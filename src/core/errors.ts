@@ -1,0 +1,157 @@
+// Typed error catalogue (D-10, spec n6). Exactly these 21 codes; no others.
+// The 20 spec n6 codes plus PODMAN_UNSUPPORTED_VERSION, added by plan 01-06 (explicit override).
+// Only this file defines retryable values or reasons. Every code surfaces to
+// MCP and ACP hosts, so renaming one is a costly change.
+
+export const ERROR_CODES = Object.freeze([
+  "REALM_UNBOUND",
+  "REALM_NOT_ACTIVE",
+  "REALM_STOPPING",
+  "REALM_INVALID_TRANSITION",
+  "STARTUP_BUDGET_EXCEEDED",
+  "TOOL_TIMEOUT",
+  "PODMAN_MISSING",
+  "PODMAN_MACHINE_DOWN",
+  "PODMAN_UNSUPPORTED_VERSION",
+  "OPENSHELL_START_FAILED",
+  "AGENTOS_CRASH_LOOP",
+  "ANDA_UNREACHABLE",
+  "ANDA_VERSION_MISMATCH",
+  "POLICY_DENIED",
+  "PATH_ESCAPE",
+  "CREDENTIAL_PATH_DENIED",
+  "LOCK_CONFLICT",
+  "WRITE_NOT_ATOMIC",
+  "EGRESS_DENIED",
+  "SHELL_NOT_ALLOWED",
+  "SCHEMA_INVALID",
+] as const);
+
+export type ErrorCode = (typeof ERROR_CODES)[number];
+
+export interface CatalogueEntry {
+  readonly reason: string;
+  readonly retryable: boolean;
+}
+
+// Object.freeze is shallow. Freezing the record alone would leave each entry
+// editable in place, so every entry is frozen as well.
+function freezeCatalogue(
+  table: Record<ErrorCode, CatalogueEntry>,
+): Readonly<Record<ErrorCode, CatalogueEntry>> {
+  for (const entry of Object.values(table)) {
+    Object.freeze(entry);
+  }
+  return Object.freeze(table);
+}
+
+// The single code-to-retryable lookup. Typed as a full Record over ErrorCode,
+// so a missing or extra key fails compilation.
+export const ERROR_CATALOGUE: Readonly<Record<ErrorCode, CatalogueEntry>> =
+  freezeCatalogue({
+    REALM_UNBOUND: {
+      reason: "No workspace is bound to this realm session; bind a workspace root first.",
+      retryable: false,
+    },
+    REALM_NOT_ACTIVE: {
+      reason: "The realm is not active; the request can run once the session reaches active.",
+      retryable: true,
+    },
+    REALM_STOPPING: {
+      reason: "The realm is stopping and refuses new requests.",
+      retryable: false,
+    },
+    REALM_INVALID_TRANSITION: {
+      reason: "The requested state transition is not allowed by the state table.",
+      retryable: false,
+    },
+    STARTUP_BUDGET_EXCEEDED: {
+      reason: "Realm startup did not finish within the configured startup budget.",
+      retryable: true,
+    },
+    TOOL_TIMEOUT: {
+      reason: "A tool call did not finish within its queue timeout.",
+      retryable: true,
+    },
+    PODMAN_MISSING: {
+      reason: "The podman binary was not found on this host.",
+      retryable: false,
+    },
+    PODMAN_MACHINE_DOWN: {
+      reason: "The podman machine is not running, so containers cannot start.",
+      retryable: true,
+    },
+    PODMAN_UNSUPPORTED_VERSION: {
+      reason: "Podman version is below the 5.x that OpenShell requires.",
+      retryable: false,
+    },
+    OPENSHELL_START_FAILED: {
+      reason: "OpenShell failed to start inside the session container.",
+      retryable: true,
+    },
+    AGENTOS_CRASH_LOOP: {
+      reason: "AgentOS is restarting repeatedly and has been held.",
+      retryable: true,
+    },
+    ANDA_UNREACHABLE: {
+      reason: "The Anda engine could not be reached.",
+      retryable: true,
+    },
+    ANDA_VERSION_MISMATCH: {
+      reason: "The Anda engine version is not one that Realm supports.",
+      retryable: false,
+    },
+    POLICY_DENIED: {
+      reason: "The active policy denies this operation.",
+      retryable: false,
+    },
+    PATH_ESCAPE: {
+      reason: "The path resolves outside the workspace root.",
+      retryable: false,
+    },
+    CREDENTIAL_PATH_DENIED: {
+      reason: "The path is credential-shaped and is not on the credential allowlist.",
+      retryable: false,
+    },
+    LOCK_CONFLICT: {
+      reason: "Another writer holds the advisory lock on this file.",
+      retryable: true,
+    },
+    WRITE_NOT_ATOMIC: {
+      reason: "The write could not complete atomically and was not applied.",
+      retryable: true,
+    },
+    EGRESS_DENIED: {
+      reason: "The outbound destination is not in the egress allowlist.",
+      retryable: false,
+    },
+    SHELL_NOT_ALLOWED: {
+      reason: "Shell execution is disabled by policy; use the argv form.",
+      retryable: false,
+    },
+    SCHEMA_INVALID: {
+      reason: "The input does not match its published schema.",
+      retryable: false,
+    },
+  });
+
+// A typed error. Its reason and retryable values come only from the catalogue,
+// so every instance carries a catalogue code and nothing else.
+export class RealmError extends Error {
+  readonly code: ErrorCode;
+  readonly reason: string;
+  readonly retryable: boolean;
+
+  constructor(code: ErrorCode) {
+    const entry = ERROR_CATALOGUE[code];
+    super(entry.reason);
+    this.name = "RealmError";
+    this.code = code;
+    this.reason = entry.reason;
+    this.retryable = entry.retryable;
+  }
+}
+
+export function makeRealmError(code: ErrorCode): RealmError {
+  return new RealmError(code);
+}

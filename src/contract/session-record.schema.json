@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Realm session record",
+  "description": "Frozen session-record schema (D-14). Persisted on disk; one-way. Holds no token, secret, or environment field. Every object rejects unknown keys (D-12). containerId is optional because the record is written before container creation. The state enum is not written here: src/contract/validate.ts sets it from the STATES constant in src/core/states.ts.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["realmId", "sessionId", "workspaceRoot", "state", "controlSocketPath"],
+  "properties": {
+    "realmId": { "type": "string", "minLength": 1 },
+    "sessionId": { "type": "string", "minLength": 1 },
+    "workspaceRoot": { "type": "string", "minLength": 1 },
+    "state": { "type": "string" },
+    "controlSocketPath": { "type": "string", "minLength": 1 },
+    "containerId": { "type": ["string", "null"] }
+  }
+}

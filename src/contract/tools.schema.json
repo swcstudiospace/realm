@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Realm tool calls",
+  "description": "Frozen tool schema (D-13). A tool call is a map with exactly one key, the tool name; its value is that tool's input. Every object rejects unknown keys (D-12). Paths are workspace-relative and are checked here at schema level; canonicalization is Phase 2.",
+  "type": "object",
+  "additionalProperties": false,
+  "minProperties": 1,
+  "maxProperties": 1,
+  "properties": {
+    "exec": { "$ref": "#/$defs/exec" },
+    "read": { "$ref": "#/$defs/read" },
+    "write": { "$ref": "#/$defs/write" },
+    "list": { "$ref": "#/$defs/list" },
+    "status": { "$ref": "#/$defs/noParams" },
+    "retry": { "$ref": "#/$defs/noParams" }
+  },
+  "$defs": {
+    "workspacePath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?![/\\\\]|[A-Za-z]:)",
+      "not": { "pattern": "(^|[/\\\\])\\.\\.([/\\\\]|$)" }
+    },
+    "exec": {
+      "description": "Argv form { argv } or shell form { shell: true, script }. Exactly one form; policy gating of the shell form is Phase 2 (SHELL_NOT_ALLOWED). The form is chosen by key presence, so a key whose value is undefined still counts as present.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "argv": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string" }
+        },
+        "shell": { "const": true },
+        "script": { "type": "string", "minLength": 1 }
+      },
+      "if": { "required": ["shell"] },
+      "then": {
+        "required": ["script"],
+        "properties": { "shell": true, "script": true },
+        "additionalProperties": false
+      },
+      "else": {
+        "required": ["argv"],
+        "properties": { "argv": true },
+        "additionalProperties": false
+      }
+    },
+    "read": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "maxBytes"],
+      "properties": {
+        "path": { "$ref": "#/$defs/workspacePath" },
+        "maxBytes": { "type": "integer", "minimum": 1, "maximum": 1048576 }
+      }
+    },
+    "write": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "content"],
+      "properties": {
+        "path": { "$ref": "#/$defs/workspacePath" },
+        "content": { "type": "string" },
+        "ifMatchSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "list": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "depth"],
+      "properties": {
+        "path": { "$ref": "#/$defs/workspacePath" },
+        "depth": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "noParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {}
+    }
+  }
+}

@@ -1,0 +1,513 @@
+<BUILD_PROMPT>
+  <ORIGINAL><![CDATA[ultrathink orchestrate workflowz So this is our realm. The 4th component in our USSR Stack. Ultrathink, Substrate, Swarm & Realm. So each component augments the Agents behaviour so Ultrathink makes the agent Think Super Hard. Substrate creates a unified memory interface for Live Sessions. Swarm introduces Subagent Chat Multithreading for the GSD-Core, Realm, well realm is like a sandbox for our Agents to run in and this makes a lot of sense if you think about how substrate provides connectivity, realm locks the files down so it can actually code with confidence. @~/src/repos/agent-realm/ is our source folder and this is a greenfield build. Starting from scratch. So basically this is an Omp plugin but also a standalone component, we've built something similar in C# for our OmpOS but this is ideally written in TypeScript like the rest of the USSR Stack. So you'll need to read these documentation websites to actually create the sandboxing. So we're basically creating a sandbox environment for all agents. We've already created something similar for Omega Prime on our Grok Bot application already and it works wonders. So basically we're using AgentOS which has documentation here: https://rivet.dev/docs/ and also Podman https://docs.podman.io/en/latest/ and OpenShell: https://docs.nvidia.com/openshell/about/overview and finally Anda: https://github.com/ldclabs/anda . So basically this is how realm functions. We create an AgentOS running on the OpenShell runtime running inside of Podman and we connect to our sandbox using the Anda Engine components, as much of Anda as possible. So this needs to be a plugin for Muse Code, Omp (mainly), Claude Code, Grok Build, Hermes Agent etc. So potentially an MCP & ACP Connection might need to be present. So we named this realm as this is quite literally the realm, the disassociated land in which our Agents program code. Now this should help heaps. I mean this plugin for Omp specifically should be running all the time automatically if connected. So our UI bar needs to be upgraded to display realm is active for the session or disconnected for the session on launch so we know if we're sandboxing or not. So please write this in TypeScript and i believe for Anda since it's Rust you might need a bit of Rust as well but if it's possible to interact with Anda using TypeScript, by all means do so. This is our final component for the USSR Stack and some of our products are shipping a variation of this already]]></ORIGINAL>
+
+  <SYSTEM_ROLE>
+    You are a senior TypeScript platform engineer building Realm, the agent sandbox component of the USSR Stack. Treat the sandbox as a security boundary. Fail closed on policy violations. Keep sandbox state always visible to the user. Never let file-mutating agent tools run outside the realm when the active policy requires the realm. Before writing any integration code, read the official documentation for each external dependency (Rivet, Podman, NVIDIA OpenShell, Anda) and record the findings in the repo. Do not guess API signatures, flags, or config keys.
+  </SYSTEM_ROLE>
+
+  <APP_CONTEXT>
+    <PRODUCT>
+      Realm is a greenfield TypeScript project at ~/src/repos/agent-realm/. It ships in three forms:
+      (1) an Omp plugin that starts automatically with each Omp session when Realm is configured and reachable (Omp is the primary target);
+      (2) a standalone TypeScript component with a CLI and a long-running local daemon;
+      (3) MCP and ACP connection surfaces so other agent hosts can use the same sandbox: Muse Code, Claude Code, Grok Build, Hermes Agent, and others.
+    </PRODUCT>
+    <USSR_STACK>
+      Realm is the fourth component. The three siblings are Ultrathink (augments agent reasoning), Substrate (unified memory interface for live sessions), and Swarm (subagent chat multithreading for GSD-Core). Realm must expose clean seams for these siblings but must not implement them. Realm does not depend on any sibling to run.
+    </USSR_STACK>
+    <EXISTING_PRIOR_ART>
+      A C# implementation exists for OmpOS. A variant is in production in the Grok Bot application for Omega Prime. Use these for behavioral reference only. Do not copy code from them unless the code is supplied in the session.
+    </EXISTING_PRIOR_ART>
+    <LAYER_STACK>
+      Host agent (Omp, Claude Code, and others) → Realm TypeScript client, daemon, and plugin → Podman rootless container → OpenShell runtime inside the container → AgentOS running on OpenShell → Anda Engine components reached from the TypeScript client.
+      Anda is primarily Rust. Prefer a TypeScript-native boundary (process protocol, JSON-RPC, HTTP, or WASM, whichever Anda's docs actually support). Add Rust only where no TypeScript boundary exists, and isolate it in its own directory with its own build.
+    </LAYER_STACK>
+  </APP_CONTEXT>
+
+  <SCOPE>
+    <IN_SCOPE_NOW>
+      Build the Realm foundation end to end:
+      1. Core library: lifecycle controller, policy engine, state machine, typed event bus.
+      2. Runtime adapter: Podman (rootless) to OpenShell to AgentOS, with start, health, exec, file operations under policy, and stop.
+      3. Anda bridge: a TypeScript client to the Anda Engine components the sandbox needs. Document the chosen boundary and why.
+      4. Omp plugin: autostart per session, and a status indicator that shows realm active or realm disconnected for that session at launch and on every state change.
+      5. MCP server exposing realm tools with a shared tool contract.
+      6. ACP adapter exposing the same tool contract.
+      7. Standalone CLI: realm up, down, status, and doctor.
+      8. Integration notes per documentation source, and a policy reference.
+      9. Tests: unit, state-machine, contract tests for MCP and ACP, and integration tests that run only when Podman is present.
+    </IN_SCOPE_NOW>
+  </SCOPE>
+
+  <CONSTRAINTS>
+    <QUALITY>
+      TypeScript in strict mode. Public APIs are typed and documented. Every async boundary has a timeout. Errors are typed and carry a machine-readable code and a human-readable reason. No silent catch blocks.
+    </QUALITY>
+    <CONSISTENCY>
+      Match the conventions of the USSR Stack where they are visible in the session. Where they are not visible, state the convention you chose in ASSUMPTIONS and keep it uniform across the repo.
+    </CONSISTENCY>
+    <NO_INVENTED_FACTS>
+      Do not invent package names, library versions, repo paths beyond the stated root, existing function or type names, or external API routes. Verify each dependency in its registry or documentation before adding it. Record any unverified item as an open question, not as a fact.
+    </NO_INVENTED_FACTS>
+    <HARD_LIMITS>
+      Do not modify repositories other than agent-realm. Do not add telemetry that sends data off-machine. Do not store secrets in the repo, in images, or in logs.
+    </HARD_LIMITS>
+  </CONSTRAINTS>
+
+  <PLATFORM_CONSTRAINTS>
+    <CONTAINER_RUNTIME>
+      Podman rootless is the default. Do not require root or a privileged container. Use the Podman machine model on hosts that need a VM.
+    </CONTAINER_RUNTIME>
+    <HOST_TARGETS>
+      Linux is the primary target. macOS support goes through Podman machine and must be verified. Windows is out of scope unless the session says otherwise.
+    </HOST_TARGETS>
+    <NODE_RUNTIME>
+      The plugin and daemon must run on the Node or Bun runtime that each host supports. Verify the host's runtime constraints in its documentation before choosing one.
+    </NODE_RUNTIME>
+  </PLATFORM_CONSTRAINTS>
+
+  <REALM_SANDBOX>
+    <CONTAINER_LAYER_PODMAN>
+      Build a reproducible image pinned by digest. Run rootless. Drop all Linux capabilities and add back only what is verified as required. Use a read-only root filesystem with tmpfs for scratch space. Set CPU, memory, and PID limits. Mount only the bound workspace and the realm state directory. Never run privileged. Never mount the host Docker or Podman socket into the container.
+    </CONTAINER_LAYER_PODMAN>
+    <RUNTIME_LAYER_OPENSHELL>
+      Read the NVIDIA OpenShell documentation and determine what it enforces, how it is launched inside the container, and how its policy is expressed. Record the findings. Do not assume its policy model until it is confirmed. Route all agent execution through OpenShell and never bypass it.
+    </RUNTIME_LAYER_OPENSHELL>
+    <AGENT_OS_LAYER>
+      Read the Rivet documentation for AgentOS. Confirm what AgentOS is in this context, including whether it corresponds to a Rivet actor model or to a separate product, before designing around it. AgentOS is the execution service the agent talks to. Manage its lifecycle through its supported API only.
+    </AGENT_OS_LAYER>
+    <ANDA_ENGINE_BRIDGE>
+      Connect the TypeScript client to the Anda Engine components the sandbox uses. Verify the supported boundary in the Anda documentation and source. Implement a version handshake. Implement reconnection with bounded exponential backoff and jitter. Surface connection state to the state machine. If a Rust shim is required, keep it minimal, typed at the boundary, and covered by contract tests from the TypeScript side.
+    </ANDA_ENGINE_BRIDGE>
+    <FILESYSTEM_LOCKDOWN>
+      Define a workspace root allowlist. Canonicalize every path before use, resolving symlinks, and reject any path that escapes the root. Mount everything outside the workspace read-only or not at all. Deny by default access to credential-shaped paths such as SSH keys, cloud credential files, and .env files, with a configurable allowlist. Provide per-file advisory write locks so that concurrent writers, including future subagents, cannot silently clobber each other. Write operations must be atomic: write to a temp file in the same directory, fsync, then rename.
+    </FILESYSTEM_LOCKDOWN>
+    <NETWORK_POLICY>
+      Default deny egress from the container. Allow only explicitly configured hosts or ports. Expose only the local control channel to the host. The control channel must be a local socket with user-only permissions, or a loopback port with a per-session token.
+    </NETWORK_POLICY>
+    <LIFECYCLE>
+      Operations are create, start, health probe, attach, detach, stop, and destroy. Every operation is idempotent. On startup, reap orphaned containers and sessions left by a previous crash. Record a session record on disk so that a restart can reattach or clean up.
+    </LIFECYCLE>
+  </REALM_SANDBOX>
+
+  <OMP_PLUGIN>
+    <SESSION_AUTOSTART>
+      When an Omp session starts and Realm is configured, start or attach to the realm for that session. Startup must not block the UI. It runs under a bounded startup budget. If the budget is exceeded, the session continues with realm disconnected and the reason is shown. Verify the Omp plugin hook names and lifecycle events in the Omp documentation before wiring them.
+    </SESSION_AUTOSTART>
+    <STATUS_BAR_INDICATOR>
+      The status bar shows exactly one of two labels for the session at launch: realm active or realm disconnected. It updates on every state transition. Use a text label plus a color cue, and make sure the state is also readable without color. The tooltip gives the reason and the time of the last transition. Provide a command to retry the connection. Verify the Omp status surface API in its documentation before implementing it. Do not invent an API.
+    </STATUS_BAR_INDICATOR>
+    <BEHAVIOR_ON_DISCONNECT>
+      When realm is disconnected, the plugin reports it clearly and applies the policy from GRACEFUL_DEGRADATION. It never silently falls back to unsandboxed file mutation.
+    </BEHAVIOR_ON_DISCONNECT>
+  </OMP_PLUGIN>
+
+  <HOST_INTEGRATIONS>
+    <MCP_SERVER>
+      Expose the realm tools over MCP. Tools include sandboxed exec, read file, write file with lock, list directory, realm status, and realm retry. Verify the MCP specification version and transport against the official MCP documentation.
+    </MCP_SERVER>
+    <ACP_ADAPTER>
+      Expose the same tool contract over ACP. Verify the ACP specification and its current transport against its official documentation. One tool contract, two transports. Do not duplicate tool logic.
+    </ACP_ADAPTER>
+    <PER_HOST_MATRIX>
+      For each host (Omp, Muse Code, Claude Code, Grok Build, Hermes Agent), document how that host loads plugins, MCP servers, or ACP agents. Record capability gaps. Generate a host config snippet for each host that the user can copy. Do not assume that hosts share a plugin model.
+    </PER_HOST_MATRIX>
+  </HOST_INTEGRATIONS>
+
+  <STATES>
+    <STATE name="unbound">No workspace bound to the session. Tools return a structured unbound error. Status shows realm disconnected with reason no workspace.</STATE>
+    <STATE name="connecting">Startup in progress within budget. Status shows realm disconnected with reason connecting. Tools queue for a bounded time, then return a structured error.</STATE>
+    <STATE name="active">Container, OpenShell, AgentOS, and Anda bridge are healthy. Status shows realm active.</STATE>
+    <STATE name="degraded">Core execution works but a non-essential component is unhealthy, for example the Anda bridge. Status shows realm active with a degraded marker and reason. Tools that need the failed component return a structured error.</STATE>
+    <STATE name="error">Startup or recovery failed after bounded retries. Status shows realm disconnected with the error code. Retry is available.</STATE>
+    <STATE name="stopping">Teardown in progress. New tool calls are rejected. Status reflects stopping.</STATE>
+  </STATES>
+
+  <SECURITY_AND_VALIDATION>
+    Validate every tool input against a schema before it reaches the sandbox. Prefer argv arrays over shell strings for exec. If a shell is needed, make it an explicit opt-in per policy. Canonicalize all paths. Never inject host secrets into the sandbox by default. Write an audit log of tool calls with secrets redacted. Use a local control channel with user-only permissions or a per-session token. Pin all images by digest and verify checksums. Run the dependency and supply-chain review before the first release.
+  </SECURITY_AND_VALIDATION>
+
+  <GRACEFUL_DEGRADATION>
+    <POLICY_MODE>
+      Make the policy configurable: fail-closed or fail-open for file-mutating tools when realm is disconnected. Default to fail-closed when the user has enabled realm required mode. Default to visible warning in advisory mode. Record the chosen default in ASSUMPTIONS.
+    </POLICY_MODE>
+    <FAILURE_CASES>
+      Podman missing: disconnected with reason, and doctor explains the fix.
+      Podman machine not running: disconnected with reason.
+      OpenShell fails to start: error after bounded retries.
+      AgentOS crashes: restart with backoff, then error after the maximum attempts.
+      Anda bridge unreachable: degraded, with a retry in the background.
+      Tool call during a non-active state: return a structured error immediately or after a bounded queue wait. Never hang.
+    </FAILURE_CASES>
+  </GRACEFUL_DEGRADATION>
+
+  <WORKFLOW>
+    1. Read each documentation source. Write findings into the repo's docs as integration notes, with the URL and the date read.
+    2. Scaffold the repo with strict TypeScript, linting, and a test runner. Verify all dependencies first.
+    3. Implement the policy engine and state machine with unit tests before any runtime code.
+    4. Implement the Podman, OpenShell, and AgentOS adapters with integration tests gated on Podman availability.
+    5. Build the Anda bridge spike. Record the boundary decision and the Rust shim decision, if any.
+    6. Build the Omp plugin: autostart, status indicator, retry command.
+    7. Build the shared tool contract, then the MCP and ACP adapters with contract tests.
+    8. Build the CLI and doctor.
+    9. Run the full test suite and a manual check of the status indicator across the disconnected, connecting, active, and error states.
+  </WORKFLOW>
+
+  <ACCEPTANCE_CRITERIA>
+    The repo builds and passes strict type checks with no suppressed errors.
+    Each external dependency has a written integration note that cites its official documentation.
+    The state machine has tests for every transition, including invalid transitions being rejected.
+    Path canonicalization rejects traversal and symlink escape in tests.
+    Tool inputs failing schema validation are rejected before reaching the sandbox.
+    With Podman available, realm up brings the state to active and realm down returns it to disconnected with no orphan containers left behind.
+    With Podman missing, realm up reports disconnected with a specific reason and exits without hanging.
+    In an Omp session with realm configured, the status indicator shows realm active or realm disconnected at launch, within the startup budget.
+    Each state change updates the indicator, and the tooltip shows the reason.
+    The retry command moves the state from disconnected or error to connecting and then to active or error.
+    The same tool call returns equivalent results through MCP and through ACP.
+    A file write that conflicts with an existing advisory lock fails with a structured lock error and leaves the file unchanged.
+    An atomic write interrupted before rename leaves the original file intact.
+    Egress to a non-allowlisted host from inside the sandbox fails.
+    Secrets do not appear in audit logs or in the image.
+    The doctor command lists each prerequisite and its status.
+  </ACCEPTANCE_CRITERIA>
+
+  <OUT_OF_SCOPE>
+    Building Ultrathink, Substrate, or Swarm. Realm provides seams only.
+    Implementing the Substrate memory interface or any GSD-Core changes.
+    Multi-tenant or cloud-hosted realm.
+    Porting the C# OmpOS implementation or the Grok Bot variant code.
+    Any UI beyond the status indicator and the retry command.
+    Windows-native support.
+    Tuning or prompt changes for any model.
+    Adding per-subagent container isolation. Design the lock and session model so it can be added later, and nothing more.
+  </OUT_OF_SCOPE>
+
+  <ASSUMPTIONS>
+    The repo's conventions follow TypeScript strict mode with ESM modules and a single package at the repo root. This is a choice, not a verified fact, and should be confirmed against the USSR Stack.
+    The Omp status indicator is the UI bar referred to in the request.
+    Default mode is advisory, with fail-closed available as an opt-in. Required mode is enabled per project.
+    Startup budget defaults to a short bounded value that is configurable.
+    Podman is the only supported container engine in v1.
+    The Anda boundary is decided by the documentation spike, not by this spec.
+  </ASSUMPTIONS>
+
+  <AMBIGUITIES>
+    The phrase "ultrathink orchestrate workflowz" at the start of the request is unclear. It is treated as a framing prefix and not as additional scope. Confirm if it means something else.
+    The skill argument placeholder was not expanded in the invocation. Treated as no additional arguments.
+    "AgentOS" with a rivet.dev reference: it is unclear whether this means a Rivet actor-based service or a separate product. Resolve during the documentation step.
+    Whether Anda is consumed through a TypeScript-native boundary or requires a Rust shim. Resolve during the Anda bridge spike.
+    The default policy when realm is disconnected: fail-closed or advisory. Confirm with the team.
+    Whether realm is one container per session or one container per workspace. This affects the Swarm seam.
+    macOS support requirements and the Podman machine version to target.
+    Whether the existing C# OmpOS and Grok Bot implementations are available to read in this session.
+    Whether any of the sibling products already define the Omp plugin manifest format. If so, that format is authoritative.
+  </AMBIGUITIES>
+
+<GRAPH_OF_THOUGHT>
+	<GOAL>Produce a dependency-ordered, wave-parallel plan that a coding agent can execute to build the greenfield Realm sandbox component (TypeScript, Omp plugin plus standalone CLI and daemon, MCP and ACP surfaces) at ~/src/repos/agent-realm/.</GOAL>
+	<NODE id="n1" kind="understand" title="Define the minimal end-to-end path" issue="SPE-18512" issueUrl="https://linear.app/swcstudio/issue/SPE-18512/n1-define-the-minimal-end-to-end-path" notionUrl="https://app.notion.com/p/400bc1a0c7ae81b38ebdf03945400fdf?pvs=204">
+		<QUESTION>What must Realm do end to end, which parts of the spec are fixed requirements (Podman rootless, OpenShell inside the container, AgentOS on OpenShell, Anda reached from the TypeScript client, the six-state machine, fail-closed filesystem and egress rules, the Omp status bar label) and which are open decisions, and what is the smallest vertical slice (realm up reaches active, realm down leaves no orphan container) that proves the architecture before breadth is added?</QUESTION>
+		<DEPENDS_ON></DEPENDS_ON>
+		<RATIONALE>1. Fixed requirements: Podman rootless with no privileged mode and no host socket mount; OpenShell inside the container, with all agent execution routed through it; AgentOS via its supported API only; Anda reached from TypeScript; the six states; fail-closed file mutation in required mode; &quot;realm active&quot; and &quot;realm disconnected&quot; labels.
+    2. Open decisions: AgentOS identity (Rivet actor or separate product); Anda boundary (TypeScript-native or Rust shim); default policy mode; one container per session or per workspace; Omp manifest and status API; Node or Bun; Podman machine target. Each sits behind an adapter interface so the slice can start before these are resolved.
+    3. Required chain for the slice: CLI realm up, then Realm core, then a Podman rootless run of a digest-pinned image, then OpenShell started inside it, then an AgentOS health probe, then an Anda version handshake, then active. realm down reverses this: stopping, container removed, disconnected.
+    4. Tension: active requires a healthy Anda bridge, so the slice must include a minimal Anda handshake or the state rules must change. Keep the spec and build the handshake, since it is small and is the failure path that degraded exists for.
+    5. &quot;Disconnected&quot; is a display label, not a listed state; it covers unbound, connecting, and error. Model the six states internally with a reason field and map them to the two labels in one place, so the CLI, tests, and future status bar share a single source.
+    6. Include cheap, hard-to-retrofit hardening in the slice: digest pin, dropped capabilities, read-only root with tmpfs, CPU, memory, and PID limits, default-deny egress, a token-guarded control channel, and an on-disk session record. Defer file locks, atomic writes, MCP/ACP, and the Omp plugin.
+    7. Slice acceptance: with Podman present, up reaches active and down leaves zero containers carrying the realm label; with Podman absent, up returns disconnected with reason podman-missing and exits within budget; a crash mid-up is reaped on the next start.</RATIONALE>
+		<CONCLUSION>Minimal end-to-end path: host CLI, then Realm TypeScript core, then a Podman rootless container (digest-pinned), then OpenShell, then AgentOS, then the Anda handshake, then state active. Teardown reverses the order and must leave no container with the realm label.
+
+    Build the vertical slice first: up, down, status, and doctor in the CLI only, with the Rivet, OpenShell, and Anda adapters behind interfaces so each can be swapped once its documentation is read and recorded.
+
+    Include in the slice: digest pin, dropped capabilities, read-only root with tmpfs, resource limits, default-deny egress, token-guarded control channel, on-disk session record, and startup reaping.
+
+    Defer: advisory file locks, atomic write path, MCP and ACP surfaces, the Omp plugin and status bar, and any Rust shim unless the Anda spike forces one.
+
+    Record these decisions before the final plan: AgentOS identity, Anda boundary, default policy mode, and container granularity. Tentative defaults: advisory mode by default with fail-closed as opt-in, per the spec; TypeScript-native Anda only if its docs confirm a supported boundary.</CONCLUSION>
+	</NODE>
+	<NODE id="n2" kind="decompose" title="Decompose Realm into buildable modules" issue="SPE-18514" issueUrl="https://linear.app/swcstudio/issue/SPE-18514/n2-decompose-realm-into-buildable-modules" notionUrl="https://app.notion.com/p/400bc1a0c7ae819cb82ce3f681d3a5dc?pvs=204">
+		<QUESTION>How should Realm be split into independently buildable modules under ~/src/repos/agent-realm/ (src/core for state machine, policy engine and event bus; src/fs for canonicalization, advisory locks and atomic write; src/runtime for the Podman, OpenShell and AgentOS adapters; src/anda for the bridge; src/contract for shared tool schemas; src/omp for the plugin; src/mcp; src/acp; src/cli with doctor; src/audit; src/session for the on-disk session record), and for each module, what are its inputs, outputs, owned files, and which other modules it must wait for?</QUESTION>
+		<DEPENDS_ON>n1</DEPENDS_ON>
+		<RATIONALE>1. Foundation modules with no external dependencies come first: src/core (state machine, policy engine, typed event bus, typed errors with code and reason), src/session (on-disk session record), and src/audit (redacting tool-call log).
+    2. src/fs depends only on core's policy and error types, so canonicalization, advisory locks, and atomic write can be built and tested without any container present.
+    3. Runtime and Anda are split into ports defined in src/core and implementations in src/runtime and src/anda; the ports land early, while concrete adapters wait for the documentation gate (n7) and the unresolved AgentOS identity and Anda boundary decisions.
+    4. src/contract owns the shared tool schemas and handler types, depending only on core and fs; src/mcp and src/acp are thin transports over that contract and must hold no tool logic.
+    5. Host surfaces src/omp and src/cli compose core, a runtime port, and session; src/omp additionally waits for verified Omp plugin hook and status-surface notes before any wiring.
+    6. Ownership is strict: each source file belongs to exactly one module, and shared root files (package.json, tsconfig, lint and test config) belong to a scaffold unit that no module may edit.
+    7. The dependency graph yields parallel groups: {core, session, audit}, then {fs, runtime ports, anda ports}, then {contract, runtime adapters, anda client}, then {mcp, acp, omp, cli}.</RATIONALE>
+		<CONCLUSION>core: config, adapter ports =&gt; state machine, policy, event bus, typed errors | src/core/ | after: none
+    session: workspace root, realm id =&gt; on-disk record, reap plan | src/session/ | after: core
+    audit: tool calls, results =&gt; redacted JSONL log | src/audit/ | after: core
+    fs: paths, policy =&gt; canonical paths, advisory locks, atomic write | src/fs/ | after: core
+    runtime: ports =&gt; Podman, OpenShell, AgentOS lifecycle, exec, health | src/runtime/ | after: core, session, n7 docs, AgentOS decision
+    anda: Anda port =&gt; version handshake, backoff client, health | src/anda/ (Rust: src/anda/native/) | after: core, Anda spike
+    contract: tool schemas =&gt; validated calls, handler types | src/contract/ | after: core, fs
+    mcp: contract =&gt; MCP tool server | src/mcp/ | after: contract
+    acp: contract =&gt; ACP adapter | src/acp/ | after: contract
+    omp: core, runtime, session =&gt; autostart, status item, retry | src/omp/ | after: runtime, n7 Omp docs
+    cli: all ports =&gt; up, down, status, doctor, wiring | src/cli/ | after: core, session, runtime, audit
+    Rule: each file has one owner.</CONCLUSION>
+	</NODE>
+	<NODE id="n3" kind="critique" title="Identify blocking unknowns" issue="SPE-18513" issueUrl="https://linear.app/swcstudio/issue/SPE-18513/n3-identify-blocking-unknowns" notionUrl="https://app.notion.com/p/400bc1a0c7ae817fb477f4d2041b3f9e?pvs=204">
+		<QUESTION>What information is missing or ambiguous that would materially change the implementation? Specifically: is AgentOS a Rivet actor-based service or a separate product; can Anda be consumed through a TypeScript-native boundary or does it need a Rust shim; is the default policy fail-closed or advisory; is the container one per session or one per workspace; what is the Omp plugin manifest format and status-bar API (and is any sibling product's format authoritative); what Podman machine version and macOS behaviour must be targeted; are the C# OmpOS and Grok Bot sources readable in this session; and which Node or Bun version does each host support? For each item, name the modules or files it blocks and whether a stated default lets work proceed without an answer.</QUESTION>
+		<DEPENDS_ON>n1</DEPENDS_ON>
+		<RATIONALE>1. Extract the unknowns named in the node question and in the spec's AMBIGUITIES section, and check each against the spec text.
+    2. Flag the policy default as a spec contradiction, not an unknown: ASSUMPTIONS and POLICY_MODE say advisory by default, while GRACEFUL_DEGRADATION says fail-closed when required mode is on.
+    3. Mark AgentOS identity and the Anda boundary as blocking the vertical slice, because the runtime and bridge adapters cannot be typed without them.
+    4. Mark container granularity as blocking the session record and the Swarm seam, but not the slice, since a one-container-per-session default is reversible.
+    5. Mark the Omp manifest and status-bar API, Podman machine and macOS behaviour, and Node or Bun per host as blocking only their own module or CI matrix, so they can sit behind adapters.
+    6. Mark availability of the C# OmpOS and Grok Bot sources as non-blocking, because the spec forbids copying code and the official docs are the reference.
+    7. Give each item a stated default so n4 through n8 can proceed, and route each open item to the n7 documentation gates for resolution.</RATIONALE>
+		<CONCLUSION>Blocking: AgentOS identity and the Anda boundary. The others proceed on their defaults.
+
+    Open questions:
+    - AgentOS: Rivet actor service or separate product? Blocks src/runtime/agentos.ts and the session model. Default: ExecutionService interface; no actor design until rivet.dev docs are read.
+    - Anda boundary: TypeScript-native or Rust shim? Blocks src/anda/ and rust/. Default: TypeScript client over the boundary Anda docs confirm; Rust only if none exists.
+    - Default policy mode: advisory or fail-closed? Spec conflicts. Blocks src/policy/defaults.ts. Default: advisory with visible warning; fail-closed when required mode is set.
+    - Container granularity: per session or per workspace? Blocks src/runtime/session.ts and the Swarm seam. Default: one container per session.
+    - Omp plugin manifest and status-bar API? Blocks plugin/. Default: adapter module; read Omp docs first; sibling format wins if one exists.
+    - Podman machine and macOS behaviour? Blocks CI matrix and platform probe. Default: Linux only in v1; macOS unverified.
+    - C# OmpOS and Grok Bot sources readable? Blocks nothing. Default: spec is the reference; no code copied.
+    - Node or Bun per host? Blocks engines field and build target. Default: Node LTS, ESM; Bun unverified.</CONCLUSION>
+	</NODE>
+	<NODE id="n5" kind="critique" title="Stress-test the fail-closed guarantees" issue="SPE-18515" issueUrl="https://linear.app/swcstudio/issue/SPE-18515/n5-stress-test-the-fail-closed-guarantees" notionUrl="https://app.notion.com/p/400bc1a0c7ae81b49648f874128121f4?pvs=204">
+		<QUESTION>What are the highest-risk failure modes for a sandbox that must fail closed: path traversal and symlink races between canonicalization and write (TOCTOU), lock bypass by non-cooperating writers, credential leakage into audit logs or the image, egress bypass through DNS, IPv6, or host networking, orphaned containers after a daemon crash, Omp autostart blocking the UI or exceeding its startup budget, and silent fallback to unsandboxed mutation when disconnected? For each, state the mitigation in the design and the specific test (file under test/) that proves it.</QUESTION>
+		<DEPENDS_ON>n2</DEPENDS_ON>
+		<RATIONALE>1. Enumerate the seven failure modes named in the node question and treat each as a fail-closed invariant that needs a design mitigation and a test.
+    2. TOCTOU: canonicalize paths against a pinned root file descriptor, open each component with O_NOFOLLOW, and write via same-directory temp file, fsync, then rename, so a swapped symlink between check and open is rejected.
+    3. Lock bypass and credential leakage: advisory locks only bind cooperating writers, so realm writes must re-check hash and mtime before rename. Credential-shaped paths are denied by default, and audit redaction runs before any JSONL append.
+    4. Egress: the container gets no network by default, IPv6 is disabled, and host networking is rejected during config validation. DNS and the exact enforcement mechanism must be confirmed against the OpenShell docs before the test is written.
+    5. Orphans and autostart: the session record is written before container create, orphans are reaped by label at startup, and Omp startup runs detached, raced against a budget timer that settles to disconnected(reason=budget).
+    6. Silent fallback: every mutating tool checks that state is active. In required mode a non-active state returns a structured error; in advisory mode it returns the write with a visible warning.
+    7. Map each mitigation to a file under test/ and list the unverifiable items (host-native writes, OpenShell egress mechanism) as open questions rather than facts.</RATIONALE>
+		<CONCLUSION>Risks and mitigations (test in brackets):
+    - TOCTOU: pin root fd, open each component with O_NOFOLLOW, temp+fsync+rename. [test/fs/toctou.test.ts]
+    - Lock bypass: realm writes re-check hash before rename and return LOCK_CONFLICT. [test/fs/lock.test.ts]
+    - Credential leakage: deny credential paths, redact before JSONL append, inject no host env. [test/audit/redaction.test.ts, test/fs/deny-credentials.test.ts]
+    - Egress (DNS, IPv6, host net): default-deny, IPv6 off, host networking rejected at config load. [test/runtime/egress.test.ts]
+    - Orphans: session record before create; reap by label at startup. [test/session/reap.test.ts]
+    - Autostart stall: detached start raced against budget timer, settles to disconnected(budget). [test/omp/autostart-budget.test.ts]
+    - Silent fallback: mutating tools require active; required mode errors, advisory mode warns. [test/core/fail-closed.test.ts]
+
+    Open questions:
+    - Can Omp intercept host-native write/edit tools? Default: no; flag those writes as residual risk.
+    - Should required mode also gate reads? Default: gate writes only.
+    - Is egress enforced by OpenShell policy or a proxy? Default: whatever the docs confirm, else deny all.</CONCLUSION>
+	</NODE>
+	<NODE id="n4" kind="compare" title="Compare architecture-shaping options" issue="SPE-18516" issueUrl="https://linear.app/swcstudio/issue/SPE-18516/n4-compare-architecture-shaping-options" notionUrl="https://app.notion.com/p/400bc1a0c7ae814fbc67ff6745e43b8e?pvs=204">
+		<QUESTION>For the three choices that shape the architecture, compare the options and recommend one for each: (a) the Anda boundary (process protocol, JSON-RPC over stdio or socket, HTTP, WASM, or a minimal Rust shim) judged on TypeScript verifiability, version handshake, and reconnection; (b) the host-to-daemon control channel (user-only Unix socket versus loopback port with a per-session token) judged on security against other local users and on Windows-out-of-scope simplicity; (c) container granularity (per session versus per workspace) judged on lock model, orphan reaping, and the future Swarm seam. Mark which recommendations would change if the open questions in n3 resolve differently.</QUESTION>
+		<DEPENDS_ON>n2,n3</DEPENDS_ON>
+		<RATIONALE>1. No documentation has been read in this session, so Anda, Rivet, OpenShell, and Podman behaviour is unverified; each option is judged on its criteria, not on claimed APIs.
+    2. For Anda TypeScript verifiability, JSON-RPC over stdio or a socket, or HTTP, can be exercised from Node with no extra toolchain if documented; WASM needs a loader; a Rust shim adds a second build and test path.
+    3. For Anda handshake and reconnection, a version handshake works on any transport, but stdio ties the connection to the child process lifetime, while socket or HTTP connections can be re-established under bounded backoff with jitter.
+    4. The Anda recommendation is a TypeScript client over the first boundary the Anda docs confirm, preferring socket JSON-RPC or HTTP, with a Rust shim only if no TypeScript-reachable surface is documented.
+    5. For control channel security, a user-only Unix socket (directory 0700, socket 0600) excludes other local users by filesystem permission, whereas a loopback port with a per-session token is reachable by any local process that can read the token.
+    6. For control channel simplicity, Windows is out of scope so no socket fallback is needed, and a socket path avoids port collisions; the token variant adds token generation, storage, rotation, and redaction work.
+    7. For container granularity, one container per session keeps the advisory lock table in the daemon with one owner lifetime and reaps by session record, while per-workspace needs cross-session lock leases and refcounted reaping.
+    8. For the Swarm seam, per-session containers let subagents share the session lock table without new isolation, and the Anda, channel, and granularity picks change only if n3 resolves the boundary, AgentOS identity, or granularity differently.</RATIONALE>
+		<CONCLUSION>Anda boundary: TypeScript client over the first documented surface Anda Engine exposes, preferring socket JSON-RPC or HTTP. Version handshake on connect; bounded exponential backoff with jitter on reconnect. Rust shim only if no TypeScript-reachable surface is documented, kept minimal in src/anda/native/. Flips to shim if the n3 spike finds nothing documented.
+    Control channel: user-only Unix socket (directory 0700, socket 0600) under the realm state directory. Loopback port with per-session token only as a fallback. Never mount the socket or any Podman or Docker socket into the container.
+    Granularity: one container per session. Advisory locks live in the daemon, keyed by canonical path. Reaping keys off the session record. Flips to per-workspace only if n3 chooses it; then locks need cross-session leases and reaping needs refcounts.
+    Unchanged across n3 outcomes: the control channel and per-session granularity. The Anda boundary changes only on the spike result; AgentOS identity affects the runtime port, not these picks.</CONCLUSION>
+	</NODE>
+	<NODE id="n6" kind="generate" title="Fix the shared contracts" issue="SPE-18517" issueUrl="https://linear.app/swcstudio/issue/SPE-18517/n6-fix-the-shared-contracts" notionUrl="https://app.notion.com/p/400bc1a0c7ae8111afc7dc206aa6f404?pvs=204">
+		<QUESTION>What exact shared contracts must every module code against before parallel work starts: the state machine transition table for unbound, connecting, active, degraded, error and stopping (including which transitions are rejected); the typed error code catalogue with machine-readable codes; the JSON schemas for exec (argv array, shell opt-in only), read, write-with-lock, list directory, realm status and realm retry; the session record schema on disk; and the policy file schema covering workspace roots, credential-path allowlist, egress allowlist, and fail-closed or advisory mode? Name the file each lives in under src/contract/ or src/core/.</QUESTION>
+		<DEPENDS_ON>n2,n4</DEPENDS_ON>
+		<RATIONALE>1. Enumerate the consumers from the n2 module map (core, session, audit, fs, runtime, anda, contract, mcp, acp, omp, cli). Every module that touches state, errors, tools, or persisted records must import these contracts, so they are frozen before wave 1 starts.
+    2. Derive the state transition table from the STATES spec and the n4 decisions. unbound to connecting to active is the forward path, degraded is a side state of active, error is reachable from connecting, active, and degraded, error to connecting is the only retry edge, and stopping returns to unbound. Every other edge is rejected.
+    3. Build the error catalogue from every FAILURE_CASES and GRACEFUL_DEGRADATION row, giving each a machine-readable code and a retryable flag, so modules do not invent ad hoc strings.
+    4. Map each of the six tools (exec, read, write-with-lock, list, status, retry) to one schema in tools.schema.json. Use argv-first exec, gate shell mode behind policy.shellEnabled, and reject unknown keys, so validation runs before any call reaches the sandbox.
+    5. Derive the session record and policy schemas from n4 (one container per session, user-only control socket, daemon-held locks keyed by canonical path) and from the policy requirements (mode, workspace roots, credential deny, egress allowlist). Exclude token and secret fields.
+    6. Check the frozen contracts against the acceptance criteria. Confirm that each rejection path has a code, each disconnected state is representable in the status view, and each schema can reject a bad input before the sandbox sees it. Then run the type checker and the state-table unit tests before wave 1 begins.</RATIONALE>
+		<CONCLUSION>Freeze before wave 1. Modules import these and never redefine them.
+    - src/core/states.ts: unbound, connecting, active, degraded, error, stopping. Allowed: unbound&gt;connecting; connecting&gt;active|error|stopping; active&gt;degraded|error|stopping; degraded&gt;active|error|stopping; error&gt;connecting|stopping; stopping&gt;unbound. Else REALM_INVALID_TRANSITION.
+    - src/core/errors.ts: typed RealmError {code, reason, retryable}. Codes: REALM_UNBOUND, REALM_NOT_ACTIVE, REALM_STOPPING, REALM_INVALID_TRANSITION, STARTUP_BUDGET_EXCEEDED, TOOL_TIMEOUT, PODMAN_MISSING, PODMAN_MACHINE_DOWN, OPENSHELL_START_FAILED, AGENTOS_CRASH_LOOP, ANDA_UNREACHABLE, ANDA_VERSION_MISMATCH, POLICY_DENIED, PATH_ESCAPE, CREDENTIAL_PATH_DENIED, LOCK_CONFLICT, WRITE_NOT_ATOMIC, EGRESS_DENIED, SHELL_NOT_ALLOWED, SCHEMA_INVALID.
+    - src/contract/tools.schema.json: exec {argv[]} or {shell:true, script} if policy.shellEnabled; read {path, maxBytes}; write {path, content, ifMatchSha256?} locks per call; list {path, depth}; status and retry {}. No extra keys; paths workspace-relative.
+    - src/contract/session-record.schema.json: realmId, sessionId, workspaceRoot, state, containerId, controlSocketPath. No secrets.
+    - src/core/policy.schema.json: mode advisory(default)|fail-closed, workspaceRoots, credentialAllow globs (credential paths denied by default), egressAllow [{host, port}], shellEnabled false, startupBudgetMs, toolQueueMs.</CONCLUSION>
+	</NODE>
+	<NODE id="n7" kind="refine" title="Gate the documentation reads" issue="SPE-18518" issueUrl="https://linear.app/swcstudio/issue/SPE-18518/n7-gate-the-documentation-reads" notionUrl="https://app.notion.com/p/400bc1a0c7ae81779e0be69662d1de27?pvs=204">
+		<QUESTION>For each external source (Rivet for AgentOS, Podman, NVIDIA OpenShell, Anda, the Omp plugin and status API, the MCP specification and its transport, the ACP specification and its transport, and the Node or Bun runtime constraints of each host), which specific questions must be answered from the official documentation, with the URL and read date recorded in docs/integration/&lt;name&gt;.md, before which module may write integration code? Also state which tests can run with no dependency present so that wave 1 is not blocked on documentation.</QUESTION>
+		<DEPENDS_ON>n3,n4</DEPENDS_ON>
+		<RATIONALE>1. Gate Rivet first: read rivet.dev/docs to confirm whether AgentOS is a Rivet actor service or a separate product, and record its lifecycle API in docs/integration/agentos.md with URL and read date. This blocks src/runtime/agentos.ts.
+    2. Gate Podman and OpenShell: from docs.podman.io and the NVIDIA OpenShell docs, confirm the rootless flags for capability drop, read-only root, tmpfs, CPU, memory and PID limits, and egress control, plus OpenShell's launch-inside-container and policy model. Record in docs/integration/podman.md and docs/integration/openshell.md. This blocks src/runtime/podman.ts and openshell.ts.
+    3. Gate Anda: from the Anda repository and docs, identify the supported Engine boundary (socket JSON-RPC, HTTP, or WASM), its version handshake, and whether a Rust shim is needed. Record in docs/integration/anda.md. This blocks src/anda/ and rust/.
+    4. Gate the Omp plugin surface: locate the Omp plugin docs (URL not supplied, so record the one found), and confirm the manifest format, lifecycle hook names, and status-bar API. Record in docs/integration/omp.md. Any sibling manifest format in the session takes precedence. This blocks plugin/.
+    5. Gate the protocol surfaces: confirm the MCP spec version and transport, and the ACP spec version and transport, from their official docs. Record in docs/integration/mcp.md and docs/integration/acp.md. This blocks transport code in src/mcp/ and src/acp/; shared contract types may proceed.
+    6. Gate host runtime constraints: for Omp, Muse Code, Claude Code, Grok Build, and Hermes Agent, record each host's Node or Bun requirement, plugin, MCP, and ACP loading model, and capability gaps in docs/integration/hosts.md. This blocks the engines field and build target.
+    7. Mark the no-dependency wave: policy engine, state machine transitions (including rejected ones), path canonicalization and symlink escape, schema validation, lock manager, atomic write with interrupt simulation, audit redaction, MCP and ACP contract tests against an in-memory fake ExecutionService, and doctor with mocked probes. None of these need a documentation read.
+    8. Enforce the gating rule: no module writes integration code until its gate file exists with URL, read date, and answered questions. An unanswered question is recorded as &quot;not documented&quot;, and the n3 default applies. No integration code is written from memory.</RATIONALE>
+		<CONCLUSION>Six doc gates, each writing only its own file under docs/integration/, so the reads can run in parallel:
+    - agentos.md (Rivet): actor service or separate product, lifecycle API. Blocks src/runtime/agentos.ts.
+    - podman.md and openshell.md: rootless hardening flags, resource limits, egress control, OpenShell launch and policy model. Blocks src/runtime/podman.ts and openshell.ts.
+    - anda.md: supported Engine boundary, version handshake, Rust shim need. Blocks src/anda/ and rust/.
+    - omp.md: plugin manifest, lifecycle hooks, status-bar API. Blocks plugin/. Sibling format wins if one exists.
+    - mcp.md and acp.md: spec version and transport. Block transport code only.
+    - hosts.md: Node or Bun constraints and plugin, MCP, and ACP loading per host. Blocks the engines field and build target.
+
+    Wave 1 needs no documentation: policy engine, state machine, canonicalization, schema validation, lock manager, atomic write, audit redaction, contract tests against an in-memory fake ExecutionService, and doctor with mocked probes.
+
+    An unanswered gate is recorded as &quot;not documented&quot; and the n3 default applies.</CONCLUSION>
+	</NODE>
+	<NODE id="n8" kind="synthesize" title="Ordered execution plan in waves" issue="SPE-18519" issueUrl="https://linear.app/swcstudio/issue/SPE-18519/n8-ordered-execution-plan-in-waves" notionUrl="https://app.notion.com/p/400bc1a0c7ae81f892d2def97b9be4eb?pvs=204">
+		<QUESTION>Produce the ordered execution plan as dependency waves. Each wave lists file-disjoint units; each unit names the files it owns under ~/src/repos/agent-realm/, the change to make, and the verification commands (for example npm run typecheck, npm test, npm run test:integration gated on podman availability, and a manual status-bar check across disconnected, connecting, active and error). Wave 0 covers scaffolding, lint and test runner config, and the docs/integration notes. Later waves cover the policy and state-machine core, the filesystem lockdown, the runtime adapters, the Anda bridge spike with its recorded decision, the Omp plugin, the shared tool contract with MCP and ACP contract tests, and the CLI with doctor. For each clarification from n3 that blocks a unit, state the question to ask the user and the default to use if no answer arrives.</QUESTION>
+		<DEPENDS_ON>n3,n5,n6,n7</DEPENDS_ON>
+		<RATIONALE>1. Read the n3 blockers (AgentOS identity, Anda boundary, default policy mode, container granularity, Omp manifest, macOS target, Node or Bun) and give each a default so no unit stalls on an unanswered question.
+    2. Freeze the shared contracts (states, errors, tool and session schemas) in Wave 0 alongside the six documentation gates, so every Wave 1 module imports fixed types and needs no external docs.
+    3. Put the pure core in Wave 1: policy engine, state machine, filesystem lockdown (canonicalization, advisory locks, atomic write), schema validation, audit redaction, and the runtime seam with an in-memory fake.
+    4. Add the runtime adapters (Podman, OpenShell, AgentOS), the Anda bridge spike, and the lifecycle controller in Wave 2, with fail-closed behavior tested against the fake before any real container runs.
+    5. Add the orphan reaper, egress guard, and shared tool dispatcher in Wave 3, then the Omp plugin and the MCP and ACP adapters in Wave 4, which both call the same dispatcher so parity is structural.
+    6. Deliver the CLI, doctor probes, host snippets, and docs in Waves 5 and 6. File ownership is disjoint within each wave, and the final Verify line maps to the acceptance criteria.</RATIONALE>
+		<CONCLUSION>Ask (default applies if unanswered):
+    AgentOS actor service or separate product? Default: ExecutionService interface, no actor design.
+    Anda TypeScript client or Rust shim? Default: TypeScript over the boundary anda.md confirms.
+    Default policy mode? Default: advisory with visible warning; fail-closed when required mode is set.
+    One container per session or per workspace? Default: per session.
+    Omp manifest and status API? Default: adapter module in plugin/omp; sibling format wins if one exists.
+    macOS and Podman machine target? Default: Linux only in v1.
+    Node or Bun per host? Default: Node LTS, ESM.
+
+    WORKFLOW
+    Wave 0 (parallel): scaffold — files: package.json, tsconfig.json, eslint.config.mjs, vitest.config.ts — done when: typecheck and smoke test pass
+    Wave 0 (parallel): frozen contracts — files: src/core/states.ts, src/core/errors.ts, src/core/policy.schema.json, src/contract/tools.schema.json, src/contract/session-record.schema.json — done when: typecheck passes
+    Wave 0 (parallel): doc gates A — files: docs/integration/agentos.md, podman.md, openshell.md — done when: each cites official URL, read date, and answer or not documented
+    Wave 0 (parallel): doc gates B — files: docs/integration/anda.md, omp.md, mcp.md, acp.md, hosts.md — done when: same check as gates A
+    Wave 1 (parallel): policy — files: src/policy/engine.ts, src/policy/defaults.ts, test/policy/ — done when: credential paths denied; advisory is default
+    Wave 1 (parallel): state machine — files: src/core/machine.ts, test/core/machine.test.ts — done when: invalid edges return REALM_INVALID_TRANSITION
+    Wave 1 (parallel): fs lockdown — files: src/fs/canonicalize.ts, src/fs/lock.ts, src/fs/atomic-write.ts, test/fs/ — done when: traversal, lock conflict, and interrupted-write tests pass
+    Wave 1 (parallel): validation and audit — files: src/contract/validate.ts, src/audit/redact.ts, src/audit/log.ts, test/contract/, test/audit/ — done when: no seeded secret reaches JSONL
+    Wave 1 (parallel): runtime seam, store, doctor core — files: src/runtime/execution-service.ts, src/runtime/fake-service.ts, src/session/store.ts, src/doctor/doctor.ts, tests — done when: fake passes shared suite
+    Wave 2 (parallel): Podman adapter — files: src/runtime/podman.ts, test/runtime/podman.integration.test.ts — done when: rootless flags verified; no orphans after down
+    Wave 2 (parallel): OpenShell and AgentOS — files: src/runtime/openshell.ts, src/runtime/agentos.ts, test/runtime/ — done when: exec routed via OpenShell; crash loop gives AGENTOS_CRASH_LOOP
+    Wave 2 (parallel): Anda spike — files: src/anda/client.ts, src/anda/backoff.ts, test/anda/, docs/integration/anda-decision.md — done when: handshake and backoff tested; decision recorded
+    Wave 2 (parallel): controller — files: src/core/controller.ts, test/core/ — done when: mutating tools need active; required mode errors
+    Wave 3 (parallel): runtime guards — files: src/session/reap.ts, src/runtime/egress.ts, test/session/, test/runtime/egress.test.ts — done when: orphans reaped; host networking rejected
+    Wave 3 (parallel): dispatcher — files: src/tools/dispatch.ts, test/tools/ — done when: schema, state, lock, and audit precede every sandbox call
+    Wave 4 (parallel): Omp autostart — files: plugin/omp/autostart.ts, test/omp/autostart-budget.test.ts — done when: budget overrun settles to disconnected
+    Wave 4 (parallel): Omp status — files: plugin/omp/status.ts, plugin/omp/manifest.json, test/omp/status.test.ts — done when: label and tooltip track transitions; retry works
+    Wave 4 (parallel): MCP and ACP — files: src/mcp/server.ts, src/acp/adapter.ts, test/contract/ — done when: same call gives equal results
+    Wave 5 (parallel): CLI and probes — files: src/cli/index.ts, src/cli/commands.ts, src/doctor/probes.ts, test/cli/, test/doctor/ — done when: up without Podman exits disconnected
+    Wave 5 (parallel): host snippets — files: docs/hosts/snippets/*.json — done when: match hosts.md
+    Wave 6 (parallel): docs and review — files: docs/policy.md, README.md, docs/security/review.md — done when: all policy keys documented
+    Verify: npm run typecheck; npm run lint; npm test; npm run test:integration; npm run build; then manual Omp status check in unbound, connecting, active, and error</CONCLUSION>
+	</NODE>
+	<WORKFLOW>
+		<WAVE n="1" parallel="false">n1</WAVE>
+		<WAVE n="2" parallel="true">n2, n3</WAVE>
+		<WAVE n="3" parallel="true">n5, n4</WAVE>
+		<WAVE n="4" parallel="true">n6, n7</WAVE>
+		<WAVE n="5" parallel="false">n8</WAVE>
+	</WORKFLOW>
+</GRAPH_OF_THOUGHT>
+<ISSUES graphId="ut-mvic65lc-5a70151a" status="complete" notionTaskUrl="https://app.notion.com/p/400bc1a0c7ae81cbae8fcf252eca5628?pvs=204">
+	<ISSUE node="n1" identifier="SPE-18512" url="https://linear.app/swcstudio/issue/SPE-18512/n1-define-the-minimal-end-to-end-path" notionUrl="https://app.notion.com/p/400bc1a0c7ae81b38ebdf03945400fdf?pvs=204">[n1] Define the minimal end-to-end path
+		<SUBISSUE step="1" identifier="SPE-18521" url="https://linear.app/swcstudio/issue/SPE-18521/define-the-minimal-end-to-end-path-step-1-fixed-requirements-podman" notionUrl="https://app.notion.com/p/400bc1a0c7ae8171988ffc10a5dfe4a2?pvs=204">Step 1: Fixed requirements: Podman rootless with no privileged mode and no host…</SUBISSUE>
+		<SUBISSUE step="2" identifier="SPE-18523" url="https://linear.app/swcstudio/issue/SPE-18523/define-the-minimal-end-to-end-path-step-2-open-decisions-agentos" notionUrl="https://app.notion.com/p/400bc1a0c7ae8164ac08d4f5d92e2fd2?pvs=204">Step 2: Open decisions: AgentOS identity (Rivet actor or separate product); And…</SUBISSUE>
+		<SUBISSUE step="3" identifier="SPE-18524" url="https://linear.app/swcstudio/issue/SPE-18524/define-the-minimal-end-to-end-path-step-3-required-chain-for-the-slice" notionUrl="https://app.notion.com/p/400bc1a0c7ae81e89ca4cdab40b59e12?pvs=204">Step 3: Required chain for the slice: CLI realm up, then Realm core, then a Pod…</SUBISSUE>
+		<SUBISSUE step="4" identifier="SPE-18520" url="https://linear.app/swcstudio/issue/SPE-18520/define-the-minimal-end-to-end-path-step-4-tension-active-requires-a" notionUrl="https://app.notion.com/p/400bc1a0c7ae813b8a6dd6e83b7cac80?pvs=204">Step 4: Tension: active requires a healthy Anda bridge, so the slice must inclu…</SUBISSUE>
+		<SUBISSUE step="5" identifier="SPE-18522" url="https://linear.app/swcstudio/issue/SPE-18522/define-the-minimal-end-to-end-path-step-5-disconnected-is-a-display" notionUrl="https://app.notion.com/p/400bc1a0c7ae816ba0f6dff3d4e44f91?pvs=204">Step 5: &quot;Disconnected&quot; is a display label, not a listed state; it covers unboun…</SUBISSUE>
+		<SUBISSUE step="6" identifier="SPE-18525" url="https://linear.app/swcstudio/issue/SPE-18525/define-the-minimal-end-to-end-path-step-6-include-cheap-hard-to" notionUrl="https://app.notion.com/p/400bc1a0c7ae81a9b87fe2823fdf44fe?pvs=204">Step 6: Include cheap, hard-to-retrofit hardening in the slice: digest pin, dro…</SUBISSUE>
+		<SUBISSUE step="7" identifier="SPE-18526" url="https://linear.app/swcstudio/issue/SPE-18526/define-the-minimal-end-to-end-path-step-7-slice-acceptance-with-podman" notionUrl="https://app.notion.com/p/400bc1a0c7ae81c58c86f8c3596cc87d?pvs=204">Step 7: Slice acceptance: with Podman present, up reaches active and down leave…</SUBISSUE>
+	</ISSUE>
+	<ISSUE node="n2" identifier="SPE-18514" url="https://linear.app/swcstudio/issue/SPE-18514/n2-decompose-realm-into-buildable-modules" notionUrl="https://app.notion.com/p/400bc1a0c7ae819cb82ce3f681d3a5dc?pvs=204">[n2] Decompose Realm into buildable modules
+		<SUBISSUE step="1" identifier="SPE-18527" url="https://linear.app/swcstudio/issue/SPE-18527/decompose-realm-into-buildable-modules-step-1-foundation-modules-with" notionUrl="https://app.notion.com/p/400bc1a0c7ae81df8facea37c1006f91?pvs=204">Step 1: Foundation modules with no external dependencies come first: src/core (…</SUBISSUE>
+		<SUBISSUE step="2" identifier="SPE-18528" url="https://linear.app/swcstudio/issue/SPE-18528/decompose-realm-into-buildable-modules-step-2-srcfs-depends-only-on" notionUrl="https://app.notion.com/p/400bc1a0c7ae81309136c07cb5cf48af?pvs=204">Step 2: src/fs depends only on core's policy and error types, so canonicalizati…</SUBISSUE>
+		<SUBISSUE step="3" identifier="SPE-18530" url="https://linear.app/swcstudio/issue/SPE-18530/decompose-realm-into-buildable-modules-step-3-runtime-and-anda-are" notionUrl="https://app.notion.com/p/400bc1a0c7ae81fe9ef5c8738e5f92e7?pvs=204">Step 3: Runtime and Anda are split into ports defined in src/core and implement…</SUBISSUE>
+		<SUBISSUE step="4" identifier="SPE-18529" url="https://linear.app/swcstudio/issue/SPE-18529/decompose-realm-into-buildable-modules-step-4-srccontract-owns-the" notionUrl="https://app.notion.com/p/400bc1a0c7ae81a1baf6ccbfd25dd74c?pvs=204">Step 4: src/contract owns the shared tool schemas and handler types, depending…</SUBISSUE>
+		<SUBISSUE step="5" identifier="SPE-18531" url="https://linear.app/swcstudio/issue/SPE-18531/decompose-realm-into-buildable-modules-step-5-host-surfaces-srcomp-and" notionUrl="https://app.notion.com/p/400bc1a0c7ae81369068fbc1c1cff94d?pvs=204">Step 5: Host surfaces src/omp and src/cli compose core, a runtime port, and ses…</SUBISSUE>
+		<SUBISSUE step="6" identifier="SPE-18532" url="https://linear.app/swcstudio/issue/SPE-18532/decompose-realm-into-buildable-modules-step-6-ownership-is-strict-each" notionUrl="https://app.notion.com/p/400bc1a0c7ae81d28b02fdfd95e8b782?pvs=204">Step 6: Ownership is strict: each source file belongs to exactly one module, an…</SUBISSUE>
+		<SUBISSUE step="7" identifier="SPE-18534" url="https://linear.app/swcstudio/issue/SPE-18534/decompose-realm-into-buildable-modules-step-7-the-dependency-graph" notionUrl="https://app.notion.com/p/400bc1a0c7ae813b916dc7ea88516f32?pvs=204">Step 7: The dependency graph yields parallel groups: {core, session, audit}, th…</SUBISSUE>
+	</ISSUE>
+	<ISSUE node="n3" identifier="SPE-18513" url="https://linear.app/swcstudio/issue/SPE-18513/n3-identify-blocking-unknowns" notionUrl="https://app.notion.com/p/400bc1a0c7ae817fb477f4d2041b3f9e?pvs=204">[n3] Identify blocking unknowns
+		<SUBISSUE step="1" identifier="SPE-18533" url="https://linear.app/swcstudio/issue/SPE-18533/identify-blocking-unknowns-step-1-extract-the-unknowns-named-in-the" notionUrl="https://app.notion.com/p/400bc1a0c7ae813f96a0f9465a51c438?pvs=204">Step 1: Extract the unknowns named in the node question and in the spec's AMBIG…</SUBISSUE>
+		<SUBISSUE step="2" identifier="SPE-18535" url="https://linear.app/swcstudio/issue/SPE-18535/identify-blocking-unknowns-step-2-flag-the-policy-default-as-a-spec" notionUrl="https://app.notion.com/p/400bc1a0c7ae8190b452fee19226a955?pvs=204">Step 2: Flag the policy default as a spec contradiction, not an unknown: ASSUMP…</SUBISSUE>
+		<SUBISSUE step="3" identifier="SPE-18537" url="https://linear.app/swcstudio/issue/SPE-18537/identify-blocking-unknowns-step-3-mark-agentos-identity-and-the-anda" notionUrl="https://app.notion.com/p/400bc1a0c7ae81a082bcef65af6d0590?pvs=204">Step 3: Mark AgentOS identity and the Anda boundary as blocking the vertical sl…</SUBISSUE>
+		<SUBISSUE step="4" identifier="SPE-18536" url="https://linear.app/swcstudio/issue/SPE-18536/identify-blocking-unknowns-step-4-mark-container-granularity-as" notionUrl="https://app.notion.com/p/400bc1a0c7ae81268b5cd45619dd75cd?pvs=204">Step 4: Mark container granularity as blocking the session record and the Swarm…</SUBISSUE>
+		<SUBISSUE step="5" identifier="SPE-18538" url="https://linear.app/swcstudio/issue/SPE-18538/identify-blocking-unknowns-step-5-mark-the-omp-manifest-and-status-bar" notionUrl="https://app.notion.com/p/400bc1a0c7ae818d8d25ffedd025b264?pvs=204">Step 5: Mark the Omp manifest and status-bar API, Podman machine and macOS beha…</SUBISSUE>
+		<SUBISSUE step="6" identifier="SPE-18539" url="https://linear.app/swcstudio/issue/SPE-18539/identify-blocking-unknowns-step-6-mark-availability-of-the-c-ompos-and" notionUrl="https://app.notion.com/p/400bc1a0c7ae81748555de93900c6e14?pvs=204">Step 6: Mark availability of the C# OmpOS and Grok Bot sources as non-blocking,…</SUBISSUE>
+		<SUBISSUE step="7" identifier="SPE-18540" url="https://linear.app/swcstudio/issue/SPE-18540/identify-blocking-unknowns-step-7-give-each-item-a-stated-default-so" notionUrl="https://app.notion.com/p/400bc1a0c7ae8194b66df0725ebfe3df?pvs=204">Step 7: Give each item a stated default so n4 through n8 can proceed, and route…</SUBISSUE>
+	</ISSUE>
+	<ISSUE node="n5" identifier="SPE-18515" url="https://linear.app/swcstudio/issue/SPE-18515/n5-stress-test-the-fail-closed-guarantees" notionUrl="https://app.notion.com/p/400bc1a0c7ae81b49648f874128121f4?pvs=204">[n5] Stress-test the fail-closed guarantees
+		<SUBISSUE step="1" identifier="SPE-18541" url="https://linear.app/swcstudio/issue/SPE-18541/stress-test-the-fail-closed-guarantees-step-1-enumerate-the-seven" notionUrl="https://app.notion.com/p/400bc1a0c7ae812c9754c71884f554e9?pvs=204">Step 1: Enumerate the seven failure modes named in the node question and treat…</SUBISSUE>
+		<SUBISSUE step="2" identifier="SPE-18542" url="https://linear.app/swcstudio/issue/SPE-18542/stress-test-the-fail-closed-guarantees-step-2-toctou-canonicalize" notionUrl="https://app.notion.com/p/400bc1a0c7ae81408dd5edae07a01432?pvs=204">Step 2: TOCTOU: canonicalize paths against a pinned root file descriptor, open…</SUBISSUE>
+		<SUBISSUE step="3" identifier="SPE-18543" url="https://linear.app/swcstudio/issue/SPE-18543/stress-test-the-fail-closed-guarantees-step-3-lock-bypass-and" notionUrl="https://app.notion.com/p/400bc1a0c7ae81188493f4fa0ab0ca0f?pvs=204">Step 3: Lock bypass and credential leakage: advisory locks only bind cooperatin…</SUBISSUE>
+		<SUBISSUE step="4" identifier="SPE-18544" url="https://linear.app/swcstudio/issue/SPE-18544/stress-test-the-fail-closed-guarantees-step-4-egress-the-container" notionUrl="https://app.notion.com/p/400bc1a0c7ae81d59470cad31003f8ce?pvs=204">Step 4: Egress: the container gets no network by default, IPv6 is disabled, and…</SUBISSUE>
+		<SUBISSUE step="5" identifier="SPE-18545" url="https://linear.app/swcstudio/issue/SPE-18545/stress-test-the-fail-closed-guarantees-step-5-orphans-and-autostart" notionUrl="https://app.notion.com/p/400bc1a0c7ae81769829ed7f3c588ede?pvs=204">Step 5: Orphans and autostart: the session record is written before container c…</SUBISSUE>
+		<SUBISSUE step="6" identifier="SPE-18548" url="https://linear.app/swcstudio/issue/SPE-18548/stress-test-the-fail-closed-guarantees-step-6-silent-fallback-every" notionUrl="https://app.notion.com/p/400bc1a0c7ae81aca748cd4af1092c51?pvs=204">Step 6: Silent fallback: every mutating tool checks that state is active. In re…</SUBISSUE>
+		<SUBISSUE step="7" identifier="SPE-18546" url="https://linear.app/swcstudio/issue/SPE-18546/stress-test-the-fail-closed-guarantees-step-7-map-each-mitigation-to-a" notionUrl="https://app.notion.com/p/400bc1a0c7ae81309927fc55c68f549f?pvs=204">Step 7: Map each mitigation to a file under test/ and list the unverifiable ite…</SUBISSUE>
+	</ISSUE>
+	<ISSUE node="n4" identifier="SPE-18516" url="https://linear.app/swcstudio/issue/SPE-18516/n4-compare-architecture-shaping-options" notionUrl="https://app.notion.com/p/400bc1a0c7ae814fbc67ff6745e43b8e?pvs=204">[n4] Compare architecture-shaping options
+		<SUBISSUE step="1" identifier="SPE-18547" url="https://linear.app/swcstudio/issue/SPE-18547/compare-architecture-shaping-options-step-1-no-documentation-has-been" notionUrl="https://app.notion.com/p/400bc1a0c7ae81fa83a4e5b7feabcd56?pvs=204">Step 1: No documentation has been read in this session, so Anda, Rivet, OpenShe…</SUBISSUE>
+		<SUBISSUE step="2" identifier="SPE-18550" url="https://linear.app/swcstudio/issue/SPE-18550/compare-architecture-shaping-options-step-2-for-anda-typescript" notionUrl="https://app.notion.com/p/400bc1a0c7ae81488ce7d46fe96c1063?pvs=204">Step 2: For Anda TypeScript verifiability, JSON-RPC over stdio or a socket, or…</SUBISSUE>
+		<SUBISSUE step="3" identifier="SPE-18549" url="https://linear.app/swcstudio/issue/SPE-18549/compare-architecture-shaping-options-step-3-for-anda-handshake-and" notionUrl="https://app.notion.com/p/400bc1a0c7ae81f69895f6ee2b54bf69?pvs=204">Step 3: For Anda handshake and reconnection, a version handshake works on any t…</SUBISSUE>
+		<SUBISSUE step="4" identifier="SPE-18551" url="https://linear.app/swcstudio/issue/SPE-18551/compare-architecture-shaping-options-step-4-the-anda-recommendation-is" notionUrl="https://app.notion.com/p/400bc1a0c7ae81f59781c8b3f8f0dca0?pvs=204">Step 4: The Anda recommendation is a TypeScript client over the first boundary…</SUBISSUE>
+		<SUBISSUE step="5" identifier="SPE-18555" url="https://linear.app/swcstudio/issue/SPE-18555/compare-architecture-shaping-options-step-5-for-control-channel" notionUrl="https://app.notion.com/p/400bc1a0c7ae812bbce4db3b257e3069?pvs=204">Step 5: For control channel security, a user-only Unix socket (directory 0700,…</SUBISSUE>
+		<SUBISSUE step="6" identifier="SPE-18552" url="https://linear.app/swcstudio/issue/SPE-18552/compare-architecture-shaping-options-step-6-for-control-channel" notionUrl="https://app.notion.com/p/400bc1a0c7ae81799405c9a03266a4b3?pvs=204">Step 6: For control channel simplicity, Windows is out of scope so no socket fa…</SUBISSUE>
+		<SUBISSUE step="7" identifier="SPE-18557" url="https://linear.app/swcstudio/issue/SPE-18557/compare-architecture-shaping-options-step-7-for-container-granularity" notionUrl="https://app.notion.com/p/400bc1a0c7ae810b8b7ede54a05923c5?pvs=204">Step 7: For container granularity, one container per session keeps the advisory…</SUBISSUE>
+		<SUBISSUE step="8" identifier="SPE-18553" url="https://linear.app/swcstudio/issue/SPE-18553/compare-architecture-shaping-options-step-8-for-the-swarm-seam-per" notionUrl="https://app.notion.com/p/400bc1a0c7ae813a9ba1c05b40371594?pvs=204">Step 8: For the Swarm seam, per-session containers let subagents share the sess…</SUBISSUE>
+	</ISSUE>
+	<ISSUE node="n6" identifier="SPE-18517" url="https://linear.app/swcstudio/issue/SPE-18517/n6-fix-the-shared-contracts" notionUrl="https://app.notion.com/p/400bc1a0c7ae8111afc7dc206aa6f404?pvs=204">[n6] Fix the shared contracts
+		<SUBISSUE step="1" identifier="SPE-18554" url="https://linear.app/swcstudio/issue/SPE-18554/fix-the-shared-contracts-step-1-enumerate-the-consumers-from-the-n2" notionUrl="https://app.notion.com/p/400bc1a0c7ae8155a7ddf3eaaf2481ff?pvs=204">Step 1: Enumerate the consumers from the n2 module map (core, session, audit, f…</SUBISSUE>
+		<SUBISSUE step="2" identifier="SPE-18556" url="https://linear.app/swcstudio/issue/SPE-18556/fix-the-shared-contracts-step-2-derive-the-state-transition-table-from" notionUrl="https://app.notion.com/p/400bc1a0c7ae8190b494dbef2e0845b5?pvs=204">Step 2: Derive the state transition table from the STATES spec and the n4 decis…</SUBISSUE>
+		<SUBISSUE step="3" identifier="SPE-18558" url="https://linear.app/swcstudio/issue/SPE-18558/fix-the-shared-contracts-step-3-build-the-error-catalogue-from-every" notionUrl="https://app.notion.com/p/400bc1a0c7ae8105979bf38b68572ef7?pvs=204">Step 3: Build the error catalogue from every FAILURE_CASES and GRACEFUL_DEGRADA…</SUBISSUE>
+		<SUBISSUE step="4" identifier="SPE-18559" url="https://linear.app/swcstudio/issue/SPE-18559/fix-the-shared-contracts-step-4-map-each-of-the-six-tools-exec-read" notionUrl="https://app.notion.com/p/400bc1a0c7ae812ab0fcfcd6fbe13705?pvs=204">Step 4: Map each of the six tools (exec, read, write-with-lock, list, status, r…</SUBISSUE>
+		<SUBISSUE step="5" identifier="SPE-18562" url="https://linear.app/swcstudio/issue/SPE-18562/fix-the-shared-contracts-step-5-derive-the-session-record-and-policy" notionUrl="https://app.notion.com/p/400bc1a0c7ae81958049c9d7f6f1d7f9?pvs=204">Step 5: Derive the session record and policy schemas from n4 (one container per…</SUBISSUE>
+		<SUBISSUE step="6" identifier="SPE-18563" url="https://linear.app/swcstudio/issue/SPE-18563/fix-the-shared-contracts-step-6-check-the-frozen-contracts-against-the" notionUrl="https://app.notion.com/p/400bc1a0c7ae81ceb275d3662ca599e1?pvs=204">Step 6: Check the frozen contracts against the acceptance criteria. Confirm tha…</SUBISSUE>
+	</ISSUE>
+	<ISSUE node="n7" identifier="SPE-18518" url="https://linear.app/swcstudio/issue/SPE-18518/n7-gate-the-documentation-reads" notionUrl="https://app.notion.com/p/400bc1a0c7ae81779e0be69662d1de27?pvs=204">[n7] Gate the documentation reads
+		<SUBISSUE step="1" identifier="SPE-18560" url="https://linear.app/swcstudio/issue/SPE-18560/gate-the-documentation-reads-step-1-gate-rivet-first-read-rivetdevdocs" notionUrl="https://app.notion.com/p/400bc1a0c7ae8134bcf8fdd85d7de4e4?pvs=204">Step 1: Gate Rivet first: read rivet.dev/docs to confirm whether AgentOS is a R…</SUBISSUE>
+		<SUBISSUE step="2" identifier="SPE-18561" url="https://linear.app/swcstudio/issue/SPE-18561/gate-the-documentation-reads-step-2-gate-podman-and-openshell-from" notionUrl="https://app.notion.com/p/400bc1a0c7ae81ebb100d67ca3800fa7?pvs=204">Step 2: Gate Podman and OpenShell: from docs.podman.io and the NVIDIA OpenShell…</SUBISSUE>
+		<SUBISSUE step="3" identifier="SPE-18564" url="https://linear.app/swcstudio/issue/SPE-18564/gate-the-documentation-reads-step-3-gate-anda-from-the-anda-repository" notionUrl="https://app.notion.com/p/400bc1a0c7ae811ab890dcd232a1353c?pvs=204">Step 3: Gate Anda: from the Anda repository and docs, identify the supported En…</SUBISSUE>
+		<SUBISSUE step="4" identifier="SPE-18565" url="https://linear.app/swcstudio/issue/SPE-18565/gate-the-documentation-reads-step-4-gate-the-omp-plugin-surface-locate" notionUrl="https://app.notion.com/p/400bc1a0c7ae818a9484d18844e25b50?pvs=204">Step 4: Gate the Omp plugin surface: locate the Omp plugin docs (URL not suppli…</SUBISSUE>
+		<SUBISSUE step="5" identifier="SPE-18566" url="https://linear.app/swcstudio/issue/SPE-18566/gate-the-documentation-reads-step-5-gate-the-protocol-surfaces-confirm" notionUrl="https://app.notion.com/p/400bc1a0c7ae8111a640c505ac4bc292?pvs=204">Step 5: Gate the protocol surfaces: confirm the MCP spec version and transport,…</SUBISSUE>
+		<SUBISSUE step="6" identifier="SPE-18568" url="https://linear.app/swcstudio/issue/SPE-18568/gate-the-documentation-reads-step-6-gate-host-runtime-constraints-for" notionUrl="https://app.notion.com/p/400bc1a0c7ae81f1ac4df2d1b554a8e8?pvs=204">Step 6: Gate host runtime constraints: for Omp, Muse Code, Claude Code, Grok Bu…</SUBISSUE>
+		<SUBISSUE step="7" identifier="SPE-18567" url="https://linear.app/swcstudio/issue/SPE-18567/gate-the-documentation-reads-step-7-mark-the-no-dependency-wave-policy" notionUrl="https://app.notion.com/p/400bc1a0c7ae811cad7ec5854ed92caf?pvs=204">Step 7: Mark the no-dependency wave: policy engine, state machine transitions (…</SUBISSUE>
+		<SUBISSUE step="8" identifier="SPE-18569" url="https://linear.app/swcstudio/issue/SPE-18569/gate-the-documentation-reads-step-8-enforce-the-gating-rule-no-module" notionUrl="https://app.notion.com/p/400bc1a0c7ae81acba4fcf2d48ec4c66?pvs=204">Step 8: Enforce the gating rule: no module writes integration code until its ga…</SUBISSUE>
+	</ISSUE>
+	<ISSUE node="n8" identifier="SPE-18519" url="https://linear.app/swcstudio/issue/SPE-18519/n8-ordered-execution-plan-in-waves" notionUrl="https://app.notion.com/p/400bc1a0c7ae81f892d2def97b9be4eb?pvs=204">[n8] Ordered execution plan in waves
+		<SUBISSUE step="1" identifier="SPE-18570" url="https://linear.app/swcstudio/issue/SPE-18570/ordered-execution-plan-in-waves-step-1-read-the-n3-blockers-agentos" notionUrl="https://app.notion.com/p/400bc1a0c7ae81b0be4ce39f4a971575?pvs=204">Step 1: Read the n3 blockers (AgentOS identity, Anda boundary, default policy m…</SUBISSUE>
+		<SUBISSUE step="2" identifier="SPE-18571" url="https://linear.app/swcstudio/issue/SPE-18571/ordered-execution-plan-in-waves-step-2-freeze-the-shared-contracts" notionUrl="https://app.notion.com/p/400bc1a0c7ae8189aa1cd0dd5c6f21bf?pvs=204">Step 2: Freeze the shared contracts (states, errors, tool and session schemas)…</SUBISSUE>
+		<SUBISSUE step="3" identifier="SPE-18572" url="https://linear.app/swcstudio/issue/SPE-18572/ordered-execution-plan-in-waves-step-3-put-the-pure-core-in-wave-1" notionUrl="https://app.notion.com/p/400bc1a0c7ae81d58481d7e03d4bd7fe?pvs=204">Step 3: Put the pure core in Wave 1: policy engine, state machine, filesystem l…</SUBISSUE>
+		<SUBISSUE step="4" identifier="SPE-18573" url="https://linear.app/swcstudio/issue/SPE-18573/ordered-execution-plan-in-waves-step-4-add-the-runtime-adapters-podman" notionUrl="https://app.notion.com/p/400bc1a0c7ae811b811ad19716579d52?pvs=204">Step 4: Add the runtime adapters (Podman, OpenShell, AgentOS), the Anda bridge…</SUBISSUE>
+		<SUBISSUE step="5" identifier="SPE-18575" url="https://linear.app/swcstudio/issue/SPE-18575/ordered-execution-plan-in-waves-step-5-add-the-orphan-reaper-egress" notionUrl="https://app.notion.com/p/400bc1a0c7ae8153a732d6e8e92e5044?pvs=204">Step 5: Add the orphan reaper, egress guard, and shared tool dispatcher in Wave…</SUBISSUE>
+		<SUBISSUE step="6" identifier="SPE-18574" url="https://linear.app/swcstudio/issue/SPE-18574/ordered-execution-plan-in-waves-step-6-deliver-the-cli-doctor-probes" notionUrl="https://app.notion.com/p/400bc1a0c7ae81c9821fc2772c64bfd2?pvs=204">Step 6: Deliver the CLI, doctor probes, host snippets, and docs in Waves 5 and…</SUBISSUE>
+	</ISSUE>
+</ISSUES>
+
+<CLARIFICATIONS>
+	<CLARIFICATION id="q1" header="Policy mode" blocking="true">
+		<QUESTION>Should Realm default to advisory or fail-closed when realm is disconnected and a file-mutating tool is called?</QUESTION>
+		<WHY>Determines whether writes proceed unsandboxed with a warning or return a structured error, which changes the controller, dispatcher, and default policy file.</WHY>
+		<OPTIONS>
+			<OPTION recommended="true">Advisory with warning — Writes proceed while disconnected and the status bar warns. Lowest friction, but mutations can land outside the sandbox.</OPTION>
+			<OPTION>Fail-closed by default — Mutating tools return REALM_NOT_ACTIVE while disconnected. Strongest guarantee, but a Podman outage blocks all edits until realm recovers.</OPTION>
+			<OPTION>Fail-closed for writes only — Reads stay available while disconnected, and every write is rejected. Keeps the session usable without allowing unsandboxed mutation.</OPTION>
+		</OPTIONS>
+	</CLARIFICATION>
+	<CLARIFICATION id="q2" header="Delivery" blocking="false">
+		<QUESTION>Should the first delivery be the vertical slice (realm up, down, status, doctor on the core and runtime), or the full in-scope list in one pass?</QUESTION>
+		<WHY>A slice-first plan defers the Omp plugin, MCP, ACP, and file locks, which changes the milestones and what is verified first.</WHY>
+		<OPTIONS>
+			<OPTION recommended="true">Vertical slice first — Ship up/down/status/doctor with the sandbox hardening and state machine, then add the plugin, MCP, ACP, and lock layers. Proves the architecture early.</OPTION>
+			<OPTION>Full scope in one pass — Build every in-scope item before the first verified release. Larger, slower, and riskier to review in one go.</OPTION>
+		</OPTIONS>
+	</CLARIFICATION>
+	<CLARIFICATION id="q3" header="Granularity" blocking="false">
+		<QUESTION>Should Realm run one container per agent session or one container per workspace?</QUESTION>
+		<WHY>This sets how locks, orphan reaping, and the Swarm seam are modeled. Per-session is the default and is reversible, but the choice affects future subagent design.</WHY>
+		<OPTIONS>
+			<OPTION recommended="true">One container per session — Simple lifetime and reaping keyed to the session record. Subagents in one session share a lock table with no extra isolation.</OPTION>
+			<OPTION>One container per workspace — Several sessions can share a warm container and its state. Requires cross-session lock leases and refcounted reaping.</OPTION>
+		</OPTIONS>
+	</CLARIFICATION>
+	<CLARIFICATION id="q4" header="Host writes" blocking="false">
+		<QUESTION>When realm is required, should Omp's built-in write and edit tools be disabled in favor of Realm's tools?</QUESTION>
+		<WHY>Determines whether the plugin removes or wraps host-native mutation tools, and whether those writes count as a residual risk.</WHY>
+		<OPTIONS>
+			<OPTION recommended="true">Disable host writes in required mode — Built-in write and edit are removed when required mode is active, so all mutations go through Realm. Strictest option, depends on Omp allowing tool removal.</OPTION>
+			<OPTION>Keep host writes with a warning — Built-in tools stay available and the status bar warns about unsandboxed writes. Keeps the host workflow intact but leaves a known gap.</OPTION>
+		</OPTIONS>
+	</CLARIFICATION>
+</CLARIFICATIONS>
+</BUILD_PROMPT>

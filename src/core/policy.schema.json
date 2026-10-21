@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Realm policy",
+  "description": "Frozen policy schema (D-15). Exactly these keys; every object rejects unknown keys (D-12). Defaults are applied by src/contract/validate.ts.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "mode": {
+      "type": "string",
+      "enum": ["advisory", "fail-closed"],
+      "default": "advisory"
+    },
+    "workspaceRoots": {
+      "type": "array",
+      "items": { "type": "string" },
+      "default": []
+    },
+    "credentialAllow": {
+      "type": "array",
+      "items": { "type": "string" },
+      "default": []
+    },
+    "egressAllow": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/egressRule" },
+      "default": []
+    },
+    "shellEnabled": {
+      "type": "boolean",
+      "default": false
+    },
+    "startupBudgetMs": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 10000
+    },
+    "toolQueueMs": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 2000
+    }
+  },
+  "$defs": {
+    "egressRule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["host", "port"],
+      "properties": {
+        "host": { "type": "string", "minLength": 1 },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
+      }
+    }
+  }
+}
