@@ -1,5 +1,5 @@
-// Typed error catalogue (D-10, spec n6). Exactly these 21 codes; no others.
-// The 20 spec n6 codes plus PODMAN_UNSUPPORTED_VERSION, added by plan 01-06 (explicit override).
+// Typed error catalogue (D-10, spec n6). Exactly these 22 codes; no others.
+// The 20 spec n6 codes plus PODMAN_UNSUPPORTED_VERSION (plan 01-06, explicit override) and AUDIT_WRITE_FAILED.
 // Only this file defines retryable values or reasons. Every code surfaces to
 // MCP and ACP hosts, so renaming one is a costly change.
 
@@ -25,6 +25,7 @@ export const ERROR_CODES = Object.freeze([
   "EGRESS_DENIED",
   "SHELL_NOT_ALLOWED",
   "SCHEMA_INVALID",
+  "AUDIT_WRITE_FAILED",
 ] as const);
 
 export type ErrorCode = (typeof ERROR_CODES)[number];
@@ -132,6 +133,10 @@ export const ERROR_CATALOGUE: Readonly<Record<ErrorCode, CatalogueEntry>> =
     SCHEMA_INVALID: {
       reason: "The input does not match its published schema.",
       retryable: false,
+    },
+    AUDIT_WRITE_FAILED: {
+      reason: "audit log could not be written; the tool call did not run",
+      retryable: true,
     },
   });
 

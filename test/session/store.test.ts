@@ -1,0 +1,127 @@
+import { test, type TestContext } from "node:test";
+import assert from "node:assert/strict";
+import { mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { SessionRecord } from "../../src/contract/validate.js";
+import { RealmError } from "../../src/core/errors.js";
+import { resolveStateDir } from "../../src/session/paths.js";
+import { SessionStore } from "../../src/session/store.js";
+
+// The frozen D-14 field set, pinned as literals.
+const FROZEN_FIELDS = [
+  "containerId",
+  "controlSocketPath",
+  "realmId",
+  "sessionId",
+  "state",
+  "workspaceRoot",
+];
+
+const REALM_ID = "7b1c2d3e-4f50-4a61-8b72-9c83d4e5f601";
+
+function fixture(t: TestContext): { store: SessionStore; stateDir: string; sessionsDir: string } {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), "realm-store-")));
+  t.after(() => {
+    rmSync(base, { recursive: true, force: true });
+  });
+  const stateDir = join(base, "state");
+  return { store: new SessionStore(stateDir), stateDir, sessionsDir: join(stateDir, "sessions") };
+}
+
+function recordFor(stateDir: string, sessionId: string): SessionRecord {
+  return {
+    realmId: REALM_ID,
+    sessionId,
+    workspaceRoot: "/srv/workspace",
+    state: "connecting",
+    controlSocketPath: join(stateDir, "run", "control.sock"),
+    containerId: null,
+  };
+}
+
+function assertRejectsWith(action: () => unknown, code: string): void {
+  assert.throws(action, (error: unknown) => error instanceof RealmError && error.code === code);
+}
+
+test("a first save writes exactly the frozen fields, with containerId null when none is given (RT-07, D-14)", (t) => {
+  const { store, stateDir, sessionsDir } = fixture(t);
+  const withoutContainer: SessionRecord = {
+    realmId: REALM_ID,
+    sessionId: "session-1",
+    workspaceRoot: "/srv/workspace",
+    state: "connecting",
+    controlSocketPath: join(stateDir, "run", "control.sock"),
+  };
+  store.save(withoutContainer);
+
+  const parsed = JSON.parse(readFileSync(join(sessionsDir, "session-1.json"), "utf8")) as Record<string, unknown>;
+  assert.deepEqual(Object.keys(parsed).sort(), FROZEN_FIELDS);
+  assert.equal(parsed["containerId"], null);
+  assert.equal(parsed["controlSocketPath"], join(stateDir, "run", "control.sock"));
+});
+
+test("the sessions directory is created with mode 0700 and the record file with mode 0600 (D-37)", (t) => {
+  const { store, stateDir, sessionsDir } = fixture(t);
+  store.save(recordFor(stateDir, "session-1"));
+  assert.equal(statSync(sessionsDir).mode & 0o777, 0o700);
+  assert.equal(statSync(join(sessionsDir, "session-1.json")).mode & 0o777, 0o600);
+});
+
+test("a record carrying an extra token-shaped field is refused, the value is not echoed, and nothing is written (D-14, AUD-02)", (t) => {
+  const { store, stateDir } = fixture(t);
+  const leaky = { ...recordFor(stateDir, "session-1"), token: "sk-test-0123456789abcdefghijkl" };
+  assert.throws(
+    () => store.save(leaky),
+    (error: unknown) =>
+      error instanceof RealmError &&
+      error.code === "SCHEMA_INVALID" &&
+      !error.message.includes("sk-test"),
+  );
+  assert.equal(store.load("session-1"), null);
+});
+
+test("an update replaces the record atomically and leaves no temporary file behind (FS-05, D-37)", (t) => {
+  const { store, stateDir, sessionsDir } = fixture(t);
+  store.save(recordFor(stateDir, "session-1"));
+  const updated: SessionRecord = {
+    ...recordFor(stateDir, "session-1"),
+    state: "active",
+    containerId: "fake-container-1",
+  };
+  store.save(updated);
+
+  assert.deepEqual(store.load("session-1"), updated);
+  assert.deepEqual(readdirSync(sessionsDir), ["session-1.json"]);
+});
+
+test("load returns the stored record and null for a session with no record (D-37)", (t) => {
+  const { store, stateDir } = fixture(t);
+  assert.equal(store.load("never-saved"), null);
+  const record = recordFor(stateDir, "session-1");
+  store.save(record);
+  assert.deepEqual(store.load("session-1"), record);
+});
+
+test("delete removes the record, and deleting an absent session is a no-op (D-37)", (t) => {
+  const { store, stateDir } = fixture(t);
+  store.save(recordFor(stateDir, "session-1"));
+  store.delete("session-1");
+  assert.equal(store.load("session-1"), null);
+  store.delete("session-1");
+  store.delete("never-saved");
+});
+
+test("a session id that could leave the sessions directory is refused with SCHEMA_INVALID (D-37)", (t) => {
+  const { store, stateDir } = fixture(t);
+  assertRejectsWith(() => store.save(recordFor(stateDir, "../escape")), "SCHEMA_INVALID");
+  assertRejectsWith(() => store.load("../escape"), "SCHEMA_INVALID");
+  assertRejectsWith(() => store.delete("nested/id"), "SCHEMA_INVALID");
+});
+
+test("resolveStateDir prefers an absolute XDG_STATE_HOME, falls back to HOME, and ignores a relative XDG value (D-37)", () => {
+  assert.equal(resolveStateDir({ XDG_STATE_HOME: "/xdg/state", HOME: "/home/user" }), "/xdg/state/realm");
+  assert.equal(resolveStateDir({ HOME: "/home/user" }), "/home/user/.local/state/realm");
+  assert.equal(resolveStateDir({ XDG_STATE_HOME: "relative/state", HOME: "/home/user" }), "/home/user/.local/state/realm");
+  assert.throws(() => resolveStateDir({}), /neither XDG_STATE_HOME nor an absolute HOME/);
+});

@@ -31,9 +31,10 @@ const EXPECTED_CODES: readonly ErrorCode[] = [
   "EGRESS_DENIED",
   "SHELL_NOT_ALLOWED",
   "SCHEMA_INVALID",
+  "AUDIT_WRITE_FAILED",
 ];
 
-// D-10: retryable true exactly for these nine codes.
+// D-10: retryable true for these codes. AUDIT_WRITE_FAILED is retryable because the tool call did not run.
 const RETRYABLE_TRUE: readonly ErrorCode[] = [
   "REALM_NOT_ACTIVE",
   "STARTUP_BUDGET_EXCEEDED",
@@ -44,6 +45,7 @@ const RETRYABLE_TRUE: readonly ErrorCode[] = [
   "ANDA_UNREACHABLE",
   "LOCK_CONFLICT",
   "WRITE_NOT_ATOMIC",
+  "AUDIT_WRITE_FAILED",
 ];
 
 // D-10, amended by plan 01-06: retryable false for the other twelve codes.
@@ -64,21 +66,21 @@ const RETRYABLE_FALSE: readonly ErrorCode[] = [
 
 const sorted = (xs: readonly string[]): string[] => [...xs].sort();
 
-test("the catalogue holds exactly the 21 codes: the 20 D-10 codes plus PODMAN_UNSUPPORTED_VERSION", () => {
-  assert.equal(EXPECTED_CODES.length, 21);
-  assert.equal(ERROR_CODES.length, 21);
+test("the catalogue holds exactly the 22 codes: the 20 D-10 codes, PODMAN_UNSUPPORTED_VERSION, and AUDIT_WRITE_FAILED", () => {
+  assert.equal(EXPECTED_CODES.length, 22);
+  assert.equal(ERROR_CODES.length, 22);
   assert.deepEqual(sorted(ERROR_CODES), sorted(EXPECTED_CODES));
 });
 
-test("the catalogue record has exactly the 21 codes and no others", () => {
+test("the catalogue record has exactly the 22 codes and no others", () => {
   const keys = Object.keys(ERROR_CATALOGUE);
-  assert.equal(keys.length, 21);
+  assert.equal(keys.length, 22);
   assert.deepEqual(sorted(keys), sorted(EXPECTED_CODES));
   assert.equal(Object.isFrozen(ERROR_CATALOGUE), true);
 });
 
 test("the retryable true and false lists partition the catalogue", () => {
-  assert.equal(RETRYABLE_TRUE.length, 9);
+  assert.equal(RETRYABLE_TRUE.length, 10);
   assert.equal(RETRYABLE_FALSE.length, 12);
   assert.deepEqual(sorted([...RETRYABLE_TRUE, ...RETRYABLE_FALSE]), sorted(EXPECTED_CODES));
 });
@@ -131,5 +133,13 @@ test("replacing or adding a catalogue key throws a TypeError", () => {
   assert.throws(() => {
     record.NOT_A_CODE = { reason: "added", retryable: false };
   }, TypeError);
-  assert.equal(Object.keys(ERROR_CATALOGUE).length, 21);
+  assert.equal(Object.keys(ERROR_CATALOGUE).length, 22);
+});
+
+test("AUDIT_WRITE_FAILED has the approved reason and is retryable, because the tool call did not run", () => {
+  assert.equal(
+    ERROR_CATALOGUE.AUDIT_WRITE_FAILED.reason,
+    "audit log could not be written; the tool call did not run",
+  );
+  assert.equal(ERROR_CATALOGUE.AUDIT_WRITE_FAILED.retryable, true);
 });
