@@ -76,7 +76,7 @@ Success criteria are taken from `.planning/ROADMAP.md` Phase 4 (SC1 to SC4), and
 
 - **D-82:** OQ-P3-16 resolved for the fields Realm writes. Source: `https://docs.nvidia.com/openshell/v0.1.2/how-it-works/policies/schema.md`, read 2026-10-21 (the pinned CLI is 0.1.2, so the v0.1.2 index is used, not the v0.1.5 page). The page documents: `network_policies` as a map of rules; a rule with `name`, `endpoints` (list), and `binaries` (list); an endpoint with `host` and `port` or `ports`; a binary object with `path`; and that an empty `binaries` list matches no binary. The inspection and protocol fields are not used. The live acceptance of this document is gated (OQ-P4-02). Recorded in `docs/integration/runtime-decision.md` (D-100).
 
-- **D-83 (verifier unchanged).** The hardening verifier (D-51) keeps `NetworkMode: none`, which matches the documented Podman driver. Egress is the sandbox proxy's job and is not container networking. No hardening property changes in Phase 4. **Reversibility:** costly (RT-01 contract).
+- **D-83:** Verifier unchanged. The hardening verifier (D-51) keeps `NetworkMode: none`, which matches the documented Podman driver. Egress is the sandbox proxy's job and is not container networking. No hardening property changes in Phase 4. **Reversibility:** costly (RT-01 contract).
 
 ### Reaper (RT-08)
 
@@ -105,7 +105,7 @@ Success criteria are taken from `.planning/ROADMAP.md` Phase 4 (SC1 to SC4), and
 
   **Reversibility:** costly, because the order is the TOOL-03 contract.
 
-- **D-90:** Audit format. The Phase 2 entry format (D-42) is unchanged. A call produces two lines: an admission line before execution and a result line after. A reader distinguishes them by the outcome (`ok` on admission, and the final outcome on the result line). An admission line is not written for refused calls before stage 4. Write entries record byte count and sha256, never content. Exec entries record argv after redaction, or the script length and sha256 for shell form. **Reversibility:** reversible.
+- **D-90 (amended in the plan step, see D-104):** Audit format. A call produces two lines: an admission line before execution and a result line after. Both use the Phase 2 entry format (D-42) with one additive, optional field, `phase`, valued `admission` or `result`. Outcome alone cannot separate the two lines, because a successful call has outcome `ok` on both. An admission line is not written for refused calls before stage 4. Write entries record byte count and sha256, never content. Exec entries record argv after redaction, or the script length and sha256 for shell form. **Reversibility:** one-way for the field name (Phase 7 consumes the log); reversible for the value set.
 
 - **D-91:** Timeouts and the queue (TOOL-04).
   - **Queue.** When the state is `connecting` and the call needs `active` (exec, and write before the gate), the dispatcher waits on `controller.events` for a transition out of `connecting`, bounded by `policy.toolQueueMs` (default 2000). The timer is cleared on either outcome. A transition to `active` proceeds at once. On expiry: exec returns `REALM_NOT_ACTIVE` (retryable); write is decided by the mode gate (required mode returns `REALM_NOT_ACTIVE`; advisory mode proceeds with a warning). Only `connecting` waits. Other non-active states do not wait, so a call in `degraded` or `error` returns at once (OQ-P4-08).
@@ -129,7 +129,7 @@ Success criteria are taken from `.planning/ROADMAP.md` Phase 4 (SC1 to SC4), and
 
 - **D-98:** Read, list, and write results. `read` and `list` return the Phase 2 result shapes (D-36). `write` returns `{ sha256, bytes }` and the optional advisory `warning` from `decideMutation` (D-23, CORE-05). A write under advisory policy in a non-active state returns the warning in the result and the audit admission line. The write itself is not reported as failed. **Reversibility:** reversible.
 
-- **D-99:** No-bypass structure (TOOL-03). A static test asserts that `buildExecArgv`, `lockedWrite`, `readFileCapped`, `listDir`, `spawnOpenShellRunner`, and `openshell` process spawning are referenced only from `src/tools/*`, `src/runtime/openshell.ts`, `src/runtime/session-execution.ts`, and their own modules. The same method as the D-46 routing test is used. **Reversibility:** reversible.
+- **D-99:** No-bypass structure (TOOL-03). A static test asserts that the D-99 symbols (`buildExecArgv`, `lockedWrite`, `readFileCapped`, `listDir`, `spawnOpenShellRunner`) are referenced only from `src/tools/*`, `src/runtime/openshell.ts`, `src/runtime/session-execution.ts`, and their own modules, and that `spawn(` appears in `src/` only in `src/runtime/session-execution.ts`. `src/doctor/checks.ts` is allowlisted for the `OPENSHELL_BINARY` literal only, because its `sandbox create --help` probe is read-only and starts no workload (D-104). The same method as the D-46 routing test is used. **Reversibility:** reversible.
 
 ### Documentation and decision record (carried by the phase)
 
@@ -159,6 +159,18 @@ Success criteria are taken from `.planning/ROADMAP.md` Phase 4 (SC1 to SC4), and
   `test/support/*` helpers are not test files. Phase 4 may add `test/support/fake-tools.ts` (an in-memory controller and runner) if the existing helpers do not cover a case.
 
 - **D-103:** The existing Phase 3 test `test/runtime/openshell-policy.test.ts` asserts `network_policies: {}`. That assertion is kept for the empty allowlist and extended for non-empty, so it is migrated, not deleted.
+
+### Plan-step resolutions (accepted when the plans were written)
+
+These resolve the "planner decision required" items in `04-PATTERNS.md` (C-1 to C-8). They refine D-75 to D-103 and do not reopen them.
+
+- **D-104 (C-5, D-99):** The doctor's read-only `openshell sandbox create --help` probe (`src/doctor/checks.ts`, Phase 3 D-69) is not a workload start. The no-bypass guard allowlists the doctor for the `OPENSHELL_BINARY` literal only. **Reversibility:** reversible.
+- **D-105 (C-2, D-91, D-97):** `EventBus.subscribe` in `src/core/events.ts` returns `() => void`. Existing callers ignore the return value, so they still compile. The dispatcher subscribes for one queue wait and unsubscribes when the wait settles, so listeners do not accumulate. The change is additive and does not alter the Phase 2 publish semantics (D-26). **Reversibility:** reversible.
+- **D-106 (C-3, D-77):** Egress is validated where the runtime is built, not in `loadPolicyFile`. `SessionExecutionOptions` gains `egressAllow`, and the `SessionExecution` constructor runs `validateEgressAllow`, so an invalid list throws `SCHEMA_INVALID` before any create. `loadPolicyFile` is not edited, and `RuntimeConfig` still has no egress field. The composition root is out of this phase (Phase 6), so the constructor is the earliest shared point. **Reversibility:** reversible.
+- **D-107 (C-4, D-90):** The audit `AuditEntryInput` gains the optional `phase` field (`admission` or `result`), per the amended D-90. The field is additive and optional, so existing lines and readers stay valid. The change is recorded in `docs/integration/runtime-decision.md` (D-100) so Phase 7 review reads both lines of one call as one call. **Reversibility:** one-way for the field name.
+- **D-108 (C-6, D-94):** `spawnOpenShellRunner` gains an opt-in `captureOutput` flag on `OpenShellRunOptions`. With the flag false, stdio stays `ignore` and the create path is unchanged. The runner rejects with a small exported `OpenShellRunnerError` carrying `kind` (`failed` or `timed-out`) and no child text in its message. This replaces message-text matching. The error class is new public surface inside `src/runtime/openshell.ts`. **Reversibility:** reversible.
+- **D-109 (C-8, D-89):** Exec uses a direct `active` check in the dispatcher. `decideMutation` decides only mutating writes, so the Phase 3 rule that the gate wrapper adds no decision logic (D-63) holds. **Reversibility:** reversible.
+- **D-110 (C-1, C-7, D-88, D-95, D-96):** `retry` calls `controller.create(boundRoot.realPath)`, which binds the same workspace again, and the controller is not changed. The composition passes one `LockTable` to both the controller and the dispatcher (C-7, D-33). **Reversibility:** reversible.
 
 ### Claude's Discretion
 

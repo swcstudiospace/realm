@@ -19,6 +19,7 @@ Coverage: 46/46 v1 requirements mapped, each to exactly one phase.
 ## Phase Details
 
 ### Phase 1: Scaffold and Frozen Contracts
+
 **Goal:** The repo is a strict ESM TypeScript package with working quality scripts, and every shared contract and integration gate exists before any module code is written.
 **Mode:** mvp
 **Depends on:** Nothing (first phase)
@@ -28,9 +29,11 @@ Coverage: 46/46 v1 requirements mapped, each to exactly one phase.
   2. The state table, typed error catalogue, tool schema, session-record schema, and policy schema exist at their specified paths, and contract tests show each schema rejecting a sample invalid input.
   3. Integration notes exist under `docs/integration/` for agentos.md, podman.md, openshell.md, anda.md, omp.md, mcp.md, acp.md, and hosts.md, each citing its official URL and read date, and no integration module exists in the repo without its note.
   4. Every async boundary in the scaffold has a timeout, every error carries a machine-readable code and a human-readable reason, and no silent catch blocks exist.
+
 **Plans**: TBD
 
 ### Phase 2: Policy, State, and Filesystem Lockdown
+
 **Goal:** Policy, the six-state machine, the event bus, filesystem safety, audit redaction, the session store, and the doctor core all work and are tested with no container present.
 **Mode:** mvp
 **Depends on:** Phase 1
@@ -41,9 +44,11 @@ Coverage: 46/46 v1 requirements mapped, each to exactly one phase.
   3. Policy defaults to advisory mode, fail-closed is set per project, `shellEnabled` defaults to false so shell-mode exec is rejected with `SHELL_NOT_ALLOWED`, and tool inputs with unknown keys are rejected with `SCHEMA_INVALID`.
   4. A path that escapes a workspace root, including through a symlink, is rejected with `PATH_ESCAPE`; a credential-shaped path is rejected with `CREDENTIAL_PATH_DENIED` unless the allowlist permits it; a write blocked by a held advisory lock fails with `LOCK_CONFLICT` and leaves the file unchanged; an interrupted atomic write leaves the original file intact and reports `WRITE_NOT_ATOMIC`.
   5. Repeating any lifecycle operation (create, start, health probe, attach, detach, stop, destroy) against the fake runtime returns the same state without duplicating resources, and audit log entries are redacted with no host secrets or environment variables present.
+
 **Plans**: TBD
 
 ### Phase 3: Container Runtime and Bridges
+
 **Goal:** Realm runs a rootless, hardened Podman container with OpenShell and AgentOS, reaches Anda through the bridge, and gates file-mutating tools through the lifecycle controller.
 **Mode:** mvp
 **Depends on:** Phase 2
@@ -54,6 +59,7 @@ Coverage: 46/46 v1 requirements mapped, each to exactly one phase.
   3. All agent execution runs through OpenShell inside the container, and AgentOS is managed only through its supported API, restarting with bounded backoff and reporting `AGENTOS_CRASH_LOOP` after the maximum attempts.
   4. The TypeScript Anda client completes a version handshake, a mismatch fails with `ANDA_VERSION_MISMATCH`, and an unreachable bridge reports `ANDA_UNREACHABLE`, moves the state to degraded, and retries in the background with bounded exponential backoff and jitter; the chosen boundary is recorded in `docs/integration/anda-decision.md`.
   5. `realm down` removes every container carrying the realm label and returns the state to disconnected with zero orphan containers, and Podman-gated integration tests skip with a stated reason while Podman is below 5.x (the local Podman 4.9.3 install is not changed).
+
 **Plans**: 10 plans (waves 1-4)
 Plans:
 - [ ] 03-01-PLAN.md — wave 1 — backoff schedule plus BridgePort contract (ANDA-03, RT-04)
@@ -68,6 +74,7 @@ Plans:
 - [ ] 03-10-PLAN.md — wave 4 — doctor checks, Podman gate bodies, taxonomy (RT-02, RT-01, RT-03, RT-09, ANDA-02)
 
 ### Phase 4: Reaper, Egress Guard, and Shared Dispatcher
+
 **Goal:** Crashed sessions leave nothing behind, the container can reach only allowlisted hosts, and every tool call passes through one dispatcher.
 **Mode:** mvp
 **Depends on:** Phase 3
@@ -77,9 +84,26 @@ Plans:
   2. From inside the container, a request to a non-allowlisted host fails, only configured host and port pairs succeed, IPv6 is disabled, and a configuration that requests host networking is rejected at config load.
   3. Every tool call passes schema validation, state check, lock check, and audit logging in the single shared dispatcher before any sandbox call is made.
   4. A tool call that exceeds its timeout returns `TOOL_TIMEOUT`, and a call made while the state is connecting waits no longer than the bounded queue wait before it is returned.
-**Plans**: TBD
+
+**Plans**: 7 plans (waves 1-4)
+Plans:
+**Wave 1**
+- [ ] 04-01-PLAN.md — wave 1 — egress validator and renderer (RT-05)
+- [ ] 04-02-PLAN.md — wave 1 — sweep move, store list, startup reaper (RT-08)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+- [ ] 04-03-PLAN.md — wave 2 — OpenShell egress wiring, config refusals, exec argv, bounded capture types (RT-05)
+- [ ] 04-04-PLAN.md — wave 2 — workspace handlers, audit phase field, no-bypass guard (TOOL-03)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+- [ ] 04-05-PLAN.md — wave 3 — bounded exec capture and egress plumbing in session-execution (TOOL-03)
+- [ ] 04-06-PLAN.md — wave 3 — ToolDispatcher pipeline, queue and timeout, routing proof (TOOL-03, TOOL-04)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+- [ ] 04-07-PLAN.md — wave 4 — gated live bodies, taxonomy, decision-note section (RT-05, RT-08, TOOL-03, TOOL-04)
 
 ### Phase 5: Omp Plugin, MCP, and ACP Surfaces
+
 **Goal:** Omp sessions autostart the realm within a startup budget and show its state, and MCP and ACP expose the same tool logic through the shared dispatcher.
 **Mode:** mvp
 **Depends on:** Phase 4
@@ -90,9 +114,11 @@ Plans:
   3. The retry command moves disconnected or error to connecting, and then to active or error.
   4. While disconnected, a file write is refused in required mode or proceeds with a visible warning in advisory mode; no file mutation is silently performed outside the realm.
   5. The same tool call returns equivalent results through MCP and through ACP, verified by contract tests, and neither the MCP server nor the ACP adapter contains tool logic.
+
 **Plans**: TBD
 
 ### Phase 6: CLI, Daemon, and Host Packaging
+
 **Goal:** Developers run `realm up`, `down`, `status`, and `doctor` from a standalone CLI backed by a long-running local daemon, and each supported host has a config snippet.
 **Mode:** mvp
 **Depends on:** Phase 5
@@ -103,9 +129,11 @@ Plans:
   3. `realm doctor` lists Podman, Podman version, machine state, OpenShell, AgentOS, the Anda bridge, the policy file, and the control channel, each with its status and the fix for every failing item.
   4. The host-to-daemon control channel is a user-only Unix socket (directory 0700, socket 0600) under the realm state directory, and neither that socket nor any Podman or Docker socket is visible inside the container.
   5. Config snippets exist under `docs/hosts/snippets/` for Omp, Muse Code, Claude Code, Grok Build, and Hermes Agent, and each matches its host note in `docs/integration/hosts.md`.
+
 **Plans**: TBD
 
 ### Phase 7: Policy Reference and Security Review
+
 **Goal:** Every policy key is documented and the security and supply-chain reviews are recorded before the first release.
 **Mode:** mvp
 **Depends on:** Phase 6
@@ -113,6 +141,7 @@ Plans:
 **Success Criteria** (what must be TRUE):
   1. The policy reference documents every policy key (workspace roots, credential allowlist, egress allowlist, mode, `shellEnabled`, `startupBudgetMs`, `toolQueueMs`) with its default value and its effect.
   2. A security review and a dependency and supply-chain review are recorded in the repo, and both are complete before the first release is cut.
+
 **Plans**: TBD
 
 ## Progress
