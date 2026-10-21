@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { podmanSkipReason, type PodmanProbe } from "../integration/podman-version.js";
+import { podmanSkipReason, type PodmanProbe } from "../../src/runtime/podman-version.js";
 
 // This file runs from dist/test/quality, so three levels up is the package root.
 const TEST_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "test");
@@ -18,6 +18,8 @@ const CATEGORY_DIRS = [
   "contract",
   "doctor",
   "integration",
+  "runtime",
+  "anda",
 ] as const;
 
 // F-5 category map: each named category is carried by the files listed under it.
@@ -30,6 +32,26 @@ const CATEGORY_MAP: ReadonlyArray<{ readonly category: string; readonly files: r
   },
   { category: "audit redaction", files: ["audit/redaction.test.ts"] },
   { category: "integration", files: ["integration/podman-gate.test.ts"] },
+  {
+    category: "runtime boundary",
+    files: [
+      "runtime/podman-version.test.ts",
+      "runtime/podman-probe.test.ts",
+      "runtime/config.test.ts",
+      "runtime/openshell-argv.test.ts",
+      "runtime/openshell-policy.test.ts",
+      "runtime/openshell-routing.test.ts",
+      "runtime/session-execution.test.ts",
+      "runtime/down-sweep.test.ts",
+      "runtime/hardening.test.ts",
+      "runtime/agentos-supervisor.test.ts",
+      "runtime/libpod-client.test.ts",
+    ],
+  },
+  {
+    category: "anda bridge",
+    files: ["anda/handshake.test.ts", "anda/reconnect.test.ts", "anda/no-shim.test.ts", "anda/boundary-decision.test.ts"],
+  },
 ];
 
 // Every D-45 test file. Requirement citations are searched only in these files.
@@ -57,6 +79,26 @@ const D45_FILES = [
   "lifecycle/idempotent.test.ts",
   "lifecycle/no-host-env.test.ts",
   "doctor/checks.test.ts",
+  "doctor/runtime-checks.test.ts",
+  "core/backoff.test.ts",
+  "lifecycle/bridge-states.test.ts",
+  "lifecycle/mutation-gate.test.ts",
+  "runtime/podman-version.test.ts",
+  "runtime/podman-probe.test.ts",
+  "runtime/config.test.ts",
+  "runtime/openshell-argv.test.ts",
+  "runtime/openshell-policy.test.ts",
+  "runtime/openshell-routing.test.ts",
+  "runtime/session-execution.test.ts",
+  "runtime/down-sweep.test.ts",
+  "runtime/hardening.test.ts",
+  "runtime/agentos-supervisor.test.ts",
+  "runtime/libpod-client.test.ts",
+  "runtime/decision-note.test.ts",
+  "anda/handshake.test.ts",
+  "anda/reconnect.test.ts",
+  "anda/no-shim.test.ts",
+  "anda/boundary-decision.test.ts",
   "quality/suite-taxonomy.test.ts",
 ] as const;
 
@@ -78,6 +120,20 @@ const PHASE_2_REQUIREMENT_IDS = [
   "AUD-01",
   "AUD-02",
   "QUAL-02",
+] as const;
+
+// The ten Phase 3 requirement IDs (plan 03-10 must_haves; matches .planning/REQUIREMENTS.md).
+const PHASE_3_REQUIREMENT_IDS = [
+  "CORE-05",
+  "RT-01",
+  "RT-02",
+  "RT-03",
+  "RT-04",
+  "RT-09",
+  "ANDA-01",
+  "ANDA-02",
+  "ANDA-03",
+  "ANDA-04",
 ] as const;
 
 function gateReasonOf(probe: PodmanProbe): string {
@@ -140,4 +196,46 @@ test("all 16 Phase 2 requirement IDs are cited by at least one D-45 test file (Q
     (id) => !D45_FILES.some((file) => readFileSync(join(TEST_DIR, file), "utf8").includes(id)),
   );
   assert.deepEqual(uncovered, [], `Phase 2 requirement IDs cited by no D-45 test file: ${uncovered.join(", ")}`);
+});
+
+// Only a test title counts as coverage. A requirement ID in a comment, an assertion message or a file name
+// does not. A title counts when the ID is in its leading ID list: the words before its first colon, while
+// they are IDs, "and", or commas. So "RT-03, RT-04: ..." covers both RT-03 and RT-04.
+const TEST_TITLE_START = /\btest\(\s*["'`]([^\n]*)/g;
+
+function leadingIdsOf(title: string): readonly string[] {
+  const head = title.split(":")[0] ?? "";
+  const lead = /^(?:[A-Z]+-\d+|and|[\s,])+/.exec(head)?.[0] ?? "";
+  return lead.match(/[A-Z]+-\d+/g) ?? [];
+}
+
+function titleLeadingIds(source: string): Set<string> {
+  const ids = new Set<string>();
+  for (const match of source.matchAll(TEST_TITLE_START)) {
+    for (const id of leadingIdsOf(match[1] ?? "")) {
+      ids.add(id);
+    }
+  }
+  return ids;
+}
+
+test("the title check counts an ID only when a title leads with it, so a comment or a mid-title mention does not count", () => {
+  const source = [
+    "// RT-09 is discussed in this comment only",
+    'test("the sweep removes RT-09 containers", () => {});',
+    'test("RT-03, RT-04: the leading list counts both", () => {});',
+  ].join("\n");
+  assert.deepEqual([...titleLeadingIds(source)].sort(), ["RT-03", "RT-04"]);
+});
+
+test("all 10 Phase 3 requirement IDs lead the title of a test in a named D-45 test file (QUAL-02, Phase 3)", () => {
+  const citing = D45_FILES.filter((file) => file !== "quality/suite-taxonomy.test.ts");
+  const leading = new Set<string>();
+  for (const file of citing) {
+    for (const id of titleLeadingIds(readFileSync(join(TEST_DIR, file), "utf8"))) {
+      leading.add(id);
+    }
+  }
+  const uncovered = PHASE_3_REQUIREMENT_IDS.filter((id) => !leading.has(id));
+  assert.deepEqual(uncovered, [], `Phase 3 requirement IDs named by no D-45 test title: ${uncovered.join(", ")}`);
 });

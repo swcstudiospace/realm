@@ -10,6 +10,7 @@ import { LockTable } from "../../src/fs/locks.js";
 import { LifecycleController } from "../../src/lifecycle/controller.js";
 import { SessionStore } from "../../src/session/store.js";
 import { FakeExecutionService } from "../support/fake-execution.js";
+import { FakeBridge } from "../support/fake-bridge.js";
 
 const SESSION = "session-1";
 const CLOCK_TIME = "2026-10-21T09:30:00.000Z";
@@ -50,16 +51,18 @@ function fixture(t: TestContext, options: FixtureOptions = {}) {
     : [workspace];
   const store = new SessionStore(join(base, "state"));
   const exec = new FakeExecutionService();
+  const bridge = new FakeBridge();
   const locks = new LockTable();
   const controller = new LifecycleController({
     sessionId: SESSION,
     policy: policyFor(roots),
     store,
     exec,
+    bridge,
     clock: () => new Date(CLOCK_TIME),
     locks,
   });
-  return { base, workspace, second, otherDir, store, exec, locks, controller };
+  return { base, workspace, second, otherDir, store, exec, bridge, locks, controller };
 }
 
 function assertRejectsWith(promise: Promise<unknown>, code: string): Promise<void> {
@@ -305,6 +308,7 @@ test("create with a scripted fake delay beyond startupBudgetMs gives STARTUP_BUD
     policy: { ...policyFor([workspace]), startupBudgetMs: 50 },
     store,
     exec,
+    bridge: new FakeBridge(),
     clock: () => new Date(CLOCK_TIME),
   });
   exec.setDelay("create", 500);

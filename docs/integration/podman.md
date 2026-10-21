@@ -88,3 +88,7 @@ Not documented in the pages read. The `podman system service` page says the comm
 ## Module blocked
 
 `src/runtime/podman.ts`, until the flags and routes are confirmed against the 4.9.3 man pages and API.
+
+## Phase 3 resolution
+
+Recorded in `docs/integration/runtime-decision.md` (S-09, OQ-P3-08, OQ-P3-13). Host Podman 4.9.3 is below the 5.x floor, so live suites skip with `PODMAN_UNSUPPORTED_VERSION`. A read-only `podman run --help` on 4.9.3 lists the hardening and limit flags (Q1, Q2). Its help text does not confirm the `no-new-privileges` default, so that item stays live-gated. Libpod routes (Q5) remain unverified and are kept in `src/runtime/libpod-routes.ts` (D-48).

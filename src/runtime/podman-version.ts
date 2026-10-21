@@ -1,6 +1,7 @@
-// Pure helpers for the Podman-gated integration suite (plan 01-06). No I/O here: the
-// probe that runs `podman --version` lives in podman-gate.test.ts. The file name does
-// not end in .test.ts, so node --test does not run it as a test file.
+// Podman version parser (RT-02, D-49). Pure helpers: no I/O here. The prerequisite probe
+// that runs `podman --version` and connects to the rootless API socket is
+// src/runtime/podman-probe.ts (D-53). The Podman-gated integration suite imports the
+// parser and the skip-reason mapping from this file, so there is one parser in the repo.
 
 // OpenShell requires Podman 5.x; anything below this major is gated off.
 export const OPENSHELL_MIN_PODMAN_MAJOR = 5;

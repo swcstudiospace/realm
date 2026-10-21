@@ -1,0 +1,275 @@
+// ExecutionService composition (D-39, D-67) over the OpenShell adapter, the closed libpod client, the
+// hardening verifier, and the AgentOS supervisor. Every dependency arrives as a constructor argument:
+// this module reads no host environment, and the only process it starts is the OpenShell CLI, through
+// the runner it is given (RT-03, D-46).
+//
+// Create (D-47, D-51, D-56, D-57): read the libpod info for the rootless flag, write the policy
+// document before the create, run the label-idempotent OpenShell create, then verify the inspect of
+// the container it resolved. A mismatch, or an inspect that cannot be read, removes the container
+// before anything is thrown. No unverified container is ever returned as running.
+//
+// Sweep (D-68, RT-09): remove every realm-labelled container, list again, and report REALM_STOPPING
+// when any survive. The second listing is the zero-orphan proof.
+
+import { spawn, type ChildProcess } from "node:child_process";
+import { makeRealmError, RealmError } from "../core/errors.js";
+import type { CreateRequest, ExecutionService, ProbeResult } from "../core/ports.js";
+import type { EnvironmentLike } from "../session/paths.js";
+import type { AgentOsSupervisor } from "./agentos.js";
+import { loadRuntimeConfig, type RuntimeConfig } from "./config.js";
+import { HARDENING_PROFILE, verifyInspect, type HardeningBinding, type HardeningProperty } from "./hardening.js";
+import type { LibpodClient, LibpodInspect } from "./libpod-client.js";
+import {
+  MANAGED_LABEL_KEY,
+  runOpenShellCreate,
+  writePolicyDocument,
+  type OpenShellRunner,
+  type OpenShellRunOutcome,
+} from "./openshell.js";
+
+// Bound for the whole OpenShell create, including the label poll (OQ-P3-01).
+const OPENSHELL_CREATE_DEADLINE_MS = 60_000;
+// Grace period a container gets to stop before it is killed (libpod stop timeout).
+const CONTAINER_STOP_GRACE_MS = 10_000;
+const MANAGED_LABEL_VALUE = "true";
+// The sandbox limits come from the frozen profile, so they cannot drift from the verifier.
+const SANDBOX_CPUS = HARDENING_PROFILE.nanoCpus / 1_000_000_000;
+const SANDBOX_MEMORY = `${HARDENING_PROFILE.memoryBytes / 1024 ** 3}g`;
+
+// The only environment names the OpenShell CLI receives. Each one is needed by the CLI to locate its
+// configuration and the rootless Podman socket. No other name crosses from the host.
+export const OPENSHELL_ENV_NAMES: readonly string[] = Object.freeze(["PATH", "HOME", "XDG_RUNTIME_DIR"]);
+
+const RUNNER_FAILED = "openshell runner failed";
+const RUNNER_TIMED_OUT = "openshell runner exceeded its budget";
+
+// The libpod calls the composition needs. The closed client satisfies it.
+export type SessionContainers = Pick<
+  LibpodClient,
+  "info" | "inspectContainer" | "listContainersByLabel" | "stopContainer" | "removeContainer"
+>;
+
+export interface SessionExecutionOptions {
+  readonly libpod: SessionContainers;
+  readonly runner: OpenShellRunner;
+  readonly agentos: AgentOsSupervisor;
+  // The workspace root is per session and comes from the create request.
+  readonly config: Omit<RuntimeConfig, "workspaceRoot">;
+}
+
+// A container whose hardening check failed. It carries the first failed property of the D-51 list,
+// which is a fixed name from the profile and never caller text. The error code is still
+// OPENSHELL_START_FAILED.
+export class HardeningFailedError extends RealmError {
+  readonly property: HardeningProperty;
+
+  constructor(property: HardeningProperty) {
+    super("OPENSHELL_START_FAILED");
+    this.property = property;
+  }
+}
+
+export class SessionExecution implements ExecutionService {
+  private readonly libpod: SessionContainers;
+  private readonly runner: OpenShellRunner;
+  private readonly agentos: AgentOsSupervisor;
+  private readonly config: Omit<RuntimeConfig, "workspaceRoot">;
+
+  constructor(options: SessionExecutionOptions) {
+    this.libpod = options.libpod;
+    this.runner = options.runner;
+    this.agentos = options.agentos;
+    this.config = options.config;
+  }
+
+  // The session id is the idempotency key, so a repeated create for one session reuses its
+  // labelled container (CORE-06).
+  async create(req: CreateRequest): Promise<{ readonly containerId: string }> {
+    const runtime = loadRuntimeConfig({ ...this.config, workspaceRoot: req.workspaceRoot });
+    const info = await this.libpod.info();
+    const sessionId = req.idempotencyKey;
+    const policyPath = writePolicyDocument(runtime.stateDir, sessionId);
+    const containerId = await runOpenShellCreate(
+      { containers: this.libpod, runner: this.runner },
+      {
+        sessionId,
+        policyPath,
+        cpus: SANDBOX_CPUS,
+        memory: SANDBOX_MEMORY,
+        workloadArgv: runtime.workloadArgv,
+      },
+      OPENSHELL_CREATE_DEADLINE_MS,
+    );
+    const binding: HardeningBinding = {
+      image: runtime.image,
+      rootless: info.rootless,
+      workspaceRoot: runtime.workspaceRoot,
+      stateDir: runtime.stateDir,
+    };
+    await this.verifyOrRemove(containerId, binding);
+    return { containerId };
+  }
+
+  // Checks the container is running. It starts nothing itself: the create ran with --detach. It starts
+  // AgentOS through the supervisor, the only path that starts it (RT-04).
+  async start(containerId: string): Promise<void> {
+    const inspect = await this.libpod.inspectContainer(containerId);
+    if (inspect === null || !isRunning(inspect)) {
+      throw makeRealmError("OPENSHELL_START_FAILED");
+    }
+    await this.agentos.start();
+  }
+
+  // Healthy only when the container runs and AgentOS reports alive. Any failure reports unhealthy:
+  // the probe answers a health question, and the lifecycle decides what follows.
+  async probe(containerId: string): Promise<ProbeResult> {
+    try {
+      const inspect = await this.libpod.inspectContainer(containerId);
+      if (inspect === null || !isRunning(inspect)) {
+        return "unhealthy";
+      }
+      return (await this.agentos.check()) ? "healthy" : "unhealthy";
+    } catch {
+      return "unhealthy";
+    }
+  }
+
+  // Stops AgentOS best effort, then the container. A container that is already gone counts as stopped.
+  async stop(containerId: string): Promise<void> {
+    await this.agentos.stop();
+    if ((await this.libpod.inspectContainer(containerId)) === null) {
+      return;
+    }
+    await this.libpod.stopContainer(containerId, CONTAINER_STOP_GRACE_MS);
+  }
+
+  // Force-removes the container. A container that is already gone counts as removed.
+  async destroy(containerId: string): Promise<void> {
+    await this.libpod.removeContainer(containerId, { force: true });
+  }
+
+  // Returns only when the container conforms. Otherwise the container is removed before anything is
+  // thrown. The removal is best effort: a container that survives it is still never returned as
+  // running, and the down sweep is the backstop.
+  private async verifyOrRemove(containerId: string, binding: HardeningBinding): Promise<void> {
+    let failed: readonly HardeningProperty[] | null;
+    try {
+      const inspect = await this.libpod.inspectContainer(containerId);
+      failed = inspect === null ? null : verifyInspect(binding, inspect);
+    } catch {
+      failed = null;
+    }
+    if (failed?.length === 0) {
+      return;
+    }
+    try {
+      await this.libpod.removeContainer(containerId, { force: true });
+    } catch {
+      // The down sweep proves the removal. The start is refused either way.
+    }
+    const first = failed?.[0];
+    if (first !== undefined) {
+      throw new HardeningFailedError(first);
+    }
+    throw makeRealmError("OPENSHELL_START_FAILED");
+  }
+}
+
+// The running flag of a libpod inspect object. Anything other than a boolean true is not running.
+// (The State.Running path is provisional, podman.md Q5.)
+function isRunning(inspect: LibpodInspect): boolean {
+  const state: unknown = inspect["State"];
+  return typeof state === "object" && state !== null && Reflect.get(state, "Running") === true;
+}
+
+// Removes every realm-labelled container (RT-09, D-68). Foreign containers are never listed, so they are
+// never removed. The first listing finds the targets. A failed removal leaves its container listed, and
+// the second listing reports it, so a failure is never swallowed silently. A repeated call on a clean
+// host is a no-op.
+export type SweepClient = Pick<LibpodClient, "listContainersByLabel" | "removeContainer">;
+
+export async function removeAllRealmContainers(libpod: SweepClient): Promise<void> {
+  const found = await libpod.listContainersByLabel(MANAGED_LABEL_KEY, MANAGED_LABEL_VALUE);
+  for (const container of found) {
+    try {
+      await libpod.removeContainer(container.id, { force: true });
+    } catch {
+      // The second listing proves whether the container is still there.
+    }
+  }
+  const survivors = await libpod.listContainersByLabel(MANAGED_LABEL_KEY, MANAGED_LABEL_VALUE);
+  if (survivors.length > 0) {
+    throw makeRealmError("REALM_STOPPING");
+  }
+}
+
+// Picks the allowed names from a caller-supplied environment. The caller decides the source. Names
+// that are absent from the source are left out, so the result never carries a made-up value.
+export function selectOpenShellEnvironment(source: EnvironmentLike): Readonly<Record<string, string>> {
+  const selected: Record<string, string> = {};
+  for (const name of OPENSHELL_ENV_NAMES) {
+    const value = source[name];
+    if (value !== undefined) {
+      selected[name] = value;
+    }
+  }
+  return Object.freeze(selected);
+}
+
+// POSIX children lead their own process group, so a timeout reaches the helpers they fork. Windows has no
+// such group here, and the child alone is killed there.
+const OWN_PROCESS_GROUP = process.platform !== "win32";
+
+// Kills the child and, on POSIX, the whole process group it leads. kill() on a group that has already gone
+// throws ESRCH, which means nothing is left to kill; the direct kill that follows covers the child itself.
+function killProcessTree(child: ChildProcess): void {
+  if (OWN_PROCESS_GROUP && child.pid !== undefined) {
+    try {
+      process.kill(-child.pid, "SIGKILL");
+    } catch {
+      // The group is already gone. The direct kill below is the remaining best effort.
+    }
+  }
+  child.kill("SIGKILL");
+}
+
+// The production OpenShell runner (RT-03, S-10). It starts argv[0] with the rest as arguments and no
+// shell. The child gets exactly the environment it is given, and its output is discarded so no runner
+// text can reach an error. A process that misses timeoutMs is killed with its process group, so helpers it
+// forked die too, and the call rejects. Failures use fixed messages, never the child's output or the spawn
+// error's text.
+export function spawnOpenShellRunner(environment: Readonly<Record<string, string>>): OpenShellRunner {
+  const childEnvironment: Readonly<Record<string, string>> = Object.freeze({ ...environment });
+  return (argv, options) =>
+    new Promise<OpenShellRunOutcome>((resolve, reject) => {
+      const file = argv[0];
+      if (file === undefined) {
+        reject(new Error(RUNNER_FAILED));
+        return;
+      }
+      let child: ChildProcess;
+      try {
+        child = spawn(file, argv.slice(1), {
+          shell: false,
+          env: { ...childEnvironment },
+          stdio: "ignore",
+          detached: OWN_PROCESS_GROUP,
+        });
+      } catch {
+        reject(new Error(RUNNER_FAILED));
+        return;
+      }
+      const timer = setTimeout(() => {
+        killProcessTree(child);
+        reject(new Error(RUNNER_TIMED_OUT));
+      }, options.timeoutMs);
+      child.once("error", () => {
+        clearTimeout(timer);
+        reject(new Error(RUNNER_FAILED));
+      });
+      child.once("close", (code) => {
+        clearTimeout(timer);
+        resolve({ exitCode: code ?? 1 });
+      });
+    });
+}

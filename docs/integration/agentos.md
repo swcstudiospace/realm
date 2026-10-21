@@ -88,3 +88,12 @@ From the Self-Hosting page: the control plane runs as the `rivetdev/engine` imag
 ## Module blocked
 
 `src/runtime/agentos.ts`, until Phase 3 records the mode choice and the destroy route, or confirms the `ExecutionService` default.
+
+## Phase 3 resolution
+
+Recorded in `docs/integration/runtime-decision.md` (S-11, OQ-P3-05, OQ-P3-06, OQ-P3-07). Summary:
+
+- Mode (Q1, Q2): library mode is primary and runs as the sandbox workload. Hosted mode is secondary and gated. Its worker is Docker-based (Q8).
+- Driver: Phase 3 defines the `AgentOsDriver` port and the supervisor only. It has no concrete binding and no `@rivet-dev/agentos-core` dependency. The in-sandbox channel (OQ-P3-05) and the package check (OQ-P3-06) are blocked.
+- Native binaries (Q5): still open (OQ-P3-07).
+- Destroy route (Q2): still undocumented for hosted mode, so Phase 3 makes no hosted call.

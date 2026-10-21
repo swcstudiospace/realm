@@ -103,3 +103,12 @@ Rule restated: if any of Q2 to Q4 remains `not documented` at Phase 3 entry, the
 
 - No Rust code, no shim, no `src/anda/` file, no Anda dependency.
 - No guessed URLs. Every URL above was read at the listed path.
+
+## Phase 3 resolution
+
+Recorded in `docs/integration/anda-decision.md` (ANDA-01, ANDA-04). Summary:
+
+- Boundary (Q1): TypeScript client over the HTTP API. Phase 3 uses only `GET /.well-known/information`. No Rust shim (D-66).
+- Version (Q4): the handshake is a shape check, not a version check (D-61, OQ-P3-09).
+- RPC and credentials (Q2, Q3): `POST /{id}` and credentials are not used in Phase 3 (OQ-P3-10).
+- Licence (Q6): the conflict stays open (OQ-P3-11). No Anda code or dependency is added.
