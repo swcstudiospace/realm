@@ -38,13 +38,13 @@ Phase requirements: **CORE-01, CORE-02, CORE-03, CORE-04, CORE-06, FS-01, FS-02,
 - **S-04:** The control channel is a user-only Unix socket. Phase 2 records the socket path in the session record; it creates no socket (RT-06 is Phase 6).
 - **S-05:** Reaping keys off the session record. Reaping itself is Phase 4 (RT-08). Phase 2 only writes the record.
 - **S-06:** Host Podman is 4.9.3. Container integration stays gated. Phase 2 tests use the in-memory fake `ExecutionService` only.
-- **D-01..D-18 (Phase 1, `.planning/phases/01-scaffold-and-frozen-contracts/01-CONTEXT.md`):** all still in force. In particular D-01 (advisory default; `fail-closed` is the config value and "required mode" is its prose name), D-10 (21-code catalogue, frozen), D-11 (state table frozen), D-12 (schema wrapper returns `SCHEMA_INVALID`), D-14 (session record: no secrets, `containerId` null until created), D-15 (policy schema frozen, defaults `startupBudgetMs` 10000 and `toolQueueMs` 2000).
+- **Inherited constraints from Phase 1 (informational, not new Phase 2 decisions):** the Phase 1 decision set in `.planning/phases/01-scaffold-and-frozen-contracts/01-CONTEXT.md` remains in force in full. The points Phase 2 relies on are: the policy default is advisory and `fail-closed` is the config value for "required mode"; the 21-code catalogue, state table, and schemas are frozen; `containerId` is null until the container exists; the policy's numeric defaults are 10000 ms for `startupBudgetMs` and 2000 ms for `toolQueueMs`. [informational]
 
 ### Module ownership and layout (spec n2, amended for Phase 2)
 
 - **D-19:** Phase 2 owns these new paths. Each file has exactly one owner (spec n2 rule). Frozen Phase 1 files (`src/core/states.ts`, `src/core/errors.ts`, `src/core/policy.schema.json`, `src/contract/*`) are extended only by adding new files beside them, never by editing their frozen tables.
   - `src/core/state-machine.ts` (behavior over `states.ts`), `src/core/events.ts` (typed bus), `src/core/status.ts` (display mapping), `src/core/policy.ts` (load, defaults, mode decision, exec gate), `src/core/ports.ts` (the `ExecutionService` interface), `src/core/timeout.ts` (`withTimeout`).
-  - `src/fs/` with `root.ts`, `canonicalize.ts`, `glob.ts`, `credentials.ts`, `locks.ts`, `atomic-write.ts`, `read.ts`, `list.ts`, `write.ts` (the locked write composition).
+  - `src/fs/` with `root.ts`, `canonicalize.ts`, `glob.ts`, `credentials.ts`, `locks.ts`, `atomic-write.ts`, `read.ts`, `list.ts`, `write.ts` (the locked write composition). `root.ts` owns only the root binding: `bindRoot(path)` does `realpath`, checks it is a directory, and returns the canonical root object that every other fs function takes. `canonicalize.ts` owns only the walk (D-29). Splitting them keeps the bind step testable on its own.
   - `src/session/` with `paths.ts` (state directory resolution) and `store.ts` (session record persistence).
   - `src/audit/` with `redact.ts` and `log.ts`.
   - `src/lifecycle/controller.ts`. **Amendment to n2:** n2 does not name a lifecycle module. The controller composes core, session, and the port, so it cannot live in `src/core/` without a dependency cycle (session depends on core). It gets its own directory. Phase 3 extends this module with the gating of CORE-05.
@@ -52,13 +52,13 @@ Phase requirements: **CORE-01, CORE-02, CORE-03, CORE-04, CORE-06, FS-01, FS-02,
   - `test/support/fake-execution.ts` (test-only in-memory `ExecutionService`). It lives under `test/`, not `src/`, so no runtime integration code sits in `src/` before its docs gate. This keeps FOUND-03's "no integration module without its note" rule intact.
   - **Reversibility:** reversible (module placement, one-file moves).
 
-- **D-20:** Dependency direction for Phase 2: `core` imports nothing from the other modules. `fs` imports `core`. `session` imports `core` and `fs` (atomic write). `audit` imports `core`. `lifecycle` imports `core`, `session`, and `fs` (none in practice beyond the port). `doctor` imports `core`, `session`, and `fs`. `contract` (existing) imports `core`. **Reversibility:** reversible.
+- **D-20:** Dependency direction for Phase 2: `core` imports nothing from the other modules. `fs` imports `core`. `session` imports `core`, `fs` (atomic replace for the record), and `contract` (validation of the record before write). `audit` imports `core` only (its append is `O_APPEND` on its own file, not the fs replace path). `lifecycle` imports `core`, `session`, `fs`, and `contract` (create validates the record it writes). `doctor` imports `core`, `session`, `fs`, and `contract` (the `policy-file` check validates through `validate("policy", …)`). `contract` (existing) imports `core`. `validate.ts` stays the only module that imports ajv. **Reversibility:** reversible.
 
 ### Policy file and policy engine (CORE-03)
 
 - **D-21:** The policy file is an explicit path supplied by the caller. Phase 2 defines no default location; the CLI and host config choose it in Phase 6. A missing file means the default policy applies (advisory, no roots, shell disabled, session unbound); `doctor` reports that as a warning with the fix. An invalid file fails with `SCHEMA_INVALID` through the existing `validate("policy", …)` wrapper, and the wrapper's defaults fill in missing keys. **Reversibility:** reversible.
 
-- **D-22:** A policy file must not reside inside any of its own `workspaceRoots`. The agent can write inside a workspace root, so a policy stored there could be rewritten by the agent it constrains. The loader rejects such a file with `POLICY_DENIED`. Every `workspaceRoots` entry must be an absolute path; a relative entry fails with `SCHEMA_INVALID`. Each root is canonicalized with `realpath` when the workspace is bound. A root that cannot be canonicalized fails the bind with `POLICY_DENIED`. **Reversibility:** costly. The policy file location rule is part of the user-authored format, so changing it touches every policy file's documented location (Phase 7 policy reference).
+- **D-22:** A policy file must not reside inside any of its own `workspaceRoots`. The agent can write inside a workspace root, so a policy stored there could be rewritten by the agent it constrains. The loader rejects such a file with `POLICY_DENIED`. Every `workspaceRoots` entry must be an absolute path. The frozen policy schema does not enforce this (its items are plain strings, D-15 is frozen), so the loader runs a code check after `validate("policy", …)` succeeds and returns a `SchemaInvalidError` (the same shape the wrapper returns, code `SCHEMA_INVALID`) for a relative entry. Each root is canonicalized with `realpath` when the workspace is bound. A root that cannot be canonicalized fails the bind with `POLICY_DENIED`. **Reversibility:** costly. The policy file location rule is part of the user-authored format, so changing it touches every policy file's documented location (Phase 7 policy reference).
 
 - **D-23:** Mode decision function (pure, no wiring): `decideMutation(policy, state)` returns one of
   - `allow` when state is `active`;
@@ -114,7 +114,7 @@ Phase requirements: **CORE-01, CORE-02, CORE-03, CORE-04, CORE-06, FS-01, FS-02,
 
   **Residual risk (recorded, not hidden):** a rename that targets a parent directory swapped between verification and `rename(2)` is narrowed by the parent re-check immediately before rename, but it cannot be closed with path-based Node APIs. This is an open question for the Phase 7 security review (Q-2). A native or `openat`-capable helper would close it; that is a Rust-shim question for Phase 3 and is not assumed here.
 
-  Linux only. If `/proc/self/fd` is unavailable, every path operation fails closed with `PATH_ESCAPE` (the path cannot be verified, so it is treated as escaping). macOS is V2-01. **Reversibility:** costly (the resolution strategy is used by every fs primitive).
+  Linux only. If `/proc/self/fd` is unavailable, every path operation fails closed with `PATH_ESCAPE` (the path cannot be verified, so it is treated as escaping). The path tests (`test/fs/canonicalize.test.ts`, `test/fs/toctou.test.ts`) must not skip on such a host: a path-verification failure is a real failure and a silent skip would hide it. macOS is V2-01. **Reversibility:** costly (the resolution strategy is used by every fs primitive).
 
 - **D-31:** Credential denial (FS-03). The denied patterns are a single constant in `src/fs/credentials.ts`, matched against the canonical relative path (after symlink resolution, so a symlink into `~/.ssh` is denied). The initial list is:
   - `.env`, `.env.*`, `**/.env`, `**/.env.*`
@@ -208,14 +208,35 @@ Phase requirements: **CORE-01, CORE-02, CORE-03, CORE-04, CORE-06, FS-01, FS-02,
 
 ### Test suite taxonomy (QUAL-02)
 
-- **D-45:** Test layout mirrors `src/` (Phase 1 Claude's Discretion). Categories and their Phase 2 files:
-  - unit: `test/core/*`, `test/fs/glob.test.ts`, `test/audit/*`
-  - state-machine: `test/core/state-machine.test.ts`
-  - path and symlink: `test/fs/canonicalize.test.ts`, `test/fs/toctou.test.ts`
-  - schema rejection: `test/contract/tool-input-gate.test.ts`, `test/contract/exec-policy.test.ts`
-  - audit redaction: `test/audit/redaction.test.ts`
-  - integration (Podman-gated): existing `test/integration/*`, which skips with a stated reason; no new integration test in Phase 2
-  - a taxonomy check: `test/quality/suite-taxonomy.test.ts` asserts that each category directory has at least one test file.
+- **D-45:** Test layout mirrors `src/`: every `src/<dir>/<file>.ts` has its test at `test/<dir>/<file>.test.ts`, except where a file below says otherwise. Every Phase 2 requirement ID maps to at least one named test file. The complete list:
+  - `test/core/state-machine.test.ts` (CORE-01: every allowed edge accepted, every disallowed pair including self-transitions rejected with `REALM_INVALID_TRANSITION`, state unchanged after rejection)
+  - `test/core/status.test.ts` (CORE-02: one of two labels per state; the `degraded` flag; reason and time carried through)
+  - `test/core/events.test.ts` (CORE-04: every committed transition publishes once with from, to, reason, at; listener-failure delivery per D-26)
+  - `test/core/policy.test.ts` (CORE-03: defaults, `SCHEMA_INVALID` on unknown keys, relative root rejected, policy file inside a root rejected with `POLICY_DENIED`, missing file yields defaults)
+  - `test/core/fail-closed.test.ts` (CORE-03 and the n5 silent-fallback mitigation: `decideMutation` for every state under both modes)
+  - `test/core/timeout.test.ts` (QUAL-01: `withTimeout` resolves, rejects with the given code on expiry, clears its timer)
+  - `test/fs/glob.test.ts` (D-32 matcher cases, including `**` at root and in the middle)
+  - `test/fs/canonicalize.test.ts` (FS-01: relative resolution, symlink inside root followed, symlink outside root `PATH_ESCAPE`, hop limit, absent final segment returned as a result)
+  - `test/fs/toctou.test.ts` (FS-02: a symlink swapped in between resolve and open is rejected with `PATH_ESCAPE`, driven by an injected hook at the resolve-to-open boundary)
+  - `test/fs/deny-credentials.test.ts` (FS-03: each denied class denied for read and for write; `credentialAllow` permits; escape reported before credential)
+  - `test/fs/lock.test.ts` (FS-04: conflict returns `LOCK_CONFLICT` and leaves the file unchanged; same-owner idempotence; release; a second owner reaching the same file through a symlink conflicts; session destroy releases)
+  - `test/fs/atomic-write.test.ts` (FS-05: stage hooks `after-temp-write`, `after-fsync`, `before-rename` each leave the original byte-identical and no `.realm-tmp-` file behind; `WRITE_NOT_ATOMIC` reported; success path replaces content)
+  - `test/fs/write.test.ts` (D-34 order: `ifMatchSha256` mismatch and absence both `LOCK_CONFLICT`; hash re-check before rename yields `LOCK_CONFLICT` with the file unchanged)
+  - `test/fs/read-list.test.ts` (D-36: truncation flag, non-regular rejection, symlink reported not followed, 1000-entry cap with `truncated`)
+  - `test/session/store.test.ts` (RT-07: record written with `containerId: null`; fields exactly the frozen schema; modes 0600 and 0700; no secret field; atomic replace on update)
+  - `test/audit/redaction.test.ts` (AUD-01: key-based and value-based redaction; depth limit fails closed; spec n5 credential leakage test)
+  - `test/audit/log.test.ts` (AUD-01: one JSON object per line; redaction before append; no file content in write entries; mode 0600)
+  - `test/contract/tool-input-gate.test.ts` (TOOL-01: cases of D-40 not already covered by `test/contract/tools.schema.test.ts`; read that file first and add only missing cases)
+  - `test/contract/exec-policy.test.ts` (TOOL-02: argv allowed; shell rejected with `SHELL_NOT_ALLOWED` unless `shellEnabled`; shell allowed when enabled; gate never executes)
+  - `test/lifecycle/controller.test.ts` (D-38 transitions and the RT-07 ordering: the fake sees the record with `containerId: null` at the moment of `create`; startup budget overrun gives `STARTUP_BUDGET_EXCEEDED` and `error`; teardown timeout gives `REALM_STOPPING`)
+  - `test/lifecycle/idempotent.test.ts` (CORE-06: every operation repeated returns the same snapshot with no duplicate fake resources)
+  - `test/lifecycle/no-host-env.test.ts` (AUD-02: sentinel environment value never reaches the fake, the record, or the audit line; port sample request has no environment key)
+  - `test/doctor/checks.test.ts` (D-44: pass, warn, and fail outcomes of each of the three checks, each with its fix)
+  - `test/quality/suite-taxonomy.test.ts` (QUAL-02: the test directories `core`, `fs`, `session`, `audit`, `lifecycle`, `contract`, `doctor`, `integration` each hold at least one `*.test.ts`; `test/integration/*` files declare a Podman skip reason)
+
+  Category mapping for the taxonomy check: unit = `core`, `fs`, `session`, `audit`, `lifecycle`, `doctor`; state-machine = `core/state-machine`; path and symlink = `fs/canonicalize`, `fs/toctou`; schema rejection = `contract`; audit redaction = `audit/redaction`; integration = `integration` (existing, Podman-gated, skips with a stated reason; no new integration test in Phase 2).
+
+  `test/support/fake-execution.ts` is a helper, not a test file; it is exercised by the lifecycle tests above.
 
   **MCP and ACP contract tests are not written in Phase 2.** QUAL-02 names them, but no MCP or ACP surface exists until Phase 5, and ROADMAP Phase 5 success criterion 5 already requires those contract tests. Phase 2 covers the transport-neutral part, the tool schema contract, through `tool-input-gate.test.ts`. **Open question Q-4:** the orchestrator should confirm that QUAL-02's MCP and ACP clause moves to Phase 5 (the traceability table maps it to Phase 2 only through the other categories).
 
