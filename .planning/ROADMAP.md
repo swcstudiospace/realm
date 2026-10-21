@@ -54,7 +54,18 @@ Coverage: 46/46 v1 requirements mapped, each to exactly one phase.
   3. All agent execution runs through OpenShell inside the container, and AgentOS is managed only through its supported API, restarting with bounded backoff and reporting `AGENTOS_CRASH_LOOP` after the maximum attempts.
   4. The TypeScript Anda client completes a version handshake, a mismatch fails with `ANDA_VERSION_MISMATCH`, and an unreachable bridge reports `ANDA_UNREACHABLE`, moves the state to degraded, and retries in the background with bounded exponential backoff and jitter; the chosen boundary is recorded in `docs/integration/anda-decision.md`.
   5. `realm down` removes every container carrying the realm label and returns the state to disconnected with zero orphan containers, and Podman-gated integration tests skip with a stated reason while Podman is below 5.x (the local Podman 4.9.3 install is not changed).
-**Plans**: TBD
+**Plans**: 10 plans (waves 1-4)
+Plans:
+- [ ] 03-01-PLAN.md — wave 1 — backoff schedule plus BridgePort contract (ANDA-03, RT-04)
+- [ ] 03-02-PLAN.md — wave 1 — version move, Podman probe, RuntimeConfig validation (RT-02, RT-01)
+- [ ] 03-03-PLAN.md — wave 1 — Anda shape check, anda-decision and runtime-decision notes (ANDA-01, ANDA-04)
+- [ ] 03-04-PLAN.md — wave 1 — closed libpod client and fake socket server (RT-03, RT-09)
+- [ ] 03-05-PLAN.md — wave 2 — OpenShell argv, policy document, idempotent runner (RT-03)
+- [ ] 03-06-PLAN.md — wave 2 — Anda bridge handshake and reconnect (ANDA-02, ANDA-03)
+- [ ] 03-07-PLAN.md — wave 2 — AgentOS supervisor and hardening verifier (RT-04, RT-01)
+- [ ] 03-08-PLAN.md — wave 3 — session execution, down sweep, no-bypass proof (RT-01, RT-03, RT-09, CORE-06)
+- [ ] 03-09-PLAN.md — wave 3 — mutation gate, controller bridge wiring, caller migration (CORE-05, ANDA-03)
+- [ ] 03-10-PLAN.md — wave 4 — doctor checks, Podman gate bodies, taxonomy (RT-02, RT-01, RT-03, RT-09, ANDA-02)
 
 ### Phase 4: Reaper, Egress Guard, and Shared Dispatcher
 **Goal:** Crashed sessions leave nothing behind, the container can reach only allowlisted hosts, and every tool call passes through one dispatcher.
