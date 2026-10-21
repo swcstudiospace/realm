@@ -20,6 +20,7 @@ const CATEGORY_DIRS = [
   "integration",
   "runtime",
   "anda",
+  "tools",
 ] as const;
 
 // F-5 category map: each named category is carried by the files listed under it.
@@ -51,6 +52,15 @@ const CATEGORY_MAP: ReadonlyArray<{ readonly category: string; readonly files: r
   {
     category: "anda bridge",
     files: ["anda/handshake.test.ts", "anda/reconnect.test.ts", "anda/no-shim.test.ts", "anda/boundary-decision.test.ts"],
+  },
+  {
+    category: "tools",
+    files: [
+      "tools/dispatch.test.ts",
+      "tools/queue-timeout.test.ts",
+      "tools/workspace.test.ts",
+      "tools/no-bypass.test.ts",
+    ],
   },
 ];
 
@@ -95,6 +105,12 @@ const D45_FILES = [
   "runtime/agentos-supervisor.test.ts",
   "runtime/libpod-client.test.ts",
   "runtime/decision-note.test.ts",
+  "runtime/egress.test.ts",
+  "session/reap.test.ts",
+  "tools/dispatch.test.ts",
+  "tools/queue-timeout.test.ts",
+  "tools/workspace.test.ts",
+  "tools/no-bypass.test.ts",
   "anda/handshake.test.ts",
   "anda/reconnect.test.ts",
   "anda/no-shim.test.ts",
@@ -134,6 +150,13 @@ const PHASE_3_REQUIREMENT_IDS = [
   "ANDA-02",
   "ANDA-03",
   "ANDA-04",
+] as const;
+// The four Phase 4 requirement IDs (plan 04-07 must_haves; matches .planning/REQUIREMENTS.md).
+const PHASE_4_REQUIREMENT_IDS = [
+  "RT-05",
+  "RT-08",
+  "TOOL-03",
+  "TOOL-04",
 ] as const;
 
 function gateReasonOf(probe: PodmanProbe): string {
@@ -238,4 +261,16 @@ test("all 10 Phase 3 requirement IDs lead the title of a test in a named D-45 te
   }
   const uncovered = PHASE_3_REQUIREMENT_IDS.filter((id) => !leading.has(id));
   assert.deepEqual(uncovered, [], `Phase 3 requirement IDs named by no D-45 test title: ${uncovered.join(", ")}`);
+});
+
+test("all 4 Phase 4 requirement IDs lead the title of a test in a named D-45 test file (QUAL-02, Phase 4)", () => {
+  const citing = D45_FILES.filter((file) => file !== "quality/suite-taxonomy.test.ts");
+  const leading = new Set<string>();
+  for (const file of citing) {
+    for (const id of titleLeadingIds(readFileSync(join(TEST_DIR, file), "utf8"))) {
+      leading.add(id);
+    }
+  }
+  const uncovered = PHASE_4_REQUIREMENT_IDS.filter((id) => !leading.has(id));
+  assert.deepEqual(uncovered, [], `Phase 4 requirement IDs named by no D-45 test title: ${uncovered.join(", ")}`);
 });

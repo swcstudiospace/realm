@@ -1,6 +1,6 @@
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SessionRecord } from "../../src/contract/validate.js";
@@ -124,4 +124,32 @@ test("resolveStateDir prefers an absolute XDG_STATE_HOME, falls back to HOME, an
   assert.equal(resolveStateDir({ HOME: "/home/user" }), "/home/user/.local/state/realm");
   assert.equal(resolveStateDir({ XDG_STATE_HOME: "relative/state", HOME: "/home/user" }), "/home/user/.local/state/realm");
   assert.throws(() => resolveStateDir({}), /neither XDG_STATE_HOME nor an absolute HOME/);
+});
+
+test("RT-08: list() returns the sorted ids of record files and ignores names that do not match the record pattern (D-85)", (t) => {
+  const { store, stateDir, sessionsDir } = fixture(t);
+  store.save(recordFor(stateDir, "session-b"));
+  store.save(recordFor(stateDir, "session-a"));
+  writeFileSync(join(sessionsDir, "notes.txt"), "not a record");
+  writeFileSync(join(sessionsDir, ".hidden.json"), "{}");
+  writeFileSync(join(sessionsDir, "has space.json"), "{}");
+  writeFileSync(join(sessionsDir, "a.b.json"), "{}");
+  writeFileSync(join(sessionsDir, "session-c.json.bak"), "{}");
+  mkdirSync(join(sessionsDir, "directory-record.json"));
+  assert.deepEqual(store.list(), ["session-a", "session-b"]);
+});
+
+test("RT-08: list() includes the id of a record whose contents are corrupt, so the record can still be deleted (D-85)", (t) => {
+  const { store, sessionsDir } = fixture(t);
+  mkdirSync(sessionsDir, { recursive: true, mode: 0o700 });
+  writeFileSync(join(sessionsDir, "corrupt-1.json"), "{not json");
+  assert.deepEqual(store.list(), ["corrupt-1"]);
+  store.delete("corrupt-1");
+  assert.deepEqual(store.list(), []);
+});
+
+test("RT-08: list() on an absent sessions directory returns an empty array, not null (D-85)", (t) => {
+  const { store, sessionsDir } = fixture(t);
+  assert.equal(existsSync(sessionsDir), false);
+  assert.deepEqual(store.list(), []);
 });

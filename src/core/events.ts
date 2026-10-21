@@ -19,21 +19,30 @@ export type RealmEvent = StateTransitionEvent;
 export type RealmListener = (event: RealmEvent) => void;
 
 export interface EventBus {
-  subscribe(listener: RealmListener): void;
+  subscribe(listener: RealmListener): () => void;
   publish(event: RealmEvent): void;
 }
 
 export function createEventBus(): EventBus {
-  const listeners: RealmListener[] = [];
+  // One entry per subscription, so removing one registration never removes another, even when
+  // the same listener function is subscribed twice.
+  const subscriptions: { readonly listener: RealmListener }[] = [];
   return {
     subscribe(listener) {
-      listeners.push(listener);
+      const subscription = { listener };
+      subscriptions.push(subscription);
+      return () => {
+        const index = subscriptions.indexOf(subscription);
+        if (index !== -1) {
+          subscriptions.splice(index, 1);
+        }
+      };
     },
     publish(event) {
       let failure: { readonly error: unknown } | undefined;
-      // Iterate over a copy so a listener subscribed during delivery does not
-      // receive the event that is already in flight.
-      for (const listener of [...listeners]) {
+      // Iterate over a copy so a listener subscribed during delivery does not receive the event
+      // already in flight. A listener removed during delivery is still handed that event.
+      for (const { listener } of [...subscriptions]) {
         try {
           listener(event);
         } catch (error: unknown) {

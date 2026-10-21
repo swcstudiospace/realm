@@ -7,7 +7,7 @@
 // change to the field set or the location needs a migration, so the record carries
 // exactly the frozen fields and no token, secret, or environment value.
 
-import { existsSync, closeSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, closeSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { validate, type SessionRecord } from "../contract/validate.js";
 import { makeRealmError } from "../core/errors.js";
@@ -17,6 +17,7 @@ import { bindRoot } from "../fs/root.js";
 import { recordFileName, sessionsDirOf } from "./paths.js";
 
 const DIRECTORY_MODE = 0o700;
+const RECORD_SUFFIX = ".json";
 
 export class SessionStore {
   readonly stateDir: string;
@@ -57,6 +58,30 @@ export class SessionStore {
       closeSync(opened.fd);
     }
     return parseRecord(text);
+  }
+
+  // The session ids of the record files, sorted (D-85). A name is taken only when it is a regular file
+  // ending in .json whose stem passes recordFileName. No file is opened or parsed, so a corrupt record is
+  // still listed and can be deleted. An absent sessions directory lists nothing.
+  list(): string[] {
+    const dir = sessionsDirOf(this.stateDir);
+    if (!existsSync(dir)) {
+      return [];
+    }
+    const ids: string[] = [];
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.endsWith(RECORD_SUFFIX)) {
+        continue;
+      }
+      const sessionId = entry.name.slice(0, -RECORD_SUFFIX.length);
+      try {
+        recordFileName(sessionId);
+      } catch {
+        continue;
+      }
+      ids.push(sessionId);
+    }
+    return ids.sort();
   }
 
   // Removing a record that does not exist is a no-op.

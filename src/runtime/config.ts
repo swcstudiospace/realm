@@ -29,11 +29,26 @@ const ACCEPTED_KEYS: Readonly<Record<string, true>> = {
   workspaceRoot: true,
 };
 
+// D-80: host networking and driver escape. The closed key set refuses these too; naming them here
+// makes the refusal explicit in the code and in the tests.
+const DENIED_KEYS: Readonly<Record<string, true>> = {
+  network: true,
+  networkMode: true,
+  hostNetwork: true,
+  netns: true,
+  driverConfig: true,
+  driverConfigJson: true,
+};
+
 // Validates an untrusted input object and returns a frozen RuntimeConfig. Any violation throws
 // a RealmError with SCHEMA_INVALID. The error names no field value, so no secret reaches a log.
 export function loadRuntimeConfig(input: unknown): RuntimeConfig {
   const record = plainRecord(input);
   for (const key of Object.keys(record)) {
+    // D-80: the named refusal for host-network and driver-escape keys, checked before the closed key set.
+    if (Object.hasOwn(DENIED_KEYS, key)) {
+      reject();
+    }
     if (!Object.hasOwn(ACCEPTED_KEYS, key)) {
       reject();
     }
@@ -69,8 +84,8 @@ function requireImage(value: unknown): string {
   return value;
 }
 
-// A non-empty array of non-empty strings. The copy means later changes to the caller's array
-// cannot alter the loaded config.
+// A non-empty array of non-empty strings whose first element is an absolute path (D-79). The copy
+// means later changes to the caller's array cannot alter the loaded config.
 function requireArgv(value: unknown): readonly string[] {
   if (!Array.isArray(value) || value.length === 0) {
     reject();
@@ -81,6 +96,11 @@ function requireArgv(value: unknown): readonly string[] {
       reject();
     }
     argv.push(item);
+  }
+  // D-79: argv[0] must be an absolute path. An OpenShell network rule matches the executable by
+  // path, and an empty binaries list matches nothing.
+  if (!isAbsolute(argv[0] ?? "")) {
+    reject();
   }
   return Object.freeze(argv);
 }

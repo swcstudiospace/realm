@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { RealmError, type ErrorCode } from "../../src/core/errors.js";
 import { LibpodClient } from "../../src/runtime/libpod-client.js";
-import { removeAllRealmContainers } from "../../src/runtime/session-execution.js";
+import { removeAllRealmContainers } from "../../src/runtime/sweep.js";
 import { FakeContainerStore, FakeLibpod } from "../support/fake-libpod.js";
 
 const REALM_LABELS = { "io.realm.managed": "true" };
@@ -35,14 +35,15 @@ async function assertCode(work: Promise<unknown>, code: ErrorCode): Promise<void
   await assert.rejects(work, (error: unknown) => error instanceof RealmError && error.code === code);
 }
 
-test("RT-09: the sweep removes every realm-labelled container and leaves a foreign container untouched", async (t) => {
+test("RT-08: the sweep removes every realm-labelled container, leaves a foreign container untouched, and returns the removed count", async (t) => {
   const { store, libpod, client } = await startFixture(t);
   for (const n of [1, 2, 3]) {
     store.add({ id: `realm-${n}`, labels: { ...REALM_LABELS, "io.realm.session": `s-${n}` }, running: n % 2 === 1 });
   }
   store.add({ id: "foreign-1", labels: { owner: "someone-else" }, running: true });
 
-  await removeAllRealmContainers(client);
+  const removed = await removeAllRealmContainers(client);
+  assert.equal(removed, 3);
 
   assert.deepEqual(
     store.list().map((container) => container.id),
@@ -56,19 +57,19 @@ test("RT-09: the sweep removes every realm-labelled container and leaves a forei
   );
 });
 
-test("RT-09: the sweep lists before and after removal on every run, and a repeated sweep over a clean host is a no-op", async (t) => {
+test("RT-08: the sweep lists before and after removal on every run, and a repeated sweep over a clean host is a no-op returning zero", async (t) => {
   const { libpod, client } = await startFixture(t);
 
-  await removeAllRealmContainers(client);
+  assert.equal(await removeAllRealmContainers(client), 0);
   assert.equal(requestsOn(libpod, "listContainers").length, 2);
   assert.equal(requestsOn(libpod, "removeContainer").length, 0);
 
-  await removeAllRealmContainers(client);
+  assert.equal(await removeAllRealmContainers(client), 0);
   assert.equal(requestsOn(libpod, "listContainers").length, 4);
   assert.equal(requestsOn(libpod, "removeContainer").length, 0);
 });
 
-test("RT-09: a container that cannot be removed gives REALM_STOPPING, and a repeated sweep resumes and clears it", async (t) => {
+test("RT-08: a container that cannot be removed gives REALM_STOPPING, and a repeated sweep clears it and returns its count", async (t) => {
   const { store, libpod, client } = await startFixture(t);
   store.add({ id: "realm-stuck", labels: REALM_LABELS, running: true });
   libpod.respondNext("removeContainer", { status: 500 });
@@ -76,6 +77,6 @@ test("RT-09: a container that cannot be removed gives REALM_STOPPING, and a repe
   await assertCode(removeAllRealmContainers(client), "REALM_STOPPING");
   assert.equal(store.list().length, 1);
 
-  await removeAllRealmContainers(client);
+  assert.equal(await removeAllRealmContainers(client), 1);
   assert.equal(store.list().length, 0);
 });

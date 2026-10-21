@@ -97,3 +97,45 @@ Reversibility: costly. Every runtime module depends on this layering.
 - **Unit-verified in Phase 3:** argv and policy shape (D-55, D-57), the libpod client method set (D-54), the probe mapping (D-53), config rules (D-52), and the lifecycle gates (D-63 to D-68). All run against in-process fakes and the fake libpod socket.
 - **Live-gated (skip with a stated reason, fail closed):** OQ-P3-01, 02, 03, 12, 14, and 15. Live suites skip on 4.9.3 with `PODMAN_UNSUPPORTED_VERSION`.
 - **Not claimed:** any live container, OpenShell sandbox, AgentOS run, or Anda RPC call. No Phase 3 report may say "live verified".
+
+## Phase 4: Reaper, Egress Guard, and Shared Dispatcher (D-100)
+
+Phase 4 status: decided for Phase 4. Live behavior is unit-verified, live-gated: the RT-05, RT-08, and TOOL-03 live bodies in `test/integration/podman-gate.test.ts` skip with `PODMAN_UNSUPPORTED_VERSION` on 4.9.3. Nothing here is live-verified on this host.
+Scope: the startup reaper (RT-08), the egress allowlist and its OpenShell rendering (RT-05), the shared dispatcher (TOOL-03, TOOL-04), and every open question OQ-P4-01 to OQ-P4-12 with its default.
+
+### OQ-P3-16 resolution (D-82)
+
+OQ-P3-16 is resolved for the fields Realm writes. Source: `https://docs.nvidia.com/openshell/v0.1.2/how-it-works/policies/schema.md`, read 2026-10-21 (the pinned CLI is 0.1.2, so the v0.1.2 index is used, not the v0.1.5 page). The page documents: `network_policies` as a map of rules; a rule with `name`, `endpoints` (list), and `binaries` (list); an endpoint with `host` and `port` or `ports`; a binary object with `path`; and that an empty `binaries` list matches no binary. Realm writes only `name`, `endpoints[].host`, `endpoints[].port`, and `binaries[].path` (D-78). The inspection and protocol fields are not used. Live acceptance of the rendered document stays gated (OQ-P4-02).
+
+### Exec verb pin (D-93)
+
+Phase 3 deferred exec because no exec verb was in the pinned OpenShell set. The local 0.1.2 CLI now shows `openshell sandbox exec` (read-only `--help` check, 2026-10-21). It lists `-n/--name`, `--workdir`, `--timeout`, `--tty/--no-tty`, `--no-login-shell`, and `--env` (which is never used). The `sandbox exec` verb and the four flags used in D-92 are added to the pinned set (S-10). Pinned argv (D-92): `openshell sandbox exec --name realm-<sessionId> --workdir /workspace --no-tty --no-login-shell -- <argv...>`. The live exec path stays gated (OQ-P4-04).
+
+### IPv6 partial status (D-76)
+
+RT-05 says "IPv6 is disabled". Realm does not create the container and cannot set its sysctls, so Realm cannot disable IPv6 directly. Phase 4 enforces what Realm can and reports the rest: (a) no IPv6 host or address appears in any rendered `network_policies` entry (D-80 refuses IPv6 literals); (b) the hardening verifier keeps `NetworkMode: none` (D-51), so the workload container has no interface and no IPv6 address; (c) whether the supervisor proxy blocks IPv6 egress is unverified and live-gated (OQ-P4-01). The unit suite reports RT-05 IPv6 as partially unit-verified.
+
+### Single-owner precondition (D-87, OQ-P4-06)
+
+`reapStartup` must run before any `LifecycleController` or `ToolDispatcher` exists in the process, and only one host daemon may own the state directory (S-19, Phase 6). Phase 4 has no cross-process owner check. A second host process could reap a live session. The reap precondition and the single-daemon rule in Phase 6 are the mitigation; until then this is an accepted residual risk (OQ-P4-06).
+
+### Audit: two lines per call (D-90)
+
+A dispatcher call writes two audit lines: an admission line before execution and a result line after. Both use the Phase 2 entry format (D-42) with one additive, optional field, `phase`, valued `admission` or `result`. Outcome alone cannot separate the two lines, because a successful call has outcome `ok` on both. Phase 7 review must read both lines of one call as one call.
+
+### Open questions and defaults (OQ-P4-01 to OQ-P4-12)
+
+| ID | Question | Default applied | Blocked module or phase | Status |
+| --- | --- | --- | --- | --- |
+| OQ-P4-01 | Does the OpenShell supervisor proxy block IPv6 egress, and does it enforce `network_policies` when the workload container has networking off? | Rely on the proxy and the rendered IPv4-only policy; the live property is gated. | Live egress proof in `test/integration/podman-gate.test.ts` (RT-05, D-75) | Live-gated. Fails closed. |
+| OQ-P4-02 | Does the OpenShell 0.1.2 gateway accept the D-78 document at `--policy` create, and is `binaries[].path` matched by the workload interpreter? | The document as rendered, with `workloadArgv[0]` absolute (D-79). | Live acceptance of the policy document in `src/runtime/openshell.ts` | Live-gated. Fails closed. |
+| OQ-P4-03 | The v0.1.2 page documents the endpoint fields Realm uses, but the inspection and protocol fields were read only in part. | Realm writes none of them. Re-verify on upgrade. | The rendered shape in `src/runtime/egress.ts` (D-78) | Recorded assumption. |
+| OQ-P4-04 | Does `openshell sandbox exec --name realm-<id> --workdir /workspace --no-tty --no-login-shell` run against a gateway-created sandbox, and does the sandbox have `/bin/sh` for shell form? | The argv form is the tested path; shell form is gated. | Live exec path in `test/integration/podman-gate.test.ts` (TOOL-03, D-92) | Live-gated. Fails closed. |
+| OQ-P4-05 | Does `sandbox exec` return the remote exit code through the CLI exit status? | Yes (the 0.1.2 help says "The CLI exits with the remote command's exit code"); the gated suite verifies it. | Exec result mapping in `src/runtime/session-execution.ts` (D-94) | Live-gated. Fails closed. |
+| OQ-P4-06 | Reaping has no cross-process owner check. A second host process could reap a live session. | The reap precondition (D-87) and the single-daemon rule in Phase 6. | Phase 6 single-daemon control channel (RT-06) | Residual risk. Accepted in Phase 6. |
+| OQ-P4-07 | A result-audit failure after a write has landed. | Return `AUDIT_WRITE_FAILED` to the caller and do not roll back. The caller must treat the outcome as unknown. | Dispatcher result stage in `src/tools/dispatch.ts` (D-89) | Decided. |
+| OQ-P4-08 | The queue-wait error for advisory writes. | After the wait, advisory writes proceed with a warning; exec and required-mode writes return `REALM_NOT_ACTIVE`. | Dispatcher queue wait in `src/tools/dispatch.ts` (D-91) | Decided. |
+| OQ-P4-09 | The value of `TOOL_CALL_TIMEOUT_MS` (30000). | The constant. Revisit only with a measured need, not as a policy key. | Dispatcher timeout in `src/tools/dispatch.ts` (D-91) | Decided. |
+| OQ-P4-10 | Egress changes after create. | Fixed at create; changing it means destroy and recreate. Live `openshell policy set` is not used in Phase 4. | Session lifecycle after create (RT-05, D-81) | Decided. |
+| OQ-P4-11 | Retry and status surface. | The dispatcher implements both (D-95); Phase 5 exposes `retry` through OMP-03. | Phase 5 OMP surface (TOOL-05, OMP-03) | Decided. Phase 5 exposes. |
+| OQ-P4-12 | An allowlisted hostname that resolves to a private address is reachable under OpenShell's documented rule for exact hostnames. | Realm does not add `allowed_ips`, so the allowlist must contain only hosts the user intends to reach. | Egress allowlist review (RT-05, D-77) | Residual risk. Recorded. |

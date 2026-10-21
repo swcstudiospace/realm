@@ -7,6 +7,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { request as httpRequest, type ClientRequest } from "node:http";
 import { AndaBridge, sleepUnlessAborted, type SleepFn } from "../../src/anda/client.js";
 import { RealmError } from "../../src/core/errors.js";
 import type { BridgeEvent } from "../../src/core/ports.js";
@@ -245,28 +246,39 @@ test("ANDA-02/ANDA-03: connect after close starts a fresh handshake and reaches 
 });
 
 // Real timers: a failed connect must clear each attempt timer and leave no request open (F-P3-05).
+// Attempts are counted at the transport seam, which is the bridge's own record of what it sent. The
+// fake engine records a request only once it parses it, so a request the bridge abandoned before the
+// engine parsed it can reach the engine's log after a snapshot of that log. The request timeout is set
+// well above any scheduling stall, so a retry's first attempt is not cut short by its timer under load.
 test("ANDA-03: a failed connect leaves no live timer and no open request, and a retry on the same bridge succeeds", async (t) => {
   const fake = new FakeAnda();
   await fake.start();
   t.after(() => fake.stop());
   fake.respond({ kind: "hang" });
+  const sent: ClientRequest[] = [];
   const bridge = new AndaBridge({
     url: fake.url(),
     random: () => 1,
     backoff: { baseMs: 5, capMs: 20 },
-    requestTimeoutMs: 50,
+    requestTimeoutMs: 1000,
+    transport: (options, onResponse) => {
+      const req = httpRequest(options, onResponse);
+      sent.push(req);
+      return req;
+    },
   });
   t.after(() => bridge.close());
   const before = liveTimers();
 
-  await assert.rejects(bridge.connect(120), expectCode("ANDA_UNREACHABLE"));
+  await assert.rejects(bridge.connect(2500), expectCode("ANDA_UNREACHABLE"));
   await fake.waitUntil(() => fake.requests().every((request) => request.aborted));
   assert.equal(liveTimers(), before, "a failed connect clears every attempt timer");
+  assert.ok(sent.every((req) => req.destroyed), "a failed connect destroys every request it sent");
 
-  const failed = fake.requestCount();
+  const failed = sent.length;
   fake.respond({ kind: "json", body: HEALTHY_INFORMATION });
   await bridge.connect(5000);
-  assert.equal(fake.requestCount(), failed + 1, "the retry's first attempt succeeds");
+  assert.equal(sent.length, failed + 1, "the retry's first attempt succeeds");
 });
 
 test("ANDA-03: a connect that exhausts its deadline is retryable, and the retry waits within its own deadline", async (t) => {

@@ -276,3 +276,26 @@ test("a FIFO at the session's audit path makes the append fail with AUDIT_WRITE_
     rmSync(stateDir, { recursive: true, force: true });
   }
 });
+
+test("TOOL-03: an entry carries its phase when the caller names one, and each phase is its own line (D-90, D-107)", () => {
+  withStateDir((stateDir) => {
+    appendAudit(stateDir, { sessionId: SESSION, tool: "write", outcome: "ok", phase: "admission", path: "a.txt" });
+    appendAudit(stateDir, { sessionId: SESSION, tool: "write", outcome: "ok", phase: "result", path: "a.txt", bytes: 7, sha256: HEX64 });
+
+    const lines = readLines(stateDir).map((line) => JSON.parse(line) as Record<string, unknown>);
+    assert.equal(lines.length, 2);
+    assert.equal(lines[0]?.["phase"], "admission");
+    assert.equal(lines[1]?.["phase"], "result");
+    assert.equal(lines[0]?.["outcome"], "ok");
+    assert.equal(lines[1]?.["outcome"], "ok");
+  });
+});
+
+test("TOOL-03: an entry with no phase has no phase key, so the pre-stage shape is unchanged (D-107)", () => {
+  withStateDir((stateDir) => {
+    appendAudit(stateDir, { sessionId: SESSION, tool: "list", outcome: "ok", path: "." });
+    const entry = JSON.parse(readLines(stateDir)[0] ?? "") as Record<string, unknown>;
+    assert.equal("phase" in entry, false);
+    assert.deepEqual(Object.keys(entry).sort(), ["at", "outcome", "path", "sessionId", "tool"]);
+  });
+});

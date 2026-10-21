@@ -6,11 +6,13 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { RealmError, type ErrorCode } from "../../src/core/errors.js";
 import { AgentOsSupervisor } from "../../src/runtime/agentos.js";
+import { renderNetworkPolicies } from "../../src/runtime/egress.js";
 import { HARDENING_PROFILE } from "../../src/runtime/hardening.js";
 import { LibpodClient } from "../../src/runtime/libpod-client.js";
-import { buildPolicyDocument, type OpenShellRunner } from "../../src/runtime/openshell.js";
+import { buildExecArgv, buildPolicyDocument, OPENSHELL_OUTPUT_LIMIT_BYTES, OpenShellRunnerError, type OpenShellRunner } from "../../src/runtime/openshell.js";
 import {
   HardeningFailedError,
+  runSandboxExec,
   SessionExecution,
   selectOpenShellEnvironment,
   spawnOpenShellRunner,
@@ -23,7 +25,11 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const SESSION = "sess-01";
 const DIGEST = `sha256:${"a".repeat(64)}`;
 const IMAGE = `registry.example.com/realm/session@${DIGEST}`;
-const WORKLOAD = ["/usr/bin/agent", "--serve"];
+const WORKLOAD_BINARY = "/usr/bin/agent";
+const WORKLOAD = [WORKLOAD_BINARY, "--serve"];
+const EGRESS = [{ host: "api.example.com", port: 443 }];
+// The D-80 flags no argv on the execution path may carry (RT-05). Each is compared as a whole argv element.
+const FORBIDDEN_FLAGS = ["--env", "--provider", "--driver-config-json", "--forward", "--expose", "--template", "--auto-providers"];
 
 interface Fixture {
   readonly base: string;
@@ -35,8 +41,9 @@ interface Fixture {
   readonly driver: FakeAgentOsDriver;
   readonly supervisor: AgentOsSupervisor;
   readonly exec: SessionExecution;
-  // One entry per OpenShell run: whether the policy document already existed when it ran.
-  readonly policyPresentAtRun: boolean[];
+  // One entry per OpenShell run: the policy document's text when the run starts, or undefined when no
+  // document exists yet.
+  readonly policyAtRun: (string | undefined)[];
 }
 
 async function fixture(t: TestContext, options: { readonly rootless?: boolean } = {}): Promise<Fixture> {
@@ -53,10 +60,10 @@ async function fixture(t: TestContext, options: { readonly rootless?: boolean } 
   t.after(() => libpod.stop());
 
   const openshell = new FakeOpenShell(store);
-  const policyPresentAtRun: boolean[] = [];
+  const policyAtRun: (string | undefined)[] = [];
   const runner: OpenShellRunner = (argv, options) => {
     const policy = argv[argv.indexOf("--policy") + 1];
-    policyPresentAtRun.push(policy !== undefined && existsSync(policy));
+    policyAtRun.push(policy !== undefined && existsSync(policy) ? readFileSync(policy, "utf8") : undefined);
     return openshell.runner(argv, options);
   };
   const driver = new FakeAgentOsDriver();
@@ -72,6 +79,7 @@ async function fixture(t: TestContext, options: { readonly rootless?: boolean } 
     runner,
     agentos: supervisor,
     config: { image: IMAGE, workloadArgv: WORKLOAD, stateDir },
+    egressAllow: EGRESS,
   });
   return {
     base,
@@ -83,7 +91,7 @@ async function fixture(t: TestContext, options: { readonly rootless?: boolean } 
     driver,
     supervisor,
     exec,
-    policyPresentAtRun,
+    policyAtRun,
   };
 }
 
@@ -159,9 +167,60 @@ test("RT-01, RT-03: an inspect that cannot be read fails closed, removes the con
 test("RT-03, CORE-06: the policy document is written before the OpenShell create runs", async (t) => {
   const f = await fixture(t);
   await createSession(f);
-  assert.deepEqual(f.policyPresentAtRun, [true]);
+  assert.equal(f.policyAtRun.length, 1, "one OpenShell run, the create");
+  assert.notEqual(f.policyAtRun[0], undefined, "the policy document exists when the create runs");
   const policy = join(f.stateDir, "runtime", `${SESSION}.policy.json`);
-  assert.equal(readFileSync(policy, "utf8"), `${JSON.stringify(buildPolicyDocument(), null, 2)}\n`);
+  assert.equal(readFileSync(policy, "utf8"), `${JSON.stringify(buildPolicyDocument(EGRESS, WORKLOAD_BINARY), null, 2)}\n`);
+});
+
+test("RT-05, RT-03: create writes the egress list and the workload binary into the policy the create runs against", async (t) => {
+  const f = await fixture(t);
+  await createSession(f);
+  const written = f.policyAtRun[0];
+  assert.ok(written !== undefined, "the policy document exists when the create runs");
+  assert.equal(written, `${JSON.stringify(buildPolicyDocument(EGRESS, WORKLOAD_BINARY), null, 2)}\n`);
+  const policy = JSON.parse(written) as { readonly network_policies: unknown };
+  assert.deepEqual(policy.network_policies, renderNetworkPolicies(EGRESS, WORKLOAD_BINARY));
+});
+
+test("RT-05: an invalid egress allowlist throws SCHEMA_INVALID at construction, before any OpenShell run, container, policy write or libpod request", async (t) => {
+  const f = await fixture(t);
+  const invalid: readonly unknown[] = [
+    [{ host: "*.example.com", port: 443 }],
+    [{ host: "localhost", port: 443 }],
+    "api.example.com:443",
+  ];
+  for (const egressAllow of invalid) {
+    assert.throws(
+      () =>
+        new SessionExecution({
+          libpod: new LibpodClient(join(f.base, "podman.sock")),
+          runner: f.openshell.runner,
+          agentos: f.supervisor,
+          config: { image: IMAGE, workloadArgv: WORKLOAD, stateDir: f.stateDir },
+          egressAllow,
+        }),
+      (error: unknown) => error instanceof RealmError && error.code === "SCHEMA_INVALID",
+    );
+  }
+  assert.equal(f.openshell.callCount(), 0, "no OpenShell run starts");
+  assert.equal(f.store.list().length, 0, "no container is created");
+  assert.equal(existsSync(join(f.stateDir, "runtime")), false, "no policy document is written");
+  assert.equal(f.libpod.requests().length, 0, "the libpod client receives no request");
+});
+
+test("RT-05, D-80: no argv the execution path spawns, for create or exec, carries a forbidden flag", async (t) => {
+  const f = await fixture(t);
+  await createSession(f);
+  f.openshell.next({ output: { exitCode: 0 } });
+  await runSandboxExec(f.openshell.runner, SESSION, WORKLOAD, 1000);
+  const spawned = f.openshell.calls();
+  assert.deepEqual(spawned.map((call) => call.argv[2]), ["create", "exec"]);
+  for (const call of spawned) {
+    for (const flag of FORBIDDEN_FLAGS) {
+      assert.equal(call.argv.includes(flag), false, `${flag} is absent from the ${call.argv[2]} argv`);
+    }
+  }
 });
 
 test("RT-03, RT-04: start refuses a container that is not running and starts AgentOS only through the supervisor", async (t) => {
@@ -244,6 +303,35 @@ test("RT-03: stop stops the container, destroy removes it, and a repeated stop o
   assert.equal(routeCount(f, "stopContainer"), stops, "a stop of a removed container sends no stop request");
 });
 
+test("RT-03, RT-01: a stop whose AgentOS stop throws still stops the container, then reports AGENTOS_CRASH_LOOP", async (t) => {
+  const f = await fixture(t);
+  const { containerId } = await createSession(f);
+  f.supervisor.stop = () => Promise.reject(new Error("scripted supervisor socket gone"));
+  await assertCode(f.exec.stop(containerId), "AGENTOS_CRASH_LOOP");
+  assert.equal(f.store.get(containerId)?.running, false, "the container is stopped although the AgentOS stop failed");
+});
+
+test("RT-03, RT-04, RT-01: destroy stops AgentOS while the container still exists, and removes the container even when that stop throws", async (t) => {
+  const f = await fixture(t);
+  const { containerId } = await createSession(f);
+  await f.exec.start(containerId);
+  const seen: boolean[] = [];
+  const stopAgentOs = f.supervisor.stop.bind(f.supervisor);
+  f.supervisor.stop = async () => {
+    seen.push(f.store.get(containerId) !== undefined);
+    await stopAgentOs();
+  };
+  await f.exec.destroy(containerId);
+  assert.equal(f.driver.callCount("stop"), 1, "destroy stops the AgentOS driver");
+  assert.deepEqual(seen, [true], "AgentOS stops while the container still exists");
+  assert.equal(f.store.get(containerId), undefined, "the container is removed after AgentOS stops");
+
+  const second = await createSession(f, "sess-02");
+  f.supervisor.stop = () => Promise.reject(new Error("scripted supervisor socket gone"));
+  await assertCode(f.exec.destroy(second.containerId), "AGENTOS_CRASH_LOOP");
+  assert.equal(f.store.get(second.containerId), undefined, "the container is removed even though the AgentOS stop failed");
+});
+
 function routeCount(f: Fixture, route: string): number {
   return f.libpod.requests().filter((request) => request.route === route).length;
 }
@@ -314,6 +402,104 @@ test("RT-03: the OpenShell runner rejects a binary that cannot start, and the re
   );
   assert.ok(error instanceof Error);
   assert.equal(error.message.includes(missing), false);
+});
+
+// The production runner with the minimal environment, for children that are plain node scripts.
+function nodeRunner(): OpenShellRunner {
+  return spawnOpenShellRunner({ PATH: process.env["PATH"] ?? "/usr/bin:/bin" });
+}
+
+test("TOOL-03: exec spawns the pinned exec argv with output capture on and returns the runner outcome as it is", async (t) => {
+  const f = await fixture(t);
+  f.openshell.next({ output: { exitCode: 0, stdout: "hello", stderr: "warn", truncated: false } });
+  const outcome = await runSandboxExec(f.openshell.runner, SESSION, WORKLOAD, 1500);
+  assert.deepEqual(outcome, { exitCode: 0, stdout: "hello", stderr: "warn", truncated: false });
+  const [call] = f.openshell.calls();
+  assert.deepEqual(call?.argv, buildExecArgv(SESSION, WORKLOAD));
+  assert.equal(call?.captureOutput, true);
+  assert.equal(call?.timeoutMs, 1500);
+  assert.equal(f.store.list().length, 0, "exec creates no container");
+});
+
+test("TOOL-03: a non-zero remote exit code is a successful call carrying exitCode, not an error", async (t) => {
+  const f = await fixture(t);
+  f.openshell.next({ output: { exitCode: 7, stdout: "partial", stderr: "", truncated: false } });
+  const outcome = await runSandboxExec(f.openshell.runner, SESSION, WORKLOAD, 1500);
+  assert.equal(outcome.exitCode, 7);
+  assert.equal(outcome.stdout, "partial");
+});
+
+test("TOOL-03: a runner rejection during exec maps to REALM_NOT_ACTIVE, and the error carries no child text", async (t) => {
+  const f = await fixture(t);
+  f.openshell.next("reject-failed");
+  await assertCode(runSandboxExec(f.openshell.runner, SESSION, WORKLOAD, 1500), "REALM_NOT_ACTIVE");
+  f.openshell.next("reject");
+  await assert.rejects(
+    runSandboxExec(f.openshell.runner, SESSION, WORKLOAD, 1500),
+    (error: unknown) => error instanceof RealmError && error.code === "REALM_NOT_ACTIVE" && !error.message.includes("ENOENT"),
+  );
+});
+
+test("TOOL-03: a deadline expiry during exec maps to TOOL_TIMEOUT", async (t) => {
+  const f = await fixture(t);
+  f.openshell.next("reject-timed-out");
+  await assertCode(runSandboxExec(f.openshell.runner, SESSION, WORKLOAD, 1500), "TOOL_TIMEOUT");
+});
+
+test("TOOL-03: exec refuses a non-positive timeout before any OpenShell run starts", async (t) => {
+  const f = await fixture(t);
+  await assertCode(runSandboxExec(f.openshell.runner, SESSION, WORKLOAD, 0), "SCHEMA_INVALID");
+  assert.equal(f.openshell.callCount(), 0);
+});
+
+test("TOOL-03: captured output is bounded at 262144 bytes per stream, and truncated is set when a stream is cut", async () => {
+  const outcome = await nodeRunner()(
+    [process.execPath, "-e", "process.stdout.write(Buffer.alloc(300000, 97)); process.stderr.write('bbbbb');"],
+    { timeoutMs: 10_000, captureOutput: true },
+  );
+  assert.equal(outcome.exitCode, 0);
+  assert.equal(outcome.stdout, "a".repeat(OPENSHELL_OUTPUT_LIMIT_BYTES));
+  assert.equal(outcome.stderr, "bbbbb");
+  assert.equal(outcome.truncated, true);
+});
+
+test("TOOL-03: captured output below the bound is returned whole with truncated false, and a non-zero exit is an outcome", async () => {
+  const outcome = await nodeRunner()(
+    [process.execPath, "-e", "process.stdout.write('out'); process.stderr.write('err'); process.exit(3);"],
+    { timeoutMs: 10_000, captureOutput: true },
+  );
+  assert.deepEqual(outcome, { exitCode: 3, stdout: "out", stderr: "err", truncated: false });
+});
+
+test("TOOL-03: without captureOutput the runner outcome carries the exit code only, so the create path keeps its output out", async () => {
+  const outcome = await nodeRunner()([process.execPath, "-e", "process.stdout.write('quiet');"], { timeoutMs: 10_000 });
+  assert.deepEqual(outcome, { exitCode: 0 });
+});
+
+test("TOOL-03: a capturing run that misses timeoutMs has its process and forked helper killed, and rejects as a timed-out OpenShellRunnerError", async (t) => {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "realm-runner-")));
+  t.after(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const pidFile = join(dir, "pids");
+  const runner = spawnOpenShellRunner({ PATH: process.env["PATH"] ?? "/usr/bin:/bin", PID_FILE: pidFile });
+  const script = [
+    "const fs = require('node:fs');",
+    "const helper = require('node:child_process').spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });",
+    "fs.writeFileSync(process.env.PID_FILE, process.pid + ' ' + helper.pid + '\\n');",
+    "setInterval(() => {}, 1000);",
+  ].join(" ");
+  // Attached at once, so a rejection before the pids are read is never unhandled.
+  const outcome = runner([process.execPath, "-e", script], { timeoutMs: 2000, captureOutput: true }).then(
+    () => "resolved",
+    (error: unknown) => error,
+  );
+  const [childText, helperText] = (await waitForFile(pidFile, 5000)).trim().split(" ");
+  const error = await outcome;
+  assert.ok(error instanceof OpenShellRunnerError, "a run that misses its budget rejects with OpenShellRunnerError");
+  assert.equal(error.kind, "timed-out");
+  assert.equal(await waitUntilGone(Number(childText), 3000), true, "the child must be killed at timeoutMs");
+  assert.equal(await waitUntilGone(Number(helperText), 3000), true, "a helper the child forked must be killed with it");
 });
 
 // Real time on purpose: the child is an operating-system process, and no fake clock can advance

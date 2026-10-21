@@ -6,13 +6,21 @@ import { join } from "node:path";
 import { AgentOsSupervisor } from "../../src/runtime/agentos.js";
 import { HARDENING_PROFILE } from "../../src/runtime/hardening.js";
 import { LibpodClient } from "../../src/runtime/libpod-client.js";
+import { buildExecArgv } from "../../src/runtime/openshell.js";
 import { SessionExecution } from "../../src/runtime/session-execution.js";
+import { TOOL_CALL_TIMEOUT_MS } from "../../src/tools/dispatch.js";
 import { FakeAgentOsDriver } from "../support/fake-agentos.js";
 import { FakeContainerStore, FakeLibpod } from "../support/fake-libpod.js";
 import { FakeOpenShell } from "../support/fake-openshell.js";
+import {
+  makeHarness,
+  SESSION as DISPATCH_SESSION,
+  WORKLOAD as DISPATCH_WORKLOAD,
+} from "../support/fake-tools.js";
 
-// Structural no-bypass proof (D-46, RT-03). These tests read the call logs of the fakes and the
-// client's method set. They touch no live process, socket, or container.
+// Structural no-bypass proof (D-46, RT-03) with the dispatcher routing half (D-99, TOOL-03).
+// These tests read the call logs of the fakes and the method sets of the clients. They touch
+// no live process, socket, or container.
 
 const DIGEST = `sha256:${"b".repeat(64)}`;
 const IMAGE = `registry.example.com/realm/session@${DIGEST}`;
@@ -56,6 +64,7 @@ async function fixture(t: TestContext): Promise<Fixture> {
     runner: openshell.runner,
     agentos,
     config: { image: IMAGE, workloadArgv: WORKLOAD, stateDir },
+    egressAllow: [],
   });
   return { libpod, store, openshell, driver, supervisor: agentos, exec, stateDir, workspaceRoot: join(base, "workspace") };
 }
@@ -158,3 +167,31 @@ function reachesWithout(root: object, target: object, barrier?: object): boolean
   }
   return false;
 }
+
+test("TOOL-03: every exec routes through the shared dispatcher and reaches the runner with the pinned exec argv (D-99)", async (t) => {
+  const h = makeHarness(t);
+  const outcome = await h.dispatcher.call({ exec: { argv: [...DISPATCH_WORKLOAD] } });
+  assert.equal(outcome.outcome, "done");
+  assert.equal(h.runs.length, 1, "the dispatcher ran the workload once, through the runner");
+  assert.deepEqual(h.runs[0]?.argv, [...buildExecArgv(DISPATCH_SESSION, DISPATCH_WORKLOAD)]);
+  assert.equal(h.runs[0]?.options.timeoutMs, TOOL_CALL_TIMEOUT_MS);
+  assert.equal(h.runs[0]?.options.captureOutput, true);
+});
+
+test("TOOL-03: every file write routes through the dispatcher stages, landing on disk with admission and result audit lines (D-99)", async (t) => {
+  const h = makeHarness(t);
+  const outcome = await h.dispatcher.call({ write: { path: "doc.txt", content: "routed" } });
+  assert.equal(outcome.outcome, "done");
+  assert.equal(h.doc(), "routed", "the write landed on disk through the dispatcher");
+  assert.deepEqual(h.phases(), ["admission", "result"]);
+  const result = h.auditLines()[1] ?? {};
+  assert.equal(typeof result["sha256"], "string", "the result line carries the content sha256");
+  assert.equal("content" in result, false, "the audit line never carries content");
+});
+
+test("TOOL-03: the session service exposes no tool-call surface, so every tool call routes through the dispatcher (D-99)", () => {
+  const methods = Object.getOwnPropertyNames(SessionExecution.prototype).filter((name) => name !== "constructor");
+  for (const name of methods) {
+    assert.equal(/call|tool|dispatch|exec/i.test(name), false, `SessionExecution.${name} must not be a tool entry point`);
+  }
+});

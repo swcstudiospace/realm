@@ -7,6 +7,7 @@ import { RealmError, type ErrorCode } from "../../src/core/errors.js";
 import { LibpodClient } from "../../src/runtime/libpod-client.js";
 import {
   buildCreateArgv,
+  buildExecArgv,
   runOpenShellCreate,
   type SandboxCreateRequest,
 } from "../../src/runtime/openshell.js";
@@ -214,4 +215,69 @@ test("CORE-06: two labelled containers for one session fail closed with OPENSHEL
 
   await assertCode(runOpenShellCreate({ containers: client, runner: openshell.runner }, REQUEST, 2000), "OPENSHELL_START_FAILED");
   assert.equal(openshell.callCount(), 0);
+});
+
+// The D-80 flags no builder may emit before the -- separator. Each name is pinned by its own assertion.
+const FORBIDDEN_FLAGS: readonly string[] = [
+  "--driver-config-json",
+  "--forward",
+  "--expose",
+  "--template",
+  "--provider",
+  "--env",
+  "--auto-providers",
+];
+
+test("RT-03, AUD-02: the exec argv is exactly the pinned D-92 form with the workload after --, and it is frozen", () => {
+  const argv = buildExecArgv(SESSION, WORKLOAD);
+  assert.deepEqual(argv, [
+    "openshell",
+    "sandbox",
+    "exec",
+    "--name",
+    `realm-${SESSION}`,
+    "--workdir",
+    "/workspace",
+    "--no-tty",
+    "--no-login-shell",
+    "--",
+    ...WORKLOAD,
+  ]);
+  assert.equal(Object.isFrozen(argv), true);
+});
+
+test("RT-03: the exec argv names the same sandbox that the create argv names", () => {
+  const create = buildCreateArgv(REQUEST);
+  const exec = buildExecArgv(SESSION, WORKLOAD);
+  assert.equal(exec[exec.indexOf("--name") + 1], create[create.indexOf("--name") + 1]);
+});
+
+test("RT-05: neither builder emits any D-80 forbidden flag, as an element or as a prefixed form, before the separator", () => {
+  for (const argv of [buildCreateArgv(REQUEST), buildExecArgv(SESSION, WORKLOAD)]) {
+    const head = argv.slice(0, argv.indexOf("--"));
+    for (const flag of FORBIDDEN_FLAGS) {
+      assert.equal(head.includes(flag), false, `${flag} must not appear before the separator`);
+      assert.equal(
+        head.some((element) => element.startsWith(`${flag}=`)),
+        false,
+        `${flag}= must not appear before the separator`,
+      );
+    }
+  }
+});
+
+test("RT-05: a session id outside the safe set, an empty argv, or an empty element is refused by buildExecArgv with SCHEMA_INVALID", () => {
+  const refused: readonly (readonly [string, readonly string[]])[] = [
+    ["../escape", WORKLOAD],
+    ["", WORKLOAD],
+    [SESSION, []],
+    [SESSION, [""]],
+  ];
+  for (const [sessionId, argv] of refused) {
+    assert.throws(
+      () => buildExecArgv(sessionId, argv),
+      (error: unknown) => error instanceof RealmError && error.code === "SCHEMA_INVALID",
+      `refused exec for session "${sessionId}"`,
+    );
+  }
 });

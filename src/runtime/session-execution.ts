@@ -8,19 +8,24 @@
 // the container it resolved. A mismatch, or an inspect that cannot be read, removes the container
 // before anything is thrown. No unverified container is ever returned as running.
 //
-// Sweep (D-68, RT-09): remove every realm-labelled container, list again, and report REALM_STOPPING
-// when any survive. The second listing is the zero-orphan proof.
+// Sweep (D-68, RT-09, D-84): the zero-orphan sweep lives in sweep.ts and is re-exported below so existing
+// callers keep working. It removes every realm-labelled container and proves zero survivors.
 
-import { spawn, type ChildProcess } from "node:child_process";
-import { makeRealmError, RealmError } from "../core/errors.js";
+import { spawn, type ChildProcess, type StdioOptions } from "node:child_process";
+import { makeRealmError, RealmError, type ErrorCode } from "../core/errors.js";
+import { withTimeout } from "../core/timeout.js";
 import type { CreateRequest, ExecutionService, ProbeResult } from "../core/ports.js";
+import type { EgressRule } from "../contract/validate.js";
 import type { EnvironmentLike } from "../session/paths.js";
 import type { AgentOsSupervisor } from "./agentos.js";
 import { loadRuntimeConfig, type RuntimeConfig } from "./config.js";
+import { validateEgressAllow } from "./egress.js";
 import { HARDENING_PROFILE, verifyInspect, type HardeningBinding, type HardeningProperty } from "./hardening.js";
 import type { LibpodClient, LibpodInspect } from "./libpod-client.js";
 import {
-  MANAGED_LABEL_KEY,
+  buildExecArgv,
+  OPENSHELL_OUTPUT_LIMIT_BYTES,
+  OpenShellRunnerError,
   runOpenShellCreate,
   writePolicyDocument,
   type OpenShellRunner,
@@ -31,7 +36,12 @@ import {
 const OPENSHELL_CREATE_DEADLINE_MS = 60_000;
 // Grace period a container gets to stop before it is killed (libpod stop timeout).
 const CONTAINER_STOP_GRACE_MS = 10_000;
-const MANAGED_LABEL_VALUE = "true";
+// Backstop bound on the AgentOS stop in stop() and destroy(). The supervisor's own per-call timeout normally
+// settles the stop first; this timer only guarantees the container step is reached.
+const AGENTOS_STOP_DEADLINE_MS = 15_000;
+// The catalogue code a failed AgentOS stop is reported with. No catalogue code names a stop failure, so this is
+// the closest AgentOS-supervision code; it is typed and retryable like the rest of the catalogue.
+const AGENTOS_STOP_CODE: ErrorCode = "AGENTOS_CRASH_LOOP";
 // The sandbox limits come from the frozen profile, so they cannot drift from the verifier.
 const SANDBOX_CPUS = HARDENING_PROFILE.nanoCpus / 1_000_000_000;
 const SANDBOX_MEMORY = `${HARDENING_PROFILE.memoryBytes / 1024 ** 3}g`;
@@ -39,9 +49,6 @@ const SANDBOX_MEMORY = `${HARDENING_PROFILE.memoryBytes / 1024 ** 3}g`;
 // The only environment names the OpenShell CLI receives. Each one is needed by the CLI to locate its
 // configuration and the rootless Podman socket. No other name crosses from the host.
 export const OPENSHELL_ENV_NAMES: readonly string[] = Object.freeze(["PATH", "HOME", "XDG_RUNTIME_DIR"]);
-
-const RUNNER_FAILED = "openshell runner failed";
-const RUNNER_TIMED_OUT = "openshell runner exceeded its budget";
 
 // The libpod calls the composition needs. The closed client satisfies it.
 export type SessionContainers = Pick<
@@ -55,6 +62,9 @@ export interface SessionExecutionOptions {
   readonly agentos: AgentOsSupervisor;
   // The workspace root is per session and comes from the create request.
   readonly config: Omit<RuntimeConfig, "workspaceRoot">;
+  // The session's egress allowlist, fixed for the session (D-106, OQ-P4-10). It arrives untrusted and is
+  // validated by the constructor, so an invalid list throws SCHEMA_INVALID before any create.
+  readonly egressAllow: unknown;
 }
 
 // A container whose hardening check failed. It carries the first failed property of the D-51 list,
@@ -74,8 +84,12 @@ export class SessionExecution implements ExecutionService {
   private readonly runner: OpenShellRunner;
   private readonly agentos: AgentOsSupervisor;
   private readonly config: Omit<RuntimeConfig, "workspaceRoot">;
+  private readonly egressAllow: readonly EgressRule[];
 
+  // The egress list is validated here, before any create can run (D-106). An invalid list throws, and
+  // no OpenShell or libpod call has been made by then.
   constructor(options: SessionExecutionOptions) {
+    this.egressAllow = validateEgressAllow(options.egressAllow);
     this.libpod = options.libpod;
     this.runner = options.runner;
     this.agentos = options.agentos;
@@ -88,7 +102,11 @@ export class SessionExecution implements ExecutionService {
     const runtime = loadRuntimeConfig({ ...this.config, workspaceRoot: req.workspaceRoot });
     const info = await this.libpod.info();
     const sessionId = req.idempotencyKey;
-    const policyPath = writePolicyDocument(runtime.stateDir, sessionId);
+    const workloadBinary = runtime.workloadArgv[0];
+    if (workloadBinary === undefined) {
+      throw makeRealmError("SCHEMA_INVALID");
+    }
+    const policyPath = writePolicyDocument(runtime.stateDir, sessionId, this.egressAllow, workloadBinary);
     const containerId = await runOpenShellCreate(
       { containers: this.libpod, runner: this.runner },
       {
@@ -134,18 +152,39 @@ export class SessionExecution implements ExecutionService {
     }
   }
 
-  // Stops AgentOS best effort, then the container. A container that is already gone counts as stopped.
+  // Stops AgentOS, then the container. The container stop runs even when the AgentOS stop fails, so a
+  // supervisor failure never leaves a running container behind. A container that is already gone
+  // counts as stopped. A failed AgentOS stop is reported as a typed error after the container step.
   async stop(containerId: string): Promise<void> {
-    await this.agentos.stop();
-    if ((await this.libpod.inspectContainer(containerId)) === null) {
-      return;
+    const agentosStopped = await this.stopAgentOs();
+    if ((await this.libpod.inspectContainer(containerId)) !== null) {
+      await this.libpod.stopContainer(containerId, CONTAINER_STOP_GRACE_MS);
     }
-    await this.libpod.stopContainer(containerId, CONTAINER_STOP_GRACE_MS);
+    if (!agentosStopped) {
+      throw makeRealmError(AGENTOS_STOP_CODE);
+    }
   }
 
-  // Force-removes the container. A container that is already gone counts as removed.
+  // Stops AgentOS, then force-removes the container, mirroring stop. A container that is already gone
+  // counts as removed. The removal runs even when the AgentOS stop fails, and that failure is then reported
+  // as a typed error.
   async destroy(containerId: string): Promise<void> {
+    const agentosStopped = await this.stopAgentOs();
     await this.libpod.removeContainer(containerId, { force: true });
+    if (!agentosStopped) {
+      throw makeRealmError(AGENTOS_STOP_CODE);
+    }
+  }
+
+  // Runs the AgentOS stop bounded by AGENTOS_STOP_DEADLINE_MS. Returns false when the stop rejects, throws, or
+  // misses the deadline. The callers turn that into the typed AGENTOS_STOP_CODE error after their container step.
+  private async stopAgentOs(): Promise<boolean> {
+    try {
+      await withTimeout(this.agentos.stop(), AGENTOS_STOP_DEADLINE_MS, AGENTOS_STOP_CODE);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   // Returns only when the container conforms. Otherwise the container is removed before anything is
@@ -182,26 +221,8 @@ function isRunning(inspect: LibpodInspect): boolean {
   return typeof state === "object" && state !== null && Reflect.get(state, "Running") === true;
 }
 
-// Removes every realm-labelled container (RT-09, D-68). Foreign containers are never listed, so they are
-// never removed. The first listing finds the targets. A failed removal leaves its container listed, and
-// the second listing reports it, so a failure is never swallowed silently. A repeated call on a clean
-// host is a no-op.
-export type SweepClient = Pick<LibpodClient, "listContainersByLabel" | "removeContainer">;
-
-export async function removeAllRealmContainers(libpod: SweepClient): Promise<void> {
-  const found = await libpod.listContainersByLabel(MANAGED_LABEL_KEY, MANAGED_LABEL_VALUE);
-  for (const container of found) {
-    try {
-      await libpod.removeContainer(container.id, { force: true });
-    } catch {
-      // The second listing proves whether the container is still there.
-    }
-  }
-  const survivors = await libpod.listContainersByLabel(MANAGED_LABEL_KEY, MANAGED_LABEL_VALUE);
-  if (survivors.length > 0) {
-    throw makeRealmError("REALM_STOPPING");
-  }
-}
+// The zero-orphan sweep moved to sweep.ts (D-84). It is re-exported here so existing callers keep working.
+export { removeAllRealmContainers, type SweepClient } from "./sweep.js";
 
 // Picks the allowed names from a caller-supplied environment. The caller decides the source. Names
 // that are absent from the source are left out, so the result never carries a made-up value.
@@ -233,43 +254,114 @@ function killProcessTree(child: ChildProcess): void {
   child.kill("SIGKILL");
 }
 
-// The production OpenShell runner (RT-03, S-10). It starts argv[0] with the rest as arguments and no
-// shell. The child gets exactly the environment it is given, and its output is discarded so no runner
-// text can reach an error. A process that misses timeoutMs is killed with its process group, so helpers it
-// forked die too, and the call rejects. Failures use fixed messages, never the child's output or the spawn
-// error's text.
+// One captured output stream (D-94). It keeps at most OPENSHELL_OUTPUT_LIMIT_BYTES bytes and drops the
+// rest, so memory stays bounded. It keeps reading after the bound, so a chatty child never blocks on a
+// full pipe.
+class BoundedOutput {
+  private readonly chunks: Buffer[] = [];
+  private size = 0;
+  private cut = false;
+
+  add(chunk: Buffer): void {
+    const room = OPENSHELL_OUTPUT_LIMIT_BYTES - this.size;
+    if (chunk.length <= room) {
+      this.chunks.push(chunk);
+      this.size += chunk.length;
+      return;
+    }
+    this.chunks.push(chunk.subarray(0, room));
+    this.size = OPENSHELL_OUTPUT_LIMIT_BYTES;
+    this.cut = true;
+  }
+
+  text(): string {
+    return Buffer.concat(this.chunks).toString("utf8");
+  }
+
+  truncated(): boolean {
+    return this.cut;
+  }
+}
+
+// The production OpenShell runner (RT-03, S-10, D-94). It starts argv[0] with the rest as arguments and no
+// shell. The child gets exactly the environment it is given. Its output is discarded unless captureOutput is
+// set; with it, each stream is kept up to OPENSHELL_OUTPUT_LIMIT_BYTES and truncated says whether a stream
+// was cut. A process that misses timeoutMs is killed with its process group, so helpers it forked die too,
+// and the call rejects with an OpenShellRunnerError. Failures carry a fixed message and kind, never the
+// child's output or the spawn error's text.
 export function spawnOpenShellRunner(environment: Readonly<Record<string, string>>): OpenShellRunner {
   const childEnvironment: Readonly<Record<string, string>> = Object.freeze({ ...environment });
   return (argv, options) =>
     new Promise<OpenShellRunOutcome>((resolve, reject) => {
       const file = argv[0];
       if (file === undefined) {
-        reject(new Error(RUNNER_FAILED));
+        reject(new OpenShellRunnerError("failed"));
         return;
       }
+      const capture = options.captureOutput === true;
+      const stdio: StdioOptions = capture ? ["ignore", "pipe", "pipe"] : "ignore";
       let child: ChildProcess;
       try {
         child = spawn(file, argv.slice(1), {
           shell: false,
           env: { ...childEnvironment },
-          stdio: "ignore",
+          stdio,
           detached: OWN_PROCESS_GROUP,
         });
       } catch {
-        reject(new Error(RUNNER_FAILED));
+        reject(new OpenShellRunnerError("failed"));
         return;
+      }
+      const stdout = new BoundedOutput();
+      const stderr = new BoundedOutput();
+      if (capture) {
+        child.stdout?.on("data", (chunk: Buffer) => stdout.add(chunk));
+        child.stderr?.on("data", (chunk: Buffer) => stderr.add(chunk));
       }
       const timer = setTimeout(() => {
         killProcessTree(child);
-        reject(new Error(RUNNER_TIMED_OUT));
+        reject(new OpenShellRunnerError("timed-out"));
       }, options.timeoutMs);
       child.once("error", () => {
         clearTimeout(timer);
-        reject(new Error(RUNNER_FAILED));
+        reject(new OpenShellRunnerError("failed"));
       });
       child.once("close", (code) => {
         clearTimeout(timer);
-        resolve({ exitCode: code ?? 1 });
+        const exitCode = code ?? 1;
+        if (!capture) {
+          resolve({ exitCode });
+          return;
+        }
+        resolve({
+          exitCode,
+          stdout: stdout.text(),
+          stderr: stderr.text(),
+          truncated: stdout.truncated() || stderr.truncated(),
+        });
       });
     });
+}
+
+// Runs one workload in a session's running sandbox through the injected runner (D-92, D-94). The argv is the
+// pinned exec form from buildExecArgv, and output is captured and bounded per stream. A non-zero exit is a
+// successful call carrying exitCode. A runner rejection maps to REALM_NOT_ACTIVE and a deadline expiry to
+// TOOL_TIMEOUT; neither error carries child text. The runner stops the process at timeoutMs (D-91), so a
+// timed-out call keeps nothing running.
+export async function runSandboxExec(
+  runner: OpenShellRunner,
+  sessionId: string,
+  workload: readonly string[],
+  timeoutMs: number,
+): Promise<OpenShellRunOutcome> {
+  if (!Number.isInteger(timeoutMs) || timeoutMs <= 0) {
+    throw makeRealmError("SCHEMA_INVALID");
+  }
+  const argv = buildExecArgv(sessionId, workload);
+  try {
+    return await runner(argv, { timeoutMs, captureOutput: true });
+  } catch (error) {
+    const timedOut = error instanceof OpenShellRunnerError && error.kind === "timed-out";
+    throw makeRealmError(timedOut ? "TOOL_TIMEOUT" : "REALM_NOT_ACTIVE");
+  }
 }

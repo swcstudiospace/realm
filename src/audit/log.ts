@@ -31,10 +31,15 @@ export type ExecShape =
 
 // There is deliberately no content field: a write entry records the byte count and
 // sha256 of what was written, never the written text.
+// The stage a line records (D-89, D-90, D-107). A call writes an admission line before its
+// execution and a result line after it. Optional: a line with no phase keeps the pre-stage shape.
+export type AuditPhase = "admission" | "result";
+
 export interface AuditEntryInput {
   readonly sessionId: string;
   readonly tool: string;
   readonly outcome: AuditOutcome;
+  readonly phase?: AuditPhase;
   readonly path?: string;
   readonly bytes?: number;
   readonly sha256?: string;
@@ -70,6 +75,7 @@ export function appendAudit(stateDir: string, input: AuditEntryInput): void {
     sessionId: input.sessionId,
     tool: input.tool,
     outcome: input.outcome,
+    phase: input.phase,
     path: input.path,
     bytes: input.bytes,
     sha256: input.sha256,

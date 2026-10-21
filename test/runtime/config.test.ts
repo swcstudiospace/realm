@@ -137,3 +137,29 @@ test("the loaded workloadArgv is a copy, so later changes to the caller's array 
   argv.push("--injected");
   assert.deepEqual(config.workloadArgv, ["/usr/bin/agent"]);
 });
+
+test("RT-05: each D-80 denylist name is refused at load with SCHEMA_INVALID (D-80)", () => {
+  for (const key of ["network", "networkMode", "hostNetwork", "netns", "driverConfig", "driverConfigJson"]) {
+    assert.equal(rejectionCode({ ...validInput(), [key]: "host" }), "SCHEMA_INVALID", `denied key ${key}`);
+  }
+});
+
+test("RT-05: a relative workloadArgv[0] is refused with SCHEMA_INVALID (D-79)", () => {
+  assert.equal(rejectionCode({ ...validInput(), workloadArgv: ["agent", "--serve"] }), "SCHEMA_INVALID");
+  assert.equal(rejectionCode({ ...validInput(), workloadArgv: ["./agent"] }), "SCHEMA_INVALID");
+  assert.equal(rejectionCode({ ...validInput(), workloadArgv: ["bin/agent", "--serve"] }), "SCHEMA_INVALID");
+});
+
+test("RT-05: an absolute workloadArgv[0] is accepted with or without arguments (D-79)", () => {
+  assert.deepEqual(loadRuntimeConfig({ ...validInput(), workloadArgv: ["/usr/bin/agent"] }).workloadArgv, [
+    "/usr/bin/agent",
+  ]);
+  assert.deepEqual(loadRuntimeConfig(validInput()).workloadArgv, ["/usr/bin/agent", "--serve"]);
+});
+
+test("RT-05: an egressAllow key is refused at load, because the allowlist is validated where the runtime is built (D-106)", () => {
+  assert.equal(
+    rejectionCode({ ...validInput(), egressAllow: [{ host: "api.example.com", port: 443 }] }),
+    "SCHEMA_INVALID",
+  );
+});

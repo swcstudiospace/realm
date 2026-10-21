@@ -149,3 +149,49 @@ test("a listener subscribed during delivery does not receive the event already i
 
   assert.deepEqual(late, []);
 });
+
+test("C-2: the function subscribe returns removes its listener, so later publications skip it (D-105)", () => {
+  const bus = createEventBus();
+  const received: string[] = [];
+  const unsubscribe = bus.subscribe(() => {
+    received.push("first");
+  });
+  bus.subscribe(() => {
+    received.push("second");
+  });
+
+  unsubscribe();
+  bus.publish({
+    type: "state.transition",
+    sessionId: "session-1",
+    from: "unbound",
+    to: "connecting",
+    reason: "creating container",
+    at: FIXED_TIME,
+  });
+
+  assert.deepEqual(received, ["second"]);
+});
+
+test("C-2: calling an unsubscribe twice removes nothing more, even when the same listener is subscribed twice (D-105)", () => {
+  const bus = createEventBus();
+  let calls = 0;
+  const listener = (): void => {
+    calls += 1;
+  };
+  const first = bus.subscribe(listener);
+  bus.subscribe(listener);
+
+  first();
+  first();
+  bus.publish({
+    type: "state.transition",
+    sessionId: "session-1",
+    from: "unbound",
+    to: "connecting",
+    reason: "creating container",
+    at: FIXED_TIME,
+  });
+
+  assert.equal(calls, 1, "the second registration of the same listener stays");
+});

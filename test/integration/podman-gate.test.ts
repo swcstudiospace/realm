@@ -15,6 +15,11 @@ import { tmpdir } from "node:os";
 import { delimiter, isAbsolute, join } from "node:path";
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
+import type { EgressRule } from "../../src/contract/validate.js";
+import { createEventBus } from "../../src/core/events.js";
+import { loadPolicyFile } from "../../src/core/policy.js";
+import { LockTable } from "../../src/fs/locks.js";
+import { bindRoot } from "../../src/fs/root.js";
 import { loadRuntimeConfig, type RuntimeConfig } from "../../src/runtime/config.js";
 import { HARDENING_PROFILE, verifyInspect } from "../../src/runtime/hardening.js";
 import { LibpodClient, type LibpodInspect } from "../../src/runtime/libpod-client.js";
@@ -26,7 +31,11 @@ import {
   type OpenShellRunner,
 } from "../../src/runtime/openshell.js";
 import { parsePodmanVersion, podmanSkipReason, type PodmanProbe } from "../../src/runtime/podman-version.js";
-import { removeAllRealmContainers, selectOpenShellEnvironment, spawnOpenShellRunner, type SweepClient } from "../../src/runtime/session-execution.js";
+import { removeAllRealmContainers, type SweepClient } from "../../src/runtime/sweep.js";
+import { runSandboxExec, selectOpenShellEnvironment, spawnOpenShellRunner } from "../../src/runtime/session-execution.js";
+import { reapStartup } from "../../src/session/reap.js";
+import { SessionStore } from "../../src/session/store.js";
+import { ToolDispatcher, type DispatcherController } from "../../src/tools/dispatch.js";
 
 // `podman --version` is local and fast; the timeout keeps a hung binary from hanging the run.
 const PROBE_TIMEOUT_MS = 5_000;
@@ -64,10 +73,10 @@ test("Podman gate: the host reports Podman 5.x or newer (RT-02)", { skip: gate }
   assert.ok(parsed.major >= 5, `expected Podman 5.x or newer, found ${parsed.version}`);
 });
 
-// ---- Live bodies (RT-01, RT-03, RT-09). Each needs the 5.x host described above, a digest-pinned
-// image in REALM_LIVE_IMAGE, and a JSON string array in REALM_LIVE_WORKLOAD. A host without them
-// skips each body with a stated reason. The bodies drive the production create path, so a 5.x run
-// observes real behaviour; nothing in this file claims a live result that has not run.
+// ---- Live bodies (RT-01, RT-03, RT-05, RT-08, RT-09, TOOL-03). Each needs the 5.x host described
+// above, a digest-pinned image in REALM_LIVE_IMAGE, and a JSON string array in REALM_LIVE_WORKLOAD. A
+// host without them skips each body with a stated reason. The bodies drive the production create path,
+// so a 5.x run observes real behaviour; nothing in this file claims a live result that has not run.
 
 const LIVE_IMAGE_VARIABLE = "REALM_LIVE_IMAGE";
 const LIVE_WORKLOAD_VARIABLE = "REALM_LIVE_WORKLOAD";
@@ -152,8 +161,10 @@ function liveSocketPath(): string {
 
 // Creates one session container through the production create path: the policy document is written
 // first, then the pinned OpenShell argv runs once and the label lookup resolves the container. The
-// container is removed when the test ends. Every argv the runner receives is recorded.
-async function createLiveContainer(t: TestContext): Promise<LiveContainer> {
+// container is removed when the test ends. Every argv the runner receives is recorded. The egress
+// allowlist is rendered into the session's policy document (deny-all when empty, S-20), so the RT-05
+// bodies can admit exactly the probe host.
+async function createLiveContainer(t: TestContext, egress: readonly EgressRule[] = []): Promise<LiveContainer> {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "realm-live-")));
   t.after(() => {
     rmSync(root, { recursive: true, force: true });
@@ -173,7 +184,11 @@ async function createLiveContainer(t: TestContext): Promise<LiveContainer> {
     argvSeen.push([...argv]);
     return spawnRunner(argv, options);
   };
-  const policyPath = writePolicyDocument(config.stateDir, sessionId);
+  const workloadBinary = config.workloadArgv[0];
+  if (workloadBinary === undefined) {
+    throw new Error("the live workload argv is empty; REALM_LIVE_WORKLOAD must hold a non-empty JSON string array");
+  }
+  const policyPath = writePolicyDocument(config.stateDir, sessionId, egress, workloadBinary);
   const containerId = await runOpenShellCreate(
     { containers: libpod, runner },
     { sessionId, policyPath, cpus: SANDBOX_CPUS, memory: SANDBOX_MEMORY, workloadArgv: config.workloadArgv },
@@ -250,4 +265,118 @@ test("RT-09 live: the down sweep leaves none of the containers this test created
     created.has(container.id),
   );
   assert.deepEqual(remaining, [], "a zero-orphan sweep leaves no container this test created");
+});
+
+// ---- Live bodies (RT-05, RT-08, TOOL-03). Each runs under the same gate as the bodies above and
+// skips with PODMAN_UNSUPPORTED_VERSION on 4.9.3. Nothing here runs without a 5.x host, a rootless
+// API socket, an openshell CLI, and the digest-pinned image and workload argv.
+
+// Egress is observed from inside the sandbox through the supervisor proxy, not from inside the
+// container (D-75): the workload container keeps NetworkMode none (D-83), so each probe runs through
+// the pinned exec path. Each body assumes the sandbox provides /bin/sh (OQ-P4-04, live-gated).
+const LIVE_EGRESS_HOST = process.env["REALM_LIVE_EGRESS_HOST"] ?? "registry.example.com";
+const parsedLiveEgressPort = Number.parseInt(process.env["REALM_LIVE_EGRESS_PORT"] ?? "443", 10);
+const LIVE_EGRESS_PORT = Number.isInteger(parsedLiveEgressPort) ? parsedLiveEgressPort : 443;
+// The bound for one exec probe, the same TOOL_CALL_TIMEOUT_MS the dispatcher enforces (D-91).
+const LIVE_PROBE_TIMEOUT_MS = 30_000;
+
+// True when the sandbox can open a TCP connection to host:port through the supervisor proxy. A
+// refused or timed-out probe is false, never a throw, so the bodies assert reachability directly.
+async function egressReachable(sessionId: string, host: string, port: number): Promise<boolean> {
+  try {
+    const outcome = await runSandboxExec(
+      spawnOpenShellRunner(selectOpenShellEnvironment(process.env)),
+      sessionId,
+      ["/bin/sh", "-c", `exec 3<>/dev/tcp/${host}/${port}`],
+      LIVE_PROBE_TIMEOUT_MS,
+    );
+    return outcome.exitCode === 0;
+  } catch {
+    return false;
+  }
+}
+
+test("RT-05 live: an allowlisted host and port is reachable from inside the sandbox through the supervisor proxy (RT-05)", { skip: liveGate }, async (t) => {
+  const live = await createLiveContainer(t, [{ host: LIVE_EGRESS_HOST, port: LIVE_EGRESS_PORT }]);
+  assert.equal(
+    await egressReachable(live.sessionId, LIVE_EGRESS_HOST, LIVE_EGRESS_PORT),
+    true,
+    `an allowlisted ${LIVE_EGRESS_HOST}:${LIVE_EGRESS_PORT} must be reachable through the supervisor proxy`,
+  );
+});
+
+test("RT-05 live: a non-allowlisted host is not reachable from inside the sandbox (RT-05)", { skip: liveGate }, async (t) => {
+  const live = await createLiveContainer(t);
+  assert.equal(
+    await egressReachable(live.sessionId, "never-allowlisted.invalid", 443),
+    false,
+    "a host outside the deny-all allowlist must not be reachable",
+  );
+});
+
+test("RT-05 live: IPv6 is not reachable from inside the sandbox (RT-05)", { skip: liveGate }, async (t) => {
+  // Realm renders no IPv6 host into any network_policies entry (D-76), so no IPv6 destination can be
+  // allowlisted and the loopback probe below must fail.
+  const live = await createLiveContainer(t);
+  assert.equal(
+    await egressReachable(live.sessionId, "::1", 80),
+    false,
+    "an IPv6 destination is never allowlisted and must not be reachable",
+  );
+});
+
+test("RT-08 live: a crash during up is reaped on the next start on a live host (RT-08)", { skip: liveGate }, async (t) => {
+  const live = await createLiveContainer(t);
+  // A crash during realm up leaves a record with a null container id (D-86) while the
+  // session-labelled container exists on the host.
+  const store = new SessionStore(live.config.stateDir);
+  store.save({
+    realmId: "7b1c2d3e-4f50-4a61-8b72-9c83d4e5f601",
+    sessionId: live.sessionId,
+    workspaceRoot: live.config.workspaceRoot,
+    state: "connecting",
+    controlSocketPath: join(live.config.stateDir, "run", "control.sock"),
+    containerId: null,
+  });
+  const created = new Set([live.containerId]);
+  const result = await reapStartup({
+    store,
+    sweep: () => removeAllRealmContainers(scopedSweep(live.libpod, created)),
+  });
+  assert.equal(result.containersRemoved, 1, "the orphan container is removed");
+  assert.equal(result.recordsDeleted, 1, "the stale record is deleted after the sweep");
+  assert.deepEqual(store.list(), [], "no record survives the reap");
+  const remaining = (await live.libpod.listContainersByLabel(MANAGED_LABEL_KEY, "true")).filter((container) =>
+    created.has(container.id),
+  );
+  assert.deepEqual(remaining, [], "no created container survives the reap");
+});
+
+test("TOOL-03 live: an exec through the shared dispatcher runs in the live sandbox (TOOL-03)", { skip: liveGate }, async (t) => {
+  const live = await createLiveContainer(t);
+  // The controller is a stub pinned to active: only the dispatcher's schema, state, audit, and
+  // execution stages run, and the execution reaches the live sandbox through the pinned exec argv.
+  const events = createEventBus();
+  const controller: DispatcherController = {
+    events,
+    snapshot: () => ({ state: "active", reason: "live gated exec", lastTransitionAt: new Date().toISOString() }),
+    mutationGate: () => {
+      throw new Error("the live exec body never reaches the mutation gate");
+    },
+    create: () => {
+      throw new Error("the live exec body never creates a session");
+    },
+  };
+  const dispatcher = new ToolDispatcher({
+    sessionId: live.sessionId,
+    boundRoot: bindRoot(live.config.workspaceRoot),
+    policy: loadPolicyFile(join(live.config.stateDir, "policy.json")),
+    controller,
+    locks: new LockTable(),
+    stateDir: live.config.stateDir,
+    runOpenShell: spawnOpenShellRunner(selectOpenShellEnvironment(process.env)),
+  });
+  const outcome = await dispatcher.call({ exec: { argv: ["true"] } });
+  assert.equal(outcome.outcome, "done", "the dispatcher exec against the live sandbox succeeds");
+  assert.equal(outcome.tool, "exec");
 });

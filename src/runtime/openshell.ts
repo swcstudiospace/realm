@@ -1,6 +1,6 @@
 // OpenShell adapter (RT-03, D-55 to D-57, S-10). This module is the only path by which agent
-// workload code is started. It builds the pinned `openshell sandbox create` argv, writes the
-// deny-all policy document, and runs create idempotently by label.
+// workload code is started. It builds the pinned `openshell sandbox create` and `sandbox exec` argv,
+// writes the policy document, and runs create idempotently by label.
 //
 // The argv is an array with no shell. The builder never emits --env or --provider (AUD-02),
 // so no host environment variable or credential crosses into the sandbox. The pinned verbs
@@ -17,15 +17,18 @@
 import { mkdirSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { performance } from "node:perf_hooks";
-import { makeRealmError } from "../core/errors.js";
+import { makeRealmError, RealmError, type ErrorCode } from "../core/errors.js";
+import type { EgressRule } from "../contract/validate.js";
 import { withTimeout } from "../core/timeout.js";
 import { atomicWriteFile, observeSha256 } from "../fs/atomic-write.js";
 import { bindRoot } from "../fs/root.js";
 import { recordFileName } from "../session/paths.js";
 import type { LibpodClient } from "./libpod-client.js";
+import { renderNetworkPolicies, type NetworkPolicies } from "./egress.js";
 
 export const OPENSHELL_BINARY = "openshell";
 export const MANAGED_LABEL_KEY = "io.realm.managed";
+export const MANAGED_LABEL_VALUE = "true";
 export const SESSION_LABEL_KEY = "io.realm.session";
 
 // The in-sandbox workspace path (OQ-P3-02 default).
@@ -41,10 +44,33 @@ const MEMORY_PATTERN = /^[1-9][0-9]{0,11}[bkmgBKMG]?$/;
 export interface OpenShellRunOptions {
   // The runner must stop the process when this many milliseconds pass.
   readonly timeoutMs: number;
+  // Opt-in (D-94, C-6). Only exec reads output, so the create path leaves this unset and the runner
+  // keeps its stdio ignored.
+  readonly captureOutput?: boolean;
 }
+
+// The bound on each captured output stream (D-94). Bytes beyond it are dropped and truncated is set.
+export const OPENSHELL_OUTPUT_LIMIT_BYTES = 262144;
 
 export interface OpenShellRunOutcome {
   readonly exitCode: number;
+  // Present only when the run was started with captureOutput. Each stream holds at most
+  // OPENSHELL_OUTPUT_LIMIT_BYTES bytes; truncated is true when either stream was cut.
+  readonly stdout?: string;
+  readonly stderr?: string;
+  readonly truncated?: boolean;
+}
+
+// The kinded rejection of a runner (D-94, C-6). The message is fixed text and never carries child
+// output, so a caller maps the kind instead of matching message text.
+export class OpenShellRunnerError extends Error {
+  readonly kind: "failed" | "timed-out";
+
+  constructor(kind: "failed" | "timed-out") {
+    super(kind === "timed-out" ? "openshell runner exceeded its budget" : "openshell runner failed");
+    this.name = "OpenShellRunnerError";
+    this.kind = kind;
+  }
 }
 
 // Runs argv (argv[0] is the binary) with no shell. Resolves with the exit status. Rejects when the
@@ -97,7 +123,7 @@ export function buildCreateArgv(request: SandboxCreateRequest): readonly string[
     "--no-keep",
     "--detach",
     "--label",
-    `${MANAGED_LABEL_KEY}=true`,
+    `${MANAGED_LABEL_KEY}=${MANAGED_LABEL_VALUE}`,
     "--label",
     `${SESSION_LABEL_KEY}=${request.sessionId}`,
     "--cpu",
@@ -109,12 +135,38 @@ export function buildCreateArgv(request: SandboxCreateRequest): readonly string[
   ]);
 }
 
+// The exec argv for one session's running sandbox (D-92, D-93). It is the pinned form: the verb and
+// its four flags, then the workload after --. It never emits --env (AUD-02). The shell form is not
+// built here; the dispatcher owns it behind checkExecPolicy.
+export function buildExecArgv(sessionId: string, argv: readonly string[]): readonly string[] {
+  recordFileName(sessionId);
+  if (argv.length === 0 || argv.some((element) => element.length === 0)) {
+    throw makeRealmError("SCHEMA_INVALID");
+  }
+  return Object.freeze([
+    OPENSHELL_BINARY,
+    "sandbox",
+    "exec",
+    "--name",
+    `realm-${sessionId}`,
+    "--workdir",
+    SANDBOX_WORKSPACE_PATH,
+    "--no-tty",
+    "--no-login-shell",
+    "--",
+    ...argv,
+  ]);
+}
+
 // Creates the sandbox for one session and returns its container id (D-56, CORE-06).
 //
 // Flow: look up the labelled container first and return it without running anything if it
 // exists; otherwise run the create argv once; then poll the label lookup every 250 ms until one
 // container appears or the caller deadline expires. An ambiguous label match (more than one
-// container) fails closed. Deadline expiry and every runner failure give OPENSHELL_START_FAILED.
+// container) is refused at once and never retried. A transient libpod failure (socket refused or
+// timed out) is polled through until the deadline; any other libpod failure ends the poll at once.
+// Deadline expiry, an ambiguous match, a non-transient libpod failure and every runner failure
+// give OPENSHELL_START_FAILED. No refusal carries container ids or libpod message text.
 export async function runOpenShellCreate(
   deps: OpenShellCreateDeps,
   request: SandboxCreateRequest,
@@ -147,14 +199,25 @@ export async function runOpenShellCreate(
     throw makeRealmError("OPENSHELL_START_FAILED");
   }
 
+  let lastLibpodClause: string | undefined;
   for (;;) {
     const left = remaining();
     if (left <= 0) {
-      throw makeRealmError("OPENSHELL_START_FAILED");
+      throw deadlineRefusal(lastLibpodClause);
     }
-    const found = await lookupWithinDeadline(deps.containers, request.sessionId, left);
-    if (found !== null && found.length > 0) {
-      return singleId(found);
+    const lookup = await lookupWithinDeadline(deps.containers, request.sessionId, left);
+    if (lookup.kind === "found" && lookup.containers.length > 0) {
+      return singleId(lookup.containers);
+    }
+    if (lookup.kind === "deadline") {
+      throw deadlineRefusal(lastLibpodClause);
+    }
+    if (lookup.kind === "failed") {
+      const transient = lookup.error instanceof RealmError && lookup.error.code === TRANSIENT_LIBPOD_CODE;
+      if (!transient) {
+        throw new OpenShellStartRefusal(`${NON_TRANSIENT_REASON} ${libpodErrorClause(lookup.error)}`, true);
+      }
+      lastLibpodClause = libpodErrorClause(lookup.error);
     }
     const wait = Math.min(POLL_INTERVAL_MS, remaining());
     if (wait > 0) {
@@ -163,8 +226,8 @@ export async function runOpenShellCreate(
   }
 }
 
-// The policy document (D-57). It holds fixed values only: no secret, no environment variable, and no
-// network endpoint. Its shape is a documented contract, so changing it is a costly change.
+// The policy document (D-57, D-81). It holds no secret and no environment variable. Its shape is a
+// documented contract, so changing it is a costly change.
 export interface PolicyDocument {
   readonly version: 1;
   readonly filesystem_policy: {
@@ -173,64 +236,115 @@ export interface PolicyDocument {
   };
   readonly landlock: { readonly compatibility: "hard_requirement" };
   readonly process: { readonly run_as_user: "sandbox"; readonly run_as_group: "sandbox" };
-  // Empty: deny-all egress by the documented default. The allowlist mapping is Phase 4 (RT-05,
-  // OQ-P3-16).
-  readonly network_policies: Readonly<Record<string, never>>;
+  // The D-78 rendering of the egress allowlist. Empty means deny-all egress (S-20).
+  readonly network_policies: NetworkPolicies;
 }
 
-// Takes no argument on purpose. The document reads no configuration field, so nothing from a
-// config object can reach the file.
-export function buildPolicyDocument(): PolicyDocument {
+// Takes the session's egress allowlist and its absolute workload binary, and no other input, so no
+// configuration field can reach the file. renderNetworkPolicies validates both.
+export function buildPolicyDocument(egress: readonly EgressRule[], workloadBinary: string): PolicyDocument {
   return {
     version: 1,
     filesystem_policy: { read_only: [], read_write: [SANDBOX_WORKSPACE_PATH] },
     landlock: { compatibility: "hard_requirement" },
     process: { run_as_user: "sandbox", run_as_group: "sandbox" },
-    network_policies: {},
+    network_policies: renderNetworkPolicies(egress, workloadBinary),
   };
 }
 
 // Writes the session's policy document to <stateDir>/runtime/<sessionId>.policy.json through the
 // atomic replace (D-57). Returns the path written. The file is 0600 because the atomic replace
-// creates temp files at 0600 and carries over the mode of an existing file.
-export function writePolicyDocument(stateDir: string, sessionId: string): string {
+// creates temp files at 0600 and carries over the mode of an existing file. The document is rendered
+// before the runtime directory is created, so a refused allowlist or workload binary writes nothing.
+export function writePolicyDocument(
+  stateDir: string,
+  sessionId: string,
+  egress: readonly EgressRule[],
+  workloadBinary: string,
+): string {
   recordFileName(sessionId);
   if (!isAbsolute(stateDir)) {
     throw makeRealmError("SCHEMA_INVALID");
   }
+  const text = `${JSON.stringify(buildPolicyDocument(egress, workloadBinary), null, 2)}\n`;
   const dir = join(stateDir, RUNTIME_DIR_NAME);
   mkdirSync(dir, { recursive: true, mode: RUNTIME_DIR_MODE });
   const root = bindRoot(dir);
   const target = join(root.realPath, `${sessionId}.policy.json`);
-  const text = `${JSON.stringify(buildPolicyDocument(), null, 2)}\n`;
   atomicWriteFile(target, text, { expectedPriorSha256: observeSha256(target) });
   return target;
 }
 
-// The one container id in a non-empty lookup result. Several matches for one session fail closed.
+// A create-path refusal. The code is OPENSHELL_START_FAILED. The catalogue gives that code one
+// fixed reason and a retryable value, so this subclass sets both for one refusal: an ambiguous
+// match is not retryable, and an early poll end names the last libpod error. The reason never
+// holds libpod message text or container ids.
+class OpenShellStartRefusal extends RealmError {
+  constructor(reason: string, retryable: boolean) {
+    super("OPENSHELL_START_FAILED");
+    Object.assign(this, { reason, retryable, message: reason });
+  }
+}
+
+const AMBIGUOUS_MATCH_REASON =
+  "OpenShell start refused: more than one container matches this session's label, so the sandbox cannot be identified. No container was chosen.";
+const DEADLINE_REASON = "OpenShell start did not show its container before the deadline.";
+const NON_TRANSIENT_REASON = "OpenShell start stopped: the libpod container lookup failed and retrying will not help.";
+
+// The one container id in a non-empty lookup result. More than one match for one session is refused
+// at once and never retried, because it names no single sandbox.
 function singleId(found: readonly { readonly id: string }[]): string {
+  if (found.length > 1) {
+    throw new OpenShellStartRefusal(AMBIGUOUS_MATCH_REASON, false);
+  }
   if (found.length !== 1 || found[0] === undefined) {
     throw makeRealmError("OPENSHELL_START_FAILED");
   }
   return found[0].id;
 }
 
-// One label lookup, bounded by the time left before the deadline. A failed or late lookup is
-// treated as "not visible yet": the poll keeps going until the deadline, which then gives
-// OPENSHELL_START_FAILED.
+function deadlineRefusal(lastLibpodClause: string | undefined): OpenShellStartRefusal {
+  const reason = lastLibpodClause === undefined ? DEADLINE_REASON : `${DEADLINE_REASON} ${lastLibpodClause}`;
+  return new OpenShellStartRefusal(reason, true);
+}
+
+// The libpod failure the poll rides out: the socket refused or a request timed out (D-53). Every other
+// typed failure, such as a rejected status or a malformed body (SCHEMA_INVALID), ends the poll at once.
+const TRANSIENT_LIBPOD_CODE: ErrorCode = "PODMAN_MACHINE_DOWN";
+
+// Names the last libpod error by its machine-readable code and kind only. Untyped errors name no code.
+function libpodErrorClause(error: unknown): string {
+  if (!(error instanceof RealmError)) {
+    return "Last libpod error: untyped, kind non-transient.";
+  }
+  const kind = error.code === TRANSIENT_LIBPOD_CODE ? "transient" : "non-transient";
+  return `Last libpod error: ${error.code}, kind ${kind}.`;
+}
+
+type LookupOutcome =
+  | { readonly kind: "found"; readonly containers: readonly { readonly id: string }[] }
+  | { readonly kind: "deadline" }
+  | { readonly kind: "failed"; readonly error: unknown };
+
+// One label lookup, bounded by the time left before the deadline. The deadline cutting the lookup
+// off is its own outcome, so it is never mistaken for a libpod failure.
 async function lookupWithinDeadline(
   containers: Pick<LibpodClient, "listContainersByLabel">,
   sessionId: string,
   leftMs: number,
-): Promise<readonly { readonly id: string }[] | null> {
+): Promise<LookupOutcome> {
   try {
-    return await withTimeout(
+    const found = await withTimeout(
       containers.listContainersByLabel(SESSION_LABEL_KEY, sessionId),
       leftMs,
       "OPENSHELL_START_FAILED",
     );
-  } catch {
-    return null;
+    return { kind: "found", containers: found };
+  } catch (error) {
+    if (error instanceof RealmError && error.code === "OPENSHELL_START_FAILED") {
+      return { kind: "deadline" };
+    }
+    return { kind: "failed", error };
   }
 }
 

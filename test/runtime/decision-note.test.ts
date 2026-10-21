@@ -18,11 +18,12 @@ interface OpenQuestionRow {
   readonly status: string;
 }
 
-// The OQ-P3 table rows: | ID | Question | Default applied | Blocked module or phase | Status |.
-function openQuestionRows(text: string): readonly OpenQuestionRow[] {
+// The OQ table rows: | ID | Question | Default applied | Blocked module or phase | Status |.
+function openQuestionRowsFor(text: string, prefix: string): readonly OpenQuestionRow[] {
   const rows: OpenQuestionRow[] = [];
+  const start = new RegExp(`^\\| ${prefix}-\\d{2} \\|`);
   for (const line of text.split("\n")) {
-    if (!/^\| OQ-P3-\d{2} \|/.test(line)) {
+    if (!start.test(line)) {
       continue;
     }
     const cells = line
@@ -32,6 +33,14 @@ function openQuestionRows(text: string): readonly OpenQuestionRow[] {
     rows.push({ id: cells[0] ?? "", defaultApplied: cells[2] ?? "", status: cells[4] ?? "" });
   }
   return rows;
+}
+
+function openQuestionRows(text: string): readonly OpenQuestionRow[] {
+  return openQuestionRowsFor(text, "OQ-P3");
+}
+
+function openQuestionRowsP4(text: string): readonly OpenQuestionRow[] {
+  return openQuestionRowsFor(text, "OQ-P4");
 }
 
 function rowOf(rows: readonly OpenQuestionRow[], id: string): OpenQuestionRow {
@@ -75,4 +84,48 @@ test("RT-01, RT-03: the decision note records that S-08 supersedes the RT-01 and
     text,
     /RT-01 and RT-03 wording that places the OpenShell gateway inside the Realm container is superseded by S-08 \(D-46, D-47\)/,
   );
+});
+
+test("Phase 4: the decision note carries a Phase 4 section recording the OQ-P3-16 resolution with the v0.1.2 URL and read date (D-82, D-100)", () => {
+  const text = readNote();
+  assert.match(text, /## Phase 4: Reaper, Egress Guard, and Shared Dispatcher \(D-100\)/);
+  assert.match(text, /OQ-P3-16 is resolved for the fields Realm writes/);
+  assert.match(text, /https:\/\/docs\.nvidia\.com\/openshell\/v0\.1\.2\/how-it-works\/policies\/schema\.md/);
+  assert.match(text, /read 2026-10-21/);
+});
+
+test("Phase 4: the decision note records the exec verb pin with its --help evidence (D-93)", () => {
+  const text = readNote();
+  assert.match(text, /openshell sandbox exec/);
+  assert.match(text, /read-only `--help` check, 2026-10-21/);
+  assert.match(text, /--workdir \/workspace --no-tty --no-login-shell/);
+});
+
+test("Phase 4: the decision note records the IPv6 partial status (D-76)", () => {
+  const text = readNote();
+  assert.match(text, /partially unit-verified/);
+  assert.match(text, /NetworkMode: none/);
+});
+
+test("Phase 4: the decision note records the single-owner precondition with the OQ-P4-06 residual risk (D-87)", () => {
+  const text = readNote();
+  assert.match(text, /must run before any `LifecycleController` or `ToolDispatcher` exists/);
+  assert.match(text, /accepted residual risk \(OQ-P4-06\)/);
+});
+
+test("Phase 4: the decision note records the two-lines-per-call audit note for the Phase 7 reader (D-90)", () => {
+  const text = readNote();
+  assert.match(text, /Phase 7 review must read both lines of one call as one call/);
+});
+
+test("OQ-P4-01 to OQ-P4-12: the table has one row per item, in order, and each row has a non-empty default applied", () => {
+  const rows = openQuestionRowsP4(readNote());
+  const expected = Array.from({ length: 12 }, (_, index) => `OQ-P4-${String(index + 1).padStart(2, "0")}`);
+  assert.deepEqual(
+    rows.map((row) => row.id),
+    expected,
+  );
+  for (const row of rows) {
+    assert.notEqual(row.defaultApplied, "", `${row.id} has no default applied`);
+  }
 });

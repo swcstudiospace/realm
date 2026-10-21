@@ -8,15 +8,26 @@
 // only, as the real CLI does.
 
 import type { FakeContainerStore } from "./fake-libpod.js";
-import type { OpenShellRunner, OpenShellRunOptions, OpenShellRunOutcome } from "../../src/runtime/openshell.js";
+import { OpenShellRunnerError, type OpenShellRunner, type OpenShellRunOptions, type OpenShellRunOutcome } from "../../src/runtime/openshell.js";
 
 // create: exit 0 and add a labelled container. exit-1: exit 1, no container. reject: the start
-// fails with a raw error. hang: never settles. silent: exit 0 and no container appears.
-export type OpenShellStep = "create" | "exit-1" | "reject" | "hang" | "silent";
+// fails with a raw error. reject-failed and reject-timed-out: the runner rejects with the kinded
+// OpenShellRunnerError. hang: never settles. silent: exit 0 and no container appears. An object
+// { output } returns that outcome as it is, so exec tests can script stdout, stderr and truncated.
+export type OpenShellStep =
+  | "create"
+  | "exit-1"
+  | "reject"
+  | "reject-failed"
+  | "reject-timed-out"
+  | "hang"
+  | "silent"
+  | { readonly output: OpenShellRunOutcome };
 
 export interface FakeOpenShellCall {
   readonly argv: readonly string[];
   readonly timeoutMs: number;
+  readonly captureOutput: boolean;
 }
 
 function labelsBeforeSeparator(argv: readonly string[]): Record<string, string> {
@@ -55,7 +66,7 @@ export class FakeOpenShell {
   }
 
   calls(): readonly FakeOpenShellCall[] {
-    return this.log.map((call) => ({ argv: [...call.argv], timeoutMs: call.timeoutMs }));
+    return this.log.map((call) => ({ argv: [...call.argv], timeoutMs: call.timeoutMs, captureOutput: call.captureOutput }));
   }
 
   callCount(): number {
@@ -63,8 +74,11 @@ export class FakeOpenShell {
   }
 
   private async run(argv: readonly string[], options: OpenShellRunOptions): Promise<OpenShellRunOutcome> {
-    this.log.push({ argv: [...argv], timeoutMs: options.timeoutMs });
+    this.log.push({ argv: [...argv], timeoutMs: options.timeoutMs, captureOutput: options.captureOutput === true });
     const step = this.script.shift() ?? "create";
+    if (typeof step === "object") {
+      return step.output;
+    }
     switch (step) {
       case "create":
         this.sequence += 1;
@@ -80,6 +94,10 @@ export class FakeOpenShell {
         return { exitCode: 1 };
       case "reject":
         throw new Error("spawn openshell ENOENT");
+      case "reject-failed":
+        throw new OpenShellRunnerError("failed");
+      case "reject-timed-out":
+        throw new OpenShellRunnerError("timed-out");
       case "hang":
         return new Promise<OpenShellRunOutcome>(() => undefined);
     }
