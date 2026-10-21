@@ -107,4 +107,49 @@ Filled by the roadmap. Each v1 requirement maps to exactly one phase.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| (filled by roadmap) | | |
+| FOUND-01 | Phase 1 | Pending |
+| FOUND-02 | Phase 1 | Pending |
+| FOUND-03 | Phase 1 | Pending |
+| CORE-01 | Phase 2 | Pending |
+| CORE-02 | Phase 2 | Pending |
+| CORE-03 | Phase 2 | Pending |
+| CORE-04 | Phase 2 | Pending |
+| CORE-05 | Phase 3 | Pending |
+| CORE-06 | Phase 2 | Pending |
+| FS-01 | Phase 2 | Pending |
+| FS-02 | Phase 2 | Pending |
+| FS-03 | Phase 2 | Pending |
+| FS-04 | Phase 2 | Pending |
+| FS-05 | Phase 2 | Pending |
+| RT-01 | Phase 3 | Pending |
+| RT-02 | Phase 3 | Pending |
+| RT-03 | Phase 3 | Pending |
+| RT-04 | Phase 3 | Pending |
+| RT-05 | Phase 4 | Pending |
+| RT-06 | Phase 6 | Pending |
+| RT-07 | Phase 2 | Pending |
+| RT-08 | Phase 4 | Pending |
+| RT-09 | Phase 3 | Pending |
+| ANDA-01 | Phase 3 | Pending |
+| ANDA-02 | Phase 3 | Pending |
+| ANDA-03 | Phase 3 | Pending |
+| ANDA-04 | Phase 3 | Pending |
+| TOOL-01 | Phase 2 | Pending |
+| TOOL-02 | Phase 2 | Pending |
+| TOOL-03 | Phase 4 | Pending |
+| TOOL-04 | Phase 4 | Pending |
+| TOOL-05 | Phase 5 | Pending |
+| AUD-01 | Phase 2 | Pending |
+| AUD-02 | Phase 2 | Pending |
+| OMP-01 | Phase 5 | Pending |
+| OMP-02 | Phase 5 | Pending |
+| OMP-03 | Phase 5 | Pending |
+| OMP-04 | Phase 5 | Pending |
+| OMP-05 | Phase 5 | Pending |
+| CLI-01 | Phase 6 | Pending |
+| CLI-02 | Phase 6 | Pending |
+| CLI-03 | Phase 6 | Pending |
+| CLI-04 | Phase 6 | Pending |
+| QUAL-01 | Phase 1 | Pending |
+| QUAL-02 | Phase 2 | Pending |
+| QUAL-03 | Phase 7 | Pending |
