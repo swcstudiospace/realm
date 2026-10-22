@@ -12,7 +12,7 @@
 
 Realm is the agent sandbox component of the GSD-Core USSR Stack (Ultrathink, Substrate, Swarm, Realm). It runs an agent's execution and file mutations inside a locked-down sandbox, and it ships an Omp plugin, a standalone CLI with a long-running local daemon, and MCP and ACP surfaces. The MCP and ACP surfaces let other agent hosts, such as Muse Code, Claude Code, Grok Build, and Hermes Agent, use the same sandbox.
 
-The core guarantee: every file mutation either lands inside the realm under policy or fails closed, and the user can see whether the realm is active or disconnected for the session.
+The core guarantee, under the fail-closed policy: every file mutation either lands inside the realm under policy or fails closed, and the user can see whether the realm is active or disconnected for the session. The default advisory mode does not contain: while the realm is disconnected, the Omp guard warns and allows host write and edit calls. Containment requires opting into fail-closed.
 
 ## Status
 

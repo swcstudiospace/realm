@@ -14,7 +14,7 @@ Realm ships three things over one tool contract:
 - a standalone CLI, `realm`, with a long-running local daemon;
 - MCP and ACP surfaces, so other agent hosts use the same sandbox.
 
-Core guarantee: every file mutation either lands inside the realm under policy or fails closed, and the user can always see whether the realm is active or disconnected for the session.
+Core guarantee, under the fail-closed policy: every file mutation either lands inside the realm under policy or fails closed, and the user can always see whether the realm is active or disconnected for the session. In the default advisory mode the Omp guard warns and allows host write and edit calls while the realm is disconnected; containment requires opting into fail-closed.
 
 Status (README.md and `.planning/PROJECT.md`):
 
