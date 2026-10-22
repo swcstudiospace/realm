@@ -1,0 +1,210 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  verify:
+    name: Verify (Node ${{ matrix.node-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version:
+          - 22.x
+          - 24.x
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          npm ci
+
+      - name: Typecheck
+        run: |
+          set -euo pipefail
+          npm run typecheck
+
+      - name: Lint
+        run: |
+          set -euo pipefail
+          npm run lint
+
+      - name: Unit tests
+        run: |
+          set -euo pipefail
+          npm test
+
+      - name: Integration tests
+        run: |
+          set -euo pipefail
+          npm run test:integration
+
+      - name: Script tests
+        run: |
+          set -euo pipefail
+          npm run test:scripts
+
+      - name: Check docs
+        run: |
+          set -euo pipefail
+          npm run check:docs
+
+      - name: Build
+        run: |
+          set -euo pipefail
+          npm run build
+
+  release:
+    name: Release
+    needs: verify
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: write
+    concurrency:
+      group: release-main
+      cancel-in-progress: false
+    steps:
+      - name: Checkout full history
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Set up Node.js 24 for release
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24.x
+
+      - name: Install release dependencies
+        run: |
+          set -euo pipefail
+          npm ci
+
+      - name: Compute next version
+        id: version
+        run: |
+          set -euo pipefail
+          line="$(node scripts/release/next-version.mjs)"
+          NEXT_VERSION_LINE="$line" node -e '
+            const fs = require("node:fs");
+            const next = JSON.parse(process.env.NEXT_VERSION_LINE);
+            const lines = [
+              `version=${next.version}`,
+              `tag=${next.tag}`,
+              `previousTag=${next.previousTag ?? ""}`,
+            ].join("\n") + "\n";
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, lines);
+          '
+
+      - name: Check whether tag exists on origin
+        id: tag_check
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          remote_tag="$(git ls-remote --tags origin "refs/tags/${TAG}")"
+          if [ -n "${remote_tag}" ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Tag ${TAG} already exists on origin; skipping release."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Sync package version
+        if: steps.tag_check.outputs.exists == 'false'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          node scripts/release/sync-version.mjs "${VERSION}"
+
+      - name: Generate changelog and release notes
+        if: steps.tag_check.outputs.exists == 'false'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          PREVIOUS_TAG: ${{ steps.version.outputs.previousTag }}
+        run: |
+          set -euo pipefail
+          release_date="$(date -u +%Y-%m-%d)"
+          args=(--version "${VERSION}" --date "${release_date}" --notes-out release-notes.md)
+          if [ -n "${PREVIOUS_TAG}" ]; then
+            args+=(--since "${PREVIOUS_TAG}")
+          fi
+          node scripts/release/changelog.mjs "${args[@]}"
+
+      - name: Commit release changes
+        if: steps.tag_check.outputs.exists == 'false'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          git add package.json package-lock.json CHANGELOG.md
+          if git diff --cached --quiet; then
+            echo "No release file changes to commit."
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit -m "chore(release): v${VERSION} [skip ci]"
+          fi
+
+      - name: Tag and push release
+        if: steps.tag_check.outputs.exists == 'false'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          git tag -a "v${VERSION}" -m "Release v${VERSION}"
+          git push origin HEAD:main
+          git push origin "v${VERSION}"
+
+      - name: Build and pack tarball
+        if: steps.tag_check.outputs.exists == 'false'
+        run: |
+          set -euo pipefail
+          npm run build
+          npm pack
+
+      - name: Create GitHub release
+        if: steps.tag_check.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          gh release create "v${VERSION}" "agent-realm-${VERSION}.tgz" \
+            --title "Realm v${VERSION}" \
+            --notes-file release-notes.md \
+            --verify-tag
+
+      - name: Dispatch Pages workflow
+        if: steps.tag_check.outputs.exists == 'false' && hashFiles('.github/workflows/pages.yml') != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh workflow run pages.yml --ref main
