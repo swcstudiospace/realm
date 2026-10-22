@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Policy } from "../../src/contract/validate.js";
 import { LockTable } from "../../src/fs/locks.js";
+import { bindWorkspaceUnderPolicy } from "../../src/fs/root.js";
 import { LifecycleController } from "../../src/lifecycle/controller.js";
 import { SessionStore } from "../../src/session/store.js";
 import { FakeExecutionService } from "../support/fake-execution.js";
@@ -41,6 +42,7 @@ function fixture(t: TestContext, startupBudgetMs = 10000) {
   const controller = new LifecycleController({
     sessionId: SESSION,
     policy: policyFor([workspace], startupBudgetMs),
+    pinnedRoot: bindWorkspaceUnderPolicy([workspace], workspace),
     store,
     exec,
     bridge,

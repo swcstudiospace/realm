@@ -84,11 +84,17 @@ export async function probePodman(options: PodmanProbeOptions): Promise<PodmanPr
       `XDG_RUNTIME_DIR is not set to an absolute path, so the rootless Podman API socket cannot be located. ${FIX_START_SOCKET}`,
     );
   }
-  const accepted = await socketAccepts(options.connectSocket, socketPath, options.timeoutMs);
-  if (!accepted) {
+  const dial = await dialSocket(options.connectSocket, socketPath, options.timeoutMs);
+  if (dial === "timed-out") {
     return failure(
       "PODMAN_MACHINE_DOWN",
-      `The rootless Podman API socket did not accept a connection (refused, missing, or no answer within ${options.timeoutMs} ms). ${FIX_START_SOCKET}`,
+      `The rootless Podman API socket did not answer a connection within ${options.timeoutMs} ms. ${FIX_START_SOCKET}`,
+    );
+  }
+  if (dial === "refused") {
+    return failure(
+      "PODMAN_MACHINE_DOWN",
+      `The rootless Podman API socket refused the connection or is missing. ${FIX_START_SOCKET}`,
     );
   }
 
@@ -153,15 +159,18 @@ async function readVersion(
   return { ok: true, stdout: outcome.stdout };
 }
 
-async function socketAccepts(
+// How one dial of the API socket ended. A RealmError is withTimeout's own timer, as in readVersion.
+type SocketDial = "accepted" | "timed-out" | "refused";
+
+async function dialSocket(
   connectSocket: ConnectSocket,
   socketPath: string,
   timeoutMs: number,
-): Promise<boolean> {
+): Promise<SocketDial> {
   try {
     await withTimeout(connectSocket(socketPath, timeoutMs), timeoutMs, "PODMAN_MACHINE_DOWN");
-    return true;
-  } catch {
-    return false;
+    return "accepted";
+  } catch (error: unknown) {
+    return error instanceof RealmError ? "timed-out" : "refused";
   }
 }

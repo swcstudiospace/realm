@@ -1,6 +1,6 @@
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Policy, SessionRecord } from "../../src/contract/validate.js";
@@ -33,7 +33,6 @@ function policyFor(workspaceRoots: readonly string[]): Policy {
 interface FixtureOptions {
   readonly policyRoots?: (base: string, workspace: string, second: string) => readonly string[];
   readonly teardownTimeoutMs?: number;
-  readonly pinWorkspace?: boolean;
 }
 
 // Real directories under a temporary base, a session store on disk, and the fake
@@ -52,9 +51,8 @@ function fixture(t: TestContext, options: FixtureOptions = {}) {
   const roots = options.policyRoots
     ? options.policyRoots(base, workspace, second)
     : [workspace];
-  // With pinWorkspace the root is pinned at bind time, before the directory can be replaced.
-  const pinnedRoot =
-    options.pinWorkspace === true ? bindWorkspaceUnderPolicy(roots, workspace) : undefined;
+  // The root is pinned at bind time, before the directory can be replaced.
+  const pinnedRoot = bindWorkspaceUnderPolicy(roots, workspace);
   const store = new SessionStore(join(base, "state"));
   const exec = new FakeExecutionService();
   const bridge = new FakeBridge();
@@ -67,7 +65,7 @@ function fixture(t: TestContext, options: FixtureOptions = {}) {
     bridge,
     clock: () => new Date(CLOCK_TIME),
     locks,
-    ...(pinnedRoot === undefined ? {} : { pinnedRoot }),
+    pinnedRoot,
     ...(options.teardownTimeoutMs === undefined ? {} : { teardownTimeoutMs: options.teardownTimeoutMs }),
   });
   return { base, workspace, second, otherDir, store, exec, bridge, locks, controller };
@@ -238,20 +236,6 @@ test("a workspace outside every policy root is refused with POLICY_DENIED and no
   assert.equal(exec.callCount("create"), 0);
 });
 
-test("an empty workspaceRoots policy refuses every create with POLICY_DENIED (D-21 default)", async (t) => {
-  const { controller, exec, workspace } = fixture(t, { policyRoots: () => [] });
-  await assertRejectsWith(controller.create(workspace), "POLICY_DENIED");
-  assert.equal(exec.callCount("create"), 0);
-});
-
-test("a policy root that cannot be canonicalized fails the bind with POLICY_DENIED (D-22)", async (t) => {
-  const { controller, workspace } = fixture(t, {
-    policyRoots: (dir, root) => [root, join(dir, "missing-root")],
-  });
-  await assertRejectsWith(controller.create(workspace), "POLICY_DENIED");
-  assert.equal(controller.snapshot().state, "unbound");
-});
-
 test("a container bound to one workspace is never reused for another (S-02)", async (t) => {
   const { controller, exec, workspace, second } = fixture(t, {
     policyRoots: (_dir, root, other) => [root, other],
@@ -314,6 +298,7 @@ test("create with a scripted fake delay beyond startupBudgetMs gives STARTUP_BUD
   const controller = new LifecycleController({
     sessionId: SESSION,
     policy: { ...policyFor([workspace]), startupBudgetMs: 50 },
+    pinnedRoot: bindWorkspaceUnderPolicy([workspace], workspace),
     store,
     exec,
     bridge: new FakeBridge(),
@@ -366,7 +351,7 @@ test("destroy with a scripted stop delay beyond the teardown bound returns REALM
 });
 
 test("create is refused with POLICY_DENIED when the pinned workspace directory was replaced, and nothing changes (D-22, S-02)", async (t) => {
-  const { base, workspace, store, exec, controller } = fixture(t, { pinWorkspace: true });
+  const { base, workspace, store, exec, controller } = fixture(t);
   const before = controller.snapshot();
   renameSync(workspace, join(base, "workspace-old"));
   mkdirSync(workspace);
@@ -375,6 +360,17 @@ test("create is refused with POLICY_DENIED when the pinned workspace directory w
   assert.deepEqual(controller.snapshot(), before);
   assert.equal(store.load(SESSION), null);
   assert.equal(exec.calls().length, 0);
+});
+
+test("create through a link to the pinned workspace is accepted, and the record names the pinned real path (D-22, FS-02)", async (t) => {
+  const { base, workspace, store, controller } = fixture(t);
+  const alias = join(base, "alias");
+  symlinkSync(workspace, alias, "dir");
+
+  const snapshot = await controller.create(alias);
+
+  assert.equal(snapshot.state, "active");
+  assert.equal(store.load(SESSION)?.workspaceRoot, workspace);
 });
 
 test("create on an active session at another workspace is refused with POLICY_DENIED and changes nothing (S-02, CORE-03)", async (t) => {

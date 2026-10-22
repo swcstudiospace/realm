@@ -12,7 +12,7 @@ import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { PassThrough } from "node:stream";
 import { ACP_PROTOCOL_VERSION, REALM_TOOL_METHOD, runAcpAgent } from "../../src/acp/agent.js";
-import { ERROR_CODES } from "../../src/core/errors.js";
+import { ERROR_CATALOGUE, ERROR_CODES, makeRealmError } from "../../src/core/errors.js";
 import { displayStatus } from "../../src/core/status.js";
 import type { ToolCall } from "../../src/contract/validate.js";
 import type { ToolDispatcher, ToolOutcome } from "../../src/tools/dispatch.js";
@@ -32,7 +32,7 @@ interface AcpClient {
   close(): Promise<void>;
 }
 
-function startClient(t: TestContext, dispatcher: ToolDispatcher, input: PassThrough = new PassThrough()): AcpClient {
+function startClient(t: TestContext, dispatcher: Pick<ToolDispatcher, "call">, input: PassThrough = new PassThrough()): AcpClient {
   const output = new PassThrough();
   const diagnostics: string[] = [];
   const lines: string[] = [];
@@ -91,7 +91,7 @@ interface RpcReply {
   readonly jsonrpc: "2.0";
   readonly id: string | number | null;
   readonly result?: unknown;
-  readonly error?: { readonly code: number; readonly message: string };
+  readonly error?: { readonly code: number; readonly message: string; readonly data?: unknown };
 }
 
 function parseReply(line: string): RpcReply {
@@ -227,6 +227,28 @@ test(
       (ERROR_CODES as readonly string[]).includes(outcome.code),
       "the surfaced code is a catalogue code",
     );
+    await client.close();
+  },
+);
+
+test(
+  "TOOL-05: a RealmError thrown by the dispatcher reaches the realm/tool reply with its code, retryable flag, and message (G-08)",
+  { timeout: 10_000 },
+  async (t) => {
+    const thrown = makeRealmError("OPENSHELL_START_FAILED", "PODMAN_MACHINE_DOWN");
+    const dispatcher: Pick<ToolDispatcher, "call"> = { call: () => Promise.reject(thrown) };
+    const client = startClient(t, dispatcher);
+    send(client, realmTool(1, { exec: { argv: [...WORKLOAD] } }));
+    await client.waitFor(1);
+    const reply = parseReply(client.lines[0] ?? "");
+    assert.equal(reply.id, 1);
+    assert.equal(reply.result, undefined, "a thrown refusal is an error reply, not a result");
+    const entry = ERROR_CATALOGUE["OPENSHELL_START_FAILED"];
+    assert.deepEqual(reply.error, {
+      code: -32603,
+      message: `OPENSHELL_START_FAILED: ${entry.reason}`,
+      data: { code: "OPENSHELL_START_FAILED", retryable: entry.retryable, causeCode: "PODMAN_MACHINE_DOWN" },
+    });
     await client.close();
   },
 );

@@ -161,13 +161,31 @@ test("session-store: a writable session directory passes, and the check writes n
   assert.deepEqual(readdirSync(sessionsDir), before);
 });
 
+// A probe that refuses writes, with the error text the default probe would report.
+const refused = (): { readonly writable: false; readonly reason: string } => ({
+  writable: false,
+  reason: "EACCES: permission denied",
+});
+
 test("session-store: an unwritable session directory fails with an ownership fix (D-44)", async (t) => {
   const { stateDir, policyPath } = layout(t);
   mkdirSync(join(stateDir, "sessions"), { mode: 0o700 });
-  const result = resultOf(await runChecks({ policyPath, stateDir, canWrite: () => false }), "session-store");
+  const result = resultOf(await runChecks({ policyPath, stateDir, canWrite: refused }), "session-store");
   assert.equal(result.status, "fail");
   assert.match(result.detail, /not writable/);
   assert.match(fixOf(result), /ownership/);
+});
+
+test("session-store: a refused write keeps the probe's error text as the detail reason (QUAL-01)", async (t) => {
+  const { stateDir, policyPath } = layout(t);
+  mkdirSync(join(stateDir, "sessions"), { mode: 0o700 });
+  const canWrite = (): { readonly writable: false; readonly reason: string } => ({
+    writable: false,
+    reason: "EACCES: permission denied, access 'sessions'",
+  });
+  const result = resultOf(await runChecks({ policyPath, stateDir, canWrite }), "session-store");
+  assert.equal(result.status, "fail");
+  assert.match(result.detail, /EACCES: permission denied, access 'sessions'/);
 });
 
 test("session-store: an absent session directory warns when its nearest ancestor is writable (D-37, D-44)", async (t) => {
@@ -179,7 +197,7 @@ test("session-store: an absent session directory warns when its nearest ancestor
 
 test("session-store: an absent session directory fails when no ancestor is writable (D-44)", async (t) => {
   const { stateDir, policyPath } = layout(t);
-  const result = resultOf(await runChecks({ policyPath, stateDir, canWrite: () => false }), "session-store");
+  const result = resultOf(await runChecks({ policyPath, stateDir, canWrite: refused }), "session-store");
   assert.equal(result.status, "fail");
   assert.match(fixOf(result), /ownership/);
 });

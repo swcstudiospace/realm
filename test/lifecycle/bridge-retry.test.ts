@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Policy } from "../../src/contract/validate.js";
 import { type ErrorCode, makeRealmError } from "../../src/core/errors.js";
+import { bindWorkspaceUnderPolicy } from "../../src/fs/root.js";
 import { LifecycleController } from "../../src/lifecycle/controller.js";
 import { SessionStore } from "../../src/session/store.js";
 import { FakeBridge } from "../support/fake-bridge.js";
@@ -104,6 +105,7 @@ function fixture(t: TestContext) {
   const controller = new LifecycleController({
     sessionId: SESSION,
     policy: policyFor(workspace),
+    pinnedRoot: bindWorkspaceUnderPolicy([workspace], workspace),
     store,
     exec,
     bridge,

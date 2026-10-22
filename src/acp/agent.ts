@@ -10,8 +10,8 @@
 // The module holds no tool logic (P5-D11): it parses envelopes and calls the
 // dispatcher, nothing more. The only dispatcher member it touches is call.
 
-import type { Readable, Writable } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
+import { RealmError } from "../core/errors.js";
 import type { ToolDispatcher, ToolOutcome } from "../tools/dispatch.js";
 
 // The ACP generation Realm speaks (docs/integration/acp.md Q5, P5-D10).
@@ -33,8 +33,8 @@ const INTERNAL_ERROR = -32603;
 
 export interface AcpAgentOptions {
   readonly dispatcher: Pick<ToolDispatcher, "call">;
-  readonly input: Readable;
-  readonly output: Writable;
+  readonly input: NodeJS.ReadableStream;
+  readonly output: NodeJS.WritableStream;
   // Optional observer: it receives a copy of each diagnostic after the
   // diagnostic has gone to process.stderr. It cannot redirect diagnostics, and
   // it must never write to `output`, which carries protocol bytes only.
@@ -50,7 +50,7 @@ interface RpcSuccess {
 interface RpcFailure {
   readonly jsonrpc: "2.0";
   readonly id: string | number | null;
-  readonly error: { readonly code: number; readonly message: string };
+  readonly error: { readonly code: number; readonly message: string; readonly data?: Record<string, unknown> };
 }
 
 type RpcId = string | number | null;
@@ -76,8 +76,17 @@ function success(id: RpcId, result: unknown): RpcSuccess {
   return { jsonrpc: "2.0", id, result };
 }
 
-function failure(id: RpcId, code: number, message: string): RpcFailure {
-  return { jsonrpc: "2.0", id, error: { code, message } };
+function failure(id: RpcId, code: number, message: string, data?: Record<string, unknown>): RpcFailure {
+  return { jsonrpc: "2.0", id, error: { code, message, ...(data === undefined ? {} : { data }) } };
+}
+
+// The catalogue fields a host needs to act on a refusal (G-08). The cause code is present only when one was given.
+function realmErrorData(error: RealmError): Record<string, unknown> {
+  const data: Record<string, unknown> = { code: error.code, retryable: error.retryable };
+  if (error.causeCode !== undefined) {
+    data["causeCode"] = error.causeCode;
+  }
+  return data;
 }
 
 // Decodes a chunk without touching the caller's stream. A split multi-byte
@@ -167,6 +176,12 @@ async function handleLine(
     try {
       outcome = await dispatcher.call(params["tool"]);
     } catch (error: unknown) {
+      if (error instanceof RealmError) {
+        // The catalogue code travels in the reply data and in the message (G-08).
+        diagnose(`realm acp agent tool dispatch refused: ${error.code}`);
+        send(failure(id, INTERNAL_ERROR, `${error.code}: ${error.message}`, realmErrorData(error)));
+        return;
+      }
       diagnose(`realm acp agent tool dispatch failed: ${error instanceof Error ? error.message : "unknown"}`);
       send(failure(id, INTERNAL_ERROR, "tool dispatch failed"));
       return;

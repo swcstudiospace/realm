@@ -12,21 +12,22 @@
 //   - ctx.cwd: the session working directory, bound as the workspace root at attach.
 //   - ctx.ui.setStatus(key, text) per-key storage, plus ctx.ui.notify for the advisory warning.
 //     The exact setStatus key-plus-text signature was found only upstream (OQ-P5-01).
-//   - Managed timers ctx.setTimeout() / ctx.clearTimer().
+//   - Managed timers ctx.setTimeout() / ctx.setInterval() / ctx.clearTimer(). The host clears its
+//     managed callbacks on session shutdown; the plugin also clears every timer it armed there.
 //   - pi.registerCommand(name, { description, handler }) for the retry command.
 // No status endpoint, tooltip, or setActiveTools enforcement is used: no status endpoint was found
-// on any source read (not documented), and neither setActiveTools removal nor a tool_call block is
-// documented to cover every host execution path (OQ-P5-01, OQ-P5-02).
+// on any source read (not documented), no tooltip surface was verified, and neither setActiveTools
+// removal nor a tool_call block is documented to cover every host execution path (OQ-P5-01, OQ-P5-02).
 //
 // Deviations recorded here:
-//   - P5-D5: reason and last-transition time are written to a second setStatus item (REALM_DETAIL_KEY),
-//     not a tooltip: no tooltip surface was verified.
+//   - P5-D5: the label, the reason, and the last-transition time share one status item
+//     (REALM_STATUS_KEY). The host offers no tooltip, so the reason and time ride in that item's text.
 //   - Required mode is the fail-closed policy mode (advisory is the default). The mode is the policy
 //     mode the daemon reports in its status value; the plugin reads no policy file.
 //   - The startup budget is STARTUP_BUDGET_MS. The policy is daemon-owned, so the plugin cannot read
 //     policy.startupBudgetMs; the constant mirrors the policy schema default.
-//   - No push channel carries transitions. The indicator repaints on attach, on retry, and on every
-//     guarded call, which reads the daemon status.
+//   - No push channel carries transitions from the daemon. While attached, the indicator repaints on
+//     attach, on retry, on every guarded call, and on a bounded poll (STATUS_POLL_MS) of the daemon status.
 
 import { makeRealmError, RealmError } from "../core/errors.js";
 import type { MutationDenyCode } from "../core/policy.js";
@@ -48,6 +49,7 @@ export interface OmpSessionContext {
   readonly cwd: string;
   readonly ui: OmpStatusUi;
   setTimeout(callback: () => void, ms: number): unknown;
+  setInterval(callback: () => void, ms: number): unknown;
   clearTimer(handle: unknown): void;
 }
 
@@ -87,6 +89,16 @@ export interface ActiveSession {
   client: DaemonClient | null;
   // Policy mode from the last status the daemon reported; null until one arrives.
   mode: PolicyMode | null;
+  // Managed timers armed and not yet cleared, each with the action that ends its wait at shutdown.
+  // Shutdown clears every handle and runs its action, so no timer outlives the session.
+  readonly timers: Map<unknown, () => void>;
+  // The repaint poll, or null when none is armed.
+  poll: { readonly handle: unknown } | null;
+  // True while a repaint poll read is in flight, so a slow daemon never stacks reads.
+  refreshing: boolean;
+  // The error the poll last painted, with the stamp it carried. A repeat of the same error reuses the
+  // stamp, so the repaint stays quiet until the transition really changes.
+  errorStamp: { readonly code: string; readonly at: string } | null;
 }
 
 // Startup budget for attach plus its first status read. The daemon owns the policy, so this mirrors
@@ -97,10 +109,13 @@ export const STARTUP_BUDGET_MS = 10_000;
 // daemon yields a verdict instead of a host timeout.
 export const GUARD_STATUS_BUDGET_MS = 5_000;
 
-// The single status key (P5-D5). Every render targets this key plus the detail
-// key below, so the indicator can never present two competing labels.
+// Interval of the repaint poll while attached. With no push channel from the daemon, a transition
+// reaches the indicator within this bound. Each tick is one local status read.
+export const STATUS_POLL_MS = 2_000;
+
+// The single status key (P5-D5). The label, reason, and time are one item, so the indicator can
+// never present two competing labels.
 export const REALM_STATUS_KEY = "realm";
-export const REALM_DETAIL_KEY = "realm.detail";
 export const REALM_RETRY_COMMAND = "realm-retry";
 
 // Host tools the tool_call guard inspects. read, list, status, and retry pass
@@ -111,11 +126,12 @@ export const GUARDED_HOST_TOOLS: readonly string[] = Object.freeze(["write", "ed
 // One shared label from displayStatus, the only label source. The leading
 // marker (● active family, ○ disconnected family) and the [degraded] flag are
 // text, so the state stays readable without colour. Degraded keeps the active
-// label with its flag; it is never a third label.
+// label with its flag; it is never a third label. The reason and the last
+// transition time follow the label in the same text.
 //
-// Each real transition paints once. Attach, retry, and every guarded status read render the
-// snapshot, so the last painted pair is kept per indicator and a render equal to it is skipped
-// (OMP-03). A changed detail, such as ANDA_UNREACHABLE followed by anda reachable, always paints.
+// Each real transition paints once. Attach, retry, every guarded status read, and every poll tick
+// render the snapshot, so the last painted text is kept per indicator and a render equal to it is
+// skipped (OMP-03). A changed reason or time always paints.
 
 const lastPainted = new WeakMap<OmpStatusUi, string>();
 
@@ -123,17 +139,36 @@ export function renderRealmStatus(ui: OmpStatusUi, snapshot: StateSnapshot): voi
   const display = displayStatus(snapshot);
   const marker = display.label === STATUS_LABELS.active ? "●" : "○";
   const flag = display.degraded ? " [degraded]" : "";
-  const label = `${marker} ${display.label}${flag}`;
-  const detail = `${display.reason} · ${display.lastTransitionAt}`;
-  const pair = JSON.stringify([label, detail]);
-  if (lastPainted.get(ui) === pair) {
+  const text = `${marker} ${display.label}${flag} · ${display.reason} · ${display.lastTransitionAt}`;
+  if (lastPainted.get(ui) === text) {
     return;
   }
-  // Cached only after both writes succeed: a throw above leaves the cache stale, so the
-  // next render repaints both keys instead of skipping them (MED-03).
-  ui.setStatus(REALM_STATUS_KEY, label);
-  ui.setStatus(REALM_DETAIL_KEY, detail);
-  lastPainted.set(ui, pair);
+  // Cached only after the write succeeds: a throw above leaves the cache stale, so the next
+  // render repaints instead of skipping it (MED-03).
+  ui.setStatus(REALM_STATUS_KEY, text);
+  lastPainted.set(ui, text);
+}
+
+// ---- Managed timers ----------------------------------------------------------
+// Every timer the plugin arms goes through these two helpers, so the session can clear them all.
+// onExpiry runs when the timer fires; onEnd runs when the session ends first, so a pending wait
+// settles instead of hanging after shutdown.
+
+function armTimer(session: ActiveSession, ms: number, onExpiry: () => void, onEnd: () => void): unknown {
+  const handle: unknown = session.ctx.setTimeout(() => {
+    session.timers.delete(handle);
+    onExpiry();
+  }, ms);
+  session.timers.set(handle, onEnd);
+  return handle;
+}
+
+// Clears a timer whose wait has settled. A handle already fired or cleared is not in the map, so
+// it is never cleared twice.
+function disarmTimer(session: ActiveSession, handle: unknown): void {
+  if (session.timers.delete(handle)) {
+    session.ctx.clearTimer(handle);
+  }
 }
 
 // ---- Registration -----------------------------------------------------------
@@ -149,12 +184,26 @@ export function registerRealmPlugin(pi: OmpExtensionApi, options: RealmPluginOpt
   let live: ActiveSession | null = null;
   let attempt = 0;
 
-  // Ends the captured session. The client is closed, never taken down: the daemon keeps the
-  // sandbox, and a host shutdown is only a detach of this host.
+  // Ends the captured session. Every timer it armed is cleared and its wait settled, and the poll
+  // is cleared, so the host runs no callback for an ended session. The client is closed, never taken
+  // down: the daemon keeps the sandbox, and a host shutdown is only a detach of this host.
   const endSession = (): void => {
     const ended = live;
     live = null;
-    if (ended !== null && ended.client !== null) {
+    if (ended === null) {
+      return;
+    }
+    const armed = [...ended.timers];
+    ended.timers.clear();
+    for (const [handle, onEnd] of armed) {
+      ended.ctx.clearTimer(handle);
+      onEnd();
+    }
+    if (ended.poll !== null) {
+      ended.ctx.clearTimer(ended.poll.handle);
+      ended.poll = null;
+    }
+    if (ended.client !== null) {
       ended.client.close();
       ended.client = null;
     }
@@ -175,9 +224,16 @@ export function registerRealmPlugin(pi: OmpExtensionApi, options: RealmPluginOpt
     const budget = new Promise<never>((_resolve, reject) => {
       rejectBudget = reject;
     });
-    const timer = ctx.setTimeout(() => {
-      rejectBudget(makeRealmError("STARTUP_BUDGET_EXCEEDED"));
-    }, STARTUP_BUDGET_MS);
+    const timer = armTimer(
+      session,
+      STARTUP_BUDGET_MS,
+      () => {
+        rejectBudget(makeRealmError("STARTUP_BUDGET_EXCEEDED"));
+      },
+      () => {
+        rejectBudget(makeRealmError("REALM_NOT_ACTIVE"));
+      },
+    );
     // The attach and its first status read share one budget; a client is adopted only with its status.
     const pending = Promise.resolve()
       .then(() => options.attachDaemon(ctx.cwd))
@@ -190,7 +246,7 @@ export function registerRealmPlugin(pi: OmpExtensionApi, options: RealmPluginOpt
     } catch (error: unknown) {
       code = error instanceof RealmError ? error.code : "OPENSHELL_START_FAILED";
     }
-    ctx.clearTimer(timer);
+    disarmTimer(session, timer);
 
     if (!isCurrent()) {
       // Ended or superseded: release whatever this attempt produces, late or not.
@@ -207,6 +263,40 @@ export function registerRealmPlugin(pi: OmpExtensionApi, options: RealmPluginOpt
     session.mode = attached.status.mode;
     renderRealmStatus(ctx.ui, attached.status.snapshot);
     return { outcome: "attached", snapshot: attached.status.snapshot };
+  };
+
+  // One repaint tick: reads the daemon status and paints any transition the tick finds. It paints
+  // only for the client it read through; a client replaced or ended meanwhile paints nothing.
+  const repaint = async (session: ActiveSession): Promise<void> => {
+    const client = session.client;
+    if (client === null || session.refreshing) {
+      return;
+    }
+    const isCurrent = (): boolean => live === session && session.client === client;
+    session.refreshing = true;
+    try {
+      let status: DaemonStatus;
+      try {
+        status = await readStatus(session);
+      } catch (error: unknown) {
+        if (!isCurrent()) {
+          return;
+        }
+        const code = error instanceof RealmError ? error.code : "REALM_NOT_ACTIVE";
+        const at = session.errorStamp?.code === code ? session.errorStamp.at : nowIso();
+        session.errorStamp = { code, at };
+        renderRealmStatus(session.ctx.ui, { state: "error", reason: code, lastTransitionAt: at });
+        return;
+      }
+      if (!isCurrent()) {
+        return;
+      }
+      session.errorStamp = null;
+      session.mode = status.mode;
+      renderRealmStatus(session.ctx.ui, status.snapshot);
+    } finally {
+      session.refreshing = false;
+    }
   };
 
   // Dispatcher-owned retry: the command re-runs the attach path and reports its outcome.
@@ -226,10 +316,23 @@ export function registerRealmPlugin(pi: OmpExtensionApi, options: RealmPluginOpt
   };
 
   pi.on("session_start", (ctx) => {
-    // A second start replaces the first, so the previous client is closed, not orphaned.
+    // A second start replaces the first, so the previous client and its timers are released, not orphaned.
     endSession();
-    const session: ActiveSession = { ctx, client: null, mode: null };
+    const session: ActiveSession = {
+      ctx,
+      client: null,
+      mode: null,
+      timers: new Map(),
+      poll: null,
+      refreshing: false,
+      errorStamp: null,
+    };
     live = session;
+    session.poll = {
+      handle: ctx.setInterval(() => {
+        void repaint(session);
+      }, STATUS_POLL_MS),
+    };
     // Detached: the handler returns while the attach runs, and the outcome paints itself.
     void attach(session);
   });
@@ -291,26 +394,33 @@ export async function guardHostToolCall(
 }
 
 // One status read under a managed timer. The timer expiry rejects with TOOL_TIMEOUT, so a hung
-// daemon can never hold the host's tool call.
+// daemon can never hold the host's tool call. Session shutdown rejects with REALM_NOT_ACTIVE, so an
+// in-flight read never outlives its session.
 function readStatus(session: ActiveSession): Promise<DaemonStatus> {
   const client = session.client;
   if (client === null) {
     return Promise.reject(makeRealmError("REALM_NOT_ACTIVE"));
   }
-  const { ctx } = session;
   return new Promise<DaemonStatus>((resolve, reject) => {
-    const timer = ctx.setTimeout(() => {
-      reject(makeRealmError("TOOL_TIMEOUT"));
-    }, GUARD_STATUS_BUDGET_MS);
+    const timer = armTimer(
+      session,
+      GUARD_STATUS_BUDGET_MS,
+      () => {
+        reject(makeRealmError("TOOL_TIMEOUT"));
+      },
+      () => {
+        reject(makeRealmError("REALM_NOT_ACTIVE"));
+      },
+    );
     Promise.resolve()
       .then(() => client.status())
       .then(
         (value) => {
-          ctx.clearTimer(timer);
+          disarmTimer(session, timer);
           resolve(value);
         },
         (error: unknown) => {
-          ctx.clearTimer(timer);
+          disarmTimer(session, timer);
           reject(error);
         },
       );

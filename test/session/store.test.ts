@@ -5,7 +5,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SessionRecord } from "../../src/contract/validate.js";
 import { RealmError } from "../../src/core/errors.js";
-import { resolveStateDir } from "../../src/session/paths.js";
 import { SessionStore } from "../../src/session/store.js";
 
 // The frozen D-14 field set, pinned as literals.
@@ -117,16 +116,6 @@ test("a session id that could leave the sessions directory is refused with SCHEM
   assertRejectsWith(() => store.save(recordFor(stateDir, "../escape")), "SCHEMA_INVALID");
   assertRejectsWith(() => store.load("../escape"), "SCHEMA_INVALID");
   assertRejectsWith(() => store.delete("nested/id"), "SCHEMA_INVALID");
-});
-
-test("resolveStateDir prefers an absolute XDG_STATE_HOME, falls back to HOME, and ignores a relative XDG value (D-37)", () => {
-  assert.equal(resolveStateDir({ XDG_STATE_HOME: "/xdg/state", HOME: "/home/user" }), "/xdg/state/realm");
-  assert.equal(resolveStateDir({ HOME: "/home/user" }), "/home/user/.local/state/realm");
-  assert.equal(resolveStateDir({ XDG_STATE_HOME: "relative/state", HOME: "/home/user" }), "/home/user/.local/state/realm");
-  assert.throws(
-    () => resolveStateDir({}),
-    (error: unknown) => error instanceof RealmError && error.code === "SCHEMA_INVALID",
-  );
 });
 
 test("RT-08: list() returns the sorted ids of record files and ignores names that do not match the record pattern (D-85)", (t) => {

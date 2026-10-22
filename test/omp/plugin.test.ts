@@ -12,10 +12,10 @@ import type { ToolOutcome } from "../../src/tools/dispatch.js";
 import {
   GUARD_STATUS_BUDGET_MS,
   GUARDED_HOST_TOOLS,
-  REALM_DETAIL_KEY,
   REALM_RETRY_COMMAND,
   REALM_STATUS_KEY,
   STARTUP_BUDGET_MS,
+  STATUS_POLL_MS,
   guardHostToolCall,
   registerRealmPlugin,
   renderRealmStatus,
@@ -30,8 +30,8 @@ import {
 
 // OMP-01 to OMP-05 plugin proof (P5-D4 to P5-D6, P5-D8, P5-D14). Every test runs the real plugin
 // wiring against a FakeDaemon injected through attachDaemon. The doubles are the FakePi host
-// (capturing handlers, commands, and managed timers), the FakeCtx timers, and the FakeDaemon client.
-// Required mode is the fail-closed policy mode; advisory is the default.
+// (capturing handlers and commands), the FakeCtx managed timers (manual: a test fires them), and the
+// FakeDaemon client. Required mode is the fail-closed policy mode; advisory is the default.
 
 const CLOCK_ISO = "2026-10-21T09:30:00.000Z";
 const ACTIVE: StateSnapshot = { state: "active", reason: "container running", lastTransitionAt: CLOCK_ISO };
@@ -40,8 +40,10 @@ const ACTIVE_LABEL = `● ${STATUS_LABELS.active}`;
 const DEGRADED_LABEL = `● ${STATUS_LABELS.active} [degraded]`;
 const DISCONNECTED_LABEL = `○ ${STATUS_LABELS.disconnected}`;
 const WORKSPACE = "/ws";
+const SEPARATOR = " · ";
 
 // Yields one turn of the event loop. No wall-clock wait: the awaited conditions settle on promises.
+// Every promise chain in these tests settles in microtasks, so one turn flushes a completed tick.
 function yieldTurn(): Promise<void> {
   return new Promise<void>((resolve) => {
     setImmediate(resolve);
@@ -79,6 +81,38 @@ class FakeUi implements OmpStatusUi {
   }
 }
 
+// The status item text is "<label> · <reason> · <time>". The label is the first segment.
+function labelOf(text: string): string {
+  return text.split(SEPARATOR)[0] ?? "";
+}
+
+// The detail is everything after the label: "<reason> · <time>".
+function detailOf(text: string): string {
+  return text.slice(labelOf(text).length + SEPARATOR.length);
+}
+
+function statusTexts(ui: FakeUi): string[] {
+  return ui.texts(REALM_STATUS_KEY);
+}
+
+function labelsOf(ui: FakeUi): string[] {
+  return statusTexts(ui).map(labelOf);
+}
+
+function detailsOf(ui: FakeUi): string[] {
+  return statusTexts(ui).map(detailOf);
+}
+
+function lastLabel(ui: FakeUi): string | undefined {
+  const last = statusTexts(ui).at(-1);
+  return last === undefined ? undefined : labelOf(last);
+}
+
+function lastDetail(ui: FakeUi): string | undefined {
+  const last = statusTexts(ui).at(-1);
+  return last === undefined ? undefined : detailOf(last);
+}
+
 interface ArmedTimer {
   readonly ms: number;
   readonly callback: () => void;
@@ -88,6 +122,7 @@ interface ArmedTimer {
 class FakeCtx implements OmpSessionContext {
   readonly timeouts: number[] = [];
   readonly armed: ArmedTimer[] = [];
+  readonly intervals: ArmedTimer[] = [];
   readonly cleared: unknown[] = [];
   private sequence = 0;
 
@@ -102,6 +137,13 @@ class FakeCtx implements OmpSessionContext {
     this.sequence += 1;
     const handle = this.sequence;
     this.armed.push({ ms, callback, handle });
+    return handle;
+  }
+
+  setInterval(callback: () => void, ms: number): unknown {
+    this.sequence += 1;
+    const handle = this.sequence;
+    this.intervals.push({ ms, callback, handle });
     return handle;
   }
 
@@ -248,7 +290,7 @@ function shutdownHandlerOf(pi: FakePi): () => void {
 
 async function waitForDetail(ui: FakeUi, needle: string): Promise<string> {
   for (let attempt = 0; attempt < 500; attempt += 1) {
-    const found = ui.texts(REALM_DETAIL_KEY).find((text) => text.includes(needle));
+    const found = detailsOf(ui).find((detail) => detail.includes(needle));
     if (found !== undefined) {
       return found;
     }
@@ -281,9 +323,16 @@ function expireTimer(ctx: FakeCtx, ms: number): void {
   ctx.clearTimer(entry.handle);
 }
 
+// The repaint poll armed at session start.
+function pollOf(ctx: FakeCtx): ArmedTimer {
+  const entry = ctx.intervals.find((interval) => interval.ms === STATUS_POLL_MS);
+  assert.ok(entry !== undefined, `a ${STATUS_POLL_MS} ms poll was armed`);
+  return entry;
+}
+
 // Waits until the start attach has settled: the connecting render and the settled render are both painted.
 async function waitForSettledDetails(fixture: Fixture): Promise<void> {
-  await waitUntil(() => fixture.ui.texts(REALM_DETAIL_KEY).length >= 2);
+  await waitUntil(() => statusTexts(fixture.ui).length >= 2);
 }
 
 test("OMP-01: session start attaches the daemon for the session cwd and returns while connecting (P5-D8)", async () => {
@@ -298,16 +347,16 @@ test("OMP-01: session start attaches the daemon for the session cwd and returns 
   startHandlerOf(fixture.pi)(fixture.ctx);
 
   // The handler returned while the attach is still in flight: only the connecting render has landed.
-  assert.deepEqual(fixture.ui.texts(REALM_STATUS_KEY), [DISCONNECTED_LABEL]);
-  assert.ok(fixture.ui.texts(REALM_DETAIL_KEY)[0]?.startsWith("connecting · "), "connecting detail paints first");
+  assert.deepEqual(labelsOf(fixture.ui), [DISCONNECTED_LABEL]);
+  assert.ok(detailsOf(fixture.ui)[0]?.startsWith("connecting · "), "connecting detail paints first");
   assert.ok(fixture.ctx.timeouts.includes(STARTUP_BUDGET_MS), "the attach runs under the startup budget");
   // attachDaemon is invoked from a microtask, so the workspace root is observed after one turn of the event loop.
   await yieldTurn();
   assert.deepEqual(fixture.attachCalls, [WORKSPACE]);
 
   gate.resolve();
-  await waitUntil(() => fixture.ui.texts(REALM_STATUS_KEY).at(-1) === ACTIVE_LABEL);
-  assert.equal(fixture.ui.texts(REALM_DETAIL_KEY).at(-1), `container running · ${CLOCK_ISO}`);
+  await waitUntil(() => lastLabel(fixture.ui) === ACTIVE_LABEL);
+  assert.equal(lastDetail(fixture.ui), `container running · ${CLOCK_ISO}`);
 });
 
 test("OMP-01: a successful attach renders the status the daemon reports and never ups the realm (P5-D5)", async () => {
@@ -315,8 +364,8 @@ test("OMP-01: a successful attach renders the status the daemon reports and neve
   startHandlerOf(fixture.pi)(fixture.ctx);
 
   await waitForDetail(fixture.ui, "container running");
-  assert.equal(fixture.ui.texts(REALM_STATUS_KEY).at(-1), ACTIVE_LABEL);
-  assert.equal(fixture.ui.texts(REALM_DETAIL_KEY).at(-1), `container running · ${CLOCK_ISO}`);
+  assert.equal(lastLabel(fixture.ui), ACTIVE_LABEL);
+  assert.equal(lastDetail(fixture.ui), `container running · ${CLOCK_ISO}`);
   assert.equal(fixture.daemon.count("status"), 1, "attach reads status once");
   assert.equal(fixture.daemon.count("call"), 0, "the plugin dispatches no tools");
   // The settled attach clears its budget timer.
@@ -328,8 +377,8 @@ test("OMP-01 (a): an attach failure settles disconnected with the catalogue code
   startHandlerOf(fixture.pi)(fixture.ctx);
 
   await waitForDetail(fixture.ui, "ANDA_UNREACHABLE");
-  assert.equal(fixture.ui.texts(REALM_STATUS_KEY).at(-1), DISCONNECTED_LABEL);
-  assert.match(fixture.ui.texts(REALM_DETAIL_KEY).at(-1) ?? "", /^ANDA_UNREACHABLE · /);
+  assert.equal(lastLabel(fixture.ui), DISCONNECTED_LABEL);
+  assert.match(lastDetail(fixture.ui) ?? "", /^ANDA_UNREACHABLE · /);
   // No daemon was attached, so the guard has no client and refuses a guarded write.
   assert.deepEqual(await toolCallOf(fixture.pi)({ toolName: "write" }), { block: true, reason: "REALM_NOT_ACTIVE" });
 });
@@ -346,8 +395,8 @@ test("OMP-01 (a): an attach that outlives the startup budget settles disconnecte
 
   expireTimer(fixture.ctx, STARTUP_BUDGET_MS);
   await waitForDetail(fixture.ui, "STARTUP_BUDGET_EXCEEDED");
-  assert.equal(fixture.ui.texts(REALM_STATUS_KEY).at(-1), DISCONNECTED_LABEL);
-  assert.match(fixture.ui.texts(REALM_DETAIL_KEY).at(-1) ?? "", /^STARTUP_BUDGET_EXCEEDED · /);
+  assert.equal(lastLabel(fixture.ui), DISCONNECTED_LABEL);
+  assert.match(lastDetail(fixture.ui) ?? "", /^STARTUP_BUDGET_EXCEEDED · /);
 
   // The attach lands after the budget: it is closed, never adopted, so the guard still has no client.
   gate.resolve();
@@ -365,7 +414,7 @@ test("OMP-01: an attachDaemon that throws synchronously paints disconnected with
 
   assert.doesNotThrow(() => startHandlerOf(fixture.pi)(fixture.ctx));
   await waitForDetail(fixture.ui, "SCHEMA_INVALID");
-  assert.equal(fixture.ui.texts(REALM_STATUS_KEY).at(-1), DISCONNECTED_LABEL);
+  assert.equal(lastLabel(fixture.ui), DISCONNECTED_LABEL);
 });
 
 test("OMP-01 (b): session shutdown closes the client, never calls down, and refuses guarded calls after (P5-D8)", async () => {
@@ -385,7 +434,7 @@ test("OMP-01 (b): session shutdown closes the client, never calls down, and refu
   assert.equal(fixture.daemon.count("status"), 1, "a refused call after shutdown reads no status");
 });
 
-test("OMP-02: every status read paints one shared label across every transition (P5-D5)", async () => {
+test("OMP-02: every status read paints one shared label across every transition, in one status item (P5-D5)", async () => {
   const fixture = makeFixture();
   startHandlerOf(fixture.pi)(fixture.ctx);
   await waitForDetail(fixture.ui, "container running");
@@ -400,25 +449,27 @@ test("OMP-02: every status read paints one shared label across every transition 
 
   // Pinned table: the only labels are the shared mapping plus the text degraded flag.
   const allowed = new Set([ACTIVE_LABEL, DEGRADED_LABEL, DISCONNECTED_LABEL]);
-  const labels = fixture.ui.texts(REALM_STATUS_KEY);
+  const labels = labelsOf(fixture.ui);
   for (const label of labels) {
     assert.ok(allowed.has(label), `label comes from the shared mapping: ${label}`);
   }
   assert.ok(labels.includes(DISCONNECTED_LABEL), "disconnected renders");
   assert.ok(labels.includes(ACTIVE_LABEL), "active renders");
   assert.equal(labels.at(-1), DEGRADED_LABEL, "degraded keeps the active label with its flag");
+  // One status item carries the label, the reason, and the time: no second key competes with it.
   const keys = new Set(fixture.ui.calls.map((call) => call.key));
-  assert.deepEqual(keys, new Set([REALM_STATUS_KEY, REALM_DETAIL_KEY]));
+  assert.deepEqual(keys, new Set([REALM_STATUS_KEY]));
+  assert.equal(statusTexts(fixture.ui).at(-1), `${DEGRADED_LABEL} · ANDA_VERSION_MISMATCH · ${CLOCK_ISO}`);
 });
 
-test("OMP-03: the reason and last-transition time render beside the label on every transition (P5-D5)", async () => {
+test("OMP-03: the reason and last-transition time follow the label in the one status item on every transition (P5-D5)", async () => {
   const fixture = makeFixture();
   startHandlerOf(fixture.pi)(fixture.ctx);
   await waitForDetail(fixture.ui, "container running");
   const toolCall = toolCallOf(fixture.pi);
 
-  // Tooltip deviation (P5-D5): no tooltip surface was verified, so the reason and the ISO instant ride in the
-  // second status item on every transition.
+  // Tooltip deviation (P5-D5): the host offers no tooltip, so the reason and the ISO instant ride in the
+  // text of the one status item on every transition.
   const transitions: Array<{ readonly snapshot: StateSnapshot; readonly label: string; readonly detail: string }> = [
     {
       snapshot: { state: "error", reason: "ANDA_UNREACHABLE", lastTransitionAt: CLOCK_ISO },
@@ -435,9 +486,87 @@ test("OMP-03: the reason and last-transition time render beside the label on eve
   for (const transition of transitions) {
     fixture.daemon.snapshot = transition.snapshot;
     await toolCall({ toolName: "write" });
-    assert.equal(fixture.ui.texts(REALM_STATUS_KEY).at(-1), transition.label, `label for ${transition.detail}`);
-    assert.equal(fixture.ui.texts(REALM_DETAIL_KEY).at(-1), transition.detail);
+    assert.equal(lastLabel(fixture.ui), transition.label, `label for ${transition.detail}`);
+    assert.equal(lastDetail(fixture.ui), transition.detail);
   }
+});
+
+test("OMP-02: a daemon transition reaches the indicator on the poll, with no guarded call (P5-D5)", async () => {
+  const fixture = makeFixture();
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitForDetail(fixture.ui, "container running");
+
+  fixture.daemon.snapshot = { state: "error", reason: "ANDA_UNREACHABLE", lastTransitionAt: CLOCK_ISO };
+  pollOf(fixture.ctx).callback();
+  await waitUntil(() => lastLabel(fixture.ui) === DISCONNECTED_LABEL);
+  assert.equal(lastDetail(fixture.ui), `ANDA_UNREACHABLE · ${CLOCK_ISO}`);
+
+  fixture.daemon.snapshot = { state: "degraded", reason: "ANDA_VERSION_MISMATCH", lastTransitionAt: CLOCK_ISO };
+  pollOf(fixture.ctx).callback();
+  await waitUntil(() => lastLabel(fixture.ui) === DEGRADED_LABEL);
+  assert.equal(lastDetail(fixture.ui), `ANDA_VERSION_MISMATCH · ${CLOCK_ISO}`);
+  assert.equal(fixture.daemon.count("call"), 0, "the repaint dispatches no tool");
+});
+
+test("OMP-02: session start arms one poll at the bounded interval, and an unchanged poll paints nothing (P5-D5)", async () => {
+  const fixture = makeFixture();
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitForDetail(fixture.ui, "container running");
+
+  assert.equal(fixture.ctx.intervals.length, 1, "one poll per session");
+  assert.equal(pollOf(fixture.ctx).ms, STATUS_POLL_MS);
+  const paintsBefore = fixture.ui.calls.length;
+  const readsBefore = fixture.daemon.count("status");
+  pollOf(fixture.ctx).callback();
+  await yieldTurn();
+  assert.equal(fixture.daemon.count("status"), readsBefore + 1, "the poll reads the daemon status");
+  assert.equal(fixture.ui.calls.length, paintsBefore, "an unchanged snapshot paints nothing");
+});
+
+test("OMP-02: a poll tick that lands while a read is in flight does not stack reads (P5-D5)", async () => {
+  const fixture = makeFixture();
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitForDetail(fixture.ui, "container running");
+  fixture.daemon.hangStatus = true;
+
+  pollOf(fixture.ctx).callback();
+  pollOf(fixture.ctx).callback();
+  await yieldTurn();
+  assert.equal(fixture.daemon.count("status"), 2, "attach read plus one poll read, not a second poll read");
+});
+
+test("OMP-02: a failed poll read paints its code once, and a repeat of the same failure stays quiet (P5-D5)", async () => {
+  const fixture = makeFixture();
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitForDetail(fixture.ui, "container running");
+  fixture.daemon.hangStatus = true;
+
+  pollOf(fixture.ctx).callback();
+  expireTimer(fixture.ctx, GUARD_STATUS_BUDGET_MS);
+  await waitUntil(() => lastLabel(fixture.ui) === DISCONNECTED_LABEL);
+  assert.match(lastDetail(fixture.ui) ?? "", /^TOOL_TIMEOUT · /);
+  const paintsAfterFirstFailure = fixture.ui.calls.length;
+
+  pollOf(fixture.ctx).callback();
+  expireTimer(fixture.ctx, GUARD_STATUS_BUDGET_MS);
+  await yieldTurn();
+  assert.equal(fixture.daemon.count("status"), 3, "the second tick read the daemon again");
+  assert.equal(fixture.ui.calls.length, paintsAfterFirstFailure, "the same failure, with the same stamp, paints nothing");
+});
+
+test("OMP-02: a poll tick that fires after shutdown reads no status and paints nothing (P5-D5)", async () => {
+  const fixture = makeFixture();
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitForDetail(fixture.ui, "container running");
+  const poll = pollOf(fixture.ctx);
+
+  shutdownHandlerOf(fixture.pi)();
+  const paintsAtShutdown = fixture.ui.calls.length;
+  const readsAtShutdown = fixture.daemon.count("status");
+  poll.callback();
+  await yieldTurn();
+  assert.equal(fixture.daemon.count("status"), readsAtShutdown, "no read after shutdown");
+  assert.equal(fixture.ui.calls.length, paintsAtShutdown, "no paint after shutdown");
 });
 
 test("OMP-04: the retry command re-runs the attach path and moves error to connecting then active (P5-D14)", async () => {
@@ -446,18 +575,18 @@ test("OMP-04: the retry command re-runs the attach path and moves error to conne
   assert.ok(command.description.length > 0, "retry command carries a description");
   startHandlerOf(fixture.pi)(fixture.ctx);
   await waitForDetail(fixture.ui, "ANDA_UNREACHABLE");
-  assert.equal(fixture.ui.texts(REALM_STATUS_KEY).at(-1), DISCONNECTED_LABEL);
+  assert.equal(lastLabel(fixture.ui), DISCONNECTED_LABEL);
 
-  const detailsBefore = fixture.ui.texts(REALM_DETAIL_KEY).length;
+  const detailsBefore = detailsOf(fixture.ui).length;
   const result = await command.handler();
 
   assert.match(result, /active/, "retry reports the active state");
   assert.deepEqual(fixture.attachCalls, [WORKSPACE, WORKSPACE], "retry runs the same attach with the session cwd");
-  const after = fixture.ui.texts(REALM_DETAIL_KEY).slice(detailsBefore);
+  const after = detailsOf(fixture.ui).slice(detailsBefore);
   const connectingAt = after.findIndex((text) => text.startsWith("connecting"));
   const activeAt = after.findIndex((text) => text.includes("container running"));
   assert.ok(connectingAt !== -1 && activeAt !== -1 && connectingAt < activeAt, `retry passes through connecting then active: ${after.join(" | ")}`);
-  assert.equal(fixture.ui.texts(REALM_STATUS_KEY).at(-1), ACTIVE_LABEL);
+  assert.equal(lastLabel(fixture.ui), ACTIVE_LABEL);
 });
 
 test("OMP-04: the retry command before session start reports realm not started", async () => {
@@ -567,6 +696,58 @@ test("OMP-05: the package manifest points at the compiled edge entry (P5-D4)", (
   assert.ok(existsSync(join(root, "dist", "src", "omp", "extension.js")), "the omp field resolves to the built entry");
 });
 
+// ---- Timer cleanup (CORE-06 for the host edge) ----------------------------------
+
+test("timers: session shutdown clears the attach budget and the poll, and a late attach is released unpainted (P5-D8)", async () => {
+  const gate = makeGate();
+  const fixture = makeFixture({
+    attach: async (daemon) => {
+      await gate.promise;
+      return daemon;
+    },
+  });
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  const budgetHandle = armedTimer(fixture.ctx, STARTUP_BUDGET_MS).handle;
+  const pollHandle = pollOf(fixture.ctx).handle;
+
+  shutdownHandlerOf(fixture.pi)();
+  assert.ok(fixture.ctx.cleared.includes(budgetHandle), "the attach budget timer is cleared");
+  assert.ok(fixture.ctx.cleared.includes(pollHandle), "the poll is cleared");
+
+  gate.resolve();
+  await waitUntil(() => fixture.daemon.count("close") === 1);
+  assert.deepEqual(labelsOf(fixture.ui), [DISCONNECTED_LABEL], "only the connecting paint landed");
+  assert.equal(fixture.daemon.count("status"), 1, "the late attach reads status once and adopts nothing");
+});
+
+test("timers: session shutdown settles an in-flight guard read as refused and clears its timer (P5-D6)", async () => {
+  const fixture = makeFixture({ mode: "fail-closed" });
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitForDetail(fixture.ui, "container running");
+  fixture.daemon.hangStatus = true;
+
+  const verdict = toolCallOf(fixture.pi)({ toolName: "write" });
+  const guardHandle = armedTimer(fixture.ctx, GUARD_STATUS_BUDGET_MS).handle;
+  shutdownHandlerOf(fixture.pi)();
+
+  assert.deepEqual(await verdict, { block: true, reason: "REALM_NOT_ACTIVE" }, "the pending read fails closed at shutdown");
+  assert.ok(fixture.ctx.cleared.includes(guardHandle), "the guard read's timer is cleared");
+});
+
+test("timers: a settled attach and a settled guard read leave no timer armed (CORE-06)", async () => {
+  const fixture = makeFixture({ mode: "fail-closed" });
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitForDetail(fixture.ui, "container running");
+  const budgetHandle = armedTimer(fixture.ctx, STARTUP_BUDGET_MS).handle;
+  assert.ok(fixture.ctx.cleared.includes(budgetHandle), "the settled attach clears its budget");
+
+  assert.equal(await toolCallOf(fixture.pi)({ toolName: "write" }), undefined);
+  const guardHandle = armedTimer(fixture.ctx, GUARD_STATUS_BUDGET_MS).handle;
+  assert.ok(fixture.ctx.cleared.includes(guardHandle), "the settled guard read clears its timeout");
+  assert.equal(fixture.ctx.intervals.length, 1, "the poll is the only interval and stays armed until shutdown");
+  assert.ok(!fixture.ctx.cleared.includes(pollOf(fixture.ctx).handle), "the poll is not cleared while attached");
+});
+
 // ---- Review fixes: MED-02, MED-03 ----------------------------------------------
 
 test("OMP-01 / MED-02: a budget timer that fires after the attach settled does not overwrite the settled status (P5-D8)", async () => {
@@ -578,17 +759,17 @@ test("OMP-01 / MED-02: a budget timer that fires after the attach settled does n
   const paintsBefore = fixture.ui.calls.length;
   armedTimer(fixture.ctx, STARTUP_BUDGET_MS).callback();
   assert.equal(fixture.ui.calls.length, paintsBefore, "the late expiry paints nothing");
-  assert.equal(fixture.ui.texts(REALM_STATUS_KEY).at(-1), ACTIVE_LABEL);
-  assert.equal(fixture.ui.texts(REALM_DETAIL_KEY).at(-1), `container running · ${CLOCK_ISO}`);
+  assert.equal(lastLabel(fixture.ui), ACTIVE_LABEL);
+  assert.equal(lastDetail(fixture.ui), `container running · ${CLOCK_ISO}`);
 });
 
-test("OMP-02 / MED-03: a throwing detail write leaves the paint cache stale so the next render repaints both keys (P5-D5)", () => {
+test("OMP-02 / MED-03: a throwing status write leaves the paint cache stale so the next render repaints (P5-D5)", () => {
   const writes: Array<{ readonly key: string; readonly text: string }> = [];
-  let failDetail = true;
+  let failWrite = true;
   const ui: OmpStatusUi = {
     setStatus(key, text) {
-      if (key === REALM_DETAIL_KEY && failDetail) {
-        failDetail = false;
+      if (failWrite) {
+        failWrite = false;
         throw new Error("rpc transport");
       }
       writes.push({ key, text });
@@ -599,8 +780,9 @@ test("OMP-02 / MED-03: a throwing detail write leaves the paint cache stale so t
 
   assert.throws(() => renderRealmStatus(ui, snapshot), /rpc transport/);
   renderRealmStatus(ui, snapshot);
+  renderRealmStatus(ui, snapshot);
 
-  const details = writes.filter((write) => write.key === REALM_DETAIL_KEY).map((write) => write.text);
-  assert.deepEqual(details, [`STARTUP_BUDGET_EXCEEDED · ${CLOCK_ISO}`]);
-  assert.equal(writes.at(-1)?.key, REALM_DETAIL_KEY, "the detail key is written on the repaint");
+  assert.deepEqual(writes, [
+    { key: REALM_STATUS_KEY, text: `${DISCONNECTED_LABEL} · STARTUP_BUDGET_EXCEEDED · ${CLOCK_ISO}` },
+  ]);
 });

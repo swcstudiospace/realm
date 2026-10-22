@@ -6,9 +6,7 @@
 // drains.
 
 import { RealmError, type ErrorCode } from "../core/errors.js";
-import { loadRuntimeConfig } from "../runtime/config.js";
-import { readRuntimeConfigFile } from "../runtime/config-file.js";
-import { defaultPolicyPath, isDirectEntry, podmanSocketPath, resolveConfigPath } from "../runtime/host-paths.js";
+import { defaultPolicyPath, isDirectEntry, podmanSocketPath, readHostRuntime } from "../runtime/host-paths.js";
 import type { EnvironmentLike } from "../session/paths.js";
 import { CONTROL_TIMEOUT_MS, sendRequest, type ControlReply } from "./channel.js";
 import { startDaemon, type StartDaemonOptions, type StartedDaemon } from "./daemon.js";
@@ -41,15 +39,13 @@ interface StopWiring {
 }
 
 // Starts the daemon and resolves with its exit code once it has stopped: 0 after a clean teardown,
-// 1 when start or the shutdown fails. Each failure writes one line carrying only a catalogue code.
+// 1 when start, the shutdown, or the listening server fails. Each failure writes one line carrying only a catalogue code.
 export async function runDaemon(deps: DaemonDeps): Promise<number> {
-  const readConfig = deps.readConfig ?? readRuntimeConfigFile;
   const start = deps.start ?? startDaemon;
   const writeStderr = deps.writeStderr ?? writeLine;
   let started: StartedDaemon;
   try {
-    const runtimeInput = readConfig(resolveConfigPath(deps.env));
-    const { stateDir } = loadRuntimeConfig(runtimeInput);
+    const { runtimeInput, stateDir } = readHostRuntime(deps.env, deps.readConfig);
     const libpodSocketPath = podmanSocketPath(deps.env);
     started = await start({
       stateDir,
@@ -110,12 +106,21 @@ function awaitStop(started: StartedDaemon, wiring: StopWiring): Promise<number> 
         }),
       );
     }
-    void started.done.then(() => {
-      // A signal-initiated shutdown reports its own outcome, so done alone never settles it.
-      if (!shutdownRequested) {
-        settle(0);
-      }
-    });
+    void started.done.then(
+      () => {
+        // A signal-initiated shutdown reports its own outcome, so done alone never settles it.
+        if (!shutdownRequested) {
+          settle(0);
+        }
+      },
+      (error: unknown) => {
+        // The listening server failed: its code is the stop reason, and the daemon exits nonzero.
+        if (!shutdownRequested) {
+          wiring.writeStderr(failureLine(codeOf(error)));
+          settle(1);
+        }
+      },
+    );
   });
 }
 

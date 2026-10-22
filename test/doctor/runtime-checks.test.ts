@@ -248,6 +248,13 @@ test("RT-03: openshell fails with the OpenShell 0.1.2 install fix when it cannot
   assert.match(fixOf(result), /OpenShell 0\.1\.2/);
 });
 
+test("RT-03: openshell's failed start names the errno code and never the error message (RT-03)", async (t) => {
+  const host = fakeHost({});
+  const result = resultOf(await runtimeChecks(t, host), "openshell");
+  assert.equal(result.status, "fail");
+  assert.match(result.detail, /^openshell cannot be started: ENOENT$/);
+});
+
 test("RT-03: openshell fails on a non-zero exit, reports the status only, and never echoes the output (RT-03)", async (t) => {
   const host = fakeHost({ commands: { [OPENSHELL_HELP]: { exitCode: 2, stdout: "error: SECRET-HELP-TEXT" } } });
   const result = resultOf(await runtimeChecks(t, host), "openshell");

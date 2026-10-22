@@ -262,3 +262,21 @@ test("a FIFO swapped in at the resolve-to-open boundary is refused with PATH_ESC
   });
   assert.deepEqual(outcome, { code: "PATH_ESCAPE" });
 });
+
+test("a failed descriptor close keeps the verification failure and records CLEANUP_FAILED as its cause (QUAL-01)", (t) => {
+  const base = tempBase(t);
+  const file = join(base, "inside.txt");
+  writeFileSync(file, "inside");
+  const absentProc = join(base, "no-proc-fd");
+  assert.throws(
+    () =>
+      openVerified(file, absentProc, (fd) => {
+        closeSync(fd);
+        throw new Error("injected close failure");
+      }),
+    (error: unknown) =>
+      error instanceof RealmError &&
+      error.code === "PATH_ESCAPE" &&
+      error.causeCode === "CLEANUP_FAILED",
+  );
+});

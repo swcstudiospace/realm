@@ -4,10 +4,10 @@
 // shutdown on down. No live Podman, OpenShell, or Anda engine is started: the
 // adapter seam carries the existing fakes and scripted probes.
 
-import { test, type TestContext } from "node:test";
+import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { createConnection } from "node:net";
+import { createConnection, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -54,11 +54,19 @@ interface DaemonParts {
   readonly events: string[];
 }
 
-function makeDirs(t: TestContext): Fixture {
+// Scratch directories are removed once the whole file has run. A test's daemon is stopped by its own t.after
+// hook, and t.after hooks run in registration order, so removing a directory at the end of its test would delete
+// the socket that hook must still reach.
+const scratchDirs: string[] = [];
+after(() => {
+  for (const dir of scratchDirs) {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+function makeDirs(): Fixture {
   const base = realpathSync(mkdtempSync(join(tmpdir(), "realm-daemon-")));
-  t.after(() => {
-    rmSync(base, { recursive: true, force: true });
-  });
+  scratchDirs.push(base);
   const ws = join(base, "ws");
   mkdirSync(ws, { recursive: true });
   writeFileSync(join(ws, "doc.txt"), "original");
@@ -156,6 +164,22 @@ async function cleanupDaemon(daemon: StartedDaemon): Promise<void> {
   ]);
 }
 
+
+// Bounds one wait in this file: a wait that never settles fails the test instead of hanging the run.
+const WAIT_MS = 5000;
+function bounded<T>(pending: Promise<T>, what: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  return Promise.race([
+    pending,
+    new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        reject(new Error(`${what} did not settle within ${WAIT_MS} ms`));
+      }, WAIT_MS);
+    }),
+  ]).finally(() => {
+    clearTimeout(timer);
+  });
+}
 function sendRawLine(socketPath: string, line: string): Promise<string> {
   return new Promise<string>((resolve, reject) => {
     const socket = createConnection(socketPath);
@@ -182,8 +206,24 @@ function sendRawLine(socketPath: string, line: string): Promise<string> {
   });
 }
 
-test("CLI-01: buildDaemonHandle wires the shared composition root and answers snapshot plus dispatcher status (P6-D12)", async (t) => {
-  const fixture = makeDirs(t);
+// Writes one request line on a socket that is already open and resolves with the reply line.
+function replyOn(socket: Socket, line: string): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    let text = "";
+    socket.on("data", (chunk: Buffer) => {
+      text += chunk.toString();
+      const end = text.indexOf("\n");
+      if (end !== -1) {
+        resolve(text.slice(0, end));
+      }
+    });
+    socket.once("error", reject);
+    socket.write(line);
+  });
+}
+
+test("CLI-01: buildDaemonHandle wires the shared composition root and answers snapshot plus dispatcher status (P6-D12)", async () => {
+  const fixture = makeDirs();
   const { options } = daemonParts(fixture);
   const handle = buildDaemonHandle(options);
   const snapshot = handle.controller.snapshot();
@@ -201,7 +241,7 @@ test("CLI-01: buildDaemonHandle wires the shared composition root and answers sn
 });
 
 test("RT-04, D-47: buildDaemonHandle builds with no AgentOS driver, and an up is refused with AGENTOS_NOT_CONFIGURED while no container is created", async (t) => {
-  const fixture = makeDirs(t);
+  const fixture = makeDirs();
   const socketPath = join(fixture.base, "podman.sock");
   const store = new FakeContainerStore();
   const libpod = new FakeLibpod({ store, rootless: true });
@@ -235,7 +275,7 @@ test("RT-04, D-47: buildDaemonHandle builds with no AgentOS driver, and an up is
 });
 
 test("RT-06: startDaemon with no owner binds the socket and answers status over a real socket pair", async (t) => {
-  const fixture = makeDirs(t);
+  const fixture = makeDirs();
   const { options } = daemonParts(fixture);
   const daemon = await startDaemon(options);
   t.after(() => cleanupDaemon(daemon));
@@ -252,7 +292,7 @@ test("RT-06: startDaemon with no owner binds the socket and answers status over 
 });
 
 test("RT-06: a second startDaemon against the same state directory refuses with LOCK_CONFLICT (single owner)", async (t) => {
-  const fixture = makeDirs(t);
+  const fixture = makeDirs();
   const first = await startDaemon(daemonParts(fixture).options);
   t.after(() => cleanupDaemon(first));
 
@@ -273,7 +313,7 @@ test("RT-06: a second startDaemon against the same state directory refuses with 
 });
 
 test("CLI-01: startDaemon runs the reap sweep before serving and deletes pre-existing records (P6-D4)", async (t) => {
-  const fixture = makeDirs(t);
+  const fixture = makeDirs();
   const { options, events } = daemonParts(fixture);
   mkdirSync(join(fixture.stateDir, "sessions"), { recursive: true });
   const stale = join(fixture.stateDir, "sessions", "stale-session.json");
@@ -293,8 +333,8 @@ test("CLI-01: startDaemon runs the reap sweep before serving and deletes pre-exi
   await awaitDone(daemon);
 });
 
-test("CLI-01: a failed sweep rejects startup before any record is touched (P6-D4)", async (t) => {
-  const fixture = makeDirs(t);
+test("CLI-01: a failed sweep rejects startup before any record is touched (P6-D4)", async () => {
+  const fixture = makeDirs();
   mkdirSync(join(fixture.stateDir, "sessions"), { recursive: true });
   const kept = join(fixture.stateDir, "sessions", "kept-session.json");
   writeFileSync(kept, "{}");
@@ -313,7 +353,7 @@ test("CLI-01: a failed sweep rejects startup before any record is touched (P6-D4
 });
 
 test("CLI-01: up with a failing probe answers the probe code without starting (P6-D5)", async (t) => {
-  const fixture = makeDirs(t);
+  const fixture = makeDirs();
   const { options, exec, events } = daemonParts(fixture, {
     probe: async () => ({ ok: false, code: "PODMAN_MISSING", reason: "podman is missing" }),
   });
@@ -335,7 +375,7 @@ test("CLI-01: up with a failing probe answers the probe code without starting (P
 });
 
 test("CLI-01: up with a healthy probe starts the session and answers the active snapshot", async (t) => {
-  const fixture = makeDirs(t);
+  const fixture = makeDirs();
   const { options, events } = daemonParts(fixture);
   const daemon = await startDaemon(options);
   t.after(() => cleanupDaemon(daemon));
@@ -356,7 +396,7 @@ test("CLI-01: up with a healthy probe starts the session and answers the active 
 });
 
 test("CLI-01: up with a missing workspaceRoot refuses with SCHEMA_INVALID", async (t) => {
-  const fixture = makeDirs(t);
+  const fixture = makeDirs();
   const { options } = daemonParts(fixture);
   const daemon = await startDaemon(options);
   t.after(() => cleanupDaemon(daemon));
@@ -372,7 +412,7 @@ test("CLI-01: up with a missing workspaceRoot refuses with SCHEMA_INVALID", asyn
 });
 
 test("CLI-01: doctor dispatches runChecks over the socket", async (t) => {
-  const fixture = makeDirs(t);
+  const fixture = makeDirs();
   const report: readonly CheckResult[] = [
     { id: "policy-file", status: "pass", detail: "policy file ok", fix: null },
   ];
@@ -418,7 +458,7 @@ function recordDispatcherCalls(
 }
 
 test("RT-06: a tool request reaches the dispatcher exactly once and answers its outcome (P6-D12)", async (t) => {
-  const fixture = makeDirs(t);
+  const fixture = makeDirs();
   const { options } = daemonParts(fixture);
   const daemon = await startDaemon(options);
   t.after(() => cleanupDaemon(daemon));
@@ -442,7 +482,7 @@ test("RT-06: a tool request reaches the dispatcher exactly once and answers its 
 });
 
 test("RT-06: a tool request without a tool object refuses with SCHEMA_INVALID and never reaches the dispatcher (P6-D2, P6-D12)", async (t) => {
-  const fixture = makeDirs(t);
+  const fixture = makeDirs();
   const { options } = daemonParts(fixture);
   const daemon = await startDaemon(options);
   t.after(() => cleanupDaemon(daemon));
@@ -468,7 +508,7 @@ test("RT-06: a tool request without a tool object refuses with SCHEMA_INVALID an
 });
 
 test("RT-06: a dispatcher that throws a RealmError answers that error's catalogue code (P6-D12)", async (t) => {
-  const fixture = makeDirs(t);
+  const fixture = makeDirs();
   const { options } = daemonParts(fixture);
   const daemon = await startDaemon(options);
   t.after(() => cleanupDaemon(daemon));
@@ -488,7 +528,7 @@ test("RT-06: a dispatcher that throws a RealmError answers that error's catalogu
 });
 
 test("RT-06: a refused outcome answers its catalogue code and no other field (P6-D12)", async (t) => {
-  const fixture = makeDirs(t);
+  const fixture = makeDirs();
   const { options } = daemonParts(fixture);
   const daemon = await startDaemon(options);
   t.after(() => cleanupDaemon(daemon));
@@ -516,7 +556,7 @@ test("RT-06: a refused outcome answers its catalogue code and no other field (P6
 });
 
 test("RT-06: an oversized request line is refused with a null-id SCHEMA_INVALID, and the dispatcher never sees it (P6-D2, P6-D12)", async (t) => {
-  const fixture = makeDirs(t);
+  const fixture = makeDirs();
   const { options } = daemonParts(fixture);
   const daemon = await startDaemon(options);
   t.after(() => cleanupDaemon(daemon));
@@ -534,7 +574,7 @@ test("RT-06: an oversized request line is refused with a null-id SCHEMA_INVALID,
 });
 
 test("CLI-01: a status reply carries the policy mode the daemon loaded (P6-D12)", async (t) => {
-  const fixture = makeDirs(t);
+  const fixture = makeDirs();
   const policyPath = writePolicy(fixture, "fail-closed-policy.json", {
     mode: "fail-closed",
     workspaceRoots: [fixture.ws],
@@ -554,7 +594,7 @@ test("CLI-01: a status reply carries the policy mode the daemon loaded (P6-D12)"
 });
 
 test("RT-06: unknown methods and malformed lines refuse with SCHEMA_INVALID and carry the id", async (t) => {
-  const fixture = makeDirs(t);
+  const fixture = makeDirs();
   const { options } = daemonParts(fixture);
   const daemon = await startDaemon(options);
   t.after(() => cleanupDaemon(daemon));
@@ -571,7 +611,7 @@ test("RT-06: unknown methods and malformed lines refuse with SCHEMA_INVALID and 
 });
 
 test("CLI-01: down drains, closes, removes the socket, and resolves done", async (t) => {
-  const fixture = makeDirs(t);
+  const fixture = makeDirs();
   const { options } = daemonParts(fixture);
   const daemon = await startDaemon(options);
   t.after(() => cleanupDaemon(daemon));
@@ -588,7 +628,7 @@ test("CLI-01: down drains, closes, removes the socket, and resolves done", async
 });
 
 test("CLI-01: a second down is a no-op that still answers", async (t) => {
-  const fixture = makeDirs(t);
+  const fixture = makeDirs();
   const { options } = daemonParts(fixture);
   const daemon = await startDaemon(options);
   t.after(() => cleanupDaemon(daemon));
@@ -610,4 +650,145 @@ test("RT-06: daemon.ts parses no argv, spawns no daemon, and reads no process en
   for (const forbidden of ["process.argv", "process.env", "process.exit", "detached"]) {
     assert.ok(!source.includes(forbidden), `daemon.ts must not contain ${forbidden}`);
   }
+});
+
+test("QUAL-01: a connection that waits on a failed start is answered with the start's refusal code", async () => {
+  const fixture = makeDirs();
+  let sweepEntered!: () => void;
+  const entered = new Promise<void>((resolve) => {
+    sweepEntered = resolve;
+  });
+  let connectionAccepted!: () => void;
+  const accepted = new Promise<void>((resolve) => {
+    connectionAccepted = resolve;
+  });
+  let failSweep!: (cause: unknown) => void;
+  const { options } = daemonParts(fixture, {
+    onServer: (server) => {
+      server.once("connection", () => {
+        connectionAccepted();
+      });
+    },
+    sweep: () => {
+      sweepEntered();
+      return new Promise<number>((_resolve, reject) => {
+        failSweep = reject;
+      });
+    },
+  });
+  const starting = startDaemon(options);
+  await bounded(entered, "the start sweep");
+  const waiting = sendRawLine(controlSocketPath(fixture.stateDir), '{"id":"early","method":"status"}\n');
+  // The start fails only once the server has accepted this connection. Closing the listening socket first would
+  // reset the connection still in the accept queue, and the client would see a reset rather than the refusal.
+  await bounded(accepted, "the early connection");
+  failSweep(makeRealmError("REALM_STOPPING"));
+  await bounded(
+    assert.rejects(starting, (error: unknown) => error instanceof RealmError && error.code === "REALM_STOPPING"),
+    "the failed start",
+  );
+  assert.deepEqual(JSON.parse(await bounded(waiting, "the refusal")), { id: null, error: { code: "REALM_STOPPING" } });
+});
+
+test("QUAL-01: a connection that never completes its request line is answered TOOL_TIMEOUT", async (t) => {
+  const fixture = makeDirs();
+  const { options } = daemonParts(fixture, { timeoutMs: 100 });
+  const daemon = await startDaemon(options);
+  t.after(() => cleanupDaemon(daemon));
+  const raw = await sendRawLine(daemon.socketPath, '{"id":"partial"');
+  assert.deepEqual(JSON.parse(raw), { id: null, error: { code: "TOOL_TIMEOUT" } });
+});
+
+test("QUAL-01: a down whose socket file cannot be removed answers SCHEMA_INVALID and still stops", async (t) => {
+  const fixture = makeDirs();
+  const { options } = daemonParts(fixture);
+  const daemon = await startDaemon(options);
+  t.after(() => cleanupDaemon(daemon));
+  // Connected before the swap, so the down request reaches the daemon over this connection.
+  const client = createConnection(daemon.socketPath);
+  t.after(() => {
+    client.destroy();
+  });
+  await bounded(
+    new Promise<void>((resolve, reject) => {
+      client.once("connect", resolve);
+      client.once("error", reject);
+    }),
+    "the client connection",
+  );
+  // A non-empty directory where the socket file was: removing it without recursion fails.
+  rmSync(daemon.socketPath, { force: true });
+  mkdirSync(daemon.socketPath);
+  writeFileSync(join(daemon.socketPath, "kept"), "not a socket");
+  const raw = await bounded(replyOn(client, '{"id":"down-1","method":"down"}\n'), "the down reply");
+  assert.deepEqual(JSON.parse(raw), { id: "down-1", error: { code: "SCHEMA_INVALID" } });
+  await awaitDone(daemon);
+});
+
+test("QUAL-01: a failed start whose socket file cannot be removed keeps its code and names the removal cause", async () => {
+  const fixture = makeDirs();
+  const socketPath = controlSocketPath(fixture.stateDir);
+  const { options } = daemonParts(fixture, {
+    sweep: () =>
+      new Promise<number>((_resolve, reject) => {
+        // The socket is listening here: a non-empty directory takes its file's place, then the start fails.
+        rmSync(socketPath, { force: true });
+        mkdirSync(socketPath);
+        writeFileSync(join(socketPath, "kept"), "not a socket");
+        reject(makeRealmError("REALM_STOPPING"));
+      }),
+  });
+  await bounded(
+    assert.rejects(
+      startDaemon(options),
+      (error: unknown) =>
+        error instanceof RealmError && error.code === "REALM_STOPPING" && error.causeCode === "SCHEMA_INVALID",
+    ),
+    "the failed start",
+  );
+});
+
+test("QUAL-01: a reply that cannot be encoded is answered SCHEMA_INVALID, not a silent close", async (t) => {
+  const fixture = makeDirs();
+  const { options } = daemonParts(fixture);
+  const daemon = await startDaemon(options);
+  t.after(() => cleanupDaemon(daemon));
+  // A BigInt cannot be JSON-encoded, so the outcome cannot be written as dispatched.
+  const unencodable: unknown = { outcome: "done", tool: "status", value: { size: BigInt(1) } };
+  recordDispatcherCalls(daemon, async () => unencodable as ToolOutcome);
+  const reply = await sendRequest(daemon.socketPath, { id: "big-1", method: "tool", params: { tool: { status: {} } } });
+  assert.deepEqual(reply, { id: "big-1", error: { code: "SCHEMA_INVALID" } });
+});
+
+test("QUAL-01: a listening server that fails stops the daemon, and done rejects with that error's code", async (t) => {
+  const fixture = makeDirs();
+  const servers: Server[] = [];
+  const { options } = daemonParts(fixture, {
+    onServer: (server) => {
+      servers.push(server);
+    },
+  });
+  const daemon = await startDaemon(options);
+  const listening = servers[0];
+  assert.ok(listening !== undefined, "the daemon hands out its listening server");
+  t.after(() => {
+    listening.close();
+  });
+  const stopped = daemon.done.then(
+    () => "resolved",
+    (cause: unknown) => (cause instanceof RealmError ? cause.code : "not a RealmError"),
+  );
+  listening.emit("error", makeRealmError("REALM_NOT_ACTIVE"));
+  let timer: NodeJS.Timeout | undefined;
+  const outcome = await Promise.race([
+    stopped,
+    new Promise<string>((resolve) => {
+      timer = setTimeout(() => {
+        resolve("still serving");
+      }, 5000);
+    }),
+  ]).finally(() => {
+    clearTimeout(timer);
+  });
+  assert.equal(outcome, "REALM_NOT_ACTIVE");
 });

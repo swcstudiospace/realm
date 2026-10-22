@@ -6,6 +6,7 @@ import { join } from "node:path";
 import type { Policy } from "../../src/contract/validate.js";
 import { decideMutation } from "../../src/core/policy.js";
 import { STATES, type State } from "../../src/core/states.js";
+import { bindWorkspaceUnderPolicy } from "../../src/fs/root.js";
 import { gateMutation, runGatedMutation } from "../../src/lifecycle/mutation-gate.js";
 import { LifecycleController } from "../../src/lifecycle/controller.js";
 import { SessionStore } from "../../src/session/store.js";
@@ -122,6 +123,7 @@ test("CORE-05: the controller gate reads the current state, so a refused write n
   const controller = new LifecycleController({
     sessionId: "session-gate",
     policy: { ...ADVISORY, mode: "fail-closed", workspaceRoots: [workspace] },
+    pinnedRoot: bindWorkspaceUnderPolicy([workspace], workspace),
     store: new SessionStore(join(base, "state")),
     exec,
     bridge,

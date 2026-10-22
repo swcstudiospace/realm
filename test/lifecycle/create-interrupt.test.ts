@@ -6,7 +6,8 @@ import { join } from "node:path";
 import type { Policy } from "../../src/contract/validate.js";
 import { LifecycleController } from "../../src/lifecycle/controller.js";
 import type { StateSnapshot } from "../../src/core/state-machine.js";
-import { RealmError } from "../../src/core/errors.js";
+import { type ErrorCode, RealmError } from "../../src/core/errors.js";
+import { bindWorkspaceUnderPolicy } from "../../src/fs/root.js";
 import { SessionStore } from "../../src/session/store.js";
 import { FakeExecutionService } from "../support/fake-execution.js";
 import { FakeBridge } from "../support/fake-bridge.js";
@@ -40,6 +41,7 @@ function fixture(t: TestContext, startupBudgetMs = 10000) {
   const controller = new LifecycleController({
     sessionId: SESSION,
     policy: policyFor(workspace, startupBudgetMs),
+    pinnedRoot: bindWorkspaceUnderPolicy([workspace], workspace),
     store,
     exec,
     bridge,
@@ -175,6 +177,15 @@ async function assertRejectsWith(promise: Promise<unknown>, code: string): Promi
   await assert.rejects(promise, (error: unknown) => error instanceof RealmError && error.code === code);
 }
 
+// The rejection carries the catalogue code and the kept background failure as its causeCode.
+async function assertRejectsWithCause(promise: Promise<unknown>, code: string, causeCode: string): Promise<void> {
+  await assert.rejects(
+    promise,
+    (error: unknown) =>
+      error instanceof RealmError && error.code === code && error.causeCode === causeCode,
+  );
+}
+
 test("a stop during a pending exec.start leaves no running container, even when the create gave up at the budget (C1, F1)", async (t) => {
   const { workspace, store, exec, controller } = fixture(t, 1000);
   // The start is held behind a gate, so the stop begins while exec.start is in flight. The
@@ -240,17 +251,18 @@ test("an orphan whose destroy fails once is retried by the destroy that waits fo
 test("an orphan whose destroy and its retry both fail keeps its containerId in the record, so the next destroy removes it (C2, F2)", async (t) => {
   const { workspace, store, exec, controller } = fixture(t, 500);
   exec.setDelay("create", 2000);
-  // The first two destroy calls fail: the orphan's own destroy, then the destroy that waits for it.
-  let destroyCalls = 0;
+  // The first two destroy calls fail with different codes: the orphan's own destroy, then the
+  // destroy that retries it.
+  const failures: ErrorCode[] = ["PODMAN_MACHINE_DOWN", "OPENSHELL_START_FAILED"];
   exec.beforeCall("destroy", () => {
-    destroyCalls += 1;
-    if (destroyCalls <= 2) {
-      exec.failNext("destroy", "OPENSHELL_START_FAILED");
+    const next = failures.shift();
+    if (next !== undefined) {
+      exec.failNext("destroy", next);
     }
   });
 
   await controller.create(workspace);
-  await assertRejectsWith(controller.destroy(), "OPENSHELL_START_FAILED");
+  await assertRejectsWithCause(controller.destroy(), "OPENSHELL_START_FAILED", "PODMAN_MACHINE_DOWN");
 
   assert.equal(controller.snapshot().state, "stopping");
   assert.equal(store.load(SESSION)?.containerId, "fake-container-1");
@@ -324,6 +336,7 @@ test("a create for another workspace during a first create is refused with POLIC
   const controller = new LifecycleController({
     sessionId: SESSION,
     policy: policyFor(base, 10000),
+    pinnedRoot: bindWorkspaceUnderPolicy([base], first),
     store,
     exec,
     bridge: new FakeBridge(),
@@ -375,4 +388,61 @@ test("a store write that throws during a bridge down event keeps the degraded st
   assert.equal(controller.snapshot().state, "active");
   assert.equal(controller.hasUnpersistedState(), false);
   assert.equal(store.load(SESSION)?.state, "active");
+});
+
+test("a background stop and destroy that both fail are kept, and the next destroy reports them as the cause of its own failure (G-04, F1)", async (t) => {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), "realm-interrupt-")));
+  t.after(() => {
+    rmSync(base, { recursive: true, force: true });
+  });
+  const workspace = join(base, "workspace");
+  mkdirSync(workspace);
+  const store = new SessionStore(join(base, "state"));
+  const exec = new FakeExecutionService();
+  const controller = new LifecycleController({
+    sessionId: SESSION,
+    policy: policyFor(workspace, 10000),
+    pinnedRoot: bindWorkspaceUnderPolicy([workspace], workspace),
+    store,
+    exec,
+    bridge: new FakeBridge(),
+    clock: () => new Date(CLOCK_TIME),
+    teardownTimeoutMs: 1000,
+  });
+  // The start outlives the teardown bound, so the stop hands it to the background.
+  // The start settles after the stop's bound expires and before the destroy's bound expires.
+  exec.setDelay("start", 1500);
+  // Stop calls in order: the stop from the first stop, the stop from the destroy, then the stop of
+  // the start once it settles. The last one fails, so the background falls back to destroy.
+  let stops = 0;
+  exec.beforeCall("stop", () => {
+    stops += 1;
+    if (stops === 3) {
+      exec.failNext("stop", "OPENSHELL_START_FAILED");
+    }
+  });
+  // Destroy calls in order: the background fallback destroy, then the destroy that retries it.
+  const failures: ErrorCode[] = ["PODMAN_MACHINE_DOWN", "OPENSHELL_START_FAILED"];
+  exec.beforeCall("destroy", () => {
+    const next = failures.shift();
+    if (next !== undefined) {
+      exec.failNext("destroy", next);
+    }
+  });
+
+  const creating = controller.create(workspace);
+  await waitUntil(() => exec.callCount("start") === 1, "exec.start to be called");
+  await assertRejectsWith(controller.stop(), "REALM_STOPPING");
+
+  await assertRejectsWithCause(controller.destroy(), "OPENSHELL_START_FAILED", "PODMAN_MACHINE_DOWN");
+  assert.equal(controller.snapshot().state, "stopping");
+  assert.equal(store.load(SESSION)?.containerId, "fake-container-1");
+  assert.equal(exec.resources().length, 1);
+
+  const destroyed = await controller.destroy();
+
+  assert.equal(destroyed.state, "unbound");
+  assert.equal(exec.resources().length, 0);
+  assert.equal(store.load(SESSION), null);
+  assertOvertaken(await creating);
 });

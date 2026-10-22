@@ -3,14 +3,17 @@
 // pinned root object that every other fs function takes. The walk lives in
 // canonicalize.ts.
 
-import { realpathSync, statSync, type Stats } from "node:fs";
+import { closeSync, constants, fstatSync, openSync, readlinkSync, realpathSync, statSync, type Stats } from "node:fs";
 import { isAbsolute, relative, sep } from "node:path";
 import { makeRealmError } from "../core/errors.js";
 
+// The directory that names an open descriptor's path on Linux. Without it, assertPinnedAt fails closed.
+const PROC_FD_DIR = "/proc/self/fd";
+
 export class PinnedRoot {
   readonly realPath: string;
-  // The device and inode of the directory at bind time. assertSameRoot compares them to
-  // detect a directory replaced after it was pinned.
+  // The device and inode of the directory at bind time. verifyPinnedAt compares them to detect a
+  // directory replaced after it was pinned.
   readonly dev: number;
   readonly ino: number;
 
@@ -51,12 +54,29 @@ export function bindWorkspaceUnderPolicy(
   throw makeRealmError("POLICY_DENIED");
 }
 
-// Throws POLICY_DENIED when current is not the directory pinned earlier. A different device or
-// inode means the directory at the path was replaced after it was pinned.
-export function assertSameRoot(pinned: PinnedRoot, current: PinnedRoot): void {
-  if (pinned.dev !== current.dev || pinned.ino !== current.ino) {
+// Returns the pinned root when requested names the same directory now, and throws POLICY_DENIED
+// otherwise. The path is opened once, and the descriptor answers both questions: its device and
+// inode must be the pinned ones, and the path /proc names for that descriptor must be the pinned
+// real path. A directory swapped in at the path fails the first test. A pinned directory that
+// moved and is reached through a link fails the second, because the real path no longer names it.
+// Without /proc the second test cannot run, so the check fails closed.
+export function verifyPinnedAt(pinned: PinnedRoot, requested: string): PinnedRoot {
+  if (!isAbsolute(requested)) {
     throw makeRealmError("POLICY_DENIED");
   }
+  const fd = openDirectoryOrDeny(requested);
+  try {
+    const stats = fstatSync(fd);
+    if (stats.dev !== pinned.dev || stats.ino !== pinned.ino) {
+      throw makeRealmError("POLICY_DENIED");
+    }
+    if (readlinkOrDeny(`${PROC_FD_DIR}/${fd}`) !== pinned.realPath) {
+      throw makeRealmError("POLICY_DENIED");
+    }
+  } finally {
+    closeSync(fd);
+  }
+  return pinned;
 }
 
 // True when the absolute real path equals the root or lies below it. The check is
@@ -83,6 +103,22 @@ function realpathOrDeny(path: string): string {
 function statOrDeny(path: string): Stats {
   try {
     return statSync(path);
+  } catch {
+    throw makeRealmError("POLICY_DENIED");
+  }
+}
+
+function openDirectoryOrDeny(path: string): number {
+  try {
+    return openSync(path, constants.O_RDONLY | constants.O_DIRECTORY);
+  } catch {
+    throw makeRealmError("POLICY_DENIED");
+  }
+}
+
+function readlinkOrDeny(path: string): string {
+  try {
+    return readlinkSync(path);
   } catch {
     throw makeRealmError("POLICY_DENIED");
   }

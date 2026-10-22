@@ -10,6 +10,7 @@ import {
   realpathSync,
   rmSync,
   statSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -188,4 +189,34 @@ test("syncDirectory on a FIFO at the parent path returns PATH_ESCAPE without blo
   } finally {
     rmSync(fifo, { force: true });
   }
+});
+
+// The temp file is swapped for a directory after the verified write, so the cleanup that follows
+// the injected fault cannot remove it. The original fault stays the error thrown, and the failed
+// cleanup is recorded as its cause.
+test("a failed temp-file cleanup keeps the write failure and records CLEANUP_FAILED as its cause (QUAL-01)", (t) => {
+  const { dir, target } = setup(t);
+  assert.throws(
+    () =>
+      atomicWriteFile(target, "replacement\n", {
+        expectedPriorSha256: sha256Hex(ORIGINAL),
+        stageHook: (stage) => {
+          if (stage !== "before-rename") {
+            return;
+          }
+          const [temp] = tempFiles(dir);
+          if (temp === undefined) {
+            throw new Error("expected a temp file before the rename");
+          }
+          unlinkSync(join(dir, temp));
+          mkdirSync(join(dir, temp));
+          throw new Error("injected fault at before-rename");
+        },
+      }),
+    (error: unknown) =>
+      error instanceof WriteNotAtomicError &&
+      error.code === "WRITE_NOT_ATOMIC" &&
+      error.causeCode === "CLEANUP_FAILED",
+  );
+  assert.equal(readFileSync(target, "utf8"), ORIGINAL);
 });

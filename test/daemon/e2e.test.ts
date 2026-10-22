@@ -28,6 +28,7 @@ import { STATUS_LABELS } from "../../src/core/status.js";
 import { runCli, type SpawnDaemon } from "../../src/cli/main.js";
 import { sendRequest } from "../../src/daemon/channel.js";
 import { startDaemon, type StartedDaemon, type StartDaemonOptions } from "../../src/daemon/daemon.js";
+import { runDaemon } from "../../src/daemon/main.js";
 import type { CheckId, CheckResult } from "../../src/doctor/checks.js";
 import { buildCreateArgv, buildPolicyDocument } from "../../src/runtime/openshell.js";
 import { controlSocketPath, type EnvironmentLike } from "../../src/session/paths.js";
@@ -74,8 +75,18 @@ function makeDirs(t: TestContext): Fixture {
   const ws = join(base, "ws");
   mkdirSync(ws, { recursive: true });
   writeFileSync(join(ws, "doc.txt"), "original");
-  // resolveStateDir(env) with XDG_STATE_HOME=base yields base/realm, so the CLI
-  // and the daemon agree on this directory without sharing configuration.
+  // The runtime config names the state directory. The CLI and the daemon both read this file from
+  // XDG_CONFIG_HOME, so they meet at its stateDir whatever XDG_STATE_HOME says.
+  mkdirSync(join(base, "config", "realm"), { recursive: true });
+  writeFileSync(
+    join(base, "config", "realm", "config.json"),
+    JSON.stringify({
+      image: IMAGE,
+      workloadArgv: ["/usr/bin/agent", "--serve"],
+      stateDir: join(base, "realm"),
+      workspaceRoot: ws,
+    }),
+  );
   return { base, ws, stateDir: join(base, "realm"), daemons };
 }
 
@@ -84,7 +95,8 @@ function cliEnv(fixture: Fixture): EnvironmentLike {
     PATH: "/usr/bin",
     HOME: "/root",
     XDG_RUNTIME_DIR: "/run/user/0",
-    XDG_STATE_HOME: fixture.base,
+    XDG_CONFIG_HOME: join(fixture.base, "config"),
+    XDG_STATE_HOME: join(fixture.base, "xdg-state"),
   };
 }
 
@@ -254,7 +266,7 @@ test("doctor through the CLI against the fake-backed daemon lists every item wit
   const fixture = makeDirs(t);
   // Podman and socket probes fail deterministically, so the Podman-backed items
   // report non-pass with fixes; the control channel passes against the live
-  // daemon socket and AgentOS warns with its fix (no live session exists).
+  // daemon socket and AgentOS fails with AGENTOS_NOT_CONFIGURED (no driver is bound).
   await startTestDaemon(fixture,
     daemonOptions(fixture, {
       doctorOptions: {
@@ -323,6 +335,50 @@ test("doctor through the CLI against the fake-backed daemon lists every item wit
       );
     }
   }
+});
+
+// The CLI and the daemon entry meet at one state directory because both read it from the runtime
+// config. XDG_STATE_HOME names another directory, so only the config can bring them together: runDaemon
+// starts the daemon with the config's stateDir, and runCli finds that daemon's socket through the same read.
+test("the CLI and the daemon entry resolve one state directory from the runtime config, not XDG_STATE_HOME (CLI-01, RT-06, OMP-01)", async (t) => {
+  const fixture = makeDirs(t);
+  const env = cliEnv(fixture);
+  const stderr: string[] = [];
+  let started: StartedDaemon | undefined;
+  let startedStateDir: string | undefined;
+  let markServing: (() => void) | undefined;
+  const serving = new Promise<void>((resolve) => {
+    markServing = resolve;
+  });
+  const daemonRun = runDaemon({
+    env,
+    start: async (options) => {
+      startedStateDir = options.stateDir;
+      started = await startTestDaemon(fixture, { ...daemonOptions(fixture), runtimeInput: options.runtimeInput });
+      markServing?.();
+      return started;
+    },
+    writeStderr: (line) => {
+      stderr.push(line);
+    },
+    onSignal: () => () => undefined,
+  });
+  await Promise.race([serving, daemonRun]);
+  assert.ok(started !== undefined, "the daemon entry starts a daemon before the CLI runs");
+  assert.equal(startedStateDir, fixture.stateDir);
+
+  const status = await runCli(["status"], { env, timeoutMs: 2000 });
+  assert.equal(status.exitCode, 0);
+  assert.equal(status.stderr, "", "the CLI reaches the daemon the config names, so it reports no absent daemon");
+  const body = JSON.parse(status.stdout) as StatusBody;
+  assert.equal(body.snapshot.state, "unbound");
+
+  const down = await runCli(["down"], { env, timeoutMs: 2000 });
+  assert.equal(down.exitCode, 0);
+  assert.ok(started !== undefined);
+  await awaitDone(started);
+  assert.equal(await daemonRun, 0);
+  assert.deepEqual(stderr, []);
 });
 
 test("the socket directory is 0700 with a 0600 socket after daemon start (RT-06)", async (t) => {

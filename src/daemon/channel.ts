@@ -62,6 +62,8 @@ export interface ControlRequest {
 
 export interface ControlError {
   readonly code: ErrorCode;
+  // Present only when the refusal carries a cause code, such as a libpod code under OPENSHELL_START_FAILED.
+  readonly causeCode?: ErrorCode;
 }
 
 export interface ControlReply {
@@ -160,10 +162,11 @@ export function encodeReply(reply: ControlReply): string {
     throw makeRealmError("SCHEMA_INVALID");
   }
   if (reply.error !== undefined) {
-    if (reply.result !== undefined || !isErrorCode(reply.error.code)) {
+    const { code, causeCode } = reply.error;
+    if (reply.result !== undefined || !isErrorCode(code) || (causeCode !== undefined && !isErrorCode(causeCode))) {
       throw makeRealmError("SCHEMA_INVALID");
     }
-    return `${JSON.stringify({ id: reply.id, error: { code: reply.error.code } })}\n`;
+    return `${JSON.stringify({ id: reply.id, error: causeCode === undefined ? { code } : { code, causeCode } })}\n`;
   }
   if (reply.result === undefined) {
     throw makeRealmError("SCHEMA_INVALID");
@@ -192,10 +195,21 @@ export function decodeReply(line: string): ControlReply {
   }
   if (hasError) {
     const error: unknown = parsed["error"];
-    if (!isRecord(error) || !isErrorCode(error["code"]) || Object.keys(error).length !== 1) {
+    if (
+      !isRecord(error) ||
+      !isErrorCode(error["code"]) ||
+      !Object.keys(error).every((key) => key === "code" || key === "causeCode")
+    ) {
       throw makeRealmError("SCHEMA_INVALID");
     }
-    return { id, error: { code: error["code"] } };
+    const causeCode: unknown = error["causeCode"];
+    if (causeCode === undefined) {
+      return { id, error: { code: error["code"] } };
+    }
+    if (!isErrorCode(causeCode)) {
+      throw makeRealmError("SCHEMA_INVALID");
+    }
+    return { id, error: { code: error["code"], causeCode } };
   }
   return { id, result: parsed["result"] };
 }

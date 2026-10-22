@@ -1,10 +1,10 @@
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, symlinkSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { RealmError } from "../../src/core/errors.js";
-import { assertSameRoot, bindRoot, bindWorkspaceUnderPolicy } from "../../src/fs/root.js";
+import { bindRoot, bindWorkspaceUnderPolicy, verifyPinnedAt } from "../../src/fs/root.js";
 
 // Real directories under a temporary base. Nothing is mocked: the directories and the
 // symbolic link are created on disk, and the base is removed when the test ends.
@@ -64,24 +64,48 @@ test("bindWorkspaceUnderPolicy refuses when any policy root cannot be canonicali
   assertDenied(() => bindWorkspaceUnderPolicy([ws, join(base, "missing")], inner));
 });
 
-test("assertSameRoot passes when the path still names the directory pinned earlier (D-22)", (t) => {
-  const { ws } = fixture(t);
-  const pinned = bindRoot(ws);
-  const current = bindRoot(ws);
-  assert.equal(current.dev, pinned.dev);
-  assert.equal(current.ino, pinned.ino);
-  assert.doesNotThrow(() => {
-    assertSameRoot(pinned, current);
-  });
+test("bindWorkspaceUnderPolicy refuses every path when the policy has no workspace roots (D-21, D-22)", (t) => {
+  const { ws, inner } = fixture(t);
+  assertDenied(() => bindWorkspaceUnderPolicy([], inner));
+  assertDenied(() => bindWorkspaceUnderPolicy([], ws));
 });
 
-test("assertSameRoot throws POLICY_DENIED after the directory at the path is replaced (D-22)", (t) => {
+test("verifyPinnedAt returns the pinned root when the path still names the directory pinned earlier (D-22, FS-02)", (t) => {
+  const { ws } = fixture(t);
+  const pinned = bindRoot(ws);
+  assert.equal(verifyPinnedAt(pinned, ws), pinned);
+});
+
+test("verifyPinnedAt accepts the pinned directory reached through a symbolic link to its real path (FS-02)", (t) => {
+  const { base, ws } = fixture(t);
+  const pinned = bindRoot(ws);
+  const alias = join(base, "alias");
+  symlinkSync(ws, alias, "dir");
+  assert.equal(verifyPinnedAt(pinned, alias), pinned);
+});
+
+test("verifyPinnedAt throws POLICY_DENIED after the directory at the path is replaced (D-22, FS-02)", (t) => {
   const { base, ws } = fixture(t);
   const pinned = bindRoot(ws);
   renameSync(ws, join(base, "ws-old"));
   mkdirSync(ws);
-  const replaced = bindRoot(ws);
-  assertDenied(() => {
-    assertSameRoot(pinned, replaced);
-  });
+  assertDenied(() => verifyPinnedAt(pinned, ws));
+});
+
+test("verifyPinnedAt throws POLICY_DENIED when the pinned directory moved and a link now sits at its path (FS-02)", (t) => {
+  const { base, ws } = fixture(t);
+  const pinned = bindRoot(ws);
+  const moved = join(base, "ws-moved");
+  renameSync(ws, moved);
+  symlinkSync(moved, ws, "dir");
+  assertDenied(() => verifyPinnedAt(pinned, ws));
+});
+
+test("verifyPinnedAt throws POLICY_DENIED for a relative path and for a path that is not a directory (FS-02)", (t) => {
+  const { ws } = fixture(t);
+  const pinned = bindRoot(ws);
+  const file = join(ws, "plain.txt");
+  writeFileSync(file, "not a directory");
+  assertDenied(() => verifyPinnedAt(pinned, "ws"));
+  assertDenied(() => verifyPinnedAt(pinned, file));
 });

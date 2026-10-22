@@ -175,7 +175,7 @@ test("ANDA-02: an oversize reply is unreachable, not a mismatch, and does not ma
   assert.equal(fake.requestCount(), 3, "a later healthy reply connects: the oversize reply set no sticky mismatch");
 });
 
-test("ANDA-02: a transport that throws synchronously is unreachable, and its detail is not echoed", async (t) => {
+test("ANDA-02: a transport that throws synchronously is unreachable, its errno code is the reason, and its detail is not echoed", async (t) => {
   const clock = fakeClock();
   let calls = 0;
   const bridge = new AndaBridge({
@@ -185,7 +185,7 @@ test("ANDA-02: a transport that throws synchronously is unreachable, and its det
     sleep: clock.sleep,
     transport: () => {
       calls += 1;
-      throw new Error("socket detail 10.0.0.7");
+      throw Object.assign(new Error("socket detail 10.0.0.7"), { code: "EMFILE" });
     },
   });
   t.after(() => bridge.close());
@@ -197,6 +197,25 @@ test("ANDA-02: a transport that throws synchronously is unreachable, and its det
   assert.ok(error instanceof RealmError, "a synchronous transport throw must surface as a catalogue error");
   assert.equal(error.code, "ANDA_UNREACHABLE");
   assert.doesNotMatch(error.message, /socket detail|10\.0\.0\.7/, "the transport's detail must not be echoed");
+  assert.equal(bridge.lastTransportFailure(), "EMFILE", "the errno code is the transport reason");
   assert.equal(calls, 1, "the attempt before the deadline is the only call");
   assert.deepEqual(clock.delays, [100], "the retry waits only as long as the deadline allows");
+});
+
+test("ANDA-02: a synchronous transport throw with no errno code gives a fixed, non-blank reason and no detail", async (t) => {
+  const clock = fakeClock();
+  const bridge = new AndaBridge({
+    url: "http://127.0.0.1:9",
+    random: () => 1,
+    now: clock.now,
+    sleep: clock.sleep,
+    transport: () => {
+      throw new Error("socket detail 10.0.0.7");
+    },
+  });
+  t.after(() => bridge.close());
+
+  await assert.rejects(bridge.connect(100), expectCode("ANDA_UNREACHABLE"));
+  const reason = bridge.lastTransportFailure();
+  assert.equal(reason, "transport threw without an errno code");
 });

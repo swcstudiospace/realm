@@ -14,7 +14,7 @@ import { makeRealmError } from "../core/errors.js";
 import { atomicWriteFile, observeSha256 } from "../fs/atomic-write.js";
 import { openCanonical } from "../fs/canonicalize.js";
 import { bindRoot } from "../fs/root.js";
-import { recordFileName, sessionsDirOf } from "./paths.js";
+import { isSessionId, recordFileName, sessionsDirOf } from "./paths.js";
 
 const DIRECTORY_MODE = 0o700;
 const RECORD_SUFFIX = ".json";
@@ -61,7 +61,7 @@ export class SessionStore {
   }
 
   // The session ids of the record files, sorted (D-85). A name is taken only when it is a regular file
-  // ending in .json whose stem passes recordFileName. No file is opened or parsed, so a corrupt record is
+  // ending in .json whose stem passes isSessionId. No file is opened or parsed, so a corrupt record is
   // still listed and can be deleted. An absent sessions directory lists nothing.
   list(): string[] {
     const dir = sessionsDirOf(this.stateDir);
@@ -74,12 +74,9 @@ export class SessionStore {
         continue;
       }
       const sessionId = entry.name.slice(0, -RECORD_SUFFIX.length);
-      try {
-        recordFileName(sessionId);
-      } catch {
-        continue;
+      if (isSessionId(sessionId)) {
+        ids.push(sessionId);
       }
-      ids.push(sessionId);
     }
     return ids.sort();
   }

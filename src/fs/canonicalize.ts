@@ -18,7 +18,7 @@ import {
   type Stats,
 } from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
-import { makeRealmError } from "../core/errors.js";
+import { makeRealmError, RealmError } from "../core/errors.js";
 import { isInsideRoot, type PinnedRoot } from "./root.js";
 
 export const MAX_SYMLINK_HOPS = 40;
@@ -175,7 +175,11 @@ export function verifyDescriptor(fd: number, realPath: string, procFdDir: string
 // verification refuses the non-regular file. Every open failure is PATH_ESCAPE: a symlink
 // swapped in after resolution fails with ELOOP, and an unverifiable path is treated as
 // escaping. The caller closes the returned fd.
-export function openVerified(realPath: string, procFdDir: string = PROC_FD_DIR): number {
+export function openVerified(
+  realPath: string,
+  procFdDir: string = PROC_FD_DIR,
+  closeFd: (fd: number) => void = closeSync,
+): number {
   let fd: number;
   try {
     fd = openSync(realPath, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
@@ -185,7 +189,13 @@ export function openVerified(realPath: string, procFdDir: string = PROC_FD_DIR):
   try {
     verifyDescriptor(fd, realPath, procFdDir);
   } catch (error: unknown) {
-    closeSync(fd);
+    try {
+      closeFd(fd);
+    } catch {
+      // The verification failure stays the error thrown. The close failure is kept as its cause.
+      const code = error instanceof RealmError ? error.code : "PATH_ESCAPE";
+      throw makeRealmError(code, "CLEANUP_FAILED");
+    }
     throw error;
   }
   return fd;

@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { PassThrough, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { STATUS_LABELS } from "../../src/core/status.js";
-import { ERROR_CATALOGUE } from "../../src/core/errors.js";
+import { ERROR_CATALOGUE, makeRealmError, RealmError } from "../../src/core/errors.js";
 import {
   MCP_PROTOCOL_VERSION,
   createMcpServer,
@@ -198,6 +198,50 @@ test("TOOL-05: a dispatcher refusal surfaces the catalogue code in the reply env
     code: "SCHEMA_INVALID",
     retryable: ERROR_CATALOGUE["SCHEMA_INVALID"].retryable,
   });
+});
+
+test("TOOL-05: a RealmError thrown by the dispatcher reaches the client as a tool error result with its code and message (G-08)", async () => {
+  const thrown = makeRealmError("OPENSHELL_START_FAILED", "PODMAN_MACHINE_DOWN");
+  const dispatcher: McpDispatcher = { call: () => Promise.reject(thrown) };
+  const driven = await drive(dispatcher, [toolRequest(1, "exec", { argv: ["true"] })]);
+  assert.equal(driven.stdoutLines.length, 1);
+  const body = parseLine(driven.stdoutLines[0] as string);
+  assert.equal(body["error"], undefined, "a tool failure is a result, not a protocol error");
+  const reason = ERROR_CATALOGUE["OPENSHELL_START_FAILED"].reason;
+  assert.deepEqual(body["result"], {
+    isError: true,
+    content: [{ type: "text", text: `OPENSHELL_START_FAILED: ${reason}` }],
+    structuredContent: {
+      code: "OPENSHELL_START_FAILED",
+      message: reason,
+      retryable: ERROR_CATALOGUE["OPENSHELL_START_FAILED"].retryable,
+      causeCode: "PODMAN_MACHINE_DOWN",
+    },
+  });
+});
+
+test("TOOL-05: a thrown defect that is not a RealmError still answers the internal error without its message", async () => {
+  const dispatcher: McpDispatcher = { call: () => Promise.reject(new Error("socket reset with secret text")) };
+  const driven = await drive(dispatcher, [toolRequest(1, "status", {})]);
+  assert.equal(driven.stdoutLines.length, 1);
+  assert.deepEqual(parseLine(driven.stdoutLines[0] as string)["error"], { code: -32603, message: "Internal error" });
+});
+
+test("TOOL-05: a failing input stream rejects closed with MCP_INPUT_FAILED and writes only the fixed diagnostic", async () => {
+  const dispatcher: McpDispatcher = { call: () => Promise.reject(new Error("not reached")) };
+  const input = new PassThrough();
+  const output = new PassThrough();
+  const stderrChunks: string[] = [];
+  const stderr = new Writable({
+    write(chunk, _encoding, callback) {
+      stderrChunks.push(String(chunk));
+      callback();
+    },
+  });
+  const server = createMcpServer(dispatcher, input, output, stderr);
+  input.destroy(new Error("read EIO with secret text"));
+  await assert.rejects(server.closed, (error: unknown) => error instanceof RealmError && error.code === "MCP_INPUT_FAILED");
+  assert.deepEqual(stderrChunks, ["mcp: input stream failed\n"]);
 });
 
 test("TOOL-05: the surface calls no dispatcher member except call (P5-D11)", async () => {

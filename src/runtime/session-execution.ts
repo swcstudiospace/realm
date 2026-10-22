@@ -17,7 +17,7 @@
 // callers keep working. It removes every realm-labelled container and proves zero survivors.
 
 import { spawn, type ChildProcess, type StdioOptions } from "node:child_process";
-import { makeRealmError, RealmError } from "../core/errors.js";
+import { makeRealmError, RealmError, type ErrorCode } from "../core/errors.js";
 import { withTimeout } from "../core/timeout.js";
 import type { CreateRequest, ExecutionService, ProbeResult } from "../core/ports.js";
 import type { EgressRule } from "../contract/validate.js";
@@ -72,15 +72,19 @@ export interface SessionExecutionOptions {
 
 // A container whose hardening check failed. It carries the first failed property of the D-51 list,
 // which is a fixed name from the profile and never caller text. The error code is still
-// OPENSHELL_START_FAILED.
+// OPENSHELL_START_FAILED, and causeCode is the libpod code the refusal rests on, when there is one.
 export class HardeningFailedError extends RealmError {
   readonly property: HardeningProperty;
 
-  constructor(property: HardeningProperty) {
-    super("OPENSHELL_START_FAILED");
+  constructor(property: HardeningProperty, causeCode?: ErrorCode) {
+    super("OPENSHELL_START_FAILED", causeCode);
     this.property = property;
   }
 }
+
+// The outcome of the bounded AgentOS stop. A failed stop carries the catalogue code of the supervisor error as its
+// cause, when that error has a code other than the stop's own.
+type AgentOsStop = { readonly ok: true } | { readonly ok: false; readonly causeCode: ErrorCode | undefined };
 
 export class SessionExecution implements ExecutionService {
   private readonly libpod: SessionContainers;
@@ -144,19 +148,16 @@ export class SessionExecution implements ExecutionService {
     await agentos.start();
   }
 
-  // Healthy only when the container runs and AgentOS reports alive. Any failure reports unhealthy:
-  // the probe answers a health question, and the lifecycle decides what follows.
+  // Healthy only when the container runs and AgentOS reports alive. An unhealthy answer is a false result. A
+  // failure to answer, such as a libpod error or AGENTOS_CRASH_LOOP, is thrown with its own code, so the lifecycle
+  // records that code rather than a generic unhealthy result.
   async probe(containerId: string): Promise<ProbeResult> {
     const agentos = this.requireAgentOs();
-    try {
-      const inspect = await this.libpod.inspectContainer(containerId);
-      if (inspect === null || !isRunning(inspect)) {
-        return "unhealthy";
-      }
-      return (await agentos.check()) ? "healthy" : "unhealthy";
-    } catch {
+    const inspect = await this.libpod.inspectContainer(containerId);
+    if (inspect === null || !isRunning(inspect)) {
       return "unhealthy";
     }
+    return (await agentos.check()) ? "healthy" : "unhealthy";
   }
 
   // Stops AgentOS, then the container. The container stop runs even when the AgentOS stop fails, so a
@@ -164,12 +165,12 @@ export class SessionExecution implements ExecutionService {
   // counts as stopped. With no supervisor bound there is no AgentOS step. A failed AgentOS stop is reported
   // as AGENTOS_STOP_FAILED after the container step.
   async stop(containerId: string): Promise<void> {
-    const agentosStopped = await this.stopAgentOs();
+    const agentosStop = await this.stopAgentOs();
     if ((await this.libpod.inspectContainer(containerId)) !== null) {
       await this.libpod.stopContainer(containerId, CONTAINER_STOP_GRACE_MS);
     }
-    if (!agentosStopped) {
-      throw makeRealmError("AGENTOS_STOP_FAILED");
+    if (!agentosStop.ok) {
+      throw makeRealmError("AGENTOS_STOP_FAILED", agentosStop.causeCode);
     }
   }
 
@@ -177,26 +178,28 @@ export class SessionExecution implements ExecutionService {
   // counts as removed. The removal runs even when the AgentOS stop fails, and that failure is then reported
   // as AGENTOS_STOP_FAILED.
   async destroy(containerId: string): Promise<void> {
-    const agentosStopped = await this.stopAgentOs();
+    const agentosStop = await this.stopAgentOs();
     await this.libpod.removeContainer(containerId, { force: true });
-    if (!agentosStopped) {
-      throw makeRealmError("AGENTOS_STOP_FAILED");
+    if (!agentosStop.ok) {
+      throw makeRealmError("AGENTOS_STOP_FAILED", agentosStop.causeCode);
     }
   }
 
-  // Runs the AgentOS stop bounded by AGENTOS_STOP_DEADLINE_MS. Returns false when the stop rejects, throws, or
-  // misses the deadline. With no supervisor bound there is nothing to stop, so the step counts as stopped.
-  // The callers turn a false into the typed AGENTOS_STOP_FAILED error after their container step.
-  private async stopAgentOs(): Promise<boolean> {
+  // Runs the AgentOS stop bounded by AGENTOS_STOP_DEADLINE_MS. A rejection or a missed deadline is a failed stop,
+  // and its cause is kept in the result. With no supervisor bound there is nothing to stop, so the step counts as
+  // stopped. The callers turn a failed stop into the typed AGENTOS_STOP_FAILED error after their container step.
+  private async stopAgentOs(): Promise<AgentOsStop> {
     const agentos = this.agentos;
     if (agentos === undefined) {
-      return true;
+      return { ok: true };
     }
     try {
       await withTimeout(agentos.stop(), AGENTOS_STOP_DEADLINE_MS, "AGENTOS_STOP_FAILED");
-      return true;
-    } catch {
-      return false;
+      return { ok: true };
+    } catch (error) {
+      // The deadline's own AGENTOS_STOP_FAILED adds nothing, so only a different code is kept as the cause.
+      const code = catalogueCodeOf(error);
+      return { ok: false, causeCode: code === "AGENTOS_STOP_FAILED" ? undefined : code };
     }
   }
 
@@ -211,28 +214,33 @@ export class SessionExecution implements ExecutionService {
 
   // Returns only when the container conforms. Otherwise the container is removed before anything is
   // thrown. The removal is best effort: a container that survives it is still never returned as
-  // running, and the down sweep is the backstop.
+  // running, and the down sweep is the backstop. The refusal keeps one libpod code as causeCode: the
+  // removal's when the removal failed, since a surviving container is the worse outcome, else the inspect's.
   private async verifyOrRemove(containerId: string, binding: HardeningBinding): Promise<void> {
     let failed: readonly HardeningProperty[] | null;
+    let inspectCause: ErrorCode | undefined;
     try {
       const inspect = await this.libpod.inspectContainer(containerId);
       failed = inspect === null ? null : verifyInspect(binding, inspect);
-    } catch {
+    } catch (error) {
       failed = null;
+      inspectCause = catalogueCodeOf(error);
     }
     if (failed?.length === 0) {
       return;
     }
+    let removeCause: ErrorCode | undefined;
     try {
       await this.libpod.removeContainer(containerId, { force: true });
-    } catch {
-      // The down sweep proves the removal. The start is refused either way.
+    } catch (error) {
+      removeCause = catalogueCodeOf(error);
     }
+    const causeCode = removeCause ?? inspectCause;
     const first = failed?.[0];
     if (first !== undefined) {
-      throw new HardeningFailedError(first);
+      throw new HardeningFailedError(first, causeCode);
     }
-    throw makeRealmError("OPENSHELL_START_FAILED");
+    throw makeRealmError("OPENSHELL_START_FAILED", causeCode);
   }
 }
 
@@ -241,6 +249,11 @@ export class SessionExecution implements ExecutionService {
 function isRunning(inspect: LibpodInspect): boolean {
   const state: unknown = inspect["State"];
   return typeof state === "object" && state !== null && Reflect.get(state, "Running") === true;
+}
+
+// The catalogue code of an error thrown by a libpod or AgentOS call, or undefined for any other error.
+function catalogueCodeOf(error: unknown): ErrorCode | undefined {
+  return error instanceof RealmError ? error.code : undefined;
 }
 
 // The zero-orphan sweep moved to sweep.ts (D-84). It is re-exported here so existing callers keep working.
@@ -263,17 +276,21 @@ export function selectOpenShellEnvironment(source: EnvironmentLike): Readonly<Re
 // such group here, and the child alone is killed there.
 const OWN_PROCESS_GROUP = process.platform !== "win32";
 
-// Kills the child and, on POSIX, the whole process group it leads. kill() on a group that has already gone
-// throws ESRCH, which means nothing is left to kill; the direct kill that follows covers the child itself.
-function killProcessTree(child: ChildProcess): void {
+// Kills the child and, on POSIX, the whole process group it leads. Returns false when the group could not be
+// signalled. ESRCH means the group is already gone, so nothing is left to kill and that counts as signalled. The
+// direct kill of the child runs in every case.
+function killProcessTree(child: ChildProcess): boolean {
+  let groupSignalled = true;
   if (OWN_PROCESS_GROUP && child.pid !== undefined) {
     try {
       process.kill(-child.pid, "SIGKILL");
-    } catch {
-      // The group is already gone. The direct kill below is the remaining best effort.
+    } catch (error) {
+      const code: unknown = error instanceof Error ? Reflect.get(error, "code") : undefined;
+      groupSignalled = code === "ESRCH";
     }
   }
   child.kill("SIGKILL");
+  return groupSignalled;
 }
 
 // One captured output stream (D-94). It keeps at most OPENSHELL_OUTPUT_LIMIT_BYTES bytes and drops the
@@ -341,8 +358,9 @@ export function spawnOpenShellRunner(environment: Readonly<Record<string, string
         child.stderr?.on("data", (chunk: Buffer) => stderr.add(chunk));
       }
       const timer = setTimeout(() => {
-        killProcessTree(child);
-        reject(new OpenShellRunnerError("timed-out"));
+        // A group that could not be signalled may keep helpers alive, so the run fails rather than timing out cleanly.
+        const contained = killProcessTree(child);
+        reject(new OpenShellRunnerError(contained ? "timed-out" : "failed"));
       }, options.timeoutMs);
       child.once("error", () => {
         clearTimeout(timer);

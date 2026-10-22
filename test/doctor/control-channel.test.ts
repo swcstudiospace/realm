@@ -98,7 +98,7 @@ test("CLI-03: the full report lists all eight items in order with control-channe
   const results = await runChecks({
     ...silentBase(policyPath, stateDir),
     connectSocket: fakeConnect("connect", seen),
-    agentosAlive: () => Promise.resolve(true),
+    agentos: () => Promise.resolve({ bound: true, alive: true }),
   });
   assert.deepEqual(
     results.map((result) => result.id),
@@ -197,7 +197,7 @@ test("CLI-03: control-channel fails with a fix and never echoes the socket error
   assert.doesNotMatch(`${result.detail} ${fixOf(result)}`, /secret-socket-9c1d/);
 });
 
-test("CLI-03: agentos warns with the realm-up fix when no live session is tracked (CLI-03)", async (t) => {
+test("CLI-03: agentos warns with REALM_NOT_ACTIVE and the realm-up fix when no daemon answers (CLI-03)", async (t) => {
   const { policyPath, stateDir } = layout(t);
   makeRunDir(stateDir);
   const seen: SeenDials = { dials: [], timeouts: [] };
@@ -207,7 +207,7 @@ test("CLI-03: agentos warns with the realm-up fix when no live session is tracke
   });
   const result = resultOf(results, "agentos");
   assert.equal(result.status, "warn");
-  assert.match(result.detail, /no live AgentOS session is tracked/);
+  assert.match(result.detail, /REALM_NOT_ACTIVE/);
   assert.match(fixOf(result), /realm up/);
 });
 
@@ -216,7 +216,7 @@ test("CLI-03: agentos passes when the injected probe reports a live session (CLI
   const results = await runChecks({
     ...silentBase(policyPath, stateDir),
     connectSocket: fakeConnect("connect", { dials: [], timeouts: [] }),
-    agentosAlive: () => Promise.resolve(true),
+    agentos: () => Promise.resolve({ bound: true, alive: true }),
   });
   const result = resultOf(results, "agentos");
   assert.equal(result.status, "pass");
@@ -228,7 +228,7 @@ test("CLI-03: agentos fails with a fix when the injected probe reports no live s
   const results = await runChecks({
     ...silentBase(policyPath, stateDir),
     connectSocket: fakeConnect("connect", { dials: [], timeouts: [] }),
-    agentosAlive: () => Promise.resolve(false),
+    agentos: () => Promise.resolve({ bound: true, alive: false }),
   });
   const result = resultOf(results, "agentos");
   assert.equal(result.status, "fail");
@@ -241,12 +241,25 @@ test("CLI-03: agentos fails with a fix when the injected probe does not answer (
   const results = await runChecks({
     ...silentBase(policyPath, stateDir),
     connectSocket: fakeConnect("connect", { dials: [], timeouts: [] }),
-    agentosAlive: () => Promise.reject(new Error("agentos probe timed out")),
+    agentos: () => Promise.reject(new Error("agentos probe timed out")),
   });
   const result = resultOf(results, "agentos");
   assert.equal(result.status, "fail");
   assert.match(result.detail, /AGENTOS_CRASH_LOOP/);
   assert.doesNotMatch(`${result.detail} ${fixOf(result)}`, /timed out/);
+});
+
+test("CLI-03: agentos fails with AGENTOS_NOT_CONFIGURED and a driver fix when the daemon has no driver bound (CLI-03)", async (t) => {
+  const { policyPath, stateDir } = layout(t);
+  const results = await runChecks({
+    ...silentBase(policyPath, stateDir),
+    connectSocket: fakeConnect("connect", { dials: [], timeouts: [] }),
+    agentos: () => Promise.resolve({ bound: false }),
+  });
+  const result = resultOf(results, "agentos");
+  assert.equal(result.status, "fail");
+  assert.match(result.detail, /AGENTOS_NOT_CONFIGURED/);
+  assert.match(fixOf(result), /AgentOS driver/);
 });
 
 test("CLI-03: every non-pass across both items carries a fix and every pass carries none (CLI-03)", async (t) => {
@@ -256,7 +269,7 @@ test("CLI-03: every non-pass across both items carries a fix and every pass carr
   const passing = await runChecks({
     ...silentBase(policyPath, stateDir),
     connectSocket: fakeConnect("connect", seen),
-    agentosAlive: () => Promise.resolve(true),
+    agentos: () => Promise.resolve({ bound: true, alive: true }),
   });
   for (const id of ["control-channel", "agentos"] as const) {
     const result = resultOf(passing, id);

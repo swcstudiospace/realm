@@ -1,11 +1,11 @@
-import { test } from "node:test";
+import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { RealmError } from "../../src/core/errors.js";
-import { isDirectEntry, podmanSocketPath, resolveConfigPath } from "../../src/runtime/host-paths.js";
+import { isDirectEntry, podmanSocketPath, readHostRuntime, resolveConfigPath } from "../../src/runtime/host-paths.js";
 
 test("resolveConfigPath prefers an absolute XDG_CONFIG_HOME, ignores a relative one, and falls back to HOME/.config", () => {
   assert.equal(
@@ -29,6 +29,46 @@ test("resolveConfigPath throws SCHEMA_INVALID when neither XDG_CONFIG_HOME nor H
 
 test("podmanSocketPath is the rootless API socket under an absolute XDG_RUNTIME_DIR", () => {
   assert.equal(podmanSocketPath({ XDG_RUNTIME_DIR: "/run/user/1000" }), "/run/user/1000/podman/podman.sock");
+});
+
+const IMAGE = `registry.example.com/realm/workload@sha256:${"0".repeat(64)}`;
+
+function configDir(t: TestContext): string {
+  const dir = mkdtempSync(join(tmpdir(), "host-paths-config-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  return dir;
+}
+
+test("readHostRuntime takes the state directory from the config file, whatever XDG_STATE_HOME names (CLI-01, RT-06)", (t) => {
+  const dir = configDir(t);
+  const runtimeInput = {
+    image: IMAGE,
+    workloadArgv: ["/usr/bin/agent"],
+    stateDir: "/var/lib/realm/state",
+    workspaceRoot: "/srv/workspace",
+  };
+  mkdirSync(join(dir, "realm"));
+  writeFileSync(join(dir, "realm", "config.json"), JSON.stringify(runtimeInput));
+  const host = readHostRuntime({ XDG_CONFIG_HOME: dir, XDG_STATE_HOME: "/elsewhere/state" });
+  assert.equal(host.stateDir, "/var/lib/realm/state");
+  assert.deepEqual(host.runtimeInput, runtimeInput);
+});
+
+test("readHostRuntime refuses a missing config and a config with a relative state directory with SCHEMA_INVALID", (t) => {
+  const dir = configDir(t);
+  assert.throws(
+    () => readHostRuntime({ XDG_CONFIG_HOME: dir }),
+    (error) => error instanceof RealmError && error.code === "SCHEMA_INVALID",
+  );
+  mkdirSync(join(dir, "realm"));
+  writeFileSync(
+    join(dir, "realm", "config.json"),
+    JSON.stringify({ image: IMAGE, workloadArgv: ["/usr/bin/agent"], stateDir: "state", workspaceRoot: "/srv/ws" }),
+  );
+  assert.throws(
+    () => readHostRuntime({ XDG_CONFIG_HOME: dir }),
+    (error) => error instanceof RealmError && error.code === "SCHEMA_INVALID",
+  );
 });
 
 test("isDirectEntry is true for a symbolic link to the module file, and false for another file, a missing path, or no argv1", (t) => {

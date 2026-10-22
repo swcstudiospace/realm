@@ -14,6 +14,7 @@
 import { createInterface } from "node:readline";
 import type { Readable, Writable } from "node:stream";
 import type { ToolCall, ToolName } from "../contract/validate.js";
+import { makeRealmError, RealmError } from "../core/errors.js";
 import type { ToolDispatcher } from "../tools/dispatch.js";
 
 // The only spec-verified revision string (mcp.md Q1, Q5). The upstream-only string named
@@ -145,6 +146,20 @@ function initializePayload(): Record<string, unknown> {
   };
 }
 
+// A RealmError is a tool failure, not a protocol failure. It returns as an MCP tool error result
+// (isError) carrying the catalogue code, the reason, the retryable flag, and any cause code (G-08).
+function realmErrorResult(error: RealmError): Record<string, unknown> {
+  const structured: Record<string, unknown> = { code: error.code, message: error.message, retryable: error.retryable };
+  if (error.causeCode !== undefined) {
+    structured["causeCode"] = error.causeCode;
+  }
+  return {
+    isError: true,
+    content: [{ type: "text", text: `${error.code}: ${error.message}` }],
+    structuredContent: structured,
+  };
+}
+
 async function callTool(dispatcher: McpDispatcher, params: unknown): Promise<MethodReply> {
   if (!isRecord(params) || typeof params["name"] !== "string" || !isToolName(params["name"])) {
     return { error: { code: -32602, message: "Invalid params" } };
@@ -158,7 +173,10 @@ async function callTool(dispatcher: McpDispatcher, params: unknown): Promise<Met
   try {
     const outcome = await dispatcher.call(call);
     return { result: outcome };
-  } catch {
+  } catch (error: unknown) {
+    if (error instanceof RealmError) {
+      return { result: realmErrorResult(error) };
+    }
     return { error: { code: -32603, message: "Internal error" } };
   }
 }
@@ -229,8 +247,10 @@ export function createMcpServer(
 ): McpServer {
   const reader = createInterface({ input, crlfDelay: Number.POSITIVE_INFINITY });
   let resolveClosed: () => void = () => undefined;
-  const closed = new Promise<void>((resolve) => {
+  let rejectClosed: (error: Error) => void = () => undefined;
+  const closed = new Promise<void>((resolve, reject) => {
     resolveClosed = resolve;
+    rejectClosed = reject;
   });
   const run = async (): Promise<void> => {
     try {
@@ -239,9 +259,10 @@ export function createMcpServer(
       }
     } catch {
       diagnostics.write("mcp: input stream failed\n");
-    } finally {
-      resolveClosed();
+      rejectClosed(makeRealmError("MCP_INPUT_FAILED"));
+      return;
     }
+    resolveClosed();
   };
   void run();
   return {

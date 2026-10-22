@@ -1,17 +1,22 @@
-// Daemon control client tests (wave 3). Every test drives connectDaemon over a live Unix socket
-// served by a stub that speaks the real channel wire format (decodeRequest, encodeReply). Each
-// test removes its scratch directory in t.after.
+// Daemon control client tests (wave 3). Most tests drive connectDaemon over a live Unix socket served by a
+// stub that speaks the real channel wire format (decodeRequest, encodeReply). The refusal tests at the end
+// drive it over the control socket of a real startDaemon, with the existing fakes at the adapter seam.
+// Each test removes its scratch directory in t.after.
 
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { RealmError } from "../../src/core/errors.js";
+import { ERROR_CATALOGUE, makeRealmError, RealmError } from "../../src/core/errors.js";
 import type { StatusValue, ToolOutcome } from "../../src/tools/dispatch.js";
 import { connectDaemon, type DaemonStatus } from "../../src/daemon/client.js";
-import { decodeRequest, encodeReply, type ControlRequest } from "../../src/daemon/channel.js";
+import { decodeRequest, encodeReply, sendRequest, type ControlRequest } from "../../src/daemon/channel.js";
+import { type StartedDaemon, startDaemon } from "../../src/daemon/daemon.js";
+import type { PodmanProbeResult } from "../../src/runtime/podman-probe.js";
+import { FakeBridge } from "../support/fake-bridge.js";
+import { FakeExecutionService } from "../support/fake-execution.js";
 
 const TS = "2026-10-22T00:00:00.000Z";
 
@@ -207,4 +212,124 @@ test("close is idempotent and later requests refuse with REALM_NOT_ACTIVE withou
   await assert.rejects(client.status(), assertRealmError("REALM_NOT_ACTIVE"));
   await assert.rejects(client.call({ status: {} }), assertRealmError("REALM_NOT_ACTIVE"));
   assert.equal(stub.requests.length, 1);
+});
+
+const IMAGE = `registry.example.com/realm/workload@sha256:${"0".repeat(64)}`;
+
+// Starts a real daemon on its control socket with every host seam faked: the probe is scripted by the
+// test, and no Podman, OpenShell, or Anda engine runs. One t.after brings the daemon down, then removes
+// the scratch directory, so the socket is closed before the directory goes.
+async function startRealDaemon(
+  t: TestContext,
+  probe: () => Promise<PodmanProbeResult>,
+): Promise<{ readonly daemon: StartedDaemon; readonly workspace: string }> {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), "realm-client-daemon-")));
+  const workspace = join(base, "ws");
+  mkdirSync(workspace);
+  const policyPath = join(base, "policy.json");
+  writeFileSync(policyPath, JSON.stringify({ workspaceRoots: [workspace] }));
+  const daemon = await startDaemon({
+    runtimeInput: {
+      image: IMAGE,
+      workloadArgv: ["/usr/bin/agent", "--serve"],
+      stateDir: join(base, "state"),
+      workspaceRoot: workspace,
+    },
+    policyPath,
+    sessionId: "sess-client",
+    exec: new FakeExecutionService(),
+    bridge: new FakeBridge(),
+    clock: () => new Date(TS),
+    runOpenShell: () => Promise.resolve({ exitCode: 0, stdout: "", stderr: "", truncated: false }),
+    sweep: async () => 0,
+    probe,
+  }).catch((error: unknown) => {
+    rmSync(base, { recursive: true, force: true });
+    throw error;
+  });
+  t.after(async () => {
+    try {
+      await sendRequest(daemon.socketPath, { id: "client-down", method: "down" });
+      await daemon.done;
+    } catch {
+      // The daemon already went down, so only the scratch directory is left to remove.
+    }
+    rmSync(base, { recursive: true, force: true });
+  });
+  return { daemon, workspace };
+}
+
+test("a daemon refusal rejects with a RealmError carrying the daemon's code, message and causeCode (TOOL-05, TOOL-01, TOOL-03)", async (t) => {
+  const { daemon } = await startRealDaemon(t, async () => ({ ok: true, version: "5.0.0" }));
+  const raised: RealmError[] = [];
+  daemon.handle.dispatcher.call = async () => {
+    const refusal = makeRealmError("OPENSHELL_START_FAILED", "PODMAN_MACHINE_DOWN");
+    raised.push(refusal);
+    throw refusal;
+  };
+  const client = connectDaemon(daemon.socketPath);
+  const error = await client.call({ exec: {} }).then(
+    () => undefined,
+    (cause: unknown) => cause,
+  );
+  client.close();
+  assert.ok(error instanceof RealmError, "the refusal arrives as a RealmError");
+  const daemonSide = raised[0];
+  assert.ok(daemonSide !== undefined, "the daemon raised the refusal");
+  assert.equal(error.code, daemonSide.code);
+  assert.equal(error.causeCode, "PODMAN_MACHINE_DOWN");
+  assert.equal(error.message, daemonSide.message);
+  assert.equal(error.message, ERROR_CATALOGUE.OPENSHELL_START_FAILED.reason);
+  assert.equal(error.retryable, daemonSide.retryable);
+});
+
+test("a daemon refusal without a cause rejects with no causeCode property (TOOL-05)", async (t) => {
+  const { daemon } = await startRealDaemon(t, async () => ({ ok: true, version: "5.0.0" }));
+  daemon.handle.dispatcher.call = () => Promise.reject(makeRealmError("TOOL_TIMEOUT"));
+  const client = connectDaemon(daemon.socketPath);
+  const error = await client.call({ status: {} }).then(
+    () => undefined,
+    (cause: unknown) => cause,
+  );
+  client.close();
+  assert.ok(error instanceof RealmError, "the refusal arrives as a RealmError");
+  assert.equal(error.code, "TOOL_TIMEOUT");
+  assert.equal(Object.hasOwn(error, "causeCode"), false);
+});
+
+test("a refused tool outcome rejects with its catalogue code, as the daemon answers it (P6-D12, TOOL-01)", async (t) => {
+  const { daemon } = await startRealDaemon(t, async () => ({ ok: true, version: "5.0.0" }));
+  daemon.handle.dispatcher.call = async () => ({
+    outcome: "refused",
+    tool: "read",
+    code: "POLICY_DENIED",
+    retryable: false,
+  });
+  const client = connectDaemon(daemon.socketPath);
+  const error = await client.call({ read: { path: "doc.txt", maxBytes: 16 } }).then(
+    () => undefined,
+    (cause: unknown) => cause,
+  );
+  client.close();
+  assert.ok(error instanceof RealmError, "the refusal arrives as a RealmError");
+  assert.equal(error.code, "POLICY_DENIED");
+  assert.equal(error.message, ERROR_CATALOGUE.POLICY_DENIED.reason);
+  assert.equal(Object.hasOwn(error, "causeCode"), false);
+});
+
+test("up refused by the podman probe rejects with the probe code over the real socket (CLI-01, TOOL-05)", async (t) => {
+  const { daemon, workspace } = await startRealDaemon(t, async () => ({
+    ok: false,
+    code: "PODMAN_MISSING",
+    reason: "podman is missing",
+  }));
+  const client = connectDaemon(daemon.socketPath);
+  const error = await client.up(workspace).then(
+    () => undefined,
+    (cause: unknown) => cause,
+  );
+  client.close();
+  assert.ok(error instanceof RealmError, "the refusal arrives as a RealmError");
+  assert.equal(error.code, "PODMAN_MISSING");
+  assert.equal(error.message, ERROR_CATALOGUE.PODMAN_MISSING.reason);
 });

@@ -631,3 +631,47 @@ test("ANDA-03: a monitor loop that fails on its own ends cleanly on close and re
   assert.equal(bridge.snapshot()?.code, "ANDA_UNREACHABLE");
   assert.deepEqual(unhandled, [], "the monitor's failure must not escape as an unhandled rejection");
 });
+
+// Real timers: a throwing clock must not make up a stamp (site 448). The transition stays unstamped and undelivered,
+// the monitor keeps probing and retries it, and once the clock works again it is stamped and delivered.
+test("ANDA-03: a throwing clock leaves a transition unstamped and undelivered, and a working clock later stamps and delivers it", { timeout: 5000 }, async (t) => {
+  const fake = new FakeAnda();
+  await fake.start();
+  t.after(() => fake.stop());
+  let clockBroken = false;
+  const bridge = new AndaBridge({
+    url: fake.url(),
+    random: () => 1,
+    backoff: { baseMs: 5, capMs: 20 },
+    now: () => {
+      if (clockBroken) {
+        throw new Error("clock failure");
+      }
+      return Date.now();
+    },
+  });
+  t.after(() => bridge.close());
+  const received: BridgeEvent[] = [];
+  bridge.subscribe((event) => {
+    received.push(event);
+  });
+
+  await bridge.connect(5000);
+  fake.respond({ kind: "reset" });
+  const down = await nextEvent(bridge, (event) => event.kind === "down");
+  assert.ok(Number.isFinite(Date.parse(down.at)), "the down event is stamped while the clock works");
+
+  clockBroken = true;
+  fake.respond({ kind: "json", body: HEALTHY_INFORMATION });
+  const probes = fake.requestCount();
+  // Two probes after the switch: the first brings up, which cannot be stamped, and the monitor retries it before the second.
+  await fake.waitUntil(() => fake.requestCount() >= probes + 2);
+  assert.deepEqual(received.map((event) => event.kind), ["down"], "no listener receives an up that has no stamp");
+  assert.equal(bridge.snapshot()?.kind, "down", "the snapshot keeps the last stamped event");
+
+  clockBroken = false;
+  const recoveredAt = Date.now();
+  const up = await nextEvent(bridge, (event) => event.kind === "up");
+  assert.ok(Date.parse(up.at) >= recoveredAt, "the up is stamped by the clock that works, at delivery");
+  assert.equal(bridge.snapshot()?.kind, "up");
+});

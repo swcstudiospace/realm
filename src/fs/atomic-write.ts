@@ -19,7 +19,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { makeRealmError, RealmError } from "../core/errors.js";
+import { type ErrorCode, makeRealmError, RealmError } from "../core/errors.js";
 import { lstatIfPresent, openVerified, verifyDescriptor } from "./canonicalize.js";
 
 export type AtomicWriteStage = "after-temp-write" | "after-fsync" | "before-rename";
@@ -39,8 +39,8 @@ export interface AtomicWriteOptions {
 export class WriteNotAtomicError extends RealmError {
   readonly replaced: boolean;
 
-  constructor(replaced: boolean) {
-    super("WRITE_NOT_ATOMIC");
+  constructor(replaced: boolean, causeCode?: ErrorCode) {
+    super("WRITE_NOT_ATOMIC", causeCode);
     this.replaced = replaced;
     this.message = replaced
       ? `${this.reason} The file was replaced, but durability is not confirmed.`
@@ -69,6 +69,17 @@ export function observeSha256(path: string): string | null {
     return sha256Hex(readFileSync(fd));
   } finally {
     closeSync(fd);
+  }
+}
+
+// Removes the temp file a failed write left behind. A failed removal is not thrown over the
+// original failure. It returns CLEANUP_FAILED, which the caller keeps as the cause.
+function removeTempFile(path: string): ErrorCode | undefined {
+  try {
+    rmSync(path, { force: true });
+    return undefined;
+  } catch {
+    return "CLEANUP_FAILED";
   }
 }
 
@@ -113,11 +124,14 @@ export function atomicWriteFile(
     }
     renameSync(tempPath, targetPath);
   } catch (error: unknown) {
-    rmSync(tempPath, { force: true });
+    const cleanup = removeTempFile(tempPath);
     if (error instanceof RealmError) {
-      throw error;
+      if (cleanup === undefined) {
+        throw error;
+      }
+      throw makeRealmError(error.code, cleanup);
     }
-    throw new WriteNotAtomicError(false);
+    throw new WriteNotAtomicError(false, cleanup);
   } finally {
     closeSync(fd);
   }

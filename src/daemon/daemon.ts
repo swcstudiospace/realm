@@ -18,7 +18,7 @@ import type { BridgePort, ExecutionService } from "../core/ports.js";
 import type { StateSnapshot } from "../core/state-machine.js";
 import { displayStatus, type DisplayStatus } from "../core/status.js";
 import { withTimeout } from "../core/timeout.js";
-import { defaultRunCommand, runChecks, type CheckResult, type DoctorOptions } from "../doctor/checks.js";
+import { defaultRunCommand, runChecks, type AgentOsReading, type CheckResult, type DoctorOptions } from "../doctor/checks.js";
 import { TEARDOWN_TIMEOUT_MS } from "../lifecycle/controller.js";
 import { createRealmHandle, type RealmHandle } from "../realm/compose.js";
 import { AgentOsSupervisor, type AgentOsDriver } from "../runtime/agentos.js";
@@ -63,6 +63,9 @@ import {
 // controller still enforces the policy startup budget around the whole path.
 const AGENTOS_CALL_TIMEOUT_MS = 5000;
 
+// How the start gate settles: open for serving, or failed with the start error.
+type GateOutcome = { readonly ok: true } | { readonly ok: false; readonly error: unknown };
+
 export interface BuildDaemonHandleOptions {
   readonly runtimeInput: unknown;
   readonly policyPath: string;
@@ -103,13 +106,16 @@ export interface StartDaemonOptions extends BuildDaemonHandleOptions {
   readonly socketDirDeps?: SocketDirDeps;
   // Bound for one socket operation and for draining in-flight requests on down.
   readonly timeoutMs?: number;
+  // Test seam: receives the listening server, so a test can fail it the way the runtime would.
+  readonly onServer?: (server: Server) => void;
 }
 
 export interface StartedDaemon {
   readonly socketPath: string;
   readonly handle: RealmHandle;
-  // Resolves when down completes teardown, removes the socket, and releases
-  // the server. The entrypoint exits the process then; this module never exits.
+  // Resolves when the daemon has stopped: down completes teardown, removes the socket, and releases the server.
+  // Rejects with the stop reason when the listening server failed. The entrypoint exits the process then; this
+  // module never exits.
   readonly done: Promise<void>;
 }
 
@@ -146,7 +152,15 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
   const libpod =
     options.libpod ??
     (options.libpodSocketPath !== undefined ? new LibpodClient(options.libpodSocketPath) : undefined);
-  const handle = buildDaemonHandle(libpod === undefined ? options : { ...options, libpod });
+  // One supervisor per daemon: the one the caller gives, or one built over the driver. The handle and the
+  // doctor probe share it, so a single supervisor owns the driver process.
+  const agentos =
+    options.agentos ?? (options.agentosDriver !== undefined ? defaultSupervisor(options.agentosDriver) : undefined);
+  const handle = buildDaemonHandle({
+    ...options,
+    ...(libpod === undefined ? {} : { libpod }),
+    ...(agentos === undefined ? {} : { agentos }),
+  });
   const config = loadRuntimeConfig(options.runtimeInput);
   const stateDir = config.stateDir;
   const sweep =
@@ -164,10 +178,15 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
         env: options.env ?? {},
         timeoutMs: options.probeTimeoutMs ?? SOCKET_TIMEOUT_MS,
       }));
+  // The AgentOS reading the doctor reports (CLI-03; P6-D14): unbound when no driver is given, otherwise
+  // whether the driver's live session answers.
+  const agentosReading = async (): Promise<AgentOsReading> =>
+    agentos === undefined ? { bound: false } : { bound: true, alive: await agentos.check() };
   const runDoctor = (): Promise<readonly CheckResult[]> =>
     (options.runChecks ?? runChecks)({
       stateDir,
       policyPath: options.policyPath,
+      agentos: agentosReading,
       ...options.doctorOptions,
     });
 
@@ -178,45 +197,48 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
   if (await probeSocketAlive(socketPath, timeoutMs)) {
     throw makeRealmError("LOCK_CONFLICT");
   }
-  try {
-    rmSync(socketPath, { force: true });
-  } catch {
-    throw makeRealmError("SCHEMA_INVALID");
+  const stale = removeSocketFile(socketPath);
+  if (stale !== undefined) {
+    throw stale;
   }
 
   let inFlight = 0;
   let draining = false;
   let downRequested = false;
-  let finished = false;
   const completed = new Set<Socket>();
   let resolveDone!: () => void;
-  const done = new Promise<void>((resolve) => {
+  let rejectDone!: (cause: unknown) => void;
+  const done = new Promise<void>((resolve, reject) => {
     resolveDone = resolve;
+    rejectDone = reject;
   });
+  // The gate settles with a result and never rejects: a failed start reaches each connection waiting on it
+  // as a typed refusal, so no connection needs a rejection handler.
   let openGate!: () => void;
   let failGate!: (cause: unknown) => void;
-  const gate = new Promise<void>((resolve, reject) => {
-    openGate = resolve;
-    failGate = reject;
+  const gate = new Promise<GateOutcome>((resolve) => {
+    openGate = () => {
+      resolve({ ok: true });
+    };
+    failGate = (error: unknown) => {
+      resolve({ ok: false, error });
+    };
   });
-  // A failed start rejects the gate before any connection awaits it; mark it handled so
-  // only the connections that await it see the rejection.
-  void gate.catch(() => undefined);
 
   const endSocket = (socket: Socket, reply: ControlReply): void => {
     if (completed.has(socket)) {
       return;
     }
     completed.add(socket);
+    // A reply that cannot be encoded is replaced by its refusal under the same id, so the peer always gets a
+    // catalogue answer it can match to its request.
+    let line: string;
     try {
-      socket.end(encodeReply(reply));
-    } catch {
-      try {
-        socket.destroy();
-      } catch {
-        // Best effort on the way out; the peer already went away.
-      }
+      line = encodeReply(reply);
+    } catch (error: unknown) {
+      line = encodeReply(refusalReply(reply.id, error));
     }
+    socket.end(line);
   };
 
   const dropSocket = (socket: Socket): void => {
@@ -224,29 +246,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
       return;
     }
     completed.add(socket);
-    try {
-      socket.destroy();
-    } catch {
-      // Best effort on the way out; the peer already went away.
-    }
-  };
-
-  const finalize = (): void => {
-    if (finished) {
-      return;
-    }
-    finished = true;
-    try {
-      server.close();
-    } catch {
-      // The server is already closed; removal and resolution still run.
-    }
-    try {
-      rmSync(socketPath, { force: true });
-    } catch {
-      // Best effort on the way out; the run directory guards still hold.
-    }
-    resolveDone();
+    socket.destroy();
   };
 
   const drainOthers = async (): Promise<void> => {
@@ -260,14 +260,10 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
     }
   };
 
-  const shutdown = async (id: ControlId, socket: Socket): Promise<void> => {
-    if (downRequested) {
-      // A second down is a no-op: it answers the current snapshot without
-      // running teardown again (close delegates to controller stop, which is
-      // safe to call twice).
-      endSocket(socket, { id, result: statusResult(handle.controller.snapshot(), handle.policyMode) });
-      return;
-    }
+  // The one stop path, for a down request and for a failed listening server. It closes the server, tears the
+  // handle down, and removes the socket file. A down passes its socket and is answered on it. A failed server
+  // passes its code as the reason, so done rejects with that code instead of resolving.
+  const stop = async (id: ControlId | null, socket: Socket | undefined, reason?: ErrorCode): Promise<void> => {
     downRequested = true;
     draining = true;
     await drainOthers();
@@ -278,10 +274,30 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
       const closed = await withTimeout(handle.close(), TEARDOWN_TIMEOUT_MS, "REALM_STOPPING");
       reply = { id, result: statusResult(closed, handle.policyMode) };
     } catch (error: unknown) {
-      reply = { id, error: { code: codeOf(error) } };
+      reply = refusalReply(id, error);
     }
-    endSocket(socket, reply);
-    finalize();
+    server.close();
+    // A socket file that cannot be removed is the reply's refusal, never a silent loss. The daemon stops either way.
+    const removal = removeSocketFile(socketPath);
+    if (socket !== undefined) {
+      endSocket(socket, removal === undefined ? reply : refusalReply(id, removal));
+    }
+    if (reason === undefined) {
+      resolveDone();
+    } else {
+      rejectDone(makeRealmError(reason, removal?.code));
+    }
+  };
+
+  const shutdown = async (id: ControlId, socket: Socket): Promise<void> => {
+    if (downRequested) {
+      // A second down is a no-op: it answers the current snapshot without
+      // running teardown again (close delegates to controller stop, which is
+      // safe to call twice).
+      endSocket(socket, { id, result: statusResult(handle.controller.snapshot(), handle.policyMode) });
+      return;
+    }
+    await stop(id, socket);
   };
 
   const dispatch = async (
@@ -309,7 +325,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
         try {
           probeResult = await probe();
         } catch (error: unknown) {
-          return { id, error: { code: codeOf(error) } };
+          return refusalReply(id, error);
         }
         if (!probeResult.ok) {
           return { id, error: { code: probeResult.code } };
@@ -318,7 +334,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
           const snapshot = await handle.controller.create(workspaceRoot);
           return { id, result: statusResult(snapshot, handle.policyMode) };
         } catch (error: unknown) {
-          return { id, error: { code: codeOf(error) } };
+          return refusalReply(id, error);
         }
       }
       case "tool": {
@@ -336,7 +352,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
           }
           return { id, result: outcome };
         } catch (error: unknown) {
-          return { id, error: { code: codeOf(error) } };
+          return refusalReply(id, error);
         }
       }
       case "down": {
@@ -348,7 +364,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
           const results = await runDoctor();
           return { id, result: results };
         } catch (error: unknown) {
-          return { id, error: { code: codeOf(error) } };
+          return refusalReply(id, error);
         }
       }
     }
@@ -386,18 +402,17 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
       } else {
         endSocket(socket, reply);
       }
-    } catch {
-      dropSocket(socket);
+    } catch (error: unknown) {
+      endSocket(socket, refusalReply(null, error));
     } finally {
       inFlight -= 1;
     }
   };
 
   const track = async (socket: Socket): Promise<void> => {
-    try {
-      await gate;
-    } catch {
-      dropSocket(socket);
+    const outcome = await gate;
+    if (!outcome.ok) {
+      endSocket(socket, refusalReply(null, outcome.error));
       return;
     }
     await serveOne(socket);
@@ -407,25 +422,21 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
     socket.once("close", () => {
       completed.delete(socket);
     });
-    // track never rejects: gate failures drop the socket and serveOne answers
-    // or drops every path. The catch is belt-and-braces so a future edit can
-    // never surface an unhandled rejection here.
-    void track(socket).catch(() => undefined);
+    // track answers every path itself; this catch only turns an unexpected rejection into a refusal.
+    void track(socket).catch((error: unknown) => {
+      endSocket(socket, refusalReply(null, error));
+    });
   });
 
   const abortStart = (cause: unknown): never => {
     failGate(cause);
-    try {
-      server.close();
-    } catch {
-      // The server never listened; removal still runs.
+    server.close();
+    const removal = removeSocketFile(socketPath);
+    if (removal === undefined) {
+      throw cause;
     }
-    try {
-      rmSync(socketPath, { force: true });
-    } catch {
-      // Best effort on a failed start.
-    }
-    throw cause;
+    // The start failure stays the reason; the removal failure is kept as its cause code.
+    throw makeRealmError(codeOf(cause), removal.code);
   };
 
   try {
@@ -445,9 +456,15 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
     }
     throw makeRealmError("SCHEMA_INVALID");
   }
-  // Post-listen server errors (a stray connection failure) never throw out of
-  // the daemon; per-connection failures are answered or dropped in serveOne.
-  server.on("error", () => undefined);
+  // A failure of the listening server stops the daemon: it must not keep serving on a dead socket. Its code is
+  // the stop reason. A failure during a stop belongs to that stop. Per-connection failures never reach here.
+  server.on("error", (error: unknown) => {
+    if (downRequested) {
+      return;
+    }
+    void stop(null, undefined, codeOf(error));
+  });
+  options.onServer?.(server);
 
   try {
     chmodSocket(socketPath);
@@ -476,6 +493,25 @@ function statusResult(
 
 function codeOf(error: unknown): ErrorCode {
   return error instanceof RealmError ? error.code : "SCHEMA_INVALID";
+}
+
+// The refusal reply for a thrown error: its catalogue code, plus the cause code when the error has one.
+function refusalReply(id: ControlId | null, error: unknown): ControlReply {
+  if (error instanceof RealmError && error.causeCode !== undefined) {
+    return { id, error: { code: error.code, causeCode: error.causeCode } };
+  }
+  return { id, error: { code: codeOf(error) } };
+}
+
+// Removes the control socket file. A failure is returned as SCHEMA_INVALID, the refusal every other filesystem
+// failure in this module uses, so it is never dropped.
+function removeSocketFile(socketPath: string): RealmError | undefined {
+  try {
+    rmSync(socketPath, { force: true });
+    return undefined;
+  } catch {
+    return makeRealmError("SCHEMA_INVALID");
+  }
 }
 
 // A bridge that immediately reports the engine unreachable. Used only when the

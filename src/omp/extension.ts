@@ -11,7 +11,8 @@ import { RealmError } from "../core/errors.js";
 import { connectDaemon, type DaemonClient } from "../daemon/client.js";
 import { CONTROL_TIMEOUT_MS } from "../daemon/channel.js";
 import { ensureDaemon } from "../daemon/ensure.js";
-import { controlSocketPath, resolveStateDir } from "../session/paths.js";
+import { readHostRuntime } from "../runtime/host-paths.js";
+import { controlSocketPath } from "../session/paths.js";
 import { registerRealmPlugin, type OmpExtensionApi } from "./plugin.js";
 
 // Status probe for ensureDaemon: true when a daemon answers, false when none does. Any other
@@ -32,8 +33,8 @@ async function probeDaemon(socketPath: string): Promise<boolean> {
 }
 
 export default function realmExtension(pi: OmpExtensionApi): void {
-  // Read once, at the edge. A state directory that cannot be resolved throws here, unswallowed.
-  const stateDir = resolveStateDir(process.env);
+  // Read once, at the edge: the config's stateDir, the value the CLI and the daemon use. An invalid config throws here.
+  const stateDir = readHostRuntime(process.env).stateDir;
   const socketPath = controlSocketPath(stateDir);
   const daemonEntry = fileURLToPath(new URL("../daemon/main.js", import.meta.url));
 

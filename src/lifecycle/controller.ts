@@ -19,7 +19,7 @@ import type { BridgeEvent, BridgePort, ExecutionService, ProbeResult } from "../
 import { INITIAL_REASON, RealmStateMachine, type StateSnapshot } from "../core/state-machine.js";
 import { withTimeout } from "../core/timeout.js";
 import { LockTable } from "../fs/locks.js";
-import { assertSameRoot, bindWorkspaceUnderPolicy, type PinnedRoot } from "../fs/root.js";
+import { type PinnedRoot, verifyPinnedAt } from "../fs/root.js";
 import { controlSocketPath } from "../session/paths.js";
 import type { SessionStore } from "../session/store.js";
 import { type GateOutcome, gateMutation } from "./mutation-gate.js";
@@ -28,6 +28,13 @@ import { type GateOutcome, gateMutation } from "./mutation-gate.js";
 // The raw error is dropped: it is never attached as a cause, and its message and stack are
 // never copied into a RealmError, because either may hold a secret.
 const PORT_FAILURE_CODE: ErrorCode = "OPENSHELL_START_FAILED";
+
+// The typed code of a port failure. A RealmError keeps its code. Any other failure is
+// PORT_FAILURE_CODE, the same rule create and enterError follow. The raw error is never kept,
+// because its message may hold a secret.
+function portFailureCode(error: unknown): ErrorCode {
+  return error instanceof RealmError ? error.code : PORT_FAILURE_CODE;
+}
 
 // Reason recorded while teardown is in progress.
 const STOPPING_REASON = "stopping";
@@ -50,12 +57,12 @@ interface PendingCreate {
 
 // A port start that is issued and has not settled. A teardown that begins while it is in flight
 // waits for it and stops the container it starts, because a stop that ran before the start took
-// effect leaves the container running (F1). `settled` resolves however the call ends, so waiting
-// on it never rejects.
+// effect leaves the container running (F1). `settled` resolves to the typed code of a failed
+// start, or null, and never rejects, so waiting on it never throws.
 interface PendingStart {
   readonly containerId: string;
   readonly started: Promise<void>;
-  readonly settled: Promise<void>;
+  readonly settled: Promise<ErrorCode | null>;
 }
 
 export interface LifecycleDeps {
@@ -71,9 +78,10 @@ export interface LifecycleDeps {
   // the session owns. The daemon passes its shared table in Phase 6; without one the
   // controller owns a table of its own.
   readonly locks?: LockTable;
-  // The root pinned when the workspace was bound (D-22). When set, create refuses a requested
-  // workspace whose directory identity differs from it, before any state change.
-  readonly pinnedRoot?: PinnedRoot;
+  // The root bound under policy when the workspace was chosen (D-22). Every create verifies the
+  // requested workspace against it, by device, inode, and real path, before any state change. The
+  // controller never binds a workspace from a string of its own (FS-02).
+  readonly pinnedRoot: PinnedRoot;
   // The teardown bound in milliseconds. The default is TEARDOWN_TIMEOUT_MS.
   readonly teardownTimeoutMs?: number;
 }
@@ -98,10 +106,14 @@ export class LifecycleController {
   private readonly pendingStarts = new Set<PendingStart>();
   // Background teardown work that outlived its caller: an orphaned create's destroy and the late
   // stop of a start (F1, F2). destroy waits for these before it reads the record. No entry
-  // rejects.
+  // rejects; a failed step is kept in orphanFailure instead.
   private readonly orphans = new Set<Promise<void>>();
-  // True while the record lags the in-memory state because its last write failed (F7).
-  private unpersistedState = false;
+  // The code of the last background teardown step that failed. Its container stays recorded, so
+  // the next destroy retries it. If that retry fails too, this code is the causeCode of the error
+  // that destroy throws, and a retry that succeeds clears it (G-04).
+  private orphanFailure: ErrorCode | null = null;
+  // The code of the write failure that left the record behind the in-memory state, or null (F7).
+  private unpersistedFailure: ErrorCode | null = null;
 
   constructor(deps: LifecycleDeps) {
     this.deps = deps;
@@ -115,7 +127,12 @@ export class LifecycleController {
 
   // True while the record lags the in-memory state, because its last write failed (F7).
   hasUnpersistedState(): boolean {
-    return this.unpersistedState;
+    return this.unpersistedFailure !== null;
+  }
+
+  // The code of the write failure behind hasUnpersistedState, or null when the record is current.
+  unpersistedCause(): ErrorCode | null {
+    return this.unpersistedFailure;
   }
 
   // The CORE-05 gate for a file-mutating call, decided from the current state (D-63). It
@@ -124,16 +141,18 @@ export class LifecycleController {
     return gateMutation(this.deps.policy, this.machine.snapshot().state);
   }
 
-  // Binds the workspace, writes the record with containerId null before the port
-  // create (RT-07), stores the returned containerId, then starts the container. A
+  // Verifies the requested workspace against the pinned root, writes the record with containerId
+  // null before the port create (RT-07), stores the returned containerId, then starts the
+  // container. A
   // RealmError from create or start moves the session to error and returns the snapshot
   // whose reason is the error code. Any other failure moves the session to error and throws
   // OPENSHELL_START_FAILED. A retry from error runs through connecting again.
-  // A stored containerId means no second create. While connecting, active, or degraded,
-  // create binds the workspace and checks it against the record first: the same workspace
-  // changes nothing, and a different one is refused with POLICY_DENIED.
-  // The startup budget (policy.startupBudgetMs) starts before bindWorkspace and covers the
-  // bind, the record loads and writes, the port create and start, and the bridge handshake.
+  // A stored containerId means no second create. Every create verifies the requested workspace
+  // against the pinned root first: the same directory changes nothing, and any other is refused
+  // with POLICY_DENIED. While connecting, active, or degraded, a record that names another workspace
+  // is refused the same way.
+  // The startup budget (policy.startupBudgetMs) starts before the pinned-root check and covers the
+  // check, the record loads and writes, the port create and start, and the bridge handshake.
   // Each synchronous step is followed by a deadline check, and each port call is raced against
   // the time left.
   // Expiry moves the session to error with STARTUP_BUDGET_EXCEEDED, keeps any containerId
@@ -159,13 +178,12 @@ export class LifecycleController {
     }
 
     // One deadline covers the whole startup path after the stopping check (D-28): the
-    // workspace bind, the record load and writes, and the port create and start.
+    // pinned-root check, the record load and writes, and the port create and start.
     const deadline = performance.now() + this.deps.policy.startupBudgetMs;
-    const root = this.bindWorkspace(workspaceRoot);
-    // The pinned root refuses a workspace whose directory was replaced, before any state change.
-    if (this.deps.pinnedRoot !== undefined) {
-      assertSameRoot(this.deps.pinnedRoot, root);
-    }
+    // The requested path is checked against the pinned directory before any state change (FS-02).
+    // The root used from here on is the pinned one, so the record and the port call never see a
+    // path string that was resolved again after the check.
+    const root = verifyPinnedAt(this.deps.pinnedRoot, workspaceRoot);
     const existing = this.deps.store.load(this.deps.sessionId);
     const priorContainerId = existing?.containerId ?? null;
     const live = state === "connecting" || state === "active" || state === "degraded";
@@ -184,6 +202,7 @@ export class LifecycleController {
 
     this.machine.transition("connecting", "creating container");
     let containerId: string | null = priorContainerId;
+    let issuedStart: PendingStart | null = null;
 
     // Every store write sits inside the guarded block, so a failed write moves the
     // session to error rather than leaving it stuck in connecting. Each await is followed by a
@@ -204,11 +223,16 @@ export class LifecycleController {
             "STARTUP_BUDGET_EXCEEDED",
           );
         } catch (error: unknown) {
-          // This create gives up, so a container the port produces later is destroyed. A stop
-          // that already took the pending create owns that container instead. The error goes to
-          // the outer catch, which is the one place that calls failCreate.
+          // This create gives up at its budget, so a container the port produces later is destroyed.
+          // A stop that already took the pending create owns that container instead. A port failure is
+          // not adopted: its call has settled, and the error goes to the outer catch, the one place
+          // that calls failCreate.
           const owned = this.takePendingCreate();
-          if (owned !== null) {
+          if (
+            owned !== null &&
+            error instanceof RealmError &&
+            error.code === "STARTUP_BUDGET_EXCEEDED"
+          ) {
             this.adoptOrphan(owned);
           }
           throw error;
@@ -224,6 +248,7 @@ export class LifecycleController {
         this.checkDeadline(deadline);
       }
       const start = this.issueStart(containerId);
+      issuedStart = start;
       await withTimeout(
         start.started,
         Math.max(0, deadline - performance.now()),
@@ -237,6 +262,16 @@ export class LifecycleController {
       const remaining = Math.max(0, deadline - performance.now());
       await withTimeout(this.connectBridge(remaining), remaining, "STARTUP_BUDGET_EXCEEDED");
     } catch (error: unknown) {
+      // A start the budget gave up on is still in flight. adoptStart keeps its outcome, unless a
+      // stop is in progress, which reclaims that start itself.
+      if (
+        issuedStart !== null &&
+        error instanceof RealmError &&
+        error.code === "STARTUP_BUDGET_EXCEEDED" &&
+        this.machine.snapshot().state !== "stopping"
+      ) {
+        this.adoptStart(issuedStart);
+      }
       return this.failCreate(error, realmId, root, containerId);
     }
     if (this.machine.snapshot().state !== "connecting") {
@@ -368,9 +403,7 @@ export class LifecycleController {
     const containerId = this.deps.store.load(this.deps.sessionId)?.containerId ?? null;
     this.releaseBridge();
     try {
-      if (containerId !== null) {
-        await this.teardownCall(this.deps.exec.destroy(containerId));
-      }
+      await this.destroyRecorded(containerId);
     } finally {
       this.locks.releaseOwner(this.deps.sessionId);
     }
@@ -382,10 +415,28 @@ export class LifecycleController {
     return this.machine.snapshot();
   }
 
-  // The requested root must canonicalize, lie inside a policy root, and every policy root must
-  // canonicalize (D-22). The rule lives in bindWorkspaceUnderPolicy.
-  private bindWorkspace(requested: string): PinnedRoot {
-    return bindWorkspaceUnderPolicy(this.deps.policy.workspaceRoots, requested);
+  // Destroys the container the record names. A failed background step left that container
+  // recorded, so this call is its retry. A retry that succeeds clears the kept failure. A retry that
+  // fails throws its own code with the kept failure as causeCode. A kept failure with no recorded
+  // container has nothing left to retry, so it is reported as the cause of REALM_STOPPING.
+  private async destroyRecorded(containerId: string | null): Promise<void> {
+    const failure = this.orphanFailure;
+    if (containerId === null) {
+      if (failure !== null) {
+        this.orphanFailure = null;
+        throw makeRealmError("REALM_STOPPING", failure);
+      }
+      return;
+    }
+    try {
+      await this.teardownCall(this.deps.exec.destroy(containerId));
+    } catch (error: unknown) {
+      if (failure !== null && error instanceof RealmError) {
+        throw makeRealmError(error.code, failure);
+      }
+      throw error;
+    }
+    this.orphanFailure = null;
   }
 
   // Throws STARTUP_BUDGET_EXCEEDED once the startup deadline has passed. Synchronous work
@@ -517,11 +568,11 @@ export class LifecycleController {
       return;
     }
     // The listener must not throw. The transition above stays in memory, and a failed write is
-    // recorded in unpersistedState. The next write persists the current state (F7).
+    // recorded with its code in unpersistedFailure. The next write persists the current state (F7).
     try {
       this.writeState();
-    } catch {
-      this.unpersistedState = true;
+    } catch (error: unknown) {
+      this.unpersistedFailure = error instanceof RealmError ? error.code : "WRITE_NOT_ATOMIC";
     }
   }
 
@@ -583,8 +634,8 @@ export class LifecycleController {
   private issueStart(containerId: string): PendingStart {
     const started = this.deps.exec.start(containerId);
     const settled = started.then(
-      () => undefined,
-      () => undefined,
+      () => null,
+      (error: unknown) => portFailureCode(error),
     );
     const pending: PendingStart = { containerId, started, settled };
     this.pendingStarts.add(pending);
@@ -613,7 +664,11 @@ export class LifecycleController {
       containerId = await withTimeout(
         pending.created.then(
           (created) => created.containerId,
-          () => null,
+          (error: unknown) => {
+            // The stop took this create over, so it reports nothing. Its failure is kept here.
+            this.orphanFailure = portFailureCode(error);
+            return null;
+          },
         ),
         this.teardownBound(),
         "REALM_STOPPING",
@@ -631,22 +686,35 @@ export class LifecycleController {
   // container the start left running (F1). A start that outlives the bound is handed to the
   // background, and the expiry is REALM_STOPPING.
   private async reclaimPendingStart(start: PendingStart): Promise<void> {
+    let failure: ErrorCode | null;
     try {
-      await withTimeout(start.settled, this.teardownBound(), "REALM_STOPPING");
+      failure = await withTimeout(start.settled, this.teardownBound(), "REALM_STOPPING");
     } catch (error: unknown) {
       this.adoptStart(start);
       throw error;
+    }
+    if (failure !== null) {
+      // The stop took this start over, so it reports nothing. Its failure is kept here.
+      this.orphanFailure = failure;
     }
     await this.stopStarted(start.containerId);
   }
 
   // Stops a container that a start left running. When the stop fails, the container is destroyed
   // instead, and the record forgets it, so no later start targets a container that is gone (F1).
+  // The stop failure is recovered by that destroy. A destroy failure propagates to the caller with
+  // the stop failure as its cause.
   private async stopStarted(containerId: string): Promise<void> {
     try {
       await this.teardownCall(this.deps.exec.stop(containerId));
-    } catch {
-      await this.teardownCall(this.deps.exec.destroy(containerId));
+    } catch (stopError: unknown) {
+      try {
+        await this.teardownCall(this.deps.exec.destroy(containerId));
+      } catch (destroyError: unknown) {
+        // The fallback destroy failed too, so both errors are kept: the destroy error is thrown, and
+        // the stop error is its cause.
+        throw makeRealmError(portFailureCode(destroyError), portFailureCode(stopError));
+      }
       this.forgetContainer(containerId);
     }
   }
@@ -661,28 +729,35 @@ export class LifecycleController {
 
   // Hands a start that outlived the teardown bound to the background. Once it settles, its
   // container is stopped, but only while the session is still stopping. A failure is not lost:
-  // the record keeps the containerId, and destroy waits for this work, then destroys that
-  // container.
+  // the record keeps the containerId, and the next destroy retries that container (see adopt).
   private adoptStart(start: PendingStart): void {
     this.pendingStarts.delete(start);
     this.adopt(
-      start.settled
-        .then(async () => {
-          if (this.machine.snapshot().state === "stopping") {
-            await this.stopStarted(start.containerId);
-          }
-        })
-        .catch(() => undefined),
+      start.settled.then(async (failure) => {
+        if (failure !== null) {
+          this.orphanFailure = failure;
+        }
+        if (this.machine.snapshot().state === "stopping") {
+          await this.stopStarted(start.containerId);
+        }
+      }),
     );
   }
 
-  // Tracks background teardown work that outlived its caller. The work never rejects, and it
-  // leaves the set when it settles.
+  // Tracks background teardown work that outlived its caller. The work leaves the set when it
+  // settles. A failure does not reject: it is kept in orphanFailure, so no rejection goes unhandled,
+  // and destroy reports it as the cause of its own error (see destroyRecorded).
   private adopt(background: Promise<void>): void {
-    this.orphans.add(background);
-    void background.then(() => {
-      this.orphans.delete(background);
-    });
+    const tracked: Promise<void> = background.then(
+      () => {
+        this.orphans.delete(tracked);
+      },
+      (error: unknown) => {
+        this.orphans.delete(tracked);
+        this.orphanFailure = error instanceof RealmError ? error.code : "REALM_STOPPING";
+      },
+    );
+    this.orphans.add(tracked);
   }
 
   // Waits, within the teardown bound, for every adopted create and start that is still unresolved
@@ -717,22 +792,23 @@ export class LifecycleController {
   }
 
   // Hands a container that an abandoned create produces to a background destroy (C2). It is
-  // destroyed once, when the port call resolves. A call that rejects produced no container. A
-  // create issued after this one owns the session's container through the shared idempotency
-  // key, so it is left alone. A failed background destroy is recorded by destroyUnrecorded;
-  // no caller is left to report it to.
+  // destroyed once, when the port call resolves. A call that rejects produced no container, so it
+  // leaves nothing to destroy, and its failure is kept as a typed code. The raw error is never kept,
+  // because it may hold a secret. A create issued after this one owns the session's
+  // container through the shared idempotency key, so it is left alone. A failed background destroy is
+  // recorded by destroyUnrecorded and kept by adopt.
   private adoptOrphan(pending: PendingCreate): void {
     this.adopt(
-      pending.created
-        .then(
-          async (created) => {
-            if (pending.attempt === this.createAttempts) {
-              await this.destroyUnrecorded(created.containerId);
-            }
-          },
-          () => undefined,
-        )
-        .catch(() => undefined),
+      pending.created.then(
+        async (created) => {
+          if (pending.attempt === this.createAttempts) {
+            await this.destroyUnrecorded(created.containerId);
+          }
+        },
+        (error: unknown) => {
+          throw makeRealmError(portFailureCode(error));
+        },
+      ),
     );
   }
 
@@ -772,7 +848,7 @@ export class LifecycleController {
       return;
     }
     this.deps.store.save({ ...record, state: this.machine.snapshot().state });
-    this.unpersistedState = false;
+    this.unpersistedFailure = null;
   }
 
   // Writes the record with the current state. The record is the only place the
@@ -786,6 +862,6 @@ export class LifecycleController {
       controlSocketPath: controlSocketPath(this.deps.store.stateDir),
       containerId,
     });
-    this.unpersistedState = false;
+    this.unpersistedFailure = null;
   }
 }

@@ -20,7 +20,7 @@ import { dirname, join } from "node:path";
 import { ANDA_INFORMATION_PATH } from "../anda/client.js";
 import { checkAppInformationShape } from "../anda/shape.js";
 import { SchemaInvalidError } from "../contract/validate.js";
-import { RealmError } from "../core/errors.js";
+import { ERROR_CATALOGUE, RealmError } from "../core/errors.js";
 import { loadPolicyFile } from "../core/policy.js";
 import { buildCreateArgv, OPENSHELL_BINARY } from "../runtime/openshell.js";
 import {
@@ -54,7 +54,7 @@ export interface DoctorOptions {
   readonly stateDir: string;
   // Writability probe for the session store. The default is access(W_OK), which writes no
   // file (D-44). Tests inject a probe to exercise the unwritable outcome.
-  readonly canWrite?: (path: string) => boolean;
+  readonly canWrite?: (path: string) => WriteReading;
   // Phase 3 seams (RT-02, ANDA-02). Each has a real default; tests inject fakes so that no
   // process runs and no socket opens. env defaults to the host environment, and each probe
   // passes only the names its own allowlist permits.
@@ -64,9 +64,9 @@ export interface DoctorOptions {
   readonly fetchInformation?: FetchInformation;
   // The Anda Engine base URL (RuntimeConfig.andaUrl). Absent means no engine is configured.
   readonly andaUrl?: string;
-  // AgentOS liveness seam (CLI-03; P6-D14). Absent means no live session is tracked, so the
-  // agentos item warns instead of claiming a pass. Tests inject a probe to drive pass and fail.
-  readonly agentosAlive?: AgentOsAliveProbe;
+  // AgentOS seam (CLI-03; P6-D14). Absent means no daemon answered, so the realm is not active and the
+  // agentos item reports that. Present, it says whether the daemon has a driver bound and whether a live session answers.
+  readonly agentos?: AgentOsProbe;
   // The bound for one probe step, in milliseconds. Defaults to 5000.
   readonly probeTimeoutMs?: number;
 }
@@ -80,10 +80,14 @@ export interface AndaReply {
 
 export type FetchInformation = (url: string, timeoutMs: number) => Promise<AndaReply>;
 
-// AgentOS liveness probe (CLI-03; P6-D14). Resolves true when a live session answers.
-export type AgentOsAliveProbe = () => Promise<boolean>;
+// What the daemon reports about AgentOS (CLI-03; P6-D14). bound false: no driver is bound, so realm up is
+// refused with AGENTOS_NOT_CONFIGURED. bound true: alive says whether the driver's live session answers.
+export type AgentOsReading = { readonly bound: false } | { readonly bound: true; readonly alive: boolean };
+export type AgentOsProbe = () => Promise<AgentOsReading>;
 
-type WriteProbe = (path: string) => boolean;
+// What a writability probe reports. A refusal carries the probe's error text as its reason.
+export type WriteReading = { readonly writable: true } | { readonly writable: false; readonly reason: string };
+type WriteProbe = (path: string) => WriteReading;
 
 interface CheckContext {
   readonly options: DoctorOptions;
@@ -137,13 +141,18 @@ export async function runChecks(options: DoctorOptions): Promise<readonly CheckR
   return Promise.all(REGISTERED.map((check) => check(context)));
 }
 
-// access(W_OK) answers without creating or touching any file.
-function defaultCanWrite(path: string): boolean {
+// The text a failed probe reports as its reason. Every probe here throws an Error, so its message is the text.
+function probeErrorText(error: unknown): string {
+  return error instanceof Error ? error.message : "the probe failed without error text";
+}
+
+// access(W_OK) answers without creating or touching any file. A refusal keeps the error text as its reason.
+function defaultCanWrite(path: string): WriteReading {
   try {
     accessSync(path, constants.W_OK);
-    return true;
-  } catch {
-    return false;
+    return { writable: true };
+  } catch (error: unknown) {
+    return { writable: false, reason: probeErrorText(error) };
   }
 }
 
@@ -257,18 +266,22 @@ function sessionStoreCheck(options: DoctorOptions, canWrite: WriteProbe): CheckR
         fix: "Move the file at the session store path aside so the realm can create the directory.",
       };
     }
-    if (canWrite(dir)) {
+    const reading = canWrite(dir);
+    if (reading.writable) {
       return { id, status: "pass", detail: "session store directory is writable by this process", fix: null };
     }
     return {
       id,
       status: "fail",
-      detail: "session store directory is not writable by this process",
+      detail: `session store directory is not writable by this process: ${reading.reason}`,
       fix: `Check the ownership of ${dir}: it must belong to the user that runs the realm and be writable by that user.`,
     };
   }
   const ancestor = nearestExistingAncestor(dir);
-  if (isDirectoryAt(ancestor) && canWrite(ancestor)) {
+  const reading: WriteReading = isDirectoryAt(ancestor)
+    ? canWrite(ancestor)
+    : { writable: false, reason: "the nearest existing ancestor is not a readable directory" };
+  if (reading.writable) {
     return {
       id,
       status: "warn",
@@ -279,7 +292,7 @@ function sessionStoreCheck(options: DoctorOptions, canWrite: WriteProbe): CheckR
   return {
     id,
     status: "fail",
-    detail: "session store cannot be created: no writable directory covers its path",
+    detail: `session store cannot be created: no writable directory covers its path: ${reading.reason}`,
     fix: `Check the ownership of ${ancestor}: it must be a directory that the user running the realm can write.`,
   };
 }
@@ -396,8 +409,14 @@ async function openShellCheck(context: CheckContext): Promise<CheckResult> {
       env,
       timeoutMs: probeTimeoutOf(options),
     });
-  } catch {
-    return { id, status: "fail", detail: "openshell cannot be started", fix: FIX_INSTALL_OPENSHELL };
+  } catch (error: unknown) {
+    const code = errnoOf(error);
+    return {
+      id,
+      status: "fail",
+      detail: code === undefined ? "openshell cannot be started" : `openshell cannot be started: ${code}`,
+      fix: FIX_INSTALL_OPENSHELL,
+    };
   }
   if (outcome.exitCode !== 0) {
     return {
@@ -494,6 +513,8 @@ const FIX_CONTROL_ABSENT = "Run realm up to start the daemon, then rerun doctor.
 const FIX_CONTROL_REFUSED =
   "Check that the realm daemon owns the control socket, then run realm up to replace a stale socket and rerun doctor.";
 const FIX_AGENTOS_UP = "Run realm up, then rerun doctor.";
+const FIX_AGENTOS_DRIVER =
+  "Bind an AgentOS driver in the realm daemon (docs/integration/agentos.md). Until one is bound, realm up is refused.";
 
 // control-channel (CLI-03; P6-D6). The run directory has mode 0700 and the control socket
 // accepts a connection. A missing run directory or socket warns, because a stopped daemon is
@@ -564,22 +585,25 @@ async function controlChannelCheck(context: CheckContext): Promise<CheckResult> 
   };
 }
 
-// agentos (CLI-03; P6-D14). With no live session there is nothing to probe, so the item warns
-// instead of claiming a pass. An injected agentosAlive probe drives pass and fail in tests.
+// agentos (CLI-03; P6-D14). The status follows the state the daemon reports, not a fixed answer. With no
+// probe, no daemon answers, so the realm is not active and the item warns with REALM_NOT_ACTIVE. A daemon
+// with no driver bound refuses up with AGENTOS_NOT_CONFIGURED, so the item fails with that code. A bound
+// driver passes when its session answers; a session that does not answer, or a probe that fails, is
+// AGENTOS_CRASH_LOOP.
 async function agentOsCheck(context: CheckContext): Promise<CheckResult> {
   const id: CheckId = "agentos";
-  const probe = context.options.agentosAlive;
+  const probe = context.options.agentos;
   if (probe === undefined) {
     return {
       id,
       status: "warn",
-      detail: "no live AgentOS session is tracked, so liveness was not probed",
+      detail: "REALM_NOT_ACTIVE: no daemon answers, so AgentOS liveness is not known",
       fix: FIX_AGENTOS_UP,
     };
   }
-  let alive: boolean;
+  let reading: AgentOsReading;
   try {
-    alive = await probe();
+    reading = await probe();
   } catch {
     return {
       id,
@@ -588,7 +612,15 @@ async function agentOsCheck(context: CheckContext): Promise<CheckResult> {
       fix: FIX_AGENTOS_UP,
     };
   }
-  if (alive) {
+  if (reading.bound === false) {
+    return {
+      id,
+      status: "fail",
+      detail: `AGENTOS_NOT_CONFIGURED: ${ERROR_CATALOGUE.AGENTOS_NOT_CONFIGURED.reason}`,
+      fix: FIX_AGENTOS_DRIVER,
+    };
+  }
+  if (reading.alive) {
     return { id, status: "pass", detail: "the AgentOS driver reports a live session", fix: null };
   }
   return {

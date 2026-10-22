@@ -3,7 +3,7 @@
 // receive it as a function argument (D-50) without importing runtime. Foreign containers are never listed,
 // so they are never removed.
 
-import { makeRealmError } from "../core/errors.js";
+import { makeRealmError, RealmError, type ErrorCode } from "../core/errors.js";
 import { withTimeout } from "../core/timeout.js";
 import type { LibpodClient } from "./libpod-client.js";
 import { MANAGED_LABEL_KEY, MANAGED_LABEL_VALUE } from "./openshell.js";
@@ -28,6 +28,8 @@ export async function removeAllRealmContainers(libpod: SweepClient): Promise<num
     SWEEP_CALL_TIMEOUT_MS,
     "PODMAN_MACHINE_DOWN",
   );
+  // The first removal failure keeps its code, so a refusal names what stopped the sweep.
+  let removalFailure: ErrorCode | undefined;
   for (const container of found) {
     try {
       await withTimeout(
@@ -35,8 +37,11 @@ export async function removeAllRealmContainers(libpod: SweepClient): Promise<num
         SWEEP_CALL_TIMEOUT_MS,
         "PODMAN_MACHINE_DOWN",
       );
-    } catch {
+    } catch (error: unknown) {
       // The second listing proves whether the container is still there.
+      if (removalFailure === undefined) {
+        removalFailure = codeOf(error);
+      }
     }
   }
   const survivors = await withTimeout(
@@ -45,7 +50,12 @@ export async function removeAllRealmContainers(libpod: SweepClient): Promise<num
     "PODMAN_MACHINE_DOWN",
   );
   if (survivors.length > 0) {
-    throw makeRealmError("REALM_STOPPING");
+    throw makeRealmError("REALM_STOPPING", removalFailure);
   }
   return found.length;
+}
+
+// A removal failure that is not a RealmError has no catalogue code of its own, so it is SCHEMA_INVALID.
+function codeOf(error: unknown): ErrorCode {
+  return error instanceof RealmError ? error.code : "SCHEMA_INVALID";
 }

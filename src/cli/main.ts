@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Realm CLI (CLI-01, CLI-02; P6-D1, P6-D5, P6-D7, P6-D9, P6-D12, P6-D13). One module
-// parses argv into up, down, status, doctor, and mcp; dials the control socket with every
+// parses argv into up, down, status, doctor, mcp, and acp; dials the control socket with every
 // request bounded by its CONTROL_TIMEOUT_MS; spawns the detached daemon with node:child_process
 // argv form (no shell) when no daemon answers; probes Podman first on up with a bounded
 // wait and never spawns on probe failure; and serves the Phase 5 MCP server over stdio for
@@ -12,6 +12,7 @@
 
 import { spawn } from "node:child_process";
 import { createConnection } from "node:net";
+import { runAcpOverStdio } from "../acp/stdio.js";
 import { ERROR_CATALOGUE, ERROR_CODES, RealmError, type ErrorCode } from "../core/errors.js";
 import {
   sendRequest,
@@ -24,19 +25,19 @@ import { connectDaemon, type DaemonClient } from "../daemon/client.js";
 import { ensureDaemon } from "../daemon/ensure.js";
 import { defaultRunCommand, runChecks, type DoctorOptions } from "../doctor/checks.js";
 import { createMcpServer } from "../mcp/server.js";
-import { isDirectEntry } from "../runtime/host-paths.js";
+import { isDirectEntry, readHostRuntime } from "../runtime/host-paths.js";
 import {
   probePodman,
   type ConnectSocket,
   type PodmanProbeResult,
   type RunCommand,
 } from "../runtime/podman-probe.js";
-import { controlSocketPath, resolveStateDir, type EnvironmentLike } from "../session/paths.js";
+import { controlSocketPath, type EnvironmentLike } from "../session/paths.js";
 
-export const CLI_COMMANDS = ["up", "down", "status", "doctor", "mcp"] as const;
+export const CLI_COMMANDS = ["up", "down", "status", "doctor", "mcp", "acp"] as const;
 export type CliCommand = (typeof CLI_COMMANDS)[number];
 
-const USAGE = "Usage: realm <up|down|status|doctor|mcp> (realm up|mcp [--workspace <absolute path>])";
+const USAGE = "Usage: realm <up|down|status|doctor|mcp|acp> (realm up|mcp|acp [--workspace <absolute path>])";
 const RETRY_INTERVAL_MS = 25;
 const MCP_POLL_INTERVAL_MS = 100;
 
@@ -59,7 +60,7 @@ function parseArgv(argv: readonly string[]): ParsedArgv | undefined {
     return { command, workspace: undefined };
   }
   const [flag, value] = rest;
-  const takesWorkspace = command === "up" || command === "mcp";
+  const takesWorkspace = command === "up" || command === "mcp" || command === "acp";
   if (takesWorkspace && rest.length === 2 && flag === "--workspace" && value !== undefined) {
     return { command, workspace: value };
   }
@@ -86,10 +87,12 @@ export type ConnectDaemon = (socketPath: string) => DaemonClient;
 
 type McpInput = Parameters<typeof createMcpServer>[1];
 type McpOutput = Parameters<typeof createMcpServer>[2];
+type AcpInput = Parameters<typeof runAcpOverStdio>[0]["stdin"];
+type AcpOutput = Parameters<typeof runAcpOverStdio>[0]["stdout"];
 
 export interface CliDeps {
   readonly env: EnvironmentLike;
-  // Working directory that `realm up` and `realm mcp` use as the workspace root when --workspace
+  // Working directory that `realm up`, `realm mcp`, and `realm acp` use as the workspace root when --workspace
   // is absent. Defaults to process.cwd(); no other command reads it.
   readonly cwd?: string;
   readonly timeoutMs?: number;
@@ -102,7 +105,12 @@ export interface CliDeps {
   readonly connectSocket?: ConnectSocket;
   readonly mcpInput?: McpInput;
   readonly mcpOutput?: McpOutput;
-  readonly mcpDiagnostics?: McpOutput;
+  readonly acpInput?: AcpInput;
+  readonly acpOutput?: AcpOutput;
+  // Stderr for the startup messages and refusals of mcp and acp (default process.stderr).
+  readonly diagnostics?: McpOutput;
+  // Reads the runtime config file that names the state directory (default readRuntimeConfigFile).
+  readonly readConfig?: (path: string) => unknown;
 }
 
 export interface CliResult {
@@ -122,7 +130,9 @@ interface ResolvedDeps {
   readonly connectSocket: ConnectSocket;
   readonly mcpInput: McpInput;
   readonly mcpOutput: McpOutput;
-  readonly mcpDiagnostics: McpOutput;
+  readonly acpInput: AcpInput;
+  readonly acpOutput: AcpOutput;
+  readonly diagnostics: McpOutput;
 }
 
 // Dials a Unix socket and closes it at once, mirroring the doctor default (checks.ts).
@@ -399,19 +409,24 @@ async function runDoctor(deps: ResolvedDeps, stateDir: string, socketPath: strin
   };
 }
 
+// Ensures the shared daemon answers on the control socket, spawning it detached when none does.
+async function ensureSharedDaemon(deps: ResolvedDeps, socketPath: string): Promise<void> {
+  await ensureDaemon({
+    socketPath,
+    probe: probeDaemon(deps),
+    spawnDaemon: spawnDetachedDaemon(deps),
+    timeoutMs: controlTimeoutOf(deps, "up"),
+    pollMs: MCP_POLL_INTERVAL_MS,
+  });
+}
+
 // realm mcp attaches to the shared daemon (P6-D9): ensure it runs, claim the workspace with up,
 // then serve the Phase 5 server over stdio with the daemon client as its dispatcher. Every tool
 // call crosses the daemon; no handle is built in-process. stdout carries only MCP messages, so a
 // refused up is written to stderr while the server keeps answering.
 async function runMcp(deps: ResolvedDeps, socketPath: string, workspaceRoot: string): Promise<CliResult> {
   try {
-    await ensureDaemon({
-      socketPath,
-      probe: probeDaemon(deps),
-      spawnDaemon: spawnDetachedDaemon(deps),
-      timeoutMs: controlTimeoutOf(deps, "up"),
-      pollMs: MCP_POLL_INTERVAL_MS,
-    });
+    await ensureSharedDaemon(deps, socketPath);
   } catch (error) {
     return { exitCode: 1, stdout: "", stderr: diagnosticFor(error) };
   }
@@ -419,12 +434,50 @@ async function runMcp(deps: ResolvedDeps, socketPath: string, workspaceRoot: str
   try {
     await client.up(workspaceRoot);
   } catch (error) {
-    deps.mcpDiagnostics.write(diagnosticFor(error));
+    deps.diagnostics.write(diagnosticFor(error));
   }
-  const server = createMcpServer(client, deps.mcpInput, deps.mcpOutput, deps.mcpDiagnostics);
-  await server.closed;
-  client.close();
+  const server = createMcpServer(client, deps.mcpInput, deps.mcpOutput, deps.diagnostics);
+  try {
+    await server.closed;
+  } catch (error) {
+    if (error instanceof RealmError) {
+      return { exitCode: 1, stdout: "", stderr: diagnosticFor(error) };
+    }
+    throw error;
+  } finally {
+    client.close();
+  }
   return { exitCode: 0, stdout: "", stderr: "" };
+}
+
+// realm acp attaches the same way realm mcp does (P6-D9), then serves ACP over stdio with the daemon
+// client as its dispatcher. stdout carries only ACP frames, so startup and refusals go to stderr. The
+// session must reach active or degraded before the server starts; any other state exits 1 with its code.
+async function runAcp(deps: ResolvedDeps, socketPath: string, workspaceRoot: string): Promise<CliResult> {
+  try {
+    await ensureSharedDaemon(deps, socketPath);
+  } catch (error) {
+    return { exitCode: 1, stdout: "", stderr: diagnosticFor(error) };
+  }
+  const client = deps.connect(socketPath);
+  try {
+    const status = await client.up(workspaceRoot);
+    const lifecycle: UpLifecycle = { state: status.snapshot.state, reason: status.snapshot.reason };
+    if (lifecycle.state !== "active" && lifecycle.state !== "degraded") {
+      const { code, reason } = upRefusal(lifecycle);
+      return { exitCode: 1, stdout: "", stderr: `${code}: ${reason}\n` };
+    }
+    await runAcpOverStdio({
+      dispatcher: { call: (tool: unknown) => client.call(tool) },
+      stdin: deps.acpInput,
+      stdout: deps.acpOutput,
+    });
+    return { exitCode: 0, stdout: "", stderr: "" };
+  } catch (error) {
+    return { exitCode: 1, stdout: "", stderr: diagnosticFor(error) };
+  } finally {
+    client.close();
+  }
 }
 
 export async function runCli(argv: readonly string[], deps: CliDeps): Promise<CliResult> {
@@ -435,12 +488,12 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
   const { command } = parsed;
   let stateDir: string;
   try {
-    stateDir = resolveStateDir(deps.env);
+    stateDir = readHostRuntime(deps.env, deps.readConfig).stateDir;
   } catch {
     return {
       exitCode: 2,
       stdout: "",
-      stderr: `realm ${command}: cannot resolve a state directory (set XDG_STATE_HOME or HOME to an absolute path)\n`,
+      stderr: `realm ${command}: cannot resolve a state directory (the realm config file under an absolute XDG_CONFIG_HOME or HOME must be present and valid)\n`,
     };
   }
   const resolved: ResolvedDeps = {
@@ -454,12 +507,15 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
     connectSocket: deps.connectSocket ?? defaultConnectSocket,
     mcpInput: deps.mcpInput ?? (process.stdin as unknown as McpInput),
     mcpOutput: deps.mcpOutput ?? (process.stdout as unknown as McpOutput),
-    mcpDiagnostics: deps.mcpDiagnostics ?? (process.stderr as unknown as McpOutput),
+    acpInput: deps.acpInput ?? process.stdin,
+    acpOutput: deps.acpOutput ?? process.stdout,
+    diagnostics: deps.diagnostics ?? (process.stderr as unknown as McpOutput),
   };
   const socketPath = controlSocketPath(stateDir);
   switch (command) {
     case "up":
-    case "mcp": {
+    case "mcp":
+    case "acp": {
       const workspaceRoot = parsed.workspace ?? deps.cwd ?? process.cwd();
       // Absolute POSIX path by string operations: node:path is outside the P6-D7 allowlist.
       if (!workspaceRoot.startsWith("/")) {
@@ -469,9 +525,13 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
           stderr: `realm ${command}: the workspace root must be an absolute path (use --workspace <path>)\n`,
         };
       }
-      return command === "up"
-        ? runUp(resolved, socketPath, workspaceRoot)
-        : runMcp(resolved, socketPath, workspaceRoot);
+      if (command === "up") {
+        return runUp(resolved, socketPath, workspaceRoot);
+      }
+      if (command === "mcp") {
+        return runMcp(resolved, socketPath, workspaceRoot);
+      }
+      return runAcp(resolved, socketPath, workspaceRoot);
     }
     case "down":
       return runDown(resolved, socketPath);

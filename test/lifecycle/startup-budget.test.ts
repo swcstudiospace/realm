@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import type { Policy } from "../../src/contract/validate.js";
+import { bindWorkspaceUnderPolicy } from "../../src/fs/root.js";
 import { LifecycleController } from "../../src/lifecycle/controller.js";
 import { SessionStore } from "../../src/session/store.js";
 import { FakeExecutionService } from "../support/fake-execution.js";
@@ -14,17 +15,10 @@ const SESSION = "session-1";
 const CLOCK_TIME = "2026-10-21T09:30:00.000Z";
 const BUDGET_MS = 50;
 
-function policyFor(
-  workspaceRoots: readonly string[],
-  startupBudgetMs: number,
-  onRootsRead: () => void = () => {},
-): Policy {
+function policyFor(workspaceRoots: readonly string[], startupBudgetMs: number): Policy {
   return {
     mode: "advisory",
-    get workspaceRoots() {
-      onRootsRead();
-      return workspaceRoots;
-    },
+    workspaceRoots,
     credentialAllow: [],
     egressAllow: [],
     shellEnabled: false,
@@ -64,7 +58,6 @@ function scriptedLoadStore(
 
 interface FixtureOptions {
   readonly startupBudgetMs?: number;
-  readonly onRootsRead?: () => void;
   readonly store?: (stateDir: string) => SessionStore;
 }
 
@@ -83,7 +76,8 @@ function fixture(t: TestContext, options: FixtureOptions = {}) {
   const bridge = new FakeBridge();
   const controller = new LifecycleController({
     sessionId: SESSION,
-    policy: policyFor([workspace], options.startupBudgetMs ?? 10000, options.onRootsRead),
+    policy: policyFor([workspace], options.startupBudgetMs ?? 10000),
+    pinnedRoot: bindWorkspaceUnderPolicy([workspace], workspace),
     store,
     exec,
     bridge,
@@ -97,27 +91,6 @@ test("a slow store load that uses up the startup budget gives STARTUP_BUDGET_EXC
   const { store, exec, controller, workspace } = fixture(t, {
     startupBudgetMs: BUDGET_MS,
     store: scriptedLoadStore(clock, 3000),
-  });
-
-  const snapshot = await controller.create(workspace);
-
-  assert.equal(snapshot.state, "error");
-  assert.equal(snapshot.reason, "STARTUP_BUDGET_EXCEEDED");
-  assert.equal(controller.snapshot().state, "error");
-  assert.equal(store.load(SESSION)?.state, "error");
-  assert.equal(exec.callCount("create"), 0);
-  assert.equal(exec.callCount("start"), 0);
-});
-
-test("a slow workspace bind that uses up the startup budget gives STARTUP_BUDGET_EXCEEDED and state error, with no container created (D-28)", async (t) => {
-  const clock = scriptedClock(t);
-  const { store, exec, controller, workspace } = fixture(t, {
-    startupBudgetMs: BUDGET_MS,
-    // bindWorkspace canonicalizes every policy root, so reading the roots is where the
-    // scripted slow bind runs.
-    onRootsRead: () => {
-      clock.advance(3000);
-    },
   });
 
   const snapshot = await controller.create(workspace);

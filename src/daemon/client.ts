@@ -102,7 +102,8 @@ export function connectDaemon(socketPath: string): DaemonClient {
   let nextId = 0;
   let closed = false;
 
-  // One request over the channel. The reply's error becomes a RealmError with the same code.
+  // One request over the channel. The reply's error becomes a RealmError with the daemon's code and causeCode.
+  // Its message is the catalogue reason for that code, the same text the daemon's own RealmError carries.
   // Channel failures already arrive as RealmError; any other throw can only come from encoding the
   // request body (a value JSON cannot serialize), so it maps to SCHEMA_INVALID.
   const request = async (method: ControlMethod, params?: unknown): Promise<unknown> => {
@@ -122,7 +123,7 @@ export function connectDaemon(socketPath: string): DaemonClient {
       throw makeRealmError("SCHEMA_INVALID");
     }
     if (reply.error !== undefined) {
-      throw makeRealmError(reply.error.code);
+      throw makeRealmError(reply.error.code, reply.error.causeCode);
     }
     return reply.result;
   };

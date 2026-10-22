@@ -1,6 +1,7 @@
-// Typed error catalogue (D-10, spec n6). Exactly these 25 codes; no others.
+// Typed error catalogue (D-10, spec n6). Exactly these 27 codes; no others.
 // The 20 spec n6 codes plus PODMAN_UNSUPPORTED_VERSION (plan 01-06, explicit override), AUDIT_WRITE_FAILED,
 // and three codes from the 2026-10-22 closure: AGENTOS_NOT_CONFIGURED, AGENTOS_STOP_FAILED, OPENSHELL_LABEL_AMBIGUOUS.
+// MCP_INPUT_FAILED and CLEANUP_FAILED are catalogued after the closure codes.
 // Only this file defines retryable values or reasons. Every code surfaces to
 // MCP and ACP hosts, so renaming one is a costly change.
 
@@ -30,6 +31,8 @@ export const ERROR_CODES = Object.freeze([
   "SHELL_NOT_ALLOWED",
   "SCHEMA_INVALID",
   "AUDIT_WRITE_FAILED",
+  "MCP_INPUT_FAILED",
+  "CLEANUP_FAILED",
 ] as const);
 
 export type ErrorCode = (typeof ERROR_CODES)[number];
@@ -156,6 +159,14 @@ export const ERROR_CATALOGUE: Readonly<Record<ErrorCode, CatalogueEntry>> =
     AUDIT_WRITE_FAILED: {
       reason: "audit log could not be written; the tool call did not run",
       retryable: true,
+    },
+    MCP_INPUT_FAILED: {
+      reason: "the MCP input stream failed",
+      retryable: false,
+    },
+    CLEANUP_FAILED: {
+      reason: "A temporary file or descriptor could not be released after a failed operation; the original failure is the error thrown.",
+      retryable: false,
     },
   });
 

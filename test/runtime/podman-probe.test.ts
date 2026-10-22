@@ -158,6 +158,15 @@ test("an API socket that does not answer in time gives PODMAN_MACHINE_DOWN (RT-0
   assert.match(failure.reason, /systemctl --user start podman\.socket/);
 });
 
+test("an API socket that does not answer names the timeout in the reason (RT-02)", async () => {
+  const { run } = versionCommand(VERSION_5);
+  const { connect } = socketDialer("hang");
+  const failure = failureOf(
+    await probePodman({ runCommand: run, connectSocket: connect, env: ENV, timeoutMs: 10 }),
+  );
+  assert.match(failure.reason, /did not answer a connection within 10 ms/);
+});
+
 test("the raw socket error text is never echoed into the reason (RT-02)", async () => {
   const { run } = versionCommand(VERSION_5);
   const { connect } = socketDialer(new Error("EACCES while reading PRIVATE-DETAIL"));

@@ -117,20 +117,17 @@ function requireAndaUrl(value: unknown): string {
   if (typeof value !== "string") {
     reject();
   }
-  const url = parseUrl(value);
-  if (url === undefined || (url.protocol !== "http:" && url.protocol !== "https:")) {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    reject();
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
     reject();
   }
   if (url.username !== "" || url.password !== "" || USERINFO_PATTERN.test(value)) {
     reject();
   }
   return value;
-}
-
-function parseUrl(text: string): URL | undefined {
-  try {
-    return new URL(text);
-  } catch {
-    return undefined;
-  }
 }

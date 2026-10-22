@@ -198,6 +198,30 @@ test("RT-06: encoding a reply with a non-catalogue code is refused, and decoding
   });
 });
 
+test("RT-06: an error reply carries a catalogue causeCode when it has one, and decoding refuses any other error field (P6-D2)", () => {
+  const withCause = encodeReply({
+    id: 1,
+    error: { code: "OPENSHELL_START_FAILED", causeCode: "PODMAN_MACHINE_DOWN" },
+  });
+  assert.deepEqual(decodeReply(withCause), {
+    id: 1,
+    error: { code: "OPENSHELL_START_FAILED", causeCode: "PODMAN_MACHINE_DOWN" },
+  });
+  const withoutCause = encodeReply({ id: 2, error: { code: "TOOL_TIMEOUT" } });
+  const decoded = decodeReply(withoutCause);
+  assert.deepEqual(decoded, { id: 2, error: { code: "TOOL_TIMEOUT" } });
+  assert.equal(Object.hasOwn(decoded.error ?? {}, "causeCode"), false);
+  assertRefusesSchemaInvalid(() => {
+    encodeReply({ id: 3, error: { code: "TOOL_TIMEOUT", causeCode: "BOGUS" as unknown as ErrorCode } });
+  });
+  assertRefusesSchemaInvalid(() => {
+    decodeReply('{"id":4,"error":{"code":"TOOL_TIMEOUT","causeCode":"BOGUS"}}\n');
+  });
+  assertRefusesSchemaInvalid(() => {
+    decodeReply('{"id":5,"error":{"code":"TOOL_TIMEOUT","message":"raw text"}}\n');
+  });
+});
+
 test("RT-06: a malformed line is rejected with fixed text and never throws a raw error across the boundary (P6-D2)", () => {
   const fixed = ERROR_CATALOGUE["SCHEMA_INVALID"].reason;
   for (const line of [`not json {{{ ${SECRET}`, `["an", "array"]`, `{"method":"status"}`, ""]) {

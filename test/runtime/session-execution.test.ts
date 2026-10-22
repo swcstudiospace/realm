@@ -174,6 +174,27 @@ test("RT-01, RT-03: an inspect that cannot be read fails closed, removes the con
   assert.equal(f.store.list().length, 0);
 });
 
+test("RT-01, RT-03: an inspect that cannot be read refuses the start and keeps the libpod code as causeCode", async (t) => {
+  const f = await fixture(t);
+  f.libpod.respondNext("inspectContainer", { status: 500 });
+  await assert.rejects(
+    f.exec.create({ idempotencyKey: SESSION, workspaceRoot: f.workspaceRoot }),
+    (error: unknown) =>
+      error instanceof RealmError && error.code === "OPENSHELL_START_FAILED" && error.causeCode === "SCHEMA_INVALID",
+  );
+});
+
+test("RT-01, RT-03: a container that fails hardening and survives its removal refuses with the removal's code as causeCode", async (t) => {
+  const f = await fixture(t);
+  scriptInspect(f, conformingInspect(f, { Privileged: true }));
+  f.libpod.respondNext("removeContainer", { status: 500 });
+  await assert.rejects(
+    f.exec.create({ idempotencyKey: SESSION, workspaceRoot: f.workspaceRoot }),
+    (error: unknown) =>
+      error instanceof HardeningFailedError && error.property === "privileged" && error.causeCode === "SCHEMA_INVALID",
+  );
+});
+
 test("RT-03, CORE-06: the policy document is written before the OpenShell create runs", async (t) => {
   const f = await fixture(t);
   await createSession(f);
@@ -257,6 +278,14 @@ test("RT-01, RT-04: probe is healthy only when the container runs and AgentOS re
   assert.equal(await f.exec.probe("missing-container"), "unhealthy");
 });
 
+test("RT-01, RT-04: a probe whose inspect cannot be read rejects with the libpod code instead of reporting unhealthy", async (t) => {
+  const f = await fixture(t);
+  const { containerId } = await createSession(f);
+  await f.exec.start(containerId);
+  f.libpod.respondNext("inspectContainer", { status: 500 });
+  await assertCode(f.exec.probe(containerId), "SCHEMA_INVALID");
+});
+
 test("RT-01, RT-03: a reused container whose inspect does not conform is verified on the reuse path, removed, and refused", async (t) => {
   const f = await fixture(t);
   await createSession(f);
@@ -319,6 +348,17 @@ test("RT-03, RT-01: a stop whose AgentOS stop throws still stops the container, 
   f.supervisor.stop = () => Promise.reject(new Error("scripted supervisor socket gone"));
   await assertCode(f.exec.stop(containerId), "AGENTOS_STOP_FAILED");
   assert.equal(f.store.get(containerId)?.running, false, "the container is stopped although the AgentOS stop failed");
+});
+
+test("RT-03, RT-01: a failed AgentOS stop keeps the supervisor's catalogue code as the causeCode of AGENTOS_STOP_FAILED", async (t) => {
+  const f = await fixture(t);
+  const { containerId } = await createSession(f);
+  f.supervisor.stop = () => Promise.reject(new RealmError("AGENTOS_CRASH_LOOP"));
+  await assert.rejects(
+    f.exec.stop(containerId),
+    (error: unknown) =>
+      error instanceof RealmError && error.code === "AGENTOS_STOP_FAILED" && error.causeCode === "AGENTOS_CRASH_LOOP",
+  );
 });
 
 test("RT-03, RT-04, RT-01: destroy stops AgentOS while the container still exists, and removes the container even when that stop throws", async (t) => {
@@ -433,6 +473,18 @@ test("RT-03: the OpenShell runner rejects a binary that cannot start, and the re
   );
   assert.ok(error instanceof Error);
   assert.equal(error.message.includes(missing), false);
+});
+
+test("RT-03: when the OpenShell runner cannot signal the child's process group, it rejects as failed, not as a clean timeout", async (t) => {
+  t.mock.method(process, "kill", () => {
+    throw Object.assign(new Error("operation not permitted"), { code: "EPERM" });
+  });
+  const error = await nodeRunner()([process.execPath, "-e", "setTimeout(() => {}, 10000)"], { timeoutMs: 200 }).then(
+    () => null,
+    (failure: unknown) => failure,
+  );
+  assert.ok(error instanceof OpenShellRunnerError);
+  assert.equal(error.kind, "failed");
 });
 
 // The production runner with the minimal environment, for children that are plain node scripts.

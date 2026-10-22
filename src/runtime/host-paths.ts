@@ -6,6 +6,8 @@ import { isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { makeRealmError } from "../core/errors.js";
 import type { EnvironmentLike } from "../session/paths.js";
+import { loadRuntimeConfig } from "./config.js";
+import { readRuntimeConfigFile } from "./config-file.js";
 
 // $XDG_CONFIG_HOME/realm/config.json when XDG_CONFIG_HOME is an absolute path, otherwise
 // $HOME/.config/realm/config.json. A relative XDG value is ignored, as the XDG spec requires.
@@ -20,6 +22,24 @@ export function resolveConfigPath(env: EnvironmentLike): string {
     throw makeRealmError("SCHEMA_INVALID");
   }
   return join(home, ".config", "realm", "config.json");
+}
+
+// The host runtime as the daemon reads it: the config file at resolveConfigPath(env), validated by
+// loadRuntimeConfig. The state directory is that config's stateDir, so the CLI, the daemon, and the Omp
+// extension derive every state path from one value. readConfig defaults to the file reader; a missing,
+// unreadable, or invalid config is SCHEMA_INVALID.
+export interface HostRuntime {
+  readonly runtimeInput: unknown;
+  readonly stateDir: string;
+}
+
+export function readHostRuntime(
+  env: EnvironmentLike,
+  readConfig: (path: string) => unknown = readRuntimeConfigFile,
+): HostRuntime {
+  const runtimeInput = readConfig(resolveConfigPath(env));
+  const { stateDir } = loadRuntimeConfig(runtimeInput);
+  return { runtimeInput, stateDir };
 }
 
 // The rootless API socket lives under an absolute XDG_RUNTIME_DIR; otherwise there is no

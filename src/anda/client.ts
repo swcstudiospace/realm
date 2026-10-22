@@ -41,6 +41,7 @@ import { request as httpsRequest } from "node:https";
 import { computeBackoffDelayMs, type RandomSource } from "../core/backoff.js";
 import { type ErrorCode, makeRealmError } from "../core/errors.js";
 import type { BridgeEvent, BridgeKind, BridgePort } from "../core/ports.js";
+import { errnoOf } from "../fs/canonicalize.js";
 import { checkAppInformationShape } from "./shape.js";
 
 export const ANDA_INFORMATION_PATH = "/.well-known/information";
@@ -49,6 +50,8 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 2000;
 const DEFAULT_BACKOFF_BASE_MS = 500;
 const DEFAULT_BACKOFF_CAP_MS = 30000;
 const MAX_INFORMATION_BYTES = 64 * 1024;
+// The reason kept when a synchronous transport throw carries no errno code (F4).
+const NO_CODE_TRANSPORT_REASON = "transport threw without an errno code";
 
 // Resolves after ms, or as soon as the signal aborts. It never rejects, so a caller checks
 // the signal after each wait.
@@ -75,6 +78,14 @@ type AttemptOutcome = "ok" | "unreachable" | "mismatch";
 type Listener = (event: BridgeEvent) => void;
 // The request function behind one attempt. node:http and node:https both fit it.
 type Transport = (options: RequestOptions, onResponse: (res: IncomingMessage) => void) => ClientRequest;
+
+// A transition no listener has received yet. Its at is null while the clock has not stamped it (site 448).
+// A stamped event is a BridgeEvent, which fits this shape.
+interface Transition {
+  readonly kind: BridgeKind;
+  readonly code?: ErrorCode;
+  readonly at: string | null;
+}
 
 export function sleepUnlessAborted(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise<void>((resolve) => {
@@ -148,9 +159,14 @@ export class AndaBridge implements BridgePort {
   private lifecycle = new AbortController();
   private readonly listeners = new Set<Listener>();
   private last: BridgeEvent | null = null;
-  // The latest event that some listener has not received. The monitor delivers it again on its next
-  // tick until one delivery succeeds (F3). A newer event replaces it.
-  private undelivered: BridgeEvent | null = null;
+  // The latest transition that some listener has not received. The monitor delivers it again on its next
+  // tick until one delivery succeeds (F3). A newer transition replaces it. A transition the clock could not
+  // stamp keeps a null at until the clock works (site 448).
+  private undelivered: Transition | null = null;
+  // Counts every transition published. A listener failure is recorded only while no newer transition exists.
+  private transitions = 0;
+  // The errno code of the latest synchronous transport throw, or the fixed reason when it has none (F4).
+  private transportFailure: string | null = null;
   private phase: "idle" | "connecting" | "connected" = "idle";
   private mismatched = false;
   // The current handshake and monitor loop. Neither promise ever rejects, so close() can await both.
@@ -258,6 +274,12 @@ export class AndaBridge implements BridgePort {
     return this.last;
   }
 
+  // The errno code of the latest synchronous transport throw, or a fixed reason when that error has no code.
+  // The raw message is never kept, since it can carry request detail (F4). Null before any such throw.
+  lastTransportFailure(): string | null {
+    return this.transportFailure;
+  }
+
   subscribe(listener: Listener): () => void {
     this.listeners.add(listener);
     return () => {
@@ -290,7 +312,7 @@ export class AndaBridge implements BridgePort {
         return;
       }
       if (this.mismatched) {
-        this.redeliverUndelivered();
+        this.deliverUndelivered();
         if (this.undelivered === null) {
           return;
         }
@@ -300,7 +322,7 @@ export class AndaBridge implements BridgePort {
       if (signal.aborted) {
         return;
       }
-      this.redeliverUndelivered();
+      this.deliverUndelivered();
       if (outcome === "ok") {
         attempt = 0;
         if (!up) {
@@ -326,7 +348,7 @@ export class AndaBridge implements BridgePort {
   // One request, settled exactly once. The timer and the abort listener are both cleared in finish, so
   // a settled attempt leaves nothing behind. The timer is the smaller of the request timeout and the
   // budget passed in. The signal is the connection's own. A synchronous throw from the transport is an
-  // unreachable attempt, and its detail is dropped so that no request detail reaches an error (F4).
+  // unreachable attempt. Its errno code becomes the transport reason, and its message is dropped (F4).
   private attempt(signal: AbortSignal, timeoutMs: number): Promise<AttemptOutcome> {
     return new Promise<AttemptOutcome>((resolve) => {
       if (signal.aborted) {
@@ -380,36 +402,54 @@ export class AndaBridge implements BridgePort {
         }, timeoutMs);
         signal.addEventListener("abort", onStop, { once: true });
         req.end();
-      } catch {
+      } catch (error) {
         req?.destroy();
+        this.transportFailure = errnoOf(error) ?? NO_CODE_TRANSPORT_REASON;
         finish("unreachable");
       }
     });
   }
 
-  // Records the event, then calls every listener. The event is stored before any listener runs, so
-  // snapshot() reports it even while it is undelivered.
+  // Records a transition and delivers it. A newer transition replaces an undelivered one. The transition is
+  // stamped on delivery, so while the clock cannot stamp it nothing is delivered and the monitor retries it.
   private publish(kind: BridgeKind, code?: ErrorCode): void {
-    const at = new Date(this.now()).toISOString();
-    const event: BridgeEvent = code === undefined ? { kind, at } : { kind, code, at };
+    this.transitions += 1;
+    this.undelivered = code === undefined ? { kind, at: null } : { kind, code, at: null };
+    this.deliverUndelivered();
+  }
+
+  // Stamps the undelivered transition if the clock allows, records it as the latest event, then calls every
+  // listener. A transition that is already stamped keeps its instant, so a redelivery repeats the same event.
+  private deliverUndelivered(): void {
+    const pending = this.undelivered;
+    if (pending === null) {
+      return;
+    }
+    const at = pending.at ?? this.stamp();
+    if (at === null) {
+      return;
+    }
+    const event: BridgeEvent =
+      pending.code === undefined ? { kind: pending.kind, at } : { kind: pending.kind, code: pending.code, at };
     this.last = event;
     this.deliver(event);
   }
 
-  // Calls every listener with event. A listener that throws, or whose promise rejects, has not
-  // received the event, so the event stays undelivered until one delivery succeeds (F2, F3). Each
-  // call has its own try/catch, so one failing listener does not stop the others.
+  // Calls every listener with event. A listener that throws, or whose promise rejects, has not received the
+  // event, so the event stays undelivered until one delivery succeeds (F2, F3). Each call has its own
+  // try/catch, so one failing listener does not stop the others.
   private deliver(event: BridgeEvent): void {
     const owner = this.lifecycle;
+    const transition = this.transitions;
     let failed = false;
     for (const listener of [...this.listeners]) {
       try {
         const result: unknown = listener(event);
         if (isPromiseLike(result)) {
-          // Handling the rejection here keeps it from escaping as an unhandled rejection. It counts
-          // as a failed delivery only while this connection is current and the event is still the latest.
+          // Handling the rejection here keeps it from escaping as an unhandled rejection. It counts as a failed
+          // delivery only while this connection is current and no newer transition has been published.
           result.then(undefined, () => {
-            if (this.lifecycle === owner && this.last === event) {
+            if (this.lifecycle === owner && this.transitions === transition) {
               this.undelivered = event;
             }
           });
@@ -421,32 +461,32 @@ export class AndaBridge implements BridgePort {
     this.undelivered = failed ? event : null;
   }
 
-  // Delivers the undelivered event again on the monitor's tick, before that tick's result is published.
-  private redeliverUndelivered(): void {
-    const event = this.undelivered;
-    if (event !== null) {
-      this.deliver(event);
-    }
-  }
-
   // The monitor stopped without a close, so no further probe runs, and the bridge records that as down
   // with ANDA_UNREACHABLE. Only the connection that owns the monitor may record it, so a superseded or
   // closed connection never writes the snapshot of a newer one (F4). A mismatch is final and is never
   // overwritten. The failure is not published, because the listener that failed may be the cause. This
-  // runs on a catch path, so it does not throw.
+  // runs on a catch path, so it does not throw. If the clock cannot stamp the record, it stays undelivered
+  // and unstamped, the same as a failed delivery (site 448).
   private recordMonitorFailure(lifecycle: AbortController): void {
     if (this.lifecycle !== lifecycle || lifecycle.signal.aborted || this.mismatched) {
       return;
     }
-    this.last = { kind: "down", code: "ANDA_UNREACHABLE", at: this.timestamp() };
+    this.transitions += 1;
+    const at = this.stamp();
+    if (at === null) {
+      this.undelivered = { kind: "down", code: "ANDA_UNREACHABLE", at: null };
+      return;
+    }
+    this.last = { kind: "down", code: "ANDA_UNREACHABLE", at };
   }
 
-  // The injected clock may be the component that failed, so the record falls back to the system clock (F4).
-  private timestamp(): string {
+  // The current instant as ISO 8601 text, or null when the injected clock throws. The clock may be the component
+  // that failed, so no other clock is substituted. The transition then stays unstamped until the clock works (site 448).
+  private stamp(): string | null {
     try {
       return new Date(this.now()).toISOString();
     } catch {
-      return new Date().toISOString();
+      return null;
     }
   }
 }
