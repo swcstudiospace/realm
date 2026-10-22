@@ -14,8 +14,8 @@ import {
 // ToolDispatcher over a real workspace and the real audit log with a fake
 // OpenShell runner, so no process is started. The never-settling runner is
 // covered through the runner's timed-out rejection, which is the signal the
-// kill produces; the 30-second TOOL_CALL_TIMEOUT_MS bound itself is asserted
-// as the deadline handed to the runner, because waiting it out is not a unit
+// kill produces; the runner's kill deadline is asserted to sit strictly inside the
+// 30-second TOOL_CALL_TIMEOUT_MS outer bound, because waiting that bound out is not a unit
 // behavior.
 
 test("TOOL-04: a timed-out runner yields TOOL_TIMEOUT and the runner received its kill deadline (D-91)", async (t) => {
@@ -24,7 +24,12 @@ test("TOOL-04: a timed-out runner yields TOOL_TIMEOUT and the runner received it
   const outcome = await h.dispatcher.call({ exec: { argv: [...WORKLOAD] } });
   assert.deepEqual(outcome, refusal("exec", "TOOL_TIMEOUT", true));
   assert.equal(h.runs.length, 1);
-  assert.equal(h.runs[0]?.options.timeoutMs, TOOL_CALL_TIMEOUT_MS);
+  const runnerDeadline = h.runs[0]?.options.timeoutMs;
+  assert.ok(typeof runnerDeadline === "number" && runnerDeadline > 0, "the runner kill deadline is positive");
+  assert.ok(
+    typeof runnerDeadline === "number" && runnerDeadline < TOOL_CALL_TIMEOUT_MS,
+    "the runner kill deadline is strictly inside the outer bound",
+  );
   assert.equal(h.runs[0]?.options.captureOutput, true);
   assert.deepEqual(h.phases(), ["admission", "result"]);
   assert.equal(h.auditLines()[1]?.["outcome"], "TOOL_TIMEOUT");

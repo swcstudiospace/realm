@@ -8,7 +8,6 @@ import { HARDENING_PROFILE } from "../../src/runtime/hardening.js";
 import { LibpodClient } from "../../src/runtime/libpod-client.js";
 import { buildExecArgv } from "../../src/runtime/openshell.js";
 import { SessionExecution } from "../../src/runtime/session-execution.js";
-import { TOOL_CALL_TIMEOUT_MS } from "../../src/tools/dispatch.js";
 import { FakeAgentOsDriver } from "../support/fake-agentos.js";
 import { FakeContainerStore, FakeLibpod } from "../support/fake-libpod.js";
 import { FakeOpenShell } from "../support/fake-openshell.js";
@@ -174,7 +173,6 @@ test("TOOL-03: every exec routes through the shared dispatcher and reaches the r
   assert.equal(outcome.outcome, "done");
   assert.equal(h.runs.length, 1, "the dispatcher ran the workload once, through the runner");
   assert.deepEqual(h.runs[0]?.argv, [...buildExecArgv(DISPATCH_SESSION, DISPATCH_WORKLOAD)]);
-  assert.equal(h.runs[0]?.options.timeoutMs, TOOL_CALL_TIMEOUT_MS);
   assert.equal(h.runs[0]?.options.captureOutput, true);
 });
 

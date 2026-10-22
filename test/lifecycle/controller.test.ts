@@ -1,12 +1,13 @@
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Policy, SessionRecord } from "../../src/contract/validate.js";
 import { ERROR_CATALOGUE, RealmError } from "../../src/core/errors.js";
 import type { RealmEvent } from "../../src/core/events.js";
 import { LockTable } from "../../src/fs/locks.js";
+import { bindWorkspaceUnderPolicy } from "../../src/fs/root.js";
 import { LifecycleController } from "../../src/lifecycle/controller.js";
 import { SessionStore } from "../../src/session/store.js";
 import { FakeExecutionService } from "../support/fake-execution.js";
@@ -31,6 +32,8 @@ function policyFor(workspaceRoots: readonly string[]): Policy {
 
 interface FixtureOptions {
   readonly policyRoots?: (base: string, workspace: string, second: string) => readonly string[];
+  readonly teardownTimeoutMs?: number;
+  readonly pinWorkspace?: boolean;
 }
 
 // Real directories under a temporary base, a session store on disk, and the fake
@@ -49,6 +52,9 @@ function fixture(t: TestContext, options: FixtureOptions = {}) {
   const roots = options.policyRoots
     ? options.policyRoots(base, workspace, second)
     : [workspace];
+  // With pinWorkspace the root is pinned at bind time, before the directory can be replaced.
+  const pinnedRoot =
+    options.pinWorkspace === true ? bindWorkspaceUnderPolicy(roots, workspace) : undefined;
   const store = new SessionStore(join(base, "state"));
   const exec = new FakeExecutionService();
   const bridge = new FakeBridge();
@@ -61,6 +67,8 @@ function fixture(t: TestContext, options: FixtureOptions = {}) {
     bridge,
     clock: () => new Date(CLOCK_TIME),
     locks,
+    ...(pinnedRoot === undefined ? {} : { pinnedRoot }),
+    ...(options.teardownTimeoutMs === undefined ? {} : { teardownTimeoutMs: options.teardownTimeoutMs }),
   });
   return { base, workspace, second, otherDir, store, exec, bridge, locks, controller };
 }
@@ -324,12 +332,12 @@ test("create with a scripted fake delay beyond startupBudgetMs gives STARTUP_BUD
 });
 
 test("destroy with a scripted stop delay beyond the teardown bound returns REALM_STOPPING, keeps the session stopping, and a repeated destroy resumes teardown (D-28, Q-1)", async (t) => {
-  const { store, exec, controller, workspace } = fixture(t);
+  const { store, exec, controller, workspace } = fixture(t, { teardownTimeoutMs: 50 });
   await controller.create(workspace);
-  // The teardown bound is TEARDOWN_TIMEOUT_MS (5000 ms) and has no injection point, so this
-  // test drives it with node's mocked setTimeout instead of waiting out real time. The stop is
-  // scripted at 3x the bound; tick(5000) fires the bound while the stop is still pending. The
-  // mock is restored when the test ends, which also drops the stop's pending fake timer.
+  // The teardown bound is injected as teardownTimeoutMs (50 ms), so this test waits for no production
+  // bound. It drives that bound with node's mocked setTimeout: the stop is scripted far beyond the
+  // bound, and tick(50) fires the bound while the stop is still pending. The mock is restored when
+  // the test ends, which also drops the stop's pending fake timer.
   t.after(() => {
     t.mock.timers.reset();
   });
@@ -342,7 +350,7 @@ test("destroy with a scripted stop delay beyond the teardown bound returns REALM
   await new Promise((resolve) => {
     setImmediate(resolve);
   });
-  t.mock.timers.tick(5000);
+  t.mock.timers.tick(50);
   await destroyed;
   assert.equal(controller.snapshot().state, "stopping");
   assert.equal(store.load(SESSION)?.state, "stopping");
@@ -355,6 +363,18 @@ test("destroy with a scripted stop delay beyond the teardown bound returns REALM
   assert.equal(exec.resources().length, 0);
   assert.equal(exec.callCount("stop"), 2);
   assert.equal(exec.callCount("destroy"), 1);
+});
+
+test("create is refused with POLICY_DENIED when the pinned workspace directory was replaced, and nothing changes (D-22, S-02)", async (t) => {
+  const { base, workspace, store, exec, controller } = fixture(t, { pinWorkspace: true });
+  const before = controller.snapshot();
+  renameSync(workspace, join(base, "workspace-old"));
+  mkdirSync(workspace);
+
+  await assertRejectsWith(controller.create(workspace), "POLICY_DENIED");
+  assert.deepEqual(controller.snapshot(), before);
+  assert.equal(store.load(SESSION), null);
+  assert.equal(exec.calls().length, 0);
 });
 
 test("create on an active session at another workspace is refused with POLICY_DENIED and changes nothing (S-02, CORE-03)", async (t) => {

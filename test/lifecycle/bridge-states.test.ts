@@ -45,6 +45,7 @@ function fixture(t: TestContext) {
     exec,
     bridge,
     clock: () => new Date(CLOCK_TIME),
+    teardownTimeoutMs: 5000,
   });
   return { workspace, store, exec, bridge, controller };
 }

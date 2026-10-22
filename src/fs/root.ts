@@ -9,9 +9,15 @@ import { makeRealmError } from "../core/errors.js";
 
 export class PinnedRoot {
   readonly realPath: string;
+  // The device and inode of the directory at bind time. assertSameRoot compares them to
+  // detect a directory replaced after it was pinned.
+  readonly dev: number;
+  readonly ino: number;
 
-  constructor(realPath: string) {
+  constructor(realPath: string, dev: number, ino: number) {
     this.realPath = realPath;
+    this.dev = dev;
+    this.ino = ino;
   }
 }
 
@@ -22,10 +28,35 @@ export function bindRoot(path: string): PinnedRoot {
     throw makeRealmError("POLICY_DENIED");
   }
   const realPath = realpathOrDeny(path);
-  if (!statOrDeny(realPath).isDirectory()) {
+  const stats = statOrDeny(realPath);
+  if (!stats.isDirectory()) {
     throw makeRealmError("POLICY_DENIED");
   }
-  return new PinnedRoot(realPath);
+  return new PinnedRoot(realPath, stats.dev, stats.ino);
+}
+
+// Binds a requested workspace under the policy (D-22). The requested path must be absolute
+// and canonicalize. Every policy root must canonicalize too, even when an earlier one already
+// contains the request. The canonical request must then lie inside at least one canonical
+// policy root. Anything else fails with POLICY_DENIED.
+export function bindWorkspaceUnderPolicy(
+  policyRoots: readonly string[],
+  requested: string,
+): PinnedRoot {
+  const root = bindRoot(requested);
+  const roots = policyRoots.map((entry) => bindRoot(entry));
+  if (roots.some((policyRoot) => isInsideRoot(policyRoot, root.realPath))) {
+    return root;
+  }
+  throw makeRealmError("POLICY_DENIED");
+}
+
+// Throws POLICY_DENIED when current is not the directory pinned earlier. A different device or
+// inode means the directory at the path was replaced after it was pinned.
+export function assertSameRoot(pinned: PinnedRoot, current: PinnedRoot): void {
+  if (pinned.dev !== current.dev || pinned.ino !== current.ino) {
+    throw makeRealmError("POLICY_DENIED");
+  }
 }
 
 // True when the absolute real path equals the root or lies below it. The check is

@@ -139,3 +139,23 @@ A dispatcher call writes two audit lines: an admission line before execution and
 | OQ-P4-10 | Egress changes after create. | Fixed at create; changing it means destroy and recreate. Live `openshell policy set` is not used in Phase 4. | Session lifecycle after create (RT-05, D-81) | Decided. |
 | OQ-P4-11 | Retry and status surface. | The dispatcher implements both (D-95); Phase 5 exposes `retry` through OMP-03. | Phase 5 OMP surface (TOOL-05, OMP-03) | Decided. Phase 5 exposes. |
 | OQ-P4-12 | An allowlisted hostname that resolves to a private address is reachable under OpenShell's documented rule for exact hostnames. | Realm does not add `allowed_ips`, so the allowlist must contain only hosts the user intends to reach. | Egress allowlist review (RT-05, D-77) | Residual risk. Recorded. |
+
+## Catalogue extension (closure, 2026-10-22)
+
+This section records an explicit contract extension to the error catalogue in `src/core/errors.ts`. The extension removes misleading code reuse. No existing code was renamed or removed. The catalogue now holds 25 codes. Three codes were added:
+
+| Code | Retryable | What it replaces |
+| --- | --- | --- |
+| `AGENTOS_NOT_CONFIGURED` | false | `SCHEMA_INVALID`, which was used for a missing AgentOS driver. |
+| `AGENTOS_STOP_FAILED` | true | `AGENTOS_CRASH_LOOP`, which was used for a stop failure. |
+| `OPENSHELL_LABEL_AMBIGUOUS` | false | A per-instance reason override in `src/runtime/openshell.ts`. A later unit removes that override. |
+
+Each new code now covers its own situation. The code it replaces keeps its own meaning and its catalogue entry is unchanged.
+
+### Optional cause code (`causeCode`)
+
+`RealmError` has an optional, readonly `causeCode` of type `ErrorCode`. It is present only when a cause is given. `makeRealmError(code, causeCode?)` takes it as an optional second argument, and one-argument calls behave as before.
+
+- The cause is itself a catalogue code, so no raw runtime text can enter an error.
+- The reason and the retryable flag always come from the primary `code`. `causeCode` never changes them.
+- Example: `makeRealmError("OPENSHELL_START_FAILED", "PODMAN_MACHINE_DOWN")` gives code `OPENSHELL_START_FAILED`, `causeCode` `PODMAN_MACHINE_DOWN`, and the `OPENSHELL_START_FAILED` reason.

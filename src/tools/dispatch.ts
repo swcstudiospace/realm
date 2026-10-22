@@ -56,6 +56,9 @@ export type DispatcherController = Pick<LifecycleController, "events" | "snapsho
 // The bound on one call's awaited work (D-91). It is a constant, not a policy key (D-101).
 export const TOOL_CALL_TIMEOUT_MS = 30_000;
 
+// The runner must kill its child before the dispatcher outer bound settles, so the outer bound is only a backstop.
+const EXEC_RUNNER_MARGIN_MS = 2_000;
+
 export interface ToolDispatcherDeps {
   readonly sessionId: string;
   readonly boundRoot: PinnedRoot;
@@ -175,7 +178,12 @@ export class ToolDispatcher {
     }
     const value = await this.#audited("exec", summarizeExec(params), () =>
       withTimeout(
-        runSandboxExec(this.deps.runOpenShell, this.deps.sessionId, workload, TOOL_CALL_TIMEOUT_MS),
+        runSandboxExec(
+          this.deps.runOpenShell,
+          this.deps.sessionId,
+          workload,
+          TOOL_CALL_TIMEOUT_MS - EXEC_RUNNER_MARGIN_MS,
+        ),
         TOOL_CALL_TIMEOUT_MS,
         "TOOL_TIMEOUT",
       ),

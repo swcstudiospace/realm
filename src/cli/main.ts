@@ -20,6 +20,7 @@ import {
 import { buildDaemonHandle } from "../daemon/daemon.js";
 import { runChecks, type DoctorOptions } from "../doctor/checks.js";
 import { createMcpServer, type McpDispatcher } from "../mcp/server.js";
+import { defaultPolicyPath, podmanSocketPath } from "../runtime/host-paths.js";
 import {
   probePodman,
   type CommandOptions,
@@ -240,23 +241,6 @@ function defaultBuildHandle(request: McpHandleRequest): CliDaemonHandle {
     ...(socketPath !== undefined ? { libpodSocketPath: socketPath } : {}),
     env: request.env,
   });
-}
-
-// Mirrors the probe's apiSocketPath rule (podman-probe.ts, OQ-P3-13): the rootless API
-// socket lives under an absolute XDG_RUNTIME_DIR. String operations only: node:path
-// is outside the P6-D7 allowlist (POSIX-only; Windows is out of scope).
-function podmanSocketPath(env: EnvironmentLike): string | undefined {
-  const runtimeDir = env["XDG_RUNTIME_DIR"];
-  if (runtimeDir === undefined || !runtimeDir.startsWith("/")) {
-    return undefined;
-  }
-  return `${runtimeDir}/podman/podman.sock`;
-}
-
-// Conventional policy location beside the state directory. String concatenation only:
-// node:path is outside the P6-D7 allowlist (POSIX-only; Windows is out of scope).
-function defaultPolicyPath(stateDir: string): string {
-  return `${stateDir}/policy.json`;
 }
 
 function failureFor(error: unknown): CliResult {

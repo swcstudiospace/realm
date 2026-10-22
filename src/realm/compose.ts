@@ -6,12 +6,11 @@
 // so no second table can split lock ownership.
 
 import type { Policy } from "../contract/validate.js";
-import { makeRealmError } from "../core/errors.js";
 import { loadPolicyFile } from "../core/policy.js";
 import type { BridgePort, ExecutionService } from "../core/ports.js";
 import type { StateSnapshot } from "../core/state-machine.js";
 import { LockTable } from "../fs/locks.js";
-import { bindRoot, isInsideRoot, type PinnedRoot } from "../fs/root.js";
+import { bindWorkspaceUnderPolicy } from "../fs/root.js";
 import { LifecycleController } from "../lifecycle/controller.js";
 import { loadRuntimeConfig } from "../runtime/config.js";
 import type { OpenShellRunner } from "../runtime/openshell.js";
@@ -56,7 +55,7 @@ export interface CreateRealmHandleOptions {
 export function createRealmHandle(options: CreateRealmHandleOptions): RealmHandle {
   const config = loadRuntimeConfig(options.runtimeInput);
   const policy = options.policy ?? loadPolicyFile(options.policyPath);
-  const boundRoot = bindPolicyWorkspace(policy, config.workspaceRoot);
+  const boundRoot = bindWorkspaceUnderPolicy(policy.workspaceRoots, config.workspaceRoot);
   const locks = new LockTable();
   const store = new SessionStore(config.stateDir);
   const controller = new LifecycleController({
@@ -67,6 +66,9 @@ export function createRealmHandle(options: CreateRealmHandleOptions): RealmHandl
     bridge: options.bridge,
     clock: options.clock,
     locks,
+    // Pinned at bind time. create refuses any requested workspace whose identity differs from
+    // the pinned root, with POLICY_DENIED, before any state change.
+    pinnedRoot: boundRoot,
   });
   const dispatcher = new ToolDispatcher({
     sessionId: options.sessionId,
@@ -82,16 +84,4 @@ export function createRealmHandle(options: CreateRealmHandleOptions): RealmHandl
     dispatcher,
     close: () => controller.stop(),
   };
-}
-
-// Same rule as LifecycleController.bindWorkspace (D-22): the workspace must lie inside a
-// policy root, and every policy root must canonicalize. The controller re-binds on create,
-// so the rule is repeated here rather than shared; both must change together.
-function bindPolicyWorkspace(policy: Policy, requested: string): PinnedRoot {
-  const root = bindRoot(requested);
-  const policyRoots = policy.workspaceRoots.map((entry) => bindRoot(entry));
-  if (policyRoots.some((policyRoot) => isInsideRoot(policyRoot, root.realPath))) {
-    return root;
-  }
-  throw makeRealmError("POLICY_DENIED");
 }

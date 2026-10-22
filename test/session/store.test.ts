@@ -123,7 +123,10 @@ test("resolveStateDir prefers an absolute XDG_STATE_HOME, falls back to HOME, an
   assert.equal(resolveStateDir({ XDG_STATE_HOME: "/xdg/state", HOME: "/home/user" }), "/xdg/state/realm");
   assert.equal(resolveStateDir({ HOME: "/home/user" }), "/home/user/.local/state/realm");
   assert.equal(resolveStateDir({ XDG_STATE_HOME: "relative/state", HOME: "/home/user" }), "/home/user/.local/state/realm");
-  assert.throws(() => resolveStateDir({}), /neither XDG_STATE_HOME nor an absolute HOME/);
+  assert.throws(
+    () => resolveStateDir({}),
+    (error: unknown) => error instanceof RealmError && error.code === "SCHEMA_INVALID",
+  );
 });
 
 test("RT-08: list() returns the sorted ids of record files and ignores names that do not match the record pattern (D-85)", (t) => {

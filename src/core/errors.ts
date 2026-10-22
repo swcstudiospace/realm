@@ -1,5 +1,6 @@
-// Typed error catalogue (D-10, spec n6). Exactly these 22 codes; no others.
-// The 20 spec n6 codes plus PODMAN_UNSUPPORTED_VERSION (plan 01-06, explicit override) and AUDIT_WRITE_FAILED.
+// Typed error catalogue (D-10, spec n6). Exactly these 25 codes; no others.
+// The 20 spec n6 codes plus PODMAN_UNSUPPORTED_VERSION (plan 01-06, explicit override), AUDIT_WRITE_FAILED,
+// and three codes from the 2026-10-22 closure: AGENTOS_NOT_CONFIGURED, AGENTOS_STOP_FAILED, OPENSHELL_LABEL_AMBIGUOUS.
 // Only this file defines retryable values or reasons. Every code surfaces to
 // MCP and ACP hosts, so renaming one is a costly change.
 
@@ -14,7 +15,10 @@ export const ERROR_CODES = Object.freeze([
   "PODMAN_MACHINE_DOWN",
   "PODMAN_UNSUPPORTED_VERSION",
   "OPENSHELL_START_FAILED",
+  "OPENSHELL_LABEL_AMBIGUOUS",
   "AGENTOS_CRASH_LOOP",
+  "AGENTOS_NOT_CONFIGURED",
+  "AGENTOS_STOP_FAILED",
   "ANDA_UNREACHABLE",
   "ANDA_VERSION_MISMATCH",
   "POLICY_DENIED",
@@ -90,8 +94,23 @@ export const ERROR_CATALOGUE: Readonly<Record<ErrorCode, CatalogueEntry>> =
       reason: "OpenShell failed to start inside the session container.",
       retryable: true,
     },
+    OPENSHELL_LABEL_AMBIGUOUS: {
+      reason:
+        "More than one container matches this session label, so the sandbox cannot be identified. No container was chosen.",
+      retryable: false,
+    },
     AGENTOS_CRASH_LOOP: {
       reason: "AgentOS is restarting repeatedly and has been held.",
+      retryable: true,
+    },
+    AGENTOS_NOT_CONFIGURED: {
+      reason:
+        "AgentOS is not configured, so no sandbox session can start. Bind an AgentOS driver before starting a realm.",
+      retryable: false,
+    },
+    AGENTOS_STOP_FAILED: {
+      reason:
+        "AgentOS did not stop cleanly. Its sandbox container is stopped regardless, and the stop can be retried.",
       retryable: true,
     },
     ANDA_UNREACHABLE: {
@@ -141,22 +160,31 @@ export const ERROR_CATALOGUE: Readonly<Record<ErrorCode, CatalogueEntry>> =
   });
 
 // A typed error. Its reason and retryable values come only from the catalogue,
-// so every instance carries a catalogue code and nothing else.
+// so every instance carries a catalogue code and, when one is given, a catalogue
+// cause code. Nothing else enters an error.
 export class RealmError extends Error {
   readonly code: ErrorCode;
   readonly reason: string;
   readonly retryable: boolean;
+  // Present only when a cause was given. `declare` emits no class field, so an
+  // absent cause leaves no own property behind (ES2023 class fields would define it as undefined).
+  declare readonly causeCode?: ErrorCode;
 
-  constructor(code: ErrorCode) {
+  constructor(code: ErrorCode, causeCode?: ErrorCode) {
     const entry = ERROR_CATALOGUE[code];
     super(entry.reason);
     this.name = "RealmError";
     this.code = code;
     this.reason = entry.reason;
     this.retryable = entry.retryable;
+    if (causeCode !== undefined) {
+      this.causeCode = causeCode;
+    }
   }
 }
 
-export function makeRealmError(code: ErrorCode): RealmError {
-  return new RealmError(code);
+// The optional cause is a catalogue code, so no raw runtime text can enter an error.
+// It never changes the reason, which always comes from the primary code.
+export function makeRealmError(code: ErrorCode, causeCode?: ErrorCode): RealmError {
+  return new RealmError(code, causeCode);
 }

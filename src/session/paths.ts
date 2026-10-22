@@ -18,7 +18,7 @@ export function resolveStateDir(env: EnvironmentLike): string {
   }
   const home = env["HOME"];
   if (home === undefined || !isAbsolute(home)) {
-    throw new Error("resolveStateDir: neither XDG_STATE_HOME nor an absolute HOME is set");
+    throw makeRealmError("SCHEMA_INVALID");
   }
   return join(home, ".local", "state", "realm");
 }

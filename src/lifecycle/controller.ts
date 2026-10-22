@@ -19,7 +19,7 @@ import type { BridgeEvent, BridgePort, ExecutionService, ProbeResult } from "../
 import { INITIAL_REASON, RealmStateMachine, type StateSnapshot } from "../core/state-machine.js";
 import { withTimeout } from "../core/timeout.js";
 import { LockTable } from "../fs/locks.js";
-import { bindRoot, isInsideRoot, type PinnedRoot } from "../fs/root.js";
+import { assertSameRoot, bindWorkspaceUnderPolicy, type PinnedRoot } from "../fs/root.js";
 import { controlSocketPath } from "../session/paths.js";
 import type { SessionStore } from "../session/store.js";
 import { type GateOutcome, gateMutation } from "./mutation-gate.js";
@@ -32,10 +32,13 @@ const PORT_FAILURE_CODE: ErrorCode = "OPENSHELL_START_FAILED";
 // Reason recorded while teardown is in progress.
 const STOPPING_REASON = "stopping";
 
-// The single teardown bound (D-28, Q-1). Expiry returns REALM_STOPPING and leaves the
-// session in stopping, so a repeated destroy resumes teardown. The catalogue has no
-// teardown-timeout code, and none is added.
-const TEARDOWN_TIMEOUT_MS = 5000;
+// The single teardown bound (D-28, Q-1). It is the sum of three bounds that teardown stages
+// honour in turn: the AgentOS stop backstop (15 s), the container stop grace (10 s), and one
+// libpod request bound (5 s). Teardown gives up only after an inner stage has had its own
+// bound, so it does not expire while that stage is still within it. Expiry returns
+// REALM_STOPPING and leaves the session in stopping, so a repeated destroy resumes teardown.
+// The catalogue has no teardown-timeout code, and none is added.
+export const TEARDOWN_TIMEOUT_MS = 30_000;
 
 // A port create that is issued and has not settled. Its owner is the create that issued it,
 // until a stop or destroy takes it (C1). `attempt` numbers the creates, so an abandoned one can
@@ -68,6 +71,11 @@ export interface LifecycleDeps {
   // the session owns. The daemon passes its shared table in Phase 6; without one the
   // controller owns a table of its own.
   readonly locks?: LockTable;
+  // The root pinned when the workspace was bound (D-22). When set, create refuses a requested
+  // workspace whose directory identity differs from it, before any state change.
+  readonly pinnedRoot?: PinnedRoot;
+  // The teardown bound in milliseconds. The default is TEARDOWN_TIMEOUT_MS.
+  readonly teardownTimeoutMs?: number;
 }
 
 export class LifecycleController {
@@ -154,6 +162,10 @@ export class LifecycleController {
     // workspace bind, the record load and writes, and the port create and start.
     const deadline = performance.now() + this.deps.policy.startupBudgetMs;
     const root = this.bindWorkspace(workspaceRoot);
+    // The pinned root refuses a workspace whose directory was replaced, before any state change.
+    if (this.deps.pinnedRoot !== undefined) {
+      assertSameRoot(this.deps.pinnedRoot, root);
+    }
     const existing = this.deps.store.load(this.deps.sessionId);
     const priorContainerId = existing?.containerId ?? null;
     const live = state === "connecting" || state === "active" || state === "degraded";
@@ -370,16 +382,10 @@ export class LifecycleController {
     return this.machine.snapshot();
   }
 
-  // The requested root must canonicalize, and it must lie inside a policy root. Every
-  // policy root must canonicalize too, or the bind fails with POLICY_DENIED (D-22), even
-  // when an earlier policy root already contains the workspace.
+  // The requested root must canonicalize, lie inside a policy root, and every policy root must
+  // canonicalize (D-22). The rule lives in bindWorkspaceUnderPolicy.
   private bindWorkspace(requested: string): PinnedRoot {
-    const root = bindRoot(requested);
-    const policyRoots = this.deps.policy.workspaceRoots.map((entry) => bindRoot(entry));
-    if (policyRoots.some((policyRoot) => isInsideRoot(policyRoot, root.realPath))) {
-      return root;
-    }
-    throw makeRealmError("POLICY_DENIED");
+    return bindWorkspaceUnderPolicy(this.deps.policy.workspaceRoots, requested);
   }
 
   // Throws STARTUP_BUDGET_EXCEEDED once the startup deadline has passed. Synchronous work
@@ -609,7 +615,7 @@ export class LifecycleController {
           (created) => created.containerId,
           () => null,
         ),
-        TEARDOWN_TIMEOUT_MS,
+        this.teardownBound(),
         "REALM_STOPPING",
       );
     } catch (error: unknown) {
@@ -626,7 +632,7 @@ export class LifecycleController {
   // background, and the expiry is REALM_STOPPING.
   private async reclaimPendingStart(start: PendingStart): Promise<void> {
     try {
-      await withTimeout(start.settled, TEARDOWN_TIMEOUT_MS, "REALM_STOPPING");
+      await withTimeout(start.settled, this.teardownBound(), "REALM_STOPPING");
     } catch (error: unknown) {
       this.adoptStart(start);
       throw error;
@@ -687,7 +693,7 @@ export class LifecycleController {
     }
     await withTimeout(
       Promise.all([...this.orphans]).then(() => undefined),
-      TEARDOWN_TIMEOUT_MS,
+      this.teardownBound(),
       "REALM_STOPPING",
     );
   }
@@ -739,12 +745,17 @@ export class LifecycleController {
     }
   }
 
+  // The teardown bound for this controller: the injected value, or TEARDOWN_TIMEOUT_MS.
+  private teardownBound(): number {
+    return this.deps.teardownTimeoutMs ?? TEARDOWN_TIMEOUT_MS;
+  }
+
   // Runs one teardown port call within the teardown bound (D-28). Expiry throws
   // REALM_STOPPING. A RealmError from the port keeps its code; any other failure is also
   // reported as REALM_STOPPING, so a raw port error never escapes teardown.
   private async teardownCall(call: Promise<void>): Promise<void> {
     try {
-      await withTimeout(call, TEARDOWN_TIMEOUT_MS, "REALM_STOPPING");
+      await withTimeout(call, this.teardownBound(), "REALM_STOPPING");
     } catch (error: unknown) {
       if (error instanceof RealmError) {
         throw error;
