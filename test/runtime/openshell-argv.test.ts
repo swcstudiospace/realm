@@ -206,14 +206,14 @@ test("RT-03: a hung runner is bounded by the caller deadline and gives OPENSHELL
   assert.ok(handed !== undefined && handed > 0 && handed <= 300, `the runner is told its bound (${String(handed)} ms)`);
 });
 
-test("CORE-06: two labelled containers for one session fail closed with OPENSHELL_START_FAILED and no run", async (t) => {
+test("CORE-06: two labelled containers for one session fail closed with OPENSHELL_LABEL_AMBIGUOUS and no run", async (t) => {
   const store = new FakeContainerStore();
   store.add({ id: "fake-a", labels: { [LABEL_KEY]: "true", [SESSION_KEY]: SESSION }, running: true });
   store.add({ id: "fake-b", labels: { [LABEL_KEY]: "true", [SESSION_KEY]: SESSION }, running: true });
   const client = await startLibpod(t, store);
   const openshell = new FakeOpenShell(store);
 
-  await assertCode(runOpenShellCreate({ containers: client, runner: openshell.runner }, REQUEST, 2000), "OPENSHELL_START_FAILED");
+  await assertCode(runOpenShellCreate({ containers: client, runner: openshell.runner }, REQUEST, 2000), "OPENSHELL_LABEL_AMBIGUOUS");
   assert.equal(openshell.callCount(), 0);
 });
 

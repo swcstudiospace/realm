@@ -165,8 +165,9 @@ export function buildExecArgv(sessionId: string, argv: readonly string[]): reado
 // container appears or the caller deadline expires. An ambiguous label match (more than one
 // container) is refused at once and never retried. A transient libpod failure (socket refused or
 // timed out) is polled through until the deadline; any other libpod failure ends the poll at once.
-// Deadline expiry, an ambiguous match, a non-transient libpod failure and every runner failure
-// give OPENSHELL_START_FAILED. No refusal carries container ids or libpod message text.
+// Deadline expiry, a non-transient libpod failure and every runner failure give
+// OPENSHELL_START_FAILED. An ambiguous match gives OPENSHELL_LABEL_AMBIGUOUS. A libpod code, when
+// one was involved, appears only as causeCode. No refusal carries container ids or libpod message text.
 export async function runOpenShellCreate(
   deps: OpenShellCreateDeps,
   request: SandboxCreateRequest,
@@ -199,25 +200,26 @@ export async function runOpenShellCreate(
     throw makeRealmError("OPENSHELL_START_FAILED");
   }
 
-  let lastLibpodClause: string | undefined;
+  let lastLibpodCode: ErrorCode | undefined;
   for (;;) {
     const left = remaining();
     if (left <= 0) {
-      throw deadlineRefusal(lastLibpodClause);
+      throw makeRealmError("OPENSHELL_START_FAILED", lastLibpodCode);
     }
     const lookup = await lookupWithinDeadline(deps.containers, request.sessionId, left);
     if (lookup.kind === "found" && lookup.containers.length > 0) {
       return singleId(lookup.containers);
     }
     if (lookup.kind === "deadline") {
-      throw deadlineRefusal(lastLibpodClause);
+      throw makeRealmError("OPENSHELL_START_FAILED", lastLibpodCode);
     }
     if (lookup.kind === "failed") {
-      const transient = lookup.error instanceof RealmError && lookup.error.code === TRANSIENT_LIBPOD_CODE;
-      if (!transient) {
-        throw new OpenShellStartRefusal(`${NON_TRANSIENT_REASON} ${libpodErrorClause(lookup.error)}`, true);
+      const failure = lookup.error;
+      if (!(failure instanceof RealmError) || failure.code !== TRANSIENT_LIBPOD_CODE) {
+        const causeCode = failure instanceof RealmError ? failure.code : undefined;
+        throw makeRealmError("OPENSHELL_START_FAILED", causeCode);
       }
-      lastLibpodClause = libpodErrorClause(lookup.error);
+      lastLibpodCode = failure.code;
     }
     const wait = Math.min(POLL_INTERVAL_MS, remaining());
     if (wait > 0) {
@@ -275,27 +277,11 @@ export function writePolicyDocument(
   return target;
 }
 
-// A create-path refusal. The code is OPENSHELL_START_FAILED. The catalogue gives that code one
-// fixed reason and a retryable value, so this subclass sets both for one refusal: an ambiguous
-// match is not retryable, and an early poll end names the last libpod error. The reason never
-// holds libpod message text or container ids.
-class OpenShellStartRefusal extends RealmError {
-  constructor(reason: string, retryable: boolean) {
-    super("OPENSHELL_START_FAILED");
-    Object.assign(this, { reason, retryable, message: reason });
-  }
-}
-
-const AMBIGUOUS_MATCH_REASON =
-  "OpenShell start refused: more than one container matches this session's label, so the sandbox cannot be identified. No container was chosen.";
-const DEADLINE_REASON = "OpenShell start did not show its container before the deadline.";
-const NON_TRANSIENT_REASON = "OpenShell start stopped: the libpod container lookup failed and retrying will not help.";
-
 // The one container id in a non-empty lookup result. More than one match for one session is refused
 // at once and never retried, because it names no single sandbox.
 function singleId(found: readonly { readonly id: string }[]): string {
   if (found.length > 1) {
-    throw new OpenShellStartRefusal(AMBIGUOUS_MATCH_REASON, false);
+    throw makeRealmError("OPENSHELL_LABEL_AMBIGUOUS");
   }
   if (found.length !== 1 || found[0] === undefined) {
     throw makeRealmError("OPENSHELL_START_FAILED");
@@ -303,23 +289,9 @@ function singleId(found: readonly { readonly id: string }[]): string {
   return found[0].id;
 }
 
-function deadlineRefusal(lastLibpodClause: string | undefined): OpenShellStartRefusal {
-  const reason = lastLibpodClause === undefined ? DEADLINE_REASON : `${DEADLINE_REASON} ${lastLibpodClause}`;
-  return new OpenShellStartRefusal(reason, true);
-}
-
 // The libpod failure the poll rides out: the socket refused or a request timed out (D-53). Every other
 // typed failure, such as a rejected status or a malformed body (SCHEMA_INVALID), ends the poll at once.
 const TRANSIENT_LIBPOD_CODE: ErrorCode = "PODMAN_MACHINE_DOWN";
-
-// Names the last libpod error by its machine-readable code and kind only. Untyped errors name no code.
-function libpodErrorClause(error: unknown): string {
-  if (!(error instanceof RealmError)) {
-    return "Last libpod error: untyped, kind non-transient.";
-  }
-  const kind = error.code === TRANSIENT_LIBPOD_CODE ? "transient" : "non-transient";
-  return `Last libpod error: ${error.code}, kind ${kind}.`;
-}
 
 type LookupOutcome =
   | { readonly kind: "found"; readonly containers: readonly { readonly id: string }[] }

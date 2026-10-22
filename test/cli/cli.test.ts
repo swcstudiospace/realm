@@ -17,7 +17,7 @@ import {
   type SendControlRequest,
   type SpawnDaemon,
 } from "../../src/cli/main.js";
-import type { ControlReply, ControlRequest } from "../../src/daemon/channel.js";
+import { CONTROL_TIMEOUT_MS, type ControlReply, type ControlRequest } from "../../src/daemon/channel.js";
 import type { McpDispatcher } from "../../src/mcp/server.js";
 import type { EnvironmentLike } from "../../src/session/paths.js";
 import type { ToolOutcome } from "../../src/tools/dispatch.js";
@@ -349,4 +349,54 @@ test("cli module stays inside its runtime allowlist with argv-form spawn and no 
   assert.ok(source.includes('detached: true'));
   assert.ok(source.includes('stdio: "ignore"'));
   assert.ok(!source.includes("shell: true"));
+});
+
+test("the default daemon spawn targets daemon/main.js beside the compiled CLI (CLI-01)", async () => {
+  const spawns: SpawnCall[] = [];
+  let calls = 0;
+  const send: SendControlRequest = async (_socketPath, request) => {
+    calls += 1;
+    if (calls === 1) {
+      throw new RealmError("REALM_NOT_ACTIVE");
+    }
+    const reply: ControlReply = { id: request.id, result: "active" };
+    return reply;
+  };
+  const result = await runCli(["up"], {
+    env: ENV,
+    cwd: "/srv/realm-ws",
+    spawn: makeSpawn(spawns),
+    send,
+    runCommand: okVersion,
+    connectSocket: acceptConnect,
+  });
+  assert.equal(result.exitCode, 0);
+  assert.equal(spawns.length, 1);
+  assert.deepEqual(spawns[0]?.args, [join(ROOT, "dist", "src", "daemon", "main.js")]);
+});
+
+test("each control request is bounded by its own CONTROL_TIMEOUT_MS entry (CLI-01)", async () => {
+  const seen: { method: string; timeoutMs: number }[] = [];
+  const send: SendControlRequest = async (_socketPath, request, timeoutMs) => {
+    seen.push({ method: request.method, timeoutMs });
+    const reply: ControlReply = { id: request.id, result: "ok" };
+    return reply;
+  };
+  const deps: CliDeps = {
+    env: ENV,
+    cwd: "/srv/realm-ws",
+    send,
+    runCommand: okVersion,
+    connectSocket: acceptConnect,
+  };
+  for (const argv of [["up"], ["down"], ["status"], ["doctor"]]) {
+    const result = await runCli(argv, deps);
+    assert.equal(result.exitCode, 0);
+  }
+  assert.deepEqual(seen, [
+    { method: "up", timeoutMs: CONTROL_TIMEOUT_MS.up },
+    { method: "down", timeoutMs: CONTROL_TIMEOUT_MS.down },
+    { method: "status", timeoutMs: CONTROL_TIMEOUT_MS.status },
+    { method: "doctor", timeoutMs: CONTROL_TIMEOUT_MS.doctor },
+  ]);
 });

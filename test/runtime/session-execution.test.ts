@@ -41,6 +41,8 @@ interface Fixture {
   readonly driver: FakeAgentOsDriver;
   readonly supervisor: AgentOsSupervisor;
   readonly exec: SessionExecution;
+  // The same libpod and runner with no AgentOS supervisor bound (the AGENTOS_NOT_CONFIGURED paths).
+  readonly unbound: SessionExecution;
   // One entry per OpenShell run: the policy document's text when the run starts, or undefined when no
   // document exists yet.
   readonly policyAtRun: (string | undefined)[];
@@ -74,10 +76,17 @@ async function fixture(t: TestContext, options: { readonly rootless?: boolean } 
     sleep: () => Promise.resolve(),
     now: () => 0,
   });
+  const libpodClient = new LibpodClient(socketPath);
   const exec = new SessionExecution({
-    libpod: new LibpodClient(socketPath),
+    libpod: libpodClient,
     runner,
     agentos: supervisor,
+    config: { image: IMAGE, workloadArgv: WORKLOAD, stateDir },
+    egressAllow: EGRESS,
+  });
+  const unbound = new SessionExecution({
+    libpod: libpodClient,
+    runner,
     config: { image: IMAGE, workloadArgv: WORKLOAD, stateDir },
     egressAllow: EGRESS,
   });
@@ -91,6 +100,7 @@ async function fixture(t: TestContext, options: { readonly rootless?: boolean } 
     driver,
     supervisor,
     exec,
+    unbound,
     policyAtRun,
   };
 }
@@ -303,11 +313,11 @@ test("RT-03: stop stops the container, destroy removes it, and a repeated stop o
   assert.equal(routeCount(f, "stopContainer"), stops, "a stop of a removed container sends no stop request");
 });
 
-test("RT-03, RT-01: a stop whose AgentOS stop throws still stops the container, then reports AGENTOS_CRASH_LOOP", async (t) => {
+test("RT-03, RT-01: a stop whose AgentOS stop throws still stops the container, then reports AGENTOS_STOP_FAILED", async (t) => {
   const f = await fixture(t);
   const { containerId } = await createSession(f);
   f.supervisor.stop = () => Promise.reject(new Error("scripted supervisor socket gone"));
-  await assertCode(f.exec.stop(containerId), "AGENTOS_CRASH_LOOP");
+  await assertCode(f.exec.stop(containerId), "AGENTOS_STOP_FAILED");
   assert.equal(f.store.get(containerId)?.running, false, "the container is stopped although the AgentOS stop failed");
 });
 
@@ -328,8 +338,29 @@ test("RT-03, RT-04, RT-01: destroy stops AgentOS while the container still exist
 
   const second = await createSession(f, "sess-02");
   f.supervisor.stop = () => Promise.reject(new Error("scripted supervisor socket gone"));
-  await assertCode(f.exec.destroy(second.containerId), "AGENTOS_CRASH_LOOP");
+  await assertCode(f.exec.destroy(second.containerId), "AGENTOS_STOP_FAILED");
   assert.equal(f.store.get(second.containerId), undefined, "the container is removed even though the AgentOS stop failed");
+});
+
+test("RT-04, D-47: without an AgentOS supervisor, create, start, and probe each refuse with AGENTOS_NOT_CONFIGURED before any libpod request, OpenShell run, or policy write", async (t) => {
+  const f = await fixture(t);
+  await assertCode(f.unbound.create({ idempotencyKey: SESSION, workspaceRoot: f.workspaceRoot }), "AGENTOS_NOT_CONFIGURED");
+  await assertCode(f.unbound.start("sandbox-container"), "AGENTOS_NOT_CONFIGURED");
+  await assertCode(f.unbound.probe("sandbox-container"), "AGENTOS_NOT_CONFIGURED");
+  assert.deepEqual(f.libpod.requests(), [], "no libpod request is sent");
+  assert.equal(f.openshell.callCount(), 0, "no OpenShell run starts");
+  assert.equal(existsSync(f.stateDir), false, "no policy document is written");
+  assert.equal(f.store.list().length, 0, "no container is created");
+});
+
+test("RT-03, D-47: without an AgentOS supervisor, stop stops the container and resolves, and destroy removes it, with no AgentOS call", async (t) => {
+  const f = await fixture(t);
+  const { containerId } = await createSession(f);
+  await f.unbound.stop(containerId);
+  assert.equal(f.store.get(containerId)?.running, false, "the container is stopped");
+  await f.unbound.destroy(containerId);
+  assert.equal(f.store.get(containerId), undefined, "the container is removed");
+  assert.deepEqual(f.driver.calls(), [], "no AgentOS driver call is made");
 });
 
 function routeCount(f: Fixture, route: string): number {

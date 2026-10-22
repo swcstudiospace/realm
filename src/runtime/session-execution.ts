@@ -1,5 +1,5 @@
 // ExecutionService composition (D-39, D-67) over the OpenShell adapter, the closed libpod client, the
-// hardening verifier, and the AgentOS supervisor. Every dependency arrives as a constructor argument:
+// hardening verifier, and the optional AgentOS supervisor. Every dependency arrives as a constructor argument:
 // this module reads no host environment, and the only process it starts is the OpenShell CLI, through
 // the runner it is given (RT-03, D-46).
 //
@@ -8,11 +8,16 @@
 // the container it resolved. A mismatch, or an inspect that cannot be read, removes the container
 // before anything is thrown. No unverified container is ever returned as running.
 //
+// Without an AgentOS supervisor, every runtime-touching path fails closed (AGENTOS_NOT_CONFIGURED).
+// create, start, and probe refuse before any libpod call, OpenShell run, or policy-file write, so no
+// container is created. stop and destroy still stop and remove the container: with no AgentOS step to run,
+// there is nothing to stop first.
+//
 // Sweep (D-68, RT-09, D-84): the zero-orphan sweep lives in sweep.ts and is re-exported below so existing
 // callers keep working. It removes every realm-labelled container and proves zero survivors.
 
 import { spawn, type ChildProcess, type StdioOptions } from "node:child_process";
-import { makeRealmError, RealmError, type ErrorCode } from "../core/errors.js";
+import { makeRealmError, RealmError } from "../core/errors.js";
 import { withTimeout } from "../core/timeout.js";
 import type { CreateRequest, ExecutionService, ProbeResult } from "../core/ports.js";
 import type { EgressRule } from "../contract/validate.js";
@@ -39,9 +44,6 @@ const CONTAINER_STOP_GRACE_MS = 10_000;
 // Backstop bound on the AgentOS stop in stop() and destroy(). The supervisor's own per-call timeout normally
 // settles the stop first; this timer only guarantees the container step is reached.
 const AGENTOS_STOP_DEADLINE_MS = 15_000;
-// The catalogue code a failed AgentOS stop is reported with. No catalogue code names a stop failure, so this is
-// the closest AgentOS-supervision code; it is typed and retryable like the rest of the catalogue.
-const AGENTOS_STOP_CODE: ErrorCode = "AGENTOS_CRASH_LOOP";
 // The sandbox limits come from the frozen profile, so they cannot drift from the verifier.
 const SANDBOX_CPUS = HARDENING_PROFILE.nanoCpus / 1_000_000_000;
 const SANDBOX_MEMORY = `${HARDENING_PROFILE.memoryBytes / 1024 ** 3}g`;
@@ -59,7 +61,8 @@ export type SessionContainers = Pick<
 export interface SessionExecutionOptions {
   readonly libpod: SessionContainers;
   readonly runner: OpenShellRunner;
-  readonly agentos: AgentOsSupervisor;
+  // Optional. With no supervisor bound, every runtime-touching operation fails closed (AGENTOS_NOT_CONFIGURED).
+  readonly agentos?: AgentOsSupervisor;
   // The workspace root is per session and comes from the create request.
   readonly config: Omit<RuntimeConfig, "workspaceRoot">;
   // The session's egress allowlist, fixed for the session (D-106, OQ-P4-10). It arrives untrusted and is
@@ -82,7 +85,7 @@ export class HardeningFailedError extends RealmError {
 export class SessionExecution implements ExecutionService {
   private readonly libpod: SessionContainers;
   private readonly runner: OpenShellRunner;
-  private readonly agentos: AgentOsSupervisor;
+  private readonly agentos: AgentOsSupervisor | undefined;
   private readonly config: Omit<RuntimeConfig, "workspaceRoot">;
   private readonly egressAllow: readonly EgressRule[];
 
@@ -99,6 +102,8 @@ export class SessionExecution implements ExecutionService {
   // The session id is the idempotency key, so a repeated create for one session reuses its
   // labelled container (CORE-06).
   async create(req: CreateRequest): Promise<{ readonly containerId: string }> {
+    // Refuses before any libpod, OpenShell, or policy-file call when no supervisor is bound (fail closed).
+    this.requireAgentOs();
     const runtime = loadRuntimeConfig({ ...this.config, workspaceRoot: req.workspaceRoot });
     const info = await this.libpod.info();
     const sessionId = req.idempotencyKey;
@@ -131,22 +136,24 @@ export class SessionExecution implements ExecutionService {
   // Checks the container is running. It starts nothing itself: the create ran with --detach. It starts
   // AgentOS through the supervisor, the only path that starts it (RT-04).
   async start(containerId: string): Promise<void> {
+    const agentos = this.requireAgentOs();
     const inspect = await this.libpod.inspectContainer(containerId);
     if (inspect === null || !isRunning(inspect)) {
       throw makeRealmError("OPENSHELL_START_FAILED");
     }
-    await this.agentos.start();
+    await agentos.start();
   }
 
   // Healthy only when the container runs and AgentOS reports alive. Any failure reports unhealthy:
   // the probe answers a health question, and the lifecycle decides what follows.
   async probe(containerId: string): Promise<ProbeResult> {
+    const agentos = this.requireAgentOs();
     try {
       const inspect = await this.libpod.inspectContainer(containerId);
       if (inspect === null || !isRunning(inspect)) {
         return "unhealthy";
       }
-      return (await this.agentos.check()) ? "healthy" : "unhealthy";
+      return (await agentos.check()) ? "healthy" : "unhealthy";
     } catch {
       return "unhealthy";
     }
@@ -154,37 +161,52 @@ export class SessionExecution implements ExecutionService {
 
   // Stops AgentOS, then the container. The container stop runs even when the AgentOS stop fails, so a
   // supervisor failure never leaves a running container behind. A container that is already gone
-  // counts as stopped. A failed AgentOS stop is reported as a typed error after the container step.
+  // counts as stopped. With no supervisor bound there is no AgentOS step. A failed AgentOS stop is reported
+  // as AGENTOS_STOP_FAILED after the container step.
   async stop(containerId: string): Promise<void> {
     const agentosStopped = await this.stopAgentOs();
     if ((await this.libpod.inspectContainer(containerId)) !== null) {
       await this.libpod.stopContainer(containerId, CONTAINER_STOP_GRACE_MS);
     }
     if (!agentosStopped) {
-      throw makeRealmError(AGENTOS_STOP_CODE);
+      throw makeRealmError("AGENTOS_STOP_FAILED");
     }
   }
 
   // Stops AgentOS, then force-removes the container, mirroring stop. A container that is already gone
   // counts as removed. The removal runs even when the AgentOS stop fails, and that failure is then reported
-  // as a typed error.
+  // as AGENTOS_STOP_FAILED.
   async destroy(containerId: string): Promise<void> {
     const agentosStopped = await this.stopAgentOs();
     await this.libpod.removeContainer(containerId, { force: true });
     if (!agentosStopped) {
-      throw makeRealmError(AGENTOS_STOP_CODE);
+      throw makeRealmError("AGENTOS_STOP_FAILED");
     }
   }
 
   // Runs the AgentOS stop bounded by AGENTOS_STOP_DEADLINE_MS. Returns false when the stop rejects, throws, or
-  // misses the deadline. The callers turn that into the typed AGENTOS_STOP_CODE error after their container step.
+  // misses the deadline. With no supervisor bound there is nothing to stop, so the step counts as stopped.
+  // The callers turn a false into the typed AGENTOS_STOP_FAILED error after their container step.
   private async stopAgentOs(): Promise<boolean> {
+    const agentos = this.agentos;
+    if (agentos === undefined) {
+      return true;
+    }
     try {
-      await withTimeout(this.agentos.stop(), AGENTOS_STOP_DEADLINE_MS, AGENTOS_STOP_CODE);
+      await withTimeout(agentos.stop(), AGENTOS_STOP_DEADLINE_MS, "AGENTOS_STOP_FAILED");
       return true;
     } catch {
       return false;
     }
+  }
+
+  // Returns the bound supervisor, or throws AGENTOS_NOT_CONFIGURED. Create, start, and probe call it
+  // before any libpod, OpenShell, or policy-file call, so no container is created without a supervisor.
+  private requireAgentOs(): AgentOsSupervisor {
+    if (this.agentos === undefined) {
+      throw makeRealmError("AGENTOS_NOT_CONFIGURED");
+    }
+    return this.agentos;
   }
 
   // Returns only when the container conforms. Otherwise the container is removed before anything is

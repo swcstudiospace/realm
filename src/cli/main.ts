@@ -1,6 +1,7 @@
+#!/usr/bin/env node
 // Realm CLI (CLI-01, CLI-02; P6-D1, P6-D5, P6-D7, P6-D9, P6-D12, P6-D13). One module
 // parses argv into up, down, status, doctor, and mcp; dials the control socket with every
-// operation bounded by SOCKET_TIMEOUT_MS; spawns the detached daemon with node:child_process
+// request bounded by its CONTROL_TIMEOUT_MS; spawns the detached daemon with node:child_process
 // argv form (no shell) when up finds no daemon; probes Podman first on up with a bounded
 // wait and never spawns on probe failure; and serves the Phase 5 MCP server over stdio for
 // mcp from the shared daemon handle. Exit codes: 0 success, 1 catalogue-coded failure,
@@ -8,23 +9,22 @@
 // is ever printed. Only runCli's caller supplies the environment (main hands over the host
 // environment once, at the entry edge), so every command path stays hermetic under test.
 
-import { execFile, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { createConnection } from "node:net";
 import { ERROR_CATALOGUE, RealmError, type ErrorCode } from "../core/errors.js";
 import {
   sendRequest,
+  CONTROL_TIMEOUT_MS,
   SOCKET_TIMEOUT_MS,
   type ControlReply,
   type ControlRequest,
 } from "../daemon/channel.js";
 import { buildDaemonHandle } from "../daemon/daemon.js";
-import { runChecks, type DoctorOptions } from "../doctor/checks.js";
+import { defaultRunCommand, runChecks, type DoctorOptions } from "../doctor/checks.js";
 import { createMcpServer, type McpDispatcher } from "../mcp/server.js";
-import { defaultPolicyPath, podmanSocketPath } from "../runtime/host-paths.js";
+import { defaultPolicyPath, isDirectEntry, podmanSocketPath } from "../runtime/host-paths.js";
 import {
   probePodman,
-  type CommandOptions,
-  type CommandOutcome,
   type ConnectSocket,
   type PodmanProbeResult,
   type RunCommand,
@@ -36,7 +36,6 @@ export type CliCommand = (typeof CLI_COMMANDS)[number];
 
 const USAGE = "Usage: realm <up|down|status|doctor|mcp> (realm up [--workspace <absolute path>])";
 const RETRY_INTERVAL_MS = 25;
-const COMPILED_SUFFIX = "/cli/main.js";
 
 function isCliCommand(value: string): value is CliCommand {
   return (CLI_COMMANDS as readonly string[]).includes(value);
@@ -129,7 +128,7 @@ export interface CliResult {
 
 interface ResolvedDeps {
   readonly env: EnvironmentLike;
-  readonly timeoutMs: number;
+  readonly timeoutMs: number | undefined;
   readonly daemonEntry: string | undefined;
   readonly now: () => number;
   readonly spawn: SpawnDaemon;
@@ -143,34 +142,6 @@ interface ResolvedDeps {
   readonly mcpInput: McpInput;
   readonly mcpOutput: McpOutput;
   readonly mcpDiagnostics: McpOutput;
-}
-
-// Runs file with argv and no shell, mirroring the doctor default (checks.ts): a process
-// that exits resolves with its status; one that cannot start, or is killed at the timeout,
-// rejects so the probe reports PODMAN_MISSING.
-function defaultRunCommand(
-  file: string,
-  args: readonly string[],
-  options: CommandOptions,
-): Promise<CommandOutcome> {
-  return new Promise<CommandOutcome>((resolve, reject) => {
-    execFile(
-      file,
-      [...args],
-      { env: { ...options.env }, encoding: "utf8", shell: false, timeout: options.timeoutMs },
-      (error, stdout) => {
-        if (error === null) {
-          resolve({ exitCode: 0, stdout });
-          return;
-        }
-        if (typeof error.code === "number") {
-          resolve({ exitCode: error.code, stdout });
-          return;
-        }
-        reject(error);
-      },
-    );
-  });
 }
 
 // Dials a Unix socket and closes it at once, mirroring the doctor default (checks.ts).
@@ -213,15 +184,10 @@ function defaultSpawnDaemon(
   return child;
 }
 
-// The compiled daemon entry beside this module (dist/src/daemon/daemon.js). Derived with
-// string operations only: node:path and node:url are outside the P6-D7 allowlist.
+// The compiled daemon entry beside this module (dist/src/daemon/main.js). Derived from
+// import.meta.url with the global URL: node:url is outside the P6-D7 allowlist.
 function defaultDaemonEntry(): string {
-  const url = import.meta.url;
-  const prefix = "file://";
-  if (url.startsWith(prefix) && url.endsWith(COMPILED_SUFFIX)) {
-    return `${url.slice(prefix.length, -COMPILED_SUFFIX.length)}/daemon/daemon.js`;
-  }
-  throw new RealmError("SCHEMA_INVALID");
+  return decodeURIComponent(new URL("../daemon/main.js", import.meta.url).pathname);
 }
 
 // The production handle builder (P6-D12): the 06-03 buildDaemonHandle with the
@@ -270,14 +236,21 @@ function isAbsentDaemon(error: unknown): boolean {
   return error instanceof RealmError && error.code === "REALM_NOT_ACTIVE";
 }
 
+// One control request's bound: an injected timeoutMs overrides it; otherwise the method's own
+// CONTROL_TIMEOUT_MS entry applies (channel.ts), so no request runs on a shared default.
+function controlTimeoutOf(deps: ResolvedDeps, method: keyof typeof CONTROL_TIMEOUT_MS): number {
+  return deps.timeoutMs ?? CONTROL_TIMEOUT_MS[method];
+}
+
 async function runUp(deps: ResolvedDeps, socketPath: string, workspaceRoot: string): Promise<CliResult> {
+  const upTimeoutMs = controlTimeoutOf(deps, "up");
   let probe: PodmanProbeResult;
   try {
     probe = await probePodman({
       runCommand: deps.runCommand,
       connectSocket: deps.connectSocket,
       env: deps.env,
-      timeoutMs: deps.timeoutMs,
+      timeoutMs: deps.timeoutMs ?? SOCKET_TIMEOUT_MS,
     });
   } catch (error) {
     return failureFor(error);
@@ -292,7 +265,7 @@ async function runUp(deps: ResolvedDeps, socketPath: string, workspaceRoot: stri
       await deps.send(
         socketPath,
         { id: nextId, method: "up", params: { workspaceRoot } },
-        deps.timeoutMs,
+        upTimeoutMs,
       ),
     );
   } catch (error) {
@@ -308,8 +281,8 @@ async function runUp(deps: ResolvedDeps, socketPath: string, workspaceRoot: stri
   } catch (error) {
     return failureFor(error);
   }
-  const deadline = deps.now() + deps.timeoutMs;
-  const maxAttempts = Math.max(1, Math.ceil(deps.timeoutMs / RETRY_INTERVAL_MS) + 1);
+  const deadline = deps.now() + upTimeoutMs;
+  const maxAttempts = Math.max(1, Math.ceil(upTimeoutMs / RETRY_INTERVAL_MS) + 1);
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     nextId += 1;
     try {
@@ -317,7 +290,7 @@ async function runUp(deps: ResolvedDeps, socketPath: string, workspaceRoot: stri
         await deps.send(
           socketPath,
           { id: nextId, method: "up", params: { workspaceRoot } },
-          deps.timeoutMs,
+          upTimeoutMs,
         ),
       );
     } catch (error) {
@@ -341,7 +314,9 @@ async function runUp(deps: ResolvedDeps, socketPath: string, workspaceRoot: stri
 
 async function runDown(deps: ResolvedDeps, socketPath: string): Promise<CliResult> {
   try {
-    return replyToResult(await deps.send(socketPath, { id: 1, method: "down" }, deps.timeoutMs));
+    return replyToResult(
+      await deps.send(socketPath, { id: 1, method: "down" }, controlTimeoutOf(deps, "down")),
+    );
   } catch (error) {
     return failureFor(error);
   }
@@ -350,7 +325,7 @@ async function runDown(deps: ResolvedDeps, socketPath: string): Promise<CliResul
 async function runStatus(deps: ResolvedDeps, socketPath: string): Promise<CliResult> {
   try {
     return replyToResult(
-      await deps.send(socketPath, { id: 1, method: "status" }, deps.timeoutMs),
+      await deps.send(socketPath, { id: 1, method: "status" }, controlTimeoutOf(deps, "status")),
     );
   } catch (error) {
     if (!isAbsentDaemon(error)) {
@@ -368,7 +343,7 @@ async function runStatus(deps: ResolvedDeps, socketPath: string): Promise<CliRes
 async function runDoctor(deps: ResolvedDeps, stateDir: string, socketPath: string): Promise<CliResult> {
   try {
     return replyToResult(
-      await deps.send(socketPath, { id: 1, method: "doctor" }, deps.timeoutMs),
+      await deps.send(socketPath, { id: 1, method: "doctor" }, controlTimeoutOf(deps, "doctor")),
     );
   } catch (error) {
     if (!isAbsentDaemon(error)) {
@@ -381,7 +356,7 @@ async function runDoctor(deps: ResolvedDeps, stateDir: string, socketPath: strin
     env: deps.env,
     runCommand: deps.runCommand,
     connectSocket: deps.connectSocket,
-    probeTimeoutMs: deps.timeoutMs,
+    probeTimeoutMs: deps.timeoutMs ?? SOCKET_TIMEOUT_MS,
   };
   let checks: readonly { readonly id: string }[];
   try {
@@ -440,7 +415,7 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
   }
   const resolved: ResolvedDeps = {
     env: deps.env,
-    timeoutMs: deps.timeoutMs ?? SOCKET_TIMEOUT_MS,
+    timeoutMs: deps.timeoutMs,
     daemonEntry: deps.daemonEntry,
     now: deps.now ?? Date.now,
     spawn: deps.spawn ?? defaultSpawnDaemon,
@@ -493,6 +468,6 @@ export async function main(): Promise<void> {
   process.exitCode = result.exitCode;
 }
 
-if (typeof process.argv[1] === "string" && process.argv[1].endsWith(COMPILED_SUFFIX)) {
+if (isDirectEntry(import.meta.url, process.argv[1])) {
   void main();
 }

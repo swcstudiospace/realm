@@ -3,8 +3,10 @@
 // libpod client, AndaBridge over the configured URL, the production OpenShell runner, Date clock); tests inject
 // the existing fakes at the same seam. startDaemon binds the control socket once per state directory,
 // runs reapStartup with the bounded sweep before serving, dispatches the four CONTROL_METHODS from
-// the 06-01 channel, and tears down on down. This module parses no argv, spawns no daemon process,
-// and reads no process environment: every host value arrives through its options.
+// the 06-01 channel, and tears down on down. The wait for the controller teardown is bounded by
+// TEARDOWN_TIMEOUT_MS; socket I/O keeps SOCKET_TIMEOUT_MS. With no AgentOS driver or supervisor bound,
+// the handle still builds and up refuses with AGENTOS_NOT_CONFIGURED. This module parses no argv,
+// spawns no daemon process, and reads no process environment: every host value arrives through its options.
 
 import { rmSync } from "node:fs";
 import { createConnection, createServer, type Server, type Socket } from "node:net";
@@ -17,6 +19,7 @@ import type { StateSnapshot } from "../core/state-machine.js";
 import { displayStatus, type DisplayStatus } from "../core/status.js";
 import { withTimeout } from "../core/timeout.js";
 import { defaultRunCommand, runChecks, type CheckResult, type DoctorOptions } from "../doctor/checks.js";
+import { TEARDOWN_TIMEOUT_MS } from "../lifecycle/controller.js";
 import { createRealmHandle, type RealmHandle } from "../realm/compose.js";
 import { AgentOsSupervisor, type AgentOsDriver } from "../runtime/agentos.js";
 import { loadRuntimeConfig, type RuntimeConfig } from "../runtime/config.js";
@@ -268,7 +271,10 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
     await drainOthers();
     let reply: ControlReply;
     try {
-      reply = { id, result: statusResult(await handle.close()) };
+      // The teardown wait is bounded by TEARDOWN_TIMEOUT_MS. Expiry is REALM_STOPPING, the code the controller
+      // reports for its own teardown bound; the catalogue has no teardown-timeout code.
+      const closed = await withTimeout(handle.close(), TEARDOWN_TIMEOUT_MS, "REALM_STOPPING");
+      reply = { id, result: statusResult(closed) };
     } catch (error: unknown) {
       reply = { id, error: { code: codeOf(error) } };
     }
@@ -491,13 +497,12 @@ function defaultExec(
   const agentos =
     options.agentos ??
     (options.agentosDriver !== undefined ? defaultSupervisor(options.agentosDriver) : undefined);
-  if (agentos === undefined) {
-    throw makeRealmError("SCHEMA_INVALID");
-  }
+  // No driver and no supervisor leaves AgentOS unbound: SessionExecution then refuses every runtime-touching
+  // call with AGENTOS_NOT_CONFIGURED, so the handle still builds.
   return new SessionExecution({
     libpod,
     runner: runOpenShell,
-    agentos,
+    ...(agentos !== undefined ? { agentos } : {}),
     config: {
       image: config.image,
       workloadArgv: config.workloadArgv,

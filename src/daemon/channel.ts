@@ -1,8 +1,8 @@
 // Control channel wire format and run-directory guards (P6-D2, P6-D3, P6-D10, P6-D11).
 // Requests and replies cross the Unix socket at controlSocketPath(stateDir) as
 // newline-delimited JSON carrying request ids; every reply carries the request id plus
-// either a result or an existing catalogue ErrorCode. Every socket operation is bounded
-// by SOCKET_TIMEOUT_MS through withTimeout. The run directory is created-or-checked at
+// either a result or an existing catalogue ErrorCode. Control requests are bounded per method
+// by CONTROL_TIMEOUT_MS; other socket operations by SOCKET_TIMEOUT_MS through withTimeout. The run directory is created-or-checked at
 // mode 0700 and the socket is chmod 0600 after listen; any other mode, a non-directory,
 // or a foreign owner refuses with SCHEMA_INVALID. This module owns the wire format plus
 // the filesystem guards only; it starts no long-running process and parses no argv.
@@ -21,6 +21,17 @@ const KNOWN_CODES: readonly string[] = ERROR_CODES;
 
 // Default bound for every socket operation in milliseconds (OQ-P6-01).
 export const SOCKET_TIMEOUT_MS = 5000;
+
+// Bound for one control request, per method. down must outlast the controller teardown bound
+// (TEARDOWN_TIMEOUT_MS in lifecycle/controller.ts, 30 s), or the CLI gives up while the daemon is
+// still tearing down. up covers the policy startup budget. doctor runs up to nine probes, each
+// bounded at 5 s, so it gets 60 s.
+export const CONTROL_TIMEOUT_MS: Readonly<Record<ControlMethod, number>> = Object.freeze({
+  status: 5_000,
+  up: 60_000,
+  down: 45_000,
+  doctor: 60_000,
+});
 
 // The socket is chmod to this mode after listen (P6-D3).
 export const SOCKET_MODE = 0o600;

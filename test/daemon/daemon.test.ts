@@ -16,6 +16,7 @@ import { displayStatus, STATUS_LABELS } from "../../src/core/status.js";
 import { sendRequest, type ControlReply } from "../../src/daemon/channel.js";
 import {
   buildDaemonHandle,
+  type BuildDaemonHandleOptions,
   startDaemon,
   type StartedDaemon,
   type StartDaemonOptions,
@@ -24,6 +25,8 @@ import type { CheckResult } from "../../src/doctor/checks.js";
 import { controlSocketPath } from "../../src/session/paths.js";
 import { FakeBridge } from "../support/fake-bridge.js";
 import { FakeExecutionService } from "../support/fake-execution.js";
+import { FakeContainerStore, FakeLibpod } from "../support/fake-libpod.js";
+import { FakeOpenShell } from "../support/fake-openshell.js";
 
 // This file runs from dist/test/daemon, so three levels up is the package root.
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -189,6 +192,40 @@ test("CLI-01: buildDaemonHandle wires the shared composition root and answers sn
   assert.deepEqual(outcome.value.snapshot, snapshot);
   assert.equal(outcome.value.display.label, STATUS_LABELS.disconnected);
   await handle.close();
+});
+
+test("RT-04, D-47: buildDaemonHandle builds with no AgentOS driver, and an up is refused with AGENTOS_NOT_CONFIGURED while no container is created", async (t) => {
+  const fixture = makeDirs(t);
+  const socketPath = join(fixture.base, "podman.sock");
+  const store = new FakeContainerStore();
+  const libpod = new FakeLibpod({ store, rootless: true });
+  await libpod.start(socketPath);
+  t.after(() => libpod.stop());
+  const openshell = new FakeOpenShell(store);
+  const options: BuildDaemonHandleOptions = {
+    runtimeInput: {
+      image: IMAGE,
+      workloadArgv: ["/usr/bin/agent", "--serve"],
+      stateDir: fixture.stateDir,
+      workspaceRoot: fixture.ws,
+    },
+    policyPath: writePolicy(fixture, "no-driver-policy.json", { workspaceRoots: [fixture.ws] }),
+    sessionId: "sess-no-driver",
+    bridge: new FakeBridge(),
+    libpodSocketPath: socketPath,
+    runOpenShell: openshell.runner,
+    clock: () => new Date(CLOCK_ISO),
+  };
+  const handle = buildDaemonHandle(options);
+  t.after(async () => {
+    await handle.close();
+  });
+
+  const snapshot = await handle.controller.create(fixture.ws);
+  assert.equal(snapshot.state, "error");
+  assert.equal(snapshot.reason, "AGENTOS_NOT_CONFIGURED");
+  assert.equal(openshell.callCount(), 0, "no OpenShell run starts");
+  assert.equal(store.list().length, 0, "no container is created");
 });
 
 test("RT-06: startDaemon with no owner binds the socket and answers status over a real socket pair", async (t) => {

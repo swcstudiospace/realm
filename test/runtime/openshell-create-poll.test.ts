@@ -1,7 +1,7 @@
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { performance } from "node:perf_hooks";
-import { RealmError } from "../../src/core/errors.js";
+import { ERROR_CATALOGUE, RealmError, type ErrorCode } from "../../src/core/errors.js";
 import type { LibpodClient } from "../../src/runtime/libpod-client.js";
 import {
   runOpenShellCreate,
@@ -14,7 +14,7 @@ import {
 // setTimeout (the 250 ms poll wait and the per-lookup bound). Each advance moves both clocks by the
 // same amount, so no real time passes and every wait is driven by the test.
 
-type LookupAnswer = readonly { readonly id: string }[] | RealmError;
+type LookupAnswer = readonly { readonly id: string }[] | Error;
 
 const REQUEST: SandboxCreateRequest = {
   sessionId: "sess-poll",
@@ -60,7 +60,7 @@ function scriptedLibpod(answer: (poll: number) => LookupAnswer): {
           return [];
         }
         const found = answer(calls - 1);
-        if (found instanceof RealmError) {
+        if (found instanceof Error) {
           throw found;
         }
         return found.map((entry) => ({ id: entry.id }));
@@ -108,6 +108,35 @@ function refusalOf(run: Run): RealmError {
   return run.error;
 }
 
+// Checks a refusal against its catalogue entry: the code, the catalogue reason text and the
+// catalogue retryable flag. No custom reason or retryable value is allowed.
+function assertCatalogued(refusal: RealmError, code: ErrorCode): void {
+  const entry = ERROR_CATALOGUE[code];
+  assert.equal(refusal.code, code);
+  assert.equal(refusal.reason, entry.reason);
+  assert.equal(refusal.retryable, entry.retryable);
+}
+
+// causeCode is present only when a libpod code was involved, so it is never an own property otherwise.
+function assertNoCause(refusal: RealmError): void {
+  assert.equal(
+    Object.hasOwn(refusal, "causeCode"),
+    false,
+    "causeCode must be absent when no libpod code was involved",
+  );
+}
+
+// The fields a caller reads (code, reason, causeCode) hold no forbidden text such as a container id
+// or raw libpod text.
+function assertNoLeak(refusal: RealmError, forbidden: readonly string[]): void {
+  const surfaces: readonly string[] = [refusal.code, refusal.reason, refusal.causeCode ?? ""];
+  for (const surface of surfaces) {
+    for (const text of forbidden) {
+      assert.ok(!surface.includes(text), `a refusal field must not carry "${text}"`);
+    }
+  }
+}
+
 test("RT-03: an ambiguous label match is refused at once with no further poll and no container ids", async (t) => {
   const advance = useVirtualClock(t);
   const libpod = scriptedLibpod(() => [{ id: "ctr-secret-a" }, { id: "ctr-secret-b" }]);
@@ -115,10 +144,10 @@ test("RT-03: an ambiguous label match is refused at once with no further poll an
 
   await settle();
   const refusal = refusalOf(run);
-  assert.equal(refusal.code, "OPENSHELL_START_FAILED");
+  assertCatalogued(refusal, "OPENSHELL_LABEL_AMBIGUOUS");
   assert.equal(refusal.retryable, false, "an ambiguous match must not be retryable");
-  assert.match(refusal.reason, /more than one container matches this session's label/);
-  assert.ok(!refusal.reason.includes("ctr-secret"), "the reason must not name container ids");
+  assertNoLeak(refusal, ["ctr-"]);
+  assertNoCause(refusal);
   assert.equal(libpod.calls(), 2, "one pre-create lookup and exactly one poll");
 
   await advance(POLL_STEP_MS * 20);
@@ -136,23 +165,38 @@ test("RT-03: an ambiguous match already present before create is refused without
 
   await settle();
   const refusal = refusalOf(run);
-  assert.equal(refusal.code, "OPENSHELL_START_FAILED");
-  assert.equal(refusal.retryable, false);
+  assertCatalogued(refusal, "OPENSHELL_LABEL_AMBIGUOUS");
+  assertNoLeak(refusal, ["ctr-"]);
+  assertNoCause(refusal);
   assert.equal(run.runnerCalls(), 0, "the create argv must not run when the session is already ambiguous");
 });
 
-test("RT-03: a non-transient libpod error ends the poll at once and names the last error code", async (t) => {
+test("RT-03: a non-transient libpod error ends the poll at once and carries the last error code as causeCode", async (t) => {
   const advance = useVirtualClock(t);
   const libpod = scriptedLibpod(() => new RealmError("SCHEMA_INVALID"));
   const run = startCreate(libpod.containers, 60_000);
 
   await settle();
   const refusal = refusalOf(run);
-  assert.equal(refusal.code, "OPENSHELL_START_FAILED");
-  assert.equal(
-    refusal.reason,
-    "OpenShell start stopped: the libpod container lookup failed and retrying will not help. Last libpod error: SCHEMA_INVALID, kind non-transient.",
-  );
+  assertCatalogued(refusal, "OPENSHELL_START_FAILED");
+  assert.equal(refusal.causeCode, "SCHEMA_INVALID", "causeCode is the last libpod code");
+  assertNoLeak(refusal, ["ctr-"]);
+  assert.equal(libpod.calls(), 2, "the failing poll is the only poll");
+
+  await advance(POLL_STEP_MS * 20);
+  assert.equal(libpod.calls(), 2, "no poll runs after a non-transient failure");
+});
+
+test("RT-03: an untyped libpod error ends the poll at once with no causeCode and no raw text", async (t) => {
+  const advance = useVirtualClock(t);
+  const libpod = scriptedLibpod(() => new Error("raw libpod text naming ctr-raw"));
+  const run = startCreate(libpod.containers, 60_000);
+
+  await settle();
+  const refusal = refusalOf(run);
+  assertCatalogued(refusal, "OPENSHELL_START_FAILED");
+  assertNoCause(refusal);
+  assertNoLeak(refusal, ["ctr-", "raw libpod text"]);
   assert.equal(libpod.calls(), 2, "the failing poll is the only poll");
 
   await advance(POLL_STEP_MS * 20);
@@ -173,18 +217,16 @@ test("RT-09: a transient libpod error followed by a found container succeeds wit
   assert.equal(run.runnerCalls(), 1, "the create argv runs once");
 });
 
-test("RT-09: a persistent transient libpod error ends at the deadline with the last error code in the reason", async (t) => {
+test("RT-09: a persistent transient libpod error ends at the deadline with the last error code as causeCode", async (t) => {
   const advance = useVirtualClock(t);
   const libpod = scriptedLibpod(() => new RealmError("PODMAN_MACHINE_DOWN"));
   const run = startCreate(libpod.containers, 1000);
 
   await advanceUntilSettled(run, advance);
   const refusal = refusalOf(run);
-  assert.equal(refusal.code, "OPENSHELL_START_FAILED");
-  assert.equal(
-    refusal.reason,
-    "OpenShell start did not show its container before the deadline. Last libpod error: PODMAN_MACHINE_DOWN, kind transient.",
-  );
+  assertCatalogued(refusal, "OPENSHELL_START_FAILED");
+  assert.equal(refusal.causeCode, "PODMAN_MACHINE_DOWN", "causeCode is the last libpod code");
+  assertNoLeak(refusal, ["ctr-"]);
   assert.equal(libpod.calls(), 5, "pre-create lookup plus polls at 0, 250, 500 and 750 ms; none at the deadline");
 });
 
@@ -195,19 +237,19 @@ test("RT-09: a deadline with no libpod error names no libpod code", async (t) =>
 
   await advanceUntilSettled(run, advance);
   const refusal = refusalOf(run);
-  assert.equal(refusal.code, "OPENSHELL_START_FAILED");
-  assert.equal(refusal.reason, "OpenShell start did not show its container before the deadline.");
+  assertCatalogued(refusal, "OPENSHELL_START_FAILED");
+  assertNoCause(refusal);
+  assertNoLeak(refusal, ["ctr-"]);
 });
 
-test("RT-09: an error code that appeared earlier is still named when the poll later reaches the deadline", async (t) => {
+test("RT-09: an error code that appeared earlier is still carried as causeCode when the poll reaches the deadline", async (t) => {
   const advance = useVirtualClock(t);
   const libpod = scriptedLibpod((poll) => (poll === 1 ? new RealmError("PODMAN_MACHINE_DOWN") : []));
   const run = startCreate(libpod.containers, 1000);
 
   await advanceUntilSettled(run, advance);
   const refusal = refusalOf(run);
-  assert.equal(
-    refusal.reason,
-    "OpenShell start did not show its container before the deadline. Last libpod error: PODMAN_MACHINE_DOWN, kind transient.",
-  );
+  assertCatalogued(refusal, "OPENSHELL_START_FAILED");
+  assert.equal(refusal.causeCode, "PODMAN_MACHINE_DOWN", "causeCode is the earlier libpod code");
+  assertNoLeak(refusal, ["ctr-"]);
 });
