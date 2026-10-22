@@ -80,6 +80,31 @@ jobs:
           set -euo pipefail
           npm run check:pack
 
+  site:
+    name: Build docs site
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js 22.x for the site
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22.x
+
+      - name: Install site dependencies
+        run: |
+          set -euo pipefail
+          npm ci --prefix site
+
+      - name: Build site from the repository markdown
+        run: |
+          set -euo pipefail
+          node scripts/docs/sync-site.mjs
+          npm run build --prefix site
+
   release:
     name: Release
     needs: verify
