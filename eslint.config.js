@@ -97,6 +97,24 @@ const childProcessPaths = CHILD_PROCESS_PATHS.map((name) => ({
   name,
   message: "TOOL-02: only the allowlisted modules (src/cli/main.ts, src/doctor/checks.ts, src/runtime/session-execution.ts) import child_process.",
 }));
+// Dispatcher internals that host adapters (src/mcp, src/acp, src/omp) must never reference (P5-D11, P5-D12).
+const ADAPTER_INTERNALS = [
+  "ToolDispatcherDeps",
+  "DispatcherController",
+  "TOOL_CALL_TIMEOUT_MS",
+  "runSandboxExec",
+  "withTimeout",
+  "appendAudit",
+  "summarizeExec",
+  "waitLeavingConnecting",
+  "checkExecPolicy",
+  "refuseRetryIn",
+];
+/** @param {string} name */
+const adapterInternal = (name) => ({
+  selector: `Identifier[name="${name}"]`,
+  message: `Adapters route tool logic only through ToolDispatcher.call (P5-D11, P5-D12): ${name} is a dispatcher internal and must not be referenced from src/mcp, src/acp or src/omp.`,
+});
 
 export default tseslint.config(
   {
@@ -225,5 +243,29 @@ export default tseslint.config(
   {
     files: ["src/cli/main.ts", "src/daemon/main.ts", "src/omp/extension.ts"],
     rules: { "no-restricted-properties": "off" },
+  },
+  {
+    files: ["src/mcp/**/*.ts", "src/acp/**/*.ts", "src/omp/**/*.ts"],
+    rules: {
+      "no-restricted-syntax": ["error", ...GENERIC.map((key) => SYNTAX[key]), ...ADAPTER_INTERNALS.map(adapterInternal)],
+      "no-restricted-imports": ["error", { paths: childProcessPaths }],
+    },
+  },
+  {
+    files: ["src/omp/**/*.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: childProcessPaths,
+          patterns: [
+            {
+              group: ["../daemon/*", "!../daemon/client.js", "!../daemon/channel.js", "!../daemon/ensure.js"],
+              message: "Adapters route tool logic only through ToolDispatcher.call (P5-D11, P5-D12): Omp reaches the daemon only through DaemonClient, so only ../daemon/client, ../daemon/channel and ../daemon/ensure may be imported.",
+            },
+          ],
+        },
+      ],
+    },
   },
 );
