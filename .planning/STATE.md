@@ -85,7 +85,7 @@ Full log lives in PROJECT.md Key Decisions table. Recent decisions affecting cur
 
 ### Pending Todos
 
-Follow-ups (not started): the AgentOS sandbox runner in the follow-up milestone (RT-04, CLI-01); ensure-expiry reason text (TOOL_TIMEOUT reads as a tool queue timeout); a state-directory log file for detached daemon startup errors; a client-side reply size cap; the recursive mkdir ancestor mode; deterministic ordering seams for the lifecycle timing tests (widened to 1 to 4 s windows on this loaded host); a containment-default migration note if the default ever changes; an Omp status-refresh cost check on a real host; a confirmation of the FS-02 accepted approximation.
+Open follow-ups: the AgentOS sandbox runner in the follow-up milestone (RT-04, CLI-01); deterministic ordering seams for the lifecycle timing tests (widened to 1 to 4 s windows on this loaded host); a containment-default migration note if the default ever changes; an Omp status-refresh cost check on a real host; the FS-02 confirmation. Fixed in the four-defect wave (2026-10-22): the ensure expiry code is DAEMON_START_TIMEOUT; the detached daemon's output goes to <stateDir>/daemon.log; client replies are capped at 1 MiB; missing ancestors of the state directory take the default mode. Known inconsistency, documented: up does not print the daemon log hint on a daemon refusal, while mcp and acp do.
 
 ### Blockers/Concerns
 
