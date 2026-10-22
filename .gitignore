@@ -10,3 +10,16 @@ coverage/
 .env
 .env.*
 !.env.example
+
+# Generated VitePress content (scripts/docs/sync-site.mjs)
+/site/content/overview.md
+/site/content/changelog.md
+/site/content/contributing.md
+/site/content/security.md
+/site/content/agents.md
+/site/content/claude.md
+/site/content/docs/
+/site/content/planning/
+/site/content/agents/
+/site/content/github/
+/site/content/public/
