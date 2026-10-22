@@ -1,6 +1,11 @@
+// Exec gate closure check (TOOL-02). Builtins-only, except for typescript: the compiler's parser, a devDependency
+// that npm ci installs before every gate. Import specifiers are read from the parse tree, so text inside string
+// literals, template literals and comments is never read as an import, and regex-versus-division is decided by
+// the parser rather than by a scanner.
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, posix, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
 
 const DEFAULT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -17,151 +22,40 @@ export const FORBIDDEN_MODULES = ["src/doctor/checks.ts", "src/runtime/session-e
 
 const CHILD_PROCESS = new Set(["child_process", "node:child_process"]);
 
-// Import forms, matched on code only (see blankNonCode). The d flag reports each specifier's offset in the source.
-const STATIC_IMPORT = /\b(?:import|export)\b[^;'"]*?\bfrom\s*["']([^"']+)["']/gd;
-const SIDE_EFFECT_IMPORT = /\bimport\s*["']([^"']+)["']/gd;
-const DYNAMIC_IMPORT = /\bimport\s*\(\s*["']([^"']+)["']\s*\)/gd;
-const REQUIRE_CALL = /\brequire\s*\(\s*["']([^"']+)["']\s*\)/gd;
-
-// Words after which a slash opens a regex literal rather than dividing.
-const REGEX_AFTER_WORDS = new Set([
-  "return", "typeof", "instanceof", "in", "of", "new", "delete", "void", "throw", "case", "do", "else", "yield", "await",
-]);
-
 function isFile(path) {
   return existsSync(path) && statSync(path).isFile();
 }
 
-// Index just past the regex literal that starts at start, or -1 when the slash does not open one on this line.
-function regexEnd(source, start) {
-  let inClass = false;
-  for (let j = start + 1; j < source.length; j++) {
-    const ch = source[j];
-    if (ch === "\n") {
-      return -1;
-    }
-    if (ch === "\\") {
-      j++;
-    } else if (inClass) {
-      inClass = ch !== "]";
-    } else if (ch === "[") {
-      inClass = true;
-    } else if (ch === "/") {
-      let k = j + 1;
-      while (k < source.length && /[A-Za-z]/.test(source[k])) {
-        k++;
-      }
-      return k;
-    }
-  }
-  return -1;
-}
-
-// Returns the source with string literal contents, template literal text, comments and regex literal bodies
-// replaced by spaces. Newlines are kept, so every character keeps its offset and line number. Code inside a
-// template substitution (${ ... }) is kept, so an import there is still seen.
-export function blankNonCode(source) {
-  const chars = source.split("");
-  const n = source.length;
-  const blank = (from, to) => {
-    for (let k = from; k < to; k++) {
-      if (chars[k] !== "\n") {
-        chars[k] = " ";
-      }
-    }
-  };
-  // "code" at top level, "expr" inside a ${ ... } with its brace depth, "template" for literal text.
-  const frames = [{ kind: "code", depth: 0 }];
-  let regexAllowed = true;
-  let i = 0;
-  while (i < n) {
-    const frame = frames.at(-1);
-    const ch = source[i];
-    if (frame.kind === "template") {
-      if (ch === "\\") {
-        blank(i, Math.min(i + 2, n));
-        i += 2;
-      } else if (ch === "`") {
-        blank(i, i + 1);
-        frames.pop();
-        regexAllowed = false;
-        i++;
-      } else if (ch === "$" && source[i + 1] === "{") {
-        frames.push({ kind: "expr", depth: 0 });
-        regexAllowed = true;
-        i += 2;
-      } else {
-        blank(i, i + 1);
-        i++;
-      }
-    } else if (ch === "/" && source[i + 1] === "/") {
-      const newline = source.indexOf("\n", i);
-      const stop = newline === -1 ? n : newline;
-      blank(i, stop);
-      i = stop;
-    } else if (ch === "/" && source[i + 1] === "*") {
-      const close = source.indexOf("*/", i + 2);
-      const stop = close === -1 ? n : close + 2;
-      blank(i, stop);
-      i = stop;
-    } else if (ch === "'" || ch === '"') {
-      let j = i + 1;
-      while (j < n && source[j] !== ch && source[j] !== "\n") {
-        j += source[j] === "\\" ? 2 : 1;
-      }
-      const end = Math.min(j, n);
-      blank(i + 1, end);
-      i = source[end] === ch ? end + 1 : end;
-      regexAllowed = false;
-    } else if (ch === "`") {
-      blank(i, i + 1);
-      frames.push({ kind: "template" });
-      i++;
-    } else if (ch === "/" && regexAllowed && regexEnd(source, i) !== -1) {
-      const end = regexEnd(source, i);
-      blank(i, end);
-      i = end;
-      regexAllowed = false;
-    } else if (/[\w$]/.test(ch)) {
-      let j = i;
-      while (j < n && /[\w$]/.test(source[j])) {
-        j++;
-      }
-      regexAllowed = REGEX_AFTER_WORDS.has(source.slice(i, j));
-      i = j;
-    } else {
-      if (ch === "{" && frame.kind === "expr") {
-        frame.depth++;
-      } else if (ch === "}" && frame.kind === "expr") {
-        if (frame.depth === 0) {
-          frames.pop();
-        } else {
-          frame.depth--;
-        }
-      }
-      if (ch === ")" || ch === "]") {
-        regexAllowed = false;
-      } else if (!/\s/.test(ch)) {
-        regexAllowed = true;
-      }
-      i++;
-    }
-  }
-  return chars.join("");
-}
-
-// Every module specifier the code names: static, side-effect, dynamic and require forms. The patterns run on the
-// blanked code, so text inside literals and comments is never read as an import. The specifier text is read from
-// the original source at the offset the d flag reports.
-function specifiersOf(source) {
-  const code = blankNonCode(source);
+// Every module specifier the file names as code: static import and re-export declarations, import-equals with an
+// external module reference, dynamic import() with a string literal, and require() with a string literal.
+export function specifiersOf(source, fileName = "module.ts") {
+  const file = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true);
   const found = [];
-  for (const pattern of [STATIC_IMPORT, SIDE_EFFECT_IMPORT, DYNAMIC_IMPORT, REQUIRE_CALL]) {
-    for (const match of code.matchAll(pattern)) {
-      const [start, end] = match.indices[1];
-      found.push(source.slice(start, end));
+  const visit = (node) => {
+    if (
+      (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
+      node.moduleSpecifier !== undefined &&
+      ts.isStringLiteral(node.moduleSpecifier)
+    ) {
+      found.push(node.moduleSpecifier.text);
+    } else if (
+      ts.isImportEqualsDeclaration(node) &&
+      ts.isExternalModuleReference(node.moduleReference) &&
+      ts.isStringLiteral(node.moduleReference.expression)
+    ) {
+      found.push(node.moduleReference.expression.text);
+    } else if (
+      ts.isCallExpression(node) &&
+      (node.expression.kind === ts.SyntaxKind.ImportKeyword ||
+        (ts.isIdentifier(node.expression) && node.expression.text === "require")) &&
+      node.arguments.length > 0 &&
+      ts.isStringLiteral(node.arguments[0])
+    ) {
+      found.push(node.arguments[0].text);
     }
-  }
+    ts.forEachChild(node, visit);
+  };
+  visit(file);
   return found;
 }
 
@@ -180,9 +74,7 @@ function resolveRelative(root, fromModule, specifier) {
     candidates.push(base);
   }
   candidates.push(`${base}.ts`, `${base}/index.ts`);
-  return (
-    candidates.find((candidate) => !candidate.startsWith("../") && isFile(join(root, candidate))) ?? null
-  );
+  return candidates.find((candidate) => !candidate.startsWith("../") && isFile(join(root, candidate))) ?? null;
 }
 
 function isCodeSpecifier(specifier) {
@@ -208,7 +100,7 @@ export function gateClosure({ root = DEFAULT_ROOT, entries = GATE_ENTRIES } = {}
     if (modules.has(module)) {
       continue;
     }
-    const specifiers = specifiersOf(readFileSync(join(root, module), "utf8"));
+    const specifiers = specifiersOf(readFileSync(join(root, module), "utf8"), module);
     modules.set(module, { parent, specifiers });
     for (const specifier of specifiers) {
       if (!isRelative(specifier) || !isCodeSpecifier(specifier)) {
@@ -251,7 +143,11 @@ export function gateViolations({ root = DEFAULT_ROOT, entries = GATE_ENTRIES, fo
     }
   }
   for (const { from, specifier } of unresolved) {
-    violations.push({ module: from, chain: importChain(modules, from), reason: `has an unresolved relative import ${specifier}` });
+    violations.push({
+      module: from,
+      chain: importChain(modules, from),
+      reason: `has an unresolved relative import ${specifier}`,
+    });
   }
   return violations;
 }

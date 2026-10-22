@@ -35,6 +35,34 @@ test("a child_process import reached through a helper is reported with its impor
   );
 });
 
+test("a dynamic import after a division that follows an increment is still followed", async () => {
+  await withFixture(
+    {
+      "src/core/policy.ts":
+        'export async function sample(samples: number): Promise<number> {\n  return samples++ / (await import("./helper.js")).limit;\n}\nexport const gate = sample;\n',
+      "src/core/helper.ts": "export const limit = 2;\n",
+    },
+    async (root) => {
+      const { modules, unresolved } = gateClosure({ root, entries: ["src/core/policy.ts"] });
+      assert.deepEqual(unresolved, []);
+      assert.deepEqual([...modules.keys()].sort(), ["src/core/helper.ts", "src/core/policy.ts"]);
+    },
+  );
+});
+
+test("an import written inside a template literal's text is not followed", async () => {
+  await withFixture(
+    {
+      "src/core/policy.ts": 'export const doc = `Use import("./optional.js") here`;\nexport const gate = doc;\n',
+    },
+    async (root) => {
+      const { modules, unresolved } = gateClosure({ root, entries: ["src/core/policy.ts"] });
+      assert.deepEqual(unresolved, []);
+      assert.deepEqual([...modules.keys()], ["src/core/policy.ts"]);
+    },
+  );
+});
+
 test("import text inside string literals and comments is not read as an import, and a real import after them is followed", async () => {
   await withFixture(
     {
