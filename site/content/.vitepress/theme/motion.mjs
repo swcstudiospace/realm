@@ -25,9 +25,11 @@ function getObserver() {
 
 function markReveals(doc) {
   const io = getObserver();
+  // Drop every target from the previous page, so detached page nodes are released.
+  if (io) io.disconnect();
   for (const el of doc.querySelectorAll(REVEAL_SELECTOR)) {
-    if (el.classList.contains('reveal')) continue;
     el.classList.add('reveal');
+    if (el.classList.contains('is-visible')) continue;
     if (io) {
       io.observe(el);
     } else {
