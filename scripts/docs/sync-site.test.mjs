@@ -379,4 +379,51 @@ describe('syncSite', () => {
       assert.ok(overview.includes(badge), `missing ${badge}`);
     }
   });
+
+  it('removes a deleted document, its directory index and the emptied directory on the next sync', async () => {
+    const fixture = await makeRoot('sync-site-prune-');
+    const dir = join(fixture, 'site', 'content');
+    await Promise.all([
+      writeFixtureFile(fixture, 'README.md', lines('# Prune')),
+      writeFixtureFile(fixture, 'notes/html.md', lines('# Raw HTML', '', 'Body.')),
+      writeFixtureFile(fixture, 'site/content/index.md', lines('# Home')),
+      writeFixtureFile(fixture, 'site/content/.vitepress/config.mts', 'export default {};\n'),
+    ]);
+    await syncSite({ repoRoot: fixture, contentDir: dir });
+    const manifest = JSON.parse(await readFile(join(fixture, 'site', '.sync-manifest.json'), 'utf8'));
+    assert.ok(manifest.outputs.includes('notes/html.md'));
+    assert.ok(manifest.outputs.includes('notes/index.md'));
+    assert.equal(await exists(join(dir, 'notes', 'index.md')), true);
+
+    await rm(join(fixture, 'notes', 'html.md'));
+    await syncSite({ repoRoot: fixture, contentDir: dir });
+
+    assert.equal(await exists(join(dir, 'notes', 'html.md')), false);
+    assert.equal(await exists(join(dir, 'notes', 'index.md')), false);
+    assert.equal(await exists(join(dir, 'notes')), false);
+    assert.equal(await readFile(join(dir, 'index.md'), 'utf8'), '# Home\n');
+    assert.equal(await exists(join(dir, '.vitepress', 'config.mts')), true);
+  });
+
+  it('never deletes paths outside the content tree or the protected entries named in a manifest', async () => {
+    const fixture = await makeRoot('sync-site-guard-');
+    const dir = join(fixture, 'site', 'content');
+    await Promise.all([
+      writeFixtureFile(fixture, 'README.md', lines('# Guard')),
+      writeFixtureFile(fixture, 'sentinel.txt', 'keep\n'),
+      writeFixtureFile(fixture, 'site/escape.md', 'keep\n'),
+      writeFixtureFile(fixture, 'site/content/index.md', lines('# Home')),
+      writeFixtureFile(fixture, 'site/content/.vitepress/config.mts', 'export default {};\n'),
+      writeFixtureFile(
+        fixture,
+        'site/.sync-manifest.json',
+        JSON.stringify({ outputs: ['../../sentinel.txt', '../escape.md', 'index.md', '.vitepress/config.mts'] }),
+      ),
+    ]);
+    await syncSite({ repoRoot: fixture, contentDir: dir });
+    assert.equal(await readFile(join(fixture, 'sentinel.txt'), 'utf8'), 'keep\n');
+    assert.equal(await readFile(join(fixture, 'site', 'escape.md'), 'utf8'), 'keep\n');
+    assert.equal(await readFile(join(dir, 'index.md'), 'utf8'), '# Home\n');
+    assert.equal(await exists(join(dir, '.vitepress', 'config.mts')), true);
+  });
 });

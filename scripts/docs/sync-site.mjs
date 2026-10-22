@@ -14,7 +14,7 @@
 // Directory indexes: every generated directory without a source index.md gets a generated
 // index.md listing its children (pages and subdirectories) as sorted links.
 
-import { copyFile, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, readdir, rm, rmdir, stat, writeFile } from 'node:fs/promises';
 import { dirname, join, posix, resolve } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -96,6 +96,9 @@ export async function syncSite({
   const indexes = planDirectoryIndexes(documents);
   const assets = await listFiles(join(root, 'assets'), () => true);
 
+  const manifestPath = join(dirname(content), MANIFEST_NAME);
+  await removePreviousOutputs(content, await readManifest(manifestPath));
+
   await Promise.all(
     GENERATED_ENTRIES.map((entry) => rm(join(content, entry), { recursive: true, force: true })),
   );
@@ -109,7 +112,80 @@ export async function syncSite({
     ...indexes.map((index) => writeRendered(index.output, index.text, index.output, context, content)),
     ...assets.map((asset) => copyAsset(asset, root, content)),
   ]);
+  const written = [
+    ...documents.map((document) => document.output),
+    ...indexes.map((index) => index.output),
+    ...assets.map((asset) => `public/assets/${asset}`),
+  ].sort(compareStrings);
+  await writeText(manifestPath, `${JSON.stringify({ outputs: written }, null, 2)}\n`);
   return { pages: documents.length, indexes: indexes.length, assets: assets.length };
+}
+
+const MANIFEST_NAME = '.sync-manifest.json';
+
+// Outputs recorded by the previous run. A missing or unparseable manifest records nothing,
+// and the fixed GENERATED_ENTRIES cleanup still applies.
+async function readManifest(manifestPath) {
+  let text;
+  try {
+    text = await readFile(manifestPath, 'utf8');
+  } catch (error) {
+    if (error?.code === 'ENOENT') {
+      return [];
+    }
+    throw error;
+  }
+  try {
+    const parsed = JSON.parse(text);
+    return Array.isArray(parsed?.outputs)
+      ? parsed.outputs.filter((output) => typeof output === 'string')
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+// Only plain relative paths inside contentDir may be deleted: a manifest can never reach
+// outside the content tree, and the root index.md and .vitepress/ are always kept.
+function isPrunable(output) {
+  const segments = output.split('/');
+  return (
+    output !== 'index.md' &&
+    segments.every((segment) => segment !== '' && segment !== '.' && segment !== '..') &&
+    segments[0] !== '.vitepress'
+  );
+}
+
+async function removePreviousOutputs(content, previous) {
+  const outputs = previous.filter(isPrunable);
+  await Promise.all(
+    outputs.map((output) => rm(join(content, ...output.split('/')), { force: true })),
+  );
+  const levels = new Map();
+  for (const output of outputs) {
+    const segments = output.split('/');
+    for (let depth = 1; depth < segments.length; depth += 1) {
+      const dirs = levels.get(depth) ?? new Set();
+      dirs.add(segments.slice(0, depth).join('/'));
+      levels.set(depth, dirs);
+    }
+  }
+  // Deepest directories first, so a parent is only tried after its children were removed.
+  for (const depth of [...levels.keys()].sort((a, b) => b - a)) {
+    await Promise.all(
+      [...levels.get(depth)].map((dir) => removeIfEmpty(join(content, ...dir.split('/')))),
+    );
+  }
+}
+
+async function removeIfEmpty(dir) {
+  try {
+    await rmdir(dir);
+  } catch (error) {
+    if (!['ENOENT', 'ENOTEMPTY', 'EEXIST'].includes(error?.code)) {
+      throw error;
+    }
+  }
 }
 
 function planPages(sources) {
