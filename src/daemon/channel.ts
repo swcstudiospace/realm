@@ -379,10 +379,25 @@ export interface SocketDirDeps {
   readonly getuid?: () => number;
 }
 
-// Creates stateDir/run at mode 0700 when absent; when present asserts it is a
-// directory at exactly mode 0700 owned by the current user. Any other state, any
-// filesystem failure, or an unavailable owner check refuses with SCHEMA_INVALID.
-// Returns the run directory path. The stat/mkdir/getuid seams keep tests hermetic.
+// Stats one directory: undefined when the path is absent. Any other stat failure refuses with SCHEMA_INVALID.
+function observeDir(stat: (path: string) => SocketStat, path: string): SocketStat | undefined {
+  try {
+    return stat(path);
+  } catch (error: unknown) {
+    const missing =
+      typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
+    if (!missing) {
+      throw makeRealmError("SCHEMA_INVALID");
+    }
+    return undefined;
+  }
+}
+
+// Creates the state directory and the run directory at mode 0700 when the state directory is absent, so a
+// fresh start never leaves the state directory at the default mode. When the state directory exists, an
+// absent run directory is created at 0700. An existing directory is checked, never chmodded: a run directory
+// that is not exactly 0700 owned by the current user refuses with SCHEMA_INVALID. Returns the run directory
+// path. The stat/mkdir/getuid seams keep tests hermetic.
 export function ensureSocketDir(stateDir: string, deps?: SocketDirDeps): string {
   const socketPath = controlSocketPath(stateDir);
   const slash = socketPath.lastIndexOf("/");
@@ -390,21 +405,30 @@ export function ensureSocketDir(stateDir: string, deps?: SocketDirDeps): string 
     throw makeRealmError("SCHEMA_INVALID");
   }
   const runDir = socketPath.slice(0, slash);
-  const stat = deps?.stat ?? ((path: string): SocketStat => statSync(path));
-  let observed: SocketStat | undefined;
-  try {
-    observed = stat(runDir);
-  } catch (error: unknown) {
-    const missing =
-      typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
-    if (!missing) {
-      throw makeRealmError("SCHEMA_INVALID");
-    }
+  const parent = runDir.lastIndexOf("/");
+  if (parent === -1) {
+    throw makeRealmError("SCHEMA_INVALID");
   }
-  if (observed === undefined) {
-    const mkdir = deps?.mkdir ?? ((path: string, options: { readonly recursive: boolean; readonly mode: number }): void => {
+  const stateDirPath = runDir.slice(0, parent);
+  const stat = deps?.stat ?? ((path: string): SocketStat => statSync(path));
+  const mkdir =
+    deps?.mkdir ??
+    ((path: string, options: { readonly recursive: boolean; readonly mode: number }): void => {
       mkdirSync(path, options);
     });
+  if (observeDir(stat, stateDirPath) === undefined) {
+    // A recursive mkdir gives its mode to every directory it creates, so the state directory is made at
+    // RUN_DIR_MODE rather than the default mode, and the run directory is made at RUN_DIR_MODE beneath it.
+    try {
+      mkdir(stateDirPath, { recursive: true, mode: RUN_DIR_MODE });
+      mkdir(runDir, { recursive: false, mode: RUN_DIR_MODE });
+    } catch {
+      throw makeRealmError("SCHEMA_INVALID");
+    }
+    return runDir;
+  }
+  const observed = observeDir(stat, runDir);
+  if (observed === undefined) {
     try {
       mkdir(runDir, { recursive: true, mode: RUN_DIR_MODE });
     } catch {

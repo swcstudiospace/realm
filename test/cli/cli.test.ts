@@ -69,6 +69,8 @@ async function okVersion(): Promise<{ exitCode: number; stdout: string }> {
 // false: the socket is absent); the last answer repeats. up and call settle with STATUS and
 // REFUSED_STATUS unless a test overrides them.
 const STATUS = { mode: "advisory" } as DaemonStatus;
+// The up reply every successful realm returns: its lifecycle snapshot reports active.
+const ACTIVE_RESULT = { snapshot: { state: "active", reason: "" } };
 const REFUSED_STATUS: ToolOutcome = {
   outcome: "refused",
   tool: "status",
@@ -76,8 +78,12 @@ const REFUSED_STATUS: ToolOutcome = {
   retryable: ERROR_CATALOGUE.REALM_NOT_ACTIVE.retryable,
 };
 
+// One status answer per probe: true (a daemon answers), false (the socket is absent), or "timeout"
+// (the daemon has not served within the bound yet).
+type ProbeAnswer = boolean | "timeout";
+
 interface FakeDaemonOptions {
-  readonly probes: readonly boolean[];
+  readonly probes: readonly ProbeAnswer[];
   readonly up?: () => Promise<DaemonStatus>;
   readonly call?: (tool: unknown) => Promise<ToolOutcome>;
 }
@@ -102,6 +108,9 @@ function fakeDaemon(options: FakeDaemonOptions): FakeDaemon {
       status: async () => {
         const answer = options.probes[Math.min(statusCalls, options.probes.length - 1)];
         statusCalls += 1;
+        if (answer === "timeout") {
+          throw new RealmError("TOOL_TIMEOUT");
+        }
         if (answer !== true) {
           throw new RealmError("REALM_NOT_ACTIVE");
         }
@@ -152,7 +161,7 @@ test("realm up with no daemon spawns the detached child then reports over the so
   const sent: ControlRequest[] = [];
   const send: SendControlRequest = async (_socketPath, request) => {
     sent.push(request);
-    const reply: ControlReply = { id: request.id, result: "active" };
+    const reply: ControlReply = { id: request.id, result: ACTIVE_RESULT };
     return reply;
   };
   const result = await runCli(["up"], {
@@ -167,7 +176,7 @@ test("realm up with no daemon spawns the detached child then reports over the so
     connectSocket: acceptConnect,
   });
   assert.equal(result.exitCode, 0);
-  assert.equal(result.stdout, "active\n");
+  assert.equal(result.stdout, `${JSON.stringify(ACTIVE_RESULT)}\n`);
   assert.equal(daemon.record.connects, 2);
   assert.equal(spawns.length, 1);
   assert.equal(spawns[0]?.file, process.execPath);
@@ -191,7 +200,7 @@ test("realm up sends the --workspace root as the up params and spawns nothing wh
     spawn: makeSpawn(spawns),
     send: async (_socketPath, request) => {
       sent.push(request);
-      return { id: request.id, result: "active" };
+      return { id: request.id, result: ACTIVE_RESULT };
     },
     runCommand: okVersion,
     connectSocket: acceptConnect,
@@ -210,13 +219,59 @@ test("realm up defaults the workspace root to the current directory when --works
     connect: fakeDaemon({ probes: [true] }).connect,
     send: async (_socketPath, request) => {
       sent.push(request);
-      return { id: request.id, result: "active" };
+      return { id: request.id, result: ACTIVE_RESULT };
     },
     runCommand: okVersion,
     connectSocket: acceptConnect,
   });
   assert.equal(result.exitCode, 0);
   assert.deepEqual(sent[0]?.params, { workspaceRoot: process.cwd() });
+});
+
+test("realm up treats a status timeout as not ready and succeeds once the daemon answers (CLI-01)", async () => {
+  const spawns: SpawnCall[] = [];
+  const daemon = fakeDaemon({ probes: ["timeout", true] });
+  const sent: ControlRequest[] = [];
+  const send: SendControlRequest = async (_socketPath, request) => {
+    sent.push(request);
+    const reply: ControlReply = { id: request.id, result: ACTIVE_RESULT };
+    return reply;
+  };
+  const result = await runCli(["up"], {
+    env: ENV,
+    cwd: "/srv/realm-ws",
+    timeoutMs: 500,
+    daemonEntry: DAEMON_ENTRY,
+    spawn: makeSpawn(spawns),
+    connect: daemon.connect,
+    send,
+    runCommand: okVersion,
+    connectSocket: acceptConnect,
+  });
+  assert.equal(result.exitCode, 0);
+  assert.equal(daemon.record.connects, 2);
+  assert.equal(spawns.length, 1);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0]?.method, "up");
+});
+
+test("realm up exits 1 with the catalogue line when the realm is not active (CLI-01)", async () => {
+  const errorState = { snapshot: { state: "error", reason: "AGENTOS_NOT_CONFIGURED" } };
+  const send: SendControlRequest = async (_socketPath, request) => {
+    const reply: ControlReply = { id: request.id, result: errorState };
+    return reply;
+  };
+  const result = await runCli(["up", "--workspace", "/srv/realm-ws"], {
+    env: ENV,
+    timeoutMs: 500,
+    connect: fakeDaemon({ probes: [true] }).connect,
+    send,
+    runCommand: okVersion,
+    connectSocket: acceptConnect,
+  });
+  assert.equal(result.exitCode, 1);
+  assert.equal(result.stdout, `${JSON.stringify(errorState)}\n`);
+  assert.equal(result.stderr, `AGENTOS_NOT_CONFIGURED: ${ERROR_CATALOGUE.AGENTOS_NOT_CONFIGURED.reason}\n`);
 });
 
 test("realm up and mcp refuse a non-absolute or missing --workspace value before probing or dialing (CLI-01)", async () => {
@@ -272,6 +327,22 @@ test("realm down sends down over the socket (CLI-01)", async () => {
   assert.equal(result.exitCode, 0);
   assert.deepEqual(seen, ["down"]);
   assert.equal(result.stdout, "torn-down\n");
+});
+
+test("realm down with no daemon is idempotent and says already down (CORE-06)", async () => {
+  const absent: SendControlRequest = async () => {
+    throw new RealmError("REALM_NOT_ACTIVE");
+  };
+  const result = await runCli(["down"], { env: ENV, timeoutMs: 500, send: absent });
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.stdout, "disconnected\n");
+  assert.equal(result.stderr, "already down\n");
+  const failing: SendControlRequest = async () => {
+    throw new RealmError("TOOL_TIMEOUT");
+  };
+  const other = await runCli(["down"], { env: ENV, timeoutMs: 500, send: failing });
+  assert.equal(other.exitCode, 1);
+  assert.equal(other.stdout, "TOOL_TIMEOUT\n");
 });
 
 test("realm doctor with no daemon runs local checks and says the daemon is absent (CLI-01)", async () => {
@@ -503,7 +574,7 @@ test("cli module builds no in-process mcp handle and needs no runtime configurat
 
 test("the default daemon spawn targets daemon/main.js beside the compiled CLI for up and mcp (CLI-01)", async () => {
   const send: SendControlRequest = async (_socketPath, request) => {
-    const reply: ControlReply = { id: request.id, result: "active" };
+    const reply: ControlReply = { id: request.id, result: ACTIVE_RESULT };
     return reply;
   };
   for (const argv of [["up"], ["mcp"]]) {
@@ -533,7 +604,7 @@ test("each control request is bounded by its own CONTROL_TIMEOUT_MS entry (CLI-0
   const seen: { method: string; timeoutMs: number }[] = [];
   const send: SendControlRequest = async (_socketPath, request, timeoutMs) => {
     seen.push({ method: request.method, timeoutMs });
-    const reply: ControlReply = { id: request.id, result: "ok" };
+    const reply: ControlReply = { id: request.id, result: ACTIVE_RESULT };
     return reply;
   };
   const deps: CliDeps = {

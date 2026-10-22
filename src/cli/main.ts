@@ -12,7 +12,7 @@
 
 import { spawn } from "node:child_process";
 import { createConnection } from "node:net";
-import { ERROR_CATALOGUE, RealmError, type ErrorCode } from "../core/errors.js";
+import { ERROR_CATALOGUE, ERROR_CODES, RealmError, type ErrorCode } from "../core/errors.js";
 import {
   sendRequest,
   CONTROL_TIMEOUT_MS,
@@ -210,6 +210,56 @@ function isAbsentDaemon(error: unknown): boolean {
   return error instanceof RealmError && error.code === "REALM_NOT_ACTIVE";
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isCatalogueCode(value: string): value is ErrorCode {
+  return (ERROR_CODES as readonly string[]).includes(value);
+}
+
+// The lifecycle the daemon reports in an up reply (its snapshot); the fields stay unknown until checked.
+interface UpLifecycle {
+  readonly state: unknown;
+  readonly reason: unknown;
+}
+
+// The snapshot of an up reply, or undefined when the reply carries none.
+function lifecycleOf(result: unknown): UpLifecycle | undefined {
+  const snapshot = isRecord(result) ? result["snapshot"] : undefined;
+  if (!isRecord(snapshot)) {
+    return undefined;
+  }
+  return { state: snapshot["state"], reason: snapshot["reason"] };
+}
+
+// The refusal for an up reply that does not report active or degraded. A catalogue code reason keeps
+// its own code; any other reason reads as REALM_NOT_ACTIVE; a reply with no lifecycle is SCHEMA_INVALID.
+function upRefusal(lifecycle: UpLifecycle | undefined): { readonly code: ErrorCode; readonly reason: string } {
+  let code: ErrorCode = "SCHEMA_INVALID";
+  if (lifecycle !== undefined) {
+    code =
+      typeof lifecycle.reason === "string" && isCatalogueCode(lifecycle.reason)
+        ? lifecycle.reason
+        : "REALM_NOT_ACTIVE";
+  }
+  return { code, reason: ERROR_CATALOGUE[code].reason };
+}
+
+// realm up succeeds only when the daemon reports the realm active or degraded. Any other state keeps
+// its JSON on stdout and writes one "CODE: reason" line to stderr.
+function upResult(reply: ControlReply): CliResult {
+  if (reply.error !== undefined) {
+    return replyToResult(reply);
+  }
+  const lifecycle = lifecycleOf(reply.result);
+  if (lifecycle?.state === "active" || lifecycle?.state === "degraded") {
+    return replyToResult(reply);
+  }
+  const { code, reason } = upRefusal(lifecycle);
+  return { exitCode: 1, stdout: `${renderResult(reply.result)}\n`, stderr: `${code}: ${reason}\n` };
+}
+
 // The probe ensureDaemon polls: one status request on a fresh client. An absent socket reads as no
 // daemon yet (false); any other failure propagates unchanged.
 function probeDaemon(deps: ResolvedDeps): (socketPath: string) => Promise<boolean> {
@@ -219,7 +269,7 @@ function probeDaemon(deps: ResolvedDeps): (socketPath: string) => Promise<boolea
       await client.status();
       return true;
     } catch (error) {
-      if (isAbsentDaemon(error)) {
+      if (isAbsentDaemon(error) || (error instanceof RealmError && error.code === "TOOL_TIMEOUT")) {
         return false;
       }
       throw error;
@@ -278,7 +328,7 @@ async function runUp(deps: ResolvedDeps, socketPath: string, workspaceRoot: stri
       timeoutMs: upTimeoutMs,
       pollMs: RETRY_INTERVAL_MS,
     });
-    return replyToResult(
+    return upResult(
       await deps.send(socketPath, { id: 1, method: "up", params: { workspaceRoot } }, upTimeoutMs),
     );
   } catch (error) {
@@ -292,7 +342,11 @@ async function runDown(deps: ResolvedDeps, socketPath: string): Promise<CliResul
       await deps.send(socketPath, { id: 1, method: "down" }, controlTimeoutOf(deps, "down")),
     );
   } catch (error) {
-    return failureFor(error);
+    if (!isAbsentDaemon(error)) {
+      return failureFor(error);
+    }
+    // CORE-06: down is idempotent, so a realm with no daemon is already down.
+    return { exitCode: 0, stdout: "disconnected\n", stderr: "already down\n" };
   }
 }
 

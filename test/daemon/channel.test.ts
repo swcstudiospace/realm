@@ -277,6 +277,13 @@ test("RT-06: ensureSocketDir creates stateDir/run at mode 0700 when absent and a
   assert.equal(ensureSocketDir(stateDir), runDir, "a compliant directory is accepted again");
 });
 
+test("RT-06: a fresh state directory is created at mode 0700, and so is its run directory (P6-D3)", (t) => {
+  const stateDir = join(scratchBase(t), "state");
+  const runDir = ensureSocketDir(stateDir);
+  assert.equal(statSync(stateDir).mode & 0o777, 0o700, "the fresh state directory must not keep the default mode");
+  assert.equal(statSync(runDir).mode & 0o777, 0o700, "the fresh run directory must be 0700");
+});
+
 test("RT-06: ensureSocketDir refuses a wrong mode, a foreign owner, or a non-directory with SCHEMA_INVALID (P6-D3, P6-D11)", (t) => {
   const stateDir = join(scratchBase(t), "state");
   const runDir = ensureSocketDir(stateDir);
