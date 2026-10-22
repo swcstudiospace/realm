@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-22
+
+### Changed
+- Add the GitHub Pages docs site built from the repository markdown (#3) (118499c)
+
 ## [0.1.0] - 2026-10-22
 
 ### Added
