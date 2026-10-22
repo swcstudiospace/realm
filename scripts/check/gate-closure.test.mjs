@@ -35,6 +35,32 @@ test("a child_process import reached through a helper is reported with its impor
   );
 });
 
+test("import text inside string literals and comments is not read as an import, and a real import after them is followed", async () => {
+  await withFixture(
+    {
+      "src/core/policy.ts": [
+        'export const help = "Use import(\'./optional.js\') here and import { x } from \'./also-missing.js\'";',
+        '// import { y } from "./comment-missing.js";',
+        '/* import("./block-missing.js") */',
+        'import { load } from "./loader.js";',
+        "export const gate = load;",
+        "",
+      ].join("\n"),
+      "src/core/loader.ts": 'import { spawn } from "node:child_process";\nexport const load = spawn;\n',
+    },
+    async (root) => {
+      const { modules, unresolved } = gateClosure({ root, entries: ["src/core/policy.ts"] });
+      assert.deepEqual(unresolved, []);
+      assert.deepEqual([...modules.keys()].sort(), ["src/core/loader.ts", "src/core/policy.ts"]);
+      const violations = gateViolations({ root, entries: ["src/core/policy.ts"], forbidden: [] });
+      assert.deepEqual(
+        violations.map((violation) => violation.chain),
+        [["src/core/policy.ts", "src/core/loader.ts"]],
+      );
+    },
+  );
+});
+
 test("a relative import written with a .js specifier resolves to the .ts source in the closure", async () => {
   await withFixture(
     {
