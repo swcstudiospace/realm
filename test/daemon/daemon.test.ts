@@ -1,6 +1,6 @@
 // Daemon tests (CLI-01, RT-06, P6-D1, P6-D4, P6-D12). Every test drives the
 // real module: single-owner start over a live Unix socket, the reap sweep
-// before serving, all four CONTROL_METHODS over the channel, and graceful
+// before serving, all five CONTROL_METHODS over the channel, and graceful
 // shutdown on down. No live Podman, OpenShell, or Anda engine is started: the
 // adapter seam carries the existing fakes and scripted probes.
 
@@ -13,7 +13,12 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { makeRealmError, RealmError } from "../../src/core/errors.js";
 import { displayStatus, STATUS_LABELS } from "../../src/core/status.js";
-import { sendRequest, type ControlReply } from "../../src/daemon/channel.js";
+import {
+  MAX_CONTROL_LINE_BYTES,
+  sendRequest,
+  type ControlReply,
+  type ControlRequest,
+} from "../../src/daemon/channel.js";
 import {
   buildDaemonHandle,
   type BuildDaemonHandleOptions,
@@ -23,6 +28,7 @@ import {
 } from "../../src/daemon/daemon.js";
 import type { CheckResult } from "../../src/doctor/checks.js";
 import { controlSocketPath } from "../../src/session/paths.js";
+import type { ToolOutcome } from "../../src/tools/dispatch.js";
 import { FakeBridge } from "../support/fake-bridge.js";
 import { FakeExecutionService } from "../support/fake-execution.js";
 import { FakeContainerStore, FakeLibpod } from "../support/fake-libpod.js";
@@ -382,6 +388,165 @@ test("CLI-01: doctor dispatches runChecks over the socket", async (t) => {
   const reply = await sendRequest(daemon.socketPath, { id: "doc-1", method: "doctor" });
   assert.equal(reply.id, "doc-1");
   assert.deepEqual(reply.result, report);
+
+  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down" });
+  assert.ok(down.result !== undefined);
+  await awaitDone(daemon);
+});
+
+interface DispatcherRecord {
+  readonly raws: unknown[];
+  readonly outcomes: ToolOutcome[];
+}
+
+// Wraps the daemon's own dispatcher instance so each raw tool object and the outcome it produced
+// are recorded. With no replacement the real pipeline runs; with one, the replacement answers.
+function recordDispatcherCalls(
+  daemon: StartedDaemon,
+  replacement?: (raw: unknown) => Promise<ToolOutcome>,
+): DispatcherRecord {
+  const dispatcher = daemon.handle.dispatcher;
+  const real = dispatcher.call.bind(dispatcher);
+  const record: DispatcherRecord = { raws: [], outcomes: [] };
+  dispatcher.call = async (raw: unknown): Promise<ToolOutcome> => {
+    record.raws.push(raw);
+    const outcome = await (replacement === undefined ? real(raw) : replacement(raw));
+    record.outcomes.push(outcome);
+    return outcome;
+  };
+  return record;
+}
+
+test("RT-06: a tool request reaches the dispatcher exactly once and answers its outcome (P6-D12)", async (t) => {
+  const fixture = makeDirs(t);
+  const { options } = daemonParts(fixture);
+  const daemon = await startDaemon(options);
+  t.after(() => cleanupDaemon(daemon));
+  const record = recordDispatcherCalls(daemon);
+
+  const reply = await sendRequest(daemon.socketPath, {
+    id: "tool-1",
+    method: "tool",
+    params: { tool: { status: {} } },
+  });
+  assert.equal(reply.id, "tool-1");
+  assert.equal(reply.error, undefined);
+  assert.deepEqual(record.raws, [{ status: {} }]);
+  const [outcome] = record.outcomes;
+  assert.ok(outcome !== undefined, "the dispatcher must answer exactly one outcome");
+  assert.deepEqual(reply.result, JSON.parse(JSON.stringify(outcome)));
+
+  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down" });
+  assert.ok(down.result !== undefined);
+  await awaitDone(daemon);
+});
+
+test("RT-06: a tool request without a tool object refuses with SCHEMA_INVALID and never reaches the dispatcher (P6-D2, P6-D12)", async (t) => {
+  const fixture = makeDirs(t);
+  const { options } = daemonParts(fixture);
+  const daemon = await startDaemon(options);
+  t.after(() => cleanupDaemon(daemon));
+  const record = recordDispatcherCalls(daemon);
+
+  const withoutTool: ControlRequest[] = [
+    { id: "t-1", method: "tool" },
+    { id: "t-2", method: "tool", params: {} },
+    { id: "t-3", method: "tool", params: { tool: null } },
+    { id: "t-4", method: "tool", params: { tool: "status" } },
+    { id: "t-5", method: "tool", params: { tool: [] } },
+    { id: "t-6", method: "tool", params: [] },
+  ];
+  for (const request of withoutTool) {
+    const reply = await sendRequest(daemon.socketPath, request);
+    assert.deepEqual(reply, { id: request.id, error: { code: "SCHEMA_INVALID" } });
+  }
+  assert.deepEqual(record.raws, []);
+
+  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down" });
+  assert.ok(down.result !== undefined);
+  await awaitDone(daemon);
+});
+
+test("RT-06: a dispatcher that throws a RealmError answers that error's catalogue code (P6-D12)", async (t) => {
+  const fixture = makeDirs(t);
+  const { options } = daemonParts(fixture);
+  const daemon = await startDaemon(options);
+  t.after(() => cleanupDaemon(daemon));
+  const record = recordDispatcherCalls(daemon, () => Promise.reject(makeRealmError("TOOL_TIMEOUT")));
+
+  const reply = await sendRequest(daemon.socketPath, {
+    id: "tool-2",
+    method: "tool",
+    params: { tool: { status: {} } },
+  });
+  assert.deepEqual(reply, { id: "tool-2", error: { code: "TOOL_TIMEOUT" } });
+  assert.equal(record.raws.length, 1);
+
+  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down" });
+  assert.ok(down.result !== undefined);
+  await awaitDone(daemon);
+});
+
+test("RT-06: a refused outcome answers its catalogue code and no other field (P6-D12)", async (t) => {
+  const fixture = makeDirs(t);
+  const { options } = daemonParts(fixture);
+  const daemon = await startDaemon(options);
+  t.after(() => cleanupDaemon(daemon));
+  recordDispatcherCalls(
+    daemon,
+    () =>
+      Promise.resolve<ToolOutcome>({
+        outcome: "refused",
+        tool: "read",
+        code: "POLICY_DENIED",
+        retryable: false,
+      }),
+  );
+
+  const reply = await sendRequest(daemon.socketPath, {
+    id: "tool-3",
+    method: "tool",
+    params: { tool: { read: { path: "doc.txt", maxBytes: 16 } } },
+  });
+  assert.deepEqual(reply, { id: "tool-3", error: { code: "POLICY_DENIED" } });
+
+  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down" });
+  assert.ok(down.result !== undefined);
+  await awaitDone(daemon);
+});
+
+test("RT-06: an oversized request line is refused with a null-id SCHEMA_INVALID, and the dispatcher never sees it (P6-D2, P6-D12)", async (t) => {
+  const fixture = makeDirs(t);
+  const { options } = daemonParts(fixture);
+  const daemon = await startDaemon(options);
+  t.after(() => cleanupDaemon(daemon));
+  const record = recordDispatcherCalls(daemon);
+
+  const padding = "x".repeat(MAX_CONTROL_LINE_BYTES);
+  const oversized = `{"id":"big-1","method":"tool","params":{"tool":{"status":{}},"pad":"${padding}"}}`;
+  const raw = await sendRawLine(daemon.socketPath, `${oversized}\n`);
+  assert.deepEqual(JSON.parse(raw), { id: null, error: { code: "SCHEMA_INVALID" } });
+  assert.deepEqual(record.raws, []);
+
+  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down" });
+  assert.ok(down.result !== undefined);
+  await awaitDone(daemon);
+});
+
+test("CLI-01: a status reply carries the policy mode the daemon loaded (P6-D12)", async (t) => {
+  const fixture = makeDirs(t);
+  const policyPath = writePolicy(fixture, "fail-closed-policy.json", {
+    mode: "fail-closed",
+    workspaceRoots: [fixture.ws],
+  });
+  const { options } = daemonParts(fixture, { policyPath });
+  const daemon = await startDaemon(options);
+  t.after(() => cleanupDaemon(daemon));
+
+  const status = await sendRequest(daemon.socketPath, { id: "s1", method: "status" });
+  const result: unknown = status.result;
+  const mode = typeof result === "object" && result !== null && "mode" in result ? result.mode : undefined;
+  assert.equal(mode, "fail-closed");
 
   const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down" });
   assert.ok(down.result !== undefined);

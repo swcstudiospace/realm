@@ -32,7 +32,7 @@ const INVALID_PARAMS = -32602;
 const INTERNAL_ERROR = -32603;
 
 export interface AcpAgentOptions {
-  readonly dispatcher: ToolDispatcher;
+  readonly dispatcher: Pick<ToolDispatcher, "call">;
   readonly input: Readable;
   readonly output: Writable;
   // Optional observer: it receives a copy of each diagnostic after the
@@ -91,7 +91,7 @@ function decodeChunk(chunk: unknown, decoder: StringDecoder): string {
 
 async function handleLine(
   line: string,
-  dispatcher: ToolDispatcher,
+  dispatcher: Pick<ToolDispatcher, "call">,
   send: Sender,
   diagnose: Diagnose,
 ): Promise<void> {

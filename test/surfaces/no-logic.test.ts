@@ -119,6 +119,27 @@ function dispatcherBypassViolations(sources: ReadonlyMap<string, string>): strin
   return violations;
 }
 
+// The daemon modules the Omp surface may import. client carries the only request path (DaemonClient); channel
+// holds the control timeouts and ensure runs the attach over that same client. None of them dispatches a tool.
+const OMP_DAEMON_MODULES: readonly string[] = ["client", "channel", "ensure"];
+
+// Each entry names an Omp surface file that imports a daemon module outside that allowlist.
+function ompDaemonImportViolations(sources: ReadonlyMap<string, string>): string[] {
+  const violations: string[] = [];
+  for (const [file, text] of sources) {
+    if (!file.startsWith("omp/")) {
+      continue;
+    }
+    for (const match of text.matchAll(/from "\.\.\/daemon\/([\w-]+)\.js"/g)) {
+      const name = match[1] ?? "";
+      if (!OMP_DAEMON_MODULES.includes(name)) {
+        violations.push(`${file} imports daemon/${name}, not DaemonClient`);
+      }
+    }
+  }
+  return violations;
+}
+
 // Every module whose source calls spawn( as a call, not as part of another identifier.
 function spawnCallers(sources: ReadonlyMap<string, string>): string[] {
   return [...sources.keys()].filter((file) => /\bspawn\(/.test(sources.get(file) ?? ""));
@@ -132,19 +153,12 @@ test("TOOL-05: no surface file references a dispatcher-internal symbol outside t
   assert.deepEqual(surfaceInternalViolations(readSources()), []);
 });
 
-test("TOOL-05: the surfaces reach the dispatcher only through call, never another dispatcher member (P5-D11, P5-D12)", () => {
+test("TOOL-05: the Omp surface reaches the daemon only through DaemonClient, never another dispatcher member (P5-D11, P5-D12)", () => {
   const sources = readSources();
   assert.deepEqual(dispatcherBypassViolations(sources), []);
-  for (const dir of SURFACE_DIRS) {
-    const files = [...sources.keys()].filter((file) => file.startsWith(dir));
-    assert.ok(files.length > 0, `expected surface files under src/${dir}`);
-    for (const file of files) {
-      assert.ok(
-        mentions(sources.get(file) ?? "", "call"),
-        `${file} reaches the dispatcher through call (P5-D11)`,
-      );
-    }
-  }
+  assert.deepEqual(ompDaemonImportViolations(sources), []);
+  assert.ok(mentions(sources.get("omp/extension.ts") ?? "", "connectDaemon"), "omp/extension.ts attaches through connectDaemon (P5-D11)");
+  assert.ok(mentions(sources.get("omp/plugin.ts") ?? "", "DaemonClient"), "omp/plugin.ts holds the daemon only as a DaemonClient (P5-D11)");
 });
 
 test("TOOL-05: spawn( appears in src/ only in src/runtime/session-execution.ts (P5-D12)", () => {

@@ -6,6 +6,7 @@
 // mode 0700 and the socket is chmod 0600 after listen; any other mode, a non-directory,
 // or a foreign owner refuses with SCHEMA_INVALID. This module owns the wire format plus
 // the filesystem guards only; it starts no long-running process and parses no argv.
+// Request lines are capped at MAX_CONTROL_LINE_BYTES; a longer line is refused unread with a null-id SCHEMA_INVALID reply.
 
 import { createConnection, type Socket } from "node:net";
 import { chmodSync, mkdirSync, statSync, type Stats } from "node:fs";
@@ -13,7 +14,7 @@ import { ERROR_CODES, makeRealmError, RealmError, type ErrorCode } from "../core
 import { withTimeout } from "../core/timeout.js";
 import { controlSocketPath } from "../session/paths.js";
 
-export const CONTROL_METHODS = ["status", "up", "down", "doctor"] as const;
+export const CONTROL_METHODS = ["status", "up", "down", "doctor", "tool"] as const;
 export type ControlMethod = (typeof CONTROL_METHODS)[number];
 
 const KNOWN_METHODS: readonly string[] = CONTROL_METHODS;
@@ -25,12 +26,19 @@ export const SOCKET_TIMEOUT_MS = 5000;
 // Bound for one control request, per method. down must outlast the controller teardown bound
 // (TEARDOWN_TIMEOUT_MS in lifecycle/controller.ts, 30 s), or the CLI gives up while the daemon is
 // still tearing down. up covers the policy startup budget. doctor runs up to nine probes, each
-// bounded at 5 s, so it gets 60 s.
+// bounded at 5 s, so it gets 60 s. tool runs one dispatcher call under its own bound, so it gets
+// that bound plus 10 s for the reply.
+// The dispatcher's per-call bound (TOOL_CALL_TIMEOUT_MS in src/tools/dispatch.ts). It is mirrored,
+// not imported: this module keeps its five-import allowlist (P6-D10), and importing the dispatcher
+// would load the tool and lifecycle graph into every channel consumer. The channel test asserts
+// that the tool bound exceeds the dispatcher constant, so drift fails the suite.
+const TOOL_CALL_BOUND_MS = 30_000;
 export const CONTROL_TIMEOUT_MS: Readonly<Record<ControlMethod, number>> = Object.freeze({
   status: 5_000,
   up: 60_000,
   down: 45_000,
   doctor: 60_000,
+  tool: TOOL_CALL_BOUND_MS + 10_000,
 });
 
 // The socket is chmod to this mode after listen (P6-D3).
@@ -40,6 +48,9 @@ export const SOCKET_MODE = 0o600;
 export const RUN_DIR_MODE = 0o700;
 
 const PERMISSION_BITS = 0o777;
+
+// The largest control line the channel buffers (1 MiB). A longer line is refused without being read whole.
+export const MAX_CONTROL_LINE_BYTES = 1_048_576;
 
 export type ControlId = string | number;
 
@@ -54,7 +65,8 @@ export interface ControlError {
 }
 
 export interface ControlReply {
-  readonly id: ControlId;
+  // Null only on the oversized-line refusal, where no id from the line is trusted.
+  readonly id: ControlId | null;
   readonly result?: unknown;
   readonly error?: ControlError;
 }
@@ -144,7 +156,7 @@ export function decodeRequest(line: string): ControlRequest {
 }
 
 export function encodeReply(reply: ControlReply): string {
-  if (!isControlId(reply.id)) {
+  if (!isReplyId(reply.id)) {
     throw makeRealmError("SCHEMA_INVALID");
   }
   if (reply.error !== undefined) {
@@ -170,7 +182,7 @@ export function decodeReply(line: string): ControlReply {
     throw makeRealmError("SCHEMA_INVALID");
   }
   const id: unknown = parsed["id"];
-  if (!isControlId(id)) {
+  if (!isReplyId(id)) {
     throw makeRealmError("SCHEMA_INVALID");
   }
   const hasResult = "result" in parsed;
@@ -249,6 +261,67 @@ async function readBounded(socket: Socket, timeoutMs: number): Promise<string> {
       if (end !== -1) {
         cleanup();
         resolve(text.slice(0, end));
+      }
+    };
+    const onError = (cause: unknown): void => {
+      cleanup();
+      reject(cause);
+    };
+    const onClose = (): void => {
+      cleanup();
+      reject(makeRealmError("REALM_NOT_ACTIVE"));
+    };
+    socket.on("data", onData);
+    socket.once("error", onError);
+    socket.once("close", onClose);
+  });
+  try {
+    return await withTimeout(line, timeoutMs, "TOOL_TIMEOUT");
+  } catch (error: unknown) {
+    throw ioFailure(error);
+  }
+}
+
+function isReplyId(value: unknown): value is ControlId | null {
+  return value === null || isControlId(value);
+}
+
+// The reply for a request line longer than MAX_CONTROL_LINE_BYTES. The line was never read whole,
+// so no id from it is trusted: the reply carries a null id, and the server closes the socket after it.
+export function oversizedLineReply(): ControlReply {
+  return { id: null, error: { code: "SCHEMA_INVALID" } };
+}
+
+export type ControlLineRead =
+  | { readonly ok: true; readonly line: string }
+  | { readonly ok: false; readonly reason: "oversized" };
+
+// Reads one newline-terminated request line, buffering at most MAX_CONTROL_LINE_BYTES. Once the
+// line passes the cap, buffering stops, the rest of the line is discarded, and the result reports
+// it oversized. Timeouts and socket failures surface as catalogue codes, as readBounded does.
+export async function readControlLine(socket: Socket, timeoutMs: number): Promise<ControlLineRead> {
+  const line = new Promise<ControlLineRead>((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    const cleanup = (): void => {
+      socket.off("data", onData);
+      socket.off("error", onError);
+      socket.off("close", onClose);
+    };
+    const onData = (chunk: unknown): void => {
+      const bytes: Buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
+      const end = bytes.indexOf(0x0a);
+      const take = end === -1 ? bytes.length : end;
+      size += take;
+      if (size > MAX_CONTROL_LINE_BYTES) {
+        cleanup();
+        resolve({ ok: false, reason: "oversized" });
+        return;
+      }
+      chunks.push(bytes.subarray(0, take));
+      if (end !== -1) {
+        cleanup();
+        resolve({ ok: true, line: Buffer.concat(chunks).toString("utf8") });
       }
     };
     const onError = (cause: unknown): void => {

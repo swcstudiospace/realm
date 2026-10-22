@@ -2,7 +2,7 @@
 // buildDaemonHandle wires createRealmHandle with the production adapters (SessionExecution over the
 // libpod client, AndaBridge over the configured URL, the production OpenShell runner, Date clock); tests inject
 // the existing fakes at the same seam. startDaemon binds the control socket once per state directory,
-// runs reapStartup with the bounded sweep before serving, dispatches the four CONTROL_METHODS from
+// runs reapStartup with the bounded sweep before serving, dispatches the five CONTROL_METHODS from
 // the 06-01 channel, and tears down on down. The wait for the controller teardown is bounded by
 // TEARDOWN_TIMEOUT_MS; socket I/O keeps SOCKET_TIMEOUT_MS. With no AgentOS driver or supervisor bound,
 // the handle still builds and up refuses with AGENTOS_NOT_CONFIGURED. This module parses no argv,
@@ -11,7 +11,7 @@
 import { rmSync } from "node:fs";
 import { createConnection, createServer, type Server, type Socket } from "node:net";
 import { AndaBridge } from "../anda/client.js";
-import type { Policy } from "../contract/validate.js";
+import type { Policy, PolicyMode } from "../contract/validate.js";
 import { makeRealmError, RealmError, type ErrorCode } from "../core/errors.js";
 import { loadPolicyFile } from "../core/policy.js";
 import type { BridgePort, ExecutionService } from "../core/ports.js";
@@ -46,6 +46,8 @@ import {
   encodeReply,
   ensureSocketDir,
   isControlMethod,
+  oversizedLineReply,
+  readControlLine,
   replyForMalformedLine,
   SOCKET_TIMEOUT_MS,
   unknownMethodReply,
@@ -126,7 +128,7 @@ export function buildDaemonHandle(options: BuildDaemonHandleOptions): RealmHandl
   return createRealmHandle({
     runtimeInput: options.runtimeInput,
     policyPath: options.policyPath,
-    ...(options.policy !== undefined ? { policy: options.policy } : {}),
+    policy,
     sessionId: options.sessionId,
     exec,
     bridge,
@@ -263,7 +265,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
       // A second down is a no-op: it answers the current snapshot without
       // running teardown again (close delegates to controller stop, which is
       // safe to call twice).
-      endSocket(socket, { id, result: statusResult(handle.controller.snapshot()) });
+      endSocket(socket, { id, result: statusResult(handle.controller.snapshot(), handle.policyMode) });
       return;
     }
     downRequested = true;
@@ -274,7 +276,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
       // The teardown wait is bounded by TEARDOWN_TIMEOUT_MS. Expiry is REALM_STOPPING, the code the controller
       // reports for its own teardown bound; the catalogue has no teardown-timeout code.
       const closed = await withTimeout(handle.close(), TEARDOWN_TIMEOUT_MS, "REALM_STOPPING");
-      reply = { id, result: statusResult(closed) };
+      reply = { id, result: statusResult(closed, handle.policyMode) };
     } catch (error: unknown) {
       reply = { id, error: { code: codeOf(error) } };
     }
@@ -290,7 +292,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
   ): Promise<ControlReply | null> => {
     switch (method) {
       case "status": {
-        return { id, result: statusResult(handle.controller.snapshot()) };
+        return { id, result: statusResult(handle.controller.snapshot(), handle.policyMode) };
       }
       case "up": {
         const workspaceRoot: unknown =
@@ -314,7 +316,25 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
         }
         try {
           const snapshot = await handle.controller.create(workspaceRoot);
-          return { id, result: statusResult(snapshot) };
+          return { id, result: statusResult(snapshot, handle.policyMode) };
+        } catch (error: unknown) {
+          return { id, error: { code: codeOf(error) } };
+        }
+      }
+      case "tool": {
+        const tool: unknown =
+          typeof params === "object" && params !== null && !Array.isArray(params) && "tool" in params
+            ? params.tool
+            : undefined;
+        if (typeof tool !== "object" || tool === null || Array.isArray(tool)) {
+          return { id, error: { code: "SCHEMA_INVALID" } };
+        }
+        try {
+          const outcome = await handle.dispatcher.call(tool);
+          if (outcome.outcome === "refused") {
+            return { id, error: { code: outcome.code } };
+          }
+          return { id, result: outcome };
         } catch (error: unknown) {
           return { id, error: { code: codeOf(error) } };
         }
@@ -354,8 +374,13 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
     }
     inFlight += 1;
     try {
-      const line = await readLine(socket, timeoutMs);
-      const reply = await dispatchLine(line, socket);
+      const read = await readControlLine(socket, timeoutMs);
+      if (!read.ok) {
+        // An oversized line is never dispatched: refuse it with a null-id reply, then close.
+        endSocket(socket, oversizedLineReply());
+        return;
+      }
+      const reply = await dispatchLine(read.line, socket);
       if (reply === null) {
         dropSocket(socket);
       } else {
@@ -438,11 +463,15 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
   return { socketPath, handle, done };
 }
 
-function statusResult(snapshot: StateSnapshot): {
+function statusResult(
+  snapshot: StateSnapshot,
+  mode: PolicyMode,
+): {
   readonly snapshot: StateSnapshot;
   readonly display: DisplayStatus;
+  readonly mode: PolicyMode;
 } {
-  return { snapshot, display: displayStatus(snapshot) };
+  return { snapshot, display: displayStatus(snapshot), mode };
 }
 
 function codeOf(error: unknown): ErrorCode {
@@ -562,42 +591,5 @@ function probeSocketAlive(socketPath: string, timeoutMs: number): Promise<boolea
       socket.destroy();
       resolve(false);
     });
-  });
-}
-
-// One newline-terminated line bounded by the socket timeout, mirroring the
-// 06-01 channel read. A peer that never answers rejects with TOOL_TIMEOUT; a
-// peer that went away rejects with REALM_NOT_ACTIVE.
-function readLine(socket: Socket, timeoutMs: number): Promise<string> {
-  const pending = new Promise<string>((resolve, reject) => {
-    let text = "";
-    const cleanup = (): void => {
-      socket.off("data", onData);
-      socket.off("error", onError);
-      socket.off("close", onClose);
-    };
-    const onData = (chunk: unknown): void => {
-      text += String(chunk);
-      const end = text.indexOf("\n");
-      if (end !== -1) {
-        cleanup();
-        resolve(text.slice(0, end));
-      }
-    };
-    const onError = (cause: unknown): void => {
-      cleanup();
-      reject(cause);
-    };
-    const onClose = (): void => {
-      cleanup();
-      reject(makeRealmError("REALM_NOT_ACTIVE"));
-    };
-    socket.on("data", onData);
-    socket.once("error", onError);
-    socket.once("close", onClose);
-  });
-  return withTimeout(pending, timeoutMs, "TOOL_TIMEOUT").catch((error: unknown) => {
-    socket.destroy();
-    throw error instanceof RealmError ? error : makeRealmError("REALM_NOT_ACTIVE");
   });
 }

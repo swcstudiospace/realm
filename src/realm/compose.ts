@@ -5,7 +5,7 @@
 // controller and the dispatcher share one LockTable instance (P5-D15, D-96),
 // so no second table can split lock ownership.
 
-import type { Policy } from "../contract/validate.js";
+import type { Policy, PolicyMode } from "../contract/validate.js";
 import { loadPolicyFile } from "../core/policy.js";
 import type { BridgePort, ExecutionService } from "../core/ports.js";
 import type { StateSnapshot } from "../core/state-machine.js";
@@ -20,6 +20,8 @@ import { ToolDispatcher } from "../tools/dispatch.js";
 export interface RealmHandle {
   readonly controller: LifecycleController;
   readonly dispatcher: ToolDispatcher;
+  // The policy's mode, read by surfaces that must not load the policy themselves.
+  readonly policyMode: PolicyMode;
   close(): Promise<StateSnapshot>;
 }
 
@@ -82,6 +84,7 @@ export function createRealmHandle(options: CreateRealmHandleOptions): RealmHandl
   return {
     controller,
     dispatcher,
+    policyMode: policy.mode,
     close: () => controller.stop(),
   };
 }

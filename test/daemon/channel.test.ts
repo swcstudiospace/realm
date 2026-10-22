@@ -5,13 +5,17 @@
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { chmodSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { createServer, type Server, type Socket } from "node:net";
+import { createConnection, createServer, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { RealmError, ERROR_CATALOGUE, type ErrorCode } from "../../src/core/errors.js";
 import {
   CONTROL_METHODS,
+  MAX_CONTROL_LINE_BYTES,
+  oversizedLineReply,
+  readControlLine,
+  CONTROL_TIMEOUT_MS,
   SOCKET_TIMEOUT_MS,
   chmodSocket,
   decodeReply,
@@ -25,6 +29,7 @@ import {
   sendRequest,
   unknownMethodReply,
 } from "../../src/daemon/channel.js";
+import { TOOL_CALL_TIMEOUT_MS } from "../../src/tools/dispatch.js";
 
 // This file runs from dist/test/daemon, so three levels up is the package root.
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -114,6 +119,52 @@ test("RT-06: requests and replies round-trip over a live socket with matching id
     assert.equal(reply.id, id);
     assert.deepEqual(reply.result, { method });
   }
+});
+
+test("RT-06: the control methods are exactly status, up, down, doctor, and tool, and tool outlasts one dispatcher call (P6-D2, P6-D12)", () => {
+  assert.deepEqual([...CONTROL_METHODS].sort(), ["doctor", "down", "status", "tool", "up"]);
+  assert.ok(
+    CONTROL_TIMEOUT_MS.tool > TOOL_CALL_TIMEOUT_MS,
+    "a tool request must outlast one dispatcher call",
+  );
+});
+
+test("RT-06: a request line over MAX_CONTROL_LINE_BYTES is refused with a null-id SCHEMA_INVALID and never reaches the dispatcher (P6-D2, P6-D12)", async (t) => {
+  const dispatched: string[] = [];
+  const socketPath = await listenUnix(
+    t,
+    createServer((socket) => {
+      // The same read-then-dispatch order the daemon uses: an oversized line is refused before any dispatch.
+      void readControlLine(socket, SOCKET_TIMEOUT_MS)
+        .then((read) => {
+          if (!read.ok) {
+            socket.end(encodeReply(oversizedLineReply()));
+            return;
+          }
+          dispatched.push(read.line);
+          socket.end(encodeReply({ id: 1, result: {} }));
+        })
+        .catch(() => {
+          socket.destroy();
+        });
+    }),
+  );
+  const raw = await new Promise<string>((resolve, reject) => {
+    const socket = createConnection(socketPath);
+    let text = "";
+    socket.on("data", (chunk) => {
+      text += String(chunk);
+      const end = text.indexOf("\n");
+      if (end !== -1) {
+        socket.destroy();
+        resolve(text.slice(0, end));
+      }
+    });
+    socket.once("error", reject);
+    socket.write(`${"x".repeat(MAX_CONTROL_LINE_BYTES + 1)}\n`);
+  });
+  assert.deepEqual(decodeReply(raw), { id: null, error: { code: "SCHEMA_INVALID" } });
+  assert.deepEqual(dispatched, []);
 });
 
 test("RT-06: an unknown method replies with a catalogue code, never a raw message (P6-D2)", async (t) => {

@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "bin": { "realm": "./dist/src/cli/main.js" },
-  "omp": { "extensions": ["./dist/src/omp/plugin.js"] },
+  "omp": { "extensions": ["./dist/src/omp/extension.js"] },
   "description": "Realm: strict ESM TypeScript package",
   "type": "module",
   "engines": {
