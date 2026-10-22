@@ -6,6 +6,16 @@ export default tseslint.config(
     ignores: ["dist/**", "coverage/**", "node_modules/**"],
   },
   js.configs.recommended,
+  {
+    // Release and check scripts are Node ESM; declare the Node globals they use.
+    files: ["scripts/**/*.mjs"],
+    languageOptions: {
+      globals: {
+        console: "readonly",
+        process: "readonly",
+      },
+    },
+  },
   tseslint.configs.strict,
   {
     files: ["**/*.ts"],

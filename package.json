@@ -2,9 +2,31 @@
   "name": "agent-realm",
   "version": "0.0.0",
   "private": true,
+  "license": "AGPL-3.0-only",
+  "author": "Spectrum Web Co/swcstudiospace",
+  "description": "Realm: strict ESM TypeScript package",
+  "keywords": [
+    "realm",
+    "ai",
+    "agent",
+    "sandbox",
+    "podman",
+    "mcp",
+    "acp",
+    "ultrathink",
+    "ussr-stack"
+  ],
+  "homepage": "https://swcstudiospace.github.io/realm/",
+  "bugs": {
+    "url": "https://github.com/swcstudiospace/realm/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/swcstudiospace/realm.git"
+  },
   "bin": { "realm": "./dist/src/cli/main.js" },
   "omp": { "extensions": ["./dist/src/omp/extension.js"] },
-  "description": "Realm: strict ESM TypeScript package",
+  "files": ["dist/src", "README.md", "LICENSE", "NOTICE", "CHANGELOG.md"],
   "type": "module",
   "engines": {
     "node": ">=22.13.0"
@@ -14,7 +36,12 @@
     "lint": "eslint .",
     "test": "tsc -p tsconfig.json && node --test \"dist/test/**/*.test.js\"",
     "test:integration": "tsc -p tsconfig.json && node --test \"dist/test/integration/*.test.js\"",
-    "build": "tsc -p tsconfig.json"
+    "build": "tsc -p tsconfig.json",
+    "test:scripts": "node --test \"scripts/**/*.test.mjs\"",
+    "check:docs": "node scripts/check/host-paths.mjs && node scripts/check/agents-sync.mjs",
+    "release:next": "node scripts/release/next-version.mjs",
+    "release:sync": "node scripts/release/sync-version.mjs",
+    "release:changelog": "node scripts/release/changelog.mjs"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
