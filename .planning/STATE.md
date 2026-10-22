@@ -87,7 +87,7 @@ Open follow-ups: the AgentOS sandbox runner in the follow-up milestone (RT-04, C
 
 ### Blockers/Concerns
 
-- Approvals: ship (PR and possible merge to main; ship.autoMerge is on, origin github.com/swcstudiospace/realm), archive via complete-milestone (irreversible), licence (the repo has no declared licence, which is a release gate), CI (no .github), and README (none exists; not created without a request).
+- Approvals: ship done (PRs #1 to #3 merged through ultrathink-ship, PR #4 archives v1.0; the ship CLI ran with --ignore-gsd while the GSD roadmap was incomplete); licence done (AGPL-3.0-only); CI done (verify and release on main, and the docs site built on pull requests); README done. Still open: confirmation of the FS-02 accepted approximation, awaiting the user.
 - Host Podman is 4.9.3, below OpenShell's 5.x requirement. Podman-gated checks are deferred to a Podman 5.x host.
 - Omp host write and edit interception is not documented (OQ-P5-02). The guard blocks writes while the policy mode is unknown. Audit G-09 part 5.4 stays open for this reason.
 - The Anda licence conflict still blocks vendoring Anda code.
@@ -125,8 +125,8 @@ Detail, by phase: Phase 3 covers RT-01, RT-02, RT-03, RT-09, and the live parts 
 ## Session Continuity
 
 Last session: 2026-10-22
-Stopped at: decisions recorded and gates green at 54bc236. Waiting on approvals: ship, licence, CI, README, archive, and confirmation of the FS-02 accepted approximation.
-Resume file: None. Next action on resume: take the approvals. On ship approval, open the PR and run ultrathink-ship. On archive approval, run complete-milestone, then the milestone audit's disposition is final. On FS-02 confirmation, record it as accepted or reopen it.
+Stopped at: v1.0 archived on 2026-10-22 after PRs #1 to #3 merged. Releases v0.1.0 and v0.1.1 are published, and the docs site is live at https://swcstudiospace.github.io/realm/. Waiting on: confirmation of the FS-02 accepted approximation, and live verification on a Podman 5.x host.
+Resume file: None. Next action on resume: confirm or reopen FS-02, then choose the scope of the next milestone (the AgentOS runner follow-up), and run the live verification on a Podman 5.x host.
 
 Recorded commits (closure run): 72817e9 (private flag restored, engines >=22.13.0); 390f511 (causeCode and catalogue codes, host paths, lifecycle bound, root identity, exec margin); b6bc892 (daemon entry, AgentOS fail-closed, catalogue refusals, per-method control bounds); 8088159 (daemon owns sessions; tool method; daemon client; Omp and MCP attach); 4b1d4ab (smoke fixes: CLI probe, up and down exits, state-dir 0700); c55056a (traceability: requirements by evidence, spike facts, runtime config, Omp attach contract); a999c17 (audit gap closure: realm acp, refusal code mapping, one state-dir resolver, Omp status, pinned-root rebind, catch-site fixes, daemon server-failure stop); dd02034 (re-audit, planning, and docs); 54bc236 (MCP tool-call diagnostic); plus the decisions commit (see git log).
 
