@@ -11,6 +11,7 @@
 // hermetic under test.
 
 import { spawn } from "node:child_process";
+import { closeSync, fchmodSync, mkdirSync, openSync } from "node:fs";
 import { createConnection } from "node:net";
 import { runAcpOverStdio } from "../acp/stdio.js";
 import { ERROR_CATALOGUE, ERROR_CODES, RealmError, type ErrorCode } from "../core/errors.js";
@@ -21,7 +22,7 @@ import {
   type ControlReply,
   type ControlRequest,
 } from "../daemon/channel.js";
-import { connectDaemon, type DaemonClient } from "../daemon/client.js";
+import { connectDaemon, type DaemonClient, type DaemonStatus } from "../daemon/client.js";
 import { ensureDaemon } from "../daemon/ensure.js";
 import { defaultRunCommand, runChecks, type DoctorOptions } from "../doctor/checks.js";
 import { createMcpServer } from "../mcp/server.js";
@@ -74,7 +75,11 @@ export interface SpawnedProcess {
 export type SpawnDaemon = (
   file: string,
   args: readonly string[],
-  options: { readonly detached: true; readonly stdio: "ignore" },
+  options: {
+    readonly detached: true;
+    readonly stdio: readonly ["ignore", number, number];
+    readonly env: EnvironmentLike;
+  },
 ) => SpawnedProcess;
 
 export type SendControlRequest = (
@@ -121,6 +126,7 @@ export interface CliResult {
 
 interface ResolvedDeps {
   readonly env: EnvironmentLike;
+  readonly stateDir: string;
   readonly timeoutMs: number | undefined;
   readonly daemonEntry: string | undefined;
   readonly spawn: SpawnDaemon;
@@ -168,9 +174,9 @@ function defaultSend(
 function defaultSpawnDaemon(
   file: string,
   args: readonly string[],
-  options: { readonly detached: true; readonly stdio: "ignore" },
+  options: Parameters<SpawnDaemon>[2],
 ): SpawnedProcess {
-  const child = spawn(file, [...args], { detached: options.detached, stdio: options.stdio });
+  const child = spawn(file, [...args], { detached: options.detached, stdio: [...options.stdio], env: options.env });
   child.unref();
   return child;
 }
@@ -289,20 +295,58 @@ function probeDaemon(deps: ResolvedDeps): (socketPath: string) => Promise<boolea
   };
 }
 
-// Spawns the detached daemon (argv form, no shell, stdio ignored) and returns at once; the
-// ensureDaemon poll that follows is what waits for it (T-06-07, T-06-10).
+// The daemon's startup log: <stateDir>/daemon.log, append-only and owner-only. The state directory is
+// made at 0700 when missing, because the log opens before the daemon creates it. The child keeps its own
+// copy of the descriptor, so the parent closes its copy once the spawn returns.
+function daemonLogPath(stateDir: string): string {
+  return `${stateDir}/daemon.log`;
+}
+
+function withDaemonLog(stateDir: string, launch: (log: number) => void): void {
+  // Missing ancestors take the default mode; only the state directory itself is made 0700.
+  const cut = stateDir.lastIndexOf("/");
+  if (cut > 0) {
+    mkdirSync(stateDir.slice(0, cut), { recursive: true });
+  }
+  mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+  const log = openSync(daemonLogPath(stateDir), "a", 0o600);
+  try {
+    fchmodSync(log, 0o600);
+    launch(log);
+  } finally {
+    closeSync(log);
+  }
+}
+
+// The line a failed attach adds to stderr, naming the startup log so the user can read the daemon's own
+// error. The log's contents are never printed.
+function daemonLogHint(stateDir: string): string {
+  return `realm: the daemon's startup output is in ${daemonLogPath(stateDir)}\n`;
+}
+
+// The stderr line for a failed attach: the catalogue code and reason, then the log hint.
+function attachFailure(error: unknown, stateDir: string): string {
+  return `${diagnosticFor(error)}${daemonLogHint(stateDir)}`;
+}
+
+// Spawns the detached daemon with its output on the startup log and returns at once; the ensureDaemon
+// poll that follows is what waits for it (T-06-07, T-06-10).
 function spawnDetachedDaemon(deps: ResolvedDeps): () => void {
   return () => {
     const entry = deps.daemonEntry ?? defaultDaemonEntry();
-    deps.spawn(process.execPath, [entry], { detached: true, stdio: "ignore" });
+    withDaemonLog(deps.stateDir, (log) => {
+      deps.spawn(process.execPath, [entry], { detached: true, stdio: ["ignore", log, log], env: deps.env });
+    });
   };
 }
 
-// The documented CLI daemon spawn (P6-D1): starts the daemon entry detached with the argv form (no
-// shell), stdio ignored, and unrefs the child so the CLI can exit. The Omp extension imports it.
-export function startDetachedDaemon(entry: string): void {
-  const child = spawn(process.execPath, [entry], { detached: true, stdio: "ignore" });
-  child.unref();
+// The documented CLI daemon spawn (P6-D1): starts the daemon entry detached with the argv form (no shell),
+// its output on <stateDir>/daemon.log, and unrefs the child so the CLI can exit. The Omp extension imports it.
+export function startDetachedDaemon(entry: string, stateDir: string): void {
+  withDaemonLog(stateDir, (log) => {
+    const child = spawn(process.execPath, [entry], { detached: true, stdio: ["ignore", log, log] });
+    child.unref();
+  });
 }
 
 // One control request's bound: an injected timeoutMs overrides it; otherwise the method's own
@@ -329,7 +373,7 @@ async function runUp(deps: ResolvedDeps, socketPath: string, workspaceRoot: stri
     return { exitCode: 1, stdout: `${probe.code}\n`, stderr: `${probe.reason}\n` };
   }
   // ensureDaemon spawns at most one detached daemon and polls the status probe until one answers;
-  // an expired bound throws TOOL_TIMEOUT, which failureFor reports as before.
+  // an expired bound throws DAEMON_START_TIMEOUT, which failureFor reports as before.
   try {
     await ensureDaemon({
       socketPath,
@@ -342,7 +386,8 @@ async function runUp(deps: ResolvedDeps, socketPath: string, workspaceRoot: stri
       await deps.send(socketPath, { id: 1, method: "up", params: { workspaceRoot } }, upTimeoutMs),
     );
   } catch (error) {
-    return failureFor(error);
+    const failure = failureFor(error);
+    return { ...failure, stderr: `${failure.stderr}${daemonLogHint(deps.stateDir)}` };
   }
 }
 
@@ -428,13 +473,13 @@ async function runMcp(deps: ResolvedDeps, socketPath: string, workspaceRoot: str
   try {
     await ensureSharedDaemon(deps, socketPath);
   } catch (error) {
-    return { exitCode: 1, stdout: "", stderr: diagnosticFor(error) };
+    return { exitCode: 1, stdout: "", stderr: attachFailure(error, deps.stateDir) };
   }
   const client = deps.connect(socketPath);
   try {
     await client.up(workspaceRoot);
   } catch (error) {
-    deps.diagnostics.write(diagnosticFor(error));
+    deps.diagnostics.write(attachFailure(error, deps.stateDir));
   }
   const server = createMcpServer(client, deps.mcpInput, deps.mcpOutput, deps.diagnostics);
   try {
@@ -457,11 +502,16 @@ async function runAcp(deps: ResolvedDeps, socketPath: string, workspaceRoot: str
   try {
     await ensureSharedDaemon(deps, socketPath);
   } catch (error) {
-    return { exitCode: 1, stdout: "", stderr: diagnosticFor(error) };
+    return { exitCode: 1, stdout: "", stderr: attachFailure(error, deps.stateDir) };
   }
   const client = deps.connect(socketPath);
   try {
-    const status = await client.up(workspaceRoot);
+    let status: DaemonStatus;
+    try {
+      status = await client.up(workspaceRoot);
+    } catch (error) {
+      return { exitCode: 1, stdout: "", stderr: attachFailure(error, deps.stateDir) };
+    }
     const lifecycle: UpLifecycle = { state: status.snapshot.state, reason: status.snapshot.reason };
     if (lifecycle.state !== "active" && lifecycle.state !== "degraded") {
       const { code, reason } = upRefusal(lifecycle);
@@ -498,6 +548,7 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
   }
   const resolved: ResolvedDeps = {
     env: deps.env,
+    stateDir,
     timeoutMs: deps.timeoutMs,
     daemonEntry: deps.daemonEntry,
     spawn: deps.spawn ?? defaultSpawnDaemon,

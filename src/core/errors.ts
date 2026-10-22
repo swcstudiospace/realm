@@ -1,4 +1,4 @@
-// Typed error catalogue (D-10, spec n6). Exactly these 27 codes; no others.
+// Typed error catalogue (D-10, spec n6). Exactly these 28 codes; no others.
 // The 20 spec n6 codes plus PODMAN_UNSUPPORTED_VERSION (plan 01-06, explicit override), AUDIT_WRITE_FAILED,
 // and three codes from the 2026-10-22 closure: AGENTOS_NOT_CONFIGURED, AGENTOS_STOP_FAILED, OPENSHELL_LABEL_AMBIGUOUS.
 // MCP_INPUT_FAILED and CLEANUP_FAILED are catalogued after the closure codes.
@@ -11,6 +11,7 @@ export const ERROR_CODES = Object.freeze([
   "REALM_STOPPING",
   "REALM_INVALID_TRANSITION",
   "STARTUP_BUDGET_EXCEEDED",
+  "DAEMON_START_TIMEOUT",
   "TOOL_TIMEOUT",
   "PODMAN_MISSING",
   "PODMAN_MACHINE_DOWN",
@@ -75,6 +76,10 @@ export const ERROR_CATALOGUE: Readonly<Record<ErrorCode, CatalogueEntry>> =
     },
     STARTUP_BUDGET_EXCEEDED: {
       reason: "Realm startup did not finish within the configured startup budget.",
+      retryable: true,
+    },
+    DAEMON_START_TIMEOUT: {
+      reason: "The daemon did not answer on its control socket within the daemon start timeout after it was spawned.",
       retryable: true,
     },
     TOOL_TIMEOUT: {

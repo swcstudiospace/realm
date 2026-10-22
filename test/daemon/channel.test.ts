@@ -409,3 +409,31 @@ test("RT-06: the channel module imports only its five allowlisted modules and to
   assert.ok(!withoutControlSock.includes(".sock"), "no socket path literal besides control.sock");
   assert.ok(source.includes("encodeRequest"), "sanity: the read source is the channel module");
 });
+
+test("RT-06: a reply longer than MAX_CONTROL_LINE_BYTES is refused with SCHEMA_INVALID, and its socket closes (P6-D2)", async (t) => {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "realm-reply-cap-")));
+  t.after(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const socketPath = join(dir, "stub.sock");
+  // A valid reply about 2 MiB long: a client that read it whole would accept it.
+  const payload = `${JSON.stringify({ id: "big-1", result: "x".repeat(2 * 1024 * 1024) })}\n`;
+  const stub = createServer((socket) => {
+    // The client refuses the reply and closes, so the stub's write may fail after that.
+    socket.on("error", () => undefined);
+    socket.once("data", () => {
+      socket.end(payload);
+    });
+  });
+  await new Promise<void>((resolve) => {
+    stub.listen(socketPath, resolve);
+  });
+  t.after(() => {
+    stub.close();
+  });
+  const failure: unknown = await sendRequest(socketPath, { id: "big-1", method: "status" }).then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+  assert.ok(failure instanceof RealmError && failure.code === "SCHEMA_INVALID");
+});

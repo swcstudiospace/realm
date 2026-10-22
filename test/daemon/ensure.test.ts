@@ -52,7 +52,7 @@ test("a probe false then true after one spawn spawns exactly once and returns", 
   assert.equal(polls, 3);
 });
 
-test("a probe that never turns true throws TOOL_TIMEOUT after the bounded wait", async () => {
+test("a probe that never turns true throws DAEMON_START_TIMEOUT, whose reason names a daemon start and not a tool", async () => {
   let spawns = 0;
   const timeoutMs = 80;
   const started = Date.now();
@@ -66,7 +66,11 @@ test("a probe that never turns true throws TOOL_TIMEOUT after the bounded wait",
       timeoutMs,
       pollMs: 10,
     }),
-    (error: unknown) => error instanceof RealmError && error.code === "TOOL_TIMEOUT",
+    (error: unknown) =>
+      error instanceof RealmError &&
+      error.code === "DAEMON_START_TIMEOUT" &&
+      /daemon start/.test(error.reason) &&
+      !/tool/i.test(error.reason),
   );
   const elapsed = Date.now() - started;
   assert.equal(spawns, 1);

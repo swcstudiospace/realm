@@ -6,7 +6,7 @@
 
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createConnection, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -791,4 +791,16 @@ test("QUAL-01: a listening server that fails stops the daemon, and done rejects 
     clearTimeout(timer);
   });
   assert.equal(outcome, "REALM_NOT_ACTIVE");
+});
+
+test("CLI-01: a fresh start makes the state and run directories 0700 and leaves a missing ancestor at the default mode (P6-D3)", async (t) => {
+  const fixture = makeDirs();
+  const ancestor = join(fixture.base, "ancestor");
+  const stateDir = join(ancestor, "state");
+  const { options } = daemonParts({ ...fixture, stateDir });
+  const daemon = await startDaemon(options);
+  t.after(() => cleanupDaemon(daemon));
+  assert.equal(statSync(stateDir).mode & 0o777, 0o700);
+  assert.equal(statSync(join(stateDir, "run")).mode & 0o777, 0o700);
+  assert.equal(statSync(ancestor).mode & 0o777, 0o777 & ~process.umask());
 });

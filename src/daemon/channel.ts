@@ -46,6 +46,8 @@ export const SOCKET_MODE = 0o600;
 
 // The run directory is created-or-checked at this mode (P6-D3).
 export const RUN_DIR_MODE = 0o700;
+// Mode of directories created as missing ancestors of the state directory: the default, which the umask narrows.
+const DEFAULT_DIR_MODE = 0o777;
 
 const PERMISSION_BITS = 0o777;
 
@@ -263,18 +265,30 @@ async function writeBounded(socket: Socket, line: string, timeoutMs: number): Pr
 
 async function readBounded(socket: Socket, timeoutMs: number): Promise<string> {
   const line = new Promise<string>((resolve, reject) => {
-    let text = "";
+    const chunks: Buffer[] = [];
+    let size = 0;
     const cleanup = (): void => {
       socket.off("data", onData);
       socket.off("error", onError);
       socket.off("close", onClose);
     };
+    // A reply is capped like a request line. The bytes before its newline are counted chunk by chunk, so an
+    // oversized reply is refused and its socket closed without the whole line ever being held.
     const onData = (chunk: unknown): void => {
-      text += String(chunk);
-      const end = text.indexOf("\n");
+      const bytes: Buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
+      const end = bytes.indexOf(0x0a);
+      const take = end === -1 ? bytes.length : end;
+      size += take;
+      if (size > MAX_CONTROL_LINE_BYTES) {
+        cleanup();
+        socket.destroy();
+        reject(makeRealmError("SCHEMA_INVALID"));
+        return;
+      }
+      chunks.push(bytes.subarray(0, take));
       if (end !== -1) {
         cleanup();
-        resolve(text.slice(0, end));
+        resolve(Buffer.concat(chunks).toString("utf8"));
       }
     };
     const onError = (cause: unknown): void => {
@@ -431,10 +445,14 @@ export function ensureSocketDir(stateDir: string, deps?: SocketDirDeps): string 
       mkdirSync(path, options);
     });
   if (observeDir(stat, stateDirPath) === undefined) {
-    // A recursive mkdir gives its mode to every directory it creates, so the state directory is made at
-    // RUN_DIR_MODE rather than the default mode, and the run directory is made at RUN_DIR_MODE beneath it.
+    // Missing ancestors above the state directory take the default mode, which the umask narrows. Only the state
+    // directory and its run directory are created at RUN_DIR_MODE, one level at a time.
+    const parentDir = stateDirPath.slice(0, stateDirPath.lastIndexOf("/"));
     try {
-      mkdir(stateDirPath, { recursive: true, mode: RUN_DIR_MODE });
+      if (parentDir !== "") {
+        mkdir(parentDir, { recursive: true, mode: DEFAULT_DIR_MODE });
+      }
+      mkdir(stateDirPath, { recursive: false, mode: RUN_DIR_MODE });
       mkdir(runDir, { recursive: false, mode: RUN_DIR_MODE });
     } catch {
       throw makeRealmError("SCHEMA_INVALID");

@@ -6,7 +6,7 @@
 
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { PassThrough, Writable } from "node:stream";
@@ -32,8 +32,8 @@ const CLI_SOURCE = join(ROOT, "src", "cli", "main.ts");
 
 // The CLI names its state directory from the runtime config file, the file the daemon reads. This file
 // writes one into a scratch XDG_CONFIG_HOME and removes it when the file's tests finish.
-const RUNTIME_STATE_DIR = "/tmp/realm-cli-test-state";
 const CONFIG_HOME = mkdtempSync(join(tmpdir(), "realm-cli-config-"));
+const RUNTIME_STATE_DIR = join(CONFIG_HOME, "state");
 mkdirSync(join(CONFIG_HOME, "realm"));
 writeFileSync(
   join(CONFIG_HOME, "realm", "config.json"),
@@ -61,7 +61,7 @@ interface SpawnCall {
   readonly file: string;
   readonly args: readonly string[];
   readonly detached: boolean;
-  readonly stdio: string;
+  readonly stdio: readonly (string | number)[];
 }
 
 function makeSpawn(spawns: SpawnCall[]): SpawnDaemon {
@@ -202,7 +202,7 @@ test("realm up with no daemon spawns the detached child then reports over the so
   assert.equal(spawns[0]?.file, process.execPath);
   assert.deepEqual(spawns[0]?.args, [DAEMON_ENTRY]);
   assert.equal(spawns[0]?.detached, true);
-  assert.equal(spawns[0]?.stdio, "ignore");
+  assert.equal(spawns[0]?.stdio[0], "ignore");
   assert.equal(sent.length, 1);
   assert.equal(sent[0]?.method, "up");
   assert.deepEqual(sent[0]?.params, { workspaceRoot: "/srv/realm-ws" });
@@ -564,7 +564,7 @@ test("realm mcp writes an ensure failure code to stderr and exits 1 without serv
   });
   assert.equal(result.exitCode, 1);
   assert.equal(result.stdout, "");
-  assert.ok(result.stderr.startsWith("TOOL_TIMEOUT: "), result.stderr);
+  assert.ok(result.stderr.startsWith("DAEMON_START_TIMEOUT: "), result.stderr);
   assert.equal(stdout, "");
   assert.equal(spawns.length, 1);
   assert.deepEqual(daemon.record.upRoots, []);
@@ -591,6 +591,129 @@ test("realm mcp exits 1 with MCP_INPUT_FAILED on stderr when its input stream fa
   assert.equal(result.stdout, "");
   assert.ok(result.stderr.startsWith("MCP_INPUT_FAILED: "), result.stderr);
   assert.equal(output.text(), "");
+});
+
+test("a detached daemon that fails startup writes its error to <stateDir>/daemon.log, owner-only, and realm up names that log (CLI-01, RT-06)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "realm-cli-detached-"));
+  try {
+    const configHome = join(dir, "config");
+    const stateDir = join(dir, "state");
+    mkdirSync(join(configHome, "realm"), { recursive: true });
+    mkdirSync(stateDir, { recursive: true });
+    writeFileSync(
+      join(configHome, "realm", "config.json"),
+      JSON.stringify({
+        image: `registry.example.com/realm/workload@sha256:${"0".repeat(64)}`,
+        workloadArgv: ["/usr/bin/agent", "--serve"],
+        stateDir,
+        workspaceRoot: "/srv/realm-ws",
+      }),
+    );
+    // The CLI never reads the policy file, but the daemon parses it at startup, so this makes the real
+    // daemon entry fail after the CLI has spawned it detached.
+    writeFileSync(join(stateDir, "policy.json"), "not json");
+    const result = await runCli(["up", "--workspace", "/srv/realm-ws"], {
+      env: {
+        PATH: "/usr/bin",
+        HOME: "/root",
+        XDG_RUNTIME_DIR: "/run/user/0",
+        XDG_CONFIG_HOME: configHome,
+      },
+      // Long enough for a loaded machine to start the real daemon entry and write its failure to the log.
+      timeoutMs: 6000,
+      daemonEntry: join(ROOT, "dist", "src", "daemon", "main.js"),
+      runCommand: okVersion,
+      connectSocket: acceptConnect,
+    });
+    const logPath = join(stateDir, "daemon.log");
+    assert.equal(result.exitCode, 1);
+    assert.ok(result.stderr.includes(logPath), "the failure names the daemon log");
+    assert.equal(statSync(logPath).mode & 0o777, 0o600);
+    assert.ok(readFileSync(logPath, "utf8").includes("realm daemon: SCHEMA_INVALID"), "the startup error reached the log");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+
+test("the CLI creates missing ancestors of a fresh state path at the default mode and the state directory at 0700 (CLI-01)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "realm-cli-modes-"));
+  try {
+    const configHome = join(dir, "config");
+    const ancestor = join(dir, "fresh");
+    const stateDir = join(ancestor, "state");
+    mkdirSync(join(configHome, "realm"), { recursive: true });
+    writeFileSync(
+      join(configHome, "realm", "config.json"),
+      JSON.stringify({
+        image: `registry.example.com/realm/workload@sha256:${"0".repeat(64)}`,
+        workloadArgv: ["/usr/bin/agent", "--serve"],
+        stateDir,
+        workspaceRoot: "/srv/realm-ws",
+      }),
+    );
+    const daemon = fakeDaemon({ probes: [false, true] });
+    const send: SendControlRequest = async (_socketPath, request) => ({ id: request.id, result: ACTIVE_RESULT });
+    const result = await runCli(["up"], {
+      env: { PATH: "/usr/bin", HOME: "/root", XDG_RUNTIME_DIR: "/run/user/0", XDG_CONFIG_HOME: configHome },
+      cwd: "/srv/realm-ws",
+      timeoutMs: 500,
+      daemonEntry: DAEMON_ENTRY,
+      spawn: makeSpawn([]),
+      send,
+      connect: daemon.connect,
+      runCommand: okVersion,
+      connectSocket: acceptConnect,
+    });
+    assert.equal(result.exitCode, 0);
+    assert.equal(statSync(ancestor).mode & 0o777, 0o777 & ~process.umask());
+    assert.equal(statSync(stateDir).mode & 0o777, 0o700);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a failed realm acp up prints the code and the daemon log path on stderr (CLI-01, TOOL-05)", async () => {
+  const daemon = fakeDaemon({ probes: [true], up: () => Promise.reject(new RealmError("PODMAN_MISSING")) });
+  const input = new PassThrough();
+  input.end();
+  const result = await runCli(["acp"], {
+    env: ENV,
+    cwd: "/srv/realm-ws",
+    timeoutMs: 500,
+    daemonEntry: DAEMON_ENTRY,
+    spawn: makeSpawn([]),
+    connect: daemon.connect,
+    acpInput: input,
+    acpOutput: captureDiagnostics().stream,
+    diagnostics: captureDiagnostics().stream,
+  });
+  assert.equal(result.exitCode, 1);
+  assert.ok(result.stderr.startsWith("PODMAN_MISSING: "), result.stderr);
+  assert.ok(result.stderr.includes(`${RUNTIME_STATE_DIR}/daemon.log`), result.stderr);
+});
+
+test("a failed realm mcp up writes the code and the daemon log path to stderr and keeps serving (CLI-01)", async () => {
+  const daemon = fakeDaemon({ probes: [true], up: () => Promise.reject(new RealmError("PODMAN_MISSING")) });
+  const input = new PassThrough();
+  input.end();
+  const diagnostics = captureDiagnostics();
+  const result = await untilShutdown(
+    runCli(["mcp", "--workspace", "/srv/realm-ws"], {
+      env: ENV,
+      cwd: "/srv/realm-ws",
+      timeoutMs: 500,
+      daemonEntry: DAEMON_ENTRY,
+      spawn: makeSpawn([]),
+      connect: daemon.connect,
+      mcpInput: input,
+      mcpOutput: captureDiagnostics().stream,
+      diagnostics: diagnostics.stream,
+    }),
+  );
+  assert.equal(result.exitCode, 0);
+  assert.ok(diagnostics.text().startsWith("PODMAN_MISSING: "), diagnostics.text());
+  assert.ok(diagnostics.text().includes(`${RUNTIME_STATE_DIR}/daemon.log`), diagnostics.text());
 });
 
 // The up reply an active realm returns, in the DaemonStatus shape the client validates.
@@ -717,7 +840,7 @@ test("realm acp writes an ensure failure code to stderr and exits 1 without serv
   });
   assert.equal(result.exitCode, 1);
   assert.equal(result.stdout, "");
-  assert.ok(result.stderr.startsWith("TOOL_TIMEOUT: "), result.stderr);
+  assert.ok(result.stderr.startsWith("DAEMON_START_TIMEOUT: "), result.stderr);
   assert.equal(output.text(), "");
   assert.equal(spawns.length, 1);
   assert.deepEqual(daemon.record.upRoots, []);
@@ -747,7 +870,7 @@ test("cli module stays inside its runtime allowlist with argv-form spawn and no 
   const envReads = source.match(/process\.env/g) ?? [];
   assert.equal(envReads.length, 1, "the only process.env read is the main entry handoff");
   assert.ok(source.includes('detached: true'));
-  assert.ok(source.includes('stdio: "ignore"'));
+  assert.ok(source.includes('"ignore"'));
   assert.ok(!source.includes("shell: true"));
 });
 

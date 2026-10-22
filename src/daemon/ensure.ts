@@ -1,7 +1,7 @@
 // Ensures a daemon answers on its control socket (Phase 6 wave 3). When the probe already reports
 // a live daemon, it returns at once. Otherwise it calls spawnDaemon exactly once, then polls the
 // probe every pollMs until it reports true or timeoutMs has elapsed. The poll mirrors runUp in
-// src/cli/main.ts: one spawn after an absent daemon, then bounded retries, and TOOL_TIMEOUT when the
+// src/cli/main.ts: one spawn after an absent daemon, then bounded retries, and DAEMON_START_TIMEOUT when the
 // daemon never comes up. The module spawns no process itself and reads no environment; the caller
 // supplies the probe and the spawn. A rejected probe or spawn propagates unchanged.
 
@@ -42,7 +42,7 @@ export async function ensureDaemon(options: EnsureDaemonOptions): Promise<void> 
     }
     const remaining = deadline - Date.now();
     if (remaining <= 0) {
-      throw makeRealmError("TOOL_TIMEOUT");
+      throw makeRealmError("DAEMON_START_TIMEOUT");
     }
     await sleep(Math.min(pollMs, remaining));
   }

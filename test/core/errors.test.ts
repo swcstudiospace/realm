@@ -15,6 +15,7 @@ const EXPECTED_CODES: readonly ErrorCode[] = [
   "REALM_STOPPING",
   "REALM_INVALID_TRANSITION",
   "STARTUP_BUDGET_EXCEEDED",
+  "DAEMON_START_TIMEOUT",
   "TOOL_TIMEOUT",
   "PODMAN_MISSING",
   "PODMAN_MACHINE_DOWN",
@@ -43,6 +44,7 @@ const EXPECTED_CODES: readonly ErrorCode[] = [
 const RETRYABLE_TRUE: readonly ErrorCode[] = [
   "REALM_NOT_ACTIVE",
   "STARTUP_BUDGET_EXCEEDED",
+  "DAEMON_START_TIMEOUT",
   "TOOL_TIMEOUT",
   "PODMAN_MACHINE_DOWN",
   "OPENSHELL_START_FAILED",
@@ -76,21 +78,21 @@ const RETRYABLE_FALSE: readonly ErrorCode[] = [
 
 const sorted = (xs: readonly string[]): string[] => [...xs].sort();
 
-test("the catalogue holds exactly the 27 codes: the 20 D-10 codes, PODMAN_UNSUPPORTED_VERSION, AUDIT_WRITE_FAILED, the three 2026-10-22 closure codes, MCP_INPUT_FAILED, and CLEANUP_FAILED", () => {
-  assert.equal(EXPECTED_CODES.length, 27);
-  assert.equal(ERROR_CODES.length, 27);
+test("the catalogue holds exactly the 28 codes: the 20 D-10 codes, PODMAN_UNSUPPORTED_VERSION, AUDIT_WRITE_FAILED, the three 2026-10-22 closure codes, MCP_INPUT_FAILED, CLEANUP_FAILED, and DAEMON_START_TIMEOUT", () => {
+  assert.equal(EXPECTED_CODES.length, 28);
+  assert.equal(ERROR_CODES.length, 28);
   assert.deepEqual(sorted(ERROR_CODES), sorted(EXPECTED_CODES));
 });
 
-test("the catalogue record has exactly the 27 codes and no others", () => {
+test("the catalogue record has exactly the 28 codes and no others", () => {
   const keys = Object.keys(ERROR_CATALOGUE);
-  assert.equal(keys.length, 27);
+  assert.equal(keys.length, 28);
   assert.deepEqual(sorted(keys), sorted(EXPECTED_CODES));
   assert.equal(Object.isFrozen(ERROR_CATALOGUE), true);
 });
 
 test("the retryable true and false lists partition the catalogue", () => {
-  assert.equal(RETRYABLE_TRUE.length, 11);
+  assert.equal(RETRYABLE_TRUE.length, 12);
   assert.equal(RETRYABLE_FALSE.length, 16);
   assert.deepEqual(sorted([...RETRYABLE_TRUE, ...RETRYABLE_FALSE]), sorted(EXPECTED_CODES));
 });
@@ -143,7 +145,7 @@ test("replacing or adding a catalogue key throws a TypeError", () => {
   assert.throws(() => {
     record.NOT_A_CODE = { reason: "added", retryable: false };
   }, TypeError);
-  assert.equal(Object.keys(ERROR_CATALOGUE).length, 27);
+  assert.equal(Object.keys(ERROR_CATALOGUE).length, 28);
 });
 
 test("AUDIT_WRITE_FAILED has the approved reason and is retryable, because the tool call did not run", () => {
