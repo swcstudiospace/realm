@@ -2,7 +2,7 @@
 gsd_state_version: "1.0"
 current_phase: 7
 current_phase_name: Policy Reference and Security Review
-status: executed; verification pending for phases 6 and 7; live checks deferred for phases 3-5
+status: executed; verification deferred: human for phases 3-7 (06-VERIFICATION.md human_needed 5/5 must-haves 6 live items; 07-VERIFICATION.md human_needed 9/9 must-haves 5 human items)
 stopped_at: State reconciled to evidence 2026-10-22
 last_updated: "2026-10-22"
 last_activity: 2026-10-22
@@ -27,9 +27,9 @@ See: .planning/PROJECT.md (updated 2026-10-21)
 
 ## Current Position
 
-Phase: 7 (Policy Reference and Security Review) — EXECUTED as three units (docs/policy-reference.md, 07-SECURITY-REVIEW.md, 07-SUPPLY-CHAIN-REVIEW.md), no PLAN files; verification pending
-Plan: all phase plans executed — Phase 1: 5/5, Phase 2: 6/6, Phase 3: 10/10, Phase 4: 7/7, Phase 5: 6/6, Phase 6: 6/6 with summaries; Phase 7 has no PLAN files
-Status: Phases 1-5 and 7 execution complete; Phase 6 code complete (gates green, no VERIFICATION report yet); verifications deferred/pending per Deferred Verification below
+Phase: 7 (Policy Reference and Security Review) — EXECUTED as three units (docs/policy-reference.md, 07-SECURITY-REVIEW.md, 07-SUPPLY-CHAIN-REVIEW.md), no PLAN files; 07-VERIFICATION.md human_needed (9/9 must-haves, 5 human items)
+Plan: all phase plans executed — Phase 1: 5/5, Phase 2: 6/6, Phase 3: 10/10, Phase 4: 7/7, Phase 5: 6/6, Phase 6: 6/6 with summaries; Phase 7 has no PLAN files; Phase 6: 06-VERIFICATION.md human_needed (5/5 must-haves, 6 live items)
+Status: Phases 1-7 execution complete; verifications deferred: human for phases 3-7 per Deferred Verification below
 Last activity: 2026-10-22 - ROADMAP and STATE reconciled to evidence
 
 Progress: [████████▓░] 86%
@@ -97,8 +97,8 @@ Live or pending verifications deferred by evidence, most recent first:
 | Phase 3: Container Runtime and Bridges | Live Podman, OpenShell, AgentOS, and Anda checks are live-gated (host Podman 4.9.3 below 5.x) | `/gsd:verify-work 3` on a Podman 5.x host |
 | Phase 4: Reaper, Egress Guard, and Shared Dispatcher | 04-VERIFICATION.md status human_needed (5 live items) | `/gsd:verify-work 4` on a Podman 5.x host |
 | Phase 5: Omp Plugin, MCP, and ACP Surfaces | 05-VERIFICATION.md status human_needed (7 live items; limitations a to f) | `/gsd:verify-work 5` on a Podman 5.x host |
-| Phase 6: CLI, Daemon, and Host Packaging | No VERIFICATION report yet; gates green | Run phase 6 verification when the verification step is available |
-| Phase 7: Policy Reference and Security Review | Executed as documentation; verification pending | Run phase 7 verification when the verification step is available |
+| Phase 6: CLI, Daemon, and Host Packaging | 06-VERIFICATION.md status human_needed (5/5 must-haves, 6 live items) | `/gsd:verify-work 6` |
+| Phase 7: Policy Reference and Security Review | 07-VERIFICATION.md status human_needed (9/9 must-haves, 5 human items) | `/gsd:verify-work 7` |
 
 ## Session Continuity
 
