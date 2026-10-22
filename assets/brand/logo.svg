@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-labelledby="logo-title">
+  <title id="logo-title">Realm logo</title>
+  <g stroke-linejoin="round" stroke-width="0.5">
+    <path d="M100.12 166 L256 256 L256 436 L100.12 346 Z" fill="#8b5cf6" stroke="#8b5cf6"/>
+    <path d="M256 256 L411.88 166 L411.88 346 L256 436 Z" fill="#5b21b6" stroke="#5b21b6"/>
+    <path d="M256 76 L411.88 166 L256 256 L100.12 166 Z" fill="#c3aefc" stroke="#c3aefc"/>
+    <path d="M256 121 L333.94 166 L256 211 L178.06 166 Z" fill="#ffffff"/>
+  </g>
+</svg>

@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" role="img" aria-labelledby="banner-title banner-desc">
+  <title id="banner-title">Realm banner</title>
+  <desc id="banner-desc">Realm wordmark, the tagline The home of AI Generated Code, and three isometric realm cubes.</desc>
+  <defs>
+    <linearGradient id="banner-bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0" stop-color="#fcfbff"/>
+      <stop offset="1" stop-color="#efe9ff"/>
+    </linearGradient>
+    <g id="realm-cube" stroke-linejoin="round" stroke-width="0.5">
+      <path d="M100.12 166 L256 256 L256 436 L100.12 346 Z" fill="#8b5cf6" stroke="#8b5cf6"/>
+      <path d="M256 256 L411.88 166 L411.88 346 L256 436 Z" fill="#5b21b6" stroke="#5b21b6"/>
+      <path d="M256 76 L411.88 166 L256 256 L100.12 166 Z" fill="#c3aefc" stroke="#c3aefc"/>
+      <path d="M256 121 L333.94 166 L256 211 L178.06 166 Z" fill="#ffffff"/>
+    </g>
+  </defs>
+  <rect width="1280" height="640" fill="url(#banner-bg)"/>
+  <g font-family="Anybody, Inter, system-ui, -apple-system, 'Segoe UI', sans-serif">
+    <text x="80" y="300" font-size="132" font-weight="700" fill="#1a0f33">Realm</text>
+    <text x="80" y="362" font-size="34" fill="#4a3d6b">The home of AI Generated Code</text>
+    <text x="80" y="408" font-size="22" fill="#7137ea">Agent sandbox for the GSD-Core USSR Stack</text>
+  </g>
+  <use href="#realm-cube" transform="translate(880 343) scale(0.8) translate(-256 -256)"/>
+  <use href="#realm-cube" transform="translate(1095 243) scale(0.5) translate(-256 -256)"/>
+  <use href="#realm-cube" transform="translate(1160 413) scale(0.3) translate(-256 -256)"/>
+</svg>
