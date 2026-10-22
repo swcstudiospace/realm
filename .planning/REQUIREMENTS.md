@@ -36,7 +36,6 @@ All v1 requirements are hypotheses until shipped and verified.
 - [ ] **RT-01**: Podman container runs rootless from a digest-pinned image, is never privileged, drops all Linux capabilities and adds back only verified ones, uses a read-only root filesystem with tmpfs scratch space, sets CPU, memory, and PID limits, and mounts only the bound workspace and the realm state directory
 - [ ] **RT-02**: Prerequisite probe reports `PODMAN_MISSING` when Podman is absent and `PODMAN_MACHINE_DOWN` when a required machine is not running, with a human-readable reason
 - [ ] **RT-03**: OpenShell runs inside the container, and all agent execution is routed through it; no code path bypasses OpenShell
-- [ ] **RT-04**: AgentOS is managed only through its supported API; a crash restarts with bounded backoff and reports `AGENTOS_CRASH_LOOP` after the maximum attempts
 - [ ] **RT-05**: Egress from the container is default-deny; only explicitly configured host and port pairs are allowed; IPv6 is disabled; host networking is rejected at config load; a request to a non-allowlisted host fails
 - [x] **RT-06**: Host-to-daemon control channel is a user-only Unix socket (directory 0700, socket 0600) under the realm state directory, or a loopback port with a per-session token; neither the socket nor any Podman or Docker socket is mounted into the container
 - [x] **RT-07**: Session record is written to disk before container creation, and records the realm id, session id, workspace root, state, container id, and control socket path, with no secrets
@@ -67,22 +66,37 @@ All v1 requirements are hypotheses until shipped and verified.
 
 - [ ] **OMP-01**: On each Omp session start with realm configured, the plugin starts or attaches to the realm detached from the UI under a bounded startup budget; on budget overrun the state settles to disconnected with reason `STARTUP_BUDGET_EXCEEDED` and the session continues
 - [ ] **OMP-02**: Status indicator shows exactly one label, "realm active" or "realm disconnected", at launch and on every transition, using a text label plus a color cue, readable without color
-- [ ] **OMP-03**: Status tooltip shows the reason for the current state and the time of the last transition
+- [x] **OMP-03**: Status tooltip shows the reason for the current state and the time of the last transition
 - [ ] **OMP-04**: A retry command moves disconnected or error to connecting, then to active or error
 - [ ] **OMP-05**: When disconnected, the plugin reports it and applies the configured policy; it never silently falls back to unsandboxed file mutation
 
 ### CLI and daemon (CLI)
 
-- [ ] **CLI-01**: `realm up`, `realm down`, `realm status`, and `realm doctor` are available from a standalone CLI backed by a long-running local daemon
 - [x] **CLI-02**: With Podman missing, `realm up` reports disconnected with reason `PODMAN_MISSING` and exits without hanging
 - [x] **CLI-03**: `realm doctor` lists each prerequisite (Podman, Podman version, machine state, OpenShell, AgentOS, Anda bridge, policy file, control channel) with its status and the fix for each failing item
 - [ ] **CLI-04**: Host config snippets exist under `docs/hosts/snippets/` for Omp, Muse Code, Claude Code, Grok Build, and Hermes Agent, each matching its host note in `docs/integration/hosts.md`
 
 ### Quality and documentation (QUAL)
 
-- [ ] **QUAL-01**: Every async boundary has a timeout; every error is typed with a machine-readable code and a human-readable reason; no silent catch blocks exist
+- [x] **QUAL-01**: Every async boundary has a timeout; every error is typed with a machine-readable code and a human-readable reason; the silent-catch rule is amended as below
+  Amended by decision: no silent catch blocks exist, except the named exceptions below. Each exception keeps the failure as recorded state or a retry, or fails closed, as stated.
+  - (a) `src/anda/client.ts`, `deliver`: a listener throw or rejection leaves the event undelivered for the monitor to retry (2 sites).
+  - (b) `src/anda/client.ts`, `stamp`: a clock failure leaves the transition undelivered and unstamped for retry.
+  - (c) `src/lifecycle/controller.ts`, `stop`: a stop failure is recovered by the fallback destroy, which succeeds; the stop error is not kept.
+  - (d) `src/lifecycle/controller.ts`, `probe`: a probe error is not recorded when a stop already owns the session; the stop's outcome is the session state (documented in the code).
+  - (e) `src/omp/plugin.ts`, `attach`: a late rejection from a superseded attempt; the current attempt reports its own outcome.
+  - (f) `src/omp/plugin.ts`, `attach`: a late rejection after the attach budget; the budget error is what the status reports.
+  - (g) `src/daemon/channel.ts`, and `daemon.ts` `dispatchLine`: a malformed control line whose id cannot be recovered gets no reply; the socket closes. The rule is in the channel comment and in the phase 06 summary.
+  - (h) `src/audit/redact.ts`: a value that fails redaction becomes the REDACTED sentinel (fail-closed by design).
 - [x] **QUAL-02**: Test suite includes unit tests, state-machine tests, contract tests for MCP and ACP, path and symlink tests, schema-rejection tests, audit-redaction tests, and integration tests that run only when Podman is present and skip with a stated reason otherwise
 - [x] **QUAL-03**: Policy reference documents every policy key; security review and dependency and supply-chain review are recorded before the first release
+
+### Deferred to a follow-up milestone
+
+- [ ] **RT-04**: AgentOS is managed only through its supported API; a crash restarts with bounded backoff and reports `AGENTOS_CRASH_LOOP` after the maximum attempts
+  Status: Deferred to a follow-up milestone (2026-10-22): no AgentOS driver is bound; realm up fails closed with AGENTOS_NOT_CONFIGURED; the spike recommends no-go as designed (docs/integration/agentos.md).
+- [ ] **CLI-01**: `realm up`, `realm down`, `realm status`, and `realm doctor` are available from a standalone CLI backed by a long-running local daemon
+  Status: Deferred to a follow-up milestone (2026-10-22): no AgentOS driver is bound; realm up fails closed with AGENTOS_NOT_CONFIGURED; the spike recommends no-go as designed (docs/integration/agentos.md).
 
 ## v2 Requirements (deferred)
 
@@ -117,14 +131,14 @@ Filled by the roadmap. Each v1 requirement maps to exactly one phase.
 | CORE-05 | Phase 3 | Complete |
 | CORE-06 | Phase 2 | Complete |
 | FS-01 | Phase 2 | Complete |
-| FS-02 | Phase 2 | Partial (accepted approximation; rebind verified through the pinned root, but path canonicalization remains; audit G-10) |
+| FS-02 | Phase 2 | Partial (accepted approximation; rebind verified through the pinned root, but path canonicalization remains; audit G-10) (pending the user's confirmation of the accepted approximation) |
 | FS-03 | Phase 2 | Complete |
 | FS-04 | Phase 2 | Complete |
 | FS-05 | Phase 2 | Complete |
 | RT-01 | Phase 3 | Partial (live-gated) |
 | RT-02 | Phase 3 | Partial (live-gated) |
 | RT-03 | Phase 3 | Partial (live-gated) |
-| RT-04 | Phase 3 | Open |
+| RT-04 | Phase 3 | Deferred to a follow-up milestone (2026-10-22): no AgentOS driver is bound; realm up fails closed with AGENTOS_NOT_CONFIGURED; the spike recommends no-go as designed (docs/integration/agentos.md) |
 | RT-05 | Phase 4 | Partial (live-gated) |
 | RT-06 | Phase 6 | Complete |
 | RT-07 | Phase 2 | Complete |
@@ -143,13 +157,13 @@ Filled by the roadmap. Each v1 requirement maps to exactly one phase.
 | AUD-02 | Phase 2 | Complete |
 | OMP-01 | Phase 5 | Partial (live-gated) |
 | OMP-02 | Phase 5 | Partial (live-gated) |
-| OMP-03 | Phase 5 | Partial (accepted approximation; one status item, no tooltip API on this host; decision pending) |
+| OMP-03 | Phase 5 | Complete (accepted approximation, 2026-10-22: one status item, detail in its text; no tooltip API on this host) |
 | OMP-04 | Phase 5 | Partial (live-gated) |
 | OMP-05 | Phase 5 | Partial (live-gated) |
-| CLI-01 | Phase 6 | Open |
+| CLI-01 | Phase 6 | Deferred to a follow-up milestone (2026-10-22): no AgentOS driver is bound; realm up fails closed with AGENTOS_NOT_CONFIGURED; the spike recommends no-go as designed (docs/integration/agentos.md) |
 | CLI-02 | Phase 6 | Complete |
 | CLI-03 | Phase 6 | Complete |
 | CLI-04 | Phase 6 | Partial (live-gated) |
-| QUAL-01 | Phase 1 | Open (10 catch sites still drop or replace errors; audit G-04) |
+| QUAL-01 | Phase 1 | Complete (amended 2026-10-22) |
 | QUAL-02 | Phase 2 | Complete |
 | QUAL-03 | Phase 7 | Complete |

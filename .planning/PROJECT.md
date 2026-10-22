@@ -35,6 +35,8 @@ When an agent edits code, every file mutation either lands inside the realm unde
 - **QUAL-03**: policy reference and reviews. Evidence: `docs/policy-reference.md`, `.planning/phases/07-policy-reference-and-security-review/07-SECURITY-REVIEW.md`, `.planning/phases/07-policy-reference-and-security-review/07-SUPPLY-CHAIN-REVIEW.md`
 - **TOOL-01**: six tools in one schema; every input validated before any sandbox call. Evidence: `test/contract/tools.schema.test.ts`, `test/contract/tool-input-gate.test.ts`, `test/tools/dispatch.test.ts`
 - **TOOL-02**: argv-first exec; shell mode gated by policy. Evidence: `test/contract/exec-policy.test.ts`, `test/contract/tools.schema.test.ts`
+- **QUAL-01**: amended by user decision (2026-10-22) with a named silent-catch exception list; typed codes and causes elsewhere. Evidence: `test/lifecycle/teardown-failures.test.ts`, `test/fs/canonicalize.test.ts`, `test/fs/atomic-write.test.ts`; exception list in `.planning/v1.0-MILESTONE-AUDIT.md` section 6
+- **OMP-03**: one status item with the reason and transition time in its text (accepted approximation, 2026-10-22; no tooltip API on this host). Evidence: `test/omp/plugin.test.ts`
 
 ### Active
 
@@ -52,7 +54,7 @@ The v1 requirement set lives in `.planning/REQUIREMENTS.md` (REQ-IDs grouped by 
 - [ ] Integration notes per documentation source, policy reference, security review
 - [ ] Unit, state-machine, contract, and Podman-gated integration tests
 
-**Milestone status (2026-10-22):** not complete. Open: RT-04 and CLI-01 (no AgentOS driver is bound; `realm up` reaches the error state `AGENTOS_NOT_CONFIGURED`, not active; the spike recommends no-go for the in-sandbox runner as designed). QUAL-01 is open: 10 catch sites still drop or replace errors (audit G-04), and the requirement text forbids silent catch blocks; the decision is pending. Partial, accepted approximations: FS-02 and OMP-03 (OMP-03's decision is pending). Partial, live-gated and deferred as human verification: RT-01, RT-02, RT-03, RT-05, RT-08, RT-09, TOOL-03, TOOL-04, TOOL-05, OMP-01, OMP-02, OMP-04, OMP-05, CLI-04, ANDA-01, ANDA-02, ANDA-03, ANDA-04. The milestone name v1.0 is provisional, and archive needs approval.
+**Milestone status (2026-10-22):** not complete and provisional; not archived. v1.0 is fail-closed: RT-04 and CLI-01 are deferred to a follow-up milestone, and `realm up` refuses with `AGENTOS_NOT_CONFIGURED` until an AgentOS driver exists. QUAL-01 is amended by user decision with a named exception list (2026-10-22). OMP-03 is accepted as an approximation: one status item, detail in its text, no tooltip API on this host (2026-10-22). FS-02 is a Partial accepted approximation that awaits the user's confirmation. The live-gated items are deferred to human verification on a Podman 5.x host: RT-01, RT-02, RT-03, RT-05, RT-08, RT-09, TOOL-03, TOOL-04, TOOL-05, OMP-01, OMP-02, OMP-04, OMP-05, CLI-04, ANDA-01, ANDA-02, ANDA-03, ANDA-04. Archive and ship need explicit approval. The milestone name v1.0 is provisional.
 
 ### Out of Scope
 
@@ -108,7 +110,10 @@ The v1 requirement set lives in `.planning/REQUIREMENTS.md` (REQ-IDs grouped by 
 | Podman-gated integration tests skip with a clear reason until Podman 5.x is installed | OpenShell docs require Podman 5.x; local Podman is 4.9.3; no package installs | — Pending (environment) |
 | Node LTS with ESM for CLI and daemon; Bun unverified | Spec ASSUMPTIONS and n3 default | — Pending (host doc gate) |
 | The daemon owns sessions; surfaces attach through the control socket | User decision, 2026-10-22 (STATE.md). Surfaces attach by calling the idempotent `up`; there is no attach or detach protocol | Decided 2026-10-22 |
-| Containment default: advisory is the recorded default | Security review (07-SECURITY-REVIEW.md, section 5.3 and section 8, item 2) recommends fail-closed for containment deployments | Pending: decision on the containment default (2026-10-22) |
+| Containment default: advisory is the recorded default | Security review (07-SECURITY-REVIEW.md, section 5.3 and section 8, item 2) recommends fail-closed for containment deployments | Keep advisory as the default (user decision 2026-10-22); fail-closed is the documented opt-in for containment deployments |
+| AgentOS path after the no-go spike | User decision, 2026-10-22; spike recommends no-go as designed (docs/integration/agentos.md) | Deferred to a follow-up milestone (2026-10-22). v1.0 fails closed with AGENTOS_NOT_CONFIGURED until a driver exists |
+| QUAL-01 silent-catch rule | Nine residual catch sites in eight named exceptions (audit section 6); user decision, 2026-10-22 | Amended 2026-10-22: the rule now names its exceptions |
+| OMP-03 tooltip wording | The host offers no tooltip API (P5-D5); user decision, 2026-10-22 | Accepted as an approximation 2026-10-22: one status item, detail in its text |
 
 ---
 *Last updated: 2026-10-22 after initialization (automatic mode, research skipped by preset)*
