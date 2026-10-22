@@ -9,7 +9,9 @@
     "node": ">=22.13.0"
   },
   "scripts": {
+    "predev": "node ../scripts/docs/sync-site.mjs",
     "dev": "vitepress dev content",
+    "prebuild": "node ../scripts/docs/sync-site.mjs",
     "build": "vitepress build content",
     "preview": "vitepress preview content"
   },
