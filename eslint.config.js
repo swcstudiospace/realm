@@ -123,6 +123,25 @@ const adapterInternal = (name) => ({
   selector: `Identifier[name="${name}"]`,
   message: `Adapters route tool logic only through ToolDispatcher.call (P5-D11, P5-D12): ${name} is a dispatcher internal and must not be referenced from src/mcp, src/acp or src/omp.`,
 });
+// CLI-01 and P6-D7: the CLI builds no in-process daemon handle and passes no runtime input to the daemon.
+const CLI_HANDLE_IDENTIFIERS = ["buildDaemonHandle", "BuildDaemonHandle", "buildHandle", "defaultBuildHandle", "runtimeInput"];
+/** @param {string} name */
+const cliIdentifier = (name) => ({
+  selector: `Identifier[name="${name}"]`,
+  message: `CLI-01: the CLI builds no in-process daemon handle and passes no runtime input to the daemon; ${name} must not be referenced from src/cli/main.ts.`,
+});
+// P6-D10: the control channel names no container runtime, no child_process and no socket path except control.sock.
+const CHANNEL_MESSAGE = "P6-D10: the control channel names no container runtime (podman, docker, container) and no child_process.";
+const CHANNEL_SOCKET_MESSAGE = "P6-D10: the control channel names no socket path except control.sock.";
+const CHANNEL_SELECTORS = [
+  { selector: "Identifier[name=/podman|docker|container|child_process/i]", message: CHANNEL_MESSAGE },
+  { selector: "Literal[value=/podman|docker|container|child_process/i]", message: CHANNEL_MESSAGE },
+  { selector: "TemplateElement[value.cooked=/podman|docker|container|child_process/i]", message: CHANNEL_MESSAGE },
+  { selector: "Literal[value=/\\.sock/]:not([value=/control\\.sock/])", message: CHANNEL_SOCKET_MESSAGE },
+];
+// P6-D10: the control channel imports only node:fs, node:net, ../core/errors.js, ../core/timeout.js and ../session/paths.js.
+// Anchored, so each specifier is compared whole: any other import text matches and is refused.
+const CHANNEL_REFUSED_IMPORT = "^(?!(?:node:fs|node:net|\\.\\./core/errors\\.js|\\.\\./core/timeout\\.js|\\.\\./session/paths\\.js)$)";
 
 export default tseslint.config(
   {
@@ -270,6 +289,41 @@ export default tseslint.config(
             {
               group: ["../daemon/*", "!../daemon/client.js", "!../daemon/channel.js", "!../daemon/ensure.js"],
               message: "Adapters route tool logic only through ToolDispatcher.call (P5-D11, P5-D12): Omp reaches the daemon only through DaemonClient, so only ../daemon/client, ../daemon/channel and ../daemon/ensure may be imported.",
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    files: ["src/cli/main.ts"],
+    rules: {
+      "no-restricted-syntax": [...syntaxRule([...DYNAMIC, ...NAMED_ONLY, "openshellBinary", ...GUARDS]), ...CLI_HANDLE_IDENTIFIERS.map(cliIdentifier)],
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              group: ["node:*", "node:*/*", "!node:fs", "!node:net", "!node:child_process"],
+              message: "CLI-01 and P6-D7: the CLI imports only node:fs, node:net and node:child_process from the runtime.",
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    files: ["src/daemon/channel.ts"],
+    rules: {
+      "no-restricted-syntax": ["error", ...GENERIC.map((key) => SYNTAX[key]), ...CHANNEL_SELECTORS],
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: childProcessPaths,
+          patterns: [
+            {
+              regex: CHANNEL_REFUSED_IMPORT,
+              message: "P6-D10: the control channel imports only node:fs, node:net, ../core/errors.js, ../core/timeout.js and ../session/paths.js.",
             },
           ],
         },
