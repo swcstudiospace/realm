@@ -75,6 +75,11 @@ jobs:
           set -euo pipefail
           npm run build
 
+      - name: Packed package smoke
+        run: |
+          set -euo pipefail
+          npm run check:pack
+
   release:
     name: Release
     needs: verify
@@ -87,9 +92,10 @@ jobs:
       group: release-main
       cancel-in-progress: false
     steps:
-      - name: Checkout full history
+      - name: Checkout triggering commit
         uses: actions/checkout@v7
         with:
+          ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: true
 
@@ -102,6 +108,11 @@ jobs:
         run: |
           set -euo pipefail
           npm ci
+
+      - name: Fetch tags from origin
+        run: |
+          set -euo pipefail
+          git fetch --force --tags origin
 
       - name: Compute next version
         id: version
@@ -119,46 +130,159 @@ jobs:
             fs.appendFileSync(process.env.GITHUB_OUTPUT, lines);
           '
 
-      - name: Check whether tag exists on origin
+      # Decides exactly one action, before any remote mutation:
+      #   finish     latest milestone tag exists on origin without a GitHub release
+      #              (or the target tag exists without one): publish that tag's release.
+      #   skip       target tag and its GitHub release both exist: nothing to publish.
+      #   superseded origin/main is no longer this commit: the newer commit's run releases.
+      #   normal     bump, build, commit, atomic push of main and tag, then release.
+      # exists=true means this run publishes nothing (skip or superseded); the Pages
+      # dispatch step keys off it.
+      - name: Plan release
         id: tag_check
         env:
-          TAG: ${{ steps.version.outputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TARGET_TAG: ${{ steps.version.outputs.tag }}
+          PREVIOUS_TAG: ${{ steps.version.outputs.previousTag }}
         run: |
           set -euo pipefail
-          remote_tag="$(git ls-remote --tags origin "refs/tags/${TAG}")"
-          if [ -n "${remote_tag}" ]; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-            echo "Tag ${TAG} already exists on origin; skipping release."
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
+
+          remote_tag_state() {
+            REMOTE_TAG="$(git ls-remote --tags origin "refs/tags/$1")"
+          }
+
+          # Sets RELEASE_STATE to present or missing; any other gh failure is fatal.
+          release_state() {
+            local out
+            if out="$(gh release view "$1" --json tagName 2>&1)"; then
+              RELEASE_STATE=present
+            elif printf '%s' "$out" | grep -qi 'not found'; then
+              RELEASE_STATE=missing
+            else
+              printf '%s\n' "$out" >&2
+              return 1
+            fi
+          }
+
+          milestone_minor="$(node -e 'process.stdout.write(String(require("./release/milestone.json").minor))')"
+          latest=""
+          case "${PREVIOUS_TAG}" in
+            "v0.${milestone_minor}."*) latest="${PREVIOUS_TAG}" ;;
+          esac
+
+          action=normal
+          tag="${TARGET_TAG}"
+
+          if [ -n "${latest}" ]; then
+            release_state "${latest}"
+            if [ "${RELEASE_STATE}" = missing ]; then
+              echo "Milestone tag ${latest} exists without a GitHub release; finishing it."
+              action=finish
+              tag="${latest}"
+            fi
           fi
 
-      - name: Sync package version
-        if: steps.tag_check.outputs.exists == 'false'
+          if [ "${action}" = normal ]; then
+            remote_tag_state "${TARGET_TAG}"
+            if [ -n "${REMOTE_TAG}" ]; then
+              tag="${TARGET_TAG}"
+              release_state "${TARGET_TAG}"
+              if [ "${RELEASE_STATE}" = present ]; then
+                action=skip
+              else
+                action=finish
+              fi
+            fi
+          fi
+
+          if [ "${action}" = normal ]; then
+            main_sha="$(git ls-remote origin refs/heads/main | cut -f1)"
+            if [ -z "${main_sha}" ]; then
+              echo "Could not read refs/heads/main from origin." >&2
+              exit 1
+            fi
+            if [ "${main_sha}" != "${GITHUB_SHA}" ]; then
+              action=superseded
+              echo "origin/main is ${main_sha}, not ${GITHUB_SHA}; this commit is superseded and publishes no release."
+            fi
+          fi
+
+          case "${action}" in
+            skip)
+              echo "Tag ${tag} and its GitHub release already exist; nothing to publish."
+              exists=true
+              ;;
+            superseded)
+              exists=true
+              ;;
+            *)
+              exists=false
+              ;;
+          esac
+
+          {
+            echo "action=${action}"
+            echo "tag=${tag}"
+            echo "version=${tag#v}"
+            echo "exists=${exists}"
+          } >> "$GITHUB_OUTPUT"
+          echo "Release plan: action=${action} tag=${tag}"
+
+      - name: Check out existing tag to finish its release
+        if: steps.tag_check.outputs.action == 'finish'
         env:
-          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.tag_check.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git checkout --detach "refs/tags/${TAG}"
+
+      - name: Install dependencies for finished tag
+        if: steps.tag_check.outputs.action == 'finish'
+        run: |
+          set -euo pipefail
+          npm ci
+
+      - name: Sync package version
+        if: steps.tag_check.outputs.action == 'normal'
+        env:
+          VERSION: ${{ steps.tag_check.outputs.version }}
         run: |
           set -euo pipefail
           node scripts/release/sync-version.mjs "${VERSION}"
 
+      # For finish, changelog.mjs returns the existing CHANGELOG section as notes; the
+      # guard refuses to regenerate notes for a published tag that lacks its section.
       - name: Generate changelog and release notes
-        if: steps.tag_check.outputs.exists == 'false'
+        if: steps.tag_check.outputs.action == 'normal' || steps.tag_check.outputs.action == 'finish'
         env:
-          VERSION: ${{ steps.version.outputs.version }}
+          ACTION: ${{ steps.tag_check.outputs.action }}
+          VERSION: ${{ steps.tag_check.outputs.version }}
           PREVIOUS_TAG: ${{ steps.version.outputs.previousTag }}
         run: |
           set -euo pipefail
           release_date="$(date -u +%Y-%m-%d)"
+          if [ "${ACTION}" = finish ] && ! grep -qF "## [${VERSION}]" CHANGELOG.md; then
+            echo "CHANGELOG.md has no section for ${VERSION}; refusing to regenerate notes for a published tag." >&2
+            exit 1
+          fi
           args=(--version "${VERSION}" --date "${release_date}" --notes-out release-notes.md)
-          if [ -n "${PREVIOUS_TAG}" ]; then
+          if [ "${ACTION}" = normal ] && [ -n "${PREVIOUS_TAG}" ]; then
             args+=(--since "${PREVIOUS_TAG}")
           fi
           node scripts/release/changelog.mjs "${args[@]}"
 
+      - name: Build and pack tarball
+        if: steps.tag_check.outputs.action == 'normal' || steps.tag_check.outputs.action == 'finish'
+        run: |
+          set -euo pipefail
+          npm run build
+          npm pack
+
       - name: Commit release changes
-        if: steps.tag_check.outputs.exists == 'false'
+        if: steps.tag_check.outputs.action == 'normal'
         env:
-          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.tag_check.outputs.tag }}
         run: |
           set -euo pipefail
           git add package.json package-lock.json CHANGELOG.md
@@ -167,36 +291,46 @@ jobs:
           else
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git commit -m "chore(release): v${VERSION} [skip ci]"
+            git commit -m "chore(release): ${TAG} [skip ci]"
           fi
 
-      - name: Tag and push release
-        if: steps.tag_check.outputs.exists == 'false'
+      # Tag and branch move together or not at all. A rejected push while origin/main has
+      # moved is superseded: this run exits green and the newer commit's run releases.
+      - name: Tag and push release atomically
+        id: push
+        if: steps.tag_check.outputs.action == 'normal'
         env:
-          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.tag_check.outputs.tag }}
         run: |
           set -euo pipefail
-          git tag -a "v${VERSION}" -m "Release v${VERSION}"
-          git push origin HEAD:main
-          git push origin "v${VERSION}"
+          git tag -a "${TAG}" -m "Release ${TAG}"
+          if git push --atomic origin "HEAD:refs/heads/main" "refs/tags/${TAG}"; then
+            echo "pushed=true" >> "$GITHUB_OUTPUT"
+            echo "Pushed main and ${TAG} atomically."
+            exit 0
+          fi
+          git fetch --quiet --force origin "+refs/heads/main:refs/remotes/origin/main"
+          remote_main="$(git rev-parse --verify refs/remotes/origin/main)"
+          if [ "${remote_main}" != "${GITHUB_SHA}" ]; then
+            echo "origin/main moved to ${remote_main} while ${TAG} was built from ${GITHUB_SHA}; this run publishes nothing. The run for the newer commit publishes the release."
+            exit 0
+          fi
+          echo "Atomic push of main and ${TAG} failed while origin/main is still ${GITHUB_SHA}." >&2
+          exit 1
 
-      - name: Build and pack tarball
-        if: steps.tag_check.outputs.exists == 'false'
-        run: |
-          set -euo pipefail
-          npm run build
-          npm pack
-
+      # If this fails, the tag and commit already exist on origin; the next run takes the
+      # finish branch and publishes this release.
       - name: Create GitHub release
-        if: steps.tag_check.outputs.exists == 'false'
+        if: steps.tag_check.outputs.action == 'finish' || (steps.tag_check.outputs.action == 'normal' && steps.push.outputs.pushed == 'true')
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.tag_check.outputs.tag }}
+          VERSION: ${{ steps.tag_check.outputs.version }}
         run: |
           set -euo pipefail
-          gh release create "v${VERSION}" "agent-realm-${VERSION}.tgz" \
-            --title "Realm v${VERSION}" \
+          gh release create "${TAG}" "agent-realm-${VERSION}.tgz" \
+            --title "Realm ${TAG}" \
             --notes-file release-notes.md \
             --verify-tag
 
