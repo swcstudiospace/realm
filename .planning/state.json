@@ -6,43 +6,43 @@
     {
       "number": "1",
       "name": "Scaffold and Frozen Contracts",
-      "status": "pending"
+      "status": "complete"
     },
     {
       "number": "2",
       "name": "Policy, State, and Filesystem Lockdown",
-      "status": "pending"
+      "status": "complete"
     },
     {
       "number": "3",
       "name": "Container Runtime and Bridges",
-      "status": "pending"
+      "status": "complete"
     },
     {
       "number": "4",
       "name": "Reaper, Egress Guard, and Shared Dispatcher",
-      "status": "pending"
+      "status": "complete"
     },
     {
       "number": "5",
       "name": "Omp Plugin, MCP, and ACP Surfaces",
-      "status": "pending"
+      "status": "complete"
     },
     {
       "number": "6",
       "name": "CLI, Daemon, and Host Packaging",
-      "status": "pending"
+      "status": "complete"
     },
     {
       "number": "7",
       "name": "Policy Reference and Security Review",
-      "status": "pending"
+      "status": "complete"
     }
   ],
   "next": {
-    "command": "/gsd:progress --next",
-    "label": "Advance to the next step (plan phase 2)",
-    "reason": "Phase 2 of 7 — needs a plan"
+    "command": "/gsd-progress",
+    "label": "Show progress",
+    "reason": "Unsure of state — showing progress"
   },
-  "updated_at": "2026-10-21T18:41:56.770Z"
+  "updated_at": "2026-10-22T19:59:15.758Z"
 }

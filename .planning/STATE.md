@@ -1,19 +1,19 @@
 ---
 gsd_state_version: "1.0"
-current_phase: 7
-current_phase_name: Policy Reference and Security Review
-status: "milestone v1.0 provisional: not archived; decisions recorded; v1.0 ships fail-closed; approvals pending (ship, licence, CI, README, archive, FS-02 confirmation)"
+status: Awaiting next milestone
 stopped_at: "Awaiting approvals: ship (PR and possible merge to main), licence, CI, README, archive, and confirmation of the FS-02 accepted approximation"
-last_updated: "2026-10-22"
+last_updated: "2026-10-22T19:59:15.667Z"
 last_activity: 2026-10-22
-last_activity_desc: "Decisions recorded: AgentOS deferred to a follow-up milestone; QUAL-01 amended with named exceptions; advisory default kept; OMP-03 accepted; full gates green at 54bc236 (1114 tests, 1105 pass, 9 skipped)"
-state_head: dd02034
+last_activity_desc: Milestone v1.0 completed and archived
+state_head: 08d9d19919e5676706184555de09683e9dddb2d5
 progress:
   total_phases: 7
-  completed_phases: 6
+  completed_phases: 7
   total_plans: 40
   completed_plans: 40
-  percent: 86
+  percent: 100
+current_phase: 7
+current_phase_name: Policy Reference and Security Review
 ---
 
 # Project State
@@ -27,12 +27,10 @@ See: .planning/PROJECT.md (updated 2026-10-22)
 
 ## Current Position
 
-Phase: 7 (Policy Reference and Security Review), executed; verification human_needed and deferred
-Plan: phases 1-7 executed. Closure, traceability, audit, gap-closure, and decision waves are on main (see Recorded commits).
-Status: Not archived. v1.0 is fail-closed: realm up refuses with AGENTOS_NOT_CONFIGURED because no AgentOS driver is bound. RT-04 and CLI-01 are deferred to a follow-up milestone. QUAL-01 is complete under its amended text, which names nine exception sites. OMP-03 is an accepted approximation. FS-02 awaits confirmation. Live-gated items are deferred as human verification.
-Last activity: 2026-10-22 - decisions recorded; gates green at 54bc236
-
-Progress: [████████▓░] 86%
+Phase: Milestone v1.0 complete
+Plan: —
+Status: Awaiting next milestone
+Last activity: 2026-10-22 — Milestone v1.0 completed and archived
 
 ## Performance Metrics
 
@@ -89,7 +87,7 @@ Open follow-ups: the AgentOS sandbox runner in the follow-up milestone (RT-04, C
 
 ### Blockers/Concerns
 
-- Approvals: ship (PR and possible merge to main; ship.autoMerge is on, origin github.com/swcstudiospace/realm), archive via complete-milestone (irreversible), licence (the repo has no declared licence, which is a release gate), CI (no .github), and README (none exists; not created without a request).
+- Approvals: ship done (PRs #1 to #3 merged through ultrathink-ship, PR #4 archives v1.0; the ship CLI ran with --ignore-gsd while the GSD roadmap was incomplete); licence done (AGPL-3.0-only); CI done (verify and release on main, and the docs site built on pull requests); README done. Still open: confirmation of the FS-02 accepted approximation, awaiting the user.
 - Host Podman is 4.9.3, below OpenShell's 5.x requirement. Podman-gated checks are deferred to a Podman 5.x host.
 - Omp host write and edit interception is not documented (OQ-P5-02). The guard blocks writes while the policy mode is unknown. Audit G-09 part 5.4 stays open for this reason.
 - The Anda licence conflict still blocks vendoring Anda code.
@@ -127,8 +125,8 @@ Detail, by phase: Phase 3 covers RT-01, RT-02, RT-03, RT-09, and the live parts 
 ## Session Continuity
 
 Last session: 2026-10-22
-Stopped at: decisions recorded and gates green at 54bc236. Waiting on approvals: ship, licence, CI, README, archive, and confirmation of the FS-02 accepted approximation.
-Resume file: None. Next action on resume: take the approvals. On ship approval, open the PR and run ultrathink-ship. On archive approval, run complete-milestone, then the milestone audit's disposition is final. On FS-02 confirmation, record it as accepted or reopen it.
+Stopped at: v1.0 archived on 2026-10-22 after PRs #1 to #3 merged. Releases v0.1.0 and v0.1.1 are published, and the docs site is live at https://swcstudiospace.github.io/realm/. Waiting on: confirmation of the FS-02 accepted approximation, and live verification on a Podman 5.x host.
+Resume file: None. Next action on resume: confirm or reopen FS-02, then choose the scope of the next milestone (the AgentOS runner follow-up), and run the live verification on a Podman 5.x host.
 
 Recorded commits (closure run): 72817e9 (private flag restored, engines >=22.13.0); 390f511 (causeCode and catalogue codes, host paths, lifecycle bound, root identity, exec margin); b6bc892 (daemon entry, AgentOS fail-closed, catalogue refusals, per-method control bounds); 8088159 (daemon owns sessions; tool method; daemon client; Omp and MCP attach); 4b1d4ab (smoke fixes: CLI probe, up and down exits, state-dir 0700); c55056a (traceability: requirements by evidence, spike facts, runtime config, Omp attach contract); a999c17 (audit gap closure: realm acp, refusal code mapping, one state-dir resolver, Omp status, pinned-root rebind, catch-site fixes, daemon server-failure stop); dd02034 (re-audit, planning, and docs); 54bc236 (MCP tool-call diagnostic); plus the decisions commit (see git log).
 
@@ -143,3 +141,7 @@ Recorded commits (earlier): e949ad3, 53fc919, 26ab145 (phases 1 to 3); 6b28fa4 a
 - 2026-10-22 gap closure: fixes for G-03, G-05 to G-08, and G-10; G-04 reduced to nine sites in the named exceptions. Fixed in the run: a typecheck error in the daemon e2e test; a hang in the daemon test (scratch-dir cleanup order); three lifecycle timing windows widened on the loaded host; one CLI usage assertion changed from wording to behaviour; an unused parameter removed in the daemon test; an MCP tool-call defect now leaves a diagnostic.
 - 2026-10-22 re-audit: overall gaps_found before decisions. QUAL-01 open; FS-02 and OMP-03 accepted approximations pending decisions.
 - 2026-10-22 decisions: AgentOS deferred; QUAL-01 amended with the named exceptions; containment default kept advisory; OMP-03 accepted. A count correction: the first summary said 7 deliberate and 3 undocumented sites; the re-audit actually has 8 deliberate, 1 documented, and 1 undocumented (fixed). Gates at 54bc236: typecheck 0, lint 0, test 0 (1114 total, 1105 pass, 0 fail, 9 skipped), integration 0, build 0.
+
+## Operator Next Steps
+
+- Start the next milestone with /gsd-new-milestone
