@@ -1,12 +1,13 @@
 {
   "name": "agent-realm",
   "version": "0.0.0",
+  "private": true,
   "bin": { "realm": "./dist/src/cli/main.js" },
   "omp": { "extensions": ["./dist/src/omp/plugin.js"] },
   "description": "Realm: strict ESM TypeScript package",
   "type": "module",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.13.0"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
