@@ -56,6 +56,10 @@ const SYNTAX = {
     selector: 'ExportAllDeclaration[source.value=/^(node:)?child_process$/]',
     message: "TOOL-02: child_process is never re-exported with export *.",
   },
+  shellTrue: {
+    selector: 'Property[key.name="shell"][value.value=true], Property[key.value="shell"][value.value=true]',
+    message: "TOOL-02: no source module enables a shell; spawn argv stays explicit and shell-free (AUD-02).",
+  },
   cpSideEffect: {
     selector: 'ImportDeclaration[source.value=/^(node:)?child_process$/]:not(:has(ImportSpecifier))',
     message: "TOOL-02: an allowlisted module imports child_process by name; a side-effect import is refused.",
@@ -90,7 +94,7 @@ const SYNTAX = {
  */
 const syntaxRule = (keys) => ["error", ...keys.map((key) => SYNTAX[key])];
 /** @type {SyntaxKey[]} */
-const DYNAMIC = ["cpDynamic", "cpRequire", "cpReexport", "cpReexportAll"];
+const DYNAMIC = ["cpDynamic", "cpRequire", "cpReexport", "cpReexportAll", "shellTrue"];
 /** @type {SyntaxKey[]} */
 const NAMED_ONLY = ["cpSideEffect", "cpDefault", "cpNamespace"];
 /** @type {SyntaxKey[]} */
@@ -189,6 +193,11 @@ export default tseslint.config(
     files: ["src/**/*.ts"],
     ignores: SPECIAL_SRC,
     rules: { "no-restricted-syntax": syntaxRule(GENERIC) },
+  },
+  {
+    // summarizeExec records that a script-form exec ran. That summary field is audit data, not spawn options.
+    files: ["src/audit/log.ts"],
+    rules: { "no-restricted-syntax": syntaxRule(withoutKey(GENERIC, "shellTrue")) },
   },
   {
     files: ["src/tools/**/*.ts"],
