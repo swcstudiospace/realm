@@ -353,15 +353,22 @@ test("ANDA-02: anda-bridge gives up on a server that trickles bytes at the probe
   assert.ok(elapsed < trickleMs / 2, `the probe must end at its deadline, not after the trickle (took ${elapsed} ms)`);
 });
 
-test("RT-02 and ANDA-02: the four runtime items follow the three Phase 2 items in order, and no AgentOS or control-channel item is registered (D-69)", async (t) => {
+test("RT-02 and ANDA-02: the four runtime items follow the three Phase 2 items, and the Phase 6 control-channel and agentos items follow anda-bridge (D-69, CLI-03)", async (t) => {
   const results = await runtimeChecks(t, fakeHost({}));
   assert.deepEqual(
     results.map((result) => result.id),
-    ["policy-file", "state-dir", "session-store", "podman", "podman-service", "openshell", "anda-bridge"],
+    [
+      "policy-file",
+      "state-dir",
+      "session-store",
+      "podman",
+      "podman-service",
+      "openshell",
+      "anda-bridge",
+      "control-channel",
+      "agentos",
+    ],
   );
-  for (const result of results) {
-    assert.doesNotMatch(`${result.id} ${result.detail} ${result.fix ?? ""}`, /agentos|control/i);
-  }
 });
 
 test("RT-02 and ANDA-02: a fail or warn always carries a fix, and a pass never does (D-44, RT-02, ANDA-02)", async (t) => {

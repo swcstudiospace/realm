@@ -33,7 +33,8 @@ const OPENSHELL_BINARY_MODULES: readonly string[] = [
   "runtime/session-execution.ts",
   "doctor/checks.ts",
 ];
-const SPAWN_MODULE = "runtime/session-execution.ts";
+// spawn( is allowed in the OpenShell runner and in the CLI that spawns the detached daemon (P6-D1).
+const SPAWN_MODULES: readonly string[] = ["cli/main.ts", "runtime/session-execution.ts"];
 
 function readSources(): Map<string, string> {
   const names = readdirSync(SRC_DIR, { recursive: true, encoding: "utf8" }).filter(
@@ -103,7 +104,7 @@ test("TOOL-03: the D-99 symbols are referenced only from src/tools/, the two sha
 
 test("TOOL-03: spawn( appears in src/ only in src/runtime/session-execution.ts (D-99)", () => {
   const callers = spawnCallers(readSources());
-  assert.deepEqual(callers, [SPAWN_MODULE], "the one process spawn in src/ is the OpenShell runner");
+  assert.deepEqual(callers.sort(), [...SPAWN_MODULES].sort(), "spawn( is allowed only in the OpenShell runner and the documented CLI daemon spawn (P6-D1)");
 });
 
 test("TOOL-03: OPENSHELL_BINARY is referenced only from its allowlist, and the doctor probe is allowlisted for that literal alone (D-99, D-104, C-5)", () => {

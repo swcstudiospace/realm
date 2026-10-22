@@ -343,6 +343,12 @@ export function spawnOpenShellRunner(environment: Readonly<Record<string, string
     });
 }
 
+// The production OpenShell runner for the environment the caller passes (RT-03, D-46). The
+// composition root takes its runner here, so the spawn stays in this module.
+export function productionOpenShellRunner(source: EnvironmentLike): OpenShellRunner {
+  return spawnOpenShellRunner(selectOpenShellEnvironment(source));
+}
+
 // Runs one workload in a session's running sandbox through the injected runner (D-92, D-94). The argv is the
 // pinned exec form from buildExecArgv, and output is captured and bounded per stream. A non-zero exit is a
 // successful call carrying exitCode. A runner rejection maps to REALM_NOT_ACTIVE and a deadline expiry to

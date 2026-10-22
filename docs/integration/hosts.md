@@ -8,13 +8,13 @@ Gate note for FOUND-03 (decisions D-09, D-16, D-17, D-18). Status per host:
 | Claude Code | yes (code.claude.com) | none for the native binary; Node.js 22 or later only for the npm install path | plugins and MCP documented; ACP not documented |
 | Grok Build | yes (docs.x.ai) | not documented | plugins and MCP documented; ACP named, transport not documented |
 | Hermes Agent | yes (hermes-agent.nousresearch.com) | managed Python 3.14 and Node.js; no system Node adopted | plugins, MCP and ACP documented |
-| Muse Code | no official URL found | not documented | not documented |
+| Muse Code | yes (dev.meta.ai) | native binary, no runtime stated | skills, hooks and MCP documented; ACP not documented |
 
 Blocks: the `engines` field and the build target (plan 01-03, D-09). It also blocks host-specific plugin code in later phases, which must read the matching gate section below before writing code.
 
 ## Read date
 
-2026-10-21 (ISO 8601). Every statement below was read on that date. Quotations are taken from the page text as fetched.
+2026-10-21 (ISO 8601) for Omp, Claude Code, Grok Build, and Hermes Agent; 2026-10-22 for Muse Code. Every statement below was read on its section's date. Quotations are taken from the page text as fetched.
 
 ## Official URLs read
 
@@ -46,7 +46,11 @@ Hermes Agent:
 - https://hermes-agent.nousresearch.com/docs/user-guide/features/mcp (MCP configuration)
 - https://hermes-agent.nousresearch.com/docs/user-guide/features/acp (ACP server)
 
-Muse Code: no official URL was found in any source read in this phase, so the URL is recorded as not documented (D-17). No URL was guessed.
+Muse Code (read 2026-10-22):
+
+- https://dev.meta.ai/docs/muse-code (product index; install and reading guide)
+- https://dev.meta.ai/docs/muse-code/extending (skills, hooks, MCP servers, headless runs)
+- https://dev.meta.ai/docs/muse-code/configuration (settings.json, schema_version, project instructions, memory)
 
 Each URL was reached from the official documentation index or from a link on an official page. None was typed from memory.
 
@@ -110,7 +114,17 @@ Q5 (capability gaps). The page states that "The embedded `hermes mcp serve` expo
 
 ## Muse Code
 
-Q1 to Q5: not documented. No official URL for Muse Code was found in any source read in this phase, and the spec names the host without a link (D-17). Muse Code therefore has no sourced Node or Bun requirement and no sourced loading model. It must not be claimed as supported in `engines`, the host snippets, or the MCP and ACP surfaces until its official URL is recorded here.
+Read date: 2026-10-22 (ISO 8601). Sources are the three official URLs listed above.
+
+Q1 (Node or Bun). Answer: not documented. The index page installs "a native `muse` binary on your path" with the one-line installer (`curl -fsSL https://dev.meta.ai/install.sh | sh` on macOS and Linux; `irm https://dev.meta.ai/install.ps1 | iex` on Windows) and states no Node or Bun version requirement. The TypeScript SDK installs with `npm install @muse-code/sdk`; no Node floor for the SDK is stated on the pages read.
+
+Q2 (plugin loading). Answer, from the extending page: a skill "packages a repeatable workflow the agent can load on demand" and skills load from four sources: built-in, user (`$XDG_CONFIG_HOME/muse/skills` and `~/.agents/skills`), project (`<repo>/.agents/skills/<skill-id>/SKILL.md`), and plugin ("skills contributed by enabled plugin bundles"). Management commands are `muse skills list`, `muse skills inspect <skill-id>`, `muse skills enable <skill-id> --scope project`, `muse skills install ./my-skill --scope user`, `muse skills validate ./my-skill`, and `muse skills import --from claude`. A hook "binds to exactly one event"; the available events are `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PermissionRequest`, `PostToolUse`, `PostToolUseFailure`, `PostToolBatch`, `PreLLMCall`, `PostLLMCall`, `PreCompact`, `PostCompact`, `SubagentStart`, `SubagentStop`, `Notification`, `Stop`, `StopFailure`, and `SessionEnd`. Hooks are declared in the first-class `hooks` block of the settings file. The plugin bundle manifest format is not on the pages read: not documented in the pages read.
+
+Q3 (MCP loading). Answer, from the extending page: "Declare servers in the `mcp_servers` block of your settings file. Each server takes a `transport`: either `stdio` (with `command`, `args`, and `env`) or `streamable_http` (with `url` and `headers`). Every server also takes `enabled` and `mode`." A server's `mode` defaults to `required` ("If a required server fails to start, the whole run aborts"); `optional` is skipped with a warning when unavailable. "For `stdio`, the optional `framing` setting controls message framing." Server configs support `${VAR}` environment-variable interpolation, and Muse Code passes `MUSE_SESSION_ID` to `stdio` servers. The settings file lives at `~/.config/muse/settings.json` and "must set `"schema_version": 1`" (configuration page). Run `/mcp` in an interactive session for a live inventory; `muse mcp login <server>` and `muse mcp logout <server>` handle OAuth sign-in for remote servers.
+
+Q4 (ACP). Not documented in the pages read. Neither the extending nor the configuration page names an ACP surface.
+
+Q5 (capability gaps). From the extending page: "MCP tools are not sandboxed. Unlike shell commands, an MCP server runs as an ordinary child process (stdio) or a direct network connection, outside the filesystem and network sandbox." A tool whose server declares it read-only runs without an approval prompt under on-request approvals. The agent-tree execution capacity defaults to 8 including the root agent and is set with `agents.execution_capacity` (1 through 64; an unconfigured `ultra` root uses 64).
 
 ## Node requirement recorded for plan 01-03 (D-09)
 
@@ -138,4 +152,4 @@ Decision owner: plan 01-03 and the main agent confirm this value before `package
 - Claude Code plugin manifest, MCP configuration format and ACP support: not read in this phase.
 - Grok Build plugin manifest, hook contract and ACP transport: not read in this phase.
 - Hermes numeric managed Node.js version: not documented in the page read.
-- Muse Code: an official URL, and then its Node or Bun requirement, plugin, MCP and ACP model.
+- Muse Code: plugin bundle manifest format and ACP support (not on the pages read 2026-10-22); Node or Bun requirement not stated on those pages.

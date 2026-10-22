@@ -9,8 +9,8 @@ import { fileURLToPath } from "node:url";
 // (D-99) and proves the three host surfaces hold no tool logic: no file under
 // src/mcp/, src/acp/, or src/omp/ references a D-99 guarded symbol or a
 // dispatcher-internal symbol, every surface reaches the dispatcher only
-// through ToolDispatcher.call, and spawn( still appears only in
-// src/runtime/session-execution.ts. It starts no process and touches no
+// through ToolDispatcher.call, and spawn( appears only in the OpenShell runner and the
+// documented CLI daemon spawn (src/runtime/session-execution.ts, src/cli/main.ts; P6-D1). It starts no process and touches no
 // network. The guard allowlists no new spawn site and no new guarded-symbol
 // referrer: any surface reference is a violation.
 
@@ -48,7 +48,8 @@ const DISPATCHER_INTERNALS: readonly string[] = [
 // The three host surfaces this guard scans (P5-D12, T-05-12).
 const SURFACE_DIRS: readonly string[] = ["mcp/", "acp/", "omp/"];
 
-const SPAWN_MODULE = "runtime/session-execution.ts";
+// spawn( is allowed in the OpenShell runner and in the CLI that spawns the detached daemon (P6-D1).
+const SPAWN_MODULES: readonly string[] = ["cli/main.ts", "runtime/session-execution.ts"];
 
 function readSources(): Map<string, string> {
   const names = readdirSync(SRC_DIR, { recursive: true, encoding: "utf8" }).filter(
@@ -147,7 +148,7 @@ test("TOOL-05: the surfaces reach the dispatcher only through call, never anothe
 });
 
 test("TOOL-05: spawn( appears in src/ only in src/runtime/session-execution.ts (P5-D12)", () => {
-  assert.deepEqual(spawnCallers(readSources()), [SPAWN_MODULE], "the one process spawn in src/ is the OpenShell runner");
+  assert.deepEqual(spawnCallers(readSources()).sort(), [...SPAWN_MODULES].sort(), "spawn( in src/ is the OpenShell runner and the documented CLI daemon spawn (P6-D1)");
 });
 
 test("TOOL-05: the guard reports a planted surface reference to tool internals, a dispatcher bypass, or a new spawn site", () => {

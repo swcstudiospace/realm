@@ -13,8 +13,9 @@ const REGISTERED_IDS: readonly CheckId[] = [
   "podman-service",
   "openshell",
   "anda-bridge",
+  "control-channel",
+  "agentos",
 ];
-const UNINSPECTABLE_ITEMS = /agentos|control/i;
 
 interface Layout {
   readonly base: string;
@@ -183,7 +184,7 @@ test("session-store: an absent session directory fails when no ancestor is writa
   assert.match(fixOf(result), /ownership/);
 });
 
-test("only the seven checks are registered, and none reports on AgentOS or the control channel (D-44, D-69)", async (t) => {
+test("the nine checks are registered in report order, with control-channel and agentos after anda-bridge (D-44, D-69, CLI-03)", async (t) => {
   const { policyPath, stateDir } = layout(t);
   // Every seam is injected: each command fails to start and each socket is refused, so the run spawns no
   // process and opens no socket. The andaUrl is absent, so no engine is contacted either.
@@ -198,7 +199,4 @@ test("only the seven checks are registered, and none reports on AgentOS or the c
     results.map((result) => result.id),
     REGISTERED_IDS,
   );
-  for (const result of results) {
-    assert.doesNotMatch(`${result.id} ${result.detail} ${result.fix ?? ""}`, UNINSPECTABLE_ITEMS);
-  }
 });

@@ -4,8 +4,9 @@
 //
 // Phase 2 registered three checks (D-44). Phase 3 adds four runtime items (RT-02, RT-03,
 // ANDA-02; D-69): podman, podman-service, openshell, and anda-bridge. AgentOS and the
-// control channel have no item, because nothing in Phase 3 can inspect them (D-69). Phase 6
-// adds its items to REGISTERED deliberately; the list is a costly change under D-44.
+// control channel have no item in Phase 3, because nothing there can inspect them (D-69).
+// Phase 6 appends control-channel and agentos to REGISTERED deliberately (CLI-03; P6-D6,
+// P6-D14); the list is a costly change under D-44.
 //
 // Details and fixes name paths, rules, and schema pointers. They never carry a value read
 // from the policy file (the privacy rule in src/contract/validate.ts).
@@ -15,7 +16,7 @@ import { accessSync, constants, existsSync, statSync, type Stats } from "node:fs
 import { request as httpRequest, type ClientRequest, type IncomingMessage, type RequestOptions } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { createConnection } from "node:net";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { ANDA_INFORMATION_PATH } from "../anda/client.js";
 import { checkAppInformationShape } from "../anda/shape.js";
 import { SchemaInvalidError } from "../contract/validate.js";
@@ -31,9 +32,12 @@ import {
   type RunCommand,
 } from "../runtime/podman-probe.js";
 import { selectOpenShellEnvironment } from "../runtime/session-execution.js";
-import { type EnvironmentLike, sessionsDirOf } from "../session/paths.js";
+import { SOCKET_TIMEOUT_MS } from "../daemon/channel.js";
+import { controlSocketPath, type EnvironmentLike, sessionsDirOf } from "../session/paths.js";
 
-export type CheckId = "policy-file" | "state-dir" | "session-store" | "podman" | "podman-service" | "openshell" | "anda-bridge";
+export type { ConnectSocket } from "../runtime/podman-probe.js";
+
+export type CheckId = "policy-file" | "state-dir" | "session-store" | "podman" | "podman-service" | "openshell" | "anda-bridge" | "control-channel" | "agentos";
 export type CheckStatus = "pass" | "warn" | "fail";
 
 export interface CheckResult {
@@ -60,6 +64,9 @@ export interface DoctorOptions {
   readonly fetchInformation?: FetchInformation;
   // The Anda Engine base URL (RuntimeConfig.andaUrl). Absent means no engine is configured.
   readonly andaUrl?: string;
+  // AgentOS liveness seam (CLI-03; P6-D14). Absent means no live session is tracked, so the
+  // agentos item warns instead of claiming a pass. Tests inject a probe to drive pass and fail.
+  readonly agentosAlive?: AgentOsAliveProbe;
   // The bound for one probe step, in milliseconds. Defaults to 5000.
   readonly probeTimeoutMs?: number;
 }
@@ -72,6 +79,9 @@ export interface AndaReply {
 }
 
 export type FetchInformation = (url: string, timeoutMs: number) => Promise<AndaReply>;
+
+// AgentOS liveness probe (CLI-03; P6-D14). Resolves true when a live session answers.
+export type AgentOsAliveProbe = () => Promise<boolean>;
 
 type WriteProbe = (path: string) => boolean;
 
@@ -88,6 +98,8 @@ const STATE_DIR_MODE = 0o700;
 const PERMISSION_BITS = 0o777;
 
 // The registered checks in report order. The Phase 3 items follow the Phase 2 three (D-69).
+// Phase 6 appends control-channel and agentos after anda-bridge (P6-D6, P6-D14); nothing
+// earlier moves, because the list is a costly change under D-44.
 const REGISTERED: readonly Check[] = [
   (context) => policyFileCheck(context.options),
   (context) => stateDirCheck(context.options),
@@ -96,6 +108,8 @@ const REGISTERED: readonly Check[] = [
   podmanServiceCheck,
   openShellCheck,
   andaBridgeCheck,
+  controlChannelCheck,
+  agentOsCheck,
 ];
 
 const DEFAULT_PROBE_TIMEOUT_MS = 5000;
@@ -472,6 +486,119 @@ async function andaBridgeCheck(context: CheckContext): Promise<CheckResult> {
   };
 }
 
+// ---- Phase 6 items (CLI-03; P6-D6, P6-D14). Each item returns a status, a detail, and a fix
+// that is null only on pass. A detail names a catalogue code, a mode, or a rule. It never
+// carries socket bytes or a value read from the engine.
+
+const FIX_CONTROL_ABSENT = "Run realm up to start the daemon, then rerun doctor.";
+const FIX_CONTROL_REFUSED =
+  "Check that the realm daemon owns the control socket, then run realm up to replace a stale socket and rerun doctor.";
+const FIX_AGENTOS_UP = "Run realm up, then rerun doctor.";
+
+// control-channel (CLI-03; P6-D6). The run directory has mode 0700 and the control socket
+// accepts a connection. A missing run directory or socket warns, because a stopped daemon is
+// normal. A wrong mode, a non-directory, or a refused dial fails closed, so a tampered or
+// foreign socket never reports pass (T-06-12). Details name codes and modes only (T-06-13).
+async function controlChannelCheck(context: CheckContext): Promise<CheckResult> {
+  const id: CheckId = "control-channel";
+  const { options } = context;
+  const runDir = join(options.stateDir, "run");
+  const found = probePath(runDir);
+  if (found.state === "absent") {
+    return {
+      id,
+      status: "warn",
+      detail: "control socket is absent because the run directory is absent, so the daemon looks stopped",
+      fix: FIX_CONTROL_ABSENT,
+    };
+  }
+  if (found.state === "unreadable") {
+    return {
+      id,
+      status: "fail",
+      detail: "run directory cannot be inspected",
+      fix: `Check the ownership and permissions of the parent directory of the run directory: ${runDir}.`,
+    };
+  }
+  if (!found.stats.isDirectory()) {
+    return {
+      id,
+      status: "fail",
+      detail: "run directory path is not a directory",
+      fix: `Move the file at the run directory path aside so the realm can create the directory: ${runDir}.`,
+    };
+  }
+  const mode = found.stats.mode & PERMISSION_BITS;
+  if (mode !== STATE_DIR_MODE) {
+    return {
+      id,
+      status: "fail",
+      detail: `run directory mode is ${mode.toString(8)}, expected 700`,
+      fix: `Run chmod 700 on the run directory: ${runDir}`,
+    };
+  }
+  const socketPath = controlSocketPath(options.stateDir);
+  try {
+    await (options.connectSocket ?? defaultConnectSocket)(socketPath, SOCKET_TIMEOUT_MS);
+  } catch (error: unknown) {
+    if (errnoOf(error) === "ENOENT") {
+      return {
+        id,
+        status: "warn",
+        detail: "control socket is absent, so the daemon looks stopped",
+        fix: FIX_CONTROL_ABSENT,
+      };
+    }
+    return {
+      id,
+      status: "fail",
+      detail: "REALM_NOT_ACTIVE: the control socket did not accept a connection",
+      fix: FIX_CONTROL_REFUSED,
+    };
+  }
+  return {
+    id,
+    status: "pass",
+    detail: "the run directory has mode 700 and the control socket accepts connections",
+    fix: null,
+  };
+}
+
+// agentos (CLI-03; P6-D14). With no live session there is nothing to probe, so the item warns
+// instead of claiming a pass. An injected agentosAlive probe drives pass and fail in tests.
+async function agentOsCheck(context: CheckContext): Promise<CheckResult> {
+  const id: CheckId = "agentos";
+  const probe = context.options.agentosAlive;
+  if (probe === undefined) {
+    return {
+      id,
+      status: "warn",
+      detail: "no live AgentOS session is tracked, so liveness was not probed",
+      fix: FIX_AGENTOS_UP,
+    };
+  }
+  let alive: boolean;
+  try {
+    alive = await probe();
+  } catch {
+    return {
+      id,
+      status: "fail",
+      detail: "AGENTOS_CRASH_LOOP: the AgentOS liveness probe did not answer",
+      fix: FIX_AGENTOS_UP,
+    };
+  }
+  if (alive) {
+    return { id, status: "pass", detail: "the AgentOS driver reports a live session", fix: null };
+  }
+  return {
+    id,
+    status: "fail",
+    detail: "AGENTOS_CRASH_LOOP: the AgentOS driver reports no live session",
+    fix: FIX_AGENTOS_UP,
+  };
+}
+
 // The same rule as the bridge: http or https, and no user information in the authority, even an empty one.
 function isEngineUrl(text: string): boolean {
   if (/^[a-z][a-z0-9+.-]*:\/\/[^/?#]*@/i.test(text)) {
@@ -492,7 +619,7 @@ function probeTimeoutOf(options: DoctorOptions): number {
 
 // Runs file with argv and no shell, under the environment the caller passes. A process that exits
 // resolves with its status. One that cannot start, or is killed at the timeout, rejects.
-function defaultRunCommand(file: string, args: readonly string[], options: CommandOptions): Promise<CommandOutcome> {
+export function defaultRunCommand(file: string, args: readonly string[], options: CommandOptions): Promise<CommandOutcome> {
   return new Promise<CommandOutcome>((resolve, reject) => {
     execFile(
       file,

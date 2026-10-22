@@ -24,10 +24,14 @@ const OPEN: Policy = { ...CLOSED, shellEnabled: true };
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const SRC_DIR = join(REPO_ROOT, "src");
 
-// TOOL-02: the only src files that may import child_process. Both are Phase 3 spawn sites:
-// session-execution.ts runs the OpenShell create runner with no shell and a minimal
-// environment; checks.ts runs the read-only Podman and OpenShell probes via execFile.
-const CHILD_PROCESS_ALLOWLIST: readonly string[] = ["src/doctor/checks.ts", "src/runtime/session-execution.ts"];
+// TOOL-02: the only src files that may import child_process. session-execution.ts runs the
+// OpenShell create runner with no shell and a minimal environment; checks.ts runs the read-only
+// Podman and OpenShell probes via execFile; cli/main.ts spawns the detached daemon by argv (P6-D1).
+const CHILD_PROCESS_ALLOWLIST: readonly string[] = [
+  "src/cli/main.ts",
+  "src/doctor/checks.ts",
+  "src/runtime/session-execution.ts",
+];
 
 // Matches an import, re-export, dynamic import or require that names child_process.
 const CHILD_PROCESS_REF = /\b(?:from|import|require)\s*\(?\s*["'](?:node:)?child_process["']/;
