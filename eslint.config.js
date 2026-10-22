@@ -48,6 +48,14 @@ const SYNTAX = {
     selector: 'CallExpression[callee.name="require"] > Literal[value=/^(node:)?child_process$/]',
     message: "TOOL-02: child_process is never loaded with require().",
   },
+  cpReexport: {
+    selector: 'ExportNamedDeclaration[source.value=/^(node:)?child_process$/]',
+    message: "TOOL-02: child_process is never re-exported; allowlisted modules keep it private.",
+  },
+  cpReexportAll: {
+    selector: 'ExportAllDeclaration[source.value=/^(node:)?child_process$/]',
+    message: "TOOL-02: child_process is never re-exported with export *.",
+  },
   cpSideEffect: {
     selector: 'ImportDeclaration[source.value=/^(node:)?child_process$/]:not(:has(ImportSpecifier))',
     message: "TOOL-02: an allowlisted module imports child_process by name; a side-effect import is refused.",
@@ -82,7 +90,7 @@ const SYNTAX = {
  */
 const syntaxRule = (keys) => ["error", ...keys.map((key) => SYNTAX[key])];
 /** @type {SyntaxKey[]} */
-const DYNAMIC = ["cpDynamic", "cpRequire"];
+const DYNAMIC = ["cpDynamic", "cpRequire", "cpReexport", "cpReexportAll"];
 /** @type {SyntaxKey[]} */
 const NAMED_ONLY = ["cpSideEffect", "cpDefault", "cpNamespace"];
 /** @type {SyntaxKey[]} */
