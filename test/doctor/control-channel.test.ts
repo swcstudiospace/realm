@@ -91,7 +91,7 @@ function enoent(message: string): Error {
   return Object.assign(new Error(message), { code: "ENOENT" });
 }
 
-test("CLI-03: the full report lists all eight items in order with control-channel and agentos appended (CLI-03)", async (t) => {
+void test("CLI-03: the full report lists all eight items in order with control-channel and agentos appended (CLI-03)", async (t) => {
   const { policyPath, stateDir } = layout(t);
   makeRunDir(stateDir);
   const seen: SeenDials = { dials: [], timeouts: [] };
@@ -106,7 +106,7 @@ test("CLI-03: the full report lists all eight items in order with control-channe
   );
 });
 
-test("CLI-03: control-channel passes when the run directory is 0700 and the socket accepts (CLI-03)", async (t) => {
+void test("CLI-03: control-channel passes when the run directory is 0700 and the socket accepts (CLI-03)", async (t) => {
   const { policyPath, stateDir } = layout(t);
   makeRunDir(stateDir);
   const seen: SeenDials = { dials: [], timeouts: [] };
@@ -121,7 +121,7 @@ test("CLI-03: control-channel passes when the run directory is 0700 and the sock
   assert.deepEqual(seen.timeouts, [SOCKET_TIMEOUT_MS]);
 });
 
-test("CLI-03: control-channel fails with a chmod fix and dials nothing when the run directory mode is wrong (CLI-03)", async (t) => {
+void test("CLI-03: control-channel fails with a chmod fix and dials nothing when the run directory mode is wrong (CLI-03)", async (t) => {
   const { policyPath, stateDir } = layout(t);
   makeRunDir(stateDir, 0o755);
   const seen: SeenDials = { dials: [], timeouts: [] };
@@ -136,7 +136,7 @@ test("CLI-03: control-channel fails with a chmod fix and dials nothing when the 
   assert.deepEqual(seen.dials, []);
 });
 
-test("CLI-03: control-channel fails with a move-aside fix when the run directory path is not a directory (CLI-03)", async (t) => {
+void test("CLI-03: control-channel fails with a move-aside fix when the run directory path is not a directory (CLI-03)", async (t) => {
   const { policyPath, stateDir } = layout(t);
   writeFileSync(join(stateDir, "run"), "not a directory");
   const seen: SeenDials = { dials: [], timeouts: [] };
@@ -151,7 +151,7 @@ test("CLI-03: control-channel fails with a move-aside fix when the run directory
   assert.deepEqual(seen.dials, []);
 });
 
-test("CLI-03: control-channel warns with a fix when the socket is absent because the daemon is down (CLI-03)", async (t) => {
+void test("CLI-03: control-channel warns with a fix when the socket is absent because the daemon is down (CLI-03)", async (t) => {
   const { policyPath, stateDir } = layout(t);
   makeRunDir(stateDir);
   const seen: SeenDials = { dials: [], timeouts: [] };
@@ -166,7 +166,7 @@ test("CLI-03: control-channel warns with a fix when the socket is absent because
   assert.deepEqual(seen.dials, [controlSocketPath(stateDir)]);
 });
 
-test("CLI-03: control-channel warns with a fix when the run directory is absent (CLI-03)", async (t) => {
+void test("CLI-03: control-channel warns with a fix when the run directory is absent (CLI-03)", async (t) => {
   const { policyPath, stateDir } = layout(t);
   const seen: SeenDials = { dials: [], timeouts: [] };
   const results = await runChecks({
@@ -179,7 +179,7 @@ test("CLI-03: control-channel warns with a fix when the run directory is absent 
   assert.deepEqual(seen.dials, []);
 });
 
-test("CLI-03: control-channel fails with a fix and never echoes the socket error when the dial is refused (CLI-03)", async (t) => {
+void test("CLI-03: control-channel fails with a fix and never echoes the socket error when the dial is refused (CLI-03)", async (t) => {
   const { policyPath, stateDir } = layout(t);
   makeRunDir(stateDir);
   const seen: SeenDials = { dials: [], timeouts: [] };
@@ -197,7 +197,7 @@ test("CLI-03: control-channel fails with a fix and never echoes the socket error
   assert.doesNotMatch(`${result.detail} ${fixOf(result)}`, /secret-socket-9c1d/);
 });
 
-test("CLI-03: agentos warns with REALM_NOT_ACTIVE and the realm-up fix when no daemon answers (CLI-03)", async (t) => {
+void test("CLI-03: agentos warns with REALM_NOT_ACTIVE and the realm-up fix when no daemon answers (CLI-03)", async (t) => {
   const { policyPath, stateDir } = layout(t);
   makeRunDir(stateDir);
   const seen: SeenDials = { dials: [], timeouts: [] };
@@ -211,7 +211,7 @@ test("CLI-03: agentos warns with REALM_NOT_ACTIVE and the realm-up fix when no d
   assert.match(fixOf(result), /realm up/);
 });
 
-test("CLI-03: agentos passes when the injected probe reports a live session (CLI-03)", async (t) => {
+void test("CLI-03: agentos passes when the injected probe reports a live session (CLI-03)", async (t) => {
   const { policyPath, stateDir } = layout(t);
   const results = await runChecks({
     ...silentBase(policyPath, stateDir),
@@ -223,7 +223,7 @@ test("CLI-03: agentos passes when the injected probe reports a live session (CLI
   assert.equal(result.fix, null);
 });
 
-test("CLI-03: agentos fails with a fix when the injected probe reports no live session (CLI-03)", async (t) => {
+void test("CLI-03: agentos fails with a fix when the injected probe reports no live session (CLI-03)", async (t) => {
   const { policyPath, stateDir } = layout(t);
   const results = await runChecks({
     ...silentBase(policyPath, stateDir),
@@ -236,7 +236,7 @@ test("CLI-03: agentos fails with a fix when the injected probe reports no live s
   assert.match(fixOf(result), /realm up/);
 });
 
-test("CLI-03: agentos fails with a fix when the injected probe does not answer (CLI-03)", async (t) => {
+void test("CLI-03: agentos fails with a fix when the injected probe does not answer (CLI-03)", async (t) => {
   const { policyPath, stateDir } = layout(t);
   const results = await runChecks({
     ...silentBase(policyPath, stateDir),
@@ -249,7 +249,7 @@ test("CLI-03: agentos fails with a fix when the injected probe does not answer (
   assert.doesNotMatch(`${result.detail} ${fixOf(result)}`, /timed out/);
 });
 
-test("CLI-03: agentos fails with AGENTOS_NOT_CONFIGURED and a driver fix when the daemon has no driver bound (CLI-03)", async (t) => {
+void test("CLI-03: agentos fails with AGENTOS_NOT_CONFIGURED and a driver fix when the daemon has no driver bound (CLI-03)", async (t) => {
   const { policyPath, stateDir } = layout(t);
   const results = await runChecks({
     ...silentBase(policyPath, stateDir),
@@ -262,7 +262,7 @@ test("CLI-03: agentos fails with AGENTOS_NOT_CONFIGURED and a driver fix when th
   assert.match(fixOf(result), /AgentOS driver/);
 });
 
-test("CLI-03: every non-pass across both items carries a fix and every pass carries none (CLI-03)", async (t) => {
+void test("CLI-03: every non-pass across both items carries a fix and every pass carries none (CLI-03)", async (t) => {
   const { policyPath, stateDir } = layout(t);
   makeRunDir(stateDir);
   const seen: SeenDials = { dials: [], timeouts: [] };

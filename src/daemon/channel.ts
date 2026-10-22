@@ -235,7 +235,7 @@ async function dial(socketPath: string, timeoutMs: number): Promise<Socket> {
     });
     socket.once("error", (cause: unknown) => {
       socket.destroy();
-      reject(cause);
+      reject(ioFailure(cause));
     });
   });
   try {
@@ -252,7 +252,7 @@ async function writeBounded(socket: Socket, line: string, timeoutMs: number): Pr
       if (cause === undefined || cause === null) {
         resolve();
       } else {
-        reject(cause);
+        reject(ioFailure(cause));
       }
     });
   });
@@ -293,7 +293,7 @@ async function readBounded(socket: Socket, timeoutMs: number): Promise<string> {
     };
     const onError = (cause: unknown): void => {
       cleanup();
-      reject(cause);
+      reject(ioFailure(cause));
     };
     const onClose = (): void => {
       cleanup();
@@ -354,7 +354,7 @@ export async function readControlLine(socket: Socket, timeoutMs: number): Promis
     };
     const onError = (cause: unknown): void => {
       cleanup();
-      reject(cause);
+      reject(ioFailure(cause));
     };
     const onClose = (): void => {
       cleanup();
@@ -504,7 +504,7 @@ export function describeRunDirRefusal(observed: RunDirObservation, currentUid: n
   if (mode !== RUN_DIR_MODE) {
     return `run directory mode is ${mode.toString(8)}, expected 700`;
   }
-  return `run directory owner uid is ${observed.uid}, expected uid ${currentUid}`;
+  return `run directory owner uid is ${String(observed.uid)}, expected uid ${String(currentUid)}`;
 }
 
 // Applies SOCKET_MODE to the bound socket path after listen (P6-D3). Any failure

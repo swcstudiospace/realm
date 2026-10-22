@@ -119,7 +119,7 @@ function fixture(t: TestContext) {
   return { base, rootDir, outside, root: bindRoot(rootDir) };
 }
 
-test("the denied list is exactly the D-31 shapes and each shape denies its sample (FS-03)", () => {
+void test("the denied list is exactly the D-31 shapes and each shape denies its sample (FS-03)", () => {
   assert.deepEqual([...CREDENTIAL_PATTERNS], D31_SHAPES);
   assert.deepEqual(
     DENIED_SAMPLES.map((sample) => sample.shape),
@@ -130,7 +130,7 @@ test("the denied list is exactly the D-31 shapes and each shape denies its sampl
   }
 });
 
-test("paths that only resemble a denied shape are not denied (FS-03)", () => {
+void test("paths that only resemble a denied shape are not denied (FS-03)", () => {
   for (const path of [
     "environment.ts",
     "src/env.ts",
@@ -144,13 +144,13 @@ test("paths that only resemble a denied shape are not denied (FS-03)", () => {
   }
 });
 
-test("the allow helper matches only the canonical relative path (FS-03)", () => {
+void test("the allow helper matches only the canonical relative path (FS-03)", () => {
   assert.equal(isCredentialAllowed(["**/.env.example"], "app/.env.example"), true);
   assert.equal(isCredentialAllowed(["**/.env.example"], "app/.env"), false);
   assert.equal(isCredentialAllowed([], ".env"), false);
 });
 
-test("every denied shape fails with CREDENTIAL_PATH_DENIED on read (FS-03)", (t) => {
+void test("every denied shape fails with CREDENTIAL_PATH_DENIED on read (FS-03)", (t) => {
   const { root } = fixture(t);
   for (const sample of DENIED_SAMPLES) {
     assertRejectsWith(
@@ -160,7 +160,7 @@ test("every denied shape fails with CREDENTIAL_PATH_DENIED on read (FS-03)", (t)
   }
 });
 
-test("every denied shape fails with CREDENTIAL_PATH_DENIED on write and leaves the file unchanged (FS-03)", (t) => {
+void test("every denied shape fails with CREDENTIAL_PATH_DENIED on write and leaves the file unchanged (FS-03)", (t) => {
   const { root, rootDir } = fixture(t);
   const locks = new LockTable();
   for (const sample of DENIED_SAMPLES) {
@@ -172,7 +172,7 @@ test("every denied shape fails with CREDENTIAL_PATH_DENIED on write and leaves t
   }
 });
 
-test("a denied shape that does not exist yet is denied on read and on write (FS-03)", (t) => {
+void test("a denied shape that does not exist yet is denied on read and on write (FS-03)", (t) => {
   const { root, rootDir } = fixture(t);
   assertRejectsWith(() => readFileCapped(root, ".env.new", readOptions()), "CREDENTIAL_PATH_DENIED");
   assertRejectsWith(
@@ -182,7 +182,7 @@ test("a denied shape that does not exist yet is denied on read and on write (FS-
   assert.equal(existsSync(join(rootDir, ".env.new")), false);
 });
 
-test("nested credential shapes are denied at any depth (FS-03)", (t) => {
+void test("nested credential shapes are denied at any depth (FS-03)", (t) => {
   const { root, rootDir } = fixture(t);
   putFile(rootDir, "a/b/c/.ssh/known_hosts", "host");
   putFile(rootDir, "a/b/c/id_ed25519.pub", "key");
@@ -192,7 +192,7 @@ test("nested credential shapes are denied at any depth (FS-03)", (t) => {
   }
 });
 
-test("credentialAllow permits the matching denied path for read and write and nothing else (FS-03)", (t) => {
+void test("credentialAllow permits the matching denied path for read and write and nothing else (FS-03)", (t) => {
   const { root, rootDir } = fixture(t);
   putFile(rootDir, "app/.env.example", "EXAMPLE=1");
   const allow = ["**/.env.example"];
@@ -210,7 +210,7 @@ test("credentialAllow permits the matching denied path for read and write and no
   assert.equal(readFileSync(join(rootDir, "app/.env.example"), "utf8"), "EXAMPLE=2");
 });
 
-test("an escaping credential path reports PATH_ESCAPE before any credential check (FS-01, FS-03)", (t) => {
+void test("an escaping credential path reports PATH_ESCAPE before any credential check (FS-01, FS-03)", (t) => {
   const { root, rootDir, outside } = fixture(t);
   // The canonical path of each of these lies outside the root and matches a credential
   // shape. Only the escape check stands between them and a CREDENTIAL_PATH_DENIED answer.
@@ -233,7 +233,7 @@ test("an escaping credential path reports PATH_ESCAPE before any credential chec
   assert.equal(readFileSync(join(outside, ".env"), "utf8"), "OUTSIDE_SECRET=1");
 });
 
-test("a symlink inside the root into a credential path is denied on read (FS-03)", (t) => {
+void test("a symlink inside the root into a credential path is denied on read (FS-03)", (t) => {
   const { root, rootDir } = fixture(t);
   symlinkSync(join(rootDir, ".ssh"), join(rootDir, "cfg"));
   symlinkSync(join(rootDir, ".env"), join(rootDir, "notes.txt"));
@@ -241,7 +241,7 @@ test("a symlink inside the root into a credential path is denied on read (FS-03)
   assertRejectsWith(() => readFileCapped(root, "notes.txt", readOptions()), "CREDENTIAL_PATH_DENIED");
 });
 
-test("listing a denied directory fails with CREDENTIAL_PATH_DENIED (FS-03, D-36)", (t) => {
+void test("listing a denied directory fails with CREDENTIAL_PATH_DENIED (FS-03, D-36)", (t) => {
   const { root } = fixture(t);
   assertRejectsWith(() => listDir(root, ".ssh", { credentialAllow: [] }), "CREDENTIAL_PATH_DENIED");
   assertRejectsWith(
@@ -250,7 +250,7 @@ test("listing a denied directory fails with CREDENTIAL_PATH_DENIED (FS-03, D-36)
   );
 });
 
-test("the credential check runs before the lock: a held path is still CREDENTIAL_PATH_DENIED (D-34)", (t) => {
+void test("the credential check runs before the lock: a held path is still CREDENTIAL_PATH_DENIED (D-34)", (t) => {
   const { root, rootDir } = fixture(t);
   const locks = new LockTable();
   const otherHandle = locks.acquire(join(rootDir, ".env"), "other");

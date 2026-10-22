@@ -5,7 +5,7 @@ import { RealmStateMachine } from "../../src/core/state-machine.js";
 
 const FIXED_TIME = "2026-10-21T09:30:00.000Z";
 
-test("every committed transition publishes exactly one state.transition event with sessionId, from, to, reason, and at (CORE-04)", () => {
+void test("every committed transition publishes exactly one state.transition event with sessionId, from, to, reason, and at (CORE-04)", () => {
   const bus = createEventBus();
   const received: RealmEvent[] = [];
   bus.subscribe((event) => {
@@ -36,7 +36,7 @@ test("every committed transition publishes exactly one state.transition event wi
   ]);
 });
 
-test("listeners run synchronously in subscription order (CORE-04, D-26)", () => {
+void test("listeners run synchronously in subscription order (CORE-04, D-26)", () => {
   const bus = createEventBus();
   const order: string[] = [];
   bus.subscribe(() => {
@@ -61,7 +61,7 @@ test("listeners run synchronously in subscription order (CORE-04, D-26)", () => 
   assert.deepEqual(order, ["first", "second", "third"]);
 });
 
-test("a throwing listener does not stop later listeners, and its error is rethrown after all have run (CORE-04, D-26)", () => {
+void test("a throwing listener does not stop later listeners, and its error is rethrown after all have run (CORE-04, D-26)", () => {
   const bus = createEventBus();
   const boom = new Error("listener failed");
   const delivered: string[] = [];
@@ -76,7 +76,7 @@ test("a throwing listener does not stop later listeners, and its error is rethro
   });
 
   assert.throws(
-    () =>
+    () => {
       bus.publish({
         type: "state.transition",
         sessionId: "session-1",
@@ -84,13 +84,14 @@ test("a throwing listener does not stop later listeners, and its error is rethro
         to: "connecting",
         reason: "creating container",
         at: FIXED_TIME,
-      }),
+      });
+    },
     (error: unknown) => error === boom,
   );
   assert.deepEqual(delivered, ["before", "after"]);
 });
 
-test("when several listeners throw, the first listener error is the one rethrown (D-26)", () => {
+void test("when several listeners throw, the first listener error is the one rethrown (D-26)", () => {
   const bus = createEventBus();
   const first = new Error("first listener failed");
   bus.subscribe(() => {
@@ -101,7 +102,7 @@ test("when several listeners throw, the first listener error is the one rethrown
   });
 
   assert.throws(
-    () =>
+    () => {
       bus.publish({
         type: "state.transition",
         sessionId: "session-1",
@@ -109,12 +110,13 @@ test("when several listeners throw, the first listener error is the one rethrown
         to: "connecting",
         reason: "creating container",
         at: FIXED_TIME,
-      }),
+      });
+    },
     (error: unknown) => error === first,
   );
 });
 
-test("a transition whose listener throws stays committed, because the state changes before publication (CORE-04, D-25)", () => {
+void test("a transition whose listener throws stays committed, because the state changes before publication (CORE-04, D-25)", () => {
   const bus = createEventBus();
   bus.subscribe(() => {
     throw new Error("listener failed");
@@ -129,7 +131,7 @@ test("a transition whose listener throws stays committed, because the state chan
   });
 });
 
-test("a listener subscribed during delivery does not receive the event already in flight (D-26)", () => {
+void test("a listener subscribed during delivery does not receive the event already in flight (D-26)", () => {
   const bus = createEventBus();
   const late: RealmEvent[] = [];
   bus.subscribe(() => {
@@ -150,7 +152,7 @@ test("a listener subscribed during delivery does not receive the event already i
   assert.deepEqual(late, []);
 });
 
-test("C-2: the function subscribe returns removes its listener, so later publications skip it (D-105)", () => {
+void test("C-2: the function subscribe returns removes its listener, so later publications skip it (D-105)", () => {
   const bus = createEventBus();
   const received: string[] = [];
   const unsubscribe = bus.subscribe(() => {
@@ -173,7 +175,7 @@ test("C-2: the function subscribe returns removes its listener, so later publica
   assert.deepEqual(received, ["second"]);
 });
 
-test("C-2: calling an unsubscribe twice removes nothing more, even when the same listener is subscribed twice (D-105)", () => {
+void test("C-2: calling an unsubscribe twice removes nothing more, even when the same listener is subscribed twice (D-105)", () => {
   const bus = createEventBus();
   let calls = 0;
   const listener = (): void => {

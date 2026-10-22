@@ -50,7 +50,7 @@ export class FakeExecutionService implements ExecutionService {
         return { containerId: existing };
       }
       this.sequence += 1;
-      const containerId = `fake-container-${this.sequence}`;
+      const containerId = `fake-container-${String(this.sequence)}`;
       this.table.set(containerId, {
         containerId,
         idempotencyKey: request.idempotencyKey,

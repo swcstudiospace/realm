@@ -85,7 +85,7 @@ function depsFor(
     boundRoot: f.root,
     locks: f.locks,
     credentialAllow: options.credentialAllow ?? [],
-    audit: options.audit ?? ((entry) => appendAudit(f.stateDir, entry)),
+    audit: options.audit ?? ((entry) => { appendAudit(f.stateDir, entry); }),
     mutationGate: () => gateMutation(policy, state),
   };
 }
@@ -110,7 +110,7 @@ function sha256Of(text: string | Uint8Array): string {
   return createHash("sha256").update(text).digest("hex");
 }
 
-test("TOOL-03: a write with a matching ifMatchSha256 replaces the content, returns its sha256 and byte count, and logs admission then result (D-34, D-98, D-90)", (t) => {
+void test("TOOL-03: a write with a matching ifMatchSha256 replaces the content, returns its sha256 and byte count, and logs admission then result (D-34, D-98, D-90)", (t) => {
   const f = makeFixture(t);
   const result = writeWorkspaceFile(depsFor(f), {
     path: "doc.txt",
@@ -131,10 +131,10 @@ test("TOOL-03: a write with a matching ifMatchSha256 replaces the content, retur
     ["ok", "ok"],
   );
   assert.equal(lines[1]?.["bytes"], 7);
-  assert.equal(lines[1]?.["sha256"], sha256Of("updated"));
+  assert.equal(lines[1]["sha256"], sha256Of("updated"));
 });
 
-test("TOOL-03: a write with a stale ifMatchSha256 is LOCK_CONFLICT, the file stays byte-identical, and the result line records the code (D-34, D-98)", (t) => {
+void test("TOOL-03: a write with a stale ifMatchSha256 is LOCK_CONFLICT, the file stays byte-identical, and the result line records the code (D-34, D-98)", (t) => {
   const f = makeFixture(t);
   const target = join(f.ws, "doc.txt");
   const before = readFileSync(target);
@@ -163,7 +163,7 @@ test("TOOL-03: a write with a stale ifMatchSha256 is LOCK_CONFLICT, the file sta
   assert.equal("sha256" in (lines[1] ?? {}), false);
 });
 
-test("TOOL-03: a write to a path another owner holds is LOCK_CONFLICT before admission, and that owner keeps the lock (D-89 stage 3, D-34)", (t) => {
+void test("TOOL-03: a write to a path another owner holds is LOCK_CONFLICT before admission, and that owner keeps the lock (D-89 stage 3, D-34)", (t) => {
   const f = makeFixture(t);
   const target = join(f.ws, "doc.txt");
   f.locks.acquire(target, "other-owner");
@@ -176,7 +176,7 @@ test("TOOL-03: a write to a path another owner holds is LOCK_CONFLICT before adm
   assert.deepEqual(auditLines(f), [], "a lock refusal writes no audit line");
 });
 
-test("TOOL-03: a write whose target is a symlink is PATH_ESCAPE before admission and writes nothing (D-34 step 1, D-89 stage 3)", (t) => {
+void test("TOOL-03: a write whose target is a symlink is PATH_ESCAPE before admission and writes nothing (D-34 step 1, D-89 stage 3)", (t) => {
   const f = makeFixture(t);
   assertRejectsWith(
     () => writeWorkspaceFile(depsFor(f), { path: "link.txt", content: "through the link" }),
@@ -186,7 +186,7 @@ test("TOOL-03: a write whose target is a symlink is PATH_ESCAPE before admission
   assert.deepEqual(auditLines(f), []);
 });
 
-test("TOOL-03: a write to a credential path is CREDENTIAL_PATH_DENIED before admission and creates nothing (D-31, D-89 stage 3)", (t) => {
+void test("TOOL-03: a write to a credential path is CREDENTIAL_PATH_DENIED before admission and creates nothing (D-31, D-89 stage 3)", (t) => {
   const f = makeFixture(t);
   assertRejectsWith(
     () => writeWorkspaceFile(depsFor(f), { path: ".env", content: "TOKEN=1" }),
@@ -196,7 +196,7 @@ test("TOOL-03: a write to a credential path is CREDENTIAL_PATH_DENIED before adm
   assert.deepEqual(auditLines(f), []);
 });
 
-test("TOOL-03: a write refused by the state gate in required mode is REALM_NOT_ACTIVE, with no audit line and no change (D-89 stage 2, D-63)", (t) => {
+void test("TOOL-03: a write refused by the state gate in required mode is REALM_NOT_ACTIVE, with no audit line and no change (D-89 stage 2, D-63)", (t) => {
   const f = makeFixture(t);
   assertRejectsWith(
     () =>
@@ -210,7 +210,7 @@ test("TOOL-03: a write refused by the state gate in required mode is REALM_NOT_A
   assert.deepEqual(auditLines(f), []);
 });
 
-test("TOOL-03: a write in a non-active state under advisory policy proceeds and returns the advisory warning (D-98, D-23)", (t) => {
+void test("TOOL-03: a write in a non-active state under advisory policy proceeds and returns the advisory warning (D-98, D-23)", (t) => {
   const f = makeFixture(t);
   const result = writeWorkspaceFile(depsFor(f, { state: "degraded", policy: ADVISORY }), {
     path: "doc.txt",
@@ -225,7 +225,7 @@ test("TOOL-03: a write in a non-active state under advisory policy proceeds and 
   );
 });
 
-test("TOOL-03: a write whose admission line cannot be appended is refused with AUDIT_WRITE_FAILED and nothing executes (S-21, D-89 stage 4)", (t) => {
+void test("TOOL-03: a write whose admission line cannot be appended is refused with AUDIT_WRITE_FAILED and nothing executes (S-21, D-89 stage 4)", (t) => {
   const f = makeFixture(t);
   const deps = depsFor(f, {
     audit: () => {
@@ -237,7 +237,7 @@ test("TOOL-03: a write whose admission line cannot be appended is refused with A
   assert.equal(f.locks.isHeldBy(join(f.ws, "doc.txt"), SESSION), false, "the lock probe releases its path");
 });
 
-test("TOOL-03: a result line that cannot be appended after a write returns AUDIT_WRITE_FAILED and the write is not rolled back (D-89 stage 6, OQ-P4-07)", (t) => {
+void test("TOOL-03: a result line that cannot be appended after a write returns AUDIT_WRITE_FAILED and the write is not rolled back (D-89 stage 6, OQ-P4-07)", (t) => {
   const f = makeFixture(t);
   let calls = 0;
   const deps = depsFor(f, {
@@ -254,7 +254,7 @@ test("TOOL-03: a result line that cannot be appended after a write returns AUDIT
   assert.equal(f.locks.isHeldBy(join(f.ws, "doc.txt"), SESSION), false);
 });
 
-test("TOOL-03: write audit lines carry the byte count and sha256 of the content and never the content (D-42, D-90)", (t) => {
+void test("TOOL-03: write audit lines carry the byte count and sha256 of the content and never the content (D-42, D-90)", (t) => {
   const f = makeFixture(t);
   const SENTINEL = "WRITE-BODY-SENTINEL-4c1";
   writeWorkspaceFile(depsFor(f), { path: "doc.txt", content: SENTINEL });
@@ -264,11 +264,11 @@ test("TOOL-03: write audit lines carry the byte count and sha256 of the content 
   const [admission, result] = auditLines(f);
   assert.equal("bytes" in (admission ?? {}), false);
   assert.equal(result?.["bytes"], Buffer.byteLength(SENTINEL, "utf8"));
-  assert.equal(result?.["sha256"], sha256Of(SENTINEL));
-  assert.equal("content" in (result ?? {}), false);
+  assert.equal(result["sha256"], sha256Of(SENTINEL));
+  assert.equal("content" in result, false);
 });
 
-test("TOOL-03: the byte count of a write is its UTF-8 length, not its character count (D-42)", (t) => {
+void test("TOOL-03: the byte count of a write is its UTF-8 length, not its character count (D-42)", (t) => {
   const f = makeFixture(t);
   const content = "é€";
   const result = writeWorkspaceFile(depsFor(f), { path: "doc.txt", content });
@@ -277,7 +277,7 @@ test("TOOL-03: the byte count of a write is its UTF-8 length, not its character 
   assert.equal(auditLines(f)[1]?.["bytes"], 5);
 });
 
-test("TOOL-03: a read returns the Phase 2 result shape and logs admission and result lines with byte count and sha256, never content (D-36, D-42, D-98)", (t) => {
+void test("TOOL-03: a read returns the Phase 2 result shape and logs admission and result lines with byte count and sha256, never content (D-36, D-42, D-98)", (t) => {
   const f = makeFixture(t);
   const SENTINEL = "READ-BODY-SENTINEL-7d";
   writeFileSync(join(f.ws, "body.txt"), SENTINEL);
@@ -290,14 +290,14 @@ test("TOOL-03: a read returns the Phase 2 result shape and logs admission and re
   assert.equal(auditText(f).includes(SENTINEL), false, "the read content never reaches the audit file");
   const [admission, outcome] = auditLines(f);
   assert.equal(admission?.["phase"], "admission");
-  assert.equal("bytes" in (admission ?? {}), false);
+  assert.equal("bytes" in admission, false);
   assert.equal(outcome?.["phase"], "result");
-  assert.equal(outcome?.["tool"], "read");
-  assert.equal(outcome?.["bytes"], Buffer.byteLength(SENTINEL, "utf8"));
-  assert.equal(outcome?.["sha256"], sha256Of(SENTINEL));
+  assert.equal(outcome["tool"], "read");
+  assert.equal(outcome["bytes"], Buffer.byteLength(SENTINEL, "utf8"));
+  assert.equal(outcome["sha256"], sha256Of(SENTINEL));
 });
 
-test("TOOL-03: a read capped at maxBytes returns the capped content, the sha256 of the whole file, and truncated true (D-36, D-98)", (t) => {
+void test("TOOL-03: a read capped at maxBytes returns the capped content, the sha256 of the whole file, and truncated true (D-36, D-98)", (t) => {
   const f = makeFixture(t);
   writeFileSync(join(f.ws, "long.txt"), "abcdefghij");
   const result = readWorkspaceFile(depsFor(f), { path: "long.txt", maxBytes: 4 });
@@ -308,7 +308,7 @@ test("TOOL-03: a read capped at maxBytes returns the capped content, the sha256 
   assert.equal(auditLines(f)[1]?.["bytes"], 4);
 });
 
-test("TOOL-03: a read of an escaping path is PATH_ESCAPE and a credential path is CREDENTIAL_PATH_DENIED, each logged as its result code (D-36, D-31, D-98)", (t) => {
+void test("TOOL-03: a read of an escaping path is PATH_ESCAPE and a credential path is CREDENTIAL_PATH_DENIED, each logged as its result code (D-36, D-31, D-98)", (t) => {
   const f = makeFixture(t);
   writeFileSync(join(f.ws, ".env"), "TOKEN=1");
   assertRejectsWith(() => readWorkspaceFile(depsFor(f), { path: "../outside.txt", maxBytes: 64 }), "PATH_ESCAPE");
@@ -324,7 +324,7 @@ test("TOOL-03: a read of an escaping path is PATH_ESCAPE and a credential path i
   );
 });
 
-test("TOOL-03: a credential path is readable when credentialAllow names it (D-31)", (t) => {
+void test("TOOL-03: a credential path is readable when credentialAllow names it (D-31)", (t) => {
   const f = makeFixture(t);
   writeFileSync(join(f.ws, ".env"), "allowed");
   const result = readWorkspaceFile(depsFor(f, { credentialAllow: [".env"] }), { path: ".env", maxBytes: 64 });
@@ -332,7 +332,7 @@ test("TOOL-03: a credential path is readable when credentialAllow names it (D-31
   assert.equal(Buffer.from(result.content).toString("utf8"), "allowed");
 });
 
-test("TOOL-03: a read whose admission line cannot be appended runs nothing and returns AUDIT_WRITE_FAILED (S-21, D-89 stage 4)", (t) => {
+void test("TOOL-03: a read whose admission line cannot be appended runs nothing and returns AUDIT_WRITE_FAILED (S-21, D-89 stage 4)", (t) => {
   const f = makeFixture(t);
   const deps = depsFor(f, {
     audit: () => {
@@ -342,7 +342,7 @@ test("TOOL-03: a read whose admission line cannot be appended runs nothing and r
   assertRejectsWith(() => readWorkspaceFile(deps, { path: "doc.txt", maxBytes: 64 }), "AUDIT_WRITE_FAILED");
 });
 
-test("TOOL-03: a list returns the Phase 2 result shape sorted by name, with symlinks reported by link text and never followed (D-36, FS-03)", (t) => {
+void test("TOOL-03: a list returns the Phase 2 result shape sorted by name, with symlinks reported by link text and never followed (D-36, FS-03)", (t) => {
   const f = makeFixture(t);
   const result = listWorkspaceDir(depsFor(f), { path: "." });
   assert.ok(result.status === "found");
@@ -366,13 +366,13 @@ test("TOOL-03: a list returns the Phase 2 result shape sorted by name, with syml
   assert.equal("sha256" in (lines[1] ?? {}), false);
 });
 
-test("TOOL-03: a list of a credential directory is CREDENTIAL_PATH_DENIED and logged as its result code (D-31, D-36)", (t) => {
+void test("TOOL-03: a list of a credential directory is CREDENTIAL_PATH_DENIED and logged as its result code (D-31, D-36)", (t) => {
   const f = makeFixture(t);
   assertRejectsWith(() => listWorkspaceDir(depsFor(f), { path: ".ssh" }), "CREDENTIAL_PATH_DENIED");
   assert.equal(auditLines(f)[1]?.["outcome"], "CREDENTIAL_PATH_DENIED");
 });
 
-test("TOOL-03: a list of an escaping path is PATH_ESCAPE (D-36, FS-01)", (t) => {
+void test("TOOL-03: a list of an escaping path is PATH_ESCAPE (D-36, FS-01)", (t) => {
   const f = makeFixture(t);
   assertRejectsWith(() => listWorkspaceDir(depsFor(f), { path: "../" }), "PATH_ESCAPE");
 });

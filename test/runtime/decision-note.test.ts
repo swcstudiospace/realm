@@ -49,7 +49,7 @@ function rowOf(rows: readonly OpenQuestionRow[], id: string): OpenQuestionRow {
   return row;
 }
 
-test("OQ-P3-01 to OQ-P3-16: the table has one row per item, in order, and each row has a non-empty default applied", () => {
+void test("OQ-P3-01 to OQ-P3-16: the table has one row per item, in order, and each row has a non-empty default applied", () => {
   const rows = openQuestionRows(readNote());
   const expected = Array.from({ length: 16 }, (_, index) => `OQ-P3-${String(index + 1).padStart(2, "0")}`);
   assert.deepEqual(
@@ -61,13 +61,13 @@ test("OQ-P3-01 to OQ-P3-16: the table has one row per item, in order, and each r
   }
 });
 
-test("OQ-P3-05 and OQ-P3-06: the decision note records both as Blocked", () => {
+void test("OQ-P3-05 and OQ-P3-06: the decision note records both as Blocked", () => {
   const rows = openQuestionRows(readNote());
   assert.match(rowOf(rows, "OQ-P3-05").status, /^Blocked/);
   assert.match(rowOf(rows, "OQ-P3-06").status, /^Blocked/);
 });
 
-test("OQ-P3-04, OQ-P3-07 and OQ-P3-16: the table and the status line name them as Open or Blocked, never as verified", () => {
+void test("OQ-P3-04, OQ-P3-07 and OQ-P3-16: the table and the status line name them as Open or Blocked, never as verified", () => {
   const text = readNote();
   const rows = openQuestionRows(text);
   assert.match(rowOf(rows, "OQ-P3-04").status, /^Open/);
@@ -78,7 +78,7 @@ test("OQ-P3-04, OQ-P3-07 and OQ-P3-16: the table and the status line name them a
   assert.match(status, /OQ-P3-16 is Blocked/, "the status line must name the Blocked item");
 });
 
-test("RT-01, RT-03: the decision note records that S-08 supersedes the RT-01 and RT-03 wording (D-46, D-47)", () => {
+void test("RT-01, RT-03: the decision note records that S-08 supersedes the RT-01 and RT-03 wording (D-46, D-47)", () => {
   const text = readNote();
   assert.match(
     text,
@@ -86,7 +86,7 @@ test("RT-01, RT-03: the decision note records that S-08 supersedes the RT-01 and
   );
 });
 
-test("Phase 4: the decision note carries a Phase 4 section recording the OQ-P3-16 resolution with the v0.1.2 URL and read date (D-82, D-100)", () => {
+void test("Phase 4: the decision note carries a Phase 4 section recording the OQ-P3-16 resolution with the v0.1.2 URL and read date (D-82, D-100)", () => {
   const text = readNote();
   assert.match(text, /## Phase 4: Reaper, Egress Guard, and Shared Dispatcher \(D-100\)/);
   assert.match(text, /OQ-P3-16 is resolved for the fields Realm writes/);
@@ -94,31 +94,31 @@ test("Phase 4: the decision note carries a Phase 4 section recording the OQ-P3-1
   assert.match(text, /read 2026-10-21/);
 });
 
-test("Phase 4: the decision note records the exec verb pin with its --help evidence (D-93)", () => {
+void test("Phase 4: the decision note records the exec verb pin with its --help evidence (D-93)", () => {
   const text = readNote();
   assert.match(text, /openshell sandbox exec/);
   assert.match(text, /read-only `--help` check, 2026-10-21/);
   assert.match(text, /--workdir \/workspace --no-tty --no-login-shell/);
 });
 
-test("Phase 4: the decision note records the IPv6 partial status (D-76)", () => {
+void test("Phase 4: the decision note records the IPv6 partial status (D-76)", () => {
   const text = readNote();
   assert.match(text, /partially unit-verified/);
   assert.match(text, /NetworkMode: none/);
 });
 
-test("Phase 4: the decision note records the single-owner precondition with the OQ-P4-06 residual risk (D-87)", () => {
+void test("Phase 4: the decision note records the single-owner precondition with the OQ-P4-06 residual risk (D-87)", () => {
   const text = readNote();
   assert.match(text, /must run before any `LifecycleController` or `ToolDispatcher` exists/);
   assert.match(text, /accepted residual risk \(OQ-P4-06\)/);
 });
 
-test("Phase 4: the decision note records the two-lines-per-call audit note for the Phase 7 reader (D-90)", () => {
+void test("Phase 4: the decision note records the two-lines-per-call audit note for the Phase 7 reader (D-90)", () => {
   const text = readNote();
   assert.match(text, /Phase 7 review must read both lines of one call as one call/);
 });
 
-test("OQ-P4-01 to OQ-P4-12: the table has one row per item, in order, and each row has a non-empty default applied", () => {
+void test("OQ-P4-01 to OQ-P4-12: the table has one row per item, in order, and each row has a non-empty default applied", () => {
   const rows = openQuestionRowsP4(readNote());
   const expected = Array.from({ length: 12 }, (_, index) => `OQ-P4-${String(index + 1).padStart(2, "0")}`);
   assert.deepEqual(

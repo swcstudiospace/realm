@@ -43,7 +43,7 @@ function assertRejectsWith(action: () => unknown, code: string): void {
   assert.throws(action, (error: unknown) => error instanceof RealmError && error.code === code);
 }
 
-test("a first save writes exactly the frozen fields, with containerId null when none is given (RT-07, D-14)", (t) => {
+void test("a first save writes exactly the frozen fields, with containerId null when none is given (RT-07, D-14)", (t) => {
   const { store, stateDir, sessionsDir } = fixture(t);
   const withoutContainer: SessionRecord = {
     realmId: REALM_ID,
@@ -60,18 +60,18 @@ test("a first save writes exactly the frozen fields, with containerId null when 
   assert.equal(parsed["controlSocketPath"], join(stateDir, "run", "control.sock"));
 });
 
-test("the sessions directory is created with mode 0700 and the record file with mode 0600 (D-37)", (t) => {
+void test("the sessions directory is created with mode 0700 and the record file with mode 0600 (D-37)", (t) => {
   const { store, stateDir, sessionsDir } = fixture(t);
   store.save(recordFor(stateDir, "session-1"));
   assert.equal(statSync(sessionsDir).mode & 0o777, 0o700);
   assert.equal(statSync(join(sessionsDir, "session-1.json")).mode & 0o777, 0o600);
 });
 
-test("a record carrying an extra token-shaped field is refused, the value is not echoed, and nothing is written (D-14, AUD-02)", (t) => {
+void test("a record carrying an extra token-shaped field is refused, the value is not echoed, and nothing is written (D-14, AUD-02)", (t) => {
   const { store, stateDir } = fixture(t);
   const leaky = { ...recordFor(stateDir, "session-1"), token: "sk-test-0123456789abcdefghijkl" };
   assert.throws(
-    () => store.save(leaky),
+    () => { store.save(leaky); },
     (error: unknown) =>
       error instanceof RealmError &&
       error.code === "SCHEMA_INVALID" &&
@@ -80,7 +80,7 @@ test("a record carrying an extra token-shaped field is refused, the value is not
   assert.equal(store.load("session-1"), null);
 });
 
-test("an update replaces the record atomically and leaves no temporary file behind (FS-05, D-37)", (t) => {
+void test("an update replaces the record atomically and leaves no temporary file behind (FS-05, D-37)", (t) => {
   const { store, stateDir, sessionsDir } = fixture(t);
   store.save(recordFor(stateDir, "session-1"));
   const updated: SessionRecord = {
@@ -94,7 +94,7 @@ test("an update replaces the record atomically and leaves no temporary file behi
   assert.deepEqual(readdirSync(sessionsDir), ["session-1.json"]);
 });
 
-test("load returns the stored record and null for a session with no record (D-37)", (t) => {
+void test("load returns the stored record and null for a session with no record (D-37)", (t) => {
   const { store, stateDir } = fixture(t);
   assert.equal(store.load("never-saved"), null);
   const record = recordFor(stateDir, "session-1");
@@ -102,7 +102,7 @@ test("load returns the stored record and null for a session with no record (D-37
   assert.deepEqual(store.load("session-1"), record);
 });
 
-test("delete removes the record, and deleting an absent session is a no-op (D-37)", (t) => {
+void test("delete removes the record, and deleting an absent session is a no-op (D-37)", (t) => {
   const { store, stateDir } = fixture(t);
   store.save(recordFor(stateDir, "session-1"));
   store.delete("session-1");
@@ -111,14 +111,14 @@ test("delete removes the record, and deleting an absent session is a no-op (D-37
   store.delete("never-saved");
 });
 
-test("a session id that could leave the sessions directory is refused with SCHEMA_INVALID (D-37)", (t) => {
+void test("a session id that could leave the sessions directory is refused with SCHEMA_INVALID (D-37)", (t) => {
   const { store, stateDir } = fixture(t);
-  assertRejectsWith(() => store.save(recordFor(stateDir, "../escape")), "SCHEMA_INVALID");
+  assertRejectsWith(() => { store.save(recordFor(stateDir, "../escape")); }, "SCHEMA_INVALID");
   assertRejectsWith(() => store.load("../escape"), "SCHEMA_INVALID");
-  assertRejectsWith(() => store.delete("nested/id"), "SCHEMA_INVALID");
+  assertRejectsWith(() => { store.delete("nested/id"); }, "SCHEMA_INVALID");
 });
 
-test("RT-08: list() returns the sorted ids of record files and ignores names that do not match the record pattern (D-85)", (t) => {
+void test("RT-08: list() returns the sorted ids of record files and ignores names that do not match the record pattern (D-85)", (t) => {
   const { store, stateDir, sessionsDir } = fixture(t);
   store.save(recordFor(stateDir, "session-b"));
   store.save(recordFor(stateDir, "session-a"));
@@ -131,7 +131,7 @@ test("RT-08: list() returns the sorted ids of record files and ignores names tha
   assert.deepEqual(store.list(), ["session-a", "session-b"]);
 });
 
-test("RT-08: list() includes the id of a record whose contents are corrupt, so the record can still be deleted (D-85)", (t) => {
+void test("RT-08: list() includes the id of a record whose contents are corrupt, so the record can still be deleted (D-85)", (t) => {
   const { store, sessionsDir } = fixture(t);
   mkdirSync(sessionsDir, { recursive: true, mode: 0o700 });
   writeFileSync(join(sessionsDir, "corrupt-1.json"), "{not json");
@@ -140,7 +140,7 @@ test("RT-08: list() includes the id of a record whose contents are corrupt, so t
   assert.deepEqual(store.list(), []);
 });
 
-test("RT-08: list() on an absent sessions directory returns an empty array, not null (D-85)", (t) => {
+void test("RT-08: list() on an absent sessions directory returns an empty array, not null (D-85)", (t) => {
   const { store, sessionsDir } = fixture(t);
   assert.equal(existsSync(sessionsDir), false);
   assert.deepEqual(store.list(), []);

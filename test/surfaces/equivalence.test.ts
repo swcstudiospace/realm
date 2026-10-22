@@ -44,7 +44,9 @@ async function driveMcp(dispatcher: McpDispatcher, lines: readonly string[]): Pr
   await Promise.race([
     server.closed,
     new Promise<never>((_resolve, reject) => {
-      setTimeout(() => reject(new Error("mcp server did not close after stdin ended")), 2000).unref();
+      setTimeout(() => {
+        reject(new Error("mcp server did not close after stdin ended"));
+      }, 2000).unref();
     }),
   ]);
   await new Promise<void>((resolve) => {
@@ -121,82 +123,75 @@ const SIX_CALLS: ReadonlyArray<{ readonly name: string; readonly call: ToolCall 
   { name: "retry", call: { retry: {} } },
 ];
 
-test(
-  "TOOL-05: the same ToolCall for each of the six tools returns outcome-equal payloads through MCP and ACP on one dispatcher (P5-D13)",
-  { timeout: 10_000 },
-  async (t) => {
-    const h = makeHarness(t);
-    const calls = SIX_CALLS.map(({ call }) => call);
-    const throughMcp = await mcpOutcomes(h.dispatcher, calls);
-    const throughAcp = await acpOutcomes(h.dispatcher, calls);
-    assert.equal(throughMcp.length, SIX_CALLS.length);
-    assert.equal(throughAcp.length, SIX_CALLS.length);
-    SIX_CALLS.forEach(({ name }, index) => {
-      const mcp = throughMcp[index] as ToolOutcome;
-      const acp = throughAcp[index] as ToolOutcome;
-      assert.deepEqual(
-        acp,
-        mcp,
-        `${name} is outcome-equal across surfaces (mcp: ${JSON.stringify(mcp)}; acp: ${JSON.stringify(acp)})`,
-      );
-      assert.equal(mcp.outcome, "done", `expected a done ${name} through MCP`);
-      assert.equal(mcp.tool, name);
+void test("TOOL-05: the same ToolCall for each of the six tools returns outcome-equal payloads through MCP and ACP on one dispatcher (P5-D13)",
+{ timeout: 10_000 },
+async (t) => {
+  const h = makeHarness(t);
+  const calls = SIX_CALLS.map(({ call }) => call);
+  const throughMcp = await mcpOutcomes(h.dispatcher, calls);
+  const throughAcp = await acpOutcomes(h.dispatcher, calls);
+  assert.equal(throughMcp.length, SIX_CALLS.length);
+  assert.equal(throughAcp.length, SIX_CALLS.length);
+  SIX_CALLS.forEach(({ name }, index) => {
+    const mcp = throughMcp[index] as ToolOutcome;
+    const acp = throughAcp[index] as ToolOutcome;
+    assert.deepEqual(
+      acp,
+      mcp,
+      `${name} is outcome-equal across surfaces (mcp: ${JSON.stringify(mcp)}; acp: ${JSON.stringify(acp)})`,
+    );
+    assert.equal(mcp.outcome, "done", `expected a done ${name} through MCP`);
+    assert.equal(mcp.tool, name);
+  });
+},);
+
+void test("TOOL-05: a schema-invalid call and a required-mode non-active write refuse outcome-equal with the same catalogue code on both surfaces (P5-D13)",
+{ timeout: 10_000 },
+async (t) => {
+  const h = makeHarness(t);
+  // A schema-invalid map: read without its required maxBytes. The ToolCall
+  // shape cannot name it, so it crosses as an unknown map on both halves.
+  const schemaInvalid: unknown = { read: { path: "doc.txt" } };
+  const mcpSchema = (await mcpOutcomes(h.dispatcher, [schemaInvalid as ToolCall]))[0] as ToolOutcome;
+  const acpSchema = (await acpOutcomes(h.dispatcher, [schemaInvalid]))[0] as ToolOutcome;
+  for (const [half, outcome] of [
+    ["mcp", mcpSchema],
+    ["acp", acpSchema],
+  ] as const) {
+    assert.equal(outcome.outcome, "refused", `the schema-invalid call refuses through ${half}`);
+    assert.deepEqual(outcome, {
+      outcome: "refused",
+      tool: null,
+      code: "SCHEMA_INVALID",
+      retryable: ERROR_CATALOGUE["SCHEMA_INVALID"].retryable,
     });
-  },
-);
+  }
+  assert.deepEqual(
+    acpSchema,
+    mcpSchema,
+    `the schema refusal is outcome-equal (mcp: ${JSON.stringify(mcpSchema)}; acp: ${JSON.stringify(acpSchema)})`,
+  );
 
-test(
-  "TOOL-05: a schema-invalid call and a required-mode non-active write refuse outcome-equal with the same catalogue code on both surfaces (P5-D13)",
-  { timeout: 10_000 },
-  async (t) => {
-    const h = makeHarness(t);
-    // A schema-invalid map: read without its required maxBytes. The ToolCall
-    // shape cannot name it, so it crosses as an unknown map on both halves.
-    const schemaInvalid: unknown = { read: { path: "doc.txt" } };
-    const mcpSchema = (await mcpOutcomes(h.dispatcher, [schemaInvalid as ToolCall]))[0] as ToolOutcome;
-    const acpSchema = (await acpOutcomes(h.dispatcher, [schemaInvalid]))[0] as ToolOutcome;
-    for (const [half, outcome] of [
-      ["mcp", mcpSchema],
-      ["acp", acpSchema],
-    ] as const) {
-      assert.equal(outcome.outcome, "refused", `the schema-invalid call refuses through ${half}`);
-      assert.deepEqual(outcome, {
-        outcome: "refused",
-        tool: null,
-        code: "SCHEMA_INVALID",
-        retryable: ERROR_CATALOGUE["SCHEMA_INVALID"].retryable,
-      });
-    }
-    assert.deepEqual(
-      acpSchema,
-      mcpSchema,
-      `the schema refusal is outcome-equal (mcp: ${JSON.stringify(mcpSchema)}; acp: ${JSON.stringify(acpSchema)})`,
+  // A required-mode write while non-active: refused by the mutation gate
+  // with the catalogue code, on a second harness both surfaces share.
+  const gated = makeHarness(t, { policy: REQUIRED, state: "degraded" });
+  const blocked: ToolCall = { write: { path: "doc.txt", content: "blocked" } };
+  const mcpGated = (await mcpOutcomes(gated.dispatcher, [blocked]))[0] as ToolOutcome;
+  const acpGated = (await acpOutcomes(gated.dispatcher, [blocked]))[0] as ToolOutcome;
+  for (const [half, outcome] of [
+    ["mcp", mcpGated],
+    ["acp", acpGated],
+  ] as const) {
+    assert.equal(outcome.outcome, "refused", `the gated write refuses through ${half}`);
+    assert.ok(
+      (ERROR_CODES as readonly string[]).includes(outcome.code),
+      `the gated refusal carries a catalogue code through ${half}: ${outcome.code}`,
     );
-
-    // A required-mode write while non-active: refused by the mutation gate
-    // with the catalogue code, on a second harness both surfaces share.
-    const gated = makeHarness(t, { policy: REQUIRED, state: "degraded" });
-    const blocked: ToolCall = { write: { path: "doc.txt", content: "blocked" } };
-    const mcpGated = (await mcpOutcomes(gated.dispatcher, [blocked]))[0] as ToolOutcome;
-    const acpGated = (await acpOutcomes(gated.dispatcher, [blocked]))[0] as ToolOutcome;
-    for (const [half, outcome] of [
-      ["mcp", mcpGated],
-      ["acp", acpGated],
-    ] as const) {
-      assert.equal(outcome.outcome, "refused", `the gated write refuses through ${half}`);
-      if (outcome.outcome !== "refused") {
-        assert.fail(`expected a refused gated write through ${half}`);
-      }
-      assert.ok(
-        (ERROR_CODES as readonly string[]).includes(outcome.code),
-        `the gated refusal carries a catalogue code through ${half}: ${outcome.code}`,
-      );
-      assert.equal(outcome.retryable, ERROR_CATALOGUE[outcome.code].retryable);
-    }
-    assert.deepEqual(
-      acpGated,
-      mcpGated,
-      `the gated refusal is outcome-equal (mcp: ${JSON.stringify(mcpGated)}; acp: ${JSON.stringify(acpGated)})`,
-    );
-  },
-);
+    assert.equal(outcome.retryable, ERROR_CATALOGUE[outcome.code].retryable);
+  }
+  assert.deepEqual(
+    acpGated,
+    mcpGated,
+    `the gated refusal is outcome-equal (mcp: ${JSON.stringify(mcpGated)}; acp: ${JSON.stringify(acpGated)})`,
+  );
+},);

@@ -77,7 +77,7 @@ function parseJson(text: string): unknown {
 function assertAbsoluteRoots(policy: Policy): void {
   for (const [index, root] of policy.workspaceRoots.entries()) {
     if (!isAbsolute(root)) {
-      throw new SchemaInvalidError(`/workspaceRoots/${index} must be an absolute path`);
+      throw new SchemaInvalidError(`/workspaceRoots/${String(index)} must be an absolute path`);
     }
   }
 }

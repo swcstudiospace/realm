@@ -35,10 +35,10 @@ async function assertCode(work: Promise<unknown>, code: ErrorCode): Promise<void
   await assert.rejects(work, (error: unknown) => error instanceof RealmError && error.code === code);
 }
 
-test("RT-08: the sweep removes every realm-labelled container, leaves a foreign container untouched, and returns the removed count", async (t) => {
+void test("RT-08: the sweep removes every realm-labelled container, leaves a foreign container untouched, and returns the removed count", async (t) => {
   const { store, libpod, client } = await startFixture(t);
   for (const n of [1, 2, 3]) {
-    store.add({ id: `realm-${n}`, labels: { ...REALM_LABELS, "io.realm.session": `s-${n}` }, running: n % 2 === 1 });
+    store.add({ id: `realm-${String(n)}`, labels: { ...REALM_LABELS, "io.realm.session": `s-${String(n)}` }, running: n % 2 === 1 });
   }
   store.add({ id: "foreign-1", labels: { owner: "someone-else" }, running: true });
 
@@ -57,7 +57,7 @@ test("RT-08: the sweep removes every realm-labelled container, leaves a foreign 
   );
 });
 
-test("RT-08: the sweep lists before and after removal on every run, and a repeated sweep over a clean host is a no-op returning zero", async (t) => {
+void test("RT-08: the sweep lists before and after removal on every run, and a repeated sweep over a clean host is a no-op returning zero", async (t) => {
   const { libpod, client } = await startFixture(t);
 
   assert.equal(await removeAllRealmContainers(client), 0);
@@ -69,7 +69,7 @@ test("RT-08: the sweep lists before and after removal on every run, and a repeat
   assert.equal(requestsOn(libpod, "removeContainer").length, 0);
 });
 
-test("RT-08: a container that cannot be removed gives REALM_STOPPING, and a repeated sweep clears it and returns its count", async (t) => {
+void test("RT-08: a container that cannot be removed gives REALM_STOPPING, and a repeated sweep clears it and returns its count", async (t) => {
   const { store, libpod, client } = await startFixture(t);
   store.add({ id: "realm-stuck", labels: REALM_LABELS, running: true });
   libpod.respondNext("removeContainer", { status: 500 });

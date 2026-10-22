@@ -15,7 +15,7 @@ function rejection<T>(result: ValidationResult<T>): SchemaInvalidError {
   return result.error;
 }
 
-test("write with an unknown key is rejected and the key is named (TOOL-01)", () => {
+void test("write with an unknown key is rejected and the key is named (TOOL-01)", () => {
   const error = rejection(
     validate("tools", { write: { path: "a.txt", content: "x", mode: "0777" } }),
   );
@@ -23,55 +23,55 @@ test("write with an unknown key is rejected and the key is named (TOOL-01)", () 
   assert.match(error.detail, /\/write\/mode/);
 });
 
-test("list with an unknown key is rejected and the key is named (TOOL-01)", () => {
+void test("list with an unknown key is rejected and the key is named (TOOL-01)", () => {
   const error = rejection(validate("tools", { list: { path: ".", depth: 1, follow: true } }));
   assert.equal(error.code, "SCHEMA_INVALID");
   assert.match(error.detail, /\/list\/follow/);
 });
 
-test("the shell exec form with an unknown key is rejected and the key is named (TOOL-01)", () => {
+void test("the shell exec form with an unknown key is rejected and the key is named (TOOL-01)", () => {
   const error = rejection(validate("tools", { exec: { shell: true, script: "ls", cwd: "/" } }));
   assert.equal(error.code, "SCHEMA_INVALID");
   assert.match(error.detail, /\/exec\/cwd/);
 });
 
-test("the shell exec form with no script key is rejected and the missing key is named (TOOL-01)", () => {
+void test("the shell exec form with no script key is rejected and the missing key is named (TOOL-01)", () => {
   const error = rejection(validate("tools", { exec: { shell: true } }));
   assert.equal(error.code, "SCHEMA_INVALID");
   assert.match(error.detail, /\/exec\/script/);
 });
 
-test("the shell exec form with an empty script is rejected and the script is named (TOOL-01)", () => {
+void test("the shell exec form with an empty script is rejected and the script is named (TOOL-01)", () => {
   const error = rejection(validate("tools", { exec: { shell: true, script: "" } }));
   assert.equal(error.code, "SCHEMA_INVALID");
   assert.match(error.detail, /\/exec\/script/);
 });
 
-test("write with no content key is rejected and the missing key is named (TOOL-01)", () => {
+void test("write with no content key is rejected and the missing key is named (TOOL-01)", () => {
   const error = rejection(validate("tools", { write: { path: "a.txt" } }));
   assert.equal(error.code, "SCHEMA_INVALID");
   assert.match(error.detail, /\/write\/content/);
 });
 
-test("list with no depth key is rejected and the missing key is named (TOOL-01)", () => {
+void test("list with no depth key is rejected and the missing key is named (TOOL-01)", () => {
   const error = rejection(validate("tools", { list: { path: "." } }));
   assert.equal(error.code, "SCHEMA_INVALID");
   assert.match(error.detail, /\/list\/depth/);
 });
 
-test("status holding read-shaped params is rejected and the first unknown key is named (TOOL-01)", () => {
+void test("status holding read-shaped params is rejected and the first unknown key is named (TOOL-01)", () => {
   const error = rejection(validate("tools", { status: { path: "a.txt", maxBytes: 16 } }));
   assert.equal(error.code, "SCHEMA_INVALID");
   assert.match(error.detail, /\/status\/path/);
 });
 
-test("retry holding write-shaped params is rejected and the first unknown key is named (TOOL-01)", () => {
+void test("retry holding write-shaped params is rejected and the first unknown key is named (TOOL-01)", () => {
   const error = rejection(validate("tools", { retry: { path: "a.txt", content: "x" } }));
   assert.equal(error.code, "SCHEMA_INVALID");
   assert.match(error.detail, /\/retry\/path/);
 });
 
-test("an extra top-level key beside a valid tool is rejected at the envelope root (TOOL-01)", () => {
+void test("an extra top-level key beside a valid tool is rejected at the envelope root (TOOL-01)", () => {
   // The envelope's maxProperties limit is checked before additionalProperties, so the
   // failure is reported at the root pointer rather than by the extra key's name.
   const error = rejection(

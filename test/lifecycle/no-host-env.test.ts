@@ -52,7 +52,7 @@ function fixture(t: TestContext) {
   return { workspace, stateDir, store, exec, controller };
 }
 
-test("a sentinel host environment value never reaches the fake, the session record, or any audit line (AUD-02, D-43)", async (t) => {
+void test("a sentinel host environment value never reaches the fake, the session record, or any audit line (AUD-02, D-43)", async (t) => {
   const sentinel = `sentinel-${randomUUID()}`;
   const previous = process.env[SENTINEL_NAME];
   process.env[SENTINEL_NAME] = sentinel;
@@ -100,7 +100,7 @@ test("a sentinel host environment value never reaches the fake, the session reco
   assert.equal(readFileSync(auditPath, "utf8").includes(sentinel), false);
 });
 
-test("the port request and the fake carry no environment field, by runtime key-set check (AUD-02, F-7)", async (t) => {
+void test("the port request and the fake carry no environment field, by runtime key-set check (AUD-02, F-7)", async (t) => {
   const { workspace, exec, controller } = fixture(t);
   await controller.create(workspace);
   await controller.destroy();

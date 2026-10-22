@@ -31,11 +31,11 @@ const DEFAULTS = {
   toolQueueMs: 2000,
 };
 
-test("an empty object resolves to the D-15 defaults", () => {
+void test("an empty object resolves to the D-15 defaults", () => {
   assert.deepEqual(value(validate("policy", {})), DEFAULTS);
 });
 
-test("defaults are fresh per call and the caller's input is not mutated", () => {
+void test("defaults are fresh per call and the caller's input is not mutated", () => {
   const input: Record<string, unknown> = {};
   const first = value(validate("policy", input));
   (first.workspaceRoots as string[]).push("/leaked");
@@ -43,55 +43,55 @@ test("defaults are fresh per call and the caller's input is not mutated", () => 
   assert.deepEqual(input, {});
 });
 
-test("mode fail-closed is accepted", () => {
+void test("mode fail-closed is accepted", () => {
   assert.equal(value(validate("policy", { mode: "fail-closed" })).mode, "fail-closed");
 });
 
-test("any other mode string is rejected and the key is named", () => {
+void test("any other mode string is rejected and the key is named", () => {
   const error = rejection(validate("policy", { mode: "strict" }));
   assert.equal(error.code, "SCHEMA_INVALID");
   assert.match(error.detail, /\/mode/);
 });
 
-test("startupBudgetMs of zero is rejected as non-positive", () => {
+void test("startupBudgetMs of zero is rejected as non-positive", () => {
   const error = rejection(validate("policy", { startupBudgetMs: 0 }));
   assert.equal(error.code, "SCHEMA_INVALID");
   assert.match(error.detail, /\/startupBudgetMs/);
 });
 
-test("toolQueueMs of zero is rejected as non-positive", () => {
+void test("toolQueueMs of zero is rejected as non-positive", () => {
   const error = rejection(validate("policy", { toolQueueMs: 0 }));
   assert.equal(error.code, "SCHEMA_INVALID");
   assert.match(error.detail, /\/toolQueueMs/);
 });
 
-test("a positive integer budget is accepted", () => {
+void test("a positive integer budget is accepted", () => {
   const policy = value(validate("policy", { startupBudgetMs: 1, toolQueueMs: 1 }));
   assert.equal(policy.startupBudgetMs, 1);
   assert.equal(policy.toolQueueMs, 1);
 });
 
-test("an unknown key is rejected and named", () => {
+void test("an unknown key is rejected and named", () => {
   const error = rejection(validate("policy", { allowAll: true }));
   assert.equal(error.code, "SCHEMA_INVALID");
   assert.match(error.detail, /\/allowAll/);
 });
 
-test("egressAllow accepts host and port objects", () => {
+void test("egressAllow accepts host and port objects", () => {
   const policy = value(
     validate("policy", { egressAllow: [{ host: "api.example.com", port: 443 }] }),
   );
   assert.deepEqual(policy.egressAllow, [{ host: "api.example.com", port: 443 }]);
 });
 
-test("egressAllow rejects an unknown key inside a rule", () => {
+void test("egressAllow rejects an unknown key inside a rule", () => {
   const error = rejection(
     validate("policy", { egressAllow: [{ host: "a.example", port: 1, scheme: "https" }] }),
   );
   assert.match(error.detail, /scheme/);
 });
 
-test("egressAllow rejects a port outside 1 to 65535", () => {
+void test("egressAllow rejects a port outside 1 to 65535", () => {
   const error = rejection(validate("policy", { egressAllow: [{ host: "a.example", port: 70000 }] }));
   assert.match(error.detail, /\/port/);
 });

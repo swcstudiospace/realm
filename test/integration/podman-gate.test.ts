@@ -62,7 +62,7 @@ const gate = podmanSkipReason(probe);
 // socket, an openshell CLI on PATH, and a digest-pinned image. The gate checks that the socket and the CLI
 // are present; it does not run the CLI, so the 0.1.2 version is checked by the doctor's openshell item.
 // Phase 3 verification runs on a 4.9.3 host, so none of them executes there.
-test("Podman gate: the host reports Podman 5.x or newer (RT-02)", { skip: gate }, () => {
+void test("Podman gate: the host reports Podman 5.x or newer (RT-02)", { skip: gate }, () => {
   if (probe.kind !== "output") {
     assert.fail("the gate ran the suite without a successful podman --version probe");
   }
@@ -84,7 +84,7 @@ const LIVE_WORKLOAD_VARIABLE = "REALM_LIVE_WORKLOAD";
 const LIVE_CREATE_DEADLINE_MS = 60_000;
 // The sandbox limits come from the frozen hardening profile, as the composition derives them.
 const SANDBOX_CPUS = HARDENING_PROFILE.nanoCpus / 1_000_000_000;
-const SANDBOX_MEMORY = `${HARDENING_PROFILE.memoryBytes / 1024 ** 3}g`;
+const SANDBOX_MEMORY = `${String(HARDENING_PROFILE.memoryBytes / 1024 ** 3)}g`;
 
 const liveGate: string | false = gate === false ? liveInputsSkipReason() : gate;
 
@@ -213,7 +213,7 @@ function labelOf(inspect: LibpodInspect | null, key: string): unknown {
   return (labels as Record<string, unknown>)[key];
 }
 
-test("RT-01 live: a session container created through OpenShell conforms to the hardening profile (RT-01)", { skip: liveGate }, async (t) => {
+void test("RT-01 live: a session container created through OpenShell conforms to the hardening profile (RT-01)", { skip: liveGate }, async (t) => {
   const live = await createLiveContainer(t);
   const inspect = await live.libpod.inspectContainer(live.containerId);
   assert.notEqual(inspect, null, "the created container must be inspectable");
@@ -229,7 +229,7 @@ test("RT-01 live: a session container created through OpenShell conforms to the 
   assert.deepEqual(failed, [], `hardening properties that do not conform: ${failed.join(", ")}`);
 });
 
-test("RT-03 live: the workload starts only through the pinned OpenShell create argv, and the container carries the session label (RT-03)", { skip: liveGate }, async (t) => {
+void test("RT-03 live: the workload starts only through the pinned OpenShell create argv, and the container carries the session label (RT-03)", { skip: liveGate }, async (t) => {
   const live = await createLiveContainer(t);
   assert.equal(live.argvSeen.length, 1, "one OpenShell create run is expected");
   const argv = live.argvSeen[0] ?? [];
@@ -257,7 +257,7 @@ function scopedSweep(libpod: LibpodClient, created: ReadonlySet<string>): SweepC
   };
 }
 
-test("RT-09 live: the down sweep leaves none of the containers this test created (RT-09)", { skip: liveGate }, async (t) => {
+void test("RT-09 live: the down sweep leaves none of the containers this test created (RT-09)", { skip: liveGate }, async (t) => {
   const live = await createLiveContainer(t);
   const created = new Set([live.containerId]);
   await removeAllRealmContainers(scopedSweep(live.libpod, created));
@@ -287,7 +287,7 @@ async function egressReachable(sessionId: string, host: string, port: number): P
     const outcome = await runSandboxExec(
       spawnOpenShellRunner(selectOpenShellEnvironment(process.env)),
       sessionId,
-      ["/bin/sh", "-c", `exec 3<>/dev/tcp/${host}/${port}`],
+      ["/bin/sh", "-c", `exec 3<>/dev/tcp/${host}/${String(port)}`],
       LIVE_PROBE_TIMEOUT_MS,
     );
     return outcome.exitCode === 0;
@@ -296,16 +296,16 @@ async function egressReachable(sessionId: string, host: string, port: number): P
   }
 }
 
-test("RT-05 live: an allowlisted host and port is reachable from inside the sandbox through the supervisor proxy (RT-05)", { skip: liveGate }, async (t) => {
+void test("RT-05 live: an allowlisted host and port is reachable from inside the sandbox through the supervisor proxy (RT-05)", { skip: liveGate }, async (t) => {
   const live = await createLiveContainer(t, [{ host: LIVE_EGRESS_HOST, port: LIVE_EGRESS_PORT }]);
   assert.equal(
     await egressReachable(live.sessionId, LIVE_EGRESS_HOST, LIVE_EGRESS_PORT),
     true,
-    `an allowlisted ${LIVE_EGRESS_HOST}:${LIVE_EGRESS_PORT} must be reachable through the supervisor proxy`,
+    `an allowlisted ${LIVE_EGRESS_HOST}:${String(LIVE_EGRESS_PORT)} must be reachable through the supervisor proxy`,
   );
 });
 
-test("RT-05 live: a non-allowlisted host is not reachable from inside the sandbox (RT-05)", { skip: liveGate }, async (t) => {
+void test("RT-05 live: a non-allowlisted host is not reachable from inside the sandbox (RT-05)", { skip: liveGate }, async (t) => {
   const live = await createLiveContainer(t);
   assert.equal(
     await egressReachable(live.sessionId, "never-allowlisted.invalid", 443),
@@ -314,7 +314,7 @@ test("RT-05 live: a non-allowlisted host is not reachable from inside the sandbo
   );
 });
 
-test("RT-05 live: IPv6 is not reachable from inside the sandbox (RT-05)", { skip: liveGate }, async (t) => {
+void test("RT-05 live: IPv6 is not reachable from inside the sandbox (RT-05)", { skip: liveGate }, async (t) => {
   // Realm renders no IPv6 host into any network_policies entry (D-76), so no IPv6 destination can be
   // allowlisted and the loopback probe below must fail.
   const live = await createLiveContainer(t);
@@ -325,7 +325,7 @@ test("RT-05 live: IPv6 is not reachable from inside the sandbox (RT-05)", { skip
   );
 });
 
-test("RT-08 live: a crash during up is reaped on the next start on a live host (RT-08)", { skip: liveGate }, async (t) => {
+void test("RT-08 live: a crash during up is reaped on the next start on a live host (RT-08)", { skip: liveGate }, async (t) => {
   const live = await createLiveContainer(t);
   // A crash during realm up leaves a record with a null container id (D-86) while the
   // session-labelled container exists on the host.
@@ -352,7 +352,7 @@ test("RT-08 live: a crash during up is reaped on the next start on a live host (
   assert.deepEqual(remaining, [], "no created container survives the reap");
 });
 
-test("TOOL-03 live: an exec through the shared dispatcher runs in the live sandbox (TOOL-03)", { skip: liveGate }, async (t) => {
+void test("TOOL-03 live: an exec through the shared dispatcher runs in the live sandbox (TOOL-03)", { skip: liveGate }, async (t) => {
   const live = await createLiveContainer(t);
   // The controller is a stub pinned to active: only the dispatcher's schema, state, audit, and
   // execution stages run, and the execution reaches the live sandbox through the pinned exec argv.

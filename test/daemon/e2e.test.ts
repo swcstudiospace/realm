@@ -31,6 +31,7 @@ import { startDaemon, type StartedDaemon, type StartDaemonOptions } from "../../
 import { runDaemon } from "../../src/daemon/main.js";
 import type { CheckId, CheckResult } from "../../src/doctor/checks.js";
 import { buildCreateArgv, buildPolicyDocument } from "../../src/runtime/openshell.js";
+import type { PodmanProbeResult } from "../../src/runtime/podman-probe.js";
 import { controlSocketPath, type EnvironmentLike } from "../../src/session/paths.js";
 import { FakeExecutionService } from "../support/fake-execution.js";
 import { FakeBridge } from "../support/fake-bridge.js";
@@ -120,8 +121,8 @@ function daemonOptions(fixture: Fixture, overrides?: Partial<StartDaemonOptions>
     bridge: new FakeBridge(),
     clock: () => new Date(CLOCK_ISO),
     runOpenShell: () => Promise.resolve({ exitCode: 0, stdout: "", stderr: "", truncated: false }),
-    sweep: async () => 0,
-    probe: async () => ({ ok: true, version: "5.0.0" }),
+    sweep: () => Promise.resolve(0),
+    probe: () => Promise.resolve<PodmanProbeResult>({ ok: true, version: "5.0.0" }),
     ...overrides,
   };
 }
@@ -135,7 +136,9 @@ const DONE_WAIT_MS = 5000;
 async function awaitDone(daemon: StartedDaemon): Promise<void> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const expired = new Promise<never>((_resolve, reject) => {
-    timer = setTimeout(() => reject(new Error("daemon done did not resolve")), DONE_WAIT_MS);
+    timer = setTimeout(() => {
+      reject(new Error("daemon done did not resolve"));
+    }, DONE_WAIT_MS);
   });
   try {
     await Promise.race([daemon.done, expired]);
@@ -176,15 +179,15 @@ function recordingSpawn(calls: { readonly file: string; readonly args: readonly 
   };
 }
 
-async function okVersion(): Promise<{ exitCode: number; stdout: string }> {
-  return { exitCode: 0, stdout: "podman version 5.5.0\n" };
+function okVersion(): Promise<{ exitCode: number; stdout: string }> {
+  return Promise.resolve({ exitCode: 0, stdout: "podman version 5.5.0\n" });
 }
 
 function acceptConnect(): Promise<void> {
   return Promise.resolve();
 }
 
-test("up then status-active then down-to-disconnected flows through the CLI against the fake-backed daemon (CLI-01, RT-06)", async (t) => {
+void test("up then status-active then down-to-disconnected flows through the CLI against the fake-backed daemon (CLI-01, RT-06)", async (t) => {
   const fixture = makeDirs(t);
   const daemon = await startTestDaemon(fixture, daemonOptions(fixture));
 
@@ -226,7 +229,7 @@ test("up then status-active then down-to-disconnected flows through the CLI agai
   assert.equal(after.stdout, "disconnected\n");
 });
 
-test("up with Podman missing reports disconnected with PODMAN_MISSING, spawns nothing, and returns within the bound (CLI-02, RT-06)", async (t) => {
+void test("up with Podman missing reports disconnected with PODMAN_MISSING, spawns nothing, and returns within the bound (CLI-02, RT-06)", async (t) => {
   const fixture = makeDirs(t);
   const spawns: { readonly file: string; readonly args: readonly string[] }[] = [];
   let sends = 0;
@@ -237,15 +240,14 @@ test("up with Podman missing reports disconnected with PODMAN_MISSING, spawns no
     env: cliEnv(fixture),
     timeoutMs: 50,
     spawn: recordingSpawn(spawns),
-    send: async () => {
+    send: () => {
       sends += 1;
-      throw new Error("the socket must not be dialed without Podman");
+      return Promise.reject(new Error("the socket must not be dialed without Podman"));
     },
-    runCommand: async () => {
-      throw new Error("spawn podman ENOENT");
-    },
-    connectSocket: async () => {
+    runCommand: () => Promise.reject(new Error("spawn podman ENOENT")),
+    connectSocket: () => {
       connects += 1;
+      return Promise.resolve();
     },
   });
   const elapsed = Date.now() - started;
@@ -258,11 +260,11 @@ test("up with Podman missing reports disconnected with PODMAN_MISSING, spawns no
   assert.equal(connects, 0);
   assert.ok(
     elapsed < FAST_PATH_WALL_CLOCK_BOUND_MS,
-    `up with missing Podman must return promptly, took ${elapsed} ms`,
+    `up with missing Podman must return promptly, took ${String(elapsed)} ms`,
   );
 });
 
-test("doctor through the CLI against the fake-backed daemon lists every item with fix text on every non-pass (CLI-03, RT-06)", async (t) => {
+void test("doctor through the CLI against the fake-backed daemon lists every item with fix text on every non-pass (CLI-03, RT-06)", async (t) => {
   const fixture = makeDirs(t);
   // Podman and socket probes fail deterministically, so the Podman-backed items
   // report non-pass with fixes; the control channel passes against the live
@@ -270,12 +272,8 @@ test("doctor through the CLI against the fake-backed daemon lists every item wit
   await startTestDaemon(fixture,
     daemonOptions(fixture, {
       doctorOptions: {
-        runCommand: async () => {
-          throw new Error("podman not installed");
-        },
-        connectSocket: async () => {
-          throw new Error("connection refused");
-        },
+        runCommand: () => Promise.reject(new Error("podman not installed")),
+        connectSocket: () => Promise.reject(new Error("connection refused")),
       },
     }),
   );
@@ -283,12 +281,8 @@ test("doctor through the CLI against the fake-backed daemon lists every item wit
   const result = await runCli(["doctor"], {
     env: cliEnv(fixture),
     timeoutMs: 2000,
-    runCommand: async () => {
-      throw new Error("podman not installed");
-    },
-    connectSocket: async () => {
-      throw new Error("connection refused");
-    },
+    runCommand: () => Promise.reject(new Error("podman not installed")),
+    connectSocket: () => Promise.reject(new Error("connection refused")),
   });
   assert.equal(result.exitCode, 0);
 
@@ -324,7 +318,7 @@ test("doctor through the CLI against the fake-backed daemon lists every item wit
 
   for (const item of report) {
     assert.ok(typeof item.id === "string");
-    assert.ok(item.status === "pass" || item.status === "warn" || item.status === "fail");
+    assert.ok(["pass", "warn", "fail"].includes(item.status));
     assert.ok(typeof item.detail === "string" && item.detail.length > 0);
     if (item.status === "pass") {
       assert.equal(item.fix, null);
@@ -340,7 +334,7 @@ test("doctor through the CLI against the fake-backed daemon lists every item wit
 // The CLI and the daemon entry meet at one state directory because both read it from the runtime
 // config. XDG_STATE_HOME names another directory, so only the config can bring them together: runDaemon
 // starts the daemon with the config's stateDir, and runCli finds that daemon's socket through the same read.
-test("the CLI and the daemon entry resolve one state directory from the runtime config, not XDG_STATE_HOME (CLI-01, RT-06, OMP-01)", async (t) => {
+void test("the CLI and the daemon entry resolve one state directory from the runtime config, not XDG_STATE_HOME (CLI-01, RT-06, OMP-01)", async (t) => {
   const fixture = makeDirs(t);
   const env = cliEnv(fixture);
   const stderr: string[] = [];
@@ -375,13 +369,12 @@ test("the CLI and the daemon entry resolve one state directory from the runtime 
 
   const down = await runCli(["down"], { env, timeoutMs: 2000 });
   assert.equal(down.exitCode, 0);
-  assert.ok(started !== undefined);
   await awaitDone(started);
   assert.equal(await daemonRun, 0);
   assert.deepEqual(stderr, []);
 });
 
-test("the socket directory is 0700 with a 0600 socket after daemon start (RT-06)", async (t) => {
+void test("the socket directory is 0700 with a 0600 socket after daemon start (RT-06)", async (t) => {
   const fixture = makeDirs(t);
   const daemon = await startTestDaemon(fixture, daemonOptions(fixture));
 
@@ -396,7 +389,7 @@ test("the socket directory is 0700 with a 0600 socket after daemon start (RT-06)
   assert.equal(existsSync(daemon.socketPath), false);
 });
 
-test("the container-create argv and the policy document carry no socket path (RT-06)", () => {
+void test("the container-create argv and the policy document carry no socket path (RT-06)", () => {
   // A stand-in state directory that is never created: only its path shape matters.
   const stateDir = join(ROOT, "tmp", "realm-no-mounts-proof", "state");
   const socketPath = controlSocketPath(stateDir);

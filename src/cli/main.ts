@@ -219,7 +219,10 @@ function renderResult(result: unknown): string {
   if (result === undefined) {
     return "";
   }
-  return JSON.stringify(result) ?? "";
+  // JSON.stringify returns undefined for a function or symbol, which its declared string type hides. The reply is
+  // untrusted socket input, so the fallback stays.
+  const encoded = JSON.stringify(result) as string | undefined;
+  return encoded ?? "";
 }
 
 function isAbsentDaemon(error: unknown): boolean {
@@ -450,7 +453,7 @@ async function runDoctor(deps: ResolvedDeps, stateDir: string, socketPath: strin
   return {
     exitCode: 0,
     stdout: `${JSON.stringify(checks)}\n`,
-    stderr: `realm doctor: daemon absent (REALM_NOT_ACTIVE); ran ${checks.length} local checks\n`,
+    stderr: `realm doctor: daemon absent (REALM_NOT_ACTIVE); ran ${String(checks.length)} local checks\n`,
   };
 }
 
@@ -556,11 +559,11 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
     connect: deps.connect ?? connectDaemon,
     runCommand: deps.runCommand ?? defaultRunCommand,
     connectSocket: deps.connectSocket ?? defaultConnectSocket,
-    mcpInput: deps.mcpInput ?? (process.stdin as unknown as McpInput),
-    mcpOutput: deps.mcpOutput ?? (process.stdout as unknown as McpOutput),
+    mcpInput: deps.mcpInput ?? process.stdin,
+    mcpOutput: deps.mcpOutput ?? process.stdout,
     acpInput: deps.acpInput ?? process.stdin,
     acpOutput: deps.acpOutput ?? process.stdout,
-    diagnostics: deps.diagnostics ?? (process.stderr as unknown as McpOutput),
+    diagnostics: deps.diagnostics ?? process.stderr,
   };
   const socketPath = controlSocketPath(stateDir);
   switch (command) {

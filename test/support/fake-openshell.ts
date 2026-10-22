@@ -83,7 +83,7 @@ export class FakeOpenShell {
       case "create":
         this.sequence += 1;
         this.store.add({
-          id: `fake-sandbox-${this.sequence}`,
+          id: `fake-sandbox-${String(this.sequence)}`,
           labels: labelsBeforeSeparator(argv),
           running: true,
         });

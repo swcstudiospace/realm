@@ -60,8 +60,8 @@ export function renderNetworkPolicies(rules: unknown, workloadBinary: unknown): 
   const sorted = [...validated].sort(compareRules);
   const entries: Record<string, NetworkPolicyEntry> = {};
   sorted.forEach((rule, index) => {
-    entries[`egress_${index}`] = Object.freeze({
-      name: `${rule.host}:${rule.port}`,
+    entries[`egress_${String(index)}`] = Object.freeze({
+      name: `${rule.host}:${String(rule.port)}`,
       endpoints: Object.freeze([Object.freeze({ host: rule.host, port: rule.port })]),
       binaries: Object.freeze([Object.freeze({ path: binaryPath })]),
     });

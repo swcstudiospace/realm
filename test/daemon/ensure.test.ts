@@ -8,16 +8,17 @@ import { ensureDaemon } from "../../src/daemon/ensure.js";
 
 const SOCKET = "/state/run/control.sock";
 
-test("a probe that is already true returns at once with no spawn", async () => {
+void test("a probe that is already true returns at once with no spawn", async () => {
   let probes = 0;
   let spawns = 0;
   await ensureDaemon({
     socketPath: SOCKET,
-    probe: async (path) => {
-      probes += 1;
-      assert.equal(path, SOCKET);
-      return true;
-    },
+    probe: (path) =>
+      new Promise<boolean>((resolve) => {
+        probes += 1;
+        assert.equal(path, SOCKET);
+        resolve(true);
+      }),
     spawnDaemon: () => {
       spawns += 1;
     },
@@ -28,18 +29,18 @@ test("a probe that is already true returns at once with no spawn", async () => {
   assert.equal(spawns, 0);
 });
 
-test("a probe false then true after one spawn spawns exactly once and returns", async () => {
+void test("a probe false then true after one spawn spawns exactly once and returns", async () => {
   let spawned = false;
   let polls = 0;
   let spawns = 0;
   await ensureDaemon({
     socketPath: SOCKET,
-    probe: async () => {
+    probe: () => {
       if (!spawned) {
-        return false;
+        return Promise.resolve(false);
       }
       polls += 1;
-      return polls >= 3;
+      return Promise.resolve(polls >= 3);
     },
     spawnDaemon: () => {
       spawns += 1;
@@ -52,14 +53,14 @@ test("a probe false then true after one spawn spawns exactly once and returns", 
   assert.equal(polls, 3);
 });
 
-test("a probe that never turns true throws DAEMON_START_TIMEOUT, whose reason names a daemon start and not a tool", async () => {
+void test("a probe that never turns true throws DAEMON_START_TIMEOUT, whose reason names a daemon start and not a tool", async () => {
   let spawns = 0;
   const timeoutMs = 80;
   const started = Date.now();
   await assert.rejects(
     ensureDaemon({
       socketPath: SOCKET,
-      probe: async () => false,
+      probe: () => Promise.resolve(false),
       spawnDaemon: () => {
         spawns += 1;
       },
@@ -74,15 +75,15 @@ test("a probe that never turns true throws DAEMON_START_TIMEOUT, whose reason na
   );
   const elapsed = Date.now() - started;
   assert.equal(spawns, 1);
-  assert.ok(elapsed >= timeoutMs, `waited ${elapsed}ms, expected at least ${timeoutMs}ms`);
-  assert.ok(elapsed < timeoutMs + 2_000, `waited ${elapsed}ms, expected a bounded wait`);
+  assert.ok(elapsed >= timeoutMs, `waited ${String(elapsed)}ms, expected at least ${String(timeoutMs)}ms`);
+  assert.ok(elapsed < timeoutMs + 2_000, `waited ${String(elapsed)}ms, expected a bounded wait`);
 });
 
-test("non-finite or non-positive intervals refuse with SCHEMA_INVALID before any probe", async () => {
+void test("non-finite or non-positive intervals refuse with SCHEMA_INVALID before any probe", async () => {
   let probes = 0;
-  const probe = async (): Promise<boolean> => {
+  const probe = (): Promise<boolean> => {
     probes += 1;
-    return true;
+    return Promise.resolve(true);
   };
   const spawnDaemon = (): void => undefined;
   await assert.rejects(

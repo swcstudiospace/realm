@@ -21,13 +21,13 @@ function stateDirFor(t: TestContext): string {
   return dir;
 }
 
-test("RT-03: the policy document round-trips through JSON unchanged", () => {
+void test("RT-03: the policy document round-trips through JSON unchanged", () => {
   const document = buildPolicyDocument(DENY, BINARY);
   const parsed: unknown = JSON.parse(JSON.stringify(document));
   assert.deepEqual(parsed, document);
 });
 
-test("RT-03: the policy declares version 1, a hard-requirement Landlock, and a non-root run user", () => {
+void test("RT-03: the policy declares version 1, a hard-requirement Landlock, and a non-root run user", () => {
   const document = buildPolicyDocument(DENY, BINARY);
   assert.equal(document.version, 1);
   assert.deepEqual(document.landlock, { compatibility: "hard_requirement" });
@@ -37,16 +37,16 @@ test("RT-03: the policy declares version 1, a hard-requirement Landlock, and a n
   assert.notEqual(document.process.run_as_user, "0");
 });
 
-test("RT-03: the policy grants the in-sandbox workspace read-write and nothing read-only", () => {
+void test("RT-03: the policy grants the in-sandbox workspace read-write and nothing read-only", () => {
   const document = buildPolicyDocument(DENY, BINARY);
   assert.deepEqual(document.filesystem_policy, { read_only: [], read_write: ["/workspace"] });
 });
 
-test("RT-03: an empty allowlist renders network_policies as an empty map, which is deny-all egress (D-103)", () => {
+void test("RT-03: an empty allowlist renders network_policies as an empty map, which is deny-all egress (D-103)", () => {
   assert.deepEqual(buildPolicyDocument(DENY, BINARY).network_policies, {});
 });
 
-test("RT-05: a non-empty allowlist renders network_policies to the exact D-78 shape for the workload binary", () => {
+void test("RT-05: a non-empty allowlist renders network_policies to the exact D-78 shape for the workload binary", () => {
   const document = buildPolicyDocument(ALLOW, BINARY);
   assert.deepEqual(document.network_policies, {
     egress_0: {
@@ -58,7 +58,7 @@ test("RT-05: a non-empty allowlist renders network_policies to the exact D-78 sh
   assert.deepEqual(document.network_policies, renderNetworkPolicies(ALLOW, BINARY));
 });
 
-test("RT-05: a non-empty allowlist leaves version, filesystem_policy, landlock, and process at their D-57 values", () => {
+void test("RT-05: a non-empty allowlist leaves version, filesystem_policy, landlock, and process at their D-57 values", () => {
   const withRules = buildPolicyDocument(ALLOW, BINARY);
   const denied = buildPolicyDocument(DENY, BINARY);
   assert.equal(withRules.version, denied.version);
@@ -67,7 +67,7 @@ test("RT-05: a non-empty allowlist leaves version, filesystem_policy, landlock, 
   assert.deepEqual(withRules.process, denied.process);
 });
 
-test("RT-03: the policy file lands at <stateDir>/runtime/<sessionId>.policy.json with mode 0600", (t) => {
+void test("RT-03: the policy file lands at <stateDir>/runtime/<sessionId>.policy.json with mode 0600", (t) => {
   const stateDir = stateDirFor(t);
   const path = writePolicyDocument(stateDir, SESSION, DENY, BINARY);
 
@@ -76,7 +76,7 @@ test("RT-03: the policy file lands at <stateDir>/runtime/<sessionId>.policy.json
   assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), buildPolicyDocument(DENY, BINARY));
 });
 
-test("RT-05: a non-empty allowlist is written as JSON at mode 0600 with its rendered network_policies", (t) => {
+void test("RT-05: a non-empty allowlist is written as JSON at mode 0600 with its rendered network_policies", (t) => {
   const stateDir = stateDirFor(t);
   const path = writePolicyDocument(stateDir, SESSION, ALLOW, BINARY);
 
@@ -85,7 +85,7 @@ test("RT-05: a non-empty allowlist is written as JSON at mode 0600 with its rend
   assert.deepEqual(parsed, buildPolicyDocument(ALLOW, BINARY));
 });
 
-test("RT-05: an allowlist entry that is refused, or a relative workload binary, writes no file and creates no runtime directory", (t) => {
+void test("RT-05: an allowlist entry that is refused, or a relative workload binary, writes no file and creates no runtime directory", (t) => {
   const stateDir = stateDirFor(t);
   const schemaInvalid = (error: unknown): boolean => error instanceof RealmError && error.code === "SCHEMA_INVALID";
   assert.throws(() => writePolicyDocument(stateDir, SESSION, [{ host: "localhost", port: 80 }], BINARY), schemaInvalid);
@@ -94,7 +94,7 @@ test("RT-05: an allowlist entry that is refused, or a relative workload binary, 
   assert.equal(existsSync(join(stateDir, "runtime")), false);
 });
 
-test("RT-03: a second write replaces the file with identical content and keeps mode 0600", (t) => {
+void test("RT-03: a second write replaces the file with identical content and keeps mode 0600", (t) => {
   const stateDir = stateDirFor(t);
   const path = writePolicyDocument(stateDir, SESSION, ALLOW, BINARY);
   const first = readFileSync(path, "utf8");
@@ -106,7 +106,7 @@ test("RT-03: a second write replaces the file with identical content and keeps m
   assert.equal(statSync(path).mode & 0o777, 0o600);
 });
 
-test("RT-03: the deny-all policy holds exactly the documented top-level keys and no secret, environment, or endpoint", () => {
+void test("RT-03: the deny-all policy holds exactly the documented top-level keys and no secret, environment, or endpoint", () => {
   const document = buildPolicyDocument(DENY, BINARY);
   assert.deepEqual(Object.keys(document).sort(), [
     "filesystem_policy",
@@ -118,7 +118,7 @@ test("RT-03: the deny-all policy holds exactly the documented top-level keys and
   assert.doesNotMatch(JSON.stringify(document), /PATH|HOME|TOKEN|SECRET|PASSWORD|CREDENTIAL|endpoint|binaries/i);
 });
 
-test("RT-03: an invalid session id or a relative state directory is refused with SCHEMA_INVALID and no runtime directory is created", (t) => {
+void test("RT-03: an invalid session id or a relative state directory is refused with SCHEMA_INVALID and no runtime directory is created", (t) => {
   const stateDir = stateDirFor(t);
   assert.throws(
     () => writePolicyDocument(stateDir, "../escape", DENY, BINARY),

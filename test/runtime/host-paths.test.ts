@@ -7,7 +7,7 @@ import { pathToFileURL } from "node:url";
 import { RealmError } from "../../src/core/errors.js";
 import { isDirectEntry, podmanSocketPath, readHostRuntime, resolveConfigPath } from "../../src/runtime/host-paths.js";
 
-test("resolveConfigPath prefers an absolute XDG_CONFIG_HOME, ignores a relative one, and falls back to HOME/.config", () => {
+void test("resolveConfigPath prefers an absolute XDG_CONFIG_HOME, ignores a relative one, and falls back to HOME/.config", () => {
   assert.equal(
     resolveConfigPath({ XDG_CONFIG_HOME: "/xdg/config", HOME: "/home/user" }),
     "/xdg/config/realm/config.json",
@@ -19,7 +19,7 @@ test("resolveConfigPath prefers an absolute XDG_CONFIG_HOME, ignores a relative 
   assert.equal(resolveConfigPath({ HOME: "/home/user" }), "/home/user/.config/realm/config.json");
 });
 
-test("resolveConfigPath throws SCHEMA_INVALID when neither XDG_CONFIG_HOME nor HOME is absolute", () => {
+void test("resolveConfigPath throws SCHEMA_INVALID when neither XDG_CONFIG_HOME nor HOME is absolute", () => {
   const isSchemaInvalid = (error: unknown): boolean =>
     error instanceof RealmError && error.code === "SCHEMA_INVALID";
   assert.throws(() => resolveConfigPath({}), isSchemaInvalid);
@@ -27,7 +27,7 @@ test("resolveConfigPath throws SCHEMA_INVALID when neither XDG_CONFIG_HOME nor H
   assert.throws(() => resolveConfigPath({ XDG_CONFIG_HOME: "relative/config" }), isSchemaInvalid);
 });
 
-test("podmanSocketPath is the rootless API socket under an absolute XDG_RUNTIME_DIR", () => {
+void test("podmanSocketPath is the rootless API socket under an absolute XDG_RUNTIME_DIR", () => {
   assert.equal(podmanSocketPath({ XDG_RUNTIME_DIR: "/run/user/1000" }), "/run/user/1000/podman/podman.sock");
 });
 
@@ -35,11 +35,13 @@ const IMAGE = `registry.example.com/realm/workload@sha256:${"0".repeat(64)}`;
 
 function configDir(t: TestContext): string {
   const dir = mkdtempSync(join(tmpdir(), "host-paths-config-"));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  t.after(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
   return dir;
 }
 
-test("readHostRuntime takes the state directory from the config file, whatever XDG_STATE_HOME names (CLI-01, RT-06)", (t) => {
+void test("readHostRuntime takes the state directory from the config file, whatever XDG_STATE_HOME names (CLI-01, RT-06)", (t) => {
   const dir = configDir(t);
   const runtimeInput = {
     image: IMAGE,
@@ -54,7 +56,7 @@ test("readHostRuntime takes the state directory from the config file, whatever X
   assert.deepEqual(host.runtimeInput, runtimeInput);
 });
 
-test("readHostRuntime refuses a missing config and a config with a relative state directory with SCHEMA_INVALID", (t) => {
+void test("readHostRuntime refuses a missing config and a config with a relative state directory with SCHEMA_INVALID", (t) => {
   const dir = configDir(t);
   assert.throws(
     () => readHostRuntime({ XDG_CONFIG_HOME: dir }),
@@ -71,9 +73,11 @@ test("readHostRuntime refuses a missing config and a config with a relative stat
   );
 });
 
-test("isDirectEntry is true for a symbolic link to the module file, and false for another file, a missing path, or no argv1", (t) => {
+void test("isDirectEntry is true for a symbolic link to the module file, and false for another file, a missing path, or no argv1", (t) => {
   const dir = mkdtempSync(join(tmpdir(), "host-paths-"));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  t.after(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
   const moduleFile = join(dir, "module.js");
   const otherFile = join(dir, "other.js");
   const link = join(dir, "link.js");

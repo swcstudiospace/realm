@@ -85,7 +85,7 @@ async function startStub(
   return { socketPath, requests };
 }
 
-test("status returns the daemon snapshot and display after one round trip", async (t) => {
+void test("status returns the daemon snapshot and display after one round trip", async (t) => {
   const stub = await startStub(t, (request) =>
     encodeReply({ id: request.id, result: DAEMON_STATUS }),
   );
@@ -94,10 +94,10 @@ test("status returns the daemon snapshot and display after one round trip", asyn
   assert.deepEqual(status, DAEMON_STATUS);
   assert.equal(status.mode, "advisory");
   assert.equal(stub.requests[0]?.method, "status");
-  assert.equal(stub.requests[0]?.params, undefined);
+  assert.equal(stub.requests[0].params, undefined);
 });
 
-test("status rejects a reply with no policy mode with SCHEMA_INVALID", async (t) => {
+void test("status rejects a reply with no policy mode with SCHEMA_INVALID", async (t) => {
   const stub = await startStub(t, (request) =>
     encodeReply({ id: request.id, result: STATUS_VALUE }),
   );
@@ -105,7 +105,7 @@ test("status rejects a reply with no policy mode with SCHEMA_INVALID", async (t)
   await assert.rejects(client.status(), assertRealmError("SCHEMA_INVALID"));
 });
 
-test("status rejects a reply with an unknown policy mode with SCHEMA_INVALID", async (t) => {
+void test("status rejects a reply with an unknown policy mode with SCHEMA_INVALID", async (t) => {
   const stub = await startStub(t, (request) =>
     encodeReply({ id: request.id, result: { ...DAEMON_STATUS, mode: "permissive" } }),
   );
@@ -113,7 +113,7 @@ test("status rejects a reply with an unknown policy mode with SCHEMA_INVALID", a
   await assert.rejects(client.status(), assertRealmError("SCHEMA_INVALID"));
 });
 
-test("up sends workspaceRoot and returns the daemon status", async (t) => {
+void test("up sends workspaceRoot and returns the daemon status", async (t) => {
   const stub = await startStub(t, (request) =>
     encodeReply({ id: request.id, result: DAEMON_STATUS }),
   );
@@ -122,10 +122,10 @@ test("up sends workspaceRoot and returns the daemon status", async (t) => {
   assert.deepEqual(up, DAEMON_STATUS);
   assert.equal(up.mode, "advisory");
   assert.equal(stub.requests[0]?.method, "up");
-  assert.deepEqual(stub.requests[0]?.params, { workspaceRoot: "/work/project" });
+  assert.deepEqual(stub.requests[0].params, { workspaceRoot: "/work/project" });
 });
 
-test("call round-trips a raw ToolCall and returns the done outcome", async (t) => {
+void test("call round-trips a raw ToolCall and returns the done outcome", async (t) => {
   const outcome: ToolOutcome = {
     outcome: "done",
     tool: "status",
@@ -135,10 +135,10 @@ test("call round-trips a raw ToolCall and returns the done outcome", async (t) =
   const client = connectDaemon(stub.socketPath);
   assert.deepEqual(await client.call({ status: {} }), outcome);
   assert.equal(stub.requests[0]?.method, "tool");
-  assert.deepEqual(stub.requests[0]?.params, { tool: { status: {} } });
+  assert.deepEqual(stub.requests[0].params, { tool: { status: {} } });
 });
 
-test("call returns a refusal as a resolved outcome, not a throw", async (t) => {
+void test("call returns a refusal as a resolved outcome, not a throw", async (t) => {
   const outcome: ToolOutcome = {
     outcome: "refused",
     tool: "exec",
@@ -150,7 +150,7 @@ test("call returns a refusal as a resolved outcome, not a throw", async (t) => {
   assert.deepEqual(await client.call({ exec: { argv: ["ls"] } }), outcome);
 });
 
-test("a reply carrying an error throws a RealmError with that catalogue code", async (t) => {
+void test("a reply carrying an error throws a RealmError with that catalogue code", async (t) => {
   const stub = await startStub(t, (request) =>
     encodeReply({ id: request.id, error: { code: "REALM_UNBOUND" } }),
   );
@@ -159,7 +159,7 @@ test("a reply carrying an error throws a RealmError with that catalogue code", a
   await assert.rejects(client.call({ status: {} }), assertRealmError("REALM_UNBOUND"));
 });
 
-test("a status reply missing display is refused with SCHEMA_INVALID", async (t) => {
+void test("a status reply missing display is refused with SCHEMA_INVALID", async (t) => {
   const stub = await startStub(t, (request) =>
     encodeReply({ id: request.id, result: { snapshot: STATUS_VALUE.snapshot } }),
   );
@@ -168,7 +168,7 @@ test("a status reply missing display is refused with SCHEMA_INVALID", async (t) 
   await assert.rejects(client.up("/work/project"), assertRealmError("SCHEMA_INVALID"));
 });
 
-test("a call reply that is not a ToolOutcome is refused with SCHEMA_INVALID", async (t) => {
+void test("a call reply that is not a ToolOutcome is refused with SCHEMA_INVALID", async (t) => {
   const stub = await startStub(t, (request) =>
     encodeReply({ id: request.id, result: { outcome: "maybe", tool: "status" } }),
   );
@@ -176,7 +176,7 @@ test("a call reply that is not a ToolOutcome is refused with SCHEMA_INVALID", as
   await assert.rejects(client.call({ status: {} }), assertRealmError("SCHEMA_INVALID"));
 });
 
-test("a refused outcome with an unknown code is refused with SCHEMA_INVALID", async (t) => {
+void test("a refused outcome with an unknown code is refused with SCHEMA_INVALID", async (t) => {
   const stub = await startStub(t, (request) =>
     encodeReply({
       id: request.id,
@@ -187,13 +187,13 @@ test("a refused outcome with an unknown code is refused with SCHEMA_INVALID", as
   await assert.rejects(client.call({ exec: {} }), assertRealmError("SCHEMA_INVALID"));
 });
 
-test("a non-JSON reply line is refused with SCHEMA_INVALID", async (t) => {
+void test("a non-JSON reply line is refused with SCHEMA_INVALID", async (t) => {
   const stub = await startStub(t, () => "not json\n");
   const client = connectDaemon(stub.socketPath);
   await assert.rejects(client.status(), assertRealmError("SCHEMA_INVALID"));
 });
 
-test("a missing socket throws REALM_NOT_ACTIVE for every method", async (t) => {
+void test("a missing socket throws REALM_NOT_ACTIVE for every method", async (t) => {
   const socketPath = join(scratchDir(t), "absent.sock");
   const client = connectDaemon(socketPath);
   await assert.rejects(client.status(), assertRealmError("REALM_NOT_ACTIVE"));
@@ -201,7 +201,7 @@ test("a missing socket throws REALM_NOT_ACTIVE for every method", async (t) => {
   await assert.rejects(client.call({ status: {} }), assertRealmError("REALM_NOT_ACTIVE"));
 });
 
-test("close is idempotent and later requests refuse with REALM_NOT_ACTIVE without dialing", async (t) => {
+void test("close is idempotent and later requests refuse with REALM_NOT_ACTIVE without dialing", async (t) => {
   const stub = await startStub(t, (request) =>
     encodeReply({ id: request.id, result: DAEMON_STATUS }),
   );
@@ -241,7 +241,7 @@ async function startRealDaemon(
     bridge: new FakeBridge(),
     clock: () => new Date(TS),
     runOpenShell: () => Promise.resolve({ exitCode: 0, stdout: "", stderr: "", truncated: false }),
-    sweep: async () => 0,
+    sweep: () => Promise.resolve(0),
     probe,
   }).catch((error: unknown) => {
     rmSync(base, { recursive: true, force: true });
@@ -259,13 +259,13 @@ async function startRealDaemon(
   return { daemon, workspace };
 }
 
-test("a daemon refusal rejects with a RealmError carrying the daemon's code, message and causeCode (TOOL-05, TOOL-01, TOOL-03)", async (t) => {
-  const { daemon } = await startRealDaemon(t, async () => ({ ok: true, version: "5.0.0" }));
+void test("a daemon refusal rejects with a RealmError carrying the daemon's code, message and causeCode (TOOL-05, TOOL-01, TOOL-03)", async (t) => {
+  const { daemon } = await startRealDaemon(t, () => Promise.resolve<PodmanProbeResult>({ ok: true, version: "5.0.0" }));
   const raised: RealmError[] = [];
-  daemon.handle.dispatcher.call = async () => {
+  daemon.handle.dispatcher.call = () => {
     const refusal = makeRealmError("OPENSHELL_START_FAILED", "PODMAN_MACHINE_DOWN");
     raised.push(refusal);
-    throw refusal;
+    return Promise.reject(refusal);
   };
   const client = connectDaemon(daemon.socketPath);
   const error = await client.call({ exec: {} }).then(
@@ -283,8 +283,8 @@ test("a daemon refusal rejects with a RealmError carrying the daemon's code, mes
   assert.equal(error.retryable, daemonSide.retryable);
 });
 
-test("a daemon refusal without a cause rejects with no causeCode property (TOOL-05)", async (t) => {
-  const { daemon } = await startRealDaemon(t, async () => ({ ok: true, version: "5.0.0" }));
+void test("a daemon refusal without a cause rejects with no causeCode property (TOOL-05)", async (t) => {
+  const { daemon } = await startRealDaemon(t, () => Promise.resolve<PodmanProbeResult>({ ok: true, version: "5.0.0" }));
   daemon.handle.dispatcher.call = () => Promise.reject(makeRealmError("TOOL_TIMEOUT"));
   const client = connectDaemon(daemon.socketPath);
   const error = await client.call({ status: {} }).then(
@@ -297,9 +297,9 @@ test("a daemon refusal without a cause rejects with no causeCode property (TOOL-
   assert.equal(Object.hasOwn(error, "causeCode"), false);
 });
 
-test("a refused tool outcome rejects with its catalogue code, as the daemon answers it (P6-D12, TOOL-01)", async (t) => {
-  const { daemon } = await startRealDaemon(t, async () => ({ ok: true, version: "5.0.0" }));
-  daemon.handle.dispatcher.call = async () => ({
+void test("a refused tool outcome rejects with its catalogue code, as the daemon answers it (P6-D12, TOOL-01)", async (t) => {
+  const { daemon } = await startRealDaemon(t, () => Promise.resolve<PodmanProbeResult>({ ok: true, version: "5.0.0" }));
+  daemon.handle.dispatcher.call = () => Promise.resolve<ToolOutcome>({
     outcome: "refused",
     tool: "read",
     code: "POLICY_DENIED",
@@ -317,8 +317,8 @@ test("a refused tool outcome rejects with its catalogue code, as the daemon answ
   assert.equal(Object.hasOwn(error, "causeCode"), false);
 });
 
-test("up refused by the podman probe rejects with the probe code over the real socket (CLI-01, TOOL-05)", async (t) => {
-  const { daemon, workspace } = await startRealDaemon(t, async () => ({
+void test("up refused by the podman probe rejects with the probe code over the real socket (CLI-01, TOOL-05)", async (t) => {
+  const { daemon, workspace } = await startRealDaemon(t, () => Promise.resolve<PodmanProbeResult>({
     ok: false,
     code: "PODMAN_MISSING",
     reason: "podman is missing",

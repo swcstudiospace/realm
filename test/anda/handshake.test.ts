@@ -15,7 +15,7 @@ const CREDENTIAL_HEADER = /^(authorization|proxy-authorization|cookie|x-api-key|
 
 interface FakeClock {
   readonly delays: number[];
-  now(): number;
+  readonly now: () => number;
   readonly sleep: SleepFn;
 }
 
@@ -47,7 +47,7 @@ function expectCode(code: string): (error: unknown) => boolean {
   };
 }
 
-test("ANDA-02: a correct AppInformation shape connects on one anonymous GET", async (t) => {
+void test("ANDA-02: a correct AppInformation shape connects on one anonymous GET", async (t) => {
   const fake = new FakeAnda();
   await fake.start();
   t.after(() => fake.stop());
@@ -58,11 +58,13 @@ test("ANDA-02: a correct AppInformation shape connects on one anonymous GET", as
 
   const requests = fake.requests();
   assert.equal(requests.length, 1, "a healthy connect is exactly one request");
-  assert.equal(requests[0]?.method, "GET");
-  assert.equal(requests[0]?.path, INFORMATION_PATH);
+  const connectRequest = requests[0];
+  assert.ok(connectRequest !== undefined, "the connect request is recorded");
+  assert.equal(connectRequest.method, "GET");
+  assert.equal(connectRequest.path, INFORMATION_PATH);
 });
 
-test("ANDA-02: a wrong shape fails at once with ANDA_VERSION_MISMATCH and sends exactly one request", async (t) => {
+void test("ANDA-02: a wrong shape fails at once with ANDA_VERSION_MISMATCH and sends exactly one request", async (t) => {
   const fake = new FakeAnda();
   await fake.start();
   t.after(() => fake.stop());
@@ -90,7 +92,7 @@ const MALFORMED: readonly (readonly [string, ScriptedReply])[] = [
 ];
 
 for (const [label, reply] of MALFORMED) {
-  test(`ANDA-02: ${label} fails closed with ANDA_VERSION_MISMATCH and no retry`, async (t) => {
+  void test(`ANDA-02: ${label} fails closed with ANDA_VERSION_MISMATCH and no retry`, async (t) => {
     const fake = new FakeAnda();
     await fake.start();
     t.after(() => fake.stop());
@@ -98,15 +100,15 @@ for (const [label, reply] of MALFORMED) {
     const clock = fakeClock();
     const bridge = new AndaBridge({ url: fake.url(), random: () => 1, now: clock.now, sleep: clock.sleep });
     t.after(() => bridge.close());
-
+  
     await assert.rejects(bridge.connect(5000), expectCode("ANDA_VERSION_MISMATCH"));
-
+  
     assert.equal(fake.requestCount(), 1, "one request, then the mismatch is final");
     assert.deepEqual(clock.delays, []);
   });
 }
 
-test("ANDA-02: no request carries a credential header and every request is the anonymous GET route", async (t) => {
+void test("ANDA-02: no request carries a credential header and every request is the anonymous GET route", async (t) => {
   const fake = new FakeAnda();
   await fake.start();
   t.after(() => fake.stop());
@@ -132,13 +134,13 @@ test("ANDA-02: no request carries a credential header and every request is the a
   }
 });
 
-test("ANDA-02: the client module defines no RPC route and produces no credential", () => {
+void test("ANDA-02: the client module defines no RPC route and produces no credential", () => {
   const source = readFileSync(CLIENT_SOURCE, "utf8");
   assert.doesNotMatch(source, /POST/, "the RPC route must not appear in the bridge (OQ-P3-10)");
   assert.doesNotMatch(source, /authorization/i, "the bridge must not produce a credential (T-03-14)");
 });
 
-test("ANDA-02: a mismatch is final: a later connect rejects with ANDA_VERSION_MISMATCH and sends no request", async (t) => {
+void test("ANDA-02: a mismatch is final: a later connect rejects with ANDA_VERSION_MISMATCH and sends no request", async (t) => {
   const fake = new FakeAnda();
   await fake.start();
   t.after(() => fake.stop());
@@ -155,7 +157,7 @@ test("ANDA-02: a mismatch is final: a later connect rejects with ANDA_VERSION_MI
   assert.deepEqual(clock.delays, [], "a mismatch never waits, before or after the retry");
 });
 
-test("ANDA-02: an oversize reply is unreachable, not a mismatch, and does not make the bridge sticky", async (t) => {
+void test("ANDA-02: an oversize reply is unreachable, not a mismatch, and does not make the bridge sticky", async (t) => {
   const fake = new FakeAnda();
   await fake.start();
   t.after(() => fake.stop());
@@ -175,7 +177,7 @@ test("ANDA-02: an oversize reply is unreachable, not a mismatch, and does not ma
   assert.equal(fake.requestCount(), 3, "a later healthy reply connects: the oversize reply set no sticky mismatch");
 });
 
-test("ANDA-02: a transport that throws synchronously is unreachable, its errno code is the reason, and its detail is not echoed", async (t) => {
+void test("ANDA-02: a transport that throws synchronously is unreachable, its errno code is the reason, and its detail is not echoed", async (t) => {
   const clock = fakeClock();
   let calls = 0;
   const bridge = new AndaBridge({
@@ -202,7 +204,7 @@ test("ANDA-02: a transport that throws synchronously is unreachable, its errno c
   assert.deepEqual(clock.delays, [100], "the retry waits only as long as the deadline allows");
 });
 
-test("ANDA-02: a synchronous transport throw with no errno code gives a fixed, non-blank reason and no detail", async (t) => {
+void test("ANDA-02: a synchronous transport throw with no errno code gives a fixed, non-blank reason and no detail", async (t) => {
   const clock = fakeClock();
   const bridge = new AndaBridge({
     url: "http://127.0.0.1:9",

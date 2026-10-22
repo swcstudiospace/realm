@@ -52,7 +52,7 @@ function realPathOf(root: PinnedRoot, relPath: string): string {
   return resolved.realPath;
 }
 
-test("a conflicting owner gets LOCK_CONFLICT and the file stays byte-identical (FS-04)", (t) => {
+void test("a conflicting owner gets LOCK_CONFLICT and the file stays byte-identical (FS-04)", (t) => {
   const { ws, root } = fixture(t);
   const locks = new LockTable();
   locks.acquire(realPathOf(root, "sub/doc.txt"), "A");
@@ -65,7 +65,7 @@ test("a conflicting owner gets LOCK_CONFLICT and the file stays byte-identical (
   assert.equal(readFileSync(join(ws, "sub", "doc.txt"), "utf8"), "original");
 });
 
-test("same-owner re-acquire is idempotent and returns the same handle (FS-04)", (t) => {
+void test("same-owner re-acquire is idempotent and returns the same handle (FS-04)", (t) => {
   const { root } = fixture(t);
   const locks = new LockTable();
   const path = realPathOf(root, "sub/doc.txt");
@@ -74,7 +74,7 @@ test("same-owner re-acquire is idempotent and returns the same handle (FS-04)", 
   assert.equal(second, first);
 });
 
-test("a locked write by the lock's own owner keeps the lock it took before (FS-04)", (t) => {
+void test("a locked write by the lock's own owner keeps the lock it took before (FS-04)", (t) => {
   const { ws, root } = fixture(t);
   const locks = new LockTable();
   const path = realPathOf(root, "sub/doc.txt");
@@ -86,7 +86,7 @@ test("a locked write by the lock's own owner keeps the lock it took before (FS-0
   assertRejectsWith(() => locks.acquire(path, "B"), "LOCK_CONFLICT");
 });
 
-test("release is idempotent and frees the path for another owner (FS-04)", (t) => {
+void test("release is idempotent and frees the path for another owner (FS-04)", (t) => {
   const { root } = fixture(t);
   const locks = new LockTable();
   const path = realPathOf(root, "sub/doc.txt");
@@ -96,7 +96,7 @@ test("release is idempotent and frees the path for another owner (FS-04)", (t) =
   assert.equal(locks.acquire(path, "B").owner, "B");
 });
 
-test("a stale handle cannot release a lock another owner now holds (FS-04)", (t) => {
+void test("a stale handle cannot release a lock another owner now holds (FS-04)", (t) => {
   const { root } = fixture(t);
   const locks = new LockTable();
   const path = realPathOf(root, "sub/doc.txt");
@@ -111,14 +111,14 @@ test("a stale handle cannot release a lock another owner now holds (FS-04)", (t)
   locks.release(current);
 });
 
-test("a second owner reaching the same file through a file symlink conflicts (FS-04)", (t) => {
+void test("a second owner reaching the same file through a file symlink conflicts (FS-04)", (t) => {
   const { root } = fixture(t);
   const locks = new LockTable();
   locks.acquire(realPathOf(root, "real.txt"), "A");
   assertRejectsWith(() => locks.acquire(realPathOf(root, "alias.txt"), "B"), "LOCK_CONFLICT");
 });
 
-test("a second owner writing through a directory symlink conflicts and the file is unchanged (FS-04)", (t) => {
+void test("a second owner writing through a directory symlink conflicts and the file is unchanged (FS-04)", (t) => {
   const { ws, root } = fixture(t);
   const locks = new LockTable();
   locks.acquire(realPathOf(root, "sub/doc.txt"), "A");
@@ -129,7 +129,7 @@ test("a second owner writing through a directory symlink conflicts and the file 
   assert.equal(readFileSync(join(ws, "sub", "doc.txt"), "utf8"), "original");
 });
 
-test("releasing an owner's locks frees every path it held (FS-04, D-33)", (t) => {
+void test("releasing an owner's locks frees every path it held (FS-04, D-33)", (t) => {
   const { root } = fixture(t);
   const locks = new LockTable();
   locks.acquire(realPathOf(root, "real.txt"), "session-1");
@@ -141,7 +141,7 @@ test("releasing an owner's locks frees every path it held (FS-04, D-33)", (t) =>
   assert.equal(locks.acquire(realPathOf(root, "sub/doc.txt"), "session-2").owner, "session-2");
 });
 
-test("locks live in memory and acquire and release create no file (FS-04)", (t) => {
+void test("locks live in memory and acquire and release create no file (FS-04)", (t) => {
   const { base, ws, root } = fixture(t);
   const before = [readdirSync(base).sort(), readdirSync(ws).sort()];
   const locks = new LockTable();

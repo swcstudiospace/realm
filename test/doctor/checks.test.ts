@@ -54,7 +54,7 @@ function writePolicy(path: string, value: unknown): void {
   writeFileSync(path, JSON.stringify(value));
 }
 
-test("policy-file: an absent policy file warns that defaults are in effect, with a fix (D-21, D-44)", async (t) => {
+void test("policy-file: an absent policy file warns that defaults are in effect, with a fix (D-21, D-44)", async (t) => {
   const { policyPath, stateDir } = layout(t);
   const result = resultOf(await runChecks({ policyPath, stateDir }), "policy-file");
   assert.equal(result.status, "warn");
@@ -62,7 +62,7 @@ test("policy-file: an absent policy file warns that defaults are in effect, with
   assert.match(fixOf(result), /workspaceRoots/);
 });
 
-test("policy-file: a configured path with no policy file set in the options warns with a fix (D-21)", async (t) => {
+void test("policy-file: a configured path with no policy file set in the options warns with a fix (D-21)", async (t) => {
   const { stateDir } = layout(t);
   const result = resultOf(await runChecks({ stateDir }), "policy-file");
   assert.equal(result.status, "warn");
@@ -70,7 +70,7 @@ test("policy-file: a configured path with no policy file set in the options warn
   assert.match(fixOf(result), /POLICY_DENIED/);
 });
 
-test("policy-file: a valid policy outside its workspace roots passes with no fix (D-44)", async (t) => {
+void test("policy-file: a valid policy outside its workspace roots passes with no fix (D-44)", async (t) => {
   const { workspace, policyPath, stateDir } = layout(t);
   writePolicy(policyPath, { workspaceRoots: [workspace] });
   const result = resultOf(await runChecks({ policyPath, stateDir }), "policy-file");
@@ -78,7 +78,7 @@ test("policy-file: a valid policy outside its workspace roots passes with no fix
   assert.equal(result.fix, null);
 });
 
-test("policy-file: an unknown key fails and the fix names the key, never the value (D-15, D-44)", async (t) => {
+void test("policy-file: an unknown key fails and the fix names the key, never the value (D-15, D-44)", async (t) => {
   const { policyPath, stateDir } = layout(t);
   writePolicy(policyPath, { bogus: "secret-value-7f3a" });
   const result = resultOf(await runChecks({ policyPath, stateDir }), "policy-file");
@@ -88,7 +88,7 @@ test("policy-file: an unknown key fails and the fix names the key, never the val
   assert.doesNotMatch(`${result.detail} ${fixOf(result)}`, /secret-value-7f3a/);
 });
 
-test("policy-file: a relative workspace root fails and names the index, never the value (D-22, F-3)", async (t) => {
+void test("policy-file: a relative workspace root fails and names the index, never the value (D-22, F-3)", async (t) => {
   const { policyPath, stateDir } = layout(t);
   writePolicy(policyPath, { workspaceRoots: ["relative-root-value"] });
   const result = resultOf(await runChecks({ policyPath, stateDir }), "policy-file");
@@ -97,7 +97,7 @@ test("policy-file: a relative workspace root fails and names the index, never th
   assert.doesNotMatch(`${result.detail} ${fixOf(result)}`, /relative-root-value/);
 });
 
-test("policy-file: a file that is not JSON fails with a fix and without echoing its content (D-15, D-44)", async (t) => {
+void test("policy-file: a file that is not JSON fails with a fix and without echoing its content (D-15, D-44)", async (t) => {
   const { policyPath, stateDir } = layout(t);
   writeFileSync(policyPath, "{ not json secret-value-9c1d");
   const result = resultOf(await runChecks({ policyPath, stateDir }), "policy-file");
@@ -106,7 +106,7 @@ test("policy-file: a file that is not JSON fails with a fix and without echoing 
   assert.doesNotMatch(`${result.detail} ${fixOf(result)}`, /secret-value-9c1d/);
 });
 
-test("policy-file: a policy file inside its own workspace root fails with a move fix (D-22, D-44)", async (t) => {
+void test("policy-file: a policy file inside its own workspace root fails with a move fix (D-22, D-44)", async (t) => {
   const { workspace, stateDir } = layout(t);
   const policyPath = join(workspace, "policy.json");
   writePolicy(policyPath, { workspaceRoots: [workspace] });
@@ -115,21 +115,21 @@ test("policy-file: a policy file inside its own workspace root fails with a move
   assert.match(fixOf(result), /move it outside every workspace root/);
 });
 
-test("state-dir: a missing directory warns that it is created on first use (D-37, D-44)", async (t) => {
+void test("state-dir: a missing directory warns that it is created on first use (D-37, D-44)", async (t) => {
   const { base, policyPath } = layout(t);
   const result = resultOf(await runChecks({ policyPath, stateDir: join(base, "not-yet") }), "state-dir");
   assert.equal(result.status, "warn");
   assert.match(fixOf(result), /creates the state directory with mode 700 on first use/);
 });
 
-test("state-dir: mode 0700 passes with no fix (D-37, D-44)", async (t) => {
+void test("state-dir: mode 0700 passes with no fix (D-37, D-44)", async (t) => {
   const { stateDir, policyPath } = layout(t);
   const result = resultOf(await runChecks({ policyPath, stateDir }), "state-dir");
   assert.equal(result.status, "pass");
   assert.equal(result.fix, null);
 });
 
-test("state-dir: a wider mode fails with a chmod 700 fix (D-44)", async (t) => {
+void test("state-dir: a wider mode fails with a chmod 700 fix (D-44)", async (t) => {
   const { stateDir, policyPath } = layout(t);
   chmodSync(stateDir, 0o755);
   const result = resultOf(await runChecks({ policyPath, stateDir }), "state-dir");
@@ -138,7 +138,7 @@ test("state-dir: a wider mode fails with a chmod 700 fix (D-44)", async (t) => {
   assert.match(fixOf(result), /chmod 700/);
 });
 
-test("state-dir: a file at the state directory path fails with a move-aside fix (D-44)", async (t) => {
+void test("state-dir: a file at the state directory path fails with a move-aside fix (D-44)", async (t) => {
   const { base, policyPath } = layout(t);
   const stateDir = join(base, "state-file");
   writeFileSync(stateDir, "not a directory");
@@ -148,7 +148,7 @@ test("state-dir: a file at the state directory path fails with a move-aside fix 
   assert.match(fixOf(result), /Move the file/);
 });
 
-test("session-store: a writable session directory passes, and the check writes no probe file (D-44)", async (t) => {
+void test("session-store: a writable session directory passes, and the check writes no probe file (D-44)", async (t) => {
   const { stateDir, policyPath } = layout(t);
   const sessionsDir = join(stateDir, "sessions");
   mkdirSync(sessionsDir, { mode: 0o700 });
@@ -167,7 +167,7 @@ const refused = (): { readonly writable: false; readonly reason: string } => ({
   reason: "EACCES: permission denied",
 });
 
-test("session-store: an unwritable session directory fails with an ownership fix (D-44)", async (t) => {
+void test("session-store: an unwritable session directory fails with an ownership fix (D-44)", async (t) => {
   const { stateDir, policyPath } = layout(t);
   mkdirSync(join(stateDir, "sessions"), { mode: 0o700 });
   const result = resultOf(await runChecks({ policyPath, stateDir, canWrite: refused }), "session-store");
@@ -176,7 +176,7 @@ test("session-store: an unwritable session directory fails with an ownership fix
   assert.match(fixOf(result), /ownership/);
 });
 
-test("session-store: a refused write keeps the probe's error text as the detail reason (QUAL-01)", async (t) => {
+void test("session-store: a refused write keeps the probe's error text as the detail reason (QUAL-01)", async (t) => {
   const { stateDir, policyPath } = layout(t);
   mkdirSync(join(stateDir, "sessions"), { mode: 0o700 });
   const canWrite = (): { readonly writable: false; readonly reason: string } => ({
@@ -188,21 +188,21 @@ test("session-store: a refused write keeps the probe's error text as the detail 
   assert.match(result.detail, /EACCES: permission denied, access 'sessions'/);
 });
 
-test("session-store: an absent session directory warns when its nearest ancestor is writable (D-37, D-44)", async (t) => {
+void test("session-store: an absent session directory warns when its nearest ancestor is writable (D-37, D-44)", async (t) => {
   const { stateDir, policyPath } = layout(t);
   const result = resultOf(await runChecks({ policyPath, stateDir }), "session-store");
   assert.equal(result.status, "warn");
   assert.match(fixOf(result), /creates the session store on first use/);
 });
 
-test("session-store: an absent session directory fails when no ancestor is writable (D-44)", async (t) => {
+void test("session-store: an absent session directory fails when no ancestor is writable (D-44)", async (t) => {
   const { stateDir, policyPath } = layout(t);
   const result = resultOf(await runChecks({ policyPath, stateDir, canWrite: refused }), "session-store");
   assert.equal(result.status, "fail");
   assert.match(fixOf(result), /ownership/);
 });
 
-test("the nine checks are registered in report order, with control-channel and agentos after anda-bridge (D-44, D-69, CLI-03)", async (t) => {
+void test("the nine checks are registered in report order, with control-channel and agentos after anda-bridge (D-44, D-69, CLI-03)", async (t) => {
   const { policyPath, stateDir } = layout(t);
   // Every seam is injected: each command fails to start and each socket is refused, so the run spawns no
   // process and opens no socket. The andaUrl is absent, so no engine is contacted either.

@@ -5,7 +5,7 @@ import { matchGlob } from "../../src/fs/glob.js";
 // Matcher cases for D-32: a local matcher with no dependency. Each expected answer is a
 // literal, so the test does not read the matcher under test.
 
-test("star matches any run of characters inside one segment (D-32)", () => {
+void test("star matches any run of characters inside one segment (D-32)", () => {
   assert.equal(matchGlob("*.txt", "notes.txt"), true);
   assert.equal(matchGlob("*.txt", ".txt"), true);
   assert.equal(matchGlob("a*c", "abbc"), true);
@@ -14,19 +14,19 @@ test("star matches any run of characters inside one segment (D-32)", () => {
   assert.equal(matchGlob("a*c", "a/c"), false);
 });
 
-test("star backtracks across several wildcards (D-32)", () => {
+void test("star backtracks across several wildcards (D-32)", () => {
   assert.equal(matchGlob("*a*b", "xaxab"), true);
   assert.equal(matchGlob("*a*b", "xaxa"), false);
 });
 
-test("question mark matches exactly one character and never a separator (D-32)", () => {
+void test("question mark matches exactly one character and never a separator (D-32)", () => {
   assert.equal(matchGlob("file?.log", "file1.log"), true);
   assert.equal(matchGlob("file?.log", "file.log"), false);
   assert.equal(matchGlob("file?.log", "file12.log"), false);
   assert.equal(matchGlob("a?b", "a/b"), false);
 });
 
-test("double star matches zero or more whole segments at the root (D-32)", () => {
+void test("double star matches zero or more whole segments at the root (D-32)", () => {
   assert.equal(matchGlob("**/id_rsa", "id_rsa"), true);
   assert.equal(matchGlob("**/id_rsa", "keys/id_rsa"), true);
   assert.equal(matchGlob("**/id_rsa", "a/b/c/id_rsa"), true);
@@ -34,7 +34,7 @@ test("double star matches zero or more whole segments at the root (D-32)", () =>
   assert.equal(matchGlob("**/id_rsa", "id_rsa/a"), false);
 });
 
-test("double star matches zero or more whole segments in the middle (D-32)", () => {
+void test("double star matches zero or more whole segments in the middle (D-32)", () => {
   assert.equal(matchGlob("a/**/z", "a/z"), true);
   assert.equal(matchGlob("a/**/z", "a/b/z"), true);
   assert.equal(matchGlob("a/**/z", "a/b/c/z"), true);
@@ -42,21 +42,21 @@ test("double star matches zero or more whole segments in the middle (D-32)", () 
   assert.equal(matchGlob("a/**/z", "a/z/q"), false);
 });
 
-test("double star matches zero or more whole segments at the end (D-32)", () => {
+void test("double star matches zero or more whole segments at the end (D-32)", () => {
   assert.equal(matchGlob("a/**", "a"), true);
   assert.equal(matchGlob("a/**", "a/b"), true);
   assert.equal(matchGlob("a/**", "a/b/c"), true);
   assert.equal(matchGlob("a/**", "b/a"), false);
 });
 
-test("several double stars and a lone double star (D-32)", () => {
+void test("several double stars and a lone double star (D-32)", () => {
   assert.equal(matchGlob("**/a/**/b", "a/b"), true);
   assert.equal(matchGlob("**/a/**/b", "x/a/y/z/b"), true);
   assert.equal(matchGlob("**/a/**/b", "x/b"), false);
   assert.equal(matchGlob("**", "any/thing/at/all"), true);
 });
 
-test("a literal dot is not a wildcard and a segment never matches a prefix (D-32)", () => {
+void test("a literal dot is not a wildcard and a segment never matches a prefix (D-32)", () => {
   assert.equal(matchGlob(".env", "xenv"), false);
   assert.equal(matchGlob(".env", ".env.local"), false);
   assert.equal(matchGlob(".env.*", ".env"), false);

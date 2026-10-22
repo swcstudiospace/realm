@@ -86,7 +86,7 @@ function fixture(t: TestContext, options: FixtureOptions = {}) {
   return { workspace, store, exec, controller };
 }
 
-test("a slow store load that uses up the startup budget gives STARTUP_BUDGET_EXCEEDED and state error, with no container created (D-28)", async (t) => {
+void test("a slow store load that uses up the startup budget gives STARTUP_BUDGET_EXCEEDED and state error, with no container created (D-28)", async (t) => {
   const clock = scriptedClock(t);
   const { store, exec, controller, workspace } = fixture(t, {
     startupBudgetMs: BUDGET_MS,
@@ -103,7 +103,7 @@ test("a slow store load that uses up the startup budget gives STARTUP_BUDGET_EXC
   assert.equal(exec.callCount("start"), 0);
 });
 
-test("a retry after exec.start overruns the budget reattaches to the one recorded container and starts that container (CORE-06, RT-07)", async (t) => {
+void test("a retry after exec.start overruns the budget reattaches to the one recorded container and starts that container (CORE-06, RT-07)", async (t) => {
   // Real timers, on purpose: withTimeout races the port call against a real setTimeout. The
   // budget is 500 ms and the scripted start delay is 2000 ms, 4x the budget, so the budget
   // fires first. The abandoned start finishes on its own timer, which touches no disk.
@@ -116,7 +116,7 @@ test("a retry after exec.start overruns the budget reattaches to the one recorde
   assert.equal(failed.reason, "STARTUP_BUDGET_EXCEEDED");
   const recorded = store.load(SESSION);
   assert.equal(recorded?.state, "error");
-  const containerId = recorded?.containerId;
+  const containerId = recorded.containerId;
   assert.ok(typeof containerId === "string");
   assert.equal(exec.callCount("create"), 1);
 

@@ -108,10 +108,10 @@ process.stdout.write(JSON.stringify({ code }));
 `;
 
 for (const stage of STAGES) {
-  test(`a stage-hook failure at ${stage} leaves the original byte-identical with no temp file and reports WRITE_NOT_ATOMIC (FS-05)`, (t) => {
+  void test(`a stage-hook failure at ${stage} leaves the original byte-identical with no temp file and reports WRITE_NOT_ATOMIC (FS-05)`, (t) => {
     const { dir, target } = setup(t);
     assert.throws(
-      () =>
+      () => {
         atomicWriteFile(target, "replacement", {
           expectedPriorSha256: sha256Hex(ORIGINAL),
           stageHook: (current) => {
@@ -119,25 +119,26 @@ for (const stage of STAGES) {
               throw new Error(`injected fault at ${stage}`);
             }
           },
-        }),
+        });
+      },
       (error: unknown) =>
         error instanceof WriteNotAtomicError &&
         error.code === "WRITE_NOT_ATOMIC" &&
-        error.replaced === false,
+        !error.replaced,
     );
     assert.equal(readFileSync(target, "utf8"), ORIGINAL);
     assert.deepEqual(tempFiles(dir), []);
   });
 }
 
-test("the success path replaces the content and leaves no temp file (FS-05)", (t) => {
+void test("the success path replaces the content and leaves no temp file (FS-05)", (t) => {
   const { dir, target } = setup(t);
   atomicWriteFile(target, "replacement", { expectedPriorSha256: sha256Hex(ORIGINAL) });
   assert.equal(readFileSync(target, "utf8"), "replacement");
   assert.deepEqual(tempFiles(dir), []);
 });
 
-test("an absent target is created when the expected prior state is absent (FS-05)", (t) => {
+void test("an absent target is created when the expected prior state is absent (FS-05)", (t) => {
   const { dir } = setup(t);
   const fresh = join(dir, "fresh.txt");
   atomicWriteFile(fresh, "created", { expectedPriorSha256: null });
@@ -145,7 +146,7 @@ test("an absent target is created when the expected prior state is absent (FS-05
   assert.deepEqual(tempFiles(dir), []);
 });
 
-test("an atomic replace keeps the prior rwx bits and drops its setuid bit (FS-05)", (t) => {
+void test("an atomic replace keeps the prior rwx bits and drops its setuid bit (FS-05)", (t) => {
   const { dir, target } = setup(t);
   chmodSync(target, 0o4755);
   assert.equal(statSync(target).mode & 0o7777, 0o4755, "the fixture must carry the setuid bit before the replace");
@@ -157,7 +158,7 @@ test("an atomic replace keeps the prior rwx bits and drops its setuid bit (FS-05
   assert.deepEqual(tempFiles(dir), []);
 });
 
-test("observeSha256 on a FIFO returns PATH_ESCAPE within a bounded time (FS-02)", (t) => {
+void test("observeSha256 on a FIFO returns PATH_ESCAPE within a bounded time (FS-02)", (t) => {
   const { dir } = setup(t);
   const fifo = join(dir, "fifo");
   createFifo(fifo);
@@ -168,15 +169,17 @@ test("observeSha256 on a FIFO returns PATH_ESCAPE within a bounded time (FS-02)"
   assert.deepEqual(outcome, { code: "PATH_ESCAPE" });
 });
 
-test("syncDirectory on a regular file at the parent path throws PATH_ESCAPE (FS-02)", (t) => {
+void test("syncDirectory on a regular file at the parent path throws PATH_ESCAPE (FS-02)", (t) => {
   const { target } = setup(t);
   assert.throws(
-    () => syncDirectory(target),
+    () => {
+      syncDirectory(target);
+    },
     (error: unknown) => error instanceof RealmError && error.code === "PATH_ESCAPE",
   );
 });
 
-test("syncDirectory on a FIFO at the parent path returns PATH_ESCAPE without blocking (FS-02)", (t) => {
+void test("syncDirectory on a FIFO at the parent path returns PATH_ESCAPE without blocking (FS-02)", (t) => {
   const { dir } = setup(t);
   const fifo = join(dir, "fifo");
   createFifo(fifo);
@@ -194,10 +197,10 @@ test("syncDirectory on a FIFO at the parent path returns PATH_ESCAPE without blo
 // The temp file is swapped for a directory after the verified write, so the cleanup that follows
 // the injected fault cannot remove it. The original fault stays the error thrown, and the failed
 // cleanup is recorded as its cause.
-test("a failed temp-file cleanup keeps the write failure and records CLEANUP_FAILED as its cause (QUAL-01)", (t) => {
+void test("a failed temp-file cleanup keeps the write failure and records CLEANUP_FAILED as its cause (QUAL-01)", (t) => {
   const { dir, target } = setup(t);
   assert.throws(
-    () =>
+    () => {
       atomicWriteFile(target, "replacement\n", {
         expectedPriorSha256: sha256Hex(ORIGINAL),
         stageHook: (stage) => {
@@ -212,7 +215,8 @@ test("a failed temp-file cleanup keeps the write failure and records CLEANUP_FAI
           mkdirSync(join(dir, temp));
           throw new Error("injected fault at before-rename");
         },
-      }),
+      });
+    },
     (error: unknown) =>
       error instanceof WriteNotAtomicError &&
       error.code === "WRITE_NOT_ATOMIC" &&

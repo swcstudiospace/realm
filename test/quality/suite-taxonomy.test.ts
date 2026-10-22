@@ -199,54 +199,54 @@ function gateReasonOf(probe: PodmanProbe): string {
   return reason;
 }
 
-test("every D-45 test file exists", () => {
+void test("every D-45 test file exists", () => {
   const missing = D45_FILES.filter((file) => !existsSync(join(TEST_DIR, file)));
   assert.deepEqual(missing, [], "D-45 test files missing from test/");
 });
 
 for (const category of CATEGORY_DIRS) {
-  test(`the ${category} category directory holds at least one *.test.ts file`, () => {
+  void test(`the ${category} category directory holds at least one *.test.ts file`, () => {
     const tests = readdirSync(join(TEST_DIR, category)).filter((name) => name.endsWith(".test.ts"));
     assert.ok(tests.length > 0, `test/${category} holds no *.test.ts file`);
   });
 }
 
-test("the F-5 category map resolves every named category to test files that exist", () => {
+void test("the F-5 category map resolves every named category to test files that exist", () => {
   const missing = CATEGORY_MAP.flatMap(({ category, files }) =>
     files.filter((file) => !existsSync(join(TEST_DIR, file))).map((file) => `${category}: ${file}`),
   );
   assert.deepEqual(missing, [], "F-5 category map entries with no test file");
 });
 
-test("the Podman gate maps a missing binary to a stated reason naming PODMAN_MISSING", () => {
+void test("the Podman gate maps a missing binary to a stated reason naming PODMAN_MISSING", () => {
   assert.match(gateReasonOf({ kind: "unavailable" }), /PODMAN_MISSING/);
 });
 
-test("the Podman gate maps a Podman release below 5.x to a stated reason naming PODMAN_UNSUPPORTED_VERSION", () => {
+void test("the Podman gate maps a Podman release below 5.x to a stated reason naming PODMAN_UNSUPPORTED_VERSION", () => {
   assert.match(
     gateReasonOf({ kind: "output", stdout: "podman version 4.9.3\n" }),
     /PODMAN_UNSUPPORTED_VERSION/,
   );
 });
 
-test("the Podman gate lets the integration suite run on Podman 5.x", () => {
+void test("the Podman gate lets the integration suite run on Podman 5.x", () => {
   assert.equal(podmanSkipReason({ kind: "output", stdout: "podman version 5.0.0\n" }), false);
 });
 
-test("the integration gate test applies the Podman mapping to its own probe and keeps the suite gated on it", () => {
+void test("the integration gate test applies the Podman mapping to its own probe and keeps the suite gated on it", () => {
   const gate = readFileSync(join(TEST_DIR, "integration/podman-gate.test.ts"), "utf8");
   assert.ok(gate.includes("podmanSkipReason(probe)"), "podman-gate.test.ts must apply podmanSkipReason to its probe");
   assert.ok(gate.includes("{ skip: gate }"), "podman-gate.test.ts must pass the gate to the suite");
 });
 
-test("MCP and ACP contract tests are Phase 5 deliverables, not Phase 2 (Q-4; ROADMAP Phase 5 success criterion 5), so no MCP or ACP test file exists here", () => {
+void test("MCP and ACP contract tests are Phase 5 deliverables, not Phase 2 (Q-4; ROADMAP Phase 5 success criterion 5), so no MCP or ACP test file exists here", () => {
   const transport = readdirSync(TEST_DIR, { recursive: true, encoding: "utf8" })
     .filter((name) => name.endsWith(".test.ts"))
     .filter((name) => /(^|[-.])(mcp|acp)([-.]|$)/i.test(basename(name)));
   assert.deepEqual(transport, [], "no MCP or ACP test file may exist before Phase 5");
 });
 
-test("all 16 Phase 2 requirement IDs are cited by at least one D-45 test file (QUAL-02 taxonomy and category part)", () => {
+void test("all 16 Phase 2 requirement IDs are cited by at least one D-45 test file (QUAL-02 taxonomy and category part)", () => {
   const uncovered = PHASE_2_REQUIREMENT_IDS.filter(
     (id) => !D45_FILES.some((file) => readFileSync(join(TEST_DIR, file), "utf8").includes(id)),
   );
@@ -274,7 +274,7 @@ function titleLeadingIds(source: string): Set<string> {
   return ids;
 }
 
-test("the title check counts an ID only when a title leads with it, so a comment or a mid-title mention does not count", () => {
+void test("the title check counts an ID only when a title leads with it, so a comment or a mid-title mention does not count", () => {
   const source = [
     "// RT-09 is discussed in this comment only",
     'test("the sweep removes RT-09 containers", () => {});',
@@ -283,7 +283,7 @@ test("the title check counts an ID only when a title leads with it, so a comment
   assert.deepEqual([...titleLeadingIds(source)].sort(), ["RT-03", "RT-04"]);
 });
 
-test("all 10 Phase 3 requirement IDs lead the title of a test in a named D-45 test file (QUAL-02, Phase 3)", () => {
+void test("all 10 Phase 3 requirement IDs lead the title of a test in a named D-45 test file (QUAL-02, Phase 3)", () => {
   const citing = D45_FILES.filter((file) => file !== "quality/suite-taxonomy.test.ts");
   const leading = new Set<string>();
   for (const file of citing) {
@@ -295,7 +295,7 @@ test("all 10 Phase 3 requirement IDs lead the title of a test in a named D-45 te
   assert.deepEqual(uncovered, [], `Phase 3 requirement IDs named by no D-45 test title: ${uncovered.join(", ")}`);
 });
 
-test("all 4 Phase 4 requirement IDs lead the title of a test in a named D-45 test file (QUAL-02, Phase 4)", () => {
+void test("all 4 Phase 4 requirement IDs lead the title of a test in a named D-45 test file (QUAL-02, Phase 4)", () => {
   const citing = D45_FILES.filter((file) => file !== "quality/suite-taxonomy.test.ts");
   const leading = new Set<string>();
   for (const file of citing) {
@@ -307,7 +307,7 @@ test("all 4 Phase 4 requirement IDs lead the title of a test in a named D-45 tes
   assert.deepEqual(uncovered, [], `Phase 4 requirement IDs named by no D-45 test title: ${uncovered.join(", ")}`);
 });
 
-test("all 6 Phase 5 requirement IDs lead the title of a test in a named D-45 test file (QUAL-02, Phase 5)", () => {
+void test("all 6 Phase 5 requirement IDs lead the title of a test in a named D-45 test file (QUAL-02, Phase 5)", () => {
   const citing = D45_FILES.filter((file) => file !== "quality/suite-taxonomy.test.ts");
   const leading = new Set<string>();
   for (const file of citing) {

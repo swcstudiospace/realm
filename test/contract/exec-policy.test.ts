@@ -70,13 +70,13 @@ function withTempDir(body: (dir: string) => void): void {
   }
 }
 
-test("TOOL-02: the argv form is allowed when shell is disabled", () => {
+void test("TOOL-02: the argv form is allowed when shell is disabled", () => {
   assert.doesNotThrow(() => {
     checkExecPolicy(CLOSED, { argv: ["ls", "-la"] });
   });
 });
 
-test("TOOL-02: the shell form is rejected with SHELL_NOT_ALLOWED when shellEnabled is false", () => {
+void test("TOOL-02: the shell form is rejected with SHELL_NOT_ALLOWED when shellEnabled is false", () => {
   assert.throws(
     () => {
       checkExecPolicy(CLOSED, { shell: true, script: "ls | wc -l" });
@@ -89,13 +89,13 @@ test("TOOL-02: the shell form is rejected with SHELL_NOT_ALLOWED when shellEnabl
   );
 });
 
-test("TOOL-02: the shell form is allowed when shellEnabled is true", () => {
+void test("TOOL-02: the shell form is allowed when shellEnabled is true", () => {
   assert.doesNotThrow(() => {
     checkExecPolicy(OPEN, { shell: true, script: "ls | wc -l" });
   });
 });
 
-test("TOOL-02: the exec gate never executes a command, for argv or shell form", () => {
+void test("TOOL-02: the exec gate never executes a command, for argv or shell form", () => {
   withTempDir((dir) => {
     const argvMarker = join(dir, "argv-marker");
     const shellMarker = join(dir, "shell-marker");
@@ -106,7 +106,7 @@ test("TOOL-02: the exec gate never executes a command, for argv or shell form", 
   });
 });
 
-test("TOOL-02: only the allowlisted src files import child_process", () => {
+void test("TOOL-02: only the allowlisted src files import child_process", () => {
   const allowed = new Set<string>(CHILD_PROCESS_ALLOWLIST);
   const files = readdirSync(SRC_DIR, { recursive: true, encoding: "utf8" })
     .filter((name) => name.endsWith(".ts"))
@@ -120,7 +120,7 @@ test("TOOL-02: only the allowlisted src files import child_process", () => {
   }
 });
 
-test("TOOL-02: the exec gate modules never import child_process", () => {
+void test("TOOL-02: the exec gate modules never import child_process", () => {
   const gate = gateModuleClosure(join(SRC_DIR, "core", "policy.ts"));
   assert.ok(gate.includes(join(SRC_DIR, "core", "policy.ts")), "the gate closure must include core/policy.ts");
   for (const file of gate) {
@@ -132,7 +132,7 @@ test("TOOL-02: the exec gate modules never import child_process", () => {
   }
 });
 
-test("TOOL-02: each allowlisted file imports child_process by name, and no entry is stale", () => {
+void test("TOOL-02: each allowlisted file imports child_process by name, and no entry is stale", () => {
   for (const rel of CHILD_PROCESS_ALLOWLIST) {
     const file = join(REPO_ROOT, rel);
     assert.ok(existsSync(file), `${rel} is on the TOOL-02 allowlist but does not exist`);

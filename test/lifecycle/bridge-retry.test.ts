@@ -117,7 +117,7 @@ function fixture(t: TestContext) {
   return { workspace, store, exec, bridge, controller };
 }
 
-test("a retry from error waits for the handshake the expired startup started, and starts no second connect (ANDA-03, D-64)", async (t) => {
+void test("a retry from error waits for the handshake the expired startup started, and starts no second connect (ANDA-03, D-64)", async (t) => {
   const { workspace, bridge, controller } = fixture(t);
   const liveBefore = process.getActiveResourcesInfo().filter((name) => name === "Timeout").length;
 
@@ -137,7 +137,7 @@ test("a retry from error waits for the handshake the expired startup started, an
   assert.equal(process.getActiveResourcesInfo().filter((name) => name === "Timeout").length, liveBefore, "no timer survives the test");
 });
 
-test("a retry whose held handshake never settles ends at its own budget, and the next startup reuses the handshake once it connects (ANDA-03)", async (t) => {
+void test("a retry whose held handshake never settles ends at its own budget, and the next startup reuses the handshake once it connects (ANDA-03)", async (t) => {
   const { workspace, bridge, controller } = fixture(t);
   await controller.create(workspace);
 
@@ -153,7 +153,7 @@ test("a retry whose held handshake never settles ends at its own budget, and the
   assert.equal(bridge.callCount("connect"), 1, "the handshake that connected is reused, not dialled again");
 });
 
-test("a handshake that fails while a retry waits gives the retry the bridge's code, and the next startup starts a fresh handshake (ANDA-03)", async (t) => {
+void test("a handshake that fails while a retry waits gives the retry the bridge's code, and the next startup starts a fresh handshake (ANDA-03)", async (t) => {
   const { workspace, bridge, controller } = fixture(t);
   await controller.create(workspace);
 
@@ -173,7 +173,7 @@ test("a handshake that fails while a retry waits gives the retry the bridge's co
   assert.equal(bridge.callCount("connect"), 2);
 });
 
-test("after destroy, a new startup connects the bridge again instead of reusing the handshake of the old session (ANDA-03)", async (t) => {
+void test("after destroy, a new startup connects the bridge again instead of reusing the handshake of the old session (ANDA-03)", async (t) => {
   const { workspace, bridge, controller } = fixture(t);
   const first = controller.create(workspace);
   await settle();

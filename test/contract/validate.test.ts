@@ -31,14 +31,14 @@ const RECORD = {
   containerId: null,
 };
 
-test("a valid input returns the typed value", () => {
+void test("a valid input returns the typed value", () => {
   const record = value(validate("sessionRecord", RECORD));
   const state: State = record.state;
   assert.equal(state, "active");
   assert.equal(record.realmId, "realm-1");
 });
 
-test("an invalid input returns a RealmError with code SCHEMA_INVALID", () => {
+void test("an invalid input returns a RealmError with code SCHEMA_INVALID", () => {
   const result = validate("sessionRecord", { ...RECORD, state: "running" });
   assert.equal(result.ok, false);
   const error = rejection(result);
@@ -48,7 +48,7 @@ test("an invalid input returns a RealmError with code SCHEMA_INVALID", () => {
   assert.equal(error.reason, ERROR_CATALOGUE.SCHEMA_INVALID.reason);
 });
 
-test("the detail names the offending key for a missing required field", () => {
+void test("the detail names the offending key for a missing required field", () => {
   const record = Object.fromEntries(
     Object.entries(RECORD).filter(([name]) => name !== "sessionId"),
   );
@@ -57,30 +57,30 @@ test("the detail names the offending key for a missing required field", () => {
   assert.match(error.message, /sessionId/);
 });
 
-test("the detail names the offending path for a nested value", () => {
+void test("the detail names the offending path for a nested value", () => {
   const error = rejection(validate("tools", { write: { path: "../escape", content: "x" } }));
   assert.match(error.detail, /\/write\/path/);
   assert.match(error.message, /\/write\/path/);
 });
 
-test("an unknown key is rejected with SCHEMA_INVALID and the key is named", () => {
+void test("an unknown key is rejected with SCHEMA_INVALID and the key is named", () => {
   const error = rejection(validate("sessionRecord", { ...RECORD, token: "t" }));
   assert.equal(error.code, "SCHEMA_INVALID");
   assert.match(error.detail, /token/);
 });
 
-test("a non-object input names the root", () => {
+void test("a non-object input names the root", () => {
   const error = rejection(validate("policy", "not-an-object"));
   assert.equal(error.code, "SCHEMA_INVALID");
   assert.match(error.detail, /\(root\)/);
 });
 
-test("an out-of-range value is rejected and the path is named", () => {
+void test("an out-of-range value is rejected and the path is named", () => {
   const error = rejection(validate("policy", { toolQueueMs: 0 }));
   assert.match(error.detail, /\/toolQueueMs/);
 });
 
-test("a function input returns SCHEMA_INVALID instead of throwing", () => {
+void test("a function input returns SCHEMA_INVALID instead of throwing", () => {
   const SECRET = "sk-live-SECRET-4242-fn";
   const error = rejection(validate("policy", (): string => SECRET));
   assert.equal(error.code, "SCHEMA_INVALID");
@@ -90,7 +90,7 @@ test("a function input returns SCHEMA_INVALID instead of throwing", () => {
   }
 });
 
-test("a symbol nested in the input returns SCHEMA_INVALID and never echoes its description", () => {
+void test("a symbol nested in the input returns SCHEMA_INVALID and never echoes its description", () => {
   const SECRET = "sk-live-SECRET-4242-sym";
   const error = rejection(validate("policy", { mode: Symbol(SECRET) }));
   assert.equal(error.code, "SCHEMA_INVALID");
@@ -100,7 +100,7 @@ test("a symbol nested in the input returns SCHEMA_INVALID and never echoes its d
   }
 });
 
-test("a secret-shaped offending value never appears in the error", () => {
+void test("a secret-shaped offending value never appears in the error", () => {
   const SECRET = "sk-live-SECRET-4242-zq";
   const results = [
     validate("policy", { mode: SECRET }),

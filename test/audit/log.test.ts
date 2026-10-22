@@ -34,7 +34,7 @@ function readLines(stateDir: string): string[] {
   return text.slice(0, -1).split("\n");
 }
 
-test("each append adds one JSON object per line at <stateDir>/audit/<sessionId>.jsonl (AUD-01)", () => {
+void test("each append adds one JSON object per line at <stateDir>/audit/<sessionId>.jsonl (AUD-01)", () => {
   withStateDir((stateDir) => {
     appendAudit(stateDir, { sessionId: SESSION, tool: "read", outcome: "ok", path: "a.txt", bytes: 5, sha256: HEX64 });
     appendAudit(stateDir, { sessionId: SESSION, tool: "list", outcome: "ok", path: ".", bytes: 0 });
@@ -49,7 +49,7 @@ test("each append adds one JSON object per line at <stateDir>/audit/<sessionId>.
   });
 });
 
-test("an entry carries at, sessionId, tool, outcome, path, bytes, and sha256 (AUD-01, D-42)", () => {
+void test("an entry carries at, sessionId, tool, outcome, path, bytes, and sha256 (AUD-01, D-42)", () => {
   withStateDir((stateDir) => {
     appendAudit(stateDir, { sessionId: SESSION, tool: "write", outcome: "ok", path: "a.txt", bytes: 7, sha256: HEX64 });
     const entry = JSON.parse(readLines(stateDir)[0] ?? "") as Record<string, unknown>;
@@ -64,7 +64,7 @@ test("an entry carries at, sessionId, tool, outcome, path, bytes, and sha256 (AU
   });
 });
 
-test("the audit file and its directory are created with modes 0600 and 0700 (AUD-01, D-42)", () => {
+void test("the audit file and its directory are created with modes 0600 and 0700 (AUD-01, D-42)", () => {
   withStateDir((stateDir) => {
     appendAudit(stateDir, { sessionId: SESSION, tool: "status", outcome: "ok" });
     assert.equal(statSync(auditFile(stateDir)).mode & 0o777, 0o600);
@@ -72,7 +72,7 @@ test("the audit file and its directory are created with modes 0600 and 0700 (AUD
   });
 });
 
-test("a pre-existing audit file with a wider mode is narrowed to 0600 on append (AUD-01)", () => {
+void test("a pre-existing audit file with a wider mode is narrowed to 0600 on append (AUD-01)", () => {
   withStateDir((stateDir) => {
     mkdirSync(join(stateDir, "audit"), { recursive: true });
     writeFileSync(auditFile(stateDir), "");
@@ -82,7 +82,7 @@ test("a pre-existing audit file with a wider mode is narrowed to 0600 on append 
   });
 });
 
-test("redaction runs before the append: a secret in path or argv never reaches the file (AUD-01, T-02-08)", () => {
+void test("redaction runs before the append: a secret in path or argv never reaches the file (AUD-01, T-02-08)", () => {
   withStateDir((stateDir) => {
     const SECRET_PATH = "ghp_SECRETPATHTOKEN0123456789";
     const SECRET_FLAG = "SECRETFLAGVALUE42";
@@ -100,7 +100,7 @@ test("redaction runs before the append: a secret in path or argv never reaches t
   });
 });
 
-test("a write entry never carries a content field, even when a caller passes one (D-42)", () => {
+void test("a write entry never carries a content field, even when a caller passes one (D-42)", () => {
   withStateDir((stateDir) => {
     const SENTINEL = "WRITE-CONTENT-SENTINEL-9f2";
     const input = {
@@ -120,7 +120,7 @@ test("a write entry never carries a content field, even when a caller passes one
   });
 });
 
-test("a shell exec entry records only script byte length and sha256, never the script (D-42)", () => {
+void test("a shell exec entry records only script byte length and sha256, never the script (D-42)", () => {
   withStateDir((stateDir) => {
     const SCRIPT = "echo SHELLSCRIPTSENTINEL | wc -c";
     appendAudit(stateDir, {
@@ -140,7 +140,7 @@ test("a shell exec entry records only script byte length and sha256, never the s
   });
 });
 
-test("a shell script's recorded length is its UTF-8 byte length, not its character count (D-42)", () => {
+void test("a shell script's recorded length is its UTF-8 byte length, not its character count (D-42)", () => {
   const summary = summarizeExec({ shell: true, script: "é" });
   assert.deepEqual(summary, {
     shell: true,
@@ -149,7 +149,7 @@ test("a shell script's recorded length is its UTF-8 byte length, not its charact
   });
 });
 
-test("an argv exec entry records argv after redaction (D-42)", () => {
+void test("an argv exec entry records argv after redaction (D-42)", () => {
   withStateDir((stateDir) => {
     appendAudit(stateDir, {
       sessionId: SESSION,
@@ -164,7 +164,7 @@ test("an argv exec entry records argv after redaction (D-42)", () => {
   });
 });
 
-test("an error outcome is recorded as its catalogue code (D-42)", () => {
+void test("an error outcome is recorded as its catalogue code (D-42)", () => {
   withStateDir((stateDir) => {
     appendAudit(stateDir, { sessionId: SESSION, tool: "exec", outcome: "SHELL_NOT_ALLOWED" });
     const entry = JSON.parse(readLines(stateDir)[0] ?? "") as Record<string, unknown>;
@@ -172,12 +172,14 @@ test("an error outcome is recorded as its catalogue code (D-42)", () => {
   });
 });
 
-test("a session id that could leave the audit directory is refused with SCHEMA_INVALID and nothing is written (AUD-01)", () => {
+void test("a session id that could leave the audit directory is refused with SCHEMA_INVALID and nothing is written (AUD-01)", () => {
   withStateDir((stateDir) => {
-    const escapeName = `realm-audit-escape-${process.pid}`;
+    const escapeName = `realm-audit-escape-${String(process.pid)}`;
     for (const sessionId of [`../${escapeName}`, "a/b", "", ".hidden", "x".repeat(129)]) {
       assert.throws(
-        () => appendAudit(stateDir, { sessionId, tool: "write", outcome: "ok" }),
+        () => {
+          appendAudit(stateDir, { sessionId, tool: "write", outcome: "ok" });
+        },
         (error: unknown) => error instanceof RealmError && error.code === "SCHEMA_INVALID",
         sessionId,
       );
@@ -202,29 +204,33 @@ function isAuditWriteFailed(error: unknown): boolean {
   return error instanceof RealmError && error.code === "AUDIT_WRITE_FAILED";
 }
 
-test("an audit path that is not a directory fails with AUDIT_WRITE_FAILED and writes nothing (AUD-01)", () => {
+void test("an audit path that is not a directory fails with AUDIT_WRITE_FAILED and writes nothing (AUD-01)", () => {
   withStateDir((stateDir) => {
     writeFileSync(join(stateDir, "audit"), "not a directory");
     assert.throws(
-      () => appendAudit(stateDir, { sessionId: SESSION, tool: "write", outcome: "ok" }),
+      () => {
+        appendAudit(stateDir, { sessionId: SESSION, tool: "write", outcome: "ok" });
+      },
       isAuditWriteFailed,
     );
     assert.equal(readFileSync(join(stateDir, "audit"), "utf8"), "not a directory");
   });
 });
 
-test("an audit directory that is a symlink out of stateDir is refused with AUDIT_WRITE_FAILED and nothing is written (AUD-01)", () => {
+void test("an audit directory that is a symlink out of stateDir is refused with AUDIT_WRITE_FAILED and nothing is written (AUD-01)", () => {
   withStateAndOutside((stateDir, outside) => {
     symlinkSync(outside, join(stateDir, "audit"), "dir");
     assert.throws(
-      () => appendAudit(stateDir, { sessionId: SESSION, tool: "write", outcome: "ok" }),
+      () => {
+        appendAudit(stateDir, { sessionId: SESSION, tool: "write", outcome: "ok" });
+      },
       isAuditWriteFailed,
     );
     assert.deepEqual(readdirSync(outside), []);
   });
 });
 
-test("an audit file that is a symlink out of stateDir is refused with AUDIT_WRITE_FAILED and the outside file is unchanged (AUD-01)", () => {
+void test("an audit file that is a symlink out of stateDir is refused with AUDIT_WRITE_FAILED and the outside file is unchanged (AUD-01)", () => {
   withStateAndOutside((stateDir, outside) => {
     mkdirSync(join(stateDir, "audit"), { recursive: true });
     const target = join(outside, "target.jsonl");
@@ -232,14 +238,16 @@ test("an audit file that is a symlink out of stateDir is refused with AUDIT_WRIT
     writeFileSync(target, original);
     symlinkSync(target, auditFile(stateDir));
     assert.throws(
-      () => appendAudit(stateDir, { sessionId: SESSION, tool: "write", outcome: "ok" }),
+      () => {
+        appendAudit(stateDir, { sessionId: SESSION, tool: "write", outcome: "ok" });
+      },
       isAuditWriteFailed,
     );
     assert.equal(readFileSync(target, "utf8"), original);
   });
 });
 
-test("a FIFO at the session's audit path makes the append fail with AUDIT_WRITE_FAILED within a bounded time (AUD-01)", () => {
+void test("a FIFO at the session's audit path makes the append fail with AUDIT_WRITE_FAILED within a bounded time (AUD-01)", () => {
   const stateDir = mkdtempSync(join(tmpdir(), "realm-audit-fifo-"));
   try {
     mkdirSync(join(stateDir, "audit"), { recursive: true });
@@ -277,7 +285,7 @@ test("a FIFO at the session's audit path makes the append fail with AUDIT_WRITE_
   }
 });
 
-test("TOOL-03: an entry carries its phase when the caller names one, and each phase is its own line (D-90, D-107)", () => {
+void test("TOOL-03: an entry carries its phase when the caller names one, and each phase is its own line (D-90, D-107)", () => {
   withStateDir((stateDir) => {
     appendAudit(stateDir, { sessionId: SESSION, tool: "write", outcome: "ok", phase: "admission", path: "a.txt" });
     appendAudit(stateDir, { sessionId: SESSION, tool: "write", outcome: "ok", phase: "result", path: "a.txt", bytes: 7, sha256: HEX64 });
@@ -286,12 +294,12 @@ test("TOOL-03: an entry carries its phase when the caller names one, and each ph
     assert.equal(lines.length, 2);
     assert.equal(lines[0]?.["phase"], "admission");
     assert.equal(lines[1]?.["phase"], "result");
-    assert.equal(lines[0]?.["outcome"], "ok");
-    assert.equal(lines[1]?.["outcome"], "ok");
+    assert.equal(lines[0]["outcome"], "ok");
+    assert.equal(lines[1]["outcome"], "ok");
   });
 });
 
-test("TOOL-03: an entry with no phase has no phase key, so the pre-stage shape is unchanged (D-107)", () => {
+void test("TOOL-03: an entry with no phase has no phase key, so the pre-stage shape is unchanged (D-107)", () => {
   withStateDir((stateDir) => {
     appendAudit(stateDir, { sessionId: SESSION, tool: "list", outcome: "ok", path: "." });
     const entry = JSON.parse(readLines(stateDir)[0] ?? "") as Record<string, unknown>;

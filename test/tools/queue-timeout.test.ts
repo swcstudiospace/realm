@@ -18,7 +18,7 @@ import {
 // 30-second TOOL_CALL_TIMEOUT_MS outer bound, because waiting that bound out is not a unit
 // behavior.
 
-test("TOOL-04: a timed-out runner yields TOOL_TIMEOUT and the runner received its kill deadline (D-91)", async (t) => {
+void test("TOOL-04: a timed-out runner yields TOOL_TIMEOUT and the runner received its kill deadline (D-91)", async (t) => {
   const h = makeHarness(t);
   h.setRunner(() => Promise.reject(new OpenShellRunnerError("timed-out")));
   const outcome = await h.dispatcher.call({ exec: { argv: [...WORKLOAD] } });
@@ -35,7 +35,7 @@ test("TOOL-04: a timed-out runner yields TOOL_TIMEOUT and the runner received it
   assert.equal(h.auditLines()[1]?.["outcome"], "TOOL_TIMEOUT");
 });
 
-test("TOOL-04: a call in connecting returns REALM_NOT_ACTIVE after the default toolQueueMs of 2000 (D-91)", async (t) => {
+void test("TOOL-04: a call in connecting returns REALM_NOT_ACTIVE after the default toolQueueMs of 2000 (D-91)", async (t) => {
   assert.equal(ADVISORY.toolQueueMs, 2000, "the queue bound defaults to 2000");
   const h = makeHarness(t, { state: "connecting" });
   const started = Date.now();
@@ -47,7 +47,7 @@ test("TOOL-04: a call in connecting returns REALM_NOT_ACTIVE after the default t
   assert.equal(h.listeners(), 0, "expiry removed the queue listener");
 });
 
-test("TOOL-04: a queued call proceeds at once when active is reached during the wait (D-91)", async (t) => {
+void test("TOOL-04: a queued call proceeds at once when active is reached during the wait (D-91)", async (t) => {
   const h = makeHarness(t, { state: "connecting", policy: { ...ADVISORY, toolQueueMs: 5000 } });
   const pending = h.dispatcher.call({ exec: { argv: [...WORKLOAD] } });
   await nextTurn();
@@ -59,7 +59,7 @@ test("TOOL-04: a queued call proceeds at once when active is reached during the 
   assert.deepEqual(h.phases(), ["admission", "result"]);
 });
 
-test("TOOL-04: the timer is cleared on settle and degraded never waits (D-91)", async (t) => {
+void test("TOOL-04: the timer is cleared on settle and degraded never waits (D-91)", async (t) => {
   const quick = makeHarness(t, { state: "connecting", policy: { ...ADVISORY, toolQueueMs: 60 } });
   const expired = await quick.dispatcher.call({ exec: { argv: [...WORKLOAD] } });
   assert.deepEqual(expired, refusal("exec", "REALM_NOT_ACTIVE", true));

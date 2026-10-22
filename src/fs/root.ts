@@ -70,7 +70,7 @@ export function verifyPinnedAt(pinned: PinnedRoot, requested: string): PinnedRoo
     if (stats.dev !== pinned.dev || stats.ino !== pinned.ino) {
       throw makeRealmError("POLICY_DENIED");
     }
-    if (readlinkOrDeny(`${PROC_FD_DIR}/${fd}`) !== pinned.realPath) {
+    if (readlinkOrDeny(`${PROC_FD_DIR}/${String(fd)}`) !== pinned.realPath) {
       throw makeRealmError("POLICY_DENIED");
     }
   } finally {

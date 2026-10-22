@@ -94,7 +94,7 @@ async function createSession(f: Fixture): Promise<{ readonly containerId: string
   return f.exec.create({ idempotencyKey: SESSION, workspaceRoot: f.workspaceRoot });
 }
 
-test("RT-03: the workload starts only through the OpenShell create argv, with the workload after the separator", async (t) => {
+void test("RT-03: the workload starts only through the OpenShell create argv, with the workload after the separator", async (t) => {
   const f = await fixture(t);
   const { containerId } = await createSession(f);
   await f.exec.start(containerId);
@@ -109,7 +109,7 @@ test("RT-03: the workload starts only through the OpenShell create argv, with th
   assert.deepEqual(argv.slice(argv.indexOf("--") + 1), WORKLOAD);
 });
 
-test("RT-03: the libpod client exposes no method that starts or joins a process, and no request reaches one", async (t) => {
+void test("RT-03: the libpod client exposes no method that starts or joins a process, and no request reaches one", async (t) => {
   const f = await fixture(t);
   const methods = Object.getOwnPropertyNames(LibpodClient.prototype)
     .filter((name) => name !== "constructor")
@@ -126,12 +126,12 @@ test("RT-03: the libpod client exposes no method that starts or joins a process,
   await f.exec.destroy(containerId);
   for (const request of f.libpod.requests()) {
     assert.notEqual(request.route, null, `request ${request.target} must match a known route`);
-    assert.ok(LIBPOD_ROUTE_NAMES.includes(String(request.route)), `route ${request.route} must be one of the five`);
+    assert.ok(LIBPOD_ROUTE_NAMES.includes(String(request.route)), `route ${String(request.route)} must be one of the five`);
     assert.equal(/\/start|exec|attach/.test(request.target), false, `request ${request.target} starts nothing`);
   }
 });
 
-test("RT-03, RT-04: AgentOS is started only through the supervisor, and the driver is reachable from no other session path", async (t) => {
+void test("RT-03, RT-04: AgentOS is started only through the supervisor, and the driver is reachable from no other session path", async (t) => {
   const f = await fixture(t);
   const { containerId } = await createSession(f);
   await f.exec.start(containerId);
@@ -167,16 +167,16 @@ function reachesWithout(root: object, target: object, barrier?: object): boolean
   return false;
 }
 
-test("TOOL-03: every exec routes through the shared dispatcher and reaches the runner with the pinned exec argv (D-99)", async (t) => {
+void test("TOOL-03: every exec routes through the shared dispatcher and reaches the runner with the pinned exec argv (D-99)", async (t) => {
   const h = makeHarness(t);
   const outcome = await h.dispatcher.call({ exec: { argv: [...DISPATCH_WORKLOAD] } });
   assert.equal(outcome.outcome, "done");
   assert.equal(h.runs.length, 1, "the dispatcher ran the workload once, through the runner");
   assert.deepEqual(h.runs[0]?.argv, [...buildExecArgv(DISPATCH_SESSION, DISPATCH_WORKLOAD)]);
-  assert.equal(h.runs[0]?.options.captureOutput, true);
+  assert.equal(h.runs[0].options.captureOutput, true);
 });
 
-test("TOOL-03: every file write routes through the dispatcher stages, landing on disk with admission and result audit lines (D-99)", async (t) => {
+void test("TOOL-03: every file write routes through the dispatcher stages, landing on disk with admission and result audit lines (D-99)", async (t) => {
   const h = makeHarness(t);
   const outcome = await h.dispatcher.call({ write: { path: "doc.txt", content: "routed" } });
   assert.equal(outcome.outcome, "done");
@@ -187,7 +187,7 @@ test("TOOL-03: every file write routes through the dispatcher stages, landing on
   assert.equal("content" in result, false, "the audit line never carries content");
 });
 
-test("TOOL-03: the session service exposes no tool-call surface, so every tool call routes through the dispatcher (D-99)", () => {
+void test("TOOL-03: the session service exposes no tool-call surface, so every tool call routes through the dispatcher (D-99)", () => {
   const methods = Object.getOwnPropertyNames(SessionExecution.prototype).filter((name) => name !== "constructor");
   for (const name of methods) {
     assert.equal(/call|tool|dispatch|exec/i.test(name), false, `SessionExecution.${name} must not be a tool entry point`);

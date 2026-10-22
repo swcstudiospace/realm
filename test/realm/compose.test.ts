@@ -68,7 +68,7 @@ function requiredOptions(fixture: Fixture): CreateRealmHandleOptions {
   return { ...advisoryOptions(fixture), policyPath };
 }
 
-test("OMP-01: createRealmHandle starts unbound with reason no workspace and answers status through the shared mapping (P5-D7)", async (t) => {
+void test("OMP-01: createRealmHandle starts unbound with reason no workspace and answers status through the shared mapping (P5-D7)", async (t) => {
   const fixture = makeDirs(t);
   const options = advisoryOptions(fixture);
   const handle = createRealmHandle(options);
@@ -79,7 +79,7 @@ test("OMP-01: createRealmHandle starts unbound with reason no workspace and answ
 
   const outcome = await handle.dispatcher.call({ status: {} });
   assert.equal(outcome.outcome, "done");
-  if (outcome.outcome !== "done" || outcome.tool !== "status") {
+  if (outcome.tool !== "status") {
     assert.fail("expected a done status");
   }
   assert.equal(outcome.value.snapshot.state, "unbound");
@@ -93,7 +93,7 @@ test("OMP-01: createRealmHandle starts unbound with reason no workspace and answ
   assert.deepEqual(bridge.calls(), [], "no bridge call was made");
 });
 
-test("OMP-01: the controller and the dispatcher hold the same LockTable instance (P5-D15)", (t) => {
+void test("OMP-01: the controller and the dispatcher hold the same LockTable instance (P5-D15)", (t) => {
   const fixture = makeDirs(t);
   const handle = createRealmHandle(advisoryOptions(fixture));
 
@@ -108,7 +108,7 @@ test("OMP-01: the controller and the dispatcher hold the same LockTable instance
   assert.strictEqual(dispatcherLocks, controllerLocks, "one shared table, not two equal ones");
 });
 
-test("OMP-05: a write while non-active is refused in required mode and warns in advisory mode (P5-D6)", async (t) => {
+void test("OMP-05: a write while non-active is refused in required mode and warns in advisory mode (P5-D6)", async (t) => {
   const requiredFixture = makeDirs(t);
   const required = createRealmHandle(requiredOptions(requiredFixture));
   assert.equal(required.controller.snapshot().state, "unbound");
@@ -125,14 +125,14 @@ test("OMP-05: a write while non-active is refused in required mode and warns in 
   const advisory = createRealmHandle(advisoryOptions(advisoryFixture));
   const warned = await advisory.dispatcher.call({ write: { path: "doc.txt", content: "advisory" } });
   assert.equal(warned.outcome, "done");
-  if (warned.outcome !== "done" || warned.tool !== "write") {
+  if (warned.tool !== "write") {
     assert.fail("expected a done write");
   }
   assert.equal(typeof warned.value.warning, "string");
   assert.equal(readFileSync(join(advisoryFixture.ws, "doc.txt"), "utf8"), "advisory");
 });
 
-test("OMP-01: close() stops the session without starting a process and is safe to call twice (P5-D7)", async (t) => {
+void test("OMP-01: close() stops the session without starting a process and is safe to call twice (P5-D7)", async (t) => {
   const fixture = makeDirs(t);
   const options = advisoryOptions(fixture);
   const handle = createRealmHandle(options);
@@ -157,7 +157,7 @@ function mentions(text: string, identifier: string): boolean {
   return new RegExp(`\\b${identifier}\\b`).test(text);
 }
 
-test("OMP-01: compose.ts reaches tools only through ToolDispatcher and names no guarded symbol or binary (P5-D7)", () => {
+void test("OMP-01: compose.ts reaches tools only through ToolDispatcher and names no guarded symbol or binary (P5-D7)", () => {
   const source = readFileSync(join(ROOT, "src", "realm", "compose.ts"), "utf8");
   assert.ok(mentions(source, "ToolDispatcher"), "the handle builds the dispatcher");
   assert.ok(mentions(source, "LifecycleController"), "the handle builds the controller");
@@ -167,7 +167,7 @@ test("OMP-01: compose.ts reaches tools only through ToolDispatcher and names no 
   assert.ok(!mentions(source, "OPENSHELL_BINARY"), "the binary literal must not appear in the composition root");
 });
 
-test("CR-01: createRealmHandle refuses a workspace outside every policy root with POLICY_DENIED before any dispatcher exists (D-22)", (t) => {
+void test("CR-01: createRealmHandle refuses a workspace outside every policy root with POLICY_DENIED before any dispatcher exists (D-22)", (t) => {
   const fixture = makeDirs(t);
   const outside = join(fixture.base, "outside");
   mkdirSync(outside);
@@ -184,7 +184,7 @@ test("CR-01: createRealmHandle refuses a workspace outside every policy root wit
   }
 });
 
-test("MED-04: a pre-loaded policy is the policy the handle enforces, and policyPath is not read again (P5-D7)", (t) => {
+void test("MED-04: a pre-loaded policy is the policy the handle enforces, and policyPath is not read again (P5-D7)", (t) => {
   const fixture = makeDirs(t);
   const policy = loadPolicyFile(writePolicy(fixture, "loaded-policy.json", { workspaceRoots: [fixture.ws] }));
   // An unparseable file at policyPath would throw if the factory read it again.

@@ -519,8 +519,8 @@ function removeSocketFile(socketPath: string): RealmError | undefined {
 // status and doctor keep working while up reports ANDA_UNREACHABLE through the
 // controller instead of refusing to construct the handle.
 class UnreachableBridge implements BridgePort {
-  async connect(): Promise<void> {
-    throw makeRealmError("ANDA_UNREACHABLE");
+  connect(): Promise<void> {
+    return Promise.reject(makeRealmError("ANDA_UNREACHABLE"));
   }
 
   snapshot(): null {

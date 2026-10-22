@@ -94,7 +94,7 @@ class ObservedLocks extends LockTable {
 
 interface CountingBus {
   readonly events: EventBus;
-  listeners(): number;
+  readonly listeners: () => number;
 }
 
 // An event bus that counts live subscriptions, so a test can prove a queue wait removed its listener.

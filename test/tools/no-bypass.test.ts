@@ -98,16 +98,16 @@ function toolsFileFunctionViolations(sources: ReadonlyMap<string, string>): stri
   return violations;
 }
 
-test("TOOL-03: the D-99 symbols are referenced only from src/tools/, the two shared runtime modules, and their own modules (D-99)", () => {
+void test("TOOL-03: the D-99 symbols are referenced only from src/tools/, the two shared runtime modules, and their own modules (D-99)", () => {
   assert.deepEqual(guardedSymbolViolations(readSources()), []);
 });
 
-test("TOOL-03: spawn( appears in src/ only in src/runtime/session-execution.ts (D-99)", () => {
+void test("TOOL-03: spawn( appears in src/ only in src/runtime/session-execution.ts (D-99)", () => {
   const callers = spawnCallers(readSources());
   assert.deepEqual(callers.sort(), [...SPAWN_MODULES].sort(), "spawn( is allowed only in the OpenShell runner and the documented CLI daemon spawn (P6-D1)");
 });
 
-test("TOOL-03: OPENSHELL_BINARY is referenced only from its allowlist, and the doctor probe is allowlisted for that literal alone (D-99, D-104, C-5)", () => {
+void test("TOOL-03: OPENSHELL_BINARY is referenced only from its allowlist, and the doctor probe is allowlisted for that literal alone (D-99, D-104, C-5)", () => {
   const sources = readSources();
   assert.deepEqual(openShellBinaryViolations(sources), []);
   assert.equal(mentions(sources.get("doctor/checks.ts") ?? "", "OPENSHELL_BINARY"), true, "the doctor probe is the exception in use");
@@ -118,13 +118,13 @@ test("TOOL-03: OPENSHELL_BINARY is referenced only from its allowlist, and the d
   );
 });
 
-test("TOOL-03: under src/tools/ only workspace.ts imports lockedWrite, readFileCapped, or listDir (D-88)", () => {
+void test("TOOL-03: under src/tools/ only workspace.ts imports lockedWrite, readFileCapped, or listDir (D-88)", () => {
   const sources = readSources();
   assert.deepEqual(toolsFileFunctionViolations(sources), []);
   assert.equal(mentions(sources.get("tools/workspace.ts") ?? "", "lockedWrite"), true, "workspace.ts is the file-function importer");
 });
 
-test("TOOL-03: the guard reports a module outside the allowlist that references a guarded symbol, spawns a process, or names the binary", () => {
+void test("TOOL-03: the guard reports a module outside the allowlist that references a guarded symbol, spawns a process, or names the binary", () => {
   const synthetic = new Map<string, string>([
     ["audit/bypass.ts", 'import { listDir } from "../fs/list.js";\nexport const x = listDir;'],
     ["lifecycle/spawner.ts", 'import { spawn } from "node:child_process";\nspawn("sh", []);'],

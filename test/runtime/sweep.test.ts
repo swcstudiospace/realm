@@ -3,12 +3,10 @@ import assert from "node:assert/strict";
 import { makeRealmError, RealmError } from "../../src/core/errors.js";
 import { removeAllRealmContainers, type SweepClient } from "../../src/runtime/sweep.js";
 
-test("QUAL-01: a removal that fails and leaves its container listed refuses with REALM_STOPPING and the removal's code", async () => {
+void test("QUAL-01: a removal that fails and leaves its container listed refuses with REALM_STOPPING and the removal's code", async () => {
   const client: SweepClient = {
-    listContainersByLabel: async () => [{ id: "realm-stuck" }],
-    removeContainer: async () => {
-      throw makeRealmError("PODMAN_MACHINE_DOWN");
-    },
+    listContainersByLabel: () => Promise.resolve([{ id: "realm-stuck" }]),
+    removeContainer: () => Promise.reject(makeRealmError("PODMAN_MACHINE_DOWN")),
   };
   await assert.rejects(
     removeAllRealmContainers(client),

@@ -68,13 +68,14 @@ function enableMockedTimers(t: TestContext): void {
   });
 }
 
-test("RT-08: a hung container list ends with PODMAN_MACHINE_DOWN within SWEEP_CALL_TIMEOUT_MS and removes no record", async (t) => {
+void test("RT-08: a hung container list ends with PODMAN_MACHINE_DOWN within SWEEP_CALL_TIMEOUT_MS and removes no record", async (t) => {
   enableMockedTimers(t);
   const removals: string[] = [];
   const hungClient: SweepClient = {
     listContainersByLabel: () => neverSettles(),
-    removeContainer: async (id: string) => {
+    removeContainer: (id: string) => {
       removals.push(id);
+      return Promise.resolve();
     },
   };
   const records = recordStore(["session-a", "session-b"]);
@@ -93,7 +94,7 @@ test("RT-08: a hung container list ends with PODMAN_MACHINE_DOWN within SWEEP_CA
   assert.deepEqual(records.live, ["session-a", "session-b"]);
 });
 
-test("RT-08: a hung second listing after a removal ends with PODMAN_MACHINE_DOWN within the bound, and removes no record", async (t) => {
+void test("RT-08: a hung second listing after a removal ends with PODMAN_MACHINE_DOWN within the bound, and removes no record", async (t) => {
   enableMockedTimers(t);
   const removals: string[] = [];
   let listings = 0;
@@ -102,8 +103,9 @@ test("RT-08: a hung second listing after a removal ends with PODMAN_MACHINE_DOWN
       listings += 1;
       return listings === 1 ? Promise.resolve([{ id: "realm-1" }]) : neverSettles();
     },
-    removeContainer: async (id: string) => {
+    removeContainer: (id: string) => {
       removals.push(id);
+      return Promise.resolve();
     },
   };
   const records = recordStore(["session-a"]);
@@ -122,7 +124,7 @@ test("RT-08: a hung second listing after a removal ends with PODMAN_MACHINE_DOWN
   assert.deepEqual(records.live, ["session-a"]);
 });
 
-test("RT-08: a hung removal is bounded, and the proving listing that still finds the container gives REALM_STOPPING with no record deleted", async (t) => {
+void test("RT-08: a hung removal is bounded, and the proving listing that still finds the container gives REALM_STOPPING with no record deleted", async (t) => {
   enableMockedTimers(t);
   const client: SweepClient = {
     listContainersByLabel: () => Promise.resolve([{ id: "realm-stuck" }]),
@@ -143,7 +145,7 @@ test("RT-08: a hung removal is bounded, and the proving listing that still finds
   assert.deepEqual(records.live, ["session-a"]);
 });
 
-test("RT-08: a sweep that never finishes makes reapStartup reject with PODMAN_MACHINE_DOWN within REAP_SWEEP_TIMEOUT_MS and deletes no record", async (t) => {
+void test("RT-08: a sweep that never finishes makes reapStartup reject with PODMAN_MACHINE_DOWN within REAP_SWEEP_TIMEOUT_MS and deletes no record", async (t) => {
   enableMockedTimers(t);
   const records = recordStore(["session-a", "session-b"]);
 
@@ -160,7 +162,7 @@ test("RT-08: a sweep that never finishes makes reapStartup reject with PODMAN_MA
   assert.deepEqual(records.live, ["session-a", "session-b"]);
 });
 
-test("RT-08: a hung container list on the real libpod client ends with PODMAN_MACHINE_DOWN and removes no record", async (t) => {
+void test("RT-08: a hung container list on the real libpod client ends with PODMAN_MACHINE_DOWN and removes no record", async (t) => {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "realm-sweep-timeout-")));
   t.after(() => {
     rmSync(dir, { recursive: true, force: true });
@@ -186,7 +188,7 @@ test("RT-08: a hung container list on the real libpod client ends with PODMAN_MA
   assert.notEqual(containers.get("realm-1"), undefined, "a timed-out sweep removes no container");
 });
 
-test("RT-08: a successful sweep removes every container before any record is deleted", async (t) => {
+void test("RT-08: a successful sweep removes every container before any record is deleted", async (t) => {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "realm-sweep-order-")));
   t.after(() => {
     rmSync(dir, { recursive: true, force: true });

@@ -112,7 +112,7 @@ function dispatcherBypassViolations(sources: ReadonlyMap<string, string>): strin
     }
     for (const match of text.matchAll(/dispatcher\s*\.\s*([A-Za-z_$][\w$]*)/g)) {
       if (match[1] !== "call") {
-        violations.push(`${file} reaches dispatcher.${match[1]} instead of call`);
+        violations.push(`${file} reaches dispatcher.${String(match[1])} instead of call`);
       }
     }
   }
@@ -145,15 +145,15 @@ function spawnCallers(sources: ReadonlyMap<string, string>): string[] {
   return [...sources.keys()].filter((file) => /\bspawn\(/.test(sources.get(file) ?? ""));
 }
 
-test("TOOL-05: no surface file under src/mcp/, src/acp/, or src/omp/ references a D-99 guarded symbol (P5-D12)", () => {
+void test("TOOL-05: no surface file under src/mcp/, src/acp/, or src/omp/ references a D-99 guarded symbol (P5-D12)", () => {
   assert.deepEqual(surfaceGuardedViolations(readSources()), []);
 });
 
-test("TOOL-05: no surface file references a dispatcher-internal symbol outside the call entry point (P5-D12)", () => {
+void test("TOOL-05: no surface file references a dispatcher-internal symbol outside the call entry point (P5-D12)", () => {
   assert.deepEqual(surfaceInternalViolations(readSources()), []);
 });
 
-test("TOOL-05: the Omp surface reaches the daemon only through DaemonClient, never another dispatcher member (P5-D11, P5-D12)", () => {
+void test("TOOL-05: the Omp surface reaches the daemon only through DaemonClient, never another dispatcher member (P5-D11, P5-D12)", () => {
   const sources = readSources();
   assert.deepEqual(dispatcherBypassViolations(sources), []);
   assert.deepEqual(ompDaemonImportViolations(sources), []);
@@ -161,11 +161,11 @@ test("TOOL-05: the Omp surface reaches the daemon only through DaemonClient, nev
   assert.ok(mentions(sources.get("omp/plugin.ts") ?? "", "DaemonClient"), "omp/plugin.ts holds the daemon only as a DaemonClient (P5-D11)");
 });
 
-test("TOOL-05: spawn( appears in src/ only in src/runtime/session-execution.ts (P5-D12)", () => {
+void test("TOOL-05: spawn( appears in src/ only in src/runtime/session-execution.ts (P5-D12)", () => {
   assert.deepEqual(spawnCallers(readSources()).sort(), [...SPAWN_MODULES].sort(), "spawn( in src/ is the OpenShell runner and the documented CLI daemon spawn (P6-D1)");
 });
 
-test("TOOL-05: the guard reports a planted surface reference to tool internals, a dispatcher bypass, or a new spawn site", () => {
+void test("TOOL-05: the guard reports a planted surface reference to tool internals, a dispatcher bypass, or a new spawn site", () => {
   const synthetic = new Map<string, string>([
     ["mcp/server.ts", 'import { lockedWrite } from "../fs/write.js";\nexport const x = lockedWrite;'],
     ["acp/agent.ts", 'import { appendAudit } from "../audit/log.js";\nexport const y = appendAudit;'],

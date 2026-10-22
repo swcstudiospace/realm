@@ -56,7 +56,7 @@ async function assertCode(work: Promise<unknown>, code: ErrorCode): Promise<void
   await assert.rejects(work, (error: unknown) => error instanceof RealmError && error.code === code);
 }
 
-test("RT-03: the create argv is exactly the pinned 0.1.2 verb sequence with the workload after --", () => {
+void test("RT-03: the create argv is exactly the pinned 0.1.2 verb sequence with the workload after --", () => {
   assert.deepEqual(buildCreateArgv(REQUEST), [
     "openshell",
     "sandbox",
@@ -81,7 +81,7 @@ test("RT-03: the create argv is exactly the pinned 0.1.2 verb sequence with the 
   ]);
 });
 
-test("AUD-02: the create argv carries no --env and no --provider element and no prefixed form of either", () => {
+void test("AUD-02: the create argv carries no --env and no --provider element and no prefixed form of either", () => {
   const argv = buildCreateArgv(REQUEST);
   // The workload deliberately contains --env and --provider after the separator; the
   // builder must add none of its own. Only the part before -- is checked.
@@ -94,14 +94,14 @@ test("AUD-02: the create argv carries no --env and no --provider element and no 
   );
 });
 
-test("RT-03: the workload follows -- as the trailing positional arguments and no workload element precedes it", () => {
+void test("RT-03: the workload follows -- as the trailing positional arguments and no workload element precedes it", () => {
   const argv = buildCreateArgv(REQUEST);
   const separator = argv.indexOf("--");
   assert.equal(separator, argv.length - WORKLOAD.length - 1);
   assert.deepEqual(argv.slice(separator + 1), WORKLOAD);
 });
 
-test("RT-03: every flag before the separator belongs to the pinned 0.1.2 flag set", () => {
+void test("RT-03: every flag before the separator belongs to the pinned 0.1.2 flag set", () => {
   const argv = buildCreateArgv(REQUEST);
   const beforeSeparator = argv.slice(0, argv.indexOf("--"));
   assert.deepEqual(beforeSeparator.slice(0, 3), ["openshell", "sandbox", "create"]);
@@ -111,7 +111,7 @@ test("RT-03: every flag before the separator belongs to the pinned 0.1.2 flag se
   }
 });
 
-test("RT-03: a session id outside the safe set, a relative policy path, an empty workload, or a bad memory value is refused with SCHEMA_INVALID", async (t) => {
+void test("RT-03: a session id outside the safe set, a relative policy path, an empty workload, or a bad memory value is refused with SCHEMA_INVALID", async (t) => {
   const bad: readonly SandboxCreateRequest[] = [
     { ...REQUEST, sessionId: "../escape" },
     { ...REQUEST, sessionId: "" },
@@ -134,7 +134,7 @@ test("RT-03: a session id outside the safe set, a relative policy path, an empty
   }
 });
 
-test("CORE-06: a repeated create for the same session runs the OpenShell runner once and returns the same container", async (t) => {
+void test("CORE-06: a repeated create for the same session runs the OpenShell runner once and returns the same container", async (t) => {
   const store = new FakeContainerStore();
   const client = await startLibpod(t, store);
   const openshell = new FakeOpenShell(store);
@@ -148,7 +148,7 @@ test("CORE-06: a repeated create for the same session runs the OpenShell runner 
   assert.equal(store.list().length, 1);
 });
 
-test("RT-03: the runner receives the exact pinned argv on the first create", async (t) => {
+void test("RT-03: the runner receives the exact pinned argv on the first create", async (t) => {
   const store = new FakeContainerStore();
   const client = await startLibpod(t, store);
   const openshell = new FakeOpenShell(store);
@@ -158,7 +158,7 @@ test("RT-03: the runner receives the exact pinned argv on the first create", asy
   assert.deepEqual(openshell.calls()[0]?.argv, buildCreateArgv(REQUEST));
 });
 
-test("RT-03: a runner that exits non-zero gives OPENSHELL_START_FAILED after a single run and no container", async (t) => {
+void test("RT-03: a runner that exits non-zero gives OPENSHELL_START_FAILED after a single run and no container", async (t) => {
   const store = new FakeContainerStore();
   const client = await startLibpod(t, store);
   const openshell = new FakeOpenShell(store);
@@ -169,7 +169,7 @@ test("RT-03: a runner that exits non-zero gives OPENSHELL_START_FAILED after a s
   assert.equal(store.list().length, 0);
 });
 
-test("RT-03: a runner that cannot be started gives OPENSHELL_START_FAILED with no raw error text", async (t) => {
+void test("RT-03: a runner that cannot be started gives OPENSHELL_START_FAILED with no raw error text", async (t) => {
   const store = new FakeContainerStore();
   const client = await startLibpod(t, store);
   const openshell = new FakeOpenShell(store);
@@ -182,7 +182,7 @@ test("RT-03: a runner that cannot be started gives OPENSHELL_START_FAILED with n
   );
 });
 
-test("RT-03: a runner that reports success but produces no labelled container fails at the caller deadline", async (t) => {
+void test("RT-03: a runner that reports success but produces no labelled container fails at the caller deadline", async (t) => {
   const store = new FakeContainerStore();
   const client = await startLibpod(t, store);
   const openshell = new FakeOpenShell(store);
@@ -191,11 +191,11 @@ test("RT-03: a runner that reports success but produces no labelled container fa
 
   await assertCode(runOpenShellCreate({ containers: client, runner: openshell.runner }, REQUEST, 600), "OPENSHELL_START_FAILED");
   const elapsed = Date.now() - started;
-  assert.ok(elapsed >= 550, `the poll runs until the deadline (elapsed ${elapsed} ms)`);
-  assert.ok(elapsed < 5000, `the poll stops at the deadline (elapsed ${elapsed} ms)`);
+  assert.ok(elapsed >= 550, `the poll runs until the deadline (elapsed ${String(elapsed)} ms)`);
+  assert.ok(elapsed < 5000, `the poll stops at the deadline (elapsed ${String(elapsed)} ms)`);
 });
 
-test("RT-03: a hung runner is bounded by the caller deadline and gives OPENSHELL_START_FAILED", async (t) => {
+void test("RT-03: a hung runner is bounded by the caller deadline and gives OPENSHELL_START_FAILED", async (t) => {
   const store = new FakeContainerStore();
   const client = await startLibpod(t, store);
   const openshell = new FakeOpenShell(store);
@@ -206,7 +206,7 @@ test("RT-03: a hung runner is bounded by the caller deadline and gives OPENSHELL
   assert.ok(handed !== undefined && handed > 0 && handed <= 300, `the runner is told its bound (${String(handed)} ms)`);
 });
 
-test("CORE-06: two labelled containers for one session fail closed with OPENSHELL_LABEL_AMBIGUOUS and no run", async (t) => {
+void test("CORE-06: two labelled containers for one session fail closed with OPENSHELL_LABEL_AMBIGUOUS and no run", async (t) => {
   const store = new FakeContainerStore();
   store.add({ id: "fake-a", labels: { [LABEL_KEY]: "true", [SESSION_KEY]: SESSION }, running: true });
   store.add({ id: "fake-b", labels: { [LABEL_KEY]: "true", [SESSION_KEY]: SESSION }, running: true });
@@ -228,7 +228,7 @@ const FORBIDDEN_FLAGS: readonly string[] = [
   "--auto-providers",
 ];
 
-test("RT-03, AUD-02: the exec argv is exactly the pinned D-92 form with the workload after --, and it is frozen", () => {
+void test("RT-03, AUD-02: the exec argv is exactly the pinned D-92 form with the workload after --, and it is frozen", () => {
   const argv = buildExecArgv(SESSION, WORKLOAD);
   assert.deepEqual(argv, [
     "openshell",
@@ -246,13 +246,13 @@ test("RT-03, AUD-02: the exec argv is exactly the pinned D-92 form with the work
   assert.equal(Object.isFrozen(argv), true);
 });
 
-test("RT-03: the exec argv names the same sandbox that the create argv names", () => {
+void test("RT-03: the exec argv names the same sandbox that the create argv names", () => {
   const create = buildCreateArgv(REQUEST);
   const exec = buildExecArgv(SESSION, WORKLOAD);
   assert.equal(exec[exec.indexOf("--name") + 1], create[create.indexOf("--name") + 1]);
 });
 
-test("RT-05: neither builder emits any D-80 forbidden flag, as an element or as a prefixed form, before the separator", () => {
+void test("RT-05: neither builder emits any D-80 forbidden flag, as an element or as a prefixed form, before the separator", () => {
   for (const argv of [buildCreateArgv(REQUEST), buildExecArgv(SESSION, WORKLOAD)]) {
     const head = argv.slice(0, argv.indexOf("--"));
     for (const flag of FORBIDDEN_FLAGS) {
@@ -266,7 +266,7 @@ test("RT-05: neither builder emits any D-80 forbidden flag, as an element or as 
   }
 });
 
-test("RT-05: a session id outside the safe set, an empty argv, or an empty element is refused by buildExecArgv with SCHEMA_INVALID", () => {
+void test("RT-05: a session id outside the safe set, an empty argv, or an empty element is refused by buildExecArgv with SCHEMA_INVALID", () => {
   const refused: readonly (readonly [string, readonly string[]])[] = [
     ["../escape", WORKLOAD],
     ["", WORKLOAD],

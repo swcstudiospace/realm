@@ -54,16 +54,16 @@ function scriptedLibpod(answer: (poll: number) => LookupAnswer): {
   let calls = 0;
   return {
     containers: {
-      listContainersByLabel: async () => {
+      listContainersByLabel: () => {
         calls += 1;
         if (calls === 1) {
-          return [];
+          return Promise.resolve([]);
         }
         const found = answer(calls - 1);
         if (found instanceof Error) {
-          throw found;
+          return Promise.reject(found);
         }
-        return found.map((entry) => ({ id: entry.id }));
+        return Promise.resolve(found.map((entry) => ({ id: entry.id })));
       },
     },
     calls: () => calls,
@@ -79,9 +79,9 @@ interface Run {
 // Starts one create and records how it settles. The runner succeeds at once and is counted.
 function startCreate(containers: Pick<LibpodClient, "listContainersByLabel">, deadlineMs: number): Run {
   let runnerCalls = 0;
-  const runner: OpenShellRunner = async () => {
+  const runner: OpenShellRunner = () => {
     runnerCalls += 1;
-    return { exitCode: 0 };
+    return Promise.resolve({ exitCode: 0 });
   };
   const run: Run = { runnerCalls: () => runnerCalls };
   runOpenShellCreate({ containers, runner }, REQUEST, deadlineMs).then(
@@ -137,7 +137,7 @@ function assertNoLeak(refusal: RealmError, forbidden: readonly string[]): void {
   }
 }
 
-test("RT-03: an ambiguous label match is refused at once with no further poll and no container ids", async (t) => {
+void test("RT-03: an ambiguous label match is refused at once with no further poll and no container ids", async (t) => {
   const advance = useVirtualClock(t);
   const libpod = scriptedLibpod(() => [{ id: "ctr-secret-a" }, { id: "ctr-secret-b" }]);
   const run = startCreate(libpod.containers, 60_000);
@@ -154,11 +154,11 @@ test("RT-03: an ambiguous label match is refused at once with no further poll an
   assert.equal(libpod.calls(), 2, "no poll runs after the ambiguity refusal");
 });
 
-test("RT-03: an ambiguous match already present before create is refused without running the runner", async (t) => {
+void test("RT-03: an ambiguous match already present before create is refused without running the runner", async (t) => {
   useVirtualClock(t);
   const libpod = {
     containers: {
-      listContainersByLabel: async () => [{ id: "ctr-secret-a" }, { id: "ctr-secret-b" }],
+      listContainersByLabel: () => Promise.resolve([{ id: "ctr-secret-a" }, { id: "ctr-secret-b" }]),
     },
   };
   const run = startCreate(libpod.containers, 60_000);
@@ -171,7 +171,7 @@ test("RT-03: an ambiguous match already present before create is refused without
   assert.equal(run.runnerCalls(), 0, "the create argv must not run when the session is already ambiguous");
 });
 
-test("RT-03: a non-transient libpod error ends the poll at once and carries the last error code as causeCode", async (t) => {
+void test("RT-03: a non-transient libpod error ends the poll at once and carries the last error code as causeCode", async (t) => {
   const advance = useVirtualClock(t);
   const libpod = scriptedLibpod(() => new RealmError("SCHEMA_INVALID"));
   const run = startCreate(libpod.containers, 60_000);
@@ -187,7 +187,7 @@ test("RT-03: a non-transient libpod error ends the poll at once and carries the 
   assert.equal(libpod.calls(), 2, "no poll runs after a non-transient failure");
 });
 
-test("RT-03: an untyped libpod error ends the poll at once with no causeCode and no raw text", async (t) => {
+void test("RT-03: an untyped libpod error ends the poll at once with no causeCode and no raw text", async (t) => {
   const advance = useVirtualClock(t);
   const libpod = scriptedLibpod(() => new Error("raw libpod text naming ctr-raw"));
   const run = startCreate(libpod.containers, 60_000);
@@ -203,7 +203,7 @@ test("RT-03: an untyped libpod error ends the poll at once with no causeCode and
   assert.equal(libpod.calls(), 2, "no poll runs after a non-transient failure");
 });
 
-test("RT-09: a transient libpod error followed by a found container succeeds with that container id", async (t) => {
+void test("RT-09: a transient libpod error followed by a found container succeeds with that container id", async (t) => {
   const advance = useVirtualClock(t);
   const libpod = scriptedLibpod((poll) =>
     poll < 3 ? new RealmError("PODMAN_MACHINE_DOWN") : [{ id: "ctr-found" }],
@@ -217,7 +217,7 @@ test("RT-09: a transient libpod error followed by a found container succeeds wit
   assert.equal(run.runnerCalls(), 1, "the create argv runs once");
 });
 
-test("RT-09: a persistent transient libpod error ends at the deadline with the last error code as causeCode", async (t) => {
+void test("RT-09: a persistent transient libpod error ends at the deadline with the last error code as causeCode", async (t) => {
   const advance = useVirtualClock(t);
   const libpod = scriptedLibpod(() => new RealmError("PODMAN_MACHINE_DOWN"));
   const run = startCreate(libpod.containers, 1000);
@@ -230,7 +230,7 @@ test("RT-09: a persistent transient libpod error ends at the deadline with the l
   assert.equal(libpod.calls(), 5, "pre-create lookup plus polls at 0, 250, 500 and 750 ms; none at the deadline");
 });
 
-test("RT-09: a deadline with no libpod error names no libpod code", async (t) => {
+void test("RT-09: a deadline with no libpod error names no libpod code", async (t) => {
   const advance = useVirtualClock(t);
   const libpod = scriptedLibpod(() => []);
   const run = startCreate(libpod.containers, 500);
@@ -242,7 +242,7 @@ test("RT-09: a deadline with no libpod error names no libpod code", async (t) =>
   assertNoLeak(refusal, ["ctr-"]);
 });
 
-test("RT-09: an error code that appeared earlier is still carried as causeCode when the poll reaches the deadline", async (t) => {
+void test("RT-09: an error code that appeared earlier is still carried as causeCode when the poll reaches the deadline", async (t) => {
   const advance = useVirtualClock(t);
   const libpod = scriptedLibpod((poll) => (poll === 1 ? new RealmError("PODMAN_MACHINE_DOWN") : []));
   const run = startCreate(libpod.containers, 1000);

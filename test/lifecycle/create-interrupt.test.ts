@@ -73,7 +73,7 @@ function assertOvertaken(outcome: StateSnapshot): void {
   );
 }
 
-test("a stop issued while exec.create is pending leaves no running container and raises no REALM_INVALID_TRANSITION (C1, CORE-06)", async (t) => {
+void test("a stop issued while exec.create is pending leaves no running container and raises no REALM_INVALID_TRANSITION (C1, CORE-06)", async (t) => {
   const { workspace, store, exec, controller } = fixture(t);
   exec.setDelay("create", 50);
 
@@ -89,7 +89,7 @@ test("a stop issued while exec.create is pending leaves no running container and
   assert.equal(store.load(SESSION)?.state, "unbound");
 });
 
-test("a destroy issued while exec.create is pending destroys the produced container and leaves no record (C1, CORE-06)", async (t) => {
+void test("a destroy issued while exec.create is pending destroys the produced container and leaves no record (C1, CORE-06)", async (t) => {
   const { workspace, store, exec, controller } = fixture(t);
   exec.setDelay("create", 50);
 
@@ -104,7 +104,7 @@ test("a destroy issued while exec.create is pending destroys the produced contai
   assert.equal(store.load(SESSION), null);
 });
 
-test("a stop issued while exec.create is pending whose port call fails leaves the session unbound with no error (C1)", async (t) => {
+void test("a stop issued while exec.create is pending whose port call fails leaves the session unbound with no error (C1)", async (t) => {
   const { workspace, exec, controller } = fixture(t);
   exec.setDelay("create", 50);
   exec.failNext("create", "OPENSHELL_START_FAILED");
@@ -118,7 +118,7 @@ test("a stop issued while exec.create is pending whose port call fails leaves th
   assert.equal(exec.resources().length, 0);
 });
 
-test("a stop issued while exec.start is in flight leaves the container stopped, not running (C1)", async (t) => {
+void test("a stop issued while exec.start is in flight leaves the container stopped, not running (C1)", async (t) => {
   const { workspace, store, exec, controller } = fixture(t);
   exec.setDelay("start", 100);
 
@@ -131,10 +131,10 @@ test("a stop issued while exec.start is in flight leaves the container stopped, 
   assertOvertaken(outcome);
   const [container] = exec.resources();
   assert.equal(container?.started, false);
-  assert.equal(store.load(SESSION)?.containerId, container?.containerId);
+  assert.equal(store.load(SESSION)?.containerId, container.containerId);
 });
 
-test("a create whose exec.create resolves after the budget expired gets its container destroyed (C2)", async (t) => {
+void test("a create whose exec.create resolves after the budget expired gets its container destroyed (C2)", async (t) => {
   const { workspace, store, exec, controller } = fixture(t, 500);
   exec.setDelay("create", 2000);
 
@@ -152,7 +152,7 @@ test("a create whose exec.create resolves after the budget expired gets its cont
   );
 });
 
-test("an orphaned container whose destroy fails is recorded, so the next destroy removes it (C2)", async (t) => {
+void test("an orphaned container whose destroy fails is recorded, so the next destroy removes it (C2)", async (t) => {
   const { workspace, store, exec, controller } = fixture(t, 2000);
   exec.setDelay("create", 8000);
   exec.failNext("destroy", "OPENSHELL_START_FAILED");
@@ -186,13 +186,15 @@ async function assertRejectsWithCause(promise: Promise<unknown>, code: string, c
   );
 }
 
-test("a stop during a pending exec.start leaves no running container, even when the create gave up at the budget (C1, F1)", async (t) => {
+void test("a stop during a pending exec.start leaves no running container, even when the create gave up at the budget (C1, F1)", async (t) => {
   const { workspace, store, exec, controller } = fixture(t, 1000);
   // The start is held behind a gate, so the stop begins while exec.start is in flight. The
   // executor form is used because tsconfig's ES2023 lib has no Promise.withResolvers.
   let openGate: () => void = () => undefined;
   const gate = new Promise<void>((resolve) => {
-    openGate = () => resolve();
+    openGate = () => {
+      resolve();
+    };
   });
   const start = exec.start.bind(exec);
   const issued: Promise<void>[] = [];
@@ -216,10 +218,10 @@ test("a stop during a pending exec.start leaves no running container, even when 
   assert.equal(stopped.state, "unbound");
   const [container] = exec.resources();
   assert.equal(container?.started, false);
-  assert.equal(store.load(SESSION)?.containerId, container?.containerId);
+  assert.equal(store.load(SESSION)?.containerId, container.containerId);
 });
 
-test("destroy waits for an orphaned create that is still in flight, then removes its container (C2, F2)", async (t) => {
+void test("destroy waits for an orphaned create that is still in flight, then removes its container (C2, F2)", async (t) => {
   const { workspace, store, exec, controller } = fixture(t, 500);
   exec.setDelay("create", 2000);
 
@@ -234,7 +236,7 @@ test("destroy waits for an orphaned create that is still in flight, then removes
   assert.equal(store.load(SESSION), null);
 });
 
-test("an orphan whose destroy fails once is retried by the destroy that waits for it (C2, F2)", async (t) => {
+void test("an orphan whose destroy fails once is retried by the destroy that waits for it (C2, F2)", async (t) => {
   const { workspace, store, exec, controller } = fixture(t, 500);
   exec.setDelay("create", 2000);
   exec.failNext("destroy", "OPENSHELL_START_FAILED");
@@ -248,7 +250,7 @@ test("an orphan whose destroy fails once is retried by the destroy that waits fo
   assert.equal(store.load(SESSION), null);
 });
 
-test("an orphan whose destroy and its retry both fail keeps its containerId in the record, so the next destroy removes it (C2, F2)", async (t) => {
+void test("an orphan whose destroy and its retry both fail keeps its containerId in the record, so the next destroy removes it (C2, F2)", async (t) => {
   const { workspace, store, exec, controller } = fixture(t, 500);
   exec.setDelay("create", 2000);
   // The first two destroy calls fail with different codes: the orphan's own destroy, then the
@@ -275,7 +277,7 @@ test("an orphan whose destroy and its retry both fail keeps its containerId in t
   assert.equal(store.load(SESSION), null);
 });
 
-test("a stop and a destroy issued together both resolve and leave the session unbound (C1, F3)", async (t) => {
+void test("a stop and a destroy issued together both resolve and leave the session unbound (C1, F3)", async (t) => {
   const { workspace, store, exec, controller } = fixture(t);
   exec.setDelay("create", 100);
 
@@ -293,7 +295,7 @@ test("a stop and a destroy issued together both resolve and leave the session un
   assert.equal(store.load(SESSION), null);
 });
 
-test("a probe still in flight when a stop begins resolves with the snapshot and does not reject (F4)", async (t) => {
+void test("a probe still in flight when a stop begins resolves with the snapshot and does not reject (F4)", async (t) => {
   const { workspace, exec, controller } = fixture(t);
   await controller.create(workspace);
   exec.setDelay("probe", 100);
@@ -308,7 +310,7 @@ test("a probe still in flight when a stop begins resolves with the snapshot and 
   assert.equal(probed.state, "unbound");
 });
 
-test("a probe that fails in flight when a stop begins resolves with the snapshot and does not reject (F4)", async (t) => {
+void test("a probe that fails in flight when a stop begins resolves with the snapshot and does not reject (F4)", async (t) => {
   const { workspace, exec, controller } = fixture(t);
   await controller.create(workspace);
   exec.setDelay("probe", 100);
@@ -322,7 +324,7 @@ test("a probe that fails in flight when a stop begins resolves with the snapshot
   assert.equal(probed.state, "unbound");
 });
 
-test("a create for another workspace during a first create is refused with POLICY_DENIED, and the first create completes (S-02, F5)", async (t) => {
+void test("a create for another workspace during a first create is refused with POLICY_DENIED, and the first create completes (S-02, F5)", async (t) => {
   const base = realpathSync(mkdtempSync(join(tmpdir(), "realm-interrupt-")));
   t.after(() => {
     rmSync(base, { recursive: true, force: true });
@@ -352,7 +354,7 @@ test("a create for another workspace during a first create is refused with POLIC
   assert.equal(store.load(SESSION)?.workspaceRoot, first);
 });
 
-test("a bridge subscribe that throws moves the session to error instead of leaving it connecting (F6)", async (t) => {
+void test("a bridge subscribe that throws moves the session to error instead of leaving it connecting (F6)", async (t) => {
   const { workspace, store, bridge, controller } = fixture(t);
   bridge.subscribe = () => {
     throw new Error("subscribe exploded");
@@ -365,7 +367,7 @@ test("a bridge subscribe that throws moves the session to error instead of leavi
   assert.equal(store.load(SESSION)?.state, "error");
 });
 
-test("a store write that throws during a bridge down event keeps the degraded state, does not throw, and the next write persists it (F7)", async (t) => {
+void test("a store write that throws during a bridge down event keeps the degraded state, does not throw, and the next write persists it (F7)", async (t) => {
   const { workspace, store, bridge, controller } = fixture(t);
   await controller.create(workspace);
   const save = store.save.bind(store);
@@ -390,7 +392,7 @@ test("a store write that throws during a bridge down event keeps the degraded st
   assert.equal(store.load(SESSION)?.state, "active");
 });
 
-test("a background stop and destroy that both fail are kept, and the next destroy reports them as the cause of its own failure (G-04, F1)", async (t) => {
+void test("a background stop and destroy that both fail are kept, and the next destroy reports them as the cause of its own failure (G-04, F1)", async (t) => {
   const base = realpathSync(mkdtempSync(join(tmpdir(), "realm-interrupt-")));
   t.after(() => {
     rmSync(base, { recursive: true, force: true });

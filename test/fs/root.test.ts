@@ -30,53 +30,53 @@ function assertDenied(action: () => unknown): void {
   );
 }
 
-test("bindWorkspaceUnderPolicy accepts a directory inside a policy root and returns its real path (D-22)", (t) => {
+void test("bindWorkspaceUnderPolicy accepts a directory inside a policy root and returns its real path (D-22)", (t) => {
   const { ws, inner } = fixture(t);
   const bound = bindWorkspaceUnderPolicy([ws], inner);
   assert.equal(bound.realPath, inner);
 });
 
-test("bindWorkspaceUnderPolicy refuses a relative path with POLICY_DENIED (D-22)", (t) => {
+void test("bindWorkspaceUnderPolicy refuses a relative path with POLICY_DENIED (D-22)", (t) => {
   const { ws } = fixture(t);
   assertDenied(() => bindWorkspaceUnderPolicy([ws], "ws/inner"));
 });
 
-test("bindWorkspaceUnderPolicy refuses a path outside every policy root with POLICY_DENIED (D-22)", (t) => {
+void test("bindWorkspaceUnderPolicy refuses a path outside every policy root with POLICY_DENIED (D-22)", (t) => {
   const { ws, outside } = fixture(t);
   assertDenied(() => bindWorkspaceUnderPolicy([ws], outside));
 });
 
-test("bindWorkspaceUnderPolicy refuses a sibling whose name starts with a policy root name (D-22)", (t) => {
+void test("bindWorkspaceUnderPolicy refuses a sibling whose name starts with a policy root name (D-22)", (t) => {
   const { ws, sibling } = fixture(t);
   assert.ok(sibling.startsWith(ws), "the sibling name must share the root name as a prefix");
   assertDenied(() => bindWorkspaceUnderPolicy([ws], sibling));
 });
 
-test("bindWorkspaceUnderPolicy refuses a symbolic link that escapes the policy root (D-22)", (t) => {
+void test("bindWorkspaceUnderPolicy refuses a symbolic link that escapes the policy root (D-22)", (t) => {
   const { ws, outside } = fixture(t);
   const escape = join(ws, "escape");
   symlinkSync(outside, escape, "dir");
   assertDenied(() => bindWorkspaceUnderPolicy([ws], escape));
 });
 
-test("bindWorkspaceUnderPolicy refuses when any policy root cannot be canonicalized (D-22)", (t) => {
+void test("bindWorkspaceUnderPolicy refuses when any policy root cannot be canonicalized (D-22)", (t) => {
   const { base, ws, inner } = fixture(t);
   assertDenied(() => bindWorkspaceUnderPolicy([ws, join(base, "missing")], inner));
 });
 
-test("bindWorkspaceUnderPolicy refuses every path when the policy has no workspace roots (D-21, D-22)", (t) => {
+void test("bindWorkspaceUnderPolicy refuses every path when the policy has no workspace roots (D-21, D-22)", (t) => {
   const { ws, inner } = fixture(t);
   assertDenied(() => bindWorkspaceUnderPolicy([], inner));
   assertDenied(() => bindWorkspaceUnderPolicy([], ws));
 });
 
-test("verifyPinnedAt returns the pinned root when the path still names the directory pinned earlier (D-22, FS-02)", (t) => {
+void test("verifyPinnedAt returns the pinned root when the path still names the directory pinned earlier (D-22, FS-02)", (t) => {
   const { ws } = fixture(t);
   const pinned = bindRoot(ws);
   assert.equal(verifyPinnedAt(pinned, ws), pinned);
 });
 
-test("verifyPinnedAt accepts the pinned directory reached through a symbolic link to its real path (FS-02)", (t) => {
+void test("verifyPinnedAt accepts the pinned directory reached through a symbolic link to its real path (FS-02)", (t) => {
   const { base, ws } = fixture(t);
   const pinned = bindRoot(ws);
   const alias = join(base, "alias");
@@ -84,7 +84,7 @@ test("verifyPinnedAt accepts the pinned directory reached through a symbolic lin
   assert.equal(verifyPinnedAt(pinned, alias), pinned);
 });
 
-test("verifyPinnedAt throws POLICY_DENIED after the directory at the path is replaced (D-22, FS-02)", (t) => {
+void test("verifyPinnedAt throws POLICY_DENIED after the directory at the path is replaced (D-22, FS-02)", (t) => {
   const { base, ws } = fixture(t);
   const pinned = bindRoot(ws);
   renameSync(ws, join(base, "ws-old"));
@@ -92,7 +92,7 @@ test("verifyPinnedAt throws POLICY_DENIED after the directory at the path is rep
   assertDenied(() => verifyPinnedAt(pinned, ws));
 });
 
-test("verifyPinnedAt throws POLICY_DENIED when the pinned directory moved and a link now sits at its path (FS-02)", (t) => {
+void test("verifyPinnedAt throws POLICY_DENIED when the pinned directory moved and a link now sits at its path (FS-02)", (t) => {
   const { base, ws } = fixture(t);
   const pinned = bindRoot(ws);
   const moved = join(base, "ws-moved");
@@ -101,7 +101,7 @@ test("verifyPinnedAt throws POLICY_DENIED when the pinned directory moved and a 
   assertDenied(() => verifyPinnedAt(pinned, ws));
 });
 
-test("verifyPinnedAt throws POLICY_DENIED for a relative path and for a path that is not a directory (FS-02)", (t) => {
+void test("verifyPinnedAt throws POLICY_DENIED for a relative path and for a path that is not a directory (FS-02)", (t) => {
   const { ws } = fixture(t);
   const pinned = bindRoot(ws);
   const file = join(ws, "plain.txt");

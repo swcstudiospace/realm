@@ -23,12 +23,12 @@ function snapshot(state: State, reason: string): StatusSnapshot {
   return { state, reason, lastTransitionAt: AT };
 }
 
-test("CORE-02: the two frozen label strings are pinned", () => {
+void test("CORE-02: the two frozen label strings are pinned", () => {
   assert.equal(STATUS_LABELS.active, "realm active");
   assert.equal(STATUS_LABELS.disconnected, "realm disconnected");
 });
 
-test("CORE-02: each of the six states maps to exactly one of the two labels with the degraded flag, reason and time", () => {
+void test("CORE-02: each of the six states maps to exactly one of the two labels with the degraded flag, reason and time", () => {
   assert.equal(EXPECTED.length, 6, "every state has a row");
   for (const [state, reason, label, degraded, displayReason] of EXPECTED) {
     assert.deepEqual(
@@ -39,13 +39,13 @@ test("CORE-02: each of the six states maps to exactly one of the two labels with
   }
 });
 
-test("CORE-02: degraded is the active label with the degraded flag, not a third label", () => {
+void test("CORE-02: degraded is the active label with the degraded flag, not a third label", () => {
   const degraded = displayStatus(snapshot("degraded", "probe lag"));
   assert.equal(degraded.label, "realm active");
   assert.equal(degraded.degraded, true);
 });
 
-test("CORE-02: a snapshot reason and transition time pass through for active and error", () => {
+void test("CORE-02: a snapshot reason and transition time pass through for active and error", () => {
   const active = displayStatus({ state: "active", reason: "bound", lastTransitionAt: "2026-01-02T03:04:05.000Z" });
   assert.equal(active.reason, "bound");
   assert.equal(active.lastTransitionAt, "2026-01-02T03:04:05.000Z");

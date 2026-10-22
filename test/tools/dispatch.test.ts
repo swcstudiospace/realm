@@ -28,12 +28,12 @@ function stagesOf(h: Harness): string[] {
 
 function expectDone(outcome: ToolOutcome, tool: string): void {
   assert.equal(outcome.outcome, "done");
-  if (outcome.outcome !== "done" || outcome.tool !== tool) {
+  if (outcome.tool !== tool) {
     assert.fail(`expected a done ${tool}`);
   }
 }
 
-test("TOOL-03: an exec runs schema, state, admission, execution, and result in order (D-89)", async (t) => {
+void test("TOOL-03: an exec runs schema, state, admission, execution, and result in order (D-89)", async (t) => {
   const h = makeHarness(t);
   const outcome = await h.dispatcher.call({ exec: { argv: [...WORKLOAD] } });
   assert.deepEqual(outcome, {
@@ -48,7 +48,7 @@ test("TOOL-03: an exec runs schema, state, admission, execution, and result in o
   assert.equal(h.runs.length, 1);
 });
 
-test("TOOL-03: a write runs schema, state, lock, admission, execution, and result in order (D-89)", async (t) => {
+void test("TOOL-03: a write runs schema, state, lock, admission, execution, and result in order (D-89)", async (t) => {
   const h = makeHarness(t);
   const outcome = await h.dispatcher.call({ write: { path: "doc.txt", content: "updated" } });
   expectDone(outcome, "write");
@@ -68,7 +68,7 @@ test("TOOL-03: a write runs schema, state, lock, admission, execution, and resul
   assert.equal(h.doc(), "updated");
 });
 
-test("TOOL-03: read, list, and status run with no gate and no lock probe, between admission and result lines (D-89)", async (t) => {
+void test("TOOL-03: read, list, and status run with no gate and no lock probe, between admission and result lines (D-89)", async (t) => {
   const h = makeHarness(t);
   const read = await h.dispatcher.call({ read: { path: "doc.txt", maxBytes: 1024 } });
   expectDone(read, "read");
@@ -85,7 +85,7 @@ test("TOOL-03: read, list, and status run with no gate and no lock probe, betwee
   assert.deepEqual(h.phases(), ["admission", "result", "admission", "result", "admission", "result"]);
 });
 
-test("TOOL-03: a retry in error recreates from the bound root between admission and result (D-95)", async (t) => {
+void test("TOOL-03: a retry in error recreates from the bound root between admission and result (D-95)", async (t) => {
   const h = makeHarness(t, { state: "error" });
   const outcome = await h.dispatcher.call({ retry: {} });
   expectDone(outcome, "retry");
@@ -95,7 +95,7 @@ test("TOOL-03: a retry in error recreates from the bound root between admission 
   assert.deepEqual(h.phases(), ["admission", "result"]);
 });
 
-test("TOOL-03: a schema failure has zero side effects and reaches no later stage (D-89)", async (t) => {
+void test("TOOL-03: a schema failure has zero side effects and reaches no later stage (D-89)", async (t) => {
   const h = makeHarness(t);
   const outcome = await h.dispatcher.call({ nope: true });
   assert.deepEqual(outcome, refusal(null, "SCHEMA_INVALID", false));
@@ -106,7 +106,7 @@ test("TOOL-03: a schema failure has zero side effects and reaches no later stage
   assert.equal(h.doc(), "original");
 });
 
-test("TOOL-03: SHELL_NOT_ALLOWED precedes the state check (D-89)", async (t) => {
+void test("TOOL-03: SHELL_NOT_ALLOWED precedes the state check (D-89)", async (t) => {
   const h = makeHarness(t, { state: "degraded" });
   const outcome = await h.dispatcher.call({ exec: { shell: true, script: "echo hi" } });
   assert.deepEqual(outcome, refusal("exec", "SHELL_NOT_ALLOWED", false));
@@ -115,7 +115,7 @@ test("TOOL-03: SHELL_NOT_ALLOWED precedes the state check (D-89)", async (t) => 
   assert.equal(h.runs.length, 0);
 });
 
-test("TOOL-03: a malformed argv is refused before any admission line (D-89)", async (t) => {
+void test("TOOL-03: a malformed argv is refused before any admission line (D-89)", async (t) => {
   const h = makeHarness(t);
   const outcome = await h.dispatcher.call({ exec: { argv: [""] } });
   assert.deepEqual(outcome, refusal("exec", "SCHEMA_INVALID", false));
@@ -123,7 +123,7 @@ test("TOOL-03: a malformed argv is refused before any admission line (D-89)", as
   assert.equal(h.runs.length, 0);
 });
 
-test("TOOL-03: an admission failure runs no execution (D-89, S-21)", async (t) => {
+void test("TOOL-03: an admission failure runs no execution (D-89, S-21)", async (t) => {
   const h = makeHarness(t, { stateDir: (base) => join(base, "ws", "doc.txt") });
   const outcome = await h.dispatcher.call({ exec: { argv: [...WORKLOAD] } });
   assert.deepEqual(outcome, refusal("exec", "AUDIT_WRITE_FAILED", true));
@@ -131,7 +131,7 @@ test("TOOL-03: an admission failure runs no execution (D-89, S-21)", async (t) =
   assert.equal(h.doc(), "original");
 });
 
-test("TOOL-03: exec is refused unless active, in both modes (D-89, D-109)", async (t) => {
+void test("TOOL-03: exec is refused unless active, in both modes (D-89, D-109)", async (t) => {
   const cases: ReadonlyArray<{ readonly state: State; readonly code: ErrorCode; readonly retryable: boolean }> = [
     { state: "unbound", code: "REALM_UNBOUND", retryable: false },
     { state: "degraded", code: "REALM_NOT_ACTIVE", retryable: true },
@@ -149,7 +149,7 @@ test("TOOL-03: exec is refused unless active, in both modes (D-89, D-109)", asyn
   }
 });
 
-test("TOOL-03: a write in degraded under advisory policy proceeds with a warning (D-98)", async (t) => {
+void test("TOOL-03: a write in degraded under advisory policy proceeds with a warning (D-98)", async (t) => {
   const h = makeHarness(t, { state: "degraded" });
   const outcome = await h.dispatcher.call({ write: { path: "doc.txt", content: "advisory" } });
   expectDone(outcome, "write");
@@ -161,7 +161,7 @@ test("TOOL-03: a write in degraded under advisory policy proceeds with a warning
   assert.deepEqual(h.phases(), ["admission", "result"]);
 });
 
-test("TOOL-03: a write in degraded under required policy is refused with no audit line (D-98)", async (t) => {
+void test("TOOL-03: a write in degraded under required policy is refused with no audit line (D-98)", async (t) => {
   const h = makeHarness(t, { state: "degraded", policy: REQUIRED });
   const outcome = await h.dispatcher.call({ write: { path: "doc.txt", content: "blocked" } });
   assert.deepEqual(outcome, refusal("write", "REALM_NOT_ACTIVE", true));
@@ -169,7 +169,7 @@ test("TOOL-03: a write in degraded under required policy is refused with no audi
   assert.deepEqual(h.phases(), [], "the gate refuses before admission");
 });
 
-test("TOOL-03: retry follows the state, returning the snapshot except from error, unbound, and stopping (D-95)", async (t) => {
+void test("TOOL-03: retry follows the state, returning the snapshot except from error, unbound, and stopping (D-95)", async (t) => {
   for (const state of ["connecting", "active", "degraded"] as const) {
     const h = makeHarness(t, { state });
     const outcome = await h.dispatcher.call({ retry: {} });
@@ -188,7 +188,7 @@ test("TOOL-03: retry follows the state, returning the snapshot except from error
   assert.deepEqual(stopping.phases(), []);
 });
 
-test("TOOL-03: the dispatcher consults the shared lock table, so a path another owner holds is LOCK_CONFLICT (D-96)", async (t) => {
+void test("TOOL-03: the dispatcher consults the shared lock table, so a path another owner holds is LOCK_CONFLICT (D-96)", async (t) => {
   const h = makeHarness(t);
   const target = join(h.root.realPath, "doc.txt");
   const handle = h.locks.acquire(target, "other-owner");
@@ -244,7 +244,7 @@ function dispatcherMovingAfterPrecheck(
   return { dispatcher, creates };
 }
 
-test("TOOL-03: an unrecognized tool name is refused with SCHEMA_INVALID before any stage, with no create and no audit line (D-89, H-03)", async (t) => {
+void test("TOOL-03: an unrecognized tool name is refused with SCHEMA_INVALID before any stage, with no create and no audit line (D-89, H-03)", async (t) => {
   for (const call of [{ create: {} }, { delete: {} }, { RETRY: {} }]) {
     const h = makeHarness(t, { state: "error" });
     const outcome = await h.dispatcher.call(call);
@@ -257,7 +257,7 @@ test("TOOL-03: an unrecognized tool name is refused with SCHEMA_INVALID before a
   }
 });
 
-test("TOOL-03: retry decides on the state current at its decision point, not the pre-check read (D-95, M-01)", async (t) => {
+void test("TOOL-03: retry decides on the state current at its decision point, not the pre-check read (D-95, M-01)", async (t) => {
   const cases: ReadonlyArray<{
     readonly start: State;
     readonly moves: readonly State[];

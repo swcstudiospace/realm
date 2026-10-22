@@ -35,55 +35,55 @@ const RECORD = {
   containerId: null,
 };
 
-test("a record with containerId null is accepted (container not yet created)", () => {
+void test("a record with containerId null is accepted (container not yet created)", () => {
   assert.deepEqual(value(validate("sessionRecord", RECORD)), RECORD);
 });
 
-test("a record with a containerId string is accepted", () => {
+void test("a record with a containerId string is accepted", () => {
   const record = { ...RECORD, containerId: "c-123" };
   assert.deepEqual(value(validate("sessionRecord", record)), record);
 });
 
-test("a record without containerId is accepted because the field is optional", () => {
+void test("a record without containerId is accepted because the field is optional", () => {
   assert.equal(value(validate("sessionRecord", without("containerId"))).realmId, "realm-1");
 });
 
-test("a non-string containerId is rejected and named", () => {
+void test("a non-string containerId is rejected and named", () => {
   const error = rejection(validate("sessionRecord", { ...RECORD, containerId: 7 }));
   assert.equal(error.code, "SCHEMA_INVALID");
   assert.match(error.detail, /\/containerId/);
 });
 
-test("a record missing sessionId is rejected and the key is named", () => {
+void test("a record missing sessionId is rejected and the key is named", () => {
   const error = rejection(validate("sessionRecord", without("sessionId")));
   assert.equal(error.code, "SCHEMA_INVALID");
   assert.match(error.detail, /sessionId/);
 });
 
 for (const key of ["realmId", "sessionId", "workspaceRoot", "state", "controlSocketPath"]) {
-  test(`a record missing required ${key} is rejected`, () => {
+  void test(`a record missing required ${key} is rejected`, () => {
     const error = rejection(validate("sessionRecord", without(key)));
     assert.match(error.detail, new RegExp(key));
   });
 }
 
-test("an empty object is rejected because required fields exist", () => {
+void test("an empty object is rejected because required fields exist", () => {
   const error = rejection(validate("sessionRecord", {}));
   assert.equal(error.code, "SCHEMA_INVALID");
 });
 
-test("an empty realmId is rejected", () => {
+void test("an empty realmId is rejected", () => {
   const error = rejection(validate("sessionRecord", { ...RECORD, realmId: "" }));
   assert.match(error.detail, /\/realmId/);
 });
 
-test("every one of the six D-11 states is accepted", () => {
+void test("every one of the six D-11 states is accepted", () => {
   for (const state of STATES) {
     assert.equal(value(validate("sessionRecord", { ...RECORD, state })).state, state);
   }
 });
 
-test("the session-record state enum holds exactly the STATES set, in both directions", () => {
+void test("the session-record state enum holds exactly the STATES set, in both directions", () => {
   const enumStates = new Set<string>(sessionRecordStateEnum());
   const statesSet = new Set<string>(STATES);
   for (const state of enumStates) {
@@ -95,7 +95,7 @@ test("the session-record state enum holds exactly the STATES set, in both direct
   assert.equal(enumStates.size, statesSet.size);
 });
 
-test("the state enum rejects near-miss spellings of the six states and names the key", () => {
+void test("the state enum rejects near-miss spellings of the six states and names the key", () => {
   for (const near of ["Unbound", "unbound ", "stop", "", "running"]) {
     const error = rejection(validate("sessionRecord", { ...RECORD, state: near }));
     assert.equal(error.code, "SCHEMA_INVALID");
@@ -103,13 +103,13 @@ test("the state enum rejects near-miss spellings of the six states and names the
   }
 });
 
-test("a state outside the six is rejected and named", () => {
+void test("a state outside the six is rejected and named", () => {
   const error = rejection(validate("sessionRecord", { ...RECORD, state: "running" }));
   assert.match(error.detail, /\/state/);
 });
 
 for (const key of ["token", "secret", "env", "schemaVersion"]) {
-  test(`an unknown ${key} key is rejected and named`, () => {
+  void test(`an unknown ${key} key is rejected and named`, () => {
     const error = rejection(validate("sessionRecord", { ...RECORD, [key]: "x" }));
     assert.equal(error.code, "SCHEMA_INVALID");
     assert.match(error.detail, new RegExp(key));

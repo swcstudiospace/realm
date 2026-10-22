@@ -21,12 +21,12 @@ function versionCommand(outcome: CommandOutcome | Error): {
   calls: Array<{ file: string; args: readonly string[]; options: CommandOptions }>;
 } {
   const calls: Array<{ file: string; args: readonly string[]; options: CommandOptions }> = [];
-  const run: RunCommand = async (file, args, options) => {
+  const run: RunCommand = (file, args, options) => {
     calls.push({ file, args, options });
     if (outcome instanceof Error) {
-      throw outcome;
+      return Promise.reject(outcome);
     }
-    return outcome;
+    return Promise.resolve(outcome);
   };
   return { run, calls };
 }
@@ -60,7 +60,7 @@ function failureOf(result: PodmanProbeResult): { code: string; reason: string } 
 const VERSION_5: CommandOutcome = { exitCode: 0, stdout: "podman version 5.3.1\n" };
 const VERSION_49: CommandOutcome = { exitCode: 0, stdout: "podman version 4.9.3\n" };
 
-test("ENOENT from podman --version gives PODMAN_MISSING with a readable reason (RT-02)", async () => {
+void test("ENOENT from podman --version gives PODMAN_MISSING with a readable reason (RT-02)", async () => {
   const { run, calls } = versionCommand(Object.assign(new Error("spawn podman ENOENT"), { code: "ENOENT" }));
   const { connect, dials } = socketDialer("connect");
   const result = await probePodman({ runCommand: run, connectSocket: connect, env: ENV, timeoutMs: TIMEOUT_MS });
@@ -72,7 +72,7 @@ test("ENOENT from podman --version gives PODMAN_MISSING with a readable reason (
   assert.equal(dials.length, 0, "probing stops at the first failure");
 });
 
-test("a non-zero exit from podman --version gives PODMAN_MISSING naming the exit status (RT-02)", async () => {
+void test("a non-zero exit from podman --version gives PODMAN_MISSING naming the exit status (RT-02)", async () => {
   const { run } = versionCommand({ exitCode: 127, stdout: "" });
   const { connect, dials } = socketDialer("connect");
   const failure = failureOf(
@@ -83,7 +83,7 @@ test("a non-zero exit from podman --version gives PODMAN_MISSING naming the exit
   assert.equal(dials.length, 0);
 });
 
-test("a podman --version that does not finish in time gives PODMAN_MISSING naming the timeout (RT-02)", async () => {
+void test("a podman --version that does not finish in time gives PODMAN_MISSING naming the timeout (RT-02)", async () => {
   const hang: RunCommand = () => new Promise<CommandOutcome>(() => undefined);
   const { connect, dials } = socketDialer("connect");
   const failure = failureOf(
@@ -94,7 +94,7 @@ test("a podman --version that does not finish in time gives PODMAN_MISSING namin
   assert.equal(dials.length, 0);
 });
 
-test("Podman 4.9.3 gives PODMAN_UNSUPPORTED_VERSION naming the version and the 5.x need (RT-02)", async () => {
+void test("Podman 4.9.3 gives PODMAN_UNSUPPORTED_VERSION naming the version and the 5.x need (RT-02)", async () => {
   const { run } = versionCommand(VERSION_49);
   const { connect, dials } = socketDialer("connect");
   const failure = failureOf(
@@ -107,7 +107,7 @@ test("Podman 4.9.3 gives PODMAN_UNSUPPORTED_VERSION naming the version and the 5
   assert.equal(dials.length, 0, "the socket is not probed once the version fails");
 });
 
-test("output that does not parse gives PODMAN_UNSUPPORTED_VERSION and never passes (RT-02)", async () => {
+void test("output that does not parse gives PODMAN_UNSUPPORTED_VERSION and never passes (RT-02)", async () => {
   const { run } = versionCommand({ exitCode: 0, stdout: "something else entirely" });
   const { connect, dials } = socketDialer("connect");
   const failure = failureOf(
@@ -118,7 +118,7 @@ test("output that does not parse gives PODMAN_UNSUPPORTED_VERSION and never pass
   assert.equal(dials.length, 0);
 });
 
-test("the raw stdout of podman --version is never echoed into the reason (RT-02)", async () => {
+void test("the raw stdout of podman --version is never echoed into the reason (RT-02)", async () => {
   const { run } = versionCommand({ exitCode: 0, stdout: "SECRET-TOKEN-XYZ" });
   const { connect } = socketDialer("connect");
   const failure = failureOf(
@@ -127,7 +127,7 @@ test("the raw stdout of podman --version is never echoed into the reason (RT-02)
   assert.equal(failure.reason.includes("SECRET-TOKEN-XYZ"), false);
 });
 
-test("a refused API socket gives PODMAN_MACHINE_DOWN with the systemctl fix (RT-02)", async () => {
+void test("a refused API socket gives PODMAN_MACHINE_DOWN with the systemctl fix (RT-02)", async () => {
   const { run } = versionCommand(VERSION_5);
   const { connect } = socketDialer(Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" }));
   const failure = failureOf(
@@ -138,7 +138,7 @@ test("a refused API socket gives PODMAN_MACHINE_DOWN with the systemctl fix (RT-
   assert.match(failure.reason, /systemctl --user start podman\.socket/);
 });
 
-test("a missing API socket gives PODMAN_MACHINE_DOWN with the systemctl fix (RT-02)", async () => {
+void test("a missing API socket gives PODMAN_MACHINE_DOWN with the systemctl fix (RT-02)", async () => {
   const { run } = versionCommand(VERSION_5);
   const { connect } = socketDialer(Object.assign(new Error("spawn podman ENOENT"), { code: "ENOENT" }));
   const failure = failureOf(
@@ -148,7 +148,7 @@ test("a missing API socket gives PODMAN_MACHINE_DOWN with the systemctl fix (RT-
   assert.match(failure.reason, /systemctl --user start podman\.socket/);
 });
 
-test("an API socket that does not answer in time gives PODMAN_MACHINE_DOWN (RT-02)", async () => {
+void test("an API socket that does not answer in time gives PODMAN_MACHINE_DOWN (RT-02)", async () => {
   const { run } = versionCommand(VERSION_5);
   const { connect } = socketDialer("hang");
   const failure = failureOf(
@@ -158,7 +158,7 @@ test("an API socket that does not answer in time gives PODMAN_MACHINE_DOWN (RT-0
   assert.match(failure.reason, /systemctl --user start podman\.socket/);
 });
 
-test("an API socket that does not answer names the timeout in the reason (RT-02)", async () => {
+void test("an API socket that does not answer names the timeout in the reason (RT-02)", async () => {
   const { run } = versionCommand(VERSION_5);
   const { connect } = socketDialer("hang");
   const failure = failureOf(
@@ -167,7 +167,7 @@ test("an API socket that does not answer names the timeout in the reason (RT-02)
   assert.match(failure.reason, /did not answer a connection within 10 ms/);
 });
 
-test("the raw socket error text is never echoed into the reason (RT-02)", async () => {
+void test("the raw socket error text is never echoed into the reason (RT-02)", async () => {
   const { run } = versionCommand(VERSION_5);
   const { connect } = socketDialer(new Error("EACCES while reading PRIVATE-DETAIL"));
   const failure = failureOf(
@@ -176,7 +176,7 @@ test("the raw socket error text is never echoed into the reason (RT-02)", async 
   assert.equal(failure.reason.includes("PRIVATE-DETAIL"), false);
 });
 
-test("no XDG_RUNTIME_DIR gives PODMAN_MACHINE_DOWN without dialing (RT-02)", async () => {
+void test("no XDG_RUNTIME_DIR gives PODMAN_MACHINE_DOWN without dialing (RT-02)", async () => {
   const { run } = versionCommand(VERSION_5);
   const { connect, dials } = socketDialer("connect");
   const failure = failureOf(
@@ -192,18 +192,18 @@ test("no XDG_RUNTIME_DIR gives PODMAN_MACHINE_DOWN without dialing (RT-02)", asy
   assert.equal(dials.length, 0);
 });
 
-test("Podman 5.x with a connectable socket passes and dials only the XDG-derived socket (RT-02)", async () => {
+void test("Podman 5.x with a connectable socket passes and dials only the XDG-derived socket (RT-02)", async () => {
   const { run, calls } = versionCommand(VERSION_5);
   const { connect, dials } = socketDialer("connect");
   const result = await probePodman({ runCommand: run, connectSocket: connect, env: ENV, timeoutMs: TIMEOUT_MS });
   assert.deepEqual(result, { ok: true, version: "5.3.1" });
   assert.equal(calls.length, 1);
   assert.equal(calls[0]?.file, "podman");
-  assert.deepEqual(calls[0]?.args, ["--version"]);
+  assert.deepEqual(calls[0].args, ["--version"]);
   assert.deepEqual(dials, [{ socketPath: SOCKET_PATH, timeoutMs: TIMEOUT_MS }]);
 });
 
-test("the version command receives only PATH, HOME and XDG_RUNTIME_DIR from the environment (RT-02)", async () => {
+void test("the version command receives only PATH, HOME and XDG_RUNTIME_DIR from the environment (RT-02)", async () => {
   const { run, calls } = versionCommand(VERSION_5);
   const { connect } = socketDialer("connect");
   await probePodman({
@@ -213,5 +213,5 @@ test("the version command receives only PATH, HOME and XDG_RUNTIME_DIR from the 
     timeoutMs: TIMEOUT_MS,
   });
   assert.deepEqual(calls[0]?.options.env, { PATH: "/usr/bin", HOME: "/home/tester", XDG_RUNTIME_DIR: RUNTIME_DIR });
-  assert.equal(calls[0]?.options.timeoutMs, TIMEOUT_MS);
+  assert.equal(calls[0].options.timeoutMs, TIMEOUT_MS);
 });
