@@ -68,7 +68,11 @@ Status: **open**. Default applied (OQ-P3-11): no Anda code, no Anda dependency, 
 
 Phase 3 produces **no credentials** for Anda. The only route used is anonymous. The ICP envelope and the bearer CWT are not implemented (`anda.md` Q3). Calls through `POST /{id}` need the RPC body layout and credential format first. That work belongs to the first phase that calls `POST /{id}`, which is Phase 4 or 5.
 
-## 7. Revisit triggers
+## 7. Phase 5 direction: Anda consumes Realm over MCP (P5-D1)
+
+Recorded 2026-10-22. Anda consumes Realm over MCP: Realm exposes an MCP stdio server with revision 2026-07-28 semantics (`server/discover` probe plus `initialize` handshake; `docs/integration/mcp.md` Q5). The Anda MCP client speaks stdio with revision 2026-07-28 and older `initialize`-based revisions (`docs/integration/anda.md` Q5). This section introduces no new revision string and no Anda code; the Phase 3 HTTP boundary above is unchanged.
+
+## 8. Revisit triggers
 
 - Anda publishes a version surface: replace the shape check and record the change here.
 - The documented HTTP surface proves insufficient for a required call: revisit the no-shim decision with a new decision ID.

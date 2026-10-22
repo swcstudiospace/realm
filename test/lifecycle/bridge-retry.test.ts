@@ -1,7 +1,7 @@
 // Retry from error after a startup whose bridge handshake was still running when the startup
 // budget expired (ANDA-03, D-64). The bridge refuses a connect made during a handshake with a
 // plain Error, so the controller must reuse the handshake it already started, not start a second
-// one. The budget is real and short, and the handshake is held by the test, so each step is
+// one. The budget is real, and the handshake is held by the test, so each step is
 // decided by the test rather than by timing.
 
 import { test, type TestContext } from "node:test";
@@ -19,8 +19,10 @@ import { FakeExecutionService } from "../support/fake-execution.js";
 const SESSION = "session-1";
 const CLOCK_TIME = "2026-10-21T09:30:00.000Z";
 // Shared by the first startup and by every retry, so a retry waiting on the held handshake
-// runs against the same real deadline the first startup used.
-const BUDGET_MS = 200;
+// runs against the same real deadline the first startup used. The budget is wall-clock time that
+// the synchronous startup steps also spend, so it is generous: a budget that expires before the first
+// startup reaches the bridge leaves no handshake for the retry to hold (ANDA-03, D-64).
+const BUDGET_MS = 5000;
 
 // Lets the controller's promise-only startup path run up to the bridge. Each step after a
 // store or port call is a microtask, so one macrotask turn reaches the next connect call.

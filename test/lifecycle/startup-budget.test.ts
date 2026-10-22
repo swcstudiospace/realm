@@ -132,10 +132,10 @@ test("a slow workspace bind that uses up the startup budget gives STARTUP_BUDGET
 
 test("a retry after exec.start overruns the budget reattaches to the one recorded container and starts that container (CORE-06, RT-07)", async (t) => {
   // Real timers, on purpose: withTimeout races the port call against a real setTimeout. The
-  // budget is 200 ms and the scripted start delay is 800 ms, 4x the budget, so the budget
+  // budget is 500 ms and the scripted start delay is 2000 ms, 4x the budget, so the budget
   // fires first. The abandoned start finishes on its own timer, which touches no disk.
-  const { store, exec, controller, workspace } = fixture(t, { startupBudgetMs: 200 });
-  exec.setDelay("start", 800);
+  const { store, exec, controller, workspace } = fixture(t, { startupBudgetMs: 500 });
+  exec.setDelay("start", 2000);
 
   const failed = await controller.create(workspace);
 

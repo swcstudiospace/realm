@@ -77,6 +77,8 @@ Sourced answer: **not documented** as a protocol or engine version.
 
 Sourced answer, informational. Anda consumes external MCP servers through its MCP client (`MCP_INTEGRATION.md`, read 2026-10-21): stdio and Streamable HTTP transports, MCP revision `2026-07-28` and older `initialize`-based revisions. This is not a Realm requirement. See `docs/integration/mcp.md`.
 
+Phase 5 direction (P5-D1, recorded 2026-10-22): Anda consumes Realm over MCP. Realm's Phase 5 MCP server speaks stdio with revision 2026-07-28 semantics — the `server/discover` probe plus the `initialize` handshake (`docs/integration/mcp.md` Q5) — which matches exactly the two revisions this Q5 says the Anda MCP client speaks: stdio with revision 2026-07-28 and older `initialize`-based revisions. No new revision string is introduced here.
+
 ### Q6. Licence
 
 Sourced answer: **conflict in the documentation; confirmed as a conflict, not resolved here.**

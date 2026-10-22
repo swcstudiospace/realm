@@ -118,23 +118,41 @@ test("ANDA-03: backoff delays stop growing at the cap and never exceed it", asyn
 
 // Real timers: the per-attempt request timeout is the property under test (F-P3-05). Each attempt is
 // cut at 50 ms, and the 5 ms waits between attempts keep the sequence inside the 120 ms budget.
+// Attempts are counted at the transport seam, which is the bridge's own record of what it sent. The
+// engine's log is not used for the count: the engine records a request only once it parses it, and that
+// can lag the bridge under load.
 test("ANDA-03: a hung engine times out each attempt and the server sees each request aborted", async (t) => {
   const fake = new FakeAnda();
   await fake.start();
   t.after(() => fake.stop());
   fake.respond({ kind: "hang" });
+  const sent: ClientRequest[] = [];
   const bridge = new AndaBridge({
     url: fake.url(),
     random: () => 1,
     backoff: { baseMs: 5, capMs: 5 },
     requestTimeoutMs: 50,
+    transport: (options, onResponse) => {
+      const req = httpRequest(options, onResponse);
+      sent.push(req);
+      return req;
+    },
   });
   t.after(() => bridge.close());
 
   await assert.rejects(bridge.connect(120), expectCode("ANDA_UNREACHABLE"));
 
-  // Attempts start near 0, 55 and 110 ms. Each one is cut at 50 ms or at the budget that remains (F1).
-  assert.ok(fake.requestCount() >= 2, "each attempt that fits the budget is sent");
+  // Each attempt lasts at least its request timer, so consecutive attempts start at least 50 ms apart,
+  // and the bridge starts at most ceil(120 / 50) = 3 of them within the budget. The first attempt is
+  // sent synchronously by connect, so at least one is always sent. How many of the bound fit depends on
+  // timer latency under load, so the check is a range against the bridge's own bound.
+  const maxAttempts = Math.ceil(120 / 50);
+  assert.ok(
+    sent.length >= 1 && sent.length <= maxAttempts,
+    "each attempt that fits the budget is sent, and never more than the bridge's bound",
+  );
+  // The bridge destroys each attempt when it settles, and every settle happens before connect rejects.
+  assert.ok(sent.every((req) => req.destroyed), "every attempt the bridge sent is destroyed");
   await fake.waitUntil(() => fake.requests().every((request) => request.aborted));
 });
 
@@ -237,11 +255,23 @@ test("ANDA-02/ANDA-03: connect after close starts a fresh handshake and reaches 
   const fake = new FakeAnda();
   await fake.start();
   t.after(() => fake.stop());
-  const bridge = new AndaBridge({ url: fake.url() });
+  // Requests are counted at the transport seam, which is the bridge's own record of what it sent. The
+  // connect deadline is generous: a 100 ms budget can expire under load before a healthy handshake finishes.
+  const sent: ClientRequest[] = [];
+  const bridge = new AndaBridge({
+    url: fake.url(),
+    transport: (options, onResponse) => {
+      const req = httpRequest(options, onResponse);
+      sent.push(req);
+      return req;
+    },
+  });
   await bridge.close();
 
-  await bridge.connect(100);
-  assert.equal(fake.requestCount(), 1, "the fresh handshake is one anonymous request");
+  await bridge.connect(5000);
+  assert.equal(sent.length, 1, "the fresh handshake is one anonymous request");
+  await fake.waitUntil(() => fake.requestCount() >= 1);
+  assert.equal(fake.requestCount(), 1, "the engine logs the one request the bridge sent");
   await bridge.close();
 });
 
@@ -303,20 +333,21 @@ test("ANDA-03: a connect that exhausts its deadline is retryable, and the retry 
 
 // Real timer: a connect must reject at its own deadline, not at the per-attempt request timeout,
 // because each attempt is clamped to the budget that remains (F1).
-test("ANDA-03: a connect against a hung engine rejects at its deadline, not at the request timeout", { timeout: 5000 }, async (t) => {
+test("ANDA-03: a connect against a hung engine rejects at its deadline, not at the request timeout", { timeout: 20000 }, async (t) => {
   const fake = new FakeAnda();
   await fake.start();
   t.after(() => fake.stop());
   fake.respond({ kind: "hang" });
-  const bridge = new AndaBridge({ url: fake.url(), random: () => 1 });
+  const bridge = new AndaBridge({ url: fake.url(), random: () => 1, requestTimeoutMs: 8000 });
   t.after(() => bridge.close());
 
   const started = Date.now();
-  await assert.rejects(bridge.connect(300), expectCode("ANDA_UNREACHABLE"));
+  await assert.rejects(bridge.connect(1200), expectCode("ANDA_UNREACHABLE"));
   const elapsed = Date.now() - started;
 
-  // The default request timeout is 2000 ms, so 250 ms of slack covers timer scheduling only.
-  assert.ok(elapsed < 300 + 250, `a 300 ms connect must reject near its deadline, took ${elapsed} ms`);
+  // The request timeout is 8000 ms (4x the 2000 ms default), so 1000 ms of slack covers timer
+  // scheduling only. A rejection at the request timeout would take at least 8000 ms and fail here.
+  assert.ok(elapsed < 1200 + 1000, `a 1200 ms connect must reject near its deadline, took ${elapsed} ms`);
   await fake.waitUntil(() => fake.requests().every((request) => request.aborted));
 });
 

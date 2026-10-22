@@ -52,6 +52,12 @@ Recorded as found: **the remote binding is not documented as normative.** Any re
 
 v2 defines `auth/login` and `auth/logout`. A client MUST NOT call them when `authMethods` is omitted or empty (v2 overview and initialization). v2 also defines `session/new`, `session/prompt`, `session/resume`, `session/close`, and `session/list`. Their details are not needed for the transport decision in this phase.
 
+### Q5. Which generation and method Realm uses
+
+Decided in Phase 5 (P5-D10). Realm speaks protocol generation v1: `"protocolVersion": 1` with `clientInfo` / `agentInfo` (Q1), over the stdio framing of Q2 by reference (newline-delimited JSON-RPC, stdout carries only ACP messages, stderr for logs). Version negotiation follows Q1: the agent selects the highest version it supports at or below the requested one. Lifecycle-sensitive messages are never batched, per the Q2 batch rule (`initialize`, `auth/login`, `session/new`, `session/resume`, `session/prompt`).
+
+Realm's six tools ride one Realm extension method named `realm/tool`, which carries the whole frozen `ToolCall` map unchanged. `realm/tool` is a Realm extension, not standard ACP: no client-invoked tool method exists in the standard protocol pages read. Clients must not treat it as a standard ACP method.
+
 ## Blocked module
 
 ACP transport code (Phase 5). Nothing else is blocked by this note.

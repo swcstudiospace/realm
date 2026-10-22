@@ -9,6 +9,7 @@ import { podmanSkipReason, type PodmanProbe } from "../../src/runtime/podman-ver
 const TEST_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "test");
 
 // D-45 category directories. Each must hold at least one *.test.ts file.
+// Phase 5 adds the realm, mcp, acp, omp, surfaces, and docs suites (TOOL-05, OMP-01 to OMP-05).
 const CATEGORY_DIRS = [
   "core",
   "fs",
@@ -21,6 +22,12 @@ const CATEGORY_DIRS = [
   "runtime",
   "anda",
   "tools",
+  "realm",
+  "mcp",
+  "acp",
+  "omp",
+  "surfaces",
+  "docs",
 ] as const;
 
 // F-5 category map: each named category is carried by the files listed under it.
@@ -62,6 +69,15 @@ const CATEGORY_MAP: ReadonlyArray<{ readonly category: string; readonly files: r
       "tools/no-bypass.test.ts",
     ],
   },
+  { category: "realm composition", files: ["realm/compose.test.ts"] },
+  { category: "mcp surface", files: ["mcp/server.test.ts"] },
+  { category: "acp surface", files: ["acp/agent.test.ts"] },
+  { category: "omp plugin", files: ["omp/plugin.test.ts"] },
+  {
+    category: "surface equivalence",
+    files: ["surfaces/equivalence.test.ts", "surfaces/no-logic.test.ts"],
+  },
+  { category: "phase notes", files: ["docs/phase5-notes.test.ts"] },
 ];
 
 // Every D-45 test file. Requirement citations are searched only in these files.
@@ -115,6 +131,13 @@ const D45_FILES = [
   "anda/reconnect.test.ts",
   "anda/no-shim.test.ts",
   "anda/boundary-decision.test.ts",
+  "realm/compose.test.ts",
+  "mcp/server.test.ts",
+  "acp/agent.test.ts",
+  "omp/plugin.test.ts",
+  "surfaces/equivalence.test.ts",
+  "surfaces/no-logic.test.ts",
+  "docs/phase5-notes.test.ts",
   "quality/suite-taxonomy.test.ts",
 ] as const;
 
@@ -157,6 +180,15 @@ const PHASE_4_REQUIREMENT_IDS = [
   "RT-08",
   "TOOL-03",
   "TOOL-04",
+] as const;
+// The six Phase 5 requirement IDs (plan 05-06 must_haves; matches .planning/REQUIREMENTS.md).
+const PHASE_5_REQUIREMENT_IDS = [
+  "TOOL-05",
+  "OMP-01",
+  "OMP-02",
+  "OMP-03",
+  "OMP-04",
+  "OMP-05",
 ] as const;
 
 function gateReasonOf(probe: PodmanProbe): string {
@@ -273,4 +305,16 @@ test("all 4 Phase 4 requirement IDs lead the title of a test in a named D-45 tes
   }
   const uncovered = PHASE_4_REQUIREMENT_IDS.filter((id) => !leading.has(id));
   assert.deepEqual(uncovered, [], `Phase 4 requirement IDs named by no D-45 test title: ${uncovered.join(", ")}`);
+});
+
+test("all 6 Phase 5 requirement IDs lead the title of a test in a named D-45 test file (QUAL-02, Phase 5)", () => {
+  const citing = D45_FILES.filter((file) => file !== "quality/suite-taxonomy.test.ts");
+  const leading = new Set<string>();
+  for (const file of citing) {
+    for (const id of titleLeadingIds(readFileSync(join(TEST_DIR, file), "utf8"))) {
+      leading.add(id);
+    }
+  }
+  const uncovered = PHASE_5_REQUIREMENT_IDS.filter((id) => !leading.has(id));
+  assert.deepEqual(uncovered, [], `Phase 5 requirement IDs named by no D-45 test title: ${uncovered.join(", ")}`);
 });

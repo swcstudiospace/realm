@@ -50,7 +50,9 @@ Upstream Omp documentation (`mcp-protocol-transports.md`) states that its MCP cl
 
 ### Q5. Which transport Realm uses
 
-Not decided here. Phase 5 chooses it and records the decision. This note does not choose a transport and does not authorise any transport code.
+Decided in Phase 5 (P5-D9). Realm serves MCP over stdio with revision 2026-07-28 semantics: stateless per-request handling where protocol version and client capabilities travel in each request; answers the `server/discover` probe for modern clients; answers the `initialize` handshake for `initialize`-based clients (the probe-then-fallback rule is cited in Q1-Q2, "Backward Compatibility"). Stdio framing follows Q2 by reference: newline-delimited JSON-RPC, no embedded newlines, nothing but MCP messages on stdout, stderr for logs, shutdown by closing stdin.
+
+Only one spec-verified revision string is used: `2026-07-28`. The upstream-only string named in Q1 remains upstream-only and unverified; this Q5 introduces no additional revision string.
 
 ## Blocked module
 

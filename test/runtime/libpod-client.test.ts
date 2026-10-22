@@ -4,10 +4,11 @@ import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { setTimeout as sleep } from "node:timers/promises";
 import { RealmError, type ErrorCode } from "../../src/core/errors.js";
 import { LibpodClient } from "../../src/runtime/libpod-client.js";
-import { LIBPOD_ROUTES } from "../../src/runtime/libpod-routes.js";
-import { FakeLibpod, type FakeLibpodOptions } from "../support/fake-libpod.js";
+import { LIBPOD_ROUTES, type LibpodRouteName } from "../../src/runtime/libpod-routes.js";
+import { FakeLibpod, type FakeLibpodOptions, type RecordedRequest } from "../support/fake-libpod.js";
 
 // This file runs from dist/test/runtime, so three levels up is the package root.
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -30,6 +31,25 @@ async function startFake(
 
 async function assertCode(work: Promise<unknown>, code: ErrorCode): Promise<void> {
   await assert.rejects(work, (error: unknown) => error instanceof RealmError && error.code === code);
+}
+
+// FakeLibpod records a request only after it parses it, and it offers no change notification. The wait
+// therefore re-reads the recorded log every 5 ms until the route appears, and fails at its deadline.
+async function waitForRecorded(fake: FakeLibpod, route: LibpodRouteName, timeoutMs: number): Promise<RecordedRequest> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const last = fake
+      .requests()
+      .filter((request) => request.route === route)
+      .at(-1);
+    if (last !== undefined) {
+      return last;
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(`fake libpod did not record a ${route} request within ${timeoutMs} ms`);
+    }
+    await sleep(5);
+  }
 }
 
 test("RT-03: the client exposes exactly the five D-54 methods and no other instance member", () => {
@@ -113,10 +133,10 @@ test("RT-09: list asks for all containers filtered by the exact label pair", asy
 test("RT-09: a timed-out request rejects with PODMAN_MACHINE_DOWN and destroys its socket", async (t) => {
   const { fake, socketPath } = await startFake(t);
   fake.hangNext("inspectContainer");
-  const client = new LibpodClient(socketPath, { requestTimeoutMs: 100 });
+  // The timeout only creates the hung request. 1000 ms keeps it clear of scheduling stalls under load.
+  const client = new LibpodClient(socketPath, { requestTimeoutMs: 1000 });
   await assertCode(client.inspectContainer("realm-a"), "PODMAN_MACHINE_DOWN");
-  const hung = fake.requests().at(-1);
-  assert.ok(hung !== undefined);
+  const hung = await waitForRecorded(fake, "inspectContainer", 5000);
   await fake.waitForSocketClose(hung.seq, 2000);
 });
 

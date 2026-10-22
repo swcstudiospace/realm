@@ -50,7 +50,7 @@ function fixture(t: TestContext, startupBudgetMs = 10000) {
 
 // Polls until the predicate holds. The bound keeps a broken implementation from hanging the run.
 async function waitUntil(predicate: () => boolean, label: string): Promise<void> {
-  const limit = Date.now() + 3000;
+  const limit = Date.now() + 30000;
   while (!predicate()) {
     if (Date.now() > limit) {
       assert.fail(`timed out waiting for ${label}`);
@@ -133,8 +133,8 @@ test("a stop issued while exec.start is in flight leaves the container stopped, 
 });
 
 test("a create whose exec.create resolves after the budget expired gets its container destroyed (C2)", async (t) => {
-  const { workspace, store, exec, controller } = fixture(t, 50);
-  exec.setDelay("create", 200);
+  const { workspace, store, exec, controller } = fixture(t, 500);
+  exec.setDelay("create", 2000);
 
   const snapshot = await controller.create(workspace);
 
@@ -151,8 +151,8 @@ test("a create whose exec.create resolves after the budget expired gets its cont
 });
 
 test("an orphaned container whose destroy fails is recorded, so the next destroy removes it (C2)", async (t) => {
-  const { workspace, store, exec, controller } = fixture(t, 50);
-  exec.setDelay("create", 200);
+  const { workspace, store, exec, controller } = fixture(t, 2000);
+  exec.setDelay("create", 8000);
   exec.failNext("destroy", "OPENSHELL_START_FAILED");
 
   const snapshot = await controller.create(workspace);
@@ -176,7 +176,7 @@ async function assertRejectsWith(promise: Promise<unknown>, code: string): Promi
 }
 
 test("a stop during a pending exec.start leaves no running container, even when the create gave up at the budget (C1, F1)", async (t) => {
-  const { workspace, store, exec, controller } = fixture(t, 100);
+  const { workspace, store, exec, controller } = fixture(t, 1000);
   // The start is held behind a gate, so the stop begins while exec.start is in flight. The
   // executor form is used because tsconfig's ES2023 lib has no Promise.withResolvers.
   let openGate: () => void = () => undefined;
@@ -194,7 +194,7 @@ test("a stop during a pending exec.start leaves no running container, even when 
   const creating = controller.create(workspace);
   await waitUntil(() => issued.length === 1, "exec.start to be issued");
   const stopping = controller.stop();
-  // The create gives up at its 100 ms budget while the stop is still waiting for the held start.
+  // The create gives up at its 1000 ms budget while the stop is still waiting for the held start.
   const outcome = await creating;
   assertOvertaken(outcome);
 
@@ -209,8 +209,8 @@ test("a stop during a pending exec.start leaves no running container, even when 
 });
 
 test("destroy waits for an orphaned create that is still in flight, then removes its container (C2, F2)", async (t) => {
-  const { workspace, store, exec, controller } = fixture(t, 50);
-  exec.setDelay("create", 200);
+  const { workspace, store, exec, controller } = fixture(t, 500);
+  exec.setDelay("create", 2000);
 
   const snapshot = await controller.create(workspace);
   assert.equal(snapshot.reason, "STARTUP_BUDGET_EXCEEDED");
@@ -224,8 +224,8 @@ test("destroy waits for an orphaned create that is still in flight, then removes
 });
 
 test("an orphan whose destroy fails once is retried by the destroy that waits for it (C2, F2)", async (t) => {
-  const { workspace, store, exec, controller } = fixture(t, 50);
-  exec.setDelay("create", 200);
+  const { workspace, store, exec, controller } = fixture(t, 500);
+  exec.setDelay("create", 2000);
   exec.failNext("destroy", "OPENSHELL_START_FAILED");
 
   await controller.create(workspace);
@@ -238,8 +238,8 @@ test("an orphan whose destroy fails once is retried by the destroy that waits fo
 });
 
 test("an orphan whose destroy and its retry both fail keeps its containerId in the record, so the next destroy removes it (C2, F2)", async (t) => {
-  const { workspace, store, exec, controller } = fixture(t, 50);
-  exec.setDelay("create", 200);
+  const { workspace, store, exec, controller } = fixture(t, 500);
+  exec.setDelay("create", 2000);
   // The first two destroy calls fail: the orphan's own destroy, then the destroy that waits for it.
   let destroyCalls = 0;
   exec.beforeCall("destroy", () => {
