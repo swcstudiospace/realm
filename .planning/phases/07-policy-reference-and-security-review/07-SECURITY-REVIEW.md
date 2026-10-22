@@ -152,7 +152,7 @@ Implication (a fact from the code, not a finding): write containment for `write`
 | C8 | Shell form requires `shellEnabled` | implemented | `checkExecPolicy` in `policy.ts`; `dispatch.ts:164`; `policy.schema.json` (default `false`) | Shell runs inside the sandbox, not on the host. |
 | C9 | `read` and `list` are state-gated | not gated, by design | `dispatch.ts:129-146` | Reads within roots are allowed in any state (R8). |
 | C10 | Symlink and traversal containment (FS-01) | implemented on Linux | `canonicalize.ts:1-8` | Fails closed without `/proc/self/fd`. |
-| C11 | Race-resistant open (FS-02) | partial | `canonicalize.ts:5-8`; `root.ts` (`PinnedRoot` holds a path string) | No pinned descriptor for the root; resolve-then-verify only (R3). |
+| C11 | Race-resistant open (FS-02) | partial | `canonicalize.ts:5-8`; `root.ts` (`PinnedRoot` holds a path string) | No pinned descriptor for the root; resolve-then-verify only (R3). Resolution (string rebind, 5.2): `create` verifies the path with `verifyPinnedAt` against the composition pin and uses that pin from there on; descriptor pinning is still open. |
 | C12 | Credential path denial (FS-03) | implemented, coverage gap | `credentials.ts` (`CREDENTIAL_PATTERNS`), `:46-50` | List has no entries for `**/*.pem`, `**/*.key`, `**/.npmrc`, or `**/.pypirc` (R4). `credentialAllow` can override. |
 | C13 | Advisory per-file locks (FS-04) | implemented in-process | `compose.ts:60`; `write.ts:58-59` | Lock table is per handle; no cross-process lock (R9). |
 | C14 | Atomic write (FS-05) | implemented | `atomic-write.ts:42-48, 51, 91-120` | A killed write leaves `.realm-tmp-*` behind (R5). |
@@ -202,6 +202,8 @@ Analysis:
 - **Consequence [INFERENCE].** After a component swap, the container mounted at `create` can keep the old directory while later dispatcher operations follow the new one, or the reverse. This is the "double-bind TOCTOU" the review described.
 
 Disposition: open. Required fix: bind once in composition, pass the same `PinnedRoot` (or a directory descriptor) to the controller, and have `create` accept that root rather than a string. This is not done in the current tree. Until it is, the workspace directory must not be replaced during a session. That operating rule is not written in any document reviewed.
+
+Resolution (string rebind): `create` no longer binds the path string again. It calls `verifyPinnedAt` (`src/fs/root.ts`, called at `src/lifecycle/controller.ts:174`) against the root pinned in composition, and takes its root from that pin from there on. Retry calls `create` with the pinned root's real path (`src/tools/dispatch.ts:216`), so it takes the same check. The open part is unchanged: the dispatcher's file operations still canonicalize from the root's path string (R3), and `create` still accepts a string.
 
 ### 5.3 Advisory-mode non-active writes: open, accepted as specified behaviour, disclosure required
 
@@ -322,6 +324,7 @@ Each item below is fixed in the current source. Evidence is the cited code.
 - **R12. Upstream host guarantees.** Tool-call fail-closed behaviour and `setActiveTools` enforcement are not proven (`omp.md:84-90`).
 - **R13. Hardening verifier scope.** No capability beyond the ALL drop is verified (`hardening.ts:8-10`).
 - **R14. Retry re-bind.** The retry path re-binds the root from a string at a later time (`dispatch.ts:208`). This is the rebind window in 5.2.
+  Resolution (string rebind): see 5.2. `create` verifies the retry path against the composition pin with `verifyPinnedAt` (`src/fs/root.ts`, `src/lifecycle/controller.ts:174`) and fails with `POLICY_DENIED` when the directory no longer matches the pin. File operations still canonicalize from the path string (R3).
 
 ## 7. Documentation drift
 

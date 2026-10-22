@@ -25,7 +25,7 @@ score: 5/5 must-haves verified
 
 ### Required Artifacts
 
-All present, substantive, wired: `src/realm/compose.ts` (factory + `RealmHandle` + single-owner precondition), `src/mcp/server.ts` (`2026-07-28` probe-plus-initialize, stdout purity), `src/acp/agent.ts` (v1 + `realm/tool` extension, batch rule), `src/omp/plugin.ts` (autostart, status, retry, guard + residual-risk comment), `package.json` (`omp.extensions: ["./dist/src/omp/plugin.js"]`, matching `tsconfig` `rootDir: .` + `outDir: dist` and asserted byte-equal by the manifest test), extended `docs/integration/{mcp,acp,omp,anda,and-decision}.md`, `test/quality/suite-taxonomy.test.ts` (Phase 5 entries). New tests: `test/{realm/compose,mcp/server,acp/agent,omp/plugin,surfaces/equivalence,surfaces/no-logic,docs/phase5-notes}.test.ts`.
+All present, substantive, wired: `src/realm/compose.ts` (factory + `RealmHandle` + single-owner precondition), `src/mcp/server.ts` (`2026-07-28` probe-plus-initialize, stdout purity), `src/acp/agent.ts` (v1 + `realm/tool` extension, batch rule), `src/omp/plugin.ts` (autostart, status, retry, guard + residual-risk comment), `package.json` (`omp.extensions: ["./dist/src/omp/extension.js"]`, matching `tsconfig` `rootDir: .` + `outDir: dist` and asserted byte-equal by the manifest test), extended `docs/integration/{mcp,acp,omp,anda,and-decision}.md`, `test/quality/suite-taxonomy.test.ts` (Phase 5 entries). New tests: `test/{realm/compose,mcp/server,acp/agent,omp/plugin,surfaces/equivalence,surfaces/no-logic,docs/phase5-notes}.test.ts`.
 
 ### Key Link Verification
 
@@ -38,7 +38,7 @@ All present, substantive, wired: `src/realm/compose.ts` (factory + `RealmHandle`
 | `src/omp/plugin.ts` | `src/realm/compose.ts` | `createRealmHandle(options)`; no adapter constructed in plugin | WIRED (all plugin tests build through it) |
 | `src/omp/plugin.ts` | `src/core/status.ts` | `displayStatus` as the only label source | WIRED (shared-label + status-equality tests on both surfaces) |
 | `src/omp/plugin.ts` | `src/tools/dispatch.ts` | retry via `dispatcher.call({ retry: {} })` per P5-D14 | WIRED (retry test) |
-| `package.json` | `dist/src/omp/plugin.js` | `omp.extensions` entry | WIRED (manifest test asserts exact entry and built file exists) |
+| `package.json` | `dist/src/omp/extension.js` | `omp.extensions` entry | WIRED (manifest test asserts exact entry and built file exists) |
 | `test/docs/phase5-notes.test.ts` | `docs/integration/{mcp,acp,omp}.md` | exact-string pins (`2026-07-28`, `protocolVersion: 1`, `realm/tool`, verified Omp names) | WIRED (8 doc tests) |
 
 ### Data-Flow Trace (Level 4)
@@ -81,6 +81,7 @@ Per the run rules the verifier ran no gates. The orchestrator reports: typecheck
 ### Known Limitations (a)–(f) (not hidden; each names its affected requirement)
 
 - **(a) OMP-03 tooltip — no documented tooltip API; reason + time are a second status item (P5-D5 deviation).** Affects **OMP-03 / SC2**. No tooltip surface was verified on the official pages read, so `renderRealmStatus` writes `reason · lastTransitionAt` to `REALM_DETAIL_KEY` beside the `REALM_STATUS_KEY` label instead of a tooltip. The deviation is recorded in `src/omp/plugin.ts` and covered by the `OMP-03` beside-the-label test.
+  Superseded 2026-10-22 by the gap closure: one status item, detail in its text, 2 s refresh.
 - **(b) `ctx.ui.setStatus` is upstream-sourced only (OQ-P5-01).** Affects **OMP-02 / SC2**. The key-plus-text signature was found only in upstream `hooks.md`, not on the official pages read; `docs/integration/omp.md` Q3 marks the limit and the plugin uses only that call. A host whose `setStatus` differs needs a live check (Human Verification 3).
 - **(c) Host write/edit interception is not documented as enforced: the `tool_call` guard is the only control (OQ-P5-02, residual risk).** Affects **OMP-05 / SC4**. Neither `setActiveTools` removal nor a `tool_call` block is documented to cover every host execution path (launch-time tool flags, SDK sessions, a host ignoring the hook). The residual risk is recorded both in `src/omp/plugin.ts` and in `docs/integration/omp.md` Q4 (`OPEN`). Unit proof covers the extension pipeline only.
 - **(d) No live Omp session, MCP client, or ACP client has been driven.** Affects **all six requirements / SC1–SC5**. Every behavior is proven in-process with fakes (`fake-execution`, `fake-bridge`, `makeHarness`) and in-memory stdio streams; the Phase 5 CONTEXT boundary declares the phase "unit-verified, live-gated". All live acceptance is deferred to Human Verification 1–7.

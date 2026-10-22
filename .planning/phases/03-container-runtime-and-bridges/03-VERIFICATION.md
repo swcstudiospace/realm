@@ -1,7 +1,7 @@
 ---
 phase: 03-container-runtime-and-bridges
 verified: 2026-10-21T00:00:00Z
-status: passed_with_gated_live_items
+status: gaps_found
 score: 10/10 must-haves unit-verified, 5/10 with live-gated parts
 ---
 
@@ -11,7 +11,7 @@ score: 10/10 must-haves unit-verified, 5/10 with live-gated parts
 and AgentOS, reaches Anda through the bridge, and gates file-mutating tools
 through the lifecycle controller.
 **Verified:** 2026-10-21
-**Status:** passed_with_gated_live_items (unit-verified, live-gated; no live
+**Status:** gaps_found (unit-verified, live-gated; no live
 container, OpenShell sandbox, AgentOS run, or Anda RPC is claimed — host runs
 Podman 4.9.3, below the 5.x OpenShell's Podman driver requires)
 
@@ -23,7 +23,7 @@ Podman 4.9.3, below the 5.x OpenShell's Podman driver requires)
 |---|--------------------|--------|----------|
 | 1 | Non-active mutation returns structured error (required), warns (advisory), never hangs | ✓ unit-VERIFIED | `src/lifecycle/mutation-gate.ts` wraps frozen `decideMutation` (`proceed`/`proceed-with-warning`/`refused`+code); `test/lifecycle/mutation-gate.test.ts`; bridge wiring `test/lifecycle/bridge-states.test.ts` |
 | 2 | Probe reports `PODMAN_MISSING`/`PODMAN_MACHINE_DOWN` w/ reason; running container is rootless, digest-pinned, non-privileged, caps dropped, read-only root + tmpfs, CPU/mem/PID limits, workspace+state mounts only | ✓ unit-VERIFIED, live GATED | `src/runtime/podman-probe.ts`, `src/runtime/config.ts`, `src/runtime/hardening.ts` (`HARDENING_PROFILE` + `verifyInspect`: rootless, `capDrop ALL`, `capAdd []`, `no-new-privileges`, read-only root, mounts); `test/runtime/{podman-probe,config,hardening}.test.ts`; fail-closed destroy + `OPENSHELL_START_FAILED` in `src/runtime/session-execution.ts` (`test/runtime/session-execution.test.ts`). RT-01 wording superseded by S-08/D-47: the container is the OpenShell-driver-created session sandbox, recorded in `docs/integration/runtime-decision.md` |
-| 3 | All agent execution through OpenShell in-container; AgentOS only via supported API, bounded-backoff restart, `AGENTOS_CRASH_LOOP` at max | ✓ unit-VERIFIED, live GATED | `src/runtime/openshell.ts` (pinned argv, deny-all policy doc, idempotent create keyed by session) + `test/runtime/openshell-{argv,policy,routing}.test.ts` (routing proves no bypass; closed libpod client has exactly 5 methods, no exec/attach/start — `src/runtime/libpod-{client,routes}.ts`); `src/runtime/agentos.ts` supervisor (500ms/8000ms+jitter, 5th failure holds + `AGENTOS_CRASH_LOOP`, 60s-alive reset) + `test/runtime/agentos-supervisor.test.ts` vs `test/support/fake-agentos.ts`. RT-03 wording superseded by S-08/D-46 (gateway on host). No concrete driver bound (OQ-P3-05/06): e2e session start is a missing prerequisite, not a gap |
+| 3 | All agent execution through OpenShell in-container; AgentOS only via supported API, bounded-backoff restart, `AGENTOS_CRASH_LOOP` at max | unit-verified against fakes; not satisfied in production (RT-04 open, audit G-01) | `src/runtime/openshell.ts` (pinned argv, deny-all policy doc, idempotent create keyed by session) + `test/runtime/openshell-{argv,policy,routing}.test.ts` (routing proves no bypass; closed libpod client has exactly 5 methods, no exec/attach/start — `src/runtime/libpod-{client,routes}.ts`); `src/runtime/agentos.ts` supervisor (500ms/8000ms+jitter, 5th failure holds + `AGENTOS_CRASH_LOOP`, 60s-alive reset) + `test/runtime/agentos-supervisor.test.ts` vs `test/support/fake-agentos.ts`. RT-03 wording superseded by S-08/D-46 (gateway on host). No concrete driver bound (OQ-P3-05/06): e2e session start is a missing prerequisite, not a gap |
 | 4 | Anda client handshakes; mismatch → `ANDA_VERSION_MISMATCH`; unreachable → `ANDA_UNREACHABLE` + degraded + bounded backoff+jitter retry; boundary in `anda-decision.md` | ✓ unit-VERIFIED, live GATED | `src/anda/client.ts` (sticky mismatch, per-attempt timers, `computeBackoffDelayMs` from `src/core/backoff.ts`) + `src/anda/shape.ts`; `test/anda/{handshake,reconnect,boundary-decision,no-shim}.test.ts`; `test/lifecycle/bridge-retry.test.ts` (degraded + background retry); `docs/integration/anda-decision.md`. ANDA-02 accepted as shape check (no documented version surface) |
 | 5 | `realm down` removes every realm-labelled container, state → disconnected, zero orphans; Podman-gated suites skip with stated reason on <5.x | ✓ unit-VERIFIED, live GATED | `test/runtime/down-sweep.test.ts` (label sweep via fake libpod); `test/integration/podman-gate.test.ts` (4 tests skip: "Podman 4.9.3 detected; OpenShell requires Podman 5.x; `PODMAN_UNSUPPORTED_VERSION`"); `test/quality/suite-taxonomy.test.ts` enforces the skip-reason naming |
 
@@ -50,7 +50,7 @@ All present, substantive, wired: `src/runtime/{podman-probe,podman-version,libpo
 | RT-01 | `test/runtime/hardening.test.ts`, `session-execution.test.ts` | ✓ SATISFIED (unit; live conformance GATED) |
 | RT-02 | `test/runtime/podman-probe.test.ts`, `podman-version.test.ts` | ✓ SATISFIED (unit; live probe output GATED) |
 | RT-03 | `test/runtime/openshell-routing.test.ts`, `openshell-argv.test.ts` | ✓ SATISFIED (unit; live argv conformance GATED) |
-| RT-04 | `test/runtime/agentos-supervisor.test.ts` | ✓ SATISFIED (unit; live AgentOS run GATED, driver unbound per OQ-P3-05/06) |
+| RT-04 | `test/runtime/agentos-supervisor.test.ts`. Evidence basis: fakes only (`test/support/fake-agentos.ts`). | Open (unsatisfied; G-01 per v1.0 audit). No AgentOS driver is bound (`src/daemon/daemon.ts:529-534`); `docs/integration/agentos.md` "Spike result" recommends no-go. |
 | RT-09 | `test/runtime/down-sweep.test.ts` | ✓ SATISFIED (unit; zero-orphan live sweep GATED) |
 | ANDA-01 | `test/anda/boundary-decision.test.ts`, `docs/integration/anda-decision.md` | ✓ SATISFIED (unit) |
 | ANDA-02 | `test/anda/handshake.test.ts` | ✓ SATISFIED as shape check (accepted; live RPC GATED) |
@@ -71,7 +71,9 @@ All present, substantive, wired: `src/runtime/{podman-probe,podman-version,libpo
 
 ### Gaps
 
-None. No debt markers introduced (phase files grep-clean for `TBD|FIXME|XXX` by convention of prior phases; implementation adds no stubs).
+- RT-04 open, audit G-01. Production has no AgentOS driver: `src/daemon/daemon.ts:529-534` binds none, and `src/runtime/session-execution.ts:205-207` throws `AGENTOS_NOT_CONFIGURED`. `docs/integration/agentos.md` "Spike result" recommends no-go. The passing supervisor test runs against `test/support/fake-agentos.ts` only.
+
+No debt markers introduced (phase files grep-clean for `TBD|FIXME|XXX` by convention of prior phases; implementation adds no stubs).
 
 ---
 _Verified: 2026-10-21_

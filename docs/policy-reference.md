@@ -248,6 +248,8 @@ Keys (`ACCEPTED_KEYS`, `src/runtime/config.ts`). The key set is closed, and any 
 - `workspaceRoot` (required): an absolute path.
 - `andaUrl` (optional): an `http:` or `https:` URL with no userinfo.
 
+The CLI and the daemon both read `stateDir` from this file, and a config that omits it is `SCHEMA_INVALID`.
+
 Reading (`readRuntimeConfigFile`, `src/runtime/config-file.ts`):
 
 - The file is read with a 64 KiB cap (65,536 bytes).

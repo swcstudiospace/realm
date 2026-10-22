@@ -80,7 +80,7 @@ All v1 requirements are hypotheses until shipped and verified.
 
 ### Quality and documentation (QUAL)
 
-- [x] **QUAL-01**: Every async boundary has a timeout; every error is typed with a machine-readable code and a human-readable reason; no silent catch blocks exist
+- [ ] **QUAL-01**: Every async boundary has a timeout; every error is typed with a machine-readable code and a human-readable reason; no silent catch blocks exist
 - [x] **QUAL-02**: Test suite includes unit tests, state-machine tests, contract tests for MCP and ACP, path and symlink tests, schema-rejection tests, audit-redaction tests, and integration tests that run only when Podman is present and skip with a stated reason otherwise
 - [x] **QUAL-03**: Policy reference documents every policy key; security review and dependency and supply-chain review are recorded before the first release
 
@@ -117,7 +117,7 @@ Filled by the roadmap. Each v1 requirement maps to exactly one phase.
 | CORE-05 | Phase 3 | Complete |
 | CORE-06 | Phase 2 | Complete |
 | FS-01 | Phase 2 | Complete |
-| FS-02 | Phase 2 | Partial (accepted approximation) |
+| FS-02 | Phase 2 | Partial (accepted approximation; rebind verified through the pinned root, but path canonicalization remains; audit G-10) |
 | FS-03 | Phase 2 | Complete |
 | FS-04 | Phase 2 | Complete |
 | FS-05 | Phase 2 | Complete |
@@ -143,13 +143,13 @@ Filled by the roadmap. Each v1 requirement maps to exactly one phase.
 | AUD-02 | Phase 2 | Complete |
 | OMP-01 | Phase 5 | Partial (live-gated) |
 | OMP-02 | Phase 5 | Partial (live-gated) |
-| OMP-03 | Phase 5 | Partial (live-gated) |
+| OMP-03 | Phase 5 | Partial (accepted approximation; one status item, no tooltip API on this host; decision pending) |
 | OMP-04 | Phase 5 | Partial (live-gated) |
 | OMP-05 | Phase 5 | Partial (live-gated) |
 | CLI-01 | Phase 6 | Open |
 | CLI-02 | Phase 6 | Complete |
 | CLI-03 | Phase 6 | Complete |
 | CLI-04 | Phase 6 | Partial (live-gated) |
-| QUAL-01 | Phase 1 | Complete |
+| QUAL-01 | Phase 1 | Open (10 catch sites still drop or replace errors; audit G-04) |
 | QUAL-02 | Phase 2 | Complete |
 | QUAL-03 | Phase 7 | Complete |

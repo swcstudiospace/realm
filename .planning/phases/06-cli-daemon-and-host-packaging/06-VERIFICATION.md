@@ -1,7 +1,7 @@
 ---
 phase: 06-cli-daemon-and-host-packaging
 verified: 2026-10-22T00:00:00Z
-status: human_needed
+status: gaps_found
 score: 5/5 must-haves verified (unit evidence on disk; live-client checks remain)
 ---
 
@@ -9,7 +9,7 @@ score: 5/5 must-haves verified (unit evidence on disk; live-client checks remain
 
 **Phase Goal:** Developers run `realm up`, `down`, `status`, and `doctor` from a standalone CLI backed by a long-running local daemon, and each supported host has a config snippet.
 **Verified:** 2026-10-22 (read-only; no tests, typecheck, lint, build, or git commands run per assignment constraints)
-**Status:** human_needed (all unit-verifiable items met on disk; live Podman / OpenShell / Omp / MCP / ACP checks need a live host)
+**Status:** gaps_found
 **Re-verification:** No — initial verification (no prior 06-VERIFICATION.md existed)
 
 ## Goal Achievement
@@ -18,7 +18,7 @@ score: 5/5 must-haves verified (unit evidence on disk; live-client checks remain
 
 | # | Truth (Roadmap SC) | Status | Evidence |
 |---|--------------------|--------|----------|
-| 1 | `realm up` → `realm status` reports realm active → `realm down` returns realm disconnected, all through the standalone CLI and its long-running daemon | ✓ VERIFIED (unit) | `src/cli/main.ts` `runUp`/`runDown`/`runStatus` + `src/daemon/daemon.ts` `startDaemon` dispatch (`status`/`up`/`down`/`doctor`) over `src/daemon/channel.ts`; `test/daemon/e2e.test.ts` "up then status-active then down-to-disconnected flows through the CLI against the fake-backed daemon (CLI-01, RT-06)" drives the real `runCli` against the real `startDaemon` over a real Unix socket with fake adapters, asserting `active`/`realm active` then `disconnected` with the socket file gone |
+| 1 | `realm up` → `realm status` reports realm active → `realm down` returns realm disconnected, all through the standalone CLI and its long-running daemon | verified against fakes; production `realm up` ends in `AGENTOS_NOT_CONFIGURED` (CLI-01 open, audit G-02) | `src/cli/main.ts` `runUp`/`runDown`/`runStatus` + `src/daemon/daemon.ts` `startDaemon` dispatch (`status`/`up`/`down`/`doctor`) over `src/daemon/channel.ts`; `test/daemon/e2e.test.ts` "up then status-active then down-to-disconnected flows through the CLI against the fake-backed daemon (CLI-01, RT-06)" drives the real `runCli` against the real `startDaemon` over a real Unix socket with fake adapters, asserting `active`/`realm active` then `disconnected` with the socket file gone |
 | 2 | With Podman missing, `realm up` reports disconnected with `PODMAN_MISSING` and exits without hanging | ✓ VERIFIED (unit) | `src/cli/main.ts` `runUp` probes first via `probePodman` and returns exit 1 with stdout `PODMAN_MISSING` before any spawn on any probe failure (T-06-10); `test/cli/cli.test.ts` "realm up with Podman missing reports PODMAN_MISSING and exits promptly with no spawn (CLI-02)" plus `test/daemon/e2e.test.ts` fast-path test with `ENOENT` `runCommand` fake, zero spawns/sends/dials, and a 2000 ms wall-clock bound |
 | 3 | `realm doctor` lists Podman, Podman version, machine state, OpenShell, AgentOS, Anda bridge, policy file, and control channel, each with status and the fix for every failing item | ✓ VERIFIED (unit) | `src/doctor/checks.ts` `REGISTERED` order now `policy-file, state-dir, session-store, podman, podman-service, openshell, anda-bridge, control-channel, agentos` (9 items; `podman` names the version code, `podman-service` covers the machine/socket state, every non-pass carries a non-null fix); `test/doctor/control-channel.test.ts` (12 CLI-03 tests: pass/fail/warn + fix on every non-pass) and `test/doctor/checks.test.ts` "the nine checks are registered in report order" plus `test/doctor/runtime-checks.test.ts` Phase-6 order test |
 | 4 | Control channel is a user-only Unix socket (dir 0700, socket 0600) under the state dir; neither it nor any Podman/Docker socket is visible inside the container | ✓ VERIFIED (unit) | `src/session/paths.ts` `controlSocketPath` = `<stateDir>/run/control.sock`; `src/daemon/channel.ts` `ensureSocketDir` (create-or-check 0700, wrong-mode/foreign-owner/non-directory refuses `SCHEMA_INVALID`) + `chmodSocket` (0600, failure refuses); `test/daemon/channel.test.ts` (11 RT-06 tests incl. live-socket round-trip, timeout, permission matrix, structural no-container-socket pin); `test/daemon/e2e.test.ts` stats the real temp run dir 0700 and socket 0600 and proves `buildCreateArgv` + policy document carry no `.sock`/`podman.sock`/`docker.sock`; `src/runtime/openshell.ts` contains no `.sock` string |
@@ -63,7 +63,7 @@ No `scripts/*/tests/probe-*.sh` probes are declared or implied by the 06 plans, 
 | Requirement | Source Plans | Status | Evidence |
 |-------------|--------------|--------|----------|
 | RT-06 | 06-01, 06-03, 06-06 | ✓ SATISFIED (unit) | channel tests + daemon socket tests + e2e permissions/no-mounts |
-| CLI-01 | 06-03, 06-04, 06-06 | ✓ SATISFIED (unit) | daemon handle/ownership/reap/dispatch/shutdown + CLI argv/spawn/exit + e2e lifecycle |
+| CLI-01 | 06-03, 06-04, 06-06 | Open (unsatisfied; G-02 per v1.0 audit) | Evidence basis: fakes only (daemon handle/ownership/reap/dispatch/shutdown + CLI argv/spawn/exit + e2e lifecycle against fake adapters). No AgentOS driver is bound (`src/daemon/daemon.ts:529-534`), so production `realm up` ends in `AGENTOS_NOT_CONFIGURED`. |
 | CLI-02 | 06-04, 06-06 | ✓ SATISFIED (unit) | CLI bounded `PODMAN_MISSING` test + e2e fast-path bound |
 | CLI-03 | 06-05, 06-06 | ✓ SATISFIED (unit) | control-channel/agentos items + order + fix tests + e2e doctor report |
 | CLI-04 | 06-02, 06-04 | ✓ SATISFIED (unit) | 5 snippets + evidentiary suite + `realm mcp` stdio entry |
@@ -82,7 +82,7 @@ The 06-05 SUMMARY's blocker note about two stale seven-item assertions is **reso
 
 ### Gaps
 
-None. No `gaps:` section: every requirement and success criterion is met in code with unit evidence; nothing failed or is missing.
+- CLI-01 open, audit G-02. Production `realm up` has no AgentOS driver to run against: `src/daemon/daemon.ts:529-534` binds none, and `src/runtime/session-execution.ts:205-207` throws `AGENTOS_NOT_CONFIGURED`. The passing tests use fake adapters only.
 
 ### Deferred Items
 

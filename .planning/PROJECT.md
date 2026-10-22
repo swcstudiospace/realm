@@ -31,7 +31,6 @@ When an agent edits code, every file mutation either lands inside the realm unde
 - **AUD-02**: no host environment injected into the sandbox. Evidence: `test/lifecycle/no-host-env.test.ts`
 - **CLI-02**: realm up with Podman missing reports PODMAN_MISSING and exits promptly. Evidence: `test/cli/cli.test.ts`, `test/daemon/e2e.test.ts`
 - **CLI-03**: doctor lists each prerequisite with its fix. Evidence: `test/doctor/checks.test.ts`, `test/doctor/runtime-checks.test.ts`; closure smoke run (doctor runs its 9 checks)
-- **QUAL-01**: typed errors, async timeouts, no silent catches. Evidence: `test/core/errors.test.ts`, `.planning/phases/01-scaffold-and-frozen-contracts/01-VERIFICATION.md`
 - **QUAL-02**: suite taxonomy with Podman-gated skip. Evidence: `test/quality/suite-taxonomy.test.ts`, `test/integration/podman-gate.test.ts`
 - **QUAL-03**: policy reference and reviews. Evidence: `docs/policy-reference.md`, `.planning/phases/07-policy-reference-and-security-review/07-SECURITY-REVIEW.md`, `.planning/phases/07-policy-reference-and-security-review/07-SUPPLY-CHAIN-REVIEW.md`
 - **TOOL-01**: six tools in one schema; every input validated before any sandbox call. Evidence: `test/contract/tools.schema.test.ts`, `test/contract/tool-input-gate.test.ts`, `test/tools/dispatch.test.ts`
@@ -53,7 +52,7 @@ The v1 requirement set lives in `.planning/REQUIREMENTS.md` (REQ-IDs grouped by 
 - [ ] Integration notes per documentation source, policy reference, security review
 - [ ] Unit, state-machine, contract, and Podman-gated integration tests
 
-**Milestone status (2026-10-22):** not complete. RT-04 (no AgentOS driver is bound) and CLI-01 (`realm up` reaches the error state `AGENTOS_NOT_CONFIGURED`, not active) stay open, and the spike recommends no-go for the in-sandbox runner as designed. The live-gated items are deferred as human verification. The milestone name v1.0 is provisional, and archive needs approval.
+**Milestone status (2026-10-22):** not complete. Open: RT-04 and CLI-01 (no AgentOS driver is bound; `realm up` reaches the error state `AGENTOS_NOT_CONFIGURED`, not active; the spike recommends no-go for the in-sandbox runner as designed). QUAL-01 is open: 10 catch sites still drop or replace errors (audit G-04), and the requirement text forbids silent catch blocks; the decision is pending. Partial, accepted approximations: FS-02 and OMP-03 (OMP-03's decision is pending). Partial, live-gated and deferred as human verification: RT-01, RT-02, RT-03, RT-05, RT-08, RT-09, TOOL-03, TOOL-04, TOOL-05, OMP-01, OMP-02, OMP-04, OMP-05, CLI-04, ANDA-01, ANDA-02, ANDA-03, ANDA-04. The milestone name v1.0 is provisional, and archive needs approval.
 
 ### Out of Scope
 
@@ -109,6 +108,7 @@ The v1 requirement set lives in `.planning/REQUIREMENTS.md` (REQ-IDs grouped by 
 | Podman-gated integration tests skip with a clear reason until Podman 5.x is installed | OpenShell docs require Podman 5.x; local Podman is 4.9.3; no package installs | — Pending (environment) |
 | Node LTS with ESM for CLI and daemon; Bun unverified | Spec ASSUMPTIONS and n3 default | — Pending (host doc gate) |
 | The daemon owns sessions; surfaces attach through the control socket | User decision, 2026-10-22 (STATE.md). Surfaces attach by calling the idempotent `up`; there is no attach or detach protocol | Decided 2026-10-22 |
+| Containment default: advisory is the recorded default | Security review (07-SECURITY-REVIEW.md, section 5.3 and section 8, item 2) recommends fail-closed for containment deployments | Pending: decision on the containment default (2026-10-22) |
 
 ---
 *Last updated: 2026-10-22 after initialization (automatic mode, research skipped by preset)*
