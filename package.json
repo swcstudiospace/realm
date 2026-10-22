@@ -1,6 +1,6 @@
 {
   "name": "agent-realm",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "license": "AGPL-3.0-only",
   "author": "Spectrum Web Co/swcstudiospace",
@@ -24,8 +24,14 @@
     "type": "git",
     "url": "git+https://github.com/swcstudiospace/realm.git"
   },
-  "bin": { "realm": "./dist/src/cli/main.js" },
-  "omp": { "extensions": ["./dist/src/omp/extension.js"] },
+  "bin": {
+    "realm": "./dist/src/cli/main.js"
+  },
+  "omp": {
+    "extensions": [
+      "./dist/src/omp/extension.js"
+    ]
+  },
   "files": [
     "dist/src",
     "src/core/policy.schema.json",
