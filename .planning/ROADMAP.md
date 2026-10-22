@@ -8,13 +8,13 @@ Coverage: 46/46 v1 requirements mapped, each to exactly one phase.
 
 ## Phases
 
-- [ ] **Phase 1: Scaffold and Frozen Contracts** - Strict ESM package, test runner, frozen contracts, and integration gate notes
-- [ ] **Phase 2: Policy, State, and Filesystem Lockdown** - Policy engine, state machine, event bus, path and write safety, audit redaction, session store, doctor core
-- [ ] **Phase 3: Container Runtime and Bridges** - Rootless Podman, OpenShell, AgentOS adapters, Anda bridge, and the lifecycle controller
-- [ ] **Phase 4: Reaper, Egress Guard, and Shared Dispatcher** - Orphan reaping, default-deny egress, timeouts, and the single tool dispatcher
-- [ ] **Phase 5: Omp Plugin, MCP, and ACP Surfaces** - Detached Omp autostart, status indicator, retry command, and MCP and ACP over one contract
-- [ ] **Phase 6: CLI, Daemon, and Host Packaging** - realm up, down, status, doctor, control channel, and host config snippets
-- [ ] **Phase 7: Policy Reference and Security Review** - Policy reference, security review, and supply-chain review before first release
+- [x] **Phase 1: Scaffold and Frozen Contracts** - Strict ESM package, test runner, frozen contracts, and integration gate notes — Complete (verification passed; tooling format gap noted)
+- [x] **Phase 2: Policy, State, and Filesystem Lockdown** - Policy engine, state machine, event bus, path and write safety, audit redaction, session store, doctor core — Complete (verification passed)
+- [x] **Phase 3: Container Runtime and Bridges** - Rootless Podman, OpenShell, AgentOS adapters, Anda bridge, and the lifecycle controller — Complete (verification passed with gated live items; live items deferred)
+- [x] **Phase 4: Reaper, Egress Guard, and Shared Dispatcher** - Orphan reaping, default-deny egress, timeouts, and the single tool dispatcher — Complete (verification deferred: human)
+- [x] **Phase 5: Omp Plugin, MCP, and ACP Surfaces** - Detached Omp autostart, status indicator, retry command, and MCP and ACP over one contract — Complete (verification deferred: human)
+- [x] **Phase 6: CLI, Daemon, and Host Packaging** - realm up, down, status, doctor, control channel, and host config snippets — Code complete, verification pending
+- [x] **Phase 7: Policy Reference and Security Review** - Policy reference, security review, and supply-chain review before first release — Complete as documentation, verification pending
 
 ## Phase Details
 
@@ -151,10 +151,10 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Scaffold and Frozen Contracts | 0/TBD | Not started | - |
-| 2. Policy, State, and Filesystem Lockdown | 0/TBD | Not started | - |
-| 3. Container Runtime and Bridges | 0/TBD | Not started | - |
-| 4. Reaper, Egress Guard, and Shared Dispatcher | 0/TBD | Not started | - |
-| 5. Omp Plugin, MCP, and ACP Surfaces | 0/TBD | Not started | - |
-| 6. CLI, Daemon, and Host Packaging | 0/TBD | Not started | - |
-| 7. Policy Reference and Security Review | 0/TBD | Not started | - |
+| 1. Scaffold and Frozen Contracts | 5/5 | Complete (verification passed; tooling format gap noted) | - |
+| 2. Policy, State, and Filesystem Lockdown | 6/6 | Complete (verification passed) | - |
+| 3. Container Runtime and Bridges | 10/10 | Complete (verification passed with gated live items; live items deferred) | - |
+| 4. Reaper, Egress Guard, and Shared Dispatcher | 7/7 | Complete (verification deferred: human) | - |
+| 5. Omp Plugin, MCP, and ACP Surfaces | 6/6 | Complete (verification deferred: human) | - |
+| 6. CLI, Daemon, and Host Packaging | 6/6 | Code complete, verification pending | - |
+| 7. Policy Reference and Security Review | 3 units, no PLAN files | Complete as documentation, verification pending | - |

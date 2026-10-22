@@ -1,19 +1,19 @@
 ---
 gsd_state_version: "1.0"
-current_phase: 3
-current_phase_name: Container Runtime and Bridges
-status: planned
-stopped_at: Phase 3 plans written and checked
-last_updated: "2026-10-21T18:41:56.748Z"
-last_activity: 2026-10-21
-last_activity_desc: "Roadmap created: 7 phases, 46/46 v1 requirements mapped"
+current_phase: 7
+current_phase_name: Policy Reference and Security Review
+status: executed; verification pending for phases 6 and 7; live checks deferred for phases 3-5
+stopped_at: State reconciled to evidence 2026-10-22
+last_updated: "2026-10-22"
+last_activity: 2026-10-22
+last_activity_desc: "Reconciled ROADMAP and STATE to evidence: phases 1-5 and 7 execution complete, phase 6 code complete, verifications deferred/pending"
 state_head: 52049eae22888afdfc4aac88995deb1e13553b53
 progress:
   total_phases: 7
-  completed_phases: 0
-  total_plans: 11
-  completed_plans: 5
-  percent: 0
+  completed_phases: 6
+  total_plans: 40
+  completed_plans: 40
+  percent: 86
 ---
 
 # Project State
@@ -23,16 +23,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-10-21)
 
 **Core value:** Every file mutation by an agent either lands inside the realm under policy or fails closed, and the user can always see whether the realm is active or disconnected.
-**Current focus:** Phase 1: Scaffold and Frozen Contracts
+**Current focus:** Phase 7: Policy Reference and Security Review (executed as documentation; verification pending)
 
 ## Current Position
 
-Phase: 3 (Container Runtime and Bridges) — PLANNED, READY TO EXECUTE
-Plan: 0 of 10 in current phase
-Status: Plans 03-01 to 03-10 written; plan-checker PASS (15/15); not executed
-Last activity: 2026-10-21 - Phase 3 discuss (auto) and plan step complete
+Phase: 7 (Policy Reference and Security Review) — EXECUTED as three units (docs/policy-reference.md, 07-SECURITY-REVIEW.md, 07-SUPPLY-CHAIN-REVIEW.md), no PLAN files; verification pending
+Plan: all phase plans executed — Phase 1: 5/5, Phase 2: 6/6, Phase 3: 10/10, Phase 4: 7/7, Phase 5: 6/6, Phase 6: 6/6 with summaries; Phase 7 has no PLAN files
+Status: Phases 1-5 and 7 execution complete; Phase 6 code complete (gates green, no VERIFICATION report yet); verifications deferred/pending per Deferred Verification below
+Last activity: 2026-10-22 - ROADMAP and STATE reconciled to evidence
 
-Progress: [░░░░░░░░░░] 0%
+Progress: [████████▓░] 86%
 
 ## Performance Metrics
 
@@ -64,6 +64,9 @@ Full log lives in PROJECT.md Key Decisions table. Recent decisions affecting cur
 - [Roadmap]: Fixed 7-phase order; vertical slice (up, down, status, doctor on core and runtime) before plugin, MCP, and ACP
 - [Roadmap]: Podman-gated integration tests skip with a stated reason while Podman is below 5.x; no packages installed or upgraded
 - [Roadmap]: Policy defaults to advisory mode; fail-closed is opt-in per project
+- [2026-10-22 user decision]: Continue without live validation; resume deferred live checks with /gsd:verify-work on a Podman 5.x host
+- [2026-10-22 user decision]: Anda consumes Realm over MCP (Anda boundary resolved as MCP consumer)
+- [2026-10-22 user decision]: S-08 launch layering confirmed
 
 ### Pending Todos
 
@@ -71,10 +74,11 @@ None yet.
 
 ### Blockers/Concerns
 
-- [Phase 1]: AgentOS identity (Rivet actor service versus separate product) is unresolved; resolve through the agentos.md gate note
-- [Phase 3]: Anda boundary is unresolved; resolve through anda.md and anda-decision.md before the bridge is written
-- [Phase 3]: Local Podman is 4.9.3 and OpenShell docs require 5.x; Podman-gated tests skip until 5.x is present
-- [Phase 5]: Whether Omp can intercept host-native write and edit tools is open (spec q4); default is to disable them in required mode and record residual risk
+- Host Podman is 4.9.3, below OpenShell's 5.x requirement; Podman-gated tests skip with a stated reason until 5.x is present
+- Anda licence conflict blocks vendoring Anda code
+- Omp host write and edit interception is not documented (OQ-P5-02)
+- The repo has no declared licence (release gate)
+- Node engines gap 22.0 to 22.12 (release decision)
 
 ## Deferred Items
 
@@ -84,8 +88,22 @@ Items acknowledged and deferred at milestone close, most recent first:
 |----------|------|--------|-------------|-----------|
 | *(none)* | | | | |
 
+## Deferred Verification
+
+Live or pending verifications deferred by evidence, most recent first:
+
+| Phase | Deferred Items | Resume Command |
+|-------|----------------|----------------|
+| Phase 3: Container Runtime and Bridges | Live Podman, OpenShell, AgentOS, and Anda checks are live-gated (host Podman 4.9.3 below 5.x) | `/gsd:verify-work 3` on a Podman 5.x host |
+| Phase 4: Reaper, Egress Guard, and Shared Dispatcher | 04-VERIFICATION.md status human_needed (5 live items) | `/gsd:verify-work 4` on a Podman 5.x host |
+| Phase 5: Omp Plugin, MCP, and ACP Surfaces | 05-VERIFICATION.md status human_needed (7 live items; limitations a to f) | `/gsd:verify-work 5` on a Podman 5.x host |
+| Phase 6: CLI, Daemon, and Host Packaging | No VERIFICATION report yet; gates green | Run phase 6 verification when the verification step is available |
+| Phase 7: Policy Reference and Security Review | Executed as documentation; verification pending | Run phase 7 verification when the verification step is available |
+
 ## Session Continuity
 
-Last session: 2026-10-21
-Stopped at: Phase 3 plans written and checked
-Resume file: .planning/phases/03-container-runtime-and-bridges/03-CONTEXT.md
+Last session: 2026-10-22
+Stopped at: ROADMAP and STATE reconciled to evidence; verification pending for phases 6 and 7, live checks deferred for phases 3-5
+Resume file: None — resume deferred live checks with `/gsd:verify-work 4` (or 3 / 5) on a Podman 5.x host
+
+Recorded commits: e949ad3, 53fc919, 26ab145 (phases 1-3); 6b28fa4 and 57d176c (Phase 4); acc4ee1 and 4b757b3 (Phase 5); 5f1384d and a0335c7 (Phase 6); b7fad06 (Phase 7)
