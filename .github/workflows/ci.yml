@@ -80,9 +80,122 @@ jobs:
           set -euo pipefail
           npm run check:pack
 
+  # Publishes the GitHub release for the latest milestone tag when that tag has none, so the
+  # release job never has to. Never bumps a version; never pushes a commit or tag.
+  recover:
+    name: Recover unreleased milestone tag
+    needs: verify
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: write
+    concurrency:
+      group: release-main
+      cancel-in-progress: false
+    steps:
+      - name: Checkout triggering commit
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Set up Node.js 24 for recovery
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24.x
+
+      - name: Fetch tags from origin
+        run: |
+          set -euo pipefail
+          git fetch --force --tags origin
+
+      - name: Find unreleased milestone tag
+        id: latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          line="$(node scripts/release/next-version.mjs)"
+          previous="$(NEXT_VERSION_LINE="$line" node -e 'const next = JSON.parse(process.env.NEXT_VERSION_LINE); process.stdout.write(next.previousTag ?? "")')"
+          milestone_minor="$(node -e 'process.stdout.write(String(require("./release/milestone.json").minor))')"
+          tag=""
+          case "${previous}" in
+            "v0.${milestone_minor}."*) tag="${previous}" ;;
+          esac
+
+          needs=false
+          if [ -z "${tag}" ]; then
+            echo "::notice::No milestone tag exists yet; nothing to recover."
+          elif out="$(gh release view "${tag}" --json tagName 2>&1)"; then
+            echo "::notice::${tag} already has a GitHub release; nothing to recover."
+          elif printf '%s' "${out}" | grep -qi 'not found'; then
+            echo "${tag} has no GitHub release; recovering it."
+            needs=true
+          else
+            printf '%s\n' "${out}" >&2
+            exit 1
+          fi
+
+          {
+            echo "needs=${needs}"
+            echo "tag=${tag}"
+            echo "version=${tag#v}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Check out unreleased tag
+        if: steps.latest.outputs.needs == 'true'
+        env:
+          TAG: ${{ steps.latest.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git checkout --detach "refs/tags/${TAG}"
+
+      - name: Install dependencies for recovered tag
+        if: steps.latest.outputs.needs == 'true'
+        run: |
+          set -euo pipefail
+          npm ci
+
+      - name: Build and pack tarball
+        if: steps.latest.outputs.needs == 'true'
+        run: |
+          set -euo pipefail
+          npm run build
+          npm pack
+
+      - name: Extract release notes from CHANGELOG
+        if: steps.latest.outputs.needs == 'true'
+        env:
+          VERSION: ${{ steps.latest.outputs.version }}
+        run: |
+          set -euo pipefail
+          if ! grep -qF "## [${VERSION}]" CHANGELOG.md; then
+            echo "CHANGELOG.md has no section for ${VERSION}; refusing to regenerate notes for a published tag." >&2
+            exit 1
+          fi
+          release_date="$(date -u +%Y-%m-%d)"
+          node scripts/release/changelog.mjs --version "${VERSION}" --date "${release_date}" --notes-out release-notes.md
+
+      - name: Create GitHub release for unreleased tag
+        if: steps.latest.outputs.needs == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ steps.latest.outputs.tag }}
+          VERSION: ${{ steps.latest.outputs.version }}
+        run: |
+          set -euo pipefail
+          gh release create "${TAG}" "agent-realm-${VERSION}.tgz" \
+            --title "Realm ${TAG}" \
+            --notes-file release-notes.md \
+            --verify-tag
+
   release:
     name: Release
-    needs: verify
+    needs: [verify, recover]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
@@ -131,11 +244,10 @@ jobs:
           '
 
       # Decides exactly one action, before any remote mutation:
-      #   finish     latest milestone tag exists on origin without a GitHub release
-      #              (or the target tag exists without one): publish that tag's release.
       #   skip       target tag and its GitHub release both exist: nothing to publish.
       #   superseded origin/main is no longer this commit: the newer commit's run releases.
       #   normal     bump, build, commit, atomic push of main and tag, then release.
+      # A milestone tag without a GitHub release is a hard error: the recover job owns it.
       # exists=true means this run publishes nothing (skip or superseded); the Pages
       # dispatch step keys off it.
       - name: Plan release
@@ -171,28 +283,24 @@ jobs:
             "v0.${milestone_minor}."*) latest="${PREVIOUS_TAG}" ;;
           esac
 
-          action=normal
-          tag="${TARGET_TAG}"
-
           if [ -n "${latest}" ]; then
             release_state "${latest}"
             if [ "${RELEASE_STATE}" = missing ]; then
-              echo "Milestone tag ${latest} exists without a GitHub release; finishing it."
-              action=finish
-              tag="${latest}"
+              echo "::error::Milestone tag ${latest} has no GitHub release; the recover job must publish it before release runs." >&2
+              exit 1
             fi
           fi
 
-          if [ "${action}" = normal ]; then
-            remote_tag_state "${TARGET_TAG}"
-            if [ -n "${REMOTE_TAG}" ]; then
-              tag="${TARGET_TAG}"
-              release_state "${TARGET_TAG}"
-              if [ "${RELEASE_STATE}" = present ]; then
-                action=skip
-              else
-                action=finish
-              fi
+          action=normal
+          tag="${TARGET_TAG}"
+          remote_tag_state "${TARGET_TAG}"
+          if [ -n "${REMOTE_TAG}" ]; then
+            release_state "${TARGET_TAG}"
+            if [ "${RELEASE_STATE}" = present ]; then
+              action=skip
+            else
+              echo "::error::Target tag ${TARGET_TAG} exists without a GitHub release; the recover job owns finishing it." >&2
+              exit 1
             fi
           fi
 
@@ -229,20 +337,6 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "Release plan: action=${action} tag=${tag}"
 
-      - name: Check out existing tag to finish its release
-        if: steps.tag_check.outputs.action == 'finish'
-        env:
-          TAG: ${{ steps.tag_check.outputs.tag }}
-        run: |
-          set -euo pipefail
-          git checkout --detach "refs/tags/${TAG}"
-
-      - name: Install dependencies for finished tag
-        if: steps.tag_check.outputs.action == 'finish'
-        run: |
-          set -euo pipefail
-          npm ci
-
       - name: Sync package version
         if: steps.tag_check.outputs.action == 'normal'
         env:
@@ -251,29 +345,22 @@ jobs:
           set -euo pipefail
           node scripts/release/sync-version.mjs "${VERSION}"
 
-      # For finish, changelog.mjs returns the existing CHANGELOG section as notes; the
-      # guard refuses to regenerate notes for a published tag that lacks its section.
       - name: Generate changelog and release notes
-        if: steps.tag_check.outputs.action == 'normal' || steps.tag_check.outputs.action == 'finish'
+        if: steps.tag_check.outputs.action == 'normal'
         env:
-          ACTION: ${{ steps.tag_check.outputs.action }}
           VERSION: ${{ steps.tag_check.outputs.version }}
           PREVIOUS_TAG: ${{ steps.version.outputs.previousTag }}
         run: |
           set -euo pipefail
           release_date="$(date -u +%Y-%m-%d)"
-          if [ "${ACTION}" = finish ] && ! grep -qF "## [${VERSION}]" CHANGELOG.md; then
-            echo "CHANGELOG.md has no section for ${VERSION}; refusing to regenerate notes for a published tag." >&2
-            exit 1
-          fi
           args=(--version "${VERSION}" --date "${release_date}" --notes-out release-notes.md)
-          if [ "${ACTION}" = normal ] && [ -n "${PREVIOUS_TAG}" ]; then
+          if [ -n "${PREVIOUS_TAG}" ]; then
             args+=(--since "${PREVIOUS_TAG}")
           fi
           node scripts/release/changelog.mjs "${args[@]}"
 
       - name: Build and pack tarball
-        if: steps.tag_check.outputs.action == 'normal' || steps.tag_check.outputs.action == 'finish'
+        if: steps.tag_check.outputs.action == 'normal'
         run: |
           set -euo pipefail
           npm run build
@@ -318,10 +405,10 @@ jobs:
           echo "Atomic push of main and ${TAG} failed while origin/main is still ${GITHUB_SHA}." >&2
           exit 1
 
-      # If this fails, the tag and commit already exist on origin; the next run takes the
-      # finish branch and publishes this release.
+      # If this fails, the tag and commit already exist on origin; the next run's recover job
+      # publishes this release.
       - name: Create GitHub release
-        if: steps.tag_check.outputs.action == 'finish' || (steps.tag_check.outputs.action == 'normal' && steps.push.outputs.pushed == 'true')
+        if: steps.tag_check.outputs.action == 'normal' && steps.push.outputs.pushed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
