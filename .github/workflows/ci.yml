@@ -1,0 +1,360 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  verify:
+    name: Verify (Node ${{ matrix.node-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version:
+          - 22.x
+          - 24.x
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          npm ci
+
+      - name: Typecheck
+        run: |
+          set -euo pipefail
+          npm run typecheck
+
+      - name: Lint
+        run: |
+          set -euo pipefail
+          npm run lint
+
+      - name: Unit tests
+        run: |
+          set -euo pipefail
+          npm test
+
+      - name: Integration tests
+        run: |
+          set -euo pipefail
+          npm run test:integration
+
+      - name: Script tests
+        run: |
+          set -euo pipefail
+          npm run test:scripts
+
+      - name: Check docs
+        run: |
+          set -euo pipefail
+          npm run check:docs
+
+      - name: Build
+        run: |
+          set -euo pipefail
+          npm run build
+
+      - name: Packed package smoke
+        run: |
+          set -euo pipefail
+          npm run check:pack
+
+  release:
+    name: Release
+    needs: verify
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: write
+    concurrency:
+      group: release-main
+      cancel-in-progress: false
+    steps:
+      - name: Checkout triggering commit
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Set up Node.js 24 for release
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24.x
+
+      - name: Install release dependencies
+        run: |
+          set -euo pipefail
+          npm ci
+
+      - name: Fetch tags from origin
+        run: |
+          set -euo pipefail
+          git fetch --force --tags origin
+
+      # Finishes the latest milestone tag when an earlier attempt pushed it but failed before
+      # its GitHub release was created. The repair runs in a separate worktree, so the main
+      # checkout stays at GITHUB_SHA. It never bumps, commits, or pushes; gh release create is
+      # its only remote write. Runs on every release job, so a rerun after a failed release
+      # creation completes the release here before planning.
+      - name: Finish unreleased milestone tag
+        id: finish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          line="$(node scripts/release/next-version.mjs)"
+          previous="$(NEXT_VERSION_LINE="$line" node -e 'const next = JSON.parse(process.env.NEXT_VERSION_LINE); process.stdout.write(next.previousTag ?? "")')"
+          milestone_minor="$(node -e 'process.stdout.write(String(require("./release/milestone.json").minor))')"
+          tag=""
+          case "${previous}" in
+            "v0.${milestone_minor}."*) tag="${previous}" ;;
+          esac
+          if [ -z "${tag}" ]; then
+            echo "No milestone tag exists yet; nothing to finish."
+            exit 0
+          fi
+          if out="$(gh release view "${tag}" --json tagName 2>&1)"; then
+            echo "${tag} already has a GitHub release; nothing to finish."
+            exit 0
+          fi
+          if ! printf '%s' "${out}" | grep -qi 'not found'; then
+            printf '%s\n' "${out}" >&2
+            exit 1
+          fi
+
+          echo "${tag} has no GitHub release; finishing it from a separate worktree."
+          version="${tag#v}"
+          release_date="$(date -u +%Y-%m-%d)"
+          dir="${RUNNER_TEMP}/finish-${version}"
+          rm -rf "${dir}"
+          git worktree prune
+          git worktree add --detach "${dir}" "refs/tags/${tag}"
+          trap 'git worktree remove --force "${dir}" >/dev/null 2>&1 || true' EXIT
+          (
+            cd "${dir}"
+            npm ci
+            npm run build
+            npm pack
+            if ! grep -qF "## [${version}]" CHANGELOG.md; then
+              echo "CHANGELOG.md has no section for ${version}; refusing to regenerate notes for a published tag." >&2
+              exit 1
+            fi
+            node scripts/release/changelog.mjs --version "${version}" --date "${release_date}" --notes-out notes.md
+          )
+          gh release create "${tag}" "${dir}/agent-realm-${version}.tgz" \
+            --title "Realm ${tag}" \
+            --notes-file "${dir}/notes.md" \
+            --verify-tag
+          git worktree remove --force "${dir}"
+          trap - EXIT
+
+      - name: Compute next version
+        id: version
+        run: |
+          set -euo pipefail
+          line="$(node scripts/release/next-version.mjs)"
+          NEXT_VERSION_LINE="$line" node -e '
+            const fs = require("node:fs");
+            const next = JSON.parse(process.env.NEXT_VERSION_LINE);
+            const lines = [
+              `version=${next.version}`,
+              `tag=${next.tag}`,
+              `previousTag=${next.previousTag ?? ""}`,
+            ].join("\n") + "\n";
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, lines);
+          '
+
+      # Decides exactly one action, before any remote mutation:
+      #   skip       target tag and its GitHub release both exist: nothing to publish.
+      #   superseded origin/main is no longer this commit: the newer commit's run releases.
+      #   normal     bump, build, commit, atomic push of main and tag, then release.
+      # exists=true means this run publishes nothing (skip or superseded); the Pages
+      # dispatch step keys off it.
+      - name: Plan release
+        id: tag_check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TARGET_TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          remote_tag_state() {
+            REMOTE_TAG="$(git ls-remote --tags origin "refs/tags/$1")"
+          }
+
+          # Sets RELEASE_STATE to present or missing; any other gh failure is fatal.
+          release_state() {
+            local out
+            if out="$(gh release view "$1" --json tagName 2>&1)"; then
+              RELEASE_STATE=present
+            elif printf '%s' "$out" | grep -qi 'not found'; then
+              RELEASE_STATE=missing
+            else
+              printf '%s\n' "$out" >&2
+              return 1
+            fi
+          }
+
+          action=normal
+          tag="${TARGET_TAG}"
+          remote_tag_state "${TARGET_TAG}"
+          if [ -n "${REMOTE_TAG}" ]; then
+            release_state "${TARGET_TAG}"
+            if [ "${RELEASE_STATE}" = present ]; then
+              action=skip
+            else
+              echo "::error::Target tag ${TARGET_TAG} exists without a GitHub release, which the finish step should have prevented." >&2
+              exit 1
+            fi
+          fi
+
+          if [ "${action}" = normal ]; then
+            main_sha="$(git ls-remote origin refs/heads/main | cut -f1)"
+            if [ -z "${main_sha}" ]; then
+              echo "Could not read refs/heads/main from origin." >&2
+              exit 1
+            fi
+            if [ "${main_sha}" != "${GITHUB_SHA}" ]; then
+              action=superseded
+              echo "origin/main is ${main_sha}, not ${GITHUB_SHA}; this commit is superseded and publishes no release."
+            fi
+          fi
+
+          case "${action}" in
+            skip)
+              echo "Tag ${tag} and its GitHub release already exist; nothing to publish."
+              exists=true
+              ;;
+            superseded)
+              exists=true
+              ;;
+            *)
+              exists=false
+              ;;
+          esac
+
+          {
+            echo "action=${action}"
+            echo "tag=${tag}"
+            echo "version=${tag#v}"
+            echo "exists=${exists}"
+          } >> "$GITHUB_OUTPUT"
+          echo "Release plan: action=${action} tag=${tag}"
+
+      - name: Sync package version
+        if: steps.tag_check.outputs.action == 'normal'
+        env:
+          VERSION: ${{ steps.tag_check.outputs.version }}
+        run: |
+          set -euo pipefail
+          node scripts/release/sync-version.mjs "${VERSION}"
+
+      - name: Generate changelog and release notes
+        if: steps.tag_check.outputs.action == 'normal'
+        env:
+          VERSION: ${{ steps.tag_check.outputs.version }}
+          PREVIOUS_TAG: ${{ steps.version.outputs.previousTag }}
+        run: |
+          set -euo pipefail
+          release_date="$(date -u +%Y-%m-%d)"
+          args=(--version "${VERSION}" --date "${release_date}" --notes-out release-notes.md)
+          if [ -n "${PREVIOUS_TAG}" ]; then
+            args+=(--since "${PREVIOUS_TAG}")
+          fi
+          node scripts/release/changelog.mjs "${args[@]}"
+
+      - name: Build and pack tarball
+        if: steps.tag_check.outputs.action == 'normal'
+        run: |
+          set -euo pipefail
+          npm run build
+          npm pack
+
+      - name: Commit release changes
+        if: steps.tag_check.outputs.action == 'normal'
+        env:
+          TAG: ${{ steps.tag_check.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git add package.json package-lock.json CHANGELOG.md
+          if git diff --cached --quiet; then
+            echo "No release file changes to commit."
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit -m "chore(release): ${TAG} [skip ci]"
+          fi
+
+      # Tag and branch move together or not at all. A rejected push while origin/main has
+      # moved is superseded: this run exits green and the newer commit's run releases.
+      - name: Tag and push release atomically
+        id: push
+        if: steps.tag_check.outputs.action == 'normal'
+        env:
+          TAG: ${{ steps.tag_check.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git tag -a "${TAG}" -m "Release ${TAG}"
+          if git push --atomic origin "HEAD:refs/heads/main" "refs/tags/${TAG}"; then
+            echo "pushed=true" >> "$GITHUB_OUTPUT"
+            echo "Pushed main and ${TAG} atomically."
+            exit 0
+          fi
+          git fetch --quiet --force origin "+refs/heads/main:refs/remotes/origin/main"
+          remote_main="$(git rev-parse --verify refs/remotes/origin/main)"
+          if [ "${remote_main}" != "${GITHUB_SHA}" ]; then
+            echo "origin/main moved to ${remote_main} while ${TAG} was built from ${GITHUB_SHA}; this run publishes nothing. The run for the newer commit publishes the release."
+            exit 0
+          fi
+          echo "Atomic push of main and ${TAG} failed while origin/main is still ${GITHUB_SHA}." >&2
+          exit 1
+
+      # If this fails, the tag and commit already exist on origin; a rerun's finish step
+      # publishes this release before planning.
+      - name: Create GitHub release
+        if: steps.tag_check.outputs.action == 'normal' && steps.push.outputs.pushed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ steps.tag_check.outputs.tag }}
+          VERSION: ${{ steps.tag_check.outputs.version }}
+        run: |
+          set -euo pipefail
+          gh release create "${TAG}" "agent-realm-${VERSION}.tgz" \
+            --title "Realm ${TAG}" \
+            --notes-file release-notes.md \
+            --verify-tag
+
+      - name: Dispatch Pages workflow
+        if: steps.tag_check.outputs.exists == 'false' && hashFiles('.github/workflows/pages.yml') != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh workflow run pages.yml --ref main
