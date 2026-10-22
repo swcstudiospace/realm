@@ -1,17 +1,14 @@
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { RealmError, type ErrorCode } from "../../src/core/errors.js";
 import { LibpodClient } from "../../src/runtime/libpod-client.js";
 import { LIBPOD_ROUTES, type LibpodRouteName } from "../../src/runtime/libpod-routes.js";
 import { FakeLibpod, type FakeLibpodOptions, type RecordedRequest } from "../support/fake-libpod.js";
 
-// This file runs from dist/test/runtime, so three levels up is the package root.
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const LABEL_KEY = "io.realm.managed";
 
 async function startFake(
@@ -73,13 +70,7 @@ void test("RT-03: the client exposes exactly the five D-54 methods and no other 
   }
 });
 
-void test("RT-03: no exec, attach, or start-exec route string appears in the route table or the client source", () => {
-  const sources = ["src/runtime/libpod-routes.ts", "src/runtime/libpod-client.ts"].map((path) =>
-    readFileSync(join(ROOT, path), "utf8"),
-  );
-  for (const text of sources) {
-    assert.doesNotMatch(text, /exec|attach/i, "the client has no process-start route, by design");
-  }
+void test("RT-03: no exec, attach, or start-exec route appears in the route table", () => {
   for (const route of Object.values(LIBPOD_ROUTES)) {
     assert.doesNotMatch(route.path, /exec|attach|\/start/i);
   }

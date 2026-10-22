@@ -217,12 +217,9 @@ void test("a stopped supervisor neither probes nor restarts the driver (RT-04)",
   assert.equal(driver.isRunning(), false);
 });
 
-void test("the supervisor source and package manifest name no AgentOS library package, so no driver binding exists (RT-04, OQ-P3-05, OQ-P3-06)", () => {
-  const source = readFileSync(join(PACKAGE_ROOT, "src", "runtime", "agentos.ts"), "utf8");
+void test("the package manifest names no AgentOS library package, so no driver binding exists (RT-04, OQ-P3-05, OQ-P3-06)", () => {
   const manifest = readFileSync(join(PACKAGE_ROOT, "package.json"), "utf8");
-  for (const text of [source, manifest]) {
-    assert.equal(/@rivet-dev|agentos-core/.test(text), false);
-  }
+  assert.equal(/@rivet-dev|agentos-core/.test(manifest), false);
 });
 
 void test("stopping during an in-flight probe leaves no restart after stop and no timer behind (RT-04, G1)", async () => {

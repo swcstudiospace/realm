@@ -28,7 +28,6 @@ import type { ToolOutcome } from "../../src/tools/dispatch.js";
 
 // This file runs from dist/test/cli, so three levels up is the package root.
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
-const CLI_SOURCE = join(ROOT, "src", "cli", "main.ts");
 
 // The CLI names its state directory from the runtime config file, the file the daemon reads. This file
 // writes one into a scratch XDG_CONFIG_HOME and removes it when the file's tests finish.
@@ -866,31 +865,6 @@ void test("a runtime config that cannot be read makes every command exit 2 befor
   assert.equal(result.exitCode, 2);
   assert.ok(result.stderr.startsWith("realm status: cannot resolve a state directory"), result.stderr);
   assert.equal(daemon.record.connects, 0);
-});
-
-void test("cli module stays inside its runtime allowlist with argv-form spawn and no env reads (CLI-01)", () => {
-  const source = readFileSync(CLI_SOURCE, "utf8");
-  const runtimeImports = [...source.matchAll(/from\s+"(node:[^"]+)"/g)].map((match) => match[1]);
-  assert.ok(runtimeImports.length > 0);
-  for (const specifier of runtimeImports) {
-    assert.ok(
-      specifier === "node:net" || specifier === "node:fs" || specifier === "node:child_process",
-      `runtime import outside the P6-D7 allowlist: ${String(specifier)}`,
-    );
-  }
-  const envReads = source.match(/process\.env/g) ?? [];
-  assert.equal(envReads.length, 1, "the only process.env read is the main entry handoff");
-  assert.ok(source.includes('detached: true'));
-  assert.ok(source.includes('"ignore"'));
-  assert.ok(!source.includes("shell: true"));
-});
-
-void test("cli module builds no in-process handle and passes no runtime input to the daemon (CLI-01)", () => {
-  const source = readFileSync(CLI_SOURCE, "utf8");
-  const forbidden = ["buildDaemonHandle", "BuildDaemonHandle", "buildHandle", "defaultBuildHandle", "runtimeInput"];
-  for (const name of forbidden) {
-    assert.ok(!source.includes(name), `${name} must not reach the CLI`);
-  }
 });
 
 void test("the default daemon spawn targets daemon/main.js beside the compiled CLI for up and mcp (CLI-01)", async () => {

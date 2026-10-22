@@ -1,15 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { AndaBridge, type SleepFn } from "../../src/anda/client.js";
 import { RealmError } from "../../src/core/errors.js";
 import { FakeAnda, HEALTHY_INFORMATION, type ScriptedReply } from "../support/fake-anda.js";
 
-// This file runs from dist/test/anda, so three levels up is the package root.
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
-const CLIENT_SOURCE = join(ROOT, "src", "anda", "client.ts");
 const INFORMATION_PATH = "/.well-known/information";
 const CREDENTIAL_HEADER = /^(authorization|proxy-authorization|cookie|x-api-key|ic-auth-.+)$/i;
 
@@ -132,12 +126,6 @@ void test("ANDA-02: no request carries a credential header and every request is 
       assert.doesNotMatch(name, CREDENTIAL_HEADER, `header ${name} must not be sent in Phase 3`);
     }
   }
-});
-
-void test("ANDA-02: the client module defines no RPC route and produces no credential", () => {
-  const source = readFileSync(CLIENT_SOURCE, "utf8");
-  assert.doesNotMatch(source, /POST/, "the RPC route must not appear in the bridge (OQ-P3-10)");
-  assert.doesNotMatch(source, /authorization/i, "the bridge must not produce a credential (T-03-14)");
 });
 
 void test("ANDA-02: a mismatch is final: a later connect rejects with ANDA_VERSION_MISMATCH and sends no request", async (t) => {

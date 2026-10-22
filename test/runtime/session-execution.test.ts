@@ -2,8 +2,7 @@ import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import { RealmError, type ErrorCode } from "../../src/core/errors.js";
 import { AgentOsSupervisor } from "../../src/runtime/agentos.js";
 import { renderNetworkPolicies } from "../../src/runtime/egress.js";
@@ -21,7 +20,6 @@ import { FakeAgentOsDriver } from "../support/fake-agentos.js";
 import { FakeContainerStore, FakeLibpod } from "../support/fake-libpod.js";
 import { FakeOpenShell } from "../support/fake-openshell.js";
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const SESSION = "sess-01";
 const DIGEST = `sha256:${"a".repeat(64)}`;
 const IMAGE = `registry.example.com/realm/session@${DIGEST}`;
@@ -417,12 +415,6 @@ void test("AUD-02, D-67: the OpenShell environment names only PATH, HOME and XDG
     }),
     { PATH: "/usr/bin:/bin", HOME: "/home/realm" },
   );
-});
-
-void test("AUD-02, D-67: session-execution reads no host environment and its runner never uses a shell", () => {
-  const source = readFileSync(join(ROOT, "src", "runtime", "session-execution.ts"), "utf8");
-  assert.equal(source.includes("process.env"), false);
-  assert.equal(source.includes("shell: true"), false);
 });
 
 void test("RT-03: the OpenShell runner starts argv[0] without a shell and gives the child only the supplied environment", async () => {

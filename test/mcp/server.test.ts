@@ -1,9 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { PassThrough, Writable } from "node:stream";
-import { fileURLToPath } from "node:url";
 import { STATUS_LABELS } from "../../src/core/status.js";
 import { ERROR_CATALOGUE, makeRealmError, RealmError } from "../../src/core/errors.js";
 import {
@@ -252,13 +251,22 @@ void test("TOOL-05: a failing input stream rejects closed with MCP_INPUT_FAILED 
   assert.deepEqual(stderrChunks, ["mcp: input stream failed\n"]);
 });
 
-void test("TOOL-05: the surface calls no dispatcher member except call (P5-D11)", () => {
-  const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
-  const source = readFileSync(join(root, "src", "mcp", "server.ts"), "utf8");
-  for (const member of [".snapshot", ".mutationGate", ".events", ".create("]) {
-    assert.ok(!source.includes(member), `src/mcp/server.ts must not reference ${member}`);
-  }
-  assert.ok(source.includes(".call("), "the surface reaches the dispatcher through call");
+void test("TOOL-05: the surface calls no dispatcher member except call (P5-D11)", async (t) => {
+  const h = makeHarness(t);
+  const touched = new Set<string | symbol>();
+  const recording = new Proxy(h.dispatcher, {
+    get(target, property) {
+      touched.add(property);
+      const value: unknown = Reflect.get(target, property, target);
+      return typeof value === "function" ? (value as (...args: unknown[]) => unknown).bind(target) : value;
+    },
+  });
+  const driven = await drive(recording, [
+    toolRequest(1, "status", {}),
+    toolRequest(2, "write", { path: "surface.txt", content: "via call" }),
+  ]);
+  assert.equal(driven.stdoutLines.length, 2, "two tool calls take two replies");
+  assert.deepEqual([...touched].map(String), ["call"], "the surface touched no dispatcher member but call");
 });
 
 void test("TOOL-05: a stdio-client-shaped driver completes status and write calls end to end", async (t) => {
@@ -289,8 +297,4 @@ void test("TOOL-05: the status reply carries the shared displayStatus label, not
   const display = value["display"] as Record<string, unknown>;
   assert.equal(display["label"], STATUS_LABELS.active);
   assert.equal(display["label"], "realm active");
-  const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
-  const source = readFileSync(join(root, "src", "mcp", "server.ts"), "utf8");
-  assert.ok(!source.includes("realm active"), "the label comes from the shared mapping, not the surface");
-  assert.ok(!source.includes("realm disconnected"), "no label literal lives in the surface");
 });

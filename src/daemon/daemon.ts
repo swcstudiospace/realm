@@ -97,7 +97,7 @@ export interface StartDaemonOptions extends BuildDaemonHandleOptions {
   // Doctor seam. Defaults to runChecks over the daemon state directory; tests
   // inject a scripted report.
   readonly runChecks?: (options: DoctorOptions) => Promise<readonly CheckResult[]>;
-  readonly doctorOptions?: Omit<DoctorOptions, "stateDir">;
+  readonly doctorOptions?: Omit<DoctorOptions, "stateDir" | "env">;
   // Reap seam (P6-D4). Defaults to removeAllRealmContainers over the resolved
   // libpod client; tests inject a recording fake. Omitting both sweep and any
   // libpod seam refuses with SCHEMA_INVALID rather than silently skipping the reap.
@@ -187,6 +187,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
       stateDir,
       policyPath: options.policyPath,
       agentos: agentosReading,
+      env: options.env ?? {},
       ...options.doctorOptions,
     });
 

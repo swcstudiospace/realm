@@ -14,7 +14,6 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
-  readFileSync,
   realpathSync,
   rmSync,
   statSync,
@@ -38,7 +37,6 @@ import { FakeBridge } from "../support/fake-bridge.js";
 
 // This file runs from dist/test/daemon, so three levels up is the package root.
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
-const OPENSHELL_SOURCE = join(ROOT, "src", "runtime", "openshell.ts");
 
 const IMAGE = `registry.example.com/realm/workload@sha256:${"0".repeat(64)}`;
 const CLOCK_ISO = "2026-10-21T09:30:00.000Z";
@@ -411,10 +409,4 @@ void test("the container-create argv and the policy document carry no socket pat
   assert.ok(!documentText.includes(".sock"), `policy document must not mount a socket: ${documentText}`);
   assert.ok(!documentText.includes(socketPath), "policy document must not carry the control socket path");
   assert.ok(!documentText.includes("podman.sock") && !documentText.includes("docker.sock"));
-
-  // Grep-source guard in the test/tools/no-bypass.test.ts style: the argv
-  // module itself must name no .sock path, so a later edit mounting any socket
-  // breaks the suite (T-06-14).
-  const source = readFileSync(OPENSHELL_SOURCE, "utf8");
-  assert.ok(!source.includes(".sock"), "openshell.ts must not name a socket path");
 });

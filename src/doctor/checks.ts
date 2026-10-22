@@ -56,9 +56,9 @@ export interface DoctorOptions {
   // file (D-44). Tests inject a probe to exercise the unwritable outcome.
   readonly canWrite?: (path: string) => WriteReading;
   // Phase 3 seams (RT-02, ANDA-02). Each has a real default; tests inject fakes so that no
-  // process runs and no socket opens. env defaults to the host environment, and each probe
-  // passes only the names its own allowlist permits.
-  readonly env?: EnvironmentLike;
+  // process runs and no socket opens. env is the host environment, handed in by the caller at the entry
+  // edge (the doctor reads no process environment). Each probe passes only the names its allowlist permits.
+  readonly env: EnvironmentLike;
   readonly runCommand?: RunCommand;
   readonly connectSocket?: ConnectSocket;
   readonly fetchInformation?: FetchInformation;
@@ -132,7 +132,7 @@ export async function runChecks(options: DoctorOptions): Promise<readonly CheckR
       podmanProbe ??= probePodman({
         runCommand: options.runCommand ?? defaultRunCommand,
         connectSocket: options.connectSocket ?? defaultConnectSocket,
-        env: options.env ?? process.env,
+        env: options.env,
         timeoutMs: probeTimeoutOf(options),
       });
       return podmanProbe;
@@ -402,7 +402,7 @@ async function openShellCheck(context: CheckContext): Promise<CheckResult> {
   const id: CheckId = "openshell";
   const { options } = context;
   const runCommand = options.runCommand ?? defaultRunCommand;
-  const env = selectOpenShellEnvironment(options.env ?? process.env);
+  const env = selectOpenShellEnvironment(options.env);
   let outcome: CommandOutcome;
   try {
     outcome = await runCommand(OPENSHELL_BINARY, ["sandbox", "create", "--help"], {

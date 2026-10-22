@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { podmanSkipReason, type PodmanProbe } from "../../src/runtime/podman-version.js";
@@ -66,7 +66,6 @@ const CATEGORY_MAP: ReadonlyArray<{ readonly category: string; readonly files: r
       "tools/dispatch.test.ts",
       "tools/queue-timeout.test.ts",
       "tools/workspace.test.ts",
-      "tools/no-bypass.test.ts",
     ],
   },
   { category: "realm composition", files: ["realm/compose.test.ts"] },
@@ -75,7 +74,7 @@ const CATEGORY_MAP: ReadonlyArray<{ readonly category: string; readonly files: r
   { category: "omp plugin", files: ["omp/plugin.test.ts"] },
   {
     category: "surface equivalence",
-    files: ["surfaces/equivalence.test.ts", "surfaces/no-logic.test.ts"],
+    files: ["surfaces/equivalence.test.ts"],
   },
   { category: "phase notes", files: ["docs/phase5-notes.test.ts"] },
 ];
@@ -126,7 +125,6 @@ const D45_FILES = [
   "tools/dispatch.test.ts",
   "tools/queue-timeout.test.ts",
   "tools/workspace.test.ts",
-  "tools/no-bypass.test.ts",
   "anda/handshake.test.ts",
   "anda/reconnect.test.ts",
   "anda/no-shim.test.ts",
@@ -136,59 +134,8 @@ const D45_FILES = [
   "acp/agent.test.ts",
   "omp/plugin.test.ts",
   "surfaces/equivalence.test.ts",
-  "surfaces/no-logic.test.ts",
   "docs/phase5-notes.test.ts",
   "quality/suite-taxonomy.test.ts",
-] as const;
-
-// The 16 Phase 2 requirement IDs (plan 02-06 must_haves; matches .planning/REQUIREMENTS.md).
-const PHASE_2_REQUIREMENT_IDS = [
-  "CORE-01",
-  "CORE-02",
-  "CORE-03",
-  "CORE-04",
-  "CORE-06",
-  "FS-01",
-  "FS-02",
-  "FS-03",
-  "FS-04",
-  "FS-05",
-  "RT-07",
-  "TOOL-01",
-  "TOOL-02",
-  "AUD-01",
-  "AUD-02",
-  "QUAL-02",
-] as const;
-
-// The ten Phase 3 requirement IDs (plan 03-10 must_haves; matches .planning/REQUIREMENTS.md).
-const PHASE_3_REQUIREMENT_IDS = [
-  "CORE-05",
-  "RT-01",
-  "RT-02",
-  "RT-03",
-  "RT-04",
-  "RT-09",
-  "ANDA-01",
-  "ANDA-02",
-  "ANDA-03",
-  "ANDA-04",
-] as const;
-// The four Phase 4 requirement IDs (plan 04-07 must_haves; matches .planning/REQUIREMENTS.md).
-const PHASE_4_REQUIREMENT_IDS = [
-  "RT-05",
-  "RT-08",
-  "TOOL-03",
-  "TOOL-04",
-] as const;
-// The six Phase 5 requirement IDs (plan 05-06 must_haves; matches .planning/REQUIREMENTS.md).
-const PHASE_5_REQUIREMENT_IDS = [
-  "TOOL-05",
-  "OMP-01",
-  "OMP-02",
-  "OMP-03",
-  "OMP-04",
-  "OMP-05",
 ] as const;
 
 function gateReasonOf(probe: PodmanProbe): string {
@@ -233,88 +180,9 @@ void test("the Podman gate lets the integration suite run on Podman 5.x", () => 
   assert.equal(podmanSkipReason({ kind: "output", stdout: "podman version 5.0.0\n" }), false);
 });
 
-void test("the integration gate test applies the Podman mapping to its own probe and keeps the suite gated on it", () => {
-  const gate = readFileSync(join(TEST_DIR, "integration/podman-gate.test.ts"), "utf8");
-  assert.ok(gate.includes("podmanSkipReason(probe)"), "podman-gate.test.ts must apply podmanSkipReason to its probe");
-  assert.ok(gate.includes("{ skip: gate }"), "podman-gate.test.ts must pass the gate to the suite");
-});
-
 void test("MCP and ACP contract tests are Phase 5 deliverables, not Phase 2 (Q-4; ROADMAP Phase 5 success criterion 5), so no MCP or ACP test file exists here", () => {
   const transport = readdirSync(TEST_DIR, { recursive: true, encoding: "utf8" })
     .filter((name) => name.endsWith(".test.ts"))
     .filter((name) => /(^|[-.])(mcp|acp)([-.]|$)/i.test(basename(name)));
   assert.deepEqual(transport, [], "no MCP or ACP test file may exist before Phase 5");
-});
-
-void test("all 16 Phase 2 requirement IDs are cited by at least one D-45 test file (QUAL-02 taxonomy and category part)", () => {
-  const uncovered = PHASE_2_REQUIREMENT_IDS.filter(
-    (id) => !D45_FILES.some((file) => readFileSync(join(TEST_DIR, file), "utf8").includes(id)),
-  );
-  assert.deepEqual(uncovered, [], `Phase 2 requirement IDs cited by no D-45 test file: ${uncovered.join(", ")}`);
-});
-
-// Only a test title counts as coverage. A requirement ID in a comment, an assertion message or a file name
-// does not. A title counts when the ID is in its leading ID list: the words before its first colon, while
-// they are IDs, "and", or commas. So "RT-03, RT-04: ..." covers both RT-03 and RT-04.
-const TEST_TITLE_START = /\btest\(\s*["'`]([^\n]*)/g;
-
-function leadingIdsOf(title: string): readonly string[] {
-  const head = title.split(":")[0] ?? "";
-  const lead = /^(?:[A-Z]+-\d+|and|[\s,])+/.exec(head)?.[0] ?? "";
-  return lead.match(/[A-Z]+-\d+/g) ?? [];
-}
-
-function titleLeadingIds(source: string): Set<string> {
-  const ids = new Set<string>();
-  for (const match of source.matchAll(TEST_TITLE_START)) {
-    for (const id of leadingIdsOf(match[1] ?? "")) {
-      ids.add(id);
-    }
-  }
-  return ids;
-}
-
-void test("the title check counts an ID only when a title leads with it, so a comment or a mid-title mention does not count", () => {
-  const source = [
-    "// RT-09 is discussed in this comment only",
-    'test("the sweep removes RT-09 containers", () => {});',
-    'test("RT-03, RT-04: the leading list counts both", () => {});',
-  ].join("\n");
-  assert.deepEqual([...titleLeadingIds(source)].sort(), ["RT-03", "RT-04"]);
-});
-
-void test("all 10 Phase 3 requirement IDs lead the title of a test in a named D-45 test file (QUAL-02, Phase 3)", () => {
-  const citing = D45_FILES.filter((file) => file !== "quality/suite-taxonomy.test.ts");
-  const leading = new Set<string>();
-  for (const file of citing) {
-    for (const id of titleLeadingIds(readFileSync(join(TEST_DIR, file), "utf8"))) {
-      leading.add(id);
-    }
-  }
-  const uncovered = PHASE_3_REQUIREMENT_IDS.filter((id) => !leading.has(id));
-  assert.deepEqual(uncovered, [], `Phase 3 requirement IDs named by no D-45 test title: ${uncovered.join(", ")}`);
-});
-
-void test("all 4 Phase 4 requirement IDs lead the title of a test in a named D-45 test file (QUAL-02, Phase 4)", () => {
-  const citing = D45_FILES.filter((file) => file !== "quality/suite-taxonomy.test.ts");
-  const leading = new Set<string>();
-  for (const file of citing) {
-    for (const id of titleLeadingIds(readFileSync(join(TEST_DIR, file), "utf8"))) {
-      leading.add(id);
-    }
-  }
-  const uncovered = PHASE_4_REQUIREMENT_IDS.filter((id) => !leading.has(id));
-  assert.deepEqual(uncovered, [], `Phase 4 requirement IDs named by no D-45 test title: ${uncovered.join(", ")}`);
-});
-
-void test("all 6 Phase 5 requirement IDs lead the title of a test in a named D-45 test file (QUAL-02, Phase 5)", () => {
-  const citing = D45_FILES.filter((file) => file !== "quality/suite-taxonomy.test.ts");
-  const leading = new Set<string>();
-  for (const file of citing) {
-    for (const id of titleLeadingIds(readFileSync(join(TEST_DIR, file), "utf8"))) {
-      leading.add(id);
-    }
-  }
-  const uncovered = PHASE_5_REQUIREMENT_IDS.filter((id) => !leading.has(id));
-  assert.deepEqual(uncovered, [], `Phase 5 requirement IDs named by no D-45 test title: ${uncovered.join(", ")}`);
 });

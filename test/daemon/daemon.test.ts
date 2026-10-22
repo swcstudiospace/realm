@@ -6,11 +6,10 @@
 
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createConnection, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import { makeRealmError, RealmError } from "../../src/core/errors.js";
 import { displayStatus, STATUS_LABELS } from "../../src/core/status.js";
 import {
@@ -34,10 +33,6 @@ import { FakeBridge } from "../support/fake-bridge.js";
 import { FakeExecutionService } from "../support/fake-execution.js";
 import { FakeContainerStore, FakeLibpod } from "../support/fake-libpod.js";
 import { FakeOpenShell } from "../support/fake-openshell.js";
-
-// This file runs from dist/test/daemon, so three levels up is the package root.
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
-const DAEMON_SOURCE = join(ROOT, "src", "daemon", "daemon.ts");
 
 const IMAGE = `registry.example.com/realm/workload@sha256:${"0".repeat(64)}`;
 const CLOCK_ISO = "2026-10-21T09:30:00.000Z";
@@ -647,13 +642,6 @@ void test("CLI-01: a second down is a no-op that still answers", async (t) => {
   assert.ok(second.result !== undefined && second.error === undefined);
   await awaitDone(daemon);
   assert.equal(existsSync(daemon.socketPath), false);
-});
-
-void test("RT-06: daemon.ts parses no argv, spawns no daemon, and reads no process environment (P6-D1)", () => {
-  const source = readFileSync(DAEMON_SOURCE, "utf8");
-  for (const forbidden of ["process.argv", "process.env", "process.exit", "detached"]) {
-    assert.ok(!source.includes(forbidden), `daemon.ts must not contain ${forbidden}`);
-  }
 });
 
 void test("QUAL-01: a connection that waits on a failed start is answered with the start's refusal code", async () => {

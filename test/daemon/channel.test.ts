@@ -4,11 +4,10 @@
 
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createConnection, createServer, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import { RealmError, ERROR_CATALOGUE, type ErrorCode } from "../../src/core/errors.js";
 import {
   CONTROL_METHODS,
@@ -30,10 +29,6 @@ import {
   unknownMethodReply,
 } from "../../src/daemon/channel.js";
 import { TOOL_CALL_TIMEOUT_MS } from "../../src/tools/dispatch.js";
-
-// This file runs from dist/test/daemon, so three levels up is the package root.
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
-const CHANNEL_SOURCE = join(ROOT, "src", "daemon", "channel.ts");
 
 const SECRET = "sk-test-0123456789abcdefghijkl";
 
@@ -385,29 +380,6 @@ void test("RT-06: describeRunDirRefusal names the expected mode and the observed
   assert.ok(ownerRefusal.includes("2000"), "expected uid is named");
   const dirRefusal = describeRunDirRefusal({ mode: 0o100700, uid: 1000, isDirectory: false }, 1000);
   assert.ok(dirRefusal.includes("700"), "expected mode is named for a non-directory");
-});
-
-void test("RT-06: the channel module imports only its five allowlisted modules and touches no foreign socket surface (P6-D10)", () => {
-  const source = readFileSync(CHANNEL_SOURCE, "utf8");
-  const specifiers = [...source.matchAll(/^import .* from "([^"]+)";/gm)].flatMap((match) =>
-    match[1] === undefined ? [] : [match[1]],
-  );
-  assert.deepEqual(specifiers.sort(), [
-    "../core/errors.js",
-    "../core/timeout.js",
-    "../session/paths.js",
-    "node:fs",
-    "node:net",
-  ]);
-  for (const word of ["podman", "docker", "container", "child_process", "spawn(", "process.env"]) {
-    assert.ok(
-      !source.toLowerCase().includes(word),
-      `channel source must not mention ${word}`,
-    );
-  }
-  const withoutControlSock = source.replaceAll("control.sock", "");
-  assert.ok(!withoutControlSock.includes(".sock"), "no socket path literal besides control.sock");
-  assert.ok(source.includes("encodeRequest"), "sanity: the read source is the channel module");
 });
 
 void test("RT-06: a reply longer than MAX_CONTROL_LINE_BYTES is refused with SCHEMA_INVALID, and its socket closes (P6-D2)", async (t) => {

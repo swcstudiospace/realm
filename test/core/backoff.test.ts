@@ -1,8 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { spawnSync } from "node:child_process";
 import { computeBackoffDelayMs } from "../../src/core/backoff.js";
 
 // Anda reconnect schedule (D-62) and AgentOS restart schedule (D-59).
@@ -114,12 +112,12 @@ void test("ANDA-03, RT-04: a random source outside [0, 1] or not a number is rej
   }
 });
 
-void test("ANDA-03, RT-04: backoff.ts imports nothing, so it depends on no module outside itself", () => {
-  // This file runs from dist/test/core, so four levels up is the package root.
-  const source = readFileSync(
-    join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "src", "core", "backoff.ts"),
-    "utf8",
-  );
-  assert.equal(/^\s*import\b/m.test(source), false, "backoff.ts must not contain an import statement");
-  assert.equal(/\bfrom\s+["']/.test(source), false, "backoff.ts must not re-export from another module");
+void test("ANDA-03, RT-04: loading backoff.ts in a fresh process prints nothing and exits 0", () => {
+  const url = new URL("../../src/core/backoff.js", import.meta.url).href;
+  const probe = spawnSync(process.execPath, ["--input-type=module", "-e", `await import(${JSON.stringify(url)});`], {
+    encoding: "utf8",
+  });
+  assert.equal(probe.status, 0, "importing backoff.ts must succeed on its own");
+  assert.equal(probe.stdout, "", "importing backoff.ts must not write to stdout");
+  assert.equal(probe.stderr, "", "importing backoff.ts must not write to stderr");
 });

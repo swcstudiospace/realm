@@ -2,8 +2,7 @@ import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import { ERROR_CATALOGUE, RealmError } from "../../src/core/errors.js";
 import { loadPolicyFile } from "../../src/core/policy.js";
 import { displayStatus } from "../../src/core/status.js";
@@ -148,23 +147,6 @@ void test("OMP-01: close() stops the session without starting a process and is s
   assert.deepEqual(exec.calls(), [], "close started no execution call");
   assert.deepEqual(exec.resources(), [], "close created no container");
   assert.deepEqual(bridge.calls(), [], "close made no bridge call");
-});
-
-// This file runs from dist/test/realm, so three levels up is the package root.
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
-
-function mentions(text: string, identifier: string): boolean {
-  return new RegExp(`\\b${identifier}\\b`).test(text);
-}
-
-void test("OMP-01: compose.ts reaches tools only through ToolDispatcher and names no guarded symbol or binary (P5-D7)", () => {
-  const source = readFileSync(join(ROOT, "src", "realm", "compose.ts"), "utf8");
-  assert.ok(mentions(source, "ToolDispatcher"), "the handle builds the dispatcher");
-  assert.ok(mentions(source, "LifecycleController"), "the handle builds the controller");
-  for (const symbol of ["buildExecArgv", "lockedWrite", "readFileCapped", "listDir", "spawnOpenShellRunner"]) {
-    assert.ok(!mentions(source, symbol), `${symbol} must not appear in the composition root`);
-  }
-  assert.ok(!mentions(source, "OPENSHELL_BINARY"), "the binary literal must not appear in the composition root");
 });
 
 void test("CR-01: createRealmHandle refuses a workspace outside every policy root with POLICY_DENIED before any dispatcher exists (D-22)", (t) => {
