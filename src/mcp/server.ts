@@ -160,7 +160,7 @@ function realmErrorResult(error: RealmError): Record<string, unknown> {
   };
 }
 
-async function callTool(dispatcher: McpDispatcher, params: unknown): Promise<MethodReply> {
+async function callTool(dispatcher: McpDispatcher, params: unknown, diagnostics: Writable): Promise<MethodReply> {
   if (!isRecord(params) || typeof params["name"] !== "string" || !isToolName(params["name"])) {
     return { error: { code: -32602, message: "Invalid params" } };
   }
@@ -177,6 +177,7 @@ async function callTool(dispatcher: McpDispatcher, params: unknown): Promise<Met
     if (error instanceof RealmError) {
       return { result: realmErrorResult(error) };
     }
+    diagnostics.write("mcp: tool call failed\n");
     return { error: { code: -32603, message: "Internal error" } };
   }
 }
@@ -185,6 +186,7 @@ async function dispatchMethod(
   dispatcher: McpDispatcher,
   method: string,
   params: unknown,
+  diagnostics: Writable,
 ): Promise<MethodReply> {
   switch (method) {
     case "server/discover":
@@ -194,7 +196,7 @@ async function dispatchMethod(
     case "tools/list":
       return { result: { tools: MCP_TOOL_DESCRIPTORS } };
     case "tools/call":
-      return callTool(dispatcher, params);
+      return callTool(dispatcher, params, diagnostics);
     default:
       return { error: { code: -32601, message: "Method not found" } };
   }
@@ -235,7 +237,7 @@ async function handleLine(
     // A notification carries no id, so it takes no reply.
     return;
   }
-  const reply = await dispatchMethod(dispatcher, request.method, request.params);
+  const reply = await dispatchMethod(dispatcher, request.method, request.params, diagnostics);
   writeReply(output, request.id, reply);
 }
 

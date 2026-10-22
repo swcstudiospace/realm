@@ -227,6 +227,14 @@ test("TOOL-05: a thrown defect that is not a RealmError still answers the intern
   assert.deepEqual(parseLine(driven.stdoutLines[0] as string)["error"], { code: -32603, message: "Internal error" });
 });
 
+test("TOOL-05: a thrown defect answers -32603 on the wire and records only the fixed tool-call diagnostic", async () => {
+  const dispatcher: McpDispatcher = { call: () => Promise.reject(new Error("socket reset with secret text")) };
+  const driven = await drive(dispatcher, [toolRequest(1, "status", {})]);
+  assert.equal(driven.stdoutLines.length, 1);
+  assert.deepEqual(parseLine(driven.stdoutLines[0] as string)["error"], { code: -32603, message: "Internal error" });
+  assert.equal(driven.stderr, "mcp: tool call failed\n");
+});
+
 test("TOOL-05: a failing input stream rejects closed with MCP_INPUT_FAILED and writes only the fixed diagnostic", async () => {
   const dispatcher: McpDispatcher = { call: () => Promise.reject(new Error("not reached")) };
   const input = new PassThrough();
