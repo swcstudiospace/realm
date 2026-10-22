@@ -1,7 +1,7 @@
 # Phase 7 Security Review: Realm
 
 Requirement: QUAL-03 (security review recorded before first release).
-Reviewed: 2026-10-22, working tree at `/root/src/repos/agent-realm`.
+Reviewed: 2026-10-22, working tree of the agent-realm repository (host path omitted).
 Intended destination: `.planning/phases/07-policy-reference-and-security-review/07-SECURITY-REVIEW.md`.
 Status of this document: review findings and dispositions. It does not close any finding.
 

@@ -263,8 +263,8 @@ Example. The digest is a placeholder of 64 zeros. It is not a real image, and th
 {
   "image": "realm-workload@sha256:0000000000000000000000000000000000000000000000000000000000000000",
   "workloadArgv": ["/usr/bin/node", "/opt/realm/workload.js"],
-  "stateDir": "/home/user/.local/state/realm",
-  "workspaceRoot": "/home/user/projects/example"
+  "stateDir": "/srv/realm/state",
+  "workspaceRoot": "/srv/realm/workspace"
 }
 ```
 

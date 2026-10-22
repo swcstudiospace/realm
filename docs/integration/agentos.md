@@ -100,7 +100,7 @@ Recorded in `docs/integration/runtime-decision.md` (S-11, OQ-P3-05, OQ-P3-06, OQ
 
 ## Spike result (closure, 2026-10-22)
 
-Scope: a feasibility spike of `@rivet-dev/agentos-core` as the in-sandbox runner (S-11, library mode). The spike ran in `/tmp/agentos-spike`, outside this repository. That directory is not committed. The spike edited nothing under the repository and created no OpenShell sandbox, Podman container, or gateway. Host: Linux 6.8.0-147-generic x64, Node v24.18.0, Podman 4.9.3, OpenShell CLI 0.1.2. Full notes: `/tmp/agentos-spike/SPIKE.md` (not committed).
+Scope: a feasibility spike of `@rivet-dev/agentos-core` as the in-sandbox runner (S-11, library mode). The spike ran in `<spike-dir>`, outside this repository. That directory is not committed. The spike edited nothing under the repository and created no OpenShell sandbox, Podman container, or gateway. Host: Linux 6.8.0-147-generic x64, Node v24.18.0, Podman 4.9.3, OpenShell CLI 0.1.2. Full notes: `<spike-dir>/SPIKE.md` (not committed).
 
 Docs read on 2026-10-22: https://rivet.dev/agentos/docs/ (introduction) and https://rivet.dev/agentos/docs/quickstart/ (Quickstart, Library).
 
@@ -115,7 +115,7 @@ Docs read on 2026-10-22: https://rivet.dev/agentos/docs/ (introduction) and http
 | Sidecar wrapper | `@rivet-dev/agentos-runtime-sidecar@0.4.3`, `engines.node >=20` | `npm view @rivet-dev/agentos-runtime-sidecar@0.4.3 engines` (SPIKE.md section 1) |
 | linux-x64 native package | `@rivet-dev/agentos-runtime-sidecar-linux-x64-gnu@0.4.3`, `os: linux`, `cpu: x64`, `libc: glibc`, Apache-2.0 | `npm view @rivet-dev/agentos-runtime-sidecar-linux-x64-gnu@0.4.3` (SPIKE.md section 1) |
 | Sidecar binary | ELF 64-bit x86-64, dynamically linked, 143.6 MB installed | `ls -la` and `file` on `node_modules/@rivet-dev/agentos-runtime-sidecar-linux-x64-gnu/agentos-native-sidecar` (SPIKE.md sections 1 and 5) |
-| Install footprint | 121 packages, `node_modules` 487 MB | `npm install --save-exact @rivet-dev/agentos-core@0.4.3` in `/tmp/agentos-spike` (SPIKE.md section 1) |
+| Install footprint | 121 packages, `node_modules` 487 MB | `npm install --save-exact @rivet-dev/agentos-core@0.4.3` in `<spike-dir>` (SPIKE.md section 1) |
 | Licence scan | No copyleft licence in the 121 `package.json` licence fields | Script over installed `package.json` files (SPIKE.md section 1) |
 
 ### Behaviour observed on this host
