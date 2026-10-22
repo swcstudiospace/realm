@@ -159,3 +159,18 @@ Each new code now covers its own situation. The code it replaces keeps its own m
 - The cause is itself a catalogue code, so no raw runtime text can enter an error.
 - The reason and the retryable flag always come from the primary `code`. `causeCode` never changes them.
 - Example: `makeRealmError("OPENSHELL_START_FAILED", "PODMAN_MACHINE_DOWN")` gives code `OPENSHELL_START_FAILED`, `causeCode` `PODMAN_MACHINE_DOWN`, and the `OPENSHELL_START_FAILED` reason.
+
+## Closure decisions (2026-10-22)
+
+These decisions were recorded by the user on 2026-10-22. Each is checked against the source named in its line. Nothing in this section is a live host run.
+
+- **Session owner.** The daemon owns sessions: the sandbox, the policy, and the session. Hosts attach to the daemon and do not own the sandbox (`src/omp/extension.ts`, `src/omp/plugin.ts`).
+- **Attach.** A surface attaches by connecting to the control socket and calling `up`. `up` is idempotent (`src/daemon/client.ts`). There is no attach or detach protocol.
+- **Lifetime.** The sandbox persists until `realm down`. A host shutdown closes that host's client and never sends `down` (`endSession`, `src/omp/plugin.ts`).
+- **Grace-period detach.** The grace-period detach is deferred. It is recorded as a deviation from the spec.
+- **Tool method.** The `tool` method carries `{ tool }`. Its reply is the tool outcome (`done` or `refused`) or a catalogue code (`src/daemon/client.ts`, `call` and `isToolOutcome`; `src/daemon/daemon.ts`, case `tool`).
+- **Control line cap.** A control line is capped at 1 MiB (`MAX_CONTROL_LINE_BYTES`, `src/daemon/channel.ts`). An oversized request is refused unread with a null-id `SCHEMA_INVALID` reply, and the connection then closes (`oversizedLineReply`, `src/daemon/channel.ts`; `src/daemon/daemon.ts`).
+- **Policy mode in replies.** `status` and `up` replies carry the policy mode, `advisory` or `fail-closed` (`DaemonStatus.mode`, `src/daemon/client.ts`).
+- **Directory modes.** On a fresh start the state directory and the run directory are created at 0700. An existing run directory must be exactly 0700 and owned by the current user, or the call is `SCHEMA_INVALID` (`ensureSocketDir`, `src/daemon/channel.ts`).
+- **Omp guard with unknown mode.** When the status read fails and no mode has been reported yet, the Omp guard blocks the host write. With a known advisory mode, the write proceeds with a warning (`src/omp/plugin.ts`, the fallback in `stateVerdict` and the status-failure path).
+

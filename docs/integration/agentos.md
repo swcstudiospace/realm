@@ -97,3 +97,80 @@ Recorded in `docs/integration/runtime-decision.md` (S-11, OQ-P3-05, OQ-P3-06, OQ
 - Driver: Phase 3 defines the `AgentOsDriver` port and the supervisor only. It has no concrete binding and no `@rivet-dev/agentos-core` dependency. The in-sandbox channel (OQ-P3-05) and the package check (OQ-P3-06) are blocked.
 - Native binaries (Q5): still open (OQ-P3-07).
 - Destroy route (Q2): still undocumented for hosted mode, so Phase 3 makes no hosted call.
+
+## Spike result (closure, 2026-10-22)
+
+Scope: a feasibility spike of `@rivet-dev/agentos-core` as the in-sandbox runner (S-11, library mode). The spike ran in `/tmp/agentos-spike`, outside this repository. That directory is not committed. The spike edited nothing under the repository and created no OpenShell sandbox, Podman container, or gateway. Host: Linux 6.8.0-147-generic x64, Node v24.18.0, Podman 4.9.3, OpenShell CLI 0.1.2. Full notes: `/tmp/agentos-spike/SPIKE.md` (not committed).
+
+Docs read on 2026-10-22: https://rivet.dev/agentos/docs/ (introduction) and https://rivet.dev/agentos/docs/quickstart/ (Quickstart, Library).
+
+### Package facts (verified)
+
+| Fact | Value | Command or source |
+| --- | --- | --- |
+| Version | `0.4.3` (latest) | `npm view @rivet-dev/agentos-core version` |
+| Licence | Apache-2.0 | `npm view @rivet-dev/agentos-core@0.4.3 license` |
+| Declared `engines` | none on `agentos-core` | `npm view @rivet-dev/agentos-core@0.4.3 engines --json` returns no field |
+| Runtime dependencies | `@rivet-dev/agentos-runtime-core` and `@rivet-dev/agentos-runtime-sidecar`, both 0.4.3, plus the other packages in `dependencies` | `npm view @rivet-dev/agentos-core@0.4.3 dependencies --json` |
+| Sidecar wrapper | `@rivet-dev/agentos-runtime-sidecar@0.4.3`, `engines.node >=20` | `npm view @rivet-dev/agentos-runtime-sidecar@0.4.3 engines` (SPIKE.md section 1) |
+| linux-x64 native package | `@rivet-dev/agentos-runtime-sidecar-linux-x64-gnu@0.4.3`, `os: linux`, `cpu: x64`, `libc: glibc`, Apache-2.0 | `npm view @rivet-dev/agentos-runtime-sidecar-linux-x64-gnu@0.4.3` (SPIKE.md section 1) |
+| Sidecar binary | ELF 64-bit x86-64, dynamically linked, 143.6 MB installed | `ls -la` and `file` on `node_modules/@rivet-dev/agentos-runtime-sidecar-linux-x64-gnu/agentos-native-sidecar` (SPIKE.md sections 1 and 5) |
+| Install footprint | 121 packages, `node_modules` 487 MB | `npm install --save-exact @rivet-dev/agentos-core@0.4.3` in `/tmp/agentos-spike` (SPIKE.md section 1) |
+| Licence scan | No copyleft licence in the 121 `package.json` licence fields | Script over installed `package.json` files (SPIKE.md section 1) |
+
+### Behaviour observed on this host
+
+| Behaviour | Result | Evidence |
+| --- | --- | --- |
+| Create, exec, file write and read, dispose | Worked. The quickstart call `process.exec` with `output.capture: "all"` returned exit 0 and `hello`. | `smoke.out.json`, `probe.out.json` (SPIKE.md section 2) |
+| `process.exec` with an object argument | Did not run as the task assumed. It returned exit 127. `process.exec` takes a command string. The object form is the `action` of `vm.cron.schedule`. | `probe.out.json` S1, `probe2.out.json` S1b (SPIKE.md section 2) |
+| Outbound network | Denied by default: `EACCES ... blocked by network.http policy`. Allowed for `example.com` with a `network` allow rule. Other hosts were not tested. | `probe3.out.json` C1, C3, C4 |
+| Loopback | Works, host-side and guest-side. | `probe3.out.json` C2 |
+| Guest identity | `uid=1000(agentos)` | `probe.out.json` D identity |
+| Reported resources | Guest `MemTotal` 131072 kB (128 MiB), one CPU, root filesystem 65536 1K blocks (64 MiB). These are the values the guest reports. Enforcement was not measured. | `probe.out.json` D memory, cpu, filesystem |
+| Process registry | Capped at 1024. The next spawn fails. Killed processes stay listed. | `probe8-procs.mjs` terminal output (SPIKE.md section 3) |
+| SQLite persistence | Write, dispose, reopen, and read worked. | `probe5-sqlite.mjs` (SPIKE.md section 2) |
+| Cron | Schedule, list, and cancel worked. | `probe6-cron.mjs` (SPIKE.md section 2) |
+| Payload, 4 MiB write and read | Worked. | `probe3.out.json` (SPIKE.md section 3) |
+| Payload, 8 MiB write alone | Worked. | SPIKE.md section 3 (`probe4-case.mjs`) |
+| Payload, 8 MiB read | Refused with `ERR_AGENTOS_TERMINAL_RESPONSE_LIMIT`. | SPIKE.md section 3 (`probe4-case.mjs`) |
+| Payload, 16 MiB write | The sidecar process exits with `SidecarProcessExited`. The embedding Node process then exits 1 on an unhandled `Error: write EPIPE`. Reproduced twice. | `probe3.out.json`, `probe4.err.txt` (SPIKE.md section 3) |
+| Guest binary format | `/opt/agentos/bin/cat` starts with `\0asm`, which is WebAssembly, not ELF. One binary was checked. | `probe2.out.json` B1 (SPIKE.md section 3) |
+| Host channel | The library spawns the sidecar as a child process with four stdio pipes. The fourth, fd 3, is the control stream. It is not a socket or a port. | `dist/native-client.js` and `dist/process.js` in `@rivet-dev/agentos-runtime-core` (SPIKE.md section 4) |
+
+Timings are single-run observations and are not benchmarks.
+
+### Podman prerequisite
+
+The OpenShell Podman driver requires Podman 5.x (`openshell.md` Q2). The host has Podman 4.9.3 (`podman --version`). The OpenShell Podman path was not run on this host.
+
+### Unverified
+
+1. OpenShell 0.1.2 `sandbox exec` as a transport: stdin, binary framing, close semantics, and exit codes were not run. The help text is the only evidence (OQ-P4-04, OQ-P4-05).
+2. Whether the library runs its sidecar without the fd 3 control pipe, and what sets `globalThis._childProcessSpawnStart`.
+3. Whether the sidecar and the Node runner start under OpenShell Landlock and seccomp as a non-root user.
+4. The cause of the 16 MiB crash, whether `runtime.protocol.maxTerminalBytes` avoids it, and whether the host can catch `EPIPE`.
+5. The read ceiling between 4 MiB (ok) and 8 MiB (refused), and the default of the configured knob.
+6. Enforcement of memory, CPU, heap, CPU-time, and process limits.
+7. Reaping: exited processes are not evicted from the registry, and `dispose()` after kill-and-reap was not tested.
+8. The default outbound allowlist. Only `example.com` was tested.
+9. `vm.software.install` and its digest check.
+10. Node 20 and 22 on the host, and the arm64 sidecar package.
+11. The licences of the Rust crates compiled into the sidecar binary.
+12. Native ELF binary support (OQ-P3-07). Only one guest binary was checked, and it is WebAssembly.
+13. Hosted mode was not evaluated.
+14. Security. The spike did not review security. The Security Model states that agentOS is in beta and is undergoing security review.
+15. The cause of the `EACCES` on loopback port 1.
+
+### Recommendation
+
+No-go for the in-sandbox runner as designed. Three blockers:
+
+1. A 16 MiB write takes down the sidecar and the embedding process.
+2. No verified control channel into an OpenShell sandbox. The OpenShell 0.1.2 help does not show that `sandbox exec` carries the library's pipe protocol. Live exec stays gated (OQ-P4-04, OQ-P4-05), and OQ-P3-05 stays blocked.
+3. The host has Podman 4.9.3, below the 5.x the OpenShell Podman driver requires.
+
+Revisit as go with conditions only if: (a) a live OpenShell 0.1.2 run on Podman 5.x shows the sidecar protocol survives `sandbox exec` or a relay, with exit codes; (b) the crash is avoided by configuration or fixed upstream, and the embedding process survives a sidecar exit; (c) the sidecar starts under the OpenShell Landlock and seccomp policy as a non-root user; (d) the guest gaps listed above are accepted for Realm's workloads.
+
+Status: the recommendation is pending the user's decision on the AgentOS path after the spike. This section does not record that decision. No live run of the Realm runner has been made.
+

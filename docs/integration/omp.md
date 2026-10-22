@@ -1,7 +1,7 @@
 # Omp integration note
 
-Status: gate note (FOUND-03, decision D-03, spec q4). No plugin code or manifest exists in this phase.
-Blocks: `plugin/` (Phase 5). `plugin/` is not created by this note.
+Status: gate note (FOUND-03, decision D-03, spec q4). The plugin code now exists: the extension entry is `./dist/src/omp/extension.js`, and the plugin attaches to the daemon.
+Blocks: none. The plugin lives under `src/omp/`, its entry is `./dist/src/omp/extension.js`, and this note does not describe a live host run.
 
 ## Official sources read
 
@@ -99,5 +99,22 @@ No. No file under `plugin/` is created. No manifest file is written. The example
 
 ## Not in this note
 
-- No plugin code, no `package.json` for a plugin, no `.omp-plugin/` tree, no `mcp.json`.
-- No guessed URLs. Pages not fetched from `om
+- The package's `omp` field points at `./dist/src/omp/extension.js`. No `.omp-plugin/` tree and no `mcp.json` exist.
+
+## Entry and attach (closure, 2026-10-22)
+
+Sources: `package.json`, `src/omp/extension.ts`, `src/omp/plugin.ts`, and `src/daemon/client.ts`. No live Omp host session has run. The smoke run (commit 4b1d4ab) covered the built CLI and daemon only, so this section describes the attach path from source reading and makes no claim about a live Omp host.
+
+Entry. `package.json` declares `"omp": { "extensions": ["./dist/src/omp/extension.js"] }`. The module's default export is `realmExtension(pi)`. It is the only module in the Omp wiring that reads `process.env`. It resolves the state directory and the control socket path once, and passes an `attachDaemon` function to `registerRealmPlugin` (`src/omp/extension.ts`, `src/omp/plugin.ts`).
+
+Attach at session start. The `session_start` handler starts the attach without awaiting it. The attach and its first status read share a 10-second budget (`STARTUP_BUDGET_MS`). The attach:
+
+1. Ensures a daemon answers on the control socket. When none does, it spawns `dist/src/daemon/main.js` detached.
+2. Connects to the control socket and calls `up` with the session working directory (`ctx.cwd`) as the workspace root. `up` is idempotent.
+3. Calls `status`. The reply carries the snapshot and the policy mode. The mode is stored on the session.
+
+The status indicator paints from the snapshot in the daemon status. A failed attach paints the error state with its code.
+
+Mode and guard. Each guarded host write reads the daemon status under a managed timer, stores the mode it reports, and repaints the indicator. If that read fails, the last mode the daemon reported decides: `advisory` warns and the write proceeds, and `fail-closed` blocks it. If no mode has been reported yet, the write is blocked (`src/omp/plugin.ts`).
+
+Shutdown. `session_shutdown` closes the control client and clears the session. It never sends `down`. The daemon keeps the sandbox, and a host shutdown is only a detach of this host (`endSession`, `src/omp/plugin.ts`). The sandbox persists until `realm down`.

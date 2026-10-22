@@ -12,7 +12,30 @@ When an agent edits code, every file mutation either lands inside the realm unde
 
 ### Validated
 
-(None yet, ship to validate)
+- **FOUND-01**: strict ESM package; typecheck, lint, test and build exit 0. Evidence: `.planning/phases/01-scaffold-and-frozen-contracts/01-VERIFICATION.md`
+- **FOUND-02**: frozen contracts and schema rejection. Evidence: `test/core/states.test.ts`, `test/core/policy.schema.test.ts`, `test/contract/tools.schema.test.ts`, `test/contract/session-record.schema.test.ts`
+- **FOUND-03**: integration notes with official URL and read date. Evidence: `docs/integration/*.md`
+- **CORE-01**: state machine and rejected transitions. Evidence: `test/core/state-machine.test.ts`, `test/core/states.test.ts`
+- **CORE-02**: one display-label mapping with reason and transition time. Evidence: `test/core/status.test.ts`
+- **CORE-03**: advisory default, fail-closed opt-in, policy keys. Evidence: `test/core/policy.test.ts`, `test/core/fail-closed.test.ts`
+- **CORE-04**: typed event bus with transition reasons. Evidence: `test/core/events.test.ts`
+- **CORE-05**: mutation gate on state active; bounded queue wait. Evidence: `test/lifecycle/mutation-gate.test.ts`, `test/tools/queue-timeout.test.ts`
+- **CORE-06**: idempotent lifecycle operations. Evidence: `test/lifecycle/idempotent.test.ts`
+- **FS-01**: root-allowlisted canonical paths, PATH_ESCAPE. Evidence: `test/fs/canonicalize.test.ts`, `test/fs/root.test.ts`
+- **FS-03**: credential-path denial. Evidence: `test/fs/deny-credentials.test.ts`
+- **FS-04**: advisory write locks and content-hash re-check. Evidence: `test/fs/lock.test.ts`, `test/fs/write.test.ts`
+- **FS-05**: atomic writes, WRITE_NOT_ATOMIC. Evidence: `test/fs/atomic-write.test.ts`
+- **RT-06**: user-only control socket. Evidence: `test/daemon/channel.test.ts`, `test/doctor/control-channel.test.ts`; closure smoke run (commit 4b1d4ab, state-dir 0700)
+- **RT-07**: session record written before container creation. Evidence: `test/session/store.test.ts`
+- **AUD-01**: redacted JSONL audit append. Evidence: `test/audit/log.test.ts`, `test/audit/redaction.test.ts`
+- **AUD-02**: no host environment injected into the sandbox. Evidence: `test/lifecycle/no-host-env.test.ts`
+- **CLI-02**: realm up with Podman missing reports PODMAN_MISSING and exits promptly. Evidence: `test/cli/cli.test.ts`, `test/daemon/e2e.test.ts`
+- **CLI-03**: doctor lists each prerequisite with its fix. Evidence: `test/doctor/checks.test.ts`, `test/doctor/runtime-checks.test.ts`; closure smoke run (doctor runs its 9 checks)
+- **QUAL-01**: typed errors, async timeouts, no silent catches. Evidence: `test/core/errors.test.ts`, `.planning/phases/01-scaffold-and-frozen-contracts/01-VERIFICATION.md`
+- **QUAL-02**: suite taxonomy with Podman-gated skip. Evidence: `test/quality/suite-taxonomy.test.ts`, `test/integration/podman-gate.test.ts`
+- **QUAL-03**: policy reference and reviews. Evidence: `docs/policy-reference.md`, `.planning/phases/07-policy-reference-and-security-review/07-SECURITY-REVIEW.md`, `.planning/phases/07-policy-reference-and-security-review/07-SUPPLY-CHAIN-REVIEW.md`
+- **TOOL-01**: six tools in one schema; every input validated before any sandbox call. Evidence: `test/contract/tools.schema.test.ts`, `test/contract/tool-input-gate.test.ts`, `test/tools/dispatch.test.ts`
+- **TOOL-02**: argv-first exec; shell mode gated by policy. Evidence: `test/contract/exec-policy.test.ts`, `test/contract/tools.schema.test.ts`
 
 ### Active
 
@@ -29,6 +52,8 @@ The v1 requirement set lives in `.planning/REQUIREMENTS.md` (REQ-IDs grouped by 
 - [ ] Standalone CLI: realm up, down, status, doctor; host config snippets
 - [ ] Integration notes per documentation source, policy reference, security review
 - [ ] Unit, state-machine, contract, and Podman-gated integration tests
+
+**Milestone status (2026-10-22):** not complete. RT-04 (no AgentOS driver is bound) and CLI-01 (`realm up` reaches the error state `AGENTOS_NOT_CONFIGURED`, not active) stay open, and the spike recommends no-go for the in-sandbox runner as designed. The live-gated items are deferred as human verification. The milestone name v1.0 is provisional, and archive needs approval.
 
 ### Out of Scope
 
@@ -71,18 +96,19 @@ The v1 requirement set lives in `.planning/REQUIREMENTS.md` (REQ-IDs grouped by 
 
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
-| Default policy mode is advisory with a visible warning; fail-closed is opt-in per project | Decided by the user. Resolves the spec's contradiction between ASSUMPTIONS/POLICY_MODE and GRACEFUL_DEGRADATION | — Pending (implementation) |
+| Default policy mode is advisory with a visible warning; fail-closed is opt-in per project | Decided by the user. Resolves the spec's contradiction between ASSUMPTIONS/POLICY_MODE and GRACEFUL_DEGRADATION | Implemented |
 | Podman rootless as the only container engine in v1 | Spec ASSUMPTIONS and CONTAINER_LAYER_PODMAN | — Pending (implementation) |
-| Chain is host CLI → Realm core → Podman container (digest-pinned) → OpenShell → AgentOS, with Anda reached from the TypeScript client | Spec LAYER_STACK and n1 minimal path | — Pending (Rivet, Podman, OpenShell, Anda doc gates) |
-| One container per session | n4 recommendation; reversible; keeps locks in the daemon and reaping keyed to the session record | — Pending (confirm after doc gates) |
-| Control channel is a user-only Unix socket (directory 0700, socket 0600) under the realm state directory; loopback with per-session token is the fallback | n4 recommendation; excludes other local users by filesystem permission | — Pending (confirm after doc gates) |
-| Anda boundary: TypeScript client over the first documented Anda Engine surface, preferring socket JSON-RPC or HTTP; Rust shim only if no TypeScript-reachable surface is documented | n4 recommendation; decided by the documentation spike | — Pending (Anda spike, Phase 3) |
+| Chain is host CLI → Realm core → Podman container (digest-pinned) → OpenShell → AgentOS, with Anda reached from the TypeScript client | Spec LAYER_STACK and n1 minimal path | Confirmed 2026-10-22 (S-08): the OpenShell gateway runs on the host and its Podman driver creates the session container (runtime-decision.md, D-46, D-47) |
+| One container per session | n4 recommendation; reversible; keeps locks in the daemon and reaping keyed to the session record | Implemented |
+| Control channel is a user-only Unix socket (directory 0700, socket 0600) under the realm state directory; loopback with per-session token is the fallback | n4 recommendation; excludes other local users by filesystem permission | Implemented |
+| Anda boundary: TypeScript client over the first documented Anda Engine surface, preferring socket JSON-RPC or HTTP; Rust shim only if no TypeScript-reachable surface is documented | n4 recommendation; decided by the documentation spike | Phase 3: TypeScript client over the Anda HTTP API, no shim (anda-decision.md). Decided 2026-10-22: Anda consumes Realm over MCP (P5-D1, anda-decision.md section 7) |
 | AgentOS behind an ExecutionService interface; no actor design until Rivet docs are read | n3 default; AgentOS identity unresolved | — Pending (Rivet doc gate) |
 | Vertical slice (up, down, status, doctor on core and runtime) proves the architecture first; plugin, MCP, ACP and locks follow | n1 recommendation; preset roadmap order keeps this sequence | — Pending (roadmap) |
 | Omp host-native write/edit tools: disable in required mode (spec q4 recommendation) | Spec CLARIFICATIONS q4 is not decided by the user; recorded as an open question | — Pending (Omp doc gate) |
 | Required mode gates writes only; reads stay available while disconnected | n5 default; spec q1 options considered | — Pending (confirm) |
 | Podman-gated integration tests skip with a clear reason until Podman 5.x is installed | OpenShell docs require Podman 5.x; local Podman is 4.9.3; no package installs | — Pending (environment) |
 | Node LTS with ESM for CLI and daemon; Bun unverified | Spec ASSUMPTIONS and n3 default | — Pending (host doc gate) |
+| The daemon owns sessions; surfaces attach through the control socket | User decision, 2026-10-22 (STATE.md). Surfaces attach by calling the idempotent `up`; there is no attach or detach protocol | Decided 2026-10-22 |
 
 ---
-*Last updated: 2026-10-21 after initialization (automatic mode, research skipped by preset)*
+*Last updated: 2026-10-22 after initialization (automatic mode, research skipped by preset)*

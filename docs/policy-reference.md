@@ -230,3 +230,39 @@ Related but separate: session identity file naming (`SESSION_ID_PATTERN`,
 (`src/session/paths.ts:14-34`), and the open-file/list caps such as
 `MAX_LIST_ENTRIES` (`src/fs/list.ts:13`) are code constants, not policy
 keys.
+
+## Runtime configuration file
+
+This file holds deployment inputs for the runtime: the `RuntimeConfig` type in `src/runtime/config.ts`. It is not a policy file, and none of its keys are policy keys (see "What is not a policy key" above).
+
+Path (`resolveConfigPath`, `src/runtime/host-paths.ts`):
+
+- `$XDG_CONFIG_HOME/realm/config.json` when `XDG_CONFIG_HOME` is an absolute path. A relative value is ignored.
+- Otherwise `$HOME/.config/realm/config.json`. When `HOME` is not absolute there is no location to read, and the call is `SCHEMA_INVALID`.
+
+Keys (`ACCEPTED_KEYS`, `src/runtime/config.ts`). The key set is closed, and any other key is refused:
+
+- `image` (required): a digest-pinned reference in the form `name@sha256:<64 hex>`. The name starts with a lowercase letter or digit and continues with lowercase letters, digits, `.`, `_`, `/`, or `-`. A tag-only reference is refused.
+- `workloadArgv` (required): a non-empty array of non-empty strings. The first element must be an absolute path (D-79).
+- `stateDir` (required): an absolute path.
+- `workspaceRoot` (required): an absolute path.
+- `andaUrl` (optional): an `http:` or `https:` URL with no userinfo.
+
+Reading (`readRuntimeConfigFile`, `src/runtime/config-file.ts`):
+
+- The file is read with a 64 KiB cap (65,536 bytes).
+- A missing path, a path that is not a regular file, a file over the cap, invalid JSON, and any validation failure are all `SCHEMA_INVALID`. The error names no field value.
+
+Policy file: `<stateDir>/policy.json` (`defaultPolicyPath`, `src/runtime/host-paths.ts`).
+
+Example. The digest is a placeholder of 64 zeros. It is not a real image, and this document does not claim that any image with this name or digest exists. The paths are illustrative.
+
+```json
+{
+  "image": "realm-workload@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "workloadArgv": ["/usr/bin/node", "/opt/realm/workload.js"],
+  "stateDir": "/home/user/.local/state/realm",
+  "workspaceRoot": "/home/user/projects/example"
+}
+```
+
