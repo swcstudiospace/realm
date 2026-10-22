@@ -39,10 +39,20 @@ test("flags root, tmp, Users, and home host paths with location", async () => {
         ["README.md", 1, absolute("root", "x")],
         ["README.md", 2, absolute("tmp", "x")],
         ["README.md", 3, absolute("Users", "x")],
-        ["README.md", 4, absolute("home", "x", "")],
+        ["README.md", 4, absolute("home", "x")],
       ],
     );
     assert.equal(hits[0].column, "cache at ".length + 1);
+  });
+});
+
+test("flags a bare home directory with no trailing slash", async () => {
+  await withFixture({ "README.md": `Workspace: ${absolute("home", "alice")}\n` }, async (root) => {
+    const hits = await findHostPaths({ root });
+    assert.deepEqual(
+      hits.map((hit) => [hit.file, hit.line, hit.match]),
+      [["README.md", 1, absolute("home", "alice")]],
+    );
   });
 });
 
@@ -73,7 +83,7 @@ test("skips files under dist, node_modules, and .git in the fixture tree", async
       const hits = await findHostPaths({ root });
       assert.deepEqual(
         hits.map((hit) => [hit.file, hit.line, hit.match]),
-        [["docs/guide.md", 1, absolute("home", "x", "")]],
+        [["docs/guide.md", 1, absolute("home", "x")]],
       );
     },
   );

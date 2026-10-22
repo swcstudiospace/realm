@@ -11,7 +11,7 @@ const HOST_PATH_PATTERNS = [
   /\/root\/[A-Za-z0-9._-]+/g,
   /\/tmp\/[A-Za-z0-9._-]+/g,
   /\/Users\/[A-Za-z0-9._-]+/g,
-  /\/home\/[A-Za-z0-9._-]+\//g,
+  /\/home\/[A-Za-z0-9._-]+/g,
 ];
 
 // Each entry is a root-relative file or directory, or { path, extensions }.
