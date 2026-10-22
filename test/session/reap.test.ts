@@ -58,7 +58,7 @@ async function assertCode(work: Promise<unknown>, code: ErrorCode): Promise<void
   await assert.rejects(work, (error: unknown) => error instanceof RealmError && error.code === code);
 }
 
-test("RT-08: reapStartup removes every container before it deletes any record, checked against the live container store (D-84)", async (t) => {
+void test("RT-08: reapStartup removes every container before it deletes any record, checked against the live container store (D-84)", async (t) => {
   const { stateDir, store, containers, client } = await startFixture(t);
   store.save(recordFor(stateDir, "session-null", null));
   store.save(recordFor(stateDir, "session-live", "realm-live"));
@@ -69,7 +69,7 @@ test("RT-08: reapStartup removes every container before it deletes any record, c
     list: () => store.list(),
     delete: (sessionId: string) => {
       const left = containers.list().filter((container) => container.labels["io.realm.managed"] === "true");
-      log.push(`record:${sessionId}:containers-left=${left.length}`);
+      log.push(`record:${sessionId}:containers-left=${String(left.length)}`);
       store.delete(sessionId);
     },
   };
@@ -78,7 +78,7 @@ test("RT-08: reapStartup removes every container before it deletes any record, c
     sweep: async () => {
       log.push("sweep:start");
       const removed = await removeAllRealmContainers(client);
-      log.push(`sweep:removed=${removed}`);
+      log.push(`sweep:removed=${String(removed)}`);
       return removed;
     },
   });
@@ -93,7 +93,7 @@ test("RT-08: reapStartup removes every container before it deletes any record, c
   assert.deepEqual(store.list(), []);
 });
 
-test("RT-08: reapStartup reaps a crash during realm up with a null container id, found through its label (D-86)", async (t) => {
+void test("RT-08: reapStartup reaps a crash during realm up with a null container id, found through its label (D-86)", async (t) => {
   const { stateDir, store, containers, client } = await startFixture(t);
   store.save(recordFor(stateDir, "session-null", null));
   containers.add({ id: "realm-orphan", labels: { ...REALM_LABELS, "io.realm.session": "session-null" }, running: false });
@@ -105,7 +105,7 @@ test("RT-08: reapStartup reaps a crash during realm up with a null container id,
   assert.equal(store.load("session-null"), null);
 });
 
-test("RT-08: reapStartup reaps a record that holds a container id together with that container (D-86)", async (t) => {
+void test("RT-08: reapStartup reaps a record that holds a container id together with that container (D-86)", async (t) => {
   const { stateDir, store, containers, client } = await startFixture(t);
   store.save(recordFor(stateDir, "session-bound", "realm-bound"));
   containers.add({ id: "realm-bound", labels: { ...REALM_LABELS, "io.realm.session": "session-bound" }, running: true });
@@ -117,7 +117,7 @@ test("RT-08: reapStartup reaps a record that holds a container id together with 
   assert.equal(store.load("session-bound"), null);
 });
 
-test("RT-08: reapStartup leaves a foreign unlabelled container untouched (D-86)", async (t) => {
+void test("RT-08: reapStartup leaves a foreign unlabelled container untouched (D-86)", async (t) => {
   const { stateDir, store, containers, libpod, client } = await startFixture(t);
   store.save(recordFor(stateDir, "session-null", null));
   containers.add({ id: "realm-orphan", labels: { ...REALM_LABELS, "io.realm.session": "session-null" }, running: true });
@@ -130,7 +130,7 @@ test("RT-08: reapStartup leaves a foreign unlabelled container untouched (D-86)"
   assert.equal(removals(libpod).some((target) => target.includes("realm-orphan")), true);
 });
 
-test("RT-08: a second reapStartup is a no-op that removes nothing and deletes nothing (D-84)", async (t) => {
+void test("RT-08: a second reapStartup is a no-op that removes nothing and deletes nothing (D-84)", async (t) => {
   const { stateDir, store, containers, libpod, client } = await startFixture(t);
   store.save(recordFor(stateDir, "session-null", null));
   containers.add({ id: "realm-orphan", labels: { ...REALM_LABELS, "io.realm.session": "session-null" }, running: true });
@@ -143,7 +143,7 @@ test("RT-08: a second reapStartup is a no-op that removes nothing and deletes no
   assert.equal(removals(libpod).length, removalsAfterFirst);
 });
 
-test("RT-08: a surviving container makes reapStartup reject with REALM_STOPPING, deletes no record, and a later reap completes (D-84)", async (t) => {
+void test("RT-08: a surviving container makes reapStartup reject with REALM_STOPPING, deletes no record, and a later reap completes (D-84)", async (t) => {
   const { stateDir, store, containers, libpod, client } = await startFixture(t);
   store.save(recordFor(stateDir, "session-null", null));
   store.save(recordFor(stateDir, "session-bound", "realm-stuck"));

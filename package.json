@@ -49,6 +49,7 @@
     "test:scripts": "node --test \"scripts/**/*.test.mjs\"",
     "check:docs": "node scripts/check/host-paths.mjs && node scripts/check/agents-sync.mjs",
     "check:pack": "node scripts/check/pack-smoke.mjs",
+    "check:gates": "node scripts/check/gate-closure.mjs",
     "release:next": "node scripts/release/next-version.mjs",
     "release:sync": "node scripts/release/sync-version.mjs",
     "release:changelog": "node scripts/release/changelog.mjs"

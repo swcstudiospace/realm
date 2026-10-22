@@ -36,7 +36,7 @@ const NON_ACTIVE_CODES: Readonly<Record<Exclude<State, "active">, string>> = {
 
 const NON_ACTIVE_STATES = Object.keys(NON_ACTIVE_CODES) as Exclude<State, "active">[];
 
-test("CORE-05: active proceeds under both modes with no warning and runs the mutation", () => {
+void test("CORE-05: active proceeds under both modes with no warning and runs the mutation", () => {
   for (const policy of [ADVISORY, FAIL_CLOSED]) {
     assert.deepEqual(gateMutation(policy, "active"), { outcome: "proceed" });
     assert.deepEqual(runGatedMutation(gateMutation(policy, "active"), () => 7), {
@@ -47,23 +47,22 @@ test("CORE-05: active proceeds under both modes with no warning and runs the mut
   }
 });
 
-test("CORE-05: advisory proceeds with a warning that names every non-active state", () => {
+void test("CORE-05: advisory proceeds with a warning that names every non-active state", () => {
   for (const state of NON_ACTIVE_STATES) {
     const gate = gateMutation(ADVISORY, state);
     assert.equal(gate.outcome, "proceed-with-warning", `state ${state}`);
-    assert.ok(gate.outcome === "proceed-with-warning");
     assert.match(gate.warning, new RegExp(state), `warning names ${state}`);
     assert.match(gate.warning, /advisory policy/, `warning states the advisory policy for ${state}`);
   }
 });
 
-test("CORE-05: fail-closed refuses every non-active state with its exact deny code", () => {
+void test("CORE-05: fail-closed refuses every non-active state with its exact deny code", () => {
   for (const state of NON_ACTIVE_STATES) {
     assert.deepEqual(gateMutation(FAIL_CLOSED, state), { outcome: "refused", code: NON_ACTIVE_CODES[state] }, `state ${state}`);
   }
 });
 
-test("CORE-05: every state in both modes is decided, and the gate adds no decision logic over decideMutation", () => {
+void test("CORE-05: every state in both modes is decided, and the gate adds no decision logic over decideMutation", () => {
   for (const policy of [ADVISORY, FAIL_CLOSED]) {
     for (const state of STATES) {
       const decision = decideMutation(policy, state);
@@ -79,16 +78,15 @@ test("CORE-05: every state in both modes is decided, and the gate adds no decisi
   }
 });
 
-test("CORE-05: runGatedMutation returns the advisory warning together with the result", () => {
+void test("CORE-05: runGatedMutation returns the advisory warning together with the result", () => {
   const gate = gateMutation(ADVISORY, "degraded");
   const result = runGatedMutation(gate, () => "written");
   assert.equal(result.outcome, "done");
-  assert.ok(result.outcome === "done");
   assert.equal(result.value, "written");
   assert.ok(result.warning !== null && /degraded/.test(result.warning));
 });
 
-test("CORE-05: runGatedMutation never runs the mutation on a refusal and returns the deny code", () => {
+void test("CORE-05: runGatedMutation never runs the mutation on a refusal and returns the deny code", () => {
   let ran = 0;
   const result = runGatedMutation(gateMutation(FAIL_CLOSED, "connecting"), () => {
     ran += 1;
@@ -98,7 +96,7 @@ test("CORE-05: runGatedMutation never runs the mutation on a refusal and returns
   assert.deepEqual(result, { outcome: "refused", code: "REALM_NOT_ACTIVE" });
 });
 
-test("CORE-05: the gate returns synchronously, never a Promise, and schedules no timer", (t: TestContext) => {
+void test("CORE-05: the gate returns synchronously, never a Promise, and schedules no timer", (t: TestContext) => {
   const timers = t.mock.method(globalThis, "setTimeout");
   for (const policy of [ADVISORY, FAIL_CLOSED]) {
     for (const state of STATES) {
@@ -111,7 +109,7 @@ test("CORE-05: the gate returns synchronously, never a Promise, and schedules no
   assert.equal(timers.mock.callCount(), 0);
 });
 
-test("CORE-05: the controller gate reads the current state, so a refused write never reaches the port", async (t: TestContext) => {
+void test("CORE-05: the controller gate reads the current state, so a refused write never reaches the port", async (t: TestContext) => {
   const base = realpathSync(mkdtempSync(join(tmpdir(), "realm-mutation-gate-")));
   t.after(() => {
     rmSync(base, { recursive: true, force: true });

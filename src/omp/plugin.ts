@@ -250,12 +250,12 @@ export function registerRealmPlugin(pi: OmpExtensionApi, options: RealmPluginOpt
 
     if (!isCurrent()) {
       // Ended or superseded: release whatever this attempt produces, late or not.
-      void pending.then(({ client }) => client.close(), () => undefined);
+      void pending.then(({ client }) => { client.close(); }, () => undefined);
       return { outcome: "superseded" };
     }
     if (attached === null) {
       // The budget or the attach failed. A client that lands later is released, never adopted.
-      void pending.then(({ client }) => client.close(), () => undefined);
+      void pending.then(({ client }) => { client.close(); }, () => undefined);
       renderRealmStatus(ctx.ui, { state: "error", reason: code, lastTransitionAt: nowIso() });
       return { outcome: "failed", code };
     }
@@ -421,7 +421,7 @@ function readStatus(session: ActiveSession): Promise<DaemonStatus> {
         },
         (error: unknown) => {
           disarmTimer(session, timer);
-          reject(error);
+          reject(error instanceof Error ? error : makeRealmError("REALM_NOT_ACTIVE"));
         },
       );
   });

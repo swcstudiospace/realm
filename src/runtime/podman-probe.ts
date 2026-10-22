@@ -88,7 +88,7 @@ export async function probePodman(options: PodmanProbeOptions): Promise<PodmanPr
   if (dial === "timed-out") {
     return failure(
       "PODMAN_MACHINE_DOWN",
-      `The rootless Podman API socket did not answer a connection within ${options.timeoutMs} ms. ${FIX_START_SOCKET}`,
+      `The rootless Podman API socket did not answer a connection within ${String(options.timeoutMs)} ms. ${FIX_START_SOCKET}`,
     );
   }
   if (dial === "refused") {
@@ -146,7 +146,7 @@ async function readVersion(
     );
   } catch (error: unknown) {
     if (error instanceof RealmError) {
-      return { ok: false, detail: `podman --version did not finish within ${timeoutMs} ms.` };
+      return { ok: false, detail: `podman --version did not finish within ${String(timeoutMs)} ms.` };
     }
     return {
       ok: false,
@@ -154,7 +154,7 @@ async function readVersion(
     };
   }
   if (outcome.exitCode !== 0) {
-    return { ok: false, detail: `podman --version exited with status ${outcome.exitCode}.` };
+    return { ok: false, detail: `podman --version exited with status ${String(outcome.exitCode)}.` };
   }
   return { ok: true, stdout: outcome.stdout };
 }

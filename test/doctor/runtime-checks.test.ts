@@ -137,7 +137,7 @@ function fixOf(result: CheckResult): string {
   return result.fix ?? "";
 }
 
-test("RT-02: podman passes on Podman 5.x, with no fix (RT-02)", async (t) => {
+void test("RT-02: podman passes on Podman 5.x, with no fix (RT-02)", async (t) => {
   const host = fakeHost({ commands: { [PODMAN_VERSION]: PODMAN_5 } });
   const result = resultOf(await runtimeChecks(t, host), "podman");
   assert.equal(result.status, "pass");
@@ -145,7 +145,7 @@ test("RT-02: podman passes on Podman 5.x, with no fix (RT-02)", async (t) => {
   assert.match(result.detail, /5\.0\.0/);
 });
 
-test("RT-02: podman fails with PODMAN_MISSING and the install fix when the binary cannot start (RT-02)", async (t) => {
+void test("RT-02: podman fails with PODMAN_MISSING and the install fix when the binary cannot start (RT-02)", async (t) => {
   const host = fakeHost({});
   const result = resultOf(await runtimeChecks(t, host), "podman");
   assert.equal(result.status, "fail");
@@ -154,7 +154,7 @@ test("RT-02: podman fails with PODMAN_MISSING and the install fix when the binar
   assert.equal(host.dials.length, 0, "no socket is dialed before the version passes");
 });
 
-test("RT-02: podman fails with PODMAN_UNSUPPORTED_VERSION and an upgrade fix on Podman 4.9.3 (RT-02)", async (t) => {
+void test("RT-02: podman fails with PODMAN_UNSUPPORTED_VERSION and an upgrade fix on Podman 4.9.3 (RT-02)", async (t) => {
   const host = fakeHost({ commands: { [PODMAN_VERSION]: PODMAN_4 } });
   const result = resultOf(await runtimeChecks(t, host), "podman");
   assert.equal(result.status, "fail");
@@ -163,7 +163,7 @@ test("RT-02: podman fails with PODMAN_UNSUPPORTED_VERSION and an upgrade fix on 
   assert.match(fixOf(result), /Upgrade Podman to 5\.x yourself/);
 });
 
-test("RT-02: raw podman --version output is never echoed into the result (RT-02)", async (t) => {
+void test("RT-02: raw podman --version output is never echoed into the result (RT-02)", async (t) => {
   const host = fakeHost({ commands: { [PODMAN_VERSION]: { exitCode: 0, stdout: "SECRET-TOKEN-XYZ" } } });
   const result = resultOf(await runtimeChecks(t, host), "podman");
   assert.equal(result.status, "fail");
@@ -171,7 +171,7 @@ test("RT-02: raw podman --version output is never echoed into the result (RT-02)
   assert.doesNotMatch(`${result.detail} ${fixOf(result)}`, /SECRET-TOKEN-XYZ/);
 });
 
-test("RT-02: podman-service passes when the rootless socket accepts, and dials only the XDG-derived path (RT-02)", async (t) => {
+void test("RT-02: podman-service passes when the rootless socket accepts, and dials only the XDG-derived path (RT-02)", async (t) => {
   const host = fakeHost({ commands: { [PODMAN_VERSION]: PODMAN_5 } });
   const result = resultOf(await runtimeChecks(t, host), "podman-service");
   assert.equal(result.status, "pass");
@@ -179,7 +179,7 @@ test("RT-02: podman-service passes when the rootless socket accepts, and dials o
   assert.deepEqual(host.dials, ["/run/user/1000/podman/podman.sock"]);
 });
 
-test("RT-02: podman-service fails with PODMAN_MACHINE_DOWN and the systemctl fix on a refused socket, never echoing the socket error (RT-02)", async (t) => {
+void test("RT-02: podman-service fails with PODMAN_MACHINE_DOWN and the systemctl fix on a refused socket, never echoing the socket error (RT-02)", async (t) => {
   const refused = Object.assign(new Error("connect ECONNREFUSED PRIVATE-PATH"), { code: "ECONNREFUSED" });
   const host = fakeHost({ commands: { [PODMAN_VERSION]: PODMAN_5 }, socket: refused });
   const results = await runtimeChecks(t, host);
@@ -191,7 +191,7 @@ test("RT-02: podman-service fails with PODMAN_MACHINE_DOWN and the systemctl fix
   assert.equal(resultOf(results, "podman").status, "pass", "the version step passed, so podman passes");
 });
 
-test("RT-02: podman-service fails with PODMAN_MACHINE_DOWN and dials nothing when XDG_RUNTIME_DIR is unset (RT-02)", async (t) => {
+void test("RT-02: podman-service fails with PODMAN_MACHINE_DOWN and dials nothing when XDG_RUNTIME_DIR is unset (RT-02)", async (t) => {
   const host = fakeHost({
     commands: { [PODMAN_VERSION]: PODMAN_5 },
     env: { PATH: "/usr/bin:/bin", HOME: "/home/realm" },
@@ -202,7 +202,7 @@ test("RT-02: podman-service fails with PODMAN_MACHINE_DOWN and dials nothing whe
   assert.equal(host.dials.length, 0, "no socket path is derived without XDG_RUNTIME_DIR");
 });
 
-test("RT-02: podman-service warns that the socket was not inspected when the version step fails, and dials nothing (RT-02)", async (t) => {
+void test("RT-02: podman-service warns that the socket was not inspected when the version step fails, and dials nothing (RT-02)", async (t) => {
   const host = fakeHost({});
   const result = resultOf(await runtimeChecks(t, host), "podman-service");
   assert.equal(result.status, "warn");
@@ -211,7 +211,7 @@ test("RT-02: podman-service warns that the socket was not inspected when the ver
   assert.equal(host.dials.length, 0);
 });
 
-test("RT-03: openshell passes when every pinned create flag is listed, and receives only the allowlisted environment (RT-03)", async (t) => {
+void test("RT-03: openshell passes when every pinned create flag is listed, and receives only the allowlisted environment (RT-03)", async (t) => {
   const host = fakeHost({
     commands: { [OPENSHELL_HELP]: HELP_ALL },
     env: { ...HOST_ENV, REALM_SECRET: "must-not-pass" },
@@ -225,7 +225,7 @@ test("RT-03: openshell passes when every pinned create flag is listed, and recei
   assert.deepEqual(Object.keys(call.env).sort(), ["HOME", "PATH", "XDG_RUNTIME_DIR"]);
 });
 
-test("RT-03: openshell warns and names the missing pinned flag when the CLI does not list it, with a fix (RT-03)", async (t) => {
+void test("RT-03: openshell warns and names the missing pinned flag when the CLI does not list it, with a fix (RT-03)", async (t) => {
   const withoutNoKeep: CommandOutcome = {
     exitCode: 0,
     stdout: PINNED_FLAGS.filter((flag) => flag !== "--no-keep")
@@ -240,7 +240,7 @@ test("RT-03: openshell warns and names the missing pinned flag when the CLI does
   assert.notEqual(result.fix, null);
 });
 
-test("RT-03: openshell fails with the OpenShell 0.1.2 install fix when it cannot be started (RT-03)", async (t) => {
+void test("RT-03: openshell fails with the OpenShell 0.1.2 install fix when it cannot be started (RT-03)", async (t) => {
   const host = fakeHost({});
   const result = resultOf(await runtimeChecks(t, host), "openshell");
   assert.equal(result.status, "fail");
@@ -248,14 +248,14 @@ test("RT-03: openshell fails with the OpenShell 0.1.2 install fix when it cannot
   assert.match(fixOf(result), /OpenShell 0\.1\.2/);
 });
 
-test("RT-03: openshell's failed start names the errno code and never the error message (RT-03)", async (t) => {
+void test("RT-03: openshell's failed start names the errno code and never the error message (RT-03)", async (t) => {
   const host = fakeHost({});
   const result = resultOf(await runtimeChecks(t, host), "openshell");
   assert.equal(result.status, "fail");
   assert.match(result.detail, /^openshell cannot be started: ENOENT$/);
 });
 
-test("RT-03: openshell fails on a non-zero exit, reports the status only, and never echoes the output (RT-03)", async (t) => {
+void test("RT-03: openshell fails on a non-zero exit, reports the status only, and never echoes the output (RT-03)", async (t) => {
   const host = fakeHost({ commands: { [OPENSHELL_HELP]: { exitCode: 2, stdout: "error: SECRET-HELP-TEXT" } } });
   const result = resultOf(await runtimeChecks(t, host), "openshell");
   assert.equal(result.status, "fail");
@@ -263,7 +263,7 @@ test("RT-03: openshell fails on a non-zero exit, reports the status only, and ne
   assert.doesNotMatch(`${result.detail} ${fixOf(result)}`, /SECRET-HELP-TEXT/);
 });
 
-test("ANDA-02: anda-bridge passes on the AppInformation shape with one anonymous GET to the engine (ANDA-02)", async (t) => {
+void test("ANDA-02: anda-bridge passes on the AppInformation shape with one anonymous GET to the engine (ANDA-02)", async (t) => {
   const host = fakeHost({ andaUrl: ENGINE_URL, engine: ANDA_OK });
   const result = resultOf(await runtimeChecks(t, host), "anda-bridge");
   assert.equal(result.status, "pass");
@@ -272,7 +272,7 @@ test("ANDA-02: anda-bridge passes on the AppInformation shape with one anonymous
   assert.deepEqual(host.engineCalls, [ENGINE_URL]);
 });
 
-test("ANDA-02: anda-bridge fails with ANDA_UNREACHABLE and the engine-URL fix when no reply arrives, never echoing the error (ANDA-02)", async (t) => {
+void test("ANDA-02: anda-bridge fails with ANDA_UNREACHABLE and the engine-URL fix when no reply arrives, never echoing the error (ANDA-02)", async (t) => {
   const refused = Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:8080"), { code: "ECONNREFUSED" });
   const host = fakeHost({ andaUrl: ENGINE_URL, engine: refused });
   const result = resultOf(await runtimeChecks(t, host), "anda-bridge");
@@ -282,7 +282,7 @@ test("ANDA-02: anda-bridge fails with ANDA_UNREACHABLE and the engine-URL fix wh
   assert.doesNotMatch(`${result.detail} ${fixOf(result)}`, /ECONNREFUSED/);
 });
 
-test("ANDA-02: anda-bridge fails with ANDA_UNREACHABLE on a non-200 status, never echoing the body (ANDA-02)", async (t) => {
+void test("ANDA-02: anda-bridge fails with ANDA_UNREACHABLE on a non-200 status, never echoing the body (ANDA-02)", async (t) => {
   const host = fakeHost({ andaUrl: ENGINE_URL, engine: { status: 503, text: "SECRET-BODY" } });
   const result = resultOf(await runtimeChecks(t, host), "anda-bridge");
   assert.equal(result.status, "fail");
@@ -291,7 +291,7 @@ test("ANDA-02: anda-bridge fails with ANDA_UNREACHABLE on a non-200 status, neve
   assert.doesNotMatch(`${result.detail} ${fixOf(result)}`, /SECRET-BODY/);
 });
 
-test("ANDA-02: anda-bridge fails with ANDA_VERSION_MISMATCH on a wrong shape, naming the field and never its value (ANDA-02)", async (t) => {
+void test("ANDA-02: anda-bridge fails with ANDA_VERSION_MISMATCH on a wrong shape, naming the field and never its value (ANDA-02)", async (t) => {
   const wrong = JSON.stringify({ engines: "SECRET-VALUE", default_engine: null, start_time_ms: 1 });
   const host = fakeHost({ andaUrl: ENGINE_URL, engine: { status: 200, text: wrong } });
   const result = resultOf(await runtimeChecks(t, host), "anda-bridge");
@@ -301,7 +301,7 @@ test("ANDA-02: anda-bridge fails with ANDA_VERSION_MISMATCH on a wrong shape, na
   assert.doesNotMatch(`${result.detail} ${fixOf(result)}`, /SECRET-VALUE/);
 });
 
-test("ANDA-02: anda-bridge fails with ANDA_VERSION_MISMATCH when the body is not JSON (ANDA-02)", async (t) => {
+void test("ANDA-02: anda-bridge fails with ANDA_VERSION_MISMATCH when the body is not JSON (ANDA-02)", async (t) => {
   const host = fakeHost({ andaUrl: ENGINE_URL, engine: { status: 200, text: "<html>not json</html>" } });
   const result = resultOf(await runtimeChecks(t, host), "anda-bridge");
   assert.equal(result.status, "fail");
@@ -309,7 +309,7 @@ test("ANDA-02: anda-bridge fails with ANDA_VERSION_MISMATCH when the body is not
   assert.match(fixOf(result), /shape check/);
 });
 
-test("ANDA-02: anda-bridge warns that no engine is configured and contacts nothing when andaUrl is absent (ANDA-02)", async (t) => {
+void test("ANDA-02: anda-bridge warns that no engine is configured and contacts nothing when andaUrl is absent (ANDA-02)", async (t) => {
   const host = fakeHost({});
   const result = resultOf(await runtimeChecks(t, host), "anda-bridge");
   assert.equal(result.status, "warn");
@@ -318,7 +318,7 @@ test("ANDA-02: anda-bridge warns that no engine is configured and contacts nothi
   assert.deepEqual(host.engineCalls, []);
 });
 
-test("ANDA-02: anda-bridge refuses an andaUrl with user information, contacts nothing, and never echoes the credential (ANDA-02)", async (t) => {
+void test("ANDA-02: anda-bridge refuses an andaUrl with user information, contacts nothing, and never echoes the credential (ANDA-02)", async (t) => {
   const host = fakeHost({ andaUrl: "http://engine-user:secret-pass@127.0.0.1:8080", engine: ANDA_OK });
   const result = resultOf(await runtimeChecks(t, host), "anda-bridge");
   assert.equal(result.status, "fail");
@@ -331,7 +331,7 @@ test("ANDA-02: anda-bridge refuses an andaUrl with user information, contacts no
 // deadline finishes with a body that fails the JSON parse instead of hanging the run. This test waits in
 // real time on purpose: the socket timers are the behaviour under test, and fake timers do not drive
 // Node's socket I/O.
-test("ANDA-02: anda-bridge gives up on a server that trickles bytes at the probe deadline (ANDA-02)", async (t) => {
+void test("ANDA-02: anda-bridge gives up on a server that trickles bytes at the probe deadline (ANDA-02)", async (t) => {
   const trickleMs = 3000;
   const server = createServer((_request, response) => {
     response.writeHead(200, { "content-type": "application/json" });
@@ -351,16 +351,16 @@ test("ANDA-02: anda-bridge gives up on a server that trickles bytes at the probe
     server.close();
   });
   const { port } = server.address() as AddressInfo;
-  const host = fakeHost({ andaUrl: `http://127.0.0.1:${port}`, defaultTransport: true, probeTimeoutMs: 200 });
+  const host = fakeHost({ andaUrl: `http://127.0.0.1:${String(port)}`, defaultTransport: true, probeTimeoutMs: 200 });
   const started = Date.now();
   const result = resultOf(await runtimeChecks(t, host), "anda-bridge");
   const elapsed = Date.now() - started;
   assert.equal(result.status, "fail");
   assert.match(result.detail, /ANDA_UNREACHABLE/);
-  assert.ok(elapsed < trickleMs / 2, `the probe must end at its deadline, not after the trickle (took ${elapsed} ms)`);
+  assert.ok(elapsed < trickleMs / 2, `the probe must end at its deadline, not after the trickle (took ${String(elapsed)} ms)`);
 });
 
-test("RT-02 and ANDA-02: the four runtime items follow the three Phase 2 items, and the Phase 6 control-channel and agentos items follow anda-bridge (D-69, CLI-03)", async (t) => {
+void test("RT-02 and ANDA-02: the four runtime items follow the three Phase 2 items, and the Phase 6 control-channel and agentos items follow anda-bridge (D-69, CLI-03)", async (t) => {
   const results = await runtimeChecks(t, fakeHost({}));
   assert.deepEqual(
     results.map((result) => result.id),
@@ -378,7 +378,7 @@ test("RT-02 and ANDA-02: the four runtime items follow the three Phase 2 items, 
   );
 });
 
-test("RT-02 and ANDA-02: a fail or warn always carries a fix, and a pass never does (D-44, RT-02, ANDA-02)", async (t) => {
+void test("RT-02 and ANDA-02: a fail or warn always carries a fix, and a pass never does (D-44, RT-02, ANDA-02)", async (t) => {
   const results = await runtimeChecks(t, fakeHost({}));
   for (const id of RUNTIME_IDS) {
     const result = resultOf(results, id);

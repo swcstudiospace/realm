@@ -46,7 +46,7 @@ const CONTAINER_STOP_GRACE_MS = 10_000;
 const AGENTOS_STOP_DEADLINE_MS = 15_000;
 // The sandbox limits come from the frozen profile, so they cannot drift from the verifier.
 const SANDBOX_CPUS = HARDENING_PROFILE.nanoCpus / 1_000_000_000;
-const SANDBOX_MEMORY = `${HARDENING_PROFILE.memoryBytes / 1024 ** 3}g`;
+const SANDBOX_MEMORY = `${String(HARDENING_PROFILE.memoryBytes / 1024 ** 3)}g`;
 
 // The only environment names the OpenShell CLI receives. Each one is needed by the CLI to locate its
 // configuration and the rootless Podman socket. No other name crosses from the host.
@@ -354,8 +354,8 @@ export function spawnOpenShellRunner(environment: Readonly<Record<string, string
       const stdout = new BoundedOutput();
       const stderr = new BoundedOutput();
       if (capture) {
-        child.stdout?.on("data", (chunk: Buffer) => stdout.add(chunk));
-        child.stderr?.on("data", (chunk: Buffer) => stderr.add(chunk));
+        child.stdout?.on("data", (chunk: Buffer) => { stdout.add(chunk); });
+        child.stderr?.on("data", (chunk: Buffer) => { stderr.add(chunk); });
       }
       const timer = setTimeout(() => {
         // A group that could not be signalled may keep helpers alive, so the run fails rather than timing out cleanly.

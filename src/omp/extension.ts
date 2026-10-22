@@ -42,7 +42,9 @@ export default function realmExtension(pi: OmpExtensionApi): void {
     await ensureDaemon({
       socketPath,
       probe: probeDaemon,
-      spawnDaemon: () => startDetachedDaemon(daemonEntry, stateDir),
+      spawnDaemon: () => {
+        startDetachedDaemon(daemonEntry, stateDir);
+      },
       timeoutMs: CONTROL_TIMEOUT_MS.up,
       pollMs: 100,
     });

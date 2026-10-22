@@ -88,7 +88,7 @@ function assertRejectsRedacted(promise: Promise<unknown>, code: string): Promise
   });
 }
 
-test("create writes the record with containerId null before the fake create runs (RT-07)", async (t) => {
+void test("create writes the record with containerId null before the fake create runs (RT-07)", async (t) => {
   const { controller, store, exec, workspace } = fixture(t);
   const seen: (SessionRecord | null)[] = [];
   exec.beforeCall("create", () => {
@@ -104,7 +104,7 @@ test("create writes the record with containerId null before the fake create runs
   assert.equal(atCreate.state, "connecting");
 });
 
-test("create stores the returned containerId before start, and the record holds it afterwards (RT-07)", async (t) => {
+void test("create stores the returned containerId before start, and the record holds it afterwards (RT-07)", async (t) => {
   const { controller, store, exec, workspace } = fixture(t);
   const seenAtStart: (SessionRecord | null)[] = [];
   exec.beforeCall("start", () => {
@@ -123,16 +123,16 @@ test("create stores the returned containerId before start, and the record holds 
   assert.equal(store.load(SESSION)?.state, "active");
 });
 
-test("the stored record names the canonical workspace and the control socket under the state directory (D-14, D-37)", async (t) => {
+void test("the stored record names the canonical workspace and the control socket under the state directory (D-14, D-37)", async (t) => {
   const { base, controller, store, workspace } = fixture(t);
   await controller.create(workspace);
   const record = store.load(SESSION);
   assert.equal(record?.workspaceRoot, workspace);
-  assert.equal(record?.controlSocketPath, join(base, "state", "run", "control.sock"));
-  assert.match(record?.realmId ?? "", /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  assert.equal(record.controlSocketPath, join(base, "state", "run", "control.sock"));
+  assert.match(record.realmId, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
 });
 
-test("a failed start moves connecting to error with the code as reason, and a retry runs error to connecting to active (CORE-06, D-38)", async (t) => {
+void test("a failed start moves connecting to error with the code as reason, and a retry runs error to connecting to active (CORE-06, D-38)", async (t) => {
   const { controller, exec, workspace } = fixture(t);
   const transitions: string[] = [];
   controller.events.subscribe((event: RealmEvent) => {
@@ -155,7 +155,7 @@ test("a failed start moves connecting to error with the code as reason, and a re
   ]);
 });
 
-test("a pre-existing record with a containerId causes no second create, only a second start (CORE-06)", async (t) => {
+void test("a pre-existing record with a containerId causes no second create, only a second start (CORE-06)", async (t) => {
   const { controller, store, exec, workspace } = fixture(t);
   exec.failNext("start", "PODMAN_MACHINE_DOWN");
   await controller.create(workspace);
@@ -169,7 +169,7 @@ test("a pre-existing record with a containerId causes no second create, only a s
   assert.equal(exec.resources().length, 1);
 });
 
-test("a failed port create leaves containerId null in the record and the session in error (RT-07)", async (t) => {
+void test("a failed port create leaves containerId null in the record and the session in error (RT-07)", async (t) => {
   const { controller, store, exec, workspace } = fixture(t);
   exec.failNext("create", "OPENSHELL_START_FAILED");
 
@@ -181,7 +181,7 @@ test("a failed port create leaves containerId null in the record and the session
   assert.equal(exec.callCount("start"), 0);
 });
 
-test("a raw port failure on create is refused as OPENSHELL_START_FAILED, leaves the session in error, and carries no raw text", async (t) => {
+void test("a raw port failure on create is refused as OPENSHELL_START_FAILED, leaves the session in error, and carries no raw text", async (t) => {
   const { controller, exec, workspace } = fixture(t);
   exec.failNext("create", new Error(`create exploded with ${RAW_SECRET}`));
 
@@ -190,7 +190,7 @@ test("a raw port failure on create is refused as OPENSHELL_START_FAILED, leaves 
   assert.equal(controller.snapshot().reason, "OPENSHELL_START_FAILED");
 });
 
-test("a raw port failure on start is refused as OPENSHELL_START_FAILED, keeps the stored containerId, and carries no raw text", async (t) => {
+void test("a raw port failure on start is refused as OPENSHELL_START_FAILED, keeps the stored containerId, and carries no raw text", async (t) => {
   const { controller, store, exec, workspace } = fixture(t);
   exec.failNext("start", new Error(`start exploded with ${RAW_SECRET}`));
 
@@ -200,7 +200,7 @@ test("a raw port failure on start is refused as OPENSHELL_START_FAILED, keeps th
   assert.equal(typeof store.load(SESSION)?.containerId, "string");
 });
 
-test("a raw port failure on probe is refused as OPENSHELL_START_FAILED and leaves the session in error, with no raw text", async (t) => {
+void test("a raw port failure on probe is refused as OPENSHELL_START_FAILED and leaves the session in error, with no raw text", async (t) => {
   const { controller, exec, workspace } = fixture(t);
   await controller.create(workspace);
   exec.failNext("probe", new Error(`probe exploded with ${RAW_SECRET}`));
@@ -210,7 +210,7 @@ test("a raw port failure on probe is refused as OPENSHELL_START_FAILED and leave
   assert.equal(controller.snapshot().reason, "OPENSHELL_START_FAILED");
 });
 
-test("a running session with no recorded container yields a RealmError SCHEMA_INVALID whose message is catalogue text only (SCHEMA-01)", async (t) => {
+void test("a running session with no recorded container yields a RealmError SCHEMA_INVALID whose message is catalogue text only (SCHEMA-01)", async (t) => {
   const { controller, store, workspace } = fixture(t);
   await controller.create(workspace);
   const record = store.load(SESSION);
@@ -228,7 +228,7 @@ test("a running session with no recorded container yields a RealmError SCHEMA_IN
   assert.equal(controller.snapshot().state, "active");
 });
 
-test("a workspace outside every policy root is refused with POLICY_DENIED and nothing changes (CORE-03, D-22)", async (t) => {
+void test("a workspace outside every policy root is refused with POLICY_DENIED and nothing changes (CORE-03, D-22)", async (t) => {
   const { controller, store, exec, otherDir } = fixture(t);
   await assertRejectsWith(controller.create(otherDir), "POLICY_DENIED");
   assert.equal(controller.snapshot().state, "unbound");
@@ -236,7 +236,7 @@ test("a workspace outside every policy root is refused with POLICY_DENIED and no
   assert.equal(exec.callCount("create"), 0);
 });
 
-test("a container bound to one workspace is never reused for another (S-02)", async (t) => {
+void test("a container bound to one workspace is never reused for another (S-02)", async (t) => {
   const { controller, exec, workspace, second } = fixture(t, {
     policyRoots: (_dir, root, other) => [root, other],
   });
@@ -248,7 +248,7 @@ test("a container bound to one workspace is never reused for another (S-02)", as
   assert.equal(exec.callCount("create"), 1);
 });
 
-test("repeating create on an active session returns the same snapshot with no second create (CORE-06)", async (t) => {
+void test("repeating create on an active session returns the same snapshot with no second create (CORE-06)", async (t) => {
   const { controller, exec, workspace } = fixture(t);
   const first = await controller.create(workspace);
   const second = await controller.create(workspace);
@@ -258,7 +258,7 @@ test("repeating create on an active session returns the same snapshot with no se
   assert.equal(exec.resources().length, 1);
 });
 
-test("the port request carries only the idempotency key and the workspace root (AUD-02)", async (t) => {
+void test("the port request carries only the idempotency key and the workspace root (AUD-02)", async (t) => {
   const { controller, exec, workspace } = fixture(t);
   await controller.create(workspace);
   const created = exec.calls().find((call) => call.operation === "create");
@@ -268,7 +268,7 @@ test("the port request carries only the idempotency key and the workspace root (
   assert.equal(created.request.workspaceRoot, workspace);
 });
 
-test("attach and detach are idempotent, change no state or record, and return the snapshot shape (CORE-06)", (t) => {
+void test("attach and detach are idempotent, change no state or record, and return the snapshot shape (CORE-06)", (t) => {
   const { controller, store } = fixture(t);
   const before = controller.snapshot();
   assert.deepEqual(Object.keys(before).sort(), SNAPSHOT_KEYS);
@@ -286,14 +286,14 @@ test("attach and detach are idempotent, change no state or record, and return th
   assert.equal(store.load(SESSION), null);
 });
 
-test("a create result carries exactly the state, reason, and last-transition snapshot (CORE-06)", async (t) => {
+void test("a create result carries exactly the state, reason, and last-transition snapshot (CORE-06)", async (t) => {
   const { controller, workspace } = fixture(t);
   const active = await controller.create(workspace);
   assert.deepEqual(Object.keys(active).sort(), SNAPSHOT_KEYS);
   assert.deepEqual(Object.keys(controller.snapshot()).sort(), SNAPSHOT_KEYS);
 });
 
-test("create with a scripted fake delay beyond startupBudgetMs gives STARTUP_BUDGET_EXCEEDED and state error (CORE-06, D-28)", async (t) => {
+void test("create with a scripted fake delay beyond startupBudgetMs gives STARTUP_BUDGET_EXCEEDED and state error (CORE-06, D-28)", async (t) => {
   const { store, exec, workspace } = fixture(t);
   const controller = new LifecycleController({
     sessionId: SESSION,
@@ -316,7 +316,7 @@ test("create with a scripted fake delay beyond startupBudgetMs gives STARTUP_BUD
   assert.equal(exec.callCount("start"), 0);
 });
 
-test("destroy with a scripted stop delay beyond the teardown bound returns REALM_STOPPING, keeps the session stopping, and a repeated destroy resumes teardown (D-28, Q-1)", async (t) => {
+void test("destroy with a scripted stop delay beyond the teardown bound returns REALM_STOPPING, keeps the session stopping, and a repeated destroy resumes teardown (D-28, Q-1)", async (t) => {
   const { store, exec, controller, workspace } = fixture(t, { teardownTimeoutMs: 50 });
   await controller.create(workspace);
   // The teardown bound is injected as teardownTimeoutMs (50 ms), so this test waits for no production
@@ -350,7 +350,7 @@ test("destroy with a scripted stop delay beyond the teardown bound returns REALM
   assert.equal(exec.callCount("destroy"), 1);
 });
 
-test("create is refused with POLICY_DENIED when the pinned workspace directory was replaced, and nothing changes (D-22, S-02)", async (t) => {
+void test("create is refused with POLICY_DENIED when the pinned workspace directory was replaced, and nothing changes (D-22, S-02)", async (t) => {
   const { base, workspace, store, exec, controller } = fixture(t);
   const before = controller.snapshot();
   renameSync(workspace, join(base, "workspace-old"));
@@ -362,7 +362,7 @@ test("create is refused with POLICY_DENIED when the pinned workspace directory w
   assert.equal(exec.calls().length, 0);
 });
 
-test("create through a link to the pinned workspace is accepted, and the record names the pinned real path (D-22, FS-02)", async (t) => {
+void test("create through a link to the pinned workspace is accepted, and the record names the pinned real path (D-22, FS-02)", async (t) => {
   const { base, workspace, store, controller } = fixture(t);
   const alias = join(base, "alias");
   symlinkSync(workspace, alias, "dir");
@@ -373,7 +373,7 @@ test("create through a link to the pinned workspace is accepted, and the record 
   assert.equal(store.load(SESSION)?.workspaceRoot, workspace);
 });
 
-test("create on an active session at another workspace is refused with POLICY_DENIED and changes nothing (S-02, CORE-03)", async (t) => {
+void test("create on an active session at another workspace is refused with POLICY_DENIED and changes nothing (S-02, CORE-03)", async (t) => {
   const { controller, exec, store, workspace, second } = fixture(t, {
     policyRoots: (_dir, root, other) => [root, other],
   });
@@ -387,7 +387,7 @@ test("create on an active session at another workspace is refused with POLICY_DE
   assert.deepEqual(store.load(SESSION), recordBefore);
 });
 
-test("create on an active session at the same workspace returns the snapshot with no port call (CORE-06)", async (t) => {
+void test("create on an active session at the same workspace returns the snapshot with no port call (CORE-06)", async (t) => {
   const { controller, exec, workspace } = fixture(t);
   const active = await controller.create(workspace);
   const callsBefore = exec.calls().length;
@@ -396,7 +396,7 @@ test("create on an active session at the same workspace returns the snapshot wit
   assert.equal(exec.calls().length, callsBefore);
 });
 
-test("a raw failure from the port destroy is refused as REALM_STOPPING, keeps the record stopping, and releases the session's locks (D-28, D-33)", async (t) => {
+void test("a raw failure from the port destroy is refused as REALM_STOPPING, keeps the record stopping, and releases the session's locks (D-28, D-33)", async (t) => {
   const { workspace, store, exec, locks, controller } = fixture(t);
   await controller.create(workspace);
   locks.acquire(workspace, SESSION);
@@ -410,7 +410,7 @@ test("a raw failure from the port destroy is refused as REALM_STOPPING, keeps th
   assert.equal(locks.acquire(workspace, "next-owner").owner, "next-owner");
 });
 
-test("a raw failure from the port stop is refused as REALM_STOPPING, leaves the session stopping with its record, and skips destroy (D-28)", async (t) => {
+void test("a raw failure from the port stop is refused as REALM_STOPPING, leaves the session stopping with its record, and skips destroy (D-28)", async (t) => {
   const { store, exec, controller, workspace } = fixture(t);
   await controller.create(workspace);
   exec.failNext("stop", new Error("stop exploded"));
@@ -422,7 +422,7 @@ test("a raw failure from the port stop is refused as REALM_STOPPING, leaves the 
   assert.equal(exec.callCount("destroy"), 0);
 });
 
-test("a raw port failure on stop during destroy is refused as REALM_STOPPING, and the error carries no raw text (D-28)", async (t) => {
+void test("a raw port failure on stop during destroy is refused as REALM_STOPPING, and the error carries no raw text (D-28)", async (t) => {
   const { controller, exec, workspace } = fixture(t);
   await controller.create(workspace);
   exec.failNext("stop", new Error(`stop exploded with ${RAW_SECRET}`));
@@ -431,7 +431,7 @@ test("a raw port failure on stop during destroy is refused as REALM_STOPPING, an
   assert.equal(controller.snapshot().state, "stopping");
 });
 
-test("destroy on a session whose record is gone moves to unbound with no port call, and a repeat changes nothing (CORE-06)", async (t) => {
+void test("destroy on a session whose record is gone moves to unbound with no port call, and a repeat changes nothing (CORE-06)", async (t) => {
   const { controller, exec, store, workspace } = fixture(t);
   await controller.create(workspace);
   store.delete(SESSION);
@@ -443,14 +443,14 @@ test("destroy on a session whose record is gone moves to unbound with no port ca
   assert.equal(exec.calls().length, callsBefore);
 });
 
-test("stop clears host attachments once the session is unbound (L-2)", async (t) => {
+void test("stop clears host attachments once the session is unbound (L-2)", async (t) => {
   const { controller } = fixture(t);
   controller.attach("a");
   await controller.stop();
   assert.deepEqual(controller.attachments(), []);
 });
 
-test("stop from active clears host attachments on reaching unbound (L-2)", async (t) => {
+void test("stop from active clears host attachments on reaching unbound (L-2)", async (t) => {
   const { controller, workspace } = fixture(t);
   await controller.create(workspace);
   controller.attach("a");
@@ -458,7 +458,7 @@ test("stop from active clears host attachments on reaching unbound (L-2)", async
   assert.deepEqual(controller.attachments(), []);
 });
 
-test("destroy clears host attachments on reaching unbound (L-2)", async (t) => {
+void test("destroy clears host attachments on reaching unbound (L-2)", async (t) => {
   const { controller, workspace } = fixture(t);
   await controller.create(workspace);
   controller.attach("b");
@@ -466,7 +466,7 @@ test("destroy clears host attachments on reaching unbound (L-2)", async (t) => {
   assert.deepEqual(controller.attachments(), []);
 });
 
-test("a teardown that fails keeps host attachments, since the session has not reached unbound (L-2)", async (t) => {
+void test("a teardown that fails keeps host attachments, since the session has not reached unbound (L-2)", async (t) => {
   const { controller, exec, workspace } = fixture(t);
   await controller.create(workspace);
   controller.attach("a");

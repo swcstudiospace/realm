@@ -35,7 +35,7 @@ function codeOf(error: unknown): string {
   return error.code;
 }
 
-test("CORE-03: a missing policy file yields the default policy (advisory, no roots, shell disabled)", () => {
+void test("CORE-03: a missing policy file yields the default policy (advisory, no roots, shell disabled)", () => {
   withTempDir((dir) => {
     assert.deepEqual(loadPolicyFile(join(dir, "absent.json")), {
       mode: "advisory",
@@ -49,7 +49,7 @@ test("CORE-03: a missing policy file yields the default policy (advisory, no roo
   });
 });
 
-test("CORE-03: keys missing from a policy file take the validated defaults", () => {
+void test("CORE-03: keys missing from a policy file take the validated defaults", () => {
   withTempDir((dir) => {
     const policy = loadPolicyFile(writeJson(join(dir, "policy.json"), { mode: "fail-closed" }));
     assert.equal(policy.mode, "fail-closed");
@@ -60,7 +60,7 @@ test("CORE-03: keys missing from a policy file take the validated defaults", () 
   });
 });
 
-test("CORE-03: an unknown key in a policy file fails SCHEMA_INVALID and names the key", () => {
+void test("CORE-03: an unknown key in a policy file fails SCHEMA_INVALID and names the key", () => {
   withTempDir((dir) => {
     const error = thrown(() =>
       loadPolicyFile(writeJson(join(dir, "policy.json"), { mode: "advisory", bogus: true })),
@@ -71,7 +71,7 @@ test("CORE-03: an unknown key in a policy file fails SCHEMA_INVALID and names th
   });
 });
 
-test("CORE-03: a policy file that is not JSON fails SCHEMA_INVALID without echoing its content", () => {
+void test("CORE-03: a policy file that is not JSON fails SCHEMA_INVALID without echoing its content", () => {
   withTempDir((dir) => {
     const path = join(dir, "policy.json");
     writeFileSync(path, "{ not-json secret-token-value");
@@ -82,7 +82,7 @@ test("CORE-03: a policy file that is not JSON fails SCHEMA_INVALID without echoi
   });
 });
 
-test("CORE-03: a relative workspace root fails SCHEMA_INVALID, names the index, and never echoes the value", () => {
+void test("CORE-03: a relative workspace root fails SCHEMA_INVALID, names the index, and never echoes the value", () => {
   withTempDir((dir) => {
     const error = thrown(() =>
       loadPolicyFile(writeJson(join(dir, "policy.json"), { workspaceRoots: ["relative-secret-dir"] })),
@@ -94,7 +94,7 @@ test("CORE-03: a relative workspace root fails SCHEMA_INVALID, names the index, 
   });
 });
 
-test("CORE-03: a policy file outside its workspace roots loads with the declared values", () => {
+void test("CORE-03: a policy file outside its workspace roots loads with the declared values", () => {
   withTempDir((dir) => {
     const root = join(dir, "ws");
     mkdirSync(root);
@@ -106,7 +106,7 @@ test("CORE-03: a policy file outside its workspace roots loads with the declared
   });
 });
 
-test("CORE-03: a policy file directly inside its own workspace root fails POLICY_DENIED", () => {
+void test("CORE-03: a policy file directly inside its own workspace root fails POLICY_DENIED", () => {
   withTempDir((dir) => {
     const root = join(dir, "ws");
     mkdirSync(root);
@@ -115,7 +115,7 @@ test("CORE-03: a policy file directly inside its own workspace root fails POLICY
   });
 });
 
-test("CORE-03: a policy file nested below its own workspace root fails POLICY_DENIED", () => {
+void test("CORE-03: a policy file nested below its own workspace root fails POLICY_DENIED", () => {
   withTempDir((dir) => {
     const root = join(dir, "ws");
     const nested = join(root, "a", "b");
@@ -125,7 +125,7 @@ test("CORE-03: a policy file nested below its own workspace root fails POLICY_DE
   });
 });
 
-test("CORE-03: a policy path that reaches its own workspace root through a symlink fails POLICY_DENIED", () => {
+void test("CORE-03: a policy path that reaches its own workspace root through a symlink fails POLICY_DENIED", () => {
   withTempDir((dir) => {
     const root = join(dir, "ws");
     const outside = join(dir, "outside");
@@ -138,7 +138,7 @@ test("CORE-03: a policy path that reaches its own workspace root through a symli
   });
 });
 
-test("CORE-03: a sibling whose name only shares a prefix with a root is not inside it", () => {
+void test("CORE-03: a sibling whose name only shares a prefix with a root is not inside it", () => {
   withTempDir((dir) => {
     const root = join(dir, "ws");
     const sibling = join(dir, "ws-other");
@@ -151,7 +151,7 @@ test("CORE-03: a sibling whose name only shares a prefix with a root is not insi
   });
 });
 
-test("CORE-03: a workspace root that cannot be canonicalized fails POLICY_DENIED", () => {
+void test("CORE-03: a workspace root that cannot be canonicalized fails POLICY_DENIED", () => {
   withTempDir((dir) => {
     const path = writeJson(join(dir, "policy.json"), {
       workspaceRoots: [join(dir, "missing-root")],
@@ -160,7 +160,7 @@ test("CORE-03: a workspace root that cannot be canonicalized fails POLICY_DENIED
   });
 });
 
-test("CORE-03: a policy path that cannot be read as a file fails POLICY_DENIED", () => {
+void test("CORE-03: a policy path that cannot be read as a file fails POLICY_DENIED", () => {
   withTempDir((dir) => {
     const asDirectory = join(dir, "policy-dir");
     mkdirSync(asDirectory);

@@ -52,7 +52,7 @@ function fixture(t: TestContext, startupBudgetMs = 10000) {
   return { base, workspace, store, exec, locks, controller };
 }
 
-test("repeating each of the seven operations returns the same snapshot with no duplicate fake resources (CORE-06)", async (t) => {
+void test("repeating each of the seven operations returns the same snapshot with no duplicate fake resources (CORE-06)", async (t) => {
   const { controller, exec, store, workspace } = fixture(t);
   const active = await controller.create(workspace);
   const record = store.load(SESSION);
@@ -86,7 +86,7 @@ test("repeating each of the seven operations returns the same snapshot with no d
   assert.equal(store.load(SESSION), null);
 });
 
-test("a create that times out reattaches to one container on retry, with no duplicate resource (CORE-06, RT-07)", async (t) => {
+void test("a create that times out reattaches to one container on retry, with no duplicate resource (CORE-06, RT-07)", async (t) => {
   const { controller, exec, store, workspace } = fixture(t, 1000);
   exec.setDelay("create", 3000);
 
@@ -112,7 +112,7 @@ test("a create that times out reattaches to one container on retry, with no dupl
   assert.equal(store.load(SESSION)?.containerId, exec.resources()[0]?.containerId);
 });
 
-test("start from error runs create again and reuses the stored container; start in active changes nothing (CORE-06, D-38)", async (t) => {
+void test("start from error runs create again and reuses the stored container; start in active changes nothing (CORE-06, D-38)", async (t) => {
   const { controller, exec, workspace } = fixture(t);
   exec.failNext("start", "PODMAN_MACHINE_DOWN");
   const failed = await controller.create(workspace);
@@ -125,14 +125,14 @@ test("start from error runs create again and reuses the stored container; start 
   assert.deepEqual(await controller.start(), retried);
 });
 
-test("probe on an active session that is healthy changes nothing (CORE-06, D-38)", async (t) => {
+void test("probe on an active session that is healthy changes nothing (CORE-06, D-38)", async (t) => {
   const { controller, exec, workspace } = fixture(t);
   const active = await controller.create(workspace);
   assert.deepEqual(await controller.probe(), active);
   assert.equal(exec.callCount("probe"), 1);
 });
 
-test("probe unhealthy in active moves to error with reason probe failed, and the record follows (D-38)", async (t) => {
+void test("probe unhealthy in active moves to error with reason probe failed, and the record follows (D-38)", async (t) => {
   const { controller, exec, store, workspace } = fixture(t);
   await controller.create(workspace);
   const container = exec.resources()[0];
@@ -147,14 +147,14 @@ test("probe unhealthy in active moves to error with reason probe failed, and the
   assert.equal(store.load(SESSION)?.containerId, container.containerId);
 });
 
-test("probe outside active or degraded returns the snapshot without a port call (D-38)", async (t) => {
+void test("probe outside active or degraded returns the snapshot without a port call (D-38)", async (t) => {
   const { controller, exec } = fixture(t);
   const snapshot = await controller.probe();
   assert.equal(snapshot.state, "unbound");
   assert.deepEqual(exec.calls(), []);
 });
 
-test("a probe that overruns the startup budget gives STARTUP_BUDGET_EXCEEDED and state error (D-28)", async (t) => {
+void test("a probe that overruns the startup budget gives STARTUP_BUDGET_EXCEEDED and state error (D-28)", async (t) => {
   const { controller, exec, workspace } = fixture(t, 50);
   await controller.create(workspace);
   exec.setDelay("probe", 500);
@@ -165,14 +165,14 @@ test("a probe that overruns the startup budget gives STARTUP_BUDGET_EXCEEDED and
   assert.equal(snapshot.reason, "STARTUP_BUDGET_EXCEEDED");
 });
 
-test("stop of an unbound session is a no-op with no port call (CORE-06, D-38)", async (t) => {
+void test("stop of an unbound session is a no-op with no port call (CORE-06, D-38)", async (t) => {
   const { controller, exec } = fixture(t);
   const snapshot = await controller.stop();
   assert.equal(snapshot.state, "unbound");
   assert.deepEqual(exec.calls(), []);
 });
 
-test("stop of a stopping session is a no-op while the first stop completes (CORE-06, D-38)", async (t) => {
+void test("stop of a stopping session is a no-op while the first stop completes (CORE-06, D-38)", async (t) => {
   const { controller, exec, workspace } = fixture(t);
   await controller.create(workspace);
   exec.setDelay("stop", 50);
@@ -187,7 +187,7 @@ test("stop of a stopping session is a no-op while the first stop completes (CORE
   assert.equal(exec.callCount("stop"), 1);
 });
 
-test("stop from error moves to unbound and keeps the container in the record for a later create (D-38)", async (t) => {
+void test("stop from error moves to unbound and keeps the container in the record for a later create (D-38)", async (t) => {
   const { controller, exec, store, workspace } = fixture(t);
   exec.failNext("start", "PODMAN_MACHINE_DOWN");
   await controller.create(workspace);
@@ -200,7 +200,7 @@ test("stop from error moves to unbound and keeps the container in the record for
   assert.equal(exec.callCount("stop"), 1);
 });
 
-test("destroy of an absent session is a no-op with no port call (CORE-06, D-38)", async (t) => {
+void test("destroy of an absent session is a no-op with no port call (CORE-06, D-38)", async (t) => {
   const { controller, exec, store } = fixture(t);
   const snapshot = await controller.destroy();
   assert.equal(snapshot.state, "unbound");
@@ -208,7 +208,7 @@ test("destroy of an absent session is a no-op with no port call (CORE-06, D-38)"
   assert.equal(store.load(SESSION), null);
 });
 
-test("destroy releases the session's advisory locks, leaves other owners' locks, and deletes the record (CORE-06, FS-04, D-33)", async (t) => {
+void test("destroy releases the session's advisory locks, leaves other owners' locks, and deletes the record (CORE-06, FS-04, D-33)", async (t) => {
   const { workspace, store, exec, locks, controller } = fixture(t);
   await controller.create(workspace);
   const held = join(workspace, "held.txt");

@@ -80,7 +80,7 @@ async function within<T>(promise: Promise<T>, ms: number, message: string): Prom
   }
 }
 
-test("OMP-01: the Omp entry and the CLI dial one control socket, the state directory the runtime config names (G-07)", async (t) => {
+void test("OMP-01: the Omp entry and the CLI dial one control socket, the state directory the runtime config names (G-07)", async (t) => {
   const base = mkdtempSync(join(tmpdir(), "omp-extension-"));
   t.after(() => {
     rmSync(base, { recursive: true, force: true });

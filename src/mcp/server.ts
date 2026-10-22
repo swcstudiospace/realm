@@ -245,7 +245,7 @@ export function createMcpServer(
   dispatcher: McpDispatcher,
   input: Readable,
   output: Writable,
-  diagnostics: Writable = process.stderr as unknown as Writable,
+  diagnostics: Writable = process.stderr,
 ): McpServer {
   const reader = createInterface({ input, crlfDelay: Number.POSITIVE_INFINITY });
   let resolveClosed: () => void = () => undefined;

@@ -47,7 +47,7 @@ function assertPathEscape(action: () => unknown): void {
   );
 }
 
-test("a symlink swapped in at the resolve-to-open boundary is rejected with PATH_ESCAPE (FS-02)", (t) => {
+void test("a symlink swapped in at the resolve-to-open boundary is rejected with PATH_ESCAPE (FS-02)", (t) => {
   const base = tempBase(t);
   const ws = join(base, "ws");
   const outside = join(base, "outside");
@@ -67,7 +67,7 @@ test("a symlink swapped in at the resolve-to-open boundary is rejected with PATH
   );
 });
 
-test("a directory on the resolved path swapped for an escaping symlink is caught by the /proc/self/fd check (FS-02, D-30)", (t) => {
+void test("a directory on the resolved path swapped for an escaping symlink is caught by the /proc/self/fd check (FS-02, D-30)", (t) => {
   const base = tempBase(t);
   const ws = join(base, "ws");
   const outside = join(base, "outside");
@@ -90,7 +90,7 @@ test("a directory on the resolved path swapped for an escaping symlink is caught
   );
 });
 
-test("without /proc/self/fd the verified read fails closed with PATH_ESCAPE and is never skipped (FS-02, D-30)", (t) => {
+void test("without /proc/self/fd the verified read fails closed with PATH_ESCAPE and is never skipped (FS-02, D-30)", (t) => {
   const base = tempBase(t);
   const ws = join(base, "ws");
   mkdirSync(ws);
@@ -103,7 +103,7 @@ test("without /proc/self/fd the verified read fails closed with PATH_ESCAPE and 
   );
 });
 
-test("the same read succeeds with /proc/self/fd present, so the failure above comes from the missing directory alone (FS-02)", (t) => {
+void test("the same read succeeds with /proc/self/fd present, so the failure above comes from the missing directory alone (FS-02)", (t) => {
   const base = tempBase(t);
   const ws = join(base, "ws");
   mkdirSync(ws);

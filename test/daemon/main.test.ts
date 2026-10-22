@@ -67,7 +67,9 @@ function harness(env: EnvironmentLike, overrides: Partial<Omit<DaemonDeps, "env"
   const handlers = new Map<DaemonSignal, () => void>();
   let markRegistered: () => void = () => undefined;
   const registered = new Promise<void>((resolve) => {
-    markRegistered = () => resolve();
+    markRegistered = () => {
+      resolve();
+    };
   });
   const deps: DaemonDeps = {
     env,
@@ -86,7 +88,7 @@ function harness(env: EnvironmentLike, overrides: Partial<Omit<DaemonDeps, "env"
   return { deps, lines, handlers, registered };
 }
 
-test("a missing config returns 1 and reports SCHEMA_INVALID without starting", async (t) => {
+void test("a missing config returns 1 and reports SCHEMA_INVALID without starting", async (t) => {
   const dir = tempDir(t);
   let starts = 0;
   const h = harness(
@@ -104,7 +106,7 @@ test("a missing config returns 1 and reports SCHEMA_INVALID without starting", a
   assert.deepEqual(h.lines, ["realm daemon: SCHEMA_INVALID"]);
 });
 
-test("a valid config starts once with the derived options and resolves 0 on teardown", async (t) => {
+void test("a valid config starts once with the derived options and resolves 0 on teardown", async (t) => {
   const dir = tempDir(t);
   const raw = validConfig(dir);
   const env = writeConfig(dir, raw);
@@ -129,7 +131,7 @@ test("a valid config starts once with the derived options and resolves 0 on tear
   assert.deepEqual(h.lines, []);
 });
 
-test("a start rejecting with a RealmError returns 1 and writes its code", async (t) => {
+void test("a start rejecting with a RealmError returns 1 and writes its code", async (t) => {
   const dir = tempDir(t);
   const h = harness(writeConfig(dir, validConfig(dir)), {
     start: () => Promise.reject(makeRealmError("LOCK_CONFLICT")),
@@ -139,7 +141,7 @@ test("a start rejecting with a RealmError returns 1 and writes its code", async 
   assert.deepEqual(h.lines, ["realm daemon: LOCK_CONFLICT"]);
 });
 
-test("a start rejecting with a non-RealmError is reported as SCHEMA_INVALID", async (t) => {
+void test("a start rejecting with a non-RealmError is reported as SCHEMA_INVALID", async (t) => {
   const dir = tempDir(t);
   const h = harness(writeConfig(dir, validConfig(dir)), {
     start: () => Promise.reject(new Error("raw detail that must not print")),
@@ -149,11 +151,13 @@ test("a start rejecting with a non-RealmError is reported as SCHEMA_INVALID", as
   assert.deepEqual(h.lines, ["realm daemon: SCHEMA_INVALID"]);
 });
 
-test("a signal runs the control-channel down and resolves 0", async (t) => {
+void test("a signal runs the control-channel down and resolves 0", async (t) => {
   const dir = tempDir(t);
   let finishTeardown: () => void = () => undefined;
   const done = new Promise<void>((resolve) => {
-    finishTeardown = () => resolve();
+    finishTeardown = () => {
+      resolve();
+    };
   });
   const downs: string[] = [];
   const h = harness(writeConfig(dir, validConfig(dir)), {
@@ -177,7 +181,7 @@ test("a signal runs the control-channel down and resolves 0", async (t) => {
   assert.deepEqual(h.lines, []);
 });
 
-test("a down that fails during a signal shutdown returns 1 with its code", async (t) => {
+void test("a down that fails during a signal shutdown returns 1 with its code", async (t) => {
   const dir = tempDir(t);
   const h = harness(writeConfig(dir, validConfig(dir)), {
     start: () => Promise.resolve(startedWith(new Promise<void>(() => undefined))),
@@ -194,7 +198,7 @@ test("a down that fails during a signal shutdown returns 1 with its code", async
   assert.deepEqual(h.lines, ["realm daemon: AGENTOS_STOP_FAILED"]);
 });
 
-test("the CLI down bound outlasts the daemon teardown bound", () => {
+void test("the CLI down bound outlasts the daemon teardown bound", () => {
   assert.ok(
     CONTROL_TIMEOUT_MS.down > TEARDOWN_TIMEOUT_MS,
     "the CLI must not give up before the daemon finishes teardown",

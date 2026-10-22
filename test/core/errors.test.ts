@@ -78,26 +78,26 @@ const RETRYABLE_FALSE: readonly ErrorCode[] = [
 
 const sorted = (xs: readonly string[]): string[] => [...xs].sort();
 
-test("the catalogue holds exactly the 28 codes: the 20 D-10 codes, PODMAN_UNSUPPORTED_VERSION, AUDIT_WRITE_FAILED, the three 2026-10-22 closure codes, MCP_INPUT_FAILED, CLEANUP_FAILED, and DAEMON_START_TIMEOUT", () => {
+void test("the catalogue holds exactly the 28 codes: the 20 D-10 codes, PODMAN_UNSUPPORTED_VERSION, AUDIT_WRITE_FAILED, the three 2026-10-22 closure codes, MCP_INPUT_FAILED, CLEANUP_FAILED, and DAEMON_START_TIMEOUT", () => {
   assert.equal(EXPECTED_CODES.length, 28);
   assert.equal(ERROR_CODES.length, 28);
   assert.deepEqual(sorted(ERROR_CODES), sorted(EXPECTED_CODES));
 });
 
-test("the catalogue record has exactly the 28 codes and no others", () => {
+void test("the catalogue record has exactly the 28 codes and no others", () => {
   const keys = Object.keys(ERROR_CATALOGUE);
   assert.equal(keys.length, 28);
   assert.deepEqual(sorted(keys), sorted(EXPECTED_CODES));
   assert.equal(Object.isFrozen(ERROR_CATALOGUE), true);
 });
 
-test("the retryable true and false lists partition the catalogue", () => {
+void test("the retryable true and false lists partition the catalogue", () => {
   assert.equal(RETRYABLE_TRUE.length, 12);
   assert.equal(RETRYABLE_FALSE.length, 16);
   assert.deepEqual(sorted([...RETRYABLE_TRUE, ...RETRYABLE_FALSE]), sorted(EXPECTED_CODES));
 });
 
-test("the retryable values produced by the catalogue match the D-10 lists exactly", () => {
+void test("the retryable values produced by the catalogue match the D-10 lists exactly", () => {
   const actualTrue = ERROR_CODES.filter((code) => makeRealmError(code).retryable);
   const actualFalse = ERROR_CODES.filter((code) => !makeRealmError(code).retryable);
   assert.deepEqual(sorted(actualTrue), sorted(RETRYABLE_TRUE));
@@ -106,7 +106,7 @@ test("the retryable values produced by the catalogue match the D-10 lists exactl
 
 for (const code of EXPECTED_CODES) {
   const retryable = RETRYABLE_TRUE.includes(code);
-  test(`${code} builds a RealmError with its code, a non-empty reason, and retryable=${retryable}`, () => {
+  void test(`${code} builds a RealmError with its code, a non-empty reason, and retryable=${String(retryable)}`, () => {
     const err = makeRealmError(code);
     assert.ok(err instanceof RealmError);
     assert.ok(err instanceof Error);
@@ -119,17 +119,17 @@ for (const code of EXPECTED_CODES) {
   });
 }
 
-test("ERROR_CODES is frozen at runtime", () => {
+void test("ERROR_CODES is frozen at runtime", () => {
   assert.equal(Object.isFrozen(ERROR_CODES), true);
 });
 
-test("every catalogue entry is frozen, not only the record that holds it", () => {
+void test("every catalogue entry is frozen, not only the record that holds it", () => {
   for (const code of ERROR_CODES) {
     assert.equal(Object.isFrozen(ERROR_CATALOGUE[code]), true, `${code} entry must be frozen`);
   }
 });
 
-test("editing a catalogue entry in place throws a TypeError", () => {
+void test("editing a catalogue entry in place throws a TypeError", () => {
   const entry: { retryable: boolean } = ERROR_CATALOGUE.REALM_UNBOUND;
   assert.throws(() => {
     entry.retryable = true;
@@ -137,7 +137,7 @@ test("editing a catalogue entry in place throws a TypeError", () => {
   assert.equal(makeRealmError("REALM_UNBOUND").retryable, false);
 });
 
-test("replacing or adding a catalogue key throws a TypeError", () => {
+void test("replacing or adding a catalogue key throws a TypeError", () => {
   const record = ERROR_CATALOGUE as Record<string, unknown>;
   assert.throws(() => {
     record.REALM_UNBOUND = { reason: "changed", retryable: true };
@@ -148,7 +148,7 @@ test("replacing or adding a catalogue key throws a TypeError", () => {
   assert.equal(Object.keys(ERROR_CATALOGUE).length, 28);
 });
 
-test("AUDIT_WRITE_FAILED has the approved reason and is retryable, because the tool call did not run", () => {
+void test("AUDIT_WRITE_FAILED has the approved reason and is retryable, because the tool call did not run", () => {
   assert.equal(
     ERROR_CATALOGUE.AUDIT_WRITE_FAILED.reason,
     "audit log could not be written; the tool call did not run",
@@ -156,7 +156,7 @@ test("AUDIT_WRITE_FAILED has the approved reason and is retryable, because the t
   assert.equal(ERROR_CATALOGUE.AUDIT_WRITE_FAILED.retryable, true);
 });
 
-test("AGENTOS_NOT_CONFIGURED, AGENTOS_STOP_FAILED, and OPENSHELL_LABEL_AMBIGUOUS have their approved reasons and retryable flags", () => {
+void test("AGENTOS_NOT_CONFIGURED, AGENTOS_STOP_FAILED, and OPENSHELL_LABEL_AMBIGUOUS have their approved reasons and retryable flags", () => {
   const notConfigured = makeRealmError("AGENTOS_NOT_CONFIGURED");
   assert.equal(
     notConfigured.reason,
@@ -177,7 +177,7 @@ test("AGENTOS_NOT_CONFIGURED, AGENTOS_STOP_FAILED, and OPENSHELL_LABEL_AMBIGUOUS
   assert.equal(labelAmbiguous.retryable, false);
 });
 
-test("makeRealmError with a cause code carries it as causeCode and keeps the primary reason and retryable flag", () => {
+void test("makeRealmError with a cause code carries it as causeCode and keeps the primary reason and retryable flag", () => {
   const err = makeRealmError("OPENSHELL_START_FAILED", "PODMAN_MACHINE_DOWN");
   assert.ok(err instanceof RealmError);
   assert.equal(err.code, "OPENSHELL_START_FAILED");
@@ -187,7 +187,7 @@ test("makeRealmError with a cause code carries it as causeCode and keeps the pri
   assert.equal(err.retryable, true);
 });
 
-test("causeCode is absent when no cause is given, including an explicit undefined cause", () => {
+void test("causeCode is absent when no cause is given, including an explicit undefined cause", () => {
   for (const err of [
     makeRealmError("REALM_UNBOUND"),
     makeRealmError("REALM_UNBOUND", undefined),
@@ -198,7 +198,7 @@ test("causeCode is absent when no cause is given, including an explicit undefine
   }
 });
 
-test("causeCode round-trips for every primary and cause code pair, and no reason contains a cause code", () => {
+void test("causeCode round-trips for every primary and cause code pair, and no reason contains a cause code", () => {
   for (const code of ERROR_CODES) {
     for (const cause of ERROR_CODES) {
       const err = makeRealmError(code, cause);

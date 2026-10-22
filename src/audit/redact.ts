@@ -81,7 +81,7 @@ function redactAt(value: unknown, depth: number, ancestors: Set<object>): unknow
       return value.map((item: unknown) => redactAt(item, depth + 1, ancestors));
     }
     // Null prototype: a key such as "__proto__" stays an ordinary property.
-    const out: Record<string, unknown> = Object.create(null);
+    const out = Object.create(null) as Record<string, unknown>;
     const record = value as Record<string, unknown>;
     for (const key of Object.keys(record)) {
       out[redactString(key)] = SENSITIVE_KEY_PATTERN.test(key)

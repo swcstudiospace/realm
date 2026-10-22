@@ -193,9 +193,9 @@ export class ToolDispatcher {
 
   // status is not gated. It returns the controller snapshot with its display mapping (D-27).
   async #status(): Promise<ToolOutcome> {
-    const value = await this.#audited("status", null, async () => {
+    const value = await this.#audited("status", null, () => {
       const snapshot = this.deps.controller.snapshot();
-      return { snapshot, display: displayStatus(snapshot) };
+      return Promise.resolve({ snapshot, display: displayStatus(snapshot) });
     });
     return { outcome: "done", tool: "status", value };
   }

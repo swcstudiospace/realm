@@ -55,7 +55,7 @@ function tempFiles(dir: string): string[] {
   return readdirSync(dir).filter((name) => name.includes(".realm-tmp-"));
 }
 
-test("a matching ifMatchSha256 lets the write replace the content and returns the new hash (D-34, FS-04)", (t) => {
+void test("a matching ifMatchSha256 lets the write replace the content and returns the new hash (D-34, FS-04)", (t) => {
   const { ws, root } = fixture(t);
   const result = lockedWrite(root, "doc.txt", "updated", {
     owner: "A",
@@ -68,7 +68,7 @@ test("a matching ifMatchSha256 lets the write replace the content and returns th
   assert.deepEqual(tempFiles(ws), []);
 });
 
-test("an ifMatchSha256 that differs from the observed hash is LOCK_CONFLICT and the file is unchanged (D-34)", (t) => {
+void test("an ifMatchSha256 that differs from the observed hash is LOCK_CONFLICT and the file is unchanged (D-34)", (t) => {
   const { ws, root } = fixture(t);
   assertRejectsWith(
     () =>
@@ -84,7 +84,7 @@ test("an ifMatchSha256 that differs from the observed hash is LOCK_CONFLICT and 
   assert.deepEqual(tempFiles(ws), []);
 });
 
-test("an ifMatchSha256 against an absent target is LOCK_CONFLICT and creates nothing (D-34)", (t) => {
+void test("an ifMatchSha256 against an absent target is LOCK_CONFLICT and creates nothing (D-34)", (t) => {
   const { ws, root } = fixture(t);
   assertRejectsWith(
     () =>
@@ -99,13 +99,13 @@ test("an ifMatchSha256 against an absent target is LOCK_CONFLICT and creates not
   assert.equal(existsSync(join(ws, "new.txt")), false);
 });
 
-test("an absent target is created when no ifMatchSha256 is given (D-34)", (t) => {
+void test("an absent target is created when no ifMatchSha256 is given (D-34)", (t) => {
   const { ws, root } = fixture(t);
   lockedWrite(root, "new.txt", "created", { owner: "A", locks: new LockTable(), credentialAllow: [] });
   assert.equal(readFileSync(join(ws, "new.txt"), "utf8"), "created");
 });
 
-test("a non-cooperating writer between observation and rename is caught: LOCK_CONFLICT and the file is unchanged (D-34, D-35)", (t) => {
+void test("a non-cooperating writer between observation and rename is caught: LOCK_CONFLICT and the file is unchanged (D-34, D-35)", (t) => {
   const { ws, root } = fixture(t);
   const locks = new LockTable();
   assertRejectsWith(
@@ -127,7 +127,7 @@ test("a non-cooperating writer between observation and rename is caught: LOCK_CO
   assert.equal(locks.acquire(join(ws, "doc.txt"), "B").owner, "B");
 });
 
-test("a lock held by another owner is LOCK_CONFLICT, the file is unchanged, and the other owner keeps the lock (D-34, FS-04)", (t) => {
+void test("a lock held by another owner is LOCK_CONFLICT, the file is unchanged, and the other owner keeps the lock (D-34, FS-04)", (t) => {
   const { ws, root } = fixture(t);
   const locks = new LockTable();
   const otherHandle = locks.acquire(join(ws, "doc.txt"), "B");
@@ -140,7 +140,7 @@ test("a lock held by another owner is LOCK_CONFLICT, the file is unchanged, and 
   locks.release(otherHandle);
 });
 
-test("a failed write releases the lock it took, in its finally (D-34)", (t) => {
+void test("a failed write releases the lock it took, in its finally (D-34)", (t) => {
   const { ws, root } = fixture(t);
   const locks = new LockTable();
   assertRejectsWith(
@@ -156,14 +156,14 @@ test("a failed write releases the lock it took, in its finally (D-34)", (t) => {
   assert.equal(locks.acquire(join(ws, "doc.txt"), "B").owner, "B");
 });
 
-test("a successful write releases the lock it took (D-34)", (t) => {
+void test("a successful write releases the lock it took (D-34)", (t) => {
   const { ws, root } = fixture(t);
   const locks = new LockTable();
   lockedWrite(root, "doc.txt", "updated", { owner: "A", locks, credentialAllow: [] });
   assert.equal(locks.acquire(join(ws, "doc.txt"), "B").owner, "B");
 });
 
-test("a stage-hook failure through the locked write reports WRITE_NOT_ATOMIC, keeps the original, and releases the lock (D-34, D-35)", (t) => {
+void test("a stage-hook failure through the locked write reports WRITE_NOT_ATOMIC, keeps the original, and releases the lock (D-34, D-35)", (t) => {
   const { ws, root } = fixture(t);
   const locks = new LockTable();
   assertRejectsWith(
@@ -185,7 +185,7 @@ test("a stage-hook failure through the locked write reports WRITE_NOT_ATOMIC, ke
   assert.equal(locks.acquire(join(ws, "doc.txt"), "B").owner, "B");
 });
 
-test("a symlink at the target is PATH_ESCAPE and writes nothing (D-34 step 1)", (t) => {
+void test("a symlink at the target is PATH_ESCAPE and writes nothing (D-34 step 1)", (t) => {
   const { ws, root } = fixture(t);
   assertRejectsWith(
     () => lockedWrite(root, "link.txt", "x", { owner: "A", locks: new LockTable(), credentialAllow: [] }),
@@ -194,7 +194,7 @@ test("a symlink at the target is PATH_ESCAPE and writes nothing (D-34 step 1)", 
   assert.equal(readFileSync(join(ws, "real.txt"), "utf8"), "real");
 });
 
-test("a target reached through an escaping directory symlink is PATH_ESCAPE and creates nothing outside (FS-01, D-34)", (t) => {
+void test("a target reached through an escaping directory symlink is PATH_ESCAPE and creates nothing outside (FS-01, D-34)", (t) => {
   const { outside, root } = fixture(t);
   assertRejectsWith(
     () => lockedWrite(root, "out/new.txt", "x", { owner: "A", locks: new LockTable(), credentialAllow: [] }),
@@ -203,7 +203,7 @@ test("a target reached through an escaping directory symlink is PATH_ESCAPE and 
   assert.equal(existsSync(join(outside, "new.txt")), false);
 });
 
-test("a missing parent directory is PATH_ESCAPE and creates nothing (D-34 step 1)", (t) => {
+void test("a missing parent directory is PATH_ESCAPE and creates nothing (D-34 step 1)", (t) => {
   const { ws, root } = fixture(t);
   assertRejectsWith(
     () => lockedWrite(root, "nope/new.txt", "x", { owner: "A", locks: new LockTable(), credentialAllow: [] }),
@@ -212,7 +212,7 @@ test("a missing parent directory is PATH_ESCAPE and creates nothing (D-34 step 1
   assert.equal(existsSync(join(ws, "nope")), false);
 });
 
-test("a directory at the target is PATH_ESCAPE and the lock taken for it is released (D-34)", (t) => {
+void test("a directory at the target is PATH_ESCAPE and the lock taken for it is released (D-34)", (t) => {
   const { ws, root } = fixture(t);
   const locks = new LockTable();
   assertRejectsWith(

@@ -41,14 +41,18 @@ function recordingFake(calls: string[]): ExecutionService {
   };
 }
 
-test("D-39: the ExecutionService fake exposes exactly the frozen method names, each with its frozen arity", async () => {
+void test("D-39: the ExecutionService fake exposes exactly the frozen method names, each with its frozen arity", async () => {
   const calls: string[] = [];
   const service = recordingFake(calls);
   assert.deepEqual(Object.keys(service).sort(), Object.keys(FROZEN_ARITY).sort());
   for (const name of Object.keys(FROZEN_ARITY) as (keyof ExecutionService)[]) {
-    const method = service[name];
+    const method: unknown = Reflect.get(service, name);
     assert.equal(typeof method, "function", `${name} must be a function`);
-    assert.equal(method.length, FROZEN_ARITY[name], `${name} must keep its frozen arity`);
+    assert.equal(
+      (method as (...args: unknown[]) => unknown).length,
+      FROZEN_ARITY[name],
+      `${name} must keep its frozen arity`,
+    );
   }
   await service.create({ idempotencyKey: "key", workspaceRoot: "/workspace" });
   await service.start("container");
@@ -58,7 +62,7 @@ test("D-39: the ExecutionService fake exposes exactly the frozen method names, e
   assert.deepEqual(calls, ["create key", "start container", "probe container", "stop container", "destroy container"]);
 });
 
-test("D-39: the production SessionExecution class carries the frozen method names and arities", () => {
+void test("D-39: the production SessionExecution class carries the frozen method names and arities", () => {
   const prototype: object = SessionExecution.prototype;
   // The class also has private helpers, so only the frozen members are pinned here.
   for (const name of Object.keys(FROZEN_ARITY) as (keyof ExecutionService)[]) {

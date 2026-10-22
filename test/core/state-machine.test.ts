@@ -55,7 +55,7 @@ function positioned(state: State): { machine: RealmStateMachine; events: RealmEv
   return { machine, events };
 }
 
-test("the 36 ordered pairs split into the 13 D-11 edges and 23 rejected pairs (CORE-01)", () => {
+void test("the 36 ordered pairs split into the 13 D-11 edges and 23 rejected pairs (CORE-01)", () => {
   let allowed = 0;
   let rejected = 0;
   for (const from of ALL_STATES) {
@@ -71,7 +71,7 @@ test("the 36 ordered pairs split into the 13 D-11 edges and 23 rejected pairs (C
   assert.equal(rejected, 23);
 });
 
-test("every one of the 13 allowed edges commits and publishes its transition (CORE-01)", () => {
+void test("every one of the 13 allowed edges commits and publishes its transition (CORE-01)", () => {
   for (const [from, to] of EXPECTED_ALLOWED) {
     const { machine, events } = positioned(from);
     const snapshot = machine.transition(to, "allowed edge");
@@ -80,7 +80,7 @@ test("every one of the 13 allowed edges commits and publishes its transition (CO
   }
 });
 
-test("every disallowed pair, including all six self-transitions, throws REALM_INVALID_TRANSITION with nothing changed (CORE-01)", () => {
+void test("every disallowed pair, including all six self-transitions, throws REALM_INVALID_TRANSITION with nothing changed (CORE-01)", () => {
   for (const from of ALL_STATES) {
     for (const to of ALL_STATES) {
       if (ALLOWED_KEYS.has(`${from}>${to}`)) {
@@ -99,7 +99,7 @@ test("every disallowed pair, including all six self-transitions, throws REALM_IN
   }
 });
 
-test("a machine starts in unbound with reason no workspace and an ISO 8601 UTC start time (CORE-01)", () => {
+void test("a machine starts in unbound with reason no workspace and an ISO 8601 UTC start time (CORE-01)", () => {
   const machine = new RealmStateMachine("session-1", createEventBus(), () => new Date(FIXED_TIME));
   assert.deepEqual(machine.snapshot(), {
     state: "unbound",
@@ -108,7 +108,7 @@ test("a machine starts in unbound with reason no workspace and an ISO 8601 UTC s
   });
 });
 
-test("a committed transition records its reason and an ISO 8601 UTC time (CORE-01)", () => {
+void test("a committed transition records its reason and an ISO 8601 UTC time (CORE-01)", () => {
   const machine = new RealmStateMachine("session-1", createEventBus(), () => new Date(FIXED_TIME));
   const snapshot = machine.transition("connecting", "creating container");
   assert.deepEqual(snapshot, {

@@ -119,7 +119,7 @@ function labelTerms(raw: string | null): string[] | null {
   if (!Array.isArray(label) || !label.every((term) => typeof term === "string")) {
     return null;
   }
-  return label as string[];
+  return label;
 }
 
 function matchesLabel(labels: Readonly<Record<string, string>>, term: string): boolean {
@@ -208,12 +208,12 @@ export class FakeLibpod {
   async waitForSocketClose(seq: number, timeoutMs: number): Promise<void> {
     const closed = this.socketClosed.get(seq);
     if (closed === undefined) {
-      throw new Error(`fake libpod holds no request with seq ${seq}`);
+      throw new Error(`fake libpod holds no request with seq ${String(seq)}`);
     }
     let timer: NodeJS.Timeout | undefined;
     const expiry = new Promise<never>((_resolve, reject) => {
       timer = setTimeout(() => {
-        reject(new Error(`socket for request ${seq} stayed open for ${timeoutMs} ms`));
+        reject(new Error(`socket for request ${String(seq)} stayed open for ${String(timeoutMs)} ms`));
       }, timeoutMs);
     });
     try {

@@ -57,7 +57,7 @@ export interface ListParams {
   readonly depth: number;
 }
 
-export type NoParams = Readonly<Record<never, never>>;
+export type NoParams = Readonly<Record<string, never>>;
 
 export interface ToolParams {
   readonly exec: ExecParams;

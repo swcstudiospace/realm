@@ -99,7 +99,7 @@ export class AgentOsSupervisor {
     if (!this.isCurrent(epoch)) {
       return false;
     }
-    if (probe.ok && probe.value === true) {
+    if (probe.ok && probe.value) {
       this.observeAlive();
       return true;
     }
@@ -209,13 +209,13 @@ function settle<T>(
       resolve(outcome);
     };
     const timer =
-      timeoutMs === null ? undefined : setTimeout(() => finish({ ok: false }), timeoutMs);
+      timeoutMs === null ? undefined : setTimeout(() => { finish({ ok: false }); }, timeoutMs);
     inFlight.add(cancel);
     Promise.resolve()
       .then(work)
       .then(
-        (value) => finish({ ok: true, value }),
-        () => finish({ ok: false }),
+        (value) => { finish({ ok: true, value }); },
+        () => { finish({ ok: false }); },
       );
   });
 }

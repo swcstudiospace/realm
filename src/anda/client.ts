@@ -75,7 +75,7 @@ export interface AndaBridgeOptions {
 }
 
 type AttemptOutcome = "ok" | "unreachable" | "mismatch";
-type Listener = (event: BridgeEvent) => void;
+type Listener = (event: BridgeEvent) => void | PromiseLike<void>;
 // The request function behind one attempt. node:http and node:https both fit it.
 type Transport = (options: RequestOptions, onResponse: (res: IncomingMessage) => void) => ClientRequest;
 
@@ -248,7 +248,8 @@ export class AndaBridge implements BridgePort {
         throw makeRealmError("ANDA_UNREACHABLE");
       }
       const outcome = await this.attempt(signal, Math.min(this.requestTimeoutMs, remaining));
-      if (signal.aborted) {
+      // Read through lifecycle: TypeScript keeps the check on signal.aborted narrowed across the await.
+      if (lifecycle.signal.aborted) {
         throw makeRealmError("ANDA_UNREACHABLE");
       }
       if (outcome === "ok") {
@@ -319,7 +320,7 @@ export class AndaBridge implements BridgePort {
         continue;
       }
       const outcome = await this.attempt(signal, this.requestTimeoutMs);
-      if (signal.aborted) {
+      if (lifecycle.signal.aborted) {
         return;
       }
       this.deliverUndelivered();

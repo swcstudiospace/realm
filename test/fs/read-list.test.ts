@@ -57,7 +57,7 @@ function sha256Of(data: string | Uint8Array): string {
   return createHash("sha256").update(data).digest("hex");
 }
 
-test("read returns the content, a full-file sha256, and truncated false at or under maxBytes (FS-01, D-36)", (t) => {
+void test("read returns the content, a full-file sha256, and truncated false at or under maxBytes (FS-01, D-36)", (t) => {
   const { root } = fixture(t);
   const found = expectFound(readFileCapped(root, "a.txt", { maxBytes: 100, credentialAllow: [] }));
   assert.equal(Buffer.from(found.content).toString("utf8"), "alpha");
@@ -69,7 +69,7 @@ test("read returns the content, a full-file sha256, and truncated false at or un
   assert.equal(exact.truncated, false);
 });
 
-test("read stops at maxBytes, sets truncated, and still hashes the whole file across chunks (D-36)", (t) => {
+void test("read stops at maxBytes, sets truncated, and still hashes the whole file across chunks (D-36)", (t) => {
   const { ws, root } = fixture(t);
   const big = Buffer.alloc(150_000, 97);
   writeFileSync(join(ws, "big.bin"), big);
@@ -80,7 +80,7 @@ test("read stops at maxBytes, sets truncated, and still hashes the whole file ac
   assert.equal(found.sha256, sha256Of(big));
 });
 
-test("a missing final segment and a missing intermediate segment are both absent (D-36, FS-01)", (t) => {
+void test("a missing final segment and a missing intermediate segment are both absent (D-36, FS-01)", (t) => {
   const { root } = fixture(t);
   assert.deepEqual(readFileCapped(root, "missing.txt", { maxBytes: 10, credentialAllow: [] }), {
     status: "absent",
@@ -90,7 +90,7 @@ test("a missing final segment and a missing intermediate segment are both absent
   });
 });
 
-test("a directory and a FIFO are non-regular and rejected with PATH_ESCAPE, without blocking (D-36)", (t) => {
+void test("a directory and a FIFO are non-regular and rejected with PATH_ESCAPE, without blocking (D-36)", (t) => {
   const { ws, root } = fixture(t);
   execFileSync("mkfifo", [join(ws, "pipe")]);
   assertRejectsWith(() => readFileCapped(root, "d", { maxBytes: 10, credentialAllow: [] }), "PATH_ESCAPE");
@@ -100,7 +100,7 @@ test("a directory and a FIFO are non-regular and rejected with PATH_ESCAPE, with
   );
 });
 
-test("list reports each entry's kind and symlink targets without following them (D-36, FS-01)", (t) => {
+void test("list reports each entry's kind and symlink targets without following them (D-36, FS-01)", (t) => {
   const { outside, root } = fixture(t);
   const listing = expectListed(listDir(root, "", { credentialAllow: [] }));
   assert.deepEqual(listing.entries, [
@@ -113,7 +113,7 @@ test("list reports each entry's kind and symlink targets without following them 
   assert.equal(listing.truncated, false);
 });
 
-test("list caps its output at 1000 entries in name order and sets truncated (D-36)", (t) => {
+void test("list caps its output at 1000 entries in name order and sets truncated (D-36)", (t) => {
   const { ws, root } = fixture(t);
   const many = join(ws, "many");
   mkdirSync(many);
@@ -127,7 +127,7 @@ test("list caps its output at 1000 entries in name order and sets truncated (D-3
   assert.equal(listing.entries[999]?.name, "f0999");
 });
 
-test("listing a regular file is PATH_ESCAPE and listing a missing directory is absent (D-36)", (t) => {
+void test("listing a regular file is PATH_ESCAPE and listing a missing directory is absent (D-36)", (t) => {
   const { root } = fixture(t);
   assertRejectsWith(() => listDir(root, "a.txt", { credentialAllow: [] }), "PATH_ESCAPE");
   assert.deepEqual(listDir(root, "missing", { credentialAllow: [] }), { status: "absent" });

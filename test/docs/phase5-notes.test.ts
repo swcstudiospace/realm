@@ -21,14 +21,14 @@ function sectionOf(text: string, heading: string): string {
   return next === -1 ? text.slice(start) : text.slice(start, start + heading.length + next);
 }
 
-test("TOOL-05: mcp.md Q5 records revision 2026-07-28 with the server/discover probe and the initialize handshake", () => {
+void test("TOOL-05: mcp.md Q5 records revision 2026-07-28 with the server/discover probe and the initialize handshake", () => {
   const q5 = sectionOf(readIntegrationNote("mcp.md"), "### Q5");
   assert.ok(q5.includes("2026-07-28"), "Q5 must name revision 2026-07-28");
   assert.ok(q5.includes("server/discover"), "Q5 must name the server/discover probe");
   assert.ok(q5.includes("initialize"), "Q5 must name the initialize handshake");
 });
 
-test("TOOL-05: mcp.md Q5 introduces no revision string other than 2026-07-28", () => {
+void test("TOOL-05: mcp.md Q5 introduces no revision string other than 2026-07-28", () => {
   const q5 = sectionOf(readIntegrationNote("mcp.md"), "### Q5");
   const found = q5.match(/20\d\d-\d\d-\d\d/g) ?? [];
   assert.ok(found.length > 0, "Q5 must cite at least one revision string");
@@ -37,7 +37,7 @@ test("TOOL-05: mcp.md Q5 introduces no revision string other than 2026-07-28", (
   }
 });
 
-test("TOOL-05: acp.md records protocol generation v1 with the realm/tool Realm extension", () => {
+void test("TOOL-05: acp.md records protocol generation v1 with the realm/tool Realm extension", () => {
   const text = readIntegrationNote("acp.md");
   assert.ok(text.includes("protocol generation v1"), "must name protocol generation v1");
   assert.ok(text.includes('"protocolVersion": 1'), "must name protocolVersion 1");
@@ -48,7 +48,7 @@ test("TOOL-05: acp.md records protocol generation v1 with the realm/tool Realm e
   assert.ok(text.includes("not standard ACP"), "must mark realm/tool as not standard ACP");
 });
 
-test("TOOL-05: anda.md and anda-decision.md record that Anda consumes Realm over MCP", () => {
+void test("TOOL-05: anda.md and anda-decision.md record that Anda consumes Realm over MCP", () => {
   const anda = readIntegrationNote("anda.md");
   const decision = readIntegrationNote("anda-decision.md");
   assert.ok(anda.includes("Anda consumes Realm over MCP"), "anda.md must record the MCP-consumption path");
@@ -56,7 +56,7 @@ test("TOOL-05: anda.md and anda-decision.md record that Anda consumes Realm over
   assert.ok(decision.includes("docs/integration/mcp.md"), "anda-decision.md must cite the mcp.md Q5 evidence");
 });
 
-test("OMP-01: omp.md Q1 names the verified manifest field and carries a source URL plus read date", () => {
+void test("OMP-01: omp.md Q1 names the verified manifest field and carries a source URL plus read date", () => {
   const q1 = sectionOf(readIntegrationNote("omp.md"), "### Q1");
   assert.ok(q1.includes('"omp": { "extensions": ["./src/index.ts"] }'), "Q1 must name the omp.extensions field");
   assert.ok(q1.includes("pi.extensions"), "Q1 must name the compatible pi.extensions field");
@@ -65,7 +65,7 @@ test("OMP-01: omp.md Q1 names the verified manifest field and carries a source U
   assert.ok(q1.includes("2026-10-22"), "Q1 must carry the Phase 5 read date");
 });
 
-test("OMP-01: omp.md Q2 names the verified lifecycle calls and carries a source URL plus read date", () => {
+void test("OMP-01: omp.md Q2 names the verified lifecycle calls and carries a source URL plus read date", () => {
   const q2 = sectionOf(readIntegrationNote("omp.md"), "### Q2");
   assert.ok(q2.includes("pi.on(event, handler)"), "Q2 must name the verified event registration call");
   assert.ok(q2.includes("session_start"), "Q2 must name session_start");
@@ -77,7 +77,7 @@ test("OMP-01: omp.md Q2 names the verified lifecycle calls and carries a source 
   assert.ok(q2.includes("2026-10-22"), "Q2 must carry the Phase 5 read date");
 });
 
-test("OMP-01: omp.md Q3 names the status surface and marks the signature limit with a source URL plus read date", () => {
+void test("OMP-01: omp.md Q3 names the status surface and marks the signature limit with a source URL plus read date", () => {
   const q3 = sectionOf(readIntegrationNote("omp.md"), "### Q3");
   assert.ok(q3.includes("ctx.ui.setStatus(key, text)"), "Q3 must name the key-plus-text signature");
   assert.ok(q3.includes("not documented"), "Q3 must mark the missing endpoint as not documented");
@@ -85,7 +85,7 @@ test("OMP-01: omp.md Q3 names the status surface and marks the signature limit w
   assert.ok(q3.includes("2026-10-22"), "Q3 must carry the Phase 5 read date");
 });
 
-test("OMP-01: omp.md Q4 stays OPEN with the enforcement gap marked not documented", () => {
+void test("OMP-01: omp.md Q4 stays OPEN with the enforcement gap marked not documented", () => {
   const q4 = sectionOf(readIntegrationNote("omp.md"), "### Q4");
   assert.ok(q4.includes("setActiveTools"), "Q4 must name setActiveTools");
   assert.ok(q4.includes("tool_call"), "Q4 must name the tool_call hook");

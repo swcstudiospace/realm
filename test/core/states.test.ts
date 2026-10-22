@@ -30,14 +30,14 @@ const EXPECTED_KEYS = Object.keys(EXPECTED_ALLOWED);
 
 const key = (from: State, to: State): string => `${from}>${to}`;
 
-test("the state set is exactly the six D-11 states", () => {
+void test("the state set is exactly the six D-11 states", () => {
   assert.deepEqual(
     [...STATES],
     ["unbound", "connecting", "active", "degraded", "error", "stopping"],
   );
 });
 
-test("the matrix covers 36 ordered pairs: 13 allowed and 23 rejected", () => {
+void test("the matrix covers 36 ordered pairs: 13 allowed and 23 rejected", () => {
   let total = 0;
   let allowed = 0;
   for (const from of STATES) {
@@ -52,21 +52,21 @@ test("the matrix covers 36 ordered pairs: 13 allowed and 23 rejected", () => {
   assert.equal(EXPECTED_KEYS.length, 13);
 });
 
-test("the exported edge table holds exactly the D-11 edges", () => {
+void test("the exported edge table holds exactly the D-11 edges", () => {
   const actual = ALLOWED_TRANSITIONS.map(([f, t]) => key(f, t));
   assert.equal(actual.length, 13);
   assert.equal(new Set(actual).size, 13);
   assert.deepEqual([...actual].sort(), [...EXPECTED_KEYS].sort());
 });
 
-test("the exported edge table and every edge tuple are frozen", () => {
+void test("the exported edge table and every edge tuple are frozen", () => {
   assert.equal(Object.isFrozen(ALLOWED_TRANSITIONS), true);
   for (const edge of ALLOWED_TRANSITIONS) {
     assert.equal(Object.isFrozen(edge), true, `${key(edge[0], edge[1])} must be frozen`);
   }
 });
 
-test("editing the edge table or any edge in strict mode throws a TypeError", () => {
+void test("editing the edge table or any edge in strict mode throws a TypeError", () => {
   const table = ALLOWED_TRANSITIONS as unknown as string[][];
   const edge = table[0] as string[];
   assert.throws(() => {
@@ -88,11 +88,11 @@ test("editing the edge table or any edge in strict mode throws a TypeError", () 
   assert.deepEqual(table[0], ["unbound", "connecting"]);
 });
 
-test("the state list is frozen at runtime", () => {
+void test("the state list is frozen at runtime", () => {
   assert.equal(Object.isFrozen(STATES), true);
 });
 
-test("assigning into or extending the state list throws a TypeError", () => {
+void test("assigning into or extending the state list throws a TypeError", () => {
   const mutable = STATES as unknown as string[];
   assert.throws(() => {
     mutable[0] = "active";
@@ -106,7 +106,7 @@ test("assigning into or extending the state list throws a TypeError", () => {
   );
 });
 
-test("every self-transition is rejected with REALM_INVALID_TRANSITION (equality never merges)", () => {
+void test("every self-transition is rejected with REALM_INVALID_TRANSITION (equality never merges)", () => {
   for (const state of STATES) {
     assert.equal(isTransitionAllowed(state, state), false, `${state}>${state}`);
     const err = checkTransition(state, state);
@@ -119,7 +119,7 @@ for (const from of STATES) {
   for (const to of STATES) {
     const expected = EXPECTED_ALLOWED[key(from, to)] === true;
     const outcome = expected ? "accepted" : "rejected with REALM_INVALID_TRANSITION";
-    test(`${key(from, to)} is ${outcome}`, () => {
+    void test(`${key(from, to)} is ${outcome}`, () => {
       assert.equal(isTransitionAllowed(from, to), expected);
       const err = checkTransition(from, to);
       if (expected) {

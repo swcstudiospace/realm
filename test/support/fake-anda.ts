@@ -86,7 +86,7 @@ export class FakeAnda {
     if (this.port === undefined) {
       throw new Error("fake Anda has not been started");
     }
-    return `http://127.0.0.1:${this.port}`;
+    return `http://127.0.0.1:${String(this.port)}`;
   }
 
   // The reply for every request after this call, until the next call.

@@ -1,9 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { PassThrough, Writable } from "node:stream";
-import { fileURLToPath } from "node:url";
 import { STATUS_LABELS } from "../../src/core/status.js";
 import { ERROR_CATALOGUE, makeRealmError, RealmError } from "../../src/core/errors.js";
 import {
@@ -54,7 +53,7 @@ async function drive(dispatcher: McpDispatcher, lines: readonly string[]): Promi
   await Promise.race([
     server.closed,
     new Promise<never>((_resolve, reject) => {
-      setTimeout(() => reject(new Error("mcp server did not close after stdin ended")), 2000).unref();
+      setTimeout(() => { reject(new Error("mcp server did not close after stdin ended")); }, 2000).unref();
     }),
   ]);
   await new Promise<void>((resolve) => {
@@ -81,7 +80,7 @@ function resultOf(line: string): unknown {
   return parsed["result"];
 }
 
-test("TOOL-05: a well-formed request yields exactly one newline-terminated JSON-RPC message on stdout", async (t) => {
+void test("TOOL-05: a well-formed request yields exactly one newline-terminated JSON-RPC message on stdout", async (t) => {
   const h = makeHarness(t);
   const driven = await drive(h.dispatcher, [request(1, "server/discover", {})]);
   assert.equal(driven.stdoutLines.length, 1);
@@ -93,7 +92,7 @@ test("TOOL-05: a well-formed request yields exactly one newline-terminated JSON-
   assert.equal(driven.stderr, "", "a well-formed request logs nothing");
 });
 
-test("TOOL-05: malformed input and server logging go to stderr, never stdout", async (t) => {
+void test("TOOL-05: malformed input and server logging go to stderr, never stdout", async (t) => {
   const h = makeHarness(t);
   const malformed = await drive(h.dispatcher, ["{not json"]);
   assert.equal(malformed.stdout, "", "malformed input writes nothing to stdout");
@@ -106,7 +105,7 @@ test("TOOL-05: malformed input and server logging go to stderr, never stdout", a
   assert.match(mixed.stderr, /mcp: /, "the malformed fragment is still diagnosed on stderr");
 });
 
-test("TOOL-05: closing stdin shuts the server down without hanging", async (t) => {
+void test("TOOL-05: closing stdin shuts the server down without hanging", async (t) => {
   const h = makeHarness(t);
   const input = new PassThrough();
   const output = new PassThrough();
@@ -116,12 +115,12 @@ test("TOOL-05: closing stdin shuts the server down without hanging", async (t) =
   await Promise.race([
     server.closed,
     new Promise<never>((_resolve, reject) => {
-      setTimeout(() => reject(new Error("server hung after stdin closed")), 2000).unref();
+      setTimeout(() => { reject(new Error("server hung after stdin closed")); }, 2000).unref();
     }),
   ]);
 });
 
-test("TOOL-05: the server answers the server/discover probe per mcp.md Q5", async (t) => {
+void test("TOOL-05: the server answers the server/discover probe per mcp.md Q5", async (t) => {
   const h = makeHarness(t);
   const driven = await drive(h.dispatcher, [request(1, "server/discover", {})]);
   assert.equal(driven.stdoutLines.length, 1);
@@ -134,7 +133,7 @@ test("TOOL-05: the server answers the server/discover probe per mcp.md Q5", asyn
   );
 });
 
-test("TOOL-05: the server answers the initialize handshake per mcp.md Q5", async (t) => {
+void test("TOOL-05: the server answers the initialize handshake per mcp.md Q5", async (t) => {
   const h = makeHarness(t);
   const driven = await drive(h.dispatcher, [
     request(7, "initialize", {
@@ -152,7 +151,7 @@ test("TOOL-05: the server answers the initialize handshake per mcp.md Q5", async
   );
 });
 
-test("TOOL-05: each of the six tools routes to ToolDispatcher.call with the ToolCall map unchanged", async (t) => {
+void test("TOOL-05: each of the six tools routes to ToolDispatcher.call with the ToolCall map unchanged", async (t) => {
   const h = makeHarness(t);
   const seen: unknown[] = [];
   const spy: McpDispatcher = {
@@ -183,12 +182,12 @@ test("TOOL-05: each of the six tools routes to ToolDispatcher.call with the Tool
   const replies = driven.stdoutLines.slice(1).map((line) => resultOf(line) as Record<string, unknown>);
   const tools = ["exec", "read", "write", "list", "status", "retry"];
   for (let index = 0; index < tools.length; index += 1) {
-    assert.equal(replies[index]?.["outcome"], "done", `expected a done ${tools[index]}`);
+    assert.equal(replies[index]?.["outcome"], "done", `expected a done ${String(tools[index])}`);
     assert.equal(replies[index]?.["tool"], tools[index]);
   }
 });
 
-test("TOOL-05: a dispatcher refusal surfaces the catalogue code in the reply envelope", async (t) => {
+void test("TOOL-05: a dispatcher refusal surfaces the catalogue code in the reply envelope", async (t) => {
   const h = makeHarness(t);
   const driven = await drive(h.dispatcher, [toolRequest(1, "read", { path: "doc.txt" })]);
   assert.equal(driven.stdoutLines.length, 1);
@@ -200,7 +199,7 @@ test("TOOL-05: a dispatcher refusal surfaces the catalogue code in the reply env
   });
 });
 
-test("TOOL-05: a RealmError thrown by the dispatcher reaches the client as a tool error result with its code and message (G-08)", async () => {
+void test("TOOL-05: a RealmError thrown by the dispatcher reaches the client as a tool error result with its code and message (G-08)", async () => {
   const thrown = makeRealmError("OPENSHELL_START_FAILED", "PODMAN_MACHINE_DOWN");
   const dispatcher: McpDispatcher = { call: () => Promise.reject(thrown) };
   const driven = await drive(dispatcher, [toolRequest(1, "exec", { argv: ["true"] })]);
@@ -220,14 +219,14 @@ test("TOOL-05: a RealmError thrown by the dispatcher reaches the client as a too
   });
 });
 
-test("TOOL-05: a thrown defect that is not a RealmError still answers the internal error without its message", async () => {
+void test("TOOL-05: a thrown defect that is not a RealmError still answers the internal error without its message", async () => {
   const dispatcher: McpDispatcher = { call: () => Promise.reject(new Error("socket reset with secret text")) };
   const driven = await drive(dispatcher, [toolRequest(1, "status", {})]);
   assert.equal(driven.stdoutLines.length, 1);
   assert.deepEqual(parseLine(driven.stdoutLines[0] as string)["error"], { code: -32603, message: "Internal error" });
 });
 
-test("TOOL-05: a thrown defect answers -32603 on the wire and records only the fixed tool-call diagnostic", async () => {
+void test("TOOL-05: a thrown defect answers -32603 on the wire and records only the fixed tool-call diagnostic", async () => {
   const dispatcher: McpDispatcher = { call: () => Promise.reject(new Error("socket reset with secret text")) };
   const driven = await drive(dispatcher, [toolRequest(1, "status", {})]);
   assert.equal(driven.stdoutLines.length, 1);
@@ -235,7 +234,7 @@ test("TOOL-05: a thrown defect answers -32603 on the wire and records only the f
   assert.equal(driven.stderr, "mcp: tool call failed\n");
 });
 
-test("TOOL-05: a failing input stream rejects closed with MCP_INPUT_FAILED and writes only the fixed diagnostic", async () => {
+void test("TOOL-05: a failing input stream rejects closed with MCP_INPUT_FAILED and writes only the fixed diagnostic", async () => {
   const dispatcher: McpDispatcher = { call: () => Promise.reject(new Error("not reached")) };
   const input = new PassThrough();
   const output = new PassThrough();
@@ -252,16 +251,25 @@ test("TOOL-05: a failing input stream rejects closed with MCP_INPUT_FAILED and w
   assert.deepEqual(stderrChunks, ["mcp: input stream failed\n"]);
 });
 
-test("TOOL-05: the surface calls no dispatcher member except call (P5-D11)", async () => {
-  const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
-  const source = readFileSync(join(root, "src", "mcp", "server.ts"), "utf8");
-  for (const member of [".snapshot", ".mutationGate", ".events", ".create("]) {
-    assert.ok(!source.includes(member), `src/mcp/server.ts must not reference ${member}`);
-  }
-  assert.ok(source.includes(".call("), "the surface reaches the dispatcher through call");
+void test("TOOL-05: the surface calls no dispatcher member except call (P5-D11)", async (t) => {
+  const h = makeHarness(t);
+  const touched = new Set<string | symbol>();
+  const recording = new Proxy(h.dispatcher, {
+    get(target, property) {
+      touched.add(property);
+      const value: unknown = Reflect.get(target, property, target);
+      return typeof value === "function" ? (value as (...args: unknown[]) => unknown).bind(target) : value;
+    },
+  });
+  const driven = await drive(recording, [
+    toolRequest(1, "status", {}),
+    toolRequest(2, "write", { path: "surface.txt", content: "via call" }),
+  ]);
+  assert.equal(driven.stdoutLines.length, 2, "two tool calls take two replies");
+  assert.deepEqual([...touched].map(String), ["call"], "the surface touched no dispatcher member but call");
 });
 
-test("TOOL-05: a stdio-client-shaped driver completes status and write calls end to end", async (t) => {
+void test("TOOL-05: a stdio-client-shaped driver completes status and write calls end to end", async (t) => {
   const h = makeHarness(t);
   const statusCall = { status: {} };
   const writeCall = { write: { path: "e2e.txt", content: "hello" } };
@@ -278,7 +286,7 @@ test("TOOL-05: a stdio-client-shaped driver completes status and write calls end
   assert.equal(readFileSync(join(h.ws, "e2e.txt"), "utf8"), "hello");
 });
 
-test("TOOL-05: the status reply carries the shared displayStatus label, not a server-invented label", async (t) => {
+void test("TOOL-05: the status reply carries the shared displayStatus label, not a server-invented label", async (t) => {
   const h = makeHarness(t);
   const driven = await drive(h.dispatcher, [toolRequest(1, "status", {})]);
   assert.equal(driven.stdoutLines.length, 1);
@@ -289,8 +297,4 @@ test("TOOL-05: the status reply carries the shared displayStatus label, not a se
   const display = value["display"] as Record<string, unknown>;
   assert.equal(display["label"], STATUS_LABELS.active);
   assert.equal(display["label"], "realm active");
-  const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
-  const source = readFileSync(join(root, "src", "mcp", "server.ts"), "utf8");
-  assert.ok(!source.includes("realm active"), "the label comes from the shared mapping, not the surface");
-  assert.ok(!source.includes("realm disconnected"), "no label literal lives in the surface");
 });

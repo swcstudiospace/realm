@@ -56,9 +56,9 @@ export interface DoctorOptions {
   // file (D-44). Tests inject a probe to exercise the unwritable outcome.
   readonly canWrite?: (path: string) => WriteReading;
   // Phase 3 seams (RT-02, ANDA-02). Each has a real default; tests inject fakes so that no
-  // process runs and no socket opens. env defaults to the host environment, and each probe
-  // passes only the names its own allowlist permits.
-  readonly env?: EnvironmentLike;
+  // process runs and no socket opens. env is the host environment, handed in by the caller at the entry
+  // edge (the doctor reads no process environment). Each probe passes only the names its allowlist permits.
+  readonly env: EnvironmentLike;
   readonly runCommand?: RunCommand;
   readonly connectSocket?: ConnectSocket;
   readonly fetchInformation?: FetchInformation;
@@ -132,13 +132,13 @@ export async function runChecks(options: DoctorOptions): Promise<readonly CheckR
       podmanProbe ??= probePodman({
         runCommand: options.runCommand ?? defaultRunCommand,
         connectSocket: options.connectSocket ?? defaultConnectSocket,
-        env: options.env ?? process.env,
+        env: options.env,
         timeoutMs: probeTimeoutOf(options),
       });
       return podmanProbe;
     },
   };
-  return Promise.all(REGISTERED.map((check) => check(context)));
+  return Promise.all(REGISTERED.map(async (check) => await check(context)));
 }
 
 // The text a failed probe reports as its reason. Every probe here throws an Error, so its message is the text.
@@ -402,7 +402,7 @@ async function openShellCheck(context: CheckContext): Promise<CheckResult> {
   const id: CheckId = "openshell";
   const { options } = context;
   const runCommand = options.runCommand ?? defaultRunCommand;
-  const env = selectOpenShellEnvironment(options.env ?? process.env);
+  const env = selectOpenShellEnvironment(options.env);
   let outcome: CommandOutcome;
   try {
     outcome = await runCommand(OPENSHELL_BINARY, ["sandbox", "create", "--help"], {
@@ -422,7 +422,7 @@ async function openShellCheck(context: CheckContext): Promise<CheckResult> {
     return {
       id,
       status: "fail",
-      detail: `openshell sandbox create --help exited with status ${outcome.exitCode}`,
+      detail: `openshell sandbox create --help exited with status ${String(outcome.exitCode)}`,
       fix: FIX_INSTALL_OPENSHELL,
     };
   }
@@ -483,7 +483,7 @@ async function andaBridgeCheck(context: CheckContext): Promise<CheckResult> {
     return {
       id,
       status: "fail",
-      detail: `ANDA_UNREACHABLE: GET ${ANDA_INFORMATION_PATH} answered with status ${reply.status}`,
+      detail: `ANDA_UNREACHABLE: GET ${ANDA_INFORMATION_PATH} answered with status ${String(reply.status)}`,
       fix: FIX_ANDA_URL,
     };
   }
@@ -612,7 +612,7 @@ async function agentOsCheck(context: CheckContext): Promise<CheckResult> {
       fix: FIX_AGENTOS_UP,
     };
   }
-  if (reading.bound === false) {
+  if (!reading.bound) {
     return {
       id,
       status: "fail",
@@ -672,7 +672,7 @@ export function defaultRunCommand(file: string, args: readonly string[], options
           resolve({ exitCode: error.code, stdout });
           return;
         }
-        reject(error);
+        reject(error instanceof Error ? error : new Error("the command failed without an Error object"));
       },
     );
   });

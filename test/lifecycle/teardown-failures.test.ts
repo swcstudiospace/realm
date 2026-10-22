@@ -73,7 +73,7 @@ async function waitUntil(predicate: () => boolean, label: string): Promise<void>
   }
 }
 
-test("a bridge event whose state write fails keeps the write's code as the unpersisted cause (QUAL-01)", async (t) => {
+void test("a bridge event whose state write fails keeps the write's code as the unpersisted cause (QUAL-01)", async (t) => {
   const { workspace, store, bridge, controller } = fixture(t);
   const started = await controller.create(workspace);
   assert.equal(started.state, "active");
@@ -85,7 +85,7 @@ test("a bridge event whose state write fails keeps the write's code as the unper
   assert.equal(controller.unpersistedCause(), "LOCK_CONFLICT");
 });
 
-test("a stop whose fallback destroy also fails throws the destroy error with the stop error as its cause (QUAL-01)", async (t) => {
+void test("a stop whose fallback destroy also fails throws the destroy error with the stop error as its cause (QUAL-01)", async (t) => {
   const { workspace, exec, controller } = fixture(t);
   // Long enough that the start is still in flight when the stop begins, even on a loaded host.
   exec.setDelay("start", 2000);
@@ -109,7 +109,7 @@ test("a stop whose fallback destroy also fails throws the destroy error with the
   await creating;
 });
 
-test("a start that fails after its create gave up at the budget is kept, and the next destroy reports it (QUAL-01)", async (t) => {
+void test("a start that fails after its create gave up at the budget is kept, and the next destroy reports it (QUAL-01)", async (t) => {
   const { workspace, exec, controller } = fixture(t, 3000);
   exec.setDelay("start", 4000);
   exec.failNext("start", "PODMAN_MACHINE_DOWN");
@@ -128,7 +128,7 @@ test("a start that fails after its create gave up at the budget is kept, and the
   );
 });
 
-test("a create that fails after its budget expired is kept, and the next destroy reports it (QUAL-01)", async (t) => {
+void test("a create that fails after its budget expired is kept, and the next destroy reports it (QUAL-01)", async (t) => {
   const { workspace, exec, controller } = fixture(t, 3000);
   exec.setDelay("create", 4000);
   exec.failNext("create", "PODMAN_MISSING");
@@ -146,7 +146,7 @@ test("a create that fails after its budget expired is kept, and the next destroy
   );
 });
 
-test("a create that fails while a stop takes it over is kept, and the next destroy reports it (QUAL-01)", async (t) => {
+void test("a create that fails while a stop takes it over is kept, and the next destroy reports it (QUAL-01)", async (t) => {
   const { workspace, exec, controller } = fixture(t);
   exec.setDelay("create", 50);
   exec.failNext("create", "PODMAN_MISSING");

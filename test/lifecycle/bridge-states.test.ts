@@ -56,7 +56,7 @@ function assertRejectsWith(promise: Promise<unknown>, code: string): Promise<voi
   return assert.rejects(promise, (error: unknown) => error instanceof RealmError && error.code === code);
 }
 
-test("ANDA-03: bridge down moves active to degraded with ANDA_UNREACHABLE, and bridge up moves it back to active", async (t) => {
+void test("ANDA-03: bridge down moves active to degraded with ANDA_UNREACHABLE, and bridge up moves it back to active", async (t) => {
   const { workspace, store, bridge, controller } = fixture(t);
   await controller.create(workspace);
 
@@ -71,7 +71,7 @@ test("ANDA-03: bridge down moves active to degraded with ANDA_UNREACHABLE, and b
   assert.equal(store.load(SESSION)?.state, "active");
 });
 
-test("ANDA-03: a mismatch event moves active to error with ANDA_VERSION_MISMATCH", async (t) => {
+void test("ANDA-03: a mismatch event moves active to error with ANDA_VERSION_MISMATCH", async (t) => {
   const { workspace, bridge, controller } = fixture(t);
   await controller.create(workspace);
 
@@ -80,7 +80,7 @@ test("ANDA-03: a mismatch event moves active to error with ANDA_VERSION_MISMATCH
   assert.equal(controller.snapshot().reason, "ANDA_VERSION_MISMATCH");
 });
 
-test("ANDA-03: a mismatch event moves degraded to error with ANDA_VERSION_MISMATCH", async (t) => {
+void test("ANDA-03: a mismatch event moves degraded to error with ANDA_VERSION_MISMATCH", async (t) => {
   const { workspace, bridge, controller } = fixture(t);
   await controller.create(workspace);
   bridge.emit({ kind: "down", code: "ANDA_UNREACHABLE" });
@@ -91,7 +91,7 @@ test("ANDA-03: a mismatch event moves degraded to error with ANDA_VERSION_MISMAT
   assert.equal(controller.snapshot().reason, "ANDA_VERSION_MISMATCH");
 });
 
-test("ANDA-03: startup exhaustion moves connecting to error with ANDA_UNREACHABLE and keeps the container already recorded", async (t) => {
+void test("ANDA-03: startup exhaustion moves connecting to error with ANDA_UNREACHABLE and keeps the container already recorded", async (t) => {
   const { workspace, store, exec, bridge, controller } = fixture(t);
   bridge.failNext("connect", "ANDA_UNREACHABLE");
 
@@ -104,7 +104,7 @@ test("ANDA-03: startup exhaustion moves connecting to error with ANDA_UNREACHABL
   assert.equal(store.load(SESSION)?.state, "error");
 });
 
-test("ANDA-03: a startup mismatch moves connecting to error, and create or start from that error is refused with ANDA_VERSION_MISMATCH", async (t) => {
+void test("ANDA-03: a startup mismatch moves connecting to error, and create or start from that error is refused with ANDA_VERSION_MISMATCH", async (t) => {
   const { workspace, exec, bridge, controller } = fixture(t);
   bridge.failNext("connect", "ANDA_VERSION_MISMATCH");
 
@@ -120,7 +120,7 @@ test("ANDA-03: a startup mismatch moves connecting to error, and create or start
   assert.equal(bridge.callCount("connect"), 1);
 });
 
-test("ANDA-03: a mismatch that arrives while active also leaves error without retry", async (t) => {
+void test("ANDA-03: a mismatch that arrives while active also leaves error without retry", async (t) => {
   const { workspace, bridge, controller } = fixture(t);
   await controller.create(workspace);
   bridge.emit({ kind: "mismatch", code: "ANDA_VERSION_MISMATCH" });
@@ -129,7 +129,7 @@ test("ANDA-03: a mismatch that arrives while active also leaves error without re
   assert.equal(controller.snapshot().state, "error");
 });
 
-test("ANDA-03: other error states stay retryable through the error to connecting edge", async (t) => {
+void test("ANDA-03: other error states stay retryable through the error to connecting edge", async (t) => {
   const { workspace, bridge, controller } = fixture(t);
   bridge.failNext("connect", "ANDA_UNREACHABLE");
   assert.equal((await controller.create(workspace)).reason, "ANDA_UNREACHABLE");
@@ -139,7 +139,7 @@ test("ANDA-03: other error states stay retryable through the error to connecting
   assert.equal(retried.reason, "container running");
 });
 
-test("ANDA-03: an event in a non-active, non-degraded state is discarded without a throw or a transition", async (t) => {
+void test("ANDA-03: an event in a non-active, non-degraded state is discarded without a throw or a transition", async (t) => {
   const { workspace, bridge, exec, controller } = fixture(t);
   const transitions: RealmEvent[] = [];
   controller.events.subscribe((event) => {
@@ -179,7 +179,7 @@ test("ANDA-03: an event in a non-active, non-degraded state is discarded without
   assert.equal(transitions.at(-1)?.to, "unbound");
 });
 
-test("ANDA-03: probe stays exec-only and never produces degraded", async (t) => {
+void test("ANDA-03: probe stays exec-only and never produces degraded", async (t) => {
   const { workspace, exec, controller } = fixture(t);
   const active = await controller.create(workspace);
   const containerId = exec.resources()[0]?.containerId;
@@ -194,7 +194,7 @@ test("ANDA-03: probe stays exec-only and never produces degraded", async (t) => 
   assert.equal(failed.reason, "probe failed");
 });
 
-test("CORE-05 ANDA-03: stop closes the bridge before exec.stop, and destroy closes it and removes the listener", async (t) => {
+void test("CORE-05 ANDA-03: stop closes the bridge before exec.stop, and destroy closes it and removes the listener", async (t) => {
   const { workspace, exec, bridge, controller } = fixture(t);
   await controller.create(workspace);
   const order: string[] = [];
@@ -214,7 +214,7 @@ test("CORE-05 ANDA-03: stop closes the bridge before exec.stop, and destroy clos
   assert.equal(controller.snapshot().state, "unbound");
 });
 
-test("CORE-05 ANDA-03: destroy from an active session closes the bridge and leaves no listener behind", async (t) => {
+void test("CORE-05 ANDA-03: destroy from an active session closes the bridge and leaves no listener behind", async (t) => {
   const { workspace, store, bridge, controller } = fixture(t);
   await controller.create(workspace);
 
@@ -226,7 +226,7 @@ test("CORE-05 ANDA-03: destroy from an active session closes the bridge and leav
   assert.equal(controller.snapshot().state, "unbound");
 });
 
-test("CORE-05 ANDA-03: a bridge close that exceeds the teardown bound returns REALM_STOPPING and a repeated destroy resumes it", async (t: TestContext) => {
+void test("CORE-05 ANDA-03: a bridge close that exceeds the teardown bound returns REALM_STOPPING and a repeated destroy resumes it", async (t: TestContext) => {
   const { workspace, store, exec, bridge, controller } = fixture(t);
   await controller.create(workspace);
   t.after(() => {

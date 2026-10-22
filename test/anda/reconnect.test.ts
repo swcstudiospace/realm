@@ -42,7 +42,7 @@ function nextEvent(bridge: AndaBridge, predicate: (event: BridgeEvent) => boolea
 
 interface Clock {
   readonly delays: number[];
-  now(): number;
+  readonly now: () => number;
   readonly sleep: SleepFn;
 }
 
@@ -79,7 +79,7 @@ async function refusedUrl(): Promise<string> {
   return url;
 }
 
-test("ANDA-03: an unreachable engine exhausts the deadline with ANDA_UNREACHABLE and bounded growing delays", async (t) => {
+void test("ANDA-03: an unreachable engine exhausts the deadline with ANDA_UNREACHABLE and bounded growing delays", async (t) => {
   const url = await refusedUrl();
   const clock = fakeClock();
   const bridge = new AndaBridge({
@@ -97,7 +97,7 @@ test("ANDA-03: an unreachable engine exhausts the deadline with ANDA_UNREACHABLE
   assert.deepEqual(clock.delays, [500, 1000, 2000]);
 });
 
-test("ANDA-03: backoff delays stop growing at the cap and never exceed it", async (t) => {
+void test("ANDA-03: backoff delays stop growing at the cap and never exceed it", async (t) => {
   const url = await refusedUrl();
   const clock = fakeClock();
   const bridge = new AndaBridge({
@@ -121,7 +121,7 @@ test("ANDA-03: backoff delays stop growing at the cap and never exceed it", asyn
 // Attempts are counted at the transport seam, which is the bridge's own record of what it sent. The
 // engine's log is not used for the count: the engine records a request only once it parses it, and that
 // can lag the bridge under load.
-test("ANDA-03: a hung engine times out each attempt and the server sees each request aborted", async (t) => {
+void test("ANDA-03: a hung engine times out each attempt and the server sees each request aborted", async (t) => {
   const fake = new FakeAnda();
   await fake.start();
   t.after(() => fake.stop());
@@ -158,7 +158,7 @@ test("ANDA-03: a hung engine times out each attempt and the server sees each req
 
 // Real timers: the monitor's backoff between probes runs on the real sleep here, so the
 // recorded waits are the real ones the loop uses.
-test("ANDA-03: a mid-run failure publishes down, retries with growing delays, and publishes up on recovery", async (t) => {
+void test("ANDA-03: a mid-run failure publishes down, retries with growing delays, and publishes up on recovery", async (t) => {
   const fake = new FakeAnda();
   await fake.start();
   t.after(() => fake.stop());
@@ -193,7 +193,7 @@ test("ANDA-03: a mid-run failure publishes down, retries with growing delays, an
   assert.equal(bridge.snapshot()?.kind, "up");
 });
 
-test("ANDA-03: a mismatch while monitoring publishes mismatch with ANDA_VERSION_MISMATCH and stops probing", async (t) => {
+void test("ANDA-03: a mismatch while monitoring publishes mismatch with ANDA_VERSION_MISMATCH and stops probing", async (t) => {
   const fake = new FakeAnda();
   await fake.start();
   t.after(() => fake.stop());
@@ -213,7 +213,7 @@ test("ANDA-03: a mismatch while monitoring publishes mismatch with ANDA_VERSION_
 });
 
 // Real timer: the sleeping monitor's timer must be cleared by close (F-P3-05).
-test("ANDA-03: close() cancels the sleeping monitor and leaves no timer", async (t) => {
+void test("ANDA-03: close() cancels the sleeping monitor and leaves no timer", async (t) => {
   const fake = new FakeAnda();
   await fake.start();
   t.after(() => fake.stop());
@@ -228,7 +228,7 @@ test("ANDA-03: close() cancels the sleeping monitor and leaves no timer", async 
 });
 
 // Real timer: the attempt timer must be cleared when close aborts the attempt (F-P3-05).
-test("ANDA-03: close() aborts an in-flight attempt, the server sees the abort, and no timer survives", async (t) => {
+void test("ANDA-03: close() aborts an in-flight attempt, the server sees the abort, and no timer survives", async (t) => {
   const fake = new FakeAnda();
   await fake.start();
   t.after(() => fake.stop());
@@ -251,7 +251,7 @@ test("ANDA-03: close() aborts an in-flight attempt, the server sees the abort, a
   assert.equal(liveTimers(), before, "close must clear the attempt timer");
 });
 
-test("ANDA-02/ANDA-03: connect after close starts a fresh handshake and reaches a healthy engine", async (t) => {
+void test("ANDA-02/ANDA-03: connect after close starts a fresh handshake and reaches a healthy engine", async (t) => {
   const fake = new FakeAnda();
   await fake.start();
   t.after(() => fake.stop());
@@ -280,7 +280,7 @@ test("ANDA-02/ANDA-03: connect after close starts a fresh handshake and reaches 
 // fake engine records a request only once it parses it, so a request the bridge abandoned before the
 // engine parsed it can reach the engine's log after a snapshot of that log. The request timeout is set
 // well above any scheduling stall, so a retry's first attempt is not cut short by its timer under load.
-test("ANDA-03: a failed connect leaves no live timer and no open request, and a retry on the same bridge succeeds", async (t) => {
+void test("ANDA-03: a failed connect leaves no live timer and no open request, and a retry on the same bridge succeeds", async (t) => {
   const fake = new FakeAnda();
   await fake.start();
   t.after(() => fake.stop());
@@ -311,7 +311,7 @@ test("ANDA-03: a failed connect leaves no live timer and no open request, and a 
   assert.equal(sent.length, failed + 1, "the retry's first attempt succeeds");
 });
 
-test("ANDA-03: a connect that exhausts its deadline is retryable, and the retry waits within its own deadline", async (t) => {
+void test("ANDA-03: a connect that exhausts its deadline is retryable, and the retry waits within its own deadline", async (t) => {
   const fake = new FakeAnda();
   await fake.start();
   t.after(() => fake.stop());
@@ -333,7 +333,7 @@ test("ANDA-03: a connect that exhausts its deadline is retryable, and the retry 
 
 // Real timer: a connect must reject at its own deadline, not at the per-attempt request timeout,
 // because each attempt is clamped to the budget that remains (F1).
-test("ANDA-03: a connect against a hung engine rejects at its deadline, not at the request timeout", { timeout: 20000 }, async (t) => {
+void test("ANDA-03: a connect against a hung engine rejects at its deadline, not at the request timeout", { timeout: 20000 }, async (t) => {
   const fake = new FakeAnda();
   await fake.start();
   t.after(() => fake.stop());
@@ -347,11 +347,11 @@ test("ANDA-03: a connect against a hung engine rejects at its deadline, not at t
 
   // The request timeout is 8000 ms (4x the 2000 ms default), so 1000 ms of slack covers timer
   // scheduling only. A rejection at the request timeout would take at least 8000 ms and fail here.
-  assert.ok(elapsed < 1200 + 1000, `a 1200 ms connect must reject near its deadline, took ${elapsed} ms`);
+  assert.ok(elapsed < 1200 + 1000, `a 1200 ms connect must reject near its deadline, took ${String(elapsed)} ms`);
   await fake.waitUntil(() => fake.requests().every((request) => request.aborted));
 });
 
-test("ANDA-03: a connect never sends a request at or after its deadline", async (t) => {
+void test("ANDA-03: a connect never sends a request at or after its deadline", async (t) => {
   const fake = new FakeAnda();
   await fake.start();
   t.after(() => fake.stop());
@@ -368,7 +368,7 @@ test("ANDA-03: a connect never sends a request at or after its deadline", async 
   assert.equal(fake.requestCount(), 3, "a request at the deadline would be a fourth");
 });
 
-test("ANDA-03: a connect with no budget left rejects at once and sends nothing", async (t) => {
+void test("ANDA-03: a connect with no budget left rejects at once and sends nothing", async (t) => {
   const fake = new FakeAnda();
   await fake.start();
   t.after(() => fake.stop());
@@ -379,7 +379,7 @@ test("ANDA-03: a connect with no budget left rejects at once and sends nothing",
   assert.equal(fake.requestCount(), 0, "a connect whose deadline has already passed sends no request");
 });
 
-test("ANDA-03: a connect while a handshake is in flight rejects with a plain Error and sends nothing", async (t) => {
+void test("ANDA-03: a connect while a handshake is in flight rejects with a plain Error and sends nothing", async (t) => {
   const fake = new FakeAnda();
   await fake.start();
   t.after(() => fake.stop());
@@ -402,7 +402,7 @@ test("ANDA-03: a connect while a handshake is in flight rejects with a plain Err
   assert.equal(error.code, "ANDA_UNREACHABLE");
 });
 
-test("ANDA-03: a connect while connected rejects with a plain Error and starts no second monitor", async (t) => {
+void test("ANDA-03: a connect while connected rejects with a plain Error and starts no second monitor", async (t) => {
   const fake = new FakeAnda();
   await fake.start();
   t.after(() => fake.stop());
@@ -414,7 +414,13 @@ test("ANDA-03: a connect while connected rejects with a plain Error and starts n
     sleep: (ms, signal) => {
       waits.push(ms);
       return new Promise<void>((resolve) => {
-        signal.addEventListener("abort", () => resolve(), { once: true });
+        signal.addEventListener(
+          "abort",
+          () => {
+            resolve();
+          },
+          { once: true },
+        );
       });
     },
   });
@@ -428,7 +434,7 @@ test("ANDA-03: a connect while connected rejects with a plain Error and starts n
   assert.equal(fake.requestCount(), 1, "a rejected connect sends nothing");
 });
 
-test("ANDA-03: a mismatch while monitoring is final: a later connect rejects with ANDA_VERSION_MISMATCH and sends nothing", async (t) => {
+void test("ANDA-03: a mismatch while monitoring is final: a later connect rejects with ANDA_VERSION_MISMATCH and sends nothing", async (t) => {
   const fake = new FakeAnda();
   await fake.start();
   t.after(() => fake.stop());
@@ -445,7 +451,7 @@ test("ANDA-03: a mismatch while monitoring is final: a later connect rejects wit
   assert.equal(fake.requestCount(), count, "a bridge that saw a mismatch sends nothing on connect");
 });
 
-test("ANDA-02/ANDA-03: connect, close, connect again succeeds against the fake server and leaves zero timers after close", async (t) => {
+void test("ANDA-02/ANDA-03: connect, close, connect again succeeds against the fake server and leaves zero timers after close", async (t) => {
   const fake = new FakeAnda();
   await fake.start();
   t.after(() => fake.stop());
@@ -465,7 +471,7 @@ test("ANDA-02/ANDA-03: connect, close, connect again succeeds against the fake s
 // The failed up stays pending and is delivered again on the next probe tick, so the listener that
 // failed once receives up again. The snapshot stays up while the delivery is pending: the engine
 // is up, and a failed delivery must not report a contradicting down.
-test("ANDA-03: a listener that throws on up keeps the monitor running and re-delivers up on the next probe tick", { timeout: 5000 }, async (t) => {
+void test("ANDA-03: a listener that throws on up keeps the monitor running and re-delivers up on the next probe tick", { timeout: 5000 }, async (t) => {
   const fake = new FakeAnda();
   await fake.start();
   t.after(() => fake.stop());
@@ -531,7 +537,7 @@ test("ANDA-03: a listener that throws on up keeps the monitor running and re-del
 // Real timers: an async listener whose promise rejects is a failed delivery, the same as a listener
 // that throws (F2). The rejection must not escape as an unhandled rejection, and the event is
 // delivered again on the next probe tick.
-test("ANDA-03: an async listener that rejects is a failed delivery, not an unhandled rejection", { timeout: 5000 }, async (t) => {
+void test("ANDA-03: an async listener that rejects is a failed delivery, not an unhandled rejection", { timeout: 5000 }, async (t) => {
   const fake = new FakeAnda();
   await fake.start();
   t.after(() => fake.stop());
@@ -546,11 +552,12 @@ test("ANDA-03: an async listener that rejects is a failed delivery, not an unhan
   const bridge = new AndaBridge({ url: fake.url(), random: () => 1, backoff: { baseMs: 5, capMs: 20 } });
   t.after(() => bridge.close());
   let failedOnce = false;
-  bridge.subscribe(async (event) => {
+  bridge.subscribe((event) => {
     if (event.kind === "up" && !failedOnce) {
       failedOnce = true;
-      throw new Error("async listener failure");
+      return Promise.reject(new Error("async listener failure"));
     }
+    return Promise.resolve();
   });
   let ups = 0;
   const twoUps = new Promise<void>((resolve) => {
@@ -578,7 +585,7 @@ test("ANDA-03: an async listener that rejects is a failed delivery, not an unhan
 // Real timers: a monitor that fails after its connection was closed must not write the snapshot of
 // the newer connection (F4). Its wait rejects only when its own connection aborts, so the failure
 // lands after a newer connect has started.
-test("ANDA-03: a failure of a superseded monitor does not change the snapshot of a newer connection", { timeout: 5000 }, async (t) => {
+void test("ANDA-03: a failure of a superseded monitor does not change the snapshot of a newer connection", { timeout: 5000 }, async (t) => {
   const fake = new FakeAnda();
   await fake.start();
   t.after(() => fake.stop());
@@ -587,7 +594,13 @@ test("ANDA-03: a failure of a superseded monitor does not change the snapshot of
     random: () => 1,
     sleep: (_ms, signal) =>
       new Promise<void>((_resolve, reject) => {
-        signal.addEventListener("abort", () => reject(new Error("late monitor failure")), { once: true });
+        signal.addEventListener(
+          "abort",
+          () => {
+            reject(new Error("late monitor failure"));
+          },
+          { once: true },
+        );
       }),
   });
   t.after(() => bridge.close());
@@ -604,7 +617,7 @@ test("ANDA-03: a failure of a superseded monitor does not change the snapshot of
 // Real timers: the monitor's own loop fails on its first backoff draw. The monitor's terminal
 // handler records that as down with ANDA_UNREACHABLE, and close still resolves with no unhandled
 // rejection (A1).
-test("ANDA-03: a monitor loop that fails on its own ends cleanly on close and records down with ANDA_UNREACHABLE", { timeout: 5000 }, async (t) => {
+void test("ANDA-03: a monitor loop that fails on its own ends cleanly on close and records down with ANDA_UNREACHABLE", { timeout: 5000 }, async (t) => {
   const fake = new FakeAnda();
   await fake.start();
   t.after(() => fake.stop());
@@ -634,7 +647,7 @@ test("ANDA-03: a monitor loop that fails on its own ends cleanly on close and re
 
 // Real timers: a throwing clock must not make up a stamp (site 448). The transition stays unstamped and undelivered,
 // the monitor keeps probing and retries it, and once the clock works again it is stamped and delivered.
-test("ANDA-03: a throwing clock leaves a transition unstamped and undelivered, and a working clock later stamps and delivers it", { timeout: 5000 }, async (t) => {
+void test("ANDA-03: a throwing clock leaves a transition unstamped and undelivered, and a working clock later stamps and delivers it", { timeout: 5000 }, async (t) => {
   const fake = new FakeAnda();
   await fake.start();
   t.after(() => fake.stop());

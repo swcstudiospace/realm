@@ -63,7 +63,7 @@ type Check = (inspect: unknown, binding: HardeningBinding) => boolean;
 
 const CHECKS: Readonly<Record<HardeningProperty, Check>> = Object.freeze({
   privileged: (inspect) => field(inspect, ["HostConfig", "Privileged"]) === HARDENING_PROFILE.privileged,
-  rootless: (_inspect, binding) => binding.rootless === true,
+  rootless: (_inspect, binding) => binding.rootless,
   "cap-drop": (inspect) => sameStrings(field(inspect, ["HostConfig", "CapDrop"]), HARDENING_PROFILE.capDrop),
   "cap-add": (inspect) => sameStrings(field(inspect, ["HostConfig", "CapAdd"]), HARDENING_PROFILE.capAdd),
   "no-new-privileges": (inspect) => hasNoNewPrivileges(field(inspect, ["HostConfig", "SecurityOpt"])),

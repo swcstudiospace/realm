@@ -1,17 +1,14 @@
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { RealmError, type ErrorCode } from "../../src/core/errors.js";
 import { LibpodClient } from "../../src/runtime/libpod-client.js";
 import { LIBPOD_ROUTES, type LibpodRouteName } from "../../src/runtime/libpod-routes.js";
 import { FakeLibpod, type FakeLibpodOptions, type RecordedRequest } from "../support/fake-libpod.js";
 
-// This file runs from dist/test/runtime, so three levels up is the package root.
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const LABEL_KEY = "io.realm.managed";
 
 async function startFake(
@@ -46,13 +43,13 @@ async function waitForRecorded(fake: FakeLibpod, route: LibpodRouteName, timeout
       return last;
     }
     if (Date.now() >= deadline) {
-      throw new Error(`fake libpod did not record a ${route} request within ${timeoutMs} ms`);
+      throw new Error(`fake libpod did not record a ${route} request within ${String(timeoutMs)} ms`);
     }
     await sleep(5);
   }
 }
 
-test("RT-03: the client exposes exactly the five D-54 methods and no other instance member", () => {
+void test("RT-03: the client exposes exactly the five D-54 methods and no other instance member", () => {
   const methods = Object.getOwnPropertyNames(LibpodClient.prototype)
     .filter((name) => name !== "constructor")
     .sort();
@@ -73,19 +70,13 @@ test("RT-03: the client exposes exactly the five D-54 methods and no other insta
   }
 });
 
-test("RT-03: no exec, attach, or start-exec route string appears in the route table or the client source", () => {
-  const sources = ["src/runtime/libpod-routes.ts", "src/runtime/libpod-client.ts"].map((path) =>
-    readFileSync(join(ROOT, path), "utf8"),
-  );
-  for (const text of sources) {
-    assert.doesNotMatch(text, /exec|attach/i, "the client has no process-start route, by design");
-  }
+void test("RT-03: no exec, attach, or start-exec route appears in the route table", () => {
   for (const route of Object.values(LIBPOD_ROUTES)) {
     assert.doesNotMatch(route.path, /exec|attach|\/start/i);
   }
 });
 
-test("RT-09: list, inspect, stop, and remove round-trip against the fake socket server", async (t) => {
+void test("RT-09: list, inspect, stop, and remove round-trip against the fake socket server", async (t) => {
   const { fake, socketPath } = await startFake(t);
   const store = fake.store;
   store.add({ id: "realm-a", labels: { [LABEL_KEY]: "true", "io.realm.session": "a" }, running: true });
@@ -110,16 +101,16 @@ test("RT-09: list, inspect, stop, and remove round-trip against the fake socket 
   assert.deepEqual(remaining.map((entry) => entry.id), ["realm-b"]);
 });
 
-test("RT-09: removeContainer treats a 404 as success and forwards the force flag", async (t) => {
+void test("RT-09: removeContainer treats a 404 as success and forwards the force flag", async (t) => {
   const { fake, socketPath } = await startFake(t);
   const client = new LibpodClient(socketPath);
   await client.removeContainer("never-created", { force: true });
   const removal = fake.requests().find((request) => request.route === "removeContainer");
   assert.equal(removal?.method, "DELETE");
-  assert.equal(removal?.target, "/libpod/containers/never-created?force=true");
+  assert.equal(removal.target, "/libpod/containers/never-created?force=true");
 });
 
-test("RT-09: list asks for all containers filtered by the exact label pair", async (t) => {
+void test("RT-09: list asks for all containers filtered by the exact label pair", async (t) => {
   const { fake, socketPath } = await startFake(t);
   const client = new LibpodClient(socketPath);
   await client.listContainersByLabel(LABEL_KEY, "true");
@@ -130,7 +121,7 @@ test("RT-09: list asks for all containers filtered by the exact label pair", asy
   assert.deepEqual(JSON.parse(query.get("filters") ?? "null"), { label: [`${LABEL_KEY}=true`] });
 });
 
-test("RT-09: a timed-out request rejects with PODMAN_MACHINE_DOWN and destroys its socket", async (t) => {
+void test("RT-09: a timed-out request rejects with PODMAN_MACHINE_DOWN and destroys its socket", async (t) => {
   const { fake, socketPath } = await startFake(t);
   fake.hangNext("inspectContainer");
   // The timeout only creates the hung request. 1000 ms keeps it clear of scheduling stalls under load.
@@ -140,7 +131,7 @@ test("RT-09: a timed-out request rejects with PODMAN_MACHINE_DOWN and destroys i
   await fake.waitForSocketClose(hung.seq, 2000);
 });
 
-test("RT-09: a socket that does not exist gives PODMAN_MACHINE_DOWN, not a raw transport error", async (t) => {
+void test("RT-09: a socket that does not exist gives PODMAN_MACHINE_DOWN, not a raw transport error", async (t) => {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "realm-libpod-absent-")));
   t.after(() => {
     rmSync(dir, { recursive: true, force: true });
@@ -149,7 +140,7 @@ test("RT-09: a socket that does not exist gives PODMAN_MACHINE_DOWN, not a raw t
   await assertCode(client.info(), "PODMAN_MACHINE_DOWN");
 });
 
-test("RT-03: a malformed or unexpected response gives SCHEMA_INVALID and never a raw throw", async (t) => {
+void test("RT-03: a malformed or unexpected response gives SCHEMA_INVALID and never a raw throw", async (t) => {
   const { fake, socketPath } = await startFake(t);
   const client = new LibpodClient(socketPath);
 
@@ -163,7 +154,7 @@ test("RT-03: a malformed or unexpected response gives SCHEMA_INVALID and never a
   await assertCode(client.listContainersByLabel(LABEL_KEY, "true"), "SCHEMA_INVALID");
 });
 
-test("RT-03: info fails closed when the rootless field is missing", async (t) => {
+void test("RT-03: info fails closed when the rootless field is missing", async (t) => {
   const { fake, socketPath } = await startFake(t, { version: "5.2.0" });
   const client = new LibpodClient(socketPath);
   const info = await client.info();
@@ -173,7 +164,7 @@ test("RT-03: info fails closed when the rootless field is missing", async (t) =>
   await assertCode(client.info(), "SCHEMA_INVALID");
 });
 
-test("RT-03: stopContainer accepts only the documented success statuses and rejects anything else", async (t) => {
+void test("RT-03: stopContainer accepts only the documented success statuses and rejects anything else", async (t) => {
   const { fake, socketPath } = await startFake(t);
   fake.store.add({ id: "realm-x", labels: {}, running: true });
   const client = new LibpodClient(socketPath);
@@ -181,7 +172,7 @@ test("RT-03: stopContainer accepts only the documented success statuses and reje
   await assertCode(client.stopContainer("realm-x", 1000), "SCHEMA_INVALID");
 });
 
-test("RT-03: a container id outside the safe pattern is rejected before any socket request", async (t) => {
+void test("RT-03: a container id outside the safe pattern is rejected before any socket request", async (t) => {
   const { fake, socketPath } = await startFake(t);
   const client = new LibpodClient(socketPath);
   for (const id of ["", "../escape", "a/b", "c?all=true", "-leading", "x".repeat(200)]) {
@@ -191,7 +182,7 @@ test("RT-03: a container id outside the safe pattern is rejected before any sock
   assert.equal(fake.requests().length, 0, "no malformed id may reach the socket");
 });
 
-test("RT-03: a list label key containing '=' or an empty key is rejected before any socket request", async (t) => {
+void test("RT-03: a list label key containing '=' or an empty key is rejected before any socket request", async (t) => {
   const { fake, socketPath } = await startFake(t);
   const client = new LibpodClient(socketPath);
   await assertCode(client.listContainersByLabel("a=b", "true"), "SCHEMA_INVALID");
@@ -199,7 +190,7 @@ test("RT-03: a list label key containing '=' or an empty key is rejected before 
   assert.equal(fake.requests().length, 0);
 });
 
-test("RT-03: the client refuses a socket path that is not absolute", () => {
+void test("RT-03: the client refuses a socket path that is not absolute", () => {
   assert.throws(
     () => new LibpodClient("podman.sock"),
     (error: unknown) => error instanceof RealmError && error.code === "SCHEMA_INVALID",

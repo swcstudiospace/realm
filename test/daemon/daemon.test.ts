@@ -6,11 +6,10 @@
 
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createConnection, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import { makeRealmError, RealmError } from "../../src/core/errors.js";
 import { displayStatus, STATUS_LABELS } from "../../src/core/status.js";
 import {
@@ -27,16 +26,13 @@ import {
   type StartDaemonOptions,
 } from "../../src/daemon/daemon.js";
 import type { CheckResult } from "../../src/doctor/checks.js";
+import type { PodmanProbeResult } from "../../src/runtime/podman-probe.js";
 import { controlSocketPath } from "../../src/session/paths.js";
 import type { ToolOutcome } from "../../src/tools/dispatch.js";
 import { FakeBridge } from "../support/fake-bridge.js";
 import { FakeExecutionService } from "../support/fake-execution.js";
 import { FakeContainerStore, FakeLibpod } from "../support/fake-libpod.js";
 import { FakeOpenShell } from "../support/fake-openshell.js";
-
-// This file runs from dist/test/daemon, so three levels up is the package root.
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
-const DAEMON_SOURCE = join(ROOT, "src", "daemon", "daemon.ts");
 
 const IMAGE = `registry.example.com/realm/workload@sha256:${"0".repeat(64)}`;
 const CLOCK_ISO = "2026-10-21T09:30:00.000Z";
@@ -102,13 +98,13 @@ function daemonParts(fixture: Fixture, overrides?: Partial<StartDaemonOptions>):
     clock: () => new Date(CLOCK_ISO),
     runOpenShell: () =>
       Promise.resolve({ exitCode: 0, stdout: "", stderr: "", truncated: false }),
-    sweep: async () => {
+    sweep: () => {
       events.push("sweep");
-      return 0;
+      return Promise.resolve(0);
     },
-    probe: async () => {
+    probe: () => {
       events.push("probe");
-      return { ok: true, version: "5.0.0" };
+      return Promise.resolve<PodmanProbeResult>({ ok: true, version: "5.0.0" });
     },
     ...overrides,
   };
@@ -142,7 +138,9 @@ async function awaitDone(daemon: StartedDaemon): Promise<void> {
     await Promise.race([
       daemon.done,
       new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => reject(new Error("daemon done did not resolve")), 5000);
+        timer = setTimeout(() => {
+          reject(new Error("daemon done did not resolve"));
+        }, 5000);
       }),
     ]);
   } finally {
@@ -173,7 +171,7 @@ function bounded<T>(pending: Promise<T>, what: string): Promise<T> {
     pending,
     new Promise<never>((_resolve, reject) => {
       timer = setTimeout(() => {
-        reject(new Error(`${what} did not settle within ${WAIT_MS} ms`));
+        reject(new Error(`${what} did not settle within ${String(WAIT_MS)} ms`));
       }, WAIT_MS);
     }),
   ]).finally(() => {
@@ -197,7 +195,7 @@ function sendRawLine(socketPath: string, line: string): Promise<string> {
         resolve(text.slice(0, end));
       }
     });
-    socket.once("error", (cause: unknown) => {
+    socket.once("error", (cause: Error) => {
       clearTimeout(timer);
       socket.destroy();
       reject(cause);
@@ -222,7 +220,7 @@ function replyOn(socket: Socket, line: string): Promise<string> {
   });
 }
 
-test("CLI-01: buildDaemonHandle wires the shared composition root and answers snapshot plus dispatcher status (P6-D12)", async () => {
+void test("CLI-01: buildDaemonHandle wires the shared composition root and answers snapshot plus dispatcher status (P6-D12)", async () => {
   const fixture = makeDirs();
   const { options } = daemonParts(fixture);
   const handle = buildDaemonHandle(options);
@@ -232,7 +230,7 @@ test("CLI-01: buildDaemonHandle wires the shared composition root and answers sn
 
   const outcome = await handle.dispatcher.call({ status: {} });
   assert.equal(outcome.outcome, "done");
-  if (outcome.outcome !== "done" || outcome.tool !== "status") {
+  if (outcome.tool !== "status") {
     assert.fail("expected a done status");
   }
   assert.deepEqual(outcome.value.snapshot, snapshot);
@@ -240,7 +238,7 @@ test("CLI-01: buildDaemonHandle wires the shared composition root and answers sn
   await handle.close();
 });
 
-test("RT-04, D-47: buildDaemonHandle builds with no AgentOS driver, and an up is refused with AGENTOS_NOT_CONFIGURED while no container is created", async (t) => {
+void test("RT-04, D-47: buildDaemonHandle builds with no AgentOS driver, and an up is refused with AGENTOS_NOT_CONFIGURED while no container is created", async (t) => {
   const fixture = makeDirs();
   const socketPath = join(fixture.base, "podman.sock");
   const store = new FakeContainerStore();
@@ -274,7 +272,7 @@ test("RT-04, D-47: buildDaemonHandle builds with no AgentOS driver, and an up is
   assert.equal(store.list().length, 0, "no container is created");
 });
 
-test("RT-06: startDaemon with no owner binds the socket and answers status over a real socket pair", async (t) => {
+void test("RT-06: startDaemon with no owner binds the socket and answers status over a real socket pair", async (t) => {
   const fixture = makeDirs();
   const { options } = daemonParts(fixture);
   const daemon = await startDaemon(options);
@@ -291,7 +289,7 @@ test("RT-06: startDaemon with no owner binds the socket and answers status over 
   await awaitDone(daemon);
 });
 
-test("RT-06: a second startDaemon against the same state directory refuses with LOCK_CONFLICT (single owner)", async (t) => {
+void test("RT-06: a second startDaemon against the same state directory refuses with LOCK_CONFLICT (single owner)", async (t) => {
   const fixture = makeDirs();
   const first = await startDaemon(daemonParts(fixture).options);
   t.after(() => cleanupDaemon(first));
@@ -312,7 +310,7 @@ test("RT-06: a second startDaemon against the same state directory refuses with 
   await awaitDone(first);
 });
 
-test("CLI-01: startDaemon runs the reap sweep before serving and deletes pre-existing records (P6-D4)", async (t) => {
+void test("CLI-01: startDaemon runs the reap sweep before serving and deletes pre-existing records (P6-D4)", async (t) => {
   const fixture = makeDirs();
   const { options, events } = daemonParts(fixture);
   mkdirSync(join(fixture.stateDir, "sessions"), { recursive: true });
@@ -333,7 +331,7 @@ test("CLI-01: startDaemon runs the reap sweep before serving and deletes pre-exi
   await awaitDone(daemon);
 });
 
-test("CLI-01: a failed sweep rejects startup before any record is touched (P6-D4)", async () => {
+void test("CLI-01: a failed sweep rejects startup before any record is touched (P6-D4)", async () => {
   const fixture = makeDirs();
   mkdirSync(join(fixture.stateDir, "sessions"), { recursive: true });
   const kept = join(fixture.stateDir, "sessions", "kept-session.json");
@@ -352,10 +350,10 @@ test("CLI-01: a failed sweep rejects startup before any record is touched (P6-D4
   );
 });
 
-test("CLI-01: up with a failing probe answers the probe code without starting (P6-D5)", async (t) => {
+void test("CLI-01: up with a failing probe answers the probe code without starting (P6-D5)", async (t) => {
   const fixture = makeDirs();
   const { options, exec, events } = daemonParts(fixture, {
-    probe: async () => ({ ok: false, code: "PODMAN_MISSING", reason: "podman is missing" }),
+    probe: () => Promise.resolve<PodmanProbeResult>({ ok: false, code: "PODMAN_MISSING", reason: "podman is missing" }),
   });
   const daemon = await startDaemon(options);
   t.after(() => cleanupDaemon(daemon));
@@ -374,7 +372,7 @@ test("CLI-01: up with a failing probe answers the probe code without starting (P
   await awaitDone(daemon);
 });
 
-test("CLI-01: up with a healthy probe starts the session and answers the active snapshot", async (t) => {
+void test("CLI-01: up with a healthy probe starts the session and answers the active snapshot", async (t) => {
   const fixture = makeDirs();
   const { options, events } = daemonParts(fixture);
   const daemon = await startDaemon(options);
@@ -395,7 +393,7 @@ test("CLI-01: up with a healthy probe starts the session and answers the active 
   await awaitDone(daemon);
 });
 
-test("CLI-01: up with a missing workspaceRoot refuses with SCHEMA_INVALID", async (t) => {
+void test("CLI-01: up with a missing workspaceRoot refuses with SCHEMA_INVALID", async (t) => {
   const fixture = makeDirs();
   const { options } = daemonParts(fixture);
   const daemon = await startDaemon(options);
@@ -411,16 +409,17 @@ test("CLI-01: up with a missing workspaceRoot refuses with SCHEMA_INVALID", asyn
   await awaitDone(daemon);
 });
 
-test("CLI-01: doctor dispatches runChecks over the socket", async (t) => {
+void test("CLI-01: doctor dispatches runChecks over the socket", async (t) => {
   const fixture = makeDirs();
   const report: readonly CheckResult[] = [
     { id: "policy-file", status: "pass", detail: "policy file ok", fix: null },
   ];
   const { options } = daemonParts(fixture, {
-    runChecks: async (doctorOptions) => {
-      assert.equal(doctorOptions.stateDir, fixture.stateDir);
-      return report;
-    },
+    runChecks: (doctorOptions) =>
+      new Promise<readonly CheckResult[]>((resolve) => {
+        assert.equal(doctorOptions.stateDir, fixture.stateDir);
+        resolve(report);
+      }),
   });
   const daemon = await startDaemon(options);
   t.after(() => cleanupDaemon(daemon));
@@ -457,7 +456,7 @@ function recordDispatcherCalls(
   return record;
 }
 
-test("RT-06: a tool request reaches the dispatcher exactly once and answers its outcome (P6-D12)", async (t) => {
+void test("RT-06: a tool request reaches the dispatcher exactly once and answers its outcome (P6-D12)", async (t) => {
   const fixture = makeDirs();
   const { options } = daemonParts(fixture);
   const daemon = await startDaemon(options);
@@ -481,7 +480,7 @@ test("RT-06: a tool request reaches the dispatcher exactly once and answers its 
   await awaitDone(daemon);
 });
 
-test("RT-06: a tool request without a tool object refuses with SCHEMA_INVALID and never reaches the dispatcher (P6-D2, P6-D12)", async (t) => {
+void test("RT-06: a tool request without a tool object refuses with SCHEMA_INVALID and never reaches the dispatcher (P6-D2, P6-D12)", async (t) => {
   const fixture = makeDirs();
   const { options } = daemonParts(fixture);
   const daemon = await startDaemon(options);
@@ -507,7 +506,7 @@ test("RT-06: a tool request without a tool object refuses with SCHEMA_INVALID an
   await awaitDone(daemon);
 });
 
-test("RT-06: a dispatcher that throws a RealmError answers that error's catalogue code (P6-D12)", async (t) => {
+void test("RT-06: a dispatcher that throws a RealmError answers that error's catalogue code (P6-D12)", async (t) => {
   const fixture = makeDirs();
   const { options } = daemonParts(fixture);
   const daemon = await startDaemon(options);
@@ -527,7 +526,7 @@ test("RT-06: a dispatcher that throws a RealmError answers that error's catalogu
   await awaitDone(daemon);
 });
 
-test("RT-06: a refused outcome answers its catalogue code and no other field (P6-D12)", async (t) => {
+void test("RT-06: a refused outcome answers its catalogue code and no other field (P6-D12)", async (t) => {
   const fixture = makeDirs();
   const { options } = daemonParts(fixture);
   const daemon = await startDaemon(options);
@@ -555,7 +554,7 @@ test("RT-06: a refused outcome answers its catalogue code and no other field (P6
   await awaitDone(daemon);
 });
 
-test("RT-06: an oversized request line is refused with a null-id SCHEMA_INVALID, and the dispatcher never sees it (P6-D2, P6-D12)", async (t) => {
+void test("RT-06: an oversized request line is refused with a null-id SCHEMA_INVALID, and the dispatcher never sees it (P6-D2, P6-D12)", async (t) => {
   const fixture = makeDirs();
   const { options } = daemonParts(fixture);
   const daemon = await startDaemon(options);
@@ -573,7 +572,7 @@ test("RT-06: an oversized request line is refused with a null-id SCHEMA_INVALID,
   await awaitDone(daemon);
 });
 
-test("CLI-01: a status reply carries the policy mode the daemon loaded (P6-D12)", async (t) => {
+void test("CLI-01: a status reply carries the policy mode the daemon loaded (P6-D12)", async (t) => {
   const fixture = makeDirs();
   const policyPath = writePolicy(fixture, "fail-closed-policy.json", {
     mode: "fail-closed",
@@ -593,7 +592,7 @@ test("CLI-01: a status reply carries the policy mode the daemon loaded (P6-D12)"
   await awaitDone(daemon);
 });
 
-test("RT-06: unknown methods and malformed lines refuse with SCHEMA_INVALID and carry the id", async (t) => {
+void test("RT-06: unknown methods and malformed lines refuse with SCHEMA_INVALID and carry the id", async (t) => {
   const fixture = makeDirs();
   const { options } = daemonParts(fixture);
   const daemon = await startDaemon(options);
@@ -610,7 +609,7 @@ test("RT-06: unknown methods and malformed lines refuse with SCHEMA_INVALID and 
   await awaitDone(daemon);
 });
 
-test("CLI-01: down drains, closes, removes the socket, and resolves done", async (t) => {
+void test("CLI-01: down drains, closes, removes the socket, and resolves done", async (t) => {
   const fixture = makeDirs();
   const { options } = daemonParts(fixture);
   const daemon = await startDaemon(options);
@@ -627,7 +626,7 @@ test("CLI-01: down drains, closes, removes the socket, and resolves done", async
   await assert.rejects(sendRequest(daemon.socketPath, { id: "after", method: "status" }));
 });
 
-test("CLI-01: a second down is a no-op that still answers", async (t) => {
+void test("CLI-01: a second down is a no-op that still answers", async (t) => {
   const fixture = makeDirs();
   const { options } = daemonParts(fixture);
   const daemon = await startDaemon(options);
@@ -645,14 +644,7 @@ test("CLI-01: a second down is a no-op that still answers", async (t) => {
   assert.equal(existsSync(daemon.socketPath), false);
 });
 
-test("RT-06: daemon.ts parses no argv, spawns no daemon, and reads no process environment (P6-D1)", () => {
-  const source = readFileSync(DAEMON_SOURCE, "utf8");
-  for (const forbidden of ["process.argv", "process.env", "process.exit", "detached"]) {
-    assert.ok(!source.includes(forbidden), `daemon.ts must not contain ${forbidden}`);
-  }
-});
-
-test("QUAL-01: a connection that waits on a failed start is answered with the start's refusal code", async () => {
+void test("QUAL-01: a connection that waits on a failed start is answered with the start's refusal code", async () => {
   const fixture = makeDirs();
   let sweepEntered!: () => void;
   const entered = new Promise<void>((resolve) => {
@@ -690,7 +682,7 @@ test("QUAL-01: a connection that waits on a failed start is answered with the st
   assert.deepEqual(JSON.parse(await bounded(waiting, "the refusal")), { id: null, error: { code: "REALM_STOPPING" } });
 });
 
-test("QUAL-01: a connection that never completes its request line is answered TOOL_TIMEOUT", async (t) => {
+void test("QUAL-01: a connection that never completes its request line is answered TOOL_TIMEOUT", async (t) => {
   const fixture = makeDirs();
   const { options } = daemonParts(fixture, { timeoutMs: 100 });
   const daemon = await startDaemon(options);
@@ -699,7 +691,7 @@ test("QUAL-01: a connection that never completes its request line is answered TO
   assert.deepEqual(JSON.parse(raw), { id: null, error: { code: "TOOL_TIMEOUT" } });
 });
 
-test("QUAL-01: a down whose socket file cannot be removed answers SCHEMA_INVALID and still stops", async (t) => {
+void test("QUAL-01: a down whose socket file cannot be removed answers SCHEMA_INVALID and still stops", async (t) => {
   const fixture = makeDirs();
   const { options } = daemonParts(fixture);
   const daemon = await startDaemon(options);
@@ -725,7 +717,7 @@ test("QUAL-01: a down whose socket file cannot be removed answers SCHEMA_INVALID
   await awaitDone(daemon);
 });
 
-test("QUAL-01: a failed start whose socket file cannot be removed keeps its code and names the removal cause", async () => {
+void test("QUAL-01: a failed start whose socket file cannot be removed keeps its code and names the removal cause", async () => {
   const fixture = makeDirs();
   const socketPath = controlSocketPath(fixture.stateDir);
   const { options } = daemonParts(fixture, {
@@ -748,19 +740,19 @@ test("QUAL-01: a failed start whose socket file cannot be removed keeps its code
   );
 });
 
-test("QUAL-01: a reply that cannot be encoded is answered SCHEMA_INVALID, not a silent close", async (t) => {
+void test("QUAL-01: a reply that cannot be encoded is answered SCHEMA_INVALID, not a silent close", async (t) => {
   const fixture = makeDirs();
   const { options } = daemonParts(fixture);
   const daemon = await startDaemon(options);
   t.after(() => cleanupDaemon(daemon));
   // A BigInt cannot be JSON-encoded, so the outcome cannot be written as dispatched.
   const unencodable: unknown = { outcome: "done", tool: "status", value: { size: BigInt(1) } };
-  recordDispatcherCalls(daemon, async () => unencodable as ToolOutcome);
+  recordDispatcherCalls(daemon, () => Promise.resolve(unencodable as ToolOutcome));
   const reply = await sendRequest(daemon.socketPath, { id: "big-1", method: "tool", params: { tool: { status: {} } } });
   assert.deepEqual(reply, { id: "big-1", error: { code: "SCHEMA_INVALID" } });
 });
 
-test("QUAL-01: a listening server that fails stops the daemon, and done rejects with that error's code", async (t) => {
+void test("QUAL-01: a listening server that fails stops the daemon, and done rejects with that error's code", async (t) => {
   const fixture = makeDirs();
   const servers: Server[] = [];
   const { options } = daemonParts(fixture, {
@@ -793,14 +785,16 @@ test("QUAL-01: a listening server that fails stops the daemon, and done rejects 
   assert.equal(outcome, "REALM_NOT_ACTIVE");
 });
 
-test("CLI-01: a fresh start makes the state and run directories 0700 and leaves a missing ancestor at the default mode (P6-D3)", async (t) => {
+void test("CLI-01: a fresh start makes the state and run directories 0700 and leaves a missing ancestor at the default mode (P6-D3)", async (t) => {
   const fixture = makeDirs();
   const ancestor = join(fixture.base, "ancestor");
   const stateDir = join(ancestor, "state");
   const { options } = daemonParts({ ...fixture, stateDir });
+  const probe = join(fixture.base, "default-mode-probe");
+  mkdirSync(probe);
   const daemon = await startDaemon(options);
   t.after(() => cleanupDaemon(daemon));
   assert.equal(statSync(stateDir).mode & 0o777, 0o700);
   assert.equal(statSync(join(stateDir, "run")).mode & 0o777, 0o700);
-  assert.equal(statSync(ancestor).mode & 0o777, 0o777 & ~process.umask());
+  assert.equal(statSync(ancestor).mode & 0o777, statSync(probe).mode & 0o777, "the missing ancestor keeps the default mode");
 });
