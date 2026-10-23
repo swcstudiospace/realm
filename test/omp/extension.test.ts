@@ -140,7 +140,7 @@ void test("OMP-01: the Omp entry and the CLI dial one control socket, the state 
   };
   const sessionStart = handlers.get("session_start");
   assert.ok(sessionStart, "the extension registers a session_start handler");
-  sessionStart(ctx);
+  sessionStart({ type: "session_start" }, ctx);
   const upHit = await within(firstUp, 5_000, "no control socket received an up request");
   assert.equal(upHit.socketPath, configSocket, "the Omp entry attaches to the state directory the runtime config names");
 

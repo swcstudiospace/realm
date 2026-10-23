@@ -197,17 +197,17 @@ class FakeDaemon implements DaemonClient {
 }
 
 class FakePi implements OmpExtensionApi {
-  readonly startHandlers: Array<(ctx: OmpSessionContext) => void> = [];
+  readonly startHandlers: Array<(event: unknown, ctx: OmpSessionContext) => void> = [];
   readonly shutdownHandlers: Array<() => void> = [];
   readonly toolCallHandlers: Array<(call: HostToolCall) => Promise<HostToolVerdict | undefined>> = [];
   readonly commands = new Map<string, RealmRetryCommand>();
 
-  on(event: "session_start", handler: (ctx: OmpSessionContext) => void): void;
+  on(event: "session_start", handler: (event: unknown, ctx: OmpSessionContext) => void): void;
   on(event: "session_shutdown", handler: () => void): void;
   on(event: "tool_call", handler: (call: HostToolCall) => Promise<HostToolVerdict | undefined>): void;
   on(event: string, handler: unknown): void {
     if (event === "session_start") {
-      this.startHandlers.push(handler as (ctx: OmpSessionContext) => void);
+      this.startHandlers.push(handler as (event: unknown, ctx: OmpSessionContext) => void);
       return;
     }
     if (event === "session_shutdown") {
@@ -267,7 +267,10 @@ function makeFixture(options: FixtureOptions = {}): Fixture {
 function startHandlerOf(pi: FakePi): (ctx: OmpSessionContext) => void {
   const handler = pi.startHandlers[0];
   assert.ok(handler !== undefined, "session_start handler is registered");
-  return handler;
+  // The host calls a session_start handler with the event first and the context second.
+  return (ctx) => {
+    handler({ type: "session_start" }, ctx);
+  };
 }
 
 function toolCallOf(pi: FakePi): (call: HostToolCall) => Promise<HostToolVerdict | undefined> {
