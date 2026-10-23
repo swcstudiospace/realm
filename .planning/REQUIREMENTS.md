@@ -102,14 +102,14 @@ All v1 requirements are hypotheses until shipped and verified.
 
 ### Host adapters (HOST)
 
-- [ ] **HOST-01**: Claude Code and Grok Build share one plugin bundle (`adapters/claude-plugin`) whose manifest and MCP entry start `realm mcp`; each host's own validator accepts it
+- [x] **HOST-01**: Claude Code and Grok Build share one plugin bundle (`adapters/claude-plugin`) whose manifest and MCP entry start `realm mcp`; each host's own validator accepts it
 - [ ] **HOST-02**: Muse Code, Hermes Agent, and Prime Agent each have an adapter bundle (`adapters/muse-code`, `adapters/hermes-agent`, `adapters/prime-agent`) and an MCP snippet, each accepted by that host's own validator in an isolated directory
 - [ ] **HOST-03**: No host configuration outside this repository is changed without explicit approval; the adapter bundles ship in the npm package and the pack check asserts each manifest
 
 ### Omp live verification (OMP-LIVE)
 
 - [ ] **OMP-LIVE-01**: A live Omp session loading the built extension with `-e` under an isolated profile attaches to the Realm daemon for the workspace
-- [ ] **OMP-LIVE-02**: When the daemon cannot attach, the status item states disconnected with its reason, never active
+- [x] **OMP-LIVE-02**: When the daemon cannot attach, the status item states disconnected with its reason, never active
 - [ ] **OMP-LIVE-03**: The retry command reattaches from disconnected in the same live session
 - [ ] **OMP-LIVE-04**: Shutdown of the Omp session leaves the Realm daemon running
 
@@ -186,11 +186,11 @@ Filled by the roadmap. Each v1 requirement maps to exactly one phase.
 | QUAL-01 | Phase 1 | Complete (amended 2026-10-22) |
 | QUAL-02 | Phase 2 | Complete |
 | QUAL-03 | Phase 7 | Complete |
-| HOST-01 | Phase 8 | Pending |
-| HOST-02 | Phase 8 | Pending |
-| HOST-03 | Phase 10 | Pending |
-| OMP-LIVE-01 | Phase 9 | Pending |
-| OMP-LIVE-02 | Phase 9 | Pending |
-| OMP-LIVE-03 | Phase 9 | Pending |
-| OMP-LIVE-04 | Phase 9 | Pending |
-| UI-01 | Phase 9 | Pending |
+| HOST-01 | Phase 8 | Complete (Claude Code validate passes with 2 warnings; Grok validate passes; MCP entry is realm mcp) |
+| HOST-02 | Phase 8 | Partial (Muse and Hermes validators pass; Prime has no validator, isolated install and list pass) |
+| HOST-03 | Phase 10 | Pending (pack check and release 0.2.0 not yet run) |
+| OMP-LIVE-01 | Phase 9 | Not met on this host (daemon refuses at startup; AgentOS unbound) |
+| OMP-LIVE-02 | Phase 9 | Complete (live: disconnected with the daemon's own reason; never active) |
+| OMP-LIVE-03 | Phase 9 | Partial (retry re-runs the attach in the same session; reattach to active not reachable here) |
+| OMP-LIVE-04 | Phase 9 | Pending (no daemon survives on this host) |
+| UI-01 | Phase 9 | Partial (status item from launch; non-blocking not demonstrated) |
