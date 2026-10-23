@@ -162,7 +162,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 | 5. Omp Plugin, MCP, and ACP Surfaces | 6/6 | Complete (verification deferred: human) | - |
 | 6. CLI, Daemon, and Host Packaging | 6/6 | Complete (verification deferred: human — 06-VERIFICATION.md, 5/5 must-haves, 6 live items) | - |
 | 7. Policy Reference and Security Review | 3 units, no PLAN files | Complete (verification deferred: human — 07-VERIFICATION.md, 9/9 must-haves, 5 human items) | - |
-| 8. Host Adapter Bundles | 0/4 | Not started | - |
-| 9. Live Omp Verification | 0/3 | Not started | - |
-| 10. Docs, Packaging, and Release 0.2.0 | 0/4 | Not started | - |
+| 8. Host Adapter Bundles | 0/4 | In progress: bundles committed (b7e9e1c); host validators pending (owner) | - |
+| 9. Live Omp Verification | 0/3 | Blocked: live run and attach scope pending (owner); OMP-LIVE-01, -03, -04 need Podman 5.x and an AgentOS driver | - |
+| 10. Docs, Packaging, and Release 0.2.0 | 0/4 | In progress: docs, pack assertions, and changelog done; MCP parity and PR held | - |
 | 11. Milestone v2.0 Close | 0/1 | Not started | - |

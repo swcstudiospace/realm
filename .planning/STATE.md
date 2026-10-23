@@ -27,10 +27,10 @@ See: .planning/PROJECT.md (updated 2026-10-22)
 
 ## Current Position
 
-Phase: Milestone v2.0, phase 8 (Host Adapter Bundles)
+Phase: Milestone v2.0, phases 8 to 10 in progress; phase 9 blocked on the live run and an attach-scope decision; phase 11 not started
 Plan: —
-Status: In progress
-Last activity: 2026-10-22 — Milestone v1.0 completed and archived
+Status: Paused for the owner: validators, the live Omp run, and decisions (see Blockers/Concerns)
+Last activity: 2026-10-23 — v2.0 orchestration pass: live procedure checked against omp help; blockers recorded
 
 ## Performance Metrics
 
@@ -93,6 +93,9 @@ Open follow-ups: the AgentOS sandbox runner in the follow-up milestone (RT-04, C
 
 - Approvals: ship done (PRs #1 to #3 merged through ultrathink-ship, PR #4 archives v1.0; the ship CLI ran with --ignore-gsd while the GSD roadmap was incomplete); licence done (AGPL-3.0-only); CI done (verify and release on main, and the docs site built on pull requests); README done. Still open: confirmation of the FS-02 accepted approximation, awaiting the user.
 - Host Podman is 4.9.3, below OpenShell's 5.x requirement. Podman-gated checks are deferred to a Podman 5.x host.
+- v2.0 live Omp (OMP-LIVE-01 to 04, UI-01): the owner runs the procedure in docs/integration/omp.md. On this host attach cannot succeed: the MCP smoke run refuses with DAEMON_START_TIMEOUT, and an unbound AgentOS makes realm up refuse with AGENTOS_NOT_CONFIGURED. OMP-LIVE-01, -03, and -04 need Podman 5.x and an AgentOS driver, or the owner's explicit decision that a truthful disconnected status satisfies "attaches".
+- v2.0 host validators (HOST-01, HOST-02): the owner runs them in isolated directories. The Hermes Python shim decision is open.
+- v2.0 ship (HOST-03, release 0.2.0): on hold until the owner's live checks are done. ultrathink-ship assess reports not done: the GSD roadmap counts 0 of 7, and archived v1.0 verifications are 03 and 06 gaps_found, 04, 05, and 07 human_needed.
 - Omp host write and edit interception is not documented (OQ-P5-02). The guard blocks writes while the policy mode is unknown. Audit G-09 part 5.4 stays open for this reason.
 - The Anda licence conflict still blocks vendoring Anda code.
 - Test timing: the lifecycle tests use wall-clock windows, widened to 1 to 4 s on this loaded host. Deterministic seams are a follow-up.
@@ -129,8 +132,8 @@ Detail, by phase: Phase 3 covers RT-01, RT-02, RT-03, RT-09, and the live parts 
 ## Session Continuity
 
 Last session: 2026-10-22
-Stopped at: v1.0 archived on 2026-10-22 after PRs #1 to #3 merged. Releases v0.1.0 and v0.1.1 are published, and the docs site is live at https://swcstudiospace.github.io/realm/. Waiting on: confirmation of the FS-02 accepted approximation, and live verification on a Podman 5.x host.
-Resume file: None. Next action on resume: confirm or reopen FS-02, then choose the scope of the next milestone (the AgentOS runner follow-up), and run the live verification on a Podman 5.x host.
+Stopped at: v2.0 paused for the owner's validators, live Omp run, and decisions. Commits so far: b7e9e1c (adapter bundles, MCP startup fix, H1 anchoring), then the runbook and this record.
+Resume file: None. Next action on resume: the owner runs the validators and the live procedure in docs/integration/omp.md, and decides the AgentOS scope for OMP-LIVE-01, -03, and -04 and the attach reading. The orchestrator then resumes phases 8 to 10.
 
 Recorded commits (closure run): 72817e9 (private flag restored, engines >=22.13.0); 390f511 (causeCode and catalogue codes, host paths, lifecycle bound, root identity, exec margin); b6bc892 (daemon entry, AgentOS fail-closed, catalogue refusals, per-method control bounds); 8088159 (daemon owns sessions; tool method; daemon client; Omp and MCP attach); 4b1d4ab (smoke fixes: CLI probe, up and down exits, state-dir 0700); c55056a (traceability: requirements by evidence, spike facts, runtime config, Omp attach contract); a999c17 (audit gap closure: realm acp, refusal code mapping, one state-dir resolver, Omp status, pinned-root rebind, catch-site fixes, daemon server-failure stop); dd02034 (re-audit, planning, and docs); 54bc236 (MCP tool-call diagnostic); plus the decisions commit (see git log).
 
@@ -145,7 +148,8 @@ Recorded commits (earlier): e949ad3, 53fc919, 26ab145 (phases 1 to 3); 6b28fa4 a
 - 2026-10-22 gap closure: fixes for G-03, G-05 to G-08, and G-10; G-04 reduced to nine sites in the named exceptions. Fixed in the run: a typecheck error in the daemon e2e test; a hang in the daemon test (scratch-dir cleanup order); three lifecycle timing windows widened on the loaded host; one CLI usage assertion changed from wording to behaviour; an unused parameter removed in the daemon test; an MCP tool-call defect now leaves a diagnostic.
 - 2026-10-22 re-audit: overall gaps_found before decisions. QUAL-01 open; FS-02 and OMP-03 accepted approximations pending decisions.
 - 2026-10-22 decisions: AgentOS deferred; QUAL-01 amended with the named exceptions; containment default kept advisory; OMP-03 accepted. A count correction: the first summary said 7 deliberate and 3 undocumented sites; the re-audit actually has 8 deliberate, 1 documented, and 1 undocumented (fixed). Gates at 54bc236: typecheck 0, lint 0, test 0 (1114 total, 1105 pass, 0 fail, 9 skipped), integration 0, build 0.
+- 2026-10-23 v2.0 orchestration pass: phases 8 to 10 marked in progress with evidence; the live procedure in docs/integration/omp.md checked against omp --help; check:mcp exits 0 (fail-closed); blockers recorded here.
 
 ## Operator Next Steps
 
-- Start the next milestone with /gsd-new-milestone
+- Finish v2.0: run the validators and the live Omp procedure, decide the AgentOS scope, then ultrathink-ship (on hold until then).
