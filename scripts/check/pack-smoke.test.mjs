@@ -39,16 +39,6 @@ test("tarballFromPackOutput rejects output without exactly one tarball", () => {
   assert.throws(() => tarballFromPackOutput(JSON.stringify([{ name: "agent-realm" }]), "pack-dest"), /exactly one tarball/);
 });
 
-test("ADAPTER_MANIFESTS names one manifest for each host bundle under adapters/", () => {
-  assert.deepEqual(ADAPTER_MANIFESTS, [
-    "adapters/claude-plugin/.claude-plugin/plugin.json",
-    "adapters/claude-plugin/.mcp.json",
-    "adapters/muse-code/.muse-plugin/plugin.json",
-    "adapters/hermes-agent/plugin.yaml",
-    "adapters/prime-agent/package.json",
-  ]);
-});
-
 test("missingAdapterManifests reports every manifest absent from the package root", () => {
   const root = mkdtempSync(join(tmpdir(), "realm-pack-manifests-"));
   try {

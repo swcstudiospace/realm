@@ -23,7 +23,8 @@ export const ADAPTER_MANIFESTS = [
   "adapters/claude-plugin/.claude-plugin/plugin.json",
   "adapters/claude-plugin/.mcp.json",
   "adapters/muse-code/.muse-plugin/plugin.json",
-  "adapters/hermes-agent/plugin.yaml",
+  "adapters/hermes-agent/plugin.json",
+  "adapters/hermes-agent/mcp.json",
   "adapters/prime-agent/package.json",
 ];
 
