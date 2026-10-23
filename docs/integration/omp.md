@@ -1,7 +1,7 @@
 # Omp integration note
 
 Status: gate note (FOUND-03, decision D-03, spec q4). The plugin code now exists: the extension entry is `./dist/src/omp/extension.js`, and the plugin attaches to the daemon.
-Blocks: none. The plugin lives under `src/omp/`, its entry is `./dist/src/omp/extension.js`, and this note does not describe a live host run.
+Blocks: none. The plugin lives under `src/omp/`, its entry is `./dist/src/omp/extension.js`. The live run of 2026-10-23 is under Live verification.
 
 ## Official sources read
 
@@ -103,7 +103,7 @@ No. No file under `plugin/` is created. No manifest file is written. The example
 
 ## Entry and attach (closure, 2026-10-22)
 
-Sources: `package.json`, `src/omp/extension.ts`, `src/omp/plugin.ts`, and `src/daemon/client.ts`. No live Omp host session has run. The smoke run (commit 4b1d4ab) covered the built CLI and daemon only, so this section describes the attach path from source reading and makes no claim about a live Omp host.
+Sources: `package.json`, `src/omp/extension.ts`, `src/omp/plugin.ts`, and `src/daemon/client.ts`. This section describes the attach path from source reading. The live run is under Live verification.
 
 Entry. `package.json` declares `"omp": { "extensions": ["./dist/src/omp/extension.js"] }`. The module's default export is `realmExtension(pi)`. It is the only module in the Omp wiring that reads `process.env`. It resolves the state directory and the control socket path once, and passes an `attachDaemon` function to `registerRealmPlugin` (`src/omp/extension.ts`, `src/omp/plugin.ts`).
 
@@ -121,52 +121,51 @@ Mode and guard. Each guarded host write reads the daemon status under a managed 
 
 Shutdown. `session_shutdown` closes the control client and clears the session. It never sends `down`. The daemon keeps the sandbox, and a host shutdown is only a detach of this host (`endSession`, `src/omp/plugin.ts`). The sandbox persists until `realm down`.
 
-## Live verification status (2026-10-22)
+## Live verification (2026-10-23, Omp 18.12.5)
 
-This pass is partial. The CLI half ran. The Omp half did not run, so no live Omp evidence exists yet.
+Run on this host with the built extension loaded by `-e`, under an isolated profile. HOME and XDG_CONFIG_HOME pointed at scratch directories, and `--no-extensions` so only the realm extension loads. The orchestrator ran these sessions from its own top-level shell, outside the swarm, as the owner approved.
 
-- Earlier attempts from the swarm lanes were refused by the nested-agent gate (`human-approval, mcp: nested-agent`). The owner now runs the live session outside the swarm, as decided. No live Omp session has run yet.
-- Not observed: the realm status item text from rpc or rpc-ui events, attach timing, the retry command outcome, and whether the daemon survives session shutdown.
+Two defects found by the live run were fixed in this pass:
 
-### CLI status with an isolated config (observed)
+- The `session_start` handler read the context as its first argument. The host calls handlers as `(event, ctx)`, so `ctx.setInterval` was undefined and the status item never painted. `src/omp/plugin.ts` now takes `(event, ctx)`, and the plugin tests call handlers the same way.
+- A daemon that refused to start was reported as `DAEMON_START_TIMEOUT`. The daemon writes its own code to `<stateDir>/daemon.log` as `realm daemon: <CODE>`. `src/daemon/ensure.ts` reads that line, and `realm up`, `realm mcp`, `realm acp`, and the Omp attach report that code.
 
-The CLI reads its state directory from a realm config file. A scratch config was written under `XDG_CONFIG_HOME=<scratch>/config`, holding a placeholder digest-pinned image, `workloadArgv`, a scratch `stateDir`, and a scratch `workspaceRoot`. No daemon was started.
+Observed status item (`extension_ui_request`, method `setStatus`, `statusKey` `realm`):
 
-```
-XDG_CONFIG_HOME=<scratch>/config node dist/src/cli/main.js status
-disconnected
-realm status: daemon absent (REALM_NOT_ACTIVE); local report
-exit 0
-```
-
-Without an isolated config, the same command exits 2 with `cannot resolve a state directory`, because the host has no realm config file at `$HOME/.config/realm/config.json`.
-
-### Expected Omp status text (derived from source, not observed)
-
-From `renderRealmStatus` and `displayStatus`, the one `realm` status item should read `<marker> realm disconnected · <reason> · <time>`, where the marker is `○` and the reason is `connecting` during attach, or the error code (for example `REALM_NOT_ACTIVE`) when attach fails. An attached daemon in the active state reads `● realm active · <reason> · <time>`. These strings are expectations for the live run to confirm or refute.
-
-### Runbook for the live run
-
-The owner runs this procedure outside the swarm. The orchestrator does not start a live Omp session. Flags were checked against `omp --help` (omp 18.12.5). `<repo>` is the repository root. `<scratch>` is an empty scratch directory given as an absolute path. Never use the real `~/.config/realm` or the default Omp profile.
-
-1. Build the extension with `npm run build`, then confirm that `<repo>/dist/src/omp/extension.js` exists.
-2. Dry-run the package check: `omp plugin install <repo> --dry-run --json`. Record the output. Keep `--dry-run`; the persistent install is a separate step.
-3. Write a scratch config at `<scratch>/config/realm/config.json` with `image` (a digest pin), `workloadArgv`, `stateDir`, and `workspaceRoot`. Point the last two at scratch directories. The schema is in the runtime configuration section of `docs/policy-reference.md`. The extension reads `$XDG_CONFIG_HOME/realm/config.json` when `XDG_CONFIG_HOME` is an absolute path.
-4. Visible check in the interactive TUI: `export XDG_CONFIG_HOME=<scratch>/config`, then `omp --profile=realm-live-check -e <repo>/dist/src/omp/extension.js`. Record the `realm` status item text exactly. The expected form is `○ realm disconnected · <reason> · <time>`, where the reason is a catalogue code such as `DAEMON_START_TIMEOUT` or `STARTUP_BUDGET_EXCEEDED`. The default startup budget is 10 s.
-5. Retry: run the extension command `realm-retry` (description: "Retry the realm startup through the daemon attach path."). Record its reply: `realm retry: <state> (<reason>)`, `realm retry refused: <code>`, `realm retry superseded`, or `realm not started`. How the TUI lists and invokes extension commands is not verified here, so check its command list.
-6. Exact frames: run `omp --mode=rpc-ui --profile=realm-live-check -e <repo>/dist/src/omp/extension.js` with the same `XDG_CONFIG_HOME`. Do not add `--no-ui`, which drops presentation frames. Write `{"id":"q1","type":"get_state"}` on stdin, and record each stdout line whose `type` is `extension_ui_request` and whose `method` is `setStatus`. The upstream sections read did not confirm the `statusKey` and `statusText` field names, so copy the names from the captured frame. End the session by closing stdin; the upstream docs give that as the termination path.
-7. Daemon view: `node <repo>/dist/src/cli/main.js status` with the same `XDG_CONFIG_HOME`. Record the output verbatim.
-8. Shutdown: after each session exits, run the status command again. OMP-LIVE-04 needs the daemon to still answer. Record the result even when no daemon is running.
-9. Cleanup: remove the `realm-live-check` profile under the Omp profiles directory and the scratch directory. If a daemon was left running, stop it with `node <repo>/dist/src/cli/main.js down` using the same `XDG_CONFIG_HOME`, then confirm with `status`.
-
-Expected on this host (Podman 4.9.3, no AgentOS driver bound). These come from the MCP smoke run and the source. No Omp session has observed them yet.
-
-| Requirement | Check | Expected here |
+| Scenario | Status item after the attach | daemon.log |
 | --- | --- | --- |
-| UI-01 | Status item shown; session not blocked | Testable: the session accepts input while the item shows disconnected |
-| OMP-LIVE-02 | Disconnected with a reason, never active | Testable: `DAEMON_START_TIMEOUT` is expected, since the attach path refused this host in the MCP smoke run |
-| OMP-LIVE-01 | Attaches to the daemon for the workspace | Not reachable here: no daemon answers, and an unbound AgentOS makes `realm up` refuse with `AGENTOS_NOT_CONFIGURED` (`src/runtime/session-execution.ts:208-210`, `src/daemon/daemon.ts:566-568`) |
-| OMP-LIVE-03 | Retry reattaches from disconnected | Retry runs and stays disconnected here |
-| OMP-LIVE-04 | Daemon survives shutdown | Not observable here: no daemon starts |
+| No policy file; the workspace is outside every policy root | `○ realm disconnected · POLICY_DENIED · <time>` | `realm daemon: POLICY_DENIED` |
+| Policy file lists the workspace root | `○ realm disconnected · PODMAN_MACHINE_DOWN · <time>` | `realm daemon: PODMAN_MACHINE_DOWN` |
 
-Decision for the owner: an earlier note on this page treated a truthful disconnected status as enough for this run. OMP-LIVE-01 and OMP-LIVE-03 say "attaches", which is an active attach. Until you confirm the disconnected reading, those two stay unverified. Reaching `active` needs Podman 5.x and an AgentOS driver. That is the scope decision for the follow-up milestone.
+In both runs the item first read `connecting`, never `active`. stderr was empty, and no daemon was left running. With a policy file the refusal comes from the daemon's startup Podman check: this host has no reachable Podman API, and the installed Podman is 4.9.3, below the 5.x that OpenShell requires. `realm up` reports the version first (`PODMAN_UNSUPPORTED_VERSION`), because the CLI probes Podman before it spawns the daemon.
+
+Retry: `realm-retry` is listed by `get_available_commands`. Sent as a `prompt` message, it was accepted (`success: true`), the item repainted `connecting`, and then it settled on the same reason. The retry's reply text does not appear in the RPC frames.
+
+Requirements on this host:
+
+| Requirement | Result on this host | Evidence or reason |
+| --- | --- | --- |
+| OMP-LIVE-02 | Met | Disconnected with the daemon's own reason; never active |
+| OMP-LIVE-03 | Partial | The retry re-runs the attach in the same session; a reattach to active is not reachable here |
+| OMP-LIVE-01 | Not met | No daemon answers: the daemon refuses at startup (Podman), and AgentOS is unbound (`src/runtime/session-execution.ts:208-210`) |
+| OMP-LIVE-04 | Not met | No daemon runs, so nothing survives shutdown |
+| UI-01 | Partial | The item appears at launch. Non-blocking is not shown: see below |
+
+UI-01 detail. The attach alone fails in about 1.3 s (probe 2 ms; worst event-loop lag 71 ms under Node and 239 ms under Bun). Inside Omp the same failure paints about 6 s after launch, and a `get_state` sent one second after launch was answered only after the failure. In separate probes, a plugin-free extension, a `tool_call` handler, a registered command, a managed timer, and a detached spawn each answered `get_state` within about one second. The cause of the delay is not isolated, so UI-01's "without blocking the session" is not demonstrated.
+
+The session context provides `setTimeout`, `setInterval`, `clearTimer`, and `ui.setStatus`. The plugin uses only these.
+
+### Runbook
+
+1. `npm run build`, then confirm that `<repo>/dist/src/omp/extension.js` exists.
+2. Write `<scratch>/config/realm/config.json` with `image` (a digest pin), `workloadArgv`, `stateDir` set to `<scratch>/state`, and `workspaceRoot` set to `<scratch>/workspace`. The schema is in the runtime configuration section of `docs/policy-reference.md`. The extension reads `$XDG_CONFIG_HOME/realm/config.json` when `XDG_CONFIG_HOME` is absolute.
+3. To reach the attach path, also write `<scratch>/state/policy.json` as `{"workspaceRoots":["<scratch>/workspace"]}`. Without it the daemon refuses with `POLICY_DENIED`.
+4. Start the session inside the workspace root, because the attach uses the session working directory: `cd <scratch>/workspace && env HOME=<scratch>/home XDG_CONFIG_HOME=<scratch>/config omp --mode=rpc-ui --no-extensions --profile=realm-live-check -e <repo>/dist/src/omp/extension.js`.
+5. On stdin, write one JSON line per request: `{"id":"c1","type":"get_available_commands"}`, then `{"id":"s1","type":"get_state"}`. To retry, write `{"id":"p1","type":"prompt","message":"/realm-retry"}`. Close stdin to end the session.
+6. Record every stdout line whose `method` is `setStatus` and whose `statusKey` is `realm`, and any `extension_error` line.
+7. Afterwards run `env XDG_CONFIG_HOME=<scratch>/config node <repo>/dist/src/cli/main.js status`. If a daemon answers, stop it with `down` using the same command, then confirm with `status`.
+8. Delete `<scratch>`.
+
+`--no-extensions` keeps the run to the realm extension. HOME points at scratch so the Omp profile, sessions, and caches stay out of the real home.
+
+Decision for the owner: whether a truthful disconnected status satisfies OMP-LIVE-01 and OMP-LIVE-03, which say "attaches". An active attach needs Podman 5.x and an AgentOS driver, which is the scope of the follow-up milestone (RT-04, CLI-01).

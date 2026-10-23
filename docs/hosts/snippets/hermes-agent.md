@@ -33,17 +33,26 @@ exposed.
 
 ## Plugin bundle
 
-The repository ships a Hermes plugin bundle at `adapters/hermes-agent`
-(manifest `plugin.yaml`). It is MCP-only: it declares no Python code and only
-points Hermes at the `realm mcp` server. Check it with the Hermes validator,
-without dependency installation:
+The repository ships a Hermes Agent Plugins v1 (portable) bundle at
+`adapters/hermes-agent`. It has `plugin.json` (name `realm`, trust
+`untrusted`) and `mcp.json` (stdio server `realm`, command `realm`, args
+`["mcp"]`). It has no Python code. The native `plugin.yaml` is not part of the
+bundle.
+
+Validate it with the Hermes validator, using an isolated `HERMES_HOME` (run
+from `<repo>`):
 
 ```bash
-hermes plugins validate adapters/hermes-agent
+env HERMES_HOME=<scratch> hermes plugins validate adapters/hermes-agent
 ```
 
-Do not pass `--install-deps`. Installing the bundle into `~/.hermes/plugins`
-changes the user's Hermes configuration and is not part of this snippet.
+Expected result: exit 0 with "Validation passed." and an isolation line that
+reads "portable plugin (no Python)".
+
+Installing the bundle into `~/.hermes/plugins` changes the user's Hermes
+configuration and is not part of this snippet. Hosts configured by hand can
+use `adapters/hermes-agent/mcp.snippet.yaml`, the manual `mcp_servers` form
+shown above.
 
 ## Not documented
 

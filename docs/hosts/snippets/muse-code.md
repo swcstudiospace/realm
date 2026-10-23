@@ -22,7 +22,8 @@ startup. Declare servers in the `mcp_servers` block. Each server takes a
 server fails to start, the whole run aborts.
 
 Add this entry inside the top-level object of `~/.config/muse/settings.json`.
-It is a snippet to merge by hand, not a file to copy over an existing one:
+It is a snippet to merge by hand, not a file to copy over an existing one. The
+same entry is kept in `adapters/muse-code/mcp-settings.snippet.json`:
 
 ```json
 {
@@ -47,12 +48,19 @@ tools.
 ## Plugin bundle
 
 The repository ships a Muse Code plugin bundle at `adapters/muse-code`
-(manifest `.muse-plugin/plugin.json`). Validate it with the Muse validator.
-Plugin commands need the experimental flag, which the `muse` wrapper sets:
+(manifest `.muse-plugin/plugin.json`, which declares `schemaVersion` 1 and
+`compat` source `native`). Validate it offline (run from `<repo>`). Plugin
+commands need the experimental flag, so set it explicitly:
 
 ```bash
 MUSE_EXPERIMENTAL_PLUGINS=1 muse plugins validate adapters/muse-code
 ```
+
+Expected result: exit 0 and the line
+`valid realm native skills=0 commands=0 hooks=0 mcp=0 reminders=0 diagnostics=0`.
+
+The MCP server is not carried by the plugin. Merge the `realm` entry above into
+settings by hand.
 
 Installing the bundle with `muse plugins install` and approving its hooks with
 `muse plugins approve` change the user's Muse Code configuration. They are not

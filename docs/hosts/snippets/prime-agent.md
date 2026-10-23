@@ -1,7 +1,8 @@
 # Prime Agent snippet: Realm MCP server (stdio) and skill package
 
-Source: `docs/integration/hosts.md` Prime Agent section. The Prime Agent home
-directory is set per host; the settings and package formats here are medium confidence, read from the Prime Agent sources.
+Source: `docs/integration/hosts.md` Prime Agent section. The MCP and settings
+formats here are medium confidence, read from the Prime Agent sources. The
+package format and install check were verified on 2026-10-23.
 
 Realm serves MCP over stdio through its `realm` command with the `mcp`
 argument. This snippet carries no token, secret, or host path.
@@ -18,22 +19,30 @@ prime-agent mcp add realm -- realm mcp
 ```
 
 This writes the `mcpServers` block of the Prime Agent `settings.json` (medium
-confidence). To test without touching the live configuration, point
-`PRIME_AGENT_CODING_AGENT_DIR` at a scratch directory first.
+confidence). To test without touching the live configuration, run it from a
+scratch project directory with the project-local form in the next section.
 
 ## Skill package
 
-The repository ships a Prime Agent package at `adapters/prime-agent`
-(`package.json` with a `pi.skills` entry and a `SKILL.md`). Install it from a
-local path with the package command:
+The repository ships a Prime Agent package at `adapters/prime-agent`. The
+binary is `prime-agent`. Install it into a scratch project with `--local`, so
+nothing under the live Prime Agent directory changes (run from `<repo>`):
 
 ```bash
-prime-agent package install adapters/prime-agent
+cd <scratch> && prime-agent package install <repo>/adapters/prime-agent --local
 ```
 
-Run that install against an isolated `PRIME_AGENT_CODING_AGENT_DIR`. Installing
-into the live Prime Agent directory is a separate step and is not part of this
-snippet.
+Expected result: prints `Installed <path>` and exits 0. `--local` writes
+`<scratch>/.prime/agent/settings.json`. Confirm it with:
+
+```bash
+cd <scratch> && prime-agent package list
+```
+
+Expected result: the package is listed under "Project packages".
+
+Installing without `--local` writes to the live Prime Agent directory. That is
+a separate step and is not part of this snippet.
 
 ## Not documented
 

@@ -6,9 +6,9 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ### Added
 
-- Host plugin adapter bundles: `adapters/claude-plugin` (shared by Claude Code and Grok Build), `adapters/muse-code`, `adapters/hermes-agent`, and `adapters/prime-agent`, each built from the host's documented shape. The host validators have not run on this host (blocked), so none is validator verified yet.
+- Host plugin adapter bundles: `adapters/claude-plugin` (shared by Claude Code and Grok Build), `adapters/muse-code`, `adapters/hermes-agent`, and `adapters/prime-agent`. The Claude Code, Grok Build, Muse Code, and Hermes Agent validators pass on this host in isolated directories. Prime Agent has no validator subcommand, so an isolated project-local install and list are the check.
 - Host snippets for Prime Agent (`docs/hosts/snippets/prime-agent.md`) and host tiers in `docs/integration/hosts.md`.
-- Omp live verification notes in `docs/integration/omp.md`. The live Omp session is blocked on this host; only the isolated CLI status was observed (`disconnected`, `REALM_NOT_ACTIVE`).
+- Omp live verification notes in `docs/integration/omp.md`. The Omp status item was observed live on this host: disconnected, with the daemon's own reason. An attach to an active daemon needs Podman 5.x and an AgentOS driver.
 - Opt-in devnet anchoring of one session's audit-log root: `realm anchor --session <id>` prints the anchor record with no network; `--publish` sends it to devnet as a Solana Memo, signed by the key file named in `REALM_ANCHOR_KEY_FILE`. Only the session id, line count, Merkle root, and time are published. Plan: `docs/integration/hardening-plan.md`.
 
 ### Changed
@@ -17,6 +17,13 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 - README gains a Hosts section.
 - Milestone v2.0 set in `release/milestone.json` (minor 2); the first release in this line is 0.2.0.
 - Policy reference states that `advisory` stays the default and `fail-closed` is a per-project opt-in.
+
+### Fixed
+
+- The Omp plugin's `session_start` handler takes the host's `(event, ctx)` arguments. Before, the status item never painted on Omp 18.12.5.
+- A daemon that refuses to start reports its own code (for example `POLICY_DENIED` or `PODMAN_MACHINE_DOWN`) to `realm up`, `realm mcp`, `realm acp`, and the Omp status item, instead of `DAEMON_START_TIMEOUT`.
+- The Muse Code manifest declares `schemaVersion`, `compat`, and `capabilities`. The Hermes Agent bundle is a portable Agent Plugins v1 package (`plugin.json` and `mcp.json`) that validates without Python.
+- The release job runs the Pages deploy after a superseded or skipped plan, so a retry whose `origin/main` is the `[skip ci]` release commit it pushed still deploys the site. Not yet exercised on GitHub Actions.
 
 ## [0.1.2] - 2026-10-22
 

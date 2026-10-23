@@ -44,17 +44,26 @@ A project-scoped `.mcp.json` server shows "Pending approval" until it is approve
 
 ## Plugin bundle
 
-The repository ships a Claude Code plugin bundle at `adapters/claude-plugin`
-(manifest `.claude-plugin/plugin.json`, MCP entry `.mcp.json` that runs
-`realm mcp`). Load it for one session without installing it:
+The repository ships a Claude Code plugin bundle at `adapters/claude-plugin`,
+which Grok Build shares. Validate it offline with the Claude Code validator
+(run from `<repo>`; it does not start a session):
+
+```bash
+claude plugin validate adapters/claude-plugin
+```
+
+Expected result: exit 0 with "Validation passed with warnings". The warnings
+are that the bundle has no author and no plugin icon (ICON_MISSING).
+
+Loading the bundle for one session does not change any live Claude Code
+configuration:
 
 ```bash
 claude --plugin-dir adapters/claude-plugin
 ```
 
-Loading the bundle this way does not change any live Claude Code
-configuration. Installing it with `claude plugin install` is a separate step
-and is not part of this snippet.
+Installing it with `claude plugin install` is a separate step and is not part
+of this snippet.
 
 ## Not documented
 
