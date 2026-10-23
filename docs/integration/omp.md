@@ -120,3 +120,39 @@ From session start, the indicator refreshes every 2 s (`STATUS_POLL_MS`, a manag
 Mode and guard. Each guarded host write reads the daemon status under a managed timer, stores the mode it reports, and repaints the indicator. If that read fails, the last mode the daemon reported decides: `advisory` warns and the write proceeds, and `fail-closed` blocks it. If no mode has been reported yet, the write is blocked (`src/omp/plugin.ts`).
 
 Shutdown. `session_shutdown` closes the control client and clears the session. It never sends `down`. The daemon keeps the sandbox, and a host shutdown is only a detach of this host (`endSession`, `src/omp/plugin.ts`). The sandbox persists until `realm down`.
+
+## Live verification status (2026-10-22)
+
+This pass is partial. The CLI half ran. The Omp half did not run, so no live Omp evidence exists yet.
+
+- Blocked: every invocation of the `omp` binary from the verification shell returned `BLOCKED needs: human-approval (mcp: nested-agent)`, including `omp --version` on a retry. The B1 session and the B2 dry run (`omp plugin install --dry-run`) therefore have no observed output. No persistent install was attempted, and no Omp config (`config.yml`, `mcp.json`) was read or changed.
+- Not observed: the realm status item text from rpc or rpc-ui events, attach timing, the retry command outcome, and whether the daemon survives session shutdown.
+
+### CLI status with an isolated config (observed)
+
+The CLI reads its state directory from a realm config file. A scratch config was written under `XDG_CONFIG_HOME=<scratch>/config`, holding a placeholder digest-pinned image, `workloadArgv`, a scratch `stateDir`, and a scratch `workspaceRoot`. No daemon was started.
+
+```
+XDG_CONFIG_HOME=<scratch>/config node dist/src/cli/main.js status
+disconnected
+realm status: daemon absent (REALM_NOT_ACTIVE); local report
+exit 0
+```
+
+Without an isolated config, the same command exits 2 with `cannot resolve a state directory`, because the host has no realm config file at `$HOME/.config/realm/config.json`.
+
+### Expected Omp status text (derived from source, not observed)
+
+From `renderRealmStatus` and `displayStatus`, the one `realm` status item should read `<marker> realm disconnected · <reason> · <time>`, where the marker is `○` and the reason is `connecting` during attach, or the error code (for example `REALM_NOT_ACTIVE`) when attach fails. An attached daemon in the active state reads `● realm active · <reason> · <time>`. These strings are expectations for the live run to confirm or refute.
+
+### Runbook for the approved live run
+
+Run only after a human approves the `omp` invocation, and only in an isolated profile. Use placeholders for the repo and scratch paths, and record exact output.
+
+1. Dry run the package install check: `omp plugin install <repo> --dry-run --json`. Record the output. Do not drop `--dry-run`.
+2. Start an isolated session with the built extension: `omp --profile=<scratch-profile> -e <repo>/dist/src/omp/extension.js`, with `--mode=rpc` or `--mode=rpc-ui` to capture the `realm` status item. The flags come from the read-only observations in the Omp facts; they are not yet verified against `omp --help`.
+3. Record the status item text, the attach timing, and the reason. Run the retry command (`realm-retry`) and record its reply.
+4. Run `node <repo>/dist/src/cli/main.js status` to compare the daemon with the status item.
+5. Close the session and check that the daemon still answers `status`. Clean up the scratch profile and the state directory.
+
+Realm `active` is not required. It needs Podman 5.x and an AgentOS driver, and this host has Podman 4.9.3 with no driver bound.

@@ -14,6 +14,7 @@ import { spawn } from "node:child_process";
 import { closeSync, fchmodSync, mkdirSync, openSync } from "node:fs";
 import { createConnection } from "node:net";
 import { runAcpOverStdio } from "../acp/stdio.js";
+import { createJsonRpc, type AnchorRpc } from "../audit/anchor.js";
 import { ERROR_CATALOGUE, ERROR_CODES, RealmError, type ErrorCode } from "../core/errors.js";
 import {
   sendRequest,
@@ -34,11 +35,13 @@ import {
   type RunCommand,
 } from "../runtime/podman-probe.js";
 import { controlSocketPath, type EnvironmentLike } from "../session/paths.js";
+import { parseAnchorArgs, runAnchor } from "./anchor.js";
 
-export const CLI_COMMANDS = ["up", "down", "status", "doctor", "mcp", "acp"] as const;
+export const CLI_COMMANDS = ["up", "down", "status", "doctor", "mcp", "acp", "anchor"] as const;
 export type CliCommand = (typeof CLI_COMMANDS)[number];
 
-const USAGE = "Usage: realm <up|down|status|doctor|mcp|acp> (realm up|mcp|acp [--workspace <absolute path>])";
+const USAGE =
+  "Usage: realm <up|down|status|doctor|mcp|acp|anchor> (realm up|mcp|acp [--workspace <absolute path>]; realm anchor --session <id> [--publish] [--rpc <url>])";
 const RETRY_INTERVAL_MS = 25;
 const MCP_POLL_INTERVAL_MS = 100;
 
@@ -49,21 +52,27 @@ function isCliCommand(value: string): value is CliCommand {
 interface ParsedArgv {
   readonly command: CliCommand;
   readonly workspace: string | undefined;
+  // The words after `anchor`, checked by parseAnchorArgs; empty for every other command.
+  readonly words: readonly string[];
 }
 
 // `up` and `mcp` take no arguments or `--workspace <path>`; every other command takes no arguments.
+// `anchor` takes its own flags, which parseAnchorArgs checks.
 function parseArgv(argv: readonly string[]): ParsedArgv | undefined {
   const [command, ...rest] = argv;
   if (command === undefined || !isCliCommand(command)) {
     return undefined;
   }
+  if (command === "anchor") {
+    return { command, workspace: undefined, words: rest };
+  }
   if (rest.length === 0) {
-    return { command, workspace: undefined };
+    return { command, workspace: undefined, words: [] };
   }
   const [flag, value] = rest;
   const takesWorkspace = command === "up" || command === "mcp" || command === "acp";
   if (takesWorkspace && rest.length === 2 && flag === "--workspace" && value !== undefined) {
-    return { command, workspace: value };
+    return { command, workspace: value, words: [] };
   }
   return undefined;
 }
@@ -116,6 +125,12 @@ export interface CliDeps {
   readonly diagnostics?: McpOutput;
   // Reads the runtime config file that names the state directory (default readRuntimeConfigFile).
   readonly readConfig?: (path: string) => unknown;
+  // REALM_ANCHOR_KEY_FILE, read once by the entry edge (main) and used only by `realm anchor --publish`.
+  readonly anchorKeyFile?: string | undefined;
+  // RPC factory for realm anchor --publish (default createJsonRpc); tests inject a fake.
+  readonly createAnchorRpc?: (url: string) => AnchorRpc;
+  // Clock for the anchor record's createdAt (default the wall clock).
+  readonly now?: () => Date;
 }
 
 export interface CliResult {
@@ -279,8 +294,12 @@ function upResult(reply: ControlReply): CliResult {
   return { exitCode: 1, stdout: `${renderResult(reply.result)}\n`, stderr: `${code}: ${reason}\n` };
 }
 
-// The probe ensureDaemon polls: one status request on a fresh client. An absent socket reads as no
-// daemon yet (false); any other failure propagates unchanged.
+// Failures that mean the daemon is not answering yet: an absent or dropped socket, a request that
+// timed out, or a reply cut short while the daemon is still binding its socket (SCHEMA_INVALID).
+// ensureDaemon keeps polling on these; when none ever answers it reports DAEMON_START_TIMEOUT.
+const NOT_YET_ANSWERING: readonly ErrorCode[] = ["REALM_NOT_ACTIVE", "TOOL_TIMEOUT", "SCHEMA_INVALID"];
+// The probe ensureDaemon polls: one status request on a fresh client. A not-yet-answering failure
+// reads as no daemon yet (false); any other failure propagates unchanged.
 function probeDaemon(deps: ResolvedDeps): (socketPath: string) => Promise<boolean> {
   return async (socketPath) => {
     const client = deps.connect(socketPath);
@@ -288,7 +307,7 @@ function probeDaemon(deps: ResolvedDeps): (socketPath: string) => Promise<boolea
       await client.status();
       return true;
     } catch (error) {
-      if (isAbsentDaemon(error) || (error instanceof RealmError && error.code === "TOOL_TIMEOUT")) {
+      if (error instanceof RealmError && NOT_YET_ANSWERING.includes(error.code)) {
         return false;
       }
       throw error;
@@ -533,6 +552,25 @@ async function runAcp(deps: ResolvedDeps, socketPath: string, workspaceRoot: str
   }
 }
 
+// realm anchor: parseAnchorArgs refuses malformed flags with usage (exit 2); runAnchor refuses every other
+// bad input with exit 1 and makes no network call unless --publish passed its checks.
+async function runAnchorCommand(words: readonly string[], deps: CliDeps, stateDir: string): Promise<CliResult> {
+  const args = parseAnchorArgs(words);
+  if (args === undefined) {
+    return {
+      exitCode: 2,
+      stdout: "",
+      stderr: "realm anchor: usage: realm anchor --session <id> [--publish] [--rpc <url>]\n",
+    };
+  }
+  return runAnchor(args, {
+    stateDir,
+    keyFile: deps.anchorKeyFile,
+    createRpc: deps.createAnchorRpc ?? ((url) => createJsonRpc({ url })),
+    now: deps.now ?? (() => new Date()),
+  });
+}
+
 export async function runCli(argv: readonly string[], deps: CliDeps): Promise<CliResult> {
   const parsed = parseArgv(argv);
   if (parsed === undefined) {
@@ -593,13 +631,18 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
       return runStatus(resolved, socketPath);
     case "doctor":
       return runDoctor(resolved, stateDir, socketPath);
+    case "anchor":
+      return runAnchorCommand(parsed.words, deps, stateDir);
   }
 }
 
 export async function main(): Promise<void> {
   // The only host environment read in this module: the entry edge hands it to
   // runCli, which never reads it itself.
-  const result = await runCli(process.argv.slice(2), { env: process.env });
+  const result = await runCli(process.argv.slice(2), {
+    env: process.env,
+    anchorKeyFile: process.env.REALM_ANCHOR_KEY_FILE,
+  });
   if (result.stdout !== "") {
     process.stdout.write(result.stdout);
   }

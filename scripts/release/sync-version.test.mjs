@@ -1,11 +1,18 @@
 import { afterEach, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { syncVersion } from './sync-version.mjs';
 
 const tempRoots = [];
+
+const ADAPTER_JSON = [
+  'adapters/claude-plugin/.claude-plugin/plugin.json',
+  'adapters/muse-code/.muse-plugin/plugin.json',
+  'adapters/prime-agent/package.json',
+];
+const ADAPTER_YAML = 'adapters/hermes-agent/plugin.yaml';
 
 afterEach(() => {
   for (const dir of tempRoots.splice(0)) {
@@ -31,6 +38,12 @@ function makeRoot({ lock = LOCK } = {}) {
   tempRoots.push(root);
   writeFileSync(path.join(root, 'package.json'), `${JSON.stringify(PACKAGE, null, 2)}\n`);
   writeFileSync(path.join(root, 'package-lock.json'), `${JSON.stringify(lock, null, 2)}\n`);
+  for (const relative of ADAPTER_JSON) {
+    mkdirSync(path.dirname(path.join(root, relative)), { recursive: true });
+    writeFileSync(path.join(root, relative), `${JSON.stringify({ name: 'realm', version: '0.0.0' }, null, 2)}\n`);
+  }
+  mkdirSync(path.join(root, 'adapters/hermes-agent'), { recursive: true });
+  writeFileSync(path.join(root, ADAPTER_YAML), 'name: realm\nversion: 0.0.0\ndescription: test\n');
   return root;
 }
 
@@ -43,7 +56,16 @@ test('updates the version in package.json and package-lock.json', () => {
 
   const result = syncVersion({ root, version: '0.1.0' });
 
-  assert.deepEqual(result, { version: '0.1.0', changed: ['package.json', 'package-lock.json'] });
+  assert.deepEqual(result, {
+    version: '0.1.0',
+    changed: ['package.json', 'package-lock.json', ...ADAPTER_JSON, ADAPTER_YAML],
+  });
+
+  for (const relative of ADAPTER_JSON) {
+    assert.equal(JSON.parse(read(root, relative)).version, '0.1.0');
+  }
+  assert.match(read(root, ADAPTER_YAML), /^version: 0\.1\.0$/m);
+  assert.match(read(root, ADAPTER_YAML), /^name: realm$/m);
 
   const packageText = read(root, 'package.json');
   const pkg = JSON.parse(packageText);

@@ -1,5 +1,6 @@
 // Packed-package smoke test. Packs the package, installs the tarball into a
-// throwaway consumer, and loads every JSON schema through the shipped validator.
+// throwaway consumer, loads every JSON schema through the shipped validator, and
+// asserts that every host adapter manifest shipped in the tarball.
 // The schemas are read at runtime from <package root>/src/..., so a tarball that
 // omits them fails here with ENOENT. Run `npm run build` first; check:pack does not build.
 
@@ -16,6 +17,15 @@ const execFileAsync = promisify(execFile);
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const VALIDATOR = join("dist", "src", "contract", "validate.js");
 const MAX_BUFFER = 16 * 1024 * 1024;
+
+// Every host adapter manifest and MCP entry that the package must ship (paths relative to the package root).
+export const ADAPTER_MANIFESTS = [
+  "adapters/claude-plugin/.claude-plugin/plugin.json",
+  "adapters/claude-plugin/.mcp.json",
+  "adapters/muse-code/.muse-plugin/plugin.json",
+  "adapters/hermes-agent/plugin.yaml",
+  "adapters/prime-agent/package.json",
+];
 
 // The consumer imports the installed package by its bare name, so the probe
 // resolves through node_modules exactly as a real user's code would.
@@ -50,6 +60,11 @@ export function tarballFromPackOutput(stdout, destination) {
   return join(destination, entries[0].filename);
 }
 
+// Lists the adapter manifests absent under an installed package root.
+export function missingAdapterManifests(packageRoot) {
+  return ADAPTER_MANIFESTS.filter((path) => !existsSync(join(packageRoot, path)));
+}
+
 async function run(file, args, options) {
   try {
     return await execFileAsync(file, args, {
@@ -81,9 +96,15 @@ async function main() {
     await writeFile(join(consumerDir, "package.json"), `${JSON.stringify({ private: true, type: "module" })}\n`);
     await run("npm", buildInstallArgs(tarball), { cwd: consumerDir });
 
+    const missing = missingAdapterManifests(join(consumerDir, "node_modules", "agent-realm"));
+    if (missing.length > 0) {
+      throw new Error(`packed package is missing adapter manifests: ${missing.join(", ")}`);
+    }
+
     await writeFile(join(consumerDir, "probe.mjs"), PROBE_SOURCE);
     const probe = await run(process.execPath, ["probe.mjs"], { cwd: consumerDir });
     process.stdout.write(probe.stdout);
+    process.stdout.write(`adapter manifests: ${ADAPTER_MANIFESTS.length} present\n`);
     return 0;
   } finally {
     await Promise.all(

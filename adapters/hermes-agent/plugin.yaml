@@ -1,0 +1,3 @@
+name: realm
+version: 0.1.2
+description: "Realm agent sandbox: MCP-only bundle that points Hermes at realm mcp (stdio). Declares no Python code."

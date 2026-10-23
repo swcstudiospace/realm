@@ -55,17 +55,21 @@ void test("CLI-04: muse-code.md gives only the documented settings shape pointin
   assert.ok(snippet.includes("2026-10-22"), "must cite the read date");
 });
 
-void test("CLI-04: omp.md gives only the documented manifest placement pointing at the realm mcp stdio entry", () => {
+void test("CLI-04: omp.md loads the built Realm extension by path and names no unverified MCP key layout", () => {
   const snippet = readDoc("docs", "hosts", "snippets", "omp.md");
-  assert.ok(snippet.includes("mcpServers"), "must name the mcpServers entry");
-  assert.ok(snippet.includes(".mcp.json"), "must name the default .mcp.json");
-  assert.ok(snippet.includes("realm mcp"), "must point at the realm mcp entry");
+  assert.ok(
+    snippet.includes("dist/src/omp/extension.js"),
+    "must point at the built extension entry",
+  );
+  assert.ok(snippet.includes('"omp": {'), "must name the omp key in package.json");
+  assert.ok(snippet.includes("omp -e "), "must show the one-session -e load");
+  assert.ok(snippet.includes("--dry-run"), "must show the dry-run install check");
   assert.ok(
     snippet.includes("https://omp.sh/docs/extension-authoring"),
     "must cite the official URL",
   );
   assert.ok(
-    snippet.includes("Not documented"),
+    snippet.includes("## Not documented"),
     "must mark the unverified key layout",
   );
 });

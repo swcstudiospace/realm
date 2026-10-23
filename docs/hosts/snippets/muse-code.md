@@ -5,8 +5,11 @@ Official pages: https://dev.meta.ai/docs/muse-code,
 https://dev.meta.ai/docs/muse-code/extending,
 https://dev.meta.ai/docs/muse-code/configuration.
 
-Realm serves MCP over stdio via the `realm mcp` command (P6-D9; the entry
-plan 06-04 builds). This snippet carries no token, secret, or host path.
+Realm serves MCP over stdio through its `realm` command with the `mcp`
+argument. This snippet carries no token, secret, or host path.
+
+`realm` is not on `PATH` on the verification host. Install or link the `realm`
+binary first, or give the absolute path to it in place of `realm` below.
 
 ## Settings file
 
@@ -18,7 +21,8 @@ startup. Declare servers in the `mcp_servers` block. Each server takes a
 `enabled` and `mode`. A server's `mode` defaults to `required`: if a required
 server fails to start, the whole run aborts.
 
-Add this entry inside the top-level object of `~/.config/muse/settings.json`:
+Add this entry inside the top-level object of `~/.config/muse/settings.json`.
+It is a snippet to merge by hand, not a file to copy over an existing one:
 
 ```json
 {
@@ -40,9 +44,22 @@ Code passes `MUSE_SESSION_ID` to `stdio` servers. Run `/mcp` in an
 interactive session to see a live inventory of connected servers and their
 tools.
 
+## Plugin bundle
+
+The repository ships a Muse Code plugin bundle at `adapters/muse-code`
+(manifest `.muse-plugin/plugin.json`). Validate it with the Muse validator.
+Plugin commands need the experimental flag, which the `muse` wrapper sets:
+
+```bash
+MUSE_EXPERIMENTAL_PLUGINS=1 muse plugins validate adapters/muse-code
+```
+
+Installing the bundle with `muse plugins install` and approving its hooks with
+`muse plugins approve` change the user's Muse Code configuration. They are not
+part of this snippet.
+
 ## Not documented
 
 ACP: not documented in the pages read. Neither the extending nor the
 configuration page names an ACP surface, so this snippet gives no ACP
-configuration. The plugin bundle manifest format is likewise not on the pages
-read.
+configuration.

@@ -63,6 +63,8 @@ Loading rules (`src/core/policy.ts:28-37`):
     (`src/tools/dispatch.ts:1-18`); `retry` has its own state refusal
     (`src/tools/dispatch.ts:250-258`).
 
+The default stays `advisory`; a project that expects containment opts in to `fail-closed` in its own policy file, and the posture and its limits are set out in `docs/integration/hardening-plan.md`.
+
 ## `workspaceRoots`
 
 - **Type:** `string[]`, each entry must be absolute (see loader rules above)

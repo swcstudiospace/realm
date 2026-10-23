@@ -85,6 +85,11 @@ jobs:
           set -euo pipefail
           npm run check:pack
 
+      - name: MCP smoke
+        run: |
+          set -euo pipefail
+          npm run check:mcp
+
   site:
     name: Build docs site
     runs-on: ubuntu-latest

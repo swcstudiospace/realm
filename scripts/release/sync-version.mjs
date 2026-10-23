@@ -4,6 +4,15 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const VERSION_PATTERN = /^0\.\d+\.\d+$/;
 
+// Host adapter manifests that carry the release version. JSON manifests hold a top-level
+// "version"; the Hermes plugin.yaml holds a top-level "version:" line.
+const ADAPTER_JSON_MANIFESTS = [
+  'adapters/claude-plugin/.claude-plugin/plugin.json',
+  'adapters/muse-code/.muse-plugin/plugin.json',
+  'adapters/prime-agent/package.json',
+];
+const ADAPTER_YAML_MANIFESTS = ['adapters/hermes-agent/plugin.yaml'];
+
 function readText(file) {
   try {
     return readFileSync(file, 'utf8');
@@ -53,14 +62,32 @@ export function syncVersion({ root, version }) {
 
   const changed = [];
   const updates = [
-    { file: packagePath, original: packageText, value: pkg },
-    { file: lockPath, original: lockText, value: lock },
+    { file: packagePath, original: packageText, next: serialize(pkg) },
+    { file: lockPath, original: lockText, next: serialize(lock) },
   ];
-  for (const { file, original, value } of updates) {
-    const next = serialize(value);
+  for (const relative of ADAPTER_JSON_MANIFESTS) {
+    const file = path.join(root, relative);
+    const original = readText(file);
+    const manifest = parseJson(file, original);
+    if (!isObject(manifest)) {
+      throw new Error(`${file} must contain a JSON object`);
+    }
+    manifest.version = version;
+    updates.push({ file, original, next: serialize(manifest) });
+  }
+  for (const relative of ADAPTER_YAML_MANIFESTS) {
+    const file = path.join(root, relative);
+    const original = readText(file);
+    const matches = original.match(/^version:.*$/gm) ?? [];
+    if (matches.length !== 1) {
+      throw new Error(`${file} must have exactly one top-level version line`);
+    }
+    updates.push({ file, original, next: original.replace(/^version:.*$/m, `version: ${version}`) });
+  }
+  for (const { file, original, next } of updates) {
     if (next !== original) {
       writeFileSync(file, next, 'utf8');
-      changed.push(path.basename(file));
+      changed.push(path.relative(root, file));
     }
   }
   return { version, changed };

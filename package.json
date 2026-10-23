@@ -33,6 +33,7 @@
     ]
   },
   "files": [
+    "adapters",
     "dist/src",
     "src/core/policy.schema.json",
     "src/contract/tools.schema.json",
@@ -54,6 +55,7 @@
     "build": "tsc -p tsconfig.json",
     "test:scripts": "node --test \"scripts/**/*.test.mjs\"",
     "check:docs": "node scripts/check/host-paths.mjs && node scripts/check/agents-sync.mjs",
+    "check:mcp": "node scripts/check/mcp-smoke.mjs",
     "check:pack": "node scripts/check/pack-smoke.mjs",
     "check:gates": "node scripts/check/gate-closure.mjs",
     "release:next": "node scripts/release/next-version.mjs",

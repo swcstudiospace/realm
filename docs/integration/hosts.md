@@ -1,5 +1,26 @@
 # Host runtimes: Node or Bun requirement, plugin, MCP and ACP loading
 
+## Host tiers (v2.0)
+
+Realm ships one integration per host. The tier says how far each one is verified.
+
+| Tier | Meaning | Hosts |
+| --- | --- | --- |
+| 1: live verified | Run in a real session on the verification host, with the evidence recorded | none yet at v2.0: the live Omp session is blocked on this host (see `docs/integration/omp.md`) |
+| 2: validator verified | The adapter bundle passes the host's own validator, in an isolated directory. Not registered in the live host configuration | none yet at v2.0: the validators are blocked on this host. Bundles: Claude Code and Grok Build (`adapters/claude-plugin`), Muse Code (`adapters/muse-code`), Hermes Agent (`adapters/hermes-agent`), Prime Agent (`adapters/prime-agent`) |
+| 3: documented only | Snippet from the host's official pages, not run here | none at v2.0 |
+
+Each host has a snippet in `docs/hosts/snippets/`. The snippets reference the
+adapter bundles by their repo paths. `realm` is not on `PATH` on the
+verification host, so every snippet says so and gives no install path.
+
+Realm was not registered in any live host configuration (Claude Code, Grok
+Build, Muse Code, Hermes Agent, Prime Agent, or the persistent Omp config).
+Registration needs explicit approval per host.
+
+
+## Gate note (FOUND-03)
+
 Gate note for FOUND-03 (decisions D-09, D-16, D-17, D-18). Status per host:
 
 | Host | Official source found | Node or Bun requirement | Plugin, MCP, ACP model |

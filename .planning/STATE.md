@@ -1,6 +1,6 @@
 ---
 gsd_state_version: "1.0"
-status: Awaiting next milestone
+status: In progress (milestone v2.0)
 stopped_at: "Awaiting approvals: ship (PR and possible merge to main), licence, CI, README, archive, and confirmation of the FS-02 accepted approximation"
 last_updated: "2026-10-22T19:59:15.667Z"
 last_activity: 2026-10-22
@@ -23,13 +23,13 @@ current_phase_name: Policy Reference and Security Review
 See: .planning/PROJECT.md (updated 2026-10-22)
 
 **Core value:** Every file mutation by an agent either lands inside the realm under policy or fails closed, and the user can always see whether the realm is active or disconnected.
-**Current focus:** Milestone v1.0 (provisional name), shipped fail-closed. The AgentOS sandbox runner is deferred to a follow-up milestone. Remaining items are approvals and live verification.
+**Current focus:** Milestone v2.0 (host adapters, live Omp verification, release 0.2.0) in progress on feat/realm-v2-0. Milestone v1.0 (provisional name), shipped fail-closed. The AgentOS sandbox runner is deferred to a follow-up milestone. Remaining items are approvals and live verification.
 
 ## Current Position
 
-Phase: Milestone v1.0 complete
+Phase: Milestone v2.0, phase 8 (Host Adapter Bundles)
 Plan: —
-Status: Awaiting next milestone
+Status: In progress
 Last activity: 2026-10-22 — Milestone v1.0 completed and archived
 
 ## Performance Metrics
@@ -80,6 +80,10 @@ Full log lives in PROJECT.md Key Decisions table. Recent decisions affecting cur
 - [2026-10-22 gap closure]: The Omp status is one item, refreshed on a 2 s bounded interval, and every timer clears on shutdown (OMP-02, OMP-03)
 - [2026-10-22 gap closure]: The controller rebinds through verifyPinnedAt, which checks dev and ino and the /proc/self/fd real path, not a string path (FS-02, partial)
 - [2026-10-22 gap closure]: Catalogue has 27 codes; new are MCP_INPUT_FAILED and CLEANUP_FAILED
+
+### Parked
+
+- SWARM PARKED (2026-10-22): the AgentSwarm control plane (sibling checkout agent-swarm) is parked as a known issue, not fixed here. Its checkout reports one modified file (Cargo.lock) at HEAD d87bb8f. Swarm paths are not modified by this milestone. Realm wave 1 used the swarm task store only for leasing and signed assignments.
 
 ### Pending Todos
 

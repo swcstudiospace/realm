@@ -30,6 +30,22 @@ npm run build
 npm test
 ```
 
+## Hosts
+
+Realm ships one integration per host, each under `docs/hosts/` with a snippet:
+
+- Omp: a Realm extension, loaded from `dist/src/omp/extension.js` (see `docs/hosts/snippets/omp.md`).
+- Claude Code and Grok Build: the shared plugin bundle `adapters/claude-plugin`, plus an MCP entry that runs `realm mcp`.
+- Muse Code: the plugin bundle `adapters/muse-code`, plus an `mcp_servers` entry.
+- Hermes Agent: the MCP-only plugin bundle `adapters/hermes-agent`.
+- Prime Agent: the package `adapters/prime-agent`, plus an MCP entry.
+
+Each bundle is checked with its host's validator in an isolated directory. No
+host configuration is changed by this repository. `realm` is not on `PATH` on
+the verification host, so install it first or use an absolute path.
+
+See [docs/integration/hosts.md](docs/integration/hosts.md) for the host tiers.
+
 ## Documentation
 
 - [Documentation site](https://swcstudiospace.github.io/realm/)
