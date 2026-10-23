@@ -227,8 +227,9 @@ jobs:
       #   skip       target tag and its GitHub release both exist: nothing to publish.
       #   superseded origin/main is no longer this commit: the newer commit's run releases.
       #   normal     bump, build, commit, atomic push of main and tag, then release.
-      # exists=true means this run publishes nothing (skip or superseded); the Pages
-      # dispatch step keys off it.
+      # The Pages dispatch runs after every planned action, superseded included: a superseded
+      # run's origin/main is often the [skip ci] release commit its own failed attempt pushed,
+      # which starts no run of its own.
       - name: Plan release
         id: tag_check
         env:
@@ -280,24 +281,14 @@ jobs:
             fi
           fi
 
-          case "${action}" in
-            skip)
-              echo "Tag ${tag} and its GitHub release already exist; nothing to publish."
-              exists=true
-              ;;
-            superseded)
-              exists=true
-              ;;
-            *)
-              exists=false
-              ;;
-          esac
+          if [ "${action}" = skip ]; then
+            echo "Tag ${tag} and its GitHub release already exist; nothing to publish."
+          fi
 
           {
             echo "action=${action}"
             echo "tag=${tag}"
             echo "version=${tag#v}"
-            echo "exists=${exists}"
           } >> "$GITHUB_OUTPUT"
           echo "Release plan: action=${action} tag=${tag}"
 
@@ -386,7 +377,7 @@ jobs:
             --verify-tag
 
       - name: Dispatch Pages workflow
-        if: steps.tag_check.outputs.exists == 'false' && hashFiles('.github/workflows/pages.yml') != ''
+        if: steps.tag_check.outputs.action != '' && hashFiles('.github/workflows/pages.yml') != ''
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
