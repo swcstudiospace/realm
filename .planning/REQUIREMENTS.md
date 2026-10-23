@@ -108,10 +108,10 @@ All v1 requirements are hypotheses until shipped and verified.
 
 ### Omp live verification (OMP-LIVE)
 
-- [ ] **OMP-LIVE-01**: A live Omp session loading the built extension with `-e` under an isolated profile attaches to the Realm daemon for the workspace
+- [ ] **OMP-LIVE-01**: A live Omp session loading the built extension with `-e` under an isolated profile attaches to the Realm daemon for the workspace (descoped from v2.0 to the follow-up milestone by the owner, 2026-10-23; not met on this host)
 - [x] **OMP-LIVE-02**: When the daemon cannot attach, the status item states disconnected with its reason, never active
 - [ ] **OMP-LIVE-03**: The retry command reattaches from disconnected in the same live session
-- [ ] **OMP-LIVE-04**: Shutdown of the Omp session leaves the Realm daemon running
+- [ ] **OMP-LIVE-04**: Shutdown of the Omp session leaves the Realm daemon running (descoped from v2.0 to the follow-up milestone by the owner, 2026-10-23)
 
 ### Integrated UI (UI)
 
@@ -150,7 +150,7 @@ Filled by the roadmap. Each v1 requirement maps to exactly one phase.
 | CORE-05 | Phase 3 | Complete |
 | CORE-06 | Phase 2 | Complete |
 | FS-01 | Phase 2 | Complete |
-| FS-02 | Phase 2 | Partial (accepted approximation; rebind verified through the pinned root, but path canonicalization remains; audit G-10) (pending the user's confirmation of the accepted approximation) |
+| FS-02 | Phase 2 | Partial (accepted approximation, confirmed by the owner 2026-10-23; rebind verified through the pinned root; check-to-use windows remain on the read and write paths; audit G-10) |
 | FS-03 | Phase 2 | Complete |
 | FS-04 | Phase 2 | Complete |
 | FS-05 | Phase 2 | Complete |
@@ -188,9 +188,9 @@ Filled by the roadmap. Each v1 requirement maps to exactly one phase.
 | QUAL-03 | Phase 7 | Complete |
 | HOST-01 | Phase 8 | Complete (Claude Code validate passes with 2 warnings; Grok validate passes; MCP entry is realm mcp) |
 | HOST-02 | Phase 8 | Partial (Muse and Hermes validators pass; Prime has no validator, isolated install and list pass) |
-| HOST-03 | Phase 10 | Pending (pack check and release 0.2.0 not yet run) |
-| OMP-LIVE-01 | Phase 9 | Not met on this host (daemon refuses at startup; AgentOS unbound) |
+| HOST-03 | Phase 10 | Pending (pack check passes with the Hermes JSON manifests; release 0.2.0 held by the owner's ship hold) |
+| OMP-LIVE-01 | Phase 9 | Descoped to follow-up (owner decision 2026-10-23); not met on this host (daemon refuses at startup; AgentOS unbound) |
 | OMP-LIVE-02 | Phase 9 | Complete (live: disconnected with the daemon's own reason; never active) |
 | OMP-LIVE-03 | Phase 9 | Partial (retry re-runs the attach in the same session; reattach to active not reachable here) |
-| OMP-LIVE-04 | Phase 9 | Pending (no daemon survives on this host) |
+| OMP-LIVE-04 | Phase 9 | Descoped to follow-up (owner decision 2026-10-23); no daemon survives on this host |
 | UI-01 | Phase 9 | Partial (status item from launch; non-blocking not demonstrated) |

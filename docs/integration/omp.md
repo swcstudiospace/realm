@@ -168,4 +168,4 @@ The session context provides `setTimeout`, `setInterval`, `clearTimer`, and `ui.
 
 `--no-extensions` keeps the run to the realm extension. HOME points at scratch so the Omp profile, sessions, and caches stay out of the real home.
 
-Decision for the owner: whether a truthful disconnected status satisfies OMP-LIVE-01 and OMP-LIVE-03, which say "attaches". An active attach needs Podman 5.x and an AgentOS driver, which is the scope of the follow-up milestone (RT-04, CLI-01).
+Owner decision (2026-10-23): OMP-LIVE-01 and OMP-LIVE-04 are descoped from v2.0 to the follow-up milestone (RT-04, CLI-01). The v2.0 behaviour is the truthful disconnected status with the daemon's own reason. OMP-LIVE-03 is not covered by this answer and stays partial: its active reattach needs an active daemon too.

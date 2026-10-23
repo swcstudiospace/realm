@@ -27,10 +27,10 @@ See: .planning/PROJECT.md (updated 2026-10-22)
 
 ## Current Position
 
-Phase: Milestone v2.0, phases 8 to 10 in progress; phase 9 blocked on the live run and an attach-scope decision; phase 11 not started
+Phase: Milestone v2.0, phases 8 to 10 in progress; phase 9 narrowed to OMP-LIVE-02 and -03 (OMP-LIVE-01 and -04 descoped); phase 11 not started
 Plan: —
-Status: Paused for the owner: validators, the live Omp run, and decisions (see Blockers/Concerns)
-Last activity: 2026-10-23 — blocked-item pass: Omp status item fixed and observed live; validators run; snippets, runbook, and changelog refreshed; blockers recorded
+Status: Paused for the owner: ship held; the v2.0 close needs phases 8 to 10 complete and an explicit owner confirmation
+Last activity: 2026-10-23 — owner decisions recorded: FS-02 accepted, OMP-LIVE-01 and -04 descoped to a follow-up, ship held, Linear left in Backlog, UI-01 recorded as a limitation
 
 ## Performance Metrics
 
@@ -91,11 +91,11 @@ Open follow-ups: the AgentOS sandbox runner in the follow-up milestone (RT-04, C
 
 ### Blockers/Concerns
 
-- Approvals: ship done (PRs #1 to #3 merged through ultrathink-ship, PR #4 archives v1.0; the ship CLI ran with --ignore-gsd while the GSD roadmap was incomplete); licence done (AGPL-3.0-only); CI done (verify and release on main, and the docs site built on pull requests); README done. Still open: confirmation of the FS-02 accepted approximation, awaiting the user.
+- Approvals: ship done (PRs #1 to #3 merged through ultrathink-ship, PR #4 archives v1.0; the ship CLI ran with --ignore-gsd while the GSD roadmap was incomplete); licence done (AGPL-3.0-only); CI done (verify and release on main, and the docs site built on pull requests); README done. FS-02 accepted approximation: confirmed by the owner on 2026-10-23 (refusal tests kept; the read and write check-to-use windows recorded in REQUIREMENTS).
 - Host Podman is 4.9.3, below OpenShell's 5.x requirement. Podman-gated checks are deferred to a Podman 5.x host.
-- v2.0 live Omp (OMP-LIVE-01 to 04, UI-01): OMP-LIVE-02 met on this host with the daemon's own reason. OMP-LIVE-01 and -04 need an active daemon, which needs Podman 5.x and an AgentOS driver, or the owner's descoping. OMP-LIVE-03 is partial. UI-01 non-blocking is not demonstrated: get_state was delayed about 6 s during the attach, and the cause is not isolated.
+- v2.0 live Omp (OMP-LIVE-01 to 04, UI-01): OMP-LIVE-02 met on this host with the daemon's own reason. OMP-LIVE-01 and -04 are descoped to the follow-up milestone by the owner (2026-10-23): an active daemon needs Podman 5.x and an AgentOS driver. OMP-LIVE-03 is partial. UI-01 non-blocking is a stated limitation: get_state was delayed about 6 s during the attach, and the cause is not isolated.
 - v2.0 host validators (HOST-01, HOST-02): Claude Code, Grok Build, Muse Code, and Hermes Agent pass their validators in isolated directories. Prime Agent has no validator; its isolated install and list pass. Hermes uses a portable package, so no Python shim is needed.
-- v2.0 ship (HOST-03, release 0.2.0): on hold until the owner decides the attach scope and the archived gaps. ultrathink-ship assess reports not done: the GSD roadmap counts 0 of 7, and archived v1.0 verifications are 03 and 06 gaps_found, 04, 05, and 07 human_needed.
+- v2.0 ship (HOST-03, release 0.2.0): held by the owner (2026-10-23) until the archived v1.0 gaps are verified on a Podman 5.x host. The last assess reported not done: the GSD roadmap counts 0 of 7, and archived v1.0 verifications are 03 and 06 gaps_found, 04, 05, and 07 human_needed. assess was not re-run in the 2026-10-23 pass: the ship CLI path was not located.
 - Omp host write and edit interception is not documented (OQ-P5-02). The guard blocks writes while the policy mode is unknown. Audit G-09 part 5.4 stays open for this reason.
 - The Anda licence conflict still blocks vendoring Anda code.
 - Test timing: the lifecycle tests use wall-clock windows, widened to 1 to 4 s on this loaded host. Deterministic seams are a follow-up.
@@ -133,7 +133,7 @@ Detail, by phase: Phase 3 covers RT-01, RT-02, RT-03, RT-09, and the live parts 
 
 Last session: 2026-10-22
 Stopped at: v2.0 blocked-item pass complete for everything reachable. The Omp status item was fixed and observed live; validators were run; snippets, runbook, changelog, and planning were refreshed. Commits are listed in git log on feat/realm-v2-0.
-Resume file: None. Next action on resume: the owner decides the attach scope (OMP-LIVE-01 and -04), FS-02, the Linear sync, and the archived-gap ship scope. The orchestrator then runs the gates and the ship.
+Resume file: None. Owner decisions 2026-10-23: FS-02 accepted; OMP-LIVE-01 and -04 descoped; ship held; Linear left in Backlog; UI-01 recorded as a limitation; Hermes trust untrusted kept. Next action on resume: phase 8 (HOST-02: Prime Agent has no validator) and phase 10 release decisions; the ship stays held until the archived items are verified on Podman 5.x.
 
 Recorded commits (closure run): 72817e9 (private flag restored, engines >=22.13.0); 390f511 (causeCode and catalogue codes, host paths, lifecycle bound, root identity, exec margin); b6bc892 (daemon entry, AgentOS fail-closed, catalogue refusals, per-method control bounds); 8088159 (daemon owns sessions; tool method; daemon client; Omp and MCP attach); 4b1d4ab (smoke fixes: CLI probe, up and down exits, state-dir 0700); c55056a (traceability: requirements by evidence, spike facts, runtime config, Omp attach contract); a999c17 (audit gap closure: realm acp, refusal code mapping, one state-dir resolver, Omp status, pinned-root rebind, catch-site fixes, daemon server-failure stop); dd02034 (re-audit, planning, and docs); 54bc236 (MCP tool-call diagnostic); plus the decisions commit (see git log).
 
@@ -152,4 +152,4 @@ Recorded commits (earlier): e949ad3, 53fc919, 26ab145 (phases 1 to 3); 6b28fa4 a
 
 ## Operator Next Steps
 
-- Finish v2.0: decide the attach scope, FS-02, the Linear sync, and the archived-gap scope; then ultrathink-ship (held until then).
+- Decided 2026-10-23: FS-02 accepted, OMP-LIVE-01 and -04 descoped, ship held, Linear left in Backlog. Remaining: archived v1.0 items on a Podman 5.x host, phases 8 to 10 completion, ultrathink-ship (held), and the v2.0 close (needs an explicit owner --confirm).
