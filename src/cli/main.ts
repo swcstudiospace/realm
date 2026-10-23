@@ -24,7 +24,7 @@ import {
   type ControlRequest,
 } from "../daemon/channel.js";
 import { connectDaemon, type DaemonClient, type DaemonStatus } from "../daemon/client.js";
-import { ensureDaemon } from "../daemon/ensure.js";
+import { ensureDaemon, daemonLogPath, reportingStartFailure } from "../daemon/ensure.js";
 import { defaultRunCommand, runChecks, type DoctorOptions } from "../doctor/checks.js";
 import { createMcpServer } from "../mcp/server.js";
 import { isDirectEntry, readHostRuntime } from "../runtime/host-paths.js";
@@ -320,10 +320,6 @@ function probeDaemon(deps: ResolvedDeps): (socketPath: string) => Promise<boolea
 // The daemon's startup log: <stateDir>/daemon.log, append-only and owner-only. The state directory is
 // made at 0700 when missing, because the log opens before the daemon creates it. The child keeps its own
 // copy of the descriptor, so the parent closes its copy once the spawn returns.
-function daemonLogPath(stateDir: string): string {
-  return `${stateDir}/daemon.log`;
-}
-
 function withDaemonLog(stateDir: string, launch: (log: number) => void): void {
   // Missing ancestors take the default mode; only the state directory itself is made 0700.
   const cut = stateDir.lastIndexOf("/");
@@ -399,7 +395,7 @@ async function runUp(deps: ResolvedDeps, socketPath: string, workspaceRoot: stri
   try {
     await ensureDaemon({
       socketPath,
-      probe: probeDaemon(deps),
+      probe: reportingStartFailure(probeDaemon(deps), deps.stateDir),
       spawnDaemon: spawnDetachedDaemon(deps),
       timeoutMs: upTimeoutMs,
       pollMs: RETRY_INTERVAL_MS,
@@ -480,7 +476,7 @@ async function runDoctor(deps: ResolvedDeps, stateDir: string, socketPath: strin
 async function ensureSharedDaemon(deps: ResolvedDeps, socketPath: string): Promise<void> {
   await ensureDaemon({
     socketPath,
-    probe: probeDaemon(deps),
+    probe: reportingStartFailure(probeDaemon(deps), deps.stateDir),
     spawnDaemon: spawnDetachedDaemon(deps),
     timeoutMs: controlTimeoutOf(deps, "up"),
     pollMs: MCP_POLL_INTERVAL_MS,
