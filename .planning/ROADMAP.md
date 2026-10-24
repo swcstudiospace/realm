@@ -15,7 +15,7 @@ Coverage: 46/46 v1 requirements mapped, each to exactly one phase. v2.0 adds 8 r
 - [x] **Phase 5: Omp Plugin, MCP, and ACP Surfaces** - Detached Omp autostart, status indicator, retry command, and MCP and ACP over one contract — Complete (verification deferred: human)
 - [x] **Phase 6: CLI, Daemon, and Host Packaging** - realm up, down, status, doctor, control channel, and host config snippets — Complete (verification deferred: human — 06-VERIFICATION.md, 5/5 must-haves, 6 live items)
 - [x] **Phase 7: Policy Reference and Security Review** - Policy reference, security review, and supply-chain review before first release — Complete (verification deferred: human — 07-VERIFICATION.md, 9/9 must-haves, 5 human items)
-- [ ] **Phase 8: Host Adapter Bundles** - Claude Code and Grok Build, Muse Code, Hermes Agent, Prime Agent, and Omp manifests, each checked by its host's own validator in an isolated directory (HOST-01, HOST-02)
+- [x] **Phase 8: Host Adapter Bundles** - Claude Code and Grok Build, Muse Code, Hermes Agent, Prime Agent, and Omp manifests, each checked by its host's own validator in an isolated directory (HOST-01, HOST-02)
 - [ ] **Phase 9: Live Omp Verification** - A live Omp session attaches, reports a truthful disconnected status with its reason, retries, and leaves the daemon running on shutdown (OMP-LIVE-01 to OMP-LIVE-04, UI-01)
 - [ ] **Phase 10: Docs, Packaging, and Release 0.2.0** - Host docs and snippets, MCP smoke check, pack assertions for each bundle, changelog, PR to main, and release 0.2.0 (HOST-03)
 - [ ] **Phase 11: Milestone v2.0 Close** - Milestone completion after a gsd-tools dry run, with scratch profiles and worktrees removed
@@ -148,6 +148,55 @@ Plans:
 
 **Plans**: TBD
 
+### Phase 8: Host Adapter Bundles
+
+**Goal:** Claude Code and Grok Build, Muse Code, Hermes Agent, Prime Agent, and Omp manifests, each checked by its host's own validator in an isolated directory.
+**Depends on:** Not stated in ROADMAP; phases run in ROADMAP order
+**Requirements:** HOST-01, HOST-02
+**Success Criteria** (what must be TRUE):
+  1. Claude Code and Grok Build share one plugin bundle (`adapters/claude-plugin`) whose manifest and MCP entry start `realm mcp`, and each host's own validator accepts it.
+  2. Muse Code, Hermes Agent, and Prime Agent each have an adapter bundle (`adapters/muse-code`, `adapters/hermes-agent`, `adapters/prime-agent`) and an MCP snippet, each accepted by that host's check in an isolated directory: the host's own validator where it has one, and for Prime Agent an isolated project-local install and list.
+
+**Plans**: TBD
+
+### Phase 9: Live Omp Verification
+
+**Goal:** A live Omp session attaches, reports a truthful disconnected status with its reason, retries, and leaves the daemon running on shutdown.
+**Depends on:** Not stated in ROADMAP; phases run in ROADMAP order
+**Requirements:** OMP-LIVE-01, OMP-LIVE-02, OMP-LIVE-03, OMP-LIVE-04, UI-01
+**Success Criteria** (what must be TRUE):
+  1. A live Omp session loading the built extension with `-e` under an isolated profile attaches to the Realm daemon for the workspace (OMP-LIVE-01).
+  2. When the daemon cannot attach, the status item states disconnected with its reason, never active (OMP-LIVE-02).
+  3. The retry command reattaches from disconnected in the same live session (OMP-LIVE-03).
+  4. Shutdown of the Omp session leaves the Realm daemon running (OMP-LIVE-04).
+  5. The Omp plugin starts on session launch and shows its realm state in the Omp UI status item without blocking the session (UI-01).
+
+**Plans**: TBD
+
+### Phase 10: Docs, Packaging, and Release 0.2.0
+
+**Goal:** Host docs and snippets, MCP smoke check, pack assertions for each bundle, changelog, PR to main, and release 0.2.0.
+**Depends on:** Not stated in ROADMAP; phases run in ROADMAP order
+**Requirements:** HOST-03
+**Success Criteria** (what must be TRUE):
+  1. No host configuration outside this repository is changed without explicit approval, and the adapter bundles ship in the npm package with the pack check asserting each manifest (HOST-03).
+
+Release 0.2.0 and the PR to main are held by the owner's ship hold (2026-10-24); this block does not authorize either.
+
+**Plans**: TBD
+
+### Phase 11: Milestone v2.0 Close
+
+**Goal:** Milestone completion after a gsd-tools dry run, with scratch profiles and worktrees removed.
+**Depends on:** Not stated in ROADMAP; phases run in ROADMAP order
+**Requirements:** None mapped in REQUIREMENTS (milestone close)
+**Success Criteria** (what must be TRUE):
+  1. The gsd-tools milestone dry run completes before the milestone is completed.
+  2. Scratch profiles and worktrees created for the milestone are removed.
+
+**Plans**: TBD
+
+
 ## Progress
 
 **Execution Order:**
@@ -162,7 +211,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 | 5. Omp Plugin, MCP, and ACP Surfaces | 6/6 | Complete (verification deferred: human) | - |
 | 6. CLI, Daemon, and Host Packaging | 6/6 | Complete (verification deferred: human — 06-VERIFICATION.md, 5/5 must-haves, 6 live items) | - |
 | 7. Policy Reference and Security Review | 3 units, no PLAN files | Complete (verification deferred: human — 07-VERIFICATION.md, 9/9 must-haves, 5 human items) | - |
-| 8. Host Adapter Bundles | 0/4 | In progress: Claude Code, Grok Build, Muse Code, and Hermes Agent validators pass; Prime Agent has no validator, and its isolated install and list pass | - |
+| 8. Host Adapter Bundles | 1/1 | Complete (closed 2026-10-24 on validator exit codes; artifacts hand-written, pending owner ratification) | - |
 | 9. Live Omp Verification | 0/3 | In progress: OMP-LIVE-02 met live; OMP-LIVE-03 partial; OMP-LIVE-01 and OMP-LIVE-04 descoped to the follow-up milestone (owner decision 2026-10-23); UI-01 non-blocking recorded as a stated limitation | - |
 | 10. Docs, Packaging, and Release 0.2.0 | 0/4 | In progress: host snippets, Omp runbook, changelog, and pack check (Hermes JSON manifests) done; release 0.2.0 held by the owner's ship hold | - |
 | 11. Milestone v2.0 Close | 0/1 | Not started: phases 8 to 10 incomplete; gsd-tools dry run refuses (ROADMAP lists 7 unstarted phases); --force and --confirm not used | - |

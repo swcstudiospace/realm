@@ -3,14 +3,14 @@ gsd_state_version: "1.0"
 milestone: v2.0
 current_phase_name: Policy Reference and Security Review
 status: In progress (milestone v2.0)
-stopped_at: "Ship request declined at step 0: ultrathink-ship assess returned done false (roadmap 0/7); clean-dist gate chain green; triage and audit pass 1 recorded; owner decisions pending"
-last_updated: "2026-10-24T03:29:01.125Z"
+stopped_at: Run ut-mvlvx860 paused at phase 9 GREY_AREA_ACCEPTANCE (G1-G4) before PLAN; phase 8 closed on evidence; phase 10 and 11 outstanding
+last_updated: "2026-10-24T04:25:01.406Z"
 last_activity: 2026-10-23
 last_activity_desc: Milestone v1.0 completed and archived
-state_head: 0f578de31d0a7cbb11f1500c3dd7a5f659378321
+state_head: e79842ca820b5504ad81465550515ff234a9d143
 progress:
-  total_phases: 7
-  completed_phases: 7
+  total_phases: 11
+  completed_phases: 8
   total_plans: 1
   completed_plans: 40
 current_phase: 7
@@ -107,6 +107,7 @@ Open follow-ups: the AgentOS sandbox runner in the follow-up milestone (RT-04, C
 - Omp host write and edit interception is not documented (OQ-P5-02). The guard blocks writes while the policy mode is unknown. Audit G-09 part 5.4 stays open for this reason.
 - The Anda licence conflict still blocks vendoring Anda code.
 - Test timing: the lifecycle tests use wall-clock windows, widened to 1 to 4 s on this loaded host. Deterministic seams are a follow-up.
+- Run ut-mvlvx860 paused at phase 9: open blockers B-001 to B-005 (AgentOS unbound, live image and workload, Anda Engine, Podman 5.x on PATH, Linear free-issue limit). Detail in the Run ut-mvlvx860 section of STATE.
 
 ## Deferred Items
 
@@ -139,9 +140,9 @@ Detail, by phase: Phase 3 covers RT-01, RT-02, RT-03, RT-09, and the live parts 
 
 ## Session Continuity
 
-Last session: 2026-10-24T03:29:00.464Z
-Stopped at: Ship request declined at step 0: ultrathink-ship assess returned done false (roadmap 0/7); clean-dist gate chain green; triage and audit pass 1 recorded; owner decisions pending
-Resume file: .planning/phases/10-docs-packaging-release/10-02-TRIAGE-AUDIT.md
+Last session: 2026-10-24T04:25:00.949Z
+Stopped at: Run ut-mvlvx860 paused at phase 9 GREY_AREA_ACCEPTANCE (G1-G4) before PLAN; phase 8 closed on evidence; phase 10 and 11 outstanding
+Resume file: .planning/phases/09-live-omp-verification/09-CONTEXT.md
 
 Recorded commits (closure run): 72817e9 (private flag restored, engines >=22.13.0); 390f511 (causeCode and catalogue codes, host paths, lifecycle bound, root identity, exec margin); b6bc892 (daemon entry, AgentOS fail-closed, catalogue refusals, per-method control bounds); 8088159 (daemon owns sessions; tool method; daemon client; Omp and MCP attach); 4b1d4ab (smoke fixes: CLI probe, up and down exits, state-dir 0700); c55056a (traceability: requirements by evidence, spike facts, runtime config, Omp attach contract); a999c17 (audit gap closure: realm acp, refusal code mapping, one state-dir resolver, Omp status, pinned-root rebind, catch-site fixes, daemon server-failure stop); dd02034 (re-audit, planning, and docs); 54bc236 (MCP tool-call diagnostic); plus the decisions commit (see git log).
 
@@ -161,3 +162,84 @@ Recorded commits (earlier): e949ad3, 53fc919, 26ab145 (phases 1 to 3); 6b28fa4 a
 ## Operator Next Steps
 
 - Decided 2026-10-23: FS-02 accepted, OMP-LIVE-01 and -04 descoped, ship held, Linear left in Backlog. Remaining: archived v1.0 items on a Podman 5.x host, phases 8 to 10 completion, ultrathink-ship (held), and the v2.0 close (needs an explicit owner --confirm).
+
+## Run ut-mvlvx860-9e2d5e0a (gsd-autonomous, 2026-10-24)
+
+Status: PAUSED at GREY_AREA_ACCEPTANCE, phase 9, before PLAN. Resume instruction at the end of this section.
+
+### Graph and tracking
+
+- Graph ut-mvlvx860-9e2d5e0a. Spec: the session spec file, kept outside the repository. Notion Task https://app.notion.com/p/403bc1a0c7ae816bb29ac8d3ab9f8307?pvs=204 is set to Implementing. Session marked kicked off.
+- Linear: tracking partial. The workspace free-issue limit refused every issue, so 0 Linear issues and 0 sub-issues exist. Notion rows were reused from the planner. Fail-open per kickoff; see B-005.
+
+### Non-blocking defaults applied (not asked as blockers)
+
+- q1 install gate: pause per host install (recommended).
+- q2 codebases: this repository only.
+- q3 quality bar: touched code only.
+- q4 suspect decisions: raised at each phase's DISCUSS pause.
+- k1 realm: this repository's product (package.json bin `realm`; AGENTS.md).
+- k2 sessions: rootless Podman and the OpenShell gateway are required; no fallback engine (AGENTS.md; docs/integration/runtime-decision.md).
+
+### Realm target and run path (repository evidence)
+
+- Build and install: `npm ci`, `npm run build` (AGENTS.md Commands). CLI entry: dist/src/cli/main.js. Daemon entry: dist/src/daemon/main.js.
+- Working definition (dev environment starts and the smoke check passes): met at baseline by `npm run check:mcp`, exit 0.
+- User goal "realm up and running": not met. `realm up` fails closed with AGENTOS_NOT_CONFIGURED until an AgentOS driver is bound (AGENTS.md, Project). No live run was attempted in this pass. See B-001 and G1.
+
+### Baseline (before any change; HEAD e79842c; clean tree; host clock 2026-10-24)
+
+- npm ci 0; typecheck 0; lint 0; build 0; test 0 (1118 total, 1109 pass, 0 fail, 9 skipped); test:integration 0 (9 skipped, PODMAN_UNSUPPORTED_VERSION on Podman 4.9.3); test:scripts 0 (80 pass); check:docs 0; check:gates 0; check:pack 0; check:mcp 0; site build 0.
+- Platform: Ubuntu 24.04.4, Linux 6.8.0-147-generic, x86_64. Node 24.18.0. gh 2.45.0. openshell 0.1.2. Podman 4.9.3 on PATH; Podman 5.7.1 at /usr/local/bin.
+- Logs are kept outside the repository.
+
+### Install log
+
+- npm ci | project dependencies from package-lock.json | npm registry through the lockfile | project scope (node_modules) | reason: bootstrap | exit 0. No other install ran. Nothing global, no OS packages.
+
+### Decision log
+
+- D-001 [AUTO] The defaults above are applied. Reversal: edit them here and re-run DISCUSS for the affected phases.
+- D-002 [AUTO] Skill() calls: this harness has no Skill() tool. Each phase command runs by reading its skill and executing it from the top-level loop, one at a time, with no nested phase command. Reversal: use a Skill() tool if one appears.
+- D-003 [AUTO] ROADMAP detail blocks for phases 8 to 11 were added under the owner's 2026-10-24 amendment. Goals, criteria, membership, and order are unchanged. "Depends on" reads "Not stated in ROADMAP" because no dependency is stated. Written by hand because no GSD command adds detail blocks. Reversal: remove the blocks.
+- D-004 [AUTO] Phase 8 is closed on its validator exit codes, all 0, under the owner's 2026-10-24 closure decision. An addendum is appended to its SUMMARY. Owner ratification is pending. Reversal: remove the addendum and the ROADMAP marker.
+- D-005 [AUTO] Phase 9 DISCUSS is complete: CONTEXT written; locked USER decisions U-1 to U-4 not reopened; grey areas G1 to G4 raised at this pause. Reversal: none needed; artifact only.
+- D-006 [AUTO] The v1 reorganise, owner-approved on 2026-10-24 as a sanctioned step, is deferred to phase 11 closeout. It affects only the milestone-complete dry run, and running it now would shrink ROADMAP for no current gain.
+- D-007 [AUTO] Kickoff fails open on Linear. Notion rows are reused, the Task is set to Implementing, and the session is marked kicked off.
+- D-008 [AUTO] Commit policy: one local commit per completed phase boundary, explicit paths only, nothing pushed.
+
+Incident note, not a decision: while reading usage, I ran `state.signal-waiting` and `state.signal-resume` without arguments. They created and then removed `.planning/WAITING.json`. The tree was verified clean afterwards. Do not call gsd-tools state commands bare to read usage.
+
+### Blocker log
+
+- B-001 external decision (G1): AgentOS is unbound, so `realm up` refuses with AGENTOS_NOT_CONFIGURED. This blocks the phase 9 OMP-LIVE items and the user's goal of realm running. Open.
+- B-002 external (G2): REALM_LIVE_IMAGE (digest-pinned) and REALM_LIVE_WORKLOAD are unset, and the dedicated user's rootless store holds no image. This blocks the 8 live container gates. Open.
+- B-003 external (G3): the Anda Engine server is not installed (`anda` is Anda Bot 0.11.6), and licence conflict OQ-P3-11 is open. This blocks the ANDA live gates. Open.
+- B-004 environment (G4): Podman 4.9.3 resolves first on PATH; Podman 5.7.1 is at /usr/local/bin. This blocks the live Podman gates and any realm run. Open.
+- B-005 external tracker: Linear workspace free-issue limit. Blocks Linear rows only; non-blocking. Owner decision: upgrade, archive, or accept Notion-only tracking. Open.
+
+### TODO triage
+
+- User TODO list in the repository: not found. No TODO files exist. Checkbox lists exist only in verification reports under .planning. No TODO or FIXME markers exist in src, test, scripts, docs, adapters, tsconfig.json, or eslint.config.js.
+- This run's tracker: 36 prior items (23 done, 13 blocked) plus 63 Linked-issues lines. The 63 lines close with their nodes. Each prior blocked item maps to phase 9, 10, or 11, or to B-001 to B-005, so none is dropped.
+- Addressed this run: phase 8 closure, phase 9 DISCUSS, the phase 9 pause.
+- Not addressed: the codebase-wide quality and pattern overhaul (q3 default; it needs its own approved milestone), and the Linear backlog (B-005).
+
+### Pending questions (sent with this pause)
+
+- G1 AgentOS binding and OMP-LIVE scope: (a) feasibility gate, then reinstate OMP-LIVE-01, -03, -04 on go [recommended]; (b) bind now and reinstate now; (c) keep deferred, phase 9 closes on OMP-LIVE-02 and UI-01 evidence; (d) change the runner design, which needs a spec amendment.
+- G2 live gate inputs: (a) choose and pull a digest-pinned public base after registry approval [recommended]; (b) you supply the digest and workload; (c) keep the live container gates skipped.
+- G3 Anda Engine: (a) install upstream locally for live tests only, not vendored [recommended]; (b) keep the ANDA live gates skipped; (c) you supply the binary.
+- G4 Podman 5.x for realm runs: (a) put Podman 5.7.1 first on PATH for realm runs only, through the run environment [recommended]; (b) change the global PATH or profile; (c) keep Podman 4.9.3 and skip the live gates.
+
+### Phase status (workflow view, init.phase-op)
+
+- Phase 8: complete on evidence. CONTEXT, PLAN, SUMMARY, and VERIFICATION exist. Ratification pending.
+- Phase 9: paused at GREY_AREA_ACCEPTANCE. CONTEXT exists; no PLAN.
+- Phase 10: outstanding. Partial SUMMARY only; no CONTEXT, PLAN, or VERIFICATION. Release held by the ship hold.
+- Phase 11: outstanding, not started. Needs phases 9 and 10 complete and an explicit owner --confirm.
+
+### Resume instruction
+
+- When the answers arrive, record each as a USER decision in this section, with IDs from D-009 onward. If G1 is (a), run the feasibility gate outside the repository and record its result. Then re-check GREY_AREA_ACCEPTANCE for anything still open, and run PLAN for phase 9.
+- Phase 10 DISCUSS raises the ship-policy question: release, PR, and merge. Phase 11 needs explicit owner confirmation. ultrathink-ship stays uninvoked until the run is finished.
