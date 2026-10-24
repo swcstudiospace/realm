@@ -1,19 +1,19 @@
 ---
 gsd_state_version: "1.0"
+milestone: v2.0
+current_phase_name: Policy Reference and Security Review
 status: In progress (milestone v2.0)
-stopped_at: "Awaiting approvals: ship (PR and possible merge to main), licence, CI, README, archive, and confirmation of the FS-02 accepted approximation"
-last_updated: "2026-10-22T19:59:15.667Z"
-last_activity: 2026-10-22
+stopped_at: Phase 9 closed; phase 10 fix-now tier next
+last_updated: "2026-10-24T03:15:45.163Z"
+last_activity: 2026-10-23
 last_activity_desc: Milestone v1.0 completed and archived
-state_head: 08d9d19919e5676706184555de09683e9dddb2d5
+state_head: 10fd7d7156ab25f4761be177a5b4b4f98c60639b
 progress:
   total_phases: 7
   completed_phases: 7
-  total_plans: 40
+  total_plans: 1
   completed_plans: 40
-  percent: 100
 current_phase: 7
-current_phase_name: Policy Reference and Security Review
 ---
 
 # Project State
@@ -80,6 +80,14 @@ Full log lives in PROJECT.md Key Decisions table. Recent decisions affecting cur
 - [2026-10-22 gap closure]: The Omp status is one item, refreshed on a 2 s bounded interval, and every timer clears on shutdown (OMP-02, OMP-03)
 - [2026-10-22 gap closure]: The controller rebinds through verifyPinnedAt, which checks dev and ino and the /proc/self/fd real path, not a string path (FS-02, partial)
 - [2026-10-22 gap closure]: Catalogue has 27 codes; new are MCP_INPUT_FAILED and CLEANUP_FAILED
+- [Phase Pre-edit pause]: Pre-edit pause resolved by owner. (1) ROADMAP text rule amended for this run: phase 8-11 detail blocks derived from REQUIREMENTS, and the v1 reorganise through the sanctioned step; the audit allows those two changes plus status and progress fields. (2) Kickoff runs with tracker writes: Linear and Notion rows created or finished, Task status set to Implementing; duplicate risk with SPE-18512 to SPE-18519 accepted by owner. (3) Quality-bar scope: touched code, plus deletion of the wording-pin tests that AGENTS.md forbids in four files. — Owner answers at the pre-edit pause. Conflicts recorded: (a) spec serial phases versus kickoff parallel wave dispatch: writes stay serial and only read-only work runs in parallel; (b) ROADMAP text rule versus owner decisions: amended by decision (1); (c) kickoff Task status change versus the earlier Backlog decision: accepted by decision (2).
+- [Phase Discovery]: Discovery (wave 2). Active milestone: v2.0. Remaining phases in ROADMAP order: 8, 9, 10, 11. Declared dependencies: none in ROADMAP (phases 8-11 have no detail blocks yet); default is ROADMAP order. Start HEAD: dcb11dc67e20da99d4c7901133a63af12820cfe4. Tree before this record:  M .planning/STATE.md  (only run-recorded STATE changes). Start copy: gsd-start-roadmap-2026-10-24.md, SHA-256 4785d11f1b1325c98a21357ffc89279adee60750067c5c159dfac7f32965d6b9 (kept outside the repo; recorded by name and hash only). Gate commands from package.json: typecheck, lint, build, test, test:integration, test:scripts, check:docs, check:gates, check:pack, check:mcp, and the site build. TODO sources: none in src, test, scripts, docs, or adapters, and no referenced TODO document. Status convention: checkbox lines and the ROADMAP progress rows. — Start record for the ultrathink run; resumes must verify this hash rather than rewrite it. Conflicts pre-recorded: serial phases versus parallel wave dispatch (writes serial); ROADMAP text rule amended by owner decision; kickoff tracker writes accepted by owner decision.
+- [Phase Baseline]: Baseline (wave 3) at dcb11dc with Podman 4.9.3 on the default path: typecheck 0, lint 0, build 0, test 0 (1129 total, 1120 pass, 0 fail, 9 skipped), integration 0 (9 skipped), scripts 0 (80 pass), docs 0, gates 0, pack 0, mcp 0, site 0. The gate runs left the working tree unchanged. Raw logs are outside the repo. — Baseline captured before any edit, after the owner pre-edit answers. Integration is 9 skipped on Podman 4.9.3, matching the original baseline; the live 5.x gate needs the isolated runtime.
+- [Phase Phase 8]: Phase 8 complete on evidence: HOST-01 and HOST-02 passed in the isolated validator logs (Claude Code with warnings, Grok valid, Muse valid, Hermes passed, Prime install and list exit 0). Phase artifacts CONTEXT, PLAN, SUMMARY, and VERIFICATION were written by hand for this run; VERIFICATION is an orchestrator evidence check, not a gsd-verifier run. Flagged for owner ratification. — Phase 8 records validated by evidence, not a discuss, plan, and execute cycle, per the owner closure decision.
+- [Phase Phase 9]: Owner decision (phase 9 pause): fix the libpod route defect now as an accepted expansion of the active milestone. Scope: versioned libpod routes derived from the server's reported API version; a 404 counts as absence or success only when the body is Podman's no-such-container error; unit tests with a fake socket; a live check as the dedicated live user. — Accepted expansion into v1 runtime code, because the defect makes every libpod call fail on Podman 5.x. Recorded per the spec's pause rules.
+- [Phase Phase 9 checkpoint]: Phase 9 libpod fix, in progress under the owner's accepted expansion. Verified on Podman 5.7.1: GET /_ping returns 200 with a Libpod-Api-Version header; a missing container returns 404 with a JSON body whose cause is 'no such container' (inspect and remove); an unknown route returns 404 with plain text 'Not Found'; the versioned paths return 200. Remaining steps, in order: (1) libpod-routes: matchLibpodRoute accepts only a /v<semver> prefix, and routeTarget takes the API version; (2) libpod-client: discover the version from /_ping and validate it, otherwise fail with SCHEMA_INVALID; cache it per client and prefix every route; exchange returns headers; inspect and remove accept a 404 only when the JSON cause is 'no such container'; (3) test/support/fake-libpod: answer /_ping with the version header, and give the 404 body its cause and response fields; (4) new unit tests for versioning, the plain 404 failing closed, and the cause 404 accepted; (5) typecheck, lint, unit tests, and build, all green before any further step; (6) rebuild the dedicated user's copy and rerun the daemon, expecting the reaper to pass; (7) record phase 9 evidence, then start phase 10. No source edits were made in this checkpoint. — Resume plan for the libpod fix (see the phase 9 decision in STATE for the verified facts and the ordered steps).
+- [Phase Run start]: Ultrathink run for graph ut-mvlt86oy-3817dec5 on the v2.0 milestone: phases 9 to 11 outstanding; phase 8 complete on evidence. Defaults applied: unclear TODOs stay UNSCHEDULED; an AWAITING_USER phase holds later phases in its milestone unless ROADMAP documents independence; per-phase local commits, nothing pushed; accepted decisions recorded in STATE carry forward; the quality bar applies to produced code only; the full verification set runs at each phase exit and is diffed against the recorded baseline. Clarifications q1 to q4 are non-blocking and take their recommended defaults: bar for produced code, large TODOs left open, repository sources only, ask before upgrading. The planning pass's n7 wave plan is fallback content and unverified, so the wave plan is written from n1 to n6. Ship is not invoked: the owner's hold of 2026-10-24 stands, and the spec's own OUT_OF_SCOPE list excludes pull requests. — Start-of-run assumptions from the planning spec, recorded so later steps cite them rather than re-decide them.
+- [Phase 7]: Phase 9 closed on evidence: libpod routes versioned from /_ping Libpod-Api-Version; live daemon on Podman 5.7.1 passes startup reaping; realm status disconnected with reason no workspace; OMP-LIVE-02 refreshed; OMP-LIVE-01/03/04 remain descoped; UI-01 accepted limitation
 
 ### Parked
 
@@ -131,9 +139,9 @@ Detail, by phase: Phase 3 covers RT-01, RT-02, RT-03, RT-09, and the live parts 
 
 ## Session Continuity
 
-Last session: 2026-10-22
-Stopped at: v2.0 blocked-item pass complete for everything reachable. The Omp status item was fixed and observed live; validators were run; snippets, runbook, changelog, and planning were refreshed. Commits are listed in git log on feat/realm-v2-0.
-Resume file: None. Owner decisions 2026-10-23: FS-02 accepted; OMP-LIVE-01 and -04 descoped; ship held; Linear left in Backlog; UI-01 recorded as a limitation; Hermes trust untrusted kept. Next action on resume: phase 8 (HOST-02: Prime Agent has no validator) and phase 10 release decisions; the ship stays held until the archived items are verified on Podman 5.x.
+Last session: 2026-10-24T03:15:45.109Z
+Stopped at: Phase 9 closed; phase 10 fix-now tier next
+Resume file: .planning/phases/09-live-omp-verification/09-01-SUMMARY.md
 
 Recorded commits (closure run): 72817e9 (private flag restored, engines >=22.13.0); 390f511 (causeCode and catalogue codes, host paths, lifecycle bound, root identity, exec margin); b6bc892 (daemon entry, AgentOS fail-closed, catalogue refusals, per-method control bounds); 8088159 (daemon owns sessions; tool method; daemon client; Omp and MCP attach); 4b1d4ab (smoke fixes: CLI probe, up and down exits, state-dir 0700); c55056a (traceability: requirements by evidence, spike facts, runtime config, Omp attach contract); a999c17 (audit gap closure: realm acp, refusal code mapping, one state-dir resolver, Omp status, pinned-root rebind, catch-site fixes, daemon server-failure stop); dd02034 (re-audit, planning, and docs); 54bc236 (MCP tool-call diagnostic); plus the decisions commit (see git log).
 

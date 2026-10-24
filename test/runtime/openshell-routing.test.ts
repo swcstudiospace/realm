@@ -124,7 +124,13 @@ void test("RT-03: the libpod client exposes no method that starts or joins a pro
   await f.exec.probe(containerId);
   await f.exec.stop(containerId);
   await f.exec.destroy(containerId);
-  for (const request of f.libpod.requests()) {
+  // The version probe on /_ping is the one request outside the route table. It is a read that starts nothing,
+  // so it is exempt from the route check and must be a GET. Every other request must still match a route.
+  const requests = f.libpod.requests();
+  for (const probe of requests.filter((recorded) => recorded.target === "/_ping")) {
+    assert.equal(probe.method, "GET", "the version probe is a read");
+  }
+  for (const request of requests.filter((recorded) => recorded.target !== "/_ping")) {
     assert.notEqual(request.route, null, `request ${request.target} must match a known route`);
     assert.ok(LIBPOD_ROUTE_NAMES.includes(String(request.route)), `route ${String(request.route)} must be one of the five`);
     assert.equal(/\/start|exec|attach/.test(request.target), false, `request ${request.target} starts nothing`);

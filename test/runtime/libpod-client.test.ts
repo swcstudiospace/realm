@@ -107,7 +107,7 @@ void test("RT-09: removeContainer treats a 404 as success and forwards the force
   await client.removeContainer("never-created", { force: true });
   const removal = fake.requests().find((request) => request.route === "removeContainer");
   assert.equal(removal?.method, "DELETE");
-  assert.equal(removal.target, "/libpod/containers/never-created?force=true");
+  assert.match(removal.target, /\/libpod\/containers\/never-created\?force=true$/);
 });
 
 void test("RT-09: list asks for all containers filtered by the exact label pair", async (t) => {

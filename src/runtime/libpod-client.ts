@@ -16,10 +16,14 @@ import { request as httpRequest } from "node:http";
 import { isAbsolute } from "node:path";
 import { makeRealmError } from "../core/errors.js";
 import {
+  API_VERSION_PATTERN,
+  checkRouteId,
+  LIBPOD_API_VERSION_HEADER,
   LIBPOD_INFO_ROOTLESS_PATH,
   LIBPOD_INFO_VERSION_PATH,
   LIBPOD_LIST_ID_FIELD,
   LIBPOD_ROUTES,
+  PING_PATH,
   routeTarget,
   type LibpodRoute,
 } from "./libpod-routes.js";
@@ -54,6 +58,7 @@ interface Transport {
 interface HttpReply {
   readonly status: number;
   readonly text: string;
+  readonly headers: Readonly<Record<string, string | string[] | undefined>>;
 }
 
 interface RouteCall {
@@ -114,7 +119,7 @@ export class LibpodClient {
   // The raw inspect object, or null when the container does not exist.
   async inspectContainer(id: string): Promise<LibpodInspect | null> {
     const reply = await exchangeRoute(this.transport, LIBPOD_ROUTES.inspectContainer, { containerId: id });
-    if (reply.status === 404) {
+    if (isNoSuchContainer(reply)) {
       return null;
     }
     expectStatus(reply, [200]);
@@ -148,12 +153,17 @@ export class LibpodClient {
       containerId: id,
       query: { force: String(options.force) },
     });
-    expectStatus(reply, [204, 404]);
+    if (isNoSuchContainer(reply)) {
+      return;
+    }
+    expectStatus(reply, [204]);
   }
 }
 
-function exchangeRoute(transport: Transport, route: LibpodRoute, call: RouteCall): Promise<HttpReply> {
-  const target = routeTarget(route, call.containerId, call.query);
+async function exchangeRoute(transport: Transport, route: LibpodRoute, call: RouteCall): Promise<HttpReply> {
+  checkRouteId(route, call.containerId);
+  const apiVersion = await apiVersionOf(transport);
+  const target = routeTarget(route, call.containerId, apiVersion, call.query);
   return exchange(transport.socketPath, route.method, target, transport.timeoutMs + (call.graceMs ?? 0));
 }
 
@@ -192,7 +202,7 @@ function exchange(socketPath: string, method: string, target: string, timeoutMs:
         });
         res.on("end", () => {
           settle(() => {
-            resolve({ status: res.statusCode ?? 0, text: Buffer.concat(chunks).toString("utf8") });
+            resolve({ status: res.statusCode ?? 0, text: Buffer.concat(chunks).toString("utf8"), headers: res.headers });
           });
         });
         res.on("error", fail);
@@ -211,6 +221,42 @@ function expectStatus(reply: HttpReply, allowed: readonly number[]): void {
   if (!allowed.includes(reply.status)) {
     throw makeRealmError("SCHEMA_INVALID");
   }
+}
+
+// Podman answers a missing container with a 404 whose JSON cause is "no such container". Any other 404 is
+// a wrong route or an unexpected reply, so it is never read as absence. A non-JSON 404 fails in parseJson.
+function isNoSuchContainer(reply: HttpReply): boolean {
+  if (reply.status !== 404) {
+    return false;
+  }
+  const body = parseJson(reply.text);
+  return isRecord(body) && body["cause"] === "no such container";
+}
+
+// The API version each transport reported on /_ping. A failed probe is dropped, so the next call asks again.
+const apiVersions = new WeakMap<Transport, Promise<string>>();
+
+function apiVersionOf(transport: Transport): Promise<string> {
+  const known = apiVersions.get(transport);
+  if (known !== undefined) {
+    return known;
+  }
+  const pending = pingApiVersion(transport).catch((error: unknown) => {
+    apiVersions.delete(transport);
+    throw error;
+  });
+  apiVersions.set(transport, pending);
+  return pending;
+}
+
+async function pingApiVersion(transport: Transport): Promise<string> {
+  const reply = await exchange(transport.socketPath, "GET", PING_PATH, transport.timeoutMs);
+  expectStatus(reply, [200]);
+  const version = reply.headers[LIBPOD_API_VERSION_HEADER];
+  if (typeof version !== "string" || !API_VERSION_PATTERN.test(version)) {
+    throw makeRealmError("SCHEMA_INVALID");
+  }
+  return version;
 }
 
 function parseJson(text: string): unknown {
