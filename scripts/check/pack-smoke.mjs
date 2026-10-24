@@ -5,7 +5,7 @@
 // omits them fails here with ENOENT. Run `npm run build` first; check:pack does not build.
 
 import { execFile } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -66,6 +66,13 @@ export function missingAdapterManifests(packageRoot) {
   return ADAPTER_MANIFESTS.filter((path) => !existsSync(join(packageRoot, path)));
 }
 
+// Lists each entry point the installed manifest declares (the CLI bin and the Omp extension) that is absent.
+export function missingDeclaredEntries(packageRoot) {
+  const manifest = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8"));
+  const declared = [...Object.values(manifest.bin ?? {}), ...(manifest.omp?.extensions ?? [])];
+  return declared.filter((path) => !existsSync(join(packageRoot, path)));
+}
+
 async function run(file, args, options) {
   try {
     return await execFileAsync(file, args, {
@@ -100,6 +107,10 @@ async function main() {
     const missing = missingAdapterManifests(join(consumerDir, "node_modules", "agent-realm"));
     if (missing.length > 0) {
       throw new Error(`packed package is missing adapter manifests: ${missing.join(", ")}`);
+    }
+    const missingEntries = missingDeclaredEntries(join(consumerDir, "node_modules", "agent-realm"));
+    if (missingEntries.length > 0) {
+      throw new Error(`packed package is missing declared entries: ${missingEntries.join(", ")}`);
     }
 
     await writeFile(join(consumerDir, "probe.mjs"), PROBE_SOURCE);

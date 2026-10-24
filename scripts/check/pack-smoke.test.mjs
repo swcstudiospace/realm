@@ -8,6 +8,7 @@ import {
   buildInstallArgs,
   buildPackArgs,
   missingAdapterManifests,
+  missingDeclaredEntries,
   tarballFromPackOutput,
 } from "./pack-smoke.mjs";
 
@@ -48,6 +49,22 @@ test("missingAdapterManifests reports every manifest absent from the package roo
       writeFileSync(join(root, path), "{}\n");
     }
     assert.deepEqual(missingAdapterManifests(root), []);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("missingDeclaredEntries lists each declared bin or Omp entry that is absent, and clears when it appears", () => {
+  const root = mkdtempSync(join(tmpdir(), "realm-pack-entries-"));
+  try {
+    writeFileSync(
+      join(root, "package.json"),
+      JSON.stringify({ bin: { realm: "./dist/src/cli/main.js" }, omp: { extensions: ["./dist/src/omp/extension.js"] } }),
+    );
+    assert.deepEqual(missingDeclaredEntries(root), ["./dist/src/cli/main.js", "./dist/src/omp/extension.js"]);
+    mkdirSync(join(root, "dist", "src", "cli"), { recursive: true });
+    writeFileSync(join(root, "dist", "src", "cli", "main.js"), "");
+    assert.deepEqual(missingDeclaredEntries(root), ["./dist/src/omp/extension.js"]);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

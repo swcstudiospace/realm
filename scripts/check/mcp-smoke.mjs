@@ -124,10 +124,10 @@ async function main() {
   const configHome = join(scratch, "config");
   const stateDir = join(scratch, "state");
   const workspaceRoot = join(scratch, "workspace");
-  mkdirSync(workspaceRoot);
-  writeRuntime(configHome, stateDir, workspaceRoot);
   const env = { PATH: process.env.PATH ?? "/usr/bin", HOME: scratch, XDG_CONFIG_HOME: configHome, XDG_RUNTIME_DIR: scratch };
   try {
+    mkdirSync(workspaceRoot);
+    writeRuntime(configHome, stateDir, workspaceRoot);
     const { replies, stderr } = await session(env, scratch, workspaceRoot, [
       [1, "initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "mcp-smoke", version: "0" } }],
       [2, "tools/list", {}],
