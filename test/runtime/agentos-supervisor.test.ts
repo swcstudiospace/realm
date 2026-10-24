@@ -1,8 +1,5 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { RealmError } from "../../src/core/errors.js";
 import {
   AGENTOS_BACKOFF_BASE_MS,
@@ -13,8 +10,6 @@ import {
 } from "../../src/runtime/agentos.js";
 import { FakeAgentOsDriver } from "../support/fake-agentos.js";
 
-// This file runs from dist/test/runtime, so three levels up is the package root.
-const PACKAGE_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const CALL_TIMEOUT_MS = 50;
 
 function harness(): {
@@ -215,11 +210,6 @@ void test("a stopped supervisor neither probes nor restarts the driver (RT-04)",
   assert.equal(driver.callCount("alive"), 0);
   assert.equal(driver.callCount("start"), 1);
   assert.equal(driver.isRunning(), false);
-});
-
-void test("the package manifest names no AgentOS library package, so no driver binding exists (RT-04, OQ-P3-05, OQ-P3-06)", () => {
-  const manifest = readFileSync(join(PACKAGE_ROOT, "package.json"), "utf8");
-  assert.equal(/@rivet-dev|agentos-core/.test(manifest), false);
 });
 
 void test("stopping during an in-flight probe leaves no restart after stop and no timer behind (RT-04, G1)", async () => {

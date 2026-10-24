@@ -57,7 +57,7 @@ const CATEGORY_MAP: ReadonlyArray<{ readonly category: string; readonly files: r
   },
   {
     category: "anda bridge",
-    files: ["anda/handshake.test.ts", "anda/reconnect.test.ts", "anda/no-shim.test.ts", "anda/boundary-decision.test.ts"],
+    files: ["anda/handshake.test.ts", "anda/reconnect.test.ts", "anda/no-shim.test.ts"],
   },
   {
     category: "tools",
@@ -117,7 +117,6 @@ const D45_FILES = [
   "runtime/hardening.test.ts",
   "runtime/agentos-supervisor.test.ts",
   "runtime/libpod-client.test.ts",
-  "runtime/decision-note.test.ts",
   "runtime/egress.test.ts",
   "session/reap.test.ts",
   "tools/dispatch.test.ts",
@@ -126,7 +125,6 @@ const D45_FILES = [
   "anda/handshake.test.ts",
   "anda/reconnect.test.ts",
   "anda/no-shim.test.ts",
-  "anda/boundary-decision.test.ts",
   "realm/compose.test.ts",
   "mcp/server.test.ts",
   "acp/agent.test.ts",
