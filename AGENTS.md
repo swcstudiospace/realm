@@ -90,7 +90,7 @@ Every gate must pass before a change is reviewed (`CONTRIBUTING.md`).
 - The release line is `0.<milestone minor>.<part>`. `release/milestone.json` holds the minor: v1.0 is minor 1, so its line is `0.1.x`.
 - Every green push to `main` publishes the next part: `0.1.0` first, then `0.1.1`, and so on. `scripts/release/next-version.mjs` derives the next part from the latest `v0.*` tag. A milestone minor that is behind the latest tag fails the release.
 - A new milestone starts in a pull request that sets the next minor number in `release/milestone.json`. Its first release is `<minor>.0`.
-- The release job owns the version in `package.json`, the version in `package-lock.json`, and `CHANGELOG.md`. Pull requests never edit those three.
+- The release job owns the `version` field in `package.json`, `package-lock.json`, `CHANGELOG.md`, and the four adapter manifests that carry a release version: `adapters/claude-plugin/.claude-plugin/plugin.json`, `adapters/muse-code/.muse-plugin/plugin.json`, `adapters/hermes-agent/plugin.json`, and `adapters/prime-agent/package.json`. Pull requests never edit those files' version fields or `CHANGELOG.md`.
 - The release job skips a version whose tag already exists on origin. Otherwise it tags `v<version>`, packs the npm tarball, and creates the GitHub release (`.github/workflows/ci.yml`).
 
 ## Merge and release flow

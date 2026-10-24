@@ -327,7 +327,7 @@ jobs:
           TAG: ${{ steps.tag_check.outputs.tag }}
         run: |
           set -euo pipefail
-          git add package.json package-lock.json CHANGELOG.md
+          git add package.json package-lock.json CHANGELOG.md adapters/claude-plugin/.claude-plugin/plugin.json adapters/muse-code/.muse-plugin/plugin.json adapters/hermes-agent/plugin.json adapters/prime-agent/package.json
           if git diff --cached --quiet; then
             echo "No release file changes to commit."
           else
