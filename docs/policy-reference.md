@@ -79,6 +79,7 @@ The default stays `advisory`; a project that expects containment opts in to `fai
   (`src/lifecycle/controller.ts:373-383`). A `create` naming a different
   workspace than the recorded/bound one (including while live) also throws
   `POLICY_DENIED` (`src/lifecycle/controller.ts:160-167`).
+- **Breadth (residual R7):** the loader accepts any absolute directory, including the filesystem root `/`. A root of `/` places every host path inside a policy root, so the bind check no longer narrows the workspace. Keep each root as narrow as the project needs. No breadth refusal is implemented; the Phase 7 security review records R7 as an open residual (`.planning/milestones/v1.0-phases/07-policy-reference-and-security-review/07-SECURITY-REVIEW.md`, section 6).
 - **Enforced by:**
   - Startup bind in `create`: `bindWorkspace` before any record/port work,
     inside the startup budget (`src/lifecycle/controller.ts:155-156`).
