@@ -3,11 +3,11 @@ gsd_state_version: "1.0"
 milestone: v2.0
 current_phase_name: Policy Reference and Security Review
 status: In progress (milestone v2.0)
-stopped_at: Phase 9 closed on evidence (4579214); Phase 10 fix-now tier committed (00daeaf); release steps held by owner; Phase 11 blocked until release and owner confirm
-last_updated: "2026-10-24T03:22:57.291Z"
+stopped_at: "Ship request declined at step 0: ultrathink-ship assess returned done false (roadmap 0/7); clean-dist gate chain green; triage and audit pass 1 recorded; owner decisions pending"
+last_updated: "2026-10-24T03:29:01.125Z"
 last_activity: 2026-10-23
 last_activity_desc: Milestone v1.0 completed and archived
-state_head: 00daeaf109656a84b563062eb5eda0c0f488ea79
+state_head: 0f578de31d0a7cbb11f1500c3dd7a5f659378321
 progress:
   total_phases: 7
   completed_phases: 7
@@ -139,9 +139,9 @@ Detail, by phase: Phase 3 covers RT-01, RT-02, RT-03, RT-09, and the live parts 
 
 ## Session Continuity
 
-Last session: 2026-10-24T03:22:57.224Z
-Stopped at: Phase 9 closed on evidence (4579214); Phase 10 fix-now tier committed (00daeaf); release steps held by owner; Phase 11 blocked until release and owner confirm
-Resume file: .planning/phases/10-docs-packaging-release/10-01-SUMMARY.md
+Last session: 2026-10-24T03:29:00.464Z
+Stopped at: Ship request declined at step 0: ultrathink-ship assess returned done false (roadmap 0/7); clean-dist gate chain green; triage and audit pass 1 recorded; owner decisions pending
+Resume file: .planning/phases/10-docs-packaging-release/10-02-TRIAGE-AUDIT.md
 
 Recorded commits (closure run): 72817e9 (private flag restored, engines >=22.13.0); 390f511 (causeCode and catalogue codes, host paths, lifecycle bound, root identity, exec margin); b6bc892 (daemon entry, AgentOS fail-closed, catalogue refusals, per-method control bounds); 8088159 (daemon owns sessions; tool method; daemon client; Omp and MCP attach); 4b1d4ab (smoke fixes: CLI probe, up and down exits, state-dir 0700); c55056a (traceability: requirements by evidence, spike facts, runtime config, Omp attach contract); a999c17 (audit gap closure: realm acp, refusal code mapping, one state-dir resolver, Omp status, pinned-root rebind, catch-site fixes, daemon server-failure stop); dd02034 (re-audit, planning, and docs); 54bc236 (MCP tool-call diagnostic); plus the decisions commit (see git log).
 
