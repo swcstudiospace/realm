@@ -9,7 +9,7 @@ import { podmanSkipReason, type PodmanProbe } from "../../src/runtime/podman-ver
 const TEST_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "test");
 
 // D-45 category directories. Each must hold at least one *.test.ts file.
-// Phase 5 adds the realm, mcp, acp, omp, surfaces, and docs suites (TOOL-05, OMP-01 to OMP-05).
+// Phase 5 adds the realm, mcp, acp, omp, and surfaces suites (TOOL-05, OMP-01 to OMP-05).
 const CATEGORY_DIRS = [
   "core",
   "fs",
@@ -27,7 +27,6 @@ const CATEGORY_DIRS = [
   "acp",
   "omp",
   "surfaces",
-  "docs",
 ] as const;
 
 // F-5 category map: each named category is carried by the files listed under it.
@@ -76,7 +75,6 @@ const CATEGORY_MAP: ReadonlyArray<{ readonly category: string; readonly files: r
     category: "surface equivalence",
     files: ["surfaces/equivalence.test.ts"],
   },
-  { category: "phase notes", files: ["docs/phase5-notes.test.ts"] },
 ];
 
 // Every D-45 test file. Requirement citations are searched only in these files.
@@ -134,7 +132,6 @@ const D45_FILES = [
   "acp/agent.test.ts",
   "omp/plugin.test.ts",
   "surfaces/equivalence.test.ts",
-  "docs/phase5-notes.test.ts",
   "quality/suite-taxonomy.test.ts",
 ] as const;
 
