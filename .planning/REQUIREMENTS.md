@@ -103,19 +103,19 @@ All v1 requirements are hypotheses until shipped and verified.
 ### Host adapters (HOST)
 
 - [x] **HOST-01**: Claude Code and Grok Build share one plugin bundle (`adapters/claude-plugin`) whose manifest and MCP entry start `realm mcp`; each host's own validator accepts it
-- [ ] **HOST-02**: Muse Code, Hermes Agent, and Prime Agent each have an adapter bundle (`adapters/muse-code`, `adapters/hermes-agent`, `adapters/prime-agent`) and an MCP snippet, each accepted by that host's own validator in an isolated directory
+- [x] **HOST-02**: Muse Code, Hermes Agent, and Prime Agent each have an adapter bundle (`adapters/muse-code`, `adapters/hermes-agent`, `adapters/prime-agent`) and an MCP snippet, each accepted by that host's check in an isolated directory: the host's own validator where it has one (`MUSE_EXPERIMENTAL_PLUGINS=1 muse plugins validate` for Muse Code, `hermes plugins validate` for Hermes Agent), and for Prime Agent, which has no validator subcommand, an isolated project-local `prime-agent package install <repo>/adapters/prime-agent --local` followed by `prime-agent package list` (wording amended by owner decision, 2026-10-24)
 - [ ] **HOST-03**: No host configuration outside this repository is changed without explicit approval; the adapter bundles ship in the npm package and the pack check asserts each manifest
 
 ### Omp live verification (OMP-LIVE)
 
 - [ ] **OMP-LIVE-01**: A live Omp session loading the built extension with `-e` under an isolated profile attaches to the Realm daemon for the workspace (descoped from v2.0 to the follow-up milestone by the owner, 2026-10-23; not met on this host)
 - [x] **OMP-LIVE-02**: When the daemon cannot attach, the status item states disconnected with its reason, never active
-- [ ] **OMP-LIVE-03**: The retry command reattaches from disconnected in the same live session
+- [ ] **OMP-LIVE-03**: The retry command reattaches from disconnected in the same live session (descoped from v2.0 to the follow-up milestone by the owner, 2026-10-24; not met on this host, which has no active daemon)
 - [ ] **OMP-LIVE-04**: Shutdown of the Omp session leaves the Realm daemon running (descoped from v2.0 to the follow-up milestone by the owner, 2026-10-23)
 
 ### Integrated UI (UI)
 
-- [ ] **UI-01**: The Omp plugin starts on session launch and shows its realm state in the Omp UI status item without blocking the session
+- [ ] **UI-01**: The Omp plugin starts on session launch and shows its realm state in the Omp UI status item without blocking the session (accepted limitation by owner decision, 2026-10-23: the status item appears at launch; a non-blocking check was not demonstrated, because get_state took about 6 s during the attach and the cause is not isolated)
 
 ## v2 Requirements (deferred)
 
@@ -187,10 +187,10 @@ Filled by the roadmap. Each v1 requirement maps to exactly one phase.
 | QUAL-02 | Phase 2 | Complete |
 | QUAL-03 | Phase 7 | Complete |
 | HOST-01 | Phase 8 | Complete (Claude Code validate passes with 2 warnings; Grok validate passes; MCP entry is realm mcp) |
-| HOST-02 | Phase 8 | Partial (Muse and Hermes validators pass; Prime has no validator, isolated install and list pass) |
-| HOST-03 | Phase 10 | Pending (pack check passes with the Hermes JSON manifests; release 0.2.0 held by the owner's ship hold) |
+| HOST-02 | Phase 8 | Complete (2026-10-24: Claude Code, Grok Build, Muse Code, and Hermes Agent validators pass in isolated homes; Prime Agent isolated install and list pass; wording amended by owner decision 2026-10-24) |
+| HOST-03 | Phase 10 | Partial (no host configuration file references this repository; the pack check asserts the six adapter manifests and the declared bin and Omp entries; residual: an earlier, non-isolated Claude validate may have written backups under the Claude config directory, not attributed; release 0.2.0 held by the owner's ship hold) |
 | OMP-LIVE-01 | Phase 9 | Descoped to follow-up (owner decision 2026-10-23); not met on this host (daemon refuses at startup; AgentOS unbound) |
-| OMP-LIVE-02 | Phase 9 | Complete (live: disconnected with the daemon's own reason; never active) |
-| OMP-LIVE-03 | Phase 9 | Partial (retry re-runs the attach in the same session; reattach to active not reachable here) |
+| OMP-LIVE-02 | Phase 9 | Complete (live 2026-10-23: disconnected with the daemon's own reason, never active; re-run 2026-10-24 on Podman 5.7.1: disconnected with SCHEMA_INVALID, never active) |
+| OMP-LIVE-03 | Phase 9 | Descoped to follow-up (owner decision 2026-10-24); not met on this host (no active daemon) |
 | OMP-LIVE-04 | Phase 9 | Descoped to follow-up (owner decision 2026-10-23); no daemon survives on this host |
-| UI-01 | Phase 9 | Partial (status item from launch; non-blocking not demonstrated) |
+| UI-01 | Phase 9 | Accepted limitation (owner decision 2026-10-23): status item at launch; non-blocking not demonstrated |
