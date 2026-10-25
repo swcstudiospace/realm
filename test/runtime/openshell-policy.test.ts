@@ -37,9 +37,12 @@ void test("RT-03: the policy declares version 1, a hard-requirement Landlock, an
   assert.notEqual(document.process.run_as_user, "0");
 });
 
-void test("RT-03: the policy grants the in-sandbox workspace read-write and nothing read-only", () => {
+void test("RT-03: the policy grants the workspace and /tmp read-write and the system paths read-only", () => {
   const document = buildPolicyDocument(DENY, BINARY);
-  assert.deepEqual(document.filesystem_policy, { read_only: [], read_write: ["/workspace"] });
+  assert.deepEqual(document.filesystem_policy, {
+    read_only: ["/usr", "/bin", "/lib", "/lib64", "/etc", "/opt", "/proc", "/dev/urandom"],
+    read_write: ["/workspace", "/tmp"],
+  });
 });
 
 void test("RT-03: an empty allowlist renders network_policies as an empty map, which is deny-all egress (D-103)", () => {

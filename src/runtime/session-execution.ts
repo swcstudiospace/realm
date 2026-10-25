@@ -45,8 +45,8 @@ const CONTAINER_STOP_GRACE_MS = 10_000;
 // settles the stop first; this timer only guarantees the container step is reached.
 const AGENTOS_STOP_DEADLINE_MS = 15_000;
 // The sandbox limits come from the frozen profile, so they cannot drift from the verifier.
-const SANDBOX_CPUS = HARDENING_PROFILE.nanoCpus / 1_000_000_000;
-const SANDBOX_MEMORY = `${String(HARDENING_PROFILE.memoryBytes / 1024 ** 3)}g`;
+export const SANDBOX_CPUS = HARDENING_PROFILE.nanoCpus / 1_000_000_000;
+export const SANDBOX_MEMORY = `${String(HARDENING_PROFILE.memoryBytes / 1024 ** 3)}Gi`;
 
 // The only environment names the OpenShell CLI receives. Each one is needed by the CLI to locate its
 // configuration and the rootless Podman socket. No other name crosses from the host.
@@ -124,6 +124,7 @@ export class SessionExecution implements ExecutionService {
         cpus: SANDBOX_CPUS,
         memory: SANDBOX_MEMORY,
         workloadArgv: runtime.workloadArgv,
+        imageRef: runtime.image,
       },
       OPENSHELL_CREATE_DEADLINE_MS,
     );

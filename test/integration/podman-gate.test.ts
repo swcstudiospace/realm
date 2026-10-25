@@ -24,9 +24,10 @@ import { loadRuntimeConfig, type RuntimeConfig } from "../../src/runtime/config.
 import { HARDENING_PROFILE, verifyInspect } from "../../src/runtime/hardening.js";
 import { LibpodClient, type LibpodInspect } from "../../src/runtime/libpod-client.js";
 import {
-  MANAGED_LABEL_KEY,
+  OPENSHELL_MANAGED_LABEL_KEY,
   runOpenShellCreate,
-  SESSION_LABEL_KEY,
+  OPENSHELL_SANDBOX_NAME_LABEL_KEY,
+  realmSandboxName,
   writePolicyDocument,
   type OpenShellRunner,
 } from "../../src/runtime/openshell.js";
@@ -60,7 +61,7 @@ const gate = podmanSkipReason(probe);
 // Below Podman 5.x every test in this file is skipped with a reason that names the detected
 // version; the skip is the gate, not a suppression. The live bodies below also need a rootless API
 // socket, an openshell CLI on PATH, and a digest-pinned image. The gate checks that the socket and the CLI
-// are present; it does not run the CLI, so the 0.1.2 version is checked by the doctor's openshell item.
+// are present; it does not run the CLI, so the 0.1.5 version is checked by the doctor's openshell item.
 // Phase 3 verification runs on a 4.9.3 host, so none of them executes there.
 void test("Podman gate: the host reports Podman 5.x or newer (RT-02)", { skip: gate }, () => {
   if (probe.kind !== "output") {
@@ -84,7 +85,7 @@ const LIVE_WORKLOAD_VARIABLE = "REALM_LIVE_WORKLOAD";
 const LIVE_CREATE_DEADLINE_MS = 60_000;
 // The sandbox limits come from the frozen hardening profile, as the composition derives them.
 const SANDBOX_CPUS = HARDENING_PROFILE.nanoCpus / 1_000_000_000;
-const SANDBOX_MEMORY = `${String(HARDENING_PROFILE.memoryBytes / 1024 ** 3)}g`;
+const SANDBOX_MEMORY = `${String(HARDENING_PROFILE.memoryBytes / 1024 ** 3)}Gi`;
 
 const liveGate: string | false = gate === false ? liveInputsSkipReason() : gate;
 
@@ -238,7 +239,7 @@ void test("RT-03 live: the workload starts only through the pinned OpenShell cre
   assert.ok(separator > 0, "the argv must carry the -- separator before the workload");
   assert.deepEqual(argv.slice(separator + 1), live.config.workloadArgv);
   const inspect = await live.libpod.inspectContainer(live.containerId);
-  assert.equal(labelOf(inspect, SESSION_LABEL_KEY), live.sessionId);
+  assert.equal(labelOf(inspect, OPENSHELL_SANDBOX_NAME_LABEL_KEY), realmSandboxName(live.sessionId));
 });
 
 // Removes only the containers this test created. The sweep is the production removeAllRealmContainers,
@@ -261,7 +262,7 @@ void test("RT-09 live: the down sweep leaves none of the containers this test cr
   const live = await createLiveContainer(t);
   const created = new Set([live.containerId]);
   await removeAllRealmContainers(scopedSweep(live.libpod, created));
-  const remaining = (await live.libpod.listContainersByLabel(MANAGED_LABEL_KEY, "true")).filter((container) =>
+  const remaining = (await live.libpod.listContainersByLabel(OPENSHELL_MANAGED_LABEL_KEY, "true")).filter((container) =>
     created.has(container.id),
   );
   assert.deepEqual(remaining, [], "a zero-orphan sweep leaves no container this test created");
@@ -346,7 +347,7 @@ void test("RT-08 live: a crash during up is reaped on the next start on a live h
   assert.equal(result.containersRemoved, 1, "the orphan container is removed");
   assert.equal(result.recordsDeleted, 1, "the stale record is deleted after the sweep");
   assert.deepEqual(store.list(), [], "no record survives the reap");
-  const remaining = (await live.libpod.listContainersByLabel(MANAGED_LABEL_KEY, "true")).filter((container) =>
+  const remaining = (await live.libpod.listContainersByLabel(OPENSHELL_MANAGED_LABEL_KEY, "true")).filter((container) =>
     created.has(container.id),
   );
   assert.deepEqual(remaining, [], "no created container survives the reap");

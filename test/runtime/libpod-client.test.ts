@@ -9,7 +9,7 @@ import { LibpodClient } from "../../src/runtime/libpod-client.js";
 import { LIBPOD_ROUTES, type LibpodRouteName } from "../../src/runtime/libpod-routes.js";
 import { FakeLibpod, type FakeLibpodOptions, type RecordedRequest } from "../support/fake-libpod.js";
 
-const LABEL_KEY = "io.realm.managed";
+const LABEL_KEY = "openshell.managed";
 
 async function startFake(
   t: TestContext,
@@ -79,8 +79,8 @@ void test("RT-03: no exec, attach, or start-exec route appears in the route tabl
 void test("RT-09: list, inspect, stop, and remove round-trip against the fake socket server", async (t) => {
   const { fake, socketPath } = await startFake(t);
   const store = fake.store;
-  store.add({ id: "realm-a", labels: { [LABEL_KEY]: "true", "io.realm.session": "a" }, running: true });
-  store.add({ id: "realm-b", labels: { [LABEL_KEY]: "true", "io.realm.session": "b" }, running: false });
+  store.add({ id: "realm-a", labels: { [LABEL_KEY]: "true", "openshell.ai/sandbox-name": "realm-a" }, running: true });
+  store.add({ id: "realm-b", labels: { [LABEL_KEY]: "true", "openshell.ai/sandbox-name": "realm-b" }, running: false });
   store.add({ id: "foreign", labels: { owner: "someone-else" }, running: true });
   const client = new LibpodClient(socketPath);
 

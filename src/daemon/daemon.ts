@@ -61,7 +61,9 @@ import {
 // Default bound for one AgentOS driver call in the production supervisor. The
 // only purpose is to keep a hung driver from hanging daemon startup; the
 // controller still enforces the policy startup budget around the whole path.
-const AGENTOS_CALL_TIMEOUT_MS = 5000;
+// The supervisor wraps every driver call in this budget, and a sandbox create takes tens of seconds. It
+// must exceed the driver's create budget (AGENTOS_START_TIMEOUT_MS in main.ts, 180 s) with margin.
+const AGENTOS_CALL_TIMEOUT_MS = 200_000;
 
 // How the start gate settles: open for serving, or failed with the start error.
 type GateOutcome = { readonly ok: true } | { readonly ok: false; readonly error: unknown };

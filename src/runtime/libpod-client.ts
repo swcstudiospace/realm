@@ -44,6 +44,8 @@ export interface LibpodInfo {
 
 export interface LibpodContainerSummary {
   readonly id: string;
+  // The container's labels as libpod reports them. Absent from a listing that carried none.
+  readonly labels?: Readonly<Record<string, string>>;
 }
 
 // The raw inspect object. The hardening verifier (D-51) checks its fields and fails
@@ -112,7 +114,16 @@ export class LibpodClient {
       if (typeof id !== "string" || id === "") {
         throw makeRealmError("SCHEMA_INVALID");
       }
-      return { id };
+      const raw = readPath(entry, ["Labels"]);
+      const labels: Record<string, string> = {};
+      if (typeof raw === "object" && raw !== null && !Array.isArray(raw)) {
+        for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+          if (typeof value === "string") {
+            labels[key] = value;
+          }
+        }
+      }
+      return { id, labels };
     });
   }
 

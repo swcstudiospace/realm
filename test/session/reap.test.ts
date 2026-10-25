@@ -12,7 +12,7 @@ import { SessionStore } from "../../src/session/store.js";
 import { FakeContainerStore, FakeLibpod } from "../support/fake-libpod.js";
 
 const REALM_ID = "7b1c2d3e-4f50-4a61-8b72-9c83d4e5f601";
-const REALM_LABELS = { "io.realm.managed": "true" };
+const REALM_LABELS = { "openshell.managed": "true" };
 
 interface Fixture {
   readonly stateDir: string;
@@ -62,13 +62,13 @@ void test("RT-08: reapStartup removes every container before it deletes any reco
   const { stateDir, store, containers, client } = await startFixture(t);
   store.save(recordFor(stateDir, "session-null", null));
   store.save(recordFor(stateDir, "session-live", "realm-live"));
-  containers.add({ id: "realm-live", labels: { ...REALM_LABELS, "io.realm.session": "session-live" }, running: true });
+  containers.add({ id: "realm-live", labels: { ...REALM_LABELS, "openshell.ai/sandbox-name": "realm-live" }, running: true });
 
   const log: string[] = [];
   const observed = {
     list: () => store.list(),
     delete: (sessionId: string) => {
-      const left = containers.list().filter((container) => container.labels["io.realm.managed"] === "true");
+      const left = containers.list().filter((container) => container.labels["openshell.managed"] === "true");
       log.push(`record:${sessionId}:containers-left=${String(left.length)}`);
       store.delete(sessionId);
     },
@@ -96,7 +96,7 @@ void test("RT-08: reapStartup removes every container before it deletes any reco
 void test("RT-08: reapStartup reaps a crash during realm up with a null container id, found through its label (D-86)", async (t) => {
   const { stateDir, store, containers, client } = await startFixture(t);
   store.save(recordFor(stateDir, "session-null", null));
-  containers.add({ id: "realm-orphan", labels: { ...REALM_LABELS, "io.realm.session": "session-null" }, running: false });
+  containers.add({ id: "realm-orphan", labels: { ...REALM_LABELS, "openshell.ai/sandbox-name": "realm-orphan" }, running: false });
 
   const result = await reapStartup({ store, sweep: () => removeAllRealmContainers(client) });
 
@@ -108,7 +108,7 @@ void test("RT-08: reapStartup reaps a crash during realm up with a null containe
 void test("RT-08: reapStartup reaps a record that holds a container id together with that container (D-86)", async (t) => {
   const { stateDir, store, containers, client } = await startFixture(t);
   store.save(recordFor(stateDir, "session-bound", "realm-bound"));
-  containers.add({ id: "realm-bound", labels: { ...REALM_LABELS, "io.realm.session": "session-bound" }, running: true });
+  containers.add({ id: "realm-bound", labels: { ...REALM_LABELS, "openshell.ai/sandbox-name": "realm-bound" }, running: true });
 
   const result = await reapStartup({ store, sweep: () => removeAllRealmContainers(client) });
 
@@ -120,7 +120,7 @@ void test("RT-08: reapStartup reaps a record that holds a container id together 
 void test("RT-08: reapStartup leaves a foreign unlabelled container untouched (D-86)", async (t) => {
   const { stateDir, store, containers, libpod, client } = await startFixture(t);
   store.save(recordFor(stateDir, "session-null", null));
-  containers.add({ id: "realm-orphan", labels: { ...REALM_LABELS, "io.realm.session": "session-null" }, running: true });
+  containers.add({ id: "realm-orphan", labels: { ...REALM_LABELS, "openshell.ai/sandbox-name": "realm-orphan" }, running: true });
   containers.add({ id: "foreign-1", labels: { owner: "someone-else" }, running: true });
 
   await reapStartup({ store, sweep: () => removeAllRealmContainers(client) });
@@ -133,7 +133,7 @@ void test("RT-08: reapStartup leaves a foreign unlabelled container untouched (D
 void test("RT-08: a second reapStartup is a no-op that removes nothing and deletes nothing (D-84)", async (t) => {
   const { stateDir, store, containers, libpod, client } = await startFixture(t);
   store.save(recordFor(stateDir, "session-null", null));
-  containers.add({ id: "realm-orphan", labels: { ...REALM_LABELS, "io.realm.session": "session-null" }, running: true });
+  containers.add({ id: "realm-orphan", labels: { ...REALM_LABELS, "openshell.ai/sandbox-name": "realm-orphan" }, running: true });
   await reapStartup({ store, sweep: () => removeAllRealmContainers(client) });
   const removalsAfterFirst = removals(libpod).length;
 
@@ -147,7 +147,7 @@ void test("RT-08: a surviving container makes reapStartup reject with REALM_STOP
   const { stateDir, store, containers, libpod, client } = await startFixture(t);
   store.save(recordFor(stateDir, "session-null", null));
   store.save(recordFor(stateDir, "session-bound", "realm-stuck"));
-  containers.add({ id: "realm-stuck", labels: { ...REALM_LABELS, "io.realm.session": "session-bound" }, running: true });
+  containers.add({ id: "realm-stuck", labels: { ...REALM_LABELS, "openshell.ai/sandbox-name": "realm-stuck" }, running: true });
   libpod.respondNext("removeContainer", { status: 500 });
 
   const deleted: string[] = [];

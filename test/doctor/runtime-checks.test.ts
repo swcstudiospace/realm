@@ -26,14 +26,13 @@ const PODMAN_VERSION = "podman --version";
 const PODMAN_5: CommandOutcome = { exitCode: 0, stdout: "podman version 5.0.0\n" };
 const PODMAN_4: CommandOutcome = { exitCode: 0, stdout: "podman version 4.9.3\n" };
 const OPENSHELL_HELP = "openshell sandbox create --help";
-// The flags of the pinned create argv (OQ-P3-12 default: the locally verified 0.1.2 set).
+// The flags of the pinned create argv (the locally verified 0.1.5 set, S-10).
 const PINNED_FLAGS = [
   "--name",
   "--policy",
   "--no-auto-providers",
   "--no-keep",
   "--detach",
-  "--label",
   "--cpu",
   "--memory",
 ];
@@ -240,12 +239,12 @@ void test("RT-03: openshell warns and names the missing pinned flag when the CLI
   assert.notEqual(result.fix, null);
 });
 
-void test("RT-03: openshell fails with the OpenShell 0.1.2 install fix when it cannot be started (RT-03)", async (t) => {
+void test("RT-03: openshell fails with the OpenShell 0.1.5 install fix when it cannot be started (RT-03)", async (t) => {
   const host = fakeHost({});
   const result = resultOf(await runtimeChecks(t, host), "openshell");
   assert.equal(result.status, "fail");
   assert.match(result.detail, /cannot be started/);
-  assert.match(fixOf(result), /OpenShell 0\.1\.2/);
+  assert.match(fixOf(result), /OpenShell 0\.1\.5/);
 });
 
 void test("RT-03: openshell's failed start names the errno code and never the error message (RT-03)", async (t) => {

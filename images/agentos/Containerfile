@@ -1,0 +1,21 @@
+# The derived sandbox image that the AgentOS driver runs (D-016, D-020). The base is the official Node 24
+# slim image on glibc, pinned by digest: the sidecar package at 0.4.4 ships only glibc Linux builds, so an
+# Alpine (musl) base cannot load it. The library is pinned exact. The build context holds this file plus
+# the two compiled entries (agentos-runner.js and agentos-probe.js from dist/src/runtime/).
+# The workload runs as the non-root "sandbox" user, the name the shared policy document requires
+# (run_as_user and run_as_group in buildPolicyDocument). The sandbox policy grants writes only under
+# /workspace, so the workspace is also the user's home, and the runner keeps its heartbeat there.
+FROM docker.io/library/node@sha256:2dd9a4f758e173b65fee15388f7706af6fb01ef50cf7a2c0538711d67a6981ae
+
+RUN groupadd --system --gid 1001 sandbox \
+ && useradd --system --uid 1001 --gid sandbox --home-dir /workspace --no-create-home --shell /usr/sbin/nologin sandbox \
+ && install -d -o sandbox -g sandbox -m 0750 /workspace
+
+WORKDIR /opt/realm
+RUN printf '{"private":true,"type":"module"}\n' > package.json \
+ && npm install --omit=dev --no-audit --no-fund --save-exact @rivet-dev/agentos-core@0.4.4 \
+ && npm cache clean --force
+
+COPY agentos-runner.js agentos-probe.js /opt/realm/
+USER sandbox
+WORKDIR /workspace

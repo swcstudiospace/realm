@@ -344,9 +344,9 @@ const FIX_UPGRADE_PODMAN =
 const FIX_START_SOCKET =
   "Run systemctl --user start podman.socket so the rootless API socket under XDG_RUNTIME_DIR accepts connections, then rerun the check.";
 const FIX_AWAIT_PODMAN = "Resolve the podman item first. The socket is inspected only after Podman 5.x is found.";
-const FIX_INSTALL_OPENSHELL = "Install OpenShell 0.1.2 yourself and put openshell on PATH. Realm does not install OpenShell.";
+const FIX_INSTALL_OPENSHELL = "Install OpenShell 0.1.5 yourself and put openshell on PATH. Realm does not install OpenShell.";
 const FIX_DRIFT_OPENSHELL =
-  "The installed OpenShell does not list every flag of the pinned create argv. Install the pinned 0.1.2 CLI, or record the drift in the runtime decision note before relying on this build.";
+  "The installed OpenShell does not list every flag of the pinned create argv. Install the pinned 0.1.5 CLI, or record the drift in the runtime decision note before relying on this build.";
 const FIX_NOT_CONFIGURED =
   "Set andaUrl in the runtime configuration to the Anda Engine base URL. The other checks do not need an engine.";
 const FIX_ANDA_URL =
@@ -445,7 +445,7 @@ function pinnedCreateFlags(): readonly string[] {
     sessionId: "doctor-check",
     policyPath: "/doctor-check.policy.json",
     cpus: 1,
-    memory: "1g",
+    memory: "1Gi",
     workloadArgv: ["doctor-check"],
   });
   return argv.slice(0, argv.indexOf("--")).filter((element) => element.startsWith("--"));

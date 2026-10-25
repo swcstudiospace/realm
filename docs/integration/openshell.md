@@ -128,5 +128,5 @@ Recorded in `docs/integration/runtime-decision.md` (S-08, S-10, OQ-P3-01 to OQ-P
 
 - Launch (Q1): the gateway runs on the host, and the Podman driver creates the sandbox container. The RT-01 and RT-03 wording conflicts are recorded in the runtime note (D-46, D-47) and not edited.
 - Podman (Q2): host 4.9.3 is below 5.x, so the Podman driver path is live-gated.
-- Version (caveat): pinned to 0.1.2 (S-10). The local CLI reports `openshell 0.1.2`, and its `sandbox create --help` lists every pinned flag. The docs describe 0.1.5. The drift is OQ-P3-12.
+- Version (caveat): pinned to 0.1.5 (S-10). The host CLI is 0.1.5, and its `sandbox create --help` lists every pinned flag. The earlier drift (OQ-P3-12, a 0.1.2 pin against 0.1.5 docs) is resolved by the upgrade.
 - Policy (Q3): written as JSON (D-57, OQ-P3-15). No network endpoint is written (OQ-P3-16).

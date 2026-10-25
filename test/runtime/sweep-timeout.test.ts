@@ -9,7 +9,7 @@ import { removeAllRealmContainers, SWEEP_CALL_TIMEOUT_MS, type SweepClient } fro
 import { REAP_SWEEP_TIMEOUT_MS, reapStartup } from "../../src/session/reap.js";
 import { FakeContainerStore, FakeLibpod } from "../support/fake-libpod.js";
 
-const REALM_LABELS = { "io.realm.managed": "true" };
+const REALM_LABELS = { "openshell.managed": "true" };
 
 // A promise that never settles: the stand-in for a libpod call that hangs. The executor form is used
 // because tsconfig's ES2023 lib has no Promise.withResolvers.
@@ -101,7 +101,7 @@ void test("RT-08: a hung second listing after a removal ends with PODMAN_MACHINE
   const client: SweepClient = {
     listContainersByLabel: () => {
       listings += 1;
-      return listings === 1 ? Promise.resolve([{ id: "realm-1" }]) : neverSettles();
+      return listings === 1 ? Promise.resolve([{ id: "realm-1", labels: { "openshell.ai/sandbox-name": "realm-1" } }]) : neverSettles();
     },
     removeContainer: (id: string) => {
       removals.push(id);
@@ -127,7 +127,7 @@ void test("RT-08: a hung second listing after a removal ends with PODMAN_MACHINE
 void test("RT-08: a hung removal is bounded, and the proving listing that still finds the container gives REALM_STOPPING with no record deleted", async (t) => {
   enableMockedTimers(t);
   const client: SweepClient = {
-    listContainersByLabel: () => Promise.resolve([{ id: "realm-stuck" }]),
+    listContainersByLabel: () => Promise.resolve([{ id: "realm-stuck", labels: { "openshell.ai/sandbox-name": "realm-stuck" } }]),
     removeContainer: () => neverSettles(),
   };
   const records = recordStore(["session-a"]);
@@ -169,7 +169,7 @@ void test("RT-08: a hung container list on the real libpod client ends with PODM
   });
   const socketPath = join(dir, "podman.sock");
   const containers = new FakeContainerStore();
-  containers.add({ id: "realm-1", labels: REALM_LABELS, running: true });
+  containers.add({ id: "realm-1", labels: { ...REALM_LABELS, "openshell.ai/sandbox-name": "realm-1" }, running: true });
   const libpod = new FakeLibpod({ store: containers });
   await libpod.start(socketPath);
   t.after(() => libpod.stop());
@@ -195,8 +195,8 @@ void test("RT-08: a successful sweep removes every container before any record i
   });
   const socketPath = join(dir, "podman.sock");
   const containers = new FakeContainerStore();
-  containers.add({ id: "realm-1", labels: REALM_LABELS, running: true });
-  containers.add({ id: "realm-2", labels: REALM_LABELS, running: false });
+  containers.add({ id: "realm-1", labels: { ...REALM_LABELS, "openshell.ai/sandbox-name": "realm-1" }, running: true });
+  containers.add({ id: "realm-2", labels: { ...REALM_LABELS, "openshell.ai/sandbox-name": "realm-2" }, running: false });
   containers.add({ id: "foreign-1", labels: { owner: "someone-else" }, running: true });
   const libpod = new FakeLibpod({ store: containers });
   await libpod.start(socketPath);

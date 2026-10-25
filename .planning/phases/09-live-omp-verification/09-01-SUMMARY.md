@@ -1,47 +1,30 @@
-# Phase 9 Summary: Live Omp Verification
+# Phase 9 summary: live OMP verification (plan 01)
 
-Status: complete on evidence. Hand-written by the orchestrator (gsd-verifier not run); flagged for owner ratification.
+Status: partial. The code and unit gates are green. Live `realm up` is blocked by the hardening profile on the OpenShell 0.1.5 path, and the owner has chosen an external isolation backend to meet the requirements as written. That program has not started.
 
-## Scope
-- ROADMAP Phase 9 goal: a live Omp session attaches, reports a truthful disconnected status with its reason, retries, and leaves the daemon running on shutdown.
-- Owner decisions carried forward: OMP-LIVE-01 (2026-10-23), OMP-LIVE-03 (2026-10-24), and OMP-LIVE-04 (2026-10-23) are descoped to a follow-up milestone; UI-01 is an accepted limitation (2026-10-23). This phase closes OMP-LIVE-02 on refreshed evidence.
-- Accepted expansion (owner, 2026-10-24): on Podman 5.7.1 the daemon refused at startup with `SCHEMA_INVALID`, so the libpod client was fixed before a live check could mean anything.
+## Delivered and verified
 
-## Root cause
-- The libpod client sent unversioned routes (`/libpod/...`). Podman 5.7.1 answers unversioned libpod paths with 404 and serves only `/v<api-version>/libpod/...`.
-- Startup reaping (`reapStartup`, then list by realm label) turned that 404 into `SCHEMA_INVALID`, and the daemon exited at startup.
-- Inspect treated any 404 as absent, and remove accepted any 404 as removed, so a wrong route was masked as success in those two calls.
+- AgentOS sandbox driver over the OpenShell CLI (`src/runtime/agentos-driver.ts`): start, alive, and stop, with a 180 s create budget and a 30 s call budget. Live on this host: start in 1.1 s, stop ok.
+- Session lookup and the orphan sweep select containers by OpenShell's own labels and the sandbox name (`openshell.ai/sandbox-name`, `openshell.managed`, the `realm-` prefix). The workload is the container with `openshell.ai/isolation-role=sandbox`. Unit-tested.
+- Session create passes the digest-pinned image with `--from`. Live: the create returns the workload container id in about 1.3 s.
+- Exact dependency pins: `@rivet-dev/agentos-core` 0.4.4 and `ajv` 8.20.0 (Apache-2.0 and MIT).
+- OpenShell pin moved from 0.1.2 to 0.1.5 in the doctor messages, the runtime comment, and the tests. The pinned create flags are listed by the 0.1.5 `sandbox create --help`.
+- The gateway's Podman driver sets `sandbox_pids_limit = 512`, the hardening profile's value.
 
-## Change
-- `src/runtime/libpod-routes.ts`: routes are built under `/v<api-version>`; `matchLibpodRoute` matches only versioned paths; `checkRouteId` runs before any socket request; `PING_PATH`, `LIBPOD_API_VERSION_HEADER`, and `API_VERSION_PATTERN` are exported.
-- `src/runtime/libpod-client.ts`: the API version is read once per transport from `GET /_ping` (header `Libpod-Api-Version`) and cached in a module-level `WeakMap`; a failed probe is dropped and retried on the next call; a missing or malformed version is `SCHEMA_INVALID`. Inspect returns null only for a 404 whose JSON `cause` is `no such container`. Remove treats only that 404 as removed; any other 404 is `SCHEMA_INVALID`.
-- `test/support/fake-libpod.ts`: answers `/_ping` with the version header (configurable, or omitted); the missing-container 404 carries Podman's `cause`; unversioned libpod paths are not matched.
-- `test/runtime/libpod-api-version.test.ts` (new, 7 tests): versioned target, version read once, missing version fails closed, route-level 404 on list, inspect, and remove fails closed, inspect returns null for no-such-container.
-- `test/runtime/libpod-client.test.ts`: the force-flag assertion checks the route suffix and force query, not the unversioned string.
-- `test/runtime/openshell-routing.test.ts`: the no-process routing invariant exempts exactly the `GET /_ping` version probe; every other recorded request must match a route and must not start a process.
+## Blocked and not verified
 
-## Commands and outcomes
-| Step | Command | Outcome |
-|---|---|---|
-| typecheck | `npm run typecheck` | exit 0 |
-| lint | `npm run lint` | exit 0 |
-| build | `npm run build` | exit 0 |
-| targeted | `node --test` on libpod-api-version, libpod-client, sweep, down-sweep, sweep-timeout | 30 pass, 0 fail |
-| unit | `npm test` | 1136 total, 1127 pass, 0 fail, 9 skipped (baseline 1129 / 1120 / 9; +7 new tests, all pass) |
-| integration, default PATH (Podman 4.9.3) | `npm run test:integration` | 9 skipped, `PODMAN_UNSUPPORTED_VERSION` (expected below 5.x) |
-| integration, Podman 5.7.1 | `npm run test:integration` with the 5.7.1 binary first on PATH and XDG_RUNTIME_DIR pointing at the dedicated rootless user's runtime dir | 9 tests: 1 pass (RT-02), 0 fail, 8 skipped (REALM_LIVE_IMAGE and REALM_LIVE_WORKLOAD unset) |
-| scripts, docs, gates, pack, mcp, site | `npm run test:scripts`, `check:docs`, `check:gates`, `check:pack`, `check:mcp`, site build | all exit 0 |
-| live daemon before the fix | daemon run as the dedicated rootless user, 40 s limit | exited at startup with `SCHEMA_INVALID` from the reaper |
-| live daemon after the fix | same user, rootless Podman 5.7.1 service; daemon ran past its 40 s limit without exiting and created its control socket | `realm status`: state `unbound`, reason `no workspace`, display `realm disconnected`, degraded false, mode advisory |
+- Live `realm up`: the session container fails the hardening verifier on five of fifteen properties on OpenShell 0.1.5: `rootless` (the Podman service is rootful), `cap-drop` (11 capabilities kept), `read-only-root` (writable root), `tmpfs` (only the supervisor CA tmpfs), and `mounts` (only OpenShell's own mounts). The session fails closed; no sandbox is left behind.
+- OMP-LIVE-01, OMP-LIVE-03, and OMP-LIVE-04 run through `realm up` and have not been run.
+- The AgentOS sandbox has no hardening check. It does not meet RT-01 today (writable root, no workspace or state mounts). The path is off unless `REALM_AGENTOS_IMAGE` is set.
 
-## Evidence limits
-- The Omp UI was not re-run in this pass. The status text comes from the daemon's status response, which is what the Omp status item displays. OMP-LIVE-02's previous re-run line (`SCHEMA_INVALID`) is now stale; the current reason is `no workspace`.
-- No Omp session attached in this pass; OMP-LIVE-01, -03, and -04 remain descoped by owner decision.
-- The live integration bodies (REALM_LIVE_IMAGE, REALM_LIVE_WORKLOAD) are unset; the 8 skips stand.
+## Decision that governs the next step
 
-## Open finding (not a Phase 9 blocker)
-- The rootful shared container store's db file mtime changed during the root-run Podman 5.7.1 integration window (03:11:35 to 03:12:18). The writer is not attributed. The realm's Podman probe passes only PATH, HOME, and XDG_RUNTIME_DIR to Podman children, so the realm cannot be pointed at a separate store by config. The realm daemon run for this phase was rootless and used its own store; it made no rootful call.
+- The owner chose to keep RT-01 and RT-03 as written. OpenShell's built-in isolation backend needs a descriptor that only a compute driver writes, so the only route is a realm-written external isolation backend.
+- Scope of that program: a realm compute driver implementing `proto/compute_driver.proto` that provisions the hardened container and launch authentication; an isolation backend implementing `proto/isolation_backend.proto` and `proto/sandbox_protocol.proto` (Attach, Confirm, StartAgent, process I/O, network and DNS mediation); Landlock and seccomp enforcement from a digest-pinned native helper in the image; a rootless `realmlive` Podman setup; and live proof on this host.
+- The contract was read; no backend code exists. The next gate is a go/no-go spike before any build.
 
-## Follow-ups
-- Owner: ratify these hand-written artifacts. Decide whether the OMP-LIVE-02 traceability text in REQUIREMENTS (which records `SCHEMA_INVALID`) should be updated through a GSD command.
-- Owner: decide whether 5.x integration runs should use the rootless user instead of root, so they cannot touch the rootful store.
+## Gates
+
+- `npm test`: 1138 total, 1129 pass, 0 fail, 9 skipped.
+- `npm run lint`: exit 0.
+- `npm run check:docs`: exit 0.

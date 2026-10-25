@@ -396,7 +396,7 @@ void test("the container-create argv and the policy document carry no socket pat
     sessionId: "sess-proof",
     policyPath: join(ROOT, "tmp", "realm-no-mounts-proof", "policy.json"),
     cpus: 2,
-    memory: "512m",
+    memory: "512Mi",
     workloadArgv: ["/usr/bin/agent", "--serve"],
   });
   const argvText = JSON.stringify(argv);

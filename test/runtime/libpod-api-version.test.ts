@@ -7,7 +7,7 @@ import { RealmError, type ErrorCode } from "../../src/core/errors.js";
 import { LibpodClient } from "../../src/runtime/libpod-client.js";
 import { FakeLibpod, type FakeLibpodOptions } from "../support/fake-libpod.js";
 
-const LABEL_KEY = "io.realm.managed";
+const LABEL_KEY = "openshell.managed";
 
 async function startFake(
   t: TestContext,

@@ -243,3 +243,211 @@ Incident note, not a decision: while reading usage, I ran `state.signal-waiting`
 
 - When the answers arrive, record each as a USER decision in this section, with IDs from D-009 onward. If G1 is (a), run the feasibility gate outside the repository and record its result. Then re-check GREY_AREA_ACCEPTANCE for anything still open, and run PLAN for phase 9.
 - Phase 10 DISCUSS raises the ship-policy question: release, PR, and merge. Phase 11 needs explicit owner confirmation. ultrathink-ship stays uninvoked until the run is finished.
+
+### Resume: USER answers received (2026-10-24)
+
+- D-009 [USER] G1, bind AgentOS now. The feasibility gate is skipped at the owner's choice. The spike's blocker on 16 MiB writes (the sidecar crash takes down the embedding process) is accepted as a known risk, and the supervisor's crash-loop policy is the containment. The dependency lands only after the licence (Apache-2.0, from the registry), maintenance, and advisory checks are recorded in the phase 9 PLAN. Reversal: remove the dependency and the driver binding; the supervisor returns to unbound.
+- D-010 [USER] Reinstate OMP-LIVE-01, -03, and -04 into v2.0 scope. This supersedes the 2026-10-23 descopes of OMP-LIVE-01 and -04 and the 2026-10-24 descope of OMP-LIVE-03, for these three items only. UI-01 stays an accepted limitation (2026-10-23). Reversal: a new USER decision descoping them.
+- D-011 [USER] G2, choose and pull a pinned public base. The base is an official-library image with a shell and Node 24, pinned by digest, pulled into the dedicated user's rootless store. Its reference and digest are recorded here before any use. Reversal: remove the image; the live container gates return to skipped.
+- D-012 [USER] G3, install the upstream Anda Engine locally for live ANDA tests only. Nothing is vendored and no repository dependency is added. Licence conflict OQ-P3-11 stays open and is recorded. Reversal: uninstall the built binary.
+- D-013 [USER] G4, change the global PATH through the login profile so Podman 5.7.1 resolves before 4.9.3. This is a host-wide change at the owner's choice. Reversal: remove the profile line.
+- D-014 [AUTO] The concrete AgentOS driver runs the AgentOS runner as the OpenShell sandbox workload. start, alive, and stop map onto the sandbox lifecycle through the existing runner port, and every call is bounded by callTimeoutMs. Reason: the port is the only control surface the supervisor allows (src/runtime/agentos.ts), and docs/integration/agentos.md and runtime-decision D073 place AgentOS inside the sandbox. Reversal: change the carrier; the port is unchanged.
+- D-015 [AUTO] The spike's remaining conditions (the sidecar survives a 16 MiB write, sandbox exec keeps the pipe protocol with exit codes, and the sidecar starts non-root under Landlock and seccomp) are open risks. They are tested live in phase 9 EXECUTE and are not assumed. Reversal: none; this is a verification rule.
+- D-016 [AUTO] Sandbox image for the AgentOS runner: a derived image built from the pinned base digest sha256:1200d815de24f8dcca745fbf7651d166034a35adbcad8860a8538ffff44f1420, with @rivet-dev/agentos-core 0.4.4 and the runner and probe scripts installed under /opt/realm. Reason: sandbox egress is default-deny, so the library cannot be installed inside the sandbox at start, and baking it in keeps the sandbox boundary. Reversal: remove the derived image; change the driver's imageRef. Not built yet.
+- D-017 [AUTO] Anda target for the non-blocking detail of G3. The documented crate anda_engine_server 0.17.0 is a library with no binary target. Its upstream repository (commit b42da9388048b89cb50e04a4c04ac2952cdada43 at the time of the attempt) points to anda_cli, which is a client crate and cannot serve. Default applied: a small local harness binary built around the upstream engine library, outside the repository, not vendored, not redistributed. Reversal: uninstall the harness; the ANDA live gates return to skipped. The owner may override this default.
+- D-018 [AUTO] The driver module reuses the existing OpenShell argv builders and error codes. No catalogue code is added: a new code is a public contract change and needs an owner decision. Reversal: delete the module and its test.
+
+### Install log (run ut-mvlvx860)
+
+- @rivet-dev/agentos-core 0.4.4 | npm registry | project dependency, exact pin, package.json and package-lock.json changed | `npm install --save-exact @rivet-dev/agentos-core@0.4.4` exit 0 | licence Apache-2.0 (package file); maintainers 3; last modified 2026-10-22 (registry); production audit `npm audit --omit=dev`, 0 advisories, exit 0 | reason: D-009.
+- node:24-alpine, docker.io/library | rootless store of the dedicated user | digest sha256:1200d815de24f8dcca745fbf7651d166034a35adbcad8860a8538ffff44f1420, amd64 | `podman pull docker.io/library/node:24-alpine` exit 0 | reason: D-011.
+- Login PATH | the root login profile, two marked lines (export PATH=/usr/local/bin:$PATH) | host profile change | reason: D-013. Verified: a login shell resolves podman to 5.7.1. Non-login interactive shells still resolve 4.9.3, which is the scope of D-013.
+- npm ci | project, bootstrap | exit 0 (baseline).
+- Anda Engine: nothing installed. The first build attempt stopped at the target question (D-017).
+
+### Incident: root filesystem full (run ut-mvlvx860)
+
+- During this phase the root filesystem reached 100% with 0 bytes free. A build subagent was writing at the time, and the first npm install and the first image pull both failed with "no space left on device". The filesystem recovered to 51G free after the build subagent was stopped. No run-owned data was deleted by the run.
+- A CI-log scratch directory (3.3G, logs dated 2026-10-22 and 2026-10-23) is not run-owned. It was left untouched.
+- Open finding: a build can fill the root filesystem. Builds in this run now carry an 8 GiB free-space guard.
+
+### Work in progress (run ut-mvlvx860, phase 9 EXECUTE)
+
+- Driver module and its unit tests: subagent AgentOsDriverImpl (two files, no gates run). Gates after it: typecheck, lint, test.
+- Still to do: derived image (D-016) and its digest; the runner and probe scripts; wiring src/daemon/main.ts to pass the driver; the Anda harness (D-017); then live checks as the dedicated user for realm up, Omp attach, retry, and shutdown (OMP-LIVE-01, -03, -04); then the live integration gates with REALM_LIVE_IMAGE set to the digest reference; then SUMMARY, VERIFICATION, STATE, ROADMAP, and the local commit.
+
+### Checkpoint (phase 9 EXECUTE, 2026-10-24)
+
+- Verified: @rivet-dev/agentos-core 0.4.4 installed as an exact pin (licence Apache-2.0; production audit, 0 advisories; registry last modified 2026-10-22, three maintainers). Base digest pinned. Login PATH resolves Podman 5.7.1. The driver module and its 12 unit tests pass under node --test. The whole-tree typecheck and build exit 0.
+- D-019 [AUTO, superseded]: the live store was assumed to be the dedicated user's rootless store. That was wrong; see the correction block below.
+- Open lint on the two new files (gate is red): (1) D-99/C-5: src/runtime/agentos-driver.ts references buildExecArgv and OPENSHELL_BINARY directly, and only src/runtime/openshell.ts, src/tools/, and the shared runtime modules may do so. Fix: export one AgentOS sandbox argv builder from src/runtime/openshell.ts and import it in the driver. (2) test/runtime/agentos-driver.test.ts lines 68 and 69: unnecessary optional chaining. Fix: remove the optional chaining.
+- Open design gap: buildCreateArgv has no image field. Fix: add an optional imageRef to SandboxCreateRequest and emit `--from <imageRef>` before the `--` separator. The session path is unchanged when imageRef is absent.
+- Open verification: the gateway's PATH is not verified. OpenShell's Podman driver documents Podman 5.x. Check the gateway's PATH, and set it through the gateway environment file if it still resolves 4.9.3, before any live run.
+- Resume order: (1) lint fix and the shared builder; re-run the driver tests and eslint on the two files. (2) Derived image: a Containerfile from the pinned base digest, with @rivet-dev/agentos-core 0.4.4 and the runner and probe installed under /opt/realm; build it in root's rootless store; record the reference and digest here. (3) Wire the driver in src/daemon/main.ts: policy file through the session policy writer, cpus and memory from the session constants, imageRef set to the derived digest. (4) Build and run every gate. (5) Live as root's rootless user: realm up, realm status, Omp attach, retry, and exit (OMP-LIVE-01, -03, -04). Disk guard 8 GiB before each build. (6) Live integration gates with REALM_LIVE_IMAGE set to the derived digest. (7) SUMMARY with exit codes, VERIFICATION, STATE, ROADMAP, and one local commit with explicit paths. Nothing pushed. (8) Phases 10 and 11 at their own gates; ultrathink-ship stays uninvoked until the run is finished.
+- The Anda harness (D-017) is not started. The default stands unless the owner overrides it.
+
+### Correction and pause (BLOCKER_RESOLUTION, 2026-10-24)
+
+- Fact: Podman run as root is rootful. Both installed versions report rootless=false with the system graph root, which is the shared rootful store. The OpenShell gateway (root user unit) uses the system Podman API socket (podman.socket, active since 2026-10-20 22:29:29 UTC) and sets no container-host variable, so its sandbox images live in the shared rootful store.
+- Fact: the dedicated user's rootless socket directory is empty. No rootless Podman service is running.
+- Question (store): where the derived AgentOS image must live. Option A: build into the shared rootful store (one image added; reversible by removing it). Option B: point the gateway at the dedicated user's rootless socket through the gateway environment file, then restart the gateway; the shared store stays untouched, but the setting's effect must be verified first and the restart briefly interrupts the gateway. Option C: publish the derived image to a registry and reference it by digest (needs a registry and push credentials).
+- Recommendation: B. It matches the documented rootless model and leaves the shared store untouched under the standing rule.
+- Phase and step: phase 9 EXECUTE, after step 1 (lint fix and shared builder; complete: targeted 59 of 59, full unit 1135 total, 1126 pass, 0 fail, 9 skipped; npm run lint exit 0).
+- Resume: step 2 (runner, probe, Containerfile, with no store writes) proceeds now. The image build and the live checks wait for the answer.
+- Superseded: the resume order and the work-in-progress lines above that name root's rootless store or the dedicated user for live checks. The store answer decides those steps.
+- check:docs failed on two host paths in this file (login profile and CI-log directory). Both were replaced with placeholders in this edit.
+
+### Outcome of option B and new pause (BLOCKER_RESOLUTION, 2026-10-24)
+
+- Attempted: a durable rootless Podman API unit for the dedicated user (linger on), OPENSHELL_PODMAN_SOCKET in the gateway environment file pointing at its socket, then a gateway restart.
+- Verified: the driver honours the variable (the startup log names the path). The socket answered a rootless info call (rootless=true, Podman 5.7.1) through a remote client run as root.
+- Blocked: the gateway process always runs in its own user namespace that maps only uid 0 (uid_map "0 0 1", checked before and after the change). Files owned by the dedicated user's uid are unmapped there, so the gateway gets Permission denied (os error 13) even with CAP_DAC_OVERRIDE. It can reach only root-owned resources, such as the system Podman socket it uses today.
+- Rollback, verified: the gateway environment file this run created was removed; the gateway restarted (exit 0); openshell gateway info reports healthy; the driver connects with rootless=false (system socket, shared rootful store). The dedicated user's unit was stopped and removed, and linger was disabled (exit 0). The socket directory remains; it existed before this run.
+- Consequence: option B is not viable. Any image the gateway uses must be reachable through a root-owned socket. The recommendation of B above is superseded.
+- Question (store2): Option D: run a separate root-owned Podman API instance with its own storage root, outside the shared store, and point the gateway at its socket through the gateway environment file. The shared store stays untouched, but a new persistent rootful service is added and the gateway restart briefly interrupts it. Option A: build into the shared rootful store the gateway already uses; this writes to that store and is reversible by removing the image. Option defer: stop the live path here, finish the runner, probe, and tests, and record the live checks as blocked on the store decision.
+- Recommendation: D.
+- Phase and step: phase 9 EXECUTE, after step 1 (complete). The runner, probe, and Containerfile code can proceed for any answer. The image build and the live checks wait for it.
+
+### Store decision D and service set-up (phase 9 EXECUTE, 2026-10-24)
+
+- Answer: D (user, store2). A separate root-owned Podman API runs as a system service named realm-podman, with its own storage root and runtime directory. The shared store is not touched by this run.
+- Verified: the service is active. A remote info call answers (rootless=false, storage under the service's state directory, Podman 5.7.1). The gateway was restarted with its environment file pointing at the service's socket (variable OPENSHELL_PODMAN_SOCKET). openshell gateway info reports healthy, and the driver connects (rootless=false, netavark). Exit codes: enable 0, gateway restart 0.
+- Reversal: remove the gateway environment file this run created and restart the gateway; then stop and disable the realm-podman service.
+- Next: pull the pinned base into the new store, build the derived image there through the service's socket, then run the live sandbox check.
+- Phase and step: phase 9 EXECUTE, step 2 (derived image), now unblocked.
+
+### Live sandbox results and new pause (BLOCKER_RESOLUTION, 2026-10-24)
+
+- Image, verified: the derived image runs the runner and probe in a no-network container. The library creates a VM on the glibc base, the heartbeat is fresh after 2 s, and SIGTERM exits 0. Latest digest: sha256:24fa3734 (the sandbox user and the workspace paths are in it).
+- Base change (D-020, AUTO, within the G2 delegation): the sidecar package at 0.4.4 ships only glibc Linux builds (npm: linux-x64-gnu, linux-arm64-gnu; no musl build, the musl package returns 404). The Alpine base therefore cannot load the library. The base is the official Node 24 slim image on glibc, pinned by digest.
+- Image fixes found live: the shared policy document requires run_as_user "sandbox", so the image creates that user; the policy grants writes only under the workspace, so the heartbeat and the user's home live there.
+- Shared defect, found live, not yet fixed: OpenShell 0.1.2 rejects the memory quantity "4g" (lowercase) and accepts "4G" or "4Gi". The session path builds its memory the same way (SANDBOX_MEMORY in session-execution.ts), so sessions would also fail to create. The fix is a small change to that constant plus its validation; it is pending.
+- Blocker: the sandbox supervisor cannot reach the gateway. It logs "Sandbox Protocol connection lost; workload frozen pending authenticated recovery", then exits 1. The gateway listens on the loopback address, and a container cannot reach host loopback. Diagnostic sandboxes were removed; the separate service and the gateway are healthy.
+- Question (gateway-reach): where the gateway must listen so sandboxes reach it. Option 1: bind the gateway to the Podman bridge address, which is local only and not public; point the OpenShell CLI endpoint and OPENSHELL_PODMAN_HOST_GATEWAY_IP at it; check the TLS name before the restart. Option 2: bind all interfaces; sandboxes and the CLI reach it, but so can any interface, including a public one; mTLS still applies; not recommended on this host. Option 3: defer the live path; finish code and tests; record the live checks as blocked on gateway reachability.
+- Recommendation: option 1.
+- Phase and step: phase 9 EXECUTE, live check. Lint, targeted tests (59 of 59), and the full unit suite are green from before these changes. Remaining after the answer: the memory fix, daemon wiring, the live checks, SUMMARY and VERIFICATION, the local commit.
+
+### Gateway reach: option 1 checked, paused (BLOCKER_RESOLUTION, 2026-10-24)
+
+- Checked read-only; nothing changed: the bind setting is OPENSHELL_BIND_ADDRESS (default loopback). The openshell network has subnet 10.89.1.0/24 with gateway 10.89.1.1. The gateway's server certificate names are host.openshell.internal, host.containers.internal, localhost, and the IP 127.0.0.1, not 10.89.1.1. The CLI has no server-name override flag; the registered endpoint is https://127.0.0.1:17670. The bridge address is not up on the host while no sandbox runs, so a gateway bound to it would fail at startup.
+- Consequence: option 1 needs two more things: a name the certificate covers for the bridge address, and the bridge kept up.
+- Question (gateway-names). Sub-option 1b (recommended): a hosts entry maps host.openshell.internal to the bridge address; the CLI endpoint is https://host.openshell.internal:17670; the gateway binds to the bridge address. The certificate already names that host, so no certificate change. Sub-option 1a: add the bridge address to the server certificate names through a gateway unit override that regenerates certificates with the extra name, then register the endpoint by the bridge address. Option 3 (defer) stands.
+- Both sub-options need the bridge kept up, through a keep-alive container on the openshell network in the separate store.
+- Phase and step: phase 9 EXECUTE, live check, paused. The gateway and the separate service are healthy on their current configuration.
+
+### Bridge-name change applied; supervisor handshake still failing (phase 9 EXECUTE, 2026-10-24)
+
+- Applied, option 1b: a keep-alive container on the openshell network (separate store) brings the bridge up at 10.89.1.1; a hosts line maps host.openshell.internal to that address; the gateway environment file sets OPENSHELL_BIND_ADDRESS and OPENSHELL_PODMAN_HOST_GATEWAY_IP to the bridge address (OPENSHELL_PODMAN_SOCKET unchanged); the CLI gateway is re-registered as a local mTLS gateway at https://host.openshell.internal:17670 and selected. Verified: the gateway is healthy through that endpoint, and its listener is on the bridge address, not loopback.
+- Result: the sandbox still fails. The sandbox record shows Ready False (ContainerExited, exit code 1) and ConfigurationReady False (ConfigurationPending: waiting for effective configuration validation before workload activation). The supervisor never reports its configuration, so it cannot complete its handshake from inside the sandbox. The earlier "Sandbox Protocol connection lost" line is gone; now the supervisor is sent SIGTERM before confirmation.
+- Reversal, if the owner chooses to defer: restore the hosts file from the backup taken before this change (scratch directory); set the gateway environment file to the single socket line; re-register the CLI gateway at https://127.0.0.1:17670 with --local and select it; restart the gateway; remove the keep-alive container realm-openshell-bridge from the separate store.
+- Next, not started: find out why the supervisor cannot confirm from inside the sandbox (its own log at higher verbosity; whether the gateway's port is reachable from the sandbox network; the name the sandbox resolves for the gateway). Until that is known, the daemon wiring and the live checks stay blocked.
+- Phase and step: phase 9 EXECUTE, live check, open. Ship stays held. No sandboxes are left.
+
+### Supervisor handshake: cause located, owner decision needed (BLOCKER_RESOLUTION, 2026-10-24)
+
+- Evidence: a container on the openshell network reaches the gateway over TCP on the bridge address. The gateway's TLS listener answers with a certificate-required alert, so it enforces client certificate verification on every connection. Sandboxes are given no client certificate (their mounts show only the workspace, the channel, and the supervisor binary). The supervisor cannot complete its TLS handshake, never reports its configuration, and is stopped before it confirms.
+- Ruled out with evidence: the channel volume (the driver creates a sandbox-owned directory inside it); the supervisor binary's permissions (mode 755, root-owned, executable); the user-namespace mode (host mode changed nothing); a CA-only mount (the driver mounts nothing for a CA alone).
+- Upstream, read but not tested: current OpenShell gives supervisors only the gateway CA and per-sandbox bearer tokens. The older Podman design gave every sandbox one shared client certificate, and upstream's security note says that lets root inside a sandbox act as a gateway user. The Podman supervisor-CA issue (#3781) concerns upstream egress, not this path; its fix (additional_ca_bundle, PR #3996) shipped in v0.1.5.
+- Options. U: upgrade OpenShell past the repo's 0.1.2 pin (S-10) to the bearer-token supervisor design; this changes the pin and the installed binaries. M: keep 0.1.2 and configure the guest TLS bundle (CA, client certificate, key), so sandboxes receive a shared client certificate; not recommended for untrusted agent code. D: defer the live path.
+- Recommendation: U, once the pin change is approved. M is not recommended.
+- Host state: unchanged since the bridge change. The two test lines (user-namespace mode and CA-only) were removed and the gateway is healthy. No sandboxes are left.
+- Phase and step: phase 9 EXECUTE, live check, paused.
+
+### OpenShell 0.1.5 upgrade and the two-image contract (phase 9 EXECUTE, 2026-10-24)
+
+- Owner decision U (supervisor auth). The upstream v0.1.5 release binaries (CLI, gateway, supervisor, x86_64) were downloaded and their published SHA-256 checksums verified. The 0.1.2 CLI and gateway binaries are kept in a scratch backup. The supervisor is installed in the gateway's helper directory. The repo still pins 0.1.2 (S-10): the pin, the drift checks, and their tests must be updated before any ship. Nothing is committed.
+- Gateway configuration: a schema v2 TOML file (guest_tls_ca for the sandbox CA; the Podman driver table with socket path, network name, host gateway address, and grpc_endpoint=https://host.containers.internal:17670), selected through the gateway environment file, which also keeps its three earlier lines. The gateway is healthy on 0.1.5. A TLS handshake without a client certificate now succeeds, so the client-certificate requirement of 0.1.2 is gone.
+- Finding: the driver auto-detected the sandbox's gRPC endpoint as loopback in 0.1.2 and 0.1.5 regardless of the bind address. The explicit grpc_endpoint fixes that. With it, the supervisor reports ConfigurationReady True (ConfigurationAccepted).
+- Remaining blocker: the supervisor then logs "Sandbox Protocol connection lost; workload frozen pending authenticated recovery" and is stopped. Per-sandbox secrets are created (openshell-token, openshell-resolver, openshell-tls-ca), but only the resolver secret is attached to the sandbox container.
+- Upstream 0.1.5 design (read in release notes and PRs, not yet checked against the source): on Podman the supervisor runs in its own container from supervisor_image, and the workload runs in a separate container with networking off, from sandbox_runtime_image, which carries the static sandbox binary. Credentials stay on the supervisor side.
+- Next: read the 0.1.5 source at the release tag for the two image contracts (paths, entrypoints, what the driver expects in each), build both images from the release tarballs in the separate store, set supervisor_image and sandbox_runtime_image in the Podman table, and rerun the kept diagnostic. The derived AgentOS image then becomes the workload's image.
+- Phase and step: phase 9 EXECUTE, live check, open. Ship stays held. Diagnostic sandboxes are cleaned up.
+
+### Live sandbox path passes end to end (phase 9 EXECUTE, 2026-10-24)
+
+- Result: create exit 0 with the derived image through --from; the in-sandbox probe reports a fresh runner heartbeat after 3 s (exit 0); delete exit 0. The runner runs inside the OpenShell sandbox under the supervisor's enforcement.
+- What made it pass, in order: OpenShell 0.1.5 on the gateway; schema v2 gateway configuration with guest_tls_ca and the Podman driver table (socket, network, host gateway, grpc_endpoint=https://host.containers.internal:17670, image_pull_policy=never); the sandbox runtime and supervisor images built locally from the 0.1.5 release binaries, referenced by digest; the derived image's sandbox user and /workspace; the shared policy builder's read-only system paths (/usr, /bin, /lib, /lib64, /etc, /opt, /proc, /dev/urandom) and read-write paths (/workspace, /tmp), which the supervisor enforces with Landlock.
+- Shared code changed for this: src/runtime/openshell.ts (read-only system paths and scratch paths in buildPolicyDocument); test/runtime/openshell-policy.test.ts (RT-03 pins the new contract). Build exit 0; targeted tests 72 of 72; eslint exit 0 on both files.
+- Still open in phase 9: (1) the session memory quantity: SANDBOX_MEMORY in session-execution.ts still emits the lowercase g form that the 0.1.5 CLI rejects, so sessions would fail; the fix is pending. (2) Daemon wiring: src/daemon/main.ts passes the driver, with the derived image digest from the entry edge, the policy written through writePolicyDocument for the agentos session, and cpus and memory from the session constants. (3) realm up live, through the daemon. (4) Omp attach, retry, and shutdown (OMP-LIVE-01, -03, -04). (5) Integration gates with REALM_LIVE_IMAGE set to the derived digest. (6) The repo pin S-10 moves from 0.1.2 to 0.1.5, with the drift checks and their tests; the docs describe 0.1.5 already (OQ-P3-12). (7) SUMMARY, VERIFICATION, STATE, ROADMAP, and the local commit.
+- Host state: the gateway runs OpenShell 0.1.5 on the schema v2 configuration, healthy. The separate root-owned Podman service is active. The keep-alive container for the bridge is running. The hosts line and the CLI endpoint point at the bridge name. The 0.1.2 binaries are kept in a scratch backup. Diagnostic sandboxes were deleted.
+- Phase and step: phase 9 EXECUTE, live path verified once; the remaining items above are open. Ship stays held.
+
+### Session memory fix and green unit suite (phase 9 EXECUTE, 2026-10-24)
+
+- The OpenShell CLI refuses lowercase memory quantities (4g, 512m) and accepts the Gi, Mi, and G forms. SANDBOX_MEMORY on the session path now uses Gi. The integration gate, the doctor probe, and the argv, driver, and socket-path fixtures use the accepted forms. MEMORY_PATTERN accepts digits with an optional K, M, or G, and an optional i. test/runtime/openshell-memory.test.ts pins both sides.
+- Full unit suite: 1136 total, 1127 pass, 0 fail, 9 skipped (baseline 1118 pass before this phase, plus 17 driver and argv tests and 1 memory test). npm run lint exit 0. npm run check:docs exit 0. Build exit 0.
+- Remaining in phase 9: daemon wiring; realm up live through the daemon; Omp live checks (OMP-LIVE-01, -03, -04); integration gates with REALM_LIVE_IMAGE set to the derived digest; the S-10 pin bump to 0.1.5 with its drift checks; SUMMARY, VERIFICATION, STATE, ROADMAP; the local commit. Ship stays held.
+
+### Daemon wiring and the live realm up result (phase 9 EXECUTE, 2026-10-24)
+
+- Wiring, done: the daemon binds the AgentOS driver only when REALM_AGENTOS_IMAGE names a digest-pinned image (src/daemon/main.ts). Driver create has its own budget (180 s); probe and delete have 30 s; the supervisor's per-call budget is 200 s, above the create budget. The driver's timeouts are tested separately. Build exit 0; full unit suite 1138 total, 1129 pass, 0 fail, 9 skipped; npm run lint exit 0; npm run check:docs exit 0.
+- Live realm up: the daemon starts; the policy and state checks pass; doctor passes every check except agentos (the daemon is down). realm up fails with OPENSHELL_START_FAILED before the AgentOS sandbox is created. The session record is state error with containerId null.
+- Cause, reproduced by hand: the session's sandbox create succeeds (exit 0) and its container runs, but the container carries only OpenShell's openshell.ai labels. The io.realm.managed and io.realm.session labels are absent, so the realm's label lookup finds no container. This is OQ-P3-01 on OpenShell 0.1.5: the docs say that without the labels the create fails closed with OPENSHELL_START_FAILED.
+- Decision needed (ownership key): (a) identify the session container by OpenShell's own labels or by the sandbox name realm-<sessionId>, and keep the realm's container id in its record; (b) keep the io.realm labels and move OpenShell to a version that applies them; (c) defer. Before deciding, check whether the reaper and the verifier rely on the io.realm labels.
+- Host artifacts from the live attempt, all reversible: the realm config in the user config directory (owner-only); the state directory (mode 0700) with policy.json and the runtime policy files; the workspace directory; a runtime link directory that points the daemon's libpod socket at the separate service. Nothing is running, and no sandboxes or containers are left.
+- Phase and step: phase 9 EXECUTE, live realm up, blocked on the ownership-key decision. Ship stays held.
+
+### Ownership key decided: A (phase 9 EXECUTE, 2026-10-24)
+
+- Decision (user, ownership-key): identify realm containers by OpenShell's own labels and the sandbox name. Live check (this run): an OpenShell 0.1.5 sandbox container carries openshell.ai/sandbox-name=realm-<sessionId>, openshell.managed=true, and openshell.ai/sandbox-id. It carries no io.realm labels.
+- Consumers to change: runOpenShellCreate's session lookup, its ambiguity check, and the deadline lookup (src/runtime/openshell.ts), which use the sandbox name; the orphan sweep (src/runtime/sweep.ts), which starts from openshell.managed=true and keeps only sandbox names with the realm- prefix; the create argv, which drops the io.realm --label flags, since OpenShell does not apply them.
+- Phase and step: phase 9 EXECUTE, implementation of the ownership key in progress; tests and the live realm up follow.
+
+### Live realm up: read-only root decision (phase 9 EXECUTE, 2026-10-25)
+
+- Done since the ownership decision: the realm finds the session's workload container by its sandbox-role label under the session's sandbox name, so the supervisor container of the same sandbox is excluded. The session create now passes the configured digest-pinned image (imageRef). The gateway's Podman driver sets the pids limit to the profile's 512 (sandbox_pids_limit). The AgentOS driver start was verified live here: start 1.1 s, stop ok.
+- Live result: the session create and the AgentOS start succeed. The realm's hardening verifier then refuses the session container on its read-only-root check (src/runtime/hardening.ts). OpenShell 0.1.5's Podman driver creates the workload container with a writable root filesystem and offers no driver option to change it. Memory, cpu, network, privilege, pids, and image digest pass. The refused container is removed; no sandbox is left.
+- Test state: full unit suite 1138 total, 1129 pass, 0 fail, 9 skipped. npm run lint exit 0. npm run check:docs exit 0.
+- Decision needed (hardening, D-51). Option B: keep the read-only root requirement; realm sessions stay blocked until OpenShell exposes a read-only root option. Option A: relax the requirement for the OpenShell backend, with the controls already in place (Landlock writes limited to the workspace and /tmp, a non-root sandbox user, network none, pids 512, memory and cpu caps, not privileged). This changes a documented security property and needs your approval. Option C: defer.
+- Recommendation: B until upstream support exists; A only with your approval.
+- Phase and step: phase 9 EXECUTE, live realm up blocked on the read-only root decision. Ship stays held.
+
+### Decision: read-only root, option B (user, phase 9 EXECUTE, 2026-10-25)
+
+- Chosen: keep the read-only root requirement (D-51). Realm sessions stay blocked on OpenShell 0.1.5's Podman driver until it exposes a read-only root option.
+- Consequence: live `realm up` and OMP-LIVE-01, -03, -04 (which run through realm up) stay open. They are not verified and must not be reported as passed.
+- Next: confirm whether the AgentOS sandbox path applies the same hardening check; check upstream OpenShell for a read-only root option; S-10 pin bump; phase 9 artifacts; one local commit with explicit paths.
+
+### Correction: hardening failures on OpenShell 0.1.5 (phase 9 EXECUTE, 2026-10-25)
+
+- The option B decision assumed read-only root was the only failing check. That premise was incomplete: only six of fifteen checks had been inspected.
+- Full verifier run on a live session container, created through the realm's create path with the binding SessionExecution builds. Failed: rootless, cap-drop, read-only-root, tmpfs, mounts.
+  - rootless: the realm's Podman service is rootful (libpod info reports rootless false). The root-owned service decision (store2, option D) fails RT-01's rootless requirement by design.
+  - cap-drop: the container keeps 11 capabilities (CAP_CHOWN through CAP_SYS_CHROOT), not ALL. No driver option found to change it.
+  - read-only-root: writable root. No driver option found.
+  - tmpfs: the only tmpfs is /run/openshell-supervisor-ca; the profile expects its own set. No driver option found.
+  - mounts: the container's mounts are OpenShell's own (/.openshell/channel and the supervisor binary). The realm's workspace and state mounts are absent.
+- Passing: privileged, cap-add, no-new-privileges, pids-limit (512 after the gateway change), memory, cpu, network-mode none, image-digest.
+- AgentOS sandbox: the AgentOS driver has no hardening check. RT-01 applies to every running realm container, so the AgentOS sandbox is unverified and does not meet RT-01 today (writable root, OpenShell-owned mounts only).
+- Consequence: option B cannot be met by one setting on OpenShell 0.1.5. Meeting RT-01 needs a different container path or a requirement change. Decision requested; see the next block.
+- Test state unchanged: unit 1138 total, 1129 pass, 0 fail, 9 skipped; lint 0; check:docs 0.
+- Phase and step: phase 9 EXECUTE, live realm up blocked; decision requested.
+
+### Decision: container path rework (user, phase 9 EXECUTE, 2026-10-25)
+
+- Chosen: rework the container path. RT-01 stays as written. The realm creates and hardens its own rootless container with OpenShell inside it (RT-03). Realm up stays down until the rework lands.
+- Scope: replaces the OpenShell-managed sandbox path for sessions. Touches session create and start, the hardening binding, the AgentOS sandbox (non-compliant today), the rootful store2 Podman service (fails RT-01 rootless), and the phase 9 artifacts.
+- Phase and step: phase 9 EXECUTE, rework feasibility first: OpenShell supervisor inside a realm-owned container; rootless Podman for the realm user.
+
+### Feasibility: container path rework (phase 9 EXECUTE, 2026-10-25)
+
+- OpenShell's supervisor runs the workload through an isolation backend. The built-in Linux backend needs a backend descriptor file that a compute driver writes. The standalone isolation-backend role refuses to start without it (--backend-descriptor-file is required), so OpenShell cannot run inside a realm-owned container on its built-in backend.
+- OpenShell offers external isolation backends: the supervisor's registration file names an out-of-process backend endpoint, and the launch descriptor is opaque bytes that the backend validates. The contract (Sandbox Protocol 1.0, IsolationBackend gRPC) is present in the 0.1.5 supervisor binary. A realm-written backend would own the enforcement that the built-in backend provides now. No such backend exists in this repo; building one is a large, security-critical change.
+- Rootless Podman: feasible for the realmlive account. Subuid and subgid ranges are present, and podman info reports Rootless=true with the 4.9.3 binary. The 5.x binary needs PATH. A runtime directory was created for the test (reversible host change). RT-01's rootless requirement is reachable without the rootful service.
+- With RT-01 and RT-03 both kept as written, only an external isolation backend works. Dropping RT-03 (OpenShell off the session path) or relaxing RT-01 changes a requirement and needs owner approval.
+- Phase and step: phase 9 EXECUTE, decision requested. The S-10 pin bump and the phase artifacts wait for the decision, since one option drops OpenShell from the session path.
+
+### Decision: external isolation backend (user, phase 9 EXECUTE, 2026-10-25)
+
+- Chosen: build an external isolation backend. RT-01 and RT-03 stay as written. The realm owns the enforcement (Landlock, seccomp) that OpenShell's built-in backend provides today.
+- Scope: multi-phase and security-critical. Read the contract first (OpenShell isolation-backends docs and the isolation-backend-v8 example), then size the work breakdown before any build.
+- Phase and step: phase 9 EXECUTE, contract reading. Realm up, OMP-LIVE-01, -03, -04, the S-10 pin bump, and the phase artifacts stay open.
+
+### Phase 9 status and gates (phase 9 EXECUTE, 2026-10-25)
+
+- Pin moved to OpenShell 0.1.5 in the doctor, the runtime comment, the tests, and the current-pin line of docs/integration/openshell.md. Historical records (spike notes, open-question rows) keep 0.1.2.
+- Gates: npm test 1138 total, 1129 pass, 0 fail, 9 skipped. npm run lint exit 0. npm run check:docs exit 0.
+- Summary written: .planning/phases/09-live-omp-verification/09-01-SUMMARY.md. No VERIFICATION file: the live gates are blocked, so no pass is claimed.
+- Stray logs from manual checks removed from the repository root.
+- Local commit on this branch with explicit paths. Never pushed.
+- Phase and step: phase 9 partial. Next: owner approval to start the isolation-backend program at its go/no-go spike.

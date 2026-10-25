@@ -14,8 +14,8 @@ import {
 import { FakeContainerStore, FakeLibpod } from "../support/fake-libpod.js";
 import { FakeOpenShell } from "../support/fake-openshell.js";
 
-const LABEL_KEY = "io.realm.managed";
-const SESSION_KEY = "io.realm.session";
+const OPENSHELL_MANAGED_KEY = "openshell.managed";
+const SANDBOX_NAME_KEY = "openshell.ai/sandbox-name";
 const SESSION = "sess-01";
 const POLICY_PATH = "/state/realm/runtime/sess-01.policy.json";
 // Flag-looking elements in the workload must stay after the -- separator.
@@ -24,18 +24,17 @@ const REQUEST: SandboxCreateRequest = {
   sessionId: SESSION,
   policyPath: POLICY_PATH,
   cpus: 2,
-  memory: "1g",
+  memory: "1Gi",
   workloadArgv: WORKLOAD,
 };
 
-// The flags the pinned 0.1.2 create verb accepts before the separator (S-10, D-55).
+// The flags the pinned 0.1.5 create verb accepts before the separator (S-10, D-55).
 const PINNED_FLAGS: readonly string[] = [
   "--name",
   "--policy",
   "--no-auto-providers",
   "--no-keep",
   "--detach",
-  "--label",
   "--cpu",
   "--memory",
 ];
@@ -56,7 +55,7 @@ async function assertCode(work: Promise<unknown>, code: ErrorCode): Promise<void
   await assert.rejects(work, (error: unknown) => error instanceof RealmError && error.code === code);
 }
 
-void test("RT-03: the create argv is exactly the pinned 0.1.2 verb sequence with the workload after --", () => {
+void test("RT-03: the create argv is exactly the pinned 0.1.5 verb sequence with the workload after --", () => {
   assert.deepEqual(buildCreateArgv(REQUEST), [
     "openshell",
     "sandbox",
@@ -68,14 +67,10 @@ void test("RT-03: the create argv is exactly the pinned 0.1.2 verb sequence with
     "--no-auto-providers",
     "--no-keep",
     "--detach",
-    "--label",
-    `${LABEL_KEY}=true`,
-    "--label",
-    `${SESSION_KEY}=${SESSION}`,
     "--cpu",
     "2",
     "--memory",
-    "1g",
+    "1Gi",
     "--",
     ...WORKLOAD,
   ]);
@@ -101,7 +96,7 @@ void test("RT-03: the workload follows -- as the trailing positional arguments a
   assert.deepEqual(argv.slice(separator + 1), WORKLOAD);
 });
 
-void test("RT-03: every flag before the separator belongs to the pinned 0.1.2 flag set", () => {
+void test("RT-03: every flag before the separator belongs to the pinned 0.1.5 flag set", () => {
   const argv = buildCreateArgv(REQUEST);
   const beforeSeparator = argv.slice(0, argv.indexOf("--"));
   assert.deepEqual(beforeSeparator.slice(0, 3), ["openshell", "sandbox", "create"]);
@@ -208,8 +203,9 @@ void test("RT-03: a hung runner is bounded by the caller deadline and gives OPEN
 
 void test("CORE-06: two labelled containers for one session fail closed with OPENSHELL_LABEL_AMBIGUOUS and no run", async (t) => {
   const store = new FakeContainerStore();
-  store.add({ id: "fake-a", labels: { [LABEL_KEY]: "true", [SESSION_KEY]: SESSION }, running: true });
-  store.add({ id: "fake-b", labels: { [LABEL_KEY]: "true", [SESSION_KEY]: SESSION }, running: true });
+  const labels = { [OPENSHELL_MANAGED_KEY]: "true", [SANDBOX_NAME_KEY]: `realm-${SESSION}`, "openshell.ai/isolation-role": "sandbox" };
+  store.add({ id: "fake-a", labels, running: true });
+  store.add({ id: "fake-b", labels, running: true });
   const client = await startLibpod(t, store);
   const openshell = new FakeOpenShell(store);
 

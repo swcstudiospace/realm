@@ -7,6 +7,10 @@
 
 import { RealmError, type ErrorCode } from "../core/errors.js";
 import { defaultPolicyPath, isDirectEntry, podmanSocketPath, readHostRuntime } from "../runtime/host-paths.js";
+import { createOpenShellAgentOsDriver } from "../runtime/agentos-driver.js";
+import type { AgentOsDriver } from "../runtime/agentos.js";
+import { writePolicyDocument } from "../runtime/openshell.js";
+import { productionOpenShellRunner, SANDBOX_CPUS, SANDBOX_MEMORY } from "../runtime/session-execution.js";
 import type { EnvironmentLike } from "../session/paths.js";
 import { CONTROL_TIMEOUT_MS, sendRequest, type ControlReply } from "./channel.js";
 import { startDaemon, type StartDaemonOptions, type StartedDaemon } from "./daemon.js";
@@ -38,6 +42,34 @@ interface StopWiring {
   readonly writeStderr: (line: string) => void;
 }
 
+// The AgentOS driver is bound only when REALM_AGENTOS_IMAGE names a digest-pinned sandbox image. Without it
+// the daemon stays unbound and refuses AgentOS work with AGENTOS_NOT_CONFIGURED (fail closed). The sandbox
+// takes the session's cpu and memory limits and its own policy document, written beside the state
+// directory. The policy names the node binary in the image as its workload binary.
+const AGENTOS_IMAGE_ENV = "REALM_AGENTOS_IMAGE";
+const AGENTOS_SESSION_ID = "agentos";
+const AGENTOS_WORKLOAD_BINARY = "/usr/local/bin/node";
+// Create provisions the container and waits for it to start, so it gets the long budget; probe and delete
+// get the short one.
+const AGENTOS_START_TIMEOUT_MS = 180_000;
+const AGENTOS_CALL_TIMEOUT_MS = 30_000;
+
+function agentosDriverFromEnv(env: EnvironmentLike, stateDir: string): AgentOsDriver | undefined {
+  const imageRef = env[AGENTOS_IMAGE_ENV];
+  if (imageRef === undefined || imageRef.length === 0) {
+    return undefined;
+  }
+  return createOpenShellAgentOsDriver({
+    runner: productionOpenShellRunner(env),
+    imageRef,
+    policyPath: writePolicyDocument(stateDir, AGENTOS_SESSION_ID, [], AGENTOS_WORKLOAD_BINARY),
+    cpus: SANDBOX_CPUS,
+    memory: SANDBOX_MEMORY,
+    startTimeoutMs: AGENTOS_START_TIMEOUT_MS,
+    callTimeoutMs: AGENTOS_CALL_TIMEOUT_MS,
+  });
+}
+
 // Starts the daemon and resolves with its exit code once it has stopped: 0 after a clean teardown,
 // 1 when start, the shutdown, or the listening server fails. Each failure writes one line carrying only a catalogue code.
 export async function runDaemon(deps: DaemonDeps): Promise<number> {
@@ -47,6 +79,7 @@ export async function runDaemon(deps: DaemonDeps): Promise<number> {
   try {
     const { runtimeInput, stateDir } = readHostRuntime(deps.env, deps.readConfig);
     const libpodSocketPath = podmanSocketPath(deps.env);
+    const agentosDriver = agentosDriverFromEnv(deps.env, stateDir);
     started = await start({
       stateDir,
       runtimeInput,
@@ -54,6 +87,7 @@ export async function runDaemon(deps: DaemonDeps): Promise<number> {
       sessionId: SESSION_ID,
       env: deps.env,
       ...(libpodSocketPath === undefined ? {} : { libpodSocketPath }),
+      ...(agentosDriver === undefined ? {} : { agentosDriver }),
     });
   } catch (error: unknown) {
     writeStderr(failureLine(codeOf(error)));

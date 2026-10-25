@@ -20,9 +20,14 @@ const REQUEST: SandboxCreateRequest = {
   sessionId: "sess-poll",
   policyPath: "/state/runtime/sess-poll.policy.json",
   cpus: 1,
-  memory: "512m",
+  memory: "512Mi",
   workloadArgv: ["/usr/bin/agent", "--serve"],
 };
+
+// A workload container of this session as OpenShell labels it: the sandbox role under the session's sandbox name.
+function workloadOf(id: string): { readonly id: string; readonly labels: Readonly<Record<string, string>> } {
+  return { id, labels: { "openshell.ai/isolation-role": "sandbox", "openshell.ai/sandbox-name": "realm-sess-poll" } };
+}
 const POLL_STEP_MS = 250;
 const LOOKUP_CAP = 100;
 
@@ -63,7 +68,8 @@ function scriptedLibpod(answer: (poll: number) => LookupAnswer): {
         if (found instanceof Error) {
           return Promise.reject(found);
         }
-        return Promise.resolve(found.map((entry) => ({ id: entry.id })));
+        // Each entry keeps its labels, as libpod reports them, so the lookup can select by sandbox name.
+        return Promise.resolve([...found]);
       },
     },
     calls: () => calls,
@@ -139,7 +145,7 @@ function assertNoLeak(refusal: RealmError, forbidden: readonly string[]): void {
 
 void test("RT-03: an ambiguous label match is refused at once with no further poll and no container ids", async (t) => {
   const advance = useVirtualClock(t);
-  const libpod = scriptedLibpod(() => [{ id: "ctr-secret-a" }, { id: "ctr-secret-b" }]);
+  const libpod = scriptedLibpod(() => [workloadOf("ctr-secret-a"), workloadOf("ctr-secret-b")]);
   const run = startCreate(libpod.containers, 60_000);
 
   await settle();
@@ -158,7 +164,7 @@ void test("RT-03: an ambiguous match already present before create is refused wi
   useVirtualClock(t);
   const libpod = {
     containers: {
-      listContainersByLabel: () => Promise.resolve([{ id: "ctr-secret-a" }, { id: "ctr-secret-b" }]),
+      listContainersByLabel: () => Promise.resolve([workloadOf("ctr-secret-a"), workloadOf("ctr-secret-b")]),
     },
   };
   const run = startCreate(libpod.containers, 60_000);
@@ -206,7 +212,7 @@ void test("RT-03: an untyped libpod error ends the poll at once with no causeCod
 void test("RT-09: a transient libpod error followed by a found container succeeds with that container id", async (t) => {
   const advance = useVirtualClock(t);
   const libpod = scriptedLibpod((poll) =>
-    poll < 3 ? new RealmError("PODMAN_MACHINE_DOWN") : [{ id: "ctr-found" }],
+    poll < 3 ? new RealmError("PODMAN_MACHINE_DOWN") : [workloadOf("ctr-found")],
   );
   const run = startCreate(libpod.containers, 60_000);
 
