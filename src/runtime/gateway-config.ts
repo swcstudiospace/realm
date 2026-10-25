@@ -1,4 +1,4 @@
-// Gateway configuration renderer for the OpenShell gateway (phase 9.1 T7).
+// Gateway configuration renderer for the OpenShell gateway (phase 9.1 T7; phase 9.5 T9 adds the isolation backend section).
 // The module is pure: no file system, no process.env, no network. It derives the PKI layout written by
 // `openshell-gateway generate-certs` and renders the gateway TOML that Realm hands to the gateway binary.
 // Every input is validated before it is written, and each value is refused rather than escaped, so the
@@ -19,12 +19,22 @@ export interface RealmGatewayPkiPaths {
   readonly jwtKid: string;
 }
 
+// An isolation backend the gateway reaches over a Unix socket. The name is the gateway's registration name.
+export interface RealmIsolationBackend {
+  readonly name: string;
+  readonly socketPath: string;
+}
+
 export interface RealmGatewayInput {
   readonly bindAddress: string;
   readonly gatewayId: string;
   readonly computeDriver: string;
   readonly driverSocketPath: string;
   readonly pkiDir: string;
+  // The operator-owned isolation backends the supervisor may reach. Each renders one supervisor section entry. Optional.
+  readonly isolationBackends?: readonly RealmIsolationBackend[];
+  // The name of the backend the compute driver selects. It must name one of isolationBackends. Optional.
+  readonly isolationBackend?: string;
 }
 
 const GATEWAY_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
@@ -34,6 +44,9 @@ const COMPUTE_DRIVER_PATTERN = /^[a-z][a-z0-9-]{0,62}$/;
 const BIND_ADDRESS_PATTERN = /^(?:\[([^[\]]+)\]|([^:[\]]+)):([0-9]{1,5})$/;
 const PORT_PATTERN = /^[1-9][0-9]{0,4}$/;
 const MAX_PORT = 65535;
+// The gateway's backend-name rule: 1 to 128 ASCII letters, digits, hyphens, underscores or dots. The built-in name is reserved.
+const ISOLATION_BACKEND_NAME_PATTERN = /^[A-Za-z0-9._-]{1,128}$/;
+const RESERVED_ISOLATION_BACKEND_NAME = "openshell-sandbox";
 
 function invalid(): RealmError {
   return makeRealmError("SCHEMA_INVALID");
@@ -94,6 +107,32 @@ function checkPath(value: unknown): string {
   return value;
 }
 
+// The isolation backends: each has a valid, unused name and an absolute Unix socket path. A hostname, a relative path, a
+// duplicate name, or the reserved built-in name is refused. An absent list means no backend.
+function checkIsolationBackends(value: unknown): readonly RealmIsolationBackend[] {
+  if (value === undefined) {
+    return [];
+  }
+  if (!Array.isArray(value)) {
+    throw invalid();
+  }
+  const names = new Set<string>();
+  return value.map((entry: unknown) => {
+    if (typeof entry !== "object" || entry === null) {
+      throw invalid();
+    }
+    const { name, socketPath } = entry as Record<string, unknown>;
+    if (typeof name !== "string" || !ISOLATION_BACKEND_NAME_PATTERN.test(name) || name === RESERVED_ISOLATION_BACKEND_NAME) {
+      throw invalid();
+    }
+    if (names.has(name)) {
+      throw invalid();
+    }
+    names.add(name);
+    return { name, socketPath: checkPath(socketPath) };
+  });
+}
+
 // The PKI layout that `openshell-gateway generate-certs --output-dir DIR` writes. ca.key is not returned:
 // the gateway configuration never refers to it.
 export function realmGatewayPkiPaths(pkiDir: string): RealmGatewayPkiPaths {
@@ -110,8 +149,12 @@ export function realmGatewayPkiPaths(pkiDir: string): RealmGatewayPkiPaths {
   });
 }
 
-// Renders the gateway TOML. The key order and the blank line between tables are fixed. The output ends
-// with one LF, and it never contains disable_tls: the listener always runs TLS with client verification.
+// Renders the gateway TOML. The key order and the blank line between tables are fixed. The output ends with
+// one LF, and it never contains disable_tls: the listener always runs TLS with client verification.
+//
+// With no isolation backend, the output has no supervisor section. With backends, each one renders an entry of
+// [[openshell.supervisor.isolation_backends]] with a unix endpoint. The compute driver selects one backend by name, and the
+// driver table names it. A selection that names no listed backend is refused, and so is a selection without any backend.
 export function renderRealmGatewayConfig(input: RealmGatewayInput): string {
   const source: unknown = input;
   const bindAddress = checkBindAddress(fieldOf(source, "bindAddress"));
@@ -119,6 +162,11 @@ export function renderRealmGatewayConfig(input: RealmGatewayInput): string {
   const computeDriver = checkToken(fieldOf(source, "computeDriver"), COMPUTE_DRIVER_PATTERN);
   const driverSocketPath = checkPath(fieldOf(source, "driverSocketPath"));
   const pki = realmGatewayPkiPaths(checkPath(fieldOf(source, "pkiDir")));
+  const backends = checkIsolationBackends(fieldOf(source, "isolationBackends"));
+  const selected = fieldOf(source, "isolationBackend");
+  if (selected !== undefined && (typeof selected !== "string" || !backends.some((backend) => backend.name === selected))) {
+    throw invalid();
+  }
 
   const lines = [
     "[openshell]",
@@ -143,5 +191,16 @@ export function renderRealmGatewayConfig(input: RealmGatewayInput): string {
     `[openshell.drivers.${computeDriver}]`,
     `socket_path = "${driverSocketPath}"`,
   ];
+  if (typeof selected === "string") {
+    lines.push(`isolation_backend = "${selected}"`);
+  }
+  for (const backend of backends) {
+    lines.push(
+      "",
+      "[[openshell.supervisor.isolation_backends]]",
+      `name = "${backend.name}"`,
+      `endpoint = { kind = "unix", socket_path = "${backend.socketPath}" }`,
+    );
+  }
   return `${lines.join("\n")}\n`;
 }
