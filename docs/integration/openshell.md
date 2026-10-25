@@ -149,28 +149,57 @@ The realm compute driver implements `openshell.compute.v1.ComputeDriver` from th
 | RPC | Driver behaviour | Refusal or status |
 | --- | --- | --- |
 | `GetCapabilities` | Reports the driver name, the default image, the portable CPU and memory limits, the `openshell.compute.contract` capability, and the pinned admission acknowledgement (`DRIVER_ADMISSION_ACKNOWLEDGEMENT`). Declares no isolation backend. | A gateway that requires an unknown capability: `INVALID_ARGUMENT`. |
-| `AuthenticateSandbox` | Not offered. The driver does not advertise sandbox authentication. | `UNIMPLEMENTED` |
+| `AuthenticateSandbox` | Not offered. The driver does not advertise sandbox authentication. Moves to phase 9.5. | `UNIMPLEMENTED` |
 | `ValidateSandboxCreate` | Runs the create checks below. No libpod call. | `INVALID_ARGUMENT` on any refusal. |
-| `CreateSandbox` | Runs the create checks, then `DriverLifecycle.create`. Records the gateway's sandbox id and workspace. | `INVALID_ARGUMENT` on refusal; `ALREADY_EXISTS` when the name is in use. |
-| `GetSandbox` | Reads the labelled container and the registry entry. | `NOT_FOUND` when the driver does not hold the sandbox. |
-| `ListSandboxes` | Lists the sandboxes that have a registry entry and a labelled container. | none |
+| `CreateSandbox` | Runs the create checks, prepares the directories, then `DriverLifecycle.create`. Records the gateway's sandbox id, workspace and container name under the gateway's name. | `INVALID_ARGUMENT` on refusal, including a state directory already present for the name; `ALREADY_EXISTS` when a container of the name exists and its state directory does not. |
+| `GetSandbox` | Reads the labelled container and the registry entry, reporting the gateway's name. | `NOT_FOUND` when the driver does not hold the sandbox. |
+| `ListSandboxes` | Lists, under the gateway's name, the sandboxes that have a registry entry and a labelled container. | none |
 | `WatchSandboxes` | Sends every sandbox on connect, then each change, and each removal as a deleted event. Polls until the client cancels. | none |
 | `StopSandbox` | Refused. Reads and changes no state (PD-08). | `FAILED_PRECONDITION` |
 | `StartSandbox` | Refused. Reads and changes no state (PD-08). | `FAILED_PRECONDITION` |
-| `DeleteSandbox` | `DriverLifecycle.delete`, then clears the registry. Idempotent. | `deleted` is false for a sandbox that is already gone. |
+| `DeleteSandbox` | `DriverLifecycle.delete`, then clears the registry. Idempotent. A name whose container another registered sandbox holds deletes nothing. | `deleted` is false for a sandbox that is already gone. |
 | `EnsureWorkspace` | Creates `<workspaceRoot>/<workspace>` at 0700 when missing. Refuses a symbolic link or a path that resolves outside the root. | `INVALID_ARGUMENT` on refusal. |
 | `DeleteWorkspace` | Removes an empty workspace directory. A workspace that still holds files is left in place. | `FAILED_PRECONDITION` when files remain. |
 
 The create checks refuse, before any libpod call, a request whose image is not the configured digest, whose CPU or memory
 request or limit differs from the realm profile (2 CPUs, 1 GiB), that asks for a GPU, that carries a non-empty platform or
-driver config, a user-namespace request, an isolation backend, or an environment, or whose argv is empty.
+driver config, a user-namespace request, an isolation backend, or an environment, or whose argv holds an empty string.
+An empty argv is accepted: the sandbox is created idle, and the command is not forwarded before phase 9.5.
+
+Sandbox names. The gateway's name is used as given, and the container runs under the `realm-` prefixed name. A name that
+already starts with `realm-` is unchanged. Any other name gets the prefix, and the prefixed name must pass the
+container-name pattern and length rule (at most 128 characters). A name that fails is refused with `SCHEMA_INVALID`. The
+container name, the state directory name and the sandbox-name label carry the prefixed name. The driver's registry maps
+the gateway's name to it, so `GetSandbox`, `ListSandboxes`, `WatchSandboxes` and `DeleteSandbox` take and report the
+gateway's name. Two names that give one container name, such as `x` and `realm-x`, cannot both be sandboxes: the second
+create is refused, because the first sandbox's state directory exists.
+
+Directories. A create prepares two directories before the lifecycle runs. The workspace is created at 0700 if it is
+absent, by the rule `EnsureWorkspace` uses. The state directory is created at 0700 under the state root, and it must not
+already exist. If the lifecycle refuses, the state directory this call made is removed. The workspace is left in place.
+The state root and the workspace root are set in the driver's environment for the realm account. The rendered gateway
+configuration does not set them.
 
 ### PD-08 (stop and start)
 
 PD-08 default applied: `StopSandbox` and `StartSandbox` refuse with the gateway's precondition status
-(`FAILED_PRECONDITION`) and change no sandbox state. The owner decision waits on the call-site evidence below.
+(`FAILED_PRECONDITION`) and change no sandbox state. The call-site evidence below shows the gateway does not reach them
+in phase 9.4, so their live observation moves to phase 9.5.
 
-### Observed call sites (T2, lead capture)
+### Observed call sites (phase 9.4, live)
 
-<!-- T2 placeholder: the lead fills this from the running gateway, one line per RPC with the flow that caused it. -->
-Pending. Not yet captured.
+Captured live on 2026-10-25 through the realm gateway, with debug spans on. One line per RPC, with the flow that caused it:
+
+- At startup: `GetCapabilities` (driver.initialize), `WatchSandboxes`, `ListSandboxes` (reconcile).
+- Create: `ValidateSandboxCreate`, then `CreateSandbox`. A refused create runs no `CreateSandbox`.
+- Get: `GetSandbox`, polled while the sandbox is Provisioning.
+- List: `ListSandboxes`.
+- Delete: `DeleteSandbox`.
+- Not reached: `StopSandbox` and `StartSandbox`. The gateway refuses them in the Provisioning phase before calling the driver. They move to phase 9.5.
+- Not observed: `EnsureWorkspace` (the gateway calls it only for provider credentials), `DeleteWorkspace`, `AuthenticateSandbox`. `AuthenticateSandbox` returns `UNIMPLEMENTED` and is not advertised; it moves to phase 9.5.
+
+### Phase 9.4 limit
+
+Phase 9.4 closes on its code and on the live checks it can reach. A sandbox stays Provisioning (ConfigurationPending) until
+the phase 9.5 supervisor reports its effective configuration. The PD-08 stop and start observation, and
+`AuthenticateSandbox`, move to phase 9.5 with it.
