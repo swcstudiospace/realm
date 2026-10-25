@@ -1,8 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { RealmError } from "../../../src/core/errors.js";
-import { DRIVER_ENV, loadDriverProcessConfig } from "../../../src/runtime/driver/main.js";
-import { SANDBOX_IMAGE } from "./fakes.js";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { DRIVER_ENV, loadDriverProcessConfig, readPackageVersion } from "../../../src/runtime/driver/main.js";
+import { IMPLEMENTATION_VERSION, SANDBOX_IMAGE } from "./fakes.js";
 
 const COMPLETE_ENV: Readonly<Record<string, string>> = {
   [DRIVER_ENV.name]: "realm",
@@ -19,7 +23,7 @@ function refusedWithSchemaInvalid(): (error: unknown) => boolean {
 }
 
 void test("PD-05: a complete environment yields the socket, the libpod socket, and the driver config", () => {
-  const config = loadDriverProcessConfig(COMPLETE_ENV);
+  const config = loadDriverProcessConfig(COMPLETE_ENV, IMPLEMENTATION_VERSION);
   assert.equal(config.socketPath, "/run/realm/driver.sock");
   assert.equal(config.libpodSocketPath, "/run/user/1001/podman/podman.sock");
   assert.equal(config.secretRoot, "/var/lib/realm/secrets");
@@ -28,46 +32,73 @@ void test("PD-05: a complete environment yields the socket, the libpod socket, a
     sandboxImage: SANDBOX_IMAGE,
     sandboxStateRoot: "/var/lib/realm/state",
     workspaceRoot: "/var/lib/realm/workspaces",
+    implementationVersion: IMPLEMENTATION_VERSION,
   });
 });
 
 for (const key of Object.values(DRIVER_ENV)) {
   void test(`PD-05: a missing ${key} refuses with SCHEMA_INVALID`, () => {
     const env = { ...COMPLETE_ENV, [key]: undefined };
-    assert.throws(() => loadDriverProcessConfig(env), refusedWithSchemaInvalid());
+    assert.throws(() => loadDriverProcessConfig(env, IMPLEMENTATION_VERSION), refusedWithSchemaInvalid());
   });
 }
 
 void test("PD-05: a missing XDG_RUNTIME_DIR refuses, because the libpod socket cannot be found", () => {
   const env = { ...COMPLETE_ENV, XDG_RUNTIME_DIR: undefined };
-  assert.throws(() => loadDriverProcessConfig(env), refusedWithSchemaInvalid());
+  assert.throws(() => loadDriverProcessConfig(env, IMPLEMENTATION_VERSION), refusedWithSchemaInvalid());
 });
 
 void test("PD-05: a relative socket or root path refuses", () => {
   for (const key of [DRIVER_ENV.socket, DRIVER_ENV.stateRoot, DRIVER_ENV.secretRoot, DRIVER_ENV.workspaceRoot]) {
     const env = { ...COMPLETE_ENV, [key]: "relative/path" };
-    assert.throws(() => loadDriverProcessConfig(env), refusedWithSchemaInvalid());
+    assert.throws(() => loadDriverProcessConfig(env, IMPLEMENTATION_VERSION), refusedWithSchemaInvalid());
   }
 });
 
 void test("PRD-DRV-02: an image that is not digest-pinned refuses at startup", () => {
   const env = { ...COMPLETE_ENV, [DRIVER_ENV.image]: "registry.invalid/realm/sandbox:latest" };
-  assert.throws(() => loadDriverProcessConfig(env), refusedWithSchemaInvalid());
+  assert.throws(() => loadDriverProcessConfig(env, IMPLEMENTATION_VERSION), refusedWithSchemaInvalid());
 });
 
 void test("PD-05: a driver name outside the short lowercase form refuses", () => {
   const env = { ...COMPLETE_ENV, [DRIVER_ENV.name]: "Realm Driver" };
-  assert.throws(() => loadDriverProcessConfig(env), refusedWithSchemaInvalid());
+  assert.throws(() => loadDriverProcessConfig(env, IMPLEMENTATION_VERSION), refusedWithSchemaInvalid());
 });
 
 void test("a refusal names no configured value", () => {
   const env = { ...COMPLETE_ENV, [DRIVER_ENV.image]: "registry.invalid/realm/secret-tag:latest" };
   try {
-    loadDriverProcessConfig(env);
+    loadDriverProcessConfig(env, IMPLEMENTATION_VERSION);
     assert.fail("expected a refusal");
   } catch (error: unknown) {
     assert.ok(error instanceof RealmError);
     assert.ok(!error.message.includes("secret-tag"));
     assert.ok(!error.reason.includes("secret-tag"));
   }
+});
+
+function packageJsonWith(contents: string): string {
+  const dir = mkdtempSync(join(tmpdir(), "realm-driver-manifest-"));
+  const path = join(dir, "package.json");
+  writeFileSync(path, contents);
+  return path;
+}
+
+void test("PD-05: the package version is read from the manifest it is given", () => {
+  assert.equal(readPackageVersion(packageJsonWith('{"name":"agent-realm","version":"9.8.7"}')), "9.8.7");
+});
+
+void test("PD-05: the entry resolves this package's own manifest four levels above the module", () => {
+  const version = readPackageVersion(fileURLToPath(new URL("../../../../package.json", import.meta.url)));
+  assert.match(version, /^\d+\.\d+\.\d+/);
+});
+
+void test("PD-05: a manifest without a usable version refuses with SCHEMA_INVALID", () => {
+  for (const contents of ['{"name":"agent-realm"}', '{"version":""}', '{"version":"   "}', '{"version":7}', "null", "not json"]) {
+    assert.throws(() => readPackageVersion(packageJsonWith(contents)), refusedWithSchemaInvalid());
+  }
+});
+
+void test("PD-05: a manifest that cannot be read refuses with SCHEMA_INVALID", () => {
+  assert.throws(() => readPackageVersion(join(tmpdir(), "realm-no-such-package.json")), refusedWithSchemaInvalid());
 });

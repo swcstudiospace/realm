@@ -55,6 +55,19 @@ const MEMORY_UNIT_BYTES: Readonly<Record<string, number>> = Object.freeze({
 const NANOCPUS_PER_CORE = 1_000_000_000;
 const DEFAULT_WATCH_INTERVAL_MS = 1000;
 
+// The gateway accepts an implementation version of 1 to 128 bytes that is not blank and holds no control characters
+// (openshell-core extension_protocol validate_text). The driver applies the same rule, so an invalid value fails here.
+const MAX_IMPLEMENTATION_VERSION_BYTES = 128;
+const CONTROL_CHARACTER_PATTERN = /\p{Cc}/u;
+
+export function isImplementationVersion(value: string): boolean {
+  return (
+    value.trim() !== "" &&
+    Buffer.byteLength(value, "utf8") <= MAX_IMPLEMENTATION_VERSION_BYTES &&
+    !CONTROL_CHARACTER_PATTERN.test(value)
+  );
+}
+
 export interface ComputeDriverConfig {
   // The driver's name as the gateway's [openshell.drivers.<name>] table names it.
   readonly driverName: string;
@@ -64,6 +77,8 @@ export interface ComputeDriverConfig {
   readonly sandboxStateRoot: string;
   // Absolute root under which each workspace directory sits, at <root>/<workspace>.
   readonly workspaceRoot: string;
+  // The build version advertised as the extension implementation version. The gateway refuses an empty or invalid value.
+  readonly implementationVersion: string;
 }
 
 export interface ComputeDriverDeps {
@@ -190,7 +205,11 @@ export class ComputeDriver {
   private readonly registry = new Map<string, SandboxRecord>();
 
   constructor(config: ComputeDriverConfig, deps: ComputeDriverDeps) {
-    if (!isAbsolute(config.sandboxStateRoot) || !isAbsolute(config.workspaceRoot)) {
+    if (
+      !isAbsolute(config.sandboxStateRoot) ||
+      !isAbsolute(config.workspaceRoot) ||
+      !isImplementationVersion(config.implementationVersion)
+    ) {
       throw makeRealmError("SCHEMA_INVALID");
     }
     this.config = config;
@@ -217,7 +236,7 @@ export class ComputeDriver {
       extension: {
         protocol_version: { major: 1, minor: 0 },
         implementation_name: "realm/podman",
-        implementation_version: "",
+        implementation_version: this.config.implementationVersion,
         supported_capabilities: [...SUPPORTED_CAPABILITIES],
         required_capabilities: [],
       },

@@ -2,10 +2,18 @@
 // This module is the only place the driver reads process.env. It reads the configuration once, validates it, runs the
 // startup sweep, and only then binds the socket, so no request is accepted ahead of the sweep (PRD-CTR-03).
 
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { isDirectEntry, podmanSocketPath } from "../host-paths.js";
 import { makeRealmError, RealmError } from "../../core/errors.js";
 import { LibpodClient } from "../libpod-client.js";
-import { ComputeDriver, computeDriverImplementation, loadComputeDriverService, type ComputeDriverConfig } from "./compute-driver.js";
+import {
+  ComputeDriver,
+  computeDriverImplementation,
+  isImplementationVersion,
+  loadComputeDriverService,
+  type ComputeDriverConfig,
+} from "./compute-driver.js";
 import { DriverLifecycle } from "./lifecycle.js";
 import { startDriverSocketServer, type DriverSocketServer } from "./server.js";
 
@@ -22,6 +30,9 @@ export const DRIVER_ENV = Object.freeze({
 const DRIVER_NAME_PATTERN = /^[a-z][a-z0-9-]{0,62}$/;
 // The same digest-pinned form the runtime config accepts (D-52).
 const IMAGE_PATTERN = /^[a-z0-9][a-z0-9._/-]*@sha256:[a-f0-9]{64}$/;
+// The package manifest sits four levels above the built module, dist/src/runtime/driver/main.js. The driver runs from dist.
+// The release job bumps the manifest, so the version is read at startup, never copied into source.
+const PACKAGE_JSON_RELATIVE_PATH = "../../../../package.json";
 
 export interface DriverProcessConfig {
   readonly socketPath: string;
@@ -34,7 +45,7 @@ type Environment = Readonly<Record<string, string | undefined>>;
 
 // Builds the process configuration from the environment. Every value is required. A refusal names no value, so no
 // configured path or digest reaches a log.
-export function loadDriverProcessConfig(env: Environment): DriverProcessConfig {
+export function loadDriverProcessConfig(env: Environment, implementationVersion: string): DriverProcessConfig {
   const name = requiredValue(env, DRIVER_ENV.name);
   const socketPath = requiredAbsolute(env, DRIVER_ENV.socket);
   const sandboxImage = requiredValue(env, DRIVER_ENV.image);
@@ -49,8 +60,24 @@ export function loadDriverProcessConfig(env: Environment): DriverProcessConfig {
     socketPath,
     libpodSocketPath,
     secretRoot,
-    driver: { driverName: name, sandboxImage, sandboxStateRoot, workspaceRoot },
+    driver: { driverName: name, sandboxImage, sandboxStateRoot, workspaceRoot, implementationVersion },
   };
+}
+
+// Reads the build version from a package manifest. Fails closed when the file is unreadable, is not JSON, or its
+// version is not a value the gateway accepts. A refusal names no value and no path.
+export function readPackageVersion(packageJsonPath: string): string {
+  let manifest: unknown;
+  try {
+    manifest = JSON.parse(readFileSync(packageJsonPath, "utf8"));
+  } catch {
+    throw makeRealmError("SCHEMA_INVALID");
+  }
+  const version = typeof manifest === "object" && manifest !== null && "version" in manifest ? manifest.version : undefined;
+  if (typeof version !== "string" || !isImplementationVersion(version)) {
+    throw makeRealmError("SCHEMA_INVALID");
+  }
+  return version;
 }
 
 function requiredValue(env: Environment, key: string): string {
@@ -83,7 +110,8 @@ export async function startDriver(config: DriverProcessConfig): Promise<DriverSo
 }
 
 export async function main(): Promise<void> {
-  const config = loadDriverProcessConfig({ ...process.env });
+  const implementationVersion = readPackageVersion(fileURLToPath(new URL(PACKAGE_JSON_RELATIVE_PATH, import.meta.url)));
+  const config = loadDriverProcessConfig({ ...process.env }, implementationVersion);
   const server = await startDriver(config);
   process.stdout.write(
     `realm compute driver ${config.driver.driverName} listening on ${server.socketPath}\n`,

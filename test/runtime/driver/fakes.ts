@@ -82,6 +82,8 @@ export class FakeLifecycle implements Pick<DriverLifecycle, "create" | "delete">
   }
 }
 
+export const IMPLEMENTATION_VERSION = "0.1.2";
+
 // A driver config with fresh temporary roots. The roots are real directories so workspace tests can use them.
 export function driverConfig(overrides: Partial<ComputeDriverConfig> = {}): ComputeDriverConfig {
   const base = mkdtempSync(join(tmpdir(), "realm-driver-test-"));
@@ -91,6 +93,7 @@ export function driverConfig(overrides: Partial<ComputeDriverConfig> = {}): Comp
     sandboxImage: SANDBOX_IMAGE,
     sandboxStateRoot: join(base, "state"),
     workspaceRoot,
+    implementationVersion: IMPLEMENTATION_VERSION,
     ...overrides,
   };
 }

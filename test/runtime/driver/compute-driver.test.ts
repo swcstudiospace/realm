@@ -233,3 +233,22 @@ function lstatOrUndefined(path: string): Stats | undefined {
     return undefined;
   }
 }
+
+void test("PD-05: GetCapabilities advertises the configured non-empty implementation version", () => {
+  const { driver, config } = harness();
+  const extension = driver.getCapabilities({})["extension"];
+  assert.ok(extension !== null && typeof extension === "object" && "implementation_version" in extension);
+  assert.notEqual(config.implementationVersion, "");
+  assert.equal(extension.implementation_version, config.implementationVersion);
+});
+
+void test("PD-05: the constructor refuses an implementation version the gateway would reject", () => {
+  for (const implementationVersion of ["", "   ", "0.1.2\n", "v".repeat(129)]) {
+    const libpod = new FakeLibpod();
+    const lifecycle = new FakeLifecycle(libpod);
+    assert.throws(
+      () => new ComputeDriver(driverConfig({ implementationVersion }), { lifecycle, libpod }),
+      expectCode("SCHEMA_INVALID"),
+    );
+  }
+});
