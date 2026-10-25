@@ -314,8 +314,8 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 | 6. CLI, Daemon, and Host Packaging | 6/6 | Complete (verification deferred: human — 06-VERIFICATION.md, 5/5 must-haves, 6 live items) | - |
 | 7. Policy Reference and Security Review | 3 units, no PLAN files | Complete (verification deferred: human — 07-VERIFICATION.md, 9/9 must-haves, 5 human items) | - |
 | 8. Host Adapter Bundles | 1/1 | Complete (closed 2026-10-24 on validator exit codes; artifacts hand-written, pending owner ratification) | - |
-| 9. Live Omp Verification | 0/3 | In progress: OMP-LIVE-02 met live; OMP-LIVE-03 partial; OMP-LIVE-01 and OMP-LIVE-04 descoped to the follow-up milestone (owner decision 2026-10-23); UI-01 non-blocking recorded as a stated limitation | - |
-| 9.1. Host Prerequisites and Production Gateway | 1/1 | Complete (2026-10-25): T1 to T9 with evidence; T6 reboot PASS; the main gateway's keep-alive bridge was recreated after the reboot (recorded; restart persistence is an owner decision) | - |
+| 9. Live Omp Verification | 1/3 | In progress: plan 09-01 closed for code and unit gates on 2026-10-25 (the only plan on disk); OMP-LIVE-01, -03, and -04 run in phase 9.6 after `realm up` works (owner decision 2026-10-25, reinstating them from the 2026-10-23 descope); OMP-LIVE-02 met live; OMP-LIVE-03 partial; UI-01 non-blocking recorded as a stated limitation | - |
+| 9.1. Host Prerequisites and Production Gateway | 1/1 | Complete (2026-10-25): T1 to T9 with evidence; T6 reboot PASS; the main gateway's keep-alive bridge was restored after the reboot and is persistent through boot unit HC-07 | - |
 | 9.2. Native Enforcement Helper | 0/1 | Partial: helper, native tests, probe, SECCOMP.md, and image definition complete; security gate PASS WITH CONDITIONS C1 to C6; image build in phase 9.3 | - |
 | 9.3. Hardened Container Lifecycle | 1/1 | Complete, VERIFIED_WITH_GAPS (2026-10-25): live acceptance 1, 4, 5, 6, 7 PASS after the reboot; acceptance 2 and 3 unit-verified, live NOT RUN; launch and active removal unit-verified | - |
 | 9.4. Compute Driver gRPC | 0/1 | Planned (needs 9.3; starts after plan 09-01 closes) | - |

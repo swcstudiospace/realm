@@ -1,6 +1,6 @@
 # Phase 9 summary: live OMP verification (plan 01)
 
-Status: partial. Code and unit gates are green. Live `realm up` is blocked. The built-in OpenShell driver's container fails four of the fourteen hardening checks. A realm-owned driver is being spiked to meet RT-01 and RT-03 as written.
+Status: closed for code and unit gates on 2026-10-25 (owner decision). The three live checks, OMP-LIVE-01, OMP-LIVE-03, and OMP-LIVE-04, move to phase 9.6, which delivers `realm up`. The production build uses the realm-owned driver in place of the built-in path (phases 9.1 to 9.6).
 
 ## Delivered and verified
 
@@ -15,7 +15,7 @@ Status: partial. Code and unit gates are green. Live `realm up` is blocked. The 
 ## Blocked and not verified
 
 - Live `realm up` on the built-in driver: the create-time verifier fails `rootless` (the Podman service is rootful), `read-only-root` (no driver option), `tmpfs` (OpenShell's tmpfs set), and `mounts` (OpenShell's own mounts). `cap-drop` passes. The session fails closed, and no sandbox is left.
-- OMP-LIVE-01, OMP-LIVE-03, and OMP-LIVE-04 run through `realm up` and have not been run.
+- OMP-LIVE-01, OMP-LIVE-03, and OMP-LIVE-04 run through `realm up` and have not been run. The owner moved them to phase 9.6 on 2026-10-25, reinstating them from the 2026-10-23 descope.
 - The AgentOS sandbox has no hardening check. It does not meet RT-01 today (writable root, no workspace or state mounts). The path is off unless `REALM_AGENTOS_IMAGE` is set.
 
 ## Realm-owned driver (isolation backend) spike
@@ -33,3 +33,9 @@ Status: partial. Code and unit gates are green. Live `realm up` is blocked. The 
 - `npm test`: 1143 total, 1134 pass, 0 fail, 9 skipped. After the lint fix, the two affected test files pass 82 of 82.
 - `npm run lint`: exit 0.
 - `npm run check:docs`: exit 0.
+
+## Closure (2026-10-25)
+
+- Plan 09-01 is closed for its code and unit gates (driver and daemon wiring in 0a5e208). Phase 9.4 may start: this is PR-10.
+- Carried into phase 9.6: OMP-LIVE-01, OMP-LIVE-03, and OMP-LIVE-04, run through `realm up` with a live Omp session. Phase 9 stays open until they run.
+- Spike items: G3 (supervisor attaches; workload starts only after StartAgent) moves to phase 9.5. G4 (native helper) is built in phase 9.2, with its live probe in 9.6. G5 (teardown leaves no container) passed in phase 9.3, acceptance 4.
