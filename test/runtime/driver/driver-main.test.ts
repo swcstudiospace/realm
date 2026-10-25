@@ -1,12 +1,19 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { RealmError } from "../../../src/core/errors.js";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { DRIVER_ENV, loadDriverProcessConfig, readPackageVersion } from "../../../src/runtime/driver/main.js";
-import { IMPLEMENTATION_VERSION, SANDBOX_IMAGE } from "./fakes.js";
+import {
+  DRIVER_ENV,
+  loadDriverProcessConfig,
+  readPackageVersion,
+  startDriver,
+  type DriverProcessConfig,
+} from "../../../src/runtime/driver/main.js";
+import { generateGatewayKey } from "../isolation/supervisor-token.js";
+import { IMPLEMENTATION_VERSION, SANDBOX_IMAGE, driverConfig } from "./fakes.js";
 
 const COMPLETE_ENV: Readonly<Record<string, string>> = {
   [DRIVER_ENV.name]: "realm",
@@ -15,6 +22,8 @@ const COMPLETE_ENV: Readonly<Record<string, string>> = {
   [DRIVER_ENV.stateRoot]: "/var/lib/realm/state",
   [DRIVER_ENV.secretRoot]: "/var/lib/realm/secrets",
   [DRIVER_ENV.workspaceRoot]: "/var/lib/realm/workspaces",
+  [DRIVER_ENV.isolationSocket]: "/run/realm/isolation.sock",
+  [DRIVER_ENV.gatewayPublicKey]: "/var/lib/realm/pki/jwt/public.pem",
   XDG_RUNTIME_DIR: "/run/user/1001",
 };
 
@@ -22,9 +31,11 @@ function refusedWithSchemaInvalid(): (error: unknown) => boolean {
   return (error: unknown) => error instanceof RealmError && error.code === "SCHEMA_INVALID";
 }
 
-void test("PD-05: a complete environment yields the socket, the libpod socket, and the driver config", () => {
+void test("PD-05: a complete environment yields the sockets, the key path, the libpod socket, and the driver config", () => {
   const config = loadDriverProcessConfig(COMPLETE_ENV, IMPLEMENTATION_VERSION);
   assert.equal(config.socketPath, "/run/realm/driver.sock");
+  assert.equal(config.isolationSocketPath, "/run/realm/isolation.sock");
+  assert.equal(config.gatewayPublicKeyPath, "/var/lib/realm/pki/jwt/public.pem");
   assert.equal(config.libpodSocketPath, "/run/user/1001/podman/podman.sock");
   assert.equal(config.secretRoot, "/var/lib/realm/secrets");
   assert.deepEqual(config.driver, {
@@ -49,7 +60,14 @@ void test("PD-05: a missing XDG_RUNTIME_DIR refuses, because the libpod socket c
 });
 
 void test("PD-05: a relative socket or root path refuses", () => {
-  for (const key of [DRIVER_ENV.socket, DRIVER_ENV.stateRoot, DRIVER_ENV.secretRoot, DRIVER_ENV.workspaceRoot]) {
+  for (const key of [
+    DRIVER_ENV.socket,
+    DRIVER_ENV.stateRoot,
+    DRIVER_ENV.secretRoot,
+    DRIVER_ENV.workspaceRoot,
+    DRIVER_ENV.isolationSocket,
+    DRIVER_ENV.gatewayPublicKey,
+  ]) {
     const env = { ...COMPLETE_ENV, [key]: "relative/path" };
     assert.throws(() => loadDriverProcessConfig(env, IMPLEMENTATION_VERSION), refusedWithSchemaInvalid());
   }
@@ -101,4 +119,44 @@ void test("PD-05: a manifest without a usable version refuses with SCHEMA_INVALI
 
 void test("PD-05: a manifest that cannot be read refuses with SCHEMA_INVALID", () => {
   assert.throws(() => readPackageVersion(join(tmpdir(), "realm-no-such-package.json")), refusedWithSchemaInvalid());
+});
+
+// A process configuration whose libpod socket does not exist. A start that reached the sweep would fail on that socket, so a
+// refusal with SCHEMA_INVALID shows the key was checked first, before any container was touched.
+function startConfigWithKeyAt(gatewayPublicKeyPath: string): DriverProcessConfig {
+  const base = mkdtempSync(join(tmpdir(), "realm-driver-start-"));
+  mkdirSync(join(base, "run"));
+  return {
+    socketPath: join(base, "run", "driver.sock"),
+    isolationSocketPath: join(base, "run", "isolation.sock"),
+    gatewayPublicKeyPath,
+    libpodSocketPath: join(base, "missing", "podman.sock"),
+    secretRoot: join(base, "secrets"),
+    driver: driverConfig(),
+  };
+}
+
+void test("PRD-ISO-01: startup refuses a missing gateway public key with SCHEMA_INVALID before the sweep", async () => {
+  const absent = join(tmpdir(), "realm-no-such-dir", "public.pem");
+  await assert.rejects(startDriver(startConfigWithKeyAt(absent)), refusedWithSchemaInvalid());
+});
+
+void test("PRD-ISO-01: startup refuses a gateway public key that is a directory, with SCHEMA_INVALID", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "realm-driver-keydir-"));
+  await assert.rejects(startDriver(startConfigWithKeyAt(directory)), refusedWithSchemaInvalid());
+});
+
+void test("PRD-ISO-01: startup refuses a gateway public key file that holds a private key, with SCHEMA_INVALID", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "realm-driver-privkey-"));
+  const keyPath = join(dir, "signing.pem");
+  const key = generateGatewayKey();
+  writeFileSync(keyPath, String(key.privateKey.export({ format: "pem", type: "pkcs8" })));
+  await assert.rejects(startDriver(startConfigWithKeyAt(keyPath)), refusedWithSchemaInvalid());
+});
+
+void test("PRD-ISO-01: startup refuses a gateway public key file larger than a PEM Ed25519 key, without reading it", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "realm-driver-bigkey-"));
+  const keyPath = join(dir, "public.pem");
+  writeFileSync(keyPath, "a".repeat(64 * 1024));
+  await assert.rejects(startDriver(startConfigWithKeyAt(keyPath)), refusedWithSchemaInvalid());
 });
