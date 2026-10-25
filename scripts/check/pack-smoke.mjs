@@ -73,6 +73,22 @@ export function missingDeclaredEntries(packageRoot) {
   return declared.filter((path) => !existsSync(join(packageRoot, path)));
 }
 
+// The vendored compute driver protos and their provenance file, relative to the package root. The driver loads them at
+// start, so a package without them cannot serve the gateway.
+export const DRIVER_PROTO_FILES = [
+  "src/runtime/driver/proto/PROVENANCE.md",
+  "src/runtime/driver/proto/compute_driver.proto",
+  "src/runtime/driver/proto/datamodel.proto",
+  "src/runtime/driver/proto/extension.proto",
+  "src/runtime/driver/proto/options.proto",
+  "src/runtime/driver/proto/sandbox.proto",
+];
+
+// Lists the driver protos absent under an installed package root.
+export function missingDriverProtos(packageRoot) {
+  return DRIVER_PROTO_FILES.filter((path) => !existsSync(join(packageRoot, path)));
+}
+
 async function run(file, args, options) {
   try {
     return await execFileAsync(file, args, {
@@ -112,11 +128,16 @@ async function main() {
     if (missingEntries.length > 0) {
       throw new Error(`packed package is missing declared entries: ${missingEntries.join(", ")}`);
     }
+    const missingProtos = missingDriverProtos(join(consumerDir, "node_modules", "agent-realm"));
+    if (missingProtos.length > 0) {
+      throw new Error(`packed package is missing driver protos: ${missingProtos.join(", ")}`);
+    }
 
     await writeFile(join(consumerDir, "probe.mjs"), PROBE_SOURCE);
     const probe = await run(process.execPath, ["probe.mjs"], { cwd: consumerDir });
     process.stdout.write(probe.stdout);
     process.stdout.write(`adapter manifests: ${ADAPTER_MANIFESTS.length} present\n`);
+    process.stdout.write(`driver protos: ${DRIVER_PROTO_FILES.length} present\n`);
     return 0;
   } finally {
     await Promise.all(
