@@ -493,3 +493,16 @@ Incident note, not a decision: while reading usage, I ran `state.signal-waiting`
 - Scope limit: the spike used a dev-mode gateway (TLS disabled) on loopback. A production build needs the gateway's TLS and JWT configuration.
 - Effort for a production build: about 3 to 4 engineer-weeks (estimate, not measured).
 - Phase and step: phase 9 partial. Decision requested: approve the production build of the realm-owned driver and the isolation backend.
+- Decision (user, 2026-10-25): plan the production build first, then build after approval. Planning is SDLC work and goes through the AgentSwarm orchestrator (a01-orchestrator). The plan is documents only: no code, no commits until approval, no push, and ship stays held.
+- Phase and step: phase 9 partial. Planning the production build (realm-owned compute driver and isolation backend) through the swarm.
+
+### Production build plan (phase 9 EXECUTE, 2026-10-25)
+
+- Planned through the swarm (plan only). Documents under the phase 9 folder: CONTEXT, DECISIONS (PD-01 to PD-17), HOST-CHANGES (HC-01 to HC-13), RISKS (PR-01 to PR-17), ROADMAP-INSERT, REQUIREMENTS-INSERT, and six plans for phases 9.1 to 9.6. Nothing is applied. The orchestrator's roadmap edit was blocked by the shell guard, so the ROADMAP and REQUIREMENTS inserts wait for approval.
+- Correction: PD-17 and HC-07, as first written, would have removed the CLI's live gateway identity. Corrected: keep it. No deletion is planned.
+- Known conflict to resolve in 9.3 task 0: two node:24-alpine digests appear in the records (sha256:06d7 in the spike's inspect, sha256:1200d8 in D-016). D-020 already moved the base to node:24-bookworm-slim.
+- Phase and step: phase 9 partial. Decision requested: approve PD-01 to PD-17 as recommended (PD-17 corrected), then apply the ROADMAP and REQUIREMENTS inserts.
+- Plan approved (user, 2026-10-25): PD-01 to PD-17 as recommended, with PD-17 corrected. The ROADMAP and REQUIREMENTS inserts are applied. The swarm's first roadmap insert left a stray literal line and misplaced progress rows; both are fixed.
+- Committed locally, with explicit paths: the planning documents and the six phase plans (09.1 to 09.6). No code.
+- Phase and step: phase 9 partial. Next: build phase 9.1 (host prerequisites and production gateway) through the swarm, using plan 09.1-01. Host changes HC-01 to HC-03, HC-05, HC-06, and HC-08 apply in their phases, each with its checks. HC-07 is kept.
+- Ship stays held. Nothing is pushed.
