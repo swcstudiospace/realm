@@ -6,12 +6,12 @@
 //
 // The field paths below are the libpod inspect fields the route table treats as provisional
 // (libpod-routes.ts, podman.md Q5). They are confirmed only by the gated suite on Podman 5.x.
-// No capability beyond the ALL drop is verified yet (D-51).
+// The capability check reads KernelCaps: the five capability sets of the container's init process, read from
+// its host /proc status and attached by the caller, because libpod inspect does not report them (D-51).
 
 // Numeric limits and the frozen profile values live here and nowhere else (D-52).
 export const HARDENING_PROFILE = Object.freeze({
   privileged: false,
-  capDrop: Object.freeze(["ALL"]),
   capAdd: Object.freeze([] as readonly string[]),
   securityOpt: Object.freeze(["no-new-privileges"]),
   readonlyRootfs: true,
@@ -64,7 +64,7 @@ type Check = (inspect: unknown, binding: HardeningBinding) => boolean;
 const CHECKS: Readonly<Record<HardeningProperty, Check>> = Object.freeze({
   privileged: (inspect) => field(inspect, ["HostConfig", "Privileged"]) === HARDENING_PROFILE.privileged,
   rootless: (_inspect, binding) => binding.rootless,
-  "cap-drop": (inspect) => sameStrings(field(inspect, ["HostConfig", "CapDrop"]), HARDENING_PROFILE.capDrop),
+  "cap-drop": (inspect) => noCapabilities(field(inspect, ["KernelCaps"])),
   "cap-add": (inspect) => sameStrings(field(inspect, ["HostConfig", "CapAdd"]), HARDENING_PROFILE.capAdd),
   "no-new-privileges": (inspect) => hasNoNewPrivileges(field(inspect, ["HostConfig", "SecurityOpt"])),
   "read-only-root": (inspect) =>
@@ -119,6 +119,36 @@ function field(source: unknown, path: readonly string[]): unknown {
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+// The five capability sets of /proc/<pid>/status. A container's init process must hold all of them empty (D-51).
+const CAP_SET_FIELDS = ["CapInh", "CapPrm", "CapEff", "CapBnd", "CapAmb"] as const;
+
+// The capability masks of a /proc/<pid>/status text, keyed by set name. A missing or malformed line leaves its
+// set out, so the cap-drop check fails closed on it.
+export function capabilitySetsOf(status: string): Readonly<Record<string, string>> {
+  const sets: Record<string, string> = {};
+  for (const line of status.split("\n")) {
+    const match = /^(Cap(?:Inh|Prm|Eff|Bnd|Amb)):\s*([0-9a-fA-F]+)\s*$/.exec(line);
+    const name = match?.[1];
+    const mask = match?.[2];
+    if (name !== undefined && mask !== undefined) {
+      sets[name] = mask;
+    }
+  }
+  return sets;
+}
+
+// True only when every capability set is present and holds no bit.
+function noCapabilities(value: unknown): boolean {
+  if (!isRecord(value)) {
+    return false;
+  }
+  const sets = value;
+  return CAP_SET_FIELDS.every((name) => {
+    const mask = sets[name];
+    return typeof mask === "string" && /^0+$/.test(mask);
+  });
 }
 
 // True only when the value is an array of strings with exactly the expected members, in any order.

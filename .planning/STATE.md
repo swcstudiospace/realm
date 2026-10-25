@@ -451,3 +451,45 @@ Incident note, not a decision: while reading usage, I ran `state.signal-waiting`
 - Stray logs from manual checks removed from the repository root.
 - Local commit on this branch with explicit paths. Never pushed.
 - Phase and step: phase 9 partial. Next: owner approval to start the isolation-backend program at its go/no-go spike.
+
+### Spike: isolation-backend go/no-go (phase 9 EXECUTE, 2026-10-25)
+
+- Started, delegated to one agent (job IsolationSpike). Gates: G1 the gateway accepts an external compute driver; G2 a rootless realm container passes all fifteen hardening checks; G3 the supervisor attaches to a spike backend and the workload starts only after StartAgent; G4 Landlock and seccomp applied by a native helper; G5 teardown leaves no container.
+- Scope and isolation: work stays outside the repository (under the spike's scratch directory). A separate spike gateway runs on loopback port 18771. The working gateway, the realm-podman service, and the realm state are not touched.
+- Contract facts at start: ComputeDriver has 12 RPCs. GetCapabilities must return protocol 1.0 metadata and the openshell.compute.contract capability, and the gateway requires an exact resource_admission_policy match. OpenBoundary receives an opaque driver_descriptor from the trusted driver.
+- Verdict: pending. Realm up stays blocked.
+
+### Spike verdict, G1 and G2 (phase 9 EXECUTE, 2026-10-25)
+
+- The delegated spike finished at G2. Its full report is outside the repository, in the phase 9 scratch area.
+- G1 GO: the gateway connected to the spike driver, and sandbox create reached CreateSandbox.
+- G2 NO-GO on one check: the spike's rootless realm container passes 13 of 14 hardening checks. cap-drop fails because Podman 5.7.1 records CapDrop as the 11-name expansion, not the literal ALL. The kernel shows every capability set empty.
+- Corrections to earlier records: (1) the verifier has fourteen checks, not fifteen. (2) An OpenShell-created container's CapDrop lists the dropped set. The earlier statement that it keeps 11 capabilities was wrong. Its kernel sets CapInh, CapPrm, CapEff, CapBnd, and CapAmb are all zero, and libpod inspect reports EffectiveCaps and BoundingCaps as empty.
+- Proposed verifier change, decision pending: require EffectiveCaps and BoundingCaps to be empty, and CapAdd empty, in place of the literal CapDrop ALL check.
+- Host prerequisites for rootless realm containers, decision pending: the realmlive account's crun 1.14.1 fails every container start on this host (unknown version specified); runc works. Cgroup limits need a delegated cgroup; the user manager for realmlive is inactive, and linger would start it.
+- G3 (supervisor attach to the realm backend), G4 (Landlock and seccomp), and G5 (teardown) have not been run.
+- Incident: the CLI's gateway identity directory was rewritten at 07:34:43 with a CA that the gateway does not trust, so the CLI failed with BadSignature. The cause is not proven; the spike's last activity and my failed call fall in that window. Restored from the gateway's original client identity (dated 20:51), which verifies against the gateway CA. The CLI lists sandboxes again (exit 0). The replaced files are backed up in the phase 9 scratch area.
+- Phase and step: phase 9 EXECUTE. Decisions requested: the cap-drop check, the host prerequisites, and whether to continue the spike at G3 to G5.
+
+### Correction: cap-drop evidence source (phase 9 EXECUTE, 2026-10-25)
+
+- My earlier statement that libpod inspect reports EffectiveCaps and BoundingCaps as empty was wrong. The libpod REST inspect has neither field, both while the container runs and at the realm's create-time inspect. The empty reading came from a CLI template: Go templates print a missing field as an empty list.
+- The kernel is the evidence. Earlier, the capability sets of a running OpenShell-created container were all zero (CapInh, CapPrm, CapEff, CapBnd, CapAmb).
+- Decision approved by the user: check the empty capability sets. Source: the host's /proc/<State.Pid>/status for the container's init process. The verifier takes this as evidence, and it fails closed when the evidence is missing.
+- Spike agent informed: its G2 uses the same source.
+- Refinement: libpod inspect carries EffectiveCaps and BoundingCaps, but both are null while the container runs and at create. They are not evidence. The earlier "absent" wording above is superseded by this line.
+- Decision (user, 2026-10-25): the realm-owned driver starts the idle init at create and runs the kernel check at create, as the current realm flow does. No workload code runs before StartAgent.
+- Implemented: the cap-drop check reads KernelCaps, the five capability sets read from the host's /proc status for State.Pid, and fails closed without them. The literal CapDrop ALL check and the profile's capDrop value are removed. Unit suite: 1143 total, 1134 pass, 0 fail, 9 skipped.
+
+### Spike verdict, G1 to G5 (phase 9 EXECUTE, 2026-10-25)
+
+- Round 3 result: GO on all five gates.
+  - G1: the gateway reaches the external driver's CreateSandbox.
+  - G2: a rootless realm container passes all fourteen checks with the idle init started at create (State.Pid present; five kernel sets zero; CapAdd empty).
+  - G3: the supervisor attaches to the realm backend. The workload starts only after StartAgent; the RPC order is recorded in the spike report.
+  - G4: Landlock (ABI 4), seccomp, and NoNewPrivs are applied inside the container. A /tmp write gets EACCES, a /workspace write succeeds, and keyctl gets EPERM. A control without the helper shows the /tmp write succeeds.
+  - G5: sandbox delete leaves no container.
+- Host: the spike reverted its prerequisites (linger off for realmlive, containers.conf removed, user manager stopped), with exit codes in its report. The realmlive account is back to its prior state.
+- Scope limit: the spike used a dev-mode gateway (TLS disabled) on loopback. A production build needs the gateway's TLS and JWT configuration.
+- Effort for a production build: about 3 to 4 engineer-weeks (estimate, not measured).
+- Phase and step: phase 9 partial. Decision requested: approve the production build of the realm-owned driver and the isolation backend.

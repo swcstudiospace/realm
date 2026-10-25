@@ -62,6 +62,7 @@ async function fixture(t: TestContext): Promise<Fixture> {
     libpod: new LibpodClient(socketPath),
     runner: openshell.runner,
     agentos,
+    readProcStatus: () => "CapInh:\t0000000000000000\nCapPrm:\t0000000000000000\nCapEff:\t0000000000000000\nCapBnd:\t0000000000000000\nCapAmb:\t0000000000000000\n",
     config: { image: IMAGE, workloadArgv: WORKLOAD, stateDir },
     egressAllow: [],
   });
@@ -72,10 +73,9 @@ async function fixture(t: TestContext): Promise<Fixture> {
 async function createSession(f: Fixture): Promise<{ readonly containerId: string }> {
   const inspect = {
     ImageDigest: DIGEST,
-    State: { Running: true, Status: "running" },
+    State: { Running: true, Status: "running", Pid: 4242 },
     HostConfig: {
       Privileged: false,
-      CapDrop: ["ALL"],
       CapAdd: [],
       SecurityOpt: ["no-new-privileges"],
       ReadonlyRootfs: true,

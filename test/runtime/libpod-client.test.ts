@@ -89,11 +89,11 @@ void test("RT-09: list, inspect, stop, and remove round-trip against the fake so
 
   const inspect = await client.inspectContainer("realm-a");
   assert.ok(inspect !== null);
-  assert.deepEqual(inspect["State"], { Status: "running", Running: true });
+  assert.equal((inspect["State"] as { readonly Status?: unknown } | undefined)?.Status, "running");
 
   await client.stopContainer("realm-a", 1000);
   const stopped = await client.inspectContainer("realm-a");
-  assert.deepEqual(stopped?.["State"], { Status: "exited", Running: false });
+  assert.equal((stopped?.["State"] as { readonly Status?: unknown } | undefined)?.Status, "exited");
 
   await client.removeContainer("realm-a", { force: false });
   assert.equal(await client.inspectContainer("realm-a"), null, "an inspect of a removed container is null");

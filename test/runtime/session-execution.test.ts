@@ -29,6 +29,10 @@ const EGRESS = [{ host: "api.example.com", port: 443 }];
 // The D-80 flags no argv on the execution path may carry (RT-05). Each is compared as a whole argv element.
 const FORBIDDEN_FLAGS = ["--env", "--provider", "--driver-config-json", "--forward", "--expose", "--template", "--auto-providers"];
 
+const ZERO_STATUS =
+  "CapInh:\t0000000000000000\nCapPrm:\t0000000000000000\nCapEff:\t0000000000000000\n" +
+  "CapBnd:\t0000000000000000\nCapAmb:\t0000000000000000\n";
+
 interface Fixture {
   readonly base: string;
   readonly stateDir: string;
@@ -44,6 +48,7 @@ interface Fixture {
   // One entry per OpenShell run: the policy document's text when the run starts, or undefined when no
   // document exists yet.
   readonly policyAtRun: (string | undefined)[];
+  readonly procStatus: { text: string };
 }
 
 async function fixture(t: TestContext, options: { readonly rootless?: boolean } = {}): Promise<Fixture> {
@@ -75,12 +80,14 @@ async function fixture(t: TestContext, options: { readonly rootless?: boolean } 
     now: () => 0,
   });
   const libpodClient = new LibpodClient(socketPath);
+  const procStatus = { text: ZERO_STATUS };
   const exec = new SessionExecution({
     libpod: libpodClient,
     runner,
     agentos: supervisor,
     config: { image: IMAGE, workloadArgv: WORKLOAD, stateDir },
     egressAllow: EGRESS,
+    readProcStatus: () => procStatus.text,
   });
   const unbound = new SessionExecution({
     libpod: libpodClient,
@@ -100,6 +107,7 @@ async function fixture(t: TestContext, options: { readonly rootless?: boolean } 
     exec,
     unbound,
     policyAtRun,
+    procStatus,
   };
 }
 
@@ -108,10 +116,9 @@ async function fixture(t: TestContext, options: { readonly rootless?: boolean } 
 function conformingInspect(f: Fixture, hostOverrides: Readonly<Record<string, unknown>> = {}): Record<string, unknown> {
   return {
     ImageDigest: DIGEST,
-    State: { Running: true, Status: "running" },
+    State: { Running: true, Status: "running", Pid: 4242 },
     HostConfig: {
       Privileged: false,
-      CapDrop: ["ALL"],
       CapAdd: [],
       SecurityOpt: ["no-new-privileges"],
       ReadonlyRootfs: true,
@@ -191,6 +198,17 @@ void test("RT-01, RT-03: a container that fails hardening and survives its remov
     (error: unknown) =>
       error instanceof HardeningFailedError && error.property === "privileged" && error.causeCode === "SCHEMA_INVALID",
   );
+});
+
+void test("RT-01, D-51: a non-empty bounding set in the host's status fails cap-drop through create, and the container is removed", async (t) => {
+  const f = await fixture(t);
+  scriptInspect(f, conformingInspect(f));
+  f.procStatus.text = ZERO_STATUS.replace("CapBnd:\t0000000000000000", "CapBnd:\t0000000000000008");
+  await assert.rejects(
+    f.exec.create({ idempotencyKey: SESSION, workspaceRoot: f.workspaceRoot }),
+    (error: unknown) => error instanceof HardeningFailedError && error.property === "cap-drop",
+  );
+  assert.equal(f.store.list().length, 0, "the container with a non-empty bounding set is removed");
 });
 
 void test("RT-03, CORE-06: the policy document is written before the OpenShell create runs", async (t) => {

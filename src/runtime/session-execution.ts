@@ -17,6 +17,7 @@
 // callers keep working. It removes every realm-labelled container and proves zero survivors.
 
 import { spawn, type ChildProcess, type StdioOptions } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { makeRealmError, RealmError, type ErrorCode } from "../core/errors.js";
 import { withTimeout } from "../core/timeout.js";
 import type { CreateRequest, ExecutionService, ProbeResult } from "../core/ports.js";
@@ -25,7 +26,13 @@ import type { EnvironmentLike } from "../session/paths.js";
 import type { AgentOsSupervisor } from "./agentos.js";
 import { loadRuntimeConfig, type RuntimeConfig } from "./config.js";
 import { validateEgressAllow } from "./egress.js";
-import { HARDENING_PROFILE, verifyInspect, type HardeningBinding, type HardeningProperty } from "./hardening.js";
+import {
+  capabilitySetsOf,
+  HARDENING_PROFILE,
+  verifyInspect,
+  type HardeningBinding,
+  type HardeningProperty,
+} from "./hardening.js";
 import type { LibpodClient, LibpodInspect } from "./libpod-client.js";
 import {
   buildExecArgv,
@@ -68,6 +75,9 @@ export interface SessionExecutionOptions {
   // The session's egress allowlist, fixed for the session (D-106, OQ-P4-10). It arrives untrusted and is
   // validated by the constructor, so an invalid list throws SCHEMA_INVALID before any create.
   readonly egressAllow: unknown;
+  // Reads the text of a host process's status file. The create-time check reads the container's init process
+  // through it, to prove its capability sets are empty (D-51). Defaults to the host's /proc.
+  readonly readProcStatus?: (pid: number) => string;
 }
 
 // A container whose hardening check failed. It carries the first failed property of the D-51 list,
@@ -92,6 +102,7 @@ export class SessionExecution implements ExecutionService {
   private readonly agentos: AgentOsSupervisor | undefined;
   private readonly config: Omit<RuntimeConfig, "workspaceRoot">;
   private readonly egressAllow: readonly EgressRule[];
+  private readonly readProcStatus: (pid: number) => string;
 
   // The egress list is validated here, before any create can run (D-106). An invalid list throws, and
   // no OpenShell or libpod call has been made by then.
@@ -99,6 +110,7 @@ export class SessionExecution implements ExecutionService {
     this.egressAllow = validateEgressAllow(options.egressAllow);
     this.libpod = options.libpod;
     this.runner = options.runner;
+    this.readProcStatus = options.readProcStatus ?? readHostProcStatus;
     this.agentos = options.agentos;
     this.config = options.config;
   }
@@ -222,7 +234,7 @@ export class SessionExecution implements ExecutionService {
     let inspectCause: ErrorCode | undefined;
     try {
       const inspect = await this.libpod.inspectContainer(containerId);
-      failed = inspect === null ? null : verifyInspect(binding, inspect);
+      failed = inspect === null ? null : verifyInspect(binding, attachKernelCaps(inspect, this.readProcStatus));
     } catch (error) {
       failed = null;
       inspectCause = catalogueCodeOf(error);
@@ -243,6 +255,26 @@ export class SessionExecution implements ExecutionService {
     }
     throw makeRealmError("OPENSHELL_START_FAILED", causeCode);
   }
+}
+
+// Attaches the capability sets of the container's init process, read through State.Pid from the host's status
+// (D-51). A missing pid or a status that cannot be read attaches nothing, so the cap-drop check fails closed.
+function attachKernelCaps(inspect: LibpodInspect, readStatus: (pid: number) => string): LibpodInspect {
+  const state = inspect.State as Readonly<{ Pid?: unknown }> | undefined;
+  const pid = state?.Pid;
+  if (typeof pid !== "number" || !Number.isSafeInteger(pid) || pid <= 0) {
+    return inspect;
+  }
+  try {
+    return { ...inspect, KernelCaps: capabilitySetsOf(readStatus(pid)) };
+  } catch {
+    return inspect;
+  }
+}
+
+// The host's status text for one process, from /proc. Only the create-time capability check reads it.
+function readHostProcStatus(pid: number): string {
+  return readFileSync(`/proc/${String(pid)}/status`, "utf8");
 }
 
 // The running flag of a libpod inspect object. Anything other than a boolean true is not running.

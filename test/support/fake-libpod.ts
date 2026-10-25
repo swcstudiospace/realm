@@ -350,7 +350,12 @@ export class FakeLibpod {
     return jsonReply(200, {
       Id: container.id,
       Name: `/${container.id}`,
-      State: { Status: container.running ? "running" : "exited", Running: container.running },
+      // The init pid of a running container. Session tests inject the host status read for it.
+      State: {
+        Status: container.running ? "running" : "exited",
+        Running: container.running,
+        Pid: container.running ? 4242 : 0,
+      },
       Config: { Labels: container.labels },
     });
   }

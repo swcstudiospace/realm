@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  capabilitySetsOf,
   HARDENING_PROFILE,
   HARDENING_PROPERTIES,
   type HardeningBinding,
@@ -21,14 +22,22 @@ const BINDING: HardeningBinding = {
   stateDir: STATE,
 };
 
+const ZERO_CAPS = {
+  CapInh: "0000000000000000",
+  CapPrm: "0000000000000000",
+  CapEff: "0000000000000000",
+  CapBnd: "0000000000000000",
+  CapAmb: "0000000000000000",
+};
+
 // A libpod inspect object that conforms to every D-51 property. Each call returns a fresh object,
 // so a test can change one field without affecting the others.
 function conforming(): Record<string, unknown> {
   return {
     ImageDigest: DIGEST,
+    KernelCaps: { ...ZERO_CAPS },
     HostConfig: {
       Privileged: false,
-      CapDrop: ["ALL"],
       CapAdd: [],
       SecurityOpt: ["no-new-privileges"],
       ReadonlyRootfs: true,
@@ -59,7 +68,8 @@ const FIELD_CASES: ReadonlyArray<{
   readonly wrong: unknown;
 }> = [
   { property: "privileged", path: ["HostConfig", "Privileged"], wrong: true },
-  { property: "cap-drop", path: ["HostConfig", "CapDrop"], wrong: ["NET_RAW"] },
+  { property: "cap-drop", path: ["KernelCaps", "CapBnd"], wrong: "0000000000000008" },
+  { property: "cap-drop", path: ["KernelCaps", "CapEff"], wrong: "0000000000000001" },
   { property: "cap-add", path: ["HostConfig", "CapAdd"], wrong: ["NET_ADMIN"] },
   { property: "no-new-privileges", path: ["HostConfig", "SecurityOpt"], wrong: [] },
   { property: "read-only-root", path: ["HostConfig", "ReadonlyRootfs"], wrong: false },
@@ -71,11 +81,9 @@ const FIELD_CASES: ReadonlyArray<{
   { property: "image-digest", path: ["ImageDigest"], wrong: `sha256:${"b".repeat(64)}` },
 ];
 
-void test("the frozen profile carries the D-51 values and verifies no capability beyond the ALL drop (RT-01)", () => {
+void test("the frozen profile carries the D-51 values (RT-01)", () => {
   assert.equal(Object.isFrozen(HARDENING_PROFILE), true);
-  assert.equal(Object.isFrozen(HARDENING_PROFILE.capDrop), true);
   assert.equal(Object.isFrozen(HARDENING_PROFILE.tmpfs), true);
-  assert.deepEqual([...HARDENING_PROFILE.capDrop], ["ALL"]);
   assert.deepEqual([...HARDENING_PROFILE.capAdd], []);
   assert.equal(HARDENING_PROFILE.privileged, false);
   assert.equal(HARDENING_PROFILE.readonlyRootfs, true);
@@ -88,6 +96,25 @@ void test("the frozen profile carries the D-51 values and verifies no capability
 
 void test("a conforming inspect yields an empty failure list (RT-01)", () => {
   assert.deepEqual(verifyInspect(BINDING, conforming()), []);
+});
+
+void test("a missing capability evidence fails cap-drop: the check fails closed when no kernel sets are attached (RT-01)", () => {
+  const inspect = conforming();
+  delete inspect.KernelCaps;
+  assert.deepEqual(verifyInspect(BINDING, inspect), ["cap-drop"]);
+});
+
+void test("capabilitySetsOf reads the five capability masks and ignores every other status line (RT-01)", () => {
+  const status =
+    "Name:\tsleep\nCapInh:\t0000000000000000\nCapPrm:\t0000000000000000\nCapEff:\t0000000000000000\n" +
+    "CapBnd:\t00000000a80425fb\nCapAmb:\t0000000000000000\nThreads:\t1\n";
+  assert.deepEqual(capabilitySetsOf(status), {
+    CapInh: "0000000000000000",
+    CapPrm: "0000000000000000",
+    CapEff: "0000000000000000",
+    CapBnd: "00000000a80425fb",
+    CapAmb: "0000000000000000",
+  });
 });
 
 void test("every D-51 property has a named check, and a non-object inspect fails every inspect-derived property (RT-01)", () => {
