@@ -1,12 +1,14 @@
-// The SandboxProtocol Exchange stream (phase 9.5, PRD-ISO-02 and PRD-ISO-03). This wave serves one request kind: Attach.
+// The SandboxProtocol Exchange stream (phase 9.5, PRD-ISO-02 and PRD-ISO-03). This wave serves two request kinds: DiscoverPolicy,
+// which is permitted before attachment, and Attach.
 //
-// The stream carries two frames: the boundary handle, and a request whose kind is Attach. The supervisor's bearer is read from
-// the call metadata when the stream opens, but it is verified only once both frames are read, so a token that expires while the
-// stream is held open cannot authorize the request. A refusal is raised after the frames, so a client that wrote its frames never
-// sees its own writes reset the stream. Attach checks that the verified gateway sandbox and runtime generation are the ones the
-// handle was opened for, and that the driver still holds that sandbox as the handle was bound. Only then does the boundary move to
-// Attached. Every failed check ends the stream with its status and changes no state. Any other request kind returns UNIMPLEMENTED
-// and changes no state; Confirm, StartAgent and the rest of the lifecycle are built in later waves.
+// The stream carries two frames: the boundary handle, and a request. The supervisor's bearer is read from the call metadata when
+// the stream opens, but it is verified only once both frames are read, so a token that expires while the stream is held open
+// cannot authorize the request. A refusal is raised after the frames, so a client that wrote its frames never sees its own writes
+// reset the stream. Every request checks that the verified gateway sandbox and runtime generation are the ones the handle was
+// opened for, and that the driver still holds that sandbox as the handle was bound. DiscoverPolicy answers with no image policy and
+// changes no state. Attach moves the boundary to Attached. Every failed check ends the stream with its status and changes no state.
+// Any other request kind returns UNIMPLEMENTED and changes no state; Confirm, StartAgent and the rest of the lifecycle are built in
+// later waves.
 
 import type { ServerDuplexStream } from "@grpc/grpc-js";
 import { status } from "@grpc/grpc-js";
@@ -21,7 +23,7 @@ export interface SandboxProtocolDeps {
   readonly resources: ProvisionedResources;
 }
 
-// The Exchange handler. The stream is ended by this handler after the Attach response, or ended with the failure.
+// The Exchange handler. The stream is ended by this handler after the response, or ended with the failure.
 export function exchange(deps: SandboxProtocolDeps): (call: ServerDuplexStream<unknown, unknown>) => void {
   return (call) => {
     serveExchange(call, deps).catch((error: unknown) => {
@@ -63,8 +65,22 @@ async function serveExchange(call: ServerDuplexStream<unknown, unknown>, deps: S
   // Verified at the time of use, not at stream open: the frames may arrive later, and the token's expiry is checked then.
   const session = deps.verifier.verify(bearer.token);
   const envelope = requestFrame.request as Readonly<Record<string, unknown>>;
+  if (envelope.request === "discover_policy") {
+    const boundary = boundaryOf(deps, handle, session);
+    if (boundary.lifecycle !== "Bound") {
+      throw new DriverStatusError({
+        code: status.FAILED_PRECONDITION,
+        details: "DiscoverPolicy is permitted only before Attach",
+      });
+    }
+    // No image policy is absent yaml with invalid false (sandbox_protocol.proto, ImagePolicy). The supervisor then uses its
+    // restrictive default when the gateway holds no policy, and never treats this as an invalid image.
+    call.write({ response: { request_id: envelope.request_id, image_policy: { invalid: false } } });
+    call.end();
+    return;
+  }
   if (envelope.request !== "attach") {
-    throw new DriverStatusError(driverUnimplemented("only Attach is served on the sandbox protocol in this wave"));
+    throw new DriverStatusError(driverUnimplemented("only DiscoverPolicy and Attach are served on the sandbox protocol in this wave"));
   }
   const boundary = boundaryOf(deps, handle, session);
   deps.boundaries.markAttached(handle);
