@@ -271,13 +271,13 @@ export default tseslint.config(
         {
           object: "process",
           property: "env",
-          message: "process.env is read only at entry edges (src/cli/main.ts, src/daemon/main.ts, src/omp/extension.ts). Pass the value in as a parameter.",
+          message: "process.env is read only at entry edges (src/cli/main.ts, src/daemon/main.ts, src/omp/extension.ts, src/runtime/driver/main.ts). Pass the value in as a parameter.",
         },
       ],
     },
   },
   {
-    files: ["src/cli/main.ts", "src/daemon/main.ts", "src/omp/extension.ts"],
+    files: ["src/cli/main.ts", "src/daemon/main.ts", "src/omp/extension.ts", "src/runtime/driver/main.ts"],
     rules: { "no-restricted-properties": "off" },
   },
   {
