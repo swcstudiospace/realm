@@ -139,3 +139,38 @@ Recorded in `docs/integration/runtime-decision.md` (S-08, S-10, OQ-P3-01 to OQ-P
 - The realm account's rootless API runs as a user unit with `RuntimeDirectory=podman`, `Delegate=yes`, and `DelegateSubgroup=supervised`. Linger keeps it running after logout. The runtime is `runc`, set in the account's container configuration. The plan is `.planning/phases/09.1-host-prerequisites-gateway/09.1-01-PLAN.md`.
 - The realm gateway does not run yet. Its compute driver is built in phase 9.4 (`.planning/phases/09-live-omp-verification/09-PRODUCTION-BUILD-DECISIONS.md`, PD-02 and PD-05).
 
+
+## Compute driver RPC table (phase 9.4)
+
+The realm compute driver implements `openshell.compute.v1.ComputeDriver` from the vendored protos in
+`src/runtime/driver/proto/` (revision `c4688aa`, OpenShell 0.1.5; see `PROVENANCE.md`). The driver is its own process
+(`src/runtime/driver/main.ts`) and listens on a unix socket in a 0700 directory, with the socket at 0600.
+
+| RPC | Driver behaviour | Refusal or status |
+| --- | --- | --- |
+| `GetCapabilities` | Reports the driver name, the default image, the portable CPU and memory limits, the `openshell.compute.contract` capability, and the pinned admission acknowledgement (`DRIVER_ADMISSION_ACKNOWLEDGEMENT`). Declares no isolation backend. | A gateway that requires an unknown capability: `INVALID_ARGUMENT`. |
+| `AuthenticateSandbox` | Not offered. The driver does not advertise sandbox authentication. | `UNIMPLEMENTED` |
+| `ValidateSandboxCreate` | Runs the create checks below. No libpod call. | `INVALID_ARGUMENT` on any refusal. |
+| `CreateSandbox` | Runs the create checks, then `DriverLifecycle.create`. Records the gateway's sandbox id and workspace. | `INVALID_ARGUMENT` on refusal; `ALREADY_EXISTS` when the name is in use. |
+| `GetSandbox` | Reads the labelled container and the registry entry. | `NOT_FOUND` when the driver does not hold the sandbox. |
+| `ListSandboxes` | Lists the sandboxes that have a registry entry and a labelled container. | none |
+| `WatchSandboxes` | Sends every sandbox on connect, then each change, and each removal as a deleted event. Polls until the client cancels. | none |
+| `StopSandbox` | Refused. Reads and changes no state (PD-08). | `FAILED_PRECONDITION` |
+| `StartSandbox` | Refused. Reads and changes no state (PD-08). | `FAILED_PRECONDITION` |
+| `DeleteSandbox` | `DriverLifecycle.delete`, then clears the registry. Idempotent. | `deleted` is false for a sandbox that is already gone. |
+| `EnsureWorkspace` | Creates `<workspaceRoot>/<workspace>` at 0700 when missing. Refuses a symbolic link or a path that resolves outside the root. | `INVALID_ARGUMENT` on refusal. |
+| `DeleteWorkspace` | Removes an empty workspace directory. A workspace that still holds files is left in place. | `FAILED_PRECONDITION` when files remain. |
+
+The create checks refuse, before any libpod call, a request whose image is not the configured digest, whose CPU or memory
+request or limit differs from the realm profile (2 CPUs, 1 GiB), that asks for a GPU, that carries a non-empty platform or
+driver config, a user-namespace request, an isolation backend, or an environment, or whose argv is empty.
+
+### PD-08 (stop and start)
+
+PD-08 default applied: `StopSandbox` and `StartSandbox` refuse with the gateway's precondition status
+(`FAILED_PRECONDITION`) and change no sandbox state. The owner decision waits on the call-site evidence below.
+
+### Observed call sites (T2, lead capture)
+
+<!-- T2 placeholder: the lead fills this from the running gateway, one line per RPC with the flow that caused it. -->
+Pending. Not yet captured.
