@@ -15,7 +15,8 @@ import {
   type ComputeDriverConfig,
 } from "./compute-driver.js";
 import { DriverLifecycle } from "./lifecycle.js";
-import { startDriverSocketServer, type DriverSocketServer } from "./server.js";
+import { BoundaryRegistry } from "./isolation/boundary.js";
+import { startSocketServer, type SocketServer } from "./server.js";
 
 export const DRIVER_ENV = Object.freeze({
   name: "REALM_DRIVER_NAME",
@@ -97,7 +98,7 @@ function requiredAbsolute(env: Environment, key: string): string {
 }
 
 // Sweeps, then binds. The sweep removes every realm container left by a previous generation before the socket exists.
-export async function startDriver(config: DriverProcessConfig): Promise<DriverSocketServer> {
+export async function startDriver(config: DriverProcessConfig): Promise<SocketServer> {
   const libpod = new LibpodClient(config.libpodSocketPath);
   const lifecycle = new DriverLifecycle({
     libpod,
@@ -105,8 +106,10 @@ export async function startDriver(config: DriverProcessConfig): Promise<DriverSo
     secretRoot: config.secretRoot,
   });
   await lifecycle.startupSweep();
-  const driver = new ComputeDriver(config.driver, { lifecycle, libpod });
-  return startDriverSocketServer(config.socketPath, loadComputeDriverService(), computeDriverImplementation(driver));
+  const driver = new ComputeDriver(config.driver, { lifecycle, libpod, boundaries: new BoundaryRegistry() });
+  return startSocketServer(config.socketPath, [
+    { service: loadComputeDriverService(), implementation: computeDriverImplementation(driver) },
+  ]);
 }
 
 export async function main(): Promise<void> {

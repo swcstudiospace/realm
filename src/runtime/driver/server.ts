@@ -1,12 +1,13 @@
-// The driver's listening socket (phase 9.4, PRD-DRV-01). The socket lives in a directory only the realm account can enter,
-// and the socket itself is writable by that account alone. Four rules hold before any request is accepted:
+// The realm's gRPC listening sockets (phase 9.4, PRD-DRV-01; phase 9.5 reuses the same rules for the isolation backend).
+// A socket lives in a directory only the realm account can enter, and the socket itself is writable by that account
+// alone. Four rules hold before any request is accepted:
 //
 // - The parent directory is created with mode 0700, or an existing one is set to 0700. It must be a real directory, not
 //   a symbolic link, owned by this process's account.
 // - The socket is bound under a umask of 0177, so it is created 0600, and then its mode is checked.
 // - A path that exists is refused unless it is a socket owned by this account and nothing listens on it. A stale socket
 //   is removed; a live one is refused. A regular file, a directory, a symbolic link or a foreign socket is never removed.
-// - The driver removes its own socket on close, and only when the path is still that socket.
+// - The server removes its own socket on close, and only when the path is still that socket.
 
 import { Server, ServerCredentials, type ServiceDefinition, type UntypedServiceImplementation } from "@grpc/grpc-js";
 import { chmodSync, lstatSync, mkdirSync, unlinkSync, type Stats } from "node:fs";
@@ -20,18 +21,21 @@ const SOCKET_MODE = 0o600;
 const SOCKET_UMASK = 0o177;
 const PERMISSION_BITS = 0o777;
 
-export interface DriverSocketServer {
+// One gRPC service bound on a socket, with its handlers.
+export interface BoundService {
+  readonly service: ServiceDefinition;
+  readonly implementation: UntypedServiceImplementation;
+}
+
+export interface SocketServer {
   readonly socketPath: string;
   close(): Promise<void>;
 }
 
-// Binds the service on socketPath and resolves once it accepts connections. It refuses before binding when the path
-// cannot be the driver's own socket. A refusal throws a catalogue error.
-export async function startDriverSocketServer(
-  socketPath: string,
-  service: ServiceDefinition,
-  implementation: UntypedServiceImplementation,
-): Promise<DriverSocketServer> {
+// Binds the services on socketPath and resolves once it accepts connections. It refuses before binding when the path
+// cannot be the server's own socket. A refusal throws a catalogue error. A bound socket that fails the post-bind check is
+// shut down and removed before the error is thrown, so nothing keeps listening on a path that was refused.
+export async function startSocketServer(socketPath: string, services: readonly BoundService[]): Promise<SocketServer> {
   if (!isAbsolute(socketPath)) {
     throw makeRealmError("SCHEMA_INVALID");
   }
@@ -40,9 +44,16 @@ export async function startDriverSocketServer(
   await clearStaleSocket(socketPath, uid);
 
   const server = new Server();
-  server.addService(service, implementation);
+  for (const { service, implementation } of services) {
+    server.addService(service, implementation);
+  }
   await bindSocket(server, socketPath);
-  verifySocket(socketPath, uid);
+  try {
+    verifySocket(socketPath, uid);
+  } catch (error: unknown) {
+    await closeAndRemove(server, socketPath).catch(() => undefined);
+    throw error;
+  }
   return {
     socketPath,
     close: () => closeAndRemove(server, socketPath),
@@ -93,7 +104,7 @@ async function clearStaleSocket(socketPath: string, uid: number): Promise<void> 
   unlinkSync(socketPath);
 }
 
-// True when a connection to the path succeeds, so a live driver owns it. A refused or missing connection means nothing
+// True when a connection to the path succeeds, so a live server owns it. A refused or missing connection means nothing
 // listens there.
 function isListening(socketPath: string): Promise<boolean> {
   return new Promise((resolve) => {
@@ -110,7 +121,7 @@ function isListening(socketPath: string): Promise<boolean> {
 }
 
 // Binds under the restrictive umask, then restores the previous umask whatever happens. The umask is process-wide, so
-// it is set only for the bind, and the driver binds once, at startup.
+// it is set only for the bind, and each server binds once, at startup.
 async function bindSocket(server: Server, socketPath: string): Promise<void> {
   const previous = process.umask(SOCKET_UMASK);
   try {
@@ -128,7 +139,8 @@ async function bindSocket(server: Server, socketPath: string): Promise<void> {
   }
 }
 
-// Holds the bound socket to its mode. A socket that is not 0600 is closed and removed before the error is thrown.
+// Holds the bound path to the rules. A socket that is not 0600 is set to 0600. A path that is not a socket, or that this
+// account does not own, is refused; the caller then shuts the server down and removes the path.
 function verifySocket(socketPath: string, uid: number): void {
   const stat = statOrNull(socketPath);
   if (stat === null || !stat.isSocket() || stat.uid !== uid) {
@@ -139,7 +151,7 @@ function verifySocket(socketPath: string, uid: number): void {
   }
 }
 
-// Stops accepting, then removes the socket if it is still the one this driver bound.
+// Stops accepting, then removes the socket if it is still the one this server bound.
 function closeAndRemove(server: Server, socketPath: string): Promise<void> {
   return new Promise((resolve, reject) => {
     server.tryShutdown((error) => {

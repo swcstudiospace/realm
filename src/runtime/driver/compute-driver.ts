@@ -42,6 +42,7 @@ import {
 import { DRIVER_ADMISSION_ACKNOWLEDGEMENT } from "./admission.js";
 import { driverFailureOf, DriverStatusError, driverNotFound, driverUnimplemented, toServerError } from "./grpc-status.js";
 import type { DriverLifecycle } from "./lifecycle.js";
+import type { BoundaryRegistry } from "./isolation/boundary.js";
 
 export const COMPUTE_DRIVER_SERVICE_NAME = "openshell.compute.v1.ComputeDriver";
 const PROTO_FILE = "compute_driver.proto";
@@ -90,6 +91,8 @@ export interface ComputeDriverConfig {
 export interface ComputeDriverDeps {
   readonly lifecycle: Pick<DriverLifecycle, "create" | "delete">;
   readonly libpod: Pick<LibpodClient, "inspectContainer" | "listContainersByLabel">;
+  // Boundary handles of a deleted sandbox are invalidated here (PRD-ISO-06).
+  readonly boundaries: Pick<BoundaryRegistry, "invalidateAll">;
 }
 
 // The message shapes the driver reads and writes. proto-loader delivers keepCase field names. It runs with defaults, so an

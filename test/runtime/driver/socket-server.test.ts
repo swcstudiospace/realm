@@ -9,13 +9,20 @@ import {
   computeDriverImplementation,
   loadComputeDriverService,
 } from "../../../src/runtime/driver/compute-driver.js";
-import { startDriverSocketServer, type DriverSocketServer } from "../../../src/runtime/driver/server.js";
+import { BoundaryRegistry } from "../../../src/runtime/driver/isolation/boundary.js";
+import { startSocketServer, type SocketServer } from "../../../src/runtime/driver/server.js";
 import { FakeLibpod, FakeLifecycle, driverConfig, socketDirectory } from "./fakes.js";
 
-async function startOn(socketPath: string): Promise<DriverSocketServer> {
+async function startOn(socketPath: string): Promise<SocketServer> {
   const libpod = new FakeLibpod();
-  const driver = new ComputeDriver(driverConfig(), { lifecycle: new FakeLifecycle(libpod), libpod });
-  return startDriverSocketServer(socketPath, loadComputeDriverService(), computeDriverImplementation(driver));
+  const driver = new ComputeDriver(driverConfig(), {
+    lifecycle: new FakeLifecycle(libpod),
+    libpod,
+    boundaries: new BoundaryRegistry(),
+  });
+  return startSocketServer(socketPath, [
+    { service: loadComputeDriverService(), implementation: computeDriverImplementation(driver) },
+  ]);
 }
 
 function modeOf(path: string): number {

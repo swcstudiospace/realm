@@ -20,14 +20,15 @@ import {
   loadComputeDriverService,
 } from "../../../src/runtime/driver/compute-driver.js";
 import { DRIVER_ADMISSION_ACKNOWLEDGEMENT } from "../../../src/runtime/driver/admission.js";
-import { startDriverSocketServer, type DriverSocketServer } from "../../../src/runtime/driver/server.js";
+import { startSocketServer, type SocketServer } from "../../../src/runtime/driver/server.js";
+import { BoundaryRegistry } from "../../../src/runtime/driver/isolation/boundary.js";
 import { FakeLibpod, FakeLifecycle, driverConfig, OTHER_DIGEST_IMAGE, socketDirectory, validSandbox } from "./fakes.js";
 
 interface Harness {
   readonly client: Client;
   readonly lifecycle: FakeLifecycle;
   readonly service: ServiceDefinition;
-  readonly server: DriverSocketServer;
+  readonly server: SocketServer;
 }
 
 async function harness(t: TestContext): Promise<Harness> {
@@ -35,10 +36,12 @@ async function harness(t: TestContext): Promise<Harness> {
   const lifecycle = new FakeLifecycle(libpod);
   const config = driverConfig();
   mkdirSync(config.workspaceRoot, { recursive: true });
-  const driver = new ComputeDriver(config, { lifecycle, libpod });
+  const driver = new ComputeDriver(config, { lifecycle, libpod, boundaries: new BoundaryRegistry() });
   const service = loadComputeDriverService();
   const socketPath = join(socketDirectory(), "driver.sock");
-  const server = await startDriverSocketServer(socketPath, service, computeDriverImplementation(driver, 10));
+  const server = await startSocketServer(socketPath, [
+    { service, implementation: computeDriverImplementation(driver, 10) },
+  ]);
   const Constructor = makeClientConstructor(service, COMPUTE_DRIVER_SERVICE_NAME);
   const client = new Constructor(`unix:${socketPath}`, credentials.createInsecure());
   t.after(async () => {

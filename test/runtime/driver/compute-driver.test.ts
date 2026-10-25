@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { status } from "@grpc/grpc-js";
 import { RealmError } from "../../../src/core/errors.js";
 import { ComputeDriver, type DriverSandboxMessage } from "../../../src/runtime/driver/compute-driver.js";
+import { BoundaryRegistry } from "../../../src/runtime/driver/isolation/boundary.js";
 import { DRIVER_ADMISSION_ACKNOWLEDGEMENT } from "../../../src/runtime/driver/admission.js";
 import { DriverStatusError, driverFailureOf } from "../../../src/runtime/driver/grpc-status.js";
 import type { ContainerSpec } from "../../../src/runtime/libpod-client.js";
@@ -14,7 +15,7 @@ function harness() {
   const libpod = new FakeLibpod();
   const lifecycle = new FakeLifecycle(libpod);
   const config = driverConfig();
-  const driver = new ComputeDriver(config, { lifecycle, libpod });
+  const driver = new ComputeDriver(config, { lifecycle, libpod, boundaries: new BoundaryRegistry() });
   return { libpod, lifecycle, config, driver };
 }
 
@@ -188,7 +189,7 @@ void test("PRD-DRV-02: a create with absent directories makes the workspace and 
     },
     delete: () => Promise.resolve(),
   };
-  const driver = new ComputeDriver(config, { lifecycle, libpod: new FakeLibpod() });
+  const driver = new ComputeDriver(config, { lifecycle, libpod: new FakeLibpod(), boundaries: new BoundaryRegistry() });
   await driver.createSandbox(validSandbox());
   assert.deepEqual(modesAtCreate, [[0o700, 0o700]]);
 });
@@ -216,6 +217,7 @@ void test("PRD-DRV-02: a lifecycle refusal removes the state directory this call
   const driver = new ComputeDriver(config, {
     lifecycle: refusingLifecycle(refusal, stateDirSeen),
     libpod: new FakeLibpod(),
+    boundaries: new BoundaryRegistry(),
   });
   await assert.rejects(driver.createSandbox(validSandbox()), (error: unknown) => error === refusal);
   assert.deepEqual(stateDirSeen, [true]);
@@ -424,7 +426,12 @@ void test("PD-05: the constructor refuses an implementation version the gateway 
     const libpod = new FakeLibpod();
     const lifecycle = new FakeLifecycle(libpod);
     assert.throws(
-      () => new ComputeDriver(driverConfig({ implementationVersion }), { lifecycle, libpod }),
+      () =>
+        new ComputeDriver(driverConfig({ implementationVersion }), {
+          lifecycle,
+          libpod,
+          boundaries: new BoundaryRegistry(),
+        }),
       expectCode("SCHEMA_INVALID"),
     );
   }
