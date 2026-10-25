@@ -3,8 +3,10 @@
 // Create is the only path to a container. Before it reaches the lifecycle, the request is checked against the realm
 // profile: the digest-pinned image, the portable CPU and memory limits, no GPU, no platform or driver config, no
 // environment, no user-namespace request, no isolation backend, and a non-empty argv. Any mismatch is refused with
-// SCHEMA_INVALID, and no libpod call is made. The lifecycle (DriverLifecycle, phase 9.3) then builds, starts and verifies
-// the container.
+// SCHEMA_INVALID, and no libpod call is made. A create that passes prepares the directories the lifecycle requires: the
+// workspace, by the same rule EnsureWorkspace uses, and a new state directory. If the lifecycle then refuses, the state
+// directory this call made is removed. The lifecycle (DriverLifecycle, phase 9.3) then builds, starts and verifies the
+// container.
 //
 // The driver keeps a registry from sandbox name to the gateway's sandbox id and workspace. CreateSandbox fills it and
 // DeleteSandbox clears it. The startup sweep removes every realm container before the driver accepts requests, so no
@@ -12,7 +14,7 @@
 // StopSandbox and StartSandbox refuse with the transition code, which maps to FAILED_PRECONDITION (PD-08).
 // AuthenticateSandbox is not implemented: the driver does not advertise sandbox authentication.
 
-import { existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, rmdirSync, type Stats } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, rmdirSync, rmSync, type Stats } from "node:fs";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -23,7 +25,7 @@ import {
   type UntypedServiceImplementation,
 } from "@grpc/grpc-js";
 import * as protoLoader from "@grpc/proto-loader";
-import { makeRealmError } from "../../core/errors.js";
+import { makeRealmError, RealmError } from "../../core/errors.js";
 import { HARDENING_PROFILE } from "../hardening.js";
 import type { ContainerSpec, LibpodClient, LibpodInspect } from "../libpod-client.js";
 import { CONTAINER_ID_PATTERN } from "../libpod-routes.js";
@@ -250,9 +252,23 @@ export class ComputeDriver {
     return {};
   }
 
+  // An existing state directory is refused before anything is prepared, so that refusal creates nothing. Then the
+  // workspace and the new state directory are prepared, and only then does the lifecycle run. If the lifecycle refuses,
+  // the state directory this call made is removed and the original error is rethrown. The workspace is left in place.
   async createSandbox(sandbox: DriverSandboxMessage | null | undefined): Promise<{ runtime_identity: string }> {
     const plan = planCreate(sandbox, this.config);
-    const containerId = await this.deps.lifecycle.create(plan.spec);
+    assertStateDirAbsent(plan.spec.stateDir);
+    this.prepareWorkspace(plan.workspace);
+    mkdirOrRefuse(plan.spec.stateDir);
+    let containerId: string;
+    try {
+      containerId = await this.deps.lifecycle.create(plan.spec);
+    } catch (error) {
+      if (!removeStateDir(plan.spec.stateDir) && error instanceof RealmError) {
+        error.message = `${error.message} Cleanup failed: the sandbox state directory was left in place.`;
+      }
+      throw error;
+    }
     this.registry.set(plan.spec.sandboxName, { id: plan.sandboxId, workspace: plan.workspace });
     return { runtime_identity: containerId };
   }
@@ -293,14 +309,7 @@ export class ComputeDriver {
   }
 
   ensureWorkspace(request: WorkspaceRequest): Record<string, never> {
-    const dir = this.workspaceDir(request.workspace);
-    const stat = statOrNull(dir);
-    if (stat === null) {
-      mkdirOrRefuse(dir);
-    } else if (stat.isSymbolicLink() || !stat.isDirectory()) {
-      throw makeRealmError("SCHEMA_INVALID");
-    }
-    this.assertInsideRoot(dir);
+    this.prepareWorkspace(request.workspace);
     return {};
   }
 
@@ -380,6 +389,19 @@ export class ComputeDriver {
       throw makeRealmError("SCHEMA_INVALID");
     }
     return join(this.config.workspaceRoot, workspace);
+  }
+
+  // The one workspace rule, shared by EnsureWorkspace and CreateSandbox: the directory is created at 0700 when absent,
+  // a symbolic link or non-directory is refused, and the result must resolve inside the root.
+  private prepareWorkspace(workspace: string | undefined): void {
+    const dir = this.workspaceDir(workspace);
+    const stat = statOrNull(dir);
+    if (stat === null) {
+      mkdirOrRefuse(dir);
+    } else if (stat.isSymbolicLink() || !stat.isDirectory()) {
+      throw makeRealmError("SCHEMA_INVALID");
+    }
+    this.assertInsideRoot(dir);
   }
 
   // A workspace directory must resolve, through any symbolic link, to a path strictly inside the configured root.
@@ -552,11 +574,30 @@ function statOrNull(path: string): Stats | null {
   }
 }
 
+// A new state directory must not exist yet, and its root must. Both are checked before anything is created, so a
+// refusal here leaves the disk as it was. A leftover directory is never reused.
+function assertStateDirAbsent(stateDir: string): void {
+  realpathOrRefuse(dirname(stateDir));
+  if (statOrNull(stateDir) !== null) {
+    throw makeRealmError("SCHEMA_INVALID");
+  }
+}
+
 function mkdirOrRefuse(dir: string): void {
   try {
     mkdirSync(dir, { mode: 0o700 });
   } catch {
     throw makeRealmError("SCHEMA_INVALID");
+  }
+}
+
+// Removes the state directory a create made. Returns false when the removal failed, and the directory is left in place.
+function removeStateDir(dir: string): boolean {
+  try {
+    rmSync(dir, { recursive: true, force: true });
+    return true;
+  } catch {
+    return false;
   }
 }
 

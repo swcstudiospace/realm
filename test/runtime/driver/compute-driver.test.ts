@@ -7,6 +7,7 @@ import { RealmError } from "../../../src/core/errors.js";
 import { ComputeDriver, type DriverSandboxMessage } from "../../../src/runtime/driver/compute-driver.js";
 import { DRIVER_ADMISSION_ACKNOWLEDGEMENT } from "../../../src/runtime/driver/admission.js";
 import { DriverStatusError, driverFailureOf } from "../../../src/runtime/driver/grpc-status.js";
+import type { ContainerSpec } from "../../../src/runtime/libpod-client.js";
 import { FakeLibpod, FakeLifecycle, driverConfig, OTHER_DIGEST_IMAGE, SANDBOX_IMAGE, validSandbox } from "./fakes.js";
 
 function harness() {
@@ -15,6 +16,17 @@ function harness() {
   const config = driverConfig();
   const driver = new ComputeDriver(config, { lifecycle, libpod });
   return { libpod, lifecycle, config, driver };
+}
+
+// A lifecycle that records whether the state directory existed when it was called, then refuses with the given error.
+function refusingLifecycle(error: RealmError, stateDirSeen: boolean[]) {
+  return {
+    create: (spec: ContainerSpec) => {
+      stateDirSeen.push(existsSync(spec.stateDir));
+      return Promise.reject(error);
+    },
+    delete: () => Promise.resolve(),
+  };
 }
 
 function expectCode(code: string): (error: unknown) => boolean {
@@ -94,6 +106,70 @@ void test("PRD-DRV-02: a conforming request is accepted, and only its exact spec
       stateDir: join(config.sandboxStateRoot, "realm-session-1"),
     },
   ]);
+});
+
+void test("PRD-DRV-02: a create with absent directories makes the workspace and the state directory before the lifecycle runs", async () => {
+  const config = driverConfig();
+  const workspace = join(config.workspaceRoot, "workspace-a");
+  const stateDir = join(config.sandboxStateRoot, "realm-session-1");
+  assert.equal(existsSync(workspace), false);
+  assert.equal(existsSync(stateDir), false);
+  const modesAtCreate: number[][] = [];
+  const lifecycle = {
+    create: (spec: ContainerSpec) => {
+      modesAtCreate.push([statSync(spec.workspaceDir).mode & 0o777, statSync(spec.stateDir).mode & 0o777]);
+      return Promise.resolve("id-realm-session-1");
+    },
+    delete: () => Promise.resolve(),
+  };
+  const driver = new ComputeDriver(config, { lifecycle, libpod: new FakeLibpod() });
+  await driver.createSandbox(validSandbox());
+  assert.deepEqual(modesAtCreate, [[0o700, 0o700]]);
+});
+
+void test("PRD-DRV-02: a create whose state directory already exists is refused, and creates nothing", async () => {
+  const { driver, lifecycle, config } = harness();
+  const stateDir = join(config.sandboxStateRoot, "realm-session-1");
+  mkdirSync(stateDir);
+  const leftover = join(stateDir, "leftover.txt");
+  writeFileSync(leftover, "from an earlier sandbox");
+  await assert.rejects(driver.createSandbox(validSandbox()), expectCode("SCHEMA_INVALID"));
+  assert.equal(lifecycle.creates.length, 0);
+  assert.equal(existsSync(leftover), true);
+  assert.equal(lstatOrUndefined(join(config.workspaceRoot, "workspace-a")), undefined);
+});
+
+void test("PRD-DRV-02: a lifecycle refusal removes the state directory this call made, keeps a pre-existing workspace, and rethrows the original error", async () => {
+  const config = driverConfig();
+  const workspace = join(config.workspaceRoot, "workspace-a");
+  mkdirSync(workspace);
+  const notes = join(workspace, "notes.txt");
+  writeFileSync(notes, "user data");
+  const refusal = new RealmError("SCHEMA_INVALID");
+  const stateDirSeen: boolean[] = [];
+  const driver = new ComputeDriver(config, {
+    lifecycle: refusingLifecycle(refusal, stateDirSeen),
+    libpod: new FakeLibpod(),
+  });
+  await assert.rejects(driver.createSandbox(validSandbox()), (error: unknown) => error === refusal);
+  assert.deepEqual(stateDirSeen, [true]);
+  assert.equal(lstatOrUndefined(join(config.sandboxStateRoot, "realm-session-1")), undefined);
+  assert.equal(existsSync(notes), true);
+});
+
+void test("PRD-DRV-01: a create whose workspace is a symbolic link or a non-directory is refused before any directory is made", async () => {
+  const { driver, lifecycle, config } = harness();
+  const outside = join(config.workspaceRoot, "..", "outside");
+  mkdirSync(outside);
+  symlinkSync(outside, join(config.workspaceRoot, "linked"));
+  const plain = join(config.workspaceRoot, "plain");
+  writeFileSync(plain, "not a directory");
+  await assert.rejects(driver.createSandbox(validSandbox({ workspace: "linked" })), expectCode("SCHEMA_INVALID"));
+  await assert.rejects(driver.createSandbox(validSandbox({ workspace: "plain" })), expectCode("SCHEMA_INVALID"));
+  assert.equal(lifecycle.creates.length, 0);
+  assert.equal(lstatOrUndefined(join(config.sandboxStateRoot, "realm-session-1")), undefined);
+  assert.equal(existsSync(outside), true);
+  assert.equal(lstatSync(plain).isFile(), true);
 });
 
 void test("PRD-DRV-02: CPU and memory written another way for the same profile are accepted", () => {

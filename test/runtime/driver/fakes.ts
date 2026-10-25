@@ -1,7 +1,7 @@
 // Shared fakes for the compute driver tests. The libpod fake answers the two listing calls the driver makes. The lifecycle
 // fake records every create, so a test can show that a refused request never reached it.
 
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DriverLifecycle } from "../../../src/runtime/driver/lifecycle.js";
@@ -84,18 +84,21 @@ export class FakeLifecycle implements Pick<DriverLifecycle, "create" | "delete">
 
 export const IMPLEMENTATION_VERSION = "0.1.2";
 
-// A driver config with fresh temporary roots. The roots are real directories so workspace tests can use them.
+// A driver config with fresh temporary roots. The roots exist, so a create or a workspace test starts from a real root.
+// The directories beneath them are not created here.
 export function driverConfig(overrides: Partial<ComputeDriverConfig> = {}): ComputeDriverConfig {
   const base = mkdtempSync(join(tmpdir(), "realm-driver-test-"));
-  const workspaceRoot = join(base, "workspaces");
-  return {
+  const config: ComputeDriverConfig = {
     driverName: "realm",
     sandboxImage: SANDBOX_IMAGE,
     sandboxStateRoot: join(base, "state"),
-    workspaceRoot,
+    workspaceRoot: join(base, "workspaces"),
     implementationVersion: IMPLEMENTATION_VERSION,
     ...overrides,
   };
+  mkdirSync(config.sandboxStateRoot, { recursive: true });
+  mkdirSync(config.workspaceRoot, { recursive: true });
+  return config;
 }
 
 // A create request the realm profile accepts. Each test changes one field to make a refusal.
