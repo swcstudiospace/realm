@@ -20,7 +20,7 @@ Coverage: 46/46 v1 requirements mapped, each to exactly one phase. v2.0 adds 8 r
 - [x] **Phase 9.1: Host Prerequisites and Production Gateway** - Rootless realm-account runtime with delegated limits and a production TLS and JWT gateway (PRD-HOST-01, PRD-HOST-02, PRD-GW-01, PRD-GW-02) — Complete (2026-10-25: T1 to T9 evidence; T6 reboot PASS)
 - [ ] **Phase 9.2: Native Enforcement Helper** - Source-built static helper applying no_new_privs, Landlock, and seccomp, fail closed (PRD-ENF-01 to PRD-ENF-03)
 - [x] **Phase 9.3: Hardened Container Lifecycle** - Create, verify with the 14 checks, and remove the sandbox container; startup sweep (PRD-CTR-01 to PRD-CTR-05) — Complete, VERIFIED_WITH_GAPS (live acceptance 1, 4, 5, 6, 7 PASS on the committed tree; acceptance 2 and 3 unit-verified, live NOT RUN)
-- [ ] **Phase 9.4: Compute Driver gRPC** - Realm-owned ComputeDriver server on a user-only socket; admission matches the gateway (PRD-DRV-01 to PRD-DRV-03, PRD-GW-03, PRD-LIB-01)
+- [x] **Phase 9.4: Compute Driver gRPC** - Realm-owned ComputeDriver server on a user-only socket; admission matches the gateway (PRD-DRV-01 to PRD-DRV-03, PRD-GW-03, PRD-LIB-01) — Complete, VERIFIED (2026-10-25: gateway connected live; limits carried to 9.5: Ready state, PD-08 live, AuthenticateSandbox)
 - [ ] **Phase 9.5: Isolation Backend and Sandbox Protocol** - No workload before StartAgent; mediated egress and DNS (PRD-ISO-01 to PRD-ISO-06, PRD-SUP-01, PRD-GW-04)
 - [ ] **Phase 9.6: Integration, Live Proof, and Cutover** - Gated live suite, realm up and down proof, docs, clean cutover (PRD-TST-01 to PRD-TST-03, PRD-OMP-01, PRD-DOC-01, PRD-CLEAN-01)
 - [ ] **Phase 10: Docs, Packaging, and Release 0.2.0** - Host docs and snippets, MCP smoke check, pack assertions for each bundle, changelog, PR to main, and release 0.2.0 (HOST-03)
@@ -318,7 +318,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 | 9.1. Host Prerequisites and Production Gateway | 1/1 | Complete (2026-10-25): T1 to T9 with evidence; T6 reboot PASS; the main gateway's keep-alive bridge was restored after the reboot and is persistent through boot unit HC-07 | - |
 | 9.2. Native Enforcement Helper | 0/1 | Partial: helper, native tests, probe, SECCOMP.md, and image definition complete; security gate PASS WITH CONDITIONS C1 to C6; image build in phase 9.3 | - |
 | 9.3. Hardened Container Lifecycle | 1/1 | Complete, VERIFIED_WITH_GAPS (2026-10-25): live acceptance 1, 4, 5, 6, 7 PASS after the reboot; acceptance 2 and 3 unit-verified, live NOT RUN; launch and active removal unit-verified | - |
-| 9.4. Compute Driver gRPC | 0/1 | Planned (needs 9.3; starts after plan 09-01 closes) | - |
+| 9.4. Compute Driver gRPC | 1/1 | Complete, VERIFIED (2026-10-25): gateway connected live; create, get, list, and delete observed; limits carried to 9.5 (Ready state, PD-08 stop and start live, AuthenticateSandbox) | - |
 | 9.5. Isolation Backend and Sandbox Protocol | 0/1 | Planned (needs 9.4; PD-15 evidence first) | - |
 | 9.6. Integration, Live Proof, and Cutover | 0/1 | Planned (needs 9.1 to 9.5) | - |
 | 10. Docs, Packaging, and Release 0.2.0 | 0/4 | In progress: host snippets, Omp runbook, changelog, and pack check (Hermes JSON manifests) done; release 0.2.0 held by the owner's ship hold | - |
