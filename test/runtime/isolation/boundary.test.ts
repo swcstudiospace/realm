@@ -10,8 +10,10 @@ import { BoundaryRegistry, type BoundaryOpening } from "../../../src/runtime/dri
 import { DriverStatusError } from "../../../src/runtime/driver/grpc-status.js";
 import { FakeLibpod, FakeLifecycle, driverConfig } from "../driver/fakes.js";
 
+// The driver's name for the sandbox differs from the gateway sandbox identity, as it does for a live launch.
 const LAUNCH: BoundaryOpening = {
   sandboxName: "realm-session-1",
+  gatewaySandboxId: "gateway-sandbox-a",
   generationId: "generation-1",
   sessionId: "session-1",
   resourceId: "resource-a",
@@ -58,6 +60,7 @@ void test("PRD-ISO-01: an empty identifier in an opening is refused as a schema 
   const registry = new BoundaryRegistry();
   assert.throws(() => registry.open({ ...LAUNCH, sessionId: "" }), expectCode("SCHEMA_INVALID"));
   assert.throws(() => registry.open({ ...LAUNCH, resourceId: "" }), expectCode("SCHEMA_INVALID"));
+  assert.throws(() => registry.open({ ...LAUNCH, gatewaySandboxId: "" }), expectCode("SCHEMA_INVALID"));
   assert.equal(registry.size, 0);
 });
 

@@ -1,13 +1,14 @@
-// The realm's isolation backend endpoint (phase 9.5, PRD-ISO-01, T1). It serves the IsolationBackend service and the
-// SandboxProtocol service on one authenticated Unix socket. The socket is the only authentication boundary at this
-// stage: its parent directory is the realm account's (0700) and the socket is 0600, under the same rules as the driver's
-// socket (server.ts). The backend starts only with the verification keys its caller provisions. It reads no key from the
-// repository or from a file it writes itself, so a start without provisioning fails closed.
+// The realm's isolation backend endpoint (phase 9.5, PRD-ISO-01, T1 and T3). It serves the IsolationBackend service and the
+// SandboxProtocol service on one authenticated Unix socket. The socket is the only transport boundary: its parent directory
+// is the realm account's (0700) and the socket is 0600, under the same rules as the driver's socket (server.ts).
 //
-// This wave serves Describe and nothing else. Describe conveys PeerMetadata only, no credential, and it advertises no
-// optional capability: the sandbox protocol and the suspend/resume capability are not built yet. Every other RPC of both
-// services returns UNIMPLEMENTED and changes no lifecycle state. OpenBoundary is held back until the supervisor's bearer
-// can be verified against the provisioned keys, because the launch identity it binds comes from that bearer.
+// The backend verifies the supervisor's bearer with the verifier its caller provisions (bearer.ts), which the caller builds
+// from the gateway public key. The backend reads no key itself. Boundary handles live in the driver's BoundaryRegistry, which
+// the compute driver shares, so a DeleteSandbox invalidates handles in this process.
+//
+// This wave serves Describe and Attach on the Exchange stream. Describe conveys PeerMetadata only, no credential, and it
+// advertises no optional capability. OpenBoundary, SuspendBoundary, ResumeBoundary, Mediate, and every SandboxProtocol
+// request other than Attach return UNIMPLEMENTED and change no lifecycle state.
 
 import { isAbsolute } from "node:path";
 import {
@@ -23,6 +24,9 @@ import { makeRealmError } from "../../../core/errors.js";
 import { DriverStatusError, driverFailureOf, driverUnimplemented, toServerError } from "../grpc-status.js";
 import { isImplementationVersion, protoIncludeDirectory } from "../compute-driver.js";
 import { startSocketServer, type BoundService, type SocketServer } from "../server.js";
+import type { SupervisorBearerVerifier } from "./bearer.js";
+import type { BoundaryRegistry } from "./boundary.js";
+import { exchange, type SandboxProtocolDeps } from "./protocol.js";
 
 export const ISOLATION_BACKEND_SERVICE_NAME = "openshell.sandbox.backend.v1.IsolationBackend";
 export const SANDBOX_PROTOCOL_SERVICE_NAME = "openshell.sandbox.protocol.v1.SandboxProtocol";
@@ -32,17 +36,17 @@ const IMPLEMENTATION_NAME = "realm/podman-isolation";
 // The base contract this backend speaks. Version 1.0 is the only one, and no optional capability is advertised.
 const PROTOCOL_VERSION = Object.freeze({ major: 1, minor: 0 });
 
-// The verification keys the driver provisions from the gateway's launch authentication. They verify the supervisor's
-// sandbox bearer; the bearer check that uses them is added with Attach.
+// What the driver provisions from the gateway's launch authentication: the verifier of the supervisor's sandbox bearer,
+// built from the gateway public key by the driver's entry point.
 export interface BackendProvisioning {
-  readonly gatewayId: string;
-  readonly verificationKeys: readonly Uint8Array[];
+  readonly verifier: SupervisorBearerVerifier;
 }
 
 export interface IsolationBackendOptions {
   readonly socketPath: string;
   readonly implementationVersion: string;
   readonly provisioning: BackendProvisioning;
+  readonly boundaries: BoundaryRegistry;
 }
 
 // Peer metadata as the request carries it. proto-loader delivers keepCase names, and defaults fill absent fields.
@@ -69,29 +73,23 @@ export function loadIsolationServices(): { backend: ServiceDefinition; protocol:
   return { backend, protocol };
 }
 
-// Starts the endpoint. Options are checked before the socket is touched; the socket rules are the driver's.
+// Starts the endpoint. The options are checked before the socket is touched; the socket rules are the driver's.
 export async function startIsolationBackend(options: IsolationBackendOptions): Promise<SocketServer> {
   if (!isImplementationVersion(options.implementationVersion) || !isAbsolute(options.socketPath)) {
     throw makeRealmError("SCHEMA_INVALID");
   }
-  checkProvisioning(options.provisioning);
   const { backend, protocol } = loadIsolationServices();
   const services: readonly BoundService[] = [
     { service: backend, implementation: isolationBackendImplementation(options.implementationVersion) },
-    { service: protocol, implementation: sandboxProtocolImplementation() },
+    {
+      service: protocol,
+      implementation: sandboxProtocolImplementation({
+        verifier: options.provisioning.verifier,
+        boundaries: options.boundaries,
+      }),
+    },
   ];
   return startSocketServer(options.socketPath, services);
-}
-
-// A backend without a gateway identity or a usable verification key could trust nothing, so it does not start.
-function checkProvisioning(provisioning: BackendProvisioning): void {
-  if (
-    provisioning.gatewayId === "" ||
-    provisioning.verificationKeys.length === 0 ||
-    provisioning.verificationKeys.some((key) => key.length === 0)
-  ) {
-    throw makeRealmError("SCHEMA_INVALID");
-  }
 }
 
 // Negotiates the base contract. A supervisor on another major version, or one that requires a capability this backend
@@ -121,7 +119,7 @@ function isolationBackendImplementation(implementationVersion: string): UntypedS
       describe(request.supervisor, implementationVersion),
     ),
     OpenBoundary: unaryHandler(() => {
-      throw unimplemented("OpenBoundary is not served before the supervisor bearer is verified");
+      throw unimplemented("OpenBoundary is not served yet");
     }),
     SuspendBoundary: unaryHandler(() => {
       throw unimplemented("SuspendBoundary is not offered (PD-09)");
@@ -132,9 +130,9 @@ function isolationBackendImplementation(implementationVersion: string): UntypedS
   };
 }
 
-function sandboxProtocolImplementation(): UntypedServiceImplementation {
+function sandboxProtocolImplementation(deps: SandboxProtocolDeps): UntypedServiceImplementation {
   return {
-    Exchange: refuseStream,
+    Exchange: exchange(deps),
     Mediate: refuseStream,
   };
 }
@@ -156,7 +154,7 @@ function unaryHandler<Req, Res>(
   };
 }
 
-// Every stream of the sandbox protocol is refused until the protocol is built. The refusal is a status on the stream.
+// The mediation stream is refused until it is built. The refusal is a status on the stream.
 function refuseStream(call: ServerDuplexStream<unknown, unknown>): void {
-  call.emit("error", toServerError(driverFailureOf(unimplemented("the sandbox protocol is not served yet"))));
+  call.emit("error", toServerError(driverFailureOf(unimplemented("the mediation stream is not served yet"))));
 }

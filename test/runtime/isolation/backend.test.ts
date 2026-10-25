@@ -1,5 +1,5 @@
-// Drives the isolation backend over its Unix socket with a real gRPC client. The socket rules are the driver's: the
-// parent directory is 0700, the socket is 0600, and a path that cannot be the backend's own socket is refused.
+// Drives the isolation backend over its Unix socket with a real gRPC client. The socket rules are the driver's: the parent
+// directory is 0700, the socket is 0600, and a path that cannot be the backend's own socket is refused.
 
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
@@ -21,10 +21,13 @@ import {
   startIsolationBackend,
   type IsolationBackendOptions,
 } from "../../../src/runtime/driver/isolation/backend.js";
+import { SupervisorBearerVerifier } from "../../../src/runtime/driver/isolation/bearer.js";
+import { BoundaryRegistry } from "../../../src/runtime/driver/isolation/boundary.js";
 import type { SocketServer } from "../../../src/runtime/driver/server.js";
 import { IMPLEMENTATION_VERSION, socketDirectory } from "../driver/fakes.js";
+import { generateGatewayKey } from "./supervisor-token.js";
 
-const VERIFICATION_KEY = new Uint8Array(32).fill(7);
+const GATEWAY_KEY = generateGatewayKey();
 // A supervisor on the base contract, which every Describe must carry.
 const SUPERVISOR = { supervisor: { protocol_version: { major: 1, minor: 0 }, implementation_name: "supervisor" } };
 
@@ -32,7 +35,8 @@ function optionsOn(socketPath: string, overrides: Partial<IsolationBackendOption
   return {
     socketPath,
     implementationVersion: IMPLEMENTATION_VERSION,
-    provisioning: { gatewayId: "gateway-1", verificationKeys: [VERIFICATION_KEY] },
+    provisioning: { verifier: new SupervisorBearerVerifier(GATEWAY_KEY.publicPem) },
+    boundaries: new BoundaryRegistry(),
     ...overrides,
   };
 }
@@ -83,22 +87,22 @@ function unary(
   });
 }
 
-// Opens one bidirectional stream and resolves with the error the server ends it with.
-function streamError(client: Client, service: ServiceDefinition, method: string): Promise<ServiceError> {
+// Opens one bidirectional stream, writes the frames, and resolves with the error the server ends it with.
+function streamError(client: Client, service: ServiceDefinition, method: string, frames: readonly object[]): Promise<ServiceError> {
   const definition = service[method];
   if (definition === undefined) {
     throw new Error(`the service has no ${method} method`);
   }
   return new Promise((resolve) => {
-    const stream = client.makeBidiStreamRequest(
-      definition.path,
-      definition.requestSerialize,
-      definition.responseDeserialize,
-    );
+    const stream = client.makeBidiStreamRequest(definition.path, definition.requestSerialize, definition.responseDeserialize);
     stream.on("error", (error: ServiceError) => {
       stream.cancel();
       resolve(error);
     });
+    for (const frame of frames) {
+      stream.write(frame);
+    }
+    stream.end();
   });
 }
 
@@ -117,22 +121,6 @@ void test("PRD-ISO-01: the parent directory is 0700 and the socket is 0600, and 
   assert.equal(modeOf(socketPath), 0o600);
   await server.close();
   assert.equal(existsSync(socketPath), false);
-});
-
-void test("PRD-ISO-01: a backend with no verification key or no gateway identity is refused before any socket exists", async () => {
-  const withoutKeys = join(socketDirectory(), "keyless.sock");
-  await assert.rejects(
-    startIsolationBackend(optionsOn(withoutKeys, { provisioning: { gatewayId: "gateway-1", verificationKeys: [] } })),
-    expectCode("SCHEMA_INVALID"),
-  );
-  assert.equal(existsSync(withoutKeys), false);
-
-  const withoutGateway = join(socketDirectory(), "gatewayless.sock");
-  await assert.rejects(
-    startIsolationBackend(optionsOn(withoutGateway, { provisioning: { gatewayId: "", verificationKeys: [VERIFICATION_KEY] } })),
-    expectCode("SCHEMA_INVALID"),
-  );
-  assert.equal(existsSync(withoutGateway), false);
 });
 
 void test("PRD-ISO-01: a relative socket path is refused", async () => {
@@ -207,12 +195,16 @@ void test("PD-09: SuspendBoundary and ResumeBoundary return UNIMPLEMENTED and th
   await unary(client, backend, "Describe", SUPERVISOR);
 });
 
-void test("PRD-ISO-02: every SandboxProtocol stream is served on the endpoint and refused UNIMPLEMENTED", async (t) => {
+void test("PRD-ISO-02: Exchange without a bearer is refused UNAUTHENTICATED, and Mediate is refused UNIMPLEMENTED", async (t) => {
   const { socketPath } = await startOnFreshPath(t);
   const protocol = loadIsolationServices().protocol;
   const client = clientFor(t, socketPath, SANDBOX_PROTOCOL_SERVICE_NAME, protocol);
-  for (const method of ["Exchange", "Mediate"]) {
-    const error = await streamError(client, protocol, method);
-    assert.equal(error.code, status.UNIMPLEMENTED, method);
-  }
+  const requestFrames = [
+    { boundary_id: "not-a-handle" },
+    { request: { request_id: "request-1", attach: { supervisor_instance_id: "supervisor-1", policy: { version: 1 } } } },
+  ];
+  const exchangeError = await streamError(client, protocol, "Exchange", requestFrames);
+  assert.equal(exchangeError.code, status.UNAUTHENTICATED);
+  const mediateError = await streamError(client, protocol, "Mediate", []);
+  assert.equal(mediateError.code, status.UNIMPLEMENTED);
 });
