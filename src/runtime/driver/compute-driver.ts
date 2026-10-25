@@ -2,16 +2,19 @@
 //
 // Create is the only path to a container. Before it reaches the lifecycle, the request is checked against the realm
 // profile: the digest-pinned image, the portable CPU and memory limits, no GPU, no platform or driver config, no
-// environment, no user-namespace request, no isolation backend, and a non-empty argv. Any mismatch is refused with
-// SCHEMA_INVALID, and no libpod call is made. A create that passes prepares the directories the lifecycle requires: the
-// workspace, by the same rule EnsureWorkspace uses, and a new state directory. If the lifecycle then refuses, the state
-// directory this call made is removed. The lifecycle (DriverLifecycle, phase 9.3) then builds, starts and verifies the
-// container.
+// environment, no user-namespace request, no isolation backend, and a sandbox name that passes the container-name rule
+// once the realm prefix is added. Any mismatch is refused with SCHEMA_INVALID, and no libpod call is made. An empty argv
+// is accepted and creates an idle sandbox; the command is not forwarded before phase 9.5. A create that passes prepares
+// the directories the lifecycle requires: the workspace, by the same rule EnsureWorkspace uses, and a new state
+// directory. If the lifecycle then refuses, the state directory this call made is removed. The lifecycle (DriverLifecycle,
+// phase 9.3) then builds, starts and verifies the container.
 //
-// The driver keeps a registry from sandbox name to the gateway's sandbox id and workspace. CreateSandbox fills it and
-// DeleteSandbox clears it. The startup sweep removes every realm container before the driver accepts requests, so no
-// sandbox survives a restart without a registry entry. Observed state comes from the labelled containers.
-// StopSandbox and StartSandbox refuse with the transition code, which maps to FAILED_PRECONDITION (PD-08).
+// The gateway names a sandbox without the realm prefix, and the container runs under that name with the prefix added.
+// A name that already has the prefix is unchanged. The driver keeps a registry keyed by the gateway's name, holding the
+// gateway's sandbox id, its workspace and the container name. CreateSandbox fills it and DeleteSandbox clears it. The
+// startup sweep removes every realm container before the driver accepts requests, so no sandbox survives a restart
+// without a registry entry. Observed state comes from the labelled containers, and every snapshot carries the gateway's
+// name. StopSandbox and StartSandbox refuse with the transition code, which maps to FAILED_PRECONDITION (PD-08).
 // AuthenticateSandbox is not implemented: the driver does not advertise sandbox authentication.
 
 import { existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, rmdirSync, rmSync, type Stats } from "node:fs";
@@ -34,6 +37,7 @@ import {
   OPENSHELL_ISOLATION_ROLE_LABEL_KEY,
   OPENSHELL_SANDBOX_NAME_LABEL_KEY,
   OPENSHELL_SANDBOX_ROLE_VALUE,
+  REALM_SANDBOX_NAME_PREFIX,
 } from "../openshell.js";
 import { DRIVER_ADMISSION_ACKNOWLEDGEMENT } from "./admission.js";
 import { driverFailureOf, DriverStatusError, driverNotFound, driverUnimplemented, toServerError } from "./grpc-status.js";
@@ -75,7 +79,7 @@ export interface ComputeDriverConfig {
   readonly driverName: string;
   // The one digest-pinned sandbox image this driver creates.
   readonly sandboxImage: string;
-  // Absolute root under which each sandbox's state directory sits, at <root>/<sandboxName>.
+  // Absolute root under which each sandbox's state directory sits, at <root>/<containerName>.
   readonly sandboxStateRoot: string;
   // Absolute root under which each workspace directory sits, at <root>/<workspace>.
   readonly workspaceRoot: string;
@@ -155,10 +159,13 @@ export interface DriverSandboxOut {
 interface SandboxRecord {
   readonly id: string;
   readonly workspace: string;
+  // The container name the sandbox runs under: the gateway's name with the realm prefix added when it lacks it.
+  readonly containerName: string;
 }
 
-// A validated create: the gateway's sandbox id, its workspace, and the spec the lifecycle takes.
+// A validated create: the gateway's sandbox name and id, its workspace, and the spec the lifecycle takes.
 interface CreatePlan {
+  readonly sandboxName: string;
   readonly sandboxId: string;
   readonly workspace: string;
   readonly spec: ContainerSpec;
@@ -269,7 +276,11 @@ export class ComputeDriver {
       }
       throw error;
     }
-    this.registry.set(plan.spec.sandboxName, { id: plan.sandboxId, workspace: plan.workspace });
+    this.registry.set(plan.sandboxName, {
+      id: plan.sandboxId,
+      workspace: plan.workspace,
+      containerName: plan.spec.sandboxName,
+    });
     return { runtime_identity: containerId };
   }
 
@@ -287,14 +298,19 @@ export class ComputeDriver {
     return { sandboxes: [...snapshots.values()] };
   }
 
-  // Idempotent: a sandbox that is already gone deletes nothing and succeeds.
+  // Idempotent: a sandbox that is already gone deletes nothing and succeeds. A name whose container a different
+  // registered sandbox holds deletes nothing, so a request never removes a sandbox it does not name.
   async deleteSandbox(request: SandboxIdentityRequest): Promise<{ deleted: boolean }> {
     const name = this.nameOf(request);
     if (name === undefined) {
       return { deleted: false };
     }
-    const existed = (await this.deps.libpod.inspectContainer(name)) !== null;
-    await this.deps.lifecycle.delete(name);
+    const containerName = containerNameOf(name);
+    if (containerName === undefined || this.heldByAnotherSandbox(name, containerName)) {
+      return { deleted: false };
+    }
+    const existed = (await this.deps.libpod.inspectContainer(containerName)) !== null;
+    await this.deps.lifecycle.delete(containerName);
     this.registry.delete(name);
     return { deleted: existed };
   }
@@ -332,21 +348,24 @@ export class ComputeDriver {
     return {};
   }
 
-  // Every realm sandbox that has both a registry entry and a labelled container, keyed by name.
+  // Every sandbox that has both a registry entry and a labelled container, keyed by the gateway's name.
   async snapshotAll(): Promise<Map<string, DriverSandboxOut>> {
     const listed = await this.deps.libpod.listContainersByLabel(
       OPENSHELL_ISOLATION_ROLE_LABEL_KEY,
       OPENSHELL_SANDBOX_ROLE_VALUE,
     );
-    const names = new Set<string>();
+    const labelled = new Set<string>();
     for (const container of listed) {
       const name = container.labels?.[OPENSHELL_SANDBOX_NAME_LABEL_KEY];
-      if (name !== undefined && isRealmSandboxName(name)) {
-        names.add(name);
+      if (name !== undefined) {
+        labelled.add(name);
       }
     }
     const snapshots = new Map<string, DriverSandboxOut>();
-    for (const name of names) {
+    for (const [name, record] of [...this.registry]) {
+      if (!labelled.has(record.containerName)) {
+        continue;
+      }
       const sandbox = await this.snapshotOf(name);
       if (sandbox !== undefined) {
         snapshots.set(name, sandbox);
@@ -355,23 +374,24 @@ export class ComputeDriver {
     return snapshots;
   }
 
+  // The snapshot of one sandbox, named by the gateway. The container is inspected under its own name.
   private async snapshotOf(name: string): Promise<DriverSandboxOut | undefined> {
     const record = this.registry.get(name);
     if (record === undefined) {
       return undefined;
     }
-    const inspect = await this.deps.libpod.inspectContainer(name);
+    const inspect = await this.deps.libpod.inspectContainer(record.containerName);
     if (inspect === null) {
       return undefined;
     }
     return sandboxOut(name, record, inspect);
   }
 
-  // The sandbox name for a request. A name the request gives is used as is. Otherwise the id is looked up in the
-  // registry. A request with neither is malformed.
+  // The gateway's sandbox name for a request. A name the request gives is used as is. Otherwise the id is looked up in
+  // the registry. A request with neither is malformed.
   private nameOf(request: SandboxIdentityRequest): string | undefined {
     if (request.name !== undefined && request.name !== "") {
-      return isRealmSandboxName(request.name) ? request.name : undefined;
+      return request.name;
     }
     if (request.sandbox_id === undefined || request.sandbox_id === "") {
       throw makeRealmError("SCHEMA_INVALID");
@@ -382,6 +402,16 @@ export class ComputeDriver {
       }
     }
     return undefined;
+  }
+
+  // True when a registered sandbox other than `name` runs under `containerName`. Such a container is that sandbox's.
+  private heldByAnotherSandbox(name: string, containerName: string): boolean {
+    for (const [registered, record] of this.registry) {
+      if (registered !== name && record.containerName === containerName) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private workspaceDir(workspace: string | undefined): string {
@@ -414,6 +444,13 @@ export class ComputeDriver {
   }
 }
 
+// The container name for a gateway sandbox name: the realm prefix is added when the name lacks it. Undefined when the
+// result fails the container-name rule, which also bounds the length, so the caller refuses it.
+function containerNameOf(sandboxName: string): string | undefined {
+  const name = isRealmSandboxName(sandboxName) ? sandboxName : `${REALM_SANDBOX_NAME_PREFIX}${sandboxName}`;
+  return CONTAINER_ID_PATTERN.test(name) ? name : undefined;
+}
+
 // Checks a create request against the realm profile and returns the lifecycle spec. Every refusal is SCHEMA_INVALID,
 // and no libpod call is made.
 function planCreate(sandbox: DriverSandboxMessage | null | undefined, config: ComputeDriverConfig): CreatePlan {
@@ -421,9 +458,10 @@ function planCreate(sandbox: DriverSandboxMessage | null | undefined, config: Co
     throw makeRealmError("SCHEMA_INVALID");
   }
   const sandboxId = sandbox.id ?? "";
-  const name = sandbox.name ?? "";
+  const sandboxName = sandbox.name ?? "";
   const workspace = sandbox.workspace ?? "";
-  if (sandboxId === "" || !isRealmSandboxName(name) || !CONTAINER_ID_PATTERN.test(name)) {
+  const containerName = sandboxName === "" ? undefined : containerNameOf(sandboxName);
+  if (sandboxId === "" || containerName === undefined) {
     throw makeRealmError("SCHEMA_INVALID");
   }
   if (!WORKSPACE_ID_PATTERN.test(workspace)) {
@@ -458,18 +496,19 @@ function planCreate(sandbox: DriverSandboxMessage | null | undefined, config: Co
   if (hasEntries(spec.environment) || hasEntries(template.environment)) {
     throw makeRealmError("SCHEMA_INVALID");
   }
-  const command = spec.command ?? [];
-  if (command.length === 0 || command.some((argument) => argument === "")) {
+  // An empty argv is accepted and creates an idle sandbox. An argument that is an empty string is still refused.
+  if ((spec.command ?? []).some((argument) => argument === "")) {
     throw makeRealmError("SCHEMA_INVALID");
   }
   return {
+    sandboxName,
     sandboxId,
     workspace,
     spec: {
-      sandboxName: name,
+      sandboxName: containerName,
       image: template.image,
       workspaceDir: join(config.workspaceRoot, workspace),
-      stateDir: join(config.sandboxStateRoot, name),
+      stateDir: join(config.sandboxStateRoot, containerName),
     },
   };
 }
@@ -521,7 +560,7 @@ function structIsEmpty(value: unknown): boolean {
   return fields === null || fields === undefined || (typeof fields === "object" && Object.keys(fields).length === 0);
 }
 
-// The observed state of one sandbox. Ready is True only while the container is running.
+// The observed state of one sandbox, named by the gateway. Ready is True only while the container is running.
 function sandboxOut(name: string, record: SandboxRecord, inspect: LibpodInspect): DriverSandboxOut {
   const state = runStateOf(inspect);
   const instance: unknown = inspect["Id"];

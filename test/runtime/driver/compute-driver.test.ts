@@ -73,12 +73,14 @@ const REFUSALS: readonly [string, (sandbox: DriverSandboxMessage) => DriverSandb
   ],
   ["a user-namespace request", (sandbox) => withTemplate(sandbox, { user_namespaces: true })],
   ["an environment", (sandbox) => ({ ...sandbox, spec: { ...sandbox.spec, environment: { TOKEN: "x" } } })],
-  ["an empty argv", (sandbox) => ({ ...sandbox, spec: { ...sandbox.spec, command: [] } })],
+  [
+    "an argument that is an empty string",
+    (sandbox) => ({ ...sandbox, spec: { ...sandbox.spec, command: ["/usr/bin/true", ""] } }),
+  ],
   [
     "an isolation backend selection",
     (sandbox) => ({ ...sandbox, spec: { ...sandbox.spec, isolation_backend: { name: "external" } } }),
   ],
-  ["a sandbox name without the realm prefix", (sandbox) => ({ ...sandbox, name: "agent-1" })],
   ["a workspace that escapes the root", (sandbox) => ({ ...sandbox, workspace: "../elsewhere" })],
   ["no spec", (sandbox) => ({ ...sandbox, spec: null })],
 ];
@@ -98,6 +100,70 @@ void test("PRD-DRV-02: a conforming request is accepted, and only its exact spec
   assert.deepEqual(driver.validateSandboxCreate(validSandbox()), {});
   const created = await driver.createSandbox(validSandbox());
   assert.equal(created.runtime_identity, "id-realm-session-1");
+  assert.deepEqual(lifecycle.creates, [
+    {
+      sandboxName: "realm-session-1",
+      image: SANDBOX_IMAGE,
+      workspaceDir: join(config.workspaceRoot, "workspace-a"),
+      stateDir: join(config.sandboxStateRoot, "realm-session-1"),
+    },
+  ]);
+});
+
+void test("PRD-DRV-02: a name without the realm prefix is created as realm-<name>, and the lifecycle receives that name", async () => {
+  const { driver, lifecycle, config } = harness();
+  const created = await driver.createSandbox(validSandbox({ name: "agent-1" }));
+  assert.equal(created.runtime_identity, "id-realm-agent-1");
+  assert.deepEqual(lifecycle.creates, [
+    {
+      sandboxName: "realm-agent-1",
+      image: SANDBOX_IMAGE,
+      workspaceDir: join(config.workspaceRoot, "workspace-a"),
+      stateDir: join(config.sandboxStateRoot, "realm-agent-1"),
+    },
+  ]);
+});
+
+void test("PRD-DRV-02: a name that already has the realm prefix is unchanged, and is not prefixed again", async () => {
+  const { driver, lifecycle, config } = harness();
+  await driver.createSandbox(validSandbox({ name: "realm-agent-2" }));
+  assert.deepEqual(lifecycle.creates, [
+    {
+      sandboxName: "realm-agent-2",
+      image: SANDBOX_IMAGE,
+      workspaceDir: join(config.workspaceRoot, "workspace-a"),
+      stateDir: join(config.sandboxStateRoot, "realm-agent-2"),
+    },
+  ]);
+});
+
+void test("PRD-DRV-02: a name whose prefixed form is exactly 128 characters is accepted", async () => {
+  const { driver, lifecycle } = harness();
+  const name = "a".repeat(122);
+  await driver.createSandbox(validSandbox({ name }));
+  assert.equal(lifecycle.creates[0]?.sandboxName, `realm-${name}`);
+});
+
+void test("PRD-DRV-02: a name that fails the container-name rule after prefixing is refused with no libpod call and no directory", async () => {
+  for (const name of ["agent/1", "a".repeat(123)]) {
+    const { driver, lifecycle, config, libpod } = harness();
+    const sandbox = validSandbox({ name });
+    assert.throws(() => driver.validateSandboxCreate(sandbox), expectCode("SCHEMA_INVALID"));
+    await assert.rejects(driver.createSandbox(sandbox), expectCode("SCHEMA_INVALID"));
+    assert.equal(libpod.inspectCalls, 0);
+    assert.equal(libpod.containers.size, 0);
+    assert.equal(lifecycle.creates.length, 0);
+    assert.equal(lstatOrUndefined(join(config.sandboxStateRoot, `realm-${name}`)), undefined);
+    assert.equal(lstatOrUndefined(join(config.workspaceRoot, "workspace-a")), undefined);
+  }
+});
+
+void test("PRD-DRV-02: an empty argv is accepted, and the lifecycle receives the spec of an idle sandbox", async () => {
+  const { driver, lifecycle, config } = harness();
+  const base = validSandbox();
+  const sandbox: DriverSandboxMessage = { ...base, spec: { ...base.spec, command: [] } };
+  assert.deepEqual(driver.validateSandboxCreate(sandbox), {});
+  await driver.createSandbox(sandbox);
   assert.deepEqual(lifecycle.creates, [
     {
       sandboxName: "realm-session-1",
@@ -246,6 +312,22 @@ void test("ListSandboxes lists only realm sandboxes that have both a registry en
   );
 });
 
+void test("GetSandbox, ListSandboxes and the watch snapshot report the gateway's name, not the container name", async () => {
+  const { driver } = harness();
+  await driver.createSandbox(validSandbox({ name: "agent-1" }));
+  const byName = await driver.getSandbox({ name: "agent-1" });
+  const byId = await driver.getSandbox({ sandbox_id: "sandbox-1" });
+  assert.equal(byName.sandbox.name, "agent-1");
+  assert.equal(byName.sandbox.status.name, "agent-1");
+  assert.equal(byId.sandbox.name, "agent-1");
+  const listed = await driver.listSandboxes();
+  assert.deepEqual(
+    listed.sandboxes.map((sandbox) => sandbox.name),
+    ["agent-1"],
+  );
+  assert.deepEqual([...(await driver.snapshotAll()).keys()], ["agent-1"]);
+});
+
 void test("GetSandbox of an unknown name or an unknown id is NOT_FOUND", async () => {
   const { driver } = harness();
   await assert.rejects(driver.getSandbox({ name: "realm-missing" }), expectNotFound);
@@ -260,6 +342,25 @@ void test("DeleteSandbox removes the sandbox, and is idempotent for one that is 
   assert.deepEqual(lifecycle.deletes, ["realm-session-1"]);
   assert.deepEqual(await driver.deleteSandbox({ name: "realm-session-1" }), { deleted: false });
   assert.deepEqual(await driver.deleteSandbox({ sandbox_id: "sandbox-1" }), { deleted: false });
+});
+
+void test("DeleteSandbox by the gateway's name removes the container under its prefixed name", async () => {
+  const { driver, lifecycle, libpod } = harness();
+  await driver.createSandbox(validSandbox({ name: "agent-1" }));
+  assert.deepEqual(await driver.deleteSandbox({ name: "agent-1" }), { deleted: true });
+  assert.equal(libpod.containers.has("realm-agent-1"), false);
+  assert.deepEqual(lifecycle.deletes, ["realm-agent-1"]);
+  await assert.rejects(driver.getSandbox({ name: "agent-1" }), expectNotFound);
+});
+
+void test("DeleteSandbox by a name whose container another sandbox holds deletes nothing", async () => {
+  const { driver, lifecycle, libpod } = harness();
+  await driver.createSandbox(validSandbox({ name: "realm-x" }));
+  assert.deepEqual(await driver.deleteSandbox({ name: "x" }), { deleted: false });
+  assert.equal(libpod.containers.has("realm-x"), true);
+  assert.deepEqual(lifecycle.deletes, []);
+  assert.deepEqual(await driver.deleteSandbox({ sandbox_id: "sandbox-1" }), { deleted: true });
+  assert.equal(libpod.containers.has("realm-x"), false);
 });
 
 void test("EnsureWorkspace creates a 0700 directory under the root, and is idempotent", () => {
