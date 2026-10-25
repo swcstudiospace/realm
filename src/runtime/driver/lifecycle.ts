@@ -127,7 +127,7 @@ export class DriverLifecycle {
     // check is by name, so a container without the sandbox label is refused too.
     const existing = await this.libpod.inspectContainer(spec.sandboxName);
     if (existing !== null) {
-      throw makeRealmError("SCHEMA_INVALID");
+      throw makeRealmError("SANDBOX_NAME_IN_USE");
     }
     let id: string;
     try {

@@ -237,3 +237,13 @@ void test("PRD-CTR-01: a create answered 409 rejects with SANDBOX_NAME_IN_USE an
   assert.equal(sent.length, 1, "the only request after the version probe is the create itself");
   assert.equal(sent[0]?.target, "/v5.7.1/libpod/containers/create");
 });
+
+void test("PRD-CTR-01: createContainer refuses a container-safe sandbox name without the realm prefix, with no request", async (t) => {
+  const { socketPath, seen } = await startFake(t);
+  await assertRefused(
+    new LibpodClient(socketPath).createContainer({ ...SPEC, sandboxName: "agent-sess-1" }),
+    "SCHEMA_INVALID",
+    "a name without the realm prefix",
+  );
+  assert.equal(seen.length, 0, "no request reaches the socket, not even the version probe");
+});

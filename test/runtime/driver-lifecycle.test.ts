@@ -664,7 +664,7 @@ void test("PRD-CTR-01 (name free): a live container of the sandbox name makes cr
     labels: { [OPENSHELL_MANAGED_LABEL_KEY]: OPENSHELL_MANAGED_LABEL_VALUE, [OPENSHELL_SANDBOX_NAME_LABEL_KEY]: SANDBOX },
     running: true,
   });
-  await assert.rejects(h.lifecycle.create(h.spec), hasCode("SCHEMA_INVALID"));
+  await assert.rejects(h.lifecycle.create(h.spec), hasCode("SANDBOX_NAME_IN_USE"));
   assert.equal(h.fake.store.has(liveId), true);
   assert.equal(h.fake.seen.some((request) => request.route === "removeContainer"), false);
   assert.equal(h.fake.seen.some((request) => request.route === "createContainer"), false);
@@ -674,7 +674,7 @@ void test("PRD-CTR-01 (name free): a container of the sandbox name without the s
   const h = await harness(t);
   const foreignId = "2d2d2d2d2d2d";
   h.fake.store.set(foreignId, { id: foreignId, name: SANDBOX, labels: {}, running: true });
-  await assert.rejects(h.lifecycle.create(h.spec), hasCode("SCHEMA_INVALID"));
+  await assert.rejects(h.lifecycle.create(h.spec), hasCode("SANDBOX_NAME_IN_USE"));
   assert.equal(h.fake.store.has(foreignId), true);
   assert.equal(h.fake.seen.some((request) => request.route === "removeContainer"), false);
   assert.equal(h.fake.seen.some((request) => request.route === "createContainer"), false);

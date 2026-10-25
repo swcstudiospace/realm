@@ -17,6 +17,7 @@ import { isAbsolute } from "node:path";
 import { makeRealmError } from "../core/errors.js";
 import { HARDENING_PROFILE } from "./hardening.js";
 import {
+  isRealmSandboxName,
   OPENSHELL_ISOLATION_ROLE_LABEL_KEY,
   OPENSHELL_MANAGED_LABEL_KEY,
   OPENSHELL_MANAGED_LABEL_VALUE,
@@ -362,12 +363,14 @@ const STATE_OPTIONS: readonly string[] = Object.freeze(["ro", "noexec", "nosuid"
 const ENTRYPOINT: readonly string[] = Object.freeze(["/opt/realm/bin/realm-helper", "idle"]);
 
 // Validates a spec before any engine request. It is pure: it reads no environment and sends nothing. It fails closed
-// on a spec the body must not carry: a name or image outside the typed form, a host path that is relative or holds
-// a NUL byte, or a host path that names a container-engine socket.
+// on a spec the body must not carry: a sandbox name without the realm prefix or outside the container-id pattern, an
+// image outside the digest-pinned form, a host path that is relative or holds a NUL byte, or a host path that names a
+// container-engine socket.
 export function validateContainerSpec(spec: ContainerSpec): void {
   const socketNames = HARDENING_PROFILE.socketNames;
   const hostPaths = [spec.workspaceDir, spec.stateDir];
   const valid =
+    isRealmSandboxName(spec.sandboxName) &&
     CONTAINER_ID_PATTERN.test(spec.sandboxName) &&
     DIGEST_PINNED_IMAGE.test(spec.image) &&
     hostPaths.every(
