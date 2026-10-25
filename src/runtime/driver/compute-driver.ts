@@ -308,6 +308,8 @@ export class ComputeDriver {
     if (name === undefined) {
       return { deleted: false };
     }
+    // Every handle of the sandbox is invalid after delete, even when no container is removed.
+    this.deps.boundaries.invalidateAll(name);
     const containerName = containerNameOf(name);
     if (containerName === undefined || this.heldByAnotherSandbox(name, containerName)) {
       return { deleted: false };
