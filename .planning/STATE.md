@@ -506,3 +506,25 @@ Incident note, not a decision: while reading usage, I ran `state.signal-waiting`
 - Committed locally, with explicit paths: the planning documents and the six phase plans (09.1 to 09.6). No code.
 - Phase and step: phase 9 partial. Next: build phase 9.1 (host prerequisites and production gateway) through the swarm, using plan 09.1-01. Host changes HC-01 to HC-03, HC-05, HC-06, and HC-08 apply in their phases, each with its checks. HC-07 is kept.
 - Ship stays held. Nothing is pushed.
+
+### Phase 9.1 status (phase 9.1 BUILD, 2026-10-25)
+
+- Done with evidence: T1 baseline (ten digests and states, outside the repository); T2 runc in the realm account's containers configuration (rootless true, Podman 5.7.1, runtime /usr/bin/runc, read through the rootless API); T3 linger; T4 user unit realm-podman-api (active, enabled, socket owned by the account; first version failed on the socket's parent directory, fixed with RuntimeDirectory=podman); T5 soak (20 of 20 info calls, 10 of 10 profile-limited cycles, 0 orphans, kernel memory.max 1 GiB, pids.max 512, cpu.max 2 CPUs); T7 renderer and tests (11 of 11); T8 PKI under the realm state directory (0700 directory, 0600 keys; the local-mode copy kept out of the root configuration); T9 docs section.
+- Gateway evidence: the gateway's own preflight accepted the rendered config (exit 0), run as the realm account.
+- Boundary: all ten baseline digests unchanged, including the root CLI identity and the main gateway. The main gateway was not restarted.
+- Open: T6, the owner-scheduled reboot. The phase does not close until it passes (PR-05). Observation to check at that time: one `failed to reexec` line at the first start (not seen in the soak window).
+- Gates: typecheck exit 0; build exit 0; lint exit 0 (after one assertion fix); npm test 1145 pass, 0 fail, 9 skipped before the assertion-only edit, and the renderer file 11 of 11 after rebuild; check:docs exit 0.
+- Host changes applied under HC-01, HC-02, HC-03 (owner confirmed), and HC-06 (approved under PD-03). Reverts are in the 9.1 summary.
+
+### Phase 9.2 status (phase 9.2 BUILD, 2026-10-25)
+
+- Built and tested: sandbox/realm-helper compiles with -Wall -Wextra -Werror; make check runs three native test binaries (all pass); the probe builds. The helper is static. A live smoke on the host: NoNewPrivs 1, Seccomp 2, a workspace write succeeds, and writes outside the workspace and to /tmp are blocked.
+- Security gate (A10, read-only) returned CHANGES REQUIRED: six MAJOR and two MINOR findings. Fixes are in progress: denylist additions (clone flag filter, clone3 as ENOSYS, mount API, io_uring, others), capability drop, a non-root sandbox user, source digest verified in the builder, a digest-pinned gcc builder (replacing unpinned apt), the loader variable filter, narrowed workspace rights, root checks, and probe checks.
+- Residual risks that move to phase 9.3: the workspace must be mounted noexec (Landlock EXECUTE is enforced only on execve). The runner must be placed under /usr or the state path, because Landlock denies execution elsewhere. The re-review must return PASS before the phase closes.
+- Phase and step: phase 9.2 partial, fixes in progress. Phase 9.1 partial, awaiting T6.
+- Phase 9.2 closing state (2026-10-25): the helper, native tests, probe, SECCOMP.md, and sandbox image definition are complete. make clean all check probe exits 0 with -Werror. The live run on this host shows all five capability sets zero, NoNewPrivs 1, Seccomp 2, a workspace write allowed, a write outside the workspace blocked, the null device writable, and user namespaces refused.
+- Security gate: CHANGES REQUIRED on the first review; PASS WITH CONDITIONS C1 to C6 on the re-review. N1 and N2 were fixed after the re-review and are built and tested here. The conditions are owned by phases 9.3 and 9.6 and are listed in SECCOMP.md.
+- Not verified on this host: the aarch64 compile (no cross toolchain); the image build; the in-container probe; the image-only checks (C4).
+- Phase 9.1 closing state: partial, awaiting T6 (the owner-scheduled reboot). The owner must choose a window.
+- Next: phase 9.3 (hardened container lifecycle and the image build under HC-08), applying C1, C2, C4, C5, and C6. The disk guard is 8 GiB free before each build.
+- Commits: phases 9.1 and 9.2 are committed locally in two commits with explicit paths. Nothing is pushed. The ship hold stands.

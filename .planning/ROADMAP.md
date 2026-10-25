@@ -315,8 +315,8 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 | 7. Policy Reference and Security Review | 3 units, no PLAN files | Complete (verification deferred: human — 07-VERIFICATION.md, 9/9 must-haves, 5 human items) | - |
 | 8. Host Adapter Bundles | 1/1 | Complete (closed 2026-10-24 on validator exit codes; artifacts hand-written, pending owner ratification) | - |
 | 9. Live Omp Verification | 0/3 | In progress: OMP-LIVE-02 met live; OMP-LIVE-03 partial; OMP-LIVE-01 and OMP-LIVE-04 descoped to the follow-up milestone (owner decision 2026-10-23); UI-01 non-blocking recorded as a stated limitation | - |
-| 9.1. Host Prerequisites and Production Gateway | 0/1 | Planned (blocked on PD-02, PD-03, PD-04, PD-17 and host approvals HC-01 to HC-03, HC-06) | - |
-| 9.2. Native Enforcement Helper | 0/1 | Planned (source needs no decision; image build in phase 9.3) | - |
+| 9.1. Host Prerequisites and Production Gateway | 0/1 | Partial: T1 to T5 and T7 to T9 complete with evidence; T6 owner-scheduled reboot pending | - |
+| 9.2. Native Enforcement Helper | 0/1 | Partial: helper, native tests, probe, SECCOMP.md, and image definition complete; security gate PASS WITH CONDITIONS C1 to C6; image build in phase 9.3 | - |
 | 9.3. Hardened Container Lifecycle | 0/1 | Planned (needs 9.1 and 9.2; digest confirmation T0) | - |
 | 9.4. Compute Driver gRPC | 0/1 | Planned (needs 9.3; starts after plan 09-01 closes) | - |
 | 9.5. Isolation Backend and Sandbox Protocol | 0/1 | Planned (needs 9.4; PD-15 evidence first) | - |
