@@ -8,6 +8,7 @@ import {
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -400,6 +401,7 @@ interface Arrangement {
   // The state root and the workspace. A test that needs a particular layout gives them; otherwise both are fresh.
   readonly stateRoot?: string | undefined;
   readonly workspaceDir?: string | undefined;
+  readonly secretRoot?: string | undefined;
   readonly removeDirectory?: ((dir: string) => void) | undefined;
 }
 
@@ -409,6 +411,7 @@ interface Harness {
   readonly stateRoot: string;
   readonly stateDir: string;
   readonly workspaceDir: string;
+  readonly secretRoot: string;
   readonly spec: ContainerSpec;
 }
 
@@ -420,6 +423,7 @@ async function harness(t: TestContext, arrangement: Arrangement = {}): Promise<H
   mkdirSync(stateDir, { recursive: true });
   const workspaceDir = arrangement.workspaceDir ?? tempDir(t, "realm-lifecycle-workspace-");
   mkdirSync(workspaceDir, { recursive: true });
+  const secretRoot = arrangement.secretRoot ?? tempDir(t, "realm-lifecycle-secret-");
   const fake = await startFake(t, {
     inspect: goodInspect(stateDir, workspaceDir),
     mutate: arrangement.mutate,
@@ -441,6 +445,7 @@ async function harness(t: TestContext, arrangement: Arrangement = {}): Promise<H
   const lifecycle = new DriverLifecycle({
     libpod,
     sandboxStateRoot: stateRoot,
+    secretRoot,
     readProcStatus: () => arrangement.procStatus ?? ZERO_STATUS,
     removeDirectory: arrangement.removeDirectory,
   });
@@ -453,6 +458,7 @@ async function harness(t: TestContext, arrangement: Arrangement = {}): Promise<H
     stateRoot,
     stateDir,
     workspaceDir,
+    secretRoot,
     spec: { sandboxName: SANDBOX, image: SPEC_IMAGE, workspaceDir, stateDir },
   };
 }
@@ -952,4 +958,105 @@ void test("PRD-CTR-03: create and delete refuse with REALM_NOT_ACTIVE until star
   assert.equal(h.fake.seen.length, 0);
   await h.lifecycle.startupSweep();
   assert.equal(await h.lifecycle.create(h.spec), CREATED_ID);
+});
+
+void test("PRD-CTR-02 (secret): delete removes launch.json and active from the sandbox secret directory, then the empty directory", async (t) => {
+  const h = await harness(t);
+  const secretDir = join(h.secretRoot, SANDBOX);
+  mkdirSync(secretDir, { recursive: true });
+  writeFileSync(join(secretDir, "launch.json"), "{}");
+  writeFileSync(join(secretDir, "active"), "");
+  await h.lifecycle.delete(SANDBOX);
+  assert.equal(existsSync(join(secretDir, "launch.json")), false);
+  assert.equal(existsSync(join(secretDir, "active")), false);
+  assert.equal(existsSync(secretDir), false);
+  assert.equal(existsSync(h.secretRoot), true);
+});
+
+void test("PRD-CTR-02 (secret absent): delete succeeds when neither secret file exists, and when the secret root does not exist", async (t) => {
+  const h = await harness(t);
+  await h.lifecycle.delete(SANDBOX);
+  assert.deepEqual(readdirSync(h.secretRoot), []);
+  const missing = join(tempDir(t, "realm-lifecycle-absent-"), "not-created");
+  const absent = await harness(t, { secretRoot: missing });
+  await absent.lifecycle.delete(SANDBOX);
+  assert.equal(existsSync(missing), false);
+});
+
+void test("PRD-CTR-02 (secret link): a symbolic link named active makes delete refuse, and the link is neither followed nor removed", async (t) => {
+  const h = await harness(t);
+  const secretDir = join(h.secretRoot, SANDBOX);
+  mkdirSync(secretDir, { recursive: true });
+  const target = join(tempDir(t, "realm-lifecycle-target-"), "keep.txt");
+  writeFileSync(target, "keep");
+  symlinkSync(target, join(secretDir, "active"));
+  const before = h.fake.seen.length;
+  await assert.rejects(h.lifecycle.delete(SANDBOX), hasCode("SCHEMA_INVALID"));
+  assert.equal(h.fake.seen.length, before);
+  assert.equal(lstatSync(join(secretDir, "active")).isSymbolicLink(), true);
+  assert.equal(readFileSync(target, "utf8"), "keep");
+});
+
+void test("PRD-CTR-02 (secret non-regular): a directory named active makes delete refuse before any container is removed, and the directory is kept", async (t) => {
+  const h = await harness(t);
+  const secretDir = join(h.secretRoot, SANDBOX);
+  const activeDir = join(secretDir, "active");
+  mkdirSync(activeDir, { recursive: true });
+  const containerId = "6d6d6d6d6d6d";
+  h.fake.store.set(containerId, {
+    id: containerId,
+    name: SANDBOX,
+    labels: {
+      [OPENSHELL_MANAGED_LABEL_KEY]: OPENSHELL_MANAGED_LABEL_VALUE,
+      [OPENSHELL_SANDBOX_NAME_LABEL_KEY]: SANDBOX,
+    },
+    running: true,
+  });
+  const before = h.fake.seen.length;
+  await assert.rejects(h.lifecycle.delete(SANDBOX), hasCode("SCHEMA_INVALID"));
+  assert.equal(h.fake.seen.length, before);
+  assert.equal(h.fake.store.has(containerId), true);
+  assert.equal(lstatSync(activeDir).isDirectory(), true);
+});
+
+void test("PRD-CTR-02 (secret root): a secret root equal to, or inside, the state directory, or relative, is refused at construction", (t) => {
+  const stateRoot = tempDir(t, "realm-lifecycle-state-");
+  const libpod = new LibpodClient(join(stateRoot, "podman.sock"));
+  const construct = (secretRoot: string) => () => new DriverLifecycle({ libpod, sandboxStateRoot: stateRoot, secretRoot });
+  assert.throws(construct(stateRoot), hasCode("SCHEMA_INVALID"));
+  assert.throws(construct(join(stateRoot, "secrets")), hasCode("SCHEMA_INVALID"));
+  assert.throws(construct("relative/secrets"), hasCode("SCHEMA_INVALID"));
+  // A sibling whose name starts with the state root's name is outside it, so it is admitted.
+  assert.doesNotThrow(construct(`${stateRoot}-secrets`));
+});
+
+void test("PRD-CTR-02 (secret root): a secret root that is a symbolic link is refused at construction", (t) => {
+  const stateRoot = tempDir(t, "realm-lifecycle-state-");
+  const real = tempDir(t, "realm-lifecycle-real-");
+  const link = join(tempDir(t, "realm-lifecycle-links-"), "secrets");
+  symlinkSync(real, link);
+  const libpod = new LibpodClient(join(stateRoot, "podman.sock"));
+  assert.throws(
+    () => new DriverLifecycle({ libpod, sandboxStateRoot: stateRoot, secretRoot: link }),
+    hasCode("SCHEMA_INVALID"),
+  );
+});
+
+void test("PRD-CTR-02 (secret name): a sandbox name with a separator or a dot segment is refused before any filesystem access", async (t) => {
+  const h = await harness(t);
+  const victim = join(h.secretRoot, "victim");
+  mkdirSync(victim);
+  writeFileSync(join(victim, "launch.json"), "{}");
+  const before = h.fake.seen.length;
+  await assert.rejects(h.lifecycle.delete(`${SANDBOX}/../victim`), hasCode("SCHEMA_INVALID"));
+  await assert.rejects(h.lifecycle.delete(`${SANDBOX}/x`), hasCode("SCHEMA_INVALID"));
+  assert.equal(h.fake.seen.length, before);
+  assert.equal(readFileSync(join(victim, "launch.json"), "utf8"), "{}");
+});
+
+void test("PRD-CTR-02 (secret create): create writes no launch or active file under the secret root", async (t) => {
+  const h = await harness(t);
+  const before = readdirSync(h.secretRoot);
+  assert.equal(await h.lifecycle.create(h.spec), CREATED_ID);
+  assert.deepEqual(readdirSync(h.secretRoot), before);
 });
