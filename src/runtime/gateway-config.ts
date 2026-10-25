@@ -37,7 +37,7 @@ export interface RealmGatewayInput {
   readonly isolationBackend?: string;
 }
 
-const GATEWAY_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+export const GATEWAY_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const COMPUTE_DRIVER_PATTERN = /^[a-z][a-z0-9-]{0,62}$/;
 // Either a bracketed IPv6 literal or a bare IPv4 literal, then a decimal port. A bare host with a colon
 // fails here, so an unbracketed IPv6 address is refused.

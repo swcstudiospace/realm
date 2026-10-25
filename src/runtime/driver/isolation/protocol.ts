@@ -1,23 +1,24 @@
 // The SandboxProtocol Exchange stream (phase 9.5, PRD-ISO-02 and PRD-ISO-03). This wave serves one request kind: Attach.
 //
 // The stream carries two frames: the boundary handle, and a request whose kind is Attach. The supervisor's bearer is read from
-// the call metadata when the stream opens and verified then; a refusal is kept and raised only after both frames are read.
-// The status is therefore sent after the client has finished its request, so a client that wrote its frames never sees its
-// own writes reset the stream. Attach checks that the verified gateway sandbox and runtime generation are the ones the handle
-// was opened for, and only then moves the boundary to Attached. Every failed check ends the stream with its status and changes
-// no state. Any other request kind returns UNIMPLEMENTED and changes no state; Confirm, StartAgent and the rest of the
-// lifecycle are built in later waves.
+// the call metadata when the stream opens, but it is verified only once both frames are read, so a token that expires while the
+// stream is held open cannot authorize the request. A refusal is raised after the frames, so a client that wrote its frames never
+// sees its own writes reset the stream. Attach checks that the verified gateway sandbox and runtime generation are the ones the
+// handle was opened for, and that the driver still holds that sandbox as the handle was bound. Only then does the boundary move to
+// Attached. Every failed check ends the stream with its status and changes no state. Any other request kind returns UNIMPLEMENTED
+// and changes no state; Confirm, StartAgent and the rest of the lifecycle are built in later waves.
 
 import type { ServerDuplexStream } from "@grpc/grpc-js";
 import { status } from "@grpc/grpc-js";
 import { makeRealmError } from "../../../core/errors.js";
-import { DriverStatusError, driverFailureOf, driverUnimplemented, toServerError } from "../grpc-status.js";
+import { DriverStatusError, driverFailureOf, driverNotFound, driverUnimplemented, toServerError } from "../grpc-status.js";
 import { bearerFromMetadata, type SupervisorBearerVerifier, type SupervisorSession } from "./bearer.js";
-import type { BoundaryRegistry } from "./boundary.js";
+import type { Boundary, BoundaryRegistry, ProvisionedResources } from "./boundary.js";
 
 export interface SandboxProtocolDeps {
   readonly verifier: Pick<SupervisorBearerVerifier, "verify">;
   readonly boundaries: BoundaryRegistry;
+  readonly resources: ProvisionedResources;
 }
 
 // The Exchange handler. The stream is ended by this handler after the Attach response, or ended with the failure.
@@ -29,12 +30,12 @@ export function exchange(deps: SandboxProtocolDeps): (call: ServerDuplexStream<u
   };
 }
 
-// The outcome of the bearer check at stream open: the verified session, or the refusal to raise once the frames are read.
-type BearerOutcome = { readonly session: SupervisorSession } | { readonly refusal: unknown };
+// The bearer as the call metadata carries it at stream open: the token, or the refusal to raise once the frames are read.
+type BearerOutcome = { readonly token: string } | { readonly refusal: unknown };
 
-function verifyBearer(call: ServerDuplexStream<unknown, unknown>, deps: SandboxProtocolDeps): BearerOutcome {
+function readBearer(call: ServerDuplexStream<unknown, unknown>): BearerOutcome {
   try {
-    return { session: deps.verifier.verify(bearerFromMetadata(call.metadata)) };
+    return { token: bearerFromMetadata(call.metadata) };
   } catch (error: unknown) {
     return { refusal: error };
   }
@@ -43,7 +44,7 @@ function verifyBearer(call: ServerDuplexStream<unknown, unknown>, deps: SandboxP
 // The frames are proto-loader messages with oneofs set: `payload` names the set ExchangeFrame field, and `request` names the
 // set RequestEnvelope field.
 async function serveExchange(call: ServerDuplexStream<unknown, unknown>, deps: SandboxProtocolDeps): Promise<void> {
-  const bearer = verifyBearer(call, deps);
+  const bearer = readBearer(call);
   const frames = call[Symbol.asyncIterator]();
 
   const boundaryFrame = await nextFrame(frames);
@@ -59,17 +60,13 @@ async function serveExchange(call: ServerDuplexStream<unknown, unknown>, deps: S
   if ("refusal" in bearer) {
     throw bearer.refusal;
   }
+  // Verified at the time of use, not at stream open: the frames may arrive later, and the token's expiry is checked then.
+  const session = deps.verifier.verify(bearer.token);
   const envelope = requestFrame.request as Readonly<Record<string, unknown>>;
   if (envelope.request !== "attach") {
     throw new DriverStatusError(driverUnimplemented("only Attach is served on the sandbox protocol in this wave"));
   }
-  const boundary = deps.boundaries.resolve(handle);
-  if (bearer.session.sandboxId !== boundary.gatewaySandboxId || bearer.session.runtimeGeneration !== boundary.generationId) {
-    throw new DriverStatusError({
-      code: status.UNAUTHENTICATED,
-      details: "the supervisor bearer does not match the sandbox of the boundary",
-    });
-  }
+  const boundary = boundaryOf(deps, handle, session);
   deps.boundaries.markAttached(handle);
   call.write({
     response: {
@@ -78,6 +75,29 @@ async function serveExchange(call: ServerDuplexStream<unknown, unknown>, deps: S
     },
   });
   call.end();
+}
+
+// The boundary a handle names, when it is still valid for the verified sandbox. An unknown or invalidated handle is NOT_FOUND. A
+// boundary of another sandbox or generation is UNAUTHENTICATED. A handle whose driver record is gone, or whose resource was
+// replaced, is NOT_FOUND: a handle bound while a DeleteSandbox was in progress fails here once the driver has removed the sandbox.
+// Every refusal changes no state.
+function boundaryOf(deps: SandboxProtocolDeps, handle: string, session: SupervisorSession): Boundary {
+  const boundary = deps.boundaries.resolve(handle);
+  if (boundary.gatewaySandboxId !== session.sandboxId || boundary.generationId !== session.runtimeGeneration) {
+    throw new DriverStatusError({
+      code: status.UNAUTHENTICATED,
+      details: "the supervisor bearer does not match the sandbox of the boundary",
+    });
+  }
+  const resource = deps.resources.provisionedResource(session.sandboxId);
+  if (
+    resource === undefined ||
+    resource.sandboxName !== boundary.sandboxName ||
+    resource.resourceId !== boundary.resourceId
+  ) {
+    throw new DriverStatusError(driverNotFound("the boundary handle is not valid"));
+  }
+  return boundary;
 }
 
 // The next frame of the stream. A stream that ends before the frame is a protocol error.

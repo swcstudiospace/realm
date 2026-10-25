@@ -11,6 +11,10 @@
 //
 // A bound handle moves to Attached once the supervisor's bearer for its sandbox and generation verifies (Attach). Only one
 // boundary of a sandbox generation may be Attached, so a second Attach for that generation is refused.
+//
+// The driver's record is the other half of a handle's validity. A handle bound while a DeleteSandbox is in progress is not
+// invalidated by that delete's first step, so every use also checks the driver's record for the sandbox (ProvisionedResources).
+// Once the driver has removed the sandbox, the handle fails NOT_FOUND on its next use.
 
 import { randomUUID } from "node:crypto";
 import { status } from "@grpc/grpc-js";
@@ -38,6 +42,18 @@ export interface Boundary {
   readonly sessionId: string;
   readonly resourceId: string;
   readonly lifecycle: BoundaryLifecycle;
+}
+
+// A resource the driver provisioned for one gateway sandbox: the driver's name for the sandbox, and the identity of its runtime.
+export interface ProvisionedResource {
+  readonly sandboxName: string;
+  readonly resourceId: string;
+}
+
+// The driver's lookup of the resource it holds for a gateway sandbox id. It is synchronous, so a caller binds or checks a handle
+// with no await in between. It is undefined when the driver holds no such sandbox.
+export interface ProvisionedResources {
+  provisionedResource(sandboxId: string): ProvisionedResource | undefined;
 }
 
 export class BoundaryRegistry {

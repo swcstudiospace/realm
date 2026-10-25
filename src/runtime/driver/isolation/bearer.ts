@@ -1,8 +1,9 @@
 // The supervisor bearer check for the isolation backend (phase 9.5, PRD-ISO-02, PRD-ISO-03).
 //
 // The supervisor presents a gateway-minted sandbox session token as `authorization: Bearer <token>` on a Sandbox Protocol
-// stream. This module verifies it against the one gateway public key the driver was started with. It mirrors the gateway's
-// sandbox-profile verifier (crates/openshell-core/src/jwt.rs, SessionJwtVerifier::verify and validate_claims) at the
+// stream. This module verifies it against the one gateway public key the driver was started with, and against the one gateway
+// identity the driver was started with: the token's issuer must be exactly `openshell-gateway:<gateway id>`. It mirrors the
+// gateway's sandbox-profile verifier (crates/openshell-core/src/jwt.rs, SessionJwtVerifier::verify and validate_claims) at the
 // pinned source revision: the same header type, audience, subject, claim set and lifetime rules.
 //
 // The algorithm is pinned to EdDSA by an exact match on the header, so "none", HMAC, and any other algorithm fail before
@@ -17,6 +18,7 @@ import { createHash, createPublicKey, verify as verifySignature, type KeyObject 
 import { status, type Metadata } from "@grpc/grpc-js";
 import { makeRealmError } from "../../../core/errors.js";
 import { DriverStatusError } from "../grpc-status.js";
+import { GATEWAY_ID_PATTERN } from "../../gateway-config.js";
 
 export const SANDBOX_SESSION_JWT_TYPE = "openshell-sandbox-session+jwt";
 export const SANDBOX_SESSION_AUDIENCE = "openshell-sandbox";
@@ -29,7 +31,6 @@ const CLOCK_LEEWAY_SECONDS = 30;
 const MAX_LIFETIME_SECONDS = 3600;
 // The gateway's runtime generation is at most 64 lowercase letters, digits or hyphens.
 const GENERATION_PATTERN = /^[a-z0-9-]{1,64}$/;
-const GATEWAY_ID_PATTERN = /^[A-Za-z0-9._-]{1,64}$/;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const BASE64URL_PATTERN = /^[A-Za-z0-9_-]+$/;
 const WHITESPACE_PATTERN = /\s/;
@@ -90,10 +91,14 @@ export function bearerFromMetadata(metadata: Metadata): string {
 export class SupervisorBearerVerifier {
   private readonly publicKey: KeyObject;
   private readonly keyId: string;
+  private readonly issuer: string;
 
-  // Accepts only a PEM public key on an Ed25519 key. A private key, another algorithm, or unreadable content fails
-  // startup with SCHEMA_INVALID and names none of the input.
-  constructor(publicKeyPem: Uint8Array) {
+  // Accepts only a PEM public key on an Ed25519 key, for the one gateway it names. A private key, another algorithm, unreadable
+  // content, or a gateway id outside the configured form fails with SCHEMA_INVALID and names none of the input.
+  constructor(publicKeyPem: Uint8Array, gatewayId: string) {
+    if (!GATEWAY_ID_PATTERN.test(gatewayId)) {
+      throw makeRealmError("SCHEMA_INVALID");
+    }
     const text = Buffer.from(publicKeyPem).toString("utf8");
     if (!text.includes("-----BEGIN PUBLIC KEY-----")) {
       throw makeRealmError("SCHEMA_INVALID");
@@ -109,6 +114,7 @@ export class SupervisorBearerVerifier {
     }
     this.publicKey = key;
     this.keyId = gatewayKeyId(key);
+    this.issuer = `${GATEWAY_ISSUER_PREFIX}${gatewayId}`;
   }
 
   // Verifies one token at the given time (Unix seconds). Every failed check throws UNAUTHENTICATED and reads nothing else.
@@ -134,7 +140,7 @@ export class SupervisorBearerVerifier {
     if (!verifySignature(null, signed, this.publicKey, signature)) {
       throw unauthenticated("the supervisor bearer is not signed by the gateway key");
     }
-    return checkClaims(parseObject(payloadSegment), nowSeconds);
+    return checkClaims(parseObject(payloadSegment), this.issuer, nowSeconds);
   }
 }
 
@@ -153,19 +159,15 @@ function parseObject(segment: string): Json {
 }
 
 // The claim rules of the gateway's sandbox profile: issuer, audience, subject, identity, generation, epoch, component,
-// token id, and the issued-at and expiry bounds.
-function checkClaims(claims: Json, nowSeconds: number): SupervisorSession {
+// token id, and the issued-at and expiry bounds. The issuer must equal the configured gateway's issuer exactly.
+function checkClaims(claims: Json, issuer: string, nowSeconds: number): SupervisorSession {
   for (const name of Object.keys(claims)) {
     if (!Object.hasOwn(CLAIM_NAMES, name)) {
       throw unauthenticated("the supervisor bearer carries a claim that is not accepted");
     }
   }
-  const issuer = claims.iss;
-  if (typeof issuer !== "string" || !issuer.startsWith(GATEWAY_ISSUER_PREFIX)) {
-    throw unauthenticated("the supervisor bearer was not issued by a gateway");
-  }
-  if (!GATEWAY_ID_PATTERN.test(issuer.slice(GATEWAY_ISSUER_PREFIX.length))) {
-    throw unauthenticated("the supervisor bearer was not issued by a gateway");
+  if (claims.iss !== issuer) {
+    throw unauthenticated("the supervisor bearer was not issued by this gateway");
   }
   if (claims.aud !== SANDBOX_SESSION_AUDIENCE) {
     throw unauthenticated("the supervisor bearer has the wrong audience");

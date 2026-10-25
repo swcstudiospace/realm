@@ -42,7 +42,7 @@ import {
 import { DRIVER_ADMISSION_ACKNOWLEDGEMENT } from "./admission.js";
 import { driverFailureOf, DriverStatusError, driverNotFound, driverUnimplemented, toServerError } from "./grpc-status.js";
 import type { DriverLifecycle } from "./lifecycle.js";
-import type { BoundaryRegistry } from "./isolation/boundary.js";
+import type { BoundaryRegistry, ProvisionedResource } from "./isolation/boundary.js";
 
 export const COMPUTE_DRIVER_SERVICE_NAME = "openshell.compute.v1.ComputeDriver";
 const PROTO_FILE = "compute_driver.proto";
@@ -164,6 +164,8 @@ interface SandboxRecord {
   readonly workspace: string;
   // The container name the sandbox runs under: the gateway's name with the realm prefix added when it lacks it.
   readonly containerName: string;
+  // The identity the runtime reported when the container was created. It is the resource a boundary binds to.
+  readonly runtimeIdentity: string;
 }
 
 // A validated create: the gateway's sandbox name and id, its workspace, and the spec the lifecycle takes.
@@ -283,6 +285,7 @@ export class ComputeDriver {
       id: plan.sandboxId,
       workspace: plan.workspace,
       containerName: plan.spec.sandboxName,
+      runtimeIdentity: containerId,
     });
     return { runtime_identity: containerId };
   }
@@ -294,6 +297,17 @@ export class ComputeDriver {
       throw new DriverStatusError(driverNotFound("sandbox not found"));
     }
     return { sandbox };
+  }
+
+  // The resource the driver holds for a gateway sandbox id: the driver's name for the sandbox and its runtime identity. It is
+  // synchronous, so the isolation backend binds or checks a boundary handle with no await in between. An unknown id is undefined.
+  provisionedResource(sandboxId: string): ProvisionedResource | undefined {
+    const name = this.nameOf({ sandbox_id: sandboxId });
+    const record = name === undefined ? undefined : this.registry.get(name);
+    if (name === undefined || record === undefined) {
+      return undefined;
+    }
+    return { sandboxName: name, resourceId: record.runtimeIdentity };
   }
 
   async listSandboxes(): Promise<{ sandboxes: DriverSandboxOut[] }> {
@@ -317,6 +331,8 @@ export class ComputeDriver {
     const existed = (await this.deps.libpod.inspectContainer(containerName)) !== null;
     await this.deps.lifecycle.delete(containerName);
     this.registry.delete(name);
+    // A handle bound while the container was being removed is invalid once the record is gone.
+    this.deps.boundaries.invalidateAll(name);
     return { deleted: existed };
   }
 

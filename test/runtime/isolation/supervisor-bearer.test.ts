@@ -1,5 +1,6 @@
 // Behaviour of the supervisor bearer check: a valid gateway token verifies to its sandbox identity, and each refused shape fails
-// UNAUTHENTICATED (or SCHEMA_INVALID for a key that is not an Ed25519 public key). No test reads the source text.
+// UNAUTHENTICATED (or SCHEMA_INVALID for a key that is not an Ed25519 public key or a gateway id that is not the configured form).
+// No test reads the source text.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -9,6 +10,7 @@ import { RealmError } from "../../../src/core/errors.js";
 import { DriverStatusError } from "../../../src/runtime/driver/grpc-status.js";
 import { SupervisorBearerVerifier, bearerFromMetadata } from "../../../src/runtime/driver/isolation/bearer.js";
 import {
+  GATEWAY_ID,
   GENERATION_ID,
   SANDBOX_ID,
   generateGatewayKey,
@@ -29,9 +31,9 @@ function schemaInvalid(error: unknown): boolean {
   return error instanceof RealmError && error.code === "SCHEMA_INVALID";
 }
 
-// One verifier per key, so every case verifies against the gateway key the token claims to come from.
+// One verifier per key, pinned to the realm's gateway id, so every case verifies against the gateway key the token claims to come from.
 function verifierFor(key: GatewayKey): SupervisorBearerVerifier {
-  return new SupervisorBearerVerifier(key.publicPem);
+  return new SupervisorBearerVerifier(key.publicPem, GATEWAY_ID);
 }
 
 function metadataWith(...values: readonly string[]): Metadata {
@@ -135,15 +137,42 @@ void test("PRD-ISO-02: a token lasting longer than one hour, or without a positi
 void test("PRD-ISO-02: a token whose audience is not the sandbox audience is refused", () => {
   const key = generateGatewayKey();
   const now = nowSeconds();
-  for (const aud of ["openshell-gateway", "openshell-gateway:gateway-1", ["openshell-sandbox"], undefined]) {
+  for (const aud of ["openshell-gateway", "openshell-gateway:realm", ["openshell-sandbox"], undefined]) {
     assert.throws(() => verifierFor(key).verify(signedToken(key, sandboxClaims(now, { aud })), now), unauthenticated);
   }
+});
+
+void test("PRD-ISO-02: a token whose issuer is not exactly this gateway's issuer is refused", () => {
+  const key = generateGatewayKey();
+  const now = nowSeconds();
+  const issuers = [
+    "other:realm",
+    "openshell-gateway:",
+    "openshell-gateway:other",
+    "openshell-gateway:REALM",
+    "openshell-gateway:realm ",
+    "openshell-gateway:realm/extra",
+    "openshell-gateway:realm:extra",
+    "openshell-gateway:realm2",
+  ];
+  for (const iss of issuers) {
+    assert.throws(() => verifierFor(key).verify(signedToken(key, sandboxClaims(now, { iss })), now), unauthenticated, iss);
+  }
+});
+
+void test("PRD-ISO-02: a bearer minted for another gateway id is refused, and verifies only for the gateway it names", () => {
+  const key = generateGatewayKey();
+  const now = nowSeconds();
+  const otherGateway = sandboxClaims(now, { iss: "openshell-gateway:other" });
+  assert.throws(() => verifierFor(key).verify(signedToken(key, otherGateway), now), unauthenticated);
+  const pinnedToOther = new SupervisorBearerVerifier(key.publicPem, "other");
+  assert.equal(pinnedToOther.verify(signedToken(key, otherGateway), now).sandboxId, SANDBOX_ID);
 });
 
 void test("PRD-ISO-02: a token from another issuer, or a subject that names another sandbox, is refused", () => {
   const key = generateGatewayKey();
   const now = nowSeconds();
-  assert.throws(() => verifierFor(key).verify(signedToken(key, sandboxClaims(now, { iss: "other:gateway-1" })), now), unauthenticated);
+  assert.throws(() => verifierFor(key).verify(signedToken(key, sandboxClaims(now, { iss: "other:realm" })), now), unauthenticated);
   assert.throws(() => verifierFor(key).verify(signedToken(key, sandboxClaims(now, { iss: "openshell-gateway:" })), now), unauthenticated);
   assert.throws(
     () => verifierFor(key).verify(signedToken(key, sandboxClaims(now, { sub: "spiffe://openshell/sandbox/sandbox-b" })), now),
@@ -199,12 +228,19 @@ void test("PRD-ISO-02: a duplicated authorization value is refused", () => {
 
 void test("PRD-ISO-02: the verifier is built only from a PEM Ed25519 public key; anything else refuses with SCHEMA_INVALID", () => {
   const key = generateGatewayKey();
-  assert.doesNotThrow(() => new SupervisorBearerVerifier(key.publicPem));
+  assert.doesNotThrow(() => new SupervisorBearerVerifier(key.publicPem, GATEWAY_ID));
   const privatePem = key.privateKey.export({ format: "pem", type: "pkcs8" });
-  assert.throws(() => new SupervisorBearerVerifier(Buffer.from(privatePem as string)), schemaInvalid);
+  assert.throws(() => new SupervisorBearerVerifier(Buffer.from(privatePem as string), GATEWAY_ID), schemaInvalid);
   const rsa = generateKeyPairSync("rsa", { modulusLength: 2048 });
   const rsaPem = rsa.publicKey.export({ format: "pem", type: "spki" });
-  assert.throws(() => new SupervisorBearerVerifier(Buffer.from(rsaPem as string)), schemaInvalid);
-  assert.throws(() => new SupervisorBearerVerifier(new Uint8Array()), schemaInvalid);
-  assert.throws(() => new SupervisorBearerVerifier(Buffer.from("not a key")), schemaInvalid);
+  assert.throws(() => new SupervisorBearerVerifier(Buffer.from(rsaPem as string), GATEWAY_ID), schemaInvalid);
+  assert.throws(() => new SupervisorBearerVerifier(new Uint8Array(), GATEWAY_ID), schemaInvalid);
+  assert.throws(() => new SupervisorBearerVerifier(Buffer.from("not a key"), GATEWAY_ID), schemaInvalid);
+});
+
+void test("PRD-ISO-02: the verifier refuses a gateway id that is missing or outside the configured form, with SCHEMA_INVALID", () => {
+  const key = generateGatewayKey();
+  for (const gatewayId of ["", "-realm", "realm name", "realm/x", "a".repeat(65)]) {
+    assert.throws(() => new SupervisorBearerVerifier(key.publicPem, gatewayId), schemaInvalid, gatewayId);
+  }
 });

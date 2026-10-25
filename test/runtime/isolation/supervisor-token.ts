@@ -8,6 +8,8 @@ export const SANDBOX_TOKEN_TYPE = "openshell-sandbox-session+jwt";
 export const SANDBOX_AUDIENCE = "openshell-sandbox";
 export const SANDBOX_ID = "sandbox-a";
 export const GENERATION_ID = "generation-1";
+// The gateway id the realm's gateway configuration renders, and the one every verifier in these tests is pinned to.
+export const GATEWAY_ID = "realm";
 
 export interface GatewayKey {
   readonly privateKey: KeyObject;
@@ -24,7 +26,7 @@ export function generateGatewayKey(): GatewayKey {
 // The claims a valid supervisor bearer carries at the given time. A test overrides one claim to make one refusal.
 export function sandboxClaims(nowSeconds: number, overrides: Readonly<Record<string, unknown>> = {}): Record<string, unknown> {
   return {
-    iss: "openshell-gateway:gateway-1",
+    iss: `openshell-gateway:${GATEWAY_ID}`,
     sub: `spiffe://openshell/sandbox/${SANDBOX_ID}`,
     aud: SANDBOX_AUDIENCE,
     iat: nowSeconds - 10,
