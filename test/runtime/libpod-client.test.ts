@@ -49,15 +49,17 @@ async function waitForRecorded(fake: FakeLibpod, route: LibpodRouteName, timeout
   }
 }
 
-void test("RT-03: the client exposes exactly the five D-54 methods and no other instance member", () => {
+void test("RT-03: the client exposes exactly the seven D-54 methods and no other instance member", () => {
   const methods = Object.getOwnPropertyNames(LibpodClient.prototype)
     .filter((name) => name !== "constructor")
     .sort();
   assert.deepEqual(methods, [
+    "createContainer",
     "info",
     "inspectContainer",
     "listContainersByLabel",
     "removeContainer",
+    "startContainer",
     "stopContainer",
   ]);
   const client = new LibpodClient("/run/user/1000/podman/podman.sock");
@@ -70,9 +72,12 @@ void test("RT-03: the client exposes exactly the five D-54 methods and no other 
   }
 });
 
-void test("RT-03: no exec, attach, or start-exec route appears in the route table", () => {
+void test("RT-03: no exec or attach route appears in the route table, and the only start route is container start", () => {
   for (const route of Object.values(LIBPOD_ROUTES)) {
-    assert.doesNotMatch(route.path, /exec|attach|\/start/i);
+    assert.doesNotMatch(route.path, /exec|attach/i);
+    if (/start/i.test(route.path)) {
+      assert.equal(route.path, "/libpod/containers/{id}/start");
+    }
   }
 });
 
@@ -194,5 +199,17 @@ void test("RT-03: the client refuses a socket path that is not absolute", () => 
   assert.throws(
     () => new LibpodClient("podman.sock"),
     (error: unknown) => error instanceof RealmError && error.code === "SCHEMA_INVALID",
+  );
+});
+
+void test("RT-09: removeContainer succeeds on the 200 reply Podman 5.7.1 sends, which carries the removed id", async (t) => {
+  const { fake, socketPath } = await startFake(t);
+  fake.store.add({ id: "realm-x", labels: {}, running: true });
+  await new LibpodClient(socketPath).removeContainer("realm-x", { force: true });
+  assert.equal(fake.store.get("realm-x"), undefined, "the container is removed");
+  assert.equal(
+    fake.requests().filter((request) => request.route === "removeContainer").length,
+    1,
+    "one delete request reached the fake",
   );
 });

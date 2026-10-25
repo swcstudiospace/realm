@@ -25,7 +25,15 @@ const DIGEST = `sha256:${"b".repeat(64)}`;
 const IMAGE = `registry.example.com/realm/session@${DIGEST}`;
 const WORKLOAD = ["/usr/bin/agent", "--serve"];
 const SESSION = "sess-route";
-const LIBPOD_ROUTE_NAMES: readonly string[] = ["info", "listContainers", "inspectContainer", "stopContainer", "removeContainer"];
+const LIBPOD_ROUTE_NAMES: readonly string[] = [
+  "info",
+  "listContainers",
+  "inspectContainer",
+  "createContainer",
+  "startContainer",
+  "stopContainer",
+  "removeContainer",
+];
 
 interface Fixture {
   readonly libpod: FakeLibpod;
@@ -109,14 +117,23 @@ void test("RT-03: the workload starts only through the OpenShell create argv, wi
   assert.deepEqual(argv.slice(argv.indexOf("--") + 1), WORKLOAD);
 });
 
-void test("RT-03: the libpod client exposes no method that starts or joins a process, and no request reaches one", async (t) => {
+void test("RT-03: the libpod client exposes no exec or attach method, only container create and start among start methods, and no request reaches one", async (t) => {
   const f = await fixture(t);
   const methods = Object.getOwnPropertyNames(LibpodClient.prototype)
     .filter((name) => name !== "constructor")
     .sort();
-  assert.deepEqual(methods, ["info", "inspectContainer", "listContainersByLabel", "removeContainer", "stopContainer"]);
+  assert.deepEqual(methods, [
+    "createContainer",
+    "info",
+    "inspectContainer",
+    "listContainersByLabel",
+    "removeContainer",
+    "startContainer",
+    "stopContainer",
+  ]);
   for (const name of methods) {
-    assert.equal(/exec|attach|start/i.test(name), false, `method ${name} must not start a process`);
+    assert.equal(/exec|attach/i.test(name), false, `method ${name} must not start or join a process`);
+    assert.equal(/start/i.test(name) && name !== "startContainer", false, `method ${name} is a start other than container start`);
   }
 
   const { containerId } = await createSession(f);
@@ -132,8 +149,13 @@ void test("RT-03: the libpod client exposes no method that starts or joins a pro
   }
   for (const request of requests.filter((recorded) => recorded.target !== "/_ping")) {
     assert.notEqual(request.route, null, `request ${request.target} must match a known route`);
-    assert.ok(LIBPOD_ROUTE_NAMES.includes(String(request.route)), `route ${String(request.route)} must be one of the five`);
-    assert.equal(/\/start|exec|attach/.test(request.target), false, `request ${request.target} starts nothing`);
+    assert.ok(LIBPOD_ROUTE_NAMES.includes(String(request.route)), `route ${String(request.route)} must be a known libpod route`);
+    assert.equal(/exec|attach/.test(request.target), false, `request ${request.target} starts or joins a process`);
+    assert.equal(
+      /\/start/.test(request.target) && !/^\/v[\d.]+\/libpod\/containers\/[^/]+\/start$/.test(request.target),
+      false,
+      `request ${request.target} is a start other than container start`,
+    );
   }
 });
 

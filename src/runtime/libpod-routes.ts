@@ -3,9 +3,10 @@
 // this file is PROVISIONAL. The gated integration suite confirms them on a Podman 5.x host
 // (S-09). They live in this file only, so a correction touches one place.
 //
-// The table holds exactly the five routes the closed libpod client uses. It defines no
-// route that starts or joins a process inside a container (RT-03). Agent
-// workload code starts only through the OpenShell adapter.
+// The table holds the routes the closed libpod client uses: the read, stop, and remove routes, and the
+// create and container-start routes of the lifecycle. It defines no exec or attach route and no route
+// that starts a process inside a container (RT-03). Agent workload code starts only through the
+// OpenShell adapter.
 
 import { makeRealmError } from "../core/errors.js";
 
@@ -27,6 +28,8 @@ export const LIBPOD_ROUTES = Object.freeze({
   inspectContainer: route("GET", "/libpod/containers/{id}/json"),
   stopContainer: route("POST", "/libpod/containers/{id}/stop"),
   removeContainer: route("DELETE", "/libpod/containers/{id}"),
+  createContainer: route("POST", "/libpod/containers/create"),
+  startContainer: route("POST", "/libpod/containers/{id}/start"),
 });
 
 export type LibpodRouteName = keyof typeof LIBPOD_ROUTES;

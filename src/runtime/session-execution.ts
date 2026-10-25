@@ -17,7 +17,6 @@
 // callers keep working. It removes every realm-labelled container and proves zero survivors.
 
 import { spawn, type ChildProcess, type StdioOptions } from "node:child_process";
-import { readFileSync } from "node:fs";
 import { makeRealmError, RealmError, type ErrorCode } from "../core/errors.js";
 import { withTimeout } from "../core/timeout.js";
 import type { CreateRequest, ExecutionService, ProbeResult } from "../core/ports.js";
@@ -27,13 +26,13 @@ import type { AgentOsSupervisor } from "./agentos.js";
 import { loadRuntimeConfig, type RuntimeConfig } from "./config.js";
 import { validateEgressAllow } from "./egress.js";
 import {
-  capabilitySetsOf,
   HARDENING_PROFILE,
   verifyInspect,
   type HardeningBinding,
   type HardeningProperty,
 } from "./hardening.js";
 import type { LibpodClient, LibpodInspect } from "./libpod-client.js";
+import { attachKernelCaps, readHostProcStatus } from "./kernel-caps.js";
 import {
   buildExecArgv,
   OPENSHELL_OUTPUT_LIMIT_BYTES,
@@ -255,26 +254,6 @@ export class SessionExecution implements ExecutionService {
     }
     throw makeRealmError("OPENSHELL_START_FAILED", causeCode);
   }
-}
-
-// Attaches the capability sets of the container's init process, read through State.Pid from the host's status
-// (D-51). A missing pid or a status that cannot be read attaches nothing, so the cap-drop check fails closed.
-function attachKernelCaps(inspect: LibpodInspect, readStatus: (pid: number) => string): LibpodInspect {
-  const state = inspect.State as Readonly<{ Pid?: unknown }> | undefined;
-  const pid = state?.Pid;
-  if (typeof pid !== "number" || !Number.isSafeInteger(pid) || pid <= 0) {
-    return inspect;
-  }
-  try {
-    return { ...inspect, KernelCaps: capabilitySetsOf(readStatus(pid)) };
-  } catch {
-    return inspect;
-  }
-}
-
-// The host's status text for one process, from /proc. Only the create-time capability check reads it.
-function readHostProcStatus(pid: number): string {
-  return readFileSync(`/proc/${String(pid)}/status`, "utf8");
 }
 
 // The running flag of a libpod inspect object. Anything other than a boolean true is not running.

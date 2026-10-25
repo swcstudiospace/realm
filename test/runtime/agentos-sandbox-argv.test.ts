@@ -14,8 +14,8 @@ const REQUEST: AgentOsSandboxRequest = {
   cpus: 2,
   memory: "4Gi",
   imageRef: `localhost/realm-agentos@sha256:${"b".repeat(64)}`,
-  runnerPath: "/opt/realm/agentos-runner.js",
-  probePath: "/opt/realm/agentos-probe.js",
+  runnerPath: "/usr/local/lib/realm/agentos-runner.js",
+  probePath: "/usr/local/lib/realm/agentos-probe.js",
 };
 
 function refusedWith(code: ErrorCode): (error: unknown) => boolean {

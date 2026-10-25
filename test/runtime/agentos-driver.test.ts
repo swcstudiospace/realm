@@ -6,8 +6,8 @@ import { OPENSHELL_BINARY, type OpenShellRunner } from "../../src/runtime/opensh
 
 const IMAGE = `localhost/realm-agentos@sha256:${"a".repeat(64)}`;
 const POLICY = "/realm-state/agentos/policy.json";
-const RUNNER = "/opt/realm/agentos-runner.js";
-const PROBE = "/opt/realm/agentos-probe.js";
+const RUNNER = "/usr/local/lib/realm/agentos-runner.js";
+const PROBE = "/usr/local/lib/realm/agentos-probe.js";
 const TIMEOUT_MS = 2500;
 
 interface Recorded {

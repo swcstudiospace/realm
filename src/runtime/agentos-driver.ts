@@ -10,8 +10,8 @@ import type { AgentOsDriver } from "./agentos.js";
 import { buildAgentOsSandboxArgv, type OpenShellRunner } from "./openshell.js";
 
 export const DEFAULT_AGENTOS_SANDBOX_NAME = "realm-agentos";
-export const DEFAULT_AGENTOS_RUNNER_PATH = "/opt/realm/agentos-runner.js";
-export const DEFAULT_AGENTOS_PROBE_PATH = "/opt/realm/agentos-probe.js";
+export const DEFAULT_AGENTOS_RUNNER_PATH = "/usr/local/lib/realm/agentos-runner.js";
+export const DEFAULT_AGENTOS_PROBE_PATH = "/usr/local/lib/realm/agentos-probe.js";
 
 const SANDBOX_NAME_PREFIX = "realm-";
 

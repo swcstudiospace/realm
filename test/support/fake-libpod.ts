@@ -319,6 +319,10 @@ export class FakeLibpod {
         return this.stopRoute(id);
       case "removeContainer":
         return this.removeRoute(id, params);
+      case "createContainer":
+        return jsonReply(501, { message: "create is not modelled by the in-process fake" });
+      case "startContainer":
+        return jsonReply(501, { message: "start is not modelled by the in-process fake" });
     }
   }
 
@@ -383,6 +387,6 @@ export class FakeLibpod {
       return jsonReply(409, { message: "container is running" });
     }
     this.store.remove(container.id);
-    return { status: 204 };
+    return jsonReply(200, [{ Id: container.id }]);
   }
 }
