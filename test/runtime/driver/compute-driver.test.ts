@@ -264,7 +264,10 @@ void test("PRD-GW-03: GetCapabilities returns the same pinned admission acknowle
 void test("PRD-DRV-01: GetCapabilities advertises the contract but not the isolation backend (phase 9.5)", () => {
   const { driver } = harness();
   const extension = driver.getCapabilities({})["extension"] as { supported_capabilities: string[] };
-  assert.deepEqual(extension.supported_capabilities, ["openshell.compute.contract"]);
+  assert.deepEqual(extension.supported_capabilities, [
+    "openshell.compute.contract",
+    "openshell.compute.launch-authentication",
+  ]);
 });
 
 void test("PRD-DRV-01: GetCapabilities refuses a gateway that requires a capability the driver lacks", () => {

@@ -22,17 +22,16 @@ import {
   startIsolationBackend,
   type IsolationBackendOptions,
 } from "../../../src/runtime/driver/isolation/backend.js";
-import { SupervisorBearerVerifier } from "../../../src/runtime/driver/isolation/bearer.js";
 import { BoundaryRegistry, type ProvisionedResource } from "../../../src/runtime/driver/isolation/boundary.js";
 import type { SocketServer } from "../../../src/runtime/driver/server.js";
 import { IMPLEMENTATION_VERSION, socketDirectory } from "../driver/fakes.js";
 import { fakeResources, type FakeResources } from "./provisioned-resources.js";
 import {
-  GATEWAY_ID,
   GENERATION_ID,
   SANDBOX_ID,
   generateGatewayKey,
   nowSeconds,
+  provisioningFor,
   sandboxClaims,
   signedToken,
   type GatewayKey,
@@ -48,7 +47,7 @@ function optionsOn(socketPath: string, overrides: Partial<IsolationBackendOption
   return {
     socketPath,
     implementationVersion: IMPLEMENTATION_VERSION,
-    provisioning: { verifier: new SupervisorBearerVerifier(GATEWAY_KEY.publicPem, GATEWAY_ID) },
+    provisioning: provisioningFor(GATEWAY_KEY),
     boundaries: new BoundaryRegistry(),
     resources: fakeResources({ [SANDBOX_ID]: SANDBOX }),
     ...overrides,
@@ -285,6 +284,31 @@ void test("PRD-ISO-02: an OpenBoundary whose bearer fails the check is UNAUTHENT
     );
     assert.equal(boundaries.size, 0, name);
   }
+});
+
+void test("PRD-ISO-02: an OpenBoundary for a sandbox with no launch material is UNAUTHENTICATED and binds nothing", async (t) => {
+  const boundaries = new BoundaryRegistry();
+  const { socketPath } = await startOnFreshPath(t, { boundaries, provisioning: { verifierFor: () => undefined } });
+  const backend = loadIsolationServices().backend;
+  const client = clientFor(t, socketPath, ISOLATION_BACKEND_SERVICE_NAME, backend);
+  await assert.rejects(
+    unary(client, backend, "OpenBoundary", { session_id: "session-1" }, bearer(validToken(GATEWAY_KEY))),
+    (error: ServiceError) => error.code === status.UNAUTHENTICATED,
+  );
+  assert.equal(boundaries.size, 0);
+});
+
+void test("PRD-ISO-02: an OpenBoundary whose bearer names a sandbox the launch lookup does not know is UNAUTHENTICATED", async (t) => {
+  const boundaries = new BoundaryRegistry();
+  const { socketPath } = await startOnFreshPath(t, { boundaries });
+  const backend = loadIsolationServices().backend;
+  const client = clientFor(t, socketPath, ISOLATION_BACKEND_SERVICE_NAME, backend);
+  const otherSandbox = validToken(GATEWAY_KEY, { sandbox_id: "sandbox-b", sub: "spiffe://openshell/sandbox/sandbox-b" });
+  await assert.rejects(
+    unary(client, backend, "OpenBoundary", { session_id: "session-1" }, bearer(otherSandbox)),
+    (error: ServiceError) => error.code === status.UNAUTHENTICATED,
+  );
+  assert.equal(boundaries.size, 0);
 });
 
 void test("PRD-ISO-01: OpenBoundary for a sandbox the driver does not hold is NOT_FOUND and binds nothing", async (t) => {

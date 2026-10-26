@@ -1,6 +1,6 @@
 // Drives the SandboxProtocol Exchange stream over the backend's Unix socket with a real gRPC client. Each refused Attach must end
-// with its status and leave the boundary exactly as it was. The gateway's bearer is minted in the test with the key the backend
-// was started with, and the backend is pinned to the realm's gateway id.
+// with its status and leave the boundary exactly as it was. The gateway's bearer is minted in the test with the key the sandbox's
+// launch material holds, and the backend looks that material up per sandbox.
 
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
@@ -10,8 +10,9 @@ import {
   SANDBOX_PROTOCOL_SERVICE_NAME,
   loadIsolationServices,
   startIsolationBackend,
+  type BackendProvisioning,
 } from "../../../src/runtime/driver/isolation/backend.js";
-import { SupervisorBearerVerifier } from "../../../src/runtime/driver/isolation/bearer.js";
+import type { SupervisorBearerVerifier } from "../../../src/runtime/driver/isolation/bearer.js";
 import {
   BoundaryRegistry,
   type BoundaryOpening,
@@ -21,16 +22,17 @@ import type { SocketServer } from "../../../src/runtime/driver/server.js";
 import { IMPLEMENTATION_VERSION, socketDirectory } from "../driver/fakes.js";
 import { fakeResources, type FakeResources } from "./provisioned-resources.js";
 import {
-  GATEWAY_ID,
   GENERATION_ID,
   SANDBOX_ID,
   generateGatewayKey,
   hmacTokenWithPublicKey,
   nowSeconds,
+  provisioningFor,
   sandboxClaims,
   sandboxHeader,
   signedToken,
   unsignedToken,
+  verifierOf,
   type GatewayKey,
 } from "./supervisor-token.js";
 
@@ -56,12 +58,13 @@ async function startBackendFor(
   key: GatewayKey,
   boundaries: BoundaryRegistry,
   resources: FakeResources = fakeResources({ [SANDBOX_ID]: RESOURCE }),
+  provisioning: BackendProvisioning = provisioningFor(key),
 ): Promise<{ socketPath: string; server: SocketServer }> {
   const socketPath = join(socketDirectory(), "backend.sock");
   const server = await startIsolationBackend({
     socketPath,
     implementationVersion: IMPLEMENTATION_VERSION,
-    provisioning: { verifier: new SupervisorBearerVerifier(key.publicPem, GATEWAY_ID) },
+    provisioning,
     boundaries,
     resources,
   });
@@ -178,6 +181,23 @@ void test("PRD-ISO-02: each bearer that fails a check ends UNAUTHENTICATED and c
   }
 });
 
+void test("PRD-ISO-02: a sandbox with no launch material is UNAUTHENTICATED at Attach, and a later Attach with material succeeds", async (t) => {
+  const key = generateGatewayKey();
+  const boundaries = new BoundaryRegistry();
+  const handle = boundaries.open(LAUNCH);
+  const verifiers = new Map<string, SupervisorBearerVerifier>();
+  const provisioning: BackendProvisioning = { verifierFor: (sandboxId) => verifiers.get(sandboxId) };
+  const { socketPath } = await startBackendFor(t, key, boundaries, undefined, provisioning);
+  const refused = await exchange(t, socketPath, bearer(validToken(key)), [boundaryFrame(handle), attachFrame()]);
+  assert.equal(refused.code, status.UNAUTHENTICATED);
+  assert.equal(refused.responses.length, 0);
+  assert.equal(boundaries.resolve(handle).lifecycle, "Bound");
+  verifiers.set(SANDBOX_ID, verifierOf(key));
+  const attached = await exchange(t, socketPath, bearer(validToken(key)), [boundaryFrame(handle), attachFrame()]);
+  assert.equal(attached.code, status.OK);
+  assert.equal(boundaries.resolve(handle).lifecycle, "Attached");
+});
+
 void test("PRD-ISO-02: a bad bearer on a request other than Attach is UNAUTHENTICATED, not UNIMPLEMENTED", async (t) => {
   const key = generateGatewayKey();
   const boundaries = new BoundaryRegistry();
@@ -260,4 +280,16 @@ void test("PRD-ISO-02: a stream whose first frame is not a boundary handle is re
   const { socketPath } = await startBackendFor(t, key, boundaries);
   const outcome = await exchange(t, socketPath, bearer(validToken(key)), [attachFrame()]);
   assert.equal(outcome.code, status.INVALID_ARGUMENT);
+});
+
+void test("PRD-ISO-02: a bearer naming a sandbox the launch lookup does not hold is UNAUTHENTICATED, and changes no state", async (t) => {
+  const key = generateGatewayKey();
+  const boundaries = new BoundaryRegistry();
+  const handle = boundaries.open(LAUNCH);
+  const { socketPath } = await startBackendFor(t, key, boundaries);
+  const otherSandbox = validToken(key, { sandbox_id: "sandbox-b", sub: "spiffe://openshell/sandbox/sandbox-b" });
+  const outcome = await exchange(t, socketPath, bearer(otherSandbox), [boundaryFrame(handle), attachFrame()]);
+  assert.equal(outcome.code, status.UNAUTHENTICATED);
+  assert.equal(outcome.responses.length, 0);
+  assert.equal(boundaries.resolve(handle).lifecycle, "Bound");
 });

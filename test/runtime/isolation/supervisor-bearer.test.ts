@@ -1,6 +1,6 @@
 // Behaviour of the supervisor bearer check: a valid gateway token verifies to its sandbox identity, and each refused shape fails
-// UNAUTHENTICATED (or SCHEMA_INVALID for a key that is not an Ed25519 public key or a gateway id that is not the configured form).
-// No test reads the source text.
+// UNAUTHENTICATED. A key that is not an Ed25519 public key, a key set that is empty or names a key id twice, and a gateway id
+// outside the configured form are refused with SCHEMA_INVALID. No test reads the source text.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -8,7 +8,12 @@ import { generateKeyPairSync } from "node:crypto";
 import { Metadata, status } from "@grpc/grpc-js";
 import { RealmError } from "../../../src/core/errors.js";
 import { DriverStatusError } from "../../../src/runtime/driver/grpc-status.js";
-import { SupervisorBearerVerifier, bearerFromMetadata } from "../../../src/runtime/driver/isolation/bearer.js";
+import {
+  SupervisorBearerVerifier,
+  bearerFromMetadata,
+  verifyBearer,
+  type VerificationKey,
+} from "../../../src/runtime/driver/isolation/bearer.js";
 import {
   GATEWAY_ID,
   GENERATION_ID,
@@ -20,7 +25,8 @@ import {
   sandboxHeader,
   signedToken,
   unsignedToken,
-  type GatewayKey,
+  verificationKeyOf,
+  verifierOf,
 } from "./supervisor-token.js";
 
 function unauthenticated(error: unknown): boolean {
@@ -31,9 +37,8 @@ function schemaInvalid(error: unknown): boolean {
   return error instanceof RealmError && error.code === "SCHEMA_INVALID";
 }
 
-// One verifier per key, pinned to the realm's gateway id, so every case verifies against the gateway key the token claims to come from.
-function verifierFor(key: GatewayKey): SupervisorBearerVerifier {
-  return new SupervisorBearerVerifier(key.publicPem, GATEWAY_ID);
+function keyWith(publicKeyPem: Uint8Array, keyId: string = "gateway-key-1"): VerificationKey {
+  return { keyId, publicKeyPem };
 }
 
 function metadataWith(...values: readonly string[]): Metadata {
@@ -52,7 +57,7 @@ function flipSignature(token: string): string {
 void test("PRD-ISO-02: a gateway-minted sandbox token verifies to the sandbox identity it names", () => {
   const key = generateGatewayKey();
   const now = nowSeconds();
-  const session = verifierFor(key).verify(signedToken(key, sandboxClaims(now)), now);
+  const session = verifierOf(key).verify(signedToken(key, sandboxClaims(now)), now);
   assert.equal(session.sandboxId, SANDBOX_ID);
   assert.equal(session.runtimeGeneration, GENERATION_ID);
   assert.equal(session.authEpoch, 1);
@@ -67,13 +72,13 @@ void test("PRD-ISO-02: a token with an altered payload fails the signature check
   const [header = "", , signature = ""] = signedToken(key, sandboxClaims(now)).split(".");
   const forgedClaims = sandboxClaims(now, { sandbox_id: "sandbox-b", sub: "spiffe://openshell/sandbox/sandbox-b" });
   const forged = Buffer.from(JSON.stringify(forgedClaims), "utf8").toString("base64url");
-  assert.throws(() => verifierFor(key).verify(`${header}.${forged}.${signature}`, now), unauthenticated);
+  assert.throws(() => verifierOf(key).verify(`${header}.${forged}.${signature}`, now), unauthenticated);
 });
 
 void test("PRD-ISO-02: a token with a flipped signature byte fails", () => {
   const key = generateGatewayKey();
   const now = nowSeconds();
-  assert.throws(() => verifierFor(key).verify(flipSignature(signedToken(key, sandboxClaims(now))), now), unauthenticated);
+  assert.throws(() => verifierOf(key).verify(flipSignature(signedToken(key, sandboxClaims(now))), now), unauthenticated);
 });
 
 void test('PRD-ISO-02: the "none" algorithm is refused, whether or not the signature segment is empty', () => {
@@ -81,64 +86,89 @@ void test('PRD-ISO-02: the "none" algorithm is refused, whether or not the signa
   const now = nowSeconds();
   const header = sandboxHeader(key, { alg: "none" });
   const unsigned = unsignedToken(sandboxClaims(now), header);
-  assert.throws(() => verifierFor(key).verify(unsigned, now), unauthenticated);
-  assert.throws(() => verifierFor(key).verify(`${unsigned}x`, now), unauthenticated);
+  assert.throws(() => verifierOf(key).verify(unsigned, now), unauthenticated);
+  assert.throws(() => verifierOf(key).verify(`${unsigned}x`, now), unauthenticated);
 });
 
 void test("PRD-ISO-02: an HMAC token keyed with the gateway public key is refused (algorithm confusion)", () => {
   const key = generateGatewayKey();
   const now = nowSeconds();
-  assert.throws(() => verifierFor(key).verify(hmacTokenWithPublicKey(key, sandboxClaims(now)), now), unauthenticated);
+  assert.throws(() => verifierOf(key).verify(hmacTokenWithPublicKey(key, sandboxClaims(now)), now), unauthenticated);
 });
 
 void test("PRD-ISO-02: a token of the gateway profile, not the sandbox profile, is refused", () => {
   const key = generateGatewayKey();
   const now = nowSeconds();
   const header = sandboxHeader(key, { typ: "openshell-gateway-session+jwt" });
-  assert.throws(() => verifierFor(key).verify(signedToken(key, sandboxClaims(now), header), now), unauthenticated);
+  assert.throws(() => verifierOf(key).verify(signedToken(key, sandboxClaims(now), header), now), unauthenticated);
 });
 
-void test("PRD-ISO-02: a token whose kid is not the gateway key identifier is refused", () => {
+void test("PRD-ISO-02: a token whose kid names no held key is refused", () => {
   const key = generateGatewayKey();
   const now = nowSeconds();
   const header = sandboxHeader(key, { kid: "0".repeat(32) });
-  assert.throws(() => verifierFor(key).verify(signedToken(key, sandboxClaims(now), header), now), unauthenticated);
+  assert.throws(() => verifierOf(key).verify(signedToken(key, sandboxClaims(now), header), now), unauthenticated);
 });
 
-void test("PRD-ISO-02: a token signed by a different key is refused", () => {
-  const trusted = generateGatewayKey();
-  const other = generateGatewayKey();
+void test("PRD-ISO-02: a token signed by a different key is refused, even when its kid names a held key", () => {
+  const trusted = generateGatewayKey("gateway-key-1");
+  const other = generateGatewayKey("gateway-key-2");
   const now = nowSeconds();
-  const header = sandboxHeader(other, { kid: sandboxHeader(trusted).kid });
-  assert.throws(() => verifierFor(trusted).verify(signedToken(other, sandboxClaims(now), header), now), unauthenticated);
+  const header = sandboxHeader(other, { kid: trusted.keyId });
+  assert.throws(() => verifierOf(trusted).verify(signedToken(other, sandboxClaims(now), header), now), unauthenticated);
+});
+
+void test("PRD-ISO-02: a verifier built from two keys verifies a token signed by either key, selected by its kid", () => {
+  const first = generateGatewayKey("gateway-key-1");
+  const second = generateGatewayKey("gateway-key-2");
+  const verifier = new SupervisorBearerVerifier([verificationKeyOf(first), verificationKeyOf(second)], GATEWAY_ID);
+  const now = nowSeconds();
+  assert.equal(verifier.verify(signedToken(first, sandboxClaims(now)), now).sandboxId, SANDBOX_ID);
+  assert.equal(verifier.verify(signedToken(second, sandboxClaims(now)), now).sandboxId, SANDBOX_ID);
+});
+
+void test("PRD-ISO-02: a token whose kid names a key the verifier does not hold is refused", () => {
+  const held = generateGatewayKey("gateway-key-1");
+  const unheld = generateGatewayKey("gateway-key-2");
+  const now = nowSeconds();
+  assert.throws(() => verifierOf(held).verify(signedToken(unheld, sandboxClaims(now)), now), unauthenticated);
+});
+
+void test("PRD-ISO-02: a token whose kid names one held key but is signed by the other held key is refused", () => {
+  const first = generateGatewayKey("gateway-key-1");
+  const second = generateGatewayKey("gateway-key-2");
+  const verifier = new SupervisorBearerVerifier([verificationKeyOf(first), verificationKeyOf(second)], GATEWAY_ID);
+  const now = nowSeconds();
+  const header = sandboxHeader(first);
+  assert.throws(() => verifier.verify(signedToken(second, sandboxClaims(now), header), now), unauthenticated);
 });
 
 void test("PRD-ISO-02: an expired token is refused", () => {
   const key = generateGatewayKey();
   const now = nowSeconds();
   const claims = sandboxClaims(now, { iat: now - 3700, exp: now - 100 });
-  assert.throws(() => verifierFor(key).verify(signedToken(key, claims), now), unauthenticated);
+  assert.throws(() => verifierOf(key).verify(signedToken(key, claims), now), unauthenticated);
 });
 
 void test("PRD-ISO-02: a token issued in the future, beyond the 30 second leeway, is refused", () => {
   const key = generateGatewayKey();
   const now = nowSeconds();
   const claims = sandboxClaims(now, { iat: now + 60, exp: now + 600 });
-  assert.throws(() => verifierFor(key).verify(signedToken(key, claims), now), unauthenticated);
+  assert.throws(() => verifierOf(key).verify(signedToken(key, claims), now), unauthenticated);
 });
 
 void test("PRD-ISO-02: a token lasting longer than one hour, or without a positive expiry, is refused", () => {
   const key = generateGatewayKey();
   const now = nowSeconds();
-  assert.throws(() => verifierFor(key).verify(signedToken(key, sandboxClaims(now, { exp: now + 7200 })), now), unauthenticated);
-  assert.throws(() => verifierFor(key).verify(signedToken(key, sandboxClaims(now, { exp: 0 })), now), unauthenticated);
+  assert.throws(() => verifierOf(key).verify(signedToken(key, sandboxClaims(now, { exp: now + 7200 })), now), unauthenticated);
+  assert.throws(() => verifierOf(key).verify(signedToken(key, sandboxClaims(now, { exp: 0 })), now), unauthenticated);
 });
 
 void test("PRD-ISO-02: a token whose audience is not the sandbox audience is refused", () => {
   const key = generateGatewayKey();
   const now = nowSeconds();
   for (const aud of ["openshell-gateway", "openshell-gateway:realm", ["openshell-sandbox"], undefined]) {
-    assert.throws(() => verifierFor(key).verify(signedToken(key, sandboxClaims(now, { aud })), now), unauthenticated);
+    assert.throws(() => verifierOf(key).verify(signedToken(key, sandboxClaims(now, { aud })), now), unauthenticated);
   }
 });
 
@@ -156,7 +186,7 @@ void test("PRD-ISO-02: a token whose issuer is not exactly this gateway's issuer
     "openshell-gateway:realm2",
   ];
   for (const iss of issuers) {
-    assert.throws(() => verifierFor(key).verify(signedToken(key, sandboxClaims(now, { iss })), now), unauthenticated, iss);
+    assert.throws(() => verifierOf(key).verify(signedToken(key, sandboxClaims(now, { iss })), now), unauthenticated, iss);
   }
 });
 
@@ -164,18 +194,18 @@ void test("PRD-ISO-02: a bearer minted for another gateway id is refused, and ve
   const key = generateGatewayKey();
   const now = nowSeconds();
   const otherGateway = sandboxClaims(now, { iss: "openshell-gateway:other" });
-  assert.throws(() => verifierFor(key).verify(signedToken(key, otherGateway), now), unauthenticated);
-  const pinnedToOther = new SupervisorBearerVerifier(key.publicPem, "other");
+  assert.throws(() => verifierOf(key).verify(signedToken(key, otherGateway), now), unauthenticated);
+  const pinnedToOther = new SupervisorBearerVerifier([verificationKeyOf(key)], "other");
   assert.equal(pinnedToOther.verify(signedToken(key, otherGateway), now).sandboxId, SANDBOX_ID);
 });
 
 void test("PRD-ISO-02: a token from another issuer, or a subject that names another sandbox, is refused", () => {
   const key = generateGatewayKey();
   const now = nowSeconds();
-  assert.throws(() => verifierFor(key).verify(signedToken(key, sandboxClaims(now, { iss: "other:realm" })), now), unauthenticated);
-  assert.throws(() => verifierFor(key).verify(signedToken(key, sandboxClaims(now, { iss: "openshell-gateway:" })), now), unauthenticated);
+  assert.throws(() => verifierOf(key).verify(signedToken(key, sandboxClaims(now, { iss: "other:realm" })), now), unauthenticated);
+  assert.throws(() => verifierOf(key).verify(signedToken(key, sandboxClaims(now, { iss: "openshell-gateway:" })), now), unauthenticated);
   assert.throws(
-    () => verifierFor(key).verify(signedToken(key, sandboxClaims(now, { sub: "spiffe://openshell/sandbox/sandbox-b" })), now),
+    () => verifierOf(key).verify(signedToken(key, sandboxClaims(now, { sub: "spiffe://openshell/sandbox/sandbox-b" })), now),
     unauthenticated,
   );
 });
@@ -183,7 +213,7 @@ void test("PRD-ISO-02: a token from another issuer, or a subject that names anot
 void test("PRD-ISO-02: a token that carries a claim outside the gateway's set is refused", () => {
   const key = generateGatewayKey();
   const now = nowSeconds();
-  assert.throws(() => verifierFor(key).verify(signedToken(key, sandboxClaims(now, { extra: "x" })), now), unauthenticated);
+  assert.throws(() => verifierOf(key).verify(signedToken(key, sandboxClaims(now, { extra: "x" })), now), unauthenticated);
 });
 
 void test("PRD-ISO-02: a token without its component, sandbox identity, generation, epoch or token id is refused", () => {
@@ -191,7 +221,7 @@ void test("PRD-ISO-02: a token without its component, sandbox identity, generati
   const now = nowSeconds();
   for (const name of ["component", "sandbox_id", "runtime_generation", "jti", "auth_epoch"]) {
     assert.throws(
-      () => verifierFor(key).verify(signedToken(key, sandboxClaims(now, { [name]: undefined })), now),
+      () => verifierOf(key).verify(signedToken(key, sandboxClaims(now, { [name]: undefined })), now),
       unauthenticated,
       name,
     );
@@ -200,12 +230,30 @@ void test("PRD-ISO-02: a token without its component, sandbox identity, generati
 
 void test("PRD-ISO-02: a malformed token is refused", () => {
   const key = generateGatewayKey();
-  const verifier = verifierFor(key);
+  const verifier = verifierOf(key);
   const now = nowSeconds();
   assert.throws(() => verifier.verify("not-a-token", now), unauthenticated);
   assert.throws(() => verifier.verify("a.b", now), unauthenticated);
   assert.throws(() => verifier.verify("a..c", now), unauthenticated);
   assert.throws(() => verifier.verify(`${signedToken(key, sandboxClaims(now))}=`, now), unauthenticated);
+});
+
+void test("PRD-ISO-02: verifyBearer verifies through the sandbox the lookup holds, and refuses one it does not", () => {
+  const key = generateGatewayKey();
+  const now = nowSeconds();
+  const token = signedToken(key, sandboxClaims(now));
+  const verifier = verifierOf(key);
+  const session = verifyBearer((sandboxId) => (sandboxId === SANDBOX_ID ? verifier : undefined), token, now);
+  assert.equal(session.sandboxId, SANDBOX_ID);
+  assert.throws(() => verifyBearer(() => undefined, token, now), unauthenticated);
+  assert.throws(
+    () =>
+      verifyBearer(() => {
+        throw new Error("the launch material could not be read");
+      }, token, now),
+    unauthenticated,
+  );
+  assert.throws(() => verifyBearer(() => verifier, "not-a-token", now), unauthenticated);
 });
 
 void test("PRD-ISO-02: the bearer is read from one Bearer authorization value with a single token", () => {
@@ -226,21 +274,33 @@ void test("PRD-ISO-02: a duplicated authorization value is refused", () => {
   assert.throws(() => bearerFromMetadata(metadataWith(`Bearer ${token}`, `Bearer ${token}`)), unauthenticated);
 });
 
-void test("PRD-ISO-02: the verifier is built only from a PEM Ed25519 public key; anything else refuses with SCHEMA_INVALID", () => {
+void test("PRD-ISO-02: each verification key must be a PEM Ed25519 public key; anything else refuses with SCHEMA_INVALID", () => {
   const key = generateGatewayKey();
-  assert.doesNotThrow(() => new SupervisorBearerVerifier(key.publicPem, GATEWAY_ID));
+  assert.doesNotThrow(() => new SupervisorBearerVerifier([verificationKeyOf(key)], GATEWAY_ID));
   const privatePem = key.privateKey.export({ format: "pem", type: "pkcs8" });
-  assert.throws(() => new SupervisorBearerVerifier(Buffer.from(privatePem as string), GATEWAY_ID), schemaInvalid);
+  assert.throws(() => new SupervisorBearerVerifier([keyWith(Buffer.from(privatePem as string))], GATEWAY_ID), schemaInvalid);
   const rsa = generateKeyPairSync("rsa", { modulusLength: 2048 });
   const rsaPem = rsa.publicKey.export({ format: "pem", type: "spki" });
-  assert.throws(() => new SupervisorBearerVerifier(Buffer.from(rsaPem as string), GATEWAY_ID), schemaInvalid);
-  assert.throws(() => new SupervisorBearerVerifier(new Uint8Array(), GATEWAY_ID), schemaInvalid);
-  assert.throws(() => new SupervisorBearerVerifier(Buffer.from("not a key"), GATEWAY_ID), schemaInvalid);
+  assert.throws(() => new SupervisorBearerVerifier([keyWith(Buffer.from(rsaPem as string))], GATEWAY_ID), schemaInvalid);
+  assert.throws(() => new SupervisorBearerVerifier([keyWith(new Uint8Array())], GATEWAY_ID), schemaInvalid);
+  assert.throws(() => new SupervisorBearerVerifier([keyWith(Buffer.from("not a key"))], GATEWAY_ID), schemaInvalid);
+});
+
+void test("PRD-ISO-02: a verifier refuses an empty key set, or one that names a key id twice, with SCHEMA_INVALID", () => {
+  const key = generateGatewayKey();
+  const sameIdOtherKey = generateGatewayKey();
+  assert.equal(sameIdOtherKey.keyId, key.keyId);
+  assert.throws(() => new SupervisorBearerVerifier([], GATEWAY_ID), schemaInvalid);
+  assert.throws(
+    () => new SupervisorBearerVerifier([verificationKeyOf(key), verificationKeyOf(sameIdOtherKey)], GATEWAY_ID),
+    schemaInvalid,
+  );
+  assert.throws(() => new SupervisorBearerVerifier([verificationKeyOf(key), verificationKeyOf(key)], GATEWAY_ID), schemaInvalid);
 });
 
 void test("PRD-ISO-02: the verifier refuses a gateway id that is missing or outside the configured form, with SCHEMA_INVALID", () => {
   const key = generateGatewayKey();
   for (const gatewayId of ["", "-realm", "realm name", "realm/x", "a".repeat(65)]) {
-    assert.throws(() => new SupervisorBearerVerifier(key.publicPem, gatewayId), schemaInvalid, gatewayId);
+    assert.throws(() => new SupervisorBearerVerifier([verificationKeyOf(key)], gatewayId), schemaInvalid, gatewayId);
   }
 });

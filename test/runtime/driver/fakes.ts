@@ -14,9 +14,13 @@ import {
   OPENSHELL_SANDBOX_NAME_LABEL_KEY,
   OPENSHELL_SANDBOX_ROLE_VALUE,
 } from "../../../src/runtime/openshell.js";
+import { GATEWAY_ID, generateGatewayKey, launchBody } from "../isolation/supervisor-token.js";
 
 export const SANDBOX_IMAGE = `registry.invalid/realm/sandbox@sha256:${"a".repeat(64)}`;
 export const OTHER_DIGEST_IMAGE = `registry.invalid/realm/sandbox@sha256:${"b".repeat(64)}`;
+
+// The key every valid create's launch material is signed under. A test that needs to sign a bearer for that sandbox uses it.
+export const LAUNCH_KEY = generateGatewayKey();
 
 interface FakeContainer {
   readonly id: string;
@@ -84,16 +88,18 @@ export class FakeLifecycle implements Pick<DriverLifecycle, "create" | "delete">
 
 export const IMPLEMENTATION_VERSION = "0.1.2";
 
-// A driver config with fresh temporary roots. The roots exist, so a create or a workspace test starts from a real root.
-// The directories beneath them are not created here.
+// A driver config with fresh temporary roots. The state and workspace roots exist, so a create or a workspace test starts from a
+// real root. The secret root is not created here: the secret store creates it at 0700 on the first write.
 export function driverConfig(overrides: Partial<ComputeDriverConfig> = {}): ComputeDriverConfig {
   const base = mkdtempSync(join(tmpdir(), "realm-driver-test-"));
   const config: ComputeDriverConfig = {
     driverName: "realm",
     sandboxImage: SANDBOX_IMAGE,
     sandboxStateRoot: join(base, "state"),
+    secretRoot: join(base, "secrets"),
     workspaceRoot: join(base, "workspaces"),
     implementationVersion: IMPLEMENTATION_VERSION,
+    gatewayId: GATEWAY_ID,
     ...overrides,
   };
   mkdirSync(config.sandboxStateRoot, { recursive: true });
@@ -101,7 +107,8 @@ export function driverConfig(overrides: Partial<ComputeDriverConfig> = {}): Comp
   return config;
 }
 
-// A create request the realm profile accepts. Each test changes one field to make a refusal.
+// A create request the realm profile accepts, carrying launch material the driver can verify with. Each test changes one field
+// to make a refusal.
 export function validSandbox(overrides: Partial<DriverSandboxMessage> = {}): DriverSandboxMessage {
   return {
     id: "sandbox-1",
@@ -112,6 +119,7 @@ export function validSandbox(overrides: Partial<DriverSandboxMessage> = {}): Dri
       command: ["/usr/bin/true"],
       resource_requirements: null,
       isolation_backend: null,
+      launch_authentication: launchBody(LAUNCH_KEY),
       template: {
         image: SANDBOX_IMAGE,
         environment: {},

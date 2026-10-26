@@ -2,10 +2,11 @@
 // SandboxProtocol service on one authenticated Unix socket. The socket is the only transport boundary: its parent directory
 // is the realm account's (0700) and the socket is 0600, under the same rules as the driver's socket (server.ts).
 //
-// The backend verifies the supervisor's bearer with the verifier its caller provisions (bearer.ts), which the caller builds
-// from the gateway public key and gateway id. The backend reads no key itself. Boundary handles live in the driver's
-// BoundaryRegistry, which the compute driver shares, so a DeleteSandbox invalidates handles in this process. The resource a
-// boundary binds to comes from the driver's own record of the sandbox the verified bearer names (ProvisionedResources).
+// The backend verifies the supervisor's bearer with the verifier of the sandbox the bearer names. The caller provisions a lookup
+// from a sandbox to its verifier, built from that sandbox's launch material (bearer.ts, launch.ts). The backend reads no key
+// itself. Boundary handles live in the driver's BoundaryRegistry, which the compute driver shares, so a DeleteSandbox invalidates
+// handles in this process. The resource a boundary binds to comes from the driver's own record of the sandbox the verified
+// bearer names (ProvisionedResources).
 //
 // Describe conveys PeerMetadata only, no credential, and it advertises no optional capability. OpenBoundary is served here.
 // SuspendBoundary, ResumeBoundary, and Mediate return UNIMPLEMENTED and change no state. The SandboxProtocol Exchange stream is
@@ -26,7 +27,7 @@ import { makeRealmError } from "../../../core/errors.js";
 import { DriverStatusError, driverFailureOf, driverNotFound, driverUnimplemented, toServerError } from "../grpc-status.js";
 import { isImplementationVersion, protoIncludeDirectory } from "../compute-driver.js";
 import { startSocketServer, type BoundService, type SocketServer } from "../server.js";
-import { bearerFromMetadata, type SupervisorBearerVerifier } from "./bearer.js";
+import { bearerFromMetadata, verifyBearer, type VerifierLookup } from "./bearer.js";
 import type { BoundaryRegistry, ProvisionedResources } from "./boundary.js";
 import { exchange, type SandboxProtocolDeps } from "./protocol.js";
 
@@ -38,10 +39,10 @@ const IMPLEMENTATION_NAME = "realm/podman-isolation";
 // The base contract this backend speaks. Version 1.0 is the only one, and no optional capability is advertised.
 const PROTOCOL_VERSION = Object.freeze({ major: 1, minor: 0 });
 
-// What the driver provisions from the gateway's launch authentication: the verifier of the supervisor's sandbox bearer,
-// built from the gateway public key and gateway id by the driver's entry point.
+// What the driver provisions for the bearer check: the verifier of each sandbox's supervisor bearer, from that sandbox's launch
+// material. The lookup answers undefined for a sandbox that holds none, and such a bearer is refused.
 export interface BackendProvisioning {
-  readonly verifier: SupervisorBearerVerifier;
+  readonly verifierFor: VerifierLookup;
 }
 
 export interface IsolationBackendOptions {
@@ -92,7 +93,7 @@ export async function startIsolationBackend(options: IsolationBackendOptions): P
     {
       service: protocol,
       implementation: sandboxProtocolImplementation({
-        verifier: options.provisioning.verifier,
+        verifier: { verify: (token: string) => verifyBearer(options.provisioning.verifierFor, token) },
         boundaries: options.boundaries,
         resources: options.resources,
       }),
@@ -122,12 +123,13 @@ function describe(supervisor: PeerMetadataIn | null | undefined, implementationV
   };
 }
 
-// Binds the sandbox the verified bearer names to the driver's resource for it. The bearer is verified first, and the driver's record
-// is read and the handle bound in one synchronous run, so a refused bearer or an unknown sandbox changes no state. Reopening the same
-// launch returns the same handle, and a different resource for it fails in the registry. The outcome is always FRESH: the supervisor's
-// client accepts no other, and a reopen returns the same result (isolation_backend.proto, OpenBoundary).
+// Binds the sandbox the verified bearer names to the driver's resource for it. The bearer is verified first, with the launch keys
+// of the sandbox it names, and the driver's record is read and the handle bound in one synchronous run, so a refused bearer or an
+// unknown sandbox changes no state. Reopening the same launch returns the same handle, and a different resource for it fails in the
+// registry. The outcome is always FRESH: the supervisor's client accepts no other, and a reopen returns the same result
+// (isolation_backend.proto, OpenBoundary).
 function openBoundary(options: IsolationBackendOptions, request: OpenBoundaryIn, metadata: Metadata): Record<string, unknown> {
-  const session = options.provisioning.verifier.verify(bearerFromMetadata(metadata));
+  const session = verifyBearer(options.provisioning.verifierFor, bearerFromMetadata(metadata));
   const resource = options.resources.provisionedResource(session.sandboxId);
   if (resource === undefined) {
     throw new DriverStatusError(driverNotFound("the sandbox has no provisioned resource"));

@@ -1,20 +1,18 @@
 // The supervisor bearer check for the isolation backend (phase 9.5, PRD-ISO-02, PRD-ISO-03).
 //
 // The supervisor presents a gateway-minted sandbox session token as `authorization: Bearer <token>` on a Sandbox Protocol
-// stream. This module verifies it against the one gateway public key the driver was started with, and against the one gateway
-// identity the driver was started with: the token's issuer must be exactly `openshell-gateway:<gateway id>`. It mirrors the
-// gateway's sandbox-profile verifier (crates/openshell-core/src/jwt.rs, SessionJwtVerifier::verify and validate_claims) at the
-// pinned source revision: the same header type, audience, subject, claim set and lifetime rules.
+// stream. The keys that verify it are the verification keys of that sandbox's launch material (launch.ts), stored at create.
+// The token's header kid selects one of them by key id, as the gateway's SessionJwtVerifier does (crates/openshell-core/src/jwt.rs,
+// SessionJwtVerifier::verify). The driver's gateway id is the issuer pin: the token's issuer must be exactly
+// `openshell-gateway:<gateway id>`. The claim rules mirror the gateway's sandbox profile: the same header type, audience, subject,
+// claim set and lifetime bounds.
 //
-// The algorithm is pinned to EdDSA by an exact match on the header, so "none", HMAC, and any other algorithm fail before
-// a signature is read. The key is an Ed25519 public key only; node:crypto verifies with that key's own algorithm and
-// never with a key the token names. The key identifier is the gateway's: the first 16 bytes of SHA-256 over the public
-// key's SubjectPublicKeyInfo DER, hex-encoded (crates/openshell-bootstrap/src/jwt.rs, kid_from_public_key_der). A token
-// whose kid is not that identifier fails.
-//
-// Every refusal is an UNAUTHENTICATED status with a fixed reason. No reason carries a token, a claim value or a key.
+// The algorithm is pinned to EdDSA by an exact match on the header, so "none", HMAC, and any other algorithm fail before a
+// signature is read. Every key is an Ed25519 public key; node:crypto verifies with the key the kid selects and never with a key
+// the token names. Every refusal is an UNAUTHENTICATED status with a fixed reason. No reason carries a token, a claim value or a
+// key.
 
-import { createHash, createPublicKey, verify as verifySignature, type KeyObject } from "node:crypto";
+import { createPublicKey, verify as verifySignature, type KeyObject } from "node:crypto";
 import { status, type Metadata } from "@grpc/grpc-js";
 import { makeRealmError } from "../../../core/errors.js";
 import { DriverStatusError } from "../grpc-status.js";
@@ -26,6 +24,7 @@ const GATEWAY_ISSUER_PREFIX = "openshell-gateway:";
 const SANDBOX_SUBJECT_PREFIX = "spiffe://openshell/sandbox/";
 const SUPERVISOR_COMPONENT = "openshell-supervisor";
 const ALGORITHM = "EdDSA";
+const PEM_PUBLIC_KEY_HEADER = "-----BEGIN PUBLIC KEY-----";
 // The gateway's bounds: a token issued up to 30 seconds ahead of this clock is accepted, and its lifetime is at most one hour.
 const CLOCK_LEEWAY_SECONDS = 30;
 const MAX_LIFETIME_SECONDS = 3600;
@@ -58,13 +57,16 @@ export interface SupervisorSession {
   readonly expiresAt: number;
 }
 
-type Json = Readonly<Record<string, unknown>>;
-
-// The gateway's key identifier for a public key: hex of the first 16 bytes of SHA-256 over its SPKI DER.
-export function gatewayKeyId(publicKey: KeyObject): string {
-  const der = publicKey.export({ format: "der", type: "spki" });
-  return createHash("sha256").update(der).digest("hex").slice(0, 32);
+// One verification key of a sandbox's launch material: the key id the gateway assigned and the PEM public key it names.
+export interface VerificationKey {
+  readonly keyId: string;
+  readonly publicKeyPem: Uint8Array;
 }
+
+// The verifier of one sandbox's bearers, or undefined when the sandbox holds no launch material.
+export type VerifierLookup = (sandboxId: string) => SupervisorBearerVerifier | undefined;
+
+type Json = Readonly<Record<string, unknown>>;
 
 // Reads the bearer from the call metadata. Exactly one authorization value is accepted, with the Bearer scheme, and its
 // credential is one token with no whitespace, as the gateway's sandbox protocol reads it.
@@ -88,32 +90,36 @@ export function bearerFromMetadata(metadata: Metadata): string {
   return token;
 }
 
+// Verifies a bearer with the launch keys of the sandbox it names. The name is read from the unverified payload only to choose
+// the keys; the verified claims must then name the same sandbox, and the signature must check under a key the header's kid
+// selects. A sandbox with no usable launch material is refused, and nothing else is read.
+export function verifyBearer(lookup: VerifierLookup, token: string, nowSeconds?: number): SupervisorSession {
+  const sandboxId = claimedSandboxId(token);
+  let verifier: SupervisorBearerVerifier | undefined;
+  try {
+    verifier = lookup(sandboxId);
+  } catch {
+    throw unauthenticated("the sandbox has no usable launch material");
+  }
+  if (verifier === undefined) {
+    throw unauthenticated("the sandbox has no launch material");
+  }
+  return verifier.verify(token, nowSeconds);
+}
+
+// Verifies tokens with one sandbox's launch keys, pinned to the gateway the driver serves.
 export class SupervisorBearerVerifier {
-  private readonly publicKey: KeyObject;
-  private readonly keyId: string;
+  private readonly keys: ReadonlyMap<string, KeyObject>;
   private readonly issuer: string;
 
-  // Accepts only a PEM public key on an Ed25519 key, for the one gateway it names. A private key, another algorithm, unreadable
-  // content, or a gateway id outside the configured form fails with SCHEMA_INVALID and names none of the input.
-  constructor(publicKeyPem: Uint8Array, gatewayId: string) {
+  // Accepts the verification keys of one sandbox's launch material and the gateway id the driver is pinned to. A key that is
+  // not a PEM Ed25519 public key, a duplicate key id, no keys, or a gateway id outside the configured form fails with
+  // SCHEMA_INVALID and names none of the input.
+  constructor(keys: readonly VerificationKey[], gatewayId: string) {
     if (!GATEWAY_ID_PATTERN.test(gatewayId)) {
       throw makeRealmError("SCHEMA_INVALID");
     }
-    const text = Buffer.from(publicKeyPem).toString("utf8");
-    if (!text.includes("-----BEGIN PUBLIC KEY-----")) {
-      throw makeRealmError("SCHEMA_INVALID");
-    }
-    let key: KeyObject;
-    try {
-      key = createPublicKey({ key: text, format: "pem", type: "spki" });
-    } catch {
-      throw makeRealmError("SCHEMA_INVALID");
-    }
-    if (key.type !== "public" || key.asymmetricKeyType !== "ed25519") {
-      throw makeRealmError("SCHEMA_INVALID");
-    }
-    this.publicKey = key;
-    this.keyId = gatewayKeyId(key);
+    this.keys = parseVerificationKeys(keys);
     this.issuer = `${GATEWAY_ISSUER_PREFIX}${gatewayId}`;
   }
 
@@ -132,16 +138,55 @@ export class SupervisorBearerVerifier {
     if (header.typ !== SANDBOX_SESSION_JWT_TYPE) {
       throw unauthenticated("the supervisor bearer has the wrong token type");
     }
-    if (header.kid !== this.keyId) {
-      throw unauthenticated("the supervisor bearer is not signed by the gateway key");
+    const key = typeof header.kid === "string" ? this.keys.get(header.kid) : undefined;
+    if (key === undefined) {
+      throw unauthenticated("the supervisor bearer is not signed by a launch key of this sandbox");
     }
     const signed = Buffer.from(`${headerSegment}.${payloadSegment}`, "utf8");
     const signature = Buffer.from(signatureSegment, "base64url");
-    if (!verifySignature(null, signed, this.publicKey, signature)) {
-      throw unauthenticated("the supervisor bearer is not signed by the gateway key");
+    if (!verifySignature(null, signed, key, signature)) {
+      throw unauthenticated("the supervisor bearer is not signed by a launch key of this sandbox");
     }
     return checkClaims(parseObject(payloadSegment), this.issuer, nowSeconds);
   }
+}
+
+// Parses each key's PEM as an Ed25519 public key. The key ids must be distinct, and there must be at least one key.
+export function parseVerificationKeys(keys: readonly VerificationKey[]): ReadonlyMap<string, KeyObject> {
+  if (keys.length === 0) {
+    throw makeRealmError("SCHEMA_INVALID");
+  }
+  const parsed = new Map<string, KeyObject>();
+  for (const key of keys) {
+    const text = Buffer.from(key.publicKeyPem).toString("utf8");
+    if (!text.includes(PEM_PUBLIC_KEY_HEADER)) {
+      throw makeRealmError("SCHEMA_INVALID");
+    }
+    let object: KeyObject;
+    try {
+      object = createPublicKey({ key: text, format: "pem", type: "spki" });
+    } catch {
+      throw makeRealmError("SCHEMA_INVALID");
+    }
+    if (object.type !== "public" || object.asymmetricKeyType !== "ed25519" || parsed.has(key.keyId)) {
+      throw makeRealmError("SCHEMA_INVALID");
+    }
+    parsed.set(key.keyId, object);
+  }
+  return parsed;
+}
+
+// The sandbox id the payload names, read before the signature is checked. It is used only to choose the launch keys.
+function claimedSandboxId(token: string): string {
+  const payload = token.split(".")[1];
+  if (payload === undefined || !BASE64URL_PATTERN.test(payload)) {
+    throw unauthenticated("the supervisor bearer is malformed");
+  }
+  const sandboxId = parseObject(payload).sandbox_id;
+  if (typeof sandboxId !== "string" || sandboxId === "" || WHITESPACE_PATTERN.test(sandboxId)) {
+    throw unauthenticated("the supervisor bearer has an invalid sandbox identity");
+  }
+  return sandboxId;
 }
 
 // Decodes one base64url JSON object. A segment that is not a JSON object is malformed.

@@ -1,13 +1,14 @@
 // Hardened container lifecycle of the driver (phase 9.3, PRD-CTR-01..03). create builds the container from a
-// typed spec, starts it, and proves it conforms before it is returned. delete removes a sandbox's own containers and
-// its own state directory. startupSweep removes every realm-labelled container before any request is accepted.
+// typed spec, starts it, and proves it conforms before it is returned. delete removes a sandbox's own containers, its own state
+// directory, and its launch material. startupSweep removes every realm-labelled container, and every sandbox's launch material,
+// before any request is accepted.
 //
 // Everything here goes through the closed libpod client (PD-11). The verifier is the same one session-execution
 // uses (PD-13): verifyInspect over HARDENING_PROFILE, with the kernel capability sets attached from the host's
 // /proc. The checks the verifier does not make are added here, after it. The state root is a constructor argument;
-// this module reads no host environment.
+// this module reads no host environment. The secret directories are handled by secret-store.ts.
 
-import { lstatSync, readdirSync, realpathSync, rmdirSync, rmSync, unlinkSync, type Dirent, type Stats } from "node:fs";
+import { lstatSync, readdirSync, realpathSync, rmSync, type Dirent, type Stats } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { makeRealmError, RealmError, type ErrorCode } from "../../core/errors.js";
 import { attachKernelCaps, readHostProcStatus } from "../kernel-caps.js";
@@ -27,6 +28,7 @@ import {
   OPENSHELL_SANDBOX_NAME_LABEL_KEY,
 } from "../openshell.js";
 import { removeAllRealmContainers } from "../sweep.js";
+import { presentSecretFiles, removeAllSecrets, removeSecretDirIfEmpty, removeSecretFiles, secretDirOf } from "./secret-store.js";
 
 // Grace period a sandbox container gets to stop before it is killed. Matches the session composition's grace.
 const STOP_GRACE_MS = 10_000;
@@ -37,9 +39,6 @@ const STOP_GRACE_MS = 10_000;
 const SECRET_NAME_PATTERN =
   /secret|token|credential|passw|private|apikey|id_rsa|id_ed25519|kubeconfig|\.npmrc|\.netrc|\.pgpass|\.htpasswd|\.key$|\.pem$|\.env$|\.p12$|\.pfx$|\.jks$/i;
 const GROUP_OR_WORLD_BITS = 0o077;
-
-// The files of a sandbox's secret directory that delete removes: the launch file and the active marker.
-const SECRET_FILE_NAMES: readonly string[] = Object.freeze(["launch.json", "active"]);
 
 // C1. The options every workspace mount must carry, so the workspace is not executable, suid or device-bearing.
 const WORKSPACE_REQUIRED_OPTIONS: readonly string[] = Object.freeze(["noexec", "nosuid", "nodev"]);
@@ -61,7 +60,7 @@ export interface DriverLifecycleOptions {
   // Absolute root of the per-sandbox state directories. A sandbox's state directory is exactly <root>/<sandboxName>.
   readonly sandboxStateRoot: string;
   // Absolute root of the per-sandbox secret directories, <root>/<sandboxName>. It is never bound into a container and
-  // must lie outside the state root. delete removes the sandbox's launch and active files from it.
+  // must lie outside the state root. delete and startupSweep remove the sandbox's launch material from it.
   readonly secretRoot: string;
   // Reads the text of a host process's status file. The create-time check reads the init process through it (D-51).
   readonly readProcStatus?: ((pid: number) => string) | undefined;
@@ -108,11 +107,13 @@ export class DriverLifecycle {
     this.removeDirectory = options.removeDirectory ?? removeTree;
   }
 
-  // Removes every realm-owned container and resolves with how many it removed. create and delete refuse with
-  // REALM_NOT_ACTIVE until this has resolved, so no request is accepted ahead of the sweep (PRD-CTR-03).
+  // Removes every realm-owned container and every sandbox's launch material, and resolves with how many containers it removed.
+  // create and delete refuse with REALM_NOT_ACTIVE until this has resolved, so no request is accepted ahead of the sweep (PRD-CTR-03).
+  // A symbolic link under the secret root refuses the sweep, so the driver does not start on it.
   async startupSweep(): Promise<number> {
     this.swept = false;
     const removed = await removeAllRealmContainers(this.libpod);
+    removeAllSecrets(this.secretRoot);
     this.swept = true;
     return removed;
   }
@@ -168,16 +169,16 @@ export class DriverLifecycle {
   // Stops and force-removes the containers that are this sandbox's own, then removes the sandbox's state directory.
   // A container is this sandbox's own only when it carries the managed and sandbox-name labels, and its name is the
   // sandbox name. Every role of the sandbox counts, the supervisor included. The name must be a realm sandbox name and
-  // one container-name-safe segment. The directory
-  // is checked before any container is touched, and a symlink or other non-directory is refused, never followed.
-  // Then the sandbox's launch and active files are removed from its secret directory, and that directory when empty.
+  // one container-name-safe segment. The directory is checked before any container is touched, and a symlink or other
+  // non-directory is refused, never followed. Then the sandbox's launch and active files are removed from its secret
+  // directory, and that directory when empty.
   async delete(sandboxName: string): Promise<void> {
     this.requireSwept();
     const dir = sandboxDirOf(this.sandboxStateRoot, sandboxName);
     const dirExists = sandboxDirExists(dir);
     // The secret directory follows the same name rule. Its launch and active entries are checked here, before any
     // container is touched, so a symbolic link or other non-regular entry there refuses the delete with nothing removed.
-    const secretDir = sandboxDirOf(this.secretRoot, sandboxName);
+    const secretDir = secretDirOf(this.secretRoot, sandboxName);
     const secretFiles = presentSecretFiles(secretDir);
     const listed = await this.libpod.listContainersByLabel(OPENSHELL_SANDBOX_NAME_LABEL_KEY, sandboxName);
     for (const container of listed) {
@@ -458,7 +459,7 @@ function namedAs(inspect: LibpodInspect, sandboxName: string): boolean {
   return (name.startsWith("/") ? name.slice(1) : name) === sandboxName;
 }
 
-// The sandbox's own directory: the state root joined with the sandbox name. The name must be a realm sandbox name
+// The sandbox's own state directory: the state root joined with the sandbox name. The name must be a realm sandbox name
 // and one container-name-safe segment, which admits no separator, so the join stays under the root.
 function sandboxDirOf(root: string, sandboxName: string): string {
   if (!isRealmSandboxName(sandboxName) || !CONTAINER_ID_PATTERN.test(sandboxName)) {
@@ -499,7 +500,8 @@ function lstatOrAbsent(path: string, failure: ErrorCode): Stats | null {
 }
 
 // The secret root must be absolute, must be neither the bound state directory nor inside it, and must not be a
-// symbolic link. A missing secret root is allowed; delete then has nothing to remove there.
+// symbolic link. A missing secret root is allowed; the store creates it at the first write, and the sweep and delete
+// then have nothing to remove there.
 function assertSecretRoot(secretRoot: string, stateRoot: string): void {
   if (!isAbsolute(secretRoot) || within(resolve(secretRoot), resolve(stateRoot))) {
     throw makeRealmError("SCHEMA_INVALID");
@@ -507,55 +509,5 @@ function assertSecretRoot(secretRoot: string, stateRoot: string): void {
   const stat = lstatOrAbsent(resolve(secretRoot), "SCHEMA_INVALID");
   if (stat !== null && stat.isSymbolicLink()) {
     throw makeRealmError("SCHEMA_INVALID");
-  }
-}
-
-// The launch and active entries of a sandbox's secret directory that exist. They are checked here, before anything is
-// removed. A missing directory has none. A symbolic link or other non-regular entry at either is refused, and is
-// never followed or removed.
-function presentSecretFiles(dir: string): string[] {
-  if (!sandboxDirExists(dir)) {
-    return [];
-  }
-  const present: string[] = [];
-  for (const name of SECRET_FILE_NAMES) {
-    const path = join(dir, name);
-    const stat = lstatOrAbsent(path, "CLEANUP_FAILED");
-    if (stat === null) {
-      continue;
-    }
-    if (stat.isSymbolicLink() || !stat.isFile()) {
-      throw makeRealmError("SCHEMA_INVALID");
-    }
-    present.push(path);
-  }
-  return present;
-}
-
-// Removes the given secret files. A file already gone is not an error; any other failure is refused.
-function removeSecretFiles(paths: readonly string[]): void {
-  for (const path of paths) {
-    try {
-      unlinkSync(path);
-    } catch (error) {
-      if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) {
-        throw makeRealmError("CLEANUP_FAILED");
-      }
-    }
-  }
-}
-
-// Removes the sandbox's secret directory when it holds nothing. A missing directory is fine; a directory that still
-// holds an entry is left as it is.
-function removeSecretDirIfEmpty(dir: string): void {
-  if (!sandboxDirExists(dir)) {
-    return;
-  }
-  try {
-    if (readdirSync(dir).length === 0) {
-      rmdirSync(dir);
-    }
-  } catch {
-    throw makeRealmError("CLEANUP_FAILED");
   }
 }
