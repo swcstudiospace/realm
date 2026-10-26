@@ -102,7 +102,7 @@ async function createSession(f: Fixture): Promise<{ readonly containerId: string
   return f.exec.create({ idempotencyKey: SESSION, workspaceRoot: f.workspaceRoot });
 }
 
-void test("RT-03: the workload starts only through the OpenShell create argv, with the workload after the separator", async (t) => {
+void test("RT-03: the session create argv names no workload command, and the create is the only OpenShell run", async (t) => {
   const f = await fixture(t);
   const { containerId } = await createSession(f);
   await f.exec.start(containerId);
@@ -114,7 +114,7 @@ void test("RT-03: the workload starts only through the OpenShell create argv, wi
   assert.equal(calls.length, 1, "the OpenShell runner is called exactly once, by create");
   const argv = calls[0]?.argv ?? [];
   assert.deepEqual(argv.slice(0, 3), ["openshell", "sandbox", "create"]);
-  assert.deepEqual(argv.slice(argv.indexOf("--") + 1), WORKLOAD);
+  assert.equal(argv.includes("--"), false, "the create argv names no command");
 });
 
 void test("RT-03: the libpod client has no exec or attach method, and only container create and start among start methods", async (t) => {

@@ -280,3 +280,12 @@ void test("stopping during the backoff wait leaves no restart after stop and no 
     timers.restore();
   }
 });
+
+void test("a runner that exited while the session was active is reported as AGENTOS_CRASH_LOOP at once, with no probe and no restart (RT-04)", async () => {
+  const { driver, supervisor } = harness();
+  await supervisor.start();
+  driver.exitRunner();
+  await assertCrashLoop(supervisor.check());
+  assert.equal(driver.callCount("alive"), 0, "the exit is reported without a probe");
+  assert.equal(driver.callCount("start"), 1, "the supervisor does not restart a runner that exited");
+});

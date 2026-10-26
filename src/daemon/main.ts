@@ -8,6 +8,7 @@
 import { RealmError, type ErrorCode } from "../core/errors.js";
 import { defaultPolicyPath, isDirectEntry, podmanSocketPath, readHostRuntime } from "../runtime/host-paths.js";
 import { createOpenShellAgentOsDriver } from "../runtime/agentos-driver.js";
+import { productionRunnerChild } from "../runtime/agentos-workload.js";
 import type { AgentOsDriver } from "../runtime/agentos.js";
 import { writePolicyDocument } from "../runtime/openshell.js";
 import { productionOpenShellRunner, SANDBOX_CPUS, SANDBOX_MEMORY } from "../runtime/session-execution.js";
@@ -61,6 +62,7 @@ function agentosDriverFromEnv(env: EnvironmentLike, stateDir: string): AgentOsDr
   }
   return createOpenShellAgentOsDriver({
     runner: productionOpenShellRunner(env),
+    spawnRunner: productionRunnerChild(env),
     imageRef,
     policyPath: writePolicyDocument(stateDir, AGENTOS_SESSION_ID, [], AGENTOS_WORKLOAD_BINARY),
     cpus: SANDBOX_CPUS,

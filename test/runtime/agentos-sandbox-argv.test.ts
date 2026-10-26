@@ -22,12 +22,31 @@ function refusedWith(code: ErrorCode): (error: unknown) => boolean {
   return (error: unknown) => error instanceof RealmError && error.code === code;
 }
 
-void test("the create argv carries the image through --from, before the workload separator", () => {
+void test("the create argv carries the image through --from and no command", () => {
   const { create } = buildAgentOsSandboxArgv(REQUEST);
   const from = create.indexOf("--from");
   assert.notEqual(from, -1);
   assert.equal(create[from + 1], REQUEST.imageRef);
-  assert.ok(from < create.indexOf("--"));
+  assert.equal(create.includes("--"), false);
+  assert.equal(create.includes("--no-keep"), false);
+});
+
+void test("the runner argv is the pinned exec form that runs the runner in the sandbox", () => {
+  const { runner } = buildAgentOsSandboxArgv(REQUEST);
+  assert.deepEqual(runner, [
+    OPENSHELL_BINARY,
+    "sandbox",
+    "exec",
+    "--name",
+    "realm-agentos",
+    "--workdir",
+    "/workspace",
+    "--no-tty",
+    "--no-login-shell",
+    "--",
+    "node",
+    REQUEST.runnerPath,
+  ]);
 });
 
 void test("the probe and delete argv name the same sandbox as the create argv", () => {
@@ -43,7 +62,6 @@ void test("a session create argv carries no --from when no image is given", () =
     policyPath: REQUEST.policyPath,
     cpus: 2,
     memory: "4Gi",
-    workloadArgv: ["node", "/app/session.js"],
   });
   assert.equal(argv.includes("--from"), false);
 });
@@ -58,7 +76,6 @@ void test("an empty image reference is refused with SCHEMA_INVALID by both build
         cpus: 2,
         memory: "4Gi",
         imageRef: "",
-        workloadArgv: ["node", "/x.js"],
       }),
     refusedWith("SCHEMA_INVALID"),
   );

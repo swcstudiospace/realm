@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { RealmError, type ErrorCode } from "../../src/core/errors.js";
 import { createOpenShellAgentOsDriver, type OpenShellAgentOsDriverOptions } from "../../src/runtime/agentos-driver.js";
+import type { RunnerChild } from "../../src/runtime/agentos-workload.js";
 import { OPENSHELL_BINARY, type OpenShellRunner } from "../../src/runtime/openshell.js";
 
 const IMAGE = `localhost/realm-agentos@sha256:${"a".repeat(64)}`;
@@ -9,55 +10,136 @@ const POLICY = "/realm-state/agentos/policy.json";
 const RUNNER = "/usr/local/lib/realm/agentos-runner.js";
 const PROBE = "/usr/local/lib/realm/agentos-probe.js";
 const TIMEOUT_MS = 2500;
+const PROBE_INTERVAL_MS = 5;
+// The runner child's argv: the pinned exec form that runs the runner in the sandbox after create (D-92).
+const RUNNER_EXEC = [
+  OPENSHELL_BINARY,
+  "sandbox",
+  "exec",
+  "--name",
+  "realm-agentos",
+  "--workdir",
+  "/workspace",
+  "--no-tty",
+  "--no-login-shell",
+  "--",
+  "node",
+  RUNNER,
+];
+const DELETE = [OPENSHELL_BINARY, "sandbox", "delete", "realm-agentos"];
+
+type Verb = "create" | "delete" | "probe";
+// One scripted OpenShell answer: an exit code, or "reject" for a runner that rejects.
+type Answer = number | "reject";
+
+interface Answers {
+  // Answers for each create, in order. The last one repeats. Default [0].
+  readonly creates?: readonly Answer[];
+  // Answers for each probe, in order. The last one repeats. Default [0].
+  readonly probes?: readonly Answer[];
+  // Answers for each delete, in order. The last one repeats. Default [0].
+  readonly deletes?: readonly Answer[];
+  // Makes every spawned runner child exit as soon as it is spawned.
+  readonly childExitsOnSpawn?: boolean;
+  readonly startTimeoutMs?: number;
+}
 
 interface Recorded {
   readonly argv: readonly string[];
   readonly timeoutMs: number;
 }
 
-type Scripted = { readonly exitCode: number } | { readonly reject: Error };
-
-// A runner that records every call and answers from a script, in order. Running past the script is a
-// test failure, never a silent success.
-function scriptedRunner(script: readonly Scripted[]): { readonly runner: OpenShellRunner; readonly calls: Recorded[] } {
-  const calls: Recorded[] = [];
-  const queue = [...script];
-  const runner: OpenShellRunner = (argv, options) => {
-    calls.push({ argv, timeoutMs: options.timeoutMs });
-    const next = queue.shift();
-    if (next === undefined) {
-      return Promise.reject(new Error("the runner received more calls than the test scripted"));
-    }
-    if ("reject" in next) {
-      return Promise.reject(next.reject);
-    }
-    return Promise.resolve({ exitCode: next.exitCode });
-  };
-  return { runner, calls };
+// A runner child the test controls. exit() ends it as the OS would; terminate() records the kill in the step log.
+interface FakeChild extends RunnerChild {
+  exit(): void;
 }
 
-function optionsWith(
-  runner: OpenShellRunner,
-  overrides: Partial<OpenShellAgentOsDriverOptions> = {},
-): OpenShellAgentOsDriverOptions {
+interface Harness {
+  readonly options: OpenShellAgentOsDriverOptions;
+  // Every step in order: create, spawn, probe, terminate, delete.
+  readonly steps: string[];
+  readonly calls: Recorded[];
+  readonly spawns: string[][];
+  readonly children: FakeChild[];
+}
+
+// Takes the scripted answer for the nth call of one kind. The last answer repeats once the script runs out.
+function entry<T>(script: readonly T[], n: number): T {
+  const value = script[Math.min(n, script.length - 1)];
+  assert.ok(value !== undefined, "a scripted answer is required");
+  return value;
+}
+
+function fakeChild(steps: string[]): FakeChild {
+  let exited = false;
   return {
+    exit: () => {
+      exited = true;
+    },
+    hasExited: () => exited,
+    terminate: () => {
+      steps.push("terminate");
+      exited = true;
+      return Promise.resolve();
+    },
+  };
+}
+
+function harness(answers: Answers = {}): Harness {
+  const steps: string[] = [];
+  const calls: Recorded[] = [];
+  const spawns: string[][] = [];
+  const children: FakeChild[] = [];
+  const counts: Record<Verb, number> = { create: 0, delete: 0, probe: 0 };
+  const creates = answers.creates ?? [0];
+  const probes = answers.probes ?? [0];
+  const deletes = answers.deletes ?? [0];
+  const runner: OpenShellRunner = (argv, options) => {
+    calls.push({ argv: [...argv], timeoutMs: options.timeoutMs });
+    const verb: Verb = argv[2] === "create" ? "create" : argv[2] === "delete" ? "delete" : "probe";
+    steps.push(verb);
+    const script = verb === "create" ? creates : verb === "delete" ? deletes : probes;
+    const scripted = entry(script, counts[verb]);
+    counts[verb] += 1;
+    if (scripted === "reject") {
+      return Promise.reject(new Error("runner failed"));
+    }
+    return Promise.resolve({ exitCode: scripted });
+  };
+  const spawnRunner = (argv: readonly string[]): FakeChild => {
+    steps.push("spawn");
+    spawns.push([...argv]);
+    const child = fakeChild(steps);
+    if (answers.childExitsOnSpawn === true) {
+      child.exit();
+    }
+    children.push(child);
+    return child;
+  };
+  const options: OpenShellAgentOsDriverOptions = {
     runner,
+    spawnRunner,
     imageRef: IMAGE,
     policyPath: POLICY,
     cpus: 2,
     memory: "4Gi",
     runnerPath: RUNNER,
     probePath: PROBE,
-    startTimeoutMs: TIMEOUT_MS,
+    startTimeoutMs: answers.startTimeoutMs ?? TIMEOUT_MS,
     callTimeoutMs: TIMEOUT_MS,
-    ...overrides,
+    probeIntervalMs: PROBE_INTERVAL_MS,
   };
+  return { options, steps, calls, spawns, children };
 }
 
-function callAt(calls: readonly Recorded[], index: number): Recorded {
-  const call = calls[index];
-  assert.ok(call !== undefined, `expected runner call ${String(index)}`);
-  return call;
+function driverOf(h: Harness) {
+  return createOpenShellAgentOsDriver(h.options);
+}
+
+function childAt(h: Harness, index: number): FakeChild {
+  const child = h.children[index];
+  assert.ok(child !== undefined, `expected runner child ${String(index)}`);
+  return child;
 }
 
 async function assertCode(work: Promise<unknown>, code: ErrorCode): Promise<void> {
@@ -68,90 +150,143 @@ function refusedWith(code: ErrorCode): (error: unknown) => boolean {
   return (error: unknown) => error instanceof RealmError && error.code === code;
 }
 
-void test("start creates the sandbox with the derived image through --from and the runner as workload", async () => {
-  const { runner, calls } = scriptedRunner([{ exitCode: 0 }]);
-  await createOpenShellAgentOsDriver(optionsWith(runner)).start();
-  const argv = callAt(calls, 0).argv;
+void test("create runs the sandbox through --from with no command after it and no --no-keep", async () => {
+  const h = harness();
+  await driverOf(h).start();
+  const argv = h.calls[0]?.argv ?? [];
   assert.equal(argv[argv.indexOf("--name") + 1], "realm-agentos");
   assert.equal(argv[argv.indexOf("--from") + 1], IMAGE);
-  assert.deepEqual(argv.slice(argv.indexOf("--") + 1), ["node", RUNNER]);
+  assert.equal(argv.includes("--"), false, "the create argv carries no command separator");
+  assert.equal(argv.includes("--no-keep"), false);
 });
 
-void test("start rejects with OPENSHELL_START_FAILED when the create exits non-zero", async () => {
-  const { runner } = scriptedRunner([{ exitCode: 1 }]);
-  await assertCode(createOpenShellAgentOsDriver(optionsWith(runner)).start(), "OPENSHELL_START_FAILED");
+void test("after create exits 0 the runner child starts with the exact exec argv, and the first probe follows it", async () => {
+  const h = harness();
+  await driverOf(h).start();
+  assert.deepEqual(h.spawns, [RUNNER_EXEC]);
+  assert.deepEqual(h.steps, ["create", "spawn", "probe"]);
 });
 
-void test("start propagates a runner rejection unchanged", async () => {
-  const boom = new Error("spawn failed");
-  const { runner } = scriptedRunner([{ reject: boom }]);
-  await assert.rejects(createOpenShellAgentOsDriver(optionsWith(runner)).start(), (error: unknown) => error === boom);
+void test("the readiness probe is retried until it exits 0", async () => {
+  const h = harness({ probes: [1, 1, 0] });
+  await driverOf(h).start();
+  assert.deepEqual(h.steps, ["create", "spawn", "probe", "probe", "probe"]);
 });
 
-void test("alive is true when the probe exits 0, running the probe through the pinned exec form", async () => {
-  const { runner, calls } = scriptedRunner([{ exitCode: 0 }]);
-  assert.equal(await createOpenShellAgentOsDriver(optionsWith(runner)).alive(), true);
-  assert.deepEqual(callAt(calls, 0).argv.slice(-2), ["node", PROBE]);
+void test("a probe that never passes gives OPENSHELL_START_FAILED at the deadline and kills the runner child", async () => {
+  const h = harness({ probes: [1], startTimeoutMs: 60 });
+  await assertCode(driverOf(h).start(), "OPENSHELL_START_FAILED");
+  assert.ok(h.steps.filter((step) => step === "probe").length >= 2, "the probe is retried until the deadline");
+  assert.equal(childAt(h, 0).hasExited(), true);
+  assert.equal(h.steps.at(-1), "terminate");
 });
 
-void test("alive is false when the probe exits non-zero, which is an answer and not a failure", async () => {
-  const { runner } = scriptedRunner([{ exitCode: 1 }]);
-  assert.equal(await createOpenShellAgentOsDriver(optionsWith(runner)).alive(), false);
+void test("a runner child that exits before its probe passes fails the start", async () => {
+  const h = harness({ probes: [1], childExitsOnSpawn: true });
+  await assertCode(driverOf(h).start(), "OPENSHELL_START_FAILED");
+  assert.deepEqual(h.steps, ["create", "spawn", "terminate"]);
 });
 
-void test("alive propagates a runner rejection unchanged", async () => {
-  const boom = new Error("timed out");
-  const { runner } = scriptedRunner([{ reject: boom }]);
-  await assert.rejects(createOpenShellAgentOsDriver(optionsWith(runner)).alive(), (error: unknown) => error === boom);
+void test("a create that exits non-zero gives OPENSHELL_START_FAILED and starts no runner", async () => {
+  const h = harness({ creates: [1] });
+  await assertCode(driverOf(h).start(), "OPENSHELL_START_FAILED");
+  assert.deepEqual(h.steps, ["create"]);
 });
 
-void test("stop deletes the named sandbox and resolves on exit 0", async () => {
-  const { runner, calls } = scriptedRunner([{ exitCode: 0 }]);
-  await createOpenShellAgentOsDriver(optionsWith(runner)).stop();
-  assert.deepEqual(callAt(calls, 0).argv, [OPENSHELL_BINARY, "sandbox", "delete", "realm-agentos"]);
+void test("a create that rejects gives OPENSHELL_START_FAILED and starts no runner", async () => {
+  const h = harness({ creates: ["reject"] });
+  await assertCode(driverOf(h).start(), "OPENSHELL_START_FAILED");
+  assert.deepEqual(h.steps, ["create"]);
 });
 
-void test("stop rejects with AGENTOS_STOP_FAILED when the delete exits non-zero", async () => {
-  const { runner } = scriptedRunner([{ exitCode: 1 }]);
-  await assertCode(createOpenShellAgentOsDriver(optionsWith(runner)).stop(), "AGENTOS_STOP_FAILED");
+void test("a runner child that cannot be spawned gives OPENSHELL_START_FAILED after create", async () => {
+  const h = harness();
+  const driver = createOpenShellAgentOsDriver({
+    ...h.options,
+    spawnRunner: () => {
+      throw new Error("spawn failed");
+    },
+  });
+  await assertCode(driver.start(), "OPENSHELL_START_FAILED");
+  assert.deepEqual(h.steps, ["create"]);
 });
 
-void test("every runner call is bounded by the configured call timeout", async () => {
-  const { runner, calls } = scriptedRunner([{ exitCode: 0 }, { exitCode: 0 }, { exitCode: 0 }]);
-  const driver = createOpenShellAgentOsDriver(optionsWith(runner));
+void test("runnerExited is false while the child runs and true once it exits while the sandbox is up", async () => {
+  const h = harness();
+  const driver = driverOf(h);
   await driver.start();
-  await driver.alive();
+  assert.equal(driver.runnerExited(), false);
+  childAt(h, 0).exit();
+  assert.equal(driver.runnerExited(), true);
+});
+
+void test("a stop does not read as a runner exit, even though the stop kills the child", async () => {
+  const h = harness();
+  const driver = driverOf(h);
+  await driver.start();
   await driver.stop();
-  assert.deepEqual(
-    calls.map((call) => call.timeoutMs),
-    [TIMEOUT_MS, TIMEOUT_MS, TIMEOUT_MS],
-  );
+  assert.equal(driver.runnerExited(), false);
+});
+
+void test("stop kills the runner child and then deletes the sandbox", async () => {
+  const h = harness();
+  const driver = driverOf(h);
+  await driver.start();
+  await driver.stop();
+  assert.deepEqual(h.steps, ["create", "spawn", "probe", "terminate", "delete"]);
+  assert.deepEqual(h.calls.at(-1)?.argv, DELETE);
+});
+
+void test("a second stop is harmless: the child is not killed again and the delete runs again", async () => {
+  const h = harness();
+  const driver = driverOf(h);
+  await driver.start();
+  await driver.stop();
+  await driver.stop();
+  assert.deepEqual(h.steps, ["create", "spawn", "probe", "terminate", "delete", "delete"]);
+});
+
+void test("a failed delete gives AGENTOS_STOP_FAILED, and a later stop retries the delete", async () => {
+  const h = harness({ deletes: [1, 0] });
+  const driver = driverOf(h);
+  await driver.start();
+  await assertCode(driver.stop(), "AGENTOS_STOP_FAILED");
+  await driver.stop();
+  assert.deepEqual(h.steps, ["create", "spawn", "probe", "terminate", "delete", "delete"]);
+});
+
+void test("alive reports exit 0 as alive, and any other exit or a rejected probe as not alive", async () => {
+  const h = harness({ probes: [0, 1, "reject"] });
+  const driver = driverOf(h);
+  assert.equal(await driver.alive(), true);
+  assert.equal(await driver.alive(), false);
+  assert.equal(await driver.alive(), false);
 });
 
 void test("an empty image reference is refused at construction with SCHEMA_INVALID", () => {
-  const { runner } = scriptedRunner([]);
-  assert.throws(() => createOpenShellAgentOsDriver(optionsWith(runner, { imageRef: "" })), refusedWith("SCHEMA_INVALID"));
+  const { options } = harness();
+  assert.throws(() => createOpenShellAgentOsDriver({ ...options, imageRef: "" }), refusedWith("SCHEMA_INVALID"));
 });
 
 void test("a sandbox name outside the realm- prefix is refused with SCHEMA_INVALID", () => {
-  const { runner } = scriptedRunner([]);
+  const { options } = harness();
   assert.throws(
-    () => createOpenShellAgentOsDriver(optionsWith(runner, { sandboxName: "agentos" })),
+    () => createOpenShellAgentOsDriver({ ...options, sandboxName: "agentos" }),
     refusedWith("SCHEMA_INVALID"),
   );
 });
 
 void test("a non-positive or non-finite call timeout is refused with RangeError", () => {
-  const { runner } = scriptedRunner([]);
+  const { options } = harness();
   for (const callTimeoutMs of [0, -1, Number.POSITIVE_INFINITY, Number.NaN]) {
-    assert.throws(() => createOpenShellAgentOsDriver(optionsWith(runner, { callTimeoutMs })), RangeError);
+    assert.throws(() => createOpenShellAgentOsDriver({ ...options, callTimeoutMs }), RangeError);
   }
 });
 
 void test("the create argv carries no privileged flag, no mount, and no host socket", async () => {
-  const { runner, calls } = scriptedRunner([{ exitCode: 0 }]);
-  await createOpenShellAgentOsDriver(optionsWith(runner)).start();
-  const argv = callAt(calls, 0).argv;
+  const h = harness();
+  await driverOf(h).start();
+  const argv = h.calls[0]?.argv ?? [];
   for (const forbidden of ["--privileged", "--cap-add", "-v", "--volume", "--mount"]) {
     assert.equal(argv.includes(forbidden), false, `the create argv must not carry ${forbidden}`);
   }

@@ -302,6 +302,15 @@ void test("RT-01, RT-04: a probe whose inspect cannot be read rejects with the l
   await assertCode(f.exec.probe(containerId), "SCHEMA_INVALID");
 });
 
+void test("RT-04, D-59: a runner that exits while the session is active makes probe fail with AGENTOS_CRASH_LOOP, and the runner is not restarted", async (t) => {
+  const f = await fixture(t);
+  const { containerId } = await createSession(f);
+  await f.exec.start(containerId);
+  f.driver.exitRunner();
+  await assertCode(f.exec.probe(containerId), "AGENTOS_CRASH_LOOP");
+  assert.equal(f.driver.callCount("start"), 1, "the supervisor does not restart the runner");
+});
+
 void test("RT-01, RT-03: a reused container whose inspect does not conform is verified on the reuse path, removed, and refused", async (t) => {
   const f = await fixture(t);
   await createSession(f);

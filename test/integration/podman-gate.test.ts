@@ -192,7 +192,7 @@ async function createLiveContainer(t: TestContext, egress: readonly EgressRule[]
   const policyPath = writePolicyDocument(config.stateDir, sessionId, egress, workloadBinary);
   const containerId = await runOpenShellCreate(
     { containers: libpod, runner },
-    { sessionId, policyPath, cpus: SANDBOX_CPUS, memory: SANDBOX_MEMORY, workloadArgv: config.workloadArgv },
+    { sessionId, policyPath, cpus: SANDBOX_CPUS, memory: SANDBOX_MEMORY },
     LIVE_CREATE_DEADLINE_MS,
   );
   t.after(async () => {
@@ -230,14 +230,12 @@ void test("RT-01 live: a session container created through OpenShell conforms to
   assert.deepEqual(failed, [], `hardening properties that do not conform: ${failed.join(", ")}`);
 });
 
-void test("RT-03 live: the workload starts only through the pinned OpenShell create argv, and the container carries the session label (RT-03)", { skip: liveGate }, async (t) => {
+void test("RT-03 live: the create argv names no command, and the container carries the session label (RT-03)", { skip: liveGate }, async (t) => {
   const live = await createLiveContainer(t);
   assert.equal(live.argvSeen.length, 1, "one OpenShell create run is expected");
   const argv = live.argvSeen[0] ?? [];
   assert.deepEqual(argv.slice(0, 3), ["openshell", "sandbox", "create"]);
-  const separator = argv.indexOf("--");
-  assert.ok(separator > 0, "the argv must carry the -- separator before the workload");
-  assert.deepEqual(argv.slice(separator + 1), live.config.workloadArgv);
+  assert.equal(argv.includes("--"), false, "the create argv names no command");
   const inspect = await live.libpod.inspectContainer(live.containerId);
   assert.equal(labelOf(inspect, OPENSHELL_SANDBOX_NAME_LABEL_KEY), realmSandboxName(live.sessionId));
 });

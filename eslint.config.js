@@ -17,6 +17,7 @@ const CHILD_PROCESS_ALLOWED = [
   "src/cli/main.ts",
   "src/doctor/checks.ts",
   "src/runtime/session-execution.ts",
+  "src/runtime/agentos-workload.ts",
   ...DRIVER_CHILD_PROCESS_ALLOWED,
 ];
 const GATE_MODULES = ["src/core/policy.ts", "src/core/states.ts", "src/core/errors.ts", "src/contract/validate.ts"];
@@ -32,7 +33,7 @@ const SPECIAL_SRC = [
   "src/runtime/driver/supervisor.ts",
 ];
 const SPAWN_MESSAGE =
-  "P6-D1: spawn( is allowed only in src/runtime/session-execution.ts, src/cli/main.ts and src/runtime/driver/supervisor.ts. The driver's channel.ts holds child_process for openssl and never spawns (phase 9.5, owner decision 2).";
+  "P6-D1: spawn( is allowed only in src/runtime/session-execution.ts, src/runtime/agentos-workload.ts, src/cli/main.ts and src/runtime/driver/supervisor.ts. The driver's channel.ts holds child_process for openssl and never spawns (phase 9.5, owner decision 2).";
 const GUARD_OWNER = {
   buildExecArgv: "src/runtime/openshell.ts",
   lockedWrite: "src/fs/write.ts",
@@ -118,7 +119,7 @@ const GENERIC = [...DYNAMIC, ...SPAWN, "openshellBinary", ...GUARDS];
 const withoutKey = (keys, drop) => keys.filter((key) => key !== drop);
 const childProcessPaths = CHILD_PROCESS_PATHS.map((name) => ({
   name,
-  message: "TOOL-02: only the allowlisted modules (src/cli/main.ts, src/doctor/checks.ts, src/runtime/session-execution.ts, src/runtime/driver/channel.ts, src/runtime/driver/supervisor.ts) import child_process. The two driver modules are phase 9.5 owner decision 2: channel.ts runs openssl, supervisor.ts starts the host supervisor.",
+  message: "TOOL-02: only the allowlisted modules (src/cli/main.ts, src/doctor/checks.ts, src/runtime/session-execution.ts, src/runtime/agentos-workload.ts, src/runtime/driver/channel.ts, src/runtime/driver/supervisor.ts) import child_process. The two driver modules are phase 9.5 owner decision 2: channel.ts runs openssl, supervisor.ts starts the host supervisor. agentos-workload.ts starts the AgentOS runner child.",
 }));
 // Dispatcher internals that host adapters (src/mcp, src/acp, src/omp) must never reference (P5-D11, P5-D12).
 const ADAPTER_INTERNALS = [
@@ -250,6 +251,10 @@ export default tseslint.config(
   {
     files: ["src/runtime/driver/supervisor.ts"],
     rules: { "no-restricted-syntax": syntaxRule([...DYNAMIC, ...NAMED_ONLY, "openshellBinary", ...GUARDS]) },
+  },
+  {
+    files: ["src/runtime/agentos-workload.ts"],
+    rules: { "no-restricted-syntax": syntaxRule([...DYNAMIC, ...NAMED_ONLY]) },
   },
   {
     files: ["src/**/*.ts"],

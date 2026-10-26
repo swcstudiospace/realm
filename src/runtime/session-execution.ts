@@ -134,7 +134,6 @@ export class SessionExecution implements ExecutionService {
         policyPath,
         cpus: SANDBOX_CPUS,
         memory: SANDBOX_MEMORY,
-        workloadArgv: runtime.workloadArgv,
         imageRef: runtime.image,
       },
       OPENSHELL_CREATE_DEADLINE_MS,

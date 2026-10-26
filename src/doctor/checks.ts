@@ -446,9 +446,8 @@ function pinnedCreateFlags(): readonly string[] {
     policyPath: "/doctor-check.policy.json",
     cpus: 1,
     memory: "1Gi",
-    workloadArgv: ["doctor-check"],
   });
-  return argv.slice(0, argv.indexOf("--")).filter((element) => element.startsWith("--"));
+  return argv.filter((element) => element.startsWith("--"));
 }
 
 // anda-bridge (ANDA-02). The engine answers GET /.well-known/information with the AppInformation

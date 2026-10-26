@@ -31,7 +31,6 @@ const PINNED_FLAGS = [
   "--name",
   "--policy",
   "--no-auto-providers",
-  "--no-keep",
   "--detach",
   "--cpu",
   "--memory",
@@ -225,17 +224,17 @@ void test("RT-03: openshell passes when every pinned create flag is listed, and 
 });
 
 void test("RT-03: openshell warns and names the missing pinned flag when the CLI does not list it, with a fix (RT-03)", async (t) => {
-  const withoutNoKeep: CommandOutcome = {
+  const withoutCpu: CommandOutcome = {
     exitCode: 0,
-    stdout: PINNED_FLAGS.filter((flag) => flag !== "--no-keep")
+    stdout: PINNED_FLAGS.filter((flag) => flag !== "--cpu")
       .map((flag) => `  ${flag} <VALUE>`)
       .join("\n"),
   };
-  const host = fakeHost({ commands: { [OPENSHELL_HELP]: withoutNoKeep } });
+  const host = fakeHost({ commands: { [OPENSHELL_HELP]: withoutCpu } });
   const result = resultOf(await runtimeChecks(t, host), "openshell");
   assert.equal(result.status, "warn");
-  assert.match(result.detail, /--no-keep/);
-  assert.doesNotMatch(result.detail, /--detach|--label/, "only the missing flag is named");
+  assert.match(result.detail, /--cpu/);
+  assert.doesNotMatch(result.detail, /--detach|--memory/, "only the missing flag is named");
   assert.notEqual(result.fix, null);
 });
 

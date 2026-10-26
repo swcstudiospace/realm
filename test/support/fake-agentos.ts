@@ -11,12 +11,14 @@ export type ScriptedOutcome = "ok" | "reject" | "hang";
 
 export class FakeAgentOsDriver implements AgentOsDriver {
   private running = false;
+  private exited = false;
   private readonly scripts = new Map<AgentOsOperation, ScriptedOutcome[]>();
   private readonly log: AgentOsOperation[] = [];
 
   async start(): Promise<void> {
     await this.run("start", () => {
       this.running = true;
+      this.exited = false;
     });
   }
 
@@ -27,6 +29,7 @@ export class FakeAgentOsDriver implements AgentOsDriver {
   async stop(): Promise<void> {
     await this.run("stop", () => {
       this.running = false;
+      this.exited = false;
     });
   }
 
@@ -38,6 +41,16 @@ export class FakeAgentOsDriver implements AgentOsDriver {
   // Simulates the process dying: the next alive() reports false.
   crash(): void {
     this.running = false;
+  }
+
+  // True when the runner child exited while the sandbox was started and not stopped. Set by exitRunner().
+  runnerExited(): boolean {
+    return this.exited;
+  }
+
+  // Simulates the runner child exiting while the sandbox stays up: runnerExited() then reports true.
+  exitRunner(): void {
+    this.exited = true;
   }
 
   isRunning(): boolean {

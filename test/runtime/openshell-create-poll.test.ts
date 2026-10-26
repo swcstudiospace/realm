@@ -21,7 +21,6 @@ const REQUEST: SandboxCreateRequest = {
   policyPath: "/state/runtime/sess-poll.policy.json",
   cpus: 1,
   memory: "512Mi",
-  workloadArgv: ["/usr/bin/agent", "--serve"],
 };
 
 // A workload container of this session as OpenShell labels it: the sandbox role under the session's sandbox name.

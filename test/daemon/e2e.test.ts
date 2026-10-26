@@ -397,7 +397,6 @@ void test("the container-create argv and the policy document carry no socket pat
     policyPath: join(ROOT, "tmp", "realm-no-mounts-proof", "policy.json"),
     cpus: 2,
     memory: "512Mi",
-    workloadArgv: ["/usr/bin/agent", "--serve"],
   });
   const argvText = JSON.stringify(argv);
   assert.ok(!argvText.includes(".sock"), `create argv must not mount a socket: ${argvText}`);

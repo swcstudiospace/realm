@@ -126,7 +126,6 @@ export interface SandboxCreateRequest {
   readonly memory: string;
   // Optional. The container image reference for the sandbox source (OpenShell --from). Sessions omit it.
   readonly imageRef?: string;
-  readonly workloadArgv: readonly string[];
 }
 
 export interface OpenShellCreateDeps {
@@ -134,8 +133,10 @@ export interface OpenShellCreateDeps {
   readonly runner: OpenShellRunner;
 }
 
-// The pinned create argv for one session (D-55). Every refused input is SCHEMA_INVALID, and
-// the check runs before any I/O.
+// The pinned create argv for one session (D-55). It names the sandbox and carries the policy, the limits and the
+// optional image, and no command. OpenShell 0.1.5 does not run a create command, so the AgentOS runner is started
+// as an exec child after create (agentos-workload.ts). Every refused input is SCHEMA_INVALID, and the check runs
+// before any I/O.
 export function buildCreateArgv(request: SandboxCreateRequest): readonly string[] {
   // The session id is checked by the rule that names its record file (SESSION_ID_PATTERN).
   recordFileName(request.sessionId);
@@ -151,10 +152,6 @@ export function buildCreateArgv(request: SandboxCreateRequest): readonly string[
   if (request.imageRef !== undefined && request.imageRef.length === 0) {
     throw makeRealmError("SCHEMA_INVALID");
   }
-  const workload = request.workloadArgv;
-  if (workload.length === 0 || workload.some((element) => element.length === 0)) {
-    throw makeRealmError("SCHEMA_INVALID");
-  }
   return Object.freeze([
     OPENSHELL_BINARY,
     "sandbox",
@@ -164,21 +161,19 @@ export function buildCreateArgv(request: SandboxCreateRequest): readonly string[
     "--policy",
     request.policyPath,
     "--no-auto-providers",
-    "--no-keep",
     "--detach",
     "--cpu",
     String(request.cpus),
     "--memory",
     request.memory,
     ...(request.imageRef === undefined ? [] : ["--from", request.imageRef]),
-    "--",
-    ...workload,
   ]);
 }
 
-// The AgentOS driver's sandbox argv (D-014, D-016, D-018). The create argv carries the derived image
-// through --from, the probe is the pinned exec form, and the delete argv removes the named sandbox.
-// All three name the sandbox realm-<sessionId>, so they are built here, in one place.
+// The AgentOS driver's sandbox argv (D-014, D-016, D-018). The create argv carries the derived image through --from.
+// The runner is the exec form that starts the AgentOS runner in the sandbox once create has run, and the probe is the
+// same exec form running the probe. The delete argv removes the named sandbox. All four name the sandbox
+// realm-<sessionId>, so they are built here, in one place.
 export interface AgentOsSandboxRequest {
   readonly sessionId: string;
   readonly policyPath: string;
@@ -191,6 +186,7 @@ export interface AgentOsSandboxRequest {
 
 export interface AgentOsSandboxArgv {
   readonly create: readonly string[];
+  readonly runner: readonly string[];
   readonly probe: readonly string[];
   readonly delete: readonly string[];
 }
@@ -206,8 +202,8 @@ export function buildAgentOsSandboxArgv(request: AgentOsSandboxRequest): AgentOs
       cpus: request.cpus,
       memory: request.memory,
       imageRef: request.imageRef,
-      workloadArgv: ["node", request.runnerPath],
     }),
+    runner: buildExecArgv(request.sessionId, ["node", request.runnerPath]),
     probe: buildExecArgv(request.sessionId, ["node", request.probePath]),
     delete: Object.freeze([OPENSHELL_BINARY, "sandbox", "delete", `realm-${request.sessionId}`]),
   });

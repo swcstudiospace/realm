@@ -25,7 +25,6 @@ const REQUEST: SandboxCreateRequest = {
   policyPath: POLICY_PATH,
   cpus: 2,
   memory: "1Gi",
-  workloadArgv: WORKLOAD,
 };
 
 // The flags the pinned 0.1.5 create verb accepts before the separator (S-10, D-55).
@@ -33,7 +32,6 @@ const PINNED_FLAGS: readonly string[] = [
   "--name",
   "--policy",
   "--no-auto-providers",
-  "--no-keep",
   "--detach",
   "--cpu",
   "--memory",
@@ -55,7 +53,7 @@ async function assertCode(work: Promise<unknown>, code: ErrorCode): Promise<void
   await assert.rejects(work, (error: unknown) => error instanceof RealmError && error.code === code);
 }
 
-void test("RT-03: the create argv is exactly the pinned 0.1.5 verb sequence with the workload after --", () => {
+void test("RT-03: the create argv is exactly the pinned 0.1.5 verb sequence, with no command", () => {
   assert.deepEqual(buildCreateArgv(REQUEST), [
     "openshell",
     "sandbox",
@@ -65,54 +63,46 @@ void test("RT-03: the create argv is exactly the pinned 0.1.5 verb sequence with
     "--policy",
     POLICY_PATH,
     "--no-auto-providers",
-    "--no-keep",
     "--detach",
     "--cpu",
     "2",
     "--memory",
     "1Gi",
-    "--",
-    ...WORKLOAD,
   ]);
 });
 
 void test("AUD-02: the create argv carries no --env and no --provider element and no prefixed form of either", () => {
   const argv = buildCreateArgv(REQUEST);
-  // The workload deliberately contains --env and --provider after the separator; the
-  // builder must add none of its own. Only the part before -- is checked.
-  const beforeSeparator = argv.slice(0, argv.indexOf("--"));
-  assert.equal(beforeSeparator.includes("--env"), false);
-  assert.equal(beforeSeparator.includes("--provider"), false);
+  assert.equal(argv.includes("--env"), false);
+  assert.equal(argv.includes("--provider"), false);
   assert.equal(
-    beforeSeparator.some((element) => element.startsWith("--env=") || element.startsWith("--provider=")),
+    argv.some((element) => element.startsWith("--env=") || element.startsWith("--provider=")),
     false,
   );
 });
 
-void test("RT-03: the workload follows -- as the trailing positional arguments and no workload element precedes it", () => {
+void test("RT-03: the create argv carries no command: no separator and no workload element", () => {
   const argv = buildCreateArgv(REQUEST);
-  const separator = argv.indexOf("--");
-  assert.equal(separator, argv.length - WORKLOAD.length - 1);
-  assert.deepEqual(argv.slice(separator + 1), WORKLOAD);
-});
-
-void test("RT-03: every flag before the separator belongs to the pinned 0.1.5 flag set", () => {
-  const argv = buildCreateArgv(REQUEST);
-  const beforeSeparator = argv.slice(0, argv.indexOf("--"));
-  assert.deepEqual(beforeSeparator.slice(0, 3), ["openshell", "sandbox", "create"]);
-  // No value in the pinned argv starts with "--", so every such element is a flag name.
-  for (const element of beforeSeparator.filter((item) => item.startsWith("--"))) {
-    assert.ok(PINNED_FLAGS.includes(element), `unexpected flag before the separator: ${element}`);
+  assert.equal(argv.includes("--"), false);
+  for (const element of WORKLOAD) {
+    assert.equal(argv.includes(element), false, `${element} must not appear in the create argv`);
   }
 });
 
-void test("RT-03: a session id outside the safe set, a relative policy path, an empty workload, or a bad memory value is refused with SCHEMA_INVALID", async (t) => {
+void test("RT-03: every flag of the create argv belongs to the pinned 0.1.5 flag set", () => {
+  const argv = buildCreateArgv(REQUEST);
+  assert.deepEqual(argv.slice(0, 3), ["openshell", "sandbox", "create"]);
+  // No value in the pinned argv starts with "--", so every such element is a flag name.
+  for (const element of argv.filter((item) => item.startsWith("--"))) {
+    assert.ok(PINNED_FLAGS.includes(element), `unexpected flag in the create argv: ${element}`);
+  }
+});
+
+void test("RT-03: a session id outside the safe set, a relative policy path, or a bad memory value is refused with SCHEMA_INVALID", async (t) => {
   const bad: readonly SandboxCreateRequest[] = [
     { ...REQUEST, sessionId: "../escape" },
     { ...REQUEST, sessionId: "" },
     { ...REQUEST, policyPath: "runtime/sess-01.policy.json" },
-    { ...REQUEST, workloadArgv: [] },
-    { ...REQUEST, workloadArgv: [""] },
     { ...REQUEST, memory: "--env=FOO" },
     { ...REQUEST, cpus: 0 },
   ];
@@ -250,7 +240,8 @@ void test("RT-03: the exec argv names the same sandbox that the create argv name
 
 void test("RT-05: neither builder emits any D-80 forbidden flag, as an element or as a prefixed form, before the separator", () => {
   for (const argv of [buildCreateArgv(REQUEST), buildExecArgv(SESSION, WORKLOAD)]) {
-    const head = argv.slice(0, argv.indexOf("--"));
+    const separator = argv.indexOf("--");
+    const head = separator === -1 ? argv : argv.slice(0, separator);
     for (const flag of FORBIDDEN_FLAGS) {
       assert.equal(head.includes(flag), false, `${flag} must not appear before the separator`);
       assert.equal(

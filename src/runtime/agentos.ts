@@ -11,6 +11,9 @@
 //     is retryable: an explicit start() runs the policy again from a clean count;
 //   - the consecutive count resets only after 60000 ms of continuous alive, on the injected clock.
 //
+// A runner that exits while the session is active is not restarted here. check reports it at once as
+// AGENTOS_CRASH_LOOP, so the session moves to error. The next stop removes the sandbox.
+//
 // Every driver call is raced against callTimeoutMs (QUAL-01). src/core/timeout.ts is not used
 // for this race because withTimeout requires a catalogue code and no catalogue code names a
 // driver-call timeout. A timed-out call is a failed attempt, not a code the caller sees. The
@@ -23,6 +26,9 @@ export interface AgentOsDriver {
   start(): Promise<void>;
   alive(): Promise<boolean>;
   stop(): Promise<void>;
+  // True when the runner process started for the sandbox has exited and has not been stopped. A stop the realm
+  // asked for is never reported here, because the driver detaches the runner before it stops it.
+  runnerExited(): boolean;
 }
 
 export const AGENTOS_BACKOFF_BASE_MS = 500;
@@ -92,6 +98,10 @@ export class AgentOsSupervisor {
       return false;
     }
     if (this.phase === "held") {
+      throw makeRealmError("AGENTOS_CRASH_LOOP");
+    }
+    // A runner that exited while the session was active is reported at once, and supervision does not restart it.
+    if (this.driver.runnerExited()) {
       throw makeRealmError("AGENTOS_CRASH_LOOP");
     }
     const epoch = this.epoch;

@@ -7,7 +7,6 @@ const BASE = {
   sessionId: "agentos",
   policyPath: "/realm-state/agentos/policy.json",
   cpus: 2,
-  workloadArgv: ["node", "/x.js"],
 };
 
 void test("the memory quantities the OpenShell CLI accepts pass, and a lowercase gigabyte suffix it rejects is refused", () => {
