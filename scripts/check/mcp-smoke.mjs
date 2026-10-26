@@ -67,7 +67,6 @@ function writeRuntime(configHome, stateDir, workspaceRoot) {
     join(configHome, "realm", "config.json"),
     JSON.stringify({
       image: `registry.example.com/realm/workload@sha256:${"0".repeat(64)}`,
-      workloadArgv: ["/usr/bin/agent", "--serve"],
       stateDir,
       workspaceRoot,
     }),
