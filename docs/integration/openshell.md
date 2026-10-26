@@ -166,7 +166,7 @@ driver config, a user-namespace request, an isolation backend selection other th
 or whose argv holds an empty string.
 An empty argv is accepted: the sandbox is created idle, and the command is not forwarded before phase 9.5.
 
-Every create must carry the gateway's launch authentication (`launch_authentication`). The driver decodes it with the gateway's
+CreateSandbox requires the gateway's launch authentication (`launch_authentication`) and refuses a create without it before any write. ValidateSandboxCreate accepts a create without it and checks any launch authentication that is present with the same rules. The driver decodes it with the gateway's
 own rules (`src/runtime/driver/isolation/launch.ts`): one JSON document, with no byte order mark, no duplicate object key, no
 lone surrogate escape, integers written as integers within the gateway's Rust ranges (a negative zero is not an integer), and
 whitespace as Rust defines it.

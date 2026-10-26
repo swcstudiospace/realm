@@ -4,9 +4,10 @@
 // profile: the digest-pinned image, the portable CPU and memory limits, no GPU, no platform or driver config, no
 // environment, no user-namespace request, an isolation backend selection only when it names the configured backend over a
 // unix socket (see isolationSelectionOf), and a sandbox name that passes the container-name rule
-// once the realm prefix is added. The gateway's launch material is required and must decode for this driver's gateway
-// (launch.ts). Any mismatch is refused with SCHEMA_INVALID, logged with the RPC and the check that refused (refusal.ts), and no
-// libpod call is made. An empty argv is accepted and creates
+// once the realm prefix is added. A create carries the gateway's launch material. CreateSandbox requires it. ValidateSandboxCreate
+// accepts a create without it, because the gateway validates a create before it mints the material. Launch material that is present
+// must decode for this driver's gateway on both RPCs (launch.ts). Any mismatch is refused with SCHEMA_INVALID, logged with the RPC and
+// the check that refused (refusal.ts), and no libpod call is made. An empty argv is accepted and creates
 // an idle sandbox; the command is not forwarded before phase 9.5. A create that passes prepares the directories the lifecycle
 // requires: the workspace, by the same rule EnsureWorkspace uses, and a new state directory. It then stores the launch material
 // in a new secret directory (secret-store.ts), outside the state root and the workspace. If the lifecycle then refuses, the state
@@ -148,7 +149,8 @@ interface SandboxSpecMessage {
   readonly resource_requirements?: { readonly gpu?: unknown } | null;
   readonly command?: readonly string[];
   readonly isolation_backend?: unknown;
-  // The gateway-created launch credentials, as the bytes of the gateway's JSON encoding. Required for every create.
+  // The gateway-created launch credentials, as the bytes of the gateway's JSON encoding. CreateSandbox requires them;
+  // ValidateSandboxCreate accepts their absence.
   readonly launch_authentication?: Uint8Array | null;
 }
 export interface DriverSandboxMessage {
@@ -204,7 +206,8 @@ interface CreatePlan {
   readonly sandboxId: string;
   readonly workspace: string;
   readonly spec: ContainerSpec;
-  readonly launch: Uint8Array;
+  // The launch material, or undefined when the request carries none. CreateSandbox refuses a plan without it.
+  readonly launch: Uint8Array | undefined;
   readonly isolationBackend: string | undefined;
 }
 
@@ -293,18 +296,24 @@ export class ComputeDriver {
     };
   }
 
-  // Runs every create check, the launch material included. Makes no libpod call and writes nothing.
+  // Runs every create check. Launch material is validated when present and may be absent. Makes no libpod call and writes nothing.
   validateSandboxCreate(sandbox: DriverSandboxMessage | null | undefined): Record<string, never> {
     planCreate(sandbox, this.config, this.scopeOf("ValidateSandboxCreate"));
     return {};
   }
 
+  // A create without launch material is refused before anything is written, because CreateSandbox requires it.
   // An existing state or secret directory is refused before anything is prepared, so that refusal creates nothing. Then the
   // workspace and the new state directory are prepared, and the launch material is stored. Only then does the lifecycle run.
   // If the store or the lifecycle refuses, the state directory and the launch material this call made are removed and the
   // original error is rethrown. The workspace is left in place.
   async createSandbox(sandbox: DriverSandboxMessage | null | undefined): Promise<{ runtime_identity: string }> {
-    const plan = planCreate(sandbox, this.config, this.scopeOf("CreateSandbox"));
+    const scope = this.scopeOf("CreateSandbox");
+    const plan = planCreate(sandbox, this.config, scope);
+    const launch = plan.launch;
+    if (launch === undefined) {
+      throw refusal(scope, "create.launch_authentication");
+    }
     assertStateDirAbsent(plan.spec.stateDir);
     if (secretDirExists(this.config.secretRoot, plan.spec.sandboxName)) {
       throw makeRealmError("SCHEMA_INVALID");
@@ -312,7 +321,7 @@ export class ComputeDriver {
     this.prepareWorkspace(plan.workspace);
     mkdirOrRefuse(plan.spec.stateDir);
     try {
-      writeLaunchMaterial(this.config.secretRoot, plan.spec.sandboxName, plan.launch);
+      writeLaunchMaterial(this.config.secretRoot, plan.spec.sandboxName, launch);
     } catch (error: unknown) {
       const stateRemoved = removeStateDir(plan.spec.stateDir);
       if (!stateRemoved && error instanceof RealmError) {
@@ -573,10 +582,11 @@ function isolationSelectionOf(selection: unknown, configuredName: string, scope:
   return name;
 }
 
-// Checks a create request against the realm profile and returns the lifecycle spec and the launch material. Every refusal is
-// SCHEMA_INVALID, logged with its RPC and check, and no libpod call is made. The launch material is required: the driver advertises
-// openshell.compute.launch-authentication, so every launch carries the gateway's bundle, and Attach can verify a bearer only
-// with keys from that bundle. A bundle that does not decode for this driver's gateway is refused here, before any write.
+// Checks a create request against the realm profile and returns the lifecycle spec and the launch material when it carries any.
+// Every refusal is SCHEMA_INVALID, logged with its RPC and check, and no libpod call is made. Launch material that is present must
+// decode for this driver's gateway, on both RPCs, before any write. An absent bundle is not refused here: CreateSandbox refuses it
+// (createSandbox), so ValidateSandboxCreate can run before the gateway mints the bundle. Attach verifies a bearer only with keys
+// from the bundle the create stores.
 function planCreate(
   sandbox: DriverSandboxMessage | null | undefined,
   config: ComputeDriverConfig,
@@ -626,11 +636,10 @@ function planCreate(
   if ((spec.command ?? []).some((argument) => argument === "")) {
     throw refusal(scope, "create.command");
   }
-  const launch = spec.launch_authentication;
-  if (launch === undefined || launch === null || launch.length === 0) {
-    throw refusal(scope, "create.launch_authentication");
+  const launch = launchMaterialOf(spec.launch_authentication);
+  if (launch !== undefined) {
+    decodeLaunchAuthentication(launch, config.gatewayId, scope);
   }
-  decodeLaunchAuthentication(launch, config.gatewayId, scope);
   return {
     sandboxName,
     sandboxId,
@@ -644,6 +653,12 @@ function planCreate(
       stateDir: join(config.sandboxStateRoot, containerName),
     },
   };
+}
+
+// The launch material a request carries, or undefined when it carries none. proto3 bytes arrive empty when unset, so an empty
+// buffer is no material.
+function launchMaterialOf(value: Uint8Array | null | undefined): Uint8Array | undefined {
+  return value === undefined || value === null || value.length === 0 ? undefined : value;
 }
 
 // Each non-empty CPU and memory value must equal the realm profile. An empty value means the request did not set it.

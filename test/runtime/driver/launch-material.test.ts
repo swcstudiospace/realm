@@ -171,6 +171,26 @@ void test("PRD-ISO-02: a create with an empty launch_authentication buffer refus
   assertNothingWritten(h);
 });
 
+void test("PRD-ISO-02: a validate with no launch_authentication field passes, and writes nothing and makes no libpod call", () => {
+  const h = harness();
+  assert.deepEqual(h.driver.validateSandboxCreate(sandboxWithoutLaunch()), {});
+  assertNothingWritten(h);
+});
+
+void test("PRD-ISO-02: a validate with an empty launch_authentication buffer passes, and writes nothing and makes no libpod call", () => {
+  const h = harness();
+  assert.deepEqual(h.driver.validateSandboxCreate(sandboxWith(Buffer.alloc(0))), {});
+  assertNothingWritten(h);
+});
+
+for (const [label, body] of MALFORMED.filter(([, body]) => body.length > 0)) {
+  void test(`PRD-ISO-02: a validate whose launch material is ${label} refuses with SCHEMA_INVALID, and writes nothing`, () => {
+    const h = harness();
+    assert.throws(() => h.driver.validateSandboxCreate(sandboxWith(body)), schemaInvalid);
+    assertNothingWritten(h);
+  });
+}
+
 void test("PRD-ISO-02: delete removes the sandbox's launch material, and a bearer for it is then UNAUTHENTICATED", async () => {
   const config = driverConfig();
   const real = new DriverLifecycle({

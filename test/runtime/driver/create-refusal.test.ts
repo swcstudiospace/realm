@@ -35,6 +35,13 @@ function sandboxWith(body: Uint8Array): DriverSandboxMessage {
   return validSandbox({ spec: { ...validSandbox().spec, launch_authentication: body } });
 }
 
+// A create request with the launch authentication field absent from its spec.
+function sandboxWithoutLaunch(): DriverSandboxMessage {
+  const spec = { ...validSandbox().spec };
+  Reflect.deleteProperty(spec, "launch_authentication");
+  return validSandbox({ spec });
+}
+
 void test("PRD-ISO-02: a create with the gateway's own launch body is accepted, and its material is stored at 0600", async () => {
   const { config, lifecycle, driver, lines } = harness();
   const body = Buffer.from(GATEWAY_LAUNCH_SAMPLE, "utf8");
@@ -76,4 +83,18 @@ void test("PRD-ISO-02: a bearer check that reads launch material which no longer
   writeFileSync(join(config.secretRoot, CONTAINER_NAME, "launch.json"), "not json", { mode: 0o600 });
   assert.throws(() => driver.launchVerifierOf("sandbox-1"), schemaInvalid);
   assert.deepEqual(lines, ["realm compute driver refused: rpc=BearerVerification check=launch.json code=SCHEMA_INVALID"]);
+});
+
+void test("PRD-ISO-02: a validate with no launch material passes and logs nothing; a create without it logs the CreateSandbox check", async () => {
+  const { driver, lines } = harness();
+  assert.deepEqual(driver.validateSandboxCreate(sandboxWithoutLaunch()), {});
+  await assert.rejects(driver.createSandbox(sandboxWithoutLaunch()), schemaInvalid);
+  assert.deepEqual(lines, ["realm compute driver refused: rpc=CreateSandbox check=create.launch_authentication code=SCHEMA_INVALID"]);
+});
+
+void test("PRD-ISO-02: a validate with present invalid launch material logs the ValidateSandboxCreate RPC and the launch check", () => {
+  const { driver, lines } = harness();
+  const wrongGateway = Buffer.from(GATEWAY_LAUNCH_SAMPLE.replace('"gateway_id":"realm"', '"gateway_id":"other"'), "utf8");
+  assert.throws(() => driver.validateSandboxCreate(sandboxWith(wrongGateway)), schemaInvalid);
+  assert.deepEqual(lines, ["realm compute driver refused: rpc=ValidateSandboxCreate check=launch.gateway_id code=SCHEMA_INVALID"]);
 });
