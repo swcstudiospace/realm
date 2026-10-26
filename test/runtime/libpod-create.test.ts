@@ -168,6 +168,7 @@ const EXPECTED_BODY = {
     cpu: { quota: 200000, period: 100000 },
   },
   netns: { nsmode: "none" },
+  sysctl: { "net.ipv4.ip_unprivileged_port_start": "0" },
   tty: false,
   mounts: [
     { type: "tmpfs", destination: "/tmp", options: ["nosuid", "nodev"] },
@@ -200,6 +201,16 @@ void test("PRD-CTR-01: createContainer posts the spec's body to the pinned 5.7.1
   assert.equal(create.target, "/v5.7.1/libpod/containers/create", "no query string, version pinned to 5.7.1");
   assert.equal(create.contentType, "application/json");
   assert.deepEqual(JSON.parse(create.body) as unknown, EXPECTED_BODY);
+});
+
+void test("PRD-CTR-01: the create body carries exactly the runtime low-port sysctl and no other sysctl", async (t) => {
+  const { socketPath, seen } = await startFake(t);
+  await new LibpodClient(socketPath).createContainer(SPEC);
+  const [create] = callsOf(seen);
+  assert.ok(create !== undefined);
+  const parsed = JSON.parse(create.body) as { readonly sysctl?: Readonly<Record<string, string>> };
+  assert.deepEqual(parsed.sysctl, { "net.ipv4.ip_unprivileged_port_start": "0" });
+  assert.deepEqual(Object.keys(parsed.sysctl ?? {}), ["net.ipv4.ip_unprivileged_port_start"]);
 });
 
 void test("PRD-CTR-01: the CA tmpfs options pass the create route's tmpfs rule, so the create is not refused for uid or gid", async (t) => {

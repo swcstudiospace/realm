@@ -44,6 +44,11 @@ const LABEL_KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
 // The user-namespace mapping of every sandbox: the realm account is mapped to the workload uid and gid (keep-id).
 const WORKLOAD_USER = `${String(HARDENING_PROFILE.workloadUid)}:${String(HARDENING_PROFILE.workloadGid)}`;
 const WORKLOAD_USERNS = `uid=${String(HARDENING_PROFILE.workloadUid)},gid=${String(HARDENING_PROFILE.workloadGid)}`;
+// The sandbox runtime binds loopback ports below 1024 as the workload uid, so the network namespace must lower the
+// unprivileged port start to 0. The sysctl is per network namespace, and the sandbox has no network beyond loopback.
+// The sandbox runtime itself checks the value at startup and refuses to run otherwise. That check lives in the
+// runtime, outside this repository; this client does not verify it.
+const RUNTIME_SYSCTLS: Readonly<Record<string, string>> = Object.freeze({ "net.ipv4.ip_unprivileged_port_start": "0" });
 
 export interface LibpodClientOptions {
   // Bound for one request, in addition to any grace period the request itself asks for.
@@ -413,6 +418,7 @@ function containerCreateBody(spec: ContainerSpec): Readonly<Record<string, unkno
       cpu: { quota: (profile.nanoCpus * CPU_PERIOD_MICROS) / 1_000_000_000, period: CPU_PERIOD_MICROS },
     },
     netns: { nsmode: profile.networkMode },
+    sysctl: { ...RUNTIME_SYSCTLS },
     tty: false,
     mounts: [
       ...scratch.map((destination) => ({

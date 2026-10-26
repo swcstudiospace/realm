@@ -245,3 +245,11 @@ the phase 9.5 supervisor reports its effective configuration. The PD-08 stop and
 - **Packages.** `cmake` is needed by the `aws-lc-sys` build script. The apt packages come from the Debian bookworm archive and are not pinned to a version.
 
 To build the image, first build `--target runtime-builder` to read the sha256 the stage prints. Then build the full image with `--build-arg RUNTIME_SHA256=<that digest>`. A later build that produces a different binary fails the runtime gate.
+
+## Sandbox create hardening: low-port sysctl
+
+- The sandbox runtime needs `net.ipv4.ip_unprivileged_port_start` set to `0` in the sandbox network namespace. The Podman create body carries it as `sysctl`, and nothing else is set there.
+- The sysctl is per network namespace. The sandbox has no network, so only loopback is affected.
+- The sandbox runtime checks the sysctl itself at startup and refuses to run when it is not `0`. That check is the fail-closed guard. It lives in the runtime, outside this repository, and this repository does not verify it.
+- Podman 5.7.1 does not report sysctls in inspect, so the driver does not verify the sysctl there.
+- Exposure is wider than the runtime needs. With the sysctl at `0`, any loopback port below 1024 becomes bindable, for the workload uid as well. This is referred to the A10 security review.
