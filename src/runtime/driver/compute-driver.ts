@@ -5,7 +5,8 @@
 // environment, no user-namespace request, an isolation backend selection only when it names the configured backend over a
 // unix socket (see isolationSelectionOf), and a sandbox name that passes the container-name rule
 // once the realm prefix is added. The gateway's launch material is required and must decode for this driver's gateway
-// (launch.ts). Any mismatch is refused with SCHEMA_INVALID, and no libpod call is made. An empty argv is accepted and creates
+// (launch.ts). Any mismatch is refused with SCHEMA_INVALID, logged with the RPC and the check that refused (refusal.ts), and no
+// libpod call is made. An empty argv is accepted and creates
 // an idle sandbox; the command is not forwarded before phase 9.5. A create that passes prepares the directories the lifecycle
 // requires: the workspace, by the same rule EnsureWorkspace uses, and a new state directory. It then stores the launch material
 // in a new secret directory (secret-store.ts), outside the state root and the workspace. If the lifecycle then refuses, the state
@@ -50,6 +51,7 @@ import type { DriverLifecycle } from "./lifecycle.js";
 import { SupervisorBearerVerifier } from "./isolation/bearer.js";
 import type { BoundaryRegistry, ProvisionedResource } from "./isolation/boundary.js";
 import { decodeLaunchAuthentication } from "./isolation/launch.js";
+import { refusal, refusalScope, type RefusalLog, type RefusalScope } from "./refusal.js";
 import { GATEWAY_ID_PATTERN } from "../gateway-config.js";
 import { readLaunchMaterial, removeSandboxSecrets, secretDirExists, writeLaunchMaterial } from "./secret-store.js";
 
@@ -107,6 +109,8 @@ export interface ComputeDriverConfig {
   // The one isolation backend this driver serves, by the name the gateway selects it with. A create that selects any other name
   // is refused.
   readonly isolationBackendName: string;
+  // Receives each refusal line (refusal.ts). Stderr when absent.
+  readonly refusalLog?: RefusalLog;
 }
 
 export interface ComputeDriverDeps {
@@ -291,7 +295,7 @@ export class ComputeDriver {
 
   // Runs every create check, the launch material included. Makes no libpod call and writes nothing.
   validateSandboxCreate(sandbox: DriverSandboxMessage | null | undefined): Record<string, never> {
-    planCreate(sandbox, this.config);
+    planCreate(sandbox, this.config, this.scopeOf("ValidateSandboxCreate"));
     return {};
   }
 
@@ -300,7 +304,7 @@ export class ComputeDriver {
   // If the store or the lifecycle refuses, the state directory and the launch material this call made are removed and the
   // original error is rethrown. The workspace is left in place.
   async createSandbox(sandbox: DriverSandboxMessage | null | undefined): Promise<{ runtime_identity: string }> {
-    const plan = planCreate(sandbox, this.config);
+    const plan = planCreate(sandbox, this.config, this.scopeOf("CreateSandbox"));
     assertStateDirAbsent(plan.spec.stateDir);
     if (secretDirExists(this.config.secretRoot, plan.spec.sandboxName)) {
       throw makeRealmError("SCHEMA_INVALID");
@@ -377,7 +381,7 @@ export class ComputeDriver {
     if (body === undefined) {
       return undefined;
     }
-    const launch = decodeLaunchAuthentication(body, this.config.gatewayId);
+    const launch = decodeLaunchAuthentication(body, this.config.gatewayId, this.scopeOf("BearerVerification"));
     return new SupervisorBearerVerifier(launch.verificationKeys, launch.gatewayId);
   }
 
@@ -535,6 +539,11 @@ export class ComputeDriver {
       throw makeRealmError("PATH_ESCAPE");
     }
   }
+
+  // The refusal scope of one RPC: its name, and the sink this driver was configured with.
+  private scopeOf(rpc: "ValidateSandboxCreate" | "CreateSandbox" | "BearerVerification"): RefusalScope {
+    return refusalScope(rpc, this.config.refusalLog);
+  }
 }
 
 // The container name for a gateway sandbox name: the realm prefix is added when the name lacks it. Undefined when the
@@ -553,71 +562,75 @@ interface IsolationBackendSelectionMessage {
 // The isolation backend a create selects. An unset selection selects none. A selection is accepted only when its name is the
 // configured backend and its endpoint is a unix socket, the one transport the driver's isolation socket serves. Any other selection
 // is refused with SCHEMA_INVALID before any write or libpod call. The selected name is returned.
-function isolationSelectionOf(selection: unknown, configuredName: string): string | undefined {
+function isolationSelectionOf(selection: unknown, configuredName: string, scope: RefusalScope): string | undefined {
   if (selection === undefined || selection === null) {
     return undefined;
   }
   const { name, endpoint } = selection as IsolationBackendSelectionMessage;
   if (name !== configuredName || endpoint !== "unix_socket_path") {
-    throw makeRealmError("SCHEMA_INVALID");
+    throw refusal(scope, "create.isolation_backend");
   }
   return name;
 }
 
 // Checks a create request against the realm profile and returns the lifecycle spec and the launch material. Every refusal is
-// SCHEMA_INVALID, and no libpod call is made. The launch material is required: the driver advertises
+// SCHEMA_INVALID, logged with its RPC and check, and no libpod call is made. The launch material is required: the driver advertises
 // openshell.compute.launch-authentication, so every launch carries the gateway's bundle, and Attach can verify a bearer only
 // with keys from that bundle. A bundle that does not decode for this driver's gateway is refused here, before any write.
-function planCreate(sandbox: DriverSandboxMessage | null | undefined, config: ComputeDriverConfig): CreatePlan {
+function planCreate(
+  sandbox: DriverSandboxMessage | null | undefined,
+  config: ComputeDriverConfig,
+  scope: RefusalScope,
+): CreatePlan {
   if (sandbox === null || sandbox === undefined) {
-    throw makeRealmError("SCHEMA_INVALID");
+    throw refusal(scope, "create.sandbox");
   }
   const sandboxId = sandbox.id ?? "";
   const sandboxName = sandbox.name ?? "";
   const workspace = sandbox.workspace ?? "";
   const containerName = sandboxName === "" ? undefined : containerNameOf(sandboxName);
   if (sandboxId === "" || containerName === undefined) {
-    throw makeRealmError("SCHEMA_INVALID");
+    throw refusal(scope, "create.identity");
   }
   if (!WORKSPACE_ID_PATTERN.test(workspace)) {
-    throw makeRealmError("SCHEMA_INVALID");
+    throw refusal(scope, "create.workspace");
   }
   const spec = sandbox.spec;
   const template = spec?.template;
   if (spec === null || spec === undefined || template === null || template === undefined) {
-    throw makeRealmError("SCHEMA_INVALID");
+    throw refusal(scope, "create.spec");
   }
   // The image must be the configured digest exactly. A tag, or any other digest, is refused.
   if (template.image !== config.sandboxImage) {
-    throw makeRealmError("SCHEMA_INVALID");
+    throw refusal(scope, "create.image");
   }
   const gpu = spec.resource_requirements?.gpu;
   if (gpu !== undefined && gpu !== null) {
-    throw makeRealmError("SCHEMA_INVALID");
+    throw refusal(scope, "create.gpu");
   }
-  checkResources(template.resources);
+  checkResources(template.resources, scope);
   // The container is built from the realm profile alone. Caller-supplied platform or driver config could reach the
   // network, mounts or capabilities, so it is refused. So are environment and a user-namespace request. An isolation backend
   // selection is accepted only when it names the configured backend (isolationSelectionOf).
   if (!structIsEmpty(template.platform_config) || !structIsEmpty(template.driver_config)) {
-    throw makeRealmError("SCHEMA_INVALID");
+    throw refusal(scope, "create.runtime_config");
   }
   if (template.user_namespaces === true) {
-    throw makeRealmError("SCHEMA_INVALID");
+    throw refusal(scope, "create.user_namespaces");
   }
-  const isolationBackend = isolationSelectionOf(spec.isolation_backend, config.isolationBackendName);
+  const isolationBackend = isolationSelectionOf(spec.isolation_backend, config.isolationBackendName, scope);
   if (hasEntries(spec.environment) || hasEntries(template.environment)) {
-    throw makeRealmError("SCHEMA_INVALID");
+    throw refusal(scope, "create.environment");
   }
   // An empty argv is accepted and creates an idle sandbox. An argument that is an empty string is still refused.
   if ((spec.command ?? []).some((argument) => argument === "")) {
-    throw makeRealmError("SCHEMA_INVALID");
+    throw refusal(scope, "create.command");
   }
   const launch = spec.launch_authentication;
   if (launch === undefined || launch === null || launch.length === 0) {
-    throw makeRealmError("SCHEMA_INVALID");
+    throw refusal(scope, "create.launch_authentication");
   }
-  decodeLaunchAuthentication(launch, config.gatewayId);
+  decodeLaunchAuthentication(launch, config.gatewayId, scope);
   return {
     sandboxName,
     sandboxId,
@@ -634,15 +647,15 @@ function planCreate(sandbox: DriverSandboxMessage | null | undefined, config: Co
 }
 
 // Each non-empty CPU and memory value must equal the realm profile. An empty value means the request did not set it.
-function checkResources(resources: ResourceQuantityMessage | null | undefined): void {
+function checkResources(resources: ResourceQuantityMessage | null | undefined, scope: RefusalScope): void {
   for (const cpu of [resources?.cpu_request, resources?.cpu_limit]) {
     if (cpu !== undefined && cpu !== "" && cpuNanos(cpu) !== HARDENING_PROFILE.nanoCpus) {
-      throw makeRealmError("SCHEMA_INVALID");
+      throw refusal(scope, "create.resources");
     }
   }
   for (const memory of [resources?.memory_request, resources?.memory_limit]) {
     if (memory !== undefined && memory !== "" && memoryBytes(memory) !== HARDENING_PROFILE.memoryBytes) {
-      throw makeRealmError("SCHEMA_INVALID");
+      throw refusal(scope, "create.resources");
     }
   }
 }

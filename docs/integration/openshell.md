@@ -139,7 +139,6 @@ Recorded in `docs/integration/runtime-decision.md` (S-08, S-10, OQ-P3-01 to OQ-P
 - The realm account's rootless API runs as a user unit with `RuntimeDirectory=podman`, `Delegate=yes`, and `DelegateSubgroup=supervised`. Linger keeps it running after logout. The runtime is `runc`, set in the account's container configuration. The plan is `.planning/phases/09.1-host-prerequisites-gateway/09.1-01-PLAN.md`.
 - The realm gateway does not run yet. Its compute driver is built in phase 9.4 (`.planning/phases/09-live-omp-verification/09-PRODUCTION-BUILD-DECISIONS.md`, PD-02 and PD-05).
 
-
 ## Compute driver RPC table (phase 9.4)
 
 The realm compute driver implements `openshell.compute.v1.ComputeDriver` from the vendored protos in
@@ -166,6 +165,19 @@ request or limit differs from the realm profile (2 CPUs, 1 GiB), that asks for a
 driver config, a user-namespace request, an isolation backend selection other than the configured one over a unix socket, or an environment,
 or whose argv holds an empty string.
 An empty argv is accepted: the sandbox is created idle, and the command is not forwarded before phase 9.5.
+
+Every create must carry the gateway's launch authentication (`launch_authentication`). The driver decodes it with the gateway's
+own rules (`src/runtime/driver/isolation/launch.ts`): one JSON document, with no byte order mark, no duplicate object key, no
+lone surrogate escape, integers written as integers within the gateway's Rust ranges (a negative zero is not an integer), and
+whitespace as Rust defines it.
+
+Refusals are logged. Each refusal of the create checks and of the launch material writes one line to stderr:
+`realm compute driver refused: rpc=<RPC> check=<check> code=SCHEMA_INVALID`. The RPC is `ValidateSandboxCreate`,
+`CreateSandbox`, or `BearerVerification` (the supervisor's bearer check, which reads the stored launch material). The check
+names the rule that refused, such as `create.image` or `launch.gateway_id`; the full list is `REFUSAL_CHECKS` in
+`src/runtime/driver/refusal.ts`. A line never carries a value, a path, a key or a token. The directory checks that a create
+runs before the lifecycle (the state directory and the secret directory must not exist, and the workspace must be a
+directory) refuse with `SCHEMA_INVALID` and write no line yet.
 
 Sandbox names. The gateway's name is used as given, and the container runs under the `realm-` prefixed name. A name that
 already starts with `realm-` is unchanged. Any other name gets the prefix, and the prefixed name must pass the

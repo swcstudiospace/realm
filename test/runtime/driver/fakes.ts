@@ -90,7 +90,9 @@ export const IMPLEMENTATION_VERSION = "0.1.2";
 export const ISOLATION_BACKEND_NAME = "realm";
 
 // A driver config with fresh temporary roots. The state and workspace roots exist, so a create or a workspace test starts from a
-// real root. The secret root is not created here: the secret store creates it at 0700 on the first write.
+// real root. The secret root is not created here: the secret store creates it at 0700 on the first write. Refusals are logged to
+// a silent sink by default, so the expected refusals of the suite do not fill the test output; a test that checks the refusal log
+// passes its own sink.
 export function driverConfig(overrides: Partial<ComputeDriverConfig> = {}): ComputeDriverConfig {
   const base = mkdtempSync(join(tmpdir(), "realm-driver-test-"));
   const config: ComputeDriverConfig = {
@@ -102,6 +104,7 @@ export function driverConfig(overrides: Partial<ComputeDriverConfig> = {}): Comp
     implementationVersion: IMPLEMENTATION_VERSION,
     gatewayId: GATEWAY_ID,
     isolationBackendName: ISOLATION_BACKEND_NAME,
+    refusalLog: () => undefined,
     ...overrides,
   };
   mkdirSync(config.sandboxStateRoot, { recursive: true });
