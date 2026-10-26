@@ -168,7 +168,7 @@ void test("AGENTOS_NOT_CONFIGURED, AGENTOS_STOP_FAILED, and OPENSHELL_LABEL_AMBI
   const stopFailed = makeRealmError("AGENTOS_STOP_FAILED");
   assert.equal(
     stopFailed.reason,
-    "AgentOS did not stop cleanly. Its sandbox container is stopped regardless, and the stop can be retried.",
+    "AgentOS did not stop cleanly: its sandbox delete may still be pending, so no success was reported. Its sandbox container is stopped regardless, and the stop can be retried.",
   );
   assert.equal(stopFailed.retryable, true);
   const labelAmbiguous = makeRealmError("OPENSHELL_LABEL_AMBIGUOUS");

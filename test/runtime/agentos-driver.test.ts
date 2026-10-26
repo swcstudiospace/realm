@@ -42,6 +42,8 @@ interface Answers {
   // Makes every spawned runner child exit as soon as it is spawned.
   readonly childExitsOnSpawn?: boolean;
   readonly startTimeoutMs?: number;
+  // Holds the create until the test releases it, so a stop can overtake a create that is in flight.
+  readonly createGate?: Promise<void>;
 }
 
 interface Recorded {
@@ -72,17 +74,37 @@ function entry<T>(script: readonly T[], n: number): T {
 
 function fakeChild(steps: string[]): FakeChild {
   let exited = false;
+  let markExited: () => void = () => undefined;
+  const gone = new Promise<void>((resolve) => {
+    markExited = () => {
+      resolve();
+    };
+  });
+  const end = (): void => {
+    exited = true;
+    markExited();
+  };
   return {
-    exit: () => {
-      exited = true;
-    },
+    exit: end,
     hasExited: () => exited,
+    exited: gone,
     terminate: () => {
       steps.push("terminate");
-      exited = true;
+      end();
       return Promise.resolve();
     },
   };
+}
+
+// A promise the test releases by hand. Used to hold an OpenShell create in flight.
+function gate(): { readonly open: Promise<void>; readonly release: () => void } {
+  let release: () => void = () => undefined;
+  const open = new Promise<void>((resolve) => {
+    release = () => {
+      resolve();
+    };
+  });
+  return { open, release };
 }
 
 function harness(answers: Answers = {}): Harness {
@@ -103,6 +125,9 @@ function harness(answers: Answers = {}): Harness {
     counts[verb] += 1;
     if (scripted === "reject") {
       return Promise.reject(new Error("runner failed"));
+    }
+    if (verb === "create" && answers.createGate !== undefined) {
+      return answers.createGate.then(() => ({ exitCode: scripted }));
     }
     return Promise.resolve({ exitCode: scripted });
   };
@@ -237,13 +262,13 @@ void test("stop kills the runner child and then deletes the sandbox", async () =
   assert.deepEqual(h.calls.at(-1)?.argv, DELETE);
 });
 
-void test("a second stop is harmless: the child is not killed again and the delete runs again", async () => {
+void test("a second stop after a successful delete makes no second delete call", async () => {
   const h = harness();
   const driver = driverOf(h);
   await driver.start();
   await driver.stop();
   await driver.stop();
-  assert.deepEqual(h.steps, ["create", "spawn", "probe", "terminate", "delete", "delete"]);
+  assert.deepEqual(h.steps, ["create", "spawn", "probe", "terminate", "delete"]);
 });
 
 void test("a failed delete gives AGENTOS_STOP_FAILED, and a later stop retries the delete", async () => {
@@ -253,6 +278,41 @@ void test("a failed delete gives AGENTOS_STOP_FAILED, and a later stop retries t
   await assertCode(driver.stop(), "AGENTOS_STOP_FAILED");
   await driver.stop();
   assert.deepEqual(h.steps, ["create", "spawn", "probe", "terminate", "delete", "delete"]);
+});
+
+void test("a stop during create waits for the create, deletes the sandbox that create produced, and the start is not reported as active (N2)", async () => {
+  const create = gate();
+  const h = harness({ createGate: create.open });
+  const driver = driverOf(h);
+  const started = driver.start();
+  const stopped = driver.stop();
+  let stopSettled = false;
+  void stopped.then(
+    () => {
+      stopSettled = true;
+    },
+    () => {
+      stopSettled = true;
+    },
+  );
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(stopSettled, false, "the stop waits for the create it overtakes");
+  create.release();
+  await assertCode(started, "OPENSHELL_START_FAILED");
+  await stopped;
+  assert.deepEqual(h.steps, ["create", "delete"], "the create's sandbox is deleted, and no runner is spawned");
+});
+
+void test("a start called while another start is in flight joins it: one create and one runner child exist (N3)", async () => {
+  const create = gate();
+  const h = harness({ createGate: create.open });
+  const driver = driverOf(h);
+  const first = driver.start();
+  const second = driver.start();
+  create.release();
+  await Promise.all([first, second]);
+  assert.deepEqual(h.steps, ["create", "spawn", "probe"]);
+  assert.deepEqual(h.spawns, [RUNNER_EXEC]);
 });
 
 void test("alive reports exit 0 as alive, and any other exit or a rejected probe as not alive", async () => {

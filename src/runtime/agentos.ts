@@ -11,8 +11,8 @@
 //     is retryable: an explicit start() runs the policy again from a clean count;
 //   - the consecutive count resets only after 60000 ms of continuous alive, on the injected clock.
 //
-// A runner that exits while the session is active is not restarted here. check reports it at once as
-// AGENTOS_CRASH_LOOP, so the session moves to error. The next stop removes the sandbox.
+// Owner ruling (phase 9.6, N1): a single runner exit is AGENTOS_CRASH_LOOP, with no restart here. check reports it at
+// once, so the session moves to error with that catalogue code. The next stop removes the sandbox.
 //
 // Every driver call is raced against callTimeoutMs (QUAL-01). src/core/timeout.ts is not used
 // for this race because withTimeout requires a catalogue code and no catalogue code names a
@@ -122,17 +122,20 @@ export class AgentOsSupervisor {
     return this.isCurrent(epoch);
   }
 
-  // Stops the driver, best effort. A failed or hung stop does not block teardown: the session
-  // container is removed by the lifecycle, which is the hard guarantee. Stop cancels every driver
-  // call and backoff wait still in flight, so none of them starts the driver again afterwards.
-  // After stop the supervisor stays stopped until start() is called.
+  // Stops the driver. A failed, missed or hung driver stop rejects with AGENTOS_STOP_FAILED, so a failed delete is never
+  // read as success. That rejection does not stop the caller's teardown: the session container is removed by the
+  // lifecycle, which is the hard guarantee. Stop cancels every driver call and backoff wait still in flight, so none of
+  // them starts the driver again afterwards. After stop the supervisor stays stopped until start() is called.
   async stop(): Promise<void> {
     this.phase = "stopped";
     this.aliveSince = null;
     for (const cancel of [...this.inFlight]) {
       cancel();
     }
-    await this.race(() => this.driver.stop());
+    const stopped = await this.race(() => this.driver.stop());
+    if (!stopped.ok) {
+      throw makeRealmError("AGENTOS_STOP_FAILED");
+    }
   }
 
   // The current consecutive failure count, for diagnostics and tests.

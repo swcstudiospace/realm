@@ -6,7 +6,11 @@ import type { OpenShellRunner } from "../../src/runtime/openshell.js";
 
 const IMAGE = `localhost/realm-agentos@sha256:${"c".repeat(64)}`;
 // A runner child that does not exit on its own, so the budgets are the only thing these tests read.
-const RUNNING_CHILD: RunnerChild = { hasExited: () => false, terminate: () => Promise.resolve() };
+const RUNNING_CHILD: RunnerChild = {
+  hasExited: () => false,
+  exited: new Promise<void>(() => undefined),
+  terminate: () => Promise.resolve(),
+};
 
 function recordingRunner(): { readonly runner: OpenShellRunner; readonly calls: { binary: string; timeoutMs: number }[] } {
   const calls: { binary: string; timeoutMs: number }[] = [];

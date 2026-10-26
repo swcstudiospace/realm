@@ -205,8 +205,28 @@ export function buildAgentOsSandboxArgv(request: AgentOsSandboxRequest): AgentOs
     }),
     runner: buildExecArgv(request.sessionId, ["node", request.runnerPath]),
     probe: buildExecArgv(request.sessionId, ["node", request.probePath]),
-    delete: Object.freeze([OPENSHELL_BINARY, "sandbox", "delete", `realm-${request.sessionId}`]),
+    delete: buildSandboxDeleteArgv(realmSandboxName(request.sessionId)),
   });
+}
+
+// The argv that deletes one realm sandbox by name (D-014). Only a name with the realm prefix is accepted, so the realm
+// never deletes a sandbox it did not create.
+export function buildSandboxDeleteArgv(sandboxName: string): readonly string[] {
+  if (!isRealmSandboxName(sandboxName)) {
+    throw makeRealmError("SCHEMA_INVALID");
+  }
+  return Object.freeze([OPENSHELL_BINARY, "sandbox", "delete", sandboxName]);
+}
+
+// Deletes one realm sandbox and resolves true only when the delete exits 0 within timeoutMs. A refused name, a rejected
+// run and a non-zero exit are all false, so no OpenShell text reaches the caller, which maps the false result to its code.
+export async function deleteSandbox(runner: OpenShellRunner, sandboxName: string, timeoutMs: number): Promise<boolean> {
+  try {
+    const outcome = await runner(buildSandboxDeleteArgv(sandboxName), { timeoutMs });
+    return outcome.exitCode === 0;
+  } catch {
+    return false;
+  }
 }
 
 // The exec argv for one session's running sandbox (D-92, D-93). It is the pinned form: the verb and

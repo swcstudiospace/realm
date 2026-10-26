@@ -3,16 +3,25 @@ import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { RealmError, type ErrorCode } from "../../src/core/errors.js";
+import { makeRealmError, RealmError, type ErrorCode } from "../../src/core/errors.js";
 import { AgentOsSupervisor } from "../../src/runtime/agentos.js";
 import { renderNetworkPolicies } from "../../src/runtime/egress.js";
 import { HARDENING_PROFILE } from "../../src/runtime/hardening.js";
 import { LibpodClient } from "../../src/runtime/libpod-client.js";
-import { buildExecArgv, buildPolicyDocument, OPENSHELL_OUTPUT_LIMIT_BYTES, OpenShellRunnerError, type OpenShellRunner } from "../../src/runtime/openshell.js";
+import {
+  buildExecArgv,
+  buildPolicyDocument,
+  OPENSHELL_BINARY,
+  OPENSHELL_OUTPUT_LIMIT_BYTES,
+  OpenShellRunnerError,
+  realmSandboxName,
+  type OpenShellRunner,
+} from "../../src/runtime/openshell.js";
 import {
   HardeningFailedError,
   runSandboxExec,
   SessionExecution,
+  type SessionContainers,
   selectOpenShellEnvironment,
   spawnOpenShellRunner,
 } from "../../src/runtime/session-execution.js";
@@ -662,3 +671,235 @@ function sleep(ms: number): Promise<void> {
     setTimeout(resolve, ms);
   });
 }
+
+// The argv of every sandbox delete the session made through its OpenShell runner, in order.
+function sandboxDeletes(f: Fixture): (readonly string[])[] {
+  return f.openshell
+    .calls()
+    .map((call) => call.argv)
+    .filter((argv) => argv[2] === "delete");
+}
+
+void test("B2: stop deletes the session's realm sandbox, and a repeated stop makes no second delete call", async (t) => {
+  const f = await fixture(t);
+  const { containerId } = await createSession(f);
+  await f.exec.stop(containerId);
+  await f.exec.stop(containerId);
+  assert.deepEqual(sandboxDeletes(f), [[OPENSHELL_BINARY, "sandbox", "delete", realmSandboxName(SESSION)]]);
+});
+
+void test("B2: destroy deletes the session's realm sandbox, named from the container label before the container goes", async (t) => {
+  const f = await fixture(t);
+  const { containerId } = await createSession(f);
+  await f.exec.destroy(containerId);
+  assert.equal(f.store.get(containerId), undefined, "the container is removed");
+  assert.deepEqual(sandboxDeletes(f), [[OPENSHELL_BINARY, "sandbox", "delete", realmSandboxName(SESSION)]]);
+});
+
+void test("B2: a failed sandbox delete is reported as AGENTOS_STOP_FAILED, the container is still stopped, and the next stop retries the delete", async (t) => {
+  const f = await fixture(t);
+  const { containerId } = await createSession(f);
+  f.openshell.next("exit-1");
+  await assertCode(f.exec.stop(containerId), "AGENTOS_STOP_FAILED");
+  assert.equal(f.store.get(containerId)?.running, false, "the container is stopped although the delete failed");
+  await f.exec.stop(containerId);
+  assert.equal(sandboxDeletes(f).length, 2, "the next stop retries the delete");
+});
+
+void test("N5: a driver stop that outlives the stop budget is reported as AGENTOS_STOP_FAILED, never as success, and the container is still stopped", async (t) => {
+  const f = await fixture(t);
+  const { containerId } = await createSession(f);
+  const budgeted = new SessionExecution({
+    libpod: new LibpodClient(join(f.base, "podman.sock")),
+    runner: f.openshell.runner,
+    agentos: f.supervisor,
+    config: { image: IMAGE, workloadArgv: WORKLOAD, stateDir: f.stateDir },
+    egressAllow: EGRESS,
+    stopDeadlineMs: 20,
+  });
+  // A driver stop that never settles: the stop budget is the only thing that ends the step.
+  f.supervisor.stop = () => new Promise<void>(() => undefined);
+  // The stop must reject with the catalogue reason. Resolving would report success while the sandbox delete is outstanding.
+  await assert.rejects(
+    budgeted.stop(containerId),
+    (error: unknown) =>
+      error instanceof RealmError &&
+      error.code === "AGENTOS_STOP_FAILED" &&
+      error.reason === makeRealmError("AGENTOS_STOP_FAILED").reason,
+  );
+  assert.equal(f.store.get(containerId)?.running, false, "the container is stopped although the budget ran out");
+});
+
+// A promise the test releases by hand, to hold an OpenShell create in flight.
+function gate(): { readonly open: Promise<void>; readonly release: () => void } {
+  let release: () => void = () => undefined;
+  const open = new Promise<void>((resolve) => {
+    release = () => {
+      resolve();
+    };
+  });
+  return { open, release };
+}
+
+// A libpod surface that delegates to the fixture's client. Once arm(step) is called, every later call to that step rejects
+// with a libpod error, so one step fails after the create has recorded the sandbox name.
+type ArmableStep = "inspectContainer" | "stopContainer" | "removeContainer";
+
+function armableLibpod(f: Fixture): { readonly libpod: SessionContainers; readonly arm: (step: ArmableStep) => void } {
+  const client = new LibpodClient(join(f.base, "podman.sock"));
+  let armed: ArmableStep | undefined;
+  const failIf = (step: ArmableStep): Promise<never> | undefined =>
+    armed === step ? Promise.reject(makeRealmError("PODMAN_MACHINE_DOWN")) : undefined;
+  const libpod: SessionContainers = {
+    info: client.info.bind(client),
+    listContainersByLabel: client.listContainersByLabel.bind(client),
+    inspectContainer: (id) => failIf("inspectContainer") ?? client.inspectContainer(id),
+    stopContainer: (id, timeoutMs) => failIf("stopContainer") ?? client.stopContainer(id, timeoutMs),
+    removeContainer: (id, options) => failIf("removeContainer") ?? client.removeContainer(id, options),
+  };
+  return {
+    libpod,
+    arm: (step) => {
+      armed = step;
+    },
+  };
+}
+
+// A SessionExecution over the fixture's supervisor and config, with the given libpod surface and runner.
+function sessionExecWith(f: Fixture, libpod: SessionContainers, runner: OpenShellRunner = f.openshell.runner): SessionExecution {
+  return new SessionExecution({
+    libpod,
+    runner,
+    agentos: f.supervisor,
+    config: { image: IMAGE, workloadArgv: WORKLOAD, stateDir: f.stateDir },
+    egressAllow: EGRESS,
+    readProcStatus: () => f.procStatus.text,
+  });
+}
+
+// Creates the session's container through the given instance, so that instance holds the sandbox name it will delete.
+async function createWith(f: Fixture, exec: SessionExecution): Promise<{ readonly containerId: string }> {
+  scriptInspect(f, conformingInspect(f));
+  return exec.create({ idempotencyKey: SESSION, workspaceRoot: f.workspaceRoot });
+}
+
+void test("B-1: a libpod error in stop does not skip the session sandbox delete, and that libpod error is the one rethrown", async (t) => {
+  const f = await fixture(t);
+  const armed = armableLibpod(f);
+  const exec = sessionExecWith(f, armed.libpod);
+  const { containerId } = await createWith(f, exec);
+  armed.arm("stopContainer");
+  await assert.rejects(exec.stop(containerId), (error: unknown) => error instanceof RealmError && error.code === "PODMAN_MACHINE_DOWN");
+  assert.deepEqual(sandboxDeletes(f), [[OPENSHELL_BINARY, "sandbox", "delete", realmSandboxName(SESSION)]]);
+});
+
+void test("B-1: a libpod error in destroy does not skip the session sandbox delete, and that libpod error is the one rethrown", async (t) => {
+  const f = await fixture(t);
+  const armed = armableLibpod(f);
+  const exec = sessionExecWith(f, armed.libpod);
+  const { containerId } = await createWith(f, exec);
+  armed.arm("removeContainer");
+  await assert.rejects(exec.destroy(containerId), (error: unknown) => error instanceof RealmError && error.code === "PODMAN_MACHINE_DOWN");
+  assert.deepEqual(sandboxDeletes(f), [[OPENSHELL_BINARY, "sandbox", "delete", realmSandboxName(SESSION)]]);
+});
+
+void test("B-1: inspectContainer rejects in stop; the sandbox delete still runs, and that libpod error is the one rethrown", async (t) => {
+  const f = await fixture(t);
+  const armed = armableLibpod(f);
+  const exec = sessionExecWith(f, armed.libpod);
+  const { containerId } = await createWith(f, exec);
+  armed.arm("inspectContainer");
+  await assert.rejects(exec.stop(containerId), (error: unknown) => error instanceof RealmError && error.code === "PODMAN_MACHINE_DOWN");
+  assert.deepEqual(sandboxDeletes(f), [[OPENSHELL_BINARY, "sandbox", "delete", realmSandboxName(SESSION)]]);
+});
+
+void test("B-1: inspectContainer rejects in destroy; the sandbox delete still runs, and that libpod error is the one rethrown", async (t) => {
+  const f = await fixture(t);
+  const armed = armableLibpod(f);
+  const exec = sessionExecWith(f, armed.libpod);
+  const { containerId } = await createWith(f, exec);
+  armed.arm("inspectContainer");
+  await assert.rejects(exec.destroy(containerId), (error: unknown) => error instanceof RealmError && error.code === "PODMAN_MACHINE_DOWN");
+  assert.deepEqual(sandboxDeletes(f), [[OPENSHELL_BINARY, "sandbox", "delete", realmSandboxName(SESSION)]]);
+});
+
+void test("B-3: a stop whose wait for an in-flight create outlasts its deadline reports AGENTOS_STOP_FAILED with the catalogue reason, and still deletes the named sandbox", async (t) => {
+  const f = await fixture(t);
+  const name = realmSandboxName(SESSION);
+  const hold = gate();
+  const heldRunner: OpenShellRunner = (argv, options) =>
+    argv[2] === "create" ? hold.open.then(() => f.openshell.runner(argv, options)) : f.openshell.runner(argv, options);
+  const exec = new SessionExecution({
+    libpod: new LibpodClient(join(f.base, "podman.sock")),
+    runner: heldRunner,
+    agentos: f.supervisor,
+    config: { image: IMAGE, workloadArgv: WORKLOAD, stateDir: f.stateDir },
+    egressAllow: EGRESS,
+    stopDeadlineMs: 20,
+    readProcStatus: () => f.procStatus.text,
+  });
+  // The create registers before its first await, so the stop below already sees it in flight.
+  const created = exec.create({ idempotencyKey: SESSION, workspaceRoot: f.workspaceRoot });
+  await assert.rejects(
+    exec.stop(name),
+    (error: unknown) =>
+      error instanceof RealmError &&
+      error.code === "AGENTOS_STOP_FAILED" &&
+      error.reason === makeRealmError("AGENTOS_STOP_FAILED").reason,
+  );
+  assert.deepEqual(sandboxDeletes(f), [[OPENSHELL_BINARY, "sandbox", "delete", name]]);
+  // Queued only after the stop: the stop's own inspect would otherwise consume it. The create's verification reads it after release.
+  scriptInspect(f, conformingInspect(f));
+  hold.release();
+  await created.catch(() => undefined);
+});
+
+void test("B-2: a destroy whose sandbox delete fails keeps the name owed, so a second destroy after the container is gone deletes the sandbox", async (t) => {
+  const f = await fixture(t);
+  const { containerId } = await createSession(f);
+  f.openshell.next("exit-1");
+  await assertCode(f.exec.destroy(containerId), "AGENTOS_STOP_FAILED");
+  assert.equal(f.store.get(containerId), undefined, "the container is removed although the delete failed");
+  await f.exec.destroy(containerId);
+  assert.deepEqual(sandboxDeletes(f), [
+    [OPENSHELL_BINARY, "sandbox", "delete", realmSandboxName(SESSION)],
+    [OPENSHELL_BINARY, "sandbox", "delete", realmSandboxName(SESSION)],
+  ]);
+});
+
+void test("B-2: destroy of an already-removed container whose id is the realm sandbox name deletes the sandbox", async (t) => {
+  const f = await fixture(t);
+  const name = realmSandboxName(SESSION);
+  await f.exec.destroy(name);
+  assert.deepEqual(sandboxDeletes(f), [[OPENSHELL_BINARY, "sandbox", "delete", name]]);
+});
+
+void test("B-3: a stop during a session create waits for the create, deletes the sandbox it produced, and the create is not reported as active", async (t) => {
+  const f = await fixture(t);
+  const name = realmSandboxName(SESSION);
+  const hold = gate();
+  const heldRunner: OpenShellRunner = (argv, options) =>
+    argv[2] === "create" ? hold.open.then(() => f.openshell.runner(argv, options)) : f.openshell.runner(argv, options);
+  const exec = sessionExecWith(f, new LibpodClient(join(f.base, "podman.sock")), heldRunner);
+  // The container the create produces is inspected by its own create, before the stop can act on it.
+  scriptInspect(f, conformingInspect(f));
+  const created = exec.create({ idempotencyKey: SESSION, workspaceRoot: f.workspaceRoot });
+  // The stop names the sandbox, because the container id does not exist until the create returns.
+  const stopped = exec.stop(name);
+  let stopSettled = false;
+  void stopped.then(
+    () => {
+      stopSettled = true;
+    },
+    () => {
+      stopSettled = true;
+    },
+  );
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(stopSettled, false, "the stop waits for the create it names");
+  hold.release();
+  await assert.rejects(created, (error: unknown) => error instanceof RealmError && error.code === "OPENSHELL_START_FAILED");
+  await stopped;
+  assert.deepEqual(sandboxDeletes(f), [[OPENSHELL_BINARY, "sandbox", "delete", name]]);
+  assert.equal(f.store.list().filter((container) => container.running).length, 0, "no container is left running");
+});

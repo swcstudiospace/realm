@@ -53,7 +53,7 @@ export class FakeOpenShell {
     this.store = store;
   }
 
-  // Queues the steps for the next runs, in order. An unscripted run is a create.
+  // Queues the steps for the next runs, in order. An unscripted run is a create, or a silent exit 0 for a sandbox delete.
   next(...steps: OpenShellStep[]): void {
     this.script.push(...steps);
   }
@@ -68,7 +68,7 @@ export class FakeOpenShell {
 
   private async run(argv: readonly string[], options: OpenShellRunOptions): Promise<OpenShellRunOutcome> {
     this.log.push({ argv: [...argv], timeoutMs: options.timeoutMs, captureOutput: options.captureOutput === true });
-    const step = this.script.shift() ?? "create";
+    const step = this.script.shift() ?? (argv[2] === "delete" ? "silent" : "create");
     if (typeof step === "object") {
       return step.output;
     }

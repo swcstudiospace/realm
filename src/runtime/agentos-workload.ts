@@ -5,6 +5,7 @@
 
 import { spawn, type SpawnOptions } from "node:child_process";
 import { makeRealmError } from "../core/errors.js";
+import { withTimeout } from "../core/timeout.js";
 import type { EnvironmentLike } from "../session/paths.js";
 import { selectOpenShellEnvironment } from "./session-execution.js";
 
@@ -25,6 +26,8 @@ export type SpawnProcess = (file: string, args: readonly string[], options: Spaw
 export interface RunnerChild {
   // True once the process has exited, or once its spawn failed.
   hasExited(): boolean;
+  // Settles once the process has exited, or once its spawn failed. It never rejects.
+  readonly exited: Promise<void>;
   // Stops the process: SIGTERM, then SIGKILL when it has not exited within graceMs. Each wait is bounded by graceMs,
   // so the call always settles. It never rejects and never reports the child's output.
   terminate(graceMs: number): Promise<void>;
@@ -82,6 +85,7 @@ function track(proc: RunnerProcess): RunnerChild {
   });
   return {
     hasExited: () => exited,
+    exited: gone,
     terminate: async (graceMs) => {
       if (!exited) {
         signalRunner(proc, "SIGTERM");
@@ -109,13 +113,8 @@ function signalRunner(proc: RunnerProcess, name: NodeJS.Signals): void {
   proc.kill(name);
 }
 
-// Resolves once promise settles or after ms, whichever comes first. The timer is cleared on either path.
-function settleWithin(promise: Promise<void>, ms: number): Promise<void> {
-  let timer: NodeJS.Timeout | undefined;
-  const expiry = new Promise<void>((resolve) => {
-    timer = setTimeout(resolve, ms);
-  });
-  return Promise.race([promise, expiry]).finally(() => {
-    clearTimeout(timer);
-  });
+// Resolves once promise settles or after ms, whichever comes first. The bound is the codebase timeout helper. Its
+// expiry is swallowed here, because terminate only needs the wait to end, and the caller checks hasExited afterwards.
+async function settleWithin(promise: Promise<void>, ms: number): Promise<void> {
+  await withTimeout(promise, ms, "OPENSHELL_START_FAILED").catch(() => undefined);
 }

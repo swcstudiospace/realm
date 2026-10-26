@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { AgentOsSupervisor } from "../../src/runtime/agentos.js";
 import { HARDENING_PROFILE } from "../../src/runtime/hardening.js";
 import { LibpodClient } from "../../src/runtime/libpod-client.js";
-import { buildExecArgv } from "../../src/runtime/openshell.js";
+import { buildExecArgv, OPENSHELL_BINARY, realmSandboxName } from "../../src/runtime/openshell.js";
 import { SessionExecution } from "../../src/runtime/session-execution.js";
 import { FakeAgentOsDriver } from "../support/fake-agentos.js";
 import { FakeContainerStore, FakeLibpod } from "../support/fake-libpod.js";
@@ -102,7 +102,7 @@ async function createSession(f: Fixture): Promise<{ readonly containerId: string
   return f.exec.create({ idempotencyKey: SESSION, workspaceRoot: f.workspaceRoot });
 }
 
-void test("RT-03: the session create argv names no workload command, and the create is the only OpenShell run", async (t) => {
+void test("RT-03: the session create argv names no workload command, and the OpenShell runs are the create and one sandbox delete", async (t) => {
   const f = await fixture(t);
   const { containerId } = await createSession(f);
   await f.exec.start(containerId);
@@ -111,10 +111,12 @@ void test("RT-03: the session create argv names no workload command, and the cre
   await f.exec.destroy(containerId);
 
   const calls = f.openshell.calls();
-  assert.equal(calls.length, 1, "the OpenShell runner is called exactly once, by create");
+  // stop deletes the session sandbox once (B2); destroy after it finds that delete done and runs no second one.
+  assert.deepEqual(calls.map((call) => call.argv[2]), ["create", "delete"], "one create, then exactly one sandbox delete");
   const argv = calls[0]?.argv ?? [];
   assert.deepEqual(argv.slice(0, 3), ["openshell", "sandbox", "create"]);
   assert.equal(argv.includes("--"), false, "the create argv names no command");
+  assert.deepEqual(calls[1]?.argv, [OPENSHELL_BINARY, "sandbox", "delete", realmSandboxName(SESSION)]);
 });
 
 void test("RT-03: the libpod client has no exec or attach method, and only container create and start among start methods", async (t) => {

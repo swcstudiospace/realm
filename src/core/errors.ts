@@ -119,7 +119,7 @@ export const ERROR_CATALOGUE: Readonly<Record<ErrorCode, CatalogueEntry>> =
     },
     AGENTOS_STOP_FAILED: {
       reason:
-        "AgentOS did not stop cleanly. Its sandbox container is stopped regardless, and the stop can be retried.",
+        "AgentOS did not stop cleanly: its sandbox delete may still be pending, so no success was reported. Its sandbox container is stopped regardless, and the stop can be retried.",
       retryable: true,
     },
     ANDA_UNREACHABLE: {

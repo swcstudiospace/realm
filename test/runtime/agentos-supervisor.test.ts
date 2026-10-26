@@ -289,3 +289,13 @@ void test("a runner that exited while the session was active is reported as AGEN
   assert.equal(driver.callCount("alive"), 0, "the exit is reported without a probe");
   assert.equal(driver.callCount("start"), 1, "the supervisor does not restart a runner that exited");
 });
+
+void test("B2: a driver stop that fails makes the supervisor stop reject with AGENTOS_STOP_FAILED, so a failed delete is never read as success", async () => {
+  const { driver, supervisor } = harness();
+  await supervisor.start();
+  driver.script("stop", "reject");
+  await assert.rejects(
+    supervisor.stop(),
+    (error: unknown) => error instanceof RealmError && error.code === "AGENTOS_STOP_FAILED",
+  );
+});

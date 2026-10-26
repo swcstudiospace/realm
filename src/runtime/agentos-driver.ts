@@ -1,9 +1,10 @@
 // The OpenShell-carried AgentOS driver (D-014, D-016, D-018). The AgentOS runner is the workload of one OpenShell
-// sandbox. start creates the sandbox, then starts the runner as a long-lived exec child (agentos-workload.ts) and waits
-// until the probe answers. alive probes the sandbox through the pinned exec form. stop kills the runner child and
-// deletes the sandbox. Every OpenShell command goes through the injected runner port and is bounded: create by
-// startTimeoutMs, and the probes and the delete by callTimeoutMs. The argv come from src/runtime/openshell.ts, the one
-// module allowed to name the OpenShell binary and the exec builder.
+// sandbox, realm-agentos. start creates the sandbox, starts the runner as a long-lived exec child (agentos-workload.ts)
+// and waits until the probe answers. alive probes the sandbox through the pinned exec form. stop kills the runner child
+// and deletes the sandbox; a stop after a successful delete makes no second delete call. Starts and stops run one after
+// another, so a delete never runs over a create that is still in flight. Every OpenShell command goes through the
+// injected runner port and is bounded: create by startTimeoutMs, and the probes and the delete by callTimeoutMs. The argv
+// come from src/runtime/openshell.ts, the one module allowed to name the OpenShell binary and the exec builder.
 
 import { performance } from "node:perf_hooks";
 import { makeRealmError } from "../core/errors.js";
@@ -17,7 +18,7 @@ export const DEFAULT_AGENTOS_RUNNER_PATH = "/usr/local/lib/realm/agentos-runner.
 export const DEFAULT_AGENTOS_PROBE_PATH = "/usr/local/lib/realm/agentos-probe.js";
 
 const SANDBOX_NAME_PREFIX = "realm-";
-// The pause between readiness probes while the start deadline runs (D5).
+// The pause between readiness probes while the start deadline runs (D5). A runner child that exits ends the pause early.
 const PROBE_INTERVAL_MS = 1000;
 // The grace the runner child gets after SIGTERM, and again after SIGKILL, before a stop moves on (D4, D7).
 const RUNNER_TERMINATE_GRACE_MS = 2000;
@@ -64,11 +65,16 @@ async function succeeds(run: () => Promise<OpenShellRunOutcome>, budgetMs: numbe
   }
 }
 
-// A bounded pause between two readiness probes.
-function pause(ms: number): Promise<void> {
-  return new Promise<void>((resolve) => {
-    setTimeout(resolve, ms);
-  });
+// A bounded pause between two readiness probes. It ends after ms, or as soon as the runner child exits, so a runner that
+// dies is noticed at once. The bound is withTimeout; its expiry is the normal end of the pause, not a failure.
+async function pauseUnlessExited(exited: Promise<void>, ms: number): Promise<void> {
+  await withTimeout(exited, ms, "OPENSHELL_START_FAILED").catch(() => undefined);
+}
+
+// Waits for an earlier operation to settle, whatever its outcome. The earlier operation reports its own failure to its
+// own caller. Each operation is bounded by its own deadlines, so this wait is bounded too.
+async function ignoreOutcome(operation: Promise<void>): Promise<void> {
+  await operation.catch(() => undefined);
 }
 
 export function createOpenShellAgentOsDriver(options: OpenShellAgentOsDriverOptions): AgentOsDriver {
@@ -97,6 +103,12 @@ export function createOpenShellAgentOsDriver(options: OpenShellAgentOsDriverOpti
   let runnerChild: RunnerChild | undefined;
   // Counts stop() calls, so a start that a stop overtakes gives up instead of starting a runner after the stop.
   let stops = 0;
+  // The start in flight, or undefined. See start() for how an overlapping start is handled.
+  let startInFlight: Promise<void> | undefined;
+  // The stop in flight, or undefined. A start called while a stop is in flight waits for that stop.
+  let stopInFlight: Promise<void> | undefined;
+  // True once the sandbox has been deleted and no create has run since. A stop that finds it set makes no delete call.
+  let sandboxDeleted = false;
 
   // Detaches the held runner child and terminates it. Detaching first means a stop never reads as a crash, and a
   // later failed step leaves no held child to be terminated twice. terminate never rejects.
@@ -108,45 +120,96 @@ export function createOpenShellAgentOsDriver(options: OpenShellAgentOsDriverOpti
     }
   }
 
-  return {
-    async start(): Promise<void> {
-      await stopRunner();
-      const stopsAtStart = stops;
-      // The create is the first step, so it gets the whole start budget. Its deadline is the one the readiness wait uses.
-      const deadline = performance.now() + startTimeoutMs;
-      const left = (): number => deadline - performance.now();
+  // One start. It waits for the stop before it, if one is in flight, so its create never runs over that stop's delete (N2).
+  // stopsAtCall is the stop count when start() was called. A stop that lands after that call, at any point, overtakes this
+  // start, so the start fails instead of reporting the runner as up. The create is bounded by startTimeoutMs, and the
+  // readiness wait by the same deadline.
+  async function runStart(waitFor: Promise<void> | undefined, stopsAtCall: number): Promise<void> {
+    if (waitFor !== undefined) {
+      await ignoreOutcome(waitFor);
+    }
+    await stopRunner();
+    sandboxDeleted = false;
+    // The create is the first step, so it gets the whole start budget. Its deadline is the one the readiness wait uses.
+    const deadline = performance.now() + startTimeoutMs;
+    const left = (): number => deadline - performance.now();
 
-      // The runner starts only once create has exited 0, so a failed create spawns nothing.
-      const created = await succeeds(() => runner(argv.create, { timeoutMs: startTimeoutMs }), startTimeoutMs);
-      if (!created || stops !== stopsAtStart || left() <= 0) {
-        throw makeRealmError("OPENSHELL_START_FAILED");
+    // The runner starts only once create has exited 0, so a failed create spawns nothing. A stop that overtakes the
+    // create leaves the sandbox for that stop to delete when the create finishes (N2), and this start never reports it
+    // as active.
+    const created = await succeeds(() => runner(argv.create, { timeoutMs: startTimeoutMs }), startTimeoutMs);
+    if (!created || stops !== stopsAtCall || left() <= 0) {
+      throw makeRealmError("OPENSHELL_START_FAILED");
+    }
+
+    let spawned: RunnerChild;
+    try {
+      spawned = spawnRunner(argv.runner);
+    } catch {
+      throw makeRealmError("OPENSHELL_START_FAILED");
+    }
+    runnerChild = spawned;
+
+    // Readiness: probe until a probe exits 0. A runner that exits first, a stop, or the deadline fails the start.
+    for (;;) {
+      if (spawned.hasExited() || stops !== stopsAtCall) {
+        break;
       }
-
-      let spawned: RunnerChild;
-      try {
-        spawned = spawnRunner(argv.runner);
-      } catch {
-        throw makeRealmError("OPENSHELL_START_FAILED");
-      }
-      runnerChild = spawned;
-
-      // Readiness: probe until a probe exits 0. A runner that exits first, a stop, or the deadline fails the start.
-      for (;;) {
-        if (spawned.hasExited() || stops !== stopsAtStart) {
-          break;
-        }
-        const probeBudget = Math.min(callTimeoutMs, left());
-        if (await succeeds(() => runner(argv.probe, { timeoutMs: probeBudget }), probeBudget)) {
+      const probeBudget = Math.min(callTimeoutMs, left());
+      if (await succeeds(() => runner(argv.probe, { timeoutMs: probeBudget }), probeBudget)) {
+        // A stop that landed while the probe ran wins: the runner is not reported as up.
+        if (stops === stopsAtCall) {
           return;
         }
-        const pauseMs = Math.min(probeIntervalMs, left());
-        if (pauseMs <= 0) {
-          break;
-        }
-        await pause(pauseMs);
+        break;
       }
-      await stopRunner();
-      throw makeRealmError("OPENSHELL_START_FAILED");
+      const pauseMs = Math.min(probeIntervalMs, left());
+      if (pauseMs <= 0) {
+        break;
+      }
+      await pauseUnlessExited(spawned.exited, pauseMs);
+    }
+    await stopRunner();
+    throw makeRealmError("OPENSHELL_START_FAILED");
+  }
+
+  // One stop. It stops the runner child at once, so a start still in its readiness wait sees the stop at its next check.
+  // It then waits for the stop before it and for the start it overtakes, and deletes the sandbox unless a delete already
+  // succeeded. A failed delete leaves sandboxDeleted unset, so the next stop retries it.
+  async function runStop(previous: Promise<void> | undefined, starting: Promise<void> | undefined): Promise<void> {
+    await stopRunner();
+    if (previous !== undefined) {
+      await ignoreOutcome(previous);
+    }
+    if (starting !== undefined) {
+      await ignoreOutcome(starting);
+    }
+    if (sandboxDeleted) {
+      return;
+    }
+    if (!(await succeeds(() => runner(argv.delete, { timeoutMs: callTimeoutMs }), callTimeoutMs))) {
+      throw makeRealmError("AGENTOS_STOP_FAILED");
+    }
+    sandboxDeleted = true;
+  }
+
+  return {
+    start(): Promise<void> {
+      // N3, the decision: a start called while another start is in flight joins that start and gets its result. One
+      // create and one runner child exist per sandbox. A start called after a stop began does not join: the stop
+      // overtakes the start in flight, so the new start waits for that stop and then runs its own create.
+      if (startInFlight !== undefined && stopInFlight === undefined) {
+        return startInFlight;
+      }
+      const attempt = runStart(stopInFlight, stops);
+      startInFlight = attempt;
+      const clear = (): void => {
+        if (startInFlight === attempt) {
+          startInFlight = undefined;
+        }
+      };
+      attempt.then(clear, clear);
+      return attempt;
     },
     async alive(): Promise<boolean> {
       // A non-zero probe exit is an answer (not alive). A rejection or a missed budget is a failed attempt.
@@ -155,13 +218,19 @@ export function createOpenShellAgentOsDriver(options: OpenShellAgentOsDriverOpti
     runnerExited(): boolean {
       return runnerChild !== undefined && runnerChild.hasExited();
     },
-    async stop(): Promise<void> {
+    stop(): Promise<void> {
       stops += 1;
-      await stopRunner();
-      // The delete runs on every stop, so a repeated stop, or a retry after a failed delete, removes the sandbox.
-      if (!(await succeeds(() => runner(argv.delete, { timeoutMs: callTimeoutMs }), callTimeoutMs))) {
-        throw makeRealmError("AGENTOS_STOP_FAILED");
-      }
+      const previous = stopInFlight;
+      const starting = startInFlight;
+      const attempt = runStop(previous, starting);
+      stopInFlight = attempt;
+      const clear = (): void => {
+        if (stopInFlight === attempt) {
+          stopInFlight = undefined;
+        }
+      };
+      attempt.then(clear, clear);
+      return attempt;
     },
   };
 }
