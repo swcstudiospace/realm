@@ -23,7 +23,8 @@
 #   runtime-builder   Rust 1.95.0 on bookworm. Fetches OpenShell at OPENSHELL_REVISION and
 #                     fails unless HEAD is that commit. Builds openshell-sandbox with
 #                     --locked --release. Fails unless its glibc needs are at most
-#                     GLIBC_2.36 and its shared libraries are the glibc set plus libgcc_s.
+#                     GLIBC_2.36 and its shared libraries are the glibc set, libgcc_s.so.1,
+#                     and ld-linux-x86-64.so.2.
 #   runtime           Node on bookworm slim, with the helper at /opt/realm/bin/realm-helper,
 #                     the runtime at /usr/local/lib/realm/openshell-sandbox, and the AgentOS
 #                     runner and probe with the library under /usr/local/lib/realm.
@@ -138,8 +139,9 @@ RUN set -eu; \
         exit 1; \
     fi; \
     rm -f /tmp/runtime-versions.txt
-# Dependency gate. The binary may need only the glibc set and libgcc_s.so.1, and its
-# program interpreter must be the x86-64 glibc loader. The needed libraries are printed.
+# Dependency gate. The binary may need only the glibc set, libgcc_s.so.1, and the dynamic
+# loader's own soname ld-linux-x86-64.so.2, and its program interpreter must be the x86-64
+# glibc loader. The needed libraries are printed.
 RUN set -eu; \
     bin=/src/openshell/target/release/openshell-sandbox; \
     interp="$(readelf -W -l "$bin" | sed -n 's/.*Requesting program interpreter: \(.*\)]/\1/p')"; \
@@ -152,7 +154,7 @@ RUN set -eu; \
     unexpected=""; \
     while IFS= read -r lib; do \
         case "$lib" in \
-            libc.so.6|libm.so.6|libdl.so.2|libpthread.so.0|librt.so.1|libresolv.so.2|libutil.so.1|libgcc_s.so.1) ;; \
+            libc.so.6|libm.so.6|libdl.so.2|libpthread.so.0|librt.so.1|libresolv.so.2|libutil.so.1|libgcc_s.so.1|ld-linux-x86-64.so.2) ;; \
             *) unexpected="$unexpected $lib" ;; \
         esac; \
     done < /tmp/runtime-needed.txt; \
