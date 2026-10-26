@@ -229,3 +229,19 @@ Captured live on 2026-10-25 through the realm gateway, with debug spans on. One 
 Phase 9.4 closes on its code and on the live checks it can reach. A sandbox stays Provisioning (ConfigurationPending) until
 the phase 9.5 supervisor reports its effective configuration. The PD-08 stop and start observation, and
 `AuthenticateSandbox`, move to phase 9.5 with it.
+
+## Runtime image build (phase 9.5)
+
+`sandbox/Dockerfile` builds `/usr/local/lib/realm/openshell-sandbox`, the runtime the driver starts, in a `runtime-builder` stage. The stage builds the upstream source itself and does not copy a host binary.
+
+- **Base.** `docker.io/library/rust:1.95.0-bookworm`, pinned by the digest of its OCI image index. The toolchain is 1.95.0, the channel in the upstream `rust-toolchain.toml` at the pinned commit. The base is bookworm, glibc 2.36.
+- **Source.** `OPENSHELL_REVISION` names one full commit. The default is `bdb956f2cd65a635f1294fccf1d138d263bf650f`, tag `v0.1.5`. The stage fetches that commit at depth 1 from `https://github.com/NVIDIA/OpenShell`, fails unless `HEAD` equals the argument, checks the upstream toolchain channel, and removes the `.git` directory. An override names another commit. That build is unpinned: the gates still apply, but the commit has not been reviewed here.
+- **Build.** `cargo build --locked --release -p openshell-sandbox`, using the source's own `Cargo.lock`. Crates come from crates.io at build time.
+- **glibc gate.** The stage reads the `GLIBC_` version needs with `readelf` and fails when any is newer than `GLIBC_2.36`. It prints the highest version. A build of this commit on a glibc 2.39 host needs `GLIBC_2.38` and `GLIBC_2.39`, so a binary built that way cannot run in this image. That comparison comes from a local build, not from the image.
+- **Dependency gate.** The stage fails unless the program interpreter is `/lib64/ld-linux-x86-64.so.2` and every needed library is in the glibc set or is `libgcc_s.so.1`. The runtime stage then runs `ldd` on the copied binary and fails on any `not found` line. That line also covers a GLIBC version that the image's glibc lacks.
+- **Labels.** The runtime stage records `io.realm.runtime.sha256` from the `RUNTIME_SHA256` build argument. The gate fails unless that value matches the copied binary. It records `io.realm.runtime.revision` from `OPENSHELL_REVISION`. The gate proves that the image holds the binary whose digest was supplied. It does not compare that binary with an external reference.
+- **Network.** Build time only. The `runtime-builder` stage uses apt (`git`, `cmake`), the GitHub fetch and crates.io. The runtime stage's `npm ci` already used the npm registry. The image has no network at run time.
+- **Architecture.** The gates expect x86-64. On another architecture the interpreter gate fails.
+- **Packages.** `cmake` is needed by the `aws-lc-sys` build script. The apt packages come from the Debian bookworm archive and are not pinned to a version.
+
+To build the image, first build `--target runtime-builder` to read the sha256 the stage prints. Then build the full image with `--build-arg RUNTIME_SHA256=<that digest>`. A later build that produces a different binary fails the runtime gate.
