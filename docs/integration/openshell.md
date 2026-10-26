@@ -264,3 +264,13 @@ To build the image, first build `--target runtime-builder` to read the sha256 th
 - Exposure is wider than the runtime needs. With the sysctl at `0`, any loopback port below 1024 becomes bindable, for the workload uid as well. This is referred to the A10 security review.
 - IPv6 is disabled in the sandbox network namespace: `net.ipv6.conf.all.disable_ipv6` and `net.ipv6.conf.default.disable_ipv6` are both `1`. The sandbox has IPv4 loopback only, and `::1` is not configured on `lo`. RT-05 requires IPv6 off in the sandbox. Before this change the live sandbox had IPv6 on: `/proc/sys/net/ipv6/conf/all/disable_ipv6` read `0`, and `::1` was on `lo`.
 - The driver does not verify the IPv6 keys at inspect either, for the same reason as the low-port sysctl above.
+
+## CLI and gateway pin: 0.1.5 (verified 2026-10-26)
+
+- The OpenShell CLI and gateway are 0.1.5. The realm's verbs were re-verified against that version on 2026-10-26.
+- Create: `openshell sandbox create --name realm-<sessionId> --policy <path> --no-auto-providers --detach --cpu <n> --memory <size>`, with `--from <image>` for the AgentOS sandbox. The create passes no `--no-keep`, so the sandbox lasts until `realm down` deletes it.
+- Exec: `openshell sandbox exec --name realm-<sessionId> --workdir /workspace --no-tty --no-login-shell -- <argv>`. The AgentOS runner and its probe use this form.
+- Delete: `openshell sandbox delete realm-<sessionId>`.
+- A create command is not run in 0.1.5. A create with `-- <command>` and `--detach` does not run the command, and the marker the command writes never appears. Without `--detach` the CLI opens an interactive shell. So the AgentOS runner never starts from create. The realm starts it as a long-lived `sandbox exec` child after create (`src/runtime/agentos-workload.ts`). Live evidence: a runner started by the exec form above and held open wrote its heartbeat within 20 s, and the probe with the same exec flags exited 0.
+- Piped stdin is refused above 4 MiB. Move larger input with `openshell sandbox upload`.
+- The CLI receives only `PATH`, `HOME` and `XDG_RUNTIME_DIR` (`OPENSHELL_ENV_NAMES`). The gateway is therefore registered in the CLI's default config location, under `HOME`, and no gateway setting travels in the environment.
