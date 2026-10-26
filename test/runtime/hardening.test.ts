@@ -2,10 +2,15 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   capabilitySetsOf,
+  CHANNEL_MOUNT_OPTIONS,
+  channelOptionFailures,
   HARDENING_PROFILE,
   HARDENING_PROPERTIES,
   type HardeningBinding,
   type HardeningProperty,
+  RUNTIME_ARGV,
+  RUNTIME_BINARY,
+  SUPERVISOR_CA_TMPFS_OPTIONS,
   verifyInspect,
 } from "../../src/runtime/hardening.js";
 import { SANDBOX_WORKSPACE_PATH } from "../../src/runtime/openshell.js";
@@ -134,10 +139,12 @@ void test("every D-51 property has a named check, and a non-object inspect fails
       "network-mode",
       "image-digest",
       "mounts",
+      "init-process",
       "socket-path",
     ],
   );
-  const inspectDerived = HARDENING_PROPERTIES.filter((property) => property !== "rootless");
+  // A session binding has no channel, so PID 1 is not checked for it.
+  const inspectDerived = HARDENING_PROPERTIES.filter((property) => property !== "rootless" && property !== "init-process");
   assert.deepEqual(verifyInspect(BINDING, undefined), inspectDerived);
   assert.deepEqual(verifyInspect(BINDING, "not an object"), inspectDerived);
 });
@@ -325,6 +332,8 @@ function conformingSandbox(): Record<string, unknown> {
     ...(inspect.HostConfig as Record<string, unknown>),
     Tmpfs: { "/tmp": "rw", "/run": "rw", [SUPERVISOR_CA]: "rw" },
   };
+  inspect.Path = RUNTIME_BINARY;
+  inspect.Args = RUNTIME_ARGV.slice(1);
   return inspect;
 }
 
@@ -367,3 +376,59 @@ void test("a channel binding refuses a container without the CA tmpfs (RT-01)", 
   inspect.HostConfig = { ...(inspect.HostConfig as Record<string, unknown>), Tmpfs: { "/tmp": "rw", "/run": "rw" } };
   assert.deepEqual(verifyInspect(CHANNEL_BINDING, inspect), ["tmpfs"]);
 });
+
+void test("PID 1 of a channel binding is the runtime with its exact argv: any other program or argument list is refused (phase 9.5, wave 3)", () => {
+  const cases: readonly (readonly [string, (inspect: Inspect) => void])[] = [
+    ["another program", (inspect) => { inspect.Path = "/opt/realm/bin/realm-helper"; }],
+    ["another argument list", (inspect) => { inspect.Args = ["idle"]; }],
+    ["an extra argument", (inspect) => { inspect.Args = [...RUNTIME_ARGV.slice(1), "--extra"]; }],
+    ["the arguments reordered", (inspect) => { inspect.Args = [...RUNTIME_ARGV.slice(1)].reverse(); }],
+    ["no program", (inspect) => { Reflect.deleteProperty(inspect, "Path"); }],
+    ["no arguments", (inspect) => { Reflect.deleteProperty(inspect, "Args"); }],
+  ];
+  for (const [name, change] of cases) {
+    const inspect = conformingSandbox();
+    change(inspect);
+    assert.deepEqual(verifyInspect(CHANNEL_BINDING, inspect), ["init-process"], name);
+  }
+});
+
+void test("a session binding does not check PID 1, so a session container with another init still conforms (phase 9.5, wave 3)", () => {
+  assert.deepEqual(verifyInspect(BINDING, { ...conforming(), Path: "/bin/sleep", Args: ["infinity"] }), []);
+});
+
+// A container as created, before start: the CA tmpfs and the channel mount carry the given options (phase 9.5, F).
+function createdSandbox(
+  caOptions: readonly string[] = SUPERVISOR_CA_TMPFS_OPTIONS,
+  channelOptions: readonly string[] = CHANNEL_MOUNT_OPTIONS,
+): Record<string, unknown> {
+  const inspect = conformingSandbox();
+  inspect.HostConfig = {
+    ...(inspect.HostConfig as Record<string, unknown>),
+    Tmpfs: { "/tmp": "nosuid,nodev", "/run": "nosuid,nodev", [SUPERVISOR_CA]: caOptions.join(",") },
+  };
+  inspect.Mounts = [
+    bind(WORKSPACE, "/workspace", true),
+    bind(STATE, "/realm-state", false),
+    { ...bind(CHANNEL, HARDENING_PROFILE.channelDestination, true), Options: [...channelOptions, "rbind"] },
+  ];
+  return inspect;
+}
+
+void test("a container as created carries the CA tmpfs and channel mount options it must (phase 9.5, F)", () => {
+  assert.deepEqual(channelOptionFailures(createdSandbox()), []);
+});
+
+for (const option of SUPERVISOR_CA_TMPFS_OPTIONS) {
+  void test(`a CA tmpfs without ${option} fails ca-tmpfs-options alone, before start (phase 9.5, F)`, () => {
+    const options = SUPERVISOR_CA_TMPFS_OPTIONS.filter((member) => member !== option);
+    assert.deepEqual(channelOptionFailures(createdSandbox(options)), ["ca-tmpfs-options"]);
+  });
+}
+
+for (const option of CHANNEL_MOUNT_OPTIONS) {
+  void test(`a channel mount without ${option} fails channel-mount-options alone, before start (phase 9.5, F)`, () => {
+    const options = CHANNEL_MOUNT_OPTIONS.filter((member) => member !== option);
+    assert.deepEqual(channelOptionFailures(createdSandbox(undefined, options)), ["channel-mount-options"]);
+  });
+}

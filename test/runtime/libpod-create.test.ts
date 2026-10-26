@@ -120,7 +120,7 @@ const SPEC: ContainerSpec = {
 const EXPECTED_BODY = {
   name: "realm-sess-1",
   image: SPEC.image,
-  entrypoint: ["/opt/realm/bin/realm-helper", "idle"],
+  entrypoint: ["/usr/local/lib/realm/openshell-sandbox", "--bootstrap", "/run/openshell/channel/bootstrap.json"],
   user: "1001:1001",
   userns: { nsmode: "keep-id", value: "uid=1001,gid=1001" },
   labels: {

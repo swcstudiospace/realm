@@ -41,6 +41,24 @@ export const HARDENING_PROFILE = Object.freeze({
   workloadGid: 1001,
 });
 
+// The sandbox runtime is the sandbox container's main process (phase 9.5, wave 3). Its binary and the exact argv that starts it
+// are one value: the create body names them, and the verifier checks PID 1 against them. The file name is the one the channel
+// writes (BOOTSTRAP_FILE_NAME in driver/secret-store.ts).
+export const RUNTIME_BINARY = "/usr/local/lib/realm/openshell-sandbox";
+export const CONTAINER_BOOTSTRAP_PATH = `${HARDENING_PROFILE.channelDestination}/bootstrap.json`;
+export const RUNTIME_ARGV: readonly string[] = Object.freeze([RUNTIME_BINARY, "--bootstrap", CONTAINER_BOOTSTRAP_PATH]);
+// The options the sandbox container's channel mount is created with. The pre-start check requires each of them.
+export const CHANNEL_MOUNT_OPTIONS: readonly string[] = Object.freeze(["rw", "noexec", "nosuid", "nodev"]);
+// The options of the CA tmpfs: not executable, not suid, no devices, mode 0700, owned by the workload user.
+export const SUPERVISOR_CA_TMPFS_OPTIONS: readonly string[] = Object.freeze([
+  "noexec",
+  "nosuid",
+  "nodev",
+  "mode=0700",
+  `uid=${String(HARDENING_PROFILE.workloadUid)}`,
+  `gid=${String(HARDENING_PROFILE.workloadGid)}`,
+]);
+
 // The properties that verifyInspect checks, in report order.
 export const HARDENING_PROPERTIES = Object.freeze([
   "privileged",
@@ -56,6 +74,7 @@ export const HARDENING_PROPERTIES = Object.freeze([
   "network-mode",
   "image-digest",
   "mounts",
+  "init-process",
   "socket-path",
 ] as const);
 
@@ -113,6 +132,11 @@ const CHECKS: Readonly<Record<HardeningProperty, Check>> = Object.freeze({
       (channel === undefined || isMountOf(mounts, channel, HARDENING_PROFILE.channelDestination, true))
     );
   },
+  // PID 1 of a sandbox container is the sandbox runtime, started with its exact argv (phase 9.5, wave 3). A session container
+  // has no channel and is not checked here.
+  "init-process": (inspect, binding) =>
+    binding.channelDir === undefined ||
+    (field(inspect, ["Path"]) === RUNTIME_BINARY && sameArgv(field(inspect, ["Args"]), RUNTIME_ARGV.slice(1))),
   "socket-path": (inspect) => {
     const mounts = field(inspect, ["Mounts"]);
     return (
@@ -230,4 +254,58 @@ function pathIsClear(value: unknown): boolean {
 function digestOf(imageRef: string): string | undefined {
   const at = imageRef.lastIndexOf("@");
   return at < 0 ? undefined : imageRef.slice(at + 1);
+}
+
+// The properties a sandbox container is refused for before it starts (phase 9.5, wave 3, F): the CA tmpfs options and the
+// channel mount options. A missing or mistyped field fails its check.
+export type ChannelProperty = "ca-tmpfs-options" | "channel-mount-options";
+
+// The channel checks run on the container as created, before the runtime's files are written and before it starts. Reports
+// in the order of ChannelProperty; an empty list means the container conforms.
+export function channelOptionFailures(inspect: unknown): readonly ChannelProperty[] {
+  const failures: ChannelProperty[] = [];
+  if (!caTmpfsOptionsSafe(inspect)) {
+    failures.push("ca-tmpfs-options");
+  }
+  if (!channelMountOptionsSafe(inspect)) {
+    failures.push("channel-mount-options");
+  }
+  return failures;
+}
+
+function caTmpfsOptionsSafe(inspect: unknown): boolean {
+  const options = field(inspect, ["HostConfig", "Tmpfs", HARDENING_PROFILE.supervisorCaDestination]);
+  if (typeof options !== "string") {
+    return false;
+  }
+  const given = options.split(",");
+  return SUPERVISOR_CA_TMPFS_OPTIONS.every((option) => given.includes(option));
+}
+
+function channelMountOptionsSafe(inspect: unknown): boolean {
+  const mounts = field(inspect, ["Mounts"]);
+  if (!Array.isArray(mounts)) {
+    return false;
+  }
+  const entries: readonly unknown[] = mounts;
+  const channel = entries.filter((mount) => isRecord(mount) && mount["Destination"] === HARDENING_PROFILE.channelDestination);
+  const [only] = channel;
+  if (channel.length !== 1 || !isRecord(only)) {
+    return false;
+  }
+  const options = only["Options"];
+  if (!Array.isArray(options)) {
+    return false;
+  }
+  const given: readonly unknown[] = options;
+  return CHANNEL_MOUNT_OPTIONS.every((option) => given.includes(option));
+}
+
+// True only when the value is an array holding exactly the expected arguments, in order.
+function sameArgv(actual: unknown, expected: readonly string[]): boolean {
+  if (!Array.isArray(actual)) {
+    return false;
+  }
+  const values: readonly unknown[] = actual;
+  return values.length === expected.length && values.every((value, index) => value === expected[index]);
 }

@@ -3,9 +3,9 @@
 // this file is PROVISIONAL. The gated integration suite confirms them on a Podman 5.x host
 // (S-09). They live in this file only, so a correction touches one place.
 //
-// The table holds the routes the closed libpod client uses: the read, stop, and remove routes, the create and
-// container-start routes of the lifecycle, and the two exec routes the built-in runtime start uses. The exec routes start
-// one fixed command, the sandbox runtime, detached; the client takes no caller argv and no attach (RT-03).
+// The table holds the routes the closed libpod client uses: the read, stop, and remove routes, and the create and
+// container-start routes of the lifecycle. It has no exec route: the sandbox runtime is the container's main process,
+// so the client starts no process inside a container and takes no attach (RT-03).
 
 import { makeRealmError } from "../core/errors.js";
 
@@ -13,7 +13,7 @@ export type LibpodMethod = "GET" | "POST" | "DELETE";
 
 export interface LibpodRoute {
   readonly method: LibpodMethod;
-  // Path template. The single "{id}" segment is a validated id: a container id, or an exec session id for startExec.
+  // Path template. The single "{id}" segment is a validated container id.
   readonly path: string;
 }
 
@@ -29,8 +29,6 @@ export const LIBPOD_ROUTES = Object.freeze({
   removeContainer: route("DELETE", "/libpod/containers/{id}"),
   createContainer: route("POST", "/libpod/containers/create"),
   startContainer: route("POST", "/libpod/containers/{id}/start"),
-  createExec: route("POST", "/libpod/containers/{id}/exec"),
-  startExec: route("POST", "/libpod/exec/{id}/start"),
 });
 
 export type LibpodRouteName = keyof typeof LIBPOD_ROUTES;

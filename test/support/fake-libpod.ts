@@ -160,8 +160,6 @@ export class FakeLibpod {
   private readonly hangs = new Set<LibpodRouteName>();
   private readonly scripted = new Map<LibpodRouteName, RawReply>();
   private sequence = 0;
-  private readonly execs = new Map<string, string>();
-  private execSequence = 0;
 
   constructor(options: FakeLibpodOptions = {}) {
     this.store = options.store ?? new FakeContainerStore();
@@ -325,10 +323,6 @@ export class FakeLibpod {
         return jsonReply(501, { message: "create is not modelled by the in-process fake" });
       case "startContainer":
         return jsonReply(501, { message: "start is not modelled by the in-process fake" });
-      case "createExec":
-        return this.createExecRoute(id);
-      case "startExec":
-        return this.startExecRoute(id);
     }
   }
 
@@ -394,25 +388,5 @@ export class FakeLibpod {
     }
     this.store.remove(container.id);
     return jsonReply(200, [{ Id: container.id }]);
-  }
-
-  // An exec session is created in a container, running or stopped, as libpod allows. Its id is container-id shaped.
-  private createExecRoute(id: string | undefined): Reply {
-    const container = id === undefined ? undefined : this.store.get(id);
-    if (container === undefined) {
-      return NOT_FOUND;
-    }
-    this.execSequence += 1;
-    const execId = `exec-${String(this.execSequence)}`;
-    this.execs.set(execId, container.id);
-    return jsonReply(201, { [LIBPOD_LIST_ID_FIELD]: execId });
-  }
-
-  // Starting a detached exec session answers 200. The session is spent once it has started.
-  private startExecRoute(id: string | undefined): Reply {
-    if (id === undefined || !this.execs.delete(id)) {
-      return NOT_FOUND;
-    }
-    return { status: 200 };
   }
 }

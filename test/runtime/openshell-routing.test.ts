@@ -117,14 +117,13 @@ void test("RT-03: the workload starts only through the OpenShell create argv, wi
   assert.deepEqual(argv.slice(argv.indexOf("--") + 1), WORKLOAD);
 });
 
-void test("RT-03: exec is limited to the detached runtime start, the libpod client has no attach method, and only container create and start among start methods", async (t) => {
+void test("RT-03: the libpod client has no exec or attach method, and only container create and start among start methods", async (t) => {
   const f = await fixture(t);
   const methods = Object.getOwnPropertyNames(LibpodClient.prototype)
     .filter((name) => name !== "constructor")
     .sort();
   assert.deepEqual(methods, [
     "createContainer",
-    "execDetached",
     "info",
     "inspectContainer",
     "listContainersByLabel",
@@ -132,7 +131,7 @@ void test("RT-03: exec is limited to the detached runtime start, the libpod clie
     "startContainer",
     "stopContainer",
   ]);
-  assert.deepEqual(methods.filter((name) => /exec/i.test(name)), ["execDetached"], "execDetached is the only exec method");
+  assert.deepEqual(methods.filter((name) => /exec/i.test(name)), [], "the libpod client has no exec method");
   for (const name of methods) {
     assert.equal(/attach/i.test(name), false, `method ${name} must not join a process`);
     assert.equal(/start/i.test(name) && name !== "startContainer", false, `method ${name} is a start other than container start`);
