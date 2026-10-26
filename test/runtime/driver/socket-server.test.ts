@@ -9,16 +9,15 @@ import {
   computeDriverImplementation,
   loadComputeDriverService,
 } from "../../../src/runtime/driver/compute-driver.js";
-import { BoundaryRegistry } from "../../../src/runtime/driver/isolation/boundary.js";
 import { startSocketServer, type SocketServer } from "../../../src/runtime/driver/server.js";
-import { FakeLibpod, FakeLifecycle, driverConfig, socketDirectory } from "./fakes.js";
+import { FakeLibpod, FakeLifecycle, FakeRuntime, driverConfig, socketDirectory } from "./fakes.js";
 
 async function startOn(socketPath: string): Promise<SocketServer> {
   const libpod = new FakeLibpod();
   const driver = new ComputeDriver(driverConfig(), {
     lifecycle: new FakeLifecycle(libpod),
     libpod,
-    boundaries: new BoundaryRegistry(),
+    runtime: new FakeRuntime(),
   });
   return startSocketServer(socketPath, [
     { service: loadComputeDriverService(), implementation: computeDriverImplementation(driver) },

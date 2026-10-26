@@ -5,12 +5,11 @@
 
 import { makeRealmError, type RealmError } from "../../core/errors.js";
 
-// The driver entry point a refusal arrived on. BearerVerification is the supervisor bearer check on the isolation socket, which reads
-// the launch material when it verifies a bearer; it is not a compute RPC.
-export const DRIVER_RPCS = ["ValidateSandboxCreate", "CreateSandbox", "BearerVerification"] as const;
+// The driver entry point a refusal arrived on. Both are compute RPCs.
+export const DRIVER_RPCS = ["ValidateSandboxCreate", "CreateSandbox"] as const;
 export type DriverRpc = (typeof DRIVER_RPCS)[number];
 
-// The checks that refuse a create or a bearer. Each names one rule, and none names a value.
+// The checks that refuse a create. Each names one rule, and none names a value.
 export const REFUSAL_CHECKS = [
   "create.sandbox",
   "create.identity",

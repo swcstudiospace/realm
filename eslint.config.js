@@ -9,7 +9,13 @@ const untypedJs = tseslint.configs.strict.map((config) => ({ ...config, files: [
 // Architecture invariants over src/**/*.ts. These replace source-scanning tests (child_process allowlist,
 // D-99 guarded symbols, D-88 file functions, spawn sites), so the checks run as lint rules.
 const CHILD_PROCESS_PATHS = ["child_process", "node:child_process"];
-const CHILD_PROCESS_ALLOWED = ["src/cli/main.ts", "src/doctor/checks.ts", "src/runtime/session-execution.ts"];
+const CHILD_PROCESS_ALLOWED = [
+  "src/cli/main.ts",
+  "src/doctor/checks.ts",
+  "src/runtime/session-execution.ts",
+  "src/runtime/driver/channel.ts",
+  "src/runtime/driver/supervisor.ts",
+];
 const GATE_MODULES = ["src/core/policy.ts", "src/core/states.ts", "src/core/errors.ts", "src/contract/validate.ts"];
 const SPECIAL_SRC = [
   "src/tools/**/*.ts",
@@ -20,8 +26,9 @@ const SPECIAL_SRC = [
   "src/fs/list.ts",
   "src/cli/main.ts",
   "src/doctor/checks.ts",
+  "src/runtime/driver/supervisor.ts",
 ];
-const SPAWN_MESSAGE = "P6-D1: spawn( is allowed only in src/runtime/session-execution.ts and src/cli/main.ts.";
+const SPAWN_MESSAGE = "P6-D1: spawn( is allowed only in src/runtime/session-execution.ts, src/cli/main.ts and src/runtime/driver/supervisor.ts.";
 const GUARD_OWNER = {
   buildExecArgv: "src/runtime/openshell.ts",
   lockedWrite: "src/fs/write.ts",
@@ -107,7 +114,7 @@ const GENERIC = [...DYNAMIC, ...SPAWN, "openshellBinary", ...GUARDS];
 const withoutKey = (keys, drop) => keys.filter((key) => key !== drop);
 const childProcessPaths = CHILD_PROCESS_PATHS.map((name) => ({
   name,
-  message: "TOOL-02: only the allowlisted modules (src/cli/main.ts, src/doctor/checks.ts, src/runtime/session-execution.ts) import child_process.",
+  message: "TOOL-02: only the allowlisted modules (src/cli/main.ts, src/doctor/checks.ts, src/runtime/session-execution.ts, src/runtime/driver/channel.ts, src/runtime/driver/supervisor.ts) import child_process.",
 }));
 // Dispatcher internals that host adapters (src/mcp, src/acp, src/omp) must never reference (P5-D11, P5-D12).
 const ADAPTER_INTERNALS = [
@@ -235,6 +242,10 @@ export default tseslint.config(
   {
     files: ["src/doctor/checks.ts"],
     rules: { "no-restricted-syntax": syntaxRule([...DYNAMIC, ...NAMED_ONLY, ...SPAWN, ...GUARDS]) },
+  },
+  {
+    files: ["src/runtime/driver/supervisor.ts"],
+    rules: { "no-restricted-syntax": syntaxRule([...DYNAMIC, ...NAMED_ONLY, "openshellBinary", ...GUARDS]) },
   },
   {
     files: ["src/**/*.ts"],

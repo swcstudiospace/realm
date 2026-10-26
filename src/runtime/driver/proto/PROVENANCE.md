@@ -2,7 +2,8 @@
 
 These files are copied unmodified from the NVIDIA OpenShell repository. The first five define the `openshell.compute.v1.ComputeDriver`
 service that the realm compute driver implements (`src/runtime/driver/compute-driver.ts`). The last two define the isolation backend
-and sandbox protocol services that the realm isolation backend serves (`src/runtime/driver/isolation/backend.ts`, phase 9.5).
+and sandbox protocol services. The driver starts the built-in sandbox runtime (phase 9.5), which serves neither service, so the driver
+loads neither of the last two. They stay vendored at the pinned revision until the next re-vendor.
 
 - Upstream: https://github.com/NVIDIA/OpenShell
 - Revision of the first five files: `c4688aa8715ea75d6c39fe468361dbbc16c691fa` (feat(helm): add certificate hook pod labels and annotations, 2026-10-24)

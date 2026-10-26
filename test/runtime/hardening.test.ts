@@ -307,3 +307,63 @@ function parentOf(root: Inspect, path: readonly string[]): Record<string, unknow
   }
   return node;
 }
+
+const CHANNEL = "/realm/channel";
+const CHANNEL_BINDING: HardeningBinding = { ...BINDING, channelDir: CHANNEL };
+const SUPERVISOR_CA = HARDENING_PROFILE.supervisorCaDestination;
+
+// A conforming inspect of a sandbox container with a channel: the workspace, the read-only state directory, the read-write
+// channel, and the CA tmpfs beside the profile's scratch paths.
+function conformingSandbox(): Record<string, unknown> {
+  const inspect = conforming();
+  inspect.Mounts = [
+    bind(WORKSPACE, "/workspace", true),
+    bind(STATE, "/realm-state", false),
+    bind(CHANNEL, HARDENING_PROFILE.channelDestination, true),
+  ];
+  inspect.HostConfig = {
+    ...(inspect.HostConfig as Record<string, unknown>),
+    Tmpfs: { "/tmp": "rw", "/run": "rw", [SUPERVISOR_CA]: "rw" },
+  };
+  return inspect;
+}
+
+void test("a channel binding conforms to a container with the workspace, state and channel mounts and the CA tmpfs (RT-01)", () => {
+  assert.deepEqual(verifyInspect(CHANNEL_BINDING, conformingSandbox()), []);
+});
+
+void test("a session binding fails a channel-shaped container on the tmpfs and mounts properties, because it expects two mounts (RT-01)", () => {
+  assert.deepEqual(verifyInspect(BINDING, conformingSandbox()), ["tmpfs", "mounts"]);
+});
+
+void test("a channel binding refuses a fourth mount, even when the three expected mounts are present (RT-01)", () => {
+  const inspect = conformingSandbox();
+  inspect.Mounts = [...(inspect.Mounts as Record<string, unknown>[]), bind("/realm/elsewhere", "/elsewhere", false)];
+  assert.deepEqual(verifyInspect(CHANNEL_BINDING, inspect), ["mounts"]);
+});
+
+void test("a channel binding refuses a read-write state mount (RT-01, D-51)", () => {
+  const inspect = conformingSandbox();
+  inspect.Mounts = [
+    bind(WORKSPACE, "/workspace", true),
+    bind(STATE, "/realm-state", true),
+    bind(CHANNEL, HARDENING_PROFILE.channelDestination, true),
+  ];
+  assert.deepEqual(verifyInspect(CHANNEL_BINDING, inspect), ["mounts"]);
+});
+
+void test("a channel binding refuses a read-only channel mount, because the runtime writes its socket there (RT-01)", () => {
+  const inspect = conformingSandbox();
+  inspect.Mounts = [
+    bind(WORKSPACE, "/workspace", true),
+    bind(STATE, "/realm-state", false),
+    bind(CHANNEL, HARDENING_PROFILE.channelDestination, false),
+  ];
+  assert.deepEqual(verifyInspect(CHANNEL_BINDING, inspect), ["mounts"]);
+});
+
+void test("a channel binding refuses a container without the CA tmpfs (RT-01)", () => {
+  const inspect = conformingSandbox();
+  inspect.HostConfig = { ...(inspect.HostConfig as Record<string, unknown>), Tmpfs: { "/tmp": "rw", "/run": "rw" } };
+  assert.deepEqual(verifyInspect(CHANNEL_BINDING, inspect), ["tmpfs"]);
+});

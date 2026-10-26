@@ -8,6 +8,12 @@
 // (libpod-routes.ts, podman.md Q5). They are confirmed only by the gated suite on Podman 5.x.
 // The capability check reads KernelCaps: the five capability sets of the container's init process, read from
 // its host /proc status and attached by the caller, because libpod inspect does not report them (D-51).
+//
+// The compute driver's sandbox container adds two things to the session container's shape: a read-write channel mount for the
+// sandbox runtime, and a noexec tmpfs for the runtime's CA material. A binding that names a channel directory selects that shape
+// (HardeningBinding.channelDir); a binding without one is the session container, and its checks are unchanged.
+
+import { createHash } from "node:crypto";
 
 // Numeric limits and the frozen profile values live here and nowhere else (D-52).
 export const HARDENING_PROFILE = Object.freeze({
@@ -26,6 +32,13 @@ export const HARDENING_PROFILE = Object.freeze({
   // Realm chooses it, and the gated suite must confirm that the OpenShell driver mounts the state dir there.
   workspaceDestination: "/workspace",
   stateDestination: "/realm-state",
+  // The channel the sandbox runtime and the host supervisor share: its bootstrap, TLS files and control socket.
+  channelDestination: "/run/openshell/channel",
+  // A tmpfs of the runtime's CA material, mounted noexec and owned by the workload user. It is a tmpfs of the sandbox container only.
+  supervisorCaDestination: "/run/openshell-supervisor-ca",
+  // The workload identity of the sandbox process. The user namespace maps the realm account to this uid and gid.
+  workloadUid: 1001,
+  workloadGid: 1001,
 });
 
 // The properties that verifyInspect checks, in report order.
@@ -54,9 +67,12 @@ export interface HardeningBinding {
   readonly image: string;
   // From libpod info, never inferred (D-51). Anything other than true fails the rootless check.
   readonly rootless: boolean;
-  // The two mount sources the container must carry, and no others (D-51).
+  // The two mount sources of the session container, and no others (D-51): the workspace read-write, the state directory read-only.
   readonly workspaceRoot: string;
   readonly stateDir: string;
+  // The sandbox container's channel source, read-write. When present, the container must also carry the CA tmpfs and the channel
+  // mount, and nothing else. Absent for a session container.
+  readonly channelDir?: string;
 }
 
 type Check = (inspect: unknown, binding: HardeningBinding) => boolean;
@@ -69,9 +85,9 @@ const CHECKS: Readonly<Record<HardeningProperty, Check>> = Object.freeze({
   "no-new-privileges": (inspect) => hasNoNewPrivileges(field(inspect, ["HostConfig", "SecurityOpt"])),
   "read-only-root": (inspect) =>
     field(inspect, ["HostConfig", "ReadonlyRootfs"]) === HARDENING_PROFILE.readonlyRootfs,
-  tmpfs: (inspect) => {
+  tmpfs: (inspect, binding) => {
     const tmpfs = field(inspect, ["HostConfig", "Tmpfs"]);
-    return isRecord(tmpfs) && sameStrings(Object.keys(tmpfs), HARDENING_PROFILE.tmpfs);
+    return isRecord(tmpfs) && sameStrings(Object.keys(tmpfs), tmpfsDestinationsOf(binding));
   },
   "pids-limit": (inspect) => field(inspect, ["HostConfig", "PidsLimit"]) === HARDENING_PROFILE.pidsLimit,
   "memory-limit": (inspect) => field(inspect, ["HostConfig", "Memory"]) === HARDENING_PROFILE.memoryBytes,
@@ -81,15 +97,20 @@ const CHECKS: Readonly<Record<HardeningProperty, Check>> = Object.freeze({
     const pinned = digestOf(binding.image);
     return pinned !== undefined && field(inspect, ["ImageDigest"]) === pinned;
   },
-  // The two bind mounts and no others (D-51). The workspace is read-write, as the OpenShell policy grants
-  // /workspace. The state directory is read-only, which fails closed because D-51 is silent on it.
+  // The bind mounts and no others (D-51). The workspace is read-write, as the OpenShell policy grants /workspace. The state
+  // directory is read-only, which fails closed because D-51 is silent on it. The channel, when the binding names one, is read-write,
+  // so the runtime can write its socket and remove its bootstrap. An extra mount, or a read-write state mount, fails.
   mounts: (inspect, binding) => {
     const mounts = field(inspect, ["Mounts"]);
+    if (!Array.isArray(mounts)) {
+      return false;
+    }
+    const channel = binding.channelDir;
     return (
-      Array.isArray(mounts) &&
-      mounts.length === 2 &&
+      mounts.length === (channel === undefined ? 2 : 3) &&
       isMountOf(mounts, binding.workspaceRoot, HARDENING_PROFILE.workspaceDestination, true) &&
-      isMountOf(mounts, binding.stateDir, HARDENING_PROFILE.stateDestination, false)
+      isMountOf(mounts, binding.stateDir, HARDENING_PROFILE.stateDestination, false) &&
+      (channel === undefined || isMountOf(mounts, channel, HARDENING_PROFILE.channelDestination, true))
     );
   },
   "socket-path": (inspect) => {
@@ -104,6 +125,21 @@ const CHECKS: Readonly<Record<HardeningProperty, Check>> = Object.freeze({
 // Returns the failed property names in report order. An empty list means the inspect conforms.
 export function verifyInspect(binding: HardeningBinding, inspect: unknown): readonly HardeningProperty[] {
   return HARDENING_PROPERTIES.filter((property) => !CHECKS[property](inspect, binding));
+}
+
+// The tmpfs destinations a container of this binding carries: the profile's scratch paths, and the CA tmpfs for the sandbox container.
+export function tmpfsDestinationsOf(binding: HardeningBinding): readonly string[] {
+  return binding.channelDir === undefined
+    ? HARDENING_PROFILE.tmpfs
+    : [...HARDENING_PROFILE.tmpfs, HARDENING_PROFILE.supervisorCaDestination];
+}
+
+// The sha256 hex digest of the hardening profile, the properties the verifier checks, and the image. It is computed before the
+// container is created and stored as the provisioning evidence of the sandbox. The runtime is started only after the verifier
+// has accepted the container, so the evidence names a profile that was verified for that container.
+export function hardeningEvidenceDigest(image: string): string {
+  const canonical = JSON.stringify({ profile: HARDENING_PROFILE, properties: HARDENING_PROPERTIES, image });
+  return createHash("sha256").update(canonical, "utf8").digest("hex");
 }
 
 function field(source: unknown, path: readonly string[]): unknown {

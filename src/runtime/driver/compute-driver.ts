@@ -1,28 +1,29 @@
-// The realm's implementation of the OpenShell ComputeDriver gRPC service (phase 9.4, PRD-DRV-01..03).
+// The realm's implementation of the OpenShell ComputeDriver gRPC service (phase 9.4, PRD-DRV-01..03; phase 9.5 starts the
+// in-container runtime on the built-in path).
 //
 // Create is the only path to a container. Before it reaches the lifecycle, the request is checked against the realm
 // profile: the digest-pinned image, the portable CPU and memory limits, no GPU, no platform or driver config, no
-// environment, no user-namespace request, an isolation backend selection only when it names the configured backend over a
-// unix socket (see isolationSelectionOf), and a sandbox name that passes the container-name rule
-// once the realm prefix is added. A create carries the gateway's launch material. CreateSandbox requires it. ValidateSandboxCreate
-// accepts a create without it, because the gateway validates a create before it mints the material. Launch material that is present
-// must decode for this driver's gateway on both RPCs (launch.ts). Any mismatch is refused with SCHEMA_INVALID, logged with the RPC and
-// the check that refused (refusal.ts), and no libpod call is made. An empty argv is accepted and creates
-// an idle sandbox; the command is not forwarded before phase 9.5. A create that passes prepares the directories the lifecycle
-// requires: the workspace, by the same rule EnsureWorkspace uses, and a new state directory. It then stores the launch material
-// in a new secret directory (secret-store.ts), outside the state root and the workspace. If the lifecycle then refuses, the state
-// directory and the launch material this call made are removed. The lifecycle (DriverLifecycle, phase 9.3) then builds, starts
-// and verifies the container.
+// environment, no user-namespace request, no isolation backend selection (the built-in path carries none), and a sandbox name
+// that passes the container-name rule once the realm prefix is added. A create carries the gateway's launch material.
+// CreateSandbox requires it. ValidateSandboxCreate accepts a create without it, because the gateway validates a create before
+// it mints the material. Launch material that is present must decode for this driver's gateway on both RPCs (launch.ts). Any
+// mismatch is refused with SCHEMA_INVALID, logged with the RPC and the check that refused (refusal.ts), and no libpod call is made.
+// An empty argv is accepted and creates an idle sandbox.
+//
+// A create that passes prepares the directories the lifecycle requires: the workspace, by the same rule EnsureWorkspace uses, and a
+// new state directory. It stores the launch material in a new secret directory outside the state root and the workspace, and it
+// makes the channel: a TLS identity for the runtime, and the runtime's bootstrap, descriptor and auth bundle, built and checked
+// for agreement before any libpod call. The lifecycle (DriverLifecycle) then creates the container, and the bootstrap and the
+// rest are written before it starts. Once the container is verified, the driver starts the sandbox runtime inside it, waits for its
+// control socket, and starts the host supervisor. Any failure removes what this call made, and rethrows the original error.
 //
 // The gateway names a sandbox without the realm prefix, and the container runs under that name with the prefix added.
 // A name that already has the prefix is unchanged. The driver keeps a registry keyed by the gateway's name, holding the
-// gateway's sandbox id, its workspace, the container name and the isolation backend the create selected, if any. CreateSandbox
-// fills it and DeleteSandbox clears it. The startup sweep removes every realm container before the driver accepts
-// requests, so no sandbox survives a restart without a registry entry. Observed state comes from the labelled
-// containers, and every snapshot carries the gateway's name. StopSandbox and StartSandbox refuse with the
-// transition code, which maps to FAILED_PRECONDITION (PD-08).
-// AuthenticateSandbox is not implemented: the driver does not advertise sandbox authentication. Attach verifies a bearer
-// with the verification keys of the sandbox's own launch material (launchVerifierOf).
+// gateway's sandbox id, its workspace, and the container name. CreateSandbox fills it and DeleteSandbox clears it.
+// The startup sweep removes every realm container before the driver accepts requests, so no sandbox survives a restart
+// without a registry entry. Observed state comes from the labelled containers, and every snapshot carries the gateway's name.
+// StopSandbox and StartSandbox refuse with the transition code, which maps to FAILED_PRECONDITION (PD-08).
+// AuthenticateSandbox is not implemented: the driver does not advertise sandbox authentication.
 
 import { existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, rmdirSync, rmSync, type Stats } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
@@ -36,7 +37,7 @@ import {
 } from "@grpc/grpc-js";
 import * as protoLoader from "@grpc/proto-loader";
 import { makeRealmError, RealmError } from "../../core/errors.js";
-import { HARDENING_PROFILE } from "../hardening.js";
+import { HARDENING_PROFILE, hardeningEvidenceDigest } from "../hardening.js";
 import type { ContainerSpec, LibpodClient, LibpodInspect } from "../libpod-client.js";
 import { CONTAINER_ID_PATTERN } from "../libpod-routes.js";
 import {
@@ -47,24 +48,32 @@ import {
   REALM_SANDBOX_NAME_PREFIX,
 } from "../openshell.js";
 import { DRIVER_ADMISSION_ACKNOWLEDGEMENT } from "./admission.js";
+import { channelPathsOf, generateRuntimeTls, makeChannelDirectory, writeRuntimeFiles } from "./channel.js";
 import { driverFailureOf, DriverStatusError, driverNotFound, driverUnimplemented, toServerError } from "./grpc-status.js";
 import type { DriverLifecycle } from "./lifecycle.js";
-import { SupervisorBearerVerifier } from "./isolation/bearer.js";
-import type { BoundaryRegistry, ProvisionedResource } from "./isolation/boundary.js";
-import { decodeLaunchAuthentication } from "./isolation/launch.js";
+import { decodeLaunchAuthentication, type LaunchAuthentication } from "./isolation/launch.js";
 import { refusal, refusalScope, type RefusalLog, type RefusalScope } from "./refusal.js";
+import {
+  assertRuntimeFilesAgree,
+  buildRuntimeChannel,
+  runtimeServerName,
+  supervisorArguments,
+  supervisorEnvironment,
+  type RuntimeChannel,
+  type RuntimeVerificationKey,
+} from "./runtime-channel.js";
 import { GATEWAY_ID_PATTERN } from "../gateway-config.js";
-import { readLaunchMaterial, removeSandboxSecrets, secretDirExists, writeLaunchMaterial } from "./secret-store.js";
+import { removeSandboxSecrets, secretDirExists, secretDirOf, writeLaunchMaterial } from "./secret-store.js";
+import type { SupervisorHandle, SupervisorSpawn } from "./supervisor.js";
 
 export const COMPUTE_DRIVER_SERVICE_NAME = "openshell.compute.v1.ComputeDriver";
 const PROTO_FILE = "compute_driver.proto";
 const PROTO_DIRECTORY = join("src", "runtime", "driver", "proto");
-// The extension capabilities this driver declares. The isolation backend capability is advertised because this driver serves the
-// one backend its configuration names.
+// The extension capabilities this driver declares. The isolation backend capability is not advertised: the gateway requires it
+// only for a registered external backend, and the built-in path has none.
 const SUPPORTED_CAPABILITIES: readonly string[] = Object.freeze([
   "openshell.compute.contract",
   "openshell.compute.launch-authentication",
-  "openshell.compute.isolation-backend",
 ]);
 const WORKSPACE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const CPU_QUANTITY_PATTERN = /^([0-9]+(?:\.[0-9]+)?)(m)?$/;
@@ -92,6 +101,7 @@ export function isImplementationVersion(value: string): boolean {
   );
 }
 
+// The configuration of the compute driver, as the entry point reads it.
 export interface ComputeDriverConfig {
   // The driver's name as the gateway's [openshell.drivers.<name>] table names it.
   readonly driverName: string;
@@ -99,26 +109,38 @@ export interface ComputeDriverConfig {
   readonly sandboxImage: string;
   // Absolute root under which each sandbox's state directory sits, at <root>/<containerName>.
   readonly sandboxStateRoot: string;
-  // Absolute root under which each sandbox's secret directory sits, at <root>/<containerName>. It holds the launch material.
+  // Absolute root under which each sandbox's secret directory sits, at <root>/<containerName>. It holds the launch material,
+  // the runtime's channel, and the supervisor's files.
   readonly secretRoot: string;
   // Absolute root under which each workspace directory sits, at <root>/<workspace>.
   readonly workspaceRoot: string;
   // The build version advertised as the extension implementation version. The gateway refuses an empty or invalid value.
   readonly implementationVersion: string;
-  // The gateway this driver serves. Launch material issued for another gateway is refused, and bearers are checked against it.
+  // The gateway this driver serves. Launch material issued for another gateway is refused.
   readonly gatewayId: string;
-  // The one isolation backend this driver serves, by the name the gateway selects it with. A create that selects any other name
-  // is refused.
-  readonly isolationBackendName: string;
+  // The host supervisor the driver starts for each sandbox: its binary, the gateway endpoint it dials, and the CA it trusts.
+  readonly supervisor: {
+    readonly binary: string;
+    readonly gatewayEndpoint: string;
+    readonly gatewayCaPath: string;
+  };
   // Receives each refusal line (refusal.ts). Stderr when absent.
   readonly refusalLog?: RefusalLog;
+}
+
+// The process-level effects the driver needs and the tests replace: starting the runtime inside a container, and starting
+// a host supervisor. The entry point wires the real ones.
+export interface RuntimeHost {
+  // Starts the sandbox runtime in the container and waits until its control socket exists.
+  startRuntime(containerId: string, controlSocket: string): Promise<void>;
+  // Starts a host supervisor process.
+  spawnSupervisor(options: SupervisorSpawn): Promise<SupervisorHandle>;
 }
 
 export interface ComputeDriverDeps {
   readonly lifecycle: Pick<DriverLifecycle, "create" | "delete">;
   readonly libpod: Pick<LibpodClient, "inspectContainer" | "listContainersByLabel">;
-  // Boundary handles of a deleted sandbox are invalidated here (PRD-ISO-06).
-  readonly boundaries: Pick<BoundaryRegistry, "invalidateAll">;
+  readonly runtime: RuntimeHost;
 }
 
 // The message shapes the driver reads and writes. proto-loader delivers keepCase field names. It runs with defaults, so an
@@ -193,14 +215,12 @@ interface SandboxRecord {
   readonly workspace: string;
   // The container name the sandbox runs under: the gateway's name with the realm prefix added when it lacks it.
   readonly containerName: string;
-  // The identity the runtime reported when the container was created. It is the resource a boundary binds to.
+  // The identity the runtime reported when the container was created: the container id.
   readonly runtimeIdentity: string;
-  // The isolation backend the create selected, or undefined when it selected none.
-  readonly isolationBackend: string | undefined;
 }
 
 // A validated create: the gateway's sandbox name and id, its workspace, the spec the lifecycle takes, and the launch material
-// the driver stores for the sandbox, and the isolation backend the create selected.
+// the driver stores for the sandbox, with its decoded authentication.
 interface CreatePlan {
   readonly sandboxName: string;
   readonly sandboxId: string;
@@ -208,7 +228,7 @@ interface CreatePlan {
   readonly spec: ContainerSpec;
   // The launch material, or undefined when the request carries none. CreateSandbox refuses a plan without it.
   readonly launch: Uint8Array | undefined;
-  readonly isolationBackend: string | undefined;
+  readonly authentication: LaunchAuthentication | undefined;
 }
 
 // The service's method map, loaded from the vendored protos with the pinned loader. The protos are read from disk at
@@ -252,12 +272,16 @@ export class ComputeDriver {
   private readonly config: ComputeDriverConfig;
   private readonly deps: ComputeDriverDeps;
   private readonly registry = new Map<string, SandboxRecord>();
+  // The host supervisor of each sandbox, keyed by the container name. It is stopped on delete and on a failed create.
+  private readonly supervisors = new Map<string, SupervisorHandle>();
 
   constructor(config: ComputeDriverConfig, deps: ComputeDriverDeps) {
     if (
       !isAbsolute(config.sandboxStateRoot) ||
       !isAbsolute(config.secretRoot) ||
       !isAbsolute(config.workspaceRoot) ||
+      !isAbsolute(config.supervisor.binary) ||
+      !isAbsolute(config.supervisor.gatewayCaPath) ||
       !isImplementationVersion(config.implementationVersion) ||
       !GATEWAY_ID_PATTERN.test(config.gatewayId)
     ) {
@@ -282,7 +306,7 @@ export class ComputeDriver {
       resource_capabilities: {
         cpu: { limit_supported: true },
         memory: { limit_supported: true },
-        gpu: { default_selection_supported: false, count_selection_supported: false },
+        gpu: { default_supported: false },
       },
       rootfs_tar_max_bytes: 0,
       extension: {
@@ -304,48 +328,86 @@ export class ComputeDriver {
 
   // A create without launch material is refused before anything is written, because CreateSandbox requires it.
   // An existing state or secret directory is refused before anything is prepared, so that refusal creates nothing. Then the
-  // workspace and the new state directory are prepared, and the launch material is stored. Only then does the lifecycle run.
-  // If the store or the lifecycle refuses, the state directory and the launch material this call made are removed and the
-  // original error is rethrown. The workspace is left in place.
+  // workspace, the state directory, the launch material and the channel are prepared. The channel's bootstrap and descriptor
+  // must agree before the lifecycle runs. The lifecycle creates the container and writes the runtime's files before it starts it.
+  // Then the runtime starts in the container and the host supervisor starts beside it. Any failure removes what this call made:
+  // the container, the state directory, the secret entries, and the supervisor, and the original error is rethrown.
   async createSandbox(sandbox: DriverSandboxMessage | null | undefined): Promise<{ runtime_identity: string }> {
     const scope = this.scopeOf("CreateSandbox");
     const plan = planCreate(sandbox, this.config, scope);
-    const launch = plan.launch;
-    if (launch === undefined) {
+    const { launch, authentication } = plan;
+    if (launch === undefined || authentication === undefined) {
       throw refusal(scope, "create.launch_authentication");
     }
+    const sandboxName = plan.spec.sandboxName;
     assertStateDirAbsent(plan.spec.stateDir);
-    if (secretDirExists(this.config.secretRoot, plan.spec.sandboxName)) {
+    if (secretDirExists(this.config.secretRoot, sandboxName)) {
       throw makeRealmError("SCHEMA_INVALID");
     }
     this.prepareWorkspace(plan.workspace);
     mkdirOrRefuse(plan.spec.stateDir);
+    const channel = channelPathsOf(secretDirOf(this.config.secretRoot, sandboxName));
+    let files: RuntimeChannel;
     try {
-      writeLaunchMaterial(this.config.secretRoot, plan.spec.sandboxName, launch);
+      writeLaunchMaterial(this.config.secretRoot, sandboxName, launch);
+      makeChannelDirectory(channel);
+      const serverName = runtimeServerName(authentication.supervisor.sessionId);
+      const trustAnchorPem = await generateRuntimeTls(channel, serverName);
+      files = buildRuntimeChannel({
+        sandboxId: plan.sandboxId,
+        containerName: sandboxName,
+        image: plan.spec.image,
+        gatewayId: authentication.gatewayId,
+        supervisor: authentication.supervisor,
+        verificationKeys: runtimeKeysOf(authentication),
+        serverName,
+        trustAnchorPem,
+        controlSocketHostPath: channel.controlSocket,
+        evidenceDigest: hardeningEvidenceDigest(plan.spec.image),
+      });
+      assertRuntimeFilesAgree(files.bootstrap, files.descriptor);
     } catch (error: unknown) {
-      const stateRemoved = removeStateDir(plan.spec.stateDir);
-      if (!stateRemoved && error instanceof RealmError) {
-        error.message = `${error.message} Cleanup failed: the sandbox state directory was left in place.`;
-      }
+      noteCleanupFailure(error, this.discardPrepared(plan));
       throw error;
     }
     let containerId: string;
     try {
-      containerId = await this.deps.lifecycle.create(plan.spec);
+      containerId = await this.deps.lifecycle.create(plan.spec, () => {
+        writeRuntimeFiles(channel, files);
+        return Promise.resolve();
+      });
     } catch (error: unknown) {
-      const stateRemoved = removeStateDir(plan.spec.stateDir);
-      const materialRemoved = removeLaunchMaterial(this.config.secretRoot, plan.spec.sandboxName);
-      if (!(stateRemoved && materialRemoved) && error instanceof RealmError) {
-        error.message = `${error.message} Cleanup failed: the sandbox state directory or launch material was left in place.`;
-      }
+      noteCleanupFailure(error, this.discardPrepared(plan));
+      throw error;
+    }
+    try {
+      await this.deps.runtime.startRuntime(containerId, channel.controlSocket);
+      const supervisor = await this.deps.runtime.spawnSupervisor({
+        binary: this.config.supervisor.binary,
+        args: supervisorArguments({
+          sandboxId: plan.sandboxId,
+          sandboxName: plan.sandboxName,
+          gatewayEndpoint: this.config.supervisor.gatewayEndpoint,
+          secretDir: channel.secretDir,
+        }),
+        env: supervisorEnvironment({
+          sandboxId: plan.sandboxId,
+          sandboxName: plan.sandboxName,
+          gatewayEndpoint: this.config.supervisor.gatewayEndpoint,
+          gatewayCaPath: this.config.supervisor.gatewayCaPath,
+          image: plan.spec.image,
+        }),
+      });
+      this.supervisors.set(sandboxName, supervisor);
+    } catch (error: unknown) {
+      noteCleanupFailure(error, await this.discardCreated(plan));
       throw error;
     }
     this.registry.set(plan.sandboxName, {
       id: plan.sandboxId,
       workspace: plan.workspace,
-      containerName: plan.spec.sandboxName,
+      containerName: sandboxName,
       runtimeIdentity: containerId,
-      isolationBackend: plan.isolationBackend,
     });
     return { runtime_identity: containerId };
   }
@@ -359,65 +421,22 @@ export class ComputeDriver {
     return { sandbox };
   }
 
-  // The resource the driver holds for a gateway sandbox id: the driver's name for the sandbox and its runtime identity. It is
-  // synchronous, so the isolation backend binds or checks a boundary handle with no await in between. An unknown id is undefined.
-  provisionedResource(sandboxId: string): ProvisionedResource | undefined {
-    const name = this.nameOf({ sandbox_id: sandboxId });
-    const record = name === undefined ? undefined : this.registry.get(name);
-    if (name === undefined || record === undefined) {
-      return undefined;
-    }
-    return { sandboxName: name, resourceId: record.runtimeIdentity };
-  }
-
-  // The isolation backend a sandbox's create selected, by the gateway's sandbox id. Undefined when the create selected none or the
-  // driver holds no such sandbox. The isolation backend reports the binding through this.
-  isolationBackendOf(sandboxId: string): string | undefined {
-    const name = this.nameOf({ sandbox_id: sandboxId });
-    const record = name === undefined ? undefined : this.registry.get(name);
-    return record?.isolationBackend;
-  }
-
-  // The verifier of one sandbox's supervisor bearers, built from the launch material the driver stored at create. Undefined when
-  // the driver holds no such sandbox or the sandbox holds no launch material. A stored body that no longer validates throws.
-  launchVerifierOf(sandboxId: string): SupervisorBearerVerifier | undefined {
-    const name = this.nameOf({ sandbox_id: sandboxId });
-    const record = name === undefined ? undefined : this.registry.get(name);
-    if (record === undefined) {
-      return undefined;
-    }
-    const body = readLaunchMaterial(this.config.secretRoot, record.containerName);
-    if (body === undefined) {
-      return undefined;
-    }
-    const launch = decodeLaunchAuthentication(body, this.config.gatewayId, this.scopeOf("BearerVerification"));
-    return new SupervisorBearerVerifier(launch.verificationKeys, launch.gatewayId);
-  }
-
-  async listSandboxes(): Promise<{ sandboxes: DriverSandboxOut[] }> {
-    const snapshots = await this.snapshotAll();
-    return { sandboxes: [...snapshots.values()] };
-  }
-
   // Idempotent: a sandbox that is already gone deletes nothing and succeeds. A name whose container a different
-  // registered sandbox holds deletes nothing, so a request never removes a sandbox it does not name. The lifecycle removes
-  // the sandbox's state directory and its launch material.
+  // registered sandbox holds deletes nothing, so a request never removes a sandbox it does not name. The host supervisor
+  // is stopped first, then the lifecycle removes the container, the state directory and the secret entries.
   async deleteSandbox(request: SandboxIdentityRequest): Promise<{ deleted: boolean }> {
     const name = this.nameOf(request);
     if (name === undefined) {
       return { deleted: false };
     }
-    // Every handle of the sandbox is invalid after delete, even when no container is removed.
-    this.deps.boundaries.invalidateAll(name);
     const containerName = containerNameOf(name);
     if (containerName === undefined || this.heldByAnotherSandbox(name, containerName)) {
       return { deleted: false };
     }
+    await this.stopSupervisor(containerName);
     const existed = (await this.deps.libpod.inspectContainer(containerName)) !== null;
     await this.deps.lifecycle.delete(containerName);
     this.registry.delete(name);
-    // A handle bound while the container was being removed is invalid once the record is gone.
-    this.deps.boundaries.invalidateAll(name);
     return { deleted: existed };
   }
 
@@ -480,6 +499,11 @@ export class ComputeDriver {
     return snapshots;
   }
 
+  async listSandboxes(): Promise<{ sandboxes: DriverSandboxOut[] }> {
+    const snapshots = await this.snapshotAll();
+    return { sandboxes: [...snapshots.values()] };
+  }
+
   // The snapshot of one sandbox, named by the gateway. The container is inspected under its own name.
   private async snapshotOf(name: string): Promise<DriverSandboxOut | undefined> {
     const record = this.registry.get(name);
@@ -520,6 +544,39 @@ export class ComputeDriver {
     return false;
   }
 
+  // Ends the host supervisor of a container, if the driver started one. A supervisor already gone is not an error.
+  private async stopSupervisor(containerName: string): Promise<void> {
+    const supervisor = this.supervisors.get(containerName);
+    this.supervisors.delete(containerName);
+    await supervisor?.stop();
+  }
+
+  // Removes what a create made before its container existed: the state directory and the secret entries. Returns true when
+  // every removal succeeded.
+  private discardPrepared(plan: CreatePlan): boolean {
+    const stateRemoved = removeStateDir(plan.spec.stateDir);
+    const materialRemoved = removeLaunchMaterial(this.config.secretRoot, plan.spec.sandboxName);
+    return stateRemoved && materialRemoved;
+  }
+
+  // Removes what a create made after its container existed: the host supervisor, the container, and the files. Returns true
+  // when every removal succeeded.
+  private async discardCreated(plan: CreatePlan): Promise<boolean> {
+    let stopped = true;
+    try {
+      await this.stopSupervisor(plan.spec.sandboxName);
+    } catch {
+      stopped = false;
+    }
+    let deleted = true;
+    try {
+      await this.deps.lifecycle.delete(plan.spec.sandboxName);
+    } catch {
+      deleted = false;
+    }
+    return stopped && deleted && this.discardPrepared(plan);
+  }
+
   private workspaceDir(workspace: string | undefined): string {
     if (workspace === undefined || !WORKSPACE_ID_PATTERN.test(workspace)) {
       throw makeRealmError("SCHEMA_INVALID");
@@ -550,7 +607,7 @@ export class ComputeDriver {
   }
 
   // The refusal scope of one RPC: its name, and the sink this driver was configured with.
-  private scopeOf(rpc: "ValidateSandboxCreate" | "CreateSandbox" | "BearerVerification"): RefusalScope {
+  private scopeOf(rpc: "ValidateSandboxCreate" | "CreateSandbox"): RefusalScope {
     return refusalScope(rpc, this.config.refusalLog);
   }
 }
@@ -562,31 +619,18 @@ function containerNameOf(sandboxName: string): string | undefined {
   return CONTAINER_ID_PATTERN.test(name) ? name : undefined;
 }
 
-// The endpoint field proto-loader sets for an isolation backend registration (oneofs: true delivers the set field's name).
-interface IsolationBackendSelectionMessage {
-  readonly name?: string;
-  readonly endpoint?: string;
-}
-
-// The isolation backend a create selects. An unset selection selects none. A selection is accepted only when its name is the
-// configured backend and its endpoint is a unix socket, the one transport the driver's isolation socket serves. Any other selection
-// is refused with SCHEMA_INVALID before any write or libpod call. The selected name is returned.
-function isolationSelectionOf(selection: unknown, configuredName: string, scope: RefusalScope): string | undefined {
-  if (selection === undefined || selection === null) {
-    return undefined;
-  }
-  const { name, endpoint } = selection as IsolationBackendSelectionMessage;
-  if (name !== configuredName || endpoint !== "unix_socket_path") {
+// The built-in path carries no isolation backend selection: the gateway selects the built-in backend by name, and the
+// driver is not told of it. A selection that arrives anyway is refused before any write or libpod call.
+function refuseIsolationSelection(selection: unknown, scope: RefusalScope): void {
+  if (selection !== undefined && selection !== null) {
     throw refusal(scope, "create.isolation_backend");
   }
-  return name;
 }
 
 // Checks a create request against the realm profile and returns the lifecycle spec and the launch material when it carries any.
 // Every refusal is SCHEMA_INVALID, logged with its RPC and check, and no libpod call is made. Launch material that is present must
 // decode for this driver's gateway, on both RPCs, before any write. An absent bundle is not refused here: CreateSandbox refuses it
-// (createSandbox), so ValidateSandboxCreate can run before the gateway mints the bundle. Attach verifies a bearer only with keys
-// from the bundle the create stores.
+// (createSandbox), so ValidateSandboxCreate can run before the gateway mints the bundle.
 function planCreate(
   sandbox: DriverSandboxMessage | null | undefined,
   config: ComputeDriverConfig,
@@ -620,15 +664,14 @@ function planCreate(
   }
   checkResources(template.resources, scope);
   // The container is built from the realm profile alone. Caller-supplied platform or driver config could reach the
-  // network, mounts or capabilities, so it is refused. So are environment and a user-namespace request. An isolation backend
-  // selection is accepted only when it names the configured backend (isolationSelectionOf).
+  // network, mounts or capabilities, so it is refused. So are environment and a user-namespace request.
   if (!structIsEmpty(template.platform_config) || !structIsEmpty(template.driver_config)) {
     throw refusal(scope, "create.runtime_config");
   }
   if (template.user_namespaces === true) {
     throw refusal(scope, "create.user_namespaces");
   }
-  const isolationBackend = isolationSelectionOf(spec.isolation_backend, config.isolationBackendName, scope);
+  refuseIsolationSelection(spec.isolation_backend, scope);
   if (hasEntries(spec.environment) || hasEntries(template.environment)) {
     throw refusal(scope, "create.environment");
   }
@@ -637,20 +680,19 @@ function planCreate(
     throw refusal(scope, "create.command");
   }
   const launch = launchMaterialOf(spec.launch_authentication);
-  if (launch !== undefined) {
-    decodeLaunchAuthentication(launch, config.gatewayId, scope);
-  }
+  const authentication = launch === undefined ? undefined : decodeLaunchAuthentication(launch, config.gatewayId, scope);
   return {
     sandboxName,
     sandboxId,
     workspace,
     launch,
-    isolationBackend,
+    authentication,
     spec: {
       sandboxName: containerName,
       image: template.image,
       workspaceDir: join(config.workspaceRoot, workspace),
       stateDir: join(config.sandboxStateRoot, containerName),
+      channelDir: channelPathsOf(secretDirOf(config.secretRoot, containerName)).channelDir,
     },
   };
 }
@@ -659,6 +701,18 @@ function planCreate(
 // buffer is no material.
 function launchMaterialOf(value: Uint8Array | null | undefined): Uint8Array | undefined {
   return value === undefined || value === null || value.length === 0 ? undefined : value;
+}
+
+// The gateway's verification keys as the runtime's bootstrap names them: each PEM as text. A key that is not UTF-8 is refused.
+function runtimeKeysOf(authentication: LaunchAuthentication): RuntimeVerificationKey[] {
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  return authentication.verificationKeys.map((key) => {
+    try {
+      return { keyId: key.keyId, publicKeyPem: decoder.decode(key.publicKeyPem) };
+    } catch {
+      throw makeRealmError("SCHEMA_INVALID");
+    }
+  });
 }
 
 // Each non-empty CPU and memory value must equal the realm profile. An empty value means the request did not set it.
@@ -788,13 +842,20 @@ function removeStateDir(dir: string): boolean {
   }
 }
 
-// Removes the launch material a create stored. Returns false when the removal failed, and the material is left in place.
+// Removes the launch material and the channel a create stored. Returns false when the removal failed, and they are left in place.
 function removeLaunchMaterial(secretRoot: string, sandboxName: string): boolean {
   try {
     removeSandboxSecrets(secretRoot, sandboxName);
     return true;
   } catch {
     return false;
+  }
+}
+
+// Adds the cleanup note to a refusal when a removal failed. Only a RealmError carries a message the driver owns.
+function noteCleanupFailure(error: unknown, cleaned: boolean): void {
+  if (!cleaned && error instanceof RealmError) {
+    error.message = `${error.message} Cleanup failed: the sandbox state directory or launch material was left in place.`;
   }
 }
 

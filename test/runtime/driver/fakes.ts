@@ -1,11 +1,13 @@
 // Shared fakes for the compute driver tests. The libpod fake answers the two listing calls the driver makes. The lifecycle
-// fake records every create, so a test can show that a refused request never reached it.
+// fakes record every create, so a test can show that a refused request never reached it. The runtime fake records the runtime
+// start and each supervisor spawn, and hands out a supervisor handle that records its stop.
 
 import { mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { DriverLifecycle } from "../../../src/runtime/driver/lifecycle.js";
-import type { ComputeDriverConfig, DriverSandboxMessage } from "../../../src/runtime/driver/compute-driver.js";
+import type { ComputeDriverConfig, DriverSandboxMessage, RuntimeHost } from "../../../src/runtime/driver/compute-driver.js";
+import { DriverLifecycle, type BeforeStart, type LifecycleLibpod } from "../../../src/runtime/driver/lifecycle.js";
+import type { SupervisorHandle, SupervisorSpawn } from "../../../src/runtime/driver/supervisor.js";
 import type { ContainerSpec, LibpodContainerSummary, LibpodInspect } from "../../../src/runtime/libpod-client.js";
 import {
   OPENSHELL_ISOLATION_ROLE_LABEL_KEY,
@@ -19,8 +21,12 @@ import { GATEWAY_ID, generateGatewayKey, launchBody } from "../isolation/supervi
 export const SANDBOX_IMAGE = `registry.invalid/realm/sandbox@sha256:${"a".repeat(64)}`;
 export const OTHER_DIGEST_IMAGE = `registry.invalid/realm/sandbox@sha256:${"b".repeat(64)}`;
 
-// The key every valid create's launch material is signed under. A test that needs to sign a bearer for that sandbox uses it.
+// The key every valid create's launch material is signed under.
 export const LAUNCH_KEY = generateGatewayKey();
+
+export const SUPERVISOR_BINARY = "/usr/local/libexec/realm/openshell-supervisor";
+export const GATEWAY_ENDPOINT = "https://gateway.invalid:8443";
+export const GATEWAY_CA_PATH = "/etc/realm/gateway-ca.pem";
 
 interface FakeContainer {
   readonly id: string;
@@ -66,17 +72,27 @@ export class FakeLibpod {
   }
 }
 
-// Records each create and delete, and writes the container into the libpod fake on create.
+// Records each create and delete, and writes the container into the libpod fake on create. A beforeStart hook runs once the
+// container exists; when it fails the container is removed again, as the real lifecycle does.
 export class FakeLifecycle implements Pick<DriverLifecycle, "create" | "delete"> {
   readonly creates: ContainerSpec[] = [];
   readonly deletes: string[] = [];
 
   constructor(private readonly libpod: FakeLibpod) {}
 
-  create(spec: ContainerSpec): Promise<string> {
+  async create(spec: ContainerSpec, beforeStart?: BeforeStart): Promise<string> {
     this.creates.push(spec);
     this.libpod.add(spec.sandboxName, true);
-    return Promise.resolve(`id-${spec.sandboxName}`);
+    const id = `id-${spec.sandboxName}`;
+    if (beforeStart !== undefined) {
+      try {
+        await beforeStart(id);
+      } catch (error: unknown) {
+        this.libpod.containers.delete(spec.sandboxName);
+        throw error;
+      }
+    }
+    return id;
   }
 
   delete(sandboxName: string): Promise<void> {
@@ -86,8 +102,95 @@ export class FakeLifecycle implements Pick<DriverLifecycle, "create" | "delete">
   }
 }
 
+export interface DiskLifecycle extends Pick<DriverLifecycle, "create" | "delete"> {
+  readonly creates: ContainerSpec[];
+  readonly deletes: string[];
+}
+
+// A libpod stub for a lifecycle that never finds a container: nothing is listed or found, and every removal succeeds.
+function noContainers(): LifecycleLibpod {
+  const stub = {
+    listContainersByLabel: () => Promise.resolve([]),
+    inspectContainer: () => Promise.resolve(null),
+    stopContainer: () => Promise.resolve(),
+    removeContainer: () => Promise.resolve(),
+  };
+  return stub as unknown as LifecycleLibpod;
+}
+
+// A lifecycle that keeps files on disk the way the real one does. Create runs the beforeStart hook and records the container in
+// the libpod fake; delete removes the sandbox's state directory and secret entries through DriverLifecycle. The sweep runs first,
+// as the real driver's startup does.
+export async function diskLifecycle(config: ComputeDriverConfig, libpod: FakeLibpod): Promise<DiskLifecycle> {
+  const disk = new DriverLifecycle({
+    libpod: noContainers(),
+    sandboxStateRoot: config.sandboxStateRoot,
+    secretRoot: config.secretRoot,
+  });
+  await disk.startupSweep();
+  const creates: ContainerSpec[] = [];
+  const deletes: string[] = [];
+  return {
+    creates,
+    deletes,
+    create: async (spec: ContainerSpec, beforeStart?: BeforeStart): Promise<string> => {
+      creates.push(spec);
+      const id = `id-${spec.sandboxName}`;
+      libpod.add(spec.sandboxName, true);
+      if (beforeStart !== undefined) {
+        try {
+          await beforeStart(id);
+        } catch (error: unknown) {
+          libpod.containers.delete(spec.sandboxName);
+          throw error;
+        }
+      }
+      return id;
+    },
+    delete: async (sandboxName: string): Promise<void> => {
+      deletes.push(sandboxName);
+      libpod.containers.delete(sandboxName);
+      await disk.delete(sandboxName);
+    },
+  };
+}
+
+// The host supervisor a spawn returned. stop records each call.
+export class FakeSupervisor implements SupervisorHandle {
+  stops = 0;
+
+  stop(): Promise<void> {
+    this.stops += 1;
+    return Promise.resolve();
+  }
+}
+
+// The process-level effects of the driver. Each call is recorded. A test sets startError or spawnError to make the next call of
+// that step fail with the error.
+export class FakeRuntime implements RuntimeHost {
+  readonly starts: { readonly containerId: string; readonly controlSocket: string }[] = [];
+  readonly spawns: SupervisorSpawn[] = [];
+  readonly supervisors: FakeSupervisor[] = [];
+  startError: Error | undefined = undefined;
+  spawnError: Error | undefined = undefined;
+
+  startRuntime(containerId: string, controlSocket: string): Promise<void> {
+    this.starts.push({ containerId, controlSocket });
+    return this.startError === undefined ? Promise.resolve() : Promise.reject(this.startError);
+  }
+
+  spawnSupervisor(options: SupervisorSpawn): Promise<SupervisorHandle> {
+    this.spawns.push(options);
+    if (this.spawnError !== undefined) {
+      return Promise.reject(this.spawnError);
+    }
+    const handle = new FakeSupervisor();
+    this.supervisors.push(handle);
+    return Promise.resolve(handle);
+  }
+}
+
 export const IMPLEMENTATION_VERSION = "0.1.2";
-export const ISOLATION_BACKEND_NAME = "realm";
 
 // A driver config with fresh temporary roots. The state and workspace roots exist, so a create or a workspace test starts from a
 // real root. The secret root is not created here: the secret store creates it at 0700 on the first write. Refusals are logged to
@@ -103,7 +206,7 @@ export function driverConfig(overrides: Partial<ComputeDriverConfig> = {}): Comp
     workspaceRoot: join(base, "workspaces"),
     implementationVersion: IMPLEMENTATION_VERSION,
     gatewayId: GATEWAY_ID,
-    isolationBackendName: ISOLATION_BACKEND_NAME,
+    supervisor: { binary: SUPERVISOR_BINARY, gatewayEndpoint: GATEWAY_ENDPOINT, gatewayCaPath: GATEWAY_CA_PATH },
     refusalLog: () => undefined,
     ...overrides,
   };

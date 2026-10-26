@@ -1,40 +1,24 @@
 // Behaviour of the launch material the driver keeps for each sandbox: a create stores it under the secret root, a refused create
-// writes nothing and reaches no libpod call, delete and the startup sweep remove it, and the bearer check verifies a token with
-// the keys the material holds. No test reads source text.
+// writes nothing and reaches no libpod call, delete and the startup sweep remove it, and the secret and workspace roots must not
+// hold one another. No test reads source text.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
-import { existsSync, readdirSync, readFileSync, statSync, unlinkSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { status } from "@grpc/grpc-js";
 import { RealmError } from "../../../src/core/errors.js";
 import { ComputeDriver, type ComputeDriverConfig, type DriverSandboxMessage } from "../../../src/runtime/driver/compute-driver.js";
-import { DriverStatusError } from "../../../src/runtime/driver/grpc-status.js";
 import { DriverLifecycle, type LifecycleLibpod } from "../../../src/runtime/driver/lifecycle.js";
-import { verifyBearer } from "../../../src/runtime/driver/isolation/bearer.js";
-import { BoundaryRegistry } from "../../../src/runtime/driver/isolation/boundary.js";
 import { writeLaunchMaterial } from "../../../src/runtime/driver/secret-store.js";
-import { FakeLibpod, FakeLifecycle, LAUNCH_KEY, driverConfig, validSandbox } from "./fakes.js";
-import {
-  generateGatewayKey,
-  launchBody,
-  launchSupervisor,
-  nowSeconds,
-  sandboxClaims,
-  signedToken,
-} from "../isolation/supervisor-token.js";
+import { diskLifecycle, FakeLibpod, FakeLifecycle, FakeRuntime, LAUNCH_KEY, driverConfig, validSandbox } from "./fakes.js";
+import { launchBody, launchSupervisor } from "../isolation/supervisor-token.js";
 
-// The sandbox id a valid create registers (validSandbox().id), and the container name it runs under (validSandbox().name).
-const CREATED_SANDBOX_ID = "sandbox-1";
+// The container name a valid create runs under (validSandbox().name, with the realm prefix).
 const CONTAINER_NAME = "realm-session-1";
 
 function schemaInvalid(error: unknown): boolean {
   return error instanceof RealmError && error.code === "SCHEMA_INVALID";
-}
-
-function unauthenticated(error: unknown): boolean {
-  return error instanceof DriverStatusError && error.failure.code === status.UNAUTHENTICATED;
 }
 
 interface Harness {
@@ -48,7 +32,7 @@ function harness(): Harness {
   const config = driverConfig();
   const libpod = new FakeLibpod();
   const lifecycle = new FakeLifecycle(libpod);
-  const driver = new ComputeDriver(config, { lifecycle, libpod, boundaries: new BoundaryRegistry() });
+  const driver = new ComputeDriver(config, { lifecycle, libpod, runtime: new FakeRuntime() });
   return { config, libpod, lifecycle, driver };
 }
 
@@ -81,16 +65,6 @@ function filesNamed(root: string, name: string): string[] {
     }
   }
   return found;
-}
-
-// A bearer the created sandbox's launch key signs. An override changes one claim to make one refusal.
-function bearerFor(now: number, overrides: Readonly<Record<string, unknown>> = {}): string {
-  const claims = sandboxClaims(now, {
-    sandbox_id: CREATED_SANDBOX_ID,
-    sub: `spiffe://openshell/sandbox/${CREATED_SANDBOX_ID}`,
-    ...overrides,
-  });
-  return signedToken(LAUNCH_KEY, claims);
 }
 
 // A refused create touched nothing: no lifecycle create, no libpod call, and no file under any root.
@@ -191,30 +165,19 @@ for (const [label, body] of MALFORMED.filter(([, body]) => body.length > 0)) {
   });
 }
 
-void test("PRD-ISO-02: delete removes the sandbox's launch material, and a bearer for it is then UNAUTHENTICATED", async () => {
+void test("PRD-ISO-02: delete removes the sandbox's launch material and its secret directory", async () => {
   const config = driverConfig();
-  const real = new DriverLifecycle({
-    libpod: emptyLibpod(),
-    sandboxStateRoot: config.sandboxStateRoot,
-    secretRoot: config.secretRoot,
-  });
-  await real.startupSweep();
+  const libpod = new FakeLibpod();
   const driver = new ComputeDriver(config, {
-    lifecycle: {
-      create: (spec) => Promise.resolve(`id-${spec.sandboxName}`),
-      delete: (name) => real.delete(name),
-    },
-    libpod: new FakeLibpod(),
-    boundaries: new BoundaryRegistry(),
+    lifecycle: await diskLifecycle(config, libpod),
+    libpod,
+    runtime: new FakeRuntime(),
   });
   await driver.createSandbox(validSandbox());
   const secretDir = join(config.secretRoot, CONTAINER_NAME);
   assert.equal(existsSync(join(secretDir, "launch.json")), true);
-  await driver.deleteSandbox({ name: CONTAINER_NAME });
+  assert.deepEqual(await driver.deleteSandbox({ name: CONTAINER_NAME }), { deleted: true });
   assert.equal(existsSync(secretDir), false);
-  assert.equal(driver.launchVerifierOf(CREATED_SANDBOX_ID), undefined);
-  const now = nowSeconds();
-  assert.throws(() => verifyBearer((id) => driver.launchVerifierOf(id), bearerFor(now), now), unauthenticated);
 });
 
 void test("PRD-ISO-02: the startup sweep removes leftover launch material and its directory", async () => {
@@ -231,44 +194,10 @@ void test("PRD-ISO-02: the startup sweep removes leftover launch material and it
   assert.deepEqual(entriesOf(config.secretRoot), []);
 });
 
-void test("PRD-ISO-02: a bearer signed by the sandbox's launch key verifies, through the driver's lookup, to the sandbox it names", async () => {
-  const { driver } = harness();
-  await driver.createSandbox(validSandbox());
-  const now = nowSeconds();
-  const session = verifyBearer((id) => driver.launchVerifierOf(id), bearerFor(now), now);
-  assert.equal(session.sandboxId, CREATED_SANDBOX_ID);
-});
-
-void test("PRD-ISO-02: a bearer for a sandbox whose launch material was removed, or that the lookup does not hold, is UNAUTHENTICATED", async () => {
-  const { config, driver } = harness();
-  await driver.createSandbox(validSandbox());
-  const now = nowSeconds();
-  unlinkSync(join(config.secretRoot, CONTAINER_NAME, "launch.json"));
-  assert.throws(() => verifyBearer((id) => driver.launchVerifierOf(id), bearerFor(now), now), unauthenticated);
-  assert.throws(() => verifyBearer(() => undefined, bearerFor(now), now), unauthenticated);
-});
-
-void test("PRD-ISO-02: a bearer whose issuer names another gateway is refused by the material's verifier", async () => {
-  const { driver } = harness();
-  await driver.createSandbox(validSandbox());
-  const now = nowSeconds();
-  const otherGateway = bearerFor(now, { iss: "openshell-gateway:other" });
-  assert.throws(() => verifyBearer((id) => driver.launchVerifierOf(id), otherGateway, now), unauthenticated);
-});
-
-void test("PRD-ISO-02: a bearer signed by a key the sandbox's launch material does not hold is refused", async () => {
-  const { driver } = harness();
-  await driver.createSandbox(validSandbox());
-  const now = nowSeconds();
-  const stranger = generateGatewayKey();
-  const token = signedToken(stranger, sandboxClaims(now, { sandbox_id: CREATED_SANDBOX_ID }));
-  assert.throws(() => verifyBearer((id) => driver.launchVerifierOf(id), token, now), unauthenticated);
-});
-
 void test("PRD-ISO-02: a secret root inside the workspace root, or a workspace root inside the secret root, refuses construction; sibling roots construct", () => {
   const config = driverConfig();
   const libpod = new FakeLibpod();
-  const deps = { lifecycle: new FakeLifecycle(libpod), libpod, boundaries: new BoundaryRegistry() };
+  const deps = { lifecycle: new FakeLifecycle(libpod), libpod, runtime: new FakeRuntime() };
   assert.doesNotThrow(() => new ComputeDriver(config, deps));
   const secretInWorkspace = { ...config, secretRoot: join(config.workspaceRoot, "secrets") };
   assert.throws(() => new ComputeDriver(secretInWorkspace, deps), schemaInvalid);

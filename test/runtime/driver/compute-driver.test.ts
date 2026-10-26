@@ -4,19 +4,30 @@ import { existsSync, lstatSync, mkdirSync, statSync, symlinkSync, unlinkSync, wr
 import { join } from "node:path";
 import { status } from "@grpc/grpc-js";
 import { RealmError } from "../../../src/core/errors.js";
-import { ComputeDriver, type DriverSandboxMessage } from "../../../src/runtime/driver/compute-driver.js";
-import { BoundaryRegistry } from "../../../src/runtime/driver/isolation/boundary.js";
+import { ComputeDriver, type ComputeDriverConfig, type DriverSandboxMessage } from "../../../src/runtime/driver/compute-driver.js";
 import { DRIVER_ADMISSION_ACKNOWLEDGEMENT } from "../../../src/runtime/driver/admission.js";
 import { DriverStatusError, driverFailureOf } from "../../../src/runtime/driver/grpc-status.js";
 import type { ContainerSpec } from "../../../src/runtime/libpod-client.js";
-import { FakeLibpod, FakeLifecycle, driverConfig, OTHER_DIGEST_IMAGE, SANDBOX_IMAGE, validSandbox } from "./fakes.js";
+import { FakeLibpod, FakeLifecycle, FakeRuntime, driverConfig, OTHER_DIGEST_IMAGE, SANDBOX_IMAGE, validSandbox } from "./fakes.js";
 
 function harness() {
   const libpod = new FakeLibpod();
   const lifecycle = new FakeLifecycle(libpod);
+  const runtime = new FakeRuntime();
   const config = driverConfig();
-  const driver = new ComputeDriver(config, { lifecycle, libpod, boundaries: new BoundaryRegistry() });
-  return { libpod, lifecycle, config, driver };
+  const driver = new ComputeDriver(config, { lifecycle, libpod, runtime });
+  return { libpod, lifecycle, runtime, config, driver };
+}
+
+// The spec the lifecycle receives for a create of the given container name: its image, workspace, state directory and channel.
+function specOf(config: ComputeDriverConfig, containerName: string, workspace: string = "workspace-a"): ContainerSpec {
+  return {
+    sandboxName: containerName,
+    image: SANDBOX_IMAGE,
+    workspaceDir: join(config.workspaceRoot, workspace),
+    stateDir: join(config.sandboxStateRoot, containerName),
+    channelDir: join(config.secretRoot, containerName, "channel"),
+  };
 }
 
 // A lifecycle that records whether the state directory existed when it was called, then refuses with the given error.
@@ -96,46 +107,32 @@ for (const [label, change] of REFUSALS) {
   });
 }
 
-void test("PRD-DRV-02: a conforming request is accepted, and only its exact spec reaches the lifecycle", async () => {
-  const { driver, lifecycle, config } = harness();
+void test("PRD-DRV-02: a conforming request is accepted, and only its exact spec reaches the lifecycle, then the runtime starts in its container", async () => {
+  const { driver, lifecycle, runtime, config } = harness();
   assert.deepEqual(driver.validateSandboxCreate(validSandbox()), {});
   const created = await driver.createSandbox(validSandbox());
   assert.equal(created.runtime_identity, "id-realm-session-1");
-  assert.deepEqual(lifecycle.creates, [
+  assert.deepEqual(lifecycle.creates, [specOf(config, "realm-session-1")]);
+  assert.deepEqual(runtime.starts, [
     {
-      sandboxName: "realm-session-1",
-      image: SANDBOX_IMAGE,
-      workspaceDir: join(config.workspaceRoot, "workspace-a"),
-      stateDir: join(config.sandboxStateRoot, "realm-session-1"),
+      containerId: "id-realm-session-1",
+      controlSocket: join(config.secretRoot, "realm-session-1", "channel", "control.sock"),
     },
   ]);
+  assert.equal(runtime.supervisors.length, 1);
 });
 
 void test("PRD-DRV-02: a name without the realm prefix is created as realm-<name>, and the lifecycle receives that name", async () => {
   const { driver, lifecycle, config } = harness();
   const created = await driver.createSandbox(validSandbox({ name: "agent-1" }));
   assert.equal(created.runtime_identity, "id-realm-agent-1");
-  assert.deepEqual(lifecycle.creates, [
-    {
-      sandboxName: "realm-agent-1",
-      image: SANDBOX_IMAGE,
-      workspaceDir: join(config.workspaceRoot, "workspace-a"),
-      stateDir: join(config.sandboxStateRoot, "realm-agent-1"),
-    },
-  ]);
+  assert.deepEqual(lifecycle.creates, [specOf(config, "realm-agent-1")]);
 });
 
 void test("PRD-DRV-02: a name that already has the realm prefix is unchanged, and is not prefixed again", async () => {
   const { driver, lifecycle, config } = harness();
   await driver.createSandbox(validSandbox({ name: "realm-agent-2" }));
-  assert.deepEqual(lifecycle.creates, [
-    {
-      sandboxName: "realm-agent-2",
-      image: SANDBOX_IMAGE,
-      workspaceDir: join(config.workspaceRoot, "workspace-a"),
-      stateDir: join(config.sandboxStateRoot, "realm-agent-2"),
-    },
-  ]);
+  assert.deepEqual(lifecycle.creates, [specOf(config, "realm-agent-2")]);
 });
 
 void test("PRD-DRV-02: a name whose prefixed form is exactly 128 characters is accepted", async () => {
@@ -165,14 +162,7 @@ void test("PRD-DRV-02: an empty argv is accepted, and the lifecycle receives the
   const sandbox: DriverSandboxMessage = { ...base, spec: { ...base.spec, command: [] } };
   assert.deepEqual(driver.validateSandboxCreate(sandbox), {});
   await driver.createSandbox(sandbox);
-  assert.deepEqual(lifecycle.creates, [
-    {
-      sandboxName: "realm-session-1",
-      image: SANDBOX_IMAGE,
-      workspaceDir: join(config.workspaceRoot, "workspace-a"),
-      stateDir: join(config.sandboxStateRoot, "realm-session-1"),
-    },
-  ]);
+  assert.deepEqual(lifecycle.creates, [specOf(config, "realm-session-1")]);
 });
 
 void test("PRD-DRV-02: a create with absent directories makes the workspace and the state directory before the lifecycle runs", async () => {
@@ -189,7 +179,7 @@ void test("PRD-DRV-02: a create with absent directories makes the workspace and 
     },
     delete: () => Promise.resolve(),
   };
-  const driver = new ComputeDriver(config, { lifecycle, libpod: new FakeLibpod(), boundaries: new BoundaryRegistry() });
+  const driver = new ComputeDriver(config, { lifecycle, libpod: new FakeLibpod(), runtime: new FakeRuntime() });
   await driver.createSandbox(validSandbox());
   assert.deepEqual(modesAtCreate, [[0o700, 0o700]]);
 });
@@ -217,7 +207,7 @@ void test("PRD-DRV-02: a lifecycle refusal removes the state directory this call
   const driver = new ComputeDriver(config, {
     lifecycle: refusingLifecycle(refusal, stateDirSeen),
     libpod: new FakeLibpod(),
-    boundaries: new BoundaryRegistry(),
+    runtime: new FakeRuntime(),
   });
   await assert.rejects(driver.createSandbox(validSandbox()), (error: unknown) => error === refusal);
   assert.deepEqual(stateDirSeen, [true]);
@@ -261,52 +251,34 @@ void test("PRD-GW-03: GetCapabilities returns the same pinned admission acknowle
   assert.equal(first["default_image"], SANDBOX_IMAGE);
 });
 
-void test("PRD-DRV-01: GetCapabilities advertises the contract, launch authentication and the isolation backend, and no other capability", () => {
+void test("PRD-DRV-01: GetCapabilities advertises the contract and launch authentication, and no other capability", () => {
   const { driver } = harness();
   const extension = driver.getCapabilities({})["extension"] as { supported_capabilities: string[] };
   assert.deepEqual(extension.supported_capabilities, [
     "openshell.compute.contract",
     "openshell.compute.launch-authentication",
-    "openshell.compute.isolation-backend",
   ]);
 });
 
-void test("PRD-DRV-01: GetCapabilities refuses a gateway that requires a capability the driver lacks", () => {
+void test("PRD-DRV-01: GetCapabilities refuses a gateway that requires a capability the driver lacks, including the isolation backend", () => {
   const { driver } = harness();
-  assert.throws(
-    () => driver.getCapabilities({ gateway: { required_capabilities: ["openshell.compute.sandbox-authentication"] } }),
-    expectCode("SCHEMA_INVALID"),
-  );
+  for (const capability of ["openshell.compute.sandbox-authentication", "openshell.compute.isolation-backend"]) {
+    assert.throws(
+      () => driver.getCapabilities({ gateway: { required_capabilities: [capability] } }),
+      expectCode("SCHEMA_INVALID"),
+    );
+  }
 });
 
-void test("PRD-DRV-01: GetCapabilities accepts a gateway that requires the isolation backend capability", () => {
+void test("PRD-DRV-01: GetCapabilities accepts a gateway that requires only the capabilities the driver advertises", () => {
   const { driver } = harness();
   assert.doesNotThrow(() =>
-    driver.getCapabilities({ gateway: { required_capabilities: ["openshell.compute.isolation-backend"] } }),
+    driver.getCapabilities({ gateway: { required_capabilities: ["openshell.compute.launch-authentication"] } }),
   );
 });
 
-void test("PRD-DRV-02: a create that selects the configured isolation backend is accepted, and the name is recorded", async () => {
-  const { driver, lifecycle } = harness();
-  const sandbox = validSandbox({
-    spec: {
-      ...validSandbox().spec,
-      isolation_backend: { name: "realm", endpoint: "unix_socket_path", unix_socket_path: "/run/realm/isolation.sock" },
-    },
-  });
-  await driver.createSandbox(sandbox);
-  assert.equal(lifecycle.creates.length, 1);
-  assert.equal(driver.isolationBackendOf("sandbox-1"), "realm");
-});
-
-void test("PRD-DRV-02: a create that selects no isolation backend records none", async () => {
-  const { driver } = harness();
-  await driver.createSandbox(validSandbox());
-  assert.equal(driver.isolationBackendOf("sandbox-1"), undefined);
-});
-
-for (const name of ["external", "openshell-sandbox", "realm-other", "Realm", ""]) {
-  void test(`PRD-DRV-02: a create that selects another isolation backend (name ${JSON.stringify(name)}) is refused before any write or libpod call`, async () => {
+for (const name of ["realm", "external", "openshell-sandbox", "realm-other", "Realm", ""]) {
+  void test(`PRD-DRV-02: a create that selects an isolation backend (name ${JSON.stringify(name)}) is refused before any write or libpod call`, async () => {
     const { driver, lifecycle, libpod, config } = harness();
     const sandbox = validSandbox({
       spec: {
@@ -493,7 +465,7 @@ void test("PD-05: the constructor refuses an implementation version the gateway 
         new ComputeDriver(driverConfig({ implementationVersion }), {
           lifecycle,
           libpod,
-          boundaries: new BoundaryRegistry(),
+          runtime: new FakeRuntime(),
         }),
       expectCode("SCHEMA_INVALID"),
     );

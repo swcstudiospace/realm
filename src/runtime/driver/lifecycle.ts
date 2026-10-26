@@ -1,7 +1,7 @@
 // Hardened container lifecycle of the driver (phase 9.3, PRD-CTR-01..03). create builds the container from a
-// typed spec, starts it, and proves it conforms before it is returned. delete removes a sandbox's own containers, its own state
-// directory, and its launch material. startupSweep removes every realm-labelled container, and every sandbox's launch material,
-// before any request is accepted.
+// typed spec, runs the caller's before-start step, starts it, and proves it conforms before it is returned. delete removes a
+// sandbox's own containers, its own state directory, and its secret entries. startupSweep removes every realm-labelled container,
+// and every sandbox's secret entries, before any request is accepted.
 //
 // Everything here goes through the closed libpod client (PD-11). The verifier is the same one session-execution
 // uses (PD-13): verifyInspect over HARDENING_PROFILE, with the kernel capability sets attached from the host's
@@ -28,7 +28,7 @@ import {
   OPENSHELL_SANDBOX_NAME_LABEL_KEY,
 } from "../openshell.js";
 import { removeAllRealmContainers } from "../sweep.js";
-import { presentSecretFiles, removeAllSecrets, removeSecretDirIfEmpty, removeSecretFiles, secretDirOf } from "./secret-store.js";
+import { presentSecretEntries, removeAllSecrets, removeSecretDirIfEmpty, removeSecretEntries, secretDirOf } from "./secret-store.js";
 
 // Grace period a sandbox container gets to stop before it is killed. Matches the session composition's grace.
 const STOP_GRACE_MS = 10_000;
@@ -55,12 +55,16 @@ export type LifecycleLibpod = Pick<
   | "listContainersByLabel"
 >;
 
+// A step run after the container exists and before it starts. The driver writes the runtime's files here, so they are in place
+// when the runtime starts and are removed by the driver when the create refuses.
+export type BeforeStart = (containerId: string) => Promise<void>;
+
 export interface DriverLifecycleOptions {
   readonly libpod: LifecycleLibpod;
   // Absolute root of the per-sandbox state directories. A sandbox's state directory is exactly <root>/<sandboxName>.
   readonly sandboxStateRoot: string;
   // Absolute root of the per-sandbox secret directories, <root>/<sandboxName>. It is never bound into a container and
-  // must lie outside the state root. delete and startupSweep remove the sandbox's launch material from it.
+  // must lie outside the state root. delete and startupSweep remove the sandbox's secret entries from it.
   readonly secretRoot: string;
   // Reads the text of a host process's status file. The create-time check reads the init process through it (D-51).
   readonly readProcStatus?: ((pid: number) => string) | undefined;
@@ -107,7 +111,7 @@ export class DriverLifecycle {
     this.removeDirectory = options.removeDirectory ?? removeTree;
   }
 
-  // Removes every realm-owned container and every sandbox's launch material, and resolves with how many containers it removed.
+  // Removes every realm-owned container and every sandbox's secret entries, and resolves with how many containers it removed.
   // create and delete refuse with REALM_NOT_ACTIVE until this has resolved, so no request is accepted ahead of the sweep (PRD-CTR-03).
   // A symbolic link under the secret root refuses the sweep, so the driver does not start on it.
   async startupSweep(): Promise<number> {
@@ -120,8 +124,9 @@ export class DriverLifecycle {
 
   // Creates, starts, and verifies one sandbox container, and returns its id. A conforming container is kept. Any
   // other outcome removes it before the error is thrown. Every refusal that the spec and the host can decide comes
-  // before the first libpod request: the spec, the state directory, the workspace, and the name being free.
-  async create(spec: ContainerSpec): Promise<string> {
+  // before the first libpod request: the spec, the state directory, the workspace, the channel, and the name being free.
+  // beforeStart runs once the container exists and before it starts; if it fails, the container is removed.
+  async create(spec: ContainerSpec, beforeStart?: BeforeStart): Promise<string> {
     this.requireSwept();
     validateContainerSpec(spec);
     // The sweep removes only realm-prefixed names, so a container with any other name would escape it.
@@ -130,6 +135,7 @@ export class DriverLifecycle {
     }
     assertSandboxStateDir(this.sandboxStateRoot, spec);
     assertNoOverlap(spec.workspaceDir, this.sandboxStateRoot, spec.stateDir);
+    assertNoOverlapPair(spec.workspaceDir, spec.channelDir);
     assertStateDirClear(spec.stateDir);
     assertWorkspaceHasNoSocket(spec.workspaceDir);
     const info = await this.libpod.info();
@@ -161,25 +167,37 @@ export class DriverLifecycle {
       rootless: info.rootless,
       workspaceRoot: spec.workspaceDir,
       stateDir: spec.stateDir,
+      channelDir: spec.channelDir,
     };
+    if (beforeStart !== undefined) {
+      try {
+        await beforeStart(id);
+      } catch (error) {
+        const removeCause = await this.discard(id);
+        if (error instanceof RealmError && removeCause !== undefined) {
+          reportSurvivor(error, id, removeCause);
+        }
+        throw error;
+      }
+    }
     await this.startAndVerify(id, binding);
     return id;
   }
 
   // Stops and force-removes the containers that are this sandbox's own, then removes the sandbox's state directory.
   // A container is this sandbox's own only when it carries the managed and sandbox-name labels, and its name is the
-  // sandbox name. Every role of the sandbox counts, the supervisor included. The name must be a realm sandbox name and
-  // one container-name-safe segment. The directory is checked before any container is touched, and a symlink or other
-  // non-directory is refused, never followed. Then the sandbox's launch and active files are removed from its secret
-  // directory, and that directory when empty.
+  // sandbox name. Every role of the sandbox counts. The name must be a realm sandbox name and one container-name-safe
+  // segment. The directory is checked before any container is touched, and a symlink or other non-directory is refused,
+  // never followed. Then the sandbox's secret entries (launch material, descriptor, auth bundle, channel) are removed from
+  // its secret directory, and that directory when empty.
   async delete(sandboxName: string): Promise<void> {
     this.requireSwept();
     const dir = sandboxDirOf(this.sandboxStateRoot, sandboxName);
     const dirExists = sandboxDirExists(dir);
-    // The secret directory follows the same name rule. Its launch and active entries are checked here, before any
-    // container is touched, so a symbolic link or other non-regular entry there refuses the delete with nothing removed.
+    // The secret directory follows the same name rule. Its entries are checked here, before any container is touched, so a
+    // symbolic link or other wrong-kind entry there refuses the delete with nothing removed.
     const secretDir = secretDirOf(this.secretRoot, sandboxName);
-    const secretFiles = presentSecretFiles(secretDir);
+    const secretEntries = presentSecretEntries(secretDir);
     const listed = await this.libpod.listContainersByLabel(OPENSHELL_SANDBOX_NAME_LABEL_KEY, sandboxName);
     for (const container of listed) {
       if (await isSandboxOwned(this.libpod, container, sandboxName)) {
@@ -195,7 +213,7 @@ export class DriverLifecycle {
         throw makeRealmError("CLEANUP_FAILED");
       }
     }
-    removeSecretFiles(secretFiles);
+    removeSecretEntries(secretEntries);
     removeSecretDirIfEmpty(secretDir);
   }
 
@@ -330,6 +348,15 @@ function assertNoOverlap(workspaceDir: string, stateRoot: string, stateDir: stri
   const dir = realPathOf(stateDir);
   const overlaps = (a: string, b: string): boolean => within(a, b) || within(b, a);
   if (overlaps(workspace, dir) || overlaps(workspace, root)) {
+    throw makeRealmError("SCHEMA_INVALID");
+  }
+}
+
+// The workspace and the channel must not overlap in either direction, on real paths. Both are bound read-write.
+function assertNoOverlapPair(workspaceDir: string, channelDir: string): void {
+  const workspace = realPathOf(workspaceDir);
+  const channel = realPathOf(channelDir);
+  if (within(workspace, channel) || within(channel, workspace)) {
     throw makeRealmError("SCHEMA_INVALID");
   }
 }

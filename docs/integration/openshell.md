@@ -147,22 +147,22 @@ The realm compute driver implements `openshell.compute.v1.ComputeDriver` from th
 
 | RPC | Driver behaviour | Refusal or status |
 | --- | --- | --- |
-| `GetCapabilities` | Reports the driver name, the default image, the portable CPU and memory limits, the `openshell.compute.contract`, `openshell.compute.launch-authentication` and `openshell.compute.isolation-backend` capabilities, and the pinned admission acknowledgement (`DRIVER_ADMISSION_ACKNOWLEDGEMENT`). Accepts one isolation backend selection: the configured backend (`REALM_DRIVER_ISOLATION_BACKEND_NAME`) over a unix socket. | A gateway that requires an unknown capability: `INVALID_ARGUMENT`. |
+| `GetCapabilities` | Reports the driver name, the default image, the portable CPU and memory limits, the `openshell.compute.contract` and `openshell.compute.launch-authentication` capabilities, and the pinned admission acknowledgement (`DRIVER_ADMISSION_ACKNOWLEDGEMENT`). A create carries no isolation backend selection, because the built-in runtime path needs none. | A gateway that requires an unknown capability: `INVALID_ARGUMENT`. |
 | `AuthenticateSandbox` | Not offered. The driver does not advertise sandbox authentication. Moves to phase 9.5. | `UNIMPLEMENTED` |
 | `ValidateSandboxCreate` | Runs the create checks below. No libpod call. | `INVALID_ARGUMENT` on any refusal. |
-| `CreateSandbox` | Runs the create checks, prepares the directories, then `DriverLifecycle.create`. Records the gateway's sandbox id, workspace, container name and the isolation backend the create selected, under the gateway's name. | `INVALID_ARGUMENT` on refusal, including a state directory already present for the name; `ALREADY_EXISTS` when a container of the name exists and its state directory does not. |
+| `CreateSandbox` | Runs the create checks, stores the launch material, prepares the channel (a TLS identity for the runtime, and the runtime's bootstrap, descriptor and auth bundle, checked to agree before any libpod call), then `DriverLifecycle.create`, which writes the bootstrap, descriptor and auth bundle before the container starts. After the container is verified it starts the sandbox runtime inside it (a detached exec of `/usr/local/lib/realm/openshell-sandbox --bootstrap`), waits for the runtime's control socket, and starts the host supervisor. Records the gateway's sandbox id, workspace and container name, under the gateway's name. | `INVALID_ARGUMENT` on refusal, including a state directory already present for the name; `ALREADY_EXISTS` when a container of the name exists and its state directory does not. |
 | `GetSandbox` | Reads the labelled container and the registry entry, reporting the gateway's name. | `NOT_FOUND` when the driver does not hold the sandbox. |
 | `ListSandboxes` | Lists, under the gateway's name, the sandboxes that have a registry entry and a labelled container. | none |
 | `WatchSandboxes` | Sends every sandbox on connect, then each change, and each removal as a deleted event. Polls until the client cancels. | none |
 | `StopSandbox` | Refused. Reads and changes no state (PD-08). | `FAILED_PRECONDITION` |
 | `StartSandbox` | Refused. Reads and changes no state (PD-08). | `FAILED_PRECONDITION` |
-| `DeleteSandbox` | `DriverLifecycle.delete`, then clears the registry. Idempotent. A name whose container another registered sandbox holds deletes nothing. | `deleted` is false for a sandbox that is already gone. |
+| `DeleteSandbox` | Stops the host supervisor first (SIGTERM, then SIGKILL after a bounded wait), then runs `DriverLifecycle.delete`, then clears the registry. Idempotent. A name whose container another registered sandbox holds deletes nothing. | `deleted` is false for a sandbox that is already gone. |
 | `EnsureWorkspace` | Creates `<workspaceRoot>/<workspace>` at 0700 when missing. Refuses a symbolic link or a path that resolves outside the root. | `INVALID_ARGUMENT` on refusal. |
 | `DeleteWorkspace` | Removes an empty workspace directory. A workspace that still holds files is left in place. | `FAILED_PRECONDITION` when files remain. |
 
 The create checks refuse, before any libpod call, a request whose image is not the configured digest, whose CPU or memory
 request or limit differs from the realm profile (2 CPUs, 1 GiB), that asks for a GPU, that carries a non-empty platform or
-driver config, a user-namespace request, an isolation backend selection other than the configured one over a unix socket, or an environment,
+driver config, a user-namespace request, an isolation backend selection of any kind (the built-in path carries none), or an environment,
 or whose argv holds an empty string.
 An empty argv is accepted: the sandbox is created idle, and the command is not forwarded before phase 9.5.
 
@@ -172,8 +172,7 @@ lone surrogate escape, integers written as integers within the gateway's Rust ra
 whitespace as Rust defines it.
 
 Refusals are logged. Each refusal of the create checks and of the launch material writes one line to stderr:
-`realm compute driver refused: rpc=<RPC> check=<check> code=SCHEMA_INVALID`. The RPC is `ValidateSandboxCreate`,
-`CreateSandbox`, or `BearerVerification` (the supervisor's bearer check, which reads the stored launch material). The check
+`realm compute driver refused: rpc=<RPC> check=<check> code=SCHEMA_INVALID`. The RPC is `ValidateSandboxCreate` or `CreateSandbox`. The check
 names the rule that refused, such as `create.image` or `launch.gateway_id`; the full list is `REFUSAL_CHECKS` in
 `src/runtime/driver/refusal.ts`. A line never carries a value, a path, a key or a token. The directory checks that a create
 runs before the lifecycle (the state directory and the secret directory must not exist, and the workspace must be a
@@ -187,11 +186,22 @@ the gateway's name to it, so `GetSandbox`, `ListSandboxes`, `WatchSandboxes` and
 gateway's name. Two names that give one container name, such as `x` and `realm-x`, cannot both be sandboxes: the second
 create is refused, because the first sandbox's state directory exists.
 
-Directories. A create prepares two directories before the lifecycle runs. The workspace is created at 0700 if it is
+Directories. A create prepares directories before the lifecycle runs. The workspace is created at 0700 if it is
 absent, by the rule `EnsureWorkspace` uses. The state directory is created at 0700 under the state root, and it must not
-already exist. If the lifecycle refuses, the state directory this call made is removed. The workspace is left in place.
+already exist. The create also makes the sandbox's secret directory `<secretRoot>/<container name>` at 0700. It holds
+`launch.json`, the channel directory (0700, with `bootstrap.json`, `server.crt`, `server.key` and `control.sock`),
+`descriptor.json` and `auth.json` (all 0600), and the supervisor's exit-marker path. If the create refuses after any of
+these exist, the state directory and the secret entries this call made are removed. The workspace is left in place.
 The state root and the workspace root are set in the driver's environment for the realm account. The rendered gateway
 configuration does not set them.
+
+### Built-in runtime (phase 9.5)
+
+- The driver serves the compute socket only.
+- The three required variables are `REALM_DRIVER_GATEWAY_CA` (absolute readable PEM file), `REALM_DRIVER_SUPERVISOR_BINARY` (absolute executable file) and `REALM_DRIVER_GATEWAY_ENDPOINT` (https URL). The driver refuses to start with `SCHEMA_INVALID` when one is missing or invalid, and echoes no value.
+- The sandbox image must contain `/usr/local/lib/realm/openshell-sandbox`.
+- The runtime's user namespace maps the realm account to uid and gid 1001 (`podman` keep-id, `uid=1001,gid=1001`). This is not yet verified on a live host.
+- The rendered gateway configuration selects `isolation_backend = "openshell-sandbox"` in the `[openshell.drivers.<name>]` table and writes no `[[openshell.supervisor.isolation_backends]]` section.
 
 ### PD-08 (stop and start)
 

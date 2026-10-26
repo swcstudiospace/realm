@@ -49,12 +49,13 @@ async function waitForRecorded(fake: FakeLibpod, route: LibpodRouteName, timeout
   }
 }
 
-void test("RT-03: the client exposes exactly the seven D-54 methods and no other instance member", () => {
+void test("RT-03: the client exposes exactly the seven D-54 methods and execDetached, and no other instance member", () => {
   const methods = Object.getOwnPropertyNames(LibpodClient.prototype)
     .filter((name) => name !== "constructor")
     .sort();
   assert.deepEqual(methods, [
     "createContainer",
+    "execDetached",
     "info",
     "inspectContainer",
     "listContainersByLabel",
@@ -72,13 +73,39 @@ void test("RT-03: the client exposes exactly the seven D-54 methods and no other
   }
 });
 
-void test("RT-03: no exec or attach route appears in the route table, and the only start route is container start", () => {
-  for (const route of Object.values(LIBPOD_ROUTES)) {
-    assert.doesNotMatch(route.path, /exec|attach/i);
-    if (/start/i.test(route.path)) {
+void test("RT-03: the route table has no attach route, and its only exec routes are the create-exec and start-exec pair", () => {
+  const routes = Object.values(LIBPOD_ROUTES);
+  assert.equal(
+    routes.some((route) => /attach/i.test(route.path)),
+    false,
+  );
+  assert.deepEqual(
+    routes
+      .filter((route) => /exec/i.test(route.path))
+      .map((route) => `${route.method} ${route.path}`)
+      .sort(),
+    ["POST /libpod/containers/{id}/exec", "POST /libpod/exec/{id}/start"],
+  );
+  for (const route of routes) {
+    if (/start/i.test(route.path) && !/exec/i.test(route.path)) {
       assert.equal(route.path, "/libpod/containers/{id}/start");
     }
   }
+});
+
+void test("RT-03: execDetached creates an exec session and starts it, and refuses a relative program with no request", async (t) => {
+  const { fake, socketPath } = await startFake(t);
+  fake.store.add({ id: "realm-a", labels: { [LABEL_KEY]: "true" }, running: true });
+  const client = new LibpodClient(socketPath);
+  await client.execDetached("realm-a", ["/usr/local/lib/realm/openshell-sandbox", "--bootstrap", "/run/openshell/channel/bootstrap.json"]);
+  const execRequests = fake.requests().filter((request) => request.route === "createExec" || request.route === "startExec");
+  assert.deepEqual(
+    execRequests.map((request) => request.route),
+    ["createExec", "startExec"],
+  );
+  assert.equal(execRequests[1]?.target.endsWith("/libpod/exec/exec-1/start"), true);
+  await assertCode(client.execDetached("realm-a", ["relative-program"]), "SCHEMA_INVALID");
+  assert.equal(fake.requests().filter((request) => request.route === "createExec").length, 1);
 });
 
 void test("RT-09: list, inspect, stop, and remove round-trip against the fake socket server", async (t) => {

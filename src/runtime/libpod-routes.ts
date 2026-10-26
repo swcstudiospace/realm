@@ -3,10 +3,9 @@
 // this file is PROVISIONAL. The gated integration suite confirms them on a Podman 5.x host
 // (S-09). They live in this file only, so a correction touches one place.
 //
-// The table holds the routes the closed libpod client uses: the read, stop, and remove routes, and the
-// create and container-start routes of the lifecycle. It defines no exec or attach route and no route
-// that starts a process inside a container (RT-03). Agent workload code starts only through the
-// OpenShell adapter.
+// The table holds the routes the closed libpod client uses: the read, stop, and remove routes, the create and
+// container-start routes of the lifecycle, and the two exec routes the built-in runtime start uses. The exec routes start
+// one fixed command, the sandbox runtime, detached; the client takes no caller argv and no attach (RT-03).
 
 import { makeRealmError } from "../core/errors.js";
 
@@ -14,7 +13,7 @@ export type LibpodMethod = "GET" | "POST" | "DELETE";
 
 export interface LibpodRoute {
   readonly method: LibpodMethod;
-  // Path template. The single "{id}" segment is a validated container id.
+  // Path template. The single "{id}" segment is a validated id: a container id, or an exec session id for startExec.
   readonly path: string;
 }
 
@@ -30,6 +29,8 @@ export const LIBPOD_ROUTES = Object.freeze({
   removeContainer: route("DELETE", "/libpod/containers/{id}"),
   createContainer: route("POST", "/libpod/containers/create"),
   startContainer: route("POST", "/libpod/containers/{id}/start"),
+  createExec: route("POST", "/libpod/containers/{id}/exec"),
+  startExec: route("POST", "/libpod/exec/{id}/start"),
 });
 
 export type LibpodRouteName = keyof typeof LIBPOD_ROUTES;
@@ -50,7 +51,7 @@ export const LIBPOD_API_VERSION_HEADER = "libpod-api-version";
 export const API_VERSION_PATTERN = /^\d+\.\d+\.\d+$/;
 const VERSIONED_PATH = /^\/v\d+\.\d+\.\d+(\/.*)$/;
 
-// Checks the container id a route needs: present and well formed where the route has an {id}, and absent
+// Checks the id a route needs: present and well formed where the route has an {id}, and absent
 // where it has none. It runs before any socket request, so a malformed id never reaches the socket.
 export function checkRouteId(target: LibpodRoute, containerId: string | undefined): void {
   if (target.path.includes("{id}")) {
@@ -62,7 +63,7 @@ export function checkRouteId(target: LibpodRoute, containerId: string | undefine
   }
 }
 
-// The request target (path plus query string) for a route under an API version. Rejects a container id
+// The request target (path plus query string) for a route under an API version. Rejects an id
 // that the route does not accept, and an API version that is not a plain version number.
 export function routeTarget(
   target: LibpodRoute,

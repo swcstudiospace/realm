@@ -10,7 +10,8 @@
 //
 // The client reads no environment and takes its socket path as an argument. The socket
 // grants full engine access as the user (podman.md Q4), so it is never mounted into a
-// session container.
+// session container. The one process the client starts is the sandbox runtime, through execDetached, and its
+// command is fixed by the driver; no caller argv reaches the engine except through that method's validated argv.
 
 import { request as httpRequest } from "node:http";
 import { isAbsolute } from "node:path";
@@ -41,6 +42,9 @@ import {
 const DEFAULT_REQUEST_TIMEOUT_MS = 5000;
 const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 const LABEL_KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
+// The user-namespace mapping of every sandbox: the realm account is mapped to the workload uid and gid (keep-id).
+const WORKLOAD_USER = `${String(HARDENING_PROFILE.workloadUid)}:${String(HARDENING_PROFILE.workloadGid)}`;
+const WORKLOAD_USERNS = `uid=${String(HARDENING_PROFILE.workloadUid)},gid=${String(HARDENING_PROFILE.workloadGid)}`;
 
 export interface LibpodClientOptions {
   // Bound for one request, in addition to any grace period the request itself asks for.
@@ -73,6 +77,8 @@ export interface ContainerSpec {
   readonly workspaceDir: string;
   // Absolute host path, bound read-only at the state destination.
   readonly stateDir: string;
+  // Absolute host path, bound read-write at the channel destination. It holds the runtime's bootstrap, TLS files and socket.
+  readonly channelDir: string;
 }
 
 interface Transport {
@@ -219,6 +225,36 @@ export class LibpodClient {
     const reply = await exchangeRoute(this.transport, LIBPOD_ROUTES.startContainer, { containerId: id });
     expectStatus(reply, [204, 304]);
   }
+
+  // Starts one command inside a running container, detached: the call returns once the process is started, and the
+  // process runs on. The command is an argv of absolute-path program and literal arguments, validated here. It runs as the
+  // workload user, so the sandbox runtime starts with the identity the bootstrap names. The driver passes the one command it
+  // starts (the sandbox runtime); no other caller reaches this method.
+  async execDetached(containerId: string, command: readonly string[]): Promise<void> {
+    validateCommand(command);
+    const created = await exchangeRoute(this.transport, LIBPOD_ROUTES.createExec, {
+      containerId,
+      body: JSON.stringify({
+        AttachStdin: false,
+        AttachStdout: false,
+        AttachStderr: false,
+        Tty: false,
+        Privileged: false,
+        User: WORKLOAD_USER,
+        Cmd: [...command],
+      }),
+    });
+    expectStatus(created, [201]);
+    const execId = readPath(parseJson(created.text), [LIBPOD_LIST_ID_FIELD]);
+    if (typeof execId !== "string" || !CONTAINER_ID_PATTERN.test(execId)) {
+      throw makeRealmError("SCHEMA_INVALID");
+    }
+    const started = await exchangeRoute(this.transport, LIBPOD_ROUTES.startExec, {
+      containerId: execId,
+      body: JSON.stringify({ Detach: true, Tty: false }),
+    });
+    expectStatus(started, [200]);
+  }
 }
 
 async function exchangeRoute(transport: Transport, route: LibpodRoute, call: RouteCall): Promise<HttpReply> {
@@ -355,12 +391,24 @@ function readPath(value: unknown, path: readonly string[]): unknown {
 const DIGEST_PINNED_IMAGE = /^[a-z0-9]+(?:[._/-][a-z0-9]+)*(?::[A-Za-z0-9_.-]+)?@sha256:[a-f0-9]{64}$/;
 // The options of every tmpfs scratch mount, from the hardening profile's tmpfs paths.
 const TMPFS_OPTIONS: readonly string[] = Object.freeze(["nosuid", "nodev"]);
+// The supervisor CA directory: noexec, owned by the workload user, private to it.
+const SUPERVISOR_CA_TMPFS_OPTIONS: readonly string[] = Object.freeze([
+  "noexec",
+  "nosuid",
+  "nodev",
+  "mode=0700",
+  `uid=${String(HARDENING_PROFILE.workloadUid)}`,
+  `gid=${String(HARDENING_PROFILE.workloadGid)}`,
+]);
 // The CFS period in microseconds. NanoCpus is quota / period, so quota = nanoCpus * period / 1e9.
 const CPU_PERIOD_MICROS = 100000;
 const WORKSPACE_OPTIONS: readonly string[] = Object.freeze(["noexec", "nosuid", "nodev"]);
 const STATE_OPTIONS: readonly string[] = Object.freeze(["ro", "noexec", "nosuid", "nodev"]);
-// The container entry point: the helper's idle mode is the only process before StartAgent (phase 9.5).
+const CHANNEL_OPTIONS: readonly string[] = Object.freeze(["rw", "noexec", "nosuid", "nodev"]);
+// The container entry point: the helper's idle mode is the only process before the runtime starts.
 const ENTRYPOINT: readonly string[] = Object.freeze(["/opt/realm/bin/realm-helper", "idle"]);
+// A command the client starts through execDetached: an absolute program path, then literal arguments with no NUL byte.
+const EXEC_PROGRAM_PATTERN = /^\/[^\0]*$/;
 
 // Validates a spec before any engine request. It is pure: it reads no environment and sends nothing. It fails closed
 // on a spec the body must not carry: a sandbox name without the realm prefix or outside the container-id pattern, an
@@ -368,7 +416,7 @@ const ENTRYPOINT: readonly string[] = Object.freeze(["/opt/realm/bin/realm-helpe
 // container-engine socket.
 export function validateContainerSpec(spec: ContainerSpec): void {
   const socketNames = HARDENING_PROFILE.socketNames;
-  const hostPaths = [spec.workspaceDir, spec.stateDir];
+  const hostPaths = [spec.workspaceDir, spec.stateDir, spec.channelDir];
   const valid =
     isRealmSandboxName(spec.sandboxName) &&
     CONTAINER_ID_PATTERN.test(spec.sandboxName) &&
@@ -382,14 +430,30 @@ export function validateContainerSpec(spec: ContainerSpec): void {
   }
 }
 
+// Validates the argv of execDetached: one or more arguments, the first an absolute program path, every argument non-empty.
+function validateCommand(command: readonly string[]): void {
+  const [program] = command;
+  if (
+    program === undefined ||
+    !EXEC_PROGRAM_PATTERN.test(program) ||
+    command.some((argument) => argument === "" || argument.includes("\0"))
+  ) {
+    throw makeRealmError("SCHEMA_INVALID");
+  }
+}
+
 // The create body. Every field comes from the spec or from HARDENING_PROFILE, so the verifier and the
 // create request read the same values. Nothing else is added.
 function containerCreateBody(spec: ContainerSpec): Readonly<Record<string, unknown>> {
   const profile = HARDENING_PROFILE;
+  // The sandbox container carries the profile's scratch paths and the runtime's CA directory.
+  const scratch = [...profile.tmpfs, profile.supervisorCaDestination];
   return {
     name: spec.sandboxName,
     image: spec.image,
     entrypoint: [...ENTRYPOINT],
+    user: WORKLOAD_USER,
+    userns: { nsmode: "keep-id", value: WORKLOAD_USERNS },
     labels: {
       [OPENSHELL_MANAGED_LABEL_KEY]: OPENSHELL_MANAGED_LABEL_VALUE,
       [OPENSHELL_SANDBOX_NAME_LABEL_KEY]: spec.sandboxName,
@@ -408,9 +472,14 @@ function containerCreateBody(spec: ContainerSpec): Readonly<Record<string, unkno
     netns: { nsmode: profile.networkMode },
     tty: false,
     mounts: [
-      ...profile.tmpfs.map((destination) => ({ type: "tmpfs", destination, options: [...TMPFS_OPTIONS] })),
+      ...scratch.map((destination) => ({
+        type: "tmpfs",
+        destination,
+        options: [...(destination === profile.supervisorCaDestination ? SUPERVISOR_CA_TMPFS_OPTIONS : TMPFS_OPTIONS)],
+      })),
       { type: "bind", source: spec.workspaceDir, destination: profile.workspaceDestination, options: WORKSPACE_OPTIONS },
       { type: "bind", source: spec.stateDir, destination: profile.stateDestination, options: STATE_OPTIONS },
+      { type: "bind", source: spec.channelDir, destination: profile.channelDestination, options: CHANNEL_OPTIONS },
     ],
   };
 }

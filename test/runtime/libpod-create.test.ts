@@ -107,11 +107,13 @@ async function assertRefused(work: Promise<unknown>, code: ErrorCode, label: str
 
 const WORKSPACE_DIR = "/srv/realm-test/workspace/sess-1";
 const STATE_DIR = "/srv/realm-test/state/sess-1";
+const CHANNEL_DIR = "/srv/realm-test/secrets/sess-1/channel";
 const SPEC: ContainerSpec = {
   sandboxName: "realm-sess-1",
   image: `localhost/realm-agentos@sha256:${"a".repeat(64)}`,
   workspaceDir: WORKSPACE_DIR,
   stateDir: STATE_DIR,
+  channelDir: CHANNEL_DIR,
 };
 
 // The create body the spec must produce, field for field (plan T1, as amended). Any extra or missing field fails.
@@ -119,6 +121,8 @@ const EXPECTED_BODY = {
   name: "realm-sess-1",
   image: SPEC.image,
   entrypoint: ["/opt/realm/bin/realm-helper", "idle"],
+  user: "1001:1001",
+  userns: { nsmode: "keep-id", value: "uid=1001,gid=1001" },
   labels: {
     "openshell.managed": "true",
     "openshell.ai/sandbox-name": "realm-sess-1",
@@ -139,8 +143,19 @@ const EXPECTED_BODY = {
   mounts: [
     { type: "tmpfs", destination: "/tmp", options: ["nosuid", "nodev"] },
     { type: "tmpfs", destination: "/run", options: ["nosuid", "nodev"] },
+    {
+      type: "tmpfs",
+      destination: "/run/openshell-supervisor-ca",
+      options: ["noexec", "nosuid", "nodev", "mode=0700", "uid=1001", "gid=1001"],
+    },
     { type: "bind", source: WORKSPACE_DIR, destination: "/workspace", options: ["noexec", "nosuid", "nodev"] },
     { type: "bind", source: STATE_DIR, destination: "/realm-state", options: ["ro", "noexec", "nosuid", "nodev"] },
+    {
+      type: "bind",
+      source: CHANNEL_DIR,
+      destination: "/run/openshell/channel",
+      options: ["rw", "noexec", "nosuid", "nodev"],
+    },
   ],
 };
 
@@ -202,6 +217,8 @@ void test("PRD-CTR-01: createContainer refuses a spec outside the typed form bef
     ["a workspace named like the podman socket", { ...SPEC, workspaceDir: "/srv/realm-test/podman.sock" }],
     ["a state directory under a docker socket name", { ...SPEC, stateDir: "/srv/realm-test/docker.sock/state" }],
     ["a relative workspace path", { ...SPEC, workspaceDir: "workspace" }],
+    ["a channel directory under a podman socket name", { ...SPEC, channelDir: "/srv/realm-test/podman.sock/channel" }],
+    ["a relative channel path", { ...SPEC, channelDir: "channel" }],
     ["an image without a digest", { ...SPEC, image: "localhost/realm-agentos:latest" }],
     ["a sandbox name outside the container id pattern", { ...SPEC, sandboxName: "realm sess" }],
   ];

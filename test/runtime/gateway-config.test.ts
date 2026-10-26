@@ -47,6 +47,7 @@ const EXPECTED_VALID_CONFIG = [
   "",
   "[openshell.drivers.realm]",
   'socket_path = "/realm-state/gateway/driver.sock"',
+  'isolation_backend = "openshell-sandbox"',
   "",
 ].join("\n");
 

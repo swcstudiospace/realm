@@ -1,10 +1,10 @@
-import { test } from "node:test";
+import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { RealmError } from "../../../src/core/errors.js";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { RealmError } from "../../../src/core/errors.js";
 import {
   DRIVER_ENV,
   loadDriverProcessConfig,
@@ -13,29 +13,60 @@ import {
   type DriverProcessConfig,
 } from "../../../src/runtime/driver/main.js";
 import { GATEWAY_ID } from "../isolation/supervisor-token.js";
-import { IMPLEMENTATION_VERSION, SANDBOX_IMAGE, driverConfig } from "./fakes.js";
+import { GATEWAY_ENDPOINT, IMPLEMENTATION_VERSION, SANDBOX_IMAGE, driverConfig } from "./fakes.js";
 
-const COMPLETE_ENV: Readonly<Record<string, string>> = {
-  [DRIVER_ENV.name]: "realm",
-  [DRIVER_ENV.socket]: "/run/realm/driver.sock",
-  [DRIVER_ENV.image]: SANDBOX_IMAGE,
-  [DRIVER_ENV.stateRoot]: "/var/lib/realm/state",
-  [DRIVER_ENV.secretRoot]: "/var/lib/realm/secrets",
-  [DRIVER_ENV.workspaceRoot]: "/var/lib/realm/workspaces",
-  [DRIVER_ENV.isolationSocket]: "/run/realm/isolation.sock",
-  [DRIVER_ENV.isolationBackendName]: "realm",
-  [DRIVER_ENV.gatewayId]: GATEWAY_ID,
-  XDG_RUNTIME_DIR: "/run/user/1001",
-};
+interface Fixtures {
+  readonly ca: string;
+  readonly supervisor: string;
+}
+
+// A readable gateway CA and an executable supervisor, in a directory removed when the test ends.
+function fixturesFor(t: TestContext): Fixtures {
+  const dir = mkdtempSync(join(tmpdir(), "realm-driver-env-"));
+  t.after(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const ca = join(dir, "gateway-ca.pem");
+  const supervisor = join(dir, "openshell-supervisor");
+  writeFileSync(ca, "fixture certificate authority\n");
+  writeFileSync(supervisor, "fixture supervisor\n");
+  chmodSync(supervisor, 0o755);
+  return { ca, supervisor };
+}
+
+function completeEnv(fixtures: Fixtures): Readonly<Record<string, string>> {
+  return {
+    [DRIVER_ENV.name]: "realm",
+    [DRIVER_ENV.socket]: "/run/realm/driver.sock",
+    [DRIVER_ENV.image]: SANDBOX_IMAGE,
+    [DRIVER_ENV.stateRoot]: "/var/lib/realm/state",
+    [DRIVER_ENV.secretRoot]: "/var/lib/realm/secrets",
+    [DRIVER_ENV.workspaceRoot]: "/var/lib/realm/workspaces",
+    [DRIVER_ENV.gatewayId]: GATEWAY_ID,
+    [DRIVER_ENV.gatewayCa]: fixtures.ca,
+    [DRIVER_ENV.supervisorBinary]: fixtures.supervisor,
+    [DRIVER_ENV.gatewayEndpoint]: GATEWAY_ENDPOINT,
+    XDG_RUNTIME_DIR: "/run/user/1001",
+  };
+}
 
 function refusedWithSchemaInvalid(): (error: unknown) => boolean {
   return (error: unknown) => error instanceof RealmError && error.code === "SCHEMA_INVALID";
 }
 
-void test("PD-05: a complete environment yields the sockets, the libpod socket, and the driver config with its roots and gateway id", () => {
-  const config = loadDriverProcessConfig(COMPLETE_ENV, IMPLEMENTATION_VERSION);
+// The refusal is SCHEMA_INVALID, and neither its message nor its reason names the configured value.
+function refusedWithoutValue(value: string): (error: unknown) => boolean {
+  return (error: unknown) =>
+    error instanceof RealmError &&
+    error.code === "SCHEMA_INVALID" &&
+    !error.message.includes(value) &&
+    !error.reason.includes(value);
+}
+
+void test("PD-05: a complete environment yields the sockets, the libpod socket, and the driver config with its roots, gateway id and supervisor", (t) => {
+  const fixtures = fixturesFor(t);
+  const config = loadDriverProcessConfig(completeEnv(fixtures), IMPLEMENTATION_VERSION);
   assert.equal(config.socketPath, "/run/realm/driver.sock");
-  assert.equal(config.isolationSocketPath, "/run/realm/isolation.sock");
   assert.equal(config.libpodSocketPath, "/run/user/1001/podman/podman.sock");
   assert.deepEqual(config.driver, {
     driverName: "realm",
@@ -45,44 +76,73 @@ void test("PD-05: a complete environment yields the sockets, the libpod socket, 
     workspaceRoot: "/var/lib/realm/workspaces",
     implementationVersion: IMPLEMENTATION_VERSION,
     gatewayId: GATEWAY_ID,
-    isolationBackendName: "realm",
+    supervisor: {
+      binary: fixtures.supervisor,
+      gatewayEndpoint: GATEWAY_ENDPOINT,
+      gatewayCaPath: fixtures.ca,
+    },
   });
 });
 
 for (const key of Object.values(DRIVER_ENV)) {
-  void test(`PD-05: a missing ${key} refuses with SCHEMA_INVALID`, () => {
-    const env = { ...COMPLETE_ENV, [key]: undefined };
+  void test(`PD-05: a missing ${key} refuses with SCHEMA_INVALID`, (t) => {
+    const env = { ...completeEnv(fixturesFor(t)), [key]: undefined };
     assert.throws(() => loadDriverProcessConfig(env, IMPLEMENTATION_VERSION), refusedWithSchemaInvalid());
   });
 }
 
-void test("PD-05: a missing XDG_RUNTIME_DIR refuses, because the libpod socket cannot be found", () => {
-  const env = { ...COMPLETE_ENV, XDG_RUNTIME_DIR: undefined };
+void test("PD-05: a missing XDG_RUNTIME_DIR refuses, because the libpod socket cannot be found", (t) => {
+  const env = { ...completeEnv(fixturesFor(t)), XDG_RUNTIME_DIR: undefined };
   assert.throws(() => loadDriverProcessConfig(env, IMPLEMENTATION_VERSION), refusedWithSchemaInvalid());
 });
 
-void test("PD-05: a relative socket or root path refuses", () => {
+void test("PD-05: a relative socket, root, CA or supervisor path refuses", (t) => {
+  const fixtures = fixturesFor(t);
   for (const key of [
     DRIVER_ENV.socket,
     DRIVER_ENV.stateRoot,
     DRIVER_ENV.secretRoot,
     DRIVER_ENV.workspaceRoot,
-    DRIVER_ENV.isolationSocket,
+    DRIVER_ENV.gatewayCa,
+    DRIVER_ENV.supervisorBinary,
   ]) {
-    const env = { ...COMPLETE_ENV, [key]: "relative/path" };
+    const env = { ...completeEnv(fixtures), [key]: "relative/path" };
     assert.throws(() => loadDriverProcessConfig(env, IMPLEMENTATION_VERSION), refusedWithSchemaInvalid());
   }
 });
 
-void test("PRD-ISO-02: a gateway id outside the configured form refuses at startup, and an empty one is missing", () => {
+void test("PRD-DRV-01: a gateway CA that is not a readable file refuses, and the path is not echoed", (t) => {
+  const fixtures = fixturesFor(t);
+  const missing = join(tmpdir(), "realm-no-such-dir", "gateway-ca-secret.pem");
+  const env = { ...completeEnv(fixtures), [DRIVER_ENV.gatewayCa]: missing };
+  assert.throws(() => loadDriverProcessConfig(env, IMPLEMENTATION_VERSION), refusedWithoutValue(missing));
+});
+
+void test("PRD-DRV-01: a supervisor binary that is not executable refuses, and the path is not echoed", (t) => {
+  const fixtures = fixturesFor(t);
+  chmodSync(fixtures.supervisor, 0o644);
+  const env = completeEnv(fixtures);
+  assert.throws(() => loadDriverProcessConfig(env, IMPLEMENTATION_VERSION), refusedWithoutValue(fixtures.supervisor));
+});
+
+void test("PRD-DRV-01: a gateway endpoint that is not https, or has no host, refuses, and the endpoint is not echoed", (t) => {
+  const fixtures = fixturesFor(t);
+  for (const endpoint of ["http://gateway.invalid:8443", "https://", "not a url"]) {
+    const env = { ...completeEnv(fixtures), [DRIVER_ENV.gatewayEndpoint]: endpoint };
+    assert.throws(() => loadDriverProcessConfig(env, IMPLEMENTATION_VERSION), refusedWithoutValue(endpoint));
+  }
+});
+
+void test("PRD-ISO-02: a gateway id outside the configured form refuses at startup, and an empty one is missing", (t) => {
+  const fixtures = fixturesFor(t);
   for (const gatewayId of ["", " realm", "realm name", "-realm", "realm/x", "a".repeat(65)]) {
-    const env = { ...COMPLETE_ENV, [DRIVER_ENV.gatewayId]: gatewayId };
+    const env = { ...completeEnv(fixtures), [DRIVER_ENV.gatewayId]: gatewayId };
     assert.throws(() => loadDriverProcessConfig(env, IMPLEMENTATION_VERSION), refusedWithSchemaInvalid());
   }
 });
 
-void test("PRD-ISO-02: a refused gateway id is not echoed in the refusal", () => {
-  const env = { ...COMPLETE_ENV, [DRIVER_ENV.gatewayId]: "bad id secret-value" };
+void test("PRD-ISO-02: a refused gateway id is not echoed in the refusal", (t) => {
+  const env = { ...completeEnv(fixturesFor(t)), [DRIVER_ENV.gatewayId]: "bad id secret-value" };
   try {
     loadDriverProcessConfig(env, IMPLEMENTATION_VERSION);
     assert.fail("expected a refusal");
@@ -93,18 +153,18 @@ void test("PRD-ISO-02: a refused gateway id is not echoed in the refusal", () =>
   }
 });
 
-void test("PRD-DRV-02: an image that is not digest-pinned refuses at startup", () => {
-  const env = { ...COMPLETE_ENV, [DRIVER_ENV.image]: "registry.invalid/realm/sandbox:latest" };
+void test("PRD-DRV-02: an image that is not digest-pinned refuses at startup", (t) => {
+  const env = { ...completeEnv(fixturesFor(t)), [DRIVER_ENV.image]: "registry.invalid/realm/sandbox:latest" };
   assert.throws(() => loadDriverProcessConfig(env, IMPLEMENTATION_VERSION), refusedWithSchemaInvalid());
 });
 
-void test("PD-05: a driver name outside the short lowercase form refuses", () => {
-  const env = { ...COMPLETE_ENV, [DRIVER_ENV.name]: "Realm Driver" };
+void test("PD-05: a driver name outside the short lowercase form refuses", (t) => {
+  const env = { ...completeEnv(fixturesFor(t)), [DRIVER_ENV.name]: "Realm Driver" };
   assert.throws(() => loadDriverProcessConfig(env, IMPLEMENTATION_VERSION), refusedWithSchemaInvalid());
 });
 
-void test("a refusal names no configured value", () => {
-  const env = { ...COMPLETE_ENV, [DRIVER_ENV.image]: "registry.invalid/realm/secret-tag:latest" };
+void test("a refusal names no configured value", (t) => {
+  const env = { ...completeEnv(fixturesFor(t)), [DRIVER_ENV.image]: "registry.invalid/realm/secret-tag:latest" };
   try {
     loadDriverProcessConfig(env, IMPLEMENTATION_VERSION);
     assert.fail("expected a refusal");
@@ -112,32 +172,6 @@ void test("a refusal names no configured value", () => {
     assert.ok(error instanceof RealmError);
     assert.ok(!error.message.includes("secret-tag"));
     assert.ok(!error.reason.includes("secret-tag"));
-  }
-});
-
-void test("PRD-DRV-01: an isolation backend name outside the gateway's rule, or the built-in name, refuses at startup", () => {
-  for (const name of ["", "openshell-sandbox", "bad name", "realm/x", "a".repeat(129)]) {
-    const env = { ...COMPLETE_ENV, [DRIVER_ENV.isolationBackendName]: name };
-    assert.throws(() => loadDriverProcessConfig(env, IMPLEMENTATION_VERSION), refusedWithSchemaInvalid());
-  }
-});
-
-void test("PRD-DRV-01: a refused isolation backend name is not echoed in the refusal", () => {
-  const env = { ...COMPLETE_ENV, [DRIVER_ENV.isolationBackendName]: "bad name secret-value" };
-  try {
-    loadDriverProcessConfig(env, IMPLEMENTATION_VERSION);
-    assert.fail("expected a refusal");
-  } catch (error: unknown) {
-    assert.ok(error instanceof RealmError);
-    assert.ok(!error.message.includes("secret-value"));
-    assert.ok(!error.reason.includes("secret-value"));
-  }
-});
-
-void test("PRD-DRV-01: an accepted isolation backend name is carried into the driver config", () => {
-  for (const name of ["realm", "agent.substrate_2"]) {
-    const env = { ...COMPLETE_ENV, [DRIVER_ENV.isolationBackendName]: name };
-    assert.equal(loadDriverProcessConfig(env, IMPLEMENTATION_VERSION).driver.isolationBackendName, name);
   }
 });
 
@@ -174,7 +208,6 @@ function startConfigWithGatewayId(gatewayId: string): DriverProcessConfig {
   mkdirSync(join(base, "run"));
   return {
     socketPath: join(base, "run", "driver.sock"),
-    isolationSocketPath: join(base, "run", "isolation.sock"),
     libpodSocketPath: join(base, "missing", "podman.sock"),
     driver: driverConfig({ gatewayId }),
   };

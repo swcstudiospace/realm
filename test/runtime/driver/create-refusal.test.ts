@@ -3,12 +3,11 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { RealmError } from "../../../src/core/errors.js";
 import { ComputeDriver, type ComputeDriverConfig, type DriverSandboxMessage } from "../../../src/runtime/driver/compute-driver.js";
-import { BoundaryRegistry } from "../../../src/runtime/driver/isolation/boundary.js";
-import { FakeLibpod, FakeLifecycle, driverConfig, validSandbox } from "./fakes.js";
+import { FakeLibpod, FakeLifecycle, FakeRuntime, driverConfig, validSandbox } from "./fakes.js";
 import { GATEWAY_LAUNCH_SAMPLE } from "./gateway-launch-sample.js";
 
 const CONTAINER_NAME = "realm-session-1";
@@ -23,7 +22,7 @@ function harness(overrides: Partial<ComputeDriverConfig> = {}) {
   const config = driverConfig({ refusalLog: (line) => lines.push(line), ...overrides });
   const libpod = new FakeLibpod();
   const lifecycle = new FakeLifecycle(libpod);
-  const driver = new ComputeDriver(config, { lifecycle, libpod, boundaries: new BoundaryRegistry() });
+  const driver = new ComputeDriver(config, { lifecycle, libpod, runtime: new FakeRuntime() });
   return { config, libpod, lifecycle, driver, lines };
 }
 
@@ -75,14 +74,6 @@ void test("PRD-DRV-02: a create refused by the realm profile logs its RPC and ch
     "realm compute driver refused: rpc=ValidateSandboxCreate check=create.image code=SCHEMA_INVALID",
     "realm compute driver refused: rpc=CreateSandbox check=create.image code=SCHEMA_INVALID",
   ]);
-});
-
-void test("PRD-ISO-02: a bearer check that reads launch material which no longer decodes logs its check", async () => {
-  const { config, driver, lines } = harness();
-  await driver.createSandbox(validSandbox());
-  writeFileSync(join(config.secretRoot, CONTAINER_NAME, "launch.json"), "not json", { mode: 0o600 });
-  assert.throws(() => driver.launchVerifierOf("sandbox-1"), schemaInvalid);
-  assert.deepEqual(lines, ["realm compute driver refused: rpc=BearerVerification check=launch.json code=SCHEMA_INVALID"]);
 });
 
 void test("PRD-ISO-02: a validate with no launch material passes and logs nothing; a create without it logs the CreateSandbox check", async () => {

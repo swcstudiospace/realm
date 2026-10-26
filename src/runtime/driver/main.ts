@@ -1,10 +1,9 @@
-// The compute driver process (phase 9.4, PD-05; phase 9.5 adds the isolation backend). It runs as its own process under the
-// realm account's user unit (HC-04). This module is the only place the driver reads process.env. It reads the configuration
-// once, validates it, runs the startup sweep, and only then binds the sockets, so no request is accepted ahead of the sweep
-// (PRD-CTR-03). The isolation backend shares the driver's boundary registry, so a DeleteSandbox invalidates the handles the
-// backend holds, and it verifies each sandbox's bearer with that sandbox's own launch material (the driver stores it at create).
+// The compute driver process (phase 9.4, PD-05; phase 9.5 starts the sandbox runtime on the built-in path). It runs as its own
+// process under the realm account's user unit (HC-04). This module is the only place the driver reads process.env. It reads the
+// configuration once, validates it, runs the startup sweep, and only then binds the socket, so no request is accepted ahead of the
+// sweep (PRD-CTR-03).
 
-import { readFileSync } from "node:fs";
+import { accessSync, constants, readFileSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { isDirectEntry, podmanSocketPath } from "../host-paths.js";
 import { makeRealmError, RealmError } from "../../core/errors.js";
@@ -15,11 +14,12 @@ import {
   isImplementationVersion,
   loadComputeDriverService,
   type ComputeDriverConfig,
+  type RuntimeHost,
 } from "./compute-driver.js";
+import { startRuntimeProcess } from "./channel.js";
 import { DriverLifecycle } from "./lifecycle.js";
-import { GATEWAY_ID_PATTERN, isIsolationBackendName } from "../gateway-config.js";
-import { startIsolationBackend } from "./isolation/backend.js";
-import { BoundaryRegistry } from "./isolation/boundary.js";
+import { GATEWAY_ID_PATTERN } from "../gateway-config.js";
+import { spawnSupervisor } from "./supervisor.js";
 import { startSocketServer, type SocketServer } from "./server.js";
 
 export const DRIVER_ENV = Object.freeze({
@@ -29,9 +29,10 @@ export const DRIVER_ENV = Object.freeze({
   stateRoot: "REALM_DRIVER_STATE_ROOT",
   secretRoot: "REALM_DRIVER_SECRET_ROOT",
   workspaceRoot: "REALM_DRIVER_WORKSPACE_ROOT",
-  isolationSocket: "REALM_DRIVER_ISOLATION_SOCKET",
-  isolationBackendName: "REALM_DRIVER_ISOLATION_BACKEND_NAME",
   gatewayId: "REALM_DRIVER_GATEWAY_ID",
+  gatewayCa: "REALM_DRIVER_GATEWAY_CA",
+  supervisorBinary: "REALM_DRIVER_SUPERVISOR_BINARY",
+  gatewayEndpoint: "REALM_DRIVER_GATEWAY_ENDPOINT",
 });
 
 // A driver name is a short lowercase token. The gateway's [openshell.drivers.<name>] table names it.
@@ -44,15 +45,8 @@ const PACKAGE_JSON_RELATIVE_PATH = "../../../../package.json";
 
 export interface DriverProcessConfig {
   readonly socketPath: string;
-  readonly isolationSocketPath: string;
   readonly libpodSocketPath: string;
   readonly driver: ComputeDriverConfig;
-}
-
-// The two sockets the process serves: the compute driver's and the isolation backend's.
-export interface DriverServers {
-  readonly driver: SocketServer;
-  readonly isolation: SocketServer;
 }
 
 type Environment = Readonly<Record<string, string | undefined>>;
@@ -66,24 +60,19 @@ export function loadDriverProcessConfig(env: Environment, implementationVersion:
   const sandboxStateRoot = requiredAbsolute(env, DRIVER_ENV.stateRoot);
   const secretRoot = requiredAbsolute(env, DRIVER_ENV.secretRoot);
   const workspaceRoot = requiredAbsolute(env, DRIVER_ENV.workspaceRoot);
-  const isolationSocketPath = requiredAbsolute(env, DRIVER_ENV.isolationSocket);
-  // The one isolation backend this driver serves, by the name the gateway selects it with. It is required and refused with
-  // SCHEMA_INVALID without echoing the value when it is missing or invalid.
-  const isolationBackendName = requiredValue(env, DRIVER_ENV.isolationBackendName);
   const gatewayId = requiredValue(env, DRIVER_ENV.gatewayId);
+  const gatewayCaPath = requiredReadableFile(env, DRIVER_ENV.gatewayCa);
+  const supervisorBinary = requiredExecutableFile(env, DRIVER_ENV.supervisorBinary);
+  const gatewayEndpoint = requiredHttpsEndpoint(env, DRIVER_ENV.gatewayEndpoint);
   const libpodSocketPath = podmanSocketPath(env);
-  if (
-    !DRIVER_NAME_PATTERN.test(name) ||
-    !IMAGE_PATTERN.test(sandboxImage) ||
-    !GATEWAY_ID_PATTERN.test(gatewayId) ||
-    !isIsolationBackendName(isolationBackendName) ||
-    libpodSocketPath === undefined
-  ) {
+  if (!DRIVER_NAME_PATTERN.test(name) || !IMAGE_PATTERN.test(sandboxImage) || !GATEWAY_ID_PATTERN.test(gatewayId)) {
+    throw makeRealmError("SCHEMA_INVALID");
+  }
+  if (libpodSocketPath === undefined) {
     throw makeRealmError("SCHEMA_INVALID");
   }
   return {
     socketPath,
-    isolationSocketPath,
     libpodSocketPath,
     driver: {
       driverName: name,
@@ -93,7 +82,7 @@ export function loadDriverProcessConfig(env: Environment, implementationVersion:
       workspaceRoot,
       implementationVersion,
       gatewayId,
-      isolationBackendName,
+      supervisor: { binary: supervisorBinary, gatewayEndpoint, gatewayCaPath },
     },
   };
 }
@@ -130,48 +119,77 @@ function requiredAbsolute(env: Environment, key: string): string {
   return value;
 }
 
-// Builds the driver, which validates the configuration without touching libpod, then sweeps, then starts the isolation backend,
-// then binds the driver's socket. The sweep removes every realm container and every sandbox's launch material left by a previous
-// generation before any socket exists. The isolation backend reads the resource of each sandbox from the driver, and each sandbox's
-// bearer verifier from that sandbox's launch material. If the driver's own socket cannot be bound, the isolation backend is closed
-// before the error is thrown.
-export async function startDriver(config: DriverProcessConfig): Promise<DriverServers> {
+// An absolute path to a regular file the driver can read (the gateway CA).
+function requiredReadableFile(env: Environment, key: string): string {
+  const value = requiredAbsolute(env, key);
+  try {
+    if (!statSync(value).isFile()) {
+      throw makeRealmError("SCHEMA_INVALID");
+    }
+    accessSync(value, constants.R_OK);
+  } catch {
+    throw makeRealmError("SCHEMA_INVALID");
+  }
+  return value;
+}
+
+// An absolute path to a regular file the driver can execute (the host supervisor).
+function requiredExecutableFile(env: Environment, key: string): string {
+  const value = requiredAbsolute(env, key);
+  try {
+    if (!statSync(value).isFile()) {
+      throw makeRealmError("SCHEMA_INVALID");
+    }
+    accessSync(value, constants.X_OK);
+  } catch {
+    throw makeRealmError("SCHEMA_INVALID");
+  }
+  return value;
+}
+
+// An https URL with a host: the gateway's gRPC endpoint.
+function requiredHttpsEndpoint(env: Environment, key: string): string {
+  const value = requiredValue(env, key);
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw makeRealmError("SCHEMA_INVALID");
+  }
+  if (url.protocol !== "https:" || url.hostname === "") {
+    throw makeRealmError("SCHEMA_INVALID");
+  }
+  return value;
+}
+
+// Builds the driver, which validates the configuration without touching libpod, then sweeps, then binds the driver's socket.
+// The sweep removes every realm container and every sandbox's secret entries left by a previous generation before any socket
+// exists. The host supervisors of the previous generation exited when its driver's stdin pipes closed.
+export async function startDriver(config: DriverProcessConfig): Promise<SocketServer> {
   const libpod = new LibpodClient(config.libpodSocketPath);
   const lifecycle = new DriverLifecycle({
     libpod,
     sandboxStateRoot: config.driver.sandboxStateRoot,
     secretRoot: config.driver.secretRoot,
   });
-  const boundaries = new BoundaryRegistry();
-  const driver = new ComputeDriver(config.driver, { lifecycle, libpod, boundaries });
+  const runtime: RuntimeHost = {
+    startRuntime: (containerId, controlSocket) => startRuntimeProcess(libpod, containerId, controlSocket),
+    spawnSupervisor,
+  };
+  const driver = new ComputeDriver(config.driver, { lifecycle, libpod, runtime });
   await lifecycle.startupSweep();
-  const isolation = await startIsolationBackend({
-    socketPath: config.isolationSocketPath,
-    implementationVersion: config.driver.implementationVersion,
-    provisioning: { verifierFor: (sandboxId) => driver.launchVerifierOf(sandboxId) },
-    boundaries,
-    resources: driver,
-  });
-  try {
-    const server = await startSocketServer(config.socketPath, [
-      { service: loadComputeDriverService(), implementation: computeDriverImplementation(driver) },
-    ]);
-    return { driver: server, isolation };
-  } catch (error: unknown) {
-    await isolation.close().catch(() => undefined);
-    throw error;
-  }
+  return startSocketServer(config.socketPath, [
+    { service: loadComputeDriverService(), implementation: computeDriverImplementation(driver) },
+  ]);
 }
 
 export async function main(): Promise<void> {
   const implementationVersion = readPackageVersion(fileURLToPath(new URL(PACKAGE_JSON_RELATIVE_PATH, import.meta.url)));
   const config = loadDriverProcessConfig({ ...process.env }, implementationVersion);
-  const servers = await startDriver(config);
-  process.stdout.write(
-    `realm compute driver ${config.driver.driverName} listening on ${servers.driver.socketPath}\n`,
-  );
+  const server = await startDriver(config);
+  process.stdout.write(`realm compute driver ${config.driver.driverName} listening on ${server.socketPath}\n`);
   const stop = (): void => {
-    Promise.all([servers.driver.close(), servers.isolation.close()]).then(
+    server.close().then(
       () => {
         process.exit(0);
       },

@@ -267,6 +267,8 @@ async function startFake(t: TestContext, options: FakeOptions): Promise<Fake> {
         store.delete(container.id);
         return { status: 200, text: "" };
       }
+      default:
+        return json(500, { message: "route not served by this fake" });
     }
   };
 
@@ -324,8 +326,22 @@ async function startFake(t: TestContext, options: FakeOptions): Promise<Fake> {
 
 // A libpod inspect object of a conforming container, built from HARDENING_PROFILE and the bound paths. Each
 // call returns a fresh object, so a test can change one field without affecting another test. The workspace mount
-// carries noexec, nosuid and nodev (C1), which is what a conforming engine reports for it.
-function goodInspect(stateDir: string, workspaceDir: string): Record<string, unknown> {
+// carries noexec, nosuid and nodev (C1), which is what a conforming engine reports for it. A container with a channel also
+// carries the channel mount and the CA tmpfs that the channel binding expects.
+function goodInspect(stateDir: string, workspaceDir: string, channelDir?: string): Record<string, unknown> {
+  const channelTmpfs = channelDir === undefined ? [] : [HARDENING_PROFILE.supervisorCaDestination];
+  const channelMounts =
+    channelDir === undefined
+      ? []
+      : [
+          {
+            Type: "bind",
+            Source: channelDir,
+            Destination: HARDENING_PROFILE.channelDestination,
+            RW: true,
+            Options: ["rbind", "rw", "noexec", "nosuid", "nodev"],
+          },
+        ];
   return {
     ImageDigest: IMAGE_DIGEST,
     HostConfig: {
@@ -333,7 +349,9 @@ function goodInspect(stateDir: string, workspaceDir: string): Record<string, unk
       CapAdd: [...HARDENING_PROFILE.capAdd],
       SecurityOpt: [...HARDENING_PROFILE.securityOpt],
       ReadonlyRootfs: HARDENING_PROFILE.readonlyRootfs,
-      Tmpfs: Object.fromEntries(HARDENING_PROFILE.tmpfs.map((path): [string, string] => [path, "nosuid,nodev"])),
+      Tmpfs: Object.fromEntries(
+        [...HARDENING_PROFILE.tmpfs, ...channelTmpfs].map((path): [string, string] => [path, "nosuid,nodev"]),
+      ),
       PidsLimit: HARDENING_PROFILE.pidsLimit,
       Memory: HARDENING_PROFILE.memoryBytes,
       NanoCpus: HARDENING_PROFILE.nanoCpus,
@@ -354,6 +372,7 @@ function goodInspect(stateDir: string, workspaceDir: string): Record<string, unk
         RW: false,
         Options: ["rbind", "ro", "noexec", "nosuid", "nodev"],
       },
+      ...channelMounts,
     ],
   };
 }
@@ -402,6 +421,7 @@ interface Arrangement {
   readonly stateRoot?: string | undefined;
   readonly workspaceDir?: string | undefined;
   readonly secretRoot?: string | undefined;
+  readonly noChannel?: boolean | undefined;
   readonly removeDirectory?: ((dir: string) => void) | undefined;
 }
 
@@ -424,8 +444,9 @@ async function harness(t: TestContext, arrangement: Arrangement = {}): Promise<H
   const workspaceDir = arrangement.workspaceDir ?? tempDir(t, "realm-lifecycle-workspace-");
   mkdirSync(workspaceDir, { recursive: true });
   const secretRoot = arrangement.secretRoot ?? tempDir(t, "realm-lifecycle-secret-");
+  const channelDir = join(secretRoot, SANDBOX, "channel");
   const fake = await startFake(t, {
-    inspect: goodInspect(stateDir, workspaceDir),
+    inspect: goodInspect(stateDir, workspaceDir, channelDir),
     mutate: arrangement.mutate,
     rootless: arrangement.rootless,
     pid: arrangement.pid,
@@ -452,6 +473,9 @@ async function harness(t: TestContext, arrangement: Arrangement = {}): Promise<H
   if (arrangement.sweep !== false) {
     await lifecycle.startupSweep();
   }
+  if (arrangement.noChannel !== true) {
+    mkdirSync(channelDir, { recursive: true });
+  }
   return {
     fake,
     lifecycle,
@@ -459,7 +483,7 @@ async function harness(t: TestContext, arrangement: Arrangement = {}): Promise<H
     stateDir,
     workspaceDir,
     secretRoot,
-    spec: { sandboxName: SANDBOX, image: SPEC_IMAGE, workspaceDir, stateDir },
+    spec: { sandboxName: SANDBOX, image: SPEC_IMAGE, workspaceDir, stateDir, channelDir },
   };
 }
 
@@ -957,6 +981,7 @@ void test("PRD-CTR-03: create and delete refuse with REALM_NOT_ACTIVE until star
   await assert.rejects(h.lifecycle.delete(SANDBOX), hasCode("REALM_NOT_ACTIVE"));
   assert.equal(h.fake.seen.length, 0);
   await h.lifecycle.startupSweep();
+  mkdirSync(h.spec.channelDir, { recursive: true });
   assert.equal(await h.lifecycle.create(h.spec), CREATED_ID);
 });
 
@@ -978,7 +1003,7 @@ void test("PRD-CTR-02 (secret absent): delete succeeds when neither secret file 
   await h.lifecycle.delete(SANDBOX);
   assert.deepEqual(readdirSync(h.secretRoot), []);
   const missing = join(tempDir(t, "realm-lifecycle-absent-"), "not-created");
-  const absent = await harness(t, { secretRoot: missing });
+  const absent = await harness(t, { secretRoot: missing, noChannel: true });
   await absent.lifecycle.delete(SANDBOX);
   assert.equal(existsSync(missing), false);
 });

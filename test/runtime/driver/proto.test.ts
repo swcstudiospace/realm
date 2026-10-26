@@ -5,7 +5,6 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ServiceDefinition } from "@grpc/grpc-js";
 import { loadComputeDriverService, protoIncludeDirectory } from "../../../src/runtime/driver/compute-driver.js";
-import { loadIsolationServices } from "../../../src/runtime/driver/isolation/backend.js";
 
 const RPCS = [
   "AuthenticateSandbox",
@@ -50,13 +49,4 @@ void test("PRD-LIB-01: each vendored proto matches the SHA-256 recorded in PROVE
       .digest("hex");
     assert.equal(actual, digest, `${file} digest`);
   }
-});
-
-void test("PRD-ISO-01: the pinned loader resolves the IsolationBackend and SandboxProtocol services with their RPCs", () => {
-  const { backend, protocol } = loadIsolationServices();
-  assert.deepEqual(Object.keys(backend).sort(), ["Describe", "OpenBoundary", "ResumeBoundary", "SuspendBoundary"]);
-  assert.deepEqual(Object.keys(protocol).sort(), ["Exchange", "Mediate"]);
-  assert.equal(methodNamed(protocol, "Exchange").requestStream, true);
-  assert.equal(methodNamed(protocol, "Exchange").responseStream, true);
-  assert.equal(methodNamed(backend, "Describe").path, "/openshell.sandbox.backend.v1.IsolationBackend/Describe");
 });

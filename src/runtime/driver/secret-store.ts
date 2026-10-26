@@ -1,25 +1,25 @@
-// The driver's secret directories (phase 9.5, wave 1d). A sandbox's secret directory is <secretRoot>/<sandboxName>. It is
-// never bound into a container and never under the state root or the workspace. It holds the gateway's launch material
-// (launch.json), the active marker, and the staging copy launch.json is written under before the atomic rename.
+// The driver's secret directories (phase 9.5). A sandbox's secret directory is <secretRoot>/<sandboxName>. It is never bound
+// into a container as a whole and never under the state root or the workspace. It holds the gateway's launch material
+// (launch.json), the runtime descriptor and the supervisor's auth bundle, the channel directory the runtime's files live in
+// (bootstrap, TLS, control socket), a directory for the TLS work files, and the marker the host supervisor writes on exit.
 //
 // The rules: the root and the sandbox directory are owned by the realm account and carry no group or world permission bit;
 // no entry is a symbolic link, and none is followed. A write creates a new sandbox directory and refuses one that exists,
-// so launch material is never overwritten. Removal deletes only the named secret files, then the directory when it is empty.
+// so launch material is never overwritten. Removal deletes only the named entries, then the directory when it is empty.
 // Every refusal is SCHEMA_INVALID, or CLEANUP_FAILED for a removal, and names no path or value.
 
 import {
   closeSync,
   constants,
   fchmodSync,
-  fstatSync,
   fsyncSync,
   lstatSync,
   mkdirSync,
   openSync,
   readdirSync,
-  readFileSync,
   renameSync,
   rmdirSync,
+  rmSync,
   unlinkSync,
   writeSync,
   type Stats,
@@ -30,11 +30,28 @@ import { CONTAINER_ID_PATTERN } from "../libpod-routes.js";
 import { isRealmSandboxName } from "../openshell.js";
 
 export const LAUNCH_FILE_NAME = "launch.json";
+export const DESCRIPTOR_FILE_NAME = "descriptor.json";
+export const AUTH_FILE_NAME = "auth.json";
+export const MAIN_EXIT_MARKER_NAME = "main-exit";
+// The channel directory holds the runtime's bootstrap, certificate, key and control socket. It is bound into the container.
+export const CHANNEL_DIR_NAME = "channel";
+export const BOOTSTRAP_FILE_NAME = "bootstrap.json";
+// The TLS work directory holds the CA key while the runtime's leaf is signed. It is never bound, and it is removed after signing.
+export const TLS_WORK_DIR_NAME = "tls";
 const LAUNCH_STAGING_NAME = "launch.json.tmp";
 const ACTIVE_FILE_NAME = "active";
 // The files of a sandbox's secret directory that removal deletes. The staging copy is included, so a crash mid-write
 // leaves nothing behind once the sweep or a delete runs.
-const SECRET_FILE_NAMES: readonly string[] = Object.freeze([LAUNCH_FILE_NAME, LAUNCH_STAGING_NAME, ACTIVE_FILE_NAME]);
+const SECRET_FILE_NAMES: readonly string[] = Object.freeze([
+  LAUNCH_FILE_NAME,
+  LAUNCH_STAGING_NAME,
+  ACTIVE_FILE_NAME,
+  DESCRIPTOR_FILE_NAME,
+  AUTH_FILE_NAME,
+  MAIN_EXIT_MARKER_NAME,
+]);
+// The directories of a sandbox's secret directory that removal deletes with their contents.
+const SECRET_DIR_NAMES: readonly string[] = Object.freeze([CHANNEL_DIR_NAME, TLS_WORK_DIR_NAME]);
 const GROUP_OR_WORLD_BITS = 0o077;
 const PRIVATE_DIR_MODE = 0o700;
 const PRIVATE_FILE_MODE = 0o600;
@@ -73,40 +90,10 @@ export function writeLaunchMaterial(root: string, sandboxName: string, body: Uin
   }
 }
 
-// The launch material of a sandbox, or undefined when it has none. A link, a non-regular file, a file that a group or
-// world can read, or a directory the realm account does not own is refused.
-export function readLaunchMaterial(root: string, sandboxName: string): Uint8Array | undefined {
-  const dir = secretDirOf(root, sandboxName);
-  if (lstatOrAbsent(dir, "SCHEMA_INVALID") === null) {
-    return undefined;
-  }
-  assertPrivateDir(root);
-  assertPrivateDir(dir);
-  let fd: number;
-  try {
-    fd = openSync(join(dir, LAUNCH_FILE_NAME), constants.O_RDONLY | constants.O_NOFOLLOW);
-  } catch (error: unknown) {
-    if (errorCodeOf(error) === "ENOENT") {
-      return undefined;
-    }
-    throw makeRealmError("SCHEMA_INVALID");
-  }
-  try {
-    const stat = fstatSync(fd);
-    if (!stat.isFile() || !ownedByRealm(stat) || (stat.mode & GROUP_OR_WORLD_BITS) !== 0) {
-      throw makeRealmError("SCHEMA_INVALID");
-    }
-    return readFileSync(fd);
-  } catch (error: unknown) {
-    throw error instanceof RealmError ? error : makeRealmError("SCHEMA_INVALID");
-  } finally {
-    closeSync(fd);
-  }
-}
-
-// The secret files of the sandbox's directory that exist. They are checked before anything is removed. A missing directory
-// has none. A symbolic link or other non-regular entry at a secret name is refused, and is never followed or removed.
-export function presentSecretFiles(dir: string): string[] {
+// The secret entries of the sandbox's directory that exist: its known files and its known directories. They are checked before
+// anything is removed. A missing directory has none. A symbolic link or an entry of the wrong kind at a secret name is refused,
+// and is never followed or removed.
+export function presentSecretEntries(dir: string): string[] {
   if (!directoryExists(dir)) {
     return [];
   }
@@ -122,14 +109,30 @@ export function presentSecretFiles(dir: string): string[] {
     }
     present.push(path);
   }
+  for (const name of SECRET_DIR_NAMES) {
+    const path = join(dir, name);
+    const stat = lstatOrAbsent(path, "CLEANUP_FAILED");
+    if (stat === null) {
+      continue;
+    }
+    if (stat.isSymbolicLink() || !stat.isDirectory()) {
+      throw makeRealmError("SCHEMA_INVALID");
+    }
+    present.push(path);
+  }
   return present;
 }
 
-// Removes the given secret files. A file already gone is not an error; any other failure is refused.
-export function removeSecretFiles(paths: readonly string[]): void {
+// Removes the given secret entries. A directory is removed with its contents, without following a link inside it. An entry
+// already gone is not an error; any other failure is refused.
+export function removeSecretEntries(paths: readonly string[]): void {
   for (const path of paths) {
     try {
-      unlinkSync(path);
+      if (SECRET_DIR_NAMES.some((name) => path.endsWith(`/${name}`))) {
+        rmSync(path, { recursive: true, force: true });
+      } else {
+        unlinkSync(path);
+      }
     } catch (error: unknown) {
       if (errorCodeOf(error) !== "ENOENT") {
         throw makeRealmError("CLEANUP_FAILED");
@@ -153,14 +156,14 @@ export function removeSecretDirIfEmpty(dir: string): void {
   }
 }
 
-// Removes one sandbox's secret files and its directory when it is then empty.
+// Removes one sandbox's secret entries and its directory when it is then empty.
 export function removeSandboxSecrets(root: string, sandboxName: string): void {
   const dir = secretDirOf(root, sandboxName);
-  removeSecretFiles(presentSecretFiles(dir));
+  removeSecretEntries(presentSecretEntries(dir));
   removeSecretDirIfEmpty(dir);
 }
 
-// Removes the secret files of every sandbox under the root, at startup. An absent root has none. A symbolic link anywhere
+// Removes the secret entries of every sandbox under the root, at startup. An absent root has none. A symbolic link anywhere
 // under the root is refused before anything is removed, so the sweep never follows a link.
 export function removeAllSecrets(root: string): void {
   if (lstatOrAbsent(root, "SCHEMA_INVALID") === null) {
@@ -182,7 +185,7 @@ export function removeAllSecrets(root: string): void {
     }
   }
   for (const dir of dirs) {
-    removeSecretFiles(presentSecretFiles(dir));
+    removeSecretEntries(presentSecretEntries(dir));
     removeSecretDirIfEmpty(dir);
   }
 }
@@ -228,9 +231,10 @@ function writeFileAtomically(dir: string, body: Uint8Array): void {
 
 // Removes what a failed write of this directory left. Best effort: a failure here leaves the directory for the sweep.
 function discardWritten(dir: string): void {
-  for (const name of SECRET_FILE_NAMES) {
+  const entries = SECRET_FILE_NAMES.map((name) => join(dir, name)).concat(SECRET_DIR_NAMES.map((name) => join(dir, name)));
+  for (const entry of entries) {
     try {
-      unlinkSync(join(dir, name));
+      removeSecretEntries([entry]);
     } catch {
       // Absent, or already removed by the failure. The directory removal below reports what remains.
     }
