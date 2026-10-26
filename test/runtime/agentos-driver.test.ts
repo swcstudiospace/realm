@@ -315,6 +315,23 @@ void test("a start called while another start is in flight joins it: one create 
   assert.deepEqual(h.spawns, [RUNNER_EXEC]);
 });
 
+void test("two starts called during a stop leave one runner child (F6)", async () => {
+  const create = gate();
+  const h = harness({ createGate: create.open });
+  const driver = driverOf(h);
+  const first = driver.start();
+  const stopped = driver.stop();
+  const second = driver.start();
+  const third = driver.start();
+  create.release();
+  await assertCode(first, "OPENSHELL_START_FAILED");
+  await stopped;
+  await Promise.all([second, third]);
+  assert.equal(h.spawns.length, 1, "the two starts during the stop share one runner spawn");
+  assert.equal(h.children.length, 1, "exactly one runner child is held");
+  assert.equal(h.children[0]?.hasExited(), false, "the one child is the held runner, not terminated");
+});
+
 void test("alive reports exit 0 as alive, and any other exit or a rejected probe as not alive", async () => {
   const h = harness({ probes: [0, 1, "reject"] });
   const driver = driverOf(h);

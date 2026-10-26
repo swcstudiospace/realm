@@ -105,6 +105,8 @@ export function createOpenShellAgentOsDriver(options: OpenShellAgentOsDriverOpti
   let stops = 0;
   // The start in flight, or undefined. See start() for how an overlapping start is handled.
   let startInFlight: Promise<void> | undefined;
+  // The stop count when startInFlight was called. A start joins it only while no stop has landed since.
+  let startInFlightStops = -1;
   // The stop in flight, or undefined. A start called while a stop is in flight waits for that stop.
   let stopInFlight: Promise<void> | undefined;
   // True once the sandbox has been deleted and no create has run since. A stop that finds it set makes no delete call.
@@ -124,9 +126,16 @@ export function createOpenShellAgentOsDriver(options: OpenShellAgentOsDriverOpti
   // stopsAtCall is the stop count when start() was called. A stop that lands after that call, at any point, overtakes this
   // start, so the start fails instead of reporting the runner as up. The create is bounded by startTimeoutMs, and the
   // readiness wait by the same deadline.
-  async function runStart(waitFor: Promise<void> | undefined, stopsAtCall: number): Promise<void> {
+  async function runStart(
+    waitFor: Promise<void> | undefined,
+    priorStart: Promise<void> | undefined,
+    stopsAtCall: number,
+  ): Promise<void> {
     if (waitFor !== undefined) {
       await ignoreOutcome(waitFor);
+    }
+    if (priorStart !== undefined) {
+      await ignoreOutcome(priorStart);
     }
     await stopRunner();
     sandboxDeleted = false;
@@ -195,14 +204,17 @@ export function createOpenShellAgentOsDriver(options: OpenShellAgentOsDriverOpti
 
   return {
     start(): Promise<void> {
-      // N3, the decision: a start called while another start is in flight joins that start and gets its result. One
-      // create and one runner child exist per sandbox. A start called after a stop began does not join: the stop
-      // overtakes the start in flight, so the new start waits for that stop and then runs its own create.
-      if (startInFlight !== undefined && stopInFlight === undefined) {
+      // N3, the decision: a start called while an in-flight start has seen no stop since joins that start and gets its
+      // result. One create and one runner child exist per sandbox. A start called after a stop began does not join: the
+      // stop overtakes the start in flight, so the new start waits for that stop and for the prior start, then runs its
+      // own create.
+      if (startInFlight !== undefined && startInFlightStops === stops) {
         return startInFlight;
       }
-      const attempt = runStart(stopInFlight, stops);
+      const prior = startInFlight;
+      const attempt = runStart(stopInFlight, prior, stops);
       startInFlight = attempt;
+      startInFlightStops = stops;
       const clear = (): void => {
         if (startInFlight === attempt) {
           startInFlight = undefined;

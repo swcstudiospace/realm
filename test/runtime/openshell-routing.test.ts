@@ -107,8 +107,8 @@ void test("RT-03: the session create argv names no workload command, and the Ope
   const { containerId } = await createSession(f);
   await f.exec.start(containerId);
   await f.exec.probe(containerId);
-  await f.exec.stop(containerId);
-  await f.exec.destroy(containerId);
+  await f.exec.stop(containerId, realmSandboxName(SESSION));
+  await f.exec.destroy(containerId, realmSandboxName(SESSION));
 
   const calls = f.openshell.calls();
   // stop deletes the session sandbox once (B2); destroy after it finds that delete done and runs no second one.
@@ -142,8 +142,8 @@ void test("RT-03: the libpod client has no exec or attach method, and only conta
   const { containerId } = await createSession(f);
   await f.exec.start(containerId);
   await f.exec.probe(containerId);
-  await f.exec.stop(containerId);
-  await f.exec.destroy(containerId);
+  await f.exec.stop(containerId, realmSandboxName(SESSION));
+  await f.exec.destroy(containerId, realmSandboxName(SESSION));
   // The version probe on /_ping is the one request outside the route table. It is a read that starts nothing,
   // so it is exempt from the route check and must be a GET. Every other request must still match a route.
   const requests = f.libpod.requests();

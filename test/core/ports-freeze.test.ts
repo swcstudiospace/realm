@@ -10,8 +10,8 @@ const FROZEN_ARITY: Readonly<Record<keyof ExecutionService, number>> = Object.fr
   create: 1,
   start: 1,
   probe: 1,
-  stop: 1,
-  destroy: 1,
+  stop: 2,
+  destroy: 2,
 });
 
 // A fake that implements the interface. It records each call, so every parameter is used and the test can
@@ -30,12 +30,12 @@ function recordingFake(calls: string[]): ExecutionService {
       calls.push(`probe ${containerId}`);
       return Promise.resolve("healthy");
     },
-    stop: (containerId) => {
-      calls.push(`stop ${containerId}`);
+    stop: (containerId, sandbox) => {
+      calls.push(`stop ${containerId} ${sandbox}`);
       return Promise.resolve();
     },
-    destroy: (containerId) => {
-      calls.push(`destroy ${containerId}`);
+    destroy: (containerId, sandbox) => {
+      calls.push(`destroy ${containerId} ${sandbox}`);
       return Promise.resolve();
     },
   };
@@ -57,9 +57,15 @@ void test("D-39: the ExecutionService fake exposes exactly the frozen method nam
   await service.create({ idempotencyKey: "key", workspaceRoot: "/workspace" });
   await service.start("container");
   await service.probe("container");
-  await service.stop("container");
-  await service.destroy("container");
-  assert.deepEqual(calls, ["create key", "start container", "probe container", "stop container", "destroy container"]);
+  await service.stop("container", "realm-key");
+  await service.destroy("container", "realm-key");
+  assert.deepEqual(calls, [
+    "create key",
+    "start container",
+    "probe container",
+    "stop container realm-key",
+    "destroy container realm-key",
+  ]);
 });
 
 void test("D-39: the production SessionExecution class carries the frozen method names and arities", () => {

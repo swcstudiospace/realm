@@ -20,6 +20,7 @@ import { INITIAL_REASON, RealmStateMachine, type StateSnapshot } from "../core/s
 import { withTimeout } from "../core/timeout.js";
 import { LockTable } from "../fs/locks.js";
 import { type PinnedRoot, verifyPinnedAt } from "../fs/root.js";
+import { realmSandboxName } from "../runtime/openshell.js";
 import { controlSocketPath } from "../session/paths.js";
 import type { SessionStore } from "../session/store.js";
 import { type GateOutcome, gateMutation } from "./mutation-gate.js";
@@ -429,7 +430,7 @@ export class LifecycleController {
       return;
     }
     try {
-      await this.teardownCall(this.deps.exec.destroy(containerId));
+      await this.teardownCall(this.deps.exec.destroy(containerId, this.sandboxName()));
     } catch (error: unknown) {
       if (failure !== null && error instanceof RealmError) {
         throw makeRealmError(error.code, failure);
@@ -604,6 +605,12 @@ export class LifecycleController {
     this.unsubscribeBridge = null;
   }
 
+  // The sandbox name the realm gives this session. Every stop and destroy passes it, so the session-execution port can
+  // delete the session's sandbox without an in-memory name.
+  private sandboxName(): string {
+    return realmSandboxName(this.deps.sessionId);
+  }
+
   // Stops the container within the teardown bound. A session with no container has nothing
   // running to stop. A failure throws REALM_STOPPING, and the caller leaves the session in
   // stopping.
@@ -611,7 +618,7 @@ export class LifecycleController {
     if (containerId === null) {
       return;
     }
-    await this.teardownCall(this.deps.exec.stop(containerId));
+    await this.teardownCall(this.deps.exec.stop(containerId, this.sandboxName()));
   }
 
   // Issues the port create for a startup that has no container yet. The attempt number lets an
@@ -706,10 +713,10 @@ export class LifecycleController {
   // the stop failure as its cause.
   private async stopStarted(containerId: string): Promise<void> {
     try {
-      await this.teardownCall(this.deps.exec.stop(containerId));
+      await this.teardownCall(this.deps.exec.stop(containerId, this.sandboxName()));
     } catch (stopError: unknown) {
       try {
-        await this.teardownCall(this.deps.exec.destroy(containerId));
+        await this.teardownCall(this.deps.exec.destroy(containerId, this.sandboxName()));
       } catch (destroyError: unknown) {
         // The fallback destroy failed too, so both errors are kept: the destroy error is thrown, and
         // the stop error is its cause.
@@ -784,7 +791,7 @@ export class LifecycleController {
   // rethrown.
   private async destroyUnrecorded(containerId: string): Promise<void> {
     try {
-      await this.teardownCall(this.deps.exec.destroy(containerId));
+      await this.teardownCall(this.deps.exec.destroy(containerId, this.sandboxName()));
     } catch (error: unknown) {
       this.recordContainerIfEmpty(containerId);
       throw error;

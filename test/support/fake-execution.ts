@@ -12,6 +12,7 @@ export interface FakeCall {
   readonly operation: Operation;
   readonly request?: CreateRequest;
   readonly containerId?: string;
+  readonly sandbox?: string;
 }
 
 export interface FakeResource {
@@ -72,15 +73,15 @@ export class FakeExecutionService implements ExecutionService {
     return this.run({ operation: "probe", containerId }, () => this.require(containerId).health);
   }
 
-  async stop(containerId: string): Promise<void> {
-    return this.run({ operation: "stop", containerId }, () => {
+  async stop(containerId: string, sandbox: string): Promise<void> {
+    return this.run({ operation: "stop", containerId, sandbox }, () => {
       this.require(containerId).started = false;
     });
   }
 
   // Destroying a container that does not exist is a no-op.
-  async destroy(containerId: string): Promise<void> {
-    return this.run({ operation: "destroy", containerId }, () => {
+  async destroy(containerId: string, sandbox: string): Promise<void> {
+    return this.run({ operation: "destroy", containerId, sandbox }, () => {
       const resource = this.table.get(containerId);
       if (resource !== undefined) {
         this.table.delete(containerId);

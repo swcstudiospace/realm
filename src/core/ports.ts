@@ -19,8 +19,9 @@ export interface ExecutionService {
   create(req: CreateRequest): Promise<{ readonly containerId: string }>;
   start(containerId: string): Promise<void>;
   probe(containerId: string): Promise<ProbeResult>;
-  stop(containerId: string): Promise<void>;
-  destroy(containerId: string): Promise<void>;
+  // sandbox is the session's realm sandbox name, always realm-<sessionId>. Callers pass it on every stop and destroy.
+  stop(containerId: string, sandbox: string): Promise<void>;
+  destroy(containerId: string, sandbox: string): Promise<void>;
 }
 
 // BridgePort (D-64, D-65, ANDA-03). Sits beside ExecutionService and is never merged into

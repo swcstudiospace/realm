@@ -38,7 +38,6 @@ import {
   deleteSandbox,
   isRealmSandboxName,
   OPENSHELL_OUTPUT_LIMIT_BYTES,
-  OPENSHELL_SANDBOX_NAME_LABEL_KEY,
   OpenShellRunnerError,
   realmSandboxName,
   runOpenShellCreate,
@@ -99,9 +98,13 @@ export class HardeningFailedError extends RealmError {
   }
 }
 
-// The outcome of one bounded stop step: the AgentOS stop or the session sandbox delete. A failed AgentOS stop carries the
-// catalogue code of the supervisor error as its cause, when that error has a code other than the stop's own.
+// The outcome of one stop step: the AgentOS stop, the container step, or the session sandbox delete. A failed step carries the
+// catalogue code of its error as its cause, when that error has a code other than the stop's own.
 type StopStep = { readonly ok: true } | { readonly ok: false; readonly causeCode: ErrorCode | undefined };
+
+// A step that passed, and a failed step that has no cause code.
+const STEP_OK: StopStep = { ok: true };
+const STEP_FAILED: StopStep = { ok: false, causeCode: undefined };
 
 // One session create in flight. A stop or destroy that names its sandbox marks it stopped and waits for done. The container
 // the create produced is recorded in containerId as soon as runOpenShellCreate returns it.
@@ -133,8 +136,8 @@ export class SessionExecution implements ExecutionService {
   private readonly stopDeadlineMs: number;
   // Sandbox names this instance has deleted with no create since, so a repeated stop makes no second delete call.
   private readonly deletedSandboxes = new Set<string>();
-  // The sandbox name owed to each container, recorded before its container step and kept until a delete succeeds, so a
-  // retry after a failed delete still deletes the sandbox, even once the container is gone (B2). In memory only.
+  // The sandbox name known for each container id, recorded when a create or a stop names it and cleared by a successful delete.
+  // It is a cache only: a stop or destroy deletes the sandbox its caller names, and no lookup reads this map. In memory only.
   private readonly pendingDeletes = new Map<string, string>();
   // Session creates in flight. A stop or destroy that names a sandbox waits for them (B-3).
   private readonly pendingCreates = new Set<PendingCreate>();
@@ -174,32 +177,45 @@ export class SessionExecution implements ExecutionService {
         throw makeRealmError("SCHEMA_INVALID");
       }
       const policyPath = writePolicyDocument(runtime.stateDir, sessionId, this.egressAllow, workloadBinary);
-      const containerId = await runOpenShellCreate(
-        { containers: this.libpod, runner: this.runner },
-        {
-          sessionId,
-          policyPath,
-          cpus: SANDBOX_CPUS,
-          memory: SANDBOX_MEMORY,
-          imageRef: runtime.image,
-        },
-        OPENSHELL_CREATE_DEADLINE_MS,
-      );
-      // Recorded as soon as the create returns it, so a stop that waited for this create acts on this container.
-      pending.containerId = containerId;
-      // The sandbox name is known for the container this create produced before any libpod call on it, so a stop or destroy
-      // whose inspect rejects still deletes it (B-1). The entry is cleared only by a successful delete.
-      this.pendingDeletes.set(containerId, sandbox);
       const binding: HardeningBinding = {
         image: runtime.image,
         rootless: info.rootless,
         workspaceRoot: runtime.workspaceRoot,
         stateDir: runtime.stateDir,
       };
-      await this.verifyOrRemove(containerId, binding);
+      let containerId: string;
+      try {
+        containerId = await runOpenShellCreate(
+          { containers: this.libpod, runner: this.runner },
+          {
+            sessionId,
+            policyPath,
+            cpus: SANDBOX_CPUS,
+            memory: SANDBOX_MEMORY,
+            imageRef: runtime.image,
+          },
+          OPENSHELL_CREATE_DEADLINE_MS,
+        );
+        // Recorded as soon as the create returns it, so a stop that waited for this create acts on this container. The sandbox
+        // exists again from here, so a delete recorded for its name earlier no longer counts.
+        pending.containerId = containerId;
+        this.deletedSandboxes.delete(sandbox);
+        await this.verifyOrRemove(containerId, binding);
+      } catch (error) {
+        // From the OpenShell create to here, any throw leaves a sandbox with no owner, so its delete runs now. A failed delete is
+        // reported as AGENTOS_STOP_FAILED, keeping the original code as its cause. Otherwise the original error is rethrown.
+        if (!(await this.deleteNamedSandbox(sandbox))) {
+          throw makeRealmError("AGENTOS_STOP_FAILED", catalogueCodeOf(error));
+        }
+        throw error;
+      }
+      // The sandbox name is known for the container this create produced before any libpod call on it, so a stop or destroy
+      // whose inspect rejects still deletes it (B-1). The entry is cleared only by a successful delete.
+      this.pendingDeletes.set(containerId, sandbox);
       // A stop that named this sandbox while the create ran waits for it, then stops and deletes the container it produced.
-      // This create reports no success.
+      // This create reports no success: it runs that same cleanup, then throws.
       if (pending.stopped) {
+        throwIfStopFailed(await this.endContainer(containerId, sandbox, "remove"));
         throw makeRealmError("OPENSHELL_START_FAILED");
       }
       return { containerId };
@@ -232,36 +248,40 @@ export class SessionExecution implements ExecutionService {
     return (await agentos.check()) ? "healthy" : "unhealthy";
   }
 
-  // Stops AgentOS, then the container, then deletes the session's realm sandbox. A stop that names a sandbox with a create in
-  // flight waits for that create, for at most stopDeadlineMs, and acts on the container it produced. If that wait expires,
-  // the stop still stops and deletes what it knows, then reports AGENTOS_STOP_FAILED: the create may finish later (open
-  // item). A libpod error in a container step, including an inspect that rejects, does not skip the sandbox delete when the
-  // name is known, and that libpod error is then rethrown. A failed step is reported as AGENTOS_STOP_FAILED after the others.
-  async stop(containerId: string): Promise<void> {
-    const sandboxHint = isRealmSandboxName(containerId) ? containerId : undefined;
-    const waited = await this.settleCreatesFor(containerId);
-    const agentosStop = await this.stopAgentOs();
-    const sandboxStop = await this.endContainer(waited.target, sandboxHint, "stop");
-    throwIfStopFailed([agentosStop, waited.settled ? { ok: true } : { ok: false, causeCode: undefined }, sandboxStop]);
+  // Stops AgentOS, then the container, then deletes the session's realm sandbox. The caller names the sandbox, and the name is
+  // required: it is always realm-<sessionId>, the name the create gave the session. containerId is the session's container id,
+  // or the sandbox name while the create that makes the container has not returned its id. A call without a realm sandbox name
+  // is refused with AGENTOS_STOP_FAILED before any libpod, OpenShell, or AgentOS call. A stop that names a sandbox with a create
+  // in flight waits for that create, for at most stopDeadlineMs, and acts on the container it produced. If that wait expires, the
+  // stop still stops and deletes what it knows, then reports AGENTOS_STOP_FAILED: the create may finish later (open item). Every
+  // step is attempted, and the first failed step is reported as AGENTOS_STOP_FAILED with its cause code.
+  async stop(containerId: string, sandbox: string): Promise<void> {
+    await this.endSession(containerId, sandbox, "stop");
   }
 
-  // Stops AgentOS, force-removes the container, and deletes the session's realm sandbox, mirroring stop. A container that is
-  // already gone counts as removed. The removal runs even when the AgentOS stop fails. A realm-named containerId names its
-  // sandbox even when the container is gone (B2).
-  async destroy(containerId: string): Promise<void> {
-    const sandboxHint = isRealmSandboxName(containerId) ? containerId : undefined;
-    const waited = await this.settleCreatesFor(containerId);
-    const agentosStop = await this.stopAgentOs();
-    const sandboxStop = await this.endContainer(waited.target, sandboxHint, "remove");
-    throwIfStopFailed([agentosStop, waited.settled ? { ok: true } : { ok: false, causeCode: undefined }, sandboxStop]);
+  // Stops AgentOS, force-removes the container, and deletes the session's realm sandbox, mirroring stop with the same name
+  // contract. A container that is already gone counts as removed. The removal runs even when the AgentOS stop fails.
+  async destroy(containerId: string, sandbox: string): Promise<void> {
+    await this.endSession(containerId, sandbox, "remove");
   }
 
-  // Waits, for at most stopDeadlineMs, for each in-flight session create of the sandbox that containerId names, marking each
-  // stopped (B-3). The target is the container the last such create produced, or containerId when none produced one. settled
-  // is false when the wait expired, and the stop then reports AGENTOS_STOP_FAILED, never success. A containerId that names no
-  // sandbox waits for nothing.
-  private async settleCreatesFor(containerId: string): Promise<{ readonly target: string; readonly settled: boolean }> {
-    const waited = [...this.pendingCreates].filter((pending) => pending.sandbox === containerId);
+  // The shared body of stop and destroy. The name is checked first, so a refused call reaches no later step.
+  private async endSession(containerId: string, sandbox: string, mode: "stop" | "remove"): Promise<void> {
+    const name = requireSandboxName(sandbox);
+    const waited = await this.settleCreatesFor(containerId, name);
+    const agentosStop = await this.stopAgentOs();
+    const containerAndSandbox = await this.endContainer(waited.target, name, mode);
+    throwIfStopFailed([agentosStop, waited.settled ? STEP_OK : STEP_FAILED, ...containerAndSandbox]);
+  }
+
+  // Waits, for at most stopDeadlineMs, for each in-flight session create of the sandbox, marking each stopped (B-3). The target
+  // is the container the last such create produced, or containerId when none produced one. settled is false when the wait
+  // expired, and the stop then reports AGENTOS_STOP_FAILED, never success.
+  private async settleCreatesFor(
+    containerId: string,
+    sandbox: string,
+  ): Promise<{ readonly target: string; readonly settled: boolean }> {
+    const waited = [...this.pendingCreates].filter((pending) => pending.sandbox === sandbox);
     for (const pending of waited) {
       pending.stopped = true;
     }
@@ -282,33 +302,30 @@ export class SessionExecution implements ExecutionService {
     return { target, settled };
   }
 
-  // The container step of stop (stop the container) or destroy (remove it), then the session sandbox delete. The sandbox name
-  // is recorded before the container step: from a realm-named containerId, from the create that produced the container id, or,
-  // failing both, from the label that inspect reads. A container id this instance did not create, whose inspect rejects, has no
-  // known name, so its delete is skipped (open item). When a name is known, a libpod error here does not skip the delete (B-1),
-  // and that libpod error is rethrown after it.
-  private async endContainer(containerId: string, sandboxHint: string | undefined, mode: "stop" | "remove"): Promise<StopStep> {
-    if (sandboxHint !== undefined) {
-      this.pendingDeletes.set(containerId, sandboxHint);
-    }
-    let sandboxStop: StopStep;
+  // The container step of stop (stop the container) or destroy (remove it), then the session sandbox delete. The name is the one
+  // the caller gave, recorded against the container id before the container step. Both steps are attempted, and each failure is
+  // returned as its own step, so a failed container step does not drop a failed delete.
+  private async endContainer(containerId: string, sandbox: string, mode: "stop" | "remove"): Promise<readonly StopStep[]> {
+    this.pendingDeletes.set(containerId, sandbox);
+    const container = await this.containerStep(containerId, mode);
+    const sandboxStop = await this.deleteSessionSandbox(containerId, sandbox);
+    return [container, sandboxStop];
+  }
+
+  // The inspect, then the container step. A rejected inspect is a failed step, and the container step is then skipped. A stop of
+  // a container the inspect reports gone is skipped too. A removal is sent regardless, since a gone container counts as removed.
+  private async containerStep(containerId: string, mode: "stop" | "remove"): Promise<StopStep> {
     try {
       const inspect = await this.libpod.inspectContainer(containerId);
-      if (sandboxHint === undefined && inspect !== null) {
-        const name = sandboxNameOf(inspect);
-        if (name !== undefined) {
-          this.pendingDeletes.set(containerId, name);
-        }
-      }
       if (mode === "remove") {
         await this.libpod.removeContainer(containerId, { force: true });
       } else if (inspect !== null) {
         await this.libpod.stopContainer(containerId, CONTAINER_STOP_GRACE_MS);
       }
-    } finally {
-      sandboxStop = await this.deleteSessionSandbox(containerId);
+      return STEP_OK;
+    } catch (error) {
+      return { ok: false, causeCode: catalogueCodeOf(error) };
     }
-    return sandboxStop;
   }
 
   // Runs the AgentOS stop bounded by stopDeadlineMs. A rejection or a missed deadline is a failed stop, and its cause is
@@ -329,28 +346,28 @@ export class SessionExecution implements ExecutionService {
     }
   }
 
-  // Deletes the session's realm sandbox owed to containerId (B2). The name is the one recorded in pendingDeletes before the
-  // container step, and the entry is cleared only by a successful delete. A name this instance has already deleted is not
-  // deleted again. The delete is bounded: a delete that misses its deadline is a failed step, and its runner is killed at the
-  // same bound.
-  private async deleteSessionSandbox(containerId: string): Promise<StopStep> {
-    const name = this.pendingDeletes.get(containerId);
-    if (name === undefined) {
-      return { ok: true };
-    }
-    if (!this.deletedSandboxes.has(name)) {
-      const deleted = await withTimeout(
-        deleteSandbox(this.runner, name, SANDBOX_DELETE_DEADLINE_MS),
-        SANDBOX_DELETE_DEADLINE_MS,
-        "AGENTOS_STOP_FAILED",
-      ).catch(() => false);
-      if (!deleted) {
-        return { ok: false, causeCode: undefined };
-      }
-      this.deletedSandboxes.add(name);
+  // Deletes the session's realm sandbox the caller named. A name this instance has deleted with no create since is not deleted
+  // again. A failed or missed delete is a failed step, and the name stays owed to the container until a delete succeeds.
+  private async deleteSessionSandbox(containerId: string, sandbox: string): Promise<StopStep> {
+    if (!this.deletedSandboxes.has(sandbox) && !(await this.deleteNamedSandbox(sandbox))) {
+      return STEP_FAILED;
     }
     this.pendingDeletes.delete(containerId);
-    return { ok: true };
+    return STEP_OK;
+  }
+
+  // One bounded delete of a realm sandbox. It resolves true only when the delete exits 0 within SANDBOX_DELETE_DEADLINE_MS, and
+  // the runner is killed at the same bound. A success is recorded, so a repeated stop makes no second delete call.
+  private async deleteNamedSandbox(sandbox: string): Promise<boolean> {
+    const deleted = await withTimeout(
+      deleteSandbox(this.runner, sandbox, SANDBOX_DELETE_DEADLINE_MS),
+      SANDBOX_DELETE_DEADLINE_MS,
+      "AGENTOS_STOP_FAILED",
+    ).catch(() => false);
+    if (deleted) {
+      this.deletedSandboxes.add(sandbox);
+    }
+    return deleted;
   }
 
   // Returns the bound supervisor, or throws AGENTOS_NOT_CONFIGURED. Create, start, and probe call it
@@ -401,24 +418,32 @@ function isRunning(inspect: LibpodInspect): boolean {
   return typeof state === "object" && state !== null && Reflect.get(state, "Running") === true;
 }
 
-// Throws AGENTOS_STOP_FAILED for the first failed stop step, in order. The AgentOS step's cause code is kept when it has one.
+// Throws AGENTOS_STOP_FAILED when any stop step failed. The cause is the first defined cause code among the failed steps, in
+// order, so a step that failed without a code does not hide a later step's code.
 function throwIfStopFailed(steps: readonly StopStep[]): void {
+  let failed = false;
+  let causeCode: ErrorCode | undefined;
   for (const step of steps) {
     if (!step.ok) {
-      throw makeRealmError("AGENTOS_STOP_FAILED", step.causeCode);
+      failed = true;
+      if (causeCode === undefined) {
+        causeCode = step.causeCode;
+      }
     }
+  }
+  if (failed) {
+    throw makeRealmError("AGENTOS_STOP_FAILED", causeCode);
   }
 }
 
-// The realm sandbox name on a container's sandbox-name label, or undefined when the label is absent or is not a realm name.
-function sandboxNameOf(inspect: LibpodInspect): string | undefined {
-  const config: unknown = inspect["Config"];
-  const labels: unknown = typeof config === "object" && config !== null ? Reflect.get(config, "Labels") : undefined;
-  if (typeof labels !== "object" || labels === null) {
-    return undefined;
+// Returns the sandbox name a stop or destroy was given. A missing name, or one the realm did not create, is refused with
+// AGENTOS_STOP_FAILED, so the refused call reaches no libpod, OpenShell, or AgentOS step. isRealmSandboxName also refuses an
+// absent value from an untyped caller.
+function requireSandboxName(sandbox: string): string {
+  if (!isRealmSandboxName(sandbox)) {
+    throw makeRealmError("AGENTOS_STOP_FAILED");
   }
-  const name: unknown = Reflect.get(labels, OPENSHELL_SANDBOX_NAME_LABEL_KEY);
-  return typeof name === "string" && isRealmSandboxName(name) ? name : undefined;
+  return sandbox;
 }
 
 // The catalogue code of an error thrown by a libpod or AgentOS call, or undefined for any other error.
