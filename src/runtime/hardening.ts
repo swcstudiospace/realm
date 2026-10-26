@@ -34,7 +34,7 @@ export const HARDENING_PROFILE = Object.freeze({
   stateDestination: "/realm-state",
   // The channel the sandbox runtime and the host supervisor share: its bootstrap, TLS files and control socket.
   channelDestination: "/run/openshell/channel",
-  // A tmpfs of the runtime's CA material, mounted noexec and owned by the workload user. It is a tmpfs of the sandbox container only.
+  // A tmpfs of the runtime's CA material, mounted noexec and sticky (mode 1703). The runtime creates its owned material directory under this mount.
   supervisorCaDestination: "/run/openshell-supervisor-ca",
   // The workload identity of the sandbox process. The user namespace maps the realm account to this uid and gid.
   workloadUid: 1001,
@@ -47,17 +47,15 @@ export const HARDENING_PROFILE = Object.freeze({
 export const RUNTIME_BINARY = "/usr/local/lib/realm/openshell-sandbox";
 export const CONTAINER_BOOTSTRAP_PATH = `${HARDENING_PROFILE.channelDestination}/bootstrap.json`;
 export const RUNTIME_ARGV: readonly string[] = Object.freeze([RUNTIME_BINARY, "--bootstrap", CONTAINER_BOOTSTRAP_PATH]);
-// The options the sandbox container's channel mount is created with. The pre-start check requires each of them.
-export const CHANNEL_MOUNT_OPTIONS: readonly string[] = Object.freeze(["rw", "noexec", "nosuid", "nodev"]);
-// The options of the CA tmpfs: not executable, not suid, no devices, mode 0700, owned by the workload user.
-export const SUPERVISOR_CA_TMPFS_OPTIONS: readonly string[] = Object.freeze([
-  "noexec",
-  "nosuid",
-  "nodev",
-  "mode=0700",
-  `uid=${String(HARDENING_PROFILE.workloadUid)}`,
-  `gid=${String(HARDENING_PROFILE.workloadGid)}`,
-]);
+// The options the channel mount carries, as Podman's inspect reports them. Writability is not listed here: Podman reports it in the RW
+// field, which the pre-start check reads, and the create asks for rw explicitly.
+export const CHANNEL_MOUNT_OPTIONS: readonly string[] = Object.freeze(["noexec", "nosuid", "nodev"]);
+// The options of the CA tmpfs: noexec, nosuid and nodev, and mode 1703. That mode is sticky, owner rwx (root in the container
+// namespace), no group bits, and other -wx. The workload uid 1001 can create its material directory beneath the mount, and it
+// cannot list the root or remove or rename another uid's entry. The driver no longer verifies the owner, because Podman's create
+// route refuses the uid and gid tmpfs options. The runtime creates its owned directory under the mount, per SUPERVISOR_CA_RUNTIME_DIR
+// in the runtime contract.
+export const SUPERVISOR_CA_TMPFS_OPTIONS: readonly string[] = Object.freeze(["noexec", "nosuid", "nodev", "mode=1703"]);
 
 // The properties that verifyInspect checks, in report order.
 export const HARDENING_PROPERTIES = Object.freeze([
@@ -282,6 +280,8 @@ function caTmpfsOptionsSafe(inspect: unknown): boolean {
   return SUPERVISOR_CA_TMPFS_OPTIONS.every((option) => given.includes(option));
 }
 
+// The channel mount must be read-write (its RW field is true) and carry each of CHANNEL_MOUNT_OPTIONS in its Options, which is what
+// Podman reports. A read-only channel is refused here, before the runtime starts.
 function channelMountOptionsSafe(inspect: unknown): boolean {
   const mounts = field(inspect, ["Mounts"]);
   if (!Array.isArray(mounts)) {
@@ -298,7 +298,7 @@ function channelMountOptionsSafe(inspect: unknown): boolean {
     return false;
   }
   const given: readonly unknown[] = options;
-  return CHANNEL_MOUNT_OPTIONS.every((option) => given.includes(option));
+  return only["RW"] === true && CHANNEL_MOUNT_OPTIONS.every((option) => given.includes(option));
 }
 
 // True only when the value is an array holding exactly the expected arguments, in order.

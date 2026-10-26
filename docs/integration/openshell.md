@@ -174,9 +174,10 @@ whitespace as Rust defines it.
 Refusals are logged. Each refusal of the create checks and of the launch material writes one line to stderr:
 `realm compute driver refused: rpc=<RPC> check=<check> code=SCHEMA_INVALID`. The RPC is `ValidateSandboxCreate` or `CreateSandbox`. The check
 names the rule that refused, such as `create.image` or `launch.gateway_id`; the full list is `REFUSAL_CHECKS` in
-`src/runtime/driver/refusal.ts`. A line never carries a value, a path, a key or a token. The directory checks that a create
-runs before the lifecycle (the state directory and the secret directory must not exist, and the workspace must be a
-directory) refuse with `SCHEMA_INVALID` and write no line yet.
+`src/runtime/driver/refusal.ts`. A line never carries a value, a path, a key or a token. The directory checks that a create runs
+before the lifecycle write one line when they refuse with `SCHEMA_INVALID`, named by their check: `create.state_dir` (the state
+directory must not exist), `create.secret_dir` (the secret directory must not exist) and `create.workspace` (the workspace must be a
+directory). Any other error from these checks, such as `PATH_ESCAPE`, writes no line.
 
 Sandbox names. The gateway's name is used as given, and the container runs under the `realm-` prefixed name. A name that
 already starts with `realm-` is unchanged. Any other name gets the prefix, and the prefixed name must pass the

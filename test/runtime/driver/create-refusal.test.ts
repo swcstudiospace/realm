@@ -3,9 +3,9 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { RealmError } from "../../../src/core/errors.js";
+import { makeRealmError, RealmError } from "../../../src/core/errors.js";
 import { ComputeDriver, type ComputeDriverConfig, type DriverSandboxMessage } from "../../../src/runtime/driver/compute-driver.js";
 import { FakeLibpod, FakeLifecycle, FakeRuntime, driverConfig, validSandbox } from "./fakes.js";
 import { GATEWAY_LAUNCH_SAMPLE } from "./gateway-launch-sample.js";
@@ -14,6 +14,13 @@ const CONTAINER_NAME = "realm-session-1";
 
 function schemaInvalid(error: unknown): boolean {
   return error instanceof RealmError && error.code === "SCHEMA_INVALID";
+}
+
+// A lifecycle whose create refuses with SCHEMA_INVALID, as the libpod create route does when it refuses the body.
+class RefusingLifecycle extends FakeLifecycle {
+  override create(): Promise<string> {
+    return Promise.reject(makeRealmError("SCHEMA_INVALID"));
+  }
 }
 
 // A driver whose refusal lines go to the returned array, with its fakes.
@@ -88,4 +95,34 @@ void test("PRD-ISO-02: a validate with present invalid launch material logs the 
   const wrongGateway = Buffer.from(GATEWAY_LAUNCH_SAMPLE.replace('"gateway_id":"realm"', '"gateway_id":"other"'), "utf8");
   assert.throws(() => driver.validateSandboxCreate(sandboxWith(wrongGateway)), schemaInvalid);
   assert.deepEqual(lines, ["realm compute driver refused: rpc=ValidateSandboxCreate check=launch.gateway_id code=SCHEMA_INVALID"]);
+});
+
+void test("PRD-ISO-02: a create the lifecycle refuses logs one line naming CreateSandbox and the container stage, and writes nothing", async () => {
+  const lines: string[] = [];
+  const config = driverConfig({ refusalLog: (line) => lines.push(line) });
+  const libpod = new FakeLibpod();
+  const lifecycle = new RefusingLifecycle(libpod);
+  const driver = new ComputeDriver(config, { lifecycle, libpod, runtime: new FakeRuntime() });
+  await assert.rejects(driver.createSandbox(validSandbox()), schemaInvalid);
+  assert.deepEqual(lines, ["realm compute driver refused: rpc=CreateSandbox check=create.container code=SCHEMA_INVALID"]);
+  assert.deepEqual(entriesOf(config.secretRoot), []);
+  assert.deepEqual(entriesOf(config.sandboxStateRoot), []);
+});
+
+void test("PRD-ISO-02: a create whose state directory already exists logs create.state_dir and makes no libpod call", async () => {
+  const { config, libpod, lifecycle, driver, lines } = harness();
+  mkdirSync(join(config.sandboxStateRoot, CONTAINER_NAME));
+  await assert.rejects(driver.createSandbox(validSandbox()), schemaInvalid);
+  assert.deepEqual(lines, ["realm compute driver refused: rpc=CreateSandbox check=create.state_dir code=SCHEMA_INVALID"]);
+  assert.deepEqual(lifecycle.creates, []);
+  assert.equal(libpod.inspectCalls, 0);
+});
+
+void test("PRD-ISO-02: a create whose secret directory already exists logs create.secret_dir and makes no libpod call", async () => {
+  const { config, libpod, lifecycle, driver, lines } = harness();
+  mkdirSync(join(config.secretRoot, CONTAINER_NAME), { recursive: true });
+  await assert.rejects(driver.createSandbox(validSandbox()), schemaInvalid);
+  assert.deepEqual(lines, ["realm compute driver refused: rpc=CreateSandbox check=create.secret_dir code=SCHEMA_INVALID"]);
+  assert.deepEqual(lifecycle.creates, []);
+  assert.equal(libpod.inspectCalls, 0);
 });

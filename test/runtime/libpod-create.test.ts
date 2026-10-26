@@ -23,6 +23,8 @@ interface FakeOptions {
   // The status and body the create route answers with. The defaults are Podman's 201 and the new id.
   readonly createStatus?: number;
   readonly createBody?: string;
+  // When set, the create route refuses a tmpfs option whose key Podman 5.7.1's create route does not accept, as the real route does.
+  readonly podmanTmpfsRule?: boolean;
 }
 
 // A minimal in-process libpod stand-in on a Unix socket. It answers /_ping, the versioned create route, and the
@@ -40,8 +42,9 @@ async function startFake(t: TestContext, options: FakeOptions = {}): Promise<{ r
       chunks.push(chunk);
     });
     req.on("end", () => {
-      seen.push(record(req, Buffer.concat(chunks).toString("utf8")));
-      answer(req, res, options);
+      const body = Buffer.concat(chunks).toString("utf8");
+      seen.push(record(req, body));
+      answer(req, res, options, body);
     });
   });
   await new Promise<void>((resolve, reject) => {
@@ -71,7 +74,7 @@ function record(req: IncomingMessage, body: string): Seen {
   };
 }
 
-function answer(req: IncomingMessage, res: ServerResponse, options: FakeOptions): void {
+function answer(req: IncomingMessage, res: ServerResponse, options: FakeOptions, body: string): void {
   const path = (req.url ?? "").split("?")[0];
   if (path === PING) {
     res.writeHead(200, { "libpod-api-version": PINNED_VERSION });
@@ -79,6 +82,12 @@ function answer(req: IncomingMessage, res: ServerResponse, options: FakeOptions)
     return;
   }
   if (req.method === "POST" && path === `/v${PINNED_VERSION}/libpod/containers/create`) {
+    const refused = options.podmanTmpfsRule === true ? unacceptedTmpfsOption(body) : undefined;
+    if (refused !== undefined) {
+      res.writeHead(500, { "content-type": "application/json" });
+      res.end(JSON.stringify({ cause: "", message: `unknown mount option ${refused} invalid mount option`, response: 500 }));
+      return;
+    }
     res.writeHead(options.createStatus ?? 201, { "content-type": "application/json" });
     res.end(options.createBody ?? JSON.stringify({ Id: CREATED_ID, Warnings: [] }));
     return;
@@ -90,6 +99,26 @@ function answer(req: IncomingMessage, res: ServerResponse, options: FakeOptions)
   }
   res.writeHead(404, { "content-type": "application/json" });
   res.end(JSON.stringify({ cause: "page not found", message: "page not found", response: 404 }));
+}
+
+// The tmpfs option keys the fake route accepts, observed on Podman 5.7.1. This is the fake's allowlist, not a live check against Podman.
+const PODMAN_TMPFS_OPTION_KEYS: readonly string[] = ["size", "mode", "rw", "ro", "noexec", "exec", "nosuid", "suid", "nodev", "dev"];
+
+// The first tmpfs option key of a create body that the route does not accept, or undefined when every key is accepted.
+function unacceptedTmpfsOption(body: string): string | undefined {
+  const parsed = JSON.parse(body) as { readonly mounts?: readonly { readonly type?: string; readonly options?: readonly string[] }[] };
+  for (const mount of parsed.mounts ?? []) {
+    if (mount.type !== "tmpfs") {
+      continue;
+    }
+    for (const option of mount.options ?? []) {
+      const key = option.split("=")[0] ?? option;
+      if (!PODMAN_TMPFS_OPTION_KEYS.includes(key)) {
+        return key;
+      }
+    }
+  }
+  return undefined;
 }
 
 // The requests the client sent for the call itself, without the /_ping that precedes the first versioned call.
@@ -146,7 +175,7 @@ const EXPECTED_BODY = {
     {
       type: "tmpfs",
       destination: "/run/openshell-supervisor-ca",
-      options: ["noexec", "nosuid", "nodev", "mode=0700", "uid=1001", "gid=1001"],
+      options: ["noexec", "nosuid", "nodev", "mode=1703"],
     },
     { type: "bind", source: WORKSPACE_DIR, destination: "/workspace", options: ["noexec", "nosuid", "nodev"] },
     { type: "bind", source: STATE_DIR, destination: "/realm-state", options: ["ro", "noexec", "nosuid", "nodev"] },
@@ -171,6 +200,12 @@ void test("PRD-CTR-01: createContainer posts the spec's body to the pinned 5.7.1
   assert.equal(create.target, "/v5.7.1/libpod/containers/create", "no query string, version pinned to 5.7.1");
   assert.equal(create.contentType, "application/json");
   assert.deepEqual(JSON.parse(create.body) as unknown, EXPECTED_BODY);
+});
+
+void test("PRD-CTR-01: the CA tmpfs options pass the create route's tmpfs rule, so the create is not refused for uid or gid", async (t) => {
+  const { socketPath } = await startFake(t, { podmanTmpfsRule: true });
+  const id = await new LibpodClient(socketPath).createContainer(SPEC);
+  assert.equal(id, CREATED_ID);
 });
 
 void test("PRD-CTR-01: the create body carries no socket-bearing mount and binds the state directory read-only", async (t) => {

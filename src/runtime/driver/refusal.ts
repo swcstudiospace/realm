@@ -1,9 +1,9 @@
-// The refusal log of the compute driver (phase 9.5). Every refusal that the create check (planCreate) or the launch-material decoder
-// raises writes one line: the RPC it arrived on, the check that refused it, and the catalogue code. The RPC and the check are closed
-// sets of constant names, so a line never carries a value, a path, a key or a token. An operator reads the check name to see why a
-// create was refused.
+// The refusal log of the compute driver (phase 9.5). Every refusal that the create check (planCreate), the launch-material decoder,
+// or a create stage (compute-driver.ts) raises as SCHEMA_INVALID writes one line: the RPC it arrived on, the check that refused it,
+// and the catalogue code. The RPC and the check are closed sets of constant names, so a line never carries a value, a path, a key
+// or a token. An operator reads the check name to see why a create was refused.
 
-import { makeRealmError, type RealmError } from "../../core/errors.js";
+import { makeRealmError, RealmError } from "../../core/errors.js";
 
 // The driver entry point a refusal arrived on. Both are compute RPCs.
 export const DRIVER_RPCS = ["ValidateSandboxCreate", "CreateSandbox"] as const;
@@ -24,6 +24,22 @@ export const REFUSAL_CHECKS = [
   "create.environment",
   "create.command",
   "create.launch_authentication",
+  // The state directory is new, and its root exists or was created for it.
+  "create.state_dir",
+  // The sandbox's secret directory does not exist yet.
+  "create.secret_dir",
+  // The control socket path fits a unix socket address on the host and in the container.
+  "create.socket_path",
+  // The launch material is written to the secret directory.
+  "create.launch_material",
+  // The channel directory, the runtime's TLS identity and its channel are built.
+  "create.channel",
+  // The bootstrap and the descriptor agree before the lifecycle runs.
+  "create.runtime_files",
+  // The lifecycle creates the container, and the runtime's files are written before it starts.
+  "create.container",
+  // The runtime's listener, the removal of its key, and the host supervisor start.
+  "create.start",
   "launch.json",
   "launch.fields",
   "launch.supervisor",
@@ -58,8 +74,20 @@ export function refusalScope(rpc: DriverRpc, log: RefusalLog | undefined): Refus
   return { rpc, log: log ?? stderrRefusalLog };
 }
 
+// Writes the refusal line for a check. The line names the RPC, the check and the code, and no value.
+function logRefusal(scope: RefusalScope, check: RefusalCheck): void {
+  scope.log(`realm compute driver refused: rpc=${scope.rpc} check=${check} code=SCHEMA_INVALID`);
+}
+
 // Writes the refusal line and returns the error to throw. Every such refusal carries SCHEMA_INVALID.
 export function refusal(scope: RefusalScope, check: RefusalCheck): RealmError {
-  scope.log(`realm compute driver refused: rpc=${scope.rpc} check=${check} code=SCHEMA_INVALID`);
+  logRefusal(scope, check);
   return makeRealmError("SCHEMA_INVALID");
+}
+
+// Logs a stage's refusal when the error the stage raised is SCHEMA_INVALID. The check names the stage. Any other error writes nothing.
+export function logStageRefusal(scope: RefusalScope, check: RefusalCheck, error: unknown): void {
+  if (error instanceof RealmError && error.code === "SCHEMA_INVALID") {
+    logRefusal(scope, check);
+  }
 }

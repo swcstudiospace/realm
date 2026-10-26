@@ -422,7 +422,7 @@ function containerCreateBody(spec: ContainerSpec): Readonly<Record<string, unkno
       })),
       { type: "bind", source: spec.workspaceDir, destination: profile.workspaceDestination, options: WORKSPACE_OPTIONS },
       { type: "bind", source: spec.stateDir, destination: profile.stateDestination, options: STATE_OPTIONS },
-      { type: "bind", source: spec.channelDir, destination: profile.channelDestination, options: CHANNEL_MOUNT_OPTIONS },
+      { type: "bind", source: spec.channelDir, destination: profile.channelDestination, options: ["rw", ...CHANNEL_MOUNT_OPTIONS] },
     ],
   };
 }

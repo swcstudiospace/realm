@@ -432,3 +432,13 @@ for (const option of CHANNEL_MOUNT_OPTIONS) {
     assert.deepEqual(channelOptionFailures(createdSandbox(undefined, options)), ["channel-mount-options"]);
   });
 }
+
+void test("a read-only channel mount (RW false) fails channel-mount-options alone, before start (phase 9.5, F)", () => {
+  const inspect = createdSandbox();
+  inspect.Mounts = [
+    bind(WORKSPACE, "/workspace", true),
+    bind(STATE, "/realm-state", false),
+    { ...bind(CHANNEL, HARDENING_PROFILE.channelDestination, false), Options: ["rw", ...CHANNEL_MOUNT_OPTIONS, "rbind"] },
+  ];
+  assert.deepEqual(channelOptionFailures(inspect), ["channel-mount-options"]);
+});

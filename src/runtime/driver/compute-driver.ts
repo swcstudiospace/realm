@@ -53,7 +53,7 @@ import { assertSocketPathsFit, channelPathsOf, generateRuntimeTls, makeChannelDi
 import { driverFailureOf, DriverStatusError, driverNotFound, driverUnimplemented, toServerError } from "./grpc-status.js";
 import type { DriverLifecycle } from "./lifecycle.js";
 import { decodeLaunchAuthentication, type LaunchAuthentication } from "./isolation/launch.js";
-import { refusal, refusalScope, type RefusalLog, type RefusalScope } from "./refusal.js";
+import { logStageRefusal, refusal, refusalScope, type RefusalCheck, type RefusalLog, type RefusalScope } from "./refusal.js";
 import {
   assertRuntimeFilesAgree,
   CONTAINER_CONTROL_SOCKET,
@@ -345,18 +345,26 @@ export class ComputeDriver {
       throw refusal(scope, "create.launch_authentication");
     }
     const sandboxName = plan.spec.sandboxName;
-    assertStateDirAbsent(plan.spec.stateDir);
-    if (secretDirExists(this.config.secretRoot, sandboxName)) {
-      throw makeRealmError("SCHEMA_INVALID");
+    atStage(scope, "create.state_dir", () => {
+      assertStateDirAbsent(plan.spec.stateDir);
+    });
+    if (atStage(scope, "create.secret_dir", () => secretDirExists(this.config.secretRoot, sandboxName))) {
+      throw refusal(scope, "create.secret_dir");
     }
-    this.prepareWorkspace(plan.workspace);
-    mkdirOrRefuse(plan.spec.stateDir);
-    const channel = channelPathsOf(secretDirOf(this.config.secretRoot, sandboxName));
+    atStage(scope, "create.workspace", () => {
+      this.prepareWorkspace(plan.workspace);
+    });
+    atStage(scope, "create.state_dir", () => {
+      mkdirOrRefuse(plan.spec.stateDir);
+    });
+    const channel = atStage(scope, "create.channel", () => channelPathsOf(secretDirOf(this.config.secretRoot, sandboxName)));
     const serverName = runtimeServerName(authentication.supervisor.sessionId);
     let trustAnchorPem: string;
     let files: RuntimeChannel;
+    let stage: RefusalCheck = "create.launch_material";
     try {
       writeLaunchMaterial(this.config.secretRoot, sandboxName, launch);
+      stage = "create.channel";
       makeChannelDirectory(channel);
       trustAnchorPem = await generateRuntimeTls(channel, serverName);
       files = buildRuntimeChannel({
@@ -371,8 +379,10 @@ export class ComputeDriver {
         controlSocketHostPath: channel.controlSocket,
         evidenceDigest: hardeningEvidenceDigest(plan.spec.image),
       });
+      stage = "create.runtime_files";
       assertRuntimeFilesAgree(files.bootstrap, files.descriptor);
     } catch (error: unknown) {
+      logStageRefusal(scope, stage, error);
       addCleanupNote(error, this.discardPrepared(plan));
       throw error;
     }
@@ -383,6 +393,7 @@ export class ComputeDriver {
         return Promise.resolve();
       });
     } catch (error: unknown) {
+      logStageRefusal(scope, "create.container", error);
       addCleanupNote(error, this.discardPrepared(plan));
       throw error;
     }
@@ -415,6 +426,7 @@ export class ComputeDriver {
         throw makeRealmError("OPENSHELL_START_FAILED");
       }
     } catch (error: unknown) {
+      logStageRefusal(scope, "create.start", error);
       addCleanupNote(error, await this.discardCreated(plan));
       throw error;
     }
@@ -691,6 +703,16 @@ function refuseIsolationSelection(selection: unknown, scope: RefusalScope): void
   }
 }
 
+// Runs one stage of the create path. A SCHEMA_INVALID the stage raises is logged with the stage's check, and the error is rethrown unchanged.
+function atStage<T>(scope: RefusalScope, check: RefusalCheck, work: () => T): T {
+  try {
+    return work();
+  } catch (error: unknown) {
+    logStageRefusal(scope, check, error);
+    throw error;
+  }
+}
+
 // Checks a create request against the realm profile and returns the lifecycle spec and the launch material when it carries any.
 // Every refusal is SCHEMA_INVALID, logged with its RPC and check, and no libpod call is made. Launch material that is present must
 // decode for this driver's gateway, on both RPCs, before any write. An absent bundle is not refused here: CreateSandbox refuses it
@@ -746,8 +768,10 @@ function planCreate(
   const launch = launchMaterialOf(spec.launch_authentication);
   const authentication = launch === undefined ? undefined : decodeLaunchAuthentication(launch, config.gatewayId, scope);
   // The control socket must fit a unix socket address on the host and in the container. Checked before any write or libpod call.
-  const channel = channelPathsOf(secretDirOf(config.secretRoot, containerName));
-  assertSocketPathsFit([channel.controlSocket, CONTAINER_CONTROL_SOCKET]);
+  const channel = atStage(scope, "create.identity", () => channelPathsOf(secretDirOf(config.secretRoot, containerName)));
+  atStage(scope, "create.socket_path", () => {
+    assertSocketPathsFit([channel.controlSocket, CONTAINER_CONTROL_SOCKET]);
+  });
   return {
     sandboxName,
     sandboxId,
