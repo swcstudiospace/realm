@@ -1,13 +1,16 @@
-// The files and the start of the built-in runtime channel (phase 9.5, wave 2). A sandbox's channel directory holds the runtime's
-// bootstrap, its server certificate and key, and the control socket the runtime creates. It is bound read-write into the
+// The files and the start of the built-in runtime channel (phase 9.5, waves 2 and 3). A sandbox's channel directory holds the
+// runtime's bootstrap, its server certificate and key, and the control socket the runtime creates. It is bound read-write into the
 // container. The descriptor and the supervisor auth bundle sit beside it in the sandbox's secret directory, outside the container.
 // Every file is created at 0600 with O_EXCL and O_NOFOLLOW, so a file that exists or a symbolic link is refused, never followed.
 //
 // The TLS material is an ECDSA P-256 CA and one server leaf for the runtime, made by the openssl CLI through execFile with an
-// argument array and no shell. The CA key lives in a work directory that is removed after the leaf is signed. No key, key path
-// or openssl output reaches an error or a log: a failed command is reported with its catalogue code only.
+// argument array and no shell. The CA key is removed as soon as the leaf is signed. The runtime is the container's main process,
+// so it reads its server key at startup. The driver removes that key only after a TLS handshake with the runtime's listener has
+// completed (awaitRuntimeListener), so nothing after the listener is confirmed reads the key from the channel. No key, key path or openssl
+// output reaches an error or a log: a failed command is reported with its catalogue code only.
 
 import { execFile } from "node:child_process";
+import { connect as tlsConnect } from "node:tls";
 import {
   chmodSync,
   closeSync,
@@ -19,11 +22,11 @@ import {
   openSync,
   readFileSync,
   rmSync,
+  unlinkSync,
   writeSync,
 } from "node:fs";
 import { join } from "node:path";
 import { makeRealmError } from "../../core/errors.js";
-import type { LibpodClient } from "../libpod-client.js";
 import {
   AUTH_FILE_NAME,
   BOOTSTRAP_FILE_NAME,
@@ -32,18 +35,24 @@ import {
   MAIN_EXIT_MARKER_NAME,
   TLS_WORK_DIR_NAME,
 } from "./secret-store.js";
-import { RUNTIME_ARGV, serializeJson, type RuntimeChannel } from "./runtime-channel.js";
+import { serializeJson, type RuntimeChannel } from "./runtime-channel.js";
 
 const PRIVATE_DIR_MODE = 0o700;
 const PRIVATE_FILE_MODE = 0o600;
 // The validity of the CA and the runtime's leaf. A sandbox lives for the life of its runtime, which is bounded by its delete.
 const CERTIFICATE_DAYS = "3650";
 const OPENSSL_TIMEOUT_MS = 30_000;
+// How long the driver waits for the runtime's listener to complete a TLS handshake after the container starts.
 const SOCKET_WAIT_MS = 15_000;
 const SOCKET_POLL_MS = 100;
+// The longest one handshake probe may run before it counts as not confirmed. A stalled listener does not hold the wait past this.
+const HANDSHAKE_PROBE_MS = 1000;
 const CA_COMMON_NAME = "realm-sandbox-runtime-ca";
+const CA_KEY_NAME = "ca.key";
 const LEAF_COMMON_NAME = "realm-sandbox-runtime";
 const LEAF_EXTENSIONS = "[ext]\nsubjectAltName = DNS:%SERVER_NAME%\nbasicConstraints = critical,CA:FALSE\nkeyUsage = critical,digitalSignature\nextendedKeyUsage = serverAuth\n";
+// The longest unix socket path a socket address holds: sun_path is 108 bytes with the terminating NUL. A longer path cannot bind.
+export const UNIX_SOCKET_PATH_MAX_BYTES = 107;
 
 // The host paths of one sandbox's channel. Every path sits under the sandbox's secret directory.
 export interface ChannelPaths {
@@ -86,7 +95,8 @@ export function makeChannelDirectory(paths: ChannelPaths): void {
 }
 
 // Writes the CA and the runtime's leaf: the leaf certificate and key into the channel directory, and the CA certificate text
-// returned to the caller as the descriptor's trust anchor. The CA key is removed with the work directory before this returns.
+// returned to the caller as the descriptor's trust anchor. The CA key is removed once the leaf is signed, and the TLS work
+// directory once the CA certificate has been read. A key or directory that cannot be removed is refused with CLEANUP_FAILED.
 export async function generateRuntimeTls(paths: ChannelPaths, serverName: string): Promise<string> {
   try {
     mkdirSync(paths.tlsDir, { mode: PRIVATE_DIR_MODE });
@@ -94,33 +104,41 @@ export async function generateRuntimeTls(paths: ChannelPaths, serverName: string
   } catch {
     throw makeRealmError("SCHEMA_INVALID");
   }
+  let trustAnchor: string;
   try {
-    const caKey = join(paths.tlsDir, "ca.key");
-    const caCert = join(paths.tlsDir, "ca.crt");
-    const csr = join(paths.tlsDir, "server.csr");
-    const extensions = join(paths.tlsDir, "leaf.ext");
-    await runOpenssl([
-      "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1", "-nodes",
-      "-keyout", caKey, "-out", caCert, "-days", CERTIFICATE_DAYS, "-subj", `/CN=${CA_COMMON_NAME}`,
-      "-addext", "basicConstraints=critical,CA:TRUE", "-addext", "keyUsage=critical,keyCertSign,cRLSign",
-    ]);
-    await runOpenssl([
-      "req", "-new", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1", "-nodes",
-      "-keyout", paths.privateKey, "-out", csr, "-subj", `/CN=${LEAF_COMMON_NAME}`,
-    ]);
-    writePrivateFile(extensions, LEAF_EXTENSIONS.replace("%SERVER_NAME%", serverName));
-    await runOpenssl([
-      "x509", "-req", "-in", csr, "-CA", caCert, "-CAkey", caKey, "-CAcreateserial",
-      "-out", paths.certificate, "-days", CERTIFICATE_DAYS, "-extfile", extensions, "-extensions", "ext",
-    ]);
-    chmodSync(paths.certificate, PRIVATE_FILE_MODE);
-    chmodSync(paths.privateKey, PRIVATE_FILE_MODE);
-    return readFileSync(caCert, "utf8");
+    trustAnchor = await issueLeaf(paths, serverName);
   } catch {
+    // The work directory is left for the caller's discard, which removes the secret directory's TLS entries too.
     throw makeRealmError("OPENSHELL_START_FAILED");
-  } finally {
-    rmSync(paths.tlsDir, { recursive: true, force: true });
   }
+  removeKeyFile(join(paths.tlsDir, CA_KEY_NAME));
+  removeTlsWorkDirectory(paths.tlsDir);
+  return trustAnchor;
+}
+
+// Runs the openssl steps in the TLS work directory and returns the CA certificate text. Any failure rejects; the caller maps it.
+async function issueLeaf(paths: ChannelPaths, serverName: string): Promise<string> {
+  const caKey = join(paths.tlsDir, CA_KEY_NAME);
+  const caCert = join(paths.tlsDir, "ca.crt");
+  const csr = join(paths.tlsDir, "server.csr");
+  const extensions = join(paths.tlsDir, "leaf.ext");
+  await runOpenssl([
+    "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1", "-nodes",
+    "-keyout", caKey, "-out", caCert, "-days", CERTIFICATE_DAYS, "-subj", `/CN=${CA_COMMON_NAME}`,
+    "-addext", "basicConstraints=critical,CA:TRUE", "-addext", "keyUsage=critical,keyCertSign,cRLSign",
+  ]);
+  await runOpenssl([
+    "req", "-new", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1", "-nodes",
+    "-keyout", paths.privateKey, "-out", csr, "-subj", `/CN=${LEAF_COMMON_NAME}`,
+  ]);
+  writePrivateFile(extensions, LEAF_EXTENSIONS.replace("%SERVER_NAME%", serverName));
+  await runOpenssl([
+    "x509", "-req", "-in", csr, "-CA", caCert, "-CAkey", caKey, "-CAcreateserial",
+    "-out", paths.certificate, "-days", CERTIFICATE_DAYS, "-extfile", extensions, "-extensions", "ext",
+  ]);
+  chmodSync(paths.certificate, PRIVATE_FILE_MODE);
+  chmodSync(paths.privateKey, PRIVATE_FILE_MODE);
+  return readFileSync(caCert, "utf8");
 }
 
 // Writes the runtime's files once the container exists: the bootstrap into the channel, and the descriptor and the auth bundle
@@ -131,20 +149,31 @@ export function writeRuntimeFiles(paths: ChannelPaths, channel: RuntimeChannel):
   writePrivateFile(paths.auth, `${channel.auth}\n`);
 }
 
-// Starts the runtime inside the container, detached, and waits until its control socket exists. A runtime that does not
-// create the socket in time is refused; the caller removes the container.
-export async function startRuntimeProcess(
-  libpod: Pick<LibpodClient, "execDetached">,
-  containerId: string,
-  controlSocket: string,
-): Promise<void> {
-  await libpod.execDetached(containerId, RUNTIME_ARGV);
-  await waitForSocket(controlSocket);
+// Refuses a control socket path, on the host or in the container, that a unix socket address cannot hold. Nothing is written
+// before this check, and the error names no path.
+export function assertSocketPathsFit(paths: readonly string[]): void {
+  if (paths.some((path) => Buffer.byteLength(path, "utf8") > UNIX_SOCKET_PATH_MAX_BYTES)) {
+    throw makeRealmError("SCHEMA_INVALID");
+  }
 }
 
-async function waitForSocket(path: string): Promise<void> {
-  const deadline = Date.now() + SOCKET_WAIT_MS;
-  while (!isSocket(path)) {
+// What the driver needs to dial the runtime's listener over TLS: the CA certificate it trusts, and the server name its leaf carries.
+export interface ListenerTrust {
+  readonly caPem: string;
+  readonly serverName: string;
+}
+
+// Resolves once a TLS handshake with the runtime's listener completes on the control socket. A socket file, or a socket that accepts
+// a connection, does not confirm the listener: the runtime binds the socket before it loads its certificate and key, and it removes
+// the key once it has read it (boundary_server.rs). A completed handshake proves the runtime has loaded its TLS configuration, so the
+// key has been read. A failed or stalled handshake keeps the wait going until the deadline, and then the start is refused.
+export async function awaitRuntimeListener(
+  controlSocket: string,
+  trust: ListenerTrust,
+  waitMs: number = SOCKET_WAIT_MS,
+): Promise<void> {
+  const deadline = Date.now() + waitMs;
+  while (!(isSocket(controlSocket) && (await handshakeCompletes(controlSocket, trust, probeBudget(deadline))))) {
     if (Date.now() >= deadline) {
       throw makeRealmError("OPENSHELL_START_FAILED");
     }
@@ -159,6 +188,74 @@ function isSocket(path: string): boolean {
     return lstatSync(path).isSocket();
   } catch {
     return false;
+  }
+}
+
+// The time one handshake probe may take: the probe bound, and never past the deadline. It is at least one millisecond.
+function probeBudget(deadline: number): number {
+  return Math.max(1, Math.min(HANDSHAKE_PROBE_MS, deadline - Date.now()));
+}
+
+// Dials the control socket with a TLS client that trusts only the given CA, and resolves true once the handshake completes. An
+// error, or a handshake still running after timeoutMs, resolves false. The probe connection is closed at once in every case.
+function handshakeCompletes(path: string, trust: ListenerTrust, timeoutMs: number): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    const socket = tlsConnect({ path, ca: trust.caPem, servername: trust.serverName });
+    const timer = setTimeout(() => {
+      socket.destroy();
+      resolve(false);
+    }, timeoutMs);
+    socket.once("secureConnect", () => {
+      clearTimeout(timer);
+      socket.destroy();
+      resolve(true);
+    });
+    socket.on("error", () => {
+      clearTimeout(timer);
+      socket.destroy();
+      resolve(false);
+    });
+  });
+}
+
+// Removes one private key file and confirms it is gone. A key that is already absent counts as removed. Any other failure, or a
+// key still present afterwards, is CLEANUP_FAILED, and the error names no path.
+export function removeKeyFile(path: string): void {
+  try {
+    unlinkSync(path);
+  } catch (error: unknown) {
+    if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) {
+      throw makeRealmError("CLEANUP_FAILED");
+    }
+  }
+  if (entryPresent(path)) {
+    throw makeRealmError("CLEANUP_FAILED");
+  }
+}
+
+// Removes the TLS work directory and everything in it, then confirms it is gone. A failure is CLEANUP_FAILED, and its message
+// names no path: the removal's own error can carry the path, so it is not passed on.
+export function removeTlsWorkDirectory(dir: string): void {
+  try {
+    rmSync(dir, { recursive: true, force: true });
+  } catch {
+    throw makeRealmError("CLEANUP_FAILED");
+  }
+  if (entryPresent(dir)) {
+    throw makeRealmError("CLEANUP_FAILED");
+  }
+}
+
+// True when an entry exists at path. A lookup that fails for any reason other than absence is CLEANUP_FAILED.
+function entryPresent(path: string): boolean {
+  try {
+    lstatSync(path);
+    return true;
+  } catch (error: unknown) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+      return false;
+    }
+    throw makeRealmError("CLEANUP_FAILED");
   }
 }
 

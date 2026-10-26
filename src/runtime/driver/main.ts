@@ -16,7 +16,7 @@ import {
   type ComputeDriverConfig,
   type RuntimeHost,
 } from "./compute-driver.js";
-import { startRuntimeProcess } from "./channel.js";
+import { awaitRuntimeListener } from "./channel.js";
 import { DriverLifecycle } from "./lifecycle.js";
 import { GATEWAY_ID_PATTERN } from "../gateway-config.js";
 import { spawnSupervisor } from "./supervisor.js";
@@ -173,7 +173,7 @@ export async function startDriver(config: DriverProcessConfig): Promise<SocketSe
     secretRoot: config.driver.secretRoot,
   });
   const runtime: RuntimeHost = {
-    startRuntime: (containerId, controlSocket) => startRuntimeProcess(libpod, containerId, controlSocket),
+    awaitListener: (controlSocket, trust) => awaitRuntimeListener(controlSocket, trust),
     spawnSupervisor,
   };
   const driver = new ComputeDriver(config.driver, { lifecycle, libpod, runtime });

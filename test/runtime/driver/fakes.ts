@@ -1,11 +1,12 @@
 // Shared fakes for the compute driver tests. The libpod fake answers the two listing calls the driver makes. The lifecycle
-// fakes record every create, so a test can show that a refused request never reached it. The runtime fake records the runtime
-// start and each supervisor spawn, and hands out a supervisor handle that records its stop.
+// fakes record every create, stop and delete, so a test can show that a refused request never reached it. The runtime fake records
+// each listener confirmation and each supervisor spawn; a supervisor handle records its stop and can exit on its own.
 
-import { mkdirSync, mkdtempSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { ComputeDriverConfig, DriverSandboxMessage, RuntimeHost } from "../../../src/runtime/driver/compute-driver.js";
+import type { ListenerTrust } from "../../../src/runtime/driver/channel.js";
 import { DriverLifecycle, type BeforeStart, type LifecycleLibpod } from "../../../src/runtime/driver/lifecycle.js";
 import type { SupervisorHandle, SupervisorSpawn } from "../../../src/runtime/driver/supervisor.js";
 import type { ContainerSpec, LibpodContainerSummary, LibpodInspect } from "../../../src/runtime/libpod-client.js";
@@ -74,9 +75,10 @@ export class FakeLibpod {
 
 // Records each create and delete, and writes the container into the libpod fake on create. A beforeStart hook runs once the
 // container exists; when it fails the container is removed again, as the real lifecycle does.
-export class FakeLifecycle implements Pick<DriverLifecycle, "create" | "delete"> {
+export class FakeLifecycle implements Pick<DriverLifecycle, "create" | "delete" | "stop"> {
   readonly creates: ContainerSpec[] = [];
   readonly deletes: string[] = [];
+  readonly stops: string[] = [];
 
   constructor(private readonly libpod: FakeLibpod) {}
 
@@ -100,11 +102,21 @@ export class FakeLifecycle implements Pick<DriverLifecycle, "create" | "delete">
     this.libpod.containers.delete(sandboxName);
     return Promise.resolve();
   }
+
+  stop(sandboxName: string): Promise<void> {
+    this.stops.push(sandboxName);
+    const container = this.libpod.containers.get(sandboxName);
+    if (container !== undefined) {
+      container.running = false;
+    }
+    return Promise.resolve();
+  }
 }
 
-export interface DiskLifecycle extends Pick<DriverLifecycle, "create" | "delete"> {
+export interface DiskLifecycle extends Pick<DriverLifecycle, "create" | "delete" | "stop"> {
   readonly creates: ContainerSpec[];
   readonly deletes: string[];
+  readonly stops: string[];
 }
 
 // A libpod stub for a lifecycle that never finds a container: nothing is listed or found, and every removal succeeds.
@@ -130,9 +142,11 @@ export async function diskLifecycle(config: ComputeDriverConfig, libpod: FakeLib
   await disk.startupSweep();
   const creates: ContainerSpec[] = [];
   const deletes: string[] = [];
+  const stops: string[] = [];
   return {
     creates,
     deletes,
+    stops,
     create: async (spec: ContainerSpec, beforeStart?: BeforeStart): Promise<string> => {
       creates.push(spec);
       const id = `id-${spec.sandboxName}`;
@@ -152,31 +166,67 @@ export async function diskLifecycle(config: ComputeDriverConfig, libpod: FakeLib
       libpod.containers.delete(sandboxName);
       await disk.delete(sandboxName);
     },
+    stop: (sandboxName: string): Promise<void> => {
+      stops.push(sandboxName);
+      const container = libpod.containers.get(sandboxName);
+      if (container !== undefined) {
+        container.running = false;
+      }
+      return Promise.resolve();
+    },
   };
 }
 
-// The host supervisor a spawn returned. stop records each call.
+// The host supervisor a spawn returned. stop records each call and ends the process. exit ends it without a stop, as a crash does.
 export class FakeSupervisor implements SupervisorHandle {
   stops = 0;
+  readonly exited: Promise<void>;
+  private exitedNow = false;
+  private readonly markExited: () => void;
+
+  constructor(exitedAtSpawn: boolean) {
+    let resolveExit: () => void = () => undefined;
+    this.exited = new Promise<void>((resolve) => {
+      resolveExit = resolve;
+    });
+    this.markExited = () => {
+      this.exitedNow = true;
+      resolveExit();
+    };
+    if (exitedAtSpawn) {
+      this.markExited();
+    }
+  }
+
+  hasExited(): boolean {
+    return this.exitedNow;
+  }
+
+  exit(): void {
+    this.markExited();
+  }
 
   stop(): Promise<void> {
     this.stops += 1;
+    this.markExited();
     return Promise.resolve();
   }
 }
 
-// The process-level effects of the driver. Each call is recorded. A test sets startError or spawnError to make the next call of
-// that step fail with the error.
+// The process-level effects of the driver. Each call is recorded. A test sets listenerError or spawnError to make the next call of
+// that step fail with the error, or exitOnSpawn to make each supervisor exit as it is spawned.
 export class FakeRuntime implements RuntimeHost {
-  readonly starts: { readonly containerId: string; readonly controlSocket: string }[] = [];
+  // Each listener confirmation, with the control socket it was given and whether server.key was still on disk at that moment.
+  readonly confirmations: { readonly controlSocket: string; readonly trust: ListenerTrust; readonly keyPresent: boolean }[] = [];
   readonly spawns: SupervisorSpawn[] = [];
   readonly supervisors: FakeSupervisor[] = [];
-  startError: Error | undefined = undefined;
+  listenerError: Error | undefined = undefined;
   spawnError: Error | undefined = undefined;
+  exitOnSpawn = false;
 
-  startRuntime(containerId: string, controlSocket: string): Promise<void> {
-    this.starts.push({ containerId, controlSocket });
-    return this.startError === undefined ? Promise.resolve() : Promise.reject(this.startError);
+  awaitListener(controlSocket: string, trust: ListenerTrust): Promise<void> {
+    this.confirmations.push({ controlSocket, trust, keyPresent: existsSync(join(dirname(controlSocket), "server.key")) });
+    return this.listenerError === undefined ? Promise.resolve() : Promise.reject(this.listenerError);
   }
 
   spawnSupervisor(options: SupervisorSpawn): Promise<SupervisorHandle> {
@@ -184,7 +234,7 @@ export class FakeRuntime implements RuntimeHost {
     if (this.spawnError !== undefined) {
       return Promise.reject(this.spawnError);
     }
-    const handle = new FakeSupervisor();
+    const handle = new FakeSupervisor(this.exitOnSpawn);
     this.supervisors.push(handle);
     return Promise.resolve(handle);
   }
