@@ -45,10 +45,15 @@ const LABEL_KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
 const WORKLOAD_USER = `${String(HARDENING_PROFILE.workloadUid)}:${String(HARDENING_PROFILE.workloadGid)}`;
 const WORKLOAD_USERNS = `uid=${String(HARDENING_PROFILE.workloadUid)},gid=${String(HARDENING_PROFILE.workloadGid)}`;
 // The sandbox runtime binds loopback ports below 1024 as the workload uid, so the network namespace must lower the
-// unprivileged port start to 0. The sysctl is per network namespace, and the sandbox has no network beyond loopback.
-// The sandbox runtime itself checks the value at startup and refuses to run otherwise. That check lives in the
+// unprivileged port start to 0. IPv6 is disabled in the same namespace (RT-05), so the sandbox has IPv4 loopback only.
+// The sysctls are per network namespace, and the sandbox has no network beyond loopback.
+// The sandbox runtime itself checks the low-port value at startup and refuses to run otherwise. That check lives in the
 // runtime, outside this repository; this client does not verify it.
-const RUNTIME_SYSCTLS: Readonly<Record<string, string>> = Object.freeze({ "net.ipv4.ip_unprivileged_port_start": "0" });
+const RUNTIME_SYSCTLS: Readonly<Record<string, string>> = Object.freeze({
+  "net.ipv4.ip_unprivileged_port_start": "0",
+  "net.ipv6.conf.all.disable_ipv6": "1",
+  "net.ipv6.conf.default.disable_ipv6": "1",
+});
 
 export interface LibpodClientOptions {
   // Bound for one request, in addition to any grace period the request itself asks for.
