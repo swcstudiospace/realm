@@ -12,7 +12,7 @@ import { lstatSync, readdirSync, realpathSync, rmSync, type Dirent, type Stats }
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { makeRealmError, RealmError, type ErrorCode } from "../../core/errors.js";
 import { attachKernelCaps, readHostProcStatus } from "../kernel-caps.js";
-import { HARDENING_PROFILE, verifyInspect, type HardeningBinding, type HardeningProperty } from "../hardening.js";
+import { channelOptionFailures, HARDENING_PROFILE, verifyInspect, type ChannelProperty, type HardeningBinding, type HardeningProperty } from "../hardening.js";
 import {
   validateContainerSpec,
   type ContainerSpec,
@@ -72,9 +72,10 @@ export interface DriverLifecycleOptions {
   readonly removeDirectory?: ((dir: string) => void) | undefined;
 }
 
-// A property a container is refused for: the verifier's fourteen (D-51), then the two checks made after it.
+// A property a container is refused for: the verifier's properties (D-51), the workspace mount's options and the terminal check
+// made after start (C1, C6), and the channel options checked before start (phase 9.5, F).
 // "mounts-options" is the workspace mount's options (C1). "tty" is a container that has a terminal (C6).
-export type LifecycleProperty = HardeningProperty | "mounts-options" | "tty";
+export type LifecycleProperty = HardeningProperty | "mounts-options" | "tty" | ChannelProperty;
 
 // The refusal of a container that fails a create check. Its property is the first failed property, and its message
 // lists every failed property in report order, with that first name first. The refusal is a RealmError with the
@@ -169,6 +170,7 @@ export class DriverLifecycle {
       stateDir: spec.stateDir,
       channelDir: spec.channelDir,
     };
+    await this.checkBeforeStart(id);
     if (beforeStart !== undefined) {
       try {
         await beforeStart(id);
@@ -217,6 +219,13 @@ export class DriverLifecycle {
     removeSecretDirIfEmpty(secretDir);
   }
 
+  // Stops a sandbox's container by its name, for a sandbox whose host supervisor exited. The container is kept, so a later
+  // delete removes it. A stop that fails is thrown to the caller.
+  async stop(sandboxName: string): Promise<void> {
+    this.requireSwept();
+    await this.libpod.stopContainer(sandboxName, STOP_GRACE_MS);
+  }
+
   // Starts the created container and proves it conforms. The verifier runs first, then the two checks it does not
   // make. Any failure removes the container by id before the error is thrown. A State.Pid of 0, or one the host
   // cannot read, leaves the kernel capability sets unattached, so cap-drop fails. The refusal keeps the original
@@ -240,8 +249,14 @@ export class DriverLifecycle {
     if (failed?.length === 0) {
       return;
     }
+    await this.refuse(id, failed ?? [], causeCode);
+  }
+
+  // Removes the container by id, then throws the refusal for the failed properties. A failed removal is named in the refusal's
+  // message, with the survivor's id and the cleanup code, and does not replace the refusal.
+  private async refuse(id: string, failed: readonly LifecycleProperty[], causeCode: ErrorCode | undefined): Promise<never> {
     const removeCause = await this.discard(id);
-    const [first, ...rest] = failed ?? [];
+    const [first, ...rest] = failed;
     const refusal =
       first !== undefined
         ? new HardeningRefusal([first, ...rest], causeCode)
@@ -250,6 +265,25 @@ export class DriverLifecycle {
       reportSurvivor(refusal, id, removeCause);
     }
     throw refusal;
+  }
+
+  // The channel options of a container as created, checked before the runtime's files are written and before it starts (phase
+  // 9.5, F). A container that cannot be inspected, or whose options do not match, is removed and refused, so it never runs.
+  private async checkBeforeStart(id: string): Promise<void> {
+    let failed: readonly LifecycleProperty[] | null = null;
+    let causeCode: ErrorCode | undefined;
+    try {
+      const inspect = await this.libpod.inspectContainer(id);
+      if (inspect !== null) {
+        failed = channelOptionFailures(inspect);
+      }
+    } catch (error) {
+      causeCode = codeOf(error);
+    }
+    if (failed?.length === 0) {
+      return;
+    }
+    await this.refuse(id, failed ?? [], causeCode);
   }
 
   // Removes the container of the spec's name when it carries this spec's managed label and sandbox-name label. A

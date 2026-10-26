@@ -22,6 +22,9 @@ import { DriverLifecycle, HardeningRefusal } from "../../src/runtime/driver/life
 import { attachKernelCaps } from "../../src/runtime/kernel-caps.js";
 import {
   HARDENING_PROFILE,
+  RUNTIME_ARGV,
+  RUNTIME_BINARY,
+  SUPERVISOR_CA_TMPFS_OPTIONS,
   verifyInspect,
   type HardeningBinding,
   type HardeningProperty,
@@ -344,13 +347,17 @@ function goodInspect(stateDir: string, workspaceDir: string, channelDir?: string
         ];
   return {
     ImageDigest: IMAGE_DIGEST,
+    ...(channelDir === undefined ? {} : { Path: RUNTIME_BINARY, Args: RUNTIME_ARGV.slice(1) }),
     HostConfig: {
       Privileged: HARDENING_PROFILE.privileged,
       CapAdd: [...HARDENING_PROFILE.capAdd],
       SecurityOpt: [...HARDENING_PROFILE.securityOpt],
       ReadonlyRootfs: HARDENING_PROFILE.readonlyRootfs,
       Tmpfs: Object.fromEntries(
-        [...HARDENING_PROFILE.tmpfs, ...channelTmpfs].map((path): [string, string] => [path, "nosuid,nodev"]),
+        [...HARDENING_PROFILE.tmpfs, ...channelTmpfs].map((path): [string, string] => [
+          path,
+          path === HARDENING_PROFILE.supervisorCaDestination ? SUPERVISOR_CA_TMPFS_OPTIONS.join(",") : "nosuid,nodev",
+        ]),
       ),
       PidsLimit: HARDENING_PROFILE.pidsLimit,
       Memory: HARDENING_PROFILE.memoryBytes,
@@ -538,7 +545,12 @@ const PROPERTY_CASES: readonly PropertyCase[] = [
   { property: "cap-add", mutate: (body) => { hostConfig(body).CapAdd = ["NET_ADMIN"]; } },
   { property: "no-new-privileges", mutate: (body) => { hostConfig(body).SecurityOpt = []; } },
   { property: "read-only-root", mutate: (body) => { hostConfig(body).ReadonlyRootfs = false; } },
-  { property: "tmpfs", mutate: (body) => { hostConfig(body).Tmpfs = { "/tmp": "nosuid,nodev" }; } },
+  {
+    property: "tmpfs",
+    mutate: (body) => {
+      hostConfig(body).Tmpfs = { "/tmp": "nosuid,nodev", [HARDENING_PROFILE.supervisorCaDestination]: SUPERVISOR_CA_TMPFS_OPTIONS.join(",") };
+    },
+  },
   { property: "pids-limit", mutate: (body) => { hostConfig(body).PidsLimit = 1024; } },
   { property: "memory-limit", mutate: (body) => { hostConfig(body).Memory = 2 * 1024 ** 3; } },
   { property: "cpu-limit", mutate: (body) => { hostConfig(body).NanoCpus = 4_000_000_000; } },
@@ -552,6 +564,7 @@ const PROPERTY_CASES: readonly PropertyCase[] = [
       }
     },
   },
+  { property: "init-process", mutate: (body) => { body.Args = ["--bootstrap", "/tmp/elsewhere.json"]; } },
   {
     property: "socket-path",
     reported: "mounts",
@@ -605,6 +618,56 @@ void test("PRD-CTR-01: a conforming container is returned by id, kept, and poste
   assert.equal(creates.length, 1);
   const posted = JSON.parse(creates[0]?.body ?? "{}") as { readonly tty?: unknown };
   assert.equal(posted.tty, false);
+});
+
+void test("PRD-CTR-02: PID 1 that is not the sandbox runtime with its exact argv is refused, and the container is force-removed (phase 9.5, wave 3)", async (t) => {
+  const h = await harness(t, {
+    mutate: (body) => {
+      body.Path = "/opt/realm/bin/realm-helper";
+      body.Args = ["idle"];
+    },
+  });
+  await assert.rejects(
+    h.lifecycle.create(h.spec),
+    (error: unknown) => error instanceof HardeningRefusal && error.property === "init-process",
+  );
+  assert.equal(forcedRemoval(h.fake.seen, CREATED_ID), true);
+  assert.equal(h.fake.store.size, 0);
+});
+
+void test("PRD-CTR-02: a CA tmpfs without its options is refused before start, and the container never starts (phase 9.5, F)", async (t) => {
+  const h = await harness(t, {
+    mutate: (body) => {
+      hostConfig(body).Tmpfs = {
+        "/tmp": "nosuid,nodev",
+        "/run": "nosuid,nodev",
+        [HARDENING_PROFILE.supervisorCaDestination]: "nosuid,nodev",
+      };
+    },
+  });
+  await assert.rejects(
+    h.lifecycle.create(h.spec),
+    (error: unknown) => error instanceof HardeningRefusal && error.property === "ca-tmpfs-options",
+  );
+  assert.equal(h.fake.seen.some((request) => request.route === "startContainer"), false, "the container is never started");
+  assert.equal(forcedRemoval(h.fake.seen, CREATED_ID), true);
+});
+
+void test("PRD-CTR-02: a channel mount without noexec is refused before start, and the container never starts (phase 9.5, F)", async (t) => {
+  const h = await harness(t, {
+    mutate: (body) => {
+      for (const mount of mountsOf(body)) {
+        if (mount.Destination === HARDENING_PROFILE.channelDestination) {
+          mount.Options = ["rbind", "rw", "nosuid", "nodev"];
+        }
+      }
+    },
+  });
+  await assert.rejects(
+    h.lifecycle.create(h.spec),
+    (error: unknown) => error instanceof HardeningRefusal && error.property === "channel-mount-options",
+  );
+  assert.equal(h.fake.seen.some((request) => request.route === "startContainer"), false, "the container is never started");
 });
 
 void test("PRD-CTR-01 (C1): a workspace mount without noexec is refused after create, and the container is removed", async (t) => {

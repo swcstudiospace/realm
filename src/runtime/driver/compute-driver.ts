@@ -8,14 +8,15 @@
 // CreateSandbox requires it. ValidateSandboxCreate accepts a create without it, because the gateway validates a create before
 // it mints the material. Launch material that is present must decode for this driver's gateway on both RPCs (launch.ts). Any
 // mismatch is refused with SCHEMA_INVALID, logged with the RPC and the check that refused (refusal.ts), and no libpod call is made.
-// An empty argv is accepted and creates an idle sandbox.
+// The sandbox runtime is PID 1 whatever the argv. spec.command is checked for empty arguments and is otherwise not forwarded, as at HEAD.
 //
 // A create that passes prepares the directories the lifecycle requires: the workspace, by the same rule EnsureWorkspace uses, and a
 // new state directory. It stores the launch material in a new secret directory outside the state root and the workspace, and it
 // makes the channel: a TLS identity for the runtime, and the runtime's bootstrap, descriptor and auth bundle, built and checked
 // for agreement before any libpod call. The lifecycle (DriverLifecycle) then creates the container, and the bootstrap and the
-// rest are written before it starts. Once the container is verified, the driver starts the sandbox runtime inside it, waits for its
-// control socket, and starts the host supervisor. Any failure removes what this call made, and rethrows the original error.
+// rest are written before it starts. The sandbox runtime is the container's main process, so once the container is verified the
+// driver waits for the runtime's listener, removes the runtime's server key, and starts the host supervisor. Any failure removes
+// what this call made, and rethrows the original error.
 //
 // The gateway names a sandbox without the realm prefix, and the container runs under that name with the prefix added.
 // A name that already has the prefix is unchanged. The driver keeps a registry keyed by the gateway's name, holding the
@@ -48,13 +49,14 @@ import {
   REALM_SANDBOX_NAME_PREFIX,
 } from "../openshell.js";
 import { DRIVER_ADMISSION_ACKNOWLEDGEMENT } from "./admission.js";
-import { channelPathsOf, generateRuntimeTls, makeChannelDirectory, writeRuntimeFiles } from "./channel.js";
+import { assertSocketPathsFit, channelPathsOf, generateRuntimeTls, makeChannelDirectory, removeKeyFile, writeRuntimeFiles, type ListenerTrust } from "./channel.js";
 import { driverFailureOf, DriverStatusError, driverNotFound, driverUnimplemented, toServerError } from "./grpc-status.js";
 import type { DriverLifecycle } from "./lifecycle.js";
 import { decodeLaunchAuthentication, type LaunchAuthentication } from "./isolation/launch.js";
 import { refusal, refusalScope, type RefusalLog, type RefusalScope } from "./refusal.js";
 import {
   assertRuntimeFilesAgree,
+  CONTAINER_CONTROL_SOCKET,
   buildRuntimeChannel,
   runtimeServerName,
   supervisorArguments,
@@ -128,17 +130,18 @@ export interface ComputeDriverConfig {
   readonly refusalLog?: RefusalLog;
 }
 
-// The process-level effects the driver needs and the tests replace: starting the runtime inside a container, and starting
-// a host supervisor. The entry point wires the real ones.
+// The process-level effects the driver needs and the tests replace: confirming the sandbox runtime's listener, and starting a host
+// supervisor. The entry point wires the real ones.
 export interface RuntimeHost {
-  // Starts the sandbox runtime in the container and waits until its control socket exists.
-  startRuntime(containerId: string, controlSocket: string): Promise<void>;
+  // Resolves once a TLS handshake with the runtime's listener completes on its control socket, trusting the given CA and server name
+  // (channel.ts awaitRuntimeListener).
+  awaitListener(controlSocket: string, trust: ListenerTrust): Promise<void>;
   // Starts a host supervisor process.
   spawnSupervisor(options: SupervisorSpawn): Promise<SupervisorHandle>;
 }
 
 export interface ComputeDriverDeps {
-  readonly lifecycle: Pick<DriverLifecycle, "create" | "delete">;
+  readonly lifecycle: Pick<DriverLifecycle, "create" | "delete" | "stop">;
   readonly libpod: Pick<LibpodClient, "inspectContainer" | "listContainersByLabel">;
   readonly runtime: RuntimeHost;
 }
@@ -217,6 +220,8 @@ interface SandboxRecord {
   readonly containerName: string;
   // The identity the runtime reported when the container was created: the container id.
   readonly runtimeIdentity: string;
+  // Set when the sandbox's host supervisor exits. The sandbox then reports failed, whether or not its container stop worked.
+  supervisorExited: boolean;
 }
 
 // A validated create: the gateway's sandbox name and id, its workspace, the spec the lifecycle takes, and the launch material
@@ -347,12 +352,13 @@ export class ComputeDriver {
     this.prepareWorkspace(plan.workspace);
     mkdirOrRefuse(plan.spec.stateDir);
     const channel = channelPathsOf(secretDirOf(this.config.secretRoot, sandboxName));
+    const serverName = runtimeServerName(authentication.supervisor.sessionId);
+    let trustAnchorPem: string;
     let files: RuntimeChannel;
     try {
       writeLaunchMaterial(this.config.secretRoot, sandboxName, launch);
       makeChannelDirectory(channel);
-      const serverName = runtimeServerName(authentication.supervisor.sessionId);
-      const trustAnchorPem = await generateRuntimeTls(channel, serverName);
+      trustAnchorPem = await generateRuntimeTls(channel, serverName);
       files = buildRuntimeChannel({
         sandboxId: plan.sandboxId,
         containerName: sandboxName,
@@ -367,7 +373,7 @@ export class ComputeDriver {
       });
       assertRuntimeFilesAgree(files.bootstrap, files.descriptor);
     } catch (error: unknown) {
-      noteCleanupFailure(error, this.discardPrepared(plan));
+      addCleanupNote(error, this.discardPrepared(plan));
       throw error;
     }
     let containerId: string;
@@ -377,11 +383,14 @@ export class ComputeDriver {
         return Promise.resolve();
       });
     } catch (error: unknown) {
-      noteCleanupFailure(error, this.discardPrepared(plan));
+      addCleanupNote(error, this.discardPrepared(plan));
       throw error;
     }
     try {
-      await this.deps.runtime.startRuntime(containerId, channel.controlSocket);
+      await this.deps.runtime.awaitListener(channel.controlSocket, { caPem: trustAnchorPem, serverName });
+      // The TLS handshake completed, so the runtime has loaded its key, and nothing after this reads server.key from the channel.
+      // The driver removes the key now; a key that cannot be removed refuses the create.
+      removeKeyFile(channel.privateKey);
       const supervisor = await this.deps.runtime.spawnSupervisor({
         binary: this.config.supervisor.binary,
         args: supervisorArguments({
@@ -399,8 +408,14 @@ export class ComputeDriver {
         }),
       });
       this.supervisors.set(sandboxName, supervisor);
+      void supervisor.exited.then(() => this.onSupervisorExit(sandboxName, supervisor));
+      // A supervisor that exited before Ready refuses the create. Nothing between this check and the registry entry yields, so no
+      // exit can land between them.
+      if (supervisor.hasExited()) {
+        throw makeRealmError("OPENSHELL_START_FAILED");
+      }
     } catch (error: unknown) {
-      noteCleanupFailure(error, await this.discardCreated(plan));
+      addCleanupNote(error, await this.discardCreated(plan));
       throw error;
     }
     this.registry.set(plan.sandboxName, {
@@ -408,6 +423,7 @@ export class ComputeDriver {
       workspace: plan.workspace,
       containerName: sandboxName,
       runtimeIdentity: containerId,
+      supervisorExited: false,
     });
     return { runtime_identity: containerId };
   }
@@ -544,29 +560,59 @@ export class ComputeDriver {
     return false;
   }
 
-  // Ends the host supervisor of a container, if the driver started one. A supervisor already gone is not an error.
+  // Ends the host supervisor of a container, if the driver started one. A supervisor already gone is not an error. The supervisor
+  // leaves the table before it is stopped, and the sandbox is marked failed first: a delete that fails after this cannot report the
+  // sandbox Ready with no supervisor behind it.
   private async stopSupervisor(containerName: string): Promise<void> {
     const supervisor = this.supervisors.get(containerName);
     this.supervisors.delete(containerName);
+    if (supervisor !== undefined) {
+      this.markSupervisorExited(containerName);
+    }
     await supervisor?.stop();
   }
 
-  // Removes what a create made before its container existed: the state directory and the secret entries. Returns true when
-  // every removal succeeded.
-  private discardPrepared(plan: CreatePlan): boolean {
-    const stateRemoved = removeStateDir(plan.spec.stateDir);
-    const materialRemoved = removeLaunchMaterial(this.config.secretRoot, plan.spec.sandboxName);
-    return stateRemoved && materialRemoved;
+  // Marks every registered sandbox that runs under this container as failed, so its snapshot reports Ready False.
+  private markSupervisorExited(containerName: string): void {
+    for (const record of this.registry.values()) {
+      if (record.containerName === containerName) {
+        record.supervisorExited = true;
+      }
+    }
   }
 
-  // Removes what a create made after its container existed: the host supervisor, the container, and the files. Returns true
-  // when every removal succeeded.
-  private async discardCreated(plan: CreatePlan): Promise<boolean> {
-    let stopped = true;
+  // The host supervisor of a sandbox exited. An exit the driver caused is not a failure: the driver has already taken the supervisor
+  // out of the table. Any other exit marks the sandbox failed, which the snapshot reports from now on, and stops its container. The
+  // mark stands even when the stop fails; the container is removed by the sandbox's delete.
+  private async onSupervisorExit(containerName: string, supervisor: SupervisorHandle): Promise<void> {
+    if (this.supervisors.get(containerName) !== supervisor) {
+      return;
+    }
+    this.supervisors.delete(containerName);
+    this.markSupervisorExited(containerName);
+    try {
+      await this.deps.lifecycle.stop(containerName);
+    } catch {
+      // The mark above already reports the sandbox as failed, and no caller can receive this error.
+    }
+  }
+
+  // Removes what a create made before its container existed: the state directory and the secret entries. Returns what was left
+  // in place, as cleanup problems. An empty list means every removal succeeded.
+  private discardPrepared(plan: CreatePlan): string[] {
+    const stateRemoved = removeStateDir(plan.spec.stateDir);
+    const materialRemoved = removeLaunchMaterial(this.config.secretRoot, plan.spec.sandboxName);
+    return stateRemoved && materialRemoved ? [] : [FILES_LEFT_IN_PLACE];
+  }
+
+  // Removes what a create made after its container existed: the host supervisor, the container, and the files. Every removal is
+  // attempted, so one failure does not skip the rest. Returns what was left in place, each named as it is.
+  private async discardCreated(plan: CreatePlan): Promise<string[]> {
+    const problems: string[] = [];
     try {
       await this.stopSupervisor(plan.spec.sandboxName);
     } catch {
-      stopped = false;
+      problems.push(SUPERVISOR_NOT_STOPPED);
     }
     let deleted = true;
     try {
@@ -574,7 +620,25 @@ export class ComputeDriver {
     } catch {
       deleted = false;
     }
-    return stopped && deleted && this.discardPrepared(plan);
+    if (!deleted) {
+      const containerProblem = await this.containerProblem(plan.spec.sandboxName);
+      if (containerProblem !== undefined) {
+        problems.push(containerProblem);
+      }
+    }
+    problems.push(...this.discardPrepared(plan));
+    return problems;
+  }
+
+  // The problem with a container that the lifecycle failed to remove. A lookup that still finds it names it as present; a lookup
+  // that fails names the removal as unconfirmed. Undefined means the container is gone.
+  private async containerProblem(containerName: string): Promise<string | undefined> {
+    try {
+      const inspect = await this.deps.libpod.inspectContainer(containerName);
+      return inspect === null ? undefined : CONTAINER_NOT_REMOVED;
+    } catch {
+      return CONTAINER_UNCONFIRMED;
+    }
   }
 
   private workspaceDir(workspace: string | undefined): string {
@@ -675,12 +739,15 @@ function planCreate(
   if (hasEntries(spec.environment) || hasEntries(template.environment)) {
     throw refusal(scope, "create.environment");
   }
-  // An empty argv is accepted and creates an idle sandbox. An argument that is an empty string is still refused.
+  // The runtime is PID 1 whatever the argv, so an empty argv is not refused. An empty argument is still refused, as at HEAD.
   if ((spec.command ?? []).some((argument) => argument === "")) {
     throw refusal(scope, "create.command");
   }
   const launch = launchMaterialOf(spec.launch_authentication);
   const authentication = launch === undefined ? undefined : decodeLaunchAuthentication(launch, config.gatewayId, scope);
+  // The control socket must fit a unix socket address on the host and in the container. Checked before any write or libpod call.
+  const channel = channelPathsOf(secretDirOf(config.secretRoot, containerName));
+  assertSocketPathsFit([channel.controlSocket, CONTAINER_CONTROL_SOCKET]);
   return {
     sandboxName,
     sandboxId,
@@ -692,7 +759,7 @@ function planCreate(
       image: template.image,
       workspaceDir: join(config.workspaceRoot, workspace),
       stateDir: join(config.sandboxStateRoot, containerName),
-      channelDir: channelPathsOf(secretDirOf(config.secretRoot, containerName)).channelDir,
+      channelDir: channel.channelDir,
     },
   };
 }
@@ -762,9 +829,11 @@ function structIsEmpty(value: unknown): boolean {
   return fields === null || fields === undefined || (typeof fields === "object" && Object.keys(fields).length === 0);
 }
 
-// The observed state of one sandbox, named by the gateway. Ready is True only while the container is running.
+// The observed state of one sandbox, named by the gateway. Ready is True only while the container is running and its host
+// supervisor has not exited.
 function sandboxOut(name: string, record: SandboxRecord, inspect: LibpodInspect): DriverSandboxOut {
   const state = runStateOf(inspect);
+  const ready = state === "running" && !record.supervisorExited;
   const instance: unknown = inspect["Id"];
   return {
     id: record.id,
@@ -779,8 +848,8 @@ function sandboxOut(name: string, record: SandboxRecord, inspect: LibpodInspect)
       conditions: [
         {
           type: "Ready",
-          status: state === "running" ? "True" : "False",
-          reason: state,
+          status: ready ? "True" : "False",
+          reason: record.supervisorExited ? "supervisor-exited" : state,
           message: "",
         },
       ],
@@ -852,10 +921,17 @@ function removeLaunchMaterial(secretRoot: string, sandboxName: string): boolean 
   }
 }
 
-// Adds the cleanup note to a refusal when a removal failed. Only a RealmError carries a message the driver owns.
-function noteCleanupFailure(error: unknown, cleaned: boolean): void {
-  if (!cleaned && error instanceof RealmError) {
-    error.message = `${error.message} Cleanup failed: the sandbox state directory or launch material was left in place.`;
+// The cleanup problems a failed create reports. Each names only what is true of the removal that failed.
+const SUPERVISOR_NOT_STOPPED = "The host supervisor did not stop.";
+const CONTAINER_NOT_REMOVED = "The container was not removed.";
+const CONTAINER_UNCONFIRMED = "The container's removal could not be confirmed.";
+const FILES_LEFT_IN_PLACE = "The sandbox state directory or launch material was left in place.";
+
+// Adds the cleanup problems to a refusal's message. Only a RealmError carries a message the driver owns. A refusal with no
+// problems is left as it is.
+function addCleanupNote(error: unknown, problems: readonly string[]): void {
+  if (problems.length > 0 && error instanceof RealmError) {
+    error.message = `${error.message} Cleanup failed: ${problems.join(" ")}`;
   }
 }
 

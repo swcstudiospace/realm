@@ -18,7 +18,11 @@ export interface SupervisorSpawn {
 }
 
 // A started supervisor. stop ends it: SIGTERM, then SIGKILL after a bounded wait. Stopping an exited supervisor does nothing.
+// exited resolves when the process exits, however it exits, and hasExited reports whether it already has. The driver uses both to
+// refuse a sandbox whose supervisor exits before Ready, and to report a failed sandbox when it exits after.
 export interface SupervisorHandle {
+  readonly exited: Promise<void>;
+  hasExited(): boolean;
   stop(): Promise<void>;
 }
 
@@ -32,8 +36,10 @@ export function spawnSupervisor(options: SupervisorSpawn): Promise<SupervisorHan
       shell: false,
       windowsHide: true,
     });
+    let exitedNow = false;
     const exited = new Promise<void>((resolveExit) => {
       child.once("exit", () => {
+        exitedNow = true;
         resolveExit();
       });
     });
@@ -42,6 +48,8 @@ export function spawnSupervisor(options: SupervisorSpawn): Promise<SupervisorHan
     });
     child.once("spawn", () => {
       resolve({
+        exited,
+        hasExited: () => exitedNow,
         stop: async () => {
           if (child.exitCode !== null || child.signalCode !== null) {
             return;

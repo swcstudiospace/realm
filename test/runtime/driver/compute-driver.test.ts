@@ -38,6 +38,7 @@ function refusingLifecycle(error: RealmError, stateDirSeen: boolean[]) {
       return Promise.reject(error);
     },
     delete: () => Promise.resolve(),
+    stop: () => Promise.resolve(),
   };
 }
 
@@ -107,18 +108,16 @@ for (const [label, change] of REFUSALS) {
   });
 }
 
-void test("PRD-DRV-02: a conforming request is accepted, and only its exact spec reaches the lifecycle, then the runtime starts in its container", async () => {
+void test("PRD-DRV-02: a conforming request is accepted, and only its exact spec reaches the lifecycle, then the runtime's listener is confirmed", async () => {
   const { driver, lifecycle, runtime, config } = harness();
   assert.deepEqual(driver.validateSandboxCreate(validSandbox()), {});
   const created = await driver.createSandbox(validSandbox());
   assert.equal(created.runtime_identity, "id-realm-session-1");
   assert.deepEqual(lifecycle.creates, [specOf(config, "realm-session-1")]);
-  assert.deepEqual(runtime.starts, [
-    {
-      containerId: "id-realm-session-1",
-      controlSocket: join(config.secretRoot, "realm-session-1", "channel", "control.sock"),
-    },
-  ]);
+  assert.deepEqual(
+    runtime.confirmations.map((confirmation) => confirmation.controlSocket),
+    [join(config.secretRoot, "realm-session-1", "channel", "control.sock")],
+  );
   assert.equal(runtime.supervisors.length, 1);
 });
 
@@ -135,11 +134,43 @@ void test("PRD-DRV-02: a name that already has the realm prefix is unchanged, an
   assert.deepEqual(lifecycle.creates, [specOf(config, "realm-agent-2")]);
 });
 
-void test("PRD-DRV-02: a name whose prefixed form is exactly 128 characters is accepted", async () => {
-  const { driver, lifecycle } = harness();
+void test("PRD-DRV-02: a prefixed name whose control socket path exceeds 107 bytes is refused with SCHEMA_INVALID before any write or libpod call", async () => {
+  const { driver, lifecycle, config, libpod } = harness();
   const name = "a".repeat(122);
-  await driver.createSandbox(validSandbox({ name }));
+  const sandbox = validSandbox({ name });
+  assert.throws(() => driver.validateSandboxCreate(sandbox), expectCode("SCHEMA_INVALID"));
+  await assert.rejects(driver.createSandbox(sandbox), expectCode("SCHEMA_INVALID"));
+  assert.equal(lifecycle.creates.length, 0);
+  assert.equal(libpod.inspectCalls, 0);
+  assert.equal(lstatOrUndefined(join(config.sandboxStateRoot, `realm-${name}`)), undefined);
+  assert.equal(lstatOrUndefined(join(config.secretRoot, `realm-${name}`)), undefined);
+});
+
+void test("PRD-DRV-02: the longest prefixed name whose host and container socket paths both fit 107 bytes is accepted", async () => {
+  const { driver, lifecycle, config, libpod } = harness();
+  // The host control socket is <secretRoot>/<prefixed name>/channel/control.sock. Each name byte adds one byte to that path, so the
+  // longest name that fits is the last length whose path is still 107 bytes or less; one more byte is over the limit.
+  const hostSocketBytes = (length: number): number =>
+    Buffer.byteLength(join(config.secretRoot, `realm-${"a".repeat(length)}`, "channel", "control.sock"), "utf8");
+  let length = 0;
+  while (hostSocketBytes(length + 1) <= 107) {
+    length += 1;
+  }
+  assert.ok(length > 0, "the secret root leaves room for a name");
+  assert.equal(hostSocketBytes(length), 107, "the longest fitting name fills the 107-byte limit exactly");
+  assert.ok(hostSocketBytes(length + 1) > 107, "one more byte is over the limit");
+  const name = "a".repeat(length);
+  const created = await driver.createSandbox(validSandbox({ name }));
+  assert.equal(created.runtime_identity, `id-realm-${name}`);
   assert.equal(lifecycle.creates[0]?.sandboxName, `realm-${name}`);
+  const longer = `${name}a`;
+  const refused = validSandbox({ name: longer });
+  assert.throws(() => driver.validateSandboxCreate(refused), expectCode("SCHEMA_INVALID"));
+  await assert.rejects(driver.createSandbox(refused), expectCode("SCHEMA_INVALID"));
+  assert.equal(lifecycle.creates.length, 1, "only the accepted create reached the lifecycle");
+  assert.equal(libpod.inspectCalls, 0, "createSandbox makes no libpod inspect call, so the refused create made no libpod call");
+  assert.equal(lstatOrUndefined(join(config.secretRoot, `realm-${longer}`)), undefined);
+  assert.equal(lstatOrUndefined(join(config.sandboxStateRoot, `realm-${longer}`)), undefined);
 });
 
 void test("PRD-DRV-02: a name that fails the container-name rule after prefixing is refused with no libpod call and no directory", async () => {
@@ -156,7 +187,7 @@ void test("PRD-DRV-02: a name that fails the container-name rule after prefixing
   }
 });
 
-void test("PRD-DRV-02: an empty argv is accepted, and the lifecycle receives the spec of an idle sandbox", async () => {
+void test("PRD-DRV-02: an empty argv is accepted, and the lifecycle receives the spec with no command forwarded", async () => {
   const { driver, lifecycle, config } = harness();
   const base = validSandbox();
   const sandbox: DriverSandboxMessage = { ...base, spec: { ...base.spec, command: [] } };
@@ -178,6 +209,7 @@ void test("PRD-DRV-02: a create with absent directories makes the workspace and 
       return Promise.resolve("id-realm-session-1");
     },
     delete: () => Promise.resolve(),
+    stop: () => Promise.resolve(),
   };
   const driver = new ComputeDriver(config, { lifecycle, libpod: new FakeLibpod(), runtime: new FakeRuntime() });
   await driver.createSandbox(validSandbox());
