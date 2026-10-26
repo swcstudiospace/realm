@@ -17,7 +17,7 @@ import {
   type ComputeDriverConfig,
 } from "./compute-driver.js";
 import { DriverLifecycle } from "./lifecycle.js";
-import { GATEWAY_ID_PATTERN } from "../gateway-config.js";
+import { GATEWAY_ID_PATTERN, isIsolationBackendName } from "../gateway-config.js";
 import { startIsolationBackend } from "./isolation/backend.js";
 import { BoundaryRegistry } from "./isolation/boundary.js";
 import { startSocketServer, type SocketServer } from "./server.js";
@@ -30,6 +30,7 @@ export const DRIVER_ENV = Object.freeze({
   secretRoot: "REALM_DRIVER_SECRET_ROOT",
   workspaceRoot: "REALM_DRIVER_WORKSPACE_ROOT",
   isolationSocket: "REALM_DRIVER_ISOLATION_SOCKET",
+  isolationBackendName: "REALM_DRIVER_ISOLATION_BACKEND_NAME",
   gatewayId: "REALM_DRIVER_GATEWAY_ID",
 });
 
@@ -66,12 +67,16 @@ export function loadDriverProcessConfig(env: Environment, implementationVersion:
   const secretRoot = requiredAbsolute(env, DRIVER_ENV.secretRoot);
   const workspaceRoot = requiredAbsolute(env, DRIVER_ENV.workspaceRoot);
   const isolationSocketPath = requiredAbsolute(env, DRIVER_ENV.isolationSocket);
+  // The one isolation backend this driver serves, by the name the gateway selects it with. It is required and refused with
+  // SCHEMA_INVALID without echoing the value when it is missing or invalid.
+  const isolationBackendName = requiredValue(env, DRIVER_ENV.isolationBackendName);
   const gatewayId = requiredValue(env, DRIVER_ENV.gatewayId);
   const libpodSocketPath = podmanSocketPath(env);
   if (
     !DRIVER_NAME_PATTERN.test(name) ||
     !IMAGE_PATTERN.test(sandboxImage) ||
     !GATEWAY_ID_PATTERN.test(gatewayId) ||
+    !isIsolationBackendName(isolationBackendName) ||
     libpodSocketPath === undefined
   ) {
     throw makeRealmError("SCHEMA_INVALID");
@@ -88,6 +93,7 @@ export function loadDriverProcessConfig(env: Environment, implementationVersion:
       workspaceRoot,
       implementationVersion,
       gatewayId,
+      isolationBackendName,
     },
   };
 }

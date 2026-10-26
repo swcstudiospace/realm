@@ -261,21 +261,81 @@ void test("PRD-GW-03: GetCapabilities returns the same pinned admission acknowle
   assert.equal(first["default_image"], SANDBOX_IMAGE);
 });
 
-void test("PRD-DRV-01: GetCapabilities advertises the contract but not the isolation backend (phase 9.5)", () => {
+void test("PRD-DRV-01: GetCapabilities advertises the contract, launch authentication and the isolation backend, and no other capability", () => {
   const { driver } = harness();
   const extension = driver.getCapabilities({})["extension"] as { supported_capabilities: string[] };
   assert.deepEqual(extension.supported_capabilities, [
     "openshell.compute.contract",
     "openshell.compute.launch-authentication",
+    "openshell.compute.isolation-backend",
   ]);
 });
 
 void test("PRD-DRV-01: GetCapabilities refuses a gateway that requires a capability the driver lacks", () => {
   const { driver } = harness();
   assert.throws(
-    () => driver.getCapabilities({ gateway: { required_capabilities: ["openshell.compute.isolation-backend"] } }),
+    () => driver.getCapabilities({ gateway: { required_capabilities: ["openshell.compute.sandbox-authentication"] } }),
     expectCode("SCHEMA_INVALID"),
   );
+});
+
+void test("PRD-DRV-01: GetCapabilities accepts a gateway that requires the isolation backend capability", () => {
+  const { driver } = harness();
+  assert.doesNotThrow(() =>
+    driver.getCapabilities({ gateway: { required_capabilities: ["openshell.compute.isolation-backend"] } }),
+  );
+});
+
+void test("PRD-DRV-02: a create that selects the configured isolation backend is accepted, and the name is recorded", async () => {
+  const { driver, lifecycle } = harness();
+  const sandbox = validSandbox({
+    spec: {
+      ...validSandbox().spec,
+      isolation_backend: { name: "realm", endpoint: "unix_socket_path", unix_socket_path: "/run/realm/isolation.sock" },
+    },
+  });
+  await driver.createSandbox(sandbox);
+  assert.equal(lifecycle.creates.length, 1);
+  assert.equal(driver.isolationBackendOf("sandbox-1"), "realm");
+});
+
+void test("PRD-DRV-02: a create that selects no isolation backend records none", async () => {
+  const { driver } = harness();
+  await driver.createSandbox(validSandbox());
+  assert.equal(driver.isolationBackendOf("sandbox-1"), undefined);
+});
+
+for (const name of ["external", "openshell-sandbox", "realm-other", "Realm", ""]) {
+  void test(`PRD-DRV-02: a create that selects another isolation backend (name ${JSON.stringify(name)}) is refused before any write or libpod call`, async () => {
+    const { driver, lifecycle, libpod, config } = harness();
+    const sandbox = validSandbox({
+      spec: {
+        ...validSandbox().spec,
+        isolation_backend: { name, endpoint: "unix_socket_path", unix_socket_path: "/run/x.sock" },
+      },
+    });
+    assert.throws(() => driver.validateSandboxCreate(sandbox), expectCode("SCHEMA_INVALID"));
+    await assert.rejects(driver.createSandbox(sandbox), expectCode("SCHEMA_INVALID"));
+    assert.equal(lifecycle.creates.length, 0);
+    assert.equal(libpod.containers.size, 0);
+    assert.equal(existsSync(join(config.sandboxStateRoot, "realm-session-1")), false);
+    assert.equal(existsSync(join(config.secretRoot, "realm-session-1")), false);
+    assert.equal(existsSync(join(config.workspaceRoot, "workspace-a")), false);
+  });
+}
+
+void test("PRD-DRV-02: a create that selects the configured name over a non-unix endpoint is refused", async () => {
+  const { driver, lifecycle, libpod } = harness();
+  const sandbox = validSandbox({
+    spec: {
+      ...validSandbox().spec,
+      isolation_backend: { name: "realm", endpoint: "tcp", tcp: { authority: "realm.invalid", addresses: ["10.0.0.1:443"] } },
+    },
+  });
+  assert.throws(() => driver.validateSandboxCreate(sandbox), expectCode("SCHEMA_INVALID"));
+  await assert.rejects(driver.createSandbox(sandbox), expectCode("SCHEMA_INVALID"));
+  assert.equal(lifecycle.creates.length, 0);
+  assert.equal(libpod.containers.size, 0);
 });
 
 void test("PRD-DRV-03: StopSandbox and StartSandbox refuse with the transition code and read no state", async () => {

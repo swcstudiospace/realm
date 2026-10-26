@@ -2,7 +2,8 @@
 //
 // Create is the only path to a container. Before it reaches the lifecycle, the request is checked against the realm
 // profile: the digest-pinned image, the portable CPU and memory limits, no GPU, no platform or driver config, no
-// environment, no user-namespace request, no isolation backend, and a sandbox name that passes the container-name rule
+// environment, no user-namespace request, an isolation backend selection only when it names the configured backend over a
+// unix socket (see isolationSelectionOf), and a sandbox name that passes the container-name rule
 // once the realm prefix is added. The gateway's launch material is required and must decode for this driver's gateway
 // (launch.ts). Any mismatch is refused with SCHEMA_INVALID, and no libpod call is made. An empty argv is accepted and creates
 // an idle sandbox; the command is not forwarded before phase 9.5. A create that passes prepares the directories the lifecycle
@@ -13,10 +14,11 @@
 //
 // The gateway names a sandbox without the realm prefix, and the container runs under that name with the prefix added.
 // A name that already has the prefix is unchanged. The driver keeps a registry keyed by the gateway's name, holding the
-// gateway's sandbox id, its workspace and the container name. CreateSandbox fills it and DeleteSandbox clears it. The
-// startup sweep removes every realm container before the driver accepts requests, so no sandbox survives a restart
-// without a registry entry. Observed state comes from the labelled containers, and every snapshot carries the gateway's
-// name. StopSandbox and StartSandbox refuse with the transition code, which maps to FAILED_PRECONDITION (PD-08).
+// gateway's sandbox id, its workspace, the container name and the isolation backend the create selected, if any. CreateSandbox
+// fills it and DeleteSandbox clears it. The startup sweep removes every realm container before the driver accepts
+// requests, so no sandbox survives a restart without a registry entry. Observed state comes from the labelled
+// containers, and every snapshot carries the gateway's name. StopSandbox and StartSandbox refuse with the
+// transition code, which maps to FAILED_PRECONDITION (PD-08).
 // AuthenticateSandbox is not implemented: the driver does not advertise sandbox authentication. Attach verifies a bearer
 // with the verification keys of the sandbox's own launch material (launchVerifierOf).
 
@@ -54,10 +56,12 @@ import { readLaunchMaterial, removeSandboxSecrets, secretDirExists, writeLaunchM
 export const COMPUTE_DRIVER_SERVICE_NAME = "openshell.compute.v1.ComputeDriver";
 const PROTO_FILE = "compute_driver.proto";
 const PROTO_DIRECTORY = join("src", "runtime", "driver", "proto");
-// The extension capabilities this driver declares. The isolation backend capability joins them in a later wave.
+// The extension capabilities this driver declares. The isolation backend capability is advertised because this driver serves the
+// one backend its configuration names.
 const SUPPORTED_CAPABILITIES: readonly string[] = Object.freeze([
   "openshell.compute.contract",
   "openshell.compute.launch-authentication",
+  "openshell.compute.isolation-backend",
 ]);
 const WORKSPACE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const CPU_QUANTITY_PATTERN = /^([0-9]+(?:\.[0-9]+)?)(m)?$/;
@@ -100,6 +104,9 @@ export interface ComputeDriverConfig {
   readonly implementationVersion: string;
   // The gateway this driver serves. Launch material issued for another gateway is refused, and bearers are checked against it.
   readonly gatewayId: string;
+  // The one isolation backend this driver serves, by the name the gateway selects it with. A create that selects any other name
+  // is refused.
+  readonly isolationBackendName: string;
 }
 
 export interface ComputeDriverDeps {
@@ -182,16 +189,19 @@ interface SandboxRecord {
   readonly containerName: string;
   // The identity the runtime reported when the container was created. It is the resource a boundary binds to.
   readonly runtimeIdentity: string;
+  // The isolation backend the create selected, or undefined when it selected none.
+  readonly isolationBackend: string | undefined;
 }
 
 // A validated create: the gateway's sandbox name and id, its workspace, the spec the lifecycle takes, and the launch material
-// the driver stores for the sandbox.
+// the driver stores for the sandbox, and the isolation backend the create selected.
 interface CreatePlan {
   readonly sandboxName: string;
   readonly sandboxId: string;
   readonly workspace: string;
   readonly spec: ContainerSpec;
   readonly launch: Uint8Array;
+  readonly isolationBackend: string | undefined;
 }
 
 // The service's method map, loaded from the vendored protos with the pinned loader. The protos are read from disk at
@@ -322,6 +332,7 @@ export class ComputeDriver {
       workspace: plan.workspace,
       containerName: plan.spec.sandboxName,
       runtimeIdentity: containerId,
+      isolationBackend: plan.isolationBackend,
     });
     return { runtime_identity: containerId };
   }
@@ -344,6 +355,14 @@ export class ComputeDriver {
       return undefined;
     }
     return { sandboxName: name, resourceId: record.runtimeIdentity };
+  }
+
+  // The isolation backend a sandbox's create selected, by the gateway's sandbox id. Undefined when the create selected none or the
+  // driver holds no such sandbox. The isolation backend reports the binding through this.
+  isolationBackendOf(sandboxId: string): string | undefined {
+    const name = this.nameOf({ sandbox_id: sandboxId });
+    const record = name === undefined ? undefined : this.registry.get(name);
+    return record?.isolationBackend;
   }
 
   // The verifier of one sandbox's supervisor bearers, built from the launch material the driver stored at create. Undefined when
@@ -525,6 +544,26 @@ function containerNameOf(sandboxName: string): string | undefined {
   return CONTAINER_ID_PATTERN.test(name) ? name : undefined;
 }
 
+// The endpoint field proto-loader sets for an isolation backend registration (oneofs: true delivers the set field's name).
+interface IsolationBackendSelectionMessage {
+  readonly name?: string;
+  readonly endpoint?: string;
+}
+
+// The isolation backend a create selects. An unset selection selects none. A selection is accepted only when its name is the
+// configured backend and its endpoint is a unix socket, the one transport the driver's isolation socket serves. Any other selection
+// is refused with SCHEMA_INVALID before any write or libpod call. The selected name is returned.
+function isolationSelectionOf(selection: unknown, configuredName: string): string | undefined {
+  if (selection === undefined || selection === null) {
+    return undefined;
+  }
+  const { name, endpoint } = selection as IsolationBackendSelectionMessage;
+  if (name !== configuredName || endpoint !== "unix_socket_path") {
+    throw makeRealmError("SCHEMA_INVALID");
+  }
+  return name;
+}
+
 // Checks a create request against the realm profile and returns the lifecycle spec and the launch material. Every refusal is
 // SCHEMA_INVALID, and no libpod call is made. The launch material is required: the driver advertises
 // openshell.compute.launch-authentication, so every launch carries the gateway's bundle, and Attach can verify a bearer only
@@ -558,17 +597,15 @@ function planCreate(sandbox: DriverSandboxMessage | null | undefined, config: Co
   }
   checkResources(template.resources);
   // The container is built from the realm profile alone. Caller-supplied platform or driver config could reach the
-  // network, mounts or capabilities, so it is refused. So are environment, a user-namespace request, and an isolation
-  // backend, which this driver does not offer before phase 9.5.
+  // network, mounts or capabilities, so it is refused. So are environment and a user-namespace request. An isolation backend
+  // selection is accepted only when it names the configured backend (isolationSelectionOf).
   if (!structIsEmpty(template.platform_config) || !structIsEmpty(template.driver_config)) {
     throw makeRealmError("SCHEMA_INVALID");
   }
   if (template.user_namespaces === true) {
     throw makeRealmError("SCHEMA_INVALID");
   }
-  if (spec.isolation_backend !== undefined && spec.isolation_backend !== null) {
-    throw makeRealmError("SCHEMA_INVALID");
-  }
+  const isolationBackend = isolationSelectionOf(spec.isolation_backend, config.isolationBackendName);
   if (hasEntries(spec.environment) || hasEntries(template.environment)) {
     throw makeRealmError("SCHEMA_INVALID");
   }
@@ -586,6 +623,7 @@ function planCreate(sandbox: DriverSandboxMessage | null | undefined, config: Co
     sandboxId,
     workspace,
     launch,
+    isolationBackend,
     spec: {
       sandboxName: containerName,
       image: template.image,

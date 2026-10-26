@@ -87,6 +87,7 @@ export class FakeLifecycle implements Pick<DriverLifecycle, "create" | "delete">
 }
 
 export const IMPLEMENTATION_VERSION = "0.1.2";
+export const ISOLATION_BACKEND_NAME = "realm";
 
 // A driver config with fresh temporary roots. The state and workspace roots exist, so a create or a workspace test starts from a
 // real root. The secret root is not created here: the secret store creates it at 0700 on the first write.
@@ -100,6 +101,7 @@ export function driverConfig(overrides: Partial<ComputeDriverConfig> = {}): Comp
     workspaceRoot: join(base, "workspaces"),
     implementationVersion: IMPLEMENTATION_VERSION,
     gatewayId: GATEWAY_ID,
+    isolationBackendName: ISOLATION_BACKEND_NAME,
     ...overrides,
   };
   mkdirSync(config.sandboxStateRoot, { recursive: true });

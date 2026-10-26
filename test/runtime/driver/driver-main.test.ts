@@ -23,6 +23,7 @@ const COMPLETE_ENV: Readonly<Record<string, string>> = {
   [DRIVER_ENV.secretRoot]: "/var/lib/realm/secrets",
   [DRIVER_ENV.workspaceRoot]: "/var/lib/realm/workspaces",
   [DRIVER_ENV.isolationSocket]: "/run/realm/isolation.sock",
+  [DRIVER_ENV.isolationBackendName]: "realm",
   [DRIVER_ENV.gatewayId]: GATEWAY_ID,
   XDG_RUNTIME_DIR: "/run/user/1001",
 };
@@ -44,6 +45,7 @@ void test("PD-05: a complete environment yields the sockets, the libpod socket, 
     workspaceRoot: "/var/lib/realm/workspaces",
     implementationVersion: IMPLEMENTATION_VERSION,
     gatewayId: GATEWAY_ID,
+    isolationBackendName: "realm",
   });
 });
 
@@ -110,6 +112,32 @@ void test("a refusal names no configured value", () => {
     assert.ok(error instanceof RealmError);
     assert.ok(!error.message.includes("secret-tag"));
     assert.ok(!error.reason.includes("secret-tag"));
+  }
+});
+
+void test("PRD-DRV-01: an isolation backend name outside the gateway's rule, or the built-in name, refuses at startup", () => {
+  for (const name of ["", "openshell-sandbox", "bad name", "realm/x", "a".repeat(129)]) {
+    const env = { ...COMPLETE_ENV, [DRIVER_ENV.isolationBackendName]: name };
+    assert.throws(() => loadDriverProcessConfig(env, IMPLEMENTATION_VERSION), refusedWithSchemaInvalid());
+  }
+});
+
+void test("PRD-DRV-01: a refused isolation backend name is not echoed in the refusal", () => {
+  const env = { ...COMPLETE_ENV, [DRIVER_ENV.isolationBackendName]: "bad name secret-value" };
+  try {
+    loadDriverProcessConfig(env, IMPLEMENTATION_VERSION);
+    assert.fail("expected a refusal");
+  } catch (error: unknown) {
+    assert.ok(error instanceof RealmError);
+    assert.ok(!error.message.includes("secret-value"));
+    assert.ok(!error.reason.includes("secret-value"));
+  }
+});
+
+void test("PRD-DRV-01: an accepted isolation backend name is carried into the driver config", () => {
+  for (const name of ["realm", "agent.substrate_2"]) {
+    const env = { ...COMPLETE_ENV, [DRIVER_ENV.isolationBackendName]: name };
+    assert.equal(loadDriverProcessConfig(env, IMPLEMENTATION_VERSION).driver.isolationBackendName, name);
   }
 });
 

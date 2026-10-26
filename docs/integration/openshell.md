@@ -148,10 +148,10 @@ The realm compute driver implements `openshell.compute.v1.ComputeDriver` from th
 
 | RPC | Driver behaviour | Refusal or status |
 | --- | --- | --- |
-| `GetCapabilities` | Reports the driver name, the default image, the portable CPU and memory limits, the `openshell.compute.contract` capability, and the pinned admission acknowledgement (`DRIVER_ADMISSION_ACKNOWLEDGEMENT`). Declares no isolation backend. | A gateway that requires an unknown capability: `INVALID_ARGUMENT`. |
+| `GetCapabilities` | Reports the driver name, the default image, the portable CPU and memory limits, the `openshell.compute.contract`, `openshell.compute.launch-authentication` and `openshell.compute.isolation-backend` capabilities, and the pinned admission acknowledgement (`DRIVER_ADMISSION_ACKNOWLEDGEMENT`). Accepts one isolation backend selection: the configured backend (`REALM_DRIVER_ISOLATION_BACKEND_NAME`) over a unix socket. | A gateway that requires an unknown capability: `INVALID_ARGUMENT`. |
 | `AuthenticateSandbox` | Not offered. The driver does not advertise sandbox authentication. Moves to phase 9.5. | `UNIMPLEMENTED` |
 | `ValidateSandboxCreate` | Runs the create checks below. No libpod call. | `INVALID_ARGUMENT` on any refusal. |
-| `CreateSandbox` | Runs the create checks, prepares the directories, then `DriverLifecycle.create`. Records the gateway's sandbox id, workspace and container name under the gateway's name. | `INVALID_ARGUMENT` on refusal, including a state directory already present for the name; `ALREADY_EXISTS` when a container of the name exists and its state directory does not. |
+| `CreateSandbox` | Runs the create checks, prepares the directories, then `DriverLifecycle.create`. Records the gateway's sandbox id, workspace, container name and the isolation backend the create selected, under the gateway's name. | `INVALID_ARGUMENT` on refusal, including a state directory already present for the name; `ALREADY_EXISTS` when a container of the name exists and its state directory does not. |
 | `GetSandbox` | Reads the labelled container and the registry entry, reporting the gateway's name. | `NOT_FOUND` when the driver does not hold the sandbox. |
 | `ListSandboxes` | Lists, under the gateway's name, the sandboxes that have a registry entry and a labelled container. | none |
 | `WatchSandboxes` | Sends every sandbox on connect, then each change, and each removal as a deleted event. Polls until the client cancels. | none |
@@ -163,7 +163,8 @@ The realm compute driver implements `openshell.compute.v1.ComputeDriver` from th
 
 The create checks refuse, before any libpod call, a request whose image is not the configured digest, whose CPU or memory
 request or limit differs from the realm profile (2 CPUs, 1 GiB), that asks for a GPU, that carries a non-empty platform or
-driver config, a user-namespace request, an isolation backend, or an environment, or whose argv holds an empty string.
+driver config, a user-namespace request, an isolation backend selection other than the configured one over a unix socket, or an environment,
+or whose argv holds an empty string.
 An empty argv is accepted: the sandbox is created idle, and the command is not forwarded before phase 9.5.
 
 Sandbox names. The gateway's name is used as given, and the container runs under the `realm-` prefixed name. A name that

@@ -48,6 +48,11 @@ const MAX_PORT = 65535;
 const ISOLATION_BACKEND_NAME_PATTERN = /^[A-Za-z0-9._-]{1,128}$/;
 const RESERVED_ISOLATION_BACKEND_NAME = "openshell-sandbox";
 
+// True when the gateway accepts the name for a delegated isolation backend.
+export function isIsolationBackendName(name: string): boolean {
+  return ISOLATION_BACKEND_NAME_PATTERN.test(name) && name !== RESERVED_ISOLATION_BACKEND_NAME;
+}
+
 function invalid(): RealmError {
   return makeRealmError("SCHEMA_INVALID");
 }
@@ -122,7 +127,7 @@ function checkIsolationBackends(value: unknown): readonly RealmIsolationBackend[
       throw invalid();
     }
     const { name, socketPath } = entry as Record<string, unknown>;
-    if (typeof name !== "string" || !ISOLATION_BACKEND_NAME_PATTERN.test(name) || name === RESERVED_ISOLATION_BACKEND_NAME) {
+    if (typeof name !== "string" || !isIsolationBackendName(name)) {
       throw invalid();
     }
     if (names.has(name)) {
