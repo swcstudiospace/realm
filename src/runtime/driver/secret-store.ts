@@ -36,6 +36,9 @@ export const MAIN_EXIT_MARKER_NAME = "main-exit";
 // The channel directory holds the runtime's bootstrap, certificate, key and control socket. It is bound into the container.
 export const CHANNEL_DIR_NAME = "channel";
 export const BOOTSTRAP_FILE_NAME = "bootstrap.json";
+// The SSH directory holds the supervisor's SSH socket. The host supervisor creates it at 0700. It sits in the secret directory, outside
+// every container mount, and removal deletes it with its contents.
+export const SSH_DIR_NAME = "ssh";
 // The TLS work directory holds the CA key while the runtime's leaf is signed. It is never bound, and it is removed after signing.
 export const TLS_WORK_DIR_NAME = "tls";
 const LAUNCH_STAGING_NAME = "launch.json.tmp";
@@ -51,7 +54,7 @@ const SECRET_FILE_NAMES: readonly string[] = Object.freeze([
   MAIN_EXIT_MARKER_NAME,
 ]);
 // The directories of a sandbox's secret directory that removal deletes with their contents.
-const SECRET_DIR_NAMES: readonly string[] = Object.freeze([CHANNEL_DIR_NAME, TLS_WORK_DIR_NAME]);
+const SECRET_DIR_NAMES: readonly string[] = Object.freeze([CHANNEL_DIR_NAME, TLS_WORK_DIR_NAME, SSH_DIR_NAME]);
 const GROUP_OR_WORLD_BITS = 0o077;
 const PRIVATE_DIR_MODE = 0o700;
 const PRIVATE_FILE_MODE = 0o600;

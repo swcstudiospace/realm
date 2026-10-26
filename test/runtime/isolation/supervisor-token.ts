@@ -24,8 +24,8 @@ export function generateGatewayKey(keyId: string = "gateway-key-1"): GatewayKey 
   return { keyId, publicPem: Buffer.from(publicPem as string, "utf8") };
 }
 
-// The supervisor half of a valid launch body: a session, its generation and rotation, the epoch, and two tokens that expire far
-// in the future. An override replaces one field; an override of undefined removes it.
+// The supervisor half of a valid launch body: a session, its generation and rotation, the epoch, two tokens that expire far in the
+// future, and the SSH host key the gateway sends with the supervisor's SSH socket. An override replaces one field; an override of undefined removes it.
 export function launchSupervisor(overrides: Readonly<Record<string, unknown>> = {}): Record<string, unknown> {
   return {
     session_id: LAUNCH_SESSION_ID,
@@ -36,6 +36,7 @@ export function launchSupervisor(overrides: Readonly<Record<string, unknown>> = 
     gateway_expires_at: FAR_FUTURE_SECONDS,
     sandbox_token: "sandbox-token-1",
     sandbox_expires_at: FAR_FUTURE_SECONDS,
+    ssh_host_private_key: "ssh-host-key-1",
     ...overrides,
   };
 }

@@ -143,12 +143,14 @@ class LaunchDecoder {
         this.refuse("launch.supervisor");
       }
     }
+    const sshHostKey = supervisor.get("ssh_host_private_key");
     return {
       sessionId,
       runtimeGeneration,
       sessionRotation: sessionRotation.toString(),
       authEpoch: authEpoch.toString(),
       bundle: supervisor,
+      hasSshHostPrivateKey: typeof sshHostKey === "string" && sshHostKey.trim() !== "",
     };
   }
 

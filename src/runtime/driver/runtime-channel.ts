@@ -33,6 +33,8 @@ export interface SupervisorIdentity {
   readonly sessionRotation: string;
   readonly authEpoch: string;
   readonly bundle: ReadonlyMap<string, JsonValue>;
+  // True when the launch material carries a non-empty ssh_host_private_key. The key itself stays in the bundle; this flag only lets the spawn refuse.
+  readonly hasSshHostPrivateKey: boolean;
 }
 
 export interface RuntimeVerificationKey {
@@ -142,6 +144,7 @@ export function supervisorArguments(options: {
   readonly sandboxName: string;
   readonly gatewayEndpoint: string;
   readonly secretDir: string;
+  readonly sshSocketPath: string;
 }): readonly string[] {
   return [
     "--role",
@@ -152,6 +155,8 @@ export function supervisorArguments(options: {
     options.sandboxName,
     "--openshell-endpoint",
     options.gatewayEndpoint,
+    "--ssh-socket-path",
+    options.sshSocketPath,
     "--backend-descriptor-file",
     `${options.secretDir}/${DESCRIPTOR_FILE_NAME}`,
     "--auth-bundle-file",

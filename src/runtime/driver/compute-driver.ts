@@ -402,6 +402,11 @@ export class ComputeDriver {
       // The TLS handshake completed, so the runtime has loaded its key, and nothing after this reads server.key from the channel.
       // The driver removes the key now; a key that cannot be removed refuses the create.
       removeKeyFile(channel.privateKey);
+      // The supervisor binds its SSH socket only with the SSH host key. Without it the supervisor fails at startup, so the spawn is
+      // refused here, before any supervisor starts. The refusal names no key material.
+      if (!authentication.supervisor.hasSshHostPrivateKey) {
+        throw makeRealmError("SCHEMA_INVALID");
+      }
       const supervisor = await this.deps.runtime.spawnSupervisor({
         binary: this.config.supervisor.binary,
         args: supervisorArguments({
@@ -409,6 +414,7 @@ export class ComputeDriver {
           sandboxName: plan.sandboxName,
           gatewayEndpoint: this.config.supervisor.gatewayEndpoint,
           secretDir: channel.secretDir,
+          sshSocketPath: channel.sshSocket,
         }),
         env: supervisorEnvironment({
           sandboxId: plan.sandboxId,
@@ -767,10 +773,11 @@ function planCreate(
   }
   const launch = launchMaterialOf(spec.launch_authentication);
   const authentication = launch === undefined ? undefined : decodeLaunchAuthentication(launch, config.gatewayId, scope);
-  // The control socket must fit a unix socket address on the host and in the container. Checked before any write or libpod call.
+  // The control socket and the SSH socket must fit a unix socket address on the host, and the control socket in the container.
+  // Checked before any write or libpod call.
   const channel = atStage(scope, "create.identity", () => channelPathsOf(secretDirOf(config.secretRoot, containerName)));
   atStage(scope, "create.socket_path", () => {
-    assertSocketPathsFit([channel.controlSocket, CONTAINER_CONTROL_SOCKET]);
+    assertSocketPathsFit([channel.controlSocket, channel.sshSocket, CONTAINER_CONTROL_SOCKET]);
   });
   return {
     sandboxName,

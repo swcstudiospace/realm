@@ -33,6 +33,7 @@ import {
   CHANNEL_DIR_NAME,
   DESCRIPTOR_FILE_NAME,
   MAIN_EXIT_MARKER_NAME,
+  SSH_DIR_NAME,
   TLS_WORK_DIR_NAME,
 } from "./secret-store.js";
 import { serializeJson, type RuntimeChannel } from "./runtime-channel.js";
@@ -53,6 +54,8 @@ const LEAF_COMMON_NAME = "realm-sandbox-runtime";
 const LEAF_EXTENSIONS = "[ext]\nsubjectAltName = DNS:%SERVER_NAME%\nbasicConstraints = critical,CA:FALSE\nkeyUsage = critical,digitalSignature\nextendedKeyUsage = serverAuth\n";
 // The longest unix socket path a socket address holds: sun_path is 108 bytes with the terminating NUL. A longer path cannot bind.
 export const UNIX_SOCKET_PATH_MAX_BYTES = 107;
+// The supervisor's SSH socket file name, inside the sandbox's SSH directory.
+const SSH_SOCKET_NAME = "ssh.sock";
 
 // The host paths of one sandbox's channel. Every path sits under the sandbox's secret directory.
 export interface ChannelPaths {
@@ -63,6 +66,8 @@ export interface ChannelPaths {
   readonly certificate: string;
   readonly privateKey: string;
   readonly controlSocket: string;
+  // The supervisor's SSH socket. It sits in the secret directory's ssh/ subdirectory, never under the channel directory or a tmpfs.
+  readonly sshSocket: string;
   readonly descriptor: string;
   readonly auth: string;
   readonly mainExitMarker: string;
@@ -78,6 +83,7 @@ export function channelPathsOf(secretDir: string): ChannelPaths {
     certificate: join(channelDir, "server.crt"),
     privateKey: join(channelDir, "server.key"),
     controlSocket: join(channelDir, "control.sock"),
+    sshSocket: join(secretDir, SSH_DIR_NAME, SSH_SOCKET_NAME),
     descriptor: join(secretDir, DESCRIPTOR_FILE_NAME),
     auth: join(secretDir, AUTH_FILE_NAME),
     mainExitMarker: join(secretDir, MAIN_EXIT_MARKER_NAME),
@@ -149,8 +155,8 @@ export function writeRuntimeFiles(paths: ChannelPaths, channel: RuntimeChannel):
   writePrivateFile(paths.auth, `${channel.auth}\n`);
 }
 
-// Refuses a control socket path, on the host or in the container, that a unix socket address cannot hold. Nothing is written
-// before this check, and the error names no path.
+// Refuses a socket path, on the host or in the container, that a unix socket address cannot hold: the control socket and the SSH
+// socket. Nothing is written before this check, and the error names no path. A path is refused, never truncated.
 export function assertSocketPathsFit(paths: readonly string[]): void {
   if (paths.some((path) => Buffer.byteLength(path, "utf8") > UNIX_SOCKET_PATH_MAX_BYTES)) {
     throw makeRealmError("SCHEMA_INVALID");

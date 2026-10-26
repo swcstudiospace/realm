@@ -14,7 +14,7 @@ import { join } from "node:path";
 import { once } from "node:events";
 import { createServer as createTlsServer } from "node:tls";
 import { RealmError, type ErrorCode } from "../../../src/core/errors.js";
-import { awaitRuntimeListener, removeKeyFile, removeTlsWorkDirectory, type ListenerTrust } from "../../../src/runtime/driver/channel.js";
+import { assertSocketPathsFit, awaitRuntimeListener, removeKeyFile, removeTlsWorkDirectory, type ListenerTrust } from "../../../src/runtime/driver/channel.js";
 import { ComputeDriver } from "../../../src/runtime/driver/compute-driver.js";
 import { FakeLibpod, FakeRuntime, diskLifecycle, driverConfig, validSandbox } from "./fakes.js";
 
@@ -211,4 +211,19 @@ void test("a control socket host path of 107 bytes is accepted, and 108 bytes is
     assert.equal(existsSync(secretRoot), false, "no secret directory is written");
     assert.equal(existsSync(join(config.sandboxStateRoot, SANDBOX)), false, "no state directory is written");
   }
+});
+
+// assertSocketPathsFit takes the list of paths, so an SSH-only overflow is built directly: the control and container paths fit and
+// only the SSH path is longer than a unix socket address holds.
+void test("an SSH socket path of 107 bytes is accepted, and 108 bytes is refused while the other paths fit (phase 9.6)", () => {
+  const fitting = "/run/control.sock";
+  assert.doesNotThrow(() => {
+    assertSocketPathsFit([fitting, "/" + "s".repeat(SOCKET_LIMIT_BYTES - 1)]);
+  });
+  assert.throws(
+    () => {
+      assertSocketPathsFit([fitting, "/" + "s".repeat(SOCKET_LIMIT_BYTES)]);
+    },
+    (error: unknown) => error instanceof RealmError && error.code === "SCHEMA_INVALID",
+  );
 });

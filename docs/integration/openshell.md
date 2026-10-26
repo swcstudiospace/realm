@@ -206,6 +206,15 @@ configuration does not set them.
 - The runtime's user namespace maps the realm account to uid and gid 1001 (`podman` keep-id, `uid=1001,gid=1001`). This is not yet verified on a live host.
 - The rendered gateway configuration selects `isolation_backend = "openshell-sandbox"` in the `[openshell.drivers.<name>]` table and writes no `[[openshell.supervisor.isolation_backends]]` section.
 
+### SSH socket (phase 9.6)
+
+- The host supervisor's SSH socket is `ssh/ssh.sock` in the sandbox's secret directory. The supervisor creates the `ssh/` directory at 0700 and the socket at 0600. The driver passes the path as `--ssh-socket-path` and sets no environment variable for it.
+- The socket sits outside every container mount. The secret directory is never bind-mounted. The channel mount holds only the runtime's bootstrap, certificate, key and control socket, and the `/run` and CA tmpfs mounts are separate. The socket is never under the channel directory or a tmpfs.
+- A unix socket path holds at most 107 bytes. The driver checks the SSH socket path with the control socket path at create and refuses a sandbox name that makes either one longer, with `SCHEMA_INVALID`. Nothing is truncated.
+- The driver does not set `OPENSHELL_SSH_SOCKET_SHARED`, which widens the socket to 0660. Shared mode is not used because the socket stays private to the host supervisor's user.
+- The supervisor refuses to start with an SSH socket path and no SSH host key. The driver checks the key before it spawns the supervisor and refuses with `SCHEMA_INVALID`, naming no key material.
+- `openshell sandbox exec` depends on this socket. Without it the exec fails with "SSH access is not configured for this supervisor".
+
 ### PD-08 (stop and start)
 
 PD-08 default applied: `StopSandbox` and `StartSandbox` refuse with the gateway's precondition status
