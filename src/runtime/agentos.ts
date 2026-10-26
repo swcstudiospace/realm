@@ -21,14 +21,18 @@
 
 import { computeBackoffDelayMs, type RandomSource } from "../core/backoff.js";
 import { makeRealmError } from "../core/errors.js";
+import type { SandboxCreateRequest } from "./openshell.js";
 
 export interface AgentOsDriver {
-  start(): Promise<void>;
-  alive(): Promise<boolean>;
-  stop(): Promise<void>;
-  // True when the runner process started for the sandbox has exited and has not been stopped. A stop the realm
+  // Creates the session's sandbox from the request, running the create argv once within timeoutMs.
+  create(request: SandboxCreateRequest, timeoutMs: number): Promise<void>;
+  // The session's runner. start, alive, stop and runnerExited each act on the sandbox realm-<sessionId> of the session named.
+  start(sessionId: string): Promise<void>;
+  alive(sessionId: string): Promise<boolean>;
+  stop(sessionId: string): Promise<void>;
+  // True when the runner process started for the session's sandbox has exited and has not been stopped. A stop the realm
   // asked for is never reported here, because the driver detaches the runner before it stops it.
-  runnerExited(): boolean;
+  runnerExited(sessionId: string): boolean;
 }
 
 export const AGENTOS_BACKOFF_BASE_MS = 500;
@@ -38,6 +42,8 @@ export const AGENTOS_STABLE_WINDOW_MS = 60_000;
 
 export interface AgentOsSupervisorOptions {
   readonly driver: AgentOsDriver;
+  // The session this supervisor supervises. Every driver call names it, so the driver acts on this session's sandbox only.
+  readonly sessionId: string;
   // Upper bound for one driver call. Must be a positive finite number.
   readonly callTimeoutMs: number;
   readonly random: RandomSource;
@@ -53,6 +59,7 @@ type Settled<T> = { readonly ok: true; readonly value: T } | { readonly ok: fals
 
 export class AgentOsSupervisor {
   private readonly driver: AgentOsDriver;
+  private readonly sessionId: string;
   private readonly callTimeoutMs: number;
   private readonly random: RandomSource;
   private readonly sleep: (ms: number) => Promise<void>;
@@ -72,10 +79,24 @@ export class AgentOsSupervisor {
       throw new RangeError("AgentOS call timeout must be a positive finite number");
     }
     this.driver = options.driver;
+    this.sessionId = options.sessionId;
     this.callTimeoutMs = options.callTimeoutMs;
     this.random = options.random;
     this.sleep = options.sleep;
     this.now = options.now;
+  }
+
+  // Creates the session's sandbox through the driver, once, within one call budget. A failed, rejected or missed create is
+  // OPENSHELL_START_FAILED. Nothing is retried here: the caller owns the container lookup that follows the create.
+  async create(request: SandboxCreateRequest, timeoutMs: number): Promise<void> {
+    if (request.sessionId !== this.sessionId) {
+      throw makeRealmError("SCHEMA_INVALID");
+    }
+    // Not registered for cancellation: a stop that overtakes a create waits for it and deletes the container it makes (B-3).
+    const created = await settle(() => this.driver.create(request, timeoutMs), this.callTimeoutMs, new Set<() => void>());
+    if (!created.ok) {
+      throw makeRealmError("OPENSHELL_START_FAILED");
+    }
   }
 
   // Starts the driver. A failed start is retried under the policy. Rejects with
@@ -101,11 +122,11 @@ export class AgentOsSupervisor {
       throw makeRealmError("AGENTOS_CRASH_LOOP");
     }
     // A runner that exited while the session was active is reported at once, and supervision does not restart it.
-    if (this.driver.runnerExited()) {
+    if (this.driver.runnerExited(this.sessionId)) {
       throw makeRealmError("AGENTOS_CRASH_LOOP");
     }
     const epoch = this.epoch;
-    const probe = await this.race(() => this.driver.alive());
+    const probe = await this.race(() => this.driver.alive(this.sessionId));
     if (!this.isCurrent(epoch)) {
       return false;
     }
@@ -132,7 +153,7 @@ export class AgentOsSupervisor {
     for (const cancel of [...this.inFlight]) {
       cancel();
     }
-    const stopped = await this.race(() => this.driver.stop());
+    const stopped = await this.race(() => this.driver.stop(this.sessionId));
     if (!stopped.ok) {
       throw makeRealmError("AGENTOS_STOP_FAILED");
     }
@@ -162,7 +183,7 @@ export class AgentOsSupervisor {
   // Returns without a further driver call as soon as the supervisor is no longer current.
   private async startUntilUp(epoch: number): Promise<void> {
     while (this.isCurrent(epoch)) {
-      const attempt = await this.race(() => this.driver.start());
+      const attempt = await this.race(() => this.driver.start(this.sessionId));
       if (!this.isCurrent(epoch)) {
         return;
       }
@@ -179,7 +200,7 @@ export class AgentOsSupervisor {
   // Returns without holding or waiting once the supervisor is no longer current.
   private async recordFailure(epoch: number): Promise<void> {
     this.failures += 1;
-    await this.race(() => this.driver.stop());
+    await this.race(() => this.driver.stop(this.sessionId));
     if (!this.isCurrent(epoch)) {
       return;
     }

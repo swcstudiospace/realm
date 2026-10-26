@@ -21,7 +21,7 @@ import type { EgressRule } from "../contract/validate.js";
 import { withTimeout } from "../core/timeout.js";
 import { atomicWriteFile, observeSha256 } from "../fs/atomic-write.js";
 import { bindRoot } from "../fs/root.js";
-import { recordFileName } from "../session/paths.js";
+import { isSessionId, recordFileName } from "../session/paths.js";
 import type { LibpodClient, LibpodContainerSummary } from "./libpod-client.js";
 import { renderNetworkPolicies, type NetworkPolicies } from "./egress.js";
 
@@ -54,6 +54,16 @@ export function realmSandboxName(sessionId: string): string {
 // True for a sandbox name the realm created. An absent name is never the realm's.
 export function isRealmSandboxName(name: string | undefined): boolean {
   return name !== undefined && name.startsWith(REALM_SANDBOX_NAME_PREFIX);
+}
+
+// The session a realm sandbox name belongs to: the name without its realm- prefix, when that id passes the session rule. Any
+// other name, an absent one included, has no session, so the caller refuses it.
+export function sessionOfRealmSandbox(sandboxName: string | undefined): string | undefined {
+  if (sandboxName === undefined || !isRealmSandboxName(sandboxName)) {
+    return undefined;
+  }
+  const sessionId = sandboxName.slice(REALM_SANDBOX_NAME_PREFIX.length);
+  return isSessionId(sessionId) ? sessionId : undefined;
 }
 
 // The in-sandbox workspace path (OQ-P3-02 default).
@@ -130,7 +140,8 @@ export interface SandboxCreateRequest {
 
 export interface OpenShellCreateDeps {
   readonly containers: Pick<LibpodClient, "listContainersByLabel">;
-  readonly runner: OpenShellRunner;
+  // The sandbox create for the request, bounded by timeoutMs. The AgentOS driver is the only implementation; it runs the create argv once.
+  readonly createSandbox: (request: SandboxCreateRequest, timeoutMs: number) => Promise<void>;
 }
 
 // The pinned create argv for one session (D-55). It names the sandbox and carries the policy, the limits and the
@@ -170,42 +181,25 @@ export function buildCreateArgv(request: SandboxCreateRequest): readonly string[
   ]);
 }
 
-// The AgentOS driver's sandbox argv (D-014, D-016, D-018). The create argv carries the derived image through --from.
-// The runner is the exec form that starts the AgentOS runner in the sandbox once create has run, and the probe is the
-// same exec form running the probe. The delete argv removes the named sandbox. All four name the sandbox
-// realm-<sessionId>, so they are built here, in one place.
+// The AgentOS driver's sandbox argv (D-014, D-016, D-018). The runner is the exec form that starts the AgentOS runner in
+// the sandbox, and the probe is the same exec form running the probe. Both name the sandbox realm-<sessionId>, so they are
+// built here, in one place. The sandbox itself is created by SessionExecution.create through buildCreateArgv and deleted by
+// SessionExecution.stop through buildSandboxDeleteArgv; the driver never creates or deletes it.
 export interface AgentOsSandboxRequest {
   readonly sessionId: string;
-  readonly policyPath: string;
-  readonly cpus: number;
-  readonly memory: string;
-  readonly imageRef: string;
   readonly runnerPath: string;
   readonly probePath: string;
 }
 
 export interface AgentOsSandboxArgv {
-  readonly create: readonly string[];
   readonly runner: readonly string[];
   readonly probe: readonly string[];
-  readonly delete: readonly string[];
 }
 
 export function buildAgentOsSandboxArgv(request: AgentOsSandboxRequest): AgentOsSandboxArgv {
-  if (request.imageRef.length === 0) {
-    throw makeRealmError("SCHEMA_INVALID");
-  }
   return Object.freeze({
-    create: buildCreateArgv({
-      sessionId: request.sessionId,
-      policyPath: request.policyPath,
-      cpus: request.cpus,
-      memory: request.memory,
-      imageRef: request.imageRef,
-    }),
     runner: buildExecArgv(request.sessionId, ["node", request.runnerPath]),
     probe: buildExecArgv(request.sessionId, ["node", request.probePath]),
-    delete: buildSandboxDeleteArgv(realmSandboxName(request.sessionId)),
   });
 }
 
@@ -255,11 +249,11 @@ export function buildExecArgv(sessionId: string, argv: readonly string[]): reado
 // Creates the sandbox for one session and returns its container id (D-56, CORE-06).
 //
 // Flow: look up the labelled container first and return it without running anything if it
-// exists; otherwise run the create argv once; then poll the label lookup every 250 ms until one
+// exists; otherwise run deps.createSandbox once; then poll the label lookup every 250 ms until one
 // container appears or the caller deadline expires. An ambiguous label match (more than one
 // container) is refused at once and never retried. A transient libpod failure (socket refused or
 // timed out) is polled through until the deadline; any other libpod failure ends the poll at once.
-// Deadline expiry, a non-transient libpod failure and every runner failure give
+// Deadline expiry, a non-transient libpod failure and every create failure give
 // OPENSHELL_START_FAILED. An ambiguous match gives OPENSHELL_LABEL_AMBIGUOUS. A libpod code, when
 // one was involved, appears only as causeCode. No refusal carries container ids or libpod message text.
 export async function runOpenShellCreate(
@@ -270,7 +264,8 @@ export async function runOpenShellCreate(
   if (!Number.isInteger(deadlineMs) || deadlineMs <= 0) {
     throw makeRealmError("SCHEMA_INVALID");
   }
-  const argv = buildCreateArgv(request);
+  // Refuses a malformed request before any I/O. The AgentOS driver builds the same create argv from the same request.
+  buildCreateArgv(request);
 
   const existing = sessionWorkloads(
     await deps.containers.listContainersByLabel(OPENSHELL_ISOLATION_ROLE_LABEL_KEY, OPENSHELL_SANDBOX_ROLE_VALUE),
@@ -283,17 +278,13 @@ export async function runOpenShellCreate(
   const deadline = performance.now() + deadlineMs;
   const remaining = (): number => deadline - performance.now();
 
-  let outcome: OpenShellRunOutcome;
   try {
     const budget = remaining();
     if (budget <= 0) {
       throw makeRealmError("OPENSHELL_START_FAILED");
     }
-    outcome = await withTimeout(deps.runner(argv, { timeoutMs: budget }), budget, "OPENSHELL_START_FAILED");
+    await withTimeout(deps.createSandbox(request, budget), budget, "OPENSHELL_START_FAILED");
   } catch {
-    throw makeRealmError("OPENSHELL_START_FAILED");
-  }
-  if (outcome.exitCode !== 0) {
     throw makeRealmError("OPENSHELL_START_FAILED");
   }
 

@@ -31,7 +31,6 @@ writeFileSync(
   join(CONFIG_HOME, "realm", "config.json"),
   JSON.stringify({
     image: `registry.example.com/realm/workload@sha256:${"0".repeat(64)}`,
-    workloadArgv: ["/usr/bin/agent", "--serve"],
     stateDir: STATE_DIR,
     workspaceRoot: "/srv/realm-ws",
   }),

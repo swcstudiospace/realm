@@ -23,7 +23,6 @@ import {
 
 const DIGEST = `sha256:${"b".repeat(64)}`;
 const IMAGE = `registry.example.com/realm/session@${DIGEST}`;
-const WORKLOAD = ["/usr/bin/agent", "--serve"];
 const SESSION = "sess-route";
 const LIBPOD_ROUTE_NAMES: readonly string[] = [
   "info",
@@ -57,9 +56,10 @@ async function fixture(t: TestContext): Promise<Fixture> {
   await libpod.start(socketPath);
   t.after(() => libpod.stop());
   const openshell = new FakeOpenShell(store);
-  const driver = new FakeAgentOsDriver();
+  const driver = new FakeAgentOsDriver(openshell.runner);
   const agentos = new AgentOsSupervisor({
     driver,
+    sessionId: SESSION,
     callTimeoutMs: 1000,
     random: () => 0,
     sleep: () => Promise.resolve(),
@@ -69,9 +69,9 @@ async function fixture(t: TestContext): Promise<Fixture> {
   const exec = new SessionExecution({
     libpod: new LibpodClient(socketPath),
     runner: openshell.runner,
-    agentos,
+    agentosFor: () => agentos,
     readProcStatus: () => "CapInh:\t0000000000000000\nCapPrm:\t0000000000000000\nCapEff:\t0000000000000000\nCapBnd:\t0000000000000000\nCapAmb:\t0000000000000000\n",
-    config: { image: IMAGE, workloadArgv: WORKLOAD, stateDir },
+    config: { image: IMAGE, stateDir },
     egressAllow: [],
   });
   return { libpod, store, openshell, driver, supervisor: agentos, exec, stateDir, workspaceRoot: join(base, "workspace") };
@@ -105,8 +105,8 @@ async function createSession(f: Fixture): Promise<{ readonly containerId: string
 void test("RT-03: the session create argv names no workload command, and the OpenShell runs are the create and one sandbox delete", async (t) => {
   const f = await fixture(t);
   const { containerId } = await createSession(f);
-  await f.exec.start(containerId);
-  await f.exec.probe(containerId);
+  await f.exec.start(containerId, realmSandboxName(SESSION));
+  await f.exec.probe(containerId, realmSandboxName(SESSION));
   await f.exec.stop(containerId, realmSandboxName(SESSION));
   await f.exec.destroy(containerId, realmSandboxName(SESSION));
 
@@ -140,8 +140,8 @@ void test("RT-03: the libpod client has no exec or attach method, and only conta
   }
 
   const { containerId } = await createSession(f);
-  await f.exec.start(containerId);
-  await f.exec.probe(containerId);
+  await f.exec.start(containerId, realmSandboxName(SESSION));
+  await f.exec.probe(containerId, realmSandboxName(SESSION));
   await f.exec.stop(containerId, realmSandboxName(SESSION));
   await f.exec.destroy(containerId, realmSandboxName(SESSION));
   // The version probe on /_ping is the one request outside the route table. It is a read that starts nothing,
@@ -165,8 +165,8 @@ void test("RT-03: the libpod client has no exec or attach method, and only conta
 void test("RT-03, RT-04: AgentOS is started only through the supervisor, and the driver is reachable from no other session path", async (t) => {
   const f = await fixture(t);
   const { containerId } = await createSession(f);
-  await f.exec.start(containerId);
-  assert.deepEqual(f.driver.calls(), ["start"], "the only driver call is the supervisor's start");
+  await f.exec.start(containerId, realmSandboxName(SESSION));
+  assert.deepEqual(f.driver.calls(), ["create", "start"], "the driver is called only by the supervisor: create, then start");
   assert.equal(
     reachesWithout(f.exec, f.driver, f.supervisor),
     false,

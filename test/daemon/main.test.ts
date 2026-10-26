@@ -45,7 +45,6 @@ function writeConfig(dir: string, value: unknown): EnvironmentLike {
 function validConfig(dir: string): Record<string, unknown> {
   return {
     image: IMAGE,
-    workloadArgv: ["/usr/bin/true"],
     stateDir: join(dir, "state"),
     workspaceRoot: join(dir, "workspace"),
   };

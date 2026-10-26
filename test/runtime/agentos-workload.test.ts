@@ -17,7 +17,7 @@ const EXEC_ARGV = [
   "sandbox",
   "exec",
   "--name",
-  "realm-agentos",
+  "realm-daemon",
   "--workdir",
   "/workspace",
   "--no-tty",

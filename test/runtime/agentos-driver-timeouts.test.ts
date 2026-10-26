@@ -4,7 +4,8 @@ import { createOpenShellAgentOsDriver } from "../../src/runtime/agentos-driver.j
 import type { RunnerChild } from "../../src/runtime/agentos-workload.js";
 import type { OpenShellRunner } from "../../src/runtime/openshell.js";
 
-const IMAGE = `localhost/realm-agentos@sha256:${"c".repeat(64)}`;
+const SESSION = "sess-budget";
+
 // A runner child that does not exit on its own, so the budgets are the only thing these tests read.
 const RUNNING_CHILD: RunnerChild = {
   hasExited: () => false,
@@ -21,38 +22,30 @@ function recordingRunner(): { readonly runner: OpenShellRunner; readonly calls: 
   return { runner, calls };
 }
 
-void test("create is bounded by the start budget; the readiness probe, the alive probe and the delete by the call budget", async () => {
+void test("the readiness probe and the alive probe are each bounded by the call budget, and stop issues no OpenShell call", async () => {
   const { runner, calls } = recordingRunner();
   const driver = createOpenShellAgentOsDriver({
     runner,
     spawnRunner: () => RUNNING_CHILD,
-    imageRef: IMAGE,
-    policyPath: "/state/runtime/agentos.policy.json",
-    cpus: 2,
-    memory: "4Gi",
     startTimeoutMs: 180_000,
     callTimeoutMs: 30_000,
   });
-  await driver.start();
-  await driver.alive();
-  await driver.stop();
+  await driver.start(SESSION);
+  await driver.alive(SESSION);
+  await driver.stop(SESSION);
   assert.deepEqual(
     calls.map((call) => call.timeoutMs),
-    [180_000, 30_000, 30_000, 30_000],
+    [30_000, 30_000],
   );
 });
 
-void test("a non-positive create budget is refused with a RangeError before any runner call", () => {
+void test("a non-positive start budget is refused with a RangeError before any runner call", () => {
   const { runner, calls } = recordingRunner();
   assert.throws(
     () =>
       createOpenShellAgentOsDriver({
         runner,
         spawnRunner: () => RUNNING_CHILD,
-        imageRef: IMAGE,
-        policyPath: "/state/runtime/agentos.policy.json",
-        cpus: 2,
-        memory: "4Gi",
         startTimeoutMs: 0,
         callTimeoutMs: 30_000,
       }),

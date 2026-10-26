@@ -1,6 +1,6 @@
 // RuntimeConfig type and load-time validation (RT-01, D-52, D-73). The checks are hand-written:
 // no schema file and no ajv (D-73). The loader reads no environment. Phase 3 supplies no
-// default image and no default workload; the caller and the gated suite provide them.
+// default image; the caller and the gated suite provide it.
 // Numeric limits live only in HARDENING_PROFILE (src/runtime/hardening.ts) and in the backoff
 // defaults, never here.
 
@@ -12,7 +12,6 @@ export interface RuntimeConfig {
   readonly image: string;
   // Anda Engine base URL. Absent when no Anda engine is configured (the doctor reports that).
   readonly andaUrl?: string;
-  readonly workloadArgv: readonly string[];
   readonly stateDir: string;
   readonly workspaceRoot: string;
 }
@@ -24,7 +23,6 @@ const USERINFO_PATTERN = /^[a-z][a-z0-9+.-]*:\/\/[^/?#]*@/i;
 const ACCEPTED_KEYS: Readonly<Record<string, true>> = {
   image: true,
   andaUrl: true,
-  workloadArgv: true,
   stateDir: true,
   workspaceRoot: true,
 };
@@ -55,15 +53,14 @@ export function loadRuntimeConfig(input: unknown): RuntimeConfig {
   }
 
   const image = requireImage(record["image"]);
-  const workloadArgv = requireArgv(record["workloadArgv"]);
   const stateDir = requireAbsolutePath(record["stateDir"]);
   const workspaceRoot = requireAbsolutePath(record["workspaceRoot"]);
 
   if (record["andaUrl"] === undefined) {
-    return Object.freeze({ image, workloadArgv, stateDir, workspaceRoot });
+    return Object.freeze({ image, stateDir, workspaceRoot });
   }
   const andaUrl = requireAndaUrl(record["andaUrl"]);
-  return Object.freeze({ image, andaUrl, workloadArgv, stateDir, workspaceRoot });
+  return Object.freeze({ image, andaUrl, stateDir, workspaceRoot });
 }
 
 function reject(): never {
@@ -82,27 +79,6 @@ function requireImage(value: unknown): string {
     reject();
   }
   return value;
-}
-
-// A non-empty array of non-empty strings whose first element is an absolute path (D-79). The copy
-// means later changes to the caller's array cannot alter the loaded config.
-function requireArgv(value: unknown): readonly string[] {
-  if (!Array.isArray(value) || value.length === 0) {
-    reject();
-  }
-  const argv: string[] = [];
-  for (const item of value) {
-    if (typeof item !== "string" || item.length === 0) {
-      reject();
-    }
-    argv.push(item);
-  }
-  // D-79: argv[0] must be an absolute path. An OpenShell network rule matches the executable by
-  // path, and an empty binaries list matches nothing.
-  if (!isAbsolute(argv[0] ?? "")) {
-    reject();
-  }
-  return Object.freeze(argv);
 }
 
 // D-73: a relative state directory or workspace root is SCHEMA_INVALID.

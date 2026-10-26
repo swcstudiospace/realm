@@ -226,7 +226,7 @@ a policy key (D-101)" (`src/tools/dispatch.ts:56-57`).
 | `CONTAINER_STOP_GRACE_MS` | `10_000` (`src/runtime/session-execution.ts:38`) | Libpod stop timeout grace period (`src/runtime/session-execution.ts:160-161`). |
 | `AGENTOS_STOP_DEADLINE_MS` | `15_000` (`src/runtime/session-execution.ts:41`) | Backstop on the AgentOS stop; failures map to `AGENTOS_CRASH_LOOP` (`src/runtime/session-execution.ts:39-44,179-186`). |
 | `OPENSHELL_OUTPUT_LIMIT_BYTES` | `262144` (`src/runtime/openshell.ts:53`) | Per-stream capture cap for exec output (`src/runtime/session-execution.ts:257-284`). |
-| Runtime image / workload / state dir | `RuntimeConfig` (`src/runtime/config.ts:10-18`), validated by hand-written `loadRuntimeConfig` (`src/runtime/config.ts:43-67`) | Deployment inputs, not policy: image digest pin, `workloadArgv`, `stateDir`, optional `andaUrl`. Numeric limits live in `HARDENING_PROFILE`, never here (`src/runtime/config.ts:1-5`). |
+| Runtime image / state dir | `RuntimeConfig` (`src/runtime/config.ts:10-17`), validated by hand-written `loadRuntimeConfig` (`src/runtime/config.ts:43-64`) | Deployment inputs, not policy: image digest pin, `stateDir`, optional `andaUrl`. Numeric limits live in `HARDENING_PROFILE`, never here (`src/runtime/config.ts:1-5`). |
 
 Related but separate: session identity file naming (`SESSION_ID_PATTERN`,
 `src/session/paths.ts:10,36-42`), state/record layout
@@ -246,7 +246,6 @@ Path (`resolveConfigPath`, `src/runtime/host-paths.ts`):
 Keys (`ACCEPTED_KEYS`, `src/runtime/config.ts`). The key set is closed, and any other key is refused:
 
 - `image` (required): a digest-pinned reference in the form `name@sha256:<64 hex>`. The name starts with a lowercase letter or digit and continues with lowercase letters, digits, `.`, `_`, `/`, or `-`. A tag-only reference is refused.
-- `workloadArgv` (required): a non-empty array of non-empty strings. The first element must be an absolute path (D-79).
 - `stateDir` (required): an absolute path.
 - `workspaceRoot` (required): an absolute path.
 - `andaUrl` (optional): an `http:` or `https:` URL with no userinfo.
@@ -265,7 +264,6 @@ Example. The digest is a placeholder of 64 zeros. It is not a real image, and th
 ```json
 {
   "image": "realm-workload@sha256:0000000000000000000000000000000000000000000000000000000000000000",
-  "workloadArgv": ["/usr/bin/node", "/opt/realm/workload.js"],
   "stateDir": "/srv/realm/state",
   "workspaceRoot": "/srv/realm/workspace"
 }

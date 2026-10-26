@@ -17,9 +17,9 @@ export type ProbeResult = "healthy" | "unhealthy";
 
 export interface ExecutionService {
   create(req: CreateRequest): Promise<{ readonly containerId: string }>;
-  start(containerId: string): Promise<void>;
-  probe(containerId: string): Promise<ProbeResult>;
-  // sandbox is the session's realm sandbox name, always realm-<sessionId>. Callers pass it on every stop and destroy.
+  // sandbox is the session's realm sandbox name, always realm-<sessionId>. Callers pass it on every start, probe, stop and destroy.
+  start(containerId: string, sandbox: string): Promise<void>;
+  probe(containerId: string, sandbox: string): Promise<ProbeResult>;
   stop(containerId: string, sandbox: string): Promise<void>;
   destroy(containerId: string, sandbox: string): Promise<void>;
 }

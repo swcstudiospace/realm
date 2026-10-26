@@ -63,14 +63,14 @@ export class FakeExecutionService implements ExecutionService {
     });
   }
 
-  async start(containerId: string): Promise<void> {
-    return this.run({ operation: "start", containerId }, () => {
+  async start(containerId: string, sandbox: string): Promise<void> {
+    return this.run({ operation: "start", containerId, sandbox }, () => {
       this.require(containerId).started = true;
     });
   }
 
-  async probe(containerId: string): Promise<ProbeResult> {
-    return this.run({ operation: "probe", containerId }, () => this.require(containerId).health);
+  async probe(containerId: string, sandbox: string): Promise<ProbeResult> {
+    return this.run({ operation: "probe", containerId, sandbox }, () => this.require(containerId).health);
   }
 
   async stop(containerId: string, sandbox: string): Promise<void> {

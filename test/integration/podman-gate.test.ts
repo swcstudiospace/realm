@@ -1,7 +1,7 @@
 // Podman gate and live bodies (RT-01, RT-03, RT-09).
 //
 // The suite skips below Podman 5.x. Each live body also needs a rootless Podman API socket, an openshell
-// CLI on PATH, REALM_LIVE_IMAGE (a digest-pinned image) and REALM_LIVE_WORKLOAD (a JSON string array).
+// CLI on PATH and REALM_LIVE_IMAGE (a digest-pinned image).
 // liveInputsSkipReason names the first missing prerequisite, so a host without one skips the body.
 //
 // Removal scope: a live body removes only the containers it creates (createLiveContainer). The RT-09
@@ -33,9 +33,10 @@ import {
 } from "../../src/runtime/openshell.js";
 import { parsePodmanVersion, podmanSkipReason, type PodmanProbe } from "../../src/runtime/podman-version.js";
 import { removeAllRealmContainers, type SweepClient } from "../../src/runtime/sweep.js";
-import { runSandboxExec, selectOpenShellEnvironment, spawnOpenShellRunner } from "../../src/runtime/session-execution.js";
+import { AGENTOS_WORKLOAD_BINARY, runSandboxExec, selectOpenShellEnvironment, spawnOpenShellRunner } from "../../src/runtime/session-execution.js";
 import { reapStartup } from "../../src/session/reap.js";
 import { SessionStore } from "../../src/session/store.js";
+import { createThrough } from "../support/sandbox-create.js";
 import { ToolDispatcher, type DispatcherController } from "../../src/tools/dispatch.js";
 
 // `podman --version` is local and fast; the timeout keeps a hung binary from hanging the run.
@@ -75,12 +76,11 @@ void test("Podman gate: the host reports Podman 5.x or newer (RT-02)", { skip: g
 });
 
 // ---- Live bodies (RT-01, RT-03, RT-05, RT-08, RT-09, TOOL-03). Each needs the 5.x host described
-// above, a digest-pinned image in REALM_LIVE_IMAGE, and a JSON string array in REALM_LIVE_WORKLOAD. A
-// host without them skips each body with a stated reason. The bodies drive the production create path,
-// so a 5.x run observes real behaviour; nothing in this file claims a live result that has not run.
+// above and a digest-pinned image in REALM_LIVE_IMAGE. A host without them skips each body with a stated reason. The bodies
+// drive the production create path, so a 5.x run observes real behaviour; nothing in this file claims a live result that has
+// not run.
 
 const LIVE_IMAGE_VARIABLE = "REALM_LIVE_IMAGE";
-const LIVE_WORKLOAD_VARIABLE = "REALM_LIVE_WORKLOAD";
 // The bound for one OpenShell create, the same as the composition's create deadline.
 const LIVE_CREATE_DEADLINE_MS = 60_000;
 // The sandbox limits come from the frozen hardening profile, as the composition derives them.
@@ -90,9 +90,8 @@ const SANDBOX_MEMORY = `${String(HARDENING_PROFILE.memoryBytes / 1024 ** 3)}Gi`;
 const liveGate: string | false = gate === false ? liveInputsSkipReason() : gate;
 
 function liveInputsSkipReason(): string | false {
-  const missing = [LIVE_IMAGE_VARIABLE, LIVE_WORKLOAD_VARIABLE].filter((name) => (process.env[name] ?? "") === "");
-  if (missing.length > 0) {
-    return `${missing.join(" and ")} not set; the live bodies need a digest-pinned image and a workload argv`;
+  if ((process.env[LIVE_IMAGE_VARIABLE] ?? "") === "") {
+    return `${LIVE_IMAGE_VARIABLE} not set; the live bodies need a digest-pinned image`;
   }
   if (!isAbsolute(process.env["XDG_RUNTIME_DIR"] ?? "")) {
     return "XDG_RUNTIME_DIR is not an absolute path, so the rootless Podman API socket cannot be located";
@@ -146,10 +145,8 @@ interface LiveContainer {
 
 // Reads the live configuration. A malformed value throws, so a misconfigured live run fails loudly.
 function liveConfig(stateDir: string, workspaceRoot: string): RuntimeConfig {
-  const workload: unknown = JSON.parse(process.env[LIVE_WORKLOAD_VARIABLE] ?? "[]");
   return loadRuntimeConfig({
     image: process.env[LIVE_IMAGE_VARIABLE],
-    workloadArgv: workload,
     stateDir,
     workspaceRoot,
   });
@@ -185,13 +182,9 @@ async function createLiveContainer(t: TestContext, egress: readonly EgressRule[]
     argvSeen.push([...argv]);
     return spawnRunner(argv, options);
   };
-  const workloadBinary = config.workloadArgv[0];
-  if (workloadBinary === undefined) {
-    throw new Error("the live workload argv is empty; REALM_LIVE_WORKLOAD must hold a non-empty JSON string array");
-  }
-  const policyPath = writePolicyDocument(config.stateDir, sessionId, egress, workloadBinary);
+  const policyPath = writePolicyDocument(config.stateDir, sessionId, egress, AGENTOS_WORKLOAD_BINARY);
   const containerId = await runOpenShellCreate(
-    { containers: libpod, runner },
+    { containers: libpod, createSandbox: createThrough(runner) },
     { sessionId, policyPath, cpus: SANDBOX_CPUS, memory: SANDBOX_MEMORY },
     LIVE_CREATE_DEADLINE_MS,
   );
@@ -268,7 +261,7 @@ void test("RT-09 live: the down sweep leaves none of the containers this test cr
 
 // ---- Live bodies (RT-05, RT-08, TOOL-03). Each runs under the same gate as the bodies above and
 // skips with PODMAN_UNSUPPORTED_VERSION on 4.9.3. Nothing here runs without a 5.x host, a rootless
-// API socket, an openshell CLI, and the digest-pinned image and workload argv.
+// API socket, an openshell CLI, and the digest-pinned image.
 
 // Egress is observed from inside the sandbox through the supervisor proxy, not from inside the
 // container (D-75): the workload container keeps NetworkMode none (D-83), so each probe runs through

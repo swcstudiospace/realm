@@ -91,7 +91,7 @@ void test("OMP-01: the Omp entry and the CLI dial one control socket, the state 
   mkdirSync(join(base, "config", "realm"), { recursive: true });
   writeFileSync(
     join(base, "config", "realm", "config.json"),
-    JSON.stringify({ image: IMAGE, workloadArgv: ["/usr/bin/agent"], stateDir, workspaceRoot: base }),
+    JSON.stringify({ image: IMAGE, stateDir, workspaceRoot: base }),
   );
   const configSocket = controlSocketPath(stateDir);
   const decoySocket = controlSocketPath(join(xdgStateHome, "realm"));

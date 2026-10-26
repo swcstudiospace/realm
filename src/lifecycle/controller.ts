@@ -324,7 +324,7 @@ export class LifecycleController {
     let health: ProbeResult;
     try {
       health = await withTimeout(
-        this.deps.exec.probe(containerId),
+        this.deps.exec.probe(containerId, this.sandboxName()),
         this.deps.policy.startupBudgetMs,
         "STARTUP_BUDGET_EXCEEDED",
       );
@@ -639,7 +639,7 @@ export class LifecycleController {
   // Issues the port start for a container and tracks it until it settles (F1). The settled promise
   // never rejects, so the tracking adds no unhandled rejection.
   private issueStart(containerId: string): PendingStart {
-    const started = this.deps.exec.start(containerId);
+    const started = this.deps.exec.start(containerId, this.sandboxName());
     const settled = started.then(
       () => null,
       (error: unknown) => portFailureCode(error),

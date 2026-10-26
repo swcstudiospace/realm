@@ -52,6 +52,7 @@ Reversibility: costly. Every runtime module depends on this layering.
 
 - The CLI is pinned to the **0.1.2** verbs. Host observation above confirms each pinned flag is listed by `openshell sandbox create --help`.
 - Pinned argv (D-55): `sandbox create --name realm-<sessionId> --policy <policyPath> --no-auto-providers --no-keep --detach --label io.realm.managed=true --label io.realm.session=<sessionId> --cpu <cpus> --memory <memory> -- <workloadArgv...>`.
+  - Superseded by `docs/integration/openshell.md` (one sandbox per session, named `realm-<sessionId>`, AgentOS as its workload, with no workload command). The pinned argv above is historical.
 - The builder never emits `--env` or `--provider`, because AUD-02 forbids host environment or credentials reaching the sandbox. Both flags exist in 0.1.2 and are deliberately not used.
 - **Drift.** The docs describe **0.1.5** (`openshell.md` version caveat). The local CLI is 0.1.2. The `--no-keep` combined with `--detach` semantics are documented only for 0.1.5 (OQ-P3-12).
 - Default applied (OQ-P3-12): pin 0.1.2 and re-verify on upgrade. A future upgrade must re-read the matching documentation index and re-run `openshell sandbox create --help`.
@@ -139,6 +140,8 @@ A dispatcher call writes two audit lines: an admission line before execution and
 | OQ-P4-10 | Egress changes after create. | Fixed at create; changing it means destroy and recreate. Live `openshell policy set` is not used in Phase 4. | Session lifecycle after create (RT-05, D-81) | Decided. |
 | OQ-P4-11 | Retry and status surface. | The dispatcher implements both (D-95); Phase 5 exposes `retry` through OMP-03. | Phase 5 OMP surface (TOOL-05, OMP-03) | Decided. Phase 5 exposes. |
 | OQ-P4-12 | An allowlisted hostname that resolves to a private address is reachable under OpenShell's documented rule for exact hostnames. | Realm does not add `allowed_ips`, so the allowlist must contain only hosts the user intends to reach. | Egress allowlist review (RT-05, D-77) | Residual risk. Recorded. |
+
+Superseded by `docs/integration/openshell.md`: `workloadArgv` is no longer a configuration key, so OQ-P4-02's `workloadArgv[0]` is now the fixed AgentOS workload binary `/usr/local/bin/node` (`AGENTOS_WORKLOAD_BINARY`), and the sandbox has no workload command (one sandbox per session, named `realm-<sessionId>`).
 
 ## Catalogue extension (closure, 2026-10-22)
 

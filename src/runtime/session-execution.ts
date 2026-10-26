@@ -36,7 +36,7 @@ import { attachKernelCaps, readHostProcStatus } from "./kernel-caps.js";
 import {
   buildExecArgv,
   deleteSandbox,
-  isRealmSandboxName,
+  sessionOfRealmSandbox,
   OPENSHELL_OUTPUT_LIMIT_BYTES,
   OpenShellRunnerError,
   realmSandboxName,
@@ -58,6 +58,8 @@ const SANDBOX_DELETE_DEADLINE_MS = 15_000;
 // The sandbox limits come from the frozen profile, so they cannot drift from the verifier.
 export const SANDBOX_CPUS = HARDENING_PROFILE.nanoCpus / 1_000_000_000;
 export const SANDBOX_MEMORY = `${String(HARDENING_PROFILE.memoryBytes / 1024 ** 3)}Gi`;
+// The workload binary the policy document names: the node binary in the AgentOS image, which runs the runner child.
+export const AGENTOS_WORKLOAD_BINARY = "/usr/local/bin/node";
 
 // The only environment names the OpenShell CLI receives. Each one is needed by the CLI to locate its
 // configuration and the rootless Podman socket. No other name crosses from the host.
@@ -69,11 +71,16 @@ export type SessionContainers = Pick<
   "info" | "inspectContainer" | "listContainersByLabel" | "stopContainer" | "removeContainer"
 >;
 
+// The AgentOS supervisor of one session, the same object for the same session on every call. The daemon builds it over the
+// bound driver; each supervisor drives one session's sandbox only.
+export type SupervisorFor = (sessionId: string) => AgentOsSupervisor;
+
 export interface SessionExecutionOptions {
   readonly libpod: SessionContainers;
   readonly runner: OpenShellRunner;
-  // Optional. With no supervisor bound, every runtime-touching operation fails closed (AGENTOS_NOT_CONFIGURED).
-  readonly agentos?: AgentOsSupervisor;
+  // Optional. Makes the AgentOS supervisor of one session. It returns the same supervisor for the same session on every call,
+  // so a session's supervision state is one object. With no supervisor bound, every runtime-touching operation fails closed.
+  readonly agentosFor?: SupervisorFor;
   // The workspace root is per session and comes from the create request.
   readonly config: Omit<RuntimeConfig, "workspaceRoot">;
   // The session's egress allowlist, fixed for the session (D-106, OQ-P4-10). It arrives untrusted and is
@@ -129,7 +136,7 @@ function startPendingCreate(sandbox: string): PendingCreate {
 export class SessionExecution implements ExecutionService {
   private readonly libpod: SessionContainers;
   private readonly runner: OpenShellRunner;
-  private readonly agentos: AgentOsSupervisor | undefined;
+  private readonly agentosFor: SupervisorFor | undefined;
   private readonly config: Omit<RuntimeConfig, "workspaceRoot">;
   private readonly egressAllow: readonly EgressRule[];
   private readonly readProcStatus: (pid: number) => string;
@@ -149,7 +156,7 @@ export class SessionExecution implements ExecutionService {
     this.libpod = options.libpod;
     this.runner = options.runner;
     this.readProcStatus = options.readProcStatus ?? readHostProcStatus;
-    this.agentos = options.agentos;
+    this.agentosFor = options.agentosFor;
     this.config = options.config;
     this.stopDeadlineMs = options.stopDeadlineMs ?? AGENTOS_STOP_DEADLINE_MS;
     if (!(this.stopDeadlineMs > 0) || !Number.isFinite(this.stopDeadlineMs)) {
@@ -161,7 +168,7 @@ export class SessionExecution implements ExecutionService {
   // labelled container (CORE-06).
   async create(req: CreateRequest): Promise<{ readonly containerId: string }> {
     // Refuses before any libpod, OpenShell, or policy-file call when no supervisor is bound (fail closed).
-    this.requireAgentOs();
+    const agentos = this.requireAgentOs(req.idempotencyKey);
     // Registered before the first await, so a stop that names this sandbox from here on waits for this create (B-3).
     const sandbox = realmSandboxName(req.idempotencyKey);
     // A create makes a new sandbox, so a delete recorded for this name earlier no longer counts.
@@ -172,11 +179,7 @@ export class SessionExecution implements ExecutionService {
       const runtime = loadRuntimeConfig({ ...this.config, workspaceRoot: req.workspaceRoot });
       const info = await this.libpod.info();
       const sessionId = req.idempotencyKey;
-      const workloadBinary = runtime.workloadArgv[0];
-      if (workloadBinary === undefined) {
-        throw makeRealmError("SCHEMA_INVALID");
-      }
-      const policyPath = writePolicyDocument(runtime.stateDir, sessionId, this.egressAllow, workloadBinary);
+      const policyPath = writePolicyDocument(runtime.stateDir, sessionId, this.egressAllow, AGENTOS_WORKLOAD_BINARY);
       const binding: HardeningBinding = {
         image: runtime.image,
         rootless: info.rootless,
@@ -186,7 +189,7 @@ export class SessionExecution implements ExecutionService {
       let containerId: string;
       try {
         containerId = await runOpenShellCreate(
-          { containers: this.libpod, runner: this.runner },
+          { containers: this.libpod, createSandbox: (createRequest, timeoutMs) => agentos.create(createRequest, timeoutMs) },
           {
             sessionId,
             policyPath,
@@ -225,10 +228,10 @@ export class SessionExecution implements ExecutionService {
     }
   }
 
-  // Checks the container is running. It starts nothing itself: the create ran with --detach. It starts
-  // AgentOS through the supervisor, the only path that starts it (RT-04).
-  async start(containerId: string): Promise<void> {
-    const agentos = this.requireAgentOs();
+  // Checks the container is running. It starts nothing itself: the create ran with --detach. It starts the AgentOS runner
+  // in the session's sandbox through the supervisor, the only path that starts it (RT-04).
+  async start(containerId: string, sandbox: string): Promise<void> {
+    const agentos = this.requireAgentOs(sessionOf(sandbox));
     const inspect = await this.libpod.inspectContainer(containerId);
     if (inspect === null || !isRunning(inspect)) {
       throw makeRealmError("OPENSHELL_START_FAILED");
@@ -239,8 +242,8 @@ export class SessionExecution implements ExecutionService {
   // Healthy only when the container runs and AgentOS reports alive. An unhealthy answer is a false result. A
   // failure to answer, such as a libpod error or AGENTOS_CRASH_LOOP, is thrown with its own code, so the lifecycle
   // records that code rather than a generic unhealthy result.
-  async probe(containerId: string): Promise<ProbeResult> {
-    const agentos = this.requireAgentOs();
+  async probe(containerId: string, sandbox: string): Promise<ProbeResult> {
+    const agentos = this.requireAgentOs(sessionOf(sandbox));
     const inspect = await this.libpod.inspectContainer(containerId);
     if (inspect === null || !isRunning(inspect)) {
       return "unhealthy";
@@ -267,9 +270,9 @@ export class SessionExecution implements ExecutionService {
 
   // The shared body of stop and destroy. The name is checked first, so a refused call reaches no later step.
   private async endSession(containerId: string, sandbox: string, mode: "stop" | "remove"): Promise<void> {
-    const name = requireSandboxName(sandbox);
+    const { name, sessionId } = requireSandbox(sandbox);
     const waited = await this.settleCreatesFor(containerId, name);
-    const agentosStop = await this.stopAgentOs();
+    const agentosStop = await this.stopAgentOs(sessionId);
     const containerAndSandbox = await this.endContainer(waited.target, name, mode);
     throwIfStopFailed([agentosStop, waited.settled ? STEP_OK : STEP_FAILED, ...containerAndSandbox]);
   }
@@ -331,13 +334,13 @@ export class SessionExecution implements ExecutionService {
   // Runs the AgentOS stop bounded by stopDeadlineMs. A rejection or a missed deadline is a failed stop, and its cause is
   // kept in the result. With no supervisor bound there is nothing to stop, so the step counts as stopped. A driver stop
   // that outlives the budget keeps running in the driver, but this step reports the stop as failed, never as success (N5).
-  private async stopAgentOs(): Promise<StopStep> {
-    const agentos = this.agentos;
-    if (agentos === undefined) {
+  private async stopAgentOs(sessionId: string): Promise<StopStep> {
+    const agentosFor = this.agentosFor;
+    if (agentosFor === undefined) {
       return { ok: true };
     }
     try {
-      await withTimeout(agentos.stop(), this.stopDeadlineMs, "AGENTOS_STOP_FAILED");
+      await withTimeout(agentosFor(sessionId).stop(), this.stopDeadlineMs, "AGENTOS_STOP_FAILED");
       return { ok: true };
     } catch (error) {
       // The deadline's own AGENTOS_STOP_FAILED adds nothing, so only a different code is kept as the cause.
@@ -372,11 +375,11 @@ export class SessionExecution implements ExecutionService {
 
   // Returns the bound supervisor, or throws AGENTOS_NOT_CONFIGURED. Create, start, and probe call it
   // before any libpod, OpenShell, or policy-file call, so no container is created without a supervisor.
-  private requireAgentOs(): AgentOsSupervisor {
-    if (this.agentos === undefined) {
+  private requireAgentOs(sessionId: string): AgentOsSupervisor {
+    if (this.agentosFor === undefined) {
       throw makeRealmError("AGENTOS_NOT_CONFIGURED");
     }
-    return this.agentos;
+    return this.agentosFor(sessionId);
   }
 
   // Returns only when the container conforms. Otherwise the container is removed before anything is
@@ -436,14 +439,24 @@ function throwIfStopFailed(steps: readonly StopStep[]): void {
   }
 }
 
-// Returns the sandbox name a stop or destroy was given. A missing name, or one the realm did not create, is refused with
-// AGENTOS_STOP_FAILED, so the refused call reaches no libpod, OpenShell, or AgentOS step. isRealmSandboxName also refuses an
-// absent value from an untyped caller.
-function requireSandboxName(sandbox: string): string {
-  if (!isRealmSandboxName(sandbox)) {
+// Returns the sandbox name a stop or destroy was given, with the session it belongs to. A missing name, or one the realm did
+// not create, is refused with AGENTOS_STOP_FAILED, so the refused call reaches no libpod, OpenShell, or AgentOS step.
+function requireSandbox(sandbox: string): { readonly name: string; readonly sessionId: string } {
+  const sessionId = sessionOfRealmSandbox(sandbox);
+  if (sessionId === undefined) {
     throw makeRealmError("AGENTOS_STOP_FAILED");
   }
-  return sandbox;
+  return { name: sandbox, sessionId };
+}
+
+// The session a sandbox named by a start or a probe belongs to. A name the realm did not create is refused with SCHEMA_INVALID,
+// before any libpod or AgentOS call.
+function sessionOf(sandbox: string): string {
+  const sessionId = sessionOfRealmSandbox(sandbox);
+  if (sessionId === undefined) {
+    throw makeRealmError("SCHEMA_INVALID");
+  }
+  return sessionId;
 }
 
 // The catalogue code of an error thrown by a libpod or AgentOS call, or undefined for any other error.

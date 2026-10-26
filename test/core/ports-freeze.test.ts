@@ -8,8 +8,8 @@ import { SessionExecution } from "../../src/runtime/session-execution.js";
 // or removed from the interface also fails the type check.
 const FROZEN_ARITY: Readonly<Record<keyof ExecutionService, number>> = Object.freeze({
   create: 1,
-  start: 1,
-  probe: 1,
+  start: 2,
+  probe: 2,
   stop: 2,
   destroy: 2,
 });
@@ -22,12 +22,12 @@ function recordingFake(calls: string[]): ExecutionService {
       calls.push(`create ${req.idempotencyKey}`);
       return Promise.resolve({ containerId: "container" });
     },
-    start: (containerId) => {
-      calls.push(`start ${containerId}`);
+    start: (containerId, sandbox) => {
+      calls.push(`start ${containerId} ${sandbox}`);
       return Promise.resolve();
     },
-    probe: (containerId): Promise<ProbeResult> => {
-      calls.push(`probe ${containerId}`);
+    probe: (containerId, sandbox): Promise<ProbeResult> => {
+      calls.push(`probe ${containerId} ${sandbox}`);
       return Promise.resolve("healthy");
     },
     stop: (containerId, sandbox) => {
@@ -55,14 +55,14 @@ void test("D-39: the ExecutionService fake exposes exactly the frozen method nam
     );
   }
   await service.create({ idempotencyKey: "key", workspaceRoot: "/workspace" });
-  await service.start("container");
-  await service.probe("container");
+  await service.start("container", "realm-key");
+  await service.probe("container", "realm-key");
   await service.stop("container", "realm-key");
   await service.destroy("container", "realm-key");
   assert.deepEqual(calls, [
     "create key",
-    "start container",
-    "probe container",
+    "start container realm-key",
+    "probe container realm-key",
     "stop container realm-key",
     "destroy container realm-key",
   ]);

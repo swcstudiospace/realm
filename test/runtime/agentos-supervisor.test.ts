@@ -23,6 +23,7 @@ function harness(): {
   const driver = new FakeAgentOsDriver();
   const supervisor = new AgentOsSupervisor({
     driver,
+    sessionId: "sess-supervisor",
     callTimeoutMs: CALL_TIMEOUT_MS,
     // A random draw of 1 gives the top of the jitter range, so each delay is the full ceiling.
     random: () => 1,
@@ -254,6 +255,7 @@ void test("stopping during the backoff wait leaves no restart after stop and no 
   let release: () => void = () => {};
   const supervisor = new AgentOsSupervisor({
     driver,
+    sessionId: "sess-supervisor",
     callTimeoutMs: CALL_TIMEOUT_MS,
     random: () => 1,
     sleep: () => {

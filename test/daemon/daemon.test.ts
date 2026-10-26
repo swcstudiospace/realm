@@ -85,7 +85,6 @@ function daemonParts(fixture: Fixture, overrides?: Partial<StartDaemonOptions>):
   const options: StartDaemonOptions = {
     runtimeInput: {
       image: IMAGE,
-      workloadArgv: ["/usr/bin/agent", "--serve"],
       stateDir: fixture.stateDir,
       workspaceRoot: fixture.ws,
     },
@@ -249,7 +248,6 @@ void test("RT-04, D-47: buildDaemonHandle builds with no AgentOS driver, and an 
   const options: BuildDaemonHandleOptions = {
     runtimeInput: {
       image: IMAGE,
-      workloadArgv: ["/usr/bin/agent", "--serve"],
       stateDir: fixture.stateDir,
       workspaceRoot: fixture.ws,
     },

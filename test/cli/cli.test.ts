@@ -38,7 +38,6 @@ writeFileSync(
   join(CONFIG_HOME, "realm", "config.json"),
   JSON.stringify({
     image: `registry.example.com/realm/workload@sha256:${"0".repeat(64)}`,
-    workloadArgv: ["/usr/bin/agent", "--serve"],
     stateDir: RUNTIME_STATE_DIR,
     workspaceRoot: "/srv/realm-ws",
   }),
@@ -611,7 +610,6 @@ void test("a detached daemon that fails startup writes its error to <stateDir>/d
       join(configHome, "realm", "config.json"),
       JSON.stringify({
         image: `registry.example.com/realm/workload@sha256:${"0".repeat(64)}`,
-        workloadArgv: ["/usr/bin/agent", "--serve"],
         stateDir,
         workspaceRoot: "/srv/realm-ws",
       }),
@@ -657,7 +655,6 @@ void test("the CLI creates missing ancestors of a fresh state path at the defaul
       join(configHome, "realm", "config.json"),
       JSON.stringify({
         image: `registry.example.com/realm/workload@sha256:${"0".repeat(64)}`,
-        workloadArgv: ["/usr/bin/agent", "--serve"],
         stateDir,
         workspaceRoot: "/srv/realm-ws",
       }),

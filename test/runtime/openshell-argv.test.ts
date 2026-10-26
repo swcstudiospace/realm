@@ -13,6 +13,7 @@ import {
 } from "../../src/runtime/openshell.js";
 import { FakeContainerStore, FakeLibpod } from "../support/fake-libpod.js";
 import { FakeOpenShell } from "../support/fake-openshell.js";
+import { createThrough } from "../support/sandbox-create.js";
 
 const OPENSHELL_MANAGED_KEY = "openshell.managed";
 const SANDBOX_NAME_KEY = "openshell.ai/sandbox-name";
@@ -114,7 +115,7 @@ void test("RT-03: a session id outside the safe set, a relative policy path, or 
       () => buildCreateArgv(request),
       (error: unknown) => error instanceof RealmError && error.code === "SCHEMA_INVALID",
     );
-    await assertCode(runOpenShellCreate({ containers: client, runner: openshell.runner }, request, 500), "SCHEMA_INVALID");
+    await assertCode(runOpenShellCreate({ containers: client, createSandbox: createThrough(openshell.runner) }, request, 500), "SCHEMA_INVALID");
     assert.equal(openshell.callCount(), 0, "no OpenShell run starts for a refused request");
   }
 });
@@ -123,7 +124,7 @@ void test("CORE-06: a repeated create for the same session runs the OpenShell ru
   const store = new FakeContainerStore();
   const client = await startLibpod(t, store);
   const openshell = new FakeOpenShell(store);
-  const deps = { containers: client, runner: openshell.runner };
+  const deps = { containers: client, createSandbox: createThrough(openshell.runner) };
 
   const first = await runOpenShellCreate(deps, REQUEST, 2000);
   const second = await runOpenShellCreate(deps, REQUEST, 2000);
@@ -138,7 +139,7 @@ void test("RT-03: the runner receives the exact pinned argv on the first create"
   const client = await startLibpod(t, store);
   const openshell = new FakeOpenShell(store);
 
-  await runOpenShellCreate({ containers: client, runner: openshell.runner }, REQUEST, 2000);
+  await runOpenShellCreate({ containers: client, createSandbox: createThrough(openshell.runner) }, REQUEST, 2000);
 
   assert.deepEqual(openshell.calls()[0]?.argv, buildCreateArgv(REQUEST));
 });
@@ -149,7 +150,7 @@ void test("RT-03: a runner that exits non-zero gives OPENSHELL_START_FAILED afte
   const openshell = new FakeOpenShell(store);
   openshell.next("exit-1");
 
-  await assertCode(runOpenShellCreate({ containers: client, runner: openshell.runner }, REQUEST, 2000), "OPENSHELL_START_FAILED");
+  await assertCode(runOpenShellCreate({ containers: client, createSandbox: createThrough(openshell.runner) }, REQUEST, 2000), "OPENSHELL_START_FAILED");
   assert.equal(openshell.callCount(), 1);
   assert.equal(store.list().length, 0);
 });
@@ -161,7 +162,7 @@ void test("RT-03: a runner that cannot be started gives OPENSHELL_START_FAILED w
   openshell.next("reject");
 
   await assert.rejects(
-    runOpenShellCreate({ containers: client, runner: openshell.runner }, REQUEST, 2000),
+    runOpenShellCreate({ containers: client, createSandbox: createThrough(openshell.runner) }, REQUEST, 2000),
     (error: unknown) =>
       error instanceof RealmError && error.code === "OPENSHELL_START_FAILED" && !error.message.includes("ENOENT"),
   );
@@ -174,7 +175,7 @@ void test("RT-03: a runner that reports success but produces no labelled contain
   openshell.next("silent");
   const started = Date.now();
 
-  await assertCode(runOpenShellCreate({ containers: client, runner: openshell.runner }, REQUEST, 600), "OPENSHELL_START_FAILED");
+  await assertCode(runOpenShellCreate({ containers: client, createSandbox: createThrough(openshell.runner) }, REQUEST, 600), "OPENSHELL_START_FAILED");
   const elapsed = Date.now() - started;
   assert.ok(elapsed >= 550, `the poll runs until the deadline (elapsed ${String(elapsed)} ms)`);
   assert.ok(elapsed < 5000, `the poll stops at the deadline (elapsed ${String(elapsed)} ms)`);
@@ -186,7 +187,7 @@ void test("RT-03: a hung runner is bounded by the caller deadline and gives OPEN
   const openshell = new FakeOpenShell(store);
   openshell.next("hang");
 
-  await assertCode(runOpenShellCreate({ containers: client, runner: openshell.runner }, REQUEST, 300), "OPENSHELL_START_FAILED");
+  await assertCode(runOpenShellCreate({ containers: client, createSandbox: createThrough(openshell.runner) }, REQUEST, 300), "OPENSHELL_START_FAILED");
   const handed = openshell.calls()[0]?.timeoutMs;
   assert.ok(handed !== undefined && handed > 0 && handed <= 300, `the runner is told its bound (${String(handed)} ms)`);
 });
@@ -199,7 +200,7 @@ void test("CORE-06: two labelled containers for one session fail closed with OPE
   const client = await startLibpod(t, store);
   const openshell = new FakeOpenShell(store);
 
-  await assertCode(runOpenShellCreate({ containers: client, runner: openshell.runner }, REQUEST, 2000), "OPENSHELL_LABEL_AMBIGUOUS");
+  await assertCode(runOpenShellCreate({ containers: client, createSandbox: createThrough(openshell.runner) }, REQUEST, 2000), "OPENSHELL_LABEL_AMBIGUOUS");
   assert.equal(openshell.callCount(), 0);
 });
 

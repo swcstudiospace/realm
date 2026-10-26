@@ -47,7 +47,6 @@ function advisoryOptions(fixture: Fixture): CreateRealmHandleOptions {
   return {
     runtimeInput: {
       image: IMAGE,
-      workloadArgv: ["/usr/bin/agent", "--serve"],
       stateDir: fixture.stateDir,
       workspaceRoot: fixture.ws,
     },

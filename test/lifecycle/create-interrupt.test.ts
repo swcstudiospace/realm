@@ -198,8 +198,8 @@ void test("a stop during a pending exec.start leaves no running container, even 
   });
   const start = exec.start.bind(exec);
   const issued: Promise<void>[] = [];
-  exec.start = (containerId: string) => {
-    const call = gate.then(() => start(containerId));
+  exec.start = (containerId: string, sandbox: string) => {
+    const call = gate.then(() => start(containerId, sandbox));
     issued.push(call);
     return call;
   };

@@ -1,10 +1,15 @@
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeRealmError, RealmError, type ErrorCode } from "../../src/core/errors.js";
 import { AgentOsSupervisor } from "../../src/runtime/agentos.js";
+import { LifecycleController } from "../../src/lifecycle/controller.js";
+import { bindWorkspaceUnderPolicy } from "../../src/fs/root.js";
+import { SessionStore } from "../../src/session/store.js";
+import { createOpenShellAgentOsDriver, DEFAULT_AGENTOS_PROBE_PATH, DEFAULT_AGENTOS_RUNNER_PATH } from "../../src/runtime/agentos-driver.js";
+import type { RunnerChild } from "../../src/runtime/agentos-workload.js";
 import { renderNetworkPolicies } from "../../src/runtime/egress.js";
 import { HARDENING_PROFILE } from "../../src/runtime/hardening.js";
 import { LibpodClient } from "../../src/runtime/libpod-client.js";
@@ -18,6 +23,7 @@ import {
   type OpenShellRunner,
 } from "../../src/runtime/openshell.js";
 import {
+  AGENTOS_WORKLOAD_BINARY,
   HardeningFailedError,
   runSandboxExec,
   SessionExecution,
@@ -28,12 +34,12 @@ import {
 import { FakeAgentOsDriver } from "../support/fake-agentos.js";
 import { FakeContainerStore, FakeLibpod } from "../support/fake-libpod.js";
 import { FakeOpenShell } from "../support/fake-openshell.js";
+import { FakeBridge } from "../support/fake-bridge.js";
 
 const SESSION = "sess-01";
 const DIGEST = `sha256:${"a".repeat(64)}`;
 const IMAGE = `registry.example.com/realm/session@${DIGEST}`;
-const WORKLOAD_BINARY = "/usr/bin/agent";
-const WORKLOAD = [WORKLOAD_BINARY, "--serve"];
+const WORKLOAD = ["/usr/bin/agent", "--serve"];
 const EGRESS = [{ host: "api.example.com", port: 443 }];
 // The D-80 flags no argv on the execution path may carry (RT-05). Each is compared as a whole argv element.
 const FORBIDDEN_FLAGS = ["--env", "--provider", "--driver-config-json", "--forward", "--expose", "--template", "--auto-providers"];
@@ -51,6 +57,7 @@ interface Fixture {
   readonly openshell: FakeOpenShell;
   readonly driver: FakeAgentOsDriver;
   readonly supervisor: AgentOsSupervisor;
+  readonly supervisorFor: (sessionId: string) => AgentOsSupervisor;
   readonly exec: SessionExecution;
   // The same libpod and runner with no AgentOS supervisor bound (the AGENTOS_NOT_CONFIGURED paths).
   readonly unbound: SessionExecution;
@@ -80,28 +87,39 @@ async function fixture(t: TestContext, options: { readonly rootless?: boolean } 
     policyAtRun.push(policy !== undefined && existsSync(policy) ? readFileSync(policy, "utf8") : undefined);
     return openshell.runner(argv, options);
   };
-  const driver = new FakeAgentOsDriver();
-  const supervisor = new AgentOsSupervisor({
-    driver,
-    callTimeoutMs: 1000,
-    random: () => 0,
-    sleep: () => Promise.resolve(),
-    now: () => 0,
-  });
+  const driver = new FakeAgentOsDriver(runner);
+  // One supervisor per session over the one fake driver, as the daemon builds them. A session names its own supervisor.
+  const supervisors = new Map<string, AgentOsSupervisor>();
+  const supervisorFor = (sessionId: string): AgentOsSupervisor => {
+    let made = supervisors.get(sessionId);
+    if (made === undefined) {
+      made = new AgentOsSupervisor({
+        driver,
+        sessionId,
+        callTimeoutMs: 1000,
+        random: () => 0,
+        sleep: () => Promise.resolve(),
+        now: () => 0,
+      });
+      supervisors.set(sessionId, made);
+    }
+    return made;
+  };
+  const supervisor = supervisorFor(SESSION);
   const libpodClient = new LibpodClient(socketPath);
   const procStatus = { text: ZERO_STATUS };
   const exec = new SessionExecution({
     libpod: libpodClient,
     runner,
-    agentos: supervisor,
-    config: { image: IMAGE, workloadArgv: WORKLOAD, stateDir },
+    agentosFor: (sessionId) => supervisorFor(sessionId),
+    config: { image: IMAGE, stateDir },
     egressAllow: EGRESS,
     readProcStatus: () => procStatus.text,
   });
   const unbound = new SessionExecution({
     libpod: libpodClient,
     runner,
-    config: { image: IMAGE, workloadArgv: WORKLOAD, stateDir },
+    config: { image: IMAGE, stateDir },
     egressAllow: EGRESS,
   });
   return {
@@ -113,6 +131,7 @@ async function fixture(t: TestContext, options: { readonly rootless?: boolean } 
     openshell,
     driver,
     supervisor,
+    supervisorFor,
     exec,
     unbound,
     policyAtRun,
@@ -234,7 +253,7 @@ void test("RT-03, CORE-06: the policy document is written before the OpenShell c
   assert.equal(f.policyAtRun.length, 1, "one OpenShell run, the create");
   assert.notEqual(f.policyAtRun[0], undefined, "the policy document exists when the create runs");
   const policy = join(f.stateDir, "runtime", `${SESSION}.policy.json`);
-  assert.equal(readFileSync(policy, "utf8"), `${JSON.stringify(buildPolicyDocument(EGRESS, WORKLOAD_BINARY), null, 2)}\n`);
+  assert.equal(readFileSync(policy, "utf8"), `${JSON.stringify(buildPolicyDocument(EGRESS, AGENTOS_WORKLOAD_BINARY), null, 2)}\n`);
 });
 
 void test("RT-05, RT-03: create writes the egress list and the workload binary into the policy the create runs against", async (t) => {
@@ -242,9 +261,68 @@ void test("RT-05, RT-03: create writes the egress list and the workload binary i
   await createSession(f);
   const written = f.policyAtRun[0];
   assert.ok(written !== undefined, "the policy document exists when the create runs");
-  assert.equal(written, `${JSON.stringify(buildPolicyDocument(EGRESS, WORKLOAD_BINARY), null, 2)}\n`);
+  assert.equal(written, `${JSON.stringify(buildPolicyDocument(EGRESS, AGENTOS_WORKLOAD_BINARY), null, 2)}\n`);
   const policy = JSON.parse(written) as { readonly network_policies: unknown };
-  assert.deepEqual(policy.network_policies, renderNetworkPolicies(EGRESS, WORKLOAD_BINARY));
+  assert.deepEqual(policy.network_policies, renderNetworkPolicies(EGRESS, AGENTOS_WORKLOAD_BINARY));
+});
+
+void test("RT-03, CORE-06: a session create runs exactly one sandbox create, named realm-<sessionId>, with no workload command and no --no-keep", async (t) => {
+  const f = await fixture(t);
+  await createSession(f);
+  const creates = f.openshell.calls().map((call) => call.argv).filter((argv) => argv[2] === "create");
+  assert.equal(creates.length, 1, "exactly one sandbox create");
+  const create = creates[0] ?? [];
+  assert.equal(create[create.indexOf("--name") + 1], realmSandboxName(SESSION));
+  assert.equal(create.includes("--"), false, "the create carries no workload command");
+  assert.equal(create.includes("--no-keep"), false, "the create carries no --no-keep");
+});
+
+void test("RT-05, RT-03: a create for the daemon's session writes only that session's policy document, with the AgentOS workload binary", async (t) => {
+  const f = await fixture(t);
+  await createSession(f, "daemon");
+  const runtimeDir = join(f.stateDir, "runtime");
+  assert.deepEqual(readdirSync(runtimeDir), ["daemon.policy.json"]);
+  assert.equal(
+    readFileSync(join(runtimeDir, "daemon.policy.json"), "utf8"),
+    `${JSON.stringify(buildPolicyDocument(EGRESS, AGENTOS_WORKLOAD_BINARY), null, 2)}\n`,
+  );
+});
+
+void test("RT-04, D-18: a session start runs the AgentOS runner as an exec child in the session's sandbox, and starts only after its probe exits 0", async (t) => {
+  const f = await fixture(t);
+  const spawned: (readonly string[])[] = [];
+  const child: RunnerChild = {
+    hasExited: () => false,
+    exited: new Promise<void>(() => undefined),
+    terminate: () => Promise.resolve(),
+  };
+  const driver = createOpenShellAgentOsDriver({
+    runner: f.openshell.runner,
+    spawnRunner: (argv) => {
+      spawned.push([...argv]);
+      return child;
+    },
+    startTimeoutMs: 10_000,
+    callTimeoutMs: 1000,
+    probeIntervalMs: 1,
+  });
+  const supervisor = new AgentOsSupervisor({ driver, sessionId: SESSION, callTimeoutMs: 10_000, random: () => 0, sleep: () => Promise.resolve(), now: () => 0 });
+  const exec = new SessionExecution({
+    libpod: new LibpodClient(join(f.base, "podman.sock")),
+    runner: f.openshell.runner,
+    agentosFor: () => supervisor,
+    config: { image: IMAGE, stateDir: f.stateDir },
+    egressAllow: EGRESS,
+    readProcStatus: () => f.procStatus.text,
+  });
+  const { containerId } = await createWith(f, exec);
+  // The first probe finds the runner not yet up and the second finds it up, so the start must wait for the second.
+  f.openshell.next({ output: { exitCode: 1 } }, { output: { exitCode: 0 } });
+  await exec.start(containerId, realmSandboxName(SESSION));
+  assert.deepEqual(spawned, [buildExecArgv(SESSION, ["node", DEFAULT_AGENTOS_RUNNER_PATH])]);
+  const probes = f.openshell.calls().map((call) => call.argv).filter((argv) => argv[2] === "exec");
+  const probeArgv = buildExecArgv(SESSION, ["node", DEFAULT_AGENTOS_PROBE_PATH]);
+  assert.deepEqual(probes, [probeArgv, probeArgv]);
 });
 
 void test("RT-05: an invalid egress allowlist throws SCHEMA_INVALID at construction, before any OpenShell run, container, policy write or libpod request", async (t) => {
@@ -260,8 +338,8 @@ void test("RT-05: an invalid egress allowlist throws SCHEMA_INVALID at construct
         new SessionExecution({
           libpod: new LibpodClient(join(f.base, "podman.sock")),
           runner: f.openshell.runner,
-          agentos: f.supervisor,
-          config: { image: IMAGE, workloadArgv: WORKLOAD, stateDir: f.stateDir },
+          agentosFor: () => f.supervisor,
+          config: { image: IMAGE, stateDir: f.stateDir },
           egressAllow,
         }),
       (error: unknown) => error instanceof RealmError && error.code === "SCHEMA_INVALID",
@@ -291,11 +369,11 @@ void test("RT-03, RT-04: start refuses a container that is not running and start
   const f = await fixture(t);
   const { containerId } = await createSession(f);
   f.store.setRunning(containerId, false);
-  await assertCode(f.exec.start(containerId), "OPENSHELL_START_FAILED");
-  assert.deepEqual(f.driver.calls(), []);
+  await assertCode(f.exec.start(containerId, realmSandboxName(SESSION)), "OPENSHELL_START_FAILED");
+  assert.deepEqual(f.driver.calls(), ["create"], "the refused start made no AgentOS call beyond the create");
 
   f.store.setRunning(containerId, true);
-  await f.exec.start(containerId);
+  await f.exec.start(containerId, realmSandboxName(SESSION));
   assert.equal(f.driver.callCount("start"), 1);
   assert.equal(f.openshell.callCount(), 1);
 });
@@ -303,28 +381,28 @@ void test("RT-03, RT-04: start refuses a container that is not running and start
 void test("RT-01, RT-04: probe is healthy only when the container runs and AgentOS reports alive", async (t) => {
   const f = await fixture(t);
   const { containerId } = await createSession(f);
-  assert.equal(await f.exec.probe(containerId), "unhealthy", "AgentOS was never started");
-  await f.exec.start(containerId);
-  assert.equal(await f.exec.probe(containerId), "healthy");
+  assert.equal(await f.exec.probe(containerId, realmSandboxName(SESSION)), "unhealthy", "AgentOS was never started");
+  await f.exec.start(containerId, realmSandboxName(SESSION));
+  assert.equal(await f.exec.probe(containerId, realmSandboxName(SESSION)), "healthy");
   f.store.setRunning(containerId, false);
-  assert.equal(await f.exec.probe(containerId), "unhealthy", "a stopped container is never healthy");
-  assert.equal(await f.exec.probe("missing-container"), "unhealthy");
+  assert.equal(await f.exec.probe(containerId, realmSandboxName(SESSION)), "unhealthy", "a stopped container is never healthy");
+  assert.equal(await f.exec.probe("missing-container", realmSandboxName(SESSION)), "unhealthy");
 });
 
 void test("RT-01, RT-04: a probe whose inspect cannot be read rejects with the libpod code instead of reporting unhealthy", async (t) => {
   const f = await fixture(t);
   const { containerId } = await createSession(f);
-  await f.exec.start(containerId);
+  await f.exec.start(containerId, realmSandboxName(SESSION));
   f.libpod.respondNext("inspectContainer", { status: 500 });
-  await assertCode(f.exec.probe(containerId), "SCHEMA_INVALID");
+  await assertCode(f.exec.probe(containerId, realmSandboxName(SESSION)), "SCHEMA_INVALID");
 });
 
 void test("RT-04, D-59: a runner that exits while the session is active makes probe fail with AGENTOS_CRASH_LOOP, and the runner is not restarted", async (t) => {
   const f = await fixture(t);
   const { containerId } = await createSession(f);
-  await f.exec.start(containerId);
+  await f.exec.start(containerId, realmSandboxName(SESSION));
   f.driver.exitRunner();
-  await assertCode(f.exec.probe(containerId), "AGENTOS_CRASH_LOOP");
+  await assertCode(f.exec.probe(containerId, realmSandboxName(SESSION)), "AGENTOS_CRASH_LOOP");
   assert.equal(f.driver.callCount("start"), 1, "the supervisor does not restart the runner");
 });
 
@@ -401,7 +479,7 @@ void test("F2: a stop or destroy that names no realm sandbox, absent or not real
   }
   assert.equal(f.libpod.requests().length, libpodRequests, "no libpod request is sent");
   assert.equal(f.openshell.callCount(), openshellRuns, "no OpenShell run starts");
-  assert.deepEqual(f.driver.calls(), [], "no AgentOS driver call is made");
+  assert.deepEqual(f.driver.calls(), ["create"], "no AgentOS call is made beyond the create before the loop");
   assert.equal(f.store.get(containerId)?.running, true, "the container is left running");
 });
 
@@ -411,8 +489,8 @@ void test("F5: an AgentOS step that timed out with no code and a container step 
   const exec = new SessionExecution({
     libpod: armed.libpod,
     runner: f.openshell.runner,
-    agentos: f.supervisor,
-    config: { image: IMAGE, workloadArgv: WORKLOAD, stateDir: f.stateDir },
+    agentosFor: () => f.supervisor,
+    config: { image: IMAGE, stateDir: f.stateDir },
     egressAllow: EGRESS,
     stopDeadlineMs: 20,
     readProcStatus: () => f.procStatus.text,
@@ -446,7 +524,7 @@ void test("RT-03, RT-01: a failed AgentOS stop keeps the supervisor's catalogue 
 void test("RT-03, RT-04, RT-01: destroy stops AgentOS while the container still exists, and removes the container even when that stop throws", async (t) => {
   const f = await fixture(t);
   const { containerId } = await createSession(f);
-  await f.exec.start(containerId);
+  await f.exec.start(containerId, realmSandboxName(SESSION));
   const seen: boolean[] = [];
   const stopAgentOs = f.supervisor.stop.bind(f.supervisor);
   f.supervisor.stop = async () => {
@@ -459,7 +537,7 @@ void test("RT-03, RT-04, RT-01: destroy stops AgentOS while the container still 
   assert.equal(f.store.get(containerId), undefined, "the container is removed after AgentOS stops");
 
   const second = await createSession(f, "sess-02");
-  f.supervisor.stop = () => Promise.reject(new Error("scripted supervisor socket gone"));
+  f.supervisorFor("sess-02").stop = () => Promise.reject(new Error("scripted supervisor socket gone"));
   await assertCode(f.exec.destroy(second.containerId, realmSandboxName("sess-02")), "AGENTOS_STOP_FAILED");
   assert.equal(f.store.get(second.containerId), undefined, "the container is removed even though the AgentOS stop failed");
 });
@@ -467,8 +545,8 @@ void test("RT-03, RT-04, RT-01: destroy stops AgentOS while the container still 
 void test("RT-04, D-47: without an AgentOS supervisor, create, start, and probe each refuse with AGENTOS_NOT_CONFIGURED before any libpod request, OpenShell run, or policy write", async (t) => {
   const f = await fixture(t);
   await assertCode(f.unbound.create({ idempotencyKey: SESSION, workspaceRoot: f.workspaceRoot }), "AGENTOS_NOT_CONFIGURED");
-  await assertCode(f.unbound.start("sandbox-container"), "AGENTOS_NOT_CONFIGURED");
-  await assertCode(f.unbound.probe("sandbox-container"), "AGENTOS_NOT_CONFIGURED");
+  await assertCode(f.unbound.start("sandbox-container", realmSandboxName(SESSION)), "AGENTOS_NOT_CONFIGURED");
+  await assertCode(f.unbound.probe("sandbox-container", realmSandboxName(SESSION)), "AGENTOS_NOT_CONFIGURED");
   assert.deepEqual(f.libpod.requests(), [], "no libpod request is sent");
   assert.equal(f.openshell.callCount(), 0, "no OpenShell run starts");
   assert.equal(existsSync(f.stateDir), false, "no policy document is written");
@@ -482,7 +560,7 @@ void test("RT-03, D-47: without an AgentOS supervisor, stop stops the container 
   assert.equal(f.store.get(containerId)?.running, false, "the container is stopped");
   await f.unbound.destroy(containerId, realmSandboxName(SESSION));
   assert.equal(f.store.get(containerId), undefined, "the container is removed");
-  assert.deepEqual(f.driver.calls(), [], "no AgentOS driver call is made");
+  assert.deepEqual(f.driver.calls(), ["create"], "the only AgentOS call is the create that ran before the unbound stop");
 });
 
 function routeCount(f: Fixture, route: string): number {
@@ -760,8 +838,8 @@ void test("N5: a driver stop that outlives the stop budget is reported as AGENTO
   const budgeted = new SessionExecution({
     libpod: new LibpodClient(join(f.base, "podman.sock")),
     runner: f.openshell.runner,
-    agentos: f.supervisor,
-    config: { image: IMAGE, workloadArgv: WORKLOAD, stateDir: f.stateDir },
+    agentosFor: () => f.supervisor,
+    config: { image: IMAGE, stateDir: f.stateDir },
     egressAllow: EGRESS,
     stopDeadlineMs: 20,
   });
@@ -813,13 +891,28 @@ function armableLibpod(f: Fixture): { readonly libpod: SessionContainers; readon
   };
 }
 
-// A SessionExecution over the fixture's supervisor and config, with the given libpod surface and runner.
+// An AgentOS supervisor whose driver runs the sandbox create through the given runner, so a test that holds the runner holds
+// the create too.
+function supervisorThrough(runner: OpenShellRunner): AgentOsSupervisor {
+  return new AgentOsSupervisor({
+    driver: new FakeAgentOsDriver(runner),
+    sessionId: SESSION,
+    callTimeoutMs: 1000,
+    random: () => 0,
+    sleep: () => Promise.resolve(),
+    now: () => 0,
+  });
+}
+
+// A SessionExecution over the fixture's config, with the given libpod surface and runner. The runner runs the sandbox
+// create (through the driver) and the sandbox delete.
 function sessionExecWith(f: Fixture, libpod: SessionContainers, runner: OpenShellRunner = f.openshell.runner): SessionExecution {
+  const supervisor = supervisorThrough(runner);
   return new SessionExecution({
     libpod,
     runner,
-    agentos: f.supervisor,
-    config: { image: IMAGE, workloadArgv: WORKLOAD, stateDir: f.stateDir },
+    agentosFor: () => supervisor,
+    config: { image: IMAGE, stateDir: f.stateDir },
     egressAllow: EGRESS,
     readProcStatus: () => f.procStatus.text,
   });
@@ -913,11 +1006,12 @@ void test("B-3: a stop whose wait for an in-flight create outlasts its deadline 
   const hold = gate();
   const heldRunner: OpenShellRunner = (argv, options) =>
     argv[2] === "create" ? hold.open.then(() => f.openshell.runner(argv, options)) : f.openshell.runner(argv, options);
+  const supervisor = supervisorThrough(heldRunner);
   const exec = new SessionExecution({
     libpod: new LibpodClient(join(f.base, "podman.sock")),
     runner: heldRunner,
-    agentos: f.supervisor,
-    config: { image: IMAGE, workloadArgv: WORKLOAD, stateDir: f.stateDir },
+    agentosFor: () => supervisor,
+    config: { image: IMAGE, stateDir: f.stateDir },
     egressAllow: EGRESS,
     stopDeadlineMs: 20,
     readProcStatus: () => f.procStatus.text,
@@ -999,4 +1093,103 @@ void test("B-3: a stop during a session create waits for the create, deletes the
   await stopped;
   assert.deepEqual(sandboxDeletes(f), [[OPENSHELL_BINARY, "sandbox", "delete", name]]);
   assert.equal(f.store.list().filter((container) => container.running).length, 0, "no container is left running");
+});
+
+void test("RT-04, D-28: the startup budget covers the runner start on the session path: a start that outruns it gives STARTUP_BUDGET_EXCEEDED and the session is in error", async (t) => {
+  const f = await fixture(t);
+  mkdirSync(f.workspaceRoot, { recursive: true });
+  // The runner start hangs, so the controller's startup budget ends the wait. The budget is shorter than the supervisor's
+  // own call budget (1000 ms), so the controller, not the supervisor, reports the expiry.
+  f.driver.script("start", "hang");
+  scriptInspect(f, conformingInspect(f));
+  const controller = new LifecycleController({
+    sessionId: SESSION,
+    policy: {
+      mode: "advisory",
+      workspaceRoots: [f.workspaceRoot],
+      credentialAllow: [],
+      egressAllow: [],
+      shellEnabled: false,
+      startupBudgetMs: 500,
+      toolQueueMs: 2000,
+    },
+    pinnedRoot: bindWorkspaceUnderPolicy([f.workspaceRoot], f.workspaceRoot),
+    store: new SessionStore(f.stateDir),
+    exec: f.exec,
+    bridge: new FakeBridge(),
+    clock: () => new Date("2026-10-21T09:30:00.000Z"),
+  });
+  const snapshot = await controller.create(f.workspaceRoot);
+  assert.equal(snapshot.state, "error");
+  assert.equal(snapshot.reason, "STARTUP_BUDGET_EXCEEDED");
+  assert.equal(f.driver.callCount("start"), 1, "the runner start was issued and never answered");
+});
+
+void test("RT-03, RT-04, D-18: a session named s1 gets its own sandbox: create, runner exec, probe exec and delete all name realm-s1, and realm-daemon is never named", async (t) => {
+  const f = await fixture(t);
+  const name = realmSandboxName("s1");
+  const spawned: (readonly string[])[] = [];
+  const child: RunnerChild = {
+    hasExited: () => false,
+    exited: new Promise<void>(() => undefined),
+    terminate: () => Promise.resolve(),
+  };
+  const driver = createOpenShellAgentOsDriver({
+    runner: f.openshell.runner,
+    spawnRunner: (argv) => {
+      spawned.push([...argv]);
+      return child;
+    },
+    startTimeoutMs: 10_000,
+    callTimeoutMs: 1000,
+    probeIntervalMs: 1,
+  });
+  // One supervisor per session, the same object for the same session on every call.
+  const supervisors = new Map<string, AgentOsSupervisor>();
+  const exec = new SessionExecution({
+    libpod: new LibpodClient(join(f.base, "podman.sock")),
+    runner: f.openshell.runner,
+    agentosFor: (sessionId) => {
+      let supervisor = supervisors.get(sessionId);
+      if (supervisor === undefined) {
+        supervisor = new AgentOsSupervisor({
+          driver,
+          sessionId,
+          callTimeoutMs: 10_000,
+          random: () => 0,
+          sleep: () => Promise.resolve(),
+          now: () => 0,
+        });
+        supervisors.set(sessionId, supervisor);
+      }
+      return supervisor;
+    },
+    config: { image: IMAGE, stateDir: f.stateDir },
+    egressAllow: EGRESS,
+    readProcStatus: () => f.procStatus.text,
+  });
+  scriptInspect(f, conformingInspect(f));
+  const { containerId } = await exec.create({ idempotencyKey: "s1", workspaceRoot: f.workspaceRoot });
+  // The start's readiness probe and the probe's liveness check each answer exit 0.
+  f.openshell.next({ output: { exitCode: 0 } }, { output: { exitCode: 0 } });
+  await exec.start(containerId, name);
+  assert.equal(await exec.probe(containerId, name), "healthy");
+  await exec.stop(containerId, name);
+
+  const argvs = f.openshell.calls().map((call) => call.argv);
+  const creates = argvs.filter((argv) => argv[2] === "create");
+  const execs = argvs.filter((argv) => argv[2] === "exec");
+  const deletes = argvs.filter((argv) => argv[2] === "delete");
+  assert.equal(creates.length, 1, "one sandbox create");
+  assert.equal(creates[0]?.[creates[0].indexOf("--name") + 1], name);
+  assert.deepEqual(
+    execs.map((argv) => argv[argv.indexOf("--name") + 1]),
+    [name, name],
+    "the runner's readiness probe and the probe's liveness check both name realm-s1",
+  );
+  assert.deepEqual(deletes, [[OPENSHELL_BINARY, "sandbox", "delete", name]]);
+  assert.deepEqual(spawned, [buildExecArgv("s1", ["node", DEFAULT_AGENTOS_RUNNER_PATH])]);
+  const everyName = [...argvs, ...spawned].flat();
+  assert.equal(everyName.includes("realm-daemon"), false, "no argv names the daemon's sandbox");
+  assert.equal(everyName.some((token) => token.startsWith("realm-daemon")), false);
 });

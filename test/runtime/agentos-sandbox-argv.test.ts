@@ -4,16 +4,16 @@ import { RealmError, type ErrorCode } from "../../src/core/errors.js";
 import {
   buildAgentOsSandboxArgv,
   buildCreateArgv,
+  buildSandboxDeleteArgv,
   OPENSHELL_BINARY,
+  realmSandboxName,
   type AgentOsSandboxRequest,
 } from "../../src/runtime/openshell.js";
 
+const POLICY = "/state/runtime/daemon.policy.json";
+const IMAGE = `localhost/realm-agentos@sha256:${"b".repeat(64)}`;
 const REQUEST: AgentOsSandboxRequest = {
-  sessionId: "agentos",
-  policyPath: "/realm-state/agentos/policy.json",
-  cpus: 2,
-  memory: "4Gi",
-  imageRef: `localhost/realm-agentos@sha256:${"b".repeat(64)}`,
+  sessionId: "daemon",
   runnerPath: "/usr/local/lib/realm/agentos-runner.js",
   probePath: "/usr/local/lib/realm/agentos-probe.js",
 };
@@ -22,23 +22,22 @@ function refusedWith(code: ErrorCode): (error: unknown) => boolean {
   return (error: unknown) => error instanceof RealmError && error.code === code;
 }
 
-void test("the create argv carries the image through --from and no command", () => {
-  const { create } = buildAgentOsSandboxArgv(REQUEST);
-  const from = create.indexOf("--from");
-  assert.notEqual(from, -1);
-  assert.equal(create[from + 1], REQUEST.imageRef);
+void test("the session create argv names realm-<sessionId>, carries the image through --from, and has no command or --no-keep", () => {
+  const create = buildCreateArgv({ sessionId: "daemon", policyPath: POLICY, cpus: 2, memory: "4Gi", imageRef: IMAGE });
+  assert.equal(create[create.indexOf("--name") + 1], "realm-daemon");
+  assert.equal(create[create.indexOf("--from") + 1], IMAGE);
   assert.equal(create.includes("--"), false);
   assert.equal(create.includes("--no-keep"), false);
 });
 
-void test("the runner argv is the pinned exec form that runs the runner in the sandbox", () => {
+void test("the runner argv is the pinned exec form that runs the runner in the session's sandbox", () => {
   const { runner } = buildAgentOsSandboxArgv(REQUEST);
   assert.deepEqual(runner, [
     OPENSHELL_BINARY,
     "sandbox",
     "exec",
     "--name",
-    "realm-agentos",
+    "realm-daemon",
     "--workdir",
     "/workspace",
     "--no-tty",
@@ -49,34 +48,29 @@ void test("the runner argv is the pinned exec form that runs the runner in the s
   ]);
 });
 
-void test("the probe and delete argv name the same sandbox as the create argv", () => {
-  const argv = buildAgentOsSandboxArgv(REQUEST);
-  assert.equal(argv.create[argv.create.indexOf("--name") + 1], "realm-agentos");
-  assert.ok(argv.probe.includes("realm-agentos"));
-  assert.deepEqual(argv.delete, [OPENSHELL_BINARY, "sandbox", "delete", "realm-agentos"]);
+void test("the probe argv names the session's sandbox, and the delete argv names the same sandbox", () => {
+  const { probe } = buildAgentOsSandboxArgv(REQUEST);
+  assert.equal(probe[probe.indexOf("--name") + 1], "realm-daemon");
+  assert.deepEqual(buildSandboxDeleteArgv(realmSandboxName(REQUEST.sessionId)), [
+    OPENSHELL_BINARY,
+    "sandbox",
+    "delete",
+    "realm-daemon",
+  ]);
+});
+
+void test("a session id outside the safe set is refused with SCHEMA_INVALID by the AgentOS argv builder", () => {
+  assert.throws(() => buildAgentOsSandboxArgv({ ...REQUEST, sessionId: "../escape" }), refusedWith("SCHEMA_INVALID"));
 });
 
 void test("a session create argv carries no --from when no image is given", () => {
-  const argv = buildCreateArgv({
-    sessionId: "agentos",
-    policyPath: REQUEST.policyPath,
-    cpus: 2,
-    memory: "4Gi",
-  });
+  const argv = buildCreateArgv({ sessionId: "daemon", policyPath: POLICY, cpus: 2, memory: "4Gi" });
   assert.equal(argv.includes("--from"), false);
 });
 
-void test("an empty image reference is refused with SCHEMA_INVALID by both builders", () => {
-  assert.throws(() => buildAgentOsSandboxArgv({ ...REQUEST, imageRef: "" }), refusedWith("SCHEMA_INVALID"));
+void test("an empty image reference is refused with SCHEMA_INVALID by the create builder", () => {
   assert.throws(
-    () =>
-      buildCreateArgv({
-        sessionId: "agentos",
-        policyPath: REQUEST.policyPath,
-        cpus: 2,
-        memory: "4Gi",
-        imageRef: "",
-      }),
+    () => buildCreateArgv({ sessionId: "daemon", policyPath: POLICY, cpus: 2, memory: "4Gi", imageRef: "" }),
     refusedWith("SCHEMA_INVALID"),
   );
 });

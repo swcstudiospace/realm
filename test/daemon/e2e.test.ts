@@ -81,7 +81,6 @@ function makeDirs(t: TestContext): Fixture {
     join(base, "config", "realm", "config.json"),
     JSON.stringify({
       image: IMAGE,
-      workloadArgv: ["/usr/bin/agent", "--serve"],
       stateDir: join(base, "realm"),
       workspaceRoot: ws,
     }),
@@ -109,7 +108,6 @@ function daemonOptions(fixture: Fixture, overrides?: Partial<StartDaemonOptions>
   return {
     runtimeInput: {
       image: IMAGE,
-      workloadArgv: ["/usr/bin/agent", "--serve"],
       stateDir: fixture.stateDir,
       workspaceRoot: fixture.ws,
     },

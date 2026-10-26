@@ -49,7 +49,7 @@ Every gate must pass before a change is reviewed (`CONTRIBUTING.md`).
   - `realm/`: composition root (`compose.ts`) that wires the adapters into the controller and dispatcher.
   - `lifecycle/`: `controller.ts` (the lifecycle controller) and `mutation-gate.ts`.
   - `tools/`: the single shared tool dispatcher (`dispatch.ts`) and the workspace file handlers (`workspace.ts`).
-  - `runtime/`: Podman probe and version check, libpod client and routes, OpenShell adapter, hardening verifier, egress rules, session execution, the AgentOS port (no concrete driver is bound yet), and runtime config.
+  - `runtime/`: Podman probe and version check, libpod client and routes, OpenShell adapter, hardening verifier, egress rules, session execution, the AgentOS port and its OpenShell-carried driver (bound only when `REALM_AGENTOS_IMAGE` is set; each session's runner acts on its own sandbox, `realm-<sessionId>`), and runtime config.
   - `session/`: session record store, state-directory paths, and the startup reaper (`reap.ts`).
   - `anda/`: Anda Engine HTTP bridge (`client.ts`) and the version-shape check (`shape.ts`).
   - `fs/`: canonical paths, root allowlist, credential-path denial, advisory write locks, atomic writes, and read, list, glob, and write.

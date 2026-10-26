@@ -28,6 +28,7 @@ import {
   productionOpenShellRunner,
   SessionExecution,
   type SessionContainers,
+  type SupervisorFor,
 } from "../runtime/session-execution.js";
 import type { OpenShellRunner } from "../runtime/openshell.js";
 import {
@@ -82,7 +83,7 @@ export interface BuildDaemonHandleOptions {
   // Production construction seams, used only when exec is omitted.
   readonly libpod?: SessionContainers;
   readonly libpodSocketPath?: string;
-  readonly agentos?: AgentOsSupervisor;
+  readonly agentosFor?: SupervisorFor;
   readonly agentosDriver?: AgentOsDriver;
   // Host environment filtered to OPENSHELL_ENV_NAMES for the runner (never
   // read from the process: this module reads no environment).
@@ -154,14 +155,14 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
   const libpod =
     options.libpod ??
     (options.libpodSocketPath !== undefined ? new LibpodClient(options.libpodSocketPath) : undefined);
-  // One supervisor per daemon: the one the caller gives, or one built over the driver. The handle and the
-  // doctor probe share it, so a single supervisor owns the driver process.
-  const agentos =
-    options.agentos ?? (options.agentosDriver !== undefined ? defaultSupervisor(options.agentosDriver) : undefined);
+  // One supervisor per session: the caller's, or one built over the driver. The handle and the doctor probe share them, so
+  // each session's supervision state is one object.
+  const agentosFor =
+    options.agentosFor ?? (options.agentosDriver !== undefined ? supervisorsOver(options.agentosDriver) : undefined);
   const handle = buildDaemonHandle({
     ...options,
     ...(libpod === undefined ? {} : { libpod }),
-    ...(agentos === undefined ? {} : { agentos }),
+    ...(agentosFor === undefined ? {} : { agentosFor }),
   });
   const config = loadRuntimeConfig(options.runtimeInput);
   const stateDir = config.stateDir;
@@ -183,7 +184,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
   // The AgentOS reading the doctor reports (CLI-03; P6-D14): unbound when no driver is given, otherwise
   // whether the driver's live session answers.
   const agentosReading = async (): Promise<AgentOsReading> =>
-    agentos === undefined ? { bound: false } : { bound: true, alive: await agentos.check() };
+    agentosFor === undefined ? { bound: false } : { bound: true, alive: await agentosFor(options.sessionId).check() };
   const runDoctor = (): Promise<readonly CheckResult[]> =>
     (options.runChecks ?? runChecks)({
       stateDir,
@@ -537,17 +538,29 @@ class UnreachableBridge implements BridgePort {
   async close(): Promise<void> {}
 }
 
-function defaultSupervisor(driver: AgentOsDriver): AgentOsSupervisor {
-  return new AgentOsSupervisor({
-    driver,
-    callTimeoutMs: AGENTOS_CALL_TIMEOUT_MS,
-    random: Math.random,
-    sleep: (ms: number) =>
-      new Promise<void>((resolve) => {
-        setTimeout(resolve, ms);
-      }),
-    now: () => Date.now(),
-  });
+// The supervisors of one driver, one per session. Each is built on the session's first use and returned for that session from
+// then on, so a session's supervision state is one object, shared by the execution path and the doctor probe.
+function supervisorsOver(driver: AgentOsDriver): SupervisorFor {
+  const supervisors = new Map<string, AgentOsSupervisor>();
+  return (sessionId: string): AgentOsSupervisor => {
+    const existing = supervisors.get(sessionId);
+    if (existing !== undefined) {
+      return existing;
+    }
+    const made = new AgentOsSupervisor({
+      driver,
+      sessionId,
+      callTimeoutMs: AGENTOS_CALL_TIMEOUT_MS,
+      random: Math.random,
+      sleep: (ms: number) =>
+        new Promise<void>((resolve) => {
+          setTimeout(resolve, ms);
+        }),
+      now: () => Date.now(),
+    });
+    supervisors.set(sessionId, made);
+    return made;
+  };
 }
 
 function defaultExec(
@@ -562,18 +575,16 @@ function defaultExec(
   if (libpod === undefined) {
     throw makeRealmError("SCHEMA_INVALID");
   }
-  const agentos =
-    options.agentos ??
-    (options.agentosDriver !== undefined ? defaultSupervisor(options.agentosDriver) : undefined);
+  const agentosFor =
+    options.agentosFor ?? (options.agentosDriver !== undefined ? supervisorsOver(options.agentosDriver) : undefined);
   // No driver and no supervisor leaves AgentOS unbound: SessionExecution then refuses every runtime-touching
   // call with AGENTOS_NOT_CONFIGURED, so the handle still builds.
   return new SessionExecution({
     libpod,
     runner: runOpenShell,
-    ...(agentos !== undefined ? { agentos } : {}),
+    ...(agentosFor !== undefined ? { agentosFor } : {}),
     config: {
       image: config.image,
-      workloadArgv: config.workloadArgv,
       stateDir: config.stateDir,
       ...(config.andaUrl !== undefined ? { andaUrl: config.andaUrl } : {}),
     },
