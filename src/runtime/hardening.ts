@@ -6,13 +6,11 @@
 //
 // The field paths below are the libpod inspect fields the route table treats as provisional
 // (libpod-routes.ts, podman.md Q5). They are confirmed only by the gated suite on Podman 5.x.
-// The capability check reads KernelCaps: the five capability sets of the container's init process, read from
-// its host /proc status and attached by the caller, because libpod inspect does not report them (D-51).
+// The capability check is not an inspect property. Podman 5.7.1 does not report KernelCaps, so the five capability sets of the
+// container's init process are proven live, from its host /proc status, by kernel-caps.ts (D-51).
 //
-// The compute driver's sandbox container adds two things to the base container shape: a read-write channel mount for the
-// sandbox runtime, and a noexec tmpfs for the runtime's CA material. A binding that names a channel directory selects that shape
-// (HardeningBinding.channelDir). Every sandbox binding names one (sandboxBindingOf); a binding without one has no channel, and its
-// checks are unchanged.
+// Every sandbox container has the same shape: a read-write channel mount for the sandbox runtime, and a noexec tmpfs for the
+// runtime's CA material. The binding names the channel directory, which sandboxBindingOf always derives.
 
 import { createHash } from "node:crypto";
 
@@ -62,7 +60,6 @@ export const SUPERVISOR_CA_TMPFS_OPTIONS: readonly string[] = Object.freeze(["no
 export const HARDENING_PROPERTIES = Object.freeze([
   "privileged",
   "rootless",
-  "cap-drop",
   "cap-add",
   "no-new-privileges",
   "read-only-root",
@@ -88,9 +85,9 @@ export interface HardeningBinding {
   // The two mount sources of the session container, and no others (D-51): the workspace read-write, the state directory read-only.
   readonly workspaceRoot: string;
   readonly stateDir: string;
-  // The sandbox container's channel source, read-write. When present, the container must also carry the CA tmpfs and the channel
-  // mount, and nothing else. Absent only for a binding with no channel, which sandboxBindingOf never returns.
-  readonly channelDir?: string;
+  // The sandbox container's channel source, read-write. The container must also carry the CA tmpfs and the channel mount, and
+  // nothing else.
+  readonly channelDir: string;
 }
 
 type Check = (inspect: unknown, binding: HardeningBinding) => boolean;
@@ -98,14 +95,13 @@ type Check = (inspect: unknown, binding: HardeningBinding) => boolean;
 const CHECKS: Readonly<Record<HardeningProperty, Check>> = Object.freeze({
   privileged: (inspect) => field(inspect, ["HostConfig", "Privileged"]) === HARDENING_PROFILE.privileged,
   rootless: (_inspect, binding) => binding.rootless,
-  "cap-drop": (inspect) => noCapabilities(field(inspect, ["KernelCaps"])),
   "cap-add": (inspect) => sameStrings(field(inspect, ["HostConfig", "CapAdd"]), HARDENING_PROFILE.capAdd),
   "no-new-privileges": (inspect) => hasNoNewPrivileges(field(inspect, ["HostConfig", "SecurityOpt"])),
   "read-only-root": (inspect) =>
     field(inspect, ["HostConfig", "ReadonlyRootfs"]) === HARDENING_PROFILE.readonlyRootfs,
-  tmpfs: (inspect, binding) => {
+  tmpfs: (inspect) => {
     const tmpfs = field(inspect, ["HostConfig", "Tmpfs"]);
-    return isRecord(tmpfs) && sameStrings(Object.keys(tmpfs), tmpfsDestinationsOf(binding));
+    return isRecord(tmpfs) && sameStrings(Object.keys(tmpfs), [...HARDENING_PROFILE.tmpfs, HARDENING_PROFILE.supervisorCaDestination]);
   },
   "pids-limit": (inspect) => field(inspect, ["HostConfig", "PidsLimit"]) === HARDENING_PROFILE.pidsLimit,
   "memory-limit": (inspect) => field(inspect, ["HostConfig", "Memory"]) === HARDENING_PROFILE.memoryBytes,
@@ -116,26 +112,21 @@ const CHECKS: Readonly<Record<HardeningProperty, Check>> = Object.freeze({
     return pinned !== undefined && field(inspect, ["ImageDigest"]) === pinned;
   },
   // The bind mounts and no others (D-51). The workspace is read-write, as the OpenShell policy grants /workspace. The state
-  // directory is read-only, which fails closed because D-51 is silent on it. The channel, when the binding names one, is read-write,
-  // so the runtime can write its socket and remove its bootstrap. An extra mount, or a read-write state mount, fails.
+  // directory is read-only, which fails closed because D-51 is silent on it. The channel is read-write, so the runtime can write
+  // its socket and remove its bootstrap. An extra mount, or a read-write state mount, fails.
   mounts: (inspect, binding) => {
     const mounts = field(inspect, ["Mounts"]);
-    if (!Array.isArray(mounts)) {
-      return false;
-    }
-    const channel = binding.channelDir;
     return (
-      mounts.length === (channel === undefined ? 2 : 3) &&
+      Array.isArray(mounts) &&
+      mounts.length === 3 &&
       isMountOf(mounts, binding.workspaceRoot, HARDENING_PROFILE.workspaceDestination, true) &&
       isMountOf(mounts, binding.stateDir, HARDENING_PROFILE.stateDestination, false) &&
-      (channel === undefined || isMountOf(mounts, channel, HARDENING_PROFILE.channelDestination, true))
+      isMountOf(mounts, binding.channelDir, HARDENING_PROFILE.channelDestination, true)
     );
   },
-  // PID 1 of a sandbox container is the sandbox runtime, started with its exact argv (phase 9.5, wave 3). A binding with no channel
-  // is not checked here.
-  "init-process": (inspect, binding) =>
-    binding.channelDir === undefined ||
-    (field(inspect, ["Path"]) === RUNTIME_BINARY && sameArgv(field(inspect, ["Args"]), RUNTIME_ARGV.slice(1))),
+  // PID 1 of a sandbox container is the sandbox runtime, started with its exact argv (phase 9.5, wave 3).
+  "init-process": (inspect) =>
+    field(inspect, ["Path"]) === RUNTIME_BINARY && sameArgv(field(inspect, ["Args"]), RUNTIME_ARGV.slice(1)),
   "socket-path": (inspect) => {
     const mounts = field(inspect, ["Mounts"]);
     return (
@@ -148,13 +139,6 @@ const CHECKS: Readonly<Record<HardeningProperty, Check>> = Object.freeze({
 // Returns the failed property names in report order. An empty list means the inspect conforms.
 export function verifyInspect(binding: HardeningBinding, inspect: unknown): readonly HardeningProperty[] {
   return HARDENING_PROPERTIES.filter((property) => !CHECKS[property](inspect, binding));
-}
-
-// The tmpfs destinations a container of this binding carries: the profile's scratch paths, and the CA tmpfs for the sandbox container.
-export function tmpfsDestinationsOf(binding: HardeningBinding): readonly string[] {
-  return binding.channelDir === undefined
-    ? HARDENING_PROFILE.tmpfs
-    : [...HARDENING_PROFILE.tmpfs, HARDENING_PROFILE.supervisorCaDestination];
 }
 
 // The sha256 hex digest of the hardening profile, the properties the verifier checks, and the image. It is computed before the
@@ -178,36 +162,6 @@ function field(source: unknown, path: readonly string[]): unknown {
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-// The five capability sets of /proc/<pid>/status. A container's init process must hold all of them empty (D-51).
-const CAP_SET_FIELDS = ["CapInh", "CapPrm", "CapEff", "CapBnd", "CapAmb"] as const;
-
-// The capability masks of a /proc/<pid>/status text, keyed by set name. A missing or malformed line leaves its
-// set out, so the cap-drop check fails closed on it.
-export function capabilitySetsOf(status: string): Readonly<Record<string, string>> {
-  const sets: Record<string, string> = {};
-  for (const line of status.split("\n")) {
-    const match = /^(Cap(?:Inh|Prm|Eff|Bnd|Amb)):\s*([0-9a-fA-F]+)\s*$/.exec(line);
-    const name = match?.[1];
-    const mask = match?.[2];
-    if (name !== undefined && mask !== undefined) {
-      sets[name] = mask;
-    }
-  }
-  return sets;
-}
-
-// True only when every capability set is present and holds no bit.
-function noCapabilities(value: unknown): boolean {
-  if (!isRecord(value)) {
-    return false;
-  }
-  const sets = value;
-  return CAP_SET_FIELDS.every((name) => {
-    const mask = sets[name];
-    return typeof mask === "string" && /^0+$/.test(mask);
-  });
 }
 
 // True only when the value is an array of strings with exactly the expected members, in any order.

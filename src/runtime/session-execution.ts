@@ -33,7 +33,7 @@ import {
   type HardeningProperty,
 } from "./hardening.js";
 import type { LibpodClient, LibpodInspect } from "./libpod-client.js";
-import { attachKernelCaps, readHostProcStatus } from "./kernel-caps.js";
+import { attachKernelCaps, liveCapabilityFailures, readHostProcStatus, type LiveProperty } from "./kernel-caps.js";
 import { sandboxBindingOf } from "./driver/sandbox-binding.js";
 import {
   buildExecArgv,
@@ -106,9 +106,9 @@ export interface SessionExecutionOptions {
 // which is a fixed name from the profile and never caller text. The error code is still
 // OPENSHELL_START_FAILED, and causeCode is the libpod code the refusal rests on, when there is one.
 export class HardeningFailedError extends RealmError {
-  readonly property: HardeningProperty;
+  readonly property: HardeningProperty | LiveProperty;
 
-  constructor(property: HardeningProperty, causeCode?: ErrorCode) {
+  constructor(property: HardeningProperty | LiveProperty, causeCode?: ErrorCode) {
     super("OPENSHELL_START_FAILED", causeCode);
     this.property = property;
   }
@@ -420,11 +420,14 @@ export class SessionExecution implements ExecutionService {
   // running, and the down sweep is the backstop. The refusal keeps one libpod code as causeCode: the
   // removal's when the removal failed, since a surviving container is the worse outcome, else the inspect's.
   private async verifyOrRemove(containerId: string, binding: HardeningBinding): Promise<void> {
-    let failed: readonly HardeningProperty[] | null;
+    let failed: readonly (HardeningProperty | LiveProperty)[] | null;
     let inspectCause: ErrorCode | undefined;
     try {
       const inspect = await this.libpod.inspectContainer(containerId);
-      failed = inspect === null ? null : verifyInspect(binding, attachKernelCaps(inspect, this.readProcStatus));
+      failed =
+        inspect === null
+          ? null
+          : [...verifyInspect(binding, inspect), ...liveCapabilityFailures(attachKernelCaps(inspect, this.readProcStatus))];
     } catch (error) {
       failed = null;
       inspectCause = catalogueCodeOf(error);

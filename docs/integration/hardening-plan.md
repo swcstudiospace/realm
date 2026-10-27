@@ -214,3 +214,25 @@ of H1 [INFERENCE from the plan scope].
   not a gate on writes.
 - Operators who need containment must also address 5.3, 5.4, and R7 in
   their deployment. The mode switch alone does not cover them.
+
+## 9. Container capability proof (phase 9.6, C3)
+
+- **Removed inspect property.** `cap-drop` is no longer in `HARDENING_PROPERTIES` and is no
+  longer checked by `verifyInspect`. The verifier checks 14 properties; it checked 15 before.
+- **Reason.** Podman 5.7.1 does not report `KernelCaps` in libpod inspect. An inspect-level
+  check of the five capability sets therefore reads a field the engine never supplies, and
+  cannot prove them empty.
+- **Replacement: the live proof.** `attachKernelCaps` (`src/runtime/kernel-caps.ts`) reads
+  `/proc/<State.Pid>/status` on the host, and `liveCapabilityFailures` requires every one of
+  CapInh, CapPrm, CapEff, CapBnd and CapAmb to be present and hold no bit. A missing or
+  unreadable status, a missing pid, a missing set, or any non-zero set refuses with `cap-drop`.
+  The proof runs at both create-time verifiers: the driver's post-start check
+  (`src/runtime/driver/lifecycle.ts`) and the session's `verifyOrRemove`
+  (`src/runtime/session-execution.ts`). An inbound `KernelCaps` from the engine is dropped
+  before the host read, so only the host read can pass the proof.
+- **Channel binding.** Every sandbox binding names its channel directory (`sandboxBindingOf`),
+  so `HardeningBinding.channelDir` is required. The channel-less binding and its paths
+  (`tmpfsDestinationsOf`, the optional channel mount and PID 1 exemption) are removed.
+- **Not claimed.** This proof is observed on the host at create time. It does not
+  re-verify the capability sets after create, and it has not been run against a live Podman 5.7.1
+  engine in this change.

@@ -19,7 +19,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { RealmError, type ErrorCode } from "../../src/core/errors.js";
 import { DriverLifecycle, HardeningRefusal } from "../../src/runtime/driver/lifecycle.js";
-import { attachKernelCaps } from "../../src/runtime/kernel-caps.js";
+import { attachKernelCaps, type LiveProperty } from "../../src/runtime/kernel-caps.js";
 import {
   HARDENING_PROFILE,
   RUNTIME_ARGV,
@@ -327,34 +327,31 @@ async function startFake(t: TestContext, options: FakeOptions): Promise<Fake> {
   return { socketPath, seen, store };
 }
 
-// A libpod inspect object of a conforming container, built from HARDENING_PROFILE and the bound paths. Each
+// A libpod inspect object of a conforming sandbox container, built from HARDENING_PROFILE and the bound paths. Each
 // call returns a fresh object, so a test can change one field without affecting another test. The workspace mount
-// carries noexec, nosuid and nodev (C1), which is what a conforming engine reports for it. A container with a channel also
-// carries the channel mount and the CA tmpfs that the channel binding expects.
-function goodInspect(stateDir: string, workspaceDir: string, channelDir?: string): Record<string, unknown> {
-  const channelTmpfs = channelDir === undefined ? [] : [HARDENING_PROFILE.supervisorCaDestination];
-  const channelMounts =
-    channelDir === undefined
-      ? []
-      : [
-          {
-            Type: "bind",
-            Source: channelDir,
-            Destination: HARDENING_PROFILE.channelDestination,
-            RW: true,
-            Options: ["rbind", "rw", "noexec", "nosuid", "nodev"],
-          },
-        ];
+// carries noexec, nosuid and nodev (C1), which is what a conforming engine reports for it. The channel mount and the CA
+// tmpfs are the ones the sandbox binding expects.
+function goodInspect(stateDir: string, workspaceDir: string, channelDir: string): Record<string, unknown> {
+  const channelMounts = [
+    {
+      Type: "bind",
+      Source: channelDir,
+      Destination: HARDENING_PROFILE.channelDestination,
+      RW: true,
+      Options: ["rbind", "rw", "noexec", "nosuid", "nodev"],
+    },
+  ];
   return {
     ImageDigest: IMAGE_DIGEST,
-    ...(channelDir === undefined ? {} : { Path: RUNTIME_BINARY, Args: RUNTIME_ARGV.slice(1) }),
+    Path: RUNTIME_BINARY,
+    Args: RUNTIME_ARGV.slice(1),
     HostConfig: {
       Privileged: HARDENING_PROFILE.privileged,
       CapAdd: [...HARDENING_PROFILE.capAdd],
       SecurityOpt: [...HARDENING_PROFILE.securityOpt],
       ReadonlyRootfs: HARDENING_PROFILE.readonlyRootfs,
       Tmpfs: Object.fromEntries(
-        [...HARDENING_PROFILE.tmpfs, ...channelTmpfs].map((path): [string, string] => [
+        [...HARDENING_PROFILE.tmpfs, HARDENING_PROFILE.supervisorCaDestination].map((path): [string, string] => [
           path,
           path === HARDENING_PROFILE.supervisorCaDestination ? SUPERVISOR_CA_TMPFS_OPTIONS.join(",") : "nosuid,nodev",
         ]),
@@ -408,6 +405,7 @@ function setWorkspaceOptions(body: Record<string, unknown>, options: readonly st
 const SOCKET_MOUNT_SOURCE = "/srv/realm-test/engine/podman.sock";
 const SIMULATED_WORKSPACE = "/srv/realm-test/workspace/sess-1";
 const SIMULATED_STATE_DIR = "/srv/realm-test/state/sess-1";
+const SIMULATED_CHANNEL_DIR = "/srv/realm-test/secrets/sess-1/channel";
 
 interface Arrangement {
   readonly mutate?: ((body: Record<string, unknown>) => void) | undefined;
@@ -526,7 +524,7 @@ async function listenOnSocket(t: TestContext, path: string): Promise<void> {
 }
 
 interface PropertyCase {
-  readonly property: HardeningProperty;
+  readonly property: HardeningProperty | LiveProperty;
   // The property create reports first. It differs from property only where report order puts another check
   // ahead of it: socket-path is reported after mounts, and a socket mount always fails mounts too.
   readonly reported?: HardeningProperty | undefined;
@@ -597,13 +595,14 @@ for (const row of PROPERTY_CASES) {
 }
 
 void test("PRD-CTR-01: a socket mount fails mounts and socket-path, and create names mounts first", () => {
-  const body = { ...goodInspect(SIMULATED_STATE_DIR, SIMULATED_WORKSPACE), State: { Pid: GOOD_PID } };
+  const body = { ...goodInspect(SIMULATED_STATE_DIR, SIMULATED_WORKSPACE, SIMULATED_CHANNEL_DIR), State: { Pid: GOOD_PID } };
   mountsOf(body).push({ Type: "bind", Source: SOCKET_MOUNT_SOURCE, Destination: "/run/engine.sock", RW: false });
   const binding: HardeningBinding = {
     image: SPEC_IMAGE,
     rootless: true,
     workspaceRoot: SIMULATED_WORKSPACE,
     stateDir: SIMULATED_STATE_DIR,
+    channelDir: SIMULATED_CHANNEL_DIR,
   };
   const attached = attachKernelCaps(body, () => ZERO_STATUS);
   assert.deepEqual(verifyInspect(binding, attached), ["mounts", "socket-path"]);

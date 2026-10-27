@@ -22,6 +22,7 @@ import { LockTable } from "../../src/fs/locks.js";
 import { bindRoot } from "../../src/fs/root.js";
 import { loadRuntimeConfig, type RuntimeConfig } from "../../src/runtime/config.js";
 import { HARDENING_PROFILE, verifyInspect } from "../../src/runtime/hardening.js";
+import { sandboxBindingOf } from "../../src/runtime/driver/sandbox-binding.js";
 import { LibpodClient, type LibpodInspect } from "../../src/runtime/libpod-client.js";
 import {
   OPENSHELL_MANAGED_LABEL_KEY,
@@ -138,6 +139,7 @@ interface LiveContainer {
   readonly containerId: string;
   readonly sessionId: string;
   readonly config: RuntimeConfig;
+  readonly secretRoot: string;
   readonly rootless: boolean;
   // Every argv the OpenShell runner was given, in order.
   readonly argvSeen: string[][];
@@ -169,6 +171,7 @@ async function createLiveContainer(t: TestContext, egress: readonly EgressRule[]
   });
   const stateDir = join(root, "state");
   const workspaceRoot = join(root, "workspace");
+  const secretRoot = join(root, "secrets");
   mkdirSync(stateDir, { mode: 0o700 });
   mkdirSync(workspaceRoot, { mode: 0o700 });
   chmodSync(stateDir, 0o700);
@@ -191,7 +194,7 @@ async function createLiveContainer(t: TestContext, egress: readonly EgressRule[]
   t.after(async () => {
     await libpod.removeContainer(containerId, { force: true });
   });
-  return { libpod, containerId, sessionId, config, rootless: info.rootless, argvSeen };
+  return { libpod, containerId, sessionId, config, secretRoot, rootless: info.rootless, argvSeen };
 }
 
 // A label value from the inspect's Config.Labels, or undefined when the path is absent.
@@ -211,15 +214,11 @@ void test("RT-01 live: a session container created through OpenShell conforms to
   const live = await createLiveContainer(t);
   const inspect = await live.libpod.inspectContainer(live.containerId);
   assert.notEqual(inspect, null, "the created container must be inspectable");
-  const failed = verifyInspect(
-    {
-      image: live.config.image,
-      rootless: live.rootless,
-      workspaceRoot: live.config.workspaceRoot,
-      stateDir: live.config.stateDir,
-    },
-    inspect,
+  const binding = sandboxBindingOf(
+    { workspaceRoot: live.config.workspaceRoot, stateRoot: live.config.stateDir, secretRoot: live.secretRoot },
+    realmSandboxName(live.sessionId),
   );
+  const failed = verifyInspect({ image: live.config.image, rootless: live.rootless, ...binding }, inspect);
   assert.deepEqual(failed, [], `hardening properties that do not conform: ${failed.join(", ")}`);
 });
 

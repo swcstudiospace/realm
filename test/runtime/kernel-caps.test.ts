@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { attachKernelCaps } from "../../src/runtime/kernel-caps.js";
+import { attachKernelCaps, liveCapabilityFailures } from "../../src/runtime/kernel-caps.js";
 import type { LibpodInspect } from "../../src/runtime/libpod-client.js";
 
 const FULL_STATUS = [
@@ -36,7 +36,7 @@ void test("capability sets are parsed from a /proc status text", () => {
   });
 });
 
-void test("a missing capability set is left out, so the cap-drop check fails closed on it", () => {
+void test("a missing capability set is left out, so the live proof refuses it (D-51)", () => {
   const withoutAmb = FULL_STATUS.split("\n")
     .filter((line) => !line.startsWith("CapAmb:"))
     .join("\n");
@@ -57,48 +57,50 @@ void test("a zero-set sample reports every set as all zeros", () => {
   });
 });
 
-void test("a status that cannot be read attaches no capability sets", () => {
+void test("a live proof of an all-zero status passes with no failures (D-51)", () => {
+  const attached = attachKernelCaps({ State: { Pid: 4321 } }, () => ZERO_STATUS);
+  assert.deepEqual(liveCapabilityFailures(attached), []);
+});
+
+void test("a live proof of a status with any non-zero set refuses with cap-drop (D-51)", () => {
+  const attached = attachKernelCaps({ State: { Pid: 4321 } }, () => FULL_STATUS);
+  assert.deepEqual(liveCapabilityFailures(attached), ["cap-drop"]);
+});
+
+void test("a status that cannot be read refuses with cap-drop, and no set is attached (D-51)", () => {
   const inspect: LibpodInspect = { State: { Pid: 4321 } };
   const attached = attachKernelCaps(inspect, () => {
     throw new Error("ENOENT");
   });
-  assert.deepEqual(attached, { State: { Pid: 4321 } });
   assert.equal(Object.hasOwn(attached, "KernelCaps"), false);
+  assert.deepEqual(liveCapabilityFailures(attached), ["cap-drop"]);
 });
 
-void test("an inbound KernelCaps from the engine is dropped when the read throws", () => {
+void test("an inbound all-zero KernelCaps from the engine never passes the live proof (D-51)", () => {
   const inspect: LibpodInspect = {
     State: { Pid: 4321 },
-    KernelCaps: {
-      CapInh: "0000000000000000",
-      CapPrm: "0000000000000000",
-      CapEff: "0000000000000000",
-      CapBnd: "0000000000000000",
-      CapAmb: "0000000000000000",
-    },
+    KernelCaps: { CapInh: "0000000000000000", CapPrm: "0000000000000000", CapEff: "0000000000000000", CapBnd: "0000000000000000", CapAmb: "0000000000000000" },
   };
   const attached = attachKernelCaps(inspect, () => {
     throw new Error("EACCES");
   });
-  assert.equal(Object.hasOwn(attached, "KernelCaps"), false);
-  assert.deepEqual(attached, { State: { Pid: 4321 } });
+  assert.deepEqual(liveCapabilityFailures(attached), ["cap-drop"]);
 });
 
-void test("an inbound KernelCaps from the engine is replaced by the host read, never kept", () => {
-  const inspect: LibpodInspect = { State: { Pid: 4321 }, KernelCaps: { CapInh: "ffffffffffffffff" } };
-  const attached = attachKernelCaps(inspect, () => FULL_STATUS);
-  assert.equal((attached.KernelCaps as Readonly<Record<string, string>>).CapInh, "0000000000000000");
+void test("an inbound all-zero KernelCaps is replaced by the host read, which decides the proof (D-51)", () => {
+  const inspect: LibpodInspect = { State: { Pid: 4321 }, KernelCaps: { CapInh: "0000000000000000" } };
+  assert.deepEqual(liveCapabilityFailures(attachKernelCaps(inspect, () => FULL_STATUS)), ["cap-drop"]);
+  assert.deepEqual(liveCapabilityFailures(attachKernelCaps(inspect, () => ZERO_STATUS)), []);
 });
 
-void test("a missing or invalid pid attaches no capability sets and never reads /proc", () => {
+void test("a missing or invalid pid never reads /proc and refuses with cap-drop (D-51)", () => {
   let reads = 0;
   const reader = (): string => {
     reads += 1;
-    return FULL_STATUS;
+    return ZERO_STATUS;
   };
   for (const inspect of [{}, { State: {} }, { State: { Pid: 0 } }, { State: { Pid: "4321" } }] as LibpodInspect[]) {
-    const attached = attachKernelCaps(inspect, reader);
-    assert.equal(Object.hasOwn(attached, "KernelCaps"), false);
+    assert.deepEqual(liveCapabilityFailures(attachKernelCaps(inspect, reader)), ["cap-drop"]);
   }
   assert.equal(reads, 0);
 });
