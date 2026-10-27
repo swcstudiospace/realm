@@ -164,6 +164,39 @@ void test("REALM_DRIVER_WORKSPACE_ROOT in the environment is passed to the daemo
   assert.equal(calls[0]?.pinnedWorkspaceRoot, workspaceRoot);
 });
 
+void test("REALM_DRIVER_STATE_ROOT in the environment is passed to the daemon start as the sandbox state root", async (t) => {
+  const dir = tempDir(t);
+  const sandboxStateRoot = join(dir, "sandboxes");
+  const env = { ...writeConfig(dir, validConfig(dir)), REALM_DRIVER_STATE_ROOT: sandboxStateRoot };
+  const calls: DaemonStartOptions[] = [];
+  const h = harness(env, {
+    start: (options) => {
+      calls.push(options);
+      return Promise.resolve(startedWith(Promise.resolve()));
+    },
+  });
+
+  assert.equal(await runDaemon(h.deps), 0);
+  assert.equal(calls[0]?.sandboxStateRoot, sandboxStateRoot);
+});
+
+void test("REALM_DRIVER_STATE_ROOT unset or empty passes no sandbox state root to the daemon start", async (t) => {
+  const dir = tempDir(t);
+  const base = writeConfig(dir, validConfig(dir));
+  for (const env of [base, { ...base, REALM_DRIVER_STATE_ROOT: "" }]) {
+    const calls: DaemonStartOptions[] = [];
+    const h = harness(env, {
+      start: (options) => {
+        calls.push(options);
+        return Promise.resolve(startedWith(Promise.resolve()));
+      },
+    });
+
+    assert.equal(await runDaemon(h.deps), 0);
+    assert.equal(calls[0]?.sandboxStateRoot, undefined, "no sandbox state root is passed without REALM_DRIVER_STATE_ROOT");
+  }
+});
+
 void test("a start rejecting with a RealmError returns 1 and writes its code", async (t) => {
   const dir = tempDir(t);
   const h = harness(writeConfig(dir, validConfig(dir)), {

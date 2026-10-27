@@ -82,6 +82,9 @@ void test("Podman gate: the host reports Podman 5.x or newer (RT-02)", { skip: g
 // not run.
 
 const LIVE_IMAGE_VARIABLE = "REALM_LIVE_IMAGE";
+const DRIVER_STATE_ROOT_VARIABLE = "REALM_DRIVER_STATE_ROOT";
+const DRIVER_WORKSPACE_ROOT_VARIABLE = "REALM_DRIVER_WORKSPACE_ROOT";
+const DRIVER_SECRET_ROOT_VARIABLE = "REALM_DRIVER_SECRET_ROOT";
 // The bound for one OpenShell create, the same as the composition's create deadline.
 const LIVE_CREATE_DEADLINE_MS = 60_000;
 // The sandbox limits come from the frozen hardening profile, as the composition derives them.
@@ -96,6 +99,11 @@ function liveInputsSkipReason(): string | false {
   }
   if (!isAbsolute(process.env["XDG_RUNTIME_DIR"] ?? "")) {
     return "XDG_RUNTIME_DIR is not an absolute path, so the rootless Podman API socket cannot be located";
+  }
+  for (const name of [DRIVER_STATE_ROOT_VARIABLE, DRIVER_WORKSPACE_ROOT_VARIABLE, DRIVER_SECRET_ROOT_VARIABLE]) {
+    if (!isAbsolute(process.env[name] ?? "")) {
+      return `${name} is not an absolute path; the driver mounts its sandbox state, workspace and secrets from these roots`;
+    }
   }
   if (!isSocket(liveSocketPath())) {
     return "no rootless Podman API socket under XDG_RUNTIME_DIR; start it with systemctl --user start podman.socket";
@@ -139,7 +147,6 @@ interface LiveContainer {
   readonly containerId: string;
   readonly sessionId: string;
   readonly config: RuntimeConfig;
-  readonly secretRoot: string;
   readonly rootless: boolean;
   // Every argv the OpenShell runner was given, in order.
   readonly argvSeen: string[][];
@@ -159,6 +166,24 @@ function liveSocketPath(): string {
   return join(process.env["XDG_RUNTIME_DIR"] ?? "", "podman", "podman.sock");
 }
 
+// The driver's roots, the values the driver is given as REALM_DRIVER_STATE_ROOT, REALM_DRIVER_WORKSPACE_ROOT and
+// REALM_DRIVER_SECRET_ROOT. The driver mounts each sandbox's state beneath the state root, so the expected binding derives
+// from these values, not from the per-test realm directories. Each must be absolute; a missing or relative one throws naming it.
+function driverRoots(): { readonly stateRoot: string; readonly workspaceRoot: string; readonly secretRoot: string } {
+  const read = (name: string): string => {
+    const value = process.env[name];
+    if (value === undefined || !isAbsolute(value)) {
+      throw new Error(`${name} must be an absolute path`);
+    }
+    return value;
+  };
+  return {
+    stateRoot: read(DRIVER_STATE_ROOT_VARIABLE),
+    workspaceRoot: read(DRIVER_WORKSPACE_ROOT_VARIABLE),
+    secretRoot: read(DRIVER_SECRET_ROOT_VARIABLE),
+  };
+}
+
 // Creates one session container through the production create path: the policy document is written
 // first, then the pinned OpenShell argv runs once and the label lookup resolves the container. The
 // container is removed when the test ends. Every argv the runner receives is recorded. The egress
@@ -171,7 +196,6 @@ async function createLiveContainer(t: TestContext, egress: readonly EgressRule[]
   });
   const stateDir = join(root, "state");
   const workspaceRoot = join(root, "workspace");
-  const secretRoot = join(root, "secrets");
   mkdirSync(stateDir, { mode: 0o700 });
   mkdirSync(workspaceRoot, { mode: 0o700 });
   chmodSync(stateDir, 0o700);
@@ -194,7 +218,7 @@ async function createLiveContainer(t: TestContext, egress: readonly EgressRule[]
   t.after(async () => {
     await libpod.removeContainer(containerId, { force: true });
   });
-  return { libpod, containerId, sessionId, config, secretRoot, rootless: info.rootless, argvSeen };
+  return { libpod, containerId, sessionId, config, rootless: info.rootless, argvSeen };
 }
 
 // A label value from the inspect's Config.Labels, or undefined when the path is absent.
@@ -214,8 +238,9 @@ void test("RT-01 live: a session container created through OpenShell conforms to
   const live = await createLiveContainer(t);
   const inspect = await live.libpod.inspectContainer(live.containerId);
   assert.notEqual(inspect, null, "the created container must be inspectable");
+  const roots = driverRoots();
   const binding = sandboxBindingOf(
-    { workspaceRoot: live.config.workspaceRoot, stateRoot: live.config.stateDir, secretRoot: live.secretRoot },
+    { workspaceRoot: roots.workspaceRoot, stateRoot: roots.stateRoot, secretRoot: roots.secretRoot },
     realmSandboxName(live.sessionId),
   );
   const failed = verifyInspect({ image: live.config.image, rootless: live.rootless, ...binding }, inspect);

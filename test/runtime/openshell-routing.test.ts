@@ -43,6 +43,7 @@ interface Fixture {
   readonly exec: SessionExecution;
   readonly supervisor: AgentOsSupervisor;
   readonly stateDir: string;
+  readonly sandboxStateRoot: string;
   readonly workspaceRoot: string;
   readonly secretRoot: string;
 }
@@ -69,6 +70,7 @@ async function fixture(t: TestContext): Promise<Fixture> {
   });
   const stateDir = join(base, "state");
   const secretRoot = join(base, "secrets");
+  const sandboxStateRoot = join(base, "sandboxes");
   const exec = new SessionExecution({
     libpod: new LibpodClient(socketPath),
     runner: openshell.runner,
@@ -77,14 +79,15 @@ async function fixture(t: TestContext): Promise<Fixture> {
     config: { image: IMAGE, stateDir },
     secretRoot,
     pinnedWorkspaceRoot: join(base, "workspace"),
+    sandboxStateRoot,
     egressAllow: [],
   });
-  return { libpod, store, openshell, driver, supervisor: agentos, exec, stateDir, workspaceRoot: join(base, "workspace"), secretRoot };
+  return { libpod, store, openshell, driver, supervisor: agentos, exec, stateDir, sandboxStateRoot, workspaceRoot: join(base, "workspace"), secretRoot };
 }
 
 // Creates the session. The create-time verification reads one inspect, so a conforming one is scripted.
 async function createSession(f: Fixture): Promise<{ readonly containerId: string }> {
-  const binding = sandboxBindingOf({ workspaceRoot: f.workspaceRoot, stateRoot: f.stateDir, secretRoot: f.secretRoot }, realmSandboxName(SESSION));
+  const binding = sandboxBindingOf({ workspaceRoot: f.workspaceRoot, stateRoot: f.sandboxStateRoot, secretRoot: f.secretRoot }, realmSandboxName(SESSION));
   const inspect = {
     ImageDigest: DIGEST,
     Path: RUNTIME_BINARY,

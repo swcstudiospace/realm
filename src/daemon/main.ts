@@ -51,6 +51,9 @@ const SECRET_ROOT_ENV = "REALM_DRIVER_SECRET_ROOT";
 // The pinned workspace root, the value the driver is given as REALM_DRIVER_WORKSPACE_ROOT. The session's sandbox binding mounts this
 // root at /workspace, so the daemon reads the same variable the driver does. Unset, a session create is refused.
 const WORKSPACE_ROOT_ENV = "REALM_DRIVER_WORKSPACE_ROOT";
+// The driver's sandbox state root, the value the driver is given as REALM_DRIVER_STATE_ROOT. The session's sandbox binding names each
+// sandbox's state directory under it, so the daemon reads the same variable the driver does. Unset, a session create is refused.
+const SANDBOX_STATE_ROOT_ENV = "REALM_DRIVER_STATE_ROOT";
 // Start provisions the runner child and waits for its probe, so it gets the long budget; probe and delete get the short one.
 const AGENTOS_START_TIMEOUT_MS = 180_000;
 const AGENTOS_CALL_TIMEOUT_MS = 30_000;
@@ -76,6 +79,7 @@ export async function runDaemon(deps: DaemonDeps): Promise<number> {
     const agentosDriver = productionAgentOsDriver(deps.env);
     const secretRoot = deps.env[SECRET_ROOT_ENV];
     const workspaceRoot = deps.env[WORKSPACE_ROOT_ENV];
+    const sandboxStateRoot = deps.env[SANDBOX_STATE_ROOT_ENV];
     started = await start({
       stateDir,
       runtimeInput,
@@ -86,6 +90,7 @@ export async function runDaemon(deps: DaemonDeps): Promise<number> {
       agentosDriver,
       ...(secretRoot === undefined || secretRoot.length === 0 ? {} : { secretRoot }),
       ...(workspaceRoot === undefined || workspaceRoot.length === 0 ? {} : { pinnedWorkspaceRoot: workspaceRoot }),
+      ...(sandboxStateRoot === undefined || sandboxStateRoot.length === 0 ? {} : { sandboxStateRoot }),
     });
   } catch (error: unknown) {
     writeStderr(failureLine(codeOf(error)));

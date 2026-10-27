@@ -54,6 +54,7 @@ interface Fixture {
   readonly stateDir: string;
   readonly workspaceRoot: string;
   readonly secretRoot: string;
+  readonly sandboxStateRoot: string;
   readonly binding: SandboxBinding;
   readonly store: FakeContainerStore;
   readonly libpod: FakeLibpod;
@@ -78,7 +79,8 @@ async function fixture(t: TestContext, options: { readonly rootless?: boolean } 
   const stateDir = join(base, "state");
   const workspaceRoot = join(base, "workspace");
   const secretRoot = join(base, "secrets");
-  const binding = sandboxBindingOf({ workspaceRoot, stateRoot: stateDir, secretRoot }, realmSandboxName(SESSION));
+  const sandboxStateRoot = join(base, "sandboxes");
+  const binding = sandboxBindingOf({ workspaceRoot, stateRoot: sandboxStateRoot, secretRoot }, realmSandboxName(SESSION));
   const socketPath = join(base, "podman.sock");
   const store = new FakeContainerStore();
   const libpod = new FakeLibpod({ store, rootless: options.rootless ?? true });
@@ -120,6 +122,7 @@ async function fixture(t: TestContext, options: { readonly rootless?: boolean } 
     config: { image: IMAGE, stateDir },
     secretRoot,
     pinnedWorkspaceRoot: workspaceRoot,
+    sandboxStateRoot,
     egressAllow: EGRESS,
     readProcStatus: () => procStatus.text,
   });
@@ -129,6 +132,7 @@ async function fixture(t: TestContext, options: { readonly rootless?: boolean } 
     config: { image: IMAGE, stateDir },
     secretRoot,
     pinnedWorkspaceRoot: workspaceRoot,
+    sandboxStateRoot,
     egressAllow: EGRESS,
   });
   return {
@@ -136,6 +140,7 @@ async function fixture(t: TestContext, options: { readonly rootless?: boolean } 
     stateDir,
     workspaceRoot,
     secretRoot,
+    sandboxStateRoot,
     binding,
     store,
     libpod,
@@ -153,7 +158,7 @@ async function fixture(t: TestContext, options: { readonly rootless?: boolean } 
 // The binding of the sandbox a session names, derived the way the driver derives it from the fixture's roots.
 function sessionBinding(f: Fixture, sessionId: string): SandboxBinding {
   return sandboxBindingOf(
-    { workspaceRoot: f.workspaceRoot, stateRoot: f.stateDir, secretRoot: f.secretRoot },
+    { workspaceRoot: f.workspaceRoot, stateRoot: f.sandboxStateRoot, secretRoot: f.secretRoot },
     realmSandboxName(sessionId),
   );
 }
@@ -341,6 +346,7 @@ void test("RT-04, D-18: a session start runs the AgentOS runner as an exec child
     config: { image: IMAGE, stateDir: f.stateDir },
     secretRoot: f.secretRoot,
     pinnedWorkspaceRoot: f.workspaceRoot,
+    sandboxStateRoot: f.sandboxStateRoot,
     egressAllow: EGRESS,
     readProcStatus: () => f.procStatus.text,
   });
@@ -369,6 +375,7 @@ void test("RT-05: an invalid egress allowlist throws SCHEMA_INVALID at construct
           runner: f.openshell.runner,
           agentosFor: () => f.supervisor,
           config: { image: IMAGE, stateDir: f.stateDir },
+          sandboxStateRoot: f.sandboxStateRoot,
           egressAllow,
         }),
       (error: unknown) => error instanceof RealmError && error.code === "SCHEMA_INVALID",
@@ -499,6 +506,7 @@ void test("C2: a container with no channel mount fails the mounts property, and 
   assert.equal(f.store.list().length, 0, "the container with no channel mount is removed");
 });
 
+// Zero libpod calls: an unstarted LibpodClient socket throws a non-SCHEMA_INVALID error, which assertCode rejects.
 void test("C2: a create with no secret root, or a relative one, is refused with SCHEMA_INVALID before any libpod or OpenShell call", async (t) => {
   const f = await fixture(t);
   const libpod = new LibpodClient(join(f.base, "podman.sock"));
@@ -510,6 +518,7 @@ void test("C2: a create with no secret root, or a relative one, is refused with 
       config: { image: IMAGE, stateDir: f.stateDir },
       egressAllow: EGRESS,
       pinnedWorkspaceRoot: f.workspaceRoot,
+      sandboxStateRoot: f.sandboxStateRoot,
       ...(secretRoot === undefined ? {} : { secretRoot }),
     });
     await assertCode(exec.create({ idempotencyKey: SESSION, workspaceRoot: f.workspaceRoot }), "SCHEMA_INVALID");
@@ -529,6 +538,7 @@ void test("C2: a create with no pinned workspace root, or a relative one, is ref
       agentosFor: (sessionId) => f.supervisorFor(sessionId),
       config: { image: IMAGE, stateDir: f.stateDir },
       secretRoot: f.secretRoot,
+      sandboxStateRoot: f.sandboxStateRoot,
       egressAllow: EGRESS,
       ...(pinnedWorkspaceRoot === undefined ? {} : { pinnedWorkspaceRoot }),
     });
@@ -537,6 +547,37 @@ void test("C2: a create with no pinned workspace root, or a relative one, is ref
   assert.equal(f.openshell.callCount(), 0, "no OpenShell run starts");
   assert.equal(f.store.list().length, 0, "no container is created");
   assert.equal(existsSync(join(f.stateDir, "runtime")), false, "no policy document is written");
+});
+
+void test("C2: a create with no sandbox state root, or a relative one, is refused with SCHEMA_INVALID before any libpod, OpenShell, or policy-file call", async (t) => {
+  const f = await fixture(t);
+  const libpod = new LibpodClient(join(f.base, "podman.sock"));
+  for (const sandboxStateRoot of [undefined, "relative/sandboxes"]) {
+    const exec = new SessionExecution({
+      libpod,
+      runner: f.openshell.runner,
+      agentosFor: (sessionId) => f.supervisorFor(sessionId),
+      config: { image: IMAGE, stateDir: f.stateDir },
+      secretRoot: f.secretRoot,
+      pinnedWorkspaceRoot: f.workspaceRoot,
+      egressAllow: EGRESS,
+      ...(sandboxStateRoot === undefined ? {} : { sandboxStateRoot }),
+    });
+    await assertCode(exec.create({ idempotencyKey: SESSION, workspaceRoot: f.workspaceRoot }), "SCHEMA_INVALID");
+  }
+  assert.equal(f.openshell.callCount(), 0, "no OpenShell run starts");
+  assert.equal(existsSync(join(f.stateDir, "runtime")), false, "no policy document is written");
+});
+
+void test("C2: the session's sandbox binding names the driver's per-sandbox state directory, so a container mounted there verifies", async (t) => {
+  const f = await fixture(t);
+  const driver = sandboxBindingOf(
+    { workspaceRoot: f.workspaceRoot, stateRoot: f.sandboxStateRoot, secretRoot: f.secretRoot },
+    realmSandboxName(SESSION),
+  );
+  scriptInspect(f, conformingInspect(f, {}, driver));
+  await f.exec.create({ idempotencyKey: SESSION, workspaceRoot: f.workspaceRoot });
+  assert.equal(f.store.list().length, 1, "the container mounted at the driver's state directory is kept");
 });
 
 void test("C2: a create whose request names another root verifies a container mounted at the pinned root", async (t) => {
@@ -621,6 +662,7 @@ void test("F5: an AgentOS step that timed out with no code and a container step 
     config: { image: IMAGE, stateDir: f.stateDir },
     secretRoot: f.secretRoot,
     pinnedWorkspaceRoot: f.workspaceRoot,
+    sandboxStateRoot: f.sandboxStateRoot,
     egressAllow: EGRESS,
     stopDeadlineMs: 20,
     readProcStatus: () => f.procStatus.text,
@@ -972,6 +1014,7 @@ void test("N5: a driver stop that outlives the stop budget is reported as AGENTO
     config: { image: IMAGE, stateDir: f.stateDir },
     secretRoot: f.secretRoot,
     pinnedWorkspaceRoot: f.workspaceRoot,
+    sandboxStateRoot: f.sandboxStateRoot,
     egressAllow: EGRESS,
     stopDeadlineMs: 20,
   });
@@ -1047,6 +1090,7 @@ function sessionExecWith(f: Fixture, libpod: SessionContainers, runner: OpenShel
     config: { image: IMAGE, stateDir: f.stateDir },
     secretRoot: f.secretRoot,
     pinnedWorkspaceRoot: f.workspaceRoot,
+    sandboxStateRoot: f.sandboxStateRoot,
     egressAllow: EGRESS,
     readProcStatus: () => f.procStatus.text,
   });
@@ -1148,6 +1192,7 @@ void test("B-3: a stop whose wait for an in-flight create outlasts its deadline 
     config: { image: IMAGE, stateDir: f.stateDir },
     secretRoot: f.secretRoot,
     pinnedWorkspaceRoot: f.workspaceRoot,
+    sandboxStateRoot: f.sandboxStateRoot,
     egressAllow: EGRESS,
     stopDeadlineMs: 20,
     readProcStatus: () => f.procStatus.text,
@@ -1303,6 +1348,7 @@ void test("RT-03, RT-04, D-18: a session named s1 gets its own sandbox: create, 
     config: { image: IMAGE, stateDir: f.stateDir },
     secretRoot: f.secretRoot,
     pinnedWorkspaceRoot: f.workspaceRoot,
+    sandboxStateRoot: f.sandboxStateRoot,
     egressAllow: EGRESS,
     readProcStatus: () => f.procStatus.text,
   });

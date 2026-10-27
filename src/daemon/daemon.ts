@@ -94,6 +94,9 @@ export interface BuildDaemonHandleOptions {
   // The pinned workspace root the sandbox binding mounts at /workspace: the root the driver is given as REALM_DRIVER_WORKSPACE_ROOT.
   // Without it a session create is refused before any libpod call.
   readonly pinnedWorkspaceRoot?: string;
+  // The driver's sandbox state root: the root the driver is given as REALM_DRIVER_STATE_ROOT. The sandbox binding names each
+  // sandbox's state directory under it. Without it a session create is refused before any libpod call.
+  readonly sandboxStateRoot?: string;
 }
 
 export interface StartDaemonOptions extends BuildDaemonHandleOptions {
@@ -571,6 +574,7 @@ function defaultExec(
     ...(agentosFor !== undefined ? { agentosFor } : {}),
     ...(options.secretRoot !== undefined ? { secretRoot: options.secretRoot } : {}),
     ...(options.pinnedWorkspaceRoot !== undefined ? { pinnedWorkspaceRoot: options.pinnedWorkspaceRoot } : {}),
+    ...(options.sandboxStateRoot !== undefined ? { sandboxStateRoot: options.sandboxStateRoot } : {}),
     config: {
       image: config.image,
       stateDir: config.stateDir,
