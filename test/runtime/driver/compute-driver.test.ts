@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmdirSync, statSync, symlinkSync, unlinkSync, writeFileSync, type Stats } from "node:fs";
 import { dirname, join } from "node:path";
 import { status } from "@grpc/grpc-js";
-import { RealmError } from "../../../src/core/errors.js";
+import { makeRealmError, RealmError } from "../../../src/core/errors.js";
 import { ComputeDriver, type ComputeDriverConfig, type DriverSandboxMessage } from "../../../src/runtime/driver/compute-driver.js";
 import { DRIVER_ADMISSION_ACKNOWLEDGEMENT } from "../../../src/runtime/driver/admission.js";
 import { DriverStatusError, driverFailureOf } from "../../../src/runtime/driver/grpc-status.js";
@@ -48,6 +48,13 @@ function expectCode(code: string): (error: unknown) => boolean {
 
 function expectNotFound(error: unknown): boolean {
   return error instanceof DriverStatusError && error.failure.code === status.NOT_FOUND;
+}
+
+// Lets every microtask an exit queued run before the test looks at the result: a macrotask turn runs after them all.
+function settle(): Promise<void> {
+  return new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
 }
 
 function withTemplate(sandbox: DriverSandboxMessage, changes: Record<string, unknown>): DriverSandboxMessage {
@@ -432,6 +439,179 @@ void test("DeleteSandbox by a name whose container another sandbox holds deletes
   assert.deepEqual(lifecycle.deletes, []);
   assert.deepEqual(await driver.deleteSandbox({ sandbox_id: "sandbox-1" }), { deleted: true });
   assert.equal(libpod.containers.has("realm-x"), false);
+});
+
+void test("PRD-DRV-02: a second create on a pinned root with a live sandbox is refused with REALM_INVALID_TRANSITION, and creates nothing", async () => {
+  const { driver, lifecycle, libpod, config } = harness();
+  await driver.createSandbox(validSandbox());
+  const second = validSandbox({ id: "sandbox-2", name: "realm-session-2" });
+  await assert.rejects(driver.createSandbox(second), expectCode("REALM_INVALID_TRANSITION"));
+  assert.equal(lifecycle.creates.length, 1);
+  assert.equal(libpod.containers.has("realm-session-2"), false);
+  assert.equal(existsSync(join(config.sandboxStateRoot, "realm-session-2")), false);
+  assert.equal(existsSync(join(config.secretRoot, "realm-session-2")), false);
+});
+
+void test("PRD-DRV-02: a refused second create logs the held-root check and its code, and the line names no path", async () => {
+  const lines: string[] = [];
+  const config = driverConfig({
+    refusalLog: (line) => {
+      lines.push(line);
+    },
+  });
+  const libpod = new FakeLibpod();
+  const lifecycle = new FakeLifecycle(libpod);
+  const driver = new ComputeDriver(config, { lifecycle, libpod, runtime: new FakeRuntime() });
+  await driver.createSandbox(validSandbox());
+  await assert.rejects(driver.createSandbox(validSandbox({ id: "sandbox-2", name: "realm-session-2" })), expectCode("REALM_INVALID_TRANSITION"));
+  assert.deepEqual(lines, ["realm compute driver refused: rpc=CreateSandbox check=create.pinned_root_held code=REALM_INVALID_TRANSITION"]);
+});
+
+void test("PRD-DRV-02: two concurrent creates on one pinned root: one succeeds, the other is refused with REALM_INVALID_TRANSITION, and one lifecycle create runs", async () => {
+  const { driver, lifecycle } = harness();
+  const results = await Promise.allSettled([
+    driver.createSandbox(validSandbox()),
+    driver.createSandbox(validSandbox({ id: "sandbox-2", name: "realm-session-2" })),
+  ]);
+  const fulfilled = results.filter((result) => result.status === "fulfilled");
+  const rejected = results.filter((result): result is PromiseRejectedResult => result.status === "rejected");
+  assert.equal(fulfilled.length, 1);
+  assert.equal(rejected.length, 1);
+  assert.ok(expectCode("REALM_INVALID_TRANSITION")(rejected[0]?.reason));
+  assert.equal(lifecycle.creates.length, 1);
+});
+
+void test("PRD-DRV-02: a failed create whose container removal fails keeps the pinned root held, so a second create on it is refused", async () => {
+  const { libpod, lifecycle, runtime, config } = harness();
+  const undeletable = {
+    create: lifecycle.create.bind(lifecycle),
+    stop: lifecycle.stop.bind(lifecycle),
+    delete: (): Promise<void> => Promise.reject(new Error("delete refused")),
+  };
+  const driver = new ComputeDriver(config, { lifecycle: undeletable, libpod, runtime });
+  runtime.exitOnSpawn = true;
+  await assert.rejects(driver.createSandbox(validSandbox()), expectCode("OPENSHELL_START_FAILED"));
+  assert.equal(libpod.containers.get("realm-session-1")?.running, true);
+  runtime.exitOnSpawn = false;
+  await assert.rejects(driver.createSandbox(validSandbox({ id: "sandbox-2", name: "realm-session-2" })), expectCode("REALM_INVALID_TRANSITION"));
+  assert.equal(lifecycle.creates.length, 1);
+});
+
+void test("PRD-DRV-02: a failed create whose container still runs holds the pinned root, so a second create on it is refused", async () => {
+  const { libpod, lifecycle, runtime, config } = harness();
+  const startFailing = {
+    create: (spec: ContainerSpec): Promise<string> => {
+      lifecycle.creates.push(spec);
+      libpod.add(spec.sandboxName, true);
+      return Promise.reject(makeRealmError("OPENSHELL_START_FAILED"));
+    },
+    delete: lifecycle.delete.bind(lifecycle),
+    stop: lifecycle.stop.bind(lifecycle),
+  };
+  const driver = new ComputeDriver(config, { lifecycle: startFailing, libpod, runtime });
+  await assert.rejects(driver.createSandbox(validSandbox()), expectCode("OPENSHELL_START_FAILED"));
+  assert.equal(libpod.containers.get("realm-session-1")?.running, true);
+  await assert.rejects(driver.createSandbox(validSandbox({ id: "sandbox-2", name: "realm-session-2" })), expectCode("REALM_INVALID_TRANSITION"));
+  assert.equal(lifecycle.creates.length, 1);
+  assert.equal(libpod.containers.get("realm-session-1")?.running, true);
+});
+
+void test("PRD-DRV-02: a create whose pinned-root container lookup fails is refused with SCHEMA_INVALID under create.pinned_root_held, and creates nothing", async () => {
+  const lines: string[] = [];
+  const config = driverConfig({
+    refusalLog: (line) => {
+      lines.push(line);
+    },
+  });
+  const libpod = new FakeLibpod();
+  const lifecycle = new FakeLifecycle(libpod);
+  const driver = new ComputeDriver(config, { lifecycle, libpod, runtime: new FakeRuntime() });
+  await driver.createSandbox(validSandbox());
+  libpod.inspectContainer = () => Promise.reject(new Error("socket reset"));
+  await assert.rejects(driver.createSandbox(validSandbox({ id: "sandbox-2", name: "realm-session-2" })), expectCode("SCHEMA_INVALID"));
+  assert.equal(lifecycle.creates.length, 1);
+  assert.deepEqual(lines, ["realm compute driver refused: rpc=CreateSandbox check=create.pinned_root_held code=SCHEMA_INVALID"]);
+});
+
+void test("PRD-DRV-02: a container no longer found is dropped from the tracked set, so a later create checks no name for it", async () => {
+  const { libpod, lifecycle, runtime, config } = harness();
+  let deleteRefusals = 1;
+  const deleteOnce = {
+    create: lifecycle.create.bind(lifecycle),
+    stop: lifecycle.stop.bind(lifecycle),
+    delete: (name: string): Promise<void> => {
+      if (deleteRefusals > 0) {
+        deleteRefusals -= 1;
+        return Promise.reject(new Error("delete refused"));
+      }
+      return lifecycle.delete(name);
+    },
+  };
+  const driver = new ComputeDriver(config, { lifecycle: deleteOnce, libpod, runtime });
+  runtime.exitOnSpawn = true;
+  await assert.rejects(driver.createSandbox(validSandbox()), expectCode("OPENSHELL_START_FAILED"));
+  runtime.exitOnSpawn = false;
+  libpod.containers.delete("realm-session-1");
+  await driver.createSandbox(validSandbox({ id: "sandbox-2", name: "realm-session-2" }));
+  await driver.deleteSandbox({ sandbox_id: "sandbox-2" });
+  const before = libpod.inspectCalls;
+  await driver.createSandbox(validSandbox({ id: "sandbox-3", name: "realm-session-3" }));
+  assert.equal(libpod.inspectCalls - before, 0);
+  assert.equal(lifecycle.creates.length, 3);
+});
+
+void test("PRD-DRV-02: a supervisor exit whose container stop succeeds releases the pinned root, so a create on it succeeds", async () => {
+  const { driver, lifecycle, runtime } = harness();
+  await driver.createSandbox(validSandbox());
+  const [supervisor] = runtime.supervisors;
+  assert.ok(supervisor !== undefined);
+  supervisor.exit();
+  await settle();
+  assert.deepEqual(lifecycle.stops, ["realm-session-1"]);
+  await driver.createSandbox(validSandbox({ id: "sandbox-2", name: "realm-session-2" }));
+  assert.equal(lifecycle.creates.length, 2);
+});
+
+void test("PRD-DRV-02: a supervisor exit whose container stop fails keeps the pinned root held while the container runs, so a create on it is refused", async () => {
+  const { libpod, lifecycle, runtime, config } = harness();
+  const unstoppable = {
+    create: lifecycle.create.bind(lifecycle),
+    delete: lifecycle.delete.bind(lifecycle),
+    stop: (): Promise<void> => Promise.reject(new Error("stop refused")),
+  };
+  const driver = new ComputeDriver(config, { lifecycle: unstoppable, libpod, runtime });
+  await driver.createSandbox(validSandbox());
+  const [supervisor] = runtime.supervisors;
+  assert.ok(supervisor !== undefined);
+  supervisor.exit();
+  await settle();
+  assert.equal(libpod.containers.get("realm-session-1")?.running, true);
+  await assert.rejects(driver.createSandbox(validSandbox({ id: "sandbox-2", name: "realm-session-2" })), expectCode("REALM_INVALID_TRANSITION"));
+  assert.equal(lifecycle.creates.length, 1);
+});
+
+void test("PRD-DRV-02: a create after the first sandbox on the pinned root is deleted succeeds", async () => {
+  const { driver, lifecycle } = harness();
+  await driver.createSandbox(validSandbox());
+  await driver.deleteSandbox({ sandbox_id: "sandbox-1" });
+  await driver.createSandbox(validSandbox({ id: "sandbox-2", name: "realm-session-2" }));
+  assert.equal(lifecycle.creates.length, 2);
+});
+
+void test("PRD-DRV-02: a create on a different pinned root is unaffected by a live sandbox on another root", async () => {
+  const { driver: first, lifecycle, libpod } = harness();
+  await first.createSandbox(validSandbox());
+  const other = new ComputeDriver(driverConfig(), { lifecycle, libpod, runtime: new FakeRuntime() });
+  await other.createSandbox(validSandbox({ id: "sandbox-2", name: "realm-session-2" }));
+  assert.equal(lifecycle.creates.length, 2);
+});
+
+void test("PRD-DRV-02: a stale record whose container is gone does not block a create on the pinned root", async () => {
+  const { driver, lifecycle, libpod } = harness();
+  await driver.createSandbox(validSandbox());
+  libpod.containers.delete("realm-session-1");
+  await driver.createSandbox(validSandbox({ id: "sandbox-2", name: "realm-session-2" }));
+  assert.equal(lifecycle.creates.length, 2);
 });
 
 void test("EnsureWorkspace checks the pinned root and creates nothing: the root keeps its mode and contents", () => {

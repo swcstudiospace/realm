@@ -1,9 +1,9 @@
 // The refusal log of the compute driver (phase 9.5). Every refusal that the create check (planCreate), the launch-material decoder,
-// or a create stage (compute-driver.ts) raises as SCHEMA_INVALID writes one line: the RPC it arrived on, the check that refused it,
+// or a create stage (compute-driver.ts) raises writes one line: the RPC it arrived on, the check that refused it,
 // and the catalogue code. The RPC and the check are closed sets of constant names, so a line never carries a value, a path, a key
 // or a token. An operator reads the check name to see why a create was refused.
 
-import { makeRealmError, RealmError } from "../../core/errors.js";
+import { makeRealmError, RealmError, type ErrorCode } from "../../core/errors.js";
 
 // The driver entry point a refusal arrived on. Both are compute RPCs.
 export const DRIVER_RPCS = ["ValidateSandboxCreate", "CreateSandbox"] as const;
@@ -14,6 +14,8 @@ export const REFUSAL_CHECKS = [
   "create.sandbox",
   "create.identity",
   "create.workspace",
+  // No live sandbox of this driver still runs on the pinned root, and no other create holds it.
+  "create.pinned_root_held",
   "create.spec",
   "create.image",
   "create.gpu",
@@ -75,19 +77,20 @@ export function refusalScope(rpc: DriverRpc, log: RefusalLog | undefined): Refus
 }
 
 // Writes the refusal line for a check. The line names the RPC, the check and the code, and no value.
-function logRefusal(scope: RefusalScope, check: RefusalCheck): void {
-  scope.log(`realm compute driver refused: rpc=${scope.rpc} check=${check} code=SCHEMA_INVALID`);
+function logRefusal(scope: RefusalScope, check: RefusalCheck, code: ErrorCode): void {
+  scope.log(`realm compute driver refused: rpc=${scope.rpc} check=${check} code=${code}`);
 }
 
-// Writes the refusal line and returns the error to throw. Every such refusal carries SCHEMA_INVALID.
-export function refusal(scope: RefusalScope, check: RefusalCheck): RealmError {
-  logRefusal(scope, check);
-  return makeRealmError("SCHEMA_INVALID");
+// Writes the refusal line and returns the error to throw. A refusal carries SCHEMA_INVALID unless the caller names the code of
+// the state it refuses on, and that code is logged too.
+export function refusal(scope: RefusalScope, check: RefusalCheck, code: ErrorCode = "SCHEMA_INVALID"): RealmError {
+  logRefusal(scope, check, code);
+  return makeRealmError(code);
 }
 
 // Logs a stage's refusal when the error the stage raised is SCHEMA_INVALID. The check names the stage. Any other error writes nothing.
 export function logStageRefusal(scope: RefusalScope, check: RefusalCheck, error: unknown): void {
   if (error instanceof RealmError && error.code === "SCHEMA_INVALID") {
-    logRefusal(scope, check);
+    logRefusal(scope, check, "SCHEMA_INVALID");
   }
 }

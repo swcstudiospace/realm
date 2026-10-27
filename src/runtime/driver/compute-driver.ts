@@ -10,6 +10,8 @@
 // mismatch is refused with SCHEMA_INVALID, logged with the RPC and the check that refused (refusal.ts), and no libpod call is made.
 // The sandbox runtime is PID 1 whatever the argv. spec.command is checked for empty arguments and is otherwise not forwarded, as at HEAD.
 //
+// A create is refused while a container this driver created still runs on the pinned root, or while another create holds the root.
+// A container that is gone or stopped holds nothing, so a failed sandbox releases the root once its container has stopped.
 // A create that passes checks the pinned workspace root, which the driver never creates, chmods or removes, and prepares a new state
 // directory. It stores the launch material in a new secret directory outside the state root and the workspace, and it
 // makes the channel: a TLS identity for the runtime, and the runtime's bootstrap, descriptor and auth bundle, built and checked
@@ -281,6 +283,11 @@ export class ComputeDriver {
   private readonly registry = new Map<string, SandboxRecord>();
   // The host supervisor of each sandbox, keyed by the container name. It is stopped on delete and on a failed create.
   private readonly supervisors = new Map<string, SupervisorHandle>();
+  // True while a create holds the pinned root, from its check until it returns or fails. It is set before the first await, so a
+  // create that starts meanwhile is refused.
+  private rootReserved = false;
+  // Containers this driver created and could not confirm removed. Each keeps holding the pinned root while it runs.
+  private readonly unremovedContainers = new Set<string>();
 
   constructor(config: ComputeDriverConfig, deps: ComputeDriverDeps) {
     if (
@@ -349,6 +356,31 @@ export class ComputeDriver {
     if (launch === undefined || authentication === undefined) {
       throw refusal(scope, "create.launch_authentication");
     }
+    // Every sandbox of this driver is bound to the one pinned root. The root is reserved before the first await, so a create that
+    // starts while another is still checking or building is refused too. The reservation ends when its create returns or fails:
+    // after that a running container holds the root.
+    if (this.rootReserved) {
+      throw refusal(scope, "create.pinned_root_held", "REALM_INVALID_TRANSITION");
+    }
+    this.rootReserved = true;
+    try {
+      if (await this.pinnedRootHeld(scope)) {
+        throw refusal(scope, "create.pinned_root_held", "REALM_INVALID_TRANSITION");
+      }
+      return await this.buildSandbox(plan, scope, launch, authentication);
+    } finally {
+      this.rootReserved = false;
+    }
+  }
+
+  // The create once the pinned root is reserved and free: the state directory, the launch material and the channel are prepared,
+  // and the container, the runtime and the supervisor are started, as described above.
+  private async buildSandbox(
+    plan: CreatePlan,
+    scope: RefusalScope,
+    launch: Uint8Array,
+    authentication: LaunchAuthentication,
+  ): Promise<{ runtime_identity: string }> {
     const sandboxName = plan.spec.sandboxName;
     atStage(scope, "create.state_dir", () => {
       assertStateDirAbsent(plan.spec.stateDir);
@@ -399,7 +431,16 @@ export class ComputeDriver {
       });
     } catch (error: unknown) {
       logStageRefusal(scope, "create.container", error);
-      addCleanupNote(error, this.discardPrepared(plan));
+      const problems = this.discardPrepared(plan);
+      // A container this create made may still run and hold the pinned root. A name already in use belongs to another container, which this create did not make.
+      if (!(error instanceof RealmError && error.code === "SANDBOX_NAME_IN_USE")) {
+        const containerProblem = await this.containerProblem(sandboxName);
+        if (containerProblem !== undefined) {
+          this.unremovedContainers.add(sandboxName);
+          problems.push(containerProblem);
+        }
+      }
+      addCleanupNote(error, problems);
       throw error;
     }
     try {
@@ -610,6 +651,34 @@ export class ComputeDriver {
     }
   }
 
+  // True when a container this driver created still runs on the pinned root: a registered sandbox's, or one whose removal could not
+  // be confirmed. The state is read from each container, not taken from the record. A container that is gone or stopped holds
+  // nothing, so a supervisor's exit does not release the root while its container still runs.
+  private async pinnedRootHeld(scope: RefusalScope): Promise<boolean> {
+    const names = new Set([...this.registry.values()].map((record) => record.containerName));
+    for (const name of this.unremovedContainers) {
+      names.add(name);
+    }
+    for (const name of names) {
+      let inspect: LibpodInspect | null;
+      try {
+        inspect = await this.deps.libpod.inspectContainer(name);
+      } catch (error: unknown) {
+        // A state that cannot be read is not known to be free, so the create is refused. A RealmError keeps its own code.
+        if (error instanceof RealmError) {
+          throw error;
+        }
+        throw refusal(scope, "create.pinned_root_held");
+      }
+      if (inspect === null) {
+        this.unremovedContainers.delete(name);
+      } else if (runStateOf(inspect) === "running") {
+        return true;
+      }
+    }
+    return false;
+  }
+
   // Removes what a create made before its container existed: the state directory and the secret entries. Returns what was left
   // in place, as cleanup problems. An empty list means every removal succeeded.
   private discardPrepared(plan: CreatePlan): string[] {
@@ -637,6 +706,7 @@ export class ComputeDriver {
       const containerProblem = await this.containerProblem(plan.spec.sandboxName);
       if (containerProblem !== undefined) {
         problems.push(containerProblem);
+        this.unremovedContainers.add(plan.spec.sandboxName);
       }
     }
     problems.push(...this.discardPrepared(plan));
