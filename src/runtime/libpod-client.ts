@@ -372,7 +372,7 @@ const DIGEST_PINNED_IMAGE = /^[a-z0-9]+(?:[._/-][a-z0-9]+)*(?::[A-Za-z0-9_.-]+)?
 const TMPFS_OPTIONS: readonly string[] = Object.freeze(["nosuid", "nodev"]);
 // The CFS period in microseconds. NanoCpus is quota / period, so quota = nanoCpus * period / 1e9.
 const CPU_PERIOD_MICROS = 100000;
-const WORKSPACE_OPTIONS: readonly string[] = Object.freeze(["noexec", "nosuid", "nodev"]);
+const WORKSPACE_OPTIONS: readonly string[] = Object.freeze(["rw", "noexec", "nosuid", "nodev"]);
 const STATE_OPTIONS: readonly string[] = Object.freeze(["ro", "noexec", "nosuid", "nodev"]);
 
 // Validates a spec before any engine request. It is pure: it reads no environment and sends nothing. It fails closed

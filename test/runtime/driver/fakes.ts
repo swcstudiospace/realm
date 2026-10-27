@@ -242,10 +242,10 @@ export class FakeRuntime implements RuntimeHost {
 
 export const IMPLEMENTATION_VERSION = "0.1.2";
 
-// A driver config with fresh temporary roots. The state and workspace roots exist, so a create or a workspace test starts from a
-// real root. The secret root is not created here: the secret store creates it at 0700 on the first write. Refusals are logged to
-// a silent sink by default, so the expected refusals of the suite do not fill the test output; a test that checks the refusal log
-// passes its own sink.
+// A driver config with fresh temporary roots. The state root and the pinned workspace root exist, so a create starts from real roots.
+// The pinned workspace root stands for the operator's directory, so the fixture creates it; the driver never does. The secret root is
+// not created here: the secret store creates it at 0700 on the first write. Refusals are logged to a silent sink by default, so the
+// expected refusals of the suite do not fill the test output; a test that checks the refusal log passes its own sink.
 export function driverConfig(overrides: Partial<ComputeDriverConfig> = {}): ComputeDriverConfig {
   const base = mkdtempSync(join(tmpdir(), "realm-driver-test-"));
   const config: ComputeDriverConfig = {
@@ -253,7 +253,7 @@ export function driverConfig(overrides: Partial<ComputeDriverConfig> = {}): Comp
     sandboxImage: SANDBOX_IMAGE,
     sandboxStateRoot: join(base, "state"),
     secretRoot: join(base, "secrets"),
-    workspaceRoot: join(base, "workspaces"),
+    workspaceRoot: join(base, "workspace"),
     implementationVersion: IMPLEMENTATION_VERSION,
     gatewayId: GATEWAY_ID,
     supervisor: { binary: SUPERVISOR_BINARY, gatewayEndpoint: GATEWAY_ENDPOINT, gatewayCaPath: GATEWAY_CA_PATH },

@@ -157,8 +157,8 @@ The realm compute driver implements `openshell.compute.v1.ComputeDriver` from th
 | `StopSandbox` | Refused. Reads and changes no state (PD-08). | `FAILED_PRECONDITION` |
 | `StartSandbox` | Refused. Reads and changes no state (PD-08). | `FAILED_PRECONDITION` |
 | `DeleteSandbox` | Stops the host supervisor first (SIGTERM, then SIGKILL after a bounded wait), then runs `DriverLifecycle.delete`, then clears the registry. Idempotent. A name whose container another registered sandbox holds deletes nothing. | `deleted` is false for a sandbox that is already gone. |
-| `EnsureWorkspace` | Creates `<workspaceRoot>/<workspace>` at 0700 when missing. Refuses a symbolic link or a path that resolves outside the root. | `INVALID_ARGUMENT` on refusal. |
-| `DeleteWorkspace` | Removes an empty workspace directory. A workspace that still holds files is left in place. | `FAILED_PRECONDITION` when files remain. |
+| `EnsureWorkspace` | Checks the id and the pinned workspace root (`REALM_DRIVER_WORKSPACE_ROOT`). Creates nothing. Refuses a root that is missing, a symbolic link, not a directory, relative, or not owned by the driver's account. | `INVALID_ARGUMENT` on refusal. |
+| `DeleteWorkspace` | Refused. The pinned workspace root is never removed, empty or not, and nothing is read or changed. | `FAILED_PRECONDITION` |
 
 The create checks refuse, before any libpod call, a request whose image is not the configured digest, whose CPU or memory
 request or limit differs from the realm profile (2 CPUs, 1 GiB), that asks for a GPU, that carries a non-empty platform or
@@ -176,8 +176,8 @@ Refusals are logged. Each refusal of the create checks and of the launch materia
 names the rule that refused, such as `create.image` or `launch.gateway_id`; the full list is `REFUSAL_CHECKS` in
 `src/runtime/driver/refusal.ts`. A line never carries a value, a path, a key or a token. The directory checks that a create runs
 before the lifecycle write one line when they refuse with `SCHEMA_INVALID`, named by their check: `create.state_dir` (the state
-directory must not exist), `create.secret_dir` (the secret directory must not exist) and `create.workspace` (the workspace must be a
-directory). Any other error from these checks, such as `PATH_ESCAPE`, writes no line.
+directory must not exist), `create.secret_dir` (the secret directory must not exist) and `create.workspace` (the pinned workspace root must
+be a real directory the driver owns). Any other error from these checks writes no line.
 
 Sandbox names. The gateway's name is used as given, and the container runs under the `realm-` prefixed name. A name that
 already starts with `realm-` is unchanged. Any other name gets the prefix, and the prefixed name must pass the
@@ -187,8 +187,7 @@ the gateway's name to it, so `GetSandbox`, `ListSandboxes`, `WatchSandboxes` and
 gateway's name. Two names that give one container name, such as `x` and `realm-x`, cannot both be sandboxes: the second
 create is refused, because the first sandbox's state directory exists.
 
-Directories. A create prepares directories before the lifecycle runs. The workspace is created at 0700 if it is
-absent, by the rule `EnsureWorkspace` uses. The state directory is created at 0700 under the state root, and it must not
+Directories. A create prepares directories before the lifecycle runs. The workspace is the pinned root, `REALM_DRIVER_WORKSPACE_ROOT`: the sandbox's `/workspace` is that root, bound read-write, and nothing is created under it. The state directory is created at 0700 under the state root, and it must not
 already exist. The create also makes the sandbox's secret directory `<secretRoot>/<container name>` at 0700. It holds
 `launch.json`, the channel directory (0700, with `bootstrap.json`, `server.crt`, `server.key` and `control.sock`),
 `descriptor.json` and `auth.json` (all 0600), and the supervisor's exit-marker path. The driver removes `server.key` from the channel

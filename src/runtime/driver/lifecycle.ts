@@ -199,6 +199,10 @@ export class DriverLifecycle {
     // The secret directory follows the same name rule. Its entries are checked here, before any container is touched, so a
     // symbolic link or other wrong-kind entry there refuses the delete with nothing removed.
     const secretDir = secretDirOf(this.secretRoot, sandboxName);
+    // Data-loss guard: a delete removes only this sandbox's state directory and its secret entries, and each must lie strictly inside
+    // its root. The pinned workspace root lies outside both roots (the driver checks this at construction), so it is never removed.
+    assertStrictlyInside(dir, this.sandboxStateRoot);
+    assertStrictlyInside(secretDir, this.secretRoot);
     const secretEntries = presentSecretEntries(secretDir);
     const listed = await this.libpod.listContainersByLabel(OPENSHELL_SANDBOX_NAME_LABEL_KEY, sandboxName);
     for (const container of listed) {
@@ -371,6 +375,15 @@ function assertSandboxStateDir(root: string, spec: ContainerSpec): void {
 function within(child: string, parent: string): boolean {
   const prefix = parent.endsWith(sep) ? parent : parent + sep;
   return child === parent || child.startsWith(prefix);
+}
+
+// Refuses a removal target that does not lie strictly inside its root, on resolved paths. Every delete target is derived from a
+// validated sandbox name, so this holds for every delete; the check keeps the removal structurally unable to reach the root itself.
+function assertStrictlyInside(target: string, root: string): void {
+  const rel = relative(resolve(root), resolve(target));
+  if (rel === "" || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+    throw makeRealmError("SCHEMA_INVALID");
+  }
 }
 
 // The workspace, the state root and the state directory must not overlap in either direction, on real paths. The

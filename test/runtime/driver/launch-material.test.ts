@@ -5,7 +5,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { RealmError } from "../../../src/core/errors.js";
 import { ComputeDriver, type ComputeDriverConfig, type DriverSandboxMessage } from "../../../src/runtime/driver/compute-driver.js";
@@ -201,6 +201,7 @@ void test("PRD-ISO-02: a secret root inside the workspace root, or a workspace r
   assert.doesNotThrow(() => new ComputeDriver(config, deps));
   const secretInWorkspace = { ...config, secretRoot: join(config.workspaceRoot, "secrets") };
   assert.throws(() => new ComputeDriver(secretInWorkspace, deps), schemaInvalid);
+  mkdirSync(join(config.secretRoot, "workspaces"), { recursive: true });
   const workspaceInSecret = { ...config, workspaceRoot: join(config.secretRoot, "workspaces") };
   assert.throws(() => new ComputeDriver(workspaceInSecret, deps), schemaInvalid);
 });

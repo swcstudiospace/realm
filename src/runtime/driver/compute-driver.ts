@@ -10,8 +10,8 @@
 // mismatch is refused with SCHEMA_INVALID, logged with the RPC and the check that refused (refusal.ts), and no libpod call is made.
 // The sandbox runtime is PID 1 whatever the argv. spec.command is checked for empty arguments and is otherwise not forwarded, as at HEAD.
 //
-// A create that passes prepares the directories the lifecycle requires: the workspace, by the same rule EnsureWorkspace uses, and a
-// new state directory. It stores the launch material in a new secret directory outside the state root and the workspace, and it
+// A create that passes checks the pinned workspace root, which the driver never creates, chmods or removes, and prepares a new state
+// directory. It stores the launch material in a new secret directory outside the state root and the workspace, and it
 // makes the channel: a TLS identity for the runtime, and the runtime's bootstrap, descriptor and auth bundle, built and checked
 // for agreement before any libpod call. The lifecycle (DriverLifecycle) then creates the container, and the bootstrap and the
 // rest are written before it starts. The sandbox runtime is the container's main process, so once the container is verified the
@@ -26,7 +26,7 @@
 // StopSandbox and StartSandbox refuse with the transition code, which maps to FAILED_PRECONDITION (PD-08).
 // AuthenticateSandbox is not implemented: the driver does not advertise sandbox authentication.
 
-import { existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, rmdirSync, rmSync, type Stats } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, realpathSync, rmSync, type Stats } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -114,7 +114,8 @@ export interface ComputeDriverConfig {
   // Absolute root under which each sandbox's secret directory sits, at <root>/<containerName>. It holds the launch material,
   // the runtime's channel, and the supervisor's files.
   readonly secretRoot: string;
-  // Absolute root under which each workspace directory sits, at <root>/<workspace>.
+  // Absolute path of the pinned workspace root, the sandbox's /workspace, bound read-write. It is the root itself, and the
+  // workspace id selects no directory under it. The driver never creates, chmods or removes it.
   readonly workspaceRoot: string;
   // The build version advertised as the extension implementation version. The gateway refuses an empty or invalid value.
   readonly implementationVersion: string;
@@ -292,7 +293,9 @@ export class ComputeDriver {
     ) {
       throw makeRealmError("SCHEMA_INVALID");
     }
-    assertSecretRootApart(config.secretRoot, config.workspaceRoot);
+    assertPinnedWorkspaceRoot(config.workspaceRoot);
+    assertApart(config.secretRoot, config.workspaceRoot);
+    assertApart(config.sandboxStateRoot, config.workspaceRoot);
     this.config = config;
     this.deps = deps;
   }
@@ -332,11 +335,12 @@ export class ComputeDriver {
   }
 
   // A create without launch material is refused before anything is written, because CreateSandbox requires it.
-  // An existing state or secret directory is refused before anything is prepared, so that refusal creates nothing. Then the
-  // workspace, the state directory, the launch material and the channel are prepared. The channel's bootstrap and descriptor
-  // must agree before the lifecycle runs. The lifecycle creates the container and writes the runtime's files before it starts it.
-  // Then the runtime starts in the container and the host supervisor starts beside it. Any failure removes what this call made:
-  // the container, the state directory, the secret entries, and the supervisor, and the original error is rethrown.
+  // An existing state or secret directory is refused before anything is prepared, so that refusal creates nothing. Then the pinned
+  // workspace root is checked, which never creates it, and the state directory, the launch material and the channel are prepared.
+  // The channel's bootstrap and descriptor must agree before the lifecycle runs. The lifecycle creates the container and writes the
+  // runtime's files before it starts it. Then the runtime starts in the container and the host supervisor starts beside it. Any
+  // failure removes what this call made: the container, the state directory, the secret entries, and the supervisor, and the
+  // original error is rethrown.
   async createSandbox(sandbox: DriverSandboxMessage | null | undefined): Promise<{ runtime_identity: string }> {
     const scope = this.scopeOf("CreateSandbox");
     const plan = planCreate(sandbox, this.config, scope);
@@ -352,7 +356,7 @@ export class ComputeDriver {
       throw refusal(scope, "create.secret_dir");
     }
     atStage(scope, "create.workspace", () => {
-      this.prepareWorkspace(plan.workspace);
+      assertPinnedWorkspaceRoot(this.config.workspaceRoot);
     });
     atStage(scope, "create.state_dir", () => {
       mkdirOrRefuse(plan.spec.stateDir);
@@ -483,28 +487,18 @@ export class ComputeDriver {
     throw makeRealmError("REALM_INVALID_TRANSITION");
   }
 
+  // Checks the id and the pinned root. Nothing is created, so the root keeps its mode and contents.
   ensureWorkspace(request: WorkspaceRequest): Record<string, never> {
-    this.prepareWorkspace(request.workspace);
+    assertWorkspaceId(request.workspace);
+    assertPinnedWorkspaceRoot(this.config.workspaceRoot);
     return {};
   }
 
-  // Removes only an empty workspace directory. A workspace that still holds files may be the user's own data, so it is
-  // left alone and the refusal uses the transition code (FAILED_PRECONDITION).
+  // The pinned workspace root is never removed, empty or not. The request is refused with the transition code
+  // (FAILED_PRECONDITION). Only the id is checked first; nothing is read or changed.
   deleteWorkspace(request: WorkspaceRequest): Record<string, never> {
-    const dir = this.workspaceDir(request.workspace);
-    const stat = statOrNull(dir);
-    if (stat === null) {
-      return {};
-    }
-    if (stat.isSymbolicLink() || !stat.isDirectory()) {
-      throw makeRealmError("SCHEMA_INVALID");
-    }
-    this.assertInsideRoot(dir);
-    if (readdirSync(dir).length > 0) {
-      throw makeRealmError("REALM_INVALID_TRANSITION");
-    }
-    rmdirOrRefuse(dir);
-    return {};
+    assertWorkspaceId(request.workspace);
+    throw makeRealmError("REALM_INVALID_TRANSITION");
   }
 
   // Every sandbox that has both a registry entry and a labelled container, keyed by the gateway's name.
@@ -659,35 +653,6 @@ export class ComputeDriver {
     }
   }
 
-  private workspaceDir(workspace: string | undefined): string {
-    if (workspace === undefined || !WORKSPACE_ID_PATTERN.test(workspace)) {
-      throw makeRealmError("SCHEMA_INVALID");
-    }
-    return join(this.config.workspaceRoot, workspace);
-  }
-
-  // The one workspace rule, shared by EnsureWorkspace and CreateSandbox: the directory is created at 0700 when absent,
-  // a symbolic link or non-directory is refused, and the result must resolve inside the root.
-  private prepareWorkspace(workspace: string | undefined): void {
-    const dir = this.workspaceDir(workspace);
-    const stat = statOrNull(dir);
-    if (stat === null) {
-      mkdirOrRefuse(dir);
-    } else if (stat.isSymbolicLink() || !stat.isDirectory()) {
-      throw makeRealmError("SCHEMA_INVALID");
-    }
-    this.assertInsideRoot(dir);
-  }
-
-  // A workspace directory must resolve, through any symbolic link, to a path strictly inside the configured root.
-  private assertInsideRoot(dir: string): void {
-    const root = realpathOrRefuse(this.config.workspaceRoot);
-    const real = realpathOrRefuse(dir);
-    if (!isStrictlyInside(root, real)) {
-      throw makeRealmError("PATH_ESCAPE");
-    }
-  }
-
   // The refusal scope of one RPC: its name, and the sink this driver was configured with.
   private scopeOf(rpc: "ValidateSandboxCreate" | "CreateSandbox"): RefusalScope {
     return refusalScope(rpc, this.config.refusalLog);
@@ -788,7 +753,7 @@ function planCreate(
     spec: {
       sandboxName: containerName,
       image: template.image,
-      workspaceDir: join(config.workspaceRoot, workspace),
+      workspaceDir: config.workspaceRoot,
       stateDir: join(config.sandboxStateRoot, containerName),
       channelDir: channel.channelDir,
     },
@@ -966,20 +931,31 @@ function addCleanupNote(error: unknown, problems: readonly string[]): void {
   }
 }
 
-function rmdirOrRefuse(dir: string): void {
-  try {
-    rmdirSync(dir);
-  } catch {
-    throw makeRealmError("CLEANUP_FAILED");
+// The two roots must not hold one another, or be the same path. The pinned workspace root is bound into the sandbox read-write, so no
+// state or secret directory may sit under it or hold it, and a delete of a sandbox's own directories can never reach it. Both are
+// compared as resolved real paths.
+function assertApart(a: string, b: string): void {
+  const left = resolvedPathOf(a);
+  const right = resolvedPathOf(b);
+  if (left === right || isStrictlyInside(left, right) || isStrictlyInside(right, left)) {
+    throw makeRealmError("SCHEMA_INVALID");
   }
 }
 
-// The secret root and the workspace root must not hold one another. The workspace is bound into the sandbox read-write, so launch
-// material under it would reach the workload. Both are compared as resolved real paths.
-function assertSecretRootApart(secretRoot: string, workspaceRoot: string): void {
-  const secret = resolvedPathOf(secretRoot);
-  const workspace = resolvedPathOf(workspaceRoot);
-  if (secret === workspace || isStrictlyInside(secret, workspace) || isStrictlyInside(workspace, secret)) {
+// The workspace id selects no directory: the sandbox's /workspace is the pinned root. The id is still checked.
+function assertWorkspaceId(workspace: string | undefined): void {
+  if (workspace === undefined || !WORKSPACE_ID_PATTERN.test(workspace)) {
+    throw makeRealmError("SCHEMA_INVALID");
+  }
+}
+
+// The pinned workspace root must be an absolute path to a real directory that the driver's account owns. A missing path, a symbolic
+// link (checked with lstat, never followed), a file, or a directory another account owns is refused. The driver never creates,
+// chmods or removes it, so a refusal here changes nothing.
+function assertPinnedWorkspaceRoot(root: string): void {
+  const stat = statOrNull(root);
+  const uid = process.getuid?.();
+  if (!isAbsolute(root) || stat === null || !stat.isDirectory() || uid === undefined || stat.uid !== uid) {
     throw makeRealmError("SCHEMA_INVALID");
   }
 }

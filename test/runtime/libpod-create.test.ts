@@ -182,7 +182,7 @@ const EXPECTED_BODY = {
       destination: "/run/openshell-supervisor-ca",
       options: ["noexec", "nosuid", "nodev", "mode=1703"],
     },
-    { type: "bind", source: WORKSPACE_DIR, destination: "/workspace", options: ["noexec", "nosuid", "nodev"] },
+    { type: "bind", source: WORKSPACE_DIR, destination: "/workspace", options: ["rw", "noexec", "nosuid", "nodev"] },
     { type: "bind", source: STATE_DIR, destination: "/realm-state", options: ["ro", "noexec", "nosuid", "nodev"] },
     {
       type: "bind",

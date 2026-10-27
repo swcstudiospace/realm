@@ -114,7 +114,7 @@ void test("a create whose launch material does not decode is refused before any 
   assert.equal(libpod.containers.size, 0);
   assert.equal(existsSync(join(config.sandboxStateRoot, SANDBOX_NAME)), false);
   assert.equal(existsSync(join(config.secretRoot, SANDBOX_NAME)), false);
-  assert.equal(existsSync(join(config.workspaceRoot, "workspace-a")), false);
+  assert.deepEqual(readdirSync(config.workspaceRoot), []);
 });
 
 void test("after the runtime's listener is confirmed, server.key and the CA private key are gone, and the descriptor keeps the CA certificate", async () => {

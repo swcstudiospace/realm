@@ -1,14 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, lstatSync, mkdirSync, statSync, symlinkSync, unlinkSync, writeFileSync, type Stats } from "node:fs";
-import { join } from "node:path";
+import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmdirSync, statSync, symlinkSync, unlinkSync, writeFileSync, type Stats } from "node:fs";
+import { dirname, join } from "node:path";
 import { status } from "@grpc/grpc-js";
 import { RealmError } from "../../../src/core/errors.js";
 import { ComputeDriver, type ComputeDriverConfig, type DriverSandboxMessage } from "../../../src/runtime/driver/compute-driver.js";
 import { DRIVER_ADMISSION_ACKNOWLEDGEMENT } from "../../../src/runtime/driver/admission.js";
 import { DriverStatusError, driverFailureOf } from "../../../src/runtime/driver/grpc-status.js";
 import type { ContainerSpec } from "../../../src/runtime/libpod-client.js";
-import { FakeLibpod, FakeLifecycle, FakeRuntime, driverConfig, OTHER_DIGEST_IMAGE, SANDBOX_IMAGE, validSandbox } from "./fakes.js";
+import { diskLifecycle, FakeLibpod, FakeLifecycle, FakeRuntime, driverConfig, OTHER_DIGEST_IMAGE, SANDBOX_IMAGE, validSandbox } from "./fakes.js";
 
 function harness() {
   const libpod = new FakeLibpod();
@@ -20,11 +20,11 @@ function harness() {
 }
 
 // The spec the lifecycle receives for a create of the given container name: its image, workspace, state directory and channel.
-function specOf(config: ComputeDriverConfig, containerName: string, workspace: string = "workspace-a"): ContainerSpec {
+function specOf(config: ComputeDriverConfig, containerName: string): ContainerSpec {
   return {
     sandboxName: containerName,
     image: SANDBOX_IMAGE,
-    workspaceDir: join(config.workspaceRoot, workspace),
+    workspaceDir: config.workspaceRoot,
     stateDir: join(config.sandboxStateRoot, containerName),
     channelDir: join(config.secretRoot, containerName, "channel"),
   };
@@ -183,7 +183,7 @@ void test("PRD-DRV-02: a name that fails the container-name rule after prefixing
     assert.equal(libpod.containers.size, 0);
     assert.equal(lifecycle.creates.length, 0);
     assert.equal(lstatOrUndefined(join(config.sandboxStateRoot, `realm-${name}`)), undefined);
-    assert.equal(lstatOrUndefined(join(config.workspaceRoot, "workspace-a")), undefined);
+    assert.deepEqual(readdirSync(config.workspaceRoot), []);
   }
 });
 
@@ -196,11 +196,10 @@ void test("PRD-DRV-02: an empty argv is accepted, and the lifecycle receives the
   assert.deepEqual(lifecycle.creates, [specOf(config, "realm-session-1")]);
 });
 
-void test("PRD-DRV-02: a create with absent directories makes the workspace and the state directory before the lifecycle runs", async () => {
+void test("PRD-DRV-02: a create makes only the state directory, and the pinned root keeps its mode and is never created", async () => {
   const config = driverConfig();
-  const workspace = join(config.workspaceRoot, "workspace-a");
+  chmodSync(config.workspaceRoot, 0o755);
   const stateDir = join(config.sandboxStateRoot, "realm-session-1");
-  assert.equal(existsSync(workspace), false);
   assert.equal(existsSync(stateDir), false);
   const modesAtCreate: number[][] = [];
   const lifecycle = {
@@ -213,7 +212,8 @@ void test("PRD-DRV-02: a create with absent directories makes the workspace and 
   };
   const driver = new ComputeDriver(config, { lifecycle, libpod: new FakeLibpod(), runtime: new FakeRuntime() });
   await driver.createSandbox(validSandbox());
-  assert.deepEqual(modesAtCreate, [[0o700, 0o700]]);
+  assert.deepEqual(modesAtCreate, [[0o755, 0o700]]);
+  assert.deepEqual(readdirSync(config.workspaceRoot), []);
 });
 
 void test("PRD-DRV-02: a create whose state directory already exists is refused, and creates nothing", async () => {
@@ -225,14 +225,12 @@ void test("PRD-DRV-02: a create whose state directory already exists is refused,
   await assert.rejects(driver.createSandbox(validSandbox()), expectCode("SCHEMA_INVALID"));
   assert.equal(lifecycle.creates.length, 0);
   assert.equal(existsSync(leftover), true);
-  assert.equal(lstatOrUndefined(join(config.workspaceRoot, "workspace-a")), undefined);
+  assert.deepEqual(readdirSync(config.workspaceRoot), []);
 });
 
-void test("PRD-DRV-02: a lifecycle refusal removes the state directory this call made, keeps a pre-existing workspace, and rethrows the original error", async () => {
+void test("PRD-DRV-02: a lifecycle refusal removes the state directory this call made, keeps the pinned root and its contents, and rethrows the original error", async () => {
   const config = driverConfig();
-  const workspace = join(config.workspaceRoot, "workspace-a");
-  mkdirSync(workspace);
-  const notes = join(workspace, "notes.txt");
+  const notes = join(config.workspaceRoot, "notes.txt");
   writeFileSync(notes, "user data");
   const refusal = new RealmError("SCHEMA_INVALID");
   const stateDirSeen: boolean[] = [];
@@ -247,19 +245,23 @@ void test("PRD-DRV-02: a lifecycle refusal removes the state directory this call
   assert.equal(existsSync(notes), true);
 });
 
-void test("PRD-DRV-01: a create whose workspace is a symbolic link or a non-directory is refused before any directory is made", async () => {
+void test("PRD-DRV-01: a create whose pinned root is replaced by a symbolic link, a file or nothing is refused before any directory is made", async () => {
   const { driver, lifecycle, config } = harness();
-  const outside = join(config.workspaceRoot, "..", "outside");
+  const outside = join(dirname(config.workspaceRoot), "outside");
   mkdirSync(outside);
-  symlinkSync(outside, join(config.workspaceRoot, "linked"));
-  const plain = join(config.workspaceRoot, "plain");
-  writeFileSync(plain, "not a directory");
-  await assert.rejects(driver.createSandbox(validSandbox({ workspace: "linked" })), expectCode("SCHEMA_INVALID"));
-  await assert.rejects(driver.createSandbox(validSandbox({ workspace: "plain" })), expectCode("SCHEMA_INVALID"));
+  rmdirSync(config.workspaceRoot);
+  symlinkSync(outside, config.workspaceRoot);
+  await assert.rejects(driver.createSandbox(validSandbox()), expectCode("SCHEMA_INVALID"));
+  assert.equal(existsSync(outside), true);
+  unlinkSync(config.workspaceRoot);
+  writeFileSync(config.workspaceRoot, "not a directory");
+  await assert.rejects(driver.createSandbox(validSandbox()), expectCode("SCHEMA_INVALID"));
+  assert.equal(lstatSync(config.workspaceRoot).isFile(), true);
+  unlinkSync(config.workspaceRoot);
+  await assert.rejects(driver.createSandbox(validSandbox()), expectCode("SCHEMA_INVALID"));
+  assert.equal(lstatOrUndefined(config.workspaceRoot), undefined, "the driver never creates the pinned root");
   assert.equal(lifecycle.creates.length, 0);
   assert.equal(lstatOrUndefined(join(config.sandboxStateRoot, "realm-session-1")), undefined);
-  assert.equal(existsSync(outside), true);
-  assert.equal(lstatSync(plain).isFile(), true);
 });
 
 void test("PRD-DRV-02: CPU and memory written another way for the same profile are accepted", () => {
@@ -324,7 +326,7 @@ for (const name of ["realm", "external", "openshell-sandbox", "realm-other", "Re
     assert.equal(libpod.containers.size, 0);
     assert.equal(existsSync(join(config.sandboxStateRoot, "realm-session-1")), false);
     assert.equal(existsSync(join(config.secretRoot, "realm-session-1")), false);
-    assert.equal(existsSync(join(config.workspaceRoot, "workspace-a")), false);
+    assert.deepEqual(readdirSync(config.workspaceRoot), []);
   });
 }
 
@@ -432,43 +434,63 @@ void test("DeleteSandbox by a name whose container another sandbox holds deletes
   assert.equal(libpod.containers.has("realm-x"), false);
 });
 
-void test("EnsureWorkspace creates a 0700 directory under the root, and is idempotent", () => {
+void test("EnsureWorkspace checks the pinned root and creates nothing: the root keeps its mode and contents", () => {
   const { driver, config } = harness();
-  mkdirSync(config.workspaceRoot, { recursive: true });
+  chmodSync(config.workspaceRoot, 0o755);
   driver.ensureWorkspace({ workspace: "workspace-a" });
-  driver.ensureWorkspace({ workspace: "workspace-a" });
-  assert.equal(statSync(join(config.workspaceRoot, "workspace-a")).mode & 0o777, 0o700);
+  driver.ensureWorkspace({ workspace: "another-id" });
+  assert.equal(statSync(config.workspaceRoot).mode & 0o777, 0o755);
+  assert.deepEqual(readdirSync(config.workspaceRoot), []);
 });
 
-void test("PRD-DRV-01: a workspace that is a symbolic link is refused and never followed", () => {
+void test("PRD-DRV-01: a pinned root replaced by a symbolic link is refused by EnsureWorkspace and DeleteWorkspace, and the link target is untouched", () => {
   const { driver, config } = harness();
-  mkdirSync(config.workspaceRoot, { recursive: true });
-  const outside = join(config.workspaceRoot, "..", "outside");
+  const outside = join(dirname(config.workspaceRoot), "outside");
   mkdirSync(outside);
-  symlinkSync(outside, join(config.workspaceRoot, "linked"));
-  assert.throws(() => driver.ensureWorkspace({ workspace: "linked" }), expectCode("SCHEMA_INVALID"));
-  assert.throws(() => driver.deleteWorkspace({ workspace: "linked" }), expectCode("SCHEMA_INVALID"));
+  rmdirSync(config.workspaceRoot);
+  symlinkSync(outside, config.workspaceRoot);
+  assert.throws(() => driver.ensureWorkspace({ workspace: "workspace-a" }), expectCode("SCHEMA_INVALID"));
+  assert.throws(() => driver.deleteWorkspace({ workspace: "workspace-a" }), expectCode("REALM_INVALID_TRANSITION"));
   assert.equal(existsSync(outside), true);
 });
 
-void test("DeleteWorkspace refuses a workspace that still holds files, and removes it once empty", () => {
+void test("DeleteWorkspace never removes the pinned root: it is refused with the transition code, empty or not, and the root stays", () => {
   const { driver, config } = harness();
-  mkdirSync(config.workspaceRoot, { recursive: true });
-  driver.ensureWorkspace({ workspace: "workspace-a" });
-  const notes = join(config.workspaceRoot, "workspace-a", "notes.txt");
+  const notes = join(config.workspaceRoot, "notes.txt");
   writeFileSync(notes, "user data");
   assert.throws(() => driver.deleteWorkspace({ workspace: "workspace-a" }), expectCode("REALM_INVALID_TRANSITION"));
-  assert.equal(existsSync(notes), true);
+  assert.equal(readFileSync(notes, "utf8"), "user data");
   unlinkSync(notes);
-  driver.deleteWorkspace({ workspace: "workspace-a" });
-  assert.equal(lstatOrUndefined(join(config.workspaceRoot, "workspace-a")), undefined);
-  driver.deleteWorkspace({ workspace: "workspace-a" });
+  assert.throws(() => driver.deleteWorkspace({ workspace: "workspace-a" }), expectCode("REALM_INVALID_TRANSITION"));
+  assert.equal(statSync(config.workspaceRoot).isDirectory(), true);
+});
+
+void test("PRD-DRV-01: a sandbox delete leaves the pinned root, its mode and its contents in place", async () => {
+  const config = driverConfig();
+  chmodSync(config.workspaceRoot, 0o755);
+  const notes = join(config.workspaceRoot, "notes.txt");
+  writeFileSync(notes, "user data");
+  const libpod = new FakeLibpod();
+  const driver = new ComputeDriver(config, {
+    lifecycle: await diskLifecycle(config, libpod),
+    libpod,
+    runtime: new FakeRuntime(),
+  });
+  await driver.createSandbox(validSandbox());
+  const stateDir = join(config.sandboxStateRoot, "realm-session-1");
+  assert.equal(existsSync(stateDir), true);
+  assert.deepEqual(await driver.deleteSandbox({ sandbox_id: "sandbox-1" }), { deleted: true });
+  assert.equal(existsSync(stateDir), false, "the sandbox's own state directory is removed");
+  assert.equal(readFileSync(notes, "utf8"), "user data");
+  assert.equal(statSync(config.workspaceRoot).isDirectory(), true);
+  assert.equal(statSync(config.workspaceRoot).mode & 0o777, 0o755);
 });
 
 void test("a workspace id with a path separator, a dot-segment or no value is refused", () => {
   const { driver } = harness();
   for (const workspace of ["../x", "a/b", "..", ".", ""]) {
     assert.throws(() => driver.ensureWorkspace({ workspace }), expectCode("SCHEMA_INVALID"));
+    assert.throws(() => driver.deleteWorkspace({ workspace }), expectCode("SCHEMA_INVALID"));
   }
 });
 
@@ -501,5 +523,39 @@ void test("PD-05: the constructor refuses an implementation version the gateway 
         }),
       expectCode("SCHEMA_INVALID"),
     );
+  }
+});
+
+void test("PRD-DRV-01: the sandbox workspace is the configured root for every workspace id", async () => {
+  const { driver, lifecycle, config } = harness();
+  await driver.createSandbox(validSandbox({ workspace: "another-id" }));
+  assert.equal(lifecycle.creates[0]?.workspaceDir, config.workspaceRoot);
+});
+
+void test("PRD-DRV-01: the constructor refuses a pinned root that is relative, missing, a symbolic link, or a file", () => {
+  const config = driverConfig();
+  const base = dirname(config.workspaceRoot);
+  const link = join(base, "root-link");
+  symlinkSync(config.workspaceRoot, link);
+  const file = join(base, "root-file");
+  writeFileSync(file, "not a directory");
+  const libpod = new FakeLibpod();
+  const deps = { lifecycle: new FakeLifecycle(libpod), libpod, runtime: new FakeRuntime() };
+  for (const workspaceRoot of ["workspaces", join(base, "missing"), link, file]) {
+    assert.throws(() => new ComputeDriver({ ...config, workspaceRoot }, deps), expectCode("SCHEMA_INVALID"));
+  }
+  assert.doesNotThrow(() => new ComputeDriver(config, deps));
+});
+
+void test("PRD-DRV-01: the constructor refuses a state root or secret root that holds the pinned root or lies inside it", () => {
+  const config = driverConfig();
+  const libpod = new FakeLibpod();
+  const deps = { lifecycle: new FakeLifecycle(libpod), libpod, runtime: new FakeRuntime() };
+  for (const change of [
+    { sandboxStateRoot: join(config.workspaceRoot, "state") },
+    { secretRoot: join(config.workspaceRoot, "secrets") },
+    { sandboxStateRoot: dirname(config.workspaceRoot) },
+  ]) {
+    assert.throws(() => new ComputeDriver({ ...config, ...change }, deps), expectCode("SCHEMA_INVALID"));
   }
 });
