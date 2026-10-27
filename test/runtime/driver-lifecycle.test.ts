@@ -843,6 +843,16 @@ void test("PRD-CTR-01 (C5 containment): a state directory outside the state root
   assert.equal(h.fake.seen.length, before);
 });
 
+void test("C2: a spec whose channel directory is not the sandbox's binding is refused before any libpod call", async (t) => {
+  const h = await harness(t);
+  const before = h.fake.seen.length;
+  await assert.rejects(
+    h.lifecycle.create({ ...h.spec, channelDir: join(h.secretRoot, "elsewhere", "channel") }),
+    hasCode("SCHEMA_INVALID"),
+  );
+  assert.equal(h.fake.seen.length, before);
+});
+
 void test("PRD-CTR-01 (C5 containment): a state directory that is a symlink is refused before any libpod call", async (t) => {
   const h = await harness(t);
   const outside = tempDir(t, "realm-lifecycle-outside-");

@@ -29,6 +29,7 @@ import {
 } from "../openshell.js";
 import { removeAllRealmContainers } from "../sweep.js";
 import { presentSecretEntries, removeAllSecrets, removeSecretDirIfEmpty, removeSecretEntries, secretDirOf } from "./secret-store.js";
+import { sandboxBindingOf, type SandboxBinding } from "./sandbox-binding.js";
 
 // Grace period a sandbox container gets to stop before it is killed. Matches the session composition's grace.
 const STOP_GRACE_MS = 10_000;
@@ -134,6 +135,11 @@ export class DriverLifecycle {
     if (!isRealmSandboxName(spec.sandboxName)) {
       throw makeRealmError("SCHEMA_INVALID");
     }
+    const sandboxBinding = sandboxBindingOf(
+      { workspaceRoot: spec.workspaceDir, stateRoot: this.sandboxStateRoot, secretRoot: this.secretRoot },
+      spec.sandboxName,
+    );
+    assertSpecBinding(spec, sandboxBinding);
     assertSandboxStateDir(this.sandboxStateRoot, spec);
     assertNoOverlap(spec.workspaceDir, this.sandboxStateRoot, spec.stateDir);
     assertNoOverlapPair(spec.workspaceDir, spec.channelDir);
@@ -163,13 +169,7 @@ export class DriverLifecycle {
       }
       throw error;
     }
-    const binding: HardeningBinding = {
-      image: spec.image,
-      rootless: info.rootless,
-      workspaceRoot: spec.workspaceDir,
-      stateDir: spec.stateDir,
-      channelDir: spec.channelDir,
-    };
+    const binding: HardeningBinding = { image: spec.image, rootless: info.rootless, ...sandboxBinding };
     await this.checkBeforeStart(id);
     if (beforeStart !== undefined) {
       try {
@@ -367,6 +367,14 @@ function assertSandboxStateDir(root: string, spec: ContainerSpec): void {
     isDirectory = false;
   }
   if (!isDirectory) {
+    throw makeRealmError("SCHEMA_INVALID");
+  }
+}
+
+// The container's state and channel directories must be the sandbox binding's, so the mounts it is created with are the paths the
+// verifier checks. A spec that names other paths is refused before any libpod call.
+function assertSpecBinding(spec: ContainerSpec, binding: SandboxBinding): void {
+  if (spec.stateDir !== binding.stateDir || spec.channelDir !== binding.channelDir) {
     throw makeRealmError("SCHEMA_INVALID");
   }
 }

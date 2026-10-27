@@ -46,6 +46,12 @@ interface StopWiring {
 // AgentOS work with AGENTOS_NOT_CONFIGURED (fail closed). The driver serves every session: each session's sandbox is
 // realm-<sessionId>, created by its create from the configured image, and its runner runs there as the workload.
 const AGENTOS_IMAGE_ENV = "REALM_AGENTOS_IMAGE";
+// The realm secret root, the value the driver is given as REALM_DRIVER_SECRET_ROOT. The session's sandbox binding derives the channel
+// directory from it, so the daemon reads the same variable the driver does. Unset, a session create is refused.
+const SECRET_ROOT_ENV = "REALM_DRIVER_SECRET_ROOT";
+// The pinned workspace root, the value the driver is given as REALM_DRIVER_WORKSPACE_ROOT. The session's sandbox binding mounts this
+// root at /workspace, so the daemon reads the same variable the driver does. Unset, a session create is refused.
+const WORKSPACE_ROOT_ENV = "REALM_DRIVER_WORKSPACE_ROOT";
 // Start provisions the runner child and waits for its probe, so it gets the long budget; probe and delete get the short one.
 const AGENTOS_START_TIMEOUT_MS = 180_000;
 const AGENTOS_CALL_TIMEOUT_MS = 30_000;
@@ -73,6 +79,8 @@ export async function runDaemon(deps: DaemonDeps): Promise<number> {
     const { runtimeInput, stateDir } = readHostRuntime(deps.env, deps.readConfig);
     const libpodSocketPath = podmanSocketPath(deps.env);
     const agentosDriver = agentosDriverFromEnv(deps.env);
+    const secretRoot = deps.env[SECRET_ROOT_ENV];
+    const workspaceRoot = deps.env[WORKSPACE_ROOT_ENV];
     started = await start({
       stateDir,
       runtimeInput,
@@ -81,6 +89,8 @@ export async function runDaemon(deps: DaemonDeps): Promise<number> {
       env: deps.env,
       ...(libpodSocketPath === undefined ? {} : { libpodSocketPath }),
       ...(agentosDriver === undefined ? {} : { agentosDriver }),
+      ...(secretRoot === undefined || secretRoot.length === 0 ? {} : { secretRoot }),
+      ...(workspaceRoot === undefined || workspaceRoot.length === 0 ? {} : { pinnedWorkspaceRoot: workspaceRoot }),
     });
   } catch (error: unknown) {
     writeStderr(failureLine(codeOf(error)));

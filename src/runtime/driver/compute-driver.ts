@@ -66,6 +66,7 @@ import {
 } from "./runtime-channel.js";
 import { GATEWAY_ID_PATTERN } from "../gateway-config.js";
 import { removeSandboxSecrets, secretDirExists, secretDirOf, writeLaunchMaterial } from "./secret-store.js";
+import { sandboxBindingOf } from "./sandbox-binding.js";
 import type { SupervisorHandle, SupervisorSpawn } from "./supervisor.js";
 
 export const COMPUTE_DRIVER_SERVICE_NAME = "openshell.compute.v1.ComputeDriver";
@@ -744,6 +745,13 @@ function planCreate(
   atStage(scope, "create.socket_path", () => {
     assertSocketPathsFit([channel.controlSocket, channel.sshSocket, CONTAINER_CONTROL_SOCKET]);
   });
+  // The container's mounts are the sandbox binding, which the lifecycle verifies the container against.
+  const binding = atStage(scope, "create.identity", () =>
+    sandboxBindingOf(
+      { workspaceRoot: config.workspaceRoot, stateRoot: config.sandboxStateRoot, secretRoot: config.secretRoot },
+      containerName,
+    ),
+  );
   return {
     sandboxName,
     sandboxId,
@@ -753,9 +761,9 @@ function planCreate(
     spec: {
       sandboxName: containerName,
       image: template.image,
-      workspaceDir: config.workspaceRoot,
-      stateDir: join(config.sandboxStateRoot, containerName),
-      channelDir: channel.channelDir,
+      workspaceDir: binding.workspaceRoot,
+      stateDir: binding.stateDir,
+      channelDir: binding.channelDir,
     },
   };
 }

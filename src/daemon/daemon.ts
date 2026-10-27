@@ -88,6 +88,12 @@ export interface BuildDaemonHandleOptions {
   // Host environment filtered to OPENSHELL_ENV_NAMES for the runner (never
   // read from the process: this module reads no environment).
   readonly env?: EnvironmentLike;
+  // The realm secret root the sandbox binding derives from: the root the driver is given as REALM_DRIVER_SECRET_ROOT. Without it a
+  // session create is refused before any libpod call.
+  readonly secretRoot?: string;
+  // The pinned workspace root the sandbox binding mounts at /workspace: the root the driver is given as REALM_DRIVER_WORKSPACE_ROOT.
+  // Without it a session create is refused before any libpod call.
+  readonly pinnedWorkspaceRoot?: string;
 }
 
 export interface StartDaemonOptions extends BuildDaemonHandleOptions {
@@ -583,6 +589,8 @@ function defaultExec(
     libpod,
     runner: runOpenShell,
     ...(agentosFor !== undefined ? { agentosFor } : {}),
+    ...(options.secretRoot !== undefined ? { secretRoot: options.secretRoot } : {}),
+    ...(options.pinnedWorkspaceRoot !== undefined ? { pinnedWorkspaceRoot: options.pinnedWorkspaceRoot } : {}),
     config: {
       image: config.image,
       stateDir: config.stateDir,

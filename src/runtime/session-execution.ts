@@ -17,6 +17,7 @@
 // callers keep working. It removes every realm-labelled container and proves zero survivors.
 
 import { spawn, type ChildProcess, type StdioOptions } from "node:child_process";
+import { isAbsolute } from "node:path";
 import { makeRealmError, RealmError, type ErrorCode } from "../core/errors.js";
 import { withTimeout } from "../core/timeout.js";
 import type { CreateRequest, ExecutionService, ProbeResult } from "../core/ports.js";
@@ -33,6 +34,7 @@ import {
 } from "./hardening.js";
 import type { LibpodClient, LibpodInspect } from "./libpod-client.js";
 import { attachKernelCaps, readHostProcStatus } from "./kernel-caps.js";
+import { sandboxBindingOf } from "./driver/sandbox-binding.js";
 import {
   buildExecArgv,
   deleteSandbox,
@@ -83,6 +85,13 @@ export interface SessionExecutionOptions {
   readonly agentosFor?: SupervisorFor;
   // The workspace root is per session and comes from the create request.
   readonly config: Omit<RuntimeConfig, "workspaceRoot">;
+  // The realm secret root: the root the driver is given as REALM_DRIVER_SECRET_ROOT. The sandbox binding derives the channel
+  // directory from it. Absent or relative, a create is refused before any libpod, OpenShell, or policy-file call.
+  readonly secretRoot?: string;
+  // The pinned workspace root: the root the driver is given as REALM_DRIVER_WORKSPACE_ROOT and mounts at /workspace. The sandbox
+  // binding derives the workspace mount from it, so the session's verifier and the driver share one derivation. Absent or
+  // relative, a create is refused before any libpod, OpenShell, or policy-file call.
+  readonly pinnedWorkspaceRoot?: string;
   // The session's egress allowlist, fixed for the session (D-106, OQ-P4-10). It arrives untrusted and is
   // validated by the constructor, so an invalid list throws SCHEMA_INVALID before any create.
   readonly egressAllow: unknown;
@@ -138,6 +147,8 @@ export class SessionExecution implements ExecutionService {
   private readonly runner: OpenShellRunner;
   private readonly agentosFor: SupervisorFor | undefined;
   private readonly config: Omit<RuntimeConfig, "workspaceRoot">;
+  private readonly secretRoot: string | undefined;
+  private readonly pinnedWorkspaceRoot: string | undefined;
   private readonly egressAllow: readonly EgressRule[];
   private readonly readProcStatus: (pid: number) => string;
   private readonly stopDeadlineMs: number;
@@ -158,6 +169,8 @@ export class SessionExecution implements ExecutionService {
     this.readProcStatus = options.readProcStatus ?? readHostProcStatus;
     this.agentosFor = options.agentosFor;
     this.config = options.config;
+    this.secretRoot = options.secretRoot;
+    this.pinnedWorkspaceRoot = options.pinnedWorkspaceRoot;
     this.stopDeadlineMs = options.stopDeadlineMs ?? AGENTOS_STOP_DEADLINE_MS;
     if (!(this.stopDeadlineMs > 0) || !Number.isFinite(this.stopDeadlineMs)) {
       throw new RangeError("the AgentOS stop deadline must be a positive finite number");
@@ -169,6 +182,8 @@ export class SessionExecution implements ExecutionService {
   async create(req: CreateRequest): Promise<{ readonly containerId: string }> {
     // Refuses before any libpod, OpenShell, or policy-file call when no supervisor is bound (fail closed).
     const agentos = this.requireAgentOs(req.idempotencyKey);
+    const secretRoot = this.requireSecretRoot();
+    const pinnedWorkspaceRoot = this.requirePinnedWorkspaceRoot();
     // Registered before the first await, so a stop that names this sandbox from here on waits for this create (B-3).
     const sandbox = realmSandboxName(req.idempotencyKey);
     // A create makes a new sandbox, so a delete recorded for this name earlier no longer counts.
@@ -179,13 +194,13 @@ export class SessionExecution implements ExecutionService {
       const runtime = loadRuntimeConfig({ ...this.config, workspaceRoot: req.workspaceRoot });
       const info = await this.libpod.info();
       const sessionId = req.idempotencyKey;
-      const policyPath = writePolicyDocument(runtime.stateDir, sessionId, this.egressAllow, AGENTOS_WORKLOAD_BINARY);
+      // The sandbox binding is the one derivation the driver builds this sandbox's mounts from (C2).
       const binding: HardeningBinding = {
         image: runtime.image,
         rootless: info.rootless,
-        workspaceRoot: runtime.workspaceRoot,
-        stateDir: runtime.stateDir,
+        ...sandboxBindingOf({ workspaceRoot: pinnedWorkspaceRoot, stateRoot: runtime.stateDir, secretRoot }, sandbox),
       };
+      const policyPath = writePolicyDocument(runtime.stateDir, sessionId, this.egressAllow, AGENTOS_WORKLOAD_BINARY);
       let containerId: string;
       try {
         containerId = await runOpenShellCreate(
@@ -380,6 +395,24 @@ export class SessionExecution implements ExecutionService {
       throw makeRealmError("AGENTOS_NOT_CONFIGURED");
     }
     return this.agentosFor(sessionId);
+  }
+
+  // The realm secret root the sandbox binding derives from. Absent or relative, the create is refused with SCHEMA_INVALID before any
+  // libpod, OpenShell, or policy-file call.
+  private requireSecretRoot(): string {
+    if (this.secretRoot === undefined || !isAbsolute(this.secretRoot)) {
+      throw makeRealmError("SCHEMA_INVALID");
+    }
+    return this.secretRoot;
+  }
+
+  // The pinned workspace root the sandbox binding derives from. Absent or relative, the create is refused with SCHEMA_INVALID
+  // before any libpod, OpenShell, or policy-file call.
+  private requirePinnedWorkspaceRoot(): string {
+    if (this.pinnedWorkspaceRoot === undefined || !isAbsolute(this.pinnedWorkspaceRoot)) {
+      throw makeRealmError("SCHEMA_INVALID");
+    }
+    return this.pinnedWorkspaceRoot;
   }
 
   // Returns only when the container conforms. Otherwise the container is removed before anything is

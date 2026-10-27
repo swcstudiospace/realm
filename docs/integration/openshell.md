@@ -197,6 +197,8 @@ these exist, the state directory and the secret entries this call made are remov
 The state root and the workspace root are set in the driver's environment for the realm account. The rendered gateway
 configuration does not set them.
 
+The sandbox binding is one derivation, `sandboxBindingOf` (`src/runtime/driver/sandbox-binding.ts`). For a sandbox name it gives the workspace (the pinned root, mounted read-write at `/workspace`), the state directory `<state root>/<container name>` (mounted read-only at `/realm-state`), and the channel directory `<secret root>/<container name>/channel` (mounted read-write at `/run/openshell/channel`). The driver builds its create from it and verifies the container against it. The session's verifier takes the same binding, and its workspace is the pinned root from `REALM_DRIVER_WORKSPACE_ROOT`, not the root named in the create request. The daemon's state directory must equal the driver's state root, and `REALM_DRIVER_SECRET_ROOT` and `REALM_DRIVER_WORKSPACE_ROOT` must be the same values for the daemon and the driver.
+
 ### Built-in runtime (phase 9.5)
 
 - The driver serves the compute socket only.

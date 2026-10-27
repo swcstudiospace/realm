@@ -4,8 +4,9 @@ import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentOsSupervisor } from "../../src/runtime/agentos.js";
-import { HARDENING_PROFILE } from "../../src/runtime/hardening.js";
+import { HARDENING_PROFILE, RUNTIME_ARGV, RUNTIME_BINARY } from "../../src/runtime/hardening.js";
 import { LibpodClient } from "../../src/runtime/libpod-client.js";
+import { sandboxBindingOf } from "../../src/runtime/driver/sandbox-binding.js";
 import { buildExecArgv, OPENSHELL_BINARY, realmSandboxName } from "../../src/runtime/openshell.js";
 import { SessionExecution } from "../../src/runtime/session-execution.js";
 import { FakeAgentOsDriver } from "../support/fake-agentos.js";
@@ -43,6 +44,7 @@ interface Fixture {
   readonly supervisor: AgentOsSupervisor;
   readonly stateDir: string;
   readonly workspaceRoot: string;
+  readonly secretRoot: string;
 }
 
 async function fixture(t: TestContext): Promise<Fixture> {
@@ -66,28 +68,34 @@ async function fixture(t: TestContext): Promise<Fixture> {
     now: () => 0,
   });
   const stateDir = join(base, "state");
+  const secretRoot = join(base, "secrets");
   const exec = new SessionExecution({
     libpod: new LibpodClient(socketPath),
     runner: openshell.runner,
     agentosFor: () => agentos,
     readProcStatus: () => "CapInh:\t0000000000000000\nCapPrm:\t0000000000000000\nCapEff:\t0000000000000000\nCapBnd:\t0000000000000000\nCapAmb:\t0000000000000000\n",
     config: { image: IMAGE, stateDir },
+    secretRoot,
+    pinnedWorkspaceRoot: join(base, "workspace"),
     egressAllow: [],
   });
-  return { libpod, store, openshell, driver, supervisor: agentos, exec, stateDir, workspaceRoot: join(base, "workspace") };
+  return { libpod, store, openshell, driver, supervisor: agentos, exec, stateDir, workspaceRoot: join(base, "workspace"), secretRoot };
 }
 
 // Creates the session. The create-time verification reads one inspect, so a conforming one is scripted.
 async function createSession(f: Fixture): Promise<{ readonly containerId: string }> {
+  const binding = sandboxBindingOf({ workspaceRoot: f.workspaceRoot, stateRoot: f.stateDir, secretRoot: f.secretRoot }, realmSandboxName(SESSION));
   const inspect = {
     ImageDigest: DIGEST,
+    Path: RUNTIME_BINARY,
+    Args: RUNTIME_ARGV.slice(1),
     State: { Running: true, Status: "running", Pid: 4242 },
     HostConfig: {
       Privileged: false,
       CapAdd: [],
       SecurityOpt: ["no-new-privileges"],
       ReadonlyRootfs: true,
-      Tmpfs: { "/tmp": "rw", "/run": "rw" },
+      Tmpfs: { "/tmp": "rw", "/run": "rw", [HARDENING_PROFILE.supervisorCaDestination]: "rw" },
       PidsLimit: HARDENING_PROFILE.pidsLimit,
       Memory: HARDENING_PROFILE.memoryBytes,
       NanoCpus: HARDENING_PROFILE.nanoCpus,
@@ -95,7 +103,8 @@ async function createSession(f: Fixture): Promise<{ readonly containerId: string
     },
     Mounts: [
       { Type: "bind", Source: f.workspaceRoot, Destination: "/workspace", RW: true },
-      { Type: "bind", Source: f.stateDir, Destination: "/realm-state", RW: false },
+      { Type: "bind", Source: binding.stateDir, Destination: "/realm-state", RW: false },
+      { Type: "bind", Source: binding.channelDir, Destination: HARDENING_PROFILE.channelDestination, RW: true },
     ],
   };
   f.libpod.respondNext("inspectContainer", { status: 200, body: JSON.stringify(inspect) });

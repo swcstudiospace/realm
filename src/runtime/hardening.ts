@@ -9,9 +9,10 @@
 // The capability check reads KernelCaps: the five capability sets of the container's init process, read from
 // its host /proc status and attached by the caller, because libpod inspect does not report them (D-51).
 //
-// The compute driver's sandbox container adds two things to the session container's shape: a read-write channel mount for the
+// The compute driver's sandbox container adds two things to the base container shape: a read-write channel mount for the
 // sandbox runtime, and a noexec tmpfs for the runtime's CA material. A binding that names a channel directory selects that shape
-// (HardeningBinding.channelDir); a binding without one is the session container, and its checks are unchanged.
+// (HardeningBinding.channelDir). Every sandbox binding names one (sandboxBindingOf); a binding without one has no channel, and its
+// checks are unchanged.
 
 import { createHash } from "node:crypto";
 
@@ -88,7 +89,7 @@ export interface HardeningBinding {
   readonly workspaceRoot: string;
   readonly stateDir: string;
   // The sandbox container's channel source, read-write. When present, the container must also carry the CA tmpfs and the channel
-  // mount, and nothing else. Absent for a session container.
+  // mount, and nothing else. Absent only for a binding with no channel, which sandboxBindingOf never returns.
   readonly channelDir?: string;
 }
 
@@ -130,8 +131,8 @@ const CHECKS: Readonly<Record<HardeningProperty, Check>> = Object.freeze({
       (channel === undefined || isMountOf(mounts, channel, HARDENING_PROFILE.channelDestination, true))
     );
   },
-  // PID 1 of a sandbox container is the sandbox runtime, started with its exact argv (phase 9.5, wave 3). A session container
-  // has no channel and is not checked here.
+  // PID 1 of a sandbox container is the sandbox runtime, started with its exact argv (phase 9.5, wave 3). A binding with no channel
+  // is not checked here.
   "init-process": (inspect, binding) =>
     binding.channelDir === undefined ||
     (field(inspect, ["Path"]) === RUNTIME_BINARY && sameArgv(field(inspect, ["Args"]), RUNTIME_ARGV.slice(1))),
