@@ -176,8 +176,9 @@ Refusals are logged. Each refusal of the create checks and of the launch materia
 `SCHEMA_INVALID` unless a state precondition names its own code, as `create.pinned_root_held` does with `REALM_INVALID_TRANSITION`. The check
 names the rule that refused, such as `create.image` or `launch.gateway_id`; the full list is `REFUSAL_CHECKS` in
 `src/runtime/driver/refusal.ts`. A line never carries a value, a path, a key or a token. `create.pinned_root_held` refuses a create while a
-container of this driver still runs on the pinned root. If the state of a container on the root cannot be read, the create is refused under
-the same check with `SCHEMA_INVALID`, and the error of a catalogue code the lookup raised is passed on unchanged. The directory checks that a create runs
+container of this driver is live on the pinned root: any readable state other than configured, created, exited or stopped counts, so stopping and removing hold too. The containers are read from the runtime under the driver's own
+label, so a restarted driver refuses too. If the state or the mounts of a container cannot be read, the create is refused under the same
+check with `SCHEMA_INVALID`, and the error of a catalogue code the lookup raised is passed on unchanged. The directory checks that a create runs
 before the lifecycle write one line when they refuse with `SCHEMA_INVALID`, named by their check: `create.state_dir` (the state
 directory must not exist), `create.secret_dir` (the secret directory must not exist) and `create.workspace` (the pinned workspace root must
 be a real directory the driver owns). Any other error from these checks writes no line.

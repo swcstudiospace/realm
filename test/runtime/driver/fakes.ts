@@ -32,7 +32,10 @@ export const GATEWAY_CA_PATH = "/etc/realm/gateway-ca.pem";
 interface FakeContainer {
   readonly id: string;
   readonly labels: Readonly<Record<string, string>>;
+  // The host path bound at /workspace, or undefined when the container binds no workspace.
+  readonly workspace: string | undefined;
   running: boolean;
+  paused: boolean;
 }
 
 // The labels a container the realm creates carries: the managed marker, the sandbox name, and the sandbox role.
@@ -49,8 +52,9 @@ export class FakeLibpod {
   readonly containers = new Map<string, FakeContainer>();
   inspectCalls = 0;
 
-  add(name: string, running: boolean): void {
-    this.containers.set(name, { id: `id-${name}`, labels: realmLabels(name), running });
+  // The workspace is the host path the container binds at /workspace. A container added without one binds no workspace.
+  add(name: string, running: boolean, workspace?: string): void {
+    this.containers.set(name, { id: `id-${name}`, labels: realmLabels(name), workspace, running, paused: false });
   }
 
   listContainersByLabel(key: string, value: string): Promise<LibpodContainerSummary[]> {
@@ -60,15 +64,17 @@ export class FakeLibpod {
     return Promise.resolve(listed);
   }
 
-  inspectContainer(name: string): Promise<LibpodInspect | null> {
+  // Resolves a reference the way libpod does: by container name or by container id.
+  inspectContainer(reference: string): Promise<LibpodInspect | null> {
     this.inspectCalls += 1;
-    const container = this.containers.get(name);
+    const container = this.containers.get(reference) ?? [...this.containers.values()].find((candidate) => candidate.id === reference);
     if (container === undefined) {
       return Promise.resolve(null);
     }
     return Promise.resolve({
       Id: container.id,
-      State: { Status: container.running ? "running" : "exited" },
+      State: { Status: container.paused ? "paused" : container.running ? "running" : "exited" },
+      Mounts: container.workspace === undefined ? [] : [{ Source: container.workspace, Destination: "/workspace" }],
     });
   }
 }
@@ -84,7 +90,7 @@ export class FakeLifecycle implements Pick<DriverLifecycle, "create" | "delete" 
 
   async create(spec: ContainerSpec, beforeStart?: BeforeStart): Promise<string> {
     this.creates.push(spec);
-    this.libpod.add(spec.sandboxName, true);
+    this.libpod.add(spec.sandboxName, true, spec.workspaceDir);
     const id = `id-${spec.sandboxName}`;
     if (beforeStart !== undefined) {
       try {
@@ -150,7 +156,7 @@ export async function diskLifecycle(config: ComputeDriverConfig, libpod: FakeLib
     create: async (spec: ContainerSpec, beforeStart?: BeforeStart): Promise<string> => {
       creates.push(spec);
       const id = `id-${spec.sandboxName}`;
-      libpod.add(spec.sandboxName, true);
+      libpod.add(spec.sandboxName, true, spec.workspaceDir);
       if (beforeStart !== undefined) {
         try {
           await beforeStart(id);

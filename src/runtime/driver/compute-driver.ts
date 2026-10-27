@@ -10,8 +10,10 @@
 // mismatch is refused with SCHEMA_INVALID, logged with the RPC and the check that refused (refusal.ts), and no libpod call is made.
 // The sandbox runtime is PID 1 whatever the argv. spec.command is checked for empty arguments and is otherwise not forwarded, as at HEAD.
 //
-// A create is refused while a container this driver created still runs on the pinned root, or while another create holds the root.
-// A container that is gone or stopped holds nothing, so a failed sandbox releases the root once its container has stopped.
+// A create is refused while a container this driver created is live on the pinned root, or while another create holds the root.
+// Live means any readable state other than configured, created, exited or stopped, so running, paused, stopping and removing all hold.
+// The containers are read from the runtime as well as from memory, so a restarted driver refuses too. A container that is gone,
+// exited, created or stopped holds nothing, so a failed sandbox releases the root once its container has stopped.
 // A create that passes checks the pinned workspace root, which the driver never creates, chmods or removes, and prepares a new state
 // directory. It stores the launch material in a new secret directory outside the state root and the workspace, and it
 // makes the channel: a TLS identity for the runtime, and the runtime's bootstrap, descriptor and auth bundle, built and checked
@@ -286,7 +288,7 @@ export class ComputeDriver {
   // True while a create holds the pinned root, from its check until it returns or fails. It is set before the first await, so a
   // create that starts meanwhile is refused.
   private rootReserved = false;
-  // Containers this driver created and could not confirm removed. Each keeps holding the pinned root while it runs.
+  // Containers this driver created and could not confirm removed. Each keeps holding the pinned root while it is live.
   private readonly unremovedContainers = new Set<string>();
 
   constructor(config: ComputeDriverConfig, deps: ComputeDriverDeps) {
@@ -651,32 +653,41 @@ export class ComputeDriver {
     }
   }
 
-  // True when a container this driver created still runs on the pinned root: a registered sandbox's, or one whose removal could not
-  // be confirmed. The state is read from each container, not taken from the record. A container that is gone or stopped holds
-  // nothing, so a supervisor's exit does not release the root while its container still runs.
+  // True when a container this driver created holds the pinned root. The candidates are the containers in memory (the registry's and
+  // the unconfirmed-removal set) and every container the runtime lists under the driver's own label, so a driver with no memory still
+  // sees a live sandbox. A candidate holds the root when it is live and binds the pinned root. A state or mount list that cannot be
+  // read is not known to be free, so the create is refused, as is a lookup that fails for any other reason.
   private async pinnedRootHeld(scope: RefusalScope): Promise<boolean> {
-    const names = new Set([...this.registry.values()].map((record) => record.containerName));
-    for (const name of this.unremovedContainers) {
-      names.add(name);
-    }
-    for (const name of names) {
-      let inspect: LibpodInspect | null;
-      try {
-        inspect = await this.deps.libpod.inspectContainer(name);
-      } catch (error: unknown) {
-        // A state that cannot be read is not known to be free, so the create is refused. A RealmError keeps its own code.
-        if (error instanceof RealmError) {
-          throw error;
+    try {
+      // One entry per container, keyed by its sandbox name, so a container both in memory and listed is inspected once. A listed container
+      // is inspected by the id the runtime reports; a container known only from memory is inspected by its name.
+      const references = new Map<string, string>();
+      for (const name of this.unremovedContainers) {
+        references.set(name, name);
+      }
+      for (const record of this.registry.values()) {
+        references.set(record.containerName, record.containerName);
+      }
+      const listed = await this.deps.libpod.listContainersByLabel(OPENSHELL_ISOLATION_ROLE_LABEL_KEY, OPENSHELL_SANDBOX_ROLE_VALUE);
+      for (const container of listed) {
+        references.set(container.labels?.[OPENSHELL_SANDBOX_NAME_LABEL_KEY] ?? container.id, container.id);
+      }
+      for (const [name, reference] of references) {
+        const inspect = await this.deps.libpod.inspectContainer(reference);
+        if (inspect === null) {
+          this.unremovedContainers.delete(name);
+        } else if (holdsPinnedRoot(inspect, this.config.workspaceRoot)) {
+          return true;
         }
-        throw refusal(scope, "create.pinned_root_held");
       }
-      if (inspect === null) {
-        this.unremovedContainers.delete(name);
-      } else if (runStateOf(inspect) === "running") {
-        return true;
+      return false;
+    } catch (error: unknown) {
+      // A RealmError keeps its own code. Any other failure refuses the create under this check, with SCHEMA_INVALID.
+      if (error instanceof RealmError) {
+        throw error;
       }
+      throw refusal(scope, "create.pinned_root_held");
     }
-    return false;
   }
 
   // Removes what a create made before its container existed: the state directory and the secret entries. Returns what was left
@@ -938,6 +949,28 @@ function runStateOf(inspect: LibpodInspect): string {
     return state.Status;
   }
   return "unknown";
+}
+
+// States in which a container holds no pinned root: it has not started, or it has stopped. Every other readable state is live,
+// which includes running and paused.
+const NON_HOLDING_STATES: Record<string, true> = { configured: true, created: true, exited: true, stopped: true };
+
+// True when a container holds the pinned root: it is live, and one of its mounts has the pinned root as its source. Throws when the
+// state or the mounts cannot be read, so the caller refuses the create.
+function holdsPinnedRoot(inspect: LibpodInspect, root: string): boolean {
+  const state = runStateOf(inspect);
+  if (state === "unknown") {
+    throw new Error("container state unreadable");
+  }
+  if (NON_HOLDING_STATES[state] === true) {
+    return false;
+  }
+  const mounts: unknown = inspect["Mounts"];
+  if (!Array.isArray(mounts)) {
+    throw new Error("container mounts unreadable");
+  }
+  const entries: readonly unknown[] = mounts;
+  return entries.some((mount) => typeof mount === "object" && mount !== null && "Source" in mount && mount.Source === root);
 }
 
 // True when the child is a strict descendant of the parent directory. Both paths are already resolved.
