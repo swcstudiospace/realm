@@ -103,7 +103,7 @@ export interface ActiveSession {
 
 // Startup budget for attach plus its first status read. The daemon owns the policy, so this mirrors
 // the policy schema default for startupBudgetMs.
-export const STARTUP_BUDGET_MS = 10_000;
+export const STARTUP_BUDGET_MS = 200_000;
 
 // Bound on one guarded status read. It sits well inside the host's tool_call budget, so a hung
 // daemon yields a verdict instead of a host timeout.

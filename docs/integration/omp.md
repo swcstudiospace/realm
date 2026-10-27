@@ -109,7 +109,7 @@ Sources: `package.json`, `src/omp/extension.ts`, `src/omp/plugin.ts`, and `src/d
 
 Entry. `package.json` declares `"omp": { "extensions": ["./dist/src/omp/extension.js"] }`. The module's default export is `realmExtension(pi)`. It is the only module in the Omp wiring that reads `process.env`. It resolves the state directory and the control socket path once, and passes an `attachDaemon` function to `registerRealmPlugin` (`src/omp/extension.ts`, `src/omp/plugin.ts`).
 
-Attach at session start. The `session_start` handler starts the attach without awaiting it. The attach and its first status read share a 10-second budget (`STARTUP_BUDGET_MS`). The attach:
+Attach at session start. The `session_start` handler starts the attach without awaiting it. The attach and its first status read share a 200-second budget (`STARTUP_BUDGET_MS`, 200000 ms). The attach:
 
 1. Ensures a daemon answers on the control socket. When none does, it spawns `dist/src/daemon/main.js` detached.
 2. Connects to the control socket and calls `up` with the session working directory (`ctx.cwd`) as the workspace root. `up` is idempotent.

@@ -27,7 +27,7 @@ function policyFor(workspaceRoots: readonly string[], startupBudgetMs: number): 
 }
 
 // Real directories under a temporary base, a session store on disk, a lock table the test
-// can inspect, and the fake execution service. The default budget is 10000 ms.
+// can inspect, and the fake execution service. The fixture's budget is 10000 ms; this is a test value, not the policy default.
 function fixture(t: TestContext, startupBudgetMs = 10000) {
   const base = realpathSync(mkdtempSync(join(tmpdir(), "realm-idempotent-")));
   t.after(() => {

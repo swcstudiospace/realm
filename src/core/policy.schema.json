@@ -32,7 +32,7 @@
     "startupBudgetMs": {
       "type": "integer",
       "minimum": 1,
-      "default": 10000
+      "default": 200000
     },
     "toolQueueMs": {
       "type": "integer",

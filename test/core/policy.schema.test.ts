@@ -27,7 +27,7 @@ const DEFAULTS = {
   credentialAllow: [],
   egressAllow: [],
   shellEnabled: false,
-  startupBudgetMs: 10000,
+  startupBudgetMs: 200000,
   toolQueueMs: 2000,
 };
 

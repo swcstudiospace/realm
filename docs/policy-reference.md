@@ -174,7 +174,7 @@ The default stays `advisory`; a project that expects containment opts in to `fai
 
 - **Type:** `integer`, minimum 1 (`src/core/policy.schema.json:32-36`,
   `src/contract/validate.ts:36`).
-- **Default:** `10000` (`src/core/policy.schema.json:35`).
+- **Default:** `200000` ms (`src/core/policy.schema.json:35`). The default covers the AgentOS start timeout of 180 s with margin.
 - **Effect:** one deadline covering the whole startup path. In
   `LifecycleController.create` the deadline is armed before `bindWorkspace`
   and covers bind, record loads/writes, port create and start, and the bridge
