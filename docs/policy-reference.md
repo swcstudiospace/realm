@@ -38,14 +38,17 @@ Loading rules (`src/core/policy.ts:28-37`):
 - **Default:** `"advisory"` (`src/core/policy.schema.json:11`).
 - **Effect:** `advisory` is the default; `fail-closed` is opt-in per project
   (select it by writing `"mode": "fail-closed"` in that project's policy
-  file). The value only changes the mutation decision for non-`active`
-  states; `active` always allows (`src/core/policy.ts:129-140`):
+  file). The value changes the mutation decision for non-`active` states. `active` allows a mutation
+  only while an Anda bridge is attached (see `andaUrl` below), in both modes
+  (`src/core/policy.ts:129-140`):
   - `advisory` + non-`active` → `allow-with-warning` with message
     `` `realm is ${state}; the write proceeds under advisory policy` ``.
   - `fail-closed` + non-`active` → `deny` with code from
     `denyCodeFor` (`src/core/policy.ts:142-153`): `unbound` →
     `REALM_UNBOUND`, `stopping` → `REALM_STOPPING`, `connecting`/`degraded`/
     `error` → `REALM_NOT_ACTIVE`.
+  - `active` with no bridge attached → `deny` with code `ANDA_UNREACHABLE`, in both modes. This is a
+    state-invariant gate (active implies the bridge is attached), not a bridge call made by the write.
 - **Enforced by:**
   - `decideMutation` (`src/core/policy.ts:129-140`).
   - `gateMutation` thin wrapper mapping allow/allow-with-warning/deny to
@@ -248,7 +251,9 @@ Keys (`ACCEPTED_KEYS`, `src/runtime/config.ts`). The key set is closed, and any 
 - `image` (required): a digest-pinned reference in the form `name@sha256:<64 hex>`. The name starts with a lowercase letter or digit and continues with lowercase letters, digits, `.`, `_`, `/`, or `-`. A tag-only reference is refused.
 - `stateDir` (required): an absolute path.
 - `workspaceRoot` (required): an absolute path.
-- `andaUrl` (optional): an `http:` or `https:` URL with no userinfo.
+- `andaUrl` (optional): an `http:` or `https:` URL with no userinfo. Its presence decides whether the Anda bridge is required (`andaBridgeRequired`, `src/runtime/config.ts`).
+  - Set: the bridge is required at start. The start runs the bridge handshake, and an unreachable bridge refuses the start with `ANDA_UNREACHABLE`.
+  - Absent: no Anda bridge is attached and there is no handshake, so the session goes `active` once the runner start succeeds. While `active` with no bridge, `exec` and `write` refuse with `ANDA_UNREACHABLE` in both policy modes. This is a state-invariant gate (active implies the bridge is attached), not a bridge call made by either tool. The refused set (`exec` and `write` while `active`) is open for owner confirmation. `status`, `read`, `list`, and `retry` do not need the bridge.
 
 The CLI and the daemon both read `stateDir` from this file, and a config that omits it is `SCHEMA_INVALID`.
 

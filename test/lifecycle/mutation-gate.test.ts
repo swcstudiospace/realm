@@ -38,8 +38,8 @@ const NON_ACTIVE_STATES = Object.keys(NON_ACTIVE_CODES) as Exclude<State, "activ
 
 void test("CORE-05: active proceeds under both modes with no warning and runs the mutation", () => {
   for (const policy of [ADVISORY, FAIL_CLOSED]) {
-    assert.deepEqual(gateMutation(policy, "active"), { outcome: "proceed" });
-    assert.deepEqual(runGatedMutation(gateMutation(policy, "active"), () => 7), {
+    assert.deepEqual(gateMutation(policy, "active", true), { outcome: "proceed" });
+    assert.deepEqual(runGatedMutation(gateMutation(policy, "active", true), () => 7), {
       outcome: "done",
       value: 7,
       warning: null,
@@ -49,7 +49,7 @@ void test("CORE-05: active proceeds under both modes with no warning and runs th
 
 void test("CORE-05: advisory proceeds with a warning that names every non-active state", () => {
   for (const state of NON_ACTIVE_STATES) {
-    const gate = gateMutation(ADVISORY, state);
+    const gate = gateMutation(ADVISORY, state, true);
     assert.equal(gate.outcome, "proceed-with-warning", `state ${state}`);
     assert.match(gate.warning, new RegExp(state), `warning names ${state}`);
     assert.match(gate.warning, /advisory policy/, `warning states the advisory policy for ${state}`);
@@ -58,15 +58,15 @@ void test("CORE-05: advisory proceeds with a warning that names every non-active
 
 void test("CORE-05: fail-closed refuses every non-active state with its exact deny code", () => {
   for (const state of NON_ACTIVE_STATES) {
-    assert.deepEqual(gateMutation(FAIL_CLOSED, state), { outcome: "refused", code: NON_ACTIVE_CODES[state] }, `state ${state}`);
+    assert.deepEqual(gateMutation(FAIL_CLOSED, state, true), { outcome: "refused", code: NON_ACTIVE_CODES[state] }, `state ${state}`);
   }
 });
 
 void test("CORE-05: every state in both modes is decided, and the gate adds no decision logic over decideMutation", () => {
   for (const policy of [ADVISORY, FAIL_CLOSED]) {
     for (const state of STATES) {
-      const decision = decideMutation(policy, state);
-      const gate = gateMutation(policy, state);
+      const decision = decideMutation(policy, state, true);
+      const gate = gateMutation(policy, state, true);
       if (decision.decision === "allow") {
         assert.deepEqual(gate, { outcome: "proceed" }, `${policy.mode} ${state}`);
       } else if (decision.decision === "allow-with-warning") {
@@ -79,7 +79,7 @@ void test("CORE-05: every state in both modes is decided, and the gate adds no d
 });
 
 void test("CORE-05: runGatedMutation returns the advisory warning together with the result", () => {
-  const gate = gateMutation(ADVISORY, "degraded");
+  const gate = gateMutation(ADVISORY, "degraded", true);
   const result = runGatedMutation(gate, () => "written");
   assert.equal(result.outcome, "done");
   assert.equal(result.value, "written");
@@ -88,7 +88,7 @@ void test("CORE-05: runGatedMutation returns the advisory warning together with 
 
 void test("CORE-05: runGatedMutation never runs the mutation on a refusal and returns the deny code", () => {
   let ran = 0;
-  const result = runGatedMutation(gateMutation(FAIL_CLOSED, "connecting"), () => {
+  const result = runGatedMutation(gateMutation(FAIL_CLOSED, "connecting", true), () => {
     ran += 1;
     return "written";
   });
@@ -100,7 +100,7 @@ void test("CORE-05: the gate returns synchronously, never a Promise, and schedul
   const timers = t.mock.method(globalThis, "setTimeout");
   for (const policy of [ADVISORY, FAIL_CLOSED]) {
     for (const state of STATES) {
-      const gate = gateMutation(policy, state);
+      const gate = gateMutation(policy, state, true);
       const result = runGatedMutation(gate, () => state);
       assert.equal("then" in gate, false, `gate ${policy.mode} ${state}`);
       assert.equal("then" in result, false, `result ${policy.mode} ${state}`);

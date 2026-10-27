@@ -20,8 +20,8 @@ export type GatedResult<T> =
   | { readonly outcome: "done"; readonly value: T; readonly warning: string | null }
   | { readonly outcome: "refused"; readonly code: MutationDenyCode };
 
-export function gateMutation(policy: Policy, state: State): GateOutcome {
-  const decision = decideMutation(policy, state);
+export function gateMutation(policy: Policy, state: State, bridgeAttached: boolean): GateOutcome {
+  const decision = decideMutation(policy, state, bridgeAttached);
   switch (decision.decision) {
     case "allow":
       return { outcome: "proceed" };

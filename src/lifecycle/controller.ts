@@ -71,9 +71,10 @@ export interface LifecycleDeps {
   readonly policy: Policy;
   readonly store: SessionStore;
   readonly exec: ExecutionService;
-  // The Anda bridge (D-64, D-65). It publishes up, down, and mismatch events, and the
-  // controller alone decides the session state from them.
-  readonly bridge: BridgePort;
+  // The Anda bridge (D-64, D-65), or null when no Anda Engine is configured (C4). A session with a
+  // bridge runs its handshake at start and takes its events. A session without one has neither and
+  // closes nothing. The controller alone decides the session state from the events.
+  readonly bridge: BridgePort | null;
   readonly clock: () => Date;
   // Advisory locks (D-33), owned by this session's id. Session destroy releases the locks
   // the session owns. The daemon passes its shared table in Phase 6; without one the
@@ -139,7 +140,13 @@ export class LifecycleController {
   // The CORE-05 gate for a file-mutating call, decided from the current state (D-63). It
   // never waits and writes no audit entry.
   mutationGate(): GateOutcome {
-    return gateMutation(this.deps.policy, this.machine.snapshot().state);
+    return gateMutation(this.deps.policy, this.machine.snapshot().state, this.bridgeAttached());
+  }
+
+  // True when the session has an Anda bridge. An active session without one refuses writes through the
+  // mutation gate (C4), and exec refuses the same way in the dispatcher.
+  bridgeAttached(): boolean {
+    return this.deps.bridge !== null;
   }
 
   // Verifies the requested workspace against the pinned root, writes the record with containerId
@@ -153,7 +160,7 @@ export class LifecycleController {
   // with POLICY_DENIED. While connecting, active, or degraded, a record that names another workspace
   // is refused the same way.
   // The startup budget (policy.startupBudgetMs) starts before the pinned-root check and covers the
-  // check, the record loads and writes, the port create and start, and the bridge handshake.
+  // check, the record loads and writes, the port create and start, and any bridge handshake.
   // Each synchronous step is followed by a deadline check, and each port call is raced against
   // the time left.
   // Expiry moves the session to error with STARTUP_BUDGET_EXCEEDED, keeps any containerId
@@ -210,7 +217,9 @@ export class LifecycleController {
     // state check: a stop that began during the await owns the session, so this create records
     // and transitions nothing more (see failCreate).
     try {
-      this.subscribeBridge();
+      if (this.deps.bridge !== null) {
+        this.subscribeBridge(this.deps.bridge);
+      }
       this.checkDeadline(deadline);
       this.persist(realmId, root, containerId);
       this.checkDeadline(deadline);
@@ -260,8 +269,14 @@ export class LifecycleController {
         // container once the start settles (F1), so nothing more is started here.
         return this.machine.snapshot();
       }
-      const remaining = Math.max(0, deadline - performance.now());
-      await withTimeout(this.connectBridge(remaining), remaining, "STARTUP_BUDGET_EXCEEDED");
+      if (this.deps.bridge !== null) {
+        const remaining = Math.max(0, deadline - performance.now());
+        await withTimeout(
+          this.connectBridge(this.deps.bridge, remaining),
+          remaining,
+          "STARTUP_BUDGET_EXCEEDED",
+        );
+      }
     } catch (error: unknown) {
       // A start the budget gave up on is still in flight. adoptStart keeps its outcome, unless a
       // stop is in progress, which reclaims that start itself.
@@ -455,7 +470,7 @@ export class LifecycleController {
   // own deadline. A retry waits for its outcome under the retry's own budget, which the
   // caller's withTimeout enforces. A handshake that rejects is forgotten, so the next startup
   // starts a fresh one.
-  private connectBridge(deadlineMs: number): Promise<void> {
+  private connectBridge(bridge: BridgePort, deadlineMs: number): Promise<void> {
     if (this.bridgeConnected) {
       return Promise.resolve();
     }
@@ -463,7 +478,7 @@ export class LifecycleController {
     if (pending !== null) {
       return pending;
     }
-    const handshake = this.deps.bridge.connect(deadlineMs);
+    const handshake = bridge.connect(deadlineMs);
     this.bridgeHandshake = handshake;
     // Both branches are handled, so a rejection after the caller's budget expired is never
     // unhandled. Each branch clears the record only while it still names this handshake.
@@ -541,9 +556,9 @@ export class LifecycleController {
 
   // Subscribes the bridge listener once, before the first handshake, so no event is lost
   // (D-65). The listener stays subscribed until destroy.
-  private subscribeBridge(): void {
+  private subscribeBridge(bridge: BridgePort): void {
     if (this.unsubscribeBridge === null) {
-      this.unsubscribeBridge = this.deps.bridge.subscribe((event) => {
+      this.unsubscribeBridge = bridge.subscribe((event) => {
         this.onBridgeEvent(event);
       });
     }
@@ -591,7 +606,8 @@ export class LifecycleController {
     // Closing the bridge discards any handshake made before it; a later connect starts afresh (ANDA-03).
     this.bridgeHandshake = null;
     this.bridgeConnected = false;
-    const closed = this.teardownCall(this.deps.bridge.close());
+    const bridge = this.deps.bridge;
+    const closed = bridge === null ? Promise.resolve() : this.teardownCall(bridge.close());
     const stopped = this.stopContainer(containerId);
     const reclaimed = pending === null ? Promise.resolve() : this.reclaimPendingCreate(pending);
     const started = [...this.pendingStarts].map((start) => this.reclaimPendingStart(start));

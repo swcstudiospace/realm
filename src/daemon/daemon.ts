@@ -22,7 +22,7 @@ import { defaultRunCommand, runChecks, type AgentOsReading, type CheckResult, ty
 import { TEARDOWN_TIMEOUT_MS } from "../lifecycle/controller.js";
 import { createRealmHandle, type RealmHandle } from "../realm/compose.js";
 import { AgentOsSupervisor, type AgentOsDriver } from "../runtime/agentos.js";
-import { loadRuntimeConfig, type RuntimeConfig } from "../runtime/config.js";
+import { andaBridgeRequired, loadRuntimeConfig, type RuntimeConfig } from "../runtime/config.js";
 import { LibpodClient } from "../runtime/libpod-client.js";
 import {
   productionOpenShellRunner,
@@ -524,26 +524,6 @@ function removeSocketFile(socketPath: string): RealmError | undefined {
   }
 }
 
-// A bridge that immediately reports the engine unreachable. Used only when the
-// runtime input configures no Anda URL and the caller injects no bridge, so
-// status and doctor keep working while up reports ANDA_UNREACHABLE through the
-// controller instead of refusing to construct the handle.
-class UnreachableBridge implements BridgePort {
-  connect(): Promise<void> {
-    return Promise.reject(makeRealmError("ANDA_UNREACHABLE"));
-  }
-
-  snapshot(): null {
-    return null;
-  }
-
-  subscribe(): () => void {
-    return () => undefined;
-  }
-
-  async close(): Promise<void> {}
-}
-
 // The supervisors of one driver, one per session. Each is built on the session's first use and returned for that session from
 // then on, so a session's supervision state is one object, shared by the execution path and the doctor probe.
 function supervisorsOver(driver: AgentOsDriver): SupervisorFor {
@@ -600,9 +580,11 @@ function defaultExec(
   });
 }
 
-function defaultBridge(config: RuntimeConfig): BridgePort {
-  if (config.andaUrl === undefined) {
-    return new UnreachableBridge();
+// The Anda bridge over the configured URL, or null when no URL is configured, so the session has no
+// bridge and runs no handshake (C4).
+function defaultBridge(config: RuntimeConfig): BridgePort | null {
+  if (!andaBridgeRequired(config)) {
+    return null;
   }
   return new AndaBridge({ url: config.andaUrl });
 }

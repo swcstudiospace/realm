@@ -6,7 +6,7 @@
 
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createConnection, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -268,6 +268,75 @@ void test("RT-04, D-47: buildDaemonHandle builds with no AgentOS driver, and an 
   assert.equal(snapshot.reason, "AGENTOS_NOT_CONFIGURED");
   assert.equal(openshell.callCount(), 0, "no OpenShell run starts");
   assert.equal(store.list().length, 0, "no container is created");
+});
+
+void test("C4: with no andaUrl the session reaches active with no bridge handshake, and a tool call that needs Anda refuses with ANDA_UNREACHABLE", async (t) => {
+  const fixture = makeDirs();
+  const { options, bridge } = daemonParts(fixture);
+  const handle = buildDaemonHandle(options);
+  t.after(async () => {
+    await handle.close();
+  });
+
+  const snapshot = await handle.controller.create(fixture.ws);
+  assert.equal(snapshot.state, "active");
+  assert.equal(bridge.callCount("connect"), 0, "no andaUrl means no handshake, even with a bridge injected");
+
+  const write = await handle.dispatcher.call({ write: { path: "doc.txt", content: "changed" } });
+  assert.deepEqual(write, { outcome: "refused", tool: "write", code: "ANDA_UNREACHABLE", retryable: true });
+  assert.equal(readFileSync(join(fixture.ws, "doc.txt"), "utf8"), "original", "the refused write changes nothing");
+
+  const exec = await handle.dispatcher.call({ exec: { argv: ["ls"] } });
+  assert.deepEqual(exec, { outcome: "refused", tool: "exec", code: "ANDA_UNREACHABLE", retryable: true });
+});
+
+void test("B2: under advisory policy a write in error proceeds with the advisory warning", async (t) => {
+  const fixture = makeDirs();
+  const { options, bridge } = daemonParts(fixture, {
+    runtimeInput: {
+      image: IMAGE,
+      stateDir: fixture.stateDir,
+      workspaceRoot: fixture.ws,
+      andaUrl: "http://127.0.0.1:9/",
+    },
+  });
+  bridge.failNext("connect", "ANDA_UNREACHABLE");
+  const handle = buildDaemonHandle(options);
+  t.after(async () => {
+    await handle.close();
+  });
+
+  const snapshot = await handle.controller.create(fixture.ws);
+  assert.equal(snapshot.state, "error");
+
+  const write = await handle.dispatcher.call({ write: { path: "doc.txt", content: "changed" } });
+  if (write.outcome !== "done" || write.tool !== "write") {
+    assert.fail(`expected a done write, got ${JSON.stringify(write)}`);
+  }
+  assert.equal(write.value.warning, "realm is error; the write proceeds under advisory policy");
+  assert.equal(readFileSync(join(fixture.ws, "doc.txt"), "utf8"), "changed", "the advisory write in error lands");
+});
+
+void test("C4: with andaUrl set and the bridge unreachable, the start refuses with ANDA_UNREACHABLE", async (t) => {
+  const fixture = makeDirs();
+  const { options, bridge } = daemonParts(fixture, {
+    runtimeInput: {
+      image: IMAGE,
+      stateDir: fixture.stateDir,
+      workspaceRoot: fixture.ws,
+      andaUrl: "http://127.0.0.1:9/",
+    },
+  });
+  bridge.failNext("connect", "ANDA_UNREACHABLE");
+  const handle = buildDaemonHandle(options);
+  t.after(async () => {
+    await handle.close();
+  });
+
+  const snapshot = await handle.controller.create(fixture.ws);
+  assert.equal(snapshot.state, "error");
+  assert.equal(snapshot.reason, "ANDA_UNREACHABLE");
+  assert.equal(bridge.callCount("connect"), 1, "a configured engine is handshaken at start");
 });
 
 void test("RT-06: startDaemon with no owner binds the socket and answers status over a real socket pair", async (t) => {

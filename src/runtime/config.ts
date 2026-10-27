@@ -63,6 +63,15 @@ export function loadRuntimeConfig(input: unknown): RuntimeConfig {
   return Object.freeze({ image, andaUrl, stateDir, workspaceRoot });
 }
 
+// The Anda bridge is required exactly when an Anda Engine URL is configured (C4). Without one, a
+// session starts with no bridge and no handshake, and the tool calls that need Anda refuse with
+// ANDA_UNREACHABLE. The guard narrows andaUrl to a string for the caller that builds the bridge.
+export function andaBridgeRequired(
+  config: RuntimeConfig,
+): config is RuntimeConfig & { readonly andaUrl: string } {
+  return config.andaUrl !== undefined;
+}
+
 function reject(): never {
   throw makeRealmError("SCHEMA_INVALID");
 }

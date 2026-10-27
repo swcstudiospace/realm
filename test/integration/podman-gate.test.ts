@@ -354,6 +354,7 @@ void test("TOOL-03 live: an exec through the shared dispatcher runs in the live 
     mutationGate: () => {
       throw new Error("the live exec body never reaches the mutation gate");
     },
+    bridgeAttached: () => true,
     create: () => {
       throw new Error("the live exec body never creates a session");
     },
