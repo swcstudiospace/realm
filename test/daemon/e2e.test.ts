@@ -370,6 +370,54 @@ void test("the CLI and the daemon entry resolve one state directory from the run
   assert.deepEqual(stderr, []);
 });
 
+void test("the AgentOS sandbox image is the configured digest, and no environment variable changes it (RT-01, C5)", async (t) => {
+  const fixture = makeDirs(t);
+  const env = { ...cliEnv(fixture), REALM_AGENTOS_IMAGE: `registry.example.com/other@sha256:${"1".repeat(64)}` };
+  let captured: StartDaemonOptions | undefined;
+  const code = await runDaemon({
+    env,
+    start: (options) => {
+      captured = options;
+      return Promise.reject(new Error("stop after capturing the start options"));
+    },
+    writeStderr: () => undefined,
+    onSignal: () => () => undefined,
+  });
+  assert.equal(code, 1);
+  assert.ok(captured !== undefined, "the daemon entry reaches start");
+  assert.ok(captured.agentosDriver !== undefined, "the AgentOS driver is bound with no environment variable set");
+  assert.deepEqual(captured.runtimeInput, { image: IMAGE, stateDir: fixture.stateDir, workspaceRoot: fixture.ws });
+});
+
+void test("an unpinned configured image refuses the daemon start, and an environment variable cannot bind another image (RT-01, C5)", async (t) => {
+  const fixture = makeDirs(t);
+  writeFileSync(
+    join(fixture.base, "config", "realm", "config.json"),
+    JSON.stringify({
+      image: "registry.example.com/realm/workload:latest",
+      stateDir: fixture.stateDir,
+      workspaceRoot: fixture.ws,
+    }),
+  );
+  const env = { ...cliEnv(fixture), REALM_AGENTOS_IMAGE: IMAGE };
+  let started = false;
+  const stderr: string[] = [];
+  const code = await runDaemon({
+    env,
+    start: () => {
+      started = true;
+      return Promise.reject(new Error("must not start"));
+    },
+    writeStderr: (line) => {
+      stderr.push(line);
+    },
+    onSignal: () => () => undefined,
+  });
+  assert.equal(code, 1);
+  assert.equal(started, false, "a tag-only configured image never reaches start");
+  assert.equal(stderr.length, 1);
+});
+
 void test("the socket directory is 0700 with a 0600 socket after daemon start (RT-06)", async (t) => {
   const fixture = makeDirs(t);
   const daemon = await startTestDaemon(fixture, daemonOptions(fixture));

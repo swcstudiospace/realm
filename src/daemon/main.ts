@@ -42,10 +42,9 @@ interface StopWiring {
   readonly writeStderr: (line: string) => void;
 }
 
-// The AgentOS driver is bound only when REALM_AGENTOS_IMAGE is set. Without it the daemon stays unbound and refuses
-// AgentOS work with AGENTOS_NOT_CONFIGURED (fail closed). The driver serves every session: each session's sandbox is
-// realm-<sessionId>, created by its create from the configured image, and its runner runs there as the workload.
-const AGENTOS_IMAGE_ENV = "REALM_AGENTOS_IMAGE";
+// The AgentOS driver is always bound. Its sandbox image is config.image alone: the digest-pinned value the runtime
+// config loader validates at load (readHostRuntime), which startDaemon receives as runtimeInput. Each session's sandbox
+// is realm-<sessionId>, created from that image, and its runner runs there as the workload.
 // The realm secret root, the value the driver is given as REALM_DRIVER_SECRET_ROOT. The session's sandbox binding derives the channel
 // directory from it, so the daemon reads the same variable the driver does. Unset, a session create is refused.
 const SECRET_ROOT_ENV = "REALM_DRIVER_SECRET_ROOT";
@@ -56,11 +55,7 @@ const WORKSPACE_ROOT_ENV = "REALM_DRIVER_WORKSPACE_ROOT";
 const AGENTOS_START_TIMEOUT_MS = 180_000;
 const AGENTOS_CALL_TIMEOUT_MS = 30_000;
 
-function agentosDriverFromEnv(env: EnvironmentLike): AgentOsDriver | undefined {
-  const imageRef = env[AGENTOS_IMAGE_ENV];
-  if (imageRef === undefined || imageRef.length === 0) {
-    return undefined;
-  }
+function productionAgentOsDriver(env: EnvironmentLike): AgentOsDriver {
   return createOpenShellAgentOsDriver({
     runner: productionOpenShellRunner(env),
     spawnRunner: productionRunnerChild(env),
@@ -78,7 +73,7 @@ export async function runDaemon(deps: DaemonDeps): Promise<number> {
   try {
     const { runtimeInput, stateDir } = readHostRuntime(deps.env, deps.readConfig);
     const libpodSocketPath = podmanSocketPath(deps.env);
-    const agentosDriver = agentosDriverFromEnv(deps.env);
+    const agentosDriver = productionAgentOsDriver(deps.env);
     const secretRoot = deps.env[SECRET_ROOT_ENV];
     const workspaceRoot = deps.env[WORKSPACE_ROOT_ENV];
     started = await start({
@@ -88,7 +83,7 @@ export async function runDaemon(deps: DaemonDeps): Promise<number> {
       sessionId: SESSION_ID,
       env: deps.env,
       ...(libpodSocketPath === undefined ? {} : { libpodSocketPath }),
-      ...(agentosDriver === undefined ? {} : { agentosDriver }),
+      agentosDriver,
       ...(secretRoot === undefined || secretRoot.length === 0 ? {} : { secretRoot }),
       ...(workspaceRoot === undefined || workspaceRoot.length === 0 ? {} : { pinnedWorkspaceRoot: workspaceRoot }),
     });
