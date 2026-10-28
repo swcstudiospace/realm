@@ -265,8 +265,8 @@ The live runs on the production stack (OpenShell 0.1.5 gateway, the Realm comput
 - A 16 MiB upload and download round trip is byte-identical (SHA-256 matches on both sides).
 - A non-zero exit status is propagated.
 - Egress is deny-all by default.
-- With an allowlist, the allowed `host:port` connects, and a non-allowlisted host and an IPv6 literal fail (verified live on 2026-10-28).
-- With an allowlist, AAAA returns no data (verified live on 2026-10-28).
+- With an allowlist, the allowed `host:port` connects. A non-allowlisted IP, a non-allowlisted host and an IPv6 literal fail to connect with `EACCES`. The connection is refused, not the lookup (verified on the rebuilt image, 2026-10-28).
+- The sandbox resolver is synthetic and answers only A queries: every A query, including for a made-up or `.invalid` name, gets the next address from `198.18.0.0/15`, and policy is enforced at connect time on the name behind it. AAAA returns no data (`ENODATA`) and TXT returns not-implemented (`ENOTIMP`). A host packet capture on ports 53 and 853 showed zero DNS packets for the made-up, `.invalid` and denied names, and packets for the allowed name only, so a name outside the allowlist is never forwarded as a DNS query (verified on the rebuilt image, 2026-10-28). A sandbox can obtain addresses in `198.18.0.0/15` for any name, so logged resolved addresses are synthetic.
 - `realm down` leaves zero containers, sandboxes, supervisors and secret directories.
 - A wrong image digest fails closed.
 

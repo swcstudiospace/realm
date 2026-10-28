@@ -266,6 +266,7 @@ To build the image, first build `--target runtime-builder` to read the sha256 th
 - The libpod client bounds each request at 5 seconds (`requestTimeoutMs`, `DEFAULT_REQUEST_TIMEOUT_MS`). A timeout, like a transport failure, gives `PODMAN_MACHINE_DOWN`.
 - The info request alone is bounded at 30 seconds (`infoTimeoutMs`, `DEFAULT_INFO_TIMEOUT_MS`). Both options must be positive integers; any other value is refused with `SCHEMA_INVALID`.
 - Evidence (Podman 5.7.1, rootless API, 2026-10-28): `GET /libpod/info` took 4.4 to 5.9 seconds per call over six measurements, while listing containers took 1 to 23 ms. The API service runs `dpkg -S` on its own helper binaries to report package versions, and on a host with a large package database each lookup is slow. With the 5 second bound, info timed out about half the time and `realm up` failed intermittently with `PODMAN_MACHINE_DOWN`. The cause is the host, so the realm gives info a longer bound instead.
+- `realm down` followed immediately by `realm up` works, because the libpod info call has its own 30 second bound and no longer times out at the 5 second request bound.
 
 ## Sandbox create hardening: sysctls
 
@@ -284,7 +285,10 @@ To build the image, first build `--target runtime-builder` to read the sha256 th
 - The create body sets `use_image_resolve_conf: true`, which makes the container use the image's file in every network mode. It sets no `dns_server`, because Podman refuses `dns_server` with network none.
 - Podman generates no `resolv.conf` for network mode none: inspect reports an empty `ResolvConfPath`, and mountinfo shows no mount at `/etc/resolv.conf`. The image's file is therefore the only one the container sees.
 - The runtime's DNS relay listens at `127.0.0.53:53`. It binds a port below 1024 in the sandbox namespace, so it needs the `net.ipv4.ip_unprivileged_port_start` sysctl described above.
-- Live evidence (2026-10-28, production stack, Podman 5.7.1, OpenShell 0.1.5): an image with this file, run under the production flags (network none, read-only) behind the realm gateway, with the realm-rendered policy allowing `1.1.1.1:443` and `example.com:443`. The allowed IP connected. A non-allowlisted IP failed with `EACCES`. The allowlisted hostname connected, with DNS going through the relay. A non-allowlisted hostname failed with `EACCES`. An IPv6 literal failed with `EACCES`. An AAAA lookup returned `ENODATA`.
+- Live evidence (2026-10-28, rebuilt image, production stack, Podman 5.7.1, OpenShell 0.1.5): an image with this file, run under the production flags (network none, read-only) behind the realm gateway, with the realm-rendered policy allowing `1.1.1.1:443` and `example.com:443`. The allowed IP connected. A non-allowlisted IP failed with `EACCES`. The allowlisted hostname connected. A non-allowlisted hostname failed with `EACCES`. An IPv6 literal failed with `EACCES`.
+- The resolver is synthetic. Every A query, including one for a made-up name and one for a `.invalid` name that no real resolver could answer, gets the next address from `198.18.0.0/15` (`.2`, `.3`, `.4`, `.5` in query order). The connection, not the lookup, is what is refused: policy is enforced at connect time on the name behind the synthetic address. Queries for names outside the allowlist are not forwarded. A host packet capture on ports 53 and 853 during these lookups showed zero DNS packets for the made-up name, the `.invalid` name and the denied host name, and packets for the allowed host name only, because the host supervisor resolves an allowed name when it makes the connection.
+- Only A is answered. An AAAA lookup returns no data (`ENODATA`) and a TXT lookup returns not-implemented (`ENOTIMP`), for allowed and denied names alike.
+- A sandbox can obtain an address in `198.18.0.0/15` for any name, so an application that logs resolved addresses sees these synthetic ones.
 - The upstream Podman driver mounts a resolver file with the same content and sets `use_image_resolve_conf`. The upstream Docker driver sets `Dns` to `127.0.0.53`.
 - The resolver file is part of the image, so the image-digest property covers it: a different resolver file is a different image digest.
 
@@ -317,6 +321,7 @@ Every sandbox container runs under Podman's default seccomp profile with the thr
 - Open items, not fixed in phase 9.6: (1) a container id this daemon did not create, after a restart, whose inspect rejects has no known name, so its sandbox delete is skipped. (2) A create still running when a stop's wait expires finishes later and nothing removes the container it produces. (3) The compute driver's `DriverLifecycle.delete` path, which the gateway `DeleteSandbox` RPC reaches, removes containers and secret directories through libpod and does not run `openshell sandbox delete`, so an OpenShell sandbox removed through that RPC is not deleted here.
 - A create command is not run in 0.1.5. A create with `-- <command>` and `--detach` does not run the command, and the marker the command writes never appears. Without `--detach` the CLI opens an interactive shell. So the AgentOS runner never starts from create. The realm starts it as a long-lived `sandbox exec` child after create (`src/runtime/agentos-workload.ts`). Live evidence: a runner started by the exec form above and held open wrote its heartbeat within 20 s, and the probe with the same exec flags exited 0.
 - The runner's heartbeat file lives in `/tmp` (the container's tmpfs scratch, granted read-write by the realm policy), never in the workspace, so the user's project receives no realm files.
+- The pinned workspace root must be empty of realm files after `realm down`. The heartbeat lives in scratch space, not in the workspace.
 - Piped stdin is refused above 4 MiB. Move larger input with `openshell sandbox upload`.
 - The CLI receives only `PATH`, `HOME` and `XDG_RUNTIME_DIR` (`OPENSHELL_ENV_NAMES`). The gateway is therefore registered in the CLI's default config location, under `HOME`, and no gateway setting travels in the environment.
 
@@ -333,8 +338,9 @@ The live runs on the production stack (OpenShell 0.1.5 gateway, the Realm comput
 - A 16 MiB upload and download round trip is byte-identical (SHA-256 matches on both sides).
 - A non-zero exit status is propagated.
 - Egress is deny-all by default.
-- With an allowlist, the allowed `host:port` connects, and a non-allowlisted host and an IPv6 literal fail (verified live on 2026-10-28).
-- With an allowlist, AAAA returns no data (verified live on 2026-10-28).
+- With an allowlist, the allowed `host:port` connects. A non-allowlisted IP, a non-allowlisted host and an IPv6 literal fail to connect with `EACCES`. The connection is refused, not the lookup (verified on the rebuilt image, 2026-10-28).
+- With an allowlist, an AAAA lookup returns no data (`ENODATA`) and a TXT lookup returns not-implemented (`ENOTIMP`), for allowed and denied names alike (verified on the rebuilt image, 2026-10-28).
+- The sandbox resolver is synthetic and answers only A queries. Every A query, including one for a made-up name or a `.invalid` name, gets the next address from `198.18.0.0/15`. Policy is enforced at connect time on the name behind that address. A host packet capture on ports 53 and 853 showed zero DNS packets for a made-up name, a `.invalid` name and a denied host name, and packets for the allowed host name only, so a name outside the allowlist is never forwarded as a DNS query (verified on the rebuilt image, 2026-10-28).
 - `realm down` leaves zero containers, sandboxes, supervisors and secret directories.
 - A wrong image digest fails closed.
 
