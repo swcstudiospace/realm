@@ -6,7 +6,15 @@ Realm moves from frozen contracts and documentation gates to a verified sandbox 
 
 Coverage: 46/46 v1 requirements mapped, each to exactly one phase. v2.0 adds 8 requirements (HOST-01..03, OMP-LIVE-01..04, UI-01), mapped to phases 8 to 10. The production isolation build adds 31 PRD requirements, mapped to phases 9.1 to 9.6.
 
+## Milestones
+
+- 🗄 **v1.0 provisional** — Phases 1 to 7 (archived in `milestones/`)
+- 🚧 **v2.0 Host Adapters, Live Verification and Production Isolation** — Phases 8 to 11 (in progress; the ship is held by the owner)
+
 ## Phases
+
+<details>
+<summary>🗄 v1.0 provisional, phases 1 to 7: ARCHIVED (full record in milestones/v1.0-ROADMAP.md and milestones/v1.0-phases)</summary>
 
 - [x] **Phase 1: Scaffold and Frozen Contracts** - Strict ESM package, test runner, frozen contracts, and integration gate notes — Complete (verification passed; tooling format gap noted)
 - [x] **Phase 2: Policy, State, and Filesystem Lockdown** - Policy engine, state machine, event bus, path and write safety, audit redaction, session store, doctor core — Complete (verification passed)
@@ -15,18 +23,11 @@ Coverage: 46/46 v1 requirements mapped, each to exactly one phase. v2.0 adds 8 r
 - [x] **Phase 5: Omp Plugin, MCP, and ACP Surfaces** - Detached Omp autostart, status indicator, retry command, and MCP and ACP over one contract — Complete (verification deferred: human)
 - [x] **Phase 6: CLI, Daemon, and Host Packaging** - realm up, down, status, doctor, control channel, and host config snippets — Complete (verification deferred: human — 06-VERIFICATION.md, 5/5 must-haves, 6 live items)
 - [x] **Phase 7: Policy Reference and Security Review** - Policy reference, security review, and supply-chain review before first release — Complete (verification deferred: human — 07-VERIFICATION.md, 9/9 must-haves, 5 human items)
-- [x] **Phase 8: Host Adapter Bundles** - Claude Code and Grok Build, Muse Code, Hermes Agent, Prime Agent, and Omp manifests, each checked by its host's own validator in an isolated directory (HOST-01, HOST-02)
-- [x] **Phase 9: Live Omp Verification** - A live Omp session attaches, reports a truthful disconnected status with its reason, retries, and leaves the daemon running on shutdown (OMP-LIVE-01 to OMP-LIVE-04, UI-01) — Complete (2026-10-28: OMP-LIVE-01 to -04 met live on the final build; UI-01 is a recorded limitation)
-- [x] **Phase 9.1: Host Prerequisites and Production Gateway** - Rootless realm-account runtime with delegated limits and a production TLS and JWT gateway (PRD-HOST-01, PRD-HOST-02, PRD-GW-01, PRD-GW-02) — Complete (2026-10-25: T1 to T9 evidence; T6 reboot PASS)
-- [x] **Phase 9.2: Native Enforcement Helper** - Source-built static helper applying no_new_privs, Landlock, and seccomp, fail closed (PRD-ENF-01 to PRD-ENF-03) — Superseded (owner decision 2026-10-28: the runtime's own policy is the enforcement authority and the helper was removed; recoverable at commit 497b63f; PRD-ENF-03 met live as amended)
-- [x] **Phase 9.3: Hardened Container Lifecycle** - Create, verify with the 14 checks, and remove the sandbox container; startup sweep (PRD-CTR-01 to PRD-CTR-05) — Complete, VERIFIED_WITH_GAPS (live acceptance 1, 4, 5, 6, 7 PASS on the committed tree; acceptance 2 and 3 unit-verified, live NOT RUN)
-- [x] **Phase 9.4: Compute Driver gRPC** - Realm-owned ComputeDriver server on a user-only socket; admission matches the gateway (PRD-DRV-01 to PRD-DRV-03, PRD-GW-03, PRD-LIB-01) — Complete, VERIFIED (2026-10-25: gateway connected live; limits carried to 9.5: Ready state, PD-08 live, AuthenticateSandbox)
-- [x] **Phase 9.5: Isolation Backend and Sandbox Protocol** - No workload before StartAgent; mediated egress and DNS (PRD-ISO-01 to PRD-ISO-06, PRD-SUP-01, PRD-GW-04) — Complete on the amended built-in path (owner, 2026-10-26); live checks for Landlock, egress, frames, and restart move to 9.6
-- [x] **Phase 9.6: Integration, Live Proof, and Cutover** - Gated live suite, realm up and down proof, docs, clean cutover (PRD-TST-01 to PRD-TST-03, PRD-OMP-01, PRD-DOC-01, PRD-CLEAN-01) — Complete (2026-10-28: six live scenarios 28 of 28 at d2db549; OMP-LIVE-01, -03, -04 verified live; PRD-DRV-01 amendment and the review findings await owner decisions)
-- [ ] **Phase 10: Docs, Packaging, and Release 0.2.0** - Host docs and snippets, MCP smoke check, pack assertions for each bundle, changelog, PR to main, and release 0.2.0 (HOST-03)
-- [ ] **Phase 11: Milestone v2.0 Close** - Milestone completion after a gsd-tools dry run, with scratch profiles and worktrees removed
 
-## Phase Details
+</details>
+
+<details>
+<summary>🗄 v1.0 provisional, phases 1 to 7: ARCHIVED (detail blocks kept here for reference; full record in milestones/v1.0-ROADMAP.md)</summary>
 
 ### Phase 1: Scaffold and Frozen Contracts
 
@@ -154,6 +155,24 @@ Plans:
 
 **Plans**: TBD
 
+</details>
+
+### 🚧 v2.0 Host Adapters, Live Verification and Production Isolation (In Progress)
+
+- [x] **Phase 8: Host Adapter Bundles** - Claude Code and Grok Build, Muse Code, Hermes Agent, Prime Agent, and Omp manifests, each checked by its host's own validator in an isolated directory (HOST-01, HOST-02)
+- [x] **Phase 9: Live Omp Verification** - A live Omp session attaches, reports a truthful disconnected status with its reason, retries, and leaves the daemon running on shutdown (OMP-LIVE-01 to OMP-LIVE-04, UI-01) — Complete (2026-10-28: OMP-LIVE-01 to -04 met live on the final build; UI-01 is a recorded limitation)
+- [x] **Phase 9.1: Host Prerequisites and Production Gateway** - Rootless realm-account runtime with delegated limits and a production TLS and JWT gateway (PRD-HOST-01, PRD-HOST-02, PRD-GW-01, PRD-GW-02) — Complete (2026-10-25: T1 to T9 evidence; T6 reboot PASS)
+- [x] **Phase 9.2: Native Enforcement Helper** - Source-built static helper applying no_new_privs, Landlock, and seccomp, fail closed (PRD-ENF-01 to PRD-ENF-03) — Superseded (owner decision 2026-10-28: the runtime's own policy is the enforcement authority and the helper was removed; recoverable at commit 497b63f; PRD-ENF-03 met live as amended)
+- [x] **Phase 9.3: Hardened Container Lifecycle** - Create, verify with the 14 checks, and remove the sandbox container; startup sweep (PRD-CTR-01 to PRD-CTR-05) — Complete, VERIFIED_WITH_GAPS (live acceptance 1, 4, 5, 6, 7 PASS on the committed tree; acceptance 2 and 3 unit-verified, live NOT RUN)
+- [x] **Phase 9.4: Compute Driver gRPC** - Realm-owned ComputeDriver server on a user-only socket; admission matches the gateway (PRD-DRV-01 to PRD-DRV-03, PRD-GW-03, PRD-LIB-01) — Complete, VERIFIED (2026-10-25: gateway connected live; limits carried to 9.5: Ready state, PD-08 live, AuthenticateSandbox)
+- [x] **Phase 9.5: Isolation Backend and Sandbox Protocol** - No workload before StartAgent; mediated egress and DNS (PRD-ISO-01 to PRD-ISO-06, PRD-SUP-01, PRD-GW-04) — Complete on the amended built-in path (owner, 2026-10-26); live checks for Landlock, egress, frames, and restart move to 9.6
+- [x] **Phase 9.6: Integration, Live Proof, and Cutover** - Gated live suite, realm up and down proof, docs, clean cutover (PRD-TST-01 to PRD-TST-03, PRD-OMP-01, PRD-DOC-01, PRD-CLEAN-01) — Complete (2026-10-28: six live scenarios 28 of 28 at d2db549; OMP-LIVE-01, -03, -04 verified live; PRD-DRV-01 amendment and the review findings await owner decisions)
+- [x] **Phase 9.7: Review-Finding Remediation** - A10 boundary and A18 supply-chain findings fixed or recorded, truthful status when the runner dies, live-gated requirements closed (REM-01 to REM-05) — Complete (2026-10-28: nine live scenarios 31 of 31 on the rebuilt image; three defects found by the live proof were fixed; RT-04's wording amendment and the owner decisions are listed in 09.7-VERIFICATION.md)
+- [ ] **Phase 10: Docs, Packaging, and Release 0.2.0** - Host docs and snippets, MCP smoke check, pack assertions for each bundle, changelog, PR to main, and release 0.2.0 (HOST-03)
+- [ ] **Phase 11: Milestone v2.0 Close** - Milestone completion after a gsd-tools dry run, with scratch profiles and worktrees removed
+
+## Phase Details
+
 ### Phase 8: Host Adapter Bundles
 
 **Goal:** Claude Code and Grok Build, Muse Code, Hermes Agent, Prime Agent, and Omp manifests, each checked by its host's own validator in an isolated directory.
@@ -275,6 +294,23 @@ Plans:
 
 **Plans**: 1 plan (09.6-01-PLAN.md), executed; see 09.6-01-SUMMARY.md and 09.6-VERIFICATION.md
 
+### Phase 9.7: Review-Finding Remediation
+
+**Goal:** Every finding of the A10 boundary review and the A18 supply-chain review, and every defect found while closing the live-gated requirements, is fixed with a regression test or recorded with its reason. The session label tells the truth when the AgentOS runner dies, and the host binaries and the sandbox image carry recorded provenance.
+**Mode:** production build (inserted after phase 9.6; decimal numbering)
+**Depends on:** Phase 9.6
+**Requirements:** REM-01, REM-02, REM-03, REM-04, REM-05
+**Success Criteria** (what must be TRUE):
+  1. The seccomp profile denies nested user namespaces and the mount family, the create-time verifier asserts the added properties, and the spec bounds tmpfs size, swap and rlimits; each has a unit test and the live suite still passes (REM-01).
+  2. Egress literals in private and special ranges are refused, atomic writes are pinned to the checked directory, audit lines are fsynced, the credential list covers keys, certificates and registry tokens, and the workspace scan refuses a mount on another device at create time (same-filesystem bind mounts are not detected) (REM-01).
+  3. The supervisor digest pin refuses a changed binary at start and at spawn, `realm doctor` reports binary versions and digests and the ptrace scope, and the host binary record exists (REM-02).
+  4. The image build gates its inputs (pinned cmake, no git-sourced crates, runner compiled in the image, committed expected digests, a verifier script, and a build command that reads the digests), and CI pins actions to commit SHAs with job timeouts and an explicit read-only permission for the verify job; the Pages workflow keeps its original permissions (REM-02).
+  5. A runner that exits while the session is active moves the status to disconnected with AGENTOS_CRASH_LOOP within the health interval, proven live (REM-03).
+  6. RT-02, RT-04, CLI-01, CLI-04, TOOL-03, TOOL-04, TOOL-05, OMP-01, OMP-02 and OMP-04 carry evidence-based statuses, with TOOL-04, OMP-01 and the RT-04 behaviour proven in the live suite; RT-04 (wording amendment), TOOL-05 (ACP) and OMP-05 (model call) stay partial with their limits stated (REM-04).
+  7. Planning and integration records match the code: the stale bindRoot, 5.2, 5.4 and R7 rows, the AGENTS.md entry-edge list, and the RT-04 wording (REM-05).
+
+**Plans**: 1 plan (09.7-01-PLAN.md), executed; see 09.7-01-SUMMARY.md and 09.7-VERIFICATION.md
+
 ### Phase 10: Docs, Packaging, and Release 0.2.0
 
 **Goal:** Host docs and snippets, MCP smoke check, pack assertions for each bundle, changelog, PR to main, and release 0.2.0.
@@ -285,7 +321,7 @@ Plans:
 
 Release 0.2.0 and the PR to main are held by the owner's ship hold (2026-10-24); this block does not authorize either.
 
-**Plans**: TBD
+**Plans**: 4 plans. 10-01 (fix-now quality tier) and 10-02 (triage and milestone audit pass 1) are done; 10-03 (HOST-03 audit and ship paperwork) is done, see 10-03-PLAN.md and 10-03-SUMMARY.md; 10-04 (PR to main, merge, release 0.2.0) is held by the owner's ship hold and has no plan file.
 
 ### Phase 11: Milestone v2.0 Close
 
@@ -296,13 +332,12 @@ Release 0.2.0 and the PR to main are held by the owner's ship hold (2026-10-24);
   1. The gsd-tools milestone dry run completes before the milestone is completed.
   2. Scratch profiles and worktrees created for the milestone are removed.
 
-**Plans**: TBD
-
+**Plans**: 1 plan (11-01-PLAN.md). Its reorganisation, roadmap analysis, dry run and cleanup inventory are done, see 11-01-SUMMARY.md; `milestone complete --confirm` is the owner's decision and was not run.
 
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
+Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 9.1 → 9.2 → 9.3 → 9.4 → 9.5 → 9.6 → 9.7 → 10 → 11
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -321,5 +356,6 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 | 9.4. Compute Driver gRPC | 1/1 | Complete, VERIFIED (2026-10-25): gateway connected live; create, get, list, and delete observed; limits carried to 9.5 (Ready state, PD-08 stop and start live, AuthenticateSandbox) | - |
 | 9.5. Isolation Backend and Sandbox Protocol | 1/1 | Complete on the amended built-in path (2026-10-26): live T0 reached Ready with the runtime as PID 1 and the host supervisor connected; PD-15 host placement and PD-10 runtime policy decided; live checks moved to 9.6 | - |
 | 9.6. Integration, Live Proof, and Cutover | 1/1 | Complete (2026-10-28): six live scenarios 28 of 28 at d2db549 (crash recovery 3 of 3 more times); Omp checks verified live; gates green (1635 pass, 0 fail, 7 skipped); owner decisions listed in the verification file | - |
-| 10. Docs, Packaging, and Release 0.2.0 | 0/4 | In progress: host snippets, Omp runbook, changelog, and pack check (Hermes JSON manifests) done; release 0.2.0 held by the owner's ship hold | - |
-| 11. Milestone v2.0 Close | 0/1 | Not started: phases 8 to 10 incomplete; gsd-tools dry run refuses (ROADMAP lists 7 unstarted phases); --force and --confirm not used | - |
+| 9.7. Review-Finding Remediation | 1/1 | Complete (2026-10-28): the A10 and A18 findings fixed or recorded; three defects found by the live proof fixed (rlimit REST names, driver shutdown, doctor digest bound); nine live scenarios 31 of 31 on the rebuilt image, twice (the second on the final installed build); gates at the final commit: 1828 tests, 1818 pass, 0 fail, 10 skipped, test:scripts 109 of 109; RT-04 wording amendment and the owner decisions are listed in 09.7-VERIFICATION.md | - |
+| 10. Docs, Packaging, and Release 0.2.0 | 3/4 | In progress (2026-10-28): plans 10-01 to 10-03 done, HOST-03 complete on the fresh audit; 10-04 (PR to main, release 0.2.0) held by the owner's ship hold | - |
+| 11. Milestone v2.0 Close | 1/1 | Executed up to the owner's confirmation (2026-10-28): v1 phases collapsed with nothing lost, roadmap analysis lists the 11 milestone phases, `milestone complete v2.0 --dry-run` exits 0, cleanup inventory done; `--confirm` and `--force` were not used | - |

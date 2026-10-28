@@ -1,19 +1,21 @@
 ---
 gsd_state_version: "1.0"
 milestone: v2.0
-current_phase_name: Policy Reference and Security Review
-status: In progress (milestone v2.0)
-stopped_at: Run ut-mvlvx860 paused at phase 9 GREY_AREA_ACCEPTANCE (G1-G4) before PLAN; phase 8 closed on evidence; phase 10 and 11 outstanding
-last_updated: "2026-10-24T04:25:01.406Z"
-last_activity: 2026-10-23
-last_activity_desc: Milestone v1.0 completed and archived
-state_head: e79842ca820b5504ad81465550515ff234a9d143
+milestone_name: Host Adapters, Live Verification and Production Isolation
+current_phase_name: Milestone v2.0 Close (paused at the owner gates)
+current_phase: 11
+status: Paused at the owner gates (ship hold, milestone confirmation)
+stopped_at: Phase 11 plan 01 executed up to the owner's confirmation; Phase 10 plan 04 and the ship are held by the owner
+last_updated: "2026-10-28T20:53:39.219Z"
+last_activity: 2026-10-28
+state_head: b22749999daa96bed624c95ef967fc1c6800b6fe
 progress:
   total_phases: 11
-  completed_phases: 8
-  total_plans: 1
-  completed_plans: 40
-current_phase: 7
+  completed_phases: 15
+  total_plans: 11
+  completed_plans: 10
+  percent: 91
+last_activity_desc: Phase 9.7 closed with a live final-build proof; Phase 10 plan 03 and Phase 11 plan 01 executed; nothing pushed
 ---
 
 # Project State
@@ -27,10 +29,10 @@ See: .planning/PROJECT.md (updated 2026-10-22)
 
 ## Current Position
 
-Phase: Milestone v2.0, phases 8 to 10 in progress; phase 9 narrowed to OMP-LIVE-02 and -03 (OMP-LIVE-01 and -04 descoped); phase 11 not started
-Plan: —
-Status: Paused for the owner: ship held; the v2.0 close needs phases 8 to 10 complete and an explicit owner confirmation
-Last activity: 2026-10-23 — owner decisions recorded: FS-02 accepted, OMP-LIVE-01 and -04 descoped to a follow-up, ship held, Linear left in Backlog, UI-01 recorded as a limitation
+Phase: Phase 11, Milestone v2.0 Close: executed up to the owner gates; phases 8 to 10 complete or held as recorded
+Plan: none open; Phase 10 plan 04 (release) and the milestone confirmation are held
+Status: Paused at the owner gates (ship hold, milestone confirmation)
+Last activity: 2026-10-28
 
 ## Performance Metrics
 
@@ -109,6 +111,10 @@ Open follow-ups: the AgentOS sandbox runner in the follow-up milestone (RT-04, C
 - Test timing: the lifecycle tests use wall-clock windows, widened to 1 to 4 s on this loaded host. Deterministic seams are a follow-up.
 - Run ut-mvlvx860 paused at phase 9: open blockers B-001 to B-005 (AgentOS unbound, live image and workload, Anda Engine, Podman 5.x on PATH, Linear free-issue limit). Detail in the Run ut-mvlvx860 section of STATE.
 
+### Roadmap Evolution
+
+- Phase 9.7 inserted after Phase 9.6: Review-finding remediation: A10 boundary findings, A18 supply chain, truthful runner status, live-gated requirement evidence (URGENT)
+
 ## Deferred Items
 
 Items acknowledged and deferred at milestone close, most recent first:
@@ -140,9 +146,9 @@ Detail, by phase: Phase 3 covers RT-01, RT-02, RT-03, RT-09, and the live parts 
 
 ## Session Continuity
 
-Last session: 2026-10-24T04:25:00.949Z
-Stopped at: Run ut-mvlvx860 paused at phase 9 GREY_AREA_ACCEPTANCE (G1-G4) before PLAN; phase 8 closed on evidence; phase 10 and 11 outstanding
-Resume file: .planning/phases/09-live-omp-verification/09-CONTEXT.md
+Last session: 2026-10-28T20:55:00.000Z
+Stopped at: Phase 11 plan 01 executed up to the owner's confirmation; Phase 10 plan 04 and the ship are held by the owner
+Resume file: .planning/phases/11-milestone-close/11-01-SUMMARY.md
 
 Recorded commits (closure run): 72817e9 (private flag restored, engines >=22.13.0); 390f511 (causeCode and catalogue codes, host paths, lifecycle bound, root identity, exec margin); b6bc892 (daemon entry, AgentOS fail-closed, catalogue refusals, per-method control bounds); 8088159 (daemon owns sessions; tool method; daemon client; Omp and MCP attach); 4b1d4ab (smoke fixes: CLI probe, up and down exits, state-dir 0700); c55056a (traceability: requirements by evidence, spike facts, runtime config, Omp attach contract); a999c17 (audit gap closure: realm acp, refusal code mapping, one state-dir resolver, Omp status, pinned-root rebind, catch-site fixes, daemon server-failure stop); dd02034 (re-audit, planning, and docs); 54bc236 (MCP tool-call diagnostic); plus the decisions commit (see git log).
 
@@ -591,3 +597,14 @@ Incident note, not a decision: while reading usage, I ran `state.signal-waiting`
 - 2026-10-28 phase 9.6 historical notes: the verification entry V93 "PID 1 is realm-helper idle" and the 2026-10-25 acceptance wording for the helper describe a design that was superseded; they stay as dated history. RT-03 reconciliation: the managed runner start uses OpenShell exec through the gateway, the supervisor, and the runtime protocol, not a container-runtime exec route, so the no podman exec decision stands. The OMP-LIVE statements across STATE, ROADMAP, REQUIREMENTS, and docs/integration/omp.md now agree: reinstated 2026-10-25, met live 2026-10-28.
 - Open owner decisions after phase 9.6 (none blocks the code; listed in 09.6-VERIFICATION.md): PRD-DRV-01 amendment; A10 F3 (workspace planting), F4 (seccomp rule for new user namespaces), F8 (private-range egress literals), the ptrace_scope refusal follow-up; A18 items 1 and 2 (no recorded provenance for the host supervisor, CLI, gateway, and Podman), 5 (Debian 12 support), and 3, 4, 6 to 10; NOTICE attribution for the vendored seccomp profile; the PD-08 restart refusal; whether older decision records get a note that the realm compute driver replaced OpenShell's Podman driver.
 - Phase and step: phase 9.6 complete; the production build (9.1 to 9.6) is closed on feat/realm-v2-0. Nothing is pushed. The ship hold stands: ultrathink-ship, push, PR, merge, and release 0.2.0 are not run. Phases 10 (docs, packaging, release 0.2.0) and 11 (milestone close) are held for the owner. Next: the owner decides whether to lift the hold, and whether autoMerge stays on for the ship.
+
+### Run ut-mvsa36r2-2bd8b291 (gsd-autonomous orchestration, 2026-10-28)
+
+- Tracking: kickoff ran `track complete`: Notion rows exist (8 nodes, 56 steps) and the Task is set to Implementing; Linear failed again on the free-issue limit (B-005), so tracking stays Notion only and partial. The session is marked kicked-off.
+- Scope, from repository evidence and not asked (D-701 to D-710, revocable, in 09.7-CONTEXT.md): fix the identified A10 and A18 findings, the open hardening-plan rows and the RT-04 status gap; touched code only; no frozen-contract change; local commits per root cause; continue through phases 10 and 11 up to the ship and the milestone confirmation, and stop there.
+- Phase 9.7 (review-finding remediation) inserted after 9.6 and closed: 17 local commits after the baseline def7669 plus documentation and planning commits; record: 09.7-01-SUMMARY.md and 09.7-VERIFICATION.md. Gates at the final code commit b227499: typecheck, lint, check:pack and check:mcp exit 0; `npm test` 1828 tests, 1818 pass, 0 fail, 10 skipped (baseline 1642, 1635, 7); `test:scripts` 109 of 109 (was 80); `check:docs` exit 0 after the planning edits.
+- Live proof on the rebuilt image (sha256:9511929b…, built through `npm run build:image`; Podman 5.7.1 with runc): the nine-scenario suite passed 31 of 31, twice, the second time on the final installed build (zero residue); RT-02 probes, daemonless status and a live doctor behaved as specified; the Omp TUI showed active after autostart, moved to error with AGENTOS_CRASH_LOOP within the 10 s health interval after the runner was killed, recovered through the retry command from both entry states, and left the daemon running after Omp quit; a UI-01 measurement was recorded (a bound, not a proof).
+- Defects found by the live proof and fixed: rlimit type names in the create body (every create failed closed on the first run on the new stack); the compute driver ignoring SIGTERM while the gateway's stream was open (90 s restarts); the doctor digest sharing the probe timeout; the image verifier reporting every copy failure as a missing file.
+- Owner ruling N1 (no restart and no hysteresis for a dead runner, cited in src/daemon/daemon.ts) is why RT-04 stays Partial: its text still says a crash restarts with bounded backoff. The wording amendment awaits the owner.
+- Phase 10: plan 03 executed (HOST-03 complete on a fresh audit: no host configuration names this repository; the Claude Code backups are today's own). Plan 04 (PR to main, merge, release 0.2.0) is held. Phase 11: plan 01 executed up to the confirmation (v1 phases collapsed with nothing lost, a milestone heading added, `roadmap.analyze` lists the 11 phases, `milestone complete v2.0 --dry-run` exits 0, cleanup inventory done; `--confirm` and `--force` not used; the dry run reports `audit: null`).
+- Phase and step: Phase 9.7 complete; phases 10 and 11 executed up to their owner gates. Nothing is pushed, no PR is open, nothing is merged or released. Next: the owner answers the 12 open decisions in 09.7-VERIFICATION.md. The ones that block the ship are the ship hold itself, whether autoMerge stays on given the human-review rule for five workflow and release files, and the circularity between Phase 10 plan 04 and the milestone confirmation.
