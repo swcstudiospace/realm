@@ -20,7 +20,7 @@ Status (README.md and `.planning/PROJECT.md`):
 
 - v1.0 is provisional and fail-closed. The daemon binds the AgentOS driver from the configured digest-pinned image. The production stack is the OpenShell 0.1.5 gateway, the Realm compute driver, and rootless Podman 5.x (`docs/integration/openshell.md`).
 - Linux is the only verified platform. macOS and Windows are out of v1 scope unless verified later. Bun is unverified and not assumed. Podman 5.x is required, and Realm does not install it.
-- Podman-gated and host-gated checks await verification on a Podman 5.x host.
+- Podman-gated and host-gated checks ran live on 2026-10-28 on a Podman 5.7.1 host: the production live suite passed 31 of 31 assertions across its nine scenarios (`docs/integration/openshell.md`). OMP-05 is unproven live and ACP was not exercised live.
 - Licence: AGPL-3.0-only (`LICENSE`).
 
 ## Commands
@@ -32,7 +32,7 @@ Requires Node.js 22.13.0 or later (`engines` in `package.json`). CI runs Node 22
 - `npm run lint`: `eslint .`, configured by `eslint.config.js`.
 - `npm test`: compiles with tsc, then runs `node:test` over every compiled test under `dist/test/`. That glob includes `dist/test/integration/`, so the Podman-gated suites also run here and skip when Podman 5.x is absent.
 - `npm run test:integration`: compiles, then runs `dist/test/integration/*.test.js`. Podman-gated tests skip with a stated reason: `PODMAN_UNSUPPORTED_VERSION` when Podman is older than 5.x, or `PODMAN_MISSING` when Podman is absent.
-- The production live suite (`test/integration/production-driver.test.ts`) is also gated: it runs the real stack and skips, naming the first missing prerequisite, unless `REALM_LIVE_PRODUCTION=1`, Podman 5.x, `REALM_LIVE_IMAGE`, `REALM_DRIVER_STATE_ROOT`, `REALM_DRIVER_SECRET_ROOT`, `REALM_DRIVER_WORKSPACE_ROOT`, a rootless Podman socket, the `openshell` CLI and the built CLI are all present. Run the live file alone with `npm run build && node --test dist/test/integration/production-driver.test.js`. `npm run test:integration` runs the integration files in parallel, and this suite counts every container on the host, so the safe alternative is `node --test --test-concurrency=1 "dist/test/integration/*.test.js"`. Preconditions are in `docs/integration/openshell.md` (Running the production live suite).
+- The production live suite (`test/integration/production-driver.test.ts`, nine scenarios) is also gated: it runs the real stack and skips, naming the first missing prerequisite, unless `REALM_LIVE_PRODUCTION=1`, Podman 5.x, `REALM_LIVE_IMAGE`, `REALM_DRIVER_STATE_ROOT`, `REALM_DRIVER_SECRET_ROOT`, `REALM_DRIVER_WORKSPACE_ROOT`, a rootless Podman socket, the `openshell` CLI and the built CLI are all present. Run the live file alone with `npm run build && node --test dist/test/integration/production-driver.test.js`. `npm run test:integration` runs the integration files in parallel, and this suite counts every container on the host, so the safe alternative is `node --test --test-concurrency=1 "dist/test/integration/*.test.js"`. Preconditions are in `docs/integration/openshell.md` (Running the production live suite).
 - `npm run test:scripts`: runs `node:test` over `scripts/**/*.test.mjs`.
 - `npm run check:docs`: scans the published docs for host-local absolute paths, then runs the AGENTS.md and CLAUDE.md sync check.
 - `npm run check:image-digests -- --dir <dir>` or `-- --image <ref>`: verifies the sandbox image inputs against `sandbox/expected-digests.json`. `--image` needs Podman. It is not part of CI.

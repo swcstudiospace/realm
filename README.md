@@ -19,7 +19,7 @@ The core guarantee, under the fail-closed policy: every file mutation either lan
 - v0.1.x is the first release line, for milestone v1.0 (a provisional name).
 - `realm up` binds the AgentOS driver from the configured digest-pinned image. The production stack is the OpenShell 0.1.5 gateway, the Realm compute driver, and rootless Podman 5.x (`docs/integration/openshell.md`).
 - Linux is the only verified platform. Podman 5.x is required, and Realm does not install it.
-- Podman-gated and host-gated checks await human verification on a Podman 5.x host.
+- The Podman-gated production live suite (nine scenarios) and the Omp status checks were run on one Podman 5.7.1 host on 2026-10-28 (`docs/integration/openshell.md`, `docs/integration/omp.md`). Other hosts, the ACP surface, the Anda engine, and the Omp write and edit guard when disconnected (which needs a model call) are not verified live.
 
 ## Quick start
 

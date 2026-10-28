@@ -151,13 +151,17 @@ Requirements. The owner reinstated OMP-LIVE-01, OMP-LIVE-03 and OMP-LIVE-04 on 2
 
 | Requirement | Status | Evidence |
 | --- | --- | --- |
-| OMP-LIVE-01 | Verified live, 2026-10-28 | The status item read `realm active` after the attach. Historical (2026-10-23 host, superseded): not met, because no daemon answered; the daemon refused at startup (Podman). |
+| OMP-LIVE-01 | Verified live, 2026-10-28 | Omp 18.12.6 in a tmux pane, isolated profile, Podman 5.7.1, final build: the plugin attached and the status item read `● realm active · container running` (the same observation covers OMP-01 and OMP-02). Historical (2026-10-23 host, superseded): not met, because no daemon answered; the daemon refused at startup (Podman). |
 | OMP-LIVE-02 | Met (2026-10-23 evidence, still true) | Disconnected with the daemon's own reason; never active |
-| OMP-LIVE-03 | Verified live, 2026-10-28 | After `realm down` the status item read `realm disconnected` with the reason `REALM_NOT_ACTIVE`; the `realm-retry` command then reattached in the same Omp session (`connecting`, then `realm active`). Historical (2026-10-23 host, superseded): partial; the retry re-ran the attach in the same session, but a reattach to active was not reachable there. |
+| OMP-LIVE-03 | Verified live, 2026-10-28 | After `realm down` from another shell the status item read `realm disconnected · REALM_NOT_ACTIVE`; the `/realm-retry` command then reattached in the same Omp session: `connecting`, then `● realm active` in 24 seconds (also OMP-04). Historical (2026-10-23 host, superseded): partial; the retry re-ran the attach in the same session, but a reattach to active was not reachable there. |
 | OMP-LIVE-04 | Verified live, 2026-10-28 | After Omp was quit, the same daemon process was still running and `realm status` reported active. Historical (2026-10-23 host, superseded): not met, because no daemon ran, so nothing survived shutdown. |
-| UI-01 | Partial (not re-checked on 2026-10-28) | The item appears at launch. Non-blocking is not shown: see below |
+| Runner killed in the sandbox | Observed live, 2026-10-28 | The AgentOS runner was killed inside the sandbox. The status item changed to `○ realm disconnected · AGENTOS_CRASH_LOOP` within the 10 second health interval, observed 10.8 seconds after the kill (the plugin's poll cadence plus the probe interval). `/realm-retry` from that error state went to `connecting` and then `● realm active` in 4 seconds (OMP-04). |
+| OMP-05 | Not proven live | The write and edit guard when disconnected needs a model call, and no model call was made. |
+| UI-01 | Partial (re-measured 2026-10-28; a measurement, not a proof) | The item appears at launch. Non-blocking is not shown: see below |
 
-UI-01 detail. The attach alone fails in about 1.3 s (probe 2 ms; worst event-loop lag 71 ms under Node and 239 ms under Bun). Inside Omp the same failure paints about 6 s after launch, and a `get_state` sent one second after launch was answered only after the failure. In separate probes, a plugin-free extension, a `tool_call` handler, a registered command, a managed timer, and a detached spawn each answered `get_state` within about one second. The cause of the delay is not isolated, so UI-01's "without blocking the session" is not demonstrated.
+UI-01 detail. Measurement of 2026-10-23: the attach alone fails in about 1.3 s (probe 2 ms; worst event-loop lag 71 ms under Node and 239 ms under Bun). Inside Omp the same failure paints about 6 s after launch, and a `get_state` sent one second after launch was answered only after the failure. In separate probes, a plugin-free extension, a `tool_call` handler, a registered command, a managed timer, and a detached spawn each answered `get_state` within about one second. The cause of the delay is not isolated, so UI-01's "without blocking the session" is not demonstrated.
+
+Measurement of 2026-10-28 (Omp 18.12.6 in a tmux pane, isolated profile, Podman 5.7.1, final build, on a host with a load average near 30): Omp itself took 25 seconds to paint its first screen. From then on, through a 24 second cold attach, a keystroke sent every 2 to 3 seconds appeared in the editor within 0.2 to 1.2 seconds. The probe's own floor is about 0.2 to 0.3 seconds, so this bounds the stall on that run. It is a measurement and not a proof: it does not show that the loop is never blocked, and the requirement's status is the owner's to change. The earlier finding stands as history: `get_state` waited about 6 seconds.
 
 The session context provides `setTimeout`, `setInterval`, `clearTimer`, and `ui.setStatus`. The plugin uses only these.
 
@@ -180,11 +184,15 @@ Owner decisions (2026-10-23 and 2026-10-24, historical, superseded 2026-10-25): 
 
 ### Live Omp checks (2026-10-28)
 
-Verified live on 2026-10-28 on the final build, in a live Omp TUI session driven by hand, against the production stack (OpenShell 0.1.5 gateway, the Realm compute driver, rootless Podman 5.x). Steps 3, 5 and 6 each carry the one requirement they observe:
+Verified live on 2026-10-28 on the final build (Omp 18.12.6, Podman 5.7.1), in a live Omp TUI session driven by hand, against the production stack (OpenShell 0.1.5 gateway, the Realm compute driver, rootless Podman 5.x). Steps 3, 7 and 8 each carry the live requirement they observe (OMP-LIVE-01, OMP-LIVE-03 and OMP-LIVE-04):
 
 1. Run the built extension with `-e` under an isolated profile, in a pseudo-terminal such as tmux. Print mode never shows the status item.
-2. Skip the first-run setup wizard with the Escape key.
-3. Read the status line. It reads `realm active` after attach (OMP-LIVE-01).
-4. In another shell run `realm down`. After the poll interval (about 2 seconds) the status line reads `realm disconnected` with the reason `REALM_NOT_ACTIVE`. This is the disconnected state that the next step recovers from.
-5. Run the `realm-retry` slash command. The status line reads `connecting`, then `realm active`, in the same Omp session (OMP-LIVE-03).
-6. Quit Omp. Confirm the same daemon process is still running and `realm status` reports active (OMP-LIVE-04).
+2. Skip the first-run setup wizard of Omp with the Escape key. At the first launch of a fresh isolated profile the wizard has five steps, and each needs one Escape, so send five.
+3. Read the status line. It reads `● realm active · container running` after attach (OMP-01, OMP-02, OMP-LIVE-01).
+4. Kill the AgentOS runner inside the sandbox. At the daemon's 10 second health interval the status line reads `○ realm disconnected · AGENTOS_CRASH_LOOP` (observed 10.8 seconds after the kill, the plugin's poll cadence plus the probe interval).
+5. Run the `/realm-retry` slash command from that error state. The status line reads `connecting`, then `● realm active`, in 4 seconds (OMP-04).
+6. In another shell run `realm down`. After the poll interval (about 2 seconds) the status line reads `realm disconnected` with the reason `REALM_NOT_ACTIVE`. This is the disconnected state that the next step recovers from.
+7. Run `/realm-retry` again. The status line reads `connecting`, then `● realm active`, in the same Omp session, in 24 seconds (OMP-04, OMP-LIVE-03).
+8. Quit Omp. Confirm the same daemon process is still running and `realm status` reports active (OMP-LIVE-04).
+
+Limits. OMP-05 (the write and edit guard when disconnected) needs a model call and stays unproven live. ACP was not exercised live: only MCP was. The Anda engine is not in scope.
