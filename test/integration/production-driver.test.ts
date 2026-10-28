@@ -14,8 +14,9 @@
 //   5. A rootless Podman API socket under XDG_RUNTIME_DIR.
 //   6. The openshell CLI on PATH.
 //   7. The built CLI at dist/src/cli/main.js, next to the compiled tests (npm run build).
-// A default npm test therefore skips every scenario below (six in all: default policy, immediate cycle, egress allowlist, wrong
-// image digest, crash recovery, MCP exec) and reports each as skipped.
+// A default npm test therefore skips every scenario below (nine in all: default policy, immediate cycle, egress allowlist, wrong
+// image digest, crash recovery, MCP exec, the MCP exec timeout, the AgentOS runner exit and the daemon-side startup budget) and
+// reports each as skipped.
 //
 // Preconditions the suite cannot check and the operator must provide:
 //   - The gateway and the compute driver run under the realm account with the same image and roots the variables above name.
@@ -29,10 +30,11 @@
 // then waits (bounded at 90 s) for zero containers, zero realm-* sandboxes, no realm-daemon directory under the secret and
 // sandbox-state roots, and an empty pinned workspace. The scenarios share one pinned root, so they run one after another.
 // Files the suite may leave in the pinned workspace are named in WORKSPACE_FILES below; cleanup removes exactly those names.
-// The only process it ever signals is the one daemon the crash scenario's own `realm up` started: the process whose whole
+// The only host process it ever signals is the one daemon the crash scenario's own `realm up` started: the process whose whole
 // command is the current node binary and the compiled daemon entry, owned by the current uid, SIGKILLed only when exactly one
-// such process exists. The MCP scenario starts one `realm mcp` child with the same explicit environment, and kills it in
-// cleanup if it is still running.
+// such process exists. The runner-exit scenario signals only the AgentOS runner inside its own sandbox, through the sandbox exec.
+// The MCP scenarios start one `realm mcp` child each with the same explicit environment, and kill it in cleanup if it is still
+// running.
 //
 // Nothing here prints a secret. Failure messages carry exit codes, error codes, names and clipped probe output.
 
@@ -45,6 +47,7 @@ import assert from "node:assert/strict";
 import { DEFAULT_AGENTOS_PROBE_PATH } from "../../src/runtime/agentos-driver.js";
 import { SANDBOX_WORKSPACE_PATH } from "../../src/runtime/openshell.js";
 import {
+  KILL_RUNNER_ARGV,
   UNKNOWN_DIGEST_IMAGE,
   canConnect,
   cleanupScenario,
@@ -72,11 +75,14 @@ import {
   sandboxExec,
   startMcpSession,
   stateOfStatus,
+  statusFieldsOf,
+  toolErrorOf,
   waitForActive,
   waitForNoContainers,
   waitForNoResidue,
   DAEMON_SANDBOX_NAME,
   type CommandResult,
+  type StatusFields,
   type NodeProbeResult,
   type LiveInputs,
   type Listing,
@@ -626,4 +632,156 @@ void test("production live 6: realm mcp serves exec, write and read over stdio a
     session.kill();
   }
   await assertDownAndClean(scenario);
+});
+
+// ---- Scenario 7: MCP exec timeout ---------------------------------------------------------------------------------------
+
+// The request bound for the call that must time out: well above the fixed 30 s per-call bound (src/tools/dispatch.ts
+// TOOL_CALL_TIMEOUT_MS), so the answer the test waits for is the tool's own TOOL_TIMEOUT, not this bound.
+const TOOL_TIMEOUT_REQUEST_BOUND_MS = 60_000;
+// The per-call bound is a constant (30 s) and the exec runner's own deadline is 28 s; there is no per-call timeout parameter.
+// The elapsed time of the timed-out call falls between these two limits.
+const TOOL_TIMEOUT_MIN_ELAPSED_MS = 25_000;
+const TOOL_TIMEOUT_MAX_ELAPSED_MS = 40_000;
+// Longer than the per-call bound, so the workload is still running when the bound fires.
+const TOOL_TIMEOUT_SLEEP_SECONDS = "45";
+
+// `realm status` printed as its lifecycle fields. The CLI exits 0 and prints JSON for any lifecycle state.
+async function statusOf(scenario: Scenario): Promise<StatusFields> {
+  const status = await realmCli(scenario.inputs, scenario.environment, ["status"], STATUS_TIMEOUT_MS);
+  assert.equal(status.exitCode, 0, `realm status: ${describeResult(status)}`);
+  const fields = statusFieldsOf(status.stdout);
+  if (fields === undefined) {
+    assert.fail(`realm status must print the status JSON: ${describeResult(status)}`);
+  }
+  return fields;
+}
+
+// The initialize handshake of a realm mcp session, as scenario 6 opens it.
+async function initializeMcp(session: McpSession): Promise<void> {
+  const initialized = await session.request(
+    "initialize",
+    { protocolVersion: MCP_PROTOCOL_REVISION, capabilities: {}, clientInfo: { name: "realm-live-suite", version: "0" } },
+    MCP_FIRST_RESPONSE_TIMEOUT_MS,
+  );
+  assert.equal(field(initialized, "protocolVersion"), MCP_PROTOCOL_REVISION, `initialize: ${describeValue(initialized)}`);
+  session.notify("notifications/initialized");
+}
+
+void test("production live 7: an exec that outlives the per-call bound fails with a retryable TOOL_TIMEOUT and leaves the session usable", { skip: gate, timeout: SCENARIO_TIMEOUT_MS }, async (t) => {
+  const scenario = startScenario(t, { image: inputs().image });
+  const session = startMcpSession(scenario.inputs, scenario.environment);
+  try {
+    await initializeMcp(session);
+    const active = await waitForActive(scenario.inputs, scenario.environment, ACTIVE_TIMEOUT_MS);
+    assert.ok(active.ok, `the realm mcp attach must reach active: ${active.detail}; realm mcp stderr ${session.stderr()}`);
+
+    // A raw tools/call: callTool fails the scenario on isError, and the timeout is exactly the error this scenario asserts.
+    const startedAt = performance.now();
+    const timedOut = await session.request("tools/call", { name: "exec", arguments: { argv: ["sleep", TOOL_TIMEOUT_SLEEP_SECONDS] } }, TOOL_TIMEOUT_REQUEST_BOUND_MS);
+    const elapsedMs = performance.now() - startedAt;
+    assert.equal(field(timedOut, "isError"), true, `exec sleep ${TOOL_TIMEOUT_SLEEP_SECONDS} must return a tool error: ${describeValue(timedOut)}`);
+    const failure = toolErrorOf(timedOut);
+    assert.deepEqual(failure, { code: "TOOL_TIMEOUT", retryable: true }, `exec sleep ${TOOL_TIMEOUT_SLEEP_SECONDS}: ${describeValue(field(timedOut, "structuredContent"))}`);
+    assert.ok(
+      elapsedMs >= TOOL_TIMEOUT_MIN_ELAPSED_MS && elapsedMs <= TOOL_TIMEOUT_MAX_ELAPSED_MS,
+      `the timed-out call must take between ${String(TOOL_TIMEOUT_MIN_ELAPSED_MS / 1000)} and ${String(TOOL_TIMEOUT_MAX_ELAPSED_MS / 1000)} s; it took ${String(Math.round(elapsedMs / 100) / 10)} s`,
+    );
+
+    // The session survives: the next call runs, the status is still active, and the child exits cleanly when its input closes.
+    const echoed = await callTool(session, "exec", { argv: ["echo", "ok"] });
+    assert.equal(field(echoed, "exitCode"), 0, `exec echo after the timeout: ${describeValue(echoed)}`);
+    const echoedStdout = field(echoed, "stdout");
+    assert.ok(typeof echoedStdout === "string" && echoedStdout.includes("ok"), `exec echo after the timeout must print ok: ${describeValue(echoed)}`);
+    assert.equal((await statusOf(scenario)).state, "active", "realm status must still report active after the timeout");
+
+    session.closeInput();
+    const ended = await session.waitForExit(MCP_EXIT_TIMEOUT_MS);
+    assert.notEqual(ended, undefined, `realm mcp must exit within ${String(MCP_EXIT_TIMEOUT_MS / 1000)} s of its stdin closing; stderr ${session.stderr()}`);
+    assert.deepEqual(ended, { code: 0, signal: null }, `realm mcp must exit 0; stderr ${session.stderr()}`);
+  } finally {
+    session.kill();
+  }
+  await assertDownAndClean(scenario);
+});
+
+// ---- Scenario 8: AgentOS runner exit ------------------------------------------------------------------------------------
+
+// The daemon's health loop runs about every 10 s; the session reaches error well within this bound after the runner is gone.
+const RUNNER_EXIT_OBSERVE_TIMEOUT_MS = 45_000;
+const RUNNER_EXIT_OBSERVE_INTERVAL_MS = 2_000;
+
+void test("production live 8: after the AgentOS runner is killed the session moves to error with AGENTOS_CRASH_LOOP, and down then up recover it", { skip: gate, timeout: SCENARIO_TIMEOUT_MS }, async (t) => {
+  const scenario = startScenario(t, { image: inputs().image });
+  await assertActive(scenario);
+
+  try {
+    const killed = await exec(scenario, KILL_RUNNER_ARGV);
+    assertExit(killed, 0, "killing the AgentOS runner in the sandbox");
+    const result = parseNodeProbe(killed.stdout);
+    assert.equal(result.kind, "ok", `the runner kill must find and signal the runner: ${describeResult(killed)}`);
+
+    // The health loop notices that the runner is gone and moves the session to error.
+    const errored = await pollUntil(
+      async () => {
+        const status = await realmCli(scenario.inputs, scenario.environment, ["status"], STATUS_TIMEOUT_MS);
+        const fields = status.exitCode === 0 ? statusFieldsOf(status.stdout) : undefined;
+        const reached = fields?.state === "error" && fields.reason === "AGENTOS_CRASH_LOOP" && fields.label === "realm disconnected";
+        return reached ? { done: true } : { done: false, detail: `realm status: ${describeResult(status)}` };
+      },
+      { timeoutMs: RUNNER_EXIT_OBSERVE_TIMEOUT_MS, intervalMs: RUNNER_EXIT_OBSERVE_INTERVAL_MS },
+    );
+    assert.ok(errored.ok, `realm status must report state error, reason AGENTOS_CRASH_LOOP and label realm disconnected within ${String(RUNNER_EXIT_OBSERVE_TIMEOUT_MS / 1000)} s: ${errored.detail}`);
+
+    // Down removes the sandbox the dead runner left, and the next up starts one daemon and reaches active again.
+    await assertDownAndClean(scenario);
+    await assertActive(scenario);
+    const replacement = await daemonPids(scenario);
+    assert.equal(replacement.length, 1, `exactly one daemon process must run after the recovery; found ${String(replacement.length)} (pids: ${replacement.length === 0 ? "none" : replacement.join(", ")})`);
+  } catch (error) {
+    // A failed assertion still stops the stack, so the sandbox does not block the next scenario. The result is not judged and
+    // the original failure is rethrown.
+    await down(scenario);
+    throw error;
+  }
+
+  await assertDownAndClean(scenario);
+});
+
+// ---- Scenario 9: daemon-side startup budget -----------------------------------------------------------------------------
+
+// The smallest startup budget the policy schema admits (policy.schema.json startupBudgetMs, minimum 1).
+const STARTUP_BUDGET_MIN_MS = 1;
+// A create that outlives the expired budget may still finish after the failed up and leave a container, so this scenario waits
+// longer for the residue than the others, and its own timeout covers two such waits.
+const BUDGET_RESIDUE_TIMEOUT_MS = 180_000;
+const BUDGET_SCENARIO_TIMEOUT_MS = 600_000;
+
+// Registered last: a late create can leave a container behind, and no other scenario should start while one may still appear.
+// Caveat: the Omp plugin's own 200 s startup timer is a constant, proven by unit tests. This scenario proves the daemon-side
+// budget (policy.startupBudgetMs) that Omp displays: the daemon reports STARTUP_BUDGET_EXCEEDED and keeps running.
+void test("production live 9: a startup budget of 1 ms fails realm up with STARTUP_BUDGET_EXCEEDED, reports error, and leaves the daemon running until down", { skip: gate, timeout: BUDGET_SCENARIO_TIMEOUT_MS }, async (t) => {
+  const scenario = startScenario(t, { image: inputs().image, policyExtra: { startupBudgetMs: STARTUP_BUDGET_MIN_MS } });
+  const started = await up(scenario);
+  assertExit(started, 1, "realm up with a 1 ms startup budget");
+  assert.match(`${started.stdout}\n${started.stderr}`, /STARTUP_BUDGET_EXCEEDED/, `realm up must give STARTUP_BUDGET_EXCEEDED: ${describeResult(started)}`);
+
+  const fields = await statusOf(scenario);
+  assert.equal(fields.state, "error", `realm status state: ${JSON.stringify(fields)}`);
+  assert.equal(fields.label, "realm disconnected", `realm status label: ${JSON.stringify(fields)}`);
+  assert.equal(fields.reason, "STARTUP_BUDGET_EXCEEDED", `realm status reason: ${JSON.stringify(fields)}`);
+  // The session continues: the daemon that reported the expiry is still running.
+  const pids = await daemonPids(scenario);
+  assert.equal(pids.length, 1, `the daemon must still run after the expired budget; found ${String(pids.length)} (pids: ${pids.length === 0 ? "none" : pids.join(", ")})`);
+
+  const stopped = await down(scenario);
+  assertExit(stopped, 0, "realm down after the expired budget");
+  let residue = await waitForNoResidue(scenario.inputs, BUDGET_RESIDUE_TIMEOUT_MS);
+  if (!residue.ok) {
+    // The late create may have finished after the first down; one more down removes what it left. Its own result is not judged:
+    // the residue wait below is the verdict.
+    await down(scenario);
+    residue = await waitForNoResidue(scenario.inputs, BUDGET_RESIDUE_TIMEOUT_MS);
+  }
+  assert.ok(residue.ok, `residue after realm down with an expired budget: ${residue.detail}`);
 });

@@ -1,12 +1,18 @@
 // Hermetic tests for the pieces of the production live suite that need no host: probe output parsing, the polling helper
 // (with an injected clock), the 198.18.0.0/15 range check, the skip-reason selection, the daemon process finder's parsing of
-// ps output, the MCP line framing and the JSON-RPC response matcher. This file always runs. The live scenarios themselves are in
+// ps output, the MCP line framing and the JSON-RPC response matcher, the status and tool-error readers, the policyExtra merge into
+// policy.json and the runner-kill workload's syntax. This file always runs. The live scenarios themselves are in
 // production-driver.test.ts and run only when its gate opens.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { Script } from "node:vm";
 import type { PodmanProbe } from "../../src/runtime/podman-version.js";
 import {
+  KILL_RUNNER_ARGV,
+  createScenarioEnvironment,
   decodeReadContent,
   describeValue,
   findRpcReply,
@@ -18,6 +24,9 @@ import {
   productionSkipReason,
   splitJsonRpcLines,
   stateOfStatus,
+  statusFieldsOf,
+  toolErrorOf,
+  type LiveInputs,
   type PollCheck,
   type PollClock,
   type ProductionGateInputs,
@@ -81,6 +90,94 @@ void test("stateOfStatus reads snapshot.state from the status JSON and nothing e
   assert.equal(stateOfStatus('{"snapshot":{"state":7}}'), undefined);
   assert.equal(stateOfStatus('{"state":"active"}'), undefined);
   assert.equal(stateOfStatus("null"), undefined);
+});
+
+void test("statusFieldsOf reads snapshot.state, snapshot.reason and display.label from the status JSON", () => {
+  const printed = '{"snapshot":{"state":"error","reason":"AGENTOS_CRASH_LOOP","lastTransitionAt":"t"},"display":{"label":"realm disconnected","degraded":false,"reason":"AGENTOS_CRASH_LOOP"},"mode":"advisory"}\n';
+  assert.deepEqual(statusFieldsOf(printed), { state: "error", reason: "AGENTOS_CRASH_LOOP", label: "realm disconnected" });
+});
+
+void test("statusFieldsOf leaves a missing or non-string field undefined and refuses text that is not a JSON object", () => {
+  assert.deepEqual(statusFieldsOf('{"snapshot":{"state":7,"reason":"x"},"display":"flat"}'), { state: undefined, reason: "x", label: undefined });
+  assert.deepEqual(statusFieldsOf("{}"), { state: undefined, reason: undefined, label: undefined });
+  assert.equal(statusFieldsOf("STARTUP_BUDGET_EXCEEDED\n"), undefined);
+  assert.equal(statusFieldsOf("null"), undefined);
+  assert.equal(statusFieldsOf(""), undefined);
+});
+
+void test("toolErrorOf reads the code and the retryable flag of an MCP tool error", () => {
+  const timedOut = { isError: true, content: [], structuredContent: { code: "TOOL_TIMEOUT", message: "m", retryable: true } };
+  assert.deepEqual(toolErrorOf(timedOut), { code: "TOOL_TIMEOUT", retryable: true });
+  assert.deepEqual(toolErrorOf({ isError: true, structuredContent: { code: "POLICY_DENIED", retryable: false } }), { code: "POLICY_DENIED", retryable: false });
+});
+
+void test("toolErrorOf refuses a result that is not a complete tool error", () => {
+  assert.equal(toolErrorOf({ outcome: "done", tool: "exec", value: {} }), undefined);
+  assert.equal(toolErrorOf({ isError: false, structuredContent: { code: "TOOL_TIMEOUT", retryable: true } }), undefined);
+  assert.equal(toolErrorOf({ isError: true }), undefined);
+  assert.equal(toolErrorOf({ isError: true, structuredContent: { code: "TOOL_TIMEOUT" } }), undefined);
+  assert.equal(toolErrorOf({ isError: true, structuredContent: { code: 5, retryable: true } }), undefined);
+  assert.equal(toolErrorOf({ isError: true, structuredContent: { code: "TOOL_TIMEOUT", retryable: "yes" } }), undefined);
+  assert.equal(toolErrorOf(null), undefined);
+});
+
+void test("createScenarioEnvironment merges policyExtra into policy.json next to the pinned root", () => {
+  const inputs: LiveInputs = {
+    image: "localhost/realm-agentos@sha256:0",
+    stateRoot: "/driver/state",
+    secretRoot: "/driver/secret",
+    workspaceRoot: "/driver/workspace",
+    cliPath: "/driver/cli.js",
+    hostEnvironment: {},
+  };
+  const withBudget = createScenarioEnvironment(inputs, { image: inputs.image, policyExtra: { startupBudgetMs: 1 } });
+  const plain = createScenarioEnvironment(inputs, { image: inputs.image });
+  try {
+    assert.deepEqual(JSON.parse(readFileSync(join(withBudget.stateDir, "policy.json"), "utf8")), { workspaceRoots: ["/driver/workspace"], startupBudgetMs: 1 });
+    assert.deepEqual(JSON.parse(readFileSync(join(plain.stateDir, "policy.json"), "utf8")), { workspaceRoots: ["/driver/workspace"] });
+  } finally {
+    rmSync(withBudget.root, { recursive: true, force: true });
+    rmSync(plain.root, { recursive: true, force: true });
+  }
+});
+
+void test("createScenarioEnvironment refuses a policyExtra that sets workspaceRoots or egressAllow and still merges the other keys", () => {
+  const inputs: LiveInputs = {
+    image: "localhost/realm-agentos@sha256:0",
+    stateRoot: "/driver/state",
+    secretRoot: "/driver/secret",
+    workspaceRoot: "/driver/workspace",
+    cliPath: "/driver/cli.js",
+    hostEnvironment: {},
+  };
+  const egressAllow = [{ host: "example.test", port: 443 }];
+  assert.throws(
+    () => createScenarioEnvironment(inputs, { image: inputs.image, policyExtra: { workspaceRoots: ["/elsewhere"] } }),
+    /reserved policy key workspaceRoots/,
+  );
+  assert.throws(
+    () => createScenarioEnvironment(inputs, { image: inputs.image, egressAllow, policyExtra: { egressAllow: [] } }),
+    /reserved policy key egressAllow/,
+  );
+  const kept = createScenarioEnvironment(inputs, { image: inputs.image, egressAllow, policyExtra: { startupBudgetMs: 7 } });
+  try {
+    assert.deepEqual(JSON.parse(readFileSync(join(kept.stateDir, "policy.json"), "utf8")), {
+      workspaceRoots: ["/driver/workspace"],
+      egressAllow,
+      startupBudgetMs: 7,
+    });
+  } finally {
+    rmSync(kept.root, { recursive: true, force: true });
+  }
+});
+
+void test("the runner-kill workload is a node one-liner that compiles", () => {
+  assert.deepEqual(KILL_RUNNER_ARGV.slice(0, 2), ["node", "-e"]);
+  const script = KILL_RUNNER_ARGV[2];
+  assert.equal(typeof script, "string");
+  // Compiling runs nothing, so no process on this host is ever signalled.
+  assert.doesNotThrow(() => new Script(script ?? ""));
+  assert.match(script ?? "", /agentos-runner\.js/);
 });
 
 // ---- isBenchmarkAddress -----------------------------------------------------------------------------------------------------

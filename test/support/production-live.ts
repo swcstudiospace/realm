@@ -215,6 +215,58 @@ export function stateOfStatus(stdout: string): string | undefined {
   return typeof state === "string" ? state : undefined;
 }
 
+// The lifecycle fields `realm status` prints: snapshot.state, snapshot.reason and display.label. A field that is missing or not
+// a string is undefined, and so is the whole result for any text that is not a JSON object.
+export interface StatusFields {
+  readonly state: string | undefined;
+  readonly reason: string | undefined;
+  readonly label: string | undefined;
+}
+
+function stringField(value: unknown, key: string): string | undefined {
+  if (typeof value !== "object" || value === null) {
+    return undefined;
+  }
+  const found: unknown = Reflect.get(value, key);
+  return typeof found === "string" ? found : undefined;
+}
+
+function objectField(value: unknown, key: string): unknown {
+  return typeof value === "object" && value !== null ? Reflect.get(value, key) : undefined;
+}
+
+export function statusFieldsOf(stdout: string): StatusFields | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    return undefined;
+  }
+  if (typeof parsed !== "object" || parsed === null) {
+    return undefined;
+  }
+  const snapshot = objectField(parsed, "snapshot");
+  const display = objectField(parsed, "display");
+  return { state: stringField(snapshot, "state"), reason: stringField(snapshot, "reason"), label: stringField(display, "label") };
+}
+
+// The error an MCP tools/call result carries: isError true with structuredContent {code, retryable}. Undefined when the result is
+// not a tool error, or when the code or the retryable flag is missing or of the wrong type.
+export interface ToolErrorFields {
+  readonly code: string;
+  readonly retryable: boolean;
+}
+
+export function toolErrorOf(result: unknown): ToolErrorFields | undefined {
+  if (objectField(result, "isError") !== true) {
+    return undefined;
+  }
+  const structured = objectField(result, "structuredContent");
+  const code = stringField(structured, "code");
+  const retryable = objectField(structured, "retryable");
+  return code !== undefined && typeof retryable === "boolean" ? { code, retryable } : undefined;
+}
+
 // ---- Polling ------------------------------------------------------------------------------------------------------------
 
 export interface PollClock {
@@ -385,10 +437,15 @@ export function readLiveInputs(env: EnvironmentLike, cliPath: string): LiveInput
 // The image the wrong-digest scenario configures: a well-formed pin that no registry or local store holds.
 export const UNKNOWN_DIGEST_IMAGE = `localhost/realm-agentos@sha256:${"0".repeat(64)}`;
 
+const RESERVED_POLICY_KEYS: readonly string[] = ["workspaceRoots", "egressAllow"];
+
 export interface ScenarioSpec {
   readonly image: string;
   // Rendered into policy.json; omitted when empty, which leaves the deny-all default.
   readonly egressAllow?: readonly EgressRule[];
+  // Further policy keys merged into policy.json (startupBudgetMs, for one). workspaceRoots and egressAllow belong to the
+  // scenario itself and are rejected here, so an extra object can never override the pinned root or the egress rules.
+  readonly policyExtra?: Readonly<Record<string, unknown>>;
 }
 
 export interface ScenarioEnvironment {
@@ -403,6 +460,11 @@ export interface ScenarioEnvironment {
 // so the control socket path stays under the 107-byte limit. The policy pins the workspace root alone, so no scenario reads
 // another's configuration and none touches the operator's.
 export function createScenarioEnvironment(inputs: LiveInputs, spec: ScenarioSpec): ScenarioEnvironment {
+  for (const reserved of RESERVED_POLICY_KEYS) {
+    if (spec.policyExtra !== undefined && Object.hasOwn(spec.policyExtra, reserved)) {
+      throw new Error(`policyExtra must not set the reserved policy key ${reserved}`);
+    }
+  }
   const root = realpathSync(mkdtempSync(join(tmpdir(), "rlv-")));
   const configHome = join(root, "c");
   const stateDir = join(root, "s");
@@ -418,7 +480,7 @@ export function createScenarioEnvironment(inputs: LiveInputs, spec: ScenarioSpec
     { mode: 0o600 },
   );
   const egressAllow = spec.egressAllow ?? [];
-  const policy = { workspaceRoots: [inputs.workspaceRoot], ...(egressAllow.length > 0 ? { egressAllow } : {}) };
+  const policy = { workspaceRoots: [inputs.workspaceRoot], ...(egressAllow.length > 0 ? { egressAllow } : {}), ...spec.policyExtra };
   writeFileSync(join(stateDir, "policy.json"), `${JSON.stringify(policy)}\n`, { mode: 0o600 });
   return {
     root,
@@ -479,6 +541,24 @@ export function nodeConnectArgv(host: string, port: number, family: 4 | 6): read
 export function nodeResolveArgv(kind: "resolve4" | "resolve6" | "resolveTxt", name: string): readonly string[] {
   return ["node", "-e", RESOLVE_SCRIPT, kind, name];
 }
+
+// A fixed node script that SIGKILLs every process in the sandbox whose command line names agentos-runner.js (the AgentOS runner,
+// started as `node <runner path>`), found by scanning /proc, and prints "ok <count>" or "error NO_RUNNER". The runner and the exec
+// run as the same uid, so the signal is permitted; pkill is not relied on. The script's own process is skipped.
+const KILL_RUNNER_SCRIPT =
+  'const fs = require("node:fs");' +
+  "let killed = 0;" +
+  'for (const entry of fs.readdirSync("/proc")) {' +
+  "  if (!/^[0-9]+$/.test(entry) || Number(entry) === process.pid) continue;" +
+  "  let cmdline;" +
+  '  try { cmdline = fs.readFileSync("/proc/" + entry + "/cmdline", "utf8"); }' +
+  '  catch (error) { if (error.code === "ENOENT" || error.code === "ESRCH" || error.code === "EACCES") continue; throw error; }' +
+  '  if (cmdline.split("\\0").some((arg) => arg.endsWith("agentos-runner.js"))) { process.kill(Number(entry), "SIGKILL"); killed += 1; }' +
+  "}" +
+  'console.log(killed > 0 ? "ok " + killed : "error NO_RUNNER");';
+
+// The workload argv that kills the AgentOS runner inside the sandbox.
+export const KILL_RUNNER_ARGV: readonly string[] = ["node", "-e", KILL_RUNNER_SCRIPT];
 
 // ---- Residue ------------------------------------------------------------------------------------------------------------
 
@@ -549,14 +629,14 @@ export async function residueProblems(inputs: LiveInputs): Promise<readonly stri
 export const RESIDUE_TIMEOUT_MS = 90_000;
 const RESIDUE_INTERVAL_MS = 2_000;
 
-// Polls until residueProblems is empty, bounded at RESIDUE_TIMEOUT_MS.
-export function waitForNoResidue(inputs: LiveInputs): Promise<PollOutcome> {
+// Polls until residueProblems is empty, bounded at timeoutMs (RESIDUE_TIMEOUT_MS unless the caller needs longer).
+export function waitForNoResidue(inputs: LiveInputs, timeoutMs: number = RESIDUE_TIMEOUT_MS): Promise<PollOutcome> {
   return pollUntil(
     async () => {
       const problems = await residueProblems(inputs);
       return problems.length === 0 ? { done: true } : { done: false, detail: problems.join("; ") };
     },
-    { timeoutMs: RESIDUE_TIMEOUT_MS, intervalMs: RESIDUE_INTERVAL_MS },
+    { timeoutMs, intervalMs: RESIDUE_INTERVAL_MS },
   );
 }
 
