@@ -148,6 +148,10 @@ export interface RuntimeHost {
 
 export interface ComputeDriverDeps {
   readonly lifecycle: Pick<DriverLifecycle, "create" | "delete" | "stop">;
+  // The check a create runs before it touches the disk. The driver process passes the lifecycle's requireSwept, so a create that
+  // arrives while the startup sweep runs is refused before it writes a state directory or launch material the sweep would then
+  // race. Omitted by a caller whose lifecycle needs no sweep.
+  readonly requireSwept?: () => void;
   readonly libpod: Pick<LibpodClient, "inspectContainer" | "listContainersByLabel">;
   readonly runtime: RuntimeHost;
 }
@@ -353,6 +357,7 @@ export class ComputeDriver {
   // failure removes what this call made: the container, the state directory, the secret entries, and the supervisor, and the
   // original error is rethrown.
   async createSandbox(sandbox: DriverSandboxMessage | null | undefined): Promise<{ runtime_identity: string }> {
+    this.deps.requireSwept?.();
     const scope = this.scopeOf("CreateSandbox");
     const plan = planCreate(sandbox, this.config, scope);
     const { launch, authentication } = plan;

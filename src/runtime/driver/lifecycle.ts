@@ -1,7 +1,7 @@
 // Hardened container lifecycle of the driver (phase 9.3, PRD-CTR-01..03). create builds the container from a
 // typed spec, runs the caller's before-start step, starts it, and proves it conforms before it is returned. delete removes a
 // sandbox's own containers, its own state directory, and its secret entries. startupSweep removes every realm-labelled container,
-// and every sandbox's secret entries, before any request is accepted.
+// and every sandbox's secret entries, before the driver serves a request that acts on a container or a secret.
 //
 // Everything here goes through the closed libpod client (PD-11). The verifier is the same one session-execution
 // uses (PD-13): verifyInspect over HARDENING_PROFILE, with the host evidence (the OCI config's fields and the init process's
@@ -126,7 +126,7 @@ export class DriverLifecycle {
   }
 
   // Removes every realm-owned container and every sandbox's secret entries, and resolves with how many containers it removed.
-  // create and delete refuse with REALM_NOT_ACTIVE until this has resolved, so no request is accepted ahead of the sweep (PRD-CTR-03).
+  // create, delete and stop refuse with REALM_NOT_ACTIVE until this has resolved, so no request acts on a container or a secret ahead of the sweep (PRD-CTR-03).
   // A symbolic link under the secret root refuses the sweep, so the driver does not start on it.
   async startupSweep(): Promise<number> {
     this.swept = false;
@@ -330,7 +330,9 @@ export class DriverLifecycle {
     }
   }
 
-  private requireSwept(): void {
+  // Refuses with REALM_NOT_ACTIVE until startupSweep has resolved. create, delete and stop call it first; the compute driver calls it
+  // before a create writes anything to disk, so no request touches the state or secret roots ahead of the sweep.
+  requireSwept(): void {
     if (!this.swept) {
       throw makeRealmError("REALM_NOT_ACTIVE");
     }

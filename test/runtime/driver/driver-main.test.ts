@@ -1,7 +1,9 @@
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createServer as createHttpServer } from "node:http";
+import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,7 +17,11 @@ import {
   type DriverProcessConfig,
 } from "../../../src/runtime/driver/main.js";
 import { GATEWAY_ID } from "../isolation/supervisor-token.js";
-import { GATEWAY_ENDPOINT, IMPLEMENTATION_VERSION, SANDBOX_IMAGE, driverConfig } from "./fakes.js";
+import { ComputeDriver } from "../../../src/runtime/driver/compute-driver.js";
+import { DriverLifecycle } from "../../../src/runtime/driver/lifecycle.js";
+import { LibpodClient } from "../../../src/runtime/libpod-client.js";
+import { LIBPOD_API_VERSION_HEADER, matchLibpodRoute, PING_PATH } from "../../../src/runtime/libpod-routes.js";
+import { FakeLibpod, FakeRuntime, GATEWAY_ENDPOINT, IMPLEMENTATION_VERSION, SANDBOX_IMAGE, driverConfig, realmLabels, validSandbox } from "./fakes.js";
 
 interface Fixtures {
   readonly ca: string;
@@ -275,4 +281,185 @@ function startConfigWithGatewayId(gatewayId: string): DriverProcessConfig {
 
 void test("PRD-ISO-02: startup refuses an invalid gateway id with SCHEMA_INVALID before the sweep", async () => {
   await assert.rejects(startDriver(startConfigWithGatewayId("-invalid")), refusedWithSchemaInvalid());
+});
+
+// An in-process libpod engine on a unix socket. It lists the containers it holds under the realm labels, removes one on request
+// (unless it is told to refuse), and records each libpod route a client asked for, so a test can show which calls a start made.
+interface FakeEngine {
+  readonly socketPath: string;
+  readonly routes: string[];
+  // Container id to container name.
+  readonly containers: Map<string, string>;
+}
+
+async function startFakeEngine(t: TestContext, options: { readonly refuseRemoval?: boolean } = {}): Promise<FakeEngine> {
+  const dir = mkdtempSync(join(tmpdir(), "realm-engine-"));
+  const engine: FakeEngine = { socketPath: join(dir, "podman.sock"), routes: [], containers: new Map() };
+  const server = createHttpServer((req, res) => {
+    const url = new URL(req.url ?? "/", "http://engine.invalid");
+    if (url.pathname === PING_PATH) {
+      res.writeHead(200, { [LIBPOD_API_VERSION_HEADER]: "5.7.1" });
+      res.end();
+      return;
+    }
+    const matched = matchLibpodRoute(req.method ?? "", url.pathname);
+    engine.routes.push(matched?.name ?? "unmatched");
+    if (matched?.name === "listContainers") {
+      const listed = [...engine.containers].map(([id, name]) => ({
+        Id: id,
+        Names: [`/${name}`],
+        Labels: realmLabels(name),
+        State: "running",
+      }));
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(listed));
+      return;
+    }
+    if (matched?.name === "removeContainer" && matched.containerId !== null && options.refuseRemoval !== true) {
+      engine.containers.delete(matched.containerId);
+      res.writeHead(200);
+      res.end();
+      return;
+    }
+    res.writeHead(500, { "content-type": "application/json" });
+    res.end(JSON.stringify({ message: "route not served by this fake" }));
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(engine.socketPath, () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+  t.after(async () => {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => {
+      server.close(() => {
+        resolve();
+      });
+    });
+    rmSync(dir, { recursive: true, force: true });
+  });
+  return engine;
+}
+
+// A process configuration over the fake engine, with its own socket directory and roots, removed when the test ends.
+function startConfigOver(t: TestContext, engine: FakeEngine): DriverProcessConfig {
+  const base = mkdtempSync(join(tmpdir(), "realm-driver-start-"));
+  t.after(() => {
+    rmSync(base, { recursive: true, force: true });
+  });
+  mkdirSync(join(base, "run"));
+  return {
+    socketPath: join(base, "run", "driver.sock"),
+    libpodSocketPath: engine.socketPath,
+    driver: driverConfig(),
+  };
+}
+
+// Leaves a sandbox's launch material under the secret root, as a previous generation would, and returns its path.
+function leaveSecret(config: DriverProcessConfig): string {
+  const dir = join(config.driver.secretRoot, "realm-leftover");
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  chmodSync(config.driver.secretRoot, 0o700);
+  chmodSync(dir, 0o700);
+  const file = join(dir, "launch.json");
+  writeFileSync(file, "{}", { mode: 0o600 });
+  return file;
+}
+
+function listening(socketPath: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const probe = connect(socketPath);
+    probe.once("connect", () => {
+      probe.destroy();
+      resolve(true);
+    });
+    probe.once("error", () => {
+      probe.destroy();
+      resolve(false);
+    });
+  });
+}
+
+function refusedWith(code: string): (error: unknown) => boolean {
+  return (error: unknown) => error instanceof RealmError && error.code === code;
+}
+
+void test("PRD-CTR-03: a start removes the previous generation's containers and secret entries, then serves", async (t) => {
+  const engine = await startFakeEngine(t);
+  engine.containers.set("0123456789ab", "realm-leftover");
+  const config = startConfigOver(t, engine);
+  const secret = leaveSecret(config);
+  assert.equal(existsSync(secret), true);
+  const server = await startDriver(config);
+  t.after(async () => {
+    await server.close();
+  });
+  assert.equal(engine.containers.size, 0, "the leftover container was removed");
+  assert.equal(existsSync(secret), false, "the leftover secret entry was removed");
+  assert.equal(await listening(config.socketPath), true, "the driver serves once the sweep has finished");
+});
+
+void test("PRD-CTR-03: a second start against a live driver's socket refuses with LOCK_CONFLICT and removes nothing", async (t) => {
+  const engine = await startFakeEngine(t);
+  const config = startConfigOver(t, engine);
+  const live = await startDriver(config);
+  t.after(async () => {
+    await live.close();
+  });
+  // The live driver now owns containers and secrets the second start must not touch.
+  engine.containers.set("0123456789ab", "realm-live");
+  const secret = leaveSecret(config);
+  const callsBefore = engine.routes.length;
+
+  await assert.rejects(startDriver(config), refusedWith("LOCK_CONFLICT"));
+
+  assert.deepEqual(engine.routes.slice(callsBefore), [], "the refused start made no libpod call");
+  assert.equal(engine.containers.has("0123456789ab"), true, "the live driver's container was not removed");
+  assert.equal(existsSync(secret), true, "the live driver's secret entry was not removed");
+  assert.equal(await listening(config.socketPath), true, "the live driver still serves");
+});
+
+void test("PRD-CTR-03: a sweep that fails closes the server, so no socket stays bound", async (t) => {
+  const engine = await startFakeEngine(t, { refuseRemoval: true });
+  engine.containers.set("0123456789ab", "realm-leftover");
+  const config = startConfigOver(t, engine);
+  await assert.rejects(startDriver(config), refusedWith("REALM_STOPPING"));
+  assert.equal(existsSync(config.socketPath), false, "the failed start left no socket");
+  assert.equal(await listening(config.socketPath), false);
+});
+
+void test("PRD-CTR-03: a create that arrives before the sweep has resolved is refused before it writes anything", async (t) => {
+  const engine = await startFakeEngine(t);
+  const config = driverConfig();
+  t.after(() => {
+    rmSync(join(config.sandboxStateRoot, ".."), { recursive: true, force: true });
+  });
+  const lifecycle = new DriverLifecycle({
+    libpod: new LibpodClient(engine.socketPath),
+    sandboxStateRoot: config.sandboxStateRoot,
+    secretRoot: config.secretRoot,
+  });
+  const libpod = new FakeLibpod();
+  const driver = new ComputeDriver(config, {
+    lifecycle,
+    requireSwept: () => {
+      lifecycle.requireSwept();
+    },
+    libpod,
+    runtime: new FakeRuntime(),
+  });
+
+  await assert.rejects(driver.createSandbox(validSandbox()), refusedWith("REALM_NOT_ACTIVE"));
+
+  assert.equal(libpod.listCalls + libpod.inspectCalls, 0, "the refused create made no libpod call");
+  assert.deepEqual(engine.routes, []);
+  assert.equal(existsSync(join(config.sandboxStateRoot, "realm-session-1")), false, "no state directory was made");
+  assert.equal(existsSync(join(config.secretRoot, "realm-session-1")), false, "no launch material was written");
+
+  await lifecycle.startupSweep();
+  assert.doesNotThrow(() => {
+    lifecycle.requireSwept();
+  });
 });
