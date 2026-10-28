@@ -1,10 +1,10 @@
-# sandbox/Dockerfile: builds the realm-helper native enforcement binary (phase 9.2)
-# and the OpenShell sandbox runtime that the driver starts (phase 9.5).
+# sandbox/Dockerfile: builds the OpenShell sandbox runtime that the driver starts
+# (phase 9.5).
 #
 # Build context: the repository root. All bases are pinned by digest and were
-# verified on the build host. The helper is built from the repository. The runtime
-# is built from the upstream OpenShell source at the commit named by OPENSHELL_REVISION.
-# The runtime image carries only glibc, Node, the helper, the runtime binary, and the
+# verified on the build host. The runtime is built from the upstream OpenShell source
+# at the commit named by OPENSHELL_REVISION.
+# The runtime image carries only glibc, Node, the runtime binary, and the
 # AgentOS runner and probe, and it has no network at run time. The runner and probe are
 # copied from dist/src/runtime/, and the resolver file from sandbox/resolv.conf, so run
 # `npm run build` at the repository root before the image build.
@@ -13,63 +13,32 @@
 # Debian bookworm archive with apt, fetches the OpenShell source from
 # https://github.com/NVIDIA/OpenShell at one commit, and downloads the crates named by
 # that source's Cargo.lock from crates.io. The runtime stage's npm ci downloads npm
-# packages as before. No stage copies host files or secrets: the builder stages take
-# only sandbox/realm-helper and the fetched source.
+# packages as before. No stage copies host files or secrets: the builder stage takes
+# only the fetched source.
 #
 # Stages:
-#   builder           gcc 13.3.0 on bookworm. Verifies the source digest, then runs
-#                     make clean all check probe. Every gate runs here, so the image
-#                     build fails when a gate fails.
 #   runtime-builder   Rust 1.95.0 on bookworm. Fetches OpenShell at OPENSHELL_REVISION and
 #                     fails unless HEAD is that commit. Builds openshell-sandbox with
 #                     --locked --release. Fails unless its glibc needs are at most
 #                     GLIBC_2.36 and its shared libraries are the glibc set, libgcc_s.so.1,
 #                     and ld-linux-x86-64.so.2.
-#   runtime           Node on bookworm slim, with the helper at /opt/realm/bin/realm-helper,
-#                     the runtime at /usr/local/lib/realm/openshell-sandbox, and the AgentOS
+#   runtime           Node on bookworm slim, with the runtime at
+#                     /usr/local/lib/realm/openshell-sandbox, and the AgentOS
 #                     runner and probe with the library under /usr/local/lib/realm.
 #                     Runs as the unprivileged sandbox user (uid and gid 1001).
 #
-# Build arguments that must be supplied:
-#   SOURCE_SHA256, HELPER_SHA256   realm-helper digests (see the builder and runtime stages).
-#   RUNTIME_SHA256                 sha256 of the openshell-sandbox binary. The runtime-builder
-#                                  stage prints it in the build log. Build that stage once
-#                                  with --target runtime-builder to read it, then pass it.
+# Build arguments:
+#   RUNTIME_SHA256                 required. sha256 of the openshell-sandbox binary. The
+#                                  runtime-builder stage prints it in the build log. Build
+#                                  that stage once with --target runtime-builder to read it,
+#                                  then pass it.
 #   OPENSHELL_REVISION             optional. Defaults to the pinned commit. It must be a full
 #                                  40-character commit id; every stage takes the same value.
 
-ARG GCC_BASE=docker.io/library/gcc@sha256:1d71f0f3450214bef38fe09e6f610fb6cca90cf97b43f4ce845bfc32a4168818
 ARG RUST_BASE=docker.io/library/rust@sha256:6258907abe69656e41cd992e0b705cdcfabcbbe3db374f92ed2d47121282d4a1
 ARG NODE_BASE=docker.io/library/node@sha256:2dd9a4f758e173b65fee15388f7706af6fb01ef50cf7a2c0538711d67a6981ae
 # Pinned upstream commit: tag v0.1.5 (bdb956f2cd65a635f1294fccf1d138d263bf650f).
 ARG OPENSHELL_REVISION=bdb956f2cd65a635f1294fccf1d138d263bf650f
-
-FROM ${GCC_BASE} AS builder
-ARG SOURCE_SHA256
-COPY sandbox/realm-helper /src/realm-helper
-# Source digest rule. Inputs: every regular file under sandbox/realm-helper except
-# the top-level build/ directory. Each path is printed by find as ./<path>, sorted
-# under LC_ALL=C, and sha256sum writes one line per file into the manifest. The
-# digest is sha256 of that manifest. SOURCE_SHA256 must equal it, or the build fails.
-RUN set -eu; \
-    if [ -z "${SOURCE_SHA256}" ]; then \
-        echo "realm-helper: SOURCE_SHA256 build arg is required" >&2; \
-        exit 1; \
-    fi; \
-    export LC_ALL=C; \
-    cd /src/realm-helper; \
-    find . -path ./build -prune -o -type f -print | sort > /tmp/source-files.lst; \
-    : > /tmp/source-manifest; \
-    while IFS= read -r f; do \
-        sha256sum "$f" >> /tmp/source-manifest; \
-    done < /tmp/source-files.lst; \
-    actual="$(sha256sum /tmp/source-manifest | cut -d' ' -f1)"; \
-    if [ "$actual" != "${SOURCE_SHA256}" ]; then \
-        echo "realm-helper: source digest mismatch: got $actual" >&2; \
-        exit 1; \
-    fi; \
-    rm -f /tmp/source-files.lst /tmp/source-manifest
-RUN make -C /src/realm-helper clean all check probe
 
 # runtime-builder: the OpenShell sandbox runtime (package openshell-sandbox, from
 # workspace crate crates/openshell-sandbox).
@@ -165,13 +134,9 @@ RUN set -eu; \
     rm -f /tmp/runtime-needed.txt
 
 FROM ${NODE_BASE} AS runtime
-ARG HELPER_SHA256
-ARG SOURCE_SHA256
 ARG RUNTIME_SHA256
 ARG OPENSHELL_REVISION
-LABEL io.realm.helper.sha256="${HELPER_SHA256}" \
-      io.realm.helper.source-sha256="${SOURCE_SHA256}" \
-      io.realm.runtime.sha256="${RUNTIME_SHA256}" \
+LABEL io.realm.runtime.sha256="${RUNTIME_SHA256}" \
       io.realm.runtime.revision="${OPENSHELL_REVISION}"
 # Unprivileged user for the workload. Its home is /workspace, which is the
 # writable root. It has no login shell.
@@ -180,20 +145,7 @@ RUN set -eu; \
     useradd --uid 1001 --gid 1001 --home-dir /workspace --no-create-home \
             --shell /usr/sbin/nologin sandbox; \
     install -d -o 1001 -g 1001 -m 0755 /workspace; \
-    install -d -o root -g root -m 0755 /opt/realm/bin /usr/local/lib/realm
-COPY --from=builder /src/realm-helper/build/realm-helper /opt/realm/bin/realm-helper
-# Fail closed: both digests must be supplied, and the binary must match HELPER_SHA256.
-RUN set -eu; \
-    if [ -z "${HELPER_SHA256}" ]; then \
-        echo "realm-helper: HELPER_SHA256 build arg is required" >&2; \
-        exit 1; \
-    fi; \
-    if [ -z "${SOURCE_SHA256}" ]; then \
-        echo "realm-helper: SOURCE_SHA256 build arg is required" >&2; \
-        exit 1; \
-    fi; \
-    chmod 0755 /opt/realm/bin/realm-helper; \
-    printf '%s  %s\n' "${HELPER_SHA256}" /opt/realm/bin/realm-helper | sha256sum -c -
+    install -d -o root -g root -m 0755 /usr/local/lib/realm
 # The runtime is root-owned and executable by the sandbox user. The label
 # io.realm.runtime.sha256 names the digest the runtime-builder stage printed.
 COPY --from=runtime-builder --chown=0:0 --chmod=0555 \

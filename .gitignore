@@ -26,4 +26,3 @@ coverage/
 /site/content/adapters/
 /site/.sync-manifest.json
 *.tgz
-sandbox/realm-helper/build/

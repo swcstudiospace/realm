@@ -330,7 +330,7 @@ void test("a channel binding refuses a container without the CA tmpfs (RT-01)", 
 
 void test("PID 1 of a sandbox container is the runtime with its exact argv: any other program or argument list is refused (phase 9.5, wave 3)", () => {
   const cases: readonly (readonly [string, (inspect: Inspect) => void])[] = [
-    ["another program", (inspect) => { inspect.Path = "/opt/realm/bin/realm-helper"; }],
+    ["another program", (inspect) => { inspect.Path = "/opt/other/bin/program"; }],
     ["another argument list", (inspect) => { inspect.Args = ["idle"]; }],
     ["an extra argument", (inspect) => { inspect.Args = [...RUNTIME_ARGV.slice(1), "--extra"]; }],
     ["the arguments reordered", (inspect) => { inspect.Args = [...RUNTIME_ARGV.slice(1)].reverse(); }],

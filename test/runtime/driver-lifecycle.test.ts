@@ -689,7 +689,7 @@ void test("PRD-CTR-01: a conforming container is returned by id, kept, and poste
 void test("PRD-CTR-02: PID 1 that is not the sandbox runtime with its exact argv is refused, and the container is force-removed (phase 9.5, wave 3)", async (t) => {
   const h = await harness(t, {
     mutate: (body) => {
-      body.Path = "/opt/realm/bin/realm-helper";
+      body.Path = "/opt/other/bin/program";
       body.Args = ["idle"];
     },
   });
