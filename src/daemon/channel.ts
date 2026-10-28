@@ -25,7 +25,7 @@ export const SOCKET_TIMEOUT_MS = 5000;
 
 // Bound for one control request, per method. down must outlast the controller teardown bound
 // (TEARDOWN_TIMEOUT_MS in lifecycle/controller.ts, 30 s), or the CLI gives up while the daemon is
-// still tearing down. up covers the policy startup budget. doctor runs up to nine probes, each
+// still tearing down. up covers the policy startup budget. doctor runs up to eleven items, each probe
 // bounded at 5 s, so it gets 60 s. tool runs one dispatcher call under its own bound, so it gets
 // that bound plus 10 s for the reply.
 // The dispatcher's per-call bound (TOOL_CALL_TIMEOUT_MS in src/tools/dispatch.ts). It is mirrored,

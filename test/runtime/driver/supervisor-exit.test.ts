@@ -2,8 +2,12 @@
 // that exits while the sandbox runs stops the container and reports the sandbox failed. An exit the driver caused is not a failure.
 // A real child process reports its own exit. No test reads source text.
 
-import { test } from "node:test";
+import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { appendFileSync, chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { makeRealmError, RealmError, type ErrorCode } from "../../../src/core/errors.js";
 import { ComputeDriver } from "../../../src/runtime/driver/compute-driver.js";
 import { spawnSupervisor } from "../../../src/runtime/driver/supervisor.js";
@@ -123,4 +127,47 @@ void test("a real supervisor process that is running is not reported exited unti
   await handle.stop();
   await handle.exited;
   assert.equal(handle.hasExited(), true);
+});
+
+// An executable script that exits 0, in a directory removed when the test ends, and its digest.
+function pinnedScript(t: TestContext): { readonly path: string; readonly sha256: string } {
+  const dir = mkdtempSync(join(tmpdir(), "realm-supervisor-pin-"));
+  t.after(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const path = join(dir, "supervisor.sh");
+  const contents = "#!/bin/sh\nexit 0\n";
+  writeFileSync(path, contents);
+  chmodSync(path, 0o755);
+  return { path, sha256: createHash("sha256").update(contents).digest("hex") };
+}
+
+void test("a supervisor whose file matches the expected digest is spawned", async (t) => {
+  const script = pinnedScript(t);
+  const handle = await spawnSupervisor({ binary: script.path, args: [], env: {}, expectedSha256: script.sha256 });
+  await handle.exited;
+  assert.equal(handle.hasExited(), true);
+});
+
+void test("a supervisor file changed after the digest was recorded is refused at spawn with SCHEMA_INVALID, naming neither digest nor path", async (t) => {
+  const script = pinnedScript(t);
+  appendFileSync(script.path, "# changed after the config load\n");
+  await assert.rejects(
+    spawnSupervisor({ binary: script.path, args: [], env: {}, expectedSha256: script.sha256 }),
+    (error: unknown) =>
+      error instanceof RealmError &&
+      error.code === "SCHEMA_INVALID" &&
+      !error.message.includes(script.sha256) &&
+      !error.reason.includes(script.sha256) &&
+      !error.message.includes(script.path) &&
+      !error.reason.includes(script.path),
+  );
+});
+
+void test("a supervisor file that cannot be read for its digest is refused at spawn with SCHEMA_INVALID", async (t) => {
+  const script = pinnedScript(t);
+  await assert.rejects(
+    spawnSupervisor({ binary: join(tmpdir(), "realm-no-such-supervisor"), args: [], env: {}, expectedSha256: script.sha256 }),
+    codeIs("SCHEMA_INVALID"),
+  );
 });

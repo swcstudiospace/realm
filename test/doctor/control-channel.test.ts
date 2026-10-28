@@ -1,4 +1,4 @@
-import { test, type TestContext } from "node:test";
+import { after, test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -13,8 +13,13 @@ import {
 } from "../../src/doctor/checks.js";
 import { controlSocketPath } from "../../src/session/paths.js";
 
-// Every seam is injected, so no process runs and no socket opens in these tests (CLI-03).
+// Every seam is injected, so no process runs and no socket opens in these tests (CLI-03). PATH names an empty directory, so no host
+// binary is found, hashed or run.
 // The run directory itself is real filesystem state, created per test at the needed mode.
+const EMPTY_PATH_DIR = realpathSync(mkdtempSync(join(tmpdir(), "realm-control-empty-path-")));
+after(() => {
+  rmSync(EMPTY_PATH_DIR, { recursive: true, force: true });
+});
 
 const EXPECTED_IDS: readonly CheckId[] = [
   "policy-file",
@@ -26,6 +31,8 @@ const EXPECTED_IDS: readonly CheckId[] = [
   "anda-bridge",
   "control-channel",
   "agentos",
+  "host-binaries",
+  "kernel-hardening",
 ];
 
 interface Layout {
@@ -70,7 +77,7 @@ function silentBase(policyPath: string, stateDir: string): DoctorOptions {
   return {
     policyPath,
     stateDir,
-    env: { PATH: "/usr/bin:/bin", HOME: "/home/realm", XDG_RUNTIME_DIR: "/run/user/1000" },
+    env: { PATH: EMPTY_PATH_DIR, HOME: "/home/realm", XDG_RUNTIME_DIR: "/run/user/1000" },
     runCommand: () => Promise.reject(Object.assign(new Error("spawn ENOENT"), { code: "ENOENT" })),
     fetchInformation: () => Promise.reject(new Error("no engine is listening")),
   };
@@ -91,7 +98,7 @@ function enoent(message: string): Error {
   return Object.assign(new Error(message), { code: "ENOENT" });
 }
 
-void test("CLI-03: the full report lists all eight items in order with control-channel and agentos appended (CLI-03)", async (t) => {
+void test("CLI-03: the full report lists all eleven items in order, with control-channel, agentos, host-binaries and kernel-hardening appended (CLI-03)", async (t) => {
   const { policyPath, stateDir } = layout(t);
   makeRunDir(stateDir);
   const seen: SeenDials = { dials: [], timeouts: [] };

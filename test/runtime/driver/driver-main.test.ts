@@ -1,5 +1,6 @@
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,6 +10,7 @@ import {
   DRIVER_ENV,
   loadDriverProcessConfig,
   readPackageVersion,
+  runtimeHostOf,
   startDriver,
   type DriverProcessConfig,
 } from "../../../src/runtime/driver/main.js";
@@ -84,12 +86,70 @@ void test("PD-05: a complete environment yields the sockets, the libpod socket, 
   });
 });
 
-for (const key of Object.values(DRIVER_ENV)) {
+const OPTIONAL_KEYS: readonly string[] = [DRIVER_ENV.supervisorSha256];
+// The digest of the supervisor fixture's contents (fixturesFor).
+const SUPERVISOR_SHA256 = createHash("sha256").update("fixture supervisor\n").digest("hex");
+
+for (const key of Object.values(DRIVER_ENV).filter((candidate) => !OPTIONAL_KEYS.includes(candidate))) {
   void test(`PD-05: a missing ${key} refuses with SCHEMA_INVALID`, (t) => {
     const env = { ...completeEnv(fixturesFor(t)), [key]: undefined };
     assert.throws(() => loadDriverProcessConfig(env, IMPLEMENTATION_VERSION), refusedWithSchemaInvalid());
   });
 }
+
+void test("a supervisor digest pin that matches the file is accepted and carried on the process config", (t) => {
+  const env = { ...completeEnv(fixturesFor(t)), [DRIVER_ENV.supervisorSha256]: SUPERVISOR_SHA256 };
+  assert.equal(loadDriverProcessConfig(env, IMPLEMENTATION_VERSION).supervisorSha256, SUPERVISOR_SHA256);
+});
+
+void test("an unset supervisor digest pin loads as before and carries no pin", (t) => {
+  const config = loadDriverProcessConfig(completeEnv(fixturesFor(t)), IMPLEMENTATION_VERSION);
+  assert.equal(config.supervisorSha256, undefined);
+  assert.equal("supervisorSha256" in config, false);
+});
+
+// The driver's runtime host is what startDriver hands the compute driver, so a spawn through it carries the process config's pin.
+// A create cannot be driven through startDriver itself here: it needs a live libpod socket and a TLS listener in the sandbox.
+void test("a supervisor file changed after the config was loaded is refused at spawn with SCHEMA_INVALID, naming neither digest nor path", async (t) => {
+  const fixtures = fixturesFor(t);
+  const env = { ...completeEnv(fixtures), [DRIVER_ENV.supervisorSha256]: SUPERVISOR_SHA256 };
+  const config = loadDriverProcessConfig(env, IMPLEMENTATION_VERSION);
+  writeFileSync(fixtures.supervisor, "#!/bin/sh\nexit 0\n");
+  await assert.rejects(runtimeHostOf(config).spawnSupervisor({ binary: fixtures.supervisor, args: [], env: {} }), (error: unknown) => {
+    return (
+      refusedWithoutValue(SUPERVISOR_SHA256)(error) &&
+      refusedWithoutValue(fixtures.supervisor)(error) &&
+      error instanceof RealmError &&
+      !error.reason.includes(fixtures.supervisor)
+    );
+  });
+});
+
+void test("a config with no digest pin spawns the supervisor file as it is", async (t) => {
+  const fixtures = fixturesFor(t);
+  const config = loadDriverProcessConfig(completeEnv(fixtures), IMPLEMENTATION_VERSION);
+  writeFileSync(fixtures.supervisor, "#!/bin/sh\nexit 0\n");
+  const handle = await runtimeHostOf(config).spawnSupervisor({ binary: fixtures.supervisor, args: [], env: {} });
+  await handle.exited;
+  assert.equal(handle.hasExited(), true);
+});
+
+void test("a supervisor digest pin that does not match the file refuses with SCHEMA_INVALID and echoes neither digest nor path", (t) => {
+  const fixtures = fixturesFor(t);
+  const wrong = "0".repeat(64);
+  const env = { ...completeEnv(fixtures), [DRIVER_ENV.supervisorSha256]: wrong };
+  assert.throws(() => loadDriverProcessConfig(env, IMPLEMENTATION_VERSION), refusedWithoutValue(wrong));
+  assert.throws(() => loadDriverProcessConfig(env, IMPLEMENTATION_VERSION), refusedWithoutValue(SUPERVISOR_SHA256));
+  assert.throws(() => loadDriverProcessConfig(env, IMPLEMENTATION_VERSION), refusedWithoutValue(fixtures.supervisor));
+});
+
+void test("a malformed supervisor digest pin refuses with SCHEMA_INVALID, empty and upper-case included", (t) => {
+  const fixtures = fixturesFor(t);
+  for (const malformed of ["", "abc123", SUPERVISOR_SHA256.toUpperCase(), `${SUPERVISOR_SHA256}0`, `sha256:${SUPERVISOR_SHA256}`]) {
+    const env = { ...completeEnv(fixtures), [DRIVER_ENV.supervisorSha256]: malformed };
+    assert.throws(() => loadDriverProcessConfig(env, IMPLEMENTATION_VERSION), refusedWithSchemaInvalid());
+  }
+});
 
 void test("PD-05: a missing XDG_RUNTIME_DIR refuses, because the libpod socket cannot be found", (t) => {
   const env = { ...completeEnv(fixturesFor(t)), XDG_RUNTIME_DIR: undefined };

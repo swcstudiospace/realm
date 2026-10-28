@@ -1,4 +1,4 @@
-import { test, type TestContext } from "node:test";
+import { after, test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -16,9 +16,14 @@ import {
 import type { CommandOutcome, ConnectSocket, RunCommand } from "../../src/runtime/podman-probe.js";
 
 // Every seam is injected, so no process runs and no socket opens in these tests (RT-02, ANDA-02), except
-// the trickle test in the ANDA-02 group, which dials a loopback server through the default Anda transport.
+// the trickle test in the ANDA-02 group, which dials a loopback server through the default Anda transport. PATH names an empty
+// directory, so the host-binaries item finds, hashes and runs no real binary.
+const EMPTY_PATH_DIR = realpathSync(mkdtempSync(join(tmpdir(), "realm-runtime-empty-path-")));
+after(() => {
+  rmSync(EMPTY_PATH_DIR, { recursive: true, force: true });
+});
 const HOST_ENV: Readonly<Record<string, string>> = {
-  PATH: "/usr/bin:/bin",
+  PATH: EMPTY_PATH_DIR,
   HOME: "/home/realm",
   XDG_RUNTIME_DIR: "/run/user/1000",
 };
@@ -65,6 +70,8 @@ interface HostPlan {
   readonly probeTimeoutMs?: number;
   // defaultTransport leaves fetchInformation unset, so the real Anda transport runs against andaUrl.
   readonly defaultTransport?: boolean;
+  // The Yama ptrace scope reader. Absent leaves the real /proc reader in place.
+  readonly readPtraceScope?: () => string;
 }
 
 interface Host {
@@ -104,6 +111,7 @@ function fakeHost(plan: HostPlan): Host {
     ...(plan.defaultTransport === true ? {} : { fetchInformation }),
     ...(plan.andaUrl === undefined ? {} : { andaUrl: plan.andaUrl }),
     ...(plan.probeTimeoutMs === undefined ? {} : { probeTimeoutMs: plan.probeTimeoutMs }),
+    ...(plan.readPtraceScope === undefined ? {} : { readPtraceScope: plan.readPtraceScope }),
   };
   return { seams, commandCalls, dials, engineCalls };
 }
@@ -193,7 +201,7 @@ void test("RT-02: podman-service fails with PODMAN_MACHINE_DOWN and the systemct
 void test("RT-02: podman-service fails with PODMAN_MACHINE_DOWN and dials nothing when XDG_RUNTIME_DIR is unset (RT-02)", async (t) => {
   const host = fakeHost({
     commands: { [PODMAN_VERSION]: PODMAN_5 },
-    env: { PATH: "/usr/bin:/bin", HOME: "/home/realm" },
+    env: { PATH: EMPTY_PATH_DIR, HOME: "/home/realm" },
   });
   const result = resultOf(await runtimeChecks(t, host), "podman-service");
   assert.equal(result.status, "fail");
@@ -373,6 +381,8 @@ void test("RT-02 and ANDA-02: the four runtime items follow the three Phase 2 it
       "anda-bridge",
       "control-channel",
       "agentos",
+      "host-binaries",
+      "kernel-hardening",
     ],
   );
 });
@@ -386,5 +396,33 @@ void test("RT-02 and ANDA-02: a fail or warn always carries a fix, and a pass ne
     } else {
       assert.notEqual(result.fix, null, `${id} must carry a fix when it is not a pass`);
     }
+  }
+});
+
+void test("kernel-hardening: a ptrace scope of 0 warns that same-uid ptrace is unrestricted, with the sysctl fix", async (t) => {
+  const result = resultOf(await runtimeChecks(t, fakeHost({ readPtraceScope: () => "0\n" })), "kernel-hardening");
+  assert.equal(result.status, "warn");
+  assert.match(result.detail, /same-uid ptrace is unrestricted/);
+  assert.match(fixOf(result), /kernel\.yama\.ptrace_scope to 1 or higher/);
+});
+
+void test("kernel-hardening: a ptrace scope of 1 or more passes with no fix", async (t) => {
+  for (const scope of ["1\n", "2", "3\n"]) {
+    const result = resultOf(await runtimeChecks(t, fakeHost({ readPtraceScope: () => scope })), "kernel-hardening");
+    assert.equal(result.status, "pass", `scope ${scope.trim()} passes`);
+    assert.equal(result.fix, null);
+  }
+});
+
+void test("kernel-hardening: an unreadable or unparseable scope warns with unknown, and never fails", async (t) => {
+  const unreadable = (): string => {
+    throw Object.assign(new Error("ENOENT: no such file or directory, open the private path"), { code: "ENOENT" });
+  };
+  for (const reader of [unreadable, () => "", () => "restricted\n", () => "-1"]) {
+    const result = resultOf(await runtimeChecks(t, fakeHost({ readPtraceScope: reader })), "kernel-hardening");
+    assert.equal(result.status, "warn");
+    assert.match(result.detail, /unknown/);
+    assert.doesNotMatch(result.detail, /private path/);
+    assert.match(fixOf(result), /kernel\.yama\.ptrace_scope to 1 or higher/);
   }
 });

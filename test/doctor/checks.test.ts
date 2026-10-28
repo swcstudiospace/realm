@@ -1,9 +1,9 @@
-import { test, type TestContext } from "node:test";
+import { after, test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { chmodSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runChecks, type CheckId, type CheckResult } from "../../src/doctor/checks.js";
+import { runChecks as runDoctor, type CheckId, type CheckResult, type DoctorOptions } from "../../src/doctor/checks.js";
 
 const REGISTERED_IDS: readonly CheckId[] = [
   "policy-file",
@@ -15,10 +15,24 @@ const REGISTERED_IDS: readonly CheckId[] = [
   "anda-bridge",
   "control-channel",
   "agentos",
+  "host-binaries",
+  "kernel-hardening",
 ];
 
-// The explicit host environment each doctor run receives in these tests. The doctor reads no process environment.
-const DOCTOR_ENV = { PATH: "/usr/bin", HOME: "/root" };
+// The explicit host environment each doctor run receives in these tests. The doctor reads no process environment. PATH names an
+// empty directory, so no host binary is found, hashed or run, and every command fails to start.
+const EMPTY_PATH_DIR = realpathSync(mkdtempSync(join(tmpdir(), "realm-doctor-empty-path-")));
+after(() => {
+  rmSync(EMPTY_PATH_DIR, { recursive: true, force: true });
+});
+const DOCTOR_ENV = { PATH: EMPTY_PATH_DIR, HOME: "/root" };
+
+function runChecks(options: DoctorOptions): Promise<readonly CheckResult[]> {
+  return runDoctor({
+    runCommand: () => Promise.reject(Object.assign(new Error("spawn ENOENT"), { code: "ENOENT" })),
+    ...options,
+  });
+}
 
 interface Layout {
   readonly base: string;
@@ -205,14 +219,14 @@ void test("session-store: an absent session directory fails when no ancestor is 
   assert.match(fixOf(result), /ownership/);
 });
 
-void test("the nine checks are registered in report order, with control-channel and agentos after anda-bridge (D-44, D-69, CLI-03)", async (t) => {
+void test("the eleven checks are registered in report order, with control-channel, agentos, host-binaries and kernel-hardening after anda-bridge (D-44, D-69, CLI-03)", async (t) => {
   const { policyPath, stateDir } = layout(t);
   // Every seam is injected: each command fails to start and each socket is refused, so the run spawns no
   // process and opens no socket. The andaUrl is absent, so no engine is contacted either.
   const results = await runChecks({
     policyPath,
     stateDir,
-    env: { PATH: "/usr/bin:/bin", HOME: "/home/realm", XDG_RUNTIME_DIR: "/run/user/1000" },
+    env: { PATH: EMPTY_PATH_DIR, HOME: "/home/realm", XDG_RUNTIME_DIR: "/run/user/1000" },
     runCommand: () => Promise.reject(Object.assign(new Error("spawn ENOENT"), { code: "ENOENT" })),
     connectSocket: () => Promise.reject(Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" })),
   });

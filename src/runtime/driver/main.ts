@@ -20,7 +20,7 @@ import { awaitRuntimeListener } from "./channel.js";
 import { installSeccompProfile } from "./seccomp-delivery.js";
 import { DriverLifecycle } from "./lifecycle.js";
 import { GATEWAY_ID_PATTERN } from "../gateway-config.js";
-import { spawnSupervisor } from "./supervisor.js";
+import { assertSha256OfFile, spawnSupervisor } from "./supervisor.js";
 import { startSocketServer, type SocketServer } from "./server.js";
 
 export const DRIVER_ENV = Object.freeze({
@@ -34,12 +34,15 @@ export const DRIVER_ENV = Object.freeze({
   gatewayCa: "REALM_DRIVER_GATEWAY_CA",
   supervisorBinary: "REALM_DRIVER_SUPERVISOR_BINARY",
   gatewayEndpoint: "REALM_DRIVER_GATEWAY_ENDPOINT",
+  // Optional: the lowercase hex sha256 the host supervisor file must have. Every other name here is required.
+  supervisorSha256: "REALM_DRIVER_SUPERVISOR_SHA256",
 });
 
 // A driver name is a short lowercase token. The gateway's [openshell.drivers.<name>] table names it.
 const DRIVER_NAME_PATTERN = /^[a-z][a-z0-9-]{0,62}$/;
 // The same digest-pinned form the runtime config accepts (D-52).
 const IMAGE_PATTERN = /^[a-z0-9][a-z0-9._/-]*@sha256:[a-f0-9]{64}$/;
+const SHA256_HEX_PATTERN = /^[a-f0-9]{64}$/;
 // The package manifest sits four levels above the built module, dist/src/runtime/driver/main.js. The driver runs from dist.
 // The release job bumps the manifest, so the version is read at startup, never copied into source.
 const PACKAGE_JSON_RELATIVE_PATH = "../../../../package.json";
@@ -48,12 +51,15 @@ export interface DriverProcessConfig {
   readonly socketPath: string;
   readonly libpodSocketPath: string;
   readonly driver: ComputeDriverConfig;
+  // The sha256 the host supervisor file must have, checked at load and again right before each spawn. Absent means no pin.
+  readonly supervisorSha256?: string;
 }
 
 type Environment = Readonly<Record<string, string | undefined>>;
 
-// Builds the process configuration from the environment. Every value is required, and the gateway id must be the form the
-// gateway configuration renders. A refusal names no value and no path, so no configured path, digest or identity reaches a log.
+// Builds the process configuration from the environment. Every value is required except the supervisor digest pin, and the gateway
+// id must be the form the gateway configuration renders. A refusal names no value and no path, so no configured path, digest or
+// identity reaches a log.
 export function loadDriverProcessConfig(env: Environment, implementationVersion: string): DriverProcessConfig {
   const name = requiredValue(env, DRIVER_ENV.name);
   const socketPath = requiredAbsolute(env, DRIVER_ENV.socket);
@@ -65,6 +71,10 @@ export function loadDriverProcessConfig(env: Environment, implementationVersion:
   const gatewayCaPath = requiredReadableFile(env, DRIVER_ENV.gatewayCa);
   const supervisorBinary = requiredExecutableFile(env, DRIVER_ENV.supervisorBinary);
   const gatewayEndpoint = requiredHttpsEndpoint(env, DRIVER_ENV.gatewayEndpoint);
+  const supervisorSha256 = optionalSha256(env, DRIVER_ENV.supervisorSha256);
+  if (supervisorSha256 !== undefined) {
+    assertSha256OfFile(supervisorBinary, supervisorSha256);
+  }
   const libpodSocketPath = podmanSocketPath(env);
   if (!DRIVER_NAME_PATTERN.test(name) || !IMAGE_PATTERN.test(sandboxImage) || !GATEWAY_ID_PATTERN.test(gatewayId)) {
     throw makeRealmError("SCHEMA_INVALID");
@@ -85,6 +95,7 @@ export function loadDriverProcessConfig(env: Environment, implementationVersion:
       gatewayId,
       supervisor: { binary: supervisorBinary, gatewayEndpoint, gatewayCaPath },
     },
+    ...(supervisorSha256 === undefined ? {} : { supervisorSha256 }),
   };
 }
 
@@ -148,6 +159,18 @@ function requiredExecutableFile(env: Environment, key: string): string {
   return value;
 }
 
+// A lowercase hex sha256 digest, or undefined when the variable is unset. A set value that is not that form refuses, empty included.
+function optionalSha256(env: Environment, key: string): string | undefined {
+  const value = env[key];
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!SHA256_HEX_PATTERN.test(value)) {
+    throw makeRealmError("SCHEMA_INVALID");
+  }
+  return value;
+}
+
 // An https URL with a host: the gateway's gRPC endpoint.
 function requiredHttpsEndpoint(env: Environment, key: string): string {
   const value = requiredValue(env, key);
@@ -163,6 +186,16 @@ function requiredHttpsEndpoint(env: Environment, key: string): string {
   return value;
 }
 
+// The runtime host the driver uses for the listener check and the supervisor spawn. When the process configuration carries a
+// supervisor digest pin, every spawn hashes the supervisor file again and refuses with SCHEMA_INVALID on a mismatch.
+export function runtimeHostOf(config: DriverProcessConfig): RuntimeHost {
+  return {
+    awaitListener: (controlSocket, trust) => awaitRuntimeListener(controlSocket, trust),
+    spawnSupervisor: (options) =>
+      spawnSupervisor(config.supervisorSha256 === undefined ? options : { ...options, expectedSha256: config.supervisorSha256 }),
+  };
+}
+
 // Builds the driver. It first writes the sandbox seccomp profile next to the driver's socket, and the libpod client names that file in
 // every create. It then validates the configuration without touching libpod, sweeps, and binds the driver's socket.
 // The sweep removes every realm container and every sandbox's secret entries left by a previous generation before any socket
@@ -175,11 +208,7 @@ export async function startDriver(config: DriverProcessConfig): Promise<SocketSe
     sandboxStateRoot: config.driver.sandboxStateRoot,
     secretRoot: config.driver.secretRoot,
   });
-  const runtime: RuntimeHost = {
-    awaitListener: (controlSocket, trust) => awaitRuntimeListener(controlSocket, trust),
-    spawnSupervisor,
-  };
-  const driver = new ComputeDriver(config.driver, { lifecycle, libpod, runtime });
+  const driver = new ComputeDriver(config.driver, { lifecycle, libpod, runtime: runtimeHostOf(config) });
   await lifecycle.startupSweep();
   return startSocketServer(config.socketPath, [
     { service: loadComputeDriverService(), implementation: computeDriverImplementation(driver) },
