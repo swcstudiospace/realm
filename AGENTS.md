@@ -6,7 +6,7 @@ Canonical, vendor-neutral instructions for AI coding agents and human contributo
 
 Realm is the agent sandbox component of the GSD-Core USSR Stack (Ultrathink, Substrate, Swarm, Realm). Its tagline is "Realm, the home of AI Generated Code" (README.md).
 
-Realm runs an agent's execution and file mutations inside a locked-down sandbox. The layering is settled in `docs/integration/runtime-decision.md` (S-08): the OpenShell gateway runs on the host; its Podman driver creates one rootless, digest-pinned sandbox container per session; AgentOS runs as the sandbox workload; and Anda Engine runs as a separate service, reached over HTTP from the TypeScript client. Nothing nests OpenShell inside the Realm container, and nothing runs privileged.
+Realm runs an agent's execution and file mutations inside a locked-down sandbox. The layering is settled in `docs/integration/runtime-decision.md` (S-08, with the 2026-10-26 and 2026-10-28 decisions recorded in `docs/integration/openshell.md`): the OpenShell gateway runs on the host; the Realm compute driver (`src/runtime/driver/`) creates one rootless, digest-pinned sandbox container per session through the libpod API; AgentOS runs in that sandbox as a managed `openshell sandbox exec` child of the realm; and Anda Engine runs as a separate service, reached over HTTP from the TypeScript client. Nothing nests OpenShell inside the Realm container, and nothing runs privileged.
 
 Realm ships three things over one tool contract:
 
@@ -81,7 +81,7 @@ Every gate must pass before a change is reviewed (`CONTRIBUTING.md`).
 - Commit subjects start with a Conventional Commit type (`feat`, `fix`, `perf`, `refactor`, `docs`, `test`, `build`, `ci`, `chore`, or `security`), with an optional scope. The changelog groups entries by type.
 - No host-local absolute paths in committed files: no home-directory, temporary-directory, or Users-directory paths. `npm run check:docs` enforces this for the published docs.
 - Settled runtime decisions (`docs/integration/runtime-decision.md`). Change them only through a new recorded decision:
-  - The OpenShell gateway runs on the host, and its Podman driver creates the session container. Do not nest OpenShell inside the Realm container.
+  - The OpenShell gateway runs on the host, and the Realm compute driver creates the session container. Do not nest OpenShell inside the Realm container.
   - One container per session. The daemon owns sessions. A surface attaches by connecting to the control socket and calling `up`, which is idempotent. There is no attach or detach protocol.
   - The sandbox lasts until `realm down`. A host shutdown closes that host's client and never sends `down`.
   - The OpenShell CLI is pinned to the 0.1.5 verbs, re-verified on 2026-10-26: `sandbox create` with `--policy`, `--detach`, `--cpu`, `--memory` and `--from` (no create command and no `--no-keep`), `sandbox exec` with `--name`, `--workdir`, `--no-tty` and `--no-login-shell`, and `sandbox delete`. A create command does not run in 0.1.5, so the AgentOS runner starts as an exec child after create. Recorded decision: the pin moves from 0.1.2 to 0.1.5 on 2026-10-26, and the create-command finding is its reason (`docs/integration/openshell.md`). Re-verify the pin on any upgrade.

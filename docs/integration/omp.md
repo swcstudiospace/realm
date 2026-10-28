@@ -143,15 +143,15 @@ In both runs the item first read `connecting`, never `active`. stderr was empty,
 
 Retry: `realm-retry` is listed by `get_available_commands`. Sent as a `prompt` message, it was accepted (`success: true`), the item repainted `connecting`, and then it settled on the same reason. The retry's reply text does not appear in the RPC frames.
 
-Requirements on this host:
+Requirements. The owner reinstated OMP-LIVE-01, OMP-LIVE-03 and OMP-LIVE-04 on 2026-10-25, so none of them is descoped. They were verified live on 2026-10-28 on the final build; each row names what that check observed (see "Live Omp checks (2026-10-28)" below). The 2026-10-23 host results are kept in the same rows as dated history, marked historical, because that host had no reachable daemon:
 
-| Requirement | Result on this host | Evidence or reason |
+| Requirement | Status | Evidence |
 | --- | --- | --- |
-| OMP-LIVE-02 | Met | Disconnected with the daemon's own reason; never active |
-| OMP-LIVE-03 | Partial | The retry re-runs the attach in the same session; a reattach to active is not reachable here |
-| OMP-LIVE-01 | Not met | No daemon answered on the 2026-10-23 host: the daemon refused at startup (Podman). The AgentOS driver is now bound (`src/runtime/agentos-driver.ts`); OMP-LIVE results are recorded in the phase verification file |
-| OMP-LIVE-04 | Not met | No daemon runs, so nothing survives shutdown |
-| UI-01 | Partial | The item appears at launch. Non-blocking is not shown: see below |
+| OMP-LIVE-01 | Verified live, 2026-10-28 | The status item read `realm active` after the attach. Historical (2026-10-23 host, superseded): not met, because no daemon answered; the daemon refused at startup (Podman). |
+| OMP-LIVE-02 | Met (2026-10-23 evidence, still true) | Disconnected with the daemon's own reason; never active |
+| OMP-LIVE-03 | Verified live, 2026-10-28 | After `realm down` the status item read `realm disconnected` with the reason `REALM_NOT_ACTIVE`; the `realm-retry` command then reattached in the same Omp session (`connecting`, then `realm active`). Historical (2026-10-23 host, superseded): partial; the retry re-ran the attach in the same session, but a reattach to active was not reachable there. |
+| OMP-LIVE-04 | Verified live, 2026-10-28 | After Omp was quit, the same daemon process was still running and `realm status` reported active. Historical (2026-10-23 host, superseded): not met, because no daemon ran, so nothing survived shutdown. |
+| UI-01 | Partial (not re-checked on 2026-10-28) | The item appears at launch. Non-blocking is not shown: see below |
 
 UI-01 detail. The attach alone fails in about 1.3 s (probe 2 ms; worst event-loop lag 71 ms under Node and 239 ms under Bun). Inside Omp the same failure paints about 6 s after launch, and a `get_state` sent one second after launch was answered only after the failure. In separate probes, a plugin-free extension, a `tool_call` handler, a registered command, a managed timer, and a detached spawn each answered `get_state` within about one second. The cause of the delay is not isolated, so UI-01's "without blocking the session" is not demonstrated.
 
@@ -172,17 +172,15 @@ The session context provides `setTimeout`, `setInterval`, `clearTimer`, and `ui.
 
 Run of 2026-10-24 on Podman 5.7.1 (private API socket). Podman 5.7.1 was built from the upstream v5.7.1 source and installed under `/usr/local/bin`; the apt 4.9.3 package is unchanged. The live session reached a private Podman 5.7.1 API socket through `XDG_RUNTIME_DIR`. The status item read `connecting`, then `○ realm disconnected · SCHEMA_INVALID`; standard error was empty, and the daemon wrote the same code to its log. `realm doctor` passed the `podman`, `podman-service`, and `openshell` checks on this run. The policy file and the runtime configuration each load when called directly, so the refusing check is not isolated. Historical (superseded 2026-10-28): this run was made before the AgentOS driver was bound; the driver is now always bound from the configured digest-pinned image. Storage isolation was not enforced: the realm's Podman probe passes only `PATH`, `HOME`, and `XDG_RUNTIME_DIR` to the Podman child (`src/runtime/podman-probe.ts`), so `CONTAINERS_STORAGE_CONF` did not reach it. The shared rootful storage database changed at 02:09:52, after the isolated session; the writer is not attributed.
 
-Owner decision (2026-10-23): OMP-LIVE-01 and OMP-LIVE-04 are descoped from v2.0 to the follow-up milestone (RT-04, CLI-01). Owner decision (2026-10-24): OMP-LIVE-03 is descoped the same way, because its reattach also needs an active daemon. The v2.0 behaviour is the truthful disconnected status with the daemon's own reason.
+Owner decisions (2026-10-23 and 2026-10-24, historical, superseded 2026-10-25): OMP-LIVE-01 and OMP-LIVE-04 were descoped from v2.0 to the follow-up milestone (RT-04, CLI-01), and OMP-LIVE-03 the same way, because its reattach also needed an active daemon. The owner reinstated all three on 2026-10-25; they are no longer descoped. Until a daemon could answer, the v2.0 behaviour was the truthful disconnected status with the daemon's own reason, and that status is still how a failed attach is shown (OMP-LIVE-02).
 
 ### Live Omp checks (2026-10-28)
 
-These checks were run on 2026-10-28 on the rebuilt stack. The descoping above remains the recorded owner decision for the v2.0 requirement scope.
-
-How OMP-LIVE-01, OMP-LIVE-03 and OMP-LIVE-04 are exercised against a live realm:
+Verified live on 2026-10-28 on the final build, in a live Omp TUI session driven by hand, against the production stack (OpenShell 0.1.5 gateway, the Realm compute driver, rootless Podman 5.x). Steps 3, 5 and 6 each carry the one requirement they observe:
 
 1. Run the built extension with `-e` under an isolated profile, in a pseudo-terminal such as tmux. Print mode never shows the status item.
 2. Skip the first-run setup wizard with the Escape key.
 3. Read the status line. It reads `realm active` after attach (OMP-LIVE-01).
-4. In another shell run `realm down`. After the poll interval (about 2 seconds) the status line reads `realm disconnected` with the reason `REALM_NOT_ACTIVE` (OMP-LIVE-03).
-5. Run the `realm-retry` slash command. The status line reads `connecting`, then `realm active` (OMP-LIVE-04).
-6. Quit Omp. Confirm the same daemon process is still running and `realm status` reports active.
+4. In another shell run `realm down`. After the poll interval (about 2 seconds) the status line reads `realm disconnected` with the reason `REALM_NOT_ACTIVE`. This is the disconnected state that the next step recovers from.
+5. Run the `realm-retry` slash command. The status line reads `connecting`, then `realm active`, in the same Omp session (OMP-LIVE-03).
+6. Quit Omp. Confirm the same daemon process is still running and `realm status` reports active (OMP-LIVE-04).

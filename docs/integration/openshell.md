@@ -149,9 +149,9 @@ The realm compute driver implements `openshell.compute.v1.ComputeDriver` from th
 | RPC | Driver behaviour | Refusal or status |
 | --- | --- | --- |
 | `GetCapabilities` | Reports the driver name, the default image, the portable CPU and memory limits, the `openshell.compute.contract` and `openshell.compute.launch-authentication` capabilities, and the pinned admission acknowledgement (`DRIVER_ADMISSION_ACKNOWLEDGEMENT`). A create carries no isolation backend selection, because the built-in runtime path needs none. | A gateway that requires an unknown capability: `INVALID_ARGUMENT`. |
-| `AuthenticateSandbox` | Not offered. The driver does not advertise sandbox authentication. Moves to phase 9.5. | `UNIMPLEMENTED` |
+| `AuthenticateSandbox` | Not offered. The driver does not advertise the capability (`SUPPORTED_CAPABILITIES` in `src/runtime/driver/compute-driver.ts` holds only `openshell.compute.contract` and `openshell.compute.launch-authentication`), and the handler for the RPC rejects with `UNIMPLEMENTED` ("sandbox authentication is not offered"). On the built-in runtime path the gateway does not call it: the isolation backend and the sandbox protocol are the upstream runtime's (owner decision, 2026-10-26), and the live capture below did not observe the call. | `UNIMPLEMENTED` |
 | `ValidateSandboxCreate` | Runs the create checks below. No libpod call. | `INVALID_ARGUMENT` on any refusal. |
-| `CreateSandbox` | Runs the create checks, stores the launch material, prepares the channel (a TLS identity for the runtime, and the runtime's bootstrap, descriptor and auth bundle, checked to agree before any libpod call), then `DriverLifecycle.create`. The create writes the bootstrap, descriptor and auth bundle, and checks the CA tmpfs and channel mount options, before the container starts. The sandbox runtime is the container's main process, `/usr/local/lib/realm/openshell-sandbox --bootstrap /run/openshell/channel/bootstrap.json`; there is no exec route. After the container is verified, the driver waits until a TLS handshake with the runtime's listener completes on its control socket (trusting the CA certificate, under the leaf's server name), removes the runtime's `server.key`, and starts the host supervisor. The CA private key is removed once the leaf certificate is issued, and the CA certificate stays in the descriptor as its trust anchor. A supervisor that exits before the sandbox is Ready refuses the create. One that exits later stops the container and reports the sandbox not Ready, with reason `supervisor-exited`. Records the gateway's sandbox id, workspace and container name, under the gateway's name. | `INVALID_ARGUMENT` on refusal, including a state directory already present for the name, and a control socket path longer than 107 bytes; `ALREADY_EXISTS` when a container of the name exists and its state directory does not. |
+| `CreateSandbox` | Runs the create checks, stores the launch material, prepares the channel (a TLS identity for the runtime, and the runtime's bootstrap, descriptor and auth bundle, checked to agree before any libpod call), then `DriverLifecycle.create`. The create writes the bootstrap, descriptor and auth bundle, and checks the CA tmpfs and channel mount options, before the container starts. The sandbox runtime is the container's main process, `/usr/local/lib/realm/openshell-sandbox --bootstrap /run/openshell/channel/bootstrap.json`; there is no podman exec route (the libpod client has none). The realm starts its AgentOS runner as a managed `openshell sandbox exec` child after the create, through the OpenShell exec path: gateway to supervisor to runtime. After the container is verified, the driver waits until a TLS handshake with the runtime's listener completes on its control socket (trusting the CA certificate, under the leaf's server name), removes the runtime's `server.key`, and starts the host supervisor. The CA private key is removed once the leaf certificate is issued, and the CA certificate stays in the descriptor as its trust anchor. A supervisor that exits before the sandbox is Ready refuses the create. One that exits later stops the container and reports the sandbox not Ready, with reason `supervisor-exited`. Records the gateway's sandbox id, workspace and container name, under the gateway's name. | `INVALID_ARGUMENT` on refusal, including a state directory already present for the name, and a control socket path longer than 107 bytes; `ALREADY_EXISTS` when a container of the name exists and its state directory does not. |
 | `GetSandbox` | Reads the labelled container and the registry entry, reporting the gateway's name. | `NOT_FOUND` when the driver does not hold the sandbox. |
 | `ListSandboxes` | Lists, under the gateway's name, the sandboxes that have a registry entry and a labelled container. | none |
 | `WatchSandboxes` | Sends every sandbox on connect, then each change, and each removal as a deleted event. Polls until the client cancels. | none |
@@ -159,7 +159,9 @@ The realm compute driver implements `openshell.compute.v1.ComputeDriver` from th
 | `StartSandbox` | Refused. Reads and changes no state (PD-08). | `FAILED_PRECONDITION` |
 | `DeleteSandbox` | Stops the host supervisor first (SIGTERM, then SIGKILL after a bounded wait), then runs `DriverLifecycle.delete`, then clears the registry. Idempotent. A name whose container another registered sandbox holds deletes nothing. | `deleted` is false for a sandbox that is already gone. |
 | `EnsureWorkspace` | Checks the id and the pinned workspace root (`REALM_DRIVER_WORKSPACE_ROOT`). Creates nothing. Refuses a root that is missing, a symbolic link, not a directory, relative, or not owned by the driver's account. | `INVALID_ARGUMENT` on refusal. |
-| `DeleteWorkspace` | Refused. The pinned workspace root is never removed, empty or not, and nothing is read or changed. | `FAILED_PRECONDITION` |
+| `DeleteWorkspace` | Always refused. After it checks the workspace id, the driver refuses with the transition code, because the driver never creates or removes the pinned workspace root (owner decision, 2026-10-27; `EnsureWorkspace` creates nothing either). Nothing is read or changed. | `FAILED_PRECONDITION`; `INVALID_ARGUMENT` for a malformed workspace id |
+
+The `AuthenticateSandbox` and `DeleteWorkspace` rows follow from those two owner decisions (2026-10-26 and 2026-10-27). They are open for the owner to confirm.
 
 The create checks refuse, before any libpod call, a request whose image is not the configured digest, whose CPU or memory
 request or limit differs from the realm profile (2 CPUs, 1 GiB), that asks for a GPU, that carries a non-empty platform or
@@ -224,8 +226,9 @@ The sandbox binding is one derivation, `sandboxBindingOf` (`src/runtime/driver/s
 ### PD-08 (stop and start)
 
 PD-08 default applied: `StopSandbox` and `StartSandbox` refuse with the gateway's precondition status
-(`FAILED_PRECONDITION`) and change no sandbox state. The call-site evidence below shows the gateway does not reach them
-in phase 9.4, so their live observation moves to phase 9.5.
+(`FAILED_PRECONDITION`) and change no sandbox state. The unit test covers the refusal.
+
+Live state on the built-in path (phase 9.5 live run): the gateway refused a stop on a Ready sandbox in its own state table, and it accepted a start on a Ready sandbox as a no-op. In neither case did it call the driver, so the driver's refusal was not reached live. A restart after a failure would reach `StartSandbox`, which the driver refuses under PD-08. What the realm should do about that is an open owner decision: until it is made, a sandbox restarted by the gateway after a failure is refused by the driver.
 
 ### Observed call sites (phase 9.4, live)
 
@@ -236,14 +239,12 @@ Captured live on 2026-10-25 through the realm gateway, with debug spans on. One 
 - Get: `GetSandbox`, polled while the sandbox is Provisioning.
 - List: `ListSandboxes`.
 - Delete: `DeleteSandbox`.
-- Not reached: `StopSandbox` and `StartSandbox`. The gateway refuses them in the Provisioning phase before calling the driver. They move to phase 9.5.
-- Not observed: `EnsureWorkspace` (the gateway calls it only for provider credentials), `DeleteWorkspace`, `AuthenticateSandbox`. `AuthenticateSandbox` returns `UNIMPLEMENTED` and is not advertised; it moves to phase 9.5.
+- Not reached (historical, 2026-10-25 capture, Provisioning phase): `StopSandbox` and `StartSandbox`. The gateway refused them in the Provisioning phase before calling the driver. The later state on the built-in path is under PD-08 above.
+- Not observed: `EnsureWorkspace` (the gateway calls it only for provider credentials), `DeleteWorkspace`, `AuthenticateSandbox`. `AuthenticateSandbox` returns `UNIMPLEMENTED` and is not advertised; on the built-in path the gateway does not call it (see the RPC table above).
 
 ### Phase 9.4 limit
 
-Phase 9.4 closes on its code and on the live checks it can reach. A sandbox stays Provisioning (ConfigurationPending) until
-the phase 9.5 supervisor reports its effective configuration. The PD-08 stop and start observation, and
-`AuthenticateSandbox`, move to phase 9.5 with it.
+Phase 9.4 closed on its code and on the live checks it could reach. Historical: a sandbox stayed Provisioning (ConfigurationPending) in that capture, until the phase 9.5 supervisor reported its effective configuration, so the PD-08 stop and start calls were not reached then. See PD-08 above for the state on the built-in path, including the open owner decision. `AuthenticateSandbox` is not part of that: see the RPC table above.
 
 ## Runtime image build (phase 9.5)
 
@@ -404,9 +405,9 @@ Source: the A18 supply-chain review of the sandbox image and host binaries. It r
 | --- | --- | --- | --- | --- |
 | 1 | High | `openshell-supervisor` runs on the host, handles launch secrets, and was built outside this repository. The driver checks only that `REALM_DRIVER_SUPERVISOR_BINARY` is an absolute executable file. No digest, build record or version check. | Build it from the pinned runtime commit in a Dockerfile target, commit its SHA-256, and have the driver compare it at start. | Yes: build in-repo or not, and who owns the host install. |
 | 2 | High | The CLI, gateway (0.1.5) and Podman 5.7.1 have no recorded install source, digest or signature. | Add a host-binaries record (source URL, SHA-256, install date, version output) and a doctor check against it. | Yes: release channel and signature to trust. |
-| 3 | Med | Runtime trust is on first use. The expected `SOURCE_SHA256`, `HELPER_SHA256` and `RUNTIME_SHA256` values are not committed. | Commit an expected-digests file, have the build read it, build twice and diff. | No |
+| 3 | Med | Runtime trust is on first use. The expected `RUNTIME_SHA256` value is not committed. It is the one digest the review named that is still a build argument (`sandbox/Dockerfile`); the source is pinned by `OPENSHELL_REVISION` and the helper is retired. | Commit an expected-digests file, have the build read it, build twice and diff. | No |
 | 4 | Med | The AgentOS runner and probe are copied from the host `dist/`, which is gitignored and built by hand. | Compile in a Dockerfile stage from `package-lock.json`, or record and check SHA-256 labels. | No |
-| 5 | Med | Debian 12 is the base of all three stages; standard security support ended about 2026-06-10, with LTS to 2028-06-30 (inference from the Debian schedule). The tag and resolve date of the GCC and Node bases are not recorded. | Record tag, resolve date and index digest for both bases, and run the base-image policy check with an as-of date. | Yes: accept LTS or move to Debian 13 or a newer Rust base. |
+| 5 | Med | Debian 12 is the base of both stages (Rust and Node); standard security support ended about 2026-06-10, with LTS to 2028-06-30 (inference from the Debian schedule). The Dockerfile records the tag and resolve date of the Rust base and does not record them for the Node base. | Record tag, resolve date and index digest for the Node base, and run the base-image policy check with an as-of date. | Yes: accept LTS or move to Debian 13 or a newer Rust base. |
 | 6 | Med | `apt-get install ca-certificates cmake git` is unpinned and hits the live archive. | Drop `git` if the base has it and pin `cmake`; long term use a dated snapshot archive or a prebuilt builder. | No |
 | 7 | Med | CI uses `actions/checkout` and `actions/setup-node` by tag, not commit SHA. CI never builds the image: no CI image build, SBOM or signing. | Pin the actions to 40-hex SHAs; add an image-build job later. | No |
 | 8 | Low | `cargo build --locked` checks crate checksums but records nothing. Whether the upstream lock has git-sourced crates, which carry no checksum, was not checked. | Fail the build on any `source = "git+` entry in the lock and label the image with the lock's SHA-256. | No |

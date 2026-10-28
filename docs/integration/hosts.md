@@ -6,7 +6,7 @@ Realm ships one integration per host. The tier says how far each one is verified
 
 | Tier | Meaning | Hosts |
 | --- | --- | --- |
-| 1: live verified | Run in a real session on the verification host, with the evidence recorded | none at v2.0 as a full pass. The Omp status item was observed live on this host: disconnected, with the daemon's own reason (see `docs/integration/omp.md`). An attach to an active daemon needs Podman 5.x and an AgentOS driver |
+| 1: live verified | Run in a real session on the verification host, with the evidence recorded | Omp, for OMP-LIVE-01, OMP-LIVE-03 and OMP-LIVE-04: a live Omp session on the final build, 2026-10-28, showed `realm active` after the attach, the `realm-retry` command reattaching from disconnected in the same session, and the same daemon still running after Omp quit (see `docs/integration/omp.md`). The disconnected status with the daemon's own reason was observed live on 2026-10-23 (OMP-LIVE-02). UI-01's "without blocking the session" is not demonstrated, so the Omp host is not a full pass |
 | 2: validator verified | The adapter bundle passes the host's own validator, in an isolated directory. Not registered in the live host configuration | Claude Code and Grok Build (`adapters/claude-plugin`): `claude plugin validate` passes with warnings, `grok plugin validate` passes. Muse Code (`adapters/muse-code`): `muse plugins validate` passes. Hermes Agent (`adapters/hermes-agent`, a portable package): `hermes plugins validate` passes. Prime Agent (`adapters/prime-agent`): no validator subcommand exists; an isolated project-local install and list pass |
 | 3: documented only | Snippet from the host's official pages, not run here | none at v2.0 |
 
