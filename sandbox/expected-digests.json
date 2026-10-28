@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "openshellRevision": "bdb956f2cd65a635f1294fccf1d138d263bf650f",
+  "cargoLockSha256": "07ba8e262eb3b66072484281db51bb371508359b8ad499a38aa60155ee74c263",
+  "runtime": {
+    "path": "/usr/local/lib/realm/openshell-sandbox",
+    "sha256": "b5f8bd5e16b34f564cbc9b6e68cfaec8459d56e2e4157c29b2cc231221514526"
+  },
+  "agentosRunner": {
+    "path": "/usr/local/lib/realm/agentos-runner.js",
+    "sha256": "320a8b5b4095cd7aac86d2828283baa8c3aadd410700fddc01a43d6e1cd717f5"
+  },
+  "agentosProbe": {
+    "path": "/usr/local/lib/realm/agentos-probe.js",
+    "sha256": "524dcf1cc6a44088fc4d171276c177b03dad6436df1faaad1449f0d31e15aaed"
+  }
+}

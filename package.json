@@ -58,6 +58,8 @@
     "check:docs": "node scripts/check/host-paths.mjs && node scripts/check/agents-sync.mjs",
     "check:mcp": "node scripts/check/mcp-smoke.mjs",
     "check:pack": "node scripts/check/pack-smoke.mjs",
+    "check:image-digests": "node scripts/check/verify-image-digests.mjs",
+    "build:image": "node scripts/image/build-image.mjs",
     "check:gates": "node scripts/check/gate-closure.mjs",
     "release:next": "node scripts/release/next-version.mjs",
     "release:sync": "node scripts/release/sync-version.mjs",
