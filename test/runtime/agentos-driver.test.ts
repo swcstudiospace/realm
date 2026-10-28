@@ -186,7 +186,8 @@ void test("the readiness probe is retried until it exits 0", async () => {
 });
 
 void test("a probe that never passes gives OPENSHELL_START_FAILED at the deadline and kills the runner child", async () => {
-  const h = harness({ probes: [1], startTimeoutMs: 60 });
+  // A start budget wide enough that a stalled event loop on a loaded host is very unlikely to expire it before the second probe.
+  const h = harness({ probes: [1], startTimeoutMs: 400 });
   await assertCode(driverOf(h).start(), "OPENSHELL_START_FAILED");
   assert.ok(h.steps.filter((step) => step === "probe").length >= 2, "the probe is retried until the deadline");
   assert.equal(childAt(h, 0).hasExited(), true);

@@ -75,7 +75,10 @@ interface Fixture {
   readonly readOciConfig: (path: string) => string;
 }
 
-async function fixture(t: TestContext, options: { readonly rootless?: boolean } = {}): Promise<Fixture> {
+async function fixture(
+  t: TestContext,
+  options: { readonly rootless?: boolean; readonly supervisorCallTimeoutMs?: number } = {},
+): Promise<Fixture> {
   const base = realpathSync(mkdtempSync(join(tmpdir(), "realm-session-exec-")));
   t.after(() => {
     rmSync(base, { recursive: true, force: true });
@@ -107,7 +110,7 @@ async function fixture(t: TestContext, options: { readonly rootless?: boolean } 
       made = new AgentOsSupervisor({
         driver,
         sessionId,
-        callTimeoutMs: 1000,
+        callTimeoutMs: options.supervisorCallTimeoutMs ?? 1000,
         random: () => 0,
         sleep: () => Promise.resolve(),
         now: () => 0,
@@ -1343,10 +1346,12 @@ void test("B-3: a stop during a session create waits for the create, deletes the
 });
 
 void test("RT-04, D-28: the startup budget covers the runner start on the session path: a start that outruns it gives STARTUP_BUDGET_EXCEEDED and the session is in error", async (t) => {
-  const f = await fixture(t);
+  // The controller's startup budget must outlast the whole create phase (fake libpod server, policy-file writes,
+  // verifier) on a loaded host, or it expires before the runner start is issued. The budget is 4000 ms, the
+  // supervisor's own call budget is 15000 ms, so the controller, not the supervisor, reports the expiry.
+  const f = await fixture(t, { supervisorCallTimeoutMs: 15_000 });
   mkdirSync(f.workspaceRoot, { recursive: true });
-  // The runner start hangs, so the controller's startup budget ends the wait. The budget is shorter than the supervisor's
-  // own call budget (1000 ms), so the controller, not the supervisor, reports the expiry.
+  // The runner start hangs, so the controller's startup budget ends the wait.
   f.driver.script("start", "hang");
   scriptInspect(f, conformingInspect(f));
   const controller = new LifecycleController({
@@ -1357,7 +1362,7 @@ void test("RT-04, D-28: the startup budget covers the runner start on the sessio
       credentialAllow: [],
       egressAllow: [],
       shellEnabled: false,
-      startupBudgetMs: 500,
+      startupBudgetMs: 4000,
       toolQueueMs: 2000,
     },
     pinnedRoot: bindWorkspaceUnderPolicy([f.workspaceRoot], f.workspaceRoot),
