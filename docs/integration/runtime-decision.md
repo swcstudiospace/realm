@@ -103,7 +103,7 @@ Reversibility: costly. Every runtime module depends on this layering.
 
 ## Phase 4: Reaper, Egress Guard, and Shared Dispatcher (D-100)
 
-Phase 4 status: decided for Phase 4. Live behavior is unit-verified, live-gated: the RT-05, RT-08, and TOOL-03 live bodies in `test/integration/podman-gate.test.ts` skip with `PODMAN_UNSUPPORTED_VERSION` on 4.9.3. Nothing here is live-verified on this host.
+Phase 4 status: decided for Phase 4. Live behavior is unit-verified, live-gated. The RT-05 egress, RT-08 reaper, and TOOL-03 exec live bodies that this note once placed in `test/integration/podman-gate.test.ts` were removed on 2026-10-28; `test/integration/production-driver.test.ts` now carries the live egress, hardening, create, and down-sweep scenarios, and RT-08 and TOOL-03 have no live scenario yet. Nothing here is live-verified on this host.
 Scope: the startup reaper (RT-08), the egress allowlist and its OpenShell rendering (RT-05), the shared dispatcher (TOOL-03, TOOL-04), and every open question OQ-P4-01 to OQ-P4-12 with its default.
 
 ### OQ-P3-16 resolution (D-82)
@@ -130,10 +130,10 @@ A dispatcher call writes two audit lines: an admission line before execution and
 
 | ID | Question | Default applied | Blocked module or phase | Status |
 | --- | --- | --- | --- | --- |
-| OQ-P4-01 | Does the OpenShell supervisor proxy block IPv6 egress, and does it enforce `network_policies` when the workload container has networking off? | Rely on the proxy and the rendered IPv4-only policy; the live property is gated. | Live egress proof in `test/integration/podman-gate.test.ts` (RT-05, D-75) | Live-gated. Fails closed. |
+| OQ-P4-01 | Does the OpenShell supervisor proxy block IPv6 egress, and does it enforce `network_policies` when the workload container has networking off? | Rely on the proxy and the rendered IPv4-only policy; the live property is gated. | Live egress proof in `test/integration/production-driver.test.ts` (RT-05, D-75) | Live-gated. Fails closed. |
 | OQ-P4-02 | Does the OpenShell 0.1.2 gateway accept the D-78 document at `--policy` create? | The document as rendered. | Live acceptance of the policy document in `src/runtime/openshell.ts` | Live-gated. Fails closed. |
 | OQ-P4-03 | The v0.1.2 page documents the endpoint fields Realm uses, but the inspection and protocol fields were read only in part. | Realm writes none of them. Re-verify on upgrade. | The rendered shape in `src/runtime/egress.ts` (D-78) | Recorded assumption. |
-| OQ-P4-04 | Does `openshell sandbox exec --name realm-<id> --workdir /workspace --no-tty --no-login-shell` run against a gateway-created sandbox, and does the sandbox have `/bin/sh` for shell form? | The argv form is the tested path; shell form is gated. | Live exec path in `test/integration/podman-gate.test.ts` (TOOL-03, D-92) | Live-gated. Fails closed. |
+| OQ-P4-04 | Does `openshell sandbox exec --name realm-<id> --workdir /workspace --no-tty --no-login-shell` run against a gateway-created sandbox, and does the sandbox have `/bin/sh` for shell form? | The argv form is the tested path; shell form is gated. | No live exec scenario at present (TOOL-03, D-92); a production scenario is planned | Live-gated. Fails closed. |
 | OQ-P4-05 | Does `sandbox exec` return the remote exit code through the CLI exit status? | Yes (the 0.1.2 help says "The CLI exits with the remote command's exit code"); the gated suite verifies it. | Exec result mapping in `src/runtime/session-execution.ts` (D-94) | Live-gated. Fails closed. |
 | OQ-P4-06 | Reaping has no cross-process owner check. A second host process could reap a live session. | The reap precondition (D-87) and the single-daemon rule in Phase 6. | Phase 6 single-daemon control channel (RT-06) | Residual risk. Accepted in Phase 6. |
 | OQ-P4-07 | A result-audit failure after a write has landed. | Return `AUDIT_WRITE_FAILED` to the caller and do not roll back. The caller must treat the outcome as unknown. | Dispatcher result stage in `src/tools/dispatch.ts` (D-89) | Decided. |
