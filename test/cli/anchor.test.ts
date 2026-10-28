@@ -208,6 +208,37 @@ void test("realm anchor fails with exitCode 1 and a stderr line when the audit f
   assert.deepEqual(node.methods, []);
 });
 
+void test("realm anchor turns a failing audit read into exitCode 1 with a fixed stderr line that names no host path, and makes zero RPC calls (H1 CLI)", async () => {
+  const stateDir = stateWithAudit(AUDIT_TEXT);
+  const node = fakeNode();
+  let attemptedPath: string | undefined;
+  const result = await runAnchor(parsed(["--session", SESSION]), {
+    ...depsFor(stateDir, node, undefined),
+    readAuditFile: (path) => {
+      attemptedPath = path;
+      throw Object.assign(new Error(`EACCES: permission denied, open '${path}'`), { code: "EACCES" });
+    },
+  });
+  assert.ok(attemptedPath !== undefined, "the injected reader was used");
+  assert.equal(result.exitCode, 1);
+  assert.equal(result.stdout, "");
+  assert.equal(result.stderr, `realm anchor: audit log for session ${SESSION} could not be read\n`);
+  assert.equal(result.stderr.includes(stateDir), false, "no host path in the output");
+  assert.deepEqual(node.methods, []);
+});
+
+void test("realm anchor reports a directory where the audit file is expected as exitCode 1 without a host path (H1 CLI)", async () => {
+  const stateDir = join(makeTempDir(), "state");
+  mkdirSync(join(stateDir, "audit", `${SESSION}.jsonl`), { recursive: true });
+  const node = fakeNode();
+  const result = await runAnchor(parsed(["--session", SESSION]), depsFor(stateDir, node, undefined));
+  assert.equal(result.exitCode, 1);
+  assert.equal(result.stdout, "");
+  assert.equal(result.stderr, `realm anchor: audit log for session ${SESSION} is not a regular file\n`);
+  assert.equal(result.stderr.includes(stateDir), false, "no host path in the output");
+  assert.deepEqual(node.methods, []);
+});
+
 void test("realm anchor --publish without a key file fails before any RPC call, with exitCode 1 and a stderr line (H1 CLI)", async () => {
   const stateDir = stateWithAudit(AUDIT_TEXT);
   const node = fakeNode({});

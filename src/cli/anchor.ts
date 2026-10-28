@@ -31,6 +31,8 @@ export interface AnchorRunDeps {
   readonly keyFile: string | undefined;
   readonly createRpc: (url: string) => AnchorRpc;
   readonly now: () => Date;
+  // Reads the audit log's bytes; defaults to readFileSync. A seam so a read failure can be exercised as root.
+  readonly readAuditFile?: (path: string) => Uint8Array;
 }
 
 export interface AnchorRunResult {
@@ -67,16 +69,34 @@ export function parseAnchorArgs(args: readonly string[]): AnchorArgs | undefined
   return { sessionId, publish, rpcUrl };
 }
 
-// Reads the session's audit log and builds its anchor record. A missing or empty log is an AnchorError.
-function recordOfAuditLog(sessionId: string, stateDir: string, now: Date): { record: AnchorRecord; memo: string } {
+// Reads the session's audit log and builds its anchor record. A missing, unreadable or empty log is an AnchorError;
+// a filesystem failure is reported with a fixed message so no host path reaches the CLI output.
+function recordOfAuditLog(
+  sessionId: string,
+  stateDir: string,
+  now: Date,
+  readAuditFile: (path: string) => Uint8Array,
+): { record: AnchorRecord; memo: string } {
   const file = join(stateDir, "audit", `${sessionId}.jsonl`);
   if (!existsSync(file)) {
     throw new AnchorError(`no audit log exists for session ${sessionId}`, "SCHEMA_INVALID");
   }
-  if (!lstatSync(file).isFile()) {
+  let regular: boolean;
+  try {
+    regular = lstatSync(file).isFile();
+  } catch {
+    throw new AnchorError(`audit log for session ${sessionId} could not be inspected`, "SCHEMA_INVALID");
+  }
+  if (!regular) {
     throw new AnchorError(`audit log for session ${sessionId} is not a regular file`, "PATH_ESCAPE");
   }
-  const lines = splitAuditLines(readFileSync(file));
+  let bytes: Uint8Array;
+  try {
+    bytes = readAuditFile(file);
+  } catch {
+    throw new AnchorError(`audit log for session ${sessionId} could not be read`, "SCHEMA_INVALID");
+  }
+  const lines = splitAuditLines(bytes);
   if (lines.length === 0) {
     throw new AnchorError(`audit log for session ${sessionId} has no lines`, "SCHEMA_INVALID");
   }
@@ -86,7 +106,12 @@ function recordOfAuditLog(sessionId: string, stateDir: string, now: Date): { rec
 
 export async function runAnchor(args: AnchorArgs, deps: AnchorRunDeps): Promise<AnchorRunResult> {
   try {
-    const { record, memo } = recordOfAuditLog(args.sessionId, deps.stateDir, deps.now());
+    const { record, memo } = recordOfAuditLog(
+      args.sessionId,
+      deps.stateDir,
+      deps.now(),
+      deps.readAuditFile ?? ((path) => readFileSync(path)),
+    );
     if (!args.publish) {
       const out = { mode: "dry-run", record, memo, memoBytes: Buffer.byteLength(memo, "utf8") };
       return { exitCode: 0, stdout: `${JSON.stringify(out)}\n`, stderr: "" };
