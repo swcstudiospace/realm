@@ -191,15 +191,16 @@ export class SessionExecution implements ExecutionService {
   // The session id is the idempotency key, so a repeated create for one session reuses its
   // labelled container (CORE-06).
   async create(req: CreateRequest): Promise<{ readonly containerId: string }> {
-    // The gateway refuses a longer sandbox name with an opaque create failure, so refuse it here, before any I/O.
-    if (realmSandboxName(req.idempotencyKey).length > GATEWAY_SANDBOX_NAME_MAX_LENGTH) {
-      throw makeRealmError("SCHEMA_INVALID");
-    }
     // Refuses before any libpod, OpenShell, or policy-file call when no supervisor is bound (fail closed).
     const agentos = this.requireAgentOs(req.idempotencyKey);
     const secretRoot = this.requireSecretRoot();
     const pinnedWorkspaceRoot = this.requirePinnedWorkspaceRoot();
     const sandboxStateRoot = this.requireSandboxStateRoot();
+    // The gateway refuses a longer sandbox name with an opaque create failure. This runs after the configuration
+    // checks and before any libpod, OpenShell, or policy-file call.
+    if (realmSandboxName(req.idempotencyKey).length > GATEWAY_SANDBOX_NAME_MAX_LENGTH) {
+      throw makeRealmError("SCHEMA_INVALID");
+    }
     // Registered before the first await, so a stop that names this sandbox from here on waits for this create (B-3).
     const sandbox = realmSandboxName(req.idempotencyKey);
     // A create makes a new sandbox, so a delete recorded for this name earlier no longer counts.
