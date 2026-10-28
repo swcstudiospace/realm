@@ -104,13 +104,16 @@ const TRANSFER_BYTES = 16 * 1024 * 1024;
 // Where the runner keeps its heartbeat inside the sandbox: the container's scratch space, never the workspace. The runner and
 // its probe each hold a copy of this constant (src/runtime/agentos-runner.ts, agentos-probe.ts), and neither exports it.
 const HEARTBEAT_PATH = "/tmp/realm-agentos/heartbeat";
-// The scratch file one probe writes and the transfer test round-trips. Both live in the sandbox's tmpfs.
+// The scratch file one probe writes lives in the sandbox's tmpfs. The transfer file lives in the sandbox workspace, because the
+// OpenShell CLI refuses to download from anywhere else. The workspace is the pinned host root, so the transfer test removes it
+// and the cleanup list below names it.
 const SCRATCH_WRITE_PATH = "/tmp/realm-live-write";
-const TRANSFER_REMOTE_PATH = "/tmp/realm-live-transfer.bin";
+const WORKSPACE_TRANSFER_NAME = "realm-live-transfer.bin";
+const TRANSFER_REMOTE_PATH = `/workspace/${WORKSPACE_TRANSFER_NAME}`;
 // Names this suite may leave in the pinned workspace; cleanup removes exactly these.
 const WORKSPACE_WRITE_NAME = "realm-live-write-probe";
 const WORKSPACE_HOST_NAME = "realm-live-host-visible";
-const WORKSPACE_FILES: readonly string[] = [WORKSPACE_WRITE_NAME, WORKSPACE_HOST_NAME];
+const WORKSPACE_FILES: readonly string[] = [WORKSPACE_WRITE_NAME, WORKSPACE_HOST_NAME, WORKSPACE_TRANSFER_NAME];
 
 // The one shell script the write probes run. The target is a positional argument, never interpolated.
 const WRITE_SCRIPT = 'printf %s "$1" > "$2"';
