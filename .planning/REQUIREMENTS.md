@@ -34,7 +34,7 @@ All v1 requirements are hypotheses until shipped and verified.
 ### Runtime sandbox (RT)
 
 - [x] **RT-01**: Podman container runs rootless from a digest-pinned image, is never privileged, drops all Linux capabilities and adds back only verified ones, uses a read-only root filesystem with tmpfs scratch space, sets CPU, memory, and PID limits, and mounts only the bound workspace and the realm state directory
-- [ ] **RT-02**: Prerequisite probe reports `PODMAN_MISSING` when Podman is absent and `PODMAN_MACHINE_DOWN` when a required machine is not running, with a human-readable reason
+- [x] **RT-02**: Prerequisite probe reports `PODMAN_MISSING` when Podman is absent and `PODMAN_MACHINE_DOWN` when a required machine is not running, with a human-readable reason
 - [x] **RT-03**: OpenShell runs inside the container, and all agent execution is routed through it; no code path bypasses OpenShell
 - [x] **RT-05**: Egress from the container is default-deny; only explicitly configured host and port pairs are allowed; IPv6 is disabled; host networking is rejected at config load; a request to a non-allowlisted host fails
 - [x] **RT-06**: Host-to-daemon control channel is a user-only Unix socket (directory 0700, socket 0600) under the realm state directory, or a loopback port with a per-session token; neither the socket nor any Podman or Docker socket is mounted into the container
@@ -53,9 +53,10 @@ All v1 requirements are hypotheses until shipped and verified.
 
 - [x] **TOOL-01**: Six tools (exec, read, write with lock, list, status, retry) are defined in one schema; every input is validated before any sandbox call; unknown keys are rejected with `SCHEMA_INVALID`
 - [x] **TOOL-02**: Exec is argv-first; shell mode runs only when `policy.shellEnabled` is true and is otherwise rejected with `SHELL_NOT_ALLOWED`
-- [ ] **TOOL-03**: A single shared dispatcher applies schema validation, state check, lock check, and audit logging before every sandbox call
-- [ ] **TOOL-04**: Every tool call has a timeout; a timeout returns `TOOL_TIMEOUT`, and a bounded queue wait applies while the state is connecting
+- [x] **TOOL-03**: A single shared dispatcher applies schema validation, state check, lock check, and audit logging before every sandbox call
+- [x] **TOOL-04**: Every tool call has a timeout; a timeout returns `TOOL_TIMEOUT`, and a bounded queue wait applies while the state is connecting
 - [ ] **TOOL-05**: MCP server and ACP adapter both call the same dispatcher and hold no tool logic; the same call returns equivalent results through MCP and ACP
+  Status: Partial (2026-10-28): MCP is live (scenario 6 ran exec, write and read through realm mcp against the live sandbox); ACP was not exercised live, so equivalent results through both surfaces are shown at unit level only.
 
 ### Audit and secrets (AUD)
 
@@ -64,17 +65,18 @@ All v1 requirements are hypotheses until shipped and verified.
 
 ### Omp plugin (OMP)
 
-- [ ] **OMP-01**: On each Omp session start with realm configured, the plugin starts or attaches to the realm detached from the UI under a bounded startup budget; on budget overrun the state settles to disconnected with reason `STARTUP_BUDGET_EXCEEDED` and the session continues
-- [ ] **OMP-02**: Status indicator shows exactly one label, "realm active" or "realm disconnected", at launch and on every transition, using a text label plus a color cue, readable without color
+- [x] **OMP-01**: On each Omp session start with realm configured, the plugin starts or attaches to the realm detached from the UI under a bounded startup budget; on budget overrun the state settles to disconnected with reason `STARTUP_BUDGET_EXCEEDED` and the session continues
+- [x] **OMP-02**: Status indicator shows exactly one label, "realm active" or "realm disconnected", at launch and on every transition, using a text label plus a color cue, readable without color
 - [x] **OMP-03**: Status tooltip shows the reason for the current state and the time of the last transition
-- [ ] **OMP-04**: A retry command moves disconnected or error to connecting, then to active or error
+- [x] **OMP-04**: A retry command moves disconnected or error to connecting, then to active or error
 - [ ] **OMP-05**: When disconnected, the plugin reports it and applies the configured policy; it never silently falls back to unsandboxed file mutation
+  Status: Partial (2026-10-28): the guard is unit-verified for write and edit. A live check needs a model call, and the model provider is out of quota. Paths that do not go through the extension are unproven.
 
 ### CLI and daemon (CLI)
 
 - [x] **CLI-02**: With Podman missing, `realm up` reports disconnected with reason `PODMAN_MISSING` and exits without hanging
 - [x] **CLI-03**: `realm doctor` lists each prerequisite (Podman, Podman version, machine state, OpenShell, AgentOS, Anda bridge, policy file, control channel) with its status and the fix for each failing item
-- [ ] **CLI-04**: Host config snippets exist under `docs/hosts/snippets/` for Omp, Muse Code, Claude Code, Grok Build, and Hermes Agent, each matching its host note in `docs/integration/hosts.md`
+- [x] **CLI-04**: Host config snippets exist under `docs/hosts/snippets/` for Omp, Muse Code, Claude Code, Grok Build, and Hermes Agent, each matching its host note in `docs/integration/hosts.md`
 
 ### Quality and documentation (QUAL)
 
@@ -91,12 +93,12 @@ All v1 requirements are hypotheses until shipped and verified.
 - [x] **QUAL-02**: Test suite includes unit tests, state-machine tests, contract tests for MCP and ACP, path and symlink tests, schema-rejection tests, audit-redaction tests, and integration tests that run only when Podman is present and skip with a stated reason otherwise
 - [x] **QUAL-03**: Policy reference documents every policy key; security review and dependency and supply-chain review are recorded before the first release
 
-### Deferred to a follow-up milestone
+### Deferred on 2026-10-22, built in phase 9
 
 - [ ] **RT-04**: AgentOS is managed only through its supported API; a crash restarts with bounded backoff and reports `AGENTOS_CRASH_LOOP` after the maximum attempts
-  Status: Deferred to a follow-up milestone (2026-10-22): no AgentOS driver is bound; realm up fails closed with AGENTOS_NOT_CONFIGURED; the spike recommends no-go as designed (docs/integration/agentos.md).
-- [ ] **CLI-01**: `realm up`, `realm down`, `realm status`, and `realm doctor` are available from a standalone CLI backed by a long-running local daemon
-  Status: Deferred to a follow-up milestone (2026-10-22): no AgentOS driver is bound; realm up fails closed with AGENTOS_NOT_CONFIGURED; the spike recommends no-go as designed (docs/integration/agentos.md).
+  Status: Partial, verified live under owner ruling N1 (2026-10-28). The daemon probes the runner every 10 s while the session is active or degraded, and one failed probe moves the session to error with `AGENTOS_CRASH_LOOP` (live: suite scenario 8 and the Omp status item). There is no automatic restart (no hysteresis, as cited in `src/daemon/daemon.ts`), so the clause "a crash restarts with bounded backoff ... after the maximum attempts" is not implemented; recovery is `realm down` then `realm up`, or the retry command in Omp. The wording amendment awaits the owner.
+- [x] **CLI-01**: `realm up`, `realm down`, `realm status`, and `realm doctor` are available from a standalone CLI backed by a long-running local daemon
+  Status: Complete (live 2026-10-28): up, down, status and doctor ran from the standalone CLI against the production stack with the long-running daemon. The 2026-10-22 deferral no longer applies: the driver is bound from the configured image.
 
 ## v2.0 Requirements
 
@@ -104,7 +106,7 @@ All v1 requirements are hypotheses until shipped and verified.
 
 - [x] **HOST-01**: Claude Code and Grok Build share one plugin bundle (`adapters/claude-plugin`) whose manifest and MCP entry start `realm mcp`; each host's own validator accepts it
 - [x] **HOST-02**: Muse Code, Hermes Agent, and Prime Agent each have an adapter bundle (`adapters/muse-code`, `adapters/hermes-agent`, `adapters/prime-agent`) and an MCP snippet, each accepted by that host's check in an isolated directory: the host's own validator where it has one (`MUSE_EXPERIMENTAL_PLUGINS=1 muse plugins validate` for Muse Code, `hermes plugins validate` for Hermes Agent), and for Prime Agent, which has no validator subcommand, an isolated project-local `prime-agent package install <repo>/adapters/prime-agent --local` followed by `prime-agent package list` (wording amended by owner decision, 2026-10-24)
-- [ ] **HOST-03**: No host configuration outside this repository is changed without explicit approval; the adapter bundles ship in the npm package and the pack check asserts each manifest
+- [x] **HOST-03**: No host configuration outside this repository is changed without explicit approval; the adapter bundles ship in the npm package and the pack check asserts each manifest
 
 ### Omp live verification (OMP-LIVE)
 
@@ -115,7 +117,7 @@ All v1 requirements are hypotheses until shipped and verified.
 
 ### Integrated UI (UI)
 
-- [ ] **UI-01**: The Omp plugin starts on session launch and shows its realm state in the Omp UI status item without blocking the session (accepted limitation by owner decision, 2026-10-23: the status item appears at launch; a non-blocking check was not demonstrated, because get_state took about 6 s during the attach and the cause is not isolated)
+- [ ] **UI-01**: The Omp plugin starts on session launch and shows its realm state in the Omp UI status item without blocking the session (accepted limitation by owner decision, 2026-10-23: the status item appears at launch; a non-blocking check was not demonstrated, because get_state took about 6 s during the attach and the cause is not isolated; re-measured 2026-10-28: keystrokes echoed within 0.2 to 1.2 s through a 24 s cold attach on a loaded host, which bounds the stall but does not prove the loop is never blocked)
 
 ### Production isolation build (PRD)
 
@@ -150,6 +152,14 @@ All v1 requirements are hypotheses until shipped and verified.
 - [x] **PRD-OMP-01**: OMP-LIVE-01, OMP-LIVE-03, and OMP-LIVE-04 are verified live on the final build (reinstated by the owner on 2026-10-25, which supersedes PD-14) (Phase 9.6)
 - [x] **PRD-DOC-01**: The integration docs and `AGENTS.md` match the production layout and evidence with no host path; `CHANGELOG.md` and package version fields are not edited (Phase 9.6)
 - [x] **PRD-CLEAN-01**: Code that only the built-in driver path required is removed; no compatibility shim or fallback remains (Phase 9.6)
+
+### Review-finding remediation (REM)
+
+- [x] **REM-01**: The A10 boundary findings that are code defects are fixed with a regression test each: nested user namespaces and the mount family are denied by the seccomp profile, the create-time verifier asserts the added properties, the container spec bounds tmpfs size, swap and rlimits, the workspace scan refuses a mount on another device at create time (same-filesystem bind mounts are not detected), private and special egress literals are refused, atomic writes are pinned to the checked directory, audit lines are fsynced, and the credential deny list covers keys, certificates and registry tokens (Phase 9.7)
+- [x] **REM-02**: Host binaries and the sandbox image have recorded provenance: an optional supervisor digest pin is enforced at start and at spawn, `realm doctor` reports host binary versions and digests and the ptrace scope, the image build gates its inputs and compiles the runner in the image, expected digests are committed with a verifier and a build command that reads them, and CI pins actions to commit SHAs with job timeouts and an explicit read-only permission for the verify job (the Pages workflow keeps its original permissions) (Phase 9.7)
+- [x] **REM-03**: A runner that exits while the session is active moves the status to disconnected with AGENTOS_CRASH_LOOP within the health interval, so the label never says active for a dead runner; proven in the live suite and in the Omp status item (Phase 9.7)
+- [x] **REM-04**: The live-gated requirements RT-02, RT-04, CLI-01, CLI-04, TOOL-03, TOOL-04, TOOL-05, OMP-01, OMP-02 and OMP-04 carry statuses that match their evidence, and the clauses that need a model call, an ACP session or an Anda engine are stated as the limit (Phase 9.7)
+- [x] **REM-05**: Planning and integration records match the code: the stale bindRoot, 5.2, 5.4 and R7 rows, the AGENTS.md environment-read entry edges, and the RT-04 wording (Phase 9.7)
 
 ## v2 Requirements (deferred)
 
@@ -189,9 +199,9 @@ Filled by the roadmap. Each v1 requirement maps to exactly one phase.
 | FS-04 | Phase 2 | Complete |
 | FS-05 | Phase 2 | Complete |
 | RT-01 | Phase 3 | Complete (live 2026-10-28: the create-time verifier passes on every live create; CapEff 0 and CapBnd 0; rootless Podman 5.7.1; digest-pinned image; limits enforced) |
-| RT-02 | Phase 3 | Partial (live-gated) |
+| RT-02 | Phase 3 | Complete (live 2026-10-28: PODMAN_MISSING with no podman on PATH and PODMAN_MACHINE_DOWN with an empty XDG_RUNTIME_DIR, each exit 1 with a human-readable reason; no daemon and no control socket created) |
 | RT-03 | Phase 3 | Complete on the built-in path (live 2026-10-28: the runtime is PID 1 and the runner and every exec run through OpenShell exec via the gateway and supervisor; no container-runtime exec route exists; PD-15 decided; wording not amended) |
-| RT-04 | Phase 3 | Deferred to a follow-up milestone (2026-10-22): no AgentOS driver is bound; realm up fails closed with AGENTOS_NOT_CONFIGURED; the spike recommends no-go as designed (docs/integration/agentos.md) |
+| RT-04 | Phase 3 | Partial, verified live under owner ruling N1 (2026-10-28): a runner exit moves the session to error with AGENTOS_CRASH_LOOP within the 10 s health interval (scenario 8; Omp status item); no automatic restart, so the text's restart-with-backoff clause is not implemented; the wording amendment awaits the owner |
 | RT-05 | Phase 4 | Complete (live 2026-10-28, scenario 3: default-deny, allowlisted host:port connects, non-allowlisted host fails with EACCES, IPv6 off; host networking rejected at config load by unit test) |
 | RT-06 | Phase 6 | Complete |
 | RT-07 | Phase 2 | Complete |
@@ -203,31 +213,31 @@ Filled by the roadmap. Each v1 requirement maps to exactly one phase.
 | ANDA-04 | Phase 3 | Partial (live-gated) |
 | TOOL-01 | Phase 2 | Complete |
 | TOOL-02 | Phase 2 | Complete |
-| TOOL-03 | Phase 4 | Partial (live-gated) |
-| TOOL-04 | Phase 4 | Partial (live-gated) |
-| TOOL-05 | Phase 5 | Partial (live-gated) |
+| TOOL-03 | Phase 4 | Complete (unit-verified; live 2026-10-28, scenario 6: exec, write and read dispatched through realm mcp against the live sandbox) |
+| TOOL-04 | Phase 4 | Complete (live 2026-10-28, scenario 7: an exec past the per-call bound returns a retryable TOOL_TIMEOUT and the session stays usable; the bounded queue wait while connecting is unit-verified) |
+| TOOL-05 | Phase 5 | Partial (MCP live 2026-10-28, scenario 6; ACP is unit-verified only, so equivalence through both surfaces is not shown live) |
 | AUD-01 | Phase 2 | Complete |
 | AUD-02 | Phase 2 | Complete |
-| OMP-01 | Phase 5 | Partial (live-gated) |
-| OMP-02 | Phase 5 | Partial (live-gated) |
+| OMP-01 | Phase 5 | Complete (live 2026-10-28: the plugin attached and the item read realm active; the daemon survived Omp quitting; the daemon-side startup budget overrun settles to STARTUP_BUDGET_EXCEEDED, scenario 9; the plugin's own 200 s timer is unit-verified) |
+| OMP-02 | Phase 5 | Complete (live 2026-10-28: one label at a time through connecting, active, error and disconnected; marker glyph and label read in a text pane; the colour cue was not captured) |
 | OMP-03 | Phase 5 | Complete (accepted approximation, 2026-10-22: one status item, detail in its text; no tooltip API on this host) |
-| OMP-04 | Phase 5 | Partial (live-gated) |
-| OMP-05 | Phase 5 | Partial (live-gated) |
-| CLI-01 | Phase 6 | Deferred to a follow-up milestone (2026-10-22): no AgentOS driver is bound; realm up fails closed with AGENTOS_NOT_CONFIGURED; the spike recommends no-go as designed (docs/integration/agentos.md) |
+| OMP-04 | Phase 5 | Complete (live 2026-10-28: from error and from disconnected the retry command went to connecting and then active in the same Omp session) |
+| OMP-05 | Phase 5 | Partial (unit-verified; live needs a model call, which is unavailable; paths outside the extension are unproven) |
+| CLI-01 | Phase 6 | Complete (live 2026-10-28: up, down, status and doctor from the standalone CLI against the production stack, with the long-running daemon) |
 | CLI-02 | Phase 6 | Complete |
 | CLI-03 | Phase 6 | Complete |
-| CLI-04 | Phase 6 | Partial (live-gated) |
+| CLI-04 | Phase 6 | Complete (snippets exist and match their host notes; check:docs and check:pack exit 0; only the Omp host was driven live) |
 | QUAL-01 | Phase 1 | Complete (amended 2026-10-22) |
 | QUAL-02 | Phase 2 | Complete |
 | QUAL-03 | Phase 7 | Complete |
 | HOST-01 | Phase 8 | Complete (Claude Code validate passes with 2 warnings; Grok validate passes; MCP entry is realm mcp) |
 | HOST-02 | Phase 8 | Complete (2026-10-24: Claude Code, Grok Build, Muse Code, and Hermes Agent validators pass in isolated homes; Prime Agent isolated install and list pass; wording amended by owner decision 2026-10-24) |
-| HOST-03 | Phase 10 | Partial (no host configuration file references this repository; the pack check asserts the six adapter manifests and the declared bin and Omp entries; residual: an earlier, non-isolated Claude validate may have written backups under the Claude config directory, not attributed; release 0.2.0 held by the owner's ship hold) |
+| HOST-03 | Phase 10 | Complete (audit 2026-10-28, 10-03-SUMMARY.md: no host configuration file in either account names this repository or the realm entry points; the five Claude Code backups that exist all date from the same day, were written by running Claude Code instances, and name nothing of this repository; check:pack asserts the six adapter manifests, the declared bin and Omp entries; the release itself, plan 04, stays held by the owner's ship hold) |
 | OMP-LIVE-01 | Phase 9 | Complete (live 2026-10-28 on the final build: a live Omp TUI under an isolated profile with the built extension shows realm active; reinstated by the owner 2026-10-25) |
 | OMP-LIVE-02 | Phase 9 | Complete (live 2026-10-23: disconnected with the daemon's own reason, never active; re-run 2026-10-24 on Podman 5.7.1: disconnected with SCHEMA_INVALID, never active) |
 | OMP-LIVE-03 | Phase 9 | Complete (live 2026-10-28: after realm down the item shows disconnected with REALM_NOT_ACTIVE, and the retry command returns it to active in the same session; reinstated 2026-10-25) |
 | OMP-LIVE-04 | Phase 9 | Complete (live 2026-10-28: after Omp exits the same daemon process is running and realm status reports active; reinstated 2026-10-25) |
-| UI-01 | Phase 9 | Accepted limitation (owner decision 2026-10-23): status item at launch; non-blocking not demonstrated |
+| UI-01 | Phase 9 | Accepted limitation (owner decision 2026-10-23): status item at launch; re-measured 2026-10-28: keystrokes echoed within 0.2 to 1.2 s through a 24 s cold attach on a loaded host, which bounds the stall but does not prove non-blocking; the status stays the owner's call |
 | PRD-HOST-01 | Phase 9.1 | Complete (live 2026-10-25: rootless true, Podman 5.7.1, runc; memory.max 1073741824, pids.max 512, cpu.max 200000 100000) |
 | PRD-HOST-02 | Phase 9.1 | Complete (live 2026-10-25 reboot: linger, unit and socket back with no manual step; one self-recovered first-start reexec line) |
 | PRD-GW-01 | Phase 9.1 | Complete (gateway-config tests; preflight exit 0; live under production TLS) |
@@ -254,8 +264,13 @@ Filled by the roadmap. Each v1 requirement maps to exactly one phase.
 | PRD-SUP-01 | Phase 9.5 | Complete (host placement decided under PD-15, 2026-10-26, and observed live; the runner's exec child goes through OpenShell exec, not a container-runtime exec, so the no podman exec route decision stands) |
 | PRD-LIB-01 | Phase 9.4 | Complete (exact pins grpc-js 1.14.6 and proto-loader 0.8.1; per-file proto digests; pack check; audit 0 vulnerabilities, 2026-10-25; two protos used only by the removed backend were removed on 2026-10-28) |
 | PRD-TST-01 | Phase 9.6 | Complete, unit-verified (full gates at the final commit are recorded in the phase verification file) |
-| PRD-TST-02 | Phase 9.6 | Complete (live 2026-10-28 at d2db549: 28 of 28 assertions across the six scenarios, and scenario 5 passed 3 of 3 more times alone; zero residue after each run) |
+| PRD-TST-02 | Phase 9.6 | Complete (live 2026-10-28 at d2db549: 28 of 28 assertions across the six scenarios, and scenario 5 passed 3 of 3 more times alone; zero residue after each run; phase 9.7: nine scenarios, 31 of 31 assertions on the rebuilt image) |
 | PRD-TST-03 | Phase 9.6 | Complete (live 2026-10-28: up, status and down; zero residue after down; a wrong image digest fails closed; scenarios 1, 2 and 4) |
 | PRD-OMP-01 | Phase 9.6 | Complete (the owner's reinstatement of 2026-10-25 supersedes PD-14; the three checks were run live on the final build, 2026-10-28) |
 | PRD-DOC-01 | Phase 9.6 | Complete (integration docs, AGENTS.md and README refreshed; check:docs passes; no host path; CHANGELOG and package version fields untouched) |
 | PRD-CLEAN-01 | Phase 9.6 | Complete (the second sandbox and the workload command, the helper, the superseded v1.0 live bodies, and the protos used only by the removed backend were removed; defensive refusals such as AGENTOS_NOT_CONFIGURED are kept by design) |
+| REM-01 | Phase 9.7 | Complete (see 09.7-VERIFICATION.md) |
+| REM-02 | Phase 9.7 | Complete (see 09.7-VERIFICATION.md) |
+| REM-03 | Phase 9.7 | Complete (live: suite scenario 8 and the Omp status item) |
+| REM-04 | Phase 9.7 | Complete (statuses above; RT-04, TOOL-05 and OMP-05 stay partial with their limits stated) |
+| REM-05 | Phase 9.7 | Complete (see 09.7-VERIFICATION.md) |
