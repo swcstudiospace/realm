@@ -350,3 +350,48 @@ Decisions recorded with this evidence:
 - `active` needs no Anda bridge when no `andaUrl` is configured.
 - One live sandbox per pinned root.
 - The runtime's policy is the enforcement authority, and the retired realm helper is removed (recover it from git history if needed).
+
+## Running the production live suite
+
+`test/integration/production-driver.test.ts` runs the production stack end to end and checks by behaviour what the evidence above records. It is gated: without every prerequisite below the file skips, and each skipped scenario names the first missing one. A default `npm test` therefore skips it and reports the skips. The pure parts of the suite (probe output parsing, the polling helper, the `198.18.0.0/15` range check and the skip-reason selection) have their own hermetic tests in `test/integration/production-live-helpers.test.ts`, which always run.
+
+**Preconditions the operator provides.** The suite cannot check these, so a wrong host fails a scenario instead of skipping it.
+
+- The OpenShell gateway and the Realm compute driver run under the realm account, with the same image and the same roots as the variables below.
+- The `openshell` CLI has the realm gateway registered as its default. The suite gives the CLI only `PATH`, `HOME` and `XDG_RUNTIME_DIR`, as the realm does.
+- The pinned workspace root is empty, and no other live sandbox holds it (one live sandbox per pinned root).
+- The realm account's rootless Podman holds no other container. The residue check counts every container.
+
+**Environment variables.** The gate checks them in this order and reports the first that is missing.
+
+| Variable | Value |
+| --- | --- |
+| `REALM_LIVE_PRODUCTION` | `1`. An explicit operator opt-in. The test never sets it, and any other value skips the file. |
+| `REALM_LIVE_IMAGE` | The digest-pinned image reference the running driver was given. |
+| `REALM_DRIVER_STATE_ROOT` | Absolute path of the driver's sandbox state root, equal to the value the running driver was given. |
+| `REALM_DRIVER_SECRET_ROOT` | Absolute path of the driver's secret root, equal to the value the running driver was given. |
+| `REALM_DRIVER_WORKSPACE_ROOT` | Absolute path of the pinned workspace root, equal to the value the running driver was given. |
+| `XDG_RUNTIME_DIR` | The realm account's runtime directory. The rootless Podman API socket must be at `podman/podman.sock` under it. |
+
+The gate also needs Podman 5.x and the `openshell` CLI on `PATH`, and the built CLI at `dist/src/cli/main.js`, so build first.
+
+**Command.**
+
+```sh
+npm run build && node --test dist/test/integration/production-driver.test.js
+```
+
+Run the live file alone. `npm run test:integration` also runs it, but `node --test` runs the files of `dist/test/integration/*.test.js` in parallel, so the live bodies of `podman-gate.test.ts` (which run when `REALM_LIVE_IMAGE` is set) can create containers while this suite counts every container, and the residue check would fail. The safe alternative is to serialise the files: `npm run build && node --test --test-concurrency=1 "dist/test/integration/*.test.js"`.
+
+**What the suite touches.** It creates and removes only its own sandbox, `realm-daemon`, and its own temporary directories. Each scenario builds a fresh XDG config home with `realm/config.json` (the image, the pinned workspace root, and a short temporary state directory so the control socket path stays under the 107-byte limit) and its own `policy.json` (the pinned workspace root only, plus `egressAllow` where the scenario needs it). It runs the built CLI through `execFile` on the current node binary, with `PATH`, `HOME` and `XDG_RUNTIME_DIR` from the test's environment, the scenario's `XDG_CONFIG_HOME` and the three driver roots. Probes run as `openshell sandbox exec --name realm-daemon --workdir /workspace --no-tty --no-login-shell -- <argv>`, with an argv array and no interpolated shell string. The scenarios run one after another because the pinned root allows one live sandbox, and each is bounded at 5 minutes.
+
+**Cleanup.** Every scenario runs `realm down` in its cleanup, even when it failed. It then waits, polling for at most 90 s, for zero containers, zero `realm-*` sandboxes, no `realm-daemon` directory under the secret root or the sandbox state root, and an empty pinned workspace. A scenario fails if any of these remains. No secret value is printed: failures carry exit codes, error codes, names and clipped probe output.
+
+**Scenarios.**
+
+1. Default policy. `realm up` exits 0 and `realm status` reports `active`. Inside the sandbox: uid 1001; `CapEff` and `CapBnd` all zero; `NoNewPrivs` 1; `Seccomp` 2; IPv6 disabled; `/etc/resolv.conf` is exactly `nameserver 127.0.0.53`; writes to scratch space, `/workspace` and `/dev/null` succeed; writes to `/etc` and `/home` fail as read-only; `/dev/zero` and `/dev/random` are readable; `keyctl`, `add_key` and `request_key` fail with errno 1 (syscall numbers 250, 248 and 249, checked on x86-64 only and skipped with a stated reason elsewhere); the runner's heartbeat is in scratch space and the pinned workspace holds no `realm-agentos` directory; the AgentOS runner probe exits 0; `openshell sandbox exec -- sh -c 'exit 7'` exits 7; a file written in the sandbox's `/workspace` appears in the pinned root on the host and is removed afterwards; a 16 MiB random file uploaded with `openshell sandbox upload` and downloaded with `openshell sandbox download` is byte-identical (SHA-256 on the host before and after, and `sha256sum` in the sandbox), and is removed from the sandbox; a connection to `1.1.1.1:443` from the sandbox is refused. Then `realm down` exits 0 and the residue checks pass.
+2. Immediate cycle. Right after scenario 1's down, `realm up` reaches `active` with no `PODMAN_MACHINE_DOWN` (the regression check for the 30 s libpod info bound). Then `realm down` and the residue checks.
+3. Egress allowlist (`1.1.1.1:443` and `example.com:443`). The scenario first checks from the host that a TCP connection to `1.1.1.1:443` opens within 5 s, and skips with the reason that the host has no outbound connectivity if it does not. In the sandbox, with node: `1.1.1.1:443` connects; `8.8.8.8:443` fails with `EACCES`; `example.com:443` (family 4) connects; `example.org:443` fails with `EACCES`; the IPv6 literal `2606:4700:4700::1111:443` fails with `EACCES`; `dns.resolve6` for `example.com` returns `ENODATA`; `dns.resolve4` for a made-up name under `example.net` returns one address inside `198.18.0.0/15` (the range is asserted, not the address); `dns.resolveTxt` returns `ENOTIMP`. Then `realm down` and the residue checks.
+4. Wrong image digest. A config whose image is `localhost/realm-agentos@sha256:` followed by 64 zeros: `realm up` exits non-zero with the reason `OPENSHELL_START_FAILED`, and no container exists afterwards. Then `realm down` and the residue checks.
+
+**Not in the suite.** The host packet capture on ports 53 and 853 (see the sandbox resolver section above) needs root and `tcpdump`, so it is recorded in this document and is not run by the suite.
