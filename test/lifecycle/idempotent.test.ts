@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { performance } from "node:perf_hooks";
 import type { Policy } from "../../src/contract/validate.js";
 import { LockTable } from "../../src/fs/locks.js";
 import { bindWorkspaceUnderPolicy } from "../../src/fs/root.js";
@@ -87,6 +88,9 @@ void test("repeating each of the seven operations returns the same snapshot with
 });
 
 void test("a create that times out reattaches to one container on retry, with no duplicate resource (CORE-06, RT-07)", async (t) => {
+  // The clock is frozen so the 1000 ms budget cannot be used up by the create phase's real disk work on a
+  // loaded host; it bounds only the real timer racing the 3000 ms scripted create delay (3x the budget).
+  t.mock.method(performance, "now", () => 1000);
   const { controller, exec, store, workspace } = fixture(t, 1000);
   exec.setDelay("create", 3000);
 
@@ -155,6 +159,9 @@ void test("probe outside active or degraded returns the snapshot without a port 
 });
 
 void test("a probe that overruns the startup budget gives STARTUP_BUDGET_EXCEEDED and state error (D-28)", async (t) => {
+  // The clock is frozen so the 50 ms budget cannot be used up by the create phase's real disk work on a
+  // loaded host; it bounds only the real timer racing the 500 ms scripted probe delay.
+  t.mock.method(performance, "now", () => 1000);
   const { controller, exec, workspace } = fixture(t, 50);
   await controller.create(workspace);
   exec.setDelay("probe", 500);
