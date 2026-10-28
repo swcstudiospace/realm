@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { performance } from "node:perf_hooks";
 import { makeRealmError, RealmError, type ErrorCode } from "../../src/core/errors.js";
 import { AgentOsSupervisor } from "../../src/runtime/agentos.js";
 import { LifecycleController } from "../../src/lifecycle/controller.js";
@@ -1346,9 +1347,12 @@ void test("B-3: a stop during a session create waits for the create, deletes the
 });
 
 void test("RT-04, D-28: the startup budget covers the runner start on the session path: a start that outruns it gives STARTUP_BUDGET_EXCEEDED and the session is in error", async (t) => {
-  // The controller's startup budget must outlast the whole create phase (fake libpod server, policy-file writes,
-  // verifier) on a loaded host, or it expires before the runner start is issued. The budget is 4000 ms, the
-  // supervisor's own call budget is 15000 ms, so the controller, not the supervisor, reports the expiry.
+  // The clock is frozen, so the controller's deadline checks never trip: the create phase (fake libpod server,
+  // policy-file writes, verifier) cannot use up the startup budget however loaded the host is. The budget then
+  // bounds only the hanging runner start, as a real timer that starts when the controller awaits it. The
+  // supervisor's own call budget (15000 ms) is far longer than the controller's (2000 ms), so the controller,
+  // not the supervisor, reports the expiry. t.mock restores the real clock when the test ends.
+  t.mock.method(performance, "now", () => 1_000_000);
   const f = await fixture(t, { supervisorCallTimeoutMs: 15_000 });
   mkdirSync(f.workspaceRoot, { recursive: true });
   // The runner start hangs, so the controller's startup budget ends the wait.
@@ -1362,7 +1366,7 @@ void test("RT-04, D-28: the startup budget covers the runner start on the sessio
       credentialAllow: [],
       egressAllow: [],
       shellEnabled: false,
-      startupBudgetMs: 4000,
+      startupBudgetMs: 2000,
       toolQueueMs: 2000,
     },
     pinnedRoot: bindWorkspaceUnderPolicy([f.workspaceRoot], f.workspaceRoot),
