@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { RealmError, type ErrorCode } from "../../src/core/errors.js";
-import { LibpodClient } from "../../src/runtime/libpod-client.js";
+import { DEFAULT_INFO_TIMEOUT_MS, DEFAULT_REQUEST_TIMEOUT_MS, LibpodClient } from "../../src/runtime/libpod-client.js";
 import { LIBPOD_ROUTES, type LibpodRouteName } from "../../src/runtime/libpod-routes.js";
 import { FakeLibpod, type FakeLibpodOptions, type RecordedRequest } from "../support/fake-libpod.js";
 
@@ -147,6 +147,42 @@ void test("RT-09: a timed-out request rejects with PODMAN_MACHINE_DOWN and destr
   await assertCode(client.inspectContainer("realm-a"), "PODMAN_MACHINE_DOWN");
   const hung = await waitForRecorded(fake, "inspectContainer", 5000);
   await fake.waitForSocketClose(hung.seq, 2000);
+});
+
+void test("RT-09: info has its own bound; every other route keeps the request bound", async (t) => {
+  const { fake, socketPath } = await startFake(t);
+  const client = new LibpodClient(socketPath, { requestTimeoutMs: 50, infoTimeoutMs: 1000 });
+  fake.setDelay("info", 300);
+  fake.setDelay("listContainers", 300);
+  const info = await client.info();
+  assert.equal(info.rootless, true);
+  await assertCode(client.listContainersByLabel(LABEL_KEY, "true"), "PODMAN_MACHINE_DOWN");
+});
+
+void test("RT-09: an info reply that never comes fails with PODMAN_MACHINE_DOWN only after the info bound", async (t) => {
+  const { fake, socketPath } = await startFake(t);
+  fake.hangNext("info");
+  const client = new LibpodClient(socketPath, { requestTimeoutMs: 50, infoTimeoutMs: 600 });
+  const started = Date.now();
+  await assertCode(client.info(), "PODMAN_MACHINE_DOWN");
+  const elapsed = Date.now() - started;
+  assert.ok(elapsed >= 500, `info failed after ${String(elapsed)} ms, before its 600 ms bound`);
+  const hung = await waitForRecorded(fake, "info", 5000);
+  await fake.waitForSocketClose(hung.seq, 2000);
+});
+
+void test("RT-09: the default bounds are 5000 ms for requests and 30000 ms for info", () => {
+  assert.equal(DEFAULT_REQUEST_TIMEOUT_MS, 5000);
+  assert.equal(DEFAULT_INFO_TIMEOUT_MS, 30000);
+});
+
+void test("RT-09: an invalid infoTimeoutMs is refused with SCHEMA_INVALID", () => {
+  for (const bad of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+    assert.throws(
+      () => new LibpodClient("/run/user/1000/podman/podman.sock", { infoTimeoutMs: bad }),
+      (error: unknown) => error instanceof RealmError && error.code === "SCHEMA_INVALID",
+    );
+  }
 });
 
 void test("RT-09: a socket that does not exist gives PODMAN_MACHINE_DOWN, not a raw transport error", async (t) => {

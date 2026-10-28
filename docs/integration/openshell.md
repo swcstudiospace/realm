@@ -261,6 +261,12 @@ the phase 9.5 supervisor reports its effective configuration. The PD-08 stop and
 
 To build the image, first build `--target runtime-builder` to read the sha256 the stage prints. Then build the full image with `--build-arg RUNTIME_SHA256=<that digest>`. A later build that produces a different binary fails the runtime gate.
 
+## Libpod request timeouts
+
+- The libpod client bounds each request at 5 seconds (`requestTimeoutMs`, `DEFAULT_REQUEST_TIMEOUT_MS`). A timeout, like a transport failure, gives `PODMAN_MACHINE_DOWN`.
+- The info request alone is bounded at 30 seconds (`infoTimeoutMs`, `DEFAULT_INFO_TIMEOUT_MS`). Both options must be positive integers; any other value is refused with `SCHEMA_INVALID`.
+- Evidence (Podman 5.7.1, rootless API, 2026-10-28): `GET /libpod/info` took 4.4 to 5.9 seconds per call over six measurements, while listing containers took 1 to 23 ms. The API service runs `dpkg -S` on its own helper binaries to report package versions, and on a host with a large package database each lookup is slow. With the 5 second bound, info timed out about half the time and `realm up` failed intermittently with `PODMAN_MACHINE_DOWN`. The cause is the host, so the realm gives info a longer bound instead.
+
 ## Sandbox create hardening: sysctls
 
 - The sandbox runtime needs `net.ipv4.ip_unprivileged_port_start` set to `0` in the sandbox network namespace. The Podman create body carries it as `sysctl`, together with the two IPv6 keys below, and no other sysctl is set there.

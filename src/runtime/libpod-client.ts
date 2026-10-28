@@ -5,7 +5,9 @@
 // Every request owns its socket. A timer races each request, and when it fires the
 // request's socket is destroyed. withTimeout only rejects and cannot cancel, so it is not
 // used here (F-P3-05). A transport failure or a timeout gives PODMAN_MACHINE_DOWN, the
-// code D-53 gives a socket timeout. A malformed body or an unexpected status gives
+// code D-53 gives a socket timeout. The bound is requestTimeoutMs (5 s), except for info, which has
+// infoTimeoutMs (30 s).
+// A malformed body or an unexpected status gives
 // SCHEMA_INVALID, and the response body is never echoed into an error.
 //
 // The client reads no environment and takes its socket path as an argument. The socket
@@ -39,7 +41,11 @@ import {
   type LibpodRoute,
 } from "./libpod-routes.js";
 
-const DEFAULT_REQUEST_TIMEOUT_MS = 5000;
+// Evidence (Podman 5.7.1 rootless, measured six times): GET /libpod/info takes 4.4 to 5.9 s because the service runs dpkg
+// lookups on its helper binaries, which is slow on hosts with a large package database. A container list takes 1 to 23 ms.
+// A 5 s bound therefore cut info off about half the time, so info has its own, longer bound.
+export const DEFAULT_REQUEST_TIMEOUT_MS = 5000;
+export const DEFAULT_INFO_TIMEOUT_MS = 30000;
 const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 const LABEL_KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
 // The user-namespace mapping of every sandbox: the realm account is mapped to the workload uid and gid (keep-id).
@@ -62,6 +68,8 @@ export interface LibpodClientOptions {
   readonly seccompProfilePath?: string;
   // Bound for one request, in addition to any grace period the request itself asks for.
   readonly requestTimeoutMs?: number;
+  // Bound for the info request alone. Every other route keeps requestTimeoutMs.
+  readonly infoTimeoutMs?: number;
 }
 
 export interface LibpodInfo {
@@ -97,6 +105,7 @@ export interface ContainerSpec {
 interface Transport {
   readonly socketPath: string;
   readonly timeoutMs: number;
+  readonly infoTimeoutMs: number;
 }
 
 interface HttpReply {
@@ -109,6 +118,8 @@ interface RouteCall {
   readonly containerId?: string;
   readonly query?: Readonly<Record<string, string>>;
   readonly graceMs?: number;
+  // Replaces the transport's request bound for this call only.
+  readonly timeoutMs?: number;
   // A JSON request body, built by this module from a typed spec. Absent for bodyless routes.
   readonly body?: string;
 }
@@ -125,6 +136,10 @@ export class LibpodClient {
     if (!Number.isInteger(timeoutMs) || timeoutMs <= 0) {
       throw makeRealmError("SCHEMA_INVALID");
     }
+    const infoTimeoutMs = options.infoTimeoutMs ?? DEFAULT_INFO_TIMEOUT_MS;
+    if (!Number.isInteger(infoTimeoutMs) || infoTimeoutMs <= 0) {
+      throw makeRealmError("SCHEMA_INVALID");
+    }
     const seccompProfilePath = options.seccompProfilePath;
     if (
       seccompProfilePath !== undefined &&
@@ -135,11 +150,11 @@ export class LibpodClient {
       throw makeRealmError("SCHEMA_INVALID");
     }
     this.seccompProfilePath = seccompProfilePath;
-    this.transport = Object.freeze({ socketPath, timeoutMs });
+    this.transport = Object.freeze({ socketPath, timeoutMs, infoTimeoutMs });
   }
 
   async info(): Promise<LibpodInfo> {
-    const reply = await exchangeRoute(this.transport, LIBPOD_ROUTES.info, {});
+    const reply = await exchangeRoute(this.transport, LIBPOD_ROUTES.info, { timeoutMs: this.transport.infoTimeoutMs });
     expectStatus(reply, [200]);
     const body = parseJson(reply.text);
     const rootless = readPath(body, LIBPOD_INFO_ROOTLESS_PATH);
@@ -258,7 +273,7 @@ async function exchangeRoute(transport: Transport, route: LibpodRoute, call: Rou
   checkRouteId(route, call.containerId);
   const apiVersion = await apiVersionOf(transport);
   const target = routeTarget(route, call.containerId, apiVersion, call.query);
-  return exchange(transport.socketPath, route.method, target, transport.timeoutMs + (call.graceMs ?? 0), call.body);
+  return exchange(transport.socketPath, route.method, target, (call.timeoutMs ?? transport.timeoutMs) + (call.graceMs ?? 0), call.body);
 }
 
 function exchange(socketPath: string, method: string, target: string, timeoutMs: number, body = ""): Promise<HttpReply> {
