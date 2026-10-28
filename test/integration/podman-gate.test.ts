@@ -213,7 +213,7 @@ async function createLiveContainer(t: TestContext, egress: readonly EgressRule[]
   const policyPath = writePolicyDocument(config.stateDir, sessionId, egress, AGENTOS_WORKLOAD_BINARY);
   const containerId = await runOpenShellCreate(
     { containers: libpod, createSandbox: createThrough(runner) },
-    { sessionId, policyPath, cpus: SANDBOX_CPUS, memory: SANDBOX_MEMORY },
+    { sessionId, policyPath, cpus: SANDBOX_CPUS, memory: SANDBOX_MEMORY, imageRef: config.image },
     LIVE_CREATE_DEADLINE_MS,
   );
   t.after(async () => {

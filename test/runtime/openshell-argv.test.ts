@@ -19,6 +19,7 @@ const OPENSHELL_MANAGED_KEY = "openshell.managed";
 const SANDBOX_NAME_KEY = "openshell.ai/sandbox-name";
 const SESSION = "sess-01";
 const POLICY_PATH = "/state/realm/runtime/sess-01.policy.json";
+const IMAGE = "example.invalid/realm-sandbox@sha256:0000000000000000000000000000000000000000000000000000000000000000";
 // Flag-looking elements in the workload must stay after the -- separator.
 const WORKLOAD = ["/usr/bin/agent", "--serve", "--env", "--provider"];
 const REQUEST: SandboxCreateRequest = {
@@ -26,6 +27,7 @@ const REQUEST: SandboxCreateRequest = {
   policyPath: POLICY_PATH,
   cpus: 2,
   memory: "1Gi",
+  imageRef: IMAGE,
 };
 
 // The flags the pinned 0.1.5 create verb accepts before the separator (S-10, D-55).
@@ -36,6 +38,7 @@ const PINNED_FLAGS: readonly string[] = [
   "--detach",
   "--cpu",
   "--memory",
+  "--from",
 ];
 
 async function startLibpod(t: TestContext, store: FakeContainerStore): Promise<LibpodClient> {
@@ -69,6 +72,8 @@ void test("RT-03: the create argv is exactly the pinned 0.1.5 verb sequence, wit
     "2",
     "--memory",
     "1Gi",
+    "--from",
+    IMAGE,
   ]);
 });
 
@@ -99,13 +104,14 @@ void test("RT-03: every flag of the create argv belongs to the pinned 0.1.5 flag
   }
 });
 
-void test("RT-03: a session id outside the safe set, a relative policy path, or a bad memory value is refused with SCHEMA_INVALID", async (t) => {
+void test("RT-03: a session id outside the safe set, a relative policy path, a bad memory value, or an empty image reference is refused with SCHEMA_INVALID", async (t) => {
   const bad: readonly SandboxCreateRequest[] = [
     { ...REQUEST, sessionId: "../escape" },
     { ...REQUEST, sessionId: "" },
     { ...REQUEST, policyPath: "runtime/sess-01.policy.json" },
     { ...REQUEST, memory: "--env=FOO" },
     { ...REQUEST, cpus: 0 },
+    { ...REQUEST, imageRef: "" },
   ];
   const store = new FakeContainerStore();
   const client = await startLibpod(t, store);

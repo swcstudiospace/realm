@@ -34,6 +34,7 @@ const PINNED_FLAGS = [
   "--detach",
   "--cpu",
   "--memory",
+  "--from",
 ];
 const HELP_ALL: CommandOutcome = {
   exitCode: 0,

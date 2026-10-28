@@ -20,6 +20,7 @@ const REQUEST: SandboxCreateRequest = {
   policyPath: "/state/runtime/sess-poll.policy.json",
   cpus: 1,
   memory: "512Mi",
+  imageRef: "example.invalid/realm-sandbox@sha256:0000000000000000000000000000000000000000000000000000000000000000",
 };
 
 // A workload container of this session as OpenShell labels it: the sandbox role under the session's sandbox name.

@@ -22,12 +22,11 @@ function refusedWith(code: ErrorCode): (error: unknown) => boolean {
   return (error: unknown) => error instanceof RealmError && error.code === code;
 }
 
-void test("the session create argv names realm-<sessionId>, carries the image through --from, and has no command or --no-keep", () => {
+void test("the session create argv names realm-<sessionId>, carries the image through --from, and has no command", () => {
   const create = buildCreateArgv({ sessionId: "daemon", policyPath: POLICY, cpus: 2, memory: "4Gi", imageRef: IMAGE });
   assert.equal(create[create.indexOf("--name") + 1], "realm-daemon");
   assert.equal(create[create.indexOf("--from") + 1], IMAGE);
   assert.equal(create.includes("--"), false);
-  assert.equal(create.includes("--no-keep"), false);
 });
 
 void test("the runner argv is the pinned exec form that runs the runner in the session's sandbox", () => {
@@ -61,11 +60,6 @@ void test("the probe argv names the session's sandbox, and the delete argv names
 
 void test("a session id outside the safe set is refused with SCHEMA_INVALID by the AgentOS argv builder", () => {
   assert.throws(() => buildAgentOsSandboxArgv({ ...REQUEST, sessionId: "../escape" }), refusedWith("SCHEMA_INVALID"));
-});
-
-void test("a session create argv carries no --from when no image is given", () => {
-  const argv = buildCreateArgv({ sessionId: "daemon", policyPath: POLICY, cpus: 2, memory: "4Gi" });
-  assert.equal(argv.includes("--from"), false);
 });
 
 void test("an empty image reference is refused with SCHEMA_INVALID by the create builder", () => {

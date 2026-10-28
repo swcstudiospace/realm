@@ -361,7 +361,7 @@ void test("RT-05, RT-03: create writes the egress list and the workload binary i
   assert.deepEqual(policy.network_policies, renderNetworkPolicies(EGRESS, AGENTOS_WORKLOAD_BINARY));
 });
 
-void test("RT-03, CORE-06: a session create runs exactly one sandbox create, named realm-<sessionId>, with no workload command and no --no-keep", async (t) => {
+void test("RT-03, CORE-06: a session create runs exactly one sandbox create, named realm-<sessionId>, with no workload command", async (t) => {
   const f = await fixture(t);
   await createSession(f);
   const creates = f.openshell.calls().map((call) => call.argv).filter((argv) => argv[2] === "create");
@@ -369,7 +369,6 @@ void test("RT-03, CORE-06: a session create runs exactly one sandbox create, nam
   const create = creates[0] ?? [];
   assert.equal(create[create.indexOf("--name") + 1], realmSandboxName(SESSION));
   assert.equal(create.includes("--"), false, "the create carries no workload command");
-  assert.equal(create.includes("--no-keep"), false, "the create carries no --no-keep");
 });
 
 void test("RT-05, RT-03: a create for the daemon's session writes only that session's policy document, with the AgentOS workload binary", async (t) => {

@@ -138,8 +138,8 @@ export interface SandboxCreateRequest {
   readonly policyPath: string;
   readonly cpus: number;
   readonly memory: string;
-  // Optional. The container image reference for the sandbox source (OpenShell --from). Sessions omit it.
-  readonly imageRef?: string;
+  // The container image reference for the sandbox source (OpenShell --from).
+  readonly imageRef: string;
 }
 
 export interface OpenShellCreateDeps {
@@ -149,7 +149,7 @@ export interface OpenShellCreateDeps {
 }
 
 // The pinned create argv for one session (D-55). It names the sandbox and carries the policy, the limits and the
-// optional image, and no command. OpenShell 0.1.5 does not run a create command, so the AgentOS runner is started
+// image, and no command. OpenShell 0.1.5 does not run a create command, so the AgentOS runner is started
 // as an exec child after create (agentos-workload.ts). Every refused input is SCHEMA_INVALID, and the check runs
 // before any I/O.
 export function buildCreateArgv(request: SandboxCreateRequest): readonly string[] {
@@ -164,7 +164,7 @@ export function buildCreateArgv(request: SandboxCreateRequest): readonly string[
   if (!MEMORY_PATTERN.test(request.memory)) {
     throw makeRealmError("SCHEMA_INVALID");
   }
-  if (request.imageRef !== undefined && request.imageRef.length === 0) {
+  if (request.imageRef.length === 0) {
     throw makeRealmError("SCHEMA_INVALID");
   }
   return Object.freeze([
@@ -181,7 +181,8 @@ export function buildCreateArgv(request: SandboxCreateRequest): readonly string[
     String(request.cpus),
     "--memory",
     request.memory,
-    ...(request.imageRef === undefined ? [] : ["--from", request.imageRef]),
+    "--from",
+    request.imageRef,
   ]);
 }
 

@@ -446,6 +446,7 @@ function pinnedCreateFlags(): readonly string[] {
     policyPath: "/doctor-check.policy.json",
     cpus: 1,
     memory: "1Gi",
+    imageRef: `example.invalid/doctor-check@sha256:${"0".repeat(64)}`,
   });
   return argv.filter((element) => element.startsWith("--"));
 }

@@ -247,9 +247,9 @@ export function createOpenShellAgentOsDriver(options: OpenShellAgentOsDriverOpti
   }
 
   return {
-    // Creates the session's sandbox, the one create in the realm. The argv is buildCreateArgv for realm-<sessionId>, with no
-    // workload command and no --no-keep. The runner is bounded by timeoutMs. A rejection, a non-zero exit or a missed budget
-    // is OPENSHELL_START_FAILED.
+    // Creates the session's sandbox, the one create in the realm. The argv is buildCreateArgv for realm-<sessionId>: the sandbox
+    // name, the policy, the limits and the image, with no workload command. The runner is bounded by timeoutMs. A rejection, a
+    // non-zero exit or a missed budget is OPENSHELL_START_FAILED.
     async create(request: SandboxCreateRequest, timeoutMs: number): Promise<void> {
       const createArgv = buildCreateArgv(request);
       if (!(await succeeds(() => runner(createArgv, { timeoutMs }), timeoutMs))) {
