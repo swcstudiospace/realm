@@ -424,8 +424,8 @@ function assertNoOverlapPair(workspaceDir: string, channelDir: string): void {
 }
 
 // Refuses a state directory that a sandbox must not bind (C5): one holding any socket, or a secret-named entry
-// that group or world can access. The error names no path.
-function assertStateDirClear(stateDir: string): void {
+// that group or world can access. The error names no path. The driver also runs it on a stale directory before reclaiming it.
+export function assertStateDirClear(stateDir: string): void {
   visitTree(stateDir, (path, entry) => {
     if (entry.isSocket()) {
       throw makeRealmError("SCHEMA_INVALID");

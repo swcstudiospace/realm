@@ -51,6 +51,7 @@ export function realmLabels(name: string): Record<string, string> {
 export class FakeLibpod {
   readonly containers = new Map<string, FakeContainer>();
   inspectCalls = 0;
+  listCalls = 0;
 
   // The workspace is the host path the container binds at /workspace. A container added without one binds no workspace.
   add(name: string, running: boolean, workspace?: string): void {
@@ -58,6 +59,7 @@ export class FakeLibpod {
   }
 
   listContainersByLabel(key: string, value: string): Promise<LibpodContainerSummary[]> {
+    this.listCalls += 1;
     const listed = [...this.containers.values()]
       .filter((container) => container.labels[key] === value)
       .map((container) => ({ id: container.id, labels: container.labels }));

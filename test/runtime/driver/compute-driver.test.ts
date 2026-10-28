@@ -1,13 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmdirSync, statSync, symlinkSync, unlinkSync, writeFileSync, type Stats } from "node:fs";
+import { createServer } from "node:net";
 import { dirname, join } from "node:path";
 import { status } from "@grpc/grpc-js";
 import { makeRealmError, RealmError } from "../../../src/core/errors.js";
 import { ComputeDriver, type ComputeDriverConfig, type DriverSandboxMessage } from "../../../src/runtime/driver/compute-driver.js";
 import { DRIVER_ADMISSION_ACKNOWLEDGEMENT } from "../../../src/runtime/driver/admission.js";
 import { DriverStatusError, driverFailureOf } from "../../../src/runtime/driver/grpc-status.js";
-import type { ContainerSpec } from "../../../src/runtime/libpod-client.js";
+import type { ContainerSpec, LibpodInspect } from "../../../src/runtime/libpod-client.js";
 import { diskLifecycle, FakeLibpod, FakeLifecycle, FakeRuntime, driverConfig, OTHER_DIGEST_IMAGE, SANDBOX_IMAGE, validSandbox } from "./fakes.js";
 
 function harness() {
@@ -223,16 +224,189 @@ void test("PRD-DRV-02: a create makes only the state directory, and the pinned r
   assert.deepEqual(readdirSync(config.workspaceRoot), []);
 });
 
-void test("PRD-DRV-02: a create whose state directory already exists is refused, and creates nothing", async () => {
-  const { driver, lifecycle, config } = harness();
-  const stateDir = join(config.sandboxStateRoot, "realm-session-1");
+// A libpod whose inspect of a name answers as usual until the given call, and finds no container from then on.
+class VanishingLibpod extends FakeLibpod {
+  vanishAt = Number.POSITIVE_INFINITY;
+
+  override inspectContainer(reference: string): Promise<LibpodInspect | null> {
+    if (this.inspectCalls + 1 >= this.vanishAt) {
+      this.inspectCalls += 1;
+      return Promise.resolve(null);
+    }
+    return super.inspectContainer(reference);
+  }
+}
+
+// A libpod whose inspect of a container cannot be read.
+class UnreadableLibpod extends FakeLibpod {
+  override inspectContainer(): Promise<LibpodInspect | null> {
+    this.inspectCalls += 1;
+    return Promise.reject(new Error("inspect refused"));
+  }
+}
+
+const SESSION_CONTAINER = "realm-session-1";
+const STATE_DIR_REFUSAL = "realm compute driver refused: rpc=CreateSandbox check=create.state_dir code=SCHEMA_INVALID";
+const SECRET_DIR_REFUSAL = "realm compute driver refused: rpc=CreateSandbox check=create.secret_dir code=SCHEMA_INVALID";
+
+// A driver over the real state and secret directories: the lifecycle's delete removes them from disk. Refusal lines are collected.
+async function diskHarness(libpod: FakeLibpod = new FakeLibpod()) {
+  const lines: string[] = [];
+  const config = driverConfig({ refusalLog: (line) => lines.push(line) });
+  const lifecycle = await diskLifecycle(config, libpod);
+  const runtime = new FakeRuntime();
+  const driver = new ComputeDriver(config, { lifecycle, libpod, runtime });
+  return {
+    libpod,
+    lifecycle,
+    runtime,
+    config,
+    driver,
+    lines,
+    stateDir: join(config.sandboxStateRoot, SESSION_CONTAINER),
+    secretDir: join(config.secretRoot, SESSION_CONTAINER),
+  };
+}
+
+// Reproduces what a crashed driver leaves behind after a create: both directories on disk with the given files in them.
+function leaveStaleDirectories(stateDir: string, secretDir: string): { stateSentinel: string; secretSentinel: string } {
+  mkdirSync(stateDir);
+  mkdirSync(secretDir, { recursive: true, mode: 0o700 });
+  const stateSentinel = join(stateDir, "sentinel.txt");
+  const secretSentinel = join(secretDir, "main-exit");
+  writeFileSync(stateSentinel, "from a crashed sandbox");
+  writeFileSync(secretSentinel, "from a crashed sandbox", { mode: 0o600 });
+  return { stateSentinel, secretSentinel };
+}
+
+void test("PRD-DRV-02: a create whose state or secret directory exists while a container of that name exists is refused with the same check, and nothing is deleted", async () => {
+  for (const which of ["state", "secret"] as const) {
+    const lines: string[] = [];
+    const config = driverConfig({ refusalLog: (line) => lines.push(line) });
+    const libpod = new FakeLibpod();
+    const lifecycle = new FakeLifecycle(libpod);
+    const driver = new ComputeDriver(config, { lifecycle, libpod, runtime: new FakeRuntime() });
+    libpod.add(SESSION_CONTAINER, false);
+    const dir = which === "state" ? join(config.sandboxStateRoot, SESSION_CONTAINER) : join(config.secretRoot, SESSION_CONTAINER);
+    mkdirSync(dir, { recursive: true });
+    const leftover = join(dir, "leftover.txt");
+    writeFileSync(leftover, "from an earlier sandbox");
+    await assert.rejects(driver.createSandbox(validSandbox()), expectCode("SCHEMA_INVALID"));
+    assert.deepEqual(lines, [which === "state" ? STATE_DIR_REFUSAL : SECRET_DIR_REFUSAL]);
+    assert.equal(lifecycle.creates.length, 0);
+    assert.deepEqual(lifecycle.deletes, []);
+    assert.equal(existsSync(leftover), true);
+    assert.equal(libpod.containers.has(SESSION_CONTAINER), true);
+    assert.deepEqual(readdirSync(config.workspaceRoot), []);
+  }
+});
+
+void test("PRD-DRV-02: a create whose state directory exists while a running container of that name holds the pinned root is refused with the transition code, and nothing is deleted", async () => {
+  const { driver, lifecycle, libpod, config } = harness();
+  libpod.add(SESSION_CONTAINER, true, config.workspaceRoot);
+  const stateDir = join(config.sandboxStateRoot, SESSION_CONTAINER);
   mkdirSync(stateDir);
   const leftover = join(stateDir, "leftover.txt");
-  writeFileSync(leftover, "from an earlier sandbox");
-  await assert.rejects(driver.createSandbox(validSandbox()), expectCode("SCHEMA_INVALID"));
+  writeFileSync(leftover, "live sandbox state");
+  await assert.rejects(driver.createSandbox(validSandbox()), expectCode("REALM_INVALID_TRANSITION"));
+  assert.deepEqual(lifecycle.deletes, []);
   assert.equal(lifecycle.creates.length, 0);
   assert.equal(existsSync(leftover), true);
-  assert.deepEqual(readdirSync(config.workspaceRoot), []);
+  assert.equal(libpod.containers.get(SESSION_CONTAINER)?.running, true);
+});
+
+void test("PRD-DRV-02: a create whose state and secret directories remain from a sandbox whose container is gone reclaims them, stops the stale supervisor, and succeeds", async () => {
+  const { driver, lifecycle, libpod, runtime, stateDir, secretDir, lines } = await diskHarness();
+  await driver.createSandbox(validSandbox());
+  const [stale] = runtime.supervisors;
+  assert.ok(stale !== undefined);
+  // The crash: the startup sweep removed the container; the directories and the driver's handle for it remain.
+  libpod.containers.delete(SESSION_CONTAINER);
+  const stateSentinel = join(stateDir, "sentinel.txt");
+  const secretSentinel = join(secretDir, "main-exit");
+  writeFileSync(stateSentinel, "from a crashed sandbox");
+  writeFileSync(secretSentinel, "from a crashed sandbox", { mode: 0o600 });
+  lifecycle.deletes.length = 0;
+  const created = await driver.createSandbox(validSandbox());
+  assert.equal(created.runtime_identity, `id-${SESSION_CONTAINER}`);
+  assert.equal(stale.stops, 1, "the stale supervisor handle was stopped");
+  assert.deepEqual(lifecycle.deletes, [SESSION_CONTAINER]);
+  assert.equal(existsSync(stateSentinel), false, "the stale state directory's file is gone");
+  assert.equal(existsSync(secretSentinel), false, "the stale secret directory's file is gone");
+  assert.equal(runtime.supervisors.length, 2, "the new sandbox has its own supervisor");
+  assert.equal(runtime.supervisors[1]?.stops, 0);
+  assert.equal(existsSync(join(secretDir, "launch.json")), true, "the new launch material is written");
+  assert.deepEqual(lines, []);
+});
+
+void test("PRD-DRV-02: a create whose stale state directory holds a socket is refused as the create-time check does, and nothing is removed", async () => {
+  const { driver, lifecycle, libpod, runtime, stateDir, secretDir, lines } = await diskHarness();
+  await driver.createSandbox(validSandbox());
+  const [stale] = runtime.supervisors;
+  libpod.containers.delete(SESSION_CONTAINER);
+  writeFileSync(join(stateDir, "sentinel.txt"), "from a crashed sandbox");
+  const server = createServer();
+  await new Promise<void>((resolve) => {
+    server.listen(join(stateDir, "s.sock"), resolve);
+  });
+  try {
+    lifecycle.deletes.length = 0;
+    await assert.rejects(driver.createSandbox(validSandbox()), expectCode("SCHEMA_INVALID"));
+    assert.deepEqual(lines, [STATE_DIR_REFUSAL]);
+    assert.deepEqual(lifecycle.deletes, []);
+    assert.equal(existsSync(join(stateDir, "sentinel.txt")), true);
+    assert.equal(existsSync(join(secretDir, "launch.json")), true);
+    assert.equal(stale?.stops, 0, "the supervisor handle is kept when nothing is reclaimed");
+  } finally {
+    server.close();
+  }
+});
+
+void test("PRD-DRV-02: a create whose container lookup cannot be read is refused with the same check, and nothing is removed", async () => {
+  const { driver, lifecycle, stateDir, secretDir, lines } = await diskHarness(new UnreadableLibpod());
+  const { stateSentinel, secretSentinel } = leaveStaleDirectories(stateDir, secretDir);
+  await assert.rejects(driver.createSandbox(validSandbox()), expectCode("SCHEMA_INVALID"));
+  assert.deepEqual(lines, [STATE_DIR_REFUSAL]);
+  assert.deepEqual(lifecycle.deletes, []);
+  assert.equal(lifecycle.creates.length, 0);
+  assert.equal(existsSync(stateSentinel), true);
+  assert.equal(existsSync(secretSentinel), true);
+});
+
+void test("PRD-DRV-02: a name the driver tracks as an unremoved container is refused with the same check, whatever a later lookup finds, and nothing is removed", async () => {
+  const libpod = new VanishingLibpod();
+  const { lifecycle, runtime, stateDir, secretDir, lines, config } = await diskHarness(libpod);
+  // A failed create whose container cannot be removed leaves the container in the driver's unremoved set.
+  const undeletable = {
+    create: lifecycle.create.bind(lifecycle),
+    stop: lifecycle.stop.bind(lifecycle),
+    delete: (): Promise<void> => Promise.reject(new Error("delete refused")),
+  };
+  const tracking = new ComputeDriver(config, { lifecycle: undeletable, libpod, runtime });
+  runtime.exitOnSpawn = true;
+  await assert.rejects(tracking.createSandbox(validSandbox()), expectCode("OPENSHELL_START_FAILED"));
+  runtime.exitOnSpawn = false;
+  const container = libpod.containers.get(SESSION_CONTAINER);
+  assert.ok(container !== undefined);
+  container.running = false;
+  const { stateSentinel, secretSentinel } = leaveStaleDirectories(stateDir, secretDir);
+  // The pinned-root check finds the stopped container, which stays tracked; the next lookup would find nothing.
+  libpod.vanishAt = libpod.inspectCalls + 2;
+  lifecycle.deletes.length = 0;
+  await assert.rejects(tracking.createSandbox(validSandbox()), expectCode("SCHEMA_INVALID"));
+  assert.deepEqual(lifecycle.deletes, []);
+  assert.equal(existsSync(stateSentinel), true);
+  assert.equal(existsSync(secretSentinel), true);
+  assert.equal(lines.at(-1), STATE_DIR_REFUSAL);
+});
+
+void test("PRD-DRV-02: a create with no state or secret directory makes the same libpod calls as before: one list, no inspect, no delete", async () => {
+  const { driver, lifecycle, libpod } = harness();
+  await driver.createSandbox(validSandbox());
+  assert.equal(libpod.listCalls, 1, "only the pinned-root check lists containers");
+  assert.equal(libpod.inspectCalls, 0);
+  assert.deepEqual(lifecycle.deletes, []);
+  assert.equal(lifecycle.creates.length, 1);
 });
 
 void test("PRD-DRV-02: a lifecycle refusal removes the state directory this call made, keeps the pinned root and its contents, and rethrows the original error", async () => {

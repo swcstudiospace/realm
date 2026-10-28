@@ -3,8 +3,8 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, symlinkSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { makeRealmError, RealmError } from "../../../src/core/errors.js";
 import { ComputeDriver, type ComputeDriverConfig, type DriverSandboxMessage } from "../../../src/runtime/driver/compute-driver.js";
 import { FakeLibpod, FakeLifecycle, FakeRuntime, driverConfig, validSandbox } from "./fakes.js";
@@ -109,20 +109,51 @@ void test("PRD-ISO-02: a create the lifecycle refuses logs one line naming Creat
   assert.deepEqual(entriesOf(config.sandboxStateRoot), []);
 });
 
-void test("PRD-ISO-02: a create whose state directory already exists logs create.state_dir and makes no libpod call", async () => {
+void test("PRD-ISO-02: a create whose state directory exists while a container of that name exists logs create.state_dir and deletes nothing", async () => {
   const { config, libpod, lifecycle, driver, lines } = harness();
+  libpod.add(CONTAINER_NAME, false);
   mkdirSync(join(config.sandboxStateRoot, CONTAINER_NAME));
   await assert.rejects(driver.createSandbox(validSandbox()), schemaInvalid);
   assert.deepEqual(lines, ["realm compute driver refused: rpc=CreateSandbox check=create.state_dir code=SCHEMA_INVALID"]);
   assert.deepEqual(lifecycle.creates, []);
-  assert.equal(libpod.inspectCalls, 0);
+  assert.deepEqual(lifecycle.deletes, []);
+  assert.equal(libpod.containers.has(CONTAINER_NAME), true);
 });
 
-void test("PRD-ISO-02: a create whose secret directory already exists logs create.secret_dir and makes no libpod call", async () => {
+void test("PRD-ISO-02: a create whose secret directory exists while a container of that name exists logs create.secret_dir and deletes nothing", async () => {
   const { config, libpod, lifecycle, driver, lines } = harness();
+  libpod.add(CONTAINER_NAME, false);
   mkdirSync(join(config.secretRoot, CONTAINER_NAME), { recursive: true });
   await assert.rejects(driver.createSandbox(validSandbox()), schemaInvalid);
   assert.deepEqual(lines, ["realm compute driver refused: rpc=CreateSandbox check=create.secret_dir code=SCHEMA_INVALID"]);
   assert.deepEqual(lifecycle.creates, []);
+  assert.deepEqual(lifecycle.deletes, []);
+  assert.equal(libpod.containers.has(CONTAINER_NAME), true);
+});
+
+void test("PRD-ISO-02: a create whose state directory is a symbolic link is refused with create.state_dir, and no libpod inspect or delete is made", async () => {
+  const { config, libpod, lifecycle, driver, lines } = harness();
+  const outside = join(dirname(config.sandboxStateRoot), "outside-state");
+  mkdirSync(outside);
+  symlinkSync(outside, join(config.sandboxStateRoot, CONTAINER_NAME));
+  await assert.rejects(driver.createSandbox(validSandbox()), schemaInvalid);
+  assert.deepEqual(lines, ["realm compute driver refused: rpc=CreateSandbox check=create.state_dir code=SCHEMA_INVALID"]);
+  assert.deepEqual(lifecycle.creates, []);
+  assert.deepEqual(lifecycle.deletes, []);
   assert.equal(libpod.inspectCalls, 0);
+  assert.deepEqual(readdirSync(outside), []);
+});
+
+void test("PRD-ISO-02: a create whose secret directory is a symbolic link is refused with create.secret_dir, and no libpod inspect or delete is made", async () => {
+  const { config, libpod, lifecycle, driver, lines } = harness();
+  const outside = join(dirname(config.secretRoot), "outside-secret");
+  mkdirSync(outside);
+  mkdirSync(config.secretRoot, { recursive: true, mode: 0o700 });
+  symlinkSync(outside, join(config.secretRoot, CONTAINER_NAME));
+  await assert.rejects(driver.createSandbox(validSandbox()), schemaInvalid);
+  assert.deepEqual(lines, ["realm compute driver refused: rpc=CreateSandbox check=create.secret_dir code=SCHEMA_INVALID"]);
+  assert.deepEqual(lifecycle.creates, []);
+  assert.deepEqual(lifecycle.deletes, []);
+  assert.equal(libpod.inspectCalls, 0);
+  assert.deepEqual(readdirSync(outside), []);
 });

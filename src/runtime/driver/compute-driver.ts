@@ -55,7 +55,7 @@ import {
 import { DRIVER_ADMISSION_ACKNOWLEDGEMENT } from "./admission.js";
 import { assertSocketPathsFit, channelPathsOf, generateRuntimeTls, makeChannelDirectory, removeKeyFile, writeRuntimeFiles, type ListenerTrust } from "./channel.js";
 import { driverFailureOf, DriverStatusError, driverNotFound, driverUnimplemented, toServerError } from "./grpc-status.js";
-import type { DriverLifecycle } from "./lifecycle.js";
+import { assertStateDirClear, type DriverLifecycle } from "./lifecycle.js";
 import { decodeLaunchAuthentication, type LaunchAuthentication } from "./isolation/launch.js";
 import { logStageRefusal, refusal, refusalScope, type RefusalCheck, type RefusalLog, type RefusalScope } from "./refusal.js";
 import {
@@ -345,7 +345,8 @@ export class ComputeDriver {
   }
 
   // A create without launch material is refused before anything is written, because CreateSandbox requires it.
-  // An existing state or secret directory is refused before anything is prepared, so that refusal creates nothing. Then the pinned
+  // A state or secret directory that exists is reclaimed when its container is gone and the driver tracks none
+  // (reclaimStaleSandbox), and is refused before anything is prepared otherwise, so that refusal creates nothing. Then the pinned
   // workspace root is checked, which never creates it, and the state directory, the launch material and the channel are prepared.
   // The channel's bootstrap and descriptor must agree before the lifecycle runs. The lifecycle creates the container and writes the
   // runtime's files before it starts it. Then the runtime starts in the container and the host supervisor starts beside it. Any
@@ -384,6 +385,10 @@ export class ComputeDriver {
     authentication: LaunchAuthentication,
   ): Promise<{ runtime_identity: string }> {
     const sandboxName = plan.spec.sandboxName;
+    const staleCheck = this.staleDirectoryCheck(plan);
+    if (staleCheck !== undefined) {
+      await this.reclaimStaleSandbox(plan, scope, staleCheck);
+    }
     atStage(scope, "create.state_dir", () => {
       assertStateDirAbsent(plan.spec.stateDir);
     });
@@ -515,11 +520,75 @@ export class ComputeDriver {
     if (containerName === undefined || this.heldByAnotherSandbox(name, containerName)) {
       return { deleted: false };
     }
+    const existed = await this.removeSandbox(name, containerName);
+    return { deleted: existed };
+  }
+
+  // The delete path for one sandbox: stops the host supervisor the driver holds for the container, reads whether the container
+  // exists, has the lifecycle remove the container, the state directory and the secret entries, and drops the registry entry.
+  // Returns whether the container existed. DeleteSandbox and the create-time reclaim both run it.
+  private async removeSandbox(name: string, containerName: string): Promise<boolean> {
     await this.stopSupervisor(containerName);
     const existed = (await this.deps.libpod.inspectContainer(containerName)) !== null;
     await this.deps.lifecycle.delete(containerName);
     this.registry.delete(name);
-    return { deleted: existed };
+    return existed;
+  }
+
+  // The check a create reports for a stale entry, when the sandbox's state directory or secret directory exists and every entry
+  // that exists is a real directory. Undefined means there is nothing to reclaim, or an entry is a symbolic link, a wrong kind, or
+  // cannot be read; the absence checks then refuse it as they always did. Reads the filesystem only, makes no libpod call, and
+  // logs nothing.
+  private staleDirectoryCheck(plan: CreatePlan): RefusalCheck | undefined {
+    try {
+      realpathOrRefuse(dirname(plan.spec.stateDir));
+      const state = statOrNull(plan.spec.stateDir);
+      const secret = statOrNull(secretDirOf(this.config.secretRoot, plan.spec.sandboxName));
+      if ((state !== null && !state.isDirectory()) || (secret !== null && !secret.isDirectory())) {
+        return undefined;
+      }
+      return state !== null ? "create.state_dir" : secret !== null ? "create.secret_dir" : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  // Reclaims the state directory and the secret directory of a sandbox whose container is gone: a crashed driver never ran the
+  // delete path, so they are still on disk when the gateway creates the same sandbox again. The gateway creates only a name it
+  // holds no live sandbox for, and the pinned root admits one live sandbox, so a directory with no container behind it is an
+  // orphan. The reclaim runs only when all of these hold; otherwise it removes nothing and returns, and the absence checks refuse
+  // the create as they always did:
+  //   (a) libpod has no container of this sandbox's container name (inspect returns null; an inspect that throws proves nothing);
+  //   (b) the driver tracks no live container for the name: it is not in unremovedContainers (that set is pruned of gone
+  //       containers by pinnedRootHeld, so a name left in it was found), and no registry record under another gateway name holds
+  //       the container name (DeleteSandbox deletes nothing for such a name either);
+  //   (c) the driver holds no running supervisor for the name, except a stale handle: with the container proven gone by (a), a
+  //       supervisor handle for the name and a registry record under this gateway name belong to the dead sandbox, so they are
+  //       stopped and dropped by the delete path below. A create already in flight is excluded by rootReserved.
+  // The cleanup is the delete path (removeSandbox), after the state directory passes the same check a create applies to one
+  // (assertStateDirClear). Any failure refuses the create, is logged with the stage's check and no path, and leaves what the
+  // failing step left in place.
+  private async reclaimStaleSandbox(plan: CreatePlan, scope: RefusalScope, check: RefusalCheck): Promise<void> {
+    const containerName = plan.spec.sandboxName;
+    if (this.unremovedContainers.has(containerName) || this.heldByAnotherSandbox(plan.sandboxName, containerName)) {
+      return;
+    }
+    try {
+      if ((await this.deps.libpod.inspectContainer(containerName)) !== null) {
+        return;
+      }
+    } catch {
+      return;
+    }
+    try {
+      if (statOrNull(plan.spec.stateDir) !== null) {
+        assertStateDirClear(plan.spec.stateDir);
+      }
+      await this.removeSandbox(plan.sandboxName, containerName);
+    } catch (error: unknown) {
+      logStageRefusal(scope, check, error);
+      throw error instanceof RealmError ? error : makeRealmError("CLEANUP_FAILED");
+    }
   }
 
   // PD-08: stop and start are refused with the transition code (FAILED_PRECONDITION). Nothing is read or changed.
