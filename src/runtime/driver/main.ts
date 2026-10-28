@@ -1,7 +1,7 @@
 // The compute driver process (phase 9.4, PD-05; phase 9.5 starts the sandbox runtime on the built-in path). It runs as its own
 // process under the realm account's user unit (HC-04). This module is the only place the driver reads process.env. It reads the
-// configuration once, validates it, runs the startup sweep, and only then binds the socket, so no request is accepted ahead of the
-// sweep (PRD-CTR-03).
+// configuration once, validates it, writes the sandbox seccomp profile, runs the startup sweep, and only then binds the socket, so
+// no request is accepted ahead of the sweep (PRD-CTR-03).
 
 import { accessSync, constants, readFileSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -17,6 +17,7 @@ import {
   type RuntimeHost,
 } from "./compute-driver.js";
 import { awaitRuntimeListener } from "./channel.js";
+import { installSeccompProfile } from "./seccomp-delivery.js";
 import { DriverLifecycle } from "./lifecycle.js";
 import { GATEWAY_ID_PATTERN } from "../gateway-config.js";
 import { spawnSupervisor } from "./supervisor.js";
@@ -162,11 +163,13 @@ function requiredHttpsEndpoint(env: Environment, key: string): string {
   return value;
 }
 
-// Builds the driver, which validates the configuration without touching libpod, then sweeps, then binds the driver's socket.
+// Builds the driver. It first writes the sandbox seccomp profile next to the driver's socket, and the libpod client names that file in
+// every create. It then validates the configuration without touching libpod, sweeps, and binds the driver's socket.
 // The sweep removes every realm container and every sandbox's secret entries left by a previous generation before any socket
 // exists. The host supervisors of the previous generation exited when its driver's stdin pipes closed.
 export async function startDriver(config: DriverProcessConfig): Promise<SocketServer> {
-  const libpod = new LibpodClient(config.libpodSocketPath);
+  const seccompProfilePath = installSeccompProfile(config.socketPath);
+  const libpod = new LibpodClient(config.libpodSocketPath, { seccompProfilePath });
   const lifecycle = new DriverLifecycle({
     libpod,
     sandboxStateRoot: config.driver.sandboxStateRoot,

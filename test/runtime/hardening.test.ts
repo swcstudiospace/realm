@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   CHANNEL_MOUNT_OPTIONS,
   channelOptionFailures,
+  hardeningEvidenceDigest,
   HARDENING_PROFILE,
   HARDENING_PROPERTIES,
   type HardeningBinding,
@@ -12,6 +13,7 @@ import {
   SUPERVISOR_CA_TMPFS_OPTIONS,
   verifyInspect,
 } from "../../src/runtime/hardening.js";
+import { SECCOMP_PROFILE_FILE_NAME } from "../../src/runtime/driver/seccomp-profile.js";
 import { SANDBOX_WORKSPACE_PATH } from "../../src/runtime/openshell.js";
 
 const DIGEST_HEX = "a".repeat(64);
@@ -20,6 +22,7 @@ const WORKSPACE = "/realm/workspace";
 const STATE = "/realm/state";
 const CHANNEL = "/realm/channel";
 const SUPERVISOR_CA = HARDENING_PROFILE.supervisorCaDestination;
+const SECCOMP_PATH = `/realm/seccomp/${SECCOMP_PROFILE_FILE_NAME}`;
 
 const BINDING: HardeningBinding = {
   image: `registry.example.com/realm/session@${DIGEST}`,
@@ -35,6 +38,7 @@ const BINDING: HardeningBinding = {
 function conforming(): Record<string, unknown> {
   return {
     ImageDigest: DIGEST,
+    SeccompProfilePath: SECCOMP_PATH,
     Path: RUNTIME_BINARY,
     Args: RUNTIME_ARGV.slice(1),
     HostConfig: {
@@ -79,6 +83,7 @@ const FIELD_CASES: ReadonlyArray<{
   { property: "cpu-limit", path: ["HostConfig", "NanoCpus"], wrong: 4_000_000_000 },
   { property: "network-mode", path: ["HostConfig", "NetworkMode"], wrong: "bridge" },
   { property: "image-digest", path: ["ImageDigest"], wrong: `sha256:${"b".repeat(64)}` },
+  { property: "seccomp-profile", path: ["SeccompProfilePath"], wrong: "/realm/seccomp/default.json" },
 ];
 
 void test("the frozen profile carries the D-51 values (RT-01)", () => {
@@ -116,6 +121,7 @@ void test("every D-51 property has a named check, and a non-object inspect fails
       "mounts",
       "init-process",
       "socket-path",
+      "seccomp-profile",
     ],
   );
   // The rootless check reads the binding, so only the inspect-derived properties fail on a non-object inspect.
@@ -324,6 +330,69 @@ void test("PID 1 of a sandbox container is the runtime with its exact argv: any 
     change(inspect);
     assert.deepEqual(verifyInspect(BINDING, inspect), ["init-process"], name);
   }
+});
+
+void test("seccomp-profile: an inspect naming the embedded profile file by an absolute path conforms (phase 9.6)", () => {
+  const inspect = conforming();
+  assert.equal(inspect.SeccompProfilePath, SECCOMP_PATH);
+  assert.deepEqual(verifyInspect(BINDING, inspect), []);
+  inspect.SeccompProfilePath = `/another/directory/${SECCOMP_PROFILE_FILE_NAME}`;
+  assert.deepEqual(verifyInspect(BINDING, inspect), [], "only the file name is fixed, not the directory");
+});
+
+void test("seccomp-profile: an absent value fails, since Podman omits the field when no profile is set (phase 9.6)", () => {
+  const inspect = conforming();
+  Reflect.deleteProperty(inspect, "SeccompProfilePath");
+  assert.deepEqual(verifyInspect(BINDING, inspect), ["seccomp-profile"]);
+});
+
+void test("seccomp-profile: a profile file of another name fails, even one that differs in a single digit (phase 9.6)", () => {
+  const flipped = SECCOMP_PROFILE_FILE_NAME.replace(/(?<=seccomp-)[0-9a-f]/, (digit) => (digit === "0" ? "1" : "0"));
+  assert.notEqual(flipped, SECCOMP_PROFILE_FILE_NAME);
+  const names = [
+    "default.json",
+    "realm-seccomp-0000000000000000.json",
+    flipped,
+    `${SECCOMP_PROFILE_FILE_NAME}.bak`,
+    `old-${SECCOMP_PROFILE_FILE_NAME}`,
+    "",
+  ];
+  for (const name of names) {
+    const inspect = conforming();
+    inspect.SeccompProfilePath = `/realm/seccomp/${name}`;
+    assert.deepEqual(verifyInspect(BINDING, inspect), ["seccomp-profile"], name);
+  }
+});
+
+void test("seccomp-profile: a relative path fails, whatever its file name (phase 9.6)", () => {
+  for (const path of [SECCOMP_PROFILE_FILE_NAME, `seccomp/${SECCOMP_PROFILE_FILE_NAME}`, `./${SECCOMP_PROFILE_FILE_NAME}`]) {
+    const inspect = conforming();
+    inspect.SeccompProfilePath = path;
+    assert.deepEqual(verifyInspect(BINDING, inspect), ["seccomp-profile"], path);
+  }
+});
+
+void test("seccomp-profile: a value that is not a string, or whose file name is a directory, fails closed (phase 9.6)", () => {
+  const values: readonly unknown[] = [
+    null,
+    42,
+    true,
+    [SECCOMP_PATH],
+    { path: SECCOMP_PATH },
+    `${SECCOMP_PATH}/`,
+    `${SECCOMP_PATH}/inner.json`,
+  ];
+  for (const value of values) {
+    const inspect = conforming();
+    inspect.SeccompProfilePath = value;
+    assert.deepEqual(verifyInspect(BINDING, inspect), ["seccomp-profile"], JSON.stringify(value));
+  }
+});
+
+void test("seccomp-profile: the profile carries the file name, so the evidence digest binds the profile (phase 9.6)", () => {
+  assert.equal(HARDENING_PROFILE.seccompProfileFile, SECCOMP_PROFILE_FILE_NAME);
+  assert.match(hardeningEvidenceDigest(BINDING.image), /^[0-9a-f]{64}$/);
+  assert.notEqual(hardeningEvidenceDigest(BINDING.image), hardeningEvidenceDigest(`${BINDING.image}-other`));
 });
 
 function setPath(root: Inspect, path: readonly string[], value: unknown): void {

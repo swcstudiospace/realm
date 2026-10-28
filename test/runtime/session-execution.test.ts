@@ -173,6 +173,7 @@ function conformingInspect(
 ): Record<string, unknown> {
   return {
     ImageDigest: DIGEST,
+    SeccompProfilePath: `/realm/seccomp/${HARDENING_PROFILE.seccompProfileFile}`,
     Path: RUNTIME_BINARY,
     Args: RUNTIME_ARGV.slice(1),
     State: { Running: true, Status: "running", Pid: 4242 },

@@ -60,7 +60,7 @@ export async function startSocketServer(socketPath: string, services: readonly B
   };
 }
 
-function accountUid(): number {
+export function accountUid(): number {
   const uid = process.getuid?.();
   if (uid === undefined) {
     throw makeRealmError("SCHEMA_INVALID");
@@ -70,7 +70,7 @@ function accountUid(): number {
 
 // Creates the parent directory when it is missing, then holds it to the rules: a real directory, owned by the account,
 // set to 0700. A symbolic link or a directory owned by someone else is refused, never followed.
-function prepareParent(parent: string, uid: number): void {
+export function prepareParent(parent: string, uid: number): void {
   let stat = statOrNull(parent);
   if (stat === null) {
     try {

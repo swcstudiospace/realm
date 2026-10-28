@@ -13,6 +13,8 @@
 // runtime's CA material. The binding names the channel directory, which sandboxBindingOf always derives.
 
 import { createHash } from "node:crypto";
+import { isAbsolute } from "node:path";
+import { SECCOMP_PROFILE_FILE_NAME } from "./driver/seccomp-profile.js";
 
 // Numeric limits and the frozen profile values live here and nowhere else (D-52).
 export const HARDENING_PROFILE = Object.freeze({
@@ -38,6 +40,9 @@ export const HARDENING_PROFILE = Object.freeze({
   // The workload identity of the sandbox process. The user namespace maps the realm account to this uid and gid.
   workloadUid: 1001,
   workloadGid: 1001,
+  // The name of the seccomp profile file the sandbox container runs under. It carries the digest of the embedded profile, so the
+  // evidence digest changes when the profile does.
+  seccompProfileFile: SECCOMP_PROFILE_FILE_NAME,
 });
 
 // The sandbox runtime is the sandbox container's main process (phase 9.5, wave 3). Its binary and the exact argv that starts it
@@ -72,6 +77,7 @@ export const HARDENING_PROPERTIES = Object.freeze([
   "mounts",
   "init-process",
   "socket-path",
+  "seccomp-profile",
 ] as const);
 
 export type HardeningProperty = (typeof HARDENING_PROPERTIES)[number];
@@ -133,6 +139,13 @@ const CHECKS: Readonly<Record<HardeningProperty, Check>> = Object.freeze({
       Array.isArray(mounts) &&
       mounts.every((mount) => isRecord(mount) && pathIsClear(mount.Source) && pathIsClear(mount.Destination))
     );
+  },
+  // The container runs under the driver's seccomp profile: the file Podman reports names the embedded profile by its digest. Podman
+  // omits the field when no profile is set, and an absent, mistyped or relative value fails. The file's content is not read here: the
+  // driver writes the file under a digest-bearing name, and refuses to start on a file of that name with other content.
+  "seccomp-profile": (inspect) => {
+    const path = field(inspect, ["SeccompProfilePath"]);
+    return typeof path === "string" && isAbsolute(path) && path.endsWith(`/${HARDENING_PROFILE.seccompProfileFile}`);
   },
 });
 

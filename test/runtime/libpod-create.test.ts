@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { RealmError, type ErrorCode } from "../../src/core/errors.js";
 import { LibpodClient, validateContainerSpec, type ContainerSpec } from "../../src/runtime/libpod-client.js";
+import { SECCOMP_PROFILE_FILE_NAME } from "../../src/runtime/driver/seccomp-profile.js";
 
 // The API version the fake reports on /_ping. Every create and start route is pinned to it.
 const PINNED_VERSION = "5.7.1";
@@ -145,6 +146,13 @@ const SPEC: ContainerSpec = {
   channelDir: CHANNEL_DIR,
 };
 
+const SECCOMP_PROFILE_PATH = `/srv/realm-test/seccomp/${SECCOMP_PROFILE_FILE_NAME}`;
+
+// A client that names the profile file in every create, as the driver's client does.
+function clientOn(socketPath: string): LibpodClient {
+  return new LibpodClient(socketPath, { seccompProfilePath: SECCOMP_PROFILE_PATH });
+}
+
 // The create body the spec must produce, field for field (plan T1, as amended). Any extra or missing field fails.
 const EXPECTED_BODY = {
   name: "realm-sess-1",
@@ -161,6 +169,7 @@ const EXPECTED_BODY = {
   cap_drop: ["ALL"],
   cap_add: [],
   no_new_privileges: true,
+  seccomp_profile_path: SECCOMP_PROFILE_PATH,
   read_only_filesystem: true,
   resource_limits: {
     pids: { limit: 512 },
@@ -195,7 +204,7 @@ const EXPECTED_BODY = {
 
 void test("PRD-CTR-01: createContainer posts the spec's body to the pinned 5.7.1 create route and returns the id", async (t) => {
   const { socketPath, seen } = await startFake(t);
-  const id = await new LibpodClient(socketPath).createContainer(SPEC);
+  const id = await clientOn(socketPath).createContainer(SPEC);
   assert.equal(id, CREATED_ID);
   const sent = callsOf(seen);
   assert.equal(sent.length, 1, "one create request, after the version probe");
@@ -207,9 +216,45 @@ void test("PRD-CTR-01: createContainer posts the spec's body to the pinned 5.7.1
   assert.deepEqual(JSON.parse(create.body) as unknown, EXPECTED_BODY);
 });
 
+void test("phase 9.6: the create body adds seccomp_profile_path and changes no other field", async (t) => {
+  const { socketPath, seen } = await startFake(t);
+  await clientOn(socketPath).createContainer(SPEC);
+  const [create] = callsOf(seen);
+  assert.ok(create !== undefined);
+  const posted = JSON.parse(create.body) as Record<string, unknown>;
+  assert.equal(posted.seccomp_profile_path, SECCOMP_PROFILE_PATH);
+  const before: Record<string, unknown> = { ...EXPECTED_BODY };
+  delete before.seccomp_profile_path;
+  delete posted.seccomp_profile_path;
+  assert.deepEqual(posted, before, "every other field is the body the create sent before the profile existed");
+});
+
+void test("phase 9.6: a client built without a profile path refuses every create, with no request", async (t) => {
+  const { socketPath, seen } = await startFake(t);
+  await assertRefused(new LibpodClient(socketPath).createContainer(SPEC), "SCHEMA_INVALID", "a client without a profile path");
+  assert.equal(seen.length, 0, "no request reaches the socket, not even the version probe");
+});
+
+void test("phase 9.6: a client refuses at construction a profile path that is relative or names another file", () => {
+  for (const path of [
+    SECCOMP_PROFILE_FILE_NAME,
+    `seccomp/${SECCOMP_PROFILE_FILE_NAME}`,
+    "/srv/realm-test/seccomp/default.json",
+    `/srv/realm-test/seccomp/${SECCOMP_PROFILE_FILE_NAME}.bak`,
+    `/srv/realm-test/seccomp/${SECCOMP_PROFILE_FILE_NAME}\0`,
+    "",
+  ]) {
+    assert.throws(
+      () => new LibpodClient("/srv/realm-test/podman.sock", { seccompProfilePath: path }),
+      (error: unknown) => error instanceof RealmError && error.code === "SCHEMA_INVALID",
+      JSON.stringify(path),
+    );
+  }
+});
+
 void test("PRD-CTR-01: the create body carries exactly the runtime sysctls (low port, IPv6 off) and no other sysctl", async (t) => {
   const { socketPath, seen } = await startFake(t);
-  await new LibpodClient(socketPath).createContainer(SPEC);
+  await clientOn(socketPath).createContainer(SPEC);
   const [create] = callsOf(seen);
   assert.ok(create !== undefined);
   const parsed = JSON.parse(create.body) as { readonly sysctl?: Readonly<Record<string, string>> };
@@ -227,13 +272,13 @@ void test("PRD-CTR-01: the create body carries exactly the runtime sysctls (low 
 
 void test("PRD-CTR-01: the CA tmpfs options pass the create route's tmpfs rule, so the create is not refused for uid or gid", async (t) => {
   const { socketPath } = await startFake(t, { podmanTmpfsRule: true });
-  const id = await new LibpodClient(socketPath).createContainer(SPEC);
+  const id = await clientOn(socketPath).createContainer(SPEC);
   assert.equal(id, CREATED_ID);
 });
 
 void test("PRD-CTR-01: the create body carries no socket-bearing mount and binds the state directory read-only", async (t) => {
   const { socketPath, seen } = await startFake(t);
-  await new LibpodClient(socketPath).createContainer(SPEC);
+  await clientOn(socketPath).createContainer(SPEC);
   const [create] = callsOf(seen);
   assert.ok(create !== undefined);
   const body = JSON.parse(create.body) as {
@@ -259,18 +304,18 @@ void test("PRD-CTR-01: startContainer posts to the pinned 5.7.1 start route of t
 
 void test("PRD-CTR-01: createContainer refuses a create reply that is not 201 or carries no well-formed id", async (t) => {
   const wrongStatus = await startFake(t, { createStatus: 500 });
-  await assertRefused(new LibpodClient(wrongStatus.socketPath).createContainer(SPEC), "SCHEMA_INVALID", "a 500 create");
+  await assertRefused(clientOn(wrongStatus.socketPath).createContainer(SPEC), "SCHEMA_INVALID", "a 500 create");
 
   const noId = await startFake(t, { createBody: JSON.stringify({ Warnings: [] }) });
-  await assertRefused(new LibpodClient(noId.socketPath).createContainer(SPEC), "SCHEMA_INVALID", "a reply without Id");
+  await assertRefused(clientOn(noId.socketPath).createContainer(SPEC), "SCHEMA_INVALID", "a reply without Id");
 
   const badId = await startFake(t, { createBody: JSON.stringify({ Id: "../escape" }) });
-  await assertRefused(new LibpodClient(badId.socketPath).createContainer(SPEC), "SCHEMA_INVALID", "a malformed Id");
+  await assertRefused(clientOn(badId.socketPath).createContainer(SPEC), "SCHEMA_INVALID", "a malformed Id");
 });
 
 void test("PRD-CTR-01: createContainer refuses a spec outside the typed form before any socket request", async (t) => {
   const { socketPath, seen } = await startFake(t);
-  const client = new LibpodClient(socketPath);
+  const client = clientOn(socketPath);
   const refused: readonly (readonly [string, ContainerSpec])[] = [
     ["a workspace named like the podman socket", { ...SPEC, workspaceDir: "/srv/realm-test/podman.sock" }],
     ["a state directory under a docker socket name", { ...SPEC, stateDir: "/srv/realm-test/docker.sock/state" }],
@@ -298,7 +343,7 @@ void test("PRD-CTR-01: validateContainerSpec refuses a bad image digest, and cre
     },
     (error: unknown) => error instanceof RealmError && error.code === "SCHEMA_INVALID",
   );
-  await assertRefused(new LibpodClient(socketPath).createContainer(badDigest), "SCHEMA_INVALID", "a bad digest");
+  await assertRefused(clientOn(socketPath).createContainer(badDigest), "SCHEMA_INVALID", "a bad digest");
   assert.equal(seen.length, 0, "no request reaches the socket, not even the version probe");
 });
 
@@ -307,7 +352,7 @@ void test("PRD-CTR-01: a create answered 409 rejects with SANDBOX_NAME_IN_USE an
     createStatus: 409,
     createBody: JSON.stringify({ cause: "name is already in use", message: "name is already in use", response: 409 }),
   });
-  await assertRefused(new LibpodClient(socketPath).createContainer(SPEC), "SANDBOX_NAME_IN_USE", "a name in use");
+  await assertRefused(clientOn(socketPath).createContainer(SPEC), "SANDBOX_NAME_IN_USE", "a name in use");
   const sent = callsOf(seen);
   assert.equal(sent.length, 1, "the only request after the version probe is the create itself");
   assert.equal(sent[0]?.target, "/v5.7.1/libpod/containers/create");
@@ -316,7 +361,7 @@ void test("PRD-CTR-01: a create answered 409 rejects with SANDBOX_NAME_IN_USE an
 void test("PRD-CTR-01: createContainer refuses a container-safe sandbox name without the realm prefix, with no request", async (t) => {
   const { socketPath, seen } = await startFake(t);
   await assertRefused(
-    new LibpodClient(socketPath).createContainer({ ...SPEC, sandboxName: "agent-sess-1" }),
+    clientOn(socketPath).createContainer({ ...SPEC, sandboxName: "agent-sess-1" }),
     "SCHEMA_INVALID",
     "a name without the realm prefix",
   );

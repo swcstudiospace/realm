@@ -218,7 +218,8 @@ of H1 [INFERENCE from the plan scope].
 ## 9. Container capability proof (phase 9.6, C3)
 
 - **Removed inspect property.** `cap-drop` is no longer in `HARDENING_PROPERTIES` and is no
-  longer checked by `verifyInspect`. The verifier checks 14 properties; it checked 15 before.
+  longer checked by `verifyInspect`. Removing it left 14 properties; it checked 15 before.
+  The `seccomp-profile` property (below) was then added, so the verifier now checks 15.
 - **Reason.** Podman 5.7.1 does not report `KernelCaps` in libpod inspect. An inspect-level
   check of the five capability sets therefore reads a field the engine never supplies, and
   cannot prove them empty.
@@ -236,3 +237,7 @@ of H1 [INFERENCE from the plan scope].
 - **Not claimed.** This proof is observed on the host at create time. It does not
   re-verify the capability sets after create, and it has not been run against a live Podman 5.7.1
   engine in this change.
+- **Added inspect property: `seccomp-profile`.** The inspect's `SeccompProfilePath` must be an
+  absolute path whose basename is the embedded profile's file name; an absent value fails.
+  Both verifiers run it. Details: `docs/integration/openshell.md`, section "Sandbox create
+  hardening: seccomp profile".

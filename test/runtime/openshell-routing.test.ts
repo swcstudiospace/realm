@@ -90,6 +90,7 @@ async function createSession(f: Fixture): Promise<{ readonly containerId: string
   const binding = sandboxBindingOf({ workspaceRoot: f.workspaceRoot, stateRoot: f.sandboxStateRoot, secretRoot: f.secretRoot }, realmSandboxName(SESSION));
   const inspect = {
     ImageDigest: DIGEST,
+    SeccompProfilePath: `/realm/seccomp/${HARDENING_PROFILE.seccompProfileFile}`,
     Path: RUNTIME_BINARY,
     Args: RUNTIME_ARGV.slice(1),
     State: { Running: true, Status: "running", Pid: 4242 },

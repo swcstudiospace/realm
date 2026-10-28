@@ -13,9 +13,10 @@
 // session container. The client starts no process: the sandbox runtime is the container's main process, named in the create body.
 
 import { request as httpRequest } from "node:http";
-import { isAbsolute } from "node:path";
+import { basename, isAbsolute } from "node:path";
 import { makeRealmError } from "../core/errors.js";
 import { CHANNEL_MOUNT_OPTIONS, HARDENING_PROFILE, RUNTIME_ARGV, SUPERVISOR_CA_TMPFS_OPTIONS } from "./hardening.js";
+import { SECCOMP_PROFILE_FILE_NAME } from "./driver/seccomp-profile.js";
 import {
   isRealmSandboxName,
   OPENSHELL_ISOLATION_ROLE_LABEL_KEY,
@@ -56,6 +57,9 @@ const RUNTIME_SYSCTLS: Readonly<Record<string, string>> = Object.freeze({
 });
 
 export interface LibpodClientOptions {
+  // Absolute path of the seccomp profile file the driver wrote. Its name must be SECCOMP_PROFILE_FILE_NAME. A create names it
+  // in the body, and a client built without it refuses every create, so no sandbox starts without the profile.
+  readonly seccompProfilePath?: string;
   // Bound for one request, in addition to any grace period the request itself asks for.
   readonly requestTimeoutMs?: number;
 }
@@ -111,6 +115,7 @@ interface RouteCall {
 
 export class LibpodClient {
   private readonly transport: Transport;
+  private readonly seccompProfilePath: string | undefined;
 
   constructor(socketPath: string, options: LibpodClientOptions = {}) {
     if (!isAbsolute(socketPath)) {
@@ -120,6 +125,16 @@ export class LibpodClient {
     if (!Number.isInteger(timeoutMs) || timeoutMs <= 0) {
       throw makeRealmError("SCHEMA_INVALID");
     }
+    const seccompProfilePath = options.seccompProfilePath;
+    if (
+      seccompProfilePath !== undefined &&
+      (!isAbsolute(seccompProfilePath) ||
+        seccompProfilePath.includes("\0") ||
+        basename(seccompProfilePath) !== SECCOMP_PROFILE_FILE_NAME)
+    ) {
+      throw makeRealmError("SCHEMA_INVALID");
+    }
+    this.seccompProfilePath = seccompProfilePath;
     this.transport = Object.freeze({ socketPath, timeoutMs });
   }
 
@@ -215,7 +230,10 @@ export class LibpodClient {
   // built here from the spec and the hardening profile; a caller cannot add a field.
   async createContainer(spec: ContainerSpec): Promise<string> {
     validateContainerSpec(spec);
-    const body = JSON.stringify(containerCreateBody(spec));
+    if (this.seccompProfilePath === undefined) {
+      throw makeRealmError("SCHEMA_INVALID");
+    }
+    const body = JSON.stringify(containerCreateBody(spec, this.seccompProfilePath));
     const reply = await exchangeRoute(this.transport, LIBPOD_ROUTES.createContainer, { body });
     if (reply.status === 409) {
       throw makeRealmError("SANDBOX_NAME_IN_USE");
@@ -395,9 +413,9 @@ export function validateContainerSpec(spec: ContainerSpec): void {
   }
 }
 
-// The create body. Every field comes from the spec or from HARDENING_PROFILE, so the verifier and the
-// create request read the same values. Nothing else is added.
-function containerCreateBody(spec: ContainerSpec): Readonly<Record<string, unknown>> {
+// The create body. Every field comes from the spec, from HARDENING_PROFILE, or, for seccomp_profile_path, from the profile file
+// the client was built with, so the verifier and the create request read the same values. Nothing else is added.
+function containerCreateBody(spec: ContainerSpec, seccompProfilePath: string): Readonly<Record<string, unknown>> {
   const profile = HARDENING_PROFILE;
   // The sandbox container carries the profile's scratch paths and the runtime's CA directory.
   const scratch = [...profile.tmpfs, profile.supervisorCaDestination];
@@ -416,6 +434,7 @@ function containerCreateBody(spec: ContainerSpec): Readonly<Record<string, unkno
     cap_drop: ["ALL"],
     cap_add: [...profile.capAdd],
     no_new_privileges: profile.securityOpt.includes("no-new-privileges"),
+    seccomp_profile_path: seccompProfilePath,
     read_only_filesystem: profile.readonlyRootfs,
     resource_limits: {
       pids: { limit: profile.pidsLimit },

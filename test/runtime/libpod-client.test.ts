@@ -63,7 +63,11 @@ void test("RT-03: the client exposes exactly the seven D-54 methods, and no othe
     "stopContainer",
   ]);
   const client = new LibpodClient("/run/user/1000/podman/podman.sock");
-  assert.deepEqual(Object.getOwnPropertyNames(client), ["transport"], "the instance holds only its transport");
+  assert.deepEqual(
+    Object.getOwnPropertyNames(client),
+    ["transport", "seccompProfilePath"],
+    "the instance holds only its transport and its seccomp profile path (data fields, no function members)",
+  );
   for (const name of Object.getOwnPropertyNames(client)) {
     assert.notEqual(typeof Reflect.get(client, name), "function", `instance member ${name} must not be a function`);
   }

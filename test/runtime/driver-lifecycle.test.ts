@@ -30,6 +30,7 @@ import {
   type HardeningProperty,
 } from "../../src/runtime/hardening.js";
 import { LibpodClient, type ContainerSpec } from "../../src/runtime/libpod-client.js";
+import { SECCOMP_PROFILE_FILE_NAME } from "../../src/runtime/driver/seccomp-profile.js";
 import {
   LIBPOD_API_VERSION_HEADER,
   matchLibpodRoute,
@@ -53,6 +54,7 @@ const GOOD_PID = 4242;
 const SANDBOX = "realm-sess-1";
 const IMAGE_DIGEST = `sha256:${"a".repeat(64)}`;
 const SPEC_IMAGE = `localhost/realm-agentos@${IMAGE_DIGEST}`;
+const SECCOMP_PROFILE_PATH = `/srv/realm-test/seccomp/${SECCOMP_PROFILE_FILE_NAME}`;
 const NOT_FOUND_TEXT = JSON.stringify({ cause: "no such container", message: "no such container", response: 404 });
 
 const ZERO_MASK = "0000000000000000";
@@ -343,6 +345,7 @@ function goodInspect(stateDir: string, workspaceDir: string, channelDir: string)
   ];
   return {
     ImageDigest: IMAGE_DIGEST,
+    SeccompProfilePath: SECCOMP_PROFILE_PATH,
     Path: RUNTIME_BINARY,
     Args: RUNTIME_ARGV.slice(1),
     HostConfig: {
@@ -466,7 +469,10 @@ async function harness(t: TestContext, arrangement: Arrangement = {}): Promise<H
   });
   const libpod = new LibpodClient(
     fake.socketPath,
-    arrangement.requestTimeoutMs === undefined ? {} : { requestTimeoutMs: arrangement.requestTimeoutMs },
+    {
+      seccompProfilePath: SECCOMP_PROFILE_PATH,
+      ...(arrangement.requestTimeoutMs === undefined ? {} : { requestTimeoutMs: arrangement.requestTimeoutMs }),
+    },
   );
   const lifecycle = new DriverLifecycle({
     libpod,
@@ -570,6 +576,12 @@ const PROPERTY_CASES: readonly PropertyCase[] = [
       mountsOf(body).push({ Type: "bind", Source: SOCKET_MOUNT_SOURCE, Destination: "/run/engine.sock", RW: false });
     },
   },
+  {
+    property: "seccomp-profile",
+    mutate: (body) => {
+      Reflect.deleteProperty(body, "SeccompProfilePath");
+    },
+  },
 ];
 
 for (const row of PROPERTY_CASES) {
@@ -606,6 +618,14 @@ void test("PRD-CTR-01: a socket mount fails mounts and socket-path, and create n
   };
   const attached = attachKernelCaps(body, () => ZERO_STATUS);
   assert.deepEqual(verifyInspect(binding, attached), ["mounts", "socket-path"]);
+});
+
+void test("phase 9.6: the lifecycle's create posts the profile path its libpod client was built with", async (t) => {
+  const h = await harness(t);
+  assert.equal(await h.lifecycle.create(h.spec), CREATED_ID);
+  const creates = h.fake.seen.filter((request) => request.route === "createContainer");
+  const posted = JSON.parse(creates[0]?.body ?? "{}") as { readonly seccomp_profile_path?: unknown };
+  assert.equal(posted.seccomp_profile_path, SECCOMP_PROFILE_PATH);
 });
 
 void test("PRD-CTR-01: a conforming container is returned by id, kept, and posted with tty false (C6)", async (t) => {
