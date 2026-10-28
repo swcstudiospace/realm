@@ -18,9 +18,11 @@ import { sandboxBindingOf, type SandboxBinding } from "../../src/runtime/driver/
 import {
   buildExecArgv,
   buildPolicyDocument,
+  GATEWAY_SANDBOX_NAME_MAX_LENGTH,
   OPENSHELL_BINARY,
   OPENSHELL_OUTPUT_LIMIT_BYTES,
   OpenShellRunnerError,
+  REALM_SANDBOX_NAME_PREFIX,
   realmSandboxName,
   type OpenShellRunner,
 } from "../../src/runtime/openshell.js";
@@ -246,6 +248,25 @@ void test("CORE-06, RT-03: a second create with the same session reuses the labe
   assert.equal(second.containerId, first.containerId);
   assert.equal(f.openshell.callCount(), 1);
   assert.equal(f.store.list().length, 1);
+});
+
+void test("a session id whose sandbox name exceeds the gateway limit is refused with SCHEMA_INVALID before any libpod, OpenShell, or policy call", async (t) => {
+  const f = await fixture(t);
+  const tooLong = "a".repeat(GATEWAY_SANDBOX_NAME_MAX_LENGTH - REALM_SANDBOX_NAME_PREFIX.length + 1);
+  assert.equal(tooLong.length, 14);
+  await assertCode(f.exec.create({ idempotencyKey: tooLong, workspaceRoot: f.workspaceRoot }), "SCHEMA_INVALID");
+  assert.equal(f.libpod.requests().length, 0, "no libpod request is made");
+  assert.equal(f.openshell.callCount(), 0, "no OpenShell run starts");
+  assert.equal(existsSync(join(f.stateDir, "runtime")), false, "no policy document is written");
+});
+
+void test("a 13-character session id and the daemon's session id pass the sandbox name length check and create", async (t) => {
+  const f = await fixture(t);
+  for (const key of ["a".repeat(13), "daemon"]) {
+    const created = await createSession(f, key);
+    assert.ok(created.containerId.length > 0);
+  }
+  assert.equal(f.openshell.callCount(), 2, "each create runs the OpenShell create");
 });
 
 void test("RT-01, RT-03: a failed hardening check destroys the container and throws OPENSHELL_START_FAILED naming the first failed property", async (t) => {

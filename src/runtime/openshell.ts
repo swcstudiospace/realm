@@ -33,6 +33,10 @@ export const OPENSHELL_MANAGED_LABEL_KEY = "openshell.managed";
 export const OPENSHELL_MANAGED_LABEL_VALUE = "true";
 export const OPENSHELL_SANDBOX_NAME_LABEL_KEY = "openshell.ai/sandbox-name";
 export const REALM_SANDBOX_NAME_PREFIX = "realm-";
+// The longest sandbox name the OpenShell 0.1.5 gateway accepts. The limit is the gateway's, not the realm's: it is
+// the upstream constant MAX_ROUTABLE_NAME_LEN (crates/openshell-server/src/grpc/mod.rs), applied by validate_sandbox_name.
+// Observed live: `openshell sandbox create --name realm-live-<uuid>` fails with "name exceeds maximum length (47 > 19)".
+export const GATEWAY_SANDBOX_NAME_MAX_LENGTH = 19;
 // OpenShell labels a sandbox's workload container with the sandbox role, and its supervisor container with the
 // supervisor role. Both carry the sandbox name, so the session's container is the sandbox-role one.
 export const OPENSHELL_ISOLATION_ROLE_LABEL_KEY = "openshell.ai/isolation-role";

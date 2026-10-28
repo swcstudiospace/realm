@@ -42,6 +42,7 @@ import {
   sessionOfRealmSandbox,
   OPENSHELL_OUTPUT_LIMIT_BYTES,
   OpenShellRunnerError,
+  GATEWAY_SANDBOX_NAME_MAX_LENGTH,
   realmSandboxName,
   runOpenShellCreate,
   writePolicyDocument,
@@ -190,6 +191,10 @@ export class SessionExecution implements ExecutionService {
   // The session id is the idempotency key, so a repeated create for one session reuses its
   // labelled container (CORE-06).
   async create(req: CreateRequest): Promise<{ readonly containerId: string }> {
+    // The gateway refuses a longer sandbox name with an opaque create failure, so refuse it here, before any I/O.
+    if (realmSandboxName(req.idempotencyKey).length > GATEWAY_SANDBOX_NAME_MAX_LENGTH) {
+      throw makeRealmError("SCHEMA_INVALID");
+    }
     // Refuses before any libpod, OpenShell, or policy-file call when no supervisor is bound (fail closed).
     const agentos = this.requireAgentOs(req.idempotencyKey);
     const secretRoot = this.requireSecretRoot();
