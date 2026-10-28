@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-10-23
+
+### Changed
+- 00057 - CI: run all jobs on Omega CI runners (8510529)
+
 ## [0.1.2] - 2026-10-22
 
 ### Changed

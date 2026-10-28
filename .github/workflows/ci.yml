@@ -16,10 +16,15 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# Every job runs on the Omega CI runner pool, never on GitHub-hosted runners
+# (swcstudiospace/Omega-Prime docs/ci-runners.md).
 jobs:
   verify:
     name: Verify (Node ${{ matrix.node-version }})
-    runs-on: ubuntu-latest
+    # Fork pull requests are skipped instead of queuing: the Omega CI pool only runs this
+    # organisation's own code.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, linux, x64, omega-ci]
     timeout-minutes: 30
     permissions:
       contents: read
@@ -97,7 +102,8 @@ jobs:
 
   site:
     name: Build docs site
-    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, linux, x64, omega-ci]
     timeout-minutes: 15
     permissions:
       contents: read
@@ -127,7 +133,7 @@ jobs:
     name: Release
     needs: verify
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, omega-ci]
     timeout-minutes: 30
     permissions:
       contents: write
