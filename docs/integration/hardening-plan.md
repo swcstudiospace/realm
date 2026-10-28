@@ -183,6 +183,19 @@ Published fields: session id, line count, root, and creation time. Audit
 content is never published, and neither are file paths, argv, or host
 details.
 
+Failure modes of the audit file. Each exits 1 and prints one line to
+standard error, with no host path in it:
+
+- No audit file for the session: `realm anchor: no audit log exists for session <id>`.
+- The audit file is not a regular file: `realm anchor: audit log for session <id> is not a regular file`
+  (code `PATH_ESCAPE`).
+- The audit file has no lines: `realm anchor: audit log for session <id> has no lines`.
+- The audit file cannot be inspected or read (a permission or I/O error):
+  `realm anchor: audit log for session <id> could not be inspected` or
+  `realm anchor: audit log for session <id> could not be read`, code
+  `SCHEMA_INVALID`. Such an error is reported the same way as the other
+  failures above; it no longer ends the command with an uncaught Node error.
+
 To verify later, recompute the Merkle root from the audit file and compare
 it with `rootSha256` in the anchor record. Verification tooling is not part
 of H1 [INFERENCE from the plan scope].

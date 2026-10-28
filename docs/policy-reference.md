@@ -89,6 +89,15 @@ The default stays `advisory`; a project that expects containment opts in to `fai
   is recorded or the session is live, also throws
   `POLICY_DENIED` (`LifecycleController.create`, `src/lifecycle/controller.ts`,
   through `verifyPinnedAt`, `src/fs/root.ts`).
+  A session create is also refused with `POLICY_DENIED`, before any libpod,
+  OpenShell or policy-file call, unless the driver's pinned root
+  (`REALM_DRIVER_WORKSPACE_ROOT`, the root the sandbox mounts at `/workspace`)
+  and the policy-approved workspace are the same directory once both are
+  resolved with `realpath` (`src/runtime/session-execution.ts`). A symbolic
+  link to the same directory is the same directory. A pinned root that is a
+  parent of the approved workspace is refused, because the sandbox would reach
+  sibling directories the policy never approved: pin the project directory,
+  not its parent. A path that cannot be resolved is refused the same way.
 - **Breadth (residual R7):** the loader accepts any absolute directory, including the filesystem root `/`. A root of `/` places every host path inside a policy root, so the bind check no longer narrows the workspace. Keep each root as narrow as the project needs. No breadth refusal is implemented; the Phase 7 security review records R7 as an open residual (`.planning/milestones/v1.0-phases/07-policy-reference-and-security-review/07-SECURITY-REVIEW.md`, section 6).
 - **Enforced by:**
   - Startup bind: `createRealmHandle` (`src/realm/compose.ts`) calls
@@ -218,6 +227,13 @@ The default stays `advisory`; a project that expects containment opts in to `fai
   `src/omp/plugin.ts`). Catalogue entry:
   `STARTUP_BUDGET_EXCEEDED` is retryable
   (`ERROR_CATALOGUE` in `src/core/errors.ts`).
+  The control channel's `up` request waits 230 s (the 200 s default plus a
+  30 s reply margin; `CONTROL_TIMEOUT_MS`, `src/daemon/channel.ts`) before
+  the caller reports `TOOL_TIMEOUT`, while `status`, `down`, `doctor` and
+  `tool` keep their own limits. No CLI or plugin caller reads the
+  daemon-owned policy, so a `startupBudgetMs` above 200 s can still outlast
+  the `up` request limit; the plugin's own 200 s timer is unchanged and fires
+  first.
 - **Also see:** the single teardown bound `TEARDOWN_TIMEOUT_MS` (30000 ms) is a separate
   constant, not this key (`TEARDOWN_TIMEOUT_MS`, `src/lifecycle/controller.ts`).
 
