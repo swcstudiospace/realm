@@ -96,6 +96,7 @@ Numbering: `PD-` (production decision). Not the `D-` numbers in `.planning/STATE
 - Needed by: 9.6.
 - (a) Keep OMP-LIVE-01, -03, -04 descoped to the follow-up milestone, as the owner decided on 2026-10-23 and 2026-10-24. **Recommended.** The production build proves `realm up` and `realm down` (TST-03), which is what the descoped items needed.
 - (b) Reinstate them into this build. Requires a live Omp session on the host and a running daemon, both of which 09-01 did not achieve.
+- Decision (owner, 2026-10-25): option (b). The three items were reinstated and run live in phase 9.6; all passed on 2026-10-28 (09.6-VERIFICATION.md). The recommendation above is kept as the record of the proposal.
 
 ## PD-15: Where the OpenShell supervisor runs (RT-03)
 

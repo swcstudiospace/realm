@@ -16,13 +16,13 @@ Coverage: 46/46 v1 requirements mapped, each to exactly one phase. v2.0 adds 8 r
 - [x] **Phase 6: CLI, Daemon, and Host Packaging** - realm up, down, status, doctor, control channel, and host config snippets — Complete (verification deferred: human — 06-VERIFICATION.md, 5/5 must-haves, 6 live items)
 - [x] **Phase 7: Policy Reference and Security Review** - Policy reference, security review, and supply-chain review before first release — Complete (verification deferred: human — 07-VERIFICATION.md, 9/9 must-haves, 5 human items)
 - [x] **Phase 8: Host Adapter Bundles** - Claude Code and Grok Build, Muse Code, Hermes Agent, Prime Agent, and Omp manifests, each checked by its host's own validator in an isolated directory (HOST-01, HOST-02)
-- [ ] **Phase 9: Live Omp Verification** - A live Omp session attaches, reports a truthful disconnected status with its reason, retries, and leaves the daemon running on shutdown (OMP-LIVE-01 to OMP-LIVE-04, UI-01)
+- [x] **Phase 9: Live Omp Verification** - A live Omp session attaches, reports a truthful disconnected status with its reason, retries, and leaves the daemon running on shutdown (OMP-LIVE-01 to OMP-LIVE-04, UI-01) — Complete (2026-10-28: OMP-LIVE-01 to -04 met live on the final build; UI-01 is a recorded limitation)
 - [x] **Phase 9.1: Host Prerequisites and Production Gateway** - Rootless realm-account runtime with delegated limits and a production TLS and JWT gateway (PRD-HOST-01, PRD-HOST-02, PRD-GW-01, PRD-GW-02) — Complete (2026-10-25: T1 to T9 evidence; T6 reboot PASS)
-- [ ] **Phase 9.2: Native Enforcement Helper** - Source-built static helper applying no_new_privs, Landlock, and seccomp, fail closed (PRD-ENF-01 to PRD-ENF-03)
+- [x] **Phase 9.2: Native Enforcement Helper** - Source-built static helper applying no_new_privs, Landlock, and seccomp, fail closed (PRD-ENF-01 to PRD-ENF-03) — Superseded (owner decision 2026-10-28: the runtime's own policy is the enforcement authority and the helper was removed; recoverable at commit 497b63f; PRD-ENF-03 met live as amended)
 - [x] **Phase 9.3: Hardened Container Lifecycle** - Create, verify with the 14 checks, and remove the sandbox container; startup sweep (PRD-CTR-01 to PRD-CTR-05) — Complete, VERIFIED_WITH_GAPS (live acceptance 1, 4, 5, 6, 7 PASS on the committed tree; acceptance 2 and 3 unit-verified, live NOT RUN)
 - [x] **Phase 9.4: Compute Driver gRPC** - Realm-owned ComputeDriver server on a user-only socket; admission matches the gateway (PRD-DRV-01 to PRD-DRV-03, PRD-GW-03, PRD-LIB-01) — Complete, VERIFIED (2026-10-25: gateway connected live; limits carried to 9.5: Ready state, PD-08 live, AuthenticateSandbox)
 - [x] **Phase 9.5: Isolation Backend and Sandbox Protocol** - No workload before StartAgent; mediated egress and DNS (PRD-ISO-01 to PRD-ISO-06, PRD-SUP-01, PRD-GW-04) — Complete on the amended built-in path (owner, 2026-10-26); live checks for Landlock, egress, frames, and restart move to 9.6
-- [ ] **Phase 9.6: Integration, Live Proof, and Cutover** - Gated live suite, realm up and down proof, docs, clean cutover (PRD-TST-01 to PRD-TST-03, PRD-OMP-01, PRD-DOC-01, PRD-CLEAN-01)
+- [x] **Phase 9.6: Integration, Live Proof, and Cutover** - Gated live suite, realm up and down proof, docs, clean cutover (PRD-TST-01 to PRD-TST-03, PRD-OMP-01, PRD-DOC-01, PRD-CLEAN-01) — Complete (2026-10-28: six live scenarios 28 of 28 at d2db549; OMP-LIVE-01, -03, -04 verified live; PRD-DRV-01 amendment and the review findings await owner decisions)
 - [ ] **Phase 10: Docs, Packaging, and Release 0.2.0** - Host docs and snippets, MCP smoke check, pack assertions for each bundle, changelog, PR to main, and release 0.2.0 (HOST-03)
 - [ ] **Phase 11: Milestone v2.0 Close** - Milestone completion after a gsd-tools dry run, with scratch profiles and worktrees removed
 
@@ -266,14 +266,14 @@ Plans:
 **Depends on:** Phases 9.1 to 9.5; decisions PD-13, PD-14
 **Requirements:** PRD-TST-01, PRD-TST-02, PRD-TST-03, PRD-OMP-01, PRD-DOC-01, PRD-CLEAN-01
 **Success Criteria** (what must be TRUE):
-  1. The gated live suite passes: 14 checks, helper probe, supervisor order, 16 MiB round trip, exit status, non-root start, egress allow and deny, IPv6 off, delete leaves none (PRD-TST-02, RT-05 evidence).
+  1. The gated live suite passes its six scenarios: default-policy confinement with the workspace bind, runner probe, exit status, and 16 MiB round trip; immediate down then up; egress allow and deny with a synthetic resolver and IPv6 off; a wrong digest; crash recovery; and MCP exec, write, and read; `realm down` leaves no residue (PRD-TST-02, RT-05 evidence).
   2. `realm up`, `realm status` (active), and `realm down` (zero realm containers) pass live; a wrong digest fails closed with no container left (PRD-TST-03, RT-09 evidence).
   3. No code path that only the built-in driver required remains; no shim (PRD-CLEAN-01).
   4. `AGENTS.md` and the integration docs match the layout and the evidence, and `npm run check:docs` passes (PRD-DOC-01).
-  5. The OMP-LIVE traceability rows match PD-14 and their evidence (PRD-OMP-01).
+  5. The OMP-LIVE traceability rows match the owner's reinstatement of 2026-10-25 and the live evidence of 2026-10-28 (PRD-OMP-01).
   6. RT-01, RT-03, and RT-05 status changes cite the live evidence; RT-03 is not amended without owner approval.
 
-**Plans**: 1 plan (09.6-01-PLAN.md)
+**Plans**: 1 plan (09.6-01-PLAN.md), executed; see 09.6-01-SUMMARY.md and 09.6-VERIFICATION.md
 
 ### Phase 10: Docs, Packaging, and Release 0.2.0
 
@@ -314,12 +314,12 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 | 6. CLI, Daemon, and Host Packaging | 6/6 | Complete (verification deferred: human — 06-VERIFICATION.md, 5/5 must-haves, 6 live items) | - |
 | 7. Policy Reference and Security Review | 3 units, no PLAN files | Complete (verification deferred: human — 07-VERIFICATION.md, 9/9 must-haves, 5 human items) | - |
 | 8. Host Adapter Bundles | 1/1 | Complete (closed 2026-10-24 on validator exit codes; artifacts hand-written, pending owner ratification) | - |
-| 9. Live Omp Verification | 1/3 | In progress: plan 09-01 closed for code and unit gates on 2026-10-25 (the only plan on disk); OMP-LIVE-01, -03, and -04 run in phase 9.6 after `realm up` works (owner decision 2026-10-25, reinstating them from the 2026-10-23 descope); OMP-LIVE-02 met live; OMP-LIVE-03 partial; UI-01 non-blocking recorded as a stated limitation | - |
+| 9. Live Omp Verification | 3/3 | Complete (2026-10-28): plan 09-01 closed for code and unit gates on 2026-10-25; OMP-LIVE-01, -03, and -04 were run live on the final build in phase 9.6 (owner decision 2026-10-25, reinstating them from the 2026-10-23 descope); OMP-LIVE-02 met live earlier; UI-01 non-blocking recorded as a stated limitation | - |
 | 9.1. Host Prerequisites and Production Gateway | 1/1 | Complete (2026-10-25): T1 to T9 with evidence; T6 reboot PASS; the main gateway's keep-alive bridge was restored after the reboot and is persistent through boot unit HC-07 | - |
-| 9.2. Native Enforcement Helper | 0/1 | Partial: helper, native tests, probe, SECCOMP.md, and image definition complete; security gate PASS WITH CONDITIONS C1 to C6; image build in phase 9.3 | - |
+| 9.2. Native Enforcement Helper | 1/1 | Superseded (2026-10-28): the helper was built and gated in 2026-10-25, then removed by owner decision; enforcement is the runtime policy plus the vendored seccomp profile, proven live in phase 9.6 | - |
 | 9.3. Hardened Container Lifecycle | 1/1 | Complete, VERIFIED_WITH_GAPS (2026-10-25): live acceptance 1, 4, 5, 6, 7 PASS after the reboot; acceptance 2 and 3 unit-verified, live NOT RUN; launch and active removal unit-verified | - |
 | 9.4. Compute Driver gRPC | 1/1 | Complete, VERIFIED (2026-10-25): gateway connected live; create, get, list, and delete observed; limits carried to 9.5 (Ready state, PD-08 stop and start live, AuthenticateSandbox) | - |
 | 9.5. Isolation Backend and Sandbox Protocol | 1/1 | Complete on the amended built-in path (2026-10-26): live T0 reached Ready with the runtime as PID 1 and the host supervisor connected; PD-15 host placement and PD-10 runtime policy decided; live checks moved to 9.6 | - |
-| 9.6. Integration, Live Proof, and Cutover | 0/1 | Planned (needs 9.1 to 9.5) | - |
+| 9.6. Integration, Live Proof, and Cutover | 1/1 | Complete (2026-10-28): six live scenarios 28 of 28 at d2db549 (crash recovery 3 of 3 more times); Omp checks verified live; gates green (1635 pass, 0 fail, 7 skipped); owner decisions listed in the verification file | - |
 | 10. Docs, Packaging, and Release 0.2.0 | 0/4 | In progress: host snippets, Omp runbook, changelog, and pack check (Hermes JSON manifests) done; release 0.2.0 held by the owner's ship hold | - |
 | 11. Milestone v2.0 Close | 0/1 | Not started: phases 8 to 10 incomplete; gsd-tools dry run refuses (ROADMAP lists 7 unstarted phases); --force and --confirm not used | - |

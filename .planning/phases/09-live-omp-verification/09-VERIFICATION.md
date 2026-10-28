@@ -2,6 +2,8 @@
 
 Status: passed for the requirements still in scope. OMP-LIVE-02 complete on refreshed evidence; UI-01 accepted limitation; OMP-LIVE-01, -03, and -04 descoped by owner decision. Hand-written by the orchestrator (gsd-verifier not run); flagged for owner ratification.
 
+Superseded 2026-10-28: the owner reinstated OMP-LIVE-01, -03, and -04 on 2026-10-25, and all three were verified live on the final build (see 09.6-VERIFICATION.md in phase 9.6). The descoped wording in this file is dated history.
+
 | Requirement | Status | Evidence |
 |---|---|---|
 | OMP-LIVE-02 | Complete (refreshed) | After the libpod fix, the daemon reports disconnected with reason `no workspace` and never active (see 09-01-SUMMARY.md, live rows) |

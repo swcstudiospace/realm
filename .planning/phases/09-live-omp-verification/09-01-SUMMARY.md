@@ -16,6 +16,7 @@ Status: closed for code and unit gates on 2026-10-25 (owner decision). The three
 
 - Live `realm up` on the built-in driver: the create-time verifier fails `rootless` (the Podman service is rootful), `read-only-root` (no driver option), `tmpfs` (OpenShell's tmpfs set), and `mounts` (OpenShell's own mounts). `cap-drop` passes. The session fails closed, and no sandbox is left.
 - OMP-LIVE-01, OMP-LIVE-03, and OMP-LIVE-04 run through `realm up` and have not been run. The owner moved them to phase 9.6 on 2026-10-25, reinstating them from the 2026-10-23 descope.
+- Update (2026-10-28): these three checks were run live on the final build and passed; see 09.6-VERIFICATION.md.
 - The AgentOS sandbox has no hardening check. It does not meet RT-01 today (writable root, no workspace or state mounts). The path is off unless `REALM_AGENTOS_IMAGE` is set.
 
 ## Realm-owned driver (isolation backend) spike

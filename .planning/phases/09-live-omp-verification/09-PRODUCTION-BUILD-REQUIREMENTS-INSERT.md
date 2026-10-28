@@ -40,6 +40,7 @@ RT-01, RT-03, and RT-05 are not changed by this insert. Their status moves only 
 - [ ] **PRD-TST-02**: A gated live suite, skipped in CI, checks on the realm host the 14 hardening properties, the helper probe, the supervisor order, the 16 MiB round trip, exit status, non-root start, egress, and delete (Phase 9.6)
 - [ ] **PRD-TST-03**: `realm up`, `realm status`, and `realm down` pass on the production stack; `realm down` leaves zero realm containers; a wrong image digest makes `realm up` fail closed with no container left (Phase 9.6)
 - [ ] **PRD-OMP-01**: OMP-LIVE-01, OMP-LIVE-03, and OMP-LIVE-04 are re-run only if PD-14 reinstates them; otherwise their descoped status is kept (Phase 9.6)
+- Outcome (2026-10-28): PD-14 option (b) was chosen on 2026-10-25, so the three items were re-run and passed live; REQUIREMENTS.md is authoritative for this requirement's wording and status.
 - [ ] **PRD-DOC-01**: The integration docs and `AGENTS.md` match the production layout and evidence with no host path; `CHANGELOG.md` and package version fields are not edited (Phase 9.6)
 - [ ] **PRD-CLEAN-01**: Code that only the built-in driver path required is removed; no compatibility shim or fallback remains (Phase 9.6)
 

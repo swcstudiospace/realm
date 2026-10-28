@@ -33,14 +33,14 @@ All v1 requirements are hypotheses until shipped and verified.
 
 ### Runtime sandbox (RT)
 
-- [ ] **RT-01**: Podman container runs rootless from a digest-pinned image, is never privileged, drops all Linux capabilities and adds back only verified ones, uses a read-only root filesystem with tmpfs scratch space, sets CPU, memory, and PID limits, and mounts only the bound workspace and the realm state directory
+- [x] **RT-01**: Podman container runs rootless from a digest-pinned image, is never privileged, drops all Linux capabilities and adds back only verified ones, uses a read-only root filesystem with tmpfs scratch space, sets CPU, memory, and PID limits, and mounts only the bound workspace and the realm state directory
 - [ ] **RT-02**: Prerequisite probe reports `PODMAN_MISSING` when Podman is absent and `PODMAN_MACHINE_DOWN` when a required machine is not running, with a human-readable reason
-- [ ] **RT-03**: OpenShell runs inside the container, and all agent execution is routed through it; no code path bypasses OpenShell
-- [ ] **RT-05**: Egress from the container is default-deny; only explicitly configured host and port pairs are allowed; IPv6 is disabled; host networking is rejected at config load; a request to a non-allowlisted host fails
+- [x] **RT-03**: OpenShell runs inside the container, and all agent execution is routed through it; no code path bypasses OpenShell
+- [x] **RT-05**: Egress from the container is default-deny; only explicitly configured host and port pairs are allowed; IPv6 is disabled; host networking is rejected at config load; a request to a non-allowlisted host fails
 - [x] **RT-06**: Host-to-daemon control channel is a user-only Unix socket (directory 0700, socket 0600) under the realm state directory, or a loopback port with a per-session token; neither the socket nor any Podman or Docker socket is mounted into the container
 - [x] **RT-07**: Session record is written to disk before container creation, and records the realm id, session id, workspace root, state, container id, and control socket path, with no secrets
-- [ ] **RT-08**: On startup, orphaned containers (by realm label) and stale session records from a previous crash are reaped; a crash during `realm up` is reaped on the next start
-- [ ] **RT-09**: `realm down` removes every container carrying the realm label and returns the state to disconnected, leaving zero orphan containers
+- [x] **RT-08**: On startup, orphaned containers (by realm label) and stale session records from a previous crash are reaped; a crash during `realm up` is reaped on the next start
+- [x] **RT-09**: `realm down` removes every container carrying the realm label and returns the state to disconnected, leaving zero orphan containers
 
 ### Anda bridge (ANDA)
 
@@ -108,10 +108,10 @@ All v1 requirements are hypotheses until shipped and verified.
 
 ### Omp live verification (OMP-LIVE)
 
-- [ ] **OMP-LIVE-01**: A live Omp session loading the built extension with `-e` under an isolated profile attaches to the Realm daemon for the workspace (descoped from v2.0 to the follow-up milestone by the owner, 2026-10-23; not met on this host)
+- [x] **OMP-LIVE-01**: A live Omp session loading the built extension with `-e` under an isolated profile attaches to the Realm daemon for the workspace (reinstated by the owner, 2026-10-25; verified live on the final build, 2026-10-28: the status item shows realm active)
 - [x] **OMP-LIVE-02**: When the daemon cannot attach, the status item states disconnected with its reason, never active
-- [ ] **OMP-LIVE-03**: The retry command reattaches from disconnected in the same live session (descoped from v2.0 to the follow-up milestone by the owner, 2026-10-24; not met on this host, which has no active daemon)
-- [ ] **OMP-LIVE-04**: Shutdown of the Omp session leaves the Realm daemon running (descoped from v2.0 to the follow-up milestone by the owner, 2026-10-23)
+- [x] **OMP-LIVE-03**: The retry command reattaches from disconnected in the same live session (reinstated by the owner, 2026-10-25; verified live on the final build, 2026-10-28: after realm down the item shows disconnected with REALM_NOT_ACTIVE, and the retry command returns it to active)
+- [x] **OMP-LIVE-04**: Shutdown of the Omp session leaves the Realm daemon running (reinstated by the owner, 2026-10-25; verified live on the final build, 2026-10-28: the same daemon process still runs and reports active after Omp exits)
 
 ### Integrated UI (UI)
 
@@ -119,37 +119,37 @@ All v1 requirements are hypotheses until shipped and verified.
 
 ### Production isolation build (PRD)
 
-- [ ] **PRD-HOST-01**: The realm account runs its rootless Podman API as a user-manager unit with cgroup delegation, runc is configured for that account, `podman --remote info` reports rootless true, a 5.x version, and runtime runc, and CPU, memory, and PID limits are enforceable (Phase 9.1)
-- [ ] **PRD-HOST-02**: The rootless API, its unit, and linger survive a host reboot without a manual step (Phase 9.1)
-- [ ] **PRD-GW-01**: The realm gateway serves TLS with a server certificate and a client CA from the realm state directory, and the production profile never writes `disable_tls` (Phase 9.1)
-- [ ] **PRD-GW-02**: The realm gateway signs sandbox bearers with JWT keys (signing key, public key, and kid) held in the realm state directory with user-only permissions; no key value appears in the repository (Phase 9.1)
-- [ ] **PRD-GW-03**: The realm gateway's compute driver is the realm driver, and the driver's advertised name and resource admission acknowledgement match the gateway's expected policy (Phase 9.4)
-- [ ] **PRD-GW-04**: The realm gateway registers the realm isolation backend with a unique name and an absolute unix socket endpoint (Phase 9.5)
-- [ ] **PRD-DRV-01**: The realm compute driver serves ComputeDriver gRPC on a Unix socket in a 0700 directory with mode 0600, implementing GetCapabilities, ValidateSandboxCreate, CreateSandbox, GetSandbox, ListSandboxes, DeleteSandbox, WatchSandboxes, AuthenticateSandbox, EnsureWorkspace, and DeleteWorkspace (Phase 9.4)
-- [ ] **PRD-DRV-02**: ValidateSandboxCreate and CreateSandbox refuse, before any libpod call, a request whose image digest, CPU, memory, network mode, mounts, capabilities, or workload argv differ from the realm profile (Phase 9.4)
-- [ ] **PRD-DRV-03**: StopSandbox and StartSandbox return the status decided in PD-08 and change no sandbox state (Phase 9.4)
-- [ ] **PRD-CTR-01**: CreateSandbox creates and starts a container whose only process is the idle init, reads the kernel capability sets of its init process on the host, and verifies the 14 hardening properties; when any property fails it removes the container and returns an error naming the property (Phase 9.3)
-- [ ] **PRD-CTR-02**: DeleteSandbox removes the sandbox's container and its launch and active state; afterwards no realm-labelled container for that sandbox exists (Phase 9.3)
-- [ ] **PRD-CTR-03**: The driver removes realm-labelled containers left by a previous generation before it accepts requests (Phase 9.3)
-- [ ] **PRD-CTR-04**: Containers carry the OpenShell labels that existing realm code reads (managed, sandbox name, and isolation role) (Phase 9.3)
-- [ ] **PRD-CTR-05**: The sandbox image is a derived image pinned by digest, contains the helper, and mounts no socket (Phase 9.3)
-- [ ] **PRD-ENF-01**: The helper applies no_new_privs, then a Landlock ruleset at ABI 3 or higher, then a seccomp denylist, and exits non-zero before exec on any failure (Phase 9.2)
-- [ ] **PRD-ENF-02**: The helper is built from committed source in a pinned builder, is statically linked, and its source and binary digests are recorded in the image record (Phase 9.2)
-- [ ] **PRD-ENF-03**: An in-container probe shows the helper denies a `/tmp` write with EACCES, allows a `/workspace` write, returns EPERM for keyctl, and reports NoNewPrivs 1 and Seccomp 2 (Phase 9.2, live in Phase 9.6)
-- [ ] **PRD-ISO-01**: The IsolationBackend server implements Describe and OpenBoundary; SuspendBoundary and ResumeBoundary follow PD-09; Describe advertises only implemented capabilities (Phase 9.5)
-- [ ] **PRD-ISO-02**: The SandboxProtocol server implements, as frames on its Exchange and Mediate streams, DiscoverPolicy, Attach, Confirm, OpenMediation, StartAgent, AttachProcess, Wait, UpdateProviderEnvironment, Signal, Terminate, TerminateBoundary, Resize, Exec, LoopbackConnect, and AcceptNetwork in the state order Attached, Confirmed, Running, Terminated (Phase 9.5)
-- [ ] **PRD-ISO-03**: No workload process starts before StartAgent, and at Confirm the only process in the container is the idle init (Phase 9.5)
-- [ ] **PRD-ISO-04**: Control frames are at most 1 MiB and I/O payloads at most 64 KiB, and a 16 MiB stdin write reads back byte for byte (Phase 9.5)
-- [ ] **PRD-ISO-05**: Egress is default-deny through mediation: the container has no network interface, DNS answers come only through Mediate for allowlisted names, AAAA queries are refused, and non-allowlisted hosts fail (Phase 9.5)
-- [ ] **PRD-ISO-06**: After DeleteSandbox, every handle opened for that sandbox fails and changes no state (Phase 9.5)
-- [ ] **PRD-SUP-01**: The OpenShell supervisor's process placement and network path are recorded from a live attach, and RT-03 is judged against that record under PD-15 (Phase 9.5)
-- [ ] **PRD-LIB-01**: The gRPC runtime and loader are exact pins with their licence and audit recorded; the OpenShell protos are vendored at a recorded revision with per-file digests and shipped in the package (Phase 9.4)
-- [ ] **PRD-TST-01**: Every module added in phases 9.1 to 9.5 has unit tests that run under `npm test` with no host dependency (Phase 9.6)
-- [ ] **PRD-TST-02**: A gated live suite, skipped in CI, checks on the realm host the 14 hardening properties, the helper probe, the supervisor order, the 16 MiB round trip, exit status, non-root start, egress, and delete (Phase 9.6)
-- [ ] **PRD-TST-03**: `realm up`, `realm status`, and `realm down` pass on the production stack; `realm down` leaves zero realm containers; a wrong image digest makes `realm up` fail closed with no container left (Phase 9.6)
-- [ ] **PRD-OMP-01**: OMP-LIVE-01, OMP-LIVE-03, and OMP-LIVE-04 are re-run only if PD-14 reinstates them; otherwise their descoped status is kept (Phase 9.6)
-- [ ] **PRD-DOC-01**: The integration docs and `AGENTS.md` match the production layout and evidence with no host path; `CHANGELOG.md` and package version fields are not edited (Phase 9.6)
-- [ ] **PRD-CLEAN-01**: Code that only the built-in driver path required is removed; no compatibility shim or fallback remains (Phase 9.6)
+- [x] **PRD-HOST-01**: The realm account runs its rootless Podman API as a user-manager unit with cgroup delegation, runc is configured for that account, `podman --remote info` reports rootless true, a 5.x version, and runtime runc, and CPU, memory, and PID limits are enforceable (Phase 9.1)
+- [x] **PRD-HOST-02**: The rootless API, its unit, and linger survive a host reboot without a manual step (Phase 9.1)
+- [x] **PRD-GW-01**: The realm gateway serves TLS with a server certificate and a client CA from the realm state directory, and the production profile never writes `disable_tls` (Phase 9.1)
+- [x] **PRD-GW-02**: The realm gateway signs sandbox bearers with JWT keys (signing key, public key, and kid) held in the realm state directory with user-only permissions; no key value appears in the repository (Phase 9.1)
+- [x] **PRD-GW-03**: The realm gateway's compute driver is the realm driver, and the driver's advertised name and resource admission acknowledgement match the gateway's expected policy (Phase 9.4)
+- [x] **PRD-GW-04**: The realm gateway selects the built-in sandbox runtime as its isolation backend and renders no supervisor isolation-backend section (amended by owner decision, 2026-10-26: the registered realm backend was removed) (Phase 9.5)
+- [ ] **PRD-DRV-01**: The realm compute driver serves ComputeDriver gRPC on a Unix socket in a 0700 directory with mode 0600, implementing GetCapabilities, ValidateSandboxCreate, CreateSandbox, GetSandbox, ListSandboxes, DeleteSandbox, WatchSandboxes, and EnsureWorkspace. AuthenticateSandbox is not advertised and returns UNIMPLEMENTED, because the gateway does not call it on the built-in path, and DeleteWorkspace refuses, because the driver never creates or removes the pinned workspace root. This amendment follows from the owner decisions of 2026-10-26 and 2026-10-27 and awaits the owner's confirmation (Phase 9.4)
+- [x] **PRD-DRV-02**: ValidateSandboxCreate and CreateSandbox refuse, before any libpod call, a request whose image digest, CPU, memory, network mode, mounts, or capabilities differ from the realm profile (amended 2026-10-28: the create path carries no workload argv) (Phase 9.4)
+- [x] **PRD-DRV-03**: StopSandbox and StartSandbox return the status decided in PD-08 and change no sandbox state (Phase 9.4)
+- [x] **PRD-CTR-01**: CreateSandbox creates and starts a container whose PID 1 is the sandbox runtime (amended by owner decisions of 2026-10-26 and 2026-10-28: the idle init and the helper no longer exist), reads the kernel capability sets of its init process on the host, and verifies the hardening properties; when any property fails it removes the container and returns an error naming the property (Phase 9.3)
+- [x] **PRD-CTR-02**: DeleteSandbox removes the sandbox's container and its launch and active state; afterwards no realm-labelled container for that sandbox exists (Phase 9.3)
+- [x] **PRD-CTR-03**: The driver removes realm-labelled containers left by a previous generation before it accepts requests (Phase 9.3)
+- [x] **PRD-CTR-04**: Containers carry the OpenShell labels that existing realm code reads (managed, sandbox name, and isolation role) (Phase 9.3)
+- [x] **PRD-CTR-05**: The sandbox image is a derived image pinned by digest, contains the runtime, the AgentOS runner and probe, and the resolver file, and mounts no socket (amended 2026-10-28: the helper was removed) (Phase 9.3)
+- [x] **PRD-ENF-01**: Superseded by owner decision, 2026-10-28: the runtime's own policy (Landlock, seccomp, no_new_privs) is the enforcement authority and the realm helper was removed, so the original wording (the helper applies no_new_privs, a Landlock ruleset, and a seccomp denylist) no longer applies (Phase 9.2)
+- [x] **PRD-ENF-02**: Superseded by owner decision, 2026-10-28: the realm helper was removed with its image stages, so there is no helper to build or record; it stays recoverable from git history (Phase 9.2)
+- [x] **PRD-ENF-03**: An in-sandbox probe shows, under the realm policy, that /tmp, /workspace and /dev/null are writable, /etc and /home are read-only, keyctl, add_key and request_key fail with EPERM, and the workload reports NoNewPrivs 1, Seccomp 2 and no capabilities (amended by owner decisions, 2026-10-26 and 2026-10-28; live in Phase 9.6)
+- [x] **PRD-ISO-01**: Superseded by owner decision, 2026-10-26: the isolation backend is the upstream runtime on the built-in path, and the realm implements no IsolationBackend server (Phase 9.5)
+- [x] **PRD-ISO-02**: Superseded by owner decision, 2026-10-26: the SandboxProtocol server is the upstream in-container runtime, and the realm implements none of its frames (Phase 9.5)
+- [x] **PRD-ISO-03**: Superseded by owner decision, 2026-10-26: the runtime is PID 1 and starts the workload, and the realm starts its AgentOS runner as a managed exec child through OpenShell exec once the sandbox is Ready (Phase 9.5)
+- [x] **PRD-ISO-04**: A 16 MiB file uploaded into the sandbox and downloaded again reads back byte for byte, with SHA-256 compared on both sides (amended by owner decision, 2026-10-26); the control and I/O frame limits belong to the upstream runtime and are not asserted here (Phase 9.5)
+- [x] **PRD-ISO-05**: Egress is default-deny: the sandbox has no network interface, names answer synthetically from 198.18.0.0/15 and are never forwarded, a connection to a non-allowlisted host fails at connect time, an allowlisted host:port connects, and AAAA returns no data (amended 2026-10-28 on live evidence) (Phase 9.5)
+- [x] **PRD-ISO-06**: Superseded by owner decision, 2026-10-26: the driver holds no sandbox handles on the built-in path (Phase 9.5)
+- [x] **PRD-SUP-01**: The OpenShell supervisor's process placement and network path are recorded from a live attach, and RT-03 is judged against that record under PD-15 (Phase 9.5)
+- [x] **PRD-LIB-01**: The gRPC runtime and loader are exact pins with their licence and audit recorded; the OpenShell protos the driver uses are vendored at a recorded revision with per-file digests and shipped in the package (Phase 9.4)
+- [x] **PRD-TST-01**: Every module added in phases 9.1 to 9.5 has unit tests that run under `npm test` with no host dependency (Phase 9.6)
+- [x] **PRD-TST-02**: A gated live suite (`test/integration/production-driver.test.ts`), skipped in CI and by default, runs six scenarios on the realm host: default-policy confinement with the workspace, runner probe, exit status, and 16 MiB transfer; an immediate down then up; an egress allowlist with the synthetic resolver; a wrong image digest; crash recovery after the daemon is killed; and MCP exec, write, and read (amended by owner decisions, 2026-10-26 and 2026-10-28) (Phase 9.6)
+- [x] **PRD-TST-03**: `realm up`, `realm status`, and `realm down` pass on the production stack; `realm down` leaves zero realm containers; a wrong image digest makes `realm up` fail closed with no container left (Phase 9.6)
+- [x] **PRD-OMP-01**: OMP-LIVE-01, OMP-LIVE-03, and OMP-LIVE-04 are verified live on the final build (reinstated by the owner on 2026-10-25, which supersedes PD-14) (Phase 9.6)
+- [x] **PRD-DOC-01**: The integration docs and `AGENTS.md` match the production layout and evidence with no host path; `CHANGELOG.md` and package version fields are not edited (Phase 9.6)
+- [x] **PRD-CLEAN-01**: Code that only the built-in driver path required is removed; no compatibility shim or fallback remains (Phase 9.6)
 
 ## v2 Requirements (deferred)
 
@@ -188,15 +188,15 @@ Filled by the roadmap. Each v1 requirement maps to exactly one phase.
 | FS-03 | Phase 2 | Complete |
 | FS-04 | Phase 2 | Complete |
 | FS-05 | Phase 2 | Complete |
-| RT-01 | Phase 3 | Partial (live-gated) |
+| RT-01 | Phase 3 | Complete (live 2026-10-28: the create-time verifier passes on every live create; CapEff 0 and CapBnd 0; rootless Podman 5.7.1; digest-pinned image; limits enforced) |
 | RT-02 | Phase 3 | Partial (live-gated) |
-| RT-03 | Phase 3 | Partial (live-gated) |
+| RT-03 | Phase 3 | Complete on the built-in path (live 2026-10-28: the runtime is PID 1 and the runner and every exec run through OpenShell exec via the gateway and supervisor; no container-runtime exec route exists; PD-15 decided; wording not amended) |
 | RT-04 | Phase 3 | Deferred to a follow-up milestone (2026-10-22): no AgentOS driver is bound; realm up fails closed with AGENTOS_NOT_CONFIGURED; the spike recommends no-go as designed (docs/integration/agentos.md) |
-| RT-05 | Phase 4 | Partial (live-gated) |
+| RT-05 | Phase 4 | Complete (live 2026-10-28, scenario 3: default-deny, allowlisted host:port connects, non-allowlisted host fails with EACCES, IPv6 off; host networking rejected at config load by unit test) |
 | RT-06 | Phase 6 | Complete |
 | RT-07 | Phase 2 | Complete |
-| RT-08 | Phase 4 | Partial (live-gated) |
-| RT-09 | Phase 3 | Partial (live-gated) |
+| RT-08 | Phase 4 | Complete (live 2026-10-28, scenario 5: after a SIGKILL of the daemon the next realm up reaps the leftover and reaches active with one sandbox) |
+| RT-09 | Phase 3 | Complete (live 2026-10-28: realm down leaves zero containers, sandboxes, supervisors, state and secret directories in every live scenario) |
 | ANDA-01 | Phase 3 | Partial (live-gated) |
 | ANDA-02 | Phase 3 | Partial (live-gated) |
 | ANDA-03 | Phase 3 | Partial (live-gated) |
@@ -223,39 +223,39 @@ Filled by the roadmap. Each v1 requirement maps to exactly one phase.
 | HOST-01 | Phase 8 | Complete (Claude Code validate passes with 2 warnings; Grok validate passes; MCP entry is realm mcp) |
 | HOST-02 | Phase 8 | Complete (2026-10-24: Claude Code, Grok Build, Muse Code, and Hermes Agent validators pass in isolated homes; Prime Agent isolated install and list pass; wording amended by owner decision 2026-10-24) |
 | HOST-03 | Phase 10 | Partial (no host configuration file references this repository; the pack check asserts the six adapter manifests and the declared bin and Omp entries; residual: an earlier, non-isolated Claude validate may have written backups under the Claude config directory, not attributed; release 0.2.0 held by the owner's ship hold) |
-| OMP-LIVE-01 | Phase 9 | Descoped to follow-up (owner decision 2026-10-23); not met on this host (daemon refuses at startup; AgentOS unbound) |
+| OMP-LIVE-01 | Phase 9 | Complete (live 2026-10-28 on the final build: a live Omp TUI under an isolated profile with the built extension shows realm active; reinstated by the owner 2026-10-25) |
 | OMP-LIVE-02 | Phase 9 | Complete (live 2026-10-23: disconnected with the daemon's own reason, never active; re-run 2026-10-24 on Podman 5.7.1: disconnected with SCHEMA_INVALID, never active) |
-| OMP-LIVE-03 | Phase 9 | Descoped to follow-up (owner decision 2026-10-24); not met on this host (no active daemon) |
-| OMP-LIVE-04 | Phase 9 | Descoped to follow-up (owner decision 2026-10-23); no daemon survives on this host |
+| OMP-LIVE-03 | Phase 9 | Complete (live 2026-10-28: after realm down the item shows disconnected with REALM_NOT_ACTIVE, and the retry command returns it to active in the same session; reinstated 2026-10-25) |
+| OMP-LIVE-04 | Phase 9 | Complete (live 2026-10-28: after Omp exits the same daemon process is running and realm status reports active; reinstated 2026-10-25) |
 | UI-01 | Phase 9 | Accepted limitation (owner decision 2026-10-23): status item at launch; non-blocking not demonstrated |
-| PRD-HOST-01 | Phase 9.1 | Pending (plan 09.1-01) |
-| PRD-HOST-02 | Phase 9.1 | Pending (owner-scheduled reboot) |
-| PRD-GW-01 | Phase 9.1 | Pending |
-| PRD-GW-02 | Phase 9.1 | Pending |
-| PRD-GW-03 | Phase 9.4 | Pending |
-| PRD-GW-04 | Phase 9.5 | Pending |
-| PRD-DRV-01 | Phase 9.4 | Pending |
-| PRD-DRV-02 | Phase 9.4 | Pending |
-| PRD-DRV-03 | Phase 9.4 | Pending (depends on PD-08) |
-| PRD-CTR-01 | Phase 9.3 | Pending |
-| PRD-CTR-02 | Phase 9.3 | Pending |
-| PRD-CTR-03 | Phase 9.3 | Pending |
-| PRD-CTR-04 | Phase 9.3 | Pending |
-| PRD-CTR-05 | Phase 9.3 | Pending |
-| PRD-ENF-01 | Phase 9.2 | Pending |
-| PRD-ENF-02 | Phase 9.2 | Pending |
-| PRD-ENF-03 | Phase 9.2 | Pending (live in Phase 9.6) |
-| PRD-ISO-01 | Phase 9.5 | Pending |
-| PRD-ISO-02 | Phase 9.5 | Pending |
-| PRD-ISO-03 | Phase 9.5 | Pending |
-| PRD-ISO-04 | Phase 9.5 | Pending |
-| PRD-ISO-05 | Phase 9.5 | Pending |
-| PRD-ISO-06 | Phase 9.5 | Pending |
-| PRD-SUP-01 | Phase 9.5 | Pending (depends on PD-15) |
-| PRD-LIB-01 | Phase 9.4 | Pending |
-| PRD-TST-01 | Phase 9.6 | Pending |
-| PRD-TST-02 | Phase 9.6 | Pending |
-| PRD-TST-03 | Phase 9.6 | Pending |
-| PRD-OMP-01 | Phase 9.6 | Pending (depends on PD-14) |
-| PRD-DOC-01 | Phase 9.6 | Pending |
-| PRD-CLEAN-01 | Phase 9.6 | Pending |
+| PRD-HOST-01 | Phase 9.1 | Complete (live 2026-10-25: rootless true, Podman 5.7.1, runc; memory.max 1073741824, pids.max 512, cpu.max 200000 100000) |
+| PRD-HOST-02 | Phase 9.1 | Complete (live 2026-10-25 reboot: linger, unit and socket back with no manual step; one self-recovered first-start reexec line) |
+| PRD-GW-01 | Phase 9.1 | Complete (gateway-config tests; preflight exit 0; live under production TLS) |
+| PRD-GW-02 | Phase 9.1 | Complete (private keys 0600 in 0700 directories; public key and kid 0644; no key value in the repository) |
+| PRD-GW-03 | Phase 9.4 | Complete (admission tests; live "configured_driver=realm advertised_driver=realm", 2026-10-25) |
+| PRD-GW-04 | Phase 9.5 | Complete as amended (owner decision 2026-10-26: built-in selection "openshell-sandbox", no registered backend; gateway-config tests) |
+| PRD-DRV-01 | Phase 9.4 | Open: socket 0700/0600 verified live and in tests, AuthenticateSandbox UNIMPLEMENTED and not advertised, DeleteWorkspace refuses; the amendment follows from the owner decisions of 2026-10-26 and 2026-10-27 and awaits confirmation |
+| PRD-DRV-02 | Phase 9.4 | Complete (unit-verified with a spy lifecycle that makes zero libpod calls; live: a wrong image digest fails closed at the driver's create.image gate with zero containers, 2026-10-28) |
+| PRD-DRV-03 | Phase 9.4 | Complete, unit-verified (PD-08 over the wire); live the gateway answers before the driver, so the driver's refusal was not reached |
+| PRD-CTR-01 | Phase 9.3 | Complete as amended (runtime is PID 1; per-property unit tests; live: the verifier passes on every create, CapEff 0 and CapBnd 0, 2026-10-28) |
+| PRD-CTR-02 | Phase 9.3 | Complete (unit; live 2026-10-25; realm down leaves zero residue in every live scenario, 2026-10-28) |
+| PRD-CTR-03 | Phase 9.3 | Complete (unit; live 2026-10-25; crash recovery after a SIGKILL of the daemon, live scenario 5, 2026-10-28) |
+| PRD-CTR-04 | Phase 9.3 | Complete (create-body labels; unit; live 2026-10-25) |
+| PRD-CTR-05 | Phase 9.3 | Complete as amended (digest-pinned derived image, no socket mount, no helper; live 2026-10-28) |
+| PRD-ENF-01 | Phase 9.2 | Superseded (owner decision 2026-10-28: runtime policy is the enforcement authority; helper removed in commit c0a071b) |
+| PRD-ENF-02 | Phase 9.2 | Superseded (owner decision 2026-10-28: no helper to build; recoverable at commit 497b63f) |
+| PRD-ENF-03 | Phase 9.2 | Complete as amended (live 2026-10-28: /tmp, /workspace and /dev/null writable; /etc and /home read-only; keyctl, add_key and request_key EPERM; NoNewPrivs 1; Seccomp 2; scenario 1) |
+| PRD-ISO-01 | Phase 9.5 | Superseded (owner decision 2026-10-26: the isolation backend is the upstream runtime) |
+| PRD-ISO-02 | Phase 9.5 | Superseded (owner decision 2026-10-26: the SandboxProtocol server is the upstream runtime) |
+| PRD-ISO-03 | Phase 9.5 | Superseded (owner decision 2026-10-26: the runtime is PID 1; the runner starts as a managed exec child once Ready) |
+| PRD-ISO-04 | Phase 9.5 | Complete as amended (16 MiB upload and download byte-identical with SHA-256 on both sides, live scenario 1; frame limits are the upstream runtime's and are not asserted) |
+| PRD-ISO-05 | Phase 9.5 | Complete as amended (live 2026-10-28, scenario 3: default-deny; synthetic answers from 198.18.0.0/15, never forwarded, confirmed by a packet capture; connect-time refusal; AAAA no data) |
+| PRD-ISO-06 | Phase 9.5 | Superseded (owner decision 2026-10-26: the driver holds no handles on the built-in path) |
+| PRD-SUP-01 | Phase 9.5 | Complete (host placement decided under PD-15, 2026-10-26, and observed live; the runner's exec child goes through OpenShell exec, not a container-runtime exec, so the no podman exec route decision stands) |
+| PRD-LIB-01 | Phase 9.4 | Complete (exact pins grpc-js 1.14.6 and proto-loader 0.8.1; per-file proto digests; pack check; audit 0 vulnerabilities, 2026-10-25; two protos used only by the removed backend were removed on 2026-10-28) |
+| PRD-TST-01 | Phase 9.6 | Complete, unit-verified (full gates at the final commit are recorded in the phase verification file) |
+| PRD-TST-02 | Phase 9.6 | Complete (live 2026-10-28 at d2db549: 28 of 28 assertions across the six scenarios, and scenario 5 passed 3 of 3 more times alone; zero residue after each run) |
+| PRD-TST-03 | Phase 9.6 | Complete (live 2026-10-28: up, status and down; zero residue after down; a wrong image digest fails closed; scenarios 1, 2 and 4) |
+| PRD-OMP-01 | Phase 9.6 | Complete (the owner's reinstatement of 2026-10-25 supersedes PD-14; the three checks were run live on the final build, 2026-10-28) |
+| PRD-DOC-01 | Phase 9.6 | Complete (integration docs, AGENTS.md and README refreshed; check:docs passes; no host path; CHANGELOG and package version fields untouched) |
+| PRD-CLEAN-01 | Phase 9.6 | Complete (the second sandbox and the workload command, the helper, the superseded v1.0 live bodies, and the protos used only by the removed backend were removed; defensive refusals such as AGENTOS_NOT_CONFIGURED are kept by design) |

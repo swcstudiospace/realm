@@ -21,6 +21,7 @@ A live Omp session attaches, reports a truthful disconnected status with its rea
 - U-1 (2026-10-22): AgentOS deferred to a follow-up milestone. `realm up` fails closed with AGENTOS_NOT_CONFIGURED.
 - U-2 (2026-10-23): OMP-LIVE-01 and OMP-LIVE-04 descoped; UI-01 accepted as a limitation.
 - U-3 (2026-10-24): OMP-LIVE-03 descoped; the ship hold stands.
+- U-5 (2026-10-25): the owner reinstated OMP-LIVE-01, -03, and -04, superseding U-2 and U-3; they were verified live on 2026-10-28 (phase 9.6).
 - U-4 (2026-10-24, accepted expansion): the libpod route fix at 4579214 is in scope for this milestone.
 
 ## Evidence gathered for the decision (read-only, this run)
