@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ImageNotFoundError } from "../check/verify-image-digests.mjs";
+import { ImageNotFoundError, ImageReadError } from "../check/verify-image-digests.mjs";
 import { main, parseArgs } from "./build-image.mjs";
 
 const REVISION = "a".repeat(40);
@@ -188,4 +188,24 @@ test("no argument is joined into a shell string: hostile values stay single argv
     assert.equal(call.args[call.args.indexOf("-t") + 1], tag);
     assert.equal(call.args.at(-1), dir);
   });
+});
+
+test("a build context that does not exist exits 2 with a short message and no podman call", (context) => {
+  const output = capture(context);
+  withHarness(({ dir, expected }) => {
+    const { calls, io } = fakeIo();
+    assert.equal(main(["--expected", expected, "--context", join(dir, "absent")], io), 2);
+    assert.equal(main(["--expected", expected, "--context", expected], io), 2);
+    assert.deepEqual(calls, { build: [], verify: [] });
+  });
+  assert.deepEqual(output.err, ["build:image: build context not found", "build:image: build context not found"]);
+});
+
+test("a read failure after the build names the entry that could not be copied", (context) => {
+  const output = capture(context);
+  withHarness(({ expected }) => {
+    const { io } = fakeIo({ verifyThrows: new ImageReadError("runtime") });
+    assert.equal(main(["--expected", expected, "--tag", "realm:t"], io), 2);
+  });
+  assert.deepEqual(output.err, ["build:image: could not copy runtime out of the image"]);
 });

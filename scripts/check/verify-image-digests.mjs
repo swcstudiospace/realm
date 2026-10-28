@@ -147,7 +147,7 @@ export function createPodmanRunner(command) {
   return (args) =>
     execFileSync(command, args, {
       encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
+      stdio: ["ignore", "pipe", "pipe"],
       timeout: PODMAN_TIMEOUT_MS,
     });
 }
@@ -160,6 +160,22 @@ export class ImageNotFoundError extends Error {
     super(`image ${ref} is not in local podman storage (it is never pulled); build or load it first`);
     this.name = "ImageNotFoundError";
   }
+}
+
+// A copy that podman could not complete for a reason other than an absent file: a timeout, an
+// unwritable destination, a podman failure. The message names the entry and nothing else, so no
+// host path or digest reaches the output.
+export class ImageReadError extends Error {
+  constructor(name) {
+    super(`could not copy ${name} out of the image`);
+    this.name = "ImageReadError";
+  }
+}
+
+// True only for the podman message of a file that is absent from the container filesystem.
+function isAbsentFile(error) {
+  const stderr = error !== null && typeof error === "object" ? String(error.stderr ?? "").toLowerCase() : "";
+  return stderr.includes("could not be found on container") && stderr.includes("no such file or directory");
 }
 
 // Throws ImageNotFoundError when podman reports the image absent (`podman image exists`
@@ -186,8 +202,8 @@ function removeContainer(container, run) {
 }
 
 // Copies each expected file out of the image into destination, mirroring its in-image path.
-// A file that podman cannot copy is left absent, and compareDirectory reports it as missing.
-// The scratch container is always removed. run is injectable for tests.
+// A file that podman reports absent from the image is left absent, and compareDirectory reports it
+// as missing. Any other copy failure throws ImageReadError.
 export function extractImageFiles(ref, expected, destination, run = runPodman) {
   requireLocalImage(ref, run);
   const container = run(["create", "--pull=never", "--entrypoint", "/bin/true", ref]).trim();
@@ -201,8 +217,10 @@ export function extractImageFiles(ref, expected, destination, run = runPodman) {
       mkdirSync(dirname(target), { recursive: true });
       try {
         run(["cp", `${container}:${path}`, target]);
-      } catch {
-        // Absent in the image: reported as a missing finding by compareDirectory.
+      } catch (error) {
+        if (!isAbsentFile(error)) {
+          throw new ImageReadError(name);
+        }
       }
     }
   } finally {
@@ -232,6 +250,9 @@ export function parseArgs(argv) {
     const value = argv[index + 1];
     if (value === undefined || value.length === 0) {
       throw new Error(`${flag} needs a value`);
+    }
+    if (flag === "--image" && value.startsWith("-")) {
+      throw new Error("--image must be an image reference, not an option");
     }
     if (flag === "--dir") {
       options.dir = value;
@@ -263,7 +284,7 @@ function main(argv) {
   try {
     findings = options.dir === null ? verifyImage(options.image, expected) : compareDirectory(expected, options.dir);
   } catch (error) {
-    if (error instanceof ImageNotFoundError) {
+    if (error instanceof ImageNotFoundError || error instanceof ImageReadError) {
       console.error(`check:image-digests: ${error.message}`);
     } else {
       console.error("check:image-digests: could not read the image or directory");

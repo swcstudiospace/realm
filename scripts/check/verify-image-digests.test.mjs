@@ -1,11 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   ImageNotFoundError,
+  ImageReadError,
   compareDirectory,
   compareLabels,
   formatFinding,
@@ -16,6 +19,7 @@ import {
 
 const REVISION = "a".repeat(40);
 const CARGO_LOCK = "b".repeat(64);
+const SCRIPT = fileURLToPath(new URL("./verify-image-digests.mjs", import.meta.url));
 
 const FILES = {
   runtime: { path: "usr/local/lib/realm/openshell-sandbox", content: "runtime bytes" },
@@ -153,7 +157,10 @@ function fakePodman(files, labels, calls) {
       const [, path] = args[1].split(":");
       const file = Object.values(files).find((candidate) => `/${candidate.path}` === path);
       if (file === undefined || file.content === null) {
-        throw new Error("no such file");
+        throw Object.assign(new Error("Command failed: podman cp"), {
+          status: 125,
+          stderr: ABSENT_STDERR(path),
+        });
       }
       writeFileSync(args[2], file.content);
       return "";
@@ -269,4 +276,115 @@ test("verifyImage keeps its findings when the container removal fails and report
     [["agentosProbe", "missing"]],
   );
   assert.deepEqual(lines, ["check:image-digests: could not remove scratch container container-1"]);
+});
+
+// The stderr podman prints for a path that is absent from the container filesystem, as measured.
+const ABSENT_STDERR = (path) =>
+  `Error: "${path}" could not be found on container container-1: no such file or directory\n`;
+// The stderr podman prints when the host destination cannot be written, as measured.
+const UNWRITABLE_STDERR = "Error: 1 error occurred:\n\t* copying to host: open /unwritable/host/dest: permission denied\n\n";
+
+function failingCopy(stderr) {
+  const inner = fakePodman(imageFiles(), matchingLabels(), []);
+  return (args) => {
+    if (args[0] === "cp") {
+      throw Object.assign(new Error("Command failed: podman cp"), { status: 125, stderr });
+    }
+    return inner(args);
+  };
+}
+
+test("verifyImage treats a copy failure that is not an absent file as a read failure and removes the container", () => {
+  for (const stderr of [UNWRITABLE_STDERR, "", "Error: something else entirely\n"]) {
+    const calls = [];
+    const run = failingCopy(stderr);
+    const recording = (args) => {
+      calls.push(args[0]);
+      return run(args);
+    };
+    assert.throws(
+      () => verifyImage("realm:test", imageExpected(), recording),
+      (error) =>
+        error instanceof ImageReadError &&
+        error.message === "could not copy runtime out of the image" &&
+        !error.message.includes("unwritable"),
+    );
+    assert.ok(calls.includes("rm"));
+  }
+});
+
+test("verifyImage counts only the no-such-file stderr of podman as a missing file, ignoring case", () => {
+  const findings = verifyImage(
+    "realm:test",
+    imageExpected(),
+    failingCopy(ABSENT_STDERR("/usr/local/lib/realm/x").toUpperCase()),
+  );
+  assert.deepEqual(
+    findings.filter((finding) => finding.kind === "missing").map((finding) => finding.name),
+    ["runtime", "agentosRunner", "agentosProbe"],
+  );
+});
+
+test("parseArgs refuses an --image value that podman would read as an option", () => {
+  assert.throws(() => parseArgs(["--image", "--rm"]), /--image must be an image reference/);
+  assert.throws(() => parseArgs(["--image", "-x"]), /--image must be an image reference/);
+  assert.equal(parseArgs(["--dir", "-built"]).dir, "-built");
+});
+
+// Runs the script with a fake `podman` first on PATH. The fake is a node script that answers by mode.
+function runScript(args, mode) {
+  const dir = mkdtempSync(join(tmpdir(), "realm-verify-digests-cli-"));
+  try {
+    const bin = join(dir, "podman");
+    writeFileSync(
+      bin,
+      [
+        "#!/usr/bin/env node",
+        "const args = process.argv.slice(2);",
+        "const mode = process.env.FAKE_PODMAN_MODE;",
+        'if (args[0] === "create") { console.log("container-1"); }',
+        'else if (args[0] === "cp") {',
+        '  if (mode === "absent") { process.stderr.write(`Error: "${args[1]}" could not be found on container container-1: no such file or directory\\n`); process.exit(125); }',
+        '  if (mode === "unwritable") { process.stderr.write("Error: 1 error occurred:\\n\\t* copying to host: open /unwritable/host/dest: permission denied\\n\\n"); process.exit(125); }',
+        "  process.exit(1);",
+        '} else if (args[0] === "image" && args[1] === "inspect") { console.log("{}"); }',
+        "",
+      ].join("\n"),
+    );
+    chmodSync(bin, 0o755);
+    const expected = join(dir, "expected-digests.json");
+    writeFileSync(expected, JSON.stringify(fixtureJson()));
+    const result = spawnSync(process.execPath, [SCRIPT, ...args(expected)], {
+      encoding: "utf8",
+      env: { PATH: `${dir}${delimiter}${dirname(process.execPath)}`, FAKE_PODMAN_MODE: mode },
+      timeout: 30_000,
+    });
+    return { status: result.status, stderr: result.stderr, dir };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test("the script exits 1 with the finding when podman reports the file absent from the image", () => {
+  const result = runScript((expected) => ["--image", "realm:test", "--expected", expected], "absent");
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /check:image-digests: runtime: missing \(expected [0-9a-f]{12}, actual none\)/);
+});
+
+test("the script exits 2 naming the entry when the host destination is unwritable", () => {
+  const result = runScript((expected) => ["--image", "realm:test", "--expected", expected], "unwritable");
+  assert.equal(result.status, 2);
+  assert.equal(result.stderr, "check:image-digests: could not copy runtime out of the image\n");
+});
+
+test("the script exits 2 when podman cp fails with an empty stderr, as a timeout does", () => {
+  const result = runScript((expected) => ["--image", "realm:test", "--expected", expected], "silent");
+  assert.equal(result.status, 2);
+  assert.equal(result.stderr, "check:image-digests: could not copy runtime out of the image\n");
+});
+
+test("the script exits 2 for an --image value starting with a dash, without calling podman", () => {
+  const result = runScript((expected) => ["--image", "--rm", "--expected", expected], "absent");
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /--image must be an image reference/);
 });

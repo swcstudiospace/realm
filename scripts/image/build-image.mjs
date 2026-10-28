@@ -10,15 +10,16 @@
 //
 // Exit 0: built and every digest and label matches. Exit 1: the image built but a file is
 // missing or a digest or label differs. Exit 2: bad arguments, an unreadable or malformed
-// digests file, or a failed build or verification. Output names entries and the first 12
+// digests file, a missing build context, or a failed build or verification. Output names entries and the first 12
 // characters of digests, never file contents.
 
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   ImageNotFoundError,
+  ImageReadError,
   createPodmanRunner,
   formatFinding,
   parseExpected,
@@ -81,6 +82,16 @@ export const DEFAULT_IO = {
   },
 };
 
+// True when path is an existing directory. A path that cannot be examined at all (absent, or
+// below a file) is not a usable context, and the caller reports it as such.
+function isDirectory(path) {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 export function main(argv, io = DEFAULT_IO) {
   let options;
   let expected;
@@ -92,6 +103,10 @@ export function main(argv, io = DEFAULT_IO) {
     return 2;
   }
   const context = resolve(options.context);
+  if (!isDirectory(context)) {
+    console.error("build:image: build context not found");
+    return 2;
+  }
   try {
     io.build(options.podman, buildArgs(expected, options.tag, context), context);
   } catch {
@@ -103,7 +118,11 @@ export function main(argv, io = DEFAULT_IO) {
     findings = io.verify(options.tag, expected, options.podman);
   } catch (error) {
     console.error(
-      `build:image: ${error instanceof ImageNotFoundError ? error.message : "could not read the built image"}`,
+      `build:image: ${
+        error instanceof ImageNotFoundError || error instanceof ImageReadError
+          ? error.message
+          : "could not read the built image"
+      }`,
     );
     return 2;
   }
