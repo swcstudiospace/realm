@@ -13,7 +13,7 @@ import { Server, ServerCredentials, type ServiceDefinition, type UntypedServiceI
 import { chmodSync, lstatSync, mkdirSync, unlinkSync, type Stats } from "node:fs";
 import { connect } from "node:net";
 import { dirname, isAbsolute } from "node:path";
-import { makeRealmError } from "../../core/errors.js";
+import { RealmError, makeRealmError } from "../../core/errors.js";
 
 const PARENT_MODE = 0o700;
 const SOCKET_MODE = 0o600;
@@ -32,11 +32,29 @@ export interface SocketServer {
   close(): Promise<void>;
 }
 
+// How long close() waits for open calls to end before it cancels them.
+export const SHUTDOWN_GRACE_MS = 3000;
+
+export interface SocketServerOptions {
+  // Overrides SHUTDOWN_GRACE_MS. Zero cancels open calls at once.
+  readonly shutdownGraceMs?: number;
+}
+
 // Binds the services on socketPath and resolves once it accepts connections. It refuses before binding when the path
 // cannot be the server's own socket. A refusal throws a catalogue error. A bound socket that fails the post-bind check is
 // shut down and removed before the error is thrown, so nothing keeps listening on a path that was refused.
-export async function startSocketServer(socketPath: string, services: readonly BoundService[]): Promise<SocketServer> {
+// close() stops accepting, waits up to shutdownGraceMs for open calls to end, then cancels the ones still open and
+// removes the socket. Calling it again returns the same close.
+export async function startSocketServer(
+  socketPath: string,
+  services: readonly BoundService[],
+  options: SocketServerOptions = {},
+): Promise<SocketServer> {
   if (!isAbsolute(socketPath)) {
+    throw makeRealmError("SCHEMA_INVALID");
+  }
+  const graceMs = options.shutdownGraceMs ?? SHUTDOWN_GRACE_MS;
+  if (!Number.isFinite(graceMs) || graceMs < 0) {
     throw makeRealmError("SCHEMA_INVALID");
   }
   const uid = accountUid();
@@ -51,12 +69,16 @@ export async function startSocketServer(socketPath: string, services: readonly B
   try {
     verifySocket(socketPath, uid);
   } catch (error: unknown) {
-    await closeAndRemove(server, socketPath).catch(() => undefined);
+    await closeAndRemove(server, socketPath, graceMs).catch(() => undefined);
     throw error;
   }
+  let closing: Promise<void> | undefined;
   return {
     socketPath,
-    close: () => closeAndRemove(server, socketPath),
+    close: () => {
+      closing ??= closeAndRemove(server, socketPath, graceMs);
+      return closing;
+    },
   };
 }
 
@@ -151,21 +173,55 @@ function verifySocket(socketPath: string, uid: number): void {
   }
 }
 
-// Stops accepting, then removes the socket if it is still the one this server bound.
-function closeAndRemove(server: Server, socketPath: string): Promise<void> {
+// Stops accepting and lets in-flight calls finish, then removes the socket if it is still the one this server bound.
+// tryShutdown waits for every open call, and a long-lived server-streaming call (the gateway's WatchSandboxes) never ends on
+// its own, so the wait is bounded: when graceMs passes, forceShutdown cancels the open calls and the close completes. The
+// timer is cleared on every path, and the first outcome wins, so the late tryShutdown callback cannot settle the close twice.
+function closeAndRemove(server: Server, socketPath: string, graceMs: number): Promise<void> {
   return new Promise((resolve, reject) => {
-    server.tryShutdown((error) => {
-      if (error !== undefined) {
+    let settled = false;
+    const timer = setTimeout(() => {
+      server.forceShutdown();
+      settle(false);
+    }, graceMs);
+    const settle = (failure: boolean): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      if (failure) {
         reject(makeRealmError("CLEANUP_FAILED"));
         return;
       }
-      const stat = statOrNull(socketPath);
-      if (stat !== null && stat.isSocket()) {
-        unlinkSync(socketPath);
+      try {
+        removeOwnSocket(socketPath);
+      } catch (error: unknown) {
+        reject(error instanceof RealmError ? error : makeRealmError("CLEANUP_FAILED"));
+        return;
       }
       resolve();
+    };
+    server.tryShutdown((error) => {
+      settle(error !== undefined);
     });
   });
+}
+
+// Unlinks the path when it is a socket. A path that is already gone is the goal state, so a missing path is not an error.
+function removeOwnSocket(socketPath: string): void {
+  const stat = statOrNull(socketPath);
+  if (stat === null || !stat.isSocket()) {
+    return;
+  }
+  try {
+    unlinkSync(socketPath);
+  } catch (error: unknown) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+      return;
+    }
+    throw makeRealmError("CLEANUP_FAILED");
+  }
 }
 
 function statOrNull(path: string): Stats | null {
