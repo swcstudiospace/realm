@@ -83,6 +83,9 @@ export interface DoctorOptions {
   readonly agentos?: AgentOsProbe;
   // The bound for one probe step, in milliseconds. Defaults to 5000.
   readonly probeTimeoutMs?: number;
+  // The bound for hashing one host binary, in milliseconds. The file is read from disk, and a cold read of a large binary on a busy
+  // host can outlast a process probe, so the digest has its own bound. Defaults to 30000.
+  readonly hashTimeoutMs?: number;
   // Pins for the host binaries the host-binaries item inspects. The caller fills them from the REALM_HOST_PIN_<NAME>_PATH,
   // _VERSION and _SHA256 names of env (hostBinaryPinsFromEnv); when it passes none, the doctor derives them from options.env,
   // which the caller handed in, so the doctor still reads no process environment.
@@ -151,6 +154,7 @@ const REGISTERED: readonly Check[] = [
 ];
 
 const DEFAULT_PROBE_TIMEOUT_MS = 5000;
+const DEFAULT_HASH_TIMEOUT_MS = 30000;
 // The largest Anda reply the doctor reads. The bridge applies the same limit.
 const ANDA_MAX_BODY_BYTES = 64 * 1024;
 const MAX_COMMAND_OUTPUT_BYTES = 1024 * 1024;
@@ -760,7 +764,10 @@ async function inspectHostBinary(
     return { problems: [name === "supervisor" ? "supervisor is not configured or not executable" : `${name} was not found on PATH`] };
   }
   const timeoutMs = probeTimeoutOf(options);
-  const [version, sha256] = await Promise.all([readBinaryVersion(location, options, timeoutMs), sha256OfBinary(location, timeoutMs)]);
+  const [version, sha256] = await Promise.all([
+    readBinaryVersion(location, options, timeoutMs),
+    sha256OfBinary(location, options.hashTimeoutMs ?? DEFAULT_HASH_TIMEOUT_MS),
+  ]);
   const problems: string[] = [];
   if (version === undefined) {
     problems.push(`${name} version could not be read`);

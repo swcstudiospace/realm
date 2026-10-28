@@ -313,6 +313,31 @@ void test("host-binaries: a version command that never finishes is bounded by th
   assert.ok(Date.now() - started < 2000, "the probe ends at its deadline");
 });
 
+// A fixture whose podman is 16 MiB, so hashing it takes far longer than a 1 ms bound without making the test slow.
+function writeLargePodman(fixture: Fixture): string {
+  const contents = Buffer.alloc(16 * 1024 * 1024, 7);
+  writeFileSync(fixture.paths.podman, contents);
+  chmodSync(fixture.paths.podman, 0o755);
+  return createHash("sha256").update(contents).digest("hex");
+}
+
+void test("host-binaries: the digest has its own bound, so a probe timeout shorter than the read does not hide it", async (t) => {
+  const fixture = fixtureFor(t);
+  const digest = writeLargePodman(fixture);
+  const result = await hostBinaries(fixture, { probeTimeoutMs: 1 });
+  assert.ok(result.detail.includes(`podman 5.0.0 ${prefixOf(digest)}`), result.detail);
+  assert.doesNotMatch(result.detail, /podman sha256 could not be computed/);
+});
+
+void test("host-binaries: a digest that outlasts its own bound warns that it could not be computed and reports it as unknown", async (t) => {
+  const fixture = fixtureFor(t);
+  writeLargePodman(fixture);
+  const result = await hostBinaries(fixture, { hashTimeoutMs: 1 });
+  assert.equal(result.status, "warn");
+  assert.match(result.detail, /podman sha256 could not be computed/);
+  assert.ok(result.detail.includes("podman 5.0.0 unknown"), result.detail);
+});
+
 void test("host-binaries: the first executable of a name on PATH is the one inspected", async (t) => {
   const fixture = fixtureFor(t);
   const shadow = join(fixture.binDir, "shadow");
