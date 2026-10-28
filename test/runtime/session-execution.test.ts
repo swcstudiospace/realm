@@ -35,6 +35,7 @@ import {
 import { FakeAgentOsDriver } from "../support/fake-agentos.js";
 import { FakeContainerStore, FakeLibpod } from "../support/fake-libpod.js";
 import { FakeOpenShell } from "../support/fake-openshell.js";
+import { CONFORMING_OCI_CONFIG_TEXT, KEYCTL_ALLOWED_OCI_CONFIG_TEXT, OCI_CONFIG_PATH, ociReaderOf, STATIC_DIR } from "./seccomp-fixtures.js";
 import { FakeBridge } from "../support/fake-bridge.js";
 
 const SESSION = "sess-01";
@@ -69,6 +70,9 @@ interface Fixture {
   // document exists yet.
   readonly policyAtRun: (string | undefined)[];
   readonly procStatus: { text: string };
+  // The text the injected OCI config reader serves; null makes the file unreadable.
+  readonly ociConfig: { text: string | null };
+  readonly readOciConfig: (path: string) => string;
 }
 
 async function fixture(t: TestContext, options: { readonly rootless?: boolean } = {}): Promise<Fixture> {
@@ -115,6 +119,14 @@ async function fixture(t: TestContext, options: { readonly rootless?: boolean } 
   const supervisor = supervisorFor(SESSION);
   const libpodClient = new LibpodClient(socketPath);
   const procStatus = { text: ZERO_STATUS };
+  const ociConfig: { text: string | null } = { text: CONFORMING_OCI_CONFIG_TEXT };
+  // Serves the conforming OCI config for the container's config path. A null text is an unreadable file.
+  const readOciConfig = (path: string): string => {
+    if (ociConfig.text === null) {
+      throw new Error("EACCES");
+    }
+    return ociReaderOf(ociConfig.text)(path);
+  };
   const exec = new SessionExecution({
     libpod: libpodClient,
     runner,
@@ -125,6 +137,7 @@ async function fixture(t: TestContext, options: { readonly rootless?: boolean } 
     sandboxStateRoot,
     egressAllow: EGRESS,
     readProcStatus: () => procStatus.text,
+    readOciConfig,
   });
   const unbound = new SessionExecution({
     libpod: libpodClient,
@@ -152,6 +165,8 @@ async function fixture(t: TestContext, options: { readonly rootless?: boolean } 
     unbound,
     policyAtRun,
     procStatus,
+    ociConfig,
+    readOciConfig,
   };
 }
 
@@ -176,10 +191,12 @@ function conformingInspect(
     Path: RUNTIME_BINARY,
     Args: RUNTIME_ARGV.slice(1),
     State: { Running: true, Status: "running", Pid: 4242 },
+    StaticDir: STATIC_DIR,
+    OCIConfigPath: OCI_CONFIG_PATH,
     HostConfig: {
       Privileged: false,
       CapAdd: [],
-      SecurityOpt: ["no-new-privileges", `seccomp=/realm/seccomp/${HARDENING_PROFILE.seccompProfileFile}`],
+      SecurityOpt: ["no-new-privileges"],
       ReadonlyRootfs: true,
       Tmpfs: { "/tmp": "rw", "/run": "rw", [HARDENING_PROFILE.supervisorCaDestination]: "rw" },
       PidsLimit: HARDENING_PROFILE.pidsLimit,
@@ -279,6 +296,52 @@ void test("RT-01, D-51: a non-empty bounding set in the host's status fails cap-
   assert.equal(f.store.list().length, 0, "the container with a non-empty bounding set is removed");
 });
 
+void test("phase 9.6: a container whose OCI config denies the keyring syscalls verifies, and the reader is given the path under StaticDir", async (t) => {
+  const f = await fixture(t);
+  const paths: string[] = [];
+  const exec = new SessionExecution({
+    libpod: new LibpodClient(join(f.base, "podman.sock")),
+    runner: f.openshell.runner,
+    agentosFor: (sessionId) => f.supervisorFor(sessionId),
+    config: { image: IMAGE, stateDir: f.stateDir },
+    secretRoot: f.secretRoot,
+    pinnedWorkspaceRoot: f.workspaceRoot,
+    sandboxStateRoot: f.sandboxStateRoot,
+    egressAllow: EGRESS,
+    readProcStatus: () => f.procStatus.text,
+    readOciConfig: (path) => {
+      paths.push(path);
+      return f.readOciConfig(path);
+    },
+  });
+  scriptInspect(f, conformingInspect(f));
+  await exec.create({ idempotencyKey: SESSION, workspaceRoot: f.workspaceRoot });
+  assert.deepEqual(paths, [OCI_CONFIG_PATH]);
+  assert.equal(f.store.list().length, 1);
+});
+
+void test("phase 9.6: a container whose OCI config lets keyctl through fails seccomp-keyring through create, and the container is removed", async (t) => {
+  const f = await fixture(t);
+  scriptInspect(f, conformingInspect(f));
+  f.ociConfig.text = KEYCTL_ALLOWED_OCI_CONFIG_TEXT;
+  await assert.rejects(
+    f.exec.create({ idempotencyKey: SESSION, workspaceRoot: f.workspaceRoot }),
+    (error: unknown) => error instanceof HardeningFailedError && error.property === "seccomp-keyring",
+  );
+  assert.equal(f.store.list().length, 0, "the container whose config allows keyctl is removed");
+});
+
+void test("phase 9.6: an unreadable OCI config fails seccomp-keyring through create (fail closed), and the container is removed", async (t) => {
+  const f = await fixture(t);
+  scriptInspect(f, conformingInspect(f));
+  f.ociConfig.text = null;
+  await assert.rejects(
+    f.exec.create({ idempotencyKey: SESSION, workspaceRoot: f.workspaceRoot }),
+    (error: unknown) => error instanceof HardeningFailedError && error.property === "seccomp-keyring",
+  );
+  assert.equal(f.store.list().length, 0, "the container whose config cannot be read is removed");
+});
+
 void test("RT-03, CORE-06: the policy document is written before the OpenShell create runs", async (t) => {
   const f = await fixture(t);
   await createSession(f);
@@ -349,6 +412,7 @@ void test("RT-04, D-18: a session start runs the AgentOS runner as an exec child
     sandboxStateRoot: f.sandboxStateRoot,
     egressAllow: EGRESS,
     readProcStatus: () => f.procStatus.text,
+    readOciConfig: f.readOciConfig,
   });
   const { containerId } = await createWith(f, exec);
   // The first probe finds the runner not yet up and the second finds it up, so the start must wait for the second.
@@ -666,6 +730,7 @@ void test("F5: an AgentOS step that timed out with no code and a container step 
     egressAllow: EGRESS,
     stopDeadlineMs: 20,
     readProcStatus: () => f.procStatus.text,
+    readOciConfig: f.readOciConfig,
   });
   const { containerId } = await createWith(f, exec);
   // The AgentOS stop never settles, so its step times out with no cause code. The container step then fails with a libpod code.
@@ -1093,6 +1158,7 @@ function sessionExecWith(f: Fixture, libpod: SessionContainers, runner: OpenShel
     sandboxStateRoot: f.sandboxStateRoot,
     egressAllow: EGRESS,
     readProcStatus: () => f.procStatus.text,
+    readOciConfig: f.readOciConfig,
   });
 }
 
@@ -1196,6 +1262,7 @@ void test("B-3: a stop whose wait for an in-flight create outlasts its deadline 
     egressAllow: EGRESS,
     stopDeadlineMs: 20,
     readProcStatus: () => f.procStatus.text,
+    readOciConfig: f.readOciConfig,
   });
   // The create registers before its first await, so the stop below already sees it in flight.
   const created = exec.create({ idempotencyKey: SESSION, workspaceRoot: f.workspaceRoot });
@@ -1351,6 +1418,7 @@ void test("RT-03, RT-04, D-18: a session named s1 gets its own sandbox: create, 
     sandboxStateRoot: f.sandboxStateRoot,
     egressAllow: EGRESS,
     readProcStatus: () => f.procStatus.text,
+    readOciConfig: f.readOciConfig,
   });
   scriptInspect(f, conformingInspect(f, {}, sessionBinding(f, "s1")));
   const { containerId } = await exec.create({ idempotencyKey: "s1", workspaceRoot: f.workspaceRoot });

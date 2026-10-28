@@ -34,6 +34,7 @@ import {
 } from "./hardening.js";
 import type { LibpodClient, LibpodInspect } from "./libpod-client.js";
 import { attachKernelCaps, liveCapabilityFailures, readHostProcStatus, type LiveProperty } from "./kernel-caps.js";
+import { attachSeccompEvidence, readHostOciConfig } from "./seccomp-evidence.js";
 import { sandboxBindingOf } from "./driver/sandbox-binding.js";
 import {
   buildExecArgv,
@@ -101,6 +102,8 @@ export interface SessionExecutionOptions {
   // Reads the text of a host process's status file. The create-time check reads the container's init process
   // through it, to prove its capability sets are empty (D-51). Defaults to the host's /proc.
   readonly readProcStatus?: (pid: number) => string;
+  // Reads the text of a container's OCI config file, to prove its seccomp profile denies the keyring syscalls. Defaults to a host read bounded to 1 MiB.
+  readonly readOciConfig?: (path: string) => string;
   // Bound on the AgentOS stop in stop() and destroy(). Defaults to AGENTOS_STOP_DEADLINE_MS.
   readonly stopDeadlineMs?: number;
 }
@@ -155,6 +158,7 @@ export class SessionExecution implements ExecutionService {
   private readonly sandboxStateRoot: string | undefined;
   private readonly egressAllow: readonly EgressRule[];
   private readonly readProcStatus: (pid: number) => string;
+  private readonly readOciConfig: (path: string) => string;
   private readonly stopDeadlineMs: number;
   // Sandbox names this instance has deleted with no create since, so a repeated stop makes no second delete call.
   private readonly deletedSandboxes = new Set<string>();
@@ -171,6 +175,7 @@ export class SessionExecution implements ExecutionService {
     this.libpod = options.libpod;
     this.runner = options.runner;
     this.readProcStatus = options.readProcStatus ?? readHostProcStatus;
+    this.readOciConfig = options.readOciConfig ?? readHostOciConfig;
     this.agentosFor = options.agentosFor;
     this.config = options.config;
     this.secretRoot = options.secretRoot;
@@ -439,10 +444,11 @@ export class SessionExecution implements ExecutionService {
     let inspectCause: ErrorCode | undefined;
     try {
       const inspect = await this.libpod.inspectContainer(containerId);
+      const attached = inspect === null ? null : attachSeccompEvidence(inspect, this.readOciConfig);
       failed =
-        inspect === null
+        attached === null
           ? null
-          : [...verifyInspect(binding, inspect), ...liveCapabilityFailures(attachKernelCaps(inspect, this.readProcStatus))];
+          : [...verifyInspect(binding, attached), ...liveCapabilityFailures(attachKernelCaps(attached, this.readProcStatus))];
     } catch (error) {
       failed = null;
       inspectCause = catalogueCodeOf(error);

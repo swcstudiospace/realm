@@ -8,12 +8,14 @@
 // (libpod-routes.ts, podman.md Q5). They are confirmed only by the gated suite on Podman 5.x.
 // The capability check is not an inspect property. Podman 5.7.1 does not report KernelCaps, so the five capability sets of the
 // container's init process are proven live, from its host /proc status, by kernel-caps.ts (D-51).
+// The seccomp-keyring property reads evidence attached from the container's OCI config by seccomp-evidence.ts, so a caller must
+// attach it before verifyInspect.
 //
 // Every sandbox container has the same shape: a read-write channel mount for the sandbox runtime, and a noexec tmpfs for the
 // runtime's CA material. The binding names the channel directory, which sandboxBindingOf always derives.
 
 import { createHash } from "node:crypto";
-import { basename, isAbsolute } from "node:path";
+import { keyringEvidenceHolds } from "./seccomp-evidence.js";
 import { SECCOMP_PROFILE_FILE_NAME } from "./driver/seccomp-profile.js";
 
 // Numeric limits and the frozen profile values live here and nowhere else (D-52).
@@ -77,7 +79,7 @@ export const HARDENING_PROPERTIES = Object.freeze([
   "mounts",
   "init-process",
   "socket-path",
-  "seccomp-profile",
+  "seccomp-keyring",
 ] as const);
 
 export type HardeningProperty = (typeof HARDENING_PROPERTIES)[number];
@@ -140,23 +142,10 @@ const CHECKS: Readonly<Record<HardeningProperty, Check>> = Object.freeze({
       mounts.every((mount) => isRecord(mount) && pathIsClear(mount.Source) && pathIsClear(mount.Destination))
     );
   },
-  // The container runs under the driver's seccomp profile. Podman 5.7.1 reports an explicit profile as `seccomp=<path>` in
-  // HostConfig.SecurityOpt and has no top-level SeccompProfilePath. Exactly one such entry must exist, with an absolute path whose
-  // basename is the embedded profile's digest-bearing file name. The file's content is not read here: the driver writes the file under
-  // a digest-bearing name, and refuses to start on a file of that name with other content.
-  "seccomp-profile": (inspect) => {
-    const options = field(inspect, ["HostConfig", "SecurityOpt"]);
-    if (!Array.isArray(options)) {
-      return false;
-    }
-    const entries = options.filter((option): option is string => typeof option === "string" && option.startsWith("seccomp="));
-    const [entry] = entries;
-    if (entries.length !== 1 || entry === undefined) {
-      return false;
-    }
-    const path = entry.slice("seccomp=".length);
-    return isAbsolute(path) && !path.endsWith("/") && basename(path) === HARDENING_PROFILE.seccompProfileFile;
-  },
+  // The container's seccomp profile denies the three keyring syscalls. Podman 5.7.1 does not record an API-applied profile in inspect
+  // (HostConfig.SecurityOpt holds only no-new-privileges), so SecurityOpt and annotations are not read. The evidence is the verdict
+  // attachSeccompEvidence derived from the container's OCI config; absent or false fails.
+  "seccomp-keyring": (inspect) => keyringEvidenceHolds(inspect),
 });
 
 // Returns the failed property names in report order. An empty list means the inspect conforms.

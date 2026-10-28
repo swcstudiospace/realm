@@ -12,6 +12,7 @@ import { lstatSync, readdirSync, realpathSync, rmSync, type Dirent, type Stats }
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { makeRealmError, RealmError, type ErrorCode } from "../../core/errors.js";
 import { attachKernelCaps, liveCapabilityFailures, readHostProcStatus, type LiveProperty } from "../kernel-caps.js";
+import { attachSeccompEvidence, readHostOciConfig } from "../seccomp-evidence.js";
 import { channelOptionFailures, HARDENING_PROFILE, verifyInspect, type ChannelProperty, type HardeningBinding, type HardeningProperty } from "../hardening.js";
 import {
   validateContainerSpec,
@@ -69,6 +70,8 @@ export interface DriverLifecycleOptions {
   readonly secretRoot: string;
   // Reads the text of a host process's status file. The create-time check reads the init process through it (D-51).
   readonly readProcStatus?: ((pid: number) => string) | undefined;
+  // Reads the text of a container's OCI config file. The create-time check reads its seccomp section through it. Bounded to 1 MiB by default.
+  readonly readOciConfig?: ((path: string) => string) | undefined;
   // Removes a sandbox's state directory tree. The default removes it without following a symlink inside the tree.
   readonly removeDirectory?: ((dir: string) => void) | undefined;
 }
@@ -98,6 +101,7 @@ export class DriverLifecycle {
   private readonly sandboxStateRoot: string;
   private readonly secretRoot: string;
   private readonly readProcStatus: (pid: number) => string;
+  private readonly readOciConfig: (path: string) => string;
   private readonly removeDirectory: (dir: string) => void;
   private swept = false;
 
@@ -110,6 +114,7 @@ export class DriverLifecycle {
     this.sandboxStateRoot = options.sandboxStateRoot;
     this.secretRoot = options.secretRoot;
     this.readProcStatus = options.readProcStatus ?? readHostProcStatus;
+    this.readOciConfig = options.readOciConfig ?? readHostOciConfig;
     this.removeDirectory = options.removeDirectory ?? removeTree;
   }
 
@@ -242,9 +247,10 @@ export class DriverLifecycle {
       await this.libpod.startContainer(id);
       const inspect = await this.libpod.inspectContainer(id);
       if (inspect !== null) {
+        const attached = attachSeccompEvidence(inspect, this.readOciConfig);
         failed = [
-          ...verifyInspect(binding, inspect),
-          ...liveCapabilityFailures(attachKernelCaps(inspect, this.readProcStatus)),
+          ...verifyInspect(binding, attached),
+          ...liveCapabilityFailures(attachKernelCaps(attached, this.readProcStatus)),
           ...postCreateFailures(inspect),
         ];
       }

@@ -12,6 +12,7 @@ import { SessionExecution } from "../../src/runtime/session-execution.js";
 import { FakeAgentOsDriver } from "../support/fake-agentos.js";
 import { FakeContainerStore, FakeLibpod } from "../support/fake-libpod.js";
 import { FakeOpenShell } from "../support/fake-openshell.js";
+import { CONFORMING_OCI_CONFIG_TEXT, OCI_CONFIG_PATH, ociReaderOf, STATIC_DIR } from "./seccomp-fixtures.js";
 import {
   makeHarness,
   SESSION as DISPATCH_SESSION,
@@ -76,6 +77,7 @@ async function fixture(t: TestContext): Promise<Fixture> {
     runner: openshell.runner,
     agentosFor: () => agentos,
     readProcStatus: () => "CapInh:\t0000000000000000\nCapPrm:\t0000000000000000\nCapEff:\t0000000000000000\nCapBnd:\t0000000000000000\nCapAmb:\t0000000000000000\n",
+    readOciConfig: ociReaderOf(CONFORMING_OCI_CONFIG_TEXT),
     config: { image: IMAGE, stateDir },
     secretRoot,
     pinnedWorkspaceRoot: join(base, "workspace"),
@@ -93,10 +95,12 @@ async function createSession(f: Fixture): Promise<{ readonly containerId: string
     Path: RUNTIME_BINARY,
     Args: RUNTIME_ARGV.slice(1),
     State: { Running: true, Status: "running", Pid: 4242 },
+    StaticDir: STATIC_DIR,
+    OCIConfigPath: OCI_CONFIG_PATH,
     HostConfig: {
       Privileged: false,
       CapAdd: [],
-      SecurityOpt: ["no-new-privileges", `seccomp=/realm/seccomp/${HARDENING_PROFILE.seccompProfileFile}`],
+      SecurityOpt: ["no-new-privileges"],
       ReadonlyRootfs: true,
       Tmpfs: { "/tmp": "rw", "/run": "rw", [HARDENING_PROFILE.supervisorCaDestination]: "rw" },
       PidsLimit: HARDENING_PROFILE.pidsLimit,

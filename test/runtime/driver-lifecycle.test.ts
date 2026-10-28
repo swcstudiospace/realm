@@ -31,6 +31,14 @@ import {
 } from "../../src/runtime/hardening.js";
 import { LibpodClient, type ContainerSpec } from "../../src/runtime/libpod-client.js";
 import { SECCOMP_PROFILE_FILE_NAME } from "../../src/runtime/driver/seccomp-profile.js";
+import { attachSeccompEvidence } from "../../src/runtime/seccomp-evidence.js";
+import {
+  CONFORMING_OCI_CONFIG_TEXT,
+  KEYCTL_ALLOWED_OCI_CONFIG_TEXT,
+  OCI_CONFIG_PATH,
+  ociReaderOf,
+  STATIC_DIR,
+} from "./seccomp-fixtures.js";
 import {
   LIBPOD_API_VERSION_HEADER,
   matchLibpodRoute,
@@ -347,10 +355,12 @@ function goodInspect(stateDir: string, workspaceDir: string, channelDir: string)
     ImageDigest: IMAGE_DIGEST,
     Path: RUNTIME_BINARY,
     Args: RUNTIME_ARGV.slice(1),
+    StaticDir: STATIC_DIR,
+    OCIConfigPath: OCI_CONFIG_PATH,
     HostConfig: {
       Privileged: HARDENING_PROFILE.privileged,
       CapAdd: [...HARDENING_PROFILE.capAdd],
-      SecurityOpt: [...HARDENING_PROFILE.securityOpt, `seccomp=${SECCOMP_PROFILE_PATH}`],
+      SecurityOpt: [...HARDENING_PROFILE.securityOpt],
       ReadonlyRootfs: HARDENING_PROFILE.readonlyRootfs,
       Tmpfs: Object.fromEntries(
         [...HARDENING_PROFILE.tmpfs, HARDENING_PROFILE.supervisorCaDestination].map((path): [string, string] => [
@@ -422,6 +432,10 @@ interface Arrangement {
   readonly reportSlashName?: boolean | undefined;
   readonly seed?: readonly SeedContainer[] | undefined;
   readonly procStatus?: string | undefined;
+  // The text the injected OCI config reader serves for the container's config path. A conforming config by default.
+  readonly ociConfigText?: string | undefined;
+  // Replaces the OCI config reader, for a test that needs it to fail or to record the path.
+  readonly readOciConfig?: ((path: string) => string) | undefined;
   readonly requestTimeoutMs?: number | undefined;
   readonly sweep?: boolean | undefined;
   // The state root and the workspace. A test that needs a particular layout gives them; otherwise both are fresh.
@@ -478,6 +492,7 @@ async function harness(t: TestContext, arrangement: Arrangement = {}): Promise<H
     sandboxStateRoot: stateRoot,
     secretRoot,
     readProcStatus: () => arrangement.procStatus ?? ZERO_STATUS,
+    readOciConfig: arrangement.readOciConfig ?? ociReaderOf(arrangement.ociConfigText ?? CONFORMING_OCI_CONFIG_TEXT),
     removeDirectory: arrangement.removeDirectory,
   });
   if (arrangement.sweep !== false) {
@@ -536,6 +551,7 @@ interface PropertyCase {
   readonly mutate?: ((body: Record<string, unknown>) => void) | undefined;
   readonly rootless?: boolean | undefined;
   readonly procStatus?: string | undefined;
+  readonly ociConfigText?: string | undefined;
 }
 
 // One row per hardening property (D-51). Each row mutates exactly one field of the good inspect, except the two
@@ -546,7 +562,7 @@ const PROPERTY_CASES: readonly PropertyCase[] = [
   { property: "rootless", rootless: false },
   { property: "cap-drop", procStatus: statusWith({ CapBnd: "0000000000000008" }) },
   { property: "cap-add", mutate: (body) => { hostConfig(body).CapAdd = ["NET_ADMIN"]; } },
-  { property: "no-new-privileges", mutate: (body) => { hostConfig(body).SecurityOpt = [`seccomp=${SECCOMP_PROFILE_PATH}`]; } },
+  { property: "no-new-privileges", mutate: (body) => { hostConfig(body).SecurityOpt = ["label=disable"]; } },
   { property: "read-only-root", mutate: (body) => { hostConfig(body).ReadonlyRootfs = false; } },
   {
     property: "tmpfs",
@@ -575,12 +591,7 @@ const PROPERTY_CASES: readonly PropertyCase[] = [
       mountsOf(body).push({ Type: "bind", Source: SOCKET_MOUNT_SOURCE, Destination: "/run/engine.sock", RW: false });
     },
   },
-  {
-    property: "seccomp-profile",
-    mutate: (body) => {
-      hostConfig(body).SecurityOpt = [...HARDENING_PROFILE.securityOpt];
-    },
-  },
+  { property: "seccomp-keyring", ociConfigText: KEYCTL_ALLOWED_OCI_CONFIG_TEXT },
 ];
 
 for (const row of PROPERTY_CASES) {
@@ -590,6 +601,7 @@ for (const row of PROPERTY_CASES) {
       mutate: row.mutate,
       rootless: row.rootless,
       procStatus: row.procStatus,
+      ociConfigText: row.ociConfigText,
     });
     await assert.rejects(
       h.lifecycle.create(h.spec),
@@ -615,7 +627,7 @@ void test("PRD-CTR-01: a socket mount fails mounts and socket-path, and create n
     stateDir: SIMULATED_STATE_DIR,
     channelDir: SIMULATED_CHANNEL_DIR,
   };
-  const attached = attachKernelCaps(body, () => ZERO_STATUS);
+  const attached = attachKernelCaps(attachSeccompEvidence(body, ociReaderOf(CONFORMING_OCI_CONFIG_TEXT)), () => ZERO_STATUS);
   assert.deepEqual(verifyInspect(binding, attached), ["mounts", "socket-path"]);
 });
 
@@ -625,6 +637,42 @@ void test("phase 9.6: the lifecycle's create posts the profile path its libpod c
   const creates = h.fake.seen.filter((request) => request.route === "createContainer");
   const posted = JSON.parse(creates[0]?.body ?? "{}") as { readonly seccomp_profile_path?: unknown };
   assert.equal(posted.seccomp_profile_path, SECCOMP_PROFILE_PATH);
+});
+
+void test("phase 9.6: a container whose OCI config denies the keyring syscalls verifies through the injected reader, which gets the config path under StaticDir", async (t) => {
+  const paths: string[] = [];
+  const h = await harness(t, {
+    readOciConfig: (path) => {
+      paths.push(path);
+      return CONFORMING_OCI_CONFIG_TEXT;
+    },
+  });
+  assert.equal(await h.lifecycle.create(h.spec), CREATED_ID);
+  assert.deepEqual(paths, [OCI_CONFIG_PATH]);
+});
+
+void test("phase 9.6: a container whose OCI config lets keyctl through is refused with seccomp-keyring, and force-removed", async (t) => {
+  const h = await harness(t, { ociConfigText: KEYCTL_ALLOWED_OCI_CONFIG_TEXT });
+  await assert.rejects(
+    h.lifecycle.create(h.spec),
+    (error: unknown) => error instanceof HardeningRefusal && error.property === "seccomp-keyring",
+  );
+  assert.equal(forcedRemoval(h.fake.seen, CREATED_ID), true);
+  assert.equal(h.fake.store.size, 0);
+});
+
+void test("phase 9.6: an unreadable OCI config is refused with seccomp-keyring (fail closed), and force-removed", async (t) => {
+  const h = await harness(t, {
+    readOciConfig: () => {
+      throw new Error("EACCES");
+    },
+  });
+  await assert.rejects(
+    h.lifecycle.create(h.spec),
+    (error: unknown) => error instanceof HardeningRefusal && error.property === "seccomp-keyring",
+  );
+  assert.equal(forcedRemoval(h.fake.seen, CREATED_ID), true);
+  assert.equal(h.fake.store.size, 0);
 });
 
 void test("PRD-CTR-01: a conforming container is returned by id, kept, and posted with tty false (C6)", async (t) => {

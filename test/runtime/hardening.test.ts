@@ -15,6 +15,14 @@ import {
 } from "../../src/runtime/hardening.js";
 import { SECCOMP_PROFILE_FILE_NAME } from "../../src/runtime/driver/seccomp-profile.js";
 import { SANDBOX_WORKSPACE_PATH } from "../../src/runtime/openshell.js";
+import { attachSeccompEvidence, SECCOMP_EVIDENCE_FIELD } from "../../src/runtime/seccomp-evidence.js";
+import {
+  CONFORMING_OCI_CONFIG_TEXT,
+  KEYCTL_ALLOWED_OCI_CONFIG_TEXT,
+  OCI_CONFIG_PATH,
+  ociReaderOf,
+  STATIC_DIR,
+} from "./seccomp-fixtures.js";
 
 const DIGEST_HEX = "a".repeat(64);
 const DIGEST = `sha256:${DIGEST_HEX}`;
@@ -22,7 +30,6 @@ const WORKSPACE = "/realm/workspace";
 const STATE = "/realm/state";
 const CHANNEL = "/realm/channel";
 const SUPERVISOR_CA = HARDENING_PROFILE.supervisorCaDestination;
-const SECCOMP_PATH = `/realm/seccomp/${SECCOMP_PROFILE_FILE_NAME}`;
 
 const BINDING: HardeningBinding = {
   image: `registry.example.com/realm/session@${DIGEST}`,
@@ -32,18 +39,18 @@ const BINDING: HardeningBinding = {
   channelDir: CHANNEL,
 };
 
-// A libpod inspect object that conforms to every D-51 property of a sandbox container. Each call returns a fresh object,
-// so a test can change one field without affecting the others. Capability sets are not in the inspect: the live proof
-// reads them from the process (kernel-caps.ts).
-function conforming(): Record<string, unknown> {
+// The inspect before the host read: no seccomp evidence attached. The OCI config path is tied to the container's StaticDir.
+function rawConforming(): Record<string, unknown> {
   return {
     ImageDigest: DIGEST,
     Path: RUNTIME_BINARY,
     Args: RUNTIME_ARGV.slice(1),
+    StaticDir: STATIC_DIR,
+    OCIConfigPath: OCI_CONFIG_PATH,
     HostConfig: {
       Privileged: false,
       CapAdd: [],
-      SecurityOpt: ["no-new-privileges", `seccomp=${SECCOMP_PATH}`],
+      SecurityOpt: ["no-new-privileges"],
       ReadonlyRootfs: true,
       Tmpfs: { "/tmp": "rw", "/run": "rw", [SUPERVISOR_CA]: "rw" },
       PidsLimit: 512,
@@ -57,6 +64,13 @@ function conforming(): Record<string, unknown> {
       bind(CHANNEL, HARDENING_PROFILE.channelDestination, true),
     ],
   };
+}
+
+// A libpod inspect object that conforms to every D-51 property of a sandbox container, with the seccomp evidence attached from a
+// conforming OCI config. Each call returns a fresh object, so a test can change one field without affecting the others. Capability
+// sets are not in the inspect: the live proof reads them from the process (kernel-caps.ts).
+function conforming(): Record<string, unknown> {
+  return { ...attachSeccompEvidence(rawConforming(), ociReaderOf(CONFORMING_OCI_CONFIG_TEXT)) };
 }
 
 // A bind mount entry of a libpod inspect object, with the read-write flag that D-51 checks.
@@ -74,7 +88,7 @@ const FIELD_CASES: ReadonlyArray<{
 }> = [
   { property: "privileged", path: ["HostConfig", "Privileged"], wrong: true },
   { property: "cap-add", path: ["HostConfig", "CapAdd"], wrong: ["NET_ADMIN"] },
-  { property: "no-new-privileges", path: ["HostConfig", "SecurityOpt"], wrong: [`seccomp=${SECCOMP_PATH}`] },
+  { property: "no-new-privileges", path: ["HostConfig", "SecurityOpt"], wrong: ["label=disable"] },
   { property: "read-only-root", path: ["HostConfig", "ReadonlyRootfs"], wrong: false },
   { property: "tmpfs", path: ["HostConfig", "Tmpfs"], wrong: { "/tmp": "rw" } },
   { property: "pids-limit", path: ["HostConfig", "PidsLimit"], wrong: 1024 },
@@ -82,11 +96,6 @@ const FIELD_CASES: ReadonlyArray<{
   { property: "cpu-limit", path: ["HostConfig", "NanoCpus"], wrong: 4_000_000_000 },
   { property: "network-mode", path: ["HostConfig", "NetworkMode"], wrong: "bridge" },
   { property: "image-digest", path: ["ImageDigest"], wrong: `sha256:${"b".repeat(64)}` },
-  {
-    property: "seccomp-profile",
-    path: ["HostConfig", "SecurityOpt"],
-    wrong: ["no-new-privileges", "seccomp=/realm/seccomp/default.json"],
-  },
 ];
 
 void test("the frozen profile carries the D-51 values (RT-01)", () => {
@@ -124,7 +133,7 @@ void test("every D-51 property has a named check, and a non-object inspect fails
       "mounts",
       "init-process",
       "socket-path",
-      "seccomp-profile",
+      "seccomp-keyring",
     ],
   );
   // The rootless check reads the binding, so only the inspect-derived properties fail on a non-object inspect.
@@ -335,110 +344,49 @@ void test("PID 1 of a sandbox container is the runtime with its exact argv: any 
   }
 });
 
-// Replaces the HostConfig.SecurityOpt of an inspect object, leaving every other field as it was.
-function withSecurityOpt(inspect: Inspect, value: unknown): Inspect {
-  inspect.HostConfig = { ...(inspect.HostConfig as Record<string, unknown>), SecurityOpt: value };
-  return inspect;
+// An inspect of an API-created container as Podman 5.7.1 reports it (real layout): SecurityOpt holds only no-new-privileges and the
+// annotations carry no seccomp entry, or a misleading one. The OCI config is attached through the injected reader.
+function realisticWith(text: string, extra: Inspect = {}): Inspect {
+  const inspect: Inspect = { ...rawConforming(), Id: "0".repeat(64), Name: "realm-sandbox", Image: "1".repeat(64), ...extra };
+  return { ...attachSeccompEvidence(inspect, ociReaderOf(text)) };
 }
 
-void test("seccomp-profile: exactly one seccomp= entry naming the embedded profile file by an absolute path conforms, in any order (phase 9.6)", () => {
-  const inspect = conforming();
-  assert.deepEqual(verifyInspect(BINDING, inspect), []);
-  withSecurityOpt(inspect, [`seccomp=/another/directory/${SECCOMP_PROFILE_FILE_NAME}`, "no-new-privileges"]);
-  assert.deepEqual(verifyInspect(BINDING, inspect), [], "only the file name is fixed, not the directory, and the order is free");
+void test("seccomp-keyring: passes only on attached evidence that all three keyring syscalls are denied (phase 9.6)", () => {
+  assert.deepEqual(verifyInspect(BINDING, conforming()), []);
+  assert.deepEqual(verifyInspect(BINDING, realisticWith(KEYCTL_ALLOWED_OCI_CONFIG_TEXT)), ["seccomp-keyring"]);
 });
 
-void test("seccomp-profile: no seccomp entry fails, whether SecurityOpt is empty or carries only other options (phase 9.6)", () => {
-  for (const options of [[], ["no-new-privileges"], ["no-new-privileges", "label=disable"]]) {
-    const inspect = withSecurityOpt(conforming(), options);
-    assert.ok(verifyInspect(BINDING, inspect).includes("seccomp-profile"), JSON.stringify(options));
+void test("seccomp-keyring: fails closed when no evidence is attached, or the evidence is not exactly true (phase 9.6)", () => {
+  assert.deepEqual(verifyInspect(BINDING, rawConforming()), ["seccomp-keyring"]);
+  for (const value of [false, "true", 1, null, {}]) {
+    assert.deepEqual(verifyInspect(BINDING, { ...rawConforming(), [SECCOMP_EVIDENCE_FIELD]: value }), ["seccomp-keyring"], JSON.stringify(value));
   }
 });
 
-void test("seccomp-profile: two seccomp entries fail, even when both name the right file (phase 9.6)", () => {
-  const inspect = withSecurityOpt(conforming(), [
-    "no-new-privileges",
-    `seccomp=${SECCOMP_PATH}`,
-    `seccomp=/another/directory/${SECCOMP_PROFILE_FILE_NAME}`,
-  ]);
-  assert.deepEqual(verifyInspect(BINDING, inspect), ["seccomp-profile"]);
-  withSecurityOpt(inspect, ["no-new-privileges", `seccomp=${SECCOMP_PATH}`, `seccomp=${SECCOMP_PATH}`]);
-  assert.deepEqual(verifyInspect(BINDING, inspect), ["seccomp-profile"]);
-});
-
-void test("seccomp-profile: SecurityOpt missing, or not an array, fails closed (phase 9.6)", () => {
-  const missing = conforming();
-  const host = { ...(missing.HostConfig as Record<string, unknown>) };
-  Reflect.deleteProperty(host, "SecurityOpt");
-  missing.HostConfig = host;
-  assert.ok(verifyInspect(BINDING, missing).includes("seccomp-profile"), "missing");
-  for (const value of [null, 42, true, `seccomp=${SECCOMP_PATH}`, { seccomp: SECCOMP_PATH }]) {
-    const inspect = withSecurityOpt(conforming(), value);
-    assert.ok(verifyInspect(BINDING, inspect).includes("seccomp-profile"), JSON.stringify(value));
-  }
-});
-
-void test("seccomp-profile: a profile file of another name fails, even one that differs in a single digit (phase 9.6)", () => {
-  const flipped = SECCOMP_PROFILE_FILE_NAME.replace(/(?<=seccomp-)[0-9a-f]/, (digit) => (digit === "0" ? "1" : "0"));
-  assert.notEqual(flipped, SECCOMP_PROFILE_FILE_NAME);
-  const names = [
-    "default.json",
-    "realm-seccomp-0000000000000000.json",
-    flipped,
-    `${SECCOMP_PROFILE_FILE_NAME}.bak`,
-    `old-${SECCOMP_PROFILE_FILE_NAME}`,
-    "",
-  ];
-  for (const name of names) {
-    const inspect = withSecurityOpt(conforming(), ["no-new-privileges", `seccomp=/realm/seccomp/${name}`]);
-    assert.deepEqual(verifyInspect(BINDING, inspect), ["seccomp-profile"], name);
-  }
-});
-
-void test("seccomp-profile: a relative path fails, whatever its file name (phase 9.6)", () => {
-  for (const path of [SECCOMP_PROFILE_FILE_NAME, `seccomp/${SECCOMP_PROFILE_FILE_NAME}`, `./${SECCOMP_PROFILE_FILE_NAME}`]) {
-    const inspect = withSecurityOpt(conforming(), ["no-new-privileges", `seccomp=${path}`]);
-    assert.deepEqual(verifyInspect(BINDING, inspect), ["seccomp-profile"], path);
-  }
-});
-
-void test("seccomp-profile: an empty value, a directory as file name, and non-string entries fail closed (phase 9.6)", () => {
-  for (const entry of ["seccomp=", `seccomp=${SECCOMP_PATH}/`, `seccomp=${SECCOMP_PATH}/inner.json`, "seccomp=unconfined"]) {
-    const inspect = withSecurityOpt(conforming(), ["no-new-privileges", entry]);
-    assert.deepEqual(verifyInspect(BINDING, inspect), ["seccomp-profile"], entry);
-  }
-  for (const junk of [null, 42, true, { seccomp: SECCOMP_PATH }, [`seccomp=${SECCOMP_PATH}`]]) {
-    // A non-string entry never counts as a seccomp entry, so it neither satisfies nor spoils the property.
-    const without = withSecurityOpt(conforming(), ["no-new-privileges", junk]);
-    assert.deepEqual(verifyInspect(BINDING, without), ["seccomp-profile"], JSON.stringify(junk));
-    const alongside = withSecurityOpt(conforming(), ["no-new-privileges", junk, `seccomp=${SECCOMP_PATH}`]);
-    assert.deepEqual(verifyInspect(BINDING, alongside), [], JSON.stringify(junk));
-  }
-});
-
-void test("seccomp-profile: the property reads HostConfig.SecurityOpt and ignores the annotations and CreateCommand of a real Podman 5.7.1 inspect (phase 9.6)", () => {
-  const wrongPath = "/realm/seccomp/default.json";
-  const realistic = (securityOpt: unknown, annotated: string): Inspect => {
-    const inspect = withSecurityOpt(conforming(), securityOpt);
-    inspect.Id = "0".repeat(64);
-    inspect.Name = "realm-sandbox";
-    inspect.Image = "1".repeat(64);
-    const host = inspect.HostConfig as Record<string, unknown>;
-    host.Annotations = { "io.podman.annotations.seccomp": annotated };
-    inspect.Config = {
-      Annotations: { "io.podman.annotations.seccomp": annotated },
-      CreateCommand: ["podman", "create", "--security-opt", `seccomp=${annotated}`, "--security-opt", "no-new-privileges"],
+void test("seccomp-keyring: the property ignores SecurityOpt and the annotations of a real Podman 5.7.1 inspect (phase 9.6)", () => {
+  const annotated = (securityOpt: unknown, annotation: string): Inspect => {
+    const host = { ...(rawConforming().HostConfig as Record<string, unknown>), SecurityOpt: securityOpt, Annotations: { "io.podman.annotations.seccomp": annotation } };
+    return {
+      HostConfig: host,
+      Config: {
+        Annotations: { "io.podman.annotations.seccomp": annotation },
+        CreateCommand: ["podman", "create", "--security-opt", `seccomp=${annotation}`, "--security-opt", "no-new-privileges"],
+      },
     };
-    return inspect;
   };
-  // A conforming SecurityOpt conforms while the annotations and CreateCommand carry another file.
-  assert.deepEqual(verifyInspect(BINDING, realistic(["no-new-privileges", `seccomp=${SECCOMP_PATH}`], wrongPath)), []);
-  // No seccomp entry in SecurityOpt fails although the annotations and CreateCommand carry the right path.
-  assert.deepEqual(verifyInspect(BINDING, realistic(["no-new-privileges"], SECCOMP_PATH)), ["seccomp-profile"]);
-  assert.equal(Object.hasOwn(realistic(["no-new-privileges"], SECCOMP_PATH), "SeccompProfilePath"), false);
+  // A conforming OCI config passes whatever SecurityOpt and the annotations say: the real layout has no seccomp= entry at all.
+  const passing = realisticWith(CONFORMING_OCI_CONFIG_TEXT, annotated(["no-new-privileges"], ""));
+  assert.equal(Object.hasOwn(passing, "SeccompProfilePath"), false);
+  assert.deepEqual(verifyInspect(BINDING, passing), []);
+  const lying = realisticWith(CONFORMING_OCI_CONFIG_TEXT, annotated(["no-new-privileges", "seccomp=/realm/seccomp/default.json"], "/realm/seccomp/default.json"));
+  assert.deepEqual(verifyInspect(BINDING, lying), []);
+  // An OCI config that allows keyctl fails although SecurityOpt and the annotations name a profile.
+  const named = `/realm/seccomp/${SECCOMP_PROFILE_FILE_NAME}`;
+  const refused = realisticWith(KEYCTL_ALLOWED_OCI_CONFIG_TEXT, annotated(["no-new-privileges", `seccomp=${named}`], named));
+  assert.deepEqual(verifyInspect(BINDING, refused), ["seccomp-keyring"]);
 });
 
-void test("seccomp-profile: the profile carries the file name, so the evidence digest binds the profile (phase 9.6)", () => {
+void test("seccomp-keyring: the profile carries the file name, so the evidence digest binds the profile (phase 9.6)", () => {
   assert.equal(HARDENING_PROFILE.seccompProfileFile, SECCOMP_PROFILE_FILE_NAME);
   assert.match(hardeningEvidenceDigest(BINDING.image), /^[0-9a-f]{64}$/);
   assert.notEqual(hardeningEvidenceDigest(BINDING.image), hardeningEvidenceDigest(`${BINDING.image}-other`));

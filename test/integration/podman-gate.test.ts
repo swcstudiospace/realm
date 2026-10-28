@@ -22,6 +22,7 @@ import { LockTable } from "../../src/fs/locks.js";
 import { bindRoot } from "../../src/fs/root.js";
 import { loadRuntimeConfig, type RuntimeConfig } from "../../src/runtime/config.js";
 import { HARDENING_PROFILE, verifyInspect } from "../../src/runtime/hardening.js";
+import { attachSeccompEvidence, readHostOciConfig } from "../../src/runtime/seccomp-evidence.js";
 import { sandboxBindingOf } from "../../src/runtime/driver/sandbox-binding.js";
 import { LibpodClient, type LibpodInspect } from "../../src/runtime/libpod-client.js";
 import {
@@ -243,7 +244,8 @@ void test("RT-01 live: a session container created through OpenShell conforms to
     { workspaceRoot: roots.workspaceRoot, stateRoot: roots.stateRoot, secretRoot: roots.secretRoot },
     realmSandboxName(live.sessionId),
   );
-  const failed = verifyInspect({ image: live.config.image, rootless: live.rootless, ...binding }, inspect);
+  const attached = inspect === null ? null : attachSeccompEvidence(inspect, readHostOciConfig);
+  const failed = verifyInspect({ image: live.config.image, rootless: live.rootless, ...binding }, attached);
   assert.deepEqual(failed, [], `hardening properties that do not conform: ${failed.join(", ")}`);
 });
 

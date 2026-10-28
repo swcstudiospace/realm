@@ -219,7 +219,7 @@ of H1 [INFERENCE from the plan scope].
 
 - **Removed inspect property.** `cap-drop` is no longer in `HARDENING_PROPERTIES` and is no
   longer checked by `verifyInspect`. Removing it left 14 properties; it checked 15 before.
-  The `seccomp-profile` property (below) was then added, so the verifier now checks 15.
+  The `seccomp-keyring` property (below) was then added, so the verifier now checks 15.
 - **Reason.** Podman 5.7.1 does not report `KernelCaps` in libpod inspect. An inspect-level
   check of the five capability sets therefore reads a field the engine never supplies, and
   cannot prove them empty.
@@ -237,10 +237,17 @@ of H1 [INFERENCE from the plan scope].
 - **Not claimed.** This proof is observed on the host at create time. It does not
   re-verify the capability sets after create, and it has not been run against a live Podman 5.7.1
   engine in this change.
-- **Added inspect property: `seccomp-profile`.** Podman 5.7.1 reports an explicit profile in
-  `HostConfig.SecurityOpt` as `seccomp=<path>` and has no top-level `SeccompProfilePath`. The
-  property passes only on exactly one `seccomp=` entry with an absolute path whose basename is
-  the embedded profile's file name; an absent, duplicate, relative or other-basename entry, or a
-  missing `SecurityOpt`, fails.
-  Both verifiers run it. Details: `docs/integration/openshell.md`, section "Sandbox create
-  hardening: seccomp profile".
+- **Added property: `seccomp-keyring`.** Podman 5.7.1 records `seccomp=<path>` in
+  `HostConfig.SecurityOpt` only for containers the `podman` CLI created, because the CLI sets the
+  `io.podman.annotations.seccomp` annotation and the API does not. A container created through the
+  API with `seccomp_profile_path` runs under the profile, visible in `linux.seccomp` of its OCI
+  config, while its inspect shows only `no-new-privileges`. The property therefore ignores
+  `SecurityOpt` and the annotations. `attachSeccompEvidence` (`src/runtime/seccomp-evidence.ts`)
+  reads the config through the inspect's `OCIConfigPath`, which must equal `StaticDir` joined with
+  `config.json`, and the property passes only when the default action is `SCMP_ACT_ERRNO` and
+  `keyctl`, `add_key` and `request_key` are each denied with `EPERM` and allowed by no rule. An
+  absent, unreadable, oversize or unparseable config fails it, so a daemon that cannot read the
+  config refuses the create. The whole profile is not compared with the vendored file, because
+  Podman filters and expands rules by capability and architecture.
+  Both verifiers run it, with the reader injectable as `readOciConfig`. Details:
+  `docs/integration/openshell.md`, section "Sandbox create hardening: seccomp profile".
