@@ -4,15 +4,18 @@
 // blocked (OQ-P3-05 in-sandbox channel, OQ-P3-06 package verification), so the composition
 // takes a driver as an argument and the gap is reported, not papered over.
 //
-// Restart policy (D-59):
-//   - a crash (alive answers false or does not answer in time) or a failed start is one failure;
-//   - restarts wait a delay from the shared schedule (base 500 ms, cap 8000 ms, full jitter);
+// Start policy (D-59), for the INITIAL start only:
+//   - a failed start is one failure;
+//   - retries wait a delay from the shared schedule (base 500 ms, cap 8000 ms, full jitter);
 //   - the fifth consecutive failure holds the supervisor and throws AGENTOS_CRASH_LOOP, which
 //     is retryable: an explicit start() runs the policy again from a clean count;
 //   - the consecutive count resets only after 60000 ms of continuous alive, on the injected clock.
 //
-// Owner ruling (phase 9.6, N1): a single runner exit is AGENTOS_CRASH_LOOP, with no restart here. check reports it at
-// once, so the session moves to error with that catalogue code. The next stop removes the sandbox.
+// Owner ruling (phase 9.6, N1; RT-04 amended 2026-10-28): once the session is active there is no automatic restart and
+// no hysteresis. A runner exit, or one failed probe (alive answers false, does not answer in time or rejects, which
+// covers a stale heartbeat and an OpenShell failure), holds the supervisor, and check throws AGENTOS_CRASH_LOOP, so the
+// session moves to error with that catalogue code. Recovery is realm down then realm up, or the retry command: the next
+// stop removes the sandbox and an explicit start() begins again.
 //
 // Every driver call is raced against callTimeoutMs (QUAL-01). src/core/timeout.ts is not used
 // for this race because withTimeout requires a catalogue code and no catalogue code names a
@@ -51,8 +54,8 @@ export interface AgentOsSupervisorOptions {
   readonly now: () => number;
 }
 
-// idle: never started. running: under supervision. held: five consecutive failures.
-// stopped: stop() was called, so the supervisor neither probes nor restarts.
+// idle: never started. running: under supervision. held: the initial start failed five times in a row, or check found the
+// runner exited or a probe failed. stopped: stop() was called, so the supervisor does not probe.
 type Phase = "idle" | "running" | "held" | "stopped";
 
 type Settled<T> = { readonly ok: true; readonly value: T } | { readonly ok: false };
@@ -110,10 +113,12 @@ export class AgentOsSupervisor {
     await this.startUntilUp(this.epoch);
   }
 
-  // One liveness check. Returns false when the supervisor is idle or stopped, and does not
-  // touch the driver. Returns true when the driver is alive, or when a detected crash was
-  // recovered by restart. Returns false when stop() runs while the check is in flight. Throws
-  // AGENTOS_CRASH_LOOP while the supervisor is held.
+  // One liveness check. Returns false when the supervisor is idle or stopped, and does not touch the driver, and false
+  // when stop() or a newer start() overtakes the check in flight. Returns true when the driver answers alive and its
+  // runner has not exited. Anything else is terminal (owner ruling N1): a runner that exited, before or during the probe,
+  // or a probe that answers false, fails to answer in time, or rejects (a stale heartbeat, an OpenShell failure) holds the
+  // supervisor and throws AGENTOS_CRASH_LOOP. There is no restart and no failure count here, and every later check throws
+  // the same code until start() is called again.
   async check(): Promise<boolean> {
     if (this.phase === "idle" || this.phase === "stopped") {
       return false;
@@ -121,26 +126,20 @@ export class AgentOsSupervisor {
     if (this.phase === "held") {
       throw makeRealmError("AGENTOS_CRASH_LOOP");
     }
-    // A runner that exited while the session was active is reported at once, and supervision does not restart it.
     if (this.driver.runnerExited(this.sessionId)) {
-      throw makeRealmError("AGENTOS_CRASH_LOOP");
+      this.hold();
     }
     const epoch = this.epoch;
     const probe = await this.race(() => this.driver.alive(this.sessionId));
     if (!this.isCurrent(epoch)) {
       return false;
     }
-    if (probe.ok && probe.value) {
-      this.observeAlive();
-      return true;
+    // The runner may have exited while the probe was in flight, whatever the probe answered.
+    if (!(probe.ok && probe.value) || this.driver.runnerExited(this.sessionId)) {
+      this.hold();
     }
-    this.aliveSince = null;
-    await this.recordFailure(epoch);
-    if (!this.isCurrent(epoch)) {
-      return false;
-    }
-    await this.startUntilUp(epoch);
-    return this.isCurrent(epoch);
+    this.observeAlive();
+    return true;
   }
 
   // Stops the driver. A failed, missed or hung driver stop rejects with AGENTOS_STOP_FAILED, so a failed delete is never
@@ -195,8 +194,9 @@ export class AgentOsSupervisor {
     }
   }
 
-  // Counts one failure. The fifth consecutive failure holds the supervisor. Otherwise the
-  // driver is stopped best effort and the caller waits the backoff delay before its next start.
+  // Counts one failed start attempt. The fifth consecutive failure holds the supervisor. Otherwise the
+  // driver is stopped best effort and the caller waits the backoff delay before its next start. Only startUntilUp calls
+  // it: a failed probe in check is terminal and never comes here.
   // Returns without holding or waiting once the supervisor is no longer current.
   private async recordFailure(epoch: number): Promise<void> {
     this.failures += 1;
@@ -220,6 +220,14 @@ export class AgentOsSupervisor {
 
   private race<T>(work: () => Promise<T>): Promise<Settled<T>> {
     return settle(work, this.callTimeoutMs, this.inFlight);
+  }
+
+  // Holds the supervisor and throws AGENTOS_CRASH_LOOP. Unlike recordFailure, it does not stop the driver or back off: the
+  // session moves to error, and the next stop removes the sandbox.
+  private hold(): never {
+    this.aliveSince = null;
+    this.phase = "held";
+    throw makeRealmError("AGENTOS_CRASH_LOOP");
   }
 }
 
