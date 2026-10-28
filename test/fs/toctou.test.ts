@@ -2,10 +2,9 @@
 // resolve-to-open hook (onResolveBoundary), which runs after the path is resolved and before
 // it is opened.
 //
-// Residual risk Q-2, recorded and not closed: Node 22 has no openat, so a parent directory
-// swapped between verification and rename(2) cannot be excluded with path-based APIs. The
-// parent re-check immediately before rename narrows that window; it does not close it. The
-// Phase 7 security review owns the verdict.
+// Residual risk Q-2, narrowed: Node 22 has no openat, so reads still re-check the parent by path.
+// The atomic write no longer depends on that: it pins its parent directory by descriptor and acts
+// through /proc/self/fd (A10 F6; test/fs/atomic-write.test.ts covers the swap).
 
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";

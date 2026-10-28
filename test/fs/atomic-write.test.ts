@@ -8,8 +8,10 @@ import {
   readdirSync,
   readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
   statSync,
+  symlinkSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -26,7 +28,7 @@ import {
 
 const ORIGINAL = "original bytes\n";
 
-const STAGES: readonly AtomicWriteStage[] = ["after-temp-write", "after-fsync", "before-rename"];
+const STAGES: readonly AtomicWriteStage[] = ["after-temp-write", "after-fsync", "before-rename", "after-recheck"];
 
 // Real files in a temporary directory. Nothing is mocked; the stage hook is the test seam
 // that D-35 defines for fault injection.
@@ -223,4 +225,104 @@ void test("a failed temp-file cleanup keeps the write failure and records CLEANU
       error.causeCode === "CLEANUP_FAILED",
   );
   assert.equal(readFileSync(target, "utf8"), ORIGINAL);
+});
+
+// A10 F6: the parent directory is swapped for a symlink to another directory after the canonical
+// check. The write must stay in the directory that was verified, so nothing lands in `elsewhere`.
+function swappableFixture(t: TestContext) {
+  const { dir, target } = setup(t);
+  const base = join(dir, "..");
+  const elsewhere = join(base, "elsewhere");
+  const moved = join(base, "moved");
+  mkdirSync(elsewhere);
+  writeFileSync(join(elsewhere, "target.txt"), "elsewhere original");
+  const swap = (): string => {
+    const [temp] = tempFiles(dir);
+    if (temp === undefined) {
+      throw new Error("expected a temp file before the swap");
+    }
+    renameSync(dir, moved);
+    symlinkSync(elsewhere, dir);
+    return temp;
+  };
+  return { dir, target, elsewhere, moved, swap };
+}
+
+void test("a directory swapped for a symlink between the check and the rename leaves the other directory untouched (A10 F6)", (t) => {
+  const { target, elsewhere, moved, swap } = swappableFixture(t);
+  assert.throws(
+    () => {
+      atomicWriteFile(target, "replacement", {
+        expectedPriorSha256: sha256Hex(ORIGINAL),
+        stageHook: (stage) => {
+          if (stage === "before-rename") {
+            swap();
+          }
+        },
+      });
+    },
+    (error: unknown) => error instanceof RealmError && error.code === "PATH_ESCAPE",
+  );
+  assert.equal(readFileSync(join(elsewhere, "target.txt"), "utf8"), "elsewhere original");
+  assert.deepEqual(readdirSync(elsewhere), ["target.txt"]);
+  assert.deepEqual(tempFiles(moved), []);
+  assert.equal(readFileSync(join(moved, "target.txt"), "utf8"), ORIGINAL);
+});
+
+void test("a directory swap during the failure path removes the temp file from the original directory and spares a decoy in the other (A10 F6)", (t) => {
+  const { target, elsewhere, moved, swap } = swappableFixture(t);
+  assert.throws(
+    () => {
+      atomicWriteFile(target, "replacement", {
+        expectedPriorSha256: sha256Hex(ORIGINAL),
+        stageHook: (stage) => {
+          if (stage === "before-rename") {
+            const temp = swap();
+            writeFileSync(join(elsewhere, temp), "decoy");
+            throw new Error("injected fault at before-rename");
+          }
+        },
+      });
+    },
+    (error: unknown) => error instanceof WriteNotAtomicError && error.code === "WRITE_NOT_ATOMIC" && !error.replaced,
+  );
+  const decoys = readdirSync(elsewhere).filter((name) => name.includes(".realm-tmp-"));
+  assert.equal(decoys.length, 1);
+  assert.equal(readFileSync(join(elsewhere, decoys[0] ?? ""), "utf8"), "decoy");
+  assert.equal(readFileSync(join(elsewhere, "target.txt"), "utf8"), "elsewhere original");
+  assert.deepEqual(tempFiles(moved), []);
+  assert.equal(readFileSync(join(moved, "target.txt"), "utf8"), ORIGINAL);
+});
+
+// The swap lands after the pin and prior-hash re-check, immediately before the rename. The rename
+// acts through the pinned descriptor, so the write completes in the directory that was verified.
+void test("a directory swapped for a symlink after the pin re-check and before the rename leaves the other directory untouched (A10 F6)", (t) => {
+  const { target, elsewhere, moved, swap } = swappableFixture(t);
+  atomicWriteFile(target, "replacement", {
+    expectedPriorSha256: sha256Hex(ORIGINAL),
+    stageHook: (stage) => {
+      if (stage === "after-recheck") {
+        swap();
+      }
+    },
+  });
+  assert.equal(readFileSync(join(elsewhere, "target.txt"), "utf8"), "elsewhere original");
+  assert.deepEqual(readdirSync(elsewhere), ["target.txt"]);
+  assert.equal(readFileSync(join(moved, "target.txt"), "utf8"), "replacement");
+  assert.deepEqual(tempFiles(moved), []);
+});
+
+void test("without /proc/self/fd the atomic write fails closed with PATH_ESCAPE and leaves the target untouched (A10 F6)", (t) => {
+  const { dir, target } = setup(t);
+  assert.throws(
+    () => {
+      atomicWriteFile(target, "replacement", {
+        expectedPriorSha256: sha256Hex(ORIGINAL),
+        procFdDir: join(dir, "no-proc-fd"),
+      });
+    },
+    (error: unknown) => error instanceof RealmError && error.code === "PATH_ESCAPE",
+  );
+  assert.equal(readFileSync(target, "utf8"), ORIGINAL);
+  assert.deepEqual(tempFiles(dir), []);
 });

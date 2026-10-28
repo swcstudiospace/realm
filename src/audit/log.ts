@@ -10,7 +10,7 @@
 
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
-import { closeSync, constants, fchmodSync, lstatSync, mkdirSync, openSync, writeSync } from "node:fs";
+import { closeSync, constants, fchmodSync, fsyncSync, lstatSync, mkdirSync, openSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import { makeRealmError, type ErrorCode } from "../core/errors.js";
 import { redactString, redactValue } from "./redact.js";
@@ -90,9 +90,14 @@ export function appendAudit(stateDir: string, input: AuditEntryInput): void {
   }
 }
 
-// Every failure of the write (directory, lstat check, open, chmod, write, close) is mapped to
-// AUDIT_WRITE_FAILED by the caller: the tool call did not run, so a retry is safe. No raw Node
-// error escapes this function.
+// Every failure of the write (directory, lstat check, open, chmod, write, fsync, close) is mapped to
+// AUDIT_WRITE_FAILED by the caller. No raw Node error escapes this function. The failure does not
+// say whether the line reached the file: a failed fsync, or a failed directory fsync, after a
+// successful write reports AUDIT_WRITE_FAILED although the line is already in the file, so a caller
+// must not blindly retry the append, because a retry would duplicate the line.
+// The line is flushed with fsync before the descriptor closes. When this call created the log file,
+// the audit directory is fsynced once after the line is durable, so the new directory entry, and the
+// first line with it, is not lost to a crash after the call returned.
 function writeAuditLine(stateDir: string, sessionId: string, line: Buffer): void {
   const dir = join(stateDir, "audit");
   mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -102,22 +107,46 @@ function writeAuditLine(stateDir: string, sessionId: string, line: Buffer): void
     throw new Error("audit directory is not a real directory");
   }
   const file = join(dir, `${sessionId}.jsonl`);
-  // O_NONBLOCK: a FIFO at the audit path would otherwise block this write-only open until a
-  // reader appears. With it the open fails with ENXIO, which maps to AUDIT_WRITE_FAILED.
-  const flags =
-    constants.O_WRONLY |
-    constants.O_APPEND |
-    constants.O_CREAT |
-    constants.O_NOFOLLOW |
-    constants.O_NONBLOCK;
-  const fd = openSync(file, flags, 0o600);
+  const { fd, created } = openAuditFile(file);
   try {
     fchmodSync(fd, 0o600);
     let written = 0;
     while (written < line.length) {
       written += writeSync(fd, line, written, line.length - written);
     }
+    fsyncSync(fd);
   } finally {
     closeSync(fd);
+  }
+  if (created) {
+    syncAuditDirectory(dir);
+  }
+}
+
+// Opens the log for append. The first attempt uses O_EXCL, so success proves this call created the
+// file and owes a directory fsync. EEXIST falls back to an open of the existing file, without
+// O_CREAT, so a file removed in between fails the call instead of being created without that fsync.
+// O_NONBLOCK: a FIFO at the audit path would otherwise block this write-only open until a reader
+// appears. With it the open fails with ENXIO, which maps to AUDIT_WRITE_FAILED.
+function openAuditFile(file: string): { readonly fd: number; readonly created: boolean } {
+  const flags = constants.O_WRONLY | constants.O_APPEND | constants.O_NOFOLLOW | constants.O_NONBLOCK;
+  try {
+    return { fd: openSync(file, flags | constants.O_CREAT | constants.O_EXCL, 0o600), created: true };
+  } catch (error: unknown) {
+    if (typeof error !== "object" || error === null || !("code" in error) || error.code !== "EEXIST") {
+      throw error;
+    }
+  }
+  return { fd: openSync(file, flags), created: false };
+}
+
+// Flushes the audit directory entry. O_DIRECTORY rejects anything that is not a directory and
+// O_NONBLOCK keeps a FIFO from blocking the open.
+function syncAuditDirectory(dir: string): void {
+  const dirFd = openSync(dir, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NONBLOCK);
+  try {
+    fsyncSync(dirFd);
+  } finally {
+    closeSync(dirFd);
   }
 }

@@ -3,16 +3,25 @@
 // content hash still matches. Any failure before the rename removes the temp file and
 // leaves the target byte-identical. The stage hook is a test seam; production callers
 // do not pass it.
+//
+// The parent directory is pinned (A10 F6). Node 22 has no renameat or unlinkat, so after the
+// canonical check the directory is opened once and every later step (temp open, lstat and hash
+// of the target, rename, cleanup unlink) acts through /proc/self/fd/<dirFd>/<name>. A directory
+// or ancestor swapped for a symlink after the check cannot redirect those steps: they stay in
+// the directory that was verified. The directory fsync uses the same descriptor. Linux is
+// assumed, as in src/fs/root.ts; without /proc the write fails closed with PATH_ESCAPE.
 
 import { createHash, randomBytes } from "node:crypto";
 import {
   closeSync,
   constants,
+  existsSync,
   fchmodSync,
   fsyncSync,
   fstatSync,
   openSync,
   readFileSync,
+  readlinkSync,
   realpathSync,
   renameSync,
   rmSync,
@@ -20,16 +29,19 @@ import {
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { type ErrorCode, makeRealmError, RealmError } from "../core/errors.js";
-import { lstatIfPresent, openVerified, verifyDescriptor } from "./canonicalize.js";
+import { lstatIfPresent, PROC_FD_DIR } from "./canonicalize.js";
 
-export type AtomicWriteStage = "after-temp-write" | "after-fsync" | "before-rename";
+export type AtomicWriteStage = "after-temp-write" | "after-fsync" | "before-rename" | "after-recheck";
 
 export type StageHook = (stage: AtomicWriteStage) => void;
 
 export interface AtomicWriteOptions {
   // SHA-256 hex of the content the caller observed, or null when the target was absent.
   readonly expectedPriorSha256: string | null;
+  // Test seam. "after-recheck" fires after the pin and prior-hash re-check, immediately before the rename.
   readonly stageHook?: StageHook;
+  // Overrides /proc/self/fd, as in canonicalize.ts. A missing directory fails closed with PATH_ESCAPE.
+  readonly procFdDir?: string;
 }
 
 // Reported when the write did not complete. `replaced` is false when the target is
@@ -57,18 +69,58 @@ export function sha256Hex(content: string | Uint8Array): string {
 // Hash of the regular file at path, or null when it is absent. A symlink or other
 // non-regular file is PATH_ESCAPE.
 export function observeSha256(path: string): string | null {
-  const stats = lstatIfPresent(path);
+  return observeSha256Through(path, path);
+}
+
+// Hash of the regular file reached through viaPath, whose real path must be realPath. The two
+// differ when viaPath goes through a pinned directory descriptor.
+function observeSha256Through(
+  viaPath: string,
+  realPath: string,
+  procFdDir: string = PROC_FD_DIR,
+): string | null {
+  const stats = lstatIfPresent(viaPath);
   if (stats === null) {
     return null;
   }
   if (!stats.isFile()) {
     throw makeRealmError("PATH_ESCAPE");
   }
-  const fd = openVerified(path);
+  let fd: number;
   try {
+    fd = openSync(viaPath, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  } catch {
+    throw makeRealmError("PATH_ESCAPE");
+  }
+  try {
+    verifyDescriptorThrough(fd, viaPath, realPath, procFdDir);
     return sha256Hex(readFileSync(fd));
   } finally {
     closeSync(fd);
+  }
+}
+
+// Checks that an open descriptor is the regular file reached through viaPath and that the kernel
+// names it realPath. Any mismatch, and a missing or unreadable /proc entry, is PATH_ESCAPE.
+function verifyDescriptorThrough(
+  fd: number,
+  viaPath: string,
+  realPath: string,
+  procFdDir: string,
+): void {
+  if (!existsSync(procFdDir)) {
+    throw makeRealmError("PATH_ESCAPE");
+  }
+  const opened = fstatSync(fd);
+  if (!opened.isFile()) {
+    throw makeRealmError("PATH_ESCAPE");
+  }
+  const named = lstatIfPresent(viaPath);
+  if (named === null || opened.dev !== named.dev || opened.ino !== named.ino) {
+    throw makeRealmError("PATH_ESCAPE");
+  }
+  if (readlinkOrEscape(join(procFdDir, String(fd))) !== realPath) {
+    throw makeRealmError("PATH_ESCAPE");
   }
 }
 
@@ -90,20 +142,44 @@ export function atomicWriteFile(
 ): void {
   const dir = dirname(targetPath);
   const name = basename(targetPath);
+  const procFdDir = options.procFdDir ?? PROC_FD_DIR;
   assertCanonicalDirectory(dir);
+  const dirFd = pinDirectory(dir, procFdDir);
+  try {
+    replaceInPinnedDirectory(dir, dirFd, name, content, options, procFdDir);
+    try {
+      syncDirectoryFd(dirFd);
+    } catch {
+      throw new WriteNotAtomicError(true);
+    }
+  } finally {
+    closeSync(dirFd);
+  }
+}
 
-  const existing = lstatIfPresent(targetPath);
+function replaceInPinnedDirectory(
+  dir: string,
+  dirFd: number,
+  name: string,
+  content: string | Uint8Array,
+  options: AtomicWriteOptions,
+  procFdDir: string,
+): void {
+  const through = (leaf: string): string => join(procFdDir, String(dirFd), leaf);
+  const targetVia = through(name);
+  const existing = lstatIfPresent(targetVia);
   if (existing !== null && !existing.isFile()) {
     throw makeRealmError("PATH_ESCAPE");
   }
   // Only permission bits carry over; setuid and setgid are never copied to the replacement.
   const mode = existing === null ? TEMP_FILE_MODE : existing.mode & 0o777;
 
-  const tempPath = join(dir, `.${name}.realm-tmp-${randomBytes(8).toString("hex")}`);
+  const tempName = `.${name}.realm-tmp-${randomBytes(8).toString("hex")}`;
+  const tempVia = through(tempName);
   let fd: number;
   try {
     fd = openSync(
-      tempPath,
+      tempVia,
       constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW,
       TEMP_FILE_MODE,
     );
@@ -112,19 +188,21 @@ export function atomicWriteFile(
   }
 
   try {
-    verifyDescriptor(fd, tempPath);
+    verifyDescriptorThrough(fd, tempVia, join(dir, tempName), procFdDir);
     fchmodSync(fd, mode);
     writeFileSync(fd, content);
     options.stageHook?.("after-temp-write");
     fsyncSync(fd);
     options.stageHook?.("after-fsync");
     options.stageHook?.("before-rename");
-    if (observeSha256(targetPath) !== options.expectedPriorSha256) {
+    assertDirectoryPinned(dirFd, dir, procFdDir);
+    if (observeSha256Through(targetVia, join(dir, name), procFdDir) !== options.expectedPriorSha256) {
       throw makeRealmError("LOCK_CONFLICT");
     }
-    renameSync(tempPath, targetPath);
+    options.stageHook?.("after-recheck");
+    renameSync(tempVia, targetVia);
   } catch (error: unknown) {
-    const cleanup = removeTempFile(tempPath);
+    const cleanup = removeTempFile(tempVia);
     if (error instanceof RealmError) {
       if (cleanup === undefined) {
         throw error;
@@ -134,12 +212,6 @@ export function atomicWriteFile(
     throw new WriteNotAtomicError(false, cleanup);
   } finally {
     closeSync(fd);
-  }
-
-  try {
-    syncDirectory(dir);
-  } catch {
-    throw new WriteNotAtomicError(true);
   }
 }
 
@@ -163,7 +235,68 @@ function realpathOrEscape(path: string): string {
   }
 }
 
-// Flushes the parent directory entry after a rename. O_DIRECTORY rejects a regular file and
+function readlinkOrEscape(path: string): string {
+  try {
+    return readlinkSync(path);
+  } catch {
+    throw makeRealmError("PATH_ESCAPE");
+  }
+}
+
+// Opens the verified directory and proves the descriptor is that directory. O_NONBLOCK keeps a
+// FIFO from blocking the open; O_DIRECTORY rejects a regular file. A failed open or check is
+// PATH_ESCAPE. The caller closes the returned descriptor.
+function pinDirectory(dir: string, procFdDir: string): number {
+  if (!existsSync(procFdDir)) {
+    throw makeRealmError("PATH_ESCAPE");
+  }
+  let fd: number;
+  try {
+    fd = openSync(dir, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NONBLOCK);
+  } catch {
+    throw makeRealmError("PATH_ESCAPE");
+  }
+  try {
+    assertDirectoryPinned(fd, dir, procFdDir);
+  } catch (error: unknown) {
+    try {
+      closeSync(fd);
+    } catch {
+      // The verification failure stays the error thrown. The close failure is kept as its cause.
+      const code = error instanceof RealmError ? error.code : "PATH_ESCAPE";
+      throw makeRealmError(code, "CLEANUP_FAILED");
+    }
+    throw error;
+  }
+  return fd;
+}
+
+// The descriptor must still be the directory at dir: same device and inode as the path, and the
+// kernel names it dir. A directory or ancestor swapped after the pin fails here.
+function assertDirectoryPinned(dirFd: number, dir: string, procFdDir: string): void {
+  const opened = fstatSync(dirFd);
+  if (!opened.isDirectory()) {
+    throw makeRealmError("PATH_ESCAPE");
+  }
+  const named = lstatIfPresent(dir);
+  if (named === null || !named.isDirectory() || opened.dev !== named.dev || opened.ino !== named.ino) {
+    throw makeRealmError("PATH_ESCAPE");
+  }
+  if (readlinkOrEscape(join(procFdDir, String(dirFd))) !== dir) {
+    throw makeRealmError("PATH_ESCAPE");
+  }
+}
+
+// Flushes a directory entry through an open directory descriptor. fstat is the check that the
+// descriptor is a directory; anything else is PATH_ESCAPE.
+function syncDirectoryFd(fd: number): void {
+  if (!fstatSync(fd).isDirectory()) {
+    throw makeRealmError("PATH_ESCAPE");
+  }
+  fsyncSync(fd);
+}
+
+// Flushes the parent directory entry by path. O_DIRECTORY rejects a regular file and
 // O_NONBLOCK keeps a FIFO from blocking the open; fstat is the final check that the
 // descriptor is a directory. Any open failure or a non-directory is PATH_ESCAPE.
 export function syncDirectory(dir: string): void {
@@ -174,10 +307,7 @@ export function syncDirectory(dir: string): void {
     throw makeRealmError("PATH_ESCAPE");
   }
   try {
-    if (!fstatSync(fd).isDirectory()) {
-      throw makeRealmError("PATH_ESCAPE");
-    }
-    fsyncSync(fd);
+    syncDirectoryFd(fd);
   } finally {
     closeSync(fd);
   }

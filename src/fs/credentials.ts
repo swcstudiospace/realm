@@ -31,6 +31,10 @@ export const CREDENTIAL_PATTERNS = Object.freeze([
   "**/.netrc",
   "**/.git-credentials",
   "**/.gnupg/**",
+  "**/*.pem",
+  "**/*.key",
+  "**/.npmrc",
+  "**/.pypirc",
 ] as const);
 
 export function isCredentialDenied(canonicalRelPath: string): boolean {
