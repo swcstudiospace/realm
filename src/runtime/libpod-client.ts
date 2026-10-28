@@ -46,6 +46,10 @@ import {
 // A 5 s bound therefore cut info off about half the time, so info has its own, longer bound.
 export const DEFAULT_REQUEST_TIMEOUT_MS = 5000;
 export const DEFAULT_INFO_TIMEOUT_MS = 30000;
+// Seconds a force removal waits for a running container to exit before Podman kills it (the `timeout` query of the
+// remove route). Realm containers are disposable sandboxes, so a force removal does not wait for a graceful exit. Podman's
+// default is 10 s, which is longer than the request bound (crash recovery, RT-08).
+export const FORCE_REMOVE_STOP_GRACE_SECONDS = 2;
 const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 const LABEL_KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
 // The user-namespace mapping of every sandbox: the realm account is mapped to the workload uid and gid (keep-id).
@@ -230,9 +234,15 @@ export class LibpodClient {
   // Removes the container. A container that is already gone counts as removed, so a
   // repeated sweep is a no-op. The down sweep verifies zero orphans afterwards (D-68).
   async removeContainer(id: string, options: { readonly force: boolean }): Promise<void> {
+    // A force removal of a running container makes Podman stop it first. Without a timeout query Podman waits its default
+    // 10 s (SIGTERM, then SIGKILL), so the request outlived the 5 s bound while the removal went on in the background.
+    // The query carries the short grace, and the request bound is extended by it the way stopContainer extends its own.
     const reply = await exchangeRoute(this.transport, LIBPOD_ROUTES.removeContainer, {
       containerId: id,
-      query: { force: String(options.force) },
+      query: options.force
+        ? { force: "true", timeout: String(FORCE_REMOVE_STOP_GRACE_SECONDS) }
+        : { force: "false" },
+      graceMs: options.force ? FORCE_REMOVE_STOP_GRACE_SECONDS * 1000 : 0,
     });
     if (isNoSuchContainer(reply)) {
       return;

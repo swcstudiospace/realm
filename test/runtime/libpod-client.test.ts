@@ -5,7 +5,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { RealmError, type ErrorCode } from "../../src/core/errors.js";
-import { DEFAULT_INFO_TIMEOUT_MS, DEFAULT_REQUEST_TIMEOUT_MS, LibpodClient } from "../../src/runtime/libpod-client.js";
+import {
+  DEFAULT_INFO_TIMEOUT_MS,
+  DEFAULT_REQUEST_TIMEOUT_MS,
+  FORCE_REMOVE_STOP_GRACE_SECONDS,
+  LibpodClient,
+} from "../../src/runtime/libpod-client.js";
 import { LIBPOD_ROUTES, type LibpodRouteName } from "../../src/runtime/libpod-routes.js";
 import { FakeLibpod, type FakeLibpodOptions, type RecordedRequest } from "../support/fake-libpod.js";
 
@@ -124,8 +129,64 @@ void test("RT-09: removeContainer treats a 404 as success and forwards the force
   const client = new LibpodClient(socketPath);
   await client.removeContainer("never-created", { force: true });
   const removal = fake.requests().find((request) => request.route === "removeContainer");
-  assert.equal(removal?.method, "DELETE");
-  assert.match(removal.target, /\/libpod\/containers\/never-created\?force=true$/);
+  assert.ok(removal !== undefined);
+  assert.equal(removal.method, "DELETE");
+  const [path, search] = removal.target.split("?");
+  assert.match(path ?? "", /\/libpod\/containers\/never-created$/);
+  assert.equal(new URLSearchParams(search).get("force"), "true");
+});
+
+void test("RT-08: a force removal sends the short stop grace as the timeout query, and nothing else beyond force", async (t) => {
+  const { fake, socketPath } = await startFake(t);
+  fake.store.add({ id: "realm-x", labels: {}, running: true });
+  await new LibpodClient(socketPath).removeContainer("realm-x", { force: true });
+  const removal = fake.requests().find((request) => request.route === "removeContainer");
+  assert.ok(removal !== undefined);
+  assert.equal(removal.target.split("?")[1], "force=true&timeout=2", "the exact query of a force removal");
+  assert.equal(FORCE_REMOVE_STOP_GRACE_SECONDS, 2);
+});
+
+void test("RT-08: a non-force removal sends no timeout query", async (t) => {
+  const { fake, socketPath } = await startFake(t);
+  fake.store.add({ id: "realm-x", labels: {}, running: false });
+  await new LibpodClient(socketPath).removeContainer("realm-x", { force: false });
+  const removal = fake.requests().find((request) => request.route === "removeContainer");
+  assert.ok(removal !== undefined);
+  assert.equal(removal.target.split("?")[1], "force=false", "the exact query of a non-force removal");
+});
+
+void test("RT-08: a force removal whose reply comes after the request bound but within the stop grace succeeds", async (t) => {
+  const { fake, socketPath } = await startFake(t);
+  fake.store.add({ id: "realm-x", labels: {}, running: true });
+  // The request bound is 1000 ms and the force bound is 3000 ms (the bound plus the 2 s grace). The 1500 ms reply is past
+  // the first and well inside the second.
+  fake.setDelay("removeContainer", 1500);
+  const client = new LibpodClient(socketPath, { requestTimeoutMs: 1000 });
+  await client.removeContainer("realm-x", { force: true });
+  assert.equal(fake.store.get("realm-x"), undefined, "the container is removed");
+});
+
+void test("RT-08: a non-force removal keeps the plain request bound, so the same late reply fails it", async (t) => {
+  const { fake, socketPath } = await startFake(t);
+  fake.store.add({ id: "realm-x", labels: {}, running: false });
+  fake.setDelay("removeContainer", 1500);
+  const client = new LibpodClient(socketPath, { requestTimeoutMs: 1000 });
+  await assertCode(client.removeContainer("realm-x", { force: false }), "PODMAN_MACHINE_DOWN");
+});
+
+void test("RT-08: a force removal whose reply never comes fails with PODMAN_MACHINE_DOWN only after the extended bound", async (t) => {
+  const { fake, socketPath } = await startFake(t);
+  fake.store.add({ id: "realm-x", labels: {}, running: true });
+  fake.hangNext("removeContainer");
+  // The extended bound is 3000 ms. A client that kept the plain 1000 ms bound would fail near 1000 ms, so the floor sits at
+  // 2500 ms.
+  const client = new LibpodClient(socketPath, { requestTimeoutMs: 1000 });
+  const started = Date.now();
+  await assertCode(client.removeContainer("realm-x", { force: true }), "PODMAN_MACHINE_DOWN");
+  const elapsed = Date.now() - started;
+  assert.ok(elapsed >= 2500, `the force removal failed after ${String(elapsed)} ms, not clearly past the 1000 ms request bound`);
+  const hung = await waitForRecorded(fake, "removeContainer", 5000);
+  await fake.waitForSocketClose(hung.seq, 2000);
 });
 
 void test("RT-09: list asks for all containers filtered by the exact label pair", async (t) => {

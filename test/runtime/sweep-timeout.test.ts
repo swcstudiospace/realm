@@ -237,3 +237,55 @@ void test("RT-08: a successful sweep removes every container before any record i
   assert.deepEqual(events.slice(sweepDone + 1), ["delete:session-a", "delete:session-b"]);
   assert.notEqual(containers.get("foreign-1"), undefined, "a foreign container is never removed");
 });
+
+// A client whose removal takes removalMs on the (mocked) clock and removes the container only when it finishes, as Podman
+// does when it waits for a running container to stop. The listing shows what is still present.
+function slowRemovalClient(removalMs: number): { readonly client: SweepClient; readonly present: Set<string> } {
+  const present = new Set(["realm-slow"]);
+  const client: SweepClient = {
+    listContainersByLabel: () =>
+      Promise.resolve([...present].map((id) => ({ id, labels: { "openshell.ai/sandbox-name": id } }))),
+    removeContainer: (id: string) =>
+      new Promise<void>((resolve) => {
+        setTimeout(() => {
+          present.delete(id);
+          resolve();
+        }, removalMs);
+      }),
+  };
+  return { client, present };
+}
+
+void test("RT-08: the sweep bound is 30 s, so a removal that outlasts the old 10 s bound is waited for and counted", async (t) => {
+  enableMockedTimers(t);
+  assert.equal(SWEEP_CALL_TIMEOUT_MS, 30_000);
+  const { client, present } = slowRemovalClient(12_000);
+
+  const sweep = removeAllRealmContainers(client);
+  const outcome = observe(sweep);
+  await flush();
+  t.mock.timers.tick(10_000);
+  await flush();
+  assert.equal(outcome.settled(), false, "the sweep must still be waiting for the removal at the old 10 s bound");
+  assert.equal(present.size, 1);
+
+  t.mock.timers.tick(2_000);
+  assert.equal(await sweep, 1, "the removal finished and the container is counted");
+  assert.equal(present.size, 0);
+});
+
+void test("RT-08: a removal that outlasts the sweep bound leaves its container listed, and the sweep refuses with REALM_STOPPING", async (t) => {
+  enableMockedTimers(t);
+  const { client, present } = slowRemovalClient(SWEEP_CALL_TIMEOUT_MS + 1_000);
+
+  const sweep = removeAllRealmContainers(client);
+  const outcome = observe(sweep);
+  await flush();
+  t.mock.timers.tick(SWEEP_CALL_TIMEOUT_MS - 1);
+  await flush();
+  assert.equal(outcome.settled(), false, "the sweep must not end before the bound");
+
+  t.mock.timers.tick(1);
+  await assertCode(sweep, "REALM_STOPPING");
+  assert.equal(present.size, 1, "the container survived the bound");
+});

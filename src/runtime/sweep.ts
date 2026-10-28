@@ -19,8 +19,10 @@ export type SweepClient = Pick<LibpodClient, "listContainersByLabel" | "removeCo
 // Bound for each libpod call the sweep awaits. The production LibpodClient already times out each request
 // on its own socket (D-53, PODMAN_MACHINE_DOWN); this bound holds for any SweepClient that does not, so a
 // hung call cannot block daemon start. A call that does not answer in time gives PODMAN_MACHINE_DOWN, the
-// code D-53 gives a runtime socket timeout.
-export const SWEEP_CALL_TIMEOUT_MS = 10_000;
+// code D-53 gives a runtime socket timeout. It is 30 s so that one removal on a loaded host is not cut off:
+// a force removal of a running container waits the client's short stop grace (2 s) and then the kill, and the
+// sweep must outlast that plus the client's request bound (5 s) rather than race it (crash recovery, RT-08).
+export const SWEEP_CALL_TIMEOUT_MS = 30_000;
 
 // Removes every realm-owned container and returns how many the first listing found. A failed removal
 // leaves its container listed, and the second listing reports it, so a failure is never swallowed

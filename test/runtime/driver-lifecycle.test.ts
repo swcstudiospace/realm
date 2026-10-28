@@ -519,7 +519,9 @@ function hasCode(code: ErrorCode): (error: unknown) => boolean {
 function forcedRemoval(seen: readonly Seen[], containerId: string): boolean {
   return seen.some(
     (request) =>
-      request.route === "removeContainer" && request.containerId === containerId && request.target.endsWith("force=true"),
+      request.route === "removeContainer" &&
+      request.containerId === containerId &&
+      new URLSearchParams(request.target.split("?")[1]).get("force") === "true",
   );
 }
 
