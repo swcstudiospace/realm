@@ -54,6 +54,7 @@ From the Policy Schema reference:
 | `network_middlewares` | Live | Sandbox network proxy |
 
 - `filesystem_policy`: `read_only` and `read_write` lists. Each path must be absolute, must not contain `..`, must be at most 4096 bytes, and "`read_write` cannot contain `/`." A policy can list at most 256 paths. Paths not listed are inaccessible.
+- Device files in the realm policy: `/dev/null` is the one writable device, listed under `read_write`, because a denied write to it broke shell redirects such as `> /dev/null`. `/dev/urandom`, `/dev/zero` and `/dev/random` are listed under `read_only`, because reads of `/dev/zero` and `/dev/random` were denied. No other device and no `/dev` directory entry is granted.
 - `landlock`: `compatibility` is `best_effort` (default) or `hard_requirement`. "In either mode, a sandbox requires a kernel with Landlock ABI v3 or later."
 - `process`: `run_as_user` and `run_as_group` take `sandbox` or a numeric ID from 1 to 4294967294. "OpenShell rejects root."
 - `network_policies`: a map of which binaries can reach which endpoints. Endpoint rules have `host`, `port`, optional `protocol` (`rest`, `mcp`, `tcp`), `access`, `rules` and `deny_rules`.

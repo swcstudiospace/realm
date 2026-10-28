@@ -79,9 +79,13 @@ export const SANDBOX_SYSTEM_READ_ONLY_PATHS: readonly string[] = Object.freeze([
   "/opt",
   "/proc",
   "/dev/urandom",
+  "/dev/zero",
+  "/dev/random",
 ]);
 // The writable scratch paths besides the workspace. The native sidecar keeps temporary state in /tmp.
 export const SANDBOX_SCRATCH_PATHS: readonly string[] = Object.freeze(["/tmp"]);
+// The one writable device: shell redirects to /dev/null must succeed. No other device is writable.
+export const SANDBOX_WRITABLE_DEVICE_PATHS: readonly string[] = Object.freeze(["/dev/null"]);
 
 const POLL_INTERVAL_MS = 250;
 const RUNTIME_DIR_NAME = "runtime";
@@ -335,7 +339,10 @@ export interface PolicyDocument {
 export function buildPolicyDocument(egress: readonly EgressRule[], workloadBinary: string): PolicyDocument {
   return {
     version: 1,
-    filesystem_policy: { read_only: [...SANDBOX_SYSTEM_READ_ONLY_PATHS], read_write: [SANDBOX_WORKSPACE_PATH, ...SANDBOX_SCRATCH_PATHS] },
+    filesystem_policy: {
+      read_only: [...SANDBOX_SYSTEM_READ_ONLY_PATHS],
+      read_write: [SANDBOX_WORKSPACE_PATH, ...SANDBOX_SCRATCH_PATHS, ...SANDBOX_WRITABLE_DEVICE_PATHS],
+    },
     landlock: { compatibility: "hard_requirement" },
     process: { run_as_user: "sandbox", run_as_group: "sandbox" },
     network_policies: renderNetworkPolicies(egress, workloadBinary),
