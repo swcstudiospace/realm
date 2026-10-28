@@ -693,15 +693,17 @@ const FIX_PTRACE_SCOPE =
   "Set kernel.yama.ptrace_scope to 1 or higher (sysctl kernel.yama.ptrace_scope=1, persisted under /etc/sysctl.d), and check that the Yama security module is enabled.";
 
 // Reads the pins an operator recorded in the host environment: REALM_HOST_PIN_<NAME>_PATH, _VERSION and _SHA256, where NAME is
-// the binary's name in upper case with dashes as underscores. An empty value is no pin. The supervisor's digest pin falls back to
-// REALM_DRIVER_SUPERVISOR_SHA256, the variable the driver reads, when REALM_HOST_PIN_SUPERVISOR_SHA256 is unset.
+// the binary's name in upper case with dashes as underscores. For these variables an empty value is no pin. The supervisor's
+// digest pin falls back to REALM_DRIVER_SUPERVISOR_SHA256, the variable the driver reads, when REALM_HOST_PIN_SUPERVISOR_SHA256 is
+// unset. That variable is taken exactly as set: the driver refuses a padded or empty value, so either one is a pin the doctor
+// reports as malformed, not as no pin.
 export function hostBinaryPinsFromEnv(env: EnvironmentLike): HostBinaryPins {
   const pins: Partial<Record<HostBinaryName, HostBinaryPin>> = {};
   for (const name of HOST_BINARY_NAMES) {
     const stem = `${HOST_PIN_ENV_PREFIX}${name.toUpperCase().replace(/-/g, "_")}`;
     const path = pinValue(env, `${stem}_PATH`);
     const version = pinValue(env, `${stem}_VERSION`);
-    const sha256 = pinValue(env, `${stem}_SHA256`) ?? (name === "supervisor" ? pinValue(env, DRIVER_SUPERVISOR_SHA256_ENV) : undefined);
+    const sha256 = pinValue(env, `${stem}_SHA256`) ?? (name === "supervisor" ? env[DRIVER_SUPERVISOR_SHA256_ENV] : undefined);
     if (path !== undefined || version !== undefined || sha256 !== undefined) {
       pins[name] = {
         ...(path === undefined ? {} : { path }),

@@ -383,5 +383,21 @@ void test("host-binaries: hostBinaryPinsFromEnv falls back to REALM_DRIVER_SUPER
     hostBinaryPinsFromEnv({ REALM_HOST_PIN_SUPERVISOR_SHA256: "b".repeat(64), REALM_DRIVER_SUPERVISOR_SHA256: "e".repeat(64) }),
     { supervisor: { sha256: "b".repeat(64) } },
   );
-  assert.deepEqual(hostBinaryPinsFromEnv({ REALM_DRIVER_SUPERVISOR_SHA256: "  " }), {});
+  assert.deepEqual(hostBinaryPinsFromEnv({ REALM_DRIVER_SUPERVISOR_SHA256: "  " }), { supervisor: { sha256: "  " } });
+  assert.deepEqual(hostBinaryPinsFromEnv({ REALM_DRIVER_SUPERVISOR_SHA256: "" }), { supervisor: { sha256: "" } });
+  assert.deepEqual(hostBinaryPinsFromEnv({ REALM_HOST_PIN_SUPERVISOR_SHA256: "  " }), {});
+});
+
+void test("host-binaries: a REALM_DRIVER_SUPERVISOR_SHA256 the driver would refuse (padded, newline-terminated or empty) warns as a malformed pin", async (t) => {
+  const fixture = fixtureFor(t);
+  for (const value of [`${fixture.digests.supervisor}\n`, ` ${fixture.digests.supervisor} `, ""]) {
+    const result = await hostBinaries(fixture, { env: { ...fixture.env, REALM_DRIVER_SUPERVISOR_SHA256: value } });
+    assert.equal(result.status, "warn", JSON.stringify(value));
+    assert.match(result.detail, /supervisor sha256 pin is not 64 lowercase hex characters/, JSON.stringify(value));
+    assert.doesNotMatch(result.detail, /supervisor has no sha256 pin/, JSON.stringify(value));
+    assert.ok((result.fix ?? "").includes("a pin must be 64 lowercase hex characters"), JSON.stringify(value));
+  }
+  const clean = await hostBinaries(fixture, { env: { ...fixture.env, REALM_DRIVER_SUPERVISOR_SHA256: fixture.digests.supervisor } });
+  assert.equal(clean.status, "pass");
+  assert.equal(clean.fix, null);
 });
