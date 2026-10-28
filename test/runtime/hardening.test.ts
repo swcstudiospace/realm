@@ -38,13 +38,12 @@ const BINDING: HardeningBinding = {
 function conforming(): Record<string, unknown> {
   return {
     ImageDigest: DIGEST,
-    SeccompProfilePath: SECCOMP_PATH,
     Path: RUNTIME_BINARY,
     Args: RUNTIME_ARGV.slice(1),
     HostConfig: {
       Privileged: false,
       CapAdd: [],
-      SecurityOpt: ["no-new-privileges"],
+      SecurityOpt: ["no-new-privileges", `seccomp=${SECCOMP_PATH}`],
       ReadonlyRootfs: true,
       Tmpfs: { "/tmp": "rw", "/run": "rw", [SUPERVISOR_CA]: "rw" },
       PidsLimit: 512,
@@ -75,7 +74,7 @@ const FIELD_CASES: ReadonlyArray<{
 }> = [
   { property: "privileged", path: ["HostConfig", "Privileged"], wrong: true },
   { property: "cap-add", path: ["HostConfig", "CapAdd"], wrong: ["NET_ADMIN"] },
-  { property: "no-new-privileges", path: ["HostConfig", "SecurityOpt"], wrong: [] },
+  { property: "no-new-privileges", path: ["HostConfig", "SecurityOpt"], wrong: [`seccomp=${SECCOMP_PATH}`] },
   { property: "read-only-root", path: ["HostConfig", "ReadonlyRootfs"], wrong: false },
   { property: "tmpfs", path: ["HostConfig", "Tmpfs"], wrong: { "/tmp": "rw" } },
   { property: "pids-limit", path: ["HostConfig", "PidsLimit"], wrong: 1024 },
@@ -83,7 +82,11 @@ const FIELD_CASES: ReadonlyArray<{
   { property: "cpu-limit", path: ["HostConfig", "NanoCpus"], wrong: 4_000_000_000 },
   { property: "network-mode", path: ["HostConfig", "NetworkMode"], wrong: "bridge" },
   { property: "image-digest", path: ["ImageDigest"], wrong: `sha256:${"b".repeat(64)}` },
-  { property: "seccomp-profile", path: ["SeccompProfilePath"], wrong: "/realm/seccomp/default.json" },
+  {
+    property: "seccomp-profile",
+    path: ["HostConfig", "SecurityOpt"],
+    wrong: ["no-new-privileges", "seccomp=/realm/seccomp/default.json"],
+  },
 ];
 
 void test("the frozen profile carries the D-51 values (RT-01)", () => {
@@ -332,18 +335,47 @@ void test("PID 1 of a sandbox container is the runtime with its exact argv: any 
   }
 });
 
-void test("seccomp-profile: an inspect naming the embedded profile file by an absolute path conforms (phase 9.6)", () => {
+// Replaces the HostConfig.SecurityOpt of an inspect object, leaving every other field as it was.
+function withSecurityOpt(inspect: Inspect, value: unknown): Inspect {
+  inspect.HostConfig = { ...(inspect.HostConfig as Record<string, unknown>), SecurityOpt: value };
+  return inspect;
+}
+
+void test("seccomp-profile: exactly one seccomp= entry naming the embedded profile file by an absolute path conforms, in any order (phase 9.6)", () => {
   const inspect = conforming();
-  assert.equal(inspect.SeccompProfilePath, SECCOMP_PATH);
   assert.deepEqual(verifyInspect(BINDING, inspect), []);
-  inspect.SeccompProfilePath = `/another/directory/${SECCOMP_PROFILE_FILE_NAME}`;
-  assert.deepEqual(verifyInspect(BINDING, inspect), [], "only the file name is fixed, not the directory");
+  withSecurityOpt(inspect, [`seccomp=/another/directory/${SECCOMP_PROFILE_FILE_NAME}`, "no-new-privileges"]);
+  assert.deepEqual(verifyInspect(BINDING, inspect), [], "only the file name is fixed, not the directory, and the order is free");
 });
 
-void test("seccomp-profile: an absent value fails, since Podman omits the field when no profile is set (phase 9.6)", () => {
-  const inspect = conforming();
-  Reflect.deleteProperty(inspect, "SeccompProfilePath");
+void test("seccomp-profile: no seccomp entry fails, whether SecurityOpt is empty or carries only other options (phase 9.6)", () => {
+  for (const options of [[], ["no-new-privileges"], ["no-new-privileges", "label=disable"]]) {
+    const inspect = withSecurityOpt(conforming(), options);
+    assert.ok(verifyInspect(BINDING, inspect).includes("seccomp-profile"), JSON.stringify(options));
+  }
+});
+
+void test("seccomp-profile: two seccomp entries fail, even when both name the right file (phase 9.6)", () => {
+  const inspect = withSecurityOpt(conforming(), [
+    "no-new-privileges",
+    `seccomp=${SECCOMP_PATH}`,
+    `seccomp=/another/directory/${SECCOMP_PROFILE_FILE_NAME}`,
+  ]);
   assert.deepEqual(verifyInspect(BINDING, inspect), ["seccomp-profile"]);
+  withSecurityOpt(inspect, ["no-new-privileges", `seccomp=${SECCOMP_PATH}`, `seccomp=${SECCOMP_PATH}`]);
+  assert.deepEqual(verifyInspect(BINDING, inspect), ["seccomp-profile"]);
+});
+
+void test("seccomp-profile: SecurityOpt missing, or not an array, fails closed (phase 9.6)", () => {
+  const missing = conforming();
+  const host = { ...(missing.HostConfig as Record<string, unknown>) };
+  Reflect.deleteProperty(host, "SecurityOpt");
+  missing.HostConfig = host;
+  assert.ok(verifyInspect(BINDING, missing).includes("seccomp-profile"), "missing");
+  for (const value of [null, 42, true, `seccomp=${SECCOMP_PATH}`, { seccomp: SECCOMP_PATH }]) {
+    const inspect = withSecurityOpt(conforming(), value);
+    assert.ok(verifyInspect(BINDING, inspect).includes("seccomp-profile"), JSON.stringify(value));
+  }
 });
 
 void test("seccomp-profile: a profile file of another name fails, even one that differs in a single digit (phase 9.6)", () => {
@@ -358,35 +390,52 @@ void test("seccomp-profile: a profile file of another name fails, even one that 
     "",
   ];
   for (const name of names) {
-    const inspect = conforming();
-    inspect.SeccompProfilePath = `/realm/seccomp/${name}`;
+    const inspect = withSecurityOpt(conforming(), ["no-new-privileges", `seccomp=/realm/seccomp/${name}`]);
     assert.deepEqual(verifyInspect(BINDING, inspect), ["seccomp-profile"], name);
   }
 });
 
 void test("seccomp-profile: a relative path fails, whatever its file name (phase 9.6)", () => {
   for (const path of [SECCOMP_PROFILE_FILE_NAME, `seccomp/${SECCOMP_PROFILE_FILE_NAME}`, `./${SECCOMP_PROFILE_FILE_NAME}`]) {
-    const inspect = conforming();
-    inspect.SeccompProfilePath = path;
+    const inspect = withSecurityOpt(conforming(), ["no-new-privileges", `seccomp=${path}`]);
     assert.deepEqual(verifyInspect(BINDING, inspect), ["seccomp-profile"], path);
   }
 });
 
-void test("seccomp-profile: a value that is not a string, or whose file name is a directory, fails closed (phase 9.6)", () => {
-  const values: readonly unknown[] = [
-    null,
-    42,
-    true,
-    [SECCOMP_PATH],
-    { path: SECCOMP_PATH },
-    `${SECCOMP_PATH}/`,
-    `${SECCOMP_PATH}/inner.json`,
-  ];
-  for (const value of values) {
-    const inspect = conforming();
-    inspect.SeccompProfilePath = value;
-    assert.deepEqual(verifyInspect(BINDING, inspect), ["seccomp-profile"], JSON.stringify(value));
+void test("seccomp-profile: an empty value, a directory as file name, and non-string entries fail closed (phase 9.6)", () => {
+  for (const entry of ["seccomp=", `seccomp=${SECCOMP_PATH}/`, `seccomp=${SECCOMP_PATH}/inner.json`, "seccomp=unconfined"]) {
+    const inspect = withSecurityOpt(conforming(), ["no-new-privileges", entry]);
+    assert.deepEqual(verifyInspect(BINDING, inspect), ["seccomp-profile"], entry);
   }
+  for (const junk of [null, 42, true, { seccomp: SECCOMP_PATH }, [`seccomp=${SECCOMP_PATH}`]]) {
+    // A non-string entry never counts as a seccomp entry, so it neither satisfies nor spoils the property.
+    const without = withSecurityOpt(conforming(), ["no-new-privileges", junk]);
+    assert.deepEqual(verifyInspect(BINDING, without), ["seccomp-profile"], JSON.stringify(junk));
+    const alongside = withSecurityOpt(conforming(), ["no-new-privileges", junk, `seccomp=${SECCOMP_PATH}`]);
+    assert.deepEqual(verifyInspect(BINDING, alongside), [], JSON.stringify(junk));
+  }
+});
+
+void test("seccomp-profile: the property reads HostConfig.SecurityOpt and ignores the annotations and CreateCommand of a real Podman 5.7.1 inspect (phase 9.6)", () => {
+  const wrongPath = "/realm/seccomp/default.json";
+  const realistic = (securityOpt: unknown, annotated: string): Inspect => {
+    const inspect = withSecurityOpt(conforming(), securityOpt);
+    inspect.Id = "0".repeat(64);
+    inspect.Name = "realm-sandbox";
+    inspect.Image = "1".repeat(64);
+    const host = inspect.HostConfig as Record<string, unknown>;
+    host.Annotations = { "io.podman.annotations.seccomp": annotated };
+    inspect.Config = {
+      Annotations: { "io.podman.annotations.seccomp": annotated },
+      CreateCommand: ["podman", "create", "--security-opt", `seccomp=${annotated}`, "--security-opt", "no-new-privileges"],
+    };
+    return inspect;
+  };
+  // A conforming SecurityOpt conforms while the annotations and CreateCommand carry another file.
+  assert.deepEqual(verifyInspect(BINDING, realistic(["no-new-privileges", `seccomp=${SECCOMP_PATH}`], wrongPath)), []);
+  // No seccomp entry in SecurityOpt fails although the annotations and CreateCommand carry the right path.
+  assert.deepEqual(verifyInspect(BINDING, realistic(["no-new-privileges"], SECCOMP_PATH)), ["seccomp-profile"]);
+  assert.equal(Object.hasOwn(realistic(["no-new-privileges"], SECCOMP_PATH), "SeccompProfilePath"), false);
 });
 
 void test("seccomp-profile: the profile carries the file name, so the evidence digest binds the profile (phase 9.6)", () => {

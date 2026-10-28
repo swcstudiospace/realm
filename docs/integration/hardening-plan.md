@@ -237,7 +237,10 @@ of H1 [INFERENCE from the plan scope].
 - **Not claimed.** This proof is observed on the host at create time. It does not
   re-verify the capability sets after create, and it has not been run against a live Podman 5.7.1
   engine in this change.
-- **Added inspect property: `seccomp-profile`.** The inspect's `SeccompProfilePath` must be an
-  absolute path whose basename is the embedded profile's file name; an absent value fails.
+- **Added inspect property: `seccomp-profile`.** Podman 5.7.1 reports an explicit profile in
+  `HostConfig.SecurityOpt` as `seccomp=<path>` and has no top-level `SeccompProfilePath`. The
+  property passes only on exactly one `seccomp=` entry with an absolute path whose basename is
+  the embedded profile's file name; an absent, duplicate, relative or other-basename entry, or a
+  missing `SecurityOpt`, fails.
   Both verifiers run it. Details: `docs/integration/openshell.md`, section "Sandbox create
   hardening: seccomp profile".

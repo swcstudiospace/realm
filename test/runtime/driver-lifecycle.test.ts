@@ -345,13 +345,12 @@ function goodInspect(stateDir: string, workspaceDir: string, channelDir: string)
   ];
   return {
     ImageDigest: IMAGE_DIGEST,
-    SeccompProfilePath: SECCOMP_PROFILE_PATH,
     Path: RUNTIME_BINARY,
     Args: RUNTIME_ARGV.slice(1),
     HostConfig: {
       Privileged: HARDENING_PROFILE.privileged,
       CapAdd: [...HARDENING_PROFILE.capAdd],
-      SecurityOpt: [...HARDENING_PROFILE.securityOpt],
+      SecurityOpt: [...HARDENING_PROFILE.securityOpt, `seccomp=${SECCOMP_PROFILE_PATH}`],
       ReadonlyRootfs: HARDENING_PROFILE.readonlyRootfs,
       Tmpfs: Object.fromEntries(
         [...HARDENING_PROFILE.tmpfs, HARDENING_PROFILE.supervisorCaDestination].map((path): [string, string] => [
@@ -547,7 +546,7 @@ const PROPERTY_CASES: readonly PropertyCase[] = [
   { property: "rootless", rootless: false },
   { property: "cap-drop", procStatus: statusWith({ CapBnd: "0000000000000008" }) },
   { property: "cap-add", mutate: (body) => { hostConfig(body).CapAdd = ["NET_ADMIN"]; } },
-  { property: "no-new-privileges", mutate: (body) => { hostConfig(body).SecurityOpt = []; } },
+  { property: "no-new-privileges", mutate: (body) => { hostConfig(body).SecurityOpt = [`seccomp=${SECCOMP_PROFILE_PATH}`]; } },
   { property: "read-only-root", mutate: (body) => { hostConfig(body).ReadonlyRootfs = false; } },
   {
     property: "tmpfs",
@@ -579,7 +578,7 @@ const PROPERTY_CASES: readonly PropertyCase[] = [
   {
     property: "seccomp-profile",
     mutate: (body) => {
-      Reflect.deleteProperty(body, "SeccompProfilePath");
+      hostConfig(body).SecurityOpt = [...HARDENING_PROFILE.securityOpt];
     },
   },
 ];

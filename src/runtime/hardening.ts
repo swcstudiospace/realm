@@ -13,7 +13,7 @@
 // runtime's CA material. The binding names the channel directory, which sandboxBindingOf always derives.
 
 import { createHash } from "node:crypto";
-import { isAbsolute } from "node:path";
+import { basename, isAbsolute } from "node:path";
 import { SECCOMP_PROFILE_FILE_NAME } from "./driver/seccomp-profile.js";
 
 // Numeric limits and the frozen profile values live here and nowhere else (D-52).
@@ -140,12 +140,22 @@ const CHECKS: Readonly<Record<HardeningProperty, Check>> = Object.freeze({
       mounts.every((mount) => isRecord(mount) && pathIsClear(mount.Source) && pathIsClear(mount.Destination))
     );
   },
-  // The container runs under the driver's seccomp profile: the file Podman reports names the embedded profile by its digest. Podman
-  // omits the field when no profile is set, and an absent, mistyped or relative value fails. The file's content is not read here: the
-  // driver writes the file under a digest-bearing name, and refuses to start on a file of that name with other content.
+  // The container runs under the driver's seccomp profile. Podman 5.7.1 reports an explicit profile as `seccomp=<path>` in
+  // HostConfig.SecurityOpt and has no top-level SeccompProfilePath. Exactly one such entry must exist, with an absolute path whose
+  // basename is the embedded profile's digest-bearing file name. The file's content is not read here: the driver writes the file under
+  // a digest-bearing name, and refuses to start on a file of that name with other content.
   "seccomp-profile": (inspect) => {
-    const path = field(inspect, ["SeccompProfilePath"]);
-    return typeof path === "string" && isAbsolute(path) && path.endsWith(`/${HARDENING_PROFILE.seccompProfileFile}`);
+    const options = field(inspect, ["HostConfig", "SecurityOpt"]);
+    if (!Array.isArray(options)) {
+      return false;
+    }
+    const entries = options.filter((option): option is string => typeof option === "string" && option.startsWith("seccomp="));
+    const [entry] = entries;
+    if (entries.length !== 1 || entry === undefined) {
+      return false;
+    }
+    const path = entry.slice("seccomp=".length);
+    return isAbsolute(path) && !path.endsWith("/") && basename(path) === HARDENING_PROFILE.seccompProfileFile;
   },
 });
 
