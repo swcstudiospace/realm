@@ -28,6 +28,7 @@ import {
   sendRequest,
   unknownMethodReply,
 } from "../../src/daemon/channel.js";
+import { validate } from "../../src/contract/validate.js";
 import { TOOL_CALL_TIMEOUT_MS } from "../../src/tools/dispatch.js";
 
 const SECRET = "sk-test-0123456789abcdefghijkl";
@@ -122,6 +123,19 @@ void test("RT-06: the control methods are exactly status, up, down, doctor, and 
     CONTROL_TIMEOUT_MS.tool > TOOL_CALL_TIMEOUT_MS,
     "a tool request must outlast one dispatcher call",
   );
+});
+
+void test("RT-06: the up request outlasts the policy startup budget by a positive margin, and the other methods keep their bounds", () => {
+  const policy = validate("policy", {});
+  assert.ok(policy.ok, "an empty policy resolves to the schema defaults");
+  assert.ok(
+    CONTROL_TIMEOUT_MS.up > policy.value.startupBudgetMs,
+    "an up request must not time out inside the default startup budget",
+  );
+  assert.equal(CONTROL_TIMEOUT_MS.status, 5_000);
+  assert.equal(CONTROL_TIMEOUT_MS.down, 45_000);
+  assert.equal(CONTROL_TIMEOUT_MS.doctor, 60_000);
+  assert.equal(CONTROL_TIMEOUT_MS.tool, TOOL_CALL_TIMEOUT_MS + 10_000);
 });
 
 void test("RT-06: a request line over MAX_CONTROL_LINE_BYTES is refused with a null-id SCHEMA_INVALID and never reaches the dispatcher (P6-D2, P6-D12)", async (t) => {
