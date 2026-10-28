@@ -96,7 +96,7 @@ All v1 requirements are hypotheses until shipped and verified.
 ### Deferred on 2026-10-22, built in phase 9
 
 - [x] **RT-04**: AgentOS is managed only through its supported API; a runner that exits while the session is active moves the session to error with `AGENTOS_CRASH_LOOP` within the health interval (10 s); one failed probe is terminal and there is no automatic restart; recovery is `realm down` then `realm up`, or the retry command
-  Status: Complete (live 2026-10-28: suite scenario 8 and the Omp status item). Wording amended by owner decision of 2026-10-28 to match owner ruling N1 (no restart, no hysteresis; cited in `src/daemon/daemon.ts`). The original text, "a crash restarts with bounded backoff and reports `AGENTOS_CRASH_LOOP` after the maximum attempts", was deferred on 2026-10-22 and never implemented.
+  Status: Complete. Live 2026-10-28 (suite scenario 8 and the Omp status item): a runner that exits. Unit-verified, not live: a failed probe (a stale heartbeat, an OpenShell failure, an exit during the probe), which the Greptile review of the pull request found still restarting AgentOS and which now holds the supervisor the same way. Wording amended by owner decision of 2026-10-28 to match owner ruling N1 (no restart, no hysteresis; cited in `src/daemon/daemon.ts`). The original text, "a crash restarts with bounded backoff and reports `AGENTOS_CRASH_LOOP` after the maximum attempts", was deferred on 2026-10-22 and never implemented.
 - [x] **CLI-01**: `realm up`, `realm down`, `realm status`, and `realm doctor` are available from a standalone CLI backed by a long-running local daemon
   Status: Complete (live 2026-10-28): up, down, status and doctor ran from the standalone CLI against the production stack with the long-running daemon. The 2026-10-22 deferral no longer applies: the driver is bound from the configured image.
 
@@ -201,7 +201,7 @@ Filled by the roadmap. Each v1 requirement maps to exactly one phase.
 | RT-01 | Phase 3 | Complete (live 2026-10-28: the create-time verifier passes on every live create; CapEff 0 and CapBnd 0; rootless Podman 5.7.1; digest-pinned image; limits enforced) |
 | RT-02 | Phase 3 | Complete (live 2026-10-28: PODMAN_MISSING with no podman on PATH and PODMAN_MACHINE_DOWN with an empty XDG_RUNTIME_DIR, each exit 1 with a human-readable reason; no daemon and no control socket created) |
 | RT-03 | Phase 3 | Complete on the built-in path (live 2026-10-28: the runtime is PID 1 and the runner and every exec run through OpenShell exec via the gateway and supervisor; no container-runtime exec route exists; PD-15 decided; wording not amended) |
-| RT-04 | Phase 3 | Complete (live 2026-10-28: a runner exit moves the session to error with AGENTOS_CRASH_LOOP within the 10 s health interval, scenario 8 and the Omp status item; wording amended by owner decision 2026-10-28 to match ruling N1: no automatic restart) |
+| RT-04 | Phase 3 | Complete (live 2026-10-28 for a runner exit: the session moves to error with AGENTOS_CRASH_LOOP within the 10 s health interval, scenario 8 and the Omp status item; the failed-probe path is unit-verified; wording amended by owner decision 2026-10-28 to match ruling N1: no automatic restart) |
 | RT-05 | Phase 4 | Complete (live 2026-10-28, scenario 3: default-deny, allowlisted host:port connects, non-allowlisted host fails with EACCES, IPv6 off; host networking rejected at config load by unit test) |
 | RT-06 | Phase 6 | Complete |
 | RT-07 | Phase 2 | Complete |
