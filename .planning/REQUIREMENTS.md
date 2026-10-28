@@ -95,8 +95,8 @@ All v1 requirements are hypotheses until shipped and verified.
 
 ### Deferred on 2026-10-22, built in phase 9
 
-- [ ] **RT-04**: AgentOS is managed only through its supported API; a crash restarts with bounded backoff and reports `AGENTOS_CRASH_LOOP` after the maximum attempts
-  Status: Partial, verified live under owner ruling N1 (2026-10-28). The daemon probes the runner every 10 s while the session is active or degraded, and one failed probe moves the session to error with `AGENTOS_CRASH_LOOP` (live: suite scenario 8 and the Omp status item). There is no automatic restart (no hysteresis, as cited in `src/daemon/daemon.ts`), so the clause "a crash restarts with bounded backoff ... after the maximum attempts" is not implemented; recovery is `realm down` then `realm up`, or the retry command in Omp. The wording amendment awaits the owner.
+- [x] **RT-04**: AgentOS is managed only through its supported API; a runner that exits while the session is active moves the session to error with `AGENTOS_CRASH_LOOP` within the health interval (10 s); one failed probe is terminal and there is no automatic restart; recovery is `realm down` then `realm up`, or the retry command
+  Status: Complete (live 2026-10-28: suite scenario 8 and the Omp status item). Wording amended by owner decision of 2026-10-28 to match owner ruling N1 (no restart, no hysteresis; cited in `src/daemon/daemon.ts`). The original text, "a crash restarts with bounded backoff and reports `AGENTOS_CRASH_LOOP` after the maximum attempts", was deferred on 2026-10-22 and never implemented.
 - [x] **CLI-01**: `realm up`, `realm down`, `realm status`, and `realm doctor` are available from a standalone CLI backed by a long-running local daemon
   Status: Complete (live 2026-10-28): up, down, status and doctor ran from the standalone CLI against the production stack with the long-running daemon. The 2026-10-22 deferral no longer applies: the driver is bound from the configured image.
 
@@ -201,7 +201,7 @@ Filled by the roadmap. Each v1 requirement maps to exactly one phase.
 | RT-01 | Phase 3 | Complete (live 2026-10-28: the create-time verifier passes on every live create; CapEff 0 and CapBnd 0; rootless Podman 5.7.1; digest-pinned image; limits enforced) |
 | RT-02 | Phase 3 | Complete (live 2026-10-28: PODMAN_MISSING with no podman on PATH and PODMAN_MACHINE_DOWN with an empty XDG_RUNTIME_DIR, each exit 1 with a human-readable reason; no daemon and no control socket created) |
 | RT-03 | Phase 3 | Complete on the built-in path (live 2026-10-28: the runtime is PID 1 and the runner and every exec run through OpenShell exec via the gateway and supervisor; no container-runtime exec route exists; PD-15 decided; wording not amended) |
-| RT-04 | Phase 3 | Partial, verified live under owner ruling N1 (2026-10-28): a runner exit moves the session to error with AGENTOS_CRASH_LOOP within the 10 s health interval (scenario 8; Omp status item); no automatic restart, so the text's restart-with-backoff clause is not implemented; the wording amendment awaits the owner |
+| RT-04 | Phase 3 | Complete (live 2026-10-28: a runner exit moves the session to error with AGENTOS_CRASH_LOOP within the 10 s health interval, scenario 8 and the Omp status item; wording amended by owner decision 2026-10-28 to match ruling N1: no automatic restart) |
 | RT-05 | Phase 4 | Complete (live 2026-10-28, scenario 3: default-deny, allowlisted host:port connects, non-allowlisted host fails with EACCES, IPv6 off; host networking rejected at config load by unit test) |
 | RT-06 | Phase 6 | Complete |
 | RT-07 | Phase 2 | Complete |
@@ -272,5 +272,5 @@ Filled by the roadmap. Each v1 requirement maps to exactly one phase.
 | REM-01 | Phase 9.7 | Complete (see 09.7-VERIFICATION.md) |
 | REM-02 | Phase 9.7 | Complete (see 09.7-VERIFICATION.md) |
 | REM-03 | Phase 9.7 | Complete (live: suite scenario 8 and the Omp status item) |
-| REM-04 | Phase 9.7 | Complete (statuses above; RT-04, TOOL-05 and OMP-05 stay partial with their limits stated) |
+| REM-04 | Phase 9.7 | Complete (statuses above; TOOL-05 and OMP-05 stay partial with their limits stated) |
 | REM-05 | Phase 9.7 | Complete (see 09.7-VERIFICATION.md) |
