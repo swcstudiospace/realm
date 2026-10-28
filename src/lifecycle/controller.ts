@@ -116,6 +116,10 @@ export class LifecycleController {
   private orphanFailure: ErrorCode | null = null;
   // The code of the write failure that left the record behind the in-memory state, or null (F7).
   private unpersistedFailure: ErrorCode | null = null;
+  // Counts the starts and ends of a session's life: it advances when a create begins and when a
+  // stop or destroy takes the session. A probe compares it before and after its port call, so the
+  // result of a probe that began in an earlier life is never applied to a later one.
+  private lifeEpoch = 0;
 
   constructor(deps: LifecycleDeps) {
     this.deps = deps;
@@ -202,6 +206,7 @@ export class LifecycleController {
     }
     const realmId = existing?.realmId ?? randomUUID();
 
+    this.lifeEpoch += 1;
     this.machine.transition("connecting", "creating container");
     let containerId: string | null = priorContainerId;
     let issuedStart: PendingStart | null = null;
@@ -318,10 +323,15 @@ export class LifecycleController {
   }
 
   // Probes the container in active or degraded (D-38). A healthy result changes nothing.
-  // An unhealthy result moves the session to error with reason "probe failed". Probe never
-  // produces degraded: Phase 3 (ANDA-03) does. The probe is bounded by the startup budget,
-  // and its expiry maps to STARTUP_BUDGET_EXCEEDED. Any other state returns the snapshot.
+  // An unhealthy result moves the session to error with reason "probe failed". A probe that cannot
+  // answer moves it to error with the code the port threw, such as AGENTOS_CRASH_LOOP for a dead
+  // runner. Probe never produces degraded: Phase 3 (ANDA-03) does. The probe is bounded by the
+  // startup budget, and its expiry maps to STARTUP_BUDGET_EXCEEDED. A result is applied only to the
+  // life that began it: a stop, destroy, or new create that started while the probe was in flight
+  // makes the result stale, and the snapshot is returned unchanged (F4). Any other state returns
+  // the snapshot.
   async probe(): Promise<StateSnapshot> {
+    const epoch = this.lifeEpoch;
     const { state } = this.machine.snapshot();
     if (state !== "active" && state !== "degraded") {
       return this.machine.snapshot();
@@ -338,11 +348,14 @@ export class LifecycleController {
         "STARTUP_BUDGET_EXCEEDED",
       );
     } catch (error: unknown) {
+      if (epoch !== this.lifeEpoch) {
+        return this.machine.snapshot();
+      }
       return this.enterError(error);
     }
     // A stop may have taken the session while the probe was in flight. Only the active and degraded
     // states take the outcome of a probe (F4).
-    if (health === "unhealthy" && this.isInService()) {
+    if (health === "unhealthy" && epoch === this.lifeEpoch && this.isInService()) {
       this.machine.transition("error", "probe failed");
       this.writeState();
     }
@@ -544,6 +557,7 @@ export class LifecycleController {
     if (this.machine.snapshot().state === "stopping") {
       return;
     }
+    this.lifeEpoch += 1;
     this.machine.transition("stopping", STOPPING_REASON);
     this.writeState();
   }

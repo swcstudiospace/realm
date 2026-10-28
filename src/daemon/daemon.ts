@@ -66,6 +66,11 @@ import {
 // must exceed the driver's create budget (AGENTOS_START_TIMEOUT_MS in main.ts, 180 s) with margin.
 const AGENTOS_CALL_TIMEOUT_MS = 200_000;
 
+// How often the daemon probes an active session (RT-04, owner ruling N1). A runner that exited while the session is active is
+// reported by the probe as AGENTOS_CRASH_LOOP, and the session moves to error, so the status label tells the truth without a
+// doctor run. One probe runs at a time, and each is bounded by the controller's startup budget.
+export const HEALTH_PROBE_INTERVAL_MS = 10_000;
+
 // How the start gate settles: open for serving, or failed with the start error.
 type GateOutcome = { readonly ok: true } | { readonly ok: false; readonly error: unknown };
 
@@ -114,6 +119,9 @@ export interface StartDaemonOptions extends BuildDaemonHandleOptions {
   // libpod client; tests inject a recording fake. Omitting both sweep and any
   // libpod seam refuses with SCHEMA_INVALID rather than silently skipping the reap.
   readonly sweep?: () => Promise<number>;
+  // Observer for a health probe that threw. The controller has already recorded any outcome that changes the session state; this
+  // receives the catalogue code of the failure, including a refusal that left the state unchanged. It must not throw.
+  readonly onHealthProbeFailure?: (code: ErrorCode) => void;
   readonly store?: Pick<SessionStore, "list" | "delete">;
   readonly socketDirDeps?: SocketDirDeps;
   // Bound for one socket operation and for draining in-flight requests on down.
@@ -219,6 +227,51 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
   let draining = false;
   let downRequested = false;
   const completed = new Set<Socket>();
+
+  // The health loop (RT-04, N1). It runs while the session is in service, active or degraded: a degraded session (the Anda
+  // bridge is unreachable) still serves tool calls, so a dead runner there must not keep a truthful-looking label. An event
+  // that puts the session in service arms the timer unless one is already armed, so moving between active and degraded keeps
+  // exactly one timer, and any event that leaves service clears it. A tick probes through the controller, which owns the
+  // transition to error and ignores the result of a probe that began in an earlier life of the session. Ticks never overlap:
+  // a tick that finds a probe still running does nothing. The timer is unref'd, so it never keeps the process alive.
+  let healthTimer: NodeJS.Timeout | undefined;
+  let healthProbing = false;
+  const stopHealthLoop = (): void => {
+    if (healthTimer !== undefined) {
+      clearInterval(healthTimer);
+      healthTimer = undefined;
+    }
+  };
+  const healthTick = async (): Promise<void> => {
+    const { state } = handle.controller.snapshot();
+    if (healthProbing || downRequested || (state !== "active" && state !== "degraded")) {
+      return;
+    }
+    healthProbing = true;
+    try {
+      await handle.controller.probe();
+    } catch (error: unknown) {
+      options.onHealthProbeFailure?.(codeOf(error));
+    } finally {
+      healthProbing = false;
+    }
+  };
+  const startHealthLoop = (): void => {
+    stopHealthLoop();
+    healthTimer = setInterval(() => {
+      void healthTick();
+    }, HEALTH_PROBE_INTERVAL_MS);
+    healthTimer.unref();
+  };
+  const unsubscribeHealth = handle.controller.events.subscribe((event) => {
+    if (event.to === "active" || event.to === "degraded") {
+      if (healthTimer === undefined) {
+        startHealthLoop();
+      }
+    } else {
+      stopHealthLoop();
+    }
+  });
   let resolveDone!: () => void;
   let rejectDone!: (cause: unknown) => void;
   const done = new Promise<void>((resolve, reject) => {
@@ -278,6 +331,8 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
   // passes its code as the reason, so done rejects with that code instead of resolving.
   const stop = async (id: ControlId | null, socket: Socket | undefined, reason?: ErrorCode): Promise<void> => {
     downRequested = true;
+    unsubscribeHealth();
+    stopHealthLoop();
     draining = true;
     await drainOthers();
     let reply: ControlReply;
