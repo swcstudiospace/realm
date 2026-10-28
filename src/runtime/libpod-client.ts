@@ -472,6 +472,13 @@ export function validateContainerSpec(spec: ContainerSpec): void {
   }
 }
 
+// Podman's REST API takes an rlimit type without the RLIMIT_ prefix and adds the prefix itself. Measured live on Podman 5.7.1 with
+// runc: a body that names RLIMIT_NOFILE is created as RLIMIT_RLIMIT_NOFILE and the start fails with "wrong rlimit value". The
+// profile keeps the OCI names, because those are the names the inspect reports and the verifier compares.
+function restRlimitType(type: string): string {
+  return type.replace(/^RLIMIT_/, "");
+}
+
 // The create body. Every field comes from the spec, from HARDENING_PROFILE, or, for seccomp_profile_path, from the profile file
 // the client was built with, so the verifier and the create request read the same values. Nothing else is added.
 function containerCreateBody(spec: ContainerSpec, seccompProfilePath: string): Readonly<Record<string, unknown>> {
@@ -500,7 +507,7 @@ function containerCreateBody(spec: ContainerSpec, seccompProfilePath: string): R
       memory: { limit: profile.memoryBytes, swap: profile.memoryBytes },
       cpu: { quota: (profile.nanoCpus * CPU_PERIOD_MICROS) / 1_000_000_000, period: CPU_PERIOD_MICROS },
     },
-    r_limits: profile.rlimits.map(({ type, limit }) => ({ type, hard: limit, soft: limit })),
+    r_limits: profile.rlimits.map(({ type, limit }) => ({ type: restRlimitType(type), hard: limit, soft: limit })),
     netns: { nsmode: profile.networkMode },
     sysctl: { ...profile.sysctls },
     use_image_resolve_conf: true,

@@ -177,8 +177,8 @@ const EXPECTED_BODY = {
     cpu: { quota: 200000, period: 100000 },
   },
   r_limits: [
-    { type: "RLIMIT_NOFILE", hard: 4096, soft: 4096 },
-    { type: "RLIMIT_CORE", hard: 0, soft: 0 },
+    { type: "NOFILE", hard: 4096, soft: 4096 },
+    { type: "CORE", hard: 0, soft: 0 },
   ],
   netns: { nsmode: "none" },
   sysctl: {
@@ -315,7 +315,7 @@ void test("F9: every tmpfs of the create body is noexec, nosuid, nodev and bound
   assert.equal(body.resource_limits.memory.swap, body.resource_limits.memory.limit, "no swap: the swap limit equals the memory limit");
 });
 
-void test("F9: the rlimits of the create body are exactly nofile 4096 and core 0, soft equal to hard, with no nproc limit", async (t) => {
+void test("F9: the rlimits of the create body are exactly nofile 4096 and core 0 under the REST names, without the RLIMIT_ prefix the engine adds itself, soft equal to hard, with no nproc limit", async (t) => {
   const { socketPath, seen } = await startFake(t);
   await clientOn(socketPath).createContainer(SPEC);
   const [create] = callsOf(seen);
@@ -325,7 +325,7 @@ void test("F9: the rlimits of the create body are exactly nofile 4096 and core 0
   };
   assert.deepEqual(
     body.r_limits.map((limit) => [limit.type, limit.soft, limit.hard]),
-    [["RLIMIT_NOFILE", 4096, 4096], ["RLIMIT_CORE", 0, 0]],
+    [["NOFILE", 4096, 4096], ["CORE", 0, 0]],
   );
 });
 
