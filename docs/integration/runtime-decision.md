@@ -15,6 +15,8 @@ No install, upgrade, or socket change was made. Each check below is a read-only 
 | `openshell --version` | `openshell 0.1.2` |
 | `openshell sandbox create --help` | Lists `--name`, `--policy`, `--no-auto-providers`, `--no-keep`, `--detach`, `--label`, `--cpu`, `--memory`, `--env`, and `--provider`. The usage line shows the trailing `[-- <COMMAND>...]` form. |
 
+Historical (superseded 2026-10-28): the `openshell 0.1.2` version and the trailing command form in the two OpenShell rows above are superseded. The pin is 0.1.5.
+
 ## Layering (S-08) and requirement-wording conflicts (D-46, D-47)
 
 Settled input S-08:
@@ -57,14 +59,14 @@ Reversibility: costly. Every runtime module depends on this layering.
 - **Drift.** The docs describe **0.1.5** (`openshell.md` version caveat). The local CLI is 0.1.2. The `--no-keep` combined with `--detach` semantics are documented only for 0.1.5 (OQ-P3-12).
 - Default applied (OQ-P3-12): pin 0.1.2 and re-verify on upgrade. A future upgrade must re-read the matching documentation index and re-run `openshell sandbox create --help`.
 - The 0.1.2 help also lists `--from` (a rootfs tar or a container image reference). It is not in the pinned argv, and this phase does not use it. Whether it accepts a digest-pinned reference is unverified, so it bears on OQ-P3-03 (recorded below).
+- Historical (superseded 2026-10-28): the 0.1.2 pin, the `--no-keep` and `--detach` argv, and the trailing command form above no longer hold. The pin is 0.1.5 (`docs/integration/openshell.md`).
 - The doctor's `openshell` check (D-69) greps this help for each pinned flag, so drift is caught at run time.
 
 ## AgentOS mode (S-11)
 
 - **Library mode** (`@rivet-dev/agentos-core`, run in the sandbox) is **primary**. `agentos.md` Q1 and Q2 document `AgentOs.create` and `vm.dispose()`.
 - **Hosted mode** (the `agentOS` Rivet Actor and worker images) is **secondary and gated**. `agentos.md` Q8 documents the hosted worker as Docker-based, with no Podman command. Hosted mode is not implemented in Phase 3 (D-60).
-- The concrete `AgentOsDriver` is **not written** in Phase 3 (D-59). The port and supervisor exist, and `session-execution.ts` takes the driver as a dependency. The missing binding is OQ-P3-05 and the missing dependency is OQ-P3-06. Both are reported as blocked.
-- The AgentOS doctor item is not registered (D-69), because no driver binding exists to inspect.
+- Decision (2026-10-28): one sandbox per session, named `realm-<sessionId>`. The runtime's policy is the enforcement authority, and the retired realm helper is removed from the sandbox image (recover it from git history if ever needed). The AgentOS driver is bound (`src/runtime/agentos-driver.ts`); see `docs/integration/openshell.md`.
 
 ## Open questions and defaults (OQ-P3-01 to OQ-P3-16)
 
@@ -83,7 +85,7 @@ Reversibility: costly. Every runtime module depends on this layering.
 | OQ-P3-09 | Anda publishes no protocol or engine version (`anda.md` Q4). | Shape handshake (D-61). Recorded as a limitation in `anda-decision.md`. | Any claim of a version match in `src/anda/shape.ts` and the ANDA-02 test | Limitation recorded. |
 | OQ-P3-10 | Anda RPC body and credential format (`anda.md` Q2, Q3). | Not needed in Phase 3. No credentials are produced. | **Blocks the phase that first calls `POST /{id}`** (Phase 4 or 5 tool calls through Anda) | Blocked for that phase. |
 | OQ-P3-11 | Anda licence conflict (`anda.md` Q6). | No Anda code or dependency added. | Any vendoring of Anda code. It does not block Phase 3. | Open. Must be resolved before vendoring. |
-| OQ-P3-12 | OpenShell drift: docs 0.1.5, pinned verbs 0.1.2 (S-10). `--no-keep` with `--detach` is documented only for 0.1.5. | Pin 0.1.2 and gate. Re-verify on upgrade. | The argv builder in `src/runtime/openshell.ts` (D-55) and the live `--no-keep`/`--detach` lifecycle | Live-gated. Fails closed. |
+| OQ-P3-12 | OpenShell drift: docs 0.1.5, pinned verbs 0.1.2 (S-10). `--no-keep` with `--detach` is documented only for 0.1.5. Historical (superseded 2026-10-28): the pin is 0.1.5 and the create passes no `--no-keep`. | Pin 0.1.2 and gate. Re-verify on upgrade. | The argv builder in `src/runtime/openshell.ts` (D-55) and the live `--no-keep`/`--detach` lifecycle | Live-gated. Fails closed. |
 | OQ-P3-13 | On Linux, "Podman machine" is mapped to the rootless API socket (`$XDG_RUNTIME_DIR/podman/podman.sock`). | This mapping, recorded here. A refused socket gives `PODMAN_MACHINE_DOWN` with the fix `systemctl --user start podman.socket`. | `src/runtime/podman-probe.ts` step 3 (D-53) | Recorded assumption. |
 | OQ-P3-14 | Does the OpenShell driver apply the PID limit, read-only root, and capability drop? | The verifier (D-51) fails closed when it does not. | Live proof that `verifyInspect` passes on an OpenShell-created container (`src/runtime/hardening.ts`, `session-execution.ts`) | Live-gated. Fails closed. |
 | OQ-P3-15 | Does OpenShell accept the policy written as JSON (valid YAML 1.2)? | JSON (D-57). No YAML dependency. | Live acceptance of the policy document in `src/runtime/openshell.ts` (`buildPolicyDocument`) | Live-gated. Fails closed. |
@@ -129,7 +131,7 @@ A dispatcher call writes two audit lines: an admission line before execution and
 | ID | Question | Default applied | Blocked module or phase | Status |
 | --- | --- | --- | --- | --- |
 | OQ-P4-01 | Does the OpenShell supervisor proxy block IPv6 egress, and does it enforce `network_policies` when the workload container has networking off? | Rely on the proxy and the rendered IPv4-only policy; the live property is gated. | Live egress proof in `test/integration/podman-gate.test.ts` (RT-05, D-75) | Live-gated. Fails closed. |
-| OQ-P4-02 | Does the OpenShell 0.1.2 gateway accept the D-78 document at `--policy` create, and is `binaries[].path` matched by the workload interpreter? | The document as rendered, with `workloadArgv[0]` absolute (D-79). | Live acceptance of the policy document in `src/runtime/openshell.ts` | Live-gated. Fails closed. |
+| OQ-P4-02 | Does the OpenShell 0.1.2 gateway accept the D-78 document at `--policy` create? | The document as rendered. | Live acceptance of the policy document in `src/runtime/openshell.ts` | Live-gated. Fails closed. |
 | OQ-P4-03 | The v0.1.2 page documents the endpoint fields Realm uses, but the inspection and protocol fields were read only in part. | Realm writes none of them. Re-verify on upgrade. | The rendered shape in `src/runtime/egress.ts` (D-78) | Recorded assumption. |
 | OQ-P4-04 | Does `openshell sandbox exec --name realm-<id> --workdir /workspace --no-tty --no-login-shell` run against a gateway-created sandbox, and does the sandbox have `/bin/sh` for shell form? | The argv form is the tested path; shell form is gated. | Live exec path in `test/integration/podman-gate.test.ts` (TOOL-03, D-92) | Live-gated. Fails closed. |
 | OQ-P4-05 | Does `sandbox exec` return the remote exit code through the CLI exit status? | Yes (the 0.1.2 help says "The CLI exits with the remote command's exit code"); the gated suite verifies it. | Exec result mapping in `src/runtime/session-execution.ts` (D-94) | Live-gated. Fails closed. |
@@ -141,7 +143,7 @@ A dispatcher call writes two audit lines: an admission line before execution and
 | OQ-P4-11 | Retry and status surface. | The dispatcher implements both (D-95); Phase 5 exposes `retry` through OMP-03. | Phase 5 OMP surface (TOOL-05, OMP-03) | Decided. Phase 5 exposes. |
 | OQ-P4-12 | An allowlisted hostname that resolves to a private address is reachable under OpenShell's documented rule for exact hostnames. | Realm does not add `allowed_ips`, so the allowlist must contain only hosts the user intends to reach. | Egress allowlist review (RT-05, D-77) | Residual risk. Recorded. |
 
-Superseded by `docs/integration/openshell.md`: `workloadArgv` is no longer a configuration key, so OQ-P4-02's `workloadArgv[0]` is now the fixed AgentOS workload binary `/usr/local/bin/node` (`AGENTOS_WORKLOAD_BINARY`), and the sandbox has no workload command (one sandbox per session, named `realm-<sessionId>`).
+Superseded by `docs/integration/openshell.md`: `workloadArgv` is no longer a configuration key, and the sandbox has no workload command (one sandbox per session, named `realm-<sessionId>`).
 
 ## Catalogue extension (closure, 2026-10-22)
 

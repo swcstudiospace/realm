@@ -251,3 +251,28 @@ of H1 [INFERENCE from the plan scope].
   Podman filters and expands rules by capability and architecture.
   Both verifiers run it, with the reader injectable as `readOciConfig`. Details:
   `docs/integration/openshell.md`, section "Sandbox create hardening: seccomp profile".
+
+## 10. Production stack evidence (2026-10-28)
+
+The live runs on the production stack (OpenShell 0.1.5 gateway, the Realm compute driver, rootless Podman 5.x) verified the following. The OMP-LIVE items and the live egress results are recorded in the phase verification file, not here.
+
+- `realm up` reaches `active`, and `realm status` reports it.
+- The in-sandbox runner probe passes.
+- The workload runs as uid 1001 with CapEff 0, CapBnd 0, NoNewPrivs 1, seccomp mode 2, and IPv6 disabled.
+- The realm policy holds: `/tmp`, `/workspace` and `/dev/null` are writable; `/etc` and `/home` are read-only; `/dev/zero`, `/dev/random` and `/dev/urandom` are readable.
+- `keyctl`, `add_key` and `request_key` return EPERM, and the host account's keyring is not readable.
+- The pinned workspace is bound and receives no realm files.
+- A 16 MiB upload and download round trip is byte-identical (SHA-256 matches on both sides).
+- A non-zero exit status is propagated.
+- Egress is deny-all by default.
+- With an allowlist, the allowed `host:port` connects, and a non-allowlisted host and an IPv6 literal fail (verified live on 2026-10-28).
+- With an allowlist, AAAA returns no data (verified live on 2026-10-28).
+- `realm down` leaves zero containers, sandboxes, supervisors and secret directories.
+- A wrong image digest fails closed.
+
+Decisions recorded with this evidence:
+
+- One sandbox per session, named `realm-<sessionId>`.
+- `active` needs no Anda bridge when no `andaUrl` is configured.
+- One live sandbox per pinned root.
+- The runtime's policy is the enforcement authority, and the retired realm helper is removed (recover it from git history if needed).

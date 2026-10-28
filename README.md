@@ -17,7 +17,8 @@ The core guarantee, under the fail-closed policy: every file mutation either lan
 ## Status
 
 - v0.1.x is the first release line, for milestone v1.0 (a provisional name).
-- v1.0 fails closed. `realm up` refuses with `AGENTOS_NOT_CONFIGURED` until an AgentOS driver is bound. That driver is deferred to a follow-up milestone.
+- `realm up` binds the AgentOS driver from the configured digest-pinned image. The production stack is the OpenShell 0.1.5 gateway, the Realm compute driver, and rootless Podman 5.x (`docs/integration/openshell.md`).
+- Linux is the only verified platform. Podman 5.x is required, and Realm does not install it.
 - Podman-gated and host-gated checks await human verification on a Podman 5.x host.
 
 ## Quick start

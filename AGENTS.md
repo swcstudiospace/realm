@@ -18,8 +18,8 @@ Core guarantee, under the fail-closed policy: every file mutation either lands i
 
 Status (README.md and `.planning/PROJECT.md`):
 
-- v1.0 is provisional and fail-closed. `realm up` refuses with `AGENTOS_NOT_CONFIGURED` until an AgentOS driver is bound; that driver is deferred to a follow-up milestone.
-- Linux is the only verified platform. macOS and Windows are out of v1 scope unless verified later. Bun is unverified and not assumed.
+- v1.0 is provisional and fail-closed. The daemon binds the AgentOS driver from the configured digest-pinned image. The production stack is the OpenShell 0.1.5 gateway, the Realm compute driver, and rootless Podman 5.x (`docs/integration/openshell.md`).
+- Linux is the only verified platform. macOS and Windows are out of v1 scope unless verified later. Bun is unverified and not assumed. Podman 5.x is required, and Realm does not install it.
 - Podman-gated and host-gated checks await verification on a Podman 5.x host.
 - Licence: AGPL-3.0-only (`LICENSE`).
 
@@ -49,7 +49,7 @@ Every gate must pass before a change is reviewed (`CONTRIBUTING.md`).
   - `realm/`: composition root (`compose.ts`) that wires the adapters into the controller and dispatcher.
   - `lifecycle/`: `controller.ts` (the lifecycle controller) and `mutation-gate.ts`.
   - `tools/`: the single shared tool dispatcher (`dispatch.ts`) and the workspace file handlers (`workspace.ts`).
-  - `runtime/`: Podman probe and version check, libpod client and routes, OpenShell adapter, hardening verifier, egress rules, session execution, the AgentOS port and its OpenShell-carried driver (always bound; its sandbox image is the configured digest-pinned `config.image`, and each session's runner acts on its own sandbox, `realm-<sessionId>`), and runtime config.
+  - `runtime/`: Podman probe and version check, libpod client and routes, OpenShell adapter, hardening verifier, seccomp evidence (`seccomp-evidence.ts`), egress rules, session execution, and runtime config. The AgentOS pieces are `agentos.ts` (the port), `agentos-driver.ts` (the OpenShell-carried driver, always bound; its sandbox image is the configured digest-pinned `config.image`, and each session's runner acts on its own sandbox, `realm-<sessionId>`), and `agentos-workload.ts`. `runtime/driver/` holds the compute driver: gRPC server, lifecycle, channel and secret store, supervisor spawn, and seccomp profile delivery.
   - `session/`: session record store, state-directory paths, and the startup reaper (`reap.ts`).
   - `anda/`: Anda Engine HTTP bridge (`client.ts`) and the version-shape check (`shape.ts`).
   - `fs/`: canonical paths, root allowlist, credential-path denial, advisory write locks, atomic writes, and read, list, glob, and write.
@@ -64,6 +64,7 @@ Every gate must pass before a change is reviewed (`CONTRIBUTING.md`).
 - `release/milestone.json`: the milestone and its minor number, which set the release line.
 - `assets/brand/`: logo and banner artwork.
 - `.github/`: `workflows/ci.yml` (verify and release jobs), `PULL_REQUEST_TEMPLATE.md`, and `ISSUE_TEMPLATE/`.
+- `sandbox/`: the image build for the sandbox image (`Dockerfile`, `resolv.conf`). The image carries the pinned runtime, the AgentOS runner, and the probe.
 - Repository root: `package.json`, `package-lock.json`, `tsconfig.json`, `eslint.config.js`, `README.md`, `CHANGELOG.md`, `CONTRIBUTING.md`, `SECURITY.md`, `LICENSE`, and `NOTICE`. `dist/`, `node_modules/`, and `coverage/` are git-ignored build and install output.
 
 ## Conventions
