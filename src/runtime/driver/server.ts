@@ -1,4 +1,4 @@
-// The realm's gRPC listening sockets (phase 9.4, PRD-DRV-01; phase 9.5 reuses the same rules for the isolation backend).
+// The realm's gRPC listening sockets (phase 9.4, PRD-DRV-01).
 // A socket lives in a directory only the realm account can enter, and the socket itself is writable by that account
 // alone. Four rules hold before any request is accepted:
 //

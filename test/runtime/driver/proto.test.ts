@@ -42,7 +42,7 @@ void test("PRD-LIB-01: each vendored proto matches the SHA-256 recorded in PROVE
   const directory = protoIncludeDirectory();
   const provenance = readFileSync(join(directory, "PROVENANCE.md"), "utf8");
   const rows = [...provenance.matchAll(/^\| `([a-z_]+\.proto)` \|.*`([0-9a-f]{64})` \|$/gm)];
-  assert.equal(rows.length, 7);
+  assert.equal(rows.length, 5);
   for (const [, file = "", digest = ""] of rows) {
     const actual = createHash("sha256")
       .update(readFileSync(join(directory, file)))

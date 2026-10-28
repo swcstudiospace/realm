@@ -82,8 +82,6 @@ export const DRIVER_PROTO_FILES = [
   "src/runtime/driver/proto/extension.proto",
   "src/runtime/driver/proto/options.proto",
   "src/runtime/driver/proto/sandbox.proto",
-  "src/runtime/driver/proto/isolation_backend.proto",
-  "src/runtime/driver/proto/sandbox_protocol.proto",
 ];
 
 // Lists the driver protos absent under an installed package root.
