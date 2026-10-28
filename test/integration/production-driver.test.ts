@@ -3,7 +3,7 @@
 // It runs the real stack under the realm account (the realm CLI, the daemon it spawns, the OpenShell gateway, the realm compute
 // driver and rootless Podman 5.x) and verifies by behaviour what an operator would otherwise check by hand: the sandbox's
 // identity and confinement, its filesystem and device policy, the keyring seccomp rules, the AgentOS probe, file movement in and
-// out, egress, and a clean teardown.
+// out, egress, recovery after a daemon crash, the MCP exec and file tools through `realm mcp`, and a clean teardown.
 //
 // Gate. The whole file skips, with a reason that names the FIRST missing prerequisite, unless all of these hold:
 //   1. REALM_LIVE_PRODUCTION=1. An explicit operator opt-in; the test never sets it.
@@ -14,7 +14,8 @@
 //   5. A rootless Podman API socket under XDG_RUNTIME_DIR.
 //   6. The openshell CLI on PATH.
 //   7. The built CLI at dist/src/cli/main.js, next to the compiled tests (npm run build).
-// A default npm test therefore skips every scenario below and reports each as skipped.
+// A default npm test therefore skips every scenario below (six in all: default policy, immediate cycle, egress allowlist, wrong
+// image digest, crash recovery, MCP exec) and reports each as skipped.
 //
 // Preconditions the suite cannot check and the operator must provide:
 //   - The gateway and the compute driver run under the realm account with the same image and roots the variables above name.
@@ -27,6 +28,11 @@
 // scenario's XDG_CONFIG_HOME and the three driver roots. Every scenario runs `realm down` in its cleanup, even on failure, and
 // then waits (bounded at 90 s) for zero containers, zero realm-* sandboxes, no realm-daemon directory under the secret and
 // sandbox-state roots, and an empty pinned workspace. The scenarios share one pinned root, so they run one after another.
+// Files the suite may leave in the pinned workspace are named in WORKSPACE_FILES below; cleanup removes exactly those names.
+// The only process it ever signals is the one daemon the crash scenario's own `realm up` started: the process whose whole
+// command is the current node binary and the compiled daemon entry, owned by the current uid, SIGKILLed only when exactly one
+// such process exists. The MCP scenario starts one `realm mcp` child with the same explicit environment, and kills it in
+// cleanup if it is still running.
 //
 // Nothing here prints a secret. Failure messages carry exit codes, error codes, names and clipped probe output.
 
@@ -43,34 +49,47 @@ import {
   canConnect,
   cleanupScenario,
   createScenarioEnvironment,
+  decodeReadContent,
   describeResult,
+  describeValue,
+  findDaemonPids,
   isBenchmarkAddress,
   isDirectory,
   isSocket,
+  listDaemonContainers,
+  listDaemonSandboxes,
   nodeConnectArgv,
   nodeResolveArgv,
   onPath,
   openshellCli,
   parseNodeProbe,
   parseProbeFields,
+  pollUntil,
   probePodman,
   productionSkipReason,
   readLiveInputs,
   realmCli,
   sandboxExec,
+  startMcpSession,
   stateOfStatus,
+  waitForActive,
   waitForNoContainers,
   waitForNoResidue,
   DAEMON_SANDBOX_NAME,
   type CommandResult,
   type NodeProbeResult,
   type LiveInputs,
+  type Listing,
+  type McpSession,
   type ScenarioEnvironment,
   type ScenarioSpec,
 } from "../support/production-live.js";
 
 // The compiled CLI beside the compiled tests: this file runs from dist/test/integration, the CLI from dist/src/cli.
 const CLI_PATH = fileURLToPath(new URL("../../src/cli/main.js", import.meta.url));
+// The compiled daemon entry beside the CLI (dist/src/daemon/main.js). The CLI derives the same path (src/cli/main.ts
+// defaultDaemonEntry) and starts the daemon as `<node binary> <entry>` with no other argument (spawnDetachedDaemon).
+const DAEMON_ENTRY = fileURLToPath(new URL("../../src/daemon/main.js", import.meta.url));
 
 const probe = await probePodman();
 const gate = productionSkipReason({
@@ -97,6 +116,22 @@ const SCENARIO_TIMEOUT_MS = 300_000;
 const UP_TIMEOUT_MS = 240_000;
 const DOWN_TIMEOUT_MS = 120_000;
 const STATUS_TIMEOUT_MS = 30_000;
+// The bound on the crash scenario's checks that the daemon is gone and its sandbox container is still there. Neither follows the
+// SIGKILL atomically, so each is polled; both already hold within a moment.
+const CRASH_OBSERVE_TIMEOUT_MS = 10_000;
+const CRASH_OBSERVE_INTERVAL_MS = 500;
+// The bound on `realm status` reaching active after the crashed daemon's replacement came up, and after `realm mcp` attached.
+const ACTIVE_TIMEOUT_MS = 120_000;
+// The bound on every MCP response. The first one, the answer to initialize, is the exception: realm mcp claims the workspace
+// before it reads any input (src/cli/main.ts runMcp: ensure the daemon, then up, then serve), so that answer waits for the
+// attach, which has its own 60 s control bound after the daemon start. A hung server fails the test with a clear message, unless
+// the 5 minute scenario timeout fires first: the sum of the bounds can exceed it.
+const MCP_RESPONSE_TIMEOUT_MS = 60_000;
+const MCP_FIRST_RESPONSE_TIMEOUT_MS = 150_000;
+// The bound on realm mcp exiting after its stdin closes.
+const MCP_EXIT_TIMEOUT_MS = 30_000;
+// The most one MCP file read returns in this suite.
+const MCP_READ_MAX_BYTES = 4096;
 // A transfer moves 16 MiB through the gateway.
 const TRANSFER_TIMEOUT_MS = 180_000;
 const TRANSFER_BYTES = 16 * 1024 * 1024;
@@ -113,7 +148,8 @@ const TRANSFER_REMOTE_PATH = `/workspace/${WORKSPACE_TRANSFER_NAME}`;
 // Names this suite may leave in the pinned workspace; cleanup removes exactly these.
 const WORKSPACE_WRITE_NAME = "realm-live-write-probe";
 const WORKSPACE_HOST_NAME = "realm-live-host-visible";
-const WORKSPACE_FILES: readonly string[] = [WORKSPACE_WRITE_NAME, WORKSPACE_HOST_NAME, WORKSPACE_TRANSFER_NAME];
+const WORKSPACE_MCP_NAME = "realm-live-mcp-roundtrip";
+const WORKSPACE_FILES: readonly string[] = [WORKSPACE_WRITE_NAME, WORKSPACE_HOST_NAME, WORKSPACE_TRANSFER_NAME, WORKSPACE_MCP_NAME];
 
 // The one shell script the write probes run. The target is a positional argument, never interpolated.
 const WRITE_SCRIPT = 'printf %s "$1" > "$2"';
@@ -417,5 +453,177 @@ void test("production live 4: an image digest that does not exist fails closed w
   assert.match(`${started.stdout}\n${started.stderr}`, /OPENSHELL_START_FAILED/, `realm up must give OPENSHELL_START_FAILED: ${describeResult(started)}`);
   const containers = await waitForNoContainers(scenario.inputs);
   assert.ok(containers.ok, `no container may exist after the failed up: ${containers.detail}`);
+  await assertDownAndClean(scenario);
+});
+
+// ---- Scenario 5: crash recovery -----------------------------------------------------------------------------------------
+
+// The daemon processes this account runs from the compiled daemon entry. A listing that fails is a failed scenario.
+async function daemonPids(scenario: Scenario): Promise<readonly number[]> {
+  const listing = await findDaemonPids(scenario.inputs, DAEMON_ENTRY);
+  if (!listing.ok) {
+    assert.fail(`listing the daemon processes: ${listing.detail}`);
+  }
+  return listing.pids;
+}
+
+// The items of a container or sandbox listing. A listing that fails is a failed scenario.
+async function itemsOf(listing: Promise<Listing>, what: string): Promise<readonly string[]> {
+  const listed = await listing;
+  if (!listed.ok) {
+    assert.fail(`listing ${what}: ${listed.detail}`);
+  }
+  return listed.items;
+}
+
+void test("production live 5: after the daemon is killed, the next realm up reaps the sandbox it left and reaches active with exactly one", { skip: gate, timeout: SCENARIO_TIMEOUT_MS }, async (t) => {
+  const scenario = startScenario(t, { image: inputs().image });
+  await assertActive(scenario);
+
+  // The daemon this scenario's own realm up started: the one process whose whole command is the node binary and the daemon entry.
+  const started = await daemonPids(scenario);
+  assert.equal(started.length, 1, `exactly one daemon process must run from the compiled daemon entry; found ${String(started.length)} (pids: ${started.length === 0 ? "none" : started.join(", ")})`);
+  const daemonPid = started[0];
+  assert.ok(daemonPid !== undefined, "the daemon pid");
+
+  try {
+    process.kill(daemonPid, "SIGKILL");
+    const gone = await pollUntil(
+      async () => {
+        const remaining = await daemonPids(scenario);
+        return remaining.length === 0 ? { done: true } : { done: false, detail: `daemon pid(s) still running: ${remaining.join(", ")}` };
+      },
+      { timeoutMs: CRASH_OBSERVE_TIMEOUT_MS, intervalMs: CRASH_OBSERVE_INTERVAL_MS },
+    );
+    assert.ok(gone.ok, `the daemon must be gone after SIGKILL: ${gone.detail}`);
+
+    // The crash never ran the daemon's shutdown, so its sandbox is still there. This is what proves the crash was real.
+    const left = await pollUntil(
+      async () => {
+        const containers = await itemsOf(listDaemonContainers(scenario.inputs), `the ${DAEMON_SANDBOX_NAME} containers`);
+        return containers.length > 0 ? { done: true } : { done: false, detail: `no ${DAEMON_SANDBOX_NAME} container is left behind` };
+      },
+      { timeoutMs: CRASH_OBSERVE_TIMEOUT_MS, intervalMs: CRASH_OBSERVE_INTERVAL_MS },
+    );
+    assert.ok(left.ok, `the crash must leave the sandbox container behind: ${left.detail}`);
+
+    // The next start reaps what the crash left and creates the sandbox again. Its failure is reported with the CLI's reason code.
+    const restarted = await up(scenario);
+    assertExit(restarted, 0, "realm up after the daemon crash");
+    const active = await waitForActive(scenario.inputs, scenario.environment, ACTIVE_TIMEOUT_MS);
+    assert.ok(active.ok, `realm status must reach active after the restart: ${active.detail}`);
+
+    const replacement = await daemonPids(scenario);
+    assert.equal(replacement.length, 1, `exactly one daemon process must run after the restart; found ${String(replacement.length)} (pids: ${replacement.length === 0 ? "none" : replacement.join(", ")})`);
+    assert.notEqual(replacement[0], daemonPid, "the restarted daemon must be a new process");
+    const sandboxes = await itemsOf(listDaemonSandboxes(scenario.inputs), "the realm-daemon sandboxes");
+    assert.equal(sandboxes.length, 1, `exactly one ${DAEMON_SANDBOX_NAME} sandbox must exist after the restart; found ${String(sandboxes.length)}`);
+    const containers = await itemsOf(listDaemonContainers(scenario.inputs), `the ${DAEMON_SANDBOX_NAME} containers`);
+    assert.equal(containers.length, 1, `exactly one ${DAEMON_SANDBOX_NAME} container must exist after the restart; found ${String(containers.length)}`);
+  } catch (error) {
+    // With no daemon running, `realm down` reports "already down" and reaps nothing, so the sandbox the crash left would stay
+    // and block the next scenario. One more realm up lets a daemon reap it for the cleanup's down. Its result is not judged and
+    // the original failure is rethrown.
+    await up(scenario);
+    throw error;
+  }
+
+  await assertDownAndClean(scenario);
+});
+
+// ---- Scenario 6: MCP exec -----------------------------------------------------------------------------------------------
+
+// The one protocol revision the server speaks (src/mcp/server.ts MCP_PROTOCOL_VERSION).
+const MCP_PROTOCOL_REVISION = "2026-07-28";
+const MCP_TOOL_NAMES: readonly string[] = ["exec", "read", "write", "list", "status", "retry"];
+
+// The value under key of a JSON object, or undefined for anything else.
+function field(value: unknown, key: string): unknown {
+  return typeof value === "object" && value !== null ? Reflect.get(value, key) : undefined;
+}
+
+// One tools/call. The server returns the dispatcher outcome unchanged as the JSON-RPC result, so a tool that ran is
+// {outcome: "done", tool, value}. A refusal or a RealmError comes back as an MCP tool error (isError, structuredContent with the
+// catalogue code), because the daemon client throws the refusal's code. Both fail the scenario with that code.
+async function callTool(session: McpSession, tool: string, args: Readonly<Record<string, unknown>>): Promise<unknown> {
+  const result = await session.request("tools/call", { name: tool, arguments: args }, MCP_RESPONSE_TIMEOUT_MS);
+  if (field(result, "isError") === true) {
+    assert.fail(`tools/call ${tool} returned a tool error: ${describeValue(field(result, "structuredContent"))}; realm mcp stderr ${session.stderr()}`);
+  }
+  assert.equal(field(result, "outcome"), "done", `tools/call ${tool}: ${describeValue(result)}; realm mcp stderr ${session.stderr()}`);
+  assert.equal(field(result, "tool"), tool, `tools/call ${tool}: the outcome names another tool: ${describeValue(result)}`);
+  return field(result, "value");
+}
+
+async function runMcpSession(scenario: Scenario, session: McpSession): Promise<void> {
+  // 1. The handshake. realm mcp claims the workspace before it reads any input, so the first answer waits for the attach.
+  const initialized = await session.request(
+    "initialize",
+    { protocolVersion: MCP_PROTOCOL_REVISION, capabilities: {}, clientInfo: { name: "realm-live-suite", version: "0" } },
+    MCP_FIRST_RESPONSE_TIMEOUT_MS,
+  );
+  assert.equal(field(initialized, "protocolVersion"), MCP_PROTOCOL_REVISION, `initialize: ${describeValue(initialized)}`);
+  assert.equal(typeof field(field(initialized, "serverInfo"), "name"), "string", `initialize serverInfo: ${describeValue(initialized)}`);
+  assert.equal(typeof field(field(initialized, "capabilities"), "tools"), "object", `initialize capabilities.tools: ${describeValue(initialized)}`);
+  // A message without an id takes no reply.
+  session.notify("notifications/initialized");
+
+  // 2. The six tools.
+  const listed = await session.request("tools/list", {}, MCP_RESPONSE_TIMEOUT_MS);
+  const tools = field(listed, "tools");
+  assert.ok(Array.isArray(tools), `tools/list must return a tools array: ${describeValue(listed)}`);
+  const names: readonly unknown[] = tools.map((tool: unknown) => field(tool, "name"));
+  for (const name of MCP_TOOL_NAMES) {
+    assert.ok(names.includes(name), `tools/list must name ${name}: ${describeValue(names)}`);
+  }
+  for (const tool of tools) {
+    assert.equal(typeof field(tool, "description"), "string", `a tool descriptor needs a description: ${describeValue(tool)}`);
+    assert.equal(typeof field(tool, "inputSchema"), "object", `a tool descriptor needs an inputSchema: ${describeValue(tool)}`);
+  }
+
+  // 3. The attach must be active before the first call.
+  const active = await waitForActive(scenario.inputs, scenario.environment, ACTIVE_TIMEOUT_MS);
+  assert.ok(active.ok, `the realm mcp attach must reach active: ${active.detail}; realm mcp stderr ${session.stderr()}`);
+
+  // 4. exec in argv form: the marker comes back on stdout, which the daemon's exec runner captures.
+  const marker = `realm-live-${randomBytes(6).toString("hex")}`;
+  const echoed = await callTool(session, "exec", { argv: ["echo", marker] });
+  assert.equal(field(echoed, "exitCode"), 0, `exec echo: ${describeValue(echoed)}`);
+  const echoedStdout = field(echoed, "stdout");
+  assert.ok(typeof echoedStdout === "string" && echoedStdout.includes(marker), `exec echo must print the marker on stdout: ${describeValue(echoed)}`);
+
+  // 5. A non-zero exit is a successful call that carries its exit code.
+  const exited = await callTool(session, "exec", { argv: ["sh", "-c", "exit 3"] });
+  assert.equal(field(exited, "exitCode"), 3, `exec sh -c 'exit 3': ${describeValue(exited)}`);
+
+  // 6. write, then the host sees the file, then read returns the same bytes.
+  const content = `realm-live-mcp-${randomUUID()}`;
+  const hostPath = join(scenario.inputs.workspaceRoot, WORKSPACE_MCP_NAME);
+  const written = await callTool(session, "write", { path: WORKSPACE_MCP_NAME, content });
+  assert.equal(field(written, "bytes"), Buffer.byteLength(content), `write bytes: ${describeValue(written)}`);
+  assert.equal(field(written, "sha256"), sha256Hex(Buffer.from(content)), `write sha256: ${describeValue(written)}`);
+  assert.equal(readFileSync(hostPath, "utf8"), content, "the written file must appear in the pinned root on the host with exactly the written content");
+  const readBack = await callTool(session, "read", { path: WORKSPACE_MCP_NAME, maxBytes: MCP_READ_MAX_BYTES });
+  assert.equal(field(readBack, "status"), "found", `read status: ${describeValue(readBack)}`);
+  assert.equal(decodeReadContent(field(readBack, "content")), content, `read content: ${describeValue(readBack)}`);
+  assert.equal(field(readBack, "truncated"), false, `read truncated: ${describeValue(readBack)}`);
+  rmSync(hostPath);
+
+  // 7. Closing stdin ends the session, and realm mcp exits 0.
+  session.closeInput();
+  const ended = await session.waitForExit(MCP_EXIT_TIMEOUT_MS);
+  assert.notEqual(ended, undefined, `realm mcp must exit within ${String(MCP_EXIT_TIMEOUT_MS / 1000)} s of its stdin closing; stderr ${session.stderr()}`);
+  assert.deepEqual(ended, { code: 0, signal: null }, `realm mcp must exit 0; stderr ${session.stderr()}`);
+}
+
+void test("production live 6: realm mcp serves exec, write and read over stdio against the live sandbox", { skip: gate, timeout: SCENARIO_TIMEOUT_MS }, async (t) => {
+  const scenario = startScenario(t, { image: inputs().image }, WORKSPACE_FILES);
+  const session = startMcpSession(scenario.inputs, scenario.environment);
+  try {
+    await runMcpSession(scenario, session);
+  } finally {
+    // A child that is still running (a failed step, or no exit after stdin closed) is killed; the cleanup's realm down follows.
+    session.kill();
+  }
   await assertDownAndClean(scenario);
 });

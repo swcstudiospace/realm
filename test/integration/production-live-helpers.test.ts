@@ -1,16 +1,22 @@
 // Hermetic tests for the pieces of the production live suite that need no host: probe output parsing, the polling helper
-// (with an injected clock), the 198.18.0.0/15 range check and the skip-reason selection. This file always runs. The live
-// scenarios themselves are in production-driver.test.ts and run only when its gate opens.
+// (with an injected clock), the 198.18.0.0/15 range check, the skip-reason selection, the daemon process finder's parsing of
+// ps output, the MCP line framing and the JSON-RPC response matcher. This file always runs. The live scenarios themselves are in
+// production-driver.test.ts and run only when its gate opens.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { PodmanProbe } from "../../src/runtime/podman-version.js";
 import {
+  decodeReadContent,
+  describeValue,
+  findRpcReply,
   isBenchmarkAddress,
+  parseDaemonPids,
   parseNodeProbe,
   parseProbeFields,
   pollUntil,
   productionSkipReason,
+  splitJsonRpcLines,
   stateOfStatus,
   type PollCheck,
   type PollClock,
@@ -337,4 +343,169 @@ void test("a skip reason names no host path", () => {
     assert.equal(typeof reason, "string");
     assert.doesNotMatch(String(reason), /\/(root|home|tmp|Users)\//);
   }
+});
+
+// ---- parseDaemonPids ----------------------------------------------------------------------------------------------------------
+
+const DAEMON_ENTRY = "/srv/realm/dist/src/daemon/main.js";
+const NODE_BINARY = "/usr/bin/node";
+
+void test("parseDaemonPids returns no pid when no line runs the daemon entry", () => {
+  const output = [
+    "    1 /sbin/init",
+    `  200 ${NODE_BINARY} /srv/realm/dist/src/cli/main.js up --workspace /srv/work`,
+    "  300 bash",
+    "",
+  ].join("\n");
+  assert.deepEqual(parseDaemonPids(output, DAEMON_ENTRY, NODE_BINARY), []);
+  assert.deepEqual(parseDaemonPids("", DAEMON_ENTRY, NODE_BINARY), []);
+});
+
+void test("parseDaemonPids returns the pid of the one process that runs the daemon entry", () => {
+  const output = ["    1 /sbin/init", ` 4242 ${NODE_BINARY} ${DAEMON_ENTRY}`, "  300 bash"].join("\n");
+  assert.deepEqual(parseDaemonPids(output, DAEMON_ENTRY, NODE_BINARY), [4242]);
+});
+
+void test("parseDaemonPids returns every matching pid, in output order", () => {
+  const output = [` 4242 ${NODE_BINARY} ${DAEMON_ENTRY}`, `  17 ${NODE_BINARY} ${DAEMON_ENTRY}`, `99999 ${NODE_BINARY} ${DAEMON_ENTRY}`].join("\r\n");
+  assert.deepEqual(parseDaemonPids(output, DAEMON_ENTRY, NODE_BINARY), [4242, 17, 99999]);
+});
+
+void test("parseDaemonPids ignores the CLI, grep, ps and any command that only mentions the entry path", () => {
+  const output = [
+    `  10 grep ${DAEMON_ENTRY}`,
+    "  11 ps -u 1000 -ww -o pid=,args=",
+    `  12 ${NODE_BINARY} /srv/realm/dist/src/cli/main.js up`,
+    `  13 ${NODE_BINARY} ${DAEMON_ENTRY} --extra`,
+    `  14 ${NODE_BINARY} --inspect ${DAEMON_ENTRY}`,
+    `  15 /usr/local/bin/node ${DAEMON_ENTRY}`,
+    `  16 ${NODE_BINARY}-other ${DAEMON_ENTRY}`,
+    `  17 sh -c ${NODE_BINARY} ${DAEMON_ENTRY}`,
+    `  18 ${NODE_BINARY} ${DAEMON_ENTRY}.map`,
+    `  19 ${NODE_BINARY} /opt${DAEMON_ENTRY}`,
+    `  20 ${NODE_BINARY} ${DAEMON_ENTRY}/more`,
+    `  21 ${NODE_BINARY} ${DAEMON_ENTRY.replace("/srv", "/srvx")}`,
+  ].join("\n");
+  assert.deepEqual(parseDaemonPids(output, DAEMON_ENTRY, NODE_BINARY), []);
+});
+
+void test("parseDaemonPids skips malformed lines and keeps reading", () => {
+  const output = [
+    `abc ${NODE_BINARY} ${DAEMON_ENTRY}`,
+    `${NODE_BINARY} ${DAEMON_ENTRY}`,
+    `0 ${NODE_BINARY} ${DAEMON_ENTRY}`,
+    `-5 ${NODE_BINARY} ${DAEMON_ENTRY}`,
+    `12345678901 ${NODE_BINARY} ${DAEMON_ENTRY}`,
+    "   ",
+    "321",
+    `  77   ${NODE_BINARY} ${DAEMON_ENTRY}  `,
+  ].join("\n");
+  assert.deepEqual(parseDaemonPids(output, DAEMON_ENTRY, NODE_BINARY), [77]);
+});
+
+// ---- splitJsonRpcLines --------------------------------------------------------------------------------------------------------
+
+void test("splitJsonRpcLines returns every complete line of a chunk and no tail", () => {
+  assert.deepEqual(splitJsonRpcLines('{"a":1}\n{"b":2}\n'), { lines: ['{"a":1}', '{"b":2}'], rest: "" });
+  assert.deepEqual(splitJsonRpcLines(""), { lines: [], rest: "" });
+});
+
+void test("splitJsonRpcLines keeps a partial tail until the rest of the message arrives", () => {
+  const first = splitJsonRpcLines('{"a":1}\n{"jsonrpc":"2.0","i');
+  assert.deepEqual(first, { lines: ['{"a":1}'], rest: '{"jsonrpc":"2.0","i' });
+  const second = splitJsonRpcLines(`${first.rest}d":2}\n{"c"`);
+  assert.deepEqual(second, { lines: ['{"jsonrpc":"2.0","id":2}'], rest: '{"c"' });
+  assert.deepEqual(splitJsonRpcLines('no newline yet'), { lines: [], rest: "no newline yet" });
+});
+
+void test("splitJsonRpcLines reassembles a message that arrives one character at a time", () => {
+  const message = '{"jsonrpc":"2.0","id":1,"result":{}}\n';
+  let rest = "";
+  const lines: string[] = [];
+  for (const character of message) {
+    const split = splitJsonRpcLines(rest + character);
+    rest = split.rest;
+    lines.push(...split.lines);
+  }
+  assert.deepEqual(lines, ['{"jsonrpc":"2.0","id":1,"result":{}}']);
+  assert.equal(rest, "");
+});
+
+void test("splitJsonRpcLines drops blank lines and a trailing carriage return, as the server's reader does", () => {
+  assert.deepEqual(splitJsonRpcLines('\n  \n{"a":1}\r\n\r\n\t\n{"b":2}\n'), { lines: ['{"a":1}', '{"b":2}'], rest: "" });
+});
+
+// ---- findRpcReply -------------------------------------------------------------------------------------------------------------
+
+void test("findRpcReply picks the response with the given id and ignores notifications and other ids", () => {
+  const lines = [
+    '{"jsonrpc":"2.0","method":"notifications/message","params":{"level":"info"}}',
+    '{"jsonrpc":"2.0","id":1,"result":{"first":true}}',
+    '{"jsonrpc":"2.0","id":3,"result":{"third":true}}',
+  ];
+  assert.deepEqual(findRpcReply(lines, 3), { kind: "result", result: { third: true } });
+  assert.deepEqual(findRpcReply(lines, 1), { kind: "result", result: { first: true } });
+  assert.equal(findRpcReply(lines, 2), undefined);
+  assert.equal(findRpcReply([], 1), undefined);
+});
+
+void test("findRpcReply finds responses that arrive out of order", () => {
+  const lines = ['{"jsonrpc":"2.0","id":2,"result":"two"}', '{"jsonrpc":"2.0","id":1,"result":"one"}'];
+  assert.deepEqual(findRpcReply(lines, 1), { kind: "result", result: "one" });
+  assert.deepEqual(findRpcReply(lines, 2), { kind: "result", result: "two" });
+});
+
+void test("findRpcReply ignores a request or notification that carries the same id, and lines that are not JSON objects", () => {
+  const lines = ['{"jsonrpc":"2.0","id":1,"method":"ping"}', "not json", "[1]", "null", "7", '"text"', "{", '{"jsonrpc":"2.0","id":1,"result":"real"}'];
+  assert.deepEqual(findRpcReply(lines, 1), { kind: "result", result: "real" });
+});
+
+void test("findRpcReply reports a JSON-RPC error object with its code and message", () => {
+  const lines = ['{"jsonrpc":"2.0","id":5,"error":{"code":-32602,"message":"Invalid params"}}'];
+  assert.deepEqual(findRpcReply(lines, 5), { kind: "error", code: -32602, message: "Invalid params" });
+  assert.deepEqual(findRpcReply(['{"id":6,"error":{}}'], 6), { kind: "error", code: undefined, message: "" });
+});
+
+void test("findRpcReply returns a tool error result as a result, not as a JSON-RPC error", () => {
+  const line = '{"jsonrpc":"2.0","id":4,"result":{"isError":true,"structuredContent":{"code":"TOOL_TIMEOUT","retryable":true}}}';
+  assert.deepEqual(findRpcReply([line], 4), { kind: "result", result: { isError: true, structuredContent: { code: "TOOL_TIMEOUT", retryable: true } } });
+});
+
+void test("findRpcReply accepts a null result and flags a response with neither result nor error", () => {
+  assert.deepEqual(findRpcReply(['{"jsonrpc":"2.0","id":1,"result":null}'], 1), { kind: "result", result: null });
+  assert.deepEqual(findRpcReply(['{"jsonrpc":"2.0","id":1}'], 1), { kind: "malformed" });
+});
+
+void test("findRpcReply matches the id exactly: a string id is not a number id, and the first response wins", () => {
+  const lines = ['{"jsonrpc":"2.0","id":"1","result":"string id"}', '{"jsonrpc":"2.0","id":1,"result":"first"}', '{"jsonrpc":"2.0","id":1,"result":"second"}'];
+  assert.deepEqual(findRpcReply(lines, 1), { kind: "result", result: "first" });
+  assert.deepEqual(findRpcReply(lines, "1"), { kind: "result", result: "string id" });
+});
+
+// ---- decodeReadContent --------------------------------------------------------------------------------------------------------
+
+void test("decodeReadContent reads the JSON form of a Buffer, a byte array, an index-keyed object and a string", () => {
+  const text = "realm-live-mcp-é-1";
+  const bytes = [...Buffer.from(text)];
+  assert.equal(decodeReadContent(JSON.parse(JSON.stringify(Buffer.from(text)))), text);
+  assert.equal(decodeReadContent(bytes), text);
+  assert.equal(decodeReadContent(JSON.parse(JSON.stringify(new Uint8Array(Buffer.from(text))))), text);
+  assert.equal(decodeReadContent(text), text);
+  assert.equal(decodeReadContent({ type: "Buffer", data: [] }), "");
+});
+
+void test("decodeReadContent refuses anything that is not bytes", () => {
+  for (const value of [undefined, null, 7, true, { type: "Buffer", data: [256] }, { type: "Buffer", data: "abc" }, [1.5], [-1], ["a"], { a: 1 }, { 1: 65 }]) {
+    assert.equal(decodeReadContent(value), undefined, JSON.stringify(value));
+  }
+});
+
+// ---- describeValue ------------------------------------------------------------------------------------------------------------
+
+void test("describeValue gives clipped JSON and survives a value with no JSON form", () => {
+  assert.equal(describeValue({ a: 1 }), JSON.stringify('{"a":1}'));
+  assert.equal(describeValue(undefined), JSON.stringify("undefined"));
+  const long = describeValue("x".repeat(1000));
+  assert.ok(long.length < 400, `clipped: ${String(long.length)} characters`);
+  assert.match(long, /\.\.\."$/);
 });

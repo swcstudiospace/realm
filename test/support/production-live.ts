@@ -1,14 +1,15 @@
 // Helpers for the gated production live suite (PRD-TST-02, PRD-TST-03). The pure pieces (probe output parsing, the polling
-// helper, the benchmark-range check and the skip-reason selection) are covered by the hermetic file
-// test/integration/production-live-helpers.test.ts, which always runs. The rest drives the real stack: it builds an isolated
-// realm configuration per scenario, runs the built CLI and the openshell CLI, and checks that a scenario left nothing behind.
+// helper, the benchmark-range check, the skip-reason selection, the daemon process finder, the JSON-RPC line framing and the
+// response matcher) are covered by the hermetic file test/integration/production-live-helpers.test.ts, which always runs. The
+// rest drives the real stack: it builds an isolated realm configuration per scenario, runs the built CLI and the openshell CLI,
+// talks MCP to a `realm mcp` child over stdio, and checks that a scenario left nothing behind.
 //
 // Nothing here reads the process environment or touches the host at import time: every function takes what it needs as a
 // parameter, so the hermetic file can import this module on any host.
 //
 // Nothing here prints a secret. A failure message carries exit codes, error codes, names and clipped probe output only.
 
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync, accessSync, constants, statSync } from "node:fs";
 import { connect } from "node:net";
 import { tmpdir } from "node:os";
@@ -16,7 +17,7 @@ import { delimiter, isAbsolute, join } from "node:path";
 import { performance } from "node:perf_hooks";
 import type { EgressRule } from "../../src/contract/validate.js";
 import { podmanSocketPath } from "../../src/runtime/host-paths.js";
-import { buildExecArgv, OPENSHELL_BINARY, REALM_SANDBOX_NAME_PREFIX, realmSandboxName } from "../../src/runtime/openshell.js";
+import { buildExecArgv, OPENSHELL_BINARY, OPENSHELL_SANDBOX_NAME_LABEL_KEY, REALM_SANDBOX_NAME_PREFIX, realmSandboxName } from "../../src/runtime/openshell.js";
 import { podmanSkipReason, type PodmanProbe } from "../../src/runtime/podman-version.js";
 import { selectOpenShellEnvironment } from "../../src/runtime/session-execution.js";
 import { controlSocketPath, type EnvironmentLike } from "../../src/session/paths.js";
@@ -590,4 +591,291 @@ export async function cleanupScenario(
   }
   rmSync(scenario.root, { recursive: true, force: true });
   return waitForNoResidue(inputs);
+}
+
+// ---- Crash recovery -----------------------------------------------------------------------------------------------------
+
+// The pids of the daemons in `ps -o pid=,args=` output: the lines whose whole command is `<executable> <daemonEntry>`. That is
+// the exact argv spawnDetachedDaemon gives the daemon (src/cli/main.ts: process.execPath, then the entry path, no other
+// argument). A line that runs the CLI, `grep <entry>`, `ps`, or a path that merely starts or ends with the entry path is not a
+// match, and neither is a line without a numeric pid.
+export function parseDaemonPids(psOutput: string, daemonEntry: string, executable: string): readonly number[] {
+  const expected = `${executable} ${daemonEntry}`;
+  const pids: number[] = [];
+  for (const line of psOutput.split(/\r?\n/)) {
+    const match = /^\s*([1-9]\d{0,9})\s+(.*?)\s*$/.exec(line);
+    const pid = match?.[1];
+    const args = match?.[2];
+    if (pid !== undefined && args === expected) {
+      pids.push(Number(pid));
+    }
+  }
+  return pids;
+}
+
+export type PidListing = { readonly ok: true; readonly pids: readonly number[] } | { readonly ok: false; readonly detail: string };
+
+// The daemons the current uid runs from daemonEntry, read with `ps -u <uid> -ww -o pid=,args=` (argv form, no shell; -ww keeps
+// a long path from being cut). The executable is the test's own node binary: realmCli runs the CLI on it and the CLI spawns the
+// daemon on its own process.execPath, which is the same binary.
+export async function findDaemonPids(inputs: LiveInputs, daemonEntry: string): Promise<PidListing> {
+  const uid = process.getuid?.();
+  if (uid === undefined) {
+    return { ok: false, detail: "the current uid is not available on this platform" };
+  }
+  const result = await runCommand("ps", ["-u", String(uid), "-ww", "-o", "pid=,args="], { env: inputs.hostEnvironment, timeoutMs: 30_000, cwd: tmpdir() });
+  if (result.exitCode !== 0) {
+    return { ok: false, detail: `ps failed (${describeResult(result)})` };
+  }
+  return { ok: true, pids: parseDaemonPids(result.stdout, daemonEntry, process.execPath) };
+}
+
+// The container ids that carry the realm-daemon sandbox-name label, stopped ones included.
+export async function listDaemonContainers(inputs: LiveInputs): Promise<Listing> {
+  const label = `label=${OPENSHELL_SANDBOX_NAME_LABEL_KEY}=${DAEMON_SANDBOX_NAME}`;
+  const result = await runCommand("podman", ["ps", "-a", "--filter", label, "--format", "{{.ID}}"], { env: inputs.hostEnvironment, timeoutMs: 30_000, cwd: tmpdir() });
+  if (result.exitCode !== 0) {
+    return { ok: false, detail: `podman ps failed (${describeResult(result)})` };
+  }
+  return { ok: true, items: lines(result.stdout) };
+}
+
+// The OpenShell sandboxes named exactly realm-daemon.
+export async function listDaemonSandboxes(inputs: LiveInputs): Promise<Listing> {
+  const listed = await listRealmSandboxes(inputs);
+  return listed.ok ? { ok: true, items: listed.items.filter((name) => name === DAEMON_SANDBOX_NAME) } : listed;
+}
+
+// Polls `realm status` until it reports active, bounded at timeoutMs. The detail of a failed poll is the last status output.
+export function waitForActive(inputs: LiveInputs, scenario: ScenarioEnvironment, timeoutMs: number): Promise<PollOutcome> {
+  return pollUntil(
+    async () => {
+      const status = await realmCli(inputs, scenario, ["status"], 30_000);
+      const state = status.exitCode === 0 ? stateOfStatus(status.stdout) : undefined;
+      return state === "active" ? { done: true } : { done: false, detail: `realm status: ${describeResult(status)}` };
+    },
+    { timeoutMs, intervalMs: 2_000 },
+  );
+}
+
+// ---- MCP over stdio -----------------------------------------------------------------------------------------------------
+
+// Splits buffered MCP output into its complete lines and the partial tail. A line ends at "\n" (a trailing "\r" is dropped), and
+// a blank line is dropped, as the server's own reader does (src/mcp/server.ts: readline, then `line.trim() === ""`). The tail
+// is whatever follows the last "\n": the start of a message whose end has not arrived. Feed it back in front of the next chunk.
+export function splitJsonRpcLines(buffered: string): { readonly lines: readonly string[]; readonly rest: string } {
+  const parts = buffered.split("\n");
+  const rest = parts.pop() ?? "";
+  const complete = parts.map((part) => (part.endsWith("\r") ? part.slice(0, -1) : part)).filter((part) => part.trim() !== "");
+  return { lines: complete, rest };
+}
+
+// What one JSON-RPC response says. malformed is a response with the right id that carries neither result nor error.
+export type RpcReply =
+  | { readonly kind: "result"; readonly result: unknown }
+  | { readonly kind: "error"; readonly code: number | undefined; readonly message: string }
+  | { readonly kind: "malformed" };
+
+function isObject(value: unknown): value is object {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+// The response to request id among the received lines, or undefined while it has not arrived. Lines that are not JSON objects,
+// requests and notifications (they carry a method), and responses to other ids are skipped, so replies in any order and
+// interleaved notifications do not matter. The first response with the id wins.
+export function findRpcReply(receivedLines: readonly string[], id: number | string): RpcReply | undefined {
+  for (const line of receivedLines) {
+    let message: unknown;
+    try {
+      message = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!isObject(message) || Reflect.get(message, "id") !== id || Reflect.has(message, "method")) {
+      continue;
+    }
+    const error: unknown = Reflect.get(message, "error");
+    if (isObject(error)) {
+      const code: unknown = Reflect.get(error, "code");
+      const text: unknown = Reflect.get(error, "message");
+      return { kind: "error", code: typeof code === "number" ? code : undefined, message: typeof text === "string" ? text : "" };
+    }
+    if (Reflect.has(message, "result")) {
+      return { kind: "result", result: Reflect.get(message, "result") };
+    }
+    return { kind: "malformed" };
+  }
+  return undefined;
+}
+
+// One value for an assertion message: its JSON, clipped. Never used on a value that could hold a secret.
+export function describeValue(value: unknown): string {
+  const json: unknown = JSON.stringify(value);
+  return clip(typeof json === "string" ? json : String(value));
+}
+
+// The text of a read result's `content`. The handler returns a Buffer, and JSON turns a Buffer into
+// {"type":"Buffer","data":[bytes]}; a plain byte array, an index-keyed object (a Uint8Array through JSON) and a string are
+// accepted as well. Undefined for anything else, or for a byte list that holds a non-byte.
+export function decodeReadContent(content: unknown): string | undefined {
+  if (typeof content === "string") {
+    return content;
+  }
+  let bytes: unknown = content;
+  if (isObject(content) && Reflect.get(content, "type") === "Buffer") {
+    bytes = Reflect.get(content, "data");
+  } else if (isObject(content)) {
+    const keys = Object.keys(content);
+    if (keys.some((key, index) => key !== String(index))) {
+      return undefined;
+    }
+    bytes = keys.map((key): unknown => Reflect.get(content, key));
+  }
+  const isByte = (byte: unknown): byte is number => typeof byte === "number" && Number.isInteger(byte) && byte >= 0 && byte <= 255;
+  if (!Array.isArray(bytes) || !bytes.every(isByte)) {
+    return undefined;
+  }
+  return Buffer.from(bytes).toString("utf8");
+}
+
+// The most stderr text one MCP child may keep.
+const MCP_STDERR_LIMIT = 64 * 1024;
+
+export interface McpExit {
+  readonly code: number | null;
+  readonly signal: string | null;
+}
+
+// One `realm mcp` child and the JSON-RPC conversation with it. stdout carries only MCP messages and diagnostics go to stderr
+// (src/cli/main.ts runMcp), so stderr is kept, bounded, for failure messages.
+export interface McpSession {
+  // Sends one request and resolves with its result. Rejects when the JSON-RPC response is an error, when the child ends first,
+  // or when no response arrives within timeoutMs.
+  request(method: string, params: unknown, timeoutMs: number): Promise<unknown>;
+  // Sends a message with no id: the server takes it and sends no reply.
+  notify(method: string, params?: unknown): void;
+  // Ends the child's stdin, which ends the MCP session.
+  closeInput(): void;
+  // Resolves with how the child ended, or undefined when it is still running after timeoutMs.
+  waitForExit(timeoutMs: number): Promise<McpExit | undefined>;
+  // Stops the child if it is still running.
+  kill(): void;
+  // The clipped stderr text, as one JSON string.
+  stderr(): string;
+}
+
+// Starts `realm mcp --workspace <pinned root>` on the current node binary with the scenario's explicit environment and stdio
+// pipes. Nothing is written until the first request.
+export function startMcpSession(inputs: LiveInputs, scenario: ScenarioEnvironment): McpSession {
+  const child = spawn(process.execPath, [inputs.cliPath, "mcp", "--workspace", inputs.workspaceRoot], {
+    env: { ...scenario.cliEnvironment },
+    cwd: scenario.root,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  const received: string[] = [];
+  const waiters = new Set<() => void>();
+  let partial = "";
+  let stderrText = "";
+  let exit: McpExit | undefined;
+  let failure: string | undefined;
+  let nextId = 0;
+  const wakeWaiters = (): void => {
+    for (const waiter of [...waiters]) {
+      waiter();
+    }
+  };
+  child.stdout.setEncoding("utf8");
+  child.stdout.on("data", (chunk: string) => {
+    const split = splitJsonRpcLines(partial + chunk);
+    partial = split.rest;
+    received.push(...split.lines);
+    wakeWaiters();
+  });
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk: string) => {
+    if (stderrText.length < MCP_STDERR_LIMIT) {
+      stderrText += chunk;
+    }
+  });
+  child.stdin.on("error", (error: NodeJS.ErrnoException) => {
+    failure = `stdin ${error.code ?? "failed"}`;
+    wakeWaiters();
+  });
+  child.once("error", (error: NodeJS.ErrnoException) => {
+    failure = `spawn ${error.code ?? "failed"}`;
+    wakeWaiters();
+  });
+  child.once("close", (code, signal) => {
+    exit = { code, signal };
+    wakeWaiters();
+  });
+
+  // Resolves with the first value probe returns, checked now and on every change of the child's output or state; undefined at
+  // timeoutMs.
+  const waitFor = <T>(probe: () => T | undefined, timeoutMs: number): Promise<T | undefined> =>
+    new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        waiters.delete(check);
+        resolve(undefined);
+      }, timeoutMs);
+      const check = (): void => {
+        const found = probe();
+        if (found !== undefined) {
+          clearTimeout(timer);
+          waiters.delete(check);
+          resolve(found);
+        }
+      };
+      waiters.add(check);
+      check();
+    });
+
+  const describeEnd = (): string => {
+    if (exit !== undefined) {
+      return exit.signal === null ? `exit ${String(exit.code)}` : `signal ${exit.signal}`;
+    }
+    return failure ?? "still running";
+  };
+  const send = (message: Record<string, unknown>): void => {
+    child.stdin.write(`${JSON.stringify(message)}\n`);
+  };
+
+  return {
+    async request(method, params, timeoutMs) {
+      nextId += 1;
+      const id = nextId;
+      send({ jsonrpc: "2.0", id, method, params });
+      const outcome = await waitFor<RpcReply | "ended">(() => findRpcReply(received, id) ?? (exit !== undefined || failure !== undefined ? "ended" : undefined), timeoutMs);
+      if (outcome === undefined) {
+        throw new Error(`MCP ${method}: no response within ${String(timeoutMs / 1000)} s; stderr ${clip(stderrText)}`);
+      }
+      if (outcome === "ended") {
+        throw new Error(`MCP ${method}: realm mcp ended before it answered (${describeEnd()}); stderr ${clip(stderrText)}`);
+      }
+      if (outcome.kind === "error") {
+        throw new Error(`MCP ${method}: JSON-RPC error ${outcome.code === undefined ? "(no code)" : String(outcome.code)}: ${JSON.stringify(outcome.message)}`);
+      }
+      if (outcome.kind === "malformed") {
+        throw new Error(`MCP ${method}: the response carries neither result nor error`);
+      }
+      return outcome.result;
+    },
+    notify(method, params) {
+      send({ jsonrpc: "2.0", method, ...(params === undefined ? {} : { params }) });
+    },
+    closeInput() {
+      child.stdin.end();
+    },
+    async waitForExit(timeoutMs) {
+      return waitFor<McpExit>(() => exit, timeoutMs);
+    },
+    kill() {
+      if (exit === undefined) {
+        child.kill("SIGKILL");
+      }
+    },
+    stderr() {
+      return clip(stderrText);
+    },
+  };
 }
