@@ -19,26 +19,28 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { RealmError, type ErrorCode } from "../../src/core/errors.js";
 import { DriverLifecycle, HardeningRefusal } from "../../src/runtime/driver/lifecycle.js";
-import { attachKernelCaps, type LiveProperty } from "../../src/runtime/kernel-caps.js";
+import { attachRuntimeEvidence } from "../../src/runtime/create-evidence.js";
+import type { LiveProperty } from "../../src/runtime/kernel-caps.js";
 import {
   HARDENING_PROFILE,
   RUNTIME_ARGV,
   RUNTIME_BINARY,
   SUPERVISOR_CA_TMPFS_OPTIONS,
+  tmpfsOptionsOf,
   verifyInspect,
   type HardeningBinding,
   type HardeningProperty,
 } from "../../src/runtime/hardening.js";
 import { LibpodClient, type ContainerSpec } from "../../src/runtime/libpod-client.js";
 import { SECCOMP_PROFILE_FILE_NAME } from "../../src/runtime/driver/seccomp-profile.js";
-import { attachSeccompEvidence } from "../../src/runtime/seccomp-evidence.js";
 import {
-  CONFORMING_OCI_CONFIG_TEXT,
-  KEYCTL_ALLOWED_OCI_CONFIG_TEXT,
-  OCI_CONFIG_PATH,
-  ociReaderOf,
-  STATIC_DIR,
-} from "./seccomp-fixtures.js";
+  CONFORMING_PROC_STATUS,
+  procStatusOf,
+  RUNTIME_KEYCTL_ALLOWED_OCI_CONFIG_TEXT,
+  RUNTIME_OCI_CONFIG_TEXT,
+  runtimeOciTextWith,
+} from "./hardening-fixtures.js";
+import { OCI_CONFIG_PATH, ociReaderOf, STATIC_DIR } from "./seccomp-fixtures.js";
 import {
   LIBPOD_API_VERSION_HEADER,
   matchLibpodRoute,
@@ -64,25 +66,6 @@ const IMAGE_DIGEST = `sha256:${"a".repeat(64)}`;
 const SPEC_IMAGE = `localhost/realm-agentos@${IMAGE_DIGEST}`;
 const SECCOMP_PROFILE_PATH = `/srv/realm-test/seccomp/${SECCOMP_PROFILE_FILE_NAME}`;
 const NOT_FOUND_TEXT = JSON.stringify({ cause: "no such container", message: "no such container", response: 404 });
-
-const ZERO_MASK = "0000000000000000";
-
-// The text of a /proc/<pid>/status file with the five capability sets, each overridden set replacing its zero mask.
-function statusWith(overrides: Readonly<Record<string, string>>): string {
-  const masks: Record<string, string> = {
-    CapInh: ZERO_MASK,
-    CapPrm: ZERO_MASK,
-    CapEff: ZERO_MASK,
-    CapBnd: ZERO_MASK,
-    CapAmb: ZERO_MASK,
-    ...overrides,
-  };
-  return Object.entries(masks)
-    .map(([name, mask]) => `${name}:\t${mask}`)
-    .join("\n");
-}
-
-const ZERO_STATUS = statusWith({});
 
 // Everything the fake answers and records. The fake models the create, start, inspect, stop, remove and list
 // routes that the lifecycle uses. Its inspect is the good fixture, with one optional mutation applied to it. The
@@ -251,7 +234,7 @@ async function startFake(t: TestContext, options: FakeOptions): Promise<Fake> {
           Running: container.running,
           Pid: container.running ? (options.pid ?? GOOD_PID) : 0,
         };
-        inspect.Config = { Labels: container.labels, Tty: false };
+        inspect.Config = { Labels: container.labels, Tty: false, User: HARDENING_PROFILE.workloadUser };
         options.mutate?.(inspect);
         return json(200, inspect);
       }
@@ -365,13 +348,20 @@ function goodInspect(stateDir: string, workspaceDir: string, channelDir: string)
       Tmpfs: Object.fromEntries(
         [...HARDENING_PROFILE.tmpfs, HARDENING_PROFILE.supervisorCaDestination].map((path): [string, string] => [
           path,
-          path === HARDENING_PROFILE.supervisorCaDestination ? SUPERVISOR_CA_TMPFS_OPTIONS.join(",") : "nosuid,nodev",
+          tmpfsOptionsOf(path).join(","),
         ]),
       ),
       PidsLimit: HARDENING_PROFILE.pidsLimit,
       Memory: HARDENING_PROFILE.memoryBytes,
+      MemorySwap: HARDENING_PROFILE.memoryBytes,
       NanoCpus: HARDENING_PROFILE.nanoCpus,
       NetworkMode: HARDENING_PROFILE.networkMode,
+      Devices: [],
+      PidMode: "private",
+      IpcMode: "shareable",
+      UTSMode: "private",
+      CgroupMode: "private",
+      UsernsMode: "keep-id:uid=1001,gid=1001",
     },
     Mounts: [
       {
@@ -436,6 +426,10 @@ interface Arrangement {
   readonly ociConfigText?: string | undefined;
   // Replaces the OCI config reader, for a test that needs it to fail or to record the path.
   readonly readOciConfig?: ((path: string) => string) | undefined;
+  // Replaces the status reader, for a test that needs it to fail.
+  readonly readProcStatus?: ((pid: number) => string) | undefined;
+  // Replaces the device reader of the workspace scan, to model a mount nested in the workspace.
+  readonly lstat?: ((path: string) => { readonly dev: number }) | undefined;
   readonly requestTimeoutMs?: number | undefined;
   readonly sweep?: boolean | undefined;
   // The state root and the workspace. A test that needs a particular layout gives them; otherwise both are fresh.
@@ -491,8 +485,9 @@ async function harness(t: TestContext, arrangement: Arrangement = {}): Promise<H
     libpod,
     sandboxStateRoot: stateRoot,
     secretRoot,
-    readProcStatus: () => arrangement.procStatus ?? ZERO_STATUS,
-    readOciConfig: arrangement.readOciConfig ?? ociReaderOf(arrangement.ociConfigText ?? CONFORMING_OCI_CONFIG_TEXT),
+    readProcStatus: arrangement.readProcStatus ?? (() => arrangement.procStatus ?? CONFORMING_PROC_STATUS),
+    readOciConfig: arrangement.readOciConfig ?? ociReaderOf(arrangement.ociConfigText ?? RUNTIME_OCI_CONFIG_TEXT),
+    lstat: arrangement.lstat,
     removeDirectory: arrangement.removeDirectory,
   });
   if (arrangement.sweep !== false) {
@@ -562,7 +557,7 @@ interface PropertyCase {
 const PROPERTY_CASES: readonly PropertyCase[] = [
   { property: "privileged", mutate: (body) => { hostConfig(body).Privileged = true; } },
   { property: "rootless", rootless: false },
-  { property: "cap-drop", procStatus: statusWith({ CapBnd: "0000000000000008" }) },
+  { property: "cap-drop", procStatus: procStatusOf({ CapBnd: "0000000000000008" }) },
   { property: "cap-add", mutate: (body) => { hostConfig(body).CapAdd = ["NET_ADMIN"]; } },
   { property: "no-new-privileges", mutate: (body) => { hostConfig(body).SecurityOpt = ["label=disable"]; } },
   { property: "read-only-root", mutate: (body) => { hostConfig(body).ReadonlyRootfs = false; } },
@@ -593,7 +588,38 @@ const PROPERTY_CASES: readonly PropertyCase[] = [
       mountsOf(body).push({ Type: "bind", Source: SOCKET_MOUNT_SOURCE, Destination: "/run/engine.sock", RW: false });
     },
   },
-  { property: "seccomp-keyring", ociConfigText: KEYCTL_ALLOWED_OCI_CONFIG_TEXT },
+  { property: "seccomp-keyring", ociConfigText: RUNTIME_KEYCTL_ALLOWED_OCI_CONFIG_TEXT },
+  { property: "live-seccomp", procStatus: procStatusOf({ Seccomp: "0" }) },
+  { property: "live-no-new-privs", procStatus: procStatusOf({ NoNewPrivs: "0" }) },
+  { property: "namespaces", mutate: (body) => { hostConfig(body).PidMode = "host"; } },
+  { property: "devices", mutate: (body) => { hostConfig(body).Devices = [{ PathOnHost: "/dev/fuse" }]; } },
+  { property: "user", mutate: (body) => { configOf(body).User = "0:0"; } },
+  { property: "security-opt", mutate: (body) => { hostConfig(body).SecurityOpt = ["no-new-privileges", "unmask=ALL"]; } },
+  { property: "memory-swap", mutate: (body) => { hostConfig(body).MemorySwap = 0; } },
+  {
+    property: "ulimits",
+    ociConfigText: runtimeOciTextWith((spec) => {
+      (spec.process as Record<string, unknown>).rlimits = [];
+    }),
+  },
+  {
+    property: "sysctls",
+    ociConfigText: runtimeOciTextWith((spec) => {
+      (spec.linux as Record<string, unknown>).sysctl = { "net.ipv4.ip_unprivileged_port_start": "1024" };
+    }),
+  },
+  {
+    property: "masked-paths",
+    ociConfigText: runtimeOciTextWith((spec) => {
+      (spec.linux as Record<string, unknown>).maskedPaths = [];
+    }),
+  },
+  {
+    property: "readonly-paths",
+    ociConfigText: runtimeOciTextWith((spec) => {
+      (spec.linux as Record<string, unknown>).readonlyPaths = [];
+    }),
+  },
 ];
 
 for (const row of PROPERTY_CASES) {
@@ -620,7 +646,11 @@ for (const row of PROPERTY_CASES) {
 }
 
 void test("PRD-CTR-01: a socket mount fails mounts and socket-path, and create names mounts first", () => {
-  const body = { ...goodInspect(SIMULATED_STATE_DIR, SIMULATED_WORKSPACE, SIMULATED_CHANNEL_DIR), State: { Pid: GOOD_PID } };
+  const body = {
+    ...goodInspect(SIMULATED_STATE_DIR, SIMULATED_WORKSPACE, SIMULATED_CHANNEL_DIR),
+    Config: { User: HARDENING_PROFILE.workloadUser },
+    State: { Pid: GOOD_PID },
+  };
   mountsOf(body).push({ Type: "bind", Source: SOCKET_MOUNT_SOURCE, Destination: "/run/engine.sock", RW: false });
   const binding: HardeningBinding = {
     image: SPEC_IMAGE,
@@ -629,7 +659,7 @@ void test("PRD-CTR-01: a socket mount fails mounts and socket-path, and create n
     stateDir: SIMULATED_STATE_DIR,
     channelDir: SIMULATED_CHANNEL_DIR,
   };
-  const attached = attachKernelCaps(attachSeccompEvidence(body, ociReaderOf(CONFORMING_OCI_CONFIG_TEXT)), () => ZERO_STATUS);
+  const attached = attachRuntimeEvidence(body, ociReaderOf(RUNTIME_OCI_CONFIG_TEXT), () => CONFORMING_PROC_STATUS);
   assert.deepEqual(verifyInspect(binding, attached), ["mounts", "socket-path"]);
 });
 
@@ -646,7 +676,7 @@ void test("phase 9.6: a container whose OCI config denies the keyring syscalls v
   const h = await harness(t, {
     readOciConfig: (path) => {
       paths.push(path);
-      return CONFORMING_OCI_CONFIG_TEXT;
+      return RUNTIME_OCI_CONFIG_TEXT;
     },
   });
   assert.equal(await h.lifecycle.create(h.spec), CREATED_ID);
@@ -654,7 +684,7 @@ void test("phase 9.6: a container whose OCI config denies the keyring syscalls v
 });
 
 void test("phase 9.6: a container whose OCI config lets keyctl through is refused with seccomp-keyring, and force-removed", async (t) => {
-  const h = await harness(t, { ociConfigText: KEYCTL_ALLOWED_OCI_CONFIG_TEXT });
+  const h = await harness(t, { ociConfigText: RUNTIME_KEYCTL_ALLOWED_OCI_CONFIG_TEXT });
   await assert.rejects(
     h.lifecycle.create(h.spec),
     (error: unknown) => error instanceof HardeningRefusal && error.property === "seccomp-keyring",
@@ -675,6 +705,113 @@ void test("phase 9.6: an unreadable OCI config is refused with seccomp-keyring (
   );
   assert.equal(forcedRemoval(h.fake.seen, CREATED_ID), true);
   assert.equal(h.fake.store.size, 0);
+});
+
+void test("F5: an unreadable OCI config refuses every property that reads it, and the container is force-removed", async (t) => {
+  const h = await harness(t, {
+    readOciConfig: () => {
+      throw new Error("EACCES");
+    },
+  });
+  await assert.rejects(
+    h.lifecycle.create(h.spec),
+    (error: unknown) =>
+      error instanceof HardeningRefusal &&
+      JSON.stringify(error.failed) === JSON.stringify(["seccomp-keyring", "ulimits", "sysctls", "masked-paths", "readonly-paths"]),
+  );
+  assert.equal(forcedRemoval(h.fake.seen, CREATED_ID), true);
+  assert.equal(h.fake.store.size, 0);
+});
+
+void test("F5: an unreadable init status refuses the live seccomp, no_new_privs and capability proofs, and the container is force-removed", async (t) => {
+  const h = await harness(t, {
+    readProcStatus: () => {
+      throw new Error("ENOENT");
+    },
+  });
+  await assert.rejects(
+    h.lifecycle.create(h.spec),
+    (error: unknown) =>
+      error instanceof HardeningRefusal &&
+      error.property === "live-seccomp" &&
+      JSON.stringify(error.failed) === JSON.stringify(["live-seccomp", "live-no-new-privs", "cap-drop"]),
+  );
+  assert.equal(forcedRemoval(h.fake.seen, CREATED_ID), true);
+  assert.equal(h.fake.store.size, 0);
+});
+
+// A workspace that holds a nested directory. The injected device reader reports the given device for that directory and device 1
+// for everything else, so the nested directory models a mount of another filesystem.
+async function nestedWorkspace(
+  t: TestContext,
+  nestedDevice: number,
+): Promise<{ readonly h: Harness; readonly nested: string; readonly statted: string[] }> {
+  const workspaceDir = tempDir(t, "realm-lifecycle-workspace-");
+  const nested = join(workspaceDir, "projects", "deep", "mnt");
+  mkdirSync(nested, { recursive: true });
+  writeFileSync(join(workspaceDir, "projects", "notes.txt"), "notes");
+  const statted: string[] = [];
+  const h = await harness(t, {
+    workspaceDir,
+    lstat: (path) => {
+      statted.push(path);
+      return { dev: path === nested ? nestedDevice : 1 };
+    },
+  });
+  return { h, nested, statted };
+}
+
+// True when nothing but the startup sweep's listing reached the engine.
+function reachedNoEngineRoute(seen: readonly Seen[]): boolean {
+  return seen.every((request) => request.route === "listContainers");
+}
+
+void test("F7: a directory on another device under the workspace refuses create with SCHEMA_INVALID before any libpod call", async (t) => {
+  const { h } = await nestedWorkspace(t, 2);
+  await assert.rejects(h.lifecycle.create(h.spec), hasCode("SCHEMA_INVALID"));
+  assert.equal(reachedNoEngineRoute(h.fake.seen), true, "no info, inspect or create request was sent");
+});
+
+void test("F7: the same nested layout on one device is created, and only the root and the directories are stat-ed", async (t) => {
+  const { h, nested, statted } = await nestedWorkspace(t, 1);
+  assert.equal(await h.lifecycle.create(h.spec), CREATED_ID);
+  assert.deepEqual(statted, [h.workspaceDir, join(h.workspaceDir, "projects"), join(h.workspaceDir, "projects", "deep"), nested]);
+});
+
+void test("F7: a symlinked workspace root is compared by its target's device, not the link's (R1-5)", async (t) => {
+  const target = tempDir(t, "realm-lifecycle-target-");
+  const nested = join(target, "projects");
+  mkdirSync(nested, { recursive: true });
+  const link = join(tempDir(t, "realm-lifecycle-link-"), "workspace");
+  symlinkSync(target, link, "dir");
+  const statted: string[] = [];
+  const h = await harness(t, {
+    workspaceDir: link,
+    lstat: (path) => {
+      statted.push(path);
+      return { dev: path === link ? 2 : 1 };
+    },
+  });
+  assert.equal(await h.lifecycle.create(h.spec), CREATED_ID);
+  assert.equal(statted[0], target, "the root is stat-ed at its real path");
+  assert.equal(statted.includes(link), false, "the link itself is never stat-ed");
+});
+
+void test("F7: a device reader that fails on the root or on a directory refuses create with SCHEMA_INVALID before any libpod call", async (t) => {
+  const failing = (failOn: (path: string) => boolean) => (path: string): { readonly dev: number } => {
+    if (failOn(path)) {
+      throw new Error("EACCES");
+    }
+    return { dev: 1 };
+  };
+  const workspaceDir = tempDir(t, "realm-lifecycle-workspace-");
+  mkdirSync(join(workspaceDir, "projects"), { recursive: true });
+  const onRoot = await harness(t, { workspaceDir, lstat: failing((path) => path === workspaceDir) });
+  await assert.rejects(onRoot.lifecycle.create(onRoot.spec), hasCode("SCHEMA_INVALID"));
+  assert.equal(reachedNoEngineRoute(onRoot.fake.seen), true);
+  const onDirectory = await harness(t, { workspaceDir, lstat: failing((path) => path !== workspaceDir) });
+  await assert.rejects(onDirectory.lifecycle.create(onDirectory.spec), hasCode("SCHEMA_INVALID"));
+  assert.equal(reachedNoEngineRoute(onDirectory.fake.seen), true);
 });
 
 void test("PRD-CTR-01: a conforming container is returned by id, kept, and posted with tty false (C6)", async (t) => {
@@ -767,7 +904,12 @@ void test("PRD-CTR-01: a State.Pid of 0 after start fails cap-drop and force-rem
   const h = await harness(t, { pid: 0 });
   await assert.rejects(
     h.lifecycle.create(h.spec),
-    (error: unknown) => error instanceof HardeningRefusal && error.property === "cap-drop",
+    // An init process with no readable status fails every property that rests on it, so cap-drop and the two live proofs refuse together.
+    (error: unknown) =>
+      error instanceof HardeningRefusal &&
+      error.failed.includes("cap-drop") &&
+      error.failed.includes("live-seccomp") &&
+      error.failed.includes("live-no-new-privs"),
   );
   assert.equal(forcedRemoval(h.fake.seen, CREATED_ID), true);
   assert.equal(h.fake.store.size, 0);

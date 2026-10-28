@@ -33,8 +33,9 @@ import {
   type HardeningProperty,
 } from "./hardening.js";
 import type { LibpodClient, LibpodInspect } from "./libpod-client.js";
-import { attachKernelCaps, liveCapabilityFailures, readHostProcStatus, type LiveProperty } from "./kernel-caps.js";
-import { attachSeccompEvidence, readHostOciConfig } from "./seccomp-evidence.js";
+import { attachRuntimeEvidence } from "./create-evidence.js";
+import { liveCapabilityFailures, readHostProcStatus, type LiveProperty } from "./kernel-caps.js";
+import { readHostOciConfig } from "./seccomp-evidence.js";
 import { sandboxBindingOf } from "./driver/sandbox-binding.js";
 import {
   buildExecArgv,
@@ -450,11 +451,9 @@ export class SessionExecution implements ExecutionService {
     let inspectCause: ErrorCode | undefined;
     try {
       const inspect = await this.libpod.inspectContainer(containerId);
-      const attached = inspect === null ? null : attachSeccompEvidence(inspect, this.readOciConfig);
+      const attached = inspect === null ? null : attachRuntimeEvidence(inspect, this.readOciConfig, this.readProcStatus);
       failed =
-        attached === null
-          ? null
-          : [...verifyInspect(binding, attached), ...liveCapabilityFailures(attachKernelCaps(attached, this.readProcStatus))];
+        attached === null ? null : [...verifyInspect(binding, attached), ...liveCapabilityFailures(attached)];
     } catch (error) {
       failed = null;
       inspectCause = catalogueCodeOf(error);

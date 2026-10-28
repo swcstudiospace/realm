@@ -4,7 +4,7 @@ import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentOsSupervisor } from "../../src/runtime/agentos.js";
-import { HARDENING_PROFILE, RUNTIME_ARGV, RUNTIME_BINARY } from "../../src/runtime/hardening.js";
+import { HARDENING_PROFILE, RUNTIME_ARGV, RUNTIME_BINARY, tmpfsOptionsOf } from "../../src/runtime/hardening.js";
 import { LibpodClient } from "../../src/runtime/libpod-client.js";
 import { sandboxBindingOf } from "../../src/runtime/driver/sandbox-binding.js";
 import { buildExecArgv, OPENSHELL_BINARY, realmSandboxName } from "../../src/runtime/openshell.js";
@@ -12,7 +12,8 @@ import { SessionExecution } from "../../src/runtime/session-execution.js";
 import { FakeAgentOsDriver } from "../support/fake-agentos.js";
 import { FakeContainerStore, FakeLibpod } from "../support/fake-libpod.js";
 import { FakeOpenShell } from "../support/fake-openshell.js";
-import { CONFORMING_OCI_CONFIG_TEXT, OCI_CONFIG_PATH, ociReaderOf, STATIC_DIR } from "./seccomp-fixtures.js";
+import { CONFORMING_PROC_STATUS, RUNTIME_OCI_CONFIG_TEXT } from "./hardening-fixtures.js";
+import { OCI_CONFIG_PATH, ociReaderOf, STATIC_DIR } from "./seccomp-fixtures.js";
 import {
   makeHarness,
   SESSION as DISPATCH_SESSION,
@@ -76,8 +77,8 @@ async function fixture(t: TestContext): Promise<Fixture> {
     libpod: new LibpodClient(socketPath),
     runner: openshell.runner,
     agentosFor: () => agentos,
-    readProcStatus: () => "CapInh:\t0000000000000000\nCapPrm:\t0000000000000000\nCapEff:\t0000000000000000\nCapBnd:\t0000000000000000\nCapAmb:\t0000000000000000\n",
-    readOciConfig: ociReaderOf(CONFORMING_OCI_CONFIG_TEXT),
+    readProcStatus: () => CONFORMING_PROC_STATUS,
+    readOciConfig: ociReaderOf(RUNTIME_OCI_CONFIG_TEXT),
     config: { image: IMAGE, stateDir },
     secretRoot,
     pinnedWorkspaceRoot: join(base, "workspace"),
@@ -97,16 +98,26 @@ async function createSession(f: Fixture): Promise<{ readonly containerId: string
     State: { Running: true, Status: "running", Pid: 4242 },
     StaticDir: STATIC_DIR,
     OCIConfigPath: OCI_CONFIG_PATH,
+    Config: { User: HARDENING_PROFILE.workloadUser },
     HostConfig: {
       Privileged: false,
       CapAdd: [],
       SecurityOpt: ["no-new-privileges"],
       ReadonlyRootfs: true,
-      Tmpfs: { "/tmp": "rw", "/run": "rw", [HARDENING_PROFILE.supervisorCaDestination]: "rw" },
+      Tmpfs: Object.fromEntries(
+        [...HARDENING_PROFILE.tmpfs, HARDENING_PROFILE.supervisorCaDestination].map((destination): [string, string] => [destination, tmpfsOptionsOf(destination).join(",")]),
+      ),
       PidsLimit: HARDENING_PROFILE.pidsLimit,
       Memory: HARDENING_PROFILE.memoryBytes,
+      MemorySwap: HARDENING_PROFILE.memoryBytes,
       NanoCpus: HARDENING_PROFILE.nanoCpus,
       NetworkMode: HARDENING_PROFILE.networkMode,
+      Devices: [],
+      PidMode: "private",
+      IpcMode: "shareable",
+      UTSMode: "private",
+      CgroupMode: "private",
+      UsernsMode: "keep-id:uid=1001,gid=1001",
     },
     Mounts: [
       { Type: "bind", Source: f.workspaceRoot, Destination: "/workspace", RW: true },

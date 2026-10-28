@@ -173,9 +173,13 @@ const EXPECTED_BODY = {
   read_only_filesystem: true,
   resource_limits: {
     pids: { limit: 512 },
-    memory: { limit: 1073741824 },
+    memory: { limit: 1073741824, swap: 1073741824 },
     cpu: { quota: 200000, period: 100000 },
   },
+  r_limits: [
+    { type: "RLIMIT_NOFILE", hard: 4096, soft: 4096 },
+    { type: "RLIMIT_CORE", hard: 0, soft: 0 },
+  ],
   netns: { nsmode: "none" },
   sysctl: {
     "net.ipv4.ip_unprivileged_port_start": "0",
@@ -185,12 +189,12 @@ const EXPECTED_BODY = {
   use_image_resolve_conf: true,
   tty: false,
   mounts: [
-    { type: "tmpfs", destination: "/tmp", options: ["nosuid", "nodev"] },
-    { type: "tmpfs", destination: "/run", options: ["nosuid", "nodev"] },
+    { type: "tmpfs", destination: "/tmp", options: ["noexec", "nosuid", "nodev", "size=256m"] },
+    { type: "tmpfs", destination: "/run", options: ["noexec", "nosuid", "nodev", "size=16m"] },
     {
       type: "tmpfs",
       destination: "/run/openshell-supervisor-ca",
-      options: ["noexec", "nosuid", "nodev", "mode=1703"],
+      options: ["noexec", "nosuid", "nodev", "mode=1703", "size=4m"],
     },
     { type: "bind", source: WORKSPACE_DIR, destination: "/workspace", options: ["rw", "noexec", "nosuid", "nodev"] },
     { type: "bind", source: STATE_DIR, destination: "/realm-state", options: ["ro", "noexec", "nosuid", "nodev"] },
@@ -286,6 +290,43 @@ void test("PRD-CTR-01: the CA tmpfs options pass the create route's tmpfs rule, 
   const { socketPath } = await startFake(t, { podmanTmpfsRule: true });
   const id = await clientOn(socketPath).createContainer(SPEC);
   assert.equal(id, CREATED_ID);
+});
+
+void test("F9: every tmpfs of the create body is noexec, nosuid, nodev and bounded, and the swap equals the memory limit", async (t) => {
+  const { socketPath, seen } = await startFake(t, { podmanTmpfsRule: true });
+  await clientOn(socketPath).createContainer(SPEC);
+  const [create] = callsOf(seen);
+  assert.ok(create !== undefined);
+  const body = JSON.parse(create.body) as {
+    readonly mounts: readonly { readonly type: string; readonly destination: string; readonly options: readonly string[] }[];
+    readonly resource_limits: { readonly memory: { readonly limit: number; readonly swap: number } };
+  };
+  const tmpfs = body.mounts.filter((mount) => mount.type === "tmpfs");
+  assert.deepEqual(
+    tmpfs.map((mount) => mount.destination),
+    ["/tmp", "/run", "/run/openshell-supervisor-ca"],
+  );
+  for (const mount of tmpfs) {
+    for (const option of ["noexec", "nosuid", "nodev"]) {
+      assert.ok(mount.options.includes(option), `${mount.destination} carries ${option}`);
+    }
+    assert.equal(mount.options.filter((option) => option.startsWith("size=")).length, 1, `${mount.destination} has one size cap`);
+  }
+  assert.equal(body.resource_limits.memory.swap, body.resource_limits.memory.limit, "no swap: the swap limit equals the memory limit");
+});
+
+void test("F9: the rlimits of the create body are exactly nofile 4096 and core 0, soft equal to hard, with no nproc limit", async (t) => {
+  const { socketPath, seen } = await startFake(t);
+  await clientOn(socketPath).createContainer(SPEC);
+  const [create] = callsOf(seen);
+  assert.ok(create !== undefined);
+  const body = JSON.parse(create.body) as {
+    readonly r_limits: readonly { readonly type: string; readonly hard: number; readonly soft: number }[];
+  };
+  assert.deepEqual(
+    body.r_limits.map((limit) => [limit.type, limit.soft, limit.hard]),
+    [["RLIMIT_NOFILE", 4096, 4096], ["RLIMIT_CORE", 0, 0]],
+  );
 });
 
 void test("PRD-CTR-01: the create body carries no socket-bearing mount and binds the state directory read-only", async (t) => {

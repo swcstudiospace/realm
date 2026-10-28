@@ -4,15 +4,16 @@
 // and every sandbox's secret entries, before any request is accepted.
 //
 // Everything here goes through the closed libpod client (PD-11). The verifier is the same one session-execution
-// uses (PD-13): verifyInspect over HARDENING_PROFILE, with the kernel capability sets attached from the host's
-// /proc. The checks the verifier does not make are added here, after it. The state root is a constructor argument;
-// this module reads no host environment. The secret directories are handled by secret-store.ts.
+// uses (PD-13): verifyInspect over HARDENING_PROFILE, with the host evidence (the OCI config's fields and the init process's
+// /proc status) attached first by attachRuntimeEvidence. The checks the verifier does not make are added here, after it. The
+// state root is a constructor argument; this module reads no host environment. The secret directories are handled by secret-store.ts.
 
 import { lstatSync, readdirSync, realpathSync, rmSync, type Dirent, type Stats } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { makeRealmError, RealmError, type ErrorCode } from "../../core/errors.js";
-import { attachKernelCaps, liveCapabilityFailures, readHostProcStatus, type LiveProperty } from "../kernel-caps.js";
-import { attachSeccompEvidence, readHostOciConfig } from "../seccomp-evidence.js";
+import { attachRuntimeEvidence } from "../create-evidence.js";
+import { liveCapabilityFailures, readHostProcStatus, type LiveProperty } from "../kernel-caps.js";
+import { readHostOciConfig } from "../seccomp-evidence.js";
 import { channelOptionFailures, HARDENING_PROFILE, verifyInspect, type ChannelProperty, type HardeningBinding, type HardeningProperty } from "../hardening.js";
 import {
   validateContainerSpec,
@@ -72,6 +73,10 @@ export interface DriverLifecycleOptions {
   readonly readProcStatus?: ((pid: number) => string) | undefined;
   // Reads the text of a container's OCI config file. The create-time check reads its seccomp section through it. Bounded to 1 MiB by default.
   readonly readOciConfig?: ((path: string) => string) | undefined;
+  // Reads the device of a path without following a symlink. The workspace scan compares the device of every directory under the
+  // workspace with the device of the workspace's real path, so a mount of another filesystem nested in the workspace is refused.
+  // A same-filesystem bind mount shares its parent's device and is not detected. lstatSync by default.
+  readonly lstat?: ((path: string) => Pick<Stats, "dev">) | undefined;
   // Removes a sandbox's state directory tree. The default removes it without following a symlink inside the tree.
   readonly removeDirectory?: ((dir: string) => void) | undefined;
 }
@@ -102,6 +107,7 @@ export class DriverLifecycle {
   private readonly secretRoot: string;
   private readonly readProcStatus: (pid: number) => string;
   private readonly readOciConfig: (path: string) => string;
+  private readonly lstat: (path: string) => Pick<Stats, "dev">;
   private readonly removeDirectory: (dir: string) => void;
   private swept = false;
 
@@ -115,6 +121,7 @@ export class DriverLifecycle {
     this.secretRoot = options.secretRoot;
     this.readProcStatus = options.readProcStatus ?? readHostProcStatus;
     this.readOciConfig = options.readOciConfig ?? readHostOciConfig;
+    this.lstat = options.lstat ?? lstatSync;
     this.removeDirectory = options.removeDirectory ?? removeTree;
   }
 
@@ -149,7 +156,7 @@ export class DriverLifecycle {
     assertNoOverlap(spec.workspaceDir, this.sandboxStateRoot, spec.stateDir);
     assertNoOverlapPair(spec.workspaceDir, spec.channelDir);
     assertStateDirClear(spec.stateDir);
-    assertWorkspaceHasNoSocket(spec.workspaceDir);
+    assertWorkspaceHasNoSocket(spec.workspaceDir, this.lstat);
     const info = await this.libpod.info();
     // A container of this name is a live sandbox this create did not make, so it is refused and never removed. The
     // check is by name, so a container without the sandbox label is refused too.
@@ -247,10 +254,10 @@ export class DriverLifecycle {
       await this.libpod.startContainer(id);
       const inspect = await this.libpod.inspectContainer(id);
       if (inspect !== null) {
-        const attached = attachSeccompEvidence(inspect, this.readOciConfig);
+        const attached = attachRuntimeEvidence(inspect, this.readOciConfig, this.readProcStatus);
         failed = [
           ...verifyInspect(binding, attached),
-          ...liveCapabilityFailures(attachKernelCaps(attached, this.readProcStatus)),
+          ...liveCapabilityFailures(attached),
           ...postCreateFailures(inspect),
         ];
       }
@@ -438,13 +445,33 @@ export function assertStateDirClear(stateDir: string): void {
   });
 }
 
-// Refuses a workspace that holds any socket, since the workspace is bound into the container read-write.
-function assertWorkspaceHasNoSocket(workspaceDir: string): void {
-  visitTree(workspaceDir, (_path, entry) => {
+// Refuses a workspace that holds any socket, or a directory on another device than the workspace's, since the workspace is bound
+// into the container read-write. A directory whose device differs from the workspace root's is a mount of another filesystem
+// nested in the workspace, which the container would reach through the workspace mount, so it is refused. A bind mount of a
+// directory on the same filesystem shares its parent's device, and a file bind mount is not a directory, so neither is detected
+// by this scan. The root's device is read from its real path, so a symlinked workspace root compares its target's device and not
+// the link's. The scan runs at create only. A socket or a mount made in the workspace after the container starts is not
+// detected: the owner accepted that as a residual risk, and a re-scan at ListSandboxes would walk the whole tree synchronously on
+// the event loop.
+function assertWorkspaceHasNoSocket(workspaceDir: string, lstat: (path: string) => Pick<Stats, "dev">): void {
+  const rootDevice = deviceOf(realPathOf(workspaceDir), lstat);
+  visitTree(workspaceDir, (path, entry) => {
     if (entry.isSocket()) {
       throw makeRealmError("SCHEMA_INVALID");
     }
+    if (entry.isDirectory() && lstat(path).dev !== rootDevice) {
+      throw makeRealmError("SCHEMA_INVALID");
+    }
   });
+}
+
+// The device of a path, or SCHEMA_INVALID when it cannot be read. The error names no path.
+function deviceOf(path: string, lstat: (path: string) => Pick<Stats, "dev">): number {
+  try {
+    return lstat(path).dev;
+  } catch {
+    throw makeRealmError("SCHEMA_INVALID");
+  }
 }
 
 // Visits every entry under dir, depth first, without following a symlink: a symlink is an entry and is never

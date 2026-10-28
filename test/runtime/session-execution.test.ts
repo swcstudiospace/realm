@@ -12,7 +12,7 @@ import { SessionStore } from "../../src/session/store.js";
 import { createOpenShellAgentOsDriver, DEFAULT_AGENTOS_PROBE_PATH, DEFAULT_AGENTOS_RUNNER_PATH } from "../../src/runtime/agentos-driver.js";
 import type { RunnerChild } from "../../src/runtime/agentos-workload.js";
 import { renderNetworkPolicies } from "../../src/runtime/egress.js";
-import { HARDENING_PROFILE, RUNTIME_ARGV, RUNTIME_BINARY } from "../../src/runtime/hardening.js";
+import { HARDENING_PROFILE, RUNTIME_ARGV, RUNTIME_BINARY, tmpfsOptionsOf } from "../../src/runtime/hardening.js";
 import { LibpodClient } from "../../src/runtime/libpod-client.js";
 import { sandboxBindingOf, type SandboxBinding } from "../../src/runtime/driver/sandbox-binding.js";
 import {
@@ -38,7 +38,8 @@ import {
 import { FakeAgentOsDriver } from "../support/fake-agentos.js";
 import { FakeContainerStore, FakeLibpod } from "../support/fake-libpod.js";
 import { FakeOpenShell } from "../support/fake-openshell.js";
-import { CONFORMING_OCI_CONFIG_TEXT, KEYCTL_ALLOWED_OCI_CONFIG_TEXT, OCI_CONFIG_PATH, ociReaderOf, STATIC_DIR } from "./seccomp-fixtures.js";
+import { CONFORMING_PROC_STATUS, RUNTIME_KEYCTL_ALLOWED_OCI_CONFIG_TEXT, RUNTIME_OCI_CONFIG_TEXT } from "./hardening-fixtures.js";
+import { OCI_CONFIG_PATH, ociReaderOf, STATIC_DIR } from "./seccomp-fixtures.js";
 import { FakeBridge } from "../support/fake-bridge.js";
 
 const SESSION = "sess-01";
@@ -49,9 +50,8 @@ const EGRESS = [{ host: "api.example.com", port: 443 }];
 // The D-80 flags no argv on the execution path may carry (RT-05). Each is compared as a whole argv element.
 const FORBIDDEN_FLAGS = ["--env", "--provider", "--driver-config-json", "--forward", "--expose", "--template", "--auto-providers"];
 
-const ZERO_STATUS =
-  "CapInh:\t0000000000000000\nCapPrm:\t0000000000000000\nCapEff:\t0000000000000000\n" +
-  "CapBnd:\t0000000000000000\nCapAmb:\t0000000000000000\n";
+// The status of a conforming init process: every capability set empty, a seccomp filter in force, no_new_privs set.
+const ZERO_STATUS = CONFORMING_PROC_STATUS;
 
 interface Fixture {
   readonly base: string;
@@ -125,7 +125,7 @@ async function fixture(
   const supervisor = supervisorFor(SESSION);
   const libpodClient = new LibpodClient(socketPath);
   const procStatus = { text: ZERO_STATUS };
-  const ociConfig: { text: string | null } = { text: CONFORMING_OCI_CONFIG_TEXT };
+  const ociConfig: { text: string | null } = { text: RUNTIME_OCI_CONFIG_TEXT };
   // Serves the conforming OCI config for the container's config path. A null text is an unreadable file.
   const readOciConfig = (path: string): string => {
     if (ociConfig.text === null) {
@@ -199,16 +199,26 @@ function conformingInspect(
     State: { Running: true, Status: "running", Pid: 4242 },
     StaticDir: STATIC_DIR,
     OCIConfigPath: OCI_CONFIG_PATH,
+    Config: { User: HARDENING_PROFILE.workloadUser },
     HostConfig: {
       Privileged: false,
       CapAdd: [],
       SecurityOpt: ["no-new-privileges"],
       ReadonlyRootfs: true,
-      Tmpfs: { "/tmp": "rw", "/run": "rw", [HARDENING_PROFILE.supervisorCaDestination]: "rw" },
+      Tmpfs: Object.fromEntries(
+        [...HARDENING_PROFILE.tmpfs, HARDENING_PROFILE.supervisorCaDestination].map((destination): [string, string] => [destination, tmpfsOptionsOf(destination).join(",")]),
+      ),
       PidsLimit: HARDENING_PROFILE.pidsLimit,
       Memory: HARDENING_PROFILE.memoryBytes,
+      MemorySwap: HARDENING_PROFILE.memoryBytes,
       NanoCpus: HARDENING_PROFILE.nanoCpus,
       NetworkMode: HARDENING_PROFILE.networkMode,
+      Devices: [],
+      PidMode: "private",
+      IpcMode: "shareable",
+      UTSMode: "private",
+      CgroupMode: "private",
+      UsernsMode: "keep-id:uid=1001,gid=1001",
       ...hostOverrides,
     },
     Mounts: [
@@ -348,7 +358,7 @@ void test("phase 9.6: a container whose OCI config denies the keyring syscalls v
 void test("phase 9.6: a container whose OCI config lets keyctl through fails seccomp-keyring through create, and the container is removed", async (t) => {
   const f = await fixture(t);
   scriptInspect(f, conformingInspect(f));
-  f.ociConfig.text = KEYCTL_ALLOWED_OCI_CONFIG_TEXT;
+  f.ociConfig.text = RUNTIME_KEYCTL_ALLOWED_OCI_CONFIG_TEXT;
   await assert.rejects(
     f.exec.create({ idempotencyKey: SESSION, workspaceRoot: f.workspaceRoot }),
     (error: unknown) => error instanceof HardeningFailedError && error.property === "seccomp-keyring",

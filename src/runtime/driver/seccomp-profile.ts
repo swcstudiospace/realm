@@ -5,11 +5,18 @@
 // file pkg/seccomp/seccomp.json. Licence: Apache-2.0. The source file is 17525 bytes, SHA-256
 // 886ae167646b7e5db381ecf7c31e6de720a8e8da15cf3202fe1f67f424af2b75 (UPSTREAM_SHA256 below).
 //
-// Transformation, and nothing else: `keyctl` is removed from the rule that allows it, and one explicit rule
+// Transformation, and nothing else. (1) `keyctl` is removed from the rule that allows it, and one explicit rule
 // { names: [add_key, keyctl, request_key], action: SCMP_ACT_ERRNO, errnoRet: 1 } is inserted right after the first rule (the
-// upstream rule that already denies other syscalls with EPERM). Every other rule, the rule order, the architectures and the
-// default action (SCMP_ACT_ERRNO with errno 38) are upstream's. The default errno is ENOSYS, so deleting keyctl alone would
-// answer ENOSYS; the explicit rule makes the keyring syscalls answer EPERM (PRD-ENF-03).
+// upstream rule that already denies other syscalls with EPERM). The default errno is ENOSYS, so deleting keyctl alone would
+// answer ENOSYS; the explicit rule makes the keyring syscalls answer EPERM (PRD-ENF-03). (2) Namespace and mount hardening, because
+// the container holds no capability and a nested user namespace is how a workload would regain mount or namespace powers: `unshare`
+// and `setns` (also removed from the two capability rules that named setns) are denied with EPERM; the mount family (mount, umount,
+// umount2, mount_setattr, move_mount, open_tree, pivot_root, fsconfig, fsmount, fsopen, fspick) is denied with EPERM; `clone3`
+// answers ENOSYS so glibc falls back to `clone`; `clone` is allowed only through upstream Docker and Podman's masked-equality rule,
+// so a clone with any namespace flag falls to the default action (ENOSYS). (3) A separate rule denies `ptrace`, `process_vm_writev`
+// and `pidfd_getfd` with EPERM; `process_vm_readv` and `pidfd_open` stay allowed. Every name moved into a deny rule or the clone
+// rule is removed from the main allow rule, so no syscall is named by two rules. Every other rule, the rule order, the
+// architectures and the default action (SCMP_ACT_ERRNO with errno 38) are upstream's.
 //
 // The written text is JSON.stringify(profile, null, "\t") with no trailing newline, which is upstream's own formatting, so a text
 // diff against the upstream file shows only the transformation. The key order of every object below is upstream's.
@@ -129,18 +136,69 @@ export const SECCOMP_PROFILE: SeccompProfile = deepFreeze<SeccompProfile>({
       errnoRet: 1,
       errno: "EPERM",
     },
-    // Upstream's main allow rule, without keyctl (it sat between ipc and kill).
+    // Namespace entry. The container holds no capability, so a nested user namespace is the way a workload would regain mount or
+    // namespace powers; unshare and setns are refused with EPERM. These rules sit before every allow rule.
+    {
+      names: ["setns", "unshare"],
+      action: "SCMP_ACT_ERRNO",
+      args: [],
+      comment: "",
+      includes: {},
+      excludes: {},
+      errnoRet: 1,
+      errno: "EPERM",
+    },
+    // The mount family, refused with EPERM for the same reason.
+    {
+      names: [
+        "fsconfig", "fsmount", "fsopen", "fspick", "mount", "mount_setattr", "move_mount", "open_tree", "pivot_root", "umount",
+        "umount2",
+      ],
+      action: "SCMP_ACT_ERRNO",
+      args: [],
+      comment: "",
+      includes: {},
+      excludes: {},
+      errnoRet: 1,
+      errno: "EPERM",
+    },
+    // clone3 takes its flags through a structure the filter cannot read, so it answers ENOSYS and glibc falls back to clone, whose
+    // flags the clone rule below inspects.
+    {
+      names: ["clone3"],
+      action: "SCMP_ACT_ERRNO",
+      args: [],
+      comment: "",
+      includes: {},
+      excludes: {},
+      errnoRet: 38,
+      errno: "ENOSYS",
+    },
+    // Cross-process access. A separate rule, so a runtime that needs one of these can drop this rule alone. process_vm_readv and
+    // pidfd_open stay allowed.
+    {
+      names: ["pidfd_getfd", "process_vm_writev", "ptrace"],
+      action: "SCMP_ACT_ERRNO",
+      args: [],
+      comment: "",
+      includes: {},
+      excludes: {},
+      errnoRet: 1,
+      errno: "EPERM",
+    },
+    // Upstream's main allow rule, without keyctl (it sat between ipc and kill) and without the syscalls the rules above deny
+    // (unshare, setns, the mount family, clone, clone3, ptrace, process_vm_writev, pidfd_getfd). No syscall is named by two rules.
     {
       names: [
         "_llseek", "_newselect", "accept", "accept4", "access", "adjtimex", "alarm", "bind", "brk", "capget", "capset",
         "chdir", "chmod", "chown", "chown32", "clock_adjtime", "clock_adjtime64", "clock_getres", "clock_getres_time64",
-        "clock_gettime", "clock_gettime64", "clock_nanosleep", "clock_nanosleep_time64", "clone", "clone3", "close",
+        "clock_gettime", "clock_gettime64", "clock_nanosleep", "clock_nanosleep_time64", "close",
         "close_range", "connect", "copy_file_range", "creat", "dup", "dup2", "dup3", "epoll_create", "epoll_create1",
         "epoll_ctl", "epoll_ctl_old", "epoll_pwait", "epoll_pwait2", "epoll_wait", "epoll_wait_old", "eventfd", "eventfd2",
         "execve", "execveat", "exit", "exit_group", "faccessat", "faccessat2", "fadvise64", "fadvise64_64", "fallocate",
         "fanotify_init", "fanotify_mark", "fchdir", "fchmod", "fchmodat", "fchmodat2", "fchown", "fchown32", "fchownat",
-        "fcntl", "fcntl64", "fdatasync", "fgetxattr", "flistxattr", "flock", "fork", "fremovexattr", "fsconfig",
-        "fsetxattr", "fsmount", "fsopen", "fspick", "fstat", "fstat64", "fstatat64", "fstatfs", "fstatfs64", "fsync",
+        "fcntl", "fcntl64", "fdatasync", "fgetxattr", "flistxattr", "flock", "fork", "fremovexattr",
+        "fsetxattr", "fstat", "fstat64", "fstatat64", "fstatfs", "fstatfs64", "fsync",
         "ftruncate", "ftruncate64", "futex", "futex_time64", "futimesat", "get_mempolicy", "get_robust_list",
         "get_thread_area", "getcpu", "getcwd", "getdents", "getdents64", "getegid", "getegid32", "geteuid", "geteuid32",
         "getgid", "getgid32", "getgroups", "getgroups32", "getitimer", "getpeername", "getpgid", "getpgrp", "getpid",
@@ -151,13 +209,13 @@ export const SECCOMP_PROFILE: SeccompProfile = deepFreeze<SeccompProfile>({
         "landlock_add_rule", "landlock_create_ruleset", "landlock_restrict_self", "lchown", "lchown32", "lgetxattr",
         "link", "linkat", "listen", "listxattr", "llistxattr", "lremovexattr", "lseek", "lsetxattr", "lstat", "lstat64",
         "madvise", "mbind", "membarrier", "memfd_create", "memfd_secret", "mincore", "mkdir", "mkdirat", "mknod",
-        "mknodat", "mlock", "mlock2", "mlockall", "mmap", "mmap2", "mount", "mount_setattr", "move_mount", "mprotect",
+        "mknodat", "mlock", "mlock2", "mlockall", "mmap", "mmap2", "mprotect",
         "mq_getsetattr", "mq_notify", "mq_open", "mq_timedreceive", "mq_timedreceive_time64", "mq_timedsend",
         "mq_timedsend_time64", "mq_unlink", "mremap", "msgctl", "msgget", "msgrcv", "msgsnd", "msync", "munlock",
-        "munlockall", "munmap", "name_to_handle_at", "nanosleep", "newfstatat", "open", "open_tree", "openat", "openat2",
-        "pause", "pidfd_getfd", "pidfd_open", "pidfd_send_signal", "pipe", "pipe2", "pivot_root", "pkey_alloc",
+        "munlockall", "munmap", "name_to_handle_at", "nanosleep", "newfstatat", "open", "openat", "openat2",
+        "pause", "pidfd_open", "pidfd_send_signal", "pipe", "pipe2", "pkey_alloc",
         "pkey_free", "pkey_mprotect", "poll", "ppoll", "ppoll_time64", "prctl", "pread64", "preadv", "preadv2",
-        "prlimit64", "process_mrelease", "process_vm_readv", "process_vm_writev", "pselect6", "pselect6_time64", "ptrace",
+        "prlimit64", "process_mrelease", "process_vm_readv", "pselect6", "pselect6_time64",
         "pwrite64", "pwritev", "pwritev2", "read", "readahead", "readlink", "readlinkat", "readv", "reboot", "recv",
         "recvfrom", "recvmmsg", "recvmmsg_time64", "recvmsg", "remap_file_pages", "removexattr", "rename", "renameat",
         "renameat2", "restart_syscall", "rmdir", "rseq", "rt_sigaction", "rt_sigpending", "rt_sigprocmask",
@@ -167,7 +225,7 @@ export const SECCOMP_PROFILE: SeccompProfile = deepFreeze<SeccompProfile>({
         "sched_setaffinity", "sched_setattr", "sched_setparam", "sched_setscheduler", "sched_yield", "seccomp", "select",
         "semctl", "semget", "semop", "semtimedop", "semtimedop_time64", "send", "sendfile", "sendfile64", "sendmmsg",
         "sendmsg", "sendto", "set_mempolicy", "set_robust_list", "set_thread_area", "set_tid_address", "setfsgid",
-        "setfsgid32", "setfsuid", "setfsuid32", "setgid", "setgid32", "setgroups", "setgroups32", "setitimer", "setns",
+        "setfsgid32", "setfsuid", "setfsuid32", "setgid", "setgid32", "setgroups", "setgroups32", "setitimer",
         "setpgid", "setpriority", "setregid", "setregid32", "setresgid", "setresgid32", "setresuid", "setresuid32",
         "setreuid", "setreuid32", "setrlimit", "setsid", "setsockopt", "setuid", "setuid32", "setxattr", "shmat", "shmctl",
         "shmdt", "shmget", "shutdown", "sigaltstack", "signal", "signalfd", "signalfd4", "sigprocmask", "sigreturn",
@@ -175,11 +233,23 @@ export const SECCOMP_PROFILE: SeccompProfile = deepFreeze<SeccompProfile>({
         "sync", "sync_file_range", "syncfs", "sysinfo", "syslog", "tee", "tgkill", "time", "timer_create", "timer_delete",
         "timer_getoverrun", "timer_gettime", "timer_gettime64", "timer_settime", "timer_settime64", "timerfd_create",
         "timerfd_gettime", "timerfd_gettime64", "timerfd_settime", "timerfd_settime64", "times", "tkill", "truncate",
-        "truncate64", "ugetrlimit", "umask", "umount", "umount2", "uname", "unlink", "unlinkat", "unshare", "utime",
+        "truncate64", "ugetrlimit", "umask", "uname", "unlink", "unlinkat", "utime",
         "utimensat", "utimensat_time64", "utimes", "vfork", "wait4", "waitid", "waitpid", "write", "writev",
       ],
       action: "SCMP_ACT_ALLOW",
       args: [],
+      comment: "",
+      includes: {},
+      excludes: {},
+    },
+    // Upstream Docker and Podman's clone rule: clone is allowed only when none of the namespace flags (CLONE_NEWNS, NEWCGROUP,
+    // NEWUTS, NEWIPC, NEWUSER, NEWPID, NEWNET; mask 2114060288) is set in the flags argument. A clone that asks for a new namespace
+    // matches no rule and gets the default action (errno 38, ENOSYS). The argument index is the x86-64 and arm64 one: the flags are
+    // argument 0 there and argument 1 on s390 and s390x, so this profile supports x86-64 and arm64 only.
+    {
+      names: ["clone"],
+      action: "SCMP_ACT_ALLOW",
+      args: [{ index: 0, value: 2114060288, valueTwo: 0, op: "SCMP_CMP_MASKED_EQ" }],
       comment: "",
       includes: {},
       excludes: {},
@@ -291,7 +361,7 @@ export const SECCOMP_PROFILE: SeccompProfile = deepFreeze<SeccompProfile>({
       errno: "EPERM",
     },
     {
-      names: ["bpf", "lookup_dcookie", "quotactl", "quotactl_fd", "setdomainname", "sethostname", "setns"],
+      names: ["bpf", "lookup_dcookie", "quotactl", "quotactl_fd", "setdomainname", "sethostname"],
       action: "SCMP_ACT_ALLOW",
       args: [],
       comment: "",
@@ -299,7 +369,7 @@ export const SECCOMP_PROFILE: SeccompProfile = deepFreeze<SeccompProfile>({
       excludes: {},
     },
     {
-      names: ["lookup_dcookie", "perf_event_open", "quotactl", "quotactl_fd", "setdomainname", "sethostname", "setns"],
+      names: ["lookup_dcookie", "perf_event_open", "quotactl", "quotactl_fd", "setdomainname", "sethostname"],
       action: "SCMP_ACT_ERRNO",
       args: [],
       comment: "",

@@ -7,6 +7,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { RealmError, type ErrorCode } from "../../src/core/errors.js";
 import {
   DEFAULT_INFO_TIMEOUT_MS,
+  DEFAULT_INFO_TTL_MS,
   DEFAULT_REQUEST_TIMEOUT_MS,
   FORCE_REMOVE_STOP_GRACE_SECONDS,
   LibpodClient,
@@ -70,8 +71,8 @@ void test("RT-03: the client exposes exactly the seven D-54 methods, and no othe
   const client = new LibpodClient("/run/user/1000/podman/podman.sock");
   assert.deepEqual(
     Object.getOwnPropertyNames(client),
-    ["transport", "seccompProfilePath"],
-    "the instance holds only its transport and its seccomp profile path (data fields, no function members)",
+    ["transport", "seccompProfilePath", "infoTtlMs", "infoCache"],
+    "the instance holds only its transport, its seccomp profile path and its info cache (data fields, no function members)",
   );
   for (const name of Object.getOwnPropertyNames(client)) {
     assert.notEqual(typeof Reflect.get(client, name), "function", `instance member ${name} must not be a function`);
@@ -250,6 +251,70 @@ void test("RT-09: an invalid infoTimeoutMs is refused with SCHEMA_INVALID", () =
   }
 });
 
+function infoRequests(fake: FakeLibpod): number {
+  return fake.requests().filter((request) => request.route === "info").length;
+}
+
+void test("info cache: the default TTL is 60000 ms, and an invalid infoTtlMs is refused with SCHEMA_INVALID", () => {
+  assert.equal(DEFAULT_INFO_TTL_MS, 60000);
+  for (const bad of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+    assert.throws(
+      () => new LibpodClient("/run/user/1000/podman/podman.sock", { infoTtlMs: bad }),
+      (error: unknown) => error instanceof RealmError && error.code === "SCHEMA_INVALID",
+    );
+  }
+});
+
+void test("info cache: two sequential calls make one request and return the same value", async (t) => {
+  const { fake, socketPath } = await startFake(t);
+  const client = new LibpodClient(socketPath);
+  const first = await client.info();
+  const second = await client.info();
+  assert.deepEqual(second, first);
+  assert.equal(first.rootless, true);
+  assert.equal(infoRequests(fake), 1, "the second call is served from the cache");
+});
+
+void test("info cache: concurrent calls share one in-flight request", async (t) => {
+  const { fake, socketPath } = await startFake(t);
+  const client = new LibpodClient(socketPath);
+  fake.setDelay("info", 300);
+  const calls = [client.info(), client.info(), client.info()];
+  const replies = await Promise.all(calls);
+  assert.equal(infoRequests(fake), 1, "three callers, one request");
+  assert.deepEqual(replies[1], replies[0]);
+  assert.deepEqual(replies[2], replies[0]);
+});
+
+void test("info cache: a failure is not cached, and concurrent callers share the failure and then the next call asks again", async (t) => {
+  const { fake, socketPath } = await startFake(t);
+  const client = new LibpodClient(socketPath);
+  fake.respondNext("info", { status: 500 });
+  fake.setDelay("info", 200);
+  const outcomes = await Promise.allSettled([client.info(), client.info()]);
+  for (const outcome of outcomes) {
+    const reason: unknown = outcome.status === "rejected" ? outcome.reason : undefined;
+    assert.ok(reason instanceof RealmError && reason.code === "SCHEMA_INVALID", `a caller settled as ${outcome.status}`);
+  }
+  assert.equal(infoRequests(fake), 1, "both callers saw the one failed request");
+  const recovered = await client.info();
+  assert.equal(recovered.rootless, true);
+  assert.equal(infoRequests(fake), 2, "the failure was not kept, so the next call made a new request");
+  await client.info();
+  assert.equal(infoRequests(fake), 2, "the success is kept");
+});
+
+void test("info cache: after the TTL a new request is made", async (t) => {
+  const { fake, socketPath } = await startFake(t);
+  const client = new LibpodClient(socketPath, { infoTtlMs: 400 });
+  await client.info();
+  await client.info();
+  assert.equal(infoRequests(fake), 1, "a call inside the TTL is served from the cache");
+  await sleep(700);
+  await client.info();
+  assert.equal(infoRequests(fake), 2, "a call after the TTL asks again");
+});
+
 void test("RT-09: a socket that does not exist gives PODMAN_MACHINE_DOWN, not a raw transport error", async (t) => {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "realm-libpod-absent-")));
   t.after(() => {
@@ -279,8 +344,9 @@ void test("RT-03: info fails closed when the rootless field is missing", async (
   const info = await client.info();
   assert.deepEqual(info, { rootless: true, version: "5.2.0" });
 
+  // A second client has no cached reply, so it asks the engine again and sees the malformed one.
   fake.respondNext("info", { status: 200, body: '{"version":{"Version":"5.2.0"}}' });
-  await assertCode(client.info(), "SCHEMA_INVALID");
+  await assertCode(new LibpodClient(socketPath).info(), "SCHEMA_INVALID");
 });
 
 void test("RT-03: stopContainer accepts only the documented success statuses and rejects anything else", async (t) => {

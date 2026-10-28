@@ -12,18 +12,13 @@ import {
   type SeccompRule,
 } from "../../../src/runtime/driver/seccomp-profile.js";
 
-// The SHA-256 of the profile text this repository vendors. A change to the profile changes this value, so the change is a
-// deliberate edit of this line and of the documented digest, never an accident.
-const PINNED_PROFILE_SHA256 = "123be34e33655dc4a32d108b05529f1b3562a109be95ba12ea95727d69aed759";
-
-// The syscalls the in-container runtime needs: its Landlock filesystem rules, its own seccomp filter, thread and process creation,
-// and the file, descriptor and memory calls its dependencies make.
+// The syscalls the in-container runtime needs: its Landlock filesystem rules, its own seccomp filter, thread creation through clone
+// (clone3 answers ENOSYS and glibc falls back to clone), and the file, descriptor and memory calls its dependencies make.
 const REQUIRED_SYSCALLS: readonly string[] = [
   "landlock_create_ruleset",
   "landlock_add_rule",
   "landlock_restrict_self",
   "seccomp",
-  "clone3",
   "rseq",
   "faccessat2",
   "openat2",
@@ -34,6 +29,25 @@ const REQUIRED_SYSCALLS: readonly string[] = [
 ];
 
 const KEYRING_SYSCALLS: readonly string[] = ["add_key", "keyctl", "request_key"];
+const NAMESPACE_SYSCALLS: readonly string[] = ["unshare", "setns"];
+const MOUNT_SYSCALLS: readonly string[] = [
+  "mount",
+  "umount",
+  "umount2",
+  "mount_setattr",
+  "move_mount",
+  "open_tree",
+  "pivot_root",
+  "fsconfig",
+  "fsmount",
+  "fsopen",
+  "fspick",
+];
+const CROSS_PROCESS_DENIED: readonly string[] = ["ptrace", "process_vm_writev", "pidfd_getfd"];
+
+// CLONE_NEWNS, CLONE_NEWCGROUP, CLONE_NEWUTS, CLONE_NEWIPC, CLONE_NEWUSER, CLONE_NEWPID and CLONE_NEWNET.
+const CLONE_NAMESPACE_FLAGS: readonly number[] = [0x00020000, 0x02000000, 0x04000000, 0x08000000, 0x10000000, 0x20000000, 0x40000000];
+const CLONE_NAMESPACE_MASK = 2114060288;
 
 // What a sandbox container holds: a sandbox runs with every capability dropped and none added, on the host's x86-64 kernel.
 const SANDBOX_CONTEXT = { arch: "amd64", capabilities: new Set<string>() };
@@ -151,7 +165,8 @@ void test("phase 9.6: every syscall the sandbox runtime needs decides ALLOW, thr
 });
 
 void test("phase 9.6: rules other than the keyring one keep upstream's decisions for a sandbox without capabilities", () => {
-  const allowed = ["read", "write", "execve", "openat", "mmap", "futex", "ptrace", "unshare", "socket", "arch_prctl"];
+  // process_vm_readv and pidfd_open stay allowed: the in-container runtime may need them (REQUIRED_SYSCALLS).
+  const allowed = ["read", "write", "execve", "openat", "mmap", "futex", "socket", "arch_prctl", "process_vm_readv", "pidfd_open"];
   for (const syscall of allowed) {
     const decision = decide(SECCOMP_PROFILE, syscall, SANDBOX_CONTEXT);
     // socket carries argument rules for AF_NETLINK audit sockets, and its capability-free rules are argument-conditioned.
@@ -193,7 +208,6 @@ void test("phase 9.6: the text is the profile in upstream's formatting, and pars
   assert.equal(SECCOMP_PROFILE_TEXT, JSON.stringify(SECCOMP_PROFILE, null, "\t"));
   assert.ok(SECCOMP_PROFILE_TEXT.startsWith('{\n\t"defaultAction": "SCMP_ACT_ERRNO",\n'));
   assert.ok(SECCOMP_PROFILE_TEXT.endsWith("\t]\n}"), "no trailing newline, as upstream");
-  assert.equal(Buffer.byteLength(SECCOMP_PROFILE_TEXT, "utf8"), 17727);
 });
 
 void test("phase 9.6: the digest is the SHA-256 of the exact text, the prefix is its first 16 hex digits, and the file name carries it", () => {
@@ -204,8 +218,140 @@ void test("phase 9.6: the digest is the SHA-256 of the exact text, the prefix is
   assert.match(SECCOMP_PROFILE_FILE_NAME, /^realm-seccomp-[0-9a-f]{16}\.json$/);
 });
 
-void test("phase 9.6: the vendored text is the audited one (pinned digest), and differs from the upstream file it was made from", () => {
+// The vendored profile is a security control: a change to its content moves this digest and byte length, so it is a reviewed edit
+// of both values together with the docs/integration/openshell.md transformation text, never an incidental one (phase 9.7, A10 F4).
+const PINNED_PROFILE_SHA256 = "ed2525c01cd7377938a6027c64dda140c281a64b6937aaceac07fbb17b4885fa";
+const PINNED_PROFILE_BYTES = 18615;
+
+void test("phase 9.7: the vendored profile's content is pinned by digest and byte length", () => {
   assert.equal(SECCOMP_PROFILE_SHA256, PINNED_PROFILE_SHA256);
-  assert.match(SECCOMP_UPSTREAM_SHA256, /^[0-9a-f]{64}$/);
+  assert.equal(Buffer.byteLength(SECCOMP_PROFILE_TEXT, "utf8"), PINNED_PROFILE_BYTES);
+});
+
+void test("phase 9.6: the profile is not the upstream file it was made from", () => {
   assert.notEqual(SECCOMP_UPSTREAM_SHA256, SECCOMP_PROFILE_SHA256);
+  assert.match(SECCOMP_UPSTREAM_SHA256, /^[0-9a-f]{64}$/);
+});
+
+void test("phase 9.7: unshare and setns each decide ERRNO with errno 1 (EPERM) through one unconditional rule", () => {
+  for (const syscall of NAMESPACE_SYSCALLS) {
+    const decision = decide(SECCOMP_PROFILE, syscall, SANDBOX_CONTEXT);
+    assert.equal(decision.action, "SCMP_ACT_ERRNO", syscall);
+    assert.equal(decision.errnoRet, 1, syscall);
+    assert.notEqual(decision.ruleIndex, null, `${syscall} is decided by an explicit rule, not by the default action`);
+    assert.deepEqual(decision.argumentRules, [], syscall);
+    const rules = rulesNaming(syscall);
+    assert.equal(rules.length, 1, `${syscall} is named by exactly one rule`);
+    assert.ok(rules.every(isUnconditional), `${syscall} has no condition that could switch the denial off`);
+    assert.equal(SECCOMP_PROFILE.syscalls[decision.ruleIndex ?? -1]?.errno, "EPERM", syscall);
+  }
+  assert.deepEqual(rulesNaming("unshare")[0]?.names, ["setns", "unshare"]);
+});
+
+void test("phase 9.7: the mount family decides ERRNO with errno 1 (EPERM) through one unconditional rule", () => {
+  for (const syscall of MOUNT_SYSCALLS) {
+    const decision = decide(SECCOMP_PROFILE, syscall, SANDBOX_CONTEXT);
+    assert.equal(decision.action, "SCMP_ACT_ERRNO", syscall);
+    assert.equal(decision.errnoRet, 1, syscall);
+    assert.notEqual(decision.ruleIndex, null, `${syscall} is decided by an explicit rule, not by the default action`);
+    assert.deepEqual(decision.argumentRules, [], syscall);
+    const rules = rulesNaming(syscall);
+    assert.equal(rules.length, 1, `${syscall} is named by exactly one rule`);
+    assert.ok(rules.every(isUnconditional), `${syscall} has no condition that could switch the denial off`);
+    assert.equal(SECCOMP_PROFILE.syscalls[decision.ruleIndex ?? -1]?.errno, "EPERM", syscall);
+  }
+  assert.deepEqual([...(rulesNaming("mount")[0]?.names ?? [])].sort(), [...MOUNT_SYSCALLS].sort());
+});
+
+void test("phase 9.7: clone3 decides ERRNO with errno 38 (ENOSYS) through one explicit rule, so glibc falls back to clone", () => {
+  const decision = decide(SECCOMP_PROFILE, "clone3", SANDBOX_CONTEXT);
+  assert.equal(decision.action, "SCMP_ACT_ERRNO");
+  assert.equal(decision.errnoRet, 38);
+  assert.notEqual(decision.ruleIndex, null, "clone3 is decided by an explicit rule, not only by the default action");
+  assert.deepEqual(decision.argumentRules, []);
+  const rules = rulesNaming("clone3");
+  assert.equal(rules.length, 1);
+  assert.ok(rules.every(isUnconditional));
+  assert.equal(rules[0]?.errno, "ENOSYS");
+  assert.deepEqual(rules[0].names, ["clone3"]);
+});
+
+void test("phase 9.7: clone is allowed only through the masked-equality rule, so a clone with any namespace flag is refused", () => {
+  const rules = rulesNaming("clone");
+  assert.equal(rules.length, 1, "clone is named by exactly one rule");
+  const rule = rules[0];
+  assert.ok(rule !== undefined);
+  assert.equal(rule.action, "SCMP_ACT_ALLOW");
+  assert.ok(Object.keys(rule.includes).length === 0 && Object.keys(rule.excludes).length === 0);
+  assert.deepEqual(rule.args, [{ index: 0, value: CLONE_NAMESPACE_MASK, valueTwo: 0, op: "SCMP_CMP_MASKED_EQ" }]);
+  // The mask is exactly the seven namespace flags.
+  assert.equal(
+    CLONE_NAMESPACE_FLAGS.reduce((mask, flag) => mask | flag, 0),
+    CLONE_NAMESPACE_MASK,
+  );
+  // The model cannot evaluate arguments, so it reports the clone rule as argument-conditioned and falls to the default action.
+  const decision = decide(SECCOMP_PROFILE, "clone", SANDBOX_CONTEXT);
+  assert.deepEqual(decision.argumentRules, [SECCOMP_PROFILE.syscalls.indexOf(rule)]);
+  assert.equal(decision.action, SECCOMP_PROFILE.defaultAction);
+  assert.equal(decision.errnoRet, 38, "a clone that matches no rule answers ENOSYS");
+  // SCMP_CMP_MASKED_EQ allows the call when (argument & value) equals valueTwo.
+  const argument = rule.args[0];
+  assert.ok(argument !== undefined);
+  const allowedByRule = (flags: number): boolean => (flags & argument.value) === argument.valueTwo;
+  const SIGCHLD = 17;
+  const CLONE_VM = 0x100;
+  const CLONE_FS = 0x200;
+  const CLONE_FILES = 0x400;
+  const CLONE_SIGHAND = 0x800;
+  const CLONE_THREAD = 0x10000;
+  for (const flags of [0, SIGCHLD, CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND | CLONE_THREAD]) {
+    assert.equal(allowedByRule(flags), true, `clone flags ${String(flags)} stay allowed`);
+  }
+  for (const flag of CLONE_NAMESPACE_FLAGS) {
+    assert.equal(allowedByRule(SIGCHLD | flag), false, `clone flags with ${String(flag)} are refused`);
+    assert.equal(allowedByRule(flag), false, `clone flag ${String(flag)} alone is refused`);
+  }
+});
+
+void test("phase 9.7: ptrace, process_vm_writev and pidfd_getfd are denied with EPERM by a rule of their own; process_vm_readv and pidfd_open stay allowed", () => {
+  for (const syscall of CROSS_PROCESS_DENIED) {
+    const decision = decide(SECCOMP_PROFILE, syscall, SANDBOX_CONTEXT);
+    assert.equal(decision.action, "SCMP_ACT_ERRNO", syscall);
+    assert.equal(decision.errnoRet, 1, syscall);
+    assert.notEqual(decision.ruleIndex, null, syscall);
+    assert.deepEqual(decision.argumentRules, [], syscall);
+    const rules = rulesNaming(syscall);
+    assert.equal(rules.length, 1, `${syscall} is named by exactly one rule`);
+    assert.ok(rules.every(isUnconditional), syscall);
+    assert.equal(rules[0]?.errno, "EPERM", syscall);
+  }
+  // Group 2 is its own rule, so it can be dropped alone: it names nothing from the namespace, mount, keyring or clone rules.
+  const group = rulesNaming("ptrace")[0];
+  assert.ok(group !== undefined);
+  assert.deepEqual([...group.names].sort(), [...CROSS_PROCESS_DENIED].sort());
+  for (const syscall of ["process_vm_readv", "pidfd_open", "clone"]) {
+    assert.ok(!group.names.includes(syscall), syscall);
+  }
+  for (const syscall of ["process_vm_readv", "pidfd_open"]) {
+    const decision = decide(SECCOMP_PROFILE, syscall, SANDBOX_CONTEXT);
+    assert.equal(decision.action, "SCMP_ACT_ALLOW", syscall);
+    assert.equal(rulesNaming(syscall).length, 1, syscall);
+  }
+});
+
+void test("phase 9.7: every deny rule added for namespaces, mounts, clone3 and cross-process access precedes the first allow rule, and no syscall is named twice", () => {
+  const rules = SECCOMP_PROFILE.syscalls;
+  const firstAllow = rules.findIndex((rule) => rule.action === "SCMP_ACT_ALLOW");
+  const added = [...NAMESPACE_SYSCALLS, ...MOUNT_SYSCALLS, "clone3", ...CROSS_PROCESS_DENIED];
+  for (const syscall of added) {
+    const rule = rulesNaming(syscall)[0];
+    assert.ok(rule !== undefined, syscall);
+    assert.ok(rules.indexOf(rule) < firstAllow, `${syscall} is denied before any allow rule`);
+  }
+  // Whatever the context, no syscall appears in two rules that the added rules name, so the order the engine reads them in is moot.
+  for (const syscall of [...added, ...KEYRING_SYSCALLS]) {
+    assert.equal(rulesNaming(syscall).length, 1, syscall);
+  }
+  const clone = rulesNaming("clone")[0];
+  assert.ok(clone !== undefined && rules.indexOf(clone) > firstAllow);
 });

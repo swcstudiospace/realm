@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { attachKernelCaps, liveCapabilityFailures } from "../../src/runtime/kernel-caps.js";
+import { attachKernelCaps, KERNEL_STATUS_FIELD, kernelStatusOf, liveCapabilityFailures } from "../../src/runtime/kernel-caps.js";
 import type { LibpodInspect } from "../../src/runtime/libpod-client.js";
 
 const FULL_STATUS = [
@@ -101,6 +101,38 @@ void test("a missing or invalid pid never reads /proc and refuses with cap-drop 
   };
   for (const inspect of [{}, { State: {} }, { State: { Pid: 0 } }, { State: { Pid: "4321" } }] as LibpodInspect[]) {
     assert.deepEqual(liveCapabilityFailures(attachKernelCaps(inspect, reader)), ["cap-drop"]);
+  }
+  assert.equal(reads, 0);
+});
+
+void test("the seccomp mode and the no_new_privs flag are parsed from the status, and the filter count line is not the mode (F5)", () => {
+  const status = ["Name:\tinit", "NoNewPrivs:\t1", "Seccomp:\t2", "Seccomp_filters:\t3", "Speculation_Store_Bypass:\tthread force mitigated"].join("\n");
+  assert.deepEqual(kernelStatusOf(status), { NoNewPrivs: "1", Seccomp: "2" });
+  assert.deepEqual(kernelStatusOf("Seccomp_filters:\t3\nSeccomp:\tx\nNoNewPrivs:"), {});
+  const attached = attachKernelCaps({ State: { Pid: 4321 } }, () => status);
+  assert.deepEqual(attached[KERNEL_STATUS_FIELD], { NoNewPrivs: "1", Seccomp: "2" });
+});
+
+void test("an inbound KernelStatus from the engine is dropped, and a status that cannot be read attaches none (F5)", () => {
+  const inspect: LibpodInspect = { State: { Pid: 4321 }, [KERNEL_STATUS_FIELD]: { Seccomp: "2", NoNewPrivs: "1" } };
+  const attached = attachKernelCaps(inspect, () => {
+    throw new Error("EACCES");
+  });
+  assert.equal(Object.hasOwn(attached, KERNEL_STATUS_FIELD), false);
+  assert.deepEqual(attachKernelCaps(inspect, () => "Seccomp:\t0")[KERNEL_STATUS_FIELD], { Seccomp: "0" });
+});
+
+void test("a State that is not a plain object never supplies a pid, even when it carries a Pid property (F5)", () => {
+  let reads = 0;
+  const reader = (): string => {
+    reads += 1;
+    return ZERO_STATUS;
+  };
+  const states: readonly unknown[] = [Object.assign([], { Pid: 4321 }), "Pid", 4321, null, undefined, true];
+  for (const state of states) {
+    const attached = attachKernelCaps({ State: state }, reader);
+    assert.equal(Object.hasOwn(attached, "KernelCaps"), false);
+    assert.deepEqual(liveCapabilityFailures(attached), ["cap-drop"]);
   }
   assert.equal(reads, 0);
 });

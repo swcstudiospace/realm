@@ -16,8 +16,9 @@
 
 import { request as httpRequest } from "node:http";
 import { basename, isAbsolute } from "node:path";
+import { performance } from "node:perf_hooks";
 import { makeRealmError } from "../core/errors.js";
-import { CHANNEL_MOUNT_OPTIONS, HARDENING_PROFILE, RUNTIME_ARGV, SUPERVISOR_CA_TMPFS_OPTIONS } from "./hardening.js";
+import { CHANNEL_MOUNT_OPTIONS, HARDENING_PROFILE, RUNTIME_ARGV, tmpfsOptionsOf } from "./hardening.js";
 import { SECCOMP_PROFILE_FILE_NAME } from "./driver/seccomp-profile.js";
 import {
   isRealmSandboxName,
@@ -46,6 +47,9 @@ import {
 // A 5 s bound therefore cut info off about half the time, so info has its own, longer bound.
 export const DEFAULT_REQUEST_TIMEOUT_MS = 5000;
 export const DEFAULT_INFO_TIMEOUT_MS = 30000;
+// How long a successful info reply is reused. Every create asks for it, and on the target host it takes 4 to 6 s, so a burst of
+// creates shares one request. The value is the engine's rootless flag and version, which change only when Podman is reinstalled.
+export const DEFAULT_INFO_TTL_MS = 60000;
 // Seconds a force removal waits for a running container to exit before Podman kills it (the `timeout` query of the
 // remove route). Realm containers are disposable sandboxes, so a force removal does not wait for a graceful exit. Podman's
 // default is 10 s, which is longer than the request bound (crash recovery, RT-08).
@@ -53,18 +57,7 @@ export const FORCE_REMOVE_STOP_GRACE_SECONDS = 2;
 const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 const LABEL_KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
 // The user-namespace mapping of every sandbox: the realm account is mapped to the workload uid and gid (keep-id).
-const WORKLOAD_USER = `${String(HARDENING_PROFILE.workloadUid)}:${String(HARDENING_PROFILE.workloadGid)}`;
 const WORKLOAD_USERNS = `uid=${String(HARDENING_PROFILE.workloadUid)},gid=${String(HARDENING_PROFILE.workloadGid)}`;
-// The sandbox runtime binds loopback ports below 1024 as the workload uid, so the network namespace must lower the
-// unprivileged port start to 0. IPv6 is disabled in the same namespace (RT-05), so the sandbox has IPv4 loopback only.
-// The sysctls are per network namespace, and the sandbox has no network beyond loopback.
-// The sandbox runtime itself checks the low-port value at startup and refuses to run otherwise. That check lives in the
-// runtime, outside this repository; this client does not verify it.
-const RUNTIME_SYSCTLS: Readonly<Record<string, string>> = Object.freeze({
-  "net.ipv4.ip_unprivileged_port_start": "0",
-  "net.ipv6.conf.all.disable_ipv6": "1",
-  "net.ipv6.conf.default.disable_ipv6": "1",
-});
 
 export interface LibpodClientOptions {
   // Absolute path of the seccomp profile file the driver wrote. Its name must be SECCOMP_PROFILE_FILE_NAME. A create names it
@@ -74,6 +67,8 @@ export interface LibpodClientOptions {
   readonly requestTimeoutMs?: number;
   // Bound for the info request alone. Every other route keeps requestTimeoutMs.
   readonly infoTimeoutMs?: number;
+  // How long a successful info reply is reused, in milliseconds. A failure is never reused, and concurrent calls share one request.
+  readonly infoTtlMs?: number;
 }
 
 export interface LibpodInfo {
@@ -128,9 +123,18 @@ interface RouteCall {
   readonly body?: string;
 }
 
+// The info reply this client holds. The value is fresh until expiresAt; a pending request is shared by concurrent callers.
+interface InfoCache {
+  value: LibpodInfo | undefined;
+  expiresAt: number;
+  pending: Promise<LibpodInfo> | undefined;
+}
+
 export class LibpodClient {
   private readonly transport: Transport;
   private readonly seccompProfilePath: string | undefined;
+  private readonly infoTtlMs: number;
+  private readonly infoCache: InfoCache = { value: undefined, expiresAt: 0, pending: undefined };
 
   constructor(socketPath: string, options: LibpodClientOptions = {}) {
     if (!isAbsolute(socketPath)) {
@@ -144,6 +148,10 @@ export class LibpodClient {
     if (!Number.isInteger(infoTimeoutMs) || infoTimeoutMs <= 0) {
       throw makeRealmError("SCHEMA_INVALID");
     }
+    const infoTtlMs = options.infoTtlMs ?? DEFAULT_INFO_TTL_MS;
+    if (!Number.isInteger(infoTtlMs) || infoTtlMs <= 0) {
+      throw makeRealmError("SCHEMA_INVALID");
+    }
     const seccompProfilePath = options.seccompProfilePath;
     if (
       seccompProfilePath !== undefined &&
@@ -154,19 +162,14 @@ export class LibpodClient {
       throw makeRealmError("SCHEMA_INVALID");
     }
     this.seccompProfilePath = seccompProfilePath;
+    this.infoTtlMs = infoTtlMs;
     this.transport = Object.freeze({ socketPath, timeoutMs, infoTimeoutMs });
   }
 
+  // The engine's rootless flag and version. A fresh reply is reused for the info TTL, and concurrent calls share one request. A
+  // failed request is never kept, so the next call asks again.
   async info(): Promise<LibpodInfo> {
-    const reply = await exchangeRoute(this.transport, LIBPOD_ROUTES.info, { timeoutMs: this.transport.infoTimeoutMs });
-    expectStatus(reply, [200]);
-    const body = parseJson(reply.text);
-    const rootless = readPath(body, LIBPOD_INFO_ROOTLESS_PATH);
-    const version = readPath(body, LIBPOD_INFO_VERSION_PATH);
-    if (typeof rootless !== "boolean" || typeof version !== "string") {
-      throw makeRealmError("SCHEMA_INVALID");
-    }
-    return { rootless, version };
+    return readCachedInfo(this.infoCache, this.infoTtlMs, () => readInfo(this.transport));
   }
 
   // Containers, stopped ones included, whose label key has exactly the given value.
@@ -276,6 +279,39 @@ export class LibpodClient {
   async startContainer(id: string): Promise<void> {
     const reply = await exchangeRoute(this.transport, LIBPOD_ROUTES.startContainer, { containerId: id });
     expectStatus(reply, [204, 304]);
+  }
+}
+
+async function readInfo(transport: Transport): Promise<LibpodInfo> {
+  const reply = await exchangeRoute(transport, LIBPOD_ROUTES.info, { timeoutMs: transport.infoTimeoutMs });
+  expectStatus(reply, [200]);
+  const body = parseJson(reply.text);
+  const rootless = readPath(body, LIBPOD_INFO_ROOTLESS_PATH);
+  const version = readPath(body, LIBPOD_INFO_VERSION_PATH);
+  if (typeof rootless !== "boolean" || typeof version !== "string") {
+    throw makeRealmError("SCHEMA_INVALID");
+  }
+  return { rootless, version };
+}
+
+async function readCachedInfo(cache: InfoCache, ttlMs: number, load: () => Promise<LibpodInfo>): Promise<LibpodInfo> {
+  if (cache.value !== undefined && performance.now() < cache.expiresAt) {
+    return cache.value;
+  }
+  cache.pending ??= settleInfo(cache, ttlMs, load);
+  return cache.pending;
+}
+
+// Runs the one shared request. A reply is kept for ttlMs, counted from the moment it arrived. A failure keeps nothing, and the
+// pending marker is cleared either way, so the next call after it makes a new request.
+async function settleInfo(cache: InfoCache, ttlMs: number, load: () => Promise<LibpodInfo>): Promise<LibpodInfo> {
+  try {
+    const info = await load();
+    cache.value = info;
+    cache.expiresAt = performance.now() + ttlMs;
+    return info;
+  } finally {
+    cache.pending = undefined;
   }
 }
 
@@ -411,8 +447,6 @@ function readPath(value: unknown, path: readonly string[]): unknown {
 
 // The digest-pinned image reference the create body accepts: name, optional tag, then @sha256:<64 hex>.
 const DIGEST_PINNED_IMAGE = /^[a-z0-9]+(?:[._/-][a-z0-9]+)*(?::[A-Za-z0-9_.-]+)?@sha256:[a-f0-9]{64}$/;
-// The options of every tmpfs scratch mount, from the hardening profile's tmpfs paths.
-const TMPFS_OPTIONS: readonly string[] = Object.freeze(["nosuid", "nodev"]);
 // The CFS period in microseconds. NanoCpus is quota / period, so quota = nanoCpus * period / 1e9.
 const CPU_PERIOD_MICROS = 100000;
 const WORKSPACE_OPTIONS: readonly string[] = Object.freeze(["rw", "noexec", "nosuid", "nodev"]);
@@ -448,7 +482,7 @@ function containerCreateBody(spec: ContainerSpec, seccompProfilePath: string): R
     name: spec.sandboxName,
     image: spec.image,
     entrypoint: [...RUNTIME_ARGV],
-    user: WORKLOAD_USER,
+    user: profile.workloadUser,
     userns: { nsmode: "keep-id", value: WORKLOAD_USERNS },
     labels: {
       [OPENSHELL_MANAGED_LABEL_KEY]: OPENSHELL_MANAGED_LABEL_VALUE,
@@ -463,19 +497,16 @@ function containerCreateBody(spec: ContainerSpec, seccompProfilePath: string): R
     read_only_filesystem: profile.readonlyRootfs,
     resource_limits: {
       pids: { limit: profile.pidsLimit },
-      memory: { limit: profile.memoryBytes },
+      memory: { limit: profile.memoryBytes, swap: profile.memoryBytes },
       cpu: { quota: (profile.nanoCpus * CPU_PERIOD_MICROS) / 1_000_000_000, period: CPU_PERIOD_MICROS },
     },
+    r_limits: profile.rlimits.map(({ type, limit }) => ({ type, hard: limit, soft: limit })),
     netns: { nsmode: profile.networkMode },
-    sysctl: { ...RUNTIME_SYSCTLS },
+    sysctl: { ...profile.sysctls },
     use_image_resolve_conf: true,
     tty: false,
     mounts: [
-      ...scratch.map((destination) => ({
-        type: "tmpfs",
-        destination,
-        options: [...(destination === profile.supervisorCaDestination ? SUPERVISOR_CA_TMPFS_OPTIONS : TMPFS_OPTIONS)],
-      })),
+      ...scratch.map((destination) => ({ type: "tmpfs", destination, options: [...tmpfsOptionsOf(destination)] })),
       { type: "bind", source: spec.workspaceDir, destination: profile.workspaceDestination, options: WORKSPACE_OPTIONS },
       { type: "bind", source: spec.stateDir, destination: profile.stateDestination, options: STATE_OPTIONS },
       { type: "bind", source: spec.channelDir, destination: profile.channelDestination, options: ["rw", ...CHANNEL_MOUNT_OPTIONS] },

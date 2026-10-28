@@ -5,6 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   attachSeccompEvidence,
+  cloneRuleConfined,
+  defaultErrnoIsEnosys,
+  isolationSyscallsDenied,
   keyringSyscallsDenied,
   MAX_OCI_CONFIG_BYTES,
   readHostOciConfig,
@@ -13,11 +16,18 @@ import {
 import {
   ALLOW_RULE,
   CONFORMING_OCI_CONFIG_TEXT,
+  ISOLATION_DENY_RULES,
   KEYRING_DENY_RULE,
+  MOUNT_DENY_RULE,
+  NAMESPACE_DENY_RULE,
+  CLONE3_DENY_RULE,
+  CLONE_MASKED_RULE,
+  conformingOciSpec,
   OCI_CONFIG_PATH,
   ociReaderOf,
   ociSpec,
   STATIC_DIR,
+  UNSHARE_ALLOWED_OCI_CONFIG_TEXT,
 } from "./seccomp-fixtures.js";
 
 const deny = (names: readonly unknown[], errnoRet?: number): Record<string, unknown> =>
@@ -189,4 +199,147 @@ void test("phase 9.6: the host reader returns a file within the bound and throws
   writeFileSync(large, "x".repeat(MAX_OCI_CONFIG_BYTES + 1));
   assert.throws(() => readHostOciConfig(large));
   assert.throws(() => readHostOciConfig(join(dir, "missing.json")));
+});
+
+const MOUNT_FAMILY = ["mount", "umount", "umount2", "mount_setattr", "move_mount", "open_tree", "pivot_root", "fsconfig", "fsmount", "fsopen", "fspick"];
+
+void test("phase 9.7: the isolation decision accepts unshare, setns and the mount family denied with EPERM and clone3 denied with ENOSYS", () => {
+  assert.equal(isolationSyscallsDenied(ociSpec([ALLOW_RULE, KEYRING_DENY_RULE, ...ISOLATION_DENY_RULES])), true);
+  assert.deepEqual([...MOUNT_DENY_RULE.names].sort(), [...MOUNT_FAMILY].sort());
+  // Each syscall may be denied by a rule of its own.
+  const single = [...MOUNT_FAMILY, "unshare", "setns"].map((name) => deny([name], 1));
+  assert.equal(isolationSyscallsDenied(ociSpec([...single, deny(["clone3"], 38)])), true);
+});
+
+void test("phase 9.7: the isolation decision refuses a profile that leaves out unshare and setns, the mount family, or clone3", () => {
+  assert.equal(isolationSyscallsDenied(ociSpec([MOUNT_DENY_RULE, CLONE3_DENY_RULE])), false);
+  assert.equal(isolationSyscallsDenied(ociSpec([NAMESPACE_DENY_RULE, CLONE3_DENY_RULE])), false);
+  assert.equal(isolationSyscallsDenied(ociSpec([NAMESPACE_DENY_RULE, MOUNT_DENY_RULE])), false);
+  assert.equal(isolationSyscallsDenied(ociSpec([])), false);
+  for (const missing of MOUNT_FAMILY) {
+    const partial = { ...MOUNT_DENY_RULE, names: MOUNT_DENY_RULE.names.filter((name) => name !== missing) };
+    assert.equal(isolationSyscallsDenied(ociSpec([NAMESPACE_DENY_RULE, partial, CLONE3_DENY_RULE])), false, missing);
+  }
+});
+
+void test("phase 9.7: the isolation decision refuses an allow, a wrong errno, a missing errno, and a conflicting pair", () => {
+  const base = [NAMESPACE_DENY_RULE, MOUNT_DENY_RULE, CLONE3_DENY_RULE];
+  for (const syscall of ["unshare", "setns", "mount", "pivot_root", "clone3"]) {
+    const allow = { names: [syscall], action: "SCMP_ACT_ALLOW" };
+    assert.equal(isolationSyscallsDenied(ociSpec([...base, allow])), false, `${syscall} allowed after the deny`);
+    assert.equal(isolationSyscallsDenied(ociSpec([allow, ...base])), false, `${syscall} allowed before the deny`);
+  }
+  // clone3 must answer ENOSYS: EPERM or no errno is refused, and ENOSYS is the only accepted value.
+  assert.equal(isolationSyscallsDenied(ociSpec([NAMESPACE_DENY_RULE, MOUNT_DENY_RULE, deny(["clone3"], 1)])), false);
+  assert.equal(isolationSyscallsDenied(ociSpec([NAMESPACE_DENY_RULE, MOUNT_DENY_RULE, deny(["clone3"])])), false);
+  // unshare, setns and the mount family must answer EPERM: ENOSYS or no errno is refused.
+  assert.equal(isolationSyscallsDenied(ociSpec([deny(["setns", "unshare"], 38), MOUNT_DENY_RULE, CLONE3_DENY_RULE])), false);
+  assert.equal(isolationSyscallsDenied(ociSpec([deny(["setns", "unshare"]), MOUNT_DENY_RULE, CLONE3_DENY_RULE])), false);
+  assert.equal(isolationSyscallsDenied(ociSpec([NAMESPACE_DENY_RULE, deny(MOUNT_FAMILY, 38), CLONE3_DENY_RULE])), false);
+});
+
+void test("phase 9.7: the isolation decision refuses a default action other than ERRNO, a missing seccomp section, and junk", () => {
+  const allowByDefault = ociSpec([NAMESPACE_DENY_RULE, MOUNT_DENY_RULE, CLONE3_DENY_RULE]);
+  ((allowByDefault.linux as Record<string, unknown>).seccomp as Record<string, unknown>).defaultAction = "SCMP_ACT_ALLOW";
+  assert.equal(isolationSyscallsDenied(allowByDefault), false);
+  for (const junk of [null, undefined, 42, "text", [], { linux: null }, { linux: {} }, { linux: { seccomp: [] } }]) {
+    assert.equal(isolationSyscallsDenied(junk), false, JSON.stringify(junk));
+  }
+  const noList = ociSpec([]);
+  ((noList.linux as Record<string, unknown>).seccomp as Record<string, unknown>).syscalls = { names: ["unshare"] };
+  assert.equal(isolationSyscallsDenied(noList), false);
+});
+
+void test("phase 9.7: attachSeccompEvidence attaches true only when the keyring and the isolation denials both hold", () => {
+  const inspect = { StaticDir: STATIC_DIR, OCIConfigPath: OCI_CONFIG_PATH };
+  const verdictOf = (spec: Record<string, unknown>): unknown => attachSeccompEvidence(inspect, ociReaderOf(JSON.stringify(spec)))[SECCOMP_EVIDENCE_FIELD];
+  assert.equal(verdictOf(ociSpec([ALLOW_RULE, KEYRING_DENY_RULE, ...ISOLATION_DENY_RULES])), true);
+  // The keyring denial alone is no longer enough.
+  assert.equal(verdictOf(ociSpec([ALLOW_RULE, KEYRING_DENY_RULE])), false);
+  // The isolation denials alone are not enough either.
+  assert.equal(verdictOf(ociSpec([ALLOW_RULE, ...ISOLATION_DENY_RULES])), false);
+  assert.equal(attachSeccompEvidence(inspect, ociReaderOf(UNSHARE_ALLOWED_OCI_CONFIG_TEXT))[SECCOMP_EVIDENCE_FIELD], false);
+  assert.equal(attachSeccompEvidence(inspect, ociReaderOf(CONFORMING_OCI_CONFIG_TEXT))[SECCOMP_EVIDENCE_FIELD], true);
+});
+
+const INSPECT = { StaticDir: STATIC_DIR, OCIConfigPath: OCI_CONFIG_PATH };
+const verdictOfSpec = (spec: Record<string, unknown>): unknown => attachSeccompEvidence(INSPECT, ociReaderOf(JSON.stringify(spec)))[SECCOMP_EVIDENCE_FIELD];
+const withoutClone = [ALLOW_RULE, KEYRING_DENY_RULE, NAMESPACE_DENY_RULE, MOUNT_DENY_RULE, CLONE3_DENY_RULE];
+const maskedWith = (change: Record<string, unknown>): Record<string, unknown> => ({
+  ...CLONE_MASKED_RULE,
+  args: [{ ...CLONE_MASKED_RULE.args[0], ...change }],
+});
+
+void test("phase 9.7 correction: a deny rule gated by an argument condition is not a denial", () => {
+  const gate = [{ index: 0, value: 1, valueTwo: 0, op: "SCMP_CMP_EQ" }];
+  assert.equal(keyringSyscallsDenied(ociSpec([{ ...KEYRING_DENY_RULE, args: gate }])), false);
+  assert.equal(isolationSyscallsDenied(ociSpec([{ ...NAMESPACE_DENY_RULE, args: gate }, MOUNT_DENY_RULE, CLONE3_DENY_RULE])), false);
+  assert.equal(isolationSyscallsDenied(ociSpec([NAMESPACE_DENY_RULE, MOUNT_DENY_RULE, { ...CLONE3_DENY_RULE, args: gate }])), false);
+  // A gated rule beside an unconditional one still conflicts, and an empty args list is no condition.
+  assert.equal(keyringSyscallsDenied(ociSpec([KEYRING_DENY_RULE, { ...KEYRING_DENY_RULE, args: gate }])), false);
+  assert.equal(keyringSyscallsDenied(ociSpec([{ ...KEYRING_DENY_RULE, args: [] }])), true);
+  assert.equal(verdictOfSpec(ociSpec([ALLOW_RULE, { ...KEYRING_DENY_RULE, args: gate }, ...ISOLATION_DENY_RULES])), false);
+});
+
+void test("phase 9.7 correction: the clone rule must be the masked equality on argument 0 and nothing else", () => {
+  assert.equal(cloneRuleConfined(ociSpec([CLONE_MASKED_RULE])), true);
+  assert.equal(verdictOfSpec(ociSpec([...withoutClone, CLONE_MASKED_RULE])), true);
+  // The OCI runtime spec omits a zero valueTwo from its JSON: an absent valueTwo is the same condition.
+  const flagsArg = CLONE_MASKED_RULE.args[0];
+  assert.notEqual(flagsArg, undefined);
+  const noValueTwo = { index: flagsArg?.index, value: flagsArg?.value, op: flagsArg?.op };
+  assert.equal(verdictOfSpec(ociSpec([...withoutClone, { ...CLONE_MASKED_RULE, args: [noValueTwo] }])), true);
+  const refused: readonly (readonly [string, unknown])[] = [
+    ["unconditional allow", { names: ["clone"], action: "SCMP_ACT_ALLOW" }],
+    ["unconditional allow with empty args", { names: ["clone"], action: "SCMP_ACT_ALLOW", args: [] }],
+    ["wrong mask", maskedWith({ value: 2114060288 - 0x10000000 })],
+    ["wrong index", maskedWith({ index: 1 })],
+    ["wrong valueTwo", maskedWith({ valueTwo: 1 })],
+    ["wrong op", maskedWith({ op: "SCMP_CMP_EQ" })],
+    ["two arguments", { ...CLONE_MASKED_RULE, args: [...CLONE_MASKED_RULE.args, ...CLONE_MASKED_RULE.args] }],
+    ["denied clone", { names: ["clone"], action: "SCMP_ACT_ERRNO", errnoRet: 38 }],
+  ];
+  for (const [label, rule] of refused) {
+    assert.equal(cloneRuleConfined(ociSpec([rule])), false, label);
+    assert.equal(verdictOfSpec(ociSpec([...withoutClone, rule])), false, label);
+  }
+});
+
+void test("phase 9.7 correction: a missing clone rule, or an unconditional allow beside the masked one, fails the verdict", () => {
+  assert.equal(cloneRuleConfined(ociSpec([])), false);
+  assert.equal(verdictOfSpec(ociSpec(withoutClone)), false);
+  const open = { names: ["clone", "read"], action: "SCMP_ACT_ALLOW" };
+  assert.equal(verdictOfSpec(ociSpec([...withoutClone, CLONE_MASKED_RULE, open])), false);
+  assert.equal(verdictOfSpec(ociSpec([...withoutClone, open, CLONE_MASKED_RULE])), false);
+  const allowByDefault = ociSpec([CLONE_MASKED_RULE]);
+  ((allowByDefault.linux as Record<string, unknown>).seccomp as Record<string, unknown>).defaultAction = "SCMP_ACT_ALLOW";
+  assert.equal(cloneRuleConfined(allowByDefault), false);
+  for (const junk of [null, undefined, 42, "text", [], { linux: null }, { linux: {} }]) {
+    assert.equal(cloneRuleConfined(junk), false, JSON.stringify(junk));
+  }
+});
+
+void test("phase 9.7 correction: the applied defaultErrnoRet must be 38", () => {
+  const specWith = (change: (seccomp: Record<string, unknown>) => void): Record<string, unknown> => {
+    const spec = conformingOciSpec();
+    change((spec.linux as Record<string, unknown>).seccomp as Record<string, unknown>);
+    return spec;
+  };
+  assert.equal(defaultErrnoIsEnosys(conformingOciSpec()), true);
+  assert.equal(verdictOfSpec(conformingOciSpec()), true);
+  const absent = specWith((seccomp) => {
+    delete seccomp.defaultErrnoRet;
+  });
+  assert.equal(defaultErrnoIsEnosys(absent), false);
+  assert.equal(verdictOfSpec(absent), false);
+  for (const other of [1, 0, 95, "38"]) {
+    const spec = specWith((seccomp) => {
+      seccomp.defaultErrnoRet = other;
+    });
+    assert.equal(defaultErrnoIsEnosys(spec), false, String(other));
+    assert.equal(verdictOfSpec(spec), false, String(other));
+  }
+  for (const junk of [null, undefined, 42, { linux: {} }]) {
+    assert.equal(defaultErrnoIsEnosys(junk), false, JSON.stringify(junk));
+  }
 });
