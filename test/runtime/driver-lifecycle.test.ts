@@ -794,7 +794,8 @@ void test("PRD-CTR-01: a failed cleanup after a hardening refusal still names th
 });
 
 void test("PRD-CTR-01: a create whose reply never arrives removes its own container by name, so a retry does not meet the name", async (t) => {
-  const h = await harness(t, { hangCreate: true, requestTimeoutMs: 100 });
+  // 1000 ms keeps the forced removal clear of scheduling stalls; only the create is hung.
+  const h = await harness(t, { hangCreate: true, requestTimeoutMs: 1000 });
   await assert.rejects(h.lifecycle.create(h.spec), hasCode("PODMAN_MACHINE_DOWN"));
   assert.equal(forcedRemoval(h.fake.seen, SANDBOX), true);
   assert.equal(h.fake.store.size, 0);

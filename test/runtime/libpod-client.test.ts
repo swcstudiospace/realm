@@ -151,9 +151,11 @@ void test("RT-09: a timed-out request rejects with PODMAN_MACHINE_DOWN and destr
 
 void test("RT-09: info has its own bound; every other route keeps the request bound", async (t) => {
   const { fake, socketPath } = await startFake(t);
-  const client = new LibpodClient(socketPath, { requestTimeoutMs: 50, infoTimeoutMs: 1000 });
-  fake.setDelay("info", 300);
-  fake.setDelay("listContainers", 300);
+  // The request bound (1000 ms) is far above any loopback ping, so the API-version ping never trips it on a loaded host.
+  // The fake delay (3000 ms) exceeds the request bound and stays below the info bound (8000 ms).
+  const client = new LibpodClient(socketPath, { requestTimeoutMs: 1000, infoTimeoutMs: 8000 });
+  fake.setDelay("info", 3000);
+  fake.setDelay("listContainers", 3000);
   const info = await client.info();
   assert.equal(info.rootless, true);
   await assertCode(client.listContainersByLabel(LABEL_KEY, "true"), "PODMAN_MACHINE_DOWN");
@@ -162,11 +164,13 @@ void test("RT-09: info has its own bound; every other route keeps the request bo
 void test("RT-09: an info reply that never comes fails with PODMAN_MACHINE_DOWN only after the info bound", async (t) => {
   const { fake, socketPath } = await startFake(t);
   fake.hangNext("info");
-  const client = new LibpodClient(socketPath, { requestTimeoutMs: 50, infoTimeoutMs: 600 });
+  // The ping runs under the request bound (1000 ms) and succeeds. A client that ignored the info bound would fail near
+  // 1000 ms, so the floor sits at 1500 ms, well below the 3000 ms info bound.
+  const client = new LibpodClient(socketPath, { requestTimeoutMs: 1000, infoTimeoutMs: 3000 });
   const started = Date.now();
   await assertCode(client.info(), "PODMAN_MACHINE_DOWN");
   const elapsed = Date.now() - started;
-  assert.ok(elapsed >= 500, `info failed after ${String(elapsed)} ms, before its 600 ms bound`);
+  assert.ok(elapsed >= 1500, `info failed after ${String(elapsed)} ms, not clearly past the 1000 ms request bound`);
   const hung = await waitForRecorded(fake, "info", 5000);
   await fake.waitForSocketClose(hung.seq, 2000);
 });

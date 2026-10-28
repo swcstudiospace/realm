@@ -174,7 +174,8 @@ void test("RT-08: a hung container list on the real libpod client ends with PODM
   await libpod.start(socketPath);
   t.after(() => libpod.stop());
   libpod.hangNext("listContainers");
-  const client = new LibpodClient(socketPath, { requestTimeoutMs: 50 });
+  // 1000 ms keeps the version ping clear of scheduling stalls; the hung listing then times out at the request bound.
+  const client = new LibpodClient(socketPath, { requestTimeoutMs: 1000 });
   const records = recordStore(["session-a"]);
 
   const started = Date.now();
