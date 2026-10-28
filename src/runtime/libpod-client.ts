@@ -443,6 +443,7 @@ function containerCreateBody(spec: ContainerSpec, seccompProfilePath: string): R
     },
     netns: { nsmode: profile.networkMode },
     sysctl: { ...RUNTIME_SYSCTLS },
+    use_image_resolve_conf: true,
     tty: false,
     mounts: [
       ...scratch.map((destination) => ({

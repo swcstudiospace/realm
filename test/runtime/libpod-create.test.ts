@@ -182,6 +182,7 @@ const EXPECTED_BODY = {
     "net.ipv6.conf.all.disable_ipv6": "1",
     "net.ipv6.conf.default.disable_ipv6": "1",
   },
+  use_image_resolve_conf: true,
   tty: false,
   mounts: [
     { type: "tmpfs", destination: "/tmp", options: ["nosuid", "nodev"] },
@@ -227,6 +228,17 @@ void test("phase 9.6: the create body adds seccomp_profile_path and changes no o
   delete before.seccomp_profile_path;
   delete posted.seccomp_profile_path;
   assert.deepEqual(posted, before, "every other field is the body the create sent before the profile existed");
+});
+
+void test("sandbox resolver: the create body uses the image's resolv.conf and sets no dns_server", async (t) => {
+  const { socketPath, seen } = await startFake(t);
+  await clientOn(socketPath).createContainer(SPEC);
+  const [create] = callsOf(seen);
+  assert.ok(create !== undefined);
+  const posted = JSON.parse(create.body) as Record<string, unknown>;
+  assert.equal(posted.use_image_resolve_conf, true);
+  // Podman refuses dns_server with network none, so the body must never carry it.
+  assert.equal("dns_server" in posted, false);
 });
 
 void test("phase 9.6: a client built without a profile path refuses every create, with no request", async (t) => {

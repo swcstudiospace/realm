@@ -6,8 +6,8 @@
 # is built from the upstream OpenShell source at the commit named by OPENSHELL_REVISION.
 # The runtime image carries only glibc, Node, the helper, the runtime binary, and the
 # AgentOS runner and probe, and it has no network at run time. The runner and probe are
-# copied from dist/src/runtime/, so run `npm run build` at the repository root before the
-# image build.
+# copied from dist/src/runtime/, and the resolver file from sandbox/resolv.conf, so run
+# `npm run build` at the repository root before the image build.
 #
 # Build-time network use: the runtime-builder stage installs git and cmake from the
 # Debian bookworm archive with apt, fetches the OpenShell source from
@@ -222,12 +222,19 @@ RUN set -eu; \
 # file's own directory. The base is glibc: the library's sidecar ships only glibc
 # builds, so an Alpine (musl) base cannot load it. The library tree is installed from
 # the repository-root package.json and package-lock.json with npm ci, so the build
-# context must be the repository root and must contain both manifests, plus
-# dist/src/runtime/agentos-runner.js and dist/src/runtime/agentos-probe.js (compiled output).
+# context must be the repository root and must contain both manifests, sandbox/resolv.conf,
+# plus dist/src/runtime/agentos-runner.js and dist/src/runtime/agentos-probe.js (compiled output).
 WORKDIR /usr/local/lib/realm
 COPY package.json package-lock.json /usr/local/lib/realm/
 RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund \
  && npm cache clean --force
 COPY dist/src/runtime/agentos-runner.js dist/src/runtime/agentos-probe.js /usr/local/lib/realm/
+# Sandbox resolver. The workload has no network, and the runtime's DNS relay at
+# 127.0.0.53:53 mediates every name lookup, so the resolver file names only that relay.
+# The image's own file named public resolvers, which names never resolved through. The
+# file is copied after the last RUN because a build RUN step has its own resolv.conf,
+# and it is root-owned and read-only, so the image digest covers it. The libpod create
+# request sets use_image_resolve_conf so the container uses this file in every network mode.
+COPY --chown=0:0 --chmod=0444 sandbox/resolv.conf /etc/resolv.conf
 USER sandbox
 WORKDIR /workspace

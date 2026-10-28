@@ -271,6 +271,17 @@ To build the image, first build `--target runtime-builder` to read the sha256 th
 - IPv6 is disabled in the sandbox network namespace: `net.ipv6.conf.all.disable_ipv6` and `net.ipv6.conf.default.disable_ipv6` are both `1`. The sandbox has IPv4 loopback only, and `::1` is not configured on `lo`. RT-05 requires IPv6 off in the sandbox. Before this change the live sandbox had IPv6 on: `/proc/sys/net/ipv6/conf/all/disable_ipv6` read `0`, and `::1` was on `lo`.
 - The driver does not verify the IPv6 keys at inspect either, for the same reason as the low-port sysctl above.
 
+## Sandbox resolver
+
+- The runtime image bakes `sandbox/resolv.conf` at `/etc/resolv.conf`. It holds one line, `nameserver 127.0.0.53`. The Dockerfile copies it root-owned and mode 0444 after the last `RUN` of the runtime stage.
+- Why: the image's previous file named public resolvers (`1.1.1.1`, `1.0.0.1`), so no hostname ever resolved. Node connects to an allowlisted hostname failed with `EAI_AGAIN`, and so did connects to a non-allowlisted one.
+- The create body sets `use_image_resolve_conf: true`, which makes the container use the image's file in every network mode. It sets no `dns_server`, because Podman refuses `dns_server` with network none.
+- Podman generates no `resolv.conf` for network mode none: inspect reports an empty `ResolvConfPath`, and mountinfo shows no mount at `/etc/resolv.conf`. The image's file is therefore the only one the container sees.
+- The runtime's DNS relay listens at `127.0.0.53:53`. It binds a port below 1024 in the sandbox namespace, so it needs the `net.ipv4.ip_unprivileged_port_start` sysctl described above.
+- Live evidence (2026-10-28, production stack, Podman 5.7.1, OpenShell 0.1.5): an image with this file, run under the production flags (network none, read-only) behind the realm gateway, with the realm-rendered policy allowing `1.1.1.1:443` and `example.com:443`. The allowed IP connected. A non-allowlisted IP failed with `EACCES`. The allowlisted hostname connected, with DNS going through the relay. A non-allowlisted hostname failed with `EACCES`. An IPv6 literal failed with `EACCES`. An AAAA lookup returned `ENODATA`.
+- The upstream Podman driver mounts a resolver file with the same content and sets `use_image_resolve_conf`. The upstream Docker driver sets `Dns` to `127.0.0.53`.
+- The resolver file is part of the image, so the image-digest property covers it: a different resolver file is a different image digest.
+
 ## Sandbox create hardening: seccomp profile (phase 9.6)
 
 Every sandbox container runs under Podman's default seccomp profile with the three keyring syscalls denied with `EPERM`. The profile is vendored in `src/runtime/driver/seccomp-profile.ts`, written to a file by the driver, and named in the create request.
