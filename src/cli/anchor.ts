@@ -71,14 +71,14 @@ export function parseAnchorArgs(args: readonly string[]): AnchorArgs | undefined
 function recordOfAuditLog(sessionId: string, stateDir: string, now: Date): { record: AnchorRecord; memo: string } {
   const file = join(stateDir, "audit", `${sessionId}.jsonl`);
   if (!existsSync(file)) {
-    throw new AnchorError(`no audit log exists for session ${sessionId}`);
+    throw new AnchorError(`no audit log exists for session ${sessionId}`, "SCHEMA_INVALID");
   }
   if (!lstatSync(file).isFile()) {
-    throw new AnchorError(`audit log for session ${sessionId} is not a regular file`);
+    throw new AnchorError(`audit log for session ${sessionId} is not a regular file`, "PATH_ESCAPE");
   }
   const lines = splitAuditLines(readFileSync(file));
   if (lines.length === 0) {
-    throw new AnchorError(`audit log for session ${sessionId} has no lines`);
+    throw new AnchorError(`audit log for session ${sessionId} has no lines`, "SCHEMA_INVALID");
   }
   const record = buildAnchorRecord({ sessionId, lines, createdAt: now });
   return { record, memo: encodeMemo(record) };
@@ -92,7 +92,7 @@ export async function runAnchor(args: AnchorArgs, deps: AnchorRunDeps): Promise<
       return { exitCode: 0, stdout: `${JSON.stringify(out)}\n`, stderr: "" };
     }
     if (deps.keyFile === undefined) {
-      throw new AnchorError("REALM_ANCHOR_KEY_FILE is not set; --publish needs the anchor key file");
+      throw new AnchorError("REALM_ANCHOR_KEY_FILE is not set; --publish needs the anchor key file", "POLICY_DENIED");
     }
     const signer = loadAnchorKey({ keyFile: deps.keyFile, stateDir: deps.stateDir });
     const rpc = deps.createRpc(args.rpcUrl ?? DEFAULT_ANCHOR_RPC_URL);

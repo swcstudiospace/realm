@@ -28,6 +28,7 @@ import {
   type AnchorRpc,
   type Ed25519Signer,
 } from "../../src/audit/anchor.js";
+import { ERROR_CODES, type ErrorCode } from "../../src/core/errors.js";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -541,4 +542,190 @@ void test("the module pins the H1 constants: record version, memo limit, memo pr
   assert.equal(MEMO_MAX_BYTES, 566);
   assert.equal(MEMO_PROGRAM_ID, "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr");
   assert.equal(DEVNET_GENESIS_HASH, "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG");
+});
+
+// AnchorError carries a code from the frozen catalogue --------------------------------------------
+
+function thrownAnchorError(run: () => unknown): AnchorError {
+  try {
+    run();
+  } catch (error) {
+    assert.ok(error instanceof AnchorError, "expected an AnchorError");
+    return error;
+  }
+  return assert.fail("expected the call to throw");
+}
+
+async function rejectedAnchorError(run: () => Promise<unknown>): Promise<AnchorError> {
+  try {
+    await run();
+  } catch (error) {
+    assert.ok(error instanceof AnchorError, "expected an AnchorError");
+    return error;
+  }
+  return assert.fail("expected the call to reject");
+}
+
+void test("AnchorError carries the catalogue code of each failure class and every code is in ERROR_CODES (H1 errors)", async () => {
+  const observed = new Map<string, ErrorCode>();
+  const expectCode = (label: string, error: AnchorError, code: ErrorCode): void => {
+    assert.equal(error.name, "AnchorError", label);
+    assert.equal(error.code, code, label);
+    observed.set(label, error.code);
+  };
+  const key = newTestKey();
+  const signer = testSigner(key);
+
+  // Malformed input, record, memo, key or reply: SCHEMA_INVALID.
+  expectCode("base58 character", thrownAnchorError(() => base58Decode("2O2")), "SCHEMA_INVALID");
+  expectCode("compact-u16 range", thrownAnchorError(() => encodeCompactU16(65536)), "SCHEMA_INVALID");
+  expectCode("empty merkle input", thrownAnchorError(() => merkleRoot([])), "SCHEMA_INVALID");
+  expectCode(
+    "invalid anchor time",
+    thrownAnchorError(() => buildAnchorRecord({ sessionId: SESSION, lines: [A], createdAt: new Date(Number.NaN) })),
+    "SCHEMA_INVALID",
+  );
+  expectCode(
+    "memo too long",
+    thrownAnchorError(() => encodeMemo({ ...SAMPLE_RECORD, sessionId: "a".repeat(600) })),
+    "SCHEMA_INVALID",
+  );
+  expectCode(
+    "payer length",
+    thrownAnchorError(() =>
+      buildMemoTransaction({ payer: new Uint8Array(31), recentBlockhash: BLOCKHASH_BYTES, memo: SAMPLE_MEMO, signer }),
+    ),
+    "SCHEMA_INVALID",
+  );
+  expectCode(
+    "payer is not the signer",
+    thrownAnchorError(() =>
+      buildMemoTransaction({ payer: newTestKey().publicKey, recentBlockhash: BLOCKHASH_BYTES, memo: SAMPLE_MEMO, signer }),
+    ),
+    "SCHEMA_INVALID",
+  );
+  expectCode(
+    "blockhash length",
+    thrownAnchorError(() =>
+      buildMemoTransaction({ payer: key.publicKey, recentBlockhash: new Uint8Array(31), memo: SAMPLE_MEMO, signer }),
+    ),
+    "SCHEMA_INVALID",
+  );
+  const dirs = keyDirs();
+  expectCode(
+    "relative key path",
+    thrownAnchorError(() => loadAnchorKey({ keyFile: "relative.json", stateDir: dirs.stateDir })),
+    "SCHEMA_INVALID",
+  );
+  expectCode(
+    "missing key file",
+    thrownAnchorError(() => loadAnchorKey({ keyFile: join(dirs.keyDir, "absent.json"), stateDir: dirs.stateDir })),
+    "SCHEMA_INVALID",
+  );
+  const mismatched = writeKeyFile(dirs.keyDir, key, 0o600, newTestKey().publicKey);
+  expectCode(
+    "key public half mismatch",
+    thrownAnchorError(() => loadAnchorKey({ keyFile: mismatched, stateDir: dirs.stateDir })),
+    "SCHEMA_INVALID",
+  );
+  const notJson = join(dirs.keyDir, "not-json.json");
+  writeFileSync(notJson, "not json", { mode: 0o600 });
+  expectCode(
+    "key file is not JSON",
+    thrownAnchorError(() => loadAnchorKey({ keyFile: notJson, stateDir: dirs.stateDir })),
+    "SCHEMA_INVALID",
+  );
+  const shortKey = join(dirs.keyDir, "short.json");
+  writeFileSync(shortKey, JSON.stringify([1, 2, 3]), { mode: 0o600 });
+  expectCode(
+    "key file wrong length",
+    thrownAnchorError(() => loadAnchorKey({ keyFile: shortKey, stateDir: dirs.stateDir })),
+    "SCHEMA_INVALID",
+  );
+  expectCode(
+    "signature is not a string",
+    await rejectedAnchorError(() =>
+      publishAnchor({
+        rpc: scriptedRpc(DEVNET_GENESIS_HASH, 42).rpc,
+        signer,
+        record: SAMPLE_RECORD,
+        expectedGenesisHash: DEVNET_GENESIS_HASH,
+      }),
+    ),
+    "SCHEMA_INVALID",
+  );
+
+  // RPC transport, HTTP and reply failures: SCHEMA_INVALID.
+  const rpcWith = (fetchImpl: typeof fetch): AnchorRpc => createJsonRpc({ url: "https://rpc.invalid", fetchImpl });
+  expectCode(
+    "rpc transport failure",
+    await rejectedAnchorError(() => rpcWith(() => Promise.reject(new TypeError("fetch failed"))).call("getGenesisHash", [])),
+    "SCHEMA_INVALID",
+  );
+  expectCode(
+    "rpc http failure",
+    await rejectedAnchorError(() => rpcWith(fetchReplying(() => new Response("busy", { status: 503 }))).call("getGenesisHash", [])),
+    "SCHEMA_INVALID",
+  );
+  expectCode(
+    "rpc body not json",
+    await rejectedAnchorError(() => rpcWith(fetchReplying(() => new Response("<html>", { status: 200 }))).call("getGenesisHash", [])),
+    "SCHEMA_INVALID",
+  );
+  expectCode(
+    "rpc non-object reply",
+    await rejectedAnchorError(() => rpcWith(fetchReplying(() => jsonReply([1]))).call("getGenesisHash", [])),
+    "SCHEMA_INVALID",
+  );
+  expectCode(
+    "rpc error object",
+    await rejectedAnchorError(() =>
+      rpcWith(fetchReplying(() => jsonReply({ jsonrpc: "2.0", id: 1, error: { code: -1, message: "boom" } }))).call("getGenesisHash", []),
+    ),
+    "SCHEMA_INVALID",
+  );
+  expectCode(
+    "rpc reply without result",
+    await rejectedAnchorError(() => rpcWith(fetchReplying(() => jsonReply({ jsonrpc: "2.0", id: 1 }))).call("getGenesisHash", [])),
+    "SCHEMA_INVALID",
+  );
+
+  // Key file mode, key inside the state directory, genesis mismatch: POLICY_DENIED.
+  const openKey = writeKeyFile(dirs.keyDir, key, 0o644);
+  expectCode(
+    "key file mode",
+    thrownAnchorError(() => loadAnchorKey({ keyFile: openKey, stateDir: dirs.stateDir })),
+    "POLICY_DENIED",
+  );
+  const insideState = writeKeyFile(dirs.stateDir, key, 0o600);
+  expectCode(
+    "key inside state dir",
+    thrownAnchorError(() => loadAnchorKey({ keyFile: insideState, stateDir: dirs.stateDir })),
+    "POLICY_DENIED",
+  );
+  expectCode(
+    "genesis mismatch",
+    await rejectedAnchorError(() =>
+      publishAnchor({
+        rpc: scriptedRpc(MAINNET_GENESIS, SIGNATURE).rpc,
+        signer,
+        record: SAMPLE_RECORD,
+        expectedGenesisHash: DEVNET_GENESIS_HASH,
+      }),
+    ),
+    "POLICY_DENIED",
+  );
+
+  // A key file that is not a regular file: PATH_ESCAPE.
+  const directory = join(dirs.keyDir, "a-directory");
+  mkdirSync(directory);
+  expectCode(
+    "key path is a directory",
+    thrownAnchorError(() => loadAnchorKey({ keyFile: directory, stateDir: dirs.stateDir })),
+    "PATH_ESCAPE",
+  );
+
+  for (const [label, code] of observed) {
+    assert.ok(ERROR_CODES.includes(code), `${label}: ${code} is not in ERROR_CODES`);
+  }
 });

@@ -7,11 +7,15 @@ import { Buffer } from "node:buffer";
 import { createHash, createPrivateKey, createPublicKey, sign as cryptoSign, timingSafeEqual } from "node:crypto";
 import { existsSync, lstatSync, readFileSync, realpathSync } from "node:fs";
 import { isAbsolute, resolve, sep } from "node:path";
+import type { ErrorCode } from "../core/errors.js";
 
 export class AnchorError extends Error {
-  constructor(message: string) {
+  readonly code: ErrorCode;
+
+  constructor(message: string, code: ErrorCode) {
     super(message);
     this.name = "AnchorError";
+    this.code = code;
   }
 }
 
@@ -90,7 +94,7 @@ function parentLevel(level: readonly Uint8Array[]): Uint8Array[] {
 // Leaf = SHA-256(0x00 || line); parent = SHA-256(0x01 || left || right). Empty input is an error.
 export function merkleRoot(lines: readonly Uint8Array[]): Uint8Array {
   if (lines.length === 0) {
-    throw new AnchorError("cannot anchor an empty audit log");
+    throw new AnchorError("cannot anchor an empty audit log", "SCHEMA_INVALID");
   }
   let level: Uint8Array[] = lines.map((line) => sha256(LEAF_PREFIX, line));
   while (level.length > 1) {
@@ -98,7 +102,7 @@ export function merkleRoot(lines: readonly Uint8Array[]): Uint8Array {
   }
   const root = level[0];
   if (root === undefined) {
-    throw new AnchorError("merkle root computation produced no node");
+    throw new AnchorError("merkle root computation produced no node", "SCHEMA_INVALID");
   }
   return root;
 }
@@ -109,7 +113,7 @@ export function buildAnchorRecord(input: {
   readonly createdAt: Date;
 }): AnchorRecord {
   if (Number.isNaN(input.createdAt.getTime())) {
-    throw new AnchorError("anchor time is not a valid date");
+    throw new AnchorError("anchor time is not a valid date", "SCHEMA_INVALID");
   }
   return {
     version: ANCHOR_RECORD_VERSION,
@@ -130,7 +134,7 @@ export function encodeMemo(record: AnchorRecord): string {
     createdAt: record.createdAt,
   });
   if (Buffer.byteLength(memo, "utf8") > MEMO_MAX_BYTES) {
-    throw new AnchorError(`anchor memo exceeds ${String(MEMO_MAX_BYTES)} bytes`);
+    throw new AnchorError(`anchor memo exceeds ${String(MEMO_MAX_BYTES)} bytes`, "SCHEMA_INVALID");
   }
   return memo;
 }
@@ -159,7 +163,7 @@ export function base58Decode(text: string): Uint8Array {
   for (const char of text) {
     const index = BASE58_ALPHABET.indexOf(char);
     if (index < 0) {
-      throw new AnchorError("base58 text contains an invalid character");
+      throw new AnchorError("base58 text contains an invalid character", "SCHEMA_INVALID");
     }
     value = value * BIG_BASE + BigInt(index);
   }
@@ -172,7 +176,7 @@ export function base58Decode(text: string): Uint8Array {
 
 export function encodeCompactU16(value: number): Uint8Array {
   if (!Number.isInteger(value) || value < 0 || value > 0xffff) {
-    throw new AnchorError("compact-u16 value is outside 0..65535");
+    throw new AnchorError("compact-u16 value is outside 0..65535", "SCHEMA_INVALID");
   }
   const out: number[] = [];
   let rest = value;
@@ -202,33 +206,33 @@ function canonicalPath(path: string): string {
 // half does not match the seed. Error messages never include key bytes.
 export function loadAnchorKey(input: { readonly keyFile: string; readonly stateDir: string }): Ed25519Signer {
   if (!isAbsolute(input.keyFile)) {
-    throw new AnchorError("anchor key file path must be absolute");
+    throw new AnchorError("anchor key file path must be absolute", "SCHEMA_INVALID");
   }
   if (!existsSync(input.keyFile)) {
-    throw new AnchorError("anchor key file does not exist");
+    throw new AnchorError("anchor key file does not exist", "SCHEMA_INVALID");
   }
   const stat = lstatSync(input.keyFile);
   if (!stat.isFile()) {
-    throw new AnchorError("anchor key file must be a regular file (not a link, directory or device)");
+    throw new AnchorError("anchor key file must be a regular file (not a link, directory or device)", "PATH_ESCAPE");
   }
   if ((stat.mode & 0o077) !== 0) {
-    throw new AnchorError("anchor key file must not be readable by group or others (use mode 0600)");
+    throw new AnchorError("anchor key file must not be readable by group or others (use mode 0600)", "POLICY_DENIED");
   }
   const realKey = realpathSync(input.keyFile);
   const stateRoot = canonicalPath(input.stateDir);
   const statePrefix = stateRoot.endsWith(sep) ? stateRoot : `${stateRoot}${sep}`;
   if (realKey === stateRoot || realKey.startsWith(statePrefix)) {
-    throw new AnchorError("anchor key file must not be inside the state directory");
+    throw new AnchorError("anchor key file must not be inside the state directory", "POLICY_DENIED");
   }
 
   let parsed: unknown;
   try {
     parsed = JSON.parse(readFileSync(realKey, "utf8"));
   } catch {
-    throw new AnchorError("anchor key file is not a valid keypair JSON document");
+    throw new AnchorError("anchor key file is not a valid keypair JSON document", "SCHEMA_INVALID");
   }
   if (!Array.isArray(parsed) || parsed.length !== 64 || !parsed.every(isByte)) {
-    throw new AnchorError("anchor key file must hold 64 byte values (seed then public key)");
+    throw new AnchorError("anchor key file must hold 64 byte values (seed then public key)", "SCHEMA_INVALID");
   }
   const bytes = Uint8Array.from(parsed);
   const seed = bytes.subarray(0, 32);
@@ -242,7 +246,7 @@ export function loadAnchorKey(input: { readonly keyFile: string; readonly stateD
   // The SPKI DER of an Ed25519 key ends with its 32-byte public key.
   const derivedPublic = Buffer.from(createPublicKey(privateKey).export({ format: "der", type: "spki" })).subarray(-32);
   if (!timingSafeEqual(derivedPublic, storedPublic)) {
-    throw new AnchorError("anchor key file public half does not match its seed");
+    throw new AnchorError("anchor key file public half does not match its seed", "SCHEMA_INVALID");
   }
   return {
     publicKey: derivedPublic,
@@ -259,17 +263,17 @@ export function buildMemoTransaction(input: {
   readonly signer: Ed25519Signer;
 }): Uint8Array {
   if (input.payer.length !== 32) {
-    throw new AnchorError("payer public key must be 32 bytes");
+    throw new AnchorError("payer public key must be 32 bytes", "SCHEMA_INVALID");
   }
   if (!Buffer.from(input.payer).equals(input.signer.publicKey)) {
-    throw new AnchorError("payer must be the signing key's public key");
+    throw new AnchorError("payer must be the signing key's public key", "SCHEMA_INVALID");
   }
   if (input.recentBlockhash.length !== 32) {
-    throw new AnchorError("recent blockhash must be 32 bytes");
+    throw new AnchorError("recent blockhash must be 32 bytes", "SCHEMA_INVALID");
   }
   const memoBytes = Buffer.from(input.memo, "utf8");
   if (memoBytes.length > MEMO_MAX_BYTES) {
-    throw new AnchorError(`memo exceeds ${String(MEMO_MAX_BYTES)} bytes`);
+    throw new AnchorError(`memo exceeds ${String(MEMO_MAX_BYTES)} bytes`, "SCHEMA_INVALID");
   }
   const memoProgram = base58Decode(MEMO_PROGRAM_ID);
   const message = Buffer.concat([
@@ -287,7 +291,7 @@ export function buildMemoTransaction(input: {
   ]);
   const signature = input.signer.sign(message);
   if (signature.length !== 64) {
-    throw new AnchorError("signer must return a 64-byte Ed25519 signature");
+    throw new AnchorError("signer must return a 64-byte Ed25519 signature", "SCHEMA_INVALID");
   }
   return Buffer.concat([encodeCompactU16(1), signature, message]);
 }
@@ -311,27 +315,27 @@ export function createJsonRpc(input: {
           signal: AbortSignal.timeout(timeoutMs),
         });
       } catch {
-        throw new AnchorError(`RPC ${method} request failed or timed out`);
+        throw new AnchorError(`RPC ${method} request failed or timed out`, "SCHEMA_INVALID");
       }
       if (!response.ok) {
-        throw new AnchorError(`RPC ${method} failed with HTTP ${String(response.status)}`);
+        throw new AnchorError(`RPC ${method} failed with HTTP ${String(response.status)}`, "SCHEMA_INVALID");
       }
       let body: unknown;
       try {
         body = await response.json();
       } catch {
-        throw new AnchorError(`RPC ${method} returned a body that is not JSON`);
+        throw new AnchorError(`RPC ${method} returned a body that is not JSON`, "SCHEMA_INVALID");
       }
       if (!isRecord(body)) {
-        throw new AnchorError(`RPC ${method} returned a non-object reply`);
+        throw new AnchorError(`RPC ${method} returned a non-object reply`, "SCHEMA_INVALID");
       }
       if (body["error"] !== undefined) {
         const error = body["error"];
         const message = isRecord(error) && typeof error["message"] === "string" ? error["message"] : "unknown error";
-        throw new AnchorError(`RPC ${method} error: ${message}`);
+        throw new AnchorError(`RPC ${method} error: ${message}`, "SCHEMA_INVALID");
       }
       if (!("result" in body)) {
-        throw new AnchorError(`RPC ${method} reply has no result`);
+        throw new AnchorError(`RPC ${method} reply has no result`, "SCHEMA_INVALID");
       }
       return body["result"];
     },
@@ -342,7 +346,7 @@ function blockhashOf(value: unknown): string {
   if (isRecord(value) && isRecord(value["value"]) && typeof value["value"]["blockhash"] === "string") {
     return value["value"]["blockhash"];
   }
-  throw new AnchorError("getLatestBlockhash reply carries no blockhash");
+  throw new AnchorError("getLatestBlockhash reply carries no blockhash", "SCHEMA_INVALID");
 }
 
 // Checks the cluster genesis hash before any send; a mismatch throws and sends nothing.
@@ -354,7 +358,7 @@ export async function publishAnchor(input: {
 }): Promise<{ signature: string; memo: string }> {
   const genesis = await input.rpc.call("getGenesisHash", []);
   if (genesis !== input.expectedGenesisHash) {
-    throw new AnchorError("refusing to publish: the endpoint's genesis hash is not the expected cluster; nothing was sent");
+    throw new AnchorError("refusing to publish: the endpoint's genesis hash is not the expected cluster; nothing was sent", "POLICY_DENIED");
   }
   const latest = await input.rpc.call("getLatestBlockhash", [{ commitment: "finalized" }]);
   const memo = encodeMemo(input.record);
@@ -369,7 +373,7 @@ export async function publishAnchor(input: {
     { encoding: "base64", preflightCommitment: "confirmed" },
   ]);
   if (typeof sent !== "string") {
-    throw new AnchorError("sendTransaction did not return a signature");
+    throw new AnchorError("sendTransaction did not return a signature", "SCHEMA_INVALID");
   }
   return { signature: sent, memo };
 }
