@@ -276,3 +276,5 @@ Decisions recorded with this evidence:
 - `active` needs no Anda bridge when no `andaUrl` is configured.
 - One live sandbox per pinned root.
 - The runtime's policy is the enforcement authority, and the retired realm helper is removed (recover it from git history if needed).
+
+Residual risks, accepted items and open review findings of the production sandbox: `docs/integration/openshell.md`, section "Residual risks of the production sandbox (reviewed 2026-10-28)".

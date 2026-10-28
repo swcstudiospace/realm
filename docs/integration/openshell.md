@@ -354,6 +354,67 @@ Decisions recorded with this evidence:
 - One live sandbox per pinned root.
 - The runtime's policy is the enforcement authority, and the retired realm helper is removed (recover it from git history if needed).
 
+## Residual risks of the production sandbox (reviewed 2026-10-28)
+
+Source: the final A10 boundary review of the production sandbox, plus live probes on this host (kernel 6.8, rootless Podman 5.x). The review read source and docs only and rated F1 and F2 as depending on host behaviour; the probes below settle them. Finding numbers F1 to F10 are the review's. Severities are the review's unless stated.
+
+### Accepted by the owner (2026-10-28)
+
+- A unix socket that a host process creates in the pinned workspace after the sandbox starts is reachable from the sandbox. Live: a host listener logged the connection. The host service sees the connection as the realm account. A workload that reaches a socket reaches whatever that host service grants the realm account. For the runtime's own control socket, the remaining exposure is pre-auth parser surface and connection-slot denial of service against the supervisor, not impersonation (A10 Q3, unprobed by the review; the live probe showed that a handshake without a client certificate is rejected).
+- Landlock gains its unix-socket connect scope only with kernel 6.12. This host runs 6.8, so there is no mediation here. This corresponds to A10 F2 (Med) and F7.
+- The create-time refusal of a workspace that already holds a socket stays. It is the only check; nothing stops a socket created later.
+- Operator rule: keep no sockets inside a pinned workspace root. That covers ssh ControlPath sockets, agent sockets, language-server sockets and other tool sockets.
+- Revisit on kernel 6.12 or newer.
+
+### Verified live and holding
+
+- The runtime process is non-dumpable. Its `/proc` files are root-owned.
+- A workload read of `/proc/1/environ`, `/proc/1/maps` and `/proc/1/mem` is denied.
+- `ptrace` attach, `process_vm_readv` and `pidfd_getfd` against the runtime return EPERM. `pidfd_open` returns ENOSYS.
+- The host Yama `ptrace_scope` is 1. The non-dumpable property protects the runtime independently of it.
+- A connection from the workload to the runtime's control socket is accepted. A TLS handshake without a client certificate is rejected. The session and the runtime stay up.
+- Correction to the review: A10 F1 (Med, High if a probe were positive) is not High, because the probes are negative. The A10 F2 note that the connect to the control socket may succeed is right (it does), but the handshake is rejected. Refusing create when `ptrace_scope` is 0, the review's fix for F1, is not implemented.
+
+### Not assumed to hold on other hosts
+
+- Creating a user namespace is denied on this host (`kernel.apparmor_restrict_unprivileged_userns` is 1). The source of the denial (host AppArmor or the container filters) was not separated, so another host may allow it.
+- The vendored seccomp profile allows `unshare` and `clone`, as Podman's default profile does. Adding deny rules for new user namespaces is an open owner decision (A10 F4, Med; the review's fix: deny `unshare` and `clone` with `CLONE_NEWUSER`, and `clone3`). It departs from the owner's default-profile choice.
+
+### Sysctl
+
+- `net.ipv4.ip_unprivileged_port_start` is 0 in the sandbox. Any sandbox process can bind loopback ports below 1024 inside the network-less sandbox. Low. The runtime requires it.
+
+### Open items from the A10 review
+
+None of these is fixed.
+
+- **F3 (Med; by design; needs owner acceptance, not yet recorded).** Workspace planting: the workload runs as the host realm uid and can plant `.git/hooks`, `.git/config`, `.envrc`, `.vscode/tasks.json`, `package.json` scripts and symlinks that a host tool may run later. Fix: document it, mount `.git/hooks` and `.git/config` read-only, and diff sensitive paths after the session. Documenting is done by this entry; the read-only mounts and the post-session diff are not implemented.
+- **F5 (Low to Med).** The verifier does not cover user namespaces, devices, masked paths, rlimits, the live `Seccomp` and `NoNewPrivs` fields of `/proc/<pid>/status`, or the sysctl. Fix: assert them in the OCI config already read and in `/proc/<pid>/status`.
+- **F6 (Low).** `atomic-write` can leave an empty 0600 file outside the root on a parent-swap race. Fix: clean up through the descriptor, or use `O_EXCL` on a pinned directory descriptor.
+- **F7 (Low).** The socket scan runs only at create. It does not detect mounts under the workspace. Fix: compare `st_dev` during the walk and re-scan at `ListSandboxes`.
+- **F8 (Low; owner decision if private egress is allowed).** The egress allowlist accepts RFC1918 and CGNAT literals. Filtering of resolved addresses is the supervisor's, not this repository's. Fix: reject private ranges unless opted in, and confirm the supervisor's SSRF filter.
+- **F9 (Low).** `/tmp` and `/run` lack `noexec` and a size. There are no ulimits, no swap limit and no disk quota. Fix: set `size`, `memory.swap=0`, and `nofile` and `core` ulimits.
+- **F10 (Info).** The sticky bit on the CA tmpfs gives no protection against the same uid. The supervisor is unconfined. Fix: correct the comment, assert the sysctl from the OCI config, and put the supervisor in a cgroup and seccomp wrapper.
+
+## Supply chain open items (reviewed 2026-10-28)
+
+Source: the A18 supply-chain review of the sandbox image and host binaries. It read files only and ran no scanner. Findings 1 to 10 are recorded here; none is fixed. Findings 11 to 13 of the review are not recorded here. "Owner" means the finding needs an owner decision.
+
+| # | Sev | Finding | Minimal fix | Owner |
+| --- | --- | --- | --- | --- |
+| 1 | High | `openshell-supervisor` runs on the host, handles launch secrets, and was built outside this repository. The driver checks only that `REALM_DRIVER_SUPERVISOR_BINARY` is an absolute executable file. No digest, build record or version check. | Build it from the pinned runtime commit in a Dockerfile target, commit its SHA-256, and have the driver compare it at start. | Yes: build in-repo or not, and who owns the host install. |
+| 2 | High | The CLI, gateway (0.1.5) and Podman 5.7.1 have no recorded install source, digest or signature. | Add a host-binaries record (source URL, SHA-256, install date, version output) and a doctor check against it. | Yes: release channel and signature to trust. |
+| 3 | Med | Runtime trust is on first use. The expected `SOURCE_SHA256`, `HELPER_SHA256` and `RUNTIME_SHA256` values are not committed. | Commit an expected-digests file, have the build read it, build twice and diff. | No |
+| 4 | Med | The AgentOS runner and probe are copied from the host `dist/`, which is gitignored and built by hand. | Compile in a Dockerfile stage from `package-lock.json`, or record and check SHA-256 labels. | No |
+| 5 | Med | Debian 12 is the base of all three stages; standard security support ended about 2026-06-10, with LTS to 2028-06-30 (inference from the Debian schedule). The tag and resolve date of the GCC and Node bases are not recorded. | Record tag, resolve date and index digest for both bases, and run the base-image policy check with an as-of date. | Yes: accept LTS or move to Debian 13 or a newer Rust base. |
+| 6 | Med | `apt-get install ca-certificates cmake git` is unpinned and hits the live archive. | Drop `git` if the base has it and pin `cmake`; long term use a dated snapshot archive or a prebuilt builder. | No |
+| 7 | Med | CI uses `actions/checkout` and `actions/setup-node` by tag, not commit SHA. CI never builds the image: no CI image build, SBOM or signing. | Pin the actions to 40-hex SHAs; add an image-build job later. | No |
+| 8 | Low | `cargo build --locked` checks crate checksums but records nothing. Whether the upstream lock has git-sourced crates, which carry no checksum, was not checked. | Fail the build on any `source = "git+` entry in the lock and label the image with the lock's SHA-256. | No |
+| 9 | Low | The source gate trusts a SHA-1 commit id. Nothing records that tag `v0.1.5` was verified against it. | Record the tag signature or a release tarball digest next to the pinned revision. | No |
+| 10 | Low | The seccomp profile is vendored with a recorded digest but tagged without a commit id, and no script regenerates it from upstream. The verifier checks only the default action and the three keyring syscalls, at create. | Record the upstream commit id; add a script or test that fetches, transforms and compares the digest. | No |
+
+Needing an owner decision among findings 1 to 10: 1, 2 and 5.
+
 ## Running the production live suite
 
 `test/integration/production-driver.test.ts` runs the production stack end to end and checks by behaviour what the evidence above records. It is gated: without every prerequisite below the file skips, and each skipped scenario names the first missing one. A default `npm test` therefore skips it and reports the skips. The pure parts of the suite (probe output parsing, the polling helper, the `198.18.0.0/15` range check, the skip-reason selection, the daemon process finder's parsing of `ps` output, the MCP line framing and the JSON-RPC response matcher) have their own hermetic tests in `test/integration/production-live-helpers.test.ts`, which always run.
