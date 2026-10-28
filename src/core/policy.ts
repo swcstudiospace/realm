@@ -118,7 +118,7 @@ function isInside(root: string, path: string): boolean {
 
 // ---- Mode decision (D-23) ---------------------------------------------------
 
-export type MutationDenyCode = "REALM_UNBOUND" | "REALM_STOPPING" | "REALM_NOT_ACTIVE" | "ANDA_UNREACHABLE";
+export type MutationDenyCode = "REALM_UNBOUND" | "REALM_STOPPING" | "REALM_NOT_ACTIVE";
 
 export type MutationDecision =
   | { readonly decision: "allow" }
@@ -126,11 +126,12 @@ export type MutationDecision =
   | { readonly decision: "deny"; readonly code: MutationDenyCode };
 
 // Pure. The one mutation decision for file-mutating calls, in both policy modes. An active session
-// with no Anda bridge is refused with ANDA_UNREACHABLE: active implies the bridge is attached (C4).
+// allows a write whether or not an Anda bridge is configured; a configured bridge that goes down
+// moves the session to degraded, which is refused below.
 // Under advisory policy a write in any other non-active state proceeds with a warning.
-export function decideMutation(policy: Policy, state: State, bridgeAttached: boolean): MutationDecision {
+export function decideMutation(policy: Policy, state: State): MutationDecision {
   if (state === "active") {
-    return bridgeAttached ? { decision: "allow" } : { decision: "deny", code: "ANDA_UNREACHABLE" };
+    return { decision: "allow" };
   }
   if (policy.mode === "advisory") {
     return {

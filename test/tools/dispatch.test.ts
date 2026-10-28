@@ -226,8 +226,7 @@ function dispatcherMovingAfterPrecheck(
       }
       return snapshot;
     },
-    mutationGate: () => gateMutation(ADVISORY, h.machine.snapshot().state, true),
-    bridgeAttached: () => true,
+    mutationGate: () => gateMutation(ADVISORY, h.machine.snapshot().state),
     create: (workspaceRoot) => {
       creates.push(workspaceRoot);
       return Promise.resolve(h.machine.snapshot());

@@ -7,8 +7,6 @@
 //   2. state: exec runs only while active, in both modes (D-109). A write asks the mutation gate
 //      (D-63). read, list, status, and retry are not gated. A call in connecting waits at most
 //      policy.toolQueueMs for the state to leave connecting (D-91).
-//      An active session with no Anda bridge refuses write and exec with ANDA_UNREACHABLE (C4). This is a
-//      state-invariant gate (active implies the bridge is attached), not a bridge call made by either tool.
 //   3. lock: a write canonicalizes its target, runs the credential check, and probes the path lock.
 //      The workspace handlers run this stage (src/tools/workspace.ts, D-34), so it is not repeated
 //      here. The other tools have no target.
@@ -55,7 +53,7 @@ import {
 // state, so it can be composed with any object that offers these members.
 export type DispatcherController = Pick<
   LifecycleController,
-  "events" | "snapshot" | "mutationGate" | "bridgeAttached" | "create"
+  "events" | "snapshot" | "mutationGate" | "create"
 >;
 
 // The bound on one call's awaited work (D-91). It is a constant, not a policy key (D-101).
@@ -165,14 +163,6 @@ export class ToolDispatcher {
     return { outcome: "done", tool: "write", value: writeWorkspaceFile(this.workspace, params) };
   }
 
-  // exec refuses with ANDA_UNREACHABLE when the active session has no Anda bridge (C4). The same state-invariant
-  // gate applies to write in decideMutation; exec is not file-mutating, so it is checked here.
-  #requireAnda(): void {
-    if (!this.deps.controller.bridgeAttached()) {
-      throw makeRealmError("ANDA_UNREACHABLE");
-    }
-  }
-
   // exec runs only while active, in both modes (D-89, D-109). The argv form and the shell form both
   // reach the runner through buildExecArgv and runSandboxExec. The dispatcher also bounds the call with
   // TOOL_CALL_TIMEOUT_MS, so a runner that ignores its own deadline still returns TOOL_TIMEOUT.
@@ -189,7 +179,6 @@ export class ToolDispatcher {
     if (state !== "active") {
       throw makeRealmError(execRefusalCode(state));
     }
-    this.#requireAnda();
     const value = await this.#audited("exec", summarizeExec(params), () =>
       withTimeout(
         runSandboxExec(

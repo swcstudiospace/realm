@@ -38,19 +38,18 @@ Loading rules (`src/core/policy.ts:28-37`):
 - **Default:** `"advisory"` (`src/core/policy.schema.json:11`).
 - **Effect:** `advisory` is the default; `fail-closed` is opt-in per project
   (select it by writing `"mode": "fail-closed"` in that project's policy
-  file). The value changes the mutation decision for non-`active` states. `active` allows a mutation
-  only while an Anda bridge is attached (see `andaUrl` below), in both modes
-  (`src/core/policy.ts:129-140`):
+  file). The value changes the mutation decision for non-`active` states. `active`
+  allows a mutation in both modes, whether or not an Anda bridge is configured
+  (`src/core/policy.ts:128-143`):
   - `advisory` + non-`active` → `allow-with-warning` with message
     `` `realm is ${state}; the write proceeds under advisory policy` ``.
   - `fail-closed` + non-`active` → `deny` with code from
-    `denyCodeFor` (`src/core/policy.ts:142-153`): `unbound` →
+    `denyCodeFor` (`src/core/policy.ts:145-156`): `unbound` →
     `REALM_UNBOUND`, `stopping` → `REALM_STOPPING`, `connecting`/`degraded`/
     `error` → `REALM_NOT_ACTIVE`.
-  - `active` with no bridge attached → `deny` with code `ANDA_UNREACHABLE`, in both modes. This is a
-    state-invariant gate (active implies the bridge is attached), not a bridge call made by the write.
+  - `active` → `allow`, in both modes, whether or not an Anda bridge is configured. A configured bridge that goes down moves the session to `degraded` (reason `ANDA_UNREACHABLE`), which is handled by the rows above.
 - **Enforced by:**
-  - `decideMutation` (`src/core/policy.ts:129-140`).
+  - `decideMutation` (`src/core/policy.ts:128-143`).
   - `gateMutation` thin wrapper mapping allow/allow-with-warning/deny to
     proceed/proceed-with-warning/refused (`src/lifecycle/mutation-gate.ts:23-33`);
     `runGatedMutation` runs the write only when not refused and propagates
@@ -59,12 +58,12 @@ Loading rules (`src/core/policy.ts:28-37`):
     `refused`, and returns the warning on `proceed-with-warning`
     (`src/tools/workspace.ts:71-97`).
   - `exec` is stricter: it runs only while `active` **in both modes**
-    (`src/tools/dispatch.ts:160-175`); only `connecting` waits (see
+    (`src/tools/dispatch.ts:166-195`); only `connecting` waits (see
     `toolQueueMs`), all other non-`active` states throw
-    `execRefusalCode(state)` at once (`src/tools/dispatch.ts:262-273`).
+    `execRefusalCode(state)` at once (`src/tools/dispatch.ts:271-284`).
     `read`, `list`, `status`, `retry` are not mutation-gated
-    (`src/tools/dispatch.ts:1-18`); `retry` has its own state refusal
-    (`src/tools/dispatch.ts:250-258`).
+    (`src/tools/dispatch.ts:1-16`); `retry` has its own state refusal
+    (`src/tools/dispatch.ts:261-269`).
 
 The default stays `advisory`; a project that expects containment opts in to `fail-closed` in its own policy file, and the posture and its limits are set out in `docs/integration/hardening-plan.md`.
 
@@ -81,7 +80,7 @@ The default stays `advisory`; a project that expects containment opts in to `fai
   inside at least one policy root; otherwise it throws `POLICY_DENIED`
   (`src/lifecycle/controller.ts:373-383`). A `create` naming a different
   workspace than the recorded/bound one (including while live) also throws
-  `POLICY_DENIED` (`src/lifecycle/controller.ts:160-167`).
+  `POLICY_DENIED` (`src/lifecycle/controller.ts:194-199`).
 - **Breadth (residual R7):** the loader accepts any absolute directory, including the filesystem root `/`. A root of `/` places every host path inside a policy root, so the bind check no longer narrows the workspace. Keep each root as narrow as the project needs. No breadth refusal is implemented; the Phase 7 security review records R7 as an open residual (`.planning/milestones/v1.0-phases/07-policy-reference-and-security-review/07-SECURITY-REVIEW.md`, section 6).
 - **Enforced by:**
   - Startup bind in `create`: `bindWorkspace` before any record/port work,
@@ -161,14 +160,14 @@ The default stays `advisory`; a project that expects containment opts in to `fai
 - **Effect:** `false` refuses the shell form of `exec`; `true` permits it.
   The argv form always passes this gate. The check decides only and never
   spawns a process; it runs on input that already passed `validate("tools",
-  ...)` (`src/core/policy.ts:155-167`).
+  ...)` (`src/core/policy.ts:160-170`).
 - **Enforced by:** `checkExecPolicy` throwing `SHELL_NOT_ALLOWED` when the
   params carry `shell`/`script` and the flag is off
-  (`src/core/policy.ts:160-167`), called at the top of the dispatcher exec
+  (`src/core/policy.ts:160-170`), called at the top of the dispatcher exec
   path before any state check, admission line, or runner invocation
-  (`src/tools/dispatch.ts:163-165`; stage order
-  `src/tools/dispatch.ts:1-18`). The shell form then runs as
-  `["/bin/sh", "-c", script]` (`src/tools/dispatch.ts:165`).
+  (`src/tools/dispatch.ts:170`; stage order
+  `src/tools/dispatch.ts:1-16`). The shell form then runs as
+  `["/bin/sh", "-c", script]` (`src/tools/dispatch.ts:171`).
 
 ## `startupBudgetMs`
 
@@ -204,14 +203,14 @@ The default stays `advisory`; a project that expects containment opts in to `fai
 - **Default:** `2000` (`src/core/policy.schema.json:40`).
 - **Effect:** how long a tool call in `connecting` waits for the state to
   leave `connecting` before proceeding to its normal decision. Applies to
-  `write` (`src/tools/dispatch.ts:150-158`) and `exec`
-  (`src/tools/dispatch.ts:168-172`); exec outside `active` after the wait is
-  still refused in both modes (`src/tools/dispatch.ts:173-175`). `status` is
-  not gated and never waits (`src/tools/dispatch.ts:186-192`).
+  `write` (`src/tools/dispatch.ts:156-164`) and `exec`
+  (`src/tools/dispatch.ts:169-178`); exec outside `active` after the wait is
+  still refused in both modes (`src/tools/dispatch.ts:179-181`). `status` is
+  not gated and never waits (`src/tools/dispatch.ts:197-204`).
 - **Enforced by:** `waitLeavingConnecting`, which resolves when the event bus
   reports a transition from `connecting` or when the `toolQueueMs` timer
   fires, whichever comes first, clearing the timer and unsubscribing in
-  either case (`src/tools/dispatch.ts:275-291`, timer at `setTimeout(finish,
+  either case (`src/tools/dispatch.ts:286-301`, timer at `setTimeout(finish,
   toolQueueMs)`).
 
 ## What is not a policy key
@@ -219,11 +218,11 @@ The default stays `advisory`; a project that expects containment opts in to `fai
 These look budget-like but are fixed constants, not policy keys (there is no
 schema entry, no default to override, and no per-project opt-in). The
 dispatcher states this explicitly for the call bound: "It is a constant, not
-a policy key (D-101)" (`src/tools/dispatch.ts:56-57`).
+a policy key (D-101)" (`src/tools/dispatch.ts:59`).
 
 | Name | Value / site | Scope (not per-project policy) |
 | --- | --- | --- |
-| `TOOL_CALL_TIMEOUT_MS` | `30_000` (`src/tools/dispatch.ts:57`) | Bounds one awaited tool call: the `exec` sandbox run (`src/tools/dispatch.ts:176-182`) and the `retry` create (`src/tools/dispatch.ts:207-211`). Expiry maps to `TOOL_TIMEOUT`. |
+| `TOOL_CALL_TIMEOUT_MS` | `30_000` (`src/tools/dispatch.ts:60`) | Bounds one awaited tool call: the `exec` sandbox run (`src/tools/dispatch.ts:182-193`) and the `retry` create (`src/tools/dispatch.ts:218-222`). Expiry maps to `TOOL_TIMEOUT`. |
 | `TEARDOWN_TIMEOUT_MS` | `5000` (`src/lifecycle/controller.ts:38`) | Single bound for `stop`/`destroy`; expiry returns `REALM_STOPPING` (`src/lifecycle/controller.ts:3-7,35-38`). |
 | `OPENSHELL_CREATE_DEADLINE_MS` | `60_000` (`src/runtime/session-execution.ts:36`) | Bound for the whole OpenShell create including the label poll (`src/runtime/session-execution.ts:35-36,118-120`). |
 | `CONTAINER_STOP_GRACE_MS` | `10_000` (`src/runtime/session-execution.ts:38`) | Libpod stop timeout grace period (`src/runtime/session-execution.ts:160-161`). |
@@ -253,7 +252,7 @@ Keys (`ACCEPTED_KEYS`, `src/runtime/config.ts`). The key set is closed, and any 
 - `workspaceRoot` (required): an absolute path.
 - `andaUrl` (optional): an `http:` or `https:` URL with no userinfo. Its presence decides whether the Anda bridge is required (`andaBridgeRequired`, `src/runtime/config.ts`).
   - Set: the bridge is required at start. The start runs the bridge handshake, and an unreachable bridge refuses the start with `ANDA_UNREACHABLE`.
-  - Absent: no Anda bridge is attached and there is no handshake, so the session goes `active` once the runner start succeeds. While `active` with no bridge, `exec` and `write` refuse with `ANDA_UNREACHABLE` in both policy modes. This is a state-invariant gate (active implies the bridge is attached), not a bridge call made by either tool. The refused set (`exec` and `write` while `active`) is open for owner confirmation. `status`, `read`, `list`, and `retry` do not need the bridge.
+  - Absent: no Anda bridge is attached and there is no handshake, so the session goes `active` once the runner start succeeds. While `active` with no bridge, `exec` and `write` run exactly as they do with a bridge, in both policy modes. `status`, `read`, `list`, and `retry` do not need the bridge. If a configured bridge later goes down, the session moves to `degraded` and `exec` and `write` are refused as in any non-active state.
 
 The CLI and the daemon both read `stateDir` from this file, and a config that omits it is `SCHEMA_INVALID`.
 

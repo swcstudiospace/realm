@@ -140,13 +140,7 @@ export class LifecycleController {
   // The CORE-05 gate for a file-mutating call, decided from the current state (D-63). It
   // never waits and writes no audit entry.
   mutationGate(): GateOutcome {
-    return gateMutation(this.deps.policy, this.machine.snapshot().state, this.bridgeAttached());
-  }
-
-  // True when the session has an Anda bridge. An active session without one refuses writes through the
-  // mutation gate (C4), and exec refuses the same way in the dispatcher.
-  bridgeAttached(): boolean {
-    return this.deps.bridge !== null;
+    return gateMutation(this.deps.policy, this.machine.snapshot().state);
   }
 
   // Verifies the requested workspace against the pinned root, writes the record with containerId

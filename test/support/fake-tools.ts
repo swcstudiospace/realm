@@ -181,14 +181,13 @@ export function makeHarness(t: TestContext, options: HarnessOptions = {}): Harne
     },
     mutationGate: () => {
       observe("gate");
-      return gateMutation(policy, machine.snapshot().state, true);
+      return gateMutation(policy, machine.snapshot().state);
     },
     create: (workspaceRoot) => {
       observe("create");
       creates.push(workspaceRoot);
       return Promise.resolve(machine.snapshot());
     },
-    bridgeAttached: () => true,
   };
 
   const slot: { runner: Runner } = {

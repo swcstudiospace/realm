@@ -86,7 +86,7 @@ function depsFor(
     locks: f.locks,
     credentialAllow: options.credentialAllow ?? [],
     audit: options.audit ?? ((entry) => { appendAudit(f.stateDir, entry); }),
-    mutationGate: () => gateMutation(policy, state, true),
+    mutationGate: () => gateMutation(policy, state),
   };
 }
 

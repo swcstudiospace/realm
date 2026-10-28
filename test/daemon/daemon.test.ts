@@ -270,7 +270,7 @@ void test("RT-04, D-47: buildDaemonHandle builds with no AgentOS driver, and an 
   assert.equal(store.list().length, 0, "no container is created");
 });
 
-void test("C4: with no andaUrl the session reaches active with no bridge handshake, and a tool call that needs Anda refuses with ANDA_UNREACHABLE", async (t) => {
+void test("C4: with no andaUrl the session reaches active with no bridge handshake, and exec and write proceed", async (t) => {
   const fixture = makeDirs();
   const { options, bridge } = daemonParts(fixture);
   const handle = buildDaemonHandle(options);
@@ -283,11 +283,66 @@ void test("C4: with no andaUrl the session reaches active with no bridge handsha
   assert.equal(bridge.callCount("connect"), 0, "no andaUrl means no handshake, even with a bridge injected");
 
   const write = await handle.dispatcher.call({ write: { path: "doc.txt", content: "changed" } });
-  assert.deepEqual(write, { outcome: "refused", tool: "write", code: "ANDA_UNREACHABLE", retryable: true });
-  assert.equal(readFileSync(join(fixture.ws, "doc.txt"), "utf8"), "original", "the refused write changes nothing");
+  if (write.outcome !== "done" || write.tool !== "write") {
+    assert.fail(`expected a done write, got ${JSON.stringify(write)}`);
+  }
+  assert.equal(write.value.warning, null);
+  assert.equal(readFileSync(join(fixture.ws, "doc.txt"), "utf8"), "changed", "the write lands with no bridge");
 
   const exec = await handle.dispatcher.call({ exec: { argv: ["ls"] } });
-  assert.deepEqual(exec, { outcome: "refused", tool: "exec", code: "ANDA_UNREACHABLE", retryable: true });
+  assert.equal(exec.outcome, "done", `expected a done exec, got ${JSON.stringify(exec)}`);
+
+  const read = await handle.dispatcher.call({ read: { path: "doc.txt", maxBytes: 1024 } });
+  assert.equal(read.outcome, "done", `read needs no bridge, got ${JSON.stringify(read)}`);
+
+  const list = await handle.dispatcher.call({ list: { path: ".", depth: 1 } });
+  assert.equal(list.outcome, "done", `list needs no bridge, got ${JSON.stringify(list)}`);
+
+  const status = await handle.dispatcher.call({ status: {} });
+  if (status.outcome !== "done" || status.tool !== "status") {
+    assert.fail(`expected a done status, got ${JSON.stringify(status)}`);
+  }
+  assert.equal(status.value.snapshot.state, "active");
+
+  const retry = await handle.dispatcher.call({ retry: {} });
+  if (retry.outcome !== "done" || retry.tool !== "retry") {
+    assert.fail(`expected a done retry, got ${JSON.stringify(retry)}`);
+  }
+  assert.equal(retry.value.state, "active");
+});
+
+void test("C4: with andaUrl set, a bridge that goes down moves active to degraded and exec and write are refused", async (t) => {
+  const fixture = makeDirs();
+  const { options, bridge } = daemonParts(fixture, {
+    runtimeInput: {
+      image: IMAGE,
+      stateDir: fixture.stateDir,
+      workspaceRoot: fixture.ws,
+      andaUrl: "http://127.0.0.1:9/",
+    },
+    policyPath: writePolicy(fixture, "fail-closed-policy.json", { workspaceRoots: [fixture.ws], mode: "fail-closed" }),
+  });
+  const handle = buildDaemonHandle(options);
+  t.after(async () => {
+    await handle.close();
+  });
+
+  assert.equal((await handle.controller.create(fixture.ws)).state, "active");
+  bridge.emit({ kind: "down", code: "ANDA_UNREACHABLE" });
+  assert.equal(handle.controller.snapshot().state, "degraded");
+  assert.equal(handle.controller.snapshot().reason, "ANDA_UNREACHABLE");
+
+  const write = await handle.dispatcher.call({ write: { path: "doc.txt", content: "changed" } });
+  if (write.outcome !== "refused") {
+    assert.fail(`expected a refused write, got ${JSON.stringify(write)}`);
+  }
+  assert.equal(write.code, "REALM_NOT_ACTIVE");
+  assert.equal(readFileSync(join(fixture.ws, "doc.txt"), "utf8"), "original", "the refused write changes nothing");
+  const exec = await handle.dispatcher.call({ exec: { argv: ["ls"] } });
+  if (exec.outcome !== "refused") {
+    assert.fail(`expected a refused exec, got ${JSON.stringify(exec)}`);
+  }
+  assert.equal(exec.code, "REALM_NOT_ACTIVE");
 });
 
 void test("B2: under advisory policy a write in error proceeds with the advisory warning", async (t) => {

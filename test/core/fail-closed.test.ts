@@ -28,19 +28,13 @@ const NON_ACTIVE_CODES: Readonly<Record<Exclude<State, "active">, string>> = {
 const NON_ACTIVE_STATES = Object.keys(NON_ACTIVE_CODES) as Exclude<State, "active">[];
 
 void test("CORE-03: active allows a mutation under advisory and under fail-closed", () => {
-  assert.deepEqual(decideMutation(ADVISORY, "active", true), { decision: "allow" });
-  assert.deepEqual(decideMutation(FAIL_CLOSED, "active", true), { decision: "allow" });
-});
-
-void test("C4: an active session with no bridge denies a mutation with ANDA_UNREACHABLE under both modes", () => {
-  for (const policy of [ADVISORY, FAIL_CLOSED]) {
-    assert.deepEqual(decideMutation(policy, "active", false), { decision: "deny", code: "ANDA_UNREACHABLE" });
-  }
+  assert.deepEqual(decideMutation(ADVISORY, "active"), { decision: "allow" });
+  assert.deepEqual(decideMutation(FAIL_CLOSED, "active"), { decision: "allow" });
 });
 
 void test("CORE-03: advisory allows every non-active state with a warning that names the state", () => {
   for (const state of NON_ACTIVE_STATES) {
-    const decision = decideMutation(ADVISORY, state, true);
+    const decision = decideMutation(ADVISORY, state);
     assert.equal(decision.decision, "allow-with-warning", `state ${state}`);
     assert.match(decision.warning, new RegExp(state), `warning names ${state}`);
     assert.match(decision.warning, /advisory policy/, `warning states the advisory policy for ${state}`);
@@ -50,7 +44,7 @@ void test("CORE-03: advisory allows every non-active state with a warning that n
 void test("CORE-03: fail-closed denies every non-active state with its exact code", () => {
   for (const state of NON_ACTIVE_STATES) {
     assert.deepEqual(
-      decideMutation(FAIL_CLOSED, state, true),
+      decideMutation(FAIL_CLOSED, state),
       { decision: "deny", code: NON_ACTIVE_CODES[state] },
       `state ${state}`,
     );
