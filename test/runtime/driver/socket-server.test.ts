@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { RealmError } from "../../../src/core/errors.js";
 import {
@@ -180,6 +180,26 @@ void test("PRD-DRV-01: close with no open calls resolves at once and removes the
   assert.equal(first, second);
   await first;
   assert.ok(Date.now() - started < SHUTDOWN_GRACE_MS, "an idle server must not wait out the grace");
+  assert.equal(existsSync(socketPath), false);
+});
+
+void test("PRD-DRV-01: a shutdown grace of zero cancels an open never-ending call at once and removes the socket", { timeout: 20_000 }, async () => {
+  const open = await openNeverEndingWatch(0);
+  const started = Date.now();
+  await open.server.close();
+  assert.ok(Date.now() - started < 1000, "close must not wait for the open call");
+  const outcome = await open.finished;
+  assert.notEqual(outcome.code, status.OK);
+  assert.equal(existsSync(open.socketPath), false);
+  open.closeClient();
+});
+
+void test("PRD-DRV-01: close after something else already removed the socket path resolves without error", { timeout: 20_000 }, async () => {
+  const socketPath = join(socketDirectory(), "driver.sock");
+  const server = await startOn(socketPath);
+  unlinkSync(socketPath);
+  assert.equal(existsSync(socketPath), false);
+  await server.close();
   assert.equal(existsSync(socketPath), false);
 });
 

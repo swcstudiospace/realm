@@ -173,7 +173,9 @@ function verifySocket(socketPath: string, uid: number): void {
   }
 }
 
-// Stops accepting and lets in-flight calls finish, then removes the socket if it is still the one this server bound.
+// Stops accepting and lets in-flight calls finish, then unlinks the socket path when it is a socket. The check is on the file
+// type only, not on who bound it: the unit manager stops the old driver before it starts the new one, so no successor's socket
+// is at this path while a close runs.
 // tryShutdown waits for every open call, and a long-lived server-streaming call (the gateway's WatchSandboxes) never ends on
 // its own, so the wait is bounded: when graceMs passes, forceShutdown cancels the open calls and the close completes. The
 // timer is cleared on every path, and the first outcome wins, so the late tryShutdown callback cannot settle the close twice.
