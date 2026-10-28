@@ -319,9 +319,9 @@ Plans:
 **Success Criteria** (what must be TRUE):
   1. No host configuration outside this repository is changed without explicit approval, and the adapter bundles ship in the npm package with the pack check asserting each manifest (HOST-03).
 
-Release 0.2.0 and the PR to main are held by the owner's ship hold (2026-10-24); this block does not authorize either.
+The owner lifted the ship hold on 2026-10-28 for one pull request with autoMerge off: the PR is opened and reviewed, and the owner merges it by hand after reviewing the five reserved files. Release 0.2.0 is produced by the release job on main after that merge; this block does not authorize a merge or a release by anyone else.
 
-**Plans**: 4 plans. 10-01 (fix-now quality tier) and 10-02 (triage and milestone audit pass 1) are done; 10-03 (HOST-03 audit and ship paperwork) is done, see 10-03-PLAN.md and 10-03-SUMMARY.md; 10-04 (PR to main, merge, release 0.2.0) is held by the owner's ship hold and has no plan file.
+**Plans**: 4 plans. 10-01 (fix-now quality tier) and 10-02 (triage and milestone audit pass 1) are done; 10-03 (HOST-03 audit and ship paperwork) is done, see 10-03-PLAN.md and 10-03-SUMMARY.md; 10-04 (PR to main, review loop, merge, release 0.2.0) has no plan file: the PR and the review loop are run by the ship tool, the merge is the owner's, and the release is the release job's.
 
 ### Phase 11: Milestone v2.0 Close
 
@@ -357,5 +357,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 9.5. Isolation Backend and Sandbox Protocol | 1/1 | Complete on the amended built-in path (2026-10-26): live T0 reached Ready with the runtime as PID 1 and the host supervisor connected; PD-15 host placement and PD-10 runtime policy decided; live checks moved to 9.6 | - |
 | 9.6. Integration, Live Proof, and Cutover | 1/1 | Complete (2026-10-28): six live scenarios 28 of 28 at d2db549 (crash recovery 3 of 3 more times); Omp checks verified live; gates green (1635 pass, 0 fail, 7 skipped); owner decisions listed in the verification file | - |
 | 9.7. Review-Finding Remediation | 1/1 | Complete (2026-10-28): the A10 and A18 findings fixed or recorded; three defects found by the live proof fixed (rlimit REST names, driver shutdown, doctor digest bound); nine live scenarios 31 of 31 on the rebuilt image, twice (the second on the final installed build); gates at the final commit: 1828 tests, 1818 pass, 0 fail, 10 skipped, test:scripts 109 of 109; the RT-04 wording was amended by the owner to match ruling N1 and the other owner decisions are listed in 09.7-VERIFICATION.md | - |
-| 10. Docs, Packaging, and Release 0.2.0 | 3/4 | In progress (2026-10-28): plans 10-01 to 10-03 done, HOST-03 complete on the fresh audit; 10-04 (PR to main, release 0.2.0) held by the owner's ship hold | - |
+| 10. Docs, Packaging, and Release 0.2.0 | 3/4 | In progress (2026-10-28): plans 10-01 to 10-03 done, HOST-03 complete on the fresh audit; 10-04 (PR, review loop, merge by the owner, release by the release job) follows the owner's lifting of the hold with autoMerge off | - |
 | 11. Milestone v2.0 Close | 1/1 | Executed up to the owner's confirmation (2026-10-28): v1 phases collapsed with nothing lost, roadmap analysis lists the 11 milestone phases, `milestone complete v2.0 --dry-run` exits 0, cleanup inventory done; `--confirm` and `--force` were not used | - |
