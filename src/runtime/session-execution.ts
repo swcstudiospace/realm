@@ -17,6 +17,7 @@
 // callers keep working. It removes every realm-labelled container and proves zero survivors.
 
 import { spawn, type ChildProcess, type StdioOptions } from "node:child_process";
+import { realpathSync } from "node:fs";
 import { isAbsolute } from "node:path";
 import { makeRealmError, RealmError, type ErrorCode } from "../core/errors.js";
 import { withTimeout } from "../core/timeout.js";
@@ -197,6 +198,10 @@ export class SessionExecution implements ExecutionService {
     const secretRoot = this.requireSecretRoot();
     const pinnedWorkspaceRoot = this.requirePinnedWorkspaceRoot();
     const sandboxStateRoot = this.requireSandboxStateRoot();
+    // The sandbox mounts the pinned root at /workspace, while the file tools use the policy-approved workspace the request names.
+    // The two must be one directory, or exec would reach files the policy never approved. Refused before any libpod, OpenShell,
+    // or policy-file call.
+    requireSameDirectory(req.workspaceRoot, pinnedWorkspaceRoot);
     // The gateway refuses a longer sandbox name with an opaque create failure. This runs after the configuration
     // checks and before any libpod, OpenShell, or policy-file call.
     if (realmSandboxName(req.idempotencyKey).length > GATEWAY_SANDBOX_NAME_MAX_LENGTH) {
@@ -473,6 +478,22 @@ export class SessionExecution implements ExecutionService {
       throw new HardeningFailedError(first, causeCode);
     }
     throw makeRealmError("OPENSHELL_START_FAILED", causeCode);
+  }
+}
+
+// Refuses with POLICY_DENIED unless both absolute paths name the same directory once symlinks are resolved. A path that cannot be
+// resolved is refused too. The error carries no path.
+function requireSameDirectory(requested: string, pinned: string): void {
+  let requestedReal: string;
+  let pinnedReal: string;
+  try {
+    requestedReal = realpathSync(requested);
+    pinnedReal = realpathSync(pinned);
+  } catch {
+    throw makeRealmError("POLICY_DENIED");
+  }
+  if (requestedReal !== pinnedReal) {
+    throw makeRealmError("POLICY_DENIED");
   }
 }
 

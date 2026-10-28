@@ -1,6 +1,6 @@
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentOsSupervisor } from "../../src/runtime/agentos.js";
@@ -72,6 +72,8 @@ async function fixture(t: TestContext): Promise<Fixture> {
   });
   const stateDir = join(base, "state");
   const secretRoot = join(base, "secrets");
+  // The pinned workspace is a real directory: a create resolves it to compare it with the requested workspace.
+  mkdirSync(join(base, "workspace"));
   const sandboxStateRoot = join(base, "sandboxes");
   const exec = new SessionExecution({
     libpod: new LibpodClient(socketPath),

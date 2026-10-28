@@ -1,6 +1,6 @@
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
@@ -88,6 +88,8 @@ async function fixture(
   });
   const stateDir = join(base, "state");
   const workspaceRoot = join(base, "workspace");
+  // The pinned workspace is a real directory: a create resolves it to compare it with the requested workspace.
+  mkdirSync(workspaceRoot, { recursive: true });
   const secretRoot = join(base, "secrets");
   const sandboxStateRoot = join(base, "sandboxes");
   const binding = sandboxBindingOf({ workspaceRoot, stateRoot: sandboxStateRoot, secretRoot }, realmSandboxName(SESSION));
@@ -678,17 +680,52 @@ void test("C2: the session's sandbox binding names the driver's per-sandbox stat
   assert.equal(f.store.list().length, 1, "the container mounted at the driver's state directory is kept");
 });
 
-void test("C2: a create whose request names another root verifies a container mounted at the pinned root", async (t) => {
+void test("C2: a create whose request names another root is refused with POLICY_DENIED before any libpod, OpenShell, or policy-file call", async (t) => {
   const f = await fixture(t);
   const requestRoot = join(f.base, "other-project");
+  mkdirSync(requestRoot);
+  await assertCode(f.exec.create({ idempotencyKey: SESSION, workspaceRoot: requestRoot }), "POLICY_DENIED");
+  assert.equal(f.libpod.requests().length, 0, "no libpod request is made");
+  assert.equal(f.openshell.callCount(), 0, "no OpenShell run starts");
+  assert.equal(f.store.list().length, 0, "no container is created");
+  assert.equal(existsSync(join(f.stateDir, "runtime")), false, "no policy document is written");
+});
+
+void test("C2: a create whose approved workspace is a sibling of the pinned root is refused, and one that is the parent of the pinned root is refused", async (t) => {
+  const f = await fixture(t);
+  const sibling = join(f.base, "workspace2");
+  mkdirSync(sibling);
+  await assertCode(f.exec.create({ idempotencyKey: SESSION, workspaceRoot: sibling }), "POLICY_DENIED");
+  // The pinned root names the parent of the approved project: the mount would expose every sibling project.
+  const project = join(f.workspaceRoot, "project");
+  mkdirSync(project);
+  await assertCode(f.exec.create({ idempotencyKey: SESSION, workspaceRoot: project }), "POLICY_DENIED");
+  assert.equal(f.libpod.requests().length, 0, "no libpod request is made");
+  assert.equal(f.openshell.callCount(), 0, "no OpenShell run starts");
+  assert.equal(f.store.list().length, 0, "no container is created");
+  assert.equal(existsSync(join(f.stateDir, "runtime")), false, "no policy document is written");
+});
+
+void test("C2: a create whose requested workspace does not exist is refused with POLICY_DENIED before any libpod call", async (t) => {
+  const f = await fixture(t);
+  await assertCode(f.exec.create({ idempotencyKey: SESSION, workspaceRoot: join(f.base, "missing") }), "POLICY_DENIED");
+  assert.equal(f.libpod.requests().length, 0, "no libpod request is made");
+  assert.equal(f.openshell.callCount(), 0, "no OpenShell run starts");
+});
+
+void test("C2: a create whose requested workspace is a symlink to the pinned root is accepted and verifies a container mounted at the pinned root", async (t) => {
+  const f = await fixture(t);
+  const link = join(f.base, "workspace-link");
+  symlinkSync(f.workspaceRoot, link);
   scriptInspect(f, conformingInspect(f, {}, sessionBinding(f, SESSION)));
-  await f.exec.create({ idempotencyKey: SESSION, workspaceRoot: requestRoot });
+  await f.exec.create({ idempotencyKey: SESSION, workspaceRoot: link });
   assert.equal(f.store.list().length, 1, "the conforming container is kept");
 });
 
-void test("C2: a container mounted at the request root fails the mounts property through create, and is removed", async (t) => {
+void test("C2: a container mounted at the request path instead of the pinned root fails the mounts property through create, and is removed", async (t) => {
   const f = await fixture(t);
-  const requestRoot = join(f.base, "other-project");
+  const requestRoot = join(f.base, "workspace-link");
+  symlinkSync(f.workspaceRoot, requestRoot);
   const binding = sessionBinding(f, SESSION);
   scriptInspect(f, {
     ...conformingInspect(f, {}, binding),
@@ -702,7 +739,7 @@ void test("C2: a container mounted at the request root fails the mounts property
     f.exec.create({ idempotencyKey: SESSION, workspaceRoot: requestRoot }),
     (error: unknown) => error instanceof HardeningFailedError && error.property === "mounts",
   );
-  assert.equal(f.store.list().length, 0, "the container mounted at the request root is removed");
+  assert.equal(f.store.list().length, 0, "the container mounted at the request path is removed");
 });
 
 void test("RT-01, D-51: a libpod that reports rootless false fails the rootless property through create, and the container is removed", async (t) => {
