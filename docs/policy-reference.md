@@ -112,10 +112,12 @@ The default stays `advisory`; a project that expects containment opts in to `fai
   nothing extra (the `credentialAllow` property of `src/core/policy.schema.json`).
 - **Effect:** exceptions to the frozen credential-denial list
   (`CREDENTIAL_PATTERNS`, `src/fs/credentials.ts`: `.env` shapes,
-  `**/.ssh/**`, private-key names, `**/.aws/credentials`, `**/.aws/config`,
+  `**/.ssh/**`, private-key names, `**/*.pem`, `**/*.key`, `**/.npmrc`,
+  `**/.pypirc`, `**/.aws/credentials`, `**/.aws/config`,
   `**/.config/gcloud/**`, `**/.azure/**`, `**/.kube/config`,
   `**/.docker/config.json`, `**/.netrc`, `**/.git-credentials`,
-  `**/.gnupg/**`). Matching is on the canonical relative path (forward
+  `**/.gnupg/**`). `credentialAllow` can permit a specific path that one of
+  these patterns would deny. Matching is on the canonical relative path (forward
   slashes) after symlink resolution (`relPathOf`,
   `src/fs/credentials.ts`), so a symlink into `~/.ssh` is still denied
   and the raw input is never matched. A denied shape with no matching
@@ -143,10 +145,18 @@ The default stays `advisory`; a project that expects containment opts in to `fai
   OpenShell `network_policies` document. Validation (`validateEgressAllow`,
   `src/runtime/egress.ts`) admits only an exact DNS hostname of at
   least two labels or an IPv4 literal, and refuses wildcards, IPv6 literals,
-  `localhost`/`.localhost`, loopback `127.0.0.0/8`, link-local
-  `169.254.0.0/16`, and unspecified `0.0.0.0`
+  `localhost`/`.localhost`, and these IPv4 literal ranges: `0.0.0.0/8`,
+  `10.0.0.0/8`, `100.64.0.0/10`, `127.0.0.0/8`, `169.254.0.0/16`,
+  `172.16.0.0/12`, `192.0.0.0/24`, `192.168.0.0/16`, `198.18.0.0/15` (the
+  sandbox resolver hands out synthetic answers in this range), `224.0.0.0/4`
+  and `240.0.0.0/4` (which includes `255.255.255.255`)
   (`isAllowedHost`, `src/runtime/egress.ts`); refusal throws `SCHEMA_INVALID` naming no
-  value (`reject`, `src/runtime/egress.ts`). Rendering
+  value (`reject`, `src/runtime/egress.ts`). Any host whose last label is
+  decimal digits, or `0x` plus hex digits, is refused unless the whole host is a
+  canonical dotted quad outside the refused ranges, so hex, octal-looking and
+  short notations such as `0x7f.0.0.0x1` and `127.1` are refused. The check is
+  lexical: a hostname that resolves to a private address is not refused at
+  validation time, and the supervisor resolves hostnames. Rendering
   (`renderNetworkPolicies`, `src/runtime/egress.ts`) sorts by host then
   port (`compareRules`, `src/runtime/egress.ts`), emits one `egress_<n>` entry per
   rule named `<host>:<port>` bound to the absolute workload binary

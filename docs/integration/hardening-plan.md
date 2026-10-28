@@ -66,14 +66,14 @@ Source: `.planning/milestones/v1.0-phases/07-policy-reference-and-security-revie
 
 | Finding | Subject | Status | Relation to H1 |
 | --- | --- | --- | --- |
-| R10 | Audit result-line durability (no fsync, L-06) | Open | H1 commits to R10's log. Anchoring detects later edits; it does not make the line durable. The fsync gap stays open. |
-| R6 | Policy file integrity (location-only check) | Open | Not addressed. A later hash-anchor of the policy file is a candidate for H4. |
-| 5.2 | Workspace bound twice: once in composition, again in `create` | Open | Not addressed. |
-| 5.4 | Host `write` and `edit` guard (OQ-P5-02) | Open | Not addressed. |
-| R4 | Credential list lacks `**/*.pem`, `**/*.key`, `**/.npmrc`, `**/.pypirc` | Open | Not addressed. |
-| R7 | Policy root breadth (`/` accepted) | Open | Not addressed. Doc note required in the policy reference. |
+| R10 | Audit result-line durability (no fsync, L-06) | Done (phase 9.7) | `writeAuditLine` fsyncs after the write loop, and a failure is `AUDIT_WRITE_FAILED`. The first append to a new log fsyncs the file and then the directory. A failed fsync after a successful write reports `AUDIT_WRITE_FAILED` although the line is already in the file, so a caller must not blindly retry: a retry would duplicate the line. H1 commits to R10's log; anchoring detects later edits and does not itself make a line durable. |
+| R6 | Policy file integrity (location-only check) | Open: owner decision | Not addressed. Recommended rule: the policy file's owner is the daemon user or root, and it has no group or other write bit. A later hash-anchor of the policy file is a candidate for H4. |
+| 5.2 | Workspace bound twice: once in composition, again in `create` | Closed (phase 9.7) | String rebind is closed: composition binds once, and `create` verifies the pinned root with `verifyPinnedAt` in `src/lifecycle/controller.ts`. Descriptor pinning for reads is the accepted approximation FS-02. |
+| 5.4 | Host `write` and `edit` guard (OQ-P5-02) | Open (residual) | The guard is implemented in `src/omp/plugin.ts`: advisory mode warns and fail-closed mode blocks. It covers the `write` and `edit` tools only. Non-extension paths, launch-time tool flags, restricted SDK sessions and the eval bridge are not covered. |
+| R4 | Credential list lacks `**/*.pem`, `**/*.key`, `**/.npmrc`, `**/.pypirc` | Done (phase 9.7) | The four patterns are in the credential denial list (`docs/policy-reference.md`, `credentialAllow`). |
+| R7 | Policy root breadth (`/` accepted) | Open in code | Documented in `docs/policy-reference.md`; no breadth refusal is implemented. |
 
-H1 addresses none of these findings directly. It closes no finding.
+H1 itself addresses none of these findings and closes no finding. The rows marked Done or Closed were closed by phase 9.7, not by H1.
 
 ## 4. Phases
 
@@ -196,8 +196,8 @@ of H1 [INFERENCE from the plan scope].
   `AccountNotFound`) and rejected the same transaction with one signature bit
   flipped (`SignatureFailure`). That validates the signature and message
   layout. It does not validate fee payment or inclusion.
-- No Podman 5 suite was run. Container hardening claims remain as stated in
-  the v1.0 review (R1, R13).
+- No Podman 5 suite was run (historical; live evidence is in section 10). Container
+  hardening claims remain as stated in the v1.0 review (R1, R13).
 - No hardware TEE was available.
 - No Anda or ICP credentials were used.
 - Memo size limit (566 bytes) and genesis hashes were read from the sources
@@ -207,19 +207,20 @@ of H1 [INFERENCE from the plan scope].
 ## 8. Fail-closed posture
 
 - The advisory mode is the default. In advisory mode a write in a
-  non-active state proceeds with a warning (R2, 5.3).
+  non-active state proceeds with a warning (R2).
 - Fail-closed is a per-project opt-in: a project that expects containment
   sets `"mode": "fail-closed"` in its policy file.
 - Anchoring does not change the mode. An anchor is evidence after the fact,
   not a gate on writes.
-- Operators who need containment must also address 5.3, 5.4, and R7 in
+- Operators who need containment must also address 5.4 and R7 in
   their deployment. The mode switch alone does not cover them.
 
 ## 9. Container capability proof (phase 9.6, C3)
 
 - **Removed inspect property.** `cap-drop` is no longer in `HARDENING_PROPERTIES` and is no
   longer checked by `verifyInspect`. Removing it left 14 properties; it checked 15 before.
-  The `seccomp-keyring` property (below) was then added, so the verifier now checks 15.
+  The `seccomp-keyring` property (below) was then added, giving 15. Phase 9.7 added 11 more
+  (below), so the verifier now checks 26.
 - **Reason.** Podman 5.7.1 does not report `KernelCaps` in libpod inspect. An inspect-level
   check of the five capability sets therefore reads a field the engine never supplies, and
   cannot prove them empty.
@@ -235,8 +236,8 @@ of H1 [INFERENCE from the plan scope].
   so `HardeningBinding.channelDir` is required. The channel-less binding and its paths
   (`tmpfsDestinationsOf`, the optional channel mount and PID 1 exemption) are removed.
 - **Not claimed.** This proof is observed on the host at create time. It does not
-  re-verify the capability sets after create, and it has not been run against a live Podman 5.7.1
-  engine in this change.
+  re-verify the capability sets after create. The design was not run against a live Podman 5.7.1
+  engine in the change that introduced it; live evidence is in section 10.
 - **Added property: `seccomp-keyring`.** Podman 5.7.1 records `seccomp=<path>` in
   `HostConfig.SecurityOpt` only for containers the `podman` CLI created, because the CLI sets the
   `io.podman.annotations.seccomp` annotation and the API does not. A container created through the
@@ -245,12 +246,18 @@ of H1 [INFERENCE from the plan scope].
   `SecurityOpt` and the annotations. `attachSeccompEvidence` (`src/runtime/seccomp-evidence.ts`)
   reads the config through the inspect's `OCIConfigPath`, which must equal `StaticDir` joined with
   `config.json`, and the property passes only when the default action is `SCMP_ACT_ERRNO` and
-  `keyctl`, `add_key` and `request_key` are each denied with `EPERM` and allowed by no rule. An
+  `keyctl`, `add_key` and `request_key` are each denied with `EPERM` and allowed by no rule. Since
+  phase 9.7 it also requires the isolation denials (`EPERM`) and `clone3` (`ENOSYS`). An
   absent, unreadable, oversize or unparseable config fails it, so a daemon that cannot read the
   config refuses the create. The whole profile is not compared with the vendored file, because
   Podman filters and expands rules by capability and architecture.
   Both verifiers run it, with the reader injectable as `readOciConfig`. Details:
   `docs/integration/openshell.md`, section "Sandbox create hardening: seccomp profile".
+- **Phase 9.7 properties.** The verifier now checks 26 properties. The 11 added in phase 9.7 are
+  `live-seccomp`, `live-no-new-privs`, `namespaces`, `devices`, `user`, `security-opt`,
+  `memory-swap`, `ulimits`, `sysctls`, `masked-paths` and `readonly-paths`. Details:
+  `docs/integration/openshell.md`, section "Sandbox create hardening: verified properties and
+  workspace scan (phase 9.7)".
 
 ## 10. Production stack evidence (2026-10-28)
 

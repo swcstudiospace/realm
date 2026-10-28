@@ -91,6 +91,8 @@ Phase 5 verification (read 2026-10-22, https://omp.sh/docs/extension-authoring a
 
 Re-read 2026-10-23 (https://omp.sh/docs/hooks and https://omp.sh/docs/extension-authoring, the same two pages): the hooks page defines the `tool_call` return as `{ block?, reason?, input? }`, says the first block stops dispatch, and says replacement input on a model-issued call is revalidated before execution. The extension-authoring page documents managed timers (`ctx.setTimeout`, `ctx.setInterval`) that are cleared on session shutdown. Neither page states that a `tool_call` block covers launch-time tool flags, SDK sessions, or a host that ignores the hook. Those are the residual paths named in `src/omp/plugin.ts`. OQ-P5-02 therefore stays **OPEN**: the guard is not claimed to cover every execution path.
 
+OQ-P5-02, re-read for phase 9.7 (the Omp extension documentation pages `hooks.md` and `extensions.md`, read on 2026-10-28 through the `omp://` internal documentation). The documentation now states that a `tool_call` handler may return a block, and that the first block short-circuits. A handler error or timeout blocks (budget `extensionHandlers.toolCallTimeoutMs`, default 30000 ms). `tool_call` runs during argument preparation, before scheduling and approval. Calls made through the eval-prelude bridge do not emit `tool_call`. SDK sessions with `restrictToolNames` disable extensions by default. Still unsettled: paths that bypass the extension runner, `setActiveTools` enforcement, and tools other than `write` and `edit`. The guard's list is `write` and `edit` only, so `bash`, `ast-edit` and `eval` are not guarded. There is no documented way to raise a `write` or `edit` tool call without a model, and the model provider is currently out of quota, so OMP-05 stays unit-proven. OQ-P5-02 stays **OPEN**.
+
 ### Q5. Does this note permit any plugin code now?
 
 No. No file under `plugin/` is created. No manifest file is written. The examples above are quotations of official documentation, not code for this repository.
@@ -118,6 +120,8 @@ Attach at session start. The `session_start` handler starts the attach without a
 The status indicator is one status item, keyed `realm`. Its text is `<marker> <label> · <reason> · <last-transition time>`. The marker is `●` for active and `○` otherwise, and `[degraded]` follows the label when `displayStatus` marks the state degraded. There is no tooltip API on this host, so the reason and time ride in that text (P5-D5). A failed attach paints the error state with its code.
 
 From session start, the indicator refreshes every 2 s (`STATUS_POLL_MS`, a managed interval). Each tick reads daemon status only while a client is attached, and that read runs under a 5 s timer (`GUARD_STATUS_BUDGET_MS`). Session shutdown clears the interval and every other timer the plugin armed.
+
+A runner exit while the session is active is detected by the daemon's health probe, which runs every 10 seconds (in `active` and `degraded`), and the session moves to `error` with the reason `AGENTOS_CRASH_LOOP`. The status item therefore reads `realm disconnected` without running `realm doctor`.
 
 Mode and guard. Each guarded host write reads the daemon status under a managed timer, stores the mode it reports, and repaints the indicator. If that read fails, the last mode the daemon reported decides: `advisory` warns and the write proceeds, and `fail-closed` blocks it. If no mode has been reported yet, the write is blocked (`src/omp/plugin.ts`).
 

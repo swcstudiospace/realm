@@ -1,6 +1,7 @@
 # Prime Agent snippet: Realm MCP server (stdio) and skill package
 
-Source: `docs/integration/hosts.md` Prime Agent section. The MCP and settings
+Source: the tier-2 row of the host tiers table in
+`docs/integration/hosts.md`, where Prime Agent appears. The MCP and settings
 formats here are medium confidence, read from the Prime Agent sources. The
 package format and install check were verified on 2026-10-23.
 

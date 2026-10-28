@@ -35,6 +35,8 @@ Requires Node.js 22.13.0 or later (`engines` in `package.json`). CI runs Node 22
 - The production live suite (`test/integration/production-driver.test.ts`) is also gated: it runs the real stack and skips, naming the first missing prerequisite, unless `REALM_LIVE_PRODUCTION=1`, Podman 5.x, `REALM_LIVE_IMAGE`, `REALM_DRIVER_STATE_ROOT`, `REALM_DRIVER_SECRET_ROOT`, `REALM_DRIVER_WORKSPACE_ROOT`, a rootless Podman socket, the `openshell` CLI and the built CLI are all present. Run the live file alone with `npm run build && node --test dist/test/integration/production-driver.test.js`. `npm run test:integration` runs the integration files in parallel, and this suite counts every container on the host, so the safe alternative is `node --test --test-concurrency=1 "dist/test/integration/*.test.js"`. Preconditions are in `docs/integration/openshell.md` (Running the production live suite).
 - `npm run test:scripts`: runs `node:test` over `scripts/**/*.test.mjs`.
 - `npm run check:docs`: scans the published docs for host-local absolute paths, then runs the AGENTS.md and CLAUDE.md sync check.
+- `npm run check:image-digests -- --dir <dir>` or `-- --image <ref>`: verifies the sandbox image inputs against `sandbox/expected-digests.json`. `--image` needs Podman. It is not part of CI.
+- `npm run build:image`: builds the sandbox image with the digests recorded in `sandbox/expected-digests.json` and verifies it. Needs Podman. It is not part of CI.
 - `npm run build`: compiles with `tsc -p tsconfig.json` into `dist/`.
 
 Every gate must pass before a change is reviewed (`CONTRIBUTING.md`).
@@ -59,13 +61,13 @@ Every gate must pass before a change is reviewed (`CONTRIBUTING.md`).
   - `contract/`: tool and session-record schemas and the schema validator (`validate.ts`).
   - `core/`: frozen shared contracts: states and the state machine, status labels, policy loading with `policy.schema.json`, the typed error catalogue (`errors.ts`), the event bus, ports, backoff, and `withTimeout` (`timeout.ts`).
 - `test/`: `node:test` suites by area, largely mirroring `src/`. `test/integration/` holds the Podman-gated suites, and `test/support/` holds shared fakes.
-- `scripts/`: plain ESM `.mjs` using Node built-ins only. `scripts/check/` backs `npm run check:docs` and `npm run test:scripts`. `scripts/release/` backs the release job (`next-version.mjs`, `sync-version.mjs`, `changelog.mjs`).
+- `scripts/`: plain ESM `.mjs` using Node built-ins only. `scripts/check/` backs `npm run check:docs`, `npm run check:image-digests` (`verify-image-digests.mjs`) and `npm run test:scripts`. `scripts/image/` backs `npm run build:image` (`build-image.mjs`). `scripts/release/` backs the release job (`next-version.mjs`, `sync-version.mjs`, `changelog.mjs`).
 - `docs/`: `integration/` (integration and decision notes, such as `runtime-decision.md` and `anda-decision.md`), `hosts/snippets/` (host config snippets), `policy-reference.md`, and `specs/realm-spec.xml` (the product spec).
 - `.planning/`: GSD-managed planning state. See Planning artifacts.
 - `release/milestone.json`: the milestone and its minor number, which set the release line.
 - `assets/brand/`: logo and banner artwork.
 - `.github/`: `workflows/ci.yml` (verify and release jobs), `PULL_REQUEST_TEMPLATE.md`, and `ISSUE_TEMPLATE/`.
-- `sandbox/`: the image build for the sandbox image (`Dockerfile`, `resolv.conf`). The image carries the pinned runtime, the AgentOS runner, and the probe.
+- `sandbox/`: the image build for the sandbox image (`Dockerfile`, `resolv.conf`, `expected-digests.json`). The image carries the pinned runtime, the AgentOS runner, and the probe. `tsconfig.agentos.json` and `.dockerignore` sit at the repository root, not in `sandbox/`.
 - Repository root: `package.json`, `package-lock.json`, `tsconfig.json`, `eslint.config.js`, `README.md`, `CHANGELOG.md`, `CONTRIBUTING.md`, `SECURITY.md`, `LICENSE`, and `NOTICE`. `dist/`, `node_modules/`, and `coverage/` are git-ignored build and install output.
 
 ## Conventions
@@ -75,7 +77,7 @@ Every gate must pass before a change is reviewed (`CONTRIBUTING.md`).
 - Errors are `RealmError` values (`src/core/errors.ts`). Each carries a machine-readable `code` from `ERROR_CODES`, a human-readable `reason`, and a `retryable` flag. An optional `causeCode` is itself a catalogue code, so raw runtime text never enters an error.
 - Every async boundary has a timeout (`withTimeout`, `src/core/timeout.ts`).
 - No silent catch blocks, except the named exceptions under QUAL-01 in `.planning/REQUIREMENTS.md`. ESLint's `no-empty` rule rejects empty catch blocks.
-- `process.env` is read only at the entry edges: `src/cli/main.ts`, `src/daemon/main.ts`, and `src/omp/extension.ts`. Other modules take their environment as an argument.
+- `process.env` is read only at the entry edges: `src/cli/main.ts`, `src/daemon/main.ts`, `src/omp/extension.ts`, and `src/runtime/driver/main.ts`. Other modules take their environment as an argument.
 - No suppression comments. `eslint.config.js` bans `@ts-ignore`, `@ts-expect-error`, and `@ts-nocheck`; fix the cause instead.
 - No new npm dependency unless the pull request records a justification, a licence check, and a maintenance check (`CONTRIBUTING.md`). Scripts use Node built-ins only.
 - Commit subjects start with a Conventional Commit type (`feat`, `fix`, `perf`, `refactor`, `docs`, `test`, `build`, `ci`, `chore`, or `security`), with an optional scope. The changelog groups entries by type.
