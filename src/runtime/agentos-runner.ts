@@ -8,8 +8,10 @@ import { mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { AgentOs } from "@rivet-dev/agentos-core";
 
-// Under the workspace path: the sandbox policy grants writes only there.
-const HEARTBEAT_PATH = "/workspace/realm-agentos/heartbeat";
+// The workspace is the user's project and must not receive realm files, so the heartbeat lives in /tmp, the container's tmpfs
+// scratch, which the realm policy grants read-write (SANDBOX_SCRATCH_PATHS in src/runtime/openshell.ts). The probe ships as a
+// standalone file and keeps its own copy of this constant: the two must match.
+const HEARTBEAT_PATH = "/tmp/realm-agentos/heartbeat";
 const HEARTBEAT_INTERVAL_MS = 5_000;
 
 function writeHeartbeat(path: string): void {

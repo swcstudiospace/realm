@@ -4,8 +4,10 @@
 
 import { statSync } from "node:fs";
 
-// Must match the path the runner writes (under the workspace path the sandbox policy grants).
-const HEARTBEAT_PATH = "/workspace/realm-agentos/heartbeat";
+// The workspace is the user's project and must not receive realm files, so the heartbeat lives in /tmp, the container's tmpfs
+// scratch, which the realm policy grants read-write (SANDBOX_SCRATCH_PATHS in src/runtime/openshell.ts). The runner ships as a
+// standalone file and keeps its own copy of this constant: the two must match.
+const HEARTBEAT_PATH = "/tmp/realm-agentos/heartbeat";
 // The runner rewrites the heartbeat every 5 s, so three missed beats is the staleness limit.
 const MAX_AGE_MS = 15_000;
 
