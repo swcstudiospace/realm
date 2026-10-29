@@ -6,6 +6,7 @@ import { join } from "node:path";
 import type { SessionRecord } from "../../src/contract/validate.js";
 import { RealmError } from "../../src/core/errors.js";
 import { SessionStore } from "../../src/session/store.js";
+import { spyOnFsync } from "../support/fsync-spy.js";
 
 // The frozen D-14 field set, pinned as literals.
 const FROZEN_FIELDS = [
@@ -109,6 +110,30 @@ void test("delete removes the record, and deleting an absent session is a no-op 
   assert.equal(store.load("session-1"), null);
   store.delete("session-1");
   store.delete("never-saved");
+});
+
+void test("CRASH-03: delete of an existing record fsyncs the sessions directory after the unlink", (t) => {
+  const { store, stateDir } = fixture(t);
+  store.save(recordFor(stateDir, "session-1"));
+  const spy = spyOnFsync(t);
+  store.delete("session-1");
+  assert.equal(store.load("session-1"), null);
+  assert.deepEqual(spy.calls, [true]);
+});
+
+void test("CRASH-03: delete of an absent record throws nothing, with and without a sessions directory", (t) => {
+  const { store, stateDir } = fixture(t);
+  spyOnFsync(t);
+  store.delete("never-saved");
+  store.save(recordFor(stateDir, "session-1"));
+  store.delete("never-saved");
+});
+
+void test("CRASH-03: a failing directory fsync on delete is a RealmError WRITE_NOT_ATOMIC", (t) => {
+  const { store, stateDir } = fixture(t);
+  store.save(recordFor(stateDir, "session-1"));
+  spyOnFsync(t, new Error("fsync refused"));
+  assertRejectsWith(() => { store.delete("session-1"); }, "WRITE_NOT_ATOMIC");
 });
 
 void test("a session id that could leave the sessions directory is refused with SCHEMA_INVALID (D-37)", (t) => {

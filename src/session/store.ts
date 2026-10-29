@@ -10,8 +10,13 @@
 import { existsSync, closeSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { validate, type SessionRecord } from "../contract/validate.js";
-import { makeRealmError } from "../core/errors.js";
-import { atomicWriteFile, observeSha256 } from "../fs/atomic-write.js";
+import { makeRealmError, RealmError } from "../core/errors.js";
+import {
+  atomicWriteFile,
+  observeSha256,
+  syncDirectory,
+  WriteNotAtomicError,
+} from "../fs/atomic-write.js";
 import { openCanonical } from "../fs/canonicalize.js";
 import { bindRoot } from "../fs/root.js";
 import { isSessionId, recordFileName, sessionsDirOf } from "./paths.js";
@@ -88,7 +93,16 @@ export class SessionStore {
     if (!existsSync(dir)) {
       return;
     }
-    rmSync(join(bindRoot(dir).realPath, fileName), { force: true });
+    const realPath = bindRoot(dir).realPath;
+    rmSync(join(realPath, fileName), { force: true });
+    try {
+      syncDirectory(realPath);
+    } catch (error: unknown) {
+      if (error instanceof RealmError) {
+        throw error;
+      }
+      throw new WriteNotAtomicError(true);
+    }
   }
 }
 

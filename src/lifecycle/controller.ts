@@ -153,7 +153,9 @@ export class LifecycleController {
   // RealmError from create or start moves the session to error and returns the snapshot
   // whose reason is the error code. Any other failure moves the session to error and throws
   // OPENSHELL_START_FAILED. A retry from error runs through connecting again.
-  // A stored containerId means no second create. Every create verifies the requested workspace
+  // A stored containerId means no second create, except when its start fails with
+  // OPENSHELL_START_FAILED: that container is destroyed once and a new one is created (once per
+  // call). Every create verifies the requested workspace
   // against the pinned root first: the same directory changes nothing, and any other is refused
   // with POLICY_DENIED. While connecting, active, or degraded, a record that names another workspace
   // is refused the same way.
@@ -209,7 +211,7 @@ export class LifecycleController {
     this.lifeEpoch += 1;
     this.machine.transition("connecting", "creating container");
     let containerId: string | null = priorContainerId;
-    let issuedStart: PendingStart | null = null;
+    const issued: { start: PendingStart | null } = { start: null };
 
     // Every store write sits inside the guarded block, so a failed write moves the
     // session to error rather than leaving it stuck in connecting. Each await is followed by a
@@ -223,46 +225,40 @@ export class LifecycleController {
       this.persist(realmId, root, containerId);
       this.checkDeadline(deadline);
       if (containerId === null) {
-        const pending = this.issueCreate(root);
-        let created: { readonly containerId: string };
-        try {
-          created = await withTimeout(
-            pending.created,
-            Math.max(0, deadline - performance.now()),
-            "STARTUP_BUDGET_EXCEEDED",
-          );
-        } catch (error: unknown) {
-          // This create gives up at its budget, so a container the port produces later is destroyed.
-          // A stop that already took the pending create owns that container instead. A port failure is
-          // not adopted: its call has settled, and the error goes to the outer catch, the one place
-          // that calls failCreate.
-          const owned = this.takePendingCreate();
-          if (
-            owned !== null &&
-            error instanceof RealmError &&
-            error.code === "STARTUP_BUDGET_EXCEEDED"
-          ) {
-            this.adoptOrphan(owned);
-          }
-          throw error;
-        }
-        this.takePendingCreate();
-        if (this.machine.snapshot().state !== "connecting") {
-          // A stop took the create over while it was pending, and it destroys the container this
-          // create produced. Nothing is persisted or started here.
+        const created = await this.createContainer(realmId, root, deadline);
+        if (created === null) {
           return this.machine.snapshot();
         }
-        containerId = created.containerId;
-        this.persist(realmId, root, containerId);
-        this.checkDeadline(deadline);
+        containerId = created;
       }
-      const start = this.issueStart(containerId);
-      issuedStart = start;
-      await withTimeout(
-        start.started,
-        Math.max(0, deadline - performance.now()),
-        "STARTUP_BUDGET_EXCEEDED",
-      );
+      const startOnce = async (id: string): Promise<void> => {
+        const start = this.issueStart(id);
+        issued.start = start;
+        await withTimeout(
+          start.started,
+          Math.max(0, deadline - performance.now()),
+          "STARTUP_BUDGET_EXCEEDED",
+        );
+      };
+      try {
+        await startOnce(containerId);
+      } catch (error: unknown) {
+        // Only the recorded container, with no create in this call, is recovered, and only for
+        // OPENSHELL_START_FAILED. Any other failure goes to failCreate unchanged.
+        if (
+          priorContainerId === null ||
+          containerId !== priorContainerId ||
+          portFailureCode(error) !== PORT_FAILURE_CODE
+        ) {
+          throw error;
+        }
+        const replacement = await this.recoverStaleContainer(containerId, realmId, root, deadline);
+        if (replacement === null) {
+          return this.machine.snapshot();
+        }
+        containerId = replacement;
+        await startOnce(containerId);
+      }
       if (this.machine.snapshot().state !== "connecting") {
         // A stop began while start was in flight. Its teardown waits for the start and stops the
         // container once the start settles (F1), so nothing more is started here.
@@ -280,12 +276,12 @@ export class LifecycleController {
       // A start the budget gave up on is still in flight. adoptStart keeps its outcome, unless a
       // stop is in progress, which reclaims that start itself.
       if (
-        issuedStart !== null &&
+        issued.start !== null &&
         error instanceof RealmError &&
         error.code === "STARTUP_BUDGET_EXCEEDED" &&
         this.machine.snapshot().state !== "stopping"
       ) {
-        this.adoptStart(issuedStart);
+        this.adoptStart(issued.start);
       }
       return this.failCreate(error, realmId, root, containerId);
     }
@@ -643,6 +639,73 @@ export class LifecycleController {
       return;
     }
     await this.teardownCall(this.deps.exec.stop(containerId, this.sandboxName()));
+  }
+
+  // Issues the port create and waits for it within the startup budget. Returns the new container
+  // id, or null when a stop took the create over (nothing is persisted then). The id is recorded
+  // before the caller starts it.
+  private async createContainer(
+    realmId: string,
+    root: PinnedRoot,
+    deadline: number,
+  ): Promise<string | null> {
+    const pending = this.issueCreate(root);
+    let created: { readonly containerId: string };
+    try {
+      created = await withTimeout(
+        pending.created,
+        Math.max(0, deadline - performance.now()),
+        "STARTUP_BUDGET_EXCEEDED",
+      );
+    } catch (error: unknown) {
+      // This create gives up at its budget, so a container the port produces later is destroyed.
+      // A stop that already took the pending create owns that container instead. A port failure is
+      // not adopted: its call has settled, and the error goes to the caller's catch, the one place
+      // that calls failCreate.
+      const owned = this.takePendingCreate();
+      if (
+        owned !== null &&
+        error instanceof RealmError &&
+        error.code === "STARTUP_BUDGET_EXCEEDED"
+      ) {
+        this.adoptOrphan(owned);
+      }
+      throw error;
+    }
+    this.takePendingCreate();
+    if (this.machine.snapshot().state !== "connecting") {
+      // A stop took the create over while it was pending, and it destroys the container this
+      // create produced.
+      return null;
+    }
+    this.persist(realmId, root, created.containerId);
+    this.checkDeadline(deadline);
+    return created.containerId;
+  }
+
+  // TD-04: the recorded container failed to start with OPENSHELL_START_FAILED (it is gone or not
+  // running), so it is destroyed within the remaining budget (destroying a gone container is
+  // success), the cleared record is written before the new create (RT-07), and one new container
+  // is created. Returns the new id, or null when a stop took over. A destroy failure throws its
+  // own code and the old id stays recorded.
+  private async recoverStaleContainer(
+    staleId: string,
+    realmId: string,
+    root: PinnedRoot,
+    deadline: number,
+  ): Promise<string | null> {
+    await withTimeout(
+      this.deps.exec.destroy(staleId, this.sandboxName()),
+      Math.max(0, deadline - performance.now()),
+      "STARTUP_BUDGET_EXCEEDED",
+    );
+    if (this.machine.snapshot().state !== "connecting") {
+      return null;
+    }
+    this.checkDeadline(deadline);
+    this.persist(realmId, root, null);
+    this.checkDeadline(deadline);
+    return this.createContainer(realmId, root, deadline);
   }
 
   // Issues the port create for a startup that has no container yet. The attempt number lets an
