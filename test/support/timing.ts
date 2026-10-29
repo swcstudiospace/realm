@@ -36,15 +36,15 @@ export function testTimeout(ms: number): { readonly timeout: number } {
   return { timeout: scaledMs(ms) };
 }
 
-// Races work against an ALREADY-scaled bound. The timer is unref'd, so it never keeps the process alive, and it is always
-// cleared, so nothing is left running after the race settles.
+// Races work against an ALREADY-scaled bound. The timer is deliberately NOT unref'd: when work never settles it is the only
+// thing that can end the race, and an unref'd timer would let the event loop empty with the awaiting test still pending. It is
+// always cleared, so nothing is left running after the race settles.
 async function raceWithin<T>(work: Promise<T>, boundMs: number, message: string): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
   const expired = new Promise<never>((_resolve, reject) => {
     timer = setTimeout(() => {
       reject(new Error(message));
     }, boundMs);
-    timer.unref();
   });
   try {
     return await Promise.race([work, expired]);
@@ -53,8 +53,8 @@ async function raceWithin<T>(work: Promise<T>, boundMs: number, message: string)
   }
 }
 
-// Waits for work, or rejects once the scaled bound passes. The timer is unref'd, so it never keeps the process alive, and it is
-// always cleared, so nothing is left running after work settles.
+// Waits for work, or rejects once the scaled bound passes. The timer keeps the process alive until the bound passes or work
+// settles, and it is always cleared, so nothing is left running after work settles.
 export function boundedWait<T>(work: Promise<T>, what: string, ms: number = DEFAULT_WAIT_MS): Promise<T> {
   const bound = scaledMs(ms);
   return raceWithin(work, bound, `${what} did not settle within ${String(bound)} ms`);

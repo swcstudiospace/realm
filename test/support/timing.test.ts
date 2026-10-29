@@ -1,5 +1,6 @@
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import * as timing from "./timing.js";
 
 const { ManualClock, TIMEOUT_SCALE_VARIABLE, boundedWait, parseTimeoutScale, pollUntil, scaledMs, testTimeout } = timing;
@@ -110,7 +111,7 @@ void test("scaledMs and testTimeout: the bound is the milliseconds times the sca
   assert.deepEqual(scaled.testTimeout(10), { timeout: 25 });
 });
 
-void test("boundedWait: resolves with the work's value, and its timer is unref'd and cleared", async (t) => {
+void test("boundedWait: resolves with the work's value and clears its timer", async (t) => {
   const watchedMs = scaledMs(12_345);
   const armed = recordTimers(t, watchedMs);
 
@@ -120,7 +121,6 @@ void test("boundedWait: resolves with the work's value, and its timer is unref'd
   const timer = armed[0];
   assert.ok(timer !== undefined);
   assert.equal(timer.cleared, true, "the bound timer must be cleared once the work settles");
-  assert.equal(timer.handle.hasRef(), false, "the bound timer must not keep the process alive");
 });
 
 void test("boundedWait: a rejection of the work passes through and still clears the timer", async (t) => {
@@ -224,6 +224,31 @@ void test("pollUntil: an async check that never settles rejects at the deadline 
     { message: `the stalled check did not hold within ${String(scaledMs(30))} ms` },
   );
   assert.equal(checks, 1, "the stalled check ends the poll; no second check starts");
+});
+
+void test("pollUntil: a never-settling check still rejects when nothing else keeps the process alive", () => {
+  // In this process the test runner keeps the event loop alive, so a deadline timer that was unref'd would go unnoticed here
+  // and fail only on another runner. A fresh process with no other handle shows whether the timer alone ends the wait: with an
+  // unref'd timer it exits with "unsettled top-level await" (status 13) before printing.
+  const helper = new URL("./timing.js", import.meta.url).href;
+  const script = [
+    `import { pollUntil } from ${JSON.stringify(helper)};`,
+    "try {",
+    '  await pollUntil(() => new Promise(() => {}), "the stalled check", { timeoutMs: 100 });',
+    '  console.log("RESOLVED");',
+    "} catch (error) {",
+    '  console.log("REJECTED " + error.message);',
+    "}",
+  ].join("\n");
+
+  const child = spawnSync(process.execPath, ["--input-type=module", "--eval", script], {
+    encoding: "utf8",
+    timeout: scaledMs(20_000),
+    env: { ...process.env, [TIMEOUT_SCALE_VARIABLE]: "1" },
+  });
+
+  assert.equal(child.status, 0, `the child exited ${String(child.status)}: ${child.stderr}`);
+  assert.match(child.stdout, /^REJECTED the stalled check did not hold within 100 ms/);
 });
 
 void test("pollUntil: an async check that answers true only after the deadline does not succeed", async () => {
