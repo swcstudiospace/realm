@@ -20,20 +20,38 @@ import type { State } from "./states.js";
 
 // ---- Loader (D-21, D-22) ----------------------------------------------------
 
+// Where the policy's mode came from: the file named it ("explicit"), the file is present but
+// names none so the schema default applied ("default"), or there is no file ("no-file").
+export type ModeSource = "explicit" | "default" | "no-file";
+
+export interface LoadedPolicy {
+  readonly policy: Policy;
+  readonly modeSource: ModeSource;
+}
+
 // Loads the policy at an explicit caller-supplied path. A missing file yields the
-// validated defaults (advisory, no roots, shell disabled). An unreadable file, or a
+// validated defaults (fail-closed, no roots, shell disabled). An unreadable file, or a
 // policy file that resolves inside one of its own workspace roots, fails with
 // POLICY_DENIED. Invalid content fails with SchemaInvalidError (SCHEMA_INVALID).
 // Returns the plain Policy value; the validation wrapper's ok shape is not exposed.
 export function loadPolicyFile(explicitPath: string): Policy {
+  return loadPolicyFileDetailed(explicitPath).policy;
+}
+
+// As loadPolicyFile, and also reports where the mode came from. The provenance is read from the
+// parsed value before validation, because validation fills defaults into it.
+export function loadPolicyFileDetailed(explicitPath: string): LoadedPolicy {
   const text = readPolicyText(explicitPath);
   if (text === undefined) {
-    return unwrap(validate("policy", {}));
+    return { policy: unwrap(validate("policy", {})), modeSource: "no-file" };
   }
-  const policy = unwrap(validate("policy", parseJson(text)));
+  const parsed = parseJson(text);
+  const modeSource: ModeSource =
+    typeof parsed === "object" && parsed !== null && Object.hasOwn(parsed, "mode") ? "explicit" : "default";
+  const policy = unwrap(validate("policy", parsed));
   assertAbsoluteRoots(policy);
   assertPolicyOutsideRoots(explicitPath, policy);
-  return policy;
+  return { policy, modeSource };
 }
 
 function unwrap(result: ValidationResult<Policy>): Policy {
@@ -128,7 +146,8 @@ export type MutationDecision =
 // Pure. The one mutation decision for file-mutating calls, in both policy modes. An active session
 // allows a write whether or not an Anda bridge is configured; a configured bridge that goes down
 // moves the session to degraded, which is refused below.
-// Under advisory policy a write in any other non-active state proceeds with a warning.
+// Under advisory policy (an explicit opt-in; the default is fail-closed) a write in any other
+// non-active state proceeds with a warning.
 export function decideMutation(policy: Policy, state: State): MutationDecision {
   if (state === "active") {
     return { decision: "allow" };

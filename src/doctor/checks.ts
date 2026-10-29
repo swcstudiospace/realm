@@ -23,7 +23,7 @@ import { ANDA_INFORMATION_PATH } from "../anda/client.js";
 import { checkAppInformationShape } from "../anda/shape.js";
 import { SchemaInvalidError } from "../contract/validate.js";
 import { ERROR_CATALOGUE, RealmError } from "../core/errors.js";
-import { loadPolicyFile } from "../core/policy.js";
+import { loadPolicyFileDetailed, type LoadedPolicy } from "../core/policy.js";
 import { withTimeout } from "../core/timeout.js";
 import { buildCreateArgv, OPENSHELL_BINARY } from "../runtime/openshell.js";
 import {
@@ -205,12 +205,13 @@ function policyFileCheck(options: DoctorOptions): CheckResult {
     return {
       id,
       status: "warn",
-      detail: `${where}; defaults in effect (advisory mode, no workspace roots, shell disabled)`,
+      detail: `${where}; defaults in effect (fail-closed mode, no workspace roots, shell disabled)`,
       fix: "Create a policy file at the configured path that names workspaceRoots. Without one, every create is refused with POLICY_DENIED.",
     };
   }
+  let loaded: LoadedPolicy;
   try {
-    loadPolicyFile(path);
+    loaded = loadPolicyFileDetailed(path);
   } catch (error: unknown) {
     if (error instanceof SchemaInvalidError) {
       return {
@@ -231,10 +232,23 @@ function policyFileCheck(options: DoctorOptions): CheckResult {
     }
     throw error;
   }
+  const loadsText = "policy file loads, and it lies outside its own workspace roots";
+  if (loaded.policy.mode === "advisory") {
+    return {
+      id,
+      status: "warn",
+      detail: `${loadsText}, mode advisory (explicit): host writes proceed with a warning while the realm is not active; this is not containment`,
+      fix: 'Set "mode": "fail-closed", or delete the key, for containment.',
+    };
+  }
+  const modeText =
+    loaded.modeSource === "explicit"
+      ? "mode fail-closed"
+      : "mode fail-closed (the default; the file sets no mode)";
   return {
     id,
     status: "pass",
-    detail: "policy file loads, and it lies outside its own workspace roots",
+    detail: `${loadsText}, ${modeText}`,
     fix: null,
   };
 }

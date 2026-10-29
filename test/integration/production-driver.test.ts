@@ -242,6 +242,12 @@ void test("production live 1: the default policy confines the sandbox and keeps 
   const scenario = startScenario(t, { image: inputs().image }, WORKSPACE_FILES);
   await assertActive(scenario);
 
+  await t.test("realm status reports fail-closed for the suite's policy, which sets no mode (the real default)", async () => {
+    const status = await realmCli(scenario.inputs, scenario.environment, ["status"], STATUS_TIMEOUT_MS);
+    assert.equal(status.exitCode, 0, `realm status: ${describeResult(status)}`);
+    assert.equal(field(JSON.parse(status.stdout) as unknown, "mode"), "fail-closed", `realm status: ${describeResult(status)}`);
+  });
+
   await t.test("the workload is uid 1001 with no capabilities, no_new_privs and a seccomp filter", async () => {
     const result = await exec(scenario, ["cat", "/proc/self/status"]);
     assertExit(result, 0, "cat /proc/self/status");

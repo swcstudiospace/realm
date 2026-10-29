@@ -75,7 +75,7 @@ void test("policy-file: an absent policy file warns that defaults are in effect,
   const { policyPath, stateDir } = layout(t);
   const result = resultOf(await runChecks({ policyPath, stateDir, env: DOCTOR_ENV }), "policy-file");
   assert.equal(result.status, "warn");
-  assert.match(result.detail, /defaults in effect/);
+  assert.match(result.detail, /defaults in effect \(fail-closed mode, no workspace roots, shell disabled\)/);
   assert.match(fixOf(result), /workspaceRoots/);
 });
 
@@ -87,12 +87,34 @@ void test("policy-file: a configured path with no policy file set in the options
   assert.match(fixOf(result), /POLICY_DENIED/);
 });
 
-void test("policy-file: a valid policy outside its workspace roots passes with no fix (D-44)", async (t) => {
+void test("policy-file: a valid policy with no mode passes and says fail-closed is the default (D4, D-44)", async (t) => {
   const { workspace, policyPath, stateDir } = layout(t);
   writePolicy(policyPath, { workspaceRoots: [workspace] });
   const result = resultOf(await runChecks({ policyPath, stateDir, env: DOCTOR_ENV }), "policy-file");
   assert.equal(result.status, "pass");
+  assert.match(result.detail, /mode fail-closed \(the default; the file sets no mode\)/);
   assert.equal(result.fix, null);
+});
+
+void test("policy-file: a policy that names fail-closed passes and names the mode (D4)", async (t) => {
+  const { workspace, policyPath, stateDir } = layout(t);
+  writePolicy(policyPath, { mode: "fail-closed", workspaceRoots: [workspace] });
+  const result = resultOf(await runChecks({ policyPath, stateDir, env: DOCTOR_ENV }), "policy-file");
+  assert.equal(result.status, "pass");
+  assert.match(result.detail, /mode fail-closed$/);
+  assert.equal(result.fix, null);
+});
+
+void test("policy-file: an explicit advisory mode warns that it is not containment and says how to fix it (D4)", async (t) => {
+  const { workspace, policyPath, stateDir } = layout(t);
+  writePolicy(policyPath, { mode: "advisory", workspaceRoots: [workspace] });
+  const result = resultOf(await runChecks({ policyPath, stateDir, env: DOCTOR_ENV }), "policy-file");
+  assert.equal(result.status, "warn");
+  assert.match(result.detail, /mode advisory \(explicit\)/);
+  assert.match(result.detail, /host writes proceed with a warning while the realm is not active/);
+  assert.match(result.detail, /not containment/);
+  assert.match(fixOf(result), /"mode": "fail-closed"/);
+  assert.match(fixOf(result), /delete the key/);
 });
 
 void test("policy-file: an unknown key fails and the fix names the key, never the value (D-15, D-44)", async (t) => {

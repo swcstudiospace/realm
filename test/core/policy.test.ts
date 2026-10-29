@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SchemaInvalidError } from "../../src/contract/validate.js";
 import { RealmError } from "../../src/core/errors.js";
-import { loadPolicyFile } from "../../src/core/policy.js";
+import { decideMutation, loadPolicyFile, loadPolicyFileDetailed } from "../../src/core/policy.js";
 
 function withTempDir(body: (dir: string) => void): void {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "realm-policy-")));
@@ -35,10 +35,10 @@ function codeOf(error: unknown): string {
   return error.code;
 }
 
-void test("CORE-03: a missing policy file yields the default policy (advisory, no roots, shell disabled)", () => {
+void test("CORE-03: a missing policy file yields the default policy (fail-closed, no roots, shell disabled)", () => {
   withTempDir((dir) => {
     assert.deepEqual(loadPolicyFile(join(dir, "absent.json")), {
-      mode: "advisory",
+      mode: "fail-closed",
       workspaceRoots: [],
       credentialAllow: [],
       egressAllow: [],
@@ -46,6 +46,44 @@ void test("CORE-03: a missing policy file yields the default policy (advisory, n
       startupBudgetMs: 200000,
       toolQueueMs: 2000,
     });
+  });
+});
+
+void test("D4: a policy file with no mode loads as fail-closed and the guard decision denies a write while the realm is not active", () => {
+  withTempDir((dir) => {
+    const policy = loadPolicyFile(writeJson(join(dir, "policy.json"), { shellEnabled: false }));
+    assert.equal(policy.mode, "fail-closed");
+    assert.deepEqual(decideMutation(policy, "unbound"), { decision: "deny", code: "REALM_UNBOUND" });
+    assert.deepEqual(decideMutation(policy, "error"), { decision: "deny", code: "REALM_NOT_ACTIVE" });
+    assert.deepEqual(decideMutation(policy, "active"), { decision: "allow" });
+  });
+});
+
+void test("D4: a policy file that names advisory loads as advisory and its writes proceed with a warning", () => {
+  withTempDir((dir) => {
+    const policy = loadPolicyFile(writeJson(join(dir, "policy.json"), { mode: "advisory" }));
+    assert.equal(policy.mode, "advisory");
+    assert.equal(decideMutation(policy, "error").decision, "allow-with-warning");
+  });
+});
+
+void test("D4: loadPolicyFileDetailed reports where the mode came from", () => {
+  withTempDir((dir) => {
+    const absent = loadPolicyFileDetailed(join(dir, "absent.json"));
+    assert.equal(absent.modeSource, "no-file");
+    assert.equal(absent.policy.mode, "fail-closed");
+
+    const unnamed = loadPolicyFileDetailed(writeJson(join(dir, "unnamed.json"), { shellEnabled: true }));
+    assert.equal(unnamed.modeSource, "default");
+    assert.equal(unnamed.policy.mode, "fail-closed");
+
+    const closed = loadPolicyFileDetailed(writeJson(join(dir, "closed.json"), { mode: "fail-closed" }));
+    assert.equal(closed.modeSource, "explicit");
+    assert.equal(closed.policy.mode, "fail-closed");
+
+    const advisory = loadPolicyFileDetailed(writeJson(join(dir, "advisory.json"), { mode: "advisory" }));
+    assert.equal(advisory.modeSource, "explicit");
+    assert.equal(advisory.policy.mode, "advisory");
   });
 });
 

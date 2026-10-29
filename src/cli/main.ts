@@ -27,7 +27,7 @@ import { connectDaemon, type DaemonClient, type DaemonStatus } from "../daemon/c
 import { ensureDaemon, daemonAnswers, daemonLogPath, reportingStartFailure } from "../daemon/ensure.js";
 import { defaultRunCommand, runChecks, type DoctorOptions } from "../doctor/checks.js";
 import { createMcpServer } from "../mcp/server.js";
-import { isDirectEntry, readHostRuntime } from "../runtime/host-paths.js";
+import { defaultPolicyPath, isDirectEntry, readHostRuntime } from "../runtime/host-paths.js";
 import {
   probePodman,
   type ConnectSocket,
@@ -431,6 +431,7 @@ async function runDoctor(deps: ResolvedDeps, stateDir: string, socketPath: strin
   // OQ-P6-02: no daemon, so run the local checks and say the daemon is absent.
   const options: DoctorOptions = {
     stateDir,
+    policyPath: defaultPolicyPath(stateDir),
     env: deps.env,
     runCommand: deps.runCommand,
     connectSocket: deps.connectSocket,
