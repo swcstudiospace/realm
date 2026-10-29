@@ -19,7 +19,7 @@ The core guarantee, under the fail-closed policy: every file mutation either lan
 - v0.1.x was the first release line, for milestone v1.0 (a provisional name). v0.2.x, for milestone v2.0, becomes the current line with its first release and is the only line that is supported.
 - `realm up` binds the AgentOS driver from the configured digest-pinned image. The production stack is the OpenShell 0.1.5 gateway, the Realm compute driver, and rootless Podman 5.x (`docs/integration/openshell.md`).
 - Linux is the only verified platform. Podman 5.x is required, and Realm does not install it.
-- The Podman-gated production live suite (nine scenarios) and the Omp status checks were run on one Podman 5.7.1 host on 2026-10-28, and the ACP surface was run live against the same stack on 2026-10-29 (`docs/integration/openshell.md`, `docs/integration/omp.md`, `docs/integration/acp.md`). Other hosts, the Anda engine, and the Omp write and edit guard when disconnected (which needs a model call) are not verified live.
+- The Podman-gated production live suite (nine scenarios) and the Omp status checks were run on one Podman 5.7.1 host on 2026-10-28, and the ACP surface was run live against the same stack on 2026-10-29 (`docs/integration/openshell.md`, `docs/integration/omp.md`, `docs/integration/acp.md`). Other hosts and the Anda engine are not verified live. The Omp write and edit guard when disconnected was observed live on 2026-10-29 with a scripted model provider, not with a model (`docs/integration/omp-lifecycle-runbook.md`); a model-driven run is still outstanding (OMP-05).
 
 ## Quick start
 
@@ -35,7 +35,7 @@ npm test
 
 Realm ships one integration per host, each under `docs/hosts/` with a snippet:
 
-- Omp: a Realm extension, loaded from `dist/src/omp/extension.js` (see `docs/hosts/snippets/omp.md`).
+- Omp: a Realm extension, loaded from `dist/src/omp/extension.js` (see `docs/hosts/snippets/omp.md`). It attaches the sandbox when a session starts, shows its status, and gates Omp's `write` and `edit` calls. Omp's own tools, `bash` included, still run on the host, and the session directory must be the configured workspace root (`docs/integration/omp-lifecycle-runbook.md`).
 - Claude Code and Grok Build: the shared plugin bundle `adapters/claude-plugin`, plus an MCP entry that runs `realm mcp`.
 - Muse Code: the plugin bundle `adapters/muse-code`, plus an `mcp_servers` entry.
 - Hermes Agent: the MCP-only plugin bundle `adapters/hermes-agent`.
