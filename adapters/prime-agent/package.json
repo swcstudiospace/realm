@@ -1,6 +1,6 @@
 {
   "name": "realm-prime-agent",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Realm agent sandbox skill for Prime Agent; the MCP server is added with prime-agent mcp add",
   "license": "AGPL-3.0-only",
   "pi": {

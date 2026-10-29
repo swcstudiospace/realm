@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-10-29
+
+### Maintenance
+- test: replace fixed-timeout waits with injected clocks, gates and a scaled-timeout helper (phase 13, part B) (#14) (15a3651)
+
 ## [0.3.1] - 2026-10-29
 
 ### Maintenance

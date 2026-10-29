@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "name": "realm",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Realm agent sandbox: MCP server (realm mcp) for Muse Code, merged into settings by hand",
   "compat": {
     "source": "native",
