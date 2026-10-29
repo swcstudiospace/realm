@@ -6,10 +6,16 @@ import { PassThrough, Writable } from "node:stream";
 import { STATUS_LABELS } from "../../src/core/status.js";
 import { ERROR_CATALOGUE, makeRealmError, RealmError } from "../../src/core/errors.js";
 import {
-  MCP_PROTOCOL_VERSION,
   createMcpServer,
+  MCP_TOOL_DESCRIPTORS,
   type McpDispatcher,
 } from "../../src/mcp/server.js";
+import {
+  MCP_MODERN_VERSION,
+  MCP_SUPPORTED_VERSIONS,
+  META_PROTOCOL_VERSION,
+  UNSUPPORTED_PROTOCOL_VERSION,
+} from "../../src/mcp/protocol.js";
 import { makeHarness, WORKLOAD } from "../support/fake-tools.js";
 
 // TOOL-05 MCP stdio server proof (P5-D2, P5-D9, P5-D11). Every test drives the real
@@ -120,35 +126,174 @@ void test("TOOL-05: closing stdin shuts the server down without hanging", async 
   ]);
 });
 
-void test("TOOL-05: the server answers the server/discover probe per mcp.md Q5", async (t) => {
+// ---- Protocol eras and result shapes (docs/integration/mcp.md, "Protocol eras and result shapes") ------------------------
+
+const MODERN_META = { [META_PROTOCOL_VERSION]: MCP_MODERN_VERSION };
+const CLIENT = { name: "test-client", version: "0" };
+const TOOL_NAMES = ["exec", "read", "write", "list", "status", "retry"];
+
+// The version the manifest declares, read here independently of the code under test (the release job rewrites it).
+function manifestVersion(): string {
+  const manifest: unknown = JSON.parse(readFileSync("package.json", "utf8"));
+  assert.ok(typeof manifest === "object" && manifest !== null && "version" in manifest && typeof manifest.version === "string");
+  return manifest.version;
+}
+
+function resultRecord(line: string | undefined): Record<string, unknown> {
+  return resultOf(line as string) as Record<string, unknown>;
+}
+
+// The ToolOutcome inside a tools/call result.
+function structuredOf(line: string | undefined): Record<string, unknown> {
+  const outcome = resultRecord(line)["structuredContent"];
+  assert.ok(typeof outcome === "object" && outcome !== null, "the result carries structuredContent");
+  return outcome as Record<string, unknown>;
+}
+
+function errorOf(line: string | undefined): unknown {
+  return parseLine(line as string)["error"];
+}
+
+// The names of the tools in a tools/list result.
+function namesOf(list: Record<string, unknown>): string[] {
+  const tools = list["tools"];
+  assert.ok(Array.isArray(tools), "the result lists tools");
+  return tools.map((tool: unknown) => {
+    assert.ok(typeof tool === "object" && tool !== null && "name" in tool && typeof tool.name === "string");
+    return tool.name;
+  });
+}
+
+// The one text block of a tools/call result, which is what a host shows to the model.
+function textOf(result: Record<string, unknown>): string {
+  const content = result["content"];
+  assert.ok(Array.isArray(content) && content.length === 1, "the result carries exactly one content block");
+  const block: unknown = content[0];
+  assert.ok(typeof block === "object" && block !== null && "type" in block && block.type === "text");
+  assert.ok("text" in block && typeof block.text === "string");
+  return block.text;
+}
+
+void test("TOOL-05: server/discover answers a DiscoverResult that lists both eras and carries the package version", async (t) => {
   const h = makeHarness(t);
-  const driven = await drive(h.dispatcher, [request(1, "server/discover", {})]);
+  const driven = await drive(h.dispatcher, [request(1, "server/discover", { _meta: MODERN_META })]);
   assert.equal(driven.stdoutLines.length, 1);
-  const result = resultOf(driven.stdoutLines[0] as string) as Record<string, unknown>;
-  assert.equal(result["protocolVersion"], MCP_PROTOCOL_VERSION);
-  assert.equal(result["protocolVersion"], "2026-07-28");
-  assert.ok(
-    typeof result["capabilities"] === "object" && result["capabilities"] !== null,
-    "the probe answer carries capabilities",
-  );
+  const result = resultRecord(driven.stdoutLines[0]);
+  assert.equal(result["resultType"], "complete");
+  assert.deepEqual(result["supportedVersions"], [...MCP_SUPPORTED_VERSIONS]);
+  assert.deepEqual(result["supportedVersions"], ["2026-07-28", "2025-11-25", "2025-06-18"]);
+  assert.deepEqual(result["capabilities"], { tools: {} });
+  assert.equal(typeof result["ttlMs"], "number");
+  assert.equal(result["cacheScope"], "public");
+  assert.deepEqual(result["_meta"], {
+    "io.modelcontextprotocol/serverInfo": { name: "agent-realm", version: manifestVersion() },
+  });
+  assert.equal(result["protocolVersion"], undefined, "the legacy field is not part of a DiscoverResult");
 });
 
-void test("TOOL-05: the server answers the initialize handshake per mcp.md Q5", async (t) => {
+void test("TOOL-05: initialize answers the requested legacy revision, and the newest legacy one for any other request", async (t) => {
+  const h = makeHarness(t);
+  const asked = ["2025-06-18", "2025-11-25", "2024-11-05", "2026-07-28"];
+  const driven = await drive(
+    h.dispatcher,
+    asked.map((protocolVersion, index) => request(index + 1, "initialize", { protocolVersion, capabilities: {}, clientInfo: CLIENT })),
+  );
+  assert.equal(driven.stdoutLines.length, asked.length);
+  const answered = driven.stdoutLines.map((line) => resultRecord(line)["protocolVersion"]);
+  assert.deepEqual(answered, ["2025-06-18", "2025-11-25", "2025-11-25", "2025-11-25"]);
+  const first = resultRecord(driven.stdoutLines[0]);
+  assert.deepEqual(first["capabilities"], { tools: {} });
+  assert.deepEqual(first["serverInfo"], { name: "agent-realm", version: manifestVersion() });
+  assert.equal(first["resultType"], undefined, "a legacy handshake answer carries no resultType");
+});
+
+void test("TOOL-05: initialize without a string protocolVersion is invalid params", async (t) => {
+  const h = makeHarness(t);
+  const driven = await drive(h.dispatcher, [request(1, "initialize", { capabilities: {} }), request(2, "initialize", "nope")]);
+  assert.deepEqual(errorOf(driven.stdoutLines[0]), { code: -32602, message: "Invalid params" });
+  assert.deepEqual(errorOf(driven.stdoutLines[1]), { code: -32602, message: "Invalid params" });
+});
+
+void test("TOOL-05: after an initialize handshake a request without modern _meta is served in the legacy shape", async (t) => {
   const h = makeHarness(t);
   const driven = await drive(h.dispatcher, [
-    request(7, "initialize", {
-      protocolVersion: "2026-07-28",
-      capabilities: {},
-      clientInfo: { name: "test-client", version: "0" },
-    }),
+    request(1, "initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: CLIENT }),
+    request(2, "tools/list", {}),
+    toolRequest(3, "status", {}),
+    request(4, "ping", {}),
   ]);
-  assert.equal(driven.stdoutLines.length, 1);
-  const result = resultOf(driven.stdoutLines[0] as string) as Record<string, unknown>;
-  assert.equal(result["protocolVersion"], "2026-07-28");
-  assert.ok(
-    typeof result["serverInfo"] === "object" && result["serverInfo"] !== null,
-    "the handshake answer names the server",
-  );
+  assert.equal(driven.stdoutLines.length, 4);
+  const list = resultRecord(driven.stdoutLines[1]);
+  assert.deepEqual(Object.keys(list), ["tools"], "a legacy tools/list result is just the tools");
+  assert.deepEqual(namesOf(list), TOOL_NAMES);
+  const call = resultRecord(driven.stdoutLines[2]);
+  assert.equal(call["resultType"], undefined, "a legacy tool result carries no resultType");
+  assert.equal(call["isError"], false);
+  const outcome = structuredOf(driven.stdoutLines[2]);
+  assert.equal(outcome["outcome"], "done");
+  assert.equal(outcome["tool"], "status");
+  assert.deepEqual(JSON.parse(textOf(call)), outcome, "the text block is the serialised outcome, which is what the model reads");
+  assert.deepEqual(resultRecord(driven.stdoutLines[3]), {}, "the legacy revisions define ping");
+});
+
+void test("TOOL-05: a request that names the modern revision in _meta is served statelessly in the modern shape, even after a legacy handshake", async (t) => {
+  const h = makeHarness(t);
+  const driven = await drive(h.dispatcher, [
+    request(1, "initialize", { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: CLIENT }),
+    request(2, "tools/list", { _meta: MODERN_META }),
+    request(3, "tools/call", { name: "status", arguments: {}, _meta: MODERN_META }),
+    request(4, "ping", { _meta: MODERN_META }),
+  ]);
+  assert.equal(driven.stdoutLines.length, 4);
+  const list = resultRecord(driven.stdoutLines[1]);
+  assert.equal(list["resultType"], "complete");
+  assert.equal(typeof list["ttlMs"], "number");
+  assert.equal(list["cacheScope"], "public");
+  assert.deepEqual(namesOf(list), TOOL_NAMES);
+  const call = resultRecord(driven.stdoutLines[2]);
+  assert.equal(call["resultType"], "complete");
+  assert.equal(call["isError"], false);
+  assert.equal(structuredOf(driven.stdoutLines[2])["outcome"], "done");
+  assert.deepEqual(JSON.parse(textOf(call)), structuredOf(driven.stdoutLines[2]));
+  assert.deepEqual(errorOf(driven.stdoutLines[3]), { code: -32601, message: "Method not found" }, "the modern schema has no ping");
+});
+
+void test("TOOL-05: a client that sends neither a handshake nor _meta is served in the server's own (modern) revision", async (t) => {
+  const h = makeHarness(t);
+  const driven = await drive(h.dispatcher, [request(1, "tools/list", {}), toolRequest(2, "status", {})]);
+  assert.equal(resultRecord(driven.stdoutLines[0])["resultType"], "complete");
+  assert.equal(resultRecord(driven.stdoutLines[1])["resultType"], "complete");
+});
+
+void test("TOOL-05: a request naming an unsupported protocol version answers -32022 with the versions the server serves", async (t) => {
+  const h = makeHarness(t);
+  const unsupported = { [META_PROTOCOL_VERSION]: "1900-01-01" };
+  const driven = await drive(h.dispatcher, [
+    request(1, "server/discover", { _meta: unsupported }),
+    request(2, "tools/list", { _meta: unsupported }),
+    request(3, "tools/call", { name: "status", arguments: {}, _meta: unsupported }),
+  ]);
+  assert.equal(driven.stdoutLines.length, 3);
+  for (const line of driven.stdoutLines) {
+    assert.deepEqual(errorOf(line), {
+      code: UNSUPPORTED_PROTOCOL_VERSION,
+      message: "Unsupported protocol version",
+      data: { supported: [...MCP_SUPPORTED_VERSIONS], requested: "1900-01-01" },
+    });
+  }
+  assert.equal(UNSUPPORTED_PROTOCOL_VERSION, -32022);
+});
+
+void test("TOOL-05: a protocol version in _meta that is not a string is invalid params", async (t) => {
+  const h = makeHarness(t);
+  const driven = await drive(h.dispatcher, [request(1, "tools/list", { _meta: { [META_PROTOCOL_VERSION]: 20260728 } })]);
+  assert.deepEqual(errorOf(driven.stdoutLines[0]), { code: -32602, message: "Invalid params" });
+});
+
+void test("TOOL-05: the tool descriptors the server lists are the ones the module exports", async (t) => {
+  const h = makeHarness(t);
+  const driven = await drive(h.dispatcher, [request(1, "tools/list", {})]);
+  assert.deepEqual(resultRecord(driven.stdoutLines[0])["tools"], JSON.parse(JSON.stringify(MCP_TOOL_DESCRIPTORS)));
 });
 
 void test("TOOL-05: each of the six tools routes to ToolDispatcher.call with the ToolCall map unchanged", async (t) => {
@@ -179,7 +324,7 @@ void test("TOOL-05: each of the six tools routes to ToolDispatcher.call with the
   const driven = await drive(spy, lines);
   assert.equal(driven.stdoutLines.length, lines.length, "every request takes exactly one reply");
   assert.deepEqual(seen, expected, "the ToolCall maps cross unchanged and in order");
-  const replies = driven.stdoutLines.slice(1).map((line) => resultOf(line) as Record<string, unknown>);
+  const replies = driven.stdoutLines.slice(1).map((line) => structuredOf(line));
   const tools = ["exec", "read", "write", "list", "status", "retry"];
   for (let index = 0; index < tools.length; index += 1) {
     assert.equal(replies[index]?.["outcome"], "done", `expected a done ${String(tools[index])}`);
@@ -191,12 +336,16 @@ void test("TOOL-05: a dispatcher refusal surfaces the catalogue code in the repl
   const h = makeHarness(t);
   const driven = await drive(h.dispatcher, [toolRequest(1, "read", { path: "doc.txt" })]);
   assert.equal(driven.stdoutLines.length, 1);
-  assert.deepEqual(resultOf(driven.stdoutLines[0] as string), {
+  const refused = {
     outcome: "refused",
     tool: null,
     code: "SCHEMA_INVALID",
     retryable: ERROR_CATALOGUE["SCHEMA_INVALID"].retryable,
-  });
+  };
+  const result = resultRecord(driven.stdoutLines[0]);
+  assert.deepEqual(result["structuredContent"], refused, "the dispatcher outcome crosses unchanged as structuredContent");
+  assert.equal(result["isError"], true, "a refusal is a tool failure the model has to see");
+  assert.equal(textOf(result), JSON.stringify(refused));
 });
 
 void test("TOOL-05: a RealmError thrown by the dispatcher reaches the client as a tool error result with its code and message (G-08)", async () => {
@@ -208,6 +357,7 @@ void test("TOOL-05: a RealmError thrown by the dispatcher reaches the client as 
   assert.equal(body["error"], undefined, "a tool failure is a result, not a protocol error");
   const reason = ERROR_CATALOGUE["OPENSHELL_START_FAILED"].reason;
   assert.deepEqual(body["result"], {
+    resultType: "complete",
     isError: true,
     content: [{ type: "text", text: `OPENSHELL_START_FAILED: ${reason}` }],
     structuredContent: {
@@ -281,8 +431,8 @@ void test("TOOL-05: a stdio-client-shaped driver completes status and write call
     toolRequest(3, "write", { path: "e2e.txt", content: "hello" }),
   ]);
   assert.equal(driven.stdoutLines.length, 3, "probe plus two tool calls take three replies");
-  assert.deepEqual(resultOf(driven.stdoutLines[1] as string), expectedStatus);
-  assert.deepEqual(resultOf(driven.stdoutLines[2] as string), expectedWrite);
+  assert.deepEqual(structuredOf(driven.stdoutLines[1]), expectedStatus);
+  assert.deepEqual(structuredOf(driven.stdoutLines[2]), expectedWrite);
   assert.equal(readFileSync(join(h.ws, "e2e.txt"), "utf8"), "hello");
 });
 
@@ -290,11 +440,24 @@ void test("TOOL-05: the status reply carries the shared displayStatus label, not
   const h = makeHarness(t);
   const driven = await drive(h.dispatcher, [toolRequest(1, "status", {})]);
   assert.equal(driven.stdoutLines.length, 1);
-  const outcome = resultOf(driven.stdoutLines[0] as string) as Record<string, unknown>;
+  const outcome = structuredOf(driven.stdoutLines[0]);
   assert.equal(outcome["outcome"], "done");
   assert.equal(outcome["tool"], "status");
   const value = outcome["value"] as Record<string, unknown>;
   const display = value["display"] as Record<string, unknown>;
   assert.equal(display["label"], STATUS_LABELS.active);
   assert.equal(display["label"], "realm active");
+});
+
+void test("TOOL-05: a thrown RealmError is a tool error without resultType in the legacy era", async () => {
+  const thrown = makeRealmError("OPENSHELL_START_FAILED");
+  const dispatcher: McpDispatcher = { call: () => Promise.reject(thrown) };
+  const driven = await drive(dispatcher, [
+    request(1, "initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: CLIENT }),
+    toolRequest(2, "exec", { argv: ["true"] }),
+  ]);
+  const result = resultRecord(driven.stdoutLines[1]);
+  assert.equal(result["resultType"], undefined);
+  assert.equal(result["isError"], true);
+  assert.equal(structuredOf(driven.stdoutLines[1])["code"], "OPENSHELL_START_FAILED");
 });

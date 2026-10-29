@@ -480,7 +480,9 @@ void test("realm mcp attaches to the daemon, claims the current directory, and s
     byId.set(parsed["id"] as number, parsed);
   }
   assert.ok("result" in (byId.get(1) ?? {}), "tools/list answers with a result");
-  assert.deepEqual((byId.get(2) ?? {})["result"], REFUSED_STATUS);
+  const statusResult = (byId.get(2) ?? {})["result"] as Record<string, unknown>;
+  assert.deepEqual(statusResult["structuredContent"], REFUSED_STATUS, "the dispatcher outcome crosses as structuredContent");
+  assert.equal(statusResult["isError"], true, "a refused outcome is a tool error the model can see");
   assert.equal(diagnostics.text(), "", "a healthy session writes nothing to diagnostics");
   assert.equal(daemon.record.connects, 3, "two liveness probes and one mcp client");
   assert.equal(daemon.record.closes, 3, "every client is closed once the session ends");
@@ -544,8 +546,9 @@ void test("realm mcp still serves when up is refused and writes the refusal code
   assert.equal(spawns.length, 0);
   assert.deepEqual(daemon.record.upRoots, ["/srv/realm-ws"]);
   assert.deepEqual(seen, [{ status: {} }]);
-  const reply = JSON.parse(stdout) as Record<string, unknown>;
-  assert.deepEqual(reply["result"], REFUSED_STATUS);
+  const reply = JSON.parse(stdout) as { result: Record<string, unknown> };
+  assert.deepEqual(reply.result["structuredContent"], REFUSED_STATUS);
+  assert.equal(reply.result["isError"], true);
   assert.ok(diagnostics.text().startsWith("SCHEMA_INVALID: "), diagnostics.text());
 });
 
