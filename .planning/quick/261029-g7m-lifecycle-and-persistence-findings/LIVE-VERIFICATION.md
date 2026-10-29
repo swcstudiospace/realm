@@ -126,7 +126,7 @@ Reading: the two workspace files survived with identical hashes at every step. A
 
 ### L6a. Realm's atomic write, SIGKILL at each hookable stage
 
-A child process called `atomicWriteFile` from the built `dist/src/fs/atomic-write.js` against a target holding `OLD-CONTENT` and SIGKILLed itself at each stage, in a throwaway directory. A later clean write to the same target followed.
+A child process called `atomicWriteFile` from the built `dist/src/fs/atomic-write.js` against a target holding `OLD-CONTENT` and SIGKILLed itself at each stage, in a throwaway directory. The four hookable stages are `after-temp-write`, `after-fsync`, `before-rename` and `after-recheck`; all of them fire before `renameSync`, and no hook exists after the rename. A later clean write to the same target followed.
 
 ```text
 {"killedAt":"after-temp-write","childExit":"SIGKILL","target":"OLD-CONTENT","orphanTempFiles":1,"orphanContent":"NEW-CONTENT-after-temp-write","secondWrite":"completed -> target \"SECOND-WRITE\", orphans left 1"}
@@ -136,7 +136,7 @@ A child process called `atomicWriteFile` from the built `dist/src/fs/atomic-writ
 {"killedAt":"(no kill)","childExit":"exit 0 (completed)","target":"NEW-CONTENT-(no kill)","orphanTempFiles":0,"orphanContent":null}
 ```
 
-Reading: at every stage the target kept its old content, never a torn mix. A complete temp file `.target.txt.realm-tmp-<16 hex>` holding the new content stayed in the directory, and a later clean write did not remove it. The control run without a kill left no temp file.
+Reading: at each of the four stages, all before the rename, the target kept its old content, never a torn mix. A complete temp file `.target.txt.realm-tmp-<16 hex>` holding the new content stayed in the directory, and a later clean write did not remove it. The control run without a kill left no temp file. A kill after the rename and before the call returns cannot be hooked and was not run; it leaves the complete new file and no temp file, because `rename(2)` is atomic (INFERENCE).
 
 ### L6b. Omp's own write, under strace
 

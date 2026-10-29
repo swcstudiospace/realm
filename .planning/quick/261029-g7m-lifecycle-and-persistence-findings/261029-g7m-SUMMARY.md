@@ -21,7 +21,7 @@ completed: 2026-10-29
 
 - A closed terminal (SIGHUP) and a SIGKILL of Omp left the daemon, the container and the written file untouched; the next session reattached to the same container (L7).
 - A daemon SIGKILL left the workspace files intact and the container running as an orphan; the next `realm up` destroyed it and created a new one, so anything outside `/workspace` was lost (L5).
-- Realm's atomic write leaves the old content intact at every kill point, plus one orphan temp file that nothing removes (L6a). Omp's own write is an in-place overwrite with no `fsync` and no rename (L6b).
+- Realm's atomic write leaves the target old or new, never torn. A SIGKILL at each of the four hookable stages, all of which fire before the rename, left the old content and one orphan temp file that nothing removes (L6a); a kill after the rename leaves the new file (not run). Omp's own write is an in-place overwrite with no `fsync` and no rename (L6b).
 
 **Outstanding work.** No ROADMAP phase or milestone is incomplete, no TODO, FIXME, HACK or XXX marker exists, and the next GSD step is `/gsd-new-milestone`. Carried items are FS-02, ANDA-01 to ANDA-04, OMP-05, PRD-DRV-01, UI-01 and tech debt TD-01 to TD-10; those reachable by engineering alone are listed in `OUTSTANDING-WORK-INVENTORY.md`, section 5. Nothing was implemented, because no phase authorizes it and the request asked for suggestions.
 
