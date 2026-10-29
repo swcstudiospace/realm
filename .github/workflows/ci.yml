@@ -129,9 +129,32 @@ jobs:
           node scripts/docs/sync-site.mjs
           npm run build --prefix site
 
+  audit:
+    name: Dependency audit
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, linux, x64, omega-ci]
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js 24.x
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.x
+
+      - name: Audit production dependencies
+        run: |
+          set -euo pipefail
+          npm audit --omit=dev --audit-level=high
+
   release:
     name: Release
-    needs: [verify, site]
+    needs: [verify, site, audit]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: [self-hosted, linux, x64, omega-ci]
     timeout-minutes: 30
@@ -348,6 +371,16 @@ jobs:
           set -euo pipefail
           npm run build
           npm pack
+
+      # Installs the packed tarball in a scratch consumer and checks the shipped files and
+      # versions. Runs before any remote mutation, so a failure leaves no tag behind.
+      - name: Smoke the release tarball
+        if: steps.tag_check.outputs.action == 'normal'
+        env:
+          VERSION: ${{ steps.tag_check.outputs.version }}
+        run: |
+          set -euo pipefail
+          node scripts/check/pack-smoke.mjs --tarball "agent-realm-${VERSION}.tgz" --expect-version "${VERSION}"
 
       # Checksums and a CycloneDX SBOM of the production dependency tree. Both run before any
       # remote mutation, so a failure here leaves no tag and no release behind.
