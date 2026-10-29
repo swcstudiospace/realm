@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-10-29
+
+### Maintenance
+- test: add property tests for the canonicalizer and the policy parser, with fast-check (phase 13, part C-props) (#17) (9ef8b04)
+
 ## [0.3.3] - 2026-10-29
 
 ### Added
