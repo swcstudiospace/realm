@@ -89,29 +89,36 @@ void test("repeating each of the seven operations returns the same snapshot with
 
 void test("a create that times out reattaches to one container on retry, with no duplicate resource (CORE-06, RT-07)", async (t) => {
   // The clock is frozen so the 1000 ms budget cannot be used up by the create phase's real disk work on a
-  // loaded host; it bounds only the real timer racing the 3000 ms scripted create delay (3x the budget).
+  // loaded host.
+  // The first create is held at a gate and the budget timer is mocked, so the budget fires exactly
+  // when the test ticks it and the abandoned create ends exactly when the test releases it.
   t.mock.method(performance, "now", () => 1000);
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  t.after(() => {
+    t.mock.timers.reset();
+  });
   const { controller, exec, store, workspace } = fixture(t, 1000);
-  exec.setDelay("create", 3000);
+  const release = exec.holdNext("create");
 
-  const failed = await controller.create(workspace);
+  const pending = controller.create(workspace);
+  // Wait (on setImmediate, which is not mocked) until the create call is parked at the gate; the
+  // budget timer was registered before it.
+  while (exec.callCount("create") < 1) {
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+  }
+  t.mock.timers.tick(1000);
+  const failed = await pending;
   assert.equal(failed.state, "error");
   assert.equal(failed.reason, "STARTUP_BUDGET_EXCEEDED");
 
-  exec.setDelay("create", 0);
   const active = await controller.create(workspace);
   assert.equal(active.state, "active");
 
-  // Real time, on purpose: the budget is enforced by a real setTimeout inside withTimeout,
-  // and the fake's scripted delay is a real timer, so deterministic fake timers would also
-  // have to drive the controller's timer. The wait lets the abandoned create run to its end.
-  // The budget is 1000 ms, 3.6x the 274.82 ms slowest observed active create (N=200).
-  // The scripted create delay is 3000 ms, 3x the budget, so the budget fires first.
-  // The wait is 9000 ms, 3x the 3000 ms delay, so abandoned creates drain before the count check.
-  // The Promise executor form is used because tsconfig's ES2023 lib has no Promise.withResolvers.
-  await new Promise((resolve) => {
-    setTimeout(resolve, 9000);
-  });
+  // The abandoned create ends only now, after the retry's create completed.
+  release();
+  await exec.settled();
   assert.equal(exec.resources().length, 1);
   assert.equal(store.load(SESSION)?.containerId, exec.resources()[0]?.containerId);
 });
