@@ -126,6 +126,60 @@ RT-05 says "IPv6 is disabled". Realm does not create the container and cannot se
 
 A dispatcher call writes two audit lines: an admission line before execution and a result line after. Both use the Phase 2 entry format (D-42) with one additive, optional field, `phase`, valued `admission` or `result`. Outcome alone cannot separate the two lines, because a successful call has outcome `ok` on both. Phase 7 review must read both lines of one call as one call.
 
+### Audit: reconciliation and sweep lines (Phase 14, CRASH-02)
+
+Phase 14 adds two values to the audit line format. Both are additive, and a log written before this change still parses.
+
+- **`phase: "reconciliation"`** (`AuditPhase`, `src/audit/log.ts`). A reconciliation line has outcome `AUDIT_OUTCOME_UNKNOWN` (see "Catalogue extension (Phase 14)"). It closes an admission line that has no result line.
+- **`tool: "temp-sweep"`**, on lines with no `phase`. These are the orphan temp-file sweep lines (next section). With no `phase`, a sweep line keeps the pre-stage shape and is never counted as an admission, a result or a reconciliation.
+
+**Torn-tail rule.** A process killed in the middle of an append can leave a last line with no newline. `writeAuditLine` (`src/audit/log.ts`) checks an existing, non-empty file: if its last byte is not a newline, the next write is a newline followed by the new line, in one write call. The torn line stays in the file as an unparseable line, and the new line is not glued onto it. The rule lives only in `writeAuditLine`, so it covers every writer of the file.
+
+**How reconciliation pairs lines** (`reconcileAuditLogs`, `src/audit/reconcile.ts`).
+
+- It reads each `<stateDir>/audit/<sessionId>.jsonl`. The file stem is the session id and must match the same pattern `appendAudit` enforces; the reconciliation line is appended for that session id.
+- Per file it counts, for each key, the admission lines against the result and reconciliation lines. The key is built by the one exported function `pairingKey`: `tool`, `path` (empty when absent) and the JSON of `execSummary` (`null` when absent), separated by NUL. Order is not used, because calls may overlap and their lines interleave.
+- For each key with more admissions than closing lines it appends one reconciliation line per missing closing line, through `appendAudit` only. The line copies `tool`, `path` and `execSummary` from the admission and never `bytes` or `sha256`.
+- It is idempotent. After the append the counts are equal, so a second run appends nothing (VERIFIED_BY_CODE_READING).
+- Ignored lines: a line that is not JSON, not an object, has no string `phase` or `tool`, has a `path` or `execSummary` of the wrong type, or has a `phase` other than the three named. A torn last admission is therefore ignored, which is right: the admission is appended before execution, so nothing ran.
+- A missing audit directory is zero work. A symlinked or non-directory audit directory, a symlinked or non-regular log, a log whose stem is not a safe session id, an unreadable log, a log over the cap (`RECONCILE_MAX_FILE_BYTES`, 256 MiB; the log has no rotation and is read whole), and a log whose append throws are each counted in `failed` and are not fatal. The other logs are still reconciled, and the caller reports the counts. The result is `{ files, appended, failed }`.
+- Precondition: run it before any dispatcher exists in the process, as the startup reaper does (D-87). A call that is still running would otherwise be labelled unknown.
+
+**What "unknown" covers.** A reconciliation line says only that no closing line exists. A lone admission has two origins. Either the process ended after the admission and before the result, so the call may have run, or the admission append itself threw `AUDIT_WRITE_FAILED`, so nothing ran. The second case can leave the line in the file anyway: a failed fsync after a successful write reports `AUDIT_WRITE_FAILED` although the line is already there (`writeAuditLine` comment). A lone admission from a failed append is labelled unknown too, because the log cannot tell the two apart.
+
+**Status.** `reconcileAuditLogs` and `sweepOrphanTempFiles` are libraries in this change. Nothing calls either of them at daemon start yet; a later pull request wires them. Until then no reconciliation line or sweep line is written by a running daemon.
+
+### Orphan temp-file sweep (Phase 14, CRASH-01)
+
+`atomicWriteFile` writes a temp file beside its target and renames it. A process killed between the two leaves the temp file. `sweepOrphanTempFiles(roots, options)` in `src/fs/temp-sweep.ts` removes such files and only such files. As built:
+
+- **Name.** The file name must match `TEMP_NAME_PATTERN`, `^\.(.+)\.realm-tmp-[0-9a-f]{16}$`, exported from `src/fs/atomic-write.ts`. The writer builds its names with `tempFileName` in the same file, so the writer and the sweep share one definition.
+- **Regular files only.** A directory entry must be a regular file (`Dirent.isFile`) and again an `lstat` regular file. A symlink named like a temp file is not removed.
+- **Owner.** The file's uid must equal `options.ownerUid`. The caller supplies the uid.
+- **Age.** `now - mtimeMs` must be at least `options.minAgeMs`. `ORPHAN_TEMP_MIN_AGE_MS` is 60 000 ms and is what production is meant to pass; the library takes the bound as an option. A user file that is named like a temp file, is owned by the daemon's user and is older than the bound is removed by design.
+- **Same device.** A subdirectory is entered only when its device equals the root's device. A root is skipped when its bound device and inode differ from the opened descriptor's.
+- **No symlinks.** Each directory is opened with `O_NOFOLLOW|O_DIRECTORY` through the parent descriptor, and later steps act through `/proc/self/fd/<fd>/<name>`, as `atomic-write.ts` does. A symlinked directory is not entered, and a directory swapped for a symlink during the walk cannot redirect the sweep. Without `/proc` the root cannot be pinned and is skipped.
+- **Audit before unlink.** The injected `audit` callback is called with `{ tool: "temp-sweep", outcome: "ok", path, bytes }` before the unlink. If it throws, the file is kept and counted in `skipped`. If the unlink then fails, the failure is counted in `failed` and a second line with outcome `CLEANUP_FAILED` is passed to the callback; if that callback throws, that is counted in `failed` too. The entries have no `phase` (see the audit section above).
+- **Bounds.** The walk stops with `truncated: true` when it has examined `maxEntries` directory entries (default `DEFAULT_SWEEP_MAX_ENTRIES`, 500 000) or when its wall budget `deadlineMs` (default `DEFAULT_SWEEP_DEADLINE_MS`, 15 000 ms) is spent. A truncated walk skips the remaining roots.
+- **Result.** `{ removed, skipped, failed, truncated }`. A root that does not bind never aborts the sweep; it is counted in `skipped`. The sweep reads no file content, no process state and no environment: the clock, owner, age bound and audit sink are all injected.
+
+The roots are the caller's choice, and the library does not call itself: it is not yet called at daemon start (see "Status" above).
+
+### Session record delete is durable (Phase 14, CRASH-03)
+
+`SessionStore.delete` (`src/session/store.ts`) removes the record file and then syncs the sessions directory (`syncDirectory`). A directory fsync that fails is a `WRITE_NOT_ATOMIC` error: the unlink has already happened, and its durability is not known. A directory that cannot be opened, or that is not a directory, is `PATH_ESCAPE` and is rethrown unchanged (`syncDirectory`, `src/fs/atomic-write.ts`). Deleting a record that does not exist is still a no-op, and so is deleting when the sessions directory does not exist.
+
+### Lost-container retry in `create` (Phase 14, TD-04)
+
+`LifecycleController.create` (`src/lifecycle/controller.ts`) now recovers a recorded container that no longer starts. The rule as built:
+
+- It applies only when the session record already names a container and no create ran in this call, so the container being started is the recorded one.
+- It applies only when the start fails with `OPENSHELL_START_FAILED`. A port failure that is not a `RealmError` is mapped to that code (`portFailureCode`), so it qualifies too. Any other code, such as `AGENTOS_CRASH_LOOP`, goes to the usual failure path and the container is kept; a dead runner in a live container is recovered in place by `/realm-retry` (`docs/integration/omp.md`, "Runner killed in the sandbox").
+- Recovery runs once per `create` call. `recoverStaleContainer` destroys the recorded container within the remaining startup budget, writes the record with no container id (before the new create, RT-07), creates a new container and starts it. If that second start fails, the failure takes the usual path and the new id stays recorded.
+- If the destroy fails, it throws its own code and the old container id stays recorded. A stop that took the session over during recovery makes `create` return the snapshot the stop left.
+
+**Known limit.** The trigger is the code alone (VERIFIED_BY_CODE_READING). The port gives no distinction between a container that is gone and one that is stopped but still present, so a stopped-but-present container is destroyed and recreated as well, and what the old container held is dropped with it.
+
 ### Open questions and defaults (OQ-P4-01 to OQ-P4-12)
 
 | ID | Question | Default applied | Blocked module or phase | Status |
@@ -147,7 +201,7 @@ Superseded by `docs/integration/openshell.md`: `workloadArgv` is no longer a con
 
 ## Catalogue extension (closure, 2026-10-22)
 
-This section records an explicit contract extension to the error catalogue in `src/core/errors.ts`. The extension removes misleading code reuse. No existing code was renamed or removed. The catalogue now holds 25 codes. Three codes were added:
+This section records an explicit contract extension to the error catalogue in `src/core/errors.ts`. The extension removes misleading code reuse. No existing code was renamed or removed. The catalogue held 25 codes at the closure on 2026-10-22; that count is historical, and the current count is in "Catalogue extension (Phase 14)". Three codes were added:
 
 | Code | Retryable | What it replaces |
 | --- | --- | --- |
@@ -165,6 +219,20 @@ Each new code now covers its own situation. The code it replaces keeps its own m
 - The reason and the retryable flag always come from the primary `code`. `causeCode` never changes them.
 - Example: `makeRealmError("OPENSHELL_START_FAILED", "PODMAN_MACHINE_DOWN")` gives code `OPENSHELL_START_FAILED`, `causeCode` `PODMAN_MACHINE_DOWN`, and the `OPENSHELL_START_FAILED` reason.
 
+## Catalogue extension (Phase 14)
+
+This section records the second explicit contract extension to the error catalogue in `src/core/errors.ts`. The owner approved exactly this one addition (decision D5, 2026-10-29). No existing code was renamed or removed. The catalogue now holds **30 codes** (`ERROR_CODES` and the header comment "Exactly these 30 codes" in `src/core/errors.ts`). The count of 25 in "Catalogue extension (closure, 2026-10-22)" is historical: four codes were catalogued after it (`MCP_INPUT_FAILED`, `CLEANUP_FAILED`, `DAEMON_START_TIMEOUT`, `SANDBOX_NAME_IN_USE`, named in the same header comment), and this one is the fifth.
+
+| Code | Retryable | gRPC status | Reason text (`src/core/errors.ts`) |
+| --- | --- | --- | --- |
+| `AUDIT_OUTCOME_UNKNOWN` | false | `INTERNAL` (`DRIVER_STATUS`, `src/runtime/driver/grpc-status.ts`) | The process ended before this call's result was recorded; whether the call took effect is unknown. |
+
+**Why no existing code fits.** The code labels a call whose admission audit line has no result line, so the call may or may not have run. `AUDIT_WRITE_FAILED` says "audit log could not be written; the tool call did not run" and is retryable, which is false and unsafe for a call that may have run. `OPENSHELL_START_FAILED`, `WRITE_NOT_ATOMIC` and the other codes describe other events. The code is not retryable because it only labels a historical line and must not invite a blind retry.
+
+**Where it appears.** In this change the code is the `outcome` of a reconciliation audit line (`src/audit/reconcile.ts`, `reconcileAuditLogs`) and nowhere else in `src/`: no tool reply carries it (VERIFIED_BY_CODE_READING: a search of `src/` finds it only in `errors.ts`, `grpc-status.ts`, `reconcile.ts` and comments in `log.ts`).
+
+**Files that enumerate the catalogue.** A new code is added by hand in three places: `src/core/errors.ts` (the header comment, the `ERROR_CODES` tuple and the `ERROR_CATALOGUE` record), `src/runtime/driver/grpc-status.ts` (`DRIVER_STATUS`), and `test/core/errors.test.ts` (`EXPECTED_CODES`, the retryable partition and `CATALOGUE_SIZE`). `ERROR_CATALOGUE` and `DRIVER_STATUS` are typed `Record<ErrorCode, ...>`, so a missing entry fails compilation (VERIFIED_BY_CODE_READING). `src/daemon/channel.ts`, `src/daemon/client.ts`, `src/daemon/ensure.ts` and `src/cli/main.ts` read `ERROR_CODES` and need no edit.
+
 ## Closure decisions (2026-10-22)
 
 These decisions were recorded by the user on 2026-10-22. Each is checked against the source named in its line. Nothing in this section is a live host run.
@@ -173,7 +241,7 @@ These decisions were recorded by the user on 2026-10-22. Each is checked against
 - **Attach.** A surface attaches by connecting to the control socket and calling `up`. `up` is idempotent (`src/daemon/client.ts`). There is no attach or detach protocol.
 - **Lifetime.** The sandbox persists until `realm down`. A host shutdown closes that host's client and never sends `down` (`endSession`, `src/omp/plugin.ts`).
 - **Grace-period detach.** The grace-period detach is deferred. It is recorded as a deviation from the spec.
-- **Tool method.** The `tool` method carries `{ tool }`. Its reply is the tool outcome (`done` or `refused`) or a catalogue code (`src/daemon/client.ts`, `call` and `isToolOutcome`; `src/daemon/daemon.ts`, case `tool`).
+- **Tool method.** The `tool` method carries `{ tool }`. Its reply is the tool outcome (`done` or `refused`) or a catalogue code (`src/daemon/client.ts`, `call` and `isToolOutcome`; `src/daemon/daemon.ts`, case `tool`). TD-01 (Phase 14): a refusal's error reply now also carries `causeCode` when the dispatcher's refused outcome has one. The refused `ToolOutcome` variant gained an optional `causeCode` (`src/tools/dispatch.ts`, `refused`), and the `tool` case copies it into `{ code, causeCode }` (`src/daemon/daemon.ts`). Without a cause the reply is `{ code }` as before. The shapes seen over the daemon and in process are not unified: in process a caller gets the refused outcome (`outcome`, `tool`, `code`, `retryable`, optional `causeCode`), and over the daemon it gets an error reply of `code` and optional `causeCode` only, which `DaemonClient` rethrows as a `RealmError`. Unifying them is a recorded candidate owner decision and is not made here.
 - **Control line cap.** A control line is capped at 1 MiB (`MAX_CONTROL_LINE_BYTES`, `src/daemon/channel.ts`). An oversized request is refused unread with a null-id `SCHEMA_INVALID` reply, and the connection then closes (`oversizedLineReply`, `src/daemon/channel.ts`; `src/daemon/daemon.ts`).
 - **Policy mode in replies.** `status` and `up` replies carry the policy mode, `advisory` or `fail-closed` (`DaemonStatus.mode`, `src/daemon/client.ts`).
 - **Directory modes.** On a fresh start the state directory and the run directory are created at 0700. An existing run directory must be exactly 0700 and owned by the current user, or the call is `SCHEMA_INVALID` (`ensureSocketDir`, `src/daemon/channel.ts`).

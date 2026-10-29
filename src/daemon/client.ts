@@ -85,11 +85,13 @@ function isToolOutcome(value: unknown): value is ToolOutcome {
   if (value["outcome"] === "refused") {
     const tool = value["tool"];
     const code = value["code"];
+    const causeCode = value["causeCode"];
     return (
       (tool === null || typeof tool === "string") &&
       typeof code === "string" &&
       KNOWN_CODES.includes(code) &&
-      typeof value["retryable"] === "boolean"
+      typeof value["retryable"] === "boolean" &&
+      (causeCode === undefined || (typeof causeCode === "string" && KNOWN_CODES.includes(causeCode)))
     );
   }
   if (value["outcome"] === "done") {

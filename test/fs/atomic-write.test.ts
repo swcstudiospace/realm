@@ -22,6 +22,8 @@ import {
   atomicWriteFile,
   sha256Hex,
   syncDirectory,
+  tempFileName,
+  TEMP_NAME_PATTERN,
   WriteNotAtomicError,
   type AtomicWriteStage,
 } from "../../src/fs/atomic-write.js";
@@ -138,6 +140,31 @@ void test("the success path replaces the content and leaves no temp file (FS-05)
   atomicWriteFile(target, "replacement", { expectedPriorSha256: sha256Hex(ORIGINAL) });
   assert.equal(readFileSync(target, "utf8"), "replacement");
   assert.deepEqual(tempFiles(dir), []);
+});
+
+void test("TEMP_NAME_PATTERN matches temp names whose target holds a line break or a tab (CRASH-01)", () => {
+  for (const target of ["a\nb.txt", "tab\tname"]) {
+    const name = tempFileName(target);
+    assert.ok(TEMP_NAME_PATTERN.test(name), `pattern must match ${JSON.stringify(name)}`);
+    assert.equal(TEMP_NAME_PATTERN.exec(name)?.[1], target);
+  }
+});
+
+void test("TEMP_NAME_PATTERN matches the temp name the writer produces (CRASH-01)", (t) => {
+  const { dir, target } = setup(t);
+  const seen: string[] = [];
+  atomicWriteFile(target, "replacement", {
+    expectedPriorSha256: sha256Hex(ORIGINAL),
+    stageHook: (stage) => {
+      if (stage === "after-temp-write") {
+        seen.push(...readdirSync(dir).filter((name) => name.includes(".realm-tmp-")));
+      }
+    },
+  });
+  assert.equal(seen.length, 1);
+  const [name] = seen;
+  assert.ok(name !== undefined && TEMP_NAME_PATTERN.test(name), `writer produced ${String(name)}`);
+  assert.equal(TEMP_NAME_PATTERN.exec(name)?.[1], "target.txt");
 });
 
 void test("an absent target is created when the expected prior state is absent (FS-05)", (t) => {

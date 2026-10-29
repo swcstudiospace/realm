@@ -110,6 +110,9 @@ export class LifecycleController {
   // stop of a start (F1, F2). destroy waits for these before it reads the record. No entry
   // rejects; a failed step is kept in orphanFailure instead.
   private readonly orphans = new Set<Promise<void>>();
+  // The recovery destroy of a stale container that is still running, or null. It never rejects.
+  // The next create waits for it before issuing anything (see awaitRecoveryDestroy).
+  private recoveryDestroy: Promise<void> | null = null;
   // The code of the last background teardown step that failed. Its container stays recorded, so
   // the next destroy retries it. If that retry fails too, this code is the causeCode of the error
   // that destroy throws, and a retry that succeeds clears it (G-04).
@@ -153,7 +156,9 @@ export class LifecycleController {
   // RealmError from create or start moves the session to error and returns the snapshot
   // whose reason is the error code. Any other failure moves the session to error and throws
   // OPENSHELL_START_FAILED. A retry from error runs through connecting again.
-  // A stored containerId means no second create. Every create verifies the requested workspace
+  // A stored containerId means no second create, except when its start fails with
+  // OPENSHELL_START_FAILED: that container is destroyed once and a new one is created (once per
+  // call). Every create verifies the requested workspace
   // against the pinned root first: the same directory changes nothing, and any other is refused
   // with POLICY_DENIED. While connecting, active, or degraded, a record that names another workspace
   // is refused the same way.
@@ -207,63 +212,71 @@ export class LifecycleController {
     const realmId = existing?.realmId ?? randomUUID();
 
     this.lifeEpoch += 1;
+    const epoch = this.lifeEpoch;
     this.machine.transition("connecting", "creating container");
-    let containerId: string | null = priorContainerId;
-    let issuedStart: PendingStart | null = null;
+    // The container this create currently owns. The holder is updated the moment a port call settles,
+    // before any write or deadline check that can throw, so failCreate records the live container.
+    const current: { id: string | null } = { id: priorContainerId };
+    const issued: { start: PendingStart | null } = { start: null };
 
     // Every store write sits inside the guarded block, so a failed write moves the
-    // session to error rather than leaving it stuck in connecting. Each await is followed by a
-    // state check: a stop that began during the await owns the session, so this create records
-    // and transitions nothing more (see failCreate).
+    // session to error rather than leaving it stuck in connecting. Each await is followed by an
+    // ownership check (ownsStartup): a stop, destroy or newer create that began during the await owns
+    // the session, so this create records and transitions nothing more (see failCreate).
     try {
       if (this.deps.bridge !== null) {
         this.subscribeBridge(this.deps.bridge);
       }
-      this.checkDeadline(deadline);
-      this.persist(realmId, root, containerId);
-      this.checkDeadline(deadline);
-      if (containerId === null) {
-        const pending = this.issueCreate(root);
-        let created: { readonly containerId: string };
-        try {
-          created = await withTimeout(
-            pending.created,
-            Math.max(0, deadline - performance.now()),
-            "STARTUP_BUDGET_EXCEEDED",
-          );
-        } catch (error: unknown) {
-          // This create gives up at its budget, so a container the port produces later is destroyed.
-          // A stop that already took the pending create owns that container instead. A port failure is
-          // not adopted: its call has settled, and the error goes to the outer catch, the one place
-          // that calls failCreate.
-          const owned = this.takePendingCreate();
-          if (
-            owned !== null &&
-            error instanceof RealmError &&
-            error.code === "STARTUP_BUDGET_EXCEEDED"
-          ) {
-            this.adoptOrphan(owned);
-          }
-          throw error;
-        }
-        this.takePendingCreate();
-        if (this.machine.snapshot().state !== "connecting") {
-          // A stop took the create over while it was pending, and it destroys the container this
-          // create produced. Nothing is persisted or started here.
+      // A recovery destroy that outlived an earlier create must finish before anything new is issued.
+      if (this.recoveryDestroy !== null) {
+        await this.awaitRecoveryDestroy(deadline);
+        // A stop or destroy that ran during the wait owns the session and may have deleted the
+        // record: this create records and issues nothing more.
+        if (!this.ownsStartup(epoch)) {
           return this.machine.snapshot();
         }
-        containerId = created.containerId;
-        this.persist(realmId, root, containerId);
-        this.checkDeadline(deadline);
       }
-      const start = this.issueStart(containerId);
-      issuedStart = start;
-      await withTimeout(
-        start.started,
-        Math.max(0, deadline - performance.now()),
-        "STARTUP_BUDGET_EXCEEDED",
-      );
-      if (this.machine.snapshot().state !== "connecting") {
+      this.checkDeadline(deadline);
+      this.persist(realmId, root, current.id);
+      this.checkDeadline(deadline);
+      let startedId: string;
+      if (current.id === null) {
+        const created = await this.createContainer(realmId, root, deadline, current, epoch);
+        if (created === null) {
+          return this.machine.snapshot();
+        }
+        startedId = created;
+      } else {
+        startedId = current.id;
+      }
+      const startOnce = async (id: string): Promise<void> => {
+        const start = this.issueStart(id);
+        issued.start = start;
+        await withTimeout(
+          start.started,
+          Math.max(0, deadline - performance.now()),
+          "STARTUP_BUDGET_EXCEEDED",
+        );
+      };
+      try {
+        await startOnce(startedId);
+      } catch (error: unknown) {
+        // Only the recorded container, with no create in this call, is recovered, and only for
+        // OPENSHELL_START_FAILED. Any other failure goes to failCreate unchanged.
+        if (
+          priorContainerId === null ||
+          startedId !== priorContainerId ||
+          portFailureCode(error) !== PORT_FAILURE_CODE
+        ) {
+          throw error;
+        }
+        const replacement = await this.recoverStaleContainer(startedId, realmId, root, deadline, current, epoch);
+        if (replacement === null) {
+          return this.machine.snapshot();
+        }
+        await startOnce(replacement);
+      }
+      if (!this.ownsStartup(epoch)) {
         // A stop began while start was in flight. Its teardown waits for the start and stops the
         // container once the start settles (F1), so nothing more is started here.
         return this.machine.snapshot();
@@ -280,22 +293,22 @@ export class LifecycleController {
       // A start the budget gave up on is still in flight. adoptStart keeps its outcome, unless a
       // stop is in progress, which reclaims that start itself.
       if (
-        issuedStart !== null &&
+        issued.start !== null &&
         error instanceof RealmError &&
         error.code === "STARTUP_BUDGET_EXCEEDED" &&
         this.machine.snapshot().state !== "stopping"
       ) {
-        this.adoptStart(issuedStart);
+        this.adoptStart(issued.start);
       }
-      return this.failCreate(error, realmId, root, containerId);
+      return this.failCreate(error, realmId, root, current.id, epoch);
     }
-    if (this.machine.snapshot().state !== "connecting") {
+    if (!this.ownsStartup(epoch)) {
       // A stop began during the bridge handshake. It closed the bridge and stopped the container.
       return this.machine.snapshot();
     }
 
     this.machine.transition("active", "container running");
-    this.persist(realmId, root, containerId);
+    this.persist(realmId, root, current.id);
     return this.machine.snapshot();
   }
 
@@ -505,18 +518,25 @@ export class LifecycleController {
     return handshake;
   }
 
+  // True while this startup still owns the session: no stop, destroy or newer create has begun since it
+  // took the epoch. The state alone is not enough, because a newer create is connecting too.
+  private ownsStartup(epoch: number): boolean {
+    return this.lifeEpoch === epoch && this.machine.snapshot().state === "connecting";
+  }
+
   private failCreate(
     error: unknown,
     realmId: string,
     root: PinnedRoot,
     containerId: string | null,
+    epoch: number,
   ): StateSnapshot {
-    // The transition is valid only from connecting. A stop that began during the create owns the
-    // session now, so this create records nothing more and returns the state the stop left. The
-    // stop owns the outcome, so a port failure of the overtaken call is not reported, and the
-    // record already names any container that survives. A REALM_STOPPING from the stop call made
-    // here still reaches the caller (C1).
-    if (this.machine.snapshot().state !== "connecting") {
+    // The transition is valid only for the startup that owns the session. A stop that began during the
+    // create, or a newer create that replaced it, owns the session now, so this create records nothing
+    // more and returns the state the owner left. The stop owns the outcome, so a port failure of the
+    // overtaken call is not reported, and the record already names any container that survives. A
+    // REALM_STOPPING from the stop call made here still reaches the caller (C1).
+    if (!this.ownsStartup(epoch)) {
       if (error instanceof RealmError && error.code === "REALM_STOPPING") {
         throw error;
       }
@@ -643,6 +663,111 @@ export class LifecycleController {
       return;
     }
     await this.teardownCall(this.deps.exec.stop(containerId, this.sandboxName()));
+  }
+
+  // Issues the port create and waits for it within the startup budget. Sets current.id to the new
+  // container the moment the port create settles, before the record write or the deadline check can
+  // throw, so failCreate never overwrites a live container with a stale id. Returns null when a
+  // stop took the create over (nothing is persisted then). The id is recorded before the caller
+  // starts it.
+  private async createContainer(
+    realmId: string,
+    root: PinnedRoot,
+    deadline: number,
+    current: { id: string | null },
+    epoch: number,
+  ): Promise<string | null> {
+    const pending = this.issueCreate(root);
+    let created: { readonly containerId: string };
+    try {
+      created = await withTimeout(
+        pending.created,
+        Math.max(0, deadline - performance.now()),
+        "STARTUP_BUDGET_EXCEEDED",
+      );
+    } catch (error: unknown) {
+      // This create gives up at its budget, so a container the port produces later is destroyed.
+      // A stop that already took the pending create owns that container instead. A port failure is
+      // not adopted: its call has settled, and the error goes to the caller's catch, the one place
+      // that calls failCreate.
+      const owned = this.takePendingCreate();
+      if (
+        owned !== null &&
+        error instanceof RealmError &&
+        error.code === "STARTUP_BUDGET_EXCEEDED"
+      ) {
+        this.adoptOrphan(owned);
+      }
+      throw error;
+    }
+    this.takePendingCreate();
+    if (!this.ownsStartup(epoch)) {
+      // A stop took the create over while it was pending, and it destroys the container this
+      // create produced.
+      return null;
+    }
+    current.id = created.containerId;
+    this.persist(realmId, root, created.containerId);
+    this.checkDeadline(deadline);
+    return created.containerId;
+  }
+
+  // Waits for a recovery destroy that an earlier create gave up on, within the remaining startup
+  // budget, so a new startup never overtakes a destroy that is still running: that destroy removes
+  // the gateway sandbox by name and would remove a replacement. No pending destroy: returns at once.
+  private async awaitRecoveryDestroy(deadline: number): Promise<void> {
+    const pending = this.recoveryDestroy;
+    if (pending === null) {
+      return;
+    }
+    await withTimeout(
+      pending,
+      Math.max(0, deadline - performance.now()),
+      "STARTUP_BUDGET_EXCEEDED",
+    );
+  }
+
+  // TD-04: the recorded container failed to start with OPENSHELL_START_FAILED (it is gone or not
+  // running), so it is destroyed within the remaining budget (destroying a gone container is
+  // success), the cleared record is written before the new create (RT-07), and one new container
+  // is created. Returns null when a stop took over. A destroy failure throws its own code and the
+  // old id stays recorded. current.id becomes null the moment the destroy succeeds, and the new id
+  // as soon as the create settles. The destroy is tracked until it settles, even when the budget
+  // gives up on it, and the next create waits for it (awaitRecoveryDestroy).
+  private async recoverStaleContainer(
+    staleId: string,
+    realmId: string,
+    root: PinnedRoot,
+    deadline: number,
+    current: { id: string | null },
+    epoch: number,
+  ): Promise<string | null> {
+    if (this.recoveryDestroy !== null) {
+      await this.awaitRecoveryDestroy(deadline);
+      if (!this.ownsStartup(epoch)) {
+        return null;
+      }
+    }
+    const call = this.deps.exec.destroy(staleId, this.sandboxName());
+    const tracked = call.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.recoveryDestroy = tracked;
+    void tracked.then(() => {
+      if (this.recoveryDestroy === tracked) {
+        this.recoveryDestroy = null;
+      }
+    });
+    await withTimeout(call, Math.max(0, deadline - performance.now()), "STARTUP_BUDGET_EXCEEDED");
+    current.id = null;
+    if (!this.ownsStartup(epoch)) {
+      return null;
+    }
+    this.checkDeadline(deadline);
+    this.persist(realmId, root, null);
+    this.checkDeadline(deadline);
+    return this.createContainer(realmId, root, deadline, current, epoch);
   }
 
   // Issues the port create for a startup that has no container yet. The attempt number lets an

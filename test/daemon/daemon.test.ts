@@ -644,6 +644,35 @@ void test("RT-06: a refused outcome answers its catalogue code and no other fiel
   await awaitDone(daemon);
 });
 
+void test("CRASH-06: a refused outcome that carries a causeCode answers its code and that causeCode (D-1406)", async (t) => {
+  const fixture = makeDirs();
+  const { options } = daemonParts(fixture);
+  const daemon = await startDaemon(options);
+  t.after(() => cleanupDaemon(daemon));
+  recordDispatcherCalls(
+    daemon,
+    () =>
+      Promise.resolve<ToolOutcome>({
+        outcome: "refused",
+        tool: "retry",
+        code: "OPENSHELL_START_FAILED",
+        retryable: true,
+        causeCode: "PODMAN_MACHINE_DOWN",
+      }),
+  );
+
+  const reply = await sendRequest(daemon.socketPath, {
+    id: "tool-4",
+    method: "tool",
+    params: { tool: { retry: {} } },
+  });
+  assert.deepEqual(reply, { id: "tool-4", error: { code: "OPENSHELL_START_FAILED", causeCode: "PODMAN_MACHINE_DOWN" } });
+
+  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down" });
+  assert.ok(down.result !== undefined);
+  await awaitDone(daemon);
+});
+
 void test("RT-06: an oversized request line is refused with a null-id SCHEMA_INVALID, and the dispatcher never sees it (P6-D2, P6-D12)", async (t) => {
   const fixture = makeDirs();
   const { options } = daemonParts(fixture);

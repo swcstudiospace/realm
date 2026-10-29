@@ -416,7 +416,13 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
         try {
           const outcome = await handle.dispatcher.call(tool);
           if (outcome.outcome === "refused") {
-            return { id, error: { code: outcome.code } };
+            return {
+              id,
+              error:
+                outcome.causeCode === undefined
+                  ? { code: outcome.code }
+                  : { code: outcome.code, causeCode: outcome.causeCode },
+            };
           }
           return { id, result: outcome };
         } catch (error: unknown) {

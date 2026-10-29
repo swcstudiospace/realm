@@ -10,7 +10,7 @@ import { join } from "node:path";
 import type { Policy, ToolName } from "../../src/contract/validate.js";
 import type { ErrorCode } from "../../src/core/errors.js";
 import { createEventBus, type EventBus } from "../../src/core/events.js";
-import { RealmStateMachine } from "../../src/core/state-machine.js";
+import { RealmStateMachine, type StateSnapshot } from "../../src/core/state-machine.js";
 import type { State } from "../../src/core/states.js";
 import { LockTable } from "../../src/fs/locks.js";
 import { bindRoot, type PinnedRoot } from "../../src/fs/root.js";
@@ -74,6 +74,9 @@ export interface HarnessOptions {
   readonly policy?: Policy;
   // Chooses the state directory from the temporary base. The default is <base>/state.
   readonly stateDir?: (base: string) => string;
+  // Replaces the controller's create, which otherwise returns the machine snapshot. A retry in error calls it,
+  // so a test can make it raise an error that carries a cause. The harness still records the call in `creates`.
+  readonly create?: (workspaceRoot: string) => Promise<StateSnapshot>;
 }
 
 // A lock table that reports each probe of isHeldBy. The workspace write probes twice: once before its
@@ -186,6 +189,9 @@ export function makeHarness(t: TestContext, options: HarnessOptions = {}): Harne
     create: (workspaceRoot) => {
       observe("create");
       creates.push(workspaceRoot);
+      if (options.create !== undefined) {
+        return options.create(workspaceRoot);
+      }
       return Promise.resolve(machine.snapshot());
     },
   };
@@ -232,9 +238,12 @@ export function makeHarness(t: TestContext, options: HarnessOptions = {}): Harne
   };
 }
 
-// The exact refusal a call returns. The retryable flag is the catalogue value for the code.
-export function refusal(tool: ToolName | null, code: ErrorCode, retryable: boolean): ToolOutcome {
-  return { outcome: "refused", tool, code, retryable };
+// The exact refusal a call returns. The retryable flag is the catalogue value for the code. causeCode is
+// present only when given, as in the dispatcher's own outcome.
+export function refusal(tool: ToolName | null, code: ErrorCode, retryable: boolean, causeCode?: ErrorCode): ToolOutcome {
+  return causeCode === undefined
+    ? { outcome: "refused", tool, code, retryable }
+    : { outcome: "refused", tool, code, retryable, causeCode };
 }
 
 // Resolves after the current macrotask, so promise continuations that wait on a settled timer run.

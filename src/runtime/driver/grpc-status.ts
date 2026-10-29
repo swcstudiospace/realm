@@ -35,6 +35,7 @@ export const DRIVER_STATUS: Readonly<Record<ErrorCode, status>> = Object.freeze(
   AUDIT_WRITE_FAILED: status.INTERNAL,
   MCP_INPUT_FAILED: status.INTERNAL,
   CLEANUP_FAILED: status.INTERNAL,
+  AUDIT_OUTCOME_UNKNOWN: status.INTERNAL,
 });
 
 // A failure as the driver reports it on the wire: a gRPC code and the human-readable details.

@@ -150,6 +150,19 @@ void test("call returns a refusal as a resolved outcome, not a throw", async (t)
   assert.deepEqual(await client.call({ exec: { argv: ["ls"] } }), outcome);
 });
 
+void test("call returns a refusal that carries a causeCode as a resolved outcome with that causeCode", async (t) => {
+  const outcome: ToolOutcome = {
+    outcome: "refused",
+    tool: "retry",
+    code: "OPENSHELL_START_FAILED",
+    retryable: true,
+    causeCode: "PODMAN_MACHINE_DOWN",
+  };
+  const stub = await startStub(t, (request) => encodeReply({ id: request.id, result: outcome }));
+  const client = connectDaemon(stub.socketPath);
+  assert.deepEqual(await client.call({ retry: {} }), outcome);
+});
+
 void test("a reply carrying an error throws a RealmError with that catalogue code", async (t) => {
   const stub = await startStub(t, (request) =>
     encodeReply({ id: request.id, error: { code: "REALM_UNBOUND" } }),
@@ -185,6 +198,17 @@ void test("a refused outcome with an unknown code is refused with SCHEMA_INVALID
   );
   const client = connectDaemon(stub.socketPath);
   await assert.rejects(client.call({ exec: {} }), assertRealmError("SCHEMA_INVALID"));
+});
+
+void test("a refused outcome with an unknown causeCode is refused with SCHEMA_INVALID", async (t) => {
+  const stub = await startStub(t, (request) =>
+    encodeReply({
+      id: request.id,
+      result: { outcome: "refused", tool: "retry", code: "OPENSHELL_START_FAILED", retryable: true, causeCode: "NOT_A_CODE" },
+    }),
+  );
+  const client = connectDaemon(stub.socketPath);
+  await assert.rejects(client.call({ retry: {} }), assertRealmError("SCHEMA_INVALID"));
 });
 
 void test("a non-JSON reply line is refused with SCHEMA_INVALID", async (t) => {
@@ -314,6 +338,27 @@ void test("a refused tool outcome rejects with its catalogue code, as the daemon
   assert.equal(error.code, "POLICY_DENIED");
   assert.equal(error.message, ERROR_CATALOGUE.POLICY_DENIED.reason);
   assert.equal(Object.hasOwn(error, "causeCode"), false);
+});
+
+void test("a refused tool outcome that carries a causeCode rejects with that causeCode (CRASH-06, D-1406)", async (t) => {
+  const { daemon } = await startRealDaemon(t, () => Promise.resolve<PodmanProbeResult>({ ok: true, version: "5.0.0" }));
+  daemon.handle.dispatcher.call = () => Promise.resolve<ToolOutcome>({
+    outcome: "refused",
+    tool: "retry",
+    code: "OPENSHELL_START_FAILED",
+    retryable: true,
+    causeCode: "PODMAN_MACHINE_DOWN",
+  });
+  const client = connectDaemon(daemon.socketPath);
+  const error = await client.call({ retry: {} }).then(
+    () => undefined,
+    (cause: unknown) => cause,
+  );
+  client.close();
+  assert.ok(error instanceof RealmError, "the refusal arrives as a RealmError");
+  assert.equal(error.code, "OPENSHELL_START_FAILED");
+  assert.equal(error.causeCode, "PODMAN_MACHINE_DOWN");
+  assert.equal(error.message, ERROR_CATALOGUE.OPENSHELL_START_FAILED.reason);
 });
 
 void test("up refused by the podman probe rejects with the probe code over the real socket (CLI-01, TOOL-05)", async (t) => {
