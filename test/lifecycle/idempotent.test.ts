@@ -11,6 +11,7 @@ import { LifecycleController } from "../../src/lifecycle/controller.js";
 import { SessionStore } from "../../src/session/store.js";
 import { FakeExecutionService } from "../support/fake-execution.js";
 import { FakeBridge } from "../support/fake-bridge.js";
+import { scaledMs } from "../support/timing.js";
 
 const SESSION = "session-1";
 const CLOCK_TIME = "2026-10-21T09:30:00.000Z";
@@ -102,8 +103,13 @@ void test("a create that times out reattaches to one container on retry, with no
 
   const pending = controller.create(workspace);
   // Wait (on setImmediate, which is not mocked) until the create call is parked at the gate; the
-  // budget timer was registered before it.
+  // budget timer was registered before it. The deadline reads Date.now(), which this test does not mock, so a
+  // create that never reaches the execution service fails the test instead of spinning.
+  const waitDeadline = Date.now() + scaledMs(5000);
   while (exec.callCount("create") < 1) {
+    if (Date.now() >= waitDeadline) {
+      throw new Error("the create call did not reach the execution service");
+    }
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });

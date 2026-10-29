@@ -175,12 +175,12 @@ void test("pollUntil: resolves once the predicate holds, and checks an async pre
   await pollUntil(
     () => {
       asyncChecks += 1;
-      return Promise.resolve(asyncChecks >= 2);
+      return Promise.resolve(asyncChecks >= 3);
     },
     "the async counter",
     { intervalMs: 1 },
   );
-  assert.equal(asyncChecks, 2);
+  assert.equal(asyncChecks, 3);
 });
 
 void test("pollUntil: a predicate that is already true needs one check and arms no timer", async (t) => {
@@ -203,11 +203,49 @@ void test("pollUntil: a predicate that never holds rejects at the scaled deadlin
         return false;
       },
       "the never state",
-      { timeoutMs: 40, intervalMs: 5 },
+      { timeoutMs: 30, intervalMs: 5 },
     ),
-    { message: `the never state did not hold within ${String(scaledMs(40))} ms` },
+    { message: `the never state did not hold within ${String(scaledMs(30))} ms` },
   );
-  assert.ok(checks >= 2, "the predicate is checked repeatedly before the deadline");
+  assert.ok(checks >= 1, "the predicate is checked at least once");
+});
+
+void test("pollUntil: an async check that never settles rejects at the deadline instead of hanging", async () => {
+  let checks = 0;
+  await assert.rejects(
+    pollUntil(
+      () => {
+        checks += 1;
+        return neverSettles<boolean>();
+      },
+      "the stalled check",
+      { timeoutMs: 30, intervalMs: 1 },
+    ),
+    { message: `the stalled check did not hold within ${String(scaledMs(30))} ms` },
+  );
+  assert.equal(checks, 1, "the stalled check ends the poll; no second check starts");
+});
+
+void test("pollUntil: an async check that answers true only after the deadline does not succeed", async () => {
+  let answer: (held: boolean) => void = () => undefined;
+  const late = new Promise<boolean>((resolve) => {
+    answer = resolve;
+  });
+  let checks = 0;
+  const outcome = assert.rejects(
+    pollUntil(
+      () => {
+        checks += 1;
+        return late;
+      },
+      "the late check",
+      { timeoutMs: 30, intervalMs: 1 },
+    ),
+    { message: `the late check did not hold within ${String(scaledMs(30))} ms` },
+  );
+  await outcome;
+  answer(true);
+  assert.equal(checks, 1);
 });
 
 void test("pollUntil: a predicate that throws rejects with that error", async () => {

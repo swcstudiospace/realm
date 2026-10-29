@@ -36,15 +36,14 @@ export function testTimeout(ms: number): { readonly timeout: number } {
   return { timeout: scaledMs(ms) };
 }
 
-// Waits for work, or rejects once the scaled bound passes. The timer is unref'd, so it never keeps the process alive, and it is
-// always cleared, so nothing is left running after work settles.
-export async function boundedWait<T>(work: Promise<T>, what: string, ms: number = DEFAULT_WAIT_MS): Promise<T> {
-  const bound = scaledMs(ms);
+// Races work against an ALREADY-scaled bound. The timer is unref'd, so it never keeps the process alive, and it is always
+// cleared, so nothing is left running after the race settles.
+async function raceWithin<T>(work: Promise<T>, boundMs: number, message: string): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
   const expired = new Promise<never>((_resolve, reject) => {
     timer = setTimeout(() => {
-      reject(new Error(`${what} did not settle within ${String(bound)} ms`));
-    }, bound);
+      reject(new Error(message));
+    }, boundMs);
     timer.unref();
   });
   try {
@@ -54,8 +53,16 @@ export async function boundedWait<T>(work: Promise<T>, what: string, ms: number 
   }
 }
 
-// Checks the predicate every intervalMs until it is true. Rejects once the scaled deadline passes. No timer is left running
-// after it settles.
+// Waits for work, or rejects once the scaled bound passes. The timer is unref'd, so it never keeps the process alive, and it is
+// always cleared, so nothing is left running after work settles.
+export function boundedWait<T>(work: Promise<T>, what: string, ms: number = DEFAULT_WAIT_MS): Promise<T> {
+  const bound = scaledMs(ms);
+  return raceWithin(work, bound, `${what} did not settle within ${String(bound)} ms`);
+}
+
+// Checks the predicate every intervalMs until it is true. Rejects once the scaled deadline passes. An async check is bounded by
+// the time that remains, so one that never settles, or settles true too late, rejects at the deadline instead of hanging. A
+// synchronous check arms no timer, and no timer is left running after this settles.
 export async function pollUntil(
   predicate: () => boolean | Promise<boolean>,
   what: string,
@@ -63,13 +70,19 @@ export async function pollUntil(
 ): Promise<void> {
   const bound = scaledMs(options.timeoutMs ?? DEFAULT_WAIT_MS);
   const interval = options.intervalMs ?? DEFAULT_POLL_INTERVAL_MS;
+  const message = `${what} did not hold within ${String(bound)} ms`;
   const deadline = Date.now() + bound;
+  let checked = false;
   for (;;) {
-    if (await predicate()) {
-      return;
+    const remaining = deadline - Date.now();
+    if (checked && remaining <= 0) {
+      throw new Error(message);
     }
-    if (Date.now() >= deadline) {
-      throw new Error(`${what} did not hold within ${String(bound)} ms`);
+    checked = true;
+    const result = predicate();
+    const held = typeof result === "boolean" ? result : await raceWithin(result, Math.max(remaining, 1), message);
+    if (held) {
+      return;
     }
     await new Promise<void>((resolve) => {
       setTimeout(resolve, interval);
