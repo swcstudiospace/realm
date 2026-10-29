@@ -8,7 +8,7 @@
     "mode": {
       "type": "string",
       "enum": ["advisory", "fail-closed"],
-      "default": "advisory"
+      "default": "fail-closed"
     },
     "workspaceRoots": {
       "type": "array",

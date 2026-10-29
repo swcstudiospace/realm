@@ -90,8 +90,10 @@ function daemonParts(fixture: Fixture, overrides?: Partial<StartDaemonOptions>):
       workspaceRoot: fixture.ws,
     },
     // The policy names the workspace as a root, the same shape the compose
-    // tests use: the daemon refuses a workspace outside every root.
-    policyPath: writePolicy(fixture, "daemon-policy.json", { workspaceRoots: [fixture.ws] }),
+    // tests use: the daemon refuses a workspace outside every root. It names
+    // advisory mode because the tests below that write while the realm is not
+    // active expect the advisory warning; the default is fail-closed.
+    policyPath: writePolicy(fixture, "daemon-policy.json", { mode: "advisory", workspaceRoots: [fixture.ws] }),
     sessionId: "sess-daemon",
     exec,
     bridge,

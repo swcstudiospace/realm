@@ -390,6 +390,28 @@ void test("realm doctor with no daemon runs local checks and says the daemon is 
   assert.ok(result.stderr.includes("absent"));
 });
 
+void test("realm doctor with no daemon reads <stateDir>/policy.json for the policy-file check (D-1501)", async () => {
+  mkdirSync(RUNTIME_STATE_DIR, { recursive: true });
+  writeFileSync(join(RUNTIME_STATE_DIR, "policy.json"), JSON.stringify({ mode: "advisory" }));
+  try {
+    const result = await runCli(["doctor"], {
+      env: ENV,
+      timeoutMs: 500,
+      send: () => Promise.reject(new RealmError("REALM_NOT_ACTIVE")),
+      runCommand: () => Promise.reject(new Error("podman not installed")),
+      connectSocket: refuseConnect,
+    });
+    assert.equal(result.exitCode, 0);
+    const checks = JSON.parse(result.stdout) as { id: string; status: string; detail: string }[];
+    const policy = checks.find((check) => check.id === "policy-file");
+    assert.ok(policy, "the report carries a policy-file check");
+    assert.equal(policy.status, "warn");
+    assert.match(policy.detail, /mode advisory \(explicit\)/);
+  } finally {
+    rmSync(RUNTIME_STATE_DIR, { recursive: true, force: true });
+  }
+});
+
 void test("unknown argv exits 2 with usage on stderr (CLI-01)", async () => {
   for (const argv of [["frobnicate"], [], ["up", "extra"]]) {
     const result = await runCli(argv, { env: ENV });

@@ -2,14 +2,14 @@
 
 Purpose. Repeat on a real host the checks recorded in `.planning/quick/261029-g7m-lifecycle-and-persistence-findings/LIVE-VERIFICATION.md`: that an Omp session attaches the sandbox by itself, how the write and edit guard behaves in both policy modes, and what survives when Omp, the daemon or the sandbox ends abruptly. The recorded results are the "expected" column below.
 
-What this does not show. Omp's own tools (`bash`, `eval`, and the rest) run on the host even while the realm is active; the extension attaches the sandbox, shows its status and gates only `write` and `edit` (`docs/integration/omp.md`). The model-free checks use a scripted provider, so they are not an LLM-driven run: OMP-05's status is the owner's decision.
+What this does not show. Omp's own tools (`bash`, `eval`, and the rest) run on the host even while the realm is active; the extension attaches the sandbox, shows its status and gates only `write` and `edit` (`docs/integration/omp.md`). The default policy mode, `fail-closed`, refuses those two while the realm is not active; it is not containment of the built-ins with the realm active, which is Phase 16. The model-free checks use a scripted provider, so they are not an LLM-driven run: OMP-05's status is the owner's decision.
 
 ## Prerequisites
 
 - **Run this on a dedicated account or VM where no other Realm session exists.** Starting a daemon, even with its own `stateDir`, removes every Realm sandbox on the Podman socket it uses: the startup reap lists every OpenShell-managed container whose sandbox name carries the realm prefix and removes it with `force`, whoever owns it (`src/session/reap.ts:33-39`, `src/runtime/sweep.ts:33-56`). That stops another session's sandbox and erases its files outside `/workspace`. Before step A or B, confirm that the container list (see "Useful probes") is empty and that `ss -xlpn | grep control.sock` prints nothing. If either shows a Realm sandbox or daemon that is not yours, stop.
 - The production stack from `docs/integration/openshell.md`: rootless Podman 5.x, the OpenShell 0.1.5 gateway, the Realm compute driver, and the digest-pinned sandbox image.
 - A built checkout (`npm ci && npm run build`) or an installed release, and Omp 18.12.6 or later.
-- A throwaway check directory `<check-dir>` holding `c/realm/config.json` (`image`, `stateDir`, `workspaceRoot`), `<check-dir>/state` with mode 0700 and a `policy.json` of `{"workspaceRoots":["<workspace>"]}`, and an Omp agent directory `<check-dir>/agent`. `<workspace>` is the pinned workspace root; start Omp in exactly that directory.
+- A throwaway check directory `<check-dir>` holding `c/realm/config.json` (`image`, `stateDir`, `workspaceRoot`), `<check-dir>/state` with mode 0700 and a `policy.json` of `{"workspaceRoots":["<workspace>"]}` (no `mode`, so the default `fail-closed` applies until a step sets another), and an Omp agent directory `<check-dir>/agent`. `<workspace>` is the pinned workspace root; start Omp in exactly that directory.
 - Keep `HOME` as the real home. The OpenShell CLI reads its gateway registration from it (`src/runtime/session-execution.ts:72`).
 - Never signal a process you did not start. Do not run the checks inside the agent session that you are working in.
 
@@ -28,7 +28,7 @@ Useful probes: `realm status` (prints the snapshot, the label and the policy mod
 
 ## A. Watch the attach (needs a model account)
 
-Follow steps 1 to 8 of "Live Omp checks (2026-10-28)" in `docs/integration/omp.md`: a pseudo-terminal session, the status item, `realm down`, `/realm-retry`, quit. With a provider key, also ask the model to create a file once the item reads active (the guard allows it), and once after `realm down` (advisory mode: allowed with a notice).
+Follow steps 1 to 8 of "Live Omp checks (2026-10-28)" in `docs/integration/omp.md`: a pseudo-terminal session, the status item, `realm down`, `/realm-retry`, quit. With a provider key, also ask the model to create a file once the item reads active (the guard allows it), and once after `realm down` (the default fail-closed mode blocks it with `REALM_NOT_ACTIVE`; with the explicit `"mode": "advisory"` in the policy file it is allowed with a notice).
 
 ## B. The write guard without a model (scripted provider)
 
@@ -52,14 +52,14 @@ providers:
    `omp --mode rpc-ui --no-extensions -e <repo>/dist/src/omp/extension.js --model stub/scripted --no-session`.
    Write one JSON object per line on its stdin; read its stdout. Status frames are `extension_ui_request` with `method` `setStatus` and `statusKey` `realm`; notices have `method` `notify`; a tool result is `tool_execution_end`.
 4. Send `{"id":"p1","type":"prompt","message":"WRITE guard-active.txt written-while-active"}` once the item reads `● realm active`.
-5. Run `realm down`. Send `WRITE guard-advisory.txt written-while-disconnected`.
-6. Set `"mode": "fail-closed"` in `<check-dir>/state/policy.json`. Send `/realm-retry`, wait for active, send `WRITE guard-closed-active.txt ok`, run `realm down`, send `WRITE guard-blocked.txt must-not-exist`.
+5. Run `realm down`. Send `WRITE guard-default.txt must-not-exist`. The policy has no `mode`, so the default `fail-closed` applies.
+6. Set `"mode": "advisory"` in `<check-dir>/state/policy.json`. Send `/realm-retry`, wait for active, run `realm down`, send `WRITE guard-advisory.txt written-while-disconnected`.
 
 | Step | Expected | Failure sign |
 |---|---|---|
 | 3, 4 | status moves from `○ realm disconnected · connecting` to `● realm active · container running`; the write succeeds and the file exists | status stays `connecting` beyond the 200 s budget, or ends with a code such as `POLICY_DENIED`, `SCHEMA_INVALID` or `PODMAN_MACHINE_DOWN` (see `SANDBOX-LIFECYCLE-FINDINGS.md`, section 4) |
-| 5 | status `○ realm disconnected · REALM_NOT_ACTIVE`; a notice `realm status unavailable (REALM_NOT_ACTIVE); the write proceeds under advisory policy`; the file exists | the write fails, or no notice appears |
-| 6 | the write while active succeeds; the write while disconnected ends with `isError` true and the text `REALM_NOT_ACTIVE`; `guard-blocked.txt` does not exist | the file exists |
+| 5 | status `○ realm disconnected · REALM_NOT_ACTIVE`; the write ends with `isError` true and the text `REALM_NOT_ACTIVE`; `guard-default.txt` does not exist | the file exists |
+| 6 | status `○ realm disconnected · REALM_NOT_ACTIVE`; a notice `realm status unavailable (REALM_NOT_ACTIVE); the write proceeds under advisory policy`; the file exists | the write fails, or no notice appears |
 
 The first request that the provider logs lists the tools Omp offered the model: expect Omp's own tools only, with no Realm tool.
 

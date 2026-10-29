@@ -15,8 +15,9 @@ Source references are repo-relative.
 - **Web3 scope: opt-in Solana devnet anchoring first.** No mainnet. An
   anchor records that a log existed in a given state at a given time. It
   does not record what the log says.
-- **Policy default: advisory, unchanged.** Fail-closed is documented as a
-  per-project opt-in (`docs/policy-reference.md`, `mode`).
+- **Policy default: fail-closed (owner decision D4, 2026-10-29).** The mode
+  default changed from advisory; advisory is the explicit opt-in
+  (`docs/policy-reference.md`, `mode`).
 - **H1 anchor record.** `{"version":1,"sessionId","lineCount","rootSha256","createdAt"}`
   with fixed key order. `createdAt` is ISO-8601 UTC. The on-chain memo is
   that record as canonical single-line JSON, at most 566 UTF-8 bytes.
@@ -69,7 +70,7 @@ Source: `.planning/milestones/v1.0-phases/07-policy-reference-and-security-revie
 | R10 | Audit result-line durability (no fsync, L-06) | Done (phase 9.7) | `writeAuditLine` fsyncs after the write loop, and a failure is `AUDIT_WRITE_FAILED`. The first append to a new log fsyncs the file and then the directory. A failed fsync after a successful write reports `AUDIT_WRITE_FAILED` although the line is already in the file, so a caller must not blindly retry: a retry would duplicate the line. H1 commits to R10's log; anchoring detects later edits and does not itself make a line durable. |
 | R6 | Policy file integrity (location-only check) | Open: owner decision | Not addressed. Recommended rule: the policy file's owner is the daemon user or root, and it has no group or other write bit. A later hash-anchor of the policy file is a candidate for H4. |
 | 5.2 | Workspace bound twice: once in composition, again in `create` | Closed (phase 9.7) | String rebind is closed: composition binds once, and `create` verifies the pinned root with `verifyPinnedAt` in `src/lifecycle/controller.ts`. Descriptor pinning for reads is the accepted approximation FS-02. |
-| 5.4 | Host `write` and `edit` guard (OQ-P5-02) | Open (residual) | The guard is implemented in `src/omp/plugin.ts`: advisory mode warns and fail-closed mode blocks. It covers the `write` and `edit` tools only. Non-extension paths, launch-time tool flags, restricted SDK sessions and the eval bridge are not covered. |
+| 5.4 | Host `write` and `edit` guard (OQ-P5-02) | Open (residual) | The guard is implemented in `src/omp/plugin.ts`: the default fail-closed mode blocks while the realm is not active, and an explicit advisory mode warns. It covers the `write` and `edit` tools only, and with the realm active Omp's built-in `write`, `edit` and `bash` still act on the host (containment is Phase 16). Non-extension paths, launch-time tool flags, restricted SDK sessions and the eval bridge are not covered. |
 | R4 | Credential list lacks `**/*.pem`, `**/*.key`, `**/.npmrc`, `**/.pypirc` | Done (phase 9.7) | The four patterns are in the credential denial list (`docs/policy-reference.md`, `credentialAllow`). |
 | R7 | Policy root breadth (`/` accepted) | Open in code | Documented in `docs/policy-reference.md`; no breadth refusal is implemented. |
 
@@ -219,10 +220,13 @@ of H1 [INFERENCE from the plan scope].
 
 ## 8. Fail-closed posture
 
-- The advisory mode is the default. In advisory mode a write in a
-  non-active state proceeds with a warning (R2).
-- Fail-closed is a per-project opt-in: a project that expects containment
-  sets `"mode": "fail-closed"` in its policy file.
+- The fail-closed mode is the default (owner decision D4). While the realm is
+  not active, a host write is refused. It does not contain Omp's built-in
+  `write`, `edit` and `bash` while the realm is active; that is Phase 16.
+- Advisory is the explicit opt-in: a project that prefers to keep working
+  while the realm is down sets `"mode": "advisory"` in its policy file, and a
+  write in a non-active state then proceeds with a warning (R2). Advisory is
+  not containment.
 - Anchoring does not change the mode. An anchor is evidence after the fact,
   not a gate on writes.
 - Operators who need containment must also address 5.4 and R7 in

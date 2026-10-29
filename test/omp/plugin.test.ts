@@ -31,7 +31,7 @@ import {
 // OMP-01 to OMP-05 plugin proof (P5-D4 to P5-D6, P5-D8, P5-D14). Every test runs the real plugin
 // wiring against a FakeDaemon injected through attachDaemon. The doubles are the FakePi host
 // (capturing handlers and commands), the FakeCtx managed timers (manual: a test fires them), and the
-// FakeDaemon client. Required mode is the fail-closed policy mode; advisory is the default.
+// FakeDaemon client. Required mode is the fail-closed policy mode, which is also the policy default; advisory is an explicit opt-in.
 
 const CLOCK_ISO = "2026-10-21T09:30:00.000Z";
 const ACTIVE: StateSnapshot = { state: "active", reason: "container running", lastTransitionAt: CLOCK_ISO };
@@ -223,7 +223,7 @@ class FakePi implements OmpExtensionApi {
 }
 
 interface FixtureOptions {
-  // advisory is the default policy mode; fail-closed is required mode.
+  // The mode the fake daemon reports. Omitted means fail-closed, the policy default; advisory tests say so.
   readonly mode?: PolicyMode;
   readonly snapshot?: StateSnapshot;
   // One entry per attach, in order: a code rejects that attach with it; an absent entry resolves.
@@ -244,7 +244,7 @@ function makeFixture(options: FixtureOptions = {}): Fixture {
   const ui = new FakeUi();
   const ctx = new FakeCtx(ui, WORKSPACE);
   const pi = new FakePi();
-  const daemon = new FakeDaemon(options.snapshot ?? ACTIVE, options.mode ?? "advisory");
+  const daemon = new FakeDaemon(options.snapshot ?? ACTIVE, options.mode ?? "fail-closed");
   const attachCalls: string[] = [];
   const pendingErrors = [...(options.attachErrors ?? [])];
   const pluginOptions: RealmPluginOptions = {
@@ -626,7 +626,7 @@ void test("OMP-05 (c): required mode blocks a write when the status snapshot say
 });
 
 void test("OMP-05: advisory mode warns visibly and lets the guarded call through (P5-D6)", async () => {
-  const fixture = makeFixture({ snapshot: CONNECTING });
+  const fixture = makeFixture({ mode: "advisory", snapshot: CONNECTING });
   startHandlerOf(fixture.pi)(fixture.ctx);
   await waitForSettledDetails(fixture);
   const toolCall = toolCallOf(fixture.pi);
@@ -669,7 +669,7 @@ void test("OMP-05 (d): required mode blocks a write when the status fetch times 
 });
 
 void test("OMP-05 (d): advisory mode only warns when the status fetch times out and lets the call through (P5-D6)", async () => {
-  const fixture = makeFixture();
+  const fixture = makeFixture({ mode: "advisory" });
   startHandlerOf(fixture.pi)(fixture.ctx);
   await waitForDetail(fixture.ui, "container running");
   fixture.daemon.hangStatus = true;
