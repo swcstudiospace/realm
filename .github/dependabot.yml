@@ -1,0 +1,36 @@
+# Dependabot version updates. Owner decision D6 (2026-10-29), recorded as D-1302.
+# Dependabot security updates are a repository setting that the owner controls;
+# this file configures version updates only.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "ci"
+    groups:
+      actions:
+        patterns: ["*"]
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "build"
+      prefix-development: "build"
+      include: scope
+    ignore:
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+    groups:
+      dev-tooling:
+        dependency-type: development
+  - package-ecosystem: npm
+    directory: "/site"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "build"
+      prefix-development: "build"
+      include: scope
