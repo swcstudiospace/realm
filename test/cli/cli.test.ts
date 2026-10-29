@@ -6,7 +6,7 @@
 
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { PassThrough, Writable } from "node:stream";
@@ -25,6 +25,7 @@ import { CONTROL_TIMEOUT_MS, type ControlReply, type ControlRequest } from "../.
 import type { EnvironmentLike } from "../../src/session/paths.js";
 import type { DaemonStatus } from "../../src/daemon/client.js";
 import type { ToolOutcome } from "../../src/tools/dispatch.js";
+import { boundedWait, pollUntil, scaledMs, testTimeout } from "../support/timing.js";
 
 // This file runs from dist/test/cli, so three levels up is the package root.
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -161,14 +162,7 @@ function captureDiagnostics(): { readonly stream: Writable; readonly text: () =>
 // Waits for runCli to return after stdin closes, failing the test if the server never shuts down,
 // then lets the buffered stdout data events flush.
 async function untilShutdown(pending: Promise<CliResult>): Promise<CliResult> {
-  const result = await Promise.race([
-    pending,
-    new Promise<never>((_resolve, reject) => {
-      setTimeout(() => {
-        reject(new Error("the server did not shut down after stdin closed"));
-      }, 2000).unref();
-    }),
-  ]);
+  const result = await boundedWait(pending, "the server shutting down after stdin closed", 15_000);
   await new Promise<void>((resolve) => {
     setImmediate(resolve);
   });
@@ -602,7 +596,7 @@ void test("realm mcp exits 1 with MCP_INPUT_FAILED on stderr when its input stre
   assert.equal(output.text(), "");
 });
 
-void test("a detached daemon that fails startup writes its error to <stateDir>/daemon.log, owner-only, and realm up names that log (CLI-01, RT-06)", async () => {
+void test("a detached daemon that fails startup writes its error to <stateDir>/daemon.log, owner-only, and realm up names that log (CLI-01, RT-06)", testTimeout(90_000), async () => {
   const dir = mkdtempSync(join(tmpdir(), "realm-cli-detached-"));
   try {
     const configHome = join(dir, "config");
@@ -627,8 +621,9 @@ void test("a detached daemon that fails startup writes its error to <stateDir>/d
         XDG_RUNTIME_DIR: "/run/user/0",
         XDG_CONFIG_HOME: configHome,
       },
-      // Long enough for a loaded machine to start the real daemon entry and write its failure to the log.
-      timeoutMs: 6000,
+      // A real daemon entry is started detached. runUp stops waiting the moment the daemon's own failure line reaches the
+      // log, so this bound is only the ceiling for a host too starved to start it, not a time the test waits.
+      timeoutMs: scaledMs(60_000),
       daemonEntry: join(ROOT, "dist", "src", "daemon", "main.js"),
       runCommand: okVersion,
       connectSocket: acceptConnect,
@@ -636,6 +631,12 @@ void test("a detached daemon that fails startup writes its error to <stateDir>/d
     const logPath = join(stateDir, "daemon.log");
     assert.equal(result.exitCode, 1);
     assert.ok(result.stderr.includes(logPath), "the failure names the daemon log");
+    // The log is the daemon's own output and is written by another process: wait for its line, never for a fixed time.
+    await pollUntil(
+      () => existsSync(logPath) && readFileSync(logPath, "utf8").includes("realm daemon: SCHEMA_INVALID"),
+      "the startup error to reach the daemon log",
+      { timeoutMs: 30_000, intervalMs: 25 },
+    );
     assert.equal(statSync(logPath).mode & 0o777, 0o600);
     assert.ok(readFileSync(logPath, "utf8").includes("realm daemon: SCHEMA_INVALID"), "the startup error reached the log");
   } finally {

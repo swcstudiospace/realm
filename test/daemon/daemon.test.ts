@@ -33,7 +33,7 @@ import { FakeBridge } from "../support/fake-bridge.js";
 import { FakeExecutionService } from "../support/fake-execution.js";
 import { FakeContainerStore, FakeLibpod } from "../support/fake-libpod.js";
 import { FakeOpenShell } from "../support/fake-openshell.js";
-import { boundedWait } from "../support/timing.js";
+import { boundedWait, scaledMs } from "../support/timing.js";
 
 const IMAGE = `registry.example.com/realm/workload@sha256:${"0".repeat(64)}`;
 const CLOCK_ISO = "2026-10-21T09:30:00.000Z";
@@ -152,7 +152,7 @@ function sendRawLine(socketPath: string, line: string): Promise<string> {
     const timer = setTimeout(() => {
       socket.destroy();
       reject(new Error("raw read timed out"));
-    }, 5000);
+    }, scaledMs(15_000));
     socket.on("data", (chunk: Buffer) => {
       text += chunk.toString();
       const end = text.indexOf("\n");
@@ -890,17 +890,7 @@ void test("QUAL-01: a listening server that fails stops the daemon, and done rej
     (cause: unknown) => (cause instanceof RealmError ? cause.code : "not a RealmError"),
   );
   listening.emit("error", makeRealmError("REALM_NOT_ACTIVE"));
-  let timer: NodeJS.Timeout | undefined;
-  const outcome = await Promise.race([
-    stopped,
-    new Promise<string>((resolve) => {
-      timer = setTimeout(() => {
-        resolve("still serving");
-      }, 5000);
-    }),
-  ]).finally(() => {
-    clearTimeout(timer);
-  });
+  const outcome = await boundedWait(stopped, "the daemon stopping after its listening server failed", 15_000);
   assert.equal(outcome, "REALM_NOT_ACTIVE");
 });
 

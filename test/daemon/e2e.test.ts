@@ -34,6 +34,7 @@ import type { PodmanProbeResult } from "../../src/runtime/podman-probe.js";
 import { controlSocketPath, type EnvironmentLike } from "../../src/session/paths.js";
 import { FakeExecutionService } from "../support/fake-execution.js";
 import { FakeBridge } from "../support/fake-bridge.js";
+import { boundedWait } from "../support/timing.js";
 
 // This file runs from dist/test/daemon, so three levels up is the package root.
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -124,23 +125,10 @@ function daemonOptions(fixture: Fixture, overrides?: Partial<StartDaemonOptions>
 }
 
 // One wait bound for a daemon to finish teardown. A test that never sees done
-// resolve fails here instead of leaving the event loop held open.
-const DONE_WAIT_MS = 5000;
-
-// Resolves when down finishes teardown (server closed, socket removed). The single
-// timer is cleared on every settle path, so no timer outlives the wait.
+// resolve fails here instead of leaving the event loop held open. The bound is
+// scaled, and the wait ends the moment done settles.
 async function awaitDone(daemon: StartedDaemon): Promise<void> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const expired = new Promise<never>((_resolve, reject) => {
-    timer = setTimeout(() => {
-      reject(new Error("daemon done did not resolve"));
-    }, DONE_WAIT_MS);
-  });
-  try {
-    await Promise.race([daemon.done, expired]);
-  } finally {
-    clearTimeout(timer);
-  }
+  await boundedWait(daemon.done, "daemon done", 15_000);
 }
 
 // Best-effort teardown: asks a still-serving daemon to go down, then waits for
