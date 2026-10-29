@@ -48,7 +48,7 @@ Every gate must pass before a change is reviewed (`CONTRIBUTING.md`).
 
 - `src/`: strict TypeScript. `npm run build` emits it to `dist/src/`.
   - `cli/main.ts`: entry for the `realm` CLI.
-  - `daemon/`: control socket (`channel.ts`), client, daemon, `ensure.ts` (starts the daemon once and waits for it), and `main.ts`, the daemon entry.
+  - `daemon/`: control socket (`channel.ts`), client, daemon, `ensure.ts` (starts the daemon once, only when the socket is absent, and waits for it; the status probe the CLI and the Omp extension share), and `main.ts`, the daemon entry.
   - `omp/`: Omp plugin logic (`plugin.ts`) and its entry (`extension.ts`).
   - `mcp/`: MCP stdio server (`server.ts`: transport and routing) and the protocol versions and result shapes of both eras (`protocol.ts`). It serves revision 2026-07-28 and answers the `initialize` handshake of the legacy revisions that Claude Code speaks (`docs/integration/mcp.md`, Q6).
   - `acp/`: ACP agent (`agent.ts`) and its stdio entry (`stdio.ts`).

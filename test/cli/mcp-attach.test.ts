@@ -137,45 +137,46 @@ void test("realm mcp spawns the detached daemon when none answers, claims the wo
   assert.match(output.text(), /"tools"/, "the reply lists the tools");
 });
 
-void test("realm mcp keeps polling through a daemon that is still binding its socket (startup race)", async () => {
-  // The first probe reads a reply cut short while the daemon binds; the probe after the spawn answers.
-  // A cut-short reply must not abort the wait with SCHEMA_INVALID.
-  const spawns: string[] = [];
-  let statusCalls = 0;
-  const connect: ConnectDaemon = () => ({
-    status: () => {
-      statusCalls += 1;
-      return statusCalls === 1
-        ? Promise.reject(makeRealmError("SCHEMA_INVALID"))
-        : Promise.resolve(STATUS);
-    },
-    up: () => Promise.resolve(STATUS),
-    call: () => Promise.resolve({ outcome: "refused", tool: null, code: "REALM_NOT_ACTIVE", retryable: false }),
-    close: () => undefined,
-  });
-  const spawn: SpawnDaemon = (_file, args) => {
-    spawns.push(...args);
-    return { unref: () => undefined };
-  };
-  const input = new PassThrough();
-  const output = captureWriter();
-  const diagnostics = captureWriter();
-  const pending = runCli(["mcp", "--workspace", "/srv/realm-ws"], {
-    env: ENV,
-    daemonEntry: DAEMON_ENTRY,
-    spawn,
-    connect,
-    mcpInput: input,
-    mcpOutput: output.stream,
-    diagnostics: diagnostics.stream,
-    timeoutMs: 2000,
-  });
-  input.end();
-  const result = await pending;
+void test("realm mcp waits for a daemon that holds its socket but has not answered, and never spawns over it (startup race)", async () => {
+  // The first probe reads what a daemon gives while it is still binding its socket (a reply cut short) or busy with its
+  // startup reap (a timeout): a daemon is there. A second daemon spawned over it would only refuse with LOCK_CONFLICT, and
+  // neither reply may abort the wait; the next probe answers.
+  for (const code of ["SCHEMA_INVALID", "TOOL_TIMEOUT"] as const) {
+    const spawns: string[] = [];
+    let statusCalls = 0;
+    const connect: ConnectDaemon = () => ({
+      status: () => {
+        statusCalls += 1;
+        return statusCalls === 1 ? Promise.reject(makeRealmError(code)) : Promise.resolve(STATUS);
+      },
+      up: () => Promise.resolve(STATUS),
+      call: () => Promise.resolve({ outcome: "refused", tool: null, code: "REALM_NOT_ACTIVE", retryable: false }),
+      close: () => undefined,
+    });
+    const spawn: SpawnDaemon = (_file, args) => {
+      spawns.push(...args);
+      return { unref: () => undefined };
+    };
+    const input = new PassThrough();
+    const output = captureWriter();
+    const diagnostics = captureWriter();
+    const pending = runCli(["mcp", "--workspace", "/srv/realm-ws"], {
+      env: ENV,
+      daemonEntry: DAEMON_ENTRY,
+      spawn,
+      connect,
+      mcpInput: input,
+      mcpOutput: output.stream,
+      diagnostics: diagnostics.stream,
+      timeoutMs: 2000,
+    });
+    input.end();
+    const result = await pending;
 
-  assert.equal(result.exitCode, 0, "the attach completes once the daemon answers");
-  assert.deepEqual(spawns, [DAEMON_ENTRY], "the detached daemon is spawned once");
-  assert.equal(diagnostics.text(), "", "a startup race writes nothing to diagnostics");
+    assert.equal(result.exitCode, 0, `${code}: the attach completes once the daemon answers`);
+    assert.deepEqual(spawns, [], `${code}: no daemon is spawned over one that holds the socket`);
+    assert.equal(diagnostics.text(), "", `${code}: a startup race writes nothing to diagnostics`);
+  }
 });
 
 void test("realm mcp with no daemon that ever answers exits 1 with DAEMON_START_TIMEOUT, not SCHEMA_INVALID", async () => {

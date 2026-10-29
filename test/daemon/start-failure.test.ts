@@ -55,28 +55,47 @@ void test("a missing startup log has size 0 and yields no failure code", (t) => 
   assert.equal(daemonStartFailureSince(stateDir, 0), undefined);
 });
 
-void test("the wrapper resolves true when the inner probe answers true", async (t) => {
+void test("the wrapper passes an answering daemon through", async (t) => {
   const stateDir = scratchStateDir(t);
-  const probe = reportingStartFailure(() => Promise.resolve(true), stateDir);
-  assert.equal(await probe("/state/run/control.sock"), true);
+  const probe = reportingStartFailure(() => Promise.resolve("answering"), stateDir);
+  assert.equal(await probe("/state/run/control.sock"), "answering");
 });
 
-void test("the wrapper resolves false on every miss while the log shows no failure line", async (t) => {
+void test("the wrapper returns what the inner probe found on every miss while the log shows no failure line", async (t) => {
   const stateDir = scratchStateDir(t);
   writeFileSync(daemonLogPath(stateDir), "startup output with no failure line\n");
-  const probe = reportingStartFailure(() => Promise.resolve(false), stateDir);
-  assert.equal(await probe("/state/run/control.sock"), false);
-  assert.equal(await probe("/state/run/control.sock"), false);
-  assert.equal(await probe("/state/run/control.sock"), false);
+  const absent = reportingStartFailure(() => Promise.resolve("absent"), stateDir);
+  assert.equal(await absent("/state/run/control.sock"), "absent");
+  assert.equal(await absent("/state/run/control.sock"), "absent");
+  const starting = reportingStartFailure(() => Promise.resolve("starting"), stateDir);
+  assert.equal(await starting("/state/run/control.sock"), "starting");
 });
 
 void test("the wrapper rejects with the daemon's code when a failure line appears after the first miss", async (t) => {
   const stateDir = scratchStateDir(t);
-  const probe = reportingStartFailure(() => Promise.resolve(false), stateDir);
-  assert.equal(await probe("/state/run/control.sock"), false);
+  const probe = reportingStartFailure(() => Promise.resolve("absent"), stateDir);
+  assert.equal(await probe("/state/run/control.sock"), "absent");
   appendFileSync(daemonLogPath(stateDir), "realm daemon: POLICY_DENIED\n");
   await assert.rejects(
     probe("/state/run/control.sock"),
     (error: unknown) => error instanceof RealmError && error.code === "POLICY_DENIED",
   );
+});
+
+void test("a LOCK_CONFLICT line is not a start failure: it is what a rival daemon writes when a live daemon owns the socket", (t) => {
+  const stateDir = scratchStateDir(t);
+  writeFileSync(daemonLogPath(stateDir), "realm daemon: LOCK_CONFLICT\n");
+  assert.equal(daemonStartFailureSince(stateDir, 0), undefined);
+  // A real failure on a later line is still reported, and the rival's line does not hide it.
+  appendFileSync(daemonLogPath(stateDir), "realm daemon: POLICY_DENIED\nrealm daemon: LOCK_CONFLICT\n");
+  assert.equal(daemonStartFailureSince(stateDir, 0), "POLICY_DENIED");
+});
+
+void test("a host that waits for a live daemon keeps waiting when another host's spawn lost the race", async (t) => {
+  const stateDir = scratchStateDir(t);
+  const probe = reportingStartFailure(() => Promise.resolve("starting"), stateDir);
+  assert.equal(await probe("/state/run/control.sock"), "starting");
+  // The other host spawned a second daemon over the first, and the second refused and exited.
+  appendFileSync(daemonLogPath(stateDir), "realm daemon: LOCK_CONFLICT\n");
+  assert.equal(await probe("/state/run/control.sock"), "starting", "the original daemon is still starting, so the wait goes on");
 });

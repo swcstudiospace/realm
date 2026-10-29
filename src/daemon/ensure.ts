@@ -1,9 +1,11 @@
-// Ensures a daemon answers on its control socket (Phase 6 wave 3). When the probe already reports
-// a live daemon, it returns at once. Otherwise it calls spawnDaemon exactly once, then polls the
-// probe every pollMs until it reports true or timeoutMs has elapsed. The poll mirrors runUp in
-// src/cli/main.ts: one spawn after an absent daemon, then bounded retries, and DAEMON_START_TIMEOUT when the
-// daemon never comes up. The module spawns no process itself and reads no environment; the caller
-// supplies the probe and the spawn. A rejected probe or spawn propagates unchanged.
+// Ensures a daemon answers on its control socket (Phase 6 wave 3). The probe reports what the socket holds: a daemon that
+// answers, a daemon that holds the socket but has not answered yet (still binding it, or busy with its startup reap), or
+// nothing. When a daemon answers, ensureDaemon returns at once. A daemon is spawned only when the socket is absent, and at
+// most once: a second daemon spawned over one that holds the socket would only refuse with LOCK_CONFLICT. It then polls the
+// probe every pollMs until a daemon answers or timeoutMs has elapsed, so a daemon that is busy gets the whole bound to
+// answer, and DAEMON_START_TIMEOUT reports that none did. The poll mirrors runUp in src/cli/main.ts. The module spawns no
+// process itself and reads no environment; the caller supplies the probe and the spawn. A rejected probe or spawn
+// propagates unchanged.
 //
 // reportingStartFailure wraps the probe so that a daemon which refuses to start is reported by the code
 // it wrote itself: `realm daemon: <CODE>` in <stateDir>/daemon.log, before it exits. The caller passes
@@ -13,16 +15,19 @@ import { closeSync, openSync, readSync, statSync } from "node:fs";
 import { ERROR_CODES, makeRealmError, RealmError, type ErrorCode } from "../core/errors.js";
 import type { DaemonClient } from "./client.js";
 
+// What one probe of the control socket found.
+export type DaemonPresence = "answering" | "starting" | "absent";
+
 export interface EnsureDaemonOptions {
   // Control socket the probe checks; passed to probe so the caller owns no hidden path.
   readonly socketPath: string;
-  // Resolves true when a daemon answers on socketPath.
-  readonly probe: (socketPath: string) => Promise<boolean>;
-  // Starts the daemon. Called at most once per ensureDaemon call.
+  // Reports what socketPath holds.
+  readonly probe: (socketPath: string) => Promise<DaemonPresence>;
+  // Starts the daemon. Called at most once per ensureDaemon call, and only when the probe found the socket absent.
   readonly spawnDaemon: () => void;
-  // Bound, in milliseconds, on the wait after the spawn. Finite and non-negative.
+  // Bound, in milliseconds, on the wait for an answer after the first probe that found none. Finite and non-negative.
   readonly timeoutMs: number;
-  // Interval, in milliseconds, between probes after the spawn. Finite and positive.
+  // Interval, in milliseconds, between probes while waiting. Finite and positive.
   readonly pollMs: number;
 }
 
@@ -37,15 +42,27 @@ export async function ensureDaemon(options: EnsureDaemonOptions): Promise<void> 
   if (!Number.isFinite(timeoutMs) || timeoutMs < 0 || !Number.isFinite(pollMs) || pollMs <= 0) {
     throw makeRealmError("SCHEMA_INVALID");
   }
-  if (await probe(socketPath)) {
+  let spawned = false;
+  // Nothing holds the socket, so a daemon is started, once. If a daemon that held the socket vanishes while this waits, the
+  // next probe finds the socket absent and starts the one daemon this call may start.
+  const spawnWhenAbsent = (presence: DaemonPresence): void => {
+    if (presence === "absent" && !spawned) {
+      spawned = true;
+      spawnDaemon();
+    }
+  };
+  const first = await probe(socketPath);
+  if (first === "answering") {
     return;
   }
-  spawnDaemon();
+  spawnWhenAbsent(first);
   const deadline = Date.now() + timeoutMs;
   for (;;) {
-    if (await probe(socketPath)) {
+    const presence = await probe(socketPath);
+    if (presence === "answering") {
       return;
     }
+    spawnWhenAbsent(presence);
     const remaining = deadline - Date.now();
     if (remaining <= 0) {
       throw makeRealmError("DAEMON_START_TIMEOUT");
@@ -84,7 +101,8 @@ function readLogFrom(stateDir: string, offset: number, length: number): string {
 
 // The catalogue code of the last complete `realm daemon: <CODE>` line written at or after offset, or
 // undefined. A trailing line without a newline is not yet complete and is ignored. A log shorter than
-// offset, or a missing log, yields undefined.
+// offset, or a missing log, yields undefined. A LOCK_CONFLICT line is not a start failure: it is what a rival daemon
+// writes when it finds the socket owned, so a daemon is alive and the hosts waiting for it must keep waiting.
 export function daemonStartFailureSince(stateDir: string, offset: number): ErrorCode | undefined {
   const size = daemonLogSize(stateDir);
   if (size <= offset) {
@@ -98,32 +116,39 @@ export function daemonStartFailureSince(stateDir: string, offset: number): Error
   let found: ErrorCode | undefined;
   for (const line of text.slice(0, lastNewline).split("\n")) {
     const token = FAILURE_LINE.exec(line)?.[1];
-    if (token !== undefined && isErrorCode(token)) {
+    if (token !== undefined && token !== "LOCK_CONFLICT" && isErrorCode(token)) {
       found = token;
     }
   }
   return found;
 }
 
-// Failures that mean the daemon is not answering yet: an absent or dropped socket, a request that timed out, or a reply
-// cut short while the daemon is still binding its socket (SCHEMA_INVALID). ensureDaemon keeps polling on these; when none
-// ever answers it reports DAEMON_START_TIMEOUT.
-const NOT_YET_ANSWERING: readonly ErrorCode[] = ["REALM_NOT_ACTIVE", "TOOL_TIMEOUT", "SCHEMA_INVALID"];
+// Failures that mean no daemon has answered yet. REALM_NOT_ACTIVE: nothing holds the socket (absent, or a refused dial).
+// TOOL_TIMEOUT and SCHEMA_INVALID: something accepted the connection but gave no complete reply in time (a daemon busy
+// with its startup reap holds requests, and one still binding its socket cuts a reply short), so a daemon is there.
+const SOCKET_ABSENT: readonly ErrorCode[] = ["REALM_NOT_ACTIVE"];
+const SOCKET_HELD_NOT_ANSWERING: readonly ErrorCode[] = ["TOOL_TIMEOUT", "SCHEMA_INVALID"];
 
 // The probe ensureDaemon polls, shared by every host that attaches (the CLI and the Omp extension): one status request on a
-// fresh client. A not-yet-answering failure reads as no daemon yet (false); any other failure propagates unchanged. The
-// Omp extension spawns the daemon itself, so it meets the same bind race the CLI does, and must tolerate the same replies.
+// fresh client. Any other failure propagates unchanged. Telling "held but not answering" from "absent" is what keeps a host
+// from spawning a second daemon over one that is alive but busy, which would only refuse with LOCK_CONFLICT. The Omp
+// extension spawns the daemon itself, so it meets the same reaping and bind races the CLI does.
 export function daemonAnswers(
   connect: (socketPath: string) => Pick<DaemonClient, "status" | "close">,
-): (socketPath: string) => Promise<boolean> {
+): (socketPath: string) => Promise<DaemonPresence> {
   return async (socketPath) => {
     const client = connect(socketPath);
     try {
       await client.status();
-      return true;
+      return "answering";
     } catch (error: unknown) {
-      if (error instanceof RealmError && NOT_YET_ANSWERING.includes(error.code)) {
-        return false;
+      if (error instanceof RealmError) {
+        if (SOCKET_ABSENT.includes(error.code)) {
+          return "absent";
+        }
+        if (SOCKET_HELD_NOT_ANSWERING.includes(error.code)) {
+          return "starting";
+        }
       }
       throw error;
     } finally {
@@ -132,18 +157,19 @@ export function daemonAnswers(
   };
 }
 
-// Wraps a status probe for ensureDaemon. A true answer passes through. On the first miss the log's
-// current size is recorded; ensureDaemon spawns the daemon after that miss, so the recorded offset
-// precedes the new daemon's output. Every miss then looks for a failure line after the offset and
-// rejects with its code; otherwise the miss resolves false.
+// Wraps a status probe for ensureDaemon. An answer passes through. On the first miss the log's
+// current size is recorded; ensureDaemon spawns the daemon after that miss when the socket is absent, so the recorded
+// offset precedes the new daemon's output. Every miss then looks for a failure line after the offset and
+// rejects with its code; otherwise the miss resolves with what the probe found.
 export function reportingStartFailure(
-  probe: (socketPath: string) => Promise<boolean>,
+  probe: (socketPath: string) => Promise<DaemonPresence>,
   stateDir: string,
-): (socketPath: string) => Promise<boolean> {
+): (socketPath: string) => Promise<DaemonPresence> {
   let offset: number | undefined;
   return async (socketPath) => {
-    if (await probe(socketPath)) {
-      return true;
+    const presence = await probe(socketPath);
+    if (presence === "answering") {
+      return presence;
     }
     const start = offset ?? daemonLogSize(stateDir);
     offset = start;
@@ -151,6 +177,6 @@ export function reportingStartFailure(
     if (code !== undefined) {
       throw makeRealmError(code);
     }
-    return false;
+    return presence;
   };
 }

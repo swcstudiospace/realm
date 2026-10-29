@@ -252,7 +252,7 @@ void test("realm up defaults the workspace root to the current directory when --
   assert.deepEqual(sent[0]?.params, { workspaceRoot: process.cwd() });
 });
 
-void test("realm up treats a status timeout as not ready and succeeds once the daemon answers (CLI-01)", async () => {
+void test("realm up treats a status timeout as a daemon that is busy: it waits and succeeds once the daemon answers, and spawns no second daemon (CLI-01)", async () => {
   const spawns: SpawnCall[] = [];
   const daemon = fakeDaemon({ probes: ["timeout", true] });
   const sent: ControlRequest[] = [];
@@ -274,7 +274,7 @@ void test("realm up treats a status timeout as not ready and succeeds once the d
   });
   assert.equal(result.exitCode, 0);
   assert.equal(daemon.record.connects, 2);
-  assert.equal(spawns.length, 1);
+  assert.equal(spawns.length, 0, "a timeout means a daemon holds the socket; a second one would only refuse with LOCK_CONFLICT");
   assert.equal(sent.length, 1);
   assert.equal(sent[0]?.method, "up");
 });
