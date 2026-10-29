@@ -4,6 +4,21 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-29
+
+### Fixed
+- fix(omp): wait for a daemon that holds the socket instead of spawning over it (f70c236)
+- fix(mcp): serve the legacy initialize era beside the modern one, with spec-shaped results and descriptors (edb28e5)
+- fix(omp): tolerate the daemon's bind race the way the CLI does (b93d1d8)
+- fix(acp): advertise the package version instead of 0.0.0 (8620576)
+
+### Documentation
+- docs: record the MCP protocol eras, the real-host evidence and the descriptor rule (6906676)
+- docs(core): correct the error catalogue header count (4b52015)
+
+### Maintenance
+- test(mcp): pin the element type of the exec argv descriptor (8e22802)
+
 ## [0.2.0] - 2026-10-29
 
 ### Added
