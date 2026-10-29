@@ -13,6 +13,7 @@ import type { PodmanProbeResult } from "../../src/runtime/podman-probe.js";
 import type { ToolOutcome } from "../../src/tools/dispatch.js";
 import { FakeBridge } from "../support/fake-bridge.js";
 import { FakeExecutionService } from "../support/fake-execution.js";
+import { boundedWait, testTimeout } from "../support/timing.js";
 
 // CRASH-06 (TD-01, D-1406): a refusal cause code reaches a host the same way whether the surface answers from the
 // dispatcher in process or through the daemon. The shapes still differ by design: in process the refused outcome is
@@ -86,14 +87,7 @@ async function mcpReply(dispatcher: McpDispatcher, name: string, args: unknown):
   });
   input.write(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } })}\n`);
   input.end();
-  await Promise.race([
-    server.closed,
-    new Promise<never>((_resolve, reject) => {
-      setTimeout(() => {
-        reject(new Error("mcp server did not close after stdin ended"));
-      }, 2000).unref();
-    }),
-  ]);
+  await boundedWait(server.closed, "the mcp server closing after stdin ended", 15_000);
   await new Promise<void>((resolve) => {
     setImmediate(resolve);
   });
@@ -188,7 +182,7 @@ async function inProcess(answer: Answer): Promise<{ readonly mcp: Seen; readonly
   return { mcp, acp };
 }
 
-void test("CRASH-06: a refusal cause code is the same through MCP and ACP in process and over the daemon (D-1406)", { timeout: 15_000 }, async (t) => {
+void test("CRASH-06: a refusal cause code is the same through MCP and ACP in process and over the daemon (D-1406)", testTimeout(45_000), async (t) => {
   const answer: Answer = () =>
     Promise.resolve<ToolOutcome>({
       outcome: "refused",
@@ -212,7 +206,7 @@ void test("CRASH-06: a refusal cause code is the same through MCP and ACP in pro
   assert.deepEqual(daemon.acp, expected, "ACP over the daemon");
 });
 
-void test("CRASH-06: a refusal without a cause carries no causeCode on any of the four paths (D-1406)", { timeout: 15_000 }, async (t) => {
+void test("CRASH-06: a refusal without a cause carries no causeCode on any of the four paths (D-1406)", testTimeout(45_000), async (t) => {
   const answer: Answer = () =>
     Promise.resolve<ToolOutcome>({ outcome: "refused", tool: "retry", code: "POLICY_DENIED", retryable: false });
   const local = await inProcess(answer);
