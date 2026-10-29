@@ -221,7 +221,7 @@ Each new code now covers its own situation. The code it replaces keeps its own m
 
 ## Catalogue extension (Phase 14)
 
-This section records the second explicit contract extension to the error catalogue in `src/core/errors.ts`. The owner approved exactly this one addition (decision D5, 2026-10-29). No existing code was renamed or removed. The catalogue now holds **30 codes** (`ERROR_CODES` and the header comment "Exactly these 30 codes" in `src/core/errors.ts`). The count of 25 in "Catalogue extension (closure, 2026-10-22)" is historical: four codes were catalogued after it (`MCP_INPUT_FAILED`, `CLEANUP_FAILED`, `DAEMON_START_TIMEOUT`, `SANDBOX_NAME_IN_USE`, named in the same header comment), and this one is the fifth.
+This section records the second explicit contract extension to the error catalogue in `src/core/errors.ts`. The owner approved exactly this one addition (decision D5, 2026-10-29). No existing code was renamed or removed. After this change the catalogue held **30 codes** (`ERROR_CODES` and the header comment "Exactly these 30 codes" in `src/core/errors.ts`); that count is historical, and the current count is in "Catalogue extension (Phase 17)". The count of 25 in "Catalogue extension (closure, 2026-10-22)" is historical too: four codes were catalogued after it (`MCP_INPUT_FAILED`, `CLEANUP_FAILED`, `DAEMON_START_TIMEOUT`, `SANDBOX_NAME_IN_USE`, named in the same header comment), and this one is the fifth.
 
 | Code | Retryable | gRPC status | Reason text (`src/core/errors.ts`) |
 | --- | --- | --- | --- |
@@ -232,6 +232,31 @@ This section records the second explicit contract extension to the error catalog
 **Where it appears.** In this change the code is the `outcome` of a reconciliation audit line (`src/audit/reconcile.ts`, `reconcileAuditLogs`) and nowhere else in `src/`: no tool reply carries it (VERIFIED_BY_CODE_READING: a search of `src/` finds it only in `errors.ts`, `grpc-status.ts`, `reconcile.ts` and comments in `log.ts`).
 
 **Files that enumerate the catalogue.** A new code is added by hand in three places: `src/core/errors.ts` (the header comment, the `ERROR_CODES` tuple and the `ERROR_CATALOGUE` record), `src/runtime/driver/grpc-status.ts` (`DRIVER_STATUS`), and `test/core/errors.test.ts` (`EXPECTED_CODES`, the retryable partition and `CATALOGUE_SIZE`). `ERROR_CATALOGUE` and `DRIVER_STATUS` are typed `Record<ErrorCode, ...>`, so a missing entry fails compilation (VERIFIED_BY_CODE_READING). `src/daemon/channel.ts`, `src/daemon/client.ts`, `src/daemon/ensure.ts` and `src/cli/main.ts` read `ERROR_CODES` and need no edit.
+
+## Catalogue extension (Phase 17)
+
+This section records the third explicit contract extension to the error catalogue in `src/core/errors.ts`, and a settled-decision change that the extension needs. The owner approved exactly this one addition (decision D5, 2026-10-29). No existing code was renamed or removed. The catalogue now holds **31 codes** (`ERROR_CODES` and the header comment "Exactly these 31 codes" in `src/core/errors.ts`). The counts of 25 and 30 in the two sections above are historical. The decision is recorded here before the code that uses it (requirement OBS-04, debt item TD-05).
+
+| Code | Retryable | gRPC status | Reason text (`src/core/errors.ts`) |
+| --- | --- | --- | --- |
+| `OPENSHELL_GATEWAY_LOST` | true | `UNAVAILABLE` (`DRIVER_STATUS`, `src/runtime/driver/grpc-status.ts`) | The OpenShell gateway, or the compute driver behind it, did not answer, so the sandbox cannot be reached; restore the gateway, then retry. |
+
+**Why no existing code fits.** Today the runner crash and the gateway loss both read `AGENTOS_CRASH_LOOP`: the health probe (`AgentOsSupervisor.check`) holds the supervisor on a runner exit, a stale heartbeat, and a probe that fails or does not answer, and every hold throws `AGENTOS_CRASH_LOOP`. The probe is an `openshell sandbox exec` child, and `openshell sandbox exec` exits with the remote command's exit code, so a dead gateway and a stale heartbeat both end with exit code 1; the exit code cannot tell them apart. `AGENTOS_CRASH_LOOP` says the runner crashed, which is false when the gateway is gone. `OPENSHELL_START_FAILED` describes a failed create or start. `ANDA_UNREACHABLE` and `PODMAN_MACHINE_DOWN` name other services. The new code is retryable like `AGENTOS_CRASH_LOOP` and `PODMAN_MACHINE_DOWN`: the session is in `error`, and a retry, or `realm down` then `realm up`, works once the gateway is back.
+
+**Settled decision: the pinned OpenShell CLI verbs gain `openshell status`.** The pinned verbs are `sandbox create`, `sandbox exec` and `sandbox delete` (`AGENTS.md`, "Settled runtime decisions"; "Exec verb pin (D-93)"). `openshell status` is added to that set as a read-only gateway check. Source record: `docs/integration/openshell.md`, Q6 ("Gateway and CLI surface", read 2026-10-21), which lists `openshell status` among the CLI surface of the Installation and Gateway pages. Q6 records the verb and nothing about its exit codes. The exit codes below are not recorded in `openshell.md`; they come from a read-only local execution during the Phase 17 research (openshell 0.1.5, scratch `HOME`, no gateway running): with a registered gateway at a closed port `openshell status` exits 1, and with no gateway configured it prints "No gateway configured" and exits 0. The output of a healthy gateway was not observed in that execution. Only `src/runtime/openshell.ts` names the binary: `buildGatewayStatusArgv()` returns `openshell status`, and the check runs with the same environment as the exec path (`selectOpenShellEnvironment`).
+
+**What the code does.** Only the failure path of the probe classifies. When the runner has exited or the probe does not answer true, `AgentOsSupervisor.check` holds the supervisor and asks the driver `gatewayAnswers()`, which runs `openshell status` under a 10 s bound (`GATEWAY_STATUS_TIMEOUT_MS`) and answers true only for exit 0. The thrown code is `AGENTOS_CRASH_LOOP` when the gateway answers and `OPENSHELL_GATEWAY_LOST` when it does not (non-zero exit, rejection or timeout). A stop or a new start that overtakes the classification makes `check` return false. A held supervisor keeps its code until `start()`. The state machine is unchanged: the code becomes the state's reason, so `realm status` and the Omp status item show it. The `realm doctor` `agentos` item prints the thrown code when it is `OPENSHELL_GATEWAY_LOST` and otherwise keeps `AGENTOS_CRASH_LOOP`. A healthy tick runs no extra command.
+
+**What is covered and what is not.**
+
+- (a) Driver loss: the compute driver behind the gateway is detected only if `openshell status` fails while that driver is down. That is not yet verified live; the reason text says "or the compute driver behind it" on that basis.
+- (b) `openshell status` exits 0 with "No gateway configured". If the daemon's `HOME` loses the gateway configuration, the classification reads `AGENTOS_CRASH_LOOP`. The exec path and the status path share one environment, so they stay consistent.
+- (c) A runner that dies in the same second the gateway is restarted reads `AGENTOS_CRASH_LOOP`, because the gateway answers by the time it is asked.
+- (d) A TLS failure of the gateway (for example `BadSignature`) also reads `OPENSHELL_GATEWAY_LOST`. That is intended: the gateway is unusable.
+
+**Not changed.** `create` and `up` with the gateway down still fail with `OPENSHELL_START_FAILED`. The `exec` tool path is unchanged (it returns the command's exit code or `REALM_NOT_ACTIVE`). Only the health-probe path (`AgentOsSupervisor.check`) classifies.
+
+**Files that enumerate the catalogue.** As in "Catalogue extension (Phase 14)": `src/core/errors.ts` (header comment, `ERROR_CODES`, `ERROR_CATALOGUE`), `src/runtime/driver/grpc-status.ts` (`DRIVER_STATUS`) and `test/core/errors.test.ts`. `src/core/errors.ts` stays import-free because it is a gate-closure entry.
 
 ## Closure decisions (2026-10-22)
 
