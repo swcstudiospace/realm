@@ -83,7 +83,9 @@ export function stripNonCode(source) {
   const templateDepths = [];
   const length = source.length;
   const wordPattern = /[A-Za-z_$][\w$]*/y;
-  const numberPattern = /\d\w*(?:\.\d\w*)?/y;
+  // A numeric literal: digits, then word characters (hex digits, exponent, numeric separators, the n suffix), then an optional
+  // decimal part that may be empty (`3.`), so the dot of `3. / x` is not read as an operator that starts a regex.
+  const numberPattern = /\d\w*(?:\.\w*)?/y;
   let copied = 0;
   let mode = "code";
   let previous = "start";

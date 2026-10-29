@@ -58,7 +58,19 @@ test("stripNonCode keeps a template expression that holds a nested template and 
 test("stripNonCode reads a slash after a non-null assertion, an identifier, a number or a closer as division", () => {
   const source = "const q = numerator! / values.divisor;";
   assert.equal(stripNonCode(source), source);
-  for (const divided of ["a / values.b", "(a + b) / values.b", "list[0] / values.b", "3 / values.b", "call()! / values.b"]) {
+  for (const divided of [
+    "a / values.b",
+    "(a + b) / values.b",
+    "list[0] / values.b",
+    "3 / values.b",
+    "3. / values.b",
+    "3.5 / values.b",
+    "3.e2 / values.b",
+    "0x1f / values.b",
+    "1_000 / values.b",
+    "10n / values.b",
+    "call()! / values.b",
+  ]) {
     assert.ok(stripNonCode(`const q = ${divided};`).includes("values.b"), divided);
   }
 });
