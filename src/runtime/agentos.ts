@@ -15,7 +15,9 @@
 // no hysteresis. A runner exit, or one failed probe (alive answers false, does not answer in time or rejects, which
 // covers a stale heartbeat and an OpenShell failure), holds the supervisor, and check throws AGENTOS_CRASH_LOOP, so the
 // session moves to error with that catalogue code. Recovery is realm down then realm up, or the retry command: the next
-// stop removes the sandbox and an explicit start() begins again.
+// stop removes the sandbox and an explicit start() begins again. The ruling applies only after the initial start has
+// finished: a check made while that start is still pending (for example realm doctor during realm up) answers false and
+// changes nothing, because the runner is not ready to be probed yet.
 //
 // Every driver call is raced against callTimeoutMs (QUAL-01). src/core/timeout.ts is not used
 // for this race because withTimeout requires a catalogue code and no catalogue code names a
@@ -68,6 +70,9 @@ export class AgentOsSupervisor {
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly now: () => number;
   private phase: Phase = "idle";
+  // True from the beginning of start() until its startUntilUp settles, for the epoch that start began with. While it is
+  // true, check() answers false without touching the driver or the supervisor.
+  private starting = false;
   // Incremented by every start(). A continuation left over from an earlier start sees a different
   // epoch and returns without another driver call.
   private epoch = 0;
@@ -107,24 +112,38 @@ export class AgentOsSupervisor {
   // again after a hold is the explicit retry, and it starts a fresh count.
   async start(): Promise<void> {
     this.epoch += 1;
+    const epoch = this.epoch;
     this.phase = "running";
+    this.starting = true;
     this.failures = 0;
     this.aliveSince = null;
-    await this.startUntilUp(this.epoch);
+    try {
+      await this.startUntilUp(epoch);
+    } finally {
+      // A newer start() or a stop() that moved the epoch on owns the flag now: leave it alone.
+      if (this.epoch === epoch) {
+        this.starting = false;
+      }
+    }
   }
 
-  // One liveness check. Returns false when the supervisor is idle or stopped, and does not touch the driver, and false
-  // when stop() or a newer start() overtakes the check in flight. Returns true when the driver answers alive and its
-  // runner has not exited. Anything else is terminal (owner ruling N1): a runner that exited, before or during the probe,
-  // or a probe that answers false, fails to answer in time, or rejects (a stale heartbeat, an OpenShell failure) holds the
-  // supervisor and throws AGENTOS_CRASH_LOOP. There is no restart and no failure count here, and every later check throws
-  // the same code until start() is called again.
+  // One liveness check. Returns false, and does not touch the driver, when the supervisor is idle or stopped, and while the
+  // initial start is still pending: the runner is not ready to be probed yet, so a check made then (realm doctor during
+  // realm up) neither calls the driver, nor holds, nor counts, nor throws. Returns false when stop() or a newer start()
+  // overtakes the check in flight. Returns true when the driver answers alive and its runner has not exited. Anything else
+  // is terminal (owner ruling N1): a runner that exited, before or during the probe, or a probe that answers false, fails
+  // to answer in time, or rejects (a stale heartbeat, an OpenShell failure) holds the supervisor and throws
+  // AGENTOS_CRASH_LOOP. There is no restart and no failure count here, and every later check throws the same code until
+  // start() is called again.
   async check(): Promise<boolean> {
     if (this.phase === "idle" || this.phase === "stopped") {
       return false;
     }
     if (this.phase === "held") {
       throw makeRealmError("AGENTOS_CRASH_LOOP");
+    }
+    if (this.starting) {
+      return false;
     }
     if (this.driver.runnerExited(this.sessionId)) {
       this.hold();

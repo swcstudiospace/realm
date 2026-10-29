@@ -240,6 +240,111 @@ void test("stopping during an in-flight initial start leaves no further start af
   }
 });
 
+// A driver whose start waits on a gate, so a test holds the initial start pending for as long as it needs. Until the
+// gate opens, alive() answers false, as a real runner does before it is ready.
+class GatedStartDriver extends FakeAgentOsDriver {
+  private readonly gate: Promise<void>;
+  private open: () => void = () => {};
+  runnerExitedCalls = 0;
+
+  constructor() {
+    super();
+    this.gate = new Promise<void>((resolve) => {
+      this.open = resolve;
+    });
+  }
+
+  override async start(): Promise<void> {
+    await this.gate;
+    await super.start();
+  }
+
+  override runnerExited(): boolean {
+    this.runnerExitedCalls += 1;
+    return super.runnerExited();
+  }
+
+  release(): void {
+    this.open();
+  }
+}
+
+function gatedHarness(): { readonly driver: GatedStartDriver; readonly supervisor: AgentOsSupervisor } {
+  const driver = new GatedStartDriver();
+  const supervisor = new AgentOsSupervisor({
+    driver,
+    sessionId: "sess-supervisor",
+    callTimeoutMs: 60_000,
+    random: () => 1,
+    sleep: () => Promise.resolve(),
+    now: () => 0,
+  });
+  return { driver, supervisor };
+}
+
+void test("a check made while the initial start is pending answers false, touches no driver probe and does not hold (RT-04, N1)", async () => {
+  const { driver, supervisor } = gatedHarness();
+  const started = supervisor.start();
+
+  assert.equal(await supervisor.check(), false, "the runner is not ready, so the check answers false");
+  assert.equal(driver.callCount("alive"), 0);
+  assert.equal(driver.runnerExitedCalls, 0);
+  assert.equal(supervisor.consecutiveFailures(), 0);
+
+  driver.release();
+  await started;
+  assert.equal(driver.callCount("start"), 1);
+  assert.equal(driver.isRunning(), true);
+  assert.equal(await supervisor.check(), true, "the supervisor is running and the check answers true");
+  assert.equal(driver.callCount("alive"), 1);
+});
+
+void test("doctor overlapping a pending start never holds the supervisor, so the next health check is not a crash loop (RT-04, N1)", async () => {
+  const { driver, supervisor } = gatedHarness();
+  const started = supervisor.start();
+
+  // alive() would answer false here, because the runner has not started. Before the fix this held the supervisor.
+  assert.equal(driver.isRunning(), false);
+  assert.equal(await supervisor.check(), false);
+  assert.equal(await supervisor.check(), false, "a second overlapping check changes nothing either");
+
+  driver.release();
+  await started;
+
+  assert.equal(await supervisor.check(), true, "the runner started, so the health check answers true and nothing threw");
+  assert.equal(driver.callCount("alive"), 1, "only the check after the start probed the driver");
+  assert.equal(driver.callCount("stop"), 0, "the overlapping checks did not count a failure");
+});
+
+void test("stopping during a pending start leaves the supervisor stopped and a later start works (RT-04, N1)", async () => {
+  const { driver, supervisor } = gatedHarness();
+  const started = supervisor.start();
+  await supervisor.stop();
+  await started;
+
+  assert.equal(await supervisor.check(), false, "a stopped supervisor answers false");
+  assert.equal(driver.callCount("alive"), 0);
+
+  driver.release();
+  await supervisor.start();
+  assert.equal(await supervisor.check(), true, "a start after the stop supervises again");
+});
+
+void test("the end of a stopped start does not clear the pending flag of a newer start (RT-04, N1)", async () => {
+  const { driver, supervisor } = gatedHarness();
+  const first = supervisor.start();
+  await supervisor.stop();
+  const second = supervisor.start();
+  await first;
+
+  assert.equal(await supervisor.check(), false, "the newer start is still pending, so the check answers false");
+  assert.equal(driver.callCount("alive"), 0);
+
+  driver.release();
+  await second;
+  assert.equal(await supervisor.check(), true);
+});
+
 void test("stopping during the initial start's backoff wait leaves no restart after stop and no timer behind (RT-04, G1)", async () => {
   const driver = new FakeAgentOsDriver();
   let waits = 0;
