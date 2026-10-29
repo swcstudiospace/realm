@@ -194,7 +194,7 @@ export function missingLegalFiles(packageRoot) {
   return LEGAL_FILES.filter((path) => !existsSync(join(packageRoot, path)));
 }
 
-async function run(file, args, options) {
+async function execute(file, args, options) {
   try {
     return await execFileAsync(file, args, {
       ...options,
@@ -207,11 +207,23 @@ async function run(file, args, options) {
   }
 }
 
-async function main(argv) {
+// The side effects of the command. `root` is the source tree that is packed and walked; `run` spawns npm and the probe and
+// resolves to { stdout }; tests replace any of them.
+const REAL_DEPS = {
+  root: ROOT,
+  run: execute,
+  mkdtemp: (prefix) => mkdtemp(join(tmpdir(), prefix)),
+  rm: (dir) => rm(dir, { recursive: true, force: true }),
+  writeFile,
+  stdout: (text) => process.stdout.write(text),
+  stderr: (text) => process.stderr.write(text),
+};
+
+async function check(argv, deps) {
   const options = parseArgs(argv);
   const givenTarball = options.tarball === undefined ? undefined : resolve(options.tarball);
   if (givenTarball === undefined) {
-    if (!existsSync(join(ROOT, VALIDATOR))) {
+    if (!existsSync(join(deps.root, VALIDATOR))) {
       throw new Error(`${VALIDATOR} is missing; run "npm run build" before check:pack`);
     }
   } else if (!existsSync(givenTarball)) {
@@ -221,24 +233,24 @@ async function main(argv) {
   let packDir;
   let consumerDir;
   try {
-    consumerDir = await mkdtemp(join(tmpdir(), "realm-consumer-"));
+    consumerDir = await deps.mkdtemp("realm-consumer-");
 
     let tarball = givenTarball;
     if (tarball === undefined) {
-      packDir = await mkdtemp(join(tmpdir(), "realm-pack-"));
-      const packed = await run("npm", buildPackArgs(packDir), { cwd: ROOT });
+      packDir = await deps.mkdtemp("realm-pack-");
+      const packed = await deps.run("npm", buildPackArgs(packDir), { cwd: deps.root });
       tarball = tarballFromPackOutput(packed.stdout, packDir);
     }
 
-    await writeFile(join(consumerDir, "package.json"), `${JSON.stringify({ private: true, type: "module" })}\n`);
-    await run("npm", buildInstallArgs(tarball), { cwd: consumerDir });
+    await deps.writeFile(join(consumerDir, "package.json"), `${JSON.stringify({ private: true, type: "module" })}\n`);
+    await deps.run("npm", buildInstallArgs(tarball), { cwd: consumerDir });
 
     const installed = join(consumerDir, "node_modules", "agent-realm");
     const missing = missingAdapterFiles(installed);
     if (missing.length > 0) {
       throw new Error(`packed package is missing adapter files: ${missing.join(", ")}`);
     }
-    const missingWalked = missingWalkedFiles(ROOT, installed);
+    const missingWalked = missingWalkedFiles(deps.root, installed);
     if (missingWalked.length > 0) {
       throw new Error(`packed package is missing files under ${WALKED_DIRECTORIES.join(", ")}: ${missingWalked.join(", ")}`);
     }
@@ -261,30 +273,35 @@ async function main(argv) {
       }
     }
 
-    await writeFile(join(consumerDir, "probe.mjs"), PROBE_SOURCE);
-    const probe = await run(process.execPath, ["probe.mjs"], { cwd: consumerDir });
-    process.stdout.write(probe.stdout);
-    process.stdout.write(`adapter files: ${ADAPTER_FILES.length} present\n`);
-    process.stdout.write(`driver protos: ${DRIVER_PROTO_FILES.length} present\n`);
-    process.stdout.write(`legal files: ${LEGAL_FILES.length} present\n`);
+    await deps.writeFile(join(consumerDir, "probe.mjs"), PROBE_SOURCE);
+    const probe = await deps.run(process.execPath, ["probe.mjs"], { cwd: consumerDir });
+    deps.stdout(probe.stdout);
+    deps.stdout(`adapter files: ${ADAPTER_FILES.length} present\n`);
+    deps.stdout(`driver protos: ${DRIVER_PROTO_FILES.length} present\n`);
+    deps.stdout(`legal files: ${LEGAL_FILES.length} present\n`);
     if (options.expectVersion !== undefined) {
-      process.stdout.write(`version: ${options.expectVersion}\n`);
+      deps.stdout(`version: ${options.expectVersion}\n`);
     }
-    return 0;
   } finally {
     await Promise.all(
-      [packDir, consumerDir]
-        .filter((dir) => dir !== undefined)
-        .map((dir) => rm(dir, { recursive: true, force: true })),
+      [packDir, consumerDir].filter((dir) => dir !== undefined).map((dir) => deps.rm(dir)),
     );
   }
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+// Runs the whole command for the given arguments (without node and the script path) and resolves to the exit code: 0 when
+// every check passes, otherwise 1 after writing "check:pack failed: <reason>" through deps.stderr.
+export async function runCheck(argv, overrides = {}) {
+  const deps = { ...REAL_DEPS, ...overrides };
   try {
-    process.exitCode = await main(process.argv.slice(2));
+    await check(argv, deps);
+    return 0;
   } catch (error) {
-    console.error(`check:pack failed: ${error.message}`);
-    process.exitCode = 1;
+    deps.stderr(`check:pack failed: ${error.message}\n`);
+    return 1;
   }
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  process.exitCode = await runCheck(process.argv.slice(2));
 }

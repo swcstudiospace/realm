@@ -7,6 +7,8 @@ import { fileURLToPath } from "node:url";
 import { RELEASE_VERSION_FILES } from "../release/sync-version.mjs";
 import {
   ADAPTER_FILES,
+  DRIVER_PROTO_FILES,
+  LEGAL_FILES,
   WALKED_DIRECTORIES,
   buildInstallArgs,
   buildPackArgs,
@@ -14,6 +16,7 @@ import {
   missingDeclaredEntries,
   missingWalkedFiles,
   parseArgs,
+  runCheck,
   tarballFromPackOutput,
   versionMismatches,
 } from "./pack-smoke.mjs";
@@ -23,6 +26,17 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 function writeFixture(root, path, content = "{}\n") {
   mkdirSync(dirname(join(root, path)), { recursive: true });
   writeFileSync(join(root, path), content);
+}
+
+async function withTempRootsAsync(prefix, count, body) {
+  const roots = Array.from({ length: count }, (_, index) => mkdtempSync(join(tmpdir(), `${prefix}${index}-`)));
+  try {
+    await body(...roots);
+  } finally {
+    for (const root of roots) {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
 }
 
 function withTempRoots(prefix, count, body) {
@@ -79,14 +93,13 @@ test("ADAPTER_FILES names the four snippet and guide files besides the manifests
   }
 });
 
-test("the explicit list covers every file the walk finds under adapters/ in the source tree", () => {
+test("every ADAPTER_FILES entry appears in the walk of the real adapters/ tree; unlisted tree files are left to the walk check", () => {
   // An empty package root makes every walked file "missing", so the result is the walk itself.
   withTempRoots("realm-pack-walk-self-", 1, (emptyPackage) => {
-    const walked = missingWalkedFiles(REPO_ROOT, emptyPackage, ["adapters"]);
-    assert.deepEqual(
-      [...ADAPTER_FILES].sort(),
-      walked,
-    );
+    const walked = new Set(missingWalkedFiles(REPO_ROOT, emptyPackage, ["adapters"]));
+    for (const path of ADAPTER_FILES) {
+      assert.ok(walked.has(path), `${path} is listed but absent from the adapters/ tree`);
+    }
   });
 });
 
@@ -212,3 +225,158 @@ test("parseArgs rejects unknown flags, positional arguments, missing values, rep
   assert.throws(() => parseArgs(["--expect-version", "0.3"]), /must look like x\.y\.z/);
   assert.throws(() => parseArgs(["--tarball", "a.tgz", "extra"]), /unknown argument "extra"/);
 });
+
+// Writes a complete package tree (also usable as the source tree: it holds dist/.../validate.js) at the given version.
+function writePackageTree(root, version) {
+  const entries = ["dist/src/cli/main.js", "dist/src/omp/extension.js", "dist/src/contract/validate.js"];
+  writeFixture(
+    root,
+    "package.json",
+    `${JSON.stringify({ name: "agent-realm", version, bin: { realm: `./${entries[0]}` }, omp: { extensions: [`./${entries[1]}`] } })}\n`,
+  );
+  for (const path of entries) {
+    writeFixture(root, path, "");
+  }
+  for (const path of [...ADAPTER_FILES, ...DRIVER_PROTO_FILES, ...LEGAL_FILES]) {
+    const carriesVersion = RELEASE_VERSION_FILES.includes(path);
+    writeFixture(root, path, carriesVersion ? `${JSON.stringify({ version })}\n` : "{}\n");
+  }
+}
+
+// Runs the command with a fake npm: `npm pack` reports a tarball, `npm install` materialises a package at installedVersion
+// in the consumer, and the probe prints one line. No process is spawned and nothing touches the network.
+async function runWithFakeNpm(argv, { installedVersion, sourceRoot }) {
+  const calls = [];
+  const out = [];
+  const err = [];
+  const code = await runCheck(argv, {
+    root: sourceRoot,
+    run: async (file, args, options) => {
+      calls.push({ file, args, cwd: options.cwd });
+      if (file === "npm" && args[0] === "pack") {
+        return { stdout: JSON.stringify([{ filename: "agent-realm-1.0.0.tgz" }]) };
+      }
+      if (file === "npm" && args[0] === "install") {
+        writePackageTree(join(options.cwd, "node_modules", "agent-realm"), installedVersion);
+        return { stdout: "" };
+      }
+      return { stdout: "schemas loaded: policy, tools, sessionRecord\n" };
+    },
+    stdout: (text) => out.push(text),
+    stderr: (text) => err.push(text),
+  });
+  return { code, calls, out: out.join(""), err: err.join("") };
+}
+
+test("runCheck with --tarball makes no npm pack call and installs the given tarball", () =>
+  withTempRootsAsync("realm-pack-cmd-tarball-", 2, async (sourceRoot, scratch) => {
+    writePackageTree(sourceRoot, "1.0.0");
+    const tarball = join(scratch, "given.tgz");
+    writeFileSync(tarball, "");
+    const result = await runWithFakeNpm(["--tarball", tarball], { installedVersion: "1.0.0", sourceRoot });
+    assert.equal(result.code, 0, result.err);
+    assert.equal(result.calls.some((call) => call.file === "npm" && call.args[0] === "pack"), false);
+    const install = result.calls.find((call) => call.file === "npm" && call.args[0] === "install");
+    assert.equal(install?.args.at(-1), tarball);
+    assert.match(result.out, /schemas loaded/);
+  }));
+
+test("runCheck without --tarball packs the source tree and installs the packed tarball", () =>
+  withTempRootsAsync("realm-pack-cmd-pack-", 1, async (sourceRoot) => {
+    writePackageTree(sourceRoot, "1.0.0");
+    const result = await runWithFakeNpm([], { installedVersion: "1.0.0", sourceRoot });
+    assert.equal(result.code, 0, result.err);
+    const pack = result.calls.find((call) => call.file === "npm" && call.args[0] === "pack");
+    assert.ok(pack, "npm pack was called");
+    assert.equal(pack.cwd, sourceRoot);
+    const destination = pack.args[pack.args.indexOf("--pack-destination") + 1];
+    const install = result.calls.find((call) => call.file === "npm" && call.args[0] === "install");
+    assert.equal(install?.args.at(-1), join(destination, "agent-realm-1.0.0.tgz"));
+  }));
+
+test("runCheck without --tarball fails before any npm call when the build output is absent", () =>
+  withTempRootsAsync("realm-pack-cmd-nobuild-", 1, async (sourceRoot) => {
+    const result = await runWithFakeNpm([], { installedVersion: "1.0.0", sourceRoot });
+    assert.equal(result.code, 1);
+    assert.deepEqual(result.calls, []);
+    assert.match(result.err, /validate\.js is missing; run "npm run build"/);
+  }));
+
+test("runCheck with --tarball skips the build-output precheck and rejects a tarball that does not exist", () =>
+  withTempRootsAsync("realm-pack-cmd-missing-", 1, async (sourceRoot) => {
+    const result = await runWithFakeNpm(["--tarball", join(sourceRoot, "nope.tgz")], {
+      installedVersion: "1.0.0",
+      sourceRoot,
+    });
+    assert.equal(result.code, 1);
+    assert.deepEqual(result.calls, []);
+    assert.match(result.err, /does not exist/);
+  }));
+
+test("runCheck with --expect-version fails and names the mismatching files when the installed version differs", () =>
+  withTempRootsAsync("realm-pack-cmd-bad-version-", 2, async (sourceRoot, scratch) => {
+    writePackageTree(sourceRoot, "1.0.0");
+    const tarball = join(scratch, "given.tgz");
+    writeFileSync(tarball, "");
+    const result = await runWithFakeNpm(["--tarball", tarball, "--expect-version", "9.9.9"], {
+      installedVersion: "1.0.0",
+      sourceRoot,
+    });
+    assert.equal(result.code, 1);
+    assert.match(result.err, /not at version 9\.9\.9/);
+    assert.match(result.err, /package\.json: 1\.0\.0/);
+    assert.match(result.err, /adapters\/hermes-agent\/plugin\.json: 1\.0\.0/);
+    assert.doesNotMatch(result.out, /version: 9\.9\.9/);
+  }));
+
+test("runCheck with --expect-version ends with zero when the installed version matches", () =>
+  withTempRootsAsync("realm-pack-cmd-good-version-", 2, async (sourceRoot, scratch) => {
+    writePackageTree(sourceRoot, "1.0.0");
+    const tarball = join(scratch, "given.tgz");
+    writeFileSync(tarball, "");
+    const result = await runWithFakeNpm(["--tarball", tarball, "--expect-version", "9.9.9"], {
+      installedVersion: "9.9.9",
+      sourceRoot,
+    });
+    assert.equal(result.code, 0, result.err);
+    assert.match(result.out, /version: 9\.9\.9/);
+  }));
+
+test("runCheck reports bad arguments with the usage and a non-zero result before any work", async () => {
+  const result = await runWithFakeNpm(["--nope"], { installedVersion: "1.0.0", sourceRoot: tmpdir() });
+  assert.equal(result.code, 1);
+  assert.deepEqual(result.calls, []);
+  assert.match(result.err, /unknown argument "--nope"; usage: pack-smoke\.mjs/);
+});
+
+test("runCheck removes its temporary directories after a failed run", () =>
+  withTempRootsAsync("realm-pack-cmd-cleanup-", 2, async (sourceRoot, scratch) => {
+    writePackageTree(sourceRoot, "1.0.0");
+    const tarball = join(scratch, "given.tgz");
+    writeFileSync(tarball, "");
+    const removed = [];
+    const created = [];
+    const code = await runCheck(["--tarball", tarball, "--expect-version", "9.9.9"], {
+      root: sourceRoot,
+      run: async (file, args, options) => {
+        if (args[0] === "install") {
+          writePackageTree(join(options.cwd, "node_modules", "agent-realm"), "1.0.0");
+        }
+        return { stdout: "" };
+      },
+      mkdtemp: async (prefix) => {
+        const dir = mkdtempSync(join(tmpdir(), prefix));
+        created.push(dir);
+        return dir;
+      },
+      rm: async (dir) => {
+        removed.push(dir);
+        rmSync(dir, { recursive: true, force: true });
+      },
+      stderr: () => {},
+    });
+    assert.equal(code, 1);
+    assert.equal(created.length, 1);
+    assert.deepEqual(removed, created);
+    assert.equal(existsSync(created[0]), false);
+  }));
