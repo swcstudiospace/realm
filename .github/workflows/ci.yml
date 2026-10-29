@@ -65,6 +65,14 @@ jobs:
           set -euo pipefail
           npm test
 
+      # Report-only landing: the floors pull request removes continue-on-error and the reportOnly flag.
+      - name: Coverage (report only)
+        if: matrix.node-version == '22.x'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          npm run test:coverage
+
       - name: Integration tests
         run: |
           set -euo pipefail
