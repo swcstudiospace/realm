@@ -23,7 +23,7 @@ A change must pass every gate below before it is reviewed.
 | `npm run lint` | ESLint over the repository |
 | `npm test` | Unit tests (`node:test`) |
 | `npm run test:integration` | Integration tests; Podman-gated tests skip with a stated reason when the host lacks Podman 5.x |
-| `npm run test:coverage` | Per-directory coverage (`src/fs`, `src/core`, `src/tools`) against `scripts/check/coverage-floors.json`; report-only for now: it never fails on a floor, the CI step has `continue-on-error` so a failure of the step does not fail the job, and the table is printed even if the suite fails in that run. CI runs it on the Node 22.x leg only |
+| `npm run test:coverage` | Per-directory coverage (`src/fs`, `src/core`, `src/tools`) against the enforced floors in `scripts/check/coverage-floors.json` (floor(measured) minus 1, from CI runs of the gate leg): below a floor, or with a source no test loads, it exits 1; the table is printed even if the suite fails in that run. CI runs it on the Node 22.x leg only, where a failure fails the job and blocks the release |
 | `npm run test:scripts` | Tests for the scripts under `scripts/` |
 | `npm run check:docs` | Documentation checks |
 | `npm run build` | Compile to `dist/` |
