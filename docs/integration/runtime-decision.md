@@ -147,7 +147,7 @@ Phase 14 adds two values to the audit line format. Both are additive, and a log 
 
 **What "unknown" covers.** A reconciliation line says only that no closing line exists. A lone admission has two origins. Either the process ended after the admission and before the result, so the call may have run, or the admission append itself threw `AUDIT_WRITE_FAILED`, so nothing ran. The second case can leave the line in the file anyway: a failed fsync after a successful write reports `AUDIT_WRITE_FAILED` although the line is already there (`writeAuditLine` comment). A lone admission from a failed append is labelled unknown too, because the log cannot tell the two apart.
 
-**Status.** `reconcileAuditLogs` and `sweepOrphanTempFiles` are libraries in this change. Nothing calls either of them at daemon start yet; a later pull request wires them. Until then no reconciliation line or sweep line is written by a running daemon.
+**Status.** `reconcileAuditLogs` and `sweepOrphanTempFiles` are libraries, and the daemon calls both at start, before it serves, inside `runStartupMaintenance` (`src/daemon/daemon.ts`; see "Startup maintenance (Phase 14, CRASH-04)" below). A running daemon therefore writes reconciliation lines and sweep lines at each start, as long as there is something to reconcile or to remove.
 
 ### Orphan temp-file sweep (Phase 14, CRASH-01)
 
@@ -163,7 +163,56 @@ Phase 14 adds two values to the audit line format. Both are additive, and a log 
 - **Bounds.** The walk stops with `truncated: true` when it has examined `maxEntries` directory entries (default `DEFAULT_SWEEP_MAX_ENTRIES`, 500 000) or when its wall budget `deadlineMs` (default `DEFAULT_SWEEP_DEADLINE_MS`, 15 000 ms) is spent. A truncated walk skips the remaining roots.
 - **Result.** `{ removed, skipped, failed, truncated }`. A root that does not bind never aborts the sweep; it is counted in `skipped`. The sweep reads no file content, no process state and no environment: the clock, owner, age bound and audit sink are all injected.
 
-The roots are the caller's choice, and the library does not call itself: it is not yet called at daemon start (see "Status" above).
+The roots are the caller's choice, and the library does not call itself. The daemon passes three roots (`sweepRootsOf`, `src/daemon/daemon.ts`): every entry of `policy.workspaceRoots`, then `<stateDir>/sessions`, then `<stateDir>/runtime`. Each root is bound with `bindRoot`; a root that lies inside an earlier root is dropped, so no directory is walked twice, and a root that does not bind (for example a `runtime` directory that was never created) is passed on unchanged and counted in `skipped` by the sweep. There is no skip list (VERIFIED_BY_CODE_READING).
+
+### Startup maintenance (Phase 14, CRASH-04)
+
+Decision D-1409 (`.planning/phases/14-crash-safety-pack/14-CONTEXT.md`). `startDaemon` runs one function, `runStartupMaintenance` (`src/daemon/daemon.ts`), after the control socket is bound and before the gate opens, so no request is served before it finishes. Order:
+
+1. **The reap** (`reapStartup`, `src/session/reap.ts`): every realm container is removed and proven gone, then every session record is deleted.
+2. **The orphan temp-file sweep** (`sweepOrphanTempFiles`, `src/fs/temp-sweep.ts`) over `policy.workspaceRoots`, `<stateDir>/sessions` and `<stateDir>/runtime`. The daemon passes `now`, `ORPHAN_TEMP_MIN_AGE_MS` (60 000 ms), its own uid (`process.getuid()`) and an audit sink that appends each sweep line to `<stateDir>/audit/<sessionId>.jsonl` through `appendAudit`, under the daemon's own session id.
+3. **The audit reconciliation** (`reconcileAuditLogs`, `src/audit/reconcile.ts`) over `<stateDir>/audit`.
+4. **The report**: the `StartupReport` is built, the notice is derived from it, and the `onStartup` observer receives it.
+5. **The gate opens** (`openGate()`).
+
+**Failure handling.** Only the reap can stop the start: a reap that does not prove zero containers rejects (and a timeout of 60 s, `REAP_SWEEP_TIMEOUT_MS`, rejects with `PODMAN_MACHINE_DOWN`), and `startDaemon` aborts, because nothing may be served while an old sandbox might survive. A failure in step 2 or 3 never aborts the start. Each is counted in `failures` and the start goes on. The count adds the sweep's `failed` and the reconciliation's `failed`, plus 1 when the sweep or the reconciliation itself throws, plus 1 when the process has no uid (`process.getuid` is unavailable), in which case nothing is swept because the owner rule cannot be applied. Entries the sweep counted as `skipped` are not in `failures`. The reason for the rule: a skipped cleanup costs disk space and a missing reconciliation line, while a daemon that will not start costs the user the sandbox (VERIFIED_BY_CODE_READING of the comment on `runStartupMaintenance`). An `onStartup` observer that throws does abort the start.
+
+**`StartupReport`** (`src/daemon/daemon.ts`), handed to the optional `onStartup` observer of `StartDaemonOptions` once per start:
+
+| Field | Meaning |
+| --- | --- |
+| `containerIds` | Ids of the realm containers the reap removed, in removal order. Empty when an injected sweep names none. |
+| `containersRemoved` | Number of containers the reap removed. |
+| `recordsDeleted` | Number of session records the reap deleted. |
+| `tempFilesRemoved` | Number of orphan temp files the sweep removed. |
+| `auditLinesReconciled` | Number of reconciliation lines appended (`appended`). |
+| `truncated` | True when the sweep stopped at its wall or entry bound. It is not part of the log line. |
+| `failures` | The count described above. |
+
+**The `daemon.log` line.** The daemon entry (`src/daemon/main.ts`, `startupLine`) writes one line per start to its standard error. The detached daemon is spawned with that stream on `<stateDir>/daemon.log` (`startDetachedDaemon`, `src/cli/main.ts`), so the line lands there. The format, with the container ids in brackets only when there is at least one and the failure clause only when `failures` is not zero:
+
+```text
+realm daemon: startup removed <n> container(s)[<id>,<id>] and <m> session record(s); removed <t> orphan temp file(s); reconciled <a> audit admission(s); <f> startup failure(s)
+```
+
+The container ids are not secrets (the comment on `startupLine`). The line is written on every start, including when everything is zero.
+
+**`onRemoved` of `removeAllRealmContainers`** (`src/runtime/sweep.ts`, D-1405). The function takes an optional second argument `onRemoved?: (id: string) => void`. It is called with each container's id right after that container's removal succeeded; a removal that failed is not reported through it, and the callback must not throw. The return type (the count removed) and the other callers are unchanged. The daemon's default reap sweep passes a callback that collects the ids for `StartupReport.containerIds`; a sweep injected through `StartDaemonOptions.sweep` is called without one and reports no ids.
+
+**The `notice` on `status`, `up` and `down` replies** (D-1404). The daemon's `status`, `up` and `down` results (`statusResult`, `src/daemon/daemon.ts`) carry an optional `notice` string, and only when the reap destroyed something: `containersRemoved` or `recordsDeleted` is not zero (`startupNoticeOf`). With nothing destroyed the reply has no `notice` key. The text is exactly:
+
+```text
+A previous daemon's sandbox was destroyed at startup: <n> container(s), <m> session record(s). Files in the workspace were kept; state outside it was lost.
+```
+
+`<n>` is `containersRemoved` and `<m>` is `recordsDeleted`.
+
+- **Kept for the daemon's lifetime.** The text is computed once, after the maintenance, and every later `status`, `up` and `down` reply carries it. It is not consumed on read, because the Omp attach calls `up` before it calls `status` (`docs/integration/omp.md`).
+- **Not in the tool contract, the snapshot or the session record.** It is a field of the control reply only. `src/contract/` and the session record schema are unchanged, and the `StateSnapshot` inside the reply is unchanged.
+- **Precedent.** The `mode` field the replies already carry: an optional, additive field on the control reply, outside the frozen contracts.
+- **Who shows it.** The Omp plugin once per attach through `ui.notify` (`docs/integration/omp.md`). `realm mcp` and `realm acp` write it, followed by a newline, to their diagnostics stream (standard error) after their attach `up`, and never to standard output, which carries only protocol frames (`writeNotice`, `src/cli/main.ts`). `realm status` and `realm down` print the reply result as JSON on standard output (`replyToResult`), so the field appears there. `realm up` does not call `writeNotice`; it prints through `upResult`, which this note did not read. The client validator accepts the field only as a string (`src/daemon/client.ts`, `DaemonStatus`).
+
+The live suite checks it: scenario 5 of `test/integration/production-driver.test.ts` (the daemon is killed and restarted) asserts that `realm status` after the restart carries a notice that contains "destroyed at startup" and counts one container and at least one session record, and that `daemon.log` holds a `realm daemon: startup removed 1 container(s)` line naming the destroyed container (VERIFIED_BY_CODE_READING of the test; it was not run for this note).
 
 ### Session record delete is durable (Phase 14, CRASH-03)
 
