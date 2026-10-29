@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-10-29
+
+### Added
+- feat: add the crash-safety libraries, the lost-container retry and the daemon cause code (phase 14, part 1) (#11) (157ebfe)
+
 ## [0.3.2] - 2026-10-29
 
 ### Maintenance
