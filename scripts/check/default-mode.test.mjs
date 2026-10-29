@@ -201,6 +201,40 @@ test("flags a claim in each scanned location", () => {
   }
 });
 
+test("an exemption word in another clause does not excuse a default claim", () => {
+  const claims = [
+    ["Fail-closed is opt-in, and advisory is the default.", "advisory is the default"],
+    ["Advisory is the default; fail-closed is explicit.", "Advisory is the default"],
+    ["The default is advisory, not fail-closed.", "default is advisory"],
+    ["By default the mode is advisory (an explicit fail-closed is opt-in).", "default the mode is advisory"],
+    ["Fail-closed requires the explicit value, but advisory is the default mode.", "advisory is the default"],
+    ["The mode defaults to advisory. Fail-closed is opt-in.", "defaults to advisory"],
+    ["Advisory mode, the default, warns and allows the write.", "Advisory mode, the default"],
+    ["- Fail-closed needs the explicit value\n- Advisory is the default", "Advisory is the default"],
+  ];
+  for (const [text, phrase] of claims) {
+    assert.deepEqual(scanDocument("README.md", text).map((finding) => finding.phrase), [phrase], text);
+  }
+});
+
+test("words that qualify the claim itself exempt it", () => {
+  const truths = [
+    "Advisory is no longer the default.",
+    "The default was advisory before 0.3.5.",
+    "Advisory requires the explicit value.",
+    "Advisory is opt-in; the default is fail-closed.",
+    "Previously the default was advisory.",
+    "explicit advisory mode",
+    "The default is fail-closed; advisory is the explicit opt-in.",
+    "The default is advisory until 0.3.5.",
+    "Advisory, which used to be the default, is now explicit.",
+    "The old default advisory mode is gone.",
+  ];
+  for (const text of truths) {
+    assert.deepEqual(scanDocument("README.md", text), [], text);
+  }
+});
+
 test("a tree with no scanned files passes with zero files", () => {
   const result = check({ "CHANGELOG.md": "Advisory is the default.\n" });
   assert.deepEqual(result, { code: 0, output: "check:default-mode: 0 files scanned, no advisory-default claim\n" });
