@@ -54,6 +54,9 @@ const HEAD = new RegExp(`^(export\\s+)?(?:declare\\s+)?(${KIND})\\b`);
 const EXPORT_LIST = /^export\s*(type\s+)?\{([^}]*)\}(?:\s*from\s*(["']))?/;
 const EXPORT_STAR = new RegExp(`^export\\s*(?:type\\s*)?\\*\\s*(?:as\\s+(${NAME})\\s*)?from\\s*(["'])`);
 const EXPORT_IMPORT = new RegExp(`^export\\s+import\\s+(?:type\\s+)?(${NAME})\\s*=`);
+// Stands in the stripped text for the dollar sign that opens a template expression. It cannot occur in code, so the statement
+// splitter never mistakes `name${}` (an identifier ending in a dollar sign, then a block) for a template expression.
+const TEMPLATE_OPEN = "\u0001";
 // A line break at depth 0 ends the statement when the next statement starts with one of these and the line does not
 // continue (it ends in an operator or a comma).
 const DECLARATION_AHEAD =
@@ -116,6 +119,10 @@ export function stripNonCode(source) {
         previous = "expr-end";
         index += 1;
       } else if (current === "$" && next === "{") {
+        // The dollar sign of a real template expression is replaced by TEMPLATE_OPEN, so the statement splitter can tell it
+        // from an identifier that ends in a dollar sign and is followed by a block (`class Local${}`).
+        pieces.push(source.slice(copied, index), TEMPLATE_OPEN);
+        copied = index + 1;
         templateDepths.push(0);
         mode = "code";
         previous = "operator";
@@ -396,7 +403,7 @@ function splitStatements(stripped) {
       startLine = line;
     }
     last = index;
-    if (character === "{" && stripped[index - 1] === "$") {
+    if (character === "{" && stripped[index - 1] === TEMPLATE_OPEN) {
       stack.push("template");
     } else if (character === "(" || character === "[" || character === "{") {
       stack.push(character);

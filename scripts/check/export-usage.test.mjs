@@ -767,6 +767,15 @@ test("an exported type ending in an indexed access after a brace keeps the key t
   assert.equal(classes.Lonely, "self-only");
 });
 
+test("a dollar sign before a brace outside a template is part of a name: class Local${} type Internal = Leaf", () => {
+  // `Local$` is an identifier and `{}` is the class body, so the class and the alias are two statements and Leaf, which the
+  // exported function exposes through the alias, stays public-signature instead of self-only.
+  const classes = classesOf({
+    "src/a/one.ts": "export interface Leaf { readonly id: number }\nclass Local${} type Internal = Leaf;\nexport function make(): Internal { return { id: 1 }; }\n",
+  });
+  assert.equal(classes.Leaf, "public-signature");
+});
+
 test("a template literal expression never ends a statement: export const a = `${x}`, b = 1", () => {
   const found = collectExports("export const a = `${x}`, b = 1;\nexport const c = `${ {d: 1}.d } and ${e}`;\n", "src/a/x.ts");
   assert.deepEqual(found.exports.map((entry) => entry.name), ["a", "b", "c"]);
@@ -998,6 +1007,7 @@ const SNIPPETS = [
   // The ambiguous generic has its own entry below, with the unclassified allowance.
   ...TRICKY.filter(([title]) => !title.includes("ambiguous")).map(([title, source]) => [`table: ${title}`, source]),
   ["template with an expression, then a comma-separated export", "export const a = `${x}`, b = 1;\nexport const c = 2;\n"],
+  ["an identifier ending in a dollar sign before a block", "export interface Leaf { readonly id: number }\nclass Local${} type Internal = Leaf;\nexport function make(): Internal { return { id: 1 }; }\n"],
   ["nested templates and braces in expressions", "export const t = `a ${ b(`c ${ {d: `e ${f}`}.d } g`) } h`, u = 2;\nexport const after = 3;\n"],
   ["template literal types", "export type Tpl = `a${string}`;\nexport type Id<T> = `${T & string}-id`;\nexport interface Z {}\n"],
   ["indexed access types after a brace", "export type A = { value: number }[Key];\nexport type B = { k: number }[\"k\"];\nexport type Key = 'value'\nexport interface Z {}\n"],
