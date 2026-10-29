@@ -4,6 +4,10 @@
 // with a null container id (a crash during realm up, D-86) is reaped by the label sweep, not by its id.
 // A failed sweep rejects before any record is touched, so every record stays in place.
 //
+// The reap is not silent (CRASH-04): it returns what it destroyed, and the daemon reports it. startDaemon runs it inside
+// runStartupMaintenance (src/daemon/daemon.ts), which hands the counts and the removed container ids to its onStartup
+// observer (the daemon entry logs them on one line) and carries a notice on the status, up and down replies for its lifetime.
+//
 // This module imports no runtime module (D-50). The sweep arrives as a function argument.
 
 import { withTimeout } from "../core/timeout.js";

@@ -27,7 +27,7 @@ import { connectDaemon, type DaemonClient, type DaemonStatus } from "../daemon/c
 import { ensureDaemon, daemonAnswers, daemonLogPath, reportingStartFailure } from "../daemon/ensure.js";
 import { defaultRunCommand, runChecks, type DoctorOptions } from "../doctor/checks.js";
 import { createMcpServer } from "../mcp/server.js";
-import { isDirectEntry, readHostRuntime } from "../runtime/host-paths.js";
+import { defaultPolicyPath, isDirectEntry, readHostRuntime } from "../runtime/host-paths.js";
 import {
   probePodman,
   type ConnectSocket,
@@ -431,6 +431,7 @@ async function runDoctor(deps: ResolvedDeps, stateDir: string, socketPath: strin
   // OQ-P6-02: no daemon, so run the local checks and say the daemon is absent.
   const options: DoctorOptions = {
     stateDir,
+    policyPath: defaultPolicyPath(stateDir),
     env: deps.env,
     runCommand: deps.runCommand,
     connectSocket: deps.connectSocket,
@@ -460,6 +461,14 @@ async function ensureSharedDaemon(deps: ResolvedDeps, socketPath: string): Promi
   });
 }
 
+// The daemon's startup-reap notice (CRASH-04) goes to the diagnostics sink, never stdout: stdout carries only
+// protocol frames. Absent notice writes nothing.
+function writeNotice(deps: ResolvedDeps, status: DaemonStatus): void {
+  if (status.notice !== undefined) {
+    deps.diagnostics.write(`${status.notice}\n`);
+  }
+}
+
 // realm mcp attaches to the shared daemon (P6-D9): ensure it runs, claim the workspace with up,
 // then serve the Phase 5 server over stdio with the daemon client as its dispatcher. Every tool
 // call crosses the daemon; no handle is built in-process. stdout carries only MCP messages, so a
@@ -472,7 +481,8 @@ async function runMcp(deps: ResolvedDeps, socketPath: string, workspaceRoot: str
   }
   const client = deps.connect(socketPath);
   try {
-    await client.up(workspaceRoot);
+    const status = await client.up(workspaceRoot);
+    writeNotice(deps, status);
   } catch (error) {
     deps.diagnostics.write(attachFailure(error, deps.stateDir));
   }
@@ -507,6 +517,7 @@ async function runAcp(deps: ResolvedDeps, socketPath: string, workspaceRoot: str
     } catch (error) {
       return { exitCode: 1, stdout: "", stderr: attachFailure(error, deps.stateDir) };
     }
+    writeNotice(deps, status);
     const lifecycle: UpLifecycle = { state: status.snapshot.state, reason: status.snapshot.reason };
     if (lifecycle.state !== "active" && lifecycle.state !== "degraded") {
       const { code, reason } = upRefusal(lifecycle);

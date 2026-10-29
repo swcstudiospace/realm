@@ -22,7 +22,7 @@
 // Deviations recorded here:
 //   - P5-D5: the label, the reason, and the last-transition time share one status item
 //     (REALM_STATUS_KEY). The host offers no tooltip, so the reason and time ride in that item's text.
-//   - Required mode is the fail-closed policy mode (advisory is the default). The mode is the policy
+//   - Required mode is the fail-closed policy mode (the default; advisory is an explicit opt-in). The mode is the policy
 //     mode the daemon reports in its status value; the plugin reads no policy file.
 //   - The startup budget is STARTUP_BUDGET_MS. The policy is daemon-owned, so the plugin cannot read
 //     policy.startupBudgetMs; the constant mirrors the policy schema default.
@@ -262,6 +262,10 @@ export function registerRealmPlugin(pi: OmpExtensionApi, options: RealmPluginOpt
     session.client = attached.client;
     session.mode = attached.status.mode;
     renderRealmStatus(ctx.ui, attached.status.snapshot);
+    // The daemon keeps its startup-reap notice for its lifetime; each attach shows it once.
+    if (attached.status.notice !== undefined) {
+      ctx.ui.notify(attached.status.notice);
+    }
     return { outcome: "attached", snapshot: attached.status.snapshot };
   };
 
@@ -360,13 +364,13 @@ function nowIso(): string {
 // returns { block: true } and the host fails closed on error or timeout. Any host path that
 // bypasses the extension pipeline (launch-time tool flags, SDK sessions, or a host that ignores the
 // hook) is NOT covered by this guard and must not be claimed as covered. Required mode is the
-// fail-closed policy mode; advisory mode warns and lets the call through.
+// fail-closed policy mode (the default); advisory mode, set explicitly in the policy file, warns and lets the call through.
 //
 // The state comes from a daemon status read bounded by GUARD_STATUS_BUDGET_MS. stateVerdict
 // mirrors decideMutation (src/core/policy.ts) and the gate outcomes of src/lifecycle/mutation-gate.ts;
 // the mirror adds no rule of its own. The daemon reports the mode as 'advisory' or 'fail-closed'; fail-closed is
-// the required branch. When the state cannot be read, the last known mode decides: advisory warns; fail-closed,
-// or no mode yet, blocks.
+// the required branch. When the state cannot be read, the last known mode decides: advisory (explicit opt-in) warns;
+// fail-closed, or no mode yet, blocks.
 
 export async function guardHostToolCall(
   toolName: unknown,
