@@ -18,7 +18,7 @@ hero:
 
 features:
   - title: Sandboxed execution
-    details: Agent execution and file mutations run inside a sandbox. Under the fail-closed policy, every file mutation either lands inside the realm or fails closed. The default advisory mode warns and allows host write and edit calls while disconnected, so containment requires opting into fail-closed.
+    details: Agent execution and file mutations run inside a sandbox. Under the fail-closed policy, every file mutation either lands inside the realm or fails closed. The policy mode defaults to fail-closed, which refuses host write and edit calls while the realm is not active; advisory mode, which warns and allows them, needs the explicit value. Omp's own built-in tools are not contained while the realm is active.
   - title: Omp, CLI, MCP and ACP
     details: An Omp plugin, a standalone CLI with a long-running local daemon, and MCP and ACP surfaces let other agent hosts use the same sandbox.
   - title: Verification-first docs

@@ -384,6 +384,28 @@ void test("realm doctor with no daemon runs local checks and says the daemon is 
   assert.ok(result.stderr.includes("absent"));
 });
 
+void test("realm doctor with no daemon reads <stateDir>/policy.json for the policy-file check (D-1501)", async () => {
+  mkdirSync(RUNTIME_STATE_DIR, { recursive: true });
+  writeFileSync(join(RUNTIME_STATE_DIR, "policy.json"), JSON.stringify({ mode: "advisory" }));
+  try {
+    const result = await runCli(["doctor"], {
+      env: ENV,
+      timeoutMs: 500,
+      send: () => Promise.reject(new RealmError("REALM_NOT_ACTIVE")),
+      runCommand: () => Promise.reject(new Error("podman not installed")),
+      connectSocket: refuseConnect,
+    });
+    assert.equal(result.exitCode, 0);
+    const checks = JSON.parse(result.stdout) as { id: string; status: string; detail: string }[];
+    const policy = checks.find((check) => check.id === "policy-file");
+    assert.ok(policy, "the report carries a policy-file check");
+    assert.equal(policy.status, "warn");
+    assert.match(policy.detail, /mode advisory \(explicit\)/);
+  } finally {
+    rmSync(RUNTIME_STATE_DIR, { recursive: true, force: true });
+  }
+});
+
 void test("unknown argv exits 2 with usage on stderr (CLI-01)", async () => {
   for (const argv of [["frobnicate"], [], ["up", "extra"]]) {
     const result = await runCli(argv, { env: ENV });
@@ -921,4 +943,73 @@ void test("each control request is bounded by its own CONTROL_TIMEOUT_MS entry (
     { method: "status", timeoutMs: CONTROL_TIMEOUT_MS.status },
     { method: "doctor", timeoutMs: CONTROL_TIMEOUT_MS.doctor },
   ]);
+});
+
+const STARTUP_NOTICE =
+  "A previous daemon's sandbox was destroyed at startup: 1 container(s), 0 session record(s). Files in the workspace were kept; state outside it was lost.";
+
+void test("realm mcp writes the up notice to diagnostics once, and nothing when up carries none (CRASH-04)", async () => {
+  for (const notice of [STARTUP_NOTICE, undefined]) {
+    const daemon = fakeDaemon({
+      probes: [true],
+      up: () => Promise.resolve(notice === undefined ? STATUS : { ...STATUS, notice }),
+    });
+    const input = new PassThrough();
+    input.end();
+    const diagnostics = captureDiagnostics();
+    const result = await untilShutdown(
+      runCli(["mcp", "--workspace", "/srv/realm-ws"], {
+        env: ENV,
+        spawn: makeSpawn([]),
+        connect: daemon.connect,
+        mcpInput: input,
+        mcpOutput: new PassThrough(),
+        diagnostics: diagnostics.stream,
+      }),
+    );
+    assert.equal(result.exitCode, 0);
+    assert.equal(diagnostics.text(), notice === undefined ? "" : `${STARTUP_NOTICE}\n`);
+  }
+});
+
+void test("realm acp writes the up notice to diagnostics once, and nothing when up carries none (CRASH-04)", async () => {
+  for (const notice of [STARTUP_NOTICE, undefined]) {
+    const daemon = fakeDaemon({
+      probes: [true],
+      up: () => Promise.resolve(notice === undefined ? ACTIVE_DAEMON_STATUS : { ...ACTIVE_DAEMON_STATUS, notice }),
+    });
+    const input = new PassThrough();
+    input.end();
+    const output = captureDiagnostics();
+    const diagnostics = captureDiagnostics();
+    const result = await untilShutdown(
+      runCli(["acp", "--workspace", "/srv/acp-ws"], {
+        env: ENV,
+        timeoutMs: 500,
+        spawn: makeSpawn([]),
+        connect: daemon.connect,
+        acpInput: input,
+        acpOutput: output.stream,
+        diagnostics: diagnostics.stream,
+      }),
+    );
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.stdout, "", "the notice never reaches stdout");
+    assert.equal(output.text(), "", "no frame carries the notice");
+    assert.equal(diagnostics.text(), notice === undefined ? "" : `${STARTUP_NOTICE}\n`);
+  }
+});
+
+void test("realm status prints the daemon's notice inside the JSON result with no new flag (CRASH-04)", async () => {
+  const send: SendControlRequest = (_socketPath, request) => {
+    const reply: ControlReply = {
+      id: request.id,
+      result: { ...ACTIVE_DAEMON_STATUS, notice: STARTUP_NOTICE },
+    };
+    return Promise.resolve(reply);
+  };
+  const result = await runCli(["status"], { env: ENV, timeoutMs: 500, send, runCommand: okVersion, connectSocket: refuseConnect });
+  assert.equal(result.exitCode, 0);
+  const printed = JSON.parse(result.stdout) as Record<string, unknown>;
+  assert.equal(printed["notice"], STARTUP_NOTICE);
 });

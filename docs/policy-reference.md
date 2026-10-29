@@ -16,7 +16,7 @@ likewise closed (`$defs/egressRule` in `src/core/policy.schema.json`).
 Loading rules (`loadPolicyFile`, `src/core/policy.ts`):
 
 - The policy path is explicit and caller-supplied. A missing file (`ENOENT`)
-  yields validated defaults via `validate("policy", {})` — advisory mode, no
+  yields validated defaults via `validate("policy", {})` — `fail-closed` mode, no
   roots, shell disabled. Any other read failure throws `POLICY_DENIED`
   (`readPolicyText`, `src/core/policy.ts`).
 - Every `workspaceRoots` entry must be absolute; otherwise
@@ -38,18 +38,21 @@ Loading rules (`loadPolicyFile`, `src/core/policy.ts`):
 - **Type:** `"advisory" | "fail-closed"` (the `mode` property of
   `src/core/policy.schema.json`; `PolicyMode` and `Policy.mode` in
   `src/contract/validate.ts`).
-- **Default:** `"advisory"` (the `mode` property of `src/core/policy.schema.json`).
-- **Effect:** `advisory` is the default; `fail-closed` is opt-in per project
-  (select it by writing `"mode": "fail-closed"` in that project's policy
-  file). The value changes the mutation decision for non-`active` states. `active`
-  allows a mutation in both modes, whether or not an Anda bridge is configured
-  (`decideMutation`, `src/core/policy.ts`):
-  - `advisory` + non-`active` → `allow-with-warning` with message
-    `` `realm is ${state}; the write proceeds under advisory policy` ``.
+- **Default:** `"fail-closed"` (the `mode` property of `src/core/policy.schema.json`).
+  A policy file with no `mode` key, and a missing policy file, both load as
+  `fail-closed`. Decision D4 (2026-10-29) made this the default; earlier
+  releases loaded those inputs as `advisory`.
+- **Effect:** `fail-closed` is the default; `advisory` is the explicit opt-in
+  (select it by writing `"mode": "advisory"` in the policy file; it is never
+  applied without that value). The value changes the mutation decision for
+  non-`active` states. `active` allows a mutation in both modes, whether or
+  not an Anda bridge is configured (`decideMutation`, `src/core/policy.ts`):
   - `fail-closed` + non-`active` → `deny` with code from
     `denyCodeFor` (`src/core/policy.ts`): `unbound` →
     `REALM_UNBOUND`, `stopping` → `REALM_STOPPING`, `connecting`/`degraded`/
     `error` → `REALM_NOT_ACTIVE`.
+  - `advisory` + non-`active` → `allow-with-warning` with message
+    `` `realm is ${state}; the write proceeds under advisory policy` ``.
   - `active` → `allow`, in both modes, whether or not an Anda bridge is configured. A configured bridge that goes down moves the session to `degraded` (reason `ANDA_UNREACHABLE`), which is handled by the rows above.
 - **Enforced by:**
   - `decideMutation` (`src/core/policy.ts`).
@@ -68,7 +71,15 @@ Loading rules (`loadPolicyFile`, `src/core/policy.ts`):
     (stage list in the header comment of `src/tools/dispatch.ts`); `retry` has its own state refusal
     (`refuseRetryIn`, `src/tools/dispatch.ts`).
 
-The default stays `advisory`; a project that expects containment opts in to `fail-closed` in its own policy file, and the posture and its limits are set out in `docs/integration/hardening-plan.md`.
+Advisory is the opt-in for a deployment that prefers to keep working while the realm is down; it is not containment. The default `fail-closed` refuses host `write` and `edit` calls while the realm is not active; it does not contain Omp's built-in `write`, `edit` and `bash` while the realm is active, which still act on the host. Containing the built-ins is planned work (Phase 16 of milestone v3.0). The posture and its limits are set out in `docs/integration/hardening-plan.md`.
+
+`realm doctor` reports the mode in its `policy-file` check, says whether the file set it or the default applies, and warns for an explicit `advisory`. `realm status` and `realm up` print the mode in effect.
+
+Supersession. The product spec (`docs/specs/realm-spec.xml`, read-only) still carries its line on the default mode from before decision D4, which names the old value. Decision D4 supersedes that line; this document and the schema are authoritative for the default.
+
+### Upgrading
+
+A policy that has no `mode` key, or no policy file at all, used to load as `advisory`. It now loads as `fail-closed`. While the realm is not active (not yet started, connecting, degraded, stopping or in error), host writes that used to proceed with a warning are refused: the Omp guard blocks `write` and `edit` with `REALM_NOT_ACTIVE` (or `REALM_UNBOUND` or `REALM_STOPPING` for those states), and `write` through the tool dispatcher is denied the same way. Start the realm (`realm up`, or `/realm-retry` in Omp) to proceed. To keep the earlier behaviour, add `"mode": "advisory"` to `<stateDir>/policy.json` and restart the daemon; to take the new default, change nothing. `exec` is unchanged: it was already refused outside `active` in both modes.
 
 ## `workspaceRoots`
 

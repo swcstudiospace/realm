@@ -13,7 +13,7 @@ import type { AgentOsDriver } from "../runtime/agentos.js";
 import { productionOpenShellRunner } from "../runtime/session-execution.js";
 import type { EnvironmentLike } from "../session/paths.js";
 import { CONTROL_TIMEOUT_MS, sendRequest, type ControlReply } from "./channel.js";
-import { startDaemon, type StartDaemonOptions, type StartedDaemon } from "./daemon.js";
+import { startDaemon, type StartDaemonOptions, type StartedDaemon, type StartupReport } from "./daemon.js";
 
 export type DaemonSignal = "SIGTERM" | "SIGINT";
 
@@ -91,6 +91,9 @@ export async function runDaemon(deps: DaemonDeps): Promise<number> {
       ...(secretRoot === undefined || secretRoot.length === 0 ? {} : { secretRoot }),
       ...(workspaceRoot === undefined || workspaceRoot.length === 0 ? {} : { pinnedWorkspaceRoot: workspaceRoot }),
       ...(sandboxStateRoot === undefined || sandboxStateRoot.length === 0 ? {} : { sandboxStateRoot }),
+      onStartup: (report) => {
+        writeStderr(startupLine(report));
+      },
     });
   } catch (error: unknown) {
     writeStderr(failureLine(codeOf(error)));
@@ -101,6 +104,41 @@ export async function runDaemon(deps: DaemonDeps): Promise<number> {
     onSignal: deps.onSignal ?? registerSignal,
     writeStderr,
   });
+}
+
+// The one startup line (CRASH-04): what the reap destroyed, what the orphan sweep removed, what the audit
+// reconciliation appended, and whether the budgeted maintenance finished. The container ids are not secrets. The failure
+// count is added only when it is not zero. When the budget left work unfinished, the line names the audit files (base names)
+// and the sweep roots; a later start finishes them, and the user-facing notice does not change (it is about the reap only).
+// When the reap itself failed, the report is partial (what it had destroyed before it stopped) and the line adds
+// `reap failed: <CODE>`; the daemon then exits with that code, which is written on its own line.
+// At most this many names of an unfinished list go into the line; the count is always exact. The lists can hold thousands of
+// names, and one log line must stay short.
+const STARTUP_LINE_MAX_NAMES = 10;
+
+function nameList(names: readonly string[]): string {
+  const shown = names.slice(0, STARTUP_LINE_MAX_NAMES).join(",");
+  const more = names.length > STARTUP_LINE_MAX_NAMES ? `,+${String(names.length - STARTUP_LINE_MAX_NAMES)} more` : "";
+  return `[${shown}${more}]`;
+}
+
+function startupLine(report: StartupReport): string {
+  const ids = report.containerIds.length === 0 ? "" : `[${report.containerIds.join(",")}]`;
+  const hasUnfinished = report.unfinishedAuditFiles.length > 0 || report.unfinishedSweepRoots.length > 0;
+  const unfinished = hasUnfinished
+    ? `; unfinished ${String(report.unfinishedAuditFiles.length)} audit file(s)${nameList(report.unfinishedAuditFiles)}` +
+      ` and ${String(report.unfinishedSweepRoots.length)} sweep root(s)${nameList(report.unfinishedSweepRoots)}`
+    : "";
+  const listing = report.auditListingTruncated ? "; audit listing truncated" : "";
+  const reapFailed = report.reapFailure === undefined ? "" : `; reap failed: ${report.reapFailure}`;
+  const failures = report.failures > 0 ? `; ${String(report.failures)} startup failure(s)` : "";
+  return (
+    `realm daemon: startup removed ${String(report.containersRemoved)} container(s)${ids}` +
+    ` and ${String(report.recordsDeleted)} session record(s);` +
+    ` removed ${String(report.tempFilesRemoved)} orphan temp file(s);` +
+    ` reconciled ${String(report.auditLinesReconciled)} audit admission(s);` +
+    ` maintenanceComplete=${String(report.maintenanceComplete)}${unfinished}${listing}${reapFailed}${failures}`
+  );
 }
 
 // Resolves once the daemon has stopped. A signal runs the down request and settles with its

@@ -4,6 +4,21 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.3.7] - 2026-10-29
+
+### Maintenance
+- ci: add the coverage ratchet script and print its report on the Node 22 leg, report-only (phase 13, part B-coverage) (#18) (d79a8be)
+
+## [0.3.6] - 2026-10-29
+
+### Added
+- feat(daemon): sweep and reconcile at start, log the reap and show a notice (phase 14, part 2) (#15) (5719f81)
+
+## [0.3.5] - 2026-10-29
+
+### Security
+- security!: default the policy mode to fail-closed (phase 15, part 1) (#19) (84f335b)
+
 ## [0.3.4] - 2026-10-29
 
 ### Maintenance

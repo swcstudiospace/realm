@@ -125,6 +125,35 @@ void test("up sends workspaceRoot and returns the daemon status", async (t) => {
   assert.deepEqual(stub.requests[0].params, { workspaceRoot: "/work/project" });
 });
 
+const NOTICE = "A previous daemon's sandbox was destroyed at startup: 1 container(s), 0 session record(s).";
+
+void test("status and up carry an optional notice string through unchanged", async (t) => {
+  const stub = await startStub(t, (request) =>
+    encodeReply({ id: request.id, result: { ...DAEMON_STATUS, notice: NOTICE } }),
+  );
+  const client = connectDaemon(stub.socketPath);
+  assert.equal((await client.status()).notice, NOTICE);
+  assert.equal((await client.up("/work/project")).notice, NOTICE);
+});
+
+void test("status and up without a notice return no notice key", async (t) => {
+  const stub = await startStub(t, (request) =>
+    encodeReply({ id: request.id, result: DAEMON_STATUS }),
+  );
+  const client = connectDaemon(stub.socketPath);
+  assert.equal("notice" in (await client.status()), false);
+  assert.equal("notice" in (await client.up("/work/project")), false);
+});
+
+void test("status and up reject a notice that is not a string with SCHEMA_INVALID", async (t) => {
+  const stub = await startStub(t, (request) =>
+    encodeReply({ id: request.id, result: { ...DAEMON_STATUS, notice: 7 } }),
+  );
+  const client = connectDaemon(stub.socketPath);
+  await assert.rejects(client.status(), assertRealmError("SCHEMA_INVALID"));
+  await assert.rejects(client.up("/work/project"), assertRealmError("SCHEMA_INVALID"));
+});
+
 void test("call round-trips a raw ToolCall and returns the done outcome", async (t) => {
   const outcome: ToolOutcome = {
     outcome: "done",

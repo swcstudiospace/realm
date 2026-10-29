@@ -12,6 +12,7 @@
 - [ ] `npm run lint`
 - [ ] `npm test`
 - [ ] `npm run test:integration`
+- [ ] `npm run test:coverage` (report-only for now)
 - [ ] `npm run test:scripts`
 - [ ] `npm run check:docs`
 - [ ] `npm run build`
