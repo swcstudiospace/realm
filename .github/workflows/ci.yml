@@ -235,7 +235,6 @@ jobs:
             --title "Realm ${tag}" \
             --notes-file "${dir}/notes.md" \
             --verify-tag
-          echo "repaired=true" >> "${GITHUB_OUTPUT}"
           git worktree remove --force "${dir}"
           trap - EXIT
 
@@ -259,11 +258,6 @@ jobs:
       #   skip       target tag and its GitHub release both exist: nothing to publish.
       #   superseded origin/main is no longer this commit: the newer commit's run releases.
       #   normal     bump, build, commit, atomic push of main and tag, then release.
-      # Pages is dispatched only by a run that published something (its own release, or the repair of
-      # an earlier one) or that found nothing left to publish (skip). A superseded run dispatches
-      # nothing: the newer commit's run deploys after its own verify and release. A rerun after a
-      # failed release creation plans as superseded too (main is then its own [skip ci] release
-      # commit), which is why the repair step reports what it published.
       - name: Plan release
         id: tag_check
         env:
@@ -446,11 +440,25 @@ jobs:
             --notes-file release-notes.md \
             --verify-tag
 
+      # Pages deploys the tip of main, so it is dispatched exactly when that tip is a release commit:
+      # that content passed verify and was released. This covers a run that just published, the rerun
+      # of a run whose release exists but whose dispatch failed, and the repair of a tag without a
+      # release (all of which end with main at their own release commit), and it never deploys a
+      # newer push whose own verify has not finished: that run dispatches after its own release.
       - name: Dispatch Pages workflow
-        if: (steps.finish.outputs.repaired == 'true' || steps.tag_check.outputs.action == 'skip' || steps.push.outputs.pushed == 'true') && hashFiles('.github/workflows/pages.yml') != ''
+        if: hashFiles('.github/workflows/pages.yml') != ''
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          gh workflow run pages.yml --ref main
+          git fetch --quiet --force origin "+refs/heads/main:refs/remotes/origin/main"
+          tip="$(git log -1 --format=%s refs/remotes/origin/main)"
+          case "${tip}" in
+            "chore(release): v"*)
+              gh workflow run pages.yml --ref main
+              ;;
+            *)
+              echo "The tip of main is not a release commit (${tip}); the run that releases it dispatches Pages."
+              ;;
+          esac
