@@ -89,6 +89,15 @@ export function missingDriverProtos(packageRoot) {
   return DRIVER_PROTO_FILES.filter((path) => !existsSync(join(packageRoot, path)));
 }
 
+// The project licence, its notice, and the licence text of the Apache-2.0 material that NOTICE lists. Apache-2.0 section 4(a)
+// requires the text to travel with a redistributed copy of that material.
+export const LEGAL_FILES = ["LICENSE", "NOTICE", "licenses/Apache-2.0.txt"];
+
+// Lists the legal files absent under an installed package root.
+export function missingLegalFiles(packageRoot) {
+  return LEGAL_FILES.filter((path) => !existsSync(join(packageRoot, path)));
+}
+
 async function run(file, args, options) {
   try {
     return await execFileAsync(file, args, {
@@ -132,12 +141,17 @@ async function main() {
     if (missingProtos.length > 0) {
       throw new Error(`packed package is missing driver protos: ${missingProtos.join(", ")}`);
     }
+    const missingLegal = missingLegalFiles(join(consumerDir, "node_modules", "agent-realm"));
+    if (missingLegal.length > 0) {
+      throw new Error(`packed package is missing legal files: ${missingLegal.join(", ")}`);
+    }
 
     await writeFile(join(consumerDir, "probe.mjs"), PROBE_SOURCE);
     const probe = await run(process.execPath, ["probe.mjs"], { cwd: consumerDir });
     process.stdout.write(probe.stdout);
     process.stdout.write(`adapter manifests: ${ADAPTER_MANIFESTS.length} present\n`);
     process.stdout.write(`driver protos: ${DRIVER_PROTO_FILES.length} present\n`);
+    process.stdout.write(`legal files: ${LEGAL_FILES.length} present\n`);
     return 0;
   } finally {
     await Promise.all(

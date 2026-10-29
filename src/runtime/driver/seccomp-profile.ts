@@ -1,8 +1,10 @@
-// The seccomp profile every sandbox container runs under (phase 9.6). It is Podman's default profile with the three keyring
-// syscalls denied with EPERM, embedded here so the driver writes exactly these bytes and the verifier names exactly this file.
+// The seccomp profile every sandbox container runs under (phase 9.6). It is Podman's default profile with the keyring, namespace and mount
+// syscalls and ptrace denied and clone3 answered with ENOSYS (the transformation list below), embedded here so the driver writes exactly these bytes and the verifier names exactly this file.
 //
-// Upstream: the containers/container-libs repository, module go.podman.io/common at v0.66.1 (the version Podman 5.7.1 pins),
-// file pkg/seccomp/seccomp.json. Licence: Apache-2.0. The source file is 17525 bytes, SHA-256
+// Upstream: the containers/container-libs repository, module go.podman.io/common at v0.66.1 (the version Podman 5.7.1 pins, commit
+// 0799dfdfcbb09a08f4dac35365f8b25acd10caf0), file pkg/seccomp/seccomp.json. Licence: Apache-2.0, Copyright 2013-2018 Docker, Inc. (the
+// notice that the same upstream package carries in pkg/seccomp/types.go; the JSON file itself has no header). This file is modified as
+// listed below. NOTICE lists it and licenses/Apache-2.0.txt holds the licence text. The source file is 17525 bytes, SHA-256
 // 886ae167646b7e5db381ecf7c31e6de720a8e8da15cf3202fe1f67f424af2b75 (UPSTREAM_SHA256 below).
 //
 // Transformation, and nothing else. (1) `keyctl` is removed from the rule that allows it, and one explicit rule

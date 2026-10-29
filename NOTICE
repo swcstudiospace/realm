@@ -4,3 +4,21 @@ Copyright (C) 2026 Spectrum Web Co/swcstudiospace
 This program is free software licensed under the GNU Affero General Public License, version 3 only (SPDX: AGPL-3.0-only). See LICENSE.
 
 Realm is the agent sandbox component of the GSD-Core USSR Stack (Ultrathink, Substrate, Swarm, Realm).
+
+Third-party material
+
+This package includes the material below. Each item stays under its own licence, which is not the AGPL-3.0-only that covers the rest of Realm. The Apache License, Version 2.0 applies to both items; its text is in licenses/Apache-2.0.txt. The npm packages that Realm depends on are installed separately, are not part of this package, and carry their own licence terms in their package metadata.
+
+1. OpenShell protocol definitions (unmodified)
+   Files:     src/runtime/driver/proto/compute_driver.proto, datamodel.proto, extension.proto, options.proto, sandbox.proto
+   Copyright: (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+   Licence:   Apache-2.0
+   Upstream:  https://github.com/NVIDIA/OpenShell, commit c4688aa8715ea75d6c39fe468361dbbc16c691fa (the same bytes are in tag v0.1.5)
+   Details:   src/runtime/driver/proto/PROVENANCE.md lists the SHA-256 digest of each file. The SPDX headers in each file are kept.
+
+2. Sandbox seccomp profile (modified)
+   Files:     src/runtime/driver/seccomp-profile.ts, shipped compiled as dist/src/runtime/driver/seccomp-profile.js
+   Copyright: 2013-2018 Docker, Inc. (the notice that the same upstream package carries in pkg/seccomp/types.go; seccomp.json itself has no header)
+   Licence:   Apache-2.0
+   Upstream:  pkg/seccomp/seccomp.json of https://github.com/containers/container-libs, module go.podman.io/common v0.66.1 (commit 0799dfdfcbb09a08f4dac35365f8b25acd10caf0)
+   Changes:   the keyring, namespace, mount and ptrace syscalls are denied and the clone3 answer is changed; the header comment of the file lists every change.
