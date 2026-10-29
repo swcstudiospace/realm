@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-10-29
+
+### Documentation
+- docs(omp): record the lifecycle findings and add a runbook (#9) (b3e90e3)
+
 ## [0.2.2] - 2026-10-29
 
 ### Maintenance
