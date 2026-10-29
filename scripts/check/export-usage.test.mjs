@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import ts from "typescript";
 import {
   analyze,
   collectExports,
@@ -13,7 +12,6 @@ import {
   parseArgs,
   resolveSpecifier,
   runCheck,
-  stripNonCode,
 } from "./export-usage.mjs";
 
 function namesOf(source) {
@@ -27,70 +25,6 @@ function classOf(entries, name) {
 function classesOf(files) {
   return Object.fromEntries(analyze(files).entries.map((entry) => [entry.name, entry.class]));
 }
-
-test("stripNonCode blanks comments, strings, template text and regular expressions but keeps lines and code", () => {
-  const source = [
-    "// export const inLineComment = 1;",
-    "/* export const inBlock = 1;",
-    "   still the block */ export const real = 'export const inString' + `text ${inner} more`;",
-    'const pattern = /export const inRegex["\']/g;',
-    "export const after = 1;",
-  ].join("\n");
-  const stripped = stripNonCode(source);
-  assert.equal(stripped.split("\n").length, source.split("\n").length);
-  assert.equal(stripped.length, source.length);
-  assert.ok(stripped.includes("export const real"));
-  assert.ok(stripped.includes("inner"));
-  assert.ok(stripped.includes("export const after"));
-  for (const gone of ["inLineComment", "inBlock", "inString", "inRegex", "text", "more"]) {
-    assert.ok(!stripped.includes(gone), `${gone} must be blanked`);
-  }
-});
-
-test("stripNonCode keeps a template expression that holds a nested template and braces", () => {
-  const stripped = stripNonCode("const a = `x ${ fn({ k: `y ${deep}` }) } z`; export const b = 1;");
-  assert.ok(stripped.includes("deep"));
-  assert.ok(stripped.includes("fn"));
-  assert.ok(stripped.includes("export const b"));
-  assert.ok(!stripped.includes(" z"));
-});
-
-test("stripNonCode reads a slash after a non-null assertion, an identifier, a number or a closer as division", () => {
-  const source = "const q = numerator! / values.divisor;";
-  assert.equal(stripNonCode(source), source);
-  for (const divided of [
-    "a / values.b",
-    "(a + b) / values.b",
-    "list[0] / values.b",
-    "3 / values.b",
-    "3. / values.b",
-    "3.5 / values.b",
-    "3.e2 / values.b",
-    "0x1f / values.b",
-    "1_000 / values.b",
-    "10n / values.b",
-    "call()! / values.b",
-  ]) {
-    assert.ok(stripNonCode(`const q = ${divided};`).includes("values.b"), divided);
-  }
-});
-
-test("stripNonCode reads a slash after an operator, an opener or a keyword as a regular expression", () => {
-  const regexes = [
-    'const a = /"hidden"/;',
-    "if (x && /hidden/.test(y)) {}",
-    "const b = [/hidden/, 1];",
-    "const c = !/hidden/.test(y);",
-    "function f() { return /hidden/.test(y); }",
-    "const d = typeof /hidden/;",
-    "const e = cond ? /hidden/ : /other/;",
-  ];
-  for (const regex of regexes) {
-    const stripped = stripNonCode(`${regex}\nexport const visible = 1;`);
-    assert.ok(!stripped.includes("hidden"), regex);
-    assert.ok(stripped.includes("export const visible"), regex);
-  }
-});
 
 test("collectExports finds every declaration kind with its kind, space and line", () => {
   const source = [
@@ -106,6 +40,9 @@ test("collectExports finds every declaration kind with its kind, space and line"
     "export type J = string;",
     "export enum K { One }",
     "export const enum L { One }",
+    "export namespace M { export const inner = 1; }",
+    "export declare function N(): void;",
+    "export import O = M.inner;",
   ].join("\n");
   const found = collectExports(source, "src/a/x.ts");
   assert.deepEqual(
@@ -123,10 +60,12 @@ test("collectExports finds every declaration kind with its kind, space and line"
       ["J", "type", "type", 10],
       ["K", "enum", "value", 11],
       ["L", "const enum", "value", 12],
+      ["M", "namespace", "value", 13],
+      ["N", "function", "value", 14],
+      ["O", "import", "value", 15],
     ],
   );
   assert.deepEqual(found.forwards, []);
-  assert.deepEqual(found.unparsed, []);
 });
 
 test("collectExports reads export lists, aliases and type-only lists", () => {
@@ -152,7 +91,7 @@ test("collectExports reads export lists, aliases and type-only lists", () => {
   );
 });
 
-test("collectExports ignores default exports, commented and quoted exports, and lists forwards separately", () => {
+test("collectExports reads default exports as kind default and lists forwards separately", () => {
   const source = [
     "// export const commented = 1;",
     'const message = "export const quoted = 1";',
@@ -162,7 +101,7 @@ test("collectExports ignores default exports, commented and quoted exports, and 
     "export const kept = 1;",
   ].join("\n");
   const found = collectExports(source, "src/a/x.ts");
-  assert.deepEqual(namesOf(source), ["const:kept"]);
+  assert.deepEqual(namesOf(source), ["default:default", "const:kept"]);
   assert.deepEqual(found.forwards, [
     {
       line: 4,
@@ -210,12 +149,32 @@ test("collectExports reads the names of a destructured export, with renames, def
   );
 });
 
-test("collectExports reports an export form it cannot parse instead of skipping it", () => {
-  const found = collectExports("export const { broken: 5 } = source();\nexport const ok = 1;\n", "src/a/x.ts");
-  assert.deepEqual(found.exports.map((entry) => entry.name), ["ok"]);
-  assert.equal(found.unparsed.length, 1);
-  assert.equal(found.unparsed[0].line, 1);
-  assert.match(found.unparsed[0].note, /destructured export that could not be parsed/);
+test("an indented export and an export after a block comment are found", () => {
+  const found = collectExports("  export const indented = 1;\n/* note */ export const afterComment = 2;\nexport const plain = 3;\n", "src/a/x.ts");
+  assert.deepEqual(found.exports.map((entry) => [entry.name, entry.line]), [
+    ["indented", 1],
+    ["afterComment", 2],
+    ["plain", 3],
+  ]);
+});
+
+test("decorated exports are found, before or after the export keyword", () => {
+  const source = [
+    "function dec(...args: unknown[]): any { return args; }",
+    "@dec",
+    "export class Decorated {}",
+    "@dec() export class Two {}",
+    "export @dec class Three {}",
+    "",
+  ].join("\n");
+  assert.deepEqual(
+    collectExports(source, "src/a/x.ts").exports.map((entry) => [entry.name, entry.line]),
+    [
+      ["Decorated", 2],
+      ["Two", 4],
+      ["Three", 5],
+    ],
+  );
 });
 
 test("analyze classifies used-in-src, test-only (value and type), and self-only", () => {
@@ -241,6 +200,19 @@ test("analyze classifies used-in-src, test-only (value and type), and self-only"
   assert.equal(entries.find((entry) => entry.name === "testSeam")?.space, "value");
   assert.equal(classOf(entries, "insideOnly"), "self-only");
   assert.equal(classOf(entries, "nowhere"), "self-only");
+});
+
+test("analyze does not count the declaring name of an export in its own file as a use", () => {
+  const classes = classesOf({
+    "src/a/one.ts": "export const shared = 1;\n",
+    "src/b/two.ts": "export const shared = 2;\n",
+  });
+  assert.equal(classes.shared, "self-only");
+  const { entries } = analyze({
+    "src/a/one.ts": "export const shared = 1;\n",
+    "src/b/two.ts": "export const shared = 2;\n",
+  });
+  assert.deepEqual(entries.map((entry) => entry.class), ["self-only", "self-only"]);
 });
 
 test("analyze counts a reference by its exported alias, not by its local name", () => {
@@ -283,6 +255,36 @@ test("analyze keeps a reference that follows a division: numerator! / values.div
   });
   assert.equal(classOf(entries, "divisor"), "used-in-src");
   assert.equal(classOf(entries, "gone"), "self-only");
+});
+
+test("analyze keeps a reference that follows a number with a dot: 3. / values.divisor", () => {
+  const { entries } = analyze({
+    "src/a/one.ts": "export const divisor = 2;\nexport const gone = 3;\n",
+    "src/b/two.ts": "export const third = (values: { divisor: number }): number => 3. / values.divisor;\nexport const half = (values: { divisor: number }): number => 0.5 / values.divisor;\n",
+  });
+  assert.equal(classOf(entries, "divisor"), "used-in-src");
+  assert.equal(classOf(entries, "gone"), "self-only");
+});
+
+test('analyze reads a regular expression after a negation: return !/["]/.test(text) && values.allowed', () => {
+  const { entries } = analyze({
+    "src/a/one.ts": "export const allowed = true;\nexport const quote = 'q';\n",
+    "src/b/two.ts": 'export function check(text: string, values: { allowed: boolean }): boolean { return !/["]/.test(text) && values.allowed; }\n',
+  });
+  assert.equal(classOf(entries, "allowed"), "used-in-src");
+  assert.equal(classOf(entries, "quote"), "self-only");
+});
+
+test("a keyword used as a property name does not hide a reference: counts.of / values.divisor", () => {
+  const { entries } = analyze({
+    "src/a/one.ts": "export const divisor = 1;\nexport const other = 2;\n",
+    "src/b/two.ts": [
+      "export const q = (counts: { of: number; in: number }, values: { divisor: number; other: number }) =>",
+      "  counts.of / values.divisor + counts?.in / values.other;",
+    ].join("\n"),
+  });
+  assert.equal(classOf(entries, "divisor"), "used-in-src");
+  assert.equal(classOf(entries, "other"), "used-in-src");
 });
 
 test("analyze excludes the errors, ports, contract and entry modules and ignores other paths", () => {
@@ -349,16 +351,7 @@ test("analyze classifies destructured exports by their bound names", () => {
   assert.equal(classes.second, "self-only");
 });
 
-test("analyze lists a destructured export it cannot parse as unclassified with its reason", () => {
-  const { entries } = analyze({ "src/a/one.ts": "export const { broken: 5 } = source();\n" });
-  assert.equal(entries.length, 1);
-  assert.equal(entries[0].class, "unclassified");
-  assert.equal(entries[0].file, "src/a/one.ts");
-  assert.equal(entries[0].line, 1);
-  assert.match(entries[0].note, /destructured/);
-});
-
-test("analyze marks a self-only type named in the declaration of another export as public-signature", () => {
+test("analyze marks a self-only type named in the syntax of another export as public-signature", () => {
   const classes = classesOf({
     "src/a/one.ts": [
       "export interface Options { readonly inner: Inner }",
@@ -382,7 +375,8 @@ test("analyze marks a self-only type named in the declaration of another export 
     Options: "public-signature",
     Inner: "public-signature",
     Hook: "self-only",
-    Service: "self-only",
+    // A class is a type too: `make` returns it, so it stays exported.
+    Service: "public-signature",
     Config: "public-signature",
     Result: "public-signature",
     // A body-only use over-protects: the type stays exported, which only shrinks the removal list.
@@ -393,7 +387,26 @@ test("analyze marks a self-only type named in the declaration of another export 
     table: "self-only",
     make: "self-only",
   });
-  assert.equal(analyze({ "src/a/one.ts": "export interface Lonely {}\n" }).entries.every((entry) => !("extent" in entry)), true);
+  assert.equal(
+    analyze({ "src/a/one.ts": "export interface Lonely {}\n" }).entries.every((entry) => !("statements" in entry) && !("nameNode" in entry)),
+    true,
+  );
+});
+
+test("analyze protects a class or an enum that another export of its file names", () => {
+  const classes = classesOf({
+    "src/a/one.ts": [
+      "export class Box {}",
+      "export enum Level { Low }",
+      "export function open(level: Level): Box { return new Box(); }",
+      "export class Lonely {}",
+      "export enum Quiet { A }",
+    ].join("\n"),
+  });
+  assert.equal(classes.Box, "public-signature");
+  assert.equal(classes.Level, "public-signature");
+  assert.equal(classes.Lonely, "self-only");
+  assert.equal(classes.Quiet, "self-only");
 });
 
 test("analyze keeps types that hide behind an object type, a generic default or a nested class member", () => {
@@ -470,6 +483,17 @@ test("analyze classifies the exports a re-export forwards, however they are reac
   assert.equal(entries.length, 5);
 });
 
+test("analyze treats export * as ns and export type * as forwarding", () => {
+  const { entries } = analyze({
+    "src/a/index.ts": 'export * as ns from "./value.js";\nexport type * from "./types.js";\n',
+    "src/a/value.ts": "export const v = 1;\n",
+    "src/a/types.ts": "export interface Shape {}\n",
+  });
+  assert.equal(classOf(entries, "ns"), "self-only");
+  assert.equal(classOf(entries, "v"), "forwarded");
+  assert.equal(classOf(entries, "Shape"), "forwarded");
+});
+
 test("analyze lists a re-export it cannot resolve as unclassified with its reason", () => {
   const { entries } = analyze({
     "src/a/index.ts": [
@@ -489,6 +513,18 @@ test("analyze lists a re-export it cannot resolve as unclassified with its reaso
   );
   assert.match(entries[0].note, /"\.\/missing\.js", which is not an analyzed src file/);
   assert.match(entries[1].note, /external module "node:fs"/);
+});
+
+test("analyze counts a default export as used when another file imports its default", () => {
+  const classes = (importer) =>
+    classesOf({
+      "src/a/one.ts": "export default function main() {}\nexport const other = 1;\n",
+      ...importer,
+    }).default;
+  assert.equal(classes({ "src/b/two.ts": 'import main from "../a/one.js";\nexport const x = main;\n' }), "used-in-src");
+  assert.equal(classes({ "src/b/two.ts": 'import { default as main } from "../a/one.js";\nexport const x = main;\n' }), "used-in-src");
+  assert.equal(classes({ "test/a/one.test.ts": 'import main from "../../src/a/one.js";\nvoid main;\n' }), "test-only");
+  assert.equal(classes({ "src/b/two.ts": 'import { other } from "../a/one.js";\nexport const x = other;\n' }), "self-only");
 });
 
 test("resolveSpecifier maps a relative specifier onto an analyzed src file", () => {
@@ -664,15 +700,9 @@ test("runCheck exits 1, not 0, when the source tree cannot be read", () => {
   assert.match(output, /cannot read the source tree: ENOENT/);
 });
 
-test("an indented export and an export after a block comment are found", () => {
-  const found = collectExports("  export const indented = 1;\n/* note */ export const afterComment = 2;\nexport const plain = 3;\n", "src/a/x.ts");
-  assert.deepEqual(found.exports.map((entry) => [entry.name, entry.line]), [
-    ["indented", 1],
-    ["afterComment", 2],
-    ["plain", 3],
-  ]);
-  assert.deepEqual(found.unparsed, []);
-});
+// --- Findings of the earlier review rounds, each with its exact example ----------------------------------------------------
+// The scanner these examples once broke is gone: the TypeScript parser decides what a statement and an identifier are, and
+// each example stays as a regression test of the observable classes.
 
 test("a column-zero object member does not cut off an exported interface", () => {
   const classes = classesOf({
@@ -692,40 +722,12 @@ test("a column-zero object member does not cut off an exported interface", () =>
 test("generic arguments in an initializer do not invent bindings: factory<First, Middle, Last>()", () => {
   const found = collectExports("export const value = factory<First, Middle, Last>();\nexport const next = 1;\n", "src/a/x.ts");
   assert.deepEqual(found.exports.map((entry) => entry.name), ["value", "next"]);
-  assert.deepEqual(found.unparsed, []);
   const classes = classesOf({ "src/a/one.ts": "export const value = factory<First, Middle, Last>();\n" });
   assert.deepEqual(classes, { value: "self-only" });
 });
 
-test("a keyword used as a property name does not open a regular expression: counts.of / values.divisor", () => {
-  const stripped = stripNonCode("const q = counts.of / values.divisor;\nconst r = counts?.in / values.other;");
-  assert.ok(stripped.includes("values.divisor"));
-  assert.ok(stripped.includes("values.other"));
-  const { entries } = analyze({
-    "src/a/one.ts": "export const divisor = 1;\n",
-    "src/b/two.ts": "export const q = (counts: { of: number }, values: { divisor: number }) => counts.of / values.divisor;\n",
-  });
-  assert.equal(classOf(entries, "divisor"), "used-in-src");
-});
-
-test("a ! after return negates and the regular expression after it is blanked: return !/[\"]/.test(text) && values.allowed", () => {
-  const source = 'function check(text: string) { return !/["]/.test(text) && values.allowed; }';
-  const stripped = stripNonCode(source);
-  assert.ok(stripped.includes("values.allowed"));
-  assert.ok(!stripped.includes('["]'));
-  assert.equal(stripped.length, source.length);
-});
-
-test("a ! after an expression stays a non-null assertion, before = it is the comparison operator", () => {
-  assert.ok(stripNonCode("const a = x! / values.one;").includes("values.one"));
-  assert.ok(stripNonCode("const a = x!! / values.one;").includes("values.one"));
-  assert.ok(stripNonCode("const a = f()! / values.one;").includes("values.one"));
-  assert.ok(stripNonCode("const a = x != /hidden/ ? 1 : 2;").includes("?"));
-  assert.ok(!stripNonCode("const a = x != /hidden/.source;").includes("hidden"));
-});
-
 // A table of tricky snippets. Each is analysed as src/a/one.ts next to a src/b/two.ts that names `usedByTwo`, and its
-// classes must be exactly the expected ones. A regression in the scanner changes a class or an export name.
+// classes must be exactly the expected ones.
 const TRICKY = [
   ["division after a non-null assertion", "export const usedByTwo = 1;\nexport const f = (n?: number) => n! / values.divisor;\n", { usedByTwo: "used-in-src", f: "self-only" }],
   ["a link-like path inside strings", 'export const usedByTwo = 1;\nexport const url = "see link/.. and //not-a-comment";\nexport const other = \'a/b\';\n', { usedByTwo: "used-in-src", url: "self-only", other: "self-only" }],
@@ -741,11 +743,18 @@ const TRICKY = [
   ["a class with a method signature naming a type", "export interface Arg {}\nexport class Service {\n  run(arg: Arg): void {}\n}\n", { Arg: "public-signature", Service: "self-only" }],
   ["a spaced comparison in an initializer", "export const flag = a < b, other = c > d;\n", { flag: "self-only", other: "self-only" }],
   ["an unspaced comparison is two declarators", "export const flag = a<b, other = c>d;\n", { flag: "self-only", other: "self-only" }],
-  ["an ambiguous generic is reported, not guessed", "export const amb = a<b, other = c>(d);\nexport const after = 1;\n", { amb: "unclassified", after: "self-only" }],
+  ["a generic-looking comparison is still two declarators", "export const amb = a<b, other = c>(d);\nexport const after = 1;\n", { amb: "self-only", other: "self-only", after: "self-only" }],
+  ["a comparison on a property: p.value<5", "export interface Payload { readonly value: number }\nexport const check = (p: Payload) => p.value<5;\nexport const after = 1;\n", { Payload: "public-signature", check: "self-only", after: "self-only" }],
+  ["a comparison with a digit: x<5", "export const lt = x<5, after = 1;\nexport const more = 2;\n", { lt: "self-only", after: "self-only", more: "self-only" }],
+  ["a comparison of two members: a.b<c.d", "export const cmp = a.b<c.d, after = 1;\nexport const more = 2;\n", { cmp: "self-only", after: "self-only", more: "self-only" }],
+  ["a comparison with a length: i<arr.length", "export const inRange = i<arr.length, after = 1;\nexport const more = 2;\n", { inRange: "self-only", after: "self-only", more: "self-only" }],
+  ["a chained comparison: a<b>c", "export const chained = a<b>c, after = 1;\nexport const more = 2;\n", { chained: "self-only", after: "self-only", more: "self-only" }],
+  ["a generic call: f<T>(x)", "export const called = f<T>(x), after = 1;\nexport const more = 2;\n", { called: "self-only", after: "self-only", more: "self-only" }],
+  ["a generic constructor: new Map<string, number>()", "export const map = new Map<string, number>(), after = 1;\nexport const more = 2;\n", { map: "self-only", after: "self-only", more: "self-only" }],
 ];
 
 for (const [title, source, expected] of TRICKY) {
-  test(`scanner table: ${title}`, () => {
+  test(`snippet table: ${title}`, () => {
     const files = { "src/a/one.ts": source, "src/b/two.ts": "export const x = usedByTwo;\n" };
     const classes = classesOf(files);
     delete classes.x;
@@ -785,378 +794,70 @@ test("a template literal expression never ends a statement: export const a = `${
   assert.equal(classes.Ref, "public-signature");
 });
 
-// --- Differential test against the TypeScript compiler -------------------------------------------------------------------
-//
-// The scanner in export-usage.mjs is hand-written, so its statement boundaries and export inventory are compared with the
-// TypeScript parser (used as an oracle only: createSourceFile, no type checking) over every .ts file of the repository and
-// over a table of tricky snippets with deterministic variants. A mismatch names the file, the offsets and both snippets.
-
-const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
-
-function bindingNames(name, into) {
-  if (ts.isIdentifier(name)) {
-    into.push(name.text);
-    return;
-  }
-  for (const element of name.elements) {
-    if (ts.isBindingElement(element)) {
-      bindingNames(element.name, into);
-    }
-  }
-}
-
-function hasModifier(node, kind) {
-  return ts.canHaveModifiers(node) && (ts.getModifiers(node) ?? []).some((modifier) => modifier.kind === kind);
-}
-
-// What the TypeScript parser says about a source: the start offsets of its top-level statements (empty statements left
-// out, as the scanner does not report a lone `;`), the exported names, and the forwarded exports.
-function oracleOf(source, fileName) {
-  const sourceFile = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, false, ts.ScriptKind.TS);
-  const names = [];
-  const forwards = [];
-  for (const statement of sourceFile.statements) {
-    if (ts.isExportDeclaration(statement)) {
-      const specifier = statement.moduleSpecifier === undefined ? null : statement.moduleSpecifier.text;
-      const clause = statement.exportClause;
-      if (clause === undefined) {
-        forwards.push(`${specifier}|*`);
-      } else if (ts.isNamespaceExport(clause)) {
-        names.push(clause.name.text);
-      } else if (specifier === null) {
-        names.push(...clause.elements.map((element) => element.name.text));
-      } else {
-        forwards.push(...clause.elements.map((element) => `${specifier}|${(element.propertyName ?? element.name).text}>${element.name.text}`));
-      }
-      continue;
-    }
-    if (ts.isExportAssignment(statement)) {
-      continue;
-    }
-    if (!hasModifier(statement, ts.SyntaxKind.ExportKeyword) || hasModifier(statement, ts.SyntaxKind.DefaultKeyword)) {
-      continue;
-    }
-    if (ts.isVariableStatement(statement)) {
-      for (const declaration of statement.declarationList.declarations) {
-        bindingNames(declaration.name, names);
-      }
-    } else if (ts.isImportEqualsDeclaration(statement)) {
-      names.push(statement.name.text);
-    } else if (statement.name !== undefined && ts.isIdentifier(statement.name)) {
-      names.push(statement.name.text);
-    }
-  }
-  return {
-    sourceFile,
-    parseErrors: sourceFile.parseDiagnostics.length,
-    starts: sourceFile.statements.filter((statement) => statement.kind !== ts.SyntaxKind.EmptyStatement).map((statement) => statement.getStart(sourceFile)),
-    names: names.sort(),
-    forwards: forwards.sort(),
-  };
-}
-
-// What the scanner says about the same source, in the same shape.
-function scannerOf(source, fileName) {
-  const found = collectExports(source, fileName);
-  return {
-    starts: found.statements
-      .filter((statement) => source.slice(statement.start, statement.end) !== ";")
-      .map((statement) => statement.start),
-    names: found.exports.map((entry) => entry.name).sort(),
-    forwards: found.forwards
-      .flatMap((forward) =>
-        forward.star
-          ? [`${forward.specifier}|*`]
-          : forward.names.map((member) => `${forward.specifier}|${member.local}>${member.exported}`),
-      )
-      .sort(),
-    unparsed: found.unparsed,
-  };
-}
-
-function around(source, offset) {
-  return JSON.stringify(source.slice(Math.max(0, offset - 20), offset + 60));
-}
-
-// Lists the differences between the scanner and the oracle for one source; an empty list means they agree. Where the
-// scanner reports an unparsed export (its `unclassified` case) the export inventory is only required to be a subset.
-function differences(source, fileName, { allowUnclassified = false } = {}) {
-  const expected = oracleOf(source, fileName);
-  const actual = scannerOf(source, fileName);
-  const problems = [];
-  if (expected.parseErrors > 0) {
-    problems.push(`${fileName}: the oracle reports ${expected.parseErrors} parse error(s); the snippet is not valid TypeScript`);
-  }
-  const limit = Math.max(expected.starts.length, actual.starts.length);
-  for (let index = 0; index < limit; index += 1) {
-    if (expected.starts[index] !== actual.starts[index]) {
-      problems.push(
-        `${fileName}: statement ${index} starts at ${actual.starts[index]} in the scanner (${around(source, actual.starts[index] ?? 0)}) ` +
-          `but at ${expected.starts[index]} in TypeScript (${around(source, expected.starts[index] ?? 0)}); ${actual.starts.length} against ${expected.starts.length} statements`,
-      );
-      break;
-    }
-  }
-  if (actual.unparsed.length > 0) {
-    if (!allowUnclassified) {
-      problems.push(`${fileName}: the scanner reports an unparsed export (${actual.unparsed.map((item) => `${item.name}: ${item.note}`).join("; ")})`);
-    } else {
-      const missing = actual.names.filter((name) => !expected.names.includes(name));
-      if (missing.length > 0) {
-        problems.push(`${fileName}: the scanner invents ${missing.join(", ")}`);
-      }
-    }
-  } else if (JSON.stringify(actual.names) !== JSON.stringify(expected.names)) {
-    problems.push(`${fileName}: exported names differ: scanner ${JSON.stringify(actual.names)}, TypeScript ${JSON.stringify(expected.names)}`);
-  }
-  if (JSON.stringify(actual.forwards) !== JSON.stringify(expected.forwards)) {
-    problems.push(`${fileName}: forwarded exports differ: scanner ${JSON.stringify(actual.forwards)}, TypeScript ${JSON.stringify(expected.forwards)}`);
-  }
-  return problems;
-}
-
-function repositoryFiles() {
-  const files = [];
-  for (const top of ["src", "test"]) {
-    for (const relative of readdirSync(join(REPO_ROOT, top), { recursive: true }).map(String).sort()) {
-      if (relative.endsWith(".ts")) {
-        files.push(`${top}/${relative.split(sep).join("/")}`);
-      }
-    }
-  }
-  return files;
-}
-
-test("differential: the scanner agrees with the TypeScript parser on every src and test file", () => {
-  const files = repositoryFiles();
-  assert.ok(files.length > 100, `expected the whole tree, found ${files.length} files`);
-  const problems = [];
-  for (const file of files) {
-    problems.push(...differences(readFileSync(join(REPO_ROOT, file), "utf8"), file));
-  }
-  assert.deepEqual(problems.slice(0, 10), [], `${problems.length} mismatch(es) over ${files.length} files`);
-});
-
-// Deterministic pseudo-random numbers (mulberry32), so every run builds the same variants.
-function seeded(seed) {
-  let state = seed >>> 0;
-  return () => {
-    state = (state + 0x6d2b79f5) >>> 0;
-    let value = state;
-    value = Math.imul(value ^ (value >>> 15), value | 1);
-    value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
-    return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-// The start offsets of every token (leaf node) of a parsed file, with whether a line break precedes the token.
-function tokenSites(sourceFile, source) {
-  const starts = new Set();
-  const visit = (node) => {
-    if (node.kind >= ts.SyntaxKind.FirstJSDocNode && node.kind <= ts.SyntaxKind.LastJSDocNode) {
-      return;
-    }
-    const children = node.getChildren(sourceFile);
-    if (children.length === 0) {
-      if (node.kind !== ts.SyntaxKind.EndOfFileToken) {
-        starts.add(node.getStart(sourceFile));
-      }
-      return;
-    }
-    children.forEach(visit);
-  };
-  visit(sourceFile);
-  return [...starts]
-    .sort((left, right) => left - right)
-    .map((start) => ({ start, afterBreak: /\n[ \t]*$/.test(source.slice(0, start)) }));
-}
-
-const SPACES = [" ", "  ", "\t", "        "];
-const BLOCKS = ["/* c */", "/* export const fake = 1; */", '/* "quote \' */', "/* `tick ${x} */", "/*c*/"];
-const LINE_COMMENTS = ["// c", "// export const fake = 1;", "// 'quote \"", "// ${x} ` /*"];
-const BREAKING = ["/**\n * export const doc = 1;\n */", "/* two\nlines */"];
-
-// Builds a variant of a snippet by inserting trivia at token boundaries. Spaces and block comments without a line break go
-// anywhere; line comments, blank lines and block comments that contain a line break go only before a token that already
-// follows a line break, so no restricted production (return, throw, postfix ++, ...) changes meaning.
-function variantOf(source, random) {
-  const sourceFile = ts.createSourceFile("variant.ts", source, ts.ScriptTarget.Latest, false, ts.ScriptKind.TS);
-  const sites = tokenSites(sourceFile, source);
-  if (sites.length === 0) {
-    return source;
-  }
-  const picks = new Map();
-  const count = 1 + Math.floor(sites.length / 5);
-  for (let round = 0; round < count; round += 1) {
-    const site = sites[Math.floor(random() * sites.length)];
-    const pool = site.afterBreak
-      ? [...SPACES, ...BLOCKS, ...BREAKING, "\n", ...LINE_COMMENTS.map((comment) => `${comment}\n`)]
-      : [...SPACES, ...BLOCKS];
-    const insertion = pool[Math.floor(random() * pool.length)];
-    picks.set(site.start, `${picks.get(site.start) ?? ""}${insertion}${/\s$/.test(insertion) ? "" : " "}`);
-  }
-  let result = source;
-  for (const start of [...picks.keys()].sort((left, right) => right - left)) {
-    result = result.slice(0, start) + picks.get(start) + result.slice(start);
-  }
-  return result;
-}
-
-// [title, source, options]. Every snippet must be valid TypeScript (the test checks that with the oracle).
-const SNIPPETS = [
-  // The ambiguous generic has its own entry below, with the unclassified allowance.
-  ...TRICKY.filter(([title]) => !title.includes("ambiguous")).map(([title, source]) => [`table: ${title}`, source]),
-  ["template with an expression, then a comma-separated export", "export const a = `${x}`, b = 1;\nexport const c = 2;\n"],
-  ["an identifier ending in a dollar sign before a block", "export interface Leaf { readonly id: number }\nclass Local${} type Internal = Leaf;\nexport function make(): Internal { return { id: 1 }; }\n"],
-  ["nested templates and braces in expressions", "export const t = `a ${ b(`c ${ {d: `e ${f}`}.d } g`) } h`, u = 2;\nexport const after = 3;\n"],
-  ["template literal types", "export type Tpl = `a${string}`;\nexport type Id<T> = `${T & string}-id`;\nexport interface Z {}\n"],
-  ["indexed access types after a brace", "export type A = { value: number }[Key];\nexport type B = { k: number }[\"k\"];\nexport type Key = 'value'\nexport interface Z {}\n"],
-  ["arrow functions returning object literals", "export const mk = (): { a: number } => ({ a: 1 });\nexport const b = () => ({ x: 1 })\nexport const c = 2\nexport const d = async () => { return { y: 1 }; };\n"],
-  [
-    "classes with methods and decorators",
+test("a statement after a block is its own statement: a function or a class followed by [1, 2].forEach(...)", () => {
+  const found = collectExports(
     [
-      "function dec(...args: unknown[]): any { return args; }",
-      "@dec",
-      "export class Decorated {",
-      "  @dec method(): void {}",
-      "  get v(): number { return 1; }",
-      "  static { init(); }",
-      "}",
-      "@dec() export class Two {}",
-      "export @dec class Three {}",
-      "@a.b(1, { c: 2 })",
-      "@dec",
-      "export class Four {}",
+      "export function setup() {}",
+      "[1, 2].forEach((value) => void value);",
+      "export class Box {}",
+      "[3, 4].forEach((value) => void value);",
       "export const after = 1;",
       "",
     ].join("\n"),
-  ],
-  [
-    "declare and namespace blocks",
-    [
-      "declare const ambient: number;",
-      "export declare function declared(a: string): void;",
-      "export declare namespace Outer { const inner: number; namespace Deep { } }",
-      "export namespace Impl { export const x = 1; }",
-      'declare module "pkg" { export const hidden: number; }',
-      "declare global { interface Window { w: number } }",
-      "export abstract class Abs {}",
-      "export const enum CE { A }",
-      "export declare const enum DE { A }",
-      "export declare const sym: unique symbol;",
-      "namespace Local.Nested { export const y = 1; }",
-      "export import Alias = Impl.x;",
-      "",
-    ].join("\n"),
-  ],
-  ["overloads", "export function over(a: string): string;\nexport function over(a: number): number;\nexport function over(a: unknown): unknown { return a; }\nexport class C {\n  m(a: string): void;\n  m(a: number): void;\n  m(a: unknown): void {}\n}\n"],
-  ["default exports", "export default function def() {}\nexport const afterDefault = 1;\n"],
-  ["default class", "export default class {}\nexport const afterDefault = 1;\n"],
-  ["default expression", "export default { a: 1 };\nexport const afterDefault = 1;\n"],
-  ["default arrow", "export default (a: number) => a;\nexport const afterDefault = 1;\n"],
-  ["default interface", "export default interface Iface {}\nexport const afterDefault = 1;\n"],
-  ["default abstract class", "export default abstract class A {}\nexport const afterDefault = 1;\n"],
-  ["export list with default", "const x = 1;\nexport { x as default };\nexport { x as y };\n"],
-  [
-    "regular expressions with quotes, brackets and slashes",
-    "export const r1 = /[\"'`]/g, r2 = /[/\\]]/, r3 = /\\//;\nexport const r4 = x.replace(/[\\\\/]+/g, '/');\nexport const after = 1;\n",
-  ],
-  ["division after a closing paren and bracket", "export const d1 = (a + b) / values.c, d2 = list[0] / values.d, d3 = f(1) / g(2);\nexport const after = 1;\n"],
-  ["labelled blocks", "outer: {\n  if (flag) break outer;\n  run();\n}\nexport const afterLabel = 1;\nloop: for (const i of list) {\n  continue loop;\n}\nexport const afterLoop = 2;\n"],
-  [
-    "no semicolons",
-    "export const one = 1\nexport const two = 2\nexport function three() {}\nexport interface Four {}\nexport type Five = string\nexport class Six {}\nexport enum Seven { A }\nconst local = 3\nexport { local }\n",
-  ],
-  [
-    "imports and re-exports",
-    [
-      'import { a } from "./a.js";',
-      "import type { B } from './b.js'",
-      'import c, * as d from "./c.js"',
-      "export const x = 1",
-      "export { a, type B }",
-      "export * from './z.js'",
-      "export * as ns from './ns.js'",
-      "export type * from './t.js'",
-      "export { q as r, type S } from './q.js';",
-      "export { default as dflt } from './d.js';",
-      "",
-    ].join("\n"),
-  ],
-  ["destructured exports", "export const { a, b: c, d = 1, ...rest } = obj;\nexport const [x, , y = 2, ...z] = arr;\nexport const { n: { deep }, [k]: computed } = nested, plain = 1;\n"],
-  ["generic calls and arrows", "export const g = factory<First, Middle, Last>();\nexport const arrow = <T,>(v: T): T => v, other = 2;\nexport const bound = <T extends object>(v: T) => v;\n"],
-  ["property names that are keywords", "export const q = counts.of / values.divisor, r = counts?.in / values.other;\nexport const after = 1;\n"],
-  ["negations and non-null assertions", 'export const neg = (text: string) => { return !/["]/.test(text) && values.allowed; };\nexport const nn = x! / values.one, nn2 = y!! / values.two;\n'],
-  ["object type members at column zero", "export interface Holder {\n  readonly value: {\ntype: Payload;\n  };\n}\nexport interface Payload {}\n"],
-  ["wrapper returning an object type", "export function wrap(): { payload: Payload } { return { payload: p }; }\nexport interface Payload {}\n"],
-  ["class heritage and expressions", "export class A {}\nexport class B extends A {}\nexport const c = class {}\nexport const d = function () {}\nexport const e = async () => {}\nexport const f = class extends A {};\n"],
-  ["strings that look like comments", "export const s1 = \"/* not a comment\", s2 = '// nor this', s3 = `/* ${1} */`;\nexport const after = 1;\n"],
-  ["object literal with methods and computed keys", "export const obj = {\n  a() { return 1 },\n  get b() { return 2 },\n  [`k${1}`]: 3,\n};\nexport const after = 1;\n"],
-  ["conditional, mapped and function types", "export type Cond<T> = T extends string ? 'a' : 'b';\nexport type Mapped = { [K in keyof Obj]?: Obj[K] };\nexport type Fn = (a: number) => void;\nexport type Union =\n  | { kind: 'a' }\n  | { kind: 'b' };\nexport const after = 1;\n"],
-  ["satisfies and as", "export const cfg = { a: 1 } satisfies Cfg;\nexport const asd = { b: 2 } as const;\nexport const arr = [1, 2] as const;\nexport const nested = {\n  c: { d: 1 },\n} as Shape;\n"],
-  ["control flow at top level", "if (flag) {\n  run();\n} else {\n  stop();\n}\nexport const afterIf = 1;\ntry {\n  a();\n} catch (error) {\n  b();\n} finally {\n  c();\n}\nfor (const i of list) {\n  d(i);\n}\nexport const afterFor = 1;\nwhile (x) {\n  y();\n}\nexport const afterWhile = 2;\n"],
-  ["immediately invoked functions", "(function () {\n  run();\n})();\nexport const afterIife = 1;\n(() => {\n  run();\n})();\nexport const afterArrow = 2;\n"],
-  ["comments with exports inside", "/**\n * export const doc = 1;\n */\nexport const real = 1;\n// export const line = 2;\n/* export const block = 3; */\nexport const real2 = 2;\n"],
-  ["tagged templates and numbers", "export const tagged = tag`a${1}b${2}`, plain = 2;\nexport const oc = a?.b?.[0] ?? 1.5e3 / 2;\nexport const inc = i++ / values.n, dec = j-- / values.m;\n"],
-  ["generators and async generators", "export function* gen() { yield 1; }\nexport async function* ag() { yield 2; }\nexport async function fn() { await x; }\n"],
-  ["enum initializers", "export enum E { A = 1 << 2, B = 'b'.length, C }\nexport const enum F { A = 'a' }\n"],
-  ["class members of every kind", "export class Members<T = Default> extends Base<T> implements Iface {\n  static readonly s = 1;\n  #private = 2;\n  accessor acc = 3;\n  [key: string]: unknown;\n  constructor(public readonly a: number, private b?: string) { super(); }\n  get g(): number { return 1; }\n  set g(v: number) {}\n  async *gen(): AsyncGenerator<number> { yield 1; }\n}\nexport interface Default {}\n"],
-  ["statements after expressions without semicolons", "const a = 1\nconst b = 2\nexport const c = a + b\nfunction local() {}\nexport const d = local()\n"],
-  ["comparison on a property: p.value<5", "export interface Payload { readonly value: number }\nexport const check = (p: Payload) => p.value<5;\nexport const after = 1;\n"],
-  ["comparison with a digit: x<5", "export const lt = x<5, after = 1;\nexport const more = 2;\n"],
-  ["comparison of two members: a.b<c.d", "export const cmp = a.b<c.d, after = 1;\nexport const more = 2;\n"],
-  ["comparison with a length: i<arr.length", "export const inRange = i<arr.length, after = 1;\nexport const more = 2;\n"],
-  ["chained comparison: a<b>c", "export const chained = a<b>c, after = 1;\nexport const more = 2;\n"],
-  ["generic call: f<T>(x)", "export const called = f<T>(x), after = 1;\nexport const more = 2;\n"],
-  ["generic constructor: new Map<string, number>()", "export const map = new Map<string, number>(), after = 1;\nexport const more = 2;\n"],
-  ["ambiguous generic stays conservative", "export const amb = a<b, other = c>(d);\nexport const after = 1;\n", { allowUnclassified: true }],
-];
-
-// Variants per snippet; the default keeps the run short, EXPORT_USAGE_FUZZ_VARIANTS raises it for a longer local hunt.
-const VARIANTS = Number.parseInt(process.env["EXPORT_USAGE_FUZZ_VARIANTS"] ?? "", 10) || 12;
-
-for (const [title, source, options] of SNIPPETS) {
-  test(`differential: ${title}`, () => {
-    const random = seeded(title.length * 2654435761);
-    const problems = differences(source, "snippet.ts", options);
-    assert.deepEqual(problems, [], "the snippet itself");
-    for (let variant = 0; variant < VARIANTS; variant += 1) {
-      const text = variantOf(source, random);
-      const found = differences(text, `snippet-variant-${variant}.ts`, options);
-      assert.deepEqual(found, [], `variant ${variant}:\n${text}`);
-    }
-  });
-}
-
-test("a comparison after a property is not even unclassified: (p: Payload) => p.value<5", () => {
-  const source = "export interface Payload { readonly value: number }\nexport const check = (p: Payload) => p.value<5;\n";
-  assert.deepEqual(collectExports(source, "src/a/x.ts").unparsed, []);
-  assert.deepEqual(classesOf({ "src/a/one.ts": source }), { Payload: "public-signature", check: "self-only" });
-});
-
-test("an unclassified export still protects the types in its extent", () => {
+    "src/a/x.ts",
+  );
+  assert.deepEqual(found.exports.map((entry) => [entry.name, entry.line]), [
+    ["setup", 1],
+    ["Box", 3],
+    ["after", 5],
+  ]);
   const classes = classesOf({
     "src/a/one.ts": [
-      "export interface Payload { readonly value: number }",
-      "export interface Inner {}",
-      "interface Hidden { readonly inner: Inner }",
+      "export interface Payload { readonly id: number }",
+      "export function setup() {}",
+      "[1, 2].forEach((value) => void value);",
+      "export function use(): Payload { return { id: 1 }; }",
+      "export class Box {}",
+      "[3, 4].forEach((value) => void value);",
       "export interface Lonely {}",
-      "export const amb = (p: Payload, h: Hidden) => a<b, other = c>(d);",
-      "",
     ].join("\n"),
   });
-  // The ambiguous generic keeps `amb` unclassified, and uncertainty may only keep: every type its extent names stays
-  // exported, including a type reached through a non-exported local type.
-  assert.equal(classes.amb, "unclassified");
   assert.equal(classes.Payload, "public-signature");
-  assert.equal(classes.Inner, "public-signature");
   assert.equal(classes.Lonely, "self-only");
+  assert.equal(classes.setup, "self-only");
 });
 
-test("a `<` after an identifier is a comparison before a digit, a minus, a string or an =", () => {
-  for (const comparison of ["a<5", "a< 5", "a<-1", 'a<"s"', "a<'s'", "a<`t`", "a<=b", "a<=b>(c)"]) {
-    const found = collectExports(`export const x = ${comparison}, y = 1;\n`, "src/a/x.ts");
-    assert.deepEqual(found.exports.map((entry) => entry.name), ["x", "y"], comparison);
-    assert.deepEqual(found.unparsed, [], comparison);
+test("a comparison after a property is not unclassified and keeps the type it names: (p: Payload) => p.value<5", () => {
+  const source = "export interface Payload { readonly value: number }\nexport const check = (p: Payload) => p.value<5;\n";
+  assert.deepEqual(classesOf({ "src/a/one.ts": source }), { Payload: "public-signature", check: "self-only" });
+  assert.deepEqual(
+    analyze({ "src/a/one.ts": source }).entries.filter((entry) => entry.class === "unclassified"),
+    [],
+  );
+});
+
+// --- The real tree -------------------------------------------------------------------------------------------------------
+
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
+
+test("analyze completes over the real repository tree and leaves only unresolvable re-exports unclassified", () => {
+  const files = {};
+  for (const top of ["src", "test"]) {
+    for (const relative of readdirSync(join(REPO_ROOT, top), { recursive: true }).map(String).sort()) {
+      if (relative.endsWith(".ts")) {
+        const path = `${top}/${relative.split(sep).join("/")}`;
+        files[path] = readFileSync(join(REPO_ROOT, path), "utf8");
+      }
+    }
   }
+  const { entries } = analyze(files);
+  assert.ok(entries.length > 500, `expected more than 500 exports, found ${entries.length}`);
+  const unclassified = entries.filter((entry) => entry.class === "unclassified");
+  assert.deepEqual(
+    unclassified.filter((entry) => entry.kind !== "re-export"),
+    [],
+  );
+  const counts = countEntries(entries).totals;
+  assert.equal(counts.total, entries.length);
+  assert.ok(counts["used-in-src"] > 0 && counts["public-signature"] > 0 && counts.excluded > 0);
 });
