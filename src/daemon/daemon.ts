@@ -553,6 +553,14 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
     socket.once("close", () => {
       completed.delete(socket);
     });
+    // An error on a served socket (a client killed in the middle of its request, a reset or a broken pipe while the reply is
+    // written) belongs to that one connection. The read helper removes its own error listener once the request line is read, so
+    // without this one Node rethrows the error as an uncaught exception and the daemon, with its sandbox, dies because a peer
+    // went away. Nobody is left to answer, so the socket is dropped, which also stops a pending reply from being written to it;
+    // the work the request started continues. Failures of the listening server are handled on the server, below.
+    socket.on("error", () => {
+      dropSocket(socket);
+    });
     // track answers every path itself; this catch only turns an unexpected rejection into a refusal.
     void track(socket).catch((error: unknown) => {
       endSocket(socket, refusalReply(null, error));
