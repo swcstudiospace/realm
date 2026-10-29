@@ -53,6 +53,7 @@ import {
   OPENSHELL_MANAGED_LABEL_VALUE,
   OPENSHELL_SANDBOX_NAME_LABEL_KEY,
 } from "../../src/runtime/openshell.js";
+import { scaledMs } from "../support/timing.js";
 
 // The API version the fake reports on /_ping. Every lifecycle route is pinned to it through the client.
 const PINNED_VERSION = "5.7.1";
@@ -520,6 +521,21 @@ function forcedRemoval(seen: readonly Seen[], containerId: string): boolean {
   );
 }
 
+// Waits until the fake has seen a request of the route. The loop yields on setImmediate, which a test's mocked setTimeout
+// leaves alone, and a real-clock deadline (Date.now is not mocked) makes a request that never arrives fail the test
+// instead of spinning. The fake records the request in the same synchronous step that handles it.
+async function seenRoute(seen: readonly Seen[], route: LibpodRouteName): Promise<void> {
+  const limit = Date.now() + scaledMs(10_000);
+  while (!seen.some((request) => request.route === route)) {
+    if (Date.now() >= limit) {
+      throw new Error(`the fake libpod did not see a ${route} request`);
+    }
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+  }
+}
+
 // Listens on a Unix socket at path for the rest of the test, so the path is a live socket file.
 async function listenOnSocket(t: TestContext, path: string): Promise<void> {
   const socket = createSocketServer();
@@ -938,9 +954,19 @@ void test("PRD-CTR-01: a failed cleanup after a hardening refusal still names th
 });
 
 void test("PRD-CTR-01: a create whose reply never arrives removes its own container by name, so a retry does not meet the name", async (t) => {
-  // 1000 ms keeps the forced removal clear of scheduling stalls; only the create is hung.
+  // The request bound is a timer on node's mocked setTimeout, so it fires only when the test ticks it, and the inspect and the
+  // forced removal that follow the expired create run over real I/O with timers that never fire: a loaded host cannot make
+  // them time out. Only the create is hung. The test ticks the bound once the fake has seen the create.
   const h = await harness(t, { hangCreate: true, requestTimeoutMs: 1000 });
-  await assert.rejects(h.lifecycle.create(h.spec), hasCode("PODMAN_MACHINE_DOWN"));
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  t.after(() => {
+    t.mock.timers.reset();
+  });
+  const creating = h.lifecycle.create(h.spec);
+  const rejected = assert.rejects(creating, hasCode("PODMAN_MACHINE_DOWN"));
+  await seenRoute(h.fake.seen, "createContainer");
+  t.mock.timers.tick(1000);
+  await rejected;
   assert.equal(forcedRemoval(h.fake.seen, SANDBOX), true);
   assert.equal(h.fake.store.size, 0);
 });
