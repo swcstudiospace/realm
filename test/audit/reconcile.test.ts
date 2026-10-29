@@ -432,14 +432,13 @@ void test("STARTUP budget: restarts with the same small budget make progress thr
     assert.equal(first.unfinished.length, 3);
     assert.equal(first.skippedUnchanged, 0);
 
-    // The logs the record does not hold come first, so the second start spends its budget on the next two instead of
-    // revalidating the two the first start finished; those and the last unrecorded log are left unfinished.
+    // The two logs the first start finished are the newest now; the second start passes them through the record
+    // (a stat, no read, not counted) and spends its budget on the next two.
     const second = reconcileAuditLogs(stateDir, budgetOfLines(stateDir, ids, 2));
-    assert.equal(second.skippedUnchanged, 0);
+    assert.equal(second.skippedUnchanged, 2);
     assert.equal(second.appended, 2);
-    assert.equal(second.unfinished.length, 3);
+    assert.equal(second.unfinished.length, 1);
 
-    // Now only one log is unrecorded: it is scanned first, and the four recorded logs are revalidated without being read.
     const third = reconcileAuditLogs(stateDir, budgetOfLines(stateDir, ids, 2));
     assert.equal(third.skippedUnchanged, 4);
     assert.equal(third.appended, 1);
@@ -755,7 +754,7 @@ function plantOpenLogs(stateDir: string, count: number): string[] {
   return ids;
 }
 
-void test("STARTUP budget: with more logs than the per-start cap, repeated starts reconcile every log once and never rescan what an earlier start finished", () => {
+void test("STARTUP budget: with more logs than the per-start scan cap, repeated starts reconcile every log once and never rescan a finished one", () => {
   withStateDir((stateDir) => {
     const ids = plantOpenLogs(stateDir, 7);
     const linesOf = (id: string): number => reconciliations(stateDir, id).length;
@@ -766,31 +765,25 @@ void test("STARTUP budget: with more logs than the per-start cap, repeated start
     assert.equal(first.unfinished.length, 4);
     assert.deepEqual(ids.map(linesOf), [1, 1, 1, 0, 0, 0, 0]);
 
-    // The three unrecorded logs that are next come first, ahead of the recorded ones, so the cap is not spent re-reading.
+    // The three finished logs are the newest now: they are skipped after their stat, which does not use the cap, and the
+    // cap goes to the next three.
     const second = reconcileAuditLogs(stateDir, { maxFiles: 3 });
+    assert.equal(second.skippedUnchanged, 3);
     assert.equal(second.appended, 3);
-    assert.equal(second.skippedUnchanged, 0);
+    assert.equal(second.files, 6);
+    assert.deepEqual(second.unfinished, ["log-7.jsonl"]);
     assert.deepEqual(ids.map(linesOf), [1, 1, 1, 1, 1, 1, 0]);
 
-    // One unrecorded log is left: it is scanned, the cap's remainder revalidates recorded logs without reading them.
     const third = reconcileAuditLogs(stateDir, { maxFiles: 3 });
-    assert.equal(third.appended, 1);
-    assert.equal(third.skippedUnchanged, 2);
+    assert.deepEqual(third, { files: 7, appended: 1, failed: 0, unfinished: [], complete: true, skippedUnchanged: 6, listingTruncated: false });
     assert.deepEqual(ids.map(linesOf), [1, 1, 1, 1, 1, 1, 1]);
-    assert.equal(third.complete, false, "the revalidations over the cap are still reported unfinished");
-    assert.equal(third.unfinished.length, 4);
 
-    // Nothing is unrecorded now: a start only revalidates, and appends nothing.
     const fourth = reconcileAuditLogs(stateDir, { maxFiles: 3 });
-    assert.equal(fourth.appended, 0);
-    assert.equal(fourth.skippedUnchanged, 3);
-
-    const last = reconcileAuditLogs(stateDir, { maxFiles: 10 });
-    assert.deepEqual(last, { files: 7, appended: 0, failed: 0, unfinished: [], complete: true, skippedUnchanged: 7, listingTruncated: false });
+    assert.deepEqual(fourth, { files: 7, appended: 0, failed: 0, unfinished: [], complete: true, skippedUnchanged: 7, listingTruncated: false });
   });
 });
 
-void test("STARTUP budget: a log added after a record exists is considered before the logs the record holds, even when it is older", () => {
+void test("STARTUP budget: a log added after a record exists is scanned even with a cap of one, because recorded logs are skipped after their stat", () => {
   withStateDir((stateDir) => {
     plantBalancedLogs(stateDir, 4);
     assert.equal(reconcileAuditLogs(stateDir).files, 4);
@@ -800,10 +793,65 @@ void test("STARTUP budget: a log added after a record exists is considered befor
     setAge(stateDir, "log-new", 99_999);
 
     const outcome = reconcileAuditLogs(stateDir, { maxFiles: 1 });
-    assert.equal(outcome.appended, 1, "the cap of one was spent on the new log");
+    assert.equal(outcome.appended, 1);
     assert.equal(reconciliations(stateDir, "log-new").length, 1);
-    assert.equal(outcome.skippedUnchanged, 0);
-    assert.equal(outcome.unfinished.length, 4, "the four recorded logs are left for the next start");
+    assert.equal(outcome.skippedUnchanged, 4, "the four recorded logs were skipped, not counted against the cap");
+    assert.equal(outcome.complete, true);
+  });
+});
+
+void test("STARTUP budget: a recorded log that changes is rescanned at the next start even though older unrecorded logs exist", () => {
+  withStateDir((stateDir) => {
+    plantBalancedLogs(stateDir, 6);
+    // A record of three entries holds the newest three logs; log-4, log-5 and log-6 are never recorded.
+    reconcileAuditLogs(stateDir, { maxProgressEntries: 3 });
+    assert.deepEqual(recordKeys(stateDir).sort(), ["log-1.jsonl", "log-2.jsonl", "log-3.jsonl"]);
+
+    // log-2 changes (a crash left an admission in it): it becomes the newest log.
+    appendAudit(stateDir, { sessionId: "log-2", tool: "write", outcome: "ok", phase: "admission", path: "crash.txt" });
+
+    const outcome = reconcileAuditLogs(stateDir, { maxProgressEntries: 3, maxFiles: 2 });
+    assert.equal(reconciliations(stateDir, "log-2").length, 1, "the changed recorded log was scanned first");
+    assert.equal(outcome.appended, 1);
+    assert.equal(outcome.skippedUnchanged, 2, "log-1 and log-3 are skipped after their stat");
+    // The second scan of the cap went to the newest unrecorded log; the other two old logs wait.
+    assert.deepEqual([...outcome.unfinished].sort(), ["log-5.jsonl", "log-6.jsonl"]);
+  });
+});
+
+void test("STARTUP budget: never-recorded old logs do not starve changed newer ones", () => {
+  withStateDir((stateDir) => {
+    plantBalancedLogs(stateDir, 6);
+    reconcileAuditLogs(stateDir, { maxProgressEntries: 3 });
+    for (const id of ["log-1", "log-3"]) {
+      appendAudit(stateDir, { sessionId: id, tool: "write", outcome: "ok", phase: "admission", path: "crash.txt" });
+    }
+
+    // A cap of two is spent entirely on the two changed logs; the three old unrecorded logs wait, every start.
+    const outcome = reconcileAuditLogs(stateDir, { maxProgressEntries: 3, maxFiles: 2 });
+    assert.equal(outcome.appended, 2);
+    assert.equal(reconciliations(stateDir, "log-1").length, 1);
+    assert.equal(reconciliations(stateDir, "log-3").length, 1);
+    assert.deepEqual([...outcome.unfinished].sort(), ["log-4.jsonl", "log-5.jsonl", "log-6.jsonl"]);
+  });
+});
+
+void test("STARTUP budget: with a record that holds every log, repeated starts under a small scan cap reconcile each log once, newest first", () => {
+  withStateDir((stateDir) => {
+    const ids = plantOpenLogs(stateDir, 6);
+    const linesOf = (id: string): number => reconciliations(stateDir, id).length;
+    const options = { maxFiles: 2, maxProgressEntries: 6 };
+
+    reconcileAuditLogs(stateDir, options);
+    assert.deepEqual(ids.map(linesOf), [1, 1, 0, 0, 0, 0], "the newest two logs first");
+    const second = reconcileAuditLogs(stateDir, options);
+    assert.equal(second.skippedUnchanged, 2, "the two finished logs are not read again");
+    assert.deepEqual(ids.map(linesOf), [1, 1, 1, 1, 0, 0]);
+    const third = reconcileAuditLogs(stateDir, options);
+    assert.equal(third.skippedUnchanged, 4);
+    assert.deepEqual(ids.map(linesOf), [1, 1, 1, 1, 1, 1]);
+    assert.equal(third.complete, true);
+    assert.equal(reconcileAuditLogs(stateDir, options).appended, 0);
   });
 });
 

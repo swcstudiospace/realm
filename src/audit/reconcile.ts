@@ -320,14 +320,19 @@ function reconcileFile(
 // The map lives in memory for the run and is written ONCE, when the run ends (complete, out of time, or after an error),
 // and only if it changed. A kill in the middle of a run loses only that run's progress. The writer and the reader share one
 // set of limits (MAX_PROGRESS_BYTES, MAX_PROGRESS_ENTRIES), so a record the writer produced is always one the reader accepts.
+// The entry limit equals the listing bound (RECONCILE_MAX_LISTED_ENTRIES), so the record can hold every log one start can
+// list. That matters for progress: when the record is smaller than the logs, the oldest scanned logs fall out of it and are
+// scanned again (after every newer log) while logs older still might never be reached. 16 MiB holds 100 000 entries of
+// ordinary session-id names (about 85 bytes each); names near the 134-character maximum would be cut to the newest.
 export const RECONCILE_PROGRESS_FILE = ".reconciled.json";
-export const MAX_PROGRESS_BYTES = 4 * 1024 * 1024;
-export const MAX_PROGRESS_ENTRIES = 20_000;
+export const MAX_PROGRESS_BYTES = 16 * 1024 * 1024;
+export const MAX_PROGRESS_ENTRIES = 100_000;
 
 // The directory is read entry by entry and every `*.jsonl` name is kept, up to RECONCILE_MAX_LISTED_ENTRIES entries (names and
 // other entries alike, so a directory of junk cannot make the listing unbounded). A further entry makes the listing
-// "truncated" and the result incomplete. RECONCILE_MAX_FILES is not a listing cap: it is the most logs one start SCANS or
-// STAT-REVALIDATES (see workList); the rest are reported unfinished and are reached by later starts.
+// "truncated" and the result incomplete. RECONCILE_MAX_FILES is not a listing cap: it is the most logs one start SCANS (reads
+// the content of), counted in newest-first order; the rest that need a scan are reported unfinished. Skipping a recorded log
+// after its stat does not count.
 export const RECONCILE_MAX_FILES = 10_000;
 export const RECONCILE_MAX_LISTED_ENTRIES = 100_000;
 const LIST_CHECK_EVERY = 256;
@@ -374,10 +379,13 @@ function readProgress(dir: string, maxBytes: number, maxEntries: number): Progre
   try {
     const fd = openSync(join(dir, RECONCILE_PROGRESS_FILE), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     try {
-      if (!fstatSync(fd).isFile()) {
+      const opened = fstatSync(fd);
+      if (!opened.isFile() || opened.size > maxBytes) {
         return empty(false);
       }
-      const bytes = readUpTo(fd, maxBytes);
+      // At most the size the descriptor reported: a record that grew since is longer than that and is refused, so the buffer
+      // is as large as the record, never as large as the limit.
+      const bytes = readUpTo(fd, opened.size);
       if (bytes === undefined) {
         return empty(false);
       }
@@ -523,26 +531,20 @@ function listLogs(dir: string, maxEntries: number, expired: () => boolean): List
   }
 }
 
-// The work list, in two groups. FIRST the logs whose names are not in the progress record (never checked, or dropped from
-// the record), then the logs that are in it, which need only a stat to be skipped when their size and mtime are unchanged.
-// Each group is newest modified first, ties by name. Because every start records the logs it finishes, the first group
-// shrinks each start and the work terminates, whatever order the directory lists in. The deadline is checked before each
-// stat, the first group being stat'ed first: logs not stat'ed before it expired are returned in `unreached`, in that order.
-// A log that cannot be examined sorts last in its group and is counted when its turn comes.
-function workList(
+// Orders ALL listed logs newest modified first, ties by name: a crash leaves unmatched admissions in the logs written last, so
+// the logs that matter are reached first, changed or not, recorded or not. There is one ordering and no grouping by the
+// progress record. The deadline is checked before each stat: logs not stat'ed before it expired are returned in `unreached`,
+// in listing order. A log that cannot be examined sorts last and is counted when its turn comes.
+function newestFirst(
   dir: string,
   names: readonly string[],
-  checked: ReadonlyMap<string, Checked>,
   expired: () => boolean,
 ): { readonly ordered: string[]; readonly unreached: string[] } {
-  const unrecorded = names.filter((name) => !checked.has(name));
-  const recorded = names.filter((name) => checked.has(name));
-  const candidates = [...unrecorded, ...recorded];
-  const stated: { readonly name: string; readonly group: number; readonly mtimeMs: number }[] = [];
+  const stated: { readonly name: string; readonly mtimeMs: number }[] = [];
   const unreached: string[] = [];
-  for (const [index, name] of candidates.entries()) {
+  for (const [index, name] of names.entries()) {
     if (expired()) {
-      unreached.push(...candidates.slice(index));
+      unreached.push(...names.slice(index));
       break;
     }
     let mtimeMs = Number.NEGATIVE_INFINITY;
@@ -551,12 +553,9 @@ function workList(
     } catch {
       // Counted when the loop reaches this log and its own lstat fails again.
     }
-    stated.push({ name, group: index < unrecorded.length ? 0 : 1, mtimeMs });
+    stated.push({ name, mtimeMs });
   }
   stated.sort((a, b) => {
-    if (a.group !== b.group) {
-      return a.group - b.group;
-    }
     const byTime = b.mtimeMs - a.mtimeMs;
     if (byTime !== 0 && !Number.isNaN(byTime)) {
       return byTime;
@@ -603,7 +602,7 @@ export function reconcileAuditLogs(stateDir: string, options: ReconcileOptions =
   }
   const progress = readProgress(dir, maxProgressBytes, maxProgressEntries);
   const checked = progress.checked;
-  const { ordered, unreached } = workList(dir, listing.names, checked, expired);
+  const { ordered, unreached } = newestFirst(dir, listing.names, expired);
   // Entries of logs that are gone are dropped from the record, which needs a complete listing to know.
   const present = listing.truncated ? undefined : new Set(listing.names);
   let dirty = !progress.clean;
@@ -613,8 +612,8 @@ export function reconcileAuditLogs(stateDir: string, options: ReconcileOptions =
   let failed = 0;
   let skippedUnchanged = 0;
   const unfinished: string[] = [];
-  // Logs scanned or revalidated so far, against maxFiles. A refused log (not a regular file, an unsafe name, over a limit) is
-  // not counted: it is never recorded, so counting it would let a crowd of refused logs use the cap every start.
+  // Logs whose content was scanned so far, against maxFiles. A refused log (not a regular file, an unsafe name, over a limit)
+  // is not counted: it is never recorded, so counting it would let a crowd of refused logs use the cap every start.
   let considered = 0;
   // Index of the log being handled, so an error that escapes the per-log guard still reports the rest as unfinished.
   let reached = 0;
@@ -622,12 +621,6 @@ export function reconcileAuditLogs(stateDir: string, options: ReconcileOptions =
     for (const [index, name] of ordered.entries()) {
       reached = index;
       if (expired()) {
-        unfinished.push(...ordered.slice(index));
-        break;
-      }
-      if (considered >= maxFiles) {
-        // The per-start cap on logs scanned or revalidated is spent. The rest are unfinished and, being unrecorded or
-        // unchanged-and-recorded, come in the same order next start, where the logs finished now are recorded.
         unfinished.push(...ordered.slice(index));
         break;
       }
@@ -641,9 +634,16 @@ export function reconcileAuditLogs(stateDir: string, options: ReconcileOptions =
         }
         const prior = checked.get(name);
         if (prior !== undefined && prior.size === stat.size && prior.mtimeMs === stat.mtimeMs) {
+          // A stat is cheap and bounded by the deadline and the listing bound, so a skip does not count against the cap.
           files += 1;
-          considered += 1;
           skippedUnchanged += 1;
+          continue;
+        }
+        if (considered >= maxFiles) {
+          // The per-start cap on logs whose content is scanned is spent. This log is unfinished; the logs after it are still
+          // stat'ed, so an unchanged recorded one is skipped and a changed one is unfinished too. Newest first means the
+          // logs a crash touched last are the ones scanned, and the oldest unrecorded history is what waits.
+          unfinished.push(name);
           continue;
         }
         const scanned = scanFile(file, maxBytes, maxLineBytes, expired);
@@ -688,14 +688,15 @@ export function reconcileAuditLogs(stateDir: string, options: ReconcileOptions =
     failed += 1;
     unfinished.push(...ordered.slice(reached));
   } finally {
-    // One write of the record per run, whatever ended the run, and only when it changed (or needs healing).
-    let recordFailed = false;
-    const body = recordBody(checked, present, maxProgressEntries, maxProgressBytes);
-    if ((dirty || body.count !== checked.size) && !persistProgress(dir, body.text, writeRecord)) {
-      recordFailed = true;
-    }
-    if (recordFailed) {
-      failed += 1;
+    // One write of the record per run, whatever ended the run, and only when it changed, needs healing, or holds entries of
+    // logs that are gone. A record that was read is within the limits, so an unchanged one needs no size check, and the body
+    // (a sort and a serialization of every entry) is not built for it.
+    const stale = present !== undefined && [...checked.keys()].some((name) => !present.has(name));
+    if (dirty || stale) {
+      const body = recordBody(checked, present, maxProgressEntries, maxProgressBytes);
+      if (!persistProgress(dir, body.text, writeRecord)) {
+        failed += 1;
+      }
     }
   }
   unfinished.push(...unreached);
