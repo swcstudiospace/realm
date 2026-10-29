@@ -6,10 +6,21 @@
 
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { createConnection, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { appendAudit } from "../../src/audit/log.js";
 import { makeRealmError, RealmError } from "../../src/core/errors.js";
 import { displayStatus, STATUS_LABELS } from "../../src/core/status.js";
 import {
@@ -22,8 +33,10 @@ import {
   buildDaemonHandle,
   type BuildDaemonHandleOptions,
   startDaemon,
+  sweepRootsOf,
   type StartedDaemon,
   type StartDaemonOptions,
+  type StartupReport,
 } from "../../src/daemon/daemon.js";
 import type { CheckResult } from "../../src/doctor/checks.js";
 import type { PodmanProbeResult } from "../../src/runtime/podman-probe.js";
@@ -121,6 +134,26 @@ function snapshotStateOf(reply: ControlReply): unknown {
     }
   }
   return undefined;
+}
+
+// The notice a status, up or down reply carries, or undefined when the result has no `notice` key.
+function noticeOf(reply: ControlReply): unknown {
+  if (typeof reply.result === "object" && reply.result !== null && "notice" in reply.result) {
+    return reply.result.notice;
+  }
+  return undefined;
+}
+
+function hasNoticeKey(reply: ControlReply): boolean {
+  return typeof reply.result === "object" && reply.result !== null && "notice" in reply.result;
+}
+
+// The parsed lines of one audit file under the state directory.
+function auditLinesOf(fixture: Fixture, sessionId: string): Record<string, unknown>[] {
+  return readFileSync(join(fixture.stateDir, "audit", `${sessionId}.jsonl`), "utf8")
+    .split("\n")
+    .filter((line) => line.length > 0)
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
 }
 
 function displayLabelOf(reply: ControlReply): unknown {
@@ -421,6 +454,260 @@ void test("CLI-01: startDaemon runs the reap sweep before serving and deletes pr
   const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down" });
   assert.ok(down.result !== undefined);
   await awaitDone(daemon);
+});
+
+void test("CRASH-01, CRASH-02, CRASH-04: startDaemon sweeps orphan temp files, reconciles the audit log and reports both before serving", async (t) => {
+  const fixture = makeDirs();
+  const sessions = join(fixture.stateDir, "sessions");
+  mkdirSync(sessions, { recursive: true });
+  const hourAgo = new Date(Date.now() - 3_600_000);
+  const workspaceOrphan = join(fixture.ws, ".doc.txt.realm-tmp-0123456789abcdef");
+  const sessionsOrphan = join(sessions, ".rec.json.realm-tmp-fedcba9876543210");
+  for (const orphan of [workspaceOrphan, sessionsOrphan]) {
+    writeFileSync(orphan, "partial");
+    utimesSync(orphan, hourAgo, hourAgo);
+  }
+  const record = join(sessions, "stale-session.json");
+  writeFileSync(record, JSON.stringify({ sessionId: "stale-session" }));
+  // An admission whose result line was never written: the daemon that wrote it was killed in between.
+  appendAudit(fixture.stateDir, { sessionId: "sess-old", tool: "write", outcome: "ok", phase: "admission", path: "doc.txt" });
+
+  const reports: StartupReport[] = [];
+  const { options } = daemonParts(fixture, {
+    sweep: () => Promise.resolve(1),
+    onStartup: (report) => {
+      reports.push(report);
+    },
+  });
+  const first = await startDaemon(options);
+  t.after(() => cleanupDaemon(first));
+
+  // Everything below is observed before the first request is answered.
+  assert.equal(existsSync(workspaceOrphan), false, "the aged orphan in the workspace root is removed");
+  assert.equal(existsSync(sessionsOrphan), false, "the aged orphan in the sessions directory is removed");
+  assert.equal(existsSync(record), false);
+  assert.equal(readFileSync(join(fixture.ws, "doc.txt"), "utf8"), "original", "a file that is not an orphan is kept");
+  const reconciled = auditLinesOf(fixture, "sess-old").filter((line) => line["phase"] === "reconciliation");
+  assert.equal(reconciled.length, 1);
+  assert.equal(reconciled[0]?.["outcome"], "AUDIT_OUTCOME_UNKNOWN");
+  assert.equal(
+    auditLinesOf(fixture, "sess-daemon").filter((line) => line["tool"] === "temp-sweep").length,
+    2,
+    "each removal is audited in the daemon's own session log",
+  );
+  assert.deepEqual(reports, [
+    {
+      containerIds: [],
+      containersRemoved: 1,
+      recordsDeleted: 1,
+      tempFilesRemoved: 2,
+      auditLinesReconciled: 1,
+      truncated: false,
+      unfinishedSweepRoots: [],
+      unfinishedAuditFiles: [],
+      auditListingTruncated: false,
+      maintenanceComplete: true,
+      failures: 0,
+    },
+  ]);
+
+  const notice =
+    "A previous daemon's sandbox was destroyed at startup: 1 container(s), 1 session record(s). Files in the workspace were kept; state outside it was lost.";
+  const status = await sendRequest(first.socketPath, { id: "s1", method: "status" });
+  assert.equal(noticeOf(status), notice);
+  const again = await sendRequest(first.socketPath, { id: "s2", method: "status" });
+  assert.equal(noticeOf(again), notice, "the notice is kept for the daemon's lifetime, not consumed by a read");
+  const down = await sendRequest(first.socketPath, { id: "d1", method: "down" });
+  assert.equal(noticeOf(down), notice);
+  await awaitDone(first);
+
+  // A second start over the same state directory has nothing left to destroy, sweep or reconcile.
+  const second = await startDaemon({ ...options, sweep: () => Promise.resolve(0) });
+  t.after(() => cleanupDaemon(second));
+  assert.equal(reports.length, 2);
+  assert.equal(reports[1]?.containersRemoved, 0);
+  assert.equal(reports[1].recordsDeleted, 0);
+  assert.equal(reports[1].tempFilesRemoved, 0);
+  assert.equal(reports[1].auditLinesReconciled, 0, "a second start appends no reconciliation line");
+  assert.equal(auditLinesOf(fixture, "sess-old").filter((line) => line["phase"] === "reconciliation").length, 1);
+  const quiet = await sendRequest(second.socketPath, { id: "s3", method: "status" });
+  assert.equal(snapshotStateOf(quiet), "unbound");
+  assert.equal(hasNoticeKey(quiet), false, "with nothing destroyed the reply has no notice key");
+  const stopped = await sendRequest(second.socketPath, { id: "d2", method: "down" });
+  assert.equal(hasNoticeKey(stopped), false);
+  await awaitDone(second);
+});
+
+void test("STARTUP budget: with a zero budget the gate still opens, the report says the maintenance is unfinished, and a restart with the normal budget completes it", async (t) => {
+  const fixture = makeDirs();
+  const sessions = join(fixture.stateDir, "sessions");
+  mkdirSync(sessions, { recursive: true });
+  const orphan = join(fixture.ws, ".doc.txt.realm-tmp-0123456789abcdef");
+  writeFileSync(orphan, "partial");
+  const hourAgo = new Date(Date.now() - 3_600_000);
+  utimesSync(orphan, hourAgo, hourAgo);
+  appendAudit(fixture.stateDir, { sessionId: "sess-old", tool: "write", outcome: "ok", phase: "admission", path: "doc.txt" });
+
+  const reports: StartupReport[] = [];
+  const onStartup = (report: StartupReport): void => {
+    reports.push(report);
+  };
+  // A fixed clock: the deadline equals the start time, so every budgeted step is already out of time. No real wait.
+  const { options } = daemonParts(fixture, { onStartup, startupMaintenanceBudgetMs: 0, monotonicNow: () => 5 });
+  const first = await startDaemon(options);
+  t.after(() => cleanupDaemon(first));
+
+  // The gate opened: a status request is answered.
+  const status = await sendRequest(first.socketPath, { id: "s1", method: "status" });
+  assert.equal(snapshotStateOf(status), "unbound");
+  assert.equal(hasNoticeKey(status), false, "unfinished maintenance does not change the notice");
+  assert.equal(existsSync(orphan), true, "the sweep had no time, so the orphan is kept");
+  assert.equal(reports.length, 1);
+  const unfinished = reports[0];
+  assert.ok(unfinished !== undefined);
+  assert.equal(unfinished.maintenanceComplete, false);
+  assert.equal(unfinished.truncated, true);
+  assert.equal(unfinished.auditLinesReconciled, 0);
+  assert.deepEqual(unfinished.unfinishedAuditFiles, ["sess-old.jsonl"]);
+  assert.ok(unfinished.unfinishedSweepRoots.includes(fixture.ws), "the workspace root is reported as unfinished");
+  await sendRequest(first.socketPath, { id: "d1", method: "down" });
+  await awaitDone(first);
+
+  // The next start has the normal budget and finishes the work.
+  const second = await startDaemon({ ...options, startupMaintenanceBudgetMs: 60_000, monotonicNow: () => 5 });
+  t.after(() => cleanupDaemon(second));
+  assert.equal(existsSync(orphan), false);
+  assert.equal(reports.length, 2);
+  const finished = reports[1];
+  assert.ok(finished !== undefined, "the second start reported");
+  assert.equal(finished.maintenanceComplete, true);
+  assert.equal(finished.tempFilesRemoved, 1);
+  assert.equal(finished.auditLinesReconciled, 1);
+  assert.deepEqual(finished.unfinishedAuditFiles, []);
+  assert.deepEqual(finished.unfinishedSweepRoots, []);
+  await sendRequest(second.socketPath, { id: "d2", method: "down" });
+  await awaitDone(second);
+});
+
+void test("CRASH-04: a reap that fails after removing a container still reports the removal, and the start fails with the same error", async () => {
+  const fixture = makeDirs();
+  const reports: StartupReport[] = [];
+  const { options } = daemonParts(fixture, {
+    sweep: (onRemoved) => {
+      onRemoved("0123abcd");
+      return Promise.reject(makeRealmError("REALM_STOPPING", "PODMAN_MACHINE_DOWN"));
+    },
+    onStartup: (report) => {
+      reports.push(report);
+    },
+  });
+
+  await assert.rejects(
+    startDaemon(options),
+    (error: unknown) =>
+      error instanceof RealmError && error.code === "REALM_STOPPING" && error.causeCode === "PODMAN_MACHINE_DOWN",
+  );
+  assert.deepEqual(reports, [
+    {
+      containerIds: ["0123abcd"],
+      containersRemoved: 1,
+      recordsDeleted: 0,
+      tempFilesRemoved: 0,
+      auditLinesReconciled: 0,
+      truncated: false,
+      unfinishedSweepRoots: [],
+      unfinishedAuditFiles: [],
+      auditListingTruncated: false,
+      maintenanceComplete: false,
+      reapFailure: "REALM_STOPPING",
+      failures: 1,
+    },
+  ]);
+});
+
+void test("D-1401: a nested sweep root on another device is kept, one on the same device is dropped, and an unreadable device keeps it", () => {
+  const fixture = makeDirs();
+  const child = join(fixture.ws, "ssd");
+  mkdirSync(child);
+  const sessions = join(fixture.stateDir, "sessions");
+  const runtime = join(fixture.stateDir, "runtime");
+  const audit = join(fixture.stateDir, "audit");
+  const tail = [sessions, runtime, audit];
+
+  assert.deepEqual(
+    sweepRootsOf([fixture.ws, child], fixture.stateDir, () => 7),
+    [fixture.ws, ...tail],
+    "the same device: the parent walk reaches the child",
+  );
+  assert.deepEqual(
+    sweepRootsOf([fixture.ws, child], fixture.stateDir, (path) => (path === child ? 8 : 7)),
+    [fixture.ws, child, ...tail],
+    "another device: the parent walk stops at the mount, so the child is a root of its own",
+  );
+  assert.deepEqual(
+    sweepRootsOf([fixture.ws, child], fixture.stateDir, (path) => {
+      if (path === child) {
+        throw new Error("stat failed");
+      }
+      return 7;
+    }),
+    [fixture.ws, child, ...tail],
+    "an unreadable device: the root is kept",
+  );
+  assert.deepEqual(
+    sweepRootsOf([fixture.ws, fixture.ws], fixture.stateDir, () => 7),
+    [fixture.ws, ...tail],
+    "a repeated root is still dropped",
+  );
+});
+
+void test("CRASH-02: the startup sweep removes an aged orphan temp file of the progress record in the audit directory, and never the record itself", async (t) => {
+  const fixture = makeDirs();
+  const audit = join(fixture.stateDir, "audit");
+  mkdirSync(audit, { recursive: true });
+  // The state directory is outside the workspace root, so only the audit root reaches this directory.
+  const orphan = join(audit, "..reconciled.json.realm-tmp-0123456789abcdef");
+  const record = join(audit, ".reconciled.json");
+  const young = join(audit, "..reconciled.json.realm-tmp-fedcba9876543210");
+  const hourAgo = new Date(Date.now() - 3_600_000);
+  for (const file of [orphan, record]) {
+    writeFileSync(file, file === record ? "{}" : "partial");
+    utimesSync(file, hourAgo, hourAgo);
+  }
+  writeFileSync(young, "in flight");
+
+  const reports: StartupReport[] = [];
+  const { options } = daemonParts(fixture, {
+    onStartup: (report) => {
+      reports.push(report);
+    },
+  });
+  const daemon = await startDaemon(options);
+  t.after(() => cleanupDaemon(daemon));
+
+  assert.equal(existsSync(orphan), false, "the aged orphan is removed");
+  assert.equal(existsSync(young), true, "a temp file younger than the age bound is kept");
+  assert.equal(reports[0]?.tempFilesRemoved, 1);
+  const removed = auditLinesOf(fixture, "sess-daemon").filter((line) => line["tool"] === "temp-sweep");
+  assert.equal(removed.length, 1);
+  // The record was not removed by the sweep: it is still a regular file (the reconciliation may have rewritten it).
+  assert.equal(statSync(record).isFile(), true);
+  await sendRequest(daemon.socketPath, { id: "d1", method: "down" });
+  await awaitDone(daemon);
+});
+
+void test("CRASH-04: the up reply carries the startup notice when the reap destroyed a container", async (t) => {
+  const fixture = makeDirs();
+  const { options } = daemonParts(fixture, { sweep: () => Promise.resolve(2) });
+  const daemon = await startDaemon(options);
+  t.after(() => cleanupDaemon(daemon));
+
+  const up = await sendRequest(daemon.socketPath, { id: "u1", method: "up", params: { workspaceRoot: fixture.ws } });
+  assert.equal(snapshotStateOf(up), "active");
+  assert.equal(
+    noticeOf(up),
+    "A previous daemon's sandbox was destroyed at startup: 2 container(s), 0 session record(s). Files in the workspace were kept; state outside it was lost.",
+  );
 });
 
 void test("CLI-01: a failed sweep rejects startup before any record is touched (P6-D4)", async () => {

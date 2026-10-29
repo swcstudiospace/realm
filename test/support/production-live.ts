@@ -250,6 +250,36 @@ export function statusFieldsOf(stdout: string): StatusFields | undefined {
   return { state: stringField(snapshot, "state"), reason: stringField(snapshot, "reason"), label: stringField(display, "label") };
 }
 
+// The `notice` string of the daemon reply `realm status` prints (D-1404). Undefined when the text is not a JSON object or holds
+// no string `notice`.
+export function noticeOfStatus(stdout: string): string | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    return undefined;
+  }
+  return stringField(parsed, "notice");
+}
+
+// The counts the startup-reap notice states: "<n> container(s), <m> session record(s)". Undefined when the text states neither.
+export function reapCountsOfNotice(notice: string): { readonly containers: number; readonly sessionRecords: number } | undefined {
+  const match = /(\d+) container\(s\), (\d+) session record\(s\)/.exec(notice);
+  if (match === null) {
+    return undefined;
+  }
+  return { containers: Number(match[1]), sessionRecords: Number(match[2]) };
+}
+
+// The daemon log line that reports the startup reap of exactly one container and names it. The id is matched by prefix: the
+// list the suite takes before the kill prints Podman's short id, the daemon logs the full one. Undefined when no line matches.
+export function startupReapLineFor(log: string, containerId: string): string | undefined {
+  if (containerId === "") {
+    return undefined;
+  }
+  return log.split(/\r?\n/).find((line) => line.startsWith("realm daemon: startup removed 1 container(s)") && line.includes(containerId));
+}
+
 // The error an MCP tools/call result carries: isError true with structuredContent {code, retryable}. Undefined when the result is
 // not a tool error, or when the code or the retryable flag is missing or of the wrong type.
 export interface ToolErrorFields {

@@ -80,11 +80,14 @@ export interface TempSweepRemoved {
 // device, a failed open or check), and candidates kept because the audit callback threw.
 // failed: unlinks that failed, directories that could not be read or a candidate that could not be
 // examined, and a failed audit of the CLEANUP_FAILED line. Each failing step counts once.
+// unfinishedRoots: the roots given to the call whose walk was cut off by a budget, in order, followed by every root not
+// reached. Empty when `truncated` is false.
 export interface TempSweepResult {
   readonly removed: readonly TempSweepRemoved[];
   readonly skipped: number;
   readonly failed: number;
   readonly truncated: boolean;
+  readonly unfinishedRoots: readonly string[];
 }
 
 interface SweepState {
@@ -114,13 +117,29 @@ export function sweepOrphanTempFiles(roots: readonly string[], options: TempSwee
     truncated: false,
     entries: 0,
   };
+  const unfinishedRoots: string[] = [];
   for (const root of roots) {
-    if (state.truncated) {
-      break;
+    if (sweepTruncated(state)) {
+      unfinishedRoots.push(root);
+      continue;
     }
     sweepRoot(root, state);
+    if (sweepTruncated(state)) {
+      unfinishedRoots.push(root);
+    }
   }
-  return { removed: state.removed, skipped: state.skipped, failed: state.failed, truncated: state.truncated };
+  return {
+    removed: state.removed,
+    skipped: state.skipped,
+    failed: state.failed,
+    truncated: state.truncated,
+    unfinishedRoots,
+  };
+}
+
+// A function call, not a property read, so the compiler does not keep the narrowing from the check before sweepRoot ran.
+function sweepTruncated(state: SweepState): boolean {
+  return state.truncated;
 }
 
 function sweepRoot(root: string, state: SweepState): void {
