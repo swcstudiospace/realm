@@ -56,7 +56,7 @@
     "test:integration": "tsc -p tsconfig.json && node --test \"dist/test/integration/*.test.js\"",
     "build": "tsc -p tsconfig.json",
     "test:scripts": "node --test \"scripts/**/*.test.mjs\"",
-    "check:docs": "node scripts/check/host-paths.mjs && node scripts/check/agents-sync.mjs",
+    "check:docs": "node scripts/check/host-paths.mjs && node scripts/check/agents-sync.mjs && node scripts/check/default-mode.mjs",
     "check:mcp": "node scripts/check/mcp-smoke.mjs",
     "check:pack": "node scripts/check/pack-smoke.mjs",
     "check:image-digests": "node scripts/check/verify-image-digests.mjs",
