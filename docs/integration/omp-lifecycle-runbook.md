@@ -6,6 +6,7 @@ What this does not show. Omp's own tools (`bash`, `eval`, and the rest) run on t
 
 ## Prerequisites
 
+- **Run this on a dedicated account or VM where no other Realm session exists.** Starting a daemon, even with its own `stateDir`, removes every Realm sandbox on the Podman socket it uses: the startup reap lists every OpenShell-managed container whose sandbox name carries the realm prefix and removes it with `force`, whoever owns it (`src/session/reap.ts:33-39`, `src/runtime/sweep.ts:33-56`). That stops another session's sandbox and erases its files outside `/workspace`. Before step A or B, confirm that the container list (see "Useful probes") is empty and that `ss -xlpn | grep control.sock` prints nothing. If either shows a Realm sandbox or daemon that is not yours, stop.
 - The production stack from `docs/integration/openshell.md`: rootless Podman 5.x, the OpenShell 0.1.5 gateway, the Realm compute driver, and the digest-pinned sandbox image.
 - A built checkout (`npm ci && npm run build`) or an installed release, and Omp 18.12.6 or later.
 - A throwaway check directory `<check-dir>` holding `c/realm/config.json` (`image`, `stateDir`, `workspaceRoot`), `<check-dir>/state` with mode 0700 and a `policy.json` of `{"workspaceRoots":["<workspace>"]}`, and an Omp agent directory `<check-dir>/agent`. `<workspace>` is the pinned workspace root; start Omp in exactly that directory.
