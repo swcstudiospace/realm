@@ -48,16 +48,19 @@ export const CLASSES = [
 
 const IDENTIFIER = /[A-Za-z_$][\w$]*/g;
 const NAME = "[A-Za-z_$][\\w$]*";
-const KIND = "async\\s+function|function|abstract\\s+class|class|const\\s+enum|enum|interface|type|const|let|var";
+const KIND =
+  "async\\s+function|function|abstract\\s+class|class|const\\s+enum|enum|interface|type|namespace|module|const|let|var";
 const HEAD = new RegExp(`^(export\\s+)?(?:declare\\s+)?(${KIND})\\b`);
 const EXPORT_LIST = /^export\s*(type\s+)?\{([^}]*)\}(?:\s*from\s*(["']))?/;
-const EXPORT_STAR = new RegExp(`^export\\s*\\*\\s*(?:as\\s+(${NAME})\\s*)?from\\s*(["'])`);
+const EXPORT_STAR = new RegExp(`^export\\s*(?:type\\s*)?\\*\\s*(?:as\\s+(${NAME})\\s*)?from\\s*(["'])`);
+const EXPORT_IMPORT = new RegExp(`^export\\s+import\\s+(?:type\\s+)?(${NAME})\\s*=`);
 // A line break at depth 0 ends the statement when the next statement starts with one of these and the line does not
 // continue (it ends in an operator or a comma).
-const DECLARATION_AHEAD = /\s*(?:export|import|const|let|var|function|class|interface|enum|declare|abstract|type\s+[A-Za-z_$]|async\s+function)\b/y;
+const DECLARATION_AHEAD =
+  /\s*(?:@|(?:export|import|const|let|var|function|class|interface|enum|declare|abstract|namespace\s+[A-Za-z_$]|type\s+[A-Za-z_$]|async\s+function)\b)/y;
 const LINE_CONTINUES = ",=+-*/%&|^<?:.";
 // After the `}` that returns to depth 0, the statement goes on when the next text is one of these.
-const BRACE_CONTINUES = ";.,=(?:+-*/%&|^<>)";
+const BRACE_CONTINUES = ";.,=(?:+-*/%&|^<>)[!{";
 const CONTINUATION_WORDS = new Set(["as", "satisfies", "else", "catch", "finally", "while", "from", "extends", "implements", "in", "of", "instanceof"]);
 
 // Declaration kinds that live in the type space only (they emit no value).
@@ -76,64 +79,76 @@ const EXPRESSION_KEYWORDS = new Set(["return", "typeof", "case", "in", "of", "yi
 // "expr-end" divides; after any other class it opens a regular expression literal (`[...]` classes included, where a `/`
 // does not end the literal). A `!` is a postfix non-null assertion only after "expr-end" (and not before `=`).
 export function stripNonCode(source) {
-  const out = [];
+  const pieces = [];
   const templateDepths = [];
   const length = source.length;
   const wordPattern = /[A-Za-z_$][\w$]*/y;
   const numberPattern = /\d\w*(?:\.\d\w*)?/y;
+  let copied = 0;
   let mode = "code";
   let previous = "start";
   let afterDot = false;
   let index = 0;
-  const blank = (character) => (character === "\n" || character === "\r" ? character : " ");
+  // Blanks source[from, to): every character but a line break becomes a space. The rest is copied unchanged.
+  const blankSpan = (from, to) => {
+    if (to <= from) {
+      return;
+    }
+    pieces.push(source.slice(copied, from), source.slice(from, to).replace(/[^\r\n]/g, " "));
+    copied = to;
+  };
+  // A hashbang line is not code.
+  if (source.startsWith("#!")) {
+    const end = source.indexOf("\n");
+    index = end === -1 ? length : end;
+    blankSpan(0, index);
+  }
 
   while (index < length) {
     const current = source[index];
     const next = source[index + 1];
 
     if (mode === "template") {
-      if (current === "\\") {
-        out.push(blank(current));
-        if (next !== undefined) {
-          out.push(blank(next));
-        }
-        index += 2;
-      } else if (current === "`") {
-        out.push(current);
+      if (current === "`") {
         mode = "code";
         previous = "expr-end";
         index += 1;
       } else if (current === "$" && next === "{") {
-        out.push("${");
         templateDepths.push(0);
         mode = "code";
         previous = "operator";
         index += 2;
       } else {
-        out.push(blank(current));
-        index += 1;
+        // Template text runs to the next backslash escape, backtick or `${`; an escape covers two characters.
+        let stop = index + (current === "\\" ? 2 : 1);
+        while (stop < length && source[stop] !== "\\" && source[stop] !== "`" && !(source[stop] === "$" && source[stop + 1] === "{")) {
+          stop += 1;
+        }
+        blankSpan(index, Math.min(stop, length));
+        index = Math.min(stop, length);
       }
       continue;
     }
 
-    if (/\s/.test(current)) {
-      out.push(current);
+    const code = source.charCodeAt(index);
+    if (code <= 32 || (code > 127 && /\s/.test(current))) {
       index += 1;
       continue;
     }
     if (current === "/" && next === "/") {
-      while (index < length && source[index] !== "\n") {
-        out.push(" ");
-        index += 1;
+      let stop = index;
+      while (stop < length && source[stop] !== "\n") {
+        stop += 1;
       }
+      blankSpan(index, stop);
+      index = stop;
       continue;
     }
     if (current === "/" && next === "*") {
       const end = source.indexOf("*/", index + 2);
       const stop = end === -1 ? length : end + 2;
-      for (; index < stop; index += 1) {
-        out.push(blank(source[index]));
-      }
+      blankSpan(index, stop);
+      index = stop;
       continue;
     }
 
@@ -141,60 +156,49 @@ export function stripNonCode(source) {
     afterDot = false;
 
     if (current === '"' || current === "'") {
-      out.push(current);
+      const open = index;
       index += 1;
       while (index < length && source[index] !== current && source[index] !== "\n") {
-        const escaped = source[index] === "\\" && index + 1 < length && source[index + 1] !== "\n";
-        out.push(" ");
-        index += 1;
-        if (escaped) {
-          out.push(" ");
-          index += 1;
-        }
+        index += source[index] === "\\" && index + 1 < length && source[index + 1] !== "\n" ? 2 : 1;
       }
+      blankSpan(open + 1, Math.min(index, length));
       if (source[index] === current) {
-        out.push(current);
         index += 1;
       }
       previous = "expr-end";
       continue;
     }
     if (current === "`") {
-      out.push(current);
       mode = "template";
       index += 1;
       continue;
     }
-    if (/[A-Za-z_$]/.test(current)) {
+    if ((code >= 65 && code <= 90) || (code >= 97 && code <= 122) || code === 95 || code === 36) {
       wordPattern.lastIndex = index;
       const word = wordPattern.exec(source)?.[0] ?? current;
-      out.push(word);
       previous = !wasDot && EXPRESSION_KEYWORDS.has(word) ? "keyword" : "expr-end";
       index += word.length;
       continue;
     }
-    if (/\d/.test(current)) {
+    if (code >= 48 && code <= 57) {
       numberPattern.lastIndex = index;
       const number = numberPattern.exec(source)?.[0] ?? current;
-      out.push(number);
       previous = "expr-end";
       index += number.length;
       continue;
     }
     if (current === "/") {
       if (previous === "expr-end") {
-        out.push("/");
         previous = "operator";
         index += 1;
         continue;
       }
-      out.push("/");
+      const open = index;
       index += 1;
       let inClass = false;
       while (index < length && source[index] !== "\n" && (inClass || source[index] !== "/")) {
         const character = source[index];
         if (character === "\\" && index + 1 < length && source[index + 1] !== "\n") {
-          out.push(" ", " ");
           index += 2;
           continue;
         }
@@ -203,42 +207,37 @@ export function stripNonCode(source) {
         } else if (character === "]") {
           inClass = false;
         }
-        out.push(" ");
         index += 1;
       }
+      blankSpan(open + 1, Math.min(index, length));
       if (source[index] === "/") {
-        out.push("/");
         index += 1;
+        const flags = index;
         while (index < length && /[a-z]/.test(source[index])) {
-          out.push(" ");
           index += 1;
         }
+        blankSpan(flags, index);
       }
       previous = "expr-end";
       continue;
     }
     if (current === "!") {
-      const postfix = previous === "expr-end" && next !== "=";
-      out.push("!");
-      previous = postfix ? "expr-end" : "operator";
+      previous = previous === "expr-end" && next !== "=" ? "expr-end" : "operator";
       index += 1;
       continue;
     }
     if ((current === "+" || current === "-") && next === current) {
-      out.push(current, current);
       previous = previous === "expr-end" ? "expr-end" : "operator";
       index += 2;
       continue;
     }
     if (current === "?" && next === "." && !/\d/.test(source[index + 2] ?? "")) {
-      out.push("?.");
       previous = "operator";
       afterDot = true;
       index += 2;
       continue;
     }
     if (current === ".") {
-      out.push(".");
       previous = "operator";
       afterDot = true;
       index += 1;
@@ -250,7 +249,6 @@ export function stripNonCode(source) {
       } else if (current === "}") {
         if (templateDepths[templateDepths.length - 1] === 0) {
           templateDepths.pop();
-          out.push("}");
           mode = "template";
           index += 1;
           continue;
@@ -258,11 +256,11 @@ export function stripNonCode(source) {
         templateDepths[templateDepths.length - 1] -= 1;
       }
     }
-    out.push(current);
     previous = current === ")" || current === "]" ? "expr-end" : "operator";
     index += 1;
   }
-  return out.join("");
+  pieces.push(source.slice(copied));
+  return pieces.join("");
 }
 
 function countNewlines(text, end) {
@@ -282,19 +280,67 @@ function isVariableKind(kind) {
   return kind === "const" || kind === "let" || kind === "var";
 }
 
+function skipBlanks(text, from) {
+  let position = from;
+  while (position < text.length && /\s/.test(text[position])) {
+    position += 1;
+  }
+  return position;
+}
+
+// Skips the decorators (`@name`, `@a.b(args)`) that start at `from`, plus the blanks after them, and returns the position
+// of the next token; `from` itself when there is no decorator.
+function skipDecorators(text, from) {
+  let position = from;
+  for (;;) {
+    let cursor = skipBlanks(text, position);
+    if (text[cursor] !== "@") {
+      return position;
+    }
+    const name = /^\s*[A-Za-z_$][\w$]*(?:\s*\.\s*[A-Za-z_$][\w$]*)*/.exec(text.slice(cursor + 1, cursor + 201));
+    if (name === null) {
+      return position;
+    }
+    cursor += 1 + name[0].length;
+    const probe = skipBlanks(text, cursor);
+    if (text[probe] === "(") {
+      let depth = 0;
+      let close = -1;
+      for (let index = probe; index < text.length; index += 1) {
+        if (text[index] === "(") {
+          depth += 1;
+        } else if (text[index] === ")") {
+          depth -= 1;
+          if (depth === 0) {
+            close = index;
+            break;
+          }
+        }
+      }
+      if (close === -1) {
+        return position;
+      }
+      cursor = close + 1;
+    }
+    position = skipBlanks(text, cursor);
+  }
+}
+
 // Splits a stripped source into its top-level statements, by nesting depth ((), [] and {} on the blanked text, so
 // comments, strings and regular expressions cannot confuse it): { start, end, line, text }. A statement starts at its
 // first significant character, wherever that is on the line, and ends
 //   - at a `;` at depth 0;
-//   - at a `}` that returns to depth 0 unless the next text continues it (`;`, `.`, `,`, `=`, `(`, `?`, `:`, an operator,
-//     `)`, or a word such as `else`, `catch`, `as`, `from`);
+//   - at a `}` that returns to depth 0 unless the next text continues it (`;`, `.`, `,`, `=`, `(`, `[`, `?`, `:`, `!`, an
+//     operator, `)`, or a word such as `else`, `catch`, `as`, `satisfies`, `from`). The `}` that closes a template
+//     literal's `${` expression is part of the bracket stack and never ends a statement;
 //   - at a line break at depth 0 when the next statement starts with a declaration keyword and the line does not end in
 //     an operator or a comma (no semicolons needed);
 //   - before an `export` word at depth 0, which always starts a statement.
+// Leading decorators stay with the declaration that follows them.
 function splitStatements(stripped) {
   const statements = [];
   const length = stripped.length;
-  let depth = 0;
+  const stack = [];
   let start = -1;
   let startLine = 1;
   let line = 1;
@@ -306,10 +352,7 @@ function splitStatements(stripped) {
     start = -1;
   };
   const endsAfterBrace = (from) => {
-    let position = from;
-    while (position < length && /\s/.test(stripped[position])) {
-      position += 1;
-    }
+    const position = skipBlanks(stripped, from);
     if (position >= length) {
       return true;
     }
@@ -323,7 +366,7 @@ function splitStatements(stripped) {
   for (let index = 0; index < length; index += 1) {
     const character = stripped[index];
     if (character === "\n") {
-      if (start !== -1 && depth === 0 && !LINE_CONTINUES.includes(stripped[last])) {
+      if (start !== -1 && stack.length === 0 && !LINE_CONTINUES.includes(stripped[last]) && skipDecorators(stripped, start) <= last) {
         DECLARATION_AHEAD.lastIndex = index + 1;
         if (DECLARATION_AHEAD.test(stripped)) {
           finish();
@@ -339,25 +382,28 @@ function splitStatements(stripped) {
       start = index;
       startLine = line;
     } else if (
-      depth === 0 &&
+      stack.length === 0 &&
       character === "e" &&
       stripped.startsWith("export", index) &&
       !/[\w$.]/.test(stripped[index - 1] ?? " ") &&
-      !/[\w$]/.test(stripped[index + 6] ?? " ")
+      !/[\w$]/.test(stripped[index + 6] ?? " ") &&
+      skipDecorators(stripped, start) !== index
     ) {
       finish();
       start = index;
       startLine = line;
     }
     last = index;
-    if (character === "(" || character === "[" || character === "{") {
-      depth += 1;
+    if (character === "{" && stripped[index - 1] === "$") {
+      stack.push("template");
+    } else if (character === "(" || character === "[" || character === "{") {
+      stack.push(character);
     } else if (character === ")" || character === "]" || character === "}") {
-      depth = Math.max(0, depth - 1);
-      if (character === "}" && depth === 0 && endsAfterBrace(index + 1)) {
+      const closed = stack.pop();
+      if (character === "}" && stack.length === 0 && closed !== "template" && endsAfterBrace(index + 1)) {
         finish();
       }
-    } else if (character === ";" && depth === 0) {
+    } else if (character === ";" && stack.length === 0) {
       finish();
     }
   }
@@ -440,17 +486,50 @@ function patternNames(pattern) {
   return names;
 }
 
+// The index of the `>` that closes the `<` at `open` (nested angle brackets, (), [] and {} counted; the `>` of `=>` is
+// not a closer), or -1 when the statement ends first.
+function matchingAngle(text, open) {
+  let depth = 0;
+  let angle = 0;
+  for (let index = open; index < text.length; index += 1) {
+    const character = text[index];
+    if (character === "(" || character === "[" || character === "{") {
+      depth += 1;
+    } else if (character === ")" || character === "]" || character === "}") {
+      if (depth === 0) {
+        return -1;
+      }
+      depth -= 1;
+    } else if (depth === 0) {
+      if (character === ";") {
+        return -1;
+      }
+      if (character === "<") {
+        angle += 1;
+      } else if (character === ">" && text[index - 1] !== "=") {
+        angle -= 1;
+        if (angle === 0) {
+          return index;
+        }
+      }
+    }
+  }
+  return -1;
+}
+
 // Splits `const a = 1, b: T<X, Y> = f(1, 2), { c } = d;` (the text after the keyword, from `from`) into declarators and
 // returns { items: [{ binding, offset }], uncertain }: each binding is the text before the first depth-0 `:` or `=`.
-// Generic arguments stay together: a `<` right after an identifier, or at the start of an expression (a generic arrow's
-// type parameters), opens a generic that the matching `>` closes; in a type annotation every `<` does. When a generic
-// is left open, or the brackets do not balance, `uncertain` is true and the caller must not trust the items.
+// Generic arguments stay together, decided by looking ahead to the matching `>`:
+//   - in a type annotation every `<` opens a generic;
+//   - after `=`, `(`, `,`, `:`, `?`, `&` or `|` a `<` starts an expression, so it is a generic arrow's type parameters;
+//   - after an identifier (spaces allowed) it is a generic call when the matching `>` is followed by `(`, a template or a
+//     token that ends or continues an expression (`)`, `]`, `}`, `,`, `;`, `.`, `:`, `?`), otherwise a comparison. A
+//     generic whose arguments hold an `=` or `;` is ambiguous (`a<b, c = d>(e)`), and so is a generic that never closes:
+//     both make `uncertain` true, and the caller must not trust the items.
 function declarators(text, from) {
   const items = [];
   let depth = 0;
-  let angle = 0;
-  let genericStart = -1;
-  let doubtful = false;
+  let uncertain = false;
   let state = "binding";
   let startOffset = from;
   let bindingEnd = null;
@@ -461,12 +540,30 @@ function declarators(text, from) {
       items.push({ binding, offset: startOffset + (raw.length - raw.trimStart().length) });
     }
   };
-  const opensGeneric = (index) => {
-    if (/[\w$]/.test(text[index - 1] ?? "")) {
-      return true;
-    }
+  // The index to continue from after a generic at `index`, or -1 when the `<` is a comparison.
+  const genericEnd = (index) => {
     const before = text.slice(0, index).trimEnd().slice(-1);
-    return before !== "" && "=(,:?&|".includes(before);
+    const word = /[\w$]/.test(before);
+    if (!word && !(state === "annotation" || (before !== "" && "=(,:?&|".includes(before)))) {
+      return -1;
+    }
+    const close = matchingAngle(text, index);
+    if (close === -1) {
+      // After an identifier outside an annotation an unclosed `<` is a comparison; elsewhere it is a broken generic.
+      uncertain = uncertain || !word || state === "annotation";
+      return -1;
+    }
+    if (!word || state === "annotation") {
+      return close;
+    }
+    const next = text[skipBlanks(text, close + 1)];
+    if (next !== undefined && !"(`)],;.:?}".includes(next)) {
+      return -1;
+    }
+    if (/[=;]/.test(text.slice(index + 1, close).replaceAll("=>", ""))) {
+      uncertain = true;
+    }
+    return close;
   };
   for (let index = from; index < text.length; index += 1) {
     const character = text[index];
@@ -477,23 +574,16 @@ function declarators(text, from) {
     } else if (depth === 0) {
       if (character === ";") {
         finish(index);
-        return { items, uncertain: angle !== 0 || doubtful };
+        return { items, uncertain };
       }
-      if (state !== "binding") {
-        if (character === "<" && (state === "annotation" || opensGeneric(index))) {
-          if (angle === 0) {
-            genericStart = index;
-          }
-          angle += 1;
-        } else if (character === ">" && angle > 0 && text[index - 1] !== "=") {
-          angle -= 1;
-          if (angle === 0 && /[=;]/.test(text.slice(genericStart + 1, index).replaceAll("=>", ""))) {
-            // `a < b, c = d > e` is a comparison, not a generic: the bindings cannot be trusted.
-            doubtful = true;
-          }
+      if (character === "<" && state !== "binding") {
+        const close = genericEnd(index);
+        if (close !== -1) {
+          index = close;
+          continue;
         }
       }
-      if (character === "," && angle === 0) {
+      if (character === ",") {
         finish(index);
         startOffset = index + 1;
         bindingEnd = null;
@@ -508,7 +598,7 @@ function declarators(text, from) {
     }
   }
   finish(text.length);
-  return { items, uncertain: angle !== 0 || depth !== 0 || doubtful };
+  return { items, uncertain: uncertain || depth !== 0 };
 }
 
 // Reads the quoted module specifier that starts at the quote at `quoteAt` of the extent text; the stripped source blanks
@@ -558,16 +648,28 @@ function collect(source, file) {
       }
       continue;
     }
-    const head = HEAD.exec(text);
+    const importAlias = EXPORT_IMPORT.exec(text);
+    if (importAlias !== null) {
+      exports.push({ name: importAlias[1], local: importAlias[1], kind: "import", space: "value", file, line: extent.line, extent });
+      continue;
+    }
+    // Decorators come before `export` or between `export` and the keyword; the head is read without them.
+    const decorated = skipDecorators(text, 0);
+    let body = text.slice(decorated);
+    const inline = /^export\s+(?=@)/.exec(body);
+    if (inline !== null) {
+      body = body.slice(0, inline[0].length) + body.slice(skipDecorators(body, inline[0].length));
+    }
+    const head = HEAD.exec(body);
     if (head === null) {
       continue;
     }
     const exported = head[1] !== undefined;
     const kind = normalizeKind(head[2]);
-    const rest = text.slice(head[0].length);
+    const rest = body.slice(head[0].length);
 
     if (isVariableKind(kind)) {
-      const parsed = declarators(text, head[0].length);
+      const parsed = declarators(body, head[0].length);
       if (parsed.uncertain) {
         if (exported) {
           unparsed.push({
@@ -580,7 +682,7 @@ function collect(source, file) {
         continue;
       }
       for (const declared of parsed.items) {
-        const line = extent.line + countNewlines(text, declared.offset);
+        const line = extent.line + countNewlines(text, decorated + declared.offset);
         const bound = new RegExp(`^${NAME}$`).test(declared.binding) ? [declared.binding] : patternNames(declared.binding);
         if (bound === null) {
           if (exported) {
@@ -604,7 +706,7 @@ function collect(source, file) {
       continue;
     }
 
-    const named = new RegExp(`^\\s*\\*?\\s*(${NAME})`).exec(rest);
+    const named = new RegExp(`^\\s*${kind === "function" ? "\\*?\\s*" : ""}(${NAME})`).exec(rest);
     if (named === null) {
       continue;
     }
@@ -657,7 +759,7 @@ function collect(source, file) {
 
   exports.sort(compareEntries);
   forwards.sort((left, right) => left.line - right.line);
-  return { exports, forwards, unparsed, locals };
+  return { exports, forwards, unparsed, locals, statements: extents };
 }
 
 // A copy of an export record without its internal declaration extent.
@@ -672,13 +774,15 @@ function withoutExtent(found) {
 // `export const { a, b: c } = ...` or `export const [x] = ...`, `export { a, b as c }` and `export type { A }`
 // (a listed name takes the kind of its local declaration). `export default` is ignored. Returns
 // { exports: [{ name, local, kind, space, file, line }], forwards: [{ line, star, specifier, names }], unparsed:
-// [{ name, kind, line, note }] }. Forwards are the `export * from` and `export { x } from` statements.
+// [{ name, kind, line, note }], statements: [{ start, end, line }] }. Forwards are the `export * from` and `export { x } from`
+// statements; statements are the top-level statements the scanner found.
 export function collectExports(source, file) {
-  const { exports, forwards, unparsed } = collect(source, file);
+  const { exports, forwards, unparsed, statements } = collect(source, file);
   return {
     exports: exports.map(withoutExtent),
     forwards,
     unparsed,
+    statements: statements.map(({ start, end, line }) => ({ start, end, line })),
   };
 }
 
