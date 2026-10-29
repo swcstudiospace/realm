@@ -64,7 +64,7 @@ Every gate must pass before a change is reviewed (`CONTRIBUTING.md`).
   - `doctor/`: prerequisite checks behind `realm doctor`.
   - `contract/`: tool and session-record schemas and the schema validator (`validate.ts`).
   - `core/`: frozen shared contracts: states and the state machine, status labels, policy loading with `policy.schema.json`, the typed error catalogue (`errors.ts`), the event bus, ports, backoff, and `withTimeout` (`timeout.ts`); and the package version reader (`package-version.ts`).
-- `test/`: `node:test` suites by area, largely mirroring `src/`. `test/integration/` holds the Podman-gated suites, and `test/support/` holds shared fakes.
+- `test/`: `node:test` suites by area, largely mirroring `src/`. `test/integration/` holds the Podman-gated suites, and `test/support/` holds shared fakes and `property.ts`, the shared `fast-check` configuration (200 runs from a fixed seed; `REALM_PROPERTY_SEED` overrides it) used by the `*.property.test.ts` files in `test/fs/` and `test/core/`.
 - `scripts/`: plain ESM `.mjs` using Node built-ins only. `scripts/check/` backs `npm run check:docs`, `npm run check:image-digests` (`verify-image-digests.mjs`) and `npm run test:scripts`. `scripts/image/` backs `npm run build:image` (`build-image.mjs`). `scripts/release/` backs the release job (`next-version.mjs`, `sync-version.mjs`, `changelog.mjs`, and `assets.mjs`, which writes `SHA256SUMS` and the CycloneDX SBOM).
 - `docs/`: `integration/` (integration and decision notes, such as `runtime-decision.md` and `anda-decision.md`), `hosts/snippets/` (host config snippets), `policy-reference.md`, and `specs/realm-spec.xml` (the product spec).
 - `.planning/`: GSD-managed planning state. See Planning artifacts.
