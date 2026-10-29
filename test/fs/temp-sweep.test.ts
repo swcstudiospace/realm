@@ -82,6 +82,7 @@ void test("the sweep removes an aged exact-pattern file and audits it before the
   assert.equal(result.skipped, 0);
   assert.equal(result.failed, 0);
   assert.equal(result.truncated, false);
+  assert.deepEqual(result.unfinishedRoots, []);
 });
 
 void test("the sweep removes an aged orphan in a nested directory and in a second root (CRASH-01)", (t) => {
@@ -295,8 +296,20 @@ void test("the sweep stops when the wall budget is spent and reports truncated (
   const audit: TempSweepAuditEntry[] = [];
   const result = sweepOrphanTempFiles([root], sweepOptions(audit, { deadlineMs: 0 }));
   assert.equal(result.truncated, true);
+  assert.deepEqual(result.unfinishedRoots, [root]);
   assert.deepEqual(result.removed, []);
   assert.equal(existsSync(orphan), true);
+});
+
+void test("a spent budget reports the root being walked and every root not reached as unfinished (D-1401)", (t) => {
+  const { base, root } = setup(t);
+  const second = join(base, "second");
+  mkdirSync(second);
+  const audit: TempSweepAuditEntry[] = [];
+  const result = sweepOrphanTempFiles([root, second], sweepOptions(audit, { deadlineMs: 0 }));
+  assert.deepEqual(result.unfinishedRoots, [root, second]);
+  const complete = sweepOrphanTempFiles([root, second], sweepOptions(audit));
+  assert.deepEqual(complete.unfinishedRoots, []);
 });
 
 void test("a root that does not bind is counted and the other roots are still swept (D-1401)", (t) => {

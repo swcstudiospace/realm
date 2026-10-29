@@ -12,6 +12,7 @@
 import { rmSync } from "node:fs";
 import { createConnection, createServer, type Server, type Socket } from "node:net";
 import { join } from "node:path";
+import { performance } from "node:perf_hooks";
 import { AndaBridge } from "../anda/client.js";
 import { appendAudit } from "../audit/log.js";
 import { reconcileAuditLogs } from "../audit/reconcile.js";
@@ -24,7 +25,7 @@ import { displayStatus, type DisplayStatus } from "../core/status.js";
 import { withTimeout } from "../core/timeout.js";
 import { defaultRunCommand, runChecks, type AgentOsReading, type CheckResult, type DoctorOptions } from "../doctor/checks.js";
 import { bindRoot, isInsideRoot, type PinnedRoot } from "../fs/root.js";
-import { ORPHAN_TEMP_MIN_AGE_MS, sweepOrphanTempFiles } from "../fs/temp-sweep.js";
+import { DEFAULT_SWEEP_DEADLINE_MS, ORPHAN_TEMP_MIN_AGE_MS, sweepOrphanTempFiles } from "../fs/temp-sweep.js";
 import { TEARDOWN_TIMEOUT_MS } from "../lifecycle/controller.js";
 import { createRealmHandle, type RealmHandle } from "../realm/compose.js";
 import { AgentOsSupervisor, type AgentOsDriver } from "../runtime/agentos.js";
@@ -77,6 +78,11 @@ const AGENTOS_CALL_TIMEOUT_MS = 200_000;
 // doctor run. One probe runs at a time, and each is bounded by the controller's startup budget.
 export const HEALTH_PROBE_INTERVAL_MS = 10_000;
 
+// The budget of the startup temp-file sweep and audit reconciliation together, counted from the end of the reap. Both are
+// optional cleanup, so a large workspace or audit history must not keep clients waiting: the work that does not fit is
+// reported as unfinished and a later start finishes it. The gate opens at most this long, plus one chunk of work, after the reap.
+export const STARTUP_MAINTENANCE_BUDGET_MS = 10_000;
+
 // How the start gate settles: open for serving, or failed with the start error.
 type GateOutcome = { readonly ok: true } | { readonly ok: false; readonly error: unknown };
 
@@ -122,6 +128,12 @@ export interface StartupReport {
   readonly auditLinesReconciled: number;
   // True when the temp-file sweep stopped at its wall or entry bound before it had seen every directory.
   readonly truncated: boolean;
+  // The sweep roots the budget left unfinished (the root being walked when it ran out, and every root not reached), as paths.
+  readonly unfinishedSweepRoots: readonly string[];
+  // The audit logs the budget left unfinished, as base names without a directory. A later start finishes them.
+  readonly unfinishedAuditFiles: readonly string[];
+  // True when no sweep root and no audit log is unfinished. It says nothing about the notice, which is about the reap only.
+  readonly maintenanceComplete: boolean;
   readonly failures: number;
 }
 
@@ -146,6 +158,11 @@ export interface StartDaemonOptions extends BuildDaemonHandleOptions {
   // Observer for the startup maintenance report (CRASH-04). It runs once per start, after the reap, the orphan temp-file sweep
   // and the audit reconciliation and before the daemon serves its first request. It must not throw; a throw aborts the start.
   readonly onStartup?: (report: StartupReport) => void;
+  // The budget of the startup temp-file sweep and audit reconciliation together, in milliseconds counted from the end of the
+  // reap. Defaults to STARTUP_MAINTENANCE_BUDGET_MS; a test passes 0 or a small value.
+  readonly startupMaintenanceBudgetMs?: number;
+  // Monotonic clock for that budget, in milliseconds. Defaults to performance.now(); a test injects its own.
+  readonly monotonicNow?: () => number;
   readonly store?: Pick<SessionStore, "list" | "delete">;
   readonly socketDirDeps?: SocketDirDeps;
   // Bound for one socket operation and for draining in-flight requests on down.
@@ -587,6 +604,8 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
       stateDir,
       sessionId: options.sessionId,
       now: () => Date.now(),
+      monotonicNow: options.monotonicNow ?? (() => performance.now()),
+      budgetMs: options.startupMaintenanceBudgetMs ?? STARTUP_MAINTENANCE_BUDGET_MS,
     });
     startupNotice = startupNoticeOf(report);
     options.onStartup?.(report);
@@ -607,13 +626,24 @@ interface StartupMaintenanceDeps {
   readonly stateDir: string;
   // The session whose audit file records the orphan removals: the daemon's own session.
   readonly sessionId: string;
+  // Wall-clock milliseconds, for the age of a temp file (its mtime is a wall-clock value).
   readonly now: () => number;
+  // Monotonic milliseconds (performance.now()), for the budget. The deadline is read on this clock only.
+  readonly monotonicNow: () => number;
+  // The budget of the temp-file sweep and the audit reconciliation together, counted from the end of the reap.
+  readonly budgetMs: number;
 }
 
 // The whole startup block (D-1409), in this order: the reap, the orphan temp-file sweep, the audit reconciliation, the
 // report. The reap's own failure rejects (nothing is served on a reap that did not prove zero containers). A temp-file
 // sweep or reconciliation failure is counted in the report and never aborts the start: a skipped cleanup costs disk and a
 // missing reconciliation line, while a daemon that will not start costs the user the sandbox.
+//
+// The sweep and the reconciliation are optional work, so they share ONE deadline, computed when the reap has ended:
+// budgetMs after that moment. The sweep may spend at most half of what remains (and never more than its own 15 s budget),
+// so a huge workspace cannot starve the reconciliation start after start; the reconciliation gets whatever is left. Work
+// that the deadline cuts off is reported (unfinishedSweepRoots, unfinishedAuditFiles, maintenanceComplete) and finished by
+// a later start; the gate opens when the block ends, at most the budget plus one chunk of work after the reap.
 async function runStartupMaintenance(deps: StartupMaintenanceDeps): Promise<StartupReport> {
   const containerIds: string[] = [];
   const reaped = await reapStartup({
@@ -623,19 +653,23 @@ async function runStartupMaintenance(deps: StartupMaintenanceDeps): Promise<Star
         containerIds.push(id);
       }),
   });
+  const deadline = deps.monotonicNow() + deps.budgetMs;
   let failures = 0;
   let tempFilesRemoved = 0;
   let truncated = false;
+  let unfinishedSweepRoots: readonly string[] = [];
   const ownerUid = process.getuid?.();
   if (ownerUid === undefined) {
     // Without a uid the owner rule cannot be applied, so nothing is removed; the report counts the gap.
     failures += 1;
   } else {
     try {
+      const sweepShareMs = Math.max(0, Math.floor((deadline - deps.monotonicNow()) / 2));
       const swept = sweepOrphanTempFiles(sweepRootsOf(deps.policy, deps.stateDir), {
         now: deps.now(),
         minAgeMs: ORPHAN_TEMP_MIN_AGE_MS,
         ownerUid,
+        deadlineMs: Math.min(DEFAULT_SWEEP_DEADLINE_MS, sweepShareMs),
         audit: (entry) => {
           appendAudit(deps.stateDir, {
             sessionId: deps.sessionId,
@@ -648,6 +682,7 @@ async function runStartupMaintenance(deps: StartupMaintenanceDeps): Promise<Star
       });
       tempFilesRemoved = swept.removed.length;
       truncated = swept.truncated;
+      unfinishedSweepRoots = swept.unfinishedRoots;
       failures += swept.failed;
     } catch {
       // The sweep never throws on a bad root or file; this is a failure of the sweep itself, counted in the report.
@@ -655,9 +690,11 @@ async function runStartupMaintenance(deps: StartupMaintenanceDeps): Promise<Star
     }
   }
   let auditLinesReconciled = 0;
+  let unfinishedAuditFiles: readonly string[] = [];
   try {
-    const reconciled = reconcileAuditLogs(deps.stateDir);
+    const reconciled = reconcileAuditLogs(deps.stateDir, { now: deps.monotonicNow, deadline });
     auditLinesReconciled = reconciled.appended;
+    unfinishedAuditFiles = reconciled.unfinished;
     failures += reconciled.failed;
   } catch {
     // A failure of the reconciliation itself is counted in the report; the lines it appended before it stopped are not.
@@ -670,6 +707,9 @@ async function runStartupMaintenance(deps: StartupMaintenanceDeps): Promise<Star
     tempFilesRemoved,
     auditLinesReconciled,
     truncated,
+    unfinishedSweepRoots,
+    unfinishedAuditFiles,
+    maintenanceComplete: unfinishedSweepRoots.length === 0 && unfinishedAuditFiles.length === 0,
     failures,
   };
 }

@@ -143,6 +143,9 @@ void test("CRASH-04: the start's onStartup report is written as one stderr line 
         tempFilesRemoved: 3,
         auditLinesReconciled: 4,
         truncated: false,
+        unfinishedSweepRoots: [],
+        unfinishedAuditFiles: [],
+        maintenanceComplete: true,
         failures: 0,
       });
       return Promise.resolve(startedWith(Promise.resolve()));
@@ -151,7 +154,7 @@ void test("CRASH-04: the start's onStartup report is written as one stderr line 
 
   assert.equal(await runDaemon(h.deps), 0);
   assert.deepEqual(h.lines, [
-    "realm daemon: startup removed 2 container(s)[c0ffee,decaf1] and 1 session record(s); removed 3 orphan temp file(s); reconciled 4 audit admission(s)",
+    "realm daemon: startup removed 2 container(s)[c0ffee,decaf1] and 1 session record(s); removed 3 orphan temp file(s); reconciled 4 audit admission(s); maintenanceComplete=true",
   ]);
 });
 
@@ -166,6 +169,9 @@ void test("CRASH-04: the startup line has no id brackets when no container was r
         tempFilesRemoved: 0,
         auditLinesReconciled: 0,
         truncated: false,
+        unfinishedSweepRoots: [],
+        unfinishedAuditFiles: [],
+        maintenanceComplete: true,
         failures: 2,
       });
       return Promise.resolve(startedWith(Promise.resolve()));
@@ -174,7 +180,33 @@ void test("CRASH-04: the startup line has no id brackets when no container was r
 
   assert.equal(await runDaemon(h.deps), 0);
   assert.deepEqual(h.lines, [
-    "realm daemon: startup removed 0 container(s) and 0 session record(s); removed 0 orphan temp file(s); reconciled 0 audit admission(s); 2 startup failure(s)",
+    "realm daemon: startup removed 0 container(s) and 0 session record(s); removed 0 orphan temp file(s); reconciled 0 audit admission(s); maintenanceComplete=true; 2 startup failure(s)",
+  ]);
+});
+
+void test("STARTUP budget: the startup line says maintenanceComplete=false and names the unfinished audit files and sweep roots", async (t) => {
+  const dir = tempDir(t);
+  const h = harness(writeConfig(dir, validConfig(dir)), {
+    start: (options) => {
+      options.onStartup?.({
+        containerIds: [],
+        containersRemoved: 0,
+        recordsDeleted: 0,
+        tempFilesRemoved: 0,
+        auditLinesReconciled: 0,
+        truncated: true,
+        unfinishedSweepRoots: ["<workspace>", "<state>/sessions"],
+        unfinishedAuditFiles: ["a.jsonl", "daemon.jsonl"],
+        maintenanceComplete: false,
+        failures: 0,
+      });
+      return Promise.resolve(startedWith(Promise.resolve()));
+    },
+  });
+
+  assert.equal(await runDaemon(h.deps), 0);
+  assert.deepEqual(h.lines, [
+    "realm daemon: startup removed 0 container(s) and 0 session record(s); removed 0 orphan temp file(s); reconciled 0 audit admission(s); maintenanceComplete=false; unfinished 2 audit file(s)[a.jsonl,daemon.jsonl] and 2 sweep root(s)[<workspace>,<state>/sessions]",
   ]);
 });
 

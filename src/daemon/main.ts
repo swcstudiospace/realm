@@ -106,16 +106,23 @@ export async function runDaemon(deps: DaemonDeps): Promise<number> {
   });
 }
 
-// The one startup line (CRASH-04): what the reap destroyed, what the orphan sweep removed and what the audit
-// reconciliation appended. The container ids are not secrets. The failure count is added only when it is not zero.
+// The one startup line (CRASH-04): what the reap destroyed, what the orphan sweep removed, what the audit
+// reconciliation appended, and whether the budgeted maintenance finished. The container ids are not secrets. The failure
+// count is added only when it is not zero. When the budget left work unfinished, the line names the audit files (base names)
+// and the sweep roots; a later start finishes them, and the user-facing notice does not change (it is about the reap only).
 function startupLine(report: StartupReport): string {
   const ids = report.containerIds.length === 0 ? "" : `[${report.containerIds.join(",")}]`;
+  const unfinished = report.maintenanceComplete
+    ? ""
+    : `; unfinished ${String(report.unfinishedAuditFiles.length)} audit file(s)[${report.unfinishedAuditFiles.join(",")}]` +
+      ` and ${String(report.unfinishedSweepRoots.length)} sweep root(s)[${report.unfinishedSweepRoots.join(",")}]`;
   const failures = report.failures > 0 ? `; ${String(report.failures)} startup failure(s)` : "";
   return (
     `realm daemon: startup removed ${String(report.containersRemoved)} container(s)${ids}` +
     ` and ${String(report.recordsDeleted)} session record(s);` +
     ` removed ${String(report.tempFilesRemoved)} orphan temp file(s);` +
-    ` reconciled ${String(report.auditLinesReconciled)} audit admission(s)${failures}`
+    ` reconciled ${String(report.auditLinesReconciled)} audit admission(s);` +
+    ` maintenanceComplete=${String(report.maintenanceComplete)}${unfinished}${failures}`
   );
 }
 

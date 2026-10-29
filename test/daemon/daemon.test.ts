@@ -500,6 +500,9 @@ void test("CRASH-01, CRASH-02, CRASH-04: startDaemon sweeps orphan temp files, r
       tempFilesRemoved: 2,
       auditLinesReconciled: 1,
       truncated: false,
+      unfinishedSweepRoots: [],
+      unfinishedAuditFiles: [],
+      maintenanceComplete: true,
       failures: 0,
     },
   ]);
@@ -528,6 +531,57 @@ void test("CRASH-01, CRASH-02, CRASH-04: startDaemon sweeps orphan temp files, r
   assert.equal(hasNoticeKey(quiet), false, "with nothing destroyed the reply has no notice key");
   const stopped = await sendRequest(second.socketPath, { id: "d2", method: "down" });
   assert.equal(hasNoticeKey(stopped), false);
+  await awaitDone(second);
+});
+
+void test("STARTUP budget: with a zero budget the gate still opens, the report says the maintenance is unfinished, and a restart with the normal budget completes it", async (t) => {
+  const fixture = makeDirs();
+  const sessions = join(fixture.stateDir, "sessions");
+  mkdirSync(sessions, { recursive: true });
+  const orphan = join(fixture.ws, ".doc.txt.realm-tmp-0123456789abcdef");
+  writeFileSync(orphan, "partial");
+  const hourAgo = new Date(Date.now() - 3_600_000);
+  utimesSync(orphan, hourAgo, hourAgo);
+  appendAudit(fixture.stateDir, { sessionId: "sess-old", tool: "write", outcome: "ok", phase: "admission", path: "doc.txt" });
+
+  const reports: StartupReport[] = [];
+  const onStartup = (report: StartupReport): void => {
+    reports.push(report);
+  };
+  // A fixed clock: the deadline equals the start time, so every budgeted step is already out of time. No real wait.
+  const { options } = daemonParts(fixture, { onStartup, startupMaintenanceBudgetMs: 0, monotonicNow: () => 5 });
+  const first = await startDaemon(options);
+  t.after(() => cleanupDaemon(first));
+
+  // The gate opened: a status request is answered.
+  const status = await sendRequest(first.socketPath, { id: "s1", method: "status" });
+  assert.equal(snapshotStateOf(status), "unbound");
+  assert.equal(hasNoticeKey(status), false, "unfinished maintenance does not change the notice");
+  assert.equal(existsSync(orphan), true, "the sweep had no time, so the orphan is kept");
+  assert.equal(reports.length, 1);
+  const unfinished = reports[0];
+  assert.ok(unfinished !== undefined);
+  assert.equal(unfinished.maintenanceComplete, false);
+  assert.equal(unfinished.truncated, true);
+  assert.equal(unfinished.auditLinesReconciled, 0);
+  assert.deepEqual(unfinished.unfinishedAuditFiles, ["sess-old.jsonl"]);
+  assert.ok(unfinished.unfinishedSweepRoots.includes(fixture.ws), "the workspace root is reported as unfinished");
+  await sendRequest(first.socketPath, { id: "d1", method: "down" });
+  await awaitDone(first);
+
+  // The next start has the normal budget and finishes the work.
+  const second = await startDaemon({ ...options, startupMaintenanceBudgetMs: 60_000, monotonicNow: () => 5 });
+  t.after(() => cleanupDaemon(second));
+  assert.equal(existsSync(orphan), false);
+  assert.equal(reports.length, 2);
+  const finished = reports[1];
+  assert.ok(finished !== undefined, "the second start reported");
+  assert.equal(finished.maintenanceComplete, true);
+  assert.equal(finished.tempFilesRemoved, 1);
+  assert.equal(finished.auditLinesReconciled, 1);
+  assert.deepEqual(finished.unfinishedAuditFiles, []);
+  assert.deepEqual(finished.unfinishedSweepRoots, []);
+  await sendRequest(second.socketPath, { id: "d2", method: "down" });
   await awaitDone(second);
 });
 
