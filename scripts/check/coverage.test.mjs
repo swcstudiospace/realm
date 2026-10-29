@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -7,9 +8,7 @@ import {
   aggregateLcov,
   compareToFloors,
   classifyFiles,
-  suiteEnvironment,
   SUITE_FLAGS,
-  withoutSourceMaps,
   isTypeOnlyModule,
   percent,
   raiseFloors,
@@ -618,20 +617,18 @@ test("the committed floors file is valid and every floor is a number", () => {
   assert.deepEqual(Object.keys(committed.floors), DIRECTORIES);
 });
 
-test("the suite flags switch source maps off and the child environment cannot switch them back on", () => {
+test("the coverage child runs without source maps even when NODE_OPTIONS enables them", () => {
+  // Node reports coverage of a source-mapped run against src/**/*.ts, which the dist/src/** include filter drops, so the table
+  // would read 100 percent while loaded modules look unloaded. The suite flags switch source maps off on the command line; a
+  // command-line option overrides NODE_OPTIONS, which this test shows on the running Node instead of assuming it.
   assert.ok(SUITE_FLAGS.includes("--no-enable-source-maps"));
   assert.ok(SUITE_FLAGS.indexOf("--no-enable-source-maps") > SUITE_FLAGS.indexOf("--experimental-test-coverage"));
-  assert.equal(withoutSourceMaps("--enable-source-maps --max-old-space-size=4096"), "--max-old-space-size=4096");
-  assert.equal(withoutSourceMaps("--max-old-space-size=4096  --enable-source-maps"), "--max-old-space-size=4096");
-  assert.equal(withoutSourceMaps("--max-old-space-size=4096"), "--max-old-space-size=4096");
-  assert.equal(withoutSourceMaps("--enable-source-maps"), undefined);
-  assert.equal(withoutSourceMaps(undefined), undefined);
-  assert.deepEqual(suiteEnvironment({ PATH: "/bin", NODE_OPTIONS: "--enable-source-maps --trace-warnings" }), {
-    PATH: "/bin",
-    NODE_OPTIONS: "--trace-warnings",
+  const probe = spawnSync(process.execPath, ["--no-enable-source-maps", "-e", "process.stdout.write(String(process.sourceMapsEnabled))"], {
+    encoding: "utf8",
+    env: { ...process.env, NODE_OPTIONS: "--enable-source-maps" },
   });
-  assert.deepEqual(suiteEnvironment({ PATH: "/bin", NODE_OPTIONS: "--enable-source-maps" }), { PATH: "/bin" });
-  assert.deepEqual(suiteEnvironment({ PATH: "/bin" }), { PATH: "/bin" });
+  assert.equal(probe.status, 0, probe.stderr);
+  assert.equal(probe.stdout, "false");
 });
 
 test("runCheck reports stale compiled files, unbuilt sources and builds the file lists from the sources", async () => {

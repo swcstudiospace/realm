@@ -335,24 +335,6 @@ function parseArgs(argv) {
   return options;
 }
 
-// NODE_OPTIONS without the --enable-source-maps token (the rest is kept). With source maps on, Node reports coverage against
-// src/**/*.ts, which the dist/src/** include filter drops, so the table would read 100% and loaded modules look unloaded.
-// Returns undefined when nothing is left, so the caller can drop the variable.
-export function withoutSourceMaps(nodeOptions) {
-  if (nodeOptions === undefined) {
-    return undefined;
-  }
-  const kept = nodeOptions.split(/\s+/).filter((token) => token !== "" && token !== "--enable-source-maps");
-  return kept.length === 0 ? undefined : kept.join(" ");
-}
-
-// A copy of the environment whose NODE_OPTIONS cannot turn source maps on in the coverage child.
-export function suiteEnvironment(env) {
-  const { NODE_OPTIONS: nodeOptions, ...rest } = env;
-  const filtered = withoutSourceMaps(nodeOptions);
-  return filtered === undefined ? rest : { ...rest, NODE_OPTIONS: filtered };
-}
-
 // Runs the compiled suite under coverage in the root and returns its exit code. The spec output goes to the terminal; the lcov
 // report lands in <root>/coverage/lcov.info.
 function defaultRunSuite(root) {
@@ -361,7 +343,8 @@ function defaultRunSuite(root) {
   rmSync(join(root, LCOV_RELATIVE), { force: true });
   const result = spawnSync(process.execPath, SUITE_FLAGS, {
     cwd: root,
-    env: suiteEnvironment(process.env),
+    // The suite flags carry --no-enable-source-maps; a command-line option overrides NODE_OPTIONS (checked on Node 22 and 24),
+    // so the environment is passed through untouched.
     stdio: "inherit",
   });
   if (result.error !== undefined) {
