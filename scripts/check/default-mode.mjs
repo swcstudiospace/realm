@@ -15,17 +15,20 @@ export const SCANNED_FILES = ["README.md", "AGENTS.md", "CONTRIBUTING.md", "SECU
 export const SCANNED_DIRECTORIES = ["docs"];
 export const EXCLUDED_DIRECTORIES = ["docs/specs"];
 
-// Clauses end at a sentence end, a semicolon, a comma, a colon, a parenthesis, a dash, or one of the words
-// and/but/while/whereas/so. A gap between two key words of a pattern never crosses one, so a pattern matches inside
-// one clause, and the gap is short.
+// Two jobs, two boundaries. The GAP inside a claim pattern may cross commas, parentheses, dashes and short qualifiers
+// ("The default mode, when unset, is advisory."), but it stops at a sentence end, a semicolon or a colon, at the
+// clause conjunctions and/but/while/whereas/so, and at the word fail-closed, so a claim never spans two statements
+// and "Advisory is allowed, fail-closed is the default." is not read as an advisory claim.
+// The exemption window (see isExempt) is bounded by the same sentence ends, semicolons, colons and conjunctions, but
+// not by plain commas, parentheses or dashes: "Advisory, previously the default, is gone" keeps "previously" in reach.
 const CLAUSE_BREAK_WORDS = "and|but|while|whereas|so";
-const GAP = `(?:(?!\\s(?:${CLAUSE_BREAK_WORDS})\\s)[^.!?;,:()\\u2014\\u2013]){0,80}?`;
-const CLAUSE_DELIMITER = new RegExp(`[,;:()\\u2014\\u2013]|\\s(?:${CLAUSE_BREAK_WORDS})\\s|[.!?](?=\\s|$)`, "gi");
+const GAP = `(?:(?!\\s(?:${CLAUSE_BREAK_WORDS})\\s|fail-closed)[^.!?;:]){0,80}?`;
+const CLAUSE_DELIMITER = new RegExp(`[;:]|\\s(?:${CLAUSE_BREAK_WORDS})\\s|[.!?](?=\\s|$)`, "gi");
 
 // Phrases that assert advisory is the default. Matched against paragraph text with whitespace collapsed and with
 // backticks, asterisks and double quotes removed, so `"advisory"` and **advisory** read as advisory.
 export const ASSERTION_PATTERNS = [
-  { name: "advisory ... is/stays/remains/as/by ... default", regex: new RegExp(`\\badvisory\\b${GAP}\\b(?:is|stays|remains|as|by)\\b${GAP}\\bdefault\\b`, "gi") },
+  { name: "advisory ... is/stays/remains/as/by ... default", regex: new RegExp(`\\badvisory\\b${GAP}\\b(?:is|stays|remains|as|by)\\b${GAP}\\bdefault\\b(?!(?:\\s+\\w+)?\\s+(?:is|stays|remains)\\s+fail-closed)`, "gi") },
   { name: "default ... is/stays/remains ... advisory", regex: new RegExp(`\\bdefault\\b${GAP}\\b(?:is|stays|remains)\\b${GAP}\\badvisory\\b`, "gi") },
   { name: "advisory (the default)", regex: new RegExp(`\\badvisory\\b[^.!?;,()]{0,40}\\((?:the |it is the )?default\\)`, "gi") },
   { name: "advisory, the default", regex: /\badvisory(?: mode)?,\s*(?:which is |that is )?(?:the |our )?default\b/gi },
@@ -37,15 +40,19 @@ export const ASSERTION_PATTERNS = [
 
 // True statements under the new default read like the false ones ("advisory is the opt-in, not the default",
 // "advisory is no longer the default", "the previous default advisory mode"). A match is dropped only when a word
-// that qualifies THE MATCHED CLAIM says so. The words that count are the claim's own text, up to six words before it
-// inside the same clause (BEFORE_EXEMPTION: a negation, a reference to the past, the explicit or opt-in nature of
-// advisory), and up to six words right after it inside the same clause (AFTER_EXEMPTION: "was", "until", "no
-// longer"). A word in another clause never exempts the claim, and naming fail-closed is no exemption either:
-// "Fail-closed is opt-in, and advisory is the default." is flagged because "opt-in" belongs to the first clause.
+// that qualifies THE MATCHED CLAIM says so: a negation joined to the claim's own verb or key word (NEGATED_CLAIM:
+// "is not advisory", "is no longer the default"), or a word in the six words before the claim (BEFORE_EXEMPTION: a
+// negation, a reference to the past, the explicit or opt-in nature of advisory) or after it (AFTER_EXEMPTION: "was",
+// "until", "no longer"), inside the same clause. A word in another clause never exempts the claim, and naming
+// fail-closed is no exemption either: "Fail-closed is opt-in, and advisory is the default." is flagged because
+// "opt-in" belongs to the first clause, and "The default policy mode, which most users never change, is advisory."
+// is flagged because "never" qualifies the relative clause, not the claim.
 // "Previously advisory", "explicit advisory", "advisory requires the explicit value" and "the old default was
 // advisory" never match a pattern at all, because none puts is/stays/remains/as/by or a default marker between
 // advisory and "default" in that order.
 const EXEMPTION_WORDS = 6;
+export const NEGATED_CLAIM =
+  /\b(?:is|are|stays|remains)\s+(?:not|never|no longer)\b|\b(?:not|never|no longer)\s+(?:\w+\s+){0,2}(?:default|advisory)\b|\bisn't\b/i;
 export const BEFORE_EXEMPTION =
   /\b(?:no longer|not|never|isn't|aren't|wasn't|was|were|used to|previously|previous|formerly|former|old|older|until|before|explicit|explicitly|opt-in|opt in|opts in|requires?|must set|unless|instead of|rather than|unlike)\b/i;
 export const AFTER_EXEMPTION = /\b(?:previously|before|until|was|were|used to be|no longer|not any more|anymore)\b/i;
@@ -109,7 +116,8 @@ function clauseAround(text, start, end) {
 export function isExempt(text, match) {
   const { before, after } = clauseAround(text, match.index, match.index + match[0].length);
   return (
-    BEFORE_EXEMPTION.test(`${lastWords(before, EXEMPTION_WORDS)} ${match[0]}`) ||
+    NEGATED_CLAIM.test(match[0]) ||
+    BEFORE_EXEMPTION.test(lastWords(before, EXEMPTION_WORDS)) ||
     AFTER_EXEMPTION.test(firstWords(after, EXEMPTION_WORDS))
   );
 }

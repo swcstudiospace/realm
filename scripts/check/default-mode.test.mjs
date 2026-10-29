@@ -235,6 +235,34 @@ test("words that qualify the claim itself exempt it", () => {
   }
 });
 
+test("a claim with a qualifier between the key words is still a claim", () => {
+  const claims = [
+    "The default mode, when unset, is advisory.",
+    "The default mode (when unset) is advisory.",
+    "By default (when no mode is set) the mode is advisory.",
+    "The default - when unset - is advisory.",
+    "The default policy mode, which most users never change, is advisory.",
+  ];
+  for (const text of claims) {
+    assert.equal(scanDocument("README.md", text).length, 1, text);
+  }
+});
+
+test("qualified statements that are true under the fail-closed default pass", () => {
+  const truths = [
+    "The default mode, when unset, is fail-closed; advisory is the explicit opt-in.",
+    "The default mode, when unset, was advisory before 0.3.5.",
+    "Advisory, previously the default, is now opt-in.",
+    "The default mode (when unset) is fail-closed.",
+    "Advisory is allowed, the default mode is fail-closed.",
+    "Advisory is the explicit opt-in, the default is fail-closed.",
+    "Advisory is allowed, fail-closed is the default.",
+  ];
+  for (const text of truths) {
+    assert.deepEqual(scanDocument("README.md", text), [], text);
+  }
+});
+
 test("a tree with no scanned files passes with zero files", () => {
   const result = check({ "CHANGELOG.md": "Advisory is the default.\n" });
   assert.deepEqual(result, { code: 0, output: "check:default-mode: 0 files scanned, no advisory-default claim\n" });
