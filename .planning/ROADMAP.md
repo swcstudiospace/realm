@@ -9,7 +9,7 @@ Coverage: 46/46 v1 requirements mapped, each to exactly one phase. v2.0 adds 8 r
 ## Milestones
 
 - 🗄 **v1.0 provisional** — Phases 1 to 7 (archived in `milestones/`)
-- 🚧 **v2.0 Host Adapters, Live Verification and Production Isolation** — Phases 8 to 11 (in progress; the ship is held by the owner)
+- 🗄 **v2.0 Host Adapters, Live Verification and Production Isolation** — Phases 8 to 11 (shipped as releases 0.2.0 and 0.2.1 on 2026-10-29; archived in `milestones/`)
 
 ## Phases
 
@@ -157,7 +157,8 @@ Plans:
 
 </details>
 
-### 🚧 v2.0 Host Adapters, Live Verification and Production Isolation (In Progress)
+<details>
+<summary>🗄 v2.0 Host Adapters, Live Verification and Production Isolation, phases 8 to 11: ARCHIVED (full record in milestones/v2.0-ROADMAP.md and milestones/v2.0-phases; audit in milestones/v2.0-MILESTONE-AUDIT.md)</summary>
 
 - [x] **Phase 8: Host Adapter Bundles** - Claude Code and Grok Build, Muse Code, Hermes Agent, Prime Agent, and Omp manifests, each checked by its host's own validator in an isolated directory (HOST-01, HOST-02)
 - [x] **Phase 9: Live Omp Verification** - A live Omp session attaches, reports a truthful disconnected status with its reason, retries, and leaves the daemon running on shutdown (OMP-LIVE-01 to OMP-LIVE-04, UI-01) — Complete (2026-10-28: OMP-LIVE-01 to -04 met live on the final build; UI-01 is a recorded limitation)
@@ -168,10 +169,15 @@ Plans:
 - [x] **Phase 9.5: Isolation Backend and Sandbox Protocol** - No workload before StartAgent; mediated egress and DNS (PRD-ISO-01 to PRD-ISO-06, PRD-SUP-01, PRD-GW-04) — Complete on the amended built-in path (owner, 2026-10-26); live checks for Landlock, egress, frames, and restart move to 9.6
 - [x] **Phase 9.6: Integration, Live Proof, and Cutover** - Gated live suite, realm up and down proof, docs, clean cutover (PRD-TST-01 to PRD-TST-03, PRD-OMP-01, PRD-DOC-01, PRD-CLEAN-01) — Complete (2026-10-28: six live scenarios 28 of 28 at d2db549; OMP-LIVE-01, -03, -04 verified live; PRD-DRV-01 amendment and the review findings await owner decisions)
 - [x] **Phase 9.7: Review-Finding Remediation** - A10 boundary and A18 supply-chain findings fixed or recorded, truthful status when the runner dies, live-gated requirements closed (REM-01 to REM-05) — Complete (2026-10-28: nine live scenarios 31 of 31 on the rebuilt image; three defects found by the live proof were fixed; the RT-04 wording was amended by the owner to match ruling N1; the other owner decisions are listed in 09.7-VERIFICATION.md)
-- [ ] **Phase 10: Docs, Packaging, and Release 0.2.0** - Host docs and snippets, MCP smoke check, pack assertions for each bundle, changelog, PR to main, and release 0.2.0 (HOST-03)
-- [ ] **Phase 11: Milestone v2.0 Close** - Milestone completion after a gsd-tools dry run, with scratch profiles and worktrees removed
+- [x] **Phase 10: Docs, Packaging, and Release 0.2.0** - Host docs and snippets, MCP smoke check, pack assertions for each bundle, changelog, PR to main, and release 0.2.0 (HOST-03), completed 2026-10-29
+- [x] **Phase 11: Milestone v2.0 Close** - Milestone completion after a gsd-tools dry run, with scratch profiles and worktrees removed — Complete (2026-10-29: the audit found and fixed five defects in the released build, release 0.2.1; the milestone was completed with eight requirements carried)
+
+</details>
 
 ## Phase Details
+
+<details>
+<summary>🗄 v2.0 Host Adapters, Live Verification and Production Isolation, phases 8 to 11: ARCHIVED (detail blocks kept here for reference; full record in milestones/v2.0-ROADMAP.md)</summary>
 
 ### Phase 8: Host Adapter Bundles
 
@@ -319,9 +325,9 @@ Plans:
 **Success Criteria** (what must be TRUE):
   1. No host configuration outside this repository is changed without explicit approval, and the adapter bundles ship in the npm package with the pack check asserting each manifest (HOST-03).
 
-The owner lifted the ship hold on 2026-10-28 for one pull request with autoMerge off: the PR is opened and reviewed, and the owner merges it by hand after reviewing the five reserved files. Release 0.2.0 is produced by the release job on main after that merge; this block does not authorize a merge or a release by anyone else.
+The owner lifted the ship hold on 2026-10-28 for one pull request with autoMerge off. On 2026-10-29 the owner superseded that: an automatic merge to main was authorised and the review of the five reserved files was delegated to the run (recorded in 10-04-PLAN.md). Pull request 6 was merged by the ship flow as merge commit 550a41f, and the release job on main produced v0.2.0 (release commit 84d937c).
 
-**Plans**: 4 plans. 10-01 (fix-now quality tier) and 10-02 (triage and milestone audit pass 1) are done; 10-03 (HOST-03 audit and ship paperwork) is done, see 10-03-PLAN.md and 10-03-SUMMARY.md; 10-04 (PR to main, review loop, merge, release 0.2.0) has no plan file: the PR and the review loop are run by the ship tool, the merge is the owner's, and the release is the release job's.
+**Plans**: 4 plans, all done. 10-01 (fix-now quality tier) and 10-02 (triage and milestone audit pass 1); 10-03 (HOST-03 audit and ship paperwork), see 10-03-PLAN.md and 10-03-SUMMARY.md; 10-04 (reserved-file review, PR to main, review loop, merge, release 0.2.0), see 10-04-PLAN.md, 10-04-RESERVED-FILES.md and 10-04-SUMMARY.md. The phase record is 10-VERIFICATION.md.
 
 ### Phase 11: Milestone v2.0 Close
 
@@ -332,7 +338,9 @@ The owner lifted the ship hold on 2026-10-28 for one pull request with autoMerge
   1. The gsd-tools milestone dry run completes before the milestone is completed.
   2. Scratch profiles and worktrees created for the milestone are removed.
 
-**Plans**: 1 plan (11-01-PLAN.md). Its reorganisation, roadmap analysis, dry run and cleanup inventory are done, see 11-01-SUMMARY.md; `milestone complete --confirm` is the owner's decision and was not run.
+**Plans**: 1 plan (11-01-PLAN.md). Its reorganisation, roadmap analysis, dry run and cleanup inventory were done on 2026-10-28 (11-01-SUMMARY.md). The milestone audit, the completion and the cleanup were done on 2026-10-29: see milestones/v2.0-MILESTONE-AUDIT.md and 11-VERIFICATION.md.
+
+</details>
 
 ## Progress
 
@@ -357,5 +365,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 9.5. Isolation Backend and Sandbox Protocol | 1/1 | Complete on the amended built-in path (2026-10-26): live T0 reached Ready with the runtime as PID 1 and the host supervisor connected; PD-15 host placement and PD-10 runtime policy decided; live checks moved to 9.6 | - |
 | 9.6. Integration, Live Proof, and Cutover | 1/1 | Complete (2026-10-28): six live scenarios 28 of 28 at d2db549 (crash recovery 3 of 3 more times); Omp checks verified live; gates green (1635 pass, 0 fail, 7 skipped); owner decisions listed in the verification file | - |
 | 9.7. Review-Finding Remediation | 1/1 | Complete (2026-10-28): the A10 and A18 findings fixed or recorded; four defects found by the live proof fixed (rlimit REST names, driver shutdown, doctor digest bound, verifier exit-2 classification); nine live scenarios 31 of 31 on the rebuilt image, twice (the second on the final installed build); gates at the closing code commit: 1828 tests, 1818 pass, 0 fail, 10 skipped, test:scripts 109 of 109. Pull request 6 (2026-10-29): Greptile 0, 4, then 5 of 5 over three rounds (six findings, all fixed; one was a regression from an earlier fix), CI green; on the PR head 2c401b5: 1843 tests, 1833 pass, 0 fail, 10 skipped, test:scripts 109 of 109, live suite 31 of 31 on that exact build. The RT-04 wording was amended by the owner to match ruling N1 and the other owner decisions are listed in 09.7-VERIFICATION.md | - |
-| 10. Docs, Packaging, and Release 0.2.0 | 3/4 | In progress (2026-10-29): plans 10-01 to 10-03 done, HOST-03 complete on the fresh audit; 10-04: on the owner's instruction of 2026-10-29 the reserved files were reviewed by four independent lanes plus a release rehearsal and upgraded (10-04-RESERVED-FILES.md), TOOL-05 was proven live, and pull request 6 goes to main through the ship flow with a merge commit once Greptile gives 5 of 5 on the new head; the release job then publishes 0.2.0 | - |
-| 11. Milestone v2.0 Close | 1/1 | Executed up to the owner's confirmation (2026-10-28): v1 phases collapsed with nothing lost, roadmap analysis lists the 11 milestone phases, `milestone complete v2.0 --dry-run` exits 0, cleanup inventory done; `--confirm` and `--force` were not used | - |
+| 10. Docs, Packaging, and Release 0.2.0 | 4/4 | Complete (2026-10-29): plans 10-01 to 10-03 done, HOST-03 complete; 10-04: the reserved files were reviewed by four independent lanes plus an adversarial review and a release rehearsal and upgraded (10-04-RESERVED-FILES.md), TOOL-05 was proven live, pull request 6 was merged through the ship flow with a merge commit (550a41f) after Greptile gave 5 of 5 on its final head, the release job published v0.2.0 (84d937c) with checksums and an SBOM, Pages deployed, and the released tarball passed the live suite on the production stack (31 of 31) | 2026-10-29 |
+| 11. Milestone v2.0 Close | 1/1 | Complete (2026-10-29): the milestone audit ran against the built and installed product and found five defects the records had marked complete (the MCP server could not be used from Claude Code, its tool results and an exec descriptor did not match the revision and the Anthropic API, both agent surfaces advertised 0.0.0, and the Omp attach probe), all fixed in pull request 7 and released as 0.2.1 (31 of 31 on the live suite); `milestone complete v2.0 --confirm` then archived the milestone with eight requirements carried (FS-02, ANDA-01 to 04, OMP-05, PRD-DRV-01 open; UI-01 an accepted limitation) | 2026-10-29 |

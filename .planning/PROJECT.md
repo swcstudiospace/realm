@@ -8,6 +8,22 @@ Realm is the agent sandbox component of the USSR Stack (Ultrathink, Substrate, S
 
 When an agent edits code, every file mutation either lands inside the realm under policy or fails closed, and the user can always see whether the realm is active or disconnected for the session. If everything else fails, this must hold: no silent unsandboxed mutation while the policy requires the realm.
 
+## Current State
+
+Shipped: **v2.0 Host Adapters, Live Verification and Production Isolation** (2026-10-29), as releases 0.2.0 and 0.2.1 (`CHANGELOG.md` and the GitHub releases). The 0.2.x line is the supported line (`SECURITY.md`). The record is in `.planning/milestones/`: `v2.0-ROADMAP.md`, `v2.0-REQUIREMENTS.md`, `v2.0-MILESTONE-AUDIT.md`, `v2.0-INTEGRATION-CHECK.md` and `v2.0-phases/`.
+
+What exists, and what was verified live on the production stack (the realm account: rootless Podman 5.7.1, the OpenShell 0.1.5 gateway, the Realm compute driver): `realm up`, `down`, `status`, `doctor`, `mcp` and `acp`; the Omp plugin; adapter bundles for Claude Code, Grok Build, Muse Code, Hermes Agent, Prime Agent and Omp. The MCP server serves both protocol eras, and Claude Code and Grok Build connect to it (connection checks, 2026-10-29). The nine-scenario production live suite passes 31 of 31 on the installed 0.2.1. Releases carry `SHA256SUMS` and a CycloneDX SBOM, and the documentation site deploys from the release job.
+
+Verified only as far as a connection: no model-driven tool call has run through any host.
+
+## Next Milestone Goals
+
+Start with `/gsd-new-milestone`. What was carried, not closed (reasons and owners: `milestones/v2.0-MILESTONE-AUDIT.md`, the disposition table and the tech-debt register):
+
+- Requirements: FS-02 (race-resistant path resolution is an accepted approximation), ANDA-01 to ANDA-04 (live-gated; the engine licence conflict, OQ-P3-11, blocks vendoring Anda code), OMP-05 (needs a model call; the procedure is written in `docs/integration/omp.md`), PRD-DRV-01 (its amendment awaits the owner) and UI-01 (an accepted limitation).
+- Owner decisions still open: the product-spec amendment for RT-04, the Podman probe classification, A10 F2 and F3 and the policy file integrity rule (R6), the supply-chain items (trust channel and install sources, holding the openshell package, build provenance through a release job split), repository settings and a Dependabot configuration, and the removal of the rollback and builder-cache images.
+- Tech debt TD-01 to TD-10 of the audit, notably a smoke mode that lets CI check the MCP protocol without a sandbox (TD-06) and `realm doctor` checks for the driver environment (TD-03).
+
 ## Requirements
 
 ### Validated
