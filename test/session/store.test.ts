@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SessionRecord } from "../../src/contract/validate.js";
 import { RealmError } from "../../src/core/errors.js";
+import { recordFileName } from "../../src/session/paths.js";
 import { SessionStore } from "../../src/session/store.js";
 import { spyOnFsync } from "../support/fsync-spy.js";
 
@@ -113,11 +114,17 @@ void test("delete removes the record, and deleting an absent session is a no-op 
 });
 
 void test("CRASH-03: delete of an existing record fsyncs the sessions directory after the unlink", (t) => {
-  const { store, stateDir } = fixture(t);
+  const { store, stateDir, sessionsDir } = fixture(t);
   store.save(recordFor(stateDir, "session-1"));
-  const spy = spyOnFsync(t);
+  const recordPath = join(sessionsDir, recordFileName("session-1"));
+  assert.equal(existsSync(recordPath), true);
+  const absentAtFsync: boolean[] = [];
+  const spy = spyOnFsync(t, undefined, () => {
+    absentAtFsync.push(!existsSync(recordPath));
+  });
   store.delete("session-1");
   assert.equal(store.load("session-1"), null);
+  assert.deepEqual(absentAtFsync, [true]);
   assert.deepEqual(spy.calls, [true]);
 });
 
