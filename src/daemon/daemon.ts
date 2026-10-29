@@ -132,6 +132,9 @@ export interface StartupReport {
   readonly unfinishedSweepRoots: readonly string[];
   // The audit logs the budget left unfinished, as base names without a directory. A later start finishes them.
   readonly unfinishedAuditFiles: readonly string[];
+  // True when the audit directory held more logs than one start considers, or the deadline ended its listing, so logs that
+  // were not considered cannot be named in `unfinishedAuditFiles`.
+  readonly auditListingTruncated: boolean;
   // True when no sweep root and no audit log is unfinished. It says nothing about the notice, which is about the reap only.
   readonly maintenanceComplete: boolean;
   // Present only when the reap itself failed: the catalogue code it failed with. The report is then partial: it holds what the
@@ -686,6 +689,7 @@ async function runStartupMaintenance(deps: StartupMaintenanceDeps): Promise<void
       truncated: false,
       unfinishedSweepRoots: [],
       unfinishedAuditFiles: [],
+      auditListingTruncated: false,
       maintenanceComplete: false,
       reapFailure: codeOf(error),
       failures: 1,
@@ -730,14 +734,19 @@ async function runStartupMaintenance(deps: StartupMaintenanceDeps): Promise<void
   }
   let auditLinesReconciled = 0;
   let unfinishedAuditFiles: readonly string[] = [];
+  let auditListingTruncated = false;
+  let auditComplete: boolean;
   try {
     const reconciled = reconcileAuditLogs(deps.stateDir, { now: deps.monotonicNow, deadline });
     auditLinesReconciled = reconciled.appended;
     unfinishedAuditFiles = reconciled.unfinished;
+    auditListingTruncated = reconciled.listingTruncated;
+    auditComplete = reconciled.complete;
     failures += reconciled.failed;
   } catch {
     // A failure of the reconciliation itself is counted in the report; the lines it appended before it stopped are not.
     failures += 1;
+    auditComplete = false;
   }
   deps.onReport({
     containerIds,
@@ -748,12 +757,14 @@ async function runStartupMaintenance(deps: StartupMaintenanceDeps): Promise<void
     truncated,
     unfinishedSweepRoots,
     unfinishedAuditFiles,
-    maintenanceComplete: unfinishedSweepRoots.length === 0 && unfinishedAuditFiles.length === 0,
+    auditListingTruncated,
+    maintenanceComplete: unfinishedSweepRoots.length === 0 && auditComplete,
     failures,
   });
 }
 
-// The roots the orphan sweep walks: the policy's workspace roots, the sessions directory and the runtime directory (D-1401).
+// The roots the orphan sweep walks (D-1401): the policy's workspace roots, the sessions directory, the runtime directory and
+// the audit directory (where a kill during the atomic write of the reconciliation's progress record leaves a temp file).
 // A root that lies inside an earlier one is dropped only when that earlier root's walk reaches it, that is when both are on
 // the same device: the walk never crosses into another device, so a root on its own mount (for example /projects/ssd under
 // /projects) is kept. When either device cannot be read the root is kept too, because walking a directory twice costs time
@@ -764,7 +775,7 @@ export function sweepRootsOf(
   stateDir: string,
   deviceOf: (path: string) => number = (path) => statSync(path).dev,
 ): readonly string[] {
-  const candidates = [...workspaceRoots, sessionsDirOf(stateDir), join(stateDir, "runtime")];
+  const candidates = [...workspaceRoots, sessionsDirOf(stateDir), join(stateDir, "runtime"), join(stateDir, "audit")];
   const bound: PinnedRoot[] = [];
   const roots: string[] = [];
   for (const candidate of candidates) {

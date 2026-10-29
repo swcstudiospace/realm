@@ -24,7 +24,7 @@
 // This module reads no process state: the audit directory comes from the caller.
 
 import { Buffer } from "node:buffer";
-import { closeSync, constants, fstatSync, lstatSync, openSync, readdirSync, readFileSync, readSync, realpathSync } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, openSync, opendirSync, readSync, realpathSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { atomicWriteFile, observeSha256 } from "../fs/atomic-write.js";
@@ -46,6 +46,14 @@ export interface ReconcileOptions {
   readonly now?: () => number;
   // An absolute time on the `now` clock after which no further file or line of work starts. Absent: no limit.
   readonly deadline?: number;
+  // Limits, each defaulting to its exported constant. A test passes small ones.
+  readonly maxFiles?: number;
+  readonly maxProgressBytes?: number;
+  readonly maxProgressEntries?: number;
+  readonly maxLineBytes?: number;
+  // Writes the progress record: `content` to `target`, replacing it atomically. Defaults to the atomic writer. A test counts
+  // calls through it.
+  readonly writeRecord?: (target: string, content: string) => void;
 }
 
 export interface ReconcileResult {
@@ -60,10 +68,13 @@ export interface ReconcileResult {
   // Base names (no directory) of the logs the deadline left unfinished, including every log not reached. A later run
   // without the deadline finishes them.
   readonly unfinished: readonly string[];
-  // True when no log is unfinished.
+  // True when no log is unfinished and the listing was complete.
   readonly complete: boolean;
   // How many of `files` were skipped without being read because the progress record matched their size and mtime.
   readonly skippedUnchanged: number;
+  // True when the listing stopped at a limit (RECONCILE_MAX_FILES or RECONCILE_MAX_LISTED_ENTRIES) or at the deadline, so
+  // logs may exist that were not considered. They cannot be named, so they are not in `unfinished`.
+  readonly listingTruncated: boolean;
 }
 
 export interface PairingEntry {
@@ -140,15 +151,28 @@ function parseLine(bytes: Uint8Array): { readonly phase: string; readonly pendin
 export const SCAN_CHUNK_BYTES = 1024 * 1024;
 export const SCAN_CHECK_LINES = 5000;
 
+// A line longer than this is not held in memory: it is skipped, and the lines after it are still counted. No audit line is
+// near this size (an exec argv is bounded by the OS argument limit), so a longer one is not a line the realm wrote.
+export const RECONCILE_MAX_LINE_BYTES = 16 * 1024 * 1024;
+
+// A log with more distinct (tool, path, exec) keys than this is refused like an over-sized one: the counts are held in memory.
+export const RECONCILE_MAX_KEYS = 200_000;
+
 type ScanOutcome =
   | { readonly kind: "over-cap" }
   | { readonly kind: "expired" }
-  | { readonly kind: "done"; readonly counts: Map<string, Pending> };
+  | {
+      readonly kind: "done";
+      readonly counts: Map<string, Pending>;
+      // The size and mtime of the log read from the same descriptor after the last byte was read.
+      readonly end: { readonly size: number; readonly mtimeMs: number };
+    };
 
 // Scans one log incrementally through a descriptor, so the size check and the reads see the same file. The file is read in
-// SCAN_CHUNK_BYTES steps and never held whole (a line split across two steps is joined). A file over maxBytes is "over-cap".
-// When `expired()` turns true the scan stops with "expired" and returns no counts: a partial scan never yields a count.
-function scanFile(file: string, maxBytes: number, expired: () => boolean): ScanOutcome {
+// SCAN_CHUNK_BYTES steps and never held whole (a line split across two steps is joined, up to maxLineBytes). A file over
+// maxBytes, or with more than RECONCILE_MAX_KEYS keys, is "over-cap". When `expired()` turns true the scan stops with
+// "expired" and returns no counts: a partial scan never yields a count.
+function scanFile(file: string, maxBytes: number, maxLineBytes: number, expired: () => boolean): ScanOutcome {
   const fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     const stat = fstatSync(fd);
@@ -159,6 +183,9 @@ function scanFile(file: string, maxBytes: number, expired: () => boolean): ScanO
       return { kind: "over-cap" };
     }
     const counts = new Map<string, Pending>();
+    let tooManyKeys = false;
+    // Read through a function: `tally` assigns the flag in a closure, which the compiler's flow analysis does not see.
+    const keysExceeded = (): boolean => tooManyKeys;
     const tally = (raw: Uint8Array): void => {
       const parsed = parseLine(raw);
       if (parsed === undefined) {
@@ -170,8 +197,15 @@ function scanFile(file: string, maxBytes: number, expired: () => boolean): ScanO
         return;
       }
       const key = pairingKey(pending);
-      const slot = counts.get(key) ?? pending;
-      counts.set(key, slot);
+      let slot = counts.get(key);
+      if (slot === undefined) {
+        if (counts.size >= RECONCILE_MAX_KEYS) {
+          tooManyKeys = true;
+          return;
+        }
+        slot = pending;
+        counts.set(key, slot);
+      }
       if (isAdmission) {
         slot.admissions += 1;
       } else {
@@ -179,8 +213,11 @@ function scanFile(file: string, maxBytes: number, expired: () => boolean): ScanO
       }
     };
     const chunk = Buffer.allocUnsafe(SCAN_CHUNK_BYTES);
-    // The start of a line that began in an earlier step, held until its newline arrives.
+    // The start of a line that began in an earlier step, held until its newline arrives, and its length so far.
     let carry: Buffer[] = [];
+    let carryBytes = 0;
+    // True while the rest of an over-long line is being skipped.
+    let skipping = false;
     let total = 0;
     let lines = 0;
     for (;;) {
@@ -201,23 +238,42 @@ function scanFile(file: string, maxBytes: number, expired: () => boolean): ScanO
           continue;
         }
         const head = chunk.subarray(start, i);
-        tally(carry.length === 0 ? head : Buffer.concat([...carry, head]));
+        if (!skipping && carryBytes + head.length <= maxLineBytes) {
+          tally(carry.length === 0 ? head : Buffer.concat([...carry, head]));
+        }
         carry = [];
+        carryBytes = 0;
+        skipping = false;
         start = i + 1;
         lines += 1;
+        if (keysExceeded()) {
+          return { kind: "over-cap" };
+        }
         if (lines % SCAN_CHECK_LINES === 0 && expired()) {
           return { kind: "expired" };
         }
       }
-      if (start < read) {
-        // The step buffer is reused, so the unfinished line is copied out.
-        carry.push(Buffer.from(chunk.subarray(start, read)));
+      if (start < read && !skipping) {
+        carryBytes += read - start;
+        if (carryBytes > maxLineBytes) {
+          // Over-long: drop what is held and skip to the next newline.
+          carry = [];
+          carryBytes = 0;
+          skipping = true;
+        } else {
+          // The step buffer is reused, so the unfinished line is copied out.
+          carry.push(Buffer.from(chunk.subarray(start, read)));
+        }
       }
     }
-    if (carry.length > 0) {
+    if (carry.length > 0 && !skipping) {
       tally(Buffer.concat(carry));
     }
-    return { kind: "done", counts };
+    if (keysExceeded()) {
+      return { kind: "over-cap" };
+    }
+    const end = fstatSync(fd);
+    return { kind: "done", counts, end: { size: end.size, mtimeMs: end.mtimeMs } };
   } finally {
     closeSync(fd);
   }
@@ -258,35 +314,98 @@ function reconcileFile(
 // size and mtime equal its record was fully checked after its last change, so it is skipped without being read. Deleting
 // the record, or a corrupt one, only costs one rescan. It is a dot file next to the logs and never ends in .jsonl, so it
 // is not mistaken for a log, and its name is not a temp name, so the orphan sweep never touches it.
+//
+// The map lives in memory for the run and is written ONCE, when the run ends (complete, out of time, or after an error),
+// and only if it changed. A kill in the middle of a run loses only that run's progress. The writer and the reader share one
+// set of limits (MAX_PROGRESS_BYTES, MAX_PROGRESS_ENTRIES), so a record the writer produced is always one the reader accepts.
 export const RECONCILE_PROGRESS_FILE = ".reconciled.json";
-const PROGRESS_MAX_BYTES = 4 * 1024 * 1024;
+export const MAX_PROGRESS_BYTES = 4 * 1024 * 1024;
+export const MAX_PROGRESS_ENTRIES = 20_000;
+
+// At most this many logs are considered per start; a further log makes the listing "truncated" and the result incomplete.
+// The directory is read entry by entry, so even its listing is bounded. Entries that are not logs count against
+// RECONCILE_MAX_LISTED_ENTRIES, so a directory of junk cannot make the listing unbounded either.
+export const RECONCILE_MAX_FILES = 10_000;
+export const RECONCILE_MAX_LISTED_ENTRIES = 100_000;
+const LIST_CHECK_EVERY = 256;
+
+// A log file name, the shape of a record key. The stem is a safe session id.
+const LOG_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}\.jsonl$/;
 
 interface Checked {
   readonly size: number;
   readonly mtimeMs: number;
 }
 
-// The record, or an empty map when it is absent, unreadable, corrupt or of the wrong shape: it is never an error, because
-// the cost of an empty record is one rescan. An entry of the wrong shape is dropped on its own.
-function readProgress(dir: string): Map<string, Checked> {
-  const checked = new Map<string, Checked>();
+interface Progress {
+  readonly checked: Map<string, Checked>;
+  // False when the record exists but could not be used whole (unreadable, corrupt, wrong shape, over a limit, not a regular
+  // file): the run then rewrites it, which heals it.
+  readonly clean: boolean;
+}
+
+function isMissing(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
+}
+
+// Reads up to `limit` bytes from the start of a descriptor. Returns undefined when the file is longer than the limit.
+function readUpTo(fd: number, limit: number): Buffer | undefined {
+  const buffer = Buffer.allocUnsafe(limit + 1);
+  let total = 0;
+  while (total <= limit) {
+    const read = readSync(fd, buffer, total, limit + 1 - total, null);
+    if (read === 0) {
+      break;
+    }
+    total += read;
+  }
+  return total > limit ? undefined : buffer.subarray(0, total);
+}
+
+// The record, or an empty map when it is absent, unreadable, corrupt, over a limit or of the wrong shape: it is never an
+// error, because the cost of an empty record is one rescan. The file is opened without following a link and read through the
+// descriptor, at most maxBytes, so a symlink, a device, a huge file or a file that grows while it is read cannot hurt.
+function readProgress(dir: string, maxBytes: number, maxEntries: number): Progress {
+  const empty = (clean: boolean): Progress => ({ checked: new Map<string, Checked>(), clean });
+  let text: string;
+  try {
+    const fd = openSync(join(dir, RECONCILE_PROGRESS_FILE), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    try {
+      if (!fstatSync(fd).isFile()) {
+        return empty(false);
+      }
+      const bytes = readUpTo(fd, maxBytes);
+      if (bytes === undefined) {
+        return empty(false);
+      }
+      text = bytes.toString("utf8");
+    } finally {
+      closeSync(fd);
+    }
+  } catch (error: unknown) {
+    // An absent record is a clean empty one. Any other failure to read it (a link, no permission) is an empty one that the
+    // run rewrites: the logs are rescanned and the record is replaced.
+    return empty(isMissing(error));
+  }
   let parsed: unknown;
   try {
-    const file = join(dir, RECONCILE_PROGRESS_FILE);
-    const stat = lstatSync(file);
-    if (!stat.isFile() || stat.size > PROGRESS_MAX_BYTES) {
-      return checked;
-    }
-    parsed = JSON.parse(readFileSync(file, "utf8"));
+    parsed = JSON.parse(text);
   } catch {
-    // An absent or unreadable record is an empty one, by design: the logs are rescanned and the record is rewritten.
-    return checked;
+    // Corrupt content is an empty record, by design.
+    return empty(false);
   }
   if (!isRecord(parsed)) {
-    return checked;
+    return empty(false);
   }
-  for (const [name, value] of Object.entries(parsed)) {
+  const entries = Object.entries(parsed);
+  if (entries.length > maxEntries) {
+    return empty(false);
+  }
+  const checked = new Map<string, Checked>();
+  let clean = true;
+  for (const [name, value] of entries) {
     if (
+      LOG_NAME.test(name) &&
       isRecord(value) &&
       typeof value["size"] === "number" &&
       Number.isFinite(value["size"]) &&
@@ -294,133 +413,271 @@ function readProgress(dir: string): Map<string, Checked> {
       Number.isFinite(value["mtimeMs"])
     ) {
       checked.set(name, { size: value["size"], mtimeMs: value["mtimeMs"] });
+    } else {
+      clean = false;
     }
   }
-  return checked;
+  return { checked, clean };
 }
 
-// Writes the record atomically, keeping only logs that still exist. Returns false when the write failed: a lost record is
-// one rescan, so the caller counts it and goes on.
-function writeProgress(dir: string, checked: ReadonlyMap<string, Checked>, present: ReadonlySet<string>): boolean {
-  const body: Record<string, Checked> = {};
-  for (const [name, entry] of checked) {
-    if (present.has(name)) {
-      body[name] = entry;
+// The text of the record: the entries for logs that still exist (when the listing was complete; `present` is undefined
+// otherwise), newest modified first, cut to at most maxEntries entries and maxBytes bytes. The oldest are dropped first.
+// `count` is the number of entries written.
+function recordBody(
+  checked: ReadonlyMap<string, Checked>,
+  present: ReadonlySet<string> | undefined,
+  maxEntries: number,
+  maxBytes: number,
+): { readonly text: string; readonly count: number } {
+  const kept = [...checked].filter(([name]) => present === undefined || present.has(name));
+  kept.sort((a, b) => {
+    const byTime = b[1].mtimeMs - a[1].mtimeMs;
+    if (byTime !== 0) {
+      return byTime;
     }
+    return a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0;
+  });
+  const parts: string[] = [];
+  let bytes = 2;
+  for (const [name, entry] of kept) {
+    if (parts.length >= maxEntries) {
+      break;
+    }
+    const part = `${JSON.stringify(name)}:${JSON.stringify({ size: entry.size, mtimeMs: entry.mtimeMs })}`;
+    const added = Buffer.byteLength(part, "utf8") + (parts.length > 0 ? 1 : 0);
+    if (bytes + added > maxBytes) {
+      break;
+    }
+    parts.push(part);
+    bytes += added;
   }
+  return { text: `{${parts.join(",")}}`, count: parts.length };
+}
+
+// The default writer of the record. A record that is not a regular file, or is larger than the limit, is removed first (a
+// link is removed, never followed), so the atomic writer never has to hash an oversized or foreign file whole. A directory
+// cannot be removed this way and makes the write fail, which the caller counts.
+function writeRecordAtomically(maxBytes: number): (target: string, content: string) => void {
+  return (target, content) => {
+    let prior: string | null = null;
+    try {
+      const existing = lstatSync(target);
+      if (existing.isFile() && existing.size <= maxBytes) {
+        prior = observeSha256(target);
+      } else {
+        rmSync(target);
+      }
+    } catch (error: unknown) {
+      if (!isMissing(error)) {
+        throw error;
+      }
+    }
+    atomicWriteFile(target, content, { expectedPriorSha256: prior });
+  };
+}
+
+// Writes the record. Returns false when the write failed: a lost record is one rescan, so the caller counts it and goes on.
+function persistProgress(dir: string, content: string, write: (target: string, content: string) => void): boolean {
   try {
-    const target = join(realpathSync(dir), RECONCILE_PROGRESS_FILE);
-    atomicWriteFile(target, JSON.stringify(body), { expectedPriorSha256: observeSha256(target) });
+    write(join(realpathSync(dir), RECONCILE_PROGRESS_FILE), content);
     return true;
   } catch {
     return false;
   }
 }
 
-// The logs in the order they are reconciled: newest modified first (the sessions that were running at a crash are the ones
-// with unmatched admissions), ties by name. A log that cannot be examined sorts last and is counted when its turn comes.
-function newestFirst(dir: string, names: readonly string[]): string[] {
-  const mtimes = new Map<string, number>();
-  for (const name of names) {
+interface Listing {
+  readonly names: readonly string[];
+  // True when the listing stopped at a limit or at the deadline, so logs may exist that were not listed.
+  readonly truncated: boolean;
+}
+
+// The names of the logs (`*.jsonl`) of a directory, read entry by entry. Everything else in the directory (the record, its
+// temp files, other files) is ignored here. The deadline is checked every LIST_CHECK_EVERY entries.
+function listLogs(dir: string, maxFiles: number, expired: () => boolean): Listing {
+  const names: string[] = [];
+  const handle = opendirSync(dir);
+  try {
+    let entries = 0;
+    for (;;) {
+      if (entries > 0 && entries % LIST_CHECK_EVERY === 0 && expired()) {
+        return { names, truncated: true };
+      }
+      const entry = handle.readSync();
+      if (entry === null) {
+        return { names, truncated: false };
+      }
+      entries += 1;
+      if (entries > RECONCILE_MAX_LISTED_ENTRIES) {
+        return { names, truncated: true };
+      }
+      if (!entry.name.endsWith(JSONL_SUFFIX)) {
+        continue;
+      }
+      if (names.length >= maxFiles) {
+        return { names, truncated: true };
+      }
+      names.push(entry.name);
+    }
+  } finally {
+    handle.closeSync();
+  }
+}
+
+// Orders the logs newest modified first (the sessions that were running at a crash are the ones with unmatched admissions),
+// ties by name. The deadline is checked before each stat: logs not stat'ed before it expired are returned in `unreached`,
+// in listing order. A log that cannot be examined sorts last and is counted when its turn comes.
+function newestFirst(
+  dir: string,
+  names: readonly string[],
+  expired: () => boolean,
+): { readonly ordered: string[]; readonly unreached: string[] } {
+  const stated: { readonly name: string; readonly mtimeMs: number }[] = [];
+  const unreached: string[] = [];
+  for (const [index, name] of names.entries()) {
+    if (expired()) {
+      unreached.push(...names.slice(index));
+      break;
+    }
+    let mtimeMs = Number.NEGATIVE_INFINITY;
     try {
-      mtimes.set(name, lstatSync(join(dir, name)).mtimeMs);
+      mtimeMs = lstatSync(join(dir, name)).mtimeMs;
     } catch {
       // Counted when the loop reaches this log and its own lstat fails again.
-      mtimes.set(name, Number.NEGATIVE_INFINITY);
     }
+    stated.push({ name, mtimeMs });
   }
-  return [...names].sort((a, b) => {
-    const byTime = (mtimes.get(b) ?? Number.NEGATIVE_INFINITY) - (mtimes.get(a) ?? Number.NEGATIVE_INFINITY);
+  stated.sort((a, b) => {
+    const byTime = b.mtimeMs - a.mtimeMs;
     if (byTime !== 0 && !Number.isNaN(byTime)) {
       return byTime;
     }
-    return a < b ? -1 : a > b ? 1 : 0;
+    return a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
   });
+  return { ordered: stated.map((entry) => entry.name), unreached };
+}
+
+function emptyResult(failed: number): ReconcileResult {
+  return { files: 0, appended: 0, failed, unfinished: [], complete: true, skippedUnchanged: 0, listingTruncated: false };
 }
 
 // Reconciles every `<stateDir>/audit/*.jsonl`, newest modified first. A missing audit directory is zero work. A failure on one
 // file is counted in `failed` and does not stop the others. With a deadline, a file whose scan or appends do not finish in time
 // is listed in `unfinished` together with every file not reached, and `complete` is false. A log that was completely checked
 // in an earlier run and has not changed since (same size and mtime, per the progress record) is not read again.
+//
+// Single-owner guarantee (why no append can race with the scan): the daemon runs this inside runStartupMaintenance, before
+// its gate opens. Its control socket is bound first, so a second daemon on the same state directory fails with LOCK_CONFLICT
+// before it reaches its own maintenance, and every connection waits on the gate, so no tool call reaches the dispatcher and no
+// audit line is appended by this process while the scan runs.
 export function reconcileAuditLogs(stateDir: string, options: ReconcileOptions = {}): ReconcileResult {
   const maxBytes = options.maxFileBytes ?? RECONCILE_MAX_FILE_BYTES;
+  const maxFiles = options.maxFiles ?? RECONCILE_MAX_FILES;
+  const maxProgressBytes = options.maxProgressBytes ?? MAX_PROGRESS_BYTES;
+  const maxProgressEntries = options.maxProgressEntries ?? MAX_PROGRESS_ENTRIES;
+  const maxLineBytes = options.maxLineBytes ?? RECONCILE_MAX_LINE_BYTES;
+  const writeRecord = options.writeRecord ?? writeRecordAtomically(maxProgressBytes);
   const now = options.now ?? (() => performance.now());
   const { deadline } = options;
   const expired = (): boolean => deadline !== undefined && now() >= deadline;
   const dir = join(stateDir, "audit");
-  let names: string[];
+  let listing: Listing;
   try {
     const dirStat = lstatSync(dir);
     if (!dirStat.isDirectory() || dirStat.isSymbolicLink()) {
-      return { files: 0, appended: 0, failed: 1, unfinished: [], complete: true, skippedUnchanged: 0 };
+      return emptyResult(1);
     }
-    names = readdirSync(dir).filter((name) => name.endsWith(JSONL_SUFFIX));
+    listing = listLogs(dir, maxFiles, expired);
   } catch (error: unknown) {
-    if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") {
-      return { files: 0, appended: 0, failed: 0, unfinished: [], complete: true, skippedUnchanged: 0 };
-    }
-    return { files: 0, appended: 0, failed: 1, unfinished: [], complete: true, skippedUnchanged: 0 };
+    return emptyResult(isMissing(error) ? 0 : 1);
   }
-  const ordered = newestFirst(dir, names);
-  const present = new Set(ordered);
-  const checked = readProgress(dir);
+  const { ordered, unreached } = newestFirst(dir, listing.names, expired);
+  // Entries of logs that are gone are dropped from the record, which needs a complete listing to know.
+  const present = listing.truncated ? undefined : new Set(listing.names);
+  const progress = readProgress(dir, maxProgressBytes, maxProgressEntries);
+  const checked = progress.checked;
+  let dirty = !progress.clean;
 
   let files = 0;
   let appended = 0;
   let failed = 0;
   let skippedUnchanged = 0;
-  let recordWritable = true;
   const unfinished: string[] = [];
-  for (const [index, name] of ordered.entries()) {
-    if (expired()) {
-      unfinished.push(...ordered.slice(index));
-      break;
-    }
-    const sessionId = name.slice(0, -JSONL_SUFFIX.length);
-    const file = join(dir, name);
-    try {
-      const stat = lstatSync(file);
-      if (!stat.isFile() || stat.isSymbolicLink() || !SAFE_SESSION_ID.test(sessionId)) {
-        failed += 1;
-        continue;
+  // Index of the log being handled, so an error that escapes the per-log guard still reports the rest as unfinished.
+  let reached = 0;
+  try {
+    for (const [index, name] of ordered.entries()) {
+      reached = index;
+      if (expired()) {
+        unfinished.push(...ordered.slice(index));
+        break;
       }
-      const prior = checked.get(name);
-      if (prior !== undefined && prior.size === stat.size && prior.mtimeMs === stat.mtimeMs) {
+      const sessionId = name.slice(0, -JSONL_SUFFIX.length);
+      const file = join(dir, name);
+      try {
+        const stat = lstatSync(file);
+        if (!stat.isFile() || stat.isSymbolicLink() || !SAFE_SESSION_ID.test(sessionId)) {
+          failed += 1;
+          continue;
+        }
+        const prior = checked.get(name);
+        if (prior !== undefined && prior.size === stat.size && prior.mtimeMs === stat.mtimeMs) {
+          files += 1;
+          skippedUnchanged += 1;
+          continue;
+        }
+        const scanned = scanFile(file, maxBytes, maxLineBytes, expired);
+        if (scanned.kind === "over-cap") {
+          failed += 1;
+          continue;
+        }
+        if (scanned.kind === "expired") {
+          // Nothing is appended for a file whose scan did not finish: a partial count could label a call unknown that has
+          // its result line further on. Nothing is recorded for it either.
+          unfinished.push(...ordered.slice(index));
+          break;
+        }
         files += 1;
-        skippedUnchanged += 1;
-        continue;
-      }
-      const scanned = scanFile(file, maxBytes, expired);
-      if (scanned.kind === "over-cap") {
-        failed += 1;
-        continue;
-      }
-      if (scanned.kind === "expired") {
-        // Nothing is appended for a file whose scan did not finish: a partial count could label a call unknown that has
-        // its result line further on. Nothing is recorded for it either.
-        unfinished.push(...ordered.slice(index));
-        break;
-      }
-      files += 1;
-      const finished = reconcileFile(stateDir, sessionId, scanned.counts, expired, () => {
-        appended += 1;
-      });
-      if (!finished) {
-        unfinished.push(...ordered.slice(index));
-        break;
-      }
-      // Measured after this run's own appends, so the next run sees the log as unchanged.
-      const after = lstatSync(file);
-      checked.set(name, { size: after.size, mtimeMs: after.mtimeMs });
-      if (recordWritable && !writeProgress(dir, checked, present)) {
-        recordWritable = false;
+        const before = appended;
+        const finished = reconcileFile(stateDir, sessionId, scanned.counts, expired, () => {
+          appended += 1;
+        });
+        if (!finished) {
+          unfinished.push(...ordered.slice(index));
+          break;
+        }
+        // The log is recorded only when what was scanned is what the stat described (it did not change during the scan) and
+        // nothing but this run's own appends changed it since. Measured after the appends, so the next run sees it unchanged.
+        const after = lstatSync(file);
+        const scannedWhatWasStatted = scanned.end.size === stat.size && scanned.end.mtimeMs === stat.mtimeMs;
+        const changedOnlyByUs = appended > before || (after.size === stat.size && after.mtimeMs === stat.mtimeMs);
+        if (scannedWhatWasStatted && changedOnlyByUs) {
+          checked.set(name, { size: after.size, mtimeMs: after.mtimeMs });
+          dirty = true;
+        }
+      } catch {
+        // A per-file failure (unreadable file, refused path, failed append) is counted, not fatal: the other
+        // logs are still reconciled and the caller reports the count.
         failed += 1;
       }
-    } catch {
-      // A per-file failure (unreadable file, refused path, failed append) is counted, not fatal: the other
-      // logs are still reconciled and the caller reports the count.
+    }
+  } catch {
+    // An error outside the per-log guard (a throwing clock, say) ends the loop. It is counted, the logs from the current one
+    // on are reported unfinished, and the counts so far and the record are kept.
+    failed += 1;
+    unfinished.push(...ordered.slice(reached));
+  } finally {
+    // One write of the record per run, whatever ended the run, and only when it changed (or needs healing).
+    let recordFailed = false;
+    const body = recordBody(checked, present, maxProgressEntries, maxProgressBytes);
+    if ((dirty || body.count !== checked.size) && !persistProgress(dir, body.text, writeRecord)) {
+      recordFailed = true;
+    }
+    if (recordFailed) {
       failed += 1;
     }
   }
-  return { files, appended, failed, unfinished, complete: unfinished.length === 0, skippedUnchanged };
+  unfinished.push(...unreached);
+  const complete = unfinished.length === 0 && !listing.truncated;
+  return { files, appended, failed, unfinished, complete, skippedUnchanged, listingTruncated: listing.truncated };
 }

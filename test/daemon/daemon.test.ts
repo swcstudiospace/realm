@@ -503,6 +503,7 @@ void test("CRASH-01, CRASH-02, CRASH-04: startDaemon sweeps orphan temp files, r
       truncated: false,
       unfinishedSweepRoots: [],
       unfinishedAuditFiles: [],
+      auditListingTruncated: false,
       maintenanceComplete: true,
       failures: 0,
     },
@@ -614,6 +615,7 @@ void test("CRASH-04: a reap that fails after removing a container still reports 
       truncated: false,
       unfinishedSweepRoots: [],
       unfinishedAuditFiles: [],
+      auditListingTruncated: false,
       maintenanceComplete: false,
       reapFailure: "REALM_STOPPING",
       failures: 1,
@@ -627,7 +629,8 @@ void test("D-1401: a nested sweep root on another device is kept, one on the sam
   mkdirSync(child);
   const sessions = join(fixture.stateDir, "sessions");
   const runtime = join(fixture.stateDir, "runtime");
-  const tail = [sessions, runtime];
+  const audit = join(fixture.stateDir, "audit");
+  const tail = [sessions, runtime, audit];
 
   assert.deepEqual(
     sweepRootsOf([fixture.ws, child], fixture.stateDir, () => 7),
@@ -654,6 +657,41 @@ void test("D-1401: a nested sweep root on another device is kept, one on the sam
     [fixture.ws, ...tail],
     "a repeated root is still dropped",
   );
+});
+
+void test("CRASH-02: the startup sweep removes an aged orphan temp file of the progress record in the audit directory, and never the record itself", async (t) => {
+  const fixture = makeDirs();
+  const audit = join(fixture.stateDir, "audit");
+  mkdirSync(audit, { recursive: true });
+  // The state directory is outside the workspace root, so only the audit root reaches this directory.
+  const orphan = join(audit, "..reconciled.json.realm-tmp-0123456789abcdef");
+  const record = join(audit, ".reconciled.json");
+  const young = join(audit, "..reconciled.json.realm-tmp-fedcba9876543210");
+  const hourAgo = new Date(Date.now() - 3_600_000);
+  for (const file of [orphan, record]) {
+    writeFileSync(file, file === record ? "{}" : "partial");
+    utimesSync(file, hourAgo, hourAgo);
+  }
+  writeFileSync(young, "in flight");
+
+  const reports: StartupReport[] = [];
+  const { options } = daemonParts(fixture, {
+    onStartup: (report) => {
+      reports.push(report);
+    },
+  });
+  const daemon = await startDaemon(options);
+  t.after(() => cleanupDaemon(daemon));
+
+  assert.equal(existsSync(orphan), false, "the aged orphan is removed");
+  assert.equal(existsSync(young), true, "a temp file younger than the age bound is kept");
+  assert.equal(reports[0]?.tempFilesRemoved, 1);
+  const removed = auditLinesOf(fixture, "sess-daemon").filter((line) => line["tool"] === "temp-sweep");
+  assert.equal(removed.length, 1);
+  // The record was not removed by the sweep: it is still a regular file (the reconciliation may have rewritten it).
+  assert.equal(statSync(record).isFile(), true);
+  await sendRequest(daemon.socketPath, { id: "d1", method: "down" });
+  await awaitDone(daemon);
 });
 
 void test("CRASH-04: the up reply carries the startup notice when the reap destroyed a container", async (t) => {

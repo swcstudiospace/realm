@@ -112,13 +112,24 @@ export async function runDaemon(deps: DaemonDeps): Promise<number> {
 // and the sweep roots; a later start finishes them, and the user-facing notice does not change (it is about the reap only).
 // When the reap itself failed, the report is partial (what it had destroyed before it stopped) and the line adds
 // `reap failed: <CODE>`; the daemon then exits with that code, which is written on its own line.
+// At most this many names of an unfinished list go into the line; the count is always exact. The lists can hold thousands of
+// names, and one log line must stay short.
+const STARTUP_LINE_MAX_NAMES = 10;
+
+function nameList(names: readonly string[]): string {
+  const shown = names.slice(0, STARTUP_LINE_MAX_NAMES).join(",");
+  const more = names.length > STARTUP_LINE_MAX_NAMES ? `,+${String(names.length - STARTUP_LINE_MAX_NAMES)} more` : "";
+  return `[${shown}${more}]`;
+}
+
 function startupLine(report: StartupReport): string {
   const ids = report.containerIds.length === 0 ? "" : `[${report.containerIds.join(",")}]`;
   const hasUnfinished = report.unfinishedAuditFiles.length > 0 || report.unfinishedSweepRoots.length > 0;
   const unfinished = hasUnfinished
-    ? `; unfinished ${String(report.unfinishedAuditFiles.length)} audit file(s)[${report.unfinishedAuditFiles.join(",")}]` +
-      ` and ${String(report.unfinishedSweepRoots.length)} sweep root(s)[${report.unfinishedSweepRoots.join(",")}]`
+    ? `; unfinished ${String(report.unfinishedAuditFiles.length)} audit file(s)${nameList(report.unfinishedAuditFiles)}` +
+      ` and ${String(report.unfinishedSweepRoots.length)} sweep root(s)${nameList(report.unfinishedSweepRoots)}`
     : "";
+  const listing = report.auditListingTruncated ? "; audit listing truncated" : "";
   const reapFailed = report.reapFailure === undefined ? "" : `; reap failed: ${report.reapFailure}`;
   const failures = report.failures > 0 ? `; ${String(report.failures)} startup failure(s)` : "";
   return (
@@ -126,7 +137,7 @@ function startupLine(report: StartupReport): string {
     ` and ${String(report.recordsDeleted)} session record(s);` +
     ` removed ${String(report.tempFilesRemoved)} orphan temp file(s);` +
     ` reconciled ${String(report.auditLinesReconciled)} audit admission(s);` +
-    ` maintenanceComplete=${String(report.maintenanceComplete)}${unfinished}${reapFailed}${failures}`
+    ` maintenanceComplete=${String(report.maintenanceComplete)}${unfinished}${listing}${reapFailed}${failures}`
   );
 }
 

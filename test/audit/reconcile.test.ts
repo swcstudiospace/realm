@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   appendFileSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -23,6 +24,7 @@ import {
   SCAN_CHECK_LINES,
   SCAN_CHUNK_BYTES,
 } from "../../src/audit/reconcile.js";
+import { atomicWriteFile, observeSha256 } from "../../src/fs/atomic-write.js";
 
 const SESSION = "11111111-2222-4333-8444-555555555555";
 const OTHER_SESSION = "66666666-7777-4888-8999-aaaaaaaaaaaa";
@@ -78,7 +80,7 @@ void test("CRASH-02: an admission with no result gets exactly one reconciliation
 
     const outcome = reconcileAuditLogs(stateDir);
 
-    assert.deepEqual(outcome, { files: 1, appended: 1, failed: 0, unfinished: [], complete: true, skippedUnchanged: 0 });
+    assert.deepEqual(outcome, { files: 1, appended: 1, failed: 0, unfinished: [], complete: true, skippedUnchanged: 0, listingTruncated: false });
     const lines = reconciliations(stateDir);
     assert.equal(lines.length, 1);
     assert.equal(lines[0]?.["tool"], "write");
@@ -92,7 +94,7 @@ void test("CRASH-02: a balanced admission and result pair gets no line", () => {
     admit(stateDir, "write", { path: "a.txt" });
     result(stateDir, "write", { path: "a.txt", bytes: 3, sha256: HEX64 });
 
-    assert.deepEqual(reconcileAuditLogs(stateDir), { files: 1, appended: 0, failed: 0, unfinished: [], complete: true, skippedUnchanged: 0 });
+    assert.deepEqual(reconcileAuditLogs(stateDir), { files: 1, appended: 0, failed: 0, unfinished: [], complete: true, skippedUnchanged: 0, listingTruncated: false });
     assert.equal(readEntries(stateDir).length, 2);
   });
 });
@@ -129,7 +131,7 @@ void test("CRASH-02: a second run appends nothing, because every admission is cl
     assert.equal(reconcileAuditLogs(stateDir).appended, 3);
     const before = readFileSync(auditFile(stateDir), "utf8");
 
-    assert.deepEqual(reconcileAuditLogs(stateDir), { files: 1, appended: 0, failed: 0, unfinished: [], complete: true, skippedUnchanged: 1 });
+    assert.deepEqual(reconcileAuditLogs(stateDir), { files: 1, appended: 0, failed: 0, unfinished: [], complete: true, skippedUnchanged: 1, listingTruncated: false });
     assert.equal(readFileSync(auditFile(stateDir), "utf8"), before);
   });
 });
@@ -154,7 +156,7 @@ void test("CRASH-02: lines with no phase, unparseable lines and a torn last line
     appendAudit(stateDir, { sessionId: SESSION, tool: "sweep", outcome: "ok", path: "x.tmp" });
     writeFileSync(auditFile(stateDir), `${readFileSync(auditFile(stateDir), "utf8")}not json\n[1,2]\n{"phase":"admission","tool":"wri`);
 
-    assert.deepEqual(reconcileAuditLogs(stateDir), { files: 1, appended: 0, failed: 0, unfinished: [], complete: true, skippedUnchanged: 0 });
+    assert.deepEqual(reconcileAuditLogs(stateDir), { files: 1, appended: 0, failed: 0, unfinished: [], complete: true, skippedUnchanged: 0, listingTruncated: false });
   });
 });
 
@@ -162,7 +164,7 @@ void test("CRASH-02: a result with no admission is ignored", () => {
   withStateDir((stateDir) => {
     result(stateDir, "write", { path: "a.txt", bytes: 1, sha256: HEX64 });
 
-    assert.deepEqual(reconcileAuditLogs(stateDir), { files: 1, appended: 0, failed: 0, unfinished: [], complete: true, skippedUnchanged: 0 });
+    assert.deepEqual(reconcileAuditLogs(stateDir), { files: 1, appended: 0, failed: 0, unfinished: [], complete: true, skippedUnchanged: 0, listingTruncated: false });
     assert.equal(readEntries(stateDir).length, 1);
   });
 });
@@ -189,7 +191,7 @@ void test("CRASH-02: each session's log is reconciled on its own", () => {
     appendAudit(stateDir, { sessionId: OTHER_SESSION, tool: "write", outcome: "ok", phase: "admission", path: "a.txt" });
     appendAudit(stateDir, { sessionId: OTHER_SESSION, tool: "write", outcome: "ok", phase: "result", path: "a.txt" });
 
-    assert.deepEqual(reconcileAuditLogs(stateDir), { files: 2, appended: 1, failed: 0, unfinished: [], complete: true, skippedUnchanged: 0 });
+    assert.deepEqual(reconcileAuditLogs(stateDir), { files: 2, appended: 1, failed: 0, unfinished: [], complete: true, skippedUnchanged: 0, listingTruncated: false });
     assert.equal(reconciliations(stateDir).length, 1);
     assert.equal(reconciliations(stateDir, OTHER_SESSION).length, 0);
   });
@@ -197,7 +199,7 @@ void test("CRASH-02: each session's log is reconciled on its own", () => {
 
 void test("CRASH-02: a missing audit directory is zero work", () => {
   withStateDir((stateDir) => {
-    assert.deepEqual(reconcileAuditLogs(stateDir), { files: 0, appended: 0, failed: 0, unfinished: [], complete: true, skippedUnchanged: 0 });
+    assert.deepEqual(reconcileAuditLogs(stateDir), { files: 0, appended: 0, failed: 0, unfinished: [], complete: true, skippedUnchanged: 0, listingTruncated: false });
     assert.deepEqual(readdirSync(stateDir), []);
   });
 });
@@ -208,7 +210,7 @@ void test("CRASH-02: a symlinked audit directory is refused and nothing is writt
     symlinkSync(outside, join(stateDir, "audit"), "dir");
     const before = readFileSync(join(outside, `${SESSION}.jsonl`), "utf8");
 
-    assert.deepEqual(reconcileAuditLogs(stateDir), { files: 0, appended: 0, failed: 1, unfinished: [], complete: true, skippedUnchanged: 0 });
+    assert.deepEqual(reconcileAuditLogs(stateDir), { files: 0, appended: 0, failed: 1, unfinished: [], complete: true, skippedUnchanged: 0, listingTruncated: false });
     assert.equal(readFileSync(join(outside, `${SESSION}.jsonl`), "utf8"), before);
     assert.deepEqual(readdirSync(outside), [`${SESSION}.jsonl`]);
   });
@@ -222,7 +224,7 @@ void test("CRASH-02: a symlinked audit file is refused and the file it points at
     const before = readFileSync(target, "utf8");
     symlinkSync(target, auditFile(stateDir));
 
-    assert.deepEqual(reconcileAuditLogs(stateDir), { files: 0, appended: 0, failed: 1, unfinished: [], complete: true, skippedUnchanged: 0 });
+    assert.deepEqual(reconcileAuditLogs(stateDir), { files: 0, appended: 0, failed: 1, unfinished: [], complete: true, skippedUnchanged: 0, listingTruncated: false });
     assert.equal(readFileSync(target, "utf8"), before);
   });
 });
@@ -232,7 +234,7 @@ void test("CRASH-02: a log whose name is not a safe session id is refused, and t
     admit(stateDir, "write", { path: "a.txt" });
     writeFileSync(join(stateDir, "audit", ".hidden.jsonl"), `${JSON.stringify({ tool: "write", phase: "admission" })}\n`);
 
-    assert.deepEqual(reconcileAuditLogs(stateDir), { files: 1, appended: 1, failed: 1, unfinished: [], complete: true, skippedUnchanged: 0 });
+    assert.deepEqual(reconcileAuditLogs(stateDir), { files: 1, appended: 1, failed: 1, unfinished: [], complete: true, skippedUnchanged: 0, listingTruncated: false });
     assert.equal(readFileSync(join(stateDir, "audit", ".hidden.jsonl"), "utf8").split("\n").length, 2);
   });
 });
@@ -242,7 +244,7 @@ void test("CRASH-02: a log over the size cap is skipped and counted, not read", 
     admit(stateDir, "write", { path: "a.txt" });
     const before = readFileSync(auditFile(stateDir), "utf8");
 
-    assert.deepEqual(reconcileAuditLogs(stateDir, { maxFileBytes: 10 }), { files: 0, appended: 0, failed: 1, unfinished: [], complete: true, skippedUnchanged: 0 });
+    assert.deepEqual(reconcileAuditLogs(stateDir, { maxFileBytes: 10 }), { files: 0, appended: 0, failed: 1, unfinished: [], complete: true, skippedUnchanged: 0, listingTruncated: false });
     assert.equal(readFileSync(auditFile(stateDir), "utf8"), before);
   });
 });
@@ -307,13 +309,14 @@ void test("STARTUP budget: a deadline already in the past appends nothing and re
 
     const outcome = reconcileAuditLogs(stateDir, { now: () => 100, deadline: 100 });
 
-    assert.deepEqual(outcome, {
+    assert.deepEqual({ ...outcome, unfinished: [...outcome.unfinished].sort() }, {
       files: 0,
       appended: 0,
       failed: 0,
       unfinished: [`${SESSION}.jsonl`, `${OTHER_SESSION}.jsonl`],
       complete: false,
       skippedUnchanged: 0,
+      listingTruncated: false,
     });
     assert.deepEqual([readFileSync(auditFile(stateDir), "utf8"), readFileSync(auditFile(stateDir, OTHER_SESSION), "utf8")], before);
   });
@@ -328,14 +331,14 @@ void test("STARTUP budget: a deadline that expires between two logs reconciles t
       deadline: 1,
     });
 
-    assert.deepEqual(outcome, { files: 1, appended: 1, failed: 0, unfinished: [`${OTHER_SESSION}.jsonl`], complete: false, skippedUnchanged: 0 });
+    assert.deepEqual(outcome, { files: 1, appended: 1, failed: 0, unfinished: [`${OTHER_SESSION}.jsonl`], complete: false, skippedUnchanged: 0, listingTruncated: false });
     assert.equal(reconciliations(stateDir).length, 1);
     assert.equal(hasReconciliation(stateDir, OTHER_SESSION), false);
 
     // The log the first run completed is skipped through the progress record; the other one is scanned.
     const rest = reconcileAuditLogs(stateDir);
-    assert.deepEqual(rest, { files: 2, appended: 1, failed: 0, unfinished: [], complete: true, skippedUnchanged: 1 });
-    assert.deepEqual(reconcileAuditLogs(stateDir), { files: 2, appended: 0, failed: 0, unfinished: [], complete: true, skippedUnchanged: 2 });
+    assert.deepEqual(rest, { files: 2, appended: 1, failed: 0, unfinished: [], complete: true, skippedUnchanged: 1, listingTruncated: false });
+    assert.deepEqual(reconcileAuditLogs(stateDir), { files: 2, appended: 0, failed: 0, unfinished: [], complete: true, skippedUnchanged: 2, listingTruncated: false });
 
     // The lines of the two runs together are those one complete run appends.
     withStateDir((reference) => {
@@ -354,20 +357,20 @@ void test("STARTUP budget: a deadline that expires in the middle of a log append
     appendFileSync(auditFile(stateDir), filler.repeat(SCAN_CHECK_LINES + 100));
     const before = readFileSync(auditFile(stateDir), "utf8");
 
-    // Reads 0 for the loop-start check and the check before the first read, then 1: the next check is the one after the
-    // SCAN_CHECK_LINES-th line, inside the scan.
+    // Reads 0 for the check before the one stat of the ordering pass, the loop-start check and the check before the first
+    // read, then 1: the next check is the one after the SCAN_CHECK_LINES-th line, inside the scan.
     let reads = 0;
     const outcome = reconcileAuditLogs(stateDir, {
       now: () => {
         reads += 1;
-        return reads > 2 ? 1 : 0;
+        return reads > 3 ? 1 : 0;
       },
       deadline: 1,
     });
 
-    assert.deepEqual(outcome, { files: 0, appended: 0, failed: 0, unfinished: [`${SESSION}.jsonl`], complete: false, skippedUnchanged: 0 });
+    assert.deepEqual(outcome, { files: 0, appended: 0, failed: 0, unfinished: [`${SESSION}.jsonl`], complete: false, skippedUnchanged: 0, listingTruncated: false });
     assert.equal(readFileSync(auditFile(stateDir), "utf8"), before, "a partial scan appends no line");
-    assert.deepEqual(reconcileAuditLogs(stateDir), { files: 1, appended: 1, failed: 0, unfinished: [], complete: true, skippedUnchanged: 0 });
+    assert.deepEqual(reconcileAuditLogs(stateDir), { files: 1, appended: 1, failed: 0, unfinished: [], complete: true, skippedUnchanged: 0, listingTruncated: false });
   });
 });
 
@@ -402,8 +405,16 @@ void test("STARTUP budget: logs are reconciled newest modified first, ties by na
       appendAudit(stateDir, { sessionId: id, tool: "write", outcome: "ok", phase: "admission", path: "a.txt" });
       setAge(stateDir, id, ago);
     }
-    // A deadline in the past reaches no log, so `unfinished` is the order the logs would have been taken in.
-    const outcome = reconcileAuditLogs(stateDir, { now: () => 1, deadline: 1 });
+    // The clock allows the four stats of the ordering pass (one check before each) and expires at the first log, so
+    // `unfinished` is the order the logs would have been taken in.
+    let reads = 0;
+    const outcome = reconcileAuditLogs(stateDir, {
+      now: () => {
+        reads += 1;
+        return reads > 4 ? 1 : 0;
+      },
+      deadline: 1,
+    });
     assert.deepEqual(outcome.unfinished, ["log-b.jsonl", "log-c.jsonl", "log-d.jsonl", "log-a.jsonl"]);
   });
 });
@@ -434,7 +445,7 @@ void test("STARTUP budget: restarts with the same small budget make progress thr
     assert.equal(third.complete, true);
 
     const fourth = reconcileAuditLogs(stateDir);
-    assert.deepEqual(fourth, { files: 5, appended: 0, failed: 0, unfinished: [], complete: true, skippedUnchanged: 5 });
+    assert.deepEqual(fourth, { files: 5, appended: 0, failed: 0, unfinished: [], complete: true, skippedUnchanged: 5, listingTruncated: false });
     for (const id of ids) {
       assert.equal(reconciliations(stateDir, id).length, 1, `${id} has exactly one reconciliation line`);
     }
@@ -479,7 +490,7 @@ void test("STARTUP budget: a corrupt, wrong-shaped or unreadable record is ignor
       writeFileSync(join(stateDir, "audit", RECONCILE_PROGRESS_FILE), content);
 
       const outcome = reconcileAuditLogs(stateDir);
-      assert.deepEqual(outcome, { files: 1, appended: 1, failed: 0, unfinished: [], complete: true, skippedUnchanged: 0 });
+      assert.deepEqual(outcome, { files: 1, appended: 1, failed: 0, unfinished: [], complete: true, skippedUnchanged: 0, listingTruncated: false });
       assert.deepEqual(Object.keys(JSON.parse(readFileSync(join(stateDir, "audit", RECONCILE_PROGRESS_FILE), "utf8")) as object), [
         `${SESSION}.jsonl`,
       ]);
@@ -503,12 +514,230 @@ void test("STARTUP budget: a log cut off by the deadline records nothing", () =>
     const cut = reconcileAuditLogs(stateDir, {
       now: () => {
         reads += 1;
-        return reads > 2 ? 1 : 0;
+        return reads > 3 ? 1 : 0;
       },
       deadline: 1,
     });
     assert.equal(cut.complete, false);
     assert.equal(existsSync(join(stateDir, "audit", RECONCILE_PROGRESS_FILE)), false);
     assert.equal(reconcileAuditLogs(stateDir).appended, 1, "the next run scans the log and appends its line");
+  });
+});
+
+// Plants `count` small balanced logs named log-<n>, the n-th aged n*60 seconds.
+function plantBalancedLogs(stateDir: string, count: number): string[] {
+  mkdirSync(join(stateDir, "audit"), { recursive: true });
+  const ids: string[] = [];
+  for (let n = 1; n <= count; n += 1) {
+    const id = `log-${String(n)}`;
+    const admission = JSON.stringify({ phase: "admission", tool: "write", outcome: "ok", path: "a.txt" });
+    const closing = JSON.stringify({ phase: "result", tool: "write", outcome: "ok", path: "a.txt" });
+    writeFileSync(auditFile(stateDir, id), `${admission}\n${closing}\n`);
+    setAge(stateDir, id, n * 60);
+    ids.push(id);
+  }
+  return ids;
+}
+
+function recordKeys(stateDir: string): string[] {
+  return Object.keys(JSON.parse(readFileSync(join(stateDir, "audit", RECONCILE_PROGRESS_FILE), "utf8")) as object);
+}
+
+// Writes through the atomic writer, counting the calls.
+function countingWriter(writes: string[]): (target: string, content: string) => void {
+  return (target, content) => {
+    writes.push(content);
+    atomicWriteFile(target, content, { expectedPriorSha256: observeSha256(target) });
+  };
+}
+
+void test("STARTUP budget: a deadline that expires during the ordering pass stops the stats and reports every log unfinished", () => {
+  withStateDir((stateDir) => {
+    plantBalancedLogs(stateDir, 50);
+    let reads = 0;
+    const outcome = reconcileAuditLogs(stateDir, {
+      now: () => {
+        reads += 1;
+        return reads > 5 ? 1 : 0;
+      },
+      deadline: 1,
+    });
+
+    assert.equal(outcome.unfinished.length, 50, "the stat'ed logs and the logs not reached are all unfinished");
+    assert.equal(new Set(outcome.unfinished).size, 50);
+    assert.equal(outcome.files, 0);
+    assert.equal(outcome.complete, false);
+    assert.ok(reads <= 8, `the pass stopped at the deadline (${String(reads)} clock reads for 50 logs)`);
+    assert.equal(existsSync(join(stateDir, "audit", RECONCILE_PROGRESS_FILE)), false, "nothing was checked, so nothing is recorded");
+  });
+});
+
+void test("STARTUP budget: a run over many logs writes the progress record once, and a run with nothing new writes none", () => {
+  withStateDir((stateDir) => {
+    plantBalancedLogs(stateDir, 8);
+    const writes: string[] = [];
+
+    const first = reconcileAuditLogs(stateDir, { writeRecord: countingWriter(writes) });
+    assert.equal(first.files, 8);
+    assert.equal(writes.length, 1, "one write for eight newly checked logs");
+    assert.equal(recordKeys(stateDir).length, 8);
+
+    const second = reconcileAuditLogs(stateDir, { writeRecord: countingWriter(writes) });
+    assert.equal(second.skippedUnchanged, 8);
+    assert.equal(writes.length, 1, "nothing changed, so the record is not written again");
+  });
+});
+
+void test("STARTUP budget: the record is written once when the deadline ends the run too", () => {
+  withStateDir((stateDir) => {
+    const ids = ["log-1", "log-2", "log-3"];
+    ids.forEach((id, index) => {
+      appendAudit(stateDir, { sessionId: id, tool: "write", outcome: "ok", phase: "admission", path: "a.txt" });
+      setAge(stateDir, id, 10_000 - index * 100);
+    });
+    const writes: string[] = [];
+    const outcome = reconcileAuditLogs(stateDir, { ...budgetOfLines(stateDir, ids, 2), writeRecord: countingWriter(writes) });
+    assert.equal(outcome.appended, 2);
+    assert.equal(writes.length, 1);
+    assert.equal(recordKeys(stateDir).length, 2);
+  });
+});
+
+void test("STARTUP budget: a failed write of the record is counted and keeps the counts and the unfinished list", () => {
+  withStateDir((stateDir) => {
+    admit(stateDir, "write", { path: "a.txt" });
+    const outcome = reconcileAuditLogs(stateDir, {
+      writeRecord: () => {
+        throw new Error("disk full");
+      },
+    });
+    assert.deepEqual(outcome, { files: 1, appended: 1, failed: 1, unfinished: [], complete: true, skippedUnchanged: 0, listingTruncated: false });
+  });
+});
+
+void test("STARTUP budget: a record over the entry limit keeps the newest logs, and the reader accepts what the writer wrote", () => {
+  withStateDir((stateDir) => {
+    plantBalancedLogs(stateDir, 6);
+    reconcileAuditLogs(stateDir, { maxProgressEntries: 3 });
+    // log-1 is the newest (aged 60 s), then log-2, log-3.
+    assert.deepEqual(recordKeys(stateDir).sort(), ["log-1.jsonl", "log-2.jsonl", "log-3.jsonl"]);
+
+    const again = reconcileAuditLogs(stateDir, { maxProgressEntries: 3 });
+    assert.equal(again.skippedUnchanged, 3, "the reader accepts the record at the limit it was written with");
+    const defaults = reconcileAuditLogs(stateDir);
+    assert.equal(defaults.skippedUnchanged, 3, "and under the default limits");
+  });
+});
+
+void test("STARTUP budget: a record over the byte limit is cut to the newest entries and is readable", () => {
+  withStateDir((stateDir) => {
+    plantBalancedLogs(stateDir, 6);
+    reconcileAuditLogs(stateDir, { maxProgressBytes: 200 });
+    const size = readFileSync(join(stateDir, "audit", RECONCILE_PROGRESS_FILE)).length;
+    assert.ok(size <= 200, `the record is ${String(size)} bytes`);
+    const kept = recordKeys(stateDir);
+    assert.ok(kept.length >= 1 && kept.length < 6);
+    assert.ok(kept.includes("log-1.jsonl"), "the newest log is kept");
+
+    const again = reconcileAuditLogs(stateDir, { maxProgressBytes: 200 });
+    assert.equal(again.skippedUnchanged, kept.length);
+  });
+});
+
+void test("STARTUP budget: entries of logs that no longer exist are dropped from the record", () => {
+  withStateDir((stateDir) => {
+    plantBalancedLogs(stateDir, 3);
+    reconcileAuditLogs(stateDir);
+    assert.deepEqual(recordKeys(stateDir).sort(), ["log-1.jsonl", "log-2.jsonl", "log-3.jsonl"]);
+
+    rmSync(auditFile(stateDir, "log-3"));
+    // A new log gives the next run something to record, so the record is rewritten.
+    appendAudit(stateDir, { sessionId: "log-9", tool: "write", outcome: "ok", phase: "result", path: "a.txt" });
+    reconcileAuditLogs(stateDir);
+    assert.deepEqual(recordKeys(stateDir).sort(), ["log-1.jsonl", "log-2.jsonl", "log-9.jsonl"]);
+  });
+});
+
+void test("STARTUP budget: at most maxFiles logs are considered, and the result says the listing was truncated", () => {
+  withStateDir((stateDir) => {
+    plantBalancedLogs(stateDir, 5);
+    const outcome = reconcileAuditLogs(stateDir, { maxFiles: 3 });
+    assert.equal(outcome.files, 3);
+    assert.equal(outcome.listingTruncated, true);
+    assert.equal(outcome.complete, false);
+    assert.deepEqual(outcome.unfinished, []);
+  });
+});
+
+void test("STARTUP budget: the record, its temp files and other files in the audit directory are not logs", () => {
+  withStateDir((stateDir) => {
+    admit(stateDir, "write", { path: "a.txt" });
+    const dir = join(stateDir, "audit");
+    writeFileSync(join(dir, "..reconciled.json.realm-tmp-0123456789abcdef"), "{}");
+    writeFileSync(join(dir, "notes.txt"), "x");
+    writeFileSync(join(dir, RECONCILE_PROGRESS_FILE), "{}");
+    const outcome = reconcileAuditLogs(stateDir);
+    assert.deepEqual(outcome, { files: 1, appended: 1, failed: 0, unfinished: [], complete: true, skippedUnchanged: 0, listingTruncated: false });
+  });
+});
+
+void test("STARTUP budget: a symlinked record is replaced by a regular file, and the link's target is never read or written", () => {
+  withStateAndOutside((stateDir, outside) => {
+    admit(stateDir, "write", { path: "a.txt" });
+    const target = join(outside, "elsewhere.json");
+    writeFileSync(target, "keep me");
+    symlinkSync(target, join(stateDir, "audit", RECONCILE_PROGRESS_FILE));
+
+    const outcome = reconcileAuditLogs(stateDir);
+    assert.equal(outcome.failed, 0);
+    assert.equal(readFileSync(target, "utf8"), "keep me");
+    assert.equal(lstatSync(join(stateDir, "audit", RECONCILE_PROGRESS_FILE)).isFile(), true);
+    assert.deepEqual(recordKeys(stateDir), [`${SESSION}.jsonl`]);
+  });
+});
+
+void test("STARTUP budget: a record over the byte limit is replaced without being read whole", () => {
+  withStateDir((stateDir) => {
+    admit(stateDir, "write", { path: "a.txt" });
+    writeFileSync(join(stateDir, "audit", RECONCILE_PROGRESS_FILE), " ".repeat(5000));
+    const outcome = reconcileAuditLogs(stateDir, { maxProgressBytes: 1000 });
+    assert.equal(outcome.failed, 0);
+    assert.ok(readFileSync(join(stateDir, "audit", RECONCILE_PROGRESS_FILE)).length <= 1000);
+    assert.deepEqual(recordKeys(stateDir), [`${SESSION}.jsonl`]);
+  });
+});
+
+void test("STARTUP budget: a log that changed during its scan is not recorded, and is scanned again next run", () => {
+  withStateDir((stateDir) => {
+    admit(stateDir, "write", { path: "a.txt" });
+    // The clock stands in for a writer that appends between the stat that decided to scan and the end of the scan.
+    let reads = 0;
+    const first = reconcileAuditLogs(stateDir, {
+      now: () => {
+        reads += 1;
+        if (reads === 3) {
+          appendFileSync(auditFile(stateDir), `${JSON.stringify({ phase: "result", tool: "other", outcome: "ok" })}\n`);
+        }
+        return 0;
+      },
+      deadline: 1,
+    });
+    assert.equal(first.files, 1);
+    assert.equal(existsSync(join(stateDir, "audit", RECONCILE_PROGRESS_FILE)), false, "the changed log is not recorded");
+
+    const second = reconcileAuditLogs(stateDir);
+    assert.equal(second.skippedUnchanged, 0, "it is scanned again");
+    assert.equal(reconcileAuditLogs(stateDir).skippedUnchanged, 1, "and recorded once a scan sees it unchanged");
+  });
+});
+
+void test("STARTUP budget: a line over the line limit is skipped, and the lines after it are still counted", () => {
+  withStateDir((stateDir) => {
+    const line = (path: string): string => `${JSON.stringify({ phase: "admission", tool: "write", outcome: "ok", path })}\n`;
+    mkdirSync(join(stateDir, "audit"), { recursive: true });
+    writeFileSync(auditFile(stateDir), line("a.txt") + line("x".repeat(5000)) + line("b.txt"));
+    const outcome = reconcileAuditLogs(stateDir, { maxLineBytes: 1000 });
+    assert.equal(outcome.appended, 2);
+    assert.deepEqual(reconciliations(stateDir).map((entry) => entry["path"]).sort(), ["a.txt", "b.txt"]);
   });
 });

@@ -145,6 +145,7 @@ void test("CRASH-04: the start's onStartup report is written as one stderr line 
         truncated: false,
         unfinishedSweepRoots: [],
         unfinishedAuditFiles: [],
+        auditListingTruncated: false,
         maintenanceComplete: true,
         failures: 0,
       });
@@ -171,6 +172,7 @@ void test("CRASH-04: the startup line has no id brackets when no container was r
         truncated: false,
         unfinishedSweepRoots: [],
         unfinishedAuditFiles: [],
+        auditListingTruncated: false,
         maintenanceComplete: true,
         failures: 2,
       });
@@ -197,6 +199,7 @@ void test("STARTUP budget: the startup line says maintenanceComplete=false and n
         truncated: true,
         unfinishedSweepRoots: ["<workspace>", "<state>/sessions"],
         unfinishedAuditFiles: ["a.jsonl", "daemon.jsonl"],
+        auditListingTruncated: false,
         maintenanceComplete: false,
         failures: 0,
       });
@@ -223,6 +226,7 @@ void test("CRASH-04: a failed reap's partial report is logged, then the start fa
         truncated: false,
         unfinishedSweepRoots: [],
         unfinishedAuditFiles: [],
+        auditListingTruncated: false,
         maintenanceComplete: false,
         reapFailure: "REALM_STOPPING",
         failures: 1,
@@ -235,6 +239,34 @@ void test("CRASH-04: a failed reap's partial report is logged, then the start fa
   assert.deepEqual(h.lines, [
     "realm daemon: startup removed 1 container(s)[0123abcd] and 0 session record(s); removed 0 orphan temp file(s); reconciled 0 audit admission(s); maintenanceComplete=false; reap failed: REALM_STOPPING; 1 startup failure(s)",
     "realm daemon: REALM_STOPPING",
+  ]);
+});
+
+void test("STARTUP budget: a long unfinished list is cut to ten names in the line, the counts stay exact, and a truncated audit listing is named", async (t) => {
+  const dir = tempDir(t);
+  const names = Array.from({ length: 12 }, (_unused, index) => `s${String(index)}.jsonl`);
+  const h = harness(writeConfig(dir, validConfig(dir)), {
+    start: (options) => {
+      options.onStartup?.({
+        containerIds: [],
+        containersRemoved: 0,
+        recordsDeleted: 0,
+        tempFilesRemoved: 0,
+        auditLinesReconciled: 0,
+        truncated: false,
+        unfinishedSweepRoots: [],
+        unfinishedAuditFiles: names,
+        auditListingTruncated: true,
+        maintenanceComplete: false,
+        failures: 0,
+      });
+      return Promise.resolve(startedWith(Promise.resolve()));
+    },
+  });
+
+  assert.equal(await runDaemon(h.deps), 0);
+  assert.deepEqual(h.lines, [
+    "realm daemon: startup removed 0 container(s) and 0 session record(s); removed 0 orphan temp file(s); reconciled 0 audit admission(s); maintenanceComplete=false; unfinished 12 audit file(s)[s0.jsonl,s1.jsonl,s2.jsonl,s3.jsonl,s4.jsonl,s5.jsonl,s6.jsonl,s7.jsonl,s8.jsonl,s9.jsonl,+2 more] and 0 sweep root(s)[]; audit listing truncated",
   ]);
 });
 
