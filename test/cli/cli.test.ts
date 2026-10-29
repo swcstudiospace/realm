@@ -730,7 +730,7 @@ const ACTIVE_DAEMON_STATUS: DaemonStatus = {
   mode: "advisory",
 };
 
-void test("realm acp attaches with up for the workspace, forwards realm/tool to the daemon, and writes only ACP frames to stdout (CLI-01, TOOL-05)", async () => {
+void test("realm acp attaches with up for the workspace, forwards _realm/tool to the daemon, and writes only ACP frames to stdout (CLI-01, TOOL-05)", async () => {
   const forwarded: unknown[] = [];
   const daemon = fakeDaemon({
     probes: [true],
@@ -743,7 +743,7 @@ void test("realm acp attaches with up for the workspace, forwards realm/tool to 
   const input = new PassThrough();
   input.end(
     `${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: 1 } })}\n` +
-      `${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "realm/tool", params: { tool: { status: {} } } })}\n`,
+      `${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "_realm/tool", params: { tool: { status: {} } } })}\n`,
   );
   const output = captureDiagnostics();
   const diagnostics = captureDiagnostics();

@@ -2,10 +2,11 @@
 // (protocolVersion 1 with clientInfo/agentInfo) over newline-delimited JSON-RPC
 // on stdio: stdout carries only ACP messages, diagnostics go to stderr, and
 // lifecycle-sensitive messages are never batched. Realm's six tools ride one
-// Realm extension method named realm/tool, which carries the whole frozen
-// ToolCall map unchanged to ToolDispatcher.call. realm/tool is a Realm
+// Realm extension method named _realm/tool, which carries the whole frozen
+// ToolCall map unchanged to ToolDispatcher.call. _realm/tool is a Realm
 // extension, not standard ACP: no client-invoked tool method exists in the
-// standard protocol pages read (docs/integration/acp.md Q5).
+// standard protocol pages read, and ACP reserves method names starting with an
+// underscore for custom extensions (docs/integration/acp.md Q5).
 //
 // The module holds no tool logic (P5-D11): it parses envelopes and calls the
 // dispatcher, nothing more. The only dispatcher member it touches is call.
@@ -18,8 +19,14 @@ import type { ToolDispatcher, ToolOutcome } from "../tools/dispatch.js";
 export const ACP_PROTOCOL_VERSION = 1 as const;
 
 // The Realm extension method carrying the six tools. Recorded as a Realm
-// extension, never presented as standard ACP (P5-D10).
-export const REALM_TOOL_METHOD = "realm/tool" as const;
+// extension, never presented as standard ACP (P5-D10). The leading underscore
+// is the ACP extension marker (ACP v1 extensibility page).
+export const REALM_TOOL_METHOD = "_realm/tool" as const;
+
+// The capability advert under agentCapabilities._meta. The key is the method
+// name without its underscore: Realm has no controlled reverse-DNS domain, so
+// it cannot use the com.example/<name> form the extensibility page suggests.
+const REALM_TOOL_CAPABILITY = "realm/tool" as const;
 
 export const AGENT_INFO = Object.freeze({ name: "realm", version: "0.0.0" });
 
@@ -153,7 +160,11 @@ async function handleLine(
       return;
     }
     if (!notify) {
-      send(success(id, { protocolVersion: ACP_PROTOCOL_VERSION, agentInfo: { ...AGENT_INFO } }));
+      send(success(id, {
+        protocolVersion: ACP_PROTOCOL_VERSION,
+        agentCapabilities: { _meta: { [REALM_TOOL_CAPABILITY]: true } },
+        agentInfo: { ...AGENT_INFO },
+      }));
     }
     return;
   }
@@ -162,14 +173,14 @@ async function handleLine(
     if (notify) {
       // A notification is never executed: a tool call with side effects must
       // not run without a request to answer (MCP parity, src/mcp/server.ts).
-      diagnose("realm acp agent ignored a realm/tool notification");
+      diagnose("realm acp agent ignored a _realm/tool notification");
       return;
     }
     // The only path that reaches the dispatcher (P5-D11, T-05-07). The
     // embedded ToolCall map crosses unchanged; schema validation still runs
     // first inside the dispatcher pipeline.
     if (!isRecord(params) || !("tool" in params)) {
-      send(failure(id, INVALID_PARAMS, "realm/tool params must carry a tool map"));
+      send(failure(id, INVALID_PARAMS, "_realm/tool params must carry a tool map"));
       return;
     }
     let outcome: ToolOutcome;

@@ -12,7 +12,7 @@ import { makeHarness, REQUIRED, WORKLOAD } from "../support/fake-tools.js";
 // travels through the MCP server and through the ACP adapter against ONE
 // dispatcher from makeHarness, and the ToolOutcome payloads must be
 // deep-equal after envelope stripping. Only transport framing (JSON-RPC ids on
-// the MCP half, realm/tool wrappers on the ACP half) is stripped, and the
+// the MCP half, _realm/tool wrappers on the ACP half) is stripped, and the
 // stripping lives in this file: neither surface is edited (P5-D11). The only
 // fake is the OpenShell runner, which starts no process.
 

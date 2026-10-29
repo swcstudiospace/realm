@@ -1,6 +1,6 @@
 // TOOL-05 ACP adapter cases (P5-D3, P5-D10, P5-D11). They drive the adapter over
 // in-memory stdio streams against the makeHarness dispatcher: v1 initialize
-// with the never-batched lifecycle rule, realm/tool routing for all six tools
+// with the never-batched lifecycle rule, _realm/tool routing for all six tools
 // with faithful refusals, and a lifecycle drive with dispatcher-equal
 // outcomes. No real process starts and no ACP client exists on the host.
 //
@@ -174,7 +174,7 @@ void test("TOOL-05: closing stdin shuts the adapter down without hanging", { tim
   assert.ok(client.diagnostics.some((line) => line.includes("stdin closed")), "the close is written to stderr");
 });
 
-void test("TOOL-05: a realm/tool request carrying each of the six ToolCall maps routes to ToolDispatcher.call with the map unchanged",
+void test("TOOL-05: a _realm/tool request carrying each of the six ToolCall maps routes to ToolDispatcher.call with the map unchanged",
 { timeout: 10_000 },
 async (t) => {
   const h = makeHarness(t);
@@ -191,7 +191,7 @@ async (t) => {
     id += 1;
   }
   await client.waitFor(SIX_CALLS.length);
-  assert.equal(seen.length, SIX_CALLS.length, "every realm/tool request reached the dispatcher");
+  assert.equal(seen.length, SIX_CALLS.length, "every _realm/tool request reached the dispatcher");
   const replies = client.lines.map(parseReply);
   SIX_CALLS.forEach(({ name, call }, index) => {
     assert.deepEqual(seen[index], call, `${name} map crosses unchanged`);
@@ -203,7 +203,62 @@ async (t) => {
   await client.close();
 },);
 
-void test("TOOL-05: a dispatcher refusal surfaces the catalogue code in the realm/tool reply without adapter-added logic",
+void test("TOOL-05: the literal method _realm/tool routes a ToolCall to the dispatcher unchanged",
+{ timeout: 10_000 },
+async (t) => {
+  const h = makeHarness(t);
+  const seen: unknown[] = [];
+  const inner = h.dispatcher.call.bind(h.dispatcher);
+  h.dispatcher.call = async (raw: unknown): Promise<ToolOutcome> => {
+    seen.push(raw);
+    return inner(raw);
+  };
+  const client = startClient(t, h.dispatcher);
+  const status: ToolCall = { status: {} };
+  send(client, { jsonrpc: "2.0", id: 1, method: "_realm/tool", params: { tool: status } });
+  await client.waitFor(1);
+  assert.deepEqual(seen, [status], "the map crosses unchanged under the underscore method name");
+  const reply = parseReply(client.lines[0] ?? "");
+  assert.equal(reply.id, 1);
+  assert.equal((reply.result as ToolOutcome).outcome, "done");
+  await client.close();
+},);
+
+void test("TOOL-05: the pre-underscore method realm/tool is an unknown method (-32601) and never reaches the dispatcher",
+{ timeout: 10_000 },
+async (t) => {
+  const h = makeHarness(t);
+  const seen: unknown[] = [];
+  const inner = h.dispatcher.call.bind(h.dispatcher);
+  h.dispatcher.call = async (raw: unknown): Promise<ToolOutcome> => {
+    seen.push(raw);
+    return inner(raw);
+  };
+  const client = startClient(t, h.dispatcher);
+  send(client, { jsonrpc: "2.0", id: 1, method: "realm/tool", params: { tool: { status: {} } } });
+  await client.waitFor(1);
+  const reply = parseReply(client.lines[0] ?? "");
+  assert.equal(reply.id, 1);
+  assert.equal(reply.error?.code, -32601);
+  assert.equal(reply.result, undefined);
+  assert.deepEqual(seen, [], "the dispatcher recorded no call");
+  await client.close();
+},);
+
+void test("TOOL-05: the initialize reply advertises the realm/tool extension under agentCapabilities._meta",
+{ timeout: 10_000 },
+async (t) => {
+  const h = makeHarness(t);
+  const client = startClient(t, h.dispatcher);
+  send(client, { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: 1 } });
+  await client.waitFor(1);
+  const reply = parseReply(client.lines[0] ?? "");
+  const result = reply.result as { agentCapabilities?: { _meta?: Record<string, unknown> } };
+  assert.deepEqual(result.agentCapabilities, { _meta: { "realm/tool": true } });
+  await client.close();
+},);
+
+void test("TOOL-05: a dispatcher refusal surfaces the catalogue code in the _realm/tool reply without adapter-added logic",
 { timeout: 10_000 },
 async (t) => {
   const h = makeHarness(t);
@@ -223,7 +278,7 @@ async (t) => {
   await client.close();
 },);
 
-void test("TOOL-05: a RealmError thrown by the dispatcher reaches the realm/tool reply with its code, retryable flag, and message (G-08)",
+void test("TOOL-05: a RealmError thrown by the dispatcher reaches the _realm/tool reply with its code, retryable flag, and message (G-08)",
 { timeout: 10_000 },
 async (t) => {
   const thrown = makeRealmError("OPENSHELL_START_FAILED", "PODMAN_MACHINE_DOWN");
@@ -266,7 +321,7 @@ async (t) => {
   await client.close();
 },);
 
-void test("TOOL-05: initialize then realm/tool status then realm/tool write complete in order over in-memory stdio",
+void test("TOOL-05: initialize then _realm/tool status then _realm/tool write complete in order over in-memory stdio",
 { timeout: 10_000 },
 async (t) => {
   const h = makeHarness(t);
@@ -322,7 +377,7 @@ async (t) => {
   await client.close();
 },);
 
-void test("TOOL-05: a realm/tool notification without an id is never executed and takes no reply (MED-01)",
+void test("TOOL-05: a _realm/tool notification without an id is never executed and takes no reply (MED-01)",
 { timeout: 10_000 },
 async (t) => {
   const h = makeHarness(t);
@@ -384,7 +439,7 @@ void test("TOOL-05: a null request id is a legal JSON-RPC id and is answered wit
   await client.close();
 });
 
-void test("TOOL-05: a realm/tool tool value that is not a ToolCall map is refused SCHEMA_INVALID by the dispatcher (LOW-01 parity)",
+void test("TOOL-05: a _realm/tool tool value that is not a ToolCall map is refused SCHEMA_INVALID by the dispatcher (LOW-01 parity)",
 { timeout: 10_000 },
 async (t) => {
   const h = makeHarness(t);

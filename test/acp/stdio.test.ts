@@ -40,7 +40,7 @@ async function runOverStdio(
     .map((line) => JSON.parse(line) as Record<string, unknown>);
 }
 
-void test("TOOL-05 G-03: runAcpOverStdio answers initialize, then a realm/tool call that fails with a RealmError showing its code",
+void test("TOOL-05 G-03: runAcpOverStdio answers initialize, then a _realm/tool call that fails with a RealmError showing its code",
 { timeout: 10_000 },
 async (t) => {
   const thrown = makeRealmError("OPENSHELL_START_FAILED", "PODMAN_MACHINE_DOWN");
@@ -58,7 +58,11 @@ async (t) => {
   assert.deepEqual(replies[0], {
     jsonrpc: "2.0",
     id: 1,
-    result: { protocolVersion: ACP_PROTOCOL_VERSION, agentInfo: { ...AGENT_INFO } },
+    result: {
+      protocolVersion: ACP_PROTOCOL_VERSION,
+      agentCapabilities: { _meta: { "realm/tool": true } },
+      agentInfo: { ...AGENT_INFO },
+    },
   });
   const entry = ERROR_CATALOGUE["OPENSHELL_START_FAILED"];
   assert.deepEqual(replies[1], {
