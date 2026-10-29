@@ -159,6 +159,7 @@ class FakeDaemon implements DaemonClient {
   snapshot: StateSnapshot;
   mode: PolicyMode;
   hangStatus = false;
+  notice: string | undefined = undefined;
 
   constructor(snapshot: StateSnapshot, mode: PolicyMode) {
     this.snapshot = snapshot;
@@ -192,7 +193,8 @@ class FakeDaemon implements DaemonClient {
   }
 
   private value(): DaemonStatus {
-    return { snapshot: this.snapshot, display: displayStatus(this.snapshot), mode: this.mode };
+    const base = { snapshot: this.snapshot, display: displayStatus(this.snapshot), mode: this.mode };
+    return this.notice === undefined ? base : { ...base, notice: this.notice };
   }
 }
 
@@ -373,6 +375,30 @@ void test("OMP-01: a successful attach renders the status the daemon reports and
   assert.equal(fixture.daemon.count("call"), 0, "the plugin dispatches no tools");
   // The settled attach clears its budget timer.
   assert.ok(fixture.ctx.cleared.length >= 1);
+});
+
+void test("CRASH-04: an attach whose status carries a notice shows it through ui.notify once", async () => {
+  const fixture = makeFixture();
+  const notice = "A previous daemon's sandbox was destroyed at startup: 1 container(s), 0 session record(s).";
+  fixture.daemon.notice = notice;
+  startHandlerOf(fixture.pi)(fixture.ctx);
+
+  await waitForDetail(fixture.ui, "container running");
+  assert.deepEqual(fixture.ui.notifications, [notice]);
+  // A later repaint tick reads the same status and does not show the notice again.
+  const readsBefore = fixture.daemon.count("status");
+  pollOf(fixture.ctx).callback();
+  await waitUntil(() => fixture.daemon.count("status") > readsBefore);
+  await yieldTurn();
+  assert.deepEqual(fixture.ui.notifications, [notice]);
+});
+
+void test("CRASH-04: an attach whose status carries no notice never calls ui.notify", async () => {
+  const fixture = makeFixture();
+  startHandlerOf(fixture.pi)(fixture.ctx);
+
+  await waitForDetail(fixture.ui, "container running");
+  assert.deepEqual(fixture.ui.notifications, []);
 });
 
 void test("OMP-01 (a): an attach failure settles disconnected with the catalogue code as the reason (P5-D8)", async () => {

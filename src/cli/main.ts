@@ -460,6 +460,14 @@ async function ensureSharedDaemon(deps: ResolvedDeps, socketPath: string): Promi
   });
 }
 
+// The daemon's startup-reap notice (CRASH-04) goes to the diagnostics sink, never stdout: stdout carries only
+// protocol frames. Absent notice writes nothing.
+function writeNotice(deps: ResolvedDeps, status: DaemonStatus): void {
+  if (status.notice !== undefined) {
+    deps.diagnostics.write(`${status.notice}\n`);
+  }
+}
+
 // realm mcp attaches to the shared daemon (P6-D9): ensure it runs, claim the workspace with up,
 // then serve the Phase 5 server over stdio with the daemon client as its dispatcher. Every tool
 // call crosses the daemon; no handle is built in-process. stdout carries only MCP messages, so a
@@ -472,7 +480,8 @@ async function runMcp(deps: ResolvedDeps, socketPath: string, workspaceRoot: str
   }
   const client = deps.connect(socketPath);
   try {
-    await client.up(workspaceRoot);
+    const status = await client.up(workspaceRoot);
+    writeNotice(deps, status);
   } catch (error) {
     deps.diagnostics.write(attachFailure(error, deps.stateDir));
   }
@@ -507,6 +516,7 @@ async function runAcp(deps: ResolvedDeps, socketPath: string, workspaceRoot: str
     } catch (error) {
       return { exitCode: 1, stdout: "", stderr: attachFailure(error, deps.stateDir) };
     }
+    writeNotice(deps, status);
     const lifecycle: UpLifecycle = { state: status.snapshot.state, reason: status.snapshot.reason };
     if (lifecycle.state !== "active" && lifecycle.state !== "degraded") {
       const { code, reason } = upRefusal(lifecycle);

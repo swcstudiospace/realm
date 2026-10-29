@@ -16,8 +16,10 @@ import type { StatusValue, ToolOutcome } from "../tools/dispatch.js";
 import type { PolicyMode } from "../contract/validate.js";
 
 // The status value plus the policy mode the daemon reports (src/contract/validate.ts PolicyMode).
+// notice is present only when the daemon's startup reap destroyed a previous sandbox; it is user-facing text.
 export interface DaemonStatus extends StatusValue {
   readonly mode: PolicyMode;
+  readonly notice?: string;
 }
 
 export interface DaemonClient {
@@ -75,7 +77,12 @@ function isPolicyMode(value: unknown): value is PolicyMode {
 }
 
 function isDaemonStatus(value: unknown): value is DaemonStatus {
-  return isRecord(value) && isPolicyMode(value["mode"]) && isStatusValue(value);
+  return (
+    isRecord(value) &&
+    isPolicyMode(value["mode"]) &&
+    (value["notice"] === undefined || typeof value["notice"] === "string") &&
+    isStatusValue(value)
+  );
 }
 
 function isToolOutcome(value: unknown): value is ToolOutcome {

@@ -262,6 +262,10 @@ export function registerRealmPlugin(pi: OmpExtensionApi, options: RealmPluginOpt
     session.client = attached.client;
     session.mode = attached.status.mode;
     renderRealmStatus(ctx.ui, attached.status.snapshot);
+    // The daemon keeps its startup-reap notice for its lifetime; each attach shows it once.
+    if (attached.status.notice !== undefined) {
+      ctx.ui.notify(attached.status.notice);
+    }
     return { outcome: "attached", snapshot: attached.status.snapshot };
   };
 
