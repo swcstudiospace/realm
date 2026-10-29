@@ -55,8 +55,8 @@ All v1 requirements are hypotheses until shipped and verified.
 - [x] **TOOL-02**: Exec is argv-first; shell mode runs only when `policy.shellEnabled` is true and is otherwise rejected with `SHELL_NOT_ALLOWED`
 - [x] **TOOL-03**: A single shared dispatcher applies schema validation, state check, lock check, and audit logging before every sandbox call
 - [x] **TOOL-04**: Every tool call has a timeout; a timeout returns `TOOL_TIMEOUT`, and a bounded queue wait applies while the state is connecting
-- [ ] **TOOL-05**: MCP server and ACP adapter both call the same dispatcher and hold no tool logic; the same call returns equivalent results through MCP and ACP
-  Status: Partial (2026-10-28): MCP is live (scenario 6 ran exec, write and read through realm mcp against the live sandbox); ACP was not exercised live, so equivalent results through both surfaces are shown at unit level only.
+- [x] **TOOL-05**: MCP server and ACP adapter both call the same dispatcher and hold no tool logic; the same call returns equivalent results through MCP and ACP
+  Status: Complete (live 2026-10-29). A client drove `realm mcp` and then `realm acp` against the same live sandbox on the production stack: 67 checks, 0 failed, including 16 equality checks (exec, write, read, list, status and five refused paths return the same outcome or the same catalogue code and retryable flag through both surfaces). The check found that the tool method was named `realm/tool`, which ACP v1 does not allow (it reserves names starting with an underscore for extensions); it is now `_realm/tool` and `initialize` advertises it under `agentCapabilities._meta`. Limit, documented in `docs/integration/acp.md`: Realm is a tool bridge. It answers `session/new` and `session/prompt` with method not found, so a standard ACP host cannot start a session with it; only a client that calls `_realm/tool` can.
 
 ### Audit and secrets (AUD)
 
@@ -215,7 +215,7 @@ Filled by the roadmap. Each v1 requirement maps to exactly one phase.
 | TOOL-02 | Phase 2 | Complete |
 | TOOL-03 | Phase 4 | Complete (unit-verified; live 2026-10-28, scenario 6: exec, write and read dispatched through realm mcp against the live sandbox) |
 | TOOL-04 | Phase 4 | Complete (live 2026-10-28, scenario 7: an exec past the per-call bound returns a retryable TOOL_TIMEOUT and the session stays usable; the bounded queue wait while connecting is unit-verified) |
-| TOOL-05 | Phase 5 | Partial (MCP live 2026-10-28, scenario 6; ACP is unit-verified only, so equivalence through both surfaces is not shown live) |
+| TOOL-05 | Phase 5 | Complete (live 2026-10-29: 67 checks, 0 failed, ACP equals MCP on the live sandbox for 15 operations and an identical status snapshot; the extension method is `_realm/tool`; no session methods, by design) |
 | AUD-01 | Phase 2 | Complete |
 | AUD-02 | Phase 2 | Complete |
 | OMP-01 | Phase 5 | Complete (live 2026-10-28: the plugin attached and the item read realm active; the daemon survived Omp quitting; the daemon-side startup budget overrun settles to STARTUP_BUDGET_EXCEEDED, scenario 9; the plugin's own 200 s timer is unit-verified) |

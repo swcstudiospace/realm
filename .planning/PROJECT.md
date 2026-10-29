@@ -49,12 +49,12 @@ The v1 requirement set lives in `.planning/REQUIREMENTS.md` (REQ-IDs grouped by 
 - [ ] Anda Engine TypeScript bridge with version handshake and bounded backoff with jitter
 - [ ] Orphan reaper, default-deny egress guard, single shared tool dispatcher
 - [ ] Omp plugin: detached autostart under a startup budget, status indicator (realm active / realm disconnected), retry command
-- [ ] MCP server and ACP adapter over one tool contract
+- [ ] MCP server and ACP adapter over one tool contract. Superseded 2026-10-29: TOOL-05 was proven live (REQUIREMENTS.md).
 - [ ] Standalone CLI: realm up, down, status, doctor; host config snippets
 - [ ] Integration notes per documentation source, policy reference, security review
 - [ ] Unit, state-machine, contract, and Podman-gated integration tests
 
-**Milestone status (2026-10-22):** complete and archived under `.planning/milestones/`. v1.0 is fail-closed: RT-04 and CLI-01 are deferred to a follow-up milestone, and `realm up` refuses with `AGENTOS_NOT_CONFIGURED` until an AgentOS driver exists. QUAL-01 is amended by user decision with a named exception list (2026-10-22). OMP-03 is accepted as an approximation: one status item, detail in its text, no tooltip API on this host (2026-10-22). FS-02 is a Partial accepted approximation that awaits the user's confirmation. The live-gated items are deferred to human verification on a Podman 5.x host: RT-01, RT-02, RT-03, RT-05, RT-08, RT-09, TOOL-03, TOOL-04, TOOL-05, OMP-01, OMP-02, OMP-04, OMP-05, CLI-04, ANDA-01, ANDA-02, ANDA-03, ANDA-04. The milestone name v1.0 is provisional for the 0.1.x release line.
+**Milestone status (2026-10-22):** complete and archived under `.planning/milestones/`. v1.0 is fail-closed: RT-04 and CLI-01 are deferred to a follow-up milestone, and `realm up` refuses with `AGENTOS_NOT_CONFIGURED` until an AgentOS driver exists. QUAL-01 is amended by user decision with a named exception list (2026-10-22). OMP-03 is accepted as an approximation: one status item, detail in its text, no tooltip API on this host (2026-10-22). FS-02 is a Partial accepted approximation that awaits the user's confirmation. The live-gated items are deferred to human verification on a Podman 5.x host: RT-01, RT-02, RT-03, RT-05, RT-08, RT-09, TOOL-03, TOOL-04, TOOL-05, OMP-01, OMP-02, OMP-04, OMP-05, CLI-04, ANDA-01, ANDA-02, ANDA-03, ANDA-04. Superseded 2026-10-29: TOOL-05 was proven live (REQUIREMENTS.md). The milestone name v1.0 is provisional for the 0.1.x release line.
 
 ### Out of Scope
 
