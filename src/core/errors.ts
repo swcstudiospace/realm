@@ -1,7 +1,7 @@
-// Typed error catalogue (D-10, spec n6). Exactly these 28 codes; no others.
+// Typed error catalogue (D-10, spec n6). Exactly these 29 codes; no others.
 // The 20 spec n6 codes plus PODMAN_UNSUPPORTED_VERSION (plan 01-06, explicit override), AUDIT_WRITE_FAILED,
 // and three codes from the 2026-10-22 closure: AGENTOS_NOT_CONFIGURED, AGENTOS_STOP_FAILED, OPENSHELL_LABEL_AMBIGUOUS.
-// MCP_INPUT_FAILED and CLEANUP_FAILED are catalogued after the closure codes.
+// MCP_INPUT_FAILED and CLEANUP_FAILED are catalogued after the closure codes, then DAEMON_START_TIMEOUT and SANDBOX_NAME_IN_USE.
 // Only this file defines retryable values or reasons. Every code surfaces to
 // MCP and ACP hosts, so renaming one is a costly change.
 
