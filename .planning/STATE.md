@@ -1,21 +1,21 @@
 ---
 gsd_state_version: "1.0"
 milestone: v2.0
-milestone_name: Host Adapters, Live Verification and Production Isolation
 status: Awaiting next milestone
 stopped_at: Milestone v2.0 completed and archived (2026-10-29); the next step is /gsd-new-milestone
-last_updated: "2026-10-29T07:19:04.226Z"
+last_updated: "2026-10-29T12:06:33.428Z"
 last_activity: 2026-10-29
 last_activity_desc: Milestone v2.0 completed and archived
-state_head: 8b3ff5509d20aef934faad506a2a206788d100c1
+state_head: 85cb7402774c245cff9d86b453a27aebc84c7252
+milestone_name: Host Adapters, Live Verification and Production Isolation
+current_phase: 11
+current_phase_name: Milestone v2.0 Close (complete)
 progress:
   total_phases: 11
   completed_phases: 16
   total_plans: 12
   completed_plans: 12
   percent: 100
-current_phase: 11
-current_phase_name: Milestone v2.0 Close (complete)
 ---
 
 # Project State
@@ -25,7 +25,7 @@ current_phase_name: Milestone v2.0 Close (complete)
 See: .planning/PROJECT.md (updated 2026-10-22)
 
 **Core value:** Every file mutation by an agent either lands inside the realm under policy or fails closed, and the user can always see whether the realm is active or disconnected.
-**Current focus:** Milestone v2.0 (host adapters, live Omp verification, release 0.2.0) in progress on feat/realm-v2-0. Milestone v1.0 (provisional name), shipped fail-closed. The AgentOS sandbox runner is deferred to a follow-up milestone. Remaining items are approvals and live verification.
+**Current focus:** None. Milestone v2.0 (host adapters, live Omp verification, production isolation; releases 0.2.0 to 0.2.2) is complete and archived, and milestone v1.0 (provisional name) shipped fail-closed. The next step is `/gsd-new-milestone`; the carried requirements and the eight proposals recorded by quick task 261029-g7m are its candidates.
 
 ## Current Position
 
@@ -115,6 +115,12 @@ Open follow-ups: the AgentOS sandbox runner in the follow-up milestone (RT-04, C
 
 - Phase 9.7 inserted after Phase 9.6: Review-finding remediation: A10 boundary findings, A18 supply chain, truthful runner status, live-gated requirement evidence (URGENT)
 
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Directory |
+|---|-------------|------|--------|-----------|
+| 261029-g7m | Lifecycle and persistence findings: Omp sandbox attach, abrupt-end persistence, live verification and eight proposals | 2026-10-29 | 85cb740 | [261029-g7m-lifecycle-and-persistence-findings](./quick/261029-g7m-lifecycle-and-persistence-findings/) |
+
 ## Deferred Items
 
 Items acknowledged and deferred at milestone close, most recent first:
@@ -168,6 +174,7 @@ Recorded commits (earlier): e949ad3, 53fc919, 26ab145 (phases 1 to 3); 6b28fa4 a
 ## Operator Next Steps
 
 - Start the next milestone with /gsd-new-milestone. The carried requirements, the open owner decisions and the tech-debt register are in `.planning/milestones/v2.0-MILESTONE-AUDIT.md`, and a summary is in PROJECT.md under "Next Milestone Goals".
+- The eight improvement proposals in `.planning/quick/261029-g7m-lifecycle-and-persistence-findings/IMPROVEMENT-PROPOSALS.md` await selection. The decisions that gate each one are in its "Selection needed" section and in the summary of quick task 261029-g7m (D1 to D6, V1 to V3).
 
 ## Run ut-mvlvx860-9e2d5e0a (gsd-autonomous, 2026-10-24)
 
@@ -624,4 +631,12 @@ Incident note, not a decision: while reading usage, I ran `state.signal-waiting`
 - The real-host check (the finding of this run): the released 0.2.0 was run with the real hosts in isolated homes. Claude Code 2.1.308 failed to connect ("Server's protocol version is not supported: 2026-07-28"); Grok Build connected. Reading the 2026-07-28 schema and the Anthropic API's tool-schema restriction then found two more defects in the MCP surface (tool results without a content block or resultType, and an exec descriptor with a root oneOf that the API rejects with a 400 that fails the whole request), and both agent surfaces advertised 0.0.0. Pull request 7 (merge commit 2c818c4; Greptile 4 of 5 on the first head with a P1 on the shared probe spawning over a busy daemon, then 5 of 5) fixed these and the Omp attach probe, and the release job published v0.2.1 (release commit 8b3ff55). On the installed 0.2.1 Claude Code connects, Grok Build connects and lists six tools, and the production live suite passes 31 of 31. The MCP finding is recorded with its sources in docs/integration/mcp.md Q6.
 - Milestone close: the audit (`milestones/v2.0-MILESTONE-AUDIT.md`) is gaps_found: 76 satisfied, 6 superseded, 8 carried; the carried items cannot be closed by this run (FS-02 accepted approximation; ANDA-01 to 04 live-gated behind the engine licence conflict; OMP-05 needs a model call and its procedure is now written; PRD-DRV-01 awaits the owner; UI-01 an accepted limitation) and were accepted as tech debt under the owner's delegation, as v1.0 was. `milestone complete v2.0 --confirm` archived the roadmap, the requirements, the audit and the 11 phase directories; the roadmap and PROJECT.md were updated by hand as the workflow directs.
 - Process notes for the owner: no signed gate records exist for this run; the ship flow's GSD gate (roadmap incomplete) was waived with `--ignore-gsd` for pull requests 6 and 7 under the 2026-10-29 instruction; one docs lane edited the read-only product spec and was reverted; a gsd-verifier lane failed twice at start-up with the larger brief and its record was written by an a15-docs lane instead; two timing tests flaked once under a host load of 63; the ship config's autoMerge flipped unexpectedly once (restored, and left true as the owner's original value); the realm account's older scratch that the phase 11 inventory kept for the owner was not touched.
-- Next: the milestone-close pull request (this change), Greptile 5 of 5, merge through the ship flow with the default squash, and a release (0.2.2) for it; then the local worktree and branch of this change are removed.
+- Outcome: the milestone-close pull request (pull request 8) was merged through the ship flow with the default squash (be10b1e) after Greptile gave 5 of 5, release 0.2.2 was published and verified, and the local worktree and branch were removed.
+
+## Run ut-mvtfsr2p-f0cc1683 (gsd-autonomous, 2026-10-29)
+
+- Request: complete the outstanding TODOs, phases and milestones, answer whether the Omp plugin creates the sandbox when a session opens and whether files survive an abrupt end, and suggest eight improvements. The gsd-autonomous workflow found no incomplete phase ("All phases complete! Nothing left to do."), so no phase was run; the position, the carried items and the answers were recorded as quick task 261029-g7m.
+- Answers: the attach is automatic, is created on the first session and reused by later ones, but Omp's own tools do not run in the sandbox (only `write` and `edit` are gated), and the session directory must be the configured workspace root. Workspace files survive every abrupt end that was run; state inside the sandbox is lost when the daemon restarts. Evidence is in `.planning/quick/261029-g7m-lifecycle-and-persistence-findings/`.
+- Verification: baseline gates at main 00e0003 all exit 0 (`npm test` 1872 tests, 1862 passed, 0 failed, 10 skipped). Live runs on the production stack with a scripted model provider, no credentials: attach, the guard in advisory and fail-closed mode, abrupt ends of Omp and of the daemon, a real-SIGKILL test of the write path, a trace of Omp's own write, and an environment check. No source, test, script, workflow or release file was changed.
+- Not done, with the reason: no LLM-driven Omp run (needs the owner's provider key), no status change for OMP-05 or any other requirement (the owner's decision), no proposal implemented (selection pending), Linear tracking absent (workspace free-issue limit; Notion rows only).
+- Process: the ship flow's GSD gate was waived with `--ignore-gsd` for this documentation change, as for pull requests 6 to 8.
