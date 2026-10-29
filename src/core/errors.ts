@@ -1,8 +1,8 @@
-// Typed error catalogue (D-10, spec n6). Exactly these 30 codes; no others.
+// Typed error catalogue (D-10, spec n6). Exactly these 31 codes; no others.
 // The 20 spec n6 codes plus PODMAN_UNSUPPORTED_VERSION (plan 01-06, explicit override), AUDIT_WRITE_FAILED,
 // and three codes from the 2026-10-22 closure: AGENTOS_NOT_CONFIGURED, AGENTOS_STOP_FAILED, OPENSHELL_LABEL_AMBIGUOUS.
 // MCP_INPUT_FAILED and CLEANUP_FAILED are catalogued after the closure codes, then DAEMON_START_TIMEOUT and SANDBOX_NAME_IN_USE,
-// then AUDIT_OUTCOME_UNKNOWN (phase 14, D-1403).
+// then AUDIT_OUTCOME_UNKNOWN (phase 14, D-1403), then OPENSHELL_GATEWAY_LOST (phase 17, D5).
 // Only this file defines retryable values or reasons. Every code surfaces to
 // MCP and ACP hosts, so renaming one is a costly change.
 
@@ -37,6 +37,7 @@ export const ERROR_CODES = Object.freeze([
   "MCP_INPUT_FAILED",
   "CLEANUP_FAILED",
   "AUDIT_OUTCOME_UNKNOWN",
+  "OPENSHELL_GATEWAY_LOST",
 ] as const);
 
 export type ErrorCode = (typeof ERROR_CODES)[number];
@@ -183,6 +184,11 @@ export const ERROR_CATALOGUE: Readonly<Record<ErrorCode, CatalogueEntry>> =
     AUDIT_OUTCOME_UNKNOWN: {
       reason: "The process ended before this call's result was recorded; whether the call took effect is unknown.",
       retryable: false,
+    },
+    OPENSHELL_GATEWAY_LOST: {
+      reason:
+        "The OpenShell gateway, or the compute driver behind it, did not answer, so the sandbox cannot be reached; restore the gateway, then retry.",
+      retryable: true,
     },
   });
 

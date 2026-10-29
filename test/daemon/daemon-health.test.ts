@@ -14,6 +14,8 @@ import type { ProbeResult } from "../../src/core/ports.js";
 import { STATUS_LABELS } from "../../src/core/status.js";
 import { sendRequest, type ControlReply } from "../../src/daemon/channel.js";
 import { HEALTH_PROBE_INTERVAL_MS, startDaemon, type StartedDaemon } from "../../src/daemon/daemon.js";
+import { AgentOsSupervisor } from "../../src/runtime/agentos.js";
+import { FakeAgentOsDriver } from "../support/fake-agentos.js";
 import { FakeBridge } from "../support/fake-bridge.js";
 import { FakeExecutionService } from "../support/fake-execution.js";
 
@@ -24,11 +26,13 @@ interface HeldProbe {
   readonly resolve: (result: ProbeResult) => void;
 }
 
-// An execution service whose probe can be held open, so a test decides when an in-flight probe ends.
+// An execution service whose probe can be held open, so a test decides when an in-flight probe ends. When a supervisor is
+// set, the probe asks it first, as SessionExecution.probe does: a held supervisor throws its code out of the probe.
 class HoldableProbeExecution extends FakeExecutionService {
   private hold = false;
   private readonly held: HeldProbe[] = [];
   probeCalls = 0;
+  supervisor: AgentOsSupervisor | undefined;
 
   holdProbes(): void {
     this.hold = true;
@@ -48,8 +52,11 @@ class HoldableProbeExecution extends FakeExecutionService {
     next.resolve(result);
   }
 
-  override probe(containerId: string, sandbox: string): Promise<ProbeResult> {
+  override async probe(containerId: string, sandbox: string): Promise<ProbeResult> {
     this.probeCalls += 1;
+    if (this.supervisor !== undefined) {
+      await this.supervisor.check();
+    }
     if (!this.hold) {
       return super.probe(containerId, sandbox);
     }
@@ -205,6 +212,18 @@ async function statusLabelOf(running: Running): Promise<unknown> {
   return undefined;
 }
 
+async function statusReasonOf(running: Running): Promise<unknown> {
+  const reply: ControlReply = await sendRequest(running.daemon.socketPath, { id: "status-reason", method: "status" });
+  const result: unknown = reply.result;
+  if (typeof result === "object" && result !== null && "display" in result) {
+    const display: unknown = result.display;
+    if (typeof display === "object" && display !== null && "reason" in display) {
+      return display.reason;
+    }
+  }
+  return undefined;
+}
+
 void test("RT-04: the health interval is 10 seconds", () => {
   assert.equal(HEALTH_PROBE_INTERVAL_MS, 10_000);
 });
@@ -263,6 +282,54 @@ void test("RT-04, N1: a probe that throws AGENTOS_CRASH_LOOP moves the session t
   assert.equal(snapshot.reason, "AGENTOS_CRASH_LOOP");
   assert.equal(await statusLabelOf(running), STATUS_LABELS.disconnected);
   assert.deepEqual(running.failures, [], "a failure the controller recorded in the state is not a refusal");
+});
+
+function supervisedBy(driver: FakeAgentOsDriver): AgentOsSupervisor {
+  return new AgentOsSupervisor({
+    driver,
+    sessionId: "sess-health",
+    callTimeoutMs: 50,
+    random: () => 1,
+    sleep: () => Promise.resolve(),
+    now: () => 0,
+  });
+}
+
+void test("OBS-04: a health tick that finds the runner gone and the gateway silent shows OPENSHELL_GATEWAY_LOST in the state and the status reply, not AGENTOS_CRASH_LOOP", async (t) => {
+  const timers = fakeIntervals(t);
+  const running = await startActive(t);
+  const driver = new FakeAgentOsDriver();
+  const supervisor = supervisedBy(driver);
+  await supervisor.start();
+  running.exec.supervisor = supervisor;
+  driver.exitRunner();
+  driver.gatewayDown();
+
+  timers.fire();
+  await settle();
+
+  const snapshot = running.daemon.handle.controller.snapshot();
+  assert.equal(snapshot.state, "error");
+  assert.equal(snapshot.reason, "OPENSHELL_GATEWAY_LOST");
+  assert.equal(await statusLabelOf(running), STATUS_LABELS.disconnected);
+  assert.equal(await statusReasonOf(running), "OPENSHELL_GATEWAY_LOST");
+  assert.deepEqual(running.failures, [], "a failure the controller recorded in the state is not a refusal");
+});
+
+void test("OBS-04: the same health tick with the gateway answering still shows AGENTOS_CRASH_LOOP", async (t) => {
+  const timers = fakeIntervals(t);
+  const running = await startActive(t);
+  const driver = new FakeAgentOsDriver();
+  const supervisor = supervisedBy(driver);
+  await supervisor.start();
+  running.exec.supervisor = supervisor;
+  driver.exitRunner();
+
+  timers.fire();
+  await settle();
+
+  assert.equal(running.daemon.handle.controller.snapshot().reason, "AGENTOS_CRASH_LOOP");
+  assert.equal(await statusReasonOf(running), "AGENTOS_CRASH_LOOP");
 });
 
 void test("RT-04: a probe failure that is not a catalogue error moves the session to error and is reported with its typed code", async (t) => {

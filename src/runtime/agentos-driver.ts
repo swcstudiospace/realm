@@ -15,6 +15,7 @@ import type { AgentOsDriver } from "./agentos.js";
 import type { RunnerChild, RunnerChildSpawner } from "./agentos-workload.js";
 import {
   buildAgentOsSandboxArgv,
+  buildGatewayStatusArgv,
   buildCreateArgv,
   type OpenShellRunner,
   type OpenShellRunOutcome,
@@ -28,6 +29,8 @@ export const DEFAULT_AGENTOS_PROBE_PATH = "/usr/local/lib/realm/agentos-probe.js
 const PROBE_INTERVAL_MS = 1000;
 // The grace the runner child gets after SIGTERM, and again after SIGKILL, before a stop moves on (D4, D7).
 const RUNNER_TERMINATE_GRACE_MS = 2000;
+// The bound for one `openshell status` (OBS-04). A status that misses it counts as a gateway that does not answer.
+export const GATEWAY_STATUS_TIMEOUT_MS = 10_000;
 
 export interface OpenShellAgentOsDriverOptions {
   readonly runner: OpenShellRunner;
@@ -267,6 +270,14 @@ export function createOpenShellAgentOsDriver(options: OpenShellAgentOsDriverOpti
     },
     runnerExited(sessionId: string): boolean {
       return runnerFor(sessionId).runnerExited();
+    },
+    // OBS-04: true only when `openshell status` exits 0 within GATEWAY_STATUS_TIMEOUT_MS. A rejection, a missed bound and a
+    // non-zero exit are all false. The supervisor asks only after a failed probe, so a healthy tick runs nothing extra.
+    async gatewayAnswers(): Promise<boolean> {
+      return succeeds(
+        () => runner(buildGatewayStatusArgv(), { timeoutMs: GATEWAY_STATUS_TIMEOUT_MS }),
+        GATEWAY_STATUS_TIMEOUT_MS,
+      );
     },
   };
 }

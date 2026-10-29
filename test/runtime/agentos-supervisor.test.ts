@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { RealmError } from "../../src/core/errors.js";
 import {
   AGENTOS_BACKOFF_BASE_MS,
@@ -41,6 +42,14 @@ async function assertCrashLoop(promise: Promise<unknown>): Promise<void> {
     promise,
     (error: unknown) =>
       error instanceof RealmError && error.code === "AGENTOS_CRASH_LOOP" && error.retryable,
+  );
+}
+
+async function assertGatewayLost(promise: Promise<unknown>): Promise<void> {
+  await assert.rejects(
+    promise,
+    (error: unknown) =>
+      error instanceof RealmError && error.code === "OPENSHELL_GATEWAY_LOST" && error.retryable,
   );
 }
 
@@ -411,4 +420,128 @@ void test("B2: a driver stop that fails makes the supervisor stop reject with AG
     supervisor.stop(),
     (error: unknown) => error instanceof RealmError && error.code === "AGENTOS_STOP_FAILED",
   );
+});
+
+void test("OBS-04: a runner that exited while the gateway does not answer is OPENSHELL_GATEWAY_LOST, not AGENTOS_CRASH_LOOP", async () => {
+  const { driver, supervisor } = harness();
+  await supervisor.start();
+  driver.exitRunner();
+  driver.gatewayDown();
+  await assertGatewayLost(supervisor.check());
+  assert.equal(driver.gatewayCheckCount(), 1);
+  assert.equal(driver.callCount("start"), 1, "the supervisor does not restart anything");
+});
+
+void test("OBS-04: a runner that exited while the gateway answers is AGENTOS_CRASH_LOOP", async () => {
+  const { driver, supervisor } = harness();
+  await supervisor.start();
+  driver.exitRunner();
+  await assertCrashLoop(supervisor.check());
+  assert.equal(driver.gatewayCheckCount(), 1, "the failure path asks the gateway once");
+});
+
+void test("OBS-04: a probe that answers false while the gateway answers is AGENTOS_CRASH_LOOP, and while it does not is OPENSHELL_GATEWAY_LOST", async () => {
+  const answering = harness();
+  await answering.supervisor.start();
+  answering.driver.crash();
+  await assertCrashLoop(answering.supervisor.check());
+
+  const silent = harness();
+  await silent.supervisor.start();
+  silent.driver.crash();
+  silent.driver.gatewayDown();
+  await assertGatewayLost(silent.supervisor.check());
+});
+
+void test("OBS-04: a probe that rejects while the gateway does not answer is OPENSHELL_GATEWAY_LOST", async () => {
+  const { driver, supervisor } = harness();
+  await supervisor.start();
+  driver.script("alive", "reject");
+  driver.gatewayDown();
+  await assertGatewayLost(supervisor.check());
+});
+
+void test("OBS-04: a gateway status that rejects or never answers counts as a gateway that does not answer, within the call bound", async () => {
+  for (const how of ["reject", "hang"] as const) {
+    const { driver, supervisor } = harness();
+    await supervisor.start();
+    driver.exitRunner();
+    driver.gatewayDown(how);
+    await assertGatewayLost(supervisor.check());
+    assert.equal(driver.gatewayCheckCount(), 1);
+  }
+});
+
+void test("OBS-04: a healthy check never asks the gateway", async () => {
+  const { driver, supervisor } = harness();
+  await supervisor.start();
+  driver.gatewayDown();
+  assert.equal(await supervisor.check(), true);
+  assert.equal(driver.gatewayCheckCount(), 0);
+});
+
+void test("OBS-04: a held supervisor keeps its code when the gateway comes back, until start() runs again", async () => {
+  const { driver, supervisor } = harness();
+  await supervisor.start();
+  driver.exitRunner();
+  driver.gatewayDown();
+  await assertGatewayLost(supervisor.check());
+
+  driver.gatewayUp();
+  await assertGatewayLost(supervisor.check());
+  assert.equal(driver.gatewayCheckCount(), 1, "a held supervisor classifies once");
+  assert.equal(driver.callCount("alive"), 0);
+
+  await supervisor.start();
+  assert.equal(await supervisor.check(), true, "an explicit start is the retry and clears the held code");
+  driver.exitRunner();
+  await assertCrashLoop(supervisor.check());
+});
+
+void test("OBS-04: a start that gave up keeps AGENTOS_CRASH_LOOP even when the gateway does not answer", async () => {
+  const { driver, supervisor } = harness();
+  driver.script("start", "reject", "reject", "reject", "reject", "reject");
+  driver.gatewayDown();
+  await assertCrashLoop(supervisor.start());
+  await assertCrashLoop(supervisor.check());
+  assert.equal(driver.gatewayCheckCount(), 0, "the create and start path is not classified");
+});
+
+void test("OBS-04: a check made while the classification is in flight throws the same code as the first", async () => {
+  const { driver, supervisor } = harness();
+  await supervisor.start();
+  driver.exitRunner();
+  driver.gatewayDown();
+  const first = supervisor.check();
+  const second = supervisor.check();
+  await assertGatewayLost(first);
+  await assertGatewayLost(second);
+  assert.equal(driver.gatewayCheckCount(), 1);
+});
+
+void test("OBS-04: a stop that overtakes the classification makes check return false and leaves the supervisor stopped", async () => {
+  const { driver, supervisor } = harness();
+  await supervisor.start();
+  driver.exitRunner();
+  driver.gatewayDown("hang");
+  const pending = supervisor.check();
+  const concurrent = supervisor.check();
+  await nextTurn();
+  await supervisor.stop();
+  assert.equal(await pending, false);
+  assert.equal(await concurrent, false);
+  assert.equal(await supervisor.check(), false, "a stopped supervisor does not probe");
+});
+
+void test("OBS-04: a new start that overtakes the classification makes check return false and does not hold the new run", async () => {
+  const { driver, supervisor } = harness();
+  await supervisor.start();
+  driver.exitRunner();
+  driver.gatewayDown("hang");
+  const pending = supervisor.check();
+  await nextTurn();
+  await supervisor.start();
+  assert.equal(await pending, false);
+  driver.gatewayUp();
+  assert.equal(await supervisor.check(), true, "the new run is healthy and is not held by the old classification");
 });

@@ -3,6 +3,9 @@
 // "hang" (the call never settles, so a caller must time it out). Every call is logged.
 // The fake models liveness with one flag: start sets it, stop clears it, crash() clears
 // it as if the process died, and alive() reports it.
+// gatewayAnswers() reports the gateway: up by default, so a hold keeps AGENTOS_CRASH_LOOP. gatewayDown() makes it answer
+// false (the status exits non-zero), or reject or hang; gatewayUp() restores it. Gateway checks are counted apart from
+// calls(), which lists the runner operations only.
 // create runs through the OpenShell runner the test passes in (the in-process FakeOpenShell in the
 // session suite), so the create the session path issues is the one the driver builds. No process starts.
 
@@ -15,6 +18,8 @@ export type ScriptedOutcome = "ok" | "reject" | "hang";
 
 export class FakeAgentOsDriver implements AgentOsDriver {
   private running = false;
+  private gateway: "up" | "down" | "reject" | "hang" = "up";
+  private gatewayChecks = 0;
   private exited = false;
   private readonly scripts = new Map<AgentOsOperation, ScriptedOutcome[]>();
   private readonly log: AgentOsOperation[] = [];
@@ -50,6 +55,30 @@ export class FakeAgentOsDriver implements AgentOsDriver {
       this.running = false;
       this.exited = false;
     });
+  }
+
+  async gatewayAnswers(): Promise<boolean> {
+    this.gatewayChecks += 1;
+    if (this.gateway === "reject") {
+      throw new Error("scripted gateway status failure");
+    }
+    if (this.gateway === "hang") {
+      return new Promise<boolean>(() => {});
+    }
+    return this.gateway === "up";
+  }
+
+  // The gateway stops answering: "down" answers false, "reject" rejects, "hang" never settles.
+  gatewayDown(how: "down" | "reject" | "hang" = "down"): void {
+    this.gateway = how;
+  }
+
+  gatewayUp(): void {
+    this.gateway = "up";
+  }
+
+  gatewayCheckCount(): number {
+    return this.gatewayChecks;
   }
 
   // Queues outcomes for the next calls of one operation, in order.

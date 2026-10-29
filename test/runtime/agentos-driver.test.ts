@@ -1,7 +1,12 @@
-import { test } from "node:test";
+import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { RealmError, type ErrorCode } from "../../src/core/errors.js";
-import { createOpenShellAgentOsDriver, type OpenShellAgentOsDriverOptions } from "../../src/runtime/agentos-driver.js";
+import {
+  createOpenShellAgentOsDriver,
+  GATEWAY_STATUS_TIMEOUT_MS,
+  type OpenShellAgentOsDriverOptions,
+} from "../../src/runtime/agentos-driver.js";
 import type { RunnerChild } from "../../src/runtime/agentos-workload.js";
 import { OPENSHELL_BINARY, type OpenShellRunner } from "../../src/runtime/openshell.js";
 
@@ -154,6 +159,7 @@ function driverOf(h: Harness) {
     alive: () => driver.alive(SESSION),
     stop: () => driver.stop(SESSION),
     runnerExited: () => driver.runnerExited(SESSION),
+    gatewayAnswers: () => driver.gatewayAnswers(),
   };
 }
 
@@ -319,6 +325,41 @@ void test("alive reports exit 0 as alive, and any other exit or a rejected probe
   assert.equal(await driver.alive(), true);
   assert.equal(await driver.alive(), false);
   assert.equal(await driver.alive(), false);
+});
+
+void test("OBS-04: gatewayAnswers runs `openshell status` with the 10 s bound and reads only the exit code", async () => {
+  const h = harness({ probes: [0, 1, "reject"] });
+  const driver = driverOf(h);
+  assert.equal(GATEWAY_STATUS_TIMEOUT_MS, 10_000);
+  assert.equal(await driver.gatewayAnswers(), true, "exit 0 is a gateway that answers");
+  assert.equal(await driver.gatewayAnswers(), false, "a non-zero exit is a gateway that does not answer");
+  assert.equal(await driver.gatewayAnswers(), false, "a rejected run is a gateway that does not answer");
+  assert.equal(h.calls.length, 3);
+  for (const call of h.calls) {
+    assert.deepEqual(call.argv, [OPENSHELL_BINARY, "status"]);
+    assert.equal(call.timeoutMs, GATEWAY_STATUS_TIMEOUT_MS);
+  }
+  assert.equal(h.spawns.length, 0, "the gateway check starts no runner child");
+});
+
+void test("OBS-04: an `openshell status` that never exits is bounded by GATEWAY_STATUS_TIMEOUT_MS and reads as a gateway that does not answer", async (t: TestContext) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  t.after(() => {
+    t.mock.timers.reset();
+  });
+  const h = harness({ probeGate: gate().open });
+  let settled = false;
+  const answer = driverOf(h)
+    .gatewayAnswers()
+    .then((answers) => {
+      settled = true;
+      return answers;
+    });
+  t.mock.timers.tick(GATEWAY_STATUS_TIMEOUT_MS - 1);
+  await nextTurn();
+  assert.equal(settled, false, "the hung status must not end before the bound");
+  t.mock.timers.tick(1);
+  assert.equal(await answer, false);
 });
 
 void test("a session id outside the safe set is refused with SCHEMA_INVALID by each runner call, before any runner call", async () => {

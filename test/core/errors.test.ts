@@ -40,6 +40,7 @@ const EXPECTED_CODES: readonly ErrorCode[] = [
   "MCP_INPUT_FAILED",
   "CLEANUP_FAILED",
   "AUDIT_OUTCOME_UNKNOWN",
+  "OPENSHELL_GATEWAY_LOST",
 ];
 
 // D-10: retryable true for these codes. AUDIT_WRITE_FAILED is retryable because the tool call did not run.
@@ -56,6 +57,7 @@ const RETRYABLE_TRUE: readonly ErrorCode[] = [
   "LOCK_CONFLICT",
   "WRITE_NOT_ATOMIC",
   "AUDIT_WRITE_FAILED",
+  "OPENSHELL_GATEWAY_LOST",
 ];
 
 // D-10, amended by plan 01-06, the 2026-10-22 closure and phase 14 (AUDIT_OUTCOME_UNKNOWN: it only labels a
@@ -84,9 +86,9 @@ const RETRYABLE_FALSE: readonly ErrorCode[] = [
 const sorted = (xs: readonly string[]): string[] => [...xs].sort();
 
 // The size of the catalogue. Adding a code is a one-line edit here plus one entry in EXPECTED_CODES.
-const CATALOGUE_SIZE = 30;
+const CATALOGUE_SIZE = 31;
 
-void test("the catalogue holds exactly the expected codes: the 20 D-10 codes, PODMAN_UNSUPPORTED_VERSION, AUDIT_WRITE_FAILED, the three 2026-10-22 closure codes, MCP_INPUT_FAILED, CLEANUP_FAILED, DAEMON_START_TIMEOUT, SANDBOX_NAME_IN_USE, and AUDIT_OUTCOME_UNKNOWN", () => {
+void test("the catalogue holds exactly the expected codes: the 20 D-10 codes, PODMAN_UNSUPPORTED_VERSION, AUDIT_WRITE_FAILED, the three 2026-10-22 closure codes, MCP_INPUT_FAILED, CLEANUP_FAILED, DAEMON_START_TIMEOUT, SANDBOX_NAME_IN_USE, AUDIT_OUTCOME_UNKNOWN, and OPENSHELL_GATEWAY_LOST", () => {
   assert.equal(EXPECTED_CODES.length, CATALOGUE_SIZE);
   assert.equal(ERROR_CODES.length, CATALOGUE_SIZE);
   assert.deepEqual(sorted(ERROR_CODES), sorted(EXPECTED_CODES));
@@ -100,7 +102,6 @@ void test("the catalogue record has exactly the expected codes and no others", (
 });
 
 void test("the retryable true and false lists partition the catalogue", () => {
-  assert.equal(RETRYABLE_TRUE.length, 12);
   assert.equal(RETRYABLE_FALSE.length, CATALOGUE_SIZE - RETRYABLE_TRUE.length);
   assert.deepEqual(sorted([...RETRYABLE_TRUE, ...RETRYABLE_FALSE]), sorted(EXPECTED_CODES));
 });
@@ -183,6 +184,16 @@ void test("AGENTOS_NOT_CONFIGURED, AGENTOS_STOP_FAILED, and OPENSHELL_LABEL_AMBI
     "More than one container matches this session label, so the sandbox cannot be identified. No container was chosen.",
   );
   assert.equal(labelAmbiguous.retryable, false);
+});
+
+void test("OPENSHELL_GATEWAY_LOST has the approved reason, is retryable, and is a different code from AGENTOS_CRASH_LOOP", () => {
+  const lost = makeRealmError("OPENSHELL_GATEWAY_LOST");
+  assert.equal(
+    lost.reason,
+    "The OpenShell gateway, or the compute driver behind it, did not answer, so the sandbox cannot be reached; restore the gateway, then retry.",
+  );
+  assert.equal(lost.retryable, true);
+  assert.notEqual(lost.reason, ERROR_CATALOGUE.AGENTOS_CRASH_LOOP.reason);
 });
 
 void test("makeRealmError with a cause code carries it as causeCode and keeps the primary reason and retryable flag", () => {
