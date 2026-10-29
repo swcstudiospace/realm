@@ -69,11 +69,14 @@ import {
   parseProbeFields,
   pollUntil,
   probePodman,
+  noticeOfStatus,
   productionSkipReason,
   readLiveInputs,
+  reapCountsOfNotice,
   realmCli,
   sandboxExec,
   startMcpSession,
+  startupReapLineFor,
   stateOfStatus,
   statusFieldsOf,
   toolErrorOf,
@@ -493,6 +496,11 @@ void test("production live 5: after the daemon is killed, the next realm up reap
   assert.ok(daemonPid !== undefined, "the daemon pid");
 
   try {
+    // The container the crash will leave behind, listed before the kill: the restarted daemon must report destroying this one.
+    const before = await itemsOf(listDaemonContainers(scenario.inputs), `the ${DAEMON_SANDBOX_NAME} containers before the kill`);
+    assert.equal(before.length, 1, `exactly one ${DAEMON_SANDBOX_NAME} container must exist before the kill; found ${String(before.length)}`);
+    const crashedContainerId = before[0];
+    assert.ok(crashedContainerId !== undefined && crashedContainerId !== "", "the id of the container the crash leaves behind");
     process.kill(daemonPid, "SIGKILL");
     const gone = await pollUntil(
       async () => {
@@ -526,6 +534,18 @@ void test("production live 5: after the daemon is killed, the next realm up reap
     assert.equal(sandboxes.length, 1, `exactly one ${DAEMON_SANDBOX_NAME} sandbox must exist after the restart; found ${String(sandboxes.length)}`);
     const containers = await itemsOf(listDaemonContainers(scenario.inputs), `the ${DAEMON_SANDBOX_NAME} containers`);
     assert.equal(containers.length, 1, `exactly one ${DAEMON_SANDBOX_NAME} container must exist after the restart; found ${String(containers.length)}`);
+
+    // D-1410: the startup reap is visible. The notice rides on the status reply, and the daemon log names the destroyed container.
+    const status = await realmCli(scenario.inputs, scenario.environment, ["status"], STATUS_TIMEOUT_MS);
+    assertExit(status, 0, "realm status after the daemon crash");
+    const notice = noticeOfStatus(status.stdout);
+    assert.ok(notice !== undefined && notice.includes("destroyed at startup"), `realm status must carry the startup notice: ${describeResult(status)}`);
+    const counts = reapCountsOfNotice(notice);
+    assert.ok(counts !== undefined, `the notice must state its counts: ${notice}`);
+    assert.equal(counts.containers, 1, `the notice must count one container: ${notice}`);
+    assert.ok(counts.sessionRecords >= 1, `the notice must count at least one session record: ${notice}`);
+    const daemonLog = readFileSync(join(scenario.environment.stateDir, "daemon.log"), "utf8");
+    assert.ok(startupReapLineFor(daemonLog, crashedContainerId) !== undefined, `daemon.log must hold a line "realm daemon: startup removed 1 container(s)" that names container ${crashedContainerId}`);
   } catch (error) {
     // With no daemon running, `realm down` reports "already down" and reaps nothing, so the sandbox the crash left would stay
     // and block the next scenario. One more realm up lets a daemon reap it for the cleanup's down. Its result is not judged and
