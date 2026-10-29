@@ -293,3 +293,36 @@ void test("TD-04: a recovery destroy that outlived the budget finishes before a 
   assert.equal(f.exec.resources().length, 1);
   assert.equal(f.exec.resources()[0]?.containerId, f.store.load(SESSION)?.containerId);
 });
+
+void test("TD-04: a destroy that runs while a create waits for the recovery destroy leaves no record, create or resource behind", async (t) => {
+  const clock = scriptedClock(t);
+  const f = fixture(t);
+  f.exec.failNext("start", "OPENSHELL_START_FAILED");
+  assert.equal((await f.controller.create(f.workspace)).state, "error");
+  // The retry starts the recorded container again, that start fails the same way, and the recovery
+  // destroy then outlives the budget, so it is still running when the next create arrives.
+  f.exec.failNext("start", "OPENSHELL_START_FAILED");
+  f.exec.beforeCall("destroy", () => {
+    clock.advance(60_000);
+  });
+  f.exec.setDelay("destroy", 150);
+
+  const first = await f.controller.create(f.workspace);
+
+  assert.equal(first.state, "error");
+  assert.equal(first.reason, "STARTUP_BUDGET_EXCEEDED");
+  assert.equal(f.exec.callCount("create"), 1);
+  // The scripted clock never moves again, so the second create has the full budget and parks on
+  // the recovery destroy that is still running.
+  f.exec.beforeCall("destroy", () => undefined);
+  f.exec.setDelay("destroy", 0);
+
+  const second = f.controller.create(f.workspace);
+  const destroyed = f.controller.destroy();
+  await Promise.all([second, destroyed]);
+
+  assert.equal(f.controller.snapshot().state, "unbound");
+  assert.equal(f.store.load(SESSION), null);
+  assert.equal(f.exec.callCount("create"), 1);
+  assert.equal(f.exec.resources().length, 0);
+});

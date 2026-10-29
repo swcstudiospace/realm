@@ -212,6 +212,7 @@ export class LifecycleController {
     const realmId = existing?.realmId ?? randomUUID();
 
     this.lifeEpoch += 1;
+    const epoch = this.lifeEpoch;
     this.machine.transition("connecting", "creating container");
     // The container this create currently owns. The holder is updated the moment a port call settles,
     // before any write or deadline check that can throw, so failCreate records the live container.
@@ -229,6 +230,11 @@ export class LifecycleController {
       // A recovery destroy that outlived an earlier create must finish before anything new is issued.
       if (this.recoveryDestroy !== null) {
         await this.awaitRecoveryDestroy(deadline);
+        // A stop or destroy that ran during the wait owns the session and may have deleted the
+        // record: this create records and issues nothing more.
+        if (this.lifeEpoch !== epoch || this.machine.snapshot().state !== "connecting") {
+          return this.machine.snapshot();
+        }
       }
       this.checkDeadline(deadline);
       this.persist(realmId, root, current.id);
@@ -729,6 +735,9 @@ export class LifecycleController {
   ): Promise<string | null> {
     if (this.recoveryDestroy !== null) {
       await this.awaitRecoveryDestroy(deadline);
+      if (this.machine.snapshot().state !== "connecting") {
+        return null;
+      }
     }
     const call = this.deps.exec.destroy(staleId, this.sandboxName());
     const tracked = call.then(
