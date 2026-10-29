@@ -10,7 +10,7 @@
 
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
-import { closeSync, constants, fchmodSync, fsyncSync, lstatSync, mkdirSync, openSync, writeSync } from "node:fs";
+import { closeSync, constants, fchmodSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import { makeRealmError, type ErrorCode } from "../core/errors.js";
 import { redactString, redactValue } from "./redact.js";
@@ -31,9 +31,11 @@ export type ExecShape =
 
 // There is deliberately no content field: a write entry records the byte count and
 // sha256 of what was written, never the written text.
-// The stage a line records (D-89, D-90, D-107). A call writes an admission line before its
-// execution and a result line after it. Optional: a line with no phase keeps the pre-stage shape.
-export type AuditPhase = "admission" | "result";
+// The stage a line records (D-89, D-90, D-107, D-1403). A call writes an admission line before its
+// execution and a result line after it. A reconciliation line is written at the next daemon start for an
+// admission that never got a result line: its outcome is AUDIT_OUTCOME_UNKNOWN (src/audit/reconcile.ts).
+// Optional: a line with no phase keeps the pre-stage shape.
+export type AuditPhase = "admission" | "result" | "reconciliation";
 
 export interface AuditEntryInput {
   readonly sessionId: string;
@@ -98,6 +100,10 @@ export function appendAudit(stateDir: string, input: AuditEntryInput): void {
 // The line is flushed with fsync before the descriptor closes. When this call created the log file,
 // the audit directory is fsynced once after the line is durable, so the new directory entry, and the
 // first line with it, is not lost to a crash after the call returned.
+// A crash in the middle of an earlier append can leave a last line with no newline. The next line would
+// be glued onto it and neither would parse, so an existing, non-empty file whose last byte is not a
+// newline gets a newline prefix, written in the same call as the line (D-1403). That rule lives here so
+// there is one tail rule for the file.
 function writeAuditLine(stateDir: string, sessionId: string, line: Buffer): void {
   const dir = join(stateDir, "audit");
   mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -110,9 +116,10 @@ function writeAuditLine(stateDir: string, sessionId: string, line: Buffer): void
   const { fd, created } = openAuditFile(file);
   try {
     fchmodSync(fd, 0o600);
+    const payload = !created && endsWithPartialLine(file) ? Buffer.concat([Buffer.from("\n", "utf8"), line]) : line;
     let written = 0;
-    while (written < line.length) {
-      written += writeSync(fd, line, written, line.length - written);
+    while (written < payload.length) {
+      written += writeSync(fd, payload, written, payload.length - written);
     }
     fsyncSync(fd);
   } finally {
@@ -120,6 +127,25 @@ function writeAuditLine(stateDir: string, sessionId: string, line: Buffer): void
   }
   if (created) {
     syncAuditDirectory(dir);
+  }
+}
+
+// True when the file has content and its last byte is not a newline. The file is opened read-only
+// without following links; the write descriptor is O_APPEND and write-only, so it cannot read.
+function endsWithPartialLine(file: string): boolean {
+  const fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  try {
+    const size = fstatSync(fd).size;
+    if (size === 0) {
+      return false;
+    }
+    const last = Buffer.alloc(1);
+    if (readSync(fd, last, 0, 1, size - 1) !== 1) {
+      throw new Error("audit file tail could not be read");
+    }
+    return last[0] !== 0x0a;
+  } finally {
+    closeSync(fd);
   }
 }
 

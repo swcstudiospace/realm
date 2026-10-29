@@ -378,3 +378,68 @@ void test("R10: a failed directory fsync after a durable line is AUDIT_WRITE_FAI
     assert.equal(readLines(stateDir).length, 1);
   });
 });
+
+void test("CRASH-02: a reconciliation entry round-trips with its phase and the AUDIT_OUTCOME_UNKNOWN code (D-1403)", () => {
+  withStateDir((stateDir) => {
+    appendAudit(stateDir, {
+      sessionId: SESSION,
+      tool: "exec",
+      outcome: "AUDIT_OUTCOME_UNKNOWN",
+      phase: "reconciliation",
+      execSummary: { argv: ["make", "build"] },
+    });
+    const entry = JSON.parse(readLines(stateDir)[0] ?? "") as Record<string, unknown>;
+    assert.equal(entry["phase"], "reconciliation");
+    assert.equal(entry["outcome"], "AUDIT_OUTCOME_UNKNOWN");
+    assert.equal(entry["tool"], "exec");
+    assert.deepEqual(entry["execSummary"], { argv: ["make", "build"] });
+  });
+});
+
+void test("CRASH-02: an append to a file whose last line has no newline yields two valid lines, not one glued line (D-1403)", () => {
+  withStateDir((stateDir) => {
+    mkdirSync(join(stateDir, "audit"), { recursive: true });
+    const first = JSON.stringify({ at: "2026-10-29T00:00:00.000Z", sessionId: SESSION, tool: "write", outcome: "ok", phase: "admission", path: "a.txt" });
+    writeFileSync(auditFile(stateDir), first);
+
+    appendAudit(stateDir, { sessionId: SESSION, tool: "write", outcome: "ok", phase: "result", path: "a.txt" });
+
+    const lines = readLines(stateDir);
+    assert.equal(lines.length, 2);
+    assert.equal(lines[0], first);
+    assert.equal((JSON.parse(lines[1] ?? "") as Record<string, unknown>)["phase"], "result");
+  });
+});
+
+void test("CRASH-02: an append after a line cut short by a crash closes the cut line and writes its own line intact (D-1403)", () => {
+  withStateDir((stateDir) => {
+    appendAudit(stateDir, { sessionId: SESSION, tool: "write", outcome: "ok", phase: "admission", path: "a.txt" });
+    // A crash mid-append: a valid first line, then a second line cut short with no newline.
+    const torn = '{"at":"2026-10-29T00:00:00.000Z","sessionId":"x","tool":"wri';
+    fs.appendFileSync(auditFile(stateDir), torn);
+
+    appendAudit(stateDir, { sessionId: SESSION, tool: "write", outcome: "ok", phase: "result", path: "a.txt" });
+
+    const text = readFileSync(auditFile(stateDir), "utf8");
+    assert.equal(text.endsWith("\n"), true);
+    const lines = text.slice(0, -1).split("\n");
+    assert.equal(lines.length, 3);
+    assert.equal(lines[1], torn);
+    assert.equal((JSON.parse(lines[0] ?? "") as Record<string, unknown>)["phase"], "admission");
+    assert.equal((JSON.parse(lines[2] ?? "") as Record<string, unknown>)["phase"], "result");
+  });
+});
+
+void test("CRASH-02: a file that ends with a newline gets no extra blank line, and an empty file gets none either (D-1403)", () => {
+  withStateDir((stateDir) => {
+    mkdirSync(join(stateDir, "audit"), { recursive: true });
+    writeFileSync(auditFile(stateDir), "");
+    appendAudit(stateDir, { sessionId: SESSION, tool: "list", outcome: "ok" });
+    appendAudit(stateDir, { sessionId: SESSION, tool: "list", outcome: "ok" });
+    const lines = readLines(stateDir);
+    assert.equal(lines.length, 2);
+    for (const line of lines) {
+      assert.equal((JSON.parse(line) as Record<string, unknown>)["tool"], "list");
+    }
+  });
+});

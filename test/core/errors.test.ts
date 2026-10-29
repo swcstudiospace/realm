@@ -39,6 +39,7 @@ const EXPECTED_CODES: readonly ErrorCode[] = [
   "AUDIT_WRITE_FAILED",
   "MCP_INPUT_FAILED",
   "CLEANUP_FAILED",
+  "AUDIT_OUTCOME_UNKNOWN",
 ];
 
 // D-10: retryable true for these codes. AUDIT_WRITE_FAILED is retryable because the tool call did not run.
@@ -57,7 +58,8 @@ const RETRYABLE_TRUE: readonly ErrorCode[] = [
   "AUDIT_WRITE_FAILED",
 ];
 
-// D-10, amended by plan 01-06 and the 2026-10-22 closure: retryable false for the other seventeen codes.
+// D-10, amended by plan 01-06, the 2026-10-22 closure and phase 14 (AUDIT_OUTCOME_UNKNOWN: it only labels a
+// historical line, so it must not invite a blind retry): retryable false for every other code.
 const RETRYABLE_FALSE: readonly ErrorCode[] = [
   "REALM_UNBOUND",
   "REALM_STOPPING",
@@ -75,27 +77,31 @@ const RETRYABLE_FALSE: readonly ErrorCode[] = [
   "SCHEMA_INVALID",
   "MCP_INPUT_FAILED",
   "CLEANUP_FAILED",
+  "AUDIT_OUTCOME_UNKNOWN",
   "SANDBOX_NAME_IN_USE",
 ];
 
 const sorted = (xs: readonly string[]): string[] => [...xs].sort();
 
-void test("the catalogue holds exactly the 29 codes: the 20 D-10 codes, PODMAN_UNSUPPORTED_VERSION, AUDIT_WRITE_FAILED, the three 2026-10-22 closure codes, MCP_INPUT_FAILED, CLEANUP_FAILED, DAEMON_START_TIMEOUT, and SANDBOX_NAME_IN_USE", () => {
-  assert.equal(EXPECTED_CODES.length, 29);
-  assert.equal(ERROR_CODES.length, 29);
+// The size of the catalogue. Adding a code is a one-line edit here plus one entry in EXPECTED_CODES.
+const CATALOGUE_SIZE = 30;
+
+void test("the catalogue holds exactly the expected codes: the 20 D-10 codes, PODMAN_UNSUPPORTED_VERSION, AUDIT_WRITE_FAILED, the three 2026-10-22 closure codes, MCP_INPUT_FAILED, CLEANUP_FAILED, DAEMON_START_TIMEOUT, SANDBOX_NAME_IN_USE, and AUDIT_OUTCOME_UNKNOWN", () => {
+  assert.equal(EXPECTED_CODES.length, CATALOGUE_SIZE);
+  assert.equal(ERROR_CODES.length, CATALOGUE_SIZE);
   assert.deepEqual(sorted(ERROR_CODES), sorted(EXPECTED_CODES));
 });
 
-void test("the catalogue record has exactly the 29 codes and no others", () => {
+void test("the catalogue record has exactly the expected codes and no others", () => {
   const keys = Object.keys(ERROR_CATALOGUE);
-  assert.equal(keys.length, 29);
+  assert.equal(keys.length, CATALOGUE_SIZE);
   assert.deepEqual(sorted(keys), sorted(EXPECTED_CODES));
   assert.equal(Object.isFrozen(ERROR_CATALOGUE), true);
 });
 
 void test("the retryable true and false lists partition the catalogue", () => {
   assert.equal(RETRYABLE_TRUE.length, 12);
-  assert.equal(RETRYABLE_FALSE.length, 17);
+  assert.equal(RETRYABLE_FALSE.length, CATALOGUE_SIZE - RETRYABLE_TRUE.length);
   assert.deepEqual(sorted([...RETRYABLE_TRUE, ...RETRYABLE_FALSE]), sorted(EXPECTED_CODES));
 });
 
@@ -147,7 +153,7 @@ void test("replacing or adding a catalogue key throws a TypeError", () => {
   assert.throws(() => {
     record.NOT_A_CODE = { reason: "added", retryable: false };
   }, TypeError);
-  assert.equal(Object.keys(ERROR_CATALOGUE).length, 29);
+  assert.equal(Object.keys(ERROR_CATALOGUE).length, CATALOGUE_SIZE);
 });
 
 void test("AUDIT_WRITE_FAILED has the approved reason and is retryable, because the tool call did not run", () => {
