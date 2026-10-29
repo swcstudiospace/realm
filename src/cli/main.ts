@@ -24,7 +24,7 @@ import {
   type ControlRequest,
 } from "../daemon/channel.js";
 import { connectDaemon, type DaemonClient, type DaemonStatus } from "../daemon/client.js";
-import { ensureDaemon, daemonLogPath, reportingStartFailure } from "../daemon/ensure.js";
+import { ensureDaemon, daemonAnswers, daemonLogPath, reportingStartFailure } from "../daemon/ensure.js";
 import { defaultRunCommand, runChecks, type DoctorOptions } from "../doctor/checks.js";
 import { createMcpServer } from "../mcp/server.js";
 import { isDirectEntry, readHostRuntime } from "../runtime/host-paths.js";
@@ -294,29 +294,6 @@ function upResult(reply: ControlReply): CliResult {
   return { exitCode: 1, stdout: `${renderResult(reply.result)}\n`, stderr: `${code}: ${reason}\n` };
 }
 
-// Failures that mean the daemon is not answering yet: an absent or dropped socket, a request that
-// timed out, or a reply cut short while the daemon is still binding its socket (SCHEMA_INVALID).
-// ensureDaemon keeps polling on these; when none ever answers it reports DAEMON_START_TIMEOUT.
-const NOT_YET_ANSWERING: readonly ErrorCode[] = ["REALM_NOT_ACTIVE", "TOOL_TIMEOUT", "SCHEMA_INVALID"];
-// The probe ensureDaemon polls: one status request on a fresh client. A not-yet-answering failure
-// reads as no daemon yet (false); any other failure propagates unchanged.
-function probeDaemon(deps: ResolvedDeps): (socketPath: string) => Promise<boolean> {
-  return async (socketPath) => {
-    const client = deps.connect(socketPath);
-    try {
-      await client.status();
-      return true;
-    } catch (error) {
-      if (error instanceof RealmError && NOT_YET_ANSWERING.includes(error.code)) {
-        return false;
-      }
-      throw error;
-    } finally {
-      client.close();
-    }
-  };
-}
-
 // The daemon's startup log: <stateDir>/daemon.log, append-only and owner-only. The state directory is
 // made at 0700 when missing, because the log opens before the daemon creates it. The child keeps its own
 // copy of the descriptor, so the parent closes its copy once the spawn returns.
@@ -395,7 +372,7 @@ async function runUp(deps: ResolvedDeps, socketPath: string, workspaceRoot: stri
   try {
     await ensureDaemon({
       socketPath,
-      probe: reportingStartFailure(probeDaemon(deps), deps.stateDir),
+      probe: reportingStartFailure(daemonAnswers(deps.connect), deps.stateDir),
       spawnDaemon: spawnDetachedDaemon(deps),
       timeoutMs: upTimeoutMs,
       pollMs: RETRY_INTERVAL_MS,
@@ -476,7 +453,7 @@ async function runDoctor(deps: ResolvedDeps, stateDir: string, socketPath: strin
 async function ensureSharedDaemon(deps: ResolvedDeps, socketPath: string): Promise<void> {
   await ensureDaemon({
     socketPath,
-    probe: reportingStartFailure(probeDaemon(deps), deps.stateDir),
+    probe: reportingStartFailure(daemonAnswers(deps.connect), deps.stateDir),
     spawnDaemon: spawnDetachedDaemon(deps),
     timeoutMs: controlTimeoutOf(deps, "up"),
     pollMs: MCP_POLL_INTERVAL_MS,

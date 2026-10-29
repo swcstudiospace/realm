@@ -539,8 +539,10 @@ void test("production live 5: after the daemon is killed, the next realm up reap
 
 // ---- Scenario 6: MCP exec -----------------------------------------------------------------------------------------------
 
-// The one protocol revision the server speaks (src/mcp/server.ts MCP_PROTOCOL_VERSION).
-const MCP_PROTOCOL_REVISION = "2026-07-28";
+// The two revisions one realm mcp process serves (src/mcp/protocol.ts): the session below handshakes with a legacy revision the
+// way Claude Code does, and later sends a modern request that names MCP_MODERN_REVISION in its _meta, the way Grok Build does.
+const MCP_LEGACY_REVISION = "2025-11-25";
+const MCP_MODERN_REVISION = "2026-07-28";
 const MCP_TOOL_NAMES: readonly string[] = ["exec", "read", "write", "list", "status", "retry"];
 
 // The value under key of a JSON object, or undefined for anything else.
@@ -548,27 +550,32 @@ function field(value: unknown, key: string): unknown {
   return typeof value === "object" && value !== null ? Reflect.get(value, key) : undefined;
 }
 
-// One tools/call. The server returns the dispatcher outcome unchanged as the JSON-RPC result, so a tool that ran is
-// {outcome: "done", tool, value}. A refusal or a RealmError comes back as an MCP tool error (isError, structuredContent with the
-// catalogue code), because the daemon client throws the refusal's code. Both fail the scenario with that code.
+// One tools/call. The result is an MCP tool result: structuredContent is the dispatcher outcome unchanged ({outcome: "done", tool,
+// value} for a tool that ran) and content carries the same JSON as a text block, which is what a host shows to the model. A refusal
+// or a RealmError comes back as a tool error (isError, structuredContent with the catalogue code), because the daemon client throws
+// the refusal's code. Both fail the scenario with that code.
 async function callTool(session: McpSession, tool: string, args: Readonly<Record<string, unknown>>): Promise<unknown> {
   const result = await session.request("tools/call", { name: tool, arguments: args }, MCP_RESPONSE_TIMEOUT_MS);
+  const outcome = field(result, "structuredContent");
   if (field(result, "isError") === true) {
-    assert.fail(`tools/call ${tool} returned a tool error: ${describeValue(field(result, "structuredContent"))}; realm mcp stderr ${session.stderr()}`);
+    assert.fail(`tools/call ${tool} returned a tool error: ${describeValue(outcome)}; realm mcp stderr ${session.stderr()}`);
   }
-  assert.equal(field(result, "outcome"), "done", `tools/call ${tool}: ${describeValue(result)}; realm mcp stderr ${session.stderr()}`);
-  assert.equal(field(result, "tool"), tool, `tools/call ${tool}: the outcome names another tool: ${describeValue(result)}`);
-  return field(result, "value");
+  assert.equal(field(outcome, "outcome"), "done", `tools/call ${tool}: ${describeValue(result)}; realm mcp stderr ${session.stderr()}`);
+  assert.equal(field(outcome, "tool"), tool, `tools/call ${tool}: the outcome names another tool: ${describeValue(result)}`);
+  const blocks = field(result, "content");
+  const first: unknown = Array.isArray(blocks) ? (blocks as unknown[])[0] : undefined;
+  assert.equal(field(first, "type"), "text", `tools/call ${tool}: the result needs a text content block for the model: ${describeValue(result)}`);
+  return field(outcome, "value");
 }
 
 async function runMcpSession(scenario: Scenario, session: McpSession): Promise<void> {
-  // 1. The handshake. realm mcp claims the workspace before it reads any input, so the first answer waits for the attach.
+  // 1. The legacy handshake. realm mcp claims the workspace before it reads any input, so the first answer waits for the attach.
   const initialized = await session.request(
     "initialize",
-    { protocolVersion: MCP_PROTOCOL_REVISION, capabilities: {}, clientInfo: { name: "realm-live-suite", version: "0" } },
+    { protocolVersion: MCP_LEGACY_REVISION, capabilities: {}, clientInfo: { name: "realm-live-suite", version: "0" } },
     MCP_FIRST_RESPONSE_TIMEOUT_MS,
   );
-  assert.equal(field(initialized, "protocolVersion"), MCP_PROTOCOL_REVISION, `initialize: ${describeValue(initialized)}`);
+  assert.equal(field(initialized, "protocolVersion"), MCP_LEGACY_REVISION, `initialize: ${describeValue(initialized)}`);
   assert.equal(typeof field(field(initialized, "serverInfo"), "name"), "string", `initialize serverInfo: ${describeValue(initialized)}`);
   assert.equal(typeof field(field(initialized, "capabilities"), "tools"), "object", `initialize capabilities.tools: ${describeValue(initialized)}`);
   // A message without an id takes no reply.
@@ -615,7 +622,19 @@ async function runMcpSession(scenario: Scenario, session: McpSession): Promise<v
   assert.equal(field(readBack, "truncated"), false, `read truncated: ${describeValue(readBack)}`);
   rmSync(hostPath);
 
-  // 7. Closing stdin ends the session, and realm mcp exits 0.
+  // 7. The same process answers a modern request: the protocol version in _meta, resultType on every result, and the model-facing
+  // content block beside structuredContent.
+  const modernMeta = { "io.modelcontextprotocol/protocolVersion": MCP_MODERN_REVISION };
+  const discovered = await session.request("server/discover", { _meta: modernMeta }, MCP_RESPONSE_TIMEOUT_MS);
+  assert.equal(field(discovered, "resultType"), "complete", `server/discover: ${describeValue(discovered)}`);
+  const supported = field(discovered, "supportedVersions");
+  assert.ok(Array.isArray(supported) && supported.includes(MCP_MODERN_REVISION) && supported.includes(MCP_LEGACY_REVISION), `server/discover supportedVersions: ${describeValue(discovered)}`);
+  const modernStatus = await session.request("tools/call", { name: "status", arguments: {}, _meta: modernMeta }, MCP_RESPONSE_TIMEOUT_MS);
+  assert.equal(field(modernStatus, "resultType"), "complete", `modern tools/call: ${describeValue(modernStatus)}`);
+  assert.equal(field(modernStatus, "isError"), false, `modern tools/call isError: ${describeValue(modernStatus)}`);
+  assert.equal(field(field(modernStatus, "structuredContent"), "outcome"), "done", `modern tools/call outcome: ${describeValue(modernStatus)}`);
+
+  // 8. Closing stdin ends the session, and realm mcp exits 0.
   session.closeInput();
   const ended = await session.waitForExit(MCP_EXIT_TIMEOUT_MS);
   assert.notEqual(ended, undefined, `realm mcp must exit within ${String(MCP_EXIT_TIMEOUT_MS / 1000)} s of its stdin closing; stderr ${session.stderr()}`);
@@ -661,10 +680,10 @@ async function statusOf(scenario: Scenario): Promise<StatusFields> {
 async function initializeMcp(session: McpSession): Promise<void> {
   const initialized = await session.request(
     "initialize",
-    { protocolVersion: MCP_PROTOCOL_REVISION, capabilities: {}, clientInfo: { name: "realm-live-suite", version: "0" } },
+    { protocolVersion: MCP_LEGACY_REVISION, capabilities: {}, clientInfo: { name: "realm-live-suite", version: "0" } },
     MCP_FIRST_RESPONSE_TIMEOUT_MS,
   );
-  assert.equal(field(initialized, "protocolVersion"), MCP_PROTOCOL_REVISION, `initialize: ${describeValue(initialized)}`);
+  assert.equal(field(initialized, "protocolVersion"), MCP_LEGACY_REVISION, `initialize: ${describeValue(initialized)}`);
   session.notify("notifications/initialized");
 }
 

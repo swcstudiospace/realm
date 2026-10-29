@@ -55,11 +55,15 @@ async function driveMcp(dispatcher: McpDispatcher, lines: readonly string[]): Pr
   return { stdoutLines: stdout === "" ? [] : stdout.slice(0, -1).split("\n") };
 }
 
+// An MCP tools/call result wraps the outcome: structuredContent is the ToolOutcome the dispatcher returned, and
+// the envelope fields around it (content, isError, resultType) are transport framing, stripped here like the JSON-RPC
+// ids (P5-D13). The envelope itself is checked in test/mcp/server.test.ts.
 function mcpResultOf(line: string): ToolOutcome {
-  const body = JSON.parse(line) as { jsonrpc: string; result?: unknown; error?: unknown };
+  const body = JSON.parse(line) as { jsonrpc: string; result?: { structuredContent?: unknown }; error?: unknown };
   assert.equal(body.jsonrpc, "2.0", "every MCP reply is a JSON-RPC message");
   assert.ok(body.result !== undefined, `the MCP reply carries a result, not a transport error: ${line}`);
-  return body.result as ToolOutcome;
+  assert.ok(body.result.structuredContent !== undefined, `the MCP result carries structuredContent: ${line}`);
+  return body.result.structuredContent as ToolOutcome;
 }
 
 async function mcpOutcomes(dispatcher: McpDispatcher, calls: readonly ToolCall[]): Promise<ToolOutcome[]> {

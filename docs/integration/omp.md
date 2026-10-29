@@ -136,7 +136,7 @@ Run on this host with the built extension loaded by `-e`, under an isolated prof
 Two defects found by the live run were fixed in this pass:
 
 - The `session_start` handler read the context as its first argument. The host calls handlers as `(event, ctx)`, so `ctx.setInterval` was undefined and the status item never painted. `src/omp/plugin.ts` now takes `(event, ctx)`, and the plugin tests call handlers the same way.
-- A daemon that refused to start was reported as `DAEMON_START_TIMEOUT`. The daemon writes its own code to `<stateDir>/daemon.log` as `realm daemon: <CODE>`. `src/daemon/ensure.ts` reads that line, and `realm up`, `realm mcp`, `realm acp`, and the Omp attach report that code.
+- A daemon that refused to start was reported as `DAEMON_START_TIMEOUT`. The daemon writes its own code to `<stateDir>/daemon.log` as `realm daemon: <CODE>`. `src/daemon/ensure.ts` reads that line, and `realm up`, `realm mcp`, `realm acp`, and the Omp attach report that code. A `LOCK_CONFLICT` line is not reported: it is what a second daemon writes when it finds a live daemon owning the socket, so the hosts waiting for the first one keep waiting. The Omp attach and the CLI share one probe (`daemonAnswers`), so a daemon that is still binding its socket or busy with its startup reap is waited for, never spawned over.
 
 Observed status item (`extension_ui_request`, method `setStatus`, `statusKey` `realm`):
 

@@ -28,7 +28,7 @@ A change must pass every gate below before it is reviewed.
 | `npm run build` | Compile to `dist/` |
 | `npm run check:gates` | Gate closure (TOOL-02): the exec gate modules' import closure reaches no forbidden module and no `child_process` (`scripts/check/gate-closure.mjs`) |
 | `npm run check:pack` | Pack smoke test: packs the package, installs the tarball into a throwaway consumer and loads the schemas and adapter manifests; run `npm run build` first |
-| `npm run check:mcp` | MCP smoke test: spawns the built `realm mcp` over stdio and calls status; run `npm run build` first |
+| `npm run check:mcp` | MCP smoke test: spawns the built `realm mcp` over stdio, drives one session in both protocol eras and checks the result shapes and the status call; run `npm run build` first |
 
 ## Branches and pull requests
 

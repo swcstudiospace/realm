@@ -13,6 +13,7 @@
 
 import { StringDecoder } from "node:string_decoder";
 import { RealmError } from "../core/errors.js";
+import { packageVersion } from "../core/package-version.js";
 import type { ToolDispatcher, ToolOutcome } from "../tools/dispatch.js";
 
 // The ACP generation Realm speaks (docs/integration/acp.md Q5, P5-D10).
@@ -28,7 +29,11 @@ export const REALM_TOOL_METHOD = "_realm/tool" as const;
 // it cannot use the com.example/<name> form the extensibility page suggests.
 const REALM_TOOL_CAPABILITY = "realm/tool" as const;
 
-export const AGENT_INFO = Object.freeze({ name: "realm", version: "0.0.0" });
+// The agent identity advertised in `initialize`. The version is the package's own, read from its manifest, so it
+// moves with each release instead of reading 0.0.0.
+export function agentInfo(): { readonly name: string; readonly version: string } {
+  return { name: "realm", version: packageVersion() };
+}
 
 // JSON-RPC transport codes. These are framing codes, not Realm catalogue
 // codes; no entry is added to src/core/errors.ts.
@@ -163,7 +168,7 @@ async function handleLine(
       send(success(id, {
         protocolVersion: ACP_PROTOCOL_VERSION,
         agentCapabilities: { _meta: { [REALM_TOOL_CAPABILITY]: true } },
-        agentInfo: { ...AGENT_INFO },
+        agentInfo: agentInfo(),
       }));
     }
     return;

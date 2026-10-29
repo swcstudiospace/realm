@@ -4,12 +4,20 @@
 
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { PassThrough, Writable } from "node:stream";
 import { finished } from "node:stream/promises";
-import { ACP_PROTOCOL_VERSION, AGENT_INFO, REALM_TOOL_METHOD } from "../../src/acp/agent.js";
+import { ACP_PROTOCOL_VERSION, REALM_TOOL_METHOD } from "../../src/acp/agent.js";
 import { runAcpOverStdio } from "../../src/acp/stdio.js";
 import { ERROR_CATALOGUE, makeRealmError } from "../../src/core/errors.js";
 import type { ToolDispatcher } from "../../src/tools/dispatch.js";
+
+// The version the manifest declares, read here independently of the code under test (the release job rewrites it).
+function manifestVersion(): string {
+  const manifest: unknown = JSON.parse(readFileSync("package.json", "utf8"));
+  assert.ok(typeof manifest === "object" && manifest !== null && "version" in manifest && typeof manifest.version === "string");
+  return manifest.version;
+}
 
 async function runOverStdio(
   t: TestContext,
@@ -61,7 +69,7 @@ async (t) => {
     result: {
       protocolVersion: ACP_PROTOCOL_VERSION,
       agentCapabilities: { _meta: { "realm/tool": true } },
-      agentInfo: { ...AGENT_INFO },
+      agentInfo: { name: "realm", version: manifestVersion() },
     },
   });
   const entry = ERROR_CATALOGUE["OPENSHELL_START_FAILED"];
