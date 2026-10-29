@@ -4,12 +4,15 @@
 
 Realm moves from frozen contracts and documentation gates to a verified sandbox vertical slice, then to the host surfaces that expose it. Phase 1 freezes the shared contracts and the integration notes that gate every external dependency. Phase 2 builds the policy, state, and filesystem logic that needs no container. Phase 3 adds the rootless Podman container, OpenShell, AgentOS, and the Anda bridge behind the lifecycle controller. Phase 4 adds crash cleanup, default-deny egress, and the single tool dispatcher. Phase 5 exposes that dispatcher through the Omp plugin, MCP, and ACP. Phase 6 adds the standalone CLI, the daemon, and host packaging. Phase 7 documents the policy and records the security review before the first release.
 
-Coverage: 46/46 v1 requirements mapped, each to exactly one phase. v2.0 adds 8 requirements (HOST-01..03, OMP-LIVE-01..04, UI-01), mapped to phases 8 to 10. The production isolation build adds 31 PRD requirements, mapped to phases 9.1 to 9.6.
+Milestone v3.0, Containment by Default, makes the sandbox the place where a model's file mutations and commands run by default, and makes the sandbox and its files survive crashes and be observable. It has nine phases, 12 to 20, in three lanes that share no mutable state and may run in parallel; inside a lane the order is strict. The Omp lane (12, 15, 16) proves by a scripted-provider harness what Omp's extension API can enforce, adds zero-config onboarding with fail-closed as the default policy mode, and registers Realm's tools in Omp so that its built-in `write`, `edit` and `bash` are replaced or blocked in fail-closed mode. The runtime lane (14, 17, 18, 19) adds crash safety, a tamper-evident audit log with structured logs and metrics, one sandbox per project, and resume and checkpoint. The pipeline lane (13, 20) adds the quality and supply-chain ratchet, then splits and hardens the release job. Live runs on the shared realm stack are serialized, because the startup reap is account-wide.
+
+Coverage: 46/46 v1 requirements mapped, each to exactly one phase. v2.0 adds 8 requirements (HOST-01..03, OMP-LIVE-01..04, UI-01), mapped to phases 8 to 10. The production isolation build adds 31 PRD requirements, mapped to phases 9.1 to 9.6. v3.0 adds 52 requirements (HARN, QR, CRASH, ONB, DEF, OMPX, OBS, MULTI, RES, REL) mapped to phases 12 to 20.
 
 ## Milestones
 
 - 🗄 **v1.0 provisional** — Phases 1 to 7 (archived in `milestones/`)
 - 🗄 **v2.0 Host Adapters, Live Verification and Production Isolation** — Phases 8 to 11 (shipped as releases 0.2.0 and 0.2.1 on 2026-10-29; archived in `milestones/`)
+- 🚧 **v3.0 Containment by Default** — Phases 12 to 20 (in progress, release line 0.3.x)
 
 ## Phases
 
@@ -173,6 +176,20 @@ Plans:
 - [x] **Phase 11: Milestone v2.0 Close** - Milestone completion after a gsd-tools dry run, with scratch profiles and worktrees removed — Complete (2026-10-29: the audit found and fixed five defects in the released build, release 0.2.1; the milestone was completed with eight requirements carried)
 
 </details>
+
+### 🚧 v3.0 Containment by Default (In Progress)
+
+**Milestone Goal:** A model working through Omp does its file mutations and commands inside the sandbox by default; the sandbox and its files survive crashes; an operator can see what happened, prove the audit log is intact, and ship with provenance and a rollback path.
+
+- [ ] **Phase 12: Scripted-provider harness and Omp enforcement spike** - A gated harness drives a live Omp through a scripted provider in three cases, the spike answers what the extension API can enforce, and OMP-05 is recorded complete on that evidence (HARN-01..04, OMPX-01)
+- [ ] **Phase 13: Quality ratchet** - Dependency audit and Dependabot, pack checks, coverage floors, de-flaked timing tests, property tests, and a scheduled mutation run (QR-01..08)
+- [ ] **Phase 14: Crash-safety pack** - Orphan temp-file sweep, audit reconciliation, durable record deletion, a visible reap, real-SIGKILL tests, the cause code across the daemon, and retry after a lost container (CRASH-01..07)
+- [ ] **Phase 15: Zero-config onboarding and fail-closed default** - `realm init`, `doctor --fix`, driver roots in `config.json`, an allowlisted daemon environment, a verified Omp install path, and fail-closed as the default policy mode (ONB-01..07, DEF-01..02)
+- [ ] **Phase 16: Omp runs in the sandbox** - Realm's tools are registered in Omp, and in fail-closed mode the built-in `write`, `edit` and `bash` are removed or blocked by the mechanism the spike proved (OMPX-02..05)
+- [ ] **Phase 17: Observability and tamper-evident audit** - A hash-chained audit log with `realm audit verify`, structured logs with correlation ids, counters over the control socket, and a distinct code for gateway or driver loss (OBS-01..04)
+- [ ] **Phase 18: Per-project sandboxes** - One session, sandbox, audit file and lock table per project workspace under the configured roots (MULTI-01..06)
+- [ ] **Phase 19: Resume and checkpoint** - A surviving sandbox that passes the hardening verifier is re-adopted after a daemon restart, a session-owned scratch volume, and workspace snapshot and restore (RES-01..05)
+- [ ] **Phase 20: Release pipeline hardening** - Unprivileged build job and privileged publish job, build provenance attestation, a rollback workflow, and a changelog filter for removed features (REL-01..04)
 
 ## Phase Details
 
@@ -342,10 +359,153 @@ The owner lifted the ship hold on 2026-10-28 for one pull request with autoMerge
 
 </details>
 
+### Phase 12: Scripted-provider harness and Omp enforcement spike
+
+**Goal:** A live Omp, driven by a scripted model provider with no credentials, shows what the Realm extension does with a model-issued `write` in each mode, and the extension API's enforcement limits are known and recorded.
+**Depends on:** Nothing (first phase of the Omp lane; parallel with the runtime and pipeline lanes)
+**Requirements:** HARN-01, HARN-02, HARN-03, HARN-04, OMPX-01
+**Success Criteria** (what must be TRUE):
+  1. One command runs the harness against the built extension and a local Omp and passes; it starts an isolated Omp profile, a loopback OpenAI-compatible stub with a scripted sequence (one `write` tool call, then a final message), and Omp over RPC pipes with no pseudo-terminal, credentials or tokens, and it records the Omp version (HARN-01, HARN-03).
+  2. The three cases pass: advisory mode with the realm down shows the notice and the file exists; fail-closed mode with the realm down blocks the call with `REALM_NOT_ACTIVE` and the file does not exist; with the realm active the call proceeds (HARN-02).
+  3. A capture of the run shows no network call outside loopback, and without Omp, Podman or the gate variable the command skips with the missing prerequisite named, as the production live suite does (HARN-03).
+  4. `docs/integration/omp.md` records, with the Omp version, whether `registerTool` tools reach the model, whether `setActiveTools` removes `write`, `edit` and `bash` and is enforced at execution, and whether `registerFileWriteFallback` can redirect a write; OQ-P5-01 and OQ-P5-02 are closed or restated from that finding (OMPX-01).
+  5. The OMP-05 row in `.planning/REQUIREMENTS.md` reads complete, and its basis states that the run is scripted through Omp's own `write` tool and is not LLM-driven (HARN-04).
+
+**Notes:** Owner decision D2 (2026-10-29): when the harness passes live, the scripted-provider evidence closes OMP-05, with that basis stated. The finding of the OMPX-01 spike gates Phase 16 (owner decision D3). Live runs on the shared realm stack are serialized, because the startup reap is account-wide.
+
+**Plans**: TBD
+
+### Phase 13: Quality ratchet
+
+**Goal:** Regressions in dependencies, coverage, packaging and the security-relevant path and policy logic fail in CI or in a scheduled run before they ship, and the test suite no longer fails under load.
+**Depends on:** Nothing (pipeline lane; Phase 20 follows it because both change the CI workflow)
+**Requirements:** QR-01, QR-02, QR-03, QR-04, QR-05, QR-06, QR-07, QR-08
+**Success Criteria** (what must be TRUE):
+  1. `ci.yml` runs `npm audit --omit=dev --audit-level=high`, and `.github/dependabot.yml` exists and covers `github-actions` and `npm` for the repository root and for `site/` (QR-01, QR-02).
+  2. `pack-smoke` fails when a host snippet or the prime-agent `MCP.md` or `SKILL.md` is missing from the tarball, and the release job reruns `check:pack` on the release tarball after the version sync (QR-03).
+  3. `npm run test:coverage` prints the Node test runner's coverage output, and CI fails when coverage in `src/fs`, `src/core` or `src/tools` falls below its recorded floor, shown by a run against a lowered coverage; the dead exports found with that output are removed and the frozen error catalogue is unchanged (QR-04, QR-06).
+  4. The libpod TTL cache test and the idempotent lifecycle test use an injected fake clock, the 21 `{ timeout: 10_000 }` caps under `test/acp` and the other fixed waits use the shared scaled-timeout helper in `test/support`, and the full suite passes in a CPU-limited container (QR-05).
+  5. `fast-check` properties for the path canonicalizer (no result escapes the root for random `..`, symlink, NUL, doubled-slash and unicode inputs) and the policy parser (round trip, unknown keys rejected) run in `npm test`, a deliberately broken canonicalizer fails at least one of them, and a scheduled non-blocking workflow runs mutation testing over `src/fs`, `src/core/policy.ts` and `src/audit/redact.ts` (QR-07, QR-08).
+
+**Notes:** Each change under `.github/workflows/**` and `release/**` cites owner decision D6 in its pull request body. The `fast-check` dev dependency carries the justification, licence check and maintenance check that `CONTRIBUTING.md` requires. The property tests add confidence only; FS-02 keeps its status, which is the owner's call.
+
+**Plans**: TBD
+
+### Phase 14: Crash-safety pack
+
+**Goal:** A daemon or process killed at any point leaves no unrecorded debris, no silent loss of a sandbox, and no audit admission without an outcome.
+**Depends on:** Nothing (runtime lane, first phase)
+**Requirements:** CRASH-01, CRASH-02, CRASH-03, CRASH-04, CRASH-05, CRASH-06, CRASH-07
+**Success Criteria** (what must be TRUE):
+  1. For each of the four stages (`after-temp-write`, `after-fsync`, `before-rename`, `after-recheck`), a real-SIGKILL test leaves the original bytes intact and one orphan temp file, and the next startup sweep removes it with an audit line; the sweep removes only regular files named `.<name>.realm-tmp-<16 lowercase hex>` older than the stated bound, never follows a symlink, and leaves every other dotfile (CRASH-01, CRASH-05).
+  2. A crash test that leaves an admission line without a result line gets exactly one reconciliation line at the next start, marked as a reconciliation and not an execution result, and a second start appends none (CRASH-02).
+  3. `SessionStore.delete` syncs the sessions directory, shown through the directory-sync helper of `src/fs/atomic-write.ts`; the startup reap logs the container ids removed and the number of records deleted, and the next attach shows a status-read notice (CRASH-03, CRASH-04).
+  4. The daemon-path equivalence test beside `test/surfaces/equivalence.test.ts` shows the same refusal cause code over MCP and over ACP as in process (CRASH-06).
+  5. A controller test with the recorded container removed reaches `active` on retry from the error state, with a new container, and not `OPENSHELL_START_FAILED` (CRASH-07).
+
+**Notes:** CRASH-02 uses an existing catalogue code if one fits; otherwise the one catalogue addition that owner decision D5 allows, with every table, document and test that enumerates codes updated in the same pull request. Phase 17 follows because its hash chain must cover the reconciliation lines. Live runs on the shared realm stack are serialized, because the startup reap is account-wide.
+
+**Plans**: TBD
+
+### Phase 15: Zero-config onboarding and fail-closed default
+
+**Goal:** A new user on a Podman 5.x host reaches an active sandbox with `realm init` and `realm up` and no manual edit, and a policy that says nothing about its mode contains the agent.
+**Depends on:** Nothing (Omp lane; it follows Phase 12 only for scheduling)
+**Requirements:** ONB-01, ONB-02, ONB-03, ONB-04, ONB-05, ONB-06, ONB-07, DEF-01, DEF-02
+**Success Criteria** (what must be TRUE):
+  1. On a clean host with Podman 5.x, `realm init` followed by `realm up` reaches active with no manual file edit; `init` writes the `config.json` and `policy.json` templates, creates the state directory with mode 0700, refuses to overwrite an existing file, and takes the image digest as an argument or from `release/` and never invents one (ONB-01).
+  2. `realm doctor` fails with a named check and a fix when a driver root is unset, relative or mode-wrong, or when the driver socket or the gateway is unreachable, and a unit test covers each check; `realm doctor --fix` on a state directory with mode 0755 changes it to 0700, a second run changes nothing, dry-run changes nothing, and a symlinked directory is refused (ONB-02, ONB-04).
+  3. The secret, workspace and state roots are read from `config.json` with a default under `stateDir`, the `REALM_DRIVER_SECRET_ROOT`, `REALM_DRIVER_WORKSPACE_ROOT` and `REALM_DRIVER_STATE_ROOT` variables are gone (the driver's other `REALM_DRIVER_*` variables are unchanged), and the driver and the daemon read the same source; a test shows a sentinel environment variable does not reach the daemon started by `startDetachedDaemon` or by the CLI's spawn (ONB-03, ONB-07).
+  4. A policy file with no `mode` loads as fail-closed, the schema default and the loader agree, advisory needs the explicit value, and the policy reference, README, Omp notes, doctor output and `init` templates state the fail-closed default; a search of the documents finds none that calls advisory the default, and every test that relied on the old default states its mode or asserts the new one (DEF-01, DEF-02).
+  5. `omp plugin install` is run live under an isolated profile and the result is recorded in `docs/hosts/snippets/omp.md`, and `README.md` carries the install steps and a quickstart transcript of `init`, `up`, `status` and `down` captured on a real Podman 5.x host (ONB-05, ONB-06).
+
+**Notes:** Owner decision D4 (2026-10-29) flips the default `mode` from `advisory` to `fail-closed`, superseding the earlier decision to keep advisory as the default; the schema default, the loader, `docs/policy-reference.md`, the README, the Omp notes, the doctor output, the `init` templates and every test that relied on the old default change together in one clean cutover. The driver launcher lives outside the repository (TD-02), so moving the roots into `config.json` is coordinated with whoever launches the driver, or the driver and the daemon will disagree. Live runs on the shared realm stack are serialized, because the startup reap is account-wide.
+
+**Plans**: TBD
+
+### Phase 16: Omp runs in the sandbox
+
+**Goal:** A model working through Omp does its file mutations and commands through Realm's tools in the sandbox, and in fail-closed mode its built-in host `write`, `edit` and `bash` are gone or refused.
+**Depends on:** Phase 12 (the harness test bed and the enforcement answer) and Phase 15 (the fail-closed default and the roots in `config.json`); Omp lane
+**Requirements:** OMPX-02, OMPX-03, OMPX-04, OMPX-05
+**Success Criteria** (what must be TRUE):
+  1. The extension registers `exec`, `read`, `write`, `list` and `status` as Omp tools, each calling the daemon client with the frozen `ToolCall` shape; `retry` stays the `realm-retry` command, no `glob` tool exists, and the frozen tool schema tests pass unchanged (OMPX-02).
+  2. In fail-closed mode the built-in `write`, `edit` and `bash` are removed or blocked by the mechanism the Phase 12 spike proved, the `tool_call` guard stays as a backstop, and a model-issued `bash` call is refused with a catalogue code; where the spike shows the API cannot enforce removal, the status text and the docs say fail-closed is a guard and not containment (OMPX-03).
+  3. In advisory mode the Realm tools are registered, the built-in tools stay available, and the existing notice shows (OMPX-04).
+  4. In the Phase 12 harness with the realm active, a model-issued write through the registered tool lands in the sandbox's `/workspace` and appears in the host root, and the audit log holds an admission line and a result line for it (OMPX-05).
+
+**Notes:** Owner decision D3 (2026-10-29) permits removal or blocking of the built-ins only by the mechanism the Phase 12 spike proves; the spike answer decides whether criterion 2 reads as containment or as a guard. Live runs on the shared realm stack are serialized, because the startup reap is account-wide.
+
+**Plans**: TBD
+
+### Phase 17: Observability and tamper-evident audit
+
+**Goal:** An operator can read what happened from structured logs and counters, tell a gateway loss from a runner crash, and prove the audit log has not been edited.
+**Depends on:** Phase 14 (reconciliation lines must be covered by the hash chain); runtime lane. Phase 17 deliberately precedes Phase 18: the session id is a log field and a file-name component from the start, and Phase 18 completes the per-project naming (MULTI-03), because structured logs and metrics make the multi-session and adoption work diagnosable.
+**Requirements:** OBS-01, OBS-02, OBS-03, OBS-04
+**Success Criteria** (what must be TRUE):
+  1. Each audit line carries `seq` and `prev` (the sha256 of the previous line); `realm audit verify` passes an untouched file, including one with Phase 14 reconciliation lines, and names the first broken line after a middle line is edited, removed or reordered; the chain head is recovered from the last line at startup (OBS-01).
+  2. The daemon log is one JSON object per line with a level, the catalogue code in a fixed field and a correlation id per `up` and per tool call; a tool call's log line carries the same correlation id as its admission and result audit lines; `package.json` gains no dependency (OBS-02).
+  3. Counters and timings for tool calls by outcome, state transitions and attach duration are read over the existing control socket, and a listing of the daemon's listening sockets shows no network listener (OBS-03).
+  4. With the gateway killed, `realm status` and a probe test show the new gateway-or-driver-loss code and not `AGENTOS_CRASH_LOOP`, and every table, document and test that enumerates catalogue codes includes it (OBS-04).
+
+**Notes:** Owner decision D5 allows the one catalogue addition for gateway or driver loss (TD-05); any other catalogue change needs a reason recorded in the phase context. The design of OBS-01 covers the Merkle anchor and the reconciliation lines of Phase 14. Live runs on the shared realm stack are serialized, because the startup reap is account-wide.
+
+**Plans**: TBD
+
+### Phase 18: Per-project sandboxes
+
+**Goal:** Two projects under the configured roots each get their own active sandbox, workspace, audit file and lock table, and taking one down leaves the other running.
+**Depends on:** Phase 17 (the session id is already a log field and file-name component); runtime lane
+**Requirements:** MULTI-01, MULTI-02, MULTI-03, MULTI-04, MULTI-05, MULTI-06
+**Success Criteria** (what must be TRUE):
+  1. `docs/integration/runtime-decision.md` records one session per project workspace, superseding one session per daemon, in a commit that precedes the code that needs it (MULTI-01).
+  2. Two `realm up` calls from two project directories under the configured roots yield two active sandboxes `realm-<sessionId>` with distinct `/workspace` contents; a write in one is not visible in the other; the compute driver and the gateway contract carry the workspace per sandbox, with PRD-DRV-01 handled only as far as this needs (MULTI-02, MULTI-04, MULTI-05).
+  3. `realm down` for one project leaves the other active, and each session has its own record, pinned subdirectory, bind mount, audit file, lock table and status snapshot; unit tests cover the per-session pin (MULTI-03, MULTI-05).
+  4. A directory outside every configured root is refused with `POLICY_DENIED` (MULTI-02).
+  5. The aggregate memory and CPU commitment of concurrent sessions is bounded and documented, using existing configuration and no new catalogue code (MULTI-06).
+
+**Notes:** The runtime decision (owner decision D5, item i) is recorded first, before any code that needs it. Live runs on the shared realm stack are serialized, because the startup reap is account-wide.
+
+**Plans**: TBD
+
+### Phase 19: Resume and checkpoint
+
+**Goal:** A daemon crash or restart no longer destroys a good sandbox or its files, and an operator can keep scratch data and roll a workspace back to a snapshot.
+**Depends on:** Phase 18 (adoption is per session) and Phase 14 (the orphan sweep and audit reconciliation run before adoption); runtime lane
+**Requirements:** RES-01, RES-02, RES-03, RES-04, RES-05
+**Success Criteria** (what must be TRUE):
+  1. `docs/integration/runtime-decision.md` records the reaper decision and the RT-01 mount-list amendment for the scratch volume in a commit that precedes the code that needs them (RES-01).
+  2. A live scenario kills the daemon and restarts it, and the same container id is active with its `/workspace` content intact and no second container exists (RES-02, RES-05).
+  3. A container that fails the create-time hardening verifier, and a container with no record, are removed at startup, and both outcomes are logged (RES-02, RES-05).
+  4. A file written to the session-owned scratch volume beyond `/workspace` survives a daemon restart and is gone after `realm down` (RES-03, RES-05).
+  5. The snapshot and restore commands return a modified workspace to its prior content byte for byte, using the mechanism (copy, reflink or filesystem snapshot) that a recorded spike chose (RES-04, RES-05).
+
+**Notes:** Owner decision D5, items ii and iii: the startup reaper re-adopts a running container that passes the hardening verifier and removes what cannot be proven good, superseding the "remove everything" form of D-84, D-86 and RT-08 while keeping the no-orphan guarantee in a precise form, and RT-01's mount list gains the scratch volume. Both are recorded before the code. Live runs on the shared realm stack are serialized, because the startup reap is account-wide.
+
+**Plans**: TBD
+
+### Phase 20: Release pipeline hardening
+
+**Goal:** A release is built without privilege, carries a verifiable provenance attestation, can be marked a prerelease by one workflow, and has a changelog that omits features that were removed.
+**Depends on:** Phase 13 (both change the CI workflow); pipeline lane, scheduled last because it changes the release path that every earlier pull request ships through
+**Requirements:** REL-01, REL-02, REL-03, REL-04
+**Success Criteria** (what must be TRUE):
+  1. The release workflow has an unprivileged build job and a separate publish job, and the write permissions and the publishing steps are only in the publish job, as shown by reading the workflow and by a release run (REL-01).
+  2. `gh attestation verify` accepts a release artifact produced by the new workflow (REL-02).
+  3. Running the manual rollback workflow on a test release marks it a prerelease and re-points the documentation (REL-03).
+  4. A test over `scripts/release/changelog.mjs` shows that the commits of a feature that was later removed are absent from the generated changelog (REL-04).
+
+**Notes:** Owner decision D6 (2026-10-29) signs off the changes under `.github/workflows/**`, `release/**` and `scripts/release/**`; each pull request cites D6 in its body, and human review before merge still applies (`AGENTS.md`). The repository settings of TD-10 (secret scanning, push protection, branch protection, `sha_pinning_required`) stay the owner's and cannot be changed from the repository; only the job split and the attestation are in this phase. The attestation is unverified until a release built by the new workflow exists.
+
+**Plans**: TBD
+
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 9.1 → 9.2 → 9.3 → 9.4 → 9.5 → 9.6 → 9.7 → 10 → 11
+Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 9.1 → 9.2 → 9.3 → 9.4 → 9.5 → 9.6 → 9.7 → 10 → 11 → 12 → 13 → 14 → 15 → 16 → 17 → 18 → 19 → 20
+
+Milestone v3.0 phases (12 to 20) run in three parallel lanes that share no mutable state: Omp 12, 15, 16; runtime 14, 17, 18, 19; pipeline 13, 20. The Depends on line of each phase governs; the numeric order above is the default sequence when one worker runs them all. Live runs on the shared realm stack take a lock and run one at a time.
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -359,7 +519,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 8. Host Adapter Bundles | 1/1 | Complete (closed 2026-10-24 on validator exit codes; artifacts hand-written, pending owner ratification) | - |
 | 9. Live Omp Verification | 3/3 | Complete (2026-10-28): plan 09-01 closed for code and unit gates on 2026-10-25; OMP-LIVE-01, -03, and -04 were run live on the final build in phase 9.6 (owner decision 2026-10-25, reinstating them from the 2026-10-23 descope); OMP-LIVE-02 met live earlier; UI-01 non-blocking recorded as a stated limitation | - |
 | 9.1. Host Prerequisites and Production Gateway | 1/1 | Complete (2026-10-25): T1 to T9 with evidence; T6 reboot PASS; the main gateway's keep-alive bridge was restored after the reboot and is persistent through boot unit HC-07 | - |
-| 9.2. Native Enforcement Helper | 1/1 | Superseded (2026-10-28): the helper was built and gated in 2026-10-25, then removed by owner decision; enforcement is the runtime policy plus the vendored seccomp profile, proven live in phase 9.6 | - |
+| 9.2. Native Enforcement Helper | 1/1 | Complete (superseded 2026-10-28): the helper was built and gated in 2026-10-25, then removed by owner decision; enforcement is the runtime policy plus the vendored seccomp profile, proven live in phase 9.6 | - |
 | 9.3. Hardened Container Lifecycle | 1/1 | Complete, VERIFIED_WITH_GAPS (2026-10-25): live acceptance 1, 4, 5, 6, 7 PASS after the reboot; acceptance 2 and 3 unit-verified, live NOT RUN; launch and active removal unit-verified | - |
 | 9.4. Compute Driver gRPC | 1/1 | Complete, VERIFIED (2026-10-25): gateway connected live; create, get, list, and delete observed; limits carried to 9.5 (Ready state, PD-08 stop and start live, AuthenticateSandbox) | - |
 | 9.5. Isolation Backend and Sandbox Protocol | 1/1 | Complete on the amended built-in path (2026-10-26): live T0 reached Ready with the runtime as PID 1 and the host supervisor connected; PD-15 host placement and PD-10 runtime policy decided; live checks moved to 9.6 | - |
@@ -367,3 +527,12 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 9.7. Review-Finding Remediation | 1/1 | Complete (2026-10-28): the A10 and A18 findings fixed or recorded; four defects found by the live proof fixed (rlimit REST names, driver shutdown, doctor digest bound, verifier exit-2 classification); nine live scenarios 31 of 31 on the rebuilt image, twice (the second on the final installed build); gates at the closing code commit: 1828 tests, 1818 pass, 0 fail, 10 skipped, test:scripts 109 of 109. Pull request 6 (2026-10-29): Greptile 0, 4, then 5 of 5 over three rounds (six findings, all fixed; one was a regression from an earlier fix), CI green; on the PR head 2c401b5: 1843 tests, 1833 pass, 0 fail, 10 skipped, test:scripts 109 of 109, live suite 31 of 31 on that exact build. The RT-04 wording was amended by the owner to match ruling N1 and the other owner decisions are listed in 09.7-VERIFICATION.md | - |
 | 10. Docs, Packaging, and Release 0.2.0 | 4/4 | Complete (2026-10-29): plans 10-01 to 10-03 done, HOST-03 complete; 10-04: the reserved files were reviewed by four independent lanes plus an adversarial review and a release rehearsal and upgraded (10-04-RESERVED-FILES.md), TOOL-05 was proven live, pull request 6 was merged through the ship flow with a merge commit (550a41f) after Greptile gave 5 of 5 on its final head, the release job published v0.2.0 (84d937c) with checksums and an SBOM, Pages deployed, and the released tarball passed the live suite on the production stack (31 of 31) | 2026-10-29 |
 | 11. Milestone v2.0 Close | 1/1 | Complete (2026-10-29): the milestone audit ran against the built and installed product and found five defects the records had marked complete (the MCP server could not be used from Claude Code, its tool results and an exec descriptor did not match the revision and the Anthropic API, both agent surfaces advertised 0.0.0, and the Omp attach probe), all fixed in pull request 7 and released as 0.2.1 (31 of 31 on the live suite); `milestone complete v2.0 --confirm` then archived the milestone with eight requirements carried (FS-02, ANDA-01 to 04, OMP-05, PRD-DRV-01 open; UI-01 an accepted limitation) | 2026-10-29 |
+| 12. Scripted-provider harness and Omp enforcement spike | 0/TBD | Not started | - |
+| 13. Quality ratchet | 0/TBD | Not started | - |
+| 14. Crash-safety pack | 0/TBD | Not started | - |
+| 15. Zero-config onboarding and fail-closed default | 0/TBD | Not started | - |
+| 16. Omp runs in the sandbox | 0/TBD | Not started | - |
+| 17. Observability and tamper-evident audit | 0/TBD | Not started | - |
+| 18. Per-project sandboxes | 0/TBD | Not started | - |
+| 19. Resume and checkpoint | 0/TBD | Not started | - |
+| 20. Release pipeline hardening | 0/TBD | Not started | - |

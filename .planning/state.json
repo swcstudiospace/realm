@@ -1,7 +1,7 @@
 {
   "contract": "1.0.0",
   "flavor": "core",
-  "milestone": "v2.0 — Host Adapters, Live Verification and Production Isolation",
+  "milestone": "v3.0 — Containment by Default",
   "phases": [
     {
       "number": "1",
@@ -92,12 +92,57 @@
       "number": "11",
       "name": "Milestone v2.0 Close",
       "status": "complete"
+    },
+    {
+      "number": "12",
+      "name": "Scripted-provider harness and Omp enforcement spike",
+      "status": "pending"
+    },
+    {
+      "number": "13",
+      "name": "Quality ratchet",
+      "status": "pending"
+    },
+    {
+      "number": "14",
+      "name": "Crash-safety pack",
+      "status": "pending"
+    },
+    {
+      "number": "15",
+      "name": "Zero-config onboarding and fail-closed default",
+      "status": "pending"
+    },
+    {
+      "number": "16",
+      "name": "Omp runs in the sandbox",
+      "status": "pending"
+    },
+    {
+      "number": "17",
+      "name": "Observability and tamper-evident audit",
+      "status": "pending"
+    },
+    {
+      "number": "18",
+      "name": "Per-project sandboxes",
+      "status": "pending"
+    },
+    {
+      "number": "19",
+      "name": "Resume and checkpoint",
+      "status": "pending"
+    },
+    {
+      "number": "20",
+      "name": "Release pipeline hardening",
+      "status": "pending"
     }
   ],
   "next": {
-    "command": "/gsd-new-milestone",
-    "label": "Start the next milestone",
-    "reason": "Milestone v2.0 is complete and archived"
+    "command": "/gsd-progress --next",
+    "label": "Advance to the next step (plan phase 1)",
+    "reason": "Phase ? of 9 — needs a plan"
   },
-  "updated_at": "2026-10-29T07:19:04.623Z"
+  "updated_at": "2026-10-29T13:53:46.043Z"
 }
