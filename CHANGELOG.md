@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.3.6] - 2026-10-29
+
+### Added
+- feat(daemon): sweep and reconcile at start, log the reap and show a notice (phase 14, part 2) (#15) (5719f81)
+
 ## [0.3.5] - 2026-10-29
 
 ### Security
