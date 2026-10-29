@@ -198,3 +198,12 @@ Verified live on 2026-10-28 on the final build (Omp 18.12.6, Podman 5.7.1), in a
 8. Quit Omp. Confirm the same daemon process is still running and `realm status` reports active (OMP-LIVE-04).
 
 Limits. OMP-05 (the write and edit guard when disconnected) needs a model call and stays unproven live. The ACP surface was exercised live on 2026-10-29 by a separate client (`docs/integration/acp.md`), not by these Omp checks. The Anda engine is not in scope.
+
+### Closing OMP-05 live (needs a model)
+
+OMP-05 stays partial because the guard sits on the host's `tool_call` hook, and only a model can make the host call its own `write` or `edit` tool. The guard's decisions are unit-tested in `test/omp/plugin.test.ts`; this procedure observes them in a live host. It needs an Omp profile with a working model provider. The realm account's profile ran out of quota on 2026-10-28; a provider key is the owner's to supply, and none is stored in this repository.
+
+1. Run steps 1 to 3 of the live checks above, under an isolated profile, until the status item reads `● realm active`.
+2. Advisory mode (the default). Run `realm down` in another shell so the item reads `○ realm disconnected · REALM_NOT_ACTIVE`, then ask the model to create a file in the workspace with its write tool. Expected: the call goes through, Omp shows the notice "realm status unavailable (REALM_NOT_ACTIVE); the write proceeds under advisory policy" (once the daemon is gone the guard cannot read the realm's state, so it reports the code of the failed read; when a daemon answers in a state other than active, the notice reads "realm is <state>; the write proceeds under advisory policy"), and the file exists on the host. Delete that file before step 3.
+3. Fail-closed mode. Write `"mode": "fail-closed"` in the state directory's policy file (`docs/policy-reference.md`, `mode`), restart the daemon, reattach with `/realm-retry`, run `realm down`, and ask the model to write a file at a fresh path that you have confirmed does not exist. Expected: Omp reports the call blocked, with `REALM_NOT_ACTIVE` as the reason (when a daemon answers in another state, the reason is `REALM_UNBOUND`, `REALM_STOPPING` or `REALM_NOT_ACTIVE`, whichever fits that state), and the file does not exist.
+4. Record both outcomes with the Omp version. Writes made through the bash tool, and any other host path that does not pass the `tool_call` hook for `write` or `edit`, are not covered by this guard (OQ-P5-02) and stay outside the claim.

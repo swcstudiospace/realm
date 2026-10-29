@@ -6,6 +6,8 @@
 
 All v1 requirements are hypotheses until shipped and verified.
 
+**Milestone v2.0 closed 2026-10-29.** The full table is archived at `.planning/milestones/v2.0-REQUIREMENTS.md`. The requirements still open (FS-02, ANDA-01 to ANDA-04, OMP-05, PRD-DRV-01) and the accepted limitation UI-01 are carried into the next milestone; this file stays as their live record until `/gsd-new-milestone` replaces it.
+
 ## v1 Requirements
 
 ### Foundation (FOUND)
@@ -232,7 +234,7 @@ Filled by the roadmap. Each v1 requirement maps to exactly one phase.
 | QUAL-03 | Phase 7 | Complete |
 | HOST-01 | Phase 8 | Complete (Claude Code validate passes with 2 warnings; Grok validate passes; MCP entry is realm mcp) |
 | HOST-02 | Phase 8 | Complete (2026-10-24: Claude Code, Grok Build, Muse Code, and Hermes Agent validators pass in isolated homes; Prime Agent isolated install and list pass; wording amended by owner decision 2026-10-24) |
-| HOST-03 | Phase 10 | Complete (audit 2026-10-28, 10-03-SUMMARY.md: no host configuration file in either account names this repository or the realm entry points; the five Claude Code backups that exist all date from the same day, were written by running Claude Code instances, and name nothing of this repository; check:pack asserts the six adapter manifests, the declared bin and Omp entries; the release itself, plan 04, stays held by the owner's ship hold) |
+| HOST-03 | Phase 10 | Complete (audit 2026-10-28, 10-03-SUMMARY.md, repeated after the release on 2026-10-29, 10-VERIFICATION.md: no host configuration file in the root account names this repository or the realm entry points, and the realm account holds no host location after a leftover Omp daemon run directory from the live checks was removed; the five Claude Code backups that exist name nothing of this repository; check:pack asserts the six adapter manifests, the declared bin and Omp entries, and the released tarball of v0.2.0 contains them) |
 | OMP-LIVE-01 | Phase 9 | Complete (live 2026-10-28 on the final build: a live Omp TUI under an isolated profile with the built extension shows realm active; reinstated by the owner 2026-10-25) |
 | OMP-LIVE-02 | Phase 9 | Complete (live 2026-10-23: disconnected with the daemon's own reason, never active; re-run 2026-10-24 on Podman 5.7.1: disconnected with SCHEMA_INVALID, never active) |
 | OMP-LIVE-03 | Phase 9 | Complete (live 2026-10-28: after realm down the item shows disconnected with REALM_NOT_ACTIVE, and the retry command returns it to active in the same session; reinstated 2026-10-25) |

@@ -2,20 +2,20 @@
 gsd_state_version: "1.0"
 milestone: v2.0
 milestone_name: Host Adapters, Live Verification and Production Isolation
-current_phase_name: Docs, Packaging, and Release 0.2.0 (plan 04, shipping pull request 6)
-current_phase: 10
-status: Shipping pull request 6 (Greptile review, merge by the ship flow, then the 0.2.0 release); milestone close follows
-stopped_at: Phase 10 plan 04 in progress; Phase 11 plan 01 executed up to the milestone confirmation, which follows the merge
-last_updated: "2026-10-29T04:20:00.000Z"
+status: Awaiting next milestone
+stopped_at: Milestone v2.0 completed and archived (2026-10-29); the next step is /gsd-new-milestone
+last_updated: "2026-10-29T07:19:04.226Z"
 last_activity: 2026-10-29
-state_head: b22749999daa96bed624c95ef967fc1c6800b6fe
+last_activity_desc: Milestone v2.0 completed and archived
+state_head: 8b3ff5509d20aef934faad506a2a206788d100c1
 progress:
   total_phases: 11
-  completed_phases: 15
-  total_plans: 11
-  completed_plans: 10
-  percent: 91
-last_activity_desc: Reserved files reviewed and upgraded, TOOL-05 proven live, final gates and live suite green; pull request 6 goes to main through the ship flow
+  completed_phases: 16
+  total_plans: 12
+  completed_plans: 12
+  percent: 100
+current_phase: 11
+current_phase_name: Milestone v2.0 Close (complete)
 ---
 
 # Project State
@@ -29,10 +29,10 @@ See: .planning/PROJECT.md (updated 2026-10-22)
 
 ## Current Position
 
-Phase: Phase 11, Milestone v2.0 Close: executed up to the owner gates; phases 8 to 10 complete or held as recorded
-Plan: none open; Phase 10 plan 04 (release) and the milestone confirmation are held
-Status: Paused at the owner gates (ship hold, milestone confirmation)
-Last activity: 2026-10-28
+Phase: Milestone v2.0 complete
+Plan: —
+Status: Awaiting next milestone
+Last activity: 2026-10-29 — Milestone v2.0 completed and archived
 
 ## Performance Metrics
 
@@ -147,8 +147,8 @@ Detail, by phase: Phase 3 covers RT-01, RT-02, RT-03, RT-09, and the live parts 
 ## Session Continuity
 
 Last session: 2026-10-28T20:55:00.000Z
-Stopped at: Phase 11 plan 01 executed up to the owner's confirmation; Phase 10 plan 04 and the ship are held by the owner
-Resume file: .planning/phases/11-milestone-close/11-01-SUMMARY.md
+Stopped at: Milestone v2.0 completed and archived (2026-10-29)
+Resume file: none (the milestone is complete; start with /gsd-new-milestone)
 
 Recorded commits (closure run): 72817e9 (private flag restored, engines >=22.13.0); 390f511 (causeCode and catalogue codes, host paths, lifecycle bound, root identity, exec margin); b6bc892 (daemon entry, AgentOS fail-closed, catalogue refusals, per-method control bounds); 8088159 (daemon owns sessions; tool method; daemon client; Omp and MCP attach); 4b1d4ab (smoke fixes: CLI probe, up and down exits, state-dir 0700); c55056a (traceability: requirements by evidence, spike facts, runtime config, Omp attach contract); a999c17 (audit gap closure: realm acp, refusal code mapping, one state-dir resolver, Omp status, pinned-root rebind, catch-site fixes, daemon server-failure stop); dd02034 (re-audit, planning, and docs); 54bc236 (MCP tool-call diagnostic); plus the decisions commit (see git log).
 
@@ -167,7 +167,7 @@ Recorded commits (earlier): e949ad3, 53fc919, 26ab145 (phases 1 to 3); 6b28fa4 a
 
 ## Operator Next Steps
 
-- Decided 2026-10-23: FS-02 accepted, OMP-LIVE-01 and -04 descoped, ship held, Linear left in Backlog. Remaining: archived v1.0 items on a Podman 5.x host, phases 8 to 10 completion, ultrathink-ship (held), and the v2.0 close (needs an explicit owner --confirm).
+- Start the next milestone with /gsd-new-milestone. The carried requirements, the open owner decisions and the tech-debt register are in `.planning/milestones/v2.0-MILESTONE-AUDIT.md`, and a summary is in PROJECT.md under "Next Milestone Goals".
 
 ## Run ut-mvlvx860-9e2d5e0a (gsd-autonomous, 2026-10-24)
 
@@ -619,4 +619,9 @@ Incident note, not a decision: while reading usage, I ran `state.signal-waiting`
 - ACP and TOOL-05: the tool method was `realm/tool`, which ACP v1 reserves (extensions must start with an underscore); it is now `_realm/tool` and `initialize` advertises it. A client then ran `realm mcp` and `realm acp` against the same live sandbox: 67 checks, 0 failed, 16 equality checks. TOOL-05 is complete. Realm answers `session/new` with method not found by design, so a standard ACP host cannot start a session with it.
 - Verification on the final tree: typecheck, lint, check:docs, check:pack and check:mcp exit 0; `npm test` 1846 tests, 1836 pass, 0 fail, 10 skipped; `test:scripts` 126 of 126; the nine-scenario live suite 31 of 31 on the installed build of that tree, zero residue. An earlier full run failed 3 tests (one real: the ACP stdio test needed the new capability field, fixed; two timing tests, `bridge-retry` and the `session-execution` child-pid wait, whose windows of 10 s and 5 s expired at host load 63 with agent lanes building in parallel); both passed three times in isolation at loads of 16, 35 and 104 and in the next full run, so the cause is starvation, not logic, and they were not changed.
 - Merge decision: a merge commit for pull request 6. The changelog lists `git log --no-merges` subjects; a squash would reduce the 0.2.0 notes to one line and strand the commit SHAs these records cite. AGENTS.md states the rule.
-- Next: push, Greptile 5 of 5 and a green CI run on the exact head, the ship flow's merge (`ship.autoMerge` on and `mergeMethod` merge for this pull request only), then verify the release job's 0.2.0, install the released tarball on the realm host and rerun the live suite, then the milestone audit, completion and cleanup in a second pull request.
+- Pull request 6: Greptile round 5 (head f06bf27) gave 4 of 5 with one P1, a real defect in the new Pages dispatch condition (a rerun after a failed dispatch skipped Pages); fixed in 2b468a7 by dispatching exactly when the tip of main is a release commit, and the next round (head b8de12d) gave 5 of 5 with no comments. Merged through the ship flow on 2026-10-29 as merge commit 550a41f; the release job published v0.2.0 (release commit 84d937c: SHA256SUMS, a CycloneDX SBOM of 51 components, 135 changelog entries, none scoped planning) and the Pages deploy succeeded, which proved the per-job permissions.
+- Install and live proof of 0.2.0: the released tarball was installed on the realm account (the compiled output differed from the earlier build only in a comment header) and the production live suite passed 31 of 31. A post-release host-configuration audit found no file naming this repository in any of the five hosts' configuration, and a dead Omp daemon run directory left by the live checks in the realm account was removed.
+- The real-host check (the finding of this run): the released 0.2.0 was run with the real hosts in isolated homes. Claude Code 2.1.308 failed to connect ("Server's protocol version is not supported: 2026-07-28"); Grok Build connected. Reading the 2026-07-28 schema and the Anthropic API's tool-schema restriction then found two more defects in the MCP surface (tool results without a content block or resultType, and an exec descriptor with a root oneOf that the API rejects with a 400 that fails the whole request), and both agent surfaces advertised 0.0.0. Pull request 7 (merge commit 2c818c4; Greptile 4 of 5 on the first head with a P1 on the shared probe spawning over a busy daemon, then 5 of 5) fixed these and the Omp attach probe, and the release job published v0.2.1 (release commit 8b3ff55). On the installed 0.2.1 Claude Code connects, Grok Build connects and lists six tools, and the production live suite passes 31 of 31. The MCP finding is recorded with its sources in docs/integration/mcp.md Q6.
+- Milestone close: the audit (`milestones/v2.0-MILESTONE-AUDIT.md`) is gaps_found: 76 satisfied, 6 superseded, 8 carried; the carried items cannot be closed by this run (FS-02 accepted approximation; ANDA-01 to 04 live-gated behind the engine licence conflict; OMP-05 needs a model call and its procedure is now written; PRD-DRV-01 awaits the owner; UI-01 an accepted limitation) and were accepted as tech debt under the owner's delegation, as v1.0 was. `milestone complete v2.0 --confirm` archived the roadmap, the requirements, the audit and the 11 phase directories; the roadmap and PROJECT.md were updated by hand as the workflow directs.
+- Process notes for the owner: no signed gate records exist for this run; the ship flow's GSD gate (roadmap incomplete) was waived with `--ignore-gsd` for pull requests 6 and 7 under the 2026-10-29 instruction; one docs lane edited the read-only product spec and was reverted; a gsd-verifier lane failed twice at start-up with the larger brief and its record was written by an a15-docs lane instead; two timing tests flaked once under a host load of 63; the ship config's autoMerge flipped unexpectedly once (restored, and left true as the owner's original value); the realm account's older scratch that the phase 11 inventory kept for the owner was not touched.
+- Next: the milestone-close pull request (this change), Greptile 5 of 5, merge through the ship flow with the default squash, and a release (0.2.2) for it; then the local worktree and branch of this change are removed.

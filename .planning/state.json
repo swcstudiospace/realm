@@ -1,7 +1,7 @@
 {
   "contract": "1.0.0",
   "flavor": "core",
-  "milestone": "v2.0",
+  "milestone": "v2.0 — Host Adapters, Live Verification and Production Isolation",
   "phases": [
     {
       "number": "1",
@@ -56,7 +56,7 @@
     {
       "number": "9.2",
       "name": "Native Enforcement Helper",
-      "status": "pending"
+      "status": "complete"
     },
     {
       "number": "9.3",
@@ -81,23 +81,23 @@
     {
       "number": "9.7",
       "name": "Review-Finding Remediation",
-      "status": "in_progress"
+      "status": "complete"
     },
     {
       "number": "10",
       "name": "Docs, Packaging, and Release 0.2.0",
-      "status": "in_progress"
+      "status": "complete"
     },
     {
       "number": "11",
       "name": "Milestone v2.0 Close",
-      "status": "pending"
+      "status": "complete"
     }
   ],
   "next": {
-    "command": "/gsd-progress --next",
-    "label": "Advance to the next step",
-    "reason": "Phase 7 of 18 · executing"
+    "command": "/gsd-new-milestone",
+    "label": "Start the next milestone",
+    "reason": "Milestone v2.0 is complete and archived"
   },
-  "updated_at": "2026-10-28T16:14:48.517Z"
+  "updated_at": "2026-10-29T07:19:04.623Z"
 }
