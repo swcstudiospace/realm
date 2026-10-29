@@ -57,3 +57,43 @@ void test("CRASH-04: onRemoved is not called for a removal that failed, and the 
   );
   assert.deepEqual(removed, ["ok"]);
 });
+
+void test("CRASH-04: a removal whose reply is lost but whose container is gone is reported exactly once, after the proving listing", async () => {
+  const live = new Set(["fine", "lost-reply"]);
+  const client: SweepClient = {
+    listContainersByLabel: () =>
+      Promise.resolve([...live].map((id) => ({ id, labels: { "openshell.ai/sandbox-name": `realm-${id}` } }))),
+    removeContainer: (id: string) => {
+      live.delete(id);
+      return id === "lost-reply" ? Promise.reject(makeRealmError("PODMAN_MACHINE_DOWN")) : Promise.resolve();
+    },
+  };
+  const removed: string[] = [];
+  const count = await removeAllRealmContainers(client, (id) => {
+    removed.push(id);
+  });
+  assert.equal(count, 2);
+  assert.deepEqual([...removed].sort(), ["fine", "lost-reply"], "the ids match the count, each once");
+});
+
+void test("CRASH-04: a lost-reply removal is reported even when another container survives, and the survivor is not", async () => {
+  const live = new Set(["lost-reply", "stuck"]);
+  const client: SweepClient = {
+    listContainersByLabel: () =>
+      Promise.resolve([...live].map((id) => ({ id, labels: { "openshell.ai/sandbox-name": `realm-${id}` } }))),
+    removeContainer: (id: string) => {
+      if (id === "lost-reply") {
+        live.delete(id);
+      }
+      return Promise.reject(makeRealmError("PODMAN_MACHINE_DOWN"));
+    },
+  };
+  const removed: string[] = [];
+  await assert.rejects(
+    removeAllRealmContainers(client, (id) => {
+      removed.push(id);
+    }),
+    (error: unknown) => error instanceof RealmError && error.code === "REALM_STOPPING",
+  );
+  assert.deepEqual(removed, ["lost-reply"]);
+});

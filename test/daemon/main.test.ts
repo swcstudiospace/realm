@@ -210,6 +210,34 @@ void test("STARTUP budget: the startup line says maintenanceComplete=false and n
   ]);
 });
 
+void test("CRASH-04: a failed reap's partial report is logged, then the start failure, and the exit code is 1", async (t) => {
+  const dir = tempDir(t);
+  const h = harness(writeConfig(dir, validConfig(dir)), {
+    start: (options) => {
+      options.onStartup?.({
+        containerIds: ["0123abcd"],
+        containersRemoved: 1,
+        recordsDeleted: 0,
+        tempFilesRemoved: 0,
+        auditLinesReconciled: 0,
+        truncated: false,
+        unfinishedSweepRoots: [],
+        unfinishedAuditFiles: [],
+        maintenanceComplete: false,
+        reapFailure: "REALM_STOPPING",
+        failures: 1,
+      });
+      return Promise.reject(makeRealmError("REALM_STOPPING"));
+    },
+  });
+
+  assert.equal(await runDaemon(h.deps), 1);
+  assert.deepEqual(h.lines, [
+    "realm daemon: startup removed 1 container(s)[0123abcd] and 0 session record(s); removed 0 orphan temp file(s); reconciled 0 audit admission(s); maintenanceComplete=false; reap failed: REALM_STOPPING; 1 startup failure(s)",
+    "realm daemon: REALM_STOPPING",
+  ]);
+});
+
 void test("REALM_DRIVER_SECRET_ROOT in the environment is passed to the daemon start as the secret root", async (t) => {
   const dir = tempDir(t);
   const secretRoot = join(dir, "secrets");

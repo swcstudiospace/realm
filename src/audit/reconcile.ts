@@ -17,12 +17,17 @@
 // call unknown that has its result line further on); it, and every log not reached, is reported as unfinished, and a later
 // run finishes it. After a complete run the counts are equal, so a further run appends nothing.
 //
+// Progress: logs are taken newest modified first, and a small cache record (RECONCILE_PROGRESS_FILE) remembers the size and
+// mtime of each log after it was completely checked, so a start with a small budget makes progress instead of re-reading the
+// same old logs from byte zero every time. The record is a cache: deleting or corrupting it only costs one rescan.
+//
 // This module reads no process state: the audit directory comes from the caller.
 
 import { Buffer } from "node:buffer";
-import { closeSync, constants, fstatSync, lstatSync, openSync, readdirSync, readSync } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, openSync, readdirSync, readFileSync, readSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
+import { atomicWriteFile, observeSha256 } from "../fs/atomic-write.js";
 import { appendAudit, type ExecSummary } from "./log.js";
 
 // A log has no rotation, so one file can be large. A file over this size is skipped and counted as failed.
@@ -44,18 +49,21 @@ export interface ReconcileOptions {
 }
 
 export interface ReconcileResult {
-  // Log files that were read and counted completely.
+  // Log files that were checked completely: scanned in this run, or skipped because the progress record says they are
+  // unchanged since they were last checked completely.
   readonly files: number;
   // Reconciliation lines appended across all files.
   readonly appended: number;
   // Refused entries (a symlinked directory or file, a non-regular file, an unsafe name), files over the size
-  // cap, files that could not be read, and files whose append failed.
+  // cap, files that could not be read, files whose append failed, and a failed write of the progress record.
   readonly failed: number;
   // Base names (no directory) of the logs the deadline left unfinished, including every log not reached. A later run
   // without the deadline finishes them.
   readonly unfinished: readonly string[];
   // True when no log is unfinished.
   readonly complete: boolean;
+  // How many of `files` were skipped without being read because the progress record matched their size and mtime.
+  readonly skippedUnchanged: number;
 }
 
 export interface PairingEntry {
@@ -246,9 +254,94 @@ function reconcileFile(
   return true;
 }
 
-// Reconciles every `<stateDir>/audit/*.jsonl`. A missing audit directory is zero work. A failure on one file
-// is counted in `failed` and does not stop the others. With a deadline, a file whose scan or appends do not finish in time
-// is listed in `unfinished` together with every file not reached, and `complete` is false.
+// The progress record: which logs were completely checked, and how they looked when they were. It is a cache. A log whose
+// size and mtime equal its record was fully checked after its last change, so it is skipped without being read. Deleting
+// the record, or a corrupt one, only costs one rescan. It is a dot file next to the logs and never ends in .jsonl, so it
+// is not mistaken for a log, and its name is not a temp name, so the orphan sweep never touches it.
+export const RECONCILE_PROGRESS_FILE = ".reconciled.json";
+const PROGRESS_MAX_BYTES = 4 * 1024 * 1024;
+
+interface Checked {
+  readonly size: number;
+  readonly mtimeMs: number;
+}
+
+// The record, or an empty map when it is absent, unreadable, corrupt or of the wrong shape: it is never an error, because
+// the cost of an empty record is one rescan. An entry of the wrong shape is dropped on its own.
+function readProgress(dir: string): Map<string, Checked> {
+  const checked = new Map<string, Checked>();
+  let parsed: unknown;
+  try {
+    const file = join(dir, RECONCILE_PROGRESS_FILE);
+    const stat = lstatSync(file);
+    if (!stat.isFile() || stat.size > PROGRESS_MAX_BYTES) {
+      return checked;
+    }
+    parsed = JSON.parse(readFileSync(file, "utf8"));
+  } catch {
+    // An absent or unreadable record is an empty one, by design: the logs are rescanned and the record is rewritten.
+    return checked;
+  }
+  if (!isRecord(parsed)) {
+    return checked;
+  }
+  for (const [name, value] of Object.entries(parsed)) {
+    if (
+      isRecord(value) &&
+      typeof value["size"] === "number" &&
+      Number.isFinite(value["size"]) &&
+      typeof value["mtimeMs"] === "number" &&
+      Number.isFinite(value["mtimeMs"])
+    ) {
+      checked.set(name, { size: value["size"], mtimeMs: value["mtimeMs"] });
+    }
+  }
+  return checked;
+}
+
+// Writes the record atomically, keeping only logs that still exist. Returns false when the write failed: a lost record is
+// one rescan, so the caller counts it and goes on.
+function writeProgress(dir: string, checked: ReadonlyMap<string, Checked>, present: ReadonlySet<string>): boolean {
+  const body: Record<string, Checked> = {};
+  for (const [name, entry] of checked) {
+    if (present.has(name)) {
+      body[name] = entry;
+    }
+  }
+  try {
+    const target = join(realpathSync(dir), RECONCILE_PROGRESS_FILE);
+    atomicWriteFile(target, JSON.stringify(body), { expectedPriorSha256: observeSha256(target) });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// The logs in the order they are reconciled: newest modified first (the sessions that were running at a crash are the ones
+// with unmatched admissions), ties by name. A log that cannot be examined sorts last and is counted when its turn comes.
+function newestFirst(dir: string, names: readonly string[]): string[] {
+  const mtimes = new Map<string, number>();
+  for (const name of names) {
+    try {
+      mtimes.set(name, lstatSync(join(dir, name)).mtimeMs);
+    } catch {
+      // Counted when the loop reaches this log and its own lstat fails again.
+      mtimes.set(name, Number.NEGATIVE_INFINITY);
+    }
+  }
+  return [...names].sort((a, b) => {
+    const byTime = (mtimes.get(b) ?? Number.NEGATIVE_INFINITY) - (mtimes.get(a) ?? Number.NEGATIVE_INFINITY);
+    if (byTime !== 0 && !Number.isNaN(byTime)) {
+      return byTime;
+    }
+    return a < b ? -1 : a > b ? 1 : 0;
+  });
+}
+
+// Reconciles every `<stateDir>/audit/*.jsonl`, newest modified first. A missing audit directory is zero work. A failure on one
+// file is counted in `failed` and does not stop the others. With a deadline, a file whose scan or appends do not finish in time
+// is listed in `unfinished` together with every file not reached, and `complete` is false. A log that was completely checked
+// in an earlier run and has not changed since (same size and mtime, per the progress record) is not read again.
 export function reconcileAuditLogs(stateDir: string, options: ReconcileOptions = {}): ReconcileResult {
   const maxBytes = options.maxFileBytes ?? RECONCILE_MAX_FILE_BYTES;
   const now = options.now ?? (() => performance.now());
@@ -259,23 +352,28 @@ export function reconcileAuditLogs(stateDir: string, options: ReconcileOptions =
   try {
     const dirStat = lstatSync(dir);
     if (!dirStat.isDirectory() || dirStat.isSymbolicLink()) {
-      return { files: 0, appended: 0, failed: 1, unfinished: [], complete: true };
+      return { files: 0, appended: 0, failed: 1, unfinished: [], complete: true, skippedUnchanged: 0 };
     }
-    names = readdirSync(dir).filter((name) => name.endsWith(JSONL_SUFFIX)).sort();
+    names = readdirSync(dir).filter((name) => name.endsWith(JSONL_SUFFIX));
   } catch (error: unknown) {
     if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") {
-      return { files: 0, appended: 0, failed: 0, unfinished: [], complete: true };
+      return { files: 0, appended: 0, failed: 0, unfinished: [], complete: true, skippedUnchanged: 0 };
     }
-    return { files: 0, appended: 0, failed: 1, unfinished: [], complete: true };
+    return { files: 0, appended: 0, failed: 1, unfinished: [], complete: true, skippedUnchanged: 0 };
   }
+  const ordered = newestFirst(dir, names);
+  const present = new Set(ordered);
+  const checked = readProgress(dir);
 
   let files = 0;
   let appended = 0;
   let failed = 0;
+  let skippedUnchanged = 0;
+  let recordWritable = true;
   const unfinished: string[] = [];
-  for (const [index, name] of names.entries()) {
+  for (const [index, name] of ordered.entries()) {
     if (expired()) {
-      unfinished.push(...names.slice(index));
+      unfinished.push(...ordered.slice(index));
       break;
     }
     const sessionId = name.slice(0, -JSONL_SUFFIX.length);
@@ -286,6 +384,12 @@ export function reconcileAuditLogs(stateDir: string, options: ReconcileOptions =
         failed += 1;
         continue;
       }
+      const prior = checked.get(name);
+      if (prior !== undefined && prior.size === stat.size && prior.mtimeMs === stat.mtimeMs) {
+        files += 1;
+        skippedUnchanged += 1;
+        continue;
+      }
       const scanned = scanFile(file, maxBytes, expired);
       if (scanned.kind === "over-cap") {
         failed += 1;
@@ -293,8 +397,8 @@ export function reconcileAuditLogs(stateDir: string, options: ReconcileOptions =
       }
       if (scanned.kind === "expired") {
         // Nothing is appended for a file whose scan did not finish: a partial count could label a call unknown that has
-        // its result line further on.
-        unfinished.push(...names.slice(index));
+        // its result line further on. Nothing is recorded for it either.
+        unfinished.push(...ordered.slice(index));
         break;
       }
       files += 1;
@@ -302,8 +406,15 @@ export function reconcileAuditLogs(stateDir: string, options: ReconcileOptions =
         appended += 1;
       });
       if (!finished) {
-        unfinished.push(...names.slice(index));
+        unfinished.push(...ordered.slice(index));
         break;
+      }
+      // Measured after this run's own appends, so the next run sees the log as unchanged.
+      const after = lstatSync(file);
+      checked.set(name, { size: after.size, mtimeMs: after.mtimeMs });
+      if (recordWritable && !writeProgress(dir, checked, present)) {
+        recordWritable = false;
+        failed += 1;
       }
     } catch {
       // A per-file failure (unreadable file, refused path, failed append) is counted, not fatal: the other
@@ -311,5 +422,5 @@ export function reconcileAuditLogs(stateDir: string, options: ReconcileOptions =
       failed += 1;
     }
   }
-  return { files, appended, failed, unfinished, complete: unfinished.length === 0 };
+  return { files, appended, failed, unfinished, complete: unfinished.length === 0, skippedUnchanged };
 }

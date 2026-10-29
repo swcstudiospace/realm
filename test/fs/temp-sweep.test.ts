@@ -301,6 +301,19 @@ void test("the sweep stops when the wall budget is spent and reports truncated (
   assert.equal(existsSync(orphan), true);
 });
 
+void test("the sweep never touches the audit progress record, whose name is not a temp name (CRASH-02)", (t) => {
+  const { root } = setup(t);
+  const record = join(root, ".reconciled.json");
+  plant(record, OLD_MS, "{}");
+  const orphan = join(root, `.target.txt.realm-tmp-${HEX}`);
+  plant(orphan, OLD_MS);
+  const audit: TempSweepAuditEntry[] = [];
+  const result = sweepOrphanTempFiles([root], sweepOptions(audit));
+  assert.equal(existsSync(record), true, "the record is kept");
+  assert.equal(existsSync(orphan), false);
+  assert.deepEqual(result.removed.map((entry) => entry.path), [orphan]);
+});
+
 void test("a spent budget reports the root being walked and every root not reached as unfinished (D-1401)", (t) => {
   const { base, root } = setup(t);
   const second = join(base, "second");

@@ -33,6 +33,7 @@ import {
   buildDaemonHandle,
   type BuildDaemonHandleOptions,
   startDaemon,
+  sweepRootsOf,
   type StartedDaemon,
   type StartDaemonOptions,
   type StartupReport,
@@ -583,6 +584,76 @@ void test("STARTUP budget: with a zero budget the gate still opens, the report s
   assert.deepEqual(finished.unfinishedSweepRoots, []);
   await sendRequest(second.socketPath, { id: "d2", method: "down" });
   await awaitDone(second);
+});
+
+void test("CRASH-04: a reap that fails after removing a container still reports the removal, and the start fails with the same error", async () => {
+  const fixture = makeDirs();
+  const reports: StartupReport[] = [];
+  const { options } = daemonParts(fixture, {
+    sweep: (onRemoved) => {
+      onRemoved("0123abcd");
+      return Promise.reject(makeRealmError("REALM_STOPPING", "PODMAN_MACHINE_DOWN"));
+    },
+    onStartup: (report) => {
+      reports.push(report);
+    },
+  });
+
+  await assert.rejects(
+    startDaemon(options),
+    (error: unknown) =>
+      error instanceof RealmError && error.code === "REALM_STOPPING" && error.causeCode === "PODMAN_MACHINE_DOWN",
+  );
+  assert.deepEqual(reports, [
+    {
+      containerIds: ["0123abcd"],
+      containersRemoved: 1,
+      recordsDeleted: 0,
+      tempFilesRemoved: 0,
+      auditLinesReconciled: 0,
+      truncated: false,
+      unfinishedSweepRoots: [],
+      unfinishedAuditFiles: [],
+      maintenanceComplete: false,
+      reapFailure: "REALM_STOPPING",
+      failures: 1,
+    },
+  ]);
+});
+
+void test("D-1401: a nested sweep root on another device is kept, one on the same device is dropped, and an unreadable device keeps it", () => {
+  const fixture = makeDirs();
+  const child = join(fixture.ws, "ssd");
+  mkdirSync(child);
+  const sessions = join(fixture.stateDir, "sessions");
+  const runtime = join(fixture.stateDir, "runtime");
+  const tail = [sessions, runtime];
+
+  assert.deepEqual(
+    sweepRootsOf([fixture.ws, child], fixture.stateDir, () => 7),
+    [fixture.ws, ...tail],
+    "the same device: the parent walk reaches the child",
+  );
+  assert.deepEqual(
+    sweepRootsOf([fixture.ws, child], fixture.stateDir, (path) => (path === child ? 8 : 7)),
+    [fixture.ws, child, ...tail],
+    "another device: the parent walk stops at the mount, so the child is a root of its own",
+  );
+  assert.deepEqual(
+    sweepRootsOf([fixture.ws, child], fixture.stateDir, (path) => {
+      if (path === child) {
+        throw new Error("stat failed");
+      }
+      return 7;
+    }),
+    [fixture.ws, child, ...tail],
+    "an unreadable device: the root is kept",
+  );
+  assert.deepEqual(
+    sweepRootsOf([fixture.ws, fixture.ws], fixture.stateDir, () => 7),
+    [fixture.ws, ...tail],
+    "a repeated root is still dropped",
+  );
 });
 
 void test("CRASH-04: the up reply carries the startup notice when the reap destroyed a container", async (t) => {

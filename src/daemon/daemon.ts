@@ -9,7 +9,7 @@
 // the handle still builds and up refuses with AGENTOS_NOT_CONFIGURED. This module parses no argv,
 // spawns no daemon process, and reads no process environment: every host value arrives through its options.
 
-import { rmSync } from "node:fs";
+import { rmSync, statSync } from "node:fs";
 import { createConnection, createServer, type Server, type Socket } from "node:net";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
@@ -46,7 +46,7 @@ import {
 } from "../runtime/podman-probe.js";
 import { removeAllRealmContainers } from "../runtime/sweep.js";
 import { controlSocketPath, sessionsDirOf, type EnvironmentLike } from "../session/paths.js";
-import { reapStartup } from "../session/reap.js";
+import { reapStartup, type ReapResult } from "../session/reap.js";
 import { SessionStore } from "../session/store.js";
 import {
   chmodSocket,
@@ -134,6 +134,9 @@ export interface StartupReport {
   readonly unfinishedAuditFiles: readonly string[];
   // True when no sweep root and no audit log is unfinished. It says nothing about the notice, which is about the reap only.
   readonly maintenanceComplete: boolean;
+  // Present only when the reap itself failed: the catalogue code it failed with. The report is then partial: it holds what the
+  // reap had destroyed before it stopped, no sweep or reconciliation ran, and the start fails with that same error.
+  readonly reapFailure?: ErrorCode;
   readonly failures: number;
 }
 
@@ -151,7 +154,7 @@ export interface StartDaemonOptions extends BuildDaemonHandleOptions {
   // Reap seam (P6-D4). Defaults to removeAllRealmContainers over the resolved
   // libpod client; tests inject a recording fake. Omitting both sweep and any
   // libpod seam refuses with SCHEMA_INVALID rather than silently skipping the reap.
-  readonly sweep?: () => Promise<number>;
+  readonly sweep?: StartupSweep;
   // Observer for a health probe that threw. The controller has already recorded any outcome that changes the session state; this
   // receives the catalogue code of the failure, including a refusal that left the state unchanged. It must not throw.
   readonly onHealthProbeFailure?: (code: ErrorCode) => void;
@@ -597,7 +600,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
     abortStart(error);
   }
   try {
-    const report = await runStartupMaintenance({
+    await runStartupMaintenance({
       store,
       sweep,
       policy,
@@ -606,9 +609,11 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
       now: () => Date.now(),
       monotonicNow: options.monotonicNow ?? (() => performance.now()),
       budgetMs: options.startupMaintenanceBudgetMs ?? STARTUP_MAINTENANCE_BUDGET_MS,
+      onReport: (report) => {
+        startupNotice = startupNoticeOf(report);
+        options.onStartup?.(report);
+      },
     });
-    startupNotice = startupNoticeOf(report);
-    options.onStartup?.(report);
   } catch (error: unknown) {
     abortStart(error);
   }
@@ -616,8 +621,9 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
   return { socketPath, handle, done };
 }
 
-// The reap's sweep: removes every realm container and resolves with the count. `onRemoved` receives each removed id.
-type StartupSweep = (onRemoved: (id: string) => void) => Promise<number>;
+// The reap's sweep: removes every realm container and resolves with the count. `onRemoved` receives each removed id, so the
+// report can name them; a sweep that names none (most test doubles) ignores the argument.
+export type StartupSweep = (onRemoved: (id: string) => void) => Promise<number>;
 
 interface StartupMaintenanceDeps {
   readonly store: Pick<SessionStore, "list" | "delete">;
@@ -632,6 +638,8 @@ interface StartupMaintenanceDeps {
   readonly monotonicNow: () => number;
   // The budget of the temp-file sweep and the audit reconciliation together, counted from the end of the reap.
   readonly budgetMs: number;
+  // Receives the report once: the full one when the maintenance ended, a partial one (with `reapFailure`) when the reap failed.
+  readonly onReport: (report: StartupReport) => void;
 }
 
 // The whole startup block (D-1409), in this order: the reap, the orphan temp-file sweep, the audit reconciliation, the
@@ -644,15 +652,46 @@ interface StartupMaintenanceDeps {
 // so a huge workspace cannot starve the reconciliation start after start; the reconciliation gets whatever is left. Work
 // that the deadline cuts off is reported (unfinishedSweepRoots, unfinishedAuditFiles, maintenanceComplete) and finished by
 // a later start; the gate opens when the block ends, at most the budget plus one chunk of work after the reap.
-async function runStartupMaintenance(deps: StartupMaintenanceDeps): Promise<StartupReport> {
+async function runStartupMaintenance(deps: StartupMaintenanceDeps): Promise<void> {
+  // The reap's progress outlives its call, so a reap that fails halfway still reports what it destroyed.
   const containerIds: string[] = [];
-  const reaped = await reapStartup({
-    store: deps.store,
-    sweep: () =>
-      deps.sweep((id) => {
-        containerIds.push(id);
-      }),
-  });
+  let sweptCount = 0;
+  let recordsDeleted = 0;
+  let reaped: ReapResult;
+  try {
+    reaped = await reapStartup({
+      store: {
+        list: () => deps.store.list(),
+        delete: (id) => {
+          deps.store.delete(id);
+          recordsDeleted += 1;
+        },
+      },
+      sweep: async () => {
+        sweptCount = await deps.sweep((id) => {
+          containerIds.push(id);
+        });
+        return sweptCount;
+      },
+    });
+  } catch (error: unknown) {
+    // The reap failed, possibly after it had removed containers or deleted records. Record what was destroyed and why it
+    // stopped, hand it to the observer so the log has it, and rethrow the original error: nothing is served after it.
+    deps.onReport({
+      containerIds,
+      containersRemoved: Math.max(sweptCount, containerIds.length),
+      recordsDeleted,
+      tempFilesRemoved: 0,
+      auditLinesReconciled: 0,
+      truncated: false,
+      unfinishedSweepRoots: [],
+      unfinishedAuditFiles: [],
+      maintenanceComplete: false,
+      reapFailure: codeOf(error),
+      failures: 1,
+    });
+    throw error;
+  }
   const deadline = deps.monotonicNow() + deps.budgetMs;
   let failures = 0;
   let tempFilesRemoved = 0;
@@ -665,7 +704,7 @@ async function runStartupMaintenance(deps: StartupMaintenanceDeps): Promise<Star
   } else {
     try {
       const sweepShareMs = Math.max(0, Math.floor((deadline - deps.monotonicNow()) / 2));
-      const swept = sweepOrphanTempFiles(sweepRootsOf(deps.policy, deps.stateDir), {
+      const swept = sweepOrphanTempFiles(sweepRootsOf(deps.policy.workspaceRoots, deps.stateDir), {
         now: deps.now(),
         minAgeMs: ORPHAN_TEMP_MIN_AGE_MS,
         ownerUid,
@@ -700,7 +739,7 @@ async function runStartupMaintenance(deps: StartupMaintenanceDeps): Promise<Star
     // A failure of the reconciliation itself is counted in the report; the lines it appended before it stopped are not.
     failures += 1;
   }
-  return {
+  deps.onReport({
     containerIds,
     containersRemoved: reaped.containersRemoved,
     recordsDeleted: reaped.recordsDeleted,
@@ -711,14 +750,21 @@ async function runStartupMaintenance(deps: StartupMaintenanceDeps): Promise<Star
     unfinishedAuditFiles,
     maintenanceComplete: unfinishedSweepRoots.length === 0 && unfinishedAuditFiles.length === 0,
     failures,
-  };
+  });
 }
 
 // The roots the orphan sweep walks: the policy's workspace roots, the sessions directory and the runtime directory (D-1401).
-// A root that lies inside an earlier one is dropped, so no directory is walked twice. A root that does not bind (for example
-// a runtime directory that was never created) is passed on as it is: the sweep counts it as skipped and walks nothing.
-function sweepRootsOf(policy: Policy, stateDir: string): readonly string[] {
-  const candidates = [...policy.workspaceRoots, sessionsDirOf(stateDir), join(stateDir, "runtime")];
+// A root that lies inside an earlier one is dropped only when that earlier root's walk reaches it, that is when both are on
+// the same device: the walk never crosses into another device, so a root on its own mount (for example /projects/ssd under
+// /projects) is kept. When either device cannot be read the root is kept too, because walking a directory twice costs time
+// and dropping one that is not covered costs the cleanup. A root that does not bind (for example a runtime directory that
+// was never created) is passed on as it is: the sweep counts it as skipped and walks nothing. `deviceOf` is the stat seam.
+export function sweepRootsOf(
+  workspaceRoots: readonly string[],
+  stateDir: string,
+  deviceOf: (path: string) => number = (path) => statSync(path).dev,
+): readonly string[] {
+  const candidates = [...workspaceRoots, sessionsDirOf(stateDir), join(stateDir, "runtime")];
   const bound: PinnedRoot[] = [];
   const roots: string[] = [];
   for (const candidate of candidates) {
@@ -729,13 +775,23 @@ function sweepRootsOf(policy: Policy, stateDir: string): readonly string[] {
       roots.push(candidate);
       continue;
     }
-    if (bound.some((earlier) => isInsideRoot(earlier, pinned.realPath))) {
+    if (bound.some((earlier) => isInsideRoot(earlier, pinned.realPath) && sameDevice(deviceOf, earlier.realPath, pinned.realPath))) {
       continue;
     }
     bound.push(pinned);
     roots.push(pinned.realPath);
   }
   return roots;
+}
+
+// True only when both devices are read and equal. A stat that throws means "not known to be covered", so it is false.
+function sameDevice(deviceOf: (path: string) => number, covering: string, nested: string): boolean {
+  try {
+    return deviceOf(covering) === deviceOf(nested);
+  } catch {
+    // The root is kept and walked on its own, which is the conservative answer to an unreadable device.
+    return false;
+  }
 }
 
 // The notice text (D-1404): present only when the reap destroyed a container or a session record.
