@@ -1,7 +1,7 @@
 {
   "contract": "1.0.0",
   "flavor": "core",
-  "milestone": "v2.0 — Host Adapters, Live Verification and Production Isolation",
+  "milestone": "v3.0",
   "phases": [
     {
       "number": "1",
@@ -56,7 +56,7 @@
     {
       "number": "9.2",
       "name": "Native Enforcement Helper",
-      "status": "complete"
+      "status": "pending"
     },
     {
       "number": "9.3",
@@ -95,9 +95,9 @@
     }
   ],
   "next": {
-    "command": "/gsd-new-milestone",
-    "label": "Start the next milestone",
-    "reason": "Milestone v2.0 is complete and archived"
+    "command": "/gsd-discuss-phase",
+    "label": "Discuss the first phase",
+    "reason": "Project initialized — plan your first phase"
   },
-  "updated_at": "2026-10-29T07:19:04.623Z"
+  "updated_at": "2026-10-29T13:07:46.239Z"
 }
