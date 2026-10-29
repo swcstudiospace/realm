@@ -1080,6 +1080,13 @@ const SNIPPETS = [
   ["enum initializers", "export enum E { A = 1 << 2, B = 'b'.length, C }\nexport const enum F { A = 'a' }\n"],
   ["class members of every kind", "export class Members<T = Default> extends Base<T> implements Iface {\n  static readonly s = 1;\n  #private = 2;\n  accessor acc = 3;\n  [key: string]: unknown;\n  constructor(public readonly a: number, private b?: string) { super(); }\n  get g(): number { return 1; }\n  set g(v: number) {}\n  async *gen(): AsyncGenerator<number> { yield 1; }\n}\nexport interface Default {}\n"],
   ["statements after expressions without semicolons", "const a = 1\nconst b = 2\nexport const c = a + b\nfunction local() {}\nexport const d = local()\n"],
+  ["comparison on a property: p.value<5", "export interface Payload { readonly value: number }\nexport const check = (p: Payload) => p.value<5;\nexport const after = 1;\n"],
+  ["comparison with a digit: x<5", "export const lt = x<5, after = 1;\nexport const more = 2;\n"],
+  ["comparison of two members: a.b<c.d", "export const cmp = a.b<c.d, after = 1;\nexport const more = 2;\n"],
+  ["comparison with a length: i<arr.length", "export const inRange = i<arr.length, after = 1;\nexport const more = 2;\n"],
+  ["chained comparison: a<b>c", "export const chained = a<b>c, after = 1;\nexport const more = 2;\n"],
+  ["generic call: f<T>(x)", "export const called = f<T>(x), after = 1;\nexport const more = 2;\n"],
+  ["generic constructor: new Map<string, number>()", "export const map = new Map<string, number>(), after = 1;\nexport const more = 2;\n"],
   ["ambiguous generic stays conservative", "export const amb = a<b, other = c>(d);\nexport const after = 1;\n", { allowUnclassified: true }],
 ];
 
@@ -1098,3 +1105,36 @@ for (const [title, source, options] of SNIPPETS) {
     }
   });
 }
+
+test("a comparison after a property is not even unclassified: (p: Payload) => p.value<5", () => {
+  const source = "export interface Payload { readonly value: number }\nexport const check = (p: Payload) => p.value<5;\n";
+  assert.deepEqual(collectExports(source, "src/a/x.ts").unparsed, []);
+  assert.deepEqual(classesOf({ "src/a/one.ts": source }), { Payload: "public-signature", check: "self-only" });
+});
+
+test("an unclassified export still protects the types in its extent", () => {
+  const classes = classesOf({
+    "src/a/one.ts": [
+      "export interface Payload { readonly value: number }",
+      "export interface Inner {}",
+      "interface Hidden { readonly inner: Inner }",
+      "export interface Lonely {}",
+      "export const amb = (p: Payload, h: Hidden) => a<b, other = c>(d);",
+      "",
+    ].join("\n"),
+  });
+  // The ambiguous generic keeps `amb` unclassified, and uncertainty may only keep: every type its extent names stays
+  // exported, including a type reached through a non-exported local type.
+  assert.equal(classes.amb, "unclassified");
+  assert.equal(classes.Payload, "public-signature");
+  assert.equal(classes.Inner, "public-signature");
+  assert.equal(classes.Lonely, "self-only");
+});
+
+test("a `<` after an identifier is a comparison before a digit, a minus, a string or an =", () => {
+  for (const comparison of ["a<5", "a< 5", "a<-1", 'a<"s"', "a<'s'", "a<`t`", "a<=b", "a<=b>(c)"]) {
+    const found = collectExports(`export const x = ${comparison}, y = 1;\n`, "src/a/x.ts");
+    assert.deepEqual(found.exports.map((entry) => entry.name), ["x", "y"], comparison);
+    assert.deepEqual(found.unparsed, [], comparison);
+  }
+});

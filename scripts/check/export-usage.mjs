@@ -556,6 +556,10 @@ function declarators(text, from) {
     if (!word || state === "annotation") {
       return close;
     }
+    // After an identifier, `<` followed by a digit, a minus, a string or template start or an `=` is a comparison.
+    if (/[\d\-"'`=]/.test(text[skipBlanks(text, index + 1)] ?? "")) {
+      return -1;
+    }
     const next = text[skipBlanks(text, close + 1)];
     if (next !== undefined && !"(`)],;.:?}".includes(next)) {
       return -1;
@@ -677,6 +681,7 @@ function collect(source, file) {
             kind,
             line: extent.line,
             note: "declaration list that could not be split reliably (generic arguments or a comparison in an initializer)",
+            extent,
           });
         }
         continue;
@@ -692,6 +697,7 @@ function collect(source, file) {
               kind,
               line,
               note: destructured ? "destructured export that could not be parsed" : "declarator that could not be parsed",
+              extent,
             });
           }
           continue;
@@ -781,7 +787,7 @@ export function collectExports(source, file) {
   return {
     exports: exports.map(withoutExtent),
     forwards,
-    unparsed,
+    unparsed: unparsed.map(withoutExtent),
     statements: statements.map(({ start, end, line }) => ({ start, end, line })),
   };
 }
@@ -926,7 +932,8 @@ export function analyze(files) {
         klass = "test-only";
       } else if (
         found.space === "type" &&
-        exports.some(
+        // Uncertainty only ever keeps things: the extent of an unclassified export protects types like any other.
+        [...exports, ...unparsed].some(
           (other) =>
             other.extent !== null &&
             other.extent !== found.extent &&
@@ -941,7 +948,7 @@ export function analyze(files) {
       fileEntries.push({ ...visible, dir: directoryOf(file), class: klass });
     }
     const undecided = [
-      ...unparsed.map((item) => ({ ...item, local: item.name, space: "value", file })),
+      ...unparsed.map((item) => ({ ...withoutExtent(item), local: item.name, space: "value", file })),
       ...unresolved.filter((item) => item.file === file),
     ];
     for (const item of undecided) {
