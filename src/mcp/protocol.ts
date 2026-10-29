@@ -89,8 +89,9 @@ export function toolListResult(era: McpEra, tools: readonly McpToolDescriptor[])
 
 // A tool that ran. The outcome is the structured result; the same JSON is serialised into a text block because a
 // host shows `content` to the model and the specification asks for the serialised form beside `structuredContent`.
-// A refused outcome is a tool failure the model must be able to see, so it carries isError (the ToolOutcome itself
-// is unchanged: it is the frozen contract, and the ACP surface returns it as is).
+// A refused outcome is a tool failure the model must be able to see, so it carries isError. The ToolOutcome itself
+// is the frozen contract and the ACP surface returns it as is; its refused variant gained an optional, additive
+// causeCode (present only when the refusing error carried a cause), which this result then shows in structuredContent.
 export function toolCallResult(era: McpEra, outcome: ToolOutcome): Record<string, unknown> {
   return stamped(era, {
     content: [{ type: "text", text: JSON.stringify(outcome) }],

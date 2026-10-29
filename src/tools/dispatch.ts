@@ -92,6 +92,8 @@ export type ToolOutcome =
       readonly tool: ToolName | null;
       readonly code: ErrorCode;
       readonly retryable: boolean;
+      // Present only when the refusing RealmError carried a cause. Additive and optional.
+      readonly causeCode?: ErrorCode;
     };
 
 export class ToolDispatcher {
@@ -124,7 +126,7 @@ export class ToolDispatcher {
       return await this.#run(parsed.value);
     } catch (error: unknown) {
       if (error instanceof RealmError) {
-        return refused(tool, error.code);
+        return refused(tool, error.code, error.causeCode);
       }
       throw error;
     }
@@ -254,8 +256,11 @@ export class ToolDispatcher {
   }
 }
 
-function refused(tool: ToolName | null, code: ErrorCode): ToolOutcome {
-  return { outcome: "refused", tool, code, retryable: ERROR_CATALOGUE[code].retryable };
+function refused(tool: ToolName | null, code: ErrorCode, causeCode?: ErrorCode): ToolOutcome {
+  const retryable = ERROR_CATALOGUE[code].retryable;
+  return causeCode === undefined
+    ? { outcome: "refused", tool, code, retryable }
+    : { outcome: "refused", tool, code, retryable, causeCode };
 }
 
 // retry is refused in unbound and stopping (D-95). It runs before admission and again at the decision point.

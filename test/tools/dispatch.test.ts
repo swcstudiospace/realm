@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { join } from "node:path";
-import type { ErrorCode } from "../../src/core/errors.js";
+import { type ErrorCode, makeRealmError } from "../../src/core/errors.js";
 import type { State } from "../../src/core/states.js";
 import { createEventBus } from "../../src/core/events.js";
 import { gateMutation } from "../../src/lifecycle/mutation-gate.js";
@@ -93,6 +93,26 @@ void test("TOOL-03: a retry in error recreates from the bound root between admis
   assert.deepEqual(h.observations[1]?.phases, ["admission"], "the decision point reads inside the admitted window");
   assert.deepEqual(h.creates, [h.root.realPath]);
   assert.deepEqual(h.phases(), ["admission", "result"]);
+});
+
+void test("CRASH-06: a retry whose create raises a cause returns the refused outcome with that causeCode", async (t) => {
+  const h = makeHarness(t, {
+    state: "error",
+    create: () => Promise.reject(makeRealmError("OPENSHELL_START_FAILED", "PODMAN_MACHINE_DOWN")),
+  });
+  const outcome = await h.dispatcher.call({ retry: {} });
+  assert.deepEqual(outcome, refusal("retry", "OPENSHELL_START_FAILED", true, "PODMAN_MACHINE_DOWN"));
+  assert.deepEqual(h.phases(), ["admission", "result"], "the refusal is audited as before");
+});
+
+void test("CRASH-06: a retry whose create raises no cause returns a refused outcome with no causeCode key", async (t) => {
+  const h = makeHarness(t, {
+    state: "error",
+    create: () => Promise.reject(makeRealmError("OPENSHELL_START_FAILED")),
+  });
+  const outcome = await h.dispatcher.call({ retry: {} });
+  assert.deepEqual(outcome, refusal("retry", "OPENSHELL_START_FAILED", true));
+  assert.equal("causeCode" in outcome, false);
 });
 
 void test("TOOL-03: a schema failure has zero side effects and reaches no later stage (D-89)", async (t) => {
