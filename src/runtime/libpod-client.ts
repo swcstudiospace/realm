@@ -1,36 +1,74 @@
-// Closed libpod client over a Unix socket (D-54, RT-03, RT-09). The public surface is the
-// five methods below and nothing else: no method takes a path, a route name, or a request
-// body from the caller. The route table is libpod-routes.ts (provisional, D-48).
+// Closed libpod client over a Unix socket (D-54, RT-03, RT-09). The public surface is the methods below and
+// nothing else. No method takes a path, a route name, or a raw request body from the caller: create takes a
+// typed ContainerSpec, and its body is built here. The route table is libpod-routes.ts (provisional, D-48).
 //
 // Every request owns its socket. A timer races each request, and when it fires the
 // request's socket is destroyed. withTimeout only rejects and cannot cancel, so it is not
 // used here (F-P3-05). A transport failure or a timeout gives PODMAN_MACHINE_DOWN, the
-// code D-53 gives a socket timeout. A malformed body or an unexpected status gives
+// code D-53 gives a socket timeout. The bound is requestTimeoutMs (5 s), except for info, which has
+// infoTimeoutMs (30 s).
+// A malformed body or an unexpected status gives
 // SCHEMA_INVALID, and the response body is never echoed into an error.
 //
 // The client reads no environment and takes its socket path as an argument. The socket
 // grants full engine access as the user (podman.md Q4), so it is never mounted into a
-// session container.
+// session container. The client starts no process: the sandbox runtime is the container's main process, named in the create body.
 
 import { request as httpRequest } from "node:http";
-import { isAbsolute } from "node:path";
+import { basename, isAbsolute } from "node:path";
+import { performance } from "node:perf_hooks";
 import { makeRealmError } from "../core/errors.js";
+import { CHANNEL_MOUNT_OPTIONS, HARDENING_PROFILE, RUNTIME_ARGV, tmpfsOptionsOf } from "./hardening.js";
+import { SECCOMP_PROFILE_FILE_NAME } from "./driver/seccomp-profile.js";
 import {
+  isRealmSandboxName,
+  OPENSHELL_ISOLATION_ROLE_LABEL_KEY,
+  OPENSHELL_MANAGED_LABEL_KEY,
+  OPENSHELL_MANAGED_LABEL_VALUE,
+  OPENSHELL_SANDBOX_NAME_LABEL_KEY,
+  OPENSHELL_SANDBOX_ROLE_VALUE,
+} from "./openshell.js";
+import {
+  API_VERSION_PATTERN,
+  CONTAINER_ID_PATTERN,
+  checkRouteId,
+  LIBPOD_API_VERSION_HEADER,
   LIBPOD_INFO_ROOTLESS_PATH,
   LIBPOD_INFO_VERSION_PATH,
   LIBPOD_LIST_ID_FIELD,
   LIBPOD_ROUTES,
+  PING_PATH,
   routeTarget,
   type LibpodRoute,
 } from "./libpod-routes.js";
 
-const DEFAULT_REQUEST_TIMEOUT_MS = 5000;
+// Evidence (Podman 5.7.1 rootless, measured six times): GET /libpod/info takes 4.4 to 5.9 s because the service runs dpkg
+// lookups on its helper binaries, which is slow on hosts with a large package database. A container list takes 1 to 23 ms.
+// A 5 s bound therefore cut info off about half the time, so info has its own, longer bound.
+export const DEFAULT_REQUEST_TIMEOUT_MS = 5000;
+export const DEFAULT_INFO_TIMEOUT_MS = 30000;
+// How long a successful info reply is reused. Every create asks for it, and on the target host it takes 4 to 6 s, so a burst of
+// creates shares one request. The value is the engine's rootless flag and version, which change only when Podman is reinstalled.
+export const DEFAULT_INFO_TTL_MS = 60000;
+// Seconds a force removal waits for a running container to exit before Podman kills it (the `timeout` query of the
+// remove route). Realm containers are disposable sandboxes, so a force removal does not wait for a graceful exit. Podman's
+// default is 10 s, which is longer than the request bound (crash recovery, RT-08).
+export const FORCE_REMOVE_STOP_GRACE_SECONDS = 2;
 const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 const LABEL_KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
+// The user-namespace mapping of every sandbox: the realm account is mapped to the workload uid and gid (keep-id).
+const WORKLOAD_USERNS = `uid=${String(HARDENING_PROFILE.workloadUid)},gid=${String(HARDENING_PROFILE.workloadGid)}`;
 
 export interface LibpodClientOptions {
+  // Absolute path of the seccomp profile file the driver wrote. Its name must be SECCOMP_PROFILE_FILE_NAME. A create names it
+  // in the body, and a client built without it refuses every create, so no sandbox starts without the profile.
+  readonly seccompProfilePath?: string;
   // Bound for one request, in addition to any grace period the request itself asks for.
   readonly requestTimeoutMs?: number;
+  // Bound for the info request alone. Every other route keeps requestTimeoutMs.
+  readonly infoTimeoutMs?: number;
+  // How long a successful info reply is reused, in milliseconds. A failure is never reused, and concurrent calls share one request.
+  readonly infoTtlMs?: number;
 }
 
 export interface LibpodInfo {
@@ -40,30 +78,63 @@ export interface LibpodInfo {
 
 export interface LibpodContainerSummary {
   readonly id: string;
+  // The container's labels as libpod reports them. Absent from a listing that carried none.
+  readonly labels?: Readonly<Record<string, string>>;
 }
 
 // The raw inspect object. The hardening verifier (D-51) checks its fields and fails
 // closed on any that are missing.
 export type LibpodInspect = Readonly<Record<string, unknown>>;
 
+// The typed spec a create takes. The create body is built from it and HARDENING_PROFILE, so a caller cannot add
+// or change a field. The sandbox name is the container name and the sandbox-name label.
+export interface ContainerSpec {
+  // Container name and sandbox-name label: a container-name-safe string.
+  readonly sandboxName: string;
+  // A digest-pinned image reference: name, optional tag, then @sha256:<64 hex>.
+  readonly image: string;
+  // Absolute host path, bound read-write at the workspace destination.
+  readonly workspaceDir: string;
+  // Absolute host path, bound read-only at the state destination.
+  readonly stateDir: string;
+  // Absolute host path, bound read-write at the channel destination. It holds the runtime's bootstrap, TLS files and socket.
+  readonly channelDir: string;
+}
+
 interface Transport {
   readonly socketPath: string;
   readonly timeoutMs: number;
+  readonly infoTimeoutMs: number;
 }
 
 interface HttpReply {
   readonly status: number;
   readonly text: string;
+  readonly headers: Readonly<Record<string, string | string[] | undefined>>;
 }
 
 interface RouteCall {
   readonly containerId?: string;
   readonly query?: Readonly<Record<string, string>>;
   readonly graceMs?: number;
+  // Replaces the transport's request bound for this call only.
+  readonly timeoutMs?: number;
+  // A JSON request body, built by this module from a typed spec. Absent for bodyless routes.
+  readonly body?: string;
+}
+
+// The info reply this client holds. The value is fresh until expiresAt; a pending request is shared by concurrent callers.
+interface InfoCache {
+  value: LibpodInfo | undefined;
+  expiresAt: number;
+  pending: Promise<LibpodInfo> | undefined;
 }
 
 export class LibpodClient {
   private readonly transport: Transport;
+  private readonly seccompProfilePath: string | undefined;
+  private readonly infoTtlMs: number;
+  private readonly infoCache: InfoCache = { value: undefined, expiresAt: 0, pending: undefined };
 
   constructor(socketPath: string, options: LibpodClientOptions = {}) {
     if (!isAbsolute(socketPath)) {
@@ -73,19 +144,32 @@ export class LibpodClient {
     if (!Number.isInteger(timeoutMs) || timeoutMs <= 0) {
       throw makeRealmError("SCHEMA_INVALID");
     }
-    this.transport = Object.freeze({ socketPath, timeoutMs });
-  }
-
-  async info(): Promise<LibpodInfo> {
-    const reply = await exchangeRoute(this.transport, LIBPOD_ROUTES.info, {});
-    expectStatus(reply, [200]);
-    const body = parseJson(reply.text);
-    const rootless = readPath(body, LIBPOD_INFO_ROOTLESS_PATH);
-    const version = readPath(body, LIBPOD_INFO_VERSION_PATH);
-    if (typeof rootless !== "boolean" || typeof version !== "string") {
+    const infoTimeoutMs = options.infoTimeoutMs ?? DEFAULT_INFO_TIMEOUT_MS;
+    if (!Number.isInteger(infoTimeoutMs) || infoTimeoutMs <= 0) {
       throw makeRealmError("SCHEMA_INVALID");
     }
-    return { rootless, version };
+    const infoTtlMs = options.infoTtlMs ?? DEFAULT_INFO_TTL_MS;
+    if (!Number.isInteger(infoTtlMs) || infoTtlMs <= 0) {
+      throw makeRealmError("SCHEMA_INVALID");
+    }
+    const seccompProfilePath = options.seccompProfilePath;
+    if (
+      seccompProfilePath !== undefined &&
+      (!isAbsolute(seccompProfilePath) ||
+        seccompProfilePath.includes("\0") ||
+        basename(seccompProfilePath) !== SECCOMP_PROFILE_FILE_NAME)
+    ) {
+      throw makeRealmError("SCHEMA_INVALID");
+    }
+    this.seccompProfilePath = seccompProfilePath;
+    this.infoTtlMs = infoTtlMs;
+    this.transport = Object.freeze({ socketPath, timeoutMs, infoTimeoutMs });
+  }
+
+  // The engine's rootless flag and version. A fresh reply is reused for the info TTL, and concurrent calls share one request. A
+  // failed request is never kept, so the next call asks again.
+  async info(): Promise<LibpodInfo> {
+    return readCachedInfo(this.infoCache, this.infoTtlMs, () => readInfo(this.transport));
   }
 
   // Containers, stopped ones included, whose label key has exactly the given value.
@@ -107,14 +191,23 @@ export class LibpodClient {
       if (typeof id !== "string" || id === "") {
         throw makeRealmError("SCHEMA_INVALID");
       }
-      return { id };
+      const raw = readPath(entry, ["Labels"]);
+      const labels: Record<string, string> = {};
+      if (typeof raw === "object" && raw !== null && !Array.isArray(raw)) {
+        for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+          if (typeof value === "string") {
+            labels[key] = value;
+          }
+        }
+      }
+      return { id, labels };
     });
   }
 
   // The raw inspect object, or null when the container does not exist.
   async inspectContainer(id: string): Promise<LibpodInspect | null> {
     const reply = await exchangeRoute(this.transport, LIBPOD_ROUTES.inspectContainer, { containerId: id });
-    if (reply.status === 404) {
+    if (isNoSuchContainer(reply)) {
       return null;
     }
     expectStatus(reply, [200]);
@@ -144,20 +237,92 @@ export class LibpodClient {
   // Removes the container. A container that is already gone counts as removed, so a
   // repeated sweep is a no-op. The down sweep verifies zero orphans afterwards (D-68).
   async removeContainer(id: string, options: { readonly force: boolean }): Promise<void> {
+    // A force removal of a running container makes Podman stop it first. Without a timeout query Podman waits its default
+    // 10 s (SIGTERM, then SIGKILL), so the request outlived the 5 s bound while the removal went on in the background.
+    // The query carries the short grace, and the request bound is extended by it the way stopContainer extends its own.
     const reply = await exchangeRoute(this.transport, LIBPOD_ROUTES.removeContainer, {
       containerId: id,
-      query: { force: String(options.force) },
+      query: options.force
+        ? { force: "true", timeout: String(FORCE_REMOVE_STOP_GRACE_SECONDS) }
+        : { force: "false" },
+      graceMs: options.force ? FORCE_REMOVE_STOP_GRACE_SECONDS * 1000 : 0,
     });
-    expectStatus(reply, [204, 404]);
+    if (isNoSuchContainer(reply)) {
+      return;
+    }
+    // Podman 5.7.1 answers 200 with the removed id in a list. 204 is also accepted. The reply body is not read.
+    expectStatus(reply, [200, 204]);
+  }
+
+  // Creates the container from the typed spec and returns its id. Podman answers 201 with the id. The body is
+  // built here from the spec and the hardening profile; a caller cannot add a field.
+  async createContainer(spec: ContainerSpec): Promise<string> {
+    validateContainerSpec(spec);
+    if (this.seccompProfilePath === undefined) {
+      throw makeRealmError("SCHEMA_INVALID");
+    }
+    const body = JSON.stringify(containerCreateBody(spec, this.seccompProfilePath));
+    const reply = await exchangeRoute(this.transport, LIBPOD_ROUTES.createContainer, { body });
+    if (reply.status === 409) {
+      throw makeRealmError("SANDBOX_NAME_IN_USE");
+    }
+    expectStatus(reply, [201]);
+    const id = readPath(parseJson(reply.text), [LIBPOD_LIST_ID_FIELD]);
+    if (typeof id !== "string" || !CONTAINER_ID_PATTERN.test(id)) {
+      throw makeRealmError("SCHEMA_INVALID");
+    }
+    return id;
+  }
+
+  // Starts a created container. Podman answers 304 when it is already running; that counts as started, as
+  // stopContainer counts an already-stopped container. The lifecycle reads the state afterwards.
+  async startContainer(id: string): Promise<void> {
+    const reply = await exchangeRoute(this.transport, LIBPOD_ROUTES.startContainer, { containerId: id });
+    expectStatus(reply, [204, 304]);
   }
 }
 
-function exchangeRoute(transport: Transport, route: LibpodRoute, call: RouteCall): Promise<HttpReply> {
-  const target = routeTarget(route, call.containerId, call.query);
-  return exchange(transport.socketPath, route.method, target, transport.timeoutMs + (call.graceMs ?? 0));
+async function readInfo(transport: Transport): Promise<LibpodInfo> {
+  const reply = await exchangeRoute(transport, LIBPOD_ROUTES.info, { timeoutMs: transport.infoTimeoutMs });
+  expectStatus(reply, [200]);
+  const body = parseJson(reply.text);
+  const rootless = readPath(body, LIBPOD_INFO_ROOTLESS_PATH);
+  const version = readPath(body, LIBPOD_INFO_VERSION_PATH);
+  if (typeof rootless !== "boolean" || typeof version !== "string") {
+    throw makeRealmError("SCHEMA_INVALID");
+  }
+  return { rootless, version };
 }
 
-function exchange(socketPath: string, method: string, target: string, timeoutMs: number): Promise<HttpReply> {
+async function readCachedInfo(cache: InfoCache, ttlMs: number, load: () => Promise<LibpodInfo>): Promise<LibpodInfo> {
+  if (cache.value !== undefined && performance.now() < cache.expiresAt) {
+    return cache.value;
+  }
+  cache.pending ??= settleInfo(cache, ttlMs, load);
+  return cache.pending;
+}
+
+// Runs the one shared request. A reply is kept for ttlMs, counted from the moment it arrived. A failure keeps nothing, and the
+// pending marker is cleared either way, so the next call after it makes a new request.
+async function settleInfo(cache: InfoCache, ttlMs: number, load: () => Promise<LibpodInfo>): Promise<LibpodInfo> {
+  try {
+    const info = await load();
+    cache.value = info;
+    cache.expiresAt = performance.now() + ttlMs;
+    return info;
+  } finally {
+    cache.pending = undefined;
+  }
+}
+
+async function exchangeRoute(transport: Transport, route: LibpodRoute, call: RouteCall): Promise<HttpReply> {
+  checkRouteId(route, call.containerId);
+  const apiVersion = await apiVersionOf(transport);
+  const target = routeTarget(route, call.containerId, apiVersion, call.query);
+  return exchange(transport.socketPath, route.method, target, (call.timeoutMs ?? transport.timeoutMs) + (call.graceMs ?? 0), call.body);
+}
+
+function exchange(socketPath: string, method: string, target: string, timeoutMs: number, body = ""): Promise<HttpReply> {
   return new Promise<HttpReply>((resolve, reject) => {
     let settled = false;
     const settle = (outcome: () => void): void => {
@@ -175,7 +340,7 @@ function exchange(socketPath: string, method: string, target: string, timeoutMs:
     };
     // agent: false gives each request its own socket, closed when the reply ends.
     const req = httpRequest(
-      { socketPath, method, path: target, agent: false, headers: { "Content-Length": "0" } },
+      { socketPath, method, path: target, agent: false, headers: requestHeaders(body) },
       (res) => {
         const chunks: Buffer[] = [];
         let bytes = 0;
@@ -192,7 +357,7 @@ function exchange(socketPath: string, method: string, target: string, timeoutMs:
         });
         res.on("end", () => {
           settle(() => {
-            resolve({ status: res.statusCode ?? 0, text: Buffer.concat(chunks).toString("utf8") });
+            resolve({ status: res.statusCode ?? 0, text: Buffer.concat(chunks).toString("utf8"), headers: res.headers });
           });
         });
         res.on("error", fail);
@@ -203,14 +368,58 @@ function exchange(socketPath: string, method: string, target: string, timeoutMs:
       fail();
       req.destroy();
     }, timeoutMs);
-    req.end();
+    req.end(body);
   });
+}
+
+// A bodyless request keeps the zero Content-Length it always sent. A request with a body is JSON.
+function requestHeaders(body: string): Readonly<Record<string, string>> {
+  if (body === "") {
+    return { "Content-Length": "0" };
+  }
+  return { "Content-Length": String(Buffer.byteLength(body)), "Content-Type": "application/json" };
 }
 
 function expectStatus(reply: HttpReply, allowed: readonly number[]): void {
   if (!allowed.includes(reply.status)) {
     throw makeRealmError("SCHEMA_INVALID");
   }
+}
+
+// Podman answers a missing container with a 404 whose JSON cause is "no such container". Any other 404 is
+// a wrong route or an unexpected reply, so it is never read as absence. A non-JSON 404 fails in parseJson.
+function isNoSuchContainer(reply: HttpReply): boolean {
+  if (reply.status !== 404) {
+    return false;
+  }
+  const body = parseJson(reply.text);
+  return isRecord(body) && body["cause"] === "no such container";
+}
+
+// The API version each transport reported on /_ping. A failed probe is dropped, so the next call asks again.
+const apiVersions = new WeakMap<Transport, Promise<string>>();
+
+function apiVersionOf(transport: Transport): Promise<string> {
+  const known = apiVersions.get(transport);
+  if (known !== undefined) {
+    return known;
+  }
+  const pending = pingApiVersion(transport).catch((error: unknown) => {
+    apiVersions.delete(transport);
+    throw error;
+  });
+  apiVersions.set(transport, pending);
+  return pending;
+}
+
+async function pingApiVersion(transport: Transport): Promise<string> {
+  const reply = await exchange(transport.socketPath, "GET", PING_PATH, transport.timeoutMs);
+  expectStatus(reply, [200]);
+  const version = reply.headers[LIBPOD_API_VERSION_HEADER];
+  if (typeof version !== "string" || !API_VERSION_PATTERN.test(version)) {
+    throw makeRealmError("SCHEMA_INVALID");
+  }
+  return version;
 }
 
 function parseJson(text: string): unknown {
@@ -234,4 +443,80 @@ function readPath(value: unknown, path: readonly string[]): unknown {
     current = current[key];
   }
   return current;
+}
+
+// The digest-pinned image reference the create body accepts: name, optional tag, then @sha256:<64 hex>.
+const DIGEST_PINNED_IMAGE = /^[a-z0-9]+(?:[._/-][a-z0-9]+)*(?::[A-Za-z0-9_.-]+)?@sha256:[a-f0-9]{64}$/;
+// The CFS period in microseconds. NanoCpus is quota / period, so quota = nanoCpus * period / 1e9.
+const CPU_PERIOD_MICROS = 100000;
+const WORKSPACE_OPTIONS: readonly string[] = Object.freeze(["rw", "noexec", "nosuid", "nodev"]);
+const STATE_OPTIONS: readonly string[] = Object.freeze(["ro", "noexec", "nosuid", "nodev"]);
+
+// Validates a spec before any engine request. It is pure: it reads no environment and sends nothing. It fails closed
+// on a spec the body must not carry: a sandbox name without the realm prefix or outside the container-id pattern, an
+// image outside the digest-pinned form, a host path that is relative or holds a NUL byte, or a host path that names a
+// container-engine socket.
+export function validateContainerSpec(spec: ContainerSpec): void {
+  const socketNames = HARDENING_PROFILE.socketNames;
+  const hostPaths = [spec.workspaceDir, spec.stateDir, spec.channelDir];
+  const valid =
+    isRealmSandboxName(spec.sandboxName) &&
+    CONTAINER_ID_PATTERN.test(spec.sandboxName) &&
+    DIGEST_PINNED_IMAGE.test(spec.image) &&
+    hostPaths.every(
+      (path) =>
+        isAbsolute(path) && !path.includes("\0") && !path.split("/").some((segment) => socketNames.includes(segment)),
+    );
+  if (!valid) {
+    throw makeRealmError("SCHEMA_INVALID");
+  }
+}
+
+// Podman's REST API takes an rlimit type without the RLIMIT_ prefix and adds the prefix itself. Measured live on Podman 5.7.1 with
+// runc: a body that names RLIMIT_NOFILE is created as RLIMIT_RLIMIT_NOFILE and the start fails with "wrong rlimit value". The
+// profile keeps the OCI names, because those are the names the inspect reports and the verifier compares.
+function restRlimitType(type: string): string {
+  return type.replace(/^RLIMIT_/, "");
+}
+
+// The create body. Every field comes from the spec, from HARDENING_PROFILE, or, for seccomp_profile_path, from the profile file
+// the client was built with, so the verifier and the create request read the same values. Nothing else is added.
+function containerCreateBody(spec: ContainerSpec, seccompProfilePath: string): Readonly<Record<string, unknown>> {
+  const profile = HARDENING_PROFILE;
+  // The sandbox container carries the profile's scratch paths and the runtime's CA directory.
+  const scratch = [...profile.tmpfs, profile.supervisorCaDestination];
+  return {
+    name: spec.sandboxName,
+    image: spec.image,
+    entrypoint: [...RUNTIME_ARGV],
+    user: profile.workloadUser,
+    userns: { nsmode: "keep-id", value: WORKLOAD_USERNS },
+    labels: {
+      [OPENSHELL_MANAGED_LABEL_KEY]: OPENSHELL_MANAGED_LABEL_VALUE,
+      [OPENSHELL_SANDBOX_NAME_LABEL_KEY]: spec.sandboxName,
+      [OPENSHELL_ISOLATION_ROLE_LABEL_KEY]: OPENSHELL_SANDBOX_ROLE_VALUE,
+    },
+    privileged: profile.privileged,
+    cap_drop: ["ALL"],
+    cap_add: [...profile.capAdd],
+    no_new_privileges: profile.securityOpt.includes("no-new-privileges"),
+    seccomp_profile_path: seccompProfilePath,
+    read_only_filesystem: profile.readonlyRootfs,
+    resource_limits: {
+      pids: { limit: profile.pidsLimit },
+      memory: { limit: profile.memoryBytes, swap: profile.memoryBytes },
+      cpu: { quota: (profile.nanoCpus * CPU_PERIOD_MICROS) / 1_000_000_000, period: CPU_PERIOD_MICROS },
+    },
+    r_limits: profile.rlimits.map(({ type, limit }) => ({ type: restRlimitType(type), hard: limit, soft: limit })),
+    netns: { nsmode: profile.networkMode },
+    sysctl: { ...profile.sysctls },
+    use_image_resolve_conf: true,
+    tty: false,
+    mounts: [
+      ...scratch.map((destination) => ({ type: "tmpfs", destination, options: [...tmpfsOptionsOf(destination)] })),
+      { type: "bind", source: spec.workspaceDir, destination: profile.workspaceDestination, options: WORKSPACE_OPTIONS },
+      { type: "bind", source: spec.stateDir, destination: profile.stateDestination, options: STATE_OPTIONS },
+      { type: "bind", source: spec.channelDir, destination: profile.channelDestination, options: ["rw", ...CHANNEL_MOUNT_OPTIONS] },
+    ],
+  };
 }

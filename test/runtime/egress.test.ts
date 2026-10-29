@@ -58,7 +58,7 @@ void test("RT-05: exact multi-label hostnames and IPv4 literals with ports 1 and
   const rules = [
     { host: "registry.example.com", port: 443 },
     { host: "api-2.internal.example.org", port: 8080 },
-    { host: "10.0.0.5", port: 1 },
+    { host: "198.17.255.255", port: 1 },
     { host: "203.0.113.9", port: 65535 },
   ];
   assert.deepEqual(validateEgressAllow(rules), rules);
@@ -92,6 +92,51 @@ void test("RT-05: loopback 127.0.0.0/8, link-local 169.254.0.0/16, and unspecifi
   }
 });
 
+// Each refused range with its first and last address; each pair of neighbours is the address just outside.
+const REFUSED_RANGES: readonly { readonly name: string; readonly first: string; readonly last: string; readonly below: string | undefined; readonly above: string | undefined }[] = [
+  { name: "0.0.0.0/8", first: "0.0.0.0", last: "0.255.255.255", below: undefined, above: "1.0.0.0" },
+  { name: "10.0.0.0/8", first: "10.0.0.0", last: "10.255.255.255", below: "9.255.255.255", above: "11.0.0.0" },
+  { name: "100.64.0.0/10", first: "100.64.0.0", last: "100.127.255.255", below: "100.63.255.255", above: "100.128.0.0" },
+  { name: "127.0.0.0/8", first: "127.0.0.0", last: "127.255.255.255", below: "126.255.255.255", above: "128.0.0.0" },
+  { name: "169.254.0.0/16", first: "169.254.0.0", last: "169.254.255.255", below: "169.253.255.255", above: "169.255.0.0" },
+  { name: "172.16.0.0/12", first: "172.16.0.0", last: "172.31.255.255", below: "172.15.255.255", above: "172.32.0.0" },
+  { name: "192.0.0.0/24", first: "192.0.0.0", last: "192.0.0.255", below: "191.255.255.255", above: "192.0.1.0" },
+  { name: "192.168.0.0/16", first: "192.168.0.0", last: "192.168.255.255", below: "192.167.255.255", above: "192.169.0.0" },
+  { name: "198.18.0.0/15", first: "198.18.0.0", last: "198.19.255.255", below: "198.17.255.255", above: "198.20.0.0" },
+  { name: "224.0.0.0/4 and 240.0.0.0/4", first: "224.0.0.0", last: "255.255.255.255", below: "223.255.255.255", above: undefined },
+];
+
+void test("RT-05: the first and last address of every non-public IPv4 range are refused with SCHEMA_INVALID", () => {
+  for (const range of REFUSED_RANGES) {
+    for (const host of [range.first, range.last]) {
+      assert.equal(rejectionCode(() => validateEgressAllow([{ host, port: 443 }])), "SCHEMA_INVALID", `${range.name}: ${host}`);
+    }
+  }
+});
+
+void test("RT-05: an address inside a non-public range, away from its edges, is refused with SCHEMA_INVALID", () => {
+  for (const host of ["10.1.2.3", "100.100.100.100", "172.20.5.5", "192.0.0.8", "192.168.1.1", "198.18.0.2", "224.0.0.251", "239.255.255.250", "240.0.0.1", "255.255.255.254"]) {
+    assert.equal(rejectionCode(() => validateEgressAllow([{ host, port: 443 }])), "SCHEMA_INVALID", host);
+  }
+});
+
+void test("RT-05: the address just outside every non-public IPv4 range is accepted", () => {
+  for (const range of REFUSED_RANGES) {
+    for (const host of [range.below, range.above]) {
+      if (host === undefined) {
+        continue;
+      }
+      assert.deepEqual(validateEgressAllow([{ host, port: 443 }]), [{ host, port: 443 }], `${range.name}: ${host}`);
+    }
+  }
+});
+
+void test("RT-05: public IPv4 literals stay accepted", () => {
+  for (const host of ["1.1.1.1", "8.8.8.8", "203.0.113.9", "172.15.0.1", "172.32.0.1", "192.0.2.1", "192.169.0.1"]) {
+    assert.deepEqual(validateEgressAllow([{ host, port: 443 }]), [{ host, port: 443 }], host);
+  }
+});
+
 void test("RT-05: a port outside 1 to 65535, or not an integer, is refused with SCHEMA_INVALID", () => {
   for (const port of [0, -1, 65536, 1.5, Number.NaN, "443", null]) {
     assert.equal(
@@ -116,6 +161,9 @@ void test("RT-05: a malformed hostname or IPv4 literal is refused with SCHEMA_IN
     "1.2.3.256",
     "010.0.0.1",
     "example.123",
+    "8.8.8.8.",
+    "8.8.8.\uff18",
+    "example\u3002com",
     `${"a".repeat(64)}.example.com`,
   ];
   for (const host of hosts) {
@@ -131,11 +179,40 @@ void test("RT-05: an IPv4 literal with a leading-zero octet is refused with SCHE
 
 void test("RT-05: canonical IPv4 literals, including single-digit 0 octets, are still accepted", () => {
   const rules = [
-    { host: "10.0.0.1", port: 443 },
-    { host: "10.10.0.1", port: 443 },
+    { host: "1.1.1.1", port: 443 },
+    { host: "8.8.0.1", port: 443 },
     { host: "203.0.113.0", port: 443 },
   ];
   assert.deepEqual(validateEgressAllow(rules), rules);
+});
+
+void test("RT-05: IPv4 literals in hex or mixed notation are refused with SCHEMA_INVALID, because inet_aton would read them as private addresses", () => {
+  const hosts = [
+    "127.0.0.0x1",
+    "0x7f.0.0.0x1",
+    "169.254.169.0xfe",
+    "10.0.0.0X1",
+    "0x7f.0x0.0x0.0x1",
+    "0X7F.0X0.0X0.0X1",
+    "127.0.0.0x",
+    "8.8.8.0x8",
+    "1.1.1.0x01",
+  ];
+  for (const host of hosts) {
+    assert.equal(rejectionCode(() => validateEgressAllow([{ host, port: 443 }])), "SCHEMA_INVALID", host);
+  }
+});
+
+void test("RT-05: short decimal and hex forms, and a hex-only single label, are refused with SCHEMA_INVALID", () => {
+  for (const host of ["127.1", "0x7f.1", "10.1", "2130706433", "0x7f000001", "0x7f", "0x", "a.0x7f", "example.0x7f"]) {
+    assert.equal(rejectionCode(() => validateEgressAllow([{ host, port: 443 }])), "SCHEMA_INVALID", host);
+  }
+});
+
+void test("RT-05: hostnames with a normal final label stay accepted even when an earlier label looks like hex", () => {
+  for (const host of ["example.com", "a.b.c.internal", "nip.io", "host-0x7f.example.com", "0x.example.com", "0xdeadbeef.example.com", "0x7f.0x0.example.org", "1.1.1.1", "8.8.8.8"]) {
+    assert.deepEqual(validateEgressAllow([{ host, port: 443 }]), [{ host, port: 443 }], host);
+  }
 });
 
 void test("RT-05: a non-string host is refused with SCHEMA_INVALID", () => {
@@ -177,14 +254,14 @@ void test("RT-05: a non-empty allowlist renders the exact D-78 shape, sorted by 
   const rendered = renderNetworkPolicies(
     [
       { host: "registry.example.com", port: 443 },
-      { host: "10.0.0.5", port: 80 },
+      { host: "203.0.113.5", port: 80 },
     ],
     BINARY,
   );
   assert.deepEqual(rendered, {
     egress_0: {
-      name: "10.0.0.5:80",
-      endpoints: [{ host: "10.0.0.5", port: 80 }],
+      name: "203.0.113.5:80",
+      endpoints: [{ host: "203.0.113.5", port: 80 }],
       binaries: [{ path: BINARY }],
     },
     egress_1: {
@@ -251,12 +328,12 @@ void test("RT-05: a shuffled allowlist renders identical output, so the order is
 void test("RT-05: the renderer does not reorder the caller's allowlist", () => {
   const input = [
     { host: "registry.example.com", port: 443 },
-    { host: "10.0.0.5", port: 80 },
+    { host: "203.0.113.5", port: 80 },
   ];
   renderNetworkPolicies(input, BINARY);
   assert.deepEqual(input, [
     { host: "registry.example.com", port: 443 },
-    { host: "10.0.0.5", port: 80 },
+    { host: "203.0.113.5", port: 80 },
   ]);
 });
 

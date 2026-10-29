@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import { RealmError } from "../core/errors.js";
 import { connectDaemon, type DaemonClient } from "../daemon/client.js";
 import { CONTROL_TIMEOUT_MS } from "../daemon/channel.js";
-import { ensureDaemon } from "../daemon/ensure.js";
+import { ensureDaemon, reportingStartFailure } from "../daemon/ensure.js";
 import { readHostRuntime } from "../runtime/host-paths.js";
 import { controlSocketPath } from "../session/paths.js";
 import { registerRealmPlugin, type OmpExtensionApi } from "./plugin.js";
@@ -41,7 +41,7 @@ export default function realmExtension(pi: OmpExtensionApi): void {
   const attachDaemon = async (workspaceRoot: string): Promise<DaemonClient> => {
     await ensureDaemon({
       socketPath,
-      probe: probeDaemon,
+      probe: reportingStartFailure(probeDaemon, stateDir),
       spawnDaemon: () => {
         startDetachedDaemon(daemonEntry, stateDir);
       },

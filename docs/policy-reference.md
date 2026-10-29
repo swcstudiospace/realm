@@ -3,209 +3,255 @@
 Source of truth: `src/core/policy.schema.json` (frozen schema) and
 `src/core/policy.ts` (loader, mode decision, exec gate).
 Defaults are declared in the schema and applied by ajv (`useDefaults: true`,
-`src/contract/validate.ts:147-152`) on a clone inside `validate()`
-(`src/contract/validate.ts:260-287`); the typed result is `Policy`
-(`src/contract/validate.ts:30-38`).
+the `ajv` instance in `src/contract/validate.ts`) on a clone inside `validate()`
+(`validate`, `src/contract/validate.ts`); the typed result is `Policy`
+(the `Policy` interface in `src/contract/validate.ts`).
 
-The schema object is closed: `"additionalProperties": false`
-(`src/core/policy.schema.json:6`). Unknown keys fail validation with
+The schema object is closed: `"additionalProperties": false` at the top level
+of `src/core/policy.schema.json`. Unknown keys fail validation with
 `SCHEMA_INVALID`; the failure message names the key and rule only, never the
-value (`src/contract/validate.ts:217-256`). The nested egress rule object is
-likewise closed (`src/core/policy.schema.json:43`).
+value (`describeFailure`, `src/contract/validate.ts`). The nested egress rule object is
+likewise closed (`$defs/egressRule` in `src/core/policy.schema.json`).
 
-Loading rules (`src/core/policy.ts:28-37`):
+Loading rules (`loadPolicyFile`, `src/core/policy.ts`):
 
 - The policy path is explicit and caller-supplied. A missing file (`ENOENT`)
   yields validated defaults via `validate("policy", {})` — advisory mode, no
   roots, shell disabled. Any other read failure throws `POLICY_DENIED`
-  (`src/core/policy.ts:46-57`).
+  (`readPolicyText`, `src/core/policy.ts`).
 - Every `workspaceRoots` entry must be absolute; otherwise
   `SchemaInvalidError("/workspaceRoots/<index> must be an absolute path")`
-  (`src/core/policy.ts:77-83`).
+  (`assertAbsoluteRoots`, `src/core/policy.ts`).
 - The policy file itself must not resolve inside any of its own workspace
   roots (both sides canonicalized with `realpathSync`, segment comparison so
   `/ws-other` is not inside `/ws`, equality counts as inside); violation, or a
   root that cannot be canonicalized, throws `POLICY_DENIED`
-  (`src/core/policy.ts:85-117`).
+  (`assertPolicyOutsideRoots`, with `canonical` and `isInside`,
+  `src/core/policy.ts`).
 - Conventional on-disk location beside the state directory is
-  `<stateDir>/policy.json` (`src/cli/main.ts:258-260`); the daemon loads it
-  with `loadPolicyFile` (`src/daemon/daemon.ts:14`).
+  `<stateDir>/policy.json` (`defaultPolicyPath`, `src/runtime/host-paths.ts`,
+  passed by the daemon entry in `src/daemon/main.ts`); the daemon loads it
+  with `loadPolicyFile` (`buildDaemonHandle`, `src/daemon/daemon.ts`).
 
 ## `mode`
 
-- **Type:** `"advisory" | "fail-closed"` (`src/core/policy.schema.json:8-12`,
-  `src/contract/validate.ts:22,31`).
-- **Default:** `"advisory"` (`src/core/policy.schema.json:11`).
+- **Type:** `"advisory" | "fail-closed"` (the `mode` property of
+  `src/core/policy.schema.json`; `PolicyMode` and `Policy.mode` in
+  `src/contract/validate.ts`).
+- **Default:** `"advisory"` (the `mode` property of `src/core/policy.schema.json`).
 - **Effect:** `advisory` is the default; `fail-closed` is opt-in per project
   (select it by writing `"mode": "fail-closed"` in that project's policy
-  file). The value only changes the mutation decision for non-`active`
-  states; `active` always allows (`src/core/policy.ts:129-140`):
+  file). The value changes the mutation decision for non-`active` states. `active`
+  allows a mutation in both modes, whether or not an Anda bridge is configured
+  (`decideMutation`, `src/core/policy.ts`):
   - `advisory` + non-`active` → `allow-with-warning` with message
     `` `realm is ${state}; the write proceeds under advisory policy` ``.
   - `fail-closed` + non-`active` → `deny` with code from
-    `denyCodeFor` (`src/core/policy.ts:142-153`): `unbound` →
+    `denyCodeFor` (`src/core/policy.ts`): `unbound` →
     `REALM_UNBOUND`, `stopping` → `REALM_STOPPING`, `connecting`/`degraded`/
     `error` → `REALM_NOT_ACTIVE`.
+  - `active` → `allow`, in both modes, whether or not an Anda bridge is configured. A configured bridge that goes down moves the session to `degraded` (reason `ANDA_UNREACHABLE`), which is handled by the rows above.
 - **Enforced by:**
-  - `decideMutation` (`src/core/policy.ts:129-140`).
+  - `decideMutation` (`src/core/policy.ts`).
   - `gateMutation` thin wrapper mapping allow/allow-with-warning/deny to
-    proceed/proceed-with-warning/refused (`src/lifecycle/mutation-gate.ts:23-33`);
+    proceed/proceed-with-warning/refused (`src/lifecycle/mutation-gate.ts`);
     `runGatedMutation` runs the write only when not refused and propagates
-    the warning (`src/lifecycle/mutation-gate.ts:37-46`).
+    the warning (`src/lifecycle/mutation-gate.ts`).
   - `writeWorkspaceFile` asks `deps.mutationGate()`, throws the deny code on
     `refused`, and returns the warning on `proceed-with-warning`
-    (`src/tools/workspace.ts:71-97`).
+    (`src/tools/workspace.ts`).
   - `exec` is stricter: it runs only while `active` **in both modes**
-    (`src/tools/dispatch.ts:160-175`); only `connecting` waits (see
+    (`ToolDispatcher.#exec`, `src/tools/dispatch.ts`); only `connecting` waits (see
     `toolQueueMs`), all other non-`active` states throw
-    `execRefusalCode(state)` at once (`src/tools/dispatch.ts:262-273`).
+    `execRefusalCode(state)` at once (`execRefusalCode`, `src/tools/dispatch.ts`).
     `read`, `list`, `status`, `retry` are not mutation-gated
-    (`src/tools/dispatch.ts:1-18`); `retry` has its own state refusal
-    (`src/tools/dispatch.ts:250-258`).
+    (stage list in the header comment of `src/tools/dispatch.ts`); `retry` has its own state refusal
+    (`refuseRetryIn`, `src/tools/dispatch.ts`).
+
+The default stays `advisory`; a project that expects containment opts in to `fail-closed` in its own policy file, and the posture and its limits are set out in `docs/integration/hardening-plan.md`.
 
 ## `workspaceRoots`
 
 - **Type:** `string[]`, each entry must be absolute (see loader rules above)
-  (`src/core/policy.schema.json:13-17`, `src/contract/validate.ts:32`).
-- **Default:** `[]` (`src/core/policy.schema.json:16`).
+  (the `workspaceRoots` property of `src/core/policy.schema.json`;
+  `Policy.workspaceRoots` in `src/contract/validate.ts`).
+- **Default:** `[]` (the `workspaceRoots` property of `src/core/policy.schema.json`).
 - **Effect:** the allowlist of host directories a session workspace may bind
-  to. With the default (`[]`) every `create` is refused: `bindWorkspace`
-  binds each policy entry with `bindRoot` (a policy root that does not
+  to. With the default (`[]`) the bind is refused with `POLICY_DENIED`, so no
+  session is created: `bindWorkspaceUnderPolicy` (`src/fs/root.ts`) binds each
+  policy entry with `bindRoot` (a policy root that does not
   resolve, is not a directory, or is not absolute throws `POLICY_DENIED`,
-  `src/fs/root.ts:18-29`) and returns the requested root only if it lies
-  inside at least one policy root; otherwise it throws `POLICY_DENIED`
-  (`src/lifecycle/controller.ts:373-383`). A `create` naming a different
-  workspace than the recorded/bound one (including while live) also throws
-  `POLICY_DENIED` (`src/lifecycle/controller.ts:160-167`).
+  `bindRoot`, `src/fs/root.ts`) and returns the configured workspace root only if it lies
+  inside at least one policy root; otherwise it throws `POLICY_DENIED`.
+  `createRealmHandle` (`src/realm/compose.ts`) runs this bind once, at
+  construction. A `create` naming a different
+  workspace than the pinned one, or than the recorded one while a container
+  is recorded or the session is live, also throws
+  `POLICY_DENIED` (`LifecycleController.create`, `src/lifecycle/controller.ts`,
+  through `verifyPinnedAt`, `src/fs/root.ts`).
+  A session create is also refused with `POLICY_DENIED`, before any libpod,
+  OpenShell or policy-file call, unless the driver's pinned root
+  (`REALM_DRIVER_WORKSPACE_ROOT`, the root the sandbox mounts at `/workspace`)
+  and the policy-approved workspace are the same directory once both are
+  resolved with `realpath` (`src/runtime/session-execution.ts`). A symbolic
+  link to the same directory is the same directory. A pinned root that is a
+  parent of the approved workspace is refused, because the sandbox would reach
+  sibling directories the policy never approved: pin the project directory,
+  not its parent. A path that cannot be resolved is refused the same way.
+- **Breadth (residual R7):** the loader accepts any absolute directory, including the filesystem root `/`. A root of `/` places every host path inside a policy root, so the bind check no longer narrows the workspace. Keep each root as narrow as the project needs. No breadth refusal is implemented; the Phase 7 security review records R7 as an open residual (`.planning/milestones/v1.0-phases/07-policy-reference-and-security-review/07-SECURITY-REVIEW.md`, section 6).
 - **Enforced by:**
-  - Startup bind in `create`: `bindWorkspace` before any record/port work,
-    inside the startup budget (`src/lifecycle/controller.ts:155-156`).
+  - Startup bind: `createRealmHandle` (`src/realm/compose.ts`) calls
+    `bindWorkspaceUnderPolicy` before the controller exists. In
+    `LifecycleController.create` the pinned-root check (`verifyPinnedAt`) runs
+    before any record/port work, inside the startup budget.
   - `bindRoot` absolute + resolvable-directory check
-    (`src/fs/root.ts:20-29`); containment via segment comparison
-    `isInsideRoot` (`src/fs/root.ts:31-42`).
+    (`bindRoot`, `src/fs/root.ts`); containment via segment comparison
+    `isInsideRoot` (`src/fs/root.ts`).
   - Every file operation then stays under the pinned root: `canonicalize`
     throws `PATH_ESCAPE` for a target escaping the root
-    (`src/fs/canonicalize.ts:140-148`), which callers run before the
+    (`canonicalize`, `src/fs/canonicalize.ts`), which callers run before the
     credential check so escapes always report `PATH_ESCAPE`
-    (`src/fs/credentials.ts:1-5`).
+    (header comment of `src/fs/credentials.ts`).
 
 ## `credentialAllow`
 
-- **Type:** `string[]` of glob patterns (`src/core/policy.schema.json:18-22`,
-  `src/contract/validate.ts:33`).
+- **Type:** `string[]` of glob patterns (the `credentialAllow` property of
+  `src/core/policy.schema.json`; `Policy.credentialAllow` in `src/contract/validate.ts`).
 - **Default:** `[]` — deny everything matching the frozen denial list, allow
-  nothing extra (`src/core/policy.schema.json:21`).
+  nothing extra (the `credentialAllow` property of `src/core/policy.schema.json`).
 - **Effect:** exceptions to the frozen credential-denial list
-  (`CREDENTIAL_PATTERNS`, `src/fs/credentials.ts:13-34`: `.env` shapes,
-  `**/.ssh/**`, private-key names, `**/.aws/credentials`, `**/.aws/config`,
+  (`CREDENTIAL_PATTERNS`, `src/fs/credentials.ts`: `.env` shapes,
+  `**/.ssh/**`, private-key names, `**/*.pem`, `**/*.key`, `**/.npmrc`,
+  `**/.pypirc`, `**/.aws/credentials`, `**/.aws/config`,
   `**/.config/gcloud/**`, `**/.azure/**`, `**/.kube/config`,
   `**/.docker/config.json`, `**/.netrc`, `**/.git-credentials`,
-  `**/.gnupg/**`). Matching is on the canonical relative path (forward
+  `**/.gnupg/**`). `credentialAllow` can permit a specific path that one of
+  these patterns would deny. Matching is on the canonical relative path (forward
   slashes) after symlink resolution (`relPathOf`,
-  `src/fs/credentials.ts:55-57`), so a symlink into `~/.ssh` is still denied
+  `src/fs/credentials.ts`), so a symlink into `~/.ssh` is still denied
   and the raw input is never matched. A denied shape with no matching
   `credentialAllow` glob throws `CREDENTIAL_PATH_DENIED`
-  (`src/fs/credentials.ts:44-50`); `isCredentialDenied` /
-  `isCredentialAllowed` are the two halves (`src/fs/credentials.ts:36-42`).
+  (`assertCredentialAccess`, `src/fs/credentials.ts`); `isCredentialDenied` /
+  `isCredentialAllowed` are the two halves (`src/fs/credentials.ts`).
 - **Enforced by:**
-  - Dispatcher threads `deps.policy.credentialAllow` into the workspace deps
-    (`src/tools/dispatch.ts:100-106`).
-  - `read` (`src/tools/workspace.ts:100-112` → `src/fs/read.ts:35-36`),
-    `list` (`src/tools/workspace.ts:115-123` → `src/fs/list.ts:40-42` with
-    `ListOptions.credentialAllow`, `src/fs/list.ts:36-38`), and `write`
-    (`src/tools/workspace.ts:84-90` → `src/fs/write.ts:55-56`, plus the
-    pre-lock `writeTargetOf` check at `src/tools/workspace.ts:154-159`).
+  - The `ToolDispatcher` constructor threads `deps.policy.credentialAllow` into the
+    workspace deps (`src/tools/dispatch.ts`).
+  - `read` (`readWorkspaceFile`, `src/tools/workspace.ts` → `readFileCapped`, `src/fs/read.ts`),
+    `list` (`listWorkspaceDir`, `src/tools/workspace.ts` → `listDir`, `src/fs/list.ts`, with
+    `ListOptions.credentialAllow`), and `write`
+    (`writeWorkspaceFile`, `src/tools/workspace.ts` → `lockedWrite`, `src/fs/write.ts`, plus the
+    pre-lock `writeTargetOf` check in `src/tools/workspace.ts`).
 
 ## `egressAllow`
 
 - **Type:** `{ host: string; port: number }[]`
-  (`src/core/policy.schema.json:23-27`, `src/contract/validate.ts:24-27,34`).
+  (the `egressAllow` property of `src/core/policy.schema.json`; `EgressRule` and
+  `Policy.egressAllow` in `src/contract/validate.ts`).
   Rule shape: `host` non-empty string, `port` integer 1–65535
-  (`src/core/policy.schema.json:43-53`).
-- **Default:** `[]` — deny-all egress (`src/core/policy.schema.json:26`).
+  (`$defs/egressRule` in `src/core/policy.schema.json`).
+- **Default:** `[]` — deny-all egress (the `egressAllow` property of `src/core/policy.schema.json`).
 - **Effect:** the exact destinations the sandbox may reach, rendered into the
   OpenShell `network_policies` document. Validation (`validateEgressAllow`,
-  `src/runtime/egress.ts:40-45`) admits only an exact DNS hostname of at
+  `src/runtime/egress.ts`) admits only an exact DNS hostname of at
   least two labels or an IPv4 literal, and refuses wildcards, IPv6 literals,
-  `localhost`/`.localhost`, loopback `127.0.0.0/8`, link-local
-  `169.254.0.0/16`, and unspecified `0.0.0.0`
-  (`src/runtime/egress.ts:86-123`); refusal throws `SCHEMA_INVALID` naming no
-  value (`src/runtime/egress.ts:38-39,133-135`). Rendering
-  (`renderNetworkPolicies`, `src/runtime/egress.ts:50-70`) sorts by host then
-  port (`src/runtime/egress.ts:125-131`), emits one `egress_<n>` entry per
+  `localhost`/`.localhost`, and these IPv4 literal ranges: `0.0.0.0/8`,
+  `10.0.0.0/8`, `100.64.0.0/10`, `127.0.0.0/8`, `169.254.0.0/16`,
+  `172.16.0.0/12`, `192.0.0.0/24`, `192.168.0.0/16`, `198.18.0.0/15` (the
+  sandbox resolver hands out synthetic answers in this range), `224.0.0.0/4`
+  and `240.0.0.0/4` (which includes `255.255.255.255`)
+  (`isAllowedHost`, `src/runtime/egress.ts`); refusal throws `SCHEMA_INVALID` naming no
+  value (`reject`, `src/runtime/egress.ts`). Any host whose last label is
+  decimal digits, or `0x` plus hex digits, is refused unless the whole host is a
+  canonical dotted quad outside the refused ranges, so hex, octal-looking and
+  short notations such as `0x7f.0.0.0x1` and `127.1` are refused. The check is
+  lexical: a hostname that resolves to a private address is not refused at
+  validation time, and the supervisor resolves hostnames. Rendering
+  (`renderNetworkPolicies`, `src/runtime/egress.ts`) sorts by host then
+  port (`compareRules`, `src/runtime/egress.ts`), emits one `egress_<n>` entry per
   rule named `<host>:<port>` bound to the absolute workload binary
-  (non-absolute binary is `SCHEMA_INVALID`, `src/runtime/egress.ts:51-53`),
+  (non-absolute binary is `SCHEMA_INVALID`, `renderNetworkPolicies`),
   and renders an empty allowlist as `{}` (deny-all, S-20,
-  `src/runtime/egress.ts:56-59`).
+  `renderNetworkPolicies`).
 - **Enforced by:**
   - Daemon passes `policy.egressAllow` into the execution service
-    (`src/daemon/daemon.ts:497-508`).
+    (`defaultExec`, `src/daemon/daemon.ts`).
   - `buildPolicyDocument` embeds the D-78 rendering alongside the fixed
-    filesystem/landlock/process stanza (`src/runtime/openshell.ts:231-253`).
+    filesystem/landlock/process stanza (`src/runtime/openshell.ts`).
   - `writePolicyDocument` renders before creating the runtime directory, so a
     refused allowlist or workload binary writes nothing, then writes
     `<stateDir>/runtime/<sessionId>.policy.json` atomically at 0600
-    (`src/runtime/openshell.ts:255-276`).
+    (`src/runtime/openshell.ts`).
 
 ## `shellEnabled`
 
-- **Type:** `boolean` (`src/core/policy.schema.json:28-31`,
-  `src/contract/validate.ts:35`).
-- **Default:** `false` (`src/core/policy.schema.json:30`).
+- **Type:** `boolean` (the `shellEnabled` property of `src/core/policy.schema.json`;
+  `Policy.shellEnabled` in `src/contract/validate.ts`).
+- **Default:** `false` (the `shellEnabled` property of `src/core/policy.schema.json`).
 - **Effect:** `false` refuses the shell form of `exec`; `true` permits it.
   The argv form always passes this gate. The check decides only and never
   spawns a process; it runs on input that already passed `validate("tools",
-  ...)` (`src/core/policy.ts:155-167`).
+  ...)` (`checkExecPolicy`, `src/core/policy.ts`).
 - **Enforced by:** `checkExecPolicy` throwing `SHELL_NOT_ALLOWED` when the
   params carry `shell`/`script` and the flag is off
-  (`src/core/policy.ts:160-167`), called at the top of the dispatcher exec
+  (`checkExecPolicy`, `src/core/policy.ts`), called at the top of the dispatcher exec
   path before any state check, admission line, or runner invocation
-  (`src/tools/dispatch.ts:163-165`; stage order
-  `src/tools/dispatch.ts:1-18`). The shell form then runs as
-  `["/bin/sh", "-c", script]` (`src/tools/dispatch.ts:165`).
+  (`ToolDispatcher.#exec`, `src/tools/dispatch.ts`; stage order in the
+  header comment of `src/tools/dispatch.ts`). The shell form then runs as
+  `["/bin/sh", "-c", script]` (`ToolDispatcher.#exec`).
 
 ## `startupBudgetMs`
 
-- **Type:** `integer`, minimum 1 (`src/core/policy.schema.json:32-36`,
-  `src/contract/validate.ts:36`).
-- **Default:** `10000` (`src/core/policy.schema.json:35`).
+- **Type:** `integer`, minimum 1 (the `startupBudgetMs` property of
+  `src/core/policy.schema.json`; `Policy.startupBudgetMs` in `src/contract/validate.ts`).
+- **Default:** `200000` ms (the `startupBudgetMs` property of `src/core/policy.schema.json`). The default covers the AgentOS start timeout of 180 s with margin.
 - **Effect:** one deadline covering the whole startup path. In
-  `LifecycleController.create` the deadline is armed before `bindWorkspace`
-  and covers bind, record loads/writes, port create and start, and the bridge
+  `LifecycleController.create` the deadline is armed before the pinned-root
+  check (`verifyPinnedAt`)
+  and covers that check, record loads/writes, port create and start, and the bridge
   handshake; each synchronous step is followed by a deadline check and each
   port call is raced against the time left
-  (`src/lifecycle/controller.ts:127-139,153-156,180-193,214-226`). Expiry
+  (`LifecycleController.create`, `src/lifecycle/controller.ts`). Expiry
   throws/maps to `STARTUP_BUDGET_EXCEEDED` (create: `checkDeadline`,
-  `src/lifecycle/controller.ts:385-391`, and the `withTimeout` races at
-  `src/lifecycle/controller.ts:189-193,215-219,226`; probe races the same
-  budget, `src/lifecycle/controller.ts:263-282`). A create that gives up at
+  `src/lifecycle/controller.ts`, and the `withTimeout` races in
+  `LifecycleController.create`; probe races the same
+  budget, `LifecycleController.probe`). A create that gives up at
   the budget destroys the container its port call later produces
-  (`src/lifecycle/controller.ts:194-203`). The OMP plugin arms its detached
-  autostart timer from the same parsed value (`budgetMs =
-  policy.startupBudgetMs`, `src/omp/plugin.ts:186-188`); expiry paints the
+  (`LifecycleController.create` and `failCreate`, `src/lifecycle/controller.ts`). The Omp plugin
+  does not read this key: the policy is daemon-owned, so the plugin arms its
+  own detached attach timer from `STARTUP_BUDGET_MS` (`src/omp/plugin.ts`), a
+  constant equal to this key's schema default (`200000`), through `armTimer` in
+  the `attach` function of `registerRealmPlugin`. A project that sets another
+  `startupBudgetMs` therefore does not change the plugin's timer. Expiry paints the
   disconnected display with the existing `STARTUP_BUDGET_EXCEEDED` code while
-  the session continues, and settle clears the timer
-  (`src/omp/plugin.ts:173-179,205-230`). Catalogue entry:
+  the session continues, and settle clears the timer (`disarmTimer`,
+  `src/omp/plugin.ts`). Catalogue entry:
   `STARTUP_BUDGET_EXCEEDED` is retryable
-  (`src/core/errors.ts:69-72`).
-- **Also see:** the single teardown bound `TEARDOWN_TIMEOUT_MS` is a separate
-  constant, not this key (`src/lifecycle/controller.ts:35-38`).
+  (`ERROR_CATALOGUE` in `src/core/errors.ts`).
+  The control channel's `up` request waits 230 s (the 200 s default plus a
+  30 s reply margin; `CONTROL_TIMEOUT_MS`, `src/daemon/channel.ts`) before
+  the caller reports `TOOL_TIMEOUT`, while `status`, `down`, `doctor` and
+  `tool` keep their own limits. No CLI or plugin caller reads the
+  daemon-owned policy, so a `startupBudgetMs` above 200 s can still outlast
+  the `up` request limit; the plugin's own 200 s timer is unchanged and fires
+  first.
+- **Also see:** the single teardown bound `TEARDOWN_TIMEOUT_MS` (30000 ms) is a separate
+  constant, not this key (`TEARDOWN_TIMEOUT_MS`, `src/lifecycle/controller.ts`).
 
 ## `toolQueueMs`
 
-- **Type:** `integer`, minimum 1 (`src/core/policy.schema.json:37-41`,
-  `src/contract/validate.ts:37`).
-- **Default:** `2000` (`src/core/policy.schema.json:40`).
+- **Type:** `integer`, minimum 1 (the `toolQueueMs` property of
+  `src/core/policy.schema.json`; `Policy.toolQueueMs` in `src/contract/validate.ts`).
+- **Default:** `2000` (the `toolQueueMs` property of `src/core/policy.schema.json`).
 - **Effect:** how long a tool call in `connecting` waits for the state to
   leave `connecting` before proceeding to its normal decision. Applies to
-  `write` (`src/tools/dispatch.ts:150-158`) and `exec`
-  (`src/tools/dispatch.ts:168-172`); exec outside `active` after the wait is
-  still refused in both modes (`src/tools/dispatch.ts:173-175`). `status` is
-  not gated and never waits (`src/tools/dispatch.ts:186-192`).
+  `write` (`ToolDispatcher.#write`, `src/tools/dispatch.ts`) and `exec`
+  (`ToolDispatcher.#exec`); exec outside `active` after the wait is
+  still refused in both modes (`ToolDispatcher.#exec`). `status` is
+  not gated and never waits (`ToolDispatcher.#status`).
 - **Enforced by:** `waitLeavingConnecting`, which resolves when the event bus
   reports a transition from `connecting` or when the `toolQueueMs` timer
   fires, whichever comes first, clearing the timer and unsubscribing in
-  either case (`src/tools/dispatch.ts:275-291`, timer at `setTimeout(finish,
+  either case (`waitLeavingConnecting`, `src/tools/dispatch.ts`, timer at `setTimeout(finish,
   toolQueueMs)`).
 
 ## What is not a policy key
@@ -213,22 +259,22 @@ Loading rules (`src/core/policy.ts:28-37`):
 These look budget-like but are fixed constants, not policy keys (there is no
 schema entry, no default to override, and no per-project opt-in). The
 dispatcher states this explicitly for the call bound: "It is a constant, not
-a policy key (D-101)" (`src/tools/dispatch.ts:56-57`).
+a policy key (D-101)" (`TOOL_CALL_TIMEOUT_MS`, `src/tools/dispatch.ts`).
 
 | Name | Value / site | Scope (not per-project policy) |
 | --- | --- | --- |
-| `TOOL_CALL_TIMEOUT_MS` | `30_000` (`src/tools/dispatch.ts:57`) | Bounds one awaited tool call: the `exec` sandbox run (`src/tools/dispatch.ts:176-182`) and the `retry` create (`src/tools/dispatch.ts:207-211`). Expiry maps to `TOOL_TIMEOUT`. |
-| `TEARDOWN_TIMEOUT_MS` | `5000` (`src/lifecycle/controller.ts:38`) | Single bound for `stop`/`destroy`; expiry returns `REALM_STOPPING` (`src/lifecycle/controller.ts:3-7,35-38`). |
-| `OPENSHELL_CREATE_DEADLINE_MS` | `60_000` (`src/runtime/session-execution.ts:36`) | Bound for the whole OpenShell create including the label poll (`src/runtime/session-execution.ts:35-36,118-120`). |
-| `CONTAINER_STOP_GRACE_MS` | `10_000` (`src/runtime/session-execution.ts:38`) | Libpod stop timeout grace period (`src/runtime/session-execution.ts:160-161`). |
-| `AGENTOS_STOP_DEADLINE_MS` | `15_000` (`src/runtime/session-execution.ts:41`) | Backstop on the AgentOS stop; failures map to `AGENTOS_CRASH_LOOP` (`src/runtime/session-execution.ts:39-44,179-186`). |
-| `OPENSHELL_OUTPUT_LIMIT_BYTES` | `262144` (`src/runtime/openshell.ts:53`) | Per-stream capture cap for exec output (`src/runtime/session-execution.ts:257-284`). |
-| Runtime image / workload / state dir | `RuntimeConfig` (`src/runtime/config.ts:10-18`), validated by hand-written `loadRuntimeConfig` (`src/runtime/config.ts:43-67`) | Deployment inputs, not policy: image digest pin, `workloadArgv`, `stateDir`, optional `andaUrl`. Numeric limits live in `HARDENING_PROFILE`, never here (`src/runtime/config.ts:1-5`). |
+| `TOOL_CALL_TIMEOUT_MS` | `30_000` (`src/tools/dispatch.ts`) | Bounds one awaited tool call: the `exec` sandbox run (`ToolDispatcher.#exec`) and the `retry` create (`ToolDispatcher.#retry`). Expiry maps to `TOOL_TIMEOUT`. |
+| `TEARDOWN_TIMEOUT_MS` | `30_000` (`src/lifecycle/controller.ts`) | Single bound for `stop`/`destroy`; expiry returns `REALM_STOPPING` (header comment and `teardownBound` of `LifecycleController`, `src/lifecycle/controller.ts`). |
+| `OPENSHELL_CREATE_DEADLINE_MS` | `60_000` (`src/runtime/session-execution.ts`) | Bound for the whole OpenShell create including the label poll (`OPENSHELL_CREATE_DEADLINE_MS`, `src/runtime/session-execution.ts`). |
+| `CONTAINER_STOP_GRACE_MS` | `10_000` (`src/runtime/session-execution.ts`) | Libpod stop timeout grace period (`CONTAINER_STOP_GRACE_MS`, `src/runtime/session-execution.ts`). |
+| `AGENTOS_STOP_DEADLINE_MS` | `15_000` (`src/runtime/session-execution.ts`) | Backstop on the AgentOS stop; a missed deadline is a failed stop and maps to `AGENTOS_STOP_FAILED` (`AGENTOS_STOP_DEADLINE_MS` and `stopDeadlineMs`, `src/runtime/session-execution.ts`). |
+| `OPENSHELL_OUTPUT_LIMIT_BYTES` | `262144` (`src/runtime/openshell.ts`) | Per-stream capture cap for exec output (`BoundedOutput`, `src/runtime/session-execution.ts`). |
+| Runtime image / state dir | `RuntimeConfig` (`src/runtime/config.ts`), validated by hand-written `loadRuntimeConfig` (`src/runtime/config.ts`) | Deployment inputs, not policy: image digest pin, `stateDir`, optional `andaUrl`. Numeric limits live in `HARDENING_PROFILE`, never here (header comment of `src/runtime/config.ts`). |
 
 Related but separate: session identity file naming (`SESSION_ID_PATTERN`,
-`src/session/paths.ts:10,36-42`), state/record layout
-(`src/session/paths.ts:14-34`), and the open-file/list caps such as
-`MAX_LIST_ENTRIES` (`src/fs/list.ts:13`) are code constants, not policy
+`isSessionId` and `recordFileName`, `src/session/paths.ts`), state/record layout
+(`sessionsDirOf` and `controlSocketPath`, `src/session/paths.ts`), and the open-file/list caps such as
+`MAX_LIST_ENTRIES` (`src/fs/list.ts`) are code constants, not policy
 keys.
 
 ## Runtime configuration file
@@ -243,10 +289,11 @@ Path (`resolveConfigPath`, `src/runtime/host-paths.ts`):
 Keys (`ACCEPTED_KEYS`, `src/runtime/config.ts`). The key set is closed, and any other key is refused:
 
 - `image` (required): a digest-pinned reference in the form `name@sha256:<64 hex>`. The name starts with a lowercase letter or digit and continues with lowercase letters, digits, `.`, `_`, `/`, or `-`. A tag-only reference is refused.
-- `workloadArgv` (required): a non-empty array of non-empty strings. The first element must be an absolute path (D-79).
 - `stateDir` (required): an absolute path.
 - `workspaceRoot` (required): an absolute path.
-- `andaUrl` (optional): an `http:` or `https:` URL with no userinfo.
+- `andaUrl` (optional): an `http:` or `https:` URL with no userinfo. Its presence decides whether the Anda bridge is required (`andaBridgeRequired`, `src/runtime/config.ts`).
+  - Set: the bridge is required at start. The start runs the bridge handshake, and an unreachable bridge refuses the start with `ANDA_UNREACHABLE`.
+  - Absent: no Anda bridge is attached and there is no handshake, so the session goes `active` once the runner start succeeds. While `active` with no bridge, `exec` and `write` run exactly as they do with a bridge, in both policy modes. `status`, `read`, `list`, and `retry` do not need the bridge. If a configured bridge later goes down, the session moves to `degraded` and `exec` and `write` are refused as in any non-active state.
 
 The CLI and the daemon both read `stateDir` from this file, and a config that omits it is `SCHEMA_INVALID`.
 
@@ -262,7 +309,6 @@ Example. The digest is a placeholder of 64 zeros. It is not a real image, and th
 ```json
 {
   "image": "realm-workload@sha256:0000000000000000000000000000000000000000000000000000000000000000",
-  "workloadArgv": ["/usr/bin/node", "/opt/realm/workload.js"],
   "stateDir": "/srv/realm/state",
   "workspaceRoot": "/srv/realm/workspace"
 }

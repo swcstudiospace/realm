@@ -15,6 +15,8 @@ import {
   LIBPOD_INFO_VERSION_PATH,
   LIBPOD_LIST_ID_FIELD,
   matchLibpodRoute,
+  LIBPOD_API_VERSION_HEADER,
+  PING_PATH,
   type LibpodRouteName,
 } from "../../src/runtime/libpod-routes.js";
 
@@ -70,6 +72,10 @@ export interface FakeLibpodOptions {
   readonly store?: FakeContainerStore;
   readonly rootless?: boolean;
   readonly version?: string;
+  // The API version the fake reports on /_ping. Podman 5.7.1 reports 5.7.1.
+  readonly libpodApiVersion?: string;
+  // Omits the Libpod-Api-Version header from /_ping, to model a server that reports no version.
+  readonly omitApiVersionHeader?: boolean;
 }
 
 export interface RecordedRequest {
@@ -90,7 +96,7 @@ interface Reply {
   readonly body?: string;
 }
 
-const NOT_FOUND: Reply = jsonReply(404, { message: "no such container" });
+const NOT_FOUND: Reply = jsonReply(404, { cause: "no such container", message: "no such container", response: 404 });
 
 function jsonReply(status: number, value?: unknown): Reply {
   return value === undefined ? { status } : { status, body: JSON.stringify(value) };
@@ -143,6 +149,8 @@ export class FakeLibpod {
   readonly store: FakeContainerStore;
   private readonly rootless: boolean;
   private readonly version: string;
+  private readonly libpodApiVersion: string;
+  private readonly omitApiVersionHeader: boolean;
   private server: Server | undefined;
   private readonly sockets = new Set<Socket>();
   private readonly timers = new Set<NodeJS.Timeout>();
@@ -157,6 +165,8 @@ export class FakeLibpod {
     this.store = options.store ?? new FakeContainerStore();
     this.rootless = options.rootless ?? true;
     this.version = options.version ?? "0.0.0-fake";
+    this.libpodApiVersion = options.libpodApiVersion ?? "5.7.1";
+    this.omitApiVersionHeader = options.omitApiVersionHeader ?? false;
   }
 
   async start(socketPath: string): Promise<void> {
@@ -257,6 +267,11 @@ export class FakeLibpod {
         });
       }),
     );
+    if (url.pathname === PING_PATH) {
+      res.writeHead(200, this.omitApiVersionHeader ? {} : { [LIBPOD_API_VERSION_HEADER]: this.libpodApiVersion });
+      res.end();
+      return;
+    }
     if (matched === undefined) {
       write(res, jsonReply(404, { message: "page not found" }));
       return;
@@ -304,6 +319,10 @@ export class FakeLibpod {
         return this.stopRoute(id);
       case "removeContainer":
         return this.removeRoute(id, params);
+      case "createContainer":
+        return jsonReply(501, { message: "create is not modelled by the in-process fake" });
+      case "startContainer":
+        return jsonReply(501, { message: "start is not modelled by the in-process fake" });
     }
   }
 
@@ -335,7 +354,12 @@ export class FakeLibpod {
     return jsonReply(200, {
       Id: container.id,
       Name: `/${container.id}`,
-      State: { Status: container.running ? "running" : "exited", Running: container.running },
+      // The init pid of a running container. Session tests inject the host status read for it.
+      State: {
+        Status: container.running ? "running" : "exited",
+        Running: container.running,
+        Pid: container.running ? 4242 : 0,
+      },
       Config: { Labels: container.labels },
     });
   }
@@ -363,6 +387,6 @@ export class FakeLibpod {
       return jsonReply(409, { message: "container is running" });
     }
     this.store.remove(container.id);
-    return { status: 204 };
+    return jsonReply(200, [{ Id: container.id }]);
   }
 }

@@ -3,9 +3,9 @@
 // this file is PROVISIONAL. The gated integration suite confirms them on a Podman 5.x host
 // (S-09). They live in this file only, so a correction touches one place.
 //
-// The table holds exactly the five routes the closed libpod client uses. It defines no
-// route that starts or joins a process inside a container (RT-03). Agent
-// workload code starts only through the OpenShell adapter.
+// The table holds the routes the closed libpod client uses: the read, stop, and remove routes, and the create and
+// container-start routes of the lifecycle. It has no exec route: the sandbox runtime is the container's main process,
+// so the client starts no process inside a container and takes no attach (RT-03).
 
 import { makeRealmError } from "../core/errors.js";
 
@@ -27,6 +27,8 @@ export const LIBPOD_ROUTES = Object.freeze({
   inspectContainer: route("GET", "/libpod/containers/{id}/json"),
   stopContainer: route("POST", "/libpod/containers/{id}/stop"),
   removeContainer: route("DELETE", "/libpod/containers/{id}"),
+  createContainer: route("POST", "/libpod/containers/create"),
+  startContainer: route("POST", "/libpod/containers/{id}/start"),
 });
 
 export type LibpodRouteName = keyof typeof LIBPOD_ROUTES;
@@ -40,22 +42,39 @@ export const LIBPOD_LIST_ID_FIELD = "Id";
 // characters that need no escaping, so a caller cannot add a path segment or a query.
 export const CONTAINER_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 
-// The request target (path plus query string) for a route. Rejects a container id that
-// is missing where the route needs one, present where it does not, or malformed.
-export function routeTarget(
-  target: LibpodRoute,
-  containerId: string | undefined,
-  query: Readonly<Record<string, string>> = {},
-): string {
-  let path: string = target.path;
-  if (path.includes("{id}")) {
+// Podman serves libpod only under a versioned path, /v<api-version>/libpod/..., and answers an
+// unversioned libpod path with 404. The version is the one /_ping reports in its Libpod-Api-Version header.
+export const PING_PATH = "/_ping";
+export const LIBPOD_API_VERSION_HEADER = "libpod-api-version";
+export const API_VERSION_PATTERN = /^\d+\.\d+\.\d+$/;
+const VERSIONED_PATH = /^\/v\d+\.\d+\.\d+(\/.*)$/;
+
+// Checks the id a route needs: present and well formed where the route has an {id}, and absent
+// where it has none. It runs before any socket request, so a malformed id never reaches the socket.
+export function checkRouteId(target: LibpodRoute, containerId: string | undefined): void {
+  if (target.path.includes("{id}")) {
     if (containerId === undefined || !CONTAINER_ID_PATTERN.test(containerId)) {
       throw makeRealmError("SCHEMA_INVALID");
     }
-    path = path.replace("{id}", containerId);
   } else if (containerId !== undefined) {
     throw makeRealmError("SCHEMA_INVALID");
   }
+}
+
+// The request target (path plus query string) for a route under an API version. Rejects an id
+// that the route does not accept, and an API version that is not a plain version number.
+export function routeTarget(
+  target: LibpodRoute,
+  containerId: string | undefined,
+  apiVersion: string,
+  query: Readonly<Record<string, string>> = {},
+): string {
+  checkRouteId(target, containerId);
+  if (!API_VERSION_PATTERN.test(apiVersion)) {
+    throw makeRealmError("SCHEMA_INVALID");
+  }
+  const libpodPath = containerId === undefined ? target.path : target.path.replace("{id}", containerId);
+  const path = `/v${apiVersion}${libpodPath}`;
   const search = new URLSearchParams(query).toString();
   return search === "" ? path : `${path}?${search}`;
 }
@@ -65,25 +84,29 @@ export interface MatchedRoute {
   readonly containerId: string | null;
 }
 
-// Maps an incoming method and path back to a route name. Used by the fake server so it
-// shares the one route table with the client.
+// Maps an incoming method and path back to a route name. Only a versioned path matches, so the fake
+// server refuses an unversioned libpod path as Podman does. The fake shares this one route table with the client.
 export function matchLibpodRoute(method: string, pathname: string): MatchedRoute | undefined {
+  const libpodPath = VERSIONED_PATH.exec(pathname)?.[1];
+  if (libpodPath === undefined) {
+    return undefined;
+  }
   for (const name of Object.keys(LIBPOD_ROUTES) as LibpodRouteName[]) {
     const target = LIBPOD_ROUTES[name];
     if (target.method !== method) {
       continue;
     }
     if (!target.path.includes("{id}")) {
-      if (target.path === pathname) {
+      if (target.path === libpodPath) {
         return { name, containerId: null };
       }
       continue;
     }
     const [prefix = "", suffix = ""] = target.path.split("{id}");
-    if (!pathname.startsWith(prefix) || !pathname.endsWith(suffix)) {
+    if (!libpodPath.startsWith(prefix) || !libpodPath.endsWith(suffix)) {
       continue;
     }
-    const id = pathname.slice(prefix.length, pathname.length - suffix.length);
+    const id = libpodPath.slice(prefix.length, libpodPath.length - suffix.length);
     if (CONTAINER_ID_PATTERN.test(id)) {
       return { name, containerId: id };
     }

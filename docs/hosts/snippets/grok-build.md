@@ -5,32 +5,52 @@ Official page read 2026-10-22:
 https://docs.x.ai/build/features/skills-plugins-marketplaces (Skills, Plugins
 and Marketplaces).
 
-Realm serves MCP over stdio via the `realm mcp` command (P6-D9; the entry
-plan 06-04 builds). This snippet carries no token, secret, or host path.
+Realm serves MCP over stdio through its `realm` command with the `mcp`
+argument. This snippet carries no token, secret, or host path.
 
-## Documented path: Claude Code compatibility
+`realm` is not on `PATH` on the verification host. Install or link the `realm`
+binary first, or give the absolute path to it in place of `realm` below.
 
-A direct MCP configuration key in `~/.grok/config.toml` is not documented in
-the pages read, so this snippet gives no `~/.grok/config.toml` MCP block.
+## Plugin bundle (documented route)
 
-What the page documents instead: "Grok automatically reads Claude Code
+The repository ships one bundle for Claude Code and Grok Build:
+`adapters/claude-plugin`. The Grok Build page documents loading
+plugins from `--plugin-dir <PATH>` and from `./.grok/plugins/` and
+`~/.grok/plugins/`. Validate the bundle with the Grok validator (run from
+`<repo>`):
+
+```bash
+grok plugin validate adapters/claude-plugin
+```
+
+Expected result: exit 0 with "Plugin manifest is valid."
+
+Caveat: Grok documents no home-directory variable or flag. Isolated runs
+therefore set `HOME=<scratch>` in the environment instead.
+
+Load it for one session without installing it:
+
+```bash
+grok --plugin-dir adapters/claude-plugin
+```
+
+Installing with `grok plugin install <path>` is a separate step that changes
+the user's Grok configuration. It is not part of this snippet.
+
+## Claude Code project configuration
+
+The same page documents that "Grok automatically reads Claude Code
 marketplaces, plugins, skills, MCPs, agents, hooks, and instruction files."
-No extra setup is needed. Consume Realm by adding it to the Claude Code
-project configuration (the `.mcp.json` `mcpServers` entry in the
-`claude-code.md` snippet beside this one); Grok reads that entry alongside
-`~/.grok/`. List what Grok sees with `grok inspect`, which covers "config
-sources, instructions, skills, plugins, hooks, and MCP servers" for the
-current directory.
+The `.mcp.json` `mcpServers` entry in the `claude-code.md` snippet therefore
+also reaches Grok. That entry starts the stdio command `realm mcp` (command
+`realm`, argument `mcp`). Use it to share Realm with a project.
 
-The plugin route is also documented: "Plugins extend Grok with additional
-skills, agents, hooks, MCP servers, and LSP servers," loaded from
-`./.grok/plugins/`, `~/.grok/plugins/`, marketplace installs under
-`~/.grok/plugins/marketplaces/`, extra paths under `[plugins] paths` in
-`~/.grok/config.toml`, and `--plugin-dir <PATH>`.
+To list what Grok sees for the current directory, run `grok inspect`. It
+covers "config sources, instructions, skills, plugins, hooks, and MCP servers."
 
 ## Not documented
 
-A direct MCP server key in `~/.grok/config.toml`: not documented in the
-pages read. The plugin manifest file format: not documented in the pages
-read. ACP transport and launch command: not documented in the pages read, so
-this snippet gives no ACP configuration.
+A direct MCP server key in `~/.grok/config.toml`: not documented in the pages
+read, so this snippet gives no `~/.grok/config.toml` MCP block. ACP transport
+and launch command: not documented in the pages read, so this snippet gives no
+ACP configuration.

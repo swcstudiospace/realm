@@ -8,7 +8,7 @@ import { LibpodClient } from "../../src/runtime/libpod-client.js";
 import { removeAllRealmContainers } from "../../src/runtime/sweep.js";
 import { FakeContainerStore, FakeLibpod } from "../support/fake-libpod.js";
 
-const REALM_LABELS = { "io.realm.managed": "true" };
+const REALM_LABELS = { "openshell.managed": "true" };
 
 async function startFixture(t: TestContext): Promise<{
   readonly store: FakeContainerStore;
@@ -38,7 +38,8 @@ async function assertCode(work: Promise<unknown>, code: ErrorCode): Promise<void
 void test("RT-08: the sweep removes every realm-labelled container, leaves a foreign container untouched, and returns the removed count", async (t) => {
   const { store, libpod, client } = await startFixture(t);
   for (const n of [1, 2, 3]) {
-    store.add({ id: `realm-${String(n)}`, labels: { ...REALM_LABELS, "io.realm.session": `s-${String(n)}` }, running: n % 2 === 1 });
+    const id = `realm-${String(n)}`;
+    store.add({ id, labels: { ...REALM_LABELS, "openshell.ai/sandbox-name": id }, running: n % 2 === 1 });
   }
   store.add({ id: "foreign-1", labels: { owner: "someone-else" }, running: true });
 
@@ -71,7 +72,7 @@ void test("RT-08: the sweep lists before and after removal on every run, and a r
 
 void test("RT-08: a container that cannot be removed gives REALM_STOPPING, and a repeated sweep clears it and returns its count", async (t) => {
   const { store, libpod, client } = await startFixture(t);
-  store.add({ id: "realm-stuck", labels: REALM_LABELS, running: true });
+  store.add({ id: "realm-stuck", labels: { ...REALM_LABELS, "openshell.ai/sandbox-name": "realm-stuck" }, running: true });
   libpod.respondNext("removeContainer", { status: 500 });
 
   await assertCode(removeAllRealmContainers(client), "REALM_STOPPING");

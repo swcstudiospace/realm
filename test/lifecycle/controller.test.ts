@@ -350,6 +350,21 @@ void test("destroy with a scripted stop delay beyond the teardown bound returns 
   assert.equal(exec.callCount("destroy"), 1);
 });
 
+void test("F3: stop and destroy pass the realm sandbox name realm-<sessionId> as the second argument", async (t) => {
+  const { exec, controller, workspace } = fixture(t);
+  await controller.create(workspace);
+  await controller.stop();
+  await controller.destroy();
+  const teardown = exec.calls().filter((call) => call.operation === "stop" || call.operation === "destroy");
+  assert.deepEqual(
+    teardown.map((call) => [call.operation, call.sandbox]),
+    [
+      ["stop", `realm-${SESSION}`],
+      ["destroy", `realm-${SESSION}`],
+    ],
+  );
+});
+
 void test("create is refused with POLICY_DENIED when the pinned workspace directory was replaced, and nothing changes (D-22, S-02)", async (t) => {
   const { base, workspace, store, exec, controller } = fixture(t);
   const before = controller.snapshot();

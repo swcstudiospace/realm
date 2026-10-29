@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "mcp_servers": {
+    "realm": {
+      "transport": "stdio",
+      "command": "realm",
+      "args": ["mcp"],
+      "enabled": true,
+      "mode": "required"
+    }
+  }
+}

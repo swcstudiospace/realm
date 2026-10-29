@@ -13,31 +13,32 @@ import {
 } from "../../src/runtime/openshell.js";
 import { FakeContainerStore, FakeLibpod } from "../support/fake-libpod.js";
 import { FakeOpenShell } from "../support/fake-openshell.js";
+import { createThrough } from "../support/sandbox-create.js";
 
-const LABEL_KEY = "io.realm.managed";
-const SESSION_KEY = "io.realm.session";
+const OPENSHELL_MANAGED_KEY = "openshell.managed";
+const SANDBOX_NAME_KEY = "openshell.ai/sandbox-name";
 const SESSION = "sess-01";
 const POLICY_PATH = "/state/realm/runtime/sess-01.policy.json";
+const IMAGE = "example.invalid/realm-sandbox@sha256:0000000000000000000000000000000000000000000000000000000000000000";
 // Flag-looking elements in the workload must stay after the -- separator.
 const WORKLOAD = ["/usr/bin/agent", "--serve", "--env", "--provider"];
 const REQUEST: SandboxCreateRequest = {
   sessionId: SESSION,
   policyPath: POLICY_PATH,
   cpus: 2,
-  memory: "1g",
-  workloadArgv: WORKLOAD,
+  memory: "1Gi",
+  imageRef: IMAGE,
 };
 
-// The flags the pinned 0.1.2 create verb accepts before the separator (S-10, D-55).
+// The flags the pinned 0.1.5 create verb accepts before the separator (S-10, D-55).
 const PINNED_FLAGS: readonly string[] = [
   "--name",
   "--policy",
   "--no-auto-providers",
-  "--no-keep",
   "--detach",
-  "--label",
   "--cpu",
   "--memory",
+  "--from",
 ];
 
 async function startLibpod(t: TestContext, store: FakeContainerStore): Promise<LibpodClient> {
@@ -56,7 +57,7 @@ async function assertCode(work: Promise<unknown>, code: ErrorCode): Promise<void
   await assert.rejects(work, (error: unknown) => error instanceof RealmError && error.code === code);
 }
 
-void test("RT-03: the create argv is exactly the pinned 0.1.2 verb sequence with the workload after --", () => {
+void test("RT-03: the create argv is exactly the pinned 0.1.5 verb sequence, with no command", () => {
   assert.deepEqual(buildCreateArgv(REQUEST), [
     "openshell",
     "sandbox",
@@ -66,60 +67,51 @@ void test("RT-03: the create argv is exactly the pinned 0.1.2 verb sequence with
     "--policy",
     POLICY_PATH,
     "--no-auto-providers",
-    "--no-keep",
     "--detach",
-    "--label",
-    `${LABEL_KEY}=true`,
-    "--label",
-    `${SESSION_KEY}=${SESSION}`,
     "--cpu",
     "2",
     "--memory",
-    "1g",
-    "--",
-    ...WORKLOAD,
+    "1Gi",
+    "--from",
+    IMAGE,
   ]);
 });
 
 void test("AUD-02: the create argv carries no --env and no --provider element and no prefixed form of either", () => {
   const argv = buildCreateArgv(REQUEST);
-  // The workload deliberately contains --env and --provider after the separator; the
-  // builder must add none of its own. Only the part before -- is checked.
-  const beforeSeparator = argv.slice(0, argv.indexOf("--"));
-  assert.equal(beforeSeparator.includes("--env"), false);
-  assert.equal(beforeSeparator.includes("--provider"), false);
+  assert.equal(argv.includes("--env"), false);
+  assert.equal(argv.includes("--provider"), false);
   assert.equal(
-    beforeSeparator.some((element) => element.startsWith("--env=") || element.startsWith("--provider=")),
+    argv.some((element) => element.startsWith("--env=") || element.startsWith("--provider=")),
     false,
   );
 });
 
-void test("RT-03: the workload follows -- as the trailing positional arguments and no workload element precedes it", () => {
+void test("RT-03: the create argv carries no command: no separator and no workload element", () => {
   const argv = buildCreateArgv(REQUEST);
-  const separator = argv.indexOf("--");
-  assert.equal(separator, argv.length - WORKLOAD.length - 1);
-  assert.deepEqual(argv.slice(separator + 1), WORKLOAD);
-});
-
-void test("RT-03: every flag before the separator belongs to the pinned 0.1.2 flag set", () => {
-  const argv = buildCreateArgv(REQUEST);
-  const beforeSeparator = argv.slice(0, argv.indexOf("--"));
-  assert.deepEqual(beforeSeparator.slice(0, 3), ["openshell", "sandbox", "create"]);
-  // No value in the pinned argv starts with "--", so every such element is a flag name.
-  for (const element of beforeSeparator.filter((item) => item.startsWith("--"))) {
-    assert.ok(PINNED_FLAGS.includes(element), `unexpected flag before the separator: ${element}`);
+  assert.equal(argv.includes("--"), false);
+  for (const element of WORKLOAD) {
+    assert.equal(argv.includes(element), false, `${element} must not appear in the create argv`);
   }
 });
 
-void test("RT-03: a session id outside the safe set, a relative policy path, an empty workload, or a bad memory value is refused with SCHEMA_INVALID", async (t) => {
+void test("RT-03: every flag of the create argv belongs to the pinned 0.1.5 flag set", () => {
+  const argv = buildCreateArgv(REQUEST);
+  assert.deepEqual(argv.slice(0, 3), ["openshell", "sandbox", "create"]);
+  // No value in the pinned argv starts with "--", so every such element is a flag name.
+  for (const element of argv.filter((item) => item.startsWith("--"))) {
+    assert.ok(PINNED_FLAGS.includes(element), `unexpected flag in the create argv: ${element}`);
+  }
+});
+
+void test("RT-03: a session id outside the safe set, a relative policy path, a bad memory value, or an empty image reference is refused with SCHEMA_INVALID", async (t) => {
   const bad: readonly SandboxCreateRequest[] = [
     { ...REQUEST, sessionId: "../escape" },
     { ...REQUEST, sessionId: "" },
     { ...REQUEST, policyPath: "runtime/sess-01.policy.json" },
-    { ...REQUEST, workloadArgv: [] },
-    { ...REQUEST, workloadArgv: [""] },
     { ...REQUEST, memory: "--env=FOO" },
     { ...REQUEST, cpus: 0 },
+    { ...REQUEST, imageRef: "" },
   ];
   const store = new FakeContainerStore();
   const client = await startLibpod(t, store);
@@ -129,7 +121,7 @@ void test("RT-03: a session id outside the safe set, a relative policy path, an 
       () => buildCreateArgv(request),
       (error: unknown) => error instanceof RealmError && error.code === "SCHEMA_INVALID",
     );
-    await assertCode(runOpenShellCreate({ containers: client, runner: openshell.runner }, request, 500), "SCHEMA_INVALID");
+    await assertCode(runOpenShellCreate({ containers: client, createSandbox: createThrough(openshell.runner) }, request, 500), "SCHEMA_INVALID");
     assert.equal(openshell.callCount(), 0, "no OpenShell run starts for a refused request");
   }
 });
@@ -138,7 +130,7 @@ void test("CORE-06: a repeated create for the same session runs the OpenShell ru
   const store = new FakeContainerStore();
   const client = await startLibpod(t, store);
   const openshell = new FakeOpenShell(store);
-  const deps = { containers: client, runner: openshell.runner };
+  const deps = { containers: client, createSandbox: createThrough(openshell.runner) };
 
   const first = await runOpenShellCreate(deps, REQUEST, 2000);
   const second = await runOpenShellCreate(deps, REQUEST, 2000);
@@ -153,7 +145,7 @@ void test("RT-03: the runner receives the exact pinned argv on the first create"
   const client = await startLibpod(t, store);
   const openshell = new FakeOpenShell(store);
 
-  await runOpenShellCreate({ containers: client, runner: openshell.runner }, REQUEST, 2000);
+  await runOpenShellCreate({ containers: client, createSandbox: createThrough(openshell.runner) }, REQUEST, 2000);
 
   assert.deepEqual(openshell.calls()[0]?.argv, buildCreateArgv(REQUEST));
 });
@@ -164,7 +156,7 @@ void test("RT-03: a runner that exits non-zero gives OPENSHELL_START_FAILED afte
   const openshell = new FakeOpenShell(store);
   openshell.next("exit-1");
 
-  await assertCode(runOpenShellCreate({ containers: client, runner: openshell.runner }, REQUEST, 2000), "OPENSHELL_START_FAILED");
+  await assertCode(runOpenShellCreate({ containers: client, createSandbox: createThrough(openshell.runner) }, REQUEST, 2000), "OPENSHELL_START_FAILED");
   assert.equal(openshell.callCount(), 1);
   assert.equal(store.list().length, 0);
 });
@@ -176,7 +168,7 @@ void test("RT-03: a runner that cannot be started gives OPENSHELL_START_FAILED w
   openshell.next("reject");
 
   await assert.rejects(
-    runOpenShellCreate({ containers: client, runner: openshell.runner }, REQUEST, 2000),
+    runOpenShellCreate({ containers: client, createSandbox: createThrough(openshell.runner) }, REQUEST, 2000),
     (error: unknown) =>
       error instanceof RealmError && error.code === "OPENSHELL_START_FAILED" && !error.message.includes("ENOENT"),
   );
@@ -189,7 +181,7 @@ void test("RT-03: a runner that reports success but produces no labelled contain
   openshell.next("silent");
   const started = Date.now();
 
-  await assertCode(runOpenShellCreate({ containers: client, runner: openshell.runner }, REQUEST, 600), "OPENSHELL_START_FAILED");
+  await assertCode(runOpenShellCreate({ containers: client, createSandbox: createThrough(openshell.runner) }, REQUEST, 600), "OPENSHELL_START_FAILED");
   const elapsed = Date.now() - started;
   assert.ok(elapsed >= 550, `the poll runs until the deadline (elapsed ${String(elapsed)} ms)`);
   assert.ok(elapsed < 5000, `the poll stops at the deadline (elapsed ${String(elapsed)} ms)`);
@@ -201,19 +193,20 @@ void test("RT-03: a hung runner is bounded by the caller deadline and gives OPEN
   const openshell = new FakeOpenShell(store);
   openshell.next("hang");
 
-  await assertCode(runOpenShellCreate({ containers: client, runner: openshell.runner }, REQUEST, 300), "OPENSHELL_START_FAILED");
+  await assertCode(runOpenShellCreate({ containers: client, createSandbox: createThrough(openshell.runner) }, REQUEST, 300), "OPENSHELL_START_FAILED");
   const handed = openshell.calls()[0]?.timeoutMs;
   assert.ok(handed !== undefined && handed > 0 && handed <= 300, `the runner is told its bound (${String(handed)} ms)`);
 });
 
 void test("CORE-06: two labelled containers for one session fail closed with OPENSHELL_LABEL_AMBIGUOUS and no run", async (t) => {
   const store = new FakeContainerStore();
-  store.add({ id: "fake-a", labels: { [LABEL_KEY]: "true", [SESSION_KEY]: SESSION }, running: true });
-  store.add({ id: "fake-b", labels: { [LABEL_KEY]: "true", [SESSION_KEY]: SESSION }, running: true });
+  const labels = { [OPENSHELL_MANAGED_KEY]: "true", [SANDBOX_NAME_KEY]: `realm-${SESSION}`, "openshell.ai/isolation-role": "sandbox" };
+  store.add({ id: "fake-a", labels, running: true });
+  store.add({ id: "fake-b", labels, running: true });
   const client = await startLibpod(t, store);
   const openshell = new FakeOpenShell(store);
 
-  await assertCode(runOpenShellCreate({ containers: client, runner: openshell.runner }, REQUEST, 2000), "OPENSHELL_LABEL_AMBIGUOUS");
+  await assertCode(runOpenShellCreate({ containers: client, createSandbox: createThrough(openshell.runner) }, REQUEST, 2000), "OPENSHELL_LABEL_AMBIGUOUS");
   assert.equal(openshell.callCount(), 0);
 });
 
@@ -254,7 +247,8 @@ void test("RT-03: the exec argv names the same sandbox that the create argv name
 
 void test("RT-05: neither builder emits any D-80 forbidden flag, as an element or as a prefixed form, before the separator", () => {
   for (const argv of [buildCreateArgv(REQUEST), buildExecArgv(SESSION, WORKLOAD)]) {
-    const head = argv.slice(0, argv.indexOf("--"));
+    const separator = argv.indexOf("--");
+    const head = separator === -1 ? argv : argv.slice(0, separator);
     for (const flag of FORBIDDEN_FLAGS) {
       assert.equal(head.includes(flag), false, `${flag} must not appear before the separator`);
       assert.equal(

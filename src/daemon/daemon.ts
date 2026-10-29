@@ -22,12 +22,13 @@ import { defaultRunCommand, runChecks, type AgentOsReading, type CheckResult, ty
 import { TEARDOWN_TIMEOUT_MS } from "../lifecycle/controller.js";
 import { createRealmHandle, type RealmHandle } from "../realm/compose.js";
 import { AgentOsSupervisor, type AgentOsDriver } from "../runtime/agentos.js";
-import { loadRuntimeConfig, type RuntimeConfig } from "../runtime/config.js";
+import { andaBridgeRequired, loadRuntimeConfig, type RuntimeConfig } from "../runtime/config.js";
 import { LibpodClient } from "../runtime/libpod-client.js";
 import {
   productionOpenShellRunner,
   SessionExecution,
   type SessionContainers,
+  type SupervisorFor,
 } from "../runtime/session-execution.js";
 import type { OpenShellRunner } from "../runtime/openshell.js";
 import {
@@ -61,7 +62,14 @@ import {
 // Default bound for one AgentOS driver call in the production supervisor. The
 // only purpose is to keep a hung driver from hanging daemon startup; the
 // controller still enforces the policy startup budget around the whole path.
-const AGENTOS_CALL_TIMEOUT_MS = 5000;
+// The supervisor wraps every driver call in this budget, and a sandbox create takes tens of seconds. It
+// must exceed the driver's create budget (AGENTOS_START_TIMEOUT_MS in main.ts, 180 s) with margin.
+const AGENTOS_CALL_TIMEOUT_MS = 200_000;
+
+// How often the daemon probes an active session (RT-04, owner ruling N1). A runner that exited while the session is active is
+// reported by the probe as AGENTOS_CRASH_LOOP, and the session moves to error, so the status label tells the truth without a
+// doctor run. One probe runs at a time, and each is bounded by the controller's startup budget.
+export const HEALTH_PROBE_INTERVAL_MS = 10_000;
 
 // How the start gate settles: open for serving, or failed with the start error.
 type GateOutcome = { readonly ok: true } | { readonly ok: false; readonly error: unknown };
@@ -80,11 +88,20 @@ export interface BuildDaemonHandleOptions {
   // Production construction seams, used only when exec is omitted.
   readonly libpod?: SessionContainers;
   readonly libpodSocketPath?: string;
-  readonly agentos?: AgentOsSupervisor;
+  readonly agentosFor?: SupervisorFor;
   readonly agentosDriver?: AgentOsDriver;
   // Host environment filtered to OPENSHELL_ENV_NAMES for the runner (never
   // read from the process: this module reads no environment).
   readonly env?: EnvironmentLike;
+  // The realm secret root the sandbox binding derives from: the root the driver is given as REALM_DRIVER_SECRET_ROOT. Without it a
+  // session create is refused before any libpod call.
+  readonly secretRoot?: string;
+  // The pinned workspace root the sandbox binding mounts at /workspace: the root the driver is given as REALM_DRIVER_WORKSPACE_ROOT.
+  // Without it a session create is refused before any libpod call.
+  readonly pinnedWorkspaceRoot?: string;
+  // The driver's sandbox state root: the root the driver is given as REALM_DRIVER_STATE_ROOT. The sandbox binding names each
+  // sandbox's state directory under it. Without it a session create is refused before any libpod call.
+  readonly sandboxStateRoot?: string;
 }
 
 export interface StartDaemonOptions extends BuildDaemonHandleOptions {
@@ -102,6 +119,9 @@ export interface StartDaemonOptions extends BuildDaemonHandleOptions {
   // libpod client; tests inject a recording fake. Omitting both sweep and any
   // libpod seam refuses with SCHEMA_INVALID rather than silently skipping the reap.
   readonly sweep?: () => Promise<number>;
+  // Observer for a health probe that threw. The controller has already recorded any outcome that changes the session state; this
+  // receives the catalogue code of the failure, including a refusal that left the state unchanged. It must not throw.
+  readonly onHealthProbeFailure?: (code: ErrorCode) => void;
   readonly store?: Pick<SessionStore, "list" | "delete">;
   readonly socketDirDeps?: SocketDirDeps;
   // Bound for one socket operation and for draining in-flight requests on down.
@@ -152,14 +172,14 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
   const libpod =
     options.libpod ??
     (options.libpodSocketPath !== undefined ? new LibpodClient(options.libpodSocketPath) : undefined);
-  // One supervisor per daemon: the one the caller gives, or one built over the driver. The handle and the
-  // doctor probe share it, so a single supervisor owns the driver process.
-  const agentos =
-    options.agentos ?? (options.agentosDriver !== undefined ? defaultSupervisor(options.agentosDriver) : undefined);
+  // One supervisor per session: the caller's, or one built over the driver. The handle and the doctor probe share them, so
+  // each session's supervision state is one object.
+  const agentosFor =
+    options.agentosFor ?? (options.agentosDriver !== undefined ? supervisorsOver(options.agentosDriver) : undefined);
   const handle = buildDaemonHandle({
     ...options,
     ...(libpod === undefined ? {} : { libpod }),
-    ...(agentos === undefined ? {} : { agentos }),
+    ...(agentosFor === undefined ? {} : { agentosFor }),
   });
   const config = loadRuntimeConfig(options.runtimeInput);
   const stateDir = config.stateDir;
@@ -181,7 +201,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
   // The AgentOS reading the doctor reports (CLI-03; P6-D14): unbound when no driver is given, otherwise
   // whether the driver's live session answers.
   const agentosReading = async (): Promise<AgentOsReading> =>
-    agentos === undefined ? { bound: false } : { bound: true, alive: await agentos.check() };
+    agentosFor === undefined ? { bound: false } : { bound: true, alive: await agentosFor(options.sessionId).check() };
   const runDoctor = (): Promise<readonly CheckResult[]> =>
     (options.runChecks ?? runChecks)({
       stateDir,
@@ -207,6 +227,51 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
   let draining = false;
   let downRequested = false;
   const completed = new Set<Socket>();
+
+  // The health loop (RT-04, N1). It runs while the session is in service, active or degraded: a degraded session (the Anda
+  // bridge is unreachable) still serves tool calls, so a dead runner there must not keep a truthful-looking label. An event
+  // that puts the session in service arms the timer unless one is already armed, so moving between active and degraded keeps
+  // exactly one timer, and any event that leaves service clears it. A tick probes through the controller, which owns the
+  // transition to error and ignores the result of a probe that began in an earlier life of the session. Ticks never overlap:
+  // a tick that finds a probe still running does nothing. The timer is unref'd, so it never keeps the process alive.
+  let healthTimer: NodeJS.Timeout | undefined;
+  let healthProbing = false;
+  const stopHealthLoop = (): void => {
+    if (healthTimer !== undefined) {
+      clearInterval(healthTimer);
+      healthTimer = undefined;
+    }
+  };
+  const healthTick = async (): Promise<void> => {
+    const { state } = handle.controller.snapshot();
+    if (healthProbing || downRequested || (state !== "active" && state !== "degraded")) {
+      return;
+    }
+    healthProbing = true;
+    try {
+      await handle.controller.probe();
+    } catch (error: unknown) {
+      options.onHealthProbeFailure?.(codeOf(error));
+    } finally {
+      healthProbing = false;
+    }
+  };
+  const startHealthLoop = (): void => {
+    stopHealthLoop();
+    healthTimer = setInterval(() => {
+      void healthTick();
+    }, HEALTH_PROBE_INTERVAL_MS);
+    healthTimer.unref();
+  };
+  const unsubscribeHealth = handle.controller.events.subscribe((event) => {
+    if (event.to === "active" || event.to === "degraded") {
+      if (healthTimer === undefined) {
+        startHealthLoop();
+      }
+    } else {
+      stopHealthLoop();
+    }
+  });
   let resolveDone!: () => void;
   let rejectDone!: (cause: unknown) => void;
   const done = new Promise<void>((resolve, reject) => {
@@ -266,6 +331,8 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
   // passes its code as the reason, so done rejects with that code instead of resolving.
   const stop = async (id: ControlId | null, socket: Socket | undefined, reason?: ErrorCode): Promise<void> => {
     downRequested = true;
+    unsubscribeHealth();
+    stopHealthLoop();
     draining = true;
     await drainOthers();
     let reply: ControlReply;
@@ -515,37 +582,29 @@ function removeSocketFile(socketPath: string): RealmError | undefined {
   }
 }
 
-// A bridge that immediately reports the engine unreachable. Used only when the
-// runtime input configures no Anda URL and the caller injects no bridge, so
-// status and doctor keep working while up reports ANDA_UNREACHABLE through the
-// controller instead of refusing to construct the handle.
-class UnreachableBridge implements BridgePort {
-  connect(): Promise<void> {
-    return Promise.reject(makeRealmError("ANDA_UNREACHABLE"));
-  }
-
-  snapshot(): null {
-    return null;
-  }
-
-  subscribe(): () => void {
-    return () => undefined;
-  }
-
-  async close(): Promise<void> {}
-}
-
-function defaultSupervisor(driver: AgentOsDriver): AgentOsSupervisor {
-  return new AgentOsSupervisor({
-    driver,
-    callTimeoutMs: AGENTOS_CALL_TIMEOUT_MS,
-    random: Math.random,
-    sleep: (ms: number) =>
-      new Promise<void>((resolve) => {
-        setTimeout(resolve, ms);
-      }),
-    now: () => Date.now(),
-  });
+// The supervisors of one driver, one per session. Each is built on the session's first use and returned for that session from
+// then on, so a session's supervision state is one object, shared by the execution path and the doctor probe.
+function supervisorsOver(driver: AgentOsDriver): SupervisorFor {
+  const supervisors = new Map<string, AgentOsSupervisor>();
+  return (sessionId: string): AgentOsSupervisor => {
+    const existing = supervisors.get(sessionId);
+    if (existing !== undefined) {
+      return existing;
+    }
+    const made = new AgentOsSupervisor({
+      driver,
+      sessionId,
+      callTimeoutMs: AGENTOS_CALL_TIMEOUT_MS,
+      random: Math.random,
+      sleep: (ms: number) =>
+        new Promise<void>((resolve) => {
+          setTimeout(resolve, ms);
+        }),
+      now: () => Date.now(),
+    });
+    supervisors.set(sessionId, made);
+    return made;
+  };
 }
 
 function defaultExec(
@@ -560,18 +619,19 @@ function defaultExec(
   if (libpod === undefined) {
     throw makeRealmError("SCHEMA_INVALID");
   }
-  const agentos =
-    options.agentos ??
-    (options.agentosDriver !== undefined ? defaultSupervisor(options.agentosDriver) : undefined);
+  const agentosFor =
+    options.agentosFor ?? (options.agentosDriver !== undefined ? supervisorsOver(options.agentosDriver) : undefined);
   // No driver and no supervisor leaves AgentOS unbound: SessionExecution then refuses every runtime-touching
   // call with AGENTOS_NOT_CONFIGURED, so the handle still builds.
   return new SessionExecution({
     libpod,
     runner: runOpenShell,
-    ...(agentos !== undefined ? { agentos } : {}),
+    ...(agentosFor !== undefined ? { agentosFor } : {}),
+    ...(options.secretRoot !== undefined ? { secretRoot: options.secretRoot } : {}),
+    ...(options.pinnedWorkspaceRoot !== undefined ? { pinnedWorkspaceRoot: options.pinnedWorkspaceRoot } : {}),
+    ...(options.sandboxStateRoot !== undefined ? { sandboxStateRoot: options.sandboxStateRoot } : {}),
     config: {
       image: config.image,
-      workloadArgv: config.workloadArgv,
       stateDir: config.stateDir,
       ...(config.andaUrl !== undefined ? { andaUrl: config.andaUrl } : {}),
     },
@@ -579,9 +639,11 @@ function defaultExec(
   });
 }
 
-function defaultBridge(config: RuntimeConfig): BridgePort {
-  if (config.andaUrl === undefined) {
-    return new UnreachableBridge();
+// The Anda bridge over the configured URL, or null when no URL is configured, so the session has no
+// bridge and runs no handshake (C4).
+function defaultBridge(config: RuntimeConfig): BridgePort | null {
+  if (!andaBridgeRequired(config)) {
+    return null;
   }
   return new AndaBridge({ url: config.andaUrl });
 }

@@ -125,7 +125,10 @@ export type MutationDecision =
   | { readonly decision: "allow-with-warning"; readonly warning: string }
   | { readonly decision: "deny"; readonly code: MutationDenyCode };
 
-// Pure. Phase 3 wires this into lifecycle gating; Phase 2 only provides it.
+// Pure. The one mutation decision for file-mutating calls, in both policy modes. An active session
+// allows a write whether or not an Anda bridge is configured; a configured bridge that goes down
+// moves the session to degraded, which is refused below.
+// Under advisory policy a write in any other non-active state proceeds with a warning.
 export function decideMutation(policy: Policy, state: State): MutationDecision {
   if (state === "active") {
     return { decision: "allow" };

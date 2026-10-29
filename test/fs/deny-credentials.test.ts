@@ -78,6 +78,10 @@ const D31_SHAPES: readonly string[] = [
   "**/.netrc",
   "**/.git-credentials",
   "**/.gnupg/**",
+  "**/*.pem",
+  "**/*.key",
+  "**/.npmrc",
+  "**/.pypirc",
 ];
 
 // One sample path per D-31 shape. Every sample is a real file in the fixture, so reads and
@@ -103,6 +107,10 @@ const DENIED_SAMPLES: readonly { readonly shape: string; readonly path: string }
   { shape: "**/.netrc", path: "work/.netrc" },
   { shape: "**/.git-credentials", path: ".git-credentials" },
   { shape: "**/.gnupg/**", path: ".gnupg/secring.gpg" },
+  { shape: "**/*.pem", path: "certs/server.pem" },
+  { shape: "**/*.key", path: "tls/private.key" },
+  { shape: "**/.npmrc", path: "pkg/.npmrc" },
+  { shape: "**/.pypirc", path: ".pypirc" },
 ];
 
 function fixture(t: TestContext) {
@@ -139,6 +147,11 @@ void test("paths that only resemble a denied shape are not denied (FS-03)", () =
     ".kube/configs",
     "docs/.ssh-notes.md",
     "keys/id_rsa_notes.md",
+    "docs/pem-notes.md",
+    "src/key.ts",
+    "keys.txt",
+    ".npmrc.example",
+    "pypirc",
   ]) {
     assert.equal(isCredentialDenied(path), false, path);
   }
@@ -208,6 +221,21 @@ void test("credentialAllow permits the matching denied path for read and write a
 
   lockedWrite(root, "app/.env.example", "EXAMPLE=2", writeOptions("writer", new LockTable(), allow));
   assert.equal(readFileSync(join(rootDir, "app/.env.example"), "utf8"), "EXAMPLE=2");
+});
+
+void test("credentialAllow permits a matching key or registry file and still denies its siblings (R4, FS-03)", (t) => {
+  const { root, rootDir } = fixture(t);
+  putFile(rootDir, "certs/public.pem", "-----BEGIN CERTIFICATE-----");
+  const allow = ["certs/public.pem"];
+
+  const found = expectFound(readFileCapped(root, "certs/public.pem", readOptions(allow)));
+  assert.equal(Buffer.from(found.content).toString("utf8"), "-----BEGIN CERTIFICATE-----");
+  assertRejectsWith(() => readFileCapped(root, "certs/public.pem", readOptions()), "CREDENTIAL_PATH_DENIED");
+  assertRejectsWith(() => readFileCapped(root, "certs/server.pem", readOptions(allow)), "CREDENTIAL_PATH_DENIED");
+  assertRejectsWith(() => readFileCapped(root, "pkg/.npmrc", readOptions(allow)), "CREDENTIAL_PATH_DENIED");
+
+  lockedWrite(root, "certs/public.pem", "rotated", writeOptions("writer", new LockTable(), allow));
+  assert.equal(readFileSync(join(rootDir, "certs/public.pem"), "utf8"), "rotated");
 });
 
 void test("an escaping credential path reports PATH_ESCAPE before any credential check (FS-01, FS-03)", (t) => {

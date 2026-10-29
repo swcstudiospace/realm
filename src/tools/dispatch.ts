@@ -51,7 +51,10 @@ import {
 
 // The controller members the dispatcher reads. Pick keeps the dispatcher off the controller's private
 // state, so it can be composed with any object that offers these members.
-export type DispatcherController = Pick<LifecycleController, "events" | "snapshot" | "mutationGate" | "create">;
+export type DispatcherController = Pick<
+  LifecycleController,
+  "events" | "snapshot" | "mutationGate" | "create"
+>;
 
 // The bound on one call's awaited work (D-91). It is a constant, not a policy key (D-101).
 export const TOOL_CALL_TIMEOUT_MS = 30_000;

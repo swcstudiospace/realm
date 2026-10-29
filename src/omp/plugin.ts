@@ -69,7 +69,7 @@ export interface RealmRetryCommand {
 }
 
 export interface OmpExtensionApi {
-  on(event: "session_start", handler: (ctx: OmpSessionContext) => void): void;
+  on(event: "session_start", handler: (_event: unknown, ctx: OmpSessionContext) => void): void;
   on(event: "session_shutdown", handler: () => void): void;
   on(event: "tool_call", handler: (call: HostToolCall) => Promise<HostToolVerdict | undefined>): void;
   registerCommand(name: string, definition: RealmRetryCommand): void;
@@ -103,7 +103,7 @@ export interface ActiveSession {
 
 // Startup budget for attach plus its first status read. The daemon owns the policy, so this mirrors
 // the policy schema default for startupBudgetMs.
-export const STARTUP_BUDGET_MS = 10_000;
+export const STARTUP_BUDGET_MS = 200_000;
 
 // Bound on one guarded status read. It sits well inside the host's tool_call budget, so a hung
 // daemon yields a verdict instead of a host timeout.
@@ -315,7 +315,7 @@ export function registerRealmPlugin(pi: OmpExtensionApi, options: RealmPluginOpt
     return "realm retry superseded";
   };
 
-  pi.on("session_start", (ctx) => {
+  pi.on("session_start", (_event, ctx) => {
     // A second start replaces the first, so the previous client and its timers are released, not orphaned.
     endSession();
     const session: ActiveSession = {

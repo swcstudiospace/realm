@@ -1,15 +1,12 @@
 name: Pages
 
+# Started by the release job in ci.yml after verify and release, and by hand. There is no push
+# trigger: it would deploy a commit whose verify run failed.
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
 
-permissions:
-  contents: read
-  pages: write
-  id-token: write
+# No workflow-wide grant: each job declares exactly what its actions call.
+permissions: {}
 
 concurrency:
   group: pages
@@ -21,12 +18,18 @@ jobs:
   build:
     name: Build site
     runs-on: [self-hosted, linux, x64, omega-ci]
+    timeout-minutes: 15
+    permissions:
+      contents: read # actions/checkout
+      pages: read # actions/configure-pages: GET /repos/{owner}/{repo}/pages
     steps:
       - name: Checkout source
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up Node.js 22
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22.x
 
@@ -46,10 +49,10 @@ jobs:
           npm run build --prefix site
 
       - name: Configure Pages
-        uses: actions/configure-pages@v6
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
 
       - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v5
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: dist/site
 
@@ -57,10 +60,14 @@ jobs:
     name: Deploy to GitHub Pages
     needs: build
     runs-on: [self-hosted, linux, x64, omega-ci]
+    timeout-minutes: 15
+    permissions:
+      pages: write # actions/deploy-pages: POST and GET /repos/{owner}/{repo}/pages/deployments
+      id-token: write # actions/deploy-pages: OIDC token that proves where the deployment came from
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v5
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

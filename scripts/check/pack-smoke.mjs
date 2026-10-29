@@ -1,10 +1,11 @@
 // Packed-package smoke test. Packs the package, installs the tarball into a
-// throwaway consumer, and loads every JSON schema through the shipped validator.
+// throwaway consumer, loads every JSON schema through the shipped validator, and
+// asserts that every host adapter manifest shipped in the tarball.
 // The schemas are read at runtime from <package root>/src/..., so a tarball that
 // omits them fails here with ENOENT. Run `npm run build` first; check:pack does not build.
 
 import { execFile } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -16,6 +17,16 @@ const execFileAsync = promisify(execFile);
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const VALIDATOR = join("dist", "src", "contract", "validate.js");
 const MAX_BUFFER = 16 * 1024 * 1024;
+
+// Every host adapter manifest and MCP entry that the package must ship (paths relative to the package root).
+export const ADAPTER_MANIFESTS = [
+  "adapters/claude-plugin/.claude-plugin/plugin.json",
+  "adapters/claude-plugin/.mcp.json",
+  "adapters/muse-code/.muse-plugin/plugin.json",
+  "adapters/hermes-agent/plugin.json",
+  "adapters/hermes-agent/mcp.json",
+  "adapters/prime-agent/package.json",
+];
 
 // The consumer imports the installed package by its bare name, so the probe
 // resolves through node_modules exactly as a real user's code would.
@@ -50,6 +61,43 @@ export function tarballFromPackOutput(stdout, destination) {
   return join(destination, entries[0].filename);
 }
 
+// Lists the adapter manifests absent under an installed package root.
+export function missingAdapterManifests(packageRoot) {
+  return ADAPTER_MANIFESTS.filter((path) => !existsSync(join(packageRoot, path)));
+}
+
+// Lists each entry point the installed manifest declares (the CLI bin and the Omp extension) that is absent.
+export function missingDeclaredEntries(packageRoot) {
+  const manifest = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8"));
+  const declared = [...Object.values(manifest.bin ?? {}), ...(manifest.omp?.extensions ?? [])];
+  return declared.filter((path) => !existsSync(join(packageRoot, path)));
+}
+
+// The vendored compute driver protos and their provenance file, relative to the package root. The driver loads them at
+// start, so a package without them cannot serve the gateway.
+export const DRIVER_PROTO_FILES = [
+  "src/runtime/driver/proto/PROVENANCE.md",
+  "src/runtime/driver/proto/compute_driver.proto",
+  "src/runtime/driver/proto/datamodel.proto",
+  "src/runtime/driver/proto/extension.proto",
+  "src/runtime/driver/proto/options.proto",
+  "src/runtime/driver/proto/sandbox.proto",
+];
+
+// Lists the driver protos absent under an installed package root.
+export function missingDriverProtos(packageRoot) {
+  return DRIVER_PROTO_FILES.filter((path) => !existsSync(join(packageRoot, path)));
+}
+
+// The project licence, its notice, and the licence text of the Apache-2.0 material that NOTICE lists. Apache-2.0 section 4(a)
+// requires the text to travel with a redistributed copy of that material.
+export const LEGAL_FILES = ["LICENSE", "NOTICE", "licenses/Apache-2.0.txt"];
+
+// Lists the legal files absent under an installed package root.
+export function missingLegalFiles(packageRoot) {
+  return LEGAL_FILES.filter((path) => !existsSync(join(packageRoot, path)));
+}
+
 async function run(file, args, options) {
   try {
     return await execFileAsync(file, args, {
@@ -81,9 +129,29 @@ async function main() {
     await writeFile(join(consumerDir, "package.json"), `${JSON.stringify({ private: true, type: "module" })}\n`);
     await run("npm", buildInstallArgs(tarball), { cwd: consumerDir });
 
+    const missing = missingAdapterManifests(join(consumerDir, "node_modules", "agent-realm"));
+    if (missing.length > 0) {
+      throw new Error(`packed package is missing adapter manifests: ${missing.join(", ")}`);
+    }
+    const missingEntries = missingDeclaredEntries(join(consumerDir, "node_modules", "agent-realm"));
+    if (missingEntries.length > 0) {
+      throw new Error(`packed package is missing declared entries: ${missingEntries.join(", ")}`);
+    }
+    const missingProtos = missingDriverProtos(join(consumerDir, "node_modules", "agent-realm"));
+    if (missingProtos.length > 0) {
+      throw new Error(`packed package is missing driver protos: ${missingProtos.join(", ")}`);
+    }
+    const missingLegal = missingLegalFiles(join(consumerDir, "node_modules", "agent-realm"));
+    if (missingLegal.length > 0) {
+      throw new Error(`packed package is missing legal files: ${missingLegal.join(", ")}`);
+    }
+
     await writeFile(join(consumerDir, "probe.mjs"), PROBE_SOURCE);
     const probe = await run(process.execPath, ["probe.mjs"], { cwd: consumerDir });
     process.stdout.write(probe.stdout);
+    process.stdout.write(`adapter manifests: ${ADAPTER_MANIFESTS.length} present\n`);
+    process.stdout.write(`driver protos: ${DRIVER_PROTO_FILES.length} present\n`);
+    process.stdout.write(`legal files: ${LEGAL_FILES.length} present\n`);
     return 0;
   } finally {
     await Promise.all(

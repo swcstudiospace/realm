@@ -81,7 +81,6 @@ function makeDirs(t: TestContext): Fixture {
     join(base, "config", "realm", "config.json"),
     JSON.stringify({
       image: IMAGE,
-      workloadArgv: ["/usr/bin/agent", "--serve"],
       stateDir: join(base, "realm"),
       workspaceRoot: ws,
     }),
@@ -109,7 +108,6 @@ function daemonOptions(fixture: Fixture, overrides?: Partial<StartDaemonOptions>
   return {
     runtimeInput: {
       image: IMAGE,
-      workloadArgv: ["/usr/bin/agent", "--serve"],
       stateDir: fixture.stateDir,
       workspaceRoot: fixture.ws,
     },
@@ -286,10 +284,8 @@ void test("doctor through the CLI against the fake-backed daemon lists every ite
 
   const report = JSON.parse(result.stdout) as CheckResult[];
   assert.ok(Array.isArray(report));
-  // Seven pre-existing items plus the Phase 6 control-channel and agentos items
-  // appended deliberately (06-05); the bound below tolerates the plan's
-  // "eight" only if one pre-existing id were ever merged, but today all nine
-  // report and every one is asserted present by id.
+  // Seven pre-existing items, the control-channel and agentos items of Phase 6 (06-05), and the host-binaries and
+  // kernel-hardening items of Phase 9.7: eleven in all. Every one is asserted present by id.
   const ids = report.map((item) => item.id);
   const expectedIds: readonly CheckId[] = [
     "policy-file",
@@ -301,6 +297,8 @@ void test("doctor through the CLI against the fake-backed daemon lists every ite
     "anda-bridge",
     "control-channel",
     "agentos",
+    "host-binaries",
+    "kernel-hardening",
   ];
   for (const expected of expectedIds) {
     assert.ok(ids.includes(expected), `doctor report must list ${expected}`);
@@ -312,6 +310,10 @@ void test("doctor through the CLI against the fake-backed daemon lists every ite
   assert.ok(
     ids.indexOf("agentos") > ids.indexOf("anda-bridge"),
     "agentos must be appended after anda-bridge",
+  );
+  assert.ok(
+    ids.indexOf("host-binaries") > ids.indexOf("agentos") && ids.indexOf("kernel-hardening") > ids.indexOf("host-binaries"),
+    "host-binaries and kernel-hardening must be appended after agentos, in that order",
   );
 
   for (const item of report) {
@@ -372,6 +374,54 @@ void test("the CLI and the daemon entry resolve one state directory from the run
   assert.deepEqual(stderr, []);
 });
 
+void test("the AgentOS sandbox image is the configured digest, and no environment variable changes it (RT-01, C5)", async (t) => {
+  const fixture = makeDirs(t);
+  const env = { ...cliEnv(fixture), REALM_AGENTOS_IMAGE: `registry.example.com/other@sha256:${"1".repeat(64)}` };
+  let captured: StartDaemonOptions | undefined;
+  const code = await runDaemon({
+    env,
+    start: (options) => {
+      captured = options;
+      return Promise.reject(new Error("stop after capturing the start options"));
+    },
+    writeStderr: () => undefined,
+    onSignal: () => () => undefined,
+  });
+  assert.equal(code, 1);
+  assert.ok(captured !== undefined, "the daemon entry reaches start");
+  assert.ok(captured.agentosDriver !== undefined, "the AgentOS driver is bound with no environment variable set");
+  assert.deepEqual(captured.runtimeInput, { image: IMAGE, stateDir: fixture.stateDir, workspaceRoot: fixture.ws });
+});
+
+void test("an unpinned configured image refuses the daemon start, and an environment variable cannot bind another image (RT-01, C5)", async (t) => {
+  const fixture = makeDirs(t);
+  writeFileSync(
+    join(fixture.base, "config", "realm", "config.json"),
+    JSON.stringify({
+      image: "registry.example.com/realm/workload:latest",
+      stateDir: fixture.stateDir,
+      workspaceRoot: fixture.ws,
+    }),
+  );
+  const env = { ...cliEnv(fixture), REALM_AGENTOS_IMAGE: IMAGE };
+  let started = false;
+  const stderr: string[] = [];
+  const code = await runDaemon({
+    env,
+    start: () => {
+      started = true;
+      return Promise.reject(new Error("must not start"));
+    },
+    writeStderr: (line) => {
+      stderr.push(line);
+    },
+    onSignal: () => () => undefined,
+  });
+  assert.equal(code, 1);
+  assert.equal(started, false, "a tag-only configured image never reaches start");
+  assert.equal(stderr.length, 1);
+});
+
 void test("the socket directory is 0700 with a 0600 socket after daemon start (RT-06)", async (t) => {
   const fixture = makeDirs(t);
   const daemon = await startTestDaemon(fixture, daemonOptions(fixture));
@@ -396,8 +446,8 @@ void test("the container-create argv and the policy document carry no socket pat
     sessionId: "sess-proof",
     policyPath: join(ROOT, "tmp", "realm-no-mounts-proof", "policy.json"),
     cpus: 2,
-    memory: "512m",
-    workloadArgv: ["/usr/bin/agent", "--serve"],
+    memory: "512Mi",
+    imageRef: "example.invalid/realm-sandbox@sha256:0000000000000000000000000000000000000000000000000000000000000000",
   });
   const argvText = JSON.stringify(argv);
   assert.ok(!argvText.includes(".sock"), `create argv must not mount a socket: ${argvText}`);

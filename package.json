@@ -33,13 +33,16 @@
     ]
   },
   "files": [
+    "adapters",
     "dist/src",
+    "src/runtime/driver/proto",
     "src/core/policy.schema.json",
     "src/contract/tools.schema.json",
     "src/contract/session-record.schema.json",
     "README.md",
     "LICENSE",
     "NOTICE",
+    "licenses",
     "CHANGELOG.md"
   ],
   "type": "module",
@@ -54,7 +57,10 @@
     "build": "tsc -p tsconfig.json",
     "test:scripts": "node --test \"scripts/**/*.test.mjs\"",
     "check:docs": "node scripts/check/host-paths.mjs && node scripts/check/agents-sync.mjs",
+    "check:mcp": "node scripts/check/mcp-smoke.mjs",
     "check:pack": "node scripts/check/pack-smoke.mjs",
+    "check:image-digests": "node scripts/check/verify-image-digests.mjs",
+    "build:image": "node scripts/image/build-image.mjs",
     "check:gates": "node scripts/check/gate-closure.mjs",
     "release:next": "node scripts/release/next-version.mjs",
     "release:sync": "node scripts/release/sync-version.mjs",
@@ -68,6 +74,9 @@
     "typescript-eslint": "8.72.0"
   },
   "dependencies": {
+    "@grpc/grpc-js": "1.14.6",
+    "@grpc/proto-loader": "0.8.1",
+    "@rivet-dev/agentos-core": "0.4.4",
     "ajv": "8.20.0"
   }
 }

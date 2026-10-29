@@ -9,7 +9,17 @@ const untypedJs = tseslint.configs.strict.map((config) => ({ ...config, files: [
 // Architecture invariants over src/**/*.ts. These replace source-scanning tests (child_process allowlist,
 // D-99 guarded symbols, D-88 file functions, spawn sites), so the checks run as lint rules.
 const CHILD_PROCESS_PATHS = ["child_process", "node:child_process"];
-const CHILD_PROCESS_ALLOWED = ["src/cli/main.ts", "src/doctor/checks.ts", "src/runtime/session-execution.ts"];
+// The driver's two child_process modules (phase 9.5, owner decision 2). channel.ts runs openssl through execFile, with an argument
+// array and no shell, to issue the runtime's TLS, and it never spawns. supervisor.ts is the only module that spawns, to start the
+// host supervisor. Nothing else in the driver gains either right.
+const DRIVER_CHILD_PROCESS_ALLOWED = ["src/runtime/driver/channel.ts", "src/runtime/driver/supervisor.ts"];
+const CHILD_PROCESS_ALLOWED = [
+  "src/cli/main.ts",
+  "src/doctor/checks.ts",
+  "src/runtime/session-execution.ts",
+  "src/runtime/agentos-workload.ts",
+  ...DRIVER_CHILD_PROCESS_ALLOWED,
+];
 const GATE_MODULES = ["src/core/policy.ts", "src/core/states.ts", "src/core/errors.ts", "src/contract/validate.ts"];
 const SPECIAL_SRC = [
   "src/tools/**/*.ts",
@@ -20,8 +30,10 @@ const SPECIAL_SRC = [
   "src/fs/list.ts",
   "src/cli/main.ts",
   "src/doctor/checks.ts",
+  "src/runtime/driver/supervisor.ts",
 ];
-const SPAWN_MESSAGE = "P6-D1: spawn( is allowed only in src/runtime/session-execution.ts and src/cli/main.ts.";
+const SPAWN_MESSAGE =
+  "P6-D1: spawn( is allowed only in src/runtime/session-execution.ts, src/runtime/agentos-workload.ts, src/cli/main.ts and src/runtime/driver/supervisor.ts. The driver's channel.ts holds child_process for openssl and never spawns (phase 9.5, owner decision 2).";
 const GUARD_OWNER = {
   buildExecArgv: "src/runtime/openshell.ts",
   lockedWrite: "src/fs/write.ts",
@@ -107,7 +119,7 @@ const GENERIC = [...DYNAMIC, ...SPAWN, "openshellBinary", ...GUARDS];
 const withoutKey = (keys, drop) => keys.filter((key) => key !== drop);
 const childProcessPaths = CHILD_PROCESS_PATHS.map((name) => ({
   name,
-  message: "TOOL-02: only the allowlisted modules (src/cli/main.ts, src/doctor/checks.ts, src/runtime/session-execution.ts) import child_process.",
+  message: "TOOL-02: only the allowlisted modules (src/cli/main.ts, src/doctor/checks.ts, src/runtime/session-execution.ts, src/runtime/agentos-workload.ts, src/runtime/driver/channel.ts, src/runtime/driver/supervisor.ts) import child_process. The two driver modules are phase 9.5 owner decision 2: channel.ts runs openssl, supervisor.ts starts the host supervisor. agentos-workload.ts starts the AgentOS runner child.",
 }));
 // Dispatcher internals that host adapters (src/mcp, src/acp, src/omp) must never reference (P5-D11, P5-D12).
 const ADAPTER_INTERNALS = [
@@ -237,6 +249,14 @@ export default tseslint.config(
     rules: { "no-restricted-syntax": syntaxRule([...DYNAMIC, ...NAMED_ONLY, ...SPAWN, ...GUARDS]) },
   },
   {
+    files: ["src/runtime/driver/supervisor.ts"],
+    rules: { "no-restricted-syntax": syntaxRule([...DYNAMIC, ...NAMED_ONLY, "openshellBinary", ...GUARDS]) },
+  },
+  {
+    files: ["src/runtime/agentos-workload.ts"],
+    rules: { "no-restricted-syntax": syntaxRule([...DYNAMIC, ...NAMED_ONLY]) },
+  },
+  {
     files: ["src/**/*.ts"],
     rules: {
       "no-restricted-imports": ["error", { paths: childProcessPaths }],
@@ -271,13 +291,13 @@ export default tseslint.config(
         {
           object: "process",
           property: "env",
-          message: "process.env is read only at entry edges (src/cli/main.ts, src/daemon/main.ts, src/omp/extension.ts). Pass the value in as a parameter.",
+          message: "process.env is read only at entry edges (src/cli/main.ts, src/daemon/main.ts, src/omp/extension.ts, src/runtime/driver/main.ts). Pass the value in as a parameter.",
         },
       ],
     },
   },
   {
-    files: ["src/cli/main.ts", "src/daemon/main.ts", "src/omp/extension.ts"],
+    files: ["src/cli/main.ts", "src/daemon/main.ts", "src/omp/extension.ts", "src/runtime/driver/main.ts"],
     rules: { "no-restricted-properties": "off" },
   },
   {

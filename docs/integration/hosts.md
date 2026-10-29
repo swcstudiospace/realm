@@ -1,5 +1,26 @@
 # Host runtimes: Node or Bun requirement, plugin, MCP and ACP loading
 
+## Host tiers (v2.0)
+
+Realm ships one integration per host. The tier says how far each one is verified.
+
+| Tier | Meaning | Hosts |
+| --- | --- | --- |
+| 1: live verified | Run in a real session on the verification host, with the evidence recorded | Omp, for OMP-LIVE-01, OMP-LIVE-03 and OMP-LIVE-04: a live Omp session on the final build, 2026-10-28 (Omp 18.12.6, Podman 5.7.1), showed `realm active` after the attach, the `realm-retry` command reattaching from disconnected in the same session, and the same daemon still running after Omp quit (see `docs/integration/omp.md`). The disconnected status with the daemon's own reason was observed live on 2026-10-23 (OMP-LIVE-02). UI-01's "without blocking the session" was re-measured on 2026-10-28 but is a measurement, not a demonstration, so the Omp host is not a full pass. OMP-05 is unproven live, and ACP was not exercised live |
+| 2: validator verified | The adapter bundle passes the host's own validator, in an isolated directory. Not registered in the live host configuration | Claude Code and Grok Build (`adapters/claude-plugin`): `claude plugin validate` passes with warnings, `grok plugin validate` passes. Muse Code (`adapters/muse-code`): `muse plugins validate` passes. Hermes Agent (`adapters/hermes-agent`, a portable package): `hermes plugins validate` passes. Prime Agent (`adapters/prime-agent`): no validator subcommand exists; an isolated project-local install and list pass |
+| 3: documented only | Snippet from the host's official pages, not run here | none at v2.0 |
+
+Each host has a snippet in `docs/hosts/snippets/`. The snippets reference the
+adapter bundles by their repo paths. `realm` is not on `PATH` on the
+verification host, so every snippet says so and gives no install path.
+
+Realm was not registered in any live host configuration (Claude Code, Grok
+Build, Muse Code, Hermes Agent, Prime Agent, or the persistent Omp config).
+Registration needs explicit approval per host.
+
+
+## Gate note (FOUND-03)
+
 Gate note for FOUND-03 (decisions D-09, D-16, D-17, D-18). Status per host:
 
 | Host | Official source found | Node or Bun requirement | Plugin, MCP, ACP model |
@@ -30,6 +51,7 @@ Claude Code:
 - https://code.claude.com/docs/en/setup.md ("Advanced setup": system requirements and npm install)
 - https://code.claude.com/docs/en/features-overview.md (extension layer: plugins, MCP, hooks)
 - https://code.claude.com/docs/en/quickstart.md (install commands)
+- https://code.claude.com/docs/en/mcp.md (MCP reference; read 2026-10-22, see `docs/hosts/snippets/claude-code.md`)
 
 Grok Build:
 
@@ -80,9 +102,9 @@ Q5 (capability gaps). Built-in write and edit tools: the README says "`--no-tool
 
 Q1 (Node or Bun). Answer, from the Advanced setup page: the native installer is the recommended route, and it needs no Node runtime. The npm route is documented as follows: "The npm package requires Node.js 22 or later. On an older Node.js version, npm prints an `EBADENGINE` warning during install rather than failing." It also states: "The npm package installs the same native binary as the standalone installer ... The installed `claude` binary does not itself invoke Node." Bun: not documented.
 
-Q2 (plugin loading). Answer, from the Extend Claude Code page: "A plugin bundles skills, hooks, subagents, and MCP servers into a single installable unit," and plugins are distributed through marketplaces. The plugin manifest format is on a linked page (plugins/overview) that was not fetched in this phase: not documented in the pages read.
+Q2 (plugin loading). Answer, from the Extend Claude Code page: "A plugin bundles skills, hooks, subagents, and MCP servers into a single installable unit," and plugins are distributed through marketplaces. The plugin manifest format is on a linked page (plugins/overview) that was not fetched in the 2026-10-21 read. `docs/hosts/snippets/claude-code.md` documents `claude plugin validate <dir>` and `claude --plugin-dir <dir>` for a plugin bundle, from a page read on 2026-10-22; the manifest schema itself is not recorded here.
 
-Q3 (MCP loading). Answer, from the Extend Claude Code page: MCP "connects Claude to external services and tools." MCP servers load "at session start." `/mcp` shows each server's connection status, and remote servers reconnect automatically. The configuration file format is on the MCP reference page, which was not fetched: not documented in the pages read.
+Q3 (MCP loading). Answer, from the Extend Claude Code page: MCP "connects Claude to external services and tools." MCP servers load "at session start." `/mcp` shows each server's connection status, and remote servers reconnect automatically. The configuration file format was on the MCP reference page, which the 2026-10-21 read did not fetch. The page read on 2026-10-22 (https://code.claude.com/docs/en/mcp.md, recorded in `docs/hosts/snippets/claude-code.md`) documents `claude mcp add [options] <name> -- <command> [args...]` and a project-shared `.mcp.json` with an entry under `mcpServers`; an entry with no `type` is read as a stdio server.
 
 Q4 (ACP). Not documented in the pages read.
 
@@ -92,7 +114,7 @@ Q5 (capability gaps). Claude Code's own ACP host behaviour is not documented in 
 
 Q1 (Node or Bun). Answer: not documented. The overview gives the install command `curl -fsSL https://x.ai/cli/install.sh | bash` (macOS and Linux) and `irm https://x.ai/cli/install.ps1 | iex` (PowerShell). It names no Node or Bun version.
 
-Q2 (plugin loading). Answer, from the Skills, Plugins and Marketplaces page: "Plugins extend Grok with additional skills, agents, hooks, MCP servers, and LSP servers." Grok loads plugins from `./.grok/plugins/`, `~/.grok/plugins/`, marketplace installs under `~/.grok/plugins/marketplaces/`, extra paths under `[plugins] paths` in `~/.grok/config.toml`, and `--plugin-dir <PATH>`. Plugin hooks receive `GROK_PLUGIN_ROOT` and `GROK_PLUGIN_DATA`. The plugin manifest file format is not on the pages read: not documented in the pages read.
+Q2 (plugin loading). Answer, from the Skills, Plugins and Marketplaces page: "Plugins extend Grok with additional skills, agents, hooks, MCP servers, and LSP servers." Grok loads plugins from `./.grok/plugins/`, `~/.grok/plugins/`, marketplace installs under `~/.grok/plugins/marketplaces/`, extra paths under `[plugins] paths` in `~/.grok/config.toml`, and `--plugin-dir <PATH>`. Plugin hooks receive `GROK_PLUGIN_ROOT` and `GROK_PLUGIN_DATA`. The plugin manifest file format is not on the pages read: not documented in the pages read. The snippet (`docs/hosts/snippets/grok-build.md`) validates the shared Claude bundle with `grok plugin validate` (tier 2 above), which does not make the manifest format documented.
 
 Q3 (MCP loading). Answer: MCP servers are loaded from enabled plugins. The page also states that Grok "automatically reads Claude Code marketplaces, plugins, skills, MCPs, agents, hooks, and instruction files." A direct MCP configuration key in `~/.grok/config.toml` is not documented in the pages read.
 
@@ -104,7 +126,7 @@ Q5 (capability gaps). `grok inspect` lists "config sources, instructions, skills
 
 Q1 (Node or Bun). Answer, from the installation page: the installer provisions its own runtime. "PM provides pinned Python, Node.js, npm, ripgrep, and FFmpeg." It also states: "Current first-party installations run on **Python 3.14**" and "PM ... does not adopt arbitrary system Node versions as the installed runtime." The source-install prerequisites are "Git, curl, tar, and SHA-256 utilities." The numeric Node.js version pinned by PM is not documented in the page read. Bun: not documented.
 
-Q2 (plugin loading). Answer, from the Plugins page: drop a directory into `~/.hermes/plugins/` containing `plugin.yaml` and Python code. `__init__.py` defines `register(ctx)`, which calls `ctx.register_tool(...)` and `ctx.register_hook(...)`. Project-local plugins under `./.hermes/plugins/` are gated by `HERMES_ENABLE_PROJECT_PLUGINS`, and the gateway "discovers plugins once for the whole process." Plugins are enabled through `hermes plugins` (per the page).
+Q2 (plugin loading). Answer, from the Plugins page: drop a directory into `~/.hermes/plugins/` containing `plugin.yaml` and Python code. `__init__.py` defines `register(ctx)`, which calls `ctx.register_tool(...)` and `ctx.register_hook(...)`. Project-local plugins under `./.hermes/plugins/` are gated by `HERMES_ENABLE_PROJECT_PLUGINS`, and the gateway "discovers plugins once for the whole process." Plugins are enabled through `hermes plugins` (per the page). The repository's bundle uses the portable form (`plugin.json` and `mcp.json`, no Python) and is checked with `hermes plugins validate` (tier 2 above; see `docs/hosts/snippets/hermes-agent.md`).
 
 Q3 (MCP loading). Answer, from the MCP page: servers are declared under `mcp_servers` in `~/.hermes/config.yaml`. "Local stdio servers and remote HTTP MCP servers in the same config" are both supported, with "automatic tool discovery and registration at startup" and per-server tool filtering. A `~/.claude.json` `mcpServers` block maps to `mcp_servers` on import.
 
@@ -149,7 +171,7 @@ Decision owner: plan 01-03 and the main agent confirm this value before `package
 - Omp plugin manifest, lifecycle hooks and status API: gate 4 in omp.md.
 - Omp host-write removal in required mode (D-03, OMP-05): whether `--no-tools` covers the built-in write and edit tools. Answered in omp.md, Phase 5.
 - MCP protocol version and transport: mcp.md. ACP protocol version and transport: acp.md.
-- Claude Code plugin manifest, MCP configuration format and ACP support: not read in this phase.
+- Claude Code ACP support: not documented in the pages read. The MCP configuration format and the plugin validate and load commands are in `docs/hosts/snippets/claude-code.md` (page read 2026-10-22); the plugin manifest schema is not recorded.
 - Grok Build plugin manifest, hook contract and ACP transport: not read in this phase.
 - Hermes numeric managed Node.js version: not documented in the page read.
 - Muse Code: plugin bundle manifest format and ACP support (not on the pages read 2026-10-22); Node or Bun requirement not stated on those pages.

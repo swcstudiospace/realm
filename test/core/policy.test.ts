@@ -43,7 +43,7 @@ void test("CORE-03: a missing policy file yields the default policy (advisory, n
       credentialAllow: [],
       egressAllow: [],
       shellEnabled: false,
-      startupBudgetMs: 10000,
+      startupBudgetMs: 200000,
       toolQueueMs: 2000,
     });
   });
@@ -54,7 +54,7 @@ void test("CORE-03: keys missing from a policy file take the validated defaults"
     const policy = loadPolicyFile(writeJson(join(dir, "policy.json"), { mode: "fail-closed" }));
     assert.equal(policy.mode, "fail-closed");
     assert.equal(policy.shellEnabled, false);
-    assert.equal(policy.startupBudgetMs, 10000);
+    assert.equal(policy.startupBudgetMs, 200000);
     assert.equal(policy.toolQueueMs, 2000);
     assert.deepEqual(policy.workspaceRoots, []);
   });

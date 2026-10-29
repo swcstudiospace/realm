@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { performance } from "node:perf_hooks";
 import type { Policy } from "../../src/contract/validate.js";
 import { LifecycleController } from "../../src/lifecycle/controller.js";
 import type { StateSnapshot } from "../../src/core/state-machine.js";
@@ -29,6 +30,11 @@ function policyFor(workspaceRoot: string, startupBudgetMs: number): Policy {
 
 // A real workspace under a temporary base, a session store on disk, and the fake port.
 function fixture(t: TestContext, startupBudgetMs = 10000) {
+  // The clock is frozen (never advanced): the controller's deadline checks then cannot trip on the
+  // create phase's real disk work (record saves, pinned-root verify) however loaded the host is. The
+  // startup budget bounds only the real setTimeout that withTimeout races against the fake's scripted
+  // delay, and each test keeps that delay well beyond its budget so the budget timer fires first.
+  t.mock.method(performance, "now", () => 1000);
   const base = realpathSync(mkdtempSync(join(tmpdir(), "realm-interrupt-")));
   t.after(() => {
     rmSync(base, { recursive: true, force: true });
@@ -198,8 +204,8 @@ void test("a stop during a pending exec.start leaves no running container, even 
   });
   const start = exec.start.bind(exec);
   const issued: Promise<void>[] = [];
-  exec.start = (containerId: string) => {
-    const call = gate.then(() => start(containerId));
+  exec.start = (containerId: string, sandbox: string) => {
+    const call = gate.then(() => start(containerId, sandbox));
     issued.push(call);
     return call;
   };

@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": "dist",
+    "sourceMap": false
+  },
+  "include": ["src/runtime/agentos-runner.ts", "src/runtime/agentos-probe.ts"]
+}

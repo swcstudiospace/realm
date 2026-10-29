@@ -94,7 +94,7 @@ From the Self-Hosting page: the control plane runs as the `rivetdev/engine` imag
 Recorded in `docs/integration/runtime-decision.md` (S-11, OQ-P3-05, OQ-P3-06, OQ-P3-07). Summary:
 
 - Mode (Q1, Q2): library mode is primary and runs as the sandbox workload. Hosted mode is secondary and gated. Its worker is Docker-based (Q8).
-- Driver: Phase 3 defines the `AgentOsDriver` port and the supervisor only. It has no concrete binding and no `@rivet-dev/agentos-core` dependency. The in-sandbox channel (OQ-P3-05) and the package check (OQ-P3-06) are blocked.
+- Driver: Phase 3 defines the `AgentOsDriver` port and the supervisor only. It has no concrete binding and no `@rivet-dev/agentos-core` dependency. The in-sandbox channel (OQ-P3-05) and the package check (OQ-P3-06) are blocked. Historical (superseded 2026-10-28): the driver is now bound from the configured digest-pinned image (`src/runtime/agentos-driver.ts`) and the runner runs in the sandbox as a managed `sandbox exec` child (`docs/integration/openshell.md`).
 - Native binaries (Q5): still open (OQ-P3-07).
 - Destroy route (Q2): still undocumented for hosted mode, so Phase 3 makes no hosted call.
 
@@ -167,10 +167,10 @@ The OpenShell Podman driver requires Podman 5.x (`openshell.md` Q2). The host ha
 No-go for the in-sandbox runner as designed. Three blockers:
 
 1. A 16 MiB write takes down the sidecar and the embedding process.
-2. No verified control channel into an OpenShell sandbox. The OpenShell 0.1.2 help does not show that `sandbox exec` carries the library's pipe protocol. Live exec stays gated (OQ-P4-04, OQ-P4-05), and OQ-P3-05 stays blocked.
+2. No verified control channel into an OpenShell sandbox. The OpenShell 0.1.2 help does not show that `sandbox exec` carries the library's pipe protocol. Live exec stays gated (OQ-P4-04, OQ-P4-05), and OQ-P3-05 stays blocked. Historical (superseded 2026-10-28): the pin is 0.1.5, and the runner runs as a `sandbox exec` child (`docs/integration/openshell.md`).
 3. The host has Podman 4.9.3, below the 5.x the OpenShell Podman driver requires.
 
-Revisit as go with conditions only if: (a) a live OpenShell 0.1.2 run on Podman 5.x shows the sidecar protocol survives `sandbox exec` or a relay, with exit codes; (b) the crash is avoided by configuration or fixed upstream, and the embedding process survives a sidecar exit; (c) the sidecar starts under the OpenShell Landlock and seccomp policy as a non-root user; (d) the guest gaps listed above are accepted for Realm's workloads.
+Revisit as go with conditions only if: (a) a live OpenShell 0.1.2 run on Podman 5.x shows the sidecar protocol survives `sandbox exec` or a relay, with exit codes; (b) the crash is avoided by configuration or fixed upstream, and the embedding process survives a sidecar exit; (c) the sidecar starts under the OpenShell Landlock and seccomp policy as a non-root user; (d) the guest gaps listed above are accepted for Realm's workloads. Historical (superseded 2026-10-28): the 0.1.2 pin no longer holds; the pin is 0.1.5.
 
-Status: the recommendation is pending the user's decision on the AgentOS path after the spike. This section does not record that decision. No live run of the Realm runner has been made.
+Status: the recommendation is pending the user's decision on the AgentOS path after the spike. This section does not record that decision. No live run of the Realm runner has been made. Historical (superseded 2026-10-28): the "recommendation pending" status no longer holds; the AgentOS driver is bound and the runner runs in the sandbox (`docs/integration/openshell.md`).
 

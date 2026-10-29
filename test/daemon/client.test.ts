@@ -231,7 +231,6 @@ async function startRealDaemon(
   const daemon = await startDaemon({
     runtimeInput: {
       image: IMAGE,
-      workloadArgv: ["/usr/bin/agent", "--serve"],
       stateDir: join(base, "state"),
       workspaceRoot: workspace,
     },

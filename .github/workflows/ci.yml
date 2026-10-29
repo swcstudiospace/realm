@@ -25,6 +25,9 @@ jobs:
     # organisation's own code.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, linux, x64, omega-ci]
+    timeout-minutes: 30
+    permissions:
+      contents: read
     strategy:
       matrix:
         node-version:
@@ -32,10 +35,12 @@ jobs:
           - 24.x
     steps:
       - name: Checkout source
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ matrix.node-version }}
           cache: npm
@@ -90,18 +95,26 @@ jobs:
           set -euo pipefail
           npm run check:pack
 
+      - name: MCP smoke
+        run: |
+          set -euo pipefail
+          npm run check:mcp
+
   site:
     name: Build docs site
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, linux, x64, omega-ci]
+    timeout-minutes: 15
     permissions:
       contents: read
     steps:
       - name: Checkout source
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up Node.js 22.x for the site
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22.x
 
@@ -118,9 +131,10 @@ jobs:
 
   release:
     name: Release
-    needs: verify
+    needs: [verify, site]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: [self-hosted, linux, x64, omega-ci]
+    timeout-minutes: 30
     permissions:
       contents: write
       actions: write
@@ -129,21 +143,23 @@ jobs:
       cancel-in-progress: false
     steps:
       - name: Checkout triggering commit
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
-          persist-credentials: true
+          # Dependency and build code must not read the token; the push step passes it through
+          # its environment instead.
+          persist-credentials: false
 
       - name: Set up Node.js 24 for release
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24.x
 
       - name: Install release dependencies
         run: |
           set -euo pipefail
-          npm ci
+          npm ci --ignore-scripts
 
       - name: Fetch tags from origin
         run: |
@@ -182,6 +198,14 @@ jobs:
             exit 1
           fi
 
+          # Only publish a tag that is on main's history. Not compared with GITHUB_SHA: a rerun
+          # after a later commit landed must still finish the earlier tag.
+          git fetch --quiet --force origin "+refs/heads/main:refs/remotes/origin/main"
+          if ! git merge-base --is-ancestor "refs/tags/${tag}" refs/remotes/origin/main; then
+            echo "::error::${tag} is not an ancestor of origin/main; refusing to build and publish it." >&2
+            exit 1
+          fi
+
           echo "${tag} has no GitHub release; finishing it from a separate worktree."
           version="${tag#v}"
           release_date="$(date -u +%Y-%m-%d)"
@@ -192,7 +216,9 @@ jobs:
           trap 'git worktree remove --force "${dir}" >/dev/null 2>&1 || true' EXIT
           (
             cd "${dir}"
-            npm ci
+            # Dependency and build code must not see the token; gh runs outside this subshell.
+            unset GH_TOKEN
+            npm ci --ignore-scripts
             npm run build
             npm pack
             if ! grep -qF "## [${version}]" CHANGELOG.md; then
@@ -200,8 +226,12 @@ jobs:
               exit 1
             fi
             node scripts/release/changelog.mjs --version "${version}" --date "${release_date}" --notes-out notes.md
+            node "$(cd "${GITHUB_WORKSPACE}" && pwd -P)/scripts/release/assets.mjs" --root "${dir}" --tarball "${dir}/agent-realm-${version}.tgz" --out "${dir}/assets"
           )
-          gh release create "${tag}" "${dir}/agent-realm-${version}.tgz" \
+          gh release create "${tag}" \
+            "${dir}/agent-realm-${version}.tgz" \
+            "${dir}/assets/SHA256SUMS" \
+            "${dir}/assets/agent-realm-${version}.cdx.json" \
             --title "Realm ${tag}" \
             --notes-file "${dir}/notes.md" \
             --verify-tag
@@ -228,8 +258,6 @@ jobs:
       #   skip       target tag and its GitHub release both exist: nothing to publish.
       #   superseded origin/main is no longer this commit: the newer commit's run releases.
       #   normal     bump, build, commit, atomic push of main and tag, then release.
-      # exists=true means this run publishes nothing (skip or superseded); the Pages
-      # dispatch step keys off it.
       - name: Plan release
         id: tag_check
         env:
@@ -281,24 +309,14 @@ jobs:
             fi
           fi
 
-          case "${action}" in
-            skip)
-              echo "Tag ${tag} and its GitHub release already exist; nothing to publish."
-              exists=true
-              ;;
-            superseded)
-              exists=true
-              ;;
-            *)
-              exists=false
-              ;;
-          esac
+          if [ "${action}" = skip ]; then
+            echo "Tag ${tag} and its GitHub release already exist; nothing to publish."
+          fi
 
           {
             echo "action=${action}"
             echo "tag=${tag}"
             echo "version=${tag#v}"
-            echo "exists=${exists}"
           } >> "$GITHUB_OUTPUT"
           echo "Release plan: action=${action} tag=${tag}"
 
@@ -331,18 +349,34 @@ jobs:
           npm run build
           npm pack
 
+      # Checksums and a CycloneDX SBOM of the production dependency tree. Both run before any
+      # remote mutation, so a failure here leaves no tag and no release behind.
+      - name: Write release checksums and SBOM
+        if: steps.tag_check.outputs.action == 'normal'
+        env:
+          VERSION: ${{ steps.tag_check.outputs.version }}
+        run: |
+          set -euo pipefail
+          node scripts/release/assets.mjs --tarball "agent-realm-${VERSION}.tgz" --out "${RUNNER_TEMP}/release-assets"
+
       - name: Commit release changes
         if: steps.tag_check.outputs.action == 'normal'
         env:
           TAG: ${{ steps.tag_check.outputs.tag }}
         run: |
           set -euo pipefail
-          git add package.json package-lock.json CHANGELOG.md
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          list="$(node scripts/release/sync-version.mjs --files)"
+          if [ -z "${list}" ]; then
+            echo "::error::sync-version.mjs --files listed no files to stage." >&2
+            exit 1
+          fi
+          mapfile -t files <<< "${list}"
+          git add -- CHANGELOG.md "${files[@]}"
           if git diff --cached --quiet; then
             echo "No release file changes to commit."
           else
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git commit -m "chore(release): ${TAG} [skip ci]"
           fi
 
@@ -353,8 +387,25 @@ jobs:
         if: steps.tag_check.outputs.action == 'normal'
         env:
           TAG: ${{ steps.tag_check.outputs.tag }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          # The only step that holds a write credential for git. It reaches git through the
+          # environment, never argv or disk. Every other step reads the repository anonymously,
+          # which relies on it being public.
+          auth="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 -w0)"
+          echo "::add-mask::${auth}"
+          # Earlier steps ran dependency and build code as this user, so nothing on disk that git reads
+          # is trusted here: the global and system config are ignored, hooks are disabled and the
+          # remote header is set on the command line of this step only. A job split would remove the
+          # shared user altogether; it is a recorded follow-up.
+          export GIT_CONFIG_GLOBAL=/dev/null
+          export GIT_CONFIG_NOSYSTEM=1
+          export GIT_CONFIG_COUNT=2
+          export GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"
+          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic ${auth}"
+          export GIT_CONFIG_KEY_1="core.hooksPath"
+          export GIT_CONFIG_VALUE_1="/dev/null"
           git tag -a "${TAG}" -m "Release ${TAG}"
           if git push --atomic origin "HEAD:refs/heads/main" "refs/tags/${TAG}"; then
             echo "pushed=true" >> "$GITHUB_OUTPUT"
@@ -381,16 +432,33 @@ jobs:
           VERSION: ${{ steps.tag_check.outputs.version }}
         run: |
           set -euo pipefail
-          gh release create "${TAG}" "agent-realm-${VERSION}.tgz" \
+          gh release create "${TAG}" \
+            "agent-realm-${VERSION}.tgz" \
+            "${RUNNER_TEMP}/release-assets/SHA256SUMS" \
+            "${RUNNER_TEMP}/release-assets/agent-realm-${VERSION}.cdx.json" \
             --title "Realm ${TAG}" \
             --notes-file release-notes.md \
             --verify-tag
 
+      # Pages deploys the tip of main, so it is dispatched exactly when that tip is a release commit:
+      # that content passed verify and was released. This covers a run that just published, the rerun
+      # of a run whose release exists but whose dispatch failed, and the repair of a tag without a
+      # release (all of which end with main at their own release commit), and it never deploys a
+      # newer push whose own verify has not finished: that run dispatches after its own release.
       - name: Dispatch Pages workflow
-        if: steps.tag_check.outputs.exists == 'false' && hashFiles('.github/workflows/pages.yml') != ''
+        if: hashFiles('.github/workflows/pages.yml') != ''
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          gh workflow run pages.yml --ref main
+          git fetch --quiet --force origin "+refs/heads/main:refs/remotes/origin/main"
+          tip="$(git log -1 --format=%s refs/remotes/origin/main)"
+          case "${tip}" in
+            "chore(release): v"*)
+              gh workflow run pages.yml --ref main
+              ;;
+            *)
+              echo "The tip of main is not a release commit (${tip}); the run that releases it dispatches Pages."
+              ;;
+          esac

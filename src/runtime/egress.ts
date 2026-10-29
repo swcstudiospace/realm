@@ -1,10 +1,17 @@
 // Egress allowlist validation and OpenShell network-policy rendering (RT-05, D-77, D-78).
 // validateEgressAllow admits only an exact DNS hostname of at least two labels or an IPv4
 // literal, with an integer port from 1 to 65535. It refuses wildcards, IPv6 literals, localhost,
-// loopback, link-local, and unspecified hosts (D-77). renderNetworkPolicies writes only the D-78
-// fields, in a deterministic order, and renders an empty allowlist to {} (deny-all, S-20). Both
-// are pure: they read no environment and do no I/O. The rendered shape is a documented contract,
-// so changing it is a costly change.
+// and IPv4 literals in these ranges: 0.0.0.0/8 (this network), 10.0.0.0/8, 100.64.0.0/10 (shared
+// address space), 127.0.0.0/8 (loopback), 169.254.0.0/16 (link-local), 172.16.0.0/12,
+// 192.0.0.0/24, 192.168.0.0/16, 198.18.0.0/15 (the sandbox resolver hands out synthetic answers
+// there, so a literal would collide with them), 224.0.0.0/4 (multicast) and 240.0.0.0/4
+// (reserved, including 255.255.255.255) (D-77). Hex, octal-looking and short notations such as
+// 0x7f.0.0.0x1, 010.0.0.1 and 127.1 are refused: a host whose last label is decimal or 0x-hex must
+// be a canonical dotted quad. The check is otherwise lexical: a hostname that resolves
+// to a private address cannot be refused here, and the supervisor resolves hostnames.
+// renderNetworkPolicies writes only the D-78 fields, in a deterministic order, and renders an
+// empty allowlist to {} (deny-all, S-20). Both are pure: they read no environment and do no I/O.
+// The rendered shape is a documented contract, so changing it is a costly change.
 
 import { isAbsolute } from "node:path";
 import { makeRealmError } from "../core/errors.js";
@@ -30,7 +37,8 @@ export type NetworkPolicies = Readonly<Record<string, NetworkPolicyEntry>>;
 const LABEL_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i;
 // Canonical decimal octets only: "0" alone or no leading zero, so octal-looking 010 or 0177 is refused.
 const OCTET_PATTERN = /^(?:0|[1-9][0-9]{0,2})$/;
-const ALL_DIGITS_PATTERN = /^[0-9]+$/;
+// A label inet_aton reads as a number: decimal digits, or 0x followed by hex digits (possibly none).
+const NUMERIC_LABEL_PATTERN = /^(?:[0-9]+|0x[0-9a-f]*)$/i;
 const IPV6_OR_WILDCARD_PATTERN = /[:[\]*]/;
 const MAX_HOST_LENGTH = 253;
 const MAX_PORT = 65535;
@@ -94,8 +102,9 @@ function isAllowedHost(host: string): boolean {
   }
   const labels = host.split(".");
   const last = labels[labels.length - 1] ?? "";
-  if (ALL_DIGITS_PATTERN.test(last)) {
-    // A final all-digit label is not a valid DNS name, so the host must be a dotted IPv4 literal.
+  if (NUMERIC_LABEL_PATTERN.test(last)) {
+    // A final decimal or 0x-hex label is not a valid DNS name, and inet_aton reads such a host as an
+    // IPv4 literal in hex, octal or short form. Only a canonical dotted quad outside the refused ranges passes.
     const octets = parseIpv4(labels);
     return octets !== undefined && isRoutableIpv4(octets);
   }
@@ -110,16 +119,27 @@ function parseIpv4(labels: readonly string[]): readonly number[] | undefined {
   return octets.every((octet) => octet <= 255) ? octets : undefined;
 }
 
-// Refuses loopback 127.0.0.0/8, link-local 169.254.0.0/16, and the unspecified address 0.0.0.0.
+// Refuses every IPv4 literal in the ranges listed in the header comment.
 function isRoutableIpv4(octets: readonly number[]): boolean {
-  const [first, second] = octets;
-  if (octets.every((octet) => octet === 0)) {
-    return false;
+  const [first = 0, second = 0, third = 0] = octets;
+  switch (first) {
+    case 0:
+    case 10:
+    case 127:
+      return false;
+    case 100:
+      return second < 64 || second > 127;
+    case 169:
+      return second !== 254;
+    case 172:
+      return second < 16 || second > 31;
+    case 192:
+      return !(second === 168 || (second === 0 && third === 0));
+    case 198:
+      return second !== 18 && second !== 19;
+    default:
+      return first < 224;
   }
-  if (first === 127) {
-    return false;
-  }
-  return !(first === 169 && second === 254);
 }
 
 // D-78 order: by host, then by port. Plain code-unit comparison keeps it locale-independent.

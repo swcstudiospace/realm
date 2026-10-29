@@ -37,9 +37,23 @@ void test("RT-03: the policy declares version 1, a hard-requirement Landlock, an
   assert.notEqual(document.process.run_as_user, "0");
 });
 
-void test("RT-03: the policy grants the in-sandbox workspace read-write and nothing read-only", () => {
+void test("RT-03: the policy grants the workspace and /tmp read-write and the system paths read-only", () => {
   const document = buildPolicyDocument(DENY, BINARY);
-  assert.deepEqual(document.filesystem_policy, { read_only: [], read_write: ["/workspace"] });
+  assert.deepEqual(document.filesystem_policy, {
+    read_only: ["/usr", "/bin", "/lib", "/lib64", "/etc", "/opt", "/proc", "/dev/urandom", "/dev/zero", "/dev/random"],
+    read_write: ["/workspace", "/tmp", "/dev/null"],
+  });
+});
+
+void test("RT-03: /dev/null is the only writable device, and /dev/zero, /dev/random, /dev/urandom are read-only", () => {
+  const { read_only: readOnly, read_write: readWrite } = buildPolicyDocument(DENY, BINARY).filesystem_policy;
+  assert.deepEqual(readWrite.filter((p) => p.startsWith("/dev")), ["/dev/null"]);
+  assert.deepEqual(readOnly.filter((p) => p.startsWith("/dev")).sort(), ["/dev/random", "/dev/urandom", "/dev/zero"]);
+  for (const path of [...readOnly, ...readWrite]) {
+    assert.ok(!path.includes("*"), `no wildcard in ${path}`);
+    assert.notEqual(path, "/dev");
+    assert.notEqual(path, "/dev/");
+  }
 });
 
 void test("RT-03: an empty allowlist renders network_policies as an empty map, which is deny-all egress (D-103)", () => {

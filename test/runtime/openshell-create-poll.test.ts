@@ -5,7 +5,6 @@ import { ERROR_CATALOGUE, RealmError, type ErrorCode } from "../../src/core/erro
 import type { LibpodClient } from "../../src/runtime/libpod-client.js";
 import {
   runOpenShellCreate,
-  type OpenShellRunner,
   type SandboxCreateRequest,
 } from "../../src/runtime/openshell.js";
 
@@ -20,9 +19,14 @@ const REQUEST: SandboxCreateRequest = {
   sessionId: "sess-poll",
   policyPath: "/state/runtime/sess-poll.policy.json",
   cpus: 1,
-  memory: "512m",
-  workloadArgv: ["/usr/bin/agent", "--serve"],
+  memory: "512Mi",
+  imageRef: "example.invalid/realm-sandbox@sha256:0000000000000000000000000000000000000000000000000000000000000000",
 };
+
+// A workload container of this session as OpenShell labels it: the sandbox role under the session's sandbox name.
+function workloadOf(id: string): { readonly id: string; readonly labels: Readonly<Record<string, string>> } {
+  return { id, labels: { "openshell.ai/isolation-role": "sandbox", "openshell.ai/sandbox-name": "realm-sess-poll" } };
+}
 const POLL_STEP_MS = 250;
 const LOOKUP_CAP = 100;
 
@@ -63,7 +67,8 @@ function scriptedLibpod(answer: (poll: number) => LookupAnswer): {
         if (found instanceof Error) {
           return Promise.reject(found);
         }
-        return Promise.resolve(found.map((entry) => ({ id: entry.id })));
+        // Each entry keeps its labels, as libpod reports them, so the lookup can select by sandbox name.
+        return Promise.resolve([...found]);
       },
     },
     calls: () => calls,
@@ -73,18 +78,18 @@ function scriptedLibpod(answer: (poll: number) => LookupAnswer): {
 interface Run {
   value?: string;
   error?: unknown;
-  readonly runnerCalls: () => number;
+  readonly createCalls: () => number;
 }
 
-// Starts one create and records how it settles. The runner succeeds at once and is counted.
+// Starts one create and records how it settles. The sandbox create succeeds at once and is counted.
 function startCreate(containers: Pick<LibpodClient, "listContainersByLabel">, deadlineMs: number): Run {
-  let runnerCalls = 0;
-  const runner: OpenShellRunner = () => {
-    runnerCalls += 1;
-    return Promise.resolve({ exitCode: 0 });
+  let createCalls = 0;
+  const createSandbox = (): Promise<void> => {
+    createCalls += 1;
+    return Promise.resolve();
   };
-  const run: Run = { runnerCalls: () => runnerCalls };
-  runOpenShellCreate({ containers, runner }, REQUEST, deadlineMs).then(
+  const run: Run = { createCalls: () => createCalls };
+  runOpenShellCreate({ containers, createSandbox }, REQUEST, deadlineMs).then(
     (value) => {
       run.value = value;
     },
@@ -139,7 +144,7 @@ function assertNoLeak(refusal: RealmError, forbidden: readonly string[]): void {
 
 void test("RT-03: an ambiguous label match is refused at once with no further poll and no container ids", async (t) => {
   const advance = useVirtualClock(t);
-  const libpod = scriptedLibpod(() => [{ id: "ctr-secret-a" }, { id: "ctr-secret-b" }]);
+  const libpod = scriptedLibpod(() => [workloadOf("ctr-secret-a"), workloadOf("ctr-secret-b")]);
   const run = startCreate(libpod.containers, 60_000);
 
   await settle();
@@ -158,7 +163,7 @@ void test("RT-03: an ambiguous match already present before create is refused wi
   useVirtualClock(t);
   const libpod = {
     containers: {
-      listContainersByLabel: () => Promise.resolve([{ id: "ctr-secret-a" }, { id: "ctr-secret-b" }]),
+      listContainersByLabel: () => Promise.resolve([workloadOf("ctr-secret-a"), workloadOf("ctr-secret-b")]),
     },
   };
   const run = startCreate(libpod.containers, 60_000);
@@ -168,7 +173,7 @@ void test("RT-03: an ambiguous match already present before create is refused wi
   assertCatalogued(refusal, "OPENSHELL_LABEL_AMBIGUOUS");
   assertNoLeak(refusal, ["ctr-"]);
   assertNoCause(refusal);
-  assert.equal(run.runnerCalls(), 0, "the create argv must not run when the session is already ambiguous");
+  assert.equal(run.createCalls(), 0, "the create must not run when the session is already ambiguous");
 });
 
 void test("RT-03: a non-transient libpod error ends the poll at once and carries the last error code as causeCode", async (t) => {
@@ -206,7 +211,7 @@ void test("RT-03: an untyped libpod error ends the poll at once with no causeCod
 void test("RT-09: a transient libpod error followed by a found container succeeds with that container id", async (t) => {
   const advance = useVirtualClock(t);
   const libpod = scriptedLibpod((poll) =>
-    poll < 3 ? new RealmError("PODMAN_MACHINE_DOWN") : [{ id: "ctr-found" }],
+    poll < 3 ? new RealmError("PODMAN_MACHINE_DOWN") : [workloadOf("ctr-found")],
   );
   const run = startCreate(libpod.containers, 60_000);
 
@@ -214,7 +219,7 @@ void test("RT-09: a transient libpod error followed by a found container succeed
   assert.equal(run.error, undefined);
   assert.equal(run.value, "ctr-found");
   assert.equal(libpod.calls(), 4, "pre-create lookup, two transient polls, and the found poll");
-  assert.equal(run.runnerCalls(), 1, "the create argv runs once");
+  assert.equal(run.createCalls(), 1, "the create runs once");
 });
 
 void test("RT-09: a persistent transient libpod error ends at the deadline with the last error code as causeCode", async (t) => {

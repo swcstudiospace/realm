@@ -104,9 +104,12 @@ void test("a slow store load that uses up the startup budget gives STARTUP_BUDGE
 });
 
 void test("a retry after exec.start overruns the budget reattaches to the one recorded container and starts that container (CORE-06, RT-07)", async (t) => {
-  // Real timers, on purpose: withTimeout races the port call against a real setTimeout. The
-  // budget is 500 ms and the scripted start delay is 2000 ms, 4x the budget, so the budget
-  // fires first. The abandoned start finishes on its own timer, which touches no disk.
+  // The clock is frozen (and never advanced), so the controller's deadline checks cannot trip on the
+  // create phase's real disk work, however loaded the host is. The budget is then only the real
+  // setTimeout that withTimeout races against the delayed start. That timer is created after the
+  // start delay timer and expires earlier (500 ms against 2000 ms), so it fires first. The abandoned
+  // start finishes on its own timer, which touches no disk. The retry runs on the same frozen clock.
+  scriptedClock(t);
   const { store, exec, controller, workspace } = fixture(t, { startupBudgetMs: 500 });
   exec.setDelay("start", 2000);
 

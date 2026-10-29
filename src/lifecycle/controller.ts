@@ -20,6 +20,7 @@ import { INITIAL_REASON, RealmStateMachine, type StateSnapshot } from "../core/s
 import { withTimeout } from "../core/timeout.js";
 import { LockTable } from "../fs/locks.js";
 import { type PinnedRoot, verifyPinnedAt } from "../fs/root.js";
+import { realmSandboxName } from "../runtime/openshell.js";
 import { controlSocketPath } from "../session/paths.js";
 import type { SessionStore } from "../session/store.js";
 import { type GateOutcome, gateMutation } from "./mutation-gate.js";
@@ -70,9 +71,10 @@ export interface LifecycleDeps {
   readonly policy: Policy;
   readonly store: SessionStore;
   readonly exec: ExecutionService;
-  // The Anda bridge (D-64, D-65). It publishes up, down, and mismatch events, and the
-  // controller alone decides the session state from them.
-  readonly bridge: BridgePort;
+  // The Anda bridge (D-64, D-65), or null when no Anda Engine is configured (C4). A session with a
+  // bridge runs its handshake at start and takes its events. A session without one has neither and
+  // closes nothing. The controller alone decides the session state from the events.
+  readonly bridge: BridgePort | null;
   readonly clock: () => Date;
   // Advisory locks (D-33), owned by this session's id. Session destroy releases the locks
   // the session owns. The daemon passes its shared table in Phase 6; without one the
@@ -114,6 +116,10 @@ export class LifecycleController {
   private orphanFailure: ErrorCode | null = null;
   // The code of the write failure that left the record behind the in-memory state, or null (F7).
   private unpersistedFailure: ErrorCode | null = null;
+  // Counts the starts and ends of a session's life: it advances when a create begins and when a
+  // stop or destroy takes the session. A probe compares it before and after its port call, so the
+  // result of a probe that began in an earlier life is never applied to a later one.
+  private lifeEpoch = 0;
 
   constructor(deps: LifecycleDeps) {
     this.deps = deps;
@@ -152,7 +158,7 @@ export class LifecycleController {
   // with POLICY_DENIED. While connecting, active, or degraded, a record that names another workspace
   // is refused the same way.
   // The startup budget (policy.startupBudgetMs) starts before the pinned-root check and covers the
-  // check, the record loads and writes, the port create and start, and the bridge handshake.
+  // check, the record loads and writes, the port create and start, and any bridge handshake.
   // Each synchronous step is followed by a deadline check, and each port call is raced against
   // the time left.
   // Expiry moves the session to error with STARTUP_BUDGET_EXCEEDED, keeps any containerId
@@ -200,6 +206,7 @@ export class LifecycleController {
     }
     const realmId = existing?.realmId ?? randomUUID();
 
+    this.lifeEpoch += 1;
     this.machine.transition("connecting", "creating container");
     let containerId: string | null = priorContainerId;
     let issuedStart: PendingStart | null = null;
@@ -209,7 +216,9 @@ export class LifecycleController {
     // state check: a stop that began during the await owns the session, so this create records
     // and transitions nothing more (see failCreate).
     try {
-      this.subscribeBridge();
+      if (this.deps.bridge !== null) {
+        this.subscribeBridge(this.deps.bridge);
+      }
       this.checkDeadline(deadline);
       this.persist(realmId, root, containerId);
       this.checkDeadline(deadline);
@@ -259,8 +268,14 @@ export class LifecycleController {
         // container once the start settles (F1), so nothing more is started here.
         return this.machine.snapshot();
       }
-      const remaining = Math.max(0, deadline - performance.now());
-      await withTimeout(this.connectBridge(remaining), remaining, "STARTUP_BUDGET_EXCEEDED");
+      if (this.deps.bridge !== null) {
+        const remaining = Math.max(0, deadline - performance.now());
+        await withTimeout(
+          this.connectBridge(this.deps.bridge, remaining),
+          remaining,
+          "STARTUP_BUDGET_EXCEEDED",
+        );
+      }
     } catch (error: unknown) {
       // A start the budget gave up on is still in flight. adoptStart keeps its outcome, unless a
       // stop is in progress, which reclaims that start itself.
@@ -308,10 +323,15 @@ export class LifecycleController {
   }
 
   // Probes the container in active or degraded (D-38). A healthy result changes nothing.
-  // An unhealthy result moves the session to error with reason "probe failed". Probe never
-  // produces degraded: Phase 3 (ANDA-03) does. The probe is bounded by the startup budget,
-  // and its expiry maps to STARTUP_BUDGET_EXCEEDED. Any other state returns the snapshot.
+  // An unhealthy result moves the session to error with reason "probe failed". A probe that cannot
+  // answer moves it to error with the code the port threw, such as AGENTOS_CRASH_LOOP for a dead
+  // runner. Probe never produces degraded: Phase 3 (ANDA-03) does. The probe is bounded by the
+  // startup budget, and its expiry maps to STARTUP_BUDGET_EXCEEDED. A result is applied only to the
+  // life that began it: a stop, destroy, or new create that started while the probe was in flight
+  // makes the result stale, and the snapshot is returned unchanged (F4). Any other state returns
+  // the snapshot.
   async probe(): Promise<StateSnapshot> {
+    const epoch = this.lifeEpoch;
     const { state } = this.machine.snapshot();
     if (state !== "active" && state !== "degraded") {
       return this.machine.snapshot();
@@ -323,16 +343,19 @@ export class LifecycleController {
     let health: ProbeResult;
     try {
       health = await withTimeout(
-        this.deps.exec.probe(containerId),
+        this.deps.exec.probe(containerId, this.sandboxName()),
         this.deps.policy.startupBudgetMs,
         "STARTUP_BUDGET_EXCEEDED",
       );
     } catch (error: unknown) {
+      if (epoch !== this.lifeEpoch) {
+        return this.machine.snapshot();
+      }
       return this.enterError(error);
     }
     // A stop may have taken the session while the probe was in flight. Only the active and degraded
     // states take the outcome of a probe (F4).
-    if (health === "unhealthy" && this.isInService()) {
+    if (health === "unhealthy" && epoch === this.lifeEpoch && this.isInService()) {
       this.machine.transition("error", "probe failed");
       this.writeState();
     }
@@ -429,7 +452,7 @@ export class LifecycleController {
       return;
     }
     try {
-      await this.teardownCall(this.deps.exec.destroy(containerId));
+      await this.teardownCall(this.deps.exec.destroy(containerId, this.sandboxName()));
     } catch (error: unknown) {
       if (failure !== null && error instanceof RealmError) {
         throw makeRealmError(error.code, failure);
@@ -454,7 +477,7 @@ export class LifecycleController {
   // own deadline. A retry waits for its outcome under the retry's own budget, which the
   // caller's withTimeout enforces. A handshake that rejects is forgotten, so the next startup
   // starts a fresh one.
-  private connectBridge(deadlineMs: number): Promise<void> {
+  private connectBridge(bridge: BridgePort, deadlineMs: number): Promise<void> {
     if (this.bridgeConnected) {
       return Promise.resolve();
     }
@@ -462,7 +485,7 @@ export class LifecycleController {
     if (pending !== null) {
       return pending;
     }
-    const handshake = this.deps.bridge.connect(deadlineMs);
+    const handshake = bridge.connect(deadlineMs);
     this.bridgeHandshake = handshake;
     // Both branches are handled, so a rejection after the caller's budget expired is never
     // unhandled. Each branch clears the record only while it still names this handshake.
@@ -534,15 +557,16 @@ export class LifecycleController {
     if (this.machine.snapshot().state === "stopping") {
       return;
     }
+    this.lifeEpoch += 1;
     this.machine.transition("stopping", STOPPING_REASON);
     this.writeState();
   }
 
   // Subscribes the bridge listener once, before the first handshake, so no event is lost
   // (D-65). The listener stays subscribed until destroy.
-  private subscribeBridge(): void {
+  private subscribeBridge(bridge: BridgePort): void {
     if (this.unsubscribeBridge === null) {
-      this.unsubscribeBridge = this.deps.bridge.subscribe((event) => {
+      this.unsubscribeBridge = bridge.subscribe((event) => {
         this.onBridgeEvent(event);
       });
     }
@@ -590,7 +614,8 @@ export class LifecycleController {
     // Closing the bridge discards any handshake made before it; a later connect starts afresh (ANDA-03).
     this.bridgeHandshake = null;
     this.bridgeConnected = false;
-    const closed = this.teardownCall(this.deps.bridge.close());
+    const bridge = this.deps.bridge;
+    const closed = bridge === null ? Promise.resolve() : this.teardownCall(bridge.close());
     const stopped = this.stopContainer(containerId);
     const reclaimed = pending === null ? Promise.resolve() : this.reclaimPendingCreate(pending);
     const started = [...this.pendingStarts].map((start) => this.reclaimPendingStart(start));
@@ -604,6 +629,12 @@ export class LifecycleController {
     this.unsubscribeBridge = null;
   }
 
+  // The sandbox name the realm gives this session. Every stop and destroy passes it, so the session-execution port can
+  // delete the session's sandbox without an in-memory name.
+  private sandboxName(): string {
+    return realmSandboxName(this.deps.sessionId);
+  }
+
   // Stops the container within the teardown bound. A session with no container has nothing
   // running to stop. A failure throws REALM_STOPPING, and the caller leaves the session in
   // stopping.
@@ -611,7 +642,7 @@ export class LifecycleController {
     if (containerId === null) {
       return;
     }
-    await this.teardownCall(this.deps.exec.stop(containerId));
+    await this.teardownCall(this.deps.exec.stop(containerId, this.sandboxName()));
   }
 
   // Issues the port create for a startup that has no container yet. The attempt number lets an
@@ -632,7 +663,7 @@ export class LifecycleController {
   // Issues the port start for a container and tracks it until it settles (F1). The settled promise
   // never rejects, so the tracking adds no unhandled rejection.
   private issueStart(containerId: string): PendingStart {
-    const started = this.deps.exec.start(containerId);
+    const started = this.deps.exec.start(containerId, this.sandboxName());
     const settled = started.then(
       () => null,
       (error: unknown) => portFailureCode(error),
@@ -706,10 +737,10 @@ export class LifecycleController {
   // the stop failure as its cause.
   private async stopStarted(containerId: string): Promise<void> {
     try {
-      await this.teardownCall(this.deps.exec.stop(containerId));
+      await this.teardownCall(this.deps.exec.stop(containerId, this.sandboxName()));
     } catch (stopError: unknown) {
       try {
-        await this.teardownCall(this.deps.exec.destroy(containerId));
+        await this.teardownCall(this.deps.exec.destroy(containerId, this.sandboxName()));
       } catch (destroyError: unknown) {
         // The fallback destroy failed too, so both errors are kept: the destroy error is thrown, and
         // the stop error is its cause.
@@ -784,7 +815,7 @@ export class LifecycleController {
   // rethrown.
   private async destroyUnrecorded(containerId: string): Promise<void> {
     try {
-      await this.teardownCall(this.deps.exec.destroy(containerId));
+      await this.teardownCall(this.deps.exec.destroy(containerId, this.sandboxName()));
     } catch (error: unknown) {
       this.recordContainerIfEmpty(containerId);
       throw error;

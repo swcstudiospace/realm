@@ -15,6 +15,8 @@ No install, upgrade, or socket change was made. Each check below is a read-only 
 | `openshell --version` | `openshell 0.1.2` |
 | `openshell sandbox create --help` | Lists `--name`, `--policy`, `--no-auto-providers`, `--no-keep`, `--detach`, `--label`, `--cpu`, `--memory`, `--env`, and `--provider`. The usage line shows the trailing `[-- <COMMAND>...]` form. |
 
+Historical (superseded 2026-10-28): the `openshell 0.1.2` version and the trailing command form in the two OpenShell rows above are superseded. The pin is 0.1.5.
+
 ## Layering (S-08) and requirement-wording conflicts (D-46, D-47)
 
 Settled input S-08:
@@ -52,18 +54,19 @@ Reversibility: costly. Every runtime module depends on this layering.
 
 - The CLI is pinned to the **0.1.2** verbs. Host observation above confirms each pinned flag is listed by `openshell sandbox create --help`.
 - Pinned argv (D-55): `sandbox create --name realm-<sessionId> --policy <policyPath> --no-auto-providers --no-keep --detach --label io.realm.managed=true --label io.realm.session=<sessionId> --cpu <cpus> --memory <memory> -- <workloadArgv...>`.
+  - Superseded by `docs/integration/openshell.md` (one sandbox per session, named `realm-<sessionId>`, AgentOS as its workload, with no workload command). The pinned argv above is historical.
 - The builder never emits `--env` or `--provider`, because AUD-02 forbids host environment or credentials reaching the sandbox. Both flags exist in 0.1.2 and are deliberately not used.
 - **Drift.** The docs describe **0.1.5** (`openshell.md` version caveat). The local CLI is 0.1.2. The `--no-keep` combined with `--detach` semantics are documented only for 0.1.5 (OQ-P3-12).
 - Default applied (OQ-P3-12): pin 0.1.2 and re-verify on upgrade. A future upgrade must re-read the matching documentation index and re-run `openshell sandbox create --help`.
 - The 0.1.2 help also lists `--from` (a rootfs tar or a container image reference). It is not in the pinned argv, and this phase does not use it. Whether it accepts a digest-pinned reference is unverified, so it bears on OQ-P3-03 (recorded below).
+- Historical (superseded 2026-10-28): the 0.1.2 pin, the `--no-keep` and `--detach` argv, and the trailing command form above no longer hold. The pin is 0.1.5 (`docs/integration/openshell.md`).
 - The doctor's `openshell` check (D-69) greps this help for each pinned flag, so drift is caught at run time.
 
 ## AgentOS mode (S-11)
 
 - **Library mode** (`@rivet-dev/agentos-core`, run in the sandbox) is **primary**. `agentos.md` Q1 and Q2 document `AgentOs.create` and `vm.dispose()`.
 - **Hosted mode** (the `agentOS` Rivet Actor and worker images) is **secondary and gated**. `agentos.md` Q8 documents the hosted worker as Docker-based, with no Podman command. Hosted mode is not implemented in Phase 3 (D-60).
-- The concrete `AgentOsDriver` is **not written** in Phase 3 (D-59). The port and supervisor exist, and `session-execution.ts` takes the driver as a dependency. The missing binding is OQ-P3-05 and the missing dependency is OQ-P3-06. Both are reported as blocked.
-- The AgentOS doctor item is not registered (D-69), because no driver binding exists to inspect.
+- Decision (2026-10-28): one sandbox per session, named `realm-<sessionId>`. The runtime's policy is the enforcement authority, and the retired realm helper is removed from the sandbox image (recover it from git history if ever needed). The AgentOS driver is bound (`src/runtime/agentos-driver.ts`); see `docs/integration/openshell.md`.
 
 ## Open questions and defaults (OQ-P3-01 to OQ-P3-16)
 
@@ -82,7 +85,7 @@ Reversibility: costly. Every runtime module depends on this layering.
 | OQ-P3-09 | Anda publishes no protocol or engine version (`anda.md` Q4). | Shape handshake (D-61). Recorded as a limitation in `anda-decision.md`. | Any claim of a version match in `src/anda/shape.ts` and the ANDA-02 test | Limitation recorded. |
 | OQ-P3-10 | Anda RPC body and credential format (`anda.md` Q2, Q3). | Not needed in Phase 3. No credentials are produced. | **Blocks the phase that first calls `POST /{id}`** (Phase 4 or 5 tool calls through Anda) | Blocked for that phase. |
 | OQ-P3-11 | Anda licence conflict (`anda.md` Q6). | No Anda code or dependency added. | Any vendoring of Anda code. It does not block Phase 3. | Open. Must be resolved before vendoring. |
-| OQ-P3-12 | OpenShell drift: docs 0.1.5, pinned verbs 0.1.2 (S-10). `--no-keep` with `--detach` is documented only for 0.1.5. | Pin 0.1.2 and gate. Re-verify on upgrade. | The argv builder in `src/runtime/openshell.ts` (D-55) and the live `--no-keep`/`--detach` lifecycle | Live-gated. Fails closed. |
+| OQ-P3-12 | OpenShell drift: docs 0.1.5, pinned verbs 0.1.2 (S-10). `--no-keep` with `--detach` is documented only for 0.1.5. Historical (superseded 2026-10-28): the pin is 0.1.5 and the create passes no `--no-keep`. | Pin 0.1.2 and gate. Re-verify on upgrade. | The argv builder in `src/runtime/openshell.ts` (D-55) and the live `--no-keep`/`--detach` lifecycle | Live-gated. Fails closed. |
 | OQ-P3-13 | On Linux, "Podman machine" is mapped to the rootless API socket (`$XDG_RUNTIME_DIR/podman/podman.sock`). | This mapping, recorded here. A refused socket gives `PODMAN_MACHINE_DOWN` with the fix `systemctl --user start podman.socket`. | `src/runtime/podman-probe.ts` step 3 (D-53) | Recorded assumption. |
 | OQ-P3-14 | Does the OpenShell driver apply the PID limit, read-only root, and capability drop? | The verifier (D-51) fails closed when it does not. | Live proof that `verifyInspect` passes on an OpenShell-created container (`src/runtime/hardening.ts`, `session-execution.ts`) | Live-gated. Fails closed. |
 | OQ-P3-15 | Does OpenShell accept the policy written as JSON (valid YAML 1.2)? | JSON (D-57). No YAML dependency. | Live acceptance of the policy document in `src/runtime/openshell.ts` (`buildPolicyDocument`) | Live-gated. Fails closed. |
@@ -100,7 +103,7 @@ Reversibility: costly. Every runtime module depends on this layering.
 
 ## Phase 4: Reaper, Egress Guard, and Shared Dispatcher (D-100)
 
-Phase 4 status: decided for Phase 4. Live behavior is unit-verified, live-gated: the RT-05, RT-08, and TOOL-03 live bodies in `test/integration/podman-gate.test.ts` skip with `PODMAN_UNSUPPORTED_VERSION` on 4.9.3. Nothing here is live-verified on this host.
+Phase 4 status: decided for Phase 4. The RT-05 egress, RT-08 reaper, and TOOL-03 exec live bodies that this note once placed in `test/integration/podman-gate.test.ts` were removed on 2026-10-28; `test/integration/production-driver.test.ts` now carries the live egress, hardening, create, and down-sweep scenarios, a crash recovery scenario (RT-08: after the daemon is killed, the next `realm up` reaps the sandbox it left and reaches `active` with exactly one sandbox), the MCP scenarios (TOOL-03: `realm mcp` serves `exec`, `write` and `read` over stdio, and an `exec` that outlives the per-call bound fails with a retryable `TOOL_TIMEOUT`), the AgentOS runner exit scenario, and the daemon-side startup budget scenario: nine scenarios in all. They are gated. They were run live on the production stack (Podman 5.7.1) on 2026-10-28 and passed 31 of 31 assertions (see `docs/integration/openshell.md`, "Running the production live suite"). The Phase 3 status line at the top of this note records the state when Phase 3 was decided and is not updated by this run. ACP and the Anda engine were not exercised live.
 Scope: the startup reaper (RT-08), the egress allowlist and its OpenShell rendering (RT-05), the shared dispatcher (TOOL-03, TOOL-04), and every open question OQ-P4-01 to OQ-P4-12 with its default.
 
 ### OQ-P3-16 resolution (D-82)
@@ -127,10 +130,10 @@ A dispatcher call writes two audit lines: an admission line before execution and
 
 | ID | Question | Default applied | Blocked module or phase | Status |
 | --- | --- | --- | --- | --- |
-| OQ-P4-01 | Does the OpenShell supervisor proxy block IPv6 egress, and does it enforce `network_policies` when the workload container has networking off? | Rely on the proxy and the rendered IPv4-only policy; the live property is gated. | Live egress proof in `test/integration/podman-gate.test.ts` (RT-05, D-75) | Live-gated. Fails closed. |
-| OQ-P4-02 | Does the OpenShell 0.1.2 gateway accept the D-78 document at `--policy` create, and is `binaries[].path` matched by the workload interpreter? | The document as rendered, with `workloadArgv[0]` absolute (D-79). | Live acceptance of the policy document in `src/runtime/openshell.ts` | Live-gated. Fails closed. |
+| OQ-P4-01 | Does the OpenShell supervisor proxy block IPv6 egress, and does it enforce `network_policies` when the workload container has networking off? | Rely on the proxy and the rendered IPv4-only policy; the live property is gated. | Live egress proof in `test/integration/production-driver.test.ts` (RT-05, D-75) | Live-gated. Fails closed. |
+| OQ-P4-02 | Does the OpenShell 0.1.2 gateway accept the D-78 document at `--policy` create? | The document as rendered. | Live acceptance of the policy document in `src/runtime/openshell.ts` | Live-gated. Fails closed. |
 | OQ-P4-03 | The v0.1.2 page documents the endpoint fields Realm uses, but the inspection and protocol fields were read only in part. | Realm writes none of them. Re-verify on upgrade. | The rendered shape in `src/runtime/egress.ts` (D-78) | Recorded assumption. |
-| OQ-P4-04 | Does `openshell sandbox exec --name realm-<id> --workdir /workspace --no-tty --no-login-shell` run against a gateway-created sandbox, and does the sandbox have `/bin/sh` for shell form? | The argv form is the tested path; shell form is gated. | Live exec path in `test/integration/podman-gate.test.ts` (TOOL-03, D-92) | Live-gated. Fails closed. |
+| OQ-P4-04 | Does `openshell sandbox exec --name realm-<id> --workdir /workspace --no-tty --no-login-shell` run against a gateway-created sandbox, and does the sandbox have `/bin/sh` for shell form? | The argv form is the tested path. The shell form (`/bin/sh -c`) is refused with `SHELL_NOT_ALLOWED` unless `policy.shellEnabled` is true (D-24), and the live suite does not turn that policy on. | The production live suite covers the argv form through the same exec form: scenario 1 runs `sh -c` with `openshell sandbox exec` directly, and scenario 6 runs `exec` through `realm mcp` and the daemon (TOOL-03, D-92). Gated; passed live on the production stack, 2026-10-28 | Live-gated. Fails closed. |
 | OQ-P4-05 | Does `sandbox exec` return the remote exit code through the CLI exit status? | Yes (the 0.1.2 help says "The CLI exits with the remote command's exit code"); the gated suite verifies it. | Exec result mapping in `src/runtime/session-execution.ts` (D-94) | Live-gated. Fails closed. |
 | OQ-P4-06 | Reaping has no cross-process owner check. A second host process could reap a live session. | The reap precondition (D-87) and the single-daemon rule in Phase 6. | Phase 6 single-daemon control channel (RT-06) | Residual risk. Accepted in Phase 6. |
 | OQ-P4-07 | A result-audit failure after a write has landed. | Return `AUDIT_WRITE_FAILED` to the caller and do not roll back. The caller must treat the outcome as unknown. | Dispatcher result stage in `src/tools/dispatch.ts` (D-89) | Decided. |
@@ -139,6 +142,8 @@ A dispatcher call writes two audit lines: an admission line before execution and
 | OQ-P4-10 | Egress changes after create. | Fixed at create; changing it means destroy and recreate. Live `openshell policy set` is not used in Phase 4. | Session lifecycle after create (RT-05, D-81) | Decided. |
 | OQ-P4-11 | Retry and status surface. | The dispatcher implements both (D-95); Phase 5 exposes `retry` through OMP-03. | Phase 5 OMP surface (TOOL-05, OMP-03) | Decided. Phase 5 exposes. |
 | OQ-P4-12 | An allowlisted hostname that resolves to a private address is reachable under OpenShell's documented rule for exact hostnames. | Realm does not add `allowed_ips`, so the allowlist must contain only hosts the user intends to reach. | Egress allowlist review (RT-05, D-77) | Residual risk. Recorded. |
+
+Superseded by `docs/integration/openshell.md`: `workloadArgv` is no longer a configuration key, and the sandbox has no workload command (one sandbox per session, named `realm-<sessionId>`).
 
 ## Catalogue extension (closure, 2026-10-22)
 
@@ -182,5 +187,7 @@ These decisions were recorded by the user on 2026-10-22. Each is checked against
 **Reply cap.** Replies from the daemon are capped at `MAX_CONTROL_LINE_BYTES` (1 MiB), as requests are. `readBounded` in `src/daemon/channel.ts` counts the bytes before the reply's newline. Past the cap it destroys the socket and rejects with `SCHEMA_INVALID`, and `sendRequest` passes that error through, so the client's `request` in `src/daemon/client.ts` rejects with `SCHEMA_INVALID`. The reply is never buffered past the cap.
 
 **Ensure timeout.** `ensureDaemon` (`src/daemon/ensure.ts`) spawns at most once, then polls the probe until a daemon answers or its bound elapses. When the bound elapses it throws `DAEMON_START_TIMEOUT`. That code is retryable (`src/core/errors.ts`). Its reason reads: "The daemon did not answer on its control socket within the daemon start timeout after it was spawned."
+
+**Control request limits.** `CONTROL_TIMEOUT_MS` (`src/daemon/channel.ts`) bounds each request per method: `status` 5 s, `down` 45 s, `doctor` 60 s, `tool` the dispatcher's 30 s plus a 10 s reply margin, and `up` 230 s, which is the default startup budget of 200 s plus a 30 s margin. The caller reports `TOOL_TIMEOUT` when its limit passes. No CLI or plugin caller reads the daemon-owned policy, so a policy that sets `startupBudgetMs` above 200 s can still exceed the `up` limit; the plugin's own 200 s startup timer is unchanged and fires first.
 
 **Directory modes.** `withDaemonLog` (`src/cli/main.ts`) creates the missing ancestors of the state directory with no mode argument, so they take the default mode, which the umask narrows. It then creates only the state directory, with `mkdirSync(stateDir, { recursive: true, mode: 0o700 })`. `ensureSocketDir` (`src/daemon/channel.ts`) applies the same rule on the daemon side: missing ancestors of the state directory are created at `DEFAULT_DIR_MODE` (0777), which the umask narrows, and only the state directory and its run directory are created at `RUN_DIR_MODE` (0700).

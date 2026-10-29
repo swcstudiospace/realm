@@ -1,8 +1,9 @@
-import { test } from "node:test";
+import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import fs, { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { RealmError } from "../../src/core/errors.js";
@@ -305,5 +306,75 @@ void test("TOOL-03: an entry with no phase has no phase key, so the pre-stage sh
     const entry = JSON.parse(readLines(stateDir)[0] ?? "") as Record<string, unknown>;
     assert.equal("phase" in entry, false);
     assert.deepEqual(Object.keys(entry).sort(), ["at", "outcome", "path", "sessionId", "tool"]);
+  });
+});
+
+// Replaces fs.fsyncSync for the length of one test and republishes it to the ES module named
+// exports, which src/audit/log.ts imports. The spy records whether each synced descriptor is a
+// directory and calls the real fsync unless it is told to fail.
+function spyOnFsync(t: TestContext, failure?: Error): { readonly calls: boolean[] } {
+  const calls: boolean[] = [];
+  const real = fs.fsyncSync;
+  const mocked = t.mock.method(fs, "fsyncSync", (fd: number): void => {
+    calls.push(fs.fstatSync(fd).isDirectory());
+    if (failure !== undefined) {
+      throw failure;
+    }
+    real(fd);
+  });
+  syncBuiltinESMExports();
+  t.after(() => {
+    mocked.mock.restore();
+    syncBuiltinESMExports();
+  });
+  return { calls };
+}
+
+void test("R10: the first append to a new log flushes the file and then the directory, and a later append flushes only the file", (t) => {
+  const spy = spyOnFsync(t);
+  withStateDir((stateDir) => {
+    appendAudit(stateDir, { sessionId: SESSION, tool: "read", outcome: "ok", phase: "result", path: "a.txt" });
+    assert.deepEqual(spy.calls, [false, true]);
+    appendAudit(stateDir, { sessionId: SESSION, tool: "read", outcome: "ok", phase: "result", path: "b.txt" });
+    assert.deepEqual(spy.calls, [false, true, false]);
+    assert.equal(readLines(stateDir).length, 2);
+  });
+});
+
+void test("R10: a failed fsync is reported as AUDIT_WRITE_FAILED with no raw error text", (t) => {
+  spyOnFsync(t, new Error("EIO: i/o error, fsync '/secret/path'"));
+  withStateDir((stateDir) => {
+    assert.throws(
+      () => {
+        appendAudit(stateDir, { sessionId: SESSION, tool: "write", outcome: "ok", phase: "result", path: "a.txt" });
+      },
+      (error: unknown) =>
+        isAuditWriteFailed(error) && error instanceof RealmError && !error.message.includes("/secret/path"),
+    );
+  });
+});
+
+void test("R10: a failed directory fsync after a durable line is AUDIT_WRITE_FAILED although the line is already in the file", (t) => {
+  const real = fs.fsyncSync;
+  const mocked = t.mock.method(fs, "fsyncSync", (fd: number): void => {
+    if (fs.fstatSync(fd).isDirectory()) {
+      throw new Error("EIO: i/o error, fsync '/secret/dir'");
+    }
+    real(fd);
+  });
+  syncBuiltinESMExports();
+  t.after(() => {
+    mocked.mock.restore();
+    syncBuiltinESMExports();
+  });
+  withStateDir((stateDir) => {
+    assert.throws(
+      () => {
+        appendAudit(stateDir, { sessionId: SESSION, tool: "write", outcome: "ok", phase: "result", path: "a.txt" });
+      },
+      (error: unknown) =>
+        isAuditWriteFailed(error) && error instanceof RealmError && !error.message.includes("/secret/dir"),
+    );
+    assert.equal(readLines(stateDir).length, 1);
   });
 });

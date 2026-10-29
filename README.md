@@ -16,9 +16,10 @@ The core guarantee, under the fail-closed policy: every file mutation either lan
 
 ## Status
 
-- v0.1.x is the first release line, for milestone v1.0 (a provisional name).
-- v1.0 fails closed. `realm up` refuses with `AGENTOS_NOT_CONFIGURED` until an AgentOS driver is bound. That driver is deferred to a follow-up milestone.
-- Podman-gated and host-gated checks await human verification on a Podman 5.x host.
+- v0.1.x was the first release line, for milestone v1.0 (a provisional name). v0.2.x, for milestone v2.0, becomes the current line with its first release and is the only line that is supported.
+- `realm up` binds the AgentOS driver from the configured digest-pinned image. The production stack is the OpenShell 0.1.5 gateway, the Realm compute driver, and rootless Podman 5.x (`docs/integration/openshell.md`).
+- Linux is the only verified platform. Podman 5.x is required, and Realm does not install it.
+- The Podman-gated production live suite (nine scenarios) and the Omp status checks were run on one Podman 5.7.1 host on 2026-10-28, and the ACP surface was run live against the same stack on 2026-10-29 (`docs/integration/openshell.md`, `docs/integration/omp.md`, `docs/integration/acp.md`). Other hosts, the Anda engine, and the Omp write and edit guard when disconnected (which needs a model call) are not verified live.
 
 ## Quick start
 
@@ -29,6 +30,22 @@ npm ci
 npm run build
 npm test
 ```
+
+## Hosts
+
+Realm ships one integration per host, each under `docs/hosts/` with a snippet:
+
+- Omp: a Realm extension, loaded from `dist/src/omp/extension.js` (see `docs/hosts/snippets/omp.md`).
+- Claude Code and Grok Build: the shared plugin bundle `adapters/claude-plugin`, plus an MCP entry that runs `realm mcp`.
+- Muse Code: the plugin bundle `adapters/muse-code`, plus an `mcp_servers` entry.
+- Hermes Agent: the MCP-only plugin bundle `adapters/hermes-agent`.
+- Prime Agent: the package `adapters/prime-agent`, plus an MCP entry.
+
+Each bundle is checked with its host's validator in an isolated directory. No
+host configuration is changed by this repository. `realm` is not on `PATH` on
+the verification host, so install it first or use an absolute path.
+
+See [docs/integration/hosts.md](docs/integration/hosts.md) for the host tiers.
 
 ## Documentation
 

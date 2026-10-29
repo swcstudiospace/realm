@@ -23,5 +23,6 @@ coverage/
 /site/content/agents/
 /site/content/github/
 /site/content/public/
+/site/content/adapters/
 /site/.sync-manifest.json
 *.tgz

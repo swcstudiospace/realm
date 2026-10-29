@@ -5,7 +5,7 @@ import { removeAllRealmContainers, type SweepClient } from "../../src/runtime/sw
 
 void test("QUAL-01: a removal that fails and leaves its container listed refuses with REALM_STOPPING and the removal's code", async () => {
   const client: SweepClient = {
-    listContainersByLabel: () => Promise.resolve([{ id: "realm-stuck" }]),
+    listContainersByLabel: () => Promise.resolve([{ id: "realm-stuck", labels: { "openshell.ai/sandbox-name": "realm-stuck" } }]),
     removeContainer: () => Promise.reject(makeRealmError("PODMAN_MACHINE_DOWN")),
   };
   await assert.rejects(

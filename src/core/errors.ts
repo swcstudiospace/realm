@@ -27,6 +27,7 @@ export const ERROR_CODES = Object.freeze([
   "PATH_ESCAPE",
   "CREDENTIAL_PATH_DENIED",
   "LOCK_CONFLICT",
+  "SANDBOX_NAME_IN_USE",
   "WRITE_NOT_ATOMIC",
   "EGRESS_DENIED",
   "SHELL_NOT_ALLOWED",
@@ -118,7 +119,7 @@ export const ERROR_CATALOGUE: Readonly<Record<ErrorCode, CatalogueEntry>> =
     },
     AGENTOS_STOP_FAILED: {
       reason:
-        "AgentOS did not stop cleanly. Its sandbox container is stopped regardless, and the stop can be retried.",
+        "AgentOS did not stop cleanly: its sandbox delete may still be pending, so no success was reported. Its sandbox container is stopped regardless, and the stop can be retried.",
       retryable: true,
     },
     ANDA_UNREACHABLE: {
@@ -144,6 +145,10 @@ export const ERROR_CATALOGUE: Readonly<Record<ErrorCode, CatalogueEntry>> =
     LOCK_CONFLICT: {
       reason: "Another writer holds the advisory lock on this file.",
       retryable: true,
+    },
+    SANDBOX_NAME_IN_USE: {
+      reason: "A container with this sandbox name already exists.",
+      retryable: false,
     },
     WRITE_NOT_ATOMIC: {
       reason: "The write could not complete atomically and was not applied.",

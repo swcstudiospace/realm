@@ -9,7 +9,7 @@ import { removeAllRealmContainers, SWEEP_CALL_TIMEOUT_MS, type SweepClient } fro
 import { REAP_SWEEP_TIMEOUT_MS, reapStartup } from "../../src/session/reap.js";
 import { FakeContainerStore, FakeLibpod } from "../support/fake-libpod.js";
 
-const REALM_LABELS = { "io.realm.managed": "true" };
+const REALM_LABELS = { "openshell.managed": "true" };
 
 // A promise that never settles: the stand-in for a libpod call that hangs. The executor form is used
 // because tsconfig's ES2023 lib has no Promise.withResolvers.
@@ -101,7 +101,7 @@ void test("RT-08: a hung second listing after a removal ends with PODMAN_MACHINE
   const client: SweepClient = {
     listContainersByLabel: () => {
       listings += 1;
-      return listings === 1 ? Promise.resolve([{ id: "realm-1" }]) : neverSettles();
+      return listings === 1 ? Promise.resolve([{ id: "realm-1", labels: { "openshell.ai/sandbox-name": "realm-1" } }]) : neverSettles();
     },
     removeContainer: (id: string) => {
       removals.push(id);
@@ -127,7 +127,7 @@ void test("RT-08: a hung second listing after a removal ends with PODMAN_MACHINE
 void test("RT-08: a hung removal is bounded, and the proving listing that still finds the container gives REALM_STOPPING with no record deleted", async (t) => {
   enableMockedTimers(t);
   const client: SweepClient = {
-    listContainersByLabel: () => Promise.resolve([{ id: "realm-stuck" }]),
+    listContainersByLabel: () => Promise.resolve([{ id: "realm-stuck", labels: { "openshell.ai/sandbox-name": "realm-stuck" } }]),
     removeContainer: () => neverSettles(),
   };
   const records = recordStore(["session-a"]);
@@ -169,12 +169,13 @@ void test("RT-08: a hung container list on the real libpod client ends with PODM
   });
   const socketPath = join(dir, "podman.sock");
   const containers = new FakeContainerStore();
-  containers.add({ id: "realm-1", labels: REALM_LABELS, running: true });
+  containers.add({ id: "realm-1", labels: { ...REALM_LABELS, "openshell.ai/sandbox-name": "realm-1" }, running: true });
   const libpod = new FakeLibpod({ store: containers });
   await libpod.start(socketPath);
   t.after(() => libpod.stop());
   libpod.hangNext("listContainers");
-  const client = new LibpodClient(socketPath, { requestTimeoutMs: 50 });
+  // 1000 ms keeps the version ping clear of scheduling stalls; the hung listing then times out at the request bound.
+  const client = new LibpodClient(socketPath, { requestTimeoutMs: 1000 });
   const records = recordStore(["session-a"]);
 
   const started = Date.now();
@@ -195,8 +196,8 @@ void test("RT-08: a successful sweep removes every container before any record i
   });
   const socketPath = join(dir, "podman.sock");
   const containers = new FakeContainerStore();
-  containers.add({ id: "realm-1", labels: REALM_LABELS, running: true });
-  containers.add({ id: "realm-2", labels: REALM_LABELS, running: false });
+  containers.add({ id: "realm-1", labels: { ...REALM_LABELS, "openshell.ai/sandbox-name": "realm-1" }, running: true });
+  containers.add({ id: "realm-2", labels: { ...REALM_LABELS, "openshell.ai/sandbox-name": "realm-2" }, running: false });
   containers.add({ id: "foreign-1", labels: { owner: "someone-else" }, running: true });
   const libpod = new FakeLibpod({ store: containers });
   await libpod.start(socketPath);
@@ -235,4 +236,56 @@ void test("RT-08: a successful sweep removes every container before any record i
   assert.deepEqual(removedBeforeSweepEnd, ["remove:realm-1", "remove:realm-2"]);
   assert.deepEqual(events.slice(sweepDone + 1), ["delete:session-a", "delete:session-b"]);
   assert.notEqual(containers.get("foreign-1"), undefined, "a foreign container is never removed");
+});
+
+// A client whose removal takes removalMs on the (mocked) clock and removes the container only when it finishes, as Podman
+// does when it waits for a running container to stop. The listing shows what is still present.
+function slowRemovalClient(removalMs: number): { readonly client: SweepClient; readonly present: Set<string> } {
+  const present = new Set(["realm-slow"]);
+  const client: SweepClient = {
+    listContainersByLabel: () =>
+      Promise.resolve([...present].map((id) => ({ id, labels: { "openshell.ai/sandbox-name": id } }))),
+    removeContainer: (id: string) =>
+      new Promise<void>((resolve) => {
+        setTimeout(() => {
+          present.delete(id);
+          resolve();
+        }, removalMs);
+      }),
+  };
+  return { client, present };
+}
+
+void test("RT-08: the sweep bound is 30 s, so a removal that outlasts the old 10 s bound is waited for and counted", async (t) => {
+  enableMockedTimers(t);
+  assert.equal(SWEEP_CALL_TIMEOUT_MS, 30_000);
+  const { client, present } = slowRemovalClient(12_000);
+
+  const sweep = removeAllRealmContainers(client);
+  const outcome = observe(sweep);
+  await flush();
+  t.mock.timers.tick(10_000);
+  await flush();
+  assert.equal(outcome.settled(), false, "the sweep must still be waiting for the removal at the old 10 s bound");
+  assert.equal(present.size, 1);
+
+  t.mock.timers.tick(2_000);
+  assert.equal(await sweep, 1, "the removal finished and the container is counted");
+  assert.equal(present.size, 0);
+});
+
+void test("RT-08: a removal that outlasts the sweep bound leaves its container listed, and the sweep refuses with REALM_STOPPING", async (t) => {
+  enableMockedTimers(t);
+  const { client, present } = slowRemovalClient(SWEEP_CALL_TIMEOUT_MS + 1_000);
+
+  const sweep = removeAllRealmContainers(client);
+  const outcome = observe(sweep);
+  await flush();
+  t.mock.timers.tick(SWEEP_CALL_TIMEOUT_MS - 1);
+  await flush();
+  assert.equal(outcome.settled(), false, "the sweep must not end before the bound");
+
+  t.mock.timers.tick(1);
+  await assertCode(sweep, "REALM_STOPPING");
+  assert.equal(present.size, 1, "the container survived the bound");
 });

@@ -4,12 +4,20 @@
 // blocked (OQ-P3-05 in-sandbox channel, OQ-P3-06 package verification), so the composition
 // takes a driver as an argument and the gap is reported, not papered over.
 //
-// Restart policy (D-59):
-//   - a crash (alive answers false or does not answer in time) or a failed start is one failure;
-//   - restarts wait a delay from the shared schedule (base 500 ms, cap 8000 ms, full jitter);
+// Start policy (D-59), for the INITIAL start only:
+//   - a failed start is one failure;
+//   - retries wait a delay from the shared schedule (base 500 ms, cap 8000 ms, full jitter);
 //   - the fifth consecutive failure holds the supervisor and throws AGENTOS_CRASH_LOOP, which
 //     is retryable: an explicit start() runs the policy again from a clean count;
 //   - the consecutive count resets only after 60000 ms of continuous alive, on the injected clock.
+//
+// Owner ruling (phase 9.6, N1; RT-04 amended 2026-10-28): once the session is active there is no automatic restart and
+// no hysteresis. A runner exit, or one failed probe (alive answers false, does not answer in time or rejects, which
+// covers a stale heartbeat and an OpenShell failure), holds the supervisor, and check throws AGENTOS_CRASH_LOOP, so the
+// session moves to error with that catalogue code. Recovery is realm down then realm up, or the retry command: the next
+// stop removes the sandbox and an explicit start() begins again. The ruling applies only after the initial start has
+// finished: a check made while that start is still pending (for example realm doctor during realm up) answers false and
+// changes nothing, because the runner is not ready to be probed yet.
 //
 // Every driver call is raced against callTimeoutMs (QUAL-01). src/core/timeout.ts is not used
 // for this race because withTimeout requires a catalogue code and no catalogue code names a
@@ -18,11 +26,18 @@
 
 import { computeBackoffDelayMs, type RandomSource } from "../core/backoff.js";
 import { makeRealmError } from "../core/errors.js";
+import type { SandboxCreateRequest } from "./openshell.js";
 
 export interface AgentOsDriver {
-  start(): Promise<void>;
-  alive(): Promise<boolean>;
-  stop(): Promise<void>;
+  // Creates the session's sandbox from the request, running the create argv once within timeoutMs.
+  create(request: SandboxCreateRequest, timeoutMs: number): Promise<void>;
+  // The session's runner. start, alive, stop and runnerExited each act on the sandbox realm-<sessionId> of the session named.
+  start(sessionId: string): Promise<void>;
+  alive(sessionId: string): Promise<boolean>;
+  stop(sessionId: string): Promise<void>;
+  // True when the runner process started for the session's sandbox has exited and has not been stopped. A stop the realm
+  // asked for is never reported here, because the driver detaches the runner before it stops it.
+  runnerExited(sessionId: string): boolean;
 }
 
 export const AGENTOS_BACKOFF_BASE_MS = 500;
@@ -32,6 +47,8 @@ export const AGENTOS_STABLE_WINDOW_MS = 60_000;
 
 export interface AgentOsSupervisorOptions {
   readonly driver: AgentOsDriver;
+  // The session this supervisor supervises. Every driver call names it, so the driver acts on this session's sandbox only.
+  readonly sessionId: string;
   // Upper bound for one driver call. Must be a positive finite number.
   readonly callTimeoutMs: number;
   readonly random: RandomSource;
@@ -39,19 +56,23 @@ export interface AgentOsSupervisorOptions {
   readonly now: () => number;
 }
 
-// idle: never started. running: under supervision. held: five consecutive failures.
-// stopped: stop() was called, so the supervisor neither probes nor restarts.
+// idle: never started. running: under supervision. held: the initial start failed five times in a row, or check found the
+// runner exited or a probe failed. stopped: stop() was called, so the supervisor does not probe.
 type Phase = "idle" | "running" | "held" | "stopped";
 
 type Settled<T> = { readonly ok: true; readonly value: T } | { readonly ok: false };
 
 export class AgentOsSupervisor {
   private readonly driver: AgentOsDriver;
+  private readonly sessionId: string;
   private readonly callTimeoutMs: number;
   private readonly random: RandomSource;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly now: () => number;
   private phase: Phase = "idle";
+  // True from the beginning of start() until its startUntilUp settles, for the epoch that start began with. While it is
+  // true, check() answers false without touching the driver or the supervisor.
+  private starting = false;
   // Incremented by every start(). A continuation left over from an earlier start sees a different
   // epoch and returns without another driver call.
   private epoch = 0;
@@ -66,10 +87,24 @@ export class AgentOsSupervisor {
       throw new RangeError("AgentOS call timeout must be a positive finite number");
     }
     this.driver = options.driver;
+    this.sessionId = options.sessionId;
     this.callTimeoutMs = options.callTimeoutMs;
     this.random = options.random;
     this.sleep = options.sleep;
     this.now = options.now;
+  }
+
+  // Creates the session's sandbox through the driver, once, within one call budget. A failed, rejected or missed create is
+  // OPENSHELL_START_FAILED. Nothing is retried here: the caller owns the container lookup that follows the create.
+  async create(request: SandboxCreateRequest, timeoutMs: number): Promise<void> {
+    if (request.sessionId !== this.sessionId) {
+      throw makeRealmError("SCHEMA_INVALID");
+    }
+    // Not registered for cancellation: a stop that overtakes a create waits for it and deletes the container it makes (B-3).
+    const created = await settle(() => this.driver.create(request, timeoutMs), this.callTimeoutMs, new Set<() => void>());
+    if (!created.ok) {
+      throw makeRealmError("OPENSHELL_START_FAILED");
+    }
   }
 
   // Starts the driver. A failed start is retried under the policy. Rejects with
@@ -77,16 +112,29 @@ export class AgentOsSupervisor {
   // again after a hold is the explicit retry, and it starts a fresh count.
   async start(): Promise<void> {
     this.epoch += 1;
+    const epoch = this.epoch;
     this.phase = "running";
+    this.starting = true;
     this.failures = 0;
     this.aliveSince = null;
-    await this.startUntilUp(this.epoch);
+    try {
+      await this.startUntilUp(epoch);
+    } finally {
+      // A newer start() or a stop() that moved the epoch on owns the flag now: leave it alone.
+      if (this.epoch === epoch) {
+        this.starting = false;
+      }
+    }
   }
 
-  // One liveness check. Returns false when the supervisor is idle or stopped, and does not
-  // touch the driver. Returns true when the driver is alive, or when a detected crash was
-  // recovered by restart. Returns false when stop() runs while the check is in flight. Throws
-  // AGENTOS_CRASH_LOOP while the supervisor is held.
+  // One liveness check. Returns false, and does not touch the driver, when the supervisor is idle or stopped, and while the
+  // initial start is still pending: the runner is not ready to be probed yet, so a check made then (realm doctor during
+  // realm up) neither calls the driver, nor holds, nor counts, nor throws. Returns false when stop() or a newer start()
+  // overtakes the check in flight. Returns true when the driver answers alive and its runner has not exited. Anything else
+  // is terminal (owner ruling N1): a runner that exited, before or during the probe, or a probe that answers false, fails
+  // to answer in time, or rejects (a stale heartbeat, an OpenShell failure) holds the supervisor and throws
+  // AGENTOS_CRASH_LOOP. There is no restart and no failure count here, and every later check throws the same code until
+  // start() is called again.
   async check(): Promise<boolean> {
     if (this.phase === "idle" || this.phase === "stopped") {
       return false;
@@ -94,35 +142,39 @@ export class AgentOsSupervisor {
     if (this.phase === "held") {
       throw makeRealmError("AGENTOS_CRASH_LOOP");
     }
+    if (this.starting) {
+      return false;
+    }
+    if (this.driver.runnerExited(this.sessionId)) {
+      this.hold();
+    }
     const epoch = this.epoch;
-    const probe = await this.race(() => this.driver.alive());
+    const probe = await this.race(() => this.driver.alive(this.sessionId));
     if (!this.isCurrent(epoch)) {
       return false;
     }
-    if (probe.ok && probe.value) {
-      this.observeAlive();
-      return true;
+    // The runner may have exited while the probe was in flight, whatever the probe answered.
+    if (!(probe.ok && probe.value) || this.driver.runnerExited(this.sessionId)) {
+      this.hold();
     }
-    this.aliveSince = null;
-    await this.recordFailure(epoch);
-    if (!this.isCurrent(epoch)) {
-      return false;
-    }
-    await this.startUntilUp(epoch);
-    return this.isCurrent(epoch);
+    this.observeAlive();
+    return true;
   }
 
-  // Stops the driver, best effort. A failed or hung stop does not block teardown: the session
-  // container is removed by the lifecycle, which is the hard guarantee. Stop cancels every driver
-  // call and backoff wait still in flight, so none of them starts the driver again afterwards.
-  // After stop the supervisor stays stopped until start() is called.
+  // Stops the driver. A failed, missed or hung driver stop rejects with AGENTOS_STOP_FAILED, so a failed delete is never
+  // read as success. That rejection does not stop the caller's teardown: the session container is removed by the
+  // lifecycle, which is the hard guarantee. Stop cancels every driver call and backoff wait still in flight, so none of
+  // them starts the driver again afterwards. After stop the supervisor stays stopped until start() is called.
   async stop(): Promise<void> {
     this.phase = "stopped";
     this.aliveSince = null;
     for (const cancel of [...this.inFlight]) {
       cancel();
     }
-    await this.race(() => this.driver.stop());
+    const stopped = await this.race(() => this.driver.stop(this.sessionId));
+    if (!stopped.ok) {
+      throw makeRealmError("AGENTOS_STOP_FAILED");
+    }
   }
 
   // The current consecutive failure count, for diagnostics and tests.
@@ -149,7 +201,7 @@ export class AgentOsSupervisor {
   // Returns without a further driver call as soon as the supervisor is no longer current.
   private async startUntilUp(epoch: number): Promise<void> {
     while (this.isCurrent(epoch)) {
-      const attempt = await this.race(() => this.driver.start());
+      const attempt = await this.race(() => this.driver.start(this.sessionId));
       if (!this.isCurrent(epoch)) {
         return;
       }
@@ -161,12 +213,13 @@ export class AgentOsSupervisor {
     }
   }
 
-  // Counts one failure. The fifth consecutive failure holds the supervisor. Otherwise the
-  // driver is stopped best effort and the caller waits the backoff delay before its next start.
+  // Counts one failed start attempt. The fifth consecutive failure holds the supervisor. Otherwise the
+  // driver is stopped best effort and the caller waits the backoff delay before its next start. Only startUntilUp calls
+  // it: a failed probe in check is terminal and never comes here.
   // Returns without holding or waiting once the supervisor is no longer current.
   private async recordFailure(epoch: number): Promise<void> {
     this.failures += 1;
-    await this.race(() => this.driver.stop());
+    await this.race(() => this.driver.stop(this.sessionId));
     if (!this.isCurrent(epoch)) {
       return;
     }
@@ -186,6 +239,14 @@ export class AgentOsSupervisor {
 
   private race<T>(work: () => Promise<T>): Promise<Settled<T>> {
     return settle(work, this.callTimeoutMs, this.inFlight);
+  }
+
+  // Holds the supervisor and throws AGENTOS_CRASH_LOOP. Unlike recordFailure, it does not stop the driver or back off: the
+  // session moves to error, and the next stop removes the sandbox.
+  private hold(): never {
+    this.aliveSince = null;
+    this.phase = "held";
+    throw makeRealmError("AGENTOS_CRASH_LOOP");
   }
 }
 

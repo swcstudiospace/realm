@@ -10,7 +10,6 @@ function validInput(): Record<string, unknown> {
   return {
     image: IMAGE,
     andaUrl: "http://127.0.0.1:7777/",
-    workloadArgv: ["/usr/bin/agent", "--serve"],
     stateDir: "/var/lib/realm/state",
     workspaceRoot: "/srv/workspace",
   };
@@ -95,14 +94,8 @@ void test("an absent andaUrl is accepted and the config carries no andaUrl (RT-0
   assert.equal("andaUrl" in config, false);
 });
 
-void test("an empty workloadArgv is rejected with SCHEMA_INVALID (RT-01)", () => {
-  assert.equal(rejectionCode({ ...validInput(), workloadArgv: [] }), "SCHEMA_INVALID");
-});
-
-void test("a workloadArgv with a non-string or empty element is rejected with SCHEMA_INVALID (RT-01)", () => {
-  assert.equal(rejectionCode({ ...validInput(), workloadArgv: ["/usr/bin/agent", 7] }), "SCHEMA_INVALID");
-  assert.equal(rejectionCode({ ...validInput(), workloadArgv: [""] }), "SCHEMA_INVALID");
-  assert.equal(rejectionCode({ ...validInput(), workloadArgv: "/usr/bin/agent" }), "SCHEMA_INVALID");
+void test("a config that carries workloadArgv is refused as an unknown key, so the removed key cannot be silently accepted (RT-01)", () => {
+  assert.equal(rejectionCode({ ...validInput(), workloadArgv: ["/usr/bin/agent", "--serve"] }), "SCHEMA_INVALID");
 });
 
 void test("a relative stateDir is rejected with SCHEMA_INVALID (RT-01, D-73)", () => {
@@ -115,7 +108,7 @@ void test("a relative workspaceRoot is rejected with SCHEMA_INVALID (RT-01, D-73
 });
 
 void test("missing required fields are rejected with SCHEMA_INVALID (RT-01)", () => {
-  for (const key of ["image", "workloadArgv", "stateDir", "workspaceRoot"]) {
+  for (const key of ["image", "stateDir", "workspaceRoot"]) {
     const input = { ...validInput(), [key]: undefined };
     assert.equal(rejectionCode(input), "SCHEMA_INVALID", `missing ${key}`);
   }
@@ -131,30 +124,10 @@ void test("a non-object input is rejected with SCHEMA_INVALID (RT-01)", () => {
   assert.equal(rejectionCode([validInput()]), "SCHEMA_INVALID");
 });
 
-void test("the loaded workloadArgv is a copy, so later changes to the caller's array do not reach the config (RT-01)", () => {
-  const argv = ["/usr/bin/agent"];
-  const config = loadRuntimeConfig({ ...validInput(), workloadArgv: argv });
-  argv.push("--injected");
-  assert.deepEqual(config.workloadArgv, ["/usr/bin/agent"]);
-});
-
 void test("RT-05: each D-80 denylist name is refused at load with SCHEMA_INVALID (D-80)", () => {
   for (const key of ["network", "networkMode", "hostNetwork", "netns", "driverConfig", "driverConfigJson"]) {
     assert.equal(rejectionCode({ ...validInput(), [key]: "host" }), "SCHEMA_INVALID", `denied key ${key}`);
   }
-});
-
-void test("RT-05: a relative workloadArgv[0] is refused with SCHEMA_INVALID (D-79)", () => {
-  assert.equal(rejectionCode({ ...validInput(), workloadArgv: ["agent", "--serve"] }), "SCHEMA_INVALID");
-  assert.equal(rejectionCode({ ...validInput(), workloadArgv: ["./agent"] }), "SCHEMA_INVALID");
-  assert.equal(rejectionCode({ ...validInput(), workloadArgv: ["bin/agent", "--serve"] }), "SCHEMA_INVALID");
-});
-
-void test("RT-05: an absolute workloadArgv[0] is accepted with or without arguments (D-79)", () => {
-  assert.deepEqual(loadRuntimeConfig({ ...validInput(), workloadArgv: ["/usr/bin/agent"] }).workloadArgv, [
-    "/usr/bin/agent",
-  ]);
-  assert.deepEqual(loadRuntimeConfig(validInput()).workloadArgv, ["/usr/bin/agent", "--serve"]);
 });
 
 void test("RT-05: an egressAllow key is refused at load, because the allowlist is validated where the runtime is built (D-106)", () => {

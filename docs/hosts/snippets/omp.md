@@ -1,28 +1,47 @@
-# Omp snippet: Realm MCP server (stdio)
+# Omp snippet: Realm extension (live test and install)
 
-Source: `docs/integration/omp.md` Q1 (read 2026-10-21; verified 2026-10-22).
-Official pages: https://omp.sh/docs/extension-authoring,
-https://omp.sh/docs/marketplace.
+Source: `docs/integration/omp.md` (read 2026-10-21). The live Omp session is not
+yet observed; see the live verification status in that file. Official pages:
+https://omp.sh/docs/extension-authoring, https://omp.sh/docs/marketplace.
 
-Realm serves MCP over stdio via the `realm mcp` command (P6-D9; the entry
-plan 06-04 builds). This snippet carries no token, secret, or host path.
+Omp loads Realm as an extension, not as an MCP server. The Omp wiring is
+`src/omp/extension.ts`, built to `dist/src/omp/extension.js`. The package
+declares it under the `omp` key in `package.json`:
 
-## Documented placement
+```json
+"omp": { "extensions": ["./dist/src/omp/extension.js"] }
+```
 
-From omp.md Q1: a manifest `mcpServers` entry replaces the default
-`.mcp.json`. The plugin tree uses `.omp-plugin/plugin.json` read first, then
-`.claude-plugin/plugin.json`; a root `plugin.json` using the Agent Plugins
-1.0.0 schema uses the portable provider with skills and `mcp.json`.
-`${PLUGIN_ROOT}` and `${PLUGIN_DATA}` are expanded in portable plugin MCP
-config.
+This snippet carries no token, secret, or host path.
 
-Point the manifest `mcpServers` entry for the Realm server at the Realm stdio
-entry: the `realm mcp` command.
+## Load the built extension for one session
+
+Load the extension by absolute path, with no install. Use an isolated profile
+so no persistent Omp state changes:
+
+```bash
+omp -e /absolute/path/to/agent-realm/dist/src/omp/extension.js --profile=<name>
+```
+
+`-e` is repeatable. `--no-extensions` disables ambient extension discovery.
+For the headless status capture, run in `--mode=rpc` or `--mode=rpc-ui`, which
+carry the status item; print mode may not.
+
+## Dry-run install check
+
+Check the installable package without installing it:
+
+```bash
+omp plugin install --dry-run
+```
+
+The persistent install (`omp plugin install --scope=user`) is a separate step.
+Run it only after the dry run passes and `~/.omp/agent/config.yml` has been
+backed up. It is not part of this snippet.
 
 ## Not documented
 
-The exact stdio key layout inside the manifest `mcpServers` entry (key names
-for the launch command and its arguments) was not verified in the pages read.
-Manifest validation details beyond the Q1 fields "were not verified in this
-phase" (omp.md Q1). Do not guess key names here; confirm them against the Omp
-reference when the plugin is written.
+Omp's plugin manifest key names for an MCP server entry are not verified, so
+this snippet gives none. Realm reaches Omp through the extension above, not
+through an MCP entry. Local install path semantics for `omp plugin install` are
+not verified; use `--dry-run` first.

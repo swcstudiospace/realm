@@ -7,6 +7,10 @@
 
 import { RealmError, type ErrorCode } from "../core/errors.js";
 import { defaultPolicyPath, isDirectEntry, podmanSocketPath, readHostRuntime } from "../runtime/host-paths.js";
+import { createOpenShellAgentOsDriver } from "../runtime/agentos-driver.js";
+import { productionRunnerChild } from "../runtime/agentos-workload.js";
+import type { AgentOsDriver } from "../runtime/agentos.js";
+import { productionOpenShellRunner } from "../runtime/session-execution.js";
 import type { EnvironmentLike } from "../session/paths.js";
 import { CONTROL_TIMEOUT_MS, sendRequest, type ControlReply } from "./channel.js";
 import { startDaemon, type StartDaemonOptions, type StartedDaemon } from "./daemon.js";
@@ -38,6 +42,31 @@ interface StopWiring {
   readonly writeStderr: (line: string) => void;
 }
 
+// The AgentOS driver is always bound. Its sandbox image is config.image alone: the digest-pinned value the runtime
+// config loader validates at load (readHostRuntime), which startDaemon receives as runtimeInput. Each session's sandbox
+// is realm-<sessionId>, created from that image, and its runner runs there as the workload.
+// The realm secret root, the value the driver is given as REALM_DRIVER_SECRET_ROOT. The session's sandbox binding derives the channel
+// directory from it, so the daemon reads the same variable the driver does. Unset, a session create is refused.
+const SECRET_ROOT_ENV = "REALM_DRIVER_SECRET_ROOT";
+// The pinned workspace root, the value the driver is given as REALM_DRIVER_WORKSPACE_ROOT. The session's sandbox binding mounts this
+// root at /workspace, so the daemon reads the same variable the driver does. Unset, a session create is refused.
+const WORKSPACE_ROOT_ENV = "REALM_DRIVER_WORKSPACE_ROOT";
+// The driver's sandbox state root, the value the driver is given as REALM_DRIVER_STATE_ROOT. The session's sandbox binding names each
+// sandbox's state directory under it, so the daemon reads the same variable the driver does. Unset, a session create is refused.
+const SANDBOX_STATE_ROOT_ENV = "REALM_DRIVER_STATE_ROOT";
+// Start provisions the runner child and waits for its probe, so it gets the long budget; probe and delete get the short one.
+const AGENTOS_START_TIMEOUT_MS = 180_000;
+const AGENTOS_CALL_TIMEOUT_MS = 30_000;
+
+function productionAgentOsDriver(env: EnvironmentLike): AgentOsDriver {
+  return createOpenShellAgentOsDriver({
+    runner: productionOpenShellRunner(env),
+    spawnRunner: productionRunnerChild(env),
+    startTimeoutMs: AGENTOS_START_TIMEOUT_MS,
+    callTimeoutMs: AGENTOS_CALL_TIMEOUT_MS,
+  });
+}
+
 // Starts the daemon and resolves with its exit code once it has stopped: 0 after a clean teardown,
 // 1 when start, the shutdown, or the listening server fails. Each failure writes one line carrying only a catalogue code.
 export async function runDaemon(deps: DaemonDeps): Promise<number> {
@@ -47,6 +76,10 @@ export async function runDaemon(deps: DaemonDeps): Promise<number> {
   try {
     const { runtimeInput, stateDir } = readHostRuntime(deps.env, deps.readConfig);
     const libpodSocketPath = podmanSocketPath(deps.env);
+    const agentosDriver = productionAgentOsDriver(deps.env);
+    const secretRoot = deps.env[SECRET_ROOT_ENV];
+    const workspaceRoot = deps.env[WORKSPACE_ROOT_ENV];
+    const sandboxStateRoot = deps.env[SANDBOX_STATE_ROOT_ENV];
     started = await start({
       stateDir,
       runtimeInput,
@@ -54,6 +87,10 @@ export async function runDaemon(deps: DaemonDeps): Promise<number> {
       sessionId: SESSION_ID,
       env: deps.env,
       ...(libpodSocketPath === undefined ? {} : { libpodSocketPath }),
+      agentosDriver,
+      ...(secretRoot === undefined || secretRoot.length === 0 ? {} : { secretRoot }),
+      ...(workspaceRoot === undefined || workspaceRoot.length === 0 ? {} : { pinnedWorkspaceRoot: workspaceRoot }),
+      ...(sandboxStateRoot === undefined || sandboxStateRoot.length === 0 ? {} : { sandboxStateRoot }),
     });
   } catch (error: unknown) {
     writeStderr(failureLine(codeOf(error)));

@@ -1,0 +1,10 @@
+# The sandbox image build context is the repository root. Exclude everything, then
+# re-admit exactly the files sandbox/Dockerfile COPYs.
+*
+!package.json
+!package-lock.json
+!tsconfig.json
+!tsconfig.agentos.json
+!src/runtime/agentos-runner.ts
+!src/runtime/agentos-probe.ts
+!sandbox/resolv.conf

@@ -91,7 +91,7 @@ void test("OMP-01: the Omp entry and the CLI dial one control socket, the state 
   mkdirSync(join(base, "config", "realm"), { recursive: true });
   writeFileSync(
     join(base, "config", "realm", "config.json"),
-    JSON.stringify({ image: IMAGE, workloadArgv: ["/usr/bin/agent"], stateDir, workspaceRoot: base }),
+    JSON.stringify({ image: IMAGE, stateDir, workspaceRoot: base }),
   );
   const configSocket = controlSocketPath(stateDir);
   const decoySocket = controlSocketPath(join(xdgStateHome, "realm"));
@@ -140,7 +140,7 @@ void test("OMP-01: the Omp entry and the CLI dial one control socket, the state 
   };
   const sessionStart = handlers.get("session_start");
   assert.ok(sessionStart, "the extension registers a session_start handler");
-  sessionStart(ctx);
+  sessionStart({ type: "session_start" }, ctx);
   const upHit = await within(firstUp, 5_000, "no control socket received an up request");
   assert.equal(upHit.socketPath, configSocket, "the Omp entry attaches to the state directory the runtime config names");
 

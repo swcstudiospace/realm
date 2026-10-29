@@ -14,6 +14,7 @@
     "noUnusedParameters": true,
     "noImplicitReturns": true,
     "verbatimModuleSyntax": true,
+    "noUncheckedSideEffectImports": true,
     "forceConsistentCasingInFileNames": true,
     "allowJs": true,
     "checkJs": true,

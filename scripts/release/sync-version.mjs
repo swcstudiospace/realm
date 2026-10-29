@@ -4,6 +4,18 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const VERSION_PATTERN = /^0\.\d+\.\d+$/;
 
+// Host adapter manifests that carry the release version. Each is JSON with a top-level "version".
+const ADAPTER_JSON_MANIFESTS = [
+  'adapters/claude-plugin/.claude-plugin/plugin.json',
+  'adapters/muse-code/.muse-plugin/plugin.json',
+  'adapters/hermes-agent/plugin.json',
+  'adapters/prime-agent/package.json',
+];
+
+// Every file whose version the release job rewrites. The release commit stages exactly these
+// paths (`--files`), so the staged set cannot drift from the synced set.
+export const RELEASE_VERSION_FILES = ['package.json', 'package-lock.json', ...ADAPTER_JSON_MANIFESTS];
+
 function readText(file) {
   try {
     return readFileSync(file, 'utf8');
@@ -53,14 +65,23 @@ export function syncVersion({ root, version }) {
 
   const changed = [];
   const updates = [
-    { file: packagePath, original: packageText, value: pkg },
-    { file: lockPath, original: lockText, value: lock },
+    { file: packagePath, original: packageText, next: serialize(pkg) },
+    { file: lockPath, original: lockText, next: serialize(lock) },
   ];
-  for (const { file, original, value } of updates) {
-    const next = serialize(value);
+  for (const relative of ADAPTER_JSON_MANIFESTS) {
+    const file = path.join(root, relative);
+    const original = readText(file);
+    const manifest = parseJson(file, original);
+    if (!isObject(manifest)) {
+      throw new Error(`${file} must contain a JSON object`);
+    }
+    manifest.version = version;
+    updates.push({ file, original, next: serialize(manifest) });
+  }
+  for (const { file, original, next } of updates) {
     if (next !== original) {
       writeFileSync(file, next, 'utf8');
-      changed.push(path.basename(file));
+      changed.push(path.relative(root, file));
     }
   }
   return { version, changed };
@@ -76,10 +97,14 @@ if (isEntrypoint()) {
   try {
     const args = process.argv.slice(2);
     if (args.length !== 1) {
-      throw new Error('usage: sync-version.mjs <0.minor.patch>');
+      throw new Error('usage: sync-version.mjs <0.minor.patch> | --files');
     }
-    const result = syncVersion({ root: repoRoot, version: args[0] });
-    process.stdout.write(`${JSON.stringify(result)}\n`);
+    if (args[0] === '--files') {
+      process.stdout.write(`${RELEASE_VERSION_FILES.join('\n')}\n`);
+    } else {
+      const result = syncVersion({ root: repoRoot, version: args[0] });
+      process.stdout.write(`${JSON.stringify(result)}\n`);
+    }
   } catch (error) {
     process.stderr.write(`${error.message}\n`);
     process.exitCode = 1;

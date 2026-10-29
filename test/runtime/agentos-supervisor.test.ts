@@ -1,8 +1,5 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { RealmError } from "../../src/core/errors.js";
 import {
   AGENTOS_BACKOFF_BASE_MS,
@@ -13,8 +10,6 @@ import {
 } from "../../src/runtime/agentos.js";
 import { FakeAgentOsDriver } from "../support/fake-agentos.js";
 
-// This file runs from dist/test/runtime, so three levels up is the package root.
-const PACKAGE_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const CALL_TIMEOUT_MS = 50;
 
 function harness(): {
@@ -28,6 +23,7 @@ function harness(): {
   const driver = new FakeAgentOsDriver();
   const supervisor = new AgentOsSupervisor({
     driver,
+    sessionId: "sess-supervisor",
     callTimeoutMs: CALL_TIMEOUT_MS,
     // A random draw of 1 gives the top of the jitter range, so each delay is the full ceiling.
     random: () => 1,
@@ -82,19 +78,23 @@ void test("the AgentOS backoff parameters are base 500 ms, cap 8000 ms, five att
   assert.equal(AGENTOS_STABLE_WINDOW_MS, 60_000);
 });
 
-void test("a crashed driver restarts after the shared backoff schedule, with the delay drawn from the injected source (RT-04)", async () => {
+void test("a crashed driver is terminal: check holds the supervisor with AGENTOS_CRASH_LOOP and neither restarts nor backs off (RT-04, N1)", async () => {
   const { driver, supervisor, sleeps } = harness();
   await supervisor.start();
 
   driver.crash();
-  assert.equal(await supervisor.check(), true);
-  assert.deepEqual(sleeps, [500]);
-  assert.equal(driver.isRunning(), true);
+  await assertCrashLoop(supervisor.check());
 
-  driver.crash();
-  assert.equal(await supervisor.check(), true);
-  assert.deepEqual(sleeps, [500, 1000]);
-  assert.equal(driver.callCount("start"), 3);
+  assert.deepEqual(sleeps, [], "no backoff wait follows a failed probe");
+  assert.equal(driver.callCount("start"), 1, "the supervisor does not restart a driver that failed its probe");
+  assert.equal(driver.callCount("stop"), 0, "the driver is left for the session stop to remove");
+  assert.equal(supervisor.consecutiveFailures(), 0, "a failed probe is not a counted start failure");
+
+  await assertCrashLoop(supervisor.check());
+  assert.equal(driver.callCount("alive"), 1, "a held supervisor must not touch the driver again");
+
+  await supervisor.start();
+  assert.equal(await supervisor.check(), true, "an explicit start is the retry, and supervision resumes");
 });
 
 void test("a failed restart counts as a further failure and backs off again before the next attempt (RT-04)", async () => {
@@ -130,69 +130,58 @@ void test("the fifth consecutive failure holds the supervisor with AGENTOS_CRASH
   assert.equal(supervisor.consecutiveFailures(), 0);
 });
 
-void test("a crash and the failed restarts that follow it share one count toward the fifth failure (RT-04)", async () => {
+void test("a probe that rejects is terminal in the same way as one that answers false (RT-04, N1)", async () => {
   const { driver, supervisor, sleeps } = harness();
   await supervisor.start();
-  driver.crash();
-  driver.script("start", "reject", "reject", "reject", "reject");
+  driver.script("alive", "reject");
 
   await assertCrashLoop(supervisor.check());
 
-  assert.equal(driver.callCount("start"), 5, "one initial start plus four restart attempts");
-  assert.deepEqual(sleeps, [500, 1000, 2000, 4000]);
+  assert.deepEqual(sleeps, []);
+  assert.equal(driver.callCount("start"), 1);
+  assert.equal(driver.callCount("stop"), 0);
 });
 
-void test("the consecutive count resets only after 60000 ms of continuous alive (RT-04)", async () => {
+void test("the consecutive start-failure count resets only after 60000 ms of continuous alive (RT-04)", async () => {
   const { driver, supervisor, clock } = harness();
-  await supervisor.start();
-  driver.crash();
   driver.script("start", "reject", "reject", "reject");
-
-  assert.equal(await supervisor.check(), true);
-  assert.equal(supervisor.consecutiveFailures(), 4);
+  await supervisor.start();
+  assert.equal(supervisor.consecutiveFailures(), 3);
 
   clock.now = 0;
   assert.equal(await supervisor.check(), true);
   clock.now = 59_999;
   assert.equal(await supervisor.check(), true);
-  assert.equal(supervisor.consecutiveFailures(), 4, "the window is not yet stable");
+  assert.equal(supervisor.consecutiveFailures(), 3, "the window is not yet stable");
 
   clock.now = 60_000;
   assert.equal(await supervisor.check(), true);
   assert.equal(supervisor.consecutiveFailures(), 0, "a full stable minute resets the count");
-
-  driver.crash();
-  assert.equal(await supervisor.check(), true);
-  assert.equal(supervisor.consecutiveFailures(), 1);
 });
 
-void test("a crash inside the stable window keeps the count, so it still reaches AGENTOS_CRASH_LOOP (RT-04)", async () => {
+void test("a crash after a long stable run is still terminal, with no hysteresis (RT-04, N1)", async () => {
   const { driver, supervisor, clock } = harness();
   await supervisor.start();
-  driver.crash();
-  driver.script("start", "reject", "reject", "reject");
-  assert.equal(await supervisor.check(), true);
-  assert.equal(supervisor.consecutiveFailures(), 4);
-
   clock.now = 0;
   assert.equal(await supervisor.check(), true);
-  clock.now = 30_000;
-  driver.crash();
+  clock.now = 120_000;
+  assert.equal(await supervisor.check(), true);
 
+  driver.crash();
   await assertCrashLoop(supervisor.check());
-  assert.equal(supervisor.consecutiveFailures(), 5);
+  assert.equal(driver.callCount("start"), 1);
 });
 
-void test("a hung alive call times out and is treated as a crash, so supervision does not hang (RT-04)", async () => {
+void test("a hung alive call times out and is terminal, so supervision does not hang or restart (RT-04, N1)", async () => {
   const { driver, supervisor, sleeps } = harness();
   await supervisor.start();
   driver.script("alive", "hang");
 
-  assert.equal(await supervisor.check(), true);
+  await assertCrashLoop(supervisor.check());
 
-  assert.deepEqual(sleeps, [500]);
-  assert.equal(driver.callCount("stop"), 1, "a hung driver is stopped before its restart");
-  assert.equal(driver.callCount("start"), 2);
+  assert.deepEqual(sleeps, []);
+  assert.equal(driver.callCount("stop"), 0);
+  assert.equal(driver.callCount("start"), 1);
 });
 
 void test("a hung start call times out and counts as a failed attempt, so supervision does not hang (RT-04)", async () => {
@@ -217,11 +206,6 @@ void test("a stopped supervisor neither probes nor restarts the driver (RT-04)",
   assert.equal(driver.isRunning(), false);
 });
 
-void test("the package manifest names no AgentOS library package, so no driver binding exists (RT-04, OQ-P3-05, OQ-P3-06)", () => {
-  const manifest = readFileSync(join(PACKAGE_ROOT, "package.json"), "utf8");
-  assert.equal(/@rivet-dev|agentos-core/.test(manifest), false);
-});
-
 void test("stopping during an in-flight probe leaves no restart after stop and no timer behind (RT-04, G1)", async () => {
   const { driver, supervisor } = harness();
   const timers = trackTimers();
@@ -239,31 +223,135 @@ void test("stopping during an in-flight probe leaves no restart after stop and n
   }
 });
 
-void test("stopping during an in-flight restart leaves no further start after stop (RT-04, G1)", async () => {
+void test("stopping during an in-flight initial start leaves no further start after stop (RT-04, G1)", async () => {
   const { driver, supervisor } = harness();
   const timers = trackTimers();
   try {
-    await supervisor.start();
-    driver.crash();
     driver.script("start", "hang");
-    const check = supervisor.check();
+    const started = supervisor.start();
     await new Promise<void>((resolve) => setImmediate(resolve));
-    assert.equal(driver.callCount("start"), 2, "the restart is in flight");
+    assert.equal(driver.callCount("start"), 1, "the start is in flight");
     await supervisor.stop();
-    assert.equal(await check, false);
-    assert.equal(driver.callCount("start"), 2, "a restart that settles after stop must not start again");
+    await started;
+    assert.equal(driver.callCount("start"), 1, "a start that settles after stop must not start again");
     assert.equal(timers.pending(), 0, "no timer may survive teardown");
   } finally {
     timers.restore();
   }
 });
 
-void test("stopping during the backoff wait leaves no restart after stop and no timer behind (RT-04, G1)", async () => {
+// A driver whose start waits on a gate, so a test holds the initial start pending for as long as it needs. Until the
+// gate opens, alive() answers false, as a real runner does before it is ready.
+class GatedStartDriver extends FakeAgentOsDriver {
+  private readonly gate: Promise<void>;
+  private open: () => void = () => {};
+  runnerExitedCalls = 0;
+
+  constructor() {
+    super();
+    this.gate = new Promise<void>((resolve) => {
+      this.open = resolve;
+    });
+  }
+
+  override async start(): Promise<void> {
+    await this.gate;
+    await super.start();
+  }
+
+  override runnerExited(): boolean {
+    this.runnerExitedCalls += 1;
+    return super.runnerExited();
+  }
+
+  release(): void {
+    this.open();
+  }
+}
+
+function gatedHarness(): { readonly driver: GatedStartDriver; readonly supervisor: AgentOsSupervisor } {
+  const driver = new GatedStartDriver();
+  const supervisor = new AgentOsSupervisor({
+    driver,
+    sessionId: "sess-supervisor",
+    callTimeoutMs: 60_000,
+    random: () => 1,
+    sleep: () => Promise.resolve(),
+    now: () => 0,
+  });
+  return { driver, supervisor };
+}
+
+void test("a check made while the initial start is pending answers false, touches no driver probe and does not hold (RT-04, N1)", async () => {
+  const { driver, supervisor } = gatedHarness();
+  const started = supervisor.start();
+
+  assert.equal(await supervisor.check(), false, "the runner is not ready, so the check answers false");
+  assert.equal(driver.callCount("alive"), 0);
+  assert.equal(driver.runnerExitedCalls, 0);
+  assert.equal(supervisor.consecutiveFailures(), 0);
+
+  driver.release();
+  await started;
+  assert.equal(driver.callCount("start"), 1);
+  assert.equal(driver.isRunning(), true);
+  assert.equal(await supervisor.check(), true, "the supervisor is running and the check answers true");
+  assert.equal(driver.callCount("alive"), 1);
+});
+
+void test("doctor overlapping a pending start never holds the supervisor, so the next health check is not a crash loop (RT-04, N1)", async () => {
+  const { driver, supervisor } = gatedHarness();
+  const started = supervisor.start();
+
+  // alive() would answer false here, because the runner has not started. Before the fix this held the supervisor.
+  assert.equal(driver.isRunning(), false);
+  assert.equal(await supervisor.check(), false);
+  assert.equal(await supervisor.check(), false, "a second overlapping check changes nothing either");
+
+  driver.release();
+  await started;
+
+  assert.equal(await supervisor.check(), true, "the runner started, so the health check answers true and nothing threw");
+  assert.equal(driver.callCount("alive"), 1, "only the check after the start probed the driver");
+  assert.equal(driver.callCount("stop"), 0, "the overlapping checks did not count a failure");
+});
+
+void test("stopping during a pending start leaves the supervisor stopped and a later start works (RT-04, N1)", async () => {
+  const { driver, supervisor } = gatedHarness();
+  const started = supervisor.start();
+  await supervisor.stop();
+  await started;
+
+  assert.equal(await supervisor.check(), false, "a stopped supervisor answers false");
+  assert.equal(driver.callCount("alive"), 0);
+
+  driver.release();
+  await supervisor.start();
+  assert.equal(await supervisor.check(), true, "a start after the stop supervises again");
+});
+
+void test("the end of a stopped start does not clear the pending flag of a newer start (RT-04, N1)", async () => {
+  const { driver, supervisor } = gatedHarness();
+  const first = supervisor.start();
+  await supervisor.stop();
+  const second = supervisor.start();
+  await first;
+
+  assert.equal(await supervisor.check(), false, "the newer start is still pending, so the check answers false");
+  assert.equal(driver.callCount("alive"), 0);
+
+  driver.release();
+  await second;
+  assert.equal(await supervisor.check(), true);
+});
+
+void test("stopping during the initial start's backoff wait leaves no restart after stop and no timer behind (RT-04, G1)", async () => {
   const driver = new FakeAgentOsDriver();
   let waits = 0;
   let release: () => void = () => {};
   const supervisor = new AgentOsSupervisor({
     driver,
+    sessionId: "sess-supervisor",
     callTimeoutMs: CALL_TIMEOUT_MS,
     random: () => 1,
     sleep: () => {
@@ -276,17 +364,51 @@ void test("stopping during the backoff wait leaves no restart after stop and no 
   });
   const timers = trackTimers();
   try {
-    await supervisor.start();
-    driver.crash();
-    const check = supervisor.check();
+    driver.script("start", "reject");
+    const started = supervisor.start();
     await new Promise<void>((resolve) => setImmediate(resolve));
     assert.equal(waits, 1, "the backoff wait is in flight");
     await supervisor.stop();
     release();
-    assert.equal(await check, false);
-    assert.equal(driver.callCount("start"), 1, "no restart may follow a stop");
+    await started;
+    assert.equal(driver.callCount("start"), 1, "no retry may follow a stop");
     assert.equal(timers.pending(), 0, "no timer may survive teardown");
   } finally {
     timers.restore();
   }
+});
+
+void test("a runner that exited while the session was active is reported as AGENTOS_CRASH_LOOP at once, with no probe and no restart (RT-04)", async () => {
+  const { driver, supervisor } = harness();
+  await supervisor.start();
+  driver.exitRunner();
+  await assertCrashLoop(supervisor.check());
+  assert.equal(driver.callCount("alive"), 0, "the exit is reported without a probe");
+  assert.equal(driver.callCount("start"), 1, "the supervisor does not restart a runner that exited");
+});
+
+void test("a runner that exits while the probe is in flight is terminal even when the probe answered alive (RT-04, N1)", async () => {
+  const { driver, supervisor, sleeps } = harness();
+  await supervisor.start();
+
+  const pending = supervisor.check();
+  driver.exitRunner();
+  await assertCrashLoop(pending);
+
+  assert.equal(driver.callCount("alive"), 1, "the probe ran and answered alive");
+  assert.equal(driver.callCount("start"), 1, "the supervisor does not restart the runner");
+  assert.equal(driver.callCount("stop"), 0);
+  assert.deepEqual(sleeps, []);
+  await assertCrashLoop(supervisor.check());
+  assert.equal(driver.callCount("alive"), 1, "the supervisor stays held, so later checks do not probe");
+});
+
+void test("B2: a driver stop that fails makes the supervisor stop reject with AGENTOS_STOP_FAILED, so a failed delete is never read as success", async () => {
+  const { driver, supervisor } = harness();
+  await supervisor.start();
+  driver.script("stop", "reject");
+  await assert.rejects(
+    supervisor.stop(),
+    (error: unknown) => error instanceof RealmError && error.code === "AGENTOS_STOP_FAILED",
+  );
 });

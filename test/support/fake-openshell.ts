@@ -30,21 +30,14 @@ export interface FakeOpenShellCall {
   readonly captureOutput: boolean;
 }
 
-function labelsBeforeSeparator(argv: readonly string[]): Record<string, string> {
-  const labels: Record<string, string> = {};
-  for (let index = 0; index < argv.length; index += 1) {
-    const element = argv[index];
-    if (element === "--") {
-      break;
-    }
-    if (element === "--label") {
-      const pair = argv[index + 1] ?? "";
-      const equals = pair.indexOf("=");
-      if (equals > 0) {
-        labels[pair.slice(0, equals)] = pair.slice(equals + 1);
-      }
-      index += 1;
-    }
+// The labels OpenShell 0.1.5 gives the container it creates: its managed marker and its sandbox name, taken
+// from --name. OpenShell does not apply the --label values, so they are not read here.
+function openShellLabels(argv: readonly string[]): Record<string, string> {
+  const nameIndex = argv.indexOf("--name");
+  const name = nameIndex === -1 ? undefined : argv[nameIndex + 1];
+  const labels: Record<string, string> = { "openshell.managed": "true", "openshell.ai/isolation-role": "sandbox" };
+  if (name !== undefined) {
+    labels["openshell.ai/sandbox-name"] = name;
   }
   return labels;
 }
@@ -60,7 +53,7 @@ export class FakeOpenShell {
     this.store = store;
   }
 
-  // Queues the steps for the next runs, in order. An unscripted run is a create.
+  // Queues the steps for the next runs, in order. An unscripted run is a create, or a silent exit 0 for a sandbox delete.
   next(...steps: OpenShellStep[]): void {
     this.script.push(...steps);
   }
@@ -75,7 +68,7 @@ export class FakeOpenShell {
 
   private async run(argv: readonly string[], options: OpenShellRunOptions): Promise<OpenShellRunOutcome> {
     this.log.push({ argv: [...argv], timeoutMs: options.timeoutMs, captureOutput: options.captureOutput === true });
-    const step = this.script.shift() ?? "create";
+    const step = this.script.shift() ?? (argv[2] === "delete" ? "silent" : "create");
     if (typeof step === "object") {
       return step.output;
     }
@@ -84,7 +77,7 @@ export class FakeOpenShell {
         this.sequence += 1;
         this.store.add({
           id: `fake-sandbox-${String(this.sequence)}`,
-          labels: labelsBeforeSeparator(argv),
+          labels: openShellLabels(argv),
           running: true,
         });
         return { exitCode: 0 };

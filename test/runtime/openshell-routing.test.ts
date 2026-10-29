@@ -1,16 +1,19 @@
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentOsSupervisor } from "../../src/runtime/agentos.js";
-import { HARDENING_PROFILE } from "../../src/runtime/hardening.js";
+import { HARDENING_PROFILE, RUNTIME_ARGV, RUNTIME_BINARY, tmpfsOptionsOf } from "../../src/runtime/hardening.js";
 import { LibpodClient } from "../../src/runtime/libpod-client.js";
-import { buildExecArgv } from "../../src/runtime/openshell.js";
+import { sandboxBindingOf } from "../../src/runtime/driver/sandbox-binding.js";
+import { buildExecArgv, OPENSHELL_BINARY, realmSandboxName } from "../../src/runtime/openshell.js";
 import { SessionExecution } from "../../src/runtime/session-execution.js";
 import { FakeAgentOsDriver } from "../support/fake-agentos.js";
 import { FakeContainerStore, FakeLibpod } from "../support/fake-libpod.js";
 import { FakeOpenShell } from "../support/fake-openshell.js";
+import { CONFORMING_PROC_STATUS, RUNTIME_OCI_CONFIG_TEXT } from "./hardening-fixtures.js";
+import { OCI_CONFIG_PATH, ociReaderOf, STATIC_DIR } from "./seccomp-fixtures.js";
 import {
   makeHarness,
   SESSION as DISPATCH_SESSION,
@@ -23,9 +26,16 @@ import {
 
 const DIGEST = `sha256:${"b".repeat(64)}`;
 const IMAGE = `registry.example.com/realm/session@${DIGEST}`;
-const WORKLOAD = ["/usr/bin/agent", "--serve"];
 const SESSION = "sess-route";
-const LIBPOD_ROUTE_NAMES: readonly string[] = ["info", "listContainers", "inspectContainer", "stopContainer", "removeContainer"];
+const LIBPOD_ROUTE_NAMES: readonly string[] = [
+  "info",
+  "listContainers",
+  "inspectContainer",
+  "createContainer",
+  "startContainer",
+  "stopContainer",
+  "removeContainer",
+];
 
 interface Fixture {
   readonly libpod: FakeLibpod;
@@ -35,7 +45,9 @@ interface Fixture {
   readonly exec: SessionExecution;
   readonly supervisor: AgentOsSupervisor;
   readonly stateDir: string;
+  readonly sandboxStateRoot: string;
   readonly workspaceRoot: string;
+  readonly secretRoot: string;
 }
 
 async function fixture(t: TestContext): Promise<Fixture> {
@@ -49,93 +61,141 @@ async function fixture(t: TestContext): Promise<Fixture> {
   await libpod.start(socketPath);
   t.after(() => libpod.stop());
   const openshell = new FakeOpenShell(store);
-  const driver = new FakeAgentOsDriver();
+  const driver = new FakeAgentOsDriver(openshell.runner);
   const agentos = new AgentOsSupervisor({
     driver,
+    sessionId: SESSION,
     callTimeoutMs: 1000,
     random: () => 0,
     sleep: () => Promise.resolve(),
     now: () => 0,
   });
   const stateDir = join(base, "state");
+  const secretRoot = join(base, "secrets");
+  // The pinned workspace is a real directory: a create resolves it to compare it with the requested workspace.
+  mkdirSync(join(base, "workspace"));
+  const sandboxStateRoot = join(base, "sandboxes");
   const exec = new SessionExecution({
     libpod: new LibpodClient(socketPath),
     runner: openshell.runner,
-    agentos,
-    config: { image: IMAGE, workloadArgv: WORKLOAD, stateDir },
+    agentosFor: () => agentos,
+    readProcStatus: () => CONFORMING_PROC_STATUS,
+    readOciConfig: ociReaderOf(RUNTIME_OCI_CONFIG_TEXT),
+    config: { image: IMAGE, stateDir },
+    secretRoot,
+    pinnedWorkspaceRoot: join(base, "workspace"),
+    sandboxStateRoot,
     egressAllow: [],
   });
-  return { libpod, store, openshell, driver, supervisor: agentos, exec, stateDir, workspaceRoot: join(base, "workspace") };
+  return { libpod, store, openshell, driver, supervisor: agentos, exec, stateDir, sandboxStateRoot, workspaceRoot: join(base, "workspace"), secretRoot };
 }
 
 // Creates the session. The create-time verification reads one inspect, so a conforming one is scripted.
 async function createSession(f: Fixture): Promise<{ readonly containerId: string }> {
+  const binding = sandboxBindingOf({ workspaceRoot: f.workspaceRoot, stateRoot: f.sandboxStateRoot, secretRoot: f.secretRoot }, realmSandboxName(SESSION));
   const inspect = {
     ImageDigest: DIGEST,
-    State: { Running: true, Status: "running" },
+    Path: RUNTIME_BINARY,
+    Args: RUNTIME_ARGV.slice(1),
+    State: { Running: true, Status: "running", Pid: 4242 },
+    StaticDir: STATIC_DIR,
+    OCIConfigPath: OCI_CONFIG_PATH,
+    Config: { User: HARDENING_PROFILE.workloadUser },
     HostConfig: {
       Privileged: false,
-      CapDrop: ["ALL"],
       CapAdd: [],
       SecurityOpt: ["no-new-privileges"],
       ReadonlyRootfs: true,
-      Tmpfs: { "/tmp": "rw", "/run": "rw" },
+      Tmpfs: Object.fromEntries(
+        [...HARDENING_PROFILE.tmpfs, HARDENING_PROFILE.supervisorCaDestination].map((destination): [string, string] => [destination, tmpfsOptionsOf(destination).join(",")]),
+      ),
       PidsLimit: HARDENING_PROFILE.pidsLimit,
       Memory: HARDENING_PROFILE.memoryBytes,
+      MemorySwap: HARDENING_PROFILE.memoryBytes,
       NanoCpus: HARDENING_PROFILE.nanoCpus,
       NetworkMode: HARDENING_PROFILE.networkMode,
+      Devices: [],
+      PidMode: "private",
+      IpcMode: "shareable",
+      UTSMode: "private",
+      CgroupMode: "private",
+      UsernsMode: "keep-id:uid=1001,gid=1001",
     },
     Mounts: [
       { Type: "bind", Source: f.workspaceRoot, Destination: "/workspace", RW: true },
-      { Type: "bind", Source: f.stateDir, Destination: "/realm-state", RW: false },
+      { Type: "bind", Source: binding.stateDir, Destination: "/realm-state", RW: false },
+      { Type: "bind", Source: binding.channelDir, Destination: HARDENING_PROFILE.channelDestination, RW: true },
     ],
   };
   f.libpod.respondNext("inspectContainer", { status: 200, body: JSON.stringify(inspect) });
   return f.exec.create({ idempotencyKey: SESSION, workspaceRoot: f.workspaceRoot });
 }
 
-void test("RT-03: the workload starts only through the OpenShell create argv, with the workload after the separator", async (t) => {
+void test("RT-03: the session create argv names no workload command, and the OpenShell runs are the create and one sandbox delete", async (t) => {
   const f = await fixture(t);
   const { containerId } = await createSession(f);
-  await f.exec.start(containerId);
-  await f.exec.probe(containerId);
-  await f.exec.stop(containerId);
-  await f.exec.destroy(containerId);
+  await f.exec.start(containerId, realmSandboxName(SESSION));
+  await f.exec.probe(containerId, realmSandboxName(SESSION));
+  await f.exec.stop(containerId, realmSandboxName(SESSION));
+  await f.exec.destroy(containerId, realmSandboxName(SESSION));
 
   const calls = f.openshell.calls();
-  assert.equal(calls.length, 1, "the OpenShell runner is called exactly once, by create");
+  // stop deletes the session sandbox once (B2); destroy after it finds that delete done and runs no second one.
+  assert.deepEqual(calls.map((call) => call.argv[2]), ["create", "delete"], "one create, then exactly one sandbox delete");
   const argv = calls[0]?.argv ?? [];
   assert.deepEqual(argv.slice(0, 3), ["openshell", "sandbox", "create"]);
-  assert.deepEqual(argv.slice(argv.indexOf("--") + 1), WORKLOAD);
+  assert.equal(argv.includes("--"), false, "the create argv names no command");
+  assert.deepEqual(calls[1]?.argv, [OPENSHELL_BINARY, "sandbox", "delete", realmSandboxName(SESSION)]);
 });
 
-void test("RT-03: the libpod client exposes no method that starts or joins a process, and no request reaches one", async (t) => {
+void test("RT-03: the libpod client has no exec or attach method, and only container create and start among start methods", async (t) => {
   const f = await fixture(t);
   const methods = Object.getOwnPropertyNames(LibpodClient.prototype)
     .filter((name) => name !== "constructor")
     .sort();
-  assert.deepEqual(methods, ["info", "inspectContainer", "listContainersByLabel", "removeContainer", "stopContainer"]);
+  assert.deepEqual(methods, [
+    "createContainer",
+    "info",
+    "inspectContainer",
+    "listContainersByLabel",
+    "removeContainer",
+    "startContainer",
+    "stopContainer",
+  ]);
+  assert.deepEqual(methods.filter((name) => /exec/i.test(name)), [], "the libpod client has no exec method");
   for (const name of methods) {
-    assert.equal(/exec|attach|start/i.test(name), false, `method ${name} must not start a process`);
+    assert.equal(/attach/i.test(name), false, `method ${name} must not join a process`);
+    assert.equal(/start/i.test(name) && name !== "startContainer", false, `method ${name} is a start other than container start`);
   }
 
   const { containerId } = await createSession(f);
-  await f.exec.start(containerId);
-  await f.exec.probe(containerId);
-  await f.exec.stop(containerId);
-  await f.exec.destroy(containerId);
-  for (const request of f.libpod.requests()) {
+  await f.exec.start(containerId, realmSandboxName(SESSION));
+  await f.exec.probe(containerId, realmSandboxName(SESSION));
+  await f.exec.stop(containerId, realmSandboxName(SESSION));
+  await f.exec.destroy(containerId, realmSandboxName(SESSION));
+  // The version probe on /_ping is the one request outside the route table. It is a read that starts nothing,
+  // so it is exempt from the route check and must be a GET. Every other request must still match a route.
+  const requests = f.libpod.requests();
+  for (const probe of requests.filter((recorded) => recorded.target === "/_ping")) {
+    assert.equal(probe.method, "GET", "the version probe is a read");
+  }
+  for (const request of requests.filter((recorded) => recorded.target !== "/_ping")) {
     assert.notEqual(request.route, null, `request ${request.target} must match a known route`);
-    assert.ok(LIBPOD_ROUTE_NAMES.includes(String(request.route)), `route ${String(request.route)} must be one of the five`);
-    assert.equal(/\/start|exec|attach/.test(request.target), false, `request ${request.target} starts nothing`);
+    assert.ok(LIBPOD_ROUTE_NAMES.includes(String(request.route)), `route ${String(request.route)} must be a known libpod route`);
+    assert.equal(/exec|attach/.test(request.target), false, `request ${request.target} starts or joins a process`);
+    assert.equal(
+      /\/start/.test(request.target) && !/^\/v[\d.]+\/libpod\/containers\/[^/]+\/start$/.test(request.target),
+      false,
+      `request ${request.target} is a start other than container start`,
+    );
   }
 });
 
 void test("RT-03, RT-04: AgentOS is started only through the supervisor, and the driver is reachable from no other session path", async (t) => {
   const f = await fixture(t);
   const { containerId } = await createSession(f);
-  await f.exec.start(containerId);
-  assert.deepEqual(f.driver.calls(), ["start"], "the only driver call is the supervisor's start");
+  await f.exec.start(containerId, realmSandboxName(SESSION));
+  assert.deepEqual(f.driver.calls(), ["create", "start"], "the driver is called only by the supervisor: create, then start");
   assert.equal(
     reachesWithout(f.exec, f.driver, f.supervisor),
     false,

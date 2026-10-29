@@ -45,7 +45,6 @@ void test("readHostRuntime takes the state directory from the config file, whate
   const dir = configDir(t);
   const runtimeInput = {
     image: IMAGE,
-    workloadArgv: ["/usr/bin/agent"],
     stateDir: "/var/lib/realm/state",
     workspaceRoot: "/srv/workspace",
   };
@@ -65,7 +64,7 @@ void test("readHostRuntime refuses a missing config and a config with a relative
   mkdirSync(join(dir, "realm"));
   writeFileSync(
     join(dir, "realm", "config.json"),
-    JSON.stringify({ image: IMAGE, workloadArgv: ["/usr/bin/agent"], stateDir: "state", workspaceRoot: "/srv/ws" }),
+    JSON.stringify({ image: IMAGE, stateDir: "state", workspaceRoot: "/srv/ws" }),
   );
   assert.throws(
     () => readHostRuntime({ XDG_CONFIG_HOME: dir }),
