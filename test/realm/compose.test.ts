@@ -51,7 +51,7 @@ function advisoryOptions(fixture: Fixture): CreateRealmHandleOptions {
       workspaceRoot: fixture.ws,
     },
     // The policy names the workspace as a root: createRealmHandle refuses a workspace outside every root.
-    policyPath: writePolicy(fixture, "advisory-policy.json", { workspaceRoots: [fixture.ws] }),
+    policyPath: writePolicy(fixture, "advisory-policy.json", { mode: "advisory", workspaceRoots: [fixture.ws] }),
     sessionId: "sess-compose",
     exec: new FakeExecutionService(),
     bridge: new FakeBridge(),

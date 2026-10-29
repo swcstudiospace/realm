@@ -2,14 +2,14 @@
 
 Purpose. Repeat on a real host the checks recorded in `.planning/quick/261029-g7m-lifecycle-and-persistence-findings/LIVE-VERIFICATION.md`: that an Omp session attaches the sandbox by itself, how the write and edit guard behaves in both policy modes, and what survives when Omp, the daemon or the sandbox ends abruptly. The recorded results are the "expected" column below.
 
-What this does not show. Omp's own tools (`bash`, `eval`, and the rest) run on the host even while the realm is active; the extension attaches the sandbox, shows its status and gates only `write` and `edit` (`docs/integration/omp.md`). The model-free checks use a scripted provider, so they are not an LLM-driven run: OMP-05's status is the owner's decision.
+What this does not show. Omp's own tools (`bash`, `eval`, and the rest) run on the host even while the realm is active; the extension attaches the sandbox, shows its status and gates only `write` and `edit` (`docs/integration/omp.md`). The default policy mode, `fail-closed`, refuses those two while the realm is not active; it is not containment of the built-ins with the realm active, which is Phase 16. The model-free checks use a scripted provider, so they are not an LLM-driven run: OMP-05's status is the owner's decision.
 
 ## Prerequisites
 
 - **Run this on a dedicated account or VM where no other Realm session exists.** Starting a daemon, even with its own `stateDir`, removes every Realm sandbox on the Podman socket it uses: the startup reap lists every OpenShell-managed container whose sandbox name carries the realm prefix and removes it with `force`, whoever owns it (`src/session/reap.ts:33-39`, `src/runtime/sweep.ts:33-56`). That stops another session's sandbox and erases its files outside `/workspace`. Before step A or B, confirm that the container list (see "Useful probes") is empty and that `ss -xlpn | grep control.sock` prints nothing. If either shows a Realm sandbox or daemon that is not yours, stop.
 - The production stack from `docs/integration/openshell.md`: rootless Podman 5.x, the OpenShell 0.1.5 gateway, the Realm compute driver, and the digest-pinned sandbox image.
 - A built checkout (`npm ci && npm run build`) or an installed release, and Omp 18.12.6 or later.
-- A throwaway check directory `<check-dir>` holding `c/realm/config.json` (`image`, `stateDir`, `workspaceRoot`), `<check-dir>/state` with mode 0700 and a `policy.json` of `{"workspaceRoots":["<workspace>"]}`, and an Omp agent directory `<check-dir>/agent`. `<workspace>` is the pinned workspace root; start Omp in exactly that directory.
+- A throwaway check directory `<check-dir>` holding `c/realm/config.json` (`image`, `stateDir`, `workspaceRoot`), `<check-dir>/state` with mode 0700 and a `policy.json` of `{"workspaceRoots":["<workspace>"]}` (no `mode`, so the default `fail-closed` applies until a step sets another), and an Omp agent directory `<check-dir>/agent`. `<workspace>` is the pinned workspace root; start Omp in exactly that directory.
 - Keep `HOME` as the real home. The OpenShell CLI reads its gateway registration from it (`src/runtime/session-execution.ts:72`).
 - Never signal a process you did not start. Do not run the checks inside the agent session that you are working in.
 
@@ -28,7 +28,7 @@ Useful probes: `realm status` (prints the snapshot, the label and the policy mod
 
 ## A. Watch the attach (needs a model account)
 
-Follow steps 1 to 8 of "Live Omp checks (2026-10-28)" in `docs/integration/omp.md`: a pseudo-terminal session, the status item, `realm down`, `/realm-retry`, quit. With a provider key, also ask the model to create a file once the item reads active (the guard allows it), and once after `realm down` (advisory mode: allowed with a notice).
+Follow steps 1 to 8 of "Live Omp checks (2026-10-28)" in `docs/integration/omp.md`: a pseudo-terminal session, the status item, `realm down`, `/realm-retry`, quit. With a provider key, also ask the model to create a file once the item reads active (the guard allows it), and once after `realm down` (the default fail-closed mode blocks it with `REALM_NOT_ACTIVE`; with the explicit `"mode": "advisory"` in the policy file it is allowed with a notice).
 
 ## B. The write guard without a model (scripted provider)
 
@@ -52,14 +52,14 @@ providers:
    `omp --mode rpc-ui --no-extensions -e <repo>/dist/src/omp/extension.js --model stub/scripted --no-session`.
    Write one JSON object per line on its stdin; read its stdout. Status frames are `extension_ui_request` with `method` `setStatus` and `statusKey` `realm`; notices have `method` `notify`; a tool result is `tool_execution_end`.
 4. Send `{"id":"p1","type":"prompt","message":"WRITE guard-active.txt written-while-active"}` once the item reads `● realm active`.
-5. Run `realm down`. Send `WRITE guard-advisory.txt written-while-disconnected`.
-6. Set `"mode": "fail-closed"` in `<check-dir>/state/policy.json`. Send `/realm-retry`, wait for active, send `WRITE guard-closed-active.txt ok`, run `realm down`, send `WRITE guard-blocked.txt must-not-exist`.
+5. Run `realm down`. Send `WRITE guard-default.txt must-not-exist`. The policy has no `mode`, so the default `fail-closed` applies.
+6. Set `"mode": "advisory"` in `<check-dir>/state/policy.json`. Send `/realm-retry`, wait for active, run `realm down`, send `WRITE guard-advisory.txt written-while-disconnected`.
 
 | Step | Expected | Failure sign |
 |---|---|---|
 | 3, 4 | status moves from `○ realm disconnected · connecting` to `● realm active · container running`; the write succeeds and the file exists | status stays `connecting` beyond the 200 s budget, or ends with a code such as `POLICY_DENIED`, `SCHEMA_INVALID` or `PODMAN_MACHINE_DOWN` (see `SANDBOX-LIFECYCLE-FINDINGS.md`, section 4) |
-| 5 | status `○ realm disconnected · REALM_NOT_ACTIVE`; a notice `realm status unavailable (REALM_NOT_ACTIVE); the write proceeds under advisory policy`; the file exists | the write fails, or no notice appears |
-| 6 | the write while active succeeds; the write while disconnected ends with `isError` true and the text `REALM_NOT_ACTIVE`; `guard-blocked.txt` does not exist | the file exists |
+| 5 | status `○ realm disconnected · REALM_NOT_ACTIVE`; the write ends with `isError` true and the text `REALM_NOT_ACTIVE`; `guard-default.txt` does not exist | the file exists |
+| 6 | status `○ realm disconnected · REALM_NOT_ACTIVE`; a notice `realm status unavailable (REALM_NOT_ACTIVE); the write proceeds under advisory policy`; the file exists | the write fails, or no notice appears |
 
 The first request that the provider logs lists the tools Omp offered the model: expect Omp's own tools only, with no Realm tool.
 
@@ -85,7 +85,7 @@ Then, with the realm up, write files three ways through `realm mcp` (an MCP clie
 
 Save the script in the appendix as `atomic-kill-test.mjs` and run `node atomic-kill-test.mjs <repo>/dist/src/fs/atomic-write.js`. Expected: for each of the four stages the child ends by SIGKILL, the target keeps `OLD-CONTENT`, one `.target.txt.realm-tmp-*` file holds the new content, and a later clean write by the writer itself leaves that orphan in place (the writer never removes another process's temp file); the no-kill control leaves none. A change in that output means the write path changed.
 
-Who removes the orphan: the sweep in `src/fs/temp-sweep.ts` (`sweepOrphanTempFiles`). It removes only a regular file named exactly `.<name>.realm-tmp-<16 lowercase hex>`, owned by the daemon's uid, on the root's device, reached through a pinned directory descriptor and never through a symlink, and only once it is older than the 60 s bound (`ORPHAN_TEMP_MIN_AGE_MS`). It writes one audit line (`tool: "temp-sweep"`) before each removal. Expected after the daemon wiring of Phase 14 (INFERENCE until that wiring is run live): the next daemon start removes the orphan once it is older than 60 s; a start inside the first 60 s keeps it and a later start removes it. The four stages above are also exercised on every test run by `test/fs/atomic-write-sigkill.test.ts` (VERIFIED_BY_CODE_READING of the test, not yet by execution). A kill after the `rename` cannot be hooked; by `rename(2)` atomicity the target then holds either the old or the new bytes and there is no orphan (INFERENCE).
+Who removes the orphan: the sweep in `src/fs/temp-sweep.ts` (`sweepOrphanTempFiles`), which the daemon runs at every start, after the startup reap and before it serves (`runStartupMaintenance`, `src/daemon/daemon.ts`; `docs/integration/runtime-decision.md`, "Startup maintenance (Phase 14, CRASH-04)"). It walks `policy.workspaceRoots`, `<stateDir>/sessions`, `<stateDir>/runtime` and `<stateDir>/audit`. It removes only a regular file named exactly `.<name>.realm-tmp-<16 lowercase hex>`, owned by the daemon's uid, on the root's device, reached through a pinned directory descriptor and never through a symlink, and only once it is older than the 60 s bound (`ORPHAN_TEMP_MIN_AGE_MS`). The sweep and the audit reconciliation share a 10 s start budget (`STARTUP_MAINTENANCE_BUDGET_MS`): a root the sweep does not reach in time is left for the next start and is named, with any unfinished audit log, in the `daemon.log` startup line (`maintenanceComplete=false`). It writes one audit line (`tool: "temp-sweep"`) before each removal. The same start reconciles the audit log: an admission line with no result line gets one `AUDIT_OUTCOME_UNKNOWN` reconciliation line (`src/audit/reconcile.ts`). The daemon writes one line per start to `<stateDir>/daemon.log`, of the form `realm daemon: startup removed <n> container(s) and <m> session record(s); removed <t> orphan temp file(s); reconciled <a> audit admission(s)`, with a `; <f> startup failure(s)` clause when a step failed. Expected: the next daemon start removes the orphan once it is older than 60 s, and the `daemon.log` line counts it; a start inside the first 60 s keeps it and a later start removes it. This expectation is VERIFIED_BY_CODE_READING of the daemon and the sweep, and has not been run live (INFERENCE until it is). The four stages above are also exercised on every test run by `test/fs/atomic-write-sigkill.test.ts` (VERIFIED_BY_CODE_READING of the test, not yet by execution). A kill after the `rename` cannot be hooked; by `rename(2)` atomicity the target then holds either the old or the new bytes and there is no orphan (INFERENCE).
 
 ## Cleanup
 

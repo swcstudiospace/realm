@@ -22,7 +22,7 @@ function rejection<T>(result: ValidationResult<T>): SchemaInvalidError {
 
 // D-15 defaults, pinned as literals so the test does not read the schema under test.
 const DEFAULTS = {
-  mode: "advisory",
+  mode: "fail-closed",
   workspaceRoots: [],
   credentialAllow: [],
   egressAllow: [],
@@ -41,6 +41,12 @@ void test("defaults are fresh per call and the caller's input is not mutated", (
   (first.workspaceRoots as string[]).push("/leaked");
   assert.deepEqual(value(validate("policy", {})).workspaceRoots, []);
   assert.deepEqual(input, {});
+});
+
+void test("D4: the schema default mode is fail-closed, and advisory still loads as advisory when named", () => {
+  assert.equal(value(validate("policy", {})).mode, "fail-closed");
+  assert.equal(value(validate("policy", { workspaceRoots: ["/ws"] })).mode, "fail-closed");
+  assert.equal(value(validate("policy", { mode: "advisory" })).mode, "advisory");
 });
 
 void test("mode fail-closed is accepted", () => {

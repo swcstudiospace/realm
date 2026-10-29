@@ -32,6 +32,10 @@ A change must pass every gate below before it is reviewed.
 | `npm audit --omit=dev --audit-level=high` | Dependency audit of production dependencies; CI runs it as the `audit` job and release waits for it. Needs the npm registry |
 | `npm run check:mcp` | MCP smoke test: spawns the built `realm mcp` over stdio, drives one session in both protocol eras and checks the result shapes and the status call; run `npm run build` first |
 
+## Property tests
+
+Property tests use `fast-check` and live next to the example tests as `*.property.test.ts` (`test/fs/canonicalize.property.test.ts`, `test/core/policy.property.test.ts`); they run in `npm test` with everything else. They share `test/support/property.ts`, which runs each property for 200 inputs from one fixed seed, so a run is deterministic. A failure prints the seed, the shrunk counterexample and the replay path. To reproduce it, set `REALM_PROPERTY_SEED` to the printed seed and run the same file, for example `REALM_PROPERTY_SEED=123 node --test dist/test/fs/canonicalize.property.test.js` after `npm run build`. Set `REALM_PROPERTY_SEED=random` to explore with a fresh seed; the failure message names it. When a property finds a bug, fix it and keep the minimal counterexample as an ordinary example test.
+
 ## Branches and pull requests
 
 1. Create a feature branch from `main`.
