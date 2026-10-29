@@ -28,7 +28,7 @@ Start with `/gsd-new-milestone`. What was carried, not closed (reasons and owner
 
 ### Validated
 
-- **FOUND-01**: strict ESM package; typecheck, lint, test and build exit 0. Evidence: `.planning/phases/01-scaffold-and-frozen-contracts/01-VERIFICATION.md`
+- **FOUND-01**: strict ESM package; typecheck, lint, test and build exit 0. Evidence: `.planning/milestones/v1.0-phases/01-scaffold-and-frozen-contracts/01-VERIFICATION.md`
 - **FOUND-02**: frozen contracts and schema rejection. Evidence: `test/core/states.test.ts`, `test/core/policy.schema.test.ts`, `test/contract/tools.schema.test.ts`, `test/contract/session-record.schema.test.ts`
 - **FOUND-03**: integration notes with official URL and read date. Evidence: `docs/integration/*.md`
 - **CORE-01**: state machine and rejected transitions. Evidence: `test/core/state-machine.test.ts`, `test/core/states.test.ts`
@@ -48,7 +48,7 @@ Start with `/gsd-new-milestone`. What was carried, not closed (reasons and owner
 - **CLI-02**: realm up with Podman missing reports PODMAN_MISSING and exits promptly. Evidence: `test/cli/cli.test.ts`, `test/daemon/e2e.test.ts`
 - **CLI-03**: doctor lists each prerequisite with its fix. Evidence: `test/doctor/checks.test.ts`, `test/doctor/runtime-checks.test.ts`; closure smoke run (doctor runs its 9 checks)
 - **QUAL-02**: suite taxonomy with Podman-gated skip. Evidence: `test/quality/suite-taxonomy.test.ts`, `test/integration/podman-gate.test.ts`
-- **QUAL-03**: policy reference and reviews. Evidence: `docs/policy-reference.md`, `.planning/phases/07-policy-reference-and-security-review/07-SECURITY-REVIEW.md`, `.planning/phases/07-policy-reference-and-security-review/07-SUPPLY-CHAIN-REVIEW.md`
+- **QUAL-03**: policy reference and reviews. Evidence: `docs/policy-reference.md`, `.planning/milestones/v1.0-phases/07-policy-reference-and-security-review/07-SECURITY-REVIEW.md`, `.planning/milestones/v1.0-phases/07-policy-reference-and-security-review/07-SUPPLY-CHAIN-REVIEW.md`
 - **TOOL-01**: six tools in one schema; every input validated before any sandbox call. Evidence: `test/contract/tools.schema.test.ts`, `test/contract/tool-input-gate.test.ts`, `test/tools/dispatch.test.ts`
 - **TOOL-02**: argv-first exec; shell mode gated by policy. Evidence: `test/contract/exec-policy.test.ts`, `test/contract/tools.schema.test.ts`
 - **QUAL-01**: amended by user decision (2026-10-22) with a named silent-catch exception list; typed codes and causes elsewhere. Evidence: `test/lifecycle/teardown-failures.test.ts`, `test/fs/canonicalize.test.ts`, `test/fs/atomic-write.test.ts`; exception list in `.planning/v1.0-MILESTONE-AUDIT.md` section 6
