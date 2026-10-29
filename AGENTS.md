@@ -14,7 +14,7 @@ Realm ships three things over one tool contract:
 - a standalone CLI, `realm`, with a long-running local daemon;
 - MCP and ACP surfaces, so other agent hosts use the same sandbox.
 
-Core guarantee, under the fail-closed policy: every file mutation either lands inside the realm under policy or fails closed, and the user can always see whether the realm is active or disconnected for the session. In the default advisory mode the Omp guard warns and allows host write and edit calls while the realm is disconnected; containment requires opting into fail-closed.
+Core guarantee, under the fail-closed policy: every file mutation either lands inside the realm under policy or fails closed, and the user can always see whether the realm is active or disconnected for the session. The policy `mode` defaults to `fail-closed` (decision D4): while the realm is not active, the Omp guard refuses host `write` and `edit` calls. That is not containment of Omp's built-in `write`, `edit` and `bash` with the realm active, which still act on the host until Phase 16; advisory mode (warn and allow) requires the explicit value `"mode": "advisory"`.
 
 Status (README.md and `.planning/PROJECT.md`):
 
@@ -34,7 +34,7 @@ Requires Node.js 22.13.0 or later (`engines` in `package.json`). CI runs Node 22
 - `npm run test:integration`: compiles, then runs `dist/test/integration/*.test.js`. Podman-gated tests skip with a stated reason: `PODMAN_UNSUPPORTED_VERSION` when Podman is older than 5.x, or `PODMAN_MISSING` when Podman is absent.
 - The production live suite (`test/integration/production-driver.test.ts`, nine scenarios) is also gated: it runs the real stack and skips, naming the first missing prerequisite, unless `REALM_LIVE_PRODUCTION=1`, Podman 5.x, `REALM_LIVE_IMAGE`, `REALM_DRIVER_STATE_ROOT`, `REALM_DRIVER_SECRET_ROOT`, `REALM_DRIVER_WORKSPACE_ROOT`, a rootless Podman socket, the `openshell` CLI and the built CLI are all present. Run the live file alone with `npm run build && node --test dist/test/integration/production-driver.test.js`. `npm run test:integration` runs the integration files in parallel, and this suite counts every container on the host, so the safe alternative is `node --test --test-concurrency=1 "dist/test/integration/*.test.js"`. Preconditions are in `docs/integration/openshell.md` (Running the production live suite).
 - `npm run test:scripts`: runs `node:test` over `scripts/**/*.test.mjs`.
-- `npm run check:docs`: scans the published docs for host-local absolute paths, then runs the AGENTS.md and CLAUDE.md sync check.
+- `npm run check:docs`: scans the published docs for host-local absolute paths, runs the AGENTS.md and CLAUDE.md sync check, then scans the docs for stale statements about the default policy mode (`scripts/check/default-mode.mjs`).
 - `npm run check:image-digests -- --dir <dir>` or `-- --image <ref>`: verifies the sandbox image inputs against `sandbox/expected-digests.json`. `--image` needs Podman. It is not part of CI.
 - `npm run build:image`: builds the sandbox image with the digests recorded in `sandbox/expected-digests.json` and verifies it. Needs Podman. It is not part of CI.
 - `npm run build`: compiles with `tsc -p tsconfig.json` into `dist/`.
@@ -140,7 +140,7 @@ Every gate must pass before a change is reviewed (`CONTRIBUTING.md`).
 ## Safety and high-risk paths
 
 - Human review is required before merge for `.github/workflows/**`, `release/**`, `scripts/release/**`, `LICENSE`, and `NOTICE`.
-- The sandbox is a security boundary. Policy violations fail closed when the policy mode is fail-closed, and a file-mutating tool must never run outside the realm when the active policy requires the realm. The default mode is advisory, with a visible warning; fail-closed is the documented opt-in for containment deployments.
+- The sandbox is a security boundary. Policy violations fail closed when the policy mode is fail-closed, and a file-mutating tool must never run outside the realm when the active policy requires the realm. The default mode is fail-closed (a policy with no `mode` loads as fail-closed); advisory, which warns and allows, is the explicit opt-in and is not containment. Never write documents that call advisory the default: `npm run check:docs` fails on them (`scripts/check/default-mode.mjs`).
 - No host secrets are injected into the sandbox by default, and no secrets belong in the repository, images, or logs. There is no telemetry that sends data off the machine.
 - Podman runs rootless only. Never use privileged containers, and never mount a host Docker or Podman socket into a container.
 - The control socket is user-only: its directory is mode 0700 and the socket is mode 0600.
