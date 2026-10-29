@@ -39,8 +39,9 @@ function sorted(value: unknown): string[] {
   return Array.isArray(value) ? value.map(String).sort() : [];
 }
 
-// The bounds both sides state for one key. A bound only the frozen side names must also be on the descriptor.
-const SHARED_KEYWORDS = ["type", "const", "minimum", "maximum", "minLength", "minItems", "pattern"] as const;
+// The bounds both sides state for one key, including the schema of array items, so the element type of exec's argv is pinned
+// too. A bound only the frozen side names must also be on the descriptor.
+const SHARED_KEYWORDS = ["type", "const", "minimum", "maximum", "minLength", "minItems", "items", "pattern"] as const;
 
 void test("TOOL-05: the descriptors list exactly the six tools the frozen schema defines", () => {
   assert.deepEqual(MCP_TOOL_DESCRIPTORS.map((descriptor) => descriptor.name).sort(), Object.keys(rootProperties).sort());
