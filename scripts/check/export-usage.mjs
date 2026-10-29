@@ -130,7 +130,9 @@ function lineOf(sourceFile, node) {
 //             declares it (null for `export default <expression>`);
 //   forwards  [{ line, star, specifier, names: [{ local, exported }] }] for `export * from` and `export { x } from`;
 //   locals    Map name -> { kind, statements } of every top-level declaration, exported or not;
-//   defaultImports  the module specifiers this file imports a default from;
+//   defaultReaches  the module specifiers through which this file reaches a module in a way that can expose its `default`
+//             (a default or namespace import, `import { default as x }`, `import("...")`, `require("...")`,
+//             `import x = require("...")`, `export * from`); a pure named import list that does not name `default` is not one;
 //   sourceFile.
 function collect(source, file) {
   const sourceFile = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
@@ -149,7 +151,7 @@ function collect(source, file) {
 
   const exports = [];
   const forwards = [];
-  const defaultImports = [];
+  const defaultReaches = [];
   const add = (name, local, kind, space, line, statements, nameNode) =>
     exports.push({ name, local, kind, space, file, line, statements, nameNode });
 
@@ -158,11 +160,20 @@ function collect(source, file) {
 
     if (ts.isImportDeclaration(statement)) {
       const clause = statement.importClause;
-      const named = clause?.namedBindings !== undefined && ts.isNamedImports(clause.namedBindings) ? clause.namedBindings.elements : [];
-      if (ts.isStringLiteral(statement.moduleSpecifier) && (clause?.name !== undefined || named.some((element) => (element.propertyName ?? element.name).text === "default"))) {
-        defaultImports.push(statement.moduleSpecifier.text);
+      const bindings = clause?.namedBindings;
+      const exposesDefault =
+        clause !== undefined &&
+        (clause.name !== undefined ||
+          (bindings !== undefined &&
+            (ts.isNamespaceImport(bindings) || bindings.elements.some((element) => (element.propertyName ?? element.name).text === "default"))));
+      if (exposesDefault && ts.isStringLiteral(statement.moduleSpecifier)) {
+        defaultReaches.push(statement.moduleSpecifier.text);
       }
       continue;
+    }
+
+    if (ts.isImportEqualsDeclaration(statement) && ts.isExternalModuleReference(statement.moduleReference) && ts.isStringLiteral(statement.moduleReference.expression)) {
+      defaultReaches.push(statement.moduleReference.expression.text);
     }
 
     if (ts.isExportDeclaration(statement)) {
@@ -171,9 +182,15 @@ function collect(source, file) {
         const specifier = ts.isStringLiteral(statement.moduleSpecifier) ? statement.moduleSpecifier.text : null;
         if (clause === undefined) {
           forwards.push({ line, star: true, specifier, names: [] });
+          if (specifier !== null) {
+            defaultReaches.push(specifier);
+          }
         } else if (ts.isNamespaceExport(clause)) {
           add(clause.name.text, clause.name.text, "namespace", "value", line, [statement], clause.name);
           forwards.push({ line, star: true, specifier, names: [] });
+          if (specifier !== null) {
+            defaultReaches.push(specifier);
+          }
         } else {
           forwards.push({
             line,
@@ -226,7 +243,20 @@ function collect(source, file) {
 
   exports.sort(compareEntries);
   forwards.sort((left, right) => left.line - right.line);
-  return { sourceFile, exports, forwards, locals, defaultImports };
+  // Dynamic import() and require() calls, and import("...") types, anywhere in the file.
+  const visitReaches = (node) => {
+    if (ts.isCallExpression(node) && node.arguments.length > 0 && ts.isStringLiteralLike(node.arguments[0])) {
+      const callee = node.expression;
+      if (callee.kind === ts.SyntaxKind.ImportKeyword || (ts.isIdentifier(callee) && callee.text === "require")) {
+        defaultReaches.push(node.arguments[0].text);
+      }
+    } else if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument) && ts.isStringLiteral(node.argument.literal)) {
+      defaultReaches.push(node.argument.literal.text);
+    }
+    ts.forEachChild(node, visitReaches);
+  };
+  visitReaches(sourceFile);
+  return { sourceFile, exports, forwards, locals, defaultReaches };
 }
 
 // Orders by line, then by name in code-unit order, so the report does not depend on the locale.
@@ -363,10 +393,10 @@ export function analyze(files) {
   const srcSet = new Set(srcPaths);
   const testPaths = [...parsed.keys()].filter((path) => path.startsWith("test/"));
 
-  // Which files import the default export of which file.
+  // Which files reach which module in a way that can expose its default export.
   const defaultImporters = new Map();
-  for (const [path, { defaultImports }] of parsed) {
-    for (const specifier of defaultImports) {
+  for (const [path, { defaultReaches }] of parsed) {
+    for (const specifier of defaultReaches) {
       const target = resolveSpecifier(path, specifier, allPaths);
       if (target !== null) {
         defaultImporters.set(target, (defaultImporters.get(target) ?? new Set()).add(path));

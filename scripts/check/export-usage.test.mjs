@@ -527,6 +527,41 @@ test("analyze counts a default export as used when another file imports its defa
   assert.equal(classes({ "src/b/two.ts": 'import { other } from "../a/one.js";\nexport const x = other;\n' }), "self-only");
 });
 
+test("a default export is used by any access that can expose default, and only a pure named import list leaves it unused", () => {
+  const defaultOf = (importer, path = "src/b/two.ts") =>
+    classesOf({ "src/a/model.ts": "export default function model() {}\nexport const other = 1;\n", [path]: importer }).default;
+  const used = [
+    'import * as api from "./model.js";\napi.default();\n',
+    'import * as api from "./model.js";\nexport const x = api.other;\n',
+    'export async function load() { return (await import("./model.js")).default; }\n',
+    'export async function load() { return await import("./model.js"); }\n',
+    'export const load = () => import("./model.js");\n',
+    'import model = require("./model.js");\nexport const x = model;\n',
+    'export const x = require("./model.js");\n',
+    'export * from "./model.js";\n',
+    'export * as everything from "./model.js";\n',
+    'export type Shape = typeof import("./model.js");\n',
+    'import model, { other } from "./model.js";\nexport const x = [model, other];\n',
+    'import { default as model } from "./model.js";\nexport const x = model;\n',
+  ];
+  for (const importer of used) {
+    // From src/b the specifier is "../a/model.js": rewrite it, the examples above use the sibling form.
+    const fixed = importer.replaceAll('"./model.js"', '"../a/model.js"');
+    const klass = defaultOf(fixed);
+    assert.ok(klass === "used-in-src" || klass === "forwarded", `${fixed} -> ${klass}`);
+  }
+  assert.equal(defaultOf('import * as api from "./model.js";\napi.default();\n', "src/a/two.ts"), "used-in-src");
+  assert.equal(defaultOf('import * as api from "../../src/a/model.js";\napi.default();\n', "test/a/model.test.ts"), "test-only");
+  assert.equal(defaultOf('export const load = () => import("../../src/a/model.js");\n', "test/a/model.test.ts"), "test-only");
+  // Only a named list that does not name `default` leaves it unused, and a specifier that resolves elsewhere does not count.
+  assert.equal(defaultOf('import { other } from "../a/model.js";\nexport const x = other;\n'), "self-only");
+  assert.equal(defaultOf('import { other as renamed } from "../a/model.js";\nexport const x = renamed;\n'), "self-only");
+  assert.equal(defaultOf('import type { Shape } from "../a/model.js";\nexport const x = 1;\n'), "self-only");
+  assert.equal(defaultOf('import "../a/model.js";\nexport const x = 1;\n'), "self-only");
+  assert.equal(defaultOf('export const load = () => import("../a/elsewhere.js");\n'), "self-only");
+  assert.equal(defaultOf('import * as api from "../a/elsewhere.js";\napi.default();\n'), "self-only");
+});
+
 test("resolveSpecifier maps a relative specifier onto an analyzed src file", () => {
   const paths = new Set(["src/a/value.ts", "src/b/types.ts", "src/a/pkg/index.ts"]);
   assert.equal(resolveSpecifier("src/a/index.ts", "./value.js", paths), "src/a/value.ts");
