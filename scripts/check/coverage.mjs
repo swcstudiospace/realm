@@ -2,9 +2,11 @@
 //
 // Runs the compiled test suite under the Node test runner's coverage support with the lcov reporter, sums lines, branches and
 // functions per source directory (src/fs, src/core, src/tools, read from the floors file), compares each sum with the floors in
-// scripts/check/coverage-floors.json and lists every compiled source file that no test loaded (a file nobody imports is absent
-// from the lcov report, so the totals alone overstate coverage; a type-only module with no runtime code is counted separately
-// and not listed). Node's own --test-coverage-* thresholds are global, which is why this script exists.
+// scripts/check/coverage-floors.json and checks the current sources (src/<dir>/**/*.ts) against the report: a source whose
+// compiled file exists but has no lcov record is listed as unloaded (a file nobody imports is absent from the lcov report, so
+// the totals alone overstate coverage), a source without a compiled file is listed as not built (run tsc first), a type-only
+// module with no runtime code is counted separately, and compiled files whose source is gone (stale output) are ignored and
+// counted. Node's own --test-coverage-* thresholds are global, which is why this script exists.
 //
 // While the floors file says "reportOnly": true (or --report-only is passed) the table and the findings are printed and the
 // exit code stays 0. Run `npm run test:coverage` (it compiles first; this script does not build).
@@ -18,8 +20,8 @@
 // Node writes the lcov file even when a test fails, so a failed suite still gets its table printed; the suite's non-zero exit
 // code then wins over every coverage verdict. Without an lcov file the suite's code is returned alone.
 //
-// Exit codes: the suite's own non-zero code first; otherwise 0 ok or report-only, 1 below a floor or an unloaded file, 2 usage
-// or configuration error (usage and floors-file errors are reported before the suite runs).
+// Exit codes: the suite's own non-zero code first; otherwise 0 ok or report-only, 1 below a floor, an unloaded file or a source
+// that is not built, 2 usage or configuration error (usage and floors-file errors are reported before the suite runs).
 
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
@@ -34,9 +36,11 @@ const USAGE = "usage: coverage.mjs [--lcov <file>] [--floors <file>] [--report-o
 
 export const METRICS = ["lines", "branches", "functions"];
 
-const SUITE_FLAGS = [
+export const SUITE_FLAGS = [
   "--test",
   "--experimental-test-coverage",
+  // Source maps would report coverage against src/**/*.ts, outside the dist/src/** include filter.
+  "--no-enable-source-maps",
   "--test-coverage-include=dist/src/**",
   "--test-reporter=spec",
   "--test-reporter-destination=stdout",
@@ -71,6 +75,27 @@ function distRelative(path) {
   return match === null ? null : match[1];
 }
 
+function escapeRegExp(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// The compiled path "dist/src/<dir>/x.js" for a path in either form: a compiled one (dist/src/<dir>/x.js, after any prefix) or
+// a source one (src/<dir>/x.ts, after any prefix; .d.ts files have no compiled twin). Null for anything else.
+function toDistPath(path, directories) {
+  const normalized = path.replaceAll("\\", "/");
+  const compiled = distRelative(normalized);
+  if (compiled !== null || normalized.endsWith(".d.ts")) {
+    return compiled;
+  }
+  for (const directory of directories) {
+    const match = new RegExp(`(?:^|/)(${escapeRegExp(directory)}/.+)\\.ts$`).exec(normalized);
+    if (match !== null) {
+      return `dist/${match[1]}.js`;
+    }
+  }
+  return null;
+}
+
 function belongsTo(relative, directory) {
   return relative !== null && relative.startsWith(`dist/${directory}/`);
 }
@@ -101,7 +126,7 @@ export function aggregateLcov(text, directories) {
       if (current === null) {
         throw new Error(`lcov line ${index + 1}: end_of_record without an SF record`);
       }
-      const relative = distRelative(current.path);
+      const relative = toDistPath(current.path, directories);
       const directory = directories.find((candidate) => belongsTo(relative, candidate));
       if (directory !== undefined) {
         const entry = totals[directory];
@@ -209,34 +234,58 @@ export function isTypeOnlyModule(source) {
   return code === "" || code === "export{};";
 }
 
-// Files under dist/src/<dir>/ that exist on disk but have no lcov record, per directory (sorted, "/"-normalized dist/src/... paths).
-// lcovFiles are SF paths and distFiles are on-disk paths; both are compared by their dist/src/... suffix.
-export function findUnloaded(lcovFiles, distFiles, directories) {
+// Decides which files the report should have covered, from the CURRENT sources (src/<dir>/**/*.ts). lcovFiles are SF paths,
+// sourceFiles the current sources and distFiles the compiled files on disk; every path may carry a prefix and is compared by
+// its src/... or dist/src/... suffix. Returns, with "/"-normalized paths, sorted per directory:
+//   unrecorded: compiled files of a current source that exist on disk but have no lcov record (dist/src/... paths);
+//   notBuilt:   current sources (src/...ts paths) that have neither a lcov record nor a compiled file;
+//   stale:      compiled files under a directory whose source no longer exists (ignored; not part of the checks).
+export function classifyFiles(lcovFiles, sourceFiles, distFiles, directories) {
   const loaded = new Set();
   for (const file of lcovFiles) {
-    const relative = distRelative(file);
+    const relative = toDistPath(file, directories);
     if (relative !== null) {
       loaded.add(relative);
     }
   }
-  const unloaded = {};
-  for (const directory of directories) {
-    unloaded[directory] = [];
-  }
+  const built = new Set();
   for (const file of distFiles) {
     const relative = distRelative(file);
-    if (relative === null || loaded.has(relative)) {
+    if (relative !== null) {
+      built.add(relative);
+    }
+  }
+  const unrecorded = {};
+  const notBuilt = {};
+  for (const directory of directories) {
+    unrecorded[directory] = [];
+    notBuilt[directory] = [];
+  }
+  const expected = new Set();
+  for (const file of sourceFiles) {
+    const relative = toDistPath(file, directories);
+    const directory = directories.find((candidate) => belongsTo(relative, candidate));
+    if (directory === undefined || expected.has(relative)) {
       continue;
     }
-    const directory = directories.find((candidate) => belongsTo(relative, candidate));
-    if (directory !== undefined) {
-      unloaded[directory].push(relative);
+    expected.add(relative);
+    if (loaded.has(relative)) {
+      continue;
+    }
+    if (built.has(relative)) {
+      unrecorded[directory].push(relative);
+    } else {
+      notBuilt[directory].push(`${relative.slice("dist/".length, -".js".length)}.ts`);
     }
   }
   for (const directory of directories) {
-    unloaded[directory].sort();
+    unrecorded[directory].sort();
+    notBuilt[directory].sort();
   }
-  return unloaded;
+  const stale = [...built]
+    .filter((relative) => !expected.has(relative) && directories.some((directory) => belongsTo(relative, directory)))
+    .sort();
+  return { unrecorded, notBuilt, stale };
 }
 
 // The config with each floor raised to max(current floor, floor(actual) - tolerance). Never lowers. A metric with nothing to
@@ -286,20 +335,43 @@ function parseArgs(argv) {
   return options;
 }
 
+// NODE_OPTIONS without the --enable-source-maps token (the rest is kept). With source maps on, Node reports coverage against
+// src/**/*.ts, which the dist/src/** include filter drops, so the table would read 100% and loaded modules look unloaded.
+// Returns undefined when nothing is left, so the caller can drop the variable.
+export function withoutSourceMaps(nodeOptions) {
+  if (nodeOptions === undefined) {
+    return undefined;
+  }
+  const kept = nodeOptions.split(/\s+/).filter((token) => token !== "" && token !== "--enable-source-maps");
+  return kept.length === 0 ? undefined : kept.join(" ");
+}
+
+// A copy of the environment whose NODE_OPTIONS cannot turn source maps on in the coverage child.
+export function suiteEnvironment(env) {
+  const { NODE_OPTIONS: nodeOptions, ...rest } = env;
+  const filtered = withoutSourceMaps(nodeOptions);
+  return filtered === undefined ? rest : { ...rest, NODE_OPTIONS: filtered };
+}
+
 // Runs the compiled suite under coverage in the root and returns its exit code. The spec output goes to the terminal; the lcov
 // report lands in <root>/coverage/lcov.info.
 function defaultRunSuite(root) {
   mkdirSync(join(root, "coverage"), { recursive: true });
   // A report left by an earlier run must not pass for this run's report when the suite dies before writing one.
   rmSync(join(root, LCOV_RELATIVE), { force: true });
-  const result = spawnSync(process.execPath, SUITE_FLAGS, { cwd: root, stdio: "inherit" });
+  const result = spawnSync(process.execPath, SUITE_FLAGS, {
+    cwd: root,
+    env: suiteEnvironment(process.env),
+    stdio: "inherit",
+  });
   if (result.error !== undefined) {
-    throw new Error(`could not start the test suite: ${result.error.message}`);
+    throw new Error(`could not start the test suite: ${result.error.message}`, { cause: result.error });
   }
   return result.status ?? 1;
 }
 
-function listJsFiles(base, relativeDir) {
+// Files under <base>/<relativeDir> (recursive) whose name satisfies the predicate, as "/"-joined paths relative to base.
+function listFiles(base, relativeDir, accepts) {
   const absolute = join(base, relativeDir);
   if (!existsSync(absolute)) {
     return [];
@@ -308,17 +380,24 @@ function listJsFiles(base, relativeDir) {
   for (const entry of readdirSync(absolute, { withFileTypes: true })) {
     const relative = `${relativeDir}/${entry.name}`;
     if (entry.isDirectory()) {
-      found.push(...listJsFiles(base, relative));
-    } else if (entry.name.endsWith(".js")) {
+      found.push(...listFiles(base, relative, accepts));
+    } else if (accepts(entry.name)) {
       found.push(relative);
     }
   }
   return found;
 }
 
+// Current TypeScript sources (not .d.ts) under <root>/<dir> for each directory, as "src/..." paths.
+function defaultListSourceFiles(root, directories) {
+  return directories.flatMap((directory) =>
+    listFiles(root, directory, (name) => name.endsWith(".ts") && !name.endsWith(".d.ts")),
+  );
+}
+
 // Compiled .js files under <root>/dist/<dir> for each directory, as "dist/src/..." paths.
 function defaultListDistFiles(root, directories) {
-  return directories.flatMap((directory) => listJsFiles(root, `dist/${directory}`));
+  return directories.flatMap((directory) => listFiles(root, `dist/${directory}`, (name) => name.endsWith(".js")));
 }
 
 function formatTable(rows) {
@@ -340,11 +419,13 @@ function formatTable(rows) {
 }
 
 // Evaluates coverage and returns { code, output }; never exits the process. overrides: runSuite(root) -> exit code (sync or
-// async), listDistFiles(root, directories) -> file paths (relative to root or absolute), readFile(absolutePath) -> source text
-// (sync or async), root (the repository root: where the suite runs, dist/ and coverage/lcov.info live).
+// async), listSourceFiles(root, directories) -> current source paths (src/<dir>/**/*.ts), listDistFiles(root, directories) ->
+// compiled file paths (dist/src/<dir>/**/*.js), readFile(absolutePath) -> source text (sync or async), root (the repository
+// root: where the suite runs, src/, dist/ and coverage/lcov.info live). File lists may be relative to root or absolute.
 export async function runCheck(argv, overrides = {}) {
   const root = overrides.root ?? ROOT;
   const runSuite = overrides.runSuite ?? defaultRunSuite;
+  const listSourceFiles = overrides.listSourceFiles ?? defaultListSourceFiles;
   const listDistFiles = overrides.listDistFiles ?? defaultListDistFiles;
   const readFile = overrides.readFile ?? ((path) => readFileSync(path, "utf8"));
   const out = [];
@@ -399,13 +480,19 @@ export async function runCheck(argv, overrides = {}) {
 
   const { rows } = compareToFloors(totals, { ...config, reportOnly });
   const lcovFiles = directories.flatMap((directory) => totals[directory].files);
-  const candidates = findUnloaded(lcovFiles, await listDistFiles(root, directories), directories);
+  // The current sources decide which files are expected; compiled output without a source is stale and ignored.
+  const plan = classifyFiles(
+    lcovFiles,
+    await listSourceFiles(root, directories),
+    await listDistFiles(root, directories),
+    directories,
+  );
   // A module whose compiled JavaScript has no statements (types and interfaces only) can never have an lcov record.
   const unloaded = {};
   let typeOnlyCount = 0;
   for (const directory of directories) {
     unloaded[directory] = [];
-    for (const file of candidates[directory]) {
+    for (const file of plan.unrecorded[directory]) {
       if (isTypeOnlyModule(await readFile(resolve(root, file)))) {
         typeOnlyCount += 1;
       } else {
@@ -425,6 +512,18 @@ export async function runCheck(argv, overrides = {}) {
   }
   if (typeOnlyCount > 0) {
     out.push(`type-only modules without runtime code: ${typeOnlyCount}`);
+  }
+  if (plan.stale.length > 0) {
+    out.push(`stale compiled files ignored: ${plan.stale.length}`);
+  }
+  const notBuiltFiles = directories.flatMap((directory) => plan.notBuilt[directory]);
+  if (notBuiltFiles.length > 0) {
+    out.push(`not built (run tsc first): ${notBuiltFiles.length}`);
+    for (const directory of directories) {
+      for (const file of plan.notBuilt[directory]) {
+        out.push(`  ${directory}: ${file}`);
+      }
+    }
   }
   const unloadedFiles = directories.flatMap((directory) => unloaded[directory]);
   if (unloadedFiles.length > 0) {
@@ -458,8 +557,8 @@ export async function runCheck(argv, overrides = {}) {
   }
 
   const below = rows.filter((row) => row.status !== "ok");
-  const failing = !reportOnly && (below.length > 0 || unloadedFiles.length > 0);
-  const counts = `${below.length} metric(s) below a floor, ${unloadedFiles.length} unloaded file(s)`;
+  const failing = !reportOnly && (below.length > 0 || unloadedFiles.length > 0 || notBuiltFiles.length > 0);
+  const counts = `${below.length} metric(s) below a floor, ${unloadedFiles.length} unloaded file(s), ${notBuiltFiles.length} not built file(s)`;
   if (suiteCode !== 0) {
     out.push(`coverage: suite failed with exit code ${suiteCode}; the table above comes from that run (${counts})`);
   } else if (reportOnly) {

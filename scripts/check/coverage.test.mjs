@@ -6,7 +6,10 @@ import { dirname, join } from "node:path";
 import {
   aggregateLcov,
   compareToFloors,
-  findUnloaded,
+  classifyFiles,
+  suiteEnvironment,
+  SUITE_FLAGS,
+  withoutSourceMaps,
   isTypeOnlyModule,
   percent,
   raiseFloors,
@@ -123,6 +126,19 @@ test("aggregateLcov matches an absolute or Windows-style prefix and does not con
   assert.deepEqual(totals["src/core"].lines, { found: 4, hit: 1 });
 });
 
+test("aggregateLcov counts a record that names the TypeScript source like its compiled file", () => {
+  const text = [
+    record("<ws>/src/fs/mapped.ts", { lf: 4, lh: 3, brf: 2, brh: 1, fnf: 1, fnh: 1 }),
+    record("<ws>/src/fs/types.d.ts", { lf: 9, lh: 9, brf: 0, brh: 0, fnf: 0, fnh: 0 }),
+    record("<ws>/src/runtime/other.ts", { lf: 9, lh: 9, brf: 0, brh: 0, fnf: 0, fnh: 0 }),
+    record(FS_A, { lf: 10, lh: 8, brf: 4, brh: 2, fnf: 2, fnh: 2 }),
+  ].join("\n");
+  const totals = aggregateLcov(text, DIRECTORIES);
+  assert.deepEqual(totals["src/fs"].files, ["<ws>/src/fs/mapped.ts", FS_A]);
+  assert.deepEqual(totals["src/fs"].lines, { found: 14, hit: 11 });
+  assert.deepEqual(totals["src/fs"].branches, { found: 6, hit: 3 });
+});
+
 test("aggregateLcov rejects a malformed lcov text", () => {
   assert.throws(() => aggregateLcov("SF:<ws>/dist/src/fs/a.js\nLF:1\n", DIRECTORIES), /no end_of_record/);
   assert.throws(() => aggregateLcov("end_of_record\n", DIRECTORIES), /without an SF record/);
@@ -207,23 +223,48 @@ test("compareToFloors and validateConfig throw a precise message for a bad confi
   );
 });
 
-test("findUnloaded lists compiled files that have no lcov record, per directory", () => {
-  const unloaded = findUnloaded(
+test("classifyFiles reports built sources without a record, unbuilt sources, and ignores stale compiled files", () => {
+  const plan = classifyFiles(
     [FS_A, CORE_A],
+    [
+      "/other/prefix/src/fs/a.ts",
+      "/other/prefix/src/fs/never.ts",
+      "/other/prefix/src/fs/deep/unbuilt.ts",
+      "/other/prefix/src/core/a.ts",
+      "/other/prefix/src/core/also-never.ts",
+      "/other/prefix/src/core/types.d.ts",
+      "/other/prefix/src/runtime/not-listed.ts",
+    ],
     [
       "/other/prefix/dist/src/fs/a.js",
       "/other/prefix/dist/src/fs/never.js",
+      "/other/prefix/dist/src/fs/renamed-away.js",
       "/other/prefix/dist/src/core/a.js",
       "/other/prefix/dist/src/core/also-never.js",
       "/other/prefix/dist/src/runtime/not-listed.js",
     ],
     DIRECTORIES,
   );
-  assert.deepEqual(unloaded, {
+  assert.deepEqual(plan.unrecorded, {
     "src/fs": ["dist/src/fs/never.js"],
     "src/core": ["dist/src/core/also-never.js"],
     "src/tools": [],
   });
+  assert.deepEqual(plan.notBuilt, { "src/fs": ["src/fs/deep/unbuilt.ts"], "src/core": [], "src/tools": [] });
+  assert.deepEqual(plan.stale, ["dist/src/fs/renamed-away.js"]);
+});
+
+test("classifyFiles identifies a source with no record even when nothing is built", () => {
+  const plan = classifyFiles([], ["src/tools/t.ts", "src/tools/t.ts"], [], DIRECTORIES);
+  assert.deepEqual(plan.notBuilt["src/tools"], ["src/tools/t.ts"]);
+  assert.deepEqual(plan.unrecorded["src/tools"], []);
+  assert.deepEqual(plan.stale, []);
+});
+
+test("classifyFiles accepts lcov records that name the TypeScript source", () => {
+  const plan = classifyFiles(["<ws>/src/fs/a.ts"], ["src/fs/a.ts"], ["dist/src/fs/a.js"], DIRECTORIES);
+  assert.deepEqual(plan.unrecorded["src/fs"], []);
+  assert.deepEqual(plan.notBuilt["src/fs"], []);
 });
 
 test("raiseFloors sets floor(actual) minus the tolerance, never lowers, and leaves its input alone", () => {
@@ -280,6 +321,7 @@ test("runCheck runs the suite, reads its lcov and returns 0 when every floor hol
     const result = await runCheck(["--floors", floors], {
       root: dir,
       runSuite: suite.runSuite,
+      listSourceFiles: () => ["src/fs/a.ts", "src/fs/deep/b.ts", "src/core/a.ts"],
       listDistFiles: () => ["dist/src/fs/a.js", "dist/src/fs/deep/b.js", "dist/src/core/a.js"],
     });
     assert.equal(result.code, 0);
@@ -307,6 +349,7 @@ test("runCheck prints the table of a failed suite run and still returns the suit
       const result = await runCheck(["--floors", floors], {
         root: dir,
         runSuite: suite.runSuite,
+        listSourceFiles: () => ["src/fs/a.ts", "src/fs/never.ts"],
         listDistFiles: () => ["dist/src/fs/a.js", "dist/src/fs/never.js"],
         readFile: () => RUNTIME_CODE,
       });
@@ -377,6 +420,7 @@ test("runCheck does not report an unrecorded type-only module and reports one wi
     const run = (argv) =>
       runCheck(argv, {
         root: dir,
+        listSourceFiles: () => ["src/core/a.ts", "src/core/ports.ts", "src/core/orphan.ts"],
         listDistFiles: () => ["dist/src/core/a.js", "dist/src/core/ports.js", "dist/src/core/orphan.js"],
         readFile: (path) => {
           const source = sources.get(path);
@@ -390,7 +434,7 @@ test("runCheck does not report an unrecorded type-only module and reports one wi
     assert.match(enforced.output, /type-only modules without runtime code: 1\n/);
     assert.match(enforced.output, / {2}src\/core: dist\/src\/core\/orphan\.js/);
     assert.doesNotMatch(enforced.output, /ports\.js/);
-    assert.match(enforced.output, /coverage: FAILED \(0 metric\(s\) below a floor, 1 unloaded file\(s\)\)/);
+    assert.match(enforced.output, /coverage: FAILED \(0 metric\(s\) below a floor, 1 unloaded file\(s\), 0 not built file\(s\)\)/);
   });
 });
 
@@ -402,6 +446,7 @@ test("runCheck passes an enforced run when the only unrecorded file is type-only
     writeText(lcov, LCOV);
     const result = await runCheck(["--floors", floors, "--lcov", lcov], {
       root: dir,
+      listSourceFiles: () => ["src/core/a.ts", "src/core/ports.ts"],
       listDistFiles: () => ["dist/src/core/a.js", "dist/src/core/ports.js"],
       readFile: () => "export {};\n",
     });
@@ -426,6 +471,7 @@ test("runCheck with --lcov evaluates the file without running the suite and list
     const result = await runCheck(["--floors", floors, "--lcov", lcov], {
       root: dir,
       runSuite: () => assert.fail("the suite must not run with --lcov"),
+      listSourceFiles: () => ["src/fs/a.ts", "src/fs/never-imported.ts"],
       listDistFiles: () => ["dist/src/fs/a.js", "dist/src/fs/never-imported.js"],
       readFile: () => RUNTIME_CODE,
     });
@@ -433,7 +479,7 @@ test("runCheck with --lcov evaluates the file without running the suite and list
     assert.match(result.output, /unloaded \(no test imports these/);
     assert.match(result.output, / {2}src\/fs: dist\/src\/fs\/never-imported\.js/);
     assert.match(result.output, /no lcov records for src\/tools/);
-    assert.match(result.output, /coverage: report-only run, no floor enforced \(0 metric\(s\) below a floor, 1 unloaded file\(s\)\)/);
+    assert.match(result.output, /coverage: report-only run, no floor enforced \(0 metric\(s\) below a floor, 1 unloaded file\(s\), 0 not built file\(s\)\)/);
   });
 });
 
@@ -471,12 +517,13 @@ test("runCheck fails an enforced run for an unloaded file even when every floor 
     writeText(lcov, LCOV);
     const result = await runCheck(["--floors", floors, "--lcov", lcov], {
       root: dir,
+      listSourceFiles: () => ["src/core/never.ts"],
       listDistFiles: () => ["dist/src/core/never.js"],
       readFile: () => RUNTIME_CODE,
     });
     assert.equal(result.code, 1);
     assert.match(result.output, / {2}src\/core: dist\/src\/core\/never\.js/);
-    assert.match(result.output, /coverage: FAILED \(0 metric\(s\) below a floor, 1 unloaded file\(s\)\)/);
+    assert.match(result.output, /coverage: FAILED \(0 metric\(s\) below a floor, 1 unloaded file\(s\), 0 not built file\(s\)\)/);
   });
 });
 
@@ -569,4 +616,69 @@ test("the committed floors file is valid and every floor is a number", () => {
   const committed = JSON.parse(readFileSync(new URL("./coverage-floors.json", import.meta.url), "utf8"));
   validateConfig(committed);
   assert.deepEqual(Object.keys(committed.floors), DIRECTORIES);
+});
+
+test("the suite flags switch source maps off and the child environment cannot switch them back on", () => {
+  assert.ok(SUITE_FLAGS.includes("--no-enable-source-maps"));
+  assert.ok(SUITE_FLAGS.indexOf("--no-enable-source-maps") > SUITE_FLAGS.indexOf("--experimental-test-coverage"));
+  assert.equal(withoutSourceMaps("--enable-source-maps --max-old-space-size=4096"), "--max-old-space-size=4096");
+  assert.equal(withoutSourceMaps("--max-old-space-size=4096  --enable-source-maps"), "--max-old-space-size=4096");
+  assert.equal(withoutSourceMaps("--max-old-space-size=4096"), "--max-old-space-size=4096");
+  assert.equal(withoutSourceMaps("--enable-source-maps"), undefined);
+  assert.equal(withoutSourceMaps(undefined), undefined);
+  assert.deepEqual(suiteEnvironment({ PATH: "/bin", NODE_OPTIONS: "--enable-source-maps --trace-warnings" }), {
+    PATH: "/bin",
+    NODE_OPTIONS: "--trace-warnings",
+  });
+  assert.deepEqual(suiteEnvironment({ PATH: "/bin", NODE_OPTIONS: "--enable-source-maps" }), { PATH: "/bin" });
+  assert.deepEqual(suiteEnvironment({ PATH: "/bin" }), { PATH: "/bin" });
+});
+
+test("runCheck reports stale compiled files, unbuilt sources and builds the file lists from the sources", async () => {
+  await withTempDir(async (dir) => {
+    const floors = join(dir, "floors.json");
+    const lcov = join(dir, "report.info");
+    writeText(floors, JSON.stringify(floorsConfig()));
+    writeText(lcov, LCOV);
+    const overrides = {
+      root: dir,
+      // fs/a.js and core/a.js have records; fs/gone.js is stale; fs/unbuilt.ts has no compiled file; core/types.js is type-only.
+      listSourceFiles: () => ["src/fs/a.ts", "src/fs/deep/b.ts", "src/fs/unbuilt.ts", "src/core/a.ts", "src/core/types.ts"],
+      listDistFiles: () => ["dist/src/fs/a.js", "dist/src/fs/deep/b.js", "dist/src/fs/gone.js", "dist/src/core/a.js", "dist/src/core/types.js"],
+      readFile: (path) => {
+        assert.match(path, /dist\/src\/core\/types\.js$/);
+        return "export {};\n";
+      },
+    };
+    const enforced = await runCheck(["--floors", floors, "--lcov", lcov], overrides);
+    assert.equal(enforced.code, 1);
+    assert.match(enforced.output, /type-only modules without runtime code: 1\n/);
+    assert.match(enforced.output, /stale compiled files ignored: 1\n/);
+    assert.match(enforced.output, /not built \(run tsc first\): 1\n {2}src\/fs: src\/fs\/unbuilt\.ts\n/);
+    assert.doesNotMatch(enforced.output, /gone\.js|unloaded \(no test imports/);
+    assert.match(enforced.output, /coverage: FAILED \(0 metric\(s\) below a floor, 0 unloaded file\(s\), 1 not built file\(s\)\)/);
+
+    const reporting = await runCheck(["--floors", floors, "--lcov", lcov, "--report-only"], overrides);
+    assert.equal(reporting.code, 0);
+    assert.match(reporting.output, /not built \(run tsc first\): 1/);
+    assert.match(reporting.output, /report-only run, no floor enforced \(0 metric\(s\) below a floor, 0 unloaded file\(s\), 1 not built file\(s\)\)/);
+  });
+});
+
+test("runCheck ignores stale compiled output when every current source is covered", async () => {
+  await withTempDir(async (dir) => {
+    const floors = join(dir, "floors.json");
+    const lcov = join(dir, "report.info");
+    writeText(floors, JSON.stringify(floorsConfig()));
+    writeText(lcov, LCOV);
+    const result = await runCheck(["--floors", floors, "--lcov", lcov], {
+      root: dir,
+      listSourceFiles: () => ["src/fs/a.ts", "src/fs/deep/b.ts", "src/core/a.ts"],
+      listDistFiles: () => ["dist/src/fs/a.js", "dist/src/fs/deep/b.js", "dist/src/fs/was-renamed.js", "dist/src/core/a.js"],
+      readFile: () => assert.fail("no unrecorded built file to read"),
+    });
+    assert.equal(result.code, 0);
+    assert.match(result.output, /stale compiled files ignored: 1\n/);
+    assert.match(result.output, /coverage: ok/);
+  });
 });
