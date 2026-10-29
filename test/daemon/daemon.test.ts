@@ -33,6 +33,7 @@ import { FakeBridge } from "../support/fake-bridge.js";
 import { FakeExecutionService } from "../support/fake-execution.js";
 import { FakeContainerStore, FakeLibpod } from "../support/fake-libpod.js";
 import { FakeOpenShell } from "../support/fake-openshell.js";
+import { boundedWait } from "../support/timing.js";
 
 const IMAGE = `registry.example.com/realm/workload@sha256:${"0".repeat(64)}`;
 const CLOCK_ISO = "2026-10-21T09:30:00.000Z";
@@ -131,20 +132,8 @@ function displayLabelOf(reply: ControlReply): unknown {
 }
 
 // Resolves when down finishes teardown; fails fast instead of hanging the suite.
-async function awaitDone(daemon: StartedDaemon): Promise<void> {
-  let timer: NodeJS.Timeout | undefined;
-  try {
-    await Promise.race([
-      daemon.done,
-      new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => {
-          reject(new Error("daemon done did not resolve"));
-        }, 5000);
-      }),
-    ]);
-  } finally {
-    clearTimeout(timer);
-  }
+function awaitDone(daemon: StartedDaemon): Promise<void> {
+  return boundedWait(daemon.done, "daemon done");
 }
 
 async function cleanupDaemon(daemon: StartedDaemon): Promise<void> {
@@ -153,30 +142,9 @@ async function cleanupDaemon(daemon: StartedDaemon): Promise<void> {
   } catch {
     // Already down or never served; nothing to tear down.
   }
-  await Promise.race([
-    daemon.done,
-    new Promise<void>((resolve) => {
-      setTimeout(resolve, 2000);
-    }),
-  ]);
+  await boundedWait(daemon.done, "daemon done during cleanup");
 }
 
-
-// Bounds one wait in this file: a wait that never settles fails the test instead of hanging the run.
-const WAIT_MS = 5000;
-function bounded<T>(pending: Promise<T>, what: string): Promise<T> {
-  let timer: NodeJS.Timeout | undefined;
-  return Promise.race([
-    pending,
-    new Promise<never>((_resolve, reject) => {
-      timer = setTimeout(() => {
-        reject(new Error(`${what} did not settle within ${String(WAIT_MS)} ms`));
-      }, WAIT_MS);
-    }),
-  ]).finally(() => {
-    clearTimeout(timer);
-  });
-}
 function sendRawLine(socketPath: string, line: string): Promise<string> {
   return new Promise<string>((resolve, reject) => {
     const socket = createConnection(socketPath);
@@ -791,17 +759,17 @@ void test("QUAL-01: a connection that waits on a failed start is answered with t
     },
   });
   const starting = startDaemon(options);
-  await bounded(entered, "the start sweep");
+  await boundedWait(entered, "the start sweep");
   const waiting = sendRawLine(controlSocketPath(fixture.stateDir), '{"id":"early","method":"status"}\n');
   // The start fails only once the server has accepted this connection. Closing the listening socket first would
   // reset the connection still in the accept queue, and the client would see a reset rather than the refusal.
-  await bounded(accepted, "the early connection");
+  await boundedWait(accepted, "the early connection");
   failSweep(makeRealmError("REALM_STOPPING"));
-  await bounded(
+  await boundedWait(
     assert.rejects(starting, (error: unknown) => error instanceof RealmError && error.code === "REALM_STOPPING"),
     "the failed start",
   );
-  assert.deepEqual(JSON.parse(await bounded(waiting, "the refusal")), { id: null, error: { code: "REALM_STOPPING" } });
+  assert.deepEqual(JSON.parse(await boundedWait(waiting, "the refusal")), { id: null, error: { code: "REALM_STOPPING" } });
 });
 
 void test("QUAL-01: a connection that never completes its request line is answered TOOL_TIMEOUT", async (t) => {
@@ -823,7 +791,7 @@ void test("QUAL-01: a down whose socket file cannot be removed answers SCHEMA_IN
   t.after(() => {
     client.destroy();
   });
-  await bounded(
+  await boundedWait(
     new Promise<void>((resolve, reject) => {
       client.once("connect", resolve);
       client.once("error", reject);
@@ -834,7 +802,7 @@ void test("QUAL-01: a down whose socket file cannot be removed answers SCHEMA_IN
   rmSync(daemon.socketPath, { force: true });
   mkdirSync(daemon.socketPath);
   writeFileSync(join(daemon.socketPath, "kept"), "not a socket");
-  const raw = await bounded(replyOn(client, '{"id":"down-1","method":"down"}\n'), "the down reply");
+  const raw = await boundedWait(replyOn(client, '{"id":"down-1","method":"down"}\n'), "the down reply");
   assert.deepEqual(JSON.parse(raw), { id: "down-1", error: { code: "SCHEMA_INVALID" } });
   await awaitDone(daemon);
 });
@@ -852,7 +820,7 @@ void test("QUAL-01: a failed start whose socket file cannot be removed keeps its
         reject(makeRealmError("REALM_STOPPING"));
       }),
   });
-  await bounded(
+  await boundedWait(
     assert.rejects(
       startDaemon(options),
       (error: unknown) =>

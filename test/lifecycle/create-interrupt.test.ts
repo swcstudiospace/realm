@@ -417,9 +417,14 @@ void test("a background stop and destroy that both fail are kept, and the next d
     clock: () => new Date(CLOCK_TIME),
     teardownTimeoutMs: 1000,
   });
-  // The start outlives the teardown bound, so the stop hands it to the background.
-  // The start settles after the stop's bound expires and before the destroy's bound expires.
-  exec.setDelay("start", 1500);
+  // The start is held at a gate, so it outlives the teardown bound however loaded the host is. The
+  // teardown bounds are driven by mocked timers: the stop's bound expires on the first tick, and the
+  // start is released after that and before the destroy's bound could expire.
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  t.after(() => {
+    t.mock.timers.reset();
+  });
+  const release = exec.holdNext("start");
   // Stop calls in order: the stop from the first stop, the stop from the destroy, then the stop of
   // the start once it settles. The last one fails, so the background falls back to destroy.
   let stops = 0;
@@ -438,11 +443,33 @@ void test("a background stop and destroy that both fail are kept, and the next d
     }
   });
 
+  // Lets every pending microtask and the settled port calls run, so only the bound timers are left.
+  const flush = async (): Promise<void> => {
+    for (let i = 0; i < 5; i += 1) {
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+    }
+  };
+
   const creating = controller.create(workspace);
   await waitUntil(() => exec.callCount("start") === 1, "exec.start to be called");
-  await assertRejectsWith(controller.stop(), "REALM_STOPPING");
+  const stopOutcome = assertRejectsWith(controller.stop(), "REALM_STOPPING");
+  await flush();
+  t.mock.timers.tick(1000);
+  await stopOutcome;
 
-  await assertRejectsWithCause(controller.destroy(), "OPENSHELL_START_FAILED", "PODMAN_MACHINE_DOWN");
+  const destroyOutcome = assertRejectsWithCause(
+    controller.destroy(),
+    "OPENSHELL_START_FAILED",
+    "PODMAN_MACHINE_DOWN",
+  );
+  await flush();
+  // The destroy's own bound has not expired when the held start is released.
+  t.mock.timers.tick(999);
+  release();
+  await destroyOutcome;
+  await exec.settled();
   assert.equal(controller.snapshot().state, "stopping");
   assert.equal(store.load(SESSION)?.containerId, "fake-container-1");
   assert.equal(exec.resources().length, 1);

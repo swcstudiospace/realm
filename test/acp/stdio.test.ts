@@ -11,6 +11,7 @@ import { ACP_PROTOCOL_VERSION, REALM_TOOL_METHOD } from "../../src/acp/agent.js"
 import { runAcpOverStdio } from "../../src/acp/stdio.js";
 import { ERROR_CATALOGUE, makeRealmError } from "../../src/core/errors.js";
 import type { ToolDispatcher } from "../../src/tools/dispatch.js";
+import { testTimeout } from "../support/timing.js";
 
 // The version the manifest declares, read here independently of the code under test (the release job rewrites it).
 function manifestVersion(): string {
@@ -49,7 +50,7 @@ async function runOverStdio(
 }
 
 void test("TOOL-05 G-03: runAcpOverStdio answers initialize, then a _realm/tool call that fails with a RealmError showing its code",
-{ timeout: 10_000 },
+testTimeout(10_000),
 async (t) => {
   const thrown = makeRealmError("OPENSHELL_START_FAILED", "PODMAN_MACHINE_DOWN");
   const dispatcher: Pick<ToolDispatcher, "call"> = { call: () => Promise.reject(thrown) };

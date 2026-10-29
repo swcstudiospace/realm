@@ -17,6 +17,7 @@ import {
   UNSUPPORTED_PROTOCOL_VERSION,
 } from "../../src/mcp/protocol.js";
 import { makeHarness, WORKLOAD } from "../support/fake-tools.js";
+import { boundedWait } from "../support/timing.js";
 
 // TOOL-05 MCP stdio server proof (P5-D2, P5-D9, P5-D11). Every test drives the real
 // server over in-memory stdio streams against the real ToolDispatcher from makeHarness.
@@ -56,12 +57,7 @@ async function drive(dispatcher: McpDispatcher, lines: readonly string[]): Promi
     input.write(`${line}\n`);
   }
   input.end();
-  await Promise.race([
-    server.closed,
-    new Promise<never>((_resolve, reject) => {
-      setTimeout(() => { reject(new Error("mcp server did not close after stdin ended")); }, 2000).unref();
-    }),
-  ]);
+  await boundedWait(server.closed, "mcp server close after stdin ended");
   await new Promise<void>((resolve) => {
     setImmediate(resolve);
   });
@@ -118,12 +114,7 @@ void test("TOOL-05: closing stdin shuts the server down without hanging", async 
   const stderr = new PassThrough();
   const server = createMcpServer(h.dispatcher, input, output, stderr);
   input.end();
-  await Promise.race([
-    server.closed,
-    new Promise<never>((_resolve, reject) => {
-      setTimeout(() => { reject(new Error("server hung after stdin closed")); }, 2000).unref();
-    }),
-  ]);
+  await boundedWait(server.closed, "server after stdin closed");
 });
 
 // ---- Protocol eras and result shapes (docs/integration/mcp.md, "Protocol eras and result shapes") ------------------------

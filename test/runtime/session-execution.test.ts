@@ -40,6 +40,7 @@ import { FakeContainerStore, FakeLibpod } from "../support/fake-libpod.js";
 import { FakeOpenShell } from "../support/fake-openshell.js";
 import { CONFORMING_PROC_STATUS, RUNTIME_KEYCTL_ALLOWED_OCI_CONFIG_TEXT, RUNTIME_OCI_CONFIG_TEXT } from "./hardening-fixtures.js";
 import { OCI_CONFIG_PATH, ociReaderOf, STATIC_DIR } from "./seccomp-fixtures.js";
+import { pollUntil, scaledMs } from "../support/timing.js";
 import { FakeBridge } from "../support/fake-bridge.js";
 
 const SESSION = "sess-01";
@@ -916,7 +917,7 @@ void test("RT-03: the OpenShell runner kills the process and the helpers it fork
     "setInterval(() => {}, 1000);",
   ].join(" ");
   // Attached at once, so a rejection before the pids are read is never unhandled.
-  const outcome = runner([process.execPath, "-e", script], { timeoutMs: 2000 }).then(
+  const outcome = runner([process.execPath, "-e", script], { timeoutMs: scaledMs(2000) }).then(
     () => "resolved",
     (error: unknown) => error,
   );
@@ -941,7 +942,8 @@ void test("RT-03: when the OpenShell runner cannot signal the child's process gr
   t.mock.method(process, "kill", () => {
     throw Object.assign(new Error("operation not permitted"), { code: "EPERM" });
   });
-  const error = await nodeRunner()([process.execPath, "-e", "setTimeout(() => {}, 10000)"], { timeoutMs: 200 }).then(
+  const bound = scaledMs(200);
+  const error = await nodeRunner()([process.execPath, "-e", `setTimeout(() => {}, ${String(Math.max(10_000, bound * 50))})`], { timeoutMs: bound }).then(
     () => null,
     (failure: unknown) => failure,
   );
@@ -1035,7 +1037,7 @@ void test("TOOL-03: a capturing run that misses timeoutMs has its process and fo
     "setInterval(() => {}, 1000);",
   ].join(" ");
   // Attached at once, so a rejection before the pids are read is never unhandled.
-  const outcome = runner([process.execPath, "-e", script], { timeoutMs: 2000, captureOutput: true }).then(
+  const outcome = runner([process.execPath, "-e", script], { timeoutMs: scaledMs(2000), captureOutput: true }).then(
     () => "resolved",
     (error: unknown) => error,
   );
@@ -1050,19 +1052,23 @@ void test("TOOL-03: a capturing run that misses timeoutMs has its process and fo
 // Real time on purpose: the child is an operating-system process, and no fake clock can advance
 // it. These helpers poll the pid file and the process table until the runner's kill is observed.
 async function waitForFile(path: string, timeoutMs: number): Promise<string> {
-  const deadline = Date.now() + timeoutMs;
-  for (;;) {
-    if (existsSync(path)) {
-      const text = readFileSync(path, "utf8");
-      if (text.endsWith("\n")) {
-        return text;
-      }
-    }
-    if (Date.now() > deadline) {
-      throw new Error("the child never wrote its pids");
-    }
-    await sleep(20);
+  let text = "";
+  try {
+    await pollUntil(
+      () => {
+        if (!existsSync(path)) {
+          return false;
+        }
+        text = readFileSync(path, "utf8");
+        return text.endsWith("\n");
+      },
+      "the child to write its pids",
+      { timeoutMs },
+    );
+  } catch {
+    throw new Error("the child never wrote its pids");
   }
+  return text;
 }
 
 // True once the process has exited. A killed process whose parent has not reaped it is a zombie, and
@@ -1088,22 +1094,12 @@ function procState(pid: number): string | undefined {
 }
 
 async function waitUntilGone(pid: number, timeoutMs: number): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs;
-  for (;;) {
-    if (hasExited(pid)) {
-      return true;
-    }
-    if (Date.now() > deadline) {
-      return false;
-    }
-    await sleep(20);
+  try {
+    await pollUntil(() => hasExited(pid), `process ${String(pid)} to exit`, { timeoutMs });
+    return true;
+  } catch {
+    return false;
   }
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
 }
 
 // The argv of every sandbox delete the session made through its OpenShell runner, in order.

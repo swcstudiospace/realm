@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { setTimeout as sleep } from "node:timers/promises";
+import { ManualClock, pollUntil, scaledMs } from "../support/timing.js";
 import { RealmError, type ErrorCode } from "../../src/core/errors.js";
 import {
   DEFAULT_INFO_TIMEOUT_MS,
@@ -39,20 +39,17 @@ async function assertCode(work: Promise<unknown>, code: ErrorCode): Promise<void
 // FakeLibpod records a request only after it parses it, and it offers no change notification. The wait
 // therefore re-reads the recorded log every 5 ms until the route appears, and fails at its deadline.
 async function waitForRecorded(fake: FakeLibpod, route: LibpodRouteName, timeoutMs: number): Promise<RecordedRequest> {
-  const deadline = Date.now() + timeoutMs;
-  for (;;) {
-    const last = fake
+  const find = (): RecordedRequest | undefined =>
+    fake
       .requests()
       .filter((request) => request.route === route)
       .at(-1);
-    if (last !== undefined) {
-      return last;
-    }
-    if (Date.now() >= deadline) {
-      throw new Error(`fake libpod did not record a ${route} request within ${String(timeoutMs)} ms`);
-    }
-    await sleep(5);
+  await pollUntil(() => find() !== undefined, `fake libpod to record a ${route} request`, { timeoutMs });
+  const last = find();
+  if (last === undefined) {
+    throw new Error(`fake libpod did not record a ${route} request`);
   }
+  return last;
 }
 
 void test("RT-03: the client exposes exactly the seven D-54 methods, and no other instance member", () => {
@@ -187,7 +184,7 @@ void test("RT-08: a force removal whose reply never comes fails with PODMAN_MACH
   const elapsed = Date.now() - started;
   assert.ok(elapsed >= 2500, `the force removal failed after ${String(elapsed)} ms, not clearly past the 1000 ms request bound`);
   const hung = await waitForRecorded(fake, "removeContainer", 5000);
-  await fake.waitForSocketClose(hung.seq, 2000);
+  await fake.waitForSocketClose(hung.seq, scaledMs(2000));
 });
 
 void test("RT-09: list asks for all containers filtered by the exact label pair", async (t) => {
@@ -208,7 +205,7 @@ void test("RT-09: a timed-out request rejects with PODMAN_MACHINE_DOWN and destr
   const client = new LibpodClient(socketPath, { requestTimeoutMs: 1000 });
   await assertCode(client.inspectContainer("realm-a"), "PODMAN_MACHINE_DOWN");
   const hung = await waitForRecorded(fake, "inspectContainer", 5000);
-  await fake.waitForSocketClose(hung.seq, 2000);
+  await fake.waitForSocketClose(hung.seq, scaledMs(2000));
 });
 
 void test("RT-09: info has its own bound; every other route keeps the request bound", async (t) => {
@@ -234,7 +231,7 @@ void test("RT-09: an info reply that never comes fails with PODMAN_MACHINE_DOWN 
   const elapsed = Date.now() - started;
   assert.ok(elapsed >= 1500, `info failed after ${String(elapsed)} ms, not clearly past the 1000 ms request bound`);
   const hung = await waitForRecorded(fake, "info", 5000);
-  await fake.waitForSocketClose(hung.seq, 2000);
+  await fake.waitForSocketClose(hung.seq, scaledMs(2000));
 });
 
 void test("RT-09: the default bounds are 5000 ms for requests and 30000 ms for info", () => {
@@ -306,11 +303,13 @@ void test("info cache: a failure is not cached, and concurrent callers share the
 
 void test("info cache: after the TTL a new request is made", async (t) => {
   const { fake, socketPath } = await startFake(t);
-  const client = new LibpodClient(socketPath, { infoTtlMs: 400 });
+  const clock = new ManualClock();
+  const client = new LibpodClient(socketPath, { infoTtlMs: 400, now: clock.now });
   await client.info();
+  clock.advance(399);
   await client.info();
   assert.equal(infoRequests(fake), 1, "a call inside the TTL is served from the cache");
-  await sleep(700);
+  clock.advance(1);
   await client.info();
   assert.equal(infoRequests(fake), 2, "a call after the TTL asks again");
 });

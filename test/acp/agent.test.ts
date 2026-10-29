@@ -17,6 +17,7 @@ import { displayStatus } from "../../src/core/status.js";
 import type { ToolCall } from "../../src/contract/validate.js";
 import type { ToolDispatcher, ToolOutcome } from "../../src/tools/dispatch.js";
 import { makeHarness, REQUIRED, WORKLOAD } from "../support/fake-tools.js";
+import { testTimeout } from "../support/timing.js";
 
 interface LineWaiter {
   readonly count: number;
@@ -114,7 +115,7 @@ const SIX_CALLS: ReadonlyArray<{ readonly name: string; readonly call: ToolCall 
 ];
 
 void test("TOOL-05: a v1 initialize request gets a protocolVersion 1 reply on one line with stderr-only diagnostics",
-{ timeout: 10_000 },
+testTimeout(10_000),
 async (t) => {
   const h = makeHarness(t);
   const client = startClient(t, h.dispatcher);
@@ -139,7 +140,7 @@ async (t) => {
 },);
 
 void test("TOOL-05: initialize, session/new, and session/prompt equivalents are never packed into one batch line",
-{ timeout: 10_000 },
+testTimeout(10_000),
 async (t) => {
   const h = makeHarness(t);
   const client = startClient(t, h.dispatcher);
@@ -167,7 +168,7 @@ async (t) => {
   await client.close();
 },);
 
-void test("TOOL-05: closing stdin shuts the adapter down without hanging", { timeout: 10_000 }, async (t) => {
+void test("TOOL-05: closing stdin shuts the adapter down without hanging", testTimeout(10_000), async (t) => {
   const h = makeHarness(t);
   const client = startClient(t, h.dispatcher);
   await client.close();
@@ -175,7 +176,7 @@ void test("TOOL-05: closing stdin shuts the adapter down without hanging", { tim
 });
 
 void test("TOOL-05: a _realm/tool request carrying each of the six ToolCall maps routes to ToolDispatcher.call with the map unchanged",
-{ timeout: 10_000 },
+testTimeout(10_000),
 async (t) => {
   const h = makeHarness(t);
   const seen: unknown[] = [];
@@ -204,7 +205,7 @@ async (t) => {
 },);
 
 void test("TOOL-05: the literal method _realm/tool routes a ToolCall to the dispatcher unchanged",
-{ timeout: 10_000 },
+testTimeout(10_000),
 async (t) => {
   const h = makeHarness(t);
   const seen: unknown[] = [];
@@ -225,7 +226,7 @@ async (t) => {
 },);
 
 void test("TOOL-05: the pre-underscore method realm/tool is an unknown method (-32601) and never reaches the dispatcher",
-{ timeout: 10_000 },
+testTimeout(10_000),
 async (t) => {
   const h = makeHarness(t);
   const seen: unknown[] = [];
@@ -246,7 +247,7 @@ async (t) => {
 },);
 
 void test("TOOL-05: the initialize reply advertises the realm/tool extension under agentCapabilities._meta",
-{ timeout: 10_000 },
+testTimeout(10_000),
 async (t) => {
   const h = makeHarness(t);
   const client = startClient(t, h.dispatcher);
@@ -259,7 +260,7 @@ async (t) => {
 },);
 
 void test("TOOL-05: a dispatcher refusal surfaces the catalogue code in the _realm/tool reply without adapter-added logic",
-{ timeout: 10_000 },
+testTimeout(10_000),
 async (t) => {
   const h = makeHarness(t);
   const call: ToolCall = { exec: { shell: true, script: "echo hi" } };
@@ -279,7 +280,7 @@ async (t) => {
 },);
 
 void test("TOOL-05: a RealmError thrown by the dispatcher reaches the _realm/tool reply with its code, retryable flag, and message (G-08)",
-{ timeout: 10_000 },
+testTimeout(10_000),
 async (t) => {
   const thrown = makeRealmError("OPENSHELL_START_FAILED", "PODMAN_MACHINE_DOWN");
   const dispatcher: Pick<ToolDispatcher, "call"> = { call: () => Promise.reject(thrown) };
@@ -299,7 +300,7 @@ async (t) => {
 },);
 
 void test("TOOL-05: a request naming any other tool method is rejected without reaching the dispatcher",
-{ timeout: 10_000 },
+testTimeout(10_000),
 async (t) => {
   const h = makeHarness(t);
   let calls = 0;
@@ -322,7 +323,7 @@ async (t) => {
 },);
 
 void test("TOOL-05: initialize then _realm/tool status then _realm/tool write complete in order over in-memory stdio",
-{ timeout: 10_000 },
+testTimeout(10_000),
 async (t) => {
   const h = makeHarness(t);
   const expectedStatus = await h.dispatcher.call({ status: {} });
@@ -345,7 +346,7 @@ async (t) => {
 },);
 
 void test("TOOL-05: the status outcome carries the shared displayStatus label, not an adapter-invented label",
-{ timeout: 10_000 },
+testTimeout(10_000),
 async (t) => {
   const h = makeHarness(t);
   const client = startClient(t, h.dispatcher);
@@ -360,7 +361,7 @@ async (t) => {
 },);
 
 void test("TOOL-05: a required-mode refusal over the lifecycle drive equals the dispatcher's own refusal",
-{ timeout: 10_000 },
+testTimeout(10_000),
 async (t) => {
   const h = makeHarness(t, { policy: REQUIRED, state: "degraded" });
   const call: ToolCall = { write: { path: "doc.txt", content: "blocked" } };
@@ -378,7 +379,7 @@ async (t) => {
 },);
 
 void test("TOOL-05: a _realm/tool notification without an id is never executed and takes no reply (MED-01)",
-{ timeout: 10_000 },
+testTimeout(10_000),
 async (t) => {
   const h = makeHarness(t);
   const seen: unknown[] = [];
@@ -402,7 +403,7 @@ async (t) => {
 },);
 
 void test("TOOL-05: a request whose id is neither a string, number, nor null is refused with a null-id error and never dispatched (LOW-02)",
-{ timeout: 10_000 },
+testTimeout(10_000),
 async (t) => {
   const h = makeHarness(t);
   const seen: unknown[] = [];
@@ -428,7 +429,7 @@ async (t) => {
   await client.close();
 },);
 
-void test("TOOL-05: a null request id is a legal JSON-RPC id and is answered with null (LOW-02)", { timeout: 10_000 }, async (t) => {
+void test("TOOL-05: a null request id is a legal JSON-RPC id and is answered with null (LOW-02)", testTimeout(10_000), async (t) => {
   const h = makeHarness(t);
   const client = startClient(t, h.dispatcher);
   send(client, { jsonrpc: "2.0", id: null, method: REALM_TOOL_METHOD, params: { tool: { status: {} } } });
@@ -440,7 +441,7 @@ void test("TOOL-05: a null request id is a legal JSON-RPC id and is answered wit
 });
 
 void test("TOOL-05: a _realm/tool tool value that is not a ToolCall map is refused SCHEMA_INVALID by the dispatcher (LOW-01 parity)",
-{ timeout: 10_000 },
+testTimeout(10_000),
 async (t) => {
   const h = makeHarness(t);
   const client = startClient(t, h.dispatcher);
@@ -460,7 +461,7 @@ async (t) => {
 },);
 
 void test("TOOL-05: the adapter reads its input without changing the caller's stream encoding (LOW-03)",
-{ timeout: 10_000 },
+testTimeout(10_000),
 async (t) => {
   const h = makeHarness(t);
   const input = new PassThrough();
@@ -474,7 +475,7 @@ async (t) => {
 },);
 
 void test("TOOL-05: a multi-byte character split across stdin chunks reaches the dispatcher intact (LOW-03)",
-{ timeout: 10_000 },
+testTimeout(10_000),
 async (t) => {
   const h = makeHarness(t);
   const seen: unknown[] = [];
@@ -498,7 +499,7 @@ async (t) => {
 },);
 
 void test("TOOL-05: a diagnostic goes to stderr and stdout carries only protocol lines (LOW-04)",
-{ timeout: 10_000 },
+testTimeout(10_000),
 async (t) => {
   const h = makeHarness(t);
   const client = startClient(t, h.dispatcher);
