@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.3.7] - 2026-10-29
+
+### Maintenance
+- ci: add the coverage ratchet script and print its report on the Node 22 leg, report-only (phase 13, part B-coverage) (#18) (d79a8be)
+
 ## [0.3.6] - 2026-10-29
 
 ### Added
