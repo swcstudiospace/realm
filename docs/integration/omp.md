@@ -32,7 +32,7 @@ Read date: 2026-10-22 (ISO 8601). Fetched directly in Phase 5:
 | Upstream extension-loading.md | https://raw.githubusercontent.com/can1357/oh-my-pi/main/docs/extension-loading.md | handler budgets, `toolCallTimeoutMs` default 30,000 ms fail-closed (upstream-sourced) |
 | Upstream sdk.md | https://raw.githubusercontent.com/can1357/oh-my-pi/main/docs/sdk.md | `restrictToolNames`, `setActiveToolsByName` are SDK-session mechanisms (upstream-sourced) |
 
-Anything below marked upstream-sourced was not found on the two official `omp.sh` pages and stays a recorded limitation (OQ-P5-01).
+Anything below marked upstream-sourced was not found on the two official `omp.sh` pages and stays a recorded limitation (OQ-P5-01). Update 2026-10-29: the behaviour OQ-P5-01 asked about was observed on Omp 18.12.6 and the question is closed for that version (see "Enforcement spike"); the official pages themselves were not re-read in that pass and still do not state it.
 
 Omp package identity used by the official page: `@oh-my-pi/pi-coding-agent` (npm package name as written on the official page; not installed here, not verified in the registry in this phase).
 
@@ -73,7 +73,7 @@ Phase 5 verification (read 2026-10-22, https://omp.sh/docs/extension-authoring a
 
 ### Q4. Host write-tool removal in required mode (spec q4)
 
-Status: **OPEN. Deferred to Phase 5 (OMP-05). Not answered by this note.**
+Status: **ANSWERED by execution on Omp 18.12.6 (2026-10-29, OMPX-01, phase 12).** Fail-closed mode may remove the built-in tools with `setActiveTools`, and a removed tool is refused at execution. The removal must be an allowlist, not `write`/`edit`/`bash` alone: after those three are removed, `write` stays as the device transport and `ast_edit`, `lsp`, `debug`, `eval` and `task` stay callable. The results table, the tools that remain, the recommended rule and the limits are under "Enforcement spike" below. The rest of this section (from "Decision basis" to the 2026-10-28 re-read) is the record of what was known before the spike and is kept as history.
 
 Decision basis: D-03 says host write and edit tools are disabled only in required mode. Phase 1 records the question only.
 
@@ -92,6 +92,8 @@ Phase 5 verification (read 2026-10-22, https://omp.sh/docs/extension-authoring a
 Re-read 2026-10-23 (https://omp.sh/docs/hooks and https://omp.sh/docs/extension-authoring, the same two pages): the hooks page defines the `tool_call` return as `{ block?, reason?, input? }`, says the first block stops dispatch, and says replacement input on a model-issued call is revalidated before execution. The extension-authoring page documents managed timers (`ctx.setTimeout`, `ctx.setInterval`) that are cleared on session shutdown. Neither page states that a `tool_call` block covers launch-time tool flags, SDK sessions, or a host that ignores the hook. Those are the residual paths named in `src/omp/plugin.ts`. OQ-P5-02 therefore stays **OPEN**: the guard is not claimed to cover every execution path.
 
 OQ-P5-02, re-read for phase 9.7 (the Omp extension documentation pages `hooks.md` and `extensions.md`, read on 2026-10-28 through the `omp://` internal documentation). The documentation now states that a `tool_call` handler may return a block, and that the first block short-circuits. A handler error or timeout blocks (budget `extensionHandlers.toolCallTimeoutMs`, default 30000 ms). `tool_call` runs during argument preparation, before scheduling and approval. Calls made through the eval-prelude bridge do not emit `tool_call`. SDK sessions with `restrictToolNames` disable extensions by default. Still unsettled: paths that bypass the extension runner, `setActiveTools` enforcement, and tools other than `write` and `edit`. The guard's list is `write` and `edit` only, so `bash`, `ast-edit` and `eval` are not guarded. There is no documented way to raise a `write` or `edit` tool call without a model, and the model provider is currently out of quota, so OMP-05 stays unit-proven. OQ-P5-02 stays **OPEN**.
+
+Update 2026-10-29 (the enforcement spike, Omp 18.12.6, VERIFIED_BY_EXECUTION): of the three points left unsettled above, `setActiveTools` enforcement and the tools other than `write` and `edit` are settled by observation, and the paths that bypass the extension runner are partly settled; one statement above is also not what Omp 18.12.6 does. `setActiveTools` removal is enforced at execution: a call to a removed tool is refused with `Tool <name> not found`, and the tool is absent from the list the model is offered. Every native tool that writes a file or runs a command passes through the same mechanism. A call made through the eval-prelude bridge (`tool.bash(...)` inside `eval`) does emit `tool_call`, with a `js-bash-` call id, and a block on it holds; what `eval` itself writes through the runtime's file API is not a tool call, and no hook sees it. OQ-P5-02 is restated, narrowly, under "Enforcement spike".
 
 ### Q5. Does this note permit any plugin code now?
 
@@ -215,3 +217,108 @@ The guard was also observed in a real Omp 18.12.6 host with no model account. A 
 The tool list that Omp offered the model with the extension loaded contained Omp's own tools only (`bash` and `eval` among them) and no Realm tool. After SIGHUP and then SIGKILL of the Omp process, the daemon and the container were unchanged, the file written through Omp was on the host, and the next session attached to the same container. Omp's own `write` overwrote the file in place: `open`, one `write`, `ftruncate`, `close`, with no temp file, no rename and no `fsync`.
 
 The steps, the provider and the expected results are in `omp-lifecycle-runbook.md`. The recorded output is in the quick task `261029-g7m` under `.planning/quick/`.
+
+## Enforcement spike (OMPX-01, 2026-10-29, Omp 18.12.6)
+
+What Omp does when an extension removes, shadows, blocks or observes its built-in tools, observed on Omp 18.12.6 (`omp --version` prints `omp/18.12.6`), Linux x64, Node 24.18. Evidence labels: **VERIFIED_BY_EXECUTION** means the row is asserted by `test/integration/omp-spike.test.ts`, which a newer Omp that behaves differently fails; **VERIFIED_BY_CODE_READING** and **INFERENCE** are as in the research of phase 12.
+
+Method. The spike uses a test extension, `test/support/omp-spike-extension.ts`, not the Realm plugin, so no answer depends on a Realm bug. Omp runs as `omp --mode rpc-ui --no-extensions -e <extension> --model stub/scripted --no-session` under an isolated profile (own `PI_CODING_AGENT_DIR`, `HOME` and `XDG_CONFIG_HOME`, no credentials, no real model). A scripted OpenAI-compatible provider emits exactly one tool call per prompt. The extension logs `tool_call`, `tool_result`, `getActiveTools()` and `getAllTools()` to a JSONL file that the test reads. No Podman, daemon or image is involved. The suite is gated like the guard suite: `REALM_LIVE_OMP=1` (the test never sets it), the Omp executable and its version (18.12.6 or newer), and the built extension. S11 also needs `REALM_OMP_NET_TRACE=1` and a `strace` that can trace; S5 needs `unshare -m`. A newer Omp runs and is recorded, and fails a row it behaves differently on.
+
+| ID | Question | Observed result on Omp 18.12.6 | Evidence |
+| --- | --- | --- | --- |
+| S1 | Does an extension tool registered under a built-in's name replace it? | Yes. `getAllTools()` lists `write:extension` and no `write:builtin`. The model's `write {path, content}` ran the extension's `execute` with exactly that input; no file was written; `ctx.invokeTool` is a function. `tool_call` and `tool_result` still fired around it. A Zod object schema is accepted. | VERIFIED_BY_EXECUTION |
+| S1b | Do extension tools under their own names run? | Yes. `exec`, `status` and `list` (a raw JSON Schema object as `parameters`) were active, were offered to the model and ran. `ctx.invokeTool` is `undefined` for a name that is not a built-in. | VERIFIED_BY_EXECUTION |
+| S2a | After `setActiveTools` without `write`, `edit`, `bash`, `eval`, `ast_edit`, `lsp`, `debug` and `task`, is every one refused? | Yes. `getActiveTools()` afterwards was `read, ask, glob, grep, wait, todo, web_search`. Eleven calls (each removed tool, then `write xd://ast_edit`, `write xd://eval`, `write local://scratch.txt`) all returned `isError` with the text `Tool <name> not found`; no execute ran; `tool_call` never fired for them; the workspace held only its seed file. `read xd://` reported 0 mounted tool devices. The provider's next request offered exactly the active set. | VERIFIED_BY_EXECUTION |
+| S2a (shadow) | The same, with `write` replaced by an extension tool? | Yes. The seven other removed names were refused as above. `write xd://ast_edit` reached the extension's `execute` as an ordinary string path, and nothing was mounted under `xd://`. | VERIFIED_BY_EXECUTION |
+| S2b | Does a removal survive a new session? Does `session_start` fire again? | The removal persisted (`bash` still `Tool bash not found`). `session_start` did not fire again; `session_switch` fired once, with a new session id and the same restricted set. | VERIFIED_BY_EXECUTION |
+| S2c | What survives a removal of `write`, `edit` and `bash` only? | `write` stays active as the device transport. It refuses a workspace path (`limited to the xd:// device transport and local:// session scratch`). `read xd://` lists three mounted devices: `ast_edit`, `debug`, `lsp`. `write local://scratch.txt` succeeded and wrote nothing into the workspace: the file landed in `omp-local/<session id>/` under Omp's temporary directory. `eval` stayed active and wrote `e.txt` in the workspace with `Bun.write`. | VERIFIED_BY_EXECUTION |
+| S3 | Does a nested `write xd://<tool>` call emit its own `tool_call`? | Yes. A valid `write xd://ast_edit` emitted `tool_call` for the outer `write`, then one for the inner `ast_edit` with the same call id and the device's own input. A block on `ast_edit` blocked the call (the result text was the reason) and the blocked inner call had no `tool_result`. | VERIFIED_BY_EXECUTION |
+| S4 | What do `tool_call` and `tool_result` handlers do? | A block makes the reason the result text with `isError`; `execute` does not run and no `tool_result` event fires for it. A returned `input` replaces the input `execute` receives (the event showed the original). A throw blocks the call with `Extension <file> failed: <message>`. A handler that never settles blocks it with `Extension <file> timed out after <n>ms`; the budget is `extensionHandlers.toolCallTimeoutMs` and took the value 3000 from `config.yml` in the agent directory. A `tool_result` return replaced the content and `isError` on the wire, while the event itself showed the result before the replacement. An `execute` that returns `isError: true`, and one that throws, both reach the model as tool errors. | VERIFIED_BY_EXECUTION |
+| S5 | What does `registerFileWriteFallback` do? | It ran only after a native write failed with `EROFS` (a bind-mounted read-only workspace in its own mount namespace). The handler received the absolute destination, the content, a session id and the cause `EROFS`; returning `true` made Omp report `Successfully wrote 14 bytes to ro.txt` while the bytes went to another file and the workspace path stayed absent. A write to a writable path never reached it. It is a redirect for a host that denies writes, not a control. | VERIFIED_BY_EXECUTION |
+| S6 | Does a subagent (`task`) session load the extension and meet the hooks? | Yes, in the same process. The `task` call returned `Spawned agent <name> (job <name>)` at once. The subagent session loaded the extension again, ran `session_start` with its own session id and its own base tool set (`read, bash, edit, eval, glob, grep, task, wait, web_search, write, ast_edit, debug`), and the extension's own `setActiveTools` removed `bash` from it (`Tool bash not found`; the subagent was never offered `bash`). Its `write` met the `tool_call` block and no file was created. Observed with the extension loaded by `-e`; a subagent of an Omp that does not load it was not run. | VERIFIED_BY_EXECUTION |
+| S7 | Does the eval bridge pass the hook? Does `eval` bypass it? | A bridge call `tool.bash(...)` inside `eval` emitted `tool_call` for `bash` with a `js-bash-` call id, and the block held (no file). The documentation says the bridge emits no `tool_call`; on 18.12.6 it does. `eval` itself is one tool call: what its code writes with `Bun.write` is invisible to every hook, so `eval` must be removed. `ast_edit` through the device transport only stages a proposal (`files NOT modified yet`); the file changed only after `write xd://resolve` (`Applied 2 replacements in 1 file`), and `resolve` is not a tool (only the outer `write` reached the hook). | VERIFIED_BY_EXECUTION |
+| S8 | Does a user-initiated shell command pass the hook or the removal? | No. The RPC `bash` command ran with `bash` removed, wrote the file, and produced no `tool_call`. It is the user's action, outside the model's reach, and no extension hook or removal covers it. | VERIFIED_BY_EXECUTION |
+| S9 | What happens to an invalid call against a raw JSON Schema? | Omp rejects it before `execute`: `Validation failed for tool "list"` with `depth: is required`; `execute` ran for the valid call only. | VERIFIED_BY_EXECUTION |
+| S10 | Does Omp rewrite an absolute path before an extension `write` sees it? | No. The shadowed `write` received the absolute path as sent. Whether the Realm `write` accepts it is Realm's schema (it rejects a leading `/`), not Omp's. | VERIFIED_BY_EXECUTION |
+| S11 | What network does a startup make, and which lever gives a clean trace? | See "HARN-03 network finding". Cold profile 46 non-loopback connects, warm profile 0, a refusing loopback proxy 0 on a cold profile. | VERIFIED_BY_EXECUTION |
+| S12 | Which tools prompt in a non-yolo approval mode? | With `tools.approvalMode: always-ask` a tool with no declared tier and a tool declared `approval: "exec"` each raised a `select` dialog (`Allow tool: <name>` with `Approve`, `Approve <name> for this session`, `Deny`); a tool declared `approval: "read"` and Omp's native `read` raised none. `tool_call` ran before the prompt. The harness answers a `select` with a cancel, which Omp reports as `Tool call denied by user: <name>`, and the denied tool did not run. | VERIFIED_BY_EXECUTION |
+| S13 | What happens to a 1 MiB tool result? | Omp truncated it in the middle to 40 960 bytes plus a marker (41 073 characters visible) before the `tool_result` hook saw it, and attached `details.meta.truncation` (`direction: middle`, `totalBytes: 1048576`, `maxBytes: 40960`, `elidedBytes: 1007616`, an `artifactId`). The tool's own `details` survived and the model's next request carried the same truncated text. A Realm `read` of the full 1 MiB would therefore reach the model truncated. | VERIFIED_BY_EXECUTION |
+| S14 | What does SIGKILL do in the middle of a tool call? | Omp exited with signal SIGKILL; the call whose `execute` had started never finished (no `tool_execution_end`, no `tool_result`); no shutdown handler ran. Whether a daemon, a container or a partial write is unaffected is **not answerable here**: the spike has no daemon. That is covered by the live kill runs recorded in the scripted-provider section above and by the guard suite. | VERIFIED_BY_EXECUTION (the kill); not answerable (the daemon) |
+
+Run record: see "Run record" at the end of this section.
+
+### Q4 answer
+
+May fail-closed mode disable the built-in tools? **Yes.** `await pi.setActiveTools(names)` in the `session_start` handler removes tools, `getActiveTools()` returns exactly the requested set afterwards, the removed tool leaves the list the model is offered, and a call to it is refused at execution with `Tool <name> not found` before any hook or `execute` runs (S2a, S2b, S6). A `tool_call` block is a second, independent control that covers a call at execution time, including a nested `write xd://<tool>` (S3) and an eval-bridge call (S7), and it fails closed on a throw or a timeout (S4).
+
+What does not work. Removing `write`, `edit` and `bash` is not containment. `write` stays as the device transport and the mountable tools behind it, `ast_edit`, `lsp` and `debug`, stay callable, as do `eval` and `task` (S2c). Shadowing `write` with an extension tool switches the transport off, and then those tools are ordinary top-level tools that stay active (S1, S2a shadow). `registerFileWriteFallback` is not a removal and not a redirection hook (S5). A removal does not reach the user's own shell command (S8).
+
+### Tools that remain
+
+After `setActiveTools` removes only `write`, `edit` and `bash` (S2c), the active set was `read, ask, eval, glob, grep, task, wait, todo, web_search, write, ast_edit, debug, lsp`. Of those, these can write a file or run a command on the host:
+
+| Tool | Why it can mutate the host | Evidence |
+| --- | --- | --- |
+| `eval` | Runs arbitrary JavaScript (Bun) or Python in the session; `Bun.write` created a workspace file | VERIFIED_BY_EXECUTION (S2c, S7) |
+| `ast_edit` (through `write xd://ast_edit` and `write xd://resolve`) | Rewrites files once the staged proposal is resolved | VERIFIED_BY_EXECUTION (S7) |
+| `write` (device transport and `local://`) | Reaches the devices above; `local://` wrote outside the workspace | VERIFIED_BY_EXECUTION (S2c) |
+| `task` | Starts a subagent session with its own tool set that includes native `write`, `edit` and `bash` unless the extension removes them there | VERIFIED_BY_EXECUTION (S6) |
+| `lsp` | `rename`, `rename_file` and an applied code action rewrite files; a language server is a host process | VERIFIED_BY_CODE_READING (the tool's own description); not executed |
+| `debug` | `launch` starts a program on the host | VERIFIED_BY_CODE_READING (the tool's own description); not executed |
+
+`read`, `glob`, `grep`, `ask`, `todo` and `wait` write no workspace file by their own descriptions (INFERENCE: not each probed for a write). `read` and `web_search` can reach the network, which is outside the realm's egress policy.
+
+After the full removal of S2a (`write, edit, bash, eval, ast_edit, lsp, debug, task`), the active set was `read, ask, glob, grep, wait, todo, web_search`, and none of the eleven refused calls changed the workspace.
+
+### Recommended removal rule for fail-closed mode
+
+An allowlist, computed at runtime, not a denylist:
+
+1. In `session_start`, call `await pi.setActiveTools(allowed)` where `allowed` is the names in `getAllTools()` that are on an explicit read-only allowlist (`read`, `glob`, `grep`, `ask`, `todo`, `wait`, and `web_search` only if the product permits model-driven network access), plus the Realm tools. Do not name `write`, `edit` and `bash` and stop there (S2c), and do not hardcode a denylist of the eight natives of S2a: a later Omp adds tools, and every tool not on the allowlist must be gone.
+2. Read `getActiveTools()` back. It matched the request in every spike run (S2a, S2b, S6). A mismatch is a failed attach and must block (fail closed).
+3. Run the same step in every session the extension loads in. A subagent session runs its own `session_start` (S6). A new session in the same process does not run it again and keeps the removal (S2b).
+4. Keep a `tool_call` handler as a backstop that blocks any tool name that is not on the allowlist or a Realm tool. It covers a tool that another extension or an MCP server registers after the removal, and the nested device and bridge calls of S3 and S7. A handler error or timeout blocks (S4).
+5. Do not rely on `registerFileWriteFallback` (S5), and do not rely on shadowing `write` alone (S1).
+
+### What the product can truthfully claim (D3)
+
+D3 can end as containment of the model's tool calls, not as containment of the host. With the allowlist rule, every native tool that writes a file or runs a command was refused at execution in the spike, including the transports, and the same removal applies in a subagent session that loads the extension (S2a, S6). The claim must keep these limits, none of which the spike removes:
+
+- the user's own shell command (the RPC `bash` command that S8 ran) bypasses the removal and every hook (S8);
+- the removal is a decision inside the Omp process, not an operating-system boundary; a session that does not load the extension (for example Omp started with `--no-extensions` and no `-e`, or an SDK session with `restrictToolNames`) has none of it (INFERENCE: not run);
+- tools that another extension or an MCP server registers are covered only by the allowlist step 1 and the backstop of step 4, which were not run against such a tool;
+- the spike drove a test extension. Until Phase 16 repeats S2a, S3 and S6 with the Realm plugin, the supportable wording is a guard backed by tool removal that was observed on a test extension, with containment claimed for model-issued calls only.
+
+### OQ-P5-01 and OQ-P5-02
+
+OQ-P5-01 is **closed** for Omp 18.12.6. The names `registerTool`, `getActiveTools`, `getAllTools`, `setActiveTools` and `registerFileWriteFallback` exist and behave as the rows above show (VERIFIED_BY_EXECUTION). `ctx.ui.setStatus(key, text)` is exercised by the plugin in the live runs recorded above, which produced `setStatus` frames with the key `realm`. The official `omp.sh` pages still do not state the enforcement or the `setStatus` signature; they were not re-read in this pass.
+
+OQ-P5-02 is **restated, narrowly**. Known, for Omp 18.12.6 and an extension loaded with `-e`:
+
+- covered by `tool_call`: every model-issued tool call, a nested `write xd://<tool>` call (S3), a call through the eval bridge (S7), and a subagent session's calls (S6);
+- not covered by `tool_call`: what `eval`'s own code writes with the runtime's file API (S7), and the user's own shell command (S8);
+- covered by a removal but not by a hook: nothing was found that is.
+
+Still unknown, not executed: the Python eval prelude (only JavaScript was run); an SDK session with `restrictToolNames`; a subagent in an Omp that does not load the extension; the interval between process start and `session_start` (no model turn ran in it in any spike run); tools registered by other extensions or MCP servers; and the Realm plugin itself with the rule above.
+
+### HARN-03 network finding
+
+The claim "a run makes no network call outside loopback" does not hold for a default fresh profile. Measured with `strace -f -ttt -e trace=connect,sendto,sendmsg,sendmmsg` around Omp (`test/support/net-trace.ts`), the stub on loopback, one scripted text turn, classified as in D-1205 (Unix sockets allowed; loopback allowed for the stub port and the local-model discovery ports 11434, 8080 and 1234; loopback port 53 reported as DNS; anything else external). VERIFIED_BY_EXECUTION on Omp 18.12.6:
+
+| Profile or lever | Non-loopback connects | Notes |
+| --- | --- | --- |
+| Cold profile (a fresh agent directory) | 46 external TCP 443 connects (24 distinct addresses) and 7 DNS connects | The model-catalog refresh (strategy `online-if-uncached`, cache in `models.db`). Loopback probes of 11434, 8080 and 1234 and the stub. |
+| Warm profile (the same directory, second start) | 0 external, 0 DNS | Loopback probes of 11434, 8080 and 1234 and the stub only. |
+| Lever 1: a setting or environment variable that disables the refresh and discovery | No single switch found. The `disabledProviders` setting listing every provider id of the installed catalog (89 ids, read from the installed Omp) gave 0 external connects on a cold profile, and removed the probes of 11434 and 1234 | The list is internal to Omp and changes with each version, so it is recorded, not asserted. |
+| Lever 2: a registry that exposes only the stub | Not clean: 46 external connects. The profile's `models.yml` already names only the stub, and `enabledProviders: [stub]` changed nothing | |
+| Lever 3: a warm profile seeded by an earlier run | Clean (the warm row) | The warm-up run itself reaches the internet, and the cache expires. |
+| Lever 4: an empty network namespace | 0 external connects, 28 DNS connects, no stub | The stub lives in the test process and is unreachable from inside the namespace, so no scripted turn can run. |
+| Lever 5: a refusing loopback proxy (`HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY=127.0.0.1,localhost`) | 0 external, 0 DNS on a cold profile; the proxy refused 7 `CONNECT <host>:443` requests | The hosts Omp tried at startup: `api.commandcode.ai`, `api.kilo.ai`, `api.venice.ai`, `catalog.stencil.so`, `coding-intl.dashscope.aliyuncs.com`, `hyper.charm.land`, `zenmux.ai`. |
+
+The lever that works without a warm-up and without a version-bound list is lever 5: it gives a cold profile a clean trace, and the recording proxy names exactly which hosts the startup would have contacted. The guard suite should start Omp that way and assert zero offenders with the proxy port on the loopback allowlist. The warm profile (lever 3) is the fallback. The scoped claim, if neither is used, is: after the `ready` frame and across all scripted turns, Omp made no non-loopback connection on a warm profile, with the startup catalog traffic of a cold profile out of scope. The wording of HARN-03 in `.planning/REQUIREMENTS.md` is changed through GSD, not here.
+
+### Run record
+
+The suite (twelve tests: S1 S9 S10, S2a, S2a shadow, S2b S8, S2c S3, S7, S4, S5, S6, S12, S13 S14 and S11) passed live on Omp 18.12.6 in two consecutive runs on 2026-10-29, each with 12 of 12 passing and 0 skipped (each run took about 23 minutes; the load average was 27 and 41 when the two runs started). Command: `REALM_LIVE_OMP=1 REALM_OMP_NET_TRACE=1 node --test --test-concurrency=1 dist/test/integration/omp-spike.test.js` after building with `tsc -p tsconfig.json`. The raw logs, RPC frames, provider requests and strace output were kept outside the repository. Two earlier attempts of the finished suite failed under a load average near 100 on a wait bound, not on an assertion: the 60 second bound of the first prompt of a cold profile, and of an `eval` call. The bounds of runtime-starting calls (`eval`, `bash`) and of that first prompt were then widened to the startup bound; every wait still resolves from the frame handler.
+
+Two facts about running it. `omp --version` took 25 seconds at a load average near 100, so the gate's own 15 second version probe (`collectOmpGateInputs`) would skip the whole file on such a host; the spike reads the version itself with a 180 second failure bound. Omp must be given its own `TMPDIR`: its `local://` scratch files (`omp-local/<session id>/`) otherwise accumulate in the shared temporary directory, and the spike points `TMPDIR` into the profile root so they are removed with it.
