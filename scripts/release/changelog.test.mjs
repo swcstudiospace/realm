@@ -34,9 +34,9 @@ function git(cwd, args) {
   return execFileSync('git', args, { cwd, encoding: 'utf8', timeout: 30000 });
 }
 
-function commit(cwd, subject) {
+function commit(cwd, subject, file = 'work.txt') {
   commitCounter += 1;
-  writeFileSync(path.join(cwd, 'work.txt'), `${commitCounter}\n`);
+  writeFileSync(path.join(cwd, file), `${commitCounter}\n`);
   git(cwd, ['add', '-A']);
   git(cwd, [
     '-c',
@@ -308,4 +308,85 @@ test('throws naming CHANGELOG.md when the file is missing', () => {
     () => generateChangelog({ root, version: '0.1.0', date: '2026-10-22' }),
     /cannot read .*CHANGELOG\.md/,
   );
+});
+
+test('leaves out internal planning commits and keeps near-miss scopes and breaking ones', () => {
+  const root = makeRepo([
+    'docs(planning): record the phase 9 closure',
+    'fix(planning): correct a state file',
+    'docs(planning-tools): describe the helper',
+    'feat(planning)!: change the planning layout',
+    'feat(driver): add the compute driver',
+  ]);
+
+  generateChangelog({ root, version: '0.2.0', date: '2026-10-29' });
+
+  assert.equal(
+    normalize(sectionBody(readChangelog(root), '## [0.2.0] - 2026-10-29')),
+    [
+      '### Added',
+      '- feat(driver): add the compute driver (SHA)',
+      '- feat(planning)!: change the planning layout (SHA)',
+      '',
+      '### Documentation',
+      '- docs(planning-tools): describe the helper (SHA)',
+    ].join('\n'),
+  );
+});
+
+test('writes the no-changes placeholder when only planning and release commits exist', () => {
+  const root = makeRepo(['docs(planning): record a plan', 'chore(release): v0.0.9 [skip ci]']);
+
+  generateChangelog({ root, version: '0.2.0', date: '2026-10-29' });
+
+  assert.equal(
+    sectionBody(readChangelog(root), '## [0.2.0] - 2026-10-29'),
+    '### Changed\n- No user-facing changes recorded.',
+  );
+});
+
+test('classifies scoped and breaking subjects by type and sends other subjects to Changed', () => {
+  const root = makeRepo([
+    'feat(driver): scoped feature',
+    'fix(isolation)!: breaking fix',
+    'Fix: capitalised type',
+    'feat add colon later: not conventional',
+  ]);
+
+  generateChangelog({ root, version: '0.2.0', date: '2026-10-29' });
+
+  assert.equal(
+    normalize(sectionBody(readChangelog(root), '## [0.2.0] - 2026-10-29')),
+    [
+      '### Added',
+      '- feat(driver): scoped feature (SHA)',
+      '',
+      '### Changed',
+      '- feat add colon later: not conventional (SHA)',
+      '- Fix: capitalised type (SHA)',
+      '',
+      '### Fixed',
+      '- fix(isolation)!: breaking fix (SHA)',
+    ].join('\n'),
+  );
+});
+
+test('lists the commits of a merged branch and not the merge commit itself', () => {
+  const root = makeRepo(['feat: base work']);
+  const identity = ['-c', 'user.name=test', '-c', 'user.email=test@example.invalid', '-c', 'commit.gpgsign=false'];
+  const since = git(root, ['rev-parse', 'HEAD']).trim();
+  const base = git(root, ['rev-parse', '--abbrev-ref', 'HEAD']).trim();
+  git(root, ['checkout', '-q', '-b', 'side']);
+  commit(root, 'fix: branch work');
+  git(root, ['checkout', '-q', base]);
+  commit(root, 'docs: mainline work', 'mainline.txt');
+  git(root, [...identity, 'merge', '-q', '--no-ff', '-m', 'Merge pull request #6 from x/side', 'side']);
+
+  generateChangelog({ root, version: '0.2.0', date: '2026-10-29', since });
+
+  const body = normalize(sectionBody(readChangelog(root), '## [0.2.0] - 2026-10-29'));
+  assert.ok(body.includes('- fix: branch work (SHA)'));
+  assert.ok(body.includes('- docs: mainline work (SHA)'));
+  assert.ok(!body.includes('Merge pull request'));
+  assert.ok(!body.includes('base work'));
 });

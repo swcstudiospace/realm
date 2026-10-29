@@ -1,10 +1,10 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { nextVersion } from './version.mjs';
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const MILESTONE_PATTERN = /^v\d+\.\d+$/;
 
 function readMilestone(file) {
@@ -41,11 +41,20 @@ function listTags(cwd) {
     .filter((line) => line !== '');
 }
 
-try {
+export function planNextVersion(root) {
   const milestone = readMilestone(path.join(root, 'release', 'milestone.json'));
-  const result = nextVersion({ tags: listTags(root), milestoneMinor: milestone.minor });
-  process.stdout.write(`${JSON.stringify(result)}\n`);
-} catch (error) {
-  process.stderr.write(`${error.message}\n`);
-  process.exitCode = 1;
+  return nextVersion({ tags: listTags(root), milestoneMinor: milestone.minor });
+}
+
+function isEntrypoint() {
+  return process.argv[1] !== undefined && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
+}
+
+if (isEntrypoint()) {
+  try {
+    process.stdout.write(`${JSON.stringify(planNextVersion(repoRoot))}\n`);
+  } catch (error) {
+    process.stderr.write(`${error.message}\n`);
+    process.exitCode = 1;
+  }
 }

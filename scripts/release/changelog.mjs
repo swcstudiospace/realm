@@ -20,7 +20,10 @@ const CATEGORY_BY_TYPE = new Map([
   ['ci', 'Maintenance'],
   ['chore', 'Maintenance'],
 ]);
-const CONVENTIONAL_TYPE = /^([a-z]+)(?:\([^)]*\))?!?:/;
+// Scopes that mark internal bookkeeping (GSD planning records). Their commits are not notable
+// changes, so the generator leaves them out. A breaking-change marker (`!`) keeps a commit.
+const INTERNAL_SCOPES = new Set(['planning']);
+const CONVENTIONAL_HEADER = /^([a-z]+)(?:\(([^)]*)\))?(!)?:/;
 
 function assertVersion(version) {
   if (typeof version !== 'string' || !VERSION_PATTERN.test(version)) {
@@ -69,8 +72,13 @@ function findSection(lines, heading) {
 }
 
 function categoryOf(subject) {
-  const match = CONVENTIONAL_TYPE.exec(subject);
+  const match = CONVENTIONAL_HEADER.exec(subject);
   return (match !== null && CATEGORY_BY_TYPE.get(match[1])) || 'Changed';
+}
+
+function isInternal(subject) {
+  const match = CONVENTIONAL_HEADER.exec(subject);
+  return match !== null && match[3] === undefined && INTERNAL_SCOPES.has(match[2]);
 }
 
 function collectEntries(root, since) {
@@ -97,7 +105,7 @@ function collectEntries(root, since) {
     }
     const sha = line.slice(0, tab);
     const subject = line.slice(tab + 1);
-    if (subject.startsWith('chore(release)')) {
+    if (subject.startsWith('chore(release)') || isInternal(subject)) {
       continue;
     }
     entries.push({ sha, subject, category: categoryOf(subject) });

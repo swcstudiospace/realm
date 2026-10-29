@@ -12,6 +12,10 @@ const ADAPTER_JSON_MANIFESTS = [
   'adapters/prime-agent/package.json',
 ];
 
+// Every file whose version the release job rewrites. The release commit stages exactly these
+// paths (`--files`), so the staged set cannot drift from the synced set.
+export const RELEASE_VERSION_FILES = ['package.json', 'package-lock.json', ...ADAPTER_JSON_MANIFESTS];
+
 function readText(file) {
   try {
     return readFileSync(file, 'utf8');
@@ -93,10 +97,14 @@ if (isEntrypoint()) {
   try {
     const args = process.argv.slice(2);
     if (args.length !== 1) {
-      throw new Error('usage: sync-version.mjs <0.minor.patch>');
+      throw new Error('usage: sync-version.mjs <0.minor.patch> | --files');
     }
-    const result = syncVersion({ root: repoRoot, version: args[0] });
-    process.stdout.write(`${JSON.stringify(result)}\n`);
+    if (args[0] === '--files') {
+      process.stdout.write(`${RELEASE_VERSION_FILES.join('\n')}\n`);
+    } else {
+      const result = syncVersion({ root: repoRoot, version: args[0] });
+      process.stdout.write(`${JSON.stringify(result)}\n`);
+    }
   } catch (error) {
     process.stderr.write(`${error.message}\n`);
     process.exitCode = 1;
