@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { RealmError } from "../../src/core/errors.js";
-import { ensureDaemon } from "../../src/daemon/ensure.js";
+import { daemonAnswers, ensureDaemon } from "../../src/daemon/ensure.js";
 
 const SOCKET = "/state/run/control.sock";
 
@@ -95,4 +95,51 @@ void test("non-finite or non-positive intervals refuse with SCHEMA_INVALID befor
     (error: unknown) => error instanceof RealmError && error.code === "SCHEMA_INVALID",
   );
   assert.equal(probes, 0);
+});
+
+// The probe the CLI and the Omp extension share. A scripted client stands in for the control socket.
+interface ScriptedClient {
+  readonly client: { status: () => Promise<never>; close: () => void };
+  readonly closes: () => number;
+}
+
+function scriptedClient(status: () => Promise<never>): ScriptedClient {
+  let closed = 0;
+  return {
+    client: { status, close: () => { closed += 1; } },
+    closes: () => closed,
+  };
+}
+
+void test("daemonAnswers is true when the status request succeeds, and closes the client", async () => {
+  let closed = 0;
+  const answers = daemonAnswers((path) => {
+    assert.equal(path, SOCKET);
+    return {
+      status: () => Promise.resolve({} as never),
+      close: () => { closed += 1; },
+    };
+  });
+  assert.equal(await answers(SOCKET), true);
+  assert.equal(closed, 1);
+});
+
+void test("daemonAnswers reads every not-yet-answering failure as no daemon yet, so a host that starts the daemon keeps polling", async () => {
+  // An absent socket, a request that timed out, and a reply cut short while the daemon is still binding its socket.
+  for (const code of ["REALM_NOT_ACTIVE", "TOOL_TIMEOUT", "SCHEMA_INVALID"] as const) {
+    const scripted = scriptedClient(() => Promise.reject(new RealmError(code)));
+    assert.equal(await daemonAnswers(() => scripted.client)(SOCKET), false, code);
+    assert.equal(scripted.closes(), 1, `${code} closes the client`);
+  }
+});
+
+void test("daemonAnswers propagates any other failure unchanged and still closes the client", async () => {
+  const refusal = new RealmError("PODMAN_MISSING");
+  const refused = scriptedClient(() => Promise.reject(refusal));
+  await assert.rejects(daemonAnswers(() => refused.client)(SOCKET), (error: unknown) => error === refusal);
+  assert.equal(refused.closes(), 1);
+  const defect = new Error("socket reset");
+  const broken = scriptedClient(() => Promise.reject(defect));
+  await assert.rejects(daemonAnswers(() => broken.client)(SOCKET), (error: unknown) => error === defect);
+  assert.equal(broken.closes(), 1);
 });

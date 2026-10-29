@@ -7,30 +7,12 @@
 
 import { startDetachedDaemon } from "../cli/main.js";
 import { fileURLToPath } from "node:url";
-import { RealmError } from "../core/errors.js";
 import { connectDaemon, type DaemonClient } from "../daemon/client.js";
 import { CONTROL_TIMEOUT_MS } from "../daemon/channel.js";
-import { ensureDaemon, reportingStartFailure } from "../daemon/ensure.js";
+import { daemonAnswers, ensureDaemon, reportingStartFailure } from "../daemon/ensure.js";
 import { readHostRuntime } from "../runtime/host-paths.js";
 import { controlSocketPath } from "../session/paths.js";
 import { registerRealmPlugin, type OmpExtensionApi } from "./plugin.js";
-
-// Status probe for ensureDaemon: true when a daemon answers, false when none does. Any other
-// failure propagates to ensureDaemon unchanged.
-async function probeDaemon(socketPath: string): Promise<boolean> {
-  const client = connectDaemon(socketPath);
-  try {
-    await client.status();
-    return true;
-  } catch (error: unknown) {
-    if (error instanceof RealmError && error.code === "REALM_NOT_ACTIVE") {
-      return false;
-    }
-    throw error;
-  } finally {
-    client.close();
-  }
-}
 
 export default function realmExtension(pi: OmpExtensionApi): void {
   // Read once, at the edge: the config's stateDir, the value the CLI and the daemon use. An invalid config throws here.
@@ -41,7 +23,7 @@ export default function realmExtension(pi: OmpExtensionApi): void {
   const attachDaemon = async (workspaceRoot: string): Promise<DaemonClient> => {
     await ensureDaemon({
       socketPath,
-      probe: reportingStartFailure(probeDaemon, stateDir),
+      probe: reportingStartFailure(daemonAnswers(connectDaemon), stateDir),
       spawnDaemon: () => {
         startDetachedDaemon(daemonEntry, stateDir);
       },

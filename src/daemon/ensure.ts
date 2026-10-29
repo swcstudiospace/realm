@@ -10,7 +10,8 @@
 // the state directory, so the module still reads no environment.
 
 import { closeSync, openSync, readSync, statSync } from "node:fs";
-import { ERROR_CODES, makeRealmError, type ErrorCode } from "../core/errors.js";
+import { ERROR_CODES, makeRealmError, RealmError, type ErrorCode } from "../core/errors.js";
+import type { DaemonClient } from "./client.js";
 
 export interface EnsureDaemonOptions {
   // Control socket the probe checks; passed to probe so the caller owns no hidden path.
@@ -102,6 +103,33 @@ export function daemonStartFailureSince(stateDir: string, offset: number): Error
     }
   }
   return found;
+}
+
+// Failures that mean the daemon is not answering yet: an absent or dropped socket, a request that timed out, or a reply
+// cut short while the daemon is still binding its socket (SCHEMA_INVALID). ensureDaemon keeps polling on these; when none
+// ever answers it reports DAEMON_START_TIMEOUT.
+const NOT_YET_ANSWERING: readonly ErrorCode[] = ["REALM_NOT_ACTIVE", "TOOL_TIMEOUT", "SCHEMA_INVALID"];
+
+// The probe ensureDaemon polls, shared by every host that attaches (the CLI and the Omp extension): one status request on a
+// fresh client. A not-yet-answering failure reads as no daemon yet (false); any other failure propagates unchanged. The
+// Omp extension spawns the daemon itself, so it meets the same bind race the CLI does, and must tolerate the same replies.
+export function daemonAnswers(
+  connect: (socketPath: string) => Pick<DaemonClient, "status" | "close">,
+): (socketPath: string) => Promise<boolean> {
+  return async (socketPath) => {
+    const client = connect(socketPath);
+    try {
+      await client.status();
+      return true;
+    } catch (error: unknown) {
+      if (error instanceof RealmError && NOT_YET_ANSWERING.includes(error.code)) {
+        return false;
+      }
+      throw error;
+    } finally {
+      client.close();
+    }
+  };
 }
 
 // Wraps a status probe for ensureDaemon. A true answer passes through. On the first miss the log's
