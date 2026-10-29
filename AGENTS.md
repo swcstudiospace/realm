@@ -40,7 +40,7 @@ Requires Node.js 22.13.0 or later (`engines` in `package.json`). CI runs Node 22
 - `npm run build`: compiles with `tsc -p tsconfig.json` into `dist/`.
 - `npm run check:gates`: runs `scripts/check/gate-closure.mjs`, which verifies that the exec gate modules' import closure reaches no forbidden module and no `child_process` (TOOL-02).
 - `npm run check:pack`: packs the package, installs the tarball into a throwaway consumer and loads every schema and adapter manifest from it. Run `npm run build` first; it does not build.
-- `npm run check:mcp`: spawns the built `realm mcp` over stdio and runs initialize, tools/list and a status call. Run `npm run build` first; it does not build.
+- `npm run check:mcp`: spawns the built `realm mcp` over stdio and drives one session in both MCP protocol eras (a legacy `initialize` handshake, then modern requests and an unsupported version), checking the result shapes and the status call against `realm status`. Run `npm run build` first; it does not build.
 
 Every gate must pass before a change is reviewed (`CONTRIBUTING.md`).
 
@@ -50,7 +50,7 @@ Every gate must pass before a change is reviewed (`CONTRIBUTING.md`).
   - `cli/main.ts`: entry for the `realm` CLI.
   - `daemon/`: control socket (`channel.ts`), client, daemon, `ensure.ts` (starts the daemon once and waits for it), and `main.ts`, the daemon entry.
   - `omp/`: Omp plugin logic (`plugin.ts`) and its entry (`extension.ts`).
-  - `mcp/`: MCP stdio server (`server.ts`).
+  - `mcp/`: MCP stdio server (`server.ts`: transport and routing) and the protocol versions and result shapes of both eras (`protocol.ts`). It serves revision 2026-07-28 and answers the `initialize` handshake of the legacy revisions that Claude Code speaks (`docs/integration/mcp.md`, Q6).
   - `acp/`: ACP agent (`agent.ts`) and its stdio entry (`stdio.ts`).
   - `realm/`: composition root (`compose.ts`) that wires the adapters into the controller and dispatcher.
   - `lifecycle/`: `controller.ts` (the lifecycle controller) and `mutation-gate.ts`.
@@ -62,7 +62,7 @@ Every gate must pass before a change is reviewed (`CONTRIBUTING.md`).
   - `audit/`: redacted JSONL audit log.
   - `doctor/`: prerequisite checks behind `realm doctor`.
   - `contract/`: tool and session-record schemas and the schema validator (`validate.ts`).
-  - `core/`: frozen shared contracts: states and the state machine, status labels, policy loading with `policy.schema.json`, the typed error catalogue (`errors.ts`), the event bus, ports, backoff, and `withTimeout` (`timeout.ts`).
+  - `core/`: frozen shared contracts: states and the state machine, status labels, policy loading with `policy.schema.json`, the typed error catalogue (`errors.ts`), the event bus, ports, backoff, and `withTimeout` (`timeout.ts`); and the package version reader (`package-version.ts`).
 - `test/`: `node:test` suites by area, largely mirroring `src/`. `test/integration/` holds the Podman-gated suites, and `test/support/` holds shared fakes.
 - `scripts/`: plain ESM `.mjs` using Node built-ins only. `scripts/check/` backs `npm run check:docs`, `npm run check:image-digests` (`verify-image-digests.mjs`) and `npm run test:scripts`. `scripts/image/` backs `npm run build:image` (`build-image.mjs`). `scripts/release/` backs the release job (`next-version.mjs`, `sync-version.mjs`, `changelog.mjs`, and `assets.mjs`, which writes `SHA256SUMS` and the CycloneDX SBOM).
 - `docs/`: `integration/` (integration and decision notes, such as `runtime-decision.md` and `anda-decision.md`), `hosts/snippets/` (host config snippets), `policy-reference.md`, and `specs/realm-spec.xml` (the product spec).
@@ -82,6 +82,7 @@ Every gate must pass before a change is reviewed (`CONTRIBUTING.md`).
 - Every async boundary has a timeout (`withTimeout`, `src/core/timeout.ts`).
 - No silent catch blocks, except the named exceptions under QUAL-01 in `.planning/REQUIREMENTS.md`. ESLint's `no-empty` rule rejects empty catch blocks.
 - `process.env` is read only at the entry edges: `src/cli/main.ts`, `src/daemon/main.ts`, `src/omp/extension.ts`, and `src/runtime/driver/main.ts`. Other modules take their environment as an argument.
+- No version string is copied into source: the MCP and ACP surfaces read the package manifest through `packageVersion()` (`src/core/package-version.ts`), because the release job rewrites the manifest and a copied string goes stale (release 0.2.0 advertised `0.0.0`).
 - No suppression comments. `eslint.config.js` bans `@ts-ignore`, `@ts-expect-error`, and `@ts-nocheck`; fix the cause instead.
 - No new npm dependency unless the pull request records a justification, a licence check, and a maintenance check (`CONTRIBUTING.md`). Scripts use Node built-ins only.
 - Commit subjects start with a Conventional Commit type (`feat`, `fix`, `perf`, `refactor`, `docs`, `test`, `build`, `ci`, `chore`, or `security`), with an optional scope. The changelog groups entries by type.

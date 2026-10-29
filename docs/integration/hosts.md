@@ -10,6 +10,8 @@ Realm ships one integration per host. The tier says how far each one is verified
 | 2: validator verified | The adapter bundle passes the host's own validator, in an isolated directory. Not registered in the live host configuration | Claude Code and Grok Build (`adapters/claude-plugin`): `claude plugin validate` passes with warnings, `grok plugin validate` passes. Muse Code (`adapters/muse-code`): `muse plugins validate` passes. Hermes Agent (`adapters/hermes-agent`, a portable package): `hermes plugins validate` passes. Prime Agent (`adapters/prime-agent`): no validator subcommand exists; an isolated project-local install and list pass |
 | 3: documented only | Snippet from the host's official pages, not run here | none at v2.0 |
 
+MCP connectivity, checked on 2026-10-29 with the real clients in isolated homes against `realm mcp` attached to the realm account's stack (a connection check, not a model-driven tool call): Claude Code 2.1.308 (`claude mcp list`) and Grok Build 1.0.46 (`grok mcp doctor`) connect and discover the six tools. The same check against release 0.2.0 found Claude Code unable to connect, because the server answered `initialize` with a revision a legacy client does not know; `docs/integration/mcp.md`, Q6, records the finding and the dual-era fix. Muse Code, Hermes Agent and Omp were not checked (no connectivity command, or no usable install on this machine).
+
 Each host has a snippet in `docs/hosts/snippets/`. The snippets reference the
 adapter bundles by their repo paths. `realm` is not on `PATH` on the
 verification host, so every snippet says so and gives no install path.
