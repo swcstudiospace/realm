@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.3.5] - 2026-10-29
+
+### Security
+- security!: default the policy mode to fail-closed (phase 15, part 1) (#19) (84f335b)
+
 ## [0.3.4] - 2026-10-29
 
 ### Maintenance
