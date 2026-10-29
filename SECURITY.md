@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-Only the 0.2.x release line is supported, from its first release, 0.2.0.
+Only the 0.3.x release line is supported, from its first release, 0.3.0.
 
 ## Reporting a vulnerability
 

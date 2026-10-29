@@ -18,8 +18,8 @@ Core guarantee, under the fail-closed policy: every file mutation either lands i
 
 Status (README.md and `.planning/PROJECT.md`):
 
-- v2.0 is the current milestone (release line 0.2.x); v1.0 (0.1.x) was provisional and fail-closed. The daemon binds the AgentOS driver from the configured digest-pinned image. The production stack is the OpenShell 0.1.5 gateway, the Realm compute driver, and rootless Podman 5.x (`docs/integration/openshell.md`).
-- Linux is the only verified platform. macOS and Windows are out of scope for v2.0 unless verified later. Bun is unverified and not assumed. Podman 5.x is required, and Realm does not install it.
+- v3.0 (Containment by Default) is the current milestone (release line 0.3.x; phases 12 to 20 in `.planning/ROADMAP.md`); v2.0 (0.2.x) shipped, and v1.0 (0.1.x) was provisional and fail-closed. The daemon binds the AgentOS driver from the configured digest-pinned image. The production stack is the OpenShell 0.1.5 gateway, the Realm compute driver, and rootless Podman 5.x (`docs/integration/openshell.md`).
+- Linux is the only verified platform. macOS and Windows are out of scope for v3.0 unless verified later. Bun is unverified and not assumed. Podman 5.x is required, and Realm does not install it.
 - Podman-gated and host-gated checks ran live on 2026-10-28 on a Podman 5.7.1 host: the production live suite passed 31 of 31 assertions across its nine scenarios (`docs/integration/openshell.md`). The ACP surface was run live on 2026-10-29 by a separate client (67 checks, 0 failed; `docs/integration/acp.md`). OMP-05 is unproven live.
 - Licence: AGPL-3.0-only (`LICENSE`).
 
@@ -96,7 +96,7 @@ Every gate must pass before a change is reviewed (`CONTRIBUTING.md`).
 
 ## Versioning and release
 
-- The release line is `0.<milestone minor>.<part>`. `release/milestone.json` holds the minor: v1.0 was minor 1 (line `0.1.x`) and v2.0 is minor 2 (line `0.2.x`).
+- The release line is `0.<milestone minor>.<part>`. `release/milestone.json` holds the minor: v1.0 was minor 1 (line `0.1.x`), v2.0 was minor 2 (line `0.2.x`) and v3.0 is minor 3 (line `0.3.x`).
 - Each push to `main` that passes the `verify` job and the `site` build job runs the release job, which publishes the next part: `0.<minor>.0` first, then `0.<minor>.1`, and so on. `scripts/release/next-version.mjs` derives the next part from the latest `v0.*` tag. A milestone minor that is behind the latest tag fails the release.
 - A new milestone starts in a pull request that sets the next minor number in `release/milestone.json`. Its first release is `0.<minor>.0`.
 - The release job owns `CHANGELOG.md` and the `version` field in `package.json`, `package-lock.json`, and the four adapter manifests that carry a release version: `adapters/claude-plugin/.claude-plugin/plugin.json`, `adapters/muse-code/.muse-plugin/plugin.json`, `adapters/hermes-agent/plugin.json`, and `adapters/prime-agent/package.json`. Pull requests never edit those files' version fields or `CHANGELOG.md`. `node scripts/release/sync-version.mjs --files` lists the version files.
@@ -118,7 +118,7 @@ Every gate must pass before a change is reviewed (`CONTRIBUTING.md`).
 
 - `.planning/` is managed by the GSD workflow. Change it only through GSD commands, never by hand.
 - Start file-changing work through a GSD command (`.agents/GEMINI.md`): `/gsd-quick` for small fixes, documentation updates, and ad-hoc tasks; `/gsd-debug` for investigation and bug fixing; `/gsd-execute-phase` for planned phase work. Do not make repository edits outside a GSD workflow unless the user explicitly asks you to bypass it.
-- `.planning/REQUIREMENTS.md` holds the requirement IDs (for example `CORE-05` or `FS-04`) that a pull request names. `.planning/PROJECT.md` holds constraints and status, `.planning/ROADMAP.md` the phases, and `.planning/STATE.md` the workflow state.
+- `.planning/REQUIREMENTS.md` holds the requirement IDs (for example `CRASH-01` or `ONB-02`) that a pull request names, and the standing requirements of earlier milestones that still bind (`QUAL-01` to `QUAL-03`, including the named silent-catch exceptions). `.planning/PROJECT.md` holds constraints and status, `.planning/ROADMAP.md` the phases, and `.planning/STATE.md` the workflow state.
 - The documentation site publishes `.planning/` read-only.
 
 ## Documentation and site
@@ -142,5 +142,5 @@ Every gate must pass before a change is reviewed (`CONTRIBUTING.md`).
 - No host secrets are injected into the sandbox by default, and no secrets belong in the repository, images, or logs. There is no telemetry that sends data off the machine.
 - Podman runs rootless only. Never use privileged containers, and never mount a host Docker or Podman socket into a container.
 - The control socket is user-only: its directory is mode 0700 and the socket is mode 0600.
-- Report suspected vulnerabilities privately through GitHub private vulnerability reporting (`SECURITY.md`). Do not open a public issue, pull request, or discussion for one, and do not put secrets in the report. Only the 0.2.x line is supported, from its first release, 0.2.0.
+- Report suspected vulnerabilities privately through GitHub private vulnerability reporting (`SECURITY.md`). Do not open a public issue, pull request, or discussion for one, and do not put secrets in the report. Only the 0.3.x line is supported, from its first release, 0.3.0.
 - `.env` and `.env.*` files are git-ignored (`.gitignore`).

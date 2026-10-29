@@ -4,7 +4,7 @@
 
 ## Requirements
 
-<!-- Requirement IDs from .planning/REQUIREMENTS.md that this change addresses, for example CORE-05, FS-04. Write "none" if no requirement applies. -->
+<!-- Requirement IDs from .planning/REQUIREMENTS.md that this change addresses, for example CRASH-01, ONB-02. Write "none" if no requirement applies. -->
 
 ## Verification
 
