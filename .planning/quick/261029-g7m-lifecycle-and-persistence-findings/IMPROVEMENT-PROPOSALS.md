@@ -1,6 +1,6 @@
 # Improvement and feature proposals
 
-Scope: Realm at main 00e0003 (release v0.2.2). This document proposes eight changes for the owner to select from. None is implemented. `.planning/ROADMAP.md` is not touched, and no requirement status is changed here.
+Scope: Realm at main 00e0003 (release v0.2.2). This document proposes eight changes for the owner to select from. None is implemented. `.planning/ROADMAP.md` is not touched, and no requirement status is changed here. Status 2026-10-29: the owner selected all eight proposals and answered D1 to D6; the answers are in `.planning/MILESTONE-CONTEXT.md`, and the defaults in "Selection needed" below are superseded by them.
 
 Evidence labels: VERIFIED_BY_CODE_READING (the cited lines were read), VERIFIED_BY_EXECUTION (a recorded live run, cited), UNVERIFIED (what would verify it is stated). Every path is repo-relative. "The realm account" is the host account that runs the daemon.
 

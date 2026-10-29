@@ -177,6 +177,10 @@ Plans:
 
 </details>
 
+### 🚧 v3.0 Containment by Default (In Progress)
+
+**Milestone Goal:** A model working through Omp does its file mutations and commands inside the sandbox by default; the sandbox and its files survive crashes; an operator can see what happened, prove the audit log is intact, and ship with provenance and a rollback path.
+
 - [ ] **Phase 12: Scripted-provider harness and Omp enforcement spike** - A gated harness drives a live Omp through a scripted provider in three cases, the spike answers what the extension API can enforce, and OMP-05 is recorded complete on that evidence (HARN-01..04, OMPX-01)
 - [ ] **Phase 13: Quality ratchet** - Dependency audit and Dependabot, pack checks, coverage floors, de-flaked timing tests, property tests, and a scheduled mutation run (QR-01..08)
 - [ ] **Phase 14: Crash-safety pack** - Orphan temp-file sweep, audit reconciliation, durable record deletion, a visible reap, real-SIGKILL tests, the cause code across the daemon, and retry after a lost container (CRASH-01..07)
@@ -515,7 +519,7 @@ Milestone v3.0 phases (12 to 20) run in three parallel lanes that share no mutab
 | 8. Host Adapter Bundles | 1/1 | Complete (closed 2026-10-24 on validator exit codes; artifacts hand-written, pending owner ratification) | - |
 | 9. Live Omp Verification | 3/3 | Complete (2026-10-28): plan 09-01 closed for code and unit gates on 2026-10-25; OMP-LIVE-01, -03, and -04 were run live on the final build in phase 9.6 (owner decision 2026-10-25, reinstating them from the 2026-10-23 descope); OMP-LIVE-02 met live earlier; UI-01 non-blocking recorded as a stated limitation | - |
 | 9.1. Host Prerequisites and Production Gateway | 1/1 | Complete (2026-10-25): T1 to T9 with evidence; T6 reboot PASS; the main gateway's keep-alive bridge was restored after the reboot and is persistent through boot unit HC-07 | - |
-| 9.2. Native Enforcement Helper | 1/1 | Superseded (2026-10-28): the helper was built and gated in 2026-10-25, then removed by owner decision; enforcement is the runtime policy plus the vendored seccomp profile, proven live in phase 9.6 | - |
+| 9.2. Native Enforcement Helper | 1/1 | Complete (superseded 2026-10-28): the helper was built and gated in 2026-10-25, then removed by owner decision; enforcement is the runtime policy plus the vendored seccomp profile, proven live in phase 9.6 | - |
 | 9.3. Hardened Container Lifecycle | 1/1 | Complete, VERIFIED_WITH_GAPS (2026-10-25): live acceptance 1, 4, 5, 6, 7 PASS after the reboot; acceptance 2 and 3 unit-verified, live NOT RUN; launch and active removal unit-verified | - |
 | 9.4. Compute Driver gRPC | 1/1 | Complete, VERIFIED (2026-10-25): gateway connected live; create, get, list, and delete observed; limits carried to 9.5 (Ready state, PD-08 stop and start live, AuthenticateSandbox) | - |
 | 9.5. Isolation Backend and Sandbox Protocol | 1/1 | Complete on the amended built-in path (2026-10-26): live T0 reached Ready with the runtime as PID 1 and the host supervisor connected; PD-15 host placement and PD-10 runtime policy decided; live checks moved to 9.6 | - |
