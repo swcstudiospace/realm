@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-10-29
+
+### Maintenance
+- ci: audit production dependencies, add Dependabot and smoke the release tarball (phase 13, part A) (#12) (fe76536)
+
 ## [0.3.0] - 2026-10-29
 
 ### Documentation
