@@ -890,11 +890,13 @@ void test("AUD-02, D-67: the OpenShell environment names only PATH, HOME and XDG
 
 void test("RT-03: the OpenShell runner starts argv[0] without a shell and gives the child only the supplied environment", async () => {
   const runner = spawnOpenShellRunner({ PATH: process.env["PATH"] ?? "/usr/bin:/bin", MARKER: "minimal" });
+  // node's coverage mode (npm run test:coverage) forwards NODE_V8_COVERAGE into every child process, so that one
+  // variable is not part of what the runner supplied; every other variable must be exactly MARKER and PATH.
   const outcome = await runner(
     [
       process.execPath,
       "-e",
-      "process.exit(Object.keys(process.env).sort().join(',') === 'MARKER,PATH' ? 0 : 3)",
+      "process.exit(Object.keys(process.env).filter((key) => key !== 'NODE_V8_COVERAGE').sort().join(',') === 'MARKER,PATH' ? 0 : 3)",
     ],
     { timeoutMs: 10_000 },
   );

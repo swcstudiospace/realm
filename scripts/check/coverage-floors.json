@@ -1,0 +1,10 @@
+{
+  "gateNode": "22.x",
+  "tolerance": 1,
+  "reportOnly": true,
+  "floors": {
+    "src/fs": { "lines": 0, "branches": 0, "functions": 0 },
+    "src/core": { "lines": 0, "branches": 0, "functions": 0 },
+    "src/tools": { "lines": 0, "branches": 0, "functions": 0 }
+  }
+}
