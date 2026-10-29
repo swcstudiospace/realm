@@ -197,4 +197,4 @@ Verified live on 2026-10-28 on the final build (Omp 18.12.6, Podman 5.7.1), in a
 7. Run `/realm-retry` again. The status line reads `connecting`, then `● realm active`, in the same Omp session, in 24 seconds (OMP-04, OMP-LIVE-03).
 8. Quit Omp. Confirm the same daemon process is still running and `realm status` reports active (OMP-LIVE-04).
 
-Limits. OMP-05 (the write and edit guard when disconnected) needs a model call and stays unproven live. ACP was not exercised live: only MCP was. The Anda engine is not in scope.
+Limits. OMP-05 (the write and edit guard when disconnected) needs a model call and stays unproven live. The ACP surface was exercised live on 2026-10-29 by a separate client (`docs/integration/acp.md`), not by these Omp checks. The Anda engine is not in scope.
