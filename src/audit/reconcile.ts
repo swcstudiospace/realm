@@ -48,6 +48,7 @@ export interface ReconcileOptions {
   readonly deadline?: number;
   // Limits, each defaulting to its exported constant. A test passes small ones.
   readonly maxFiles?: number;
+  readonly maxListedEntries?: number;
   readonly maxProgressBytes?: number;
   readonly maxProgressEntries?: number;
   readonly maxLineBytes?: number;
@@ -72,8 +73,9 @@ export interface ReconcileResult {
   readonly complete: boolean;
   // How many of `files` were skipped without being read because the progress record matched their size and mtime.
   readonly skippedUnchanged: number;
-  // True when the listing stopped at a limit (RECONCILE_MAX_FILES or RECONCILE_MAX_LISTED_ENTRIES) or at the deadline, so
-  // logs may exist that were not considered. They cannot be named, so they are not in `unfinished`.
+  // True when the listing stopped at its entry bound (RECONCILE_MAX_LISTED_ENTRIES) or at the deadline, so logs may exist that
+  // were not listed. They cannot be named, so they are not in `unfinished`. A start that hit RECONCILE_MAX_FILES is not this:
+  // the logs it did not reach are listed in `unfinished`.
   readonly listingTruncated: boolean;
 }
 
@@ -322,9 +324,10 @@ export const RECONCILE_PROGRESS_FILE = ".reconciled.json";
 export const MAX_PROGRESS_BYTES = 4 * 1024 * 1024;
 export const MAX_PROGRESS_ENTRIES = 20_000;
 
-// At most this many logs are considered per start; a further log makes the listing "truncated" and the result incomplete.
-// The directory is read entry by entry, so even its listing is bounded. Entries that are not logs count against
-// RECONCILE_MAX_LISTED_ENTRIES, so a directory of junk cannot make the listing unbounded either.
+// The directory is read entry by entry and every `*.jsonl` name is kept, up to RECONCILE_MAX_LISTED_ENTRIES entries (names and
+// other entries alike, so a directory of junk cannot make the listing unbounded). A further entry makes the listing
+// "truncated" and the result incomplete. RECONCILE_MAX_FILES is not a listing cap: it is the most logs one start SCANS or
+// STAT-REVALIDATES (see workList); the rest are reported unfinished and are reached by later starts.
 export const RECONCILE_MAX_FILES = 10_000;
 export const RECONCILE_MAX_LISTED_ENTRIES = 100_000;
 const LIST_CHECK_EVERY = 256;
@@ -494,7 +497,7 @@ interface Listing {
 
 // The names of the logs (`*.jsonl`) of a directory, read entry by entry. Everything else in the directory (the record, its
 // temp files, other files) is ignored here. The deadline is checked every LIST_CHECK_EVERY entries.
-function listLogs(dir: string, maxFiles: number, expired: () => boolean): Listing {
+function listLogs(dir: string, maxEntries: number, expired: () => boolean): Listing {
   const names: string[] = [];
   const handle = opendirSync(dir);
   try {
@@ -508,35 +511,38 @@ function listLogs(dir: string, maxFiles: number, expired: () => boolean): Listin
         return { names, truncated: false };
       }
       entries += 1;
-      if (entries > RECONCILE_MAX_LISTED_ENTRIES) {
+      if (entries > maxEntries) {
         return { names, truncated: true };
       }
-      if (!entry.name.endsWith(JSONL_SUFFIX)) {
-        continue;
+      if (entry.name.endsWith(JSONL_SUFFIX)) {
+        names.push(entry.name);
       }
-      if (names.length >= maxFiles) {
-        return { names, truncated: true };
-      }
-      names.push(entry.name);
     }
   } finally {
     handle.closeSync();
   }
 }
 
-// Orders the logs newest modified first (the sessions that were running at a crash are the ones with unmatched admissions),
-// ties by name. The deadline is checked before each stat: logs not stat'ed before it expired are returned in `unreached`,
-// in listing order. A log that cannot be examined sorts last and is counted when its turn comes.
-function newestFirst(
+// The work list, in two groups. FIRST the logs whose names are not in the progress record (never checked, or dropped from
+// the record), then the logs that are in it, which need only a stat to be skipped when their size and mtime are unchanged.
+// Each group is newest modified first, ties by name. Because every start records the logs it finishes, the first group
+// shrinks each start and the work terminates, whatever order the directory lists in. The deadline is checked before each
+// stat, the first group being stat'ed first: logs not stat'ed before it expired are returned in `unreached`, in that order.
+// A log that cannot be examined sorts last in its group and is counted when its turn comes.
+function workList(
   dir: string,
   names: readonly string[],
+  checked: ReadonlyMap<string, Checked>,
   expired: () => boolean,
 ): { readonly ordered: string[]; readonly unreached: string[] } {
-  const stated: { readonly name: string; readonly mtimeMs: number }[] = [];
+  const unrecorded = names.filter((name) => !checked.has(name));
+  const recorded = names.filter((name) => checked.has(name));
+  const candidates = [...unrecorded, ...recorded];
+  const stated: { readonly name: string; readonly group: number; readonly mtimeMs: number }[] = [];
   const unreached: string[] = [];
-  for (const [index, name] of names.entries()) {
+  for (const [index, name] of candidates.entries()) {
     if (expired()) {
-      unreached.push(...names.slice(index));
+      unreached.push(...candidates.slice(index));
       break;
     }
     let mtimeMs = Number.NEGATIVE_INFINITY;
@@ -545,9 +551,12 @@ function newestFirst(
     } catch {
       // Counted when the loop reaches this log and its own lstat fails again.
     }
-    stated.push({ name, mtimeMs });
+    stated.push({ name, group: index < unrecorded.length ? 0 : 1, mtimeMs });
   }
   stated.sort((a, b) => {
+    if (a.group !== b.group) {
+      return a.group - b.group;
+    }
     const byTime = b.mtimeMs - a.mtimeMs;
     if (byTime !== 0 && !Number.isNaN(byTime)) {
       return byTime;
@@ -573,6 +582,7 @@ function emptyResult(failed: number): ReconcileResult {
 export function reconcileAuditLogs(stateDir: string, options: ReconcileOptions = {}): ReconcileResult {
   const maxBytes = options.maxFileBytes ?? RECONCILE_MAX_FILE_BYTES;
   const maxFiles = options.maxFiles ?? RECONCILE_MAX_FILES;
+  const maxListed = options.maxListedEntries ?? RECONCILE_MAX_LISTED_ENTRIES;
   const maxProgressBytes = options.maxProgressBytes ?? MAX_PROGRESS_BYTES;
   const maxProgressEntries = options.maxProgressEntries ?? MAX_PROGRESS_ENTRIES;
   const maxLineBytes = options.maxLineBytes ?? RECONCILE_MAX_LINE_BYTES;
@@ -587,15 +597,15 @@ export function reconcileAuditLogs(stateDir: string, options: ReconcileOptions =
     if (!dirStat.isDirectory() || dirStat.isSymbolicLink()) {
       return emptyResult(1);
     }
-    listing = listLogs(dir, maxFiles, expired);
+    listing = listLogs(dir, maxListed, expired);
   } catch (error: unknown) {
     return emptyResult(isMissing(error) ? 0 : 1);
   }
-  const { ordered, unreached } = newestFirst(dir, listing.names, expired);
-  // Entries of logs that are gone are dropped from the record, which needs a complete listing to know.
-  const present = listing.truncated ? undefined : new Set(listing.names);
   const progress = readProgress(dir, maxProgressBytes, maxProgressEntries);
   const checked = progress.checked;
+  const { ordered, unreached } = workList(dir, listing.names, checked, expired);
+  // Entries of logs that are gone are dropped from the record, which needs a complete listing to know.
+  const present = listing.truncated ? undefined : new Set(listing.names);
   let dirty = !progress.clean;
 
   let files = 0;
@@ -603,12 +613,21 @@ export function reconcileAuditLogs(stateDir: string, options: ReconcileOptions =
   let failed = 0;
   let skippedUnchanged = 0;
   const unfinished: string[] = [];
+  // Logs scanned or revalidated so far, against maxFiles. A refused log (not a regular file, an unsafe name, over a limit) is
+  // not counted: it is never recorded, so counting it would let a crowd of refused logs use the cap every start.
+  let considered = 0;
   // Index of the log being handled, so an error that escapes the per-log guard still reports the rest as unfinished.
   let reached = 0;
   try {
     for (const [index, name] of ordered.entries()) {
       reached = index;
       if (expired()) {
+        unfinished.push(...ordered.slice(index));
+        break;
+      }
+      if (considered >= maxFiles) {
+        // The per-start cap on logs scanned or revalidated is spent. The rest are unfinished and, being unrecorded or
+        // unchanged-and-recorded, come in the same order next start, where the logs finished now are recorded.
         unfinished.push(...ordered.slice(index));
         break;
       }
@@ -623,6 +642,7 @@ export function reconcileAuditLogs(stateDir: string, options: ReconcileOptions =
         const prior = checked.get(name);
         if (prior !== undefined && prior.size === stat.size && prior.mtimeMs === stat.mtimeMs) {
           files += 1;
+          considered += 1;
           skippedUnchanged += 1;
           continue;
         }
@@ -638,6 +658,7 @@ export function reconcileAuditLogs(stateDir: string, options: ReconcileOptions =
           break;
         }
         files += 1;
+        considered += 1;
         const before = appended;
         const finished = reconcileFile(stateDir, sessionId, scanned.counts, expired, () => {
           appended += 1;

@@ -432,13 +432,14 @@ void test("STARTUP budget: restarts with the same small budget make progress thr
     assert.equal(first.unfinished.length, 3);
     assert.equal(first.skippedUnchanged, 0);
 
-    // The two logs the first start finished are the newest now; the second start passes them through the record
-    // without reading them and spends its budget on the next two.
+    // The logs the record does not hold come first, so the second start spends its budget on the next two instead of
+    // revalidating the two the first start finished; those and the last unrecorded log are left unfinished.
     const second = reconcileAuditLogs(stateDir, budgetOfLines(stateDir, ids, 2));
-    assert.equal(second.skippedUnchanged, 2);
+    assert.equal(second.skippedUnchanged, 0);
     assert.equal(second.appended, 2);
-    assert.equal(second.unfinished.length, 1);
+    assert.equal(second.unfinished.length, 3);
 
+    // Now only one log is unrecorded: it is scanned first, and the four recorded logs are revalidated without being read.
     const third = reconcileAuditLogs(stateDir, budgetOfLines(stateDir, ids, 2));
     assert.equal(third.skippedUnchanged, 4);
     assert.equal(third.appended, 1);
@@ -658,10 +659,10 @@ void test("STARTUP budget: entries of logs that no longer exist are dropped from
   });
 });
 
-void test("STARTUP budget: at most maxFiles logs are considered, and the result says the listing was truncated", () => {
+void test("STARTUP budget: a listing cut at its entry bound is reported as truncated", () => {
   withStateDir((stateDir) => {
     plantBalancedLogs(stateDir, 5);
-    const outcome = reconcileAuditLogs(stateDir, { maxFiles: 3 });
+    const outcome = reconcileAuditLogs(stateDir, { maxListedEntries: 3 });
     assert.equal(outcome.files, 3);
     assert.equal(outcome.listingTruncated, true);
     assert.equal(outcome.complete, false);
@@ -739,5 +740,82 @@ void test("STARTUP budget: a line over the line limit is skipped, and the lines 
     const outcome = reconcileAuditLogs(stateDir, { maxLineBytes: 1000 });
     assert.equal(outcome.appended, 2);
     assert.deepEqual(reconciliations(stateDir).map((entry) => entry["path"]).sort(), ["a.txt", "b.txt"]);
+  });
+});
+
+// Plants `count` logs named log-<n> that each hold one admission with no result, the n-th aged n*60 seconds.
+function plantOpenLogs(stateDir: string, count: number): string[] {
+  const ids: string[] = [];
+  for (let n = 1; n <= count; n += 1) {
+    const id = `log-${String(n)}`;
+    appendAudit(stateDir, { sessionId: id, tool: "write", outcome: "ok", phase: "admission", path: `f${String(n)}.txt` });
+    setAge(stateDir, id, n * 60);
+    ids.push(id);
+  }
+  return ids;
+}
+
+void test("STARTUP budget: with more logs than the per-start cap, repeated starts reconcile every log once and never rescan what an earlier start finished", () => {
+  withStateDir((stateDir) => {
+    const ids = plantOpenLogs(stateDir, 7);
+    const linesOf = (id: string): number => reconciliations(stateDir, id).length;
+
+    const first = reconcileAuditLogs(stateDir, { maxFiles: 3 });
+    assert.equal(first.appended, 3);
+    assert.equal(first.files, 3);
+    assert.equal(first.unfinished.length, 4);
+    assert.deepEqual(ids.map(linesOf), [1, 1, 1, 0, 0, 0, 0]);
+
+    // The three unrecorded logs that are next come first, ahead of the recorded ones, so the cap is not spent re-reading.
+    const second = reconcileAuditLogs(stateDir, { maxFiles: 3 });
+    assert.equal(second.appended, 3);
+    assert.equal(second.skippedUnchanged, 0);
+    assert.deepEqual(ids.map(linesOf), [1, 1, 1, 1, 1, 1, 0]);
+
+    // One unrecorded log is left: it is scanned, the cap's remainder revalidates recorded logs without reading them.
+    const third = reconcileAuditLogs(stateDir, { maxFiles: 3 });
+    assert.equal(third.appended, 1);
+    assert.equal(third.skippedUnchanged, 2);
+    assert.deepEqual(ids.map(linesOf), [1, 1, 1, 1, 1, 1, 1]);
+    assert.equal(third.complete, false, "the revalidations over the cap are still reported unfinished");
+    assert.equal(third.unfinished.length, 4);
+
+    // Nothing is unrecorded now: a start only revalidates, and appends nothing.
+    const fourth = reconcileAuditLogs(stateDir, { maxFiles: 3 });
+    assert.equal(fourth.appended, 0);
+    assert.equal(fourth.skippedUnchanged, 3);
+
+    const last = reconcileAuditLogs(stateDir, { maxFiles: 10 });
+    assert.deepEqual(last, { files: 7, appended: 0, failed: 0, unfinished: [], complete: true, skippedUnchanged: 7, listingTruncated: false });
+  });
+});
+
+void test("STARTUP budget: a log added after a record exists is considered before the logs the record holds, even when it is older", () => {
+  withStateDir((stateDir) => {
+    plantBalancedLogs(stateDir, 4);
+    assert.equal(reconcileAuditLogs(stateDir).files, 4);
+
+    // The new log is the oldest of all, and holds an admission with no result.
+    appendAudit(stateDir, { sessionId: "log-new", tool: "write", outcome: "ok", phase: "admission", path: "n.txt" });
+    setAge(stateDir, "log-new", 99_999);
+
+    const outcome = reconcileAuditLogs(stateDir, { maxFiles: 1 });
+    assert.equal(outcome.appended, 1, "the cap of one was spent on the new log");
+    assert.equal(reconciliations(stateDir, "log-new").length, 1);
+    assert.equal(outcome.skippedUnchanged, 0);
+    assert.equal(outcome.unfinished.length, 4, "the four recorded logs are left for the next start");
+  });
+});
+
+void test("STARTUP budget: logs the run refuses do not use the per-start cap", () => {
+  withStateDir((stateDir) => {
+    plantOpenLogs(stateDir, 2);
+    // Two refused logs (unsafe names) that are never recorded, newer than the real ones.
+    for (const name of [".a.jsonl", ".b.jsonl"]) {
+      writeFileSync(join(stateDir, "audit", name), "{}\n");
+    }
+    const outcome = reconcileAuditLogs(stateDir, { maxFiles: 2 });
+    assert.equal(outcome.failed, 2);
+    assert.equal(outcome.appended, 2, "both real logs were still reached");
   });
 });
