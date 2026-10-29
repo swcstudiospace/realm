@@ -14,3 +14,46 @@ void test("QUAL-01: a removal that fails and leaves its container listed refuses
       error instanceof RealmError && error.code === "REALM_STOPPING" && error.causeCode === "PODMAN_MACHINE_DOWN",
   );
 });
+
+// A client over an in-memory list: a removal drops the container, a container in `stuck` stays listed.
+function listClient(ids: readonly string[], stuck: readonly string[] = []): SweepClient {
+  const live = new Set(ids);
+  return {
+    listContainersByLabel: () =>
+      Promise.resolve([...live].map((id) => ({ id, labels: { "openshell.ai/sandbox-name": `realm-${id}` } }))),
+    removeContainer: (id: string) => {
+      if (stuck.includes(id)) {
+        return Promise.reject(makeRealmError("PODMAN_MACHINE_DOWN"));
+      }
+      live.delete(id);
+      return Promise.resolve();
+    },
+  };
+}
+
+void test("CRASH-04: onRemoved receives the id of each removed container, and none on a clean host", async () => {
+  const removed: string[] = [];
+  const count = await removeAllRealmContainers(listClient(["aaa", "bbb"]), (id) => {
+    removed.push(id);
+  });
+  assert.equal(count, 2);
+  assert.deepEqual(removed, ["aaa", "bbb"]);
+
+  const clean: string[] = [];
+  const none = await removeAllRealmContainers(listClient([]), (id) => {
+    clean.push(id);
+  });
+  assert.equal(none, 0);
+  assert.deepEqual(clean, []);
+});
+
+void test("CRASH-04: onRemoved is not called for a removal that failed, and the sweep still refuses", async () => {
+  const removed: string[] = [];
+  await assert.rejects(
+    removeAllRealmContainers(listClient(["ok", "stuck"], ["stuck"]), (id) => {
+      removed.push(id);
+    }),
+    (error: unknown) => error instanceof RealmError && error.code === "REALM_STOPPING",
+  );
+  assert.deepEqual(removed, ["ok"]);
+});

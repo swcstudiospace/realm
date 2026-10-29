@@ -132,6 +132,52 @@ void test("a valid config starts once with the derived options and resolves 0 on
   assert.deepEqual(h.lines, []);
 });
 
+void test("CRASH-04: the start's onStartup report is written as one stderr line with the container ids", async (t) => {
+  const dir = tempDir(t);
+  const h = harness(writeConfig(dir, validConfig(dir)), {
+    start: (options) => {
+      options.onStartup?.({
+        containerIds: ["c0ffee", "decaf1"],
+        containersRemoved: 2,
+        recordsDeleted: 1,
+        tempFilesRemoved: 3,
+        auditLinesReconciled: 4,
+        truncated: false,
+        failures: 0,
+      });
+      return Promise.resolve(startedWith(Promise.resolve()));
+    },
+  });
+
+  assert.equal(await runDaemon(h.deps), 0);
+  assert.deepEqual(h.lines, [
+    "realm daemon: startup removed 2 container(s)[c0ffee,decaf1] and 1 session record(s); removed 3 orphan temp file(s); reconciled 4 audit admission(s)",
+  ]);
+});
+
+void test("CRASH-04: the startup line has no id brackets when no container was removed, and names failures only when there are some", async (t) => {
+  const dir = tempDir(t);
+  const h = harness(writeConfig(dir, validConfig(dir)), {
+    start: (options) => {
+      options.onStartup?.({
+        containerIds: [],
+        containersRemoved: 0,
+        recordsDeleted: 0,
+        tempFilesRemoved: 0,
+        auditLinesReconciled: 0,
+        truncated: false,
+        failures: 2,
+      });
+      return Promise.resolve(startedWith(Promise.resolve()));
+    },
+  });
+
+  assert.equal(await runDaemon(h.deps), 0);
+  assert.deepEqual(h.lines, [
+    "realm daemon: startup removed 0 container(s) and 0 session record(s); removed 0 orphan temp file(s); reconciled 0 audit admission(s); 2 startup failure(s)",
+  ]);
+});
+
 void test("REALM_DRIVER_SECRET_ROOT in the environment is passed to the daemon start as the secret root", async (t) => {
   const dir = tempDir(t);
   const secretRoot = join(dir, "secrets");

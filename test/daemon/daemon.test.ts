@@ -6,10 +6,21 @@
 
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { createConnection, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { appendAudit } from "../../src/audit/log.js";
 import { makeRealmError, RealmError } from "../../src/core/errors.js";
 import { displayStatus, STATUS_LABELS } from "../../src/core/status.js";
 import {
@@ -24,6 +35,7 @@ import {
   startDaemon,
   type StartedDaemon,
   type StartDaemonOptions,
+  type StartupReport,
 } from "../../src/daemon/daemon.js";
 import type { CheckResult } from "../../src/doctor/checks.js";
 import type { PodmanProbeResult } from "../../src/runtime/podman-probe.js";
@@ -119,6 +131,26 @@ function snapshotStateOf(reply: ControlReply): unknown {
     }
   }
   return undefined;
+}
+
+// The notice a status, up or down reply carries, or undefined when the result has no `notice` key.
+function noticeOf(reply: ControlReply): unknown {
+  if (typeof reply.result === "object" && reply.result !== null && "notice" in reply.result) {
+    return reply.result.notice;
+  }
+  return undefined;
+}
+
+function hasNoticeKey(reply: ControlReply): boolean {
+  return typeof reply.result === "object" && reply.result !== null && "notice" in reply.result;
+}
+
+// The parsed lines of one audit file under the state directory.
+function auditLinesOf(fixture: Fixture, sessionId: string): Record<string, unknown>[] {
+  return readFileSync(join(fixture.stateDir, "audit", `${sessionId}.jsonl`), "utf8")
+    .split("\n")
+    .filter((line) => line.length > 0)
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
 }
 
 function displayLabelOf(reply: ControlReply): unknown {
@@ -419,6 +451,98 @@ void test("CLI-01: startDaemon runs the reap sweep before serving and deletes pr
   const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down" });
   assert.ok(down.result !== undefined);
   await awaitDone(daemon);
+});
+
+void test("CRASH-01, CRASH-02, CRASH-04: startDaemon sweeps orphan temp files, reconciles the audit log and reports both before serving", async (t) => {
+  const fixture = makeDirs();
+  const sessions = join(fixture.stateDir, "sessions");
+  mkdirSync(sessions, { recursive: true });
+  const hourAgo = new Date(Date.now() - 3_600_000);
+  const workspaceOrphan = join(fixture.ws, ".doc.txt.realm-tmp-0123456789abcdef");
+  const sessionsOrphan = join(sessions, ".rec.json.realm-tmp-fedcba9876543210");
+  for (const orphan of [workspaceOrphan, sessionsOrphan]) {
+    writeFileSync(orphan, "partial");
+    utimesSync(orphan, hourAgo, hourAgo);
+  }
+  const record = join(sessions, "stale-session.json");
+  writeFileSync(record, JSON.stringify({ sessionId: "stale-session" }));
+  // An admission whose result line was never written: the daemon that wrote it was killed in between.
+  appendAudit(fixture.stateDir, { sessionId: "sess-old", tool: "write", outcome: "ok", phase: "admission", path: "doc.txt" });
+
+  const reports: StartupReport[] = [];
+  const { options } = daemonParts(fixture, {
+    sweep: () => Promise.resolve(1),
+    onStartup: (report) => {
+      reports.push(report);
+    },
+  });
+  const first = await startDaemon(options);
+  t.after(() => cleanupDaemon(first));
+
+  // Everything below is observed before the first request is answered.
+  assert.equal(existsSync(workspaceOrphan), false, "the aged orphan in the workspace root is removed");
+  assert.equal(existsSync(sessionsOrphan), false, "the aged orphan in the sessions directory is removed");
+  assert.equal(existsSync(record), false);
+  assert.equal(readFileSync(join(fixture.ws, "doc.txt"), "utf8"), "original", "a file that is not an orphan is kept");
+  const reconciled = auditLinesOf(fixture, "sess-old").filter((line) => line["phase"] === "reconciliation");
+  assert.equal(reconciled.length, 1);
+  assert.equal(reconciled[0]?.["outcome"], "AUDIT_OUTCOME_UNKNOWN");
+  assert.equal(
+    auditLinesOf(fixture, "sess-daemon").filter((line) => line["tool"] === "temp-sweep").length,
+    2,
+    "each removal is audited in the daemon's own session log",
+  );
+  assert.deepEqual(reports, [
+    {
+      containerIds: [],
+      containersRemoved: 1,
+      recordsDeleted: 1,
+      tempFilesRemoved: 2,
+      auditLinesReconciled: 1,
+      truncated: false,
+      failures: 0,
+    },
+  ]);
+
+  const notice =
+    "A previous daemon's sandbox was destroyed at startup: 1 container(s), 1 session record(s). Files in the workspace were kept; state outside it was lost.";
+  const status = await sendRequest(first.socketPath, { id: "s1", method: "status" });
+  assert.equal(noticeOf(status), notice);
+  const again = await sendRequest(first.socketPath, { id: "s2", method: "status" });
+  assert.equal(noticeOf(again), notice, "the notice is kept for the daemon's lifetime, not consumed by a read");
+  const down = await sendRequest(first.socketPath, { id: "d1", method: "down" });
+  assert.equal(noticeOf(down), notice);
+  await awaitDone(first);
+
+  // A second start over the same state directory has nothing left to destroy, sweep or reconcile.
+  const second = await startDaemon({ ...options, sweep: () => Promise.resolve(0) });
+  t.after(() => cleanupDaemon(second));
+  assert.equal(reports.length, 2);
+  assert.equal(reports[1]?.containersRemoved, 0);
+  assert.equal(reports[1].recordsDeleted, 0);
+  assert.equal(reports[1].tempFilesRemoved, 0);
+  assert.equal(reports[1].auditLinesReconciled, 0, "a second start appends no reconciliation line");
+  assert.equal(auditLinesOf(fixture, "sess-old").filter((line) => line["phase"] === "reconciliation").length, 1);
+  const quiet = await sendRequest(second.socketPath, { id: "s3", method: "status" });
+  assert.equal(snapshotStateOf(quiet), "unbound");
+  assert.equal(hasNoticeKey(quiet), false, "with nothing destroyed the reply has no notice key");
+  const stopped = await sendRequest(second.socketPath, { id: "d2", method: "down" });
+  assert.equal(hasNoticeKey(stopped), false);
+  await awaitDone(second);
+});
+
+void test("CRASH-04: the up reply carries the startup notice when the reap destroyed a container", async (t) => {
+  const fixture = makeDirs();
+  const { options } = daemonParts(fixture, { sweep: () => Promise.resolve(2) });
+  const daemon = await startDaemon(options);
+  t.after(() => cleanupDaemon(daemon));
+
+  const up = await sendRequest(daemon.socketPath, { id: "u1", method: "up", params: { workspaceRoot: fixture.ws } });
+  assert.equal(snapshotStateOf(up), "active");
+  assert.equal(
+    noticeOf(up),
+    "A previous daemon's sandbox was destroyed at startup: 2 container(s), 0 session record(s). Files in the workspace were kept; state outside it was lost.",
+  );
 });
 
 void test("CLI-01: a failed sweep rejects startup before any record is touched (P6-D4)", async () => {

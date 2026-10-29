@@ -30,7 +30,12 @@ export const SWEEP_CALL_TIMEOUT_MS = 30_000;
 // is the first listing's length. A repeated call on a clean host returns zero and removes nothing.
 // Each libpod call is bounded by SWEEP_CALL_TIMEOUT_MS. A hung listing rejects with PODMAN_MACHINE_DOWN, and
 // a hung removal counts as a failed one: the second listing, itself bounded, decides.
-export async function removeAllRealmContainers(libpod: SweepClient): Promise<number> {
+// `onRemoved` receives the id of each container right after its removal succeeds, so a caller can name what was
+// destroyed (CRASH-04, D-1405). A removal that failed is not reported through it. It must not throw.
+export async function removeAllRealmContainers(
+  libpod: SweepClient,
+  onRemoved?: (id: string) => void,
+): Promise<number> {
   const found = await listRealmContainers(libpod);
   // The first removal failure keeps its code, so a refusal names what stopped the sweep.
   let removalFailure: ErrorCode | undefined;
@@ -46,7 +51,9 @@ export async function removeAllRealmContainers(libpod: SweepClient): Promise<num
       if (removalFailure === undefined) {
         removalFailure = codeOf(error);
       }
+      continue;
     }
+    onRemoved?.(container.id);
   }
   const survivors = await listRealmContainers(libpod);
   if (survivors.length > 0) {

@@ -13,7 +13,7 @@ import type { AgentOsDriver } from "../runtime/agentos.js";
 import { productionOpenShellRunner } from "../runtime/session-execution.js";
 import type { EnvironmentLike } from "../session/paths.js";
 import { CONTROL_TIMEOUT_MS, sendRequest, type ControlReply } from "./channel.js";
-import { startDaemon, type StartDaemonOptions, type StartedDaemon } from "./daemon.js";
+import { startDaemon, type StartDaemonOptions, type StartedDaemon, type StartupReport } from "./daemon.js";
 
 export type DaemonSignal = "SIGTERM" | "SIGINT";
 
@@ -91,6 +91,9 @@ export async function runDaemon(deps: DaemonDeps): Promise<number> {
       ...(secretRoot === undefined || secretRoot.length === 0 ? {} : { secretRoot }),
       ...(workspaceRoot === undefined || workspaceRoot.length === 0 ? {} : { pinnedWorkspaceRoot: workspaceRoot }),
       ...(sandboxStateRoot === undefined || sandboxStateRoot.length === 0 ? {} : { sandboxStateRoot }),
+      onStartup: (report) => {
+        writeStderr(startupLine(report));
+      },
     });
   } catch (error: unknown) {
     writeStderr(failureLine(codeOf(error)));
@@ -101,6 +104,19 @@ export async function runDaemon(deps: DaemonDeps): Promise<number> {
     onSignal: deps.onSignal ?? registerSignal,
     writeStderr,
   });
+}
+
+// The one startup line (CRASH-04): what the reap destroyed, what the orphan sweep removed and what the audit
+// reconciliation appended. The container ids are not secrets. The failure count is added only when it is not zero.
+function startupLine(report: StartupReport): string {
+  const ids = report.containerIds.length === 0 ? "" : `[${report.containerIds.join(",")}]`;
+  const failures = report.failures > 0 ? `; ${String(report.failures)} startup failure(s)` : "";
+  return (
+    `realm daemon: startup removed ${String(report.containersRemoved)} container(s)${ids}` +
+    ` and ${String(report.recordsDeleted)} session record(s);` +
+    ` removed ${String(report.tempFilesRemoved)} orphan temp file(s);` +
+    ` reconciled ${String(report.auditLinesReconciled)} audit admission(s)${failures}`
+  );
 }
 
 // Resolves once the daemon has stopped. A signal runs the down request and settles with its

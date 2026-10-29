@@ -2,15 +2,19 @@
 // buildDaemonHandle wires createRealmHandle with the production adapters (SessionExecution over the
 // libpod client, AndaBridge over the configured URL, the production OpenShell runner, Date clock); tests inject
 // the existing fakes at the same seam. startDaemon binds the control socket once per state directory,
-// runs reapStartup with the bounded sweep before serving, dispatches the five CONTROL_METHODS from
-// the 06-01 channel, and tears down on down. The wait for the controller teardown is bounded by
+// runs the startup maintenance before serving (runStartupMaintenance: the reap with the bounded sweep, the orphan
+// temp-file sweep, the audit reconciliation, then the report; CRASH-01, CRASH-02, CRASH-04), dispatches the five
+// CONTROL_METHODS from the 06-01 channel, and tears down on down. The wait for the controller teardown is bounded by
 // TEARDOWN_TIMEOUT_MS; socket I/O keeps SOCKET_TIMEOUT_MS. With no AgentOS driver or supervisor bound,
 // the handle still builds and up refuses with AGENTOS_NOT_CONFIGURED. This module parses no argv,
 // spawns no daemon process, and reads no process environment: every host value arrives through its options.
 
 import { rmSync } from "node:fs";
 import { createConnection, createServer, type Server, type Socket } from "node:net";
+import { join } from "node:path";
 import { AndaBridge } from "../anda/client.js";
+import { appendAudit } from "../audit/log.js";
+import { reconcileAuditLogs } from "../audit/reconcile.js";
 import type { Policy, PolicyMode } from "../contract/validate.js";
 import { makeRealmError, RealmError, type ErrorCode } from "../core/errors.js";
 import { loadPolicyFile } from "../core/policy.js";
@@ -19,6 +23,8 @@ import type { StateSnapshot } from "../core/state-machine.js";
 import { displayStatus, type DisplayStatus } from "../core/status.js";
 import { withTimeout } from "../core/timeout.js";
 import { defaultRunCommand, runChecks, type AgentOsReading, type CheckResult, type DoctorOptions } from "../doctor/checks.js";
+import { bindRoot, isInsideRoot, type PinnedRoot } from "../fs/root.js";
+import { ORPHAN_TEMP_MIN_AGE_MS, sweepOrphanTempFiles } from "../fs/temp-sweep.js";
 import { TEARDOWN_TIMEOUT_MS } from "../lifecycle/controller.js";
 import { createRealmHandle, type RealmHandle } from "../realm/compose.js";
 import { AgentOsSupervisor, type AgentOsDriver } from "../runtime/agentos.js";
@@ -38,7 +44,7 @@ import {
   type RunCommand,
 } from "../runtime/podman-probe.js";
 import { removeAllRealmContainers } from "../runtime/sweep.js";
-import { controlSocketPath, type EnvironmentLike } from "../session/paths.js";
+import { controlSocketPath, sessionsDirOf, type EnvironmentLike } from "../session/paths.js";
 import { reapStartup } from "../session/reap.js";
 import { SessionStore } from "../session/store.js";
 import {
@@ -104,6 +110,21 @@ export interface BuildDaemonHandleOptions {
   readonly sandboxStateRoot?: string;
 }
 
+// What the startup maintenance did, handed to onStartup. The stable seam for the startup log line (Phases 17 and 19 reshape
+// the reap and the logger, not this object). `failures` counts the maintenance steps that threw and the entries the sweeps
+// report as failed; a failure never aborts the start.
+export interface StartupReport {
+  // The ids of the realm containers the reap removed, in removal order. Empty when the sweep is an injected one that names none.
+  readonly containerIds: readonly string[];
+  readonly containersRemoved: number;
+  readonly recordsDeleted: number;
+  readonly tempFilesRemoved: number;
+  readonly auditLinesReconciled: number;
+  // True when the temp-file sweep stopped at its wall or entry bound before it had seen every directory.
+  readonly truncated: boolean;
+  readonly failures: number;
+}
+
 export interface StartDaemonOptions extends BuildDaemonHandleOptions {
   // Probe seam for up (P6-D5). Defaults to the real probePodman over the
   // injected command/socket seams; tests inject a scripted result.
@@ -122,6 +143,9 @@ export interface StartDaemonOptions extends BuildDaemonHandleOptions {
   // Observer for a health probe that threw. The controller has already recorded any outcome that changes the session state; this
   // receives the catalogue code of the failure, including a refusal that left the state unchanged. It must not throw.
   readonly onHealthProbeFailure?: (code: ErrorCode) => void;
+  // Observer for the startup maintenance report (CRASH-04). It runs once per start, after the reap, the orphan temp-file sweep
+  // and the audit reconciliation and before the daemon serves its first request. It must not throw; a throw aborts the start.
+  readonly onStartup?: (report: StartupReport) => void;
   readonly store?: Pick<SessionStore, "list" | "delete">;
   readonly socketDirDeps?: SocketDirDeps;
   // Bound for one socket operation and for draining in-flight requests on down.
@@ -176,15 +200,20 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
   // each session's supervision state is one object.
   const agentosFor =
     options.agentosFor ?? (options.agentosDriver !== undefined ? supervisorsOver(options.agentosDriver) : undefined);
+  const config = loadRuntimeConfig(options.runtimeInput);
+  // The policy is loaded once: the handle and the startup sweep roots read the same document.
+  const policy = options.policy ?? loadPolicyFile(options.policyPath);
   const handle = buildDaemonHandle({
     ...options,
+    policy,
     ...(libpod === undefined ? {} : { libpod }),
     ...(agentosFor === undefined ? {} : { agentosFor }),
   });
-  const config = loadRuntimeConfig(options.runtimeInput);
   const stateDir = config.stateDir;
-  const sweep =
-    options.sweep ?? (libpod !== undefined ? () => removeAllRealmContainers(libpod) : undefined);
+  // The reap's sweep. The default one reports each removed container's id through onRemoved; an injected one reports none.
+  const sweep: StartupSweep | undefined =
+    options.sweep ??
+    (libpod !== undefined ? (onRemoved) => removeAllRealmContainers(libpod, onRemoved) : undefined);
   if (sweep === undefined) {
     throw makeRealmError("SCHEMA_INVALID");
   }
@@ -226,6 +255,11 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
   let inFlight = 0;
   let draining = false;
   let downRequested = false;
+  // The notice every status, up and down reply carries for the daemon's lifetime once the startup reap destroyed a container or
+  // a record (D-1404). It is not consumed on read: Omp attaches with up before it asks for status. Unset until the startup
+  // maintenance has run, and unset when nothing was destroyed.
+  let startupNotice: string | undefined;
+  const statusOf = (snapshot: StateSnapshot): StatusResult => statusResult(snapshot, handle.policyMode, startupNotice);
   const completed = new Set<Socket>();
 
   // The health loop (RT-04, N1). It runs while the session is in service, active or degraded: a degraded session (the Anda
@@ -340,7 +374,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
       // The teardown wait is bounded by TEARDOWN_TIMEOUT_MS. Expiry is REALM_STOPPING, the code the controller
       // reports for its own teardown bound; the catalogue has no teardown-timeout code.
       const closed = await withTimeout(handle.close(), TEARDOWN_TIMEOUT_MS, "REALM_STOPPING");
-      reply = { id, result: statusResult(closed, handle.policyMode) };
+      reply = { id, result: statusOf(closed) };
     } catch (error: unknown) {
       reply = refusalReply(id, error);
     }
@@ -362,7 +396,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
       // A second down is a no-op: it answers the current snapshot without
       // running teardown again (close delegates to controller stop, which is
       // safe to call twice).
-      endSocket(socket, { id, result: statusResult(handle.controller.snapshot(), handle.policyMode) });
+      endSocket(socket, { id, result: statusOf(handle.controller.snapshot()) });
       return;
     }
     await stop(id, socket);
@@ -376,7 +410,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
   ): Promise<ControlReply | null> => {
     switch (method) {
       case "status": {
-        return { id, result: statusResult(handle.controller.snapshot(), handle.policyMode) };
+        return { id, result: statusOf(handle.controller.snapshot()) };
       }
       case "up": {
         const workspaceRoot: unknown =
@@ -400,7 +434,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
         }
         try {
           const snapshot = await handle.controller.create(workspaceRoot);
-          return { id, result: statusResult(snapshot, handle.policyMode) };
+          return { id, result: statusOf(snapshot) };
         } catch (error: unknown) {
           return refusalReply(id, error);
         }
@@ -546,7 +580,16 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
     abortStart(error);
   }
   try {
-    await reapStartup({ store, sweep });
+    const report = await runStartupMaintenance({
+      store,
+      sweep,
+      policy,
+      stateDir,
+      sessionId: options.sessionId,
+      now: () => Date.now(),
+    });
+    startupNotice = startupNoticeOf(report);
+    options.onStartup?.(report);
   } catch (error: unknown) {
     abortStart(error);
   }
@@ -554,15 +597,131 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
   return { socketPath, handle, done };
 }
 
-function statusResult(
-  snapshot: StateSnapshot,
-  mode: PolicyMode,
-): {
+// The reap's sweep: removes every realm container and resolves with the count. `onRemoved` receives each removed id.
+type StartupSweep = (onRemoved: (id: string) => void) => Promise<number>;
+
+interface StartupMaintenanceDeps {
+  readonly store: Pick<SessionStore, "list" | "delete">;
+  readonly sweep: StartupSweep;
+  readonly policy: Policy;
+  readonly stateDir: string;
+  // The session whose audit file records the orphan removals: the daemon's own session.
+  readonly sessionId: string;
+  readonly now: () => number;
+}
+
+// The whole startup block (D-1409), in this order: the reap, the orphan temp-file sweep, the audit reconciliation, the
+// report. The reap's own failure rejects (nothing is served on a reap that did not prove zero containers). A temp-file
+// sweep or reconciliation failure is counted in the report and never aborts the start: a skipped cleanup costs disk and a
+// missing reconciliation line, while a daemon that will not start costs the user the sandbox.
+async function runStartupMaintenance(deps: StartupMaintenanceDeps): Promise<StartupReport> {
+  const containerIds: string[] = [];
+  const reaped = await reapStartup({
+    store: deps.store,
+    sweep: () =>
+      deps.sweep((id) => {
+        containerIds.push(id);
+      }),
+  });
+  let failures = 0;
+  let tempFilesRemoved = 0;
+  let truncated = false;
+  const ownerUid = process.getuid?.();
+  if (ownerUid === undefined) {
+    // Without a uid the owner rule cannot be applied, so nothing is removed; the report counts the gap.
+    failures += 1;
+  } else {
+    try {
+      const swept = sweepOrphanTempFiles(sweepRootsOf(deps.policy, deps.stateDir), {
+        now: deps.now(),
+        minAgeMs: ORPHAN_TEMP_MIN_AGE_MS,
+        ownerUid,
+        audit: (entry) => {
+          appendAudit(deps.stateDir, {
+            sessionId: deps.sessionId,
+            tool: entry.tool,
+            outcome: entry.outcome,
+            path: entry.path,
+            bytes: entry.bytes,
+          });
+        },
+      });
+      tempFilesRemoved = swept.removed.length;
+      truncated = swept.truncated;
+      failures += swept.failed;
+    } catch {
+      // The sweep never throws on a bad root or file; this is a failure of the sweep itself, counted in the report.
+      failures += 1;
+    }
+  }
+  let auditLinesReconciled = 0;
+  try {
+    const reconciled = reconcileAuditLogs(deps.stateDir);
+    auditLinesReconciled = reconciled.appended;
+    failures += reconciled.failed;
+  } catch {
+    // A failure of the reconciliation itself is counted in the report; the lines it appended before it stopped are not.
+    failures += 1;
+  }
+  return {
+    containerIds,
+    containersRemoved: reaped.containersRemoved,
+    recordsDeleted: reaped.recordsDeleted,
+    tempFilesRemoved,
+    auditLinesReconciled,
+    truncated,
+    failures,
+  };
+}
+
+// The roots the orphan sweep walks: the policy's workspace roots, the sessions directory and the runtime directory (D-1401).
+// A root that lies inside an earlier one is dropped, so no directory is walked twice. A root that does not bind (for example
+// a runtime directory that was never created) is passed on as it is: the sweep counts it as skipped and walks nothing.
+function sweepRootsOf(policy: Policy, stateDir: string): readonly string[] {
+  const candidates = [...policy.workspaceRoots, sessionsDirOf(stateDir), join(stateDir, "runtime")];
+  const bound: PinnedRoot[] = [];
+  const roots: string[] = [];
+  for (const candidate of candidates) {
+    let pinned: PinnedRoot;
+    try {
+      pinned = bindRoot(candidate);
+    } catch {
+      roots.push(candidate);
+      continue;
+    }
+    if (bound.some((earlier) => isInsideRoot(earlier, pinned.realPath))) {
+      continue;
+    }
+    bound.push(pinned);
+    roots.push(pinned.realPath);
+  }
+  return roots;
+}
+
+// The notice text (D-1404): present only when the reap destroyed a container or a session record.
+function startupNoticeOf(report: StartupReport): string | undefined {
+  if (report.containersRemoved === 0 && report.recordsDeleted === 0) {
+    return undefined;
+  }
+  return `A previous daemon's sandbox was destroyed at startup: ${String(report.containersRemoved)} container(s), ${String(report.recordsDeleted)} session record(s). Files in the workspace were kept; state outside it was lost.`;
+}
+
+// The result of status, up and down. `notice` is present only after a startup reap that destroyed something, so a reply with
+// nothing destroyed has no `notice` key.
+interface StatusResult {
   readonly snapshot: StateSnapshot;
   readonly display: DisplayStatus;
   readonly mode: PolicyMode;
-} {
-  return { snapshot, display: displayStatus(snapshot), mode };
+  readonly notice?: string;
+}
+
+function statusResult(snapshot: StateSnapshot, mode: PolicyMode, notice: string | undefined): StatusResult {
+  return {
+    snapshot,
+    display: displayStatus(snapshot),
+    mode,
+    ...(notice === undefined ? {} : { notice }),
+  };
 }
 
 function codeOf(error: unknown): ErrorCode {
