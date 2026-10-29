@@ -220,9 +220,9 @@ export class LifecycleController {
     const issued: { start: PendingStart | null } = { start: null };
 
     // Every store write sits inside the guarded block, so a failed write moves the
-    // session to error rather than leaving it stuck in connecting. Each await is followed by a
-    // state check: a stop that began during the await owns the session, so this create records
-    // and transitions nothing more (see failCreate).
+    // session to error rather than leaving it stuck in connecting. Each await is followed by an
+    // ownership check (ownsStartup): a stop, destroy or newer create that began during the await owns
+    // the session, so this create records and transitions nothing more (see failCreate).
     try {
       if (this.deps.bridge !== null) {
         this.subscribeBridge(this.deps.bridge);
@@ -232,7 +232,7 @@ export class LifecycleController {
         await this.awaitRecoveryDestroy(deadline);
         // A stop or destroy that ran during the wait owns the session and may have deleted the
         // record: this create records and issues nothing more.
-        if (this.lifeEpoch !== epoch || this.machine.snapshot().state !== "connecting") {
+        if (!this.ownsStartup(epoch)) {
           return this.machine.snapshot();
         }
       }
@@ -241,7 +241,7 @@ export class LifecycleController {
       this.checkDeadline(deadline);
       let startedId: string;
       if (current.id === null) {
-        const created = await this.createContainer(realmId, root, deadline, current);
+        const created = await this.createContainer(realmId, root, deadline, current, epoch);
         if (created === null) {
           return this.machine.snapshot();
         }
@@ -270,13 +270,13 @@ export class LifecycleController {
         ) {
           throw error;
         }
-        const replacement = await this.recoverStaleContainer(startedId, realmId, root, deadline, current);
+        const replacement = await this.recoverStaleContainer(startedId, realmId, root, deadline, current, epoch);
         if (replacement === null) {
           return this.machine.snapshot();
         }
         await startOnce(replacement);
       }
-      if (this.machine.snapshot().state !== "connecting") {
+      if (!this.ownsStartup(epoch)) {
         // A stop began while start was in flight. Its teardown waits for the start and stops the
         // container once the start settles (F1), so nothing more is started here.
         return this.machine.snapshot();
@@ -300,9 +300,9 @@ export class LifecycleController {
       ) {
         this.adoptStart(issued.start);
       }
-      return this.failCreate(error, realmId, root, current.id);
+      return this.failCreate(error, realmId, root, current.id, epoch);
     }
-    if (this.machine.snapshot().state !== "connecting") {
+    if (!this.ownsStartup(epoch)) {
       // A stop began during the bridge handshake. It closed the bridge and stopped the container.
       return this.machine.snapshot();
     }
@@ -518,18 +518,25 @@ export class LifecycleController {
     return handshake;
   }
 
+  // True while this startup still owns the session: no stop, destroy or newer create has begun since it
+  // took the epoch. The state alone is not enough, because a newer create is connecting too.
+  private ownsStartup(epoch: number): boolean {
+    return this.lifeEpoch === epoch && this.machine.snapshot().state === "connecting";
+  }
+
   private failCreate(
     error: unknown,
     realmId: string,
     root: PinnedRoot,
     containerId: string | null,
+    epoch: number,
   ): StateSnapshot {
-    // The transition is valid only from connecting. A stop that began during the create owns the
-    // session now, so this create records nothing more and returns the state the stop left. The
-    // stop owns the outcome, so a port failure of the overtaken call is not reported, and the
-    // record already names any container that survives. A REALM_STOPPING from the stop call made
-    // here still reaches the caller (C1).
-    if (this.machine.snapshot().state !== "connecting") {
+    // The transition is valid only for the startup that owns the session. A stop that began during the
+    // create, or a newer create that replaced it, owns the session now, so this create records nothing
+    // more and returns the state the owner left. The stop owns the outcome, so a port failure of the
+    // overtaken call is not reported, and the record already names any container that survives. A
+    // REALM_STOPPING from the stop call made here still reaches the caller (C1).
+    if (!this.ownsStartup(epoch)) {
       if (error instanceof RealmError && error.code === "REALM_STOPPING") {
         throw error;
       }
@@ -668,6 +675,7 @@ export class LifecycleController {
     root: PinnedRoot,
     deadline: number,
     current: { id: string | null },
+    epoch: number,
   ): Promise<string | null> {
     const pending = this.issueCreate(root);
     let created: { readonly containerId: string };
@@ -693,7 +701,7 @@ export class LifecycleController {
       throw error;
     }
     this.takePendingCreate();
-    if (this.machine.snapshot().state !== "connecting") {
+    if (!this.ownsStartup(epoch)) {
       // A stop took the create over while it was pending, and it destroys the container this
       // create produced.
       return null;
@@ -732,10 +740,11 @@ export class LifecycleController {
     root: PinnedRoot,
     deadline: number,
     current: { id: string | null },
+    epoch: number,
   ): Promise<string | null> {
     if (this.recoveryDestroy !== null) {
       await this.awaitRecoveryDestroy(deadline);
-      if (this.machine.snapshot().state !== "connecting") {
+      if (!this.ownsStartup(epoch)) {
         return null;
       }
     }
@@ -752,13 +761,13 @@ export class LifecycleController {
     });
     await withTimeout(call, Math.max(0, deadline - performance.now()), "STARTUP_BUDGET_EXCEEDED");
     current.id = null;
-    if (this.machine.snapshot().state !== "connecting") {
+    if (!this.ownsStartup(epoch)) {
       return null;
     }
     this.checkDeadline(deadline);
     this.persist(realmId, root, null);
     this.checkDeadline(deadline);
-    return this.createContainer(realmId, root, deadline, current);
+    return this.createContainer(realmId, root, deadline, current, epoch);
   }
 
   // Issues the port create for a startup that has no container yet. The attempt number lets an

@@ -326,3 +326,52 @@ void test("TD-04: a destroy that runs while a create waits for the recovery dest
   assert.equal(f.exec.callCount("create"), 1);
   assert.equal(f.exec.resources().length, 0);
 });
+
+void test("TD-04: an overtaken create whose recovery wait times out leaves the newer create's session alone", async (t) => {
+  // Every timer here is node's mocked setTimeout: the two budget timers and the recovery destroy's
+  // delay move only when the test ticks them, so nothing waits in real time.
+  t.after(() => {
+    t.mock.timers.reset();
+  });
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const yieldToMicrotasks = async (): Promise<void> => {
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
+  };
+  const f = fixture(t);
+  f.exec.failNext("start", "OPENSHELL_START_FAILED");
+  assert.equal((await f.controller.create(f.workspace)).state, "error");
+  // The retry starts the recorded container again, that start fails the same way, and the recovery
+  // destroy then runs far beyond every budget. Its create gives up at the first budget.
+  f.exec.failNext("start", "OPENSHELL_START_FAILED");
+  f.exec.setDelay("destroy", 30_000);
+  const first = f.controller.create(f.workspace);
+  await yieldToMicrotasks();
+  t.mock.timers.tick(10_000);
+  const gaveUp = await first;
+  assert.equal(gaveUp.reason, "STARTUP_BUDGET_EXCEEDED");
+
+  // The next create (the one that will be overtaken) parks on the recovery destroy, and the session
+  // is then destroyed. Later, a newer create parks on the same destroy.
+  f.exec.setDelay("destroy", 0);
+  const overtaken = f.controller.create(f.workspace);
+  await yieldToMicrotasks();
+  assert.equal((await f.controller.destroy()).state, "unbound");
+  t.mock.timers.tick(5_000);
+  const newer = f.controller.create(f.workspace);
+  await yieldToMicrotasks();
+
+  // The overtaken create's budget ends while the newer create owns the session. It must change nothing:
+  // the newer create is still connecting and no record was written for it.
+  t.mock.timers.tick(5_000);
+  assert.equal((await overtaken).state, "connecting");
+  assert.equal(f.controller.snapshot().state, "connecting");
+  assert.equal(f.store.load(SESSION), null);
+
+  // The newer create then ends at its own budget, and only then does the session reach error.
+  t.mock.timers.tick(5_000);
+  const ended = await newer;
+  assert.equal(ended.state, "error");
+  assert.equal(ended.reason, "STARTUP_BUDGET_EXCEEDED");
+});
