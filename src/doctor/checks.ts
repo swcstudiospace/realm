@@ -238,7 +238,7 @@ function policyFileCheck(options: DoctorOptions): CheckResult {
       id,
       status: "warn",
       detail: `${loadsText}, mode advisory (explicit): host writes proceed with a warning while the realm is not active; this is not containment`,
-      fix: 'Set "mode": "fail-closed", or delete the key, for containment.',
+      fix: 'Set "mode": "fail-closed", or delete the key, to block guarded host write and edit calls while the realm is not active. This does not contain Omp built-in tools.',
     };
   }
   const modeText =
