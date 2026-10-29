@@ -195,7 +195,7 @@ test("collectExports reads the names of a destructured export, with renames, def
 });
 
 test("collectExports reports an export form it cannot parse instead of skipping it", () => {
-  const found = collectExports("export const { broken: [ } = source();\nexport const ok = 1;\n", "src/a/x.ts");
+  const found = collectExports("export const { broken: 5 } = source();\nexport const ok = 1;\n", "src/a/x.ts");
   assert.deepEqual(found.exports.map((entry) => entry.name), ["ok"]);
   assert.equal(found.unparsed.length, 1);
   assert.equal(found.unparsed[0].line, 1);
@@ -334,7 +334,7 @@ test("analyze classifies destructured exports by their bound names", () => {
 });
 
 test("analyze lists a destructured export it cannot parse as unclassified with its reason", () => {
-  const { entries } = analyze({ "src/a/one.ts": "export const { broken: [ } = source();\n" });
+  const { entries } = analyze({ "src/a/one.ts": "export const { broken: 5 } = source();\n" });
   assert.equal(entries.length, 1);
   assert.equal(entries[0].class, "unclassified");
   assert.equal(entries[0].file, "src/a/one.ts");
@@ -647,3 +647,96 @@ test("runCheck exits 1, not 0, when the source tree cannot be read", () => {
   assert.equal(code, 1);
   assert.match(output, /cannot read the source tree: ENOENT/);
 });
+
+test("an indented export and an export after a block comment are found", () => {
+  const found = collectExports("  export const indented = 1;\n/* note */ export const afterComment = 2;\nexport const plain = 3;\n", "src/a/x.ts");
+  assert.deepEqual(found.exports.map((entry) => [entry.name, entry.line]), [
+    ["indented", 1],
+    ["afterComment", 2],
+    ["plain", 3],
+  ]);
+  assert.deepEqual(found.unparsed, []);
+});
+
+test("a column-zero object member does not cut off an exported interface", () => {
+  const classes = classesOf({
+    "src/a/one.ts": [
+      "export interface Holder {",
+      "  readonly value: {",
+      "type: Payload;",
+      "  };",
+      "}",
+      "export interface Payload {}",
+    ].join("\n"),
+  });
+  assert.equal(classes.Payload, "public-signature");
+  assert.equal(classes.Holder, "self-only");
+});
+
+test("generic arguments in an initializer do not invent bindings: factory<First, Middle, Last>()", () => {
+  const found = collectExports("export const value = factory<First, Middle, Last>();\nexport const next = 1;\n", "src/a/x.ts");
+  assert.deepEqual(found.exports.map((entry) => entry.name), ["value", "next"]);
+  assert.deepEqual(found.unparsed, []);
+  const classes = classesOf({ "src/a/one.ts": "export const value = factory<First, Middle, Last>();\n" });
+  assert.deepEqual(classes, { value: "self-only" });
+});
+
+test("a keyword used as a property name does not open a regular expression: counts.of / values.divisor", () => {
+  const stripped = stripNonCode("const q = counts.of / values.divisor;\nconst r = counts?.in / values.other;");
+  assert.ok(stripped.includes("values.divisor"));
+  assert.ok(stripped.includes("values.other"));
+  const { entries } = analyze({
+    "src/a/one.ts": "export const divisor = 1;\n",
+    "src/b/two.ts": "export const q = (counts: { of: number }, values: { divisor: number }) => counts.of / values.divisor;\n",
+  });
+  assert.equal(classOf(entries, "divisor"), "used-in-src");
+});
+
+test("a ! after return negates and the regular expression after it is blanked: return !/[\"]/.test(text) && values.allowed", () => {
+  const source = 'function check(text: string) { return !/["]/.test(text) && values.allowed; }';
+  const stripped = stripNonCode(source);
+  assert.ok(stripped.includes("values.allowed"));
+  assert.ok(!stripped.includes('["]'));
+  assert.equal(stripped.length, source.length);
+});
+
+test("a ! after an expression stays a non-null assertion, before = it is the comparison operator", () => {
+  assert.ok(stripNonCode("const a = x! / values.one;").includes("values.one"));
+  assert.ok(stripNonCode("const a = x!! / values.one;").includes("values.one"));
+  assert.ok(stripNonCode("const a = f()! / values.one;").includes("values.one"));
+  assert.ok(stripNonCode("const a = x != /hidden/ ? 1 : 2;").includes("?"));
+  assert.ok(!stripNonCode("const a = x != /hidden/.source;").includes("hidden"));
+});
+
+// A table of tricky snippets. Each is analysed as src/a/one.ts next to a src/b/two.ts that names `usedByTwo`, and its
+// classes must be exactly the expected ones. A regression in the scanner changes a class or an export name.
+const TRICKY = [
+  ["division after a non-null assertion", "export const usedByTwo = 1;\nexport const f = (n?: number) => n! / values.divisor;\n", { usedByTwo: "used-in-src", f: "self-only" }],
+  ["a link-like path inside strings", 'export const usedByTwo = 1;\nexport const url = "see link/.. and //not-a-comment";\nexport const other = \'a/b\';\n', { usedByTwo: "used-in-src", url: "self-only", other: "self-only" }],
+  ["a regular expression with a quote", "export const usedByTwo = 1;\nexport const re = /[\"']/g;\nexport const after = 2;\n", { usedByTwo: "used-in-src", re: "self-only", after: "self-only" }],
+  ["a slash inside a regular expression class", "export const re = /[/]x/;\nexport const after = 2;\n", { re: "self-only", after: "self-only" }],
+  ["a nested template", "export const t = `a ${ b(`c ${d}`) } e`;\nexport const after = 2;\n", { t: "self-only", after: "self-only" }],
+  ["a generic arrow function", "export const id = <T, U>(value: T, other: U): T => value;\nexport const after = 2;\n", { id: "self-only", after: "self-only" }],
+  ["an alias in an export list", "const hidden = 1;\nexport { hidden as shown };\n", { shown: "self-only" }],
+  ["a type-only export list", "interface Shape {}\nexport type { Shape };\n", { Shape: "self-only" }],
+  ["a function overload", "export function over(a: string): string;\nexport function over(a: number): number;\nexport function over(a: unknown): unknown { return a; }\n", { over: "self-only" }],
+  ["an export after a one-line block", "if (x) { y(); }\nexport const afterBlock = 1;\n", { afterBlock: "self-only" }],
+  ["an export with no semicolons", "export const first = 1\nexport const second = 2\nexport interface Third {}\n", { first: "self-only", second: "self-only", Third: "self-only" }],
+  ["a class with a method signature naming a type", "export interface Arg {}\nexport class Service {\n  run(arg: Arg): void {}\n}\n", { Arg: "public-signature", Service: "self-only" }],
+  ["a spaced comparison in an initializer", "export const flag = a < b, other = c > d;\n", { flag: "self-only", other: "self-only" }],
+  ["an ambiguous unspaced comparison is reported, not guessed", "export const flag = a<b, other = c>d;\n", { flag: "unclassified" }],
+];
+
+for (const [title, source, expected] of TRICKY) {
+  test(`scanner table: ${title}`, () => {
+    const files = { "src/a/one.ts": source, "src/b/two.ts": "export const x = usedByTwo;\n" };
+    const classes = classesOf(files);
+    delete classes.x;
+    for (const [name, klass] of Object.entries(expected)) {
+      assert.equal(classes[name], klass, `${name} in "${title}"`);
+    }
+    for (const name of Object.keys(classes)) {
+      assert.ok(name in expected, `${title}: unexpected export ${name}`);
+    }
+  });
+}

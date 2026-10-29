@@ -22,10 +22,9 @@
 // template text and regular expressions blanked, so documentation and messages are not references. It is a name match,
 // not a symbol resolution: a common name used elsewhere hides a dead export.
 //
-// A declaration extent starts at a column-0 line that begins a declaration keyword (export, function, async, const, let,
-// var, interface, type, class, enum, declare, abstract) and runs to the line before the next such line. Indented lines and
-// column-0 closers belong to the current declaration. For `export { a, b as c }` and `export type { ... }` the extent of a
-// member is that of the local declaration of its name.
+// A declaration extent is one top-level statement, found by nesting depth on the blanked text (see splitStatements), so
+// indentation, comments before a statement and column-zero text inside a body do not matter. For `export { a, b as c }`
+// and `export type { ... }` the extent of a member is that of the local declaration of its name.
 //
 // Usage: export-usage.mjs [--list | --json] [--dir src/<dir>]... [--class <class>]...
 // Run it from anywhere: it reads <package root>/src and <package root>/test.
@@ -53,48 +52,40 @@ const KIND = "async\\s+function|function|abstract\\s+class|class|const\\s+enum|e
 const HEAD = new RegExp(`^(export\\s+)?(?:declare\\s+)?(${KIND})\\b`);
 const EXPORT_LIST = /^export\s*(type\s+)?\{([^}]*)\}(?:\s*from\s*(["']))?/;
 const EXPORT_STAR = new RegExp(`^export\\s*\\*\\s*(?:as\\s+(${NAME})\\s*)?from\\s*(["'])`);
-const DECLARATION_START = /^(?:export|function|async|const|let|var|interface|type|class|enum|declare|abstract)\b/;
+// A line break at depth 0 ends the statement when the next statement starts with one of these and the line does not
+// continue (it ends in an operator or a comma).
+const DECLARATION_AHEAD = /\s*(?:export|import|const|let|var|function|class|interface|enum|declare|abstract|type\s+[A-Za-z_$]|async\s+function)\b/y;
+const LINE_CONTINUES = ",=+-*/%&|^<?:.";
+// After the `}` that returns to depth 0, the statement goes on when the next text is one of these.
+const BRACE_CONTINUES = ";.,=(?:+-*/%&|^<>)";
+const CONTINUATION_WORDS = new Set(["as", "satisfies", "else", "catch", "finally", "while", "from", "extends", "implements", "in", "of", "instanceof"]);
 
 // Declaration kinds that live in the type space only (they emit no value).
 const TYPE_KINDS = new Set(["interface", "type"]);
 
-// A `/` after one of these characters starts a regular expression literal; after an identifier character, `)` or `]` it
-// divides. `!` is decided by what precedes it (a non-null assertion divides).
-const REGEX_AFTER = "(,=:[&|?{};}<>+-*%^~";
-const REGEX_KEYWORDS = new Set(["return", "typeof", "case", "in", "of", "yield", "await", "void", "delete", "throw", "else", "do"]);
+// Words after which an expression starts: a `/` there opens a regular expression literal and a `!` negates. They count
+// only when they are not a property name (`counts.of / total` divides).
+const EXPRESSION_KEYWORDS = new Set(["return", "typeof", "case", "in", "of", "yield", "await", "void", "delete", "throw", "else", "do", "instanceof"]);
 
-function startsRegex(source, index, previous, beforePrevious) {
-  if (previous === "") {
-    return true;
-  }
-  if (/[\w$]/.test(previous)) {
-    const word = /([A-Za-z_$][\w$]*)\s*$/.exec(source.slice(Math.max(0, index - 24), index));
-    return word !== null && REGEX_KEYWORDS.has(word[1]);
-  }
-  if (previous === ")" || previous === "]") {
-    return false;
-  }
-  if (previous === "!") {
-    return !(beforePrevious !== "" && (/[\w$]/.test(beforePrevious) || beforePrevious === ")" || beforePrevious === "]"));
-  }
-  return REGEX_AFTER.includes(previous);
-}
-
-// Replaces comments, string literals, template text and regular expression literals by spaces, keeping every newline
-// and every delimiter, so positions and line numbers survive and `${ ... }` expressions stay code.
+// Replaces comments, string literals, template text and regular expression literals by spaces, keeping every newline,
+// every delimiter and every offset, so line numbers survive and `${ ... }` expressions stay code.
+//
+// One left-to-right scan keeps the class of the last significant token: "start" (nothing yet), "expr-end" (an identifier
+// that is not a keyword or follows a `.`, a number, a string, a template, a regular expression, a closing `)` or `]`, or
+// a postfix `!` or `++`), "keyword" (an expression keyword), or "operator" (everything else, including `}`). A `/` after
+// "expr-end" divides; after any other class it opens a regular expression literal (`[...]` classes included, where a `/`
+// does not end the literal). A `!` is a postfix non-null assertion only after "expr-end" (and not before `=`).
 export function stripNonCode(source) {
   const out = [];
   const templateDepths = [];
   const length = source.length;
+  const wordPattern = /[A-Za-z_$][\w$]*/y;
+  const numberPattern = /\d\w*(?:\.\d\w*)?/y;
   let mode = "code";
-  let previous = "";
-  let beforePrevious = "";
+  let previous = "start";
+  let afterDot = false;
   let index = 0;
   const blank = (character) => (character === "\n" || character === "\r" ? character : " ");
-  const significant = (character) => {
-    beforePrevious = previous;
-    previous = character;
-  };
 
   while (index < length) {
     const current = source[index];
@@ -110,13 +101,13 @@ export function stripNonCode(source) {
       } else if (current === "`") {
         out.push(current);
         mode = "code";
-        significant("`");
+        previous = "expr-end";
         index += 1;
       } else if (current === "$" && next === "{") {
         out.push("${");
         templateDepths.push(0);
         mode = "code";
-        significant("{");
+        previous = "operator";
         index += 2;
       } else {
         out.push(blank(current));
@@ -125,6 +116,11 @@ export function stripNonCode(source) {
       continue;
     }
 
+    if (/\s/.test(current)) {
+      out.push(current);
+      index += 1;
+      continue;
+    }
     if (current === "/" && next === "/") {
       while (index < length && source[index] !== "\n") {
         out.push(" ");
@@ -140,6 +136,10 @@ export function stripNonCode(source) {
       }
       continue;
     }
+
+    const wasDot = afterDot;
+    afterDot = false;
+
     if (current === '"' || current === "'") {
       out.push(current);
       index += 1;
@@ -156,7 +156,7 @@ export function stripNonCode(source) {
         out.push(current);
         index += 1;
       }
-      significant(current);
+      previous = "expr-end";
       continue;
     }
     if (current === "`") {
@@ -165,7 +165,29 @@ export function stripNonCode(source) {
       index += 1;
       continue;
     }
-    if (current === "/" && startsRegex(source, index, previous, beforePrevious)) {
+    if (/[A-Za-z_$]/.test(current)) {
+      wordPattern.lastIndex = index;
+      const word = wordPattern.exec(source)?.[0] ?? current;
+      out.push(word);
+      previous = !wasDot && EXPRESSION_KEYWORDS.has(word) ? "keyword" : "expr-end";
+      index += word.length;
+      continue;
+    }
+    if (/\d/.test(current)) {
+      numberPattern.lastIndex = index;
+      const number = numberPattern.exec(source)?.[0] ?? current;
+      out.push(number);
+      previous = "expr-end";
+      index += number.length;
+      continue;
+    }
+    if (current === "/") {
+      if (previous === "expr-end") {
+        out.push("/");
+        previous = "operator";
+        index += 1;
+        continue;
+      }
       out.push("/");
       index += 1;
       let inClass = false;
@@ -192,7 +214,34 @@ export function stripNonCode(source) {
           index += 1;
         }
       }
-      significant("/");
+      previous = "expr-end";
+      continue;
+    }
+    if (current === "!") {
+      const postfix = previous === "expr-end" && next !== "=";
+      out.push("!");
+      previous = postfix ? "expr-end" : "operator";
+      index += 1;
+      continue;
+    }
+    if ((current === "+" || current === "-") && next === current) {
+      out.push(current, current);
+      previous = previous === "expr-end" ? "expr-end" : "operator";
+      index += 2;
+      continue;
+    }
+    if (current === "?" && next === "." && !/\d/.test(source[index + 2] ?? "")) {
+      out.push("?.");
+      previous = "operator";
+      afterDot = true;
+      index += 2;
+      continue;
+    }
+    if (current === ".") {
+      out.push(".");
+      previous = "operator";
+      afterDot = true;
+      index += 1;
       continue;
     }
     if (templateDepths.length > 0) {
@@ -210,9 +259,7 @@ export function stripNonCode(source) {
       }
     }
     out.push(current);
-    if (!/\s/.test(current)) {
-      significant(current);
-    }
+    previous = current === ")" || current === "]" ? "expr-end" : "operator";
     index += 1;
   }
   return out.join("");
@@ -235,29 +282,87 @@ function isVariableKind(kind) {
   return kind === "const" || kind === "let" || kind === "var";
 }
 
-// Splits a stripped source into declaration extents: { start, end, line, text }. An extent starts at a column-0 line that
-// begins a declaration keyword and runs to the line before the next one; text before the first declaration (imports) is in
-// no extent.
-function splitExtents(stripped) {
-  const extents = [];
-  let current = null;
-  let offset = 0;
+// Splits a stripped source into its top-level statements, by nesting depth ((), [] and {} on the blanked text, so
+// comments, strings and regular expressions cannot confuse it): { start, end, line, text }. A statement starts at its
+// first significant character, wherever that is on the line, and ends
+//   - at a `;` at depth 0;
+//   - at a `}` that returns to depth 0 unless the next text continues it (`;`, `.`, `,`, `=`, `(`, `?`, `:`, an operator,
+//     `)`, or a word such as `else`, `catch`, `as`, `from`);
+//   - at a line break at depth 0 when the next statement starts with a declaration keyword and the line does not end in
+//     an operator or a comma (no semicolons needed);
+//   - before an `export` word at depth 0, which always starts a statement.
+function splitStatements(stripped) {
+  const statements = [];
+  const length = stripped.length;
+  let depth = 0;
+  let start = -1;
+  let startLine = 1;
   let line = 1;
-  for (const text of stripped.split("\n")) {
-    if (DECLARATION_START.test(text)) {
-      current = { start: offset, end: offset, line, text: "", identifiers: undefined };
-      extents.push(current);
+  let last = -1;
+  const finish = () => {
+    if (start !== -1) {
+      statements.push({ start, end: last + 1, line: startLine, text: stripped.slice(start, last + 1), identifiers: undefined });
     }
-    if (current !== null) {
-      current.end = offset + text.length;
+    start = -1;
+  };
+  const endsAfterBrace = (from) => {
+    let position = from;
+    while (position < length && /\s/.test(stripped[position])) {
+      position += 1;
     }
-    offset += text.length + 1;
-    line += 1;
+    if (position >= length) {
+      return true;
+    }
+    if (BRACE_CONTINUES.includes(stripped[position])) {
+      return false;
+    }
+    const word = /^[A-Za-z_$][\w$]*/.exec(stripped.slice(position, position + 16))?.[0];
+    return word === undefined || !CONTINUATION_WORDS.has(word);
+  };
+
+  for (let index = 0; index < length; index += 1) {
+    const character = stripped[index];
+    if (character === "\n") {
+      if (start !== -1 && depth === 0 && !LINE_CONTINUES.includes(stripped[last])) {
+        DECLARATION_AHEAD.lastIndex = index + 1;
+        if (DECLARATION_AHEAD.test(stripped)) {
+          finish();
+        }
+      }
+      line += 1;
+      continue;
+    }
+    if (/\s/.test(character)) {
+      continue;
+    }
+    if (start === -1) {
+      start = index;
+      startLine = line;
+    } else if (
+      depth === 0 &&
+      character === "e" &&
+      stripped.startsWith("export", index) &&
+      !/[\w$.]/.test(stripped[index - 1] ?? " ") &&
+      !/[\w$]/.test(stripped[index + 6] ?? " ")
+    ) {
+      finish();
+      start = index;
+      startLine = line;
+    }
+    last = index;
+    if (character === "(" || character === "[" || character === "{") {
+      depth += 1;
+    } else if (character === ")" || character === "]" || character === "}") {
+      depth = Math.max(0, depth - 1);
+      if (character === "}" && depth === 0 && endsAfterBrace(index + 1)) {
+        finish();
+      }
+    } else if (character === ";" && depth === 0) {
+      finish();
+    }
   }
-  for (const extent of extents) {
-    extent.text = stripped.slice(extent.start, extent.end);
-  }
-  return extents;
+  finish();
+  return statements;
 }
 
 // Splits at depth-0 occurrences of a separator character, counting (), [] and {}.
@@ -336,11 +441,16 @@ function patternNames(pattern) {
 }
 
 // Splits `const a = 1, b: T<X, Y> = f(1, 2), { c } = d;` (the text after the keyword, from `from`) into declarators and
-// returns each binding text with its offset: the part before the first depth-0 `:` or `=`.
+// returns { items: [{ binding, offset }], uncertain }: each binding is the text before the first depth-0 `:` or `=`.
+// Generic arguments stay together: a `<` right after an identifier, or at the start of an expression (a generic arrow's
+// type parameters), opens a generic that the matching `>` closes; in a type annotation every `<` does. When a generic
+// is left open, or the brackets do not balance, `uncertain` is true and the caller must not trust the items.
 function declarators(text, from) {
-  const result = [];
+  const items = [];
   let depth = 0;
   let angle = 0;
+  let genericStart = -1;
+  let doubtful = false;
   let state = "binding";
   let startOffset = from;
   let bindingEnd = null;
@@ -348,8 +458,15 @@ function declarators(text, from) {
     const raw = text.slice(startOffset, bindingEnd ?? end);
     const binding = raw.trim();
     if (binding !== "") {
-      result.push({ binding, offset: startOffset + (raw.length - raw.trimStart().length) });
+      items.push({ binding, offset: startOffset + (raw.length - raw.trimStart().length) });
     }
+  };
+  const opensGeneric = (index) => {
+    if (/[\w$]/.test(text[index - 1] ?? "")) {
+      return true;
+    }
+    const before = text.slice(0, index).trimEnd().slice(-1);
+    return before !== "" && "=(,:?&|".includes(before);
   };
   for (let index = from; index < text.length; index += 1) {
     const character = text[index];
@@ -360,31 +477,38 @@ function declarators(text, from) {
     } else if (depth === 0) {
       if (character === ";") {
         finish(index);
-        return result;
+        return { items, uncertain: angle !== 0 || doubtful };
       }
-      if (character === "," && (angle === 0 || state === "init")) {
+      if (state !== "binding") {
+        if (character === "<" && (state === "annotation" || opensGeneric(index))) {
+          if (angle === 0) {
+            genericStart = index;
+          }
+          angle += 1;
+        } else if (character === ">" && angle > 0 && text[index - 1] !== "=") {
+          angle -= 1;
+          if (angle === 0 && /[=;]/.test(text.slice(genericStart + 1, index).replaceAll("=>", ""))) {
+            // `a < b, c = d > e` is a comparison, not a generic: the bindings cannot be trusted.
+            doubtful = true;
+          }
+        }
+      }
+      if (character === "," && angle === 0) {
         finish(index);
         startOffset = index + 1;
         bindingEnd = null;
         state = "binding";
-        angle = 0;
       } else if (state === "binding" && character === ":") {
         bindingEnd = index;
         state = "annotation";
       } else if (state !== "init" && character === "=" && text[index + 1] !== ">") {
         bindingEnd ??= index;
         state = "init";
-      } else if (state === "annotation") {
-        if (character === "<") {
-          angle += 1;
-        } else if (character === ">" && text[index - 1] !== "=" && angle > 0) {
-          angle -= 1;
-        }
       }
     }
   }
   finish(text.length);
-  return result;
+  return { items, uncertain: angle !== 0 || depth !== 0 || doubtful };
 }
 
 // Reads the quoted module specifier that starts at the quote at `quoteAt` of the extent text; the stripped source blanks
@@ -407,10 +531,10 @@ function compareEntries(left, right) {
 //             null for a listed name that the file imports and exports again;
 //   forwards  [{ line, star, specifier, names: [{ local, exported }] }] for `export * from` and `export { x } from`;
 //   unparsed  [{ name, kind, line, note }] for export forms this parser cannot read;
-//   locals    Map name -> { kind, extent } of every column-0 declaration, exported or not.
+//   locals    Map name -> { kind, extent } of every top-level declaration, exported or not.
 function collect(source, file) {
   const stripped = stripNonCode(source);
-  const extents = splitExtents(stripped);
+  const extents = splitStatements(stripped);
   const locals = new Map();
   const exports = [];
   const forwards = [];
@@ -443,7 +567,19 @@ function collect(source, file) {
     const rest = text.slice(head[0].length);
 
     if (isVariableKind(kind)) {
-      for (const declared of declarators(text, head[0].length)) {
+      const parsed = declarators(text, head[0].length);
+      if (parsed.uncertain) {
+        if (exported) {
+          unparsed.push({
+            name: (parsed.items[0]?.binding ?? kind).replace(/\s+/g, " ").slice(0, 40),
+            kind,
+            line: extent.line,
+            note: "declaration list that could not be split reliably (generic arguments or a comparison in an initializer)",
+          });
+        }
+        continue;
+      }
+      for (const declared of parsed.items) {
         const line = extent.line + countNewlines(text, declared.offset);
         const bound = new RegExp(`^${NAME}$`).test(declared.binding) ? [declared.binding] : patternNames(declared.binding);
         if (bound === null) {
