@@ -110,6 +110,9 @@ export class LifecycleController {
   // stop of a start (F1, F2). destroy waits for these before it reads the record. No entry
   // rejects; a failed step is kept in orphanFailure instead.
   private readonly orphans = new Set<Promise<void>>();
+  // The recovery destroy of a stale container that is still running, or null. It never rejects.
+  // The next create waits for it before issuing anything (see awaitRecoveryDestroy).
+  private recoveryDestroy: Promise<void> | null = null;
   // The code of the last background teardown step that failed. Its container stays recorded, so
   // the next destroy retries it. If that retry fails too, this code is the causeCode of the error
   // that destroy throws, and a retry that succeeds clears it (G-04).
@@ -210,7 +213,9 @@ export class LifecycleController {
 
     this.lifeEpoch += 1;
     this.machine.transition("connecting", "creating container");
-    let containerId: string | null = priorContainerId;
+    // The container this create currently owns. The holder is updated the moment a port call settles,
+    // before any write or deadline check that can throw, so failCreate records the live container.
+    const current: { id: string | null } = { id: priorContainerId };
     const issued: { start: PendingStart | null } = { start: null };
 
     // Every store write sits inside the guarded block, so a failed write moves the
@@ -221,15 +226,22 @@ export class LifecycleController {
       if (this.deps.bridge !== null) {
         this.subscribeBridge(this.deps.bridge);
       }
+      // A recovery destroy that outlived an earlier create must finish before anything new is issued.
+      if (this.recoveryDestroy !== null) {
+        await this.awaitRecoveryDestroy(deadline);
+      }
       this.checkDeadline(deadline);
-      this.persist(realmId, root, containerId);
+      this.persist(realmId, root, current.id);
       this.checkDeadline(deadline);
-      if (containerId === null) {
-        const created = await this.createContainer(realmId, root, deadline);
+      let startedId: string;
+      if (current.id === null) {
+        const created = await this.createContainer(realmId, root, deadline, current);
         if (created === null) {
           return this.machine.snapshot();
         }
-        containerId = created;
+        startedId = created;
+      } else {
+        startedId = current.id;
       }
       const startOnce = async (id: string): Promise<void> => {
         const start = this.issueStart(id);
@@ -241,23 +253,22 @@ export class LifecycleController {
         );
       };
       try {
-        await startOnce(containerId);
+        await startOnce(startedId);
       } catch (error: unknown) {
         // Only the recorded container, with no create in this call, is recovered, and only for
         // OPENSHELL_START_FAILED. Any other failure goes to failCreate unchanged.
         if (
           priorContainerId === null ||
-          containerId !== priorContainerId ||
+          startedId !== priorContainerId ||
           portFailureCode(error) !== PORT_FAILURE_CODE
         ) {
           throw error;
         }
-        const replacement = await this.recoverStaleContainer(containerId, realmId, root, deadline);
+        const replacement = await this.recoverStaleContainer(startedId, realmId, root, deadline, current);
         if (replacement === null) {
           return this.machine.snapshot();
         }
-        containerId = replacement;
-        await startOnce(containerId);
+        await startOnce(replacement);
       }
       if (this.machine.snapshot().state !== "connecting") {
         // A stop began while start was in flight. Its teardown waits for the start and stops the
@@ -283,7 +294,7 @@ export class LifecycleController {
       ) {
         this.adoptStart(issued.start);
       }
-      return this.failCreate(error, realmId, root, containerId);
+      return this.failCreate(error, realmId, root, current.id);
     }
     if (this.machine.snapshot().state !== "connecting") {
       // A stop began during the bridge handshake. It closed the bridge and stopped the container.
@@ -291,7 +302,7 @@ export class LifecycleController {
     }
 
     this.machine.transition("active", "container running");
-    this.persist(realmId, root, containerId);
+    this.persist(realmId, root, current.id);
     return this.machine.snapshot();
   }
 
@@ -641,13 +652,16 @@ export class LifecycleController {
     await this.teardownCall(this.deps.exec.stop(containerId, this.sandboxName()));
   }
 
-  // Issues the port create and waits for it within the startup budget. Returns the new container
-  // id, or null when a stop took the create over (nothing is persisted then). The id is recorded
-  // before the caller starts it.
+  // Issues the port create and waits for it within the startup budget. Sets current.id to the new
+  // container the moment the port create settles, before the record write or the deadline check can
+  // throw, so failCreate never overwrites a live container with a stale id. Returns null when a
+  // stop took the create over (nothing is persisted then). The id is recorded before the caller
+  // starts it.
   private async createContainer(
     realmId: string,
     root: PinnedRoot,
     deadline: number,
+    current: { id: string | null },
   ): Promise<string | null> {
     const pending = this.issueCreate(root);
     let created: { readonly containerId: string };
@@ -678,34 +692,64 @@ export class LifecycleController {
       // create produced.
       return null;
     }
+    current.id = created.containerId;
     this.persist(realmId, root, created.containerId);
     this.checkDeadline(deadline);
     return created.containerId;
   }
 
+  // Waits for a recovery destroy that an earlier create gave up on, within the remaining startup
+  // budget, so a new startup never overtakes a destroy that is still running: that destroy removes
+  // the gateway sandbox by name and would remove a replacement. No pending destroy: returns at once.
+  private async awaitRecoveryDestroy(deadline: number): Promise<void> {
+    const pending = this.recoveryDestroy;
+    if (pending === null) {
+      return;
+    }
+    await withTimeout(
+      pending,
+      Math.max(0, deadline - performance.now()),
+      "STARTUP_BUDGET_EXCEEDED",
+    );
+  }
+
   // TD-04: the recorded container failed to start with OPENSHELL_START_FAILED (it is gone or not
   // running), so it is destroyed within the remaining budget (destroying a gone container is
   // success), the cleared record is written before the new create (RT-07), and one new container
-  // is created. Returns the new id, or null when a stop took over. A destroy failure throws its
-  // own code and the old id stays recorded.
+  // is created. Returns null when a stop took over. A destroy failure throws its own code and the
+  // old id stays recorded. current.id becomes null the moment the destroy succeeds, and the new id
+  // as soon as the create settles. The destroy is tracked until it settles, even when the budget
+  // gives up on it, and the next create waits for it (awaitRecoveryDestroy).
   private async recoverStaleContainer(
     staleId: string,
     realmId: string,
     root: PinnedRoot,
     deadline: number,
+    current: { id: string | null },
   ): Promise<string | null> {
-    await withTimeout(
-      this.deps.exec.destroy(staleId, this.sandboxName()),
-      Math.max(0, deadline - performance.now()),
-      "STARTUP_BUDGET_EXCEEDED",
+    if (this.recoveryDestroy !== null) {
+      await this.awaitRecoveryDestroy(deadline);
+    }
+    const call = this.deps.exec.destroy(staleId, this.sandboxName());
+    const tracked = call.then(
+      () => undefined,
+      () => undefined,
     );
+    this.recoveryDestroy = tracked;
+    void tracked.then(() => {
+      if (this.recoveryDestroy === tracked) {
+        this.recoveryDestroy = null;
+      }
+    });
+    await withTimeout(call, Math.max(0, deadline - performance.now()), "STARTUP_BUDGET_EXCEEDED");
+    current.id = null;
     if (this.machine.snapshot().state !== "connecting") {
       return null;
     }
     this.checkDeadline(deadline);
     this.persist(realmId, root, null);
     this.checkDeadline(deadline);
-    return this.createContainer(realmId, root, deadline);
+    return this.createContainer(realmId, root, deadline, current);
   }
 
   // Issues the port create for a startup that has no container yet. The attempt number lets an

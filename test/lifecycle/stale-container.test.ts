@@ -184,9 +184,14 @@ void test("TD-04: a fresh create whose first start fails with a raw error is unc
 });
 
 void test("TD-04: the recovery destroy respects the startup budget", async (t) => {
-  const f = fixture(t, 400);
+  const f = fixture(t);
+  const clock = scriptedClock(t);
   const oldId = await activeThenRemoved(f);
-  f.exec.setDelay("destroy", 1500);
+  // The startup budget runs out at the moment the recovery destroy starts, whatever the host load is.
+  f.exec.beforeCall("destroy", () => {
+    clock.advance(60_000);
+  });
+  f.exec.setDelay("destroy", 150);
 
   const snapshot = await f.controller.create(f.workspace);
 
@@ -194,4 +199,97 @@ void test("TD-04: the recovery destroy respects the startup budget", async (t) =
   assert.equal(snapshot.reason, "STARTUP_BUDGET_EXCEEDED");
   assert.equal(f.store.load(SESSION)?.containerId, oldId);
   assert.equal(f.exec.callCount("create"), 1);
+});
+
+// Replaces performance.now for one test, so a hook can model a startup budget that runs out at an
+// exact step with no real wait. t.mock restores the real clock when the test ends.
+function scriptedClock(t: TestContext): { advance(ms: number): void } {
+  let now = 0;
+  t.mock.method(performance, "now", () => now);
+  return {
+    advance(ms: number): void {
+      now += ms;
+    },
+  };
+}
+
+void test("a budget that runs out right after the port create settled records the new container, and destroy removes it", async (t) => {
+  const clock = scriptedClock(t);
+  const f = fixture(t);
+  f.exec.beforeCall("create", () => {
+    clock.advance(60_000);
+  });
+
+  const snapshot = await f.controller.create(f.workspace);
+
+  assert.equal(snapshot.state, "error");
+  assert.equal(snapshot.reason, "STARTUP_BUDGET_EXCEEDED");
+  const created = f.exec.resources()[0];
+  assert.ok(created);
+  assert.equal(f.store.load(SESSION)?.containerId, created.containerId);
+
+  await f.controller.destroy();
+
+  assert.equal(f.exec.resources().length, 0);
+  assert.equal(f.store.load(SESSION), null);
+});
+
+void test("TD-04: a budget that runs out right after the replacement create records the new container, not the stale one", async (t) => {
+  const clock = scriptedClock(t);
+  const f = fixture(t);
+  const oldId = await activeThenRemoved(f);
+  f.exec.beforeCall("create", () => {
+    clock.advance(60_000);
+  });
+
+  const snapshot = await f.controller.create(f.workspace);
+
+  assert.equal(snapshot.state, "error");
+  assert.equal(snapshot.reason, "STARTUP_BUDGET_EXCEEDED");
+  const created = f.exec.resources()[0];
+  assert.ok(created);
+  assert.notEqual(created.containerId, oldId);
+  assert.equal(f.store.load(SESSION)?.containerId, created.containerId);
+
+  await f.controller.destroy();
+
+  assert.equal(f.exec.resources().length, 0);
+});
+
+void test("TD-04: a recovery destroy that outlived the budget finishes before a later create issues a create or destroy", async (t) => {
+  const f = fixture(t);
+  const clock = scriptedClock(t);
+  await activeThenRemoved(f);
+  const destroysBefore = f.exec.callCount("destroy");
+  const DESTROY_MS = 150;
+  let destroyStartedAt = 0;
+  // The startup budget runs out at the moment the recovery destroy starts, whatever the host load is.
+  f.exec.beforeCall("destroy", () => {
+    destroyStartedAt = Date.now();
+    clock.advance(60_000);
+  });
+  f.exec.setDelay("destroy", DESTROY_MS);
+
+  const first = await f.controller.create(f.workspace);
+
+  assert.equal(first.state, "error");
+  assert.equal(first.reason, "STARTUP_BUDGET_EXCEEDED");
+  assert.equal(f.exec.callCount("destroy") - destroysBefore, 1);
+  assert.equal(f.exec.callCount("create"), 1);
+  f.exec.setDelay("destroy", 0);
+  // Every later destroy or create must be issued only after the first destroy's delay has elapsed.
+  const elapsedAtLaterCalls: number[] = [];
+  const check = (): void => {
+    elapsedAtLaterCalls.push(Date.now() - destroyStartedAt);
+  };
+  f.exec.beforeCall("destroy", check);
+  f.exec.beforeCall("create", check);
+
+  const second = await f.controller.create(f.workspace);
+
+  assert.equal(second.state, "active");
+  assert.ok(elapsedAtLaterCalls.length > 0);
+  assert.equal(elapsedAtLaterCalls.every((ms) => ms >= DESTROY_MS - 5), true);
+  assert.equal(f.exec.resources().length, 1);
+  assert.equal(f.exec.resources()[0]?.containerId, f.store.load(SESSION)?.containerId);
 });
