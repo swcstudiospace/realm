@@ -19,11 +19,12 @@
 import {
   closeSync,
   constants,
+  type Dir,
   type Dirent,
   fstatSync,
   lstatSync,
   openSync,
-  readdirSync,
+  opendirSync,
   type Stats,
   unlinkSync,
 } from "node:fs";
@@ -32,6 +33,9 @@ import { performance } from "node:perf_hooks";
 import { assertDirectoryPinned, pinDirectory, TEMP_NAME_PATTERN } from "./atomic-write.js";
 import { PROC_FD_DIR } from "./canonicalize.js";
 import { bindRoot } from "./root.js";
+
+// Directory entries buffered per read of a directory, so a huge directory is never held whole.
+const DIR_READ_BATCH = 64;
 
 // A file younger than this is never removed by the daemon-start sweep. A temp file lives for one
 // write and one fsync, so the bound only has to exceed the longest legitimate write.
@@ -156,27 +160,44 @@ function sweepRoot(root: string, state: SweepState): void {
 // Visits one directory held open as fd, whose real path is dirPath.
 function walk(fd: number, dirPath: string, rootDev: number, state: SweepState): void {
   const viaDir = join(state.procFdDir, String(fd));
-  let entries: Dirent[];
+  let dir: Dir;
   try {
-    entries = readdirSync(viaDir, { withFileTypes: true });
+    dir = opendirSync(viaDir, { bufferSize: DIR_READ_BATCH });
   } catch {
     state.failed += 1;
     return;
   }
-  for (const entry of entries) {
-    if (state.truncated) {
-      return;
+  try {
+    // Both budgets are checked between reads, so a directory with millions of entries is never
+    // loaded whole and the walk stops soon after a budget is spent.
+    while (!state.truncated) {
+      if (performance.now() - state.startedAt >= state.deadlineMs) {
+        state.truncated = true;
+        return;
+      }
+      let entry: Dirent | null;
+      try {
+        entry = dir.readSync();
+      } catch {
+        state.failed += 1;
+        return;
+      }
+      if (entry === null) {
+        return;
+      }
+      state.entries += 1;
+      if (state.entries > state.maxEntries) {
+        state.truncated = true;
+        return;
+      }
+      if (entry.isDirectory()) {
+        enterDirectory(viaDir, dirPath, entry.name, rootDev, state);
+      } else if (entry.isFile() && TEMP_NAME_PATTERN.test(entry.name)) {
+        considerFile(viaDir, dirPath, entry.name, state);
+      }
     }
-    state.entries += 1;
-    if (state.entries > state.maxEntries || performance.now() - state.startedAt >= state.deadlineMs) {
-      state.truncated = true;
-      return;
-    }
-    if (entry.isDirectory()) {
-      enterDirectory(viaDir, dirPath, entry.name, rootDev, state);
-    } else if (entry.isFile() && TEMP_NAME_PATTERN.test(entry.name)) {
-      considerFile(viaDir, dirPath, entry.name, state);
-    }
+  } finally {
+    dir.closeSync();
   }
 }
 

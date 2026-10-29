@@ -65,7 +65,7 @@ const TEMP_FILE_MODE = 0o600;
 // The one definition of the temp-file name. The writer builds names with tempFileName and the
 // orphan sweep (temp-sweep.ts) recognises them with TEMP_NAME_PATTERN, so the two cannot drift.
 // The suffix is always 16 lowercase hex digits.
-export const TEMP_NAME_PATTERN = /^\.(.+)\.realm-tmp-[0-9a-f]{16}$/;
+export const TEMP_NAME_PATTERN = /^\.(.+)\.realm-tmp-[0-9a-f]{16}$/s;
 
 export function tempFileName(name: string): string {
   return `.${name}.realm-tmp-${randomBytes(8).toString("hex")}`;

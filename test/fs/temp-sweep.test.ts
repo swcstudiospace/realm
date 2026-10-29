@@ -258,6 +258,36 @@ void test("the sweep stops at maxEntries and reports truncated (D-1401)", (t) =>
   assert.equal(result.removed.length, 2);
 });
 
+void test("a directory larger than maxEntries is read in bounded steps and most orphans stay (D-1401)", (t) => {
+  const { root } = setup(t);
+  const names: string[] = [];
+  for (let index = 0; index < 200; index += 1) {
+    const name = `.f${String(index)}.realm-tmp-${HEX}`;
+    names.push(name);
+    plant(join(root, name), OLD_MS);
+  }
+  const audit: TempSweepAuditEntry[] = [];
+  const result = sweepOrphanTempFiles([root], sweepOptions(audit, { maxEntries: 10 }));
+  assert.equal(result.truncated, true);
+  assert.ok(result.removed.length <= 10, `examined more than maxEntries: removed ${String(result.removed.length)}`);
+  assert.ok(audit.length <= 10);
+  const left = names.filter((name) => existsSync(join(root, name)));
+  assert.ok(left.length >= 190, `entries beyond the cap must be untouched, ${String(left.length)} left`);
+});
+
+void test("an aged orphan whose target name holds a newline is removed; a newline in the suffix is kept (D-1401)", (t) => {
+  const { root } = setup(t);
+  const orphan = join(root, `.a\nb.txt.realm-tmp-${HEX}`);
+  const nearMiss = join(root, `.a.txt.realm-tmp-${HEX}\n`);
+  plant(orphan, OLD_MS);
+  plant(nearMiss, OLD_MS);
+  const audit: TempSweepAuditEntry[] = [];
+  const result = sweepOrphanTempFiles([root], sweepOptions(audit));
+  assert.equal(existsSync(orphan), false);
+  assert.equal(existsSync(nearMiss), true);
+  assert.deepEqual(result.removed.map((entry) => entry.path), [orphan]);
+});
+
 void test("the sweep stops when the wall budget is spent and reports truncated (D-1401)", (t) => {
   const { root } = setup(t);
   const orphan = join(root, `.target.txt.realm-tmp-${HEX}`);
