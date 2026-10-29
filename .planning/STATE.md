@@ -1,38 +1,33 @@
 ---
 gsd_state_version: "1.0"
-milestone: v2.0
-status: Awaiting next milestone
-stopped_at: Milestone v2.0 completed and archived (2026-10-29); the next step is /gsd-new-milestone
-last_updated: "2026-10-29T12:06:33.428Z"
+milestone: v3.0
+milestone_name: Containment by Default
+status: planning
+last_updated: "2026-10-29T13:07:46.226Z"
 last_activity: 2026-10-29
-last_activity_desc: Milestone v2.0 completed and archived
-state_head: 85cb7402774c245cff9d86b453a27aebc84c7252
-milestone_name: Host Adapters, Live Verification and Production Isolation
-current_phase: 11
-current_phase_name: Milestone v2.0 Close (complete)
 progress:
-  total_phases: 11
-  completed_phases: 16
-  total_plans: 12
-  completed_plans: 12
-  percent: 100
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-10-22)
+See: .planning/PROJECT.md (updated 2026-10-29)
 
 **Core value:** Every file mutation by an agent either lands inside the realm under policy or fails closed, and the user can always see whether the realm is active or disconnected.
-**Current focus:** None. Milestone v2.0 (host adapters, live Omp verification, production isolation; releases 0.2.0 to 0.2.2) is complete and archived, and milestone v1.0 (provisional name) shipped fail-closed. The next step is `/gsd-new-milestone`; the carried requirements and the eight proposals recorded by quick task 261029-g7m are its candidates.
+**Current focus:** Milestone v3.0 Containment by Default (started 2026-10-29, phases 12 to 20): the eight proposals of quick task 261029-g7m under owner decisions D1 to D6. Milestone v2.0 (releases 0.2.0 to 0.2.3) is complete and archived. The next step after the roadmap is `/gsd-discuss-phase 12`, or `/gsd-autonomous` to run the phases.
 
 ## Current Position
 
-Phase: Milestone v2.0 complete
+Phase: Not started (defining requirements)
 Plan: —
-Status: Awaiting next milestone
-Last activity: 2026-10-29 — Milestone v2.0 completed and archived
+Status: Defining requirements
+Last activity: 2026-10-29 — Milestone v3.0 started
 
 ## Performance Metrics
 

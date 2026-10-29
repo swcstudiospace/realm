@@ -10,19 +10,31 @@ When an agent edits code, every file mutation either lands inside the realm unde
 
 ## Current State
 
-Shipped: **v2.0 Host Adapters, Live Verification and Production Isolation** (2026-10-29), as releases 0.2.0 and 0.2.1 (`CHANGELOG.md` and the GitHub releases). The 0.2.x line is the supported line (`SECURITY.md`). The record is in `.planning/milestones/`: `v2.0-ROADMAP.md`, `v2.0-REQUIREMENTS.md`, `v2.0-MILESTONE-AUDIT.md`, `v2.0-INTEGRATION-CHECK.md` and `v2.0-phases/`.
+Shipped: **v2.0 Host Adapters, Live Verification and Production Isolation** (2026-10-29), as releases 0.2.0 to 0.2.3 (`CHANGELOG.md` and the GitHub releases). The 0.2.x line is the supported line (`SECURITY.md`). The record is in `.planning/milestones/`: `v2.0-ROADMAP.md`, `v2.0-REQUIREMENTS.md`, `v2.0-MILESTONE-AUDIT.md`, `v2.0-INTEGRATION-CHECK.md` and `v2.0-phases/`. Release 0.2.3 records the lifecycle and persistence findings of 2026-10-29 (`.planning/quick/261029-g7m-lifecycle-and-persistence-findings/`) and the Omp lifecycle runbook (`docs/integration/omp-lifecycle-runbook.md`).
 
 What exists, and what was verified live on the production stack (the realm account: rootless Podman 5.7.1, the OpenShell 0.1.5 gateway, the Realm compute driver): `realm up`, `down`, `status`, `doctor`, `mcp` and `acp`; the Omp plugin; adapter bundles for Claude Code, Grok Build, Muse Code, Hermes Agent, Prime Agent and Omp. The MCP server serves both protocol eras, and Claude Code and Grok Build connect to it (connection checks, 2026-10-29). The nine-scenario production live suite passes 31 of 31 on the installed 0.2.1. Releases carry `SHA256SUMS` and a CycloneDX SBOM, and the documentation site deploys from the release job.
 
-Verified only as far as a connection: no model-driven tool call has run through any host.
+Verified only as far as a connection and a scripted run: no LLM-driven tool call has run through any host. A scripted OpenAI-compatible provider drove Omp's own `write` tool through the guard in both modes (2026-10-29), and the findings show that Omp's own tools do not run in the sandbox: the extension registers no tool and only gates `write` and `edit`.
 
-## Next Milestone Goals
+## Current Milestone: v3.0 Containment by Default
 
-Start with `/gsd-new-milestone`. What was carried, not closed (reasons and owners: `milestones/v2.0-MILESTONE-AUDIT.md`, the disposition table and the tech-debt register):
+**Goal:** A model working through Omp does its file mutations and commands inside the sandbox by default; the sandbox and the files in it survive crashes; an operator can see what happened, prove the audit log is intact, and ship the product with provenance and a rollback path.
 
-- Requirements: FS-02 (race-resistant path resolution is an accepted approximation), ANDA-01 to ANDA-04 (live-gated; the engine licence conflict, OQ-P3-11, blocks vendoring Anda code), OMP-05 (needs a model call; the procedure is written in `docs/integration/omp.md`), PRD-DRV-01 (its amendment awaits the owner) and UI-01 (an accepted limitation).
-- Owner decisions still open: the product-spec amendment for RT-04, the Podman probe classification, A10 F2 and F3 and the policy file integrity rule (R6), the supply-chain items (trust channel and install sources, holding the openshell package, build provenance through a release job split), repository settings and a Dependabot configuration, and the removal of the rollback and builder-cache images.
-- Tech debt TD-01 to TD-10 of the audit, notably a smoke mode that lets CI check the MCP protocol without a sandbox (TD-06) and `realm doctor` checks for the driver environment (TD-03).
+**Target features:**
+
+- Scripted-provider end-to-end harness and the Omp enforcement spike; OMP-05 recorded complete on that evidence (owner decision D2)
+- Quality ratchet: dependency audit and Dependabot, coverage floors, de-flaked timing tests, property tests and a scheduled mutation run
+- Crash-safety pack: orphan temp-file sweep, audit reconciliation, durable record deletion, real-SIGKILL tests, TD-01 and TD-04
+- Zero-config onboarding (`realm init`, `doctor --fix`, roots in `config.json`, an allowlisted daemon environment) and fail-closed as the default policy mode (D4)
+- Omp tools backed by the sandbox, with the built-in `write`, `edit` and `bash` removed or blocked in fail-closed mode (D3)
+- Observability and a tamper-evident audit log: structured logs with correlation ids, local metrics, a hash chain with `realm audit verify`, and a distinct code for gateway or driver loss (TD-05)
+- Per-project sandboxes: one session per project workspace
+- Resume and checkpoint: re-adoption of a surviving sandbox, a session-owned scratch volume, workspace snapshots and restore
+- Release pipeline hardening: job split, build provenance attestation, rollback workflow, changelog filter (D6)
+
+The owner decisions D1 to D6 (2026-10-29) and the scope source are in `.planning/quick/261029-g7m-lifecycle-and-persistence-findings/` (`IMPROVEMENT-PROPOSALS.md`). The requirement IDs are in `.planning/REQUIREMENTS.md` and the phases (12 to 20) in `.planning/ROADMAP.md`.
+
+**Carried, not in this milestone** (reasons and owners: `milestones/v2.0-MILESTONE-AUDIT.md`): FS-02 (race-resistant path resolution is an accepted approximation; the property tests of Phase 13 add confidence only), ANDA-01 to ANDA-04 (live-gated; the engine licence conflict, OQ-P3-11, blocks vendoring Anda code), PRD-DRV-01 (its amendment awaits the owner, except as far as Phase 18 needs the driver's workspace handling) and UI-01 (an accepted limitation). Owner decisions still open: the product-spec amendment for RT-04, the Podman probe classification, A10 F2 and F3 and the policy file integrity rule (R6), the supply-chain items for the trust channel, install sources and holding the openshell package, the TD-10 repository settings, and the removal of the rollback and builder-cache images. Tech debt outside this milestone: TD-02 (a coordination note in Phase 15) and TD-06.
 
 ## Requirements
 
@@ -69,6 +81,7 @@ The v1 requirement set lives in `.planning/REQUIREMENTS.md` (REQ-IDs grouped by 
 - [ ] Standalone CLI: realm up, down, status, doctor; host config snippets
 - [ ] Integration notes per documentation source, policy reference, security review
 - [ ] Unit, state-machine, contract, and Podman-gated integration tests
+- [ ] v3.0 (2026-10-29): the eight proposals above, tracked as the v3.0 requirement set in `.planning/REQUIREMENTS.md` (HARN, OMPX, DEF, ONB, CRASH, OBS, MULTI, RES, QR and REL IDs)
 
 **Milestone status (2026-10-22):** complete and archived under `.planning/milestones/`. v1.0 is fail-closed: RT-04 and CLI-01 are deferred to a follow-up milestone, and `realm up` refuses with `AGENTOS_NOT_CONFIGURED` until an AgentOS driver exists. QUAL-01 is amended by user decision with a named exception list (2026-10-22). OMP-03 is accepted as an approximation: one status item, detail in its text, no tooltip API on this host (2026-10-22). FS-02 is a Partial accepted approximation that awaits the user's confirmation. The live-gated items are deferred to human verification on a Podman 5.x host: RT-01, RT-02, RT-03, RT-05, RT-08, RT-09, TOOL-03, TOOL-04, TOOL-05, OMP-01, OMP-02, OMP-04, OMP-05, CLI-04, ANDA-01, ANDA-02, ANDA-03, ANDA-04. Superseded 2026-10-29: TOOL-05 was proven live (REQUIREMENTS.md). The milestone name v1.0 is provisional for the 0.1.x release line.
 
@@ -113,7 +126,7 @@ The v1 requirement set lives in `.planning/REQUIREMENTS.md` (REQ-IDs grouped by 
 
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
-| Default policy mode is advisory with a visible warning; fail-closed is opt-in per project | Decided by the user. Resolves the spec's contradiction between ASSUMPTIONS/POLICY_MODE and GRACEFUL_DEGRADATION | Implemented |
+| Default policy mode is advisory with a visible warning; fail-closed is opt-in per project | Decided by the user. Resolves the spec's contradiction between ASSUMPTIONS/POLICY_MODE and GRACEFUL_DEGRADATION | Implemented. Superseded 2026-10-29 (owner decision D4, v3.0): the default becomes fail-closed and advisory is the explicit opt-in |
 | Podman rootless as the only container engine in v1 | Spec ASSUMPTIONS and CONTAINER_LAYER_PODMAN | — Pending (implementation) |
 | Chain is host CLI → Realm core → Podman container (digest-pinned) → OpenShell → AgentOS, with Anda reached from the TypeScript client | Spec LAYER_STACK and n1 minimal path | Confirmed 2026-10-22 (S-08): the OpenShell gateway runs on the host and its Podman driver creates the session container (runtime-decision.md, D-46, D-47) |
 | One container per session | n4 recommendation; reversible; keeps locks in the daemon and reaping keyed to the session record | Implemented |
@@ -121,15 +134,18 @@ The v1 requirement set lives in `.planning/REQUIREMENTS.md` (REQ-IDs grouped by 
 | Anda boundary: TypeScript client over the first documented Anda Engine surface, preferring socket JSON-RPC or HTTP; Rust shim only if no TypeScript-reachable surface is documented | n4 recommendation; decided by the documentation spike | Phase 3: TypeScript client over the Anda HTTP API, no shim (anda-decision.md). Decided 2026-10-22: Anda consumes Realm over MCP (P5-D1, anda-decision.md section 7) |
 | AgentOS behind an ExecutionService interface; no actor design until Rivet docs are read | n3 default; AgentOS identity unresolved | — Pending (Rivet doc gate) |
 | Vertical slice (up, down, status, doctor on core and runtime) proves the architecture first; plugin, MCP, ACP and locks follow | n1 recommendation; preset roadmap order keeps this sequence | — Pending (roadmap) |
-| Omp host-native write/edit tools: disable in required mode (spec q4 recommendation) | Spec CLARIFICATIONS q4 is not decided by the user; recorded as an open question | — Pending (Omp doc gate) |
+| Omp host-native write/edit tools: disable in required mode (spec q4 recommendation) | Spec CLARIFICATIONS q4 is not decided by the user; recorded as an open question | Decided 2026-10-29 (owner decision D3, v3.0): in fail-closed mode the extension may remove or block the built-in `write`, `edit` and `bash` by the mechanism the Phase 12 spike proves; if the API cannot enforce removal, fail-closed stays a guard and the docs say so |
 | Required mode gates writes only; reads stay available while disconnected | n5 default; spec q1 options considered | — Pending (confirm) |
 | Podman-gated integration tests skip with a clear reason until Podman 5.x is installed | OpenShell docs require Podman 5.x; local Podman is 4.9.3; no package installs | — Pending (environment) |
 | Node LTS with ESM for CLI and daemon; Bun unverified | Spec ASSUMPTIONS and n3 default | — Pending (host doc gate) |
-| The daemon owns sessions; surfaces attach through the control socket | User decision, 2026-10-22 (STATE.md). Surfaces attach by calling the idempotent `up`; there is no attach or detach protocol | Decided 2026-10-22 |
-| Containment default: advisory is the recorded default | Security review (07-SECURITY-REVIEW.md, section 5.3 and section 8, item 2) recommends fail-closed for containment deployments | Keep advisory as the default (user decision 2026-10-22); fail-closed is the documented opt-in for containment deployments |
+| The daemon owns sessions; surfaces attach through the control socket | User decision, 2026-10-22 (STATE.md). Surfaces attach by calling the idempotent `up`; there is no attach or detach protocol | Decided 2026-10-22. Extended 2026-10-29 (owner decision D5, v3.0): the daemon holds one session per project workspace, recorded in `docs/integration/runtime-decision.md` in Phase 18 |
+| Containment default: advisory is the recorded default | Security review (07-SECURITY-REVIEW.md, section 5.3 and section 8, item 2) recommends fail-closed for containment deployments | Superseded 2026-10-29 (owner decision D4, v3.0): fail-closed is the default; advisory is the documented opt-in for users who accept host writes while the realm is disconnected (it was the default under user decision 2026-10-22) |
 | AgentOS path after the no-go spike | User decision, 2026-10-22; spike recommends no-go as designed (docs/integration/agentos.md) | Deferred to a follow-up milestone (2026-10-22). v1.0 fails closed with AGENTOS_NOT_CONFIGURED until a driver exists |
 | QUAL-01 silent-catch rule | Nine residual catch sites in eight named exceptions (audit section 6); user decision, 2026-10-22 | Amended 2026-10-22: the rule now names its exceptions |
 | OMP-03 tooltip wording | The host offers no tooltip API (P5-D5); user decision, 2026-10-22 | Accepted as an approximation 2026-10-22: one status item, detail in its text |
+| Startup reaper re-adopts a surviving sandbox that passes the hardening verifier; the scratch volume joins the mount list | Owner decision D5 (2026-10-29): the "remove everything" reaper discards a running sandbox and its state after a daemon crash (`ABRUPT-END-PERSISTENCE-FINDINGS.md`) | Approved 2026-10-29; recorded in `docs/integration/runtime-decision.md` in Phase 19, superseding the exact form of D-84, D-86, RT-08 and the RT-01 mount list |
+| Error catalogue grows by a code for gateway or driver loss (TD-05) and, if no existing code fits, one for audit reconciliation | Owner decision D5 (2026-10-29): the catalogue is a frozen contract, so additions are approved by name | Approved 2026-10-29; implemented in Phases 14 and 17 |
+| Owner sign-off for changes under `.github/workflows`, `release` and `scripts/release` needed by v3.0 | Owner decision D6 (2026-10-29): `AGENTS.md` requires human review for those paths | Signed off 2026-10-29; each such pull request cites D6; repository settings (TD-10) stay the owner's |
 
 ---
-*Last updated: 2026-10-22 after initialization (automatic mode, research skipped by preset)*
+*Last updated: 2026-10-29 after starting milestone v3.0*
