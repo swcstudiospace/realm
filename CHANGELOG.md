@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-10-29
+
+### Maintenance
+- chore(milestone): archive milestone v2.0 and record its audit (#8) (be10b1e)
+
 ## [0.2.1] - 2026-10-29
 
 ### Fixed
