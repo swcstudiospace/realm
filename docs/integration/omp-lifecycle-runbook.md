@@ -83,7 +83,9 @@ Then, with the realm up, write files three ways through `realm mcp` (an MCP clie
 
 ## D. Realm's write path under process death
 
-Save the script in the appendix as `atomic-kill-test.mjs` and run `node atomic-kill-test.mjs <repo>/dist/src/fs/atomic-write.js`. Expected: for each of the four stages the child ends by SIGKILL, the target keeps `OLD-CONTENT`, one `.target.txt.realm-tmp-*` file holds the new content, and a later clean write leaves that orphan in place; the no-kill control leaves none. A change in that output means the write path changed.
+Save the script in the appendix as `atomic-kill-test.mjs` and run `node atomic-kill-test.mjs <repo>/dist/src/fs/atomic-write.js`. Expected: for each of the four stages the child ends by SIGKILL, the target keeps `OLD-CONTENT`, one `.target.txt.realm-tmp-*` file holds the new content, and a later clean write by the writer itself leaves that orphan in place (the writer never removes another process's temp file); the no-kill control leaves none. A change in that output means the write path changed.
+
+Who removes the orphan: the sweep in `src/fs/temp-sweep.ts` (`sweepOrphanTempFiles`). It removes only a regular file named exactly `.<name>.realm-tmp-<16 lowercase hex>`, owned by the daemon's uid, on the root's device, reached through a pinned directory descriptor and never through a symlink, and only once it is older than the 60 s bound (`ORPHAN_TEMP_MIN_AGE_MS`). It writes one audit line (`tool: "temp-sweep"`) before each removal. Expected after the daemon wiring of Phase 14 (INFERENCE until that wiring is run live): the next daemon start removes the orphan once it is older than 60 s; a start inside the first 60 s keeps it and a later start removes it. The four stages above are also exercised on every test run by `test/fs/atomic-write-sigkill.test.ts` (VERIFIED_BY_CODE_READING of the test, not yet by execution). A kill after the `rename` cannot be hooked; by `rename(2)` atomicity the target then holds either the old or the new bytes and there is no orphan (INFERENCE).
 
 ## Cleanup
 

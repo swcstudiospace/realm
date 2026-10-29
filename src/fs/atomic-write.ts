@@ -62,6 +62,15 @@ export class WriteNotAtomicError extends RealmError {
 
 const TEMP_FILE_MODE = 0o600;
 
+// The one definition of the temp-file name. The writer builds names with tempFileName and the
+// orphan sweep (temp-sweep.ts) recognises them with TEMP_NAME_PATTERN, so the two cannot drift.
+// The suffix is always 16 lowercase hex digits.
+export const TEMP_NAME_PATTERN = /^\.(.+)\.realm-tmp-[0-9a-f]{16}$/;
+
+export function tempFileName(name: string): string {
+  return `.${name}.realm-tmp-${randomBytes(8).toString("hex")}`;
+}
+
 export function sha256Hex(content: string | Uint8Array): string {
   return createHash("sha256").update(content).digest("hex");
 }
@@ -174,7 +183,7 @@ function replaceInPinnedDirectory(
   // Only permission bits carry over; setuid and setgid are never copied to the replacement.
   const mode = existing === null ? TEMP_FILE_MODE : existing.mode & 0o777;
 
-  const tempName = `.${name}.realm-tmp-${randomBytes(8).toString("hex")}`;
+  const tempName = tempFileName(name);
   const tempVia = through(tempName);
   let fd: number;
   try {
@@ -246,7 +255,7 @@ function readlinkOrEscape(path: string): string {
 // Opens the verified directory and proves the descriptor is that directory. O_NONBLOCK keeps a
 // FIFO from blocking the open; O_DIRECTORY rejects a regular file. A failed open or check is
 // PATH_ESCAPE. The caller closes the returned descriptor.
-function pinDirectory(dir: string, procFdDir: string): number {
+export function pinDirectory(dir: string, procFdDir: string): number {
   if (!existsSync(procFdDir)) {
     throw makeRealmError("PATH_ESCAPE");
   }
@@ -273,7 +282,7 @@ function pinDirectory(dir: string, procFdDir: string): number {
 
 // The descriptor must still be the directory at dir: same device and inode as the path, and the
 // kernel names it dir. A directory or ancestor swapped after the pin fails here.
-function assertDirectoryPinned(dirFd: number, dir: string, procFdDir: string): void {
+export function assertDirectoryPinned(dirFd: number, dir: string, procFdDir: string): void {
   const opened = fstatSync(dirFd);
   if (!opened.isDirectory()) {
     throw makeRealmError("PATH_ESCAPE");
@@ -289,7 +298,7 @@ function assertDirectoryPinned(dirFd: number, dir: string, procFdDir: string): v
 
 // Flushes a directory entry through an open directory descriptor. fstat is the check that the
 // descriptor is a directory; anything else is PATH_ESCAPE.
-function syncDirectoryFd(fd: number): void {
+export function syncDirectoryFd(fd: number): void {
   if (!fstatSync(fd).isDirectory()) {
     throw makeRealmError("PATH_ESCAPE");
   }
