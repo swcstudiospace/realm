@@ -69,6 +69,8 @@ export interface LibpodClientOptions {
   readonly infoTimeoutMs?: number;
   // How long a successful info reply is reused, in milliseconds. A failure is never reused, and concurrent calls share one request.
   readonly infoTtlMs?: number;
+  // The clock the info cache reads, in milliseconds. The default is performance.now(); a test passes a manual clock.
+  readonly now?: () => number;
 }
 
 export interface LibpodInfo {
@@ -123,8 +125,10 @@ interface RouteCall {
   readonly body?: string;
 }
 
-// The info reply this client holds. The value is fresh until expiresAt; a pending request is shared by concurrent callers.
+// The info reply this client holds. The value is fresh until expiresAt on this clock; a pending request is shared by concurrent
+// callers.
 interface InfoCache {
+  readonly now: () => number;
   value: LibpodInfo | undefined;
   expiresAt: number;
   pending: Promise<LibpodInfo> | undefined;
@@ -134,7 +138,7 @@ export class LibpodClient {
   private readonly transport: Transport;
   private readonly seccompProfilePath: string | undefined;
   private readonly infoTtlMs: number;
-  private readonly infoCache: InfoCache = { value: undefined, expiresAt: 0, pending: undefined };
+  private readonly infoCache: InfoCache;
 
   constructor(socketPath: string, options: LibpodClientOptions = {}) {
     if (!isAbsolute(socketPath)) {
@@ -163,6 +167,7 @@ export class LibpodClient {
     }
     this.seccompProfilePath = seccompProfilePath;
     this.infoTtlMs = infoTtlMs;
+    this.infoCache = { now: options.now ?? (() => performance.now()), value: undefined, expiresAt: 0, pending: undefined };
     this.transport = Object.freeze({ socketPath, timeoutMs, infoTimeoutMs });
   }
 
@@ -295,7 +300,7 @@ async function readInfo(transport: Transport): Promise<LibpodInfo> {
 }
 
 async function readCachedInfo(cache: InfoCache, ttlMs: number, load: () => Promise<LibpodInfo>): Promise<LibpodInfo> {
-  if (cache.value !== undefined && performance.now() < cache.expiresAt) {
+  if (cache.value !== undefined && cache.now() < cache.expiresAt) {
     return cache.value;
   }
   cache.pending ??= settleInfo(cache, ttlMs, load);
@@ -308,7 +313,7 @@ async function settleInfo(cache: InfoCache, ttlMs: number, load: () => Promise<L
   try {
     const info = await load();
     cache.value = info;
-    cache.expiresAt = performance.now() + ttlMs;
+    cache.expiresAt = cache.now() + ttlMs;
     return info;
   } finally {
     cache.pending = undefined;
