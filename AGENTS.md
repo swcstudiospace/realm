@@ -63,6 +63,7 @@ Every gate must pass before a change is reviewed (`CONTRIBUTING.md`).
   - `anda/`: Anda Engine HTTP bridge (`client.ts`) and the version-shape check (`shape.ts`).
   - `fs/`: canonical paths, root allowlist, credential-path denial, advisory write locks, atomic writes, read, list, glob, and write, and `temp-sweep.ts` (`src/fs/temp-sweep.ts`, which removes orphaned atomic-write temp files; the daemon calls it at start, before it serves).
   - `audit/`: redacted JSONL audit log, and `reconcile.ts` (`src/audit/reconcile.ts`, which appends `AUDIT_OUTCOME_UNKNOWN` reconciliation lines for admissions with no result; the daemon calls it at start, before it serves).
+  - `observe/`: the JSON-line logger (`logger.ts`), its file and stderr sinks (`log-file.ts`, size-capped, rotated to one `.1` file), correlation ids (`ids.ts`), and the in-memory metrics registry with its strict snapshot validator (`metrics.ts`); libraries only, the daemon does not call them yet.
   - `doctor/`: prerequisite checks behind `realm doctor`.
   - `contract/`: tool and session-record schemas and the schema validator (`validate.ts`).
   - `core/`: frozen shared contracts: states and the state machine, status labels, policy loading with `policy.schema.json`, the typed error catalogue (`errors.ts`), the event bus, ports, backoff, and `withTimeout` (`timeout.ts`); and the package version reader (`package-version.ts`).
