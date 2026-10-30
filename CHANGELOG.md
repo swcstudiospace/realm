@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.3.19] - 2026-10-30
+
+### Changed
+- refactor: drop the export keyword from self-only exports (phase 13, QR-06 slice 2) (#35) (9376984)
+
 ## [0.3.18] - 2026-10-30
 
 ### Added
