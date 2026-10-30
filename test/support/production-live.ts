@@ -789,11 +789,16 @@ export function parseListeningSockets(
     }
   }
   const unix: string[] = [];
+  // Flags is hexadecimal; __SO_ACCEPTCON (0x10000) marks a listening socket. An accepted connection keeps the listener's
+  // path but does not carry the flag, so it is not a listener.
+  const SO_ACCEPTCON = 0x10000;
   for (const line of tables.unix.split("\n").slice(1)) {
     const parts = line.trim().split(/\s+/);
     const inode = parts[6];
+    const flags = Number.parseInt(parts[3] ?? "", 16);
     const path = parts.at(-1) ?? "";
-    if (inode !== undefined && inodes.has(inode) && (path.startsWith("/") || path.startsWith("@"))) {
+    const listening = Number.isInteger(flags) && (flags & SO_ACCEPTCON) !== 0;
+    if (inode !== undefined && inodes.has(inode) && listening && (path.startsWith("/") || path.startsWith("@"))) {
       unix.push(path);
     }
   }
