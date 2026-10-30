@@ -390,3 +390,18 @@ test('lists the commits of a merged branch and not the merge commit itself', () 
   assert.ok(!body.includes('Merge pull request'));
   assert.ok(!body.includes('base work'));
 });
+
+test('leaves out a reverted feature and its revert and keeps an unrelated feature', () => {
+  const root = makeRepo([
+    'feat(driver): add the old driver',
+    'feat: add the unrelated feature',
+    'Revert "feat(driver): add the old driver"',
+  ]);
+
+  generateChangelog({ root, version: '0.2.0', date: '2026-10-29' });
+
+  assert.equal(
+    normalize(sectionBody(readChangelog(root), '## [0.2.0] - 2026-10-29')),
+    '### Added\n- feat: add the unrelated feature (SHA)',
+  );
+});
