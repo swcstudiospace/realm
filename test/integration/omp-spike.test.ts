@@ -26,7 +26,6 @@
 // log, RPC frames and provider requests. Waits resolve from events; the bounds of D-1203 are failure bounds only.
 
 import assert from "node:assert/strict";
-import { lookup } from "node:dns/promises";
 import { existsSync, mkdirSync, readdirSync, readFileSync, watch, writeFileSync, type FSWatcher } from "node:fs";
 import { createServer, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
@@ -50,7 +49,7 @@ import {
 import { createOmpProfile, type OmpProfile } from "../support/omp-profile.js";
 import { scriptedTurnProblem, startOmp, type OmpFrame, type OmpSession, type PromptOutcome, type ToolEnd } from "../support/omp-rpc.js";
 import { runCommand } from "../support/production-live.js";
-import { externalConnects, OMP_DISCOVERY_PORTS, parseConnects, traceArgv, classify, formatOffenders, type NetAllow, type NetConnect } from "../support/net-trace.js";
+import { externalConnects, OMP_DISCOVERY_PORTS, parseConnects, traceArgv, classify, formatOffenders, type NetAllow } from "../support/net-trace.js";
 import { ScriptedProvider, type ProviderTurn, type RecordedRequest, type TurnPlan } from "../support/scripted-provider.js";
 import { SPIKE_BIG_BYTES, SPIKE_CONFIG_VARIABLE, type SpikeConfig, type SpikeLogLine } from "../support/omp-spike-extension.js";
 
@@ -953,29 +952,11 @@ async function tracedRun(
   return trace;
 }
 
-// The named exception of HARN-03: Omp's model-catalog refresh. Omp 18.12.6 fetches https://catalog.stencil.so/models.json.zstd under
-// its `online-if-uncached` strategy (the installed bundle; 12-RESEARCH.md 2.6), so a profile whose model cache is not filled connects
-// to that host on port 443 at startup. It is the only non-loopback peer a run may reach, and only for a profile that an earlier run
-// warmed. The same startup also reached six other hosts (docs/integration/omp.md, lever 5); none of them is exempt.
-const CATALOG_REFRESH_ENTRY = { host: "catalog.stencil.so", port: 443 } as const;
+// S11 exempts no host. Omp's model-catalog refresh (`catalog.stencil.so:443`; Omp 18.12.6's `online-if-uncached` strategy fetches
+// the model catalog when its cache is empty, 12-RESEARCH.md 2.6) happens at startup of a cold profile only. A cold run is reported as
+// skipped; a warm run fails on any connection outside the allowlist, DNS queries included, whatever address a host resolves to.
 
-// Resolves the catalog host now. A host that does not resolve exempts nothing, so any connect to it fails the warm run.
-async function catalogRefreshPeers(report: (problem: string) => void): Promise<readonly string[]> {
-  try {
-    const found = await lookup(CATALOG_REFRESH_ENTRY.host, { all: true });
-    return found.map(({ address }) => `${address}:${String(CATALOG_REFRESH_ENTRY.port)}`);
-  } catch (error: unknown) {
-    report(`${CATALOG_REFRESH_ENTRY.host} did not resolve (${error instanceof Error ? error.message : String(error)}); no address is exempt`);
-    return [];
-  }
-}
-
-// Only an external peer at the catalog host's resolved address on port 443 is exempt: never DNS, never another port or address.
-function isCatalogRefreshPeer(connect: NetConnect, peers: readonly string[]): boolean {
-  return classify(connect) === "external" && connect.address !== undefined && connect.port !== undefined && peers.includes(`${connect.address}:${String(connect.port)}`);
-}
-
-void test("S11: a warm Omp profile connects only to loopback and the model-catalog refresh host, and a refusing loopback proxy gives a cold profile a clean trace", { skip: traceGate ?? false, timeout: NETWORK_SCENARIO_TIMEOUT_MS }, async (t) => {
+void test("S11: a warm Omp profile connects only to loopback, and a cold profile is skipped with its reason (HARN-03)", { skip: traceGate ?? false, timeout: NETWORK_SCENARIO_TIMEOUT_MS }, async (t) => {
   t.diagnostic(`omp/${ompVersionText}`);
   const cleanups = createCleanups();
   t.after(() => cleanups.run());
@@ -989,8 +970,6 @@ void test("S11: a warm Omp profile connects only to loopback and the model-catal
   const pathOption = pathValue === undefined ? {} : { path: pathValue };
   // Loopback peers a run may talk to: the stub and Omp's three local-model discovery probes (OMP_DISCOVERY_PORTS).
   const allow: NetAllow = { loopbackPorts: [port, ...OMP_DISCOVERY_PORTS] };
-  // The exemption is decided once, from the addresses the catalog host resolves to when the test starts.
-  const catalogPeers = await catalogRefreshPeers(report);
 
   // Lever 3 first, because it needs no change to the profile: the same directory, used twice. The first run is the cold one.
   const profile = createOmpProfile({ providerPort: port, ...pathOption });
@@ -1003,20 +982,15 @@ void test("S11: a warm Omp profile connects only to loopback and the model-catal
   await t.test("cold profile: warm-up run, reported as skipped", async (c) => {
     const cold = summarise(await tracedRun(provider, report, profile, "cold", {}), allow);
     warmed = true;
-    c.diagnostic(`cold: ${String(cold.external)} external connects, ${String(cold.dns)} DNS connects, loopback ports ${cold.loopbackPorts.join(",")}`);
-    if (cold.offenders.length === 0) return;
-    const catalog = cold.offenders.filter((connect) => isCatalogRefreshPeer(connect, catalogPeers)).length;
-    c.skip(`a cold profile is not the claim: its startup made ${String(catalog)} connection(s) to ${CATALOG_REFRESH_ENTRY.host}, the model-catalog refresh that is exempt only for a profile warmed before the trace, and ${String(cold.offenders.length - catalog)} other connection(s) outside the allowlist; the warm run below is the asserted profile`);
+    c.diagnostic(`cold: ${String(cold.external)} external connects, ${String(cold.dns)} DNS connects, loopback ports ${cold.loopbackPorts.join(",")}; ${String(cold.offenders.length)} connection(s) outside the allowlist`);
+    c.skip("the profile is cold; Omp's model-catalog refresh is observed only on a cold profile");
   });
 
-  await t.test("warm profile: no connection outside the stub, the discovery probes and the catalog refresh host", async (w) => {
+  await t.test("warm profile: no connection outside the loopback stub, its discovery probes, or any DNS query", async (w) => {
     assert.ok(warmed, "the warm run needs the cold run to have warmed the profile");
     const warm = summarise(await tracedRun(provider, report, profile, "warm", {}), allow);
-    // The exemption is applied here and only here: this run starts from the profile the cold run warmed.
-    const exempt = warm.offenders.filter((connect) => isCatalogRefreshPeer(connect, catalogPeers)).length;
-    const unexpected = warm.offenders.filter((connect) => !isCatalogRefreshPeer(connect, catalogPeers));
-    w.diagnostic(`warm: ${String(warm.external)} external connects, ${String(warm.dns)} DNS connects, loopback ports ${warm.loopbackPorts.join(",")}; ${String(exempt)} exempt connect(s) to ${CATALOG_REFRESH_ENTRY.host}`);
-    assert.equal(unexpected.length, 0, `the warm run connected outside the allowlist; only ${CATALOG_REFRESH_ENTRY.host}:${String(CATALOG_REFRESH_ENTRY.port)} at its resolved addresses is exempt: ${formatOffenders(unexpected)}`);
+    w.diagnostic(`warm: ${String(warm.external)} external connects, ${String(warm.dns)} DNS connects, loopback ports ${warm.loopbackPorts.join(",")}`);
+    assert.equal(warm.offenders.length, 0, `the warm run connected outside the allowlist or queried DNS; no host is exempt: ${formatOffenders(warm.offenders)}`);
     assert.deepEqual(warm.loopbackPorts.filter((candidate) => !allow.loopbackPorts.includes(candidate)), []);
     assert.ok(warm.loopbackPorts.includes(port), "the warm run reached the stub");
   });
