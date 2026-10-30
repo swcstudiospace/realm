@@ -42,6 +42,7 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { test, type TestContext } from "node:test";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
 import { DEFAULT_AGENTOS_PROBE_PATH } from "../../src/runtime/agentos-driver.js";
@@ -902,62 +903,66 @@ const GATEWAY_UNIT = process.env["REALM_LIVE_GATEWAY_UNIT"] ?? "realm-openshell-
 void test("production live 10: a stopped gateway is OPENSHELL_GATEWAY_LOST, not AGENTOS_CRASH_LOOP, and the daemon listens only on its Unix socket", { skip: gate, timeout: SCENARIO_TIMEOUT_MS }, async (t) => {
   const scenario = startScenario(t, { image: inputs().image });
   let stopped = false;
-  t.after(async () => {
+  // The shared gateway must come back whatever happens below. The restart runs in this finally, inside the test body, before the
+  // scenario cleanup runs, and a failed restart is retried here rather than left to a hook that may run after the cleanup.
+  const restoreGateway = async (): Promise<void> => {
     if (!stopped) {
       return;
     }
-    await runCommand("systemctl", ["--user", "start", GATEWAY_UNIT], {
+    const restarted = await runCommand("systemctl", ["--user", "start", GATEWAY_UNIT], {
       env: scenario.environment.cliEnvironment,
       timeoutMs: 30_000,
-      cwd: scenario.environment.root,
+      cwd: tmpdir(),
     });
-  });
-  await assertActive(scenario);
-  const started = await daemonPids(scenario);
-  assert.equal(started.length, 1, `exactly one daemon must run; found ${String(started.length)}`);
-  const daemonPid = started[0];
-  assert.ok(daemonPid !== undefined, "the daemon pid");
-  const sockets = listeningSocketsOf(daemonPid);
-  assert.deepEqual(sockets.tcp, [], `the daemon must not listen on TCP: ${sockets.tcp.join(", ")}`);
-  assert.deepEqual(sockets.udp, [], `the daemon must not listen on UDP: ${sockets.udp.join(", ")}`);
-  assert.equal(sockets.unix.length, 1, `the daemon must have one Unix socket: ${sockets.unix.join(", ")}`);
+    if (restarted.exitCode === 0) {
+      stopped = false;
+    }
+  };
+  try {
+    await assertActive(scenario);
+    const started = await daemonPids(scenario);
+    assert.equal(started.length, 1, `exactly one daemon must run; found ${String(started.length)}`);
+    const daemonPid = started[0];
+    assert.ok(daemonPid !== undefined, "the daemon pid");
+    const sockets = listeningSocketsOf(daemonPid);
+    assert.deepEqual(sockets.tcp, [], `the daemon must not listen on TCP: ${sockets.tcp.join(", ")}`);
+    assert.deepEqual(sockets.udp, [], `the daemon must not listen on UDP: ${sockets.udp.join(", ")}`);
+    assert.equal(sockets.unix.length, 1, `the daemon must have one Unix socket: ${sockets.unix.join(", ")}`);
 
-  const stop = await runCommand("systemctl", ["--user", "stop", GATEWAY_UNIT], {
-    env: scenario.environment.cliEnvironment,
-    timeoutMs: 30_000,
-    cwd: scenario.environment.root,
-  });
-  assertExit(stop, 0, `systemctl --user stop ${GATEWAY_UNIT}`);
-  stopped = true;
-  let sawCrashLoop = false;
-  const errored = await pollUntil(
-    async () => {
-      const status = await realmCli(scenario.inputs, scenario.environment, ["status"], STATUS_TIMEOUT_MS);
-      const fields = status.exitCode === 0 ? statusFieldsOf(status.stdout) : undefined;
-      if (fields?.reason === "AGENTOS_CRASH_LOOP") {
-        sawCrashLoop = true;
-      }
-      const reached = fields?.state === "error" && fields.reason === "OPENSHELL_GATEWAY_LOST" && fields.label === "realm disconnected";
-      return reached ? { done: true } : { done: false, detail: `realm status: ${describeResult(status)}` };
-    },
-    { timeoutMs: RUNNER_EXIT_OBSERVE_TIMEOUT_MS, intervalMs: RUNNER_EXIT_OBSERVE_INTERVAL_MS },
-  );
-  assert.equal(sawCrashLoop, false, "a stopped gateway must not be reported as AGENTOS_CRASH_LOOP");
-  assert.ok(errored.ok, `realm status must report OPENSHELL_GATEWAY_LOST within ${String(RUNNER_EXIT_OBSERVE_TIMEOUT_MS / 1000)} s: ${errored.detail}`);
-  const metrics = await realmCli(scenario.inputs, scenario.environment, ["metrics"], STATUS_TIMEOUT_MS);
-  assertExit(metrics, 0, "realm metrics after the gateway stop");
-  const snap = JSON.parse(metrics.stdout) as { healthProbeFailures?: readonly { code?: string; count?: number }[] };
-  const lost = snap.healthProbeFailures?.find((row) => row.code === "OPENSHELL_GATEWAY_LOST");
-  assert.ok(lost !== undefined && (lost.count ?? 0) >= 1, `realm metrics must count OPENSHELL_GATEWAY_LOST: ${metrics.stdout}`);
+    const stop = await runCommand("systemctl", ["--user", "stop", GATEWAY_UNIT], {
+      env: scenario.environment.cliEnvironment,
+      timeoutMs: 30_000,
+      cwd: tmpdir(),
+    });
+    assertExit(stop, 0, `systemctl --user stop ${GATEWAY_UNIT}`);
+    stopped = true;
+    let sawCrashLoop = false;
+    const errored = await pollUntil(
+      async () => {
+        const status = await realmCli(scenario.inputs, scenario.environment, ["status"], STATUS_TIMEOUT_MS);
+        const fields = status.exitCode === 0 ? statusFieldsOf(status.stdout) : undefined;
+        if (fields?.reason === "AGENTOS_CRASH_LOOP") {
+          sawCrashLoop = true;
+        }
+        const reached = fields?.state === "error" && fields.reason === "OPENSHELL_GATEWAY_LOST" && fields.label === "realm disconnected";
+        return reached ? { done: true } : { done: false, detail: `realm status: ${describeResult(status)}` };
+      },
+      { timeoutMs: RUNNER_EXIT_OBSERVE_TIMEOUT_MS, intervalMs: RUNNER_EXIT_OBSERVE_INTERVAL_MS },
+    );
+    assert.equal(sawCrashLoop, false, "a stopped gateway must not be reported as AGENTOS_CRASH_LOOP");
+    assert.ok(errored.ok, `realm status must report OPENSHELL_GATEWAY_LOST within ${String(RUNNER_EXIT_OBSERVE_TIMEOUT_MS / 1000)} s: ${errored.detail}`);
+    const metrics = await realmCli(scenario.inputs, scenario.environment, ["metrics"], STATUS_TIMEOUT_MS);
+    assertExit(metrics, 0, "realm metrics after the gateway stop");
+    const snap = JSON.parse(metrics.stdout) as { healthProbeFailures?: readonly { code?: string; count?: number }[] };
+    const lost = snap.healthProbeFailures?.find((row) => row.code === "OPENSHELL_GATEWAY_LOST");
+    assert.ok(lost !== undefined && (lost.count ?? 0) >= 1, `realm metrics must count OPENSHELL_GATEWAY_LOST: ${metrics.stdout}`);
 
-  const startedAgain = await runCommand("systemctl", ["--user", "start", GATEWAY_UNIT], {
-    env: scenario.environment.cliEnvironment,
-    timeoutMs: 30_000,
-    cwd: scenario.environment.root,
-  });
-  stopped = false;
-  assertExit(startedAgain, 0, `systemctl --user start ${GATEWAY_UNIT}`);
-  await assertDownAndClean(scenario);
-  await assertActive(scenario);
-  await assertDownAndClean(scenario);
+    await restoreGateway();
+    assert.equal(stopped, false, "the gateway unit must start again");
+    await assertDownAndClean(scenario);
+    await assertActive(scenario);
+    await assertDownAndClean(scenario);
+  } finally {
+    await restoreGateway();
+  }
 });
