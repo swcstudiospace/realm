@@ -13,9 +13,9 @@ All v3.0 requirements are hypotheses until shipped and verified.
 ### Omp live harness (HARN)
 
 - [ ] **HARN-01**: A gated test harness starts an isolated Omp profile whose model provider is a local OpenAI-compatible stub returning a scripted sequence (one `write` tool call, then a final message), loads the built extension with `-e`, and drives Omp over RPC pipes (`--mode rpc-ui`), with no pseudo-terminal, no credentials and no tokens
-- [ ] **HARN-02**: The harness runs three cases: advisory mode with the realm down (the notice is shown and the file exists), fail-closed mode with the realm down (the call is blocked with `REALM_NOT_ACTIVE` and the file does not exist), and the realm active (the call proceeds; this is the baseline that Phase 16 changes)
+- [x] **HARN-02**: The harness runs three cases: advisory mode with the realm down (the notice is shown and the file exists), fail-closed mode with the realm down (the call is blocked with `REALM_NOT_ACTIVE` and the file does not exist), and the realm active (the call proceeds; this is the baseline that Phase 16 changes)
 - [ ] **HARN-03**: One command runs the harness against a built extension and a local Omp and passes; it records the Omp version, makes no network call outside loopback, and is gated like the production live suite, skipping with a stated reason when Omp, Podman or the gate variable is absent
-- [ ] **HARN-04**: OMP-05 is recorded complete in the traceability table on the harness evidence, and the recorded basis states that the run is scripted through Omp's own `write` tool and is not LLM-driven (owner decision D2)
+- [x] **HARN-04**: OMP-05 is recorded complete in the traceability table on the harness evidence, and the recorded basis states that the run is scripted through Omp's own `write` tool and is not LLM-driven (owner decision D2)
 
 ### Quality and supply-chain ratchet (QR)
 
@@ -99,8 +99,8 @@ All v3.0 requirements are hypotheses until shipped and verified.
 - [ ] **ANDA-02**: Connection performs a version handshake; a version mismatch fails with `ANDA_VERSION_MISMATCH`
 - [ ] **ANDA-03**: Reconnection uses bounded exponential backoff with jitter; an unreachable bridge reports `ANDA_UNREACHABLE`, moves the state to degraded, and retries in the background
 - [ ] **ANDA-04**: A Rust shim is added only if the documentation spike shows no TypeScript-reachable surface; if added, it is minimal, lives in `src/anda/native/`, has its own build, and is covered by contract tests from the TypeScript side
-- [ ] **OMP-05**: When disconnected, the plugin reports it and applies the configured policy; it never silently falls back to unsandboxed file mutation
-  Status: Partial (2026-10-28): the guard is unit-verified for write and edit. A live check needs a model call, and the model provider is out of quota. Paths that do not go through the extension are unproven.
+- [x] **OMP-05**: When disconnected, the plugin reports it and applies the configured policy; it never silently falls back to unsandboxed file mutation
+  Status: Complete (2026-10-30). Basis (owner decision D2): a scripted OpenAI-compatible provider drove Omp 18.12.6's own `write` tool through the Realm plugin. Advisory with the realm down showed the unavailable notice and wrote the file; fail-closed with the realm down blocked the write with `REALM_NOT_ACTIVE` and that error was in the provider's next request; an active realm let the write land. Not an LLM-driven run. Paths that do not load the plugin are outside this closure.
   Note: closed in this milestone by HARN-04 (owner decision D2).
 - [ ] **PRD-DRV-01**: The realm compute driver serves ComputeDriver gRPC on a Unix socket in a 0700 directory with mode 0600, implementing GetCapabilities, ValidateSandboxCreate, CreateSandbox, GetSandbox, ListSandboxes, DeleteSandbox, WatchSandboxes, and EnsureWorkspace. AuthenticateSandbox is not advertised and returns UNIMPLEMENTED, because the gateway does not call it on the built-in path, and DeleteWorkspace refuses, because the driver never creates or removes the pinned workspace root. This amendment follows from the owner decisions of 2026-10-26 and 2026-10-27 and awaits the owner's confirmation (Phase 9.4)
 - [ ] **UI-01**: The Omp plugin starts on session launch and shows its realm state in the Omp UI status item without blocking the session (accepted limitation by owner decision, 2026-10-23: the status item appears at launch; a non-blocking check was not demonstrated, because get_state took about 6 s during the attach and the cause is not isolated; re-measured 2026-10-28: keystrokes echoed within 0.2 to 1.2 s through a 24 s cold attach on a loaded host, which bounds the stall but does not prove the loop is never blocked)
@@ -156,9 +156,9 @@ Each v3.0 requirement maps to exactly one phase. The carried requirements keep t
 | Requirement | Phase | Status |
 |-------------|-------|--------|
 | HARN-01 | Phase 12 | Pending |
-| HARN-02 | Phase 12 | Pending |
+| HARN-02 | Phase 12 | Complete (2026-10-30): the three cases passed live on Omp 18.12.6, 3 of 3, 0 skipped |
 | HARN-03 | Phase 12 | Pending |
-| HARN-04 | Phase 12 | Pending |
+| HARN-04 | Phase 12 | Complete (2026-10-30): OMP-05 recorded complete with the scripted-write basis |
 | OMPX-01 | Phase 12 | Pending |
 | QR-01 | Phase 13 | Pending |
 | QR-02 | Phase 13 | Pending |
@@ -212,7 +212,7 @@ Each v3.0 requirement maps to exactly one phase. The carried requirements keep t
 | ANDA-02 | Phase 3 | Partial (live-gated) |
 | ANDA-03 | Phase 3 | Partial (live-gated) |
 | ANDA-04 | Phase 3 | Partial (live-gated) |
-| OMP-05 | Phase 5 | Partial (unit-verified; live needs a model call, which is unavailable; paths outside the extension are unproven) |
+| OMP-05 | Phase 5 | Complete (2026-10-30, HARN-04, owner decision D2): scripted provider drove Omp 18.12.6's own write through the Realm plugin; not LLM-driven |
 | PRD-DRV-01 | Phase 9.4 | Open: socket 0700/0600 verified live and in tests, AuthenticateSandbox UNIMPLEMENTED and not advertised, DeleteWorkspace refuses; the amendment follows from the owner decisions of 2026-10-26 and 2026-10-27 and awaits confirmation |
 | UI-01 | Phase 9 | Accepted limitation (owner decision 2026-10-23): status item at launch; re-measured 2026-10-28: keystrokes echoed within 0.2 to 1.2 s through a 24 s cold attach on a loaded host, which bounds the stall but does not prove non-blocking; the status stays the owner's call |
 | QUAL-01 | Phase 1 | Complete (amended 2026-10-22); standing, binds every v3.0 phase |
