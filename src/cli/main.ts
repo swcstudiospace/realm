@@ -40,12 +40,13 @@ import {
 import { controlSocketPath, type EnvironmentLike } from "../session/paths.js";
 import { parseAnchorArgs, runAnchor } from "./anchor.js";
 import { runAuditVerify } from "./audit.js";
+import { INIT_USAGE, InitRefusal, parseInitArgs, runInit } from "./init.js";
 
-export const CLI_COMMANDS = ["up", "down", "status", "doctor", "mcp", "acp", "anchor", "audit", "metrics"] as const;
+export const CLI_COMMANDS = ["init", "up", "down", "status", "doctor", "mcp", "acp", "anchor", "audit", "metrics"] as const;
 export type CliCommand = (typeof CLI_COMMANDS)[number];
 
 const USAGE =
-  "Usage: realm <up|down|status|doctor|mcp|acp|anchor|audit|metrics> (realm up|mcp|acp [--workspace <absolute path>]; realm anchor --session <id> [--publish] [--rpc <url>]; realm audit verify <file>)";
+  "Usage: realm <init|up|down|status|doctor|mcp|acp|anchor|audit|metrics> (realm init --image <name@sha256:digest> [--workspace <absolute path>] [--state-dir <absolute path>]; realm up|mcp|acp [--workspace <absolute path>]; realm anchor --session <id> [--publish] [--rpc <url>]; realm audit verify <file>)";
 const RETRY_INTERVAL_MS = 25;
 const MCP_POLL_INTERVAL_MS = 100;
 
@@ -56,18 +57,18 @@ function isCliCommand(value: string): value is CliCommand {
 interface ParsedArgv {
   readonly command: CliCommand;
   readonly workspace: string | undefined;
-  // The words after `anchor` or `audit`; empty for every other command.
+  // The words after `init`, `anchor` or `audit`; empty for every other command.
   readonly words: readonly string[];
 }
 
-// `up`, `mcp`, and `acp` take no arguments or `--workspace <path>`. `anchor` and `audit` take their own words.
+// `up`, `mcp`, and `acp` take no arguments or `--workspace <path>`. `init`, `anchor` and `audit` take their own words.
 // Every other command takes no arguments. `anchor` flags are checked by parseAnchorArgs.
 function parseArgv(argv: readonly string[]): ParsedArgv | undefined {
   const [command, ...rest] = argv;
   if (command === undefined || !isCliCommand(command)) {
     return undefined;
   }
-  if (command === "anchor" || command === "audit") {
+  if (command === "init" || command === "anchor" || command === "audit") {
     return { command, workspace: undefined, words: rest };
   }
   if (rest.length === 0) {
@@ -600,6 +601,25 @@ function runAuditCommand(words: readonly string[]): CliResult {
   }
   return runAuditVerify(file);
 }
+
+// realm init (ONB-01) runs before any config is read: it is the command that writes the config. A malformed
+// invocation is a usage error (exit 2). A refusal or write failure is its catalogue code on stdout and its detail
+// on stderr (exit 1). Success prints one JSON line of paths and the mode; no file content is printed.
+function runInitCommand(words: readonly string[], deps: CliDeps): CliResult {
+  const args = parseInitArgs(words);
+  if (args === undefined) {
+    return { exitCode: 2, stdout: "", stderr: `${INIT_USAGE}\n` };
+  }
+  try {
+    const summary = runInit(args, { env: deps.env, cwd: deps.cwd ?? process.cwd() });
+    return { exitCode: 0, stdout: `${JSON.stringify(summary)}\n`, stderr: "" };
+  } catch (error) {
+    if (error instanceof InitRefusal) {
+      return { exitCode: 1, stdout: `${error.code}\n`, stderr: `realm init: ${error.detail}\n` };
+    }
+    return failureFor(error);
+  }
+}
 export async function runCli(argv: readonly string[], deps: CliDeps): Promise<CliResult> {
   const parsed = parseArgv(argv);
   if (parsed === undefined) {
@@ -607,6 +627,9 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
   }
   if (parsed.command === "audit") {
     return runAuditCommand(parsed.words);
+  }
+  if (parsed.command === "init") {
+    return runInitCommand(parsed.words, deps);
   }
   const { command } = parsed;
   let stateDir: string;
