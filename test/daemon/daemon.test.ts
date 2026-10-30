@@ -1378,7 +1378,54 @@ void test("OBS-03: metrics answers over the control socket and counts the tool c
   assert.equal(snap.schema, 1);
   assert.equal(snap.toolCalls?.some((row) => row.tool === "status" && row.outcome === "done" && row.count === 1), true);
   assert.equal(snap.controlRequests?.some((row) => row.method === "tool"), true);
-  assert.equal(JSON.stringify(snap).includes("listen"), false);
+  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down" });
+  assert.ok(down.result !== undefined);
+  await awaitDone(daemon);
+});
+
+function inetListeners(): string[] {
+  const rows: string[] = [];
+  for (const name of ["tcp", "tcp6", "udp", "udp6"]) {
+    let text: string;
+    try {
+      text = readFileSync(`/proc/self/net/${name}`, "utf8");
+    } catch {
+      continue;
+    }
+    for (const line of text.split("\n").slice(1)) {
+      const parts = line.trim().split(/\s+/);
+      const local = parts[1];
+      const state = parts[3];
+      if (local === undefined || state === undefined) {
+        continue;
+      }
+      if (name.startsWith("udp") || state === "0A") {
+        rows.push(`${name} ${local} ${state}`);
+      }
+    }
+  }
+  return rows.sort();
+}
+
+function unixPaths(): string[] {
+  return readFileSync("/proc/self/net/unix", "utf8")
+    .split("\n")
+    .slice(1)
+    .map((line) => line.trim().split(/\s+/).at(-1) ?? "")
+    .filter((path) => path.startsWith("/"))
+    .sort();
+}
+
+void test("OBS-03: starting the daemon adds no TCP or UDP listener, only the Unix control socket", async (t) => {
+  const beforeInet = inetListeners();
+  const beforeUnix = new Set(unixPaths());
+  const fixture = makeDirs();
+  const { options } = daemonParts(fixture);
+  const daemon = await startDaemon(options);
+  t.after(() => cleanupDaemon(daemon));
+  assert.deepEqual(inetListeners(), beforeInet);
+  const added = unixPaths().filter((path) => !beforeUnix.has(path));
+  assert.deepEqual(added, [daemon.socketPath]);
   const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down" });
   assert.ok(down.result !== undefined);
   await awaitDone(daemon);
