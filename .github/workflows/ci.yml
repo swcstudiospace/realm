@@ -373,7 +373,7 @@ jobs:
           set -euo pipefail
           node scripts/release/sync-version.mjs "${VERSION}"
 
-      - name: Generate changelog and release notes
+      - name: Generate changelog
         if: steps.tag_check.outputs.action == 'normal'
         env:
           VERSION: ${{ steps.tag_check.outputs.version }}
@@ -381,7 +381,7 @@ jobs:
         run: |
           set -euo pipefail
           release_date="$(date -u +%Y-%m-%d)"
-          args=(--version "${VERSION}" --date "${release_date}" --notes-out release-notes.md)
+          args=(--version "${VERSION}" --date "${release_date}")
           if [ -n "${PREVIOUS_TAG}" ]; then
             args+=(--since "${PREVIOUS_TAG}")
           fi
@@ -421,21 +421,6 @@ jobs:
         run: |
           set -euo pipefail
           cp "agent-realm-${VERSION}.tgz" "${RUNNER_TEMP}/release-assets/"
-          cp release-notes.md "${RUNNER_TEMP}/release-assets/"
-
-      # The publish job's Commit step stages CHANGELOG.md and the release version files. This step
-      # carries those files' diff as a patch, so the publish job commits exactly the bytes this build packed.
-      - name: Write release commit patch
-        if: steps.tag_check.outputs.action == 'normal'
-        run: |
-          set -euo pipefail
-          list="$(node scripts/release/sync-version.mjs --files)"
-          if [ -z "${list}" ]; then
-            echo "::error::sync-version.mjs --files listed no files to stage." >&2
-            exit 1
-          fi
-          mapfile -t files <<< "${list}"
-          git diff --binary HEAD -- CHANGELOG.md "${files[@]}" > "${RUNNER_TEMP}/release-assets/release.patch"
 
       - name: Upload release files
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -450,8 +435,9 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: [self-hosted, linux, x64, omega-ci]
     timeout-minutes: 30
-    # Privileged: holds the write grants and the attestation identity. Every file it publishes and
-    # the release commit come from the build job's artifacts. No build, dependency or pack code runs here.
+    # Privileged: holds the write grants and the attestation identity. It downloads only the tarball, checksums,
+    # SBOM and plan from the build job. The release commit, CHANGELOG.md and release notes are regenerated
+    # here from this checkout by trusted repository scripts that need no install. No npm, build or pack runs here.
     permissions:
       contents: write
       actions: write
@@ -540,19 +526,67 @@ jobs:
           esac
           {
             echo "action=${action}"
-            echo "tag=${tag}"
-            echo "version=${version}"
+            echo "planTag=${tag}"
+            echo "planVersion=${version}"
           } >> "$GITHUB_OUTPUT"
           echo "Release plan from build: action=${action} tag=${tag}"
+
+      # Recomputes the release values from this checkout with the repository's own script, which needs
+      # no install. The build job's plan must agree; a mismatch stops publish before any write.
+      - name: Compute release values
+        id: release
+        if: steps.tag_check.outputs.action == 'normal'
+        env:
+          PLAN_TAG: ${{ steps.tag_check.outputs.planTag }}
+          PLAN_VERSION: ${{ steps.tag_check.outputs.planVersion }}
+        run: |
+          set -euo pipefail
+          line="$(node scripts/release/next-version.mjs)"
+          NEXT_VERSION_LINE="${line}" node -e '
+            const fs = require("node:fs");
+            const next = JSON.parse(process.env.NEXT_VERSION_LINE);
+            if (next.tag !== process.env.PLAN_TAG || next.version !== process.env.PLAN_VERSION) {
+              console.log(`::error::The build plan (${process.env.PLAN_TAG}, ${process.env.PLAN_VERSION}) does not match this checkout (${next.tag}, ${next.version}); refusing to publish.`);
+              process.exit(1);
+            }
+            const lines = [
+              `version=${next.version}`,
+              `tag=${next.tag}`,
+              `previousTag=${next.previousTag ?? ""}`,
+            ].join("\n") + "\n";
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, lines);
+          '
+
+      # Regenerates the release commit's files with the trusted scripts only. No install, build or pack runs here.
+      - name: Sync package version
+        if: steps.tag_check.outputs.action == 'normal'
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          node scripts/release/sync-version.mjs "${VERSION}"
+
+      - name: Generate changelog and release notes
+        if: steps.tag_check.outputs.action == 'normal'
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+          PREVIOUS_TAG: ${{ steps.release.outputs.previousTag }}
+        run: |
+          set -euo pipefail
+          release_date="$(date -u +%Y-%m-%d)"
+          args=(--version "${VERSION}" --date "${release_date}" --notes-out release-notes.md)
+          if [ -n "${PREVIOUS_TAG}" ]; then
+            args+=(--since "${PREVIOUS_TAG}")
+          fi
+          node scripts/release/changelog.mjs "${args[@]}"
 
       - name: Stage release files in the workspace
         if: steps.tag_check.outputs.action == 'normal'
         env:
-          VERSION: ${{ steps.tag_check.outputs.version }}
+          VERSION: ${{ steps.release.outputs.version }}
         run: |
           set -euo pipefail
           cp "${RUNNER_TEMP}/release-assets/agent-realm-${VERSION}.tgz" "agent-realm-${VERSION}.tgz"
-          cp "${RUNNER_TEMP}/release-assets/release-notes.md" release-notes.md
 
       # Records where and how each published file was built. It runs before any tag is pushed or any
       # release is created, so a failed attestation publishes nothing. Empty lines are dropped, so a
@@ -562,9 +596,9 @@ jobs:
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |
-            ${{ steps.tag_check.outputs.action == 'normal' && format('agent-realm-{0}.tgz', steps.tag_check.outputs.version) || '' }}
+            ${{ steps.tag_check.outputs.action == 'normal' && format('agent-realm-{0}.tgz', steps.release.outputs.version) || '' }}
             ${{ steps.tag_check.outputs.action == 'normal' && format('{0}/release-assets/SHA256SUMS', runner.temp) || '' }}
-            ${{ steps.tag_check.outputs.action == 'normal' && format('{0}/release-assets/agent-realm-{1}.cdx.json', runner.temp, steps.tag_check.outputs.version) || '' }}
+            ${{ steps.tag_check.outputs.action == 'normal' && format('{0}/release-assets/agent-realm-{1}.cdx.json', runner.temp, steps.release.outputs.version) || '' }}
             ${{ needs.build.outputs.milestone_tag != '' && format('{0}/milestone-files/agent-realm-{1}.tgz', runner.temp, steps.milestone.outputs.version) || '' }}
             ${{ needs.build.outputs.milestone_tag != '' && format('{0}/milestone-files/SHA256SUMS', runner.temp) || '' }}
             ${{ needs.build.outputs.milestone_tag != '' && format('{0}/milestone-files/agent-realm-{1}.cdx.json', runner.temp, steps.milestone.outputs.version) || '' }}
@@ -588,32 +622,10 @@ jobs:
             --notes-file "${RUNNER_TEMP}/milestone-files/notes.md" \
             --verify-tag
 
-      # Applies the build job's release patch to the same base commit. Only the files the Commit step
-      # stages may change; a patch that touches anything else fails before it is applied.
-      - name: Apply release commit changes
-        if: steps.tag_check.outputs.action == 'normal'
-        run: |
-          set -euo pipefail
-          patch="${RUNNER_TEMP}/release-assets/release.patch"
-          if [ ! -s "${patch}" ]; then
-            echo "No release file changes to apply."
-            exit 0
-          fi
-          list="$(node scripts/release/sync-version.mjs --files)"
-          allowed="$(printf 'CHANGELOG.md\n%s\n' "${list}")"
-          paths="$(git apply --numstat "${patch}" | cut -f3)"
-          while IFS= read -r path; do
-            if ! grep -qxF -- "${path}" <<< "${allowed}"; then
-              echo "::error::The release patch changes ${path}, which is not a release file." >&2
-              exit 1
-            fi
-          done <<< "${paths}"
-          git apply "${patch}"
-
       - name: Commit release changes
         if: steps.tag_check.outputs.action == 'normal'
         env:
-          TAG: ${{ steps.tag_check.outputs.tag }}
+          TAG: ${{ steps.release.outputs.tag }}
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
@@ -637,7 +649,7 @@ jobs:
         id: push
         if: steps.tag_check.outputs.action == 'normal'
         env:
-          TAG: ${{ steps.tag_check.outputs.tag }}
+          TAG: ${{ steps.release.outputs.tag }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -677,8 +689,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          TAG: ${{ steps.tag_check.outputs.tag }}
-          VERSION: ${{ steps.tag_check.outputs.version }}
+          TAG: ${{ steps.release.outputs.tag }}
+          VERSION: ${{ steps.release.outputs.version }}
         run: |
           set -euo pipefail
           gh release create "${TAG}" \
