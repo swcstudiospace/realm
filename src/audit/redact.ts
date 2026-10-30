@@ -9,7 +9,7 @@
 export const REDACTED = "[REDACTED]";
 
 // Values nested deeper than this are replaced with REDACTED, not walked (fail closed).
-export const REDACT_MAX_DEPTH = 8;
+const REDACT_MAX_DEPTH = 8;
 
 // Key layer (D-41). Matched against each object key, case-insensitively.
 export const SENSITIVE_KEY_PATTERN: RegExp =
@@ -28,7 +28,7 @@ export const SECRET_VALUE_PATTERNS: readonly RegExp[] = Object.freeze([
 
 // NAME=value where NAME contains TOKEN, SECRET, PASSWORD, or KEY. Only the value is
 // replaced; the NAME is kept so the entry still says which credential was present.
-export const SECRET_ASSIGNMENT_PATTERN: RegExp =
+const SECRET_ASSIGNMENT_PATTERN: RegExp =
   /([A-Za-z0-9_]*(?:token|secret|password|key)[A-Za-z0-9_]*)=\S+/gi;
 
 export function redactString(text: string): string {

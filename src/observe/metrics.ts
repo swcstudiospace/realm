@@ -8,10 +8,10 @@ import type { State } from "../core/states.js";
 import { STATES } from "../core/states.js";
 import { CONTROL_METHODS, type ControlMethod } from "../daemon/channel.js";
 
-export const METRICS_SCHEMA = 1;
+const METRICS_SCHEMA = 1;
 export const BUCKET_UPPER_BOUNDS_MS = [5, 25, 100, 500, 2_000, 10_000, 60_000, 300_000] as const;
-export const TOOL_CALL_NAMES = ["exec", "read", "write", "list", "status", "retry", "unknown"] as const;
-export const TOOL_CALL_OUTCOMES = ["done", "refused", "failed"] as const;
+const TOOL_CALL_NAMES = ["exec", "read", "write", "list", "status", "retry", "unknown"] as const;
+const TOOL_CALL_OUTCOMES = ["done", "refused", "failed"] as const;
 
 export type LoggedToolName = (typeof TOOL_CALL_NAMES)[number];
 export type ToolCallOutcome = (typeof TOOL_CALL_OUTCOMES)[number];

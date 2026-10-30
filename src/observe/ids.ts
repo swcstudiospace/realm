@@ -3,7 +3,7 @@
 
 import { randomUUID } from "node:crypto";
 
-export const CORRELATION_ID_PATTERN: RegExp = /^[A-Za-z0-9_-]{1,64}$/;
+const CORRELATION_ID_PATTERN: RegExp = /^[A-Za-z0-9_-]{1,64}$/;
 
 export const newCorrelationId = (): string => randomUUID();
 

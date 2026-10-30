@@ -30,7 +30,7 @@ import { atomicWriteFile, observeSha256 } from "../fs/atomic-write.js";
 import { appendAudit, type ExecSummary } from "./log.js";
 
 // A log has no rotation, so one file can be large. A file over this size is skipped and counted as failed.
-export const RECONCILE_MAX_FILE_BYTES = 256 * 1024 * 1024;
+const RECONCILE_MAX_FILE_BYTES = 256 * 1024 * 1024;
 
 // Same rule as SAFE_SESSION_ID in src/audit/log.ts, which is not exported; this module takes the file stem
 // as the session id, so the stem must pass it.
@@ -169,10 +169,10 @@ export const SCAN_CHECK_LINES = 5000;
 
 // A line longer than this is not held in memory: it is skipped, and the lines after it are still counted. No audit line is
 // near this size (an exec argv is bounded by the OS argument limit), so a longer one is not a line the realm wrote.
-export const RECONCILE_MAX_LINE_BYTES = 16 * 1024 * 1024;
+const RECONCILE_MAX_LINE_BYTES = 16 * 1024 * 1024;
 
 // A log with more distinct (tool, path, exec) keys than this is refused like an over-sized one: the counts are held in memory.
-export const RECONCILE_MAX_KEYS = 200_000;
+const RECONCILE_MAX_KEYS = 200_000;
 
 type ScanOutcome =
   | { readonly kind: "over-cap" }
@@ -340,16 +340,16 @@ function reconcileFile(
 // scanned again (after every newer log) while logs older still might never be reached. 16 MiB holds 100 000 entries of
 // ordinary session-id names (about 85 bytes each); names near the 134-character maximum would be cut to the newest.
 export const RECONCILE_PROGRESS_FILE = ".reconciled.json";
-export const MAX_PROGRESS_BYTES = 16 * 1024 * 1024;
-export const MAX_PROGRESS_ENTRIES = 100_000;
+const MAX_PROGRESS_BYTES = 16 * 1024 * 1024;
+const MAX_PROGRESS_ENTRIES = 100_000;
 
 // The directory is read entry by entry and every `*.jsonl` name is kept, up to RECONCILE_MAX_LISTED_ENTRIES entries (names and
 // other entries alike, so a directory of junk cannot make the listing unbounded). A further entry makes the listing
 // "truncated" and the result incomplete. RECONCILE_MAX_FILES is not a listing cap: it is the most logs one start SCANS (reads
 // the content of), counted in newest-first order; the rest that need a scan are reported unfinished. Skipping a recorded log
 // after its stat does not count.
-export const RECONCILE_MAX_FILES = 10_000;
-export const RECONCILE_MAX_LISTED_ENTRIES = 100_000;
+const RECONCILE_MAX_FILES = 10_000;
+const RECONCILE_MAX_LISTED_ENTRIES = 100_000;
 const LIST_CHECK_EVERY = 256;
 
 // A log file name, the shape of a record key. The stem is a safe session id.

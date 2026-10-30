@@ -10,7 +10,7 @@ import { canonicalize, lstatIfPresent } from "./canonicalize.js";
 import { assertCredentialAccess, relPathOf } from "./credentials.js";
 import type { PinnedRoot } from "./root.js";
 
-export const MAX_LIST_ENTRIES = 1000;
+const MAX_LIST_ENTRIES = 1000;
 
 export type EntryKind = "file" | "dir" | "symlink" | "other";
 

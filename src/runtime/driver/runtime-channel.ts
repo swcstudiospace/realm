@@ -16,10 +16,10 @@ import { JsonNumber, type JsonValue } from "./isolation/json.js";
 import { AUTH_FILE_NAME, DESCRIPTOR_FILE_NAME, MAIN_EXIT_MARKER_NAME } from "./secret-store.js";
 
 // The identity the sandbox process runs as. The user namespace maps the realm account to these ids.
-export const SANDBOX_IDENTITY_SOURCE = "realm-image-user";
+const SANDBOX_IDENTITY_SOURCE = "realm-image-user";
 export const CONTAINER_CONTROL_SOCKET = `${HARDENING_PROFILE.channelDestination}/control.sock`;
-export const CONTAINER_CERTIFICATE_PATH = `${HARDENING_PROFILE.channelDestination}/server.crt`;
-export const CONTAINER_PRIVATE_KEY_PATH = `${HARDENING_PROFILE.channelDestination}/server.key`;
+const CONTAINER_CERTIFICATE_PATH = `${HARDENING_PROFILE.channelDestination}/server.crt`;
+const CONTAINER_PRIVATE_KEY_PATH = `${HARDENING_PROFILE.channelDestination}/server.key`;
 
 // A JSON value this module writes. A JsonNumber keeps its digits, so a u64 is written exactly.
 export type JsonOut = null | boolean | number | string | JsonNumber | readonly JsonOut[] | { readonly [key: string]: JsonOut };

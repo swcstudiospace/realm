@@ -53,7 +53,7 @@ const CA_KEY_NAME = "ca.key";
 const LEAF_COMMON_NAME = "realm-sandbox-runtime";
 const LEAF_EXTENSIONS = "[ext]\nsubjectAltName = DNS:%SERVER_NAME%\nbasicConstraints = critical,CA:FALSE\nkeyUsage = critical,digitalSignature\nextendedKeyUsage = serverAuth\n";
 // The longest unix socket path a socket address holds: sun_path is 108 bytes with the terminating NUL. A longer path cannot bind.
-export const UNIX_SOCKET_PATH_MAX_BYTES = 107;
+const UNIX_SOCKET_PATH_MAX_BYTES = 107;
 // The supervisor's SSH socket file name, inside the sandbox's SSH directory.
 const SSH_SOCKET_NAME = "ssh.sock";
 

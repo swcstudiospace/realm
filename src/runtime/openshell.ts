@@ -74,7 +74,7 @@ export function sessionOfRealmSandbox(sandboxName: string | undefined): string |
 export const SANDBOX_WORKSPACE_PATH = "/workspace";
 // The system paths a workload reads and executes. Landlock grants no execute right on a path outside the
 // policy, so an empty list makes every system binary unrunnable (the supervisor denies the spawn).
-export const SANDBOX_SYSTEM_READ_ONLY_PATHS: readonly string[] = Object.freeze([
+const SANDBOX_SYSTEM_READ_ONLY_PATHS: readonly string[] = Object.freeze([
   "/usr",
   "/bin",
   "/lib",
@@ -87,9 +87,9 @@ export const SANDBOX_SYSTEM_READ_ONLY_PATHS: readonly string[] = Object.freeze([
   "/dev/random",
 ]);
 // The writable scratch paths besides the workspace. The native sidecar keeps temporary state in /tmp.
-export const SANDBOX_SCRATCH_PATHS: readonly string[] = Object.freeze(["/tmp"]);
+const SANDBOX_SCRATCH_PATHS: readonly string[] = Object.freeze(["/tmp"]);
 // The one writable device: shell redirects to /dev/null must succeed. No other device is writable.
-export const SANDBOX_WRITABLE_DEVICE_PATHS: readonly string[] = Object.freeze(["/dev/null"]);
+const SANDBOX_WRITABLE_DEVICE_PATHS: readonly string[] = Object.freeze(["/dev/null"]);
 
 const POLL_INTERVAL_MS = 250;
 const RUNTIME_DIR_NAME = "runtime";

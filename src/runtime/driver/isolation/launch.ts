@@ -64,7 +64,7 @@ export function decodeLaunchAuthentication(body: Uint8Array, gatewayId: string, 
 }
 
 // Parses each key's PEM as an Ed25519 public key. The key ids must be distinct, and there must be at least one key.
-export function parseVerificationKeys(keys: readonly VerificationKey[]): ReadonlyMap<string, KeyObject> {
+function parseVerificationKeys(keys: readonly VerificationKey[]): ReadonlyMap<string, KeyObject> {
   if (keys.length === 0) {
     throw makeRealmError("SCHEMA_INVALID");
   }
