@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.3.18] - 2026-10-30
+
+### Added
+- feat(daemon): expose metrics over the control socket (#33) (0ecd784)
+
 ## [0.3.17] - 2026-10-30
 
 ### Added
