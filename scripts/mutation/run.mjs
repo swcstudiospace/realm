@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { readdirSync } from "node:fs";
 import { cp, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
@@ -137,9 +138,13 @@ export function findMutations(source) {
  * @param {string} file
  * @returns {string[]}
  */
-export function testsFor(file) {
+export function compiledTestFiles(dir, names) {
+  return names.filter((name) => name.endsWith(".test.js")).sort().map((name) => join(dir, name));
+}
+
+export function testsFor(file, listDir = defaultListDir) {
   if (file.startsWith("src/fs/")) {
-    return ["dist/test/fs"];
+    return compiledTestFiles("dist/test/fs", listDir("dist/test/fs"));
   }
   if (file === "src/core/policy.ts") {
     return [
@@ -153,6 +158,14 @@ export function testsFor(file) {
   }
   const base = file.replace(/^src\//, "").replace(/\.ts$/, "");
   return [`dist/test/${base}.test.js`];
+}
+
+function defaultListDir(dir) {
+  try {
+    return readdirSync(dir);
+  } catch {
+    return [];
+  }
 }
 
 /**
@@ -220,7 +233,7 @@ export async function runCampaign(options = {}) {
   const cap = Math.min(options.cap ?? MAX_MUTANTS, MAX_MUTANTS);
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const reportPath = resolve(options.reportPath ?? join(root, "mutation-report.json"));
-  /** @type {{ file: string, status: "killed" | "survived" | "timedOut", description: string }[]} */
+  /** @type {{ file: string, status: "killed" | "survived" | "timedOut" | "untested", description: string }[]} */
   const mutants = [];
 
   try {
@@ -247,7 +260,7 @@ export async function runCampaign(options = {}) {
           }
           const applied = original.slice(0, mutant.start) + mutant.replacement + original.slice(mutant.end);
           await writeFile(absolute, applied);
-          let status = /** @type {"killed" | "survived" | "timedOut"} */ ("killed");
+          let status = /** @type {"killed" | "survived" | "timedOut" | "untested"} */ ("killed");
           try {
             const compiled = await runLimited(
               process.execPath,
@@ -258,11 +271,16 @@ export async function runCampaign(options = {}) {
             if (compiled.timedOut) {
               status = "timedOut";
             } else if (compiled.code === 0) {
-              const tested = await runLimited(process.execPath, ["--test", ...testsFor(mutant.file)], sandbox, timeoutMs);
-              if (tested.timedOut) {
-                status = "timedOut";
-              } else if (tested.code === 0) {
-                status = "survived";
+              const tests = testsFor(mutant.file);
+              if (tests.length === 0) {
+                status = "untested";
+              } else {
+                const tested = await runLimited(process.execPath, ["--test", ...tests], sandbox, timeoutMs);
+                if (tested.timedOut) {
+                  status = "timedOut";
+                } else if (tested.code === 0) {
+                  status = "survived";
+                }
               }
             }
           } finally {
@@ -287,6 +305,7 @@ export async function runCampaign(options = {}) {
     killed: mutants.filter((row) => row.status === "killed").length,
     survived: mutants.filter((row) => row.status === "survived").length,
     timedOut: mutants.filter((row) => row.status === "timedOut").length,
+    untested: mutants.filter((row) => row.status === "untested").length,
     mutants,
   };
   await mkdir(dirname(reportPath), { recursive: true });

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { MAX_MUTANTS, findMutations, runCampaign } from "./run.mjs";
+import { MAX_MUTANTS, compiledTestFiles, findMutations, runCampaign, testsFor } from "./run.mjs";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -47,6 +47,12 @@ test("finds boolean, relational, and numeric boundary sites", () => {
   assert.equal(descriptions.some((text) => text.startsWith("relational operator flip > -> <")), true);
   assert.equal(descriptions.some((text) => text.startsWith("numeric boundary off-by-one 0 -> 1")), true);
   assert.equal(MAX_MUTANTS, 12);
+});
+
+test("filesystem mutants run compiled test files, not the directory", () => {
+  const files = testsFor("src/fs/root.ts", () => ["notes.md", "write.test.js", "root.test.js"]);
+  assert.deepEqual(files, ["dist/test/fs/root.test.js", "dist/test/fs/write.test.js"]);
+  assert.equal(compiledTestFiles("dist/test/fs", []).length, 0);
 });
 
 test("kills a known mutant and writes the report shape from a fixture", async () => {
