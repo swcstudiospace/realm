@@ -87,6 +87,19 @@ Save the script in the appendix as `atomic-kill-test.mjs` and run `node atomic-k
 
 Who removes the orphan: the sweep in `src/fs/temp-sweep.ts` (`sweepOrphanTempFiles`), which the daemon runs at every start, after the startup reap and before it serves (`runStartupMaintenance`, `src/daemon/daemon.ts`; `docs/integration/runtime-decision.md`, "Startup maintenance (Phase 14, CRASH-04)"). It walks `policy.workspaceRoots`, `<stateDir>/sessions`, `<stateDir>/runtime` and `<stateDir>/audit`. It removes only a regular file named exactly `.<name>.realm-tmp-<16 lowercase hex>`, owned by the daemon's uid, on the root's device, reached through a pinned directory descriptor and never through a symlink, and only once it is older than the 60 s bound (`ORPHAN_TEMP_MIN_AGE_MS`). The sweep and the audit reconciliation share a 10 s start budget (`STARTUP_MAINTENANCE_BUDGET_MS`): a root the sweep does not reach in time is left for the next start and is named, with any unfinished audit log, in the `daemon.log` startup line (`maintenanceComplete=false`). It writes one audit line (`tool: "temp-sweep"`) before each removal. The same start reconciles the audit log: an admission line with no result line gets one `AUDIT_OUTCOME_UNKNOWN` reconciliation line (`src/audit/reconcile.ts`). The daemon writes one line per start to `<stateDir>/daemon.log`, of the form `realm daemon: startup removed <n> container(s) and <m> session record(s); removed <t> orphan temp file(s); reconciled <a> audit admission(s)`, with a `; <f> startup failure(s)` clause when a step failed. Expected: the next daemon start removes the orphan once it is older than 60 s, and the `daemon.log` line counts it; a start inside the first 60 s keeps it and a later start removes it. This expectation is VERIFIED_BY_CODE_READING of the daemon and the sweep, and has not been run live (INFERENCE until it is). The four stages above are also exercised on every test run by `test/fs/atomic-write-sigkill.test.ts` (VERIFIED_BY_CODE_READING of the test, not yet by execution). A kill after the `rename` cannot be hooked; by `rename(2)` atomicity the target then holds either the old or the new bytes and there is no orphan (INFERENCE).
 
+
+## The gated guard suite
+
+The three write-guard cases also run as `test/integration/omp-guard.test.ts`, against the built Realm plugin, not by hand and not through a model. Each case writes its policy mode explicitly, starts an in-process daemon over the harness fakes, and drives Omp's own `write` with a scripted provider. It is not an LLM-driven run.
+
+Opt in with `REALM_LIVE_OMP=1`. `REALM_OMP_BIN` optionally names the Omp executable; `REALM_OMP_NET_TRACE=1` is the spike's network-trace opt-in and is not required here. After `npm run build`:
+
+```sh
+REALM_LIVE_OMP=1 node --test --test-concurrency=1 dist/test/integration/omp-guard.test.js
+```
+
+When `REALM_LIVE_OMP` is unset, or Omp is absent, the file skips and names the first missing prerequisite. It does not start Omp. The three cases are advisory with the realm down (the notice, and the file exists), fail-closed with the realm down (blocked with `REALM_NOT_ACTIVE`, the file absent, the error on the provider's next request), and the realm active (the write proceeds on the host; the offered tool list is recorded for Phase 16).
+
 ## Cleanup
 
 Run `realm down`, stop the provider and Omp, remove the files you wrote from `<workspace>` and the check directory, and confirm that `realm status` prints `disconnected` and the container list is empty.
