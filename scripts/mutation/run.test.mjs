@@ -8,7 +8,8 @@ import { MAX_MUTANTS, findMutations, runCampaign, testsFor } from "./run.mjs";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
-const SAMPLE = `export function accept(n: number, enabled: boolean): boolean {
+const SAMPLE = `const spare = true;
+export function accept(n: number, enabled: boolean): boolean {
   if (enabled === true && n > 0) {
     return true;
   }
@@ -83,9 +84,14 @@ test("kills a known mutant and writes the report shape from a fixture", async ()
 
     assert.equal(await readFile(join(root, "src", "sample.ts"), "utf8"), SAMPLE);
     assert.equal(report.mutants.length <= MAX_MUTANTS, true);
-    const killed = report.mutants.find((row) => row.description.startsWith("boolean flip true -> false"));
+    const killed = report.mutants.find((row) => row.description.includes("boolean flip true -> false at line 4"));
     assert.ok(killed, "expected the known boolean mutant to be reported");
     assert.equal(killed.status, "killed");
+    const survivor = report.mutants.find((row) => row.description.includes("boolean flip true -> false at line 1"));
+    assert.ok(survivor, "expected the uncovered boolean mutant to be reported");
+    assert.equal(survivor.status, "survived");
+    assert.equal(report.compileError, 0);
+    assert.equal(report.error, 0);
     assert.equal(killed.file, "src/sample.ts");
     assert.equal(typeof killed.description, "string");
     assert.equal(report.killed, report.mutants.filter((row) => row.status === "killed").length);
@@ -93,6 +99,24 @@ test("kills a known mutant and writes the report shape from a fixture", async ()
     assert.equal(typeof report.timedOut, "number");
     const written = JSON.parse(await readFile(reportPath, "utf8"));
     assert.deepEqual(written, report);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a missing compiler is a compile error, not a kill", async () => {
+  const root = await mkdtemp(join(tmpdir(), "realm-mutation-nocompile-"));
+  try {
+    await mkdir(join(root, "src"), { recursive: true });
+    await mkdir(join(root, "test"), { recursive: true });
+    await mkdir(join(root, "node_modules"), { recursive: true });
+    await writeFile(join(root, "package.json"), '{"type":"module"}\n');
+    await writeFile(join(root, "tsconfig.json"), TSCONFIG);
+    await writeFile(join(root, "src", "sample.ts"), SAMPLE);
+    const report = await runCampaign({ root, files: ["src/sample.ts"], timeoutMs: 20_000 });
+    assert.equal(report.killed, 0);
+    assert.equal(report.compileError, 1);
+    assert.equal(report.mutants[0]?.status, "compileError");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

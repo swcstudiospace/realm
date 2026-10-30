@@ -236,7 +236,7 @@ export async function runCampaign(options = {}) {
   const cap = Math.min(options.cap ?? MAX_MUTANTS, MAX_MUTANTS);
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const reportPath = resolve(options.reportPath ?? join(root, "mutation-report.json"));
-  /** @type {{ file: string, status: "killed" | "survived" | "timedOut" | "untested", description: string }[]} */
+  /** @type {{ file: string, status: "killed" | "survived" | "timedOut" | "untested" | "compileError" | "baselineFailed" | "error", description: string }[]} */
   const mutants = [];
 
   try {
@@ -250,46 +250,71 @@ export async function runCampaign(options = {}) {
       const sandbox = await mkdtemp(join(tmpdir(), "realm-mutation-"));
       try {
         await prepareSandbox(root, sandbox);
-        /** @type {Map<string, string>} */
-        const originals = new Map();
-        for (const mutant of selected) {
-          const absolute = join(sandbox, mutant.file);
-          if (!originals.has(mutant.file)) {
-            originals.set(mutant.file, await readFile(absolute, "utf8"));
+        const baseline = await compileSandbox(sandbox, timeoutMs);
+        if (baseline.timedOut || baseline.code !== 0) {
+          mutants.push({
+            file: "(compile)",
+            status: "compileError",
+            description: baseline.timedOut ? "unmutated build timed out" : "unmutated build failed",
+          });
+        } else {
+          const blocked = new Set();
+          for (const file of [...new Set(selected.map((mutant) => mutant.file))]) {
+            const tests = testsFor(file, sandbox);
+            if (tests.length === 0) {
+              continue;
+            }
+            const tested = await runLimited(process.execPath, ["--test", ...tests], sandbox, timeoutMs);
+            if (tested.timedOut || tested.code !== 0) {
+              blocked.add(file);
+              mutants.push({
+                file,
+                status: "baselineFailed",
+                description: tested.timedOut ? "unmutated tests timed out" : "unmutated tests failed",
+              });
+            }
           }
-          const original = originals.get(mutant.file);
-          if (original === undefined) {
-            continue;
-          }
-          const applied = original.slice(0, mutant.start) + mutant.replacement + original.slice(mutant.end);
-          await writeFile(absolute, applied);
-          let status = /** @type {"killed" | "survived" | "timedOut" | "untested"} */ ("killed");
-          try {
-            const compiled = await runLimited(
-              process.execPath,
-              ["node_modules/typescript/lib/tsc.js", "-p", "tsconfig.json", "--incremental", "--tsBuildInfoFile", ".mutation.tsbuildinfo"],
-              sandbox,
-              timeoutMs,
-            );
-            if (compiled.timedOut) {
-              status = "timedOut";
-            } else if (compiled.code === 0) {
-              const tests = testsFor(mutant.file, sandbox);
-              if (tests.length === 0) {
-                status = "untested";
+          /** @type {Map<string, string>} */
+          const originals = new Map();
+          for (const mutant of selected) {
+            if (blocked.has(mutant.file)) {
+              continue;
+            }
+            const absolute = join(sandbox, mutant.file);
+            if (!originals.has(mutant.file)) {
+              originals.set(mutant.file, await readFile(absolute, "utf8"));
+            }
+            const original = originals.get(mutant.file);
+            if (original === undefined) {
+              continue;
+            }
+            const applied = original.slice(0, mutant.start) + mutant.replacement + original.slice(mutant.end);
+            await writeFile(absolute, applied);
+            let status = /** @type {"killed" | "survived" | "timedOut" | "untested"} */ ("killed");
+            try {
+              const compiled = await compileSandbox(sandbox, timeoutMs);
+              if (compiled.timedOut) {
+                status = "timedOut";
+              } else if (compiled.code !== 0) {
+                status = "killed";
               } else {
-                const tested = await runLimited(process.execPath, ["--test", ...tests], sandbox, timeoutMs);
-                if (tested.timedOut) {
-                  status = "timedOut";
-                } else if (tested.code === 0) {
-                  status = "survived";
+                const tests = testsFor(mutant.file, sandbox);
+                if (tests.length === 0) {
+                  status = "untested";
+                } else {
+                  const tested = await runLimited(process.execPath, ["--test", ...tests], sandbox, timeoutMs);
+                  if (tested.timedOut) {
+                    status = "timedOut";
+                  } else if (tested.code === 0) {
+                    status = "survived";
+                  }
                 }
               }
+            } finally {
+              await writeFile(absolute, original);
             }
-          } finally {
-            await writeFile(absolute, original);
+            mutants.push({ file: mutant.file, status, description: mutant.description });
           }
-          mutants.push({ file: mutant.file, status, description: mutant.description });
         }
       } finally {
         await rm(sandbox, { recursive: true, force: true });
@@ -299,7 +324,7 @@ export async function runCampaign(options = {}) {
     const reason = error instanceof Error ? error.message : "unknown failure";
     mutants.push({
       file: "(run)",
-      status: "killed",
+      status: "error",
       description: `mutation run stopped: ${reason}`,
     });
   }
@@ -309,6 +334,9 @@ export async function runCampaign(options = {}) {
     survived: mutants.filter((row) => row.status === "survived").length,
     timedOut: mutants.filter((row) => row.status === "timedOut").length,
     untested: mutants.filter((row) => row.status === "untested").length,
+    compileError: mutants.filter((row) => row.status === "compileError").length,
+    baselineFailed: mutants.filter((row) => row.status === "baselineFailed").length,
+    error: mutants.filter((row) => row.status === "error").length,
     mutants,
   };
   await mkdir(dirname(reportPath), { recursive: true });
@@ -581,6 +609,15 @@ async function prepareSandbox(root, sandbox) {
   await cp(join(root, "tsconfig.json"), join(sandbox, "tsconfig.json"));
   await cp(join(root, "package.json"), join(sandbox, "package.json"));
   await symlink(join(root, "node_modules"), join(sandbox, "node_modules"));
+}
+
+function compileSandbox(sandbox, timeoutMs) {
+  return runLimited(
+    process.execPath,
+    ["node_modules/typescript/lib/tsc.js", "-p", "tsconfig.json", "--incremental", "--tsBuildInfoFile", ".mutation.tsbuildinfo"],
+    sandbox,
+    timeoutMs,
+  );
 }
 
 /**
