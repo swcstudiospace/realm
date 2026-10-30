@@ -75,5 +75,4 @@ with `"mode": "advisory"` in `<state-dir>/policy.json`
 
 Omp's plugin manifest key names for an MCP server entry are not verified, so
 this snippet gives none. Realm reaches Omp through the extension above, not
-through an MCP entry. Local install path semantics for `omp plugin install` are
-not verified; use `--dry-run` first.
+through an MCP entry. A local path install is a link to the checkout, as the live record above shows for Omp 18.12.6. A registry or marketplace install is not verified; use `--dry-run` first.
