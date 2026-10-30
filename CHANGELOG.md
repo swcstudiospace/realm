@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.3.11] - 2026-10-30
+
+### Maintenance
+- test: add the three-case Omp write-guard suite (#26) (96fd339)
+
 ## [0.3.10] - 2026-10-30
 
 ### Added
