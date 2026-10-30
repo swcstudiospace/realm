@@ -519,6 +519,55 @@ void test("OBS-04: a check made while the classification is in flight throws the
   assert.equal(driver.gatewayCheckCount(), 1);
 });
 
+// Two checks in flight at once (a health tick and realm doctor), both parked in alive(). The first probe to answer fails
+// and starts the classification, which is parked in gatewayAnswers(); the second probe then fails while it is in flight.
+async function overlappingChecks(gateway: "up" | "down"): Promise<{
+  readonly driver: FakeAgentOsDriver;
+  readonly supervisor: AgentOsSupervisor;
+  readonly first: Promise<boolean>;
+  readonly second: Promise<boolean>;
+}> {
+  const { driver, supervisor } = harness();
+  await supervisor.start();
+  driver.crash();
+  if (gateway === "down") {
+    driver.gatewayDown();
+  }
+  driver.holdAlive();
+  driver.holdGateway();
+  const first = supervisor.check();
+  const second = supervisor.check();
+  await nextTurn();
+  driver.releaseAlive();
+  await nextTurn();
+  driver.releaseAlive();
+  await nextTurn();
+  return { driver, supervisor, first, second };
+}
+
+void test("OBS-04: two overlapping probes that fail while the gateway does not answer both reject with OPENSHELL_GATEWAY_LOST", async () => {
+  const { driver, first, second } = await overlappingChecks("down");
+  const both = Promise.all([assertGatewayLost(first), assertGatewayLost(second)]);
+  driver.releaseGateway();
+  await both;
+  assert.equal(driver.gatewayCheckCount(), 1, "the overlapping probes share one classification");
+});
+
+void test("OBS-04: two overlapping probes that fail while the gateway answers both reject with AGENTOS_CRASH_LOOP", async () => {
+  const { driver, first, second } = await overlappingChecks("up");
+  const both = Promise.all([assertCrashLoop(first), assertCrashLoop(second)]);
+  driver.releaseGateway();
+  await both;
+  assert.equal(driver.gatewayCheckCount(), 1);
+});
+
+void test("OBS-04: a stop during the classification makes both overlapping checks return false", async () => {
+  const { supervisor, first, second } = await overlappingChecks("down");
+  await supervisor.stop();
+  assert.equal(await first, false);
+  assert.equal(await second, false);
+});
+
 void test("OBS-04: a stop that overtakes the classification makes check return false and leaves the supervisor stopped", async () => {
   const { driver, supervisor } = harness();
   await supervisor.start();

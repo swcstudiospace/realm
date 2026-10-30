@@ -164,8 +164,9 @@ export class AgentOsSupervisor {
     let healthy = false;
     if (!this.driver.runnerExited(this.sessionId)) {
       const probe = await this.race(() => this.driver.alive(this.sessionId));
-      if (!this.isCurrent(epoch)) {
-        return false;
+      const late = this.lateOutcome(epoch);
+      if (late !== null) {
+        return late;
       }
       // The runner may have exited while the probe was in flight, whatever the probe answered.
       healthy = probe.ok && probe.value && !this.driver.runnerExited(this.sessionId);
@@ -211,6 +212,20 @@ export class AgentOsSupervisor {
   // True while this start is still the running supervision: stop(), or a newer start(), ends it.
   private isCurrent(epoch: number): boolean {
     return this.phase === "running" && this.epoch === epoch;
+  }
+
+  // What a check does when another call moved the supervisor on while its probe was in flight. A stop or a newer start()
+  // ends the check with false. An overlapping check (a health tick and realm doctor) may have failed first and held the
+  // supervisor: this check then joins that hold, so it throws the same code and waits for the classification when it is
+  // still in flight. Null means the supervisor is still running this epoch, so the check judges its own probe.
+  private lateOutcome(epoch: number): Promise<boolean> | null {
+    if (this.epoch !== epoch || this.phase === "stopped") {
+      return Promise.resolve(false);
+    }
+    if (this.phase === "held") {
+      return this.throwHeld();
+    }
+    return null;
   }
 
   // Attempts starts until one succeeds. Every failed attempt is one failure under the policy.

@@ -6,6 +6,9 @@
 // gatewayAnswers() reports the gateway: up by default, so a hold keeps AGENTOS_CRASH_LOOP. gatewayDown() makes it answer
 // false (the status exits non-zero), or reject or hang; gatewayUp() restores it. Gateway checks are counted apart from
 // calls(), which lists the runner operations only.
+// holdAlive() and holdGateway() park every later alive() or gatewayAnswers() call until releaseAlive() or releaseGateway()
+// frees the oldest one, which then answers from the state at that moment. The executor form is used because tsconfig's
+// ES2023 lib has no Promise.withResolvers.
 // create runs through the OpenShell runner the test passes in (the in-process FakeOpenShell in the
 // session suite), so the create the session path issues is the one the driver builds. No process starts.
 
@@ -20,6 +23,10 @@ export class FakeAgentOsDriver implements AgentOsDriver {
   private running = false;
   private gateway: "up" | "down" | "reject" | "hang" = "up";
   private gatewayChecks = 0;
+  private aliveHeld = false;
+  private gatewayHeld = false;
+  private readonly aliveWaiting: (() => void)[] = [];
+  private readonly gatewayWaiting: (() => void)[] = [];
   private exited = false;
   private readonly scripts = new Map<AgentOsOperation, ScriptedOutcome[]>();
   private readonly log: AgentOsOperation[] = [];
@@ -47,7 +54,14 @@ export class FakeAgentOsDriver implements AgentOsDriver {
   }
 
   async alive(): Promise<boolean> {
-    return this.run("alive", () => this.running);
+    return this.run("alive", async () => {
+      if (this.aliveHeld) {
+        await new Promise<void>((resolve) => {
+          this.aliveWaiting.push(resolve);
+        });
+      }
+      return this.running;
+    });
   }
 
   async stop(): Promise<void> {
@@ -59,6 +73,11 @@ export class FakeAgentOsDriver implements AgentOsDriver {
 
   async gatewayAnswers(): Promise<boolean> {
     this.gatewayChecks += 1;
+    if (this.gatewayHeld) {
+      await new Promise<void>((resolve) => {
+        this.gatewayWaiting.push(resolve);
+      });
+    }
     if (this.gateway === "reject") {
       throw new Error("scripted gateway status failure");
     }
@@ -79,6 +98,32 @@ export class FakeAgentOsDriver implements AgentOsDriver {
 
   gatewayCheckCount(): number {
     return this.gatewayChecks;
+  }
+
+  holdAlive(): void {
+    this.aliveHeld = true;
+  }
+
+  // Frees the oldest parked alive() call. It reports the liveness flag as it is now.
+  releaseAlive(): void {
+    const next = this.aliveWaiting.shift();
+    if (next === undefined) {
+      throw new Error("no alive() call is parked");
+    }
+    next();
+  }
+
+  holdGateway(): void {
+    this.gatewayHeld = true;
+  }
+
+  // Frees the oldest parked gatewayAnswers() call. It answers from the gateway state as it is now.
+  releaseGateway(): void {
+    const next = this.gatewayWaiting.shift();
+    if (next === undefined) {
+      throw new Error("no gatewayAnswers() call is parked");
+    }
+    next();
   }
 
   // Queues outcomes for the next calls of one operation, in order.

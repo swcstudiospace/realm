@@ -8,7 +8,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Policy } from "../../src/contract/validate.js";
-import { makeRealmError, type ErrorCode } from "../../src/core/errors.js";
+import { makeRealmError, RealmError, type ErrorCode } from "../../src/core/errors.js";
 import type { ProbeResult } from "../../src/core/ports.js";
 import { displayStatus, STATUS_LABELS } from "../../src/core/status.js";
 import { bindWorkspaceUnderPolicy } from "../../src/fs/root.js";
@@ -200,6 +200,39 @@ void test("OBS-04: the same probe with the gateway answering still gives AGENTOS
 
   assert.equal(snapshot.state, "error");
   assert.equal(snapshot.reason, "AGENTOS_CRASH_LOOP");
+});
+
+void test("OBS-04: a health tick racing a doctor check leaves the state's reason OPENSHELL_GATEWAY_LOST, not probe failed", async (t) => {
+  const { controller, exec, workspace } = fixture(t);
+  await controller.create(workspace);
+  const driver = new FakeAgentOsDriver();
+  const supervisor = supervisedBy(driver);
+  await supervisor.start();
+  exec.supervisor = supervisor;
+  driver.crash();
+  driver.gatewayDown();
+  driver.holdAlive();
+  driver.holdGateway();
+
+  // The doctor's check parks first, then the health tick's probe. The doctor's probe answers first and fails, so the
+  // classification is in flight when the tick's probe fails.
+  const doctor = supervisor.check().then(
+    () => "returned",
+    (error: unknown) => (error instanceof RealmError ? error.code : "other"),
+  );
+  const tick = controller.probe();
+  await settle();
+  driver.releaseAlive();
+  await settle();
+  driver.releaseAlive();
+  await settle();
+  driver.releaseGateway();
+
+  const snapshot = await tick;
+  assert.equal(await doctor, "OPENSHELL_GATEWAY_LOST");
+  assert.equal(snapshot.state, "error");
+  assert.equal(snapshot.reason, "OPENSHELL_GATEWAY_LOST");
+  assert.equal(displayStatus(controller.snapshot()).reason, "OPENSHELL_GATEWAY_LOST");
 });
 
 void test("RT-04: a probe in unbound or error makes no port call", async (t) => {
