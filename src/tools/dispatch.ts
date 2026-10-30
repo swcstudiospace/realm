@@ -99,7 +99,7 @@ export type ToolOutcome =
 
 export class ToolDispatcher {
   private readonly deps: ToolDispatcherDeps;
-  private readonly workspace: WorkspaceDeps;
+  private readonly workspace: Omit<WorkspaceDeps, "audit">;
 
   constructor(deps: ToolDispatcherDeps) {
     this.deps = deps;
@@ -108,9 +108,6 @@ export class ToolDispatcher {
       boundRoot: deps.boundRoot,
       locks: deps.locks,
       credentialAllow: deps.policy.credentialAllow,
-      audit: (entry) => {
-        appendAudit(deps.stateDir, entry);
-      },
       mutationGate: () => deps.controller.mutationGate(),
     };
   }
