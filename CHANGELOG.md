@@ -4,6 +4,14 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.3.24] - 2026-10-30
+
+### Added
+- feat(omp): register the five Realm tools and enforce the fail-closed allowlist (phase 16) (#42) (4e714b8)
+
+### Maintenance
+- test(omp): rescope the no-network claim to the loopback stub with one recorded exception (#41) (318f2cb)
+
 ## [0.3.23] - 2026-10-30
 
 ### Added
