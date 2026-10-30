@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.3.17] - 2026-10-30
+
+### Added
+- feat(daemon): log one correlation id for each up and tool call (#32) (7e122b3)
+
 ## [0.3.16] - 2026-10-30
 
 ### Fixed
