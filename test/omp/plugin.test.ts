@@ -3,13 +3,14 @@ import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { makeRealmError, type ErrorCode } from "../../src/core/errors.js";
+import { ERROR_CODES, makeRealmError, type ErrorCode } from "../../src/core/errors.js";
 import type { StateSnapshot } from "../../src/core/state-machine.js";
 import { STATUS_LABELS, displayStatus } from "../../src/core/status.js";
 import type { DaemonClient, DaemonStatus } from "../../src/daemon/client.js";
 import type { MetricsSnapshot } from "../../src/observe/metrics.js";
 import type { PolicyMode } from "../../src/contract/validate.js";
 import type { ToolOutcome } from "../../src/tools/dispatch.js";
+import type { HostToolDefinition } from "../../src/omp/tools.js";
 import {
   GUARD_STATUS_BUDGET_MS,
   GUARDED_HOST_TOOLS,
@@ -180,9 +181,17 @@ class FakeDaemon implements DaemonClient {
     return Promise.resolve(this.value());
   }
 
-  call(): Promise<ToolOutcome> {
+  // The outcome the next dispatch answers with. Unset, a dispatch rejects, so a test that expects none fails loudly.
+  callOutcome: ToolOutcome | undefined = undefined;
+  readonly dispatched: unknown[] = [];
+
+  call(tool: unknown): Promise<ToolOutcome> {
     this.calls.push("call");
-    return Promise.reject(new Error("the plugin never dispatches tools"));
+    this.dispatched.push(tool);
+    if (this.callOutcome === undefined) {
+      return Promise.reject(new Error("no dispatch outcome was configured"));
+    }
+    return Promise.resolve(this.callOutcome);
   }
 
   metrics(): Promise<MetricsSnapshot> {
@@ -202,6 +211,9 @@ class FakeDaemon implements DaemonClient {
     return this.notice === undefined ? base : { ...base, notice: this.notice };
   }
 }
+
+// The built-in tool names of Omp 18.12.6 (docs/integration/omp.md, Enforcement spike S2c and S6): the fake's starting set.
+const OMP_BUILTIN_TOOLS: readonly string[] = ["read", "ask", "glob", "grep", "wait", "todo", "web_search", "write", "edit", "bash", "eval", "ast_edit", "lsp", "debug", "task"];
 
 class FakePi implements OmpExtensionApi {
   readonly startHandlers: Array<(event: unknown, ctx: OmpSessionContext) => void> = [];
@@ -226,6 +238,43 @@ class FakePi implements OmpExtensionApi {
 
   registerCommand(name: string, definition: RealmRetryCommand): void {
     this.commands.set(name, definition);
+  }
+
+  readonly tools = new Map<string, HostToolDefinition>();
+  // Each setActiveTools call, as the plugin passed it.
+  readonly activeSets: string[][] = [];
+  // When set, setActiveTools is accepted and changes nothing, so the plugin's read-back must catch it.
+  ignoreRemoval = false;
+  private readonly builtins = new Set<string>(OMP_BUILTIN_TOOLS);
+  private readonly active = new Set<string>(OMP_BUILTIN_TOOLS);
+
+  registerTool(tool: HostToolDefinition): void {
+    this.tools.set(tool.name, tool);
+    // An extension tool under a built-in's name takes that built-in's place (spike S1).
+    this.builtins.delete(tool.name);
+    this.active.add(tool.name);
+  }
+
+  getAllTools(): { readonly name: string }[] {
+    return [...this.builtins, ...this.tools.keys()].map((name) => ({ name }));
+  }
+
+  getActiveTools(): string[] {
+    return [...this.active];
+  }
+
+  setActiveTools(names: string[]): Promise<void> {
+    this.activeSets.push([...names]);
+    if (!this.ignoreRemoval) {
+      const known = new Set(this.getAllTools().map((tool) => tool.name));
+      this.active.clear();
+      for (const name of names) {
+        if (known.has(name)) {
+          this.active.add(name);
+        }
+      }
+    }
+    return Promise.resolve();
   }
 }
 
@@ -819,4 +868,148 @@ void test("OMP-02 / MED-03: a throwing status write leaves the paint cache stale
   assert.deepEqual(writes, [
     { key: REALM_STATUS_KEY, text: `${DISCONNECTED_LABEL} · STARTUP_BUDGET_EXCEEDED · ${CLOCK_ISO}` },
   ]);
+});
+
+// ---- OMPX-02, OMPX-03, OMPX-04: Realm tools and built-in removal -----------------
+
+// The fail-closed allowlist (docs/integration/omp.md, Enforcement spike rule 1): the read-only built-ins and the Realm tools.
+const FAIL_CLOSED_ALLOWLIST = ["ask", "exec", "glob", "grep", "list", "read", "status", "todo", "wait", "write"];
+// Built-ins a fail-closed attach must remove, including web_search (network outside the realm's egress policy).
+const REMOVED_BUILTINS = ["ast_edit", "bash", "debug", "edit", "eval", "lsp", "task", "web_search"];
+const REALM_TOOLS = ["exec", "list", "read", "status", "write"];
+
+function sortedNames(names: readonly string[]): string[] {
+  return [...names].sort();
+}
+
+function toolOf(pi: FakePi, name: string): HostToolDefinition {
+  const tool = pi.tools.get(name);
+  assert.ok(tool !== undefined, `${name} tool is registered`);
+  return tool;
+}
+
+void test("OMPX-02: the Realm tools register as exec, read, write, list and status, with no glob tool and retry kept as the command", () => {
+  const fixture = makeFixture();
+  assert.deepEqual(sortedNames([...fixture.pi.tools.keys()]), REALM_TOOLS);
+  assert.ok(!fixture.pi.tools.has("glob"), "no glob tool is registered");
+  assert.ok(!fixture.pi.tools.has("retry"), "retry is a command, not a tool");
+  assert.deepEqual([...fixture.pi.commands.keys()], [REALM_RETRY_COMMAND], "realm-retry is the only command");
+  for (const tool of fixture.pi.tools.values()) {
+    assert.equal(tool.loadMode, "essential", `${tool.name} is offered to the model`);
+    assert.equal(tool.parameters["type"], "object", `${tool.name} declares an object schema`);
+  }
+});
+
+void test("OMPX-02: a Realm tool hands its input to the daemon as one frozen ToolCall and returns the daemon's outcome", async () => {
+  const fixture = makeFixture();
+  const refusal: ToolOutcome = { outcome: "refused", tool: "read", code: "PATH_ESCAPE", retryable: false };
+  fixture.daemon.callOutcome = refusal;
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitForDetail(fixture.ui, "container running");
+
+  const result = await toolOf(fixture.pi, "read").execute("call-1", { path: "notes/a.txt", maxBytes: 16 });
+  assert.deepEqual(fixture.daemon.dispatched.at(-1), { read: { path: "notes/a.txt", maxBytes: 16 } });
+  assert.equal(result.isError, true, "a refusal is an error result");
+  assert.deepEqual(result.details, refusal);
+  assert.deepEqual(result.content, [{ type: "text", text: JSON.stringify(refusal) }]);
+
+  fixture.daemon.callOutcome = { outcome: "refused", tool: "status", code: "REALM_UNBOUND", retryable: false };
+  await toolOf(fixture.pi, "status").execute("call-2", {});
+  assert.deepEqual(fixture.daemon.dispatched.at(-1), { status: {} });
+  await toolOf(fixture.pi, "exec").execute("call-3", { argv: ["ls", "-l"] });
+  assert.deepEqual(fixture.daemon.dispatched.at(-1), { exec: { argv: ["ls", "-l"] } });
+  await toolOf(fixture.pi, "write").execute("call-4", { path: "a.txt", content: "hi" });
+  assert.deepEqual(fixture.daemon.dispatched.at(-1), { write: { path: "a.txt", content: "hi" } });
+  await toolOf(fixture.pi, "list").execute("call-5", { path: "src", depth: 1 });
+  assert.deepEqual(fixture.daemon.dispatched.at(-1), { list: { path: "src", depth: 1 } });
+});
+
+void test("OMPX-02: a Realm tool called with no attached daemon refuses with REALM_NOT_ACTIVE and makes no daemon call", async () => {
+  const fixture = makeFixture();
+  const result = await toolOf(fixture.pi, "status").execute("call-1", {});
+  assert.equal(result.isError, true);
+  assert.deepEqual(result.details, { outcome: "refused", tool: "status", code: "REALM_NOT_ACTIVE", retryable: true });
+  assert.deepEqual(fixture.daemon.calls, [], "no daemon call is made");
+});
+
+void test("OMPX-03: fail-closed attach removes every built-in outside the allowlist, reads the set back, and keeps the Realm tools", async () => {
+  const fixture = makeFixture({ mode: "fail-closed" });
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitForDetail(fixture.ui, "container running");
+
+  assert.equal(fixture.pi.activeSets.length, 1, "one removal per attach");
+  assert.deepEqual(sortedNames(fixture.pi.activeSets[0] ?? []), FAIL_CLOSED_ALLOWLIST);
+  const active = sortedNames(fixture.pi.getActiveTools());
+  assert.deepEqual(active, FAIL_CLOSED_ALLOWLIST, "the read-back matches the allowlist");
+  for (const name of REMOVED_BUILTINS) {
+    assert.ok(!active.includes(name), `${name} is removed`);
+  }
+});
+
+void test("OMPX-03: a removal that does not hold fails the attach with POLICY_DENIED, releases the client, and refuses a host bash call", async () => {
+  const fixture = makeFixture({ mode: "fail-closed" });
+  fixture.pi.ignoreRemoval = true;
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitForDetail(fixture.ui, "POLICY_DENIED");
+
+  assert.equal(lastLabel(fixture.ui), DISCONNECTED_LABEL);
+  assert.match(lastDetail(fixture.ui) ?? "", /^POLICY_DENIED · /);
+  assert.equal(fixture.daemon.count("close"), 1, "the unadopted client is released");
+  assert.deepEqual(await toolCallOf(fixture.pi)({ toolName: "bash" }), { block: true, reason: "POLICY_DENIED" });
+});
+
+void test("OMPX-03: before the first attach settles no mode is known, so a host bash call is refused with POLICY_DENIED", async () => {
+  const gate = makeGate();
+  const fixture = makeFixture({
+    mode: "fail-closed",
+    attach: async (daemon) => {
+      await gate.promise;
+      return daemon;
+    },
+  });
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await yieldTurn();
+
+  assert.equal(fixture.pi.activeSets.length, 0, "nothing is removed before the attach reads the mode");
+  assert.deepEqual(await toolCallOf(fixture.pi)({ toolName: "bash" }), { block: true, reason: "POLICY_DENIED" });
+  gate.resolve();
+  await waitForDetail(fixture.ui, "container running");
+  assert.equal(fixture.pi.activeSets.length, 1, "the removal runs once the mode is read");
+});
+
+void test("OMPX-03: in fail-closed mode the tool_call backstop refuses a host bash call with a catalogue code and passes the read-only tools", async () => {
+  const fixture = makeFixture({ mode: "fail-closed" });
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitForDetail(fixture.ui, "container running");
+  const toolCall = toolCallOf(fixture.pi);
+
+  const bash = await toolCall({ toolName: "bash" });
+  assert.deepEqual(bash, { block: true, reason: "POLICY_DENIED" });
+  assert.ok((ERROR_CODES as readonly string[]).includes(bash.reason), "the refusal carries a catalogue code");
+  for (const toolName of ["web_search", "eval", "task", "ast_edit", "debug", "lsp"]) {
+    assert.deepEqual(await toolCall({ toolName }), { block: true, reason: "POLICY_DENIED" }, `${toolName} is refused`);
+  }
+  assert.deepEqual(await toolCall({ toolName: "edit" }), { block: true, reason: "POLICY_DENIED" }, "edit is refused with an active realm");
+  for (const toolName of ["glob", "grep", "ask", "todo", "wait", "read", "exec", "list", "status"]) {
+    assert.equal(await toolCall({ toolName }), undefined, `${toolName} passes`);
+  }
+  assert.equal(await toolCall({ toolName: "write" }), undefined, "the Realm write passes the mutation check with an active realm");
+});
+
+void test("OMPX-04: advisory attach removes nothing: the built-ins stay active, a host bash call passes, and the guarded edit keeps the notice", async () => {
+  const fixture = makeFixture({ mode: "advisory", snapshot: CONNECTING });
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitForSettledDetails(fixture);
+
+  assert.equal(fixture.pi.activeSets.length, 0, "advisory never calls setActiveTools");
+  const active = fixture.pi.getActiveTools();
+  for (const name of [...REMOVED_BUILTINS, "glob", "grep"]) {
+    assert.ok(active.includes(name), `${name} stays active`);
+  }
+  assert.equal(fixture.pi.tools.size, REALM_TOOLS.length, "the Realm tools stay registered");
+  const toolCall = toolCallOf(fixture.pi);
+  assert.equal(await toolCall({ toolName: "bash" }), undefined, "bash passes in advisory mode");
+  assert.equal(await toolCall({ toolName: "edit" }), undefined, "edit passes with a warning in advisory mode");
+  assert.equal(fixture.ui.notifications.length, 1);
+  assert.match(fixture.ui.notifications[0] ?? "", /advisory policy/);
 });

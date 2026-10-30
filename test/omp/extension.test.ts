@@ -118,11 +118,31 @@ void test("OMP-01: the Omp entry and the CLI dial one control socket, the state 
   });
 
   const handlers = new Map<string, (...args: unknown[]) => unknown>();
+  // The tools the plugin registers, in order. Omp reports them as its tools, and each starts active.
+  const registeredTools: string[] = [];
+  // The active allowlist as the plugin last set it, and every setActiveTools call as the plugin passed it.
+  let activeTools: string[] = [];
+  const setActiveCalls: string[][] = [];
   const pi = {
     on(event: string, handler: (...args: unknown[]) => unknown): void {
       handlers.set(event, handler);
     },
     registerCommand(): void {},
+    registerTool(tool: { readonly name: string }): void {
+      registeredTools.push(tool.name);
+      activeTools.push(tool.name);
+    },
+    getAllTools(): { readonly name: string }[] {
+      return registeredTools.map((name) => ({ name }));
+    },
+    getActiveTools(): string[] {
+      return [...activeTools];
+    },
+    setActiveTools(names: string[]): Promise<void> {
+      setActiveCalls.push([...names]);
+      activeTools = [...names];
+      return Promise.resolve();
+    },
   } as unknown as OmpExtensionApi;
   t.after(() => {
     handlers.get("session_shutdown")?.();

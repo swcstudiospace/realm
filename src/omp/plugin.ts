@@ -15,9 +15,11 @@
 //   - Managed timers ctx.setTimeout() / ctx.setInterval() / ctx.clearTimer(). The host clears its
 //     managed callbacks on session shutdown; the plugin also clears every timer it armed there.
 //   - pi.registerCommand(name, { description, handler }) for the retry command.
-// No status endpoint, tooltip, or setActiveTools enforcement is used: no status endpoint was found
-// on any source read (not documented), no tooltip surface was verified, and neither setActiveTools
-// removal nor a tool_call block is documented to cover every host execution path (OQ-P5-01, OQ-P5-02).
+//   - pi.registerTool(definition) for the five Realm tools (OMPX-02). The definitions and the frozen ToolCall shape are in tools.ts.
+//   - pi.getAllTools(), pi.getActiveTools() and pi.setActiveTools(names) for the fail-closed allowlist (OMPX-03; spike S2a).
+// Tool removal (OMPX-03): a fail-closed attach removes every built-in outside the allowlist with setActiveTools and reads it
+// back. That mechanism is the one the Enforcement spike proved on Omp 18.12.6 (docs/integration/omp.md); no tooltip surface is used.
+// The tool_call guard stays as the backstop. Neither removal nor a hook is documented to cover every host path (OQ-P5-02).
 //
 // Deviations recorded here:
 //   - P5-D5: the label, the reason, and the last-transition time share one status item
@@ -35,6 +37,14 @@ import type { DaemonClient, DaemonStatus } from "../daemon/client.js";
 import type { PolicyMode } from "../contract/validate.js";
 import type { StateSnapshot } from "../core/state-machine.js";
 import { STATUS_LABELS, displayStatus } from "../core/status.js";
+import {
+  PASS_THROUGH_HOST_TOOLS,
+  failClosedToolNames,
+  realmToolDefinitions,
+  sameToolNames,
+  type DaemonCall,
+  type HostToolDefinition,
+} from "./tools.js";
 
 // ---- Verified host surface (minimal structural reads) ----------------------
 // Each interface names only members the plugin calls. A richer host object is
@@ -73,6 +83,12 @@ export interface OmpExtensionApi {
   on(event: "session_shutdown", handler: () => void): void;
   on(event: "tool_call", handler: (call: HostToolCall) => Promise<HostToolVerdict | undefined>): void;
   registerCommand(name: string, definition: RealmRetryCommand): void;
+  // Omp tools (OMPX-02). A tool registered under a built-in's name takes that built-in's place (spike S1).
+  registerTool(tool: HostToolDefinition): void;
+  // The names Omp reports, and the allowlist setter used by fail-closed removal (OMPX-03; spike S2a).
+  getAllTools(): readonly { readonly name: string }[];
+  getActiveTools(): readonly string[];
+  setActiveTools(names: string[]): Promise<void>;
 }
 
 // ---- Daemon status and plugin options --------------------------------------
@@ -118,8 +134,9 @@ export const STATUS_POLL_MS = 2_000;
 export const REALM_STATUS_KEY = "realm";
 export const REALM_RETRY_COMMAND = "realm-retry";
 
-// Host tools the tool_call guard inspects. read, list, status, and retry pass
-// untouched; anything else is not a realm mutation and is left alone.
+// Host tools the tool_call guard checks for a realm mutation (write, edit). The pass-through names (PASS_THROUGH_HOST_TOOLS:
+// the Realm tools, the read-only built-ins, retry) are left to the mutation check alone; in fail-closed mode the backstop
+// refuses every other tool name.
 export const GUARDED_HOST_TOOLS: readonly string[] = Object.freeze(["write", "edit"]);
 
 // ---- Status rendering (OMP-02, OMP-03; P5-D5) -------------------------------
@@ -237,7 +254,19 @@ export function registerRealmPlugin(pi: OmpExtensionApi, options: RealmPluginOpt
     // The attach and its first status read share one budget; a client is adopted only with its status.
     const pending = Promise.resolve()
       .then(() => options.attachDaemon(ctx.cwd))
-      .then(async (client) => ({ client, status: await client.status() }));
+      .then(async (client) => {
+        try {
+          const status = await client.status();
+          // Fail-closed removal runs inside the attach budget; a removal that does not hold fails the attach (OMPX-03).
+          if (status.mode === "fail-closed") {
+            await enforceFailClosed(pi);
+          }
+          return { client, status };
+        } catch (error: unknown) {
+          client.close();
+          throw error;
+        }
+      });
 
     let attached: { readonly client: DaemonClient; readonly status: DaemonStatus } | null = null;
     let code = "OPENSHELL_START_FAILED";
@@ -345,6 +374,18 @@ export function registerRealmPlugin(pi: OmpExtensionApi, options: RealmPluginOpt
     endSession();
   });
 
+  // The Realm tools (OMPX-02) register at load in every mode. Which built-ins stay callable is decided per attach.
+  const callDaemon: DaemonCall = (call) => {
+    const client = live?.client ?? null;
+    if (client === null) {
+      return Promise.reject(makeRealmError("REALM_NOT_ACTIVE"));
+    }
+    return client.call(call);
+  };
+  for (const tool of realmToolDefinitions(callDaemon)) {
+    pi.registerTool(tool);
+  }
+
   pi.on("tool_call", (call) => guardHostToolCall(call.toolName, live));
 
   pi.registerCommand(REALM_RETRY_COMMAND, {
@@ -359,18 +400,23 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
-// ---- tool_call guard (OMP-05; P5-D6) ----------------------------------------
+// ---- tool_call guard (OMP-05; P5-D6; OMPX-03 backstop) ----------------------
 // Residual risk (OQ-P5-02): the block holds inside the extension pipeline. The tool_call hook
 // returns { block: true } and the host fails closed on error or timeout. Any host path that
 // bypasses the extension pipeline (launch-time tool flags, SDK sessions, or a host that ignores the
 // hook) is NOT covered by this guard and must not be claimed as covered. Required mode is the
 // fail-closed policy mode (the default); advisory mode, set explicitly in the policy file, warns and lets the call through.
 //
-// The state comes from a daemon status read bounded by GUARD_STATUS_BUDGET_MS. stateVerdict
-// mirrors decideMutation (src/core/policy.ts) and the gate outcomes of src/lifecycle/mutation-gate.ts;
-// the mirror adds no rule of its own. The daemon reports the mode as 'advisory' or 'fail-closed'; fail-closed is
-// the required branch. When the state cannot be read, the last known mode decides: advisory (explicit opt-in) warns;
-// fail-closed, or no mode yet, blocks.
+// Two checks. The mutation check reads the daemon status for write and edit: the state decides, and the
+// mode decides a non-active state (advisory warns, fail-closed blocks). It mirrors decideMutation
+// (src/core/policy.ts) and the gate outcomes of src/lifecycle/mutation-gate.ts; the mirror adds no rule of its own.
+// The backstop (OMPX-03) refuses every other tool name in fail-closed mode and while no mode is known, with the
+// catalogue code POLICY_DENIED. Removal of the built-ins is the primary control. A removed tool is refused by Omp
+// before this hook runs, so the backstop answers the calls that do reach it: a removal that did not take, or a tool
+// another extension registers. Advisory mode keeps the built-ins and passes them.
+//
+// The state comes from a daemon status read bounded by GUARD_STATUS_BUDGET_MS. When the state cannot be read, the
+// last known mode decides: advisory (explicit opt-in) warns; fail-closed, or no mode yet, blocks.
 
 export async function guardHostToolCall(
   toolName: unknown,
@@ -380,11 +426,19 @@ export async function guardHostToolCall(
     // A call the guard cannot classify is refused, never waved through (LOW-01).
     return { block: true, reason: "realm bad tool call" };
   }
-  if (!GUARDED_HOST_TOOLS.includes(toolName)) {
-    return undefined;
-  }
+  const guarded = GUARDED_HOST_TOOLS.includes(toolName);
+  const passThrough = PASS_THROUGH_HOST_TOOLS.includes(toolName);
   if (session === null) {
-    return { block: true, reason: "realm not started" };
+    if (guarded) {
+      return { block: true, reason: "realm not started" };
+    }
+    return passThrough ? undefined : { block: true, reason: "POLICY_DENIED" };
+  }
+  if (!guarded) {
+    if (passThrough || session.mode === "advisory") {
+      return undefined;
+    }
+    return { block: true, reason: "POLICY_DENIED" };
   }
   let status: DaemonStatus;
   try {
@@ -394,7 +448,27 @@ export async function guardHostToolCall(
   }
   session.mode = status.mode;
   renderRealmStatus(session.ctx.ui, status.snapshot);
-  return stateVerdict(session, status.mode, status.snapshot.state);
+  const verdict = stateVerdict(session, status.mode, status.snapshot.state);
+  if (verdict !== undefined) {
+    return verdict;
+  }
+  // A guarded built-in (edit) that reaches an active realm is still outside the allowlist in fail-closed mode.
+  return passThrough || status.mode === "advisory" ? undefined : { block: true, reason: "POLICY_DENIED" };
+}
+
+// Fail-closed removal (OMPX-03; spike rules 1 and 2). setActiveTools takes the allowlist, and getActiveTools is read
+// back and must match it. A mismatch, or a host that refuses the call, fails the attach with POLICY_DENIED, so the
+// client is released and nothing is adopted. It runs inside the attach budget.
+async function enforceFailClosed(pi: OmpExtensionApi): Promise<void> {
+  try {
+    const wanted = failClosedToolNames(pi.getAllTools().map((tool) => tool.name));
+    await pi.setActiveTools(wanted);
+    if (!sameToolNames(pi.getActiveTools(), wanted)) {
+      throw new Error("the removal did not hold");
+    }
+  } catch {
+    throw makeRealmError("POLICY_DENIED");
+  }
 }
 
 // One status read under a managed timer. The timer expiry rejects with TOOL_TIMEOUT, so a hung
