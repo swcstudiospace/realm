@@ -22,8 +22,8 @@ function config() {
   });
 }
 
-function directory(mode: number): PathReading {
-  return { state: "found", stats: { isDirectory: () => true, isSymbolicLink: () => false, isSocket: () => false, mode } as Stats };
+function directory(mode: number, uid?: number): PathReading {
+  return { state: "found", stats: { isDirectory: () => true, isSymbolicLink: () => false, isSocket: () => false, mode, ...(uid === undefined ? {} : { uid }) } as Stats };
 }
 
 function socket(mode: number): PathReading {
@@ -56,6 +56,28 @@ void test("runtime-roots passes when the three roots are absolute directories at
   );
   assert.equal(result.status, "pass");
   assert.equal(result.fix, null);
+});
+
+void test("runtime-roots accepts a workspace at 0755 and rejects one this account does not own", () => {
+  const open = runtimeRootsCheck(
+    config(),
+    statFor({
+      "/var/lib/realm/secrets": directory(0o40700),
+      "/srv/workspace": directory(0o40755, process.getuid?.()),
+      "/var/lib/realm/sandboxes": directory(0o40700),
+    }),
+  );
+  assert.equal(open.status, "pass");
+  const foreign = runtimeRootsCheck(
+    config(),
+    statFor({
+      "/var/lib/realm/secrets": directory(0o40700),
+      "/srv/workspace": directory(0o40755, (process.getuid?.() ?? 0) + 1),
+      "/var/lib/realm/sandboxes": directory(0o40700),
+    }),
+  );
+  assert.equal(foreign.status, "fail");
+  assert.match(foreign.detail, /workspaceRoot is not owned by this account/);
 });
 
 void test("runtime-roots fails when a root is absent or mode-wrong and names realm init", () => {

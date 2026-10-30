@@ -123,13 +123,39 @@ export function runtimeRootsCheck(config: RuntimeConfig, stat: (path: string) =>
   const roots = runtimeRootsOf(config);
   const problems = [
     rootProblem("secretRoot", roots.secretRoot, stat),
-    rootProblem("workspaceRoot", roots.workspaceRoot, stat),
+    workspaceProblem(roots.workspaceRoot, stat),
     rootProblem("sandboxStateRoot", roots.sandboxStateRoot, stat),
   ].filter((problem): problem is string => problem !== undefined);
   if (problems.length === 0) {
-    return pass("runtime-roots", "secretRoot, workspaceRoot and sandboxStateRoot are absolute directories at mode 0700");
+    return pass("runtime-roots", "secretRoot and sandboxStateRoot are absolute directories at mode 0700; workspaceRoot is an account-owned directory");
   }
   return fail("runtime-roots", problems.join("; "), INIT_FIX);
+}
+
+// The driver accepts a workspace at any mode when this account owns it (assertPinnedWorkspaceRoot).
+// A 0755 project directory is a working setup, so doctor must not demand 0700 there.
+function workspaceProblem(path: string, stat: (path: string) => PathReading): string | undefined {
+  if (!isAbsolute(path)) {
+    return "workspaceRoot is not absolute";
+  }
+  const found = stat(path);
+  if (found.state === "absent") {
+    return "workspaceRoot is absent";
+  }
+  if (found.state === "unreadable") {
+    return "workspaceRoot cannot be inspected";
+  }
+  if (found.stats.isSymbolicLink()) {
+    return "workspaceRoot is a symbolic link";
+  }
+  if (!found.stats.isDirectory()) {
+    return "workspaceRoot is not a directory";
+  }
+  const uid = process.getuid?.();
+  if (uid !== undefined && typeof found.stats.uid === "number" && found.stats.uid !== uid) {
+    return "workspaceRoot is not owned by this account";
+  }
+  return undefined;
 }
 
 export function driverSocketCheck(env: EnvironmentLike, stat: (path: string) => PathReading): RuntimeCheckResult {
