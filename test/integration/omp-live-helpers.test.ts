@@ -6,7 +6,7 @@
 
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync, existsSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -22,28 +22,38 @@ import {
   OMP_PROMPT_TIMEOUT_MS,
   OMP_READY_TIMEOUT_MS,
   OMP_SCENARIO_TIMEOUT_MS,
+  OMP_VERSION_PROBE_TIMEOUT_MS,
+  closeWithEvidence,
   collectOmpGateInputs,
   compareOmpVersions,
+  createCleanups,
   ompBinary,
   ompSkipReason,
   ompVersion,
+  ompVersionOnce,
   parseOmpVersion,
   probeStrace,
   resolveExtensionPath,
   within,
+  writeEvidence,
+  type CommandRunner,
   type OmpGateInputs,
   type OmpVersion,
   type StraceProbe,
 } from "../support/omp-live.js";
 import { PROFILE_IMAGE, createOmpProfile, modelsYaml } from "../support/omp-profile.js";
+import { pollUntil, scaledMs } from "../support/timing.js";
 import {
   JsonlFramer,
   OmpSession,
   ompArgs,
   ompCommand,
+  scriptedTurnProblem,
   startOmp,
+  summariseFrames,
   toolEndOf,
   toolStartOf,
+  turnFailures,
   type OmpChild,
   type OmpExit,
   type OmpFrame,
@@ -1108,3 +1118,295 @@ void test("startOmp reports a binary that does not exist through the waits inste
   assert.equal(exit.code, null);
   assert.match(exit.error ?? "", /ENOENT/);
 });
+
+// ---- Review round 1: relative binary, one version probe, cleanups, evidence, turn proof, process group -------------------------
+
+void test("ompBinary resolves a path against the given directory once, and leaves a bare name and an absolute path alone", () => {
+  assert.equal(ompBinary({ [OMP_BIN_VARIABLE]: "./node_modules/.bin/omp" }, "/work/repo"), "/work/repo/node_modules/.bin/omp");
+  assert.equal(ompBinary({ [OMP_BIN_VARIABLE]: "../bin/omp" }, "/work/repo"), "/work/bin/omp");
+  assert.equal(ompBinary({ [OMP_BIN_VARIABLE]: "/opt/omp/bin/omp" }, "/work/repo"), "/opt/omp/bin/omp");
+  assert.equal(ompBinary({ [OMP_BIN_VARIABLE]: "omp-nightly" }, "/work/repo"), "omp-nightly");
+  assert.equal(ompBinary({ [OMP_BIN_VARIABLE]: "" }, "/work/repo"), "omp");
+  assert.equal(ompBinary({}, "/work/repo"), "omp");
+  // Without a directory the process's working directory is the base.
+  assert.equal(ompBinary({ [OMP_BIN_VARIABLE]: "./omp" }), join(process.cwd(), "omp"));
+});
+
+void test("collectOmpGateInputs runs a relative REALM_OMP_BIN from the resolved absolute path, and the gate accepts it", async (t) => {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "rlv-")));
+  t.after(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const executable = join(dir, "omp-relative");
+  writeFileSync(executable, "#!/bin/sh\necho omp/18.12.6\n");
+  chmodSync(executable, 0o755);
+  const env = { [LIVE_OMP_VARIABLE]: "1", [OMP_BIN_VARIABLE]: "./omp-relative", PATH: "/usr/bin:/bin" };
+  const inputs = await collectOmpGateInputs(env, { platform: "linux", trace: false, cwd: dir, extensionPath: executable });
+  assert.equal(inputs.bin, executable);
+  assert.deepEqual(inputs.version, { kind: "output", stdout: "omp/18.12.6\n" });
+  assert.equal(ompSkipReason(inputs), undefined);
+});
+
+void test("the version probe runs once per binary however often the inputs are collected, and is bounded by the scaled base", async (t) => {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "rlv-")));
+  t.after(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const counted = join(dir, "omp-counted");
+  writeFileSync(counted, "");
+  const other = join(dir, "omp-other");
+  writeFileSync(other, "");
+  const spawned: { file: string; timeoutMs: number }[] = [];
+  const runner: CommandRunner = (file, _args, options) => {
+    spawned.push({ file, timeoutMs: options.timeoutMs });
+    return Promise.resolve({ exitCode: 0, stdout: "omp/18.12.6\n", stderr: "" });
+  };
+  const env = { [LIVE_OMP_VARIABLE]: "1", [OMP_BIN_VARIABLE]: counted, PATH: "" };
+  const first = await collectOmpGateInputs(env, { platform: "linux", trace: false, runner });
+  const second = await collectOmpGateInputs(env, { platform: "linux", trace: true, runner });
+  const third = await ompVersionOnce(counted, { PATH: "" }, { runner });
+  assert.deepEqual(spawned, [{ file: counted, timeoutMs: OMP_VERSION_PROBE_TIMEOUT_MS }]);
+  assert.deepEqual(first.version, { kind: "output", stdout: "omp/18.12.6\n" });
+  assert.deepEqual(second.version, first.version);
+  assert.deepEqual(third, first.version);
+  assert.equal(OMP_VERSION_PROBE_TIMEOUT_MS, scaledMs(60_000));
+  // Strace is not probed without REALM_OMP_NET_TRACE=1: the trace inputs say so instead of running it.
+  assert.deepEqual(second.strace, { kind: "missing" });
+  assert.match(ompSkipReason({ ...second, extensionPath: counted }) ?? "", /REALM_OMP_NET_TRACE=1 is not set/);
+  // Another binary is its own probe.
+  await collectOmpGateInputs({ ...env, [OMP_BIN_VARIABLE]: other }, { platform: "linux", trace: false, runner });
+  assert.deepEqual(
+    spawned.map((entry) => entry.file),
+    [counted, other],
+  );
+});
+
+void test("createCleanups runs every step in reverse even when one throws, then rejects with that error, or an AggregateError for several", async () => {
+  const ran: string[] = [];
+  const cleanups = createCleanups();
+  cleanups.add(() => {
+    ran.push("first");
+  });
+  cleanups.add(() => {
+    ran.push("second");
+    throw new Error("second failed");
+  });
+  cleanups.add(async () => {
+    await Promise.resolve();
+    ran.push("third");
+  });
+  await assert.rejects(cleanups.run(), /^Error: second failed$/);
+  assert.deepEqual(ran, ["third", "second", "first"]);
+  await cleanups.run();
+  assert.deepEqual(ran, ["third", "second", "first"], "a second run does nothing");
+
+  const several = createCleanups();
+  several.add(() => {
+    ran.push("a");
+    throw new Error("a failed");
+  });
+  several.add(() => {
+    ran.push("b");
+    return Promise.reject(new Error("b failed"));
+  });
+  several.add(() => {
+    ran.push("c");
+  });
+  await assert.rejects(several.run(), (error: unknown) => error instanceof AggregateError && error.errors.length === 2);
+  assert.deepEqual(ran.slice(3), ["c", "b", "a"]);
+});
+
+void test("writeEvidence reports instead of throwing: a directory that is a regular file, an unwritable name and a producer that throws", (t) => {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "rlv-")));
+  t.after(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+  assert.deepEqual(writeEvidence(undefined, { "a.txt": () => "x" }), []);
+  assert.deepEqual(writeEvidence("", { "a.txt": () => "x" }), []);
+
+  const asFile = join(dir, "not-a-directory");
+  writeFileSync(asFile, "i am a file");
+  const blocked = writeEvidence(asFile, { "a.txt": () => "x" });
+  assert.equal(blocked.length, 1);
+  assert.match(blocked[0] ?? "", /evidence directory .* could not be created/);
+
+  const target = join(dir, "evidence", "nested");
+  const mixed = writeEvidence(target, {
+    "good.txt": () => "kept",
+    "bad.txt": () => {
+      throw new Error("cannot produce");
+    },
+    "missing/sub.txt": () => "no such directory",
+  });
+  assert.equal(readFileSync(join(target, "good.txt"), "utf8"), "kept");
+  assert.equal(mixed.length, 2);
+  assert.match(mixed.join("\n"), /evidence file bad\.txt was not written: cannot produce/);
+  assert.match(mixed.join("\n"), /evidence file missing\/sub\.txt was not written/);
+});
+
+void test("a scenario teardown with an evidence directory that is a regular file still closes Omp, disposes the profile and stops the provider", async (t) => {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "rlv-")));
+  t.after(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const asFile = join(dir, "evidence-is-a-file");
+  writeFileSync(asFile, "x");
+  const calls: string[] = [];
+  const reported: string[] = [];
+  const compose = (close: () => Promise<unknown>, evidence: Record<string, () => string>): ReturnType<typeof createCleanups> => {
+    // The same composition as Scenario.start of the spike: provider, profile, then Omp with its evidence, run in reverse.
+    const cleanups = createCleanups();
+    cleanups.add(() => {
+      calls.push("stop provider");
+      return Promise.resolve();
+    });
+    cleanups.add(() => {
+      calls.push("dispose profile");
+    });
+    cleanups.add(() =>
+      closeWithEvidence({
+        evidenceDir: asFile,
+        evidence,
+        report: (problem) => {
+          reported.push(problem);
+        },
+        close,
+      }),
+    );
+    return cleanups;
+  };
+
+  await compose(
+    () => {
+      calls.push("close omp");
+      return Promise.resolve({ code: 0, signal: null });
+    },
+    { "a.log": () => "x" },
+  ).run();
+  assert.deepEqual(calls, ["close omp", "dispose profile", "stop provider"]);
+  assert.equal(reported.length, 1);
+  assert.match(reported[0] ?? "", /could not be created/);
+
+  // An evidence producer that throws does not skip the close either; and a close that fails does not skip the rest.
+  calls.length = 0;
+  reported.length = 0;
+  await assert.rejects(
+    compose(
+      () => {
+        calls.push("close omp");
+        return Promise.reject(new Error("close failed"));
+      },
+      {
+        "a.log": () => {
+          throw new Error("unreadable");
+        },
+      },
+    ).run(),
+    /close failed/,
+  );
+  assert.deepEqual(calls, ["close omp", "dispose profile", "stop provider"]);
+});
+
+function turnEnd(stopReason: string, extra: Record<string, unknown> = {}): OmpFrame {
+  return { type: "turn_end", message: { role: "assistant", content: [], stopReason, ...extra }, toolResults: [] };
+}
+
+void test("turnFailures names a turn that stopped with error or aborted, and nothing for a turn that stopped normally", () => {
+  assert.deepEqual(turnFailures([{ type: "agent_start" }, turnEnd("stop"), turnEnd("toolUse"), { type: "agent_end", isTerminal: true }]), []);
+  assert.deepEqual(turnFailures([turnEnd("error", { errorMessage: "provider returned 500" })]), ["a turn ended with stopReason error: provider returned 500"]);
+  assert.deepEqual(turnFailures([turnEnd("aborted")]), ["a turn ended with stopReason aborted"]);
+  assert.deepEqual(turnFailures([{ type: "turn_end" }, { type: "turn_end", message: "text" }]), []);
+});
+
+void test("scriptedTurnProblem proves a turn only when the provider saw the prompt, a turn stopped normally and none failed", () => {
+  const seen = [{ userText: "hello" }];
+  const answered: OmpFrame[] = [{ type: "agent_start" }, turnEnd("stop"), { type: "agent_end", isTerminal: true }];
+  assert.equal(scriptedTurnProblem({ prompt: "hello", requests: seen, frames: answered }), undefined);
+
+  const failed = scriptedTurnProblem({ prompt: "hello", requests: seen, frames: [turnEnd("error", { errorMessage: "boom" })] });
+  assert.match(failed ?? "", /stopReason error: boom/);
+  assert.match(failed ?? "", /no turn ended with stopReason stop/);
+  assert.match(failed ?? "", /1 frames; last 1:/);
+
+  const unseen = scriptedTurnProblem({ prompt: "hello", requests: [{ userText: "something else" }], frames: answered });
+  assert.match(unseen ?? "", /received no request for the prompt "hello"/);
+  assert.match(scriptedTurnProblem({ prompt: "hello", requests: [], frames: [] }) ?? "", /received no request.*no turn ended with stopReason stop.*0 frames; last 0: \(none\)/);
+});
+
+void test("summariseFrames keeps the last frames, clipped", () => {
+  const frames: OmpFrame[] = Array.from({ length: 10 }, (_unused, index) => ({ type: "n", index, pad: "x".repeat(500) }));
+  const summary = summariseFrames(frames, 2);
+  assert.match(summary, /^10 frames; last 2: /);
+  assert.match(summary, /"index":8/);
+  assert.match(summary, /"index":9/);
+  assert.equal(summary.includes('"index":7'), false);
+  assert.ok(summary.includes("..."));
+});
+
+// A process that ignores end of input and SIGTERM, with a child that does the same and holds the same output pipe.
+const STUBBORN_SOURCE = `
+const { spawn } = require("node:child_process");
+const GRANDCHILD = 'process.on("SIGTERM", () => {}); process.stdout.write(JSON.stringify({ type: "grandchild_up", pid: process.pid }) + "\\\\n"); setInterval(() => {}, 1000);';
+process.on("SIGTERM", () => {});
+process.stdin.on("data", () => {});
+process.stdin.on("end", () => {});
+const grandchild = spawn(process.execPath, ["-e", GRANDCHILD], { stdio: ["ignore", "inherit", "inherit"] });
+process.stdout.write(JSON.stringify({ type: "ready", pid: process.pid, grandchild: grandchild.pid }) + "\\n");
+setInterval(() => {}, 1000);
+`;
+
+// Whether the process is running. A zombie that nothing has reaped has exited, so it does not count.
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ESRCH") {
+      return false;
+    }
+    throw error;
+  }
+  try {
+    return !/^\d+ \(.*\) Z /.test(readFileSync(`/proc/${String(pid)}/stat`, "utf8"));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return false;
+    }
+    throw error;
+  }
+}
+
+void test(
+  "close ends a command that ignores end of input and SIGTERM, and the child it started, by signalling the process group",
+  { skip: existsSync("/proc/self/stat") ? false : "needs /proc to tell a running process from an exited one" },
+  async (t) => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "rlv-")));
+    t.after(() => {
+      rmSync(dir, { recursive: true, force: true });
+    });
+    const script = join(dir, "stubborn.cjs");
+    writeFileSync(script, STUBBORN_SOURCE);
+    const session = startOmp({ bin: "omp-under-test", env: {}, cwd: dir, extensionPath: "/ext/extension.js", wrap: [process.execPath, script, "--"] });
+    const pids: number[] = [];
+    t.after(async () => {
+      // Safety net for a failing test: nothing may outlive it.
+      await session.close({ graceMs: 100, termMs: 100, killMs: scaledMs(2000) }).catch(() => undefined);
+      for (const pid of pids) {
+        if (isAlive(pid)) {
+          process.kill(pid, "SIGKILL");
+        }
+      }
+    });
+    await session.ready(scaledMs(BOUND_MS));
+    await session.waitFor((s) => s.frames.some((frame) => frame["type"] === "grandchild_up"), scaledMs(BOUND_MS), "the grandchild to start");
+    const leader = session.frames.find((frame) => frame["type"] === "ready")?.["pid"];
+    const grandchild = session.frames.find((frame) => frame["type"] === "grandchild_up")?.["pid"];
+    assert.equal(typeof leader, "number");
+    assert.equal(typeof grandchild, "number");
+    pids.push(leader as number, grandchild as number);
+    assert.ok(isAlive(leader as number) && isAlive(grandchild as number));
+
+    const exit = await within(session.close({ graceMs: scaledMs(100), termMs: scaledMs(100), killMs: scaledMs(5000) }), scaledMs(BOUND_MS), "close");
+    assert.equal(exit.signal, "SIGKILL");
+    await pollUntil(() => !isAlive(leader as number) && !isAlive(grandchild as number), "the command and its child to be gone", { timeoutMs: BOUND_MS });
+  },
+);

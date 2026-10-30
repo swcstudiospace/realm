@@ -24,9 +24,10 @@
 //     prompt(text, ms?): Promise<PromptOutcome>   sends a prompt and resolves on that prompt's terminal `agent_end` or its
 //                                                 `prompt_result` (default OMP_PROMPT_TIMEOUT_MS); a slash command ends the same way
 //     send(command): void                         one JSON command line on stdin
-//     signal(signal): boolean                     signals the Omp process only
+//     signal(signal): boolean                     signals the command's process group (Omp, and under `wrap` the wrapper too)
 //     close(options?): Promise<OmpExit>           stdin end, wait, SIGTERM, wait, SIGKILL, wait; every wait is bounded
-//   Pure pieces, exported so they are testable without a process: JsonlFramer, ompArgs, ompCommand, toolStartOf, toolEndOf.
+//   Pure pieces, exported so they are testable without a process: JsonlFramer, ompArgs, ompCommand, toolStartOf, toolEndOf, killGroup,
+//   turnFailures, summariseFrames, scriptedTurnProblem (is a scripted turn proven: a provider request for it, a turn ended with stop, no failed turn).
 //
 // Dialogs: Omp asks the extension host with `extension_ui_request` frames. confirm is answered `confirmed: true`; select, input and
 // editor are answered `cancelled: true`. notify and setStatus need no answer.
@@ -198,10 +199,29 @@ export function ompCommand(options: Pick<StartOmpOptions, "bin" | "extensionPath
   return { command: wrapper, args: [...wrapArgs, options.bin, ...ompArgs(options.extensionPath)] };
 }
 
-// Starts Omp. A process that cannot start (ENOENT) is reported through `exited` and rejects every wait.
+// Signals the whole process group the child leads, so a wrapper (strace) and everything it started receive the signal, not the
+// wrapper alone. A group that no longer exists (ESRCH) falls back to the pid, which then also reports whether the child was alive.
+export function killGroup(child: { readonly pid?: number | undefined; kill(signal: NodeJS.Signals): boolean }, signal: NodeJS.Signals): boolean {
+  const { pid } = child;
+  if (pid !== undefined) {
+    try {
+      process.kill(-pid, signal);
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
+        throw error;
+      }
+    }
+  }
+  return child.kill(signal);
+}
+
+// Starts Omp. A process that cannot start (ENOENT) is reported through `exited` and rejects every wait. The command leads its own
+// process group (`detached`), and every signal the session sends goes to that group: under `wrap` the direct child is strace, not
+// Omp, and a SIGKILL of the wrapper alone leaves Omp running with its pipes open. stdio stays piped and the child is not unref'd.
 export function startOmp(options: StartOmpOptions): OmpSession {
   const { command, args } = ompCommand(options);
-  const child = spawn(command, args, { cwd: options.cwd, env: { ...options.env }, stdio: ["pipe", "pipe", "pipe"] });
+  const child = spawn(command, args, { cwd: options.cwd, env: { ...options.env }, stdio: ["pipe", "pipe", "pipe"], detached: true });
   const exited = new Promise<OmpExit>((resolve) => {
     child.once("error", (error) => {
       resolve({ code: null, signal: null, error: error.message });
@@ -210,7 +230,60 @@ export function startOmp(options: StartOmpOptions): OmpSession {
       resolve({ code, signal });
     });
   });
-  return new OmpSession(child, exited);
+  return new OmpSession(
+    { stdin: child.stdin, stdout: child.stdout, stderr: child.stderr, kill: (signal) => killGroup(child, signal) },
+    exited,
+  );
+}
+
+// ---- Turn checks -----------------------------------------------------------------------------------------------------------
+
+// The last `limit` frames as clipped JSON, for a failure message.
+export function summariseFrames(frames: readonly OmpFrame[], limit = 6): string {
+  const tail = frames.slice(-limit).map((frame) => clip(JSON.stringify(frame), FRAME_CLIP));
+  return `${String(frames.length)} frames; last ${String(tail.length)}: ${tail.length === 0 ? "(none)" : tail.join(" | ")}`;
+}
+
+// What went wrong in the turns of these frames: a `turn_end` whose assistant message stopped with `error` or `aborted` (a model
+// or provider failure), with its error message when it has one. Empty when no turn failed.
+export function turnFailures(frames: readonly OmpFrame[]): string[] {
+  const failures: string[] = [];
+  for (const frame of frames) {
+    if (frame["type"] !== "turn_end") {
+      continue;
+    }
+    const message = frame["message"];
+    if (!isRecord(message)) {
+      continue;
+    }
+    const reason = message["stopReason"];
+    if (reason === "error" || reason === "aborted") {
+      const detail = typeof message["errorMessage"] === "string" ? `: ${clip(message["errorMessage"], FRAME_CLIP)}` : "";
+      failures.push(`a turn ended with stopReason ${reason}${detail}`);
+    }
+  }
+  return failures;
+}
+
+// The requests the scripted provider received (those in `requests`) and the frames Omp printed for ONE scripted turn, judged
+// together. Undefined when the turn is proven: the provider recorded a request whose last user text contains `prompt`, Omp ended
+// at least one turn with stopReason `stop`, and no turn failed. Otherwise the problem, with the frames summary.
+export function scriptedTurnProblem(input: {
+  readonly prompt: string;
+  readonly requests: readonly { readonly userText: string }[];
+  readonly frames: readonly OmpFrame[];
+}): string | undefined {
+  const problems = turnFailures(input.frames);
+  if (!input.requests.some((request) => request.userText.includes(input.prompt))) {
+    problems.push(`the scripted provider received no request for the prompt ${JSON.stringify(input.prompt)}`);
+  }
+  const stopped = input.frames.some(
+    (frame) => frame["type"] === "turn_end" && isRecord(frame["message"]) && frame["message"]["stopReason"] === "stop",
+  );
+  if (!stopped) {
+    problems.push("no turn ended with stopReason stop");
+  }
+  return problems.length === 0 ? undefined : `${problems.join("; ")}; ${summariseFrames(input.frames)}`;
 }
 
 // ---- Session ---------------------------------------------------------------------------------------------------------------
@@ -368,7 +441,8 @@ export class OmpSession {
     this.#child.stdin.write(`${JSON.stringify(command)}\n`);
   }
 
-  // Signals the Omp process only.
+  // Signals the command's whole process group: Omp, and under `wrap` the wrapper and everything either started. The test's own
+  // process is never in that group.
   signal(signal: NodeJS.Signals): boolean {
     return this.#child.kill(signal);
   }

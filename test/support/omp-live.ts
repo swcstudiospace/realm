@@ -15,7 +15,7 @@
 //   OMP_READY_TIMEOUT_MS (180 s), OMP_PROMPT_TIMEOUT_MS (60 s), OMP_SCENARIO_TIMEOUT_MS (300 s)   the shared bounds (D-1203)
 //   EXTENSION_PATH: string                                       the built extension, dist/src/omp/extension.js
 //   resolveExtensionPath(moduleUrl: string): string              how EXTENSION_PATH is derived from a module URL
-//   ompBinary(env): string                                       REALM_OMP_BIN, else "omp"
+//   ompBinary(env, cwd?): string                                 REALM_OMP_BIN (a path is resolved to absolute once, against cwd), else "omp"
 //   ompVersion(bin, env): Promise<OmpVersionProbe>               runs `<bin> --version`; never rejects
 //   parseOmpVersion(stdout): OmpVersion | undefined              "omp/18.12.6" -> { major: 18, minor: 12, patch: 6, text: "18.12.6" }
 //   compareOmpVersions(a, b): number                             negative, zero or positive
@@ -24,12 +24,17 @@
 //   collectOmpGateInputs(env, options): Promise<OmpGateInputs>   the host facts for ompSkipReason (probes only after the opt-in)
 //   isRecord(value): value is Record<string, unknown>           the shared object guard of the harness files
 //   within(promise, ms, label): Promise<T>                       failure bound: rejects after ms, clears its timer as soon as either side settles
+//   ompVersionOnce(bin, env, options?): Promise<OmpVersionProbe> ompVersion once per binary path for the process (the gate never repeats a probe)
+//   OMP_VERSION_PROBE_TIMEOUT_MS                                 the version probe's bound: 60 s times REALM_TEST_TIMEOUT_SCALE
+//   createCleanups(), writeEvidence(dir, files), closeWithEvidence(parts)   a teardown that runs every step, and evidence saving that reports instead of throwing
 
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { EnvironmentLike } from "../../src/session/paths.js";
 import { describeResult, onPath, runCommand } from "./production-live.js";
+import { scaledMs } from "./timing.js";
 
 // ---- Gate variables and bounds ---------------------------------------------------------------------------------------------
 
@@ -51,6 +56,9 @@ export const OMP_SCENARIO_TIMEOUT_MS = 300_000;
 
 // `omp --version` and `strace ... true` are local and fast; the bound keeps a hung binary from hanging the run.
 const PROBE_TIMEOUT_MS = 15_000;
+// The `omp --version` probe is Omp starting up (25 s at a load average of 100), so its bound is a base of 60 s stretched by
+// REALM_TEST_TIMEOUT_SCALE like every other fixed bound of the tests (test/support/timing.ts). A failure bound only.
+export const OMP_VERSION_PROBE_TIMEOUT_MS = scaledMs(60_000);
 
 // ---- Extension path --------------------------------------------------------------------------------------------------------
 
@@ -124,16 +132,45 @@ const MIN_VERSION: OmpVersion = (() => {
   return parsed;
 })();
 
-// The Omp executable the harness uses: REALM_OMP_BIN when set and non-empty, otherwise `omp`.
-export function ompBinary(env: EnvironmentLike): string {
+// The Omp executable the harness uses: REALM_OMP_BIN when set and non-empty, otherwise `omp`. A value that contains a slash is a
+// path and is resolved ONCE to an absolute path against `cwd` (default: the process's working directory), because Omp is probed
+// from one directory and run from another; a bare name stays a name and is looked up on PATH.
+export function ompBinary(env: EnvironmentLike, cwd: string = process.cwd()): string {
   const value = env[OMP_BIN_VARIABLE];
-  return value === undefined || value === "" ? DEFAULT_OMP_BINARY : value;
+  if (value === undefined || value === "") {
+    return DEFAULT_OMP_BINARY;
+  }
+  return value.includes("/") ? resolve(cwd, value) : value;
+}
+
+// The command runner the probes use: runCommand, or a test's stand-in.
+export type CommandRunner = typeof runCommand;
+
+export interface VersionProbeOptions {
+  // The bound of the probe. Defaults to OMP_VERSION_PROBE_TIMEOUT_MS.
+  readonly timeoutMs?: number;
+  readonly runner?: CommandRunner;
 }
 
 // Runs `<bin> --version`. Asynchronous (D-1203) and never rejects.
-export async function ompVersion(bin: string, env: Readonly<Record<string, string>>): Promise<OmpVersionProbe> {
-  const result = await runCommand(bin, ["--version"], { env, timeoutMs: PROBE_TIMEOUT_MS, cwd: tmpdir() });
+export async function ompVersion(bin: string, env: Readonly<Record<string, string>>, options: VersionProbeOptions = {}): Promise<OmpVersionProbe> {
+  const run = options.runner ?? runCommand;
+  const result = await run(bin, ["--version"], { env, timeoutMs: options.timeoutMs ?? OMP_VERSION_PROBE_TIMEOUT_MS, cwd: tmpdir() });
   return result.exitCode === 0 ? { kind: "output", stdout: result.stdout } : { kind: "unavailable" };
+}
+
+const versionProbes = new Map<string, Promise<OmpVersionProbe>>();
+
+// ompVersion, once per binary path for the life of the process: every caller gets the same probe. A probe took 25 s on a loaded
+// host, so the gate must never repeat it. Keyed by the (resolved) binary path.
+export function ompVersionOnce(bin: string, env: Readonly<Record<string, string>>, options: VersionProbeOptions = {}): Promise<OmpVersionProbe> {
+  const known = versionProbes.get(bin);
+  if (known !== undefined) {
+    return known;
+  }
+  const probe = ompVersion(bin, env, options);
+  versionProbes.set(bin, probe);
+  return probe;
 }
 
 // ---- strace ----------------------------------------------------------------------------------------------------------------
@@ -171,6 +208,9 @@ export interface OmpGateInputs {
   readonly version: OmpVersionProbe;
   // The built extension beside the compiled tests (EXTENSION_PATH).
   readonly extensionPath: string;
+  // The Omp executable, already resolved (ompBinary): collectOmpGateInputs sets it so a relative REALM_OMP_BIN is resolved once.
+  // Absent in a hand-built input, where the gate resolves REALM_OMP_BIN itself.
+  readonly bin?: string;
   // Present only when the caller asks about the network trace; absent for every other test.
   readonly strace?: StraceProbe;
 }
@@ -187,7 +227,7 @@ export function ompSkipReason(inputs: OmpGateInputs): string | undefined {
   if (inputs.platform !== "linux") {
     return `the live Omp suite is verified on Linux only; this host is ${inputs.platform}`;
   }
-  const bin = ompBinary(env);
+  const bin = inputs.bin ?? ompBinary(env);
   const present = bin.includes("/") ? inputs.exists(bin) : inputs.onPath(bin);
   if (!present) {
     return `no Omp executable ${bin}; install Omp or point ${OMP_BIN_VARIABLE} at it`;
@@ -226,14 +266,21 @@ export function ompSkipReason(inputs: OmpGateInputs): string | undefined {
 export interface CollectOptions {
   // Node's process.platform.
   readonly platform: string;
-  // True when the caller asks about the network trace, so strace is probed.
+  // True when the caller asks about the network trace: strace is probed, but only when REALM_OMP_NET_TRACE=1 is set.
   readonly trace: boolean;
   // Defaults to EXTENSION_PATH.
   readonly extensionPath?: string;
+  // The directory a relative REALM_OMP_BIN is resolved against. Defaults to the process's working directory.
+  readonly cwd?: string;
+  // The bound of the `--version` probe. Defaults to OMP_VERSION_PROBE_TIMEOUT_MS.
+  readonly versionTimeoutMs?: number;
+  // The command runner of the `--version` probe; a test injects one to count spawns.
+  readonly runner?: CommandRunner;
 }
 
 // Reads the host facts ompSkipReason decides from. Nothing is started until the opt-in is set on Linux, so a plain `npm test`
-// never runs `omp --version` or strace.
+// never runs `omp --version` or strace. The `--version` probe runs once per binary for the whole process (ompVersionOnce), however
+// many times this is called, and strace is probed only when the caller asks for the trace AND REALM_OMP_NET_TRACE=1 is set.
 export async function collectOmpGateInputs(env: EnvironmentLike, options: CollectOptions): Promise<OmpGateInputs> {
   const hostPath = (name: string): boolean => onPath(name, env["PATH"]);
   const probeEnv: Record<string, string> = { PATH: env["PATH"] ?? "" };
@@ -241,10 +288,16 @@ export async function collectOmpGateInputs(env: EnvironmentLike, options: Collec
   if (home !== undefined) {
     probeEnv["HOME"] = home;
   }
-  const bin = ompBinary(env);
+  const bin = ompBinary(env, options.cwd);
   const optedIn = env[LIVE_OMP_VARIABLE] === "1" && options.platform === "linux";
   const present = bin.includes("/") ? existsSync(bin) : hostPath(bin);
-  const version: OmpVersionProbe = optedIn && present ? await ompVersion(bin, probeEnv) : { kind: "unavailable" };
+  const version: OmpVersionProbe =
+    optedIn && present
+      ? await ompVersionOnce(bin, probeEnv, {
+          timeoutMs: options.versionTimeoutMs ?? OMP_VERSION_PROBE_TIMEOUT_MS,
+          ...(options.runner === undefined ? {} : { runner: options.runner }),
+        })
+      : { kind: "unavailable" };
   const inputs = {
     env,
     platform: options.platform,
@@ -252,10 +305,98 @@ export async function collectOmpGateInputs(env: EnvironmentLike, options: Collec
     exists: existsSync,
     version,
     extensionPath: options.extensionPath ?? EXTENSION_PATH,
+    bin,
   };
   if (!options.trace) {
     return inputs;
   }
-  const strace: StraceProbe = optedIn ? await probeStrace(probeEnv) : { kind: "missing" };
+  const strace: StraceProbe = optedIn && env[OMP_NET_TRACE_VARIABLE] === "1" ? await probeStrace(probeEnv) : { kind: "missing" };
   return { ...inputs, strace };
+}
+
+// ---- Teardown --------------------------------------------------------------------------------------------------------------
+
+type CleanupStep = () => unknown;
+
+export interface Cleanups {
+  // Registers a step. Steps run in reverse order of registration, like node:test's `after` hooks.
+  add(step: CleanupStep): void;
+  // Runs EVERY step, even when an earlier one failed, then rejects: with the one error when a single step failed, with an
+  // AggregateError when several did. Steps run once: a second call does nothing.
+  run(): Promise<void>;
+}
+
+// A teardown that cannot be cut short: a step that throws never stops the steps after it, so Omp, the provider's listener and the
+// profile directory are all released whatever failed first.
+export function createCleanups(): Cleanups {
+  let steps: CleanupStep[] = [];
+  return {
+    add(step) {
+      steps.push(step);
+    },
+    async run() {
+      const pending = steps.reverse();
+      steps = [];
+      const failures: unknown[] = [];
+      for (const step of pending) {
+        try {
+          await step();
+        } catch (error) {
+          failures.push(error);
+        }
+      }
+      if (failures.length === 1) {
+        throw failures[0];
+      }
+      if (failures.length > 1) {
+        throw new AggregateError(failures, `${String(failures.length)} cleanup steps failed`);
+      }
+    },
+  };
+}
+
+// The files of one scenario's evidence, each produced on demand so that a failure to produce one is reported, not thrown.
+export type EvidenceFiles = Readonly<Record<string, () => string>>;
+
+// Writes the evidence files into `dir` (created when absent). Best effort and never throws: it returns what went wrong, one line
+// per problem, so the caller can report it. An undefined or empty `dir` writes nothing. A `dir` that is a regular file, or cannot
+// be created, is a problem; a file that cannot be produced or written is a problem, and the others are still written.
+export function writeEvidence(dir: string | undefined, files: EvidenceFiles): string[] {
+  if (dir === undefined || dir === "") {
+    return [];
+  }
+  try {
+    mkdirSync(dir, { recursive: true });
+  } catch (error) {
+    return [`evidence directory ${dir} could not be created: ${error instanceof Error ? error.message : String(error)}`];
+  }
+  const problems: string[] = [];
+  for (const [name, produce] of Object.entries(files)) {
+    try {
+      writeFileSync(join(dir, name), produce());
+    } catch (error) {
+      problems.push(`evidence file ${name} was not written: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  return problems;
+}
+
+export interface CloseWithEvidence {
+  readonly evidenceDir: string | undefined;
+  readonly evidence: EvidenceFiles;
+  // Receives each evidence problem (for example t.diagnostic).
+  readonly report: (problem: string) => void;
+  // Closes Omp. It always runs, after the evidence, whatever happened to the evidence.
+  readonly close: () => Promise<unknown>;
+}
+
+// The teardown step of one scenario's Omp: save the evidence (reported, never thrown), then close Omp in a `finally`.
+export async function closeWithEvidence(parts: CloseWithEvidence): Promise<void> {
+  try {
+    for (const problem of writeEvidence(parts.evidenceDir, parts.evidence)) {
+      parts.report(problem);
+    }
+  } finally {
+    await parts.close();
+  }
 }

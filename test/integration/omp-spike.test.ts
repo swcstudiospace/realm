@@ -33,21 +33,22 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test, { type TestContext } from "node:test";
 import {
+  closeWithEvidence,
   collectOmpGateInputs,
+  createCleanups,
   isRecord,
-  LIVE_OMP_VARIABLE,
   OMP_PROMPT_TIMEOUT_MS,
   OMP_READY_TIMEOUT_MS,
   OMP_SCENARIO_TIMEOUT_MS,
   ompBinary,
   ompSkipReason,
   parseOmpVersion,
+  writeEvidence,
   within,
-  type OmpGateInputs,
 } from "../support/omp-live.js";
 import { createOmpProfile, type OmpProfile } from "../support/omp-profile.js";
-import { startOmp, type OmpFrame, type OmpSession, type PromptOutcome, type ToolEnd } from "../support/omp-rpc.js";
-import { onPath, runCommand } from "../support/production-live.js";
+import { scriptedTurnProblem, startOmp, type OmpFrame, type OmpSession, type PromptOutcome, type ToolEnd } from "../support/omp-rpc.js";
+import { runCommand } from "../support/production-live.js";
 import { externalConnects, OMP_DISCOVERY_PORTS, parseConnects, traceArgv, classify, formatOffenders, type NetAllow } from "../support/net-trace.js";
 import { ScriptedProvider, type ProviderTurn, type RecordedRequest, type TurnPlan } from "../support/scripted-provider.js";
 import { SPIKE_BIG_BYTES, SPIKE_CONFIG_VARIABLE, type SpikeConfig, type SpikeLogLine } from "../support/omp-spike-extension.js";
@@ -69,24 +70,15 @@ const RUNTIME_START_TIMEOUT_MS = OMP_READY_TIMEOUT_MS;
 const SLOW_SCENARIO_TIMEOUT_MS = 2 * OMP_SCENARIO_TIMEOUT_MS;
 
 const platform = process.platform;
-// The version probe of collectOmpGateInputs is bounded at 15 s, which a loaded host overruns (`omp --version` took 25 s at a load
-// average of 100); this file reads the version itself with a bound that is only a failure bound.
-const VERSION_PROBE_TIMEOUT_MS = 180_000;
+// The one Omp executable of this file: REALM_OMP_BIN resolved to an absolute path once (against the working directory at gate time),
+// or the bare name `omp`. The version probe, every spawn and the strace wrap use it, so they all see the same file.
+const OMP_BIN = ompBinary(process.env);
 
-async function gateInputs(trace: boolean): Promise<OmpGateInputs> {
-  const inputs = await collectOmpGateInputs(process.env, { platform, trace });
-  const bin = ompBinary(process.env);
-  const optedIn = process.env[LIVE_OMP_VARIABLE] === "1" && platform === "linux";
-  if (!optedIn || !(bin.includes("/") ? existsSync(bin) : onPath(bin, process.env["PATH"]))) {
-    return inputs;
-  }
-  const probe = await runCommand(bin, ["--version"], { env: { PATH: process.env["PATH"] ?? "", HOME: process.env["HOME"] ?? "" }, timeoutMs: VERSION_PROBE_TIMEOUT_MS, cwd: tmpdir() });
-  return { ...inputs, version: probe.exitCode === 0 ? { kind: "output", stdout: probe.stdout } : { kind: "unavailable" } };
-}
-
-const baseInputs = await gateInputs(false);
+// `omp --version` runs ONCE for the process (collectOmpGateInputs shares one probe per binary, bounded by a base of 60 s times
+// REALM_TEST_TIMEOUT_SCALE); the second call below only adds the strace facts, and probes strace only when REALM_OMP_NET_TRACE=1.
+const baseInputs = await collectOmpGateInputs(process.env, { platform, trace: false });
 const baseGate = ompSkipReason(baseInputs);
-const traceGate = baseGate ?? ompSkipReason(await gateInputs(true));
+const traceGate = baseGate ?? ompSkipReason(await collectOmpGateInputs(process.env, { platform, trace: true }));
 const ompVersionText = baseInputs.version.kind === "output" ? (parseOmpVersion(baseInputs.version.stdout)?.text ?? "unknown") : "unknown";
 
 async function unshareGate(): Promise<string | undefined> {
@@ -198,24 +190,21 @@ class Scenario {
     readonly logPath: string,
   ) {}
 
-  // Starts the provider, the profile and Omp, waits for ready, and registers one teardown on `t`: it runs the cleanups in reverse,
-  // so Omp is closed (after the evidence is copied) before its files and the provider go.
+  // Starts the provider, the profile and Omp, waits for ready, and registers one teardown on `t`. The teardown runs EVERY step in
+  // reverse order, whatever an earlier step threw: Omp is closed (after its evidence is saved, which is reported and never
+  // thrown) before its files go and the provider's listener closes.
   static async start(t: TestContext, name: string, options: ScenarioOptions = {}): Promise<Scenario> {
     t.diagnostic(`omp/${ompVersionText}`);
-    const cleanups: (() => Promise<void> | void)[] = [];
-    t.after(async () => {
-      for (const cleanup of cleanups.reverse()) {
-        await cleanup();
-      }
-    });
+    const cleanups = createCleanups();
+    t.after(() => cleanups.run());
     const provider = new ScriptedProvider();
     const script = new Script();
     provider.onTurn((turn) => script.turn(turn));
     const { port } = await provider.start();
-    cleanups.push(() => provider.stop());
+    cleanups.add(() => provider.stop());
     const pathValue = process.env["PATH"];
     const profile = createOmpProfile({ providerPort: port, ...(pathValue === undefined ? {} : { path: pathValue }) });
-    cleanups.push(() => {
+    cleanups.add(() => {
       profile.dispose();
     });
     for (const [file, content] of Object.entries(options.seed ?? {})) {
@@ -231,17 +220,23 @@ class Scenario {
     const config: SpikeConfig = { log: logPath, ...resolveOf(options.config ?? {}, profile) };
     const wrap = options.wrap === undefined ? undefined : resolveOf(options.wrap, profile);
     const omp = startOmp({
-      bin: ompBinary(process.env),
+      bin: OMP_BIN,
       env: { ...profile.env, TMPDIR: tmpDirOf(profile), [SPIKE_CONFIG_VARIABLE]: JSON.stringify(config) },
       cwd: profile.workspace,
       extensionPath: SPIKE_EXTENSION_PATH,
       ...(wrap === undefined ? {} : { wrap }),
     });
     const scenario = new Scenario(name, provider, script, profile, omp, logPath);
-    cleanups.push(async () => {
-      scenario.#saveEvidence();
-      await omp.close(CLOSE_OPTIONS);
-    });
+    cleanups.add(() =>
+      closeWithEvidence({
+        evidenceDir: process.env[EVIDENCE_DIR_VARIABLE],
+        evidence: scenario.#evidenceFiles(),
+        report: (problem) => {
+          t.diagnostic(problem);
+        },
+        close: () => omp.close(CLOSE_OPTIONS),
+      }),
+    );
     await omp.ready(OMP_READY_TIMEOUT_MS);
     // `ready` can arrive before the extension's session_start handler (and its setActiveTools) has run: wait for them.
     const removes = config.deactivate !== undefined || config.activeOnly !== undefined;
@@ -346,15 +341,13 @@ class Scenario {
     return answer;
   }
 
-  #saveEvidence(): void {
-    const dir = process.env[EVIDENCE_DIR_VARIABLE];
-    if (dir === undefined || dir === "") {
-      return;
-    }
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, `${this.name}.log.jsonl`), readFileSync(this.logPath, "utf8"));
-    writeFileSync(join(dir, `${this.name}.frames.jsonl`), this.omp.frames.map((frame) => JSON.stringify(frame)).join("\n"));
-    writeFileSync(join(dir, `${this.name}.requests.json`), JSON.stringify(this.requests, null, 1));
+  // The evidence files of this scenario, produced on demand (a failure to read one is reported by writeEvidence, not thrown).
+  #evidenceFiles(): Record<string, () => string> {
+    return {
+      [`${this.name}.log.jsonl`]: () => readFileSync(this.logPath, "utf8"),
+      [`${this.name}.frames.jsonl`]: () => this.omp.frames.map((frame) => JSON.stringify(frame)).join("\n"),
+      [`${this.name}.requests.json`]: () => JSON.stringify(this.requests, null, 1),
+    };
   }
 }
 
@@ -916,48 +909,59 @@ function summarise(trace: string, allow: NetAllow): TraceSummary {
   };
 }
 
-// One Omp start under strace over `profile`, one scripted turn (a text answer), a clean close; returns the trace.
-async function tracedRun(profile: OmpProfile, label: string, extraEnv: Readonly<Record<string, string>>): Promise<string> {
+// One Omp start under strace over `profile`, one scripted turn (a text answer), a clean close; returns the trace. The trace counts
+// as evidence only when the turn is proven: the provider received the prompt and answered it, and Omp ended the turn without an
+// error. A turn that failed (a model error also has no tool results) would otherwise leave startup traffic to satisfy the
+// assertions that follow.
+async function tracedRun(
+  provider: ScriptedProvider,
+  report: (problem: string) => void,
+  profile: OmpProfile,
+  label: string,
+  extraEnv: Readonly<Record<string, string>>,
+): Promise<string> {
   const traceFile = join(profile.root, `${label}.strace`);
   const logPath = join(profile.root, `${label}.jsonl`);
   writeFileSync(logPath, "");
   mkdirSync(tmpDirOf(profile), { recursive: true });
   const omp = startOmp({
-    bin: ompBinary(process.env),
+    bin: OMP_BIN,
     env: { ...profile.env, TMPDIR: tmpDirOf(profile), ...extraEnv, [SPIKE_CONFIG_VARIABLE]: JSON.stringify({ log: logPath } satisfies SpikeConfig) },
     cwd: profile.workspace,
     extensionPath: SPIKE_EXTENSION_PATH,
     wrap: traceArgv(traceFile),
   });
+  const requestsBefore = provider.requests.length;
+  let frames: readonly OmpFrame[];
   try {
     await omp.ready(OMP_READY_TIMEOUT_MS);
     // A cold profile's first prompt competes with the startup network traffic that S11 measures, and the host may be loaded: it gets
     // the startup bound, which is a failure bound only.
     const outcome = await omp.prompt("hello", OMP_READY_TIMEOUT_MS);
     assert.equal(outcome.toolEnds.length, 0);
+    frames = outcome.frames;
   } finally {
     await omp.close(CLOSE_OPTIONS);
   }
+  const problem = scriptedTurnProblem({ prompt: "hello", requests: provider.requests.slice(requestsBefore), frames });
+  assert.equal(problem, undefined, `the ${label} run's scripted turn is not proven, so its trace is not evidence: ${problem ?? ""}`);
   const trace = readFileSync(traceFile, "utf8");
-  const dir = process.env[EVIDENCE_DIR_VARIABLE];
-  if (dir !== undefined && dir !== "") {
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, `s11-${label}.strace`), trace);
+  for (const evidenceProblem of writeEvidence(process.env[EVIDENCE_DIR_VARIABLE], { [`s11-${label}.strace`]: () => trace })) {
+    report(evidenceProblem);
   }
   return trace;
 }
 
 void test("S11: a cold Omp profile connects outside loopback at startup and a warm one does not; a refusing loopback proxy gives a cold profile a clean trace", { skip: traceGate ?? false, timeout: NETWORK_SCENARIO_TIMEOUT_MS }, async (t) => {
   t.diagnostic(`omp/${ompVersionText}`);
-  const cleanups: (() => Promise<void> | void)[] = [];
-  t.after(async () => {
-    for (const cleanup of cleanups.reverse()) {
-      await cleanup();
-    }
-  });
+  const cleanups = createCleanups();
+  t.after(() => cleanups.run());
+  const report = (problem: string): void => {
+    t.diagnostic(problem);
+  };
   const provider = new ScriptedProvider();
   const { port } = await provider.start();
-  cleanups.push(() => provider.stop());
+  cleanups.add(() => provider.stop());
   const pathValue = process.env["PATH"];
   const pathOption = pathValue === undefined ? {} : { path: pathValue };
   // Loopback peers a run may talk to: the stub and Omp's three local-model discovery probes (OMP_DISCOVERY_PORTS).
@@ -965,15 +969,15 @@ void test("S11: a cold Omp profile connects outside loopback at startup and a wa
 
   // Lever 3 first, because it needs no change to the profile: the same directory, used twice. The first run is the cold one.
   const profile = createOmpProfile({ providerPort: port, ...pathOption });
-  cleanups.push(() => {
+  cleanups.add(() => {
     profile.dispose();
   });
-  const cold = summarise(await tracedRun(profile, "cold", {}), allow);
+  const cold = summarise(await tracedRun(provider, report, profile, "cold", {}), allow);
   t.diagnostic(`cold: ${String(cold.external)} external connects, ${String(cold.dns)} DNS connects, loopback ports ${cold.loopbackPorts.join(",")}`);
   assert.ok(cold.external > 0, "a cold profile connects outside loopback at startup");
   assert.ok(cold.offenders.length > 0);
 
-  const warm = summarise(await tracedRun(profile, "warm", {}), allow);
+  const warm = summarise(await tracedRun(provider, report, profile, "warm", {}), allow);
   t.diagnostic(`warm: ${String(warm.external)} external connects, ${String(warm.dns)} DNS connects, loopback ports ${warm.loopbackPorts.join(",")}`);
   assert.equal(warm.offenders.length, 0, formatOffenders(warm.offenders));
   assert.deepEqual(warm.loopbackPorts.filter((candidate) => !allow.loopbackPorts.includes(candidate)), []);
@@ -982,14 +986,14 @@ void test("S11: a cold Omp profile connects outside loopback at startup and a wa
   // The proxy lever: a fresh profile (cold again) whose outbound HTTP(S) goes to a loopback proxy that refuses it.
   const proxy = new RefusingProxy();
   const proxyPort = await proxy.start();
-  cleanups.push(() => proxy.stop());
+  cleanups.add(() => proxy.stop());
   const fresh = createOmpProfile({ providerPort: port, ...pathOption });
-  cleanups.push(() => {
+  cleanups.add(() => {
     fresh.dispose();
   });
   const proxyUrl = `http://127.0.0.1:${String(proxyPort)}`;
   const proxied = summarise(
-    await tracedRun(fresh, "proxy", {
+    await tracedRun(provider, report, fresh, "proxy", {
       HTTP_PROXY: proxyUrl,
       HTTPS_PROXY: proxyUrl,
       http_proxy: proxyUrl,
