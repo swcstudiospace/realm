@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { MAX_MUTANTS, compiledTestFiles, findMutations, runCampaign, testsFor } from "./run.mjs";
+import { MAX_MUTANTS, findMutations, runCampaign, testsFor } from "./run.mjs";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -49,10 +49,17 @@ test("finds boolean, relational, and numeric boundary sites", () => {
   assert.equal(MAX_MUTANTS, 12);
 });
 
-test("filesystem mutants run compiled test files, not the directory", () => {
-  const files = testsFor("src/fs/root.ts", () => ["notes.md", "write.test.js", "root.test.js"]);
-  assert.deepEqual(files, ["dist/test/fs/root.test.js", "dist/test/fs/write.test.js"]);
-  assert.equal(compiledTestFiles("dist/test/fs", []).length, 0);
+test("filesystem mutants run compiled test files from the sandbox", async () => {
+  const root = await mkdtemp(join(tmpdir(), "realm-mutation-tests-"));
+  try {
+    await mkdir(join(root, "dist/test/fs"), { recursive: true });
+    await writeFile(join(root, "dist/test/fs/write.test.js"), "");
+    await writeFile(join(root, "dist/test/fs/notes.md"), "");
+    assert.deepEqual(testsFor("src/fs/root.ts", root), [join(root, "dist/test/fs/write.test.js")]);
+    assert.equal(testsFor("src/fs/root.ts", join(root, "absent")).length, 0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("kills a known mutant and writes the report shape from a fixture", async () => {

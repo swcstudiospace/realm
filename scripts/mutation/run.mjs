@@ -135,16 +135,27 @@ export function findMutations(source) {
 }
 
 /**
- * @param {string} file
+ * @param {string} dir
  * @returns {string[]}
  */
-export function compiledTestFiles(dir, names) {
+export function compiledTestFiles(dir) {
+  let names;
+  try {
+    names = readdirSync(dir);
+  } catch {
+    return [];
+  }
   return names.filter((name) => name.endsWith(".test.js")).sort().map((name) => join(dir, name));
 }
 
-export function testsFor(file, listDir = defaultListDir) {
+/**
+ * @param {string} file
+ * @param {string} [root]
+ * @returns {string[]}
+ */
+export function testsFor(file, root = "") {
   if (file.startsWith("src/fs/")) {
-    return compiledTestFiles("dist/test/fs", listDir("dist/test/fs"));
+    return compiledTestFiles(root === "" ? "dist/test/fs" : join(root, "dist/test/fs"));
   }
   if (file === "src/core/policy.ts") {
     return [
@@ -158,14 +169,6 @@ export function testsFor(file, listDir = defaultListDir) {
   }
   const base = file.replace(/^src\//, "").replace(/\.ts$/, "");
   return [`dist/test/${base}.test.js`];
-}
-
-function defaultListDir(dir) {
-  try {
-    return readdirSync(dir);
-  } catch {
-    return [];
-  }
 }
 
 /**
@@ -271,7 +274,7 @@ export async function runCampaign(options = {}) {
             if (compiled.timedOut) {
               status = "timedOut";
             } else if (compiled.code === 0) {
-              const tests = testsFor(mutant.file);
+              const tests = testsFor(mutant.file, sandbox);
               if (tests.length === 0) {
                 status = "untested";
               } else {
