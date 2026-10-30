@@ -14,8 +14,8 @@
 //   5. A rootless Podman API socket under XDG_RUNTIME_DIR.
 //   6. The openshell CLI on PATH.
 //   7. The built CLI at dist/src/cli/main.js, next to the compiled tests (npm run build).
-// A default npm test therefore skips every scenario below (nine in all: default policy, immediate cycle, egress allowlist, wrong
-// image digest, crash recovery, MCP exec, the MCP exec timeout, the AgentOS runner exit and the daemon-side startup budget) and
+// A default npm test therefore skips every scenario below (ten in all: default policy, immediate cycle, egress allowlist, wrong
+// image digest, crash recovery, MCP exec, the MCP exec timeout, the AgentOS runner exit, the daemon-side startup budget and a stopped gateway) and
 // reports each as skipped.
 //
 // Preconditions the suite cannot check and the operator must provide:
@@ -61,6 +61,7 @@ import {
   isSocket,
   listDaemonContainers,
   listDaemonSandboxes,
+  listeningSocketsOf,
   nodeConnectArgv,
   nodeResolveArgv,
   onPath,
@@ -74,6 +75,7 @@ import {
   readLiveInputs,
   reapCountsOfNotice,
   realmCli,
+  runCommand,
   sandboxExec,
   startMcpSession,
   startupReapLineFor,
@@ -491,6 +493,39 @@ async function itemsOf(listing: Promise<Listing>, what: string): Promise<readonl
   return listed.items;
 }
 
+function jsonLinesSinceStartup(log: string): boolean {
+  const lines = log.split("\n");
+  let start = -1;
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (line === undefined || line === "") {
+      continue;
+    }
+    try {
+      const value = JSON.parse(line) as { event?: unknown; containersRemoved?: unknown };
+      if (value.event === "daemon.startup" && value.containersRemoved === 1) {
+        start = index;
+      }
+    } catch {
+      // A line from before the restart is not part of this check.
+    }
+  }
+  if (start < 0) {
+    return false;
+  }
+  for (let index = start; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (line === undefined || line === "") {
+      continue;
+    }
+    try {
+      JSON.parse(line);
+    } catch {
+      return false;
+    }
+  }
+  return true;
+}
 void test("production live 5: after the daemon is killed, the next realm up reaps the sandbox it left and reaches active with exactly one", { skip: gate, timeout: SCENARIO_TIMEOUT_MS }, async (t) => {
   const scenario = startScenario(t, { image: inputs().image });
   await assertActive(scenario);
@@ -500,6 +535,15 @@ void test("production live 5: after the daemon is killed, the next realm up reap
   assert.equal(started.length, 1, `exactly one daemon process must run from the compiled daemon entry; found ${String(started.length)} (pids: ${started.length === 0 ? "none" : started.join(", ")})`);
   const daemonPid = started[0];
   assert.ok(daemonPid !== undefined, "the daemon pid");
+  const primed = startMcpSession(scenario.inputs, scenario.environment);
+  try {
+    await initializeMcp(primed);
+    await callTool(primed, "status", {});
+  } finally {
+    primed.closeInput();
+    await primed.waitForExit(MCP_EXIT_TIMEOUT_MS);
+    primed.kill();
+  }
 
   try {
     // The container the crash will leave behind, listed before the kill: the restarted daemon must report destroying this one.
@@ -536,10 +580,17 @@ void test("production live 5: after the daemon is killed, the next realm up reap
     const replacement = await daemonPids(scenario);
     assert.equal(replacement.length, 1, `exactly one daemon process must run after the restart; found ${String(replacement.length)} (pids: ${replacement.length === 0 ? "none" : replacement.join(", ")})`);
     assert.notEqual(replacement[0], daemonPid, "the restarted daemon must be a new process");
-    const sandboxes = await itemsOf(listDaemonSandboxes(scenario.inputs), "the realm-daemon sandboxes");
-    assert.equal(sandboxes.length, 1, `exactly one ${DAEMON_SANDBOX_NAME} sandbox must exist after the restart; found ${String(sandboxes.length)}`);
-    const containers = await itemsOf(listDaemonContainers(scenario.inputs), `the ${DAEMON_SANDBOX_NAME} containers`);
-    assert.equal(containers.length, 1, `exactly one ${DAEMON_SANDBOX_NAME} container must exist after the restart; found ${String(containers.length)}`);
+    const replacementReady = await pollUntil(
+      async () => {
+        const sandboxes = await itemsOf(listDaemonSandboxes(scenario.inputs), "the realm-daemon sandboxes");
+        const containers = await itemsOf(listDaemonContainers(scenario.inputs), `the ${DAEMON_SANDBOX_NAME} containers`);
+        return sandboxes.length === 1 && containers.length === 1
+          ? { done: true }
+          : { done: false, detail: `sandboxes ${String(sandboxes.length)}, containers ${String(containers.length)}` };
+      },
+      { timeoutMs: CRASH_OBSERVE_TIMEOUT_MS, intervalMs: CRASH_OBSERVE_INTERVAL_MS },
+    );
+    assert.ok(replacementReady.ok, `exactly one ${DAEMON_SANDBOX_NAME} sandbox and container after the restart: ${replacementReady.detail}`);
 
     // D-1410: the startup reap is visible. The notice rides on the status reply, and the daemon log names the destroyed container.
     const status = await realmCli(scenario.inputs, scenario.environment, ["status"], STATUS_TIMEOUT_MS);
@@ -552,6 +603,13 @@ void test("production live 5: after the daemon is killed, the next realm up reap
     assert.ok(counts.sessionRecords >= 1, `the notice must count at least one session record: ${notice}`);
     const daemonLog = readFileSync(join(scenario.environment.stateDir, "daemon.log"), "utf8");
     assert.ok(startupReapLineFor(daemonLog, crashedContainerId) !== undefined, `daemon.log must hold a daemon.startup record for one container that names ${crashedContainerId}`);
+    assert.equal(jsonLinesSinceStartup(daemonLog), true, "every daemon.log line from the restart's daemon.startup record must be JSON");
+    const auditFile = join(scenario.environment.stateDir, "audit", "daemon.jsonl");
+    const verified = await realmCli(scenario.inputs, scenario.environment, ["audit", "verify", auditFile], STATUS_TIMEOUT_MS);
+    assertExit(verified, 0, "realm audit verify after the restart");
+    const report = JSON.parse(verified.stdout) as { ok?: boolean; unparsedLines?: readonly number[] };
+    assert.equal(report.ok, true, `realm audit verify must report ok: ${verified.stdout}`);
+    assert.ok(Array.isArray(report.unparsedLines) && report.unparsedLines.length <= 1, `unparsedLines must be empty or only a torn tail: ${verified.stdout}`);
   } catch (error) {
     // With no daemon running, `realm down` reports "already down" and reaps nothing, so the sandbox the crash left would stay
     // and block the next scenario. One more realm up lets a daemon reap it for the cleanup's down. Its result is not judged and
@@ -647,7 +705,15 @@ async function runMcpSession(scenario: Scenario, session: McpSession): Promise<v
   assert.equal(decodeReadContent(field(readBack, "content")), content, `read content: ${describeValue(readBack)}`);
   assert.equal(field(readBack, "truncated"), false, `read truncated: ${describeValue(readBack)}`);
   rmSync(hostPath);
-
+  const metrics = await realmCli(scenario.inputs, scenario.environment, ["metrics"], STATUS_TIMEOUT_MS);
+  assertExit(metrics, 0, "realm metrics after the write");
+  const snap = JSON.parse(metrics.stdout) as {
+    toolCalls?: readonly { tool?: string; outcome?: string; count?: number }[];
+    timings?: { attachMs?: { count?: number } };
+  };
+  const writeDone = snap.toolCalls?.find((row) => row.tool === "write" && row.outcome === "done");
+  assert.ok(writeDone !== undefined && (writeDone.count ?? 0) >= 1, `realm metrics must count the write: ${metrics.stdout}`);
+  assert.ok((snap.timings?.attachMs?.count ?? 0) >= 1, `realm metrics must count the attach: ${metrics.stdout}`);
   // 7. The same process answers a modern request: the protocol version in _meta, resultType on every result, and the model-facing
   // content block beside structuredContent.
   const modernMeta = { "io.modelcontextprotocol/protocolVersion": MCP_MODERN_REVISION };
@@ -829,4 +895,69 @@ void test("production live 9: a startup budget of 1 ms fails realm up with START
     residue = await waitForNoResidue(scenario.inputs, BUDGET_RESIDUE_TIMEOUT_MS);
   }
   assert.ok(residue.ok, `residue after realm down with an expired budget: ${residue.detail}`);
+});
+
+const GATEWAY_UNIT = process.env["REALM_LIVE_GATEWAY_UNIT"] ?? "realm-openshell-gateway.service";
+
+void test("production live 10: a stopped gateway is OPENSHELL_GATEWAY_LOST, not AGENTOS_CRASH_LOOP, and the daemon listens only on its Unix socket", { skip: gate, timeout: SCENARIO_TIMEOUT_MS }, async (t) => {
+  const scenario = startScenario(t, { image: inputs().image });
+  let stopped = false;
+  t.after(async () => {
+    if (!stopped) {
+      return;
+    }
+    await runCommand("systemctl", ["--user", "start", GATEWAY_UNIT], {
+      env: scenario.environment.cliEnvironment,
+      timeoutMs: 30_000,
+      cwd: scenario.environment.root,
+    });
+  });
+  await assertActive(scenario);
+  const started = await daemonPids(scenario);
+  assert.equal(started.length, 1, `exactly one daemon must run; found ${String(started.length)}`);
+  const daemonPid = started[0];
+  assert.ok(daemonPid !== undefined, "the daemon pid");
+  const sockets = listeningSocketsOf(daemonPid);
+  assert.deepEqual(sockets.tcp, [], `the daemon must not listen on TCP: ${sockets.tcp.join(", ")}`);
+  assert.deepEqual(sockets.udp, [], `the daemon must not listen on UDP: ${sockets.udp.join(", ")}`);
+  assert.equal(sockets.unix.length, 1, `the daemon must have one Unix socket: ${sockets.unix.join(", ")}`);
+
+  const stop = await runCommand("systemctl", ["--user", "stop", GATEWAY_UNIT], {
+    env: scenario.environment.cliEnvironment,
+    timeoutMs: 30_000,
+    cwd: scenario.environment.root,
+  });
+  assertExit(stop, 0, `systemctl --user stop ${GATEWAY_UNIT}`);
+  stopped = true;
+  let sawCrashLoop = false;
+  const errored = await pollUntil(
+    async () => {
+      const status = await realmCli(scenario.inputs, scenario.environment, ["status"], STATUS_TIMEOUT_MS);
+      const fields = status.exitCode === 0 ? statusFieldsOf(status.stdout) : undefined;
+      if (fields?.reason === "AGENTOS_CRASH_LOOP") {
+        sawCrashLoop = true;
+      }
+      const reached = fields?.state === "error" && fields.reason === "OPENSHELL_GATEWAY_LOST" && fields.label === "realm disconnected";
+      return reached ? { done: true } : { done: false, detail: `realm status: ${describeResult(status)}` };
+    },
+    { timeoutMs: RUNNER_EXIT_OBSERVE_TIMEOUT_MS, intervalMs: RUNNER_EXIT_OBSERVE_INTERVAL_MS },
+  );
+  assert.equal(sawCrashLoop, false, "a stopped gateway must not be reported as AGENTOS_CRASH_LOOP");
+  assert.ok(errored.ok, `realm status must report OPENSHELL_GATEWAY_LOST within ${String(RUNNER_EXIT_OBSERVE_TIMEOUT_MS / 1000)} s: ${errored.detail}`);
+  const metrics = await realmCli(scenario.inputs, scenario.environment, ["metrics"], STATUS_TIMEOUT_MS);
+  assertExit(metrics, 0, "realm metrics after the gateway stop");
+  const snap = JSON.parse(metrics.stdout) as { healthProbeFailures?: readonly { code?: string; count?: number }[] };
+  const lost = snap.healthProbeFailures?.find((row) => row.code === "OPENSHELL_GATEWAY_LOST");
+  assert.ok(lost !== undefined && (lost.count ?? 0) >= 1, `realm metrics must count OPENSHELL_GATEWAY_LOST: ${metrics.stdout}`);
+
+  const startedAgain = await runCommand("systemctl", ["--user", "start", GATEWAY_UNIT], {
+    env: scenario.environment.cliEnvironment,
+    timeoutMs: 30_000,
+    cwd: scenario.environment.root,
+  });
+  stopped = false;
+  assertExit(startedAgain, 0, `systemctl --user start ${GATEWAY_UNIT}`);
+  await assertDownAndClean(scenario);
+  await assertActive(scenario);
+  await assertDownAndClean(scenario);
 });

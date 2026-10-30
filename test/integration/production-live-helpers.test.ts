@@ -18,6 +18,7 @@ import {
   findRpcReply,
   isBenchmarkAddress,
   parseDaemonPids,
+  parseListeningSockets,
   parseNodeProbe,
   parseProbeFields,
   pollUntil,
@@ -603,4 +604,14 @@ void test("describeValue gives clipped JSON and survives a value with no JSON fo
   const long = describeValue("x".repeat(1000));
   assert.ok(long.length < 400, `clipped: ${String(long.length)} characters`);
   assert.match(long, /\.\.\."$/);
+});
+
+void test("parseListeningSockets keeps only this process's listeners", () => {
+  const tcp = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n   0: 0100007F:1F90 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 11 1 0 100 0 0 10 0\n   1: 00000000:0050 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 99 1 0 100 0 0 10 0\n";
+  const udp = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n   0: 00000000:0035 00000000:0000 07 00000000:00000000 00:00000000 00000000     0        0 22 0 0 0 0\n";
+  const unix = "Num       RefCount Protocol Flags    Type St Inode Path\nff: 00000003 00000000 00000000 0001 01 33 /run/realm/driver.sock\nff: 00000003 00000000 00000000 0001 01 44 /tmp/other.sock\n";
+  const parsed = parseListeningSockets(new Set(["11", "33"]), { tcp, tcp6: "", udp, udp6: "", unix });
+  assert.deepEqual(parsed.tcp, ["tcp 0100007F:1F90"]);
+  assert.deepEqual(parsed.udp, []);
+  assert.deepEqual(parsed.unix, ["/run/realm/driver.sock"]);
 });
