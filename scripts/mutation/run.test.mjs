@@ -121,3 +121,22 @@ test("a missing compiler is a compile error, not a kill", async () => {
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("a failing unmutated test is a baseline failure, not a kill", async () => {
+  const root = await mkdtemp(join(tmpdir(), "realm-mutation-baseline-"));
+  try {
+    await mkdir(join(root, "src"), { recursive: true });
+    await mkdir(join(root, "test"), { recursive: true });
+    await writeFile(join(root, "package.json"), '{"type":"module"}\n');
+    await writeFile(join(root, "tsconfig.json"), TSCONFIG);
+    await writeFile(join(root, "src", "sample.ts"), SAMPLE);
+    await writeFile(join(root, "test", "sample.test.ts"), "import { test } from \"node:test\";\ntest(\"fails\", () => { throw new Error(\"baseline\"); });\n");
+    await symlink(join(REPO_ROOT, "node_modules"), join(root, "node_modules"));
+    const report = await runCampaign({ root, files: ["src/sample.ts"], timeoutMs: 60_000 });
+    assert.equal(report.killed, 0);
+    assert.equal(report.baselineFailed, 1);
+    assert.equal(report.mutants[0]?.status, "baselineFailed");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
