@@ -12,8 +12,8 @@ import { sessionsDirOf } from "../session/paths.js";
 
 const PRIVATE_DIR_MODE = 0o700;
 const PERMISSION_BITS = 0o777;
-// Owner read and search: the bits a directory needs before its children can be listed.
-const READ_SEARCH_BITS = 0o500;
+// Owner search: the bit that lets lstat reach a child of a directory. Without it the children cannot be inspected.
+const OWNER_SEARCH_BIT = 0o100;
 
 // The home directory and the workspace root. They are passed in, so nothing here reads the environment.
 export interface ProtectedLocations {
@@ -27,29 +27,24 @@ export type FixAction =
   | { readonly kind: "create-directory"; readonly path: string; readonly mode: number }
   | { readonly kind: "set-mode"; readonly path: string; readonly previousMode: number; readonly mode: number };
 
-// Applies the safe subset to the state directory and returns the actions in the order they are taken. With dryRun true the list is the
-// same and nothing is created or changed. A dry run over a directory the owner cannot read yet reports only its repair, because its
-// children cannot be observed until the repair is made.
+// Applies the safe subset to the state directory and returns the actions in the order they are taken. Every refusal is decided before
+// the first write. The children are inspected before the state directory's mode is changed, so a symbolic link or a file among them is
+// refused with the mode unchanged. A state directory without owner search permission has unobservable children, so it is refused, and a
+// dry run refuses it the same way. With dryRun true the list is the same and nothing is created or changed.
 export function applySafeFixes(stateDir: string, dryRun: boolean, locations: ProtectedLocations): readonly FixAction[] {
   const target = normalizeStateDir(stateDir);
   refuseProtectedTarget(target, locations);
   refuseUnsafeSpelling(target);
 
   const current = observeDirectory(target);
-  const stateActions = planStateMode(target, current);
-  const readable = current === undefined || (current.mode & READ_SEARCH_BITS) === READ_SEARCH_BITS;
-  const observed = readable ? planChildren(target) : undefined;
-  if (dryRun) {
-    return [...stateActions, ...(observed ?? [])];
+  const children = planChildren(target, current);
+  const actions = [...planStateMode(target, current), ...children];
+  if (!dryRun) {
+    for (const action of actions) {
+      applyAction(action);
+    }
   }
-  for (const action of stateActions) {
-    applyAction(action);
-  }
-  const children = observed ?? planChildren(target);
-  for (const action of children) {
-    applyAction(action);
-  }
-  return [...stateActions, ...children];
+  return actions;
 }
 
 // The spelling used for every check and every write. Trailing separators are removed, so "dir/" is the path "dir". The root keeps its
@@ -105,7 +100,12 @@ function planStateMode(target: string, current: Stats | undefined): FixAction[] 
   return mode === PRIVATE_DIR_MODE ? [] : [{ kind: "set-mode", path: target, previousMode: mode, mode: PRIVATE_DIR_MODE }];
 }
 
-function planChildren(target: string): FixAction[] {
+function planChildren(target: string, current: Stats | undefined): FixAction[] {
+  // lstat of a child needs search permission on the state directory. Without the owner's search bit the children cannot be looked at,
+  // so the fix refuses rather than assume they are safe. A state directory that does not exist yet has no children, so both are created.
+  if (current !== undefined && (current.mode & OWNER_SEARCH_BIT) === 0) {
+    throw makeRealmError("SCHEMA_INVALID");
+  }
   const actions: FixAction[] = [];
   for (const path of [join(target, "run"), sessionsDirOf(target)]) {
     if (observeDirectory(path) === undefined) {

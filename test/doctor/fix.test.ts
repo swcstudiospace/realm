@@ -42,6 +42,17 @@ function assertRefused(action: () => unknown): void {
   assert.throws(action, (error: unknown) => error instanceof RealmError && error.code === "SCHEMA_INVALID");
 }
 
+// The error a refusal raises, as values that can be compared. A call that is not refused fails the test.
+function refusalOf(action: () => unknown): { readonly name: string; readonly code: string; readonly message: string } {
+  try {
+    action();
+  } catch (error: unknown) {
+    assert.ok(error instanceof RealmError);
+    return { name: error.name, code: error.code, message: error.message };
+  }
+  return assert.fail("the action was not refused");
+}
+
 // As root, permission bits do not restrict reads or changes, so a locked directory cannot be reproduced and such a test would pass on any code.
 const LOCKED_SKIP =
   process.getuid?.() === 0 ? "running as root: permission bits do not restrict root, so a locked directory cannot be reproduced" : false;
@@ -200,40 +211,74 @@ void test("a state directory at mode 0300 is repaired to 0700 and its children a
   const stateDir = join(root, "state");
   directoryAt(stateDir, 0o300);
 
-  // A dry run cannot read the children of a directory it cannot read, so it reports the repair alone and changes nothing.
-  assert.deepEqual(applySafeFixes(stateDir, true, places), [{ kind: "set-mode", path: stateDir, previousMode: 0o300, mode: 0o700 }]);
-  assert.equal(modeOf(stateDir), 0o300);
-
-  const actions = applySafeFixes(stateDir, false, places);
-
-  assert.deepEqual(actions, [
+  // The owner search bit lets the children be inspected, so a dry run reports the same actions as a real run and changes nothing.
+  const planned = applySafeFixes(stateDir, true, places);
+  const expected: readonly FixAction[] = [
     { kind: "set-mode", path: stateDir, previousMode: 0o300, mode: 0o700 },
     { kind: "create-directory", path: join(stateDir, "run"), mode: 0o700 },
     { kind: "create-directory", path: join(stateDir, "sessions"), mode: 0o700 },
-  ]);
+  ];
+  assert.deepEqual(planned, expected);
+  assert.equal(modeOf(stateDir), 0o300);
+  assert.equal(existsSync(join(stateDir, "run")), false);
+
+  assert.deepEqual(applySafeFixes(stateDir, false, places), expected);
   assert.equal(modeOf(stateDir), 0o700);
   assert.equal(modeOf(join(stateDir, "run")), 0o700);
   assert.equal(modeOf(join(stateDir, "sessions")), 0o700);
 });
 
-void test("a state directory at mode 0000 is repaired to 0700 and its children are created (ONB-02)", { skip: LOCKED_SKIP }, (t) => {
+void test("a state directory at mode 0000 is refused, and its mode is not changed (ONB-02)", { skip: LOCKED_SKIP }, (t) => {
   const { root, places } = fixture(t);
   const stateDir = join(root, "state");
   directoryAt(stateDir, 0o000);
 
-  assert.deepEqual(applySafeFixes(stateDir, true, places), [{ kind: "set-mode", path: stateDir, previousMode: 0o000, mode: 0o700 }]);
+  assertRefused(() => applySafeFixes(stateDir, true, places));
+  assertRefused(() => applySafeFixes(stateDir, false, places));
   assert.equal(modeOf(stateDir), 0o000);
+});
 
-  const actions = applySafeFixes(stateDir, false, places);
+void test("a state directory at mode 0300 with a symbolic link child is refused, and its mode is not changed (ONB-02)", (t) => {
+  const { root, places } = fixture(t);
+  const stateDir = join(root, "state");
+  directoryAt(stateDir, 0o300);
+  const elsewhere = join(root, "elsewhere");
+  directoryAt(elsewhere, 0o700);
+  symlinkSync(elsewhere, join(stateDir, "run"));
 
-  assert.deepEqual(actions, [
-    { kind: "set-mode", path: stateDir, previousMode: 0o000, mode: 0o700 },
-    { kind: "create-directory", path: join(stateDir, "run"), mode: 0o700 },
-    { kind: "create-directory", path: join(stateDir, "sessions"), mode: 0o700 },
-  ]);
-  assert.equal(modeOf(stateDir), 0o700);
-  assert.equal(modeOf(join(stateDir, "run")), 0o700);
-  assert.equal(modeOf(join(stateDir, "sessions")), 0o700);
+  assertRefused(() => applySafeFixes(stateDir, true, places));
+  assertRefused(() => applySafeFixes(stateDir, false, places));
+  assert.equal(modeOf(stateDir), 0o300);
+  assert.equal(modeOf(elsewhere), 0o700);
+});
+
+void test("a state directory at mode 0300 with a regular file child is refused, and its mode is not changed (ONB-02)", (t) => {
+  const { root, places } = fixture(t);
+  const stateDir = join(root, "state");
+  directoryAt(stateDir, 0o300);
+  writeFileSync(join(stateDir, "sessions"), "not a directory");
+
+  assertRefused(() => applySafeFixes(stateDir, true, places));
+  assertRefused(() => applySafeFixes(stateDir, false, places));
+  assert.equal(modeOf(stateDir), 0o300);
+});
+
+void test("a dry run refuses a locked state directory with the same error as a real run (ONB-02)", (t) => {
+  const { root, places } = fixture(t);
+  const linked = join(root, "linked-state");
+  directoryAt(linked, 0o300);
+  symlinkSync(root, join(linked, "run"));
+  const filed = join(root, "filed-state");
+  directoryAt(filed, 0o300);
+  writeFileSync(join(filed, "sessions"), "not a directory");
+
+  for (const stateDir of [linked, filed]) {
+    const dry = refusalOf(() => applySafeFixes(stateDir, true, places));
+    const real = refusalOf(() => applySafeFixes(stateDir, false, places));
+    assert.equal(dry.code, "SCHEMA_INVALID");
+    assert.deepEqual(dry, real);
+    assert.equal(modeOf(stateDir), 0o300);
+  }
 });
 
 void test("directories created under a restrictive umask are set to 0700 (ONB-02)", (t) => {
