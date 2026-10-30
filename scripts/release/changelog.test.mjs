@@ -34,10 +34,11 @@ function git(cwd, args) {
   return execFileSync('git', args, { cwd, encoding: 'utf8', timeout: 30000 });
 }
 
-function commit(cwd, subject, file = 'work.txt') {
+function commit(cwd, subject, file = 'work.txt', body) {
   commitCounter += 1;
   writeFileSync(path.join(cwd, file), `${commitCounter}\n`);
   git(cwd, ['add', '-A']);
+  const messages = body === undefined ? [subject] : [subject, body];
   git(cwd, [
     '-c',
     'user.name=test',
@@ -47,9 +48,9 @@ function commit(cwd, subject, file = 'work.txt') {
     'commit.gpgsign=false',
     'commit',
     '-q',
-    '-m',
-    subject,
+    ...messages.flatMap((message) => ['-m', message]),
   ]);
+  return git(cwd, ['rev-parse', 'HEAD']).trim();
 }
 
 function makeRepo(subjects, changelog = SEED_CHANGELOG) {
@@ -389,4 +390,33 @@ test('lists the commits of a merged branch and not the merge commit itself', () 
   assert.ok(body.includes('- docs: mainline work (SHA)'));
   assert.ok(!body.includes('Merge pull request'));
   assert.ok(!body.includes('base work'));
+});
+
+test('leaves out a reverted feature and its revert and keeps an unrelated feature', () => {
+  const root = makeRepo([]);
+  const reverted = commit(root, 'feat(driver): add the old driver');
+  commit(root, 'feat: add the unrelated feature');
+  commit(root, 'Revert "feat(driver): add the old driver"', 'work.txt', `This reverts commit ${reverted}.`);
+
+  generateChangelog({ root, version: '0.2.0', date: '2026-10-29' });
+
+  assert.equal(
+    normalize(sectionBody(readChangelog(root), '## [0.2.0] - 2026-10-29')),
+    '### Added\n- feat: add the unrelated feature (SHA)',
+  );
+});
+
+test('pairs a revert with the commit its body names, not with a commit that shares the title', () => {
+  const root = makeRepo(['feat: add driver']);
+  const since = git(root, ['rev-parse', 'HEAD']).trim();
+  const reverted = commit(root, 'feat: add driver', 'driver.txt');
+  const unrelated = commit(root, 'feat: add driver', 'driver-copy.txt');
+  commit(root, 'Revert "feat: add driver"', 'driver.txt', `This reverts commit ${reverted}.`);
+
+  generateChangelog({ root, version: '0.2.0', date: '2026-10-29', since });
+
+  assert.equal(
+    sectionBody(readChangelog(root), '## [0.2.0] - 2026-10-29'),
+    `### Added\n- feat: add driver (${unrelated.slice(0, 7)})`,
+  );
 });
