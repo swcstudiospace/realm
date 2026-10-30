@@ -65,10 +65,10 @@ jobs:
           set -euo pipefail
           npm test
 
-      # Report-only landing: the floors pull request removes continue-on-error and the reportOnly flag.
-      - name: Coverage (report only)
+      # The coverage floors (scripts/check/coverage-floors.json) are enforced on the gate leg only. The numbers come from CI runs
+      # of this leg: floor = floor(measured) minus the tolerance. A step failure fails the job and so blocks the release.
+      - name: Coverage floors
         if: matrix.node-version == '22.x'
-        continue-on-error: true
         run: |
           set -euo pipefail
           npm run test:coverage

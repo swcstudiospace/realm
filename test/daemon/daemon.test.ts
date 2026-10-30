@@ -46,7 +46,7 @@ import { FakeBridge } from "../support/fake-bridge.js";
 import { FakeExecutionService } from "../support/fake-execution.js";
 import { FakeContainerStore, FakeLibpod } from "../support/fake-libpod.js";
 import { FakeOpenShell } from "../support/fake-openshell.js";
-import { boundedWait, scaledMs } from "../support/timing.js";
+import { boundedWait, pollUntil, scaledMs } from "../support/timing.js";
 
 const IMAGE = `registry.example.com/realm/workload@sha256:${"0".repeat(64)}`;
 const CLOCK_ISO = "2026-10-21T09:30:00.000Z";
@@ -1195,4 +1195,50 @@ void test("CLI-01: a fresh start makes the state and run directories 0700 and le
   assert.equal(statSync(stateDir).mode & 0o777, 0o700);
   assert.equal(statSync(join(stateDir, "run")).mode & 0o777, 0o700);
   assert.equal(statSync(ancestor).mode & 0o777, statSync(probe).mode & 0o777, "the missing ancestor keeps the default mode");
+});
+
+void test("a connection error on a served socket is that connection's failure and never stops the daemon", async (t) => {
+  // A client killed in the middle of its request leaves an error on the socket the daemon serves it on, after the daemon read
+  // the request line (the read helper no longer listens for errors by then). Without a listener on the served socket Node
+  // rethrows the error as an uncaught exception and the daemon dies.
+  const fixture = makeDirs();
+  const { options, exec } = daemonParts(fixture);
+  const accepted: Socket[] = [];
+  const release = exec.holdNext("create");
+  const daemon = await startDaemon({
+    ...options,
+    onServer: (server) => {
+      server.on("connection", (socket: Socket) => {
+        accepted.push(socket);
+      });
+    },
+  });
+  t.after(async () => {
+    release();
+    await cleanupDaemon(daemon);
+  });
+
+  const client = createConnection(daemon.socketPath);
+  await boundedWait(
+    new Promise<void>((resolve, reject) => {
+      client.once("connect", resolve);
+      client.once("error", reject);
+    }),
+    "the client connects",
+  );
+  client.write(`${JSON.stringify({ id: "gone", method: "up", params: { workspaceRoot: fixture.ws } })}\n`);
+  await pollUntil(() => exec.callCount("create") === 1, "the daemon is inside the create call of the up request");
+  const served = accepted[0];
+  assert.ok(served !== undefined, "the daemon accepted the client's connection");
+
+  served.destroy(Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" }));
+  client.destroy();
+
+  // The request the client left behind keeps running, and the daemon still answers other clients.
+  release();
+  await exec.settled();
+  await pollUntil(async () => {
+    const reply = await sendRequest(daemon.socketPath, { id: "alive", method: "status" });
+    return reply.id === "alive" && snapshotStateOf(reply) === "active";
+  }, "the daemon answers a new client and the abandoned up completed");
 });

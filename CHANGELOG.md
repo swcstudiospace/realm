@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.3.8] - 2026-10-29
+
+### Fixed
+- fix(daemon): a connection error on a served socket must not stop the daemon (#23) (aabeece)
+
 ## [0.3.7] - 2026-10-29
 
 ### Maintenance
