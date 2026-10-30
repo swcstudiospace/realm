@@ -347,3 +347,74 @@ These decisions were recorded by the user on 2026-10-22. Each is checked against
 ## Driver roots (Phase 15, ONB-03)
 
 The secret root, the pinned workspace root and the sandbox state root are fields of `config.json` (`secretRoot`, `workspaceRoot`, `sandboxStateRoot`). `workspaceRoot` is required. When `secretRoot` or `sandboxStateRoot` is omitted, `runtimeRootsOf` (`src/runtime/config.ts`) derives `<stateDir>/secrets` and `<stateDir>/sandboxes`. The daemon (`src/daemon/main.ts`) and the compute driver (`src/runtime/driver/main.ts`) both read that file. A stale `REALM_DRIVER_SECRET_ROOT`, `REALM_DRIVER_WORKSPACE_ROOT` or `REALM_DRIVER_STATE_ROOT` variable is ignored. `REALM_DRIVER_SOCKET`, the image, the gateway variables and the supervisor variables are unchanged.
+
+## Per-project sessions (Phase 18, MULTI-01)
+
+Status: recorded 2026-10-30, before the code that needs it. Source: owner decision D5 item (i) (2026-10-29, `.planning/MILESTONE-CONTEXT.md`) and requirements MULTI-01 to MULTI-06 (`.planning/REQUIREMENTS.md`). Not live-verified.
+
+**Decision.** The daemon holds one session per project workspace. A project workspace is a directory that is a descendant of a configured root. This supersedes "one session per daemon". The code still has the superseded form: `src/daemon/main.ts` sets `SESSION_ID = "daemon"`, so every `up` on the host shares one record, one sandbox and one audit file.
+
+**Reasons.**
+
+- The driver pins one workspace root in `config.json` (`workspaceRoot`, see "Driver roots (Phase 15, ONB-03)"). One daemon therefore cannot give two projects separate `/workspace` contents.
+- Owner decision D5 item (i) approves the change. Proposal 3 of `.planning/quick/261029-g7m-lifecycle-and-persistence-findings/IMPROVEMENT-PROPOSALS.md` asks for a recorded decision that supersedes one session per daemon.
+
+**Consequences.**
+
+- **Session id.** The session id is derived from the pinned project workspace. It is a deterministic function of the workspace's canonical path, fixed when the session is created, and it must match the session-id pattern that the store and `appendAudit` already enforce. The fixed id `"daemon"` is removed, and no alias is kept.
+- **Sandbox.** One sandbox per workspace, named `realm-<sessionId>`.
+- **Per-session state.** Each session owns its record, its pinned subdirectory under the workspace root, its audit file `<stateDir>/audit/<sessionId>.jsonl`, its lock table and its status snapshot. No file is shared between sessions.
+- **Lifecycle.** `realm down` for one session removes that session's sandbox and leaves the other sessions active.
+- **Maintenance.** The startup reconciliation already reads every `<stateDir>/audit/<sessionId>.jsonl`, so it needs no change for several logs. The startup reap is per session (RES-01 below).
+- **Resource bound.** The aggregate memory and CPU of concurrent sessions is bounded and documented with existing configuration and no new catalogue code (MULTI-06).
+
+**What does not change.**
+
+- **One container per session.** A session is one container, and no two sessions share one. V2-02 (one container per workspace, with cross-session lock leases and refcounted reaping) stays deferred.
+- **The daemon owns sessions.** Hosts attach by calling `up` on the control socket and do not own the sandbox ("Closure decisions (2026-10-22)").
+- **Lifetime.** A sandbox lasts until `realm down` for its session. A host shutdown still never sends `down`.
+- **Single owner.** One host daemon owns the state directory (D-87, OQ-P4-06).
+- **Driver scope.** This decision does not amend PRD-DRV-01. MULTI-04 handles it only as far as Phase 18 needs.
+- **Catalogue.** No error code is added.
+
+**Reversibility.** Costly. Session ids, sandbox names, paths and audit file names all depend on it.
+
+## Startup reaper and scratch volume (Phase 19, RES-01)
+
+Status: recorded 2026-10-30, before the code that needs it. Source: owner decision D5 items (ii) and (iii) (2026-10-29, `.planning/MILESTONE-CONTEXT.md`) and requirements RES-01 to RES-05 (`.planning/REQUIREMENTS.md`). Not live-verified.
+
+**Decision (reaper).** At startup the reaper re-adopts a running realm container that passes the create-time hardening verifier (D-51) and is recorded for a session. It removes every other realm container. This supersedes the "remove everything" form of D-84, D-86 and RT-08 (`reapStartup`, `removeAllRealmContainers`; "Startup maintenance (Phase 14, CRASH-04)" above). That form removed every realm container and deleted every session record, so a running sandbox and its state were lost when the daemon crashed (`ABRUPT-END-PERSISTENCE-FINDINGS.md`).
+
+**Definitions.**
+
+- **Adopted.** A realm container (label `io.realm.managed=true`) for which all of these hold: its `io.realm.session` label names a session; that session's record names its container id; it is running; and it passes the hardening verifier with the mount list in the second part of this section.
+- **Orphan.** A realm container that is not adopted. Two causes give an orphan: no session record names it, or it fails the verifier (including an inspection that fails, because such a container cannot be proven good).
+
+**The no-orphan guarantee.** After startup maintenance, and before the gate opens, every realm container is either adopted, or was removed and its removal proven by the same listing as before. No realm container that is not adopted survives startup, and no orphan is skipped silently. If a container cannot be removed or proven gone, the start aborts as it does now, because nothing may be served while an unknown container might survive.
+
+**Records.** A session record that names no adopted container is deleted, as today. The session starts again on the next `up`.
+
+**Logging.** Each adoption and each removal is logged once per start. The `StartupReport` and the `daemon.startup` record in `daemon.log` carry the adopted container ids and the removed container ids, and each removal carries its cause: `no-record`, or the catalogue code of the verifier failure or inspection failure. The notice on `status`, `up` and `down` (D-1404) is still emitted only when a container was removed or a record was deleted, so an adoption alone produces no notice.
+
+**Order.** Adoption runs inside the reap, before any `LifecycleController` or `ToolDispatcher` exists (D-87). The reap timeout (`REAP_SWEEP_TIMEOUT_MS`) still applies.
+
+**Decision (scratch volume).** RT-01's mount list gains one session-owned scratch volume. The earlier RT-01 wording is not edited; this section amends it.
+
+- **Name and labels.** A Podman named volume `realm-scratch-<sessionId>`, labelled `io.realm.managed=true` and `io.realm.session=<sessionId>`.
+- **Mount.** Read-write at `/scratch` in the sandbox. `/scratch` is the stated path. It is not `/workspace`, and no other mount uses it.
+- **Rest of the list.** Unchanged in substance. The pinned project workspace stays the only host path mounted, and the verifier still refuses any other mount.
+- **Verifier.** The mounts property admits exactly one volume mount: the volume `realm-scratch-<sessionId>` for the adopted session, at destination `/scratch`, read-write. A tmpfs, any other volume and any other destination still fail the mounts property (RT-01).
+- **Ownership.** The volume belongs to one session. No other session mounts it.
+- **Lifetime.** The volume outlives the container and the daemon, so a restart that adopts the container keeps it. `realm down` removes the session's sandbox and then its volume, and the volume's removal is checked by a listing, as the container sweep is.
+
+**Not verified.** Attachment at create goes through OpenShell, and the pinned surface does not document an extra-mount option. This is recorded as OQ-P19-01. Realm creates no fallback mount and no fallback container (D-47).
+
+**Open questions and defaults (RES-01 to RES-05)**
+
+| ID | Question | Default applied | Blocked module or phase | Status |
+| --- | --- | --- | --- | --- |
+| OQ-P19-01 | Can the OpenShell 0.1.5 Podman driver attach the named scratch volume at `/scratch` when it creates the sandbox, and keep its labels? | Fail closed. If the create cannot attach it, the create fails with `OPENSHELL_START_FAILED`. No fallback mount or container. | RES-03 live proof in `src/runtime/openshell.ts` and `src/runtime/session-execution.ts` | Live-gated. Fails closed. |
+| OQ-P19-02 | Does libpod inspect report the scratch volume as a mount of type `volume` with the name and destination that the verifier reads? | The verifier reads only those fields. Any other shape fails closed. | `verifyInspect` mounts property in `src/runtime/hardening.ts` (D-51); RES-05 live scenario | Live-gated. Fails closed. |
+| OQ-P19-03 | Does a re-adopted container keep running, with `/workspace` intact, across a daemon kill on the host? | Assumed yes. RES-05 is the test. | RES-02 and RES-05 live scenario | Live-gated. Fails closed: a container that fails the verifier is removed. |
+
+**Reversibility.** Costly for the reaper, because every restart depends on it. Moderate for the mount list, because only the scratch volume and its verifier rule change.
