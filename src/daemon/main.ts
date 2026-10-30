@@ -14,8 +14,10 @@ import type { AgentOsDriver } from "../runtime/agentos.js";
 import { productionOpenShellRunner } from "../runtime/session-execution.js";
 import type { EnvironmentLike } from "../session/paths.js";
 import { createLogger, parseLogLevel, type Logger } from "../observe/logger.js";
-import { CONTROL_TIMEOUT_MS, sendRequest, type ControlReply } from "./channel.js";
+import { createFileSink } from "../observe/log-file.js";
+import { daemonLogPath } from "./ensure.js";
 import { startDaemon, type StartDaemonOptions, type StartedDaemon, type StartupReport } from "./daemon.js";
+import { CONTROL_TIMEOUT_MS, sendRequest, type ControlReply } from "./channel.js";
 
 export type DaemonSignal = "SIGTERM" | "SIGINT";
 
@@ -73,31 +75,42 @@ export async function runDaemon(deps: DaemonDeps): Promise<number> {
     const roots = runtimeRootsOf(loadRuntimeConfig(runtimeInput));
     const libpodSocketPath = podmanSocketPath(deps.env);
     const agentosDriver = productionAgentOsDriver(deps.env);
-    started = await start({
-      stateDir,
-      runtimeInput,
-      policyPath: defaultPolicyPath(stateDir),
-      sessionId: SESSION_ID,
-      env: deps.env,
-      ...(libpodSocketPath === undefined ? {} : { libpodSocketPath }),
-      agentosDriver,
-      secretRoot: roots.secretRoot,
-      pinnedWorkspaceRoot: roots.workspaceRoot,
-      sandboxStateRoot: roots.sandboxStateRoot,
-      onStartup: (report) => {
-        writeStderr(startupLine(report));
-      },
-      logger: requestLogger(writeStderr, deps.env["REALM_LOG_LEVEL"]),
-    });
+    const requests = requestLogger(writeStderr, deps.env["REALM_LOG_LEVEL"], daemonLogPath(stateDir));
+    try {
+      started = await start({
+        stateDir,
+        runtimeInput,
+        policyPath: defaultPolicyPath(stateDir),
+        sessionId: SESSION_ID,
+        env: deps.env,
+        ...(libpodSocketPath === undefined ? {} : { libpodSocketPath }),
+        agentosDriver,
+        secretRoot: roots.secretRoot,
+        pinnedWorkspaceRoot: roots.workspaceRoot,
+        sandboxStateRoot: roots.sandboxStateRoot,
+        onStartup: (report) => {
+          writeStderr(startupLine(report));
+        },
+        logger: requests.logger,
+      });
+    } catch (error: unknown) {
+      requests.close();
+      writeStderr(failureLine(codeOf(error)));
+      return 1;
+    }
+    try {
+      return await awaitStop(started, {
+        sendDown: deps.sendDown ?? requestDown,
+        onSignal: deps.onSignal ?? registerSignal,
+        writeStderr,
+      });
+    } finally {
+      requests.close();
+    }
   } catch (error: unknown) {
     writeStderr(failureLine(codeOf(error)));
     return 1;
   }
-  return awaitStop(started, {
-    sendDown: deps.sendDown ?? requestDown,
-    onSignal: deps.onSignal ?? registerSignal,
-    writeStderr,
-  });
 }
 
 // The one startup record (CRASH-04): what the reap destroyed, what the orphan sweep removed, what the audit
@@ -126,11 +139,23 @@ function startupLine(report: StartupReport): string {
   });
 }
 
-function requestLogger(writeStderr: (line: string) => void, rawLevel: string | undefined): Logger {
+function requestLogger(
+  writeStderr: (line: string) => void,
+  rawLevel: string | undefined,
+  logPath: string,
+): { readonly logger: Logger; readonly close: () => void } {
   const parsed = parseLogLevel(rawLevel);
+  const file = createFileSink({ path: logPath });
   const logger = createLogger({
     sink: {
       write: (line) => {
+        try {
+          if (file.write(line)) {
+            return true;
+          }
+        } catch {
+          // The file sink refused the path. stderr still receives the line.
+        }
         writeStderr(line);
         return true;
       },
@@ -141,7 +166,7 @@ function requestLogger(writeStderr: (line: string) => void, rawLevel: string | u
   if (parsed.invalid) {
     logger.warn("daemon.log-level", { value: parsed.level });
   }
-  return logger;
+  return { logger, close: () => { file.close(); } };
 }
 
 // Resolves once the daemon has stopped. A signal runs the down request and settles with its
