@@ -75,7 +75,7 @@ Every gate must pass before a change is reviewed (`CONTRIBUTING.md`).
 - `.planning/`: GSD-managed planning state. See Planning artifacts.
 - `release/milestone.json`: the milestone and its minor number, which set the release line.
 - `assets/brand/`: logo and banner artwork.
-- `.github/`: `dependabot.yml`, `workflows/ci.yml` (verify, site, audit, and release jobs), `workflows/pages.yml` (site build and deploy), `PULL_REQUEST_TEMPLATE.md`, and `ISSUE_TEMPLATE/`.
+- `.github/`: `dependabot.yml`, `workflows/ci.yml` (verify, site, audit, build, and publish jobs), `workflows/pages.yml` (site build and deploy), `PULL_REQUEST_TEMPLATE.md`, and `ISSUE_TEMPLATE/`.
 - `sandbox/`: the image build for the sandbox image (`Dockerfile`, `resolv.conf`, `expected-digests.json`). The image carries the pinned runtime, the AgentOS runner, and the probe. `tsconfig.agentos.json` and `.dockerignore` sit at the repository root, not in `sandbox/`.
 - `licenses/`: the licence texts of the Apache-2.0 material that `NOTICE` lists. The package ships it.
 - Repository root: `package.json`, `package-lock.json`, `tsconfig.json`, `eslint.config.js`, `README.md`, `CHANGELOG.md`, `CONTRIBUTING.md`, `SECURITY.md`, `LICENSE`, and `NOTICE`. `dist/`, `node_modules/`, and `coverage/` are git-ignored build and install output.
