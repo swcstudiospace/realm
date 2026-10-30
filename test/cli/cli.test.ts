@@ -655,12 +655,12 @@ void test("a detached daemon that fails startup writes its error to <stateDir>/d
     assert.ok(result.stderr.includes(logPath), "the failure names the daemon log");
     // The log is the daemon's own output and is written by another process: wait for its line, never for a fixed time.
     await pollUntil(
-      () => existsSync(logPath) && readFileSync(logPath, "utf8").includes("realm daemon: SCHEMA_INVALID"),
+      () => existsSync(logPath) && readFileSync(logPath, "utf8").includes("\"event\":\"daemon.failed\"") && readFileSync(logPath, "utf8").includes("\"code\":\"SCHEMA_INVALID\""),
       "the startup error to reach the daemon log",
       { timeoutMs: 30_000, intervalMs: 25 },
     );
     assert.equal(statSync(logPath).mode & 0o777, 0o600);
-    assert.ok(readFileSync(logPath, "utf8").includes("realm daemon: SCHEMA_INVALID"), "the startup error reached the log");
+    assert.ok(readFileSync(logPath, "utf8").includes("\"code\":\"SCHEMA_INVALID\""), "the startup error reached the log");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

@@ -8,7 +8,7 @@
 // propagates unchanged.
 //
 // reportingStartFailure wraps the probe so that a daemon which refuses to start is reported by the code
-// it wrote itself: `realm daemon: <CODE>` in <stateDir>/daemon.log, before it exits. The caller passes
+// it wrote itself: a daemon.failed JSON line in <stateDir>/daemon.log, before it exits. The caller passes
 // the state directory, so the module still reads no environment.
 
 import { closeSync, openSync, readSync, statSync } from "node:fs";
@@ -81,7 +81,7 @@ export function daemonLogSize(stateDir: string): number {
   return statSync(daemonLogPath(stateDir), { throwIfNoEntry: false })?.size ?? 0;
 }
 
-const FAILURE_LINE = /^realm daemon: ([A-Z_]+)$/;
+const FAILURE_EVENT = "daemon.failed";
 
 function isErrorCode(value: string): value is ErrorCode {
   return ERROR_CODES.some((code) => code === value);
@@ -99,10 +99,11 @@ function readLogFrom(stateDir: string, offset: number, length: number): string {
   }
 }
 
-// The catalogue code of the last complete `realm daemon: <CODE>` line written at or after offset, or
+// The catalogue code of the last complete daemon.failed line written at or after offset, or
 // undefined. A trailing line without a newline is not yet complete and is ignored. A log shorter than
 // offset, or a missing log, yields undefined. A LOCK_CONFLICT line is not a start failure: it is what a rival daemon
 // writes when it finds the socket owned, so a daemon is alive and the hosts waiting for it must keep waiting.
+// A line that is not that JSON event is ignored, so a startup record cannot be mistaken for a failure.
 export function daemonStartFailureSince(stateDir: string, offset: number): ErrorCode | undefined {
   const size = daemonLogSize(stateDir);
   if (size <= offset) {
@@ -115,12 +116,32 @@ export function daemonStartFailureSince(stateDir: string, offset: number): Error
   }
   let found: ErrorCode | undefined;
   for (const line of text.slice(0, lastNewline).split("\n")) {
-    const token = FAILURE_LINE.exec(line)?.[1];
-    if (token !== undefined && token !== "LOCK_CONFLICT" && isErrorCode(token)) {
-      found = token;
+    const code = failedCode(line);
+    if (code !== undefined) {
+      found = code;
     }
   }
   return found;
+}
+
+function failedCode(line: string): ErrorCode | undefined {
+  let value: unknown;
+  try {
+    value = JSON.parse(line);
+  } catch {
+    return undefined;
+  }
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  if (record["event"] !== FAILURE_EVENT || typeof record["code"] !== "string") {
+    return undefined;
+  }
+  if (record["code"] === "LOCK_CONFLICT" || !isErrorCode(record["code"])) {
+    return undefined;
+  }
+  return record["code"];
 }
 
 // Failures that mean no daemon has answered yet. REALM_NOT_ACTIVE: nothing holds the socket (absent, or a refused dial).
