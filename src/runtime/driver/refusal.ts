@@ -6,11 +6,11 @@
 import { makeRealmError, RealmError, type ErrorCode } from "../../core/errors.js";
 
 // The driver entry point a refusal arrived on. Both are compute RPCs.
-export const DRIVER_RPCS = ["ValidateSandboxCreate", "CreateSandbox"] as const;
+const DRIVER_RPCS = ["ValidateSandboxCreate", "CreateSandbox"] as const;
 export type DriverRpc = (typeof DRIVER_RPCS)[number];
 
 // The checks that refuse a create. Each names one rule, and none names a value.
-export const REFUSAL_CHECKS = [
+const REFUSAL_CHECKS = [
   "create.sandbox",
   "create.identity",
   "create.workspace",
@@ -76,8 +76,22 @@ export function refusalScope(rpc: DriverRpc, log: RefusalLog | undefined): Refus
   return { rpc, log: log ?? stderrRefusalLog };
 }
 
+// Whether a name belongs to a closed set. The refusal line writes only set members, so no other name reaches the log.
+function isDriverRpc(value: string): value is DriverRpc {
+  const rpcs: readonly string[] = DRIVER_RPCS;
+  return rpcs.includes(value);
+}
+
+function isRefusalCheck(value: string): value is RefusalCheck {
+  const checks: readonly string[] = REFUSAL_CHECKS;
+  return checks.includes(value);
+}
+
 // Writes the refusal line for a check. The line names the RPC, the check and the code, and no value.
 function logRefusal(scope: RefusalScope, check: RefusalCheck, code: ErrorCode): void {
+  if (!isDriverRpc(scope.rpc) || !isRefusalCheck(check)) {
+    throw makeRealmError("SCHEMA_INVALID");
+  }
   scope.log(`realm compute driver refused: rpc=${scope.rpc} check=${check} code=${code}`);
 }
 
