@@ -708,7 +708,9 @@ jobs:
             ${{ needs.build.outputs.milestone_tag != '' && format('{0}/milestone-files/agent-realm-{1}.cdx.json', runner.temp, steps.milestone.outputs.version) || '' }}
 
       # Publishes the milestone tag's release with the files the build job produced, after the attestation
-      # above covers them and before this run's tag is pushed. Skipped when that release already exists.
+      # above covers them and before this run's tag is pushed. The release is created as a draft, every expected
+      # asset is uploaded to it, and only then is it published. A draft left by an earlier attempt is completed the
+      # same way; a published release is accepted only when it already has every expected asset.
       - name: Create milestone GitHub release
         if: needs.build.outputs.milestone_tag != ''
         env:
@@ -718,21 +720,68 @@ jobs:
           VERSION: ${{ steps.milestone.outputs.version }}
         run: |
           set -euo pipefail
-          if out="$(gh release view "${TAG}" --json tagName 2>&1)"; then
-            echo "${TAG} already has a GitHub release; nothing to create."
-            exit 0
-          fi
-          if ! printf '%s' "${out}" | grep -qi 'not found'; then
-            printf '%s\n' "${out}" >&2
+          files="${RUNNER_TEMP}/milestone-files"
+          # The one list of this release's assets. The upload and both checks below use it.
+          expected=(
+            "${files}/agent-realm-${VERSION}.tgz"
+            "${files}/SHA256SUMS"
+            "${files}/agent-realm-${VERSION}.cdx.json"
+          )
+          # Sets STATE to missing, draft or published, and ASSETS to the names of the release's assets. The
+          # releases are listed because the tag endpoint returns published releases only.
+          release_lookup() {
+            local tag="$1" lines
+            if ! [[ "${tag}" =~ ^v0\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::${tag} is not a release tag." >&2
+              exit 1
+            fi
+            lines="$(gh api --paginate "repos/${GH_REPO}/releases" --jq ".[] | select(.tag_name == \"${tag}\") | (if .draft then \"draft\" else \"published\" end), (.assets[].name)")"
+            STATE=missing
+            ASSETS=""
+            if [ -n "${lines}" ]; then
+              STATE="${lines%%$'\n'*}"
+              if [[ "${lines}" == *$'\n'* ]]; then
+                ASSETS="${lines#*$'\n'}"
+              fi
+            fi
+          }
+          # Prints each expected asset that the release lacks. Reads ASSETS and the expected list.
+          missing_assets() {
+            local path name
+            for path in "${expected[@]}"; do
+              name="$(basename "${path}")"
+              if ! grep -qxF "${name}" <<< "${ASSETS}"; then
+                printf '%s\n' "${name}"
+              fi
+            done
+          }
+          release_lookup "${TAG}"
+          case "${STATE}" in
+            published)
+              missing="$(missing_assets)"
+              if [ -n "${missing}" ]; then
+                echo "::error::${TAG} is published but lacks expected assets: ${missing//$'\n'/ }. Refusing to treat it as complete." >&2
+                exit 1
+              fi
+              echo "${TAG} is published with every expected asset; nothing to create."
+              exit 0
+              ;;
+            draft)
+              echo "${TAG} is an unpublished draft; completing it."
+              ;;
+            missing)
+              gh release create "${TAG}" --draft --verify-tag --title "Realm ${TAG}" --notes-file "${files}/notes.md"
+              ;;
+          esac
+          gh release upload "${TAG}" "${expected[@]}" --clobber
+          release_lookup "${TAG}"
+          missing="$(missing_assets)"
+          if [ -n "${missing}" ]; then
+            echo "::error::${TAG} lacks expected assets after upload: ${missing//$'\n'/ }. Not publishing it." >&2
             exit 1
           fi
-          gh release create "${TAG}" \
-            "${RUNNER_TEMP}/milestone-files/agent-realm-${VERSION}.tgz" \
-            "${RUNNER_TEMP}/milestone-files/SHA256SUMS" \
-            "${RUNNER_TEMP}/milestone-files/agent-realm-${VERSION}.cdx.json" \
-            --title "Realm ${TAG}" \
-            --notes-file "${RUNNER_TEMP}/milestone-files/notes.md" \
-            --verify-tag
+          gh release edit "${TAG}" --draft=false --title "Realm ${TAG}" --notes-file "${files}/notes.md"
+          echo "Published ${TAG} with its expected assets."
 
       # A retry that reuses the tag makes no commit: the tag already names this run's release commit.
       - name: Commit release changes
@@ -796,7 +845,7 @@ jobs:
           exit 1
 
       # If this fails, the tag and commit already exist on origin. A rerun of this job reuses them (Check release
-      # tag) and creates only this release.
+      # tag) and completes the draft this run left behind, or creates the release, with the same checks as the milestone release.
       - name: Create GitHub release
         if: steps.tag_check.outputs.action == 'normal' && (steps.push.outputs.pushed == 'true' || steps.remote_tag.outputs.exists == 'true')
         env:
@@ -806,21 +855,67 @@ jobs:
           VERSION: ${{ steps.release.outputs.version }}
         run: |
           set -euo pipefail
-          if out="$(gh release view "${TAG}" --json tagName 2>&1)"; then
-            echo "${TAG} already has a GitHub release; nothing to create."
-            exit 0
-          fi
-          if ! printf '%s' "${out}" | grep -qi 'not found'; then
-            printf '%s\n' "${out}" >&2
+          # The one list of this release's assets. The upload and both checks below use it.
+          expected=(
+            "agent-realm-${VERSION}.tgz"
+            "${RUNNER_TEMP}/release-assets/SHA256SUMS"
+            "${RUNNER_TEMP}/release-assets/agent-realm-${VERSION}.cdx.json"
+          )
+          # Sets STATE to missing, draft or published, and ASSETS to the names of the release's assets. The
+          # releases are listed because the tag endpoint returns published releases only.
+          release_lookup() {
+            local tag="$1" lines
+            if ! [[ "${tag}" =~ ^v0\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::${tag} is not a release tag." >&2
+              exit 1
+            fi
+            lines="$(gh api --paginate "repos/${GH_REPO}/releases" --jq ".[] | select(.tag_name == \"${tag}\") | (if .draft then \"draft\" else \"published\" end), (.assets[].name)")"
+            STATE=missing
+            ASSETS=""
+            if [ -n "${lines}" ]; then
+              STATE="${lines%%$'\n'*}"
+              if [[ "${lines}" == *$'\n'* ]]; then
+                ASSETS="${lines#*$'\n'}"
+              fi
+            fi
+          }
+          # Prints each expected asset that the release lacks. Reads ASSETS and the expected list.
+          missing_assets() {
+            local path name
+            for path in "${expected[@]}"; do
+              name="$(basename "${path}")"
+              if ! grep -qxF "${name}" <<< "${ASSETS}"; then
+                printf '%s\n' "${name}"
+              fi
+            done
+          }
+          release_lookup "${TAG}"
+          case "${STATE}" in
+            published)
+              missing="$(missing_assets)"
+              if [ -n "${missing}" ]; then
+                echo "::error::${TAG} is published but lacks expected assets: ${missing//$'\n'/ }. Refusing to treat it as complete." >&2
+                exit 1
+              fi
+              echo "${TAG} is published with every expected asset; nothing to create."
+              exit 0
+              ;;
+            draft)
+              echo "${TAG} is an unpublished draft; completing it."
+              ;;
+            missing)
+              gh release create "${TAG}" --draft --verify-tag --title "Realm ${TAG}" --notes-file release-notes.md
+              ;;
+          esac
+          gh release upload "${TAG}" "${expected[@]}" --clobber
+          release_lookup "${TAG}"
+          missing="$(missing_assets)"
+          if [ -n "${missing}" ]; then
+            echo "::error::${TAG} lacks expected assets after upload: ${missing//$'\n'/ }. Not publishing it." >&2
             exit 1
           fi
-          gh release create "${TAG}" \
-            "agent-realm-${VERSION}.tgz" \
-            "${RUNNER_TEMP}/release-assets/SHA256SUMS" \
-            "${RUNNER_TEMP}/release-assets/agent-realm-${VERSION}.cdx.json" \
-            --title "Realm ${TAG}" \
-            --notes-file release-notes.md \
-            --verify-tag
+          gh release edit "${TAG}" --draft=false --title "Realm ${TAG}" --notes-file release-notes.md
+          echo "Published ${TAG} with its expected assets."
 
       # Pages deploys the tip of main, so it is dispatched exactly when that tip is a release commit:
       # that content passed verify and was released. This covers a run that just published, the rerun
