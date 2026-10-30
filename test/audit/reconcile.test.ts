@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import {
   appendFileSync,
   existsSync,
@@ -310,6 +311,35 @@ void test("OBS-02: a correlation id pairs its own admission, and a line without 
     assert.equal(closed.length, 1);
     assert.equal(closed[0]?.["correlationId"], "call-a");
     assert.equal(reconcileAuditLogs(stateDir).appended, 0);
+  });
+});
+
+void test("OBS-02: a correlation id redaction would rewrite is stored so the unfinished call is still reconciled", () => {
+  withStateDir((stateDir) => {
+    const secretShaped = "sk-abcdefghijklmnopqrst";
+    appendAudit(stateDir, {
+      sessionId: SESSION,
+      tool: "write",
+      outcome: "ok",
+      phase: "admission",
+      path: "a.txt",
+      correlationId: secretShaped,
+    });
+    const stored = JSON.parse(readFileSync(auditFile(stateDir, SESSION), "utf8").split("\n")[0] ?? "") as {
+      correlationId: string;
+    };
+    assert.equal(stored.correlationId, createHash("sha256").update(secretShaped).digest("hex"));
+    assert.equal(reconcileAuditLogs(stateDir).appended, 1);
+    const closed = readFileSync(auditFile(stateDir, SESSION), "utf8")
+      .split("\n")
+      .filter((line) => line.length > 0)
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .filter((line) => line["phase"] === "reconciliation");
+    assert.equal(closed.length, 1);
+    const line = closed[0];
+    assert.ok(line);
+    assert.equal(line["correlationId"], stored.correlationId);
+    assert.equal(line["outcome"], "AUDIT_OUTCOME_UNKNOWN");
   });
 });
 // What the reconciliation lines of a log say, without their timestamps, so two runs compare by content.

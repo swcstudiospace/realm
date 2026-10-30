@@ -76,13 +76,11 @@ export function appendAudit(stateDir: string, input: AuditEntryInput): void {
   if (!SAFE_SESSION_ID.test(input.sessionId)) {
     throw makeRealmError("SCHEMA_INVALID");
   }
-  if (input.correlationId !== undefined && !CORRELATION_ID.test(input.correlationId)) {
-    throw makeRealmError("SCHEMA_INVALID");
-  }
+  const correlationId = durableCorrelationId(input.correlationId);
   const redacted = redactValue({
     at: new Date().toISOString(),
     sessionId: input.sessionId,
-    correlationId: input.correlationId,
+    correlationId,
     tool: input.tool,
     outcome: input.outcome,
     phase: input.phase,
@@ -103,6 +101,22 @@ export function appendAudit(stateDir: string, input: AuditEntryInput): void {
     }
     throw makeRealmError("AUDIT_WRITE_FAILED");
   }
+}
+
+// A correlation id that redaction would rewrite fails the reader's pattern, and the
+// reconciler then skips the whole line. Store a stable hash instead, so admission and
+// result still pair and an unfinished call is still visible.
+function durableCorrelationId(id: string | undefined): string | undefined {
+  if (id === undefined) {
+    return undefined;
+  }
+  if (!CORRELATION_ID.test(id)) {
+    throw makeRealmError("SCHEMA_INVALID");
+  }
+  if (redactString(id) === id) {
+    return id;
+  }
+  return createHash("sha256").update(id, "utf8").digest("hex");
 }
 
 // Every failure of the write (directory, lstat check, open, chmod, write, fsync, close, tail read) is mapped to
