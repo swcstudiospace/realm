@@ -19,7 +19,7 @@ import { LifecycleController } from "../../src/lifecycle/controller.js";
 import { SessionStore } from "../../src/session/store.js";
 import { FakeBridge } from "../support/fake-bridge.js";
 import { FakeExecutionService } from "../support/fake-execution.js";
-import { scaledMs } from "../support/timing.js";
+import { scaledMs, testTimeout, trackMockedTimers } from "../support/timing.js";
 
 const SESSION = "session-1";
 const CLOCK_TIME = "2026-10-21T09:30:00.000Z";
@@ -110,10 +110,12 @@ function policyFor(workspaceRoot: string): Policy {
 // and the held-handshake bridge. Any handshake still held when the test ends is settled.
 // The clock is frozen (never advanced), so no deadline check can trip on the startup's real disk
 // work however loaded the host is, and setTimeout is mocked, so a startup budget ends only when the
-// test ticks it. t.mock restores both when the test ends.
+// test ticks it. t.mock restores both when the test ends. The tracker counts mocked timers that
+// neither fired nor were cleared, which process.getActiveResourcesInfo() cannot see.
 function fixture(t: TestContext) {
   t.mock.method(performance, "now", () => 1000);
   t.mock.timers.enable({ apis: ["setTimeout"] });
+  const timers = trackMockedTimers(t);
   t.after(() => {
     t.mock.timers.reset();
   });
@@ -138,7 +140,7 @@ function fixture(t: TestContext) {
   t.after(() => {
     bridge.finish();
   });
-  return { workspace, store, exec, bridge, controller };
+  return { workspace, store, exec, bridge, controller, timers };
 }
 
 interface Fixture {
@@ -156,9 +158,9 @@ async function expiredFirstStartup(t: TestContext, f: Fixture): Promise<StateSna
   return creating;
 }
 
-void test("a retry from error waits for the handshake the expired startup started, and starts no second connect (ANDA-03, D-64)", async (t) => {
+void test("a retry from error waits for the handshake the expired startup started, and starts no second connect (ANDA-03, D-64)", testTimeout(30_000), async (t) => {
   const f = fixture(t);
-  const { bridge, controller } = f;
+  const { bridge, controller, timers } = f;
   const liveBefore = process.getActiveResourcesInfo().filter((name) => name === "Timeout").length;
 
   const failed = await expiredFirstStartup(t, f);
@@ -174,10 +176,11 @@ void test("a retry from error waits for the handshake the expired startup starte
 
   assert.equal(active.state, "active");
   assert.equal(bridge.callCount("connect"), 1);
-  assert.equal(process.getActiveResourcesInfo().filter((name) => name === "Timeout").length, liveBefore, "no timer survives the test");
+  assert.equal(process.getActiveResourcesInfo().filter((name) => name === "Timeout").length, liveBefore, "no real timer survives the test");
+  assert.equal(timers.pending(), 0, "no mocked timer survives the test");
 });
 
-void test("a retry whose held handshake never settles ends at its own budget, and the next startup reuses the handshake once it connects (ANDA-03)", async (t) => {
+void test("a retry whose held handshake never settles ends at its own budget, and the next startup reuses the handshake once it connects (ANDA-03)", testTimeout(30_000), async (t) => {
   const f = fixture(t);
   const { bridge, controller } = f;
   await expiredFirstStartup(t, f);
@@ -197,7 +200,7 @@ void test("a retry whose held handshake never settles ends at its own budget, an
   assert.equal(bridge.callCount("connect"), 1, "the handshake that connected is reused, not dialled again");
 });
 
-void test("a handshake that fails while a retry waits gives the retry the bridge's code, and the next startup starts a fresh handshake (ANDA-03)", async (t) => {
+void test("a handshake that fails while a retry waits gives the retry the bridge's code, and the next startup starts a fresh handshake (ANDA-03)", testTimeout(30_000), async (t) => {
   const f = fixture(t);
   const { bridge, controller } = f;
   await expiredFirstStartup(t, f);
@@ -218,8 +221,8 @@ void test("a handshake that fails while a retry waits gives the retry the bridge
   assert.equal(bridge.callCount("connect"), 2);
 });
 
-void test("after destroy, a new startup connects the bridge again instead of reusing the handshake of the old session (ANDA-03)", async (t) => {
-  const { workspace, bridge, controller } = fixture(t);
+void test("after destroy, a new startup connects the bridge again instead of reusing the handshake of the old session (ANDA-03)", testTimeout(30_000), async (t) => {
+  const { workspace, bridge, controller, timers } = fixture(t);
   const first = controller.create(workspace);
   await connectCalls(bridge, 1);
   bridge.finish();
@@ -227,10 +230,12 @@ void test("after destroy, a new startup connects the bridge again instead of reu
 
   await controller.destroy();
   assert.equal(controller.snapshot().state, "unbound");
+  assert.equal(timers.pending(), 0, "the destroy leaves no mocked timer behind");
 
   const second = controller.create(workspace);
   await connectCalls(bridge, 2);
   bridge.finish();
   assert.equal((await second).state, "active");
   assert.equal(bridge.callCount("connect"), 2);
+  assert.equal(timers.pending(), 0, "the second startup leaves no mocked timer behind");
 });

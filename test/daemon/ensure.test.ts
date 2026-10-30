@@ -7,7 +7,7 @@ import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { RealmError } from "../../src/core/errors.js";
 import { daemonAnswers, ensureDaemon, type DaemonPresence } from "../../src/daemon/ensure.js";
-import { scaledMs } from "../support/timing.js";
+import { scaledMs, testTimeout } from "../support/timing.js";
 
 const SOCKET = "/state/run/control.sock";
 // The bound for a daemon that answers after a few polls: far above any host stall.
@@ -117,7 +117,7 @@ async function advanceUntilSettled(t: TestContext, work: Promise<unknown>, stepM
   await done;
 }
 
-void test("a socket that stays absent throws DAEMON_START_TIMEOUT after one spawn, whose reason names a daemon start and not a tool", async (t) => {
+void test("a socket that stays absent throws DAEMON_START_TIMEOUT after one spawn, whose reason names a daemon start and not a tool", testTimeout(30_000), async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
   t.after(() => {
     t.mock.timers.reset();
