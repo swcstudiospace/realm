@@ -2,7 +2,7 @@
 
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DEFAULT_LOG_MAX_BYTES, createFileSink, createStderrSink } from "../../src/observe/log-file.js";
@@ -139,6 +139,43 @@ void test("an injected write failure returns false and the next write retries", 
   fail = false;
   assert.equal(sink.write("b"), true);
   sink.close();
+});
+
+void test("a short write that then fails is closed before the next line is appended", () => {
+  const dir = tmp();
+  const path = join(dir, "daemon.log");
+  let calls = 0;
+  const sink = createFileSink({
+    path,
+    fs: {
+      write: (fd, bytes, offset) => {
+        calls += 1;
+        if (calls === 1) {
+          const count = Math.min(3, bytes.length - offset);
+          writeSync(fd, bytes, offset, count);
+          return count;
+        }
+        if (calls === 2) {
+          throw new Error("ENOSPC");
+        }
+        return writeSync(fd, bytes, offset, bytes.length - offset);
+      },
+    },
+  });
+  assert.equal(sink.write("abcdef"), false);
+  assert.equal(sink.write("next"), true);
+  sink.close();
+  assert.equal(readFileSync(path, "utf8"), "abc\nnext\n");
+});
+
+void test("reopening a log with an unfinished tail closes that line before appending", () => {
+  const dir = tmp();
+  const path = join(dir, "daemon.log");
+  writeFileSync(path, "partial", { mode: 0o600 });
+  const sink = createFileSink({ path });
+  assert.equal(sink.write("next"), true);
+  sink.close();
+  assert.equal(readFileSync(path, "utf8"), "partial\nnext\n");
 });
 
 void test("the stderr sink writes one line per call and reports a throwing stream as false", () => {
