@@ -212,6 +212,8 @@ jobs:
             ].join("\n") + "\n";
             fs.appendFileSync(process.env.GITHUB_OUTPUT, lines);
           '
+          # The one release date of this run. The plan records it, and publish regenerates CHANGELOG.md with it.
+          printf 'date=%s\n' "$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
 
       # Decides exactly one action, before any remote mutation:
       #   skip       target tag and its GitHub release both exist: nothing to publish.
@@ -281,15 +283,18 @@ jobs:
           echo "Release plan: action=${action} tag=${tag}"
 
       # The publish job reads this plan. The artifact is always uploaded, so publish always has a plan to read.
+      # The plan carries the one release date and the previous tag, so publish regenerates the same CHANGELOG.md.
       - name: Record release plan
         env:
           ACTION: ${{ steps.tag_check.outputs.action }}
           TAG: ${{ steps.tag_check.outputs.tag }}
           VERSION: ${{ steps.tag_check.outputs.version }}
+          PREVIOUS_TAG: ${{ steps.version.outputs.previousTag }}
+          RELEASE_DATE: ${{ steps.version.outputs.date }}
         run: |
           set -euo pipefail
           mkdir -p "${RUNNER_TEMP}/release-assets"
-          printf 'action=%s\ntag=%s\nversion=%s\n' "${ACTION}" "${TAG}" "${VERSION}" > "${RUNNER_TEMP}/release-assets/plan.txt"
+          printf 'action=%s\ntag=%s\nversion=%s\npreviousTag=%s\ndate=%s\n' "${ACTION}" "${TAG}" "${VERSION}" "${PREVIOUS_TAG}" "${RELEASE_DATE}" > "${RUNNER_TEMP}/release-assets/plan.txt"
 
       # Builds the release files of the latest milestone tag when that tag has no GitHub release yet.
       # The build runs in a separate worktree of the tag and never bumps, commits, or pushes. Publish
@@ -323,15 +328,29 @@ jobs:
           echo "${tag} has no GitHub release; building its files."
           echo "tag=${tag}" >> "$GITHUB_OUTPUT"
 
-      # The build runs in a separate worktree of the tag. Its dependency and build code runs without any token.
-      - name: Build milestone files
+      # Read-only. The milestone tag must be on main before any build step runs on its code: the build below runs the
+      # tag's own install and build scripts.
+      - name: Check milestone tag is on main
         if: steps.milestone.outputs.tag != ''
         env:
           TAG: ${{ steps.milestone.outputs.tag }}
         run: |
           set -euo pipefail
+          git fetch --quiet --force origin "+refs/heads/main:refs/remotes/origin/main"
+          if ! git merge-base --is-ancestor "refs/tags/${TAG}" refs/remotes/origin/main; then
+            echo "::error::${TAG} is not an ancestor of origin/main; refusing to build it." >&2
+            exit 1
+          fi
+
+      # The build runs in a separate worktree of the tag. Its dependency and build code runs without any token.
+      - name: Build milestone files
+        if: steps.milestone.outputs.tag != ''
+        env:
+          TAG: ${{ steps.milestone.outputs.tag }}
+          RELEASE_DATE: ${{ steps.version.outputs.date }}
+        run: |
+          set -euo pipefail
           version="${TAG#v}"
-          release_date="$(date -u +%Y-%m-%d)"
           dir="${RUNNER_TEMP}/finish-${version}"
           rm -rf "${dir}"
           git worktree prune
@@ -346,7 +365,7 @@ jobs:
               echo "CHANGELOG.md has no section for ${version}; refusing to regenerate notes for a published tag." >&2
               exit 1
             fi
-            node scripts/release/changelog.mjs --version "${version}" --date "${release_date}" --notes-out notes.md
+            node scripts/release/changelog.mjs --version "${version}" --date "${RELEASE_DATE}" --notes-out notes.md
             node "$(cd "${GITHUB_WORKSPACE}" && pwd -P)/scripts/release/assets.mjs" --root "${dir}" --tarball "${dir}/agent-realm-${version}.tgz" --out "${dir}/assets"
           )
           out="${RUNNER_TEMP}/milestone-files"
@@ -378,10 +397,10 @@ jobs:
         env:
           VERSION: ${{ steps.tag_check.outputs.version }}
           PREVIOUS_TAG: ${{ steps.version.outputs.previousTag }}
+          RELEASE_DATE: ${{ steps.version.outputs.date }}
         run: |
           set -euo pipefail
-          release_date="$(date -u +%Y-%m-%d)"
-          args=(--version "${VERSION}" --date "${release_date}")
+          args=(--version "${VERSION}" --date "${RELEASE_DATE}")
           if [ -n "${PREVIOUS_TAG}" ]; then
             args+=(--since "${PREVIOUS_TAG}")
           fi
@@ -436,8 +455,9 @@ jobs:
     runs-on: [self-hosted, linux, x64, omega-ci]
     timeout-minutes: 30
     # Privileged: holds the write grants and the attestation identity. It downloads only the tarball, checksums,
-    # SBOM and plan from the build job. The release commit, CHANGELOG.md and release notes are regenerated
-    # here from this checkout by trusted repository scripts that need no install. No npm, build or pack runs here.
+    # SBOM, milestone files and plan from the build job. The release commit, CHANGELOG.md and release notes are
+    # regenerated here with the plan's date and previous tag by trusted repository scripts that need no install.
+    # No npm, build or pack runs here.
     permissions:
       contents: write
       actions: write
@@ -510,11 +530,15 @@ jobs:
           action=""
           tag=""
           version=""
+          previous_tag=""
+          plan_date=""
           while IFS='=' read -r key value; do
             case "${key}" in
               action) action="${value}" ;;
               tag) tag="${value}" ;;
               version) version="${value}" ;;
+              previousTag) previous_tag="${value}" ;;
+              date) plan_date="${value}" ;;
             esac
           done < "${RUNNER_TEMP}/release-assets/plan.txt"
           case "${action}" in
@@ -524,35 +548,53 @@ jobs:
               exit 1
               ;;
           esac
+          if [ "${action}" = normal ]; then
+            if ! [[ "${tag}" =~ ^v0\.[0-9]+\.[0-9]+$ ]] || [ "${version}" != "${tag#v}" ] || ! [[ "${plan_date}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+              echo "::error::The release plan from the build job is malformed." >&2
+              exit 1
+            fi
+          fi
           {
             echo "action=${action}"
             echo "planTag=${tag}"
             echo "planVersion=${version}"
+            echo "planPreviousTag=${previous_tag}"
+            echo "planDate=${plan_date}"
           } >> "$GITHUB_OUTPUT"
-          echo "Release plan from build: action=${action} tag=${tag}"
+          echo "Release plan from build: action=${action} tag=${tag} date=${plan_date}"
 
-      # Recomputes the release values from this checkout with the repository's own script, which needs
-      # no install. The build job's plan must agree; a mismatch stops publish before any write.
+      # Recomputes the release values from this checkout with the repository's own script, which needs no install.
+      # The build job's plan must agree. A tag already on origin comes from an earlier attempt of this run:
+      # next-version then reports the following release, so the plan's values stand and Check release tag verifies
+      # the tag against this checkout instead.
       - name: Compute release values
         id: release
         if: steps.tag_check.outputs.action == 'normal'
         env:
           PLAN_TAG: ${{ steps.tag_check.outputs.planTag }}
           PLAN_VERSION: ${{ steps.tag_check.outputs.planVersion }}
+          PLAN_PREVIOUS_TAG: ${{ steps.tag_check.outputs.planPreviousTag }}
         run: |
           set -euo pipefail
+          remote_tag="$(git ls-remote --tags origin "refs/tags/${PLAN_TAG}")"
+          if [ -n "${remote_tag}" ]; then
+            echo "${PLAN_TAG} is already on origin; reusing the build plan."
+            printf 'version=%s\ntag=%s\npreviousTag=%s\n' "${PLAN_VERSION}" "${PLAN_TAG}" "${PLAN_PREVIOUS_TAG}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           line="$(node scripts/release/next-version.mjs)"
           NEXT_VERSION_LINE="${line}" node -e '
             const fs = require("node:fs");
             const next = JSON.parse(process.env.NEXT_VERSION_LINE);
-            if (next.tag !== process.env.PLAN_TAG || next.version !== process.env.PLAN_VERSION) {
-              console.log(`::error::The build plan (${process.env.PLAN_TAG}, ${process.env.PLAN_VERSION}) does not match this checkout (${next.tag}, ${next.version}); refusing to publish.`);
+            const previous = next.previousTag ?? "";
+            if (next.tag !== process.env.PLAN_TAG || next.version !== process.env.PLAN_VERSION || previous !== process.env.PLAN_PREVIOUS_TAG) {
+              console.log(`::error::The build plan (${process.env.PLAN_TAG}, ${process.env.PLAN_VERSION}, previous ${process.env.PLAN_PREVIOUS_TAG}) does not match this checkout (${next.tag}, ${next.version}, previous ${previous}); refusing to publish.`);
               process.exit(1);
             }
             const lines = [
               `version=${next.version}`,
               `tag=${next.tag}`,
-              `previousTag=${next.previousTag ?? ""}`,
+              `previousTag=${previous}`,
             ].join("\n") + "\n";
             fs.appendFileSync(process.env.GITHUB_OUTPUT, lines);
           '
@@ -571,10 +613,10 @@ jobs:
         env:
           VERSION: ${{ steps.release.outputs.version }}
           PREVIOUS_TAG: ${{ steps.release.outputs.previousTag }}
+          RELEASE_DATE: ${{ steps.tag_check.outputs.planDate }}
         run: |
           set -euo pipefail
-          release_date="$(date -u +%Y-%m-%d)"
-          args=(--version "${VERSION}" --date "${release_date}" --notes-out release-notes.md)
+          args=(--version "${VERSION}" --date "${RELEASE_DATE}" --notes-out release-notes.md)
           if [ -n "${PREVIOUS_TAG}" ]; then
             args+=(--since "${PREVIOUS_TAG}")
           fi
@@ -587,6 +629,68 @@ jobs:
         run: |
           set -euo pipefail
           cp "${RUNNER_TEMP}/release-assets/agent-realm-${VERSION}.tgz" "agent-realm-${VERSION}.tgz"
+
+      # The tarball carries the CHANGELOG.md that build packed. Publish's regenerated copy must match it byte for
+      # byte: both jobs use the plan's date and previous tag. A difference stops publish before any write.
+      - name: Check CHANGELOG.md matches the packed tarball
+        if: steps.tag_check.outputs.action == 'normal'
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          tar -xzOf "agent-realm-${VERSION}.tgz" package/CHANGELOG.md > "${RUNNER_TEMP}/packed-CHANGELOG.md"
+          if ! cmp -s "${RUNNER_TEMP}/packed-CHANGELOG.md" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md regenerated by publish differs from the copy packed by build; refusing to publish." >&2
+            exit 1
+          fi
+
+      # Read-only. A tag already on origin comes from an earlier attempt of this run, and is reused only when it names
+      # this run's release commit. Sets exists, which decides whether the commit and push steps run.
+      - name: Check release tag
+        id: remote_tag
+        if: steps.tag_check.outputs.action == 'normal'
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          remote_tag="$(git ls-remote --tags origin "refs/tags/${TAG}")"
+          if [ -z "${remote_tag}" ]; then
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "${TAG} is not on origin; this run creates it."
+            exit 0
+          fi
+          tag_commit="$(git rev-parse --verify --quiet "refs/tags/${TAG}^{commit}" || true)"
+          if [ -z "${tag_commit}" ]; then
+            echo "::error::${TAG} is on origin but its commit could not be read." >&2
+            exit 1
+          fi
+          # The release commit is this run's triggering commit itself (when no release file changed), or a commit on
+          # top of it with the release subject.
+          if [ "${tag_commit}" != "${GITHUB_SHA}" ]; then
+            parent="$(git rev-parse --verify --quiet "${tag_commit}^" || true)"
+            subject="$(git log -1 --format=%s "${tag_commit}")"
+            if [ "${parent}" != "${GITHUB_SHA}" ] || [ "${subject}" != "chore(release): ${TAG} [skip ci]" ]; then
+              echo "::error::${TAG} is on origin at ${tag_commit}, which is not this run's release commit; refusing to publish." >&2
+              exit 1
+            fi
+          fi
+          list="$(node scripts/release/sync-version.mjs --files)"
+          if [ -z "${list}" ]; then
+            echo "::error::sync-version.mjs --files listed no files to compare." >&2
+            exit 1
+          fi
+          mapfile -t files <<< "${list}"
+          if ! git diff --quiet "${tag_commit}" -- CHANGELOG.md "${files[@]}"; then
+            echo "::error::The release files at ${TAG} differ from this run's regenerated files; refusing to publish." >&2
+            exit 1
+          fi
+          git fetch --quiet --force origin "+refs/heads/main:refs/remotes/origin/main"
+          if ! git merge-base --is-ancestor "${tag_commit}" refs/remotes/origin/main; then
+            echo "::error::${TAG} is not on origin/main; refusing to publish." >&2
+            exit 1
+          fi
+          echo "exists=true" >> "$GITHUB_OUTPUT"
+          echo "${TAG} is on origin at this run's release commit; reusing it."
 
       # Records where and how each published file was built. It runs before any tag is pushed or any
       # release is created, so a failed attestation publishes nothing. Empty lines are dropped, so a
@@ -604,7 +708,7 @@ jobs:
             ${{ needs.build.outputs.milestone_tag != '' && format('{0}/milestone-files/agent-realm-{1}.cdx.json', runner.temp, steps.milestone.outputs.version) || '' }}
 
       # Publishes the milestone tag's release with the files the build job produced, after the attestation
-      # above covers them and before this run's tag is pushed.
+      # above covers them and before this run's tag is pushed. Skipped when that release already exists.
       - name: Create milestone GitHub release
         if: needs.build.outputs.milestone_tag != ''
         env:
@@ -614,6 +718,14 @@ jobs:
           VERSION: ${{ steps.milestone.outputs.version }}
         run: |
           set -euo pipefail
+          if out="$(gh release view "${TAG}" --json tagName 2>&1)"; then
+            echo "${TAG} already has a GitHub release; nothing to create."
+            exit 0
+          fi
+          if ! printf '%s' "${out}" | grep -qi 'not found'; then
+            printf '%s\n' "${out}" >&2
+            exit 1
+          fi
           gh release create "${TAG}" \
             "${RUNNER_TEMP}/milestone-files/agent-realm-${VERSION}.tgz" \
             "${RUNNER_TEMP}/milestone-files/SHA256SUMS" \
@@ -622,8 +734,9 @@ jobs:
             --notes-file "${RUNNER_TEMP}/milestone-files/notes.md" \
             --verify-tag
 
+      # A retry that reuses the tag makes no commit: the tag already names this run's release commit.
       - name: Commit release changes
-        if: steps.tag_check.outputs.action == 'normal'
+        if: steps.tag_check.outputs.action == 'normal' && steps.remote_tag.outputs.exists == 'false'
         env:
           TAG: ${{ steps.release.outputs.tag }}
         run: |
@@ -647,7 +760,7 @@ jobs:
       # moved is superseded: this run exits green and the newer commit's run releases.
       - name: Tag and push release atomically
         id: push
-        if: steps.tag_check.outputs.action == 'normal'
+        if: steps.tag_check.outputs.action == 'normal' && steps.remote_tag.outputs.exists == 'false'
         env:
           TAG: ${{ steps.release.outputs.tag }}
           GH_TOKEN: ${{ github.token }}
@@ -682,10 +795,10 @@ jobs:
           echo "Atomic push of main and ${TAG} failed while origin/main is still ${GITHUB_SHA}." >&2
           exit 1
 
-      # If this fails, the tag and commit already exist on origin; a rerun's milestone step
-      # publishes this release before it publishes anything else.
+      # If this fails, the tag and commit already exist on origin. A rerun of this job reuses them (Check release
+      # tag) and creates only this release.
       - name: Create GitHub release
-        if: steps.tag_check.outputs.action == 'normal' && steps.push.outputs.pushed == 'true'
+        if: steps.tag_check.outputs.action == 'normal' && (steps.push.outputs.pushed == 'true' || steps.remote_tag.outputs.exists == 'true')
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -693,6 +806,14 @@ jobs:
           VERSION: ${{ steps.release.outputs.version }}
         run: |
           set -euo pipefail
+          if out="$(gh release view "${TAG}" --json tagName 2>&1)"; then
+            echo "${TAG} already has a GitHub release; nothing to create."
+            exit 0
+          fi
+          if ! printf '%s' "${out}" | grep -qi 'not found'; then
+            printf '%s\n' "${out}" >&2
+            exit 1
+          fi
           gh release create "${TAG}" \
             "agent-realm-${VERSION}.tgz" \
             "${RUNNER_TEMP}/release-assets/SHA256SUMS" \
