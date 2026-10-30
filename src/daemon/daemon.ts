@@ -84,7 +84,7 @@ export const HEALTH_PROBE_INTERVAL_MS = 10_000;
 // The budget of the startup temp-file sweep and audit reconciliation together, counted from the end of the reap. Both are
 // optional cleanup, so a large workspace or audit history must not keep clients waiting: the work that does not fit is
 // reported as unfinished and a later start finishes it. The gate opens at most this long, plus one chunk of work, after the reap.
-export const STARTUP_MAINTENANCE_BUDGET_MS = 10_000;
+const STARTUP_MAINTENANCE_BUDGET_MS = 10_000;
 
 // How the start gate settles: open for serving, or failed with the start error.
 type GateOutcome = { readonly ok: true } | { readonly ok: false; readonly error: unknown };

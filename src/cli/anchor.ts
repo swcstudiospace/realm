@@ -18,7 +18,7 @@ import {
 } from "../audit/anchor.js";
 import { isSessionId } from "../session/paths.js";
 
-export const DEFAULT_ANCHOR_RPC_URL = "https://api.devnet.solana.com";
+const DEFAULT_ANCHOR_RPC_URL = "https://api.devnet.solana.com";
 
 export interface AnchorArgs {
   readonly sessionId: string;

@@ -12,7 +12,7 @@ import { REDACTED, SENSITIVE_KEY_PATTERN, redactString, redactValue } from "../a
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
-export const LOG_LEVELS: readonly LogLevel[] = Object.freeze(["debug", "info", "warn", "error"] as const);
+const LOG_LEVELS: readonly LogLevel[] = Object.freeze(["debug", "info", "warn", "error"] as const);
 
 const LEVEL_RANK: Readonly<Record<LogLevel, number>> = Object.freeze({ debug: 0, info: 1, warn: 2, error: 3 });
 

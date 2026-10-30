@@ -73,7 +73,7 @@ export function kernelStatusOf(status: string): Readonly<Record<string, string>>
 
 // The capability masks of a /proc/<pid>/status text, keyed by set name. A missing or malformed line leaves its set out,
 // so the live proof fails closed on it.
-export function capabilitySetsOf(status: string): Readonly<Record<string, string>> {
+function capabilitySetsOf(status: string): Readonly<Record<string, string>> {
   const sets: Record<string, string> = {};
   for (const line of status.split("\n")) {
     const match = /^(Cap(?:Inh|Prm|Eff|Bnd|Amb)):\s*([0-9a-fA-F]+)\s*$/.exec(line);

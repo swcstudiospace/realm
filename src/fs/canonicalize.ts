@@ -21,7 +21,7 @@ import { dirname, isAbsolute, join } from "node:path";
 import { makeRealmError, RealmError } from "../core/errors.js";
 import { isInsideRoot, type PinnedRoot } from "./root.js";
 
-export const MAX_SYMLINK_HOPS = 40;
+const MAX_SYMLINK_HOPS = 40;
 
 export const PROC_FD_DIR = "/proc/self/fd";
 

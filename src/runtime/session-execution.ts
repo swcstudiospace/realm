@@ -62,14 +62,14 @@ const AGENTOS_STOP_DEADLINE_MS = 15_000;
 // Bound on the delete of one session's realm sandbox in stop() and destroy(). A delete that misses it is a failed stop.
 const SANDBOX_DELETE_DEADLINE_MS = 15_000;
 // The sandbox limits come from the frozen profile, so they cannot drift from the verifier.
-export const SANDBOX_CPUS = HARDENING_PROFILE.nanoCpus / 1_000_000_000;
-export const SANDBOX_MEMORY = `${String(HARDENING_PROFILE.memoryBytes / 1024 ** 3)}Gi`;
+const SANDBOX_CPUS = HARDENING_PROFILE.nanoCpus / 1_000_000_000;
+const SANDBOX_MEMORY = `${String(HARDENING_PROFILE.memoryBytes / 1024 ** 3)}Gi`;
 // The workload binary the policy document names: the node binary in the AgentOS image, which runs the runner child.
 export const AGENTOS_WORKLOAD_BINARY = "/usr/local/bin/node";
 
 // The only environment names the OpenShell CLI receives. Each one is needed by the CLI to locate its
 // configuration and the rootless Podman socket. No other name crosses from the host.
-export const OPENSHELL_ENV_NAMES: readonly string[] = Object.freeze(["PATH", "HOME", "XDG_RUNTIME_DIR"]);
+const OPENSHELL_ENV_NAMES: readonly string[] = Object.freeze(["PATH", "HOME", "XDG_RUNTIME_DIR"]);
 
 // The libpod calls the composition needs. The closed client satisfies it.
 export type SessionContainers = Pick<

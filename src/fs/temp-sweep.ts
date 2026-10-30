@@ -41,7 +41,7 @@ const DIR_READ_BATCH = 64;
 // write and one fsync, so the bound only has to exceed the longest legitimate write.
 export const ORPHAN_TEMP_MIN_AGE_MS = 60_000;
 
-export const DEFAULT_SWEEP_MAX_ENTRIES = 500_000;
+const DEFAULT_SWEEP_MAX_ENTRIES = 500_000;
 export const DEFAULT_SWEEP_DEADLINE_MS = 15_000;
 
 // One audit line. There is no `phase`, so the line keeps the pre-stage audit shape and is never

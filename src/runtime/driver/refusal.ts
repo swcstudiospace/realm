@@ -67,7 +67,7 @@ export interface RefusalScope {
   readonly log: RefusalLog;
 }
 
-export function stderrRefusalLog(line: string): void {
+function stderrRefusalLog(line: string): void {
   process.stderr.write(`${line}\n`);
 }
 

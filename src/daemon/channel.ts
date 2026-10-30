@@ -54,7 +54,7 @@ export const CONTROL_TIMEOUT_MS: Readonly<Record<ControlMethod, number>> = Objec
 export const SOCKET_MODE = 0o600;
 
 // The run directory is created-or-checked at this mode (P6-D3).
-export const RUN_DIR_MODE = 0o700;
+const RUN_DIR_MODE = 0o700;
 // Mode of directories created as missing ancestors of the state directory: the default, which the umask narrows.
 const DEFAULT_DIR_MODE = 0o777;
 

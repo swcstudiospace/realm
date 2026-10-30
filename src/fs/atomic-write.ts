@@ -298,7 +298,7 @@ export function assertDirectoryPinned(dirFd: number, dir: string, procFdDir: str
 
 // Flushes a directory entry through an open directory descriptor. fstat is the check that the
 // descriptor is a directory; anything else is PATH_ESCAPE.
-export function syncDirectoryFd(fd: number): void {
+function syncDirectoryFd(fd: number): void {
   if (!fstatSync(fd).isDirectory()) {
     throw makeRealmError("PATH_ESCAPE");
   }

@@ -112,7 +112,7 @@ export function tmpfsOptionsOf(destination: string): readonly string[] {
 // are one value: the create body names them, and the verifier checks PID 1 against them. The file name is the one the channel
 // writes (BOOTSTRAP_FILE_NAME in driver/secret-store.ts).
 export const RUNTIME_BINARY = "/usr/local/lib/realm/openshell-sandbox";
-export const CONTAINER_BOOTSTRAP_PATH = `${HARDENING_PROFILE.channelDestination}/bootstrap.json`;
+const CONTAINER_BOOTSTRAP_PATH = `${HARDENING_PROFILE.channelDestination}/bootstrap.json`;
 export const RUNTIME_ARGV: readonly string[] = Object.freeze([RUNTIME_BINARY, "--bootstrap", CONTAINER_BOOTSTRAP_PATH]);
 // The options the channel mount carries, as Podman's inspect reports them. Writability is not listed here: Podman reports it in the RW
 // field, which the pre-start check reads, and the create asks for rw explicitly.

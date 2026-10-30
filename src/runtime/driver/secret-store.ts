@@ -29,7 +29,7 @@ import { makeRealmError, RealmError, type ErrorCode } from "../../core/errors.js
 import { CONTAINER_ID_PATTERN } from "../libpod-routes.js";
 import { isRealmSandboxName } from "../openshell.js";
 
-export const LAUNCH_FILE_NAME = "launch.json";
+const LAUNCH_FILE_NAME = "launch.json";
 export const DESCRIPTOR_FILE_NAME = "descriptor.json";
 export const AUTH_FILE_NAME = "auth.json";
 export const MAIN_EXIT_MARKER_NAME = "main-exit";
