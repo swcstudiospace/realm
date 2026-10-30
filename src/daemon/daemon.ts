@@ -19,7 +19,7 @@ import { newCorrelationId } from "../observe/ids.js";
 import { nullLogger, type Logger } from "../observe/logger.js";
 import { reconcileAuditLogs } from "../audit/reconcile.js";
 import type { Policy, PolicyMode } from "../contract/validate.js";
-import { makeRealmError, RealmError, type ErrorCode } from "../core/errors.js";
+import { ERROR_CODES, makeRealmError, RealmError, type ErrorCode } from "../core/errors.js";
 import { loadPolicyFile } from "../core/policy.js";
 import type { BridgePort, ExecutionService } from "../core/ports.js";
 import type { StateSnapshot } from "../core/state-machine.js";
@@ -309,7 +309,14 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
     }
     healthProbing = true;
     try {
-      await handle.controller.probe();
+      const snapshot = await handle.controller.probe();
+      if (snapshot.state === "error") {
+        const code = catalogueCode(snapshot.reason);
+        logger.warn("health.probe_failed", {
+          ...(code === undefined ? { reason: snapshot.reason } : { code }),
+          ...(upId === undefined ? {} : { upId }),
+        });
+      }
     } catch (error: unknown) {
       logger.warn("health.probe_failed", { code: codeOf(error), ...(upId === undefined ? {} : { upId }) });
       options.onHealthProbeFailure?.(codeOf(error));
@@ -467,7 +474,14 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
         try {
           const snapshot = await handle.controller.create(workspaceRoot);
           upId = correlationId;
-          logger.info("up.end", { correlationId, upId, durationMs: Date.now() - startedAt, state: snapshot.state });
+          const code = snapshot.state === "error" ? catalogueCode(snapshot.reason) : undefined;
+          logger.info("up.end", {
+            correlationId,
+            upId,
+            durationMs: Date.now() - startedAt,
+            state: snapshot.state,
+            ...(code === undefined ? {} : { code }),
+          });
           return { id, result: statusOf(snapshot) };
         } catch (error: unknown) {
           logger.info("up.end", { correlationId, upId: correlationId, durationMs: Date.now() - startedAt, code: codeOf(error) });
@@ -880,6 +894,15 @@ function statusResult(snapshot: StateSnapshot, mode: PolicyMode, notice: string 
 
 function codeOf(error: unknown): ErrorCode {
   return error instanceof RealmError ? error.code : "SCHEMA_INVALID";
+}
+
+function catalogueCode(reason: string): ErrorCode | undefined {
+  for (const code of ERROR_CODES) {
+    if (code === reason) {
+      return code;
+    }
+  }
+  return undefined;
 }
 
 // The refusal reply for a thrown error: its catalogue code, plus the cause code when the error has one.

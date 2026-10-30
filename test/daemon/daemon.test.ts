@@ -901,6 +901,60 @@ void test("OBS-02: a tool call's log correlation id is the id on both audit line
   await awaitDone(daemon);
 });
 
+void test("OBS-02: up logs the catalogue code when create returns an error snapshot", async (t) => {
+  const lines: string[] = [];
+  const logger = createLogger({
+    sink: { write: (line) => { lines.push(line); return true; } },
+    level: "info",
+    now: () => new Date(CLOCK_ISO),
+  });
+  const fixture = makeDirs();
+  const { options } = daemonParts(fixture);
+  const daemon = await startDaemon({ ...options, logger });
+  t.after(() => cleanupDaemon(daemon));
+  daemon.handle.controller.create = () => Promise.resolve({
+    state: "error",
+    reason: "OPENSHELL_START_FAILED",
+    lastTransitionAt: CLOCK_ISO,
+  });
+  const reply = await sendRequest(daemon.socketPath, { id: "up-1", method: "up", params: { workspaceRoot: fixture.ws } });
+  assert.equal(reply.error, undefined);
+  const logged = lines.map((line) => JSON.parse(line) as { event?: string; code?: string; state?: string }).find((row) => row.event === "up.end");
+  assert.equal(logged?.code, "OPENSHELL_START_FAILED");
+  assert.equal(logged.state, "error");
+  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down" });
+  assert.ok(down.result !== undefined);
+  await awaitDone(daemon);
+});
+
+void test("OBS-02: a probe that resolves in error is logged", async (t) => {
+  const lines: string[] = [];
+  const logger = createLogger({
+    sink: { write: (line) => { lines.push(line); return true; } },
+    level: "warn",
+    now: () => new Date(CLOCK_ISO),
+  });
+  const fixture = makeDirs();
+  const { options } = daemonParts(fixture);
+  const daemon = await startDaemon({ ...options, logger });
+  t.after(() => cleanupDaemon(daemon));
+  const up = await sendRequest(daemon.socketPath, { id: "u1", method: "up", params: { workspaceRoot: fixture.ws } });
+  assert.equal(snapshotStateOf(up), "active");
+  daemon.handle.controller.probe = () => Promise.resolve({
+    state: "error",
+    reason: "OPENSHELL_GATEWAY_LOST",
+    lastTransitionAt: CLOCK_ISO,
+  });
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 12_000);
+  });
+  const logged = lines.map((line) => JSON.parse(line) as { event?: string; code?: string }).find((row) => row.event === "health.probe_failed");
+  assert.equal(logged?.code, "OPENSHELL_GATEWAY_LOST");
+  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down" });
+  assert.ok(down.result !== undefined);
+  await awaitDone(daemon);
+});
+
 void test("RT-06: a tool request without a tool object refuses with SCHEMA_INVALID and never reaches the dispatcher (P6-D2, P6-D12)", async (t) => {
   const fixture = makeDirs();
   const { options } = daemonParts(fixture);
