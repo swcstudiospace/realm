@@ -216,7 +216,8 @@ jobs:
           printf 'date=%s\n' "$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
 
       # Decides exactly one action, before any remote mutation:
-      #   skip       target tag and its GitHub release both exist: nothing to publish.
+      #   skip       target tag exists and its GitHub release is published with every expected
+      #              asset: nothing to publish. A draft or incomplete release is an error.
       #   superseded origin/main is no longer this commit: the newer commit's run releases.
       #   normal     bump, build and pack here; the publish job commits, pushes main and the tag
       #              atomically, then releases.
@@ -233,28 +234,42 @@ jobs:
             REMOTE_TAG="$(git ls-remote --tags origin "refs/tags/$1")"
           }
 
-          # Sets RELEASE_STATE to present or missing; any other gh failure is fatal.
-          release_state() {
-            local out
-            if out="$(gh release view "$1" --json tagName 2>&1)"; then
-              RELEASE_STATE=present
-            elif printf '%s' "$out" | grep -qi 'not found'; then
-              RELEASE_STATE=missing
-            else
-              printf '%s\n' "$out" >&2
-              return 1
+          # Lists the releases, because the tag endpoint returns published releases only. Sets STATE to missing,
+          # draft or published, and ASSETS to the names of the release's assets.
+          release_lookup() {
+            local tag="$1" lines
+            if ! [[ "${tag}" =~ ^v0\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::${tag} is not a release tag." >&2
+              exit 1
             fi
+            lines="$(gh api --paginate "repos/${GH_REPO}/releases" --jq ".[] | select(.tag_name == \"${tag}\") | (if .draft then \"draft\" else \"published\" end), (.assets[].name)")"
+            STATE=missing
+            ASSETS=""
+            if [ -n "${lines}" ]; then
+              STATE="${lines%%$'\n'*}"
+              if [[ "${lines}" == *$'\n'* ]]; then
+                ASSETS="${lines#*$'\n'}"
+              fi
+            fi
+          }
+          # Prints each expected asset of the tag's release that the release lacks. Reads ASSETS.
+          missing_assets() {
+            local version="${1#v}" name
+            for name in "agent-realm-${version}.tgz" SHA256SUMS "agent-realm-${version}.cdx.json"; do
+              grep -qxF "${name}" <<< "${ASSETS}" || printf '%s\n' "${name}"
+            done
           }
 
           action=normal
           tag="${TARGET_TAG}"
           remote_tag_state "${TARGET_TAG}"
           if [ -n "${REMOTE_TAG}" ]; then
-            release_state "${TARGET_TAG}"
-            if [ "${RELEASE_STATE}" = present ]; then
+            release_lookup "${TARGET_TAG}"
+            missing="$(missing_assets "${TARGET_TAG}")"
+            if [ "${STATE}" = published ] && [ -z "${missing}" ]; then
               action=skip
             else
-              echo "::error::Target tag ${TARGET_TAG} exists without a GitHub release; this run publishes nothing for it." >&2
+              echo "::error::Target tag ${TARGET_TAG} exists but its GitHub release is ${STATE}, not published with every expected asset (lacks: ${missing//$'\n'/ }); this run publishes nothing for it." >&2
               exit 1
             fi
           fi
@@ -272,7 +287,7 @@ jobs:
           fi
 
           if [ "${action}" = skip ]; then
-            echo "Tag ${tag} and its GitHub release already exist; nothing to publish."
+            echo "Tag ${tag} and its GitHub release are published with every expected asset; nothing to publish."
           fi
 
           {
@@ -296,10 +311,10 @@ jobs:
           mkdir -p "${RUNNER_TEMP}/release-assets"
           printf 'action=%s\ntag=%s\nversion=%s\npreviousTag=%s\ndate=%s\n' "${ACTION}" "${TAG}" "${VERSION}" "${PREVIOUS_TAG}" "${RELEASE_DATE}" > "${RUNNER_TEMP}/release-assets/plan.txt"
 
-      # Builds the release files of the latest milestone tag when that tag has no GitHub release yet.
-      # The build runs in a separate worktree of the tag and never bumps, commits, or pushes. Publish
-      # attests and releases the files this step writes. Runs on every build, so a rerun after a failed
-      # release creation publishes the earlier release first.
+      # Builds the release files of the latest milestone tag unless that tag's GitHub release is published with every
+      # expected asset. The build runs in a separate worktree of the tag and never bumps, commits, or pushes. Publish
+      # attests and releases the files this step writes. Runs on every build that finds the release incomplete, so a
+      # rerun after a failed release creation publishes the earlier release first.
       - name: Plan milestone finish
         id: milestone
         env:
@@ -317,15 +332,38 @@ jobs:
             echo "No milestone tag exists yet; nothing to finish."
             exit 0
           fi
-          if out="$(gh release view "${tag}" --json tagName 2>&1)"; then
-            echo "${tag} already has a GitHub release; nothing to finish."
+          # Lists the releases, because the tag endpoint returns published releases only. Sets STATE to missing,
+          # draft or published, and ASSETS to the names of the release's assets.
+          release_lookup() {
+            local tag="$1" lines
+            if ! [[ "${tag}" =~ ^v0\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::${tag} is not a release tag." >&2
+              exit 1
+            fi
+            lines="$(gh api --paginate "repos/${GH_REPO}/releases" --jq ".[] | select(.tag_name == \"${tag}\") | (if .draft then \"draft\" else \"published\" end), (.assets[].name)")"
+            STATE=missing
+            ASSETS=""
+            if [ -n "${lines}" ]; then
+              STATE="${lines%%$'\n'*}"
+              if [[ "${lines}" == *$'\n'* ]]; then
+                ASSETS="${lines#*$'\n'}"
+              fi
+            fi
+          }
+          # Prints each expected asset of the tag's release that the release lacks. Reads ASSETS.
+          missing_assets() {
+            local version="${1#v}" name
+            for name in "agent-realm-${version}.tgz" SHA256SUMS "agent-realm-${version}.cdx.json"; do
+              grep -qxF "${name}" <<< "${ASSETS}" || printf '%s\n' "${name}"
+            done
+          }
+          release_lookup "${tag}"
+          missing="$(missing_assets "${tag}")"
+          if [ "${STATE}" = published ] && [ -z "${missing}" ]; then
+            echo "${tag} is published with every expected asset; nothing to finish."
             exit 0
           fi
-          if ! printf '%s' "${out}" | grep -qi 'not found'; then
-            printf '%s\n' "${out}" >&2
-            exit 1
-          fi
-          echo "${tag} has no GitHub release; building its files."
+          echo "${tag}: release state ${STATE} is not complete; building its files."
           echo "tag=${tag}" >> "$GITHUB_OUTPUT"
 
       # Read-only. The milestone tag must be on main before any build step runs on its code: the build below runs the
