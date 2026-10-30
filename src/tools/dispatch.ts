@@ -19,6 +19,7 @@
 // wait settles (D-105).
 
 import { appendAudit, summarizeExec, type AuditEntryInput, type ExecSummary } from "../audit/log.js";
+import { isCorrelationId, newCorrelationId } from "../observe/ids.js";
 import {
   validate,
   type ExecParams,
@@ -98,7 +99,7 @@ export type ToolOutcome =
 
 export class ToolDispatcher {
   private readonly deps: ToolDispatcherDeps;
-  private readonly workspace: WorkspaceDeps;
+  private readonly workspace: Omit<WorkspaceDeps, "audit">;
 
   constructor(deps: ToolDispatcherDeps) {
     this.deps = deps;
@@ -107,23 +108,26 @@ export class ToolDispatcher {
       boundRoot: deps.boundRoot,
       locks: deps.locks,
       credentialAllow: deps.policy.credentialAllow,
-      audit: (entry) => {
-        appendAudit(deps.stateDir, entry);
-      },
       mutationGate: () => deps.controller.mutationGate(),
     };
   }
 
   // The only entry point for tool calls (D-88). A refusal is returned, never thrown. Only a defect
-  // that is not a RealmError escapes.
-  async call(raw: unknown): Promise<ToolOutcome> {
+  // that is not a RealmError escapes. An absent correlation id is minted here so both audit lines of
+  // the call share one (D-1703). The tool result shape is unchanged.
+  async call(raw: unknown, context?: { readonly correlationId?: string }): Promise<ToolOutcome> {
     const parsed = validate("tools", raw);
     if (!parsed.ok) {
       return refused(null, parsed.error.code);
     }
     const tool = Object.keys(parsed.value)[0] as ToolName;
+    const supplied = context?.correlationId;
+    if (supplied !== undefined && !isCorrelationId(supplied)) {
+      return refused(tool, "SCHEMA_INVALID");
+    }
+    const correlationId = supplied ?? newCorrelationId();
     try {
-      return await this.#run(parsed.value);
+      return await this.#run(parsed.value, correlationId);
     } catch (error: unknown) {
       if (error instanceof RealmError) {
         return refused(tool, error.code, error.causeCode);
@@ -132,25 +136,35 @@ export class ToolDispatcher {
     }
   }
 
+  #workspace(correlationId: string): WorkspaceDeps {
+    return {
+      ...this.workspace,
+      audit: (entry) => {
+        appendAudit(this.deps.stateDir, { ...entry, correlationId });
+      },
+    };
+  }
+
   // Dispatches by tool key. Every ToolCall member has a branch; a value that matches none is refused (TOOL-03).
-  async #run(call: ToolCall): Promise<ToolOutcome> {
+  async #run(call: ToolCall, correlationId: string): Promise<ToolOutcome> {
+    const workspace = this.#workspace(correlationId);
     if ("exec" in call) {
-      return this.#exec(call.exec);
+      return this.#exec(call.exec, correlationId);
     }
     if ("read" in call) {
-      return { outcome: "done", tool: "read", value: readWorkspaceFile(this.workspace, call.read) };
+      return { outcome: "done", tool: "read", value: readWorkspaceFile(workspace, call.read) };
     }
     if ("write" in call) {
-      return this.#write(call.write);
+      return this.#write(call.write, workspace);
     }
     if ("list" in call) {
-      return { outcome: "done", tool: "list", value: listWorkspaceDir(this.workspace, call.list) };
+      return { outcome: "done", tool: "list", value: listWorkspaceDir(workspace, call.list) };
     }
     if ("status" in call) {
-      return this.#status();
+      return this.#status(correlationId);
     }
     if ("retry" in call) {
-      return this.#retry();
+      return this.#retry(correlationId);
     }
     return refused(null, "SCHEMA_INVALID");
   }
@@ -158,17 +172,17 @@ export class ToolDispatcher {
   // A write in connecting waits for the state to leave it (D-91). The workspace handler then runs the
   // mutation gate, so an advisory write in a non-active state proceeds with its warning and a
   // required-mode write is refused with the deny code.
-  async #write(params: WriteParams): Promise<ToolOutcome> {
+  async #write(params: WriteParams, workspace: WorkspaceDeps): Promise<ToolOutcome> {
     if (this.deps.controller.snapshot().state === "connecting") {
       await waitLeavingConnecting(this.deps.controller.events, this.deps.policy.toolQueueMs);
     }
-    return { outcome: "done", tool: "write", value: writeWorkspaceFile(this.workspace, params) };
+    return { outcome: "done", tool: "write", value: writeWorkspaceFile(workspace, params) };
   }
 
   // exec runs only while active, in both modes (D-89, D-109). The argv form and the shell form both
   // reach the runner through buildExecArgv and runSandboxExec. The dispatcher also bounds the call with
   // TOOL_CALL_TIMEOUT_MS, so a runner that ignores its own deadline still returns TOOL_TIMEOUT.
-  async #exec(params: ExecParams): Promise<ToolOutcome> {
+  async #exec(params: ExecParams, correlationId: string): Promise<ToolOutcome> {
     checkExecPolicy(this.deps.policy, params);
     const workload: readonly string[] = "argv" in params ? params.argv : ["/bin/sh", "-c", params.script];
     // Refuses a malformed argv before admission. runSandboxExec builds the same argv again.
@@ -181,7 +195,7 @@ export class ToolDispatcher {
     if (state !== "active") {
       throw makeRealmError(execRefusalCode(state));
     }
-    const value = await this.#audited("exec", summarizeExec(params), () =>
+    const value = await this.#audited("exec", summarizeExec(params), correlationId, () =>
       withTimeout(
         runSandboxExec(
           this.deps.runOpenShell,
@@ -197,8 +211,8 @@ export class ToolDispatcher {
   }
 
   // status is not gated. It returns the controller snapshot with its display mapping (D-27).
-  async #status(): Promise<ToolOutcome> {
-    const value = await this.#audited("status", null, () => {
+  async #status(correlationId: string): Promise<ToolOutcome> {
+    const value = await this.#audited("status", null, correlationId, () => {
       const snapshot = this.deps.controller.snapshot();
       return Promise.resolve({ snapshot, display: displayStatus(snapshot) });
     });
@@ -209,9 +223,9 @@ export class ToolDispatcher {
   // unbound and stopping are refused before admission, so the call is not run and not audited. The
   // admission append is I/O, so the state is read again inside the admitted window and the decision
   // uses that read (M-01).
-  async #retry(): Promise<ToolOutcome> {
+  async #retry(correlationId: string): Promise<ToolOutcome> {
     refuseRetryIn(this.deps.controller.snapshot().state);
-    const value = await this.#audited("retry", null, async () => {
+    const value = await this.#audited("retry", null, correlationId, async () => {
       const current = this.deps.controller.snapshot();
       refuseRetryIn(current.state);
       if (current.state !== "error") {
@@ -233,12 +247,14 @@ export class ToolDispatcher {
   async #audited<T>(
     tool: "exec" | "status" | "retry",
     execSummary: ExecSummary | null,
+    correlationId: string,
     execute: () => Promise<T>,
   ): Promise<T> {
     const base: AuditEntryInput = {
       sessionId: this.deps.sessionId,
       tool,
       outcome: "ok",
+      correlationId,
       ...(execSummary === null ? {} : { execSummary }),
     };
     appendAudit(this.deps.stateDir, { ...base, phase: "admission" });

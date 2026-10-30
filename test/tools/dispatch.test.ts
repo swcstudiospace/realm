@@ -303,3 +303,26 @@ void test("TOOL-03: retry decides on the state current at its decision point, no
     assert.deepEqual(h.phases(), ["admission", "result"]);
   }
 });
+
+void test("OBS-02: a call mints one correlation id for both audit lines and keeps the result shape (D-1703)", async (t) => {
+  const h = makeHarness(t);
+  const outcome = await h.dispatcher.call({ status: {} });
+  expectDone(outcome, "status");
+  assert.equal("correlationId" in outcome, false);
+  const minted = auditIds(h.auditText());
+  assert.equal(minted.length, 2);
+  assert.equal(minted[0], minted[1]);
+  assert.match(minted[0] ?? "", /^[A-Za-z0-9_-]{1,64}$/);
+
+  const passed = await h.dispatcher.call({ status: {} }, { correlationId: "call-7" });
+  expectDone(passed, "status");
+  const ids = auditIds(h.auditText());
+  assert.deepEqual(ids.slice(2), ["call-7", "call-7"]);
+});
+
+function auditIds(text: string): string[] {
+  return text
+    .split("\n")
+    .filter((line) => line.length > 0)
+    .map((line) => (JSON.parse(line) as { correlationId?: string }).correlationId ?? "");
+}
