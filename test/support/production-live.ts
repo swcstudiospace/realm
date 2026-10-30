@@ -277,13 +277,25 @@ export function reapCountsOfNotice(notice: string): { readonly containers: numbe
   return { containers: Number(match[1]), sessionRecords: Number(match[2]) };
 }
 
-// The daemon log line that reports the startup reap of exactly one container and names it. The id is matched by prefix: the
+// The daemon.startup record that reports a reap of exactly one container and names it. The id is matched by prefix: the
 // list the suite takes before the kill prints Podman's short id, the daemon logs the full one. Undefined when no line matches.
 export function startupReapLineFor(log: string, containerId: string): string | undefined {
   if (containerId === "") {
     return undefined;
   }
-  return log.split(/\r?\n/).find((line) => line.startsWith("realm daemon: startup removed 1 container(s)") && line.includes(containerId));
+  return log.split(/\r?\n/).find((line) => {
+    try {
+      const value = JSON.parse(line) as { event?: unknown; containersRemoved?: unknown; containerIds?: unknown };
+      return (
+        value.event === "daemon.startup" &&
+        value.containersRemoved === 1 &&
+        Array.isArray(value.containerIds) &&
+        value.containerIds.some((id) => typeof id === "string" && (id === containerId || id.startsWith(containerId)))
+      );
+    } catch {
+      return false;
+    }
+  });
 }
 
 // The error an MCP tools/call result carries: isError true with structuredContent {code, retryable}. Undefined when the result is

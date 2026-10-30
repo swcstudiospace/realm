@@ -551,7 +551,7 @@ void test("production live 5: after the daemon is killed, the next realm up reap
     assert.equal(counts.containers, 1, `the notice must count one container: ${notice}`);
     assert.ok(counts.sessionRecords >= 1, `the notice must count at least one session record: ${notice}`);
     const daemonLog = readFileSync(join(scenario.environment.stateDir, "daemon.log"), "utf8");
-    assert.ok(startupReapLineFor(daemonLog, crashedContainerId) !== undefined, `daemon.log must hold a line "realm daemon: startup removed 1 container(s)" that names container ${crashedContainerId}`);
+    assert.ok(startupReapLineFor(daemonLog, crashedContainerId) !== undefined, `daemon.log must hold a daemon.startup record for one container that names ${crashedContainerId}`);
   } catch (error) {
     // With no daemon running, `realm down` reports "already down" and reaps nothing, so the sandbox the crash left would stay
     // and block the next scenario. One more realm up lets a daemon reap it for the cleanup's down. Its result is not judged and
