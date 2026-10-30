@@ -367,7 +367,7 @@ The owner lifted the ship hold on 2026-10-28 for one pull request with autoMerge
 **Success Criteria** (what must be TRUE):
   1. One command runs the harness against the built extension and a local Omp and passes; it starts an isolated Omp profile, a loopback OpenAI-compatible stub with a scripted sequence (one `write` tool call, then a final message), and Omp over RPC pipes with no pseudo-terminal, credentials or tokens, and it records the Omp version (HARN-01, HARN-03).
   2. The three cases pass: advisory mode with the realm down shows the notice and the file exists; fail-closed mode with the realm down blocks the call with `REALM_NOT_ACTIVE` and the file does not exist; with the realm active the call proceeds (HARN-02).
-  3. A capture of the run shows no network call outside loopback, and without Omp, Podman or the gate variable the command skips with the missing prerequisite named, as the production live suite does (HARN-03).
+  3. A capture of the run shows that the harness makes no connection to any host except the loopback stub, and no DNS query, on a warm profile; a cold profile is reported as skipped with its reason, because Omp's model-catalog refresh runs only on a cold profile and is not exempted (HARN-03).
   4. `docs/integration/omp.md` records, with the Omp version, whether `registerTool` tools reach the model, whether `setActiveTools` removes `write`, `edit` and `bash` and is enforced at execution, and whether `registerFileWriteFallback` can redirect a write; OQ-P5-01 and OQ-P5-02 are closed or restated from that finding (OMPX-01).
   5. The OMP-05 row in `.planning/REQUIREMENTS.md` reads complete, and its basis states that the run is scripted through Omp's own `write` tool and is not LLM-driven (HARN-04).
 

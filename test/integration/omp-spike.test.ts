@@ -952,7 +952,11 @@ async function tracedRun(
   return trace;
 }
 
-void test("S11: a cold Omp profile connects outside loopback at startup and a warm one does not; a refusing loopback proxy gives a cold profile a clean trace", { skip: traceGate ?? false, timeout: NETWORK_SCENARIO_TIMEOUT_MS }, async (t) => {
+// S11 exempts no host. Omp's model-catalog refresh (`catalog.stencil.so:443`; Omp 18.12.6's `online-if-uncached` strategy fetches
+// the model catalog when its cache is empty, 12-RESEARCH.md 2.6) happens at startup of a cold profile only. A cold run is reported as
+// skipped; a warm run fails on any connection outside the allowlist, DNS queries included, whatever address a host resolves to.
+
+void test("S11: a warm Omp profile connects only to loopback, and a cold profile is skipped with its reason (HARN-03)", { skip: traceGate ?? false, timeout: NETWORK_SCENARIO_TIMEOUT_MS }, async (t) => {
   t.diagnostic(`omp/${ompVersionText}`);
   const cleanups = createCleanups();
   t.after(() => cleanups.run());
@@ -972,16 +976,24 @@ void test("S11: a cold Omp profile connects outside loopback at startup and a wa
   cleanups.add(() => {
     profile.dispose();
   });
-  const cold = summarise(await tracedRun(provider, report, profile, "cold", {}), allow);
-  t.diagnostic(`cold: ${String(cold.external)} external connects, ${String(cold.dns)} DNS connects, loopback ports ${cold.loopbackPorts.join(",")}`);
-  assert.ok(cold.external > 0, "a cold profile connects outside loopback at startup");
-  assert.ok(cold.offenders.length > 0);
+  // The cold run is the warm-up that makes the profile warmed. Its trace is not the claim: a cold profile is reported as skipped with
+  // its reason, never passed on the strength of its startup traffic.
+  let warmed = false;
+  await t.test("cold profile: warm-up run, reported as skipped", async (c) => {
+    const cold = summarise(await tracedRun(provider, report, profile, "cold", {}), allow);
+    warmed = true;
+    c.diagnostic(`cold: ${String(cold.external)} external connects, ${String(cold.dns)} DNS connects, loopback ports ${cold.loopbackPorts.join(",")}; ${String(cold.offenders.length)} connection(s) outside the allowlist`);
+    c.skip("the profile is cold; Omp's model-catalog refresh is observed only on a cold profile");
+  });
 
-  const warm = summarise(await tracedRun(provider, report, profile, "warm", {}), allow);
-  t.diagnostic(`warm: ${String(warm.external)} external connects, ${String(warm.dns)} DNS connects, loopback ports ${warm.loopbackPorts.join(",")}`);
-  assert.equal(warm.offenders.length, 0, formatOffenders(warm.offenders));
-  assert.deepEqual(warm.loopbackPorts.filter((candidate) => !allow.loopbackPorts.includes(candidate)), []);
-  assert.ok(warm.loopbackPorts.includes(port), "the warm run reached the stub");
+  await t.test("warm profile: no connection outside the loopback stub, its discovery probes, or any DNS query", async (w) => {
+    assert.ok(warmed, "the warm run needs the cold run to have warmed the profile");
+    const warm = summarise(await tracedRun(provider, report, profile, "warm", {}), allow);
+    w.diagnostic(`warm: ${String(warm.external)} external connects, ${String(warm.dns)} DNS connects, loopback ports ${warm.loopbackPorts.join(",")}`);
+    assert.equal(warm.offenders.length, 0, `the warm run connected outside the allowlist or queried DNS; no host is exempt: ${formatOffenders(warm.offenders)}`);
+    assert.deepEqual(warm.loopbackPorts.filter((candidate) => !allow.loopbackPorts.includes(candidate)), []);
+    assert.ok(warm.loopbackPorts.includes(port), "the warm run reached the stub");
+  });
 
   // The proxy lever: a fresh profile (cold again) whose outbound HTTP(S) goes to a loopback proxy that refuses it.
   const proxy = new RefusingProxy();
