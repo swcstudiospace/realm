@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.3.22] - 2026-10-30
+
+### Documentation
+- docs(runtime): record per-project sessions and the reaper decision before the code (#36) (0d299a0)
+
 ## [0.3.21] - 2026-10-30
 
 ### Changed
