@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.3.12] - 2026-10-30
+
+### Added
+- feat(audit): chain each line and add realm audit verify (#28) (c898823)
+
 ## [0.3.11] - 2026-10-30
 
 ### Maintenance
