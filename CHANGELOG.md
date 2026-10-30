@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.3.23] - 2026-10-30
+
+### Added
+- feat(doctor): report each driver root once and add the safe state-directory fix (#39) (db2f966)
+
 ## [0.3.22] - 2026-10-30
 
 ### Documentation

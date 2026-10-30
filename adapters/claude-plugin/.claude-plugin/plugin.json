@@ -1,6 +1,6 @@
 {
   "name": "realm",
-  "version": "0.3.22",
+  "version": "0.3.23",
   "description": "Realm agent sandbox: serves the realm MCP server over stdio (realm mcp)",
   "license": "AGPL-3.0-only"
 }
