@@ -14,7 +14,7 @@ Realm ships three things over one tool contract:
 - a standalone CLI, `realm`, with a long-running local daemon;
 - MCP and ACP surfaces, so other agent hosts use the same sandbox.
 
-Core guarantee, under the fail-closed policy: every file mutation either lands inside the realm under policy or fails closed, and the user can always see whether the realm is active or disconnected for the session. The policy `mode` defaults to `fail-closed` (decision D4): while the realm is not active, the Omp guard refuses host `write` and `edit` calls. That is not containment of Omp's built-in `write`, `edit` and `bash` with the realm active, which still act on the host until Phase 16; advisory mode (warn and allow) requires the explicit value `"mode": "advisory"`.
+Core guarantee, under the fail-closed policy: every file mutation either lands inside the realm under policy or fails closed, and the user can always see whether the realm is active or disconnected for the session. The policy `mode` defaults to `fail-closed` (decision D4): while the realm is not active, the Omp guard refuses host `write` and `edit` calls. With the realm active, fail-closed asks Omp to remove its built-in tools outside the Realm allowlist, backed by the tool-call guard; that is a guard, not containment, because `write` stays as a device transport and the live check is pending; advisory mode (warn and allow) requires the explicit value `"mode": "advisory"`.
 
 Status (README.md and `.planning/PROJECT.md`):
 
