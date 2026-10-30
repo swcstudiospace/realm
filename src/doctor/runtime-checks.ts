@@ -210,7 +210,7 @@ function defaultConnectDriver(socketPath: string, timeoutMs: number): Promise<vo
     }, timeoutMs);
     socket.once("connect", () => {
       clearTimeout(timer);
-      socket.end();
+      socket.destroy();
       resolve();
     });
     socket.once("error", (error: unknown) => {
