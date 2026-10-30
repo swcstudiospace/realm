@@ -21,6 +21,7 @@ import { createConnection, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { appendAudit } from "../../src/audit/log.js";
+import { reconcileAuditLogs } from "../../src/audit/reconcile.js";
 import { makeRealmError, RealmError } from "../../src/core/errors.js";
 import { displayStatus, STATUS_LABELS } from "../../src/core/status.js";
 import {
@@ -39,6 +40,7 @@ import {
   type StartupReport,
 } from "../../src/daemon/daemon.js";
 import type { CheckResult } from "../../src/doctor/checks.js";
+import { createLogger } from "../../src/observe/logger.js";
 import type { PodmanProbeResult } from "../../src/runtime/podman-probe.js";
 import { controlSocketPath } from "../../src/session/paths.js";
 import type { ToolOutcome } from "../../src/tools/dispatch.js";
@@ -826,9 +828,9 @@ function recordDispatcherCalls(
   const dispatcher = daemon.handle.dispatcher;
   const real = dispatcher.call.bind(dispatcher);
   const record: DispatcherRecord = { raws: [], outcomes: [] };
-  dispatcher.call = async (raw: unknown): Promise<ToolOutcome> => {
+  dispatcher.call = async (raw: unknown, context?: { readonly correlationId?: string }): Promise<ToolOutcome> => {
     record.raws.push(raw);
-    const outcome = await (replacement === undefined ? real(raw) : replacement(raw));
+    const outcome = await (replacement === undefined ? real(raw, context) : replacement(raw));
     record.outcomes.push(outcome);
     return outcome;
   };
@@ -853,6 +855,46 @@ void test("RT-06: a tool request reaches the dispatcher exactly once and answers
   const [outcome] = record.outcomes;
   assert.ok(outcome !== undefined, "the dispatcher must answer exactly one outcome");
   assert.deepEqual(reply.result, JSON.parse(JSON.stringify(outcome)));
+
+  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down" });
+  assert.ok(down.result !== undefined);
+  await awaitDone(daemon);
+});
+
+void test("OBS-02: a tool call's log correlation id is the id on both audit lines", async (t) => {
+  const lines: string[] = [];
+  const logger = createLogger({
+    sink: { write: (line) => { lines.push(line); return true; } },
+    level: "info",
+    now: () => new Date(CLOCK_ISO),
+  });
+  const fixture = makeDirs();
+  const { options } = daemonParts(fixture);
+  const daemon = await startDaemon({ ...options, logger });
+  t.after(() => cleanupDaemon(daemon));
+
+  const reply = await sendRequest(daemon.socketPath, {
+    id: "tool-cid",
+    method: "tool",
+    params: { tool: { status: {} } },
+  });
+  assert.equal(reply.error, undefined);
+  const logged = lines.map((line) => JSON.parse(line) as { event?: string; correlationId?: string }).find((row) => row.event === "tool.result");
+  assert.equal(typeof logged?.correlationId, "string");
+  const correlationId = logged?.correlationId ?? "";
+  const audit = auditLinesOf(fixture, "sess-daemon").filter((row) => row["correlationId"] === correlationId);
+  assert.deepEqual(audit.map((row) => row["phase"]).sort(), ["admission", "result"]);
+  appendAudit(fixture.stateDir, {
+    sessionId: "sess-daemon",
+    tool: "status",
+    outcome: "ok",
+    phase: "admission",
+    correlationId,
+  });
+  assert.equal(reconcileAuditLogs(fixture.stateDir).appended, 1);
+  const closed = auditLinesOf(fixture, "sess-daemon").filter((row) => row["phase"] === "reconciliation");
+  assert.equal(closed.length, 1);
+  assert.equal(closed[0]?.["correlationId"], correlationId);
 
   const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down" });
   assert.ok(down.result !== undefined);

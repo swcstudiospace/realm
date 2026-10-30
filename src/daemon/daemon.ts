@@ -15,6 +15,8 @@ import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { AndaBridge } from "../anda/client.js";
 import { appendAudit } from "../audit/log.js";
+import { newCorrelationId } from "../observe/ids.js";
+import { nullLogger, type Logger } from "../observe/logger.js";
 import { reconcileAuditLogs } from "../audit/reconcile.js";
 import type { Policy, PolicyMode } from "../contract/validate.js";
 import { makeRealmError, RealmError, type ErrorCode } from "../core/errors.js";
@@ -171,6 +173,8 @@ export interface StartDaemonOptions extends BuildDaemonHandleOptions {
   readonly timeoutMs?: number;
   // Test seam: receives the listening server, so a test can fail it the way the runtime would.
   readonly onServer?: (server: Server) => void;
+  // Request log (OBS-02). Defaults to a logger that writes nothing. The entry passes one whose sink is the daemon log.
+  readonly logger?: Logger;
 }
 
 export interface StartedDaemon {
@@ -279,6 +283,8 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
   // a record (D-1404). It is not consumed on read: Omp attaches with up before it asks for status. Unset until the startup
   // maintenance has run, and unset when nothing was destroyed.
   let startupNotice: string | undefined;
+  let upId: string | undefined;
+  const logger = options.logger ?? nullLogger;
   const statusOf = (snapshot: StateSnapshot): StatusResult => statusResult(snapshot, handle.policyMode, startupNotice);
   const completed = new Set<Socket>();
 
@@ -305,6 +311,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
     try {
       await handle.controller.probe();
     } catch (error: unknown) {
+      logger.warn("health.probe_failed", { code: codeOf(error), ...(upId === undefined ? {} : { upId }) });
       options.onHealthProbeFailure?.(codeOf(error));
     } finally {
       healthProbing = false;
@@ -443,19 +450,27 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
         if (typeof workspaceRoot !== "string" || workspaceRoot.length === 0) {
           return { id, error: { code: "SCHEMA_INVALID" } };
         }
+        const correlationId = newCorrelationId();
+        const startedAt = Date.now();
+        logger.info("up.begin", { correlationId, upId: correlationId });
         let probeResult: PodmanProbeResult;
         try {
           probeResult = await probe();
         } catch (error: unknown) {
+          logger.info("up.end", { correlationId, upId: correlationId, durationMs: Date.now() - startedAt, code: codeOf(error) });
           return refusalReply(id, error);
         }
         if (!probeResult.ok) {
+          logger.info("up.end", { correlationId, upId: correlationId, durationMs: Date.now() - startedAt, code: probeResult.code });
           return { id, error: { code: probeResult.code } };
         }
         try {
           const snapshot = await handle.controller.create(workspaceRoot);
+          upId = correlationId;
+          logger.info("up.end", { correlationId, upId, durationMs: Date.now() - startedAt, state: snapshot.state });
           return { id, result: statusOf(snapshot) };
         } catch (error: unknown) {
+          logger.info("up.end", { correlationId, upId: correlationId, durationMs: Date.now() - startedAt, code: codeOf(error) });
           return refusalReply(id, error);
         }
       }
@@ -467,9 +482,21 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
         if (typeof tool !== "object" || tool === null || Array.isArray(tool)) {
           return { id, error: { code: "SCHEMA_INVALID" } };
         }
+        const correlationId = newCorrelationId();
+        const startedAt = Date.now();
+        const toolName = Object.keys(tool)[0] ?? "unknown";
         try {
-          const outcome = await handle.dispatcher.call(tool);
+          const outcome = await handle.dispatcher.call(tool, { correlationId });
+          const elapsed = Date.now() - startedAt;
           if (outcome.outcome === "refused") {
+            logger.info("tool.result", {
+              correlationId,
+              ...(upId === undefined ? {} : { upId }),
+              tool: toolName,
+              outcome: "refused",
+              code: outcome.code,
+              durationMs: elapsed,
+            });
             return {
               id,
               error:
@@ -478,8 +505,23 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
                   : { code: outcome.code, causeCode: outcome.causeCode },
             };
           }
+          logger.info("tool.result", {
+            correlationId,
+            ...(upId === undefined ? {} : { upId }),
+            tool: toolName,
+            outcome: "done",
+            durationMs: elapsed,
+          });
           return { id, result: outcome };
         } catch (error: unknown) {
+          logger.info("tool.result", {
+            correlationId,
+            ...(upId === undefined ? {} : { upId }),
+            tool: toolName,
+            outcome: "error",
+            code: codeOf(error),
+            durationMs: Date.now() - startedAt,
+          });
           return refusalReply(id, error);
         }
       }

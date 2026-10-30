@@ -13,6 +13,7 @@ import { productionRunnerChild } from "../runtime/agentos-workload.js";
 import type { AgentOsDriver } from "../runtime/agentos.js";
 import { productionOpenShellRunner } from "../runtime/session-execution.js";
 import type { EnvironmentLike } from "../session/paths.js";
+import { createLogger, parseLogLevel, type Logger } from "../observe/logger.js";
 import { CONTROL_TIMEOUT_MS, sendRequest, type ControlReply } from "./channel.js";
 import { startDaemon, type StartDaemonOptions, type StartedDaemon, type StartupReport } from "./daemon.js";
 
@@ -86,6 +87,7 @@ export async function runDaemon(deps: DaemonDeps): Promise<number> {
       onStartup: (report) => {
         writeStderr(startupLine(report));
       },
+      logger: requestLogger(writeStderr, deps.env["REALM_LOG_LEVEL"]),
     });
   } catch (error: unknown) {
     writeStderr(failureLine(codeOf(error)));
@@ -122,6 +124,24 @@ function startupLine(report: StartupReport): string {
     ...(report.reapFailure === undefined ? {} : { reapFailure: report.reapFailure }),
     failures: report.failures,
   });
+}
+
+function requestLogger(writeStderr: (line: string) => void, rawLevel: string | undefined): Logger {
+  const parsed = parseLogLevel(rawLevel);
+  const logger = createLogger({
+    sink: {
+      write: (line) => {
+        writeStderr(line);
+        return true;
+      },
+    },
+    level: parsed.level,
+    now: () => new Date(),
+  });
+  if (parsed.invalid) {
+    logger.warn("daemon.log-level", { value: parsed.level });
+  }
+  return logger;
 }
 
 // Resolves once the daemon has stopped. A signal runs the down request and settles with its
