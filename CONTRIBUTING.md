@@ -36,6 +36,10 @@ A change must pass every gate below before it is reviewed.
 
 Property tests use `fast-check` and live next to the example tests as `*.property.test.ts` (`test/fs/canonicalize.property.test.ts`, `test/core/policy.property.test.ts`); they run in `npm test` with everything else. They share `test/support/property.ts`, which runs each property for 200 inputs from one fixed seed, so a run is deterministic. A failure prints the seed, the shrunk counterexample and the replay path. To reproduce it, set `REALM_PROPERTY_SEED` to the printed seed and run the same file, for example `REALM_PROPERTY_SEED=123 node --test dist/test/fs/canonicalize.property.test.js` after `npm run build`. Set `REALM_PROPERTY_SEED=random` to explore with a fresh seed; the failure message names it. When a property finds a bug, fix it and keep the minimal counterexample as an ordinary example test.
 
+## Mutation
+
+A weekly scheduled mutation run (`node scripts/mutation/run.mjs`, `.github/workflows/mutation.yml`) is non-blocking and covers `src/fs`, `src/core/policy.ts` and `src/audit/redact.ts`; Stryker was not installed because research recorded a 188-package tree and an unproven fit with `node:test` on compiled output.
+
 ## Branches and pull requests
 
 1. Create a feature branch from `main`.
