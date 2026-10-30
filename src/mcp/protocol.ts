@@ -20,16 +20,16 @@ import type { ToolOutcome } from "../tools/dispatch.js";
 export const MCP_MODERN_VERSION = "2026-07-28";
 // Newest first. `initialize` answers the requested version when it is listed here, else the first entry (the
 // legacy lifecycle: the server answers another version it supports, preferably the latest).
-export const MCP_LEGACY_VERSIONS: readonly string[] = ["2025-11-25", "2025-06-18"];
-export const MCP_LATEST_LEGACY_VERSION = "2025-11-25";
+const MCP_LEGACY_VERSIONS: readonly string[] = ["2025-11-25", "2025-06-18"];
+const MCP_LATEST_LEGACY_VERSION = "2025-11-25";
 // Listed in `server/discover` and in an UnsupportedProtocolVersionError, as the versioning page's example shows
 // for a dual-era server.
 export const MCP_SUPPORTED_VERSIONS: readonly string[] = [MCP_MODERN_VERSION, ...MCP_LEGACY_VERSIONS];
 
-export const MCP_SERVER_NAME = "agent-realm";
+const MCP_SERVER_NAME = "agent-realm";
 
 export const META_PROTOCOL_VERSION = "io.modelcontextprotocol/protocolVersion";
-export const META_SERVER_INFO = "io.modelcontextprotocol/serverInfo";
+const META_SERVER_INFO = "io.modelcontextprotocol/serverInfo";
 
 // The JSON-RPC error code of UnsupportedProtocolVersionError (schema, 2026-07-28).
 export const UNSUPPORTED_PROTOCOL_VERSION = -32022;
