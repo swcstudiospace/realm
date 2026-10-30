@@ -41,6 +41,13 @@ const DRIVER_SOCKET_ENV = "REALM_DRIVER_SOCKET";
 const GATEWAY_ENDPOINT_ENV = "REALM_DRIVER_GATEWAY_ENDPOINT";
 const INIT_FIX = "Run realm init so config.json names the three roots (absolute paths, mode 0700). A stale REALM_DRIVER_*_ROOT variable is ignored.";
 
+// The fix for each driver-root condition. A fix names the root in its detail, never a path value.
+const FIX_ROOT_UNSET =
+  "Name each root in config.json as an absolute path, or run realm init to write all three. workspaceRoot is required; secretRoot and sandboxStateRoot may be omitted, which takes the default under stateDir.";
+const FIX_ROOT_RELATIVE = "Set the root named in the detail to an absolute path in config.json. The driver and the daemon read the same file.";
+const FIX_ROOT_MODE =
+  "Run chmod 0700 on the root named in the detail, then rerun the check. Run realm init to name the roots in config.json if they are not named there. workspaceRoot is not held to a mode: the driver accepts any mode for a workspace this account owns.";
+
 function fail(id: RuntimeCheckId, detail: string, fix: string): RuntimeCheckResult {
   return { id, status: "fail", detail, fix };
 }
@@ -97,67 +104,81 @@ function defaultConnectGateway(endpoint: string, timeoutMs: number): Promise<voi
   });
 }
 
-function rootProblem(name: string, path: string, stat: (path: string) => PathReading): string | undefined {
+// The three roots the driver and the daemon share (ONB-04). The workspace is held to no mode: the driver accepts any mode for a
+// workspace this account owns (assertPinnedWorkspaceRoot), so a 0755 project directory is a working setup.
+const DRIVER_ROOT_KEYS = ["secretRoot", "workspaceRoot", "sandboxStateRoot"] as const;
+type DriverRootKey = (typeof DRIVER_ROOT_KEYS)[number];
+
+// One condition on one driver root. A root has at most one, and its fix says how to clear it.
+interface RootFinding {
+  readonly severity: "fail" | "warn";
+  readonly detail: string;
+  readonly fix: string;
+}
+
+// The condition a root is in, or undefined when it passes. The checks run in this order, and the first that holds is reported:
+// unset, relative, then what the path is on disk. A detail names a root key, a mode or a rule, never a path value.
+function rootFinding(key: DriverRootKey, path: string, stat: (path: string) => PathReading): RootFinding | undefined {
+  // The empty and the missing are both unset. A config built without the loader can carry any value in a root.
+  if (typeof path !== "string" || path.trim() === "") {
+    return { severity: "fail", detail: `${key} is unset`, fix: FIX_ROOT_UNSET };
+  }
   if (!isAbsolute(path)) {
-    return `${name} is not absolute`;
+    return { severity: "fail", detail: `${key} is not absolute`, fix: FIX_ROOT_RELATIVE };
   }
   const found = stat(path);
   if (found.state === "absent") {
-    return `${name} is absent`;
+    return { severity: "fail", detail: `${key} is absent`, fix: INIT_FIX };
   }
   if (found.state === "unreadable") {
-    return `${name} cannot be inspected`;
+    return { severity: "fail", detail: `${key} cannot be inspected`, fix: INIT_FIX };
   }
   if (found.stats.isSymbolicLink()) {
-    return `${name} is a symbolic link`;
+    return { severity: "fail", detail: `${key} is a symbolic link`, fix: INIT_FIX };
   }
   if (!found.stats.isDirectory()) {
-    return `${name} is not a directory`;
+    return { severity: "fail", detail: `${key} is not a directory`, fix: INIT_FIX };
+  }
+  if (key === "workspaceRoot") {
+    const uid = process.getuid?.();
+    if (uid !== undefined && typeof found.stats.uid === "number" && found.stats.uid !== uid) {
+      return { severity: "fail", detail: "workspaceRoot is not owned by this account", fix: INIT_FIX };
+    }
+    return undefined;
   }
   const mode = found.stats.mode & PERMISSION_BITS;
   if (mode !== PRIVATE_DIR_MODE) {
-    return `${name} mode is 0${octal(mode)}, expected 0700`;
+    return { severity: "fail", detail: `${key} mode is 0${octal(mode)}, expected 0700`, fix: FIX_ROOT_MODE };
   }
   return undefined;
 }
 
+// A private root that config.json omits takes its default under stateDir. That is a warning only when the root has no condition of
+// its own. The workspace is required on the config, so it is never omitted.
+function omittedFinding(key: DriverRootKey, config: RuntimeConfig): RootFinding | undefined {
+  if (key === "workspaceRoot" || config[key] !== undefined) {
+    return undefined;
+  }
+  return { severity: "warn", detail: `${key} not named in config.json; the default under stateDir is in effect`, fix: FIX_ROOT_UNSET };
+}
+
+// One runtime-roots item for the three roots. Each root contributes at most one finding. Any fail makes the item fail; otherwise an
+// omitted private root makes it warn; otherwise it passes with the detail the item has always reported.
 export function runtimeRootsCheck(config: RuntimeConfig, stat: (path: string) => PathReading): RuntimeCheckResult {
   const roots = runtimeRootsOf(config);
-  const problems = [
-    rootProblem("secretRoot", roots.secretRoot, stat),
-    workspaceProblem(roots.workspaceRoot, stat),
-    rootProblem("sandboxStateRoot", roots.sandboxStateRoot, stat),
-  ].filter((problem): problem is string => problem !== undefined);
-  if (problems.length === 0) {
+  const findings = DRIVER_ROOT_KEYS.flatMap((key) => {
+    const finding = rootFinding(key, roots[key], stat) ?? omittedFinding(key, config);
+    return finding === undefined ? [] : [finding];
+  });
+  if (findings.length === 0) {
     return pass("runtime-roots", "secretRoot and sandboxStateRoot are absolute directories at mode 0700; workspaceRoot is an account-owned directory");
   }
-  return fail("runtime-roots", problems.join("; "), INIT_FIX);
-}
-
-// The driver accepts a workspace at any mode when this account owns it (assertPinnedWorkspaceRoot).
-// A 0755 project directory is a working setup, so doctor must not demand 0700 there.
-function workspaceProblem(path: string, stat: (path: string) => PathReading): string | undefined {
-  if (!isAbsolute(path)) {
-    return "workspaceRoot is not absolute";
+  const detail = findings.map((finding) => finding.detail).join("; ");
+  const fix = [...new Set(findings.map((finding) => finding.fix))].join(" ");
+  if (findings.some((finding) => finding.severity === "fail")) {
+    return fail("runtime-roots", detail, fix);
   }
-  const found = stat(path);
-  if (found.state === "absent") {
-    return "workspaceRoot is absent";
-  }
-  if (found.state === "unreadable") {
-    return "workspaceRoot cannot be inspected";
-  }
-  if (found.stats.isSymbolicLink()) {
-    return "workspaceRoot is a symbolic link";
-  }
-  if (!found.stats.isDirectory()) {
-    return "workspaceRoot is not a directory";
-  }
-  const uid = process.getuid?.();
-  if (uid !== undefined && typeof found.stats.uid === "number" && found.stats.uid !== uid) {
-    return "workspaceRoot is not owned by this account";
-  }
-  return undefined;
+  return { id: "runtime-roots", status: "warn", detail, fix };
 }
 
 export async function driverSocketCheck(
