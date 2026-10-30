@@ -15,6 +15,8 @@ export const TOOL_CALL_OUTCOMES = ["done", "refused", "failed"] as const;
 
 export type LoggedToolName = (typeof TOOL_CALL_NAMES)[number];
 export type ToolCallOutcome = (typeof TOOL_CALL_OUTCOMES)[number];
+export const PROBE_FAILED_REASON = "probe failed";
+export type HealthFailureCode = ErrorCode | typeof PROBE_FAILED_REASON;
 
 export interface Timing {
   readonly count: number;
@@ -44,7 +46,7 @@ export interface TransitionCount {
 }
 
 export interface HealthProbeFailureCount {
-  readonly code: ErrorCode;
+  readonly code: HealthFailureCode;
   readonly count: number;
 }
 
@@ -93,6 +95,10 @@ function isMethod(value: string): value is ControlMethod {
 
 function isCode(value: string): value is ErrorCode {
   return CODES.includes(value);
+}
+
+function isHealthCode(value: string): value is HealthFailureCode {
+  return value === PROBE_FAILED_REASON || isCode(value);
 }
 
 function isState(value: string): value is State {
@@ -154,7 +160,7 @@ export function createMetrics(options: MetricsOptions): Metrics {
   const control = new Map<ControlMethod, { count: number; refused: number }>();
   const tools = new Map<string, { tool: LoggedToolName; outcome: ToolCallOutcome; code?: ErrorCode; count: number }>();
   const transitions = new Map<string, { from: State; to: State; count: number }>();
-  const health = new Map<ErrorCode, number>();
+  const health = new Map<HealthFailureCode, number>();
   const attachMs = emptyTiming();
   const toolCallMs = emptyTiming();
   let logLinesDropped = 0;
@@ -196,7 +202,7 @@ export function createMetrics(options: MetricsOptions): Metrics {
       observe(attachMs, durationMs);
     },
     recordHealthProbeFailure(code) {
-      if (!isCode(code)) {
+      if (!isHealthCode(code)) {
         return;
       }
       health.set(code, (health.get(code) ?? 0) + 1);

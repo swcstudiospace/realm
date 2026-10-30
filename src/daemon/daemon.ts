@@ -316,6 +316,8 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
         const code = catalogueCode(snapshot.reason);
         if (code !== undefined) {
           metrics.recordHealthProbeFailure(code);
+        } else if (snapshot.reason === "probe failed") {
+          metrics.recordHealthProbeFailure(snapshot.reason);
         }
         logger.warn("health.probe_failed", {
           ...(code === undefined ? { reason: snapshot.reason } : { code }),

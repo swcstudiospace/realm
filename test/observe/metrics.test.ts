@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { BUCKET_UPPER_BOUNDS_MS, createMetrics } from "../../src/observe/metrics.js";
+import { BUCKET_UPPER_BOUNDS_MS, PROBE_FAILED_REASON, createMetrics } from "../../src/observe/metrics.js";
 
 const CLOCK = new Date("2026-01-01T00:00:00.000Z");
 
@@ -32,7 +32,6 @@ void test("OBS-03: a snapshot starts empty and names when counting began", () =>
   assert.deepEqual(snap.timings.toolCallMs.bucketUpperBoundsMs, BUCKET_UPPER_BOUNDS_MS);
   assert.equal(snap.timings.toolCallMs.bucketCounts.length, BUCKET_UPPER_BOUNDS_MS.length + 1);
 });
-
 void test("OBS-03: tool calls, attach duration, and probe failures stay inside the closed sets", () => {
   const registry = metrics([0, 40]);
   registry.recordTool("write", "done", 12);
@@ -41,6 +40,7 @@ void test("OBS-03: tool calls, attach duration, and probe failures stay inside t
   registry.recordTool("read", "sideways", 1);
   registry.recordAttach(40);
   registry.recordHealthProbeFailure("OPENSHELL_GATEWAY_LOST");
+  registry.recordHealthProbeFailure(PROBE_FAILED_REASON);
   registry.recordHealthProbeFailure("free text");
   registry.recordControl("status", false);
   registry.recordControl("status", true);
@@ -56,7 +56,9 @@ void test("OBS-03: tool calls, attach duration, and probe failures stay inside t
   assert.equal(snap.timings.toolCallMs.bucketCounts[BUCKET_UPPER_BOUNDS_MS.length], 1);
   assert.equal(snap.timings.attachMs.count, 1);
   assert.equal(snap.timings.attachMs.maxMs, 40);
-  assert.deepEqual(snap.healthProbeFailures, [{ code: "OPENSHELL_GATEWAY_LOST", count: 1 }]);
+  assert.equal(snap.healthProbeFailures.length, 2);
+  assert.equal(snap.healthProbeFailures.find((row) => row.code === "OPENSHELL_GATEWAY_LOST")?.count, 1);
+  assert.equal(snap.healthProbeFailures.find((row) => row.code === PROBE_FAILED_REASON)?.count, 1);
   assert.deepEqual(snap.controlRequests, [{ method: "status", count: 2, refused: 1 }]);
   assert.deepEqual(snap.transitions, [{ from: "unbound", to: "active", count: 1 }]);
   assert.equal(snap.logLinesDropped, 2);

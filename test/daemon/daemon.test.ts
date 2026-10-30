@@ -1383,3 +1383,26 @@ void test("OBS-03: metrics answers over the control socket and counts the tool c
   assert.ok(down.result !== undefined);
   await awaitDone(daemon);
 });
+
+void test("OBS-03: a probe that returns probe failed is counted", async (t) => {
+  const fixture = makeDirs();
+  const { options } = daemonParts(fixture);
+  const daemon = await startDaemon(options);
+  t.after(() => cleanupDaemon(daemon));
+  const up = await sendRequest(daemon.socketPath, { id: "u1", method: "up", params: { workspaceRoot: fixture.ws } });
+  assert.equal(snapshotStateOf(up), "active");
+  daemon.handle.controller.probe = () => Promise.resolve({
+    state: "error",
+    reason: "probe failed",
+    lastTransitionAt: "2026-01-01T00:00:00.000Z",
+  });
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 12_000);
+  });
+  const reply = await sendRequest(daemon.socketPath, { id: "m1", method: "metrics" });
+  const snap = reply.result as { healthProbeFailures?: { code?: string; count?: number }[] };
+  assert.equal(snap.healthProbeFailures?.some((row) => row.code === "probe failed" && row.count === 1), true);
+  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down" });
+  assert.ok(down.result !== undefined);
+  await awaitDone(daemon);
+});
