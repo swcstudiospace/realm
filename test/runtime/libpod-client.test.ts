@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ManualClock, pollUntil, scaledMs } from "../support/timing.js";
+import { ManualClock, pollUntil, scaledMs, testTimeout, yieldUntil } from "../support/timing.js";
 import { RealmError, type ErrorCode } from "../../src/core/errors.js";
 import {
   DEFAULT_INFO_TIMEOUT_MS,
@@ -208,16 +208,60 @@ void test("RT-09: a timed-out request rejects with PODMAN_MACHINE_DOWN and destr
   await fake.waitForSocketClose(hung.seq, scaledMs(2000));
 });
 
-void test("RT-09: info has its own bound; every other route keeps the request bound", async (t) => {
+// Waits until the fake has recorded `count` requests of the route. The wait yields on setImmediate (see yieldUntil), so it runs
+// under the mocked setTimeout. The fake logs a request and schedules its delayed reply in one synchronous step, so once the
+// request is recorded its reply timer is registered.
+function recordedCount(fake: FakeLibpod, route: LibpodRouteName, count: number): Promise<void> {
+  return yieldUntil(
+    () => fake.requests().filter((request) => request.route === route).length >= count,
+    `fake libpod to record ${String(count)} ${route} request(s)`,
+    10_000,
+  );
+}
+
+void test("RT-09: info has its own bound; every other route keeps the request bound", testTimeout(30_000), async (t) => {
   const { fake, socketPath } = await startFake(t);
-  // The request bound (1000 ms) is far above any loopback ping, so the API-version ping never trips it on a loaded host.
-  // The fake delay (3000 ms) exceeds the request bound and stays below the info bound (8000 ms).
+  // Every bound and every delayed reply is a timer on node's mocked setTimeout, so the test decides when each fires and no
+  // real time passes: the API-version ping and the loopback I/O cannot trip a bound on a loaded host. The fake delay
+  // (3000 ms) exceeds the request bound (1000 ms) and stays below the info bound (8000 ms).
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  t.after(() => {
+    t.mock.timers.reset();
+  });
   const client = new LibpodClient(socketPath, { requestTimeoutMs: 1000, infoTimeoutMs: 8000 });
   fake.setDelay("info", 3000);
   fake.setDelay("listContainers", 3000);
-  const info = await client.info();
+
+  const infoCall = client.info();
+  await recordedCount(fake, "info", 1);
+  // The reply timer (3000 ms) fires; the info bound (8000 ms) has not been reached.
+  t.mock.timers.tick(3000);
+  const info = await infoCall;
   assert.equal(info.rootless, true);
-  await assertCode(client.listContainersByLabel(LABEL_KEY, "true"), "PODMAN_MACHINE_DOWN");
+
+  const listCall = client.listContainersByLabel(LABEL_KEY, "true");
+  const rejected = assertCode(listCall, "PODMAN_MACHINE_DOWN");
+  let settled = false;
+  const observed = rejected.then(
+    () => {
+      settled = true;
+    },
+    () => {
+      settled = true;
+    },
+  );
+  try {
+    await recordedCount(fake, "listContainers", 1);
+    // The request bound (1000 ms) fires before the reply timer (3000 ms) of the same request, so the call is over after this tick
+    // alone. A client that used the info bound (8000 ms) would still be waiting, and the check fails instead of hanging.
+    t.mock.timers.tick(1000);
+    await yieldUntil(() => settled, "the list call to end at the request bound", 10_000);
+    await rejected;
+  } finally {
+    // Advances mocked time past every remaining bound and delayed reply, so no timer keeps the fake's listener busy.
+    t.mock.timers.tick(10_000);
+    await Promise.allSettled([rejected, observed]);
+  }
 });
 
 void test("RT-09: an info reply that never comes fails with PODMAN_MACHINE_DOWN only after the info bound", async (t) => {

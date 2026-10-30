@@ -1,12 +1,17 @@
 // Daemon startup helper tests (wave 3). The probe and spawn are scripted fakes; no process is
-// started and no socket is opened, so the module runs hermetically with small timeouts.
+// started and no socket is opened. A test whose probe answers after a few polls gives ensureDaemon a
+// generous scaled bound (it returns the moment the daemon answers, so the bound costs nothing), and
+// a test that needs the bound to expire runs it on node's mocked time, not on a real wait.
 
-import { test } from "node:test";
+import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { RealmError } from "../../src/core/errors.js";
 import { daemonAnswers, ensureDaemon, type DaemonPresence } from "../../src/daemon/ensure.js";
+import { scaledMs, testTimeout } from "../support/timing.js";
 
 const SOCKET = "/state/run/control.sock";
+// The bound for a daemon that answers after a few polls: far above any host stall.
+const ANSWER_BOUND_MS = 30_000;
 
 // A probe that reports one scripted presence per call; the last entry repeats. The probe counts its calls.
 function scripted(...sequence: DaemonPresence[]): { probe: (path: string) => Promise<DaemonPresence>; calls: () => number } {
@@ -47,7 +52,7 @@ void test("an absent socket spawns exactly once, however long it stays absent, a
     spawnDaemon: () => {
       spawns += 1;
     },
-    timeoutMs: 1_000,
+    timeoutMs: scaledMs(ANSWER_BOUND_MS),
     pollMs: 5,
   });
   assert.equal(spawns, 1);
@@ -65,7 +70,7 @@ void test("a daemon that holds the socket but has not answered is never spawned 
     spawnDaemon: () => {
       spawns += 1;
     },
-    timeoutMs: 1_000,
+    timeoutMs: scaledMs(ANSWER_BOUND_MS),
     pollMs: 5,
   });
   assert.equal(spawns, 0);
@@ -81,36 +86,69 @@ void test("a daemon that held the socket and then vanishes is replaced once", as
     spawnDaemon: () => {
       spawns += 1;
     },
-    timeoutMs: 1_000,
+    timeoutMs: scaledMs(ANSWER_BOUND_MS),
     pollMs: 5,
   });
   assert.equal(spawns, 1);
 });
 
-void test("a socket that stays absent throws DAEMON_START_TIMEOUT after one spawn, whose reason names a daemon start and not a tool", async () => {
+// Advances node's mocked setTimeout and Date by stepMs per turn of the event loop until the work settles. The loop yields on
+// setImmediate, which the mock does not touch, so the work's promise-only steps run between ticks. The step count bounds it, so
+// work that never settles fails the test instead of spinning.
+async function advanceUntilSettled(t: TestContext, work: Promise<unknown>, stepMs: number): Promise<void> {
+  let settled = false;
+  // Read through a function: the callbacks below assign the flag, which the compiler's flow analysis does not see.
+  const hasSettled = (): boolean => settled;
+  const done = work.then(
+    () => {
+      settled = true;
+    },
+    () => {
+      settled = true;
+    },
+  );
+  for (let step = 0; step < 1_000 && !hasSettled(); step += 1) {
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    t.mock.timers.tick(stepMs);
+  }
+  assert.ok(hasSettled(), "the wait did not end within 1000 steps");
+  await done;
+}
+
+void test("a socket that stays absent throws DAEMON_START_TIMEOUT after one spawn, whose reason names a daemon start and not a tool", testTimeout(30_000), async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  t.after(() => {
+    t.mock.timers.reset();
+  });
   let spawns = 0;
   const timeoutMs = 80;
+  const pollMs = 10;
   const started = Date.now();
-  await assert.rejects(
-    ensureDaemon({
-      socketPath: SOCKET,
-      probe: scripted("absent").probe,
-      spawnDaemon: () => {
-        spawns += 1;
-      },
-      timeoutMs,
-      pollMs: 10,
-    }),
+  const waiting = ensureDaemon({
+    socketPath: SOCKET,
+    probe: scripted("absent").probe,
+    spawnDaemon: () => {
+      spawns += 1;
+    },
+    timeoutMs,
+    pollMs,
+  });
+  const rejection = assert.rejects(
+    waiting,
     (error: unknown) =>
       error instanceof RealmError &&
       error.code === "DAEMON_START_TIMEOUT" &&
       /daemon start/.test(error.reason) &&
       !/tool/i.test(error.reason),
   );
+  await advanceUntilSettled(t, waiting, pollMs);
+  await rejection;
   const elapsed = Date.now() - started;
   assert.equal(spawns, 1);
-  assert.ok(elapsed >= timeoutMs, `waited ${String(elapsed)}ms, expected at least ${String(timeoutMs)}ms`);
-  assert.ok(elapsed < timeoutMs + 2_000, `waited ${String(elapsed)}ms, expected a bounded wait`);
+  assert.ok(elapsed >= timeoutMs, `waited ${String(elapsed)}ms of mocked time, expected at least ${String(timeoutMs)}ms`);
+  assert.ok(elapsed <= timeoutMs + pollMs, `waited ${String(elapsed)}ms of mocked time, expected a bounded wait`);
 });
 
 void test("a held socket that never answers throws DAEMON_START_TIMEOUT without any spawn", async () => {

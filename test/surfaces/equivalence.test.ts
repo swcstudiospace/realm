@@ -7,6 +7,7 @@ import { REALM_TOOL_METHOD, runAcpAgent } from "../../src/acp/agent.js";
 import { createMcpServer, type McpDispatcher } from "../../src/mcp/server.js";
 import type { ToolDispatcher, ToolOutcome } from "../../src/tools/dispatch.js";
 import { makeHarness, REQUIRED, WORKLOAD } from "../support/fake-tools.js";
+import { boundedWait, testTimeout } from "../support/timing.js";
 
 // TOOL-05 MCP-versus-ACP outcome equivalence proof (P5-D13). The same ToolCall
 // travels through the MCP server and through the ACP adapter against ONE
@@ -41,14 +42,7 @@ async function driveMcp(dispatcher: McpDispatcher, lines: readonly string[]): Pr
     input.write(`${line}\n`);
   }
   input.end();
-  await Promise.race([
-    server.closed,
-    new Promise<never>((_resolve, reject) => {
-      setTimeout(() => {
-        reject(new Error("mcp server did not close after stdin ended"));
-      }, 2000).unref();
-    }),
-  ]);
+  await boundedWait(server.closed, "the mcp server closing after stdin ended", 15_000);
   await new Promise<void>((resolve) => {
     setImmediate(resolve);
   });
@@ -105,7 +99,7 @@ async function acpOutcomes(dispatcher: ToolDispatcher, calls: readonly unknown[]
     input.write(`${JSON.stringify({ jsonrpc: "2.0", id: index + 1, method: REALM_TOOL_METHOD, params: { tool } })}\n`);
   });
   input.end();
-  await done;
+  await boundedWait(done, "the ACP agent finishing after stdin ended", 15_000);
   await new Promise<void>((resolve) => {
     setImmediate(resolve);
   });
@@ -128,7 +122,7 @@ const SIX_CALLS: ReadonlyArray<{ readonly name: string; readonly call: ToolCall 
 ];
 
 void test("TOOL-05: the same ToolCall for each of the six tools returns outcome-equal payloads through MCP and ACP on one dispatcher (P5-D13)",
-{ timeout: 10_000 },
+testTimeout(60_000),
 async (t) => {
   const h = makeHarness(t);
   const calls = SIX_CALLS.map(({ call }) => call);
@@ -150,7 +144,7 @@ async (t) => {
 },);
 
 void test("TOOL-05: a schema-invalid call and a required-mode non-active write refuse outcome-equal with the same catalogue code on both surfaces (P5-D13)",
-{ timeout: 10_000 },
+testTimeout(60_000),
 async (t) => {
   const h = makeHarness(t);
   // A schema-invalid map: read without its required maxBytes. The ToolCall

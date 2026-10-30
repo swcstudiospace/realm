@@ -90,6 +90,23 @@ export async function pollUntil(
   }
 }
 
+// Waits until the predicate holds by yielding to the event loop on setImmediate, which node's mocked setTimeout does not
+// touch, so it also works while a test has mocked timers on (pollUntil sleeps on setTimeout and would hang there). The
+// deadline reads the real clock (Date.now, which a test that mocks setTimeout alone leaves alone), is scaled, and makes a
+// condition that never comes fail the test instead of spinning. Do not use it where Date is mocked.
+export async function yieldUntil(predicate: () => boolean, what: string, timeoutMs: number = DEFAULT_WAIT_MS): Promise<void> {
+  const bound = scaledMs(timeoutMs);
+  const deadline = Date.now() + bound;
+  while (!predicate()) {
+    if (Date.now() >= deadline) {
+      throw new Error(`${what} did not hold within ${String(bound)} ms`);
+    }
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+  }
+}
+
 // A clock a test advances by hand. `now` is an arrow property, so it can be passed as an option (LibpodClientOptions.now).
 export class ManualClock {
   private current: number;
@@ -103,4 +120,50 @@ export class ManualClock {
   advance(ms: number): void {
     this.current += ms;
   }
+}
+
+// What trackMockedTimers reports.
+export interface MockedTimerTracker {
+  // The number of timers created since tracking began that have neither fired nor been cleared.
+  pending(): number;
+}
+
+// Counts the timers a test leaves pending while node's mocked setTimeout is on. A mocked timer is not a native resource, so
+// process.getActiveResourcesInfo() cannot see it, and a code path that forgets clearTimeout would go unnoticed. Call this right
+// after t.mock.timers.enable: it wraps the CURRENT globalThis.setTimeout and globalThis.clearTimeout (the mock's), records every
+// handle the wrapped setTimeout returns, drops a handle when its callback runs or when it is cleared, and puts the wrapped
+// functions back when the test ends. If the mock was reset first, the global already holds the real functions and is left alone.
+export function trackMockedTimers(t: { after(hook: () => void): void }): MockedTimerTracker {
+  const originalSet = globalThis.setTimeout;
+  const originalClear = globalThis.clearTimeout;
+  const live = new Set<unknown>();
+  const trackedSet = (callback: (...args: unknown[]) => void, ms?: number, ...args: unknown[]): NodeJS.Timeout => {
+    const handle: NodeJS.Timeout = originalSet(
+      (...fired: unknown[]) => {
+        live.delete(handle);
+        callback(...fired);
+      },
+      ms,
+      ...args,
+    );
+    live.add(handle);
+    return handle;
+  };
+  const trackedClear = (handle: NodeJS.Timeout | string | number | undefined): void => {
+    live.delete(handle);
+    originalClear(handle);
+  };
+  const installedSet = trackedSet as unknown as typeof setTimeout;
+  const installedClear = trackedClear;
+  globalThis.setTimeout = installedSet;
+  globalThis.clearTimeout = installedClear;
+  t.after(() => {
+    if (globalThis.setTimeout === installedSet) {
+      globalThis.setTimeout = originalSet;
+    }
+    if (globalThis.clearTimeout === installedClear) {
+      globalThis.clearTimeout = originalClear;
+    }
+  });
+  return { pending: () => live.size };
 }

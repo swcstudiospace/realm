@@ -159,6 +159,113 @@ void test("boundedWait: the default bound is 5000 ms, scaled", async (t) => {
   await outcome;
 });
 
+void test("trackMockedTimers: a timer that fires is no longer pending, and its callback still runs", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  t.after(() => {
+    t.mock.timers.reset();
+  });
+  const tracker = timing.trackMockedTimers(t);
+  let fired = 0;
+
+  setTimeout(() => {
+    fired += 1;
+  }, 10);
+  assert.equal(tracker.pending(), 1);
+  t.mock.timers.tick(9);
+  assert.equal(tracker.pending(), 1, "a timer that has not reached its time is still pending");
+  t.mock.timers.tick(1);
+
+  assert.equal(fired, 1);
+  assert.equal(tracker.pending(), 0);
+});
+
+void test("trackMockedTimers: a timer that is cleared is no longer pending and never fires", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  t.after(() => {
+    t.mock.timers.reset();
+  });
+  const tracker = timing.trackMockedTimers(t);
+  let fired = 0;
+
+  const handle = setTimeout(() => {
+    fired += 1;
+  }, 10);
+  assert.equal(tracker.pending(), 1);
+  clearTimeout(handle);
+  assert.equal(tracker.pending(), 0);
+  t.mock.timers.tick(1000);
+
+  assert.equal(fired, 0);
+  assert.equal(tracker.pending(), 0);
+});
+
+void test("trackMockedTimers: a timer nobody clears or fires is reported as pending", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  t.after(() => {
+    t.mock.timers.reset();
+  });
+  const tracker = timing.trackMockedTimers(t);
+
+  setTimeout(() => undefined, 10_000);
+  const cleared = setTimeout(() => undefined, 10);
+  clearTimeout(cleared);
+  setTimeout(() => undefined, 5);
+  t.mock.timers.tick(5);
+
+  assert.equal(tracker.pending(), 1, "only the leaked timer is pending");
+});
+
+void test("yieldUntil: resolves once the predicate holds, while setTimeout is mocked and never ticked", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  t.after(() => {
+    t.mock.timers.reset();
+  });
+  let turns = 0;
+  setImmediate(() => {
+    turns = 3;
+  });
+
+  await timing.yieldUntil(() => turns === 3, "the immediate callback");
+
+  assert.equal(turns, 3);
+});
+
+void test("yieldUntil: a condition that never holds rejects with the exact message at the scaled real-clock bound", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  t.after(() => {
+    t.mock.timers.reset();
+  });
+
+  await assert.rejects(timing.yieldUntil(() => false, "the missing condition", 20), {
+    message: `the missing condition did not hold within ${String(scaledMs(20))} ms`,
+  });
+});
+
+void test("trackMockedTimers: the global setTimeout and clearTimeout are restored, whichever hook runs first", async (t) => {
+  const realSet = globalThis.setTimeout;
+  const realClear = globalThis.clearTimeout;
+
+  await t.test("the mock is reset before the tracker's hook", (inner) => {
+    inner.mock.timers.enable({ apis: ["setTimeout"] });
+    inner.after(() => {
+      inner.mock.timers.reset();
+    });
+    timing.trackMockedTimers(inner);
+  });
+  assert.equal(globalThis.setTimeout, realSet);
+  assert.equal(globalThis.clearTimeout, realClear);
+
+  await t.test("the tracker's hook runs before the mock is reset", (inner) => {
+    inner.mock.timers.enable({ apis: ["setTimeout"] });
+    timing.trackMockedTimers(inner);
+    inner.after(() => {
+      inner.mock.timers.reset();
+    });
+  });
+  assert.equal(globalThis.setTimeout, realSet);
+  assert.equal(globalThis.clearTimeout, realClear);
+});
+
 void test("pollUntil: resolves once the predicate holds, and checks an async predicate", async () => {
   let checks = 0;
   await pollUntil(
