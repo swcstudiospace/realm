@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.3.15] - 2026-10-30
+
+### Fixed
+- fix(daemon): report start failures as daemon.failed JSON lines (#30) (f27e70e)
+
 ## [0.3.14] - 2026-10-30
 
 ### Added
