@@ -90,7 +90,7 @@ Who removes the orphan: the sweep in `src/fs/temp-sweep.ts` (`sweepOrphanTempFil
 
 ## The gated guard suite
 
-The three write-guard cases also run as `test/integration/omp-guard.test.ts`, against the built Realm plugin, not by hand and not through a model. Each case writes its policy mode explicitly, starts an in-process daemon over the harness fakes, and drives Omp's own `write` with a scripted provider. It is not an LLM-driven run.
+The three write-guard cases also run as `test/integration/omp-guard.test.ts`, against the built Realm plugin, not by hand and not through a model. Each case writes its policy mode explicitly, starts an in-process daemon over the harness fakes, and drives Omp's own `write` with a scripted provider. It is not an LLM-driven run. The profile, credentials and workspace are isolated. A cold profile can still contact the model catalog; this suite does not claim a no-network run and does not use the spike's refusing loopback proxy.
 
 Opt in with `REALM_LIVE_OMP=1`. `REALM_OMP_BIN` optionally names the Omp executable; `REALM_OMP_NET_TRACE=1` is the spike's network-trace opt-in and is not required here. After `npm run build`:
 
