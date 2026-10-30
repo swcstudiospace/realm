@@ -12,7 +12,7 @@ const ADAPTER_JSON_MANIFESTS = [
   'adapters/prime-agent/package.json',
 ];
 
-// Every file whose version the release job rewrites. The release commit stages exactly these
+// Every file whose version the build job rewrites. The publish job's release commit stages exactly these
 // paths (`--files`), so the staged set cannot drift from the synced set.
 export const RELEASE_VERSION_FILES = ['package.json', 'package-lock.json', ...ADAPTER_JSON_MANIFESTS];
 
