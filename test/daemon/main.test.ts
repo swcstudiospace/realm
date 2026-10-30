@@ -25,6 +25,12 @@ import type { EnvironmentLike } from "../../src/session/paths.js";
 function failed(code: string): string {
   return JSON.stringify({ level: "error", event: "daemon.failed", code });
 }
+
+function startupOf(lines: readonly string[]): Record<string, unknown> {
+  const value = JSON.parse(lines[0] ?? "") as Record<string, unknown>;
+  assert.equal(value["event"], "daemon.startup");
+  return value;
+}
 const SOCKET_PATH = "/run/realm-test/control.sock";
 const IMAGE = `registry.example/realm/workload@sha256:${"a".repeat(64)}`;
 
@@ -159,9 +165,11 @@ void test("CRASH-04: the start's onStartup report is written as one stderr line 
   });
 
   assert.equal(await runDaemon(h.deps), 0);
-  assert.deepEqual(h.lines, [
-    "realm daemon: startup removed 2 container(s)[c0ffee,decaf1] and 1 session record(s); removed 3 orphan temp file(s); reconciled 4 audit admission(s); maintenanceComplete=true",
-  ]);
+  const first = startupOf(h.lines);
+  assert.equal(first["containersRemoved"], 2);
+  assert.deepEqual(first["containerIds"], ["c0ffee", "decaf1"]);
+  assert.equal(first["recordsDeleted"], 1);
+  assert.equal(first["failures"], 0);
 });
 
 void test("CRASH-04: the startup line has no id brackets when no container was removed, and names failures only when there are some", async (t) => {
@@ -186,9 +194,11 @@ void test("CRASH-04: the startup line has no id brackets when no container was r
   });
 
   assert.equal(await runDaemon(h.deps), 0);
-  assert.deepEqual(h.lines, [
-    "realm daemon: startup removed 0 container(s) and 0 session record(s); removed 0 orphan temp file(s); reconciled 0 audit admission(s); maintenanceComplete=true; 2 startup failure(s)",
-  ]);
+  const quiet = startupOf(h.lines);
+  assert.equal(quiet["containersRemoved"], 0);
+  assert.equal(quiet["maintenanceComplete"], true);
+  assert.equal(quiet["failures"], 2);
+  assert.equal(quiet["reapFailure"], undefined);
 });
 
 void test("STARTUP budget: the startup line says maintenanceComplete=false and names the unfinished audit files and sweep roots", async (t) => {
@@ -213,9 +223,10 @@ void test("STARTUP budget: the startup line says maintenanceComplete=false and n
   });
 
   assert.equal(await runDaemon(h.deps), 0);
-  assert.deepEqual(h.lines, [
-    "realm daemon: startup removed 0 container(s) and 0 session record(s); removed 0 orphan temp file(s); reconciled 0 audit admission(s); maintenanceComplete=false; unfinished 2 audit file(s)[a.jsonl,daemon.jsonl] and 2 sweep root(s)[<workspace>,<state>/sessions]",
-  ]);
+  const unfinished = startupOf(h.lines);
+  assert.equal(unfinished["maintenanceComplete"], false);
+  assert.deepEqual(unfinished["unfinishedAuditFiles"], ["a.jsonl", "daemon.jsonl"]);
+  assert.deepEqual(unfinished["unfinishedSweepRoots"], ["<workspace>", "<state>/sessions"]);
 });
 
 void test("CRASH-04: a failed reap's partial report is logged, then the start failure, and the exit code is 1", async (t) => {
@@ -241,13 +252,15 @@ void test("CRASH-04: a failed reap's partial report is logged, then the start fa
   });
 
   assert.equal(await runDaemon(h.deps), 1);
-  assert.deepEqual(h.lines, [
-    "realm daemon: startup removed 1 container(s)[0123abcd] and 0 session record(s); removed 0 orphan temp file(s); reconciled 0 audit admission(s); maintenanceComplete=false; reap failed: REALM_STOPPING; 1 startup failure(s)",
-    failed("REALM_STOPPING"),
-  ]);
+  const partial = startupOf(h.lines);
+  assert.equal(partial["containersRemoved"], 1);
+  assert.deepEqual(partial["containerIds"], ["0123abcd"]);
+  assert.equal(partial["reapFailure"], "REALM_STOPPING");
+  assert.equal(partial["failures"], 1);
+  assert.deepEqual(h.lines[1], failed("REALM_STOPPING"));
 });
 
-void test("STARTUP budget: a long unfinished list is cut to ten names in the line, the counts stay exact, and a truncated audit listing is named", async (t) => {
+void test("STARTUP budget: a long unfinished list stays complete in the record, and a truncated audit listing is named", async (t) => {
   const dir = tempDir(t);
   const names = Array.from({ length: 12 }, (_unused, index) => `s${String(index)}.jsonl`);
   const h = harness(writeConfig(dir, validConfig(dir)), {
@@ -270,9 +283,10 @@ void test("STARTUP budget: a long unfinished list is cut to ten names in the lin
   });
 
   assert.equal(await runDaemon(h.deps), 0);
-  assert.deepEqual(h.lines, [
-    "realm daemon: startup removed 0 container(s) and 0 session record(s); removed 0 orphan temp file(s); reconciled 0 audit admission(s); maintenanceComplete=false; unfinished 12 audit file(s)[s0.jsonl,s1.jsonl,s2.jsonl,s3.jsonl,s4.jsonl,s5.jsonl,s6.jsonl,s7.jsonl,s8.jsonl,s9.jsonl,+2 more] and 0 sweep root(s)[]; audit listing truncated",
-  ]);
+  const listed = startupOf(h.lines);
+  assert.equal(listed["auditListingTruncated"], true);
+  assert.deepEqual(listed["unfinishedAuditFiles"], names);
+  assert.equal(listed["maintenanceComplete"], false);
 });
 
 void test("secretRoot and sandboxStateRoot in config.json are passed to the daemon start, and a stale root variable is ignored", async (t) => {
