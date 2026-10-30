@@ -494,6 +494,19 @@ test("analyze treats export * as ns and export type * as forwarding", () => {
   assert.equal(classOf(entries, "Shape"), "forwarded");
 });
 
+test("analyze keeps export type * as in the type space", () => {
+  const { entries } = analyze({
+    "src/a/index.ts": 'export type * as Shapes from "./model.js";\n',
+    "src/a/model.ts": "export interface Shape {}\n",
+    "test/a/shapes.test.ts": 'import type { Shapes } from "../../src/a/index.js";\nexport const used = Shapes;\n',
+  });
+  const found = entries.find((entry) => entry.name === "Shapes");
+  assert.equal(found?.class, "test-only");
+  assert.equal(found?.space, "type");
+  assert.equal(countEntries(entries).totals.testOnlyTypes, 1);
+  assert.equal(countEntries(entries).totals.testOnlyValues, 0);
+});
+
 test("analyze lists a re-export it cannot resolve as unclassified with its reason", () => {
   const { entries } = analyze({
     "src/a/index.ts": [

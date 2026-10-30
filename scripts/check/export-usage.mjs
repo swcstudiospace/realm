@@ -12,7 +12,7 @@
 //   exports     top-level statements with an `export` modifier (functions, classes, interfaces, type aliases, enums, namespaces,
 //               `export import X = ...`, and every binding name of a variable statement, destructured ones included),
 //               `export { a as b }` and `export type { ... }` (the local declaration is found by name), `export * as ns`, and
-//               `export default` (name `default`, kind `default`; it counts as used when another file imports its default);
+//               `export default` (name `default`, the declaration's own kind; it counts as used when another file imports its default);
 //   references  every Identifier node of a file (property names, import specifiers and type references included), minus the
 //               identifier that declares an export of that same file. Comments and strings are never identifiers. The match
 //               is by name, not by symbol, so a common name used anywhere else keeps an export.
@@ -186,7 +186,8 @@ function collect(source, file) {
             defaultReaches.push(specifier);
           }
         } else if (ts.isNamespaceExport(clause)) {
-          add(clause.name.text, clause.name.text, "namespace", "value", line, [statement], clause.name);
+          const typeOnly = statement.isTypeOnly;
+          add(clause.name.text, clause.name.text, typeOnly ? "type" : "namespace", typeOnly ? "type" : "value", line, [statement], clause.name);
           forwards.push({ line, star: true, specifier, names: [], namespace: clause.name.text });
           if (specifier !== null) {
             defaultReaches.push(specifier);
