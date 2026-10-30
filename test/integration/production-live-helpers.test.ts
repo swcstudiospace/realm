@@ -331,6 +331,11 @@ function openInputs(overrides: Partial<ProductionGateInputs> = {}): ProductionGa
     onPath: (name) => name === "openshell",
     exists: () => true,
     isDirectory: () => true,
+    readConfig: () => JSON.stringify({
+      image: "localhost/realm-agentos@sha256:" + "b".repeat(64),
+      stateDir: "/var/lib/realm/state",
+      workspaceRoot: "/srv/workspace",
+    }),
     cliPath: CLI_PATH,
     ...overrides,
   };
@@ -391,6 +396,14 @@ void test("productionSkipReason names REALM_LIVE_DRIVER_CONFIG when it is missin
   }
   const absent = String(productionSkipReason(openInputs({ exists: (path) => path === CLI_PATH })));
   assert.ok(absent.startsWith("REALM_LIVE_DRIVER_CONFIG is not an absolute path"), absent);
+});
+
+void test("productionSkipReason names an unreadable or malformed driver config instead of throwing", () => {
+  const unreadable = String(productionSkipReason(openInputs({ readConfig: () => { throw new Error("EISDIR"); } })));
+  assert.match(unreadable, /not a readable runtime config/);
+  const malformed = String(productionSkipReason(openInputs({ readConfig: () => "{" })));
+  assert.match(malformed, /not a readable runtime config/);
+  assert.equal(unreadable.includes("/driver-config.json"), false);
 });
 
 void test("productionSkipReason names the rootless socket: an unusable XDG_RUNTIME_DIR, then an absent socket", () => {

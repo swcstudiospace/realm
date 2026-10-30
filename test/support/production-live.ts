@@ -37,6 +37,9 @@ export interface ProductionGateInputs {
   readonly onPath: (name: string) => boolean;
   readonly exists: (path: string) => boolean;
   readonly isDirectory: (path: string) => boolean;
+  // Reads the driver config. Omitted, the gate reads the file itself. A throw or a value
+  // loadRuntimeConfig refuses is a skip reason, not a crash before the scenarios register.
+  readonly readConfig?: (path: string) => string;
   // The built CLI beside the compiled tests (dist/src/cli/main.js).
   readonly cliPath: string;
 }
@@ -60,6 +63,9 @@ export function productionSkipReason(inputs: ProductionGateInputs): string | fal
   if (driverConfig === undefined || !isAbsolute(driverConfig) || !inputs.exists(driverConfig)) {
     return `${LIVE_DRIVER_CONFIG_VARIABLE} is not an absolute path to an existing file; it must be the config.json the running driver reads`;
   }
+  if (!readableDriverConfig(driverConfig, inputs.readConfig ?? ((path) => readFileSync(path, "utf8")))) {
+    return `${LIVE_DRIVER_CONFIG_VARIABLE} is not a readable runtime config; it must be the config.json the running driver reads`;
+  }
   const socket = podmanSocketPath(env);
   if (socket === undefined) {
     return "XDG_RUNTIME_DIR is not an absolute path, so the rootless Podman API socket cannot be located";
@@ -74,6 +80,15 @@ export function productionSkipReason(inputs: ProductionGateInputs): string | fal
     return "the built CLI dist/src/cli/main.js is missing; run npm run build first";
   }
   return false;
+}
+
+function readableDriverConfig(path: string, readConfig: (path: string) => string): boolean {
+  try {
+    loadRuntimeConfig(JSON.parse(readConfig(path)));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // `podman --version` is local and fast; the timeout keeps a hung binary from hanging the run.
