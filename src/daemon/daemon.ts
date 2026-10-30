@@ -498,10 +498,10 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
         }
         const correlationId = newCorrelationId();
         const startedAt = Date.now();
-        const toolName = Object.keys(tool)[0] ?? "unknown";
         try {
           const outcome = await handle.dispatcher.call(tool, { correlationId });
           const elapsed = Date.now() - startedAt;
+          const toolName = outcome.tool ?? "unknown";
           if (outcome.outcome === "refused") {
             logger.info("tool.result", {
               correlationId,
@@ -531,7 +531,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
           logger.info("tool.result", {
             correlationId,
             ...(upId === undefined ? {} : { upId }),
-            tool: toolName,
+            tool: "unknown",
             outcome: "error",
             code: codeOf(error),
             durationMs: Date.now() - startedAt,

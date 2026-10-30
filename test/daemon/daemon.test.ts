@@ -901,6 +901,32 @@ void test("OBS-02: a tool call's log correlation id is the id on both audit line
   await awaitDone(daemon);
 });
 
+void test("OBS-02: an unknown tool key is logged as unknown, not copied into the line", async (t) => {
+  const lines: string[] = [];
+  const logger = createLogger({
+    sink: { write: (line) => { lines.push(line); return true; } },
+    level: "info",
+    now: () => new Date(CLOCK_ISO),
+  });
+  const fixture = makeDirs();
+  const { options } = daemonParts(fixture);
+  const daemon = await startDaemon({ ...options, logger });
+  t.after(() => cleanupDaemon(daemon));
+  const key = "not-a-tool-".repeat(20);
+  const reply = await sendRequest(daemon.socketPath, {
+    id: "tool-unknown",
+    method: "tool",
+    params: { tool: { [key]: {} } },
+  });
+  assert.equal(reply.error?.code, "SCHEMA_INVALID");
+  const logged = lines.map((line) => JSON.parse(line) as { event?: string; tool?: string }).find((row) => row.event === "tool.result");
+  assert.equal(logged?.tool, "unknown");
+  assert.equal(lines.some((line) => line.includes(key)), false);
+  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down" });
+  assert.ok(down.result !== undefined);
+  await awaitDone(daemon);
+});
+
 void test("OBS-02: up logs the catalogue code when create returns an error snapshot", async (t) => {
   const lines: string[] = [];
   const logger = createLogger({
