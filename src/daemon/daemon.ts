@@ -458,17 +458,17 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
           return { id, error: { code: "SCHEMA_INVALID" } };
         }
         const correlationId = newCorrelationId();
-        const startedAt = Date.now();
+        const startedAt = performance.now();
         logger.info("up.begin", { correlationId, upId: correlationId });
         let probeResult: PodmanProbeResult;
         try {
           probeResult = await probe();
         } catch (error: unknown) {
-          logger.info("up.end", { correlationId, upId: correlationId, durationMs: Date.now() - startedAt, code: codeOf(error) });
+          logger.info("up.end", { correlationId, upId: correlationId, durationMs: Math.round(performance.now() - startedAt), code: codeOf(error) });
           return refusalReply(id, error);
         }
         if (!probeResult.ok) {
-          logger.info("up.end", { correlationId, upId: correlationId, durationMs: Date.now() - startedAt, code: probeResult.code });
+          logger.info("up.end", { correlationId, upId: correlationId, durationMs: Math.round(performance.now() - startedAt), code: probeResult.code });
           return { id, error: { code: probeResult.code } };
         }
         try {
@@ -478,13 +478,13 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
           logger.info("up.end", {
             correlationId,
             upId,
-            durationMs: Date.now() - startedAt,
+            durationMs: Math.round(performance.now() - startedAt),
             state: snapshot.state,
             ...(code === undefined ? {} : { code }),
           });
           return { id, result: statusOf(snapshot) };
         } catch (error: unknown) {
-          logger.info("up.end", { correlationId, upId: correlationId, durationMs: Date.now() - startedAt, code: codeOf(error) });
+          logger.info("up.end", { correlationId, upId: correlationId, durationMs: Math.round(performance.now() - startedAt), code: codeOf(error) });
           return refusalReply(id, error);
         }
       }
@@ -497,10 +497,10 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
           return { id, error: { code: "SCHEMA_INVALID" } };
         }
         const correlationId = newCorrelationId();
-        const startedAt = Date.now();
+        const startedAt = performance.now();
         try {
           const outcome = await handle.dispatcher.call(tool, { correlationId });
-          const elapsed = Date.now() - startedAt;
+          const elapsed = Math.round(performance.now() - startedAt);
           const toolName = outcome.tool ?? "unknown";
           if (outcome.outcome === "refused") {
             logger.info("tool.result", {
@@ -534,7 +534,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
             tool: "unknown",
             outcome: "error",
             code: codeOf(error),
-            durationMs: Date.now() - startedAt,
+            durationMs: Math.round(performance.now() - startedAt),
           });
           return refusalReply(id, error);
         }
