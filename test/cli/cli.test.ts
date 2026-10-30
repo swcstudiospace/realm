@@ -618,6 +618,20 @@ void test("realm mcp exits 1 with MCP_INPUT_FAILED on stderr when its input stre
   assert.equal(output.text(), "");
 });
 
+
+function failedRecord(text: string, code: string): boolean {
+  return text.split("\n").some((line) => {
+    if (line.length === 0) {
+      return false;
+    }
+    try {
+      const value = JSON.parse(line) as { event?: unknown; code?: unknown };
+      return value.event === "daemon.failed" && value.code === code;
+    } catch {
+      return false;
+    }
+  });
+}
 void test("a detached daemon that fails startup writes its error to <stateDir>/daemon.log, owner-only, and realm up names that log (CLI-01, RT-06)", testTimeout(90_000), async () => {
   const dir = mkdtempSync(join(tmpdir(), "realm-cli-detached-"));
   try {
@@ -652,15 +666,16 @@ void test("a detached daemon that fails startup writes its error to <stateDir>/d
     });
     const logPath = join(stateDir, "daemon.log");
     assert.equal(result.exitCode, 1);
+    assert.equal(result.stdout, "SCHEMA_INVALID\n");
     assert.ok(result.stderr.includes(logPath), "the failure names the daemon log");
     // The log is the daemon's own output and is written by another process: wait for its line, never for a fixed time.
     await pollUntil(
-      () => existsSync(logPath) && readFileSync(logPath, "utf8").includes("realm daemon: SCHEMA_INVALID"),
+      () => existsSync(logPath) && failedRecord(readFileSync(logPath, "utf8"), "SCHEMA_INVALID"),
       "the startup error to reach the daemon log",
       { timeoutMs: 30_000, intervalMs: 25 },
     );
     assert.equal(statSync(logPath).mode & 0o777, 0o600);
-    assert.ok(readFileSync(logPath, "utf8").includes("realm daemon: SCHEMA_INVALID"), "the startup error reached the log");
+    assert.equal(failedRecord(readFileSync(logPath, "utf8"), "SCHEMA_INVALID"), true);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

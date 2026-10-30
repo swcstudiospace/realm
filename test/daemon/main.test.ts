@@ -21,6 +21,10 @@ import type { RealmHandle } from "../../src/realm/compose.js";
 import { TEARDOWN_TIMEOUT_MS } from "../../src/lifecycle/controller.js";
 import type { EnvironmentLike } from "../../src/session/paths.js";
 
+
+function failed(code: string): string {
+  return JSON.stringify({ level: "error", event: "daemon.failed", code });
+}
 const SOCKET_PATH = "/run/realm-test/control.sock";
 const IMAGE = `registry.example/realm/workload@sha256:${"a".repeat(64)}`;
 
@@ -102,7 +106,7 @@ void test("a missing config returns 1 and reports SCHEMA_INVALID without startin
 
   assert.equal(await runDaemon(h.deps), 1);
   assert.equal(starts, 0);
-  assert.deepEqual(h.lines, ["realm daemon: SCHEMA_INVALID"]);
+  assert.deepEqual(h.lines, [failed("SCHEMA_INVALID")]);
 });
 
 void test("a valid config starts once with the derived options and resolves 0 on teardown", async (t) => {
@@ -239,7 +243,7 @@ void test("CRASH-04: a failed reap's partial report is logged, then the start fa
   assert.equal(await runDaemon(h.deps), 1);
   assert.deepEqual(h.lines, [
     "realm daemon: startup removed 1 container(s)[0123abcd] and 0 session record(s); removed 0 orphan temp file(s); reconciled 0 audit admission(s); maintenanceComplete=false; reap failed: REALM_STOPPING; 1 startup failure(s)",
-    "realm daemon: REALM_STOPPING",
+    failed("REALM_STOPPING"),
   ]);
 });
 
@@ -325,7 +329,7 @@ void test("a start rejecting with a RealmError returns 1 and writes its code", a
   });
 
   assert.equal(await runDaemon(h.deps), 1);
-  assert.deepEqual(h.lines, ["realm daemon: LOCK_CONFLICT"]);
+  assert.deepEqual(h.lines, [failed("LOCK_CONFLICT")]);
 });
 
 void test("a start rejecting with a non-RealmError is reported as SCHEMA_INVALID", async (t) => {
@@ -335,7 +339,7 @@ void test("a start rejecting with a non-RealmError is reported as SCHEMA_INVALID
   });
 
   assert.equal(await runDaemon(h.deps), 1);
-  assert.deepEqual(h.lines, ["realm daemon: SCHEMA_INVALID"]);
+  assert.deepEqual(h.lines, [failed("SCHEMA_INVALID")]);
 });
 
 void test("a signal runs the control-channel down and resolves 0", async (t) => {
@@ -382,7 +386,7 @@ void test("a down that fails during a signal shutdown returns 1 with its code", 
   handler();
 
   assert.equal(await run, 1);
-  assert.deepEqual(h.lines, ["realm daemon: AGENTOS_STOP_FAILED"]);
+  assert.deepEqual(h.lines, [failed("AGENTOS_STOP_FAILED")]);
 });
 
 void test("the CLI down bound outlasts the daemon teardown bound", () => {

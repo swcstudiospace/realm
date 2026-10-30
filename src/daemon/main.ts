@@ -201,7 +201,7 @@ function codeOf(error: unknown): ErrorCode {
 }
 
 function failureLine(code: ErrorCode): string {
-  return `realm daemon: ${code}`;
+  return JSON.stringify({ level: "error", event: "daemon.failed", code });
 }
 
 function writeLine(line: string): void {
