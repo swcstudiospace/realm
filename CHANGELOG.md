@@ -4,6 +4,12 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.3.21] - 2026-10-30
+
+### Changed
+- Drive the gsd-autonomous milestone through every remaining ROADMAP.md p… (#37) (19f234f)
+- Drive the gsd-autonomous milestone through every remaining ROADMAP.md p… (#38) (01f72f3)
+
 ## [0.3.20] - 2026-10-30
 
 ### Maintenance
