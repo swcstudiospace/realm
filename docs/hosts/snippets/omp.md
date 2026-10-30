@@ -39,6 +39,17 @@ The persistent install (`omp plugin install --scope=user`) is a separate step.
 Run it only after the dry run passes and `~/.omp/agent/config.yml` has been
 backed up. It is not part of this snippet.
 
+## Live install record (ONB-05)
+
+Run on 2026-10-30 with Omp 18.12.6 (`omp --version`), under an isolated HOME (`<tmp>`), so the real `~/.omp` was not read or changed (its listing was compared before and after).
+
+- `omp plugin install --dry-run <workspace>/agent-realm --json`: exit 0, action `link`, the package path reported.
+- `omp plugin install <workspace>/agent-realm --scope=user`: exit 0, linked `agent-realm`. Omp printed that `--scope` applies only to marketplace installs and ignored it for a path.
+- `omp plugin list --json`: one npm entry `agent-realm` 0.3.24, `enabled: true`, `extensions: ["./dist/src/omp/extension.js"]`.
+
+This is a link to a local checkout, not a registry install. The published package and a marketplace install are not verified. The persistent install into the real `~/.omp` is still not run.
+
+
 ## Policy mode
 
 The extension follows the policy mode the daemon reports. The default is
