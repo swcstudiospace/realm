@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { appendAudit } from "../../src/audit/log.js";
-import { AUDIT_GENESIS_PREV, sha256Hex, verifyAuditFile } from "../../src/audit/chain.js";
+import { AUDIT_GENESIS_PREV, AUDIT_LINE_MAX_BYTES, sha256Hex, verifyAuditFile } from "../../src/audit/chain.js";
 import { runCli } from "../../src/cli/main.js";
 
 const SESSION = "11111111-2222-4333-8444-555555555555";
@@ -66,6 +66,39 @@ void test("OBS-01: a torn tail is closed and the next line hashes the fragment, 
     assert.equal(verified.ok, true);
     assert.equal(verified.tornTail, false);
     assert.deepEqual(verified.unparsedLines, [1]);
+  });
+});
+
+void test("OBS-01: a line at the JSON bound can be followed by another append", () => {
+  withStateDir((stateDir) => {
+    mkdirSync(join(stateDir, "audit"), { recursive: true });
+    const prefix = `{"seq":7,"prev":"${AUDIT_GENESIS_PREV}","tool":"write","pad":"`;
+    const suffix = `"}`;
+    const line = prefix + "x".repeat(AUDIT_LINE_MAX_BYTES - Buffer.byteLength(prefix + suffix)) + suffix;
+    assert.equal(Buffer.byteLength(line), AUDIT_LINE_MAX_BYTES);
+    writeFileSync(auditFile(stateDir), `${line}\n`);
+    appendAudit(stateDir, { sessionId: SESSION, tool: "write", outcome: "ok", phase: "result", path: "a.txt" });
+    const parts = linesOf(auditFile(stateDir));
+    assert.equal(parts.length, 2);
+    const next = JSON.parse(parts[1] ?? "") as { seq: number; prev: string };
+    assert.equal(next.seq, 8);
+    assert.equal(next.prev, sha256(line));
+  });
+});
+
+void test("OBS-01: a torn fragment cannot hide the last complete seq", () => {
+  withStateDir((stateDir) => {
+    mkdirSync(join(stateDir, "audit"), { recursive: true });
+    const prefix = `{"seq":4,"prev":"${AUDIT_GENESIS_PREV}","tool":"write","pad":"`;
+    const suffix = `"}`;
+    const complete = prefix + "y".repeat(2 * 1024 * 1024 - Buffer.byteLength(prefix + suffix)) + suffix;
+    const fragment = "z".repeat(3 * 1024 * 1024);
+    writeFileSync(auditFile(stateDir), `${complete}\n${fragment}`);
+    appendAudit(stateDir, { sessionId: SESSION, tool: "write", outcome: "ok", phase: "result", path: "a.txt" });
+    const parts = linesOf(auditFile(stateDir));
+    const next = JSON.parse(parts[parts.length - 1] ?? "") as { seq: number; prev: string };
+    assert.equal(next.seq, 5);
+    assert.equal(next.prev, sha256(fragment));
   });
 });
 

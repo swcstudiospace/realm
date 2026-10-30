@@ -50,14 +50,18 @@ export function sha256Hex(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
-// Reads the chain head from an already-open descriptor. Throws when the last physical
-// line is longer than AUDIT_LINE_MAX_BYTES, so the caller never hashes a partial tail.
+// Reads the chain head from an already-open descriptor. A physical line is the JSON
+// bytes plus its newline, so the tail window is one byte larger than the JSON bound.
+// A second line is included so a torn fragment cannot hide the last complete seq.
+// Throws when the last physical line is longer than the bound, so the caller never
+// hashes a partial tail.
 export function readChainHead(fd: number): ChainHead {
   const size = fstatSync(fd).size;
   if (size === 0) {
     return { nextSeq: 1, prevHash: AUDIT_GENESIS_PREV, needsNewline: false };
   }
-  const window = Math.min(size, AUDIT_LINE_MAX_BYTES);
+  const physicalMax = AUDIT_LINE_MAX_BYTES + 1;
+  const window = Math.min(size, physicalMax * 2);
   const start = size - window;
   const buf = Buffer.alloc(window);
   if (readSync(fd, buf, 0, window, start) !== window) {
@@ -71,17 +75,24 @@ export function readChainHead(fd: number): ChainHead {
   }
   const lineStart = boundary < 0 ? 0 : boundary + 1;
   const lastLine = buf.subarray(lineStart, end);
+  if (lastLine.length > AUDIT_LINE_MAX_BYTES) {
+    throw new Error("audit line exceeds the chain bound");
+  }
   return {
-    nextSeq: nextSeqFromTail(buf, end),
+    nextSeq: nextSeqFromTail(buf, end, start === 0),
     prevHash: sha256Hex(lastLine),
     needsNewline,
   };
 }
 
-function nextSeqFromTail(buf: Buffer, lineEnd: number): number {
+function nextSeqFromTail(buf: Buffer, lineEnd: number, startsAtFile: boolean): number {
   let end = lineEnd;
   for (let seen = 0; seen < SEQ_LOOKBACK_LINES && end > 0; seen += 1) {
     const boundary = buf.lastIndexOf(0x0a, end - 1);
+    // A window that starts mid-file must not parse the cut prefix as a record.
+    if (boundary < 0 && !startsAtFile) {
+      break;
+    }
     const start = boundary < 0 ? 0 : boundary + 1;
     const seq = chainedSeq(buf.subarray(start, end));
     if (seq !== undefined) {
