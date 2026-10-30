@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.3.26] - 2026-10-30
+
+### Documentation
+- docs(omp): record the live isolated-profile plugin install (ONB-05) (#45) (685f3f3)
+
 ## [0.3.25] - 2026-10-30
 
 ### Documentation
