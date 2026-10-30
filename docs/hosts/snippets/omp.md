@@ -39,6 +39,27 @@ The persistent install (`omp plugin install --scope=user`) is a separate step.
 Run it only after the dry run passes and `~/.omp/agent/config.yml` has been
 backed up. It is not part of this snippet.
 
+## Policy mode
+
+The extension follows the policy mode the daemon reports. The default is
+`fail-closed` (decision D4): a policy file with no `mode` key, and a missing
+policy file, both load as `fail-closed`. `advisory` is an explicit opt-in, set
+with `"mode": "advisory"` in `<state-dir>/policy.json`
+(`docs/policy-reference.md`).
+
+- `fail-closed`: attaching removes Omp's built-in tools that are outside a
+  fixed allowlist (`setActiveTools`, read back), such as `bash`, `edit` and
+  `eval`, and Realm `write` replaces the built-in `write`. The guard refuses
+  `bash` and `eval` unless the mode is advisory, and refuses host `edit` and
+  Realm `write` while the realm is not active, with `REALM_NOT_ACTIVE` or the
+  code of the realm's state. This is a guard, not containment: the spike
+  recorded a `write` transport that survived removal of the built-in write, and
+  the live check is pending (`docs/integration/omp.md`).
+- `advisory`: the built-ins the plugin removed come back. While the realm is
+  not active, host `edit` and Realm `write` proceed with a warning when the
+  daemon is reachable; with the daemon unreachable, Realm `write` refuses with
+  `REALM_NOT_ACTIVE`. This is not containment.
+
 ## Not documented
 
 Omp's plugin manifest key names for an MCP server entry are not verified, so

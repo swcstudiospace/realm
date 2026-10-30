@@ -71,7 +71,7 @@ Loading rules (`loadPolicyFile`, `src/core/policy.ts`):
     (stage list in the header comment of `src/tools/dispatch.ts`); `retry` has its own state refusal
     (`refuseRetryIn`, `src/tools/dispatch.ts`).
 
-Advisory is the opt-in for a deployment that prefers to keep working while the realm is down; it is not containment. The default `fail-closed` refuses host `write` and `edit` calls while the realm is not active; it does not contain Omp's built-in `write`, `edit` and `bash` while the realm is active, which still act on the host. Containing the built-ins is planned work (Phase 16 of milestone v3.0). The posture and its limits are set out in `docs/integration/hardening-plan.md`.
+Advisory is the opt-in for a deployment that prefers to keep working while the realm is down; it is not containment. While the realm is not active and the daemon is reachable, advisory lets host `edit` and Realm `write` through with a warning; with the daemon unreachable, Realm `write` refuses with `REALM_NOT_ACTIVE`. The default `fail-closed` refuses host `edit` and Realm `write` calls while the realm is not active; while the realm is active, it asks Omp to remove the built-in tools outside the Realm allowlist at attach, and Realm `write` replaces the built-in `write`. That is a guard, not containment: the spike recorded a `write` transport that survived removal of the built-in write, and the live check is pending (`docs/integration/omp.md`). The posture and its limits are set out in `docs/integration/hardening-plan.md`.
 
 `realm doctor` reports the mode in its `policy-file` check, says whether the file set it or the default applies, and warns for an explicit `advisory`. `realm status` and `realm up` print the mode in effect.
 
