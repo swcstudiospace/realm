@@ -4,11 +4,10 @@
 // reconciliation line, with outcome AUDIT_OUTCOME_UNKNOWN, for each admission that has no closing line.
 //
 // Pairing counts, per key, the admission lines against the result and reconciliation lines. Order is not
-// used: calls may overlap, so lines of two calls can interleave. The key is built by `pairingKey` alone, so
-// the phase that adds a correlation id changes one function. Lines are appended only through `appendAudit`,
-// which stays the single writer of the file. After an append the counts are equal, so a second run appends
-// nothing.
-//
+// used: calls may overlap, so lines of two calls can interleave. The key is built by `pairingKey` alone.
+// A line that carries a correlation id pairs on that id; a line without one keeps the (tool, path,
+// execSummary) key. Lines are appended only through `appendAudit`, which stays the single writer of the
+// file. After an append the counts are equal, so a second run appends nothing.
 // Single-owner precondition: run this before any dispatcher exists in the process, as the startup reaper
 // does, because a call that is still running would otherwise be labelled unknown.
 //
@@ -83,11 +82,18 @@ export interface PairingEntry {
   readonly tool: string;
   readonly path?: string | undefined;
   readonly execSummary?: unknown;
+  readonly correlationId?: string | undefined;
 }
 
-// The one place that decides which lines belong together. Admission, result and reconciliation lines of one
-// call share it: `tool`, `path` for file tools, and `execSummary` for exec (present on both lines of a call).
+const CORRELATION_ID = /^[A-Za-z0-9_-]{1,64}$/;
+
+// The one place that decides which lines belong together. A correlation id, when present, is the key.
+// Otherwise admission, result and reconciliation lines of one call share `tool`, `path` for file tools,
+// and `execSummary` for exec (present on both lines of a call).
 export function pairingKey(entry: PairingEntry): string {
+  if (entry.correlationId !== undefined && CORRELATION_ID.test(entry.correlationId)) {
+    return `cid:${entry.correlationId}`;
+  }
   return `${entry.tool}\0${entry.path ?? ""}\0${JSON.stringify(entry.execSummary ?? null)}`;
 }
 
@@ -95,6 +101,7 @@ interface Pending {
   readonly tool: string;
   readonly path: string | undefined;
   readonly execSummary: ExecSummary | undefined;
+  readonly correlationId: string | undefined;
   admissions: number;
   closings: number;
 }
@@ -130,6 +137,7 @@ function parseLine(bytes: Uint8Array): { readonly phase: string; readonly pendin
   const tool = value["tool"];
   const rawPath = value["path"];
   const rawExec = value["execSummary"];
+  const rawId = value["correlationId"];
   if (typeof phase !== "string" || typeof tool !== "string") {
     return undefined;
   }
@@ -145,7 +153,13 @@ function parseLine(bytes: Uint8Array): { readonly phase: string; readonly pendin
   } else if (rawExec !== undefined) {
     return undefined;
   }
-  return { phase, pending: { tool, path, execSummary, admissions: 0, closings: 0 } };
+  let correlationId: string | undefined;
+  if (typeof rawId === "string" && CORRELATION_ID.test(rawId)) {
+    correlationId = rawId;
+  } else if (rawId !== undefined) {
+    return undefined;
+  }
+  return { phase, pending: { tool, path, execSummary, correlationId, admissions: 0, closings: 0 } };
 }
 
 // Bytes read per step of a scan, and lines parsed between two deadline checks. The deadline is checked before every read and
@@ -305,6 +319,7 @@ function reconcileFile(
         phase: "reconciliation",
         ...(slot.path === undefined ? {} : { path: slot.path }),
         ...(slot.execSummary === undefined ? {} : { execSummary: slot.execSummary }),
+        ...(slot.correlationId === undefined ? {} : { correlationId: slot.correlationId }),
       });
       onAppended();
     }

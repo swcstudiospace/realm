@@ -88,16 +88,14 @@ H1 itself addresses none of these findings and closes no finding. The rows marke
   loading refuses any file with group or other bits, a key inside the state
   directory, or a mismatched public half. Tests run with a fake RPC and
   keys generated into a temporary directory.
-- **Non-goals.** No hash chain (H2). No mainnet. No key custody beyond a
-  file. No verification command that reads the chain back.
+- **Non-goals.** No mainnet. No key custody beyond a
+  file. The hash chain is H2 (`seq` and `prev`); `realm audit verify` checks it. Anchoring does not read the chain back.
 
 ### H2: hash-chained audit lines
 
-- **Interface.** Each audit line carries the hash of the previous line.
-  This is a file-format change and needs agreement with existing readers.
-- **Acceptance.** A single-line edit in the middle of a file is detected by
-  a verifier without any on-chain data. Existing v1 files remain readable.
-- **Non-goals.** Encryption of audit content. Rotation policy.
+- **Interface.** Each new audit line carries `seq` (an integer, +1 per line of that file) and `prev` (the lowercase hex sha256 of the raw bytes of the previous physical line; 64 zeros for the first line of a new file). `realm audit verify <file>` checks the chain. A pre-chain prefix is unprotected, not a break. The writer closes a torn tail before the next append so the next record is not joined onto it.
+- **Acceptance.** A single-line edit, removal, or reorder is named by `realm audit verify` without any on-chain data. Existing v1 files remain readable; their lines are reported as unprotected until the first chained line.
+- **Non-goals.** Encryption of audit content. Rotation policy. A keyed chain (anyone who can rewrite `prev` from the edit point forward is not detected by the chain alone).
 
 ### H3: dedicated signer and key custody
 

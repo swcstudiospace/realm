@@ -270,6 +270,48 @@ void test("CRASH-02: pairingKey joins tool, path and the exec summary, and tells
   assert.notEqual(pairingKey({ tool: "write", path: "a.txt" }), pairingKey({ tool: "read", path: "a.txt" }));
 });
 
+void test("OBS-02: a correlation id pairs its own admission, and a line without one keeps the tool path key (D-1703)", () => {
+  assert.equal(pairingKey({ tool: "write", path: "a.txt", correlationId: "call-a" }), "cid:call-a");
+  assert.notEqual(
+    pairingKey({ tool: "write", path: "a.txt", correlationId: "call-a" }),
+    pairingKey({ tool: "write", path: "a.txt", correlationId: "call-b" }),
+  );
+  withStateDir((stateDir) => {
+    appendAudit(stateDir, {
+      sessionId: SESSION,
+      tool: "write",
+      outcome: "ok",
+      phase: "admission",
+      path: "a.txt",
+      correlationId: "call-a",
+    });
+    appendAudit(stateDir, {
+      sessionId: SESSION,
+      tool: "write",
+      outcome: "ok",
+      phase: "admission",
+      path: "a.txt",
+      correlationId: "call-b",
+    });
+    appendAudit(stateDir, {
+      sessionId: SESSION,
+      tool: "write",
+      outcome: "ok",
+      phase: "result",
+      path: "a.txt",
+      correlationId: "call-b",
+    });
+    assert.equal(reconcileAuditLogs(stateDir).appended, 1);
+    const lines = readFileSync(join(stateDir, "audit", `${SESSION}.jsonl`), "utf8")
+      .split("\n")
+      .filter((line) => line.length > 0)
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const closed = lines.filter((line) => line["phase"] === "reconciliation");
+    assert.equal(closed.length, 1);
+    assert.equal(closed[0]?.["correlationId"], "call-a");
+    assert.equal(reconcileAuditLogs(stateDir).appended, 0);
+  });
+});
 // What the reconciliation lines of a log say, without their timestamps, so two runs compare by content.
 function reconciledContent(stateDir: string, sessionId: string): string[] {
   return reconciliations(stateDir, sessionId).map((entry) =>

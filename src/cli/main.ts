@@ -36,12 +36,13 @@ import {
 } from "../runtime/podman-probe.js";
 import { controlSocketPath, type EnvironmentLike } from "../session/paths.js";
 import { parseAnchorArgs, runAnchor } from "./anchor.js";
+import { runAuditVerify } from "./audit.js";
 
-export const CLI_COMMANDS = ["up", "down", "status", "doctor", "mcp", "acp", "anchor"] as const;
+export const CLI_COMMANDS = ["up", "down", "status", "doctor", "mcp", "acp", "anchor", "audit"] as const;
 export type CliCommand = (typeof CLI_COMMANDS)[number];
 
 const USAGE =
-  "Usage: realm <up|down|status|doctor|mcp|acp|anchor> (realm up|mcp|acp [--workspace <absolute path>]; realm anchor --session <id> [--publish] [--rpc <url>])";
+  "Usage: realm <up|down|status|doctor|mcp|acp|anchor|audit> (realm up|mcp|acp [--workspace <absolute path>]; realm anchor --session <id> [--publish] [--rpc <url>]; realm audit verify <file>)";
 const RETRY_INTERVAL_MS = 25;
 const MCP_POLL_INTERVAL_MS = 100;
 
@@ -52,18 +53,18 @@ function isCliCommand(value: string): value is CliCommand {
 interface ParsedArgv {
   readonly command: CliCommand;
   readonly workspace: string | undefined;
-  // The words after `anchor`, checked by parseAnchorArgs; empty for every other command.
+  // The words after `anchor` or `audit`; empty for every other command.
   readonly words: readonly string[];
 }
 
-// `up` and `mcp` take no arguments or `--workspace <path>`; every other command takes no arguments.
-// `anchor` takes its own flags, which parseAnchorArgs checks.
+// `up`, `mcp`, and `acp` take no arguments or `--workspace <path>`. `anchor` and `audit` take their own words.
+// Every other command takes no arguments. `anchor` flags are checked by parseAnchorArgs.
 function parseArgv(argv: readonly string[]): ParsedArgv | undefined {
   const [command, ...rest] = argv;
   if (command === undefined || !isCliCommand(command)) {
     return undefined;
   }
-  if (command === "anchor") {
+  if (command === "anchor" || command === "audit") {
     return { command, workspace: undefined, words: rest };
   }
   if (rest.length === 0) {
@@ -555,10 +556,21 @@ async function runAnchorCommand(words: readonly string[], deps: CliDeps, stateDi
   });
 }
 
+// realm audit verify <file>: a broken chain exits 1 and names the line. Usage errors exit 2.
+function runAuditCommand(words: readonly string[]): CliResult {
+  const [verb, file, extra] = words;
+  if (verb !== "verify" || file === undefined || file.length === 0 || extra !== undefined) {
+    return { exitCode: 2, stdout: "", stderr: `${USAGE}\n` };
+  }
+  return runAuditVerify(file);
+}
 export async function runCli(argv: readonly string[], deps: CliDeps): Promise<CliResult> {
   const parsed = parseArgv(argv);
   if (parsed === undefined) {
     return { exitCode: 2, stdout: "", stderr: `${USAGE}\n` };
+  }
+  if (parsed.command === "audit") {
+    return runAuditCommand(parsed.words);
   }
   const { command } = parsed;
   let stateDir: string;

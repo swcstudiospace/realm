@@ -10,9 +10,10 @@
 
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
-import { closeSync, constants, fchmodSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readSync, writeSync } from "node:fs";
+import { closeSync, constants, fchmodSync, fsyncSync, lstatSync, mkdirSync, openSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import { makeRealmError, type ErrorCode } from "../core/errors.js";
+import { AUDIT_GENESIS_PREV, AUDIT_LINE_MAX_BYTES, readChainHead, type ChainHead } from "./chain.js";
 import { redactString, redactValue } from "./redact.js";
 
 export type AuditOutcome = "ok" | ErrorCode;
@@ -46,6 +47,8 @@ export interface AuditEntryInput {
   readonly bytes?: number;
   readonly sha256?: string;
   readonly execSummary?: ExecSummary;
+  // Optional join key (D-1703). Present on admission and result lines of one call.
+  readonly correlationId?: string;
 }
 
 export function summarizeExec(exec: ExecShape): ExecSummary {
@@ -67,14 +70,19 @@ export function summarizeExec(exec: ExecShape): ExecSummary {
 // Duplicated here because this module imports core only (D-20). Anything else is
 // SCHEMA_INVALID and nothing is written.
 const SAFE_SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
+const CORRELATION_ID = /^[A-Za-z0-9_-]{1,64}$/;
 
 export function appendAudit(stateDir: string, input: AuditEntryInput): void {
   if (!SAFE_SESSION_ID.test(input.sessionId)) {
     throw makeRealmError("SCHEMA_INVALID");
   }
-  const entry = redactValue({
+  if (input.correlationId !== undefined && !CORRELATION_ID.test(input.correlationId)) {
+    throw makeRealmError("SCHEMA_INVALID");
+  }
+  const redacted = redactValue({
     at: new Date().toISOString(),
     sessionId: input.sessionId,
+    correlationId: input.correlationId,
     tool: input.tool,
     outcome: input.outcome,
     phase: input.phase,
@@ -83,16 +91,21 @@ export function appendAudit(stateDir: string, input: AuditEntryInput): void {
     sha256: input.sha256,
     execSummary: input.execSummary,
   });
-  const line = Buffer.from(`${JSON.stringify(entry)}\n`, "utf8");
+  if (typeof redacted !== "object" || redacted === null || Array.isArray(redacted)) {
+    throw makeRealmError("SCHEMA_INVALID");
+  }
 
   try {
-    writeAuditLine(stateDir, input.sessionId, line);
-  } catch {
+    writeAuditLine(stateDir, input.sessionId, redacted as Record<string, unknown>);
+  } catch (error: unknown) {
+    if (error instanceof Error && error.name === "RealmError") {
+      throw error;
+    }
     throw makeRealmError("AUDIT_WRITE_FAILED");
   }
 }
 
-// Every failure of the write (directory, lstat check, open, chmod, write, fsync, close) is mapped to
+// Every failure of the write (directory, lstat check, open, chmod, write, fsync, close, tail read) is mapped to
 // AUDIT_WRITE_FAILED by the caller. No raw Node error escapes this function. The failure does not
 // say whether the line reached the file: a failed fsync, or a failed directory fsync, after a
 // successful write reports AUDIT_WRITE_FAILED although the line is already in the file, so a caller
@@ -102,9 +115,9 @@ export function appendAudit(stateDir: string, input: AuditEntryInput): void {
 // first line with it, is not lost to a crash after the call returned.
 // A crash in the middle of an earlier append can leave a last line with no newline. The next line would
 // be glued onto it and neither would parse, so an existing, non-empty file whose last byte is not a
-// newline gets a newline prefix, written in the same call as the line (D-1403). That rule lives here so
-// there is one tail rule for the file.
-function writeAuditLine(stateDir: string, sessionId: string, line: Buffer): void {
+// newline gets a newline prefix, written in the same call as the line (D-1403). The same tail read
+// recovers seq and prev (D-1702). A line longer than AUDIT_LINE_MAX_BYTES is refused.
+function writeAuditLine(stateDir: string, sessionId: string, fields: Record<string, unknown>): void {
   const dir = join(stateDir, "audit");
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   // lstat does not follow links: a symlinked audit directory is refused before any file is opened.
@@ -116,7 +129,13 @@ function writeAuditLine(stateDir: string, sessionId: string, line: Buffer): void
   const { fd, created } = openAuditFile(file);
   try {
     fchmodSync(fd, 0o600);
-    const payload = !created && endsWithPartialLine(file) ? Buffer.concat([Buffer.from("\n", "utf8"), line]) : line;
+    const head = created ? { nextSeq: 1, prevHash: AUDIT_GENESIS_PREV, needsNewline: false } : readHead(file);
+    const text = JSON.stringify(withChain(fields, head));
+    if (Buffer.byteLength(text, "utf8") > AUDIT_LINE_MAX_BYTES) {
+      throw new Error("audit line exceeds the chain bound");
+    }
+    const line = Buffer.from(`${text}\n`, "utf8");
+    const payload = head.needsNewline ? Buffer.concat([Buffer.from("\n", "utf8"), line]) : line;
     let written = 0;
     while (written < payload.length) {
       written += writeSync(fd, payload, written, payload.length - written);
@@ -130,20 +149,23 @@ function writeAuditLine(stateDir: string, sessionId: string, line: Buffer): void
   }
 }
 
-// True when the file has content and its last byte is not a newline. The file is opened read-only
-// without following links; the write descriptor is O_APPEND and write-only, so it cannot read.
-function endsWithPartialLine(file: string): boolean {
+function withChain(fields: Record<string, unknown>, head: ChainHead): Record<string, unknown> {
+  const out = Object.create(null) as Record<string, unknown>;
+  out["seq"] = head.nextSeq;
+  out["prev"] = head.prevHash;
+  for (const key of Object.keys(fields)) {
+    const value = fields[key];
+    if (value !== undefined) {
+      out[key] = value;
+    }
+  }
+  return out;
+}
+
+function readHead(file: string): ChainHead {
   const fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
-    const size = fstatSync(fd).size;
-    if (size === 0) {
-      return false;
-    }
-    const last = Buffer.alloc(1);
-    if (readSync(fd, last, 0, 1, size - 1) !== 1) {
-      throw new Error("audit file tail could not be read");
-    }
-    return last[0] !== 0x0a;
+    return readChainHead(fd);
   } finally {
     closeSync(fd);
   }

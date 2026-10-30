@@ -54,7 +54,7 @@ void test("an entry carries at, sessionId, tool, outcome, path, bytes, and sha25
   withStateDir((stateDir) => {
     appendAudit(stateDir, { sessionId: SESSION, tool: "write", outcome: "ok", path: "a.txt", bytes: 7, sha256: HEX64 });
     const entry = JSON.parse(readLines(stateDir)[0] ?? "") as Record<string, unknown>;
-    assert.deepEqual(Object.keys(entry).sort(), ["at", "bytes", "outcome", "path", "sessionId", "sha256", "tool"]);
+    assert.deepEqual(Object.keys(entry).sort(), ["at", "bytes", "outcome", "path", "prev", "seq", "sessionId", "sha256", "tool"]);
     assert.equal(entry["sessionId"], SESSION);
     assert.equal(entry["tool"], "write");
     assert.equal(entry["outcome"], "ok");
@@ -305,7 +305,7 @@ void test("TOOL-03: an entry with no phase has no phase key, so the pre-stage sh
     appendAudit(stateDir, { sessionId: SESSION, tool: "list", outcome: "ok", path: "." });
     const entry = JSON.parse(readLines(stateDir)[0] ?? "") as Record<string, unknown>;
     assert.equal("phase" in entry, false);
-    assert.deepEqual(Object.keys(entry).sort(), ["at", "outcome", "path", "sessionId", "tool"]);
+    assert.deepEqual(Object.keys(entry).sort(), ["at", "outcome", "path", "prev", "seq", "sessionId", "tool"]);
   });
 });
 
