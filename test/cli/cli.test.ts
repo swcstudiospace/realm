@@ -879,7 +879,7 @@ void test("realm acp writes an ensure failure code to stderr and exits 1 without
   assert.deepEqual(daemon.record.upRoots, []);
 });
 
-void test("a runtime config that cannot be read makes every command exit 2 before any daemon is dialled (CLI-01, OMP-01)", async () => {
+void test("a runtime config that cannot be read makes status exit 2 before any daemon is dialled (CLI-01, OMP-01)", async () => {
   const daemon = fakeDaemon({ probes: [true] });
   const result = await runCli(["status"], {
     env: { ...ENV, XDG_CONFIG_HOME: join(CONFIG_HOME, "absent") },
@@ -888,6 +888,23 @@ void test("a runtime config that cannot be read makes every command exit 2 befor
   assert.equal(result.exitCode, 2);
   assert.ok(result.stderr.startsWith("realm status: cannot resolve a state directory"), result.stderr);
   assert.equal(daemon.record.connects, 0);
+});
+
+void test("realm doctor with no config returns the init check and does not dial a daemon", async () => {
+  const daemon = fakeDaemon({ probes: [true] });
+  const result = await runCli(["doctor"], {
+    env: { ...ENV, XDG_CONFIG_HOME: join(CONFIG_HOME, "absent") },
+    connect: daemon.connect,
+  });
+  assert.equal(result.exitCode, 0);
+  assert.equal(daemon.record.connects, 0);
+  const checks = JSON.parse(result.stdout) as { id: string; status: string; fix: string }[];
+  assert.equal(checks.length, 1);
+  const check = checks[0];
+  assert.ok(check);
+  assert.equal(check.id, "runtime-roots");
+  assert.equal(check.status, "fail");
+  assert.match(check.fix, /realm init/);
 });
 
 void test("the default daemon spawn targets daemon/main.js beside the compiled CLI for up and mcp (CLI-01)", async () => {

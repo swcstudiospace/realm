@@ -27,6 +27,7 @@ import { connectDaemon, type DaemonClient, type DaemonStatus } from "../daemon/c
 import { daemonSpawnEnv } from "../daemon/spawn-env.js";
 import { ensureDaemon, daemonAnswers, daemonLogPath, reportingStartFailure } from "../daemon/ensure.js";
 import { defaultRunCommand, runChecks, type DoctorOptions } from "../doctor/checks.js";
+import { runtimeChecks } from "../doctor/runtime-checks.js";
 import { createMcpServer } from "../mcp/server.js";
 import { loadRuntimeConfig } from "../runtime/config.js";
 import { defaultPolicyPath, isDirectEntry, loadHostRuntimeConfig, readHostRuntime } from "../runtime/host-paths.js";
@@ -586,6 +587,14 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
   try {
     stateDir = readHostRuntime(deps.env, deps.readConfig).stateDir;
   } catch {
+    if (command === "doctor") {
+      const checks = await runtimeChecks({ env: deps.env });
+      return {
+        exitCode: 0,
+        stdout: `${JSON.stringify(checks)}\n`,
+        stderr: `realm doctor: config is absent; ran ${String(checks.length)} local check\n`,
+      };
+    }
     return {
       exitCode: 2,
       stdout: "",
