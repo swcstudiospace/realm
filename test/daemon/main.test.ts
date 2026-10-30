@@ -260,7 +260,7 @@ void test("CRASH-04: a failed reap's partial report is logged, then the start fa
   assert.deepEqual(h.lines[1], failed("REALM_STOPPING"));
 });
 
-void test("STARTUP budget: a long unfinished list stays complete in the record, and a truncated audit listing is named", async (t) => {
+void test("STARTUP budget: a long unfinished list is sampled at ten names, the count stays exact, and a truncated audit listing is named", async (t) => {
   const dir = tempDir(t);
   const names = Array.from({ length: 12 }, (_unused, index) => `s${String(index)}.jsonl`);
   const h = harness(writeConfig(dir, validConfig(dir)), {
@@ -285,7 +285,8 @@ void test("STARTUP budget: a long unfinished list stays complete in the record, 
   assert.equal(await runDaemon(h.deps), 0);
   const listed = startupOf(h.lines);
   assert.equal(listed["auditListingTruncated"], true);
-  assert.deepEqual(listed["unfinishedAuditFiles"], names);
+  assert.equal(listed["unfinishedAuditFileCount"], 12);
+  assert.deepEqual(listed["unfinishedAuditFiles"], names.slice(0, 10));
   assert.equal(listed["maintenanceComplete"], false);
 });
 

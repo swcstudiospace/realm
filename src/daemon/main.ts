@@ -102,6 +102,8 @@ export async function runDaemon(deps: DaemonDeps): Promise<number> {
 // reconciliation appended, and whether the budgeted maintenance finished. The container ids are not secrets.
 // When the reap itself failed, reapFailure names the code; the daemon then exits with that code on its own
 // daemon.failed line.
+const STARTUP_NAME_CAP = 10;
+
 function startupLine(report: StartupReport): string {
   return JSON.stringify({
     level: "info",
@@ -112,8 +114,10 @@ function startupLine(report: StartupReport): string {
     tempFilesRemoved: report.tempFilesRemoved,
     auditLinesReconciled: report.auditLinesReconciled,
     maintenanceComplete: report.maintenanceComplete,
-    unfinishedAuditFiles: report.unfinishedAuditFiles,
-    unfinishedSweepRoots: report.unfinishedSweepRoots,
+    unfinishedAuditFiles: report.unfinishedAuditFiles.slice(0, STARTUP_NAME_CAP),
+    unfinishedAuditFileCount: report.unfinishedAuditFiles.length,
+    unfinishedSweepRoots: report.unfinishedSweepRoots.slice(0, STARTUP_NAME_CAP),
+    unfinishedSweepRootCount: report.unfinishedSweepRoots.length,
     auditListingTruncated: report.auditListingTruncated,
     ...(report.reapFailure === undefined ? {} : { reapFailure: report.reapFailure }),
     failures: report.failures,
