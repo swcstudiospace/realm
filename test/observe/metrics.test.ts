@@ -74,3 +74,15 @@ void test("OBS-03: a null tool row, an empty timing, or an extra key is not a me
   assert.equal(isMetricsSnapshot({ ...snap, extra: 1 }), false);
   assert.equal(isMetricsSnapshot({ ...snap, uptimeMs: Number.NaN }), false);
 });
+
+void test("OBS-03: a saved snapshot does not change when another call is recorded", () => {
+  const registry = createMetrics({ now: () => CLOCK, monotonicMs: () => 0 });
+  registry.recordTool("write", "done", 1);
+  registry.recordTransition("unbound", "active");
+  const first = registry.snapshot();
+  registry.recordTool("write", "done", 1);
+  registry.recordTransition("unbound", "active");
+  assert.equal(first.toolCalls[0]?.count, 1);
+  assert.equal(first.transitions[0]?.count, 1);
+  assert.equal(registry.snapshot().toolCalls[0]?.count, 2);
+});

@@ -227,11 +227,11 @@ export function createMetrics(options: MetricsOptions): Metrics {
           }
           const byOutcome = left.outcome.localeCompare(right.outcome);
           return byOutcome !== 0 ? byOutcome : (left.code ?? "").localeCompare(right.code ?? "");
-        }),
+        }).map((row) => ({ ...row })),
         transitions: [...transitions.values()].sort((left, right) => {
           const byFrom = left.from.localeCompare(right.from);
           return byFrom !== 0 ? byFrom : left.to.localeCompare(right.to);
-        }),
+        }).map((row) => ({ ...row })),
         timings: { attachMs: freezeTiming(attachMs), toolCallMs: freezeTiming(toolCallMs) },
         healthProbeFailures: [...health.entries()]
           .sort((left, right) => left[0].localeCompare(right[0]))
