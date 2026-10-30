@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.3.14] - 2026-10-30
+
+### Added
+- feat(runtime): read sandbox roots from config and allowlist the daemon environment (#29) (4037f84)
+
 ## [0.3.13] - 2026-10-30
 
 ### Maintenance

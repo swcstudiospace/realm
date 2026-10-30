@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "realm",
-  "version": "0.3.13",
+  "version": "0.3.14",
   "description": "Realm agent sandbox: MCP-only Agent Plugins v1 package that starts realm mcp over stdio. Declares no code.",
   "extensions": {
     "com.nousresearch.hermes": {
