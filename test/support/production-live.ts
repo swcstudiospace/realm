@@ -810,15 +810,19 @@ function socketInodesOf(pid: number): Set<string> {
   let names: string[];
   try {
     names = readdirSync(`/proc/${String(pid)}/fd`);
-  } catch {
-    return inodes;
+  } catch (error: unknown) {
+    throw new Error(`cannot list the fds of pid ${String(pid)}`, { cause: error });
   }
   for (const name of names) {
     let link: string;
     try {
       link = readlinkSync(`/proc/${String(pid)}/fd/${name}`);
-    } catch {
-      continue;
+    } catch (error: unknown) {
+      // An fd closed between the listing and the read is not a socket any more. Any other failure is not skipped.
+      if (error instanceof Error && "code" in error && (error as { code?: unknown }).code === "ENOENT") {
+        continue;
+      }
+      throw new Error(`cannot read fd ${name} of pid ${String(pid)}`, { cause: error });
     }
     const match = /^socket:\[(\d+)\]$/.exec(link);
     if (match?.[1] !== undefined) {
@@ -828,11 +832,17 @@ function socketInodesOf(pid: number): Set<string> {
   return inodes;
 }
 
+// Reads one /proc/<pid>/net table. A missing IPv6 table means the kernel has no IPv6 (the only case a missing file is
+// expected); any other read failure throws, so a listener check never passes on a table it could not read.
 function procNet(pid: number, name: string): string {
   try {
     return readFileSync(`/proc/${String(pid)}/net/${name}`, "utf8");
-  } catch {
-    return "";
+  } catch (error: unknown) {
+    const code = error instanceof Error && "code" in error ? String((error as { code?: unknown }).code) : "";
+    if (code === "ENOENT" && name.endsWith("6")) {
+      return "";
+    }
+    throw new Error(`cannot read /proc/<pid>/net/${name}`, { cause: error });
   }
 }
 
