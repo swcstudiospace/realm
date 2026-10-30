@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.3.20] - 2026-10-30
+
+### Maintenance
+- test(integration): live evidence for phase 17 (scenarios 5, 6, 10) (#34) (5292d2c)
+
 ## [0.3.19] - 2026-10-30
 
 ### Changed
