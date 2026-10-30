@@ -91,7 +91,7 @@ test("collectExports reads export lists, aliases and type-only lists", () => {
   );
 });
 
-test("collectExports reads default exports as kind default and lists forwards separately", () => {
+test("collectExports keeps a default declaration's kind and lists forwards separately", () => {
   const source = [
     "// export const commented = 1;",
     'const message = "export const quoted = 1";',
@@ -101,7 +101,7 @@ test("collectExports reads default exports as kind default and lists forwards se
     "export const kept = 1;",
   ].join("\n");
   const found = collectExports(source, "src/a/x.ts");
-  assert.deepEqual(namesOf(source), ["default:default", "const:kept"]);
+  assert.deepEqual(namesOf(source), ["function:default", "const:kept"]);
   assert.deepEqual(found.forwards, [
     {
       line: 4,
@@ -513,6 +513,27 @@ test("analyze lists a re-export it cannot resolve as unclassified with its reaso
   );
   assert.match(entries[0].note, /"\.\/missing\.js", which is not an analyzed src file/);
   assert.match(entries[1].note, /external module "node:fs"/);
+});
+
+test("analyze keeps a default class public-signature when another export names it", () => {
+  const { entries } = analyze({
+    "src/a/one.ts": "export default class Box {}\nexport function make(): Box { return new Box(); }\n",
+  });
+  const found = entries.find((entry) => entry.name === "default");
+  assert.equal(found?.kind, "class");
+  assert.equal(found?.local, "Box");
+  assert.equal(found?.class, "public-signature");
+  assert.equal(entries.some((entry) => entry.name === "default" && entry.class === "self-only"), false);
+});
+
+test("analyze marks an unresolved namespace re-export unclassified, not self-only", () => {
+  const { entries } = analyze({
+    "src/a/index.ts": 'export * as fs from "node:fs";\n',
+  });
+  assert.deepEqual(
+    entries.map((entry) => [entry.name, entry.class, entry.kind]),
+    [["fs", "unclassified", "re-export"]],
+  );
 });
 
 test("analyze counts a default export as used when another file imports its default", () => {

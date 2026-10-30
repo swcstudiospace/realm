@@ -187,7 +187,7 @@ function collect(source, file) {
           }
         } else if (ts.isNamespaceExport(clause)) {
           add(clause.name.text, clause.name.text, "namespace", "value", line, [statement], clause.name);
-          forwards.push({ line, star: true, specifier, names: [] });
+          forwards.push({ line, star: true, specifier, names: [], namespace: clause.name.text });
           if (specifier !== null) {
             defaultReaches.push(specifier);
           }
@@ -224,7 +224,9 @@ function collect(source, file) {
     }
     if (hasModifier(statement, ts.SyntaxKind.DefaultKeyword)) {
       const declared = declaredNames(statement)[0];
-      add("default", declared?.text ?? "default", "default", TYPE_KINDS.has(kind) ? "type" : "value", line, [statement], null);
+      // Keep the declaration kind. A default class is still a class: another export can name it, and that has to
+      // count as public-signature. The exported name stays "default".
+      add("default", declared?.text ?? "default", kind, TYPE_KINDS.has(kind) ? "type" : "value", line, [statement], declared ?? null);
       continue;
     }
     for (const identifier of declaredNames(statement)) {
@@ -419,7 +421,8 @@ export function analyze(files) {
             : forward.specifier.startsWith(".")
               ? `re-export of ${JSON.stringify(forward.specifier)}, which is not an analyzed src file`
               : `re-export from external module ${JSON.stringify(forward.specifier)}`;
-        const names = forward.star ? ["*"] : forward.names.map((member) => member.exported);
+        const names =
+          forward.namespace !== undefined ? [forward.namespace] : forward.star ? ["*"] : forward.names.map((member) => member.exported);
         for (const name of names) {
           unresolved.push({ name, local: name, kind: "re-export", space: "value", file, line: forward.line, note });
         }
@@ -451,7 +454,11 @@ export function analyze(files) {
       return names;
     };
     const fileEntries = [];
+    const replaced = new Set(unresolved.filter((item) => item.file === file).map((item) => `${item.line}\0${item.name}`));
     for (const found of exports) {
+      if (replaced.has(`${found.line}\0${found.name}`)) {
+        continue;
+      }
       let klass;
       if (isExcluded(file)) {
         klass = "excluded";
