@@ -462,8 +462,8 @@ void test("OMP-01 (a): an attach failure settles disconnected with the catalogue
   await waitForDetail(fixture.ui, "ANDA_UNREACHABLE");
   assert.equal(lastLabel(fixture.ui), DISCONNECTED_LABEL);
   assert.match(lastDetail(fixture.ui) ?? "", /^ANDA_UNREACHABLE · /);
-  // No daemon was attached, so the guard has no client and refuses a guarded write.
-  assert.deepEqual(await toolCallOf(fixture.pi)({ toolName: "write" }), { block: true, reason: "REALM_NOT_ACTIVE" });
+  // No daemon was attached, so the guard has no client and refuses a guarded edit.
+  assert.deepEqual(await toolCallOf(fixture.pi)({ toolName: "edit" }), { block: true, reason: "REALM_NOT_ACTIVE" });
 });
 
 void test("OMP-01 (a): an attach that outlives the startup budget settles disconnected and releases its late client (P5-D8)", async () => {
@@ -485,7 +485,7 @@ void test("OMP-01 (a): an attach that outlives the startup budget settles discon
   gate.resolve();
   await waitUntil(() => fixture.daemon.count("close") === 1);
   assert.equal(fixture.daemon.count("close"), 1, "the late client is released");
-  assert.deepEqual(await toolCallOf(fixture.pi)({ toolName: "write" }), { block: true, reason: "REALM_NOT_ACTIVE" });
+  assert.deepEqual(await toolCallOf(fixture.pi)({ toolName: "edit" }), { block: true, reason: "REALM_NOT_ACTIVE" });
 });
 
 void test("OMP-01: an attachDaemon that throws synchronously paints disconnected with its code and never throws at the host (P5-D8)", async () => {
@@ -512,7 +512,7 @@ void test("OMP-01 (b): session shutdown closes the client, never calls down, and
 
   const paintsAtShutdown = fixture.ui.calls.length;
   fixture.daemon.snapshot = { state: "error", reason: "ANDA_UNREACHABLE", lastTransitionAt: CLOCK_ISO };
-  assert.deepEqual(await toolCallOf(fixture.pi)({ toolName: "write" }), { block: true, reason: "realm not started" });
+  assert.deepEqual(await toolCallOf(fixture.pi)({ toolName: "edit" }), { block: true, reason: "realm not started" });
   assert.equal(fixture.ui.calls.length, paintsAtShutdown, "no paint after shutdown");
   assert.equal(fixture.daemon.count("status"), 1, "a refused call after shutdown reads no status");
 });
@@ -524,11 +524,11 @@ void test("OMP-02: every status read paints one shared label across every transi
   const toolCall = toolCallOf(fixture.pi);
 
   fixture.daemon.snapshot = { state: "error", reason: "ANDA_UNREACHABLE", lastTransitionAt: CLOCK_ISO };
-  await toolCall({ toolName: "write" });
+  await toolCall({ toolName: "edit" });
   fixture.daemon.snapshot = ACTIVE;
-  await toolCall({ toolName: "write" });
+  await toolCall({ toolName: "edit" });
   fixture.daemon.snapshot = { state: "degraded", reason: "ANDA_VERSION_MISMATCH", lastTransitionAt: CLOCK_ISO };
-  await toolCall({ toolName: "write" });
+  await toolCall({ toolName: "edit" });
 
   // Pinned table: the only labels are the shared mapping plus the text degraded flag.
   const allowed = new Set([ACTIVE_LABEL, DEGRADED_LABEL, DISCONNECTED_LABEL]);
@@ -568,7 +568,7 @@ void test("OMP-03: the reason and last-transition time follow the label in the o
   ];
   for (const transition of transitions) {
     fixture.daemon.snapshot = transition.snapshot;
-    await toolCall({ toolName: "write" });
+    await toolCall({ toolName: "edit" });
     assert.equal(lastLabel(fixture.ui), transition.label, `label for ${transition.detail}`);
     assert.equal(lastDetail(fixture.ui), transition.detail);
   }
@@ -677,31 +677,31 @@ void test("OMP-04: the retry command before session start reports realm not star
   assert.equal(await retryCommandOf(fixture.pi).handler(), "realm not started");
 });
 
-void test("OMP-05: required mode refuses host write and edit while the realm is non-active (P5-D6)", async () => {
+void test("OMP-05: required mode refuses host edit while the realm is non-active; the Realm write reaches the daemon (P5-D6)", async () => {
   const fixture = makeFixture({ mode: "fail-closed", snapshot: CONNECTING });
   startHandlerOf(fixture.pi)(fixture.ctx);
   await waitForSettledDetails(fixture);
   const toolCall = toolCallOf(fixture.pi);
 
-  assert.deepEqual(await toolCall({ toolName: "write" }), { block: true, reason: "REALM_NOT_ACTIVE" });
+  assert.equal(await toolCall({ toolName: "write" }), undefined, "the Realm write goes to the daemon gate, not the guard");
   assert.deepEqual(await toolCall({ toolName: "edit" }), { block: true, reason: "REALM_NOT_ACTIVE" });
-  assert.deepEqual(await guardHostToolCall("write", null), { block: true, reason: "realm not started" });
+  assert.equal(await guardHostToolCall("write", null), undefined, "a Realm write with no session passes to the tool");
   assert.deepEqual(fixture.ui.notifications, [], "refusal carries no advisory warning");
-  assert.ok(fixture.daemon.count("status") >= 3, "each guarded call reads the daemon status");
+  assert.equal(fixture.daemon.count("status"), 2, "the attach and the guarded edit each read the daemon status once");
 });
 
-void test("OMP-05 (c): required mode blocks a write when the status snapshot says not active (P5-D6)", async () => {
+void test("OMP-05 (c): required mode blocks an edit when the status snapshot says not active (P5-D6)", async () => {
   const fixture = makeFixture({ mode: "fail-closed" });
   startHandlerOf(fixture.pi)(fixture.ctx);
   await waitForDetail(fixture.ui, "container running");
   const toolCall = toolCallOf(fixture.pi);
 
   fixture.daemon.snapshot = { state: "unbound", reason: "no workspace", lastTransitionAt: CLOCK_ISO };
-  assert.deepEqual(await toolCall({ toolName: "write" }), { block: true, reason: "REALM_UNBOUND" });
+  assert.deepEqual(await toolCall({ toolName: "edit" }), { block: true, reason: "REALM_UNBOUND" });
   fixture.daemon.snapshot = { state: "stopping", reason: "stopping", lastTransitionAt: CLOCK_ISO };
   assert.deepEqual(await toolCall({ toolName: "edit" }), { block: true, reason: "REALM_STOPPING" });
   fixture.daemon.snapshot = CONNECTING;
-  assert.deepEqual(await toolCall({ toolName: "write" }), { block: true, reason: "REALM_NOT_ACTIVE" });
+  assert.deepEqual(await toolCall({ toolName: "edit" }), { block: true, reason: "REALM_NOT_ACTIVE" });
   assert.deepEqual(fixture.ui.notifications, [], "required refusals carry no advisory warning");
 });
 
@@ -713,7 +713,7 @@ void test("OMP-05: advisory mode warns visibly and lets the guarded call through
 
   assert.equal(await toolCall({ toolName: "write" }), undefined);
   assert.equal(await toolCall({ toolName: "edit" }), undefined);
-  assert.equal(fixture.ui.notifications.length, 2);
+  assert.equal(fixture.ui.notifications.length, 1, "only the guarded edit warns; the Realm write is not the guard's to warn about");
   for (const warning of fixture.ui.notifications) {
     assert.match(warning, /connecting/, "warning names the state");
     assert.match(warning, /advisory policy/, "warning states the advisory policy");
@@ -735,13 +735,13 @@ void test("OMP-05: read, list, status, and retry pass the guard untouched withou
   assert.deepEqual(fixture.ui.notifications, [], "pass-through attaches no warning");
 });
 
-void test("OMP-05 (d): required mode blocks a write when the status fetch times out (P5-D6)", async () => {
+void test("OMP-05 (d): required mode blocks an edit when the status fetch times out (P5-D6)", async () => {
   const fixture = makeFixture({ mode: "fail-closed" });
   startHandlerOf(fixture.pi)(fixture.ctx);
   await waitForDetail(fixture.ui, "container running");
   fixture.daemon.hangStatus = true;
 
-  const verdict = toolCallOf(fixture.pi)({ toolName: "write" });
+  const verdict = toolCallOf(fixture.pi)({ toolName: "edit" });
   expireTimer(fixture.ctx, GUARD_STATUS_BUDGET_MS);
 
   assert.deepEqual(await verdict, { block: true, reason: "TOOL_TIMEOUT" });
@@ -809,7 +809,7 @@ void test("timers: session shutdown settles an in-flight guard read as refused a
   await waitForDetail(fixture.ui, "container running");
   fixture.daemon.hangStatus = true;
 
-  const verdict = toolCallOf(fixture.pi)({ toolName: "write" });
+  const verdict = toolCallOf(fixture.pi)({ toolName: "edit" });
   const guardHandle = armedTimer(fixture.ctx, GUARD_STATUS_BUDGET_MS).handle;
   shutdownHandlerOf(fixture.pi)();
 
@@ -824,7 +824,7 @@ void test("timers: a settled attach and a settled guard read leave no timer arme
   const budgetHandle = armedTimer(fixture.ctx, STARTUP_BUDGET_MS).handle;
   assert.ok(fixture.ctx.cleared.includes(budgetHandle), "the settled attach clears its budget");
 
-  assert.equal(await toolCallOf(fixture.pi)({ toolName: "write" }), undefined);
+  assert.deepEqual(await toolCallOf(fixture.pi)({ toolName: "edit" }), { block: true, reason: "POLICY_DENIED" });
   const guardHandle = armedTimer(fixture.ctx, GUARD_STATUS_BUDGET_MS).handle;
   assert.ok(fixture.ctx.cleared.includes(guardHandle), "the settled guard read clears its timeout");
   assert.equal(fixture.ctx.intervals.length, 1, "the poll is the only interval and stays armed until shutdown");

@@ -49,9 +49,17 @@ export type JsonSchema = Readonly<Record<string, unknown>>;
 
 export type HostApproval = "read" | "write" | "exec";
 
+// What a successful read reports besides its text: the digest, the truncation flag and the byte count.
+export interface ReadDetails {
+  readonly outcome: "done";
+  readonly tool: "read";
+  readonly value: { readonly status: "found"; readonly sha256: string; readonly truncated: boolean; readonly bytes: number };
+}
+
 export interface HostToolResult {
   readonly content: readonly { readonly type: "text"; readonly text: string }[];
-  readonly details: ToolOutcome;
+  // A successful read reports its metadata here; every other outcome is reported whole.
+  readonly details: ToolOutcome | ReadDetails;
   readonly isError: boolean;
 }
 
@@ -173,11 +181,7 @@ function definitionOf(spec: ToolSpec, call: DaemonCall): HostToolDefinition {
       const outcome = await Promise.resolve()
         .then(() => call(spec.toCall(params)))
         .catch((error: unknown) => refusalOf(spec.name, error));
-      return {
-        content: [{ type: "text", text: JSON.stringify(outcome) }],
-        details: outcome,
-        isError: outcome.outcome === "refused",
-      };
+      return resultOf(outcome);
     },
   };
 }
@@ -199,4 +203,41 @@ function refusalOf(tool: ToolName, error: unknown): ToolOutcome {
     retryable: refusal.retryable,
     ...(refusal.causeCode === undefined ? {} : { causeCode: refusal.causeCode }),
   };
+}
+
+// The result Omp shows. A successful read returns its text, decoded from the file bytes, with its metadata in details.
+// Every other outcome is returned as JSON text, with the outcome as details.
+function resultOf(outcome: ToolOutcome): HostToolResult {
+  if (outcome.outcome === "done" && outcome.tool === "read" && outcome.value.status === "found") {
+    const { content, sha256, truncated } = outcome.value;
+    const bytes = bytesOf(content);
+    if (bytes === undefined) {
+      return resultOf(refusalOf("read", makeRealmError("SCHEMA_INVALID")));
+    }
+    const details: ReadDetails = {
+      outcome: "done",
+      tool: "read",
+      value: { status: "found", sha256, truncated, bytes: bytes.length },
+    };
+    return { content: [{ type: "text", text: bytes.toString("utf8") }], details, isError: false };
+  }
+  return {
+    content: [{ type: "text", text: JSON.stringify(outcome) }],
+    details: outcome,
+    isError: outcome.outcome === "refused",
+  };
+}
+
+// The bytes of a successful read. In-process they are a Uint8Array. Across the daemon connection they arrive in Node's JSON
+// form of a Buffer, { type: "Buffer", data: number[] }, which is rebuilt here. Any other shape is undefined.
+function bytesOf(content: unknown): Buffer | undefined {
+  if (content instanceof Uint8Array) {
+    return Buffer.from(content.buffer, content.byteOffset, content.byteLength);
+  }
+  if (typeof content === "object" && content !== null && "type" in content && "data" in content) {
+    if (content.type === "Buffer" && Array.isArray(content.data)) {
+      return Buffer.from(content.data);
+    }
+  }
+  return undefined;
 }
