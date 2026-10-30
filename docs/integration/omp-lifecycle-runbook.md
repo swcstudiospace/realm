@@ -19,10 +19,9 @@ Environment for every command below:
 export XDG_CONFIG_HOME=<check-dir>/c
 export PI_CODING_AGENT_DIR=<check-dir>/agent
 export XDG_RUNTIME_DIR=/run/user/<uid>
-export REALM_DRIVER_STATE_ROOT=<driver state root>
-export REALM_DRIVER_SECRET_ROOT=<driver secret root>
-export REALM_DRIVER_WORKSPACE_ROOT=<workspace>
 ```
+
+The secret, workspace and sandbox-state roots come from `<check-dir>/c/realm/config.json`. A stale `REALM_DRIVER_SECRET_ROOT`, `REALM_DRIVER_WORKSPACE_ROOT` or `REALM_DRIVER_STATE_ROOT` variable is ignored.
 
 Useful probes: `realm status` (prints the snapshot, the label and the policy mode), the container list through the Podman API socket (`curl -s --unix-socket "$XDG_RUNTIME_DIR/podman/podman.sock" "http://d/v5.0.0/libpod/containers/json?all=true"`), and the daemon's pid (`ss -xlpn | grep <check-dir>/state/run/control.sock`).
 

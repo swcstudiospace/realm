@@ -34,6 +34,7 @@ const EXPECTED_IDS: readonly CheckId[] = [
   "agentos",
   "host-binaries",
   "kernel-hardening",
+  "runtime-roots",
 ];
 
 interface Layout {
@@ -99,7 +100,7 @@ function enoent(message: string): Error {
   return Object.assign(new Error(message), { code: "ENOENT" });
 }
 
-void test("CLI-03: the full report lists all eleven items in order, with control-channel, agentos, host-binaries and kernel-hardening appended (CLI-03)", async (t) => {
+void test("CLI-03: the full report lists every item in order, with runtime-roots appended when no runtime config is passed", async (t) => {
   const { policyPath, stateDir } = layout(t);
   makeRunDir(stateDir);
   const seen: SeenDials = { dials: [], timeouts: [] };

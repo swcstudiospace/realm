@@ -17,6 +17,7 @@ const REGISTERED_IDS: readonly CheckId[] = [
   "agentos",
   "host-binaries",
   "kernel-hardening",
+  "runtime-roots",
 ];
 
 // The explicit host environment each doctor run receives in these tests. The doctor reads no process environment. PATH names an
@@ -241,7 +242,7 @@ void test("session-store: an absent session directory fails when no ancestor is 
   assert.match(fixOf(result), /ownership/);
 });
 
-void test("the eleven checks are registered in report order, with control-channel, agentos, host-binaries and kernel-hardening after anda-bridge (D-44, D-69, CLI-03)", async (t) => {
+void test("the checks are registered in report order, with runtime-roots appended when no runtime config is passed", async (t) => {
   const { policyPath, stateDir } = layout(t);
   // Every seam is injected: each command fails to start and each socket is refused, so the run spawns no
   // process and opens no socket. The andaUrl is absent, so no engine is contacted either.

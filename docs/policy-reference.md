@@ -102,7 +102,7 @@ A policy that has no `mode` key, or no policy file at all, used to load as `advi
   through `verifyPinnedAt`, `src/fs/root.ts`).
   A session create is also refused with `POLICY_DENIED`, before any libpod,
   OpenShell or policy-file call, unless the driver's pinned root
-  (`REALM_DRIVER_WORKSPACE_ROOT`, the root the sandbox mounts at `/workspace`)
+  (`workspaceRoot` in `config.json`, the root the sandbox mounts at `/workspace`)
   and the policy-approved workspace are the same directory once both are
   resolved with `realpath` (`src/runtime/session-execution.ts`). A symbolic
   link to the same directory is the same directory. A pinned root that is a

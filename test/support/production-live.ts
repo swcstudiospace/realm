@@ -10,13 +10,14 @@
 // Nothing here prints a secret. A failure message carries exit codes, error codes, names and clipped probe output only.
 
 import { execFile, spawn } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync, accessSync, constants, statSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync, accessSync, constants, statSync } from "node:fs";
 import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { delimiter, isAbsolute, join } from "node:path";
 import { performance } from "node:perf_hooks";
 import type { EgressRule } from "../../src/contract/validate.js";
 import { podmanSocketPath } from "../../src/runtime/host-paths.js";
+import { loadRuntimeConfig, runtimeRootsOf } from "../../src/runtime/config.js";
 import { buildExecArgv, OPENSHELL_BINARY, OPENSHELL_SANDBOX_NAME_LABEL_KEY, REALM_SANDBOX_NAME_PREFIX, realmSandboxName } from "../../src/runtime/openshell.js";
 import { podmanSkipReason, type PodmanProbe } from "../../src/runtime/podman-version.js";
 import { selectOpenShellEnvironment } from "../../src/runtime/session-execution.js";
@@ -26,15 +27,7 @@ import { controlSocketPath, type EnvironmentLike } from "../../src/session/paths
 
 export const LIVE_PRODUCTION_VARIABLE = "REALM_LIVE_PRODUCTION";
 export const LIVE_IMAGE_VARIABLE = "REALM_LIVE_IMAGE";
-export const DRIVER_STATE_ROOT_VARIABLE = "REALM_DRIVER_STATE_ROOT";
-export const DRIVER_SECRET_ROOT_VARIABLE = "REALM_DRIVER_SECRET_ROOT";
-export const DRIVER_WORKSPACE_ROOT_VARIABLE = "REALM_DRIVER_WORKSPACE_ROOT";
-// The three roots in the order the gate checks them.
-const DRIVER_ROOT_VARIABLES: readonly string[] = [
-  DRIVER_STATE_ROOT_VARIABLE,
-  DRIVER_SECRET_ROOT_VARIABLE,
-  DRIVER_WORKSPACE_ROOT_VARIABLE,
-];
+export const LIVE_DRIVER_CONFIG_VARIABLE = "REALM_LIVE_DRIVER_CONFIG";
 
 // The host facts the gate decides from. Each is injected, so the hermetic file can cover every branch.
 export interface ProductionGateInputs {
@@ -44,12 +37,15 @@ export interface ProductionGateInputs {
   readonly onPath: (name: string) => boolean;
   readonly exists: (path: string) => boolean;
   readonly isDirectory: (path: string) => boolean;
+  // Reads the driver config. Omitted, the gate reads the file itself. A throw or a value
+  // loadRuntimeConfig refuses is a skip reason, not a crash before the scenarios register.
+  readonly readConfig?: (path: string) => string;
   // The built CLI beside the compiled tests (dist/src/cli/main.js).
   readonly cliPath: string;
 }
 
 // The reason the production live suite cannot run, or false when every prerequisite holds. The reason names the FIRST missing
-// prerequisite, in this order: the operator opt-in, Podman 5.x, the image, the three driver roots, the rootless socket, the
+// prerequisite, in this order: the operator opt-in, Podman 5.x, the image, REALM_LIVE_DRIVER_CONFIG, the rootless socket, the
 // openshell CLI and the built CLI. The opt-in is exactly "1": the test never sets it.
 export function productionSkipReason(inputs: ProductionGateInputs): string | false {
   const { env } = inputs;
@@ -63,11 +59,12 @@ export function productionSkipReason(inputs: ProductionGateInputs): string | fal
   if ((env[LIVE_IMAGE_VARIABLE] ?? "") === "") {
     return `${LIVE_IMAGE_VARIABLE} not set; the production live suite needs the digest-pinned image the running driver was given`;
   }
-  for (const name of DRIVER_ROOT_VARIABLES) {
-    const value = env[name];
-    if (value === undefined || !isAbsolute(value) || !inputs.isDirectory(value)) {
-      return `${name} is not an absolute path to an existing directory; it must equal the root the running driver was given`;
-    }
+  const driverConfig = env[LIVE_DRIVER_CONFIG_VARIABLE];
+  if (driverConfig === undefined || !isAbsolute(driverConfig) || !inputs.exists(driverConfig)) {
+    return `${LIVE_DRIVER_CONFIG_VARIABLE} is not an absolute path to an existing file; it must be the config.json the running driver reads`;
+  }
+  if (!readableDriverConfig(driverConfig, inputs.readConfig ?? ((path) => readFileSync(path, "utf8")))) {
+    return `${LIVE_DRIVER_CONFIG_VARIABLE} is not a readable runtime config; it must be the config.json the running driver reads`;
   }
   const socket = podmanSocketPath(env);
   if (socket === undefined) {
@@ -83,6 +80,15 @@ export function productionSkipReason(inputs: ProductionGateInputs): string | fal
     return "the built CLI dist/src/cli/main.js is missing; run npm run build first";
   }
   return false;
+}
+
+function readableDriverConfig(path: string, readConfig: (path: string) => string): boolean {
+  try {
+    loadRuntimeConfig(JSON.parse(readConfig(path)));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // `podman --version` is local and fast; the timeout keeps a hung binary from hanging the run.
@@ -454,11 +460,13 @@ export function readLiveInputs(env: EnvironmentLike, cliPath: string): LiveInput
     }
     return value;
   };
+  const configPath = required(LIVE_DRIVER_CONFIG_VARIABLE);
+  const roots = runtimeRootsOf(loadRuntimeConfig(JSON.parse(readFileSync(configPath, "utf8"))));
   return {
     image: required(LIVE_IMAGE_VARIABLE),
-    stateRoot: required(DRIVER_STATE_ROOT_VARIABLE),
-    secretRoot: required(DRIVER_SECRET_ROOT_VARIABLE),
-    workspaceRoot: required(DRIVER_WORKSPACE_ROOT_VARIABLE),
+    stateRoot: roots.sandboxStateRoot,
+    secretRoot: roots.secretRoot,
+    workspaceRoot: roots.workspaceRoot,
     cliPath,
     hostEnvironment: selectOpenShellEnvironment(env),
   };
@@ -506,7 +514,7 @@ export function createScenarioEnvironment(inputs: LiveInputs, spec: ScenarioSpec
   }
   writeFileSync(
     join(configHome, "realm", "config.json"),
-    `${JSON.stringify({ image: spec.image, stateDir, workspaceRoot: inputs.workspaceRoot })}\n`,
+    `${JSON.stringify({ image: spec.image, stateDir, workspaceRoot: inputs.workspaceRoot, secretRoot: inputs.secretRoot, sandboxStateRoot: inputs.stateRoot })}\n`,
     { mode: 0o600 },
   );
   const egressAllow = spec.egressAllow ?? [];
@@ -518,9 +526,6 @@ export function createScenarioEnvironment(inputs: LiveInputs, spec: ScenarioSpec
     cliEnvironment: {
       ...inputs.hostEnvironment,
       XDG_CONFIG_HOME: configHome,
-      [DRIVER_STATE_ROOT_VARIABLE]: inputs.stateRoot,
-      [DRIVER_SECRET_ROOT_VARIABLE]: inputs.secretRoot,
-      [DRIVER_WORKSPACE_ROOT_VARIABLE]: inputs.workspaceRoot,
     },
   };
 }

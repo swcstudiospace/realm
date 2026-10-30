@@ -89,14 +89,14 @@ export interface SessionExecutionOptions {
   readonly agentosFor?: SupervisorFor;
   // The workspace root is per session and comes from the create request.
   readonly config: Omit<RuntimeConfig, "workspaceRoot">;
-  // The realm secret root: the root the driver is given as REALM_DRIVER_SECRET_ROOT. The sandbox binding derives the channel
+  // The realm secret root from config.json (runtimeRootsOf). The sandbox binding derives the channel
   // directory from it. Absent or relative, a create is refused before any libpod, OpenShell, or policy-file call.
   readonly secretRoot?: string;
-  // The pinned workspace root: the root the driver is given as REALM_DRIVER_WORKSPACE_ROOT and mounts at /workspace. The sandbox
+  // The pinned workspace root from config.json, mounted at /workspace. The sandbox
   // binding derives the workspace mount from it, so the session's verifier and the driver share one derivation. Absent or
   // relative, a create is refused before any libpod, OpenShell, or policy-file call.
   readonly pinnedWorkspaceRoot?: string;
-  // The driver's sandbox state root: the root the driver is given as REALM_DRIVER_STATE_ROOT. The sandbox binding names each
+  // The driver's sandbox state root from config.json. The sandbox binding names each
   // sandbox's state directory under it. Absent or relative, a create is refused before any libpod, OpenShell, or policy-file call.
   readonly sandboxStateRoot?: string;
   // The session's egress allowlist, fixed for the session (D-106, OQ-P4-10). It arrives untrusted and is

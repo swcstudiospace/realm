@@ -9,8 +9,8 @@
 //   1. REALM_LIVE_PRODUCTION=1. An explicit operator opt-in; the test never sets it.
 //   2. Podman 5.x on PATH.
 //   3. REALM_LIVE_IMAGE: the digest-pinned image the running driver was given.
-//   4. REALM_DRIVER_STATE_ROOT, REALM_DRIVER_SECRET_ROOT and REALM_DRIVER_WORKSPACE_ROOT: absolute, and equal to the roots the
-//      running driver was given.
+//   4. REALM_LIVE_DRIVER_CONFIG: absolute path of the config.json the running driver reads. The roots come from that file.
+//      A stale REALM_DRIVER_*_ROOT variable is ignored.
 //   5. A rootless Podman API socket under XDG_RUNTIME_DIR.
 //   6. The openshell CLI on PATH.
 //   7. The built CLI at dist/src/cli/main.js, next to the compiled tests (npm run build).

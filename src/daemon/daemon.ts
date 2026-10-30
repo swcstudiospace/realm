@@ -105,14 +105,10 @@ export interface BuildDaemonHandleOptions {
   // Host environment filtered to OPENSHELL_ENV_NAMES for the runner (never
   // read from the process: this module reads no environment).
   readonly env?: EnvironmentLike;
-  // The realm secret root the sandbox binding derives from: the root the driver is given as REALM_DRIVER_SECRET_ROOT. Without it a
-  // session create is refused before any libpod call.
+  // The three roots from config.json (runtimeRootsOf). The driver reads the same file. A stale REALM_DRIVER_*_ROOT
+  // variable is ignored. Without a root a session create is refused before any libpod call.
   readonly secretRoot?: string;
-  // The pinned workspace root the sandbox binding mounts at /workspace: the root the driver is given as REALM_DRIVER_WORKSPACE_ROOT.
-  // Without it a session create is refused before any libpod call.
   readonly pinnedWorkspaceRoot?: string;
-  // The driver's sandbox state root: the root the driver is given as REALM_DRIVER_STATE_ROOT. The sandbox binding names each
-  // sandbox's state directory under it. Without it a session create is refused before any libpod call.
   readonly sandboxStateRoot?: string;
 }
 
@@ -261,6 +257,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
       agentos: agentosReading,
       env: options.env ?? {},
       ...options.doctorOptions,
+      runtimeConfig: config,
     });
 
   ensureSocketDir(stateDir, options.socketDirDeps);

@@ -37,7 +37,8 @@ import {
 import { selectOpenShellEnvironment } from "../runtime/session-execution.js";
 import { SOCKET_TIMEOUT_MS } from "../daemon/channel.js";
 import { controlSocketPath, type EnvironmentLike, sessionsDirOf } from "../session/paths.js";
-
+import type { RuntimeConfig } from "../runtime/config.js";
+import { runtimeChecks, type RuntimeCheckOptions } from "./runtime-checks.js";
 export type { ConnectSocket } from "../runtime/podman-probe.js";
 
 export type CheckId =
@@ -51,7 +52,10 @@ export type CheckId =
   | "control-channel"
   | "agentos"
   | "host-binaries"
-  | "kernel-hardening";
+  | "kernel-hardening"
+  | "runtime-roots"
+  | "driver-socket"
+  | "gateway";
 export type CheckStatus = "pass" | "warn" | "fail";
 
 export interface CheckResult {
@@ -92,6 +96,10 @@ export interface DoctorOptions {
   readonly hostBinaryPins?: HostBinaryPins;
   // Reads the Yama ptrace scope as the text of /proc/sys/kernel/yama/ptrace_scope, and throws when it cannot be read.
   readonly readPtraceScope?: () => string;
+  // Loaded runtime config. Absent, the runtime checks are one item whose fix names realm init.
+  readonly runtimeConfig?: RuntimeConfig;
+  readonly statPath?: RuntimeCheckOptions["stat"];
+  readonly connectGateway?: RuntimeCheckOptions["connectGateway"];
 }
 
 export type HostBinaryName = "supervisor" | "openshell" | "openshell-gateway" | "podman";
@@ -176,7 +184,15 @@ export async function runChecks(options: DoctorOptions): Promise<readonly CheckR
       return podmanProbe;
     },
   };
-  return Promise.all(REGISTERED.map(async (check) => await check(context)));
+  const registered = await Promise.all(REGISTERED.map(async (check) => await check(context)));
+  const runtime = await runtimeChecks({
+    ...(options.runtimeConfig === undefined ? {} : { config: options.runtimeConfig }),
+    env: options.env,
+    ...(options.statPath === undefined ? {} : { stat: options.statPath }),
+    ...(options.connectGateway === undefined ? {} : { connectGateway: options.connectGateway }),
+    ...(options.probeTimeoutMs === undefined ? {} : { probeTimeoutMs: options.probeTimeoutMs }),
+  });
+  return [...registered, ...runtime];
 }
 
 // The text a failed probe reports as its reason. Every probe here throws an Error, so its message is the text.

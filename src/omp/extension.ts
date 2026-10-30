@@ -25,6 +25,7 @@ export default function realmExtension(pi: OmpExtensionApi): void {
       socketPath,
       probe: reportingStartFailure(daemonAnswers(connectDaemon), stateDir),
       spawnDaemon: () => {
+        // startDetachedDaemon allowlists the child environment (spawn-env.ts). A sentinel does not cross.
         startDetachedDaemon(daemonEntry, stateDir);
       },
       timeoutMs: CONTROL_TIMEOUT_MS.up,

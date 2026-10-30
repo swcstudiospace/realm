@@ -322,9 +322,7 @@ function openInputs(overrides: Partial<ProductionGateInputs> = {}): ProductionGa
     env: {
       REALM_LIVE_PRODUCTION: "1",
       REALM_LIVE_IMAGE: "localhost/realm-agentos@sha256:" + "a".repeat(64),
-      REALM_DRIVER_STATE_ROOT: "/state-root",
-      REALM_DRIVER_SECRET_ROOT: "/secret-root",
-      REALM_DRIVER_WORKSPACE_ROOT: "/workspace-root",
+      REALM_LIVE_DRIVER_CONFIG: "/driver-config.json",
       XDG_RUNTIME_DIR: "/run-user",
       PATH: "/bin",
     },
@@ -333,6 +331,11 @@ function openInputs(overrides: Partial<ProductionGateInputs> = {}): ProductionGa
     onPath: (name) => name === "openshell",
     exists: () => true,
     isDirectory: () => true,
+    readConfig: () => JSON.stringify({
+      image: "localhost/realm-agentos@sha256:" + "b".repeat(64),
+      stateDir: "/var/lib/realm/state",
+      workspaceRoot: "/srv/workspace",
+    }),
     cliPath: CLI_PATH,
     ...overrides,
   };
@@ -386,26 +389,21 @@ void test("productionSkipReason names REALM_LIVE_IMAGE after Podman", () => {
   }
 });
 
-void test("productionSkipReason names each driver root that is missing, relative or absent from the host", () => {
-  const roots: ReadonlyArray<readonly [string, string]> = [
-    ["REALM_DRIVER_STATE_ROOT", "/state-root"],
-    ["REALM_DRIVER_SECRET_ROOT", "/secret-root"],
-    ["REALM_DRIVER_WORKSPACE_ROOT", "/workspace-root"],
-  ];
-  for (const [name, path] of roots) {
-    for (const value of [undefined, "", "relative/root"]) {
-      const reason = String(productionSkipReason(withEnv(name, value)));
-      assert.ok(reason.startsWith(`${name} is not an absolute path`), `${name}=${String(value)}: ${reason}`);
-    }
-    const absent = String(productionSkipReason(openInputs({ isDirectory: (candidate) => candidate !== path })));
-    assert.ok(absent.startsWith(`${name} is not an absolute path`), absent);
+void test("productionSkipReason names REALM_LIVE_DRIVER_CONFIG when it is missing, relative or not a file", () => {
+  for (const value of [undefined, "", "relative/config.json"]) {
+    const reason = String(productionSkipReason(withEnv("REALM_LIVE_DRIVER_CONFIG", value)));
+    assert.ok(reason.startsWith("REALM_LIVE_DRIVER_CONFIG is not an absolute path"), reason);
   }
+  const absent = String(productionSkipReason(openInputs({ exists: (path) => path === CLI_PATH })));
+  assert.ok(absent.startsWith("REALM_LIVE_DRIVER_CONFIG is not an absolute path"), absent);
 });
 
-void test("productionSkipReason reports the first of several missing roots in state, secret, workspace order", () => {
-  const base = openInputs();
-  const env: Record<string, string | undefined> = { ...base.env, REALM_DRIVER_SECRET_ROOT: undefined, REALM_DRIVER_WORKSPACE_ROOT: undefined };
-  assert.ok(String(productionSkipReason({ ...base, env })).startsWith("REALM_DRIVER_SECRET_ROOT"));
+void test("productionSkipReason names an unreadable or malformed driver config instead of throwing", () => {
+  const unreadable = String(productionSkipReason(openInputs({ readConfig: () => { throw new Error("EISDIR"); } })));
+  assert.match(unreadable, /not a readable runtime config/);
+  const malformed = String(productionSkipReason(openInputs({ readConfig: () => "{" })));
+  assert.match(malformed, /not a readable runtime config/);
+  assert.equal(unreadable.includes("/driver-config.json"), false);
 });
 
 void test("productionSkipReason names the rootless socket: an unusable XDG_RUNTIME_DIR, then an absent socket", () => {
@@ -432,7 +430,7 @@ void test("productionSkipReason reports the earlier prerequisite when two are mi
 void test("a skip reason names no host path", () => {
   const reasons = [
     productionSkipReason(withEnv("REALM_LIVE_PRODUCTION", undefined)),
-    productionSkipReason(withEnv("REALM_DRIVER_STATE_ROOT", undefined)),
+    productionSkipReason(withEnv("REALM_LIVE_DRIVER_CONFIG", undefined)),
     productionSkipReason(openInputs({ isSocket: () => false })),
     productionSkipReason(openInputs({ exists: (path) => path !== CLI_PATH })),
   ];
