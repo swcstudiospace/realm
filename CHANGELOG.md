@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.3.25] - 2026-10-30
+
+### Documentation
+- docs: state the fail-closed default and the containment limit accurately (ONB, DEF-02) (#44) (713a3db)
+
 ## [0.3.24] - 2026-10-30
 
 ### Added
