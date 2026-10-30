@@ -1,18 +1,26 @@
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { RealmError } from "../../src/core/errors.js";
 import { applySafeFixes, type FixAction, type ProtectedLocations } from "../../src/doctor/fix.js";
 
-// A temporary base that is removed when the test ends. Every mode the tests depend on is set with chmod, so the umask does not decide it.
+// A temporary base that is removed when the test ends. Before removal, owner read, write and search access is restored under it, so a test that set a locked mode (0300 or 0000) leaves nothing a non-root user cannot remove. Every mode the tests depend on is set with chmod, so the umask does not decide it.
 function base(t: TestContext): string {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "realm-doctor-fix-")));
   t.after(() => {
+    restoreOwnerAccess(dir);
     rmSync(dir, { recursive: true, force: true });
   });
   return dir;
+}
+
+// Gives the owner read, write and search access to a directory and to every directory beneath it. Symbolic links are not followed, so nothing outside the tree changes.
+function restoreOwnerAccess(path: string): void {
+  if (!lstatSync(path).isDirectory()) return;
+  chmodSync(path, 0o700);
+  for (const name of readdirSync(path)) restoreOwnerAccess(join(path, name));
 }
 
 // A home directory at mode 0755 with a workspace two levels below it, so the workspace has an ancestor that is not the home directory.
