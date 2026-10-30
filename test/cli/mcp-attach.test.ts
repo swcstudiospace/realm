@@ -101,6 +101,7 @@ void test("realm mcp spawns the detached daemon when none answers, claims the wo
       served.push(tool);
       return Promise.resolve({ outcome: "refused", tool: null, code: "REALM_NOT_ACTIVE", retryable: false });
     },
+    metrics: () => Promise.reject(makeRealmError("REALM_NOT_ACTIVE")),
     close: () => undefined,
   });
   const spawn: SpawnDaemon = (_file, args) => {
@@ -151,6 +152,7 @@ void test("realm mcp waits for a daemon that holds its socket but has not answer
       },
       up: () => Promise.resolve(STATUS),
       call: () => Promise.resolve({ outcome: "refused", tool: null, code: "REALM_NOT_ACTIVE", retryable: false }),
+      metrics: () => Promise.reject(makeRealmError("REALM_NOT_ACTIVE")),
       close: () => undefined,
     });
     const spawn: SpawnDaemon = (_file, args) => {
@@ -185,6 +187,7 @@ void test("realm mcp with no daemon that ever answers exits 1 with DAEMON_START_
     status: () => Promise.reject(makeRealmError("REALM_NOT_ACTIVE")),
     up: () => Promise.reject(makeRealmError("REALM_NOT_ACTIVE")),
     call: () => Promise.reject(makeRealmError("REALM_NOT_ACTIVE")),
+    metrics: () => Promise.reject(makeRealmError("REALM_NOT_ACTIVE")),
     close: () => undefined,
   });
   const spawn: SpawnDaemon = (_file, args) => {

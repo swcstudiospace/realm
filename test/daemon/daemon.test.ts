@@ -1364,3 +1364,22 @@ void test("a connection error on a served socket is that connection's failure an
     return reply.id === "alive" && snapshotStateOf(reply) === "active";
   }, "the daemon answers a new client and the abandoned up completed");
 });
+
+void test("OBS-03: metrics answers over the control socket and counts the tool call", async (t) => {
+  const fixture = makeDirs();
+  const { options } = daemonParts(fixture);
+  const daemon = await startDaemon(options);
+  t.after(() => cleanupDaemon(daemon));
+  const tool = await sendRequest(daemon.socketPath, { id: "tool-1", method: "tool", params: { tool: { status: {} } } });
+  assert.equal(tool.error, undefined);
+  const reply = await sendRequest(daemon.socketPath, { id: "m1", method: "metrics" });
+  assert.equal(reply.error, undefined);
+  const snap = reply.result as { schema?: number; toolCalls?: { tool?: string; outcome?: string; count?: number }[]; controlRequests?: { method?: string }[] };
+  assert.equal(snap.schema, 1);
+  assert.equal(snap.toolCalls?.some((row) => row.tool === "status" && row.outcome === "done" && row.count === 1), true);
+  assert.equal(snap.controlRequests?.some((row) => row.method === "tool"), true);
+  assert.equal(JSON.stringify(snap).includes("listen"), false);
+  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down" });
+  assert.ok(down.result !== undefined);
+  await awaitDone(daemon);
+});

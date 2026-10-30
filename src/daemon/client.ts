@@ -12,6 +12,7 @@ import { STATUS_LABELS } from "../core/status.js";
 import type { StateSnapshot } from "../core/state-machine.js";
 import type { DisplayStatus } from "../core/status.js";
 import { CONTROL_TIMEOUT_MS, sendRequest, type ControlMethod, type ControlReply, type ControlRequest } from "./channel.js";
+import type { MetricsSnapshot } from "../observe/metrics.js";
 import type { StatusValue, ToolOutcome } from "../tools/dispatch.js";
 import type { PolicyMode } from "../contract/validate.js";
 
@@ -30,6 +31,8 @@ export interface DaemonClient {
   // Dispatches one raw ToolCall. A refusal is a resolved ToolOutcome, not a throw. Same signature
   // as Pick<ToolDispatcher, "call">, so the MCP server and ACP adapter accept the client unchanged.
   call(tool: unknown): Promise<ToolOutcome>;
+  // Reads the in-memory counters. Absent daemon is REALM_NOT_ACTIVE; there is no local report.
+  metrics(): Promise<MetricsSnapshot>;
   // Ends the client. Idempotent. Later requests refuse with REALM_NOT_ACTIVE.
   close(): void;
 }
@@ -82,6 +85,25 @@ function isDaemonStatus(value: unknown): value is DaemonStatus {
     isPolicyMode(value["mode"]) &&
     (value["notice"] === undefined || typeof value["notice"] === "string") &&
     isStatusValue(value)
+  );
+}
+function isMetricsSnapshot(value: unknown): value is MetricsSnapshot {
+  if (!isRecord(value) || value["schema"] !== 1) {
+    return false;
+  }
+  const timings = value["timings"];
+  return (
+    typeof value["startedAt"] === "string" &&
+    typeof value["now"] === "string" &&
+    typeof value["uptimeMs"] === "number" &&
+    typeof value["logLinesDropped"] === "number" &&
+    Array.isArray(value["controlRequests"]) &&
+    Array.isArray(value["toolCalls"]) &&
+    Array.isArray(value["transitions"]) &&
+    Array.isArray(value["healthProbeFailures"]) &&
+    isRecord(timings) &&
+    isRecord(timings["attachMs"]) &&
+    isRecord(timings["toolCallMs"])
   );
 }
 
@@ -155,6 +177,13 @@ export function connectDaemon(socketPath: string): DaemonClient {
     async call(tool: unknown): Promise<ToolOutcome> {
       const result = await request("tool", { tool });
       if (!isToolOutcome(result)) {
+        throw makeRealmError("SCHEMA_INVALID");
+      }
+      return result;
+    },
+    async metrics(): Promise<MetricsSnapshot> {
+      const result = await request("metrics");
+      if (!isMetricsSnapshot(result)) {
         throw makeRealmError("SCHEMA_INVALID");
       }
       return result;

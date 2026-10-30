@@ -7,6 +7,7 @@ import { makeRealmError, type ErrorCode } from "../../src/core/errors.js";
 import type { StateSnapshot } from "../../src/core/state-machine.js";
 import { STATUS_LABELS, displayStatus } from "../../src/core/status.js";
 import type { DaemonClient, DaemonStatus } from "../../src/daemon/client.js";
+import type { MetricsSnapshot } from "../../src/observe/metrics.js";
 import type { PolicyMode } from "../../src/contract/validate.js";
 import type { ToolOutcome } from "../../src/tools/dispatch.js";
 import {
@@ -182,6 +183,10 @@ class FakeDaemon implements DaemonClient {
   call(): Promise<ToolOutcome> {
     this.calls.push("call");
     return Promise.reject(new Error("the plugin never dispatches tools"));
+  }
+
+  metrics(): Promise<MetricsSnapshot> {
+    return Promise.reject(new Error("the plugin never reads metrics"));
   }
 
   close(): void {

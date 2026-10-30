@@ -41,11 +41,11 @@ import { controlSocketPath, type EnvironmentLike } from "../session/paths.js";
 import { parseAnchorArgs, runAnchor } from "./anchor.js";
 import { runAuditVerify } from "./audit.js";
 
-export const CLI_COMMANDS = ["up", "down", "status", "doctor", "mcp", "acp", "anchor", "audit"] as const;
+export const CLI_COMMANDS = ["up", "down", "status", "doctor", "mcp", "acp", "anchor", "audit", "metrics"] as const;
 export type CliCommand = (typeof CLI_COMMANDS)[number];
 
 const USAGE =
-  "Usage: realm <up|down|status|doctor|mcp|acp|anchor|audit> (realm up|mcp|acp [--workspace <absolute path>]; realm anchor --session <id> [--publish] [--rpc <url>]; realm audit verify <file>)";
+  "Usage: realm <up|down|status|doctor|mcp|acp|anchor|audit|metrics> (realm up|mcp|acp [--workspace <absolute path>]; realm anchor --session <id> [--publish] [--rpc <url>]; realm audit verify <file>)";
 const RETRY_INTERVAL_MS = 25;
 const MCP_POLL_INTERVAL_MS = 100;
 
@@ -416,6 +416,20 @@ async function runDown(deps: ResolvedDeps, socketPath: string): Promise<CliResul
   }
 }
 
+
+async function runMetrics(deps: ResolvedDeps, socketPath: string): Promise<CliResult> {
+  try {
+    return replyToResult(
+      await deps.send(socketPath, { id: 1, method: "metrics" }, controlTimeoutOf(deps, "metrics")),
+    );
+  } catch (error) {
+    if (!isAbsentDaemon(error)) {
+      return failureFor(error);
+    }
+    return { exitCode: 1, stdout: "REALM_NOT_ACTIVE\n", stderr: "realm metrics: daemon absent (REALM_NOT_ACTIVE)\n" };
+  }
+}
+
 async function runStatus(deps: ResolvedDeps, socketPath: string): Promise<CliResult> {
   try {
     return replyToResult(
@@ -655,6 +669,8 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
       return runDown(resolved, socketPath);
     case "status":
       return runStatus(resolved, socketPath);
+    case "metrics":
+      return runMetrics(resolved, socketPath);
     case "doctor":
       return runDoctor(resolved, stateDir, socketPath);
     case "anchor":

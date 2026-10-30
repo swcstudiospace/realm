@@ -186,6 +186,8 @@ Decision D-1409 (`.planning/phases/14-crash-safety-pack/14-CONTEXT.md`). `startD
 
 Request lines (`up.begin`, `up.end`, `tool.result`, `health.probe_failed`) go to `<stateDir>/requests.log`, which the file sink rotates at 4 MiB. They do not share `daemon.log`: a detached daemon inherits that file as stderr, and rotating it would leave a later `daemon.failed` line on an unlinked inode. If `requests.log` cannot be opened, the line falls back to stderr.
 
+Counters and timings are read with `realm metrics`, which sends `metrics` on the control socket. There is no network listener and no MCP or ACP tool for them. The counts reset when the daemon starts.
+
 **`StartupReport`** (`src/daemon/daemon.ts`), handed to the optional `onStartup` observer of `StartDaemonOptions` once per start:
 
 | Field | Meaning |

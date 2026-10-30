@@ -14,7 +14,7 @@ import { ERROR_CODES, makeRealmError, RealmError, type ErrorCode } from "../core
 import { withTimeout } from "../core/timeout.js";
 import { controlSocketPath } from "../session/paths.js";
 
-export const CONTROL_METHODS = ["status", "up", "down", "doctor", "tool"] as const;
+export const CONTROL_METHODS = ["status", "up", "down", "doctor", "tool", "metrics"] as const;
 export type ControlMethod = (typeof CONTROL_METHODS)[number];
 
 const KNOWN_METHODS: readonly string[] = CONTROL_METHODS;
@@ -47,6 +47,7 @@ export const CONTROL_TIMEOUT_MS: Readonly<Record<ControlMethod, number>> = Objec
   down: 45_000,
   doctor: 60_000,
   tool: TOOL_CALL_BOUND_MS + 10_000,
+  metrics: 5_000,
 });
 
 // The socket is chmod to this mode after listen (P6-D3).

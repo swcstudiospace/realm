@@ -140,6 +140,7 @@ function fakeDaemon(options: FakeDaemonOptions): FakeDaemon {
         return options.up === undefined ? STATUS : options.up();
       },
       call: async (tool: unknown) => (options.call === undefined ? REFUSED_STATUS : options.call(tool)),
+      metrics: () => Promise.reject(new RealmError("REALM_NOT_ACTIVE")),
       close: () => {
         record.closes += 1;
       },
@@ -362,6 +363,14 @@ void test("realm down with no daemon is idempotent and says already down (CORE-0
   const other = await runCli(["down"], { env: ENV, timeoutMs: 500, send: failing });
   assert.equal(other.exitCode, 1);
   assert.equal(other.stdout, "TOOL_TIMEOUT\n");
+});
+
+void test("OBS-03: realm metrics with no daemon exits 1 and names REALM_NOT_ACTIVE", async () => {
+  const absent: SendControlRequest = () => Promise.reject(new RealmError("REALM_NOT_ACTIVE"));
+  const result = await runCli(["metrics"], { env: ENV, timeoutMs: 500, send: absent });
+  assert.equal(result.exitCode, 1);
+  assert.equal(result.stdout, "REALM_NOT_ACTIVE\n");
+  assert.equal(result.stderr.includes("REALM_NOT_ACTIVE"), true);
 });
 
 void test("realm doctor with no daemon runs local checks and says the daemon is absent (CLI-01)", async () => {

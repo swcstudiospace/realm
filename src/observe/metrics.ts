@@ -1,278 +1,237 @@
-// In-memory metrics registry (OBS-03). Pure: no I/O, no timers, never throws (it is called
-// from event-bus listeners). Every key is drawn from a closed set, so memory is bounded
-// whatever the callers pass: an unknown tool name is counted as "unknown", a value outside
-// the closed sets is dropped. Nothing is persisted; counters start at daemon start.
+// In-memory counters for the daemon control socket (OBS-03). No I/O and no throw: a listener on the
+// lifecycle event bus must not throw, or the publisher would rethrow into a transition. Every key
+// comes from a closed set, so a caller cannot grow the snapshot with a path, a session id, or free text.
 
-import { ERROR_CODES, type ErrorCode } from "../core/errors.js";
-import { STATES, type State } from "../core/states.js";
+import type { ErrorCode } from "../core/errors.js";
+import { ERROR_CODES } from "../core/errors.js";
+import type { State } from "../core/states.js";
+import { STATES } from "../core/states.js";
+import { CONTROL_METHODS, type ControlMethod } from "../daemon/channel.js";
 
 export const METRICS_SCHEMA = 1;
+export const BUCKET_UPPER_BOUNDS_MS = [5, 25, 100, 500, 2_000, 10_000, 60_000, 300_000] as const;
+export const TOOL_CALL_NAMES = ["exec", "read", "write", "list", "status", "retry", "unknown"] as const;
+export const TOOL_CALL_OUTCOMES = ["done", "refused", "failed"] as const;
 
-export const METRIC_CONTROL_METHODS = ["status", "up", "down", "doctor", "tool", "metrics"] as const;
-export type MetricControlMethod = (typeof METRIC_CONTROL_METHODS)[number];
-
-export const METRIC_TOOLS = ["exec", "read", "write", "list", "status", "retry"] as const;
-export type MetricTool = (typeof METRIC_TOOLS)[number] | "unknown";
-
-export const TOOL_OUTCOMES = ["done", "refused", "failed"] as const;
-export type ToolOutcome = (typeof TOOL_OUTCOMES)[number];
-
-export const TIMING_BUCKET_BOUNDS_MS: readonly number[] = Object.freeze([5, 25, 100, 500, 2000, 10000, 60000, 300000]);
-const BUCKET_COUNT = TIMING_BUCKET_BOUNDS_MS.length + 1;
+export type LoggedToolName = (typeof TOOL_CALL_NAMES)[number];
+export type ToolCallOutcome = (typeof TOOL_CALL_OUTCOMES)[number];
 
 export interface Timing {
-  count: number;
-  sumMs: number;
-  maxMs: number;
-  bucketUpperBoundsMs: readonly number[];
-  bucketCounts: readonly number[];
+  readonly count: number;
+  readonly sumMs: number;
+  readonly maxMs: number;
+  readonly bucketUpperBoundsMs: readonly number[];
+  readonly bucketCounts: readonly number[];
+}
+
+export interface ControlRequestCount {
+  readonly method: ControlMethod;
+  readonly count: number;
+  readonly refused: number;
+}
+
+export interface ToolCallCount {
+  readonly tool: LoggedToolName;
+  readonly outcome: ToolCallOutcome;
+  readonly code?: ErrorCode;
+  readonly count: number;
+}
+
+export interface TransitionCount {
+  readonly from: State;
+  readonly to: State;
+  readonly count: number;
+}
+
+export interface HealthProbeFailureCount {
+  readonly code: ErrorCode;
+  readonly count: number;
 }
 
 export interface MetricsSnapshot {
-  schema: 1;
-  startedAt: string;
-  now: string;
-  uptimeMs: number;
-  controlRequests: { method: MetricControlMethod; count: number; refused: number }[];
-  toolCalls: { tool: MetricTool; outcome: ToolOutcome; code?: ErrorCode; count: number }[];
-  transitions: { from: State; to: State; count: number }[];
-  timings: { attachMs: Timing; toolCallMs: Timing };
-  healthProbeFailures: { code: ErrorCode; count: number }[];
-  logLinesDropped: number;
+  readonly schema: 1;
+  readonly startedAt: string;
+  readonly now: string;
+  readonly uptimeMs: number;
+  readonly controlRequests: readonly ControlRequestCount[];
+  readonly toolCalls: readonly ToolCallCount[];
+  readonly transitions: readonly TransitionCount[];
+  readonly timings: { readonly attachMs: Timing; readonly toolCallMs: Timing };
+  readonly healthProbeFailures: readonly HealthProbeFailureCount[];
+  readonly logLinesDropped: number;
 }
 
 export interface Metrics {
-  controlRequest(method: string, refused: boolean): void;
-  toolCall(tool: string, outcome: ToolOutcome, code: ErrorCode | undefined, durationMs: number): void;
-  transition(from: State, to: State): void;
-  attach(durationMs: number): void;
-  healthProbeFailure(code: ErrorCode): void;
+  recordControl(method: string, refused: boolean): void;
+  recordTool(tool: string, outcome: string, durationMs: number, code?: string): void;
+  recordTransition(from: string, to: string): void;
+  recordAttach(durationMs: number): void;
+  recordHealthProbeFailure(code: string): void;
+  setLogLinesDropped(count: number): void;
   snapshot(): MetricsSnapshot;
 }
 
 export interface MetricsOptions {
-  now: () => Date;
-  monotonicMs: () => number;
-  // Reads the logger's dropped-line counter at snapshot time.
-  droppedLines?: () => number;
+  readonly now: () => Date;
+  readonly monotonicMs: () => number;
 }
 
-interface TimingState {
+interface MutableTiming {
   count: number;
   sumMs: number;
   maxMs: number;
-  buckets: number[];
+  bucketCounts: number[];
 }
 
-const newTiming = (): TimingState => ({ count: 0, sumMs: 0, maxMs: 0, buckets: new Array<number>(BUCKET_COUNT).fill(0) });
+const METHODS: readonly string[] = CONTROL_METHODS;
+const CODES: readonly string[] = ERROR_CODES;
+const STATE_NAMES: readonly string[] = STATES;
 
-function record(timing: TimingState, durationMs: number): void {
-  const ms = Number.isFinite(durationMs) && durationMs > 0 ? durationMs : 0;
+function isMethod(value: string): value is ControlMethod {
+  return METHODS.includes(value);
+}
+
+function isCode(value: string): value is ErrorCode {
+  return CODES.includes(value);
+}
+
+function isState(value: string): value is State {
+  return STATE_NAMES.includes(value);
+}
+
+function isTool(value: string): value is LoggedToolName {
+  return (TOOL_CALL_NAMES as readonly string[]).includes(value);
+}
+
+function isOutcome(value: string): value is ToolCallOutcome {
+  return (TOOL_CALL_OUTCOMES as readonly string[]).includes(value);
+}
+
+function emptyTiming(): MutableTiming {
+  return { count: 0, sumMs: 0, maxMs: 0, bucketCounts: BUCKET_UPPER_BOUNDS_MS.map(() => 0).concat(0) };
+}
+
+function finiteMs(value: number): number {
+  return Number.isFinite(value) ? Math.max(0, value) : 0;
+}
+
+function observe(timing: MutableTiming, durationMs: number): void {
+  const ms = finiteMs(durationMs);
   timing.count += 1;
   timing.sumMs += ms;
-  timing.maxMs = Math.max(timing.maxMs, ms);
-  let index = TIMING_BUCKET_BOUNDS_MS.findIndex((bound) => ms <= bound);
-  if (index < 0) {
-    index = BUCKET_COUNT - 1;
+  if (ms > timing.maxMs) {
+    timing.maxMs = ms;
   }
-  timing.buckets[index] = (timing.buckets[index] ?? 0) + 1;
+  for (let index = 0; index < BUCKET_UPPER_BOUNDS_MS.length; index += 1) {
+    const bound = BUCKET_UPPER_BOUNDS_MS[index];
+    if (bound !== undefined && ms <= bound) {
+      const bucket = timing.bucketCounts[index];
+      if (bucket !== undefined) {
+        timing.bucketCounts[index] = bucket + 1;
+      }
+      return;
+    }
+  }
+  const overflow = timing.bucketCounts[BUCKET_UPPER_BOUNDS_MS.length];
+  if (overflow !== undefined) {
+    timing.bucketCounts[BUCKET_UPPER_BOUNDS_MS.length] = overflow + 1;
+  }
 }
 
-function view(timing: TimingState): Timing {
+function freezeTiming(timing: MutableTiming): Timing {
   return {
     count: timing.count,
     sumMs: timing.sumMs,
     maxMs: timing.maxMs,
-    bucketUpperBoundsMs: [...TIMING_BUCKET_BOUNDS_MS],
-    bucketCounts: [...timing.buckets],
+    bucketUpperBoundsMs: BUCKET_UPPER_BOUNDS_MS,
+    bucketCounts: [...timing.bucketCounts],
   };
 }
 
-function oneOf<T extends string>(list: readonly T[], value: unknown): T | undefined {
-  return list.find((item) => item === value);
-}
-
 export function createMetrics(options: MetricsOptions): Metrics {
-  const startedAt = options.now();
-  const startedMono = options.monotonicMs();
-  const control = new Map<MetricControlMethod, { count: number; refused: number }>();
-  const tools = new Map<string, { tool: MetricTool; outcome: ToolOutcome; code: ErrorCode | undefined; count: number }>();
+  const started = options.now();
+  const startedMono = finiteMs(options.monotonicMs());
+  const control = new Map<ControlMethod, { count: number; refused: number }>();
+  const tools = new Map<string, { tool: LoggedToolName; outcome: ToolCallOutcome; code?: ErrorCode; count: number }>();
   const transitions = new Map<string, { from: State; to: State; count: number }>();
-  const probes = new Map<ErrorCode, number>();
-  const attachMs = newTiming();
-  const toolCallMs = newTiming();
+  const health = new Map<ErrorCode, number>();
+  const attachMs = emptyTiming();
+  const toolCallMs = emptyTiming();
+  let logLinesDropped = 0;
 
   return {
-    controlRequest(method, refused) {
-      const known = oneOf(METRIC_CONTROL_METHODS, method);
-      if (known === undefined) {
+    recordControl(method, refused) {
+      if (!isMethod(method)) {
         return;
       }
-      const row = control.get(known) ?? { count: 0, refused: 0 };
+      const row = control.get(method) ?? { count: 0, refused: 0 };
       row.count += 1;
       if (refused) {
         row.refused += 1;
       }
-      control.set(known, row);
+      control.set(method, row);
     },
-    toolCall(tool, outcome, code, durationMs) {
-      const outcomeKnown = oneOf(TOOL_OUTCOMES, outcome);
-      if (outcomeKnown === undefined) {
+    recordTool(tool, outcome, durationMs, code) {
+      if (!isOutcome(outcome)) {
         return;
       }
-      const name: MetricTool = oneOf(METRIC_TOOLS, tool) ?? "unknown";
-      const codeKnown = oneOf(ERROR_CODES, code);
-      const key = `${name}|${outcomeKnown}|${codeKnown ?? ""}`;
-      const row = tools.get(key) ?? { tool: name, outcome: outcomeKnown, code: codeKnown, count: 0 };
+      const name: LoggedToolName = isTool(tool) ? tool : "unknown";
+      const catalogue = code !== undefined && isCode(code) ? code : undefined;
+      const key = `${name}\u0000${outcome}\u0000${catalogue ?? ""}`;
+      const row = tools.get(key) ?? { tool: name, outcome, ...(catalogue === undefined ? {} : { code: catalogue }), count: 0 };
       row.count += 1;
       tools.set(key, row);
-      record(toolCallMs, durationMs);
+      observe(toolCallMs, durationMs);
     },
-    transition(from, to) {
-      const fromKnown = oneOf(STATES, from);
-      const toKnown = oneOf(STATES, to);
-      if (fromKnown === undefined || toKnown === undefined) {
+    recordTransition(from, to) {
+      if (!isState(from) || !isState(to)) {
         return;
       }
-      const key = `${fromKnown}>${toKnown}`;
-      const row = transitions.get(key) ?? { from: fromKnown, to: toKnown, count: 0 };
+      const key = `${from}\u0000${to}`;
+      const row = transitions.get(key) ?? { from, to, count: 0 };
       row.count += 1;
       transitions.set(key, row);
     },
-    attach(durationMs) {
-      record(attachMs, durationMs);
+    recordAttach(durationMs) {
+      observe(attachMs, durationMs);
     },
-    healthProbeFailure(code) {
-      const known = oneOf(ERROR_CODES, code);
-      if (known === undefined) {
+    recordHealthProbeFailure(code) {
+      if (!isCode(code)) {
         return;
       }
-      probes.set(known, (probes.get(known) ?? 0) + 1);
+      health.set(code, (health.get(code) ?? 0) + 1);
+    },
+    setLogLinesDropped(count) {
+      logLinesDropped = Number.isFinite(count) ? Math.max(0, Math.floor(count)) : logLinesDropped;
     },
     snapshot() {
       const at = options.now();
-      const dropped = options.droppedLines?.() ?? 0;
       return {
         schema: METRICS_SCHEMA,
-        startedAt: startedAt.toISOString(),
+        startedAt: started.toISOString(),
         now: at.toISOString(),
-        uptimeMs: Math.max(0, options.monotonicMs() - startedMono),
-        controlRequests: METRIC_CONTROL_METHODS.flatMap((method) => {
-          const row = control.get(method);
-          return row === undefined ? [] : [{ method, count: row.count, refused: row.refused }];
+        uptimeMs: Math.round(finiteMs(options.monotonicMs()) - startedMono),
+        controlRequests: [...control.entries()]
+          .sort((left, right) => left[0].localeCompare(right[0]))
+          .map(([method, row]) => ({ method, count: row.count, refused: row.refused })),
+        toolCalls: [...tools.values()].sort((left, right) => {
+          const byTool = left.tool.localeCompare(right.tool);
+          if (byTool !== 0) {
+            return byTool;
+          }
+          const byOutcome = left.outcome.localeCompare(right.outcome);
+          return byOutcome !== 0 ? byOutcome : (left.code ?? "").localeCompare(right.code ?? "");
         }),
-        toolCalls: [...tools.values()].map((row) =>
-          row.code === undefined
-            ? { tool: row.tool, outcome: row.outcome, count: row.count }
-            : { tool: row.tool, outcome: row.outcome, code: row.code, count: row.count },
-        ),
-        transitions: [...transitions.values()].map((row) => ({ from: row.from, to: row.to, count: row.count })),
-        timings: { attachMs: view(attachMs), toolCallMs: view(toolCallMs) },
-        healthProbeFailures: [...probes.entries()].map(([code, count]) => ({ code, count })),
-        logLinesDropped: Number.isSafeInteger(dropped) && dropped > 0 ? dropped : 0,
+        transitions: [...transitions.values()].sort((left, right) => {
+          const byFrom = left.from.localeCompare(right.from);
+          return byFrom !== 0 ? byFrom : left.to.localeCompare(right.to);
+        }),
+        timings: { attachMs: freezeTiming(attachMs), toolCallMs: freezeTiming(toolCallMs) },
+        healthProbeFailures: [...health.entries()]
+          .sort((left, right) => left[0].localeCompare(right[0]))
+          .map(([code, count]) => ({ code, count })),
+        logLinesDropped,
       };
     },
   };
-}
-
-type Rec = Record<string, unknown>;
-
-function isRec(value: unknown): value is Rec {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-// Exactly the required keys plus any of the optional ones; nothing else.
-function keysMatch(value: Rec, required: readonly string[], optional: readonly string[] = []): boolean {
-  const keys = Object.keys(value);
-  return required.every((k) => keys.includes(k)) && keys.every((k) => required.includes(k) || optional.includes(k));
-}
-
-const isCount = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
-const isMs = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && value >= 0;
-const isIso = (value: unknown): value is string => typeof value === "string" && !Number.isNaN(Date.parse(value));
-
-function isTiming(value: unknown): boolean {
-  if (!isRec(value) || !keysMatch(value, ["count", "sumMs", "maxMs", "bucketUpperBoundsMs", "bucketCounts"])) {
-    return false;
-  }
-  const bounds = value["bucketUpperBoundsMs"];
-  const counts = value["bucketCounts"];
-  return (
-    isCount(value["count"]) &&
-    isMs(value["sumMs"]) &&
-    isMs(value["maxMs"]) &&
-    Array.isArray(bounds) &&
-    bounds.length === TIMING_BUCKET_BOUNDS_MS.length &&
-    bounds.every((bound, i) => bound === TIMING_BUCKET_BOUNDS_MS[i]) &&
-    Array.isArray(counts) &&
-    counts.length === BUCKET_COUNT &&
-    counts.every(isCount)
-  );
-}
-
-function everyRow(value: unknown, check: (row: Rec) => boolean): boolean {
-  return Array.isArray(value) && value.every((row: unknown) => isRec(row) && check(row));
-}
-
-// Strict: rejects extra and missing fields at every level, a wrong type, and any value
-// outside the closed sets. The client uses it to validate the daemon's reply.
-export function isMetricsSnapshot(value: unknown): value is MetricsSnapshot {
-  if (
-    !isRec(value) ||
-    !keysMatch(value, [
-      "schema",
-      "startedAt",
-      "now",
-      "uptimeMs",
-      "controlRequests",
-      "toolCalls",
-      "transitions",
-      "timings",
-      "healthProbeFailures",
-      "logLinesDropped",
-    ])
-  ) {
-    return false;
-  }
-  const timings = value["timings"];
-  return (
-    value["schema"] === METRICS_SCHEMA &&
-    isIso(value["startedAt"]) &&
-    isIso(value["now"]) &&
-    isMs(value["uptimeMs"]) &&
-    isCount(value["logLinesDropped"]) &&
-    everyRow(
-      value["controlRequests"],
-      (row) =>
-        keysMatch(row, ["method", "count", "refused"]) &&
-        oneOf(METRIC_CONTROL_METHODS, row["method"]) !== undefined &&
-        isCount(row["count"]) &&
-        isCount(row["refused"]),
-    ) &&
-    everyRow(
-      value["toolCalls"],
-      (row) =>
-        keysMatch(row, ["tool", "outcome", "count"], ["code"]) &&
-        (oneOf(METRIC_TOOLS, row["tool"]) !== undefined || row["tool"] === "unknown") &&
-        oneOf(TOOL_OUTCOMES, row["outcome"]) !== undefined &&
-        (row["code"] === undefined || oneOf(ERROR_CODES, row["code"]) !== undefined) &&
-        isCount(row["count"]),
-    ) &&
-    everyRow(
-      value["transitions"],
-      (row) =>
-        keysMatch(row, ["from", "to", "count"]) &&
-        oneOf(STATES, row["from"]) !== undefined &&
-        oneOf(STATES, row["to"]) !== undefined &&
-        isCount(row["count"]),
-    ) &&
-    isRec(timings) &&
-    keysMatch(timings, ["attachMs", "toolCallMs"]) &&
-    isTiming(timings["attachMs"]) &&
-    isTiming(timings["toolCallMs"]) &&
-    everyRow(
-      value["healthProbeFailures"],
-      (row) => keysMatch(row, ["code", "count"]) && oneOf(ERROR_CODES, row["code"]) !== undefined && isCount(row["count"]),
-    )
-  );
 }

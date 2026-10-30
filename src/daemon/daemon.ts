@@ -17,6 +17,7 @@ import { AndaBridge } from "../anda/client.js";
 import { appendAudit } from "../audit/log.js";
 import { newCorrelationId } from "../observe/ids.js";
 import { nullLogger, type Logger } from "../observe/logger.js";
+import { createMetrics } from "../observe/metrics.js";
 import { reconcileAuditLogs } from "../audit/reconcile.js";
 import type { Policy, PolicyMode } from "../contract/validate.js";
 import { ERROR_CODES, makeRealmError, RealmError, type ErrorCode } from "../core/errors.js";
@@ -285,6 +286,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
   let startupNotice: string | undefined;
   let upId: string | undefined;
   const logger = options.logger ?? nullLogger;
+  const metrics = createMetrics({ now: () => new Date(), monotonicMs: () => performance.now() });
   const statusOf = (snapshot: StateSnapshot): StatusResult => statusResult(snapshot, handle.policyMode, startupNotice);
   const completed = new Set<Socket>();
 
@@ -312,13 +314,18 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
       const snapshot = await handle.controller.probe();
       if (snapshot.state === "error") {
         const code = catalogueCode(snapshot.reason);
+        if (code !== undefined) {
+          metrics.recordHealthProbeFailure(code);
+        }
         logger.warn("health.probe_failed", {
           ...(code === undefined ? { reason: snapshot.reason } : { code }),
           ...(upId === undefined ? {} : { upId }),
         });
       }
     } catch (error: unknown) {
-      logger.warn("health.probe_failed", { code: codeOf(error), ...(upId === undefined ? {} : { upId }) });
+      const code = codeOf(error);
+      metrics.recordHealthProbeFailure(code);
+      logger.warn("health.probe_failed", { code, ...(upId === undefined ? {} : { upId }) });
       options.onHealthProbeFailure?.(codeOf(error));
     } finally {
       healthProbing = false;
@@ -332,6 +339,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
     healthTimer.unref();
   };
   const unsubscribeHealth = handle.controller.events.subscribe((event) => {
+    metrics.recordTransition(event.from, event.to);
     if (event.to === "active" || event.to === "degraded") {
       if (healthTimer === undefined) {
         startHealthLoop();
@@ -459,16 +467,21 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
         }
         const correlationId = newCorrelationId();
         const startedAt = performance.now();
+        const finishAttach = (): number => {
+          const elapsed = Math.round(performance.now() - startedAt);
+          metrics.recordAttach(elapsed);
+          return elapsed;
+        };
         logger.info("up.begin", { correlationId, upId: correlationId });
         let probeResult: PodmanProbeResult;
         try {
           probeResult = await probe();
         } catch (error: unknown) {
-          logger.info("up.end", { correlationId, upId: correlationId, durationMs: Math.round(performance.now() - startedAt), code: codeOf(error) });
+          logger.info("up.end", { correlationId, upId: correlationId, durationMs: finishAttach(), code: codeOf(error) });
           return refusalReply(id, error);
         }
         if (!probeResult.ok) {
-          logger.info("up.end", { correlationId, upId: correlationId, durationMs: Math.round(performance.now() - startedAt), code: probeResult.code });
+          logger.info("up.end", { correlationId, upId: correlationId, durationMs: finishAttach(), code: probeResult.code });
           return { id, error: { code: probeResult.code } };
         }
         try {
@@ -478,13 +491,13 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
           logger.info("up.end", {
             correlationId,
             upId,
-            durationMs: Math.round(performance.now() - startedAt),
+            durationMs: finishAttach(),
             state: snapshot.state,
             ...(code === undefined ? {} : { code }),
           });
           return { id, result: statusOf(snapshot) };
         } catch (error: unknown) {
-          logger.info("up.end", { correlationId, upId: correlationId, durationMs: Math.round(performance.now() - startedAt), code: codeOf(error) });
+          logger.info("up.end", { correlationId, upId: correlationId, durationMs: finishAttach(), code: codeOf(error) });
           return refusalReply(id, error);
         }
       }
@@ -503,6 +516,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
           const elapsed = Math.round(performance.now() - startedAt);
           const toolName = outcome.tool ?? "unknown";
           if (outcome.outcome === "refused") {
+            metrics.recordTool(toolName, "refused", elapsed, outcome.code);
             logger.info("tool.result", {
               correlationId,
               ...(upId === undefined ? {} : { upId }),
@@ -519,6 +533,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
                   : { code: outcome.code, causeCode: outcome.causeCode },
             };
           }
+          metrics.recordTool(toolName, "done", elapsed);
           logger.info("tool.result", {
             correlationId,
             ...(upId === undefined ? {} : { upId }),
@@ -528,13 +543,15 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
           });
           return { id, result: outcome };
         } catch (error: unknown) {
+          const elapsed = Math.round(performance.now() - startedAt);
+          metrics.recordTool("unknown", "failed", elapsed, codeOf(error));
           logger.info("tool.result", {
             correlationId,
             ...(upId === undefined ? {} : { upId }),
             tool: "unknown",
             outcome: "error",
             code: codeOf(error),
-            durationMs: Math.round(performance.now() - startedAt),
+            durationMs: elapsed,
           });
           return refusalReply(id, error);
         }
@@ -542,6 +559,10 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
       case "down": {
         await shutdown(id, socket);
         return null;
+      }
+      case "metrics": {
+        metrics.setLogLinesDropped(logger.droppedLines());
+        return { id, result: metrics.snapshot() };
       }
       case "doctor": {
         try {
@@ -564,7 +585,9 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
     if (!isControlMethod(request.method)) {
       return unknownMethodReply(request.id);
     }
-    return dispatch(request.method, request.id, request.params, socket);
+    const reply = await dispatch(request.method, request.id, request.params, socket);
+    metrics.recordControl(request.method, reply?.error !== undefined);
+    return reply;
   };
 
   const serveOne = async (socket: Socket): Promise<void> => {

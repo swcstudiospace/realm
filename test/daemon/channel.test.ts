@@ -117,8 +117,8 @@ void test("RT-06: requests and replies round-trip over a live socket with matchi
   }
 });
 
-void test("RT-06: the control methods are exactly status, up, down, doctor, and tool, and tool outlasts one dispatcher call (P6-D2, P6-D12)", () => {
-  assert.deepEqual([...CONTROL_METHODS].sort(), ["doctor", "down", "status", "tool", "up"]);
+void test("RT-06: the control methods are exactly status, up, down, doctor, tool, and metrics, and tool outlasts one dispatcher call (P6-D2, P6-D12)", () => {
+  assert.deepEqual([...CONTROL_METHODS].sort(), ["doctor", "down", "metrics", "status", "tool", "up"]);
   assert.ok(
     CONTROL_TIMEOUT_MS.tool > TOOL_CALL_TIMEOUT_MS,
     "a tool request must outlast one dispatcher call",
