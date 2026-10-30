@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { RealmError } from "../../src/core/errors.js";
@@ -545,7 +545,17 @@ async function overlappingChecks(gateway: "up" | "down"): Promise<{
   return { driver, supervisor, first, second };
 }
 
-void test("OBS-04: two overlapping probes that fail while the gateway does not answer both reject with OPENSHELL_GATEWAY_LOST", async () => {
+// The call deadline is a real setTimeout. These tests park probes across turns, so a busy worker can cross the 50 ms
+// bound before releaseGateway() and turn a correct supervisor into a timeout. Mocked timers never fire that deadline.
+function holdDeadlines(t: TestContext): void {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  t.after(() => {
+    t.mock.timers.reset();
+  });
+}
+
+void test("OBS-04: two overlapping probes that fail while the gateway does not answer both reject with OPENSHELL_GATEWAY_LOST", async (t) => {
+  holdDeadlines(t);
   const { driver, first, second } = await overlappingChecks("down");
   const both = Promise.all([assertGatewayLost(first), assertGatewayLost(second)]);
   driver.releaseGateway();
@@ -553,7 +563,8 @@ void test("OBS-04: two overlapping probes that fail while the gateway does not a
   assert.equal(driver.gatewayCheckCount(), 1, "the overlapping probes share one classification");
 });
 
-void test("OBS-04: two overlapping probes that fail while the gateway answers both reject with AGENTOS_CRASH_LOOP", async () => {
+void test("OBS-04: two overlapping probes that fail while the gateway answers both reject with AGENTOS_CRASH_LOOP", async (t) => {
+  holdDeadlines(t);
   const { driver, first, second } = await overlappingChecks("up");
   const both = Promise.all([assertCrashLoop(first), assertCrashLoop(second)]);
   driver.releaseGateway();
@@ -561,7 +572,8 @@ void test("OBS-04: two overlapping probes that fail while the gateway answers bo
   assert.equal(driver.gatewayCheckCount(), 1);
 });
 
-void test("OBS-04: a stop during the classification makes both overlapping checks return false", async () => {
+void test("OBS-04: a stop during the classification makes both overlapping checks return false", async (t) => {
+  holdDeadlines(t);
   const { supervisor, first, second } = await overlappingChecks("down");
   await supervisor.stop();
   assert.equal(await first, false);
