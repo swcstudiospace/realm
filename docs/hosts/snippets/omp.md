@@ -49,12 +49,16 @@ with `"mode": "advisory"` in `<state-dir>/policy.json`
 
 - `fail-closed`: attaching removes Omp's built-in tools that are outside a
   fixed allowlist (`setActiveTools`, read back), such as `bash`, `edit` and
-  `eval`. A guarded `write` or `edit` is refused with `REALM_NOT_ACTIVE`, or
-  the code of the realm's state, while the realm is not active. This is a guard,
-  not containment: `write` stays a device transport, and the live check is pending.
-- `advisory`: the built-ins the plugin removed come back. A guarded `write` or
-  `edit` while the realm is not active proceeds with a warning. This is not
-  containment.
+  `eval`, and Realm `write` replaces the built-in `write`. The guard refuses
+  `bash` and `eval` unless the mode is advisory, and refuses host `edit` and
+  Realm `write` while the realm is not active, with `REALM_NOT_ACTIVE` or the
+  code of the realm's state. This is a guard, not containment: the spike
+  recorded a `write` transport that survived removal of the built-in write, and
+  the live check is pending (`docs/integration/omp.md`).
+- `advisory`: the built-ins the plugin removed come back. While the realm is
+  not active, host `edit` and Realm `write` proceed with a warning when the
+  daemon is reachable; with the daemon unreachable, Realm `write` refuses with
+  `REALM_NOT_ACTIVE`. This is not containment.
 
 ## Not documented
 
