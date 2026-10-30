@@ -11,6 +11,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -19,6 +20,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CLI_COMMANDS, runCli, type CliResult } from "../../src/cli/main.js";
+import { InitRefusal, runInit as runInitDirect } from "../../src/cli/init.js";
 import { loadPolicyFileDetailed } from "../../src/core/policy.js";
 import { loadRuntimeConfig } from "../../src/runtime/config.js";
 import { resolveConfigPath } from "../../src/runtime/host-paths.js";
@@ -252,6 +254,35 @@ void test("a symlinked state directory is refused (ONB-01)", async () => {
   assert.equal(existsSync(f.configPath), false);
 });
 
+void test("a state directory reached through a workspace alias is refused and writes nothing (ONB-01)", async () => {
+  const f = fixture();
+  const alias = join(f.root, "alias");
+  symlinkSync(f.workspace, alias);
+  const result = await runCli(
+    ["init", "--image", IMAGE, "--workspace", f.workspace, "--state-dir", join(alias, "state")],
+    { env: f.env, cwd: f.root },
+  );
+  assert.equal(result.exitCode, 1);
+  assert.equal(result.stdout, "POLICY_DENIED\n");
+  assert.equal(existsSync(join(f.workspace, "state")), false, "nothing is created inside the workspace");
+  assert.equal(existsSync(f.configPath), false);
+});
+
+void test("a dangling symlink on the state path is refused and its target is not created (ONB-01)", async () => {
+  const f = fixture();
+  const target = join(f.root, "absent-state");
+  const dangling = join(f.root, "dangling");
+  symlinkSync(target, dangling);
+  const result = await runCli(
+    ["init", "--image", IMAGE, "--workspace", f.workspace, "--state-dir", join(dangling, "state")],
+    { env: f.env, cwd: f.root },
+  );
+  assert.equal(result.exitCode, 1);
+  assert.match(result.stderr, /symbolic link that cannot be resolved/);
+  assert.equal(existsSync(target), false, "a dangling link is not followed to create its target");
+  assert.equal(existsSync(f.configPath), false);
+});
+
 void test("an existing state directory that is not mode 0700 is refused, not changed (ONB-01)", async () => {
   const f = fixture();
   mkdirSync(f.stateDir);
@@ -398,4 +429,68 @@ void test("init is a catalogued command and appears in the usage (ONB-01)", asyn
   const result = await runCli(["frobnicate"], { env: fixture().env });
   assert.equal(result.exitCode, 2);
   assert.ok(result.stderr.split(/[^A-Za-z]+/).includes("init"));
+});
+
+void test("a flag in a value position is a usage error, not a value (ONB-01)", async () => {
+  const f = fixture();
+  const invocations: string[][] = [
+    ["--image", "--workspace", f.workspace],
+    ["--workspace", "--image", IMAGE],
+    ["--image", IMAGE, "--state-dir", "--workspace", f.workspace],
+    ["--image", IMAGE, "--workspace", "--state-dir", f.stateDir],
+  ];
+  for (const words of invocations) {
+    const result = await runInit(f, words);
+    assert.equal(result.exitCode, 2, JSON.stringify(words));
+    assert.equal(result.stdout, "");
+    assert.match(result.stderr, /^realm init: usage:/);
+    assertNothingWritten(f);
+  }
+});
+
+void test("a directory that cannot be created is refused, naming it and the error (ONB-01)", async () => {
+  const f = fixture();
+  const blocker = join(f.root, "blocker");
+  writeFileSync(blocker, SENTINEL);
+  const result = await runInit(f, [
+    "--image",
+    IMAGE,
+    "--workspace",
+    f.workspace,
+    "--state-dir",
+    join(blocker, "state"),
+  ]);
+  assert.equal(result.exitCode, 1);
+  assert.equal(result.stdout, "WRITE_NOT_ATOMIC\n");
+  assert.ok(result.stderr.includes(blocker), result.stderr);
+  assert.match(result.stderr, /EEXIST|ENOTDIR/);
+  assert.equal(readFileSync(blocker, "utf8"), SENTINEL, "the file in the way is untouched");
+  assertNothingWritten(f);
+});
+
+// Drives runInit directly: the afterLink seam is not reachable through runCli.
+void test("a failure after a name is linked leaves no published or temp file (ONB-01)", () => {
+  for (const failing of ["policy", "config"] as const) {
+    const f = fixture();
+    const failAt = failing === "policy" ? f.policyPath : f.configPath;
+    const args = { image: IMAGE, workspace: f.workspace, stateDir: f.stateDir };
+    const afterLink = (path: string): void => {
+      if (path === failAt) {
+        throw new Error("injected after link");
+      }
+    };
+    assert.throws(
+      () => runInitDirect(args, { env: f.env, cwd: f.root, afterLink }),
+      (error: unknown) => error instanceof InitRefusal && error.code === "WRITE_NOT_ATOMIC",
+      failing,
+    );
+    assert.equal(existsSync(f.policyPath), false, `${failing}: policy.json is removed`);
+    assert.equal(existsSync(f.configPath), false, `${failing}: config.json is removed`);
+    assert.deepEqual(readdirSync(f.stateDir), [], `${failing}: the state directory holds no temp file`);
+    assert.deepEqual(
+      readdirSync(join(f.root, "config", "realm")),
+      [],
+      `${failing}: the config directory holds no temp file`,
+    );
+  }
 });

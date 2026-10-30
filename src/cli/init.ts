@@ -6,7 +6,6 @@
 // never writes a config the daemon would refuse and never invents a digest. Nothing here reads process.env:
 // the environment and the working directory arrive as parameters from runCli.
 
-import { randomBytes } from "node:crypto";
 import {
   chmodSync,
   closeSync,
@@ -16,12 +15,14 @@ import {
   lstatSync,
   mkdirSync,
   openSync,
+  realpathSync,
   unlinkSync,
   writeFileSync,
   type Stats,
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import { RealmError, type ErrorCode } from "../core/errors.js";
+import { syncDirectory, tempFileName } from "../fs/atomic-write.js";
 import { loadRuntimeConfig } from "../runtime/config.js";
 import { defaultPolicyPath, resolveConfigPath } from "../runtime/host-paths.js";
 import type { EnvironmentLike } from "../session/paths.js";
@@ -46,10 +47,15 @@ export interface InitArgs {
   readonly stateDir: string | undefined;
 }
 
+// Called after a name is linked. Test seam, as the stage hook in src/fs/atomic-write.ts: a test fails a write after
+// its name exists. The CLI does not pass it.
+type AfterLink = (path: string) => void;
+
 export interface InitDeps {
   readonly env: EnvironmentLike;
   // Working directory that --workspace defaults to (the CLI passes process.cwd()).
   readonly cwd: string;
+  readonly afterLink?: AfterLink;
 }
 
 export interface InitSummary {
@@ -66,13 +72,20 @@ const INIT_FLAGS: Readonly<Record<string, true>> = {
 };
 
 // Parses `--image <ref>`, `--workspace <path>` and `--state-dir <path>`, each at most once, in any order.
-// --image is required; a missing value, an unknown flag, or a repeated flag is a usage error (undefined).
+// --image is required. A missing value, a flag where a value belongs, an unknown flag, or a repeated flag is a usage
+// error (undefined).
 export function parseInitArgs(words: readonly string[]): InitArgs | undefined {
   const values = new Map<string, string>();
   for (let index = 0; index < words.length; index += 2) {
     const flag = words[index];
     const value = words[index + 1];
-    if (flag === undefined || value === undefined || !Object.hasOwn(INIT_FLAGS, flag) || values.has(flag)) {
+    if (
+      flag === undefined ||
+      value === undefined ||
+      value.startsWith("--") ||
+      !Object.hasOwn(INIT_FLAGS, flag) ||
+      values.has(flag)
+    ) {
       return undefined;
     }
     values.set(flag, value);
@@ -109,8 +122,27 @@ function configPathOf(env: EnvironmentLike): string {
   }
 }
 
-// Segment comparison, not a string prefix (as core/policy.ts): equality counts as inside. Both paths are absolute
-// and lexical, because the targets do not exist yet, so a symlink in either path is not followed here.
+// Resolves every symlink on the existing part of path. The nearest existing ancestor is resolved with realpath, and
+// the missing remainder is appended, so an alias anywhere on the path is followed. A symlink that cannot be resolved
+// (dangling or looping) is refused: nothing is known about where it leads.
+function resolveThroughAncestors(path: string): string {
+  const missing: string[] = [];
+  let existing = path;
+  while (lstatIfPresent(existing) === undefined && dirname(existing) !== existing) {
+    missing.unshift(basename(existing));
+    existing = dirname(existing);
+  }
+  try {
+    return join(realpathSync(existing), ...missing);
+  } catch (error) {
+    const link = lstatIfPresent(existing)?.isSymbolicLink() === true;
+    const why = link ? "is a symbolic link that cannot be resolved" : `cannot be resolved (${codeOf(error)})`;
+    throw new InitRefusal("SCHEMA_INVALID", `${existing} ${why}; refusing to use it`);
+  }
+}
+
+// Segment comparison, not a string prefix (as core/policy.ts): equality counts as inside. Both arguments come from
+// resolveThroughAncestors, so each is absolute and has no symlink on its existing part.
 function isInside(root: string, path: string): boolean {
   const rel = relative(root, path);
   return rel === "" || (!isAbsolute(rel) && rel.split(sep)[0] !== "..");
@@ -120,12 +152,22 @@ function errnoOf(error: unknown): string | undefined {
   return error instanceof Error && "code" in error && typeof error.code === "string" ? error.code : undefined;
 }
 
-// The entry's stats without following a symlink, or undefined when nothing is there.
+// The code a refusal reports for a failed step: the catalogue code of a RealmError, else the errno.
+function codeOf(error: unknown): string {
+  if (error instanceof RealmError) {
+    return error.code;
+  }
+  return errnoOf(error) ?? "unknown error";
+}
+
+// The entry's stats without following a symlink, or undefined when nothing is there. A path whose parent is a file
+// is also nothing here; the directory creation that follows refuses it.
 function lstatIfPresent(path: string): Stats | undefined {
   try {
     return lstatSync(path);
   } catch (error) {
-    if (errnoOf(error) === "ENOENT") {
+    const code = errnoOf(error);
+    if (code === "ENOENT" || code === "ENOTDIR") {
       return undefined;
     }
     throw error;
@@ -162,18 +204,23 @@ function preflight(
   if (!workspace.isDirectory()) {
     throw new InitRefusal("SCHEMA_INVALID", "--workspace must be an existing directory, not a symbolic link or file");
   }
-  // The policy file must not sit inside a workspace root the agent can write (D-22, the loader's rule). The
-  // config file must not either. The workspace must not sit inside the state directory it protects.
-  if (isInside(workspaceRoot, policyPath)) {
+  // Containment is decided on resolved paths, so an alias in any part of a path cannot put it inside the workspace.
+  // The policy file must not sit inside a workspace root the agent can write (D-22, the loader's rule). The config
+  // file must not either. The workspace must not sit inside the state directory it protects.
+  const realWorkspace = resolveThroughAncestors(workspaceRoot);
+  const realState = resolveThroughAncestors(stateDir);
+  const realConfig = resolveThroughAncestors(configPath);
+  const realPolicy = resolveThroughAncestors(policyPath);
+  if (isInside(realWorkspace, realPolicy)) {
     throw new InitRefusal(
       "POLICY_DENIED",
       "the state directory must not be inside the workspace root: policy.json would sit where the agent can write",
     );
   }
-  if (isInside(workspaceRoot, configPath)) {
+  if (isInside(realWorkspace, realConfig)) {
     throw new InitRefusal("SCHEMA_INVALID", "config.json must not be inside the workspace root");
   }
-  if (isInside(stateDir, workspaceRoot)) {
+  if (isInside(realState, realWorkspace)) {
     throw new InitRefusal("SCHEMA_INVALID", "--workspace must not be inside the state directory");
   }
   const state = lstatIfPresent(stateDir);
@@ -209,72 +256,120 @@ function preflight(
 
 // Creates one directory at 0700 when it is absent. Ancestors take the default mode, which the umask narrows; the
 // leaf's mode is then set explicitly so the umask cannot narrow or widen it. An existing directory is untouched.
+// A failure is refused with the directory that could not be created and the error code.
 function ensureLeafDirectory(path: string): void {
   if (lstatIfPresent(path) !== undefined) {
     return;
   }
-  mkdirSync(dirname(path), { recursive: true });
-  mkdirSync(path, { mode: 0o700 });
-  chmodSync(path, 0o700);
-}
-
-// Publishes text at path only if nothing is there. The text goes to a private temp file (created wx at 0600,
-// fsynced), and linkSync publishes it: linkSync fails with EEXIST if a racing writer created the target, so the
-// publish never overwrites. The temp name is removed either way.
-function publishNew(path: string, text: string): void {
-  const temp = join(dirname(path), `.${basename(path)}.realm-tmp-${randomBytes(8).toString("hex")}`);
-  const fd = openSync(temp, "wx", 0o600);
+  const parent = dirname(path);
   try {
-    fchmodSync(fd, 0o600);
-    writeFileSync(fd, text);
-    fsyncSync(fd);
-  } finally {
-    closeSync(fd);
-  }
-  try {
-    linkSync(temp, path);
+    mkdirSync(parent, { recursive: true });
   } catch (error) {
-    if (errnoOf(error) === "EEXIST") {
-      throw new InitRefusal("SCHEMA_INVALID", `${path} already exists; refusing to overwrite it`);
-    }
-    throw error;
-  } finally {
-    unlinkSync(temp);
+    throw new InitRefusal("WRITE_NOT_ATOMIC", `${parent} could not be created (${codeOf(error)})`);
+  }
+  try {
+    mkdirSync(path, { mode: 0o700 });
+    chmodSync(path, 0o700);
+  } catch (error) {
+    throw new InitRefusal("WRITE_NOT_ATOMIC", `${path} could not be created (${codeOf(error)})`);
   }
 }
 
-// The write phase. A failure after preflight is WRITE_NOT_ATOMIC: nothing this run published stays behind. If
-// config.json cannot be published after policy.json was, the policy is removed; if that removal fails, the
-// leftover is named.
+// Removes a name if it is there; ENOENT counts as removed. False when the removal failed.
+function unlinkIfPresent(path: string): boolean {
+  try {
+    unlinkSync(path);
+    return true;
+  } catch (error) {
+    return errnoOf(error) === "ENOENT";
+  }
+}
+
+// Flushes a directory entry. False when the flush failed, so cleanup can name what it could not confirm.
+function syncOrFalse(dir: string): boolean {
+  try {
+    syncDirectory(dir);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Gives text to path only if nothing is there. The text goes to a private temp file (created wx at 0600, fsynced),
+// and linkSync gives it the final name. linkSync fails with EEXIST if a racing writer created the target, so the
+// publish never overwrites. The temp name is removed and the directory synced after the link. A failure at any later
+// step removes the final name again; the temp name is removed on every path. A name that cannot be removed is named
+// in the refusal.
+function publishNew(path: string, text: string, afterLink: AfterLink | undefined): void {
+  const dir = dirname(path);
+  const temp = join(dir, tempFileName(basename(path)));
+  let tempCreated = false;
+  let linked = false;
+  try {
+    const fd = openSync(temp, "wx", 0o600);
+    tempCreated = true;
+    try {
+      fchmodSync(fd, 0o600);
+      writeFileSync(fd, text);
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+    try {
+      linkSync(temp, path);
+    } catch (error) {
+      if (errnoOf(error) === "EEXIST") {
+        throw new InitRefusal("SCHEMA_INVALID", `${path} already exists; refusing to overwrite it`);
+      }
+      throw error;
+    }
+    linked = true;
+    afterLink?.(path);
+    unlinkSync(temp);
+    syncDirectory(dir);
+  } catch (error) {
+    const leftovers: string[] = [];
+    if (tempCreated && !unlinkIfPresent(temp)) {
+      leftovers.push(temp);
+    }
+    if (linked && !(unlinkIfPresent(path) && syncOrFalse(dir))) {
+      leftovers.push(path);
+    }
+    const cause =
+      error instanceof InitRefusal
+        ? error
+        : new InitRefusal("WRITE_NOT_ATOMIC", `${path} could not be written (${codeOf(error)})`);
+    if (leftovers.length === 0) {
+      throw cause;
+    }
+    throw new InitRefusal(
+      cause.code,
+      `${cause.detail}; ${leftovers.join(" and ")} could not be removed, so remove it before retrying`,
+    );
+  }
+}
+
+// The write phase. A failure after preflight is WRITE_NOT_ATOMIC, and nothing this run published stays behind. If
+// config.json cannot be published after policy.json was, the policy is removed; if that removal fails, the leftover
+// is named.
 function writeFiles(
   files: { readonly configPath: string; readonly configText: string; readonly policyPath: string; readonly policyText: string },
   stateDir: string,
+  afterLink: AfterLink | undefined,
 ): void {
   ensureLeafDirectory(stateDir);
   ensureLeafDirectory(dirname(files.configPath));
+  publishNew(files.policyPath, files.policyText, afterLink);
   try {
-    publishNew(files.policyPath, files.policyText);
+    publishNew(files.configPath, files.configText, afterLink);
   } catch (error) {
-    if (error instanceof InitRefusal) {
-      throw error;
-    }
-    throw new InitRefusal("WRITE_NOT_ATOMIC", `policy.json could not be written (${errnoOf(error) ?? "unknown error"})`);
-  }
-  try {
-    publishNew(files.configPath, files.configText);
-  } catch (error) {
-    try {
-      unlinkSync(files.policyPath);
-    } catch {
+    if (!(unlinkIfPresent(files.policyPath) && syncOrFalse(dirname(files.policyPath)))) {
       throw new InitRefusal(
         "CLEANUP_FAILED",
         `config.json could not be written and policy.json (${files.policyPath}) could not be removed; remove it before retrying`,
       );
     }
-    if (error instanceof InitRefusal) {
-      throw error;
-    }
-    throw new InitRefusal("WRITE_NOT_ATOMIC", `config.json could not be written (${errnoOf(error) ?? "unknown error"})`);
+    throw error;
   }
 }
 
@@ -299,6 +394,6 @@ export function runInit(args: InitArgs, deps: InitDeps): InitSummary {
 
   const configText = `${JSON.stringify({ image: args.image, stateDir, workspaceRoot }, null, 2)}\n`;
   const policyText = `${JSON.stringify({ mode: "fail-closed", workspaceRoots: [workspaceRoot] }, null, 2)}\n`;
-  writeFiles({ configPath, configText, policyPath, policyText }, stateDir);
+  writeFiles({ configPath, configText, policyPath, policyText }, stateDir, deps.afterLink);
   return { config: configPath, policy: policyPath, stateDir, mode: "fail-closed" };
 }
