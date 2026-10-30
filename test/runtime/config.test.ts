@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { RealmError } from "../../src/core/errors.js";
-import { loadRuntimeConfig } from "../../src/runtime/config.js";
+import { loadRuntimeConfig, runtimeRootsOf } from "../../src/runtime/config.js";
 
 const DIGEST = `sha256:${"a".repeat(64)}`;
 const IMAGE = `ghcr.io/example/realm-agent@${DIGEST}`;
@@ -135,4 +135,32 @@ void test("RT-05: an egressAllow key is refused at load, because the allowlist i
     rejectionCode({ ...validInput(), egressAllow: [{ host: "api.example.com", port: 443 }] }),
     "SCHEMA_INVALID",
   );
+});
+
+void test("optional secretRoot and sandboxStateRoot are accepted when absolute and refused when relative", () => {
+  const loaded = loadRuntimeConfig({
+    ...validInput(),
+    secretRoot: "/var/lib/realm/secrets",
+    sandboxStateRoot: "/var/lib/realm/sandboxes",
+  });
+  assert.equal(loaded.secretRoot, "/var/lib/realm/secrets");
+  assert.equal(loaded.sandboxStateRoot, "/var/lib/realm/sandboxes");
+  assert.equal(rejectionCode({ ...validInput(), secretRoot: "secrets" }), "SCHEMA_INVALID");
+  assert.equal(rejectionCode({ ...validInput(), sandboxStateRoot: "sandboxes" }), "SCHEMA_INVALID");
+});
+
+void test("runtimeRootsOf derives the omitted roots under stateDir and keeps an explicit workspaceRoot", () => {
+  const config = loadRuntimeConfig(validInput());
+  assert.deepEqual(runtimeRootsOf(config), {
+    secretRoot: "/var/lib/realm/state/secrets",
+    workspaceRoot: "/srv/workspace",
+    sandboxStateRoot: "/var/lib/realm/state/sandboxes",
+  });
+  const explicit = loadRuntimeConfig({
+    ...validInput(),
+    secretRoot: "/srv/secrets",
+    sandboxStateRoot: "/srv/sandboxes",
+  });
+  assert.equal(runtimeRootsOf(explicit).secretRoot, "/srv/secrets");
+  assert.equal(runtimeRootsOf(explicit).sandboxStateRoot, "/srv/sandboxes");
 });

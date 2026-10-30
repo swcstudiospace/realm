@@ -6,6 +6,7 @@
 // drains.
 
 import { RealmError, type ErrorCode } from "../core/errors.js";
+import { loadRuntimeConfig, runtimeRootsOf } from "../runtime/config.js";
 import { defaultPolicyPath, isDirectEntry, podmanSocketPath, readHostRuntime } from "../runtime/host-paths.js";
 import { createOpenShellAgentOsDriver } from "../runtime/agentos-driver.js";
 import { productionRunnerChild } from "../runtime/agentos-workload.js";
@@ -45,15 +46,8 @@ interface StopWiring {
 // The AgentOS driver is always bound. Its sandbox image is config.image alone: the digest-pinned value the runtime
 // config loader validates at load (readHostRuntime), which startDaemon receives as runtimeInput. Each session's sandbox
 // is realm-<sessionId>, created from that image, and its runner runs there as the workload.
-// The realm secret root, the value the driver is given as REALM_DRIVER_SECRET_ROOT. The session's sandbox binding derives the channel
-// directory from it, so the daemon reads the same variable the driver does. Unset, a session create is refused.
-const SECRET_ROOT_ENV = "REALM_DRIVER_SECRET_ROOT";
-// The pinned workspace root, the value the driver is given as REALM_DRIVER_WORKSPACE_ROOT. The session's sandbox binding mounts this
-// root at /workspace, so the daemon reads the same variable the driver does. Unset, a session create is refused.
-const WORKSPACE_ROOT_ENV = "REALM_DRIVER_WORKSPACE_ROOT";
-// The driver's sandbox state root, the value the driver is given as REALM_DRIVER_STATE_ROOT. The session's sandbox binding names each
-// sandbox's state directory under it, so the daemon reads the same variable the driver does. Unset, a session create is refused.
-const SANDBOX_STATE_ROOT_ENV = "REALM_DRIVER_STATE_ROOT";
+// The three roots come from that same config (runtimeRootsOf). A stale REALM_DRIVER_SECRET_ROOT,
+// REALM_DRIVER_WORKSPACE_ROOT or REALM_DRIVER_STATE_ROOT is ignored.
 // Start provisions the runner child and waits for its probe, so it gets the long budget; probe and delete get the short one.
 const AGENTOS_START_TIMEOUT_MS = 180_000;
 const AGENTOS_CALL_TIMEOUT_MS = 30_000;
@@ -75,11 +69,9 @@ export async function runDaemon(deps: DaemonDeps): Promise<number> {
   let started: StartedDaemon;
   try {
     const { runtimeInput, stateDir } = readHostRuntime(deps.env, deps.readConfig);
+    const roots = runtimeRootsOf(loadRuntimeConfig(runtimeInput));
     const libpodSocketPath = podmanSocketPath(deps.env);
     const agentosDriver = productionAgentOsDriver(deps.env);
-    const secretRoot = deps.env[SECRET_ROOT_ENV];
-    const workspaceRoot = deps.env[WORKSPACE_ROOT_ENV];
-    const sandboxStateRoot = deps.env[SANDBOX_STATE_ROOT_ENV];
     started = await start({
       stateDir,
       runtimeInput,
@@ -88,9 +80,9 @@ export async function runDaemon(deps: DaemonDeps): Promise<number> {
       env: deps.env,
       ...(libpodSocketPath === undefined ? {} : { libpodSocketPath }),
       agentosDriver,
-      ...(secretRoot === undefined || secretRoot.length === 0 ? {} : { secretRoot }),
-      ...(workspaceRoot === undefined || workspaceRoot.length === 0 ? {} : { pinnedWorkspaceRoot: workspaceRoot }),
-      ...(sandboxStateRoot === undefined || sandboxStateRoot.length === 0 ? {} : { sandboxStateRoot }),
+      secretRoot: roots.secretRoot,
+      pinnedWorkspaceRoot: roots.workspaceRoot,
+      sandboxStateRoot: roots.sandboxStateRoot,
       onStartup: (report) => {
         writeStderr(startupLine(report));
       },

@@ -272,8 +272,7 @@ void test("doctor through the CLI against the fake-backed daemon lists every ite
 
   const report = JSON.parse(result.stdout) as CheckResult[];
   assert.ok(Array.isArray(report));
-  // Seven pre-existing items, the control-channel and agentos items of Phase 6 (06-05), and the host-binaries and
-  // kernel-hardening items of Phase 9.7: eleven in all. Every one is asserted present by id.
+  // Seven pre-existing items, Phase 6's two, Phase 9.7's two, and the three runtime checks when the daemon has a config.
   const ids = report.map((item) => item.id);
   const expectedIds: readonly CheckId[] = [
     "policy-file",
@@ -287,6 +286,9 @@ void test("doctor through the CLI against the fake-backed daemon lists every ite
     "agentos",
     "host-binaries",
     "kernel-hardening",
+    "runtime-roots",
+    "driver-socket",
+    "gateway",
   ];
   for (const expected of expectedIds) {
     assert.ok(ids.includes(expected), `doctor report must list ${expected}`);

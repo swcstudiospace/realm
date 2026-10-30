@@ -24,10 +24,12 @@ import {
   type ControlRequest,
 } from "../daemon/channel.js";
 import { connectDaemon, type DaemonClient, type DaemonStatus } from "../daemon/client.js";
+import { daemonSpawnEnv } from "../daemon/spawn-env.js";
 import { ensureDaemon, daemonAnswers, daemonLogPath, reportingStartFailure } from "../daemon/ensure.js";
 import { defaultRunCommand, runChecks, type DoctorOptions } from "../doctor/checks.js";
 import { createMcpServer } from "../mcp/server.js";
-import { defaultPolicyPath, isDirectEntry, readHostRuntime } from "../runtime/host-paths.js";
+import { loadRuntimeConfig } from "../runtime/config.js";
+import { defaultPolicyPath, isDirectEntry, loadHostRuntimeConfig, readHostRuntime } from "../runtime/host-paths.js";
 import {
   probePodman,
   type ConnectSocket,
@@ -329,19 +331,31 @@ function attachFailure(error: unknown, stateDir: string): string {
 function spawnDetachedDaemon(deps: ResolvedDeps): () => void {
   return () => {
     const entry = deps.daemonEntry ?? defaultDaemonEntry();
-    withDaemonLog(deps.stateDir, (log) => {
-      deps.spawn(process.execPath, [entry], { detached: true, stdio: ["ignore", log, log], env: deps.env });
-    });
+    launchFilteredDaemon(entry, deps.stateDir, deps.env, deps.spawn);
   };
 }
 
-// The documented CLI daemon spawn (P6-D1): starts the daemon entry detached with the argv form (no shell),
-// its output on <stateDir>/daemon.log, and unrefs the child so the CLI can exit. The Omp extension imports it.
-export function startDetachedDaemon(entry: string, stateDir: string): void {
+// Starts the daemon entry detached with the allowlisted environment (D-1505). The CLI spawn and
+// startDetachedDaemon both go through here, so a sentinel variable reaches neither child.
+export function launchFilteredDaemon(
+  entry: string,
+  stateDir: string,
+  source: EnvironmentLike,
+  spawnImpl: SpawnDaemon = defaultSpawnDaemon,
+): void {
   withDaemonLog(stateDir, (log) => {
-    const child = spawn(process.execPath, [entry], { detached: true, stdio: ["ignore", log, log] });
-    child.unref();
+    spawnImpl(process.execPath, [entry], {
+      detached: true,
+      stdio: ["ignore", log, log],
+      env: daemonSpawnEnv(source),
+    });
   });
+}
+
+// The documented CLI daemon spawn (P6-D1). The Omp extension imports it. The child receives the allowlisted
+// environment only; a stale REALM_DRIVER_*_ROOT variable is not passed.
+export function startDetachedDaemon(entry: string, stateDir: string): void {
+  launchFilteredDaemon(entry, stateDir, process.env);
 }
 
 // One control request's bound: an injected timeoutMs overrides it; otherwise the method's own
@@ -429,10 +443,17 @@ async function runDoctor(deps: ResolvedDeps, stateDir: string, socketPath: strin
     }
   }
   // OQ-P6-02: no daemon, so run the local checks and say the daemon is absent.
+  let runtimeConfig: ReturnType<typeof loadRuntimeConfig> | undefined;
+  try {
+    runtimeConfig = loadHostRuntimeConfig(deps.env);
+  } catch {
+    runtimeConfig = undefined;
+  }
   const options: DoctorOptions = {
     stateDir,
     policyPath: defaultPolicyPath(stateDir),
     env: deps.env,
+    ...(runtimeConfig === undefined ? {} : { runtimeConfig }),
     runCommand: deps.runCommand,
     connectSocket: deps.connectSocket,
     probeTimeoutMs: deps.timeoutMs ?? SOCKET_TIMEOUT_MS,

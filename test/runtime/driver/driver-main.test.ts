@@ -24,11 +24,16 @@ import { LIBPOD_API_VERSION_HEADER, matchLibpodRoute, PING_PATH } from "../../..
 import { FakeLibpod, FakeRuntime, GATEWAY_ENDPOINT, IMPLEMENTATION_VERSION, SANDBOX_IMAGE, driverConfig, realmLabels, validSandbox } from "./fakes.js";
 
 interface Fixtures {
+  readonly dir: string;
   readonly ca: string;
   readonly supervisor: string;
+  readonly configHome: string;
 }
 
-// A readable gateway CA and an executable supervisor, in a directory removed when the test ends.
+const SECRET_ROOT = "/var/lib/realm/secrets";
+const WORKSPACE_ROOT = "/var/lib/realm/workspaces";
+const SANDBOX_STATE_ROOT = "/var/lib/realm/state";
+
 function fixturesFor(t: TestContext): Fixtures {
   const dir = mkdtempSync(join(tmpdir(), "realm-driver-env-"));
   t.after(() => {
@@ -39,7 +44,19 @@ function fixturesFor(t: TestContext): Fixtures {
   writeFileSync(ca, "fixture certificate authority\n");
   writeFileSync(supervisor, "fixture supervisor\n");
   chmodSync(supervisor, 0o755);
-  return { ca, supervisor };
+  const configHome = join(dir, "xdg");
+  mkdirSync(join(configHome, "realm"), { recursive: true });
+  writeFileSync(
+    join(configHome, "realm", "config.json"),
+    JSON.stringify({
+      image: SANDBOX_IMAGE,
+      stateDir: "/var/lib/realm/daemon-state",
+      workspaceRoot: WORKSPACE_ROOT,
+      secretRoot: SECRET_ROOT,
+      sandboxStateRoot: SANDBOX_STATE_ROOT,
+    }),
+  );
+  return { dir, ca, supervisor, configHome };
 }
 
 function completeEnv(fixtures: Fixtures): Readonly<Record<string, string>> {
@@ -47,14 +64,16 @@ function completeEnv(fixtures: Fixtures): Readonly<Record<string, string>> {
     [DRIVER_ENV.name]: "realm",
     [DRIVER_ENV.socket]: "/run/realm/driver.sock",
     [DRIVER_ENV.image]: SANDBOX_IMAGE,
-    [DRIVER_ENV.stateRoot]: "/var/lib/realm/state",
-    [DRIVER_ENV.secretRoot]: "/var/lib/realm/secrets",
-    [DRIVER_ENV.workspaceRoot]: "/var/lib/realm/workspaces",
     [DRIVER_ENV.gatewayId]: GATEWAY_ID,
     [DRIVER_ENV.gatewayCa]: fixtures.ca,
     [DRIVER_ENV.supervisorBinary]: fixtures.supervisor,
     [DRIVER_ENV.gatewayEndpoint]: GATEWAY_ENDPOINT,
     XDG_RUNTIME_DIR: "/run/user/1001",
+    XDG_CONFIG_HOME: fixtures.configHome,
+    HOME: fixtures.dir,
+    REALM_DRIVER_SECRET_ROOT: "/stale/secret",
+    REALM_DRIVER_WORKSPACE_ROOT: "/stale/workspace",
+    REALM_DRIVER_STATE_ROOT: "/stale/state",
   };
 }
 
@@ -79,9 +98,9 @@ void test("PD-05: a complete environment yields the sockets, the libpod socket, 
   assert.deepEqual(config.driver, {
     driverName: "realm",
     sandboxImage: SANDBOX_IMAGE,
-    sandboxStateRoot: "/var/lib/realm/state",
-    secretRoot: "/var/lib/realm/secrets",
-    workspaceRoot: "/var/lib/realm/workspaces",
+    sandboxStateRoot: SANDBOX_STATE_ROOT,
+    secretRoot: SECRET_ROOT,
+    workspaceRoot: WORKSPACE_ROOT,
     implementationVersion: IMPLEMENTATION_VERSION,
     gatewayId: GATEWAY_ID,
     supervisor: {
@@ -162,19 +181,26 @@ void test("PD-05: a missing XDG_RUNTIME_DIR refuses, because the libpod socket c
   assert.throws(() => loadDriverProcessConfig(env, IMPLEMENTATION_VERSION), refusedWithSchemaInvalid());
 });
 
-void test("PD-05: a relative socket, root, CA or supervisor path refuses", (t) => {
+void test("PD-05: a relative socket, CA or supervisor path refuses", (t) => {
   const fixtures = fixturesFor(t);
-  for (const key of [
-    DRIVER_ENV.socket,
-    DRIVER_ENV.stateRoot,
-    DRIVER_ENV.secretRoot,
-    DRIVER_ENV.workspaceRoot,
-    DRIVER_ENV.gatewayCa,
-    DRIVER_ENV.supervisorBinary,
-  ]) {
+  for (const key of [DRIVER_ENV.socket, DRIVER_ENV.gatewayCa, DRIVER_ENV.supervisorBinary]) {
     const env = { ...completeEnv(fixtures), [key]: "relative/path" };
     assert.throws(() => loadDriverProcessConfig(env, IMPLEMENTATION_VERSION), refusedWithSchemaInvalid());
   }
+});
+
+void test("a stale REALM_DRIVER_*_ROOT variable is ignored; the roots come from config.json", (t) => {
+  const fixtures = fixturesFor(t);
+  const config = loadDriverProcessConfig(completeEnv(fixtures), IMPLEMENTATION_VERSION);
+  assert.equal(config.driver.secretRoot, SECRET_ROOT);
+  assert.equal(config.driver.workspaceRoot, WORKSPACE_ROOT);
+  assert.equal(config.driver.sandboxStateRoot, SANDBOX_STATE_ROOT);
+});
+
+void test("an absent config file refuses with SCHEMA_INVALID and does not fall back to the stale root variables", (t) => {
+  const fixtures = fixturesFor(t);
+  const env = { ...completeEnv(fixtures), XDG_CONFIG_HOME: undefined, HOME: undefined };
+  assert.throws(() => loadDriverProcessConfig(env, IMPLEMENTATION_VERSION), refusedWithSchemaInvalid());
 });
 
 void test("PRD-DRV-01: a gateway CA that is not a readable file refuses, and the path is not echoed", (t) => {

@@ -5,7 +5,9 @@
 
 import { accessSync, constants, readFileSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { isDirectEntry, podmanSocketPath } from "../host-paths.js";
+import { isDirectEntry, podmanSocketPath, resolveConfigPath } from "../host-paths.js";
+import { loadRuntimeConfig, runtimeRootsOf, type RuntimeRoots } from "../config.js";
+import { readRuntimeConfigFile } from "../config-file.js";
 import { makeRealmError, RealmError } from "../../core/errors.js";
 import { LibpodClient } from "../libpod-client.js";
 import {
@@ -27,9 +29,6 @@ export const DRIVER_ENV = Object.freeze({
   name: "REALM_DRIVER_NAME",
   socket: "REALM_DRIVER_SOCKET",
   image: "REALM_DRIVER_SANDBOX_IMAGE",
-  stateRoot: "REALM_DRIVER_STATE_ROOT",
-  secretRoot: "REALM_DRIVER_SECRET_ROOT",
-  workspaceRoot: "REALM_DRIVER_WORKSPACE_ROOT",
   gatewayId: "REALM_DRIVER_GATEWAY_ID",
   gatewayCa: "REALM_DRIVER_GATEWAY_CA",
   supervisorBinary: "REALM_DRIVER_SUPERVISOR_BINARY",
@@ -57,16 +56,19 @@ export interface DriverProcessConfig {
 
 type Environment = Readonly<Record<string, string | undefined>>;
 
-// Builds the process configuration from the environment. Every value is required except the supervisor digest pin, and the gateway
-// id must be the form the gateway configuration renders. A refusal names no value and no path, so no configured path, digest or
-// identity reaches a log.
-export function loadDriverProcessConfig(env: Environment, implementationVersion: string): DriverProcessConfig {
+// Builds the process configuration from the environment and the realm config file. Socket, image, gateway and supervisor
+// values stay environment variables. The three roots come from config.json through runtimeRootsOf. A stale
+// REALM_DRIVER_SECRET_ROOT, REALM_DRIVER_WORKSPACE_ROOT or REALM_DRIVER_STATE_ROOT is ignored. A refusal names no value
+// and no path.
+export function loadDriverProcessConfig(
+  env: Environment,
+  implementationVersion: string,
+  readConfig: (path: string) => unknown = readRuntimeConfigFile,
+): DriverProcessConfig {
   const name = requiredValue(env, DRIVER_ENV.name);
   const socketPath = requiredAbsolute(env, DRIVER_ENV.socket);
   const sandboxImage = requiredValue(env, DRIVER_ENV.image);
-  const sandboxStateRoot = requiredAbsolute(env, DRIVER_ENV.stateRoot);
-  const secretRoot = requiredAbsolute(env, DRIVER_ENV.secretRoot);
-  const workspaceRoot = requiredAbsolute(env, DRIVER_ENV.workspaceRoot);
+  const roots = rootsFromConfig(env, readConfig);
   const gatewayId = requiredValue(env, DRIVER_ENV.gatewayId);
   const gatewayCaPath = requiredReadableFile(env, DRIVER_ENV.gatewayCa);
   const supervisorBinary = requiredExecutableFile(env, DRIVER_ENV.supervisorBinary);
@@ -88,15 +90,23 @@ export function loadDriverProcessConfig(env: Environment, implementationVersion:
     driver: {
       driverName: name,
       sandboxImage,
-      sandboxStateRoot,
-      secretRoot,
-      workspaceRoot,
+      sandboxStateRoot: roots.sandboxStateRoot,
+      secretRoot: roots.secretRoot,
+      workspaceRoot: roots.workspaceRoot,
       implementationVersion,
       gatewayId,
       supervisor: { binary: supervisorBinary, gatewayEndpoint, gatewayCaPath },
     },
     ...(supervisorSha256 === undefined ? {} : { supervisorSha256 }),
   };
+}
+
+function rootsFromConfig(env: Environment, readConfig: (path: string) => unknown): RuntimeRoots {
+  try {
+    return runtimeRootsOf(loadRuntimeConfig(readConfig(resolveConfigPath(env))));
+  } catch {
+    throw makeRealmError("SCHEMA_INVALID");
+  }
 }
 
 // Reads the build version from a package manifest. Fails closed when the file is unreadable, is not JSON, or its

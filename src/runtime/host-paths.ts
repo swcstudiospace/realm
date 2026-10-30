@@ -42,6 +42,16 @@ export function readHostRuntime(
   return { runtimeInput, stateDir };
 }
 
+// The validated config for a local doctor run. A missing or invalid file is undefined, so the
+// doctor can report that instead of the CLI naming the daemon's runtime input.
+export function loadHostRuntimeConfig(env: EnvironmentLike): ReturnType<typeof loadRuntimeConfig> | undefined {
+  try {
+    return loadRuntimeConfig(readRuntimeConfigFile(resolveConfigPath(env)));
+  } catch {
+    return undefined;
+  }
+}
+
 // The rootless API socket lives under an absolute XDG_RUNTIME_DIR; otherwise there is no
 // socket path to report. This mirrors the probe's apiSocketPath rule (podman-probe.ts,
 // OQ-P3-13). String operations keep the result exactly that rule.

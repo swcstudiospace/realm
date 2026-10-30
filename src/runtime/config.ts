@@ -4,7 +4,7 @@
 // Numeric limits live only in HARDENING_PROFILE (src/runtime/hardening.ts) and in the backoff
 // defaults, never here.
 
-import { isAbsolute } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { makeRealmError } from "../core/errors.js";
 
 export interface RuntimeConfig {
@@ -14,6 +14,16 @@ export interface RuntimeConfig {
   readonly andaUrl?: string;
   readonly stateDir: string;
   readonly workspaceRoot: string;
+  // Optional. Absent means <stateDir>/secrets (runtimeRootsOf). A relative value is SCHEMA_INVALID.
+  readonly secretRoot?: string;
+  // Optional. Absent means <stateDir>/sandboxes (runtimeRootsOf). A relative value is SCHEMA_INVALID.
+  readonly sandboxStateRoot?: string;
+}
+
+export interface RuntimeRoots {
+  readonly secretRoot: string;
+  readonly workspaceRoot: string;
+  readonly sandboxStateRoot: string;
 }
 
 const IMAGE_PATTERN = /^[a-z0-9][a-z0-9._/-]*@sha256:[a-f0-9]{64}$/;
@@ -25,6 +35,8 @@ const ACCEPTED_KEYS: Readonly<Record<string, true>> = {
   andaUrl: true,
   stateDir: true,
   workspaceRoot: true,
+  secretRoot: true,
+  sandboxStateRoot: true,
 };
 
 // D-80: host networking and driver escape. The closed key set refuses these too; naming them here
@@ -55,12 +67,17 @@ export function loadRuntimeConfig(input: unknown): RuntimeConfig {
   const image = requireImage(record["image"]);
   const stateDir = requireAbsolutePath(record["stateDir"]);
   const workspaceRoot = requireAbsolutePath(record["workspaceRoot"]);
-
-  if (record["andaUrl"] === undefined) {
-    return Object.freeze({ image, stateDir, workspaceRoot });
-  }
-  const andaUrl = requireAndaUrl(record["andaUrl"]);
-  return Object.freeze({ image, andaUrl, stateDir, workspaceRoot });
+  const secretRoot = record["secretRoot"] === undefined ? undefined : requireAbsolutePath(record["secretRoot"]);
+  const sandboxStateRoot = record["sandboxStateRoot"] === undefined ? undefined : requireAbsolutePath(record["sandboxStateRoot"]);
+  const andaUrl = record["andaUrl"] === undefined ? undefined : requireAndaUrl(record["andaUrl"]);
+  return Object.freeze({
+    image,
+    stateDir,
+    workspaceRoot,
+    ...(andaUrl === undefined ? {} : { andaUrl }),
+    ...(secretRoot === undefined ? {} : { secretRoot }),
+    ...(sandboxStateRoot === undefined ? {} : { sandboxStateRoot }),
+  });
 }
 
 // The Anda bridge is required exactly when an Anda Engine URL is configured (C4). Without one, a
@@ -70,6 +87,16 @@ export function andaBridgeRequired(
   config: RuntimeConfig,
 ): config is RuntimeConfig & { readonly andaUrl: string } {
   return config.andaUrl !== undefined;
+}
+
+// The three roots the daemon and the driver share. secretRoot and sandboxStateRoot default under stateDir when the
+// config omits them. workspaceRoot is required on the config. A stale REALM_DRIVER_*_ROOT variable is not consulted.
+export function runtimeRootsOf(config: RuntimeConfig): RuntimeRoots {
+  return {
+    secretRoot: config.secretRoot ?? join(config.stateDir, "secrets"),
+    workspaceRoot: config.workspaceRoot,
+    sandboxStateRoot: config.sandboxStateRoot ?? join(config.stateDir, "sandboxes"),
+  };
 }
 
 function reject(): never {
