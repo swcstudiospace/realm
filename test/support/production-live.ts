@@ -796,7 +796,8 @@ export function parseListeningSockets(
     const parts = line.trim().split(/\s+/);
     const inode = parts[6];
     const flags = Number.parseInt(parts[3] ?? "", 16);
-    const path = parts.at(-1) ?? "";
+    // Path is every field from the seventh on: a path that contains a space is one field per word.
+    const path = parts.slice(7).join(" ");
     const listening = Number.isInteger(flags) && (flags & SO_ACCEPTCON) !== 0;
     if (inode !== undefined && inodes.has(inode) && listening && (path.startsWith("/") || path.startsWith("@"))) {
       unix.push(path);
