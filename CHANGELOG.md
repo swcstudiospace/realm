@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.3.10] - 2026-10-30
+
+### Added
+- feat(observe): add the JSON logger, file sink and metrics registry (#25) (82e3928)
+
 ## [0.3.9] - 2026-10-30
 
 ### Added
