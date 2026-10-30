@@ -205,7 +205,8 @@ function refusalOf(tool: ToolName, error: unknown): ToolOutcome {
   };
 }
 
-// The result Omp shows. A successful read returns its text, decoded from the file bytes, with its metadata in details.
+// The result Omp shows. A successful read returns its text, decoded from the file bytes, then a note with its truncation flag
+// and digest. The metadata also stays in details.
 // Every other outcome is returned as JSON text, with the outcome as details.
 function resultOf(outcome: ToolOutcome): HostToolResult {
   if (outcome.outcome === "done" && outcome.tool === "read" && outcome.value.status === "found") {
@@ -219,7 +220,15 @@ function resultOf(outcome: ToolOutcome): HostToolResult {
       tool: "read",
       value: { status: "found", sha256, truncated, bytes: bytes.length },
     };
-    return { content: [{ type: "text", text: bytes.toString("utf8") }], details, isError: false };
+    const note = `[realm read] truncated=${String(truncated)} sha256=${sha256}`;
+    return {
+      content: [
+        { type: "text", text: bytes.toString("utf8") },
+        { type: "text", text: note },
+      ],
+      details,
+      isError: false,
+    };
   }
   return {
     content: [{ type: "text", text: JSON.stringify(outcome) }],

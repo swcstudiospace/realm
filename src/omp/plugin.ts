@@ -466,11 +466,20 @@ export async function guardHostToolCall(
   }
   // Any other host tool is decided by the mode the daemon reports now, so the status is read here, not taken from an earlier read.
   const client = session.client;
+  // The session can move to another client while this guard awaits (a retry, a reattach or a shutdown). Any verdict built on
+  // the earlier client is stale, so a moved session refuses the call with REALM_NOT_ACTIVE instead.
+  const moved = (): boolean => session.client !== client;
   let status: DaemonStatus;
   try {
     status = await readStatus(session);
   } catch (error: unknown) {
+    if (moved()) {
+      return { block: true, reason: "REALM_NOT_ACTIVE" };
+    }
     return guarded ? unreadableVerdict(session, error) : { block: true, reason: "POLICY_DENIED" };
+  }
+  if (moved()) {
+    return { block: true, reason: "REALM_NOT_ACTIVE" };
   }
   session.mode = status.mode;
   renderRealmStatus(session.ctx.ui, status.snapshot);
@@ -478,6 +487,10 @@ export async function guardHostToolCall(
     await setHostMode(session.tools, status.mode, () => session.client === client);
   } catch {
     return { block: true, reason: "POLICY_DENIED" };
+  }
+  // setHostMode resolves without a change when its turn comes after the session moved, so the check runs again here.
+  if (moved()) {
+    return { block: true, reason: "REALM_NOT_ACTIVE" };
   }
   if (guarded) {
     const verdict = stateVerdict(session, status.mode, status.snapshot.state);
