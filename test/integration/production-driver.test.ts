@@ -929,13 +929,14 @@ void test("production live 10: a stopped gateway is OPENSHELL_GATEWAY_LOST, not 
     assert.deepEqual(sockets.udp, [], `the daemon must not listen on UDP: ${sockets.udp.join(", ")}`);
     assert.equal(sockets.unix.length, 1, `the daemon must have one Unix socket: ${sockets.unix.join(", ")}`);
 
+    // Set before the stop runs: a stop that fails or times out can still leave the unit down, so the finally must try to start it.
+    stopped = true;
     const stop = await runCommand("systemctl", ["--user", "stop", GATEWAY_UNIT], {
       env: scenario.environment.cliEnvironment,
       timeoutMs: 30_000,
       cwd: tmpdir(),
     });
     assertExit(stop, 0, `systemctl --user stop ${GATEWAY_UNIT}`);
-    stopped = true;
     let sawCrashLoop = false;
     const errored = await pollUntil(
       async () => {
