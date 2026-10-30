@@ -12,7 +12,7 @@ import { STATUS_LABELS } from "../core/status.js";
 import type { StateSnapshot } from "../core/state-machine.js";
 import type { DisplayStatus } from "../core/status.js";
 import { CONTROL_TIMEOUT_MS, sendRequest, type ControlMethod, type ControlReply, type ControlRequest } from "./channel.js";
-import type { MetricsSnapshot } from "../observe/metrics.js";
+import { isMetricsSnapshot, type MetricsSnapshot } from "../observe/metrics.js";
 import type { StatusValue, ToolOutcome } from "../tools/dispatch.js";
 import type { PolicyMode } from "../contract/validate.js";
 
@@ -85,25 +85,6 @@ function isDaemonStatus(value: unknown): value is DaemonStatus {
     isPolicyMode(value["mode"]) &&
     (value["notice"] === undefined || typeof value["notice"] === "string") &&
     isStatusValue(value)
-  );
-}
-function isMetricsSnapshot(value: unknown): value is MetricsSnapshot {
-  if (!isRecord(value) || value["schema"] !== 1) {
-    return false;
-  }
-  const timings = value["timings"];
-  return (
-    typeof value["startedAt"] === "string" &&
-    typeof value["now"] === "string" &&
-    typeof value["uptimeMs"] === "number" &&
-    typeof value["logLinesDropped"] === "number" &&
-    Array.isArray(value["controlRequests"]) &&
-    Array.isArray(value["toolCalls"]) &&
-    Array.isArray(value["transitions"]) &&
-    Array.isArray(value["healthProbeFailures"]) &&
-    isRecord(timings) &&
-    isRecord(timings["attachMs"]) &&
-    isRecord(timings["toolCallMs"])
   );
 }
 

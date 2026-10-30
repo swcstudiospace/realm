@@ -241,3 +241,125 @@ export function createMetrics(options: MetricsOptions): Metrics {
     },
   };
 }
+
+const SNAPSHOT_KEYS = [
+  "schema",
+  "startedAt",
+  "now",
+  "uptimeMs",
+  "controlRequests",
+  "toolCalls",
+  "transitions",
+  "timings",
+  "healthProbeFailures",
+  "logLinesDropped",
+] as const;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function keysMatch(value: Record<string, unknown>, allowed: readonly string[], required: readonly string[]): boolean {
+  const present = Object.keys(value);
+  return present.every((key) => allowed.includes(key)) && required.every((key) => present.includes(key));
+}
+
+function isTiming(value: unknown): boolean {
+  if (!isRecord(value) || !keysMatch(value, ["count", "sumMs", "maxMs", "bucketUpperBoundsMs", "bucketCounts"], ["count", "sumMs", "maxMs", "bucketUpperBoundsMs", "bucketCounts"])) {
+    return false;
+  }
+  const bounds = value["bucketUpperBoundsMs"];
+  const counts = value["bucketCounts"];
+  return (
+    isFiniteNumber(value["count"]) &&
+    isFiniteNumber(value["sumMs"]) &&
+    isFiniteNumber(value["maxMs"]) &&
+    Array.isArray(bounds) &&
+    Array.isArray(counts) &&
+    bounds.length === BUCKET_UPPER_BOUNDS_MS.length &&
+    counts.length === BUCKET_UPPER_BOUNDS_MS.length + 1 &&
+    bounds.every((bound, index) => bound === BUCKET_UPPER_BOUNDS_MS[index]) &&
+    counts.every((count) => isFiniteNumber(count))
+  );
+}
+
+export function isMetricsSnapshot(value: unknown): value is MetricsSnapshot {
+  if (!isRecord(value) || !keysMatch(value, SNAPSHOT_KEYS, SNAPSHOT_KEYS) || value["schema"] !== 1) {
+    return false;
+  }
+  const timings = value["timings"];
+  if (
+    typeof value["startedAt"] !== "string" ||
+    typeof value["now"] !== "string" ||
+    !isFiniteNumber(value["uptimeMs"]) ||
+    !isFiniteNumber(value["logLinesDropped"]) ||
+    !Array.isArray(value["controlRequests"]) ||
+    !Array.isArray(value["toolCalls"]) ||
+    !Array.isArray(value["transitions"]) ||
+    !Array.isArray(value["healthProbeFailures"]) ||
+    !isRecord(timings) ||
+    !keysMatch(timings, ["attachMs", "toolCallMs"], ["attachMs", "toolCallMs"]) ||
+    !isTiming(timings["attachMs"]) ||
+    !isTiming(timings["toolCallMs"])
+  ) {
+    return false;
+  }
+  return (
+    value["controlRequests"].every((row) => isControlRow(row)) &&
+    value["toolCalls"].every((row) => isToolRow(row)) &&
+    value["transitions"].every((row) => isTransitionRow(row)) &&
+    value["healthProbeFailures"].every((row) => isHealthRow(row))
+  );
+}
+
+function isControlRow(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    keysMatch(value, ["method", "count", "refused"], ["method", "count", "refused"]) &&
+    typeof value["method"] === "string" &&
+    METHODS.includes(value["method"]) &&
+    isFiniteNumber(value["count"]) &&
+    isFiniteNumber(value["refused"])
+  );
+}
+
+function isToolRow(value: unknown): boolean {
+  if (!isRecord(value) || !keysMatch(value, ["tool", "outcome", "code", "count"], ["tool", "outcome", "count"])) {
+    return false;
+  }
+  const code = value["code"];
+  return (
+    typeof value["tool"] === "string" &&
+    isTool(value["tool"]) &&
+    typeof value["outcome"] === "string" &&
+    isOutcome(value["outcome"]) &&
+    isFiniteNumber(value["count"]) &&
+    (code === undefined || (typeof code === "string" && isCode(code)))
+  );
+}
+
+function isTransitionRow(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    keysMatch(value, ["from", "to", "count"], ["from", "to", "count"]) &&
+    typeof value["from"] === "string" &&
+    isState(value["from"]) &&
+    typeof value["to"] === "string" &&
+    isState(value["to"]) &&
+    isFiniteNumber(value["count"])
+  );
+}
+
+function isHealthRow(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    keysMatch(value, ["code", "count"], ["code", "count"]) &&
+    typeof value["code"] === "string" &&
+    isHealthCode(value["code"]) &&
+    isFiniteNumber(value["count"])
+  );
+}

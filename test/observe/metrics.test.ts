@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { BUCKET_UPPER_BOUNDS_MS, PROBE_FAILED_REASON, createMetrics } from "../../src/observe/metrics.js";
+import { BUCKET_UPPER_BOUNDS_MS, PROBE_FAILED_REASON, createMetrics, isMetricsSnapshot } from "../../src/observe/metrics.js";
 
 const CLOCK = new Date("2026-01-01T00:00:00.000Z");
 
@@ -64,4 +64,13 @@ void test("OBS-03: tool calls, attach duration, and probe failures stay inside t
   assert.equal(snap.logLinesDropped, 2);
   assert.equal(JSON.stringify(snap).includes("not-a-tool"), false);
   assert.equal(JSON.stringify(snap).includes("free text"), false);
+});
+
+void test("OBS-03: a null tool row, an empty timing, or an extra key is not a metrics snapshot", () => {
+  const snap = createMetrics({ now: () => CLOCK, monotonicMs: () => 0 }).snapshot();
+  assert.equal(isMetricsSnapshot(snap), true);
+  assert.equal(isMetricsSnapshot({ ...snap, toolCalls: [null] }), false);
+  assert.equal(isMetricsSnapshot({ ...snap, timings: { attachMs: {}, toolCallMs: snap.timings.toolCallMs } }), false);
+  assert.equal(isMetricsSnapshot({ ...snap, extra: 1 }), false);
+  assert.equal(isMetricsSnapshot({ ...snap, uptimeMs: Number.NaN }), false);
 });
