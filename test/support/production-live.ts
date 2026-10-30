@@ -10,7 +10,7 @@
 // Nothing here prints a secret. A failure message carries exit codes, error codes, names and clipped probe output only.
 
 import { execFile, spawn } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync, accessSync, constants, statSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, writeFileSync, accessSync, constants, statSync } from "node:fs";
 import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { delimiter, isAbsolute, join } from "node:path";
@@ -755,6 +755,106 @@ export async function findDaemonPids(inputs: LiveInputs, daemonEntry: string): P
     return { ok: false, detail: `ps failed (${describeResult(result)})` };
   }
   return { ok: true, pids: parseDaemonPids(result.stdout, daemonEntry, process.execPath) };
+}
+
+export interface ListeningSockets {
+  readonly tcp: readonly string[];
+  readonly udp: readonly string[];
+  readonly unix: readonly string[];
+}
+
+// Rows in /proc/net whose inode is one of this process's socket fds. /proc/net is the network namespace, so it includes every
+// process; the inode filter keeps only the pid's own listeners.
+export function parseListeningSockets(
+  inodes: ReadonlySet<string>,
+  tables: { readonly tcp: string; readonly tcp6: string; readonly udp: string; readonly udp6: string; readonly unix: string },
+): ListeningSockets {
+  const tcp: string[] = [];
+  const udp: string[] = [];
+  for (const name of ["tcp", "tcp6", "udp", "udp6"] as const) {
+    const text = tables[name];
+    for (const line of text.split("\n").slice(1)) {
+      const parts = line.trim().split(/\s+/);
+      const local = parts[1];
+      const state = parts[3];
+      const inode = parts[9];
+      if (local === undefined || state === undefined || inode === undefined || !inodes.has(inode)) {
+        continue;
+      }
+      if (name.startsWith("udp")) {
+        udp.push(`${name} ${local}`);
+      } else if (state === "0A") {
+        tcp.push(`${name} ${local}`);
+      }
+    }
+  }
+  const unix: string[] = [];
+  // Flags is hexadecimal; __SO_ACCEPTCON (0x10000) marks a listening socket. An accepted connection keeps the listener's
+  // path but does not carry the flag, so it is not a listener.
+  const SO_ACCEPTCON = 0x10000;
+  for (const line of tables.unix.split("\n").slice(1)) {
+    const parts = line.trim().split(/\s+/);
+    const inode = parts[6];
+    const flags = Number.parseInt(parts[3] ?? "", 16);
+    // Path is every field from the seventh on: a path that contains a space is one field per word.
+    const path = parts.slice(7).join(" ");
+    const listening = Number.isInteger(flags) && (flags & SO_ACCEPTCON) !== 0;
+    if (inode !== undefined && inodes.has(inode) && listening && (path.startsWith("/") || path.startsWith("@"))) {
+      unix.push(path);
+    }
+  }
+  return { tcp: tcp.sort(), udp: udp.sort(), unix: unix.sort() };
+}
+
+function socketInodesOf(pid: number): Set<string> {
+  const inodes = new Set<string>();
+  let names: string[];
+  try {
+    names = readdirSync(`/proc/${String(pid)}/fd`);
+  } catch (error: unknown) {
+    throw new Error(`cannot list the fds of pid ${String(pid)}`, { cause: error });
+  }
+  for (const name of names) {
+    let link: string;
+    try {
+      link = readlinkSync(`/proc/${String(pid)}/fd/${name}`);
+    } catch (error: unknown) {
+      // An fd closed between the listing and the read is not a socket any more. Any other failure is not skipped.
+      if (error instanceof Error && "code" in error && (error as { code?: unknown }).code === "ENOENT") {
+        continue;
+      }
+      throw new Error(`cannot read fd ${name} of pid ${String(pid)}`, { cause: error });
+    }
+    const match = /^socket:\[(\d+)\]$/.exec(link);
+    if (match?.[1] !== undefined) {
+      inodes.add(match[1]);
+    }
+  }
+  return inodes;
+}
+
+// Reads one /proc/<pid>/net table. A missing IPv6 table means the kernel has no IPv6 (the only case a missing file is
+// expected); any other read failure throws, so a listener check never passes on a table it could not read.
+function procNet(pid: number, name: string): string {
+  try {
+    return readFileSync(`/proc/${String(pid)}/net/${name}`, "utf8");
+  } catch (error: unknown) {
+    const code = error instanceof Error && "code" in error ? String((error as { code?: unknown }).code) : "";
+    if (code === "ENOENT" && name.endsWith("6")) {
+      return "";
+    }
+    throw new Error(`cannot read /proc/<pid>/net/${name}`, { cause: error });
+  }
+}
+
+export function listeningSocketsOf(pid: number): ListeningSockets {
+  return parseListeningSockets(socketInodesOf(pid), {
+    tcp: procNet(pid, "tcp"),
+    tcp6: procNet(pid, "tcp6"),
+    udp: procNet(pid, "udp"),
+    udp6: procNet(pid, "udp6"),
+    unix: procNet(pid, "unix"),
+  });
 }
 
 // The container ids that carry the realm-daemon sandbox-name label, stopped ones included.
