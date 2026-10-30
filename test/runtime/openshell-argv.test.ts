@@ -8,6 +8,7 @@ import { LibpodClient } from "../../src/runtime/libpod-client.js";
 import {
   buildCreateArgv,
   buildExecArgv,
+  buildGatewayStatusArgv,
   runOpenShellCreate,
   type SandboxCreateRequest,
 } from "../../src/runtime/openshell.js";
@@ -243,6 +244,12 @@ void test("RT-03: the exec argv names the same sandbox that the create argv name
   const create = buildCreateArgv(REQUEST);
   const exec = buildExecArgv(SESSION, WORKLOAD);
   assert.equal(exec[exec.indexOf("--name") + 1], create[create.indexOf("--name") + 1]);
+});
+
+void test("OBS-04: the gateway status argv is exactly `openshell status`, with no flag and no session, and it is frozen", () => {
+  const argv = buildGatewayStatusArgv();
+  assert.deepEqual(argv, ["openshell", "status"]);
+  assert.equal(Object.isFrozen(argv), true);
 });
 
 void test("RT-05: neither builder emits any D-80 forbidden flag, as an element or as a prefixed form, before the separator", () => {

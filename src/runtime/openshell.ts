@@ -221,6 +221,13 @@ export function buildSandboxDeleteArgv(sandboxName: string): readonly string[] {
   return Object.freeze([OPENSHELL_BINARY, "sandbox", "delete", sandboxName]);
 }
 
+// The argv that asks the OpenShell gateway whether it answers (OBS-04, "Catalogue extension (Phase 17)" in
+// docs/integration/runtime-decision.md). The verb takes no flags and no session: the gateway is shared. Its exit code is the
+// only thing read; the supervisor runs it only after a failed probe.
+export function buildGatewayStatusArgv(): readonly string[] {
+  return Object.freeze([OPENSHELL_BINARY, "status"]);
+}
+
 // Deletes one realm sandbox and resolves true only when the delete exits 0 within timeoutMs. A refused name, a rejected
 // run and a non-zero exit are all false, so no OpenShell text reaches the caller, which maps the false result to its code.
 export async function deleteSandbox(runner: OpenShellRunner, sandboxName: string, timeoutMs: number): Promise<boolean> {

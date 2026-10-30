@@ -8,12 +8,14 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Policy } from "../../src/contract/validate.js";
-import { makeRealmError, type ErrorCode } from "../../src/core/errors.js";
+import { makeRealmError, RealmError, type ErrorCode } from "../../src/core/errors.js";
 import type { ProbeResult } from "../../src/core/ports.js";
 import { displayStatus, STATUS_LABELS } from "../../src/core/status.js";
 import { bindWorkspaceUnderPolicy } from "../../src/fs/root.js";
 import { LifecycleController } from "../../src/lifecycle/controller.js";
+import { AgentOsSupervisor } from "../../src/runtime/agentos.js";
 import { SessionStore } from "../../src/session/store.js";
+import { FakeAgentOsDriver } from "../support/fake-agentos.js";
 import { FakeBridge } from "../support/fake-bridge.js";
 import { FakeExecutionService } from "../support/fake-execution.js";
 
@@ -25,11 +27,13 @@ interface HeldProbe {
   readonly reject: (code: ErrorCode) => void;
 }
 
-// An execution service whose probe can be held open, so a test decides when and how an in-flight probe ends.
+// An execution service whose probe can be held open, so a test decides when and how an in-flight probe ends. When a
+// supervisor is set, the probe asks it first, as SessionExecution.probe does: a held supervisor throws its code out of the probe.
 class HoldableProbeExecution extends FakeExecutionService {
   private hold = false;
   private readonly held: HeldProbe[] = [];
   probeCalls = 0;
+  supervisor: AgentOsSupervisor | undefined;
 
   holdProbes(): void {
     this.hold = true;
@@ -51,8 +55,11 @@ class HoldableProbeExecution extends FakeExecutionService {
     next.reject(code);
   }
 
-  override probe(containerId: string, sandbox: string): Promise<ProbeResult> {
+  override async probe(containerId: string, sandbox: string): Promise<ProbeResult> {
     this.probeCalls += 1;
+    if (this.supervisor !== undefined) {
+      await this.supervisor.check();
+    }
     if (!this.hold) {
       return super.probe(containerId, sandbox);
     }
@@ -147,6 +154,85 @@ void test("RT-04, N1: a probe that throws AGENTOS_CRASH_LOOP moves an active ses
   const shown = displayStatus(controller.snapshot());
   assert.equal(shown.label, STATUS_LABELS.disconnected);
   assert.equal(shown.reason, "AGENTOS_CRASH_LOOP");
+});
+
+function supervisedBy(driver: FakeAgentOsDriver): AgentOsSupervisor {
+  return new AgentOsSupervisor({
+    driver,
+    sessionId: SESSION,
+    callTimeoutMs: 50,
+    random: () => 1,
+    sleep: () => Promise.resolve(),
+    now: () => 0,
+  });
+}
+
+void test("OBS-04: a probe over a supervisor whose runner is gone and whose gateway is silent moves an active session to error with OPENSHELL_GATEWAY_LOST", async (t) => {
+  const { controller, exec, store, workspace } = fixture(t);
+  await controller.create(workspace);
+  const driver = new FakeAgentOsDriver();
+  const supervisor = supervisedBy(driver);
+  await supervisor.start();
+  exec.supervisor = supervisor;
+  driver.exitRunner();
+  driver.gatewayDown();
+
+  const snapshot = await controller.probe();
+
+  assert.equal(snapshot.state, "error");
+  assert.equal(snapshot.reason, "OPENSHELL_GATEWAY_LOST");
+  assert.equal(store.load(SESSION)?.state, "error");
+  const shown = displayStatus(controller.snapshot());
+  assert.equal(shown.label, STATUS_LABELS.disconnected);
+  assert.equal(shown.reason, "OPENSHELL_GATEWAY_LOST");
+});
+
+void test("OBS-04: the same probe with the gateway answering still gives AGENTOS_CRASH_LOOP", async (t) => {
+  const { controller, exec, workspace } = fixture(t);
+  await controller.create(workspace);
+  const driver = new FakeAgentOsDriver();
+  const supervisor = supervisedBy(driver);
+  await supervisor.start();
+  exec.supervisor = supervisor;
+  driver.exitRunner();
+
+  const snapshot = await controller.probe();
+
+  assert.equal(snapshot.state, "error");
+  assert.equal(snapshot.reason, "AGENTOS_CRASH_LOOP");
+});
+
+void test("OBS-04: a health tick racing a doctor check leaves the state's reason OPENSHELL_GATEWAY_LOST, not probe failed", async (t) => {
+  const { controller, exec, workspace } = fixture(t);
+  await controller.create(workspace);
+  const driver = new FakeAgentOsDriver();
+  const supervisor = supervisedBy(driver);
+  await supervisor.start();
+  exec.supervisor = supervisor;
+  driver.crash();
+  driver.gatewayDown();
+  driver.holdAlive();
+  driver.holdGateway();
+
+  // The doctor's check parks first, then the health tick's probe. The doctor's probe answers first and fails, so the
+  // classification is in flight when the tick's probe fails.
+  const doctor = supervisor.check().then(
+    () => "returned",
+    (error: unknown) => (error instanceof RealmError ? error.code : "other"),
+  );
+  const tick = controller.probe();
+  await settle();
+  driver.releaseAlive();
+  await settle();
+  driver.releaseAlive();
+  await settle();
+  driver.releaseGateway();
+
+  const snapshot = await tick;
+  assert.equal(await doctor, "OPENSHELL_GATEWAY_LOST");
+  assert.equal(snapshot.state, "error");
+  assert.equal(snapshot.reason, "OPENSHELL_GATEWAY_LOST");
+  assert.equal(displayStatus(controller.snapshot()).reason, "OPENSHELL_GATEWAY_LOST");
 });
 
 void test("RT-04: a probe in unbound or error makes no port call", async (t) => {

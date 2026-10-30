@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { makeRealmError } from "../../src/core/errors.js";
 import { SOCKET_TIMEOUT_MS } from "../../src/daemon/channel.js";
 import {
   runChecks,
@@ -254,6 +255,33 @@ void test("CLI-03: agentos fails with a fix when the injected probe does not ans
   assert.equal(result.status, "fail");
   assert.match(result.detail, /AGENTOS_CRASH_LOOP/);
   assert.doesNotMatch(`${result.detail} ${fixOf(result)}`, /timed out/);
+});
+
+void test("OBS-04: agentos fails with OPENSHELL_GATEWAY_LOST, not AGENTOS_CRASH_LOOP, when the probe throws that code", async (t) => {
+  const { policyPath, stateDir } = layout(t);
+  const results = await runChecks({
+    ...silentBase(policyPath, stateDir),
+    connectSocket: fakeConnect("connect", { dials: [], timeouts: [] }),
+    agentos: () => Promise.reject(makeRealmError("OPENSHELL_GATEWAY_LOST")),
+  });
+  const result = resultOf(results, "agentos");
+  assert.equal(result.status, "fail");
+  assert.match(result.detail, /^OPENSHELL_GATEWAY_LOST: /);
+  assert.doesNotMatch(result.detail, /AGENTOS_CRASH_LOOP/);
+  assert.match(fixOf(result), /gateway/i);
+});
+
+void test("OBS-04: agentos keeps AGENTOS_CRASH_LOOP when the probe throws any other catalogue code", async (t) => {
+  const { policyPath, stateDir } = layout(t);
+  const results = await runChecks({
+    ...silentBase(policyPath, stateDir),
+    connectSocket: fakeConnect("connect", { dials: [], timeouts: [] }),
+    agentos: () => Promise.reject(makeRealmError("AGENTOS_CRASH_LOOP")),
+  });
+  const result = resultOf(results, "agentos");
+  assert.equal(result.status, "fail");
+  assert.match(result.detail, /^AGENTOS_CRASH_LOOP: /);
+  assert.doesNotMatch(result.detail, /OPENSHELL_GATEWAY_LOST/);
 });
 
 void test("CLI-03: agentos fails with AGENTOS_NOT_CONFIGURED and a driver fix when the daemon has no driver bound (CLI-03)", async (t) => {

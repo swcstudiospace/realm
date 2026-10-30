@@ -543,6 +543,16 @@ void test("RT-04, D-59: a runner that exits while the session is active makes pr
   assert.equal(f.driver.callCount("start"), 1, "the supervisor does not restart the runner");
 });
 
+void test("OBS-04: a runner that exits while the OpenShell gateway does not answer makes probe fail with OPENSHELL_GATEWAY_LOST, and the runner is not restarted", async (t) => {
+  const f = await fixture(t);
+  const { containerId } = await createSession(f);
+  await f.exec.start(containerId, realmSandboxName(SESSION));
+  f.driver.exitRunner();
+  f.driver.gatewayDown();
+  await assertCode(f.exec.probe(containerId, realmSandboxName(SESSION)), "OPENSHELL_GATEWAY_LOST");
+  assert.equal(f.driver.callCount("start"), 1, "the supervisor does not restart the runner");
+});
+
 void test("RT-01, RT-03: a reused container whose inspect does not conform is verified on the reuse path, removed, and refused", async (t) => {
   const f = await fixture(t);
   await createSession(f);
