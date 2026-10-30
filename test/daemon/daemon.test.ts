@@ -11,6 +11,8 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
+  readlinkSync,
   realpathSync,
   rmSync,
   statSync,
@@ -1383,7 +1385,25 @@ void test("OBS-03: metrics answers over the control socket and counts the tool c
   await awaitDone(daemon);
 });
 
+function ownSocketInodes(): Set<string> {
+  const inodes = new Set<string>();
+  for (const name of readdirSync("/proc/self/fd")) {
+    let link: string;
+    try {
+      link = readlinkSync(`/proc/self/fd/${name}`);
+    } catch {
+      continue;
+    }
+    const match = /^socket:\[(\d+)\]$/.exec(link);
+    if (match?.[1] !== undefined) {
+      inodes.add(match[1]);
+    }
+  }
+  return inodes;
+}
+
 function inetListeners(): string[] {
+  const owned = ownSocketInodes();
   const rows: string[] = [];
   for (const name of ["tcp", "tcp6", "udp", "udp6"]) {
     let text: string;
@@ -1396,7 +1416,8 @@ function inetListeners(): string[] {
       const parts = line.trim().split(/\s+/);
       const local = parts[1];
       const state = parts[3];
-      if (local === undefined || state === undefined) {
+      const inode = parts[9];
+      if (local === undefined || state === undefined || inode === undefined || !owned.has(inode)) {
         continue;
       }
       if (name.startsWith("udp") || state === "0A") {
@@ -1408,11 +1429,16 @@ function inetListeners(): string[] {
 }
 
 function unixPaths(): string[] {
+  const owned = ownSocketInodes();
   return readFileSync("/proc/self/net/unix", "utf8")
     .split("\n")
     .slice(1)
-    .map((line) => line.trim().split(/\s+/).at(-1) ?? "")
-    .filter((path) => path.startsWith("/"))
+    .flatMap((line) => {
+      const parts = line.trim().split(/\s+/);
+      const inode = parts[6];
+      const path = parts.at(-1) ?? "";
+      return inode !== undefined && owned.has(inode) && path.startsWith("/") ? [path] : [];
+    })
     .sort();
 }
 
