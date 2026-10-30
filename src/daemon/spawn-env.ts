@@ -1,6 +1,7 @@
 // The environment a detached daemon may inherit (ONB-07, D-1505). Both start paths (the CLI spawn and
 // startDetachedDaemon) pass this and nothing else. A name that is not on the allowlist, including a stale
-// REALM_DRIVER_*_ROOT variable, does not reach the child.
+// REALM_DRIVER_*_ROOT variable, does not reach the child. The gateway endpoint is kept: realm doctor
+// runs inside the daemon and probes that endpoint.
 
 import type { EnvironmentLike } from "../session/paths.js";
 
@@ -10,6 +11,7 @@ const ALLOWED_EXACT: Readonly<Record<string, true>> = {
   XDG_RUNTIME_DIR: true,
   XDG_CONFIG_HOME: true,
   REALM_DRIVER_SOCKET: true,
+  REALM_DRIVER_GATEWAY_ENDPOINT: true,
   REALM_DRIVER_SUPERVISOR_BINARY: true,
   REALM_DRIVER_SUPERVISOR_SHA256: true,
 };
