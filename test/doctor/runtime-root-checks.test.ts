@@ -98,23 +98,37 @@ void test("runtime-roots fails when a root is absent or mode-wrong and names rea
   assert.match(wrongMode.fix ?? "", /realm init/);
 });
 
-void test("driver-socket passes when the socket is 0600 and its parent is 0700", () => {
-  const result = driverSocketCheck(
+void test("driver-socket passes when the socket is 0600, its parent is 0700, and it accepts a connection", async () => {
+  const result = await driverSocketCheck(
     { REALM_DRIVER_SOCKET: "/run/realm/driver.sock" },
     statFor({
       "/run/realm/driver.sock": socket(0o10600),
       "/run/realm": directory(0o40700),
     }),
+    () => Promise.resolve(),
   );
   assert.equal(result.status, "pass");
   assert.equal(result.fix, null);
 });
 
-void test("driver-socket fails when the socket is absent or the parent mode is wrong", () => {
-  const absent = driverSocketCheck({ REALM_DRIVER_SOCKET: "/run/realm/driver.sock" }, statFor({}));
+void test("driver-socket fails when a correctly permissioned socket does not accept a connection", async () => {
+  const result = await driverSocketCheck(
+    { REALM_DRIVER_SOCKET: "/run/realm/driver.sock" },
+    statFor({
+      "/run/realm/driver.sock": socket(0o10600),
+      "/run/realm": directory(0o40700),
+    }),
+    () => Promise.reject(new Error("ECONNREFUSED")),
+  );
+  assert.equal(result.status, "fail");
+  assert.match(result.detail, /not accepting connections/);
+});
+
+void test("driver-socket fails when the socket is absent or the parent mode is wrong", async () => {
+  const absent = await driverSocketCheck({ REALM_DRIVER_SOCKET: "/run/realm/driver.sock" }, statFor({}));
   assert.equal(absent.status, "fail");
   assert.match(absent.detail, /absent/);
-  const parent = driverSocketCheck(
+  const parent = await driverSocketCheck(
     { REALM_DRIVER_SOCKET: "/run/realm/driver.sock" },
     statFor({
       "/run/realm/driver.sock": socket(0o10600),

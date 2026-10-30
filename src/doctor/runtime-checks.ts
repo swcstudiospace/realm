@@ -3,6 +3,7 @@
 // item with a fix. This module reads no process environment: the caller hands env in.
 
 import { lstatSync, type Stats } from "node:fs";
+import { connect as netConnect } from "node:net";
 import { connect as tlsConnect } from "node:tls";
 import { isAbsolute, dirname } from "node:path";
 import type { EnvironmentLike } from "../session/paths.js";
@@ -29,6 +30,7 @@ export interface RuntimeCheckOptions {
   readonly env: EnvironmentLike;
   readonly stat?: (path: string) => PathReading;
   readonly connectGateway?: (endpoint: string, timeoutMs: number) => Promise<void>;
+  readonly connectDriver?: (socketPath: string, timeoutMs: number) => Promise<void>;
   readonly probeTimeoutMs?: number;
 }
 
@@ -158,7 +160,12 @@ function workspaceProblem(path: string, stat: (path: string) => PathReading): st
   return undefined;
 }
 
-export function driverSocketCheck(env: EnvironmentLike, stat: (path: string) => PathReading): RuntimeCheckResult {
+export async function driverSocketCheck(
+  env: EnvironmentLike,
+  stat: (path: string) => PathReading,
+  connect: (socketPath: string, timeoutMs: number) => Promise<void> = defaultConnectDriver,
+  timeoutMs = 5000,
+): Promise<RuntimeCheckResult> {
   const id: RuntimeCheckId = "driver-socket";
   const socketPath = env[DRIVER_SOCKET_ENV];
   if (socketPath === undefined || socketPath === "" || !isAbsolute(socketPath)) {
@@ -186,7 +193,32 @@ export function driverSocketCheck(env: EnvironmentLike, stat: (path: string) => 
   if (parentMode !== PRIVATE_DIR_MODE) {
     return fail(id, `driver socket parent mode is 0${octal(parentMode)}, expected 0700`, "chmod 0700 the directory that holds REALM_DRIVER_SOCKET.");
   }
-  return pass(id, "driver socket is present, mode 0600, parent mode 0700");
+  try {
+    await connect(socketPath, timeoutMs);
+  } catch {
+    return fail(id, "driver socket is not accepting connections", "Start the compute driver. A leftover socket file is not a running driver.");
+  }
+  return pass(id, "driver socket accepted a connection, mode 0600, parent mode 0700");
+}
+
+function defaultConnectDriver(socketPath: string, timeoutMs: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const socket = netConnect({ path: socketPath });
+    const timer = setTimeout(() => {
+      socket.destroy();
+      reject(new Error("driver socket timed out"));
+    }, timeoutMs);
+    socket.once("connect", () => {
+      clearTimeout(timer);
+      socket.end();
+      resolve();
+    });
+    socket.once("error", (error: unknown) => {
+      clearTimeout(timer);
+      socket.destroy();
+      reject(error instanceof Error ? error : new Error("driver socket refused"));
+    });
+  });
 }
 
 export async function gatewayCheck(
@@ -216,7 +248,7 @@ export async function runtimeChecks(options: RuntimeCheckOptions): Promise<reado
   const timeoutMs = options.probeTimeoutMs ?? 5000;
   return [
     runtimeRootsCheck(options.config, stat),
-    driverSocketCheck(options.env, stat),
+    await driverSocketCheck(options.env, stat, options.connectDriver ?? defaultConnectDriver, timeoutMs),
     await gatewayCheck(options.env, options.connectGateway ?? defaultConnectGateway, timeoutMs),
   ];
 }
