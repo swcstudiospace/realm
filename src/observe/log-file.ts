@@ -153,7 +153,7 @@ export function createFileSink(options: FileSinkOptions): LogSink & { close(): b
         if (fd === null) {
           openLog();
         }
-        if (needsBoundary) {
+        if (needsBoundary && !(size > 0 && size + bytes.length > maxBytes)) {
           if (!writeBytes(Buffer.from("\n"))) {
             return false;
           }
@@ -163,6 +163,12 @@ export function createFileSink(options: FileSinkOptions): LogSink & { close(): b
           fs.rename(options.path, rotated);
           closeLog();
           openLog();
+        }
+        if (needsBoundary) {
+          if (!writeBytes(Buffer.from("\n"))) {
+            return false;
+          }
+          needsBoundary = false;
         }
         return writeBytes(bytes);
       } catch {
