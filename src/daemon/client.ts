@@ -12,6 +12,7 @@ import { STATUS_LABELS } from "../core/status.js";
 import type { StateSnapshot } from "../core/state-machine.js";
 import type { DisplayStatus } from "../core/status.js";
 import { CONTROL_TIMEOUT_MS, sendRequest, type ControlMethod, type ControlReply, type ControlRequest } from "./channel.js";
+import { isMetricsSnapshot, type MetricsSnapshot } from "../observe/metrics.js";
 import type { StatusValue, ToolOutcome } from "../tools/dispatch.js";
 import type { PolicyMode } from "../contract/validate.js";
 
@@ -30,6 +31,8 @@ export interface DaemonClient {
   // Dispatches one raw ToolCall. A refusal is a resolved ToolOutcome, not a throw. Same signature
   // as Pick<ToolDispatcher, "call">, so the MCP server and ACP adapter accept the client unchanged.
   call(tool: unknown): Promise<ToolOutcome>;
+  // Reads the in-memory counters. Absent daemon is REALM_NOT_ACTIVE; there is no local report.
+  metrics(): Promise<MetricsSnapshot>;
   // Ends the client. Idempotent. Later requests refuse with REALM_NOT_ACTIVE.
   close(): void;
 }
@@ -155,6 +158,13 @@ export function connectDaemon(socketPath: string): DaemonClient {
     async call(tool: unknown): Promise<ToolOutcome> {
       const result = await request("tool", { tool });
       if (!isToolOutcome(result)) {
+        throw makeRealmError("SCHEMA_INVALID");
+      }
+      return result;
+    },
+    async metrics(): Promise<MetricsSnapshot> {
+      const result = await request("metrics");
+      if (!isMetricsSnapshot(result)) {
         throw makeRealmError("SCHEMA_INVALID");
       }
       return result;

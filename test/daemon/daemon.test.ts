@@ -11,6 +11,8 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
+  readlinkSync,
   realpathSync,
   rmSync,
   statSync,
@@ -1363,4 +1365,117 @@ void test("a connection error on a served socket is that connection's failure an
     const reply = await sendRequest(daemon.socketPath, { id: "alive", method: "status" });
     return reply.id === "alive" && snapshotStateOf(reply) === "active";
   }, "the daemon answers a new client and the abandoned up completed");
+});
+
+void test("OBS-03: metrics answers over the control socket and counts the tool call", async (t) => {
+  const fixture = makeDirs();
+  const { options } = daemonParts(fixture);
+  const daemon = await startDaemon(options);
+  t.after(() => cleanupDaemon(daemon));
+  const tool = await sendRequest(daemon.socketPath, { id: "tool-1", method: "tool", params: { tool: { status: {} } } });
+  assert.equal(tool.error, undefined);
+  const reply = await sendRequest(daemon.socketPath, { id: "m1", method: "metrics" });
+  assert.equal(reply.error, undefined);
+  const snap = reply.result as { schema?: number; toolCalls?: { tool?: string; outcome?: string; count?: number }[]; controlRequests?: { method?: string }[] };
+  assert.equal(snap.schema, 1);
+  assert.equal(snap.toolCalls?.some((row) => row.tool === "status" && row.outcome === "done" && row.count === 1), true);
+  assert.equal(snap.controlRequests?.some((row) => row.method === "tool"), true);
+  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down" });
+  assert.ok(down.result !== undefined);
+  await awaitDone(daemon);
+});
+
+function ownSocketInodes(): Set<string> {
+  const inodes = new Set<string>();
+  for (const name of readdirSync("/proc/self/fd")) {
+    let link: string;
+    try {
+      link = readlinkSync(`/proc/self/fd/${name}`);
+    } catch {
+      continue;
+    }
+    const match = /^socket:\[(\d+)\]$/.exec(link);
+    if (match?.[1] !== undefined) {
+      inodes.add(match[1]);
+    }
+  }
+  return inodes;
+}
+
+function inetListeners(): string[] {
+  const owned = ownSocketInodes();
+  const rows: string[] = [];
+  for (const name of ["tcp", "tcp6", "udp", "udp6"]) {
+    let text: string;
+    try {
+      text = readFileSync(`/proc/self/net/${name}`, "utf8");
+    } catch {
+      continue;
+    }
+    for (const line of text.split("\n").slice(1)) {
+      const parts = line.trim().split(/\s+/);
+      const local = parts[1];
+      const state = parts[3];
+      const inode = parts[9];
+      if (local === undefined || state === undefined || inode === undefined || !owned.has(inode)) {
+        continue;
+      }
+      if (name.startsWith("udp") || state === "0A") {
+        rows.push(`${name} ${local} ${state}`);
+      }
+    }
+  }
+  return rows.sort();
+}
+
+function unixPaths(): string[] {
+  const owned = ownSocketInodes();
+  return readFileSync("/proc/self/net/unix", "utf8")
+    .split("\n")
+    .slice(1)
+    .flatMap((line) => {
+      const parts = line.trim().split(/\s+/);
+      const inode = parts[6];
+      const path = parts.at(-1) ?? "";
+      return inode !== undefined && owned.has(inode) && path.startsWith("/") ? [path] : [];
+    })
+    .sort();
+}
+
+void test("OBS-03: starting the daemon adds no TCP or UDP listener, only the Unix control socket", async (t) => {
+  const beforeInet = inetListeners();
+  const beforeUnix = new Set(unixPaths());
+  const fixture = makeDirs();
+  const { options } = daemonParts(fixture);
+  const daemon = await startDaemon(options);
+  t.after(() => cleanupDaemon(daemon));
+  assert.deepEqual(inetListeners(), beforeInet);
+  const added = unixPaths().filter((path) => !beforeUnix.has(path));
+  assert.deepEqual(added, [daemon.socketPath]);
+  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down" });
+  assert.ok(down.result !== undefined);
+  await awaitDone(daemon);
+});
+
+void test("OBS-03: a probe that returns probe failed is counted", async (t) => {
+  const fixture = makeDirs();
+  const { options } = daemonParts(fixture);
+  const daemon = await startDaemon(options);
+  t.after(() => cleanupDaemon(daemon));
+  const up = await sendRequest(daemon.socketPath, { id: "u1", method: "up", params: { workspaceRoot: fixture.ws } });
+  assert.equal(snapshotStateOf(up), "active");
+  daemon.handle.controller.probe = () => Promise.resolve({
+    state: "error",
+    reason: "probe failed",
+    lastTransitionAt: "2026-01-01T00:00:00.000Z",
+  });
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 12_000);
+  });
+  const reply = await sendRequest(daemon.socketPath, { id: "m1", method: "metrics" });
+  const snap = reply.result as { healthProbeFailures?: { code?: string; count?: number }[] };
+  assert.equal(snap.healthProbeFailures?.some((row) => row.code === "probe failed" && row.count === 1), true);
+  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down" });
+  assert.ok(down.result !== undefined);
+  await awaitDone(daemon);
 });
