@@ -82,6 +82,9 @@ export async function pollUntil(
     const result = predicate();
     const held = typeof result === "boolean" ? result : await raceWithin(result, Math.max(remaining, 1), message);
     if (held) {
+      if (Date.now() >= deadline) {
+        throw new Error(message);
+      }
       return;
     }
     await new Promise<void>((resolve) => {

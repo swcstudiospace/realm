@@ -1065,8 +1065,8 @@ async function waitForFile(path: string, timeoutMs: number): Promise<string> {
       "the child to write its pids",
       { timeoutMs },
     );
-  } catch {
-    throw new Error("the child never wrote its pids");
+  } catch (error: unknown) {
+    throw new Error("the child never wrote its pids", { cause: error });
   }
   return text;
 }
