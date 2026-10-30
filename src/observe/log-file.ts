@@ -8,7 +8,7 @@
 // are closed with a newline before the next record is appended, so a later line stays valid JSON.
 
 import { Buffer } from "node:buffer";
-import { closeSync, constants, fchmodSync, fstatSync, openSync, readSync, renameSync, writeSync } from "node:fs";
+import { closeSync, constants, fchmodSync, fstatSync, lstatSync, openSync, readSync, renameSync, writeSync } from "node:fs";
 import type { LogSink } from "./logger.js";
 
 export const DEFAULT_LOG_MAX_BYTES = 4 * 1024 * 1024;
@@ -19,6 +19,7 @@ export interface FileSinkFs {
   fstatSize(fd: number): number;
   write(fd: number, bytes: Buffer, offset: number): number;
   read(fd: number, position: number, length: number): Buffer;
+  isRegular(fd: number): boolean;
   close(fd: number): void;
   rename(from: string, to: string): void;
 }
@@ -33,6 +34,7 @@ const NODE_FS: FileSinkFs = {
     const read = readSync(fd, bytes, 0, length, position);
     return bytes.subarray(0, read);
   },
+  isRegular: (fd) => fstatSync(fd).isFile(),
   close: (fd) => { closeSync(fd); },
   rename: (from, to) => { renameSync(from, to); },
 };
@@ -43,8 +45,19 @@ export interface FileSinkOptions {
   fs?: Partial<FileSinkFs>;
 }
 
-const OPEN_FLAGS = constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | constants.O_NOFOLLOW;
+const OPEN_FLAGS = constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | constants.O_NOFOLLOW | constants.O_NONBLOCK;
 const LOG_MODE = 0o600;
+
+// A named pipe opened write-only blocks until a reader appears. Refuse anything that is
+// not a regular file before that open. A missing path is not a refusal; the open creates it.
+function existingNonRegular(path: string): boolean {
+  try {
+    return !lstatSync(path).isFile();
+  } catch (error) {
+    const code = error instanceof Error && "code" in error ? String((error as { code?: unknown }).code) : "";
+    return code !== "ENOENT";
+  }
+}
 
 export function createFileSink(options: FileSinkOptions): LogSink & { close(): boolean } {
   const fs: FileSinkFs = { ...NODE_FS, ...options.fs };
@@ -54,10 +67,16 @@ export function createFileSink(options: FileSinkOptions): LogSink & { close(): b
   let size = 0;
   let needsBoundary = false;
   const openLog = (): void => {
+    if (existingNonRegular(options.path)) {
+      throw new Error("log path is not a regular file");
+    }
     needsBoundary = tailNeedsBoundary();
     const opened = fs.open(options.path, OPEN_FLAGS, LOG_MODE);
     try {
       fs.fchmod(opened, LOG_MODE);
+      if (!fs.isRegular(opened)) {
+        throw new Error("log path is not a regular file");
+      }
       size = fs.fstatSize(opened);
     } catch (error) {
       fs.close(opened);
@@ -67,11 +86,12 @@ export function createFileSink(options: FileSinkOptions): LogSink & { close(): b
   };
 
   // The write descriptor is O_WRONLY, so the tail is read through a separate descriptor.
-  // A missing file is not a partial line; the write open creates it.
+  // A missing file is not a partial line; the write open creates it. O_NONBLOCK so a named
+  // pipe cannot park the caller.
   const tailNeedsBoundary = (): boolean => {
     let probe: number;
     try {
-      probe = fs.open(options.path, constants.O_RDONLY | constants.O_NOFOLLOW, LOG_MODE);
+      probe = fs.open(options.path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK, LOG_MODE);
     } catch {
       // QUAL-01 named exception (j): absence is not a partial line. The write open reports a real failure.
       return false;

@@ -2,6 +2,7 @@
 
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -176,6 +177,15 @@ void test("reopening a log with an unfinished tail closes that line before appen
   assert.equal(sink.write("next"), true);
   sink.close();
   assert.equal(readFileSync(path, "utf8"), "partial\nnext\n");
+});
+
+void test("a named pipe is refused and the open does not block", () => {
+  const dir = tmp();
+  const path = join(dir, "daemon.log");
+  execFileSync("mkfifo", [path]);
+  const started = Date.now();
+  assert.equal(createFileSink({ path }).write("x"), false);
+  assert.ok(Date.now() - started < 1_000, "opening a named pipe blocked");
 });
 
 void test("the stderr sink writes one line per call and reports a throwing stream as false", () => {
