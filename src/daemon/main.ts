@@ -15,7 +15,7 @@ import { productionOpenShellRunner } from "../runtime/session-execution.js";
 import type { EnvironmentLike } from "../session/paths.js";
 import { createLogger, parseLogLevel, type Logger } from "../observe/logger.js";
 import { createFileSink } from "../observe/log-file.js";
-import { daemonLogPath } from "./ensure.js";
+import { requestLogPath } from "./ensure.js";
 import { startDaemon, type StartDaemonOptions, type StartedDaemon, type StartupReport } from "./daemon.js";
 import { CONTROL_TIMEOUT_MS, sendRequest, type ControlReply } from "./channel.js";
 
@@ -75,7 +75,7 @@ export async function runDaemon(deps: DaemonDeps): Promise<number> {
     const roots = runtimeRootsOf(loadRuntimeConfig(runtimeInput));
     const libpodSocketPath = podmanSocketPath(deps.env);
     const agentosDriver = productionAgentOsDriver(deps.env);
-    const requests = requestLogger(writeStderr, deps.env["REALM_LOG_LEVEL"], daemonLogPath(stateDir));
+    const requests = requestLogger(writeStderr, deps.env["REALM_LOG_LEVEL"], requestLogPath(stateDir));
     try {
       started = await start({
         stateDir,

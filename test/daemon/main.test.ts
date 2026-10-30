@@ -154,7 +154,7 @@ void test("OBS-02: a request line is written to the bounded daemon log, not stde
     },
   });
   assert.equal(await runDaemon(h.deps), 0);
-  const text = readFileSync(join(String(raw["stateDir"]), "daemon.log"), "utf8");
+  const text = readFileSync(join(String(raw["stateDir"]), "requests.log"), "utf8");
   assert.equal(text.includes("\"event\":\"up.begin\""), true);
   assert.equal(h.lines.some((line) => line.includes("up.begin")), false);
 });
@@ -164,7 +164,7 @@ void test("OBS-02: a request line falls back to stderr when the log path is not 
   const raw = validConfig(dir);
   const env = writeConfig(dir, raw);
   mkdirSync(String(raw["stateDir"]), { recursive: true });
-  mkdirSync(join(String(raw["stateDir"]), "daemon.log"));
+  mkdirSync(join(String(raw["stateDir"]), "requests.log"));
   const h = harness(env, {
     start: (options) => {
       options.logger?.info("up.begin", { correlationId: "c1" });
