@@ -77,7 +77,15 @@ function build(options: LoggerOptions, bound: Readonly<Record<string, unknown>>,
     info: (event, fields) => { emit("info", event, fields); },
     warn: (event, fields) => { emit("warn", event, fields); },
     error: (event, fields) => { emit("error", event, fields); },
-    child: (fields) => build(options, { ...bound, ...ownFields(fields) }, counter),
+    child: (fields) => {
+      try {
+        return build(options, { ...bound, ...ownFields(fields) }, counter);
+      } catch {
+        // QUAL-01 named exception (i): copying fields must not throw. The child keeps the parent's fields.
+        counter.dropped += 1;
+        return build(options, bound, counter);
+      }
+    },
     droppedLines: () => counter.dropped,
   };
 }

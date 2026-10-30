@@ -148,6 +148,23 @@ void test("parseLogLevel: absent or empty is info and valid, a known level is ke
   assert.deepEqual(parseLogLevel("verbose"), { level: "info", invalid: true });
 });
 
+void test("child does not throw when a field getter throws, and later logs still emit", () => {
+  const { sink, lines } = recording();
+  const log = createLogger({ sink, level: "debug", now: () => FIXED });
+  const fields: LogFields = {};
+  Object.defineProperty(fields, "bad", {
+    enumerable: true,
+    get() {
+      throw new Error("boom");
+    },
+  });
+  const child = log.child(fields);
+  child.info("still");
+  assert.equal(lines.length, 1);
+  assert.equal(lines[0]?.includes('"event":"still"'), true);
+  assert.equal(log.droppedLines(), 1);
+});
+
 void test("correlation ids: fresh, unique, and accepted by the pattern", () => {
   const a = newCorrelationId();
   const b = newCorrelationId();
