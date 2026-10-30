@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.3.13] - 2026-10-30
+
+### Maintenance
+- ci: add a scheduled non-blocking mutation run (#27) (28be68b)
+
 ## [0.3.12] - 2026-10-30
 
 ### Added
