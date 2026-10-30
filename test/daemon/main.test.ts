@@ -4,7 +4,7 @@
 
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeRealmError } from "../../src/core/errors.js";
@@ -141,6 +141,38 @@ void test("a valid config starts once with the derived options and resolves 0 on
   assert.equal(call.sandboxStateRoot, join(String(raw["stateDir"]), "sandboxes"));
   assert.deepEqual(call.env, env);
   assert.deepEqual(h.lines, []);
+});
+
+void test("OBS-02: a request line is written to the bounded daemon log, not stderr", async (t) => {
+  const dir = tempDir(t);
+  const raw = validConfig(dir);
+  mkdirSync(String(raw["stateDir"]), { recursive: true });
+  const h = harness(writeConfig(dir, raw), {
+    start: (options) => {
+      options.logger?.info("up.begin", { correlationId: "c1" });
+      return Promise.resolve(startedWith(Promise.resolve()));
+    },
+  });
+  assert.equal(await runDaemon(h.deps), 0);
+  const text = readFileSync(join(String(raw["stateDir"]), "requests.log"), "utf8");
+  assert.equal(text.includes("\"event\":\"up.begin\""), true);
+  assert.equal(h.lines.some((line) => line.includes("up.begin")), false);
+});
+
+void test("OBS-02: a request line falls back to stderr when the log path is not a file", async (t) => {
+  const dir = tempDir(t);
+  const raw = validConfig(dir);
+  const env = writeConfig(dir, raw);
+  mkdirSync(String(raw["stateDir"]), { recursive: true });
+  mkdirSync(join(String(raw["stateDir"]), "requests.log"));
+  const h = harness(env, {
+    start: (options) => {
+      options.logger?.info("up.begin", { correlationId: "c1" });
+      return Promise.resolve(startedWith(Promise.resolve()));
+    },
+  });
+  assert.equal(await runDaemon(h.deps), 0);
+  assert.equal(h.lines.some((line) => line.includes("up.begin")), true);
 });
 
 void test("CRASH-04: the start's onStartup report is written as one stderr line with the container ids", async (t) => {

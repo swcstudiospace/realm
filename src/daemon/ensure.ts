@@ -71,9 +71,16 @@ export async function ensureDaemon(options: EnsureDaemonOptions): Promise<void> 
   }
 }
 
-// The daemon's startup log: <stateDir>/daemon.log.
+// The daemon's startup log: <stateDir>/daemon.log. Request lines do not go here: a detached daemon
+// inherits this file as stderr, and rotating it would leave later failure lines on an unlinked inode.
 export function daemonLogPath(stateDir: string): string {
   return `${stateDir}/daemon.log`;
+}
+
+// Request lines (up, tool, health): <stateDir>/requests.log. The file sink rotates this file. stderr
+// stays the fallback when the path cannot be opened.
+export function requestLogPath(stateDir: string): string {
+  return `${stateDir}/requests.log`;
 }
 
 // Byte size of the startup log, or 0 when it does not exist.
