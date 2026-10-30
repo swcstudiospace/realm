@@ -165,11 +165,23 @@ void test("CRASH-04: the start's onStartup report is written as one stderr line 
   });
 
   assert.equal(await runDaemon(h.deps), 0);
-  const first = startupOf(h.lines);
-  assert.equal(first["containersRemoved"], 2);
-  assert.deepEqual(first["containerIds"], ["c0ffee", "decaf1"]);
-  assert.equal(first["recordsDeleted"], 1);
-  assert.equal(first["failures"], 0);
+  assert.equal(h.lines.length, 1);
+  assert.deepEqual(startupOf(h.lines), {
+    level: "info",
+    event: "daemon.startup",
+    containersRemoved: 2,
+    containerIds: ["c0ffee", "decaf1"],
+    recordsDeleted: 1,
+    tempFilesRemoved: 3,
+    auditLinesReconciled: 4,
+    maintenanceComplete: true,
+    unfinishedAuditFiles: [],
+    unfinishedAuditFileCount: 0,
+    unfinishedSweepRoots: [],
+    unfinishedSweepRootCount: 0,
+    auditListingTruncated: false,
+    failures: 0,
+  });
 });
 
 void test("CRASH-04: the startup line has no id brackets when no container was removed, and names failures only when there are some", async (t) => {
@@ -194,8 +206,11 @@ void test("CRASH-04: the startup line has no id brackets when no container was r
   });
 
   assert.equal(await runDaemon(h.deps), 0);
+  assert.equal(h.lines.length, 1);
   const quiet = startupOf(h.lines);
   assert.equal(quiet["containersRemoved"], 0);
+  assert.equal(quiet["tempFilesRemoved"], 0);
+  assert.equal(quiet["auditLinesReconciled"], 0);
   assert.equal(quiet["maintenanceComplete"], true);
   assert.equal(quiet["failures"], 2);
   assert.equal(quiet["reapFailure"], undefined);
@@ -223,9 +238,14 @@ void test("STARTUP budget: the startup line says maintenanceComplete=false and n
   });
 
   assert.equal(await runDaemon(h.deps), 0);
+  assert.equal(h.lines.length, 1);
   const unfinished = startupOf(h.lines);
   assert.equal(unfinished["maintenanceComplete"], false);
+  assert.equal(unfinished["tempFilesRemoved"], 0);
+  assert.equal(unfinished["auditLinesReconciled"], 0);
+  assert.equal(unfinished["unfinishedAuditFileCount"], 2);
   assert.deepEqual(unfinished["unfinishedAuditFiles"], ["a.jsonl", "daemon.jsonl"]);
+  assert.equal(unfinished["unfinishedSweepRootCount"], 2);
   assert.deepEqual(unfinished["unfinishedSweepRoots"], ["<workspace>", "<state>/sessions"]);
 });
 
@@ -252,12 +272,15 @@ void test("CRASH-04: a failed reap's partial report is logged, then the start fa
   });
 
   assert.equal(await runDaemon(h.deps), 1);
+  assert.equal(h.lines.length, 2);
   const partial = startupOf(h.lines);
   assert.equal(partial["containersRemoved"], 1);
   assert.deepEqual(partial["containerIds"], ["0123abcd"]);
+  assert.equal(partial["tempFilesRemoved"], 0);
+  assert.equal(partial["auditLinesReconciled"], 0);
   assert.equal(partial["reapFailure"], "REALM_STOPPING");
   assert.equal(partial["failures"], 1);
-  assert.deepEqual(h.lines[1], failed("REALM_STOPPING"));
+  assert.equal(h.lines[1], failed("REALM_STOPPING"));
 });
 
 void test("STARTUP budget: a long unfinished list is sampled at ten names, the count stays exact, and a truncated audit listing is named", async (t) => {
@@ -283,10 +306,13 @@ void test("STARTUP budget: a long unfinished list is sampled at ten names, the c
   });
 
   assert.equal(await runDaemon(h.deps), 0);
+  assert.equal(h.lines.length, 1);
   const listed = startupOf(h.lines);
   assert.equal(listed["auditListingTruncated"], true);
   assert.equal(listed["unfinishedAuditFileCount"], 12);
   assert.deepEqual(listed["unfinishedAuditFiles"], names.slice(0, 10));
+  assert.equal(listed["tempFilesRemoved"], 0);
+  assert.equal(listed["auditLinesReconciled"], 0);
   assert.equal(listed["maintenanceComplete"], false);
 });
 
