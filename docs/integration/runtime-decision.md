@@ -402,10 +402,19 @@ Status: recorded 2026-10-30, before the code that needs it. Source: owner decisi
 
 - **Name and labels.** A Podman named volume `realm-scratch-<sessionId>`, labelled `io.realm.managed=true` and `io.realm.session=<sessionId>`.
 - **Mount.** Read-write at `/scratch` in the sandbox. `/scratch` is the stated path. It is not `/workspace`, and no other mount uses it.
-- **Rest of the list.** Unchanged in substance. The pinned project workspace stays the only host path mounted, and the verifier still refuses any other mount.
+- **Policy.** The OpenShell policy must grant `/scratch` too, in the same change as the mount and the verifier. `buildPolicyDocument` (`src/runtime/openshell.ts`) renders `filesystem_policy.read_write` as `/workspace`, `/tmp` and `/dev/null` only (`SANDBOX_SCRATCH_PATHS`, `SANDBOX_WRITABLE_DEVICE_PATHS`). The change adds `/scratch` to `filesystem_policy.read_write`. Without that entry the policy does not grant writes at `/scratch`, even with a read-write mount there. The mount, the policy entry and the verifier rule land together.
+- **Rest of the list.** Unchanged in substance. Three binds are preserved from `sandboxBindingOf` (`src/runtime/driver/sandbox-binding.ts`), and the `mounts` property of `verifyInspect` (`src/runtime/hardening.ts`) requires each one:
+  - The pinned project workspace, read-write at `/workspace`.
+  - The sandbox's state directory, `<sandboxStateRoot>/<sandboxName>`, read-only at `/realm-state` (`stateDestination`; the check requires `RW` false).
+  - The channel directory, under the sandbox's secret directory, read-write at `/run/openshell/channel` (`channelDestination`; the check requires `RW` true).
+  The scratch volume is added to these three. All three are host paths, so the workspace is not the only host path mounted. The verifier refuses any other mount: its `mounts` check holds exactly four, the three binds and the scratch volume.
 - **Verifier.** The mounts property admits exactly one volume mount: the volume `realm-scratch-<sessionId>` for the adopted session, at destination `/scratch`, read-write. A tmpfs, any other volume and any other destination still fail the mounts property (RT-01).
 - **Ownership.** The volume belongs to one session. No other session mounts it.
 - **Lifetime.** The volume outlives the container and the daemon, so a restart that adopts the container keeps it. `realm down` removes the session's sandbox and then its volume, and the volume's removal is checked by a listing, as the container sweep is.
+- **Cleanup.** A scratch volume is removed in two cases.
+  - `realm down` removes it after the sandbox, as the Lifetime rule above states.
+  - The startup reaper removes any scratch volume that no surviving session record references. A volume is referenced by a surviving record when that record's session id is the `<sessionId>` in the volume's name. The reaper deletes every record that names no adopted container, so a volume is removed when its session has no adopted container. This covers a volume left by a failed create or by a rejected container.
+  The reaper runs this step after its container and record steps, so "surviving" means the record is still present after them. The volume's removal is checked by a listing. A volume that cannot be removed or proven gone aborts the start, as an orphan container does (the no-orphan guarantee). Each removal is logged once per start, with cause `no-record`.
 
 **Not verified.** Attachment at create goes through OpenShell, and the pinned surface does not document an extra-mount option. This is recorded as OQ-P19-01. Realm creates no fallback mount and no fallback container (D-47).
 
