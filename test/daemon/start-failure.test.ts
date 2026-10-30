@@ -53,6 +53,27 @@ void test("an uncatalogued failure token is ignored", (t) => {
   assert.equal(daemonStartFailureSince(stateDir, 0), undefined);
 });
 
+void test("malformed JSON, null, an array, another event and a non-string code are not failures", (t) => {
+  const stateDir = scratchStateDir(t);
+  writeFileSync(daemonLogPath(stateDir), [
+    "not json",
+    "null",
+    "[]",
+    JSON.stringify({ event: "daemon.startup", code: "POLICY_DENIED" }),
+    JSON.stringify({ event: "daemon.failed", code: 1 }),
+    "",
+  ].join("\n"));
+  assert.equal(daemonStartFailureSince(stateDir, 0), undefined);
+});
+
+void test("a mixed log still reports the valid failure that follows the rejected records", (t) => {
+  const stateDir = scratchStateDir(t);
+  writeFileSync(daemonLogPath(stateDir), "realm daemon: POLICY_DENIED\n");
+  appendFileSync(daemonLogPath(stateDir), "not json\n");
+  appendFileSync(daemonLogPath(stateDir), failed("POLICY_DENIED"));
+  assert.equal(daemonStartFailureSince(stateDir, 0), "POLICY_DENIED");
+});
+
 void test("a missing startup log has size 0 and yields no failure code", (t) => {
   const stateDir = scratchStateDir(t);
   assert.equal(daemonLogSize(stateDir), 0);
