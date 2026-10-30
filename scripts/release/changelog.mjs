@@ -24,6 +24,7 @@ const CATEGORY_BY_TYPE = new Map([
 // changes, so the generator leaves them out. A breaking-change marker (`!`) keeps a commit.
 const INTERNAL_SCOPES = new Set(['planning']);
 const CONVENTIONAL_HEADER = /^([a-z]+)(?:\(([^)]*)\))?(!)?:/;
+const REVERT_SUBJECT = /^Revert "(.*)"$/;
 
 function assertVersion(version) {
   if (typeof version !== 'string' || !VERSION_PATTERN.test(version)) {
@@ -81,7 +82,28 @@ function isInternal(subject) {
   return match !== null && match[3] === undefined && INTERNAL_SCOPES.has(match[2]);
 }
 
-function collectEntries(root, since) {
+// `git revert` names its commit `Revert "<original subject>"`. Commits arrive newest first; a revert
+// pairs with the nearest older commit that has its original subject, and both are left out. A revert
+// whose original is outside the range stays, because the feature it removed is in an earlier release.
+function dropReverted(commits) {
+  const dropped = new Set();
+  for (let index = 0; index < commits.length; index += 1) {
+    const match = REVERT_SUBJECT.exec(commits[index].subject);
+    if (match === null || dropped.has(index)) {
+      continue;
+    }
+    const original = commits.findIndex(
+      (commit, other) => other > index && !dropped.has(other) && commit.subject === match[1],
+    );
+    if (original !== -1) {
+      dropped.add(index);
+      dropped.add(original);
+    }
+  }
+  return commits.filter((_, index) => !dropped.has(index));
+}
+
+function collectCommits(root, since) {
   const range = since === undefined ? 'HEAD' : `${since}..HEAD`;
   let output;
   try {
@@ -94,7 +116,7 @@ function collectEntries(root, since) {
     throw new Error(`git log failed for range "${range}": ${error.message}`, { cause: error });
   }
 
-  const entries = [];
+  const commits = [];
   for (const line of output.split('\n')) {
     if (line === '') {
       continue;
@@ -103,8 +125,14 @@ function collectEntries(root, since) {
     if (tab === -1) {
       throw new Error(`unexpected git log output: "${line}"`);
     }
-    const sha = line.slice(0, tab);
-    const subject = line.slice(tab + 1);
+    commits.push({ sha: line.slice(0, tab), subject: line.slice(tab + 1) });
+  }
+  return commits;
+}
+
+function collectEntries(root, since) {
+  const entries = [];
+  for (const { sha, subject } of dropReverted(collectCommits(root, since))) {
     if (subject.startsWith('chore(release)') || isInternal(subject)) {
       continue;
     }
