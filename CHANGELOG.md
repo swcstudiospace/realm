@@ -4,6 +4,17 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.3.9] - 2026-10-30
+
+### Added
+- feat(runtime): add OPENSHELL_GATEWAY_LOST and tell a lost gateway from a dead runner (phase 17, part 1) (#22) (a3f87df)
+
+### Maintenance
+- chore: add the export reference analysis and drop self-only exports in the quiet directories (phase 13, part B-exports, slice 1) (#16) (edb8555)
+- test: make six recurring load-sensitive tests deterministic (phase 13, part B-2) (#20) (aab94af)
+- test: add the scripted-provider Omp harness and the enforcement spike (phase 12, part 1) (#21) (3f5c035)
+- ci: enforce the coverage floors on the Node 22 leg (#24) (995a2cc)
+
 ## [0.3.8] - 2026-10-29
 
 ### Fixed
