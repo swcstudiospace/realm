@@ -4,7 +4,8 @@
 // The server speaks two routes on a loopback port the OS picks:
 //   GET  /v1/models            -> { object: "list", data: [{ id: "scripted", object: "model" }] }
 //   POST /v1/chat/completions  -> one reply planned by the turn handler, streamed (Omp sends `stream: true`) or not
-// Anything else is 404. A body that is not JSON is 400; a body over MAX_BODY_BYTES is 413.
+// Anything else is 404, except CONNECT and absolute-URL proxy requests, which are refused with 403 and never forwarded.
+// Proxy refusals are recorded separately from chats and failures. A bad JSON body is 400; a body over MAX_BODY_BYTES is 413.
 //
 // The streamed chunk sequence is the prototype's, exactly (the one Omp accepted live):
 //   tool call: delta { role: "assistant", content: null, tool_calls: [{ index: 0, id, type: "function", function: { name, arguments: "" } }] },
@@ -21,13 +22,14 @@
 //                                                            With no handler every turn answers { text: "ack" }.
 //     get requests(): readonly RecordedRequest[]             one entry per chat-completions request, in arrival order
 //     get failures(): readonly string[]                      what went wrong inside the server (a throwing handler, a socket error)
+//     get proxyRefusals(): readonly string[]                 refused proxy request lines, never failed chat turns
 //     stop(): Promise<void>                                  closes the listener and every open connection; idempotent
 //   Pure encoders, exported so the protocol is testable without a socket: streamChunks, sseBody, completionBody, textOfContent.
 //
 // The provider binds 127.0.0.1 only and never reaches out: the network assertion (HARN-03) counts the connections Omp makes to it.
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import type { AddressInfo } from "node:net";
+import type { AddressInfo, Socket } from "node:net";
 import { isRecord, within } from "./omp-live.js";
 
 // ---- Types -----------------------------------------------------------------------------------------------------------------
@@ -217,6 +219,8 @@ function lastToolText(messages: readonly ChatMessage[]): string | undefined {
 const MAX_BODY_BYTES = 8 * 1024 * 1024;
 // A bound on closing the listener once every connection is closed.
 const STOP_TIMEOUT_MS = 5_000;
+// A CONNECT peer may not close after our refusal. Destroy it after this failure bound even if it ignores FIN.
+const PROXY_CLOSE_TIMEOUT_MS = 1_000;
 
 class BodyTooLarge extends Error {}
 
@@ -245,6 +249,8 @@ export class ScriptedProvider {
   readonly #server: Server;
   readonly #requests: RecordedRequest[] = [];
   readonly #failures: string[] = [];
+  readonly #proxyRefusals: string[] = [];
+  readonly #sockets = new Set<Socket>();
   #handler: TurnHandler = () => ({ text: "ack" });
   #counter = 0;
   #started = false;
@@ -253,6 +259,21 @@ export class ScriptedProvider {
   constructor() {
     this.#server = createServer((req, res) => {
       void this.#handle(req, res);
+    });
+    // closeAllConnections does not cover CONNECT sockets. Track every accepted socket for failure cleanup as well.
+    this.#server.on("connection", (socket) => {
+      this.#sockets.add(socket);
+      socket.once("close", () => this.#sockets.delete(socket));
+    });
+    this.#server.on("connect", (req, socket) => {
+      this.#proxyRefusals.push(`CONNECT ${req.url ?? ""} HTTP/${req.httpVersion}`);
+      const timer = setTimeout(() => socket.destroy(), PROXY_CLOSE_TIMEOUT_MS);
+      timer.unref();
+      socket.once("close", () => {
+        clearTimeout(timer);
+      });
+      socket.on("error", () => socket.destroy());
+      socket.end("HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
     });
     this.#server.on("clientError", (error, socket) => {
       this.#failures.push(`client error: ${error.message}`);
@@ -266,6 +287,10 @@ export class ScriptedProvider {
 
   get failures(): readonly string[] {
     return this.#failures;
+  }
+
+  get proxyRefusals(): readonly string[] {
+    return this.#proxyRefusals;
   }
 
   // Replaces the turn handler. It applies to requests that arrive after the call.
@@ -309,6 +334,9 @@ export class ScriptedProvider {
       });
     });
     this.#server.closeAllConnections();
+    for (const socket of this.#sockets) {
+      socket.destroy();
+    }
     await within(closed, STOP_TIMEOUT_MS, "scripted provider close");
   }
 
@@ -327,6 +355,14 @@ export class ScriptedProvider {
   }
 
   async #route(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    // Test this BEFORE URL normalization: an absolute URL with a valid chat path is still proxy traffic.
+    if (/^[a-z][a-z\d+.-]*:\/\//i.test(req.url ?? "")) {
+      this.#proxyRefusals.push(`${req.method ?? "UNKNOWN"} ${req.url ?? ""} HTTP/${req.httpVersion}`);
+      req.resume();
+      res.setHeader("connection", "close");
+      sendJson(res, 403, { error: { message: "external network refused by scripted provider" } });
+      return;
+    }
     const path = new URL(req.url ?? "/", "http://127.0.0.1").pathname;
     if (req.method === "GET" && path === "/v1/models") {
       sendJson(res, 200, { object: "list", data: [{ id: "scripted", object: "model" }] });

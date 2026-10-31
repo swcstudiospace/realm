@@ -18,7 +18,7 @@
 //   S6         a subagent session
 //   S12        approval prompts
 //   S13/S14    a 1 MiB result and SIGKILL in the middle of a tool call
-//   S11        the network trace of a cold and a warm profile, and the lever that gives a clean trace
+//   S11        a cold trace reported as skipped, a proxied warm registered-tool turn, and the separate cold proxy lever
 //
 // Gate. The whole file skips, with a reason that names the FIRST missing prerequisite, unless REALM_LIVE_OMP=1 and the Omp
 // executable, its version and the built extension are present (ompSkipReason). S11 also needs REALM_OMP_NET_TRACE=1 and a strace
@@ -47,7 +47,7 @@ import {
   within,
 } from "../support/omp-live.js";
 import { createOmpProfile, type OmpProfile } from "../support/omp-profile.js";
-import { scriptedTurnProblem, startOmp, type OmpFrame, type OmpSession, type PromptOutcome, type ToolEnd } from "../support/omp-rpc.js";
+import { startOmp, turnFailures, type OmpFrame, type OmpSession, type PromptOutcome, type ToolEnd } from "../support/omp-rpc.js";
 import { runCommand } from "../support/production-live.js";
 import { externalConnects, OMP_DISCOVERY_PORTS, parseConnects, traceArgv, classify, formatOffenders, type NetAllow } from "../support/net-trace.js";
 import { ScriptedProvider, type ProviderTurn, type RecordedRequest, type TurnPlan } from "../support/scripted-provider.js";
@@ -57,8 +57,8 @@ import { SPIKE_BIG_BYTES, SPIKE_CONFIG_VARIABLE, type SpikeConfig, type SpikeLog
 
 const EVIDENCE_DIR_VARIABLE = "REALM_OMP_EVIDENCE_DIR";
 const SPIKE_EXTENSION_PATH = fileURLToPath(new URL("../support/omp-spike-extension.js", import.meta.url));
-// S11 starts Omp three times under strace (a cold profile, the same profile warm, a fresh profile behind the proxy); D-1203's 300 s
-// bound is for one scenario with one start.
+// S11 starts Omp three times under strace (a cold profile, that profile warm behind the proxy, a fresh profile behind the proxy);
+// D-1203's 300 s bound is for one scenario with one start.
 const NETWORK_SCENARIO_TIMEOUT_MS = 1_200_000;
 // Omp needs longer than the helper's 5 s stages to shut down on a loaded host, and under strace longer still.
 const CLOSE_OPTIONS = { graceMs: 40_000, termMs: 20_000, killMs: 20_000 } as const;
@@ -835,10 +835,11 @@ void test("S13 S14: a 1 MiB result is truncated in the middle before the hook se
 //      each version, so it is not asserted here.
 //   2. a registry that exposes only the stub: the profile's models.yml already does, and the cold trace is not clean; the
 //      `enabledProviders: [stub]` setting changed nothing (46 external connects, as with no setting).
-//   3. a warm profile seeded by an earlier run: works (asserted below), but the warm-up run itself goes to the internet.
+//   3. a warm profile seeded by an earlier run: historically clean, but the parent recovery run still had 38 external and 6 DNS
+//      connects. Cache warmth alone is not the control asserted here.
 //   4. an empty network namespace: the external connects disappear, the name lookups (28 DNS connects) remain, and the stub in the
 //      test process is unreachable from inside, so no scripted turn can run. Not usable with an in-process provider.
-// The lever this test asserts besides the warm profile is the proxy: HTTP(S)_PROXY pointing at a refusing loopback proxy.
+// Both the measured warm tool turn and the separate fresh-profile lever use HTTP(S)_PROXY pointing at the refusing loopback proxy.
 
 // A loopback HTTP proxy that refuses every request and records the first line of each (`CONNECT host:443 HTTP/1.1`). It is the
 // lever that gives a cold profile a clean trace: Omp's outbound requests go to it, so the only connect they make is to loopback.
@@ -909,10 +910,9 @@ function summarise(trace: string, allow: NetAllow): TraceSummary {
   };
 }
 
-// One Omp start under strace over `profile`, one scripted turn (a text answer), a clean close; returns the trace. The trace counts
-// as evidence only when the turn is proven: the provider received the prompt and answered it, and Omp ended the turn without an
-// error. A turn that failed (a model error also has no tool results) would otherwise leave startup traffic to satisfy the
-// assertions that follow.
+// One Omp start under strace over `profile`, one registered extension-tool exchange, then a bounded process-group close. The
+// trace is evidence only when that same turn proves the offered/issued tool, extension execution, RPC success and provider result.
+// Raw evidence is retained even when a turn assertion or cleanup fails; no hello-only turn can satisfy the measurement.
 async function tracedRun(
   provider: ScriptedProvider,
   report: (problem: string) => void,
@@ -922,41 +922,109 @@ async function tracedRun(
 ): Promise<string> {
   const traceFile = join(profile.root, `${label}.strace`);
   const logPath = join(profile.root, `${label}.jsonl`);
+  const prompt = `s11-${label}-status`;
   writeFileSync(logPath, "");
   mkdirSync(tmpDirOf(profile), { recursive: true });
   const omp = startOmp({
     bin: OMP_BIN,
-    env: { ...profile.env, TMPDIR: tmpDirOf(profile), ...extraEnv, [SPIKE_CONFIG_VARIABLE]: JSON.stringify({ log: logPath } satisfies SpikeConfig) },
+    env: { ...profile.env, TMPDIR: tmpDirOf(profile), ...extraEnv, [SPIKE_CONFIG_VARIABLE]: JSON.stringify({ log: logPath, tools: ["status"] } satisfies SpikeConfig) },
     cwd: profile.workspace,
     extensionPath: SPIKE_EXTENSION_PATH,
     wrap: traceArgv(traceFile),
   });
   const requestsBefore = provider.requests.length;
-  let frames: readonly OmpFrame[];
+  const failuresBefore = provider.failures.length;
+  // Each traced start has its own handler phases and provider-request window. The host owns user-message enrichment;
+  // opaque userText bytes are recorded as evidence, never used to bind a request to this measured exchange.
+  const turnState = {
+    phase: "awaiting-prompt" as "awaiting-prompt" | "call" | "result" | "complete",
+    requestsHandled: 0,
+  };
+  provider.onTurn((turn): TurnPlan => {
+    assert.equal(provider.requests.length, requestsBefore + turnState.requestsHandled, "the measured requests arrive in order in this run's window");
+    if (turnState.phase === "call") {
+      assert.equal(turn.lastRole, "user", "the measured exchange starts with a user turn");
+      assert.ok(turn.toolsOffered.includes("status"), "the registered status tool is offered before the script issues it");
+      turnState.requestsHandled += 1;
+      turnState.phase = "result";
+      return { call: { name: "status", args: {} } };
+    }
+    assert.equal(turnState.phase, "result", "only one tool call and its continuation are permitted in the active measured exchange");
+    assert.equal(turn.lastRole, "tool", "the continuation follows the issued tool result");
+    turnState.requestsHandled += 1;
+    turnState.phase = "complete";
+    return { text: "done" };
+  });
   try {
     await omp.ready(OMP_READY_TIMEOUT_MS);
-    // A cold profile's first prompt competes with the startup network traffic that S11 measures, and the host may be loaded: it gets
-    // the startup bound, which is a failure bound only.
-    const outcome = await omp.prompt("hello", OMP_READY_TIMEOUT_MS);
-    assert.equal(outcome.toolEnds.length, 0);
-    frames = outcome.frames;
+    // A cold profile's first prompt competes with startup traffic: the startup bound is a failure bound only.
+    turnState.phase = "call";
+    const outcome = await omp.prompt(prompt, OMP_READY_TIMEOUT_MS);
+    const requests = provider.requests.slice(requestsBefore);
+    assert.equal(turnState.phase, "complete", "this run's handler issued the tool and answered its continuation");
+    assert.equal(turnState.requestsHandled, 2, "both handler phases belong to this measured request window");
+    assert.deepEqual(turnFailures(outcome.frames), [], `the ${label} run's measured turn must not fail or abort`);
+    assert.ok(
+      outcome.frames.some((frame) => frame["type"] === "turn_end" && isRecord(frame["message"]) && frame["message"]["stopReason"] === "stop"),
+      `the ${label} run's measured turn must complete with stopReason stop before its trace is evidence`,
+    );
+    assert.deepEqual(provider.failures.slice(failuresBefore), [], "the scripted provider completed without errors");
+    assert.equal(requests.length, 2, "one tool-call request and one tool-result continuation belong to this measured turn");
+    const issued = requests[0];
+    assert.ok(issued !== undefined);
+    assert.ok(issued.toolsOffered.includes("status"), "the registered status tool was offered to the provider");
+    assert.deepEqual(issued.plan, { call: { name: "status", args: {} } });
+    assert.equal(outcome.toolStarts.length, 1, "the measured turn started exactly one tool");
+    assert.equal(outcome.toolStarts[0]?.toolName, "status");
+    assert.deepEqual(outcome.toolStarts[0].args, {});
+    assert.equal(outcome.toolEnds.length, 1, "the measured turn completed exactly one tool");
+    const end = outcome.toolEnds[0];
+    assert.ok(end !== undefined);
+    assert.equal(end.toolName, "status");
+    assert.equal(end.toolCallId, outcome.toolStarts[0].toolCallId);
+    assert.equal(end.isError, false, end.text);
+    assert.equal(end.text, "SPIKE-STATUS {}");
+    const continued = requests[1];
+    assert.ok(continued !== undefined);
+    assert.equal(continued.lastRole, "tool");
+    assert.equal(continued.toolResultText, end.text, "the successful RPC result reached the same turn's provider continuation");
+    assert.deepEqual(continued.plan, { text: "done" });
+    const lines = parseLog(readFileSync(logPath, "utf8"));
+    const start = lines.find((line) => line.ev === "session_start");
+    assert.ok(stringsOf(start?.["all"]).includes("status:extension"), "the measured tool belongs to the isolated spike extension");
+    assert.ok(stringsOf(start?.["active"]).includes("status"));
+    const executions = lines.filter((line) => line.ev === "exec" && line["tool"] === "status");
+    assert.equal(executions.length, 1);
+    assert.deepEqual(executions[0]?.["params"], {});
+    for (const ev of ["tool_call", "tool_result"]) {
+      const events = lines.filter((line) => line.ev === ev && line["toolName"] === "status");
+      assert.equal(events.length, 1, `${ev} fired for the measured status call`);
+      assert.equal(events[0]?.["toolCallId"], end.toolCallId);
+    }
   } finally {
-    await omp.close(CLOSE_OPTIONS);
+    try {
+      await omp.close(CLOSE_OPTIONS);
+    } finally {
+      for (const evidenceProblem of writeEvidence(process.env[EVIDENCE_DIR_VARIABLE], {
+        [`s11-${label}.version.txt`]: () => ompVersionText,
+        [`s11-${label}.strace`]: () => readFileSync(traceFile, "utf8"),
+        [`s11-${label}.log.jsonl`]: () => readFileSync(logPath, "utf8"),
+        [`s11-${label}.frames.jsonl`]: () => omp.frames.map((frame) => JSON.stringify(frame)).join("\n"),
+        [`s11-${label}.requests.json`]: () => JSON.stringify(provider.requests.slice(requestsBefore), null, 1),
+        [`s11-${label}.provider-failures.json`]: () => JSON.stringify(provider.failures.slice(failuresBefore), null, 1),
+        [`s11-${label}.script-state.json`]: () => JSON.stringify({ ...turnState, requestsBefore, requestsAfter: provider.requests.length }, null, 1),
+      })) {
+        report(evidenceProblem);
+      }
+    }
   }
-  const problem = scriptedTurnProblem({ prompt: "hello", requests: provider.requests.slice(requestsBefore), frames });
-  assert.equal(problem, undefined, `the ${label} run's scripted turn is not proven, so its trace is not evidence: ${problem ?? ""}`);
-  const trace = readFileSync(traceFile, "utf8");
-  for (const evidenceProblem of writeEvidence(process.env[EVIDENCE_DIR_VARIABLE], { [`s11-${label}.strace`]: () => trace })) {
-    report(evidenceProblem);
-  }
-  return trace;
+  return readFileSync(traceFile, "utf8");
 }
 
-// S11 exempts no host. Omp's model-catalog refresh (`catalog.stencil.so:443`; Omp 18.12.6's `online-if-uncached` strategy fetches
-// the model catalog when its cache is empty, 12-RESEARCH.md 2.6) happens at startup of a cold profile only. A cold run is reported as
-// skipped; a warm run fails on any connection outside the allowlist, DNS queries included, whatever address a host resolves to.
+// S11 exempts no external host or DNS query. The unproxied cold warm-up is separately reported as skipped, never as a pass.
+// Cache warmth did not prevent the parent recovery failure, so the measured warm registered-tool turn itself uses the proxy.
 
-void test("S11: a warm Omp profile connects only to loopback, and a cold profile is skipped with its reason (HARN-03)", { skip: traceGate ?? false, timeout: NETWORK_SCENARIO_TIMEOUT_MS }, async (t) => {
+void test("S11: a proxied warm registered-tool turn connects only to allowed loopback ports; the unproxied cold profile is separately skipped (HARN-03)", { skip: traceGate ?? false, timeout: NETWORK_SCENARIO_TIMEOUT_MS }, async (t) => {
   t.diagnostic(`omp/${ompVersionText}`);
   const cleanups = createCleanups();
   t.after(() => cleanups.run());
@@ -971,7 +1039,7 @@ void test("S11: a warm Omp profile connects only to loopback, and a cold profile
   // Loopback peers a run may talk to: the stub and Omp's three local-model discovery probes (OMP_DISCOVERY_PORTS).
   const allow: NetAllow = { loopbackPorts: [port, ...OMP_DISCOVERY_PORTS] };
 
-  // Lever 3 first, because it needs no change to the profile: the same directory, used twice. The first run is the cold one.
+  // The same directory is used twice: the separately labelled cold warm-up, then the proxied warm measurement.
   const profile = createOmpProfile({ providerPort: port, ...pathOption });
   cleanups.add(() => {
     profile.dispose();
@@ -983,43 +1051,83 @@ void test("S11: a warm Omp profile connects only to loopback, and a cold profile
     const cold = summarise(await tracedRun(provider, report, profile, "cold", {}), allow);
     warmed = true;
     c.diagnostic(`cold: ${String(cold.external)} external connects, ${String(cold.dns)} DNS connects, loopback ports ${cold.loopbackPorts.join(",")}; ${String(cold.offenders.length)} connection(s) outside the allowlist`);
-    c.skip("the profile is cold; Omp's model-catalog refresh is observed only on a cold profile");
+    const reason = "unproxied cold warm-up; startup catalog and provider-discovery traffic is outside the warm claim";
+    for (const problem of writeEvidence(process.env[EVIDENCE_DIR_VARIABLE], {
+      "s11-cold.summary.json": () => JSON.stringify({ ompVersion: ompVersionText, status: "skipped", reason, allow, ...cold }, null, 1),
+    })) {
+      report(problem);
+    }
+    c.skip(reason);
   });
 
-  await t.test("warm profile: no connection outside the loopback stub, its discovery probes, or any DNS query", async (w) => {
-    assert.ok(warmed, "the warm run needs the cold run to have warmed the profile");
-    const warm = summarise(await tracedRun(provider, report, profile, "warm", {}), allow);
-    w.diagnostic(`warm: ${String(warm.external)} external connects, ${String(warm.dns)} DNS connects, loopback ports ${warm.loopbackPorts.join(",")}`);
-    assert.equal(warm.offenders.length, 0, `the warm run connected outside the allowlist or queried DNS; no host is exempt: ${formatOffenders(warm.offenders)}`);
-    assert.deepEqual(warm.loopbackPorts.filter((candidate) => !allow.loopbackPorts.includes(candidate)), []);
-    assert.ok(warm.loopbackPorts.includes(port), "the warm run reached the stub");
-  });
-
-  // The proxy lever: a fresh profile (cold again) whose outbound HTTP(S) goes to a loopback proxy that refuses it.
   const proxy = new RefusingProxy();
-  const proxyPort = await proxy.start();
   cleanups.add(() => proxy.stop());
+  const proxyPort = await proxy.start();
+  const proxyUrl = `http://127.0.0.1:${String(proxyPort)}`;
+  const proxyEnv = {
+    HTTP_PROXY: proxyUrl,
+    HTTPS_PROXY: proxyUrl,
+    http_proxy: proxyUrl,
+    https_proxy: proxyUrl,
+    NO_PROXY: "127.0.0.1,localhost",
+    no_proxy: "127.0.0.1,localhost",
+  };
+  // Only the actual stub, documented loopback discovery ports and this owned proxy port are allowed. DNS remains an offender.
+  const proxyAllow: NetAllow = { loopbackPorts: [...allow.loopbackPorts, proxyPort] };
+
+  await t.test("warm profile: proxied registered-tool turn has zero external, zero DNS and zero offenders", async (w) => {
+    assert.ok(warmed, "the warm run needs the cold run to have warmed the profile");
+    const requestsBefore = proxy.requests.length;
+    try {
+      const warm = summarise(await tracedRun(provider, report, profile, "warm", proxyEnv), proxyAllow);
+      for (const problem of writeEvidence(process.env[EVIDENCE_DIR_VARIABLE], {
+        "s11-warm.summary.json": () => JSON.stringify({ ompVersion: ompVersionText, allow: proxyAllow, ...warm }, null, 1),
+      })) {
+        report(problem);
+      }
+      w.diagnostic(`warm (proxied status tool): ${String(warm.external)} external connects, ${String(warm.dns)} DNS connects, loopback ports ${warm.loopbackPorts.join(",")}`);
+      assert.equal(warm.offenders.length, 0, `the warm run connected outside the allowlist or queried DNS; no host is exempt: ${formatOffenders(warm.offenders)}`);
+      assert.equal(warm.external, 0);
+      assert.equal(warm.dns, 0);
+      assert.deepEqual(warm.loopbackPorts.filter((candidate) => !proxyAllow.loopbackPorts.includes(candidate)), []);
+      assert.ok(warm.loopbackPorts.includes(port), "the measured warm tool turn reached the stub");
+    } finally {
+      for (const problem of writeEvidence(process.env[EVIDENCE_DIR_VARIABLE], {
+        "s11-warm.proxy-requests.json": () => JSON.stringify(proxy.requests.slice(requestsBefore), null, 1),
+      })) {
+        report(problem);
+      }
+    }
+  });
+
+  // A separate fresh-profile lever, not a substitute for the warm tool turn's trace or provider/RPC evidence.
   const fresh = createOmpProfile({ providerPort: port, ...pathOption });
   cleanups.add(() => {
     fresh.dispose();
   });
-  const proxyUrl = `http://127.0.0.1:${String(proxyPort)}`;
-  const proxied = summarise(
-    await tracedRun(provider, report, fresh, "proxy", {
-      HTTP_PROXY: proxyUrl,
-      HTTPS_PROXY: proxyUrl,
-      http_proxy: proxyUrl,
-      https_proxy: proxyUrl,
-      NO_PROXY: "127.0.0.1,localhost",
-      no_proxy: "127.0.0.1,localhost",
-    }),
-    { loopbackPorts: [...allow.loopbackPorts, proxyPort] },
-  );
-  const hosts = [...new Set(proxy.requests)].sort();
-  t.diagnostic(`proxy lever: ${String(proxied.external)} external connects, ${String(proxied.dns)} DNS connects; the proxy refused ${String(proxy.requests.length)} requests for ${hosts.join(", ")}`);
-  assert.equal(proxied.offenders.length, 0, formatOffenders(proxied.offenders));
-  assert.equal(proxied.external, 0);
-  assert.equal(proxied.dns, 0);
-  assert.ok(proxy.requests.length > 0, "the startup traffic reached the proxy, so the clean trace is the lever's doing");
-  assert.ok(proxy.requests.every((line) => /^CONNECT \S+:443 HTTP\/1\.1$/.test(line)), `every refused request is a CONNECT to port 443: ${hosts.join(" | ")}`);
+  const requestsBefore = proxy.requests.length;
+  try {
+    const proxied = summarise(await tracedRun(provider, report, fresh, "proxy", proxyEnv), proxyAllow);
+    const refused = proxy.requests.slice(requestsBefore);
+    const hosts = [...new Set(refused)].sort();
+    for (const problem of writeEvidence(process.env[EVIDENCE_DIR_VARIABLE], {
+      "s11-proxy.summary.json": () => JSON.stringify({ ompVersion: ompVersionText, allow: proxyAllow, ...proxied }, null, 1),
+    })) {
+      report(problem);
+    }
+    t.diagnostic(`separate cold proxy lever: ${String(proxied.external)} external connects, ${String(proxied.dns)} DNS connects; the proxy refused ${String(refused.length)} requests for ${hosts.join(", ")}`);
+    assert.equal(proxied.offenders.length, 0, formatOffenders(proxied.offenders));
+    assert.equal(proxied.external, 0);
+    assert.equal(proxied.dns, 0);
+    assert.ok(proxied.loopbackPorts.includes(port), "the separate proxy lever reached the stub");
+    assert.ok(proxied.loopbackPorts.includes(proxyPort), "the separate proxy lever reached its owned proxy");
+    assert.ok(refused.length > 0, "this fresh profile's startup traffic reached the proxy, not a prior run's requests");
+    assert.ok(refused.every((line) => /^CONNECT \S+:443 HTTP\/1\.1$/.test(line)), `every refused request is a CONNECT to port 443: ${hosts.join(" | ")}`);
+  } finally {
+    for (const problem of writeEvidence(process.env[EVIDENCE_DIR_VARIABLE], {
+      "s11-proxy.proxy-requests.json": () => JSON.stringify(proxy.requests.slice(requestsBefore), null, 1),
+    })) {
+      report(problem);
+    }
+  }
 });
