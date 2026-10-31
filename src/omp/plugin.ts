@@ -517,7 +517,7 @@ export interface HostToolSet {
 // Brings the host tool set to mode. A change starts only if isCurrent still holds when its turn in the queue comes, so a
 // superseded attempt, an attempt past its budget, or a shut-down session changes nothing. Rejects with POLICY_DENIED when the
 // set does not read back as wanted.
-export function setHostMode(tools: HostToolSet, mode: PolicyMode, isCurrent: () => boolean): Promise<void> {
+function setHostMode(tools: HostToolSet, mode: PolicyMode, isCurrent: () => boolean): Promise<void> {
   const change = tools.queue.then(() => applyHostMode(tools, mode, isCurrent));
   tools.queue = change.then(
     () => undefined,
