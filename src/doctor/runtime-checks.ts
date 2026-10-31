@@ -1,6 +1,6 @@
 // Doctor checks for the three runtime roots, the driver socket and the gateway (ONB-04, D-1506).
-// A missing or unloadable config is one item whose fix names `realm init`. Each other failure is one
-// item with a fix. This module reads no process environment: the caller hands env in.
+// A missing or unloadable config is one item with first-time setup guidance. Configured root failures
+// require manual recovery, not reinitialization. This module reads no process environment: the caller hands env in.
 
 import { lstatSync, type Stats } from "node:fs";
 import { connect as netConnect } from "node:net";
@@ -39,14 +39,24 @@ const SOCKET_MODE = 0o600;
 const PERMISSION_BITS = 0o777;
 const DRIVER_SOCKET_ENV = "REALM_DRIVER_SOCKET";
 const GATEWAY_ENDPOINT_ENV = "REALM_DRIVER_GATEWAY_ENDPOINT";
-const INIT_FIX = "Run realm init so config.json names the three roots (absolute paths, mode 0700). A stale REALM_DRIVER_*_ROOT variable is ignored.";
+const INIT_FIX = "For first-time setup with no config.json or policy.json, run realm init to write the config and prepare private roots at mode 0700. If either template already exists, preserve the templates and data and repair the existing config instead. A stale REALM_DRIVER_*_ROOT variable is ignored.";
 
 // The fix for each driver-root condition. A fix names the root in its detail, never a path value.
 const FIX_ROOT_UNSET =
-  "Name each root in config.json as an absolute path, or run realm init to write all three. workspaceRoot is required; secretRoot and sandboxStateRoot may be omitted, which takes the default under stateDir.";
+  "Set an unset root named in the detail to an absolute path in the existing config.json; workspaceRoot is required. Omitted secretRoot and sandboxStateRoot keys use the defaults under stateDir: inspect those directories and keep the omissions if the defaults are intended, or explicitly name the intended private directories in the same config.";
 const FIX_ROOT_RELATIVE = "Set the root named in the detail to an absolute path in config.json. The driver and the daemon read the same file.";
+const FIX_ROOT_ABSENT =
+  "Look up the root named in the detail in the existing config.json, including defaults under stateDir. Restore the intended missing directory and its data from the known location or backup. Only for a genuinely new secretRoot or sandboxStateRoot, manually create the confirmed private directory under this account at mode 0700 after inspecting its ancestors for symlinks. For workspaceRoot, select the existing project directory this account owns; preserve its mode and contents.";
+const FIX_ROOT_UNREADABLE =
+  "Inspect the configured root named in the detail and its ancestors as the runtime account. Check ownership and owner read/search access without following symlinks; restore that access only on confirmed directories this account owns. Do not recursively change permissions or ownership.";
+const FIX_ROOT_TYPE =
+  "Inspect the configured root named in the detail and its ancestors without following symlinks. Keep the existing entry and data intact: locate or restore the intended real directory, or correct only that root key in config.json if it names the wrong location. Private roots must be account-owned directories at mode 0700; workspaceRoot must be an existing account-owned project directory, with its mode preserved.";
+const FIX_WORKSPACE_OWNER =
+  "Check workspaceRoot in the existing config.json and select the intended existing project directory owned by the runtime account. Preserve the current workspace, its data and mode; do not take ownership of another account's directory.";
 const FIX_ROOT_MODE =
-  "Run chmod 0700 on the root named in the detail, then rerun the check. Run realm init to name the roots in config.json if they are not named there. workspaceRoot is not held to a mode: the driver accepts any mode for a workspace this account owns.";
+  "Inspect ownership and the non-symlink directory and ancestors for the private root named in the detail. Only after confirming this account owns the intended private directory, manually set that directory's mode to 0700, without recursive permission or ownership changes. Do not change workspaceRoot permissions.";
+const FIX_ROOT_MANUAL =
+  "Preserve config.json, policy.json and existing data; do not reinitialize. The driver and daemon must select the same physical config.json. realm doctor --fix only creates or tightens stateDir, stateDir/run and stateDir/sessions; it does not repair or provision private roots or the workspace, or change ownership. Rerun realm doctor after manual recovery.";
 
 function fail(id: RuntimeCheckId, detail: string, fix: string): RuntimeCheckResult {
   return { id, status: "fail", detail, fix };
@@ -128,21 +138,21 @@ function rootFinding(key: DriverRootKey, path: string, stat: (path: string) => P
   }
   const found = stat(path);
   if (found.state === "absent") {
-    return { severity: "fail", detail: `${key} is absent`, fix: INIT_FIX };
+    return { severity: "fail", detail: `${key} is absent`, fix: FIX_ROOT_ABSENT };
   }
   if (found.state === "unreadable") {
-    return { severity: "fail", detail: `${key} cannot be inspected`, fix: INIT_FIX };
+    return { severity: "fail", detail: `${key} cannot be inspected`, fix: FIX_ROOT_UNREADABLE };
   }
   if (found.stats.isSymbolicLink()) {
-    return { severity: "fail", detail: `${key} is a symbolic link`, fix: INIT_FIX };
+    return { severity: "fail", detail: `${key} is a symbolic link`, fix: FIX_ROOT_TYPE };
   }
   if (!found.stats.isDirectory()) {
-    return { severity: "fail", detail: `${key} is not a directory`, fix: INIT_FIX };
+    return { severity: "fail", detail: `${key} is not a directory`, fix: FIX_ROOT_TYPE };
   }
   if (key === "workspaceRoot") {
     const uid = process.getuid?.();
     if (uid !== undefined && typeof found.stats.uid === "number" && found.stats.uid !== uid) {
-      return { severity: "fail", detail: "workspaceRoot is not owned by this account", fix: INIT_FIX };
+      return { severity: "fail", detail: "workspaceRoot is not owned by this account", fix: FIX_WORKSPACE_OWNER };
     }
     return undefined;
   }
@@ -174,7 +184,7 @@ export function runtimeRootsCheck(config: RuntimeConfig, stat: (path: string) =>
     return pass("runtime-roots", "secretRoot and sandboxStateRoot are absolute directories at mode 0700; workspaceRoot is an account-owned directory");
   }
   const detail = findings.map((finding) => finding.detail).join("; ");
-  const fix = [...new Set(findings.map((finding) => finding.fix))].join(" ");
+  const fix = `${[...new Set(findings.map((finding) => finding.fix))].join(" ")} ${FIX_ROOT_MANUAL}`;
   if (findings.some((finding) => finding.severity === "fail")) {
     return fail("runtime-roots", detail, fix);
   }

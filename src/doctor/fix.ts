@@ -1,171 +1,222 @@
-// The safe subset of realm doctor --fix (ONB-02). It creates the state directory, and its run and sessions directories, when they are
-// missing, and sets the state directory to mode 0700. Nothing else changes. Every path that can be observed before a write is observed
-// first, so a symbolic link, a path that is not a directory, and a directory the current user does not own are refused with
-// SCHEMA_INVALID and the disk is left as it was. The filesystem root, the home directory, the workspace root and every ancestor of the
-// workspace are never a state directory. With dryRun the same actions are returned and nothing is written. A second run finds nothing
-// to do.
+// The local safe subset of realm doctor --fix (ONB-02, D-1507): state, run and sessions only.
+// Preflight every target before writing. Pin existing directories with O_DIRECTORY|O_NOFOLLOW,
+// check their identity and owner, and change modes with fchmod only. Missing leaves are created
+// through the pinned parent's /proc/self/fd path. No path-based chmod fallback is permitted.
+// Unreadable directories and umasks that prevent opening new directories fail closed; the
+// operator must restore owner read/search access before retrying. Dry-run never mutates disk.
 
-import { chmodSync, lstatSync, mkdirSync, realpathSync, type Stats } from "node:fs";
-import { basename, dirname, join, parse, resolve, sep } from "node:path";
-import { makeRealmError } from "../core/errors.js";
+import { closeSync, constants, fchmodSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readlinkSync, realpathSync, type Stats } from "node:fs";
+import { basename, dirname, isAbsolute, join, parse, resolve, sep } from "node:path";
+import { RealmError } from "../core/errors.js";
 import { sessionsDirOf } from "../session/paths.js";
 
 const PRIVATE_DIR_MODE = 0o700;
-const PERMISSION_BITS = 0o777;
-// Owner search: the bit that lets lstat reach a child of a directory. Without it the children cannot be inspected.
-const OWNER_SEARCH_BIT = 0o100;
+const PERMISSION_BITS = 0o7777;
+const OWNER_READ_SEARCH = 0o500;
+const PROC_FD_DIR = "/proc/self/fd";
 
-// The home directory and the workspace root. They are passed in, so nothing here reads the environment.
 export interface ProtectedLocations {
   readonly home: string;
   readonly workspace: string;
 }
 
-// One change the fix made, or would make with dryRun. A create-directory action names a directory that is missing. A set-mode action
-// names a directory whose permission bits are not mode, and previousMode is what they were.
 export type FixAction =
   | { readonly kind: "create-directory"; readonly path: string; readonly mode: number }
   | { readonly kind: "set-mode"; readonly path: string; readonly previousMode: number; readonly mode: number };
 
-// Applies the safe subset to the state directory and returns the actions in the order they are taken. Every refusal is decided before
-// the first write. The children are inspected before the state directory's mode is changed, so a symbolic link or a file among them is
-// refused with the mode unchanged. A state directory without owner search permission has unobservable children, so it is refused, and a
-// dry run refuses it the same way. With dryRun true the list is the same and nothing is created or changed.
-export function applySafeFixes(stateDir: string, dryRun: boolean, locations: ProtectedLocations): readonly FixAction[] {
-  const target = normalizeStateDir(stateDir);
-  refuseProtectedTarget(target, locations);
-  refuseUnsafeSpelling(target);
+type RefusalDetail = "unsafe-target" | "symlink" | "not-a-directory" | "foreign-owner" | "unreadable-directory" | "changed-directory" | "unsafe-umask" | "filesystem-error";
 
-  const current = observeDirectory(target);
-  const children = planChildren(target, current);
-  const actions = [...planStateMode(target, current), ...children];
-  if (!dryRun) {
-    for (const action of actions) {
-      applyAction(action);
-    }
+// A catalogue error plus fixed, non-runtime detail. Already-applied actions are retained if a
+// later write fails; callers must not report that a partial repair changed nothing.
+export class FixRefusal extends RealmError {
+  constructor(
+    readonly path: string,
+    readonly detail: RefusalDetail,
+    readonly applied: readonly FixAction[] = [],
+  ) {
+    super("SCHEMA_INVALID");
+    this.name = "FixRefusal";
   }
-  return actions;
 }
 
-// The spelling used for every check and every write. Trailing separators are removed, so "dir/" is the path "dir". The root keeps its
-// separator.
+export interface SafeFixOptions {
+  // Deterministic race seam, matching the filesystem modules' boundary hooks. No production caller supplies it.
+  readonly stageHook?: (stage: "before-open" | "before-apply" | "before-chmod", path: string) => void;
+}
+
+interface PinnedDirectory {
+  readonly path: string;
+  readonly fd: number;
+  readonly stats: Stats;
+}
+
+// Every observable refusal is decided before the first write. There is no rollback of changes
+// if a later filesystem operation fails; FixRefusal.applied reports that case honestly.
+export function applySafeFixes(
+  stateDir: string,
+  dryRun: boolean,
+  locations: ProtectedLocations,
+  options: SafeFixOptions = {},
+): readonly FixAction[] {
+  const target = normalizeStateDir(stateDir);
+  const pins = new Map<string, PinnedDirectory>();
+  const applied: FixAction[] = [];
+  try {
+    const paths = [target, join(target, "run"), sessionsDirOf(target)];
+    for (const path of paths) refuseProtectedTarget(path, locations);
+    const parent = dirname(target);
+    const parentStats = observeDirectory(parent, false);
+    if (parentStats === undefined) throw new FixRefusal(target, "unsafe-target");
+    pins.set(parent, pinDirectory(parent, parentStats, options));
+    const actions: FixAction[] = [];
+    let stateExists = false;
+    for (const path of paths) {
+      // A missing state directory has no children to observe yet.
+      const current: Stats | undefined = path === target || stateExists ? observeDirectory(path, true) : undefined;
+      if (path === target) stateExists = current !== undefined;
+      if (current === undefined) {
+        actions.push({ kind: "create-directory", path, mode: PRIVATE_DIR_MODE });
+      } else {
+        pins.set(path, pinDirectory(path, current, options));
+        const mode = current.mode & PERMISSION_BITS;
+        if (mode !== PRIVATE_DIR_MODE) actions.push({ kind: "set-mode", path, previousMode: mode, mode: PRIVATE_DIR_MODE });
+      }
+    }
+    // mkdir applies umask before an fd can be opened. Read Linux's proc status without
+    // changing the process-wide mask; process.umask() would write it twice and race threads.
+    // Do not create an unreadable leaf and then follow its path to chmod it, even as root.
+    if (actions.some((action) => action.kind === "create-directory")) {
+      const mask = /^Umask:[\t ]+([0-7]{4})[\t ]*$/m.exec(readFileSync("/proc/self/status", "utf8"))?.[1];
+      if (mask === undefined || (Number.parseInt(mask, 8) & OWNER_READ_SEARCH) !== 0) {
+        throw new FixRefusal(target, "unsafe-umask");
+      }
+    }
+    for (const pin of pins.values()) verifyPin(pin);
+    if (!dryRun) {
+      for (const action of actions) {
+        options.stageHook?.("before-apply", action.path);
+        // Validate the whole pinned chain before each mutation, not just the leaf.
+        for (const pin of pins.values()) verifyPin(pin);
+        applyAction(action, pins, options, applied);
+      }
+    }
+    return actions;
+  } catch (error: unknown) {
+    if (error instanceof FixRefusal) throw new FixRefusal(error.path, error.detail, applied);
+    throw new FixRefusal(target, "filesystem-error", applied);
+  } finally {
+    for (const pin of pins.values()) closeSync(pin.fd);
+  }
+}
+
 function normalizeStateDir(stateDir: string): string {
-  const trimmed = stateDir.replace(/\/+$/, "");
-  return trimmed === "" && stateDir.startsWith(sep) ? sep : trimmed;
+  const target = stateDir.replace(/\/+$/, "") || sep;
+  const names = target.split(sep);
+  if (!isAbsolute(stateDir) || names.includes(".") || names.includes("..") || resolve(target) !== target) {
+    throw new FixRefusal(stateDir, "unsafe-target");
+  }
+  return target;
 }
 
-// Compared in canonical form, so a symbolic link in a parent path does not hide a protected location.
+// Canonical comparisons also protect targets spelled through a home/workspace alias. The
+// descriptor checks below separately refuse symlinked ancestors rather than traversing them.
 function refuseProtectedTarget(target: string, locations: ProtectedLocations): void {
+  if (!isAbsolute(locations.home) || !isAbsolute(locations.workspace)) throw new FixRefusal(target, "unsafe-target");
   const canonical = canonicalPath(target);
   const home = canonicalPath(locations.home);
   const workspace = canonicalPath(locations.workspace);
-  const isRoot = parse(canonical).root === canonical;
-  const isHomeOrWorkspace = canonical === home || canonical === workspace;
-  const isAncestorOfWorkspace = workspace.startsWith(`${canonical}${sep}`);
-  if (isRoot || isHomeOrWorkspace || isAncestorOfWorkspace) {
-    throw makeRealmError("SCHEMA_INVALID");
+  if (
+    parse(canonical).root === canonical || canonical === home || canonical === workspace ||
+    workspace.startsWith(`${canonical}${sep}`) || canonical.startsWith(`${workspace}${sep}`)
+  ) {
+    throw new FixRefusal(target, "unsafe-target");
   }
 }
 
-// The final component must be a name. A final "." and any ".." are refused. The kernel resolves them through a symbolic link that lstat
-// and O_NOFOLLOW do not see, and join collapses ".." lexically, so the checked path and the written path would name different places.
-function refuseUnsafeSpelling(target: string): void {
-  const names = target.split(sep);
-  const last = names[names.length - 1];
-  if (last === undefined || last === "" || last === "." || names.includes("..")) {
-    throw makeRealmError("SCHEMA_INVALID");
-  }
-}
-
-// The real path of path, or of its longest existing ancestor with the missing rest appended.
 function canonicalPath(path: string): string {
   const absolute = resolve(path);
   try {
     return realpathSync(absolute);
   } catch (error: unknown) {
     const parent = dirname(absolute);
-    const notFound = typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
-    if (!notFound || parent === absolute) {
-      throw makeRealmError("SCHEMA_INVALID");
-    }
+    if (!isMissing(error) || parent === absolute) throw new FixRefusal(path, "unsafe-target");
     return join(canonicalPath(parent), basename(absolute));
   }
 }
 
-function planStateMode(target: string, current: Stats | undefined): FixAction[] {
-  if (current === undefined) {
-    return [{ kind: "create-directory", path: target, mode: PRIVATE_DIR_MODE }];
-  }
-  const mode = current.mode & PERMISSION_BITS;
-  return mode === PRIVATE_DIR_MODE ? [] : [{ kind: "set-mode", path: target, previousMode: mode, mode: PRIVATE_DIR_MODE }];
+function isMissing(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
 }
 
-function planChildren(target: string, current: Stats | undefined): FixAction[] {
-  // lstat of a child needs search permission on the state directory. Without the owner's search bit the children cannot be looked at,
-  // so the fix refuses rather than assume they are safe. A state directory that does not exist yet has no children, so both are created.
-  if (current !== undefined && (current.mode & OWNER_SEARCH_BIT) === 0) {
-    throw makeRealmError("SCHEMA_INVALID");
-  }
-  const actions: FixAction[] = [];
-  for (const path of [join(target, "run"), sessionsDirOf(target)]) {
-    if (observeDirectory(path) === undefined) {
-      actions.push({ kind: "create-directory", path, mode: PRIVATE_DIR_MODE });
-    }
-  }
-  return actions;
-}
-
-// lstat, so a link is seen as a link and never followed. Undefined when the path is absent. A symbolic link, a path that is not a
-// directory, a directory another user owns, and any other failure are refused.
-function observeDirectory(path: string): Stats | undefined {
+function observeDirectory(path: string, requireOwner: boolean): Stats | undefined {
   let stats: Stats;
   try {
     stats = lstatSync(path);
   } catch (error: unknown) {
-    if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") {
-      return undefined;
-    }
-    throw makeRealmError("SCHEMA_INVALID");
+    if (isMissing(error)) return undefined;
+    throw new FixRefusal(path, "filesystem-error");
   }
-  if (stats.isSymbolicLink() || !stats.isDirectory() || stats.uid !== process.getuid?.()) {
-    throw makeRealmError("SCHEMA_INVALID");
+  if (stats.isSymbolicLink()) throw new FixRefusal(path, "symlink");
+  if (!stats.isDirectory()) throw new FixRefusal(path, "not-a-directory");
+  if (requireOwner && stats.uid !== process.getuid?.()) throw new FixRefusal(path, "foreign-owner");
+  if (requireOwner && (stats.mode & OWNER_READ_SEARCH) !== OWNER_READ_SEARCH) {
+    throw new FixRefusal(path, "unreadable-directory");
   }
   return stats;
 }
 
-// Creates a missing directory, then sets its mode. The umask can leave a new directory with fewer bits than requested, so the mode is
-// always set and then checked.
-function applyAction(action: FixAction): void {
-  if (action.kind === "create-directory") {
-    try {
-      mkdirSync(action.path, { mode: action.mode });
-    } catch {
-      throw makeRealmError("SCHEMA_INVALID");
-    }
+function pinDirectory(path: string, observed: Stats, options: SafeFixOptions): PinnedDirectory {
+  options.stageHook?.("before-open", path);
+  const fd = openSync(path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+  try {
+    const pin = { path, fd, stats: observed };
+    verifyPin(pin);
+    return pin;
+  } catch (error: unknown) {
+    closeSync(fd);
+    throw error;
   }
-  repairMode(action.path, action.mode);
 }
 
-// Sets the permission bits of a directory the current user owns, then checks that they took. The change is made by path, because a
-// directory whose mode lacks read or search permission cannot be opened to be changed through a descriptor. The path is observed just
-// before the change and again just after it, so a symbolic link, a directory another user owns, or a mode that did not take is refused.
-// Known race: the check and the chmod are separate system calls, so a link swapped in between is followed by the chmod. The window is
-// accepted because it is confined to the owner's own directory. Swapping that path needs write access to its parent, and the only
-// change made is to the mode of a directory the current user owns.
-function repairMode(path: string, mode: number): void {
-  const before = observeDirectory(path);
-  if (before === undefined) {
-    throw makeRealmError("SCHEMA_INVALID");
+function verifyPin(pin: PinnedDirectory): void {
+  const opened = fstatSync(pin.fd);
+  const named = lstatSync(pin.path);
+  if (
+    !opened.isDirectory() || !named.isDirectory() || named.isSymbolicLink() ||
+    opened.dev !== pin.stats.dev || opened.ino !== pin.stats.ino || opened.uid !== pin.stats.uid ||
+    named.dev !== opened.dev || named.ino !== opened.ino || named.uid !== opened.uid ||
+    realpathSync(pin.path) !== pin.path || readlinkSync(join(PROC_FD_DIR, String(pin.fd))) !== pin.path
+  ) {
+    throw new FixRefusal(pin.path, "changed-directory");
   }
-  if ((before.mode & PERMISSION_BITS) !== mode) {
-    try {
-      chmodSync(path, mode);
-    } catch {
-      throw makeRealmError("SCHEMA_INVALID");
-    }
+}
+
+function applyAction(action: FixAction, pins: Map<string, PinnedDirectory>, options: SafeFixOptions, applied: FixAction[]): void {
+  let pin = pins.get(action.path);
+  if (action.kind === "create-directory") {
+    const parent = pins.get(dirname(action.path));
+    if (parent === undefined) throw new FixRefusal(action.path, "unsafe-target");
+    verifyPin(parent);
+    const through = join(PROC_FD_DIR, String(parent.fd), basename(action.path));
+    // Non-recursive mkdir is no-clobber: a concurrent leaf creation is a refusal.
+    mkdirSync(through, { mode: action.mode });
+    const observed = observeDirectory(action.path, true);
+    if (observed === undefined) throw new FixRefusal(action.path, "changed-directory");
+    pin = pinDirectory(action.path, observed, options);
+    pins.set(action.path, pin);
   }
-  const after = observeDirectory(path);
-  if (after === undefined || (after.mode & PERMISSION_BITS) !== mode) {
-    throw makeRealmError("SCHEMA_INVALID");
+  if (pin === undefined) throw new FixRefusal(action.path, "changed-directory");
+  verifyPin(pin);
+  const before = fstatSync(pin.fd);
+  if (before.uid !== process.getuid?.()) throw new FixRefusal(action.path, "foreign-owner");
+  if ((before.mode & PERMISSION_BITS) !== action.mode) {
+    options.stageHook?.("before-chmod", action.path);
+    fchmodSync(pin.fd, action.mode);
   }
+  const after = fstatSync(pin.fd);
+  if (after.uid !== before.uid || (after.mode & PERMISSION_BITS) !== action.mode) {
+    throw new FixRefusal(action.path, "changed-directory");
+  }
+  applied.push(action);
+  verifyPin(pin);
 }
