@@ -6,7 +6,10 @@
 
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
+import { once } from "node:events";
 import { chmodSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync, existsSync } from "node:fs";
+import { createServer } from "node:http";
+import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -348,6 +351,98 @@ void test("the scripted provider binds loopback on a port the OS picks and serve
   assert.deepEqual(await response.json(), { object: "list", data: [{ id: "scripted", object: "model" }] });
 });
 
+// Send proxy-form HTTP directly to the listening stub, without consulting this test process's proxy environment.
+async function rawProviderRequest(port: number, request: string): Promise<string> {
+  const socket = createConnection({ host: "127.0.0.1", port });
+  let response = "";
+  socket.setEncoding("utf8");
+  const closed = once(socket, "close");
+  socket.once("connect", () => socket.write(request));
+  socket.on("data", (chunk: string) => {
+    response += chunk;
+  });
+  try {
+    await within(closed, BOUND_MS, "stub proxy refusal and socket close");
+    return response;
+  } finally {
+    socket.destroy();
+  }
+}
+
+void test("the stub port refuses CONNECT and absolute-URL requests without forwarding or consuming chat turns", async (t) => {
+  const { provider, baseUrl, port } = await startProvider(t);
+  // An actual local target detects even a CONNECT tunnel opened without sending an HTTP request.
+  let targetConnections = 0;
+  const target = createServer((_req, res) => res.end("must not be reached"));
+  target.on("connection", () => {
+    targetConnections += 1;
+  });
+  t.after(async () => {
+    const closed = once(target, "close");
+    target.close();
+    target.closeAllConnections();
+    await within(closed, BOUND_MS, "proxy target close");
+  });
+  const listening = once(target, "listening");
+  target.listen(0, "127.0.0.1");
+  await within(listening, BOUND_MS, "proxy target listen");
+  const address = target.address();
+  assert.ok(address !== null && typeof address === "object");
+  const authority = `127.0.0.1:${String(address.port)}`;
+  const body = JSON.stringify({ model: "scripted", messages: [{ role: "user", content: "must not become a chat" }] });
+  const lines = [
+    `CONNECT ${authority} HTTP/1.1`,
+    `GET http://${authority}/v1/models HTTP/1.1`,
+    `POST http://${authority}/v1/chat/completions HTTP/1.1`,
+  ];
+  for (const line of lines) {
+    const response = await rawProviderRequest(port, `${line}\r\nHost: ${authority}\r\nConnection: close\r\nContent-Length: ${String(Buffer.byteLength(body))}\r\n\r\n${body}`);
+    assert.match(response, /^HTTP\/1\.1 403 Forbidden\r\n/);
+  }
+  assert.equal(targetConnections, 0, "no refused request may open a connection to its target");
+  assert.deepEqual(provider.proxyRefusals, lines);
+  assert.equal(provider.requests.length, 0, "proxy discovery must not enter the chat transcript");
+  assert.deepEqual(provider.failures, [], "intentional proxy refusal is not a failed stub chat");
+
+  // Normal turns still work on the SAME port and keep their original call sequence after discovery was refused.
+  provider.onTurn(({ lastRole }) => lastRole === "tool" ? { text: "done" } : { call: { name: "write", args: { path: "normal.txt", content: "ok" } } });
+  const first = await chat(baseUrl, { model: "scripted", messages: [{ role: "user", content: "normal" }], tools: [WRITE_TOOL] });
+  const completion = await first.json() as { choices: { message: { tool_calls: { id: string }[] } }[] };
+  assert.equal(completion.choices[0]?.message.tool_calls[0]?.id, "call_000001");
+  const second = await chat(baseUrl, { messages: [{ role: "user", content: "normal" }, { role: "tool", content: "success" }] });
+  assert.equal(second.status, 200);
+  assert.deepEqual(provider.requests.map((request) => request.lastRole), ["user", "tool"]);
+  assert.equal(provider.requests[1]?.toolResultText, "success");
+  assert.deepEqual(provider.failures, []);
+});
+
+void test("provider stop reclaims a refused CONNECT whose peer never sends FIN and a partially sent HTTP request", async (t) => {
+  const { provider, port } = await startProvider(t);
+  const tunnel = createConnection({ host: "127.0.0.1", port, allowHalfOpen: true });
+  const partial = createConnection({ host: "127.0.0.1", port });
+  t.after(() => {
+    tunnel.destroy();
+    partial.destroy();
+  });
+  let response = "";
+  tunnel.setEncoding("utf8");
+  tunnel.on("data", (chunk: string) => {
+    response += chunk;
+  });
+  const refused = once(tunnel, "end");
+  tunnel.once("connect", () => tunnel.write("CONNECT never-forward.invalid:443 HTTP/1.1\r\nHost: never-forward.invalid:443\r\n\r\n"));
+  const incomplete = once(partial, "connect").then(() => {
+    partial.write("POST /v1/chat/completions HTTP/1.1\r\n");
+  });
+  await within(Promise.all([refused, incomplete]), BOUND_MS, "open proxy and partial HTTP peers");
+  assert.match(response, /^HTTP\/1\.1 403 Forbidden\r\n/);
+  assert.equal(tunnel.writableEnded, false, "the CONNECT peer intentionally has not sent FIN");
+  await within(provider.stop(), BOUND_MS, "stop with a half-open CONNECT and incomplete request");
+  await provider.stop();
+  assert.deepEqual(provider.requests, []);
+  assert.deepEqual(provider.failures, []);
+});
+
 void test("a streamed tool call, then the final text, in the exact chunk sequence of the prototype", async (t) => {
   const { provider, baseUrl } = await startProvider(t);
   provider.onTurn(({ userText, toolsOffered, lastRole }) => {
@@ -580,6 +675,31 @@ void test("the path option replaces the default PATH, and nothing else enters th
   });
   assert.equal(profile.env["PATH"], "/custom/bin:/usr/bin");
   assert.equal(Object.keys(profile.env).length, 4);
+});
+
+void test("refusing external network is opt-in and uses only the provider port in the isolated child environment", (t) => {
+  const ordinary = createOmpProfile({ providerPort: 4321, refuseExternalNetwork: false });
+  const refusing = createOmpProfile({ providerPort: 4321, refuseExternalNetwork: true, path: "/custom/bin:/usr/bin" });
+  t.after(() => {
+    ordinary.dispose();
+    refusing.dispose();
+  });
+  assert.deepEqual(Object.keys(ordinary.env).sort(), ["HOME", "PATH", "PI_CODING_AGENT_DIR", "XDG_CONFIG_HOME"]);
+  assert.deepEqual(refusing.env, {
+    PATH: "/custom/bin:/usr/bin",
+    HOME: refusing.home,
+    XDG_CONFIG_HOME: refusing.configHome,
+    PI_CODING_AGENT_DIR: refusing.agentDir,
+    HTTP_PROXY: "http://127.0.0.1:4321",
+    HTTPS_PROXY: "http://127.0.0.1:4321",
+    ALL_PROXY: "http://127.0.0.1:4321",
+    http_proxy: "http://127.0.0.1:4321",
+    https_proxy: "http://127.0.0.1:4321",
+    all_proxy: "http://127.0.0.1:4321",
+    NO_PROXY: "127.0.0.1,localhost",
+    no_proxy: "127.0.0.1,localhost",
+  });
+  assert.equal(readFileSync(refusing.modelsPath, "utf8"), modelsYaml(4321), "the chat endpoint stays on the same port");
 });
 
 for (const mode of ["advisory", "fail-closed"] as const) {
@@ -1103,6 +1223,61 @@ void test("startOmp spawns the wrapped command with exactly the given environmen
   );
   const exit = await within(session.close(), BOUND_MS, "close");
   assert.deepEqual(exit, { code: 0, signal: null });
+});
+
+void test("a refusing profile and its spawned child exclude ambient provider credentials, proxy credentials and extra environment", async (t) => {
+  // Synthetic sentinels only: never read credential values into a child or report them in evidence.
+  const ambient: Readonly<Record<string, string>> = {
+    OPENAI_API_KEY: "not-a-real-openai-key",
+    ANTHROPIC_API_KEY: "not-a-real-anthropic-key",
+    AWS_SECRET_ACCESS_KEY: "not-a-real-aws-key",
+    HTTP_PROXY: "http://fake-user:fake-password@ambient.invalid:9999",
+    HTTPS_PROXY: "http://fake-user:fake-password@ambient.invalid:9999",
+    ALL_PROXY: "http://fake-user:fake-password@ambient.invalid:9999",
+    NO_PROXY: "*",
+    http_proxy: "http://fake-user:fake-password@ambient.invalid:9999",
+    https_proxy: "http://fake-user:fake-password@ambient.invalid:9999",
+    all_proxy: "http://fake-user:fake-password@ambient.invalid:9999",
+    no_proxy: "*",
+    REALM_TEST_ENV_SENTINEL: "must-not-reach-child",
+  };
+  const previous = new Map<string, string | undefined>();
+  for (const [key, value] of Object.entries(ambient)) {
+    previous.set(key, process.env[key]);
+    process.env[key] = value;
+  }
+  t.after(() => {
+    for (const [key, value] of previous) {
+      if (value === undefined) {
+        Reflect.deleteProperty(process.env, key);
+      } else {
+        process.env[key] = value;
+      }
+    }
+  });
+  const profile = createOmpProfile({ providerPort: 4321, refuseExternalNetwork: true });
+  t.after(() => {
+    profile.dispose();
+  });
+  for (const key of Object.keys(ambient)) {
+    assert.equal(process.env[key], ambient[key], "profile creation never changes the parent's environment");
+    assert.notEqual(profile.env[key], ambient[key], `ambient ${key} must not enter the child environment`);
+  }
+  const script = join(profile.root, "env-omp.cjs");
+  writeFileSync(script, FAKE_OMP_SOURCE);
+  const session = startOmp({
+    bin: "omp-under-test",
+    env: profile.env,
+    cwd: profile.workspace,
+    extensionPath: "/ext/extension.js",
+    wrap: [process.execPath, script, "--"],
+  });
+  t.after(() => session.close({ graceMs: 100, termMs: 100, killMs: 1000 }));
+  await session.ready(BOUND_MS);
+  const ready = session.frames[0];
+  assert.ok(ready !== undefined);
+  assert.deepEqual(ready["env"], Object.keys(profile.env).sort(), "the actual spawned child receives only the isolated profile keys");
+  assert.equal(readFileSync(profile.modelsPath, "utf8"), modelsYaml(4321), "only the dummy stub key is configured");
 });
 
 void test("startOmp reports a binary that does not exist through the waits instead of throwing", async () => {

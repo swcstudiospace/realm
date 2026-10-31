@@ -11,11 +11,12 @@
 // Unix socket path (the profile throws when it does not).
 //
 // Frozen interface (other units import exactly these names):
-//   createOmpProfile({ providerPort, realm?, path? }): OmpProfile
+//   createOmpProfile({ providerPort, realm?, path?, refuseExternalNetwork? }): OmpProfile
 //     providerPort  the port of the ScriptedProvider; models.yml names provider `stub`, model `scripted`, api openai-completions
 //     realm         when given, also writes config/realm/config.json, state/policy.json (with the explicit mode) and state/
 //     path          the PATH value for Omp (the caller passes its own PATH so bun and omp resolve); defaults to the system bin dirs
-//   OmpProfile.env      exactly PATH, HOME, XDG_CONFIG_HOME, PI_CODING_AGENT_DIR (the daemon is in-process, so no driver roots)
+//     refuseExternalNetwork  default false; opt in to refusing proxies at the already-listening providerPort, only in this child
+//   OmpProfile.env      PATH, HOME, XDG_CONFIG_HOME, PI_CODING_AGENT_DIR, plus opt-in proxy controls (never ambient credentials)
 //   OmpProfile.root, agentDir, home, configHome, stateDir, workspace, modelsPath, configPath, policyPath, socketPath
 //   OmpProfile.dispose()  removes the root; safe to call twice
 //
@@ -45,6 +46,7 @@ export interface OmpProfileOptions {
   readonly providerPort: number;
   readonly realm?: ProfileRealm;
   readonly path?: string;
+  readonly refuseExternalNetwork?: boolean;
 }
 
 export interface OmpProfile {
@@ -116,6 +118,26 @@ export function createOmpProfile(options: OmpProfileOptions): OmpProfile {
       writeFileSync(policyPath, `${JSON.stringify({ workspaceRoots: [workspace], mode: options.realm.mode })}\n`, { mode: 0o600 });
       chmodSync(policyPath, 0o600);
     }
+    const env: Record<string, string> = {
+      PATH: options.path ?? DEFAULT_PATH,
+      HOME: home,
+      XDG_CONFIG_HOME: configHome,
+      PI_CODING_AGENT_DIR: agentDir,
+    };
+    if (options.refuseExternalNetwork === true) {
+      const proxy = `http://127.0.0.1:${String(providerPort)}`;
+      // ScriptedProvider refuses proxy traffic on its existing port; no extra HARN-03 port exemption.
+      Object.assign(env, {
+        HTTP_PROXY: proxy,
+        HTTPS_PROXY: proxy,
+        ALL_PROXY: proxy,
+        http_proxy: proxy,
+        https_proxy: proxy,
+        all_proxy: proxy,
+        NO_PROXY: "127.0.0.1,localhost",
+        no_proxy: "127.0.0.1,localhost",
+      });
+    }
     return {
       root,
       agentDir,
@@ -127,7 +149,7 @@ export function createOmpProfile(options: OmpProfileOptions): OmpProfile {
       configPath,
       policyPath,
       socketPath,
-      env: { PATH: options.path ?? DEFAULT_PATH, HOME: home, XDG_CONFIG_HOME: configHome, PI_CODING_AGENT_DIR: agentDir },
+      env,
       dispose,
     };
   } catch (error) {
