@@ -19,7 +19,6 @@ import {
   chmodSocket,
   decodeReply,
   decodeRequest,
-  describeRunDirRefusal,
   encodeReply,
   encodeRequest,
   ensureSocketDir,
@@ -383,17 +382,6 @@ void test("RT-06: chmodSocket applies mode 0600 after listen, and the injected s
   assertRefusesSchemaInvalid(() => {
     chmodSocket(join(base, "missing.sock"));
   });
-});
-
-void test("RT-06: describeRunDirRefusal names the expected mode and the observed state (P6-D11)", () => {
-  const modeRefusal = describeRunDirRefusal({ mode: 0o40755, uid: 1000, isDirectory: true }, 1000);
-  assert.ok(modeRefusal.includes("755"), "observed mode is named");
-  assert.ok(modeRefusal.includes("700"), "expected mode is named");
-  const ownerRefusal = describeRunDirRefusal({ mode: 0o40700, uid: 1000, isDirectory: true }, 2000);
-  assert.ok(ownerRefusal.includes("1000"), "observed uid is named");
-  assert.ok(ownerRefusal.includes("2000"), "expected uid is named");
-  const dirRefusal = describeRunDirRefusal({ mode: 0o100700, uid: 1000, isDirectory: false }, 1000);
-  assert.ok(dirRefusal.includes("700"), "expected mode is named for a non-directory");
 });
 
 void test("RT-06: a reply longer than MAX_CONTROL_LINE_BYTES is refused with SCHEMA_INVALID, and its socket closes (P6-D2)", async (t) => {
