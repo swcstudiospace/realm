@@ -3,12 +3,12 @@ gsd_state_version: "1.0"
 milestone: v3.0
 milestone_name: Containment by Default
 status: planning
-last_updated: "2026-10-29T13:07:46.226Z"
-last_activity: 2026-10-29
+last_updated: "2026-10-31"
+last_activity: 2026-10-31
 progress:
   total_phases: 9
   completed_phases: 0
-  total_plans: 0
+  total_plans: 9
   completed_plans: 0
   percent: 0
 ---
@@ -20,14 +20,33 @@ progress:
 See: .planning/PROJECT.md (updated 2026-10-29)
 
 **Core value:** Every file mutation by an agent either lands inside the realm under policy or fails closed, and the user can always see whether the realm is active or disconnected.
-**Current focus:** Milestone v3.0 Containment by Default (started 2026-10-29, phases 12 to 20): the eight proposals of quick task 261029-g7m under owner decisions D1 to D6. Milestone v2.0 (releases 0.2.0 to 0.2.3) is complete and archived. The next step after the roadmap is `/gsd-discuss-phase 12`, or `/gsd-autonomous` to run the phases.
+**Current focus:** v3.0 recovery, phases 12–20, original association `ut-mvvowl70-29165019`. Continue the existing invoked GSD-autonomous flat workflow, not a new discovery or phase-closeout run. Original GSD/docs tasks and accepted outputs remain DONE/preserved. New bounded docs task `Trealm31-prereq-onboarding-evidence` (`realm-prerequisites-onb-network-oct31`) owns only README, AGENTS, the Omp host snippet, REQUIREMENTS and this STATE; separate signed owners handle built-Realm network coverage and the original spike's two lint causes. The original 52-ID/code/proof snapshot in `phases/RECOVERY-2026-10-31.md` is preserved; the individual updates in REQUIREMENTS and this current section supersede only their stale evidence status.
 
 ## Current Position
 
-Phase: Not started (defining requirements)
-Plan: —
-Status: Defining requirements
-Last activity: 2026-10-29 — Milestone v3.0 started
+Phase: Recovery across phases 12–20; zero completed
+Plan: Five existing plans reused; four missing context/plan pairs authored (nine plans total, none recorded complete)
+Status: Bounded prerequisite edit-only wave after actual first-wave parent verification; literal built-Realm warm proof and current joined verification pending
+Last activity: 2026-10-31 — actual lifecycle/doctor/C4 evidence reconciled; normalized onboarding docs authored; no checks, commits or phase completion by this worker
+
+## Current Recovery Boundaries
+
+- Parent alone verifies the joined union after all three disjoint owners settle. Specialists run no tests, builds, typecheck, lint, formatters, docs checkers, gates, smokes, commits, git mutations, services or live actions. `docs_bundle` twins and GSD checker/executor/verifier are NOT RUN here. No SUMMARY/VERIFICATION passing report, milestone transition, archival, cleanup, gate dispatch or original downstream code is authorized by this unit.
+- Workflow provenance retained: the original GSD discovery reported nine phases, zero completed, five existing plans; four missing context/plan pairs were authored in the accepted records task. This unit reads the matching GSD-autonomous skill/workflow and uses the already invoked flat workflow; it does not restart discovery, mark a plan complete or claim a Skill/checker execution. All nine phases and all nine plans remain incomplete.
+- Actual parent first-wave verification (`firstWaveVerification`, `artifact://8723`): typecheck/lint passed; 2380 tests, 2351 passed/0 failed/29 skipped; 282 script tests passed; gate-closure4 modules/0 violations; build/pack/MCP passed. That MCP smoke is disconnected catalogue proof, not live sandbox proof. These results precede later network changes, and no aggregate total promotes unrelated requirements. Historical coverage, deliberate canonicalizer break/restoration, one-CPU and earlier production receipts remain dated historical evidence.
+- Latest parent union (`lastJoinedAttempt`, lint `artifact://8741`): typecheck PASSED, lint FAILED exactly two `no-unnecessary-condition` optional chains in `test/integration/omp-spike.test.ts` at955:43/960:55. Chained tests/scripts/docs/gates/build/pack/MCP did NOT RUN. The original HARN owner is renewed only for those two causes, without suppression; this A15 edits no harness file. A repair being authored is not a parent pass, and the previous first-wave pass does not verify current or future edits.
+- Current supplied C1–C3 pass remains scoped to registered read/write shadowing. Parent then actually passed native patch-mode C4 CREATE1/1,0skips on Omp18.12.6 (`firstWaveVerification.realC4`); the unissued-tag failure is superseded for C4, not erased historically. Realm read never issues an Omp native edit snapshot. HARN-02/HARN-04 and OMP-05 original native-write receipts remain historical; fake-backed guard/control proof is not production OMPX-05.
+- HARN-03 chronology: original warm38external+6DNS=44offenders; coldskip49 separate; refusing LOOPBACK PROXY LEVER0external/0DNS/7CONNECTrefusals narrower than the requirement. The original spike repair is now implemented-unverified, not NOT QUEUED. A separate signed built-Realm prerequisite authors the measured warm registered-write case against `dist/src/omp/extension.js`, with unchanged stub+three-discovery allowlist, no extra proxy port, zero external/DNS/offenders, same-profile coldskip separation and retained raw trace/version/tool-result/bytes/continuation. Its actual parent execution remains pending; a spike/text-only pass cannot substitute.
+- Fresh actual parent lifecycle (`freshLiveVerification`, separate private capture read in full): compiled Realm0.3.26, Linux uid5002, Podman5.7.1, public local image pin `localhost/realm-agentos@sha256:9511929b0b1a23120c30c04d2383317c7b8108ec8ee915e9a1538920e1c9596b`. Fresh generated config, no legacy root environment and no manual JSON edits: init fail-closed → up/status active, exactly1actualrootlesscontainer → down unbound. Driver/daemon selected the same physical generated config. Existing production live5 crash/reap/reattach and live6 actual MCP exec/write/read both passed (2 passed,0failed,0skipped). Original service restored active,0containers,owned temporary config removed; no permanent unit/package changes. The stale6632image failure is historical, not a current live blocker. This was a temporary matching rebuilt driver deployment, not released-installer provisioning proof.
+- Individual requirement reconciliation only: ONB-01/03 now checked on first-wave safety and actual generated-config driver/daemon proof; ONB-02 checked on31nonrootpasses/0skips and actual CLI dry-run/apply/idempotence (`firstWaveVerification.unprivilegedDoctor`). ONB-05/06 docs are authored with a historical local-link Omp18.12.6/package0.3.24 receipt and normalized actual lifecycle stdout; they stay unchecked pending parent docs checks. CRASH-04 stays unchecked: live5 asserts crash/status notice/counts and logged container id, but `startupReapLineFor` does not assert the logged `recordsDeleted` field. Emission in daemon source is not that missing runtime assertion.
+- README/snippet normalize actual private paths to explicit `WORKSPACE`, `STATE_DIR`, `CONFIG_HOME` and explain rootless Podman/OpenShell gateway/supervisor/matching-driver prerequisites, current safe `doctor --fix --dry-run`, no global CLI assumption and local-link install limits. No private transcript path, credential or registry-publication claim is published. The raw parent evidence stays private and unchanged. Current docs still need parent link/path/AGENTS-sync/default-mode checks; no self-gate pass is invented.
+- Control-plane limitation retained: `swarm_tool_call.input` exposes only an empty object here; two `shared_handover_verify` attempts returned `INVALID_INPUT`, missing `task_id`. No receipt or stored handover is claimed. This is a fresh root task with no upstream tasks, so missing own handover is expected; the supplied canonical signed assignment and parent continuation authorize the bounded edits. A01 retains responsibility for genuine result/handover preservation and canonical file ingestion; no raw task-store writes, synthetic results/gates or signing bypass.
+- The independent approved AgentSwarm npm/node:test QA prerequisite belongs to its correctly rooted controller, not this unit. Realm's `npm test` is compiler plus `node --test "dist/test/**/*.test.js"`; no direct-node shortcut, duplicate adapter work or sibling runtime/worktree edits here.
+- PR36 decisions and PR40 chronology remain unchanged. A15 never merges, deploys or releases. Main user edits in audit/log and runtime/config are untouched. Only the five signed docs/state paths are writable; absolute realpath containment is rechecked before writes. Spec/LICENSE/NOTICE/CHANGELOG/version, all other planning records and original accepted snapshots remain unchanged. FS-02, ANDA-01..04, UI-01, TD-06 and TD-10 settings retain their exclusions/owner statuses; PRD-DRV-01 remains only as MULTI-04 needs.
+
+The accumulated context and older run sections below are historical records,
+not a fresh instruction to restart discovery, install a runtime or close a phase.
+
 
 ## Performance Metrics
 
@@ -58,7 +77,7 @@ Full log lives in PROJECT.md Key Decisions table. Recent decisions affecting cur
 
 - [Roadmap]: Fixed 7-phase order; vertical slice (up, down, status, doctor on core and runtime) before plugin, MCP, and ACP
 - [Roadmap]: Podman-gated integration tests skip with a stated reason while Podman is below 5.x; no packages installed or upgraded
-- [Roadmap]: Policy defaults to advisory mode; fail-closed is opt-in per project
+- [Historical Roadmap; superseded by D4, 2026-10-29]: Policy defaults to advisory mode; fail-closed is opt-in per project. Current v3.0 default is fail-closed, advisory explicit opt-in.
 - [2026-10-22 user decision]: Continue without live validation; resume deferred live checks with /gsd:verify-work on a Podman 5.x host
 - [2026-10-22 user decision]: Anda consumes Realm over MCP (Anda boundary resolved as MCP consumer)
 - [2026-10-22 user decision]: S-08 launch layering confirmed
@@ -68,7 +87,7 @@ Full log lives in PROJECT.md Key Decisions table. Recent decisions affecting cur
 - [2026-10-22 user decision]: The daemon owns sessions. Surfaces attach by connecting and calling the idempotent up. There is no attach or detach protocol; the sandbox persists until realm down (docs/integration/runtime-decision.md, "Closure decisions")
 - [2026-10-22 user decision]: Phase 3 live items are deferred as human verification, as Phases 4 to 7 are. The milestone name v1.0 is provisional; archive still needs approval
 - [2026-10-22 user decision]: QUAL-01 amended with a named exception list (nine sites in eight exceptions; the rule is no silent catch blocks, except those exceptions)
-- [2026-10-22 user decision]: Containment default stays advisory; fail-closed is the documented opt-in for containment deployments
+- [Historical 2026-10-22 user decision; superseded by D4, 2026-10-29]: Containment default stays advisory; fail-closed is the documented opt-in for containment deployments. This is retained history, not the current default.
 - [2026-10-22 user decision]: OMP-03 accepted as an approximation: one status item, detail in its text, no tooltip API on this host
 - [2026-10-22 default, not answered]: Scope is roadmap phases only; a codebase-wide typed-lint pass is a follow-up
 - [2026-10-22 default, not answered]: No new test framework; a blocked item pauses the run

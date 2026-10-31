@@ -2,6 +2,17 @@
 
 Status: planning (2026-10-29). Milestone v3.0, Omp lane, first phase. Requirements HARN-01 to HARN-04 and OMPX-01 (`.planning/REQUIREMENTS.md`). Scope source: proposal 6 and the spike of proposal 1 in `.planning/quick/261029-g7m-lifecycle-and-persistence-findings/IMPROVEMENT-PROPOSALS.md`. The facts below come from `12-RESEARCH.md` (a research pass over the prototype, the Omp 18.12.6 package source and short live Omp runs, with evidence labels `[EX]` executed and `[CR]` code read); the planner and the implementation agents read it.
 
+## Recovery supersession (2026-10-31)
+
+Task `Trealm31-gsd-records`, execution correlation `ut-mvvowl70-29165019`. The original decisions/acceptance below are retained as dated history, not erased or silently treated as today's result. Accepted phase16 OMPX-04 name shadowing replaces native read/write with Realm's registered tools in both modes. Current disconnected registered write therefore refuses in advisory too, with no host file and no native advisory notice. Supplied current C1–C3 passed. The old D-1202 advisory native-write expectation and its historical Omp18.12.6 receipt do not describe that registered tool; the historical OMP-05 closure stays labelled scripted, not LLM-driven.
+
+The separate current **C4 native advisory host-create** control replaces the failed fabricated `[c4.txt#0000] REM` probe: C4-only `PI_EDIT_VARIANT=patch`, supported native `edit` CREATE `{path:'c4-created.txt',edits:[{op:'create',diff:'c4\n'}]}` against an absent target, advisory notice, successful edit result, exact host bytes and next provider result. Realm read gives bytes/digest, never a native Omp snapshot; reading first cannot issue a hashline tag. This is an unverified first-wave repair, not a production sandbox proof. The older optional production-stack “C4” in D-1201 is a historical case name, distinct from this current host-create control.
+
+HARN-03 current parent S11 warm FAILED with 38 external+6 DNS=44 offenders; cold separately skipped49. Same-run refusing LOOPBACK PROXY LEVER:0 external,0 DNS,7 refused CONNECTs. The lever is narrower evidence, not a clean warm registered-tool run. Zero external/zero DNS acceptance remains unchanged; research's fallback scoped-claim suggestion cannot waive it. HARN repair NOT QUEUED pending a functioning structured handover route and future signed assignment. No network repair or known-failure rerun occurs now.
+
+First joined recovery wave is edit-only; any older permission below to run a spike, gate, commit or amend acceptance is inactive for this wave. Parent alone verifies after C4/init/doctor/records owners land. Reuse existing harness/spike helpers and retain raw historical answers; actual production Omp `/workspace`+host+audit admission/result is required separately for OMPX-05. See `../RECOVERY-2026-10-31.md` P12/P16 and full52-ID mapping. No SUMMARY/VERIFICATION pass is authored here.
+
+
 ## Owner decisions that bind this phase
 - D2 (2026-10-29): when the harness passes live, the scripted-provider evidence closes OMP-05, with the basis stated: a scripted OpenAI-compatible provider drove Omp's own `write` tool through the extension's guard; it is not an LLM-driven run. The status change is made in `.planning/REQUIREMENTS.md` (the OMP-05 traceability row and its carried entry) only after the live run passes.
 - D3 (2026-10-29): in fail-closed mode the extension may remove or block built-in tools by the mechanism the spike proves. This phase produces the proof; Phase 16 acts on it.

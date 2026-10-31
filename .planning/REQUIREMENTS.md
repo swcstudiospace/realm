@@ -6,6 +6,10 @@
 
 All v3.0 requirements are hypotheses until shipped and verified.
 
+**Recovery record (2026-10-31):** original task `Trealm31-gsd-records`, execution correlation `ut-mvvowl70-29165019`, remains accepted/DONE; the original 52-ID/code/recipe map in `phases/RECOVERY-2026-10-31.md` is retained as its historical snapshot. Bounded prerequisite task `Trealm31-prereq-onboarding-evidence`, correlation `realm-prerequisites-onb-network-oct31`, updates only the five signed docs/state paths within the existing invoked autonomous flat workflow. Individual ONB-01/02/03 evidence below supersedes their old pending status; unrelated unchecked rows are not promoted by a suite total. Historical checked HARN-02/HARN-04 and OMP-05 receipts remain intact. No aggregate gate, phase/SUMMARY/VERIFICATION completion or milestone closure is inferred; all nine phases remain incomplete.
+
+**Parent evidence boundary:** the first joined wave passed typecheck/lint, 2380 tests (2351 passed, 0 failed, 29 skipped), 282 script tests, gate-closure (4 modules, 0 violations), build/pack/MCP (`firstWaveVerification`, parent artifact `artifact://8723`). MCP smoke there covered disconnected catalogue behaviour, not a live sandbox. The latest post-network union passed typecheck, then FAILED lint on two unnecessary optional chains in `test/integration/omp-spike.test.ts` at 955:43 and 960:55; all later chained tests/scripts/docs/gates/build/pack/MCP were NOT RUN (`lastJoinedAttempt`, lint artifact `artifact://8741`). The original owner is correcting those causes, not suppressing them. Neither result verifies future edits in this prerequisite wave; parent alone verifies the joined changes.
+
 **Milestone v2.0 closed 2026-10-29.** The full v2.0 table is archived at `.planning/milestones/v2.0-REQUIREMENTS.md`. The requirements it left open (FS-02, ANDA-01 to ANDA-04, OMP-05, PRD-DRV-01) and the accepted limitation UI-01 are listed under "Carried from v2.0" below. OMP-05 is closed in this milestone by HARN-04; the others are not in this milestone.
 
 ## v3.0 Requirements
@@ -14,7 +18,9 @@ All v3.0 requirements are hypotheses until shipped and verified.
 
 - [ ] **HARN-01**: A gated test harness starts an isolated Omp profile whose model provider is a local OpenAI-compatible stub returning a scripted sequence (one `write` tool call, then a final message), loads the built extension with `-e`, and drives Omp over RPC pipes (`--mode rpc-ui`), with no pseudo-terminal, no credentials and no tokens
 - [x] **HARN-02**: The harness runs three cases: advisory mode with the realm down (the notice is shown and the file exists), fail-closed mode with the realm down (the call is blocked with `REALM_NOT_ACTIVE` and the file does not exist), and the realm active (the call proceeds; this is the baseline that Phase 16 changes)
+  Recovery supersession: the checked three-case native-write receipt is historical. Phase16's accepted OMPX-04 same-name replacement means disconnected registered Realm write now refuses even in advisory mode and creates no host file. Supplied current C1–C3 passed on those semantics. The parent now separately verified C4 native patch-mode edit CREATE: 1 passed, 0 skipped on Omp18.12.6 (`firstWaveVerification.realC4`, `artifact://8723`), with no unissued snapshot tag. This is fake-backed host guard/control evidence, not production sandbox/audit proof. Do not erase the original receipt or claim registered-tool refusal meets its old native file-exists expectation.
 - [ ] **HARN-03**: One command runs the harness against a built extension and a local Omp and passes; it records the Omp version and makes no connection to any host except the loopback stub (and Omp's three loopback discovery probes, D-1205). On a warmed profile, no connection outside the loopback stub is permitted; a cold profile is reported as skipped, its model-catalog refresh being the recorded reason. The command is gated like the production live suite, skipping with a stated reason when Omp, Podman or the gate variable is absent
+  Evidence chronology: original S11 warm FAILED with 38 external + 6 DNS = 44 offenders; cold separately skipped with 49 offenders. The same-run refusing LOOPBACK PROXY LEVER observed 0 external, 0 DNS and 7 refused CONNECTs, narrower than a built-Realm warm harness pass. The original signed spike repair is now implemented-unverified, not NOT QUEUED; the latest parent union stopped at its two lint errors before later checks. The separately signed built-Realm prerequisite owns strict measured warm registered-write coverage with only `defaultAllow(stubPort)` (stub + discovery11434/8080/1234), no extra proxy port, zero external/DNS/offenders, separate cold skip, exact bytes/tool result/provider continuation and raw trace/version. Literal built-Realm warm execution remains pending parent proof; no spike/text-only substitute or network exemption completes HARN-03.
 - [x] **HARN-04**: OMP-05 is recorded complete in the traceability table on the harness evidence, and the recorded basis states that the run is scripted through Omp's own `write` tool and is not LLM-driven (owner decision D2)
 
 ### Quality and supply-chain ratchet (QR)
@@ -34,18 +40,23 @@ All v3.0 requirements are hypotheses until shipped and verified.
 - [ ] **CRASH-02**: At startup, for each audit file, every admission line with no following result line gets one reconciliation line, marked as a reconciliation and not an execution result, using the catalogue code the owner approved (owner decision D5: an existing code if one fits, otherwise the one allowed addition); a second start appends none
 - [ ] **CRASH-03**: The sessions directory is fsynced after `SessionStore.delete`, reusing the directory-sync helper of `src/fs/atomic-write.ts`
 - [ ] **CRASH-04**: The startup reap logs the container ids removed and the number of records deleted, and the next attach shows a status-read notice, so a destroyed sandbox is never silent
+  Current bounded disposition: production live5 actually passed on 2026-10-31 with the rebuilt driver (live5/6 together: 2 passed, 0 skipped). Its assertions cover real SIGKILL, replacement active with exactly one container, status-read notice with 1 container and at least 1 session record, and a `daemon.startup` log entry naming the destroyed container. However, `startupReapLineFor` (`test/support/production-live.ts`) asserts `containersRemoved` and `containerIds`, **not the logged `recordsDeleted` count**. `src/daemon/main.ts` emits that field, but source emission is not the missing runtime assertion. Keep CRASH-04 unchecked until the logged record-deletion count is asserted against the actual run; Phase19 selective-notice preservation also remains a separate future obligation.
 - [ ] **CRASH-05**: Real-SIGKILL tests: a child process writes through `atomicWriteFile` and kills itself from the stage hook at each of the four stages (`after-temp-write`, `after-fsync`, `before-rename`, `after-recheck`); for each stage the parent asserts the original is intact, names the orphan temp file, and asserts the next sweep removes it
 - [ ] **CRASH-06**: TD-01: the refusal cause code is carried across the daemon for MCP and ACP, with a daemon-path equivalence test beside `test/surfaces/equivalence.test.ts` showing the same cause code over MCP and ACP as in process
 - [ ] **CRASH-07**: TD-04: when the recorded container is gone, a retry from the error state creates a new container instead of failing with `OPENSHELL_START_FAILED`; a controller test with a removed container reaches `active` on retry
 
 ### Zero-config onboarding (ONB)
 
-- [ ] **ONB-01**: `realm init` writes `config.json` and `policy.json` templates, creates the state directory with mode 0700, refuses to overwrite an existing file, and takes the image digest as an argument or from `release/` (it never invents one); on a clean host with Podman 5.x, `realm init` then `realm up` reaches active with no manual file edit
-- [ ] **ONB-02**: `realm doctor --fix` applies only the safe subset (create missing directories, set the state directory to 0700), supports a dry-run mode, refuses symlinked directories, is idempotent and reports what it changed; everything else stays prose; run on a state directory with mode 0755 it changes it to 0700, and a second run changes nothing
-- [ ] **ONB-03**: The three `REALM_DRIVER_*` roots (secret, workspace and state) move into `config.json` with a default derived under `stateDir`; the environment variables are removed (clean cutover, no shim); the driver and the daemon read the same source
+- [x] **ONB-01**: `realm init` writes `config.json` and `policy.json` templates, creates the state directory with mode 0700, refuses to overwrite an existing file, and takes the image digest as an argument or from `release/` (it never invents one); on a clean host with Podman 5.x, `realm init` then `realm up` reaches active with no manual file edit
+  Individually verified (2026-10-31 parent): first-wave init safety suite in `artifact://8723` plus actual fresh generated-config lifecycle on compiled Realm0.3.26/Podman5.7.1, uid5002. Init reported fail-closed; up/status active with exactly one actual rootless container; down unbound, zero containers. No manual JSON edits. `test/cli/init.test.ts` covers 0600 templates, 0700 state/derived roots, no overwrite and unsafe-root refusals. README normalizes the actual stdout. Scope requires an already provisioned gateway/supervisor/rootless Podman and matching rebuilt compute driver, not a claim that init or a released installer provisions those prerequisites.
+- [x] **ONB-02**: `realm doctor --fix` applies only the safe subset (create missing directories, set the state directory to 0700), supports a dry-run mode, refuses symlinked directories, is idempotent and reports what it changed; everything else stays prose; run on a state directory with mode 0755 it changes it to 0700, and a second run changes nothing
+  Individually verified (2026-10-31 parent): 31 nonroot doctor tests passed, 0 skipped, uid5002; actual CLI dry-run/apply/idempotence also passed (`firstWaveVerification.unprivilegedDoctor`, `artifact://8723`). `test/cli/cli.test.ts` exercises the real runCli consumer with 0755→0700, run/sessions creation, dry-run immutability, symlink refusal, unchanged unrelated contents and `fixes: []` on repeat. Current README/snippet command documentation still awaits parent docs checks.
+- [x] **ONB-03**: The three `REALM_DRIVER_*` roots (secret, workspace and state) move into `config.json` with a default derived under `stateDir`; the environment variables are removed (clean cutover, no shim); the driver and the daemon read the same source
+  Individually verified (2026-10-31 parent): fresh actual driver/daemon run selected the same generated config, no legacy root environment and no manual JSON edits (`freshLiveVerification.sameConfig`). `runtimeRootsOf` derives secret/sandbox-state roots under stateDir; workspaceRoot is explicit. Driver `loadDriverProcessConfig` and daemon `runDaemon` read that shared source. Driver image/socket/gateway/supervisor settings remain their documented separate environment contract. Temporary rebuilt-driver success does not prove a released service was permanently upgraded.
 - [ ] **ONB-04**: `realm doctor` checks that the three roots are set, absolute and mode-correct, that the driver socket is present with mode 0600 in a 0700 directory, and that the gateway is reachable (TD-03); a failure names the check and the fix, and a unit test covers each check
 - [ ] **ONB-05**: `omp plugin install` is verified live under an isolated profile, the result is recorded in `docs/hosts/snippets/omp.md`, and `README.md` carries the install steps
 - [ ] **ONB-06**: `README.md` carries a quickstart with a transcript, captured on a real Podman 5.x host, of `init`, `up`, `status` and `down`
+  Docs authored in this bounded unit: README now carries the isolated local-link commands and exact normalized generated-config lifecycle stdout; Omp snippet retains the historical Omp18.12.6/package0.3.24 install receipt. ONB-05/06 stay unchecked pending parent docs/link/path/AGENTS-sync/default-mode checks after these edits. No registry/marketplace or current-package installed-load proof is substituted.
 - [ ] **ONB-07**: The daemon starts with an allowlisted environment (`PATH`, `HOME`, `XDG_RUNTIME_DIR`, `XDG_CONFIG_HOME` and what the roots need) in both `startDetachedDaemon` and the CLI's spawn; a test shows that a sentinel variable does not reach the daemon
 
 ### Containment default (DEF)
@@ -157,58 +168,58 @@ Each v3.0 requirement maps to exactly one phase. The carried requirements keep t
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| HARN-01 | Phase 12 | Pending |
-| HARN-02 | Phase 12 | Complete (2026-10-30): the three cases passed live on Omp 18.12.6, 3 of 3, 0 skipped |
-| HARN-03 | Phase 12 | Pending |
-| HARN-04 | Phase 12 | Complete (2026-10-30): OMP-05 recorded complete with the scripted-write basis |
-| OMPX-01 | Phase 12 | Pending |
-| QR-01 | Phase 13 | Pending |
-| QR-02 | Phase 13 | Pending |
-| QR-03 | Phase 13 | Pending |
-| QR-04 | Phase 13 | Pending |
-| QR-05 | Phase 13 | Pending |
-| QR-06 | Phase 13 | Pending |
-| QR-07 | Phase 13 | Pending |
-| QR-08 | Phase 13 | Pending |
-| CRASH-01 | Phase 14 | Pending |
-| CRASH-02 | Phase 14 | Pending |
-| CRASH-03 | Phase 14 | Pending |
-| CRASH-04 | Phase 14 | Pending |
-| CRASH-05 | Phase 14 | Pending |
-| CRASH-06 | Phase 14 | Pending |
-| CRASH-07 | Phase 14 | Pending |
-| ONB-01 | Phase 15 | Pending |
-| ONB-02 | Phase 15 | Pending |
-| ONB-03 | Phase 15 | Pending |
-| ONB-04 | Phase 15 | Pending |
-| ONB-05 | Phase 15 | Pending |
-| ONB-06 | Phase 15 | Pending |
-| ONB-07 | Phase 15 | Pending |
-| DEF-01 | Phase 15 | Pending |
-| DEF-02 | Phase 15 | Pending |
-| OMPX-02 | Phase 16 | Pending |
-| OMPX-03 | Phase 16 | Pending |
-| OMPX-04 | Phase 16 | Pending |
-| OMPX-05 | Phase 16 | Pending |
-| OBS-01 | Phase 17 | Pending |
-| OBS-02 | Phase 17 | Pending |
-| OBS-03 | Phase 17 | Pending |
-| OBS-04 | Phase 17 | Pending |
-| MULTI-01 | Phase 18 | Pending |
-| MULTI-02 | Phase 18 | Pending |
-| MULTI-03 | Phase 18 | Pending |
-| MULTI-04 | Phase 18 | Pending |
-| MULTI-05 | Phase 18 | Pending |
-| MULTI-06 | Phase 18 | Pending |
-| RES-01 | Phase 19 | Pending |
-| RES-02 | Phase 19 | Pending |
-| RES-03 | Phase 19 | Pending |
-| RES-04 | Phase 19 | Pending |
-| RES-05 | Phase 19 | Pending |
-| REL-01 | Phase 20 | Pending |
-| REL-02 | Phase 20 | Pending |
-| REL-03 | Phase 20 | Pending |
-| REL-04 | Phase 20 | Pending |
+| HARN-01 | Phase 12 | Implemented-unverified; supplied current C1–C3, P12 isolated RPC/version/provider evidence |
+| HARN-02 | Phase 12 | Historical Complete (2026-10-30, 3/3, 0 skipped, Omp18.12.6 native write); current shadowing preserved; parent C4 native CREATE1pass/0skip, P12 |
+| HARN-03 | Phase 12 | Original warm44/coldskip49 retained; proxy0/0/7 narrower; signed spike repair implemented-unverified, latest lint blocked later checks; literal built-Realm warm proof pending, P12 |
+| HARN-04 | Phase 12 | Historical Complete (2026-10-30): OMP-05 recorded with scripted native-write basis, not LLM-driven; preserve receipt, P12 |
+| OMPX-01 | Phase 12 | Historical versioned spike answers; parent verified current C4 native CREATE1pass/0skip on Omp18.12.6; not broad current-spike/containment closure, P12 |
+| QR-01 | Phase 13 | Implemented-unverified; actual audit-job run needed, P13A |
+| QR-02 | Phase 13 | Implemented-unverified configuration; TD-10 settings excluded, P13A |
+| QR-03 | Phase 13 | Missing Finish/repair actual-tarball smoke; real positive/four negatives unverified, P13A |
+| QR-04 | Phase 13 | Implemented with historical positive coverage; real raised-floor rejection and CI floor provenance unresolved, P13B |
+| QR-05 | Phase 13 | Implemented-unverified; historical one-CPU2317/30 skips is not CPU-quota-container/load proof, P13C |
+| QR-06 | Phase 13 | Shipped cleanup/source support; current reference inventory and intentional-seam disposition unverified, P13B |
+| QR-07 | Phase 13 | Historical deliberate break3/11/restoration11/11 accepted; current suite/provenance attachment pending, P13B; FS-02 unchanged |
+| QR-08 | Phase 13 | Implemented sampled schedule; permission/fallback disposition and run artifact unresolved, P13B |
+| CRASH-01 | Phase 14 | Implemented-unverified including startup wiring; conditional negative-case pass/skip attribution pending, P14 |
+| CRASH-02 | Phase 14 | Implemented-unverified planted-start/idempotence; explicit live in-chain presence pending under OBS, P14/P17 |
+| CRASH-03 | Phase 14 | Implemented-unverified durable delete/fsync failure cases, P14 |
+| CRASH-04 | Phase 14 | Live5 passed crash/notice/container-id assertions; logged recordsDeleted count not asserted by live helper, so full acceptance stays unverified, P14/P17; phase19 selective notice remains |
+| CRASH-05 | Phase 14 | Implemented-unverified four real child SIGKILL stages, original/orphan/sweep controls, P14 |
+| CRASH-06 | Phase 14 | Implemented-unverified cause-code equivalence; no wire-shape-unification expansion, P14 |
+| CRASH-07 | Phase 14 | Implemented-unverified stale-container one-shot controller retry, P14 |
+| ONB-01 | Phase 15 | Individually verified2026-10-31: first-wave init safety + actual fresh generated-config init→active→unbound, Realm0.3.26/Podman5.7.1; preconfigured matching stack required, P15 |
+| ONB-02 | Phase 15 | Individually verified2026-10-31: nonroot31pass/0skip + actual CLI dry-run/apply/idempotence; docs updates await parent checks, P15 |
+| ONB-03 | Phase 15 | Individually verified2026-10-31: actual matching rebuilt driver/daemon share generated config, no legacy root env/manual JSON; not permanent released-driver provisioning, P15 |
+| ONB-04 | Phase 15 | Implemented diagnostics; actionable post-init missing-root repair guidance unresolved, P15 |
+| ONB-05 | Phase 15 | Historical isolated local link Omp18.12.6/package0.3.24 retained; README/snippet steps now authored, parent docs checks pending; registry/current installed-load not claimed, P15 |
+| ONB-06 | Phase 15 | Actual generated-config lifecycle captured Realm0.3.26/Podman5.7.1; normalized exact README transcript authored, parent docs checks pending, P15 |
+| ONB-07 | Phase 15 | Implemented-unverified real-child sentinel tests on both daemon launches, P15 |
+| DEF-01 | Phase 15 | Implemented-unverified fail-closed schema/loader/provenance, P0/P15 |
+| DEF-02 | Phase 15 | Implemented-unverified current docs/default guard/fixture cutover; historical exclusions retained, P0/P15 |
+| OMPX-02 | Phase 16 | Registered frozen calls implemented; successful-read regression/model-visible proof incomplete, P16 |
+| OMPX-03 | Phase 16 | Missing active-set/lifetime transition correctness and actual catalogue bash proof, P12/P16 |
+| OMPX-04 | Phase 16 | Same-name replacement implemented; safe restore/mode publication and current advisory proof incomplete, P12/P16 |
+| OMPX-05 | Phase 16 | Missing real production Omp path coverage; live-gated /workspace+host+actual audit pair, P16 |
+| OBS-01 | Phase 17 | Basic chain implemented; approved selectors/head/anchor/prefix-tail verification missing, P17 |
+| OBS-02 | Phase 17 | Request logger implemented; common startup/failure shape missing; live correlation incomplete, P17 |
+| OBS-03 | Phase 17 | Implemented with historical real metrics/socket-only proof; current joins unverified, P17 |
+| OBS-04 | Phase 17 | Historical real gateway-loss proof accepted; driver-only exec/realm-status observation still live-gated, P17 |
+| MULTI-01 | Phase 18 | Decision recorded2026-10-30/PR36; retain chronology, not runtime completion, P18 |
+| MULTI-02 | Phase 18 | Missing per-project id/registry/mount; existing pin primitives reused, P18 |
+| MULTI-03 | Phase 18 | Missing selected routing/local down; existing per-id stores/handle locks reused, P18 |
+| MULTI-04 | Phase 18 | Missing authoritative gateway→driver selected-workspace transport, P18 |
+| MULTI-05 | Phase 18 | Missing per-project acceptance/scenario; live-gated two inspected mounts/isolation/down, P18 |
+| MULTI-06 | Phase 18 | Missing aggregate reservation/accounting contract+implementation; no preexisting aggregate knob invented, P18 |
+| RES-01 | Phase 19 | Decision recorded2026-10-30/PR36; actual labels/order alignment before code, P19 |
+| RES-02 | Phase 19 | Missing dual daemon/driver selective adoption and hydration/supervision, P19 |
+| RES-03 | Phase 19 | Missing real scratch volume/policy/exact verifier/proven cleanup; attachment/inspect live-gated, P19 |
+| RES-04 | Phase 19 | Missing filesystem-spike-selected snapshot/restore service+CLI/quiescence, P19 |
+| RES-05 | Phase 19 | Missing new real acceptance; historical replacement/scratch loss is opposite of target, P19 |
+| REL-01 | Phase 20 | Implemented-unverified in open PR40; actual release-run permission/handoff evidence live-gated, P20 |
+| REL-02 | Phase 20 | Normal+repair six-file provenance implemented-unverified; actual downloaded-subject attestation proof live-gated, P20 |
+| REL-03 | Phase 20 | Prerelease workflow implemented; known-good docs selection missing; approved test rollback/deployment evidence live-gated, P20 |
+| REL-04 | Phase 20 | Missing multi-commit non-revert removed-feature semantics beyond canonical revert pairing, P20 |
 | FS-02 | Phase 2 | Partial (accepted approximation, confirmed by the owner 2026-10-23; rebind verified through the pinned root; check-to-use windows remain on the read and write paths; audit G-10) |
 | ANDA-01 | Phase 3 | Partial (live-gated) |
 | ANDA-02 | Phase 3 | Partial (live-gated) |
