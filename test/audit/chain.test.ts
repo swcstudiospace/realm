@@ -5,7 +5,15 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { appendAudit } from "../../src/audit/log.js";
-import { AUDIT_GENESIS_PREV, AUDIT_LINE_MAX_BYTES, sha256Hex, verifyAuditFile } from "../../src/audit/chain.js";
+import {
+  AUDIT_GENESIS_PREV,
+  AUDIT_LINE_MAX_BYTES,
+  checkAuditFile,
+  formatAuditCheckpoint,
+  parseAuditCheckpoint,
+  sha256Hex,
+  verifyAuditFile,
+} from "../../src/audit/chain.js";
 import { runCli } from "../../src/cli/main.js";
 
 const SESSION = "11111111-2222-4333-8444-555555555555";
@@ -220,3 +228,159 @@ async function withFile(run: (file: string) => Promise<void>): Promise<void> {
     rmSync(dir, { recursive: true, force: true });
   }
 }
+
+function seed(stateDir: string, count: number): string[] {
+  for (let i = 0; i < count; i += 1) {
+    appendAudit(stateDir, { sessionId: SESSION, tool: "write", outcome: "ok", phase: "result", path: `f${String(i)}.txt` });
+  }
+  return linesOf(auditFile(stateDir));
+}
+
+function lineHash(lines: readonly string[], seq: number): string {
+  return sha256(lines[seq - 1] ?? "");
+}
+
+function writeLines(file: string, lines: readonly string[]): void {
+  writeFileSync(file, `${lines.join("\n")}\n`);
+}
+
+void test("OBS-01 checkpoint: a clean log verifies against its saved head and reports that head", () => {
+  withStateDir((stateDir) => {
+    const lines = seed(stateDir, 3);
+    const check = checkAuditFile(auditFile(stateDir), { head: `3:${lineHash(lines, 3)}` });
+    assert.equal(check.exitCode, 0);
+    assert.equal(check.ok, true);
+    assert.deepEqual(check.head, { seq: 3, line: 3, hash: lineHash(lines, 3) });
+  });
+});
+
+void test("OBS-01 checkpoint: tail loss is reported at the last line still present", () => {
+  withStateDir((stateDir) => {
+    const lines = seed(stateDir, 3);
+    writeLines(auditFile(stateDir), lines.slice(0, 2));
+    const check = checkAuditFile(auditFile(stateDir), { head: `3:${lineHash(lines, 3)}` });
+    assert.equal(check.exitCode, 1);
+    assert.equal(check.reason, "tail-loss");
+    assert.equal(check.line, 2);
+  });
+});
+
+void test("OBS-01 checkpoint: an anchor past the end of a shorter log is reported as shorter-log at the last line", () => {
+  withStateDir((stateDir) => {
+    const lines = seed(stateDir, 3);
+    writeLines(auditFile(stateDir), lines.slice(0, 1));
+    const check = checkAuditFile(auditFile(stateDir), { anchor: `2:${lineHash(lines, 2)}` });
+    assert.equal(check.exitCode, 1);
+    assert.equal(check.reason, "shorter-log");
+    assert.equal(check.line, 1);
+  });
+});
+
+void test("OBS-01 checkpoint: a prefix rewritten with a re-linked successor passes the chain but fails the anchor at the anchored line", () => {
+  withStateDir((stateDir) => {
+    const lines = seed(stateDir, 3);
+    const edited2 = JSON.stringify({ ...(JSON.parse(lines[1] ?? "") as Record<string, unknown>), path: "forged.txt" });
+    const relinked3 = JSON.stringify({ ...(JSON.parse(lines[2] ?? "") as Record<string, unknown>), prev: sha256(edited2) });
+    writeLines(auditFile(stateDir), [lines[0] ?? "", edited2, relinked3]);
+    assert.equal(verifyAuditFile(auditFile(stateDir)).ok, true);
+    const check = checkAuditFile(auditFile(stateDir), { anchor: `2:${lineHash(lines, 2)}` });
+    assert.equal(check.exitCode, 1);
+    assert.equal(check.reason, "prefix-changed");
+    assert.equal(check.line, 2);
+  });
+});
+
+void test("OBS-01 checkpoint: with a head pin, edit, delete and reorder each name the line the chain breaks at", () => {
+  withStateDir((stateDir) => {
+    const lines = seed(stateDir, 3);
+    const head = `3:${lineHash(lines, 3)}`;
+    const file = auditFile(stateDir);
+
+    const edited = [...lines];
+    edited[1] = JSON.stringify({ ...(JSON.parse(lines[1] ?? "") as Record<string, unknown>), path: "changed.txt" });
+    writeLines(file, edited);
+    const editCheck = checkAuditFile(file, { head });
+    assert.equal(editCheck.reason, "prev-mismatch");
+    assert.equal(editCheck.line, 3);
+
+    writeLines(file, [lines[0] ?? "", lines[2] ?? ""]);
+    const deleteCheck = checkAuditFile(file, { head });
+    assert.equal(deleteCheck.reason, "seq-gap");
+    assert.equal(deleteCheck.line, 2);
+
+    writeLines(file, [lines[0] ?? "", lines[2] ?? "", lines[1] ?? ""]);
+    const reorderCheck = checkAuditFile(file, { head });
+    assert.equal(reorderCheck.exitCode, 1);
+    assert.equal(reorderCheck.line, 2);
+  });
+});
+
+void test("OBS-01 checkpoint: a torn tail is not a seq, so the head still verifies and the fragment is excluded", () => {
+  withStateDir((stateDir) => {
+    const lines = seed(stateDir, 2);
+    writeFileSync(auditFile(stateDir), `${lines.join("\n")}\n{"tool":"wri`);
+    const check = checkAuditFile(auditFile(stateDir), { head: `2:${lineHash(lines, 2)}` });
+    assert.equal(check.exitCode, 0);
+    assert.equal(check.tornTail, true);
+    assert.equal(check.head?.seq, 2);
+  });
+});
+
+void test("OBS-01 checkpoint: legacy lines are reported as unprotected and no pin covers them", () => {
+  withStateDir((stateDir) => {
+    mkdirSync(join(stateDir, "audit"), { recursive: true });
+    const legacy = JSON.stringify({ tool: "write", outcome: "ok" });
+    writeFileSync(auditFile(stateDir), `${legacy}\n`);
+    appendAudit(stateDir, { sessionId: SESSION, tool: "write", outcome: "ok", phase: "result", path: "a.txt" });
+    const lines = linesOf(auditFile(stateDir));
+    const check = checkAuditFile(auditFile(stateDir), { head: `1:${sha256(lines[1] ?? "")}` });
+    assert.equal(check.exitCode, 0);
+    assert.equal(check.unprotected, 1);
+    assert.equal(check.head?.line, 2);
+  });
+});
+
+void test("OBS-01 checkpoint: a reconciliation line is a chained line, so editing it breaks the next line", () => {
+  withStateDir((stateDir) => {
+    appendAudit(stateDir, { sessionId: SESSION, tool: "write", outcome: "ok", phase: "admission", path: "a.txt" });
+    appendAudit(stateDir, {
+      sessionId: SESSION,
+      tool: "write",
+      outcome: "AUDIT_OUTCOME_UNKNOWN",
+      phase: "reconciliation",
+      path: "a.txt",
+    });
+    appendAudit(stateDir, { sessionId: SESSION, tool: "write", outcome: "ok", phase: "result", path: "a.txt" });
+    const file = auditFile(stateDir);
+    const lines = linesOf(file);
+    assert.equal(verifyAuditFile(file).ok, true);
+    const edited = [...lines];
+    edited[1] = JSON.stringify({ ...(JSON.parse(lines[1] ?? "") as Record<string, unknown>), outcome: "ok" });
+    writeLines(file, edited);
+    const check = checkAuditFile(file, { head: `3:${lineHash(lines, 3)}` });
+    assert.equal(check.reason, "prev-mismatch");
+    assert.equal(check.line, 3);
+  });
+});
+
+void test("OBS-01 checkpoint: malformed checkpoint text and an unreadable file exit 2, never 0 or 1", () => {
+  withStateDir((stateDir) => {
+    const lines = seed(stateDir, 1);
+    const bad = checkAuditFile(auditFile(stateDir), { head: "not-a-checkpoint" });
+    assert.equal(bad.exitCode, 2);
+    assert.equal(bad.reason, "bad-checkpoint");
+    const missing = checkAuditFile(join(stateDir, "missing.jsonl"), { head: `1:${lineHash(lines, 1)}` });
+    assert.equal(missing.exitCode, 2);
+    assert.equal(missing.reason, "unreadable");
+  });
+});
+
+void test("OBS-01 checkpoint: format and parse round-trip, and out-of-shape text is rejected", () => {
+  const hash = "a".repeat(64);
+  const text = formatAuditCheckpoint({ seq: 9, line: 10, hash });
+  assert.equal(text, `9:${hash}`);
+  assert.deepEqual(parseAuditCheckpoint(text), { seq: 9, hash });
+  assert.equal(parseAuditCheckpoint(`0:${hash}`), undefined);
+  assert.equal(parseAuditCheckpoint(`9:${"A".repeat(64)}`), undefined);
+  assert.equal(parseAuditCheckpoint(`9:${hash}\n`), undefined);
+});

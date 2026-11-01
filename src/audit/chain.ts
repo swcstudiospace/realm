@@ -6,6 +6,12 @@
 // A pre-chain file has no marker line. The first chained line commits to the last legacy
 // line only. A torn tail (no trailing newline, or a fragment that is not valid JSON) is
 // closed by the writer and stays its own line; the next line hashes that fragment.
+//
+// The chain alone cannot see a log that was cut short or rewritten consistently from some
+// line on. checkAuditFile adds two externally held pins, each "<seq>:<sha256>" of a chained
+// line: a head (the newest line known at save time) and an anchor (an older line that must
+// stay unchanged). A log shorter than the pin reports tail-loss (head) or shorter-log
+// (anchor); a pinned line whose bytes changed reports prefix-changed at that line.
 
 import { createHash } from "node:crypto";
 import { closeSync, constants, fstatSync, openSync, readSync } from "node:fs";
@@ -16,11 +22,20 @@ export const AUDIT_GENESIS_PREV = "0".repeat(64);
 const TAIL_CHUNK_BYTES = 64 * 1024;
 const SEQ_LOOKBACK_LINES = 64;
 const HEX64 = /^[0-9a-f]{64}$/;
+const CHECKPOINT = /^([1-9][0-9]*):([0-9a-f]{64})$/;
 
 export interface ChainHead {
   readonly nextSeq: number;
   readonly prevHash: string;
   readonly needsNewline: boolean;
+}
+
+// The newest chained line verified by one pass: its seq, its 1-based physical line number,
+// and the sha256 of its raw bytes (the value the next line's `prev` must equal).
+export interface AuditHead {
+  readonly seq: number;
+  readonly line: number;
+  readonly hash: string;
 }
 
 export type ChainBreakReason =
@@ -29,7 +44,10 @@ export type ChainBreakReason =
   | "seq-gap"
   | "seq-regress"
   | "prev-mismatch"
-  | "line-too-long";
+  | "line-too-long"
+  | "prefix-changed"
+  | "tail-loss"
+  | "shorter-log";
 
 export interface ChainBreak {
   readonly line: number;
@@ -43,7 +61,41 @@ export interface VerifyAuditResult {
   readonly legacyLines: number;
   readonly unparsedLines: readonly number[];
   readonly tornTail: boolean;
+  readonly head?: AuditHead;
   readonly broken?: ChainBreak;
+}
+
+// Typed outcome for a CLI: exit 0 = verified, 1 = the log is broken (line and reason name
+// where), 2 = the check could not run (unreadable file or malformed checkpoint argument).
+export type AuditCheckReason = ChainBreakReason | "bad-checkpoint" | "unreadable";
+
+export interface AuditCheck {
+  readonly ok: boolean;
+  readonly exitCode: 0 | 1 | 2;
+  readonly line?: number;
+  readonly reason?: AuditCheckReason;
+  readonly lines: number;
+  readonly chainedLines: number;
+  // Legacy lines before the chain start. They carry no seq and no checkpoint covers them.
+  readonly unprotected: number;
+  readonly tornTail: boolean;
+  readonly head?: AuditHead;
+}
+
+export interface AuditCheckOptions {
+  // "<seq>:<sha256>" saved from an earlier head. Detects tail loss and a changed head line.
+  readonly head?: string;
+  // "<seq>:<sha256>" of an older chained line. Detects a shorter log and a changed prefix.
+  readonly anchor?: string;
+}
+
+export interface AuditCheckpoint {
+  readonly seq: number;
+  readonly hash: string;
+}
+
+interface Pin extends AuditCheckpoint {
+  readonly missing: "tail-loss" | "shorter-log";
 }
 
 export function sha256Hex(bytes: Uint8Array): string {
@@ -140,19 +192,32 @@ function isChained(record: Record<string, unknown>): boolean {
   );
 }
 
+// R3 (OBS-01): a broken link is reported at the SUCCESSOR line, the first line whose `prev`
+// does not equal the sha256 of its predecessor. An edit to line N therefore surfaces as
+// prev-mismatch on line N+1, not on N. A deletion surfaces as seq-gap on the line after the
+// gap; a reorder as seq-gap or seq-regress on the line that arrives out of order. The
+// successor rule is pinned by test/audit/chain.test.ts; do not move it to the edited line.
 export function verifyAuditFile(file: string): VerifyAuditResult {
+  return verifyWithPins(file, []);
+}
+
+// Verifies the chain and every pin in one pass. A pinned seq whose line hash differs
+// reports prefix-changed at that anchored line (the chain check of its successor still
+// runs first on any line that precedes it). A pin whose seq the log never reaches reports
+// tail-loss or shorter-log at the last line present.
+function verifyWithPins(file: string, pins: readonly Pin[]): VerifyAuditResult {
   const fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     if (!fstatSync(fd).isFile()) {
       throw new Error("audit file is not a regular file");
     }
-    return verifyDescriptor(fd);
+    return verifyDescriptor(fd, pins);
   } finally {
     closeSync(fd);
   }
 }
 
-function verifyDescriptor(fd: number): VerifyAuditResult {
+function verifyDescriptor(fd: number, pins: readonly Pin[]): VerifyAuditResult {
   const unparsedLines: number[] = [];
   let lines = 0;
   let chainedLines = 0;
@@ -161,8 +226,25 @@ function verifyDescriptor(fd: number): VerifyAuditResult {
   let lastSeq = 0;
   let prevRaw = AUDIT_GENESIS_PREV;
   let tornTail = false;
+  let head: AuditHead | undefined;
   let broken: ChainBreak | undefined;
   let carry = Buffer.alloc(0);
+
+  const pin = (seq: number, lineNo: number, line: Buffer): void => {
+    for (const expected of pins) {
+      if (expected.seq === seq && expected.hash !== sha256Hex(line)) {
+        broken = { line: lineNo, reason: "prefix-changed" };
+        return;
+      }
+    }
+  };
+
+  const accept = (seq: number, lineNo: number, line: Buffer): void => {
+    lastSeq = seq;
+    chainedLines += 1;
+    head = { seq, line: lineNo, hash: sha256Hex(line) };
+    pin(seq, lineNo, line);
+  };
 
   const finish = (line: Buffer, atEof: boolean): void => {
     if (line.length === 0 && atEof && !tornTail) {
@@ -187,8 +269,7 @@ function verifyDescriptor(fd: number): VerifyAuditResult {
         broken = { line: lineNo, reason: "bad-chain-start" };
       } else {
         chainStarted = true;
-        lastSeq = parsed["seq"] as number;
-        chainedLines += 1;
+        accept(parsed["seq"] as number, lineNo, line);
       }
     } else if (parsed === undefined) {
       unparsedLines.push(lineNo);
@@ -202,11 +283,22 @@ function verifyDescriptor(fd: number): VerifyAuditResult {
       } else if (prev !== prevRaw) {
         broken = { line: lineNo, reason: "prev-mismatch" };
       } else {
-        lastSeq = seq;
-        chainedLines += 1;
+        accept(seq, lineNo, line);
       }
     }
     prevRaw = sha256Hex(line);
+  };
+
+  const done = (): VerifyAuditResult => {
+    if (broken === undefined) {
+      for (const expected of pins) {
+        if (expected.seq > lastSeq) {
+          broken = { line: lines, reason: expected.missing };
+          break;
+        }
+      }
+    }
+    return resultOf(lines, chainedLines, legacyLines, unparsedLines, tornTail, broken, head);
   };
 
   const chunk = Buffer.alloc(TAIL_CHUNK_BYTES);
@@ -224,7 +316,7 @@ function verifyDescriptor(fd: number): VerifyAuditResult {
         if (carry.length + piece.length > AUDIT_LINE_MAX_BYTES) {
           lines += 1;
           broken = { line: lines, reason: "line-too-long" };
-          return resultOf(lines, chainedLines, legacyLines, unparsedLines, true, broken);
+          return done();
         }
         carry = Buffer.concat([carry, piece]);
         break;
@@ -234,7 +326,7 @@ function verifyDescriptor(fd: number): VerifyAuditResult {
       carry = Buffer.alloc(0);
       finish(line, false);
       if (broken !== undefined) {
-        return resultOf(lines, chainedLines, legacyLines, unparsedLines, false, broken);
+        return done();
       }
       offset = newline + 1;
     }
@@ -243,7 +335,7 @@ function verifyDescriptor(fd: number): VerifyAuditResult {
     tornTail = true;
     finish(carry, true);
   }
-  return resultOf(lines, chainedLines, legacyLines, unparsedLines, tornTail, broken);
+  return done();
 }
 
 function acceptChainStart(record: Record<string, unknown>, lineNo: number, prevRaw: string): boolean {
@@ -258,6 +350,7 @@ function resultOf(
   unparsedLines: readonly number[],
   tornTail: boolean,
   broken: ChainBreak | undefined,
+  head: AuditHead | undefined,
 ): VerifyAuditResult {
   return {
     ok: broken === undefined,
@@ -266,6 +359,66 @@ function resultOf(
     legacyLines,
     unparsedLines,
     tornTail,
+    ...(head === undefined ? {} : { head }),
     ...(broken === undefined ? {} : { broken }),
   };
+}
+
+// Renders the head as the checkpoint text a caller stores: "<seq>:<sha256>".
+export function formatAuditCheckpoint(head: AuditHead): string {
+  return `${String(head.seq)}:${head.hash}`;
+}
+
+// Parses "<seq>:<sha256>". Undefined for any other shape or a seq beyond the safe integer range.
+export function parseAuditCheckpoint(text: string): AuditCheckpoint | undefined {
+  const match = CHECKPOINT.exec(text);
+  if (match === null) {
+    return undefined;
+  }
+  const seq = Number(match[1]);
+  if (!Number.isSafeInteger(seq)) {
+    return undefined;
+  }
+  return { seq, hash: match[2] ?? "" };
+}
+
+// Checks the chain, then the optional head and anchor pins, and returns a typed outcome.
+// Malformed checkpoint text and an unreadable file are exit 2, never a verification verdict.
+export function checkAuditFile(file: string, options: AuditCheckOptions = {}): AuditCheck {
+  const pins: Pin[] = [];
+  const sources: readonly [string | undefined, Pin["missing"]][] = [
+    [options.head, "tail-loss"],
+    [options.anchor, "shorter-log"],
+  ];
+  for (const [text, missing] of sources) {
+    if (text === undefined) {
+      continue;
+    }
+    const parsed = parseAuditCheckpoint(text);
+    if (parsed === undefined) {
+      return checkError("bad-checkpoint");
+    }
+    pins.push({ ...parsed, missing });
+  }
+  let result: VerifyAuditResult;
+  try {
+    result = verifyWithPins(file, pins);
+  } catch {
+    return checkError("unreadable");
+  }
+  const broken = result.broken;
+  return {
+    ok: broken === undefined,
+    exitCode: broken === undefined ? 0 : 1,
+    ...(broken === undefined ? {} : { line: broken.line, reason: broken.reason }),
+    lines: result.lines,
+    chainedLines: result.chainedLines,
+    unprotected: result.legacyLines,
+    tornTail: result.tornTail,
+    ...(result.head === undefined ? {} : { head: result.head }),
+  };
+}
+
+function checkError(reason: AuditCheckReason): AuditCheck {
+  return { ok: false, exitCode: 2, reason, lines: 0, chainedLines: 0, unprotected: 0, tornTail: false };
 }
