@@ -115,7 +115,7 @@ Entry. `package.json` declares `"omp": { "extensions": ["./dist/src/omp/extensio
 
 Attach at session start. The `session_start` handler starts the attach without awaiting it. The attach and its first status read share a 200-second budget (`STARTUP_BUDGET_MS`, 200000 ms). The attach:
 
-1. Ensures a daemon answers on the control socket. When none does, it spawns `dist/src/daemon/main.js` detached.
+1. Ensures a daemon answers on the control socket. When none does, it spawns `dist/src/daemon/main.js` detached under Node. Under the compiled Omp binary (a Bun host) it never spawns: the attach refuses with `REALM_NOT_ACTIVE` until `realm up` has started the daemon.
 2. Connects to the control socket and calls `up` with the session working directory (`ctx.cwd`) as the workspace root. `up` is idempotent.
 3. Calls `status`. The reply carries the snapshot and the policy mode. The mode is stored on the session.
 

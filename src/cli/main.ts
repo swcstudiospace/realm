@@ -15,7 +15,7 @@ import { closeSync, fchmodSync, mkdirSync, openSync } from "node:fs";
 import { createConnection } from "node:net";
 import { runAcpOverStdio } from "../acp/stdio.js";
 import { createJsonRpc, type AnchorRpc } from "../audit/anchor.js";
-import { ERROR_CATALOGUE, ERROR_CODES, RealmError, type ErrorCode } from "../core/errors.js";
+import { ERROR_CATALOGUE, ERROR_CODES, RealmError, makeRealmError, type ErrorCode } from "../core/errors.js";
 import {
   sendRequest,
   CONTROL_TIMEOUT_MS,
@@ -354,6 +354,11 @@ export function launchFilteredDaemon(
   source: EnvironmentLike,
   spawnImpl: SpawnDaemon = defaultSpawnDaemon,
 ): void {
+  // A Bun host never spawns the daemon: process.execPath there is the Omp binary, which would read the entry as a prompt
+  // and run an unsupervised agent session. The attach refuses with REALM_NOT_ACTIVE until realm up has started the daemon.
+  if (Object.hasOwn(process.versions, "bun")) {
+    throw makeRealmError("REALM_NOT_ACTIVE");
+  }
   withDaemonLog(stateDir, (log) => {
     spawnImpl(process.execPath, [entry], {
       detached: true,
