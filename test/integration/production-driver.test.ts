@@ -606,7 +606,7 @@ void test("production live 5: after the daemon is killed, the next realm up reap
     assert.ok(startupReapLineFor(daemonLog, crashedContainerId) !== undefined, `daemon.log must hold a daemon.startup record for one container that names ${crashedContainerId}`);
     assert.equal(jsonLinesSinceStartup(daemonLog), true, "every daemon.log line from the restart's daemon.startup record must be JSON");
     const auditFile = join(scenario.environment.stateDir, "audit", "daemon.jsonl");
-    const verified = await realmCli(scenario.inputs, scenario.environment, ["audit", "verify", auditFile], STATUS_TIMEOUT_MS);
+    const verified = await realmCli(scenario.inputs, scenario.environment, ["audit", "verify", "--file", auditFile], STATUS_TIMEOUT_MS);
     assertExit(verified, 0, "realm audit verify after the restart");
     const report = JSON.parse(verified.stdout) as { ok?: boolean; unparsedLines?: readonly number[] };
     assert.equal(report.ok, true, `realm audit verify must report ok: ${verified.stdout}`);

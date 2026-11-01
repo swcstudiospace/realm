@@ -172,7 +172,7 @@ void test("OBS-01: realm audit verify exits 0 for a clean file, 1 naming the bro
   await withFile(async (file) => {
     writeFileSync(file, "");
     appendOnto(file);
-    const clean = await runCli(["audit", "verify", file], { env: {} });
+    const clean = await runCli(["audit", "verify", "--file", file], { env: {} });
     assert.equal(clean.exitCode, 0);
     assert.equal(clean.stderr, "");
     const cleanReport = JSON.parse(clean.stdout) as { ok: boolean };
@@ -182,7 +182,7 @@ void test("OBS-01: realm audit verify exits 0 for a clean file, 1 naming the bro
     const changed = JSON.parse(lines[0] ?? "") as Record<string, unknown>;
     changed["tool"] = "read";
     writeFileSync(file, `${JSON.stringify(changed)}\n${lines[1] ?? ""}\n`);
-    const broken = await runCli(["audit", "verify", file], { env: {} });
+    const broken = await runCli(["audit", "verify", "--file", file], { env: {} });
     assert.equal(broken.exitCode, 1);
     assert.match(broken.stderr, /line 2 does not chain to line 1 \(prev-mismatch\)/);
   });
@@ -200,12 +200,12 @@ void test("OBS-01: realm audit verify exits 0 for a clean file, 1 naming the bro
     } finally {
       rmSync(stateDir, { recursive: true, force: true });
     }
-    const result = await runCli(["audit", "verify", file], { env: {} });
+    const result = await runCli(["audit", "verify", "--file", file], { env: {} });
     assert.equal(result.exitCode, 0);
     assert.match(result.stderr, /1 legacy line\(s\) are unprotected/);
-    const report = JSON.parse(result.stdout) as { unprotected: number; ok: boolean };
+    const report = JSON.parse(result.stdout) as { ok: boolean; files: { unprotected: number }[] };
     assert.equal(report.ok, true);
-    assert.equal(report.unprotected, 1);
+    assert.equal(report.files[0]?.unprotected, 1);
   });
 });
 

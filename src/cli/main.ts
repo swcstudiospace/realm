@@ -41,14 +41,14 @@ import {
 } from "../runtime/podman-probe.js";
 import { controlSocketPath, type EnvironmentLike } from "../session/paths.js";
 import { parseAnchorArgs, runAnchor } from "./anchor.js";
-import { runAuditVerify } from "./audit.js";
+import { runAuditCommand } from "./audit.js";
 import { INIT_USAGE, InitRefusal, parseInitArgs, runInit } from "./init.js";
 
 export const CLI_COMMANDS = ["init", "up", "down", "status", "doctor", "mcp", "acp", "anchor", "audit", "metrics"] as const;
 export type CliCommand = (typeof CLI_COMMANDS)[number];
 
 const USAGE =
-  "Usage: realm <init|up|down|status|doctor|mcp|acp|anchor|audit|metrics> (realm init --image <name@sha256:digest> [--workspace <absolute path>] [--state-dir <absolute path>]; realm up|mcp|acp [--workspace <absolute path>]; realm doctor [--fix [--dry-run]]; realm anchor --session <id> [--publish] [--rpc <url>]; realm audit verify <file>)";
+  "Usage: realm <init|up|down|status|doctor|mcp|acp|anchor|audit|metrics> (realm init --image <name@sha256:digest> [--workspace <absolute path>] [--state-dir <absolute path>]; realm up|mcp|acp [--workspace <absolute path>]; realm doctor [--fix [--dry-run]]; realm anchor --session <id> [--publish] [--rpc <url>]; realm audit verify [--file <path> | --session <id>] [--head <seq>:<sha256>] [--anchor <record.json>])";
 const RETRY_INTERVAL_MS = 25;
 const MCP_POLL_INTERVAL_MS = 100;
 
@@ -635,13 +635,15 @@ async function runAnchorCommand(words: readonly string[], deps: CliDeps, stateDi
   });
 }
 
-// realm audit verify <file>: a broken chain exits 1 and names the line. Usage errors exit 2.
-function runAuditCommand(words: readonly string[]): CliResult {
-  const [verb, file, extra] = words;
-  if (verb !== "verify" || file === undefined || file.length === 0 || extra !== undefined) {
-    return { exitCode: 2, stdout: "", stderr: `${USAGE}\n` };
+// The state directory for realm audit verify --session and the selector-less form, read from the realm config the
+// way runCli reads it for the other commands. Absent or invalid config yields undefined; the audit command then
+// refuses with usage (exit 2), as realm anchor does.
+function auditStateDir(deps: CliDeps): string | undefined {
+  try {
+    return loadRuntimeConfig((deps.readConfig ?? readRuntimeConfigFile)(resolveConfigPath(deps.env))).stateDir;
+  } catch {
+    return undefined;
   }
-  return runAuditVerify(file);
 }
 
 // realm init (ONB-01) runs before any config is read: it is the command that writes the config. A malformed
@@ -668,7 +670,7 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
     return { exitCode: 2, stdout: "", stderr: `${USAGE}\n` };
   }
   if (parsed.command === "audit") {
-    return runAuditCommand(parsed.words);
+    return runAuditCommand(parsed.words, () => auditStateDir(deps));
   }
   if (parsed.command === "init") {
     return runInitCommand(parsed.words, deps);

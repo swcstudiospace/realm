@@ -93,7 +93,7 @@ H1 itself addresses none of these findings and closes no finding. The rows marke
 
 ### H2: hash-chained audit lines
 
-- **Interface.** Each new audit line carries `seq` (an integer, +1 per line of that file) and `prev` (the lowercase hex sha256 of the raw bytes of the previous physical line; 64 zeros for the first line of a new file). `realm audit verify <file>` checks the chain. A pre-chain prefix is unprotected, not a break. The writer closes a torn tail before the next append so the next record is not joined onto it.
+- **Interface.** Each new audit line carries `seq` (an integer, +1 per line of that file) and `prev` (the lowercase hex sha256 of the raw bytes of the previous physical line; 64 zeros for the first line of a new file). `realm audit verify --file <file>` checks the chain. A pre-chain prefix is unprotected, not a break. The writer closes a torn tail before the next append so the next record is not joined onto it.
 - **Acceptance.** A single-line edit, removal, or reorder is named by `realm audit verify` without any on-chain data. Existing v1 files remain readable; their lines are reported as unprotected until the first chained line.
 - **Non-goals.** Encryption of audit content. Rotation policy. A keyed chain (anyone who can rewrite `prev` from the edit point forward is not detected by the chain alone).
 
