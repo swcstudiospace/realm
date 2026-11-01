@@ -173,7 +173,9 @@ void test(
     const omp: OmpSession = startOmp({
       bin: OMP_BIN,
       env: { ...profile.env, XDG_CONFIG_HOME: configHome, TMPDIR: tmpDir },
-      cwd: profile.workspace,
+      // The daemon pins the project root the test brings up. Omp starts in that project, as a user runs it: the plugin
+      // attaches with its working directory, and any other directory is refused with POLICY_DENIED.
+      cwd: inputs.workspaceRoot,
       extensionPath: EXTENSION_PATH,
     });
     cleanups.add(() =>
