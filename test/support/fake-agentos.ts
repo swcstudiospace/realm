@@ -5,7 +5,8 @@
 // it as if the process died, and alive() reports it.
 // gatewayAnswers() reports the gateway: up by default, so a hold keeps AGENTOS_CRASH_LOOP. gatewayDown() makes it answer
 // false (the status exits non-zero), or reject or hang; gatewayUp() restores it. Gateway checks are counted apart from
-// calls(), which lists the runner operations only.
+// calls(), which lists the runner operations only. driverAnswers() reports the compute driver's socket: up by default, and
+// driverDown() makes it answer false, reject or hang; driverUp() restores it. Driver checks are counted apart from calls().
 // holdAlive() and holdGateway() park every later alive() or gatewayAnswers() call until releaseAlive() or releaseGateway()
 // frees the oldest one, which then answers from the state at that moment. The executor form is used because tsconfig's
 // ES2023 lib has no Promise.withResolvers.
@@ -23,6 +24,8 @@ export class FakeAgentOsDriver implements AgentOsDriver {
   private running = false;
   private gateway: "up" | "down" | "reject" | "hang" = "up";
   private gatewayChecks = 0;
+  private driverSocket: "up" | "down" | "reject" | "hang" = "up";
+  private driverChecks = 0;
   private aliveHeld = false;
   private gatewayHeld = false;
   private readonly aliveWaiting: (() => void)[] = [];
@@ -87,6 +90,17 @@ export class FakeAgentOsDriver implements AgentOsDriver {
     return this.gateway === "up";
   }
 
+  async driverAnswers(): Promise<boolean> {
+    this.driverChecks += 1;
+    if (this.driverSocket === "reject") {
+      throw new Error("scripted driver socket failure");
+    }
+    if (this.driverSocket === "hang") {
+      return new Promise<boolean>(() => {});
+    }
+    return this.driverSocket === "up";
+  }
+
   // The gateway stops answering: "down" answers false, "reject" rejects, "hang" never settles.
   gatewayDown(how: "down" | "reject" | "hang" = "down"): void {
     this.gateway = how;
@@ -98,6 +112,19 @@ export class FakeAgentOsDriver implements AgentOsDriver {
 
   gatewayCheckCount(): number {
     return this.gatewayChecks;
+  }
+
+  // The compute driver's socket: "down" answers false (the socket refuses), "reject" rejects, "hang" never settles.
+  driverDown(how: "down" | "reject" | "hang" = "down"): void {
+    this.driverSocket = how;
+  }
+
+  driverUp(): void {
+    this.driverSocket = "up";
+  }
+
+  driverCheckCount(): number {
+    return this.driverChecks;
   }
 
   holdAlive(): void {

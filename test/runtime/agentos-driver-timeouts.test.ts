@@ -29,6 +29,7 @@ void test("the readiness probe and the alive probe are each bounded by the call 
     spawnRunner: () => RUNNING_CHILD,
     startTimeoutMs: 180_000,
     callTimeoutMs: 30_000,
+    driverSocketPath: "/nonexistent-realm-driver/driver.sock",
   });
   await driver.start(SESSION);
   await driver.alive(SESSION);
@@ -48,6 +49,7 @@ void test("a non-positive start budget is refused with a RangeError before any r
         spawnRunner: () => RUNNING_CHILD,
         startTimeoutMs: 0,
         callTimeoutMs: 30_000,
+        driverSocketPath: "/nonexistent-realm-driver/driver.sock",
       }),
     RangeError,
   );

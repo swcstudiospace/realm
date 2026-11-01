@@ -15,5 +15,6 @@ export function createThrough(
       },
       startTimeoutMs: timeoutMs,
       callTimeoutMs: timeoutMs,
+      driverSocketPath: "/nonexistent-realm-driver/driver.sock",
     }).create(request, timeoutMs);
 }

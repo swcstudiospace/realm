@@ -581,7 +581,7 @@ const FIX_CONTROL_ABSENT = "Run realm up to start the daemon, then rerun doctor.
 const FIX_CONTROL_REFUSED =
   "Check that the realm daemon owns the control socket, then run realm up to replace a stale socket and rerun doctor.";
 const FIX_AGENTOS_UP = "Run realm up, then rerun doctor.";
-const FIX_GATEWAY_LOST = "Restore the OpenShell gateway, then run realm down and realm up, and rerun doctor.";
+const FIX_GATEWAY_LOST = "Restore the OpenShell gateway and the compute driver behind it, then run realm down and realm up, and rerun doctor.";
 const FIX_AGENTOS_DRIVER =
   "Bind an AgentOS driver in the realm daemon (docs/integration/agentos.md). Until one is bound, realm up is refused.";
 
@@ -658,7 +658,7 @@ async function controlChannelCheck(context: CheckContext): Promise<CheckResult> 
 // probe, no daemon answers, so the realm is not active and the item warns with REALM_NOT_ACTIVE. A daemon
 // with no driver bound refuses up with AGENTOS_NOT_CONFIGURED, so the item fails with that code. A bound
 // driver passes when its session answers; a session that does not answer, or a probe that fails, is
-// AGENTOS_CRASH_LOOP, unless the probe threw OPENSHELL_GATEWAY_LOST: the gateway did not answer, and the item says so (OBS-04).
+// AGENTOS_CRASH_LOOP, unless the probe threw OPENSHELL_GATEWAY_LOST: the gateway or the compute driver behind it did not answer, and the item says so (OBS-04).
 async function agentOsCheck(context: CheckContext): Promise<CheckResult> {
   const id: CheckId = "agentos";
   const probe = context.options.agentos;

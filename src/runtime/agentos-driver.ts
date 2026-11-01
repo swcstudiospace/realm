@@ -8,6 +8,8 @@
 // bounded: the readiness wait by startTimeoutMs, and the probes by callTimeoutMs. The argv come from src/runtime/openshell.ts,
 // the one module allowed to name the OpenShell binary and the exec builder.
 
+import { createConnection } from "node:net";
+import { isAbsolute } from "node:path";
 import { performance } from "node:perf_hooks";
 import { makeRealmError } from "../core/errors.js";
 import { withTimeout } from "../core/timeout.js";
@@ -31,6 +33,8 @@ const PROBE_INTERVAL_MS = 1000;
 const RUNNER_TERMINATE_GRACE_MS = 2000;
 // The bound for one `openshell status` (OBS-04). A status that misses it counts as a gateway that does not answer.
 export const GATEWAY_STATUS_TIMEOUT_MS = 10_000;
+// The bound for the compute driver's socket probe (OBS-04). A driver that does not accept a connection within it does not answer.
+const DRIVER_PROBE_TIMEOUT_MS = 5_000;
 
 export interface OpenShellAgentOsDriverOptions {
   readonly runner: OpenShellRunner;
@@ -42,6 +46,9 @@ export interface OpenShellAgentOsDriverOptions {
   readonly startTimeoutMs: number;
   // Upper bound for one probe.
   readonly callTimeoutMs: number;
+  // The compute driver's socket: the path the driver binds, which the daemon reads from REALM_DRIVER_SOCKET. driverAnswers
+  // connects to it. A path that is not absolute answers false.
+  readonly driverSocketPath: string;
   // The pause between readiness probes. Defaults to one second.
   readonly probeIntervalMs?: number;
 }
@@ -75,6 +82,32 @@ async function succeeds(run: () => Promise<OpenShellRunOutcome>, budgetMs: numbe
   }
 }
 
+// Connects to a unix socket and reports whether it accepted the connection within timeoutMs. A relative path, a refused or
+// absent socket and a missed bound are all false. The connection is closed as soon as the answer is known, and the OS error
+// is not read, so no path or OS text leaves the probe.
+function connectsWithin(socketPath: string, timeoutMs: number): Promise<boolean> {
+  if (!isAbsolute(socketPath)) {
+    return Promise.resolve(false);
+  }
+  return new Promise<boolean>((resolve) => {
+    const timer = setTimeout(() => {
+      finish(false);
+    }, timeoutMs);
+    const socket = createConnection({ path: socketPath });
+    const finish = (answer: boolean): void => {
+      clearTimeout(timer);
+      socket.destroy();
+      resolve(answer);
+    };
+    socket.once("connect", () => {
+      finish(true);
+    });
+    socket.once("error", () => {
+      finish(false);
+    });
+  });
+}
+
 // A bounded pause between two readiness probes. It ends after ms, or as soon as the runner child exits, so a runner that
 // dies is noticed at once. The bound is withTimeout; its expiry is the normal end of the pause, not a failure.
 async function pauseUnlessExited(exited: Promise<void>, ms: number): Promise<void> {
@@ -94,7 +127,7 @@ export function createOpenShellAgentOsDriver(options: OpenShellAgentOsDriverOpti
   assertPositiveFinite(probeIntervalMs);
   const runnerPath = options.runnerPath ?? DEFAULT_AGENTOS_RUNNER_PATH;
   const probePath = options.probePath ?? DEFAULT_AGENTOS_PROBE_PATH;
-  const { runner, spawnRunner, startTimeoutMs, callTimeoutMs } = options;
+  const { runner, spawnRunner, startTimeoutMs, callTimeoutMs, driverSocketPath } = options;
 
   // The runner of each session, made on that session's first call. A session's argv names its own sandbox, and the
   // builders refuse a malformed session id with SCHEMA_INVALID, before any runner call.
@@ -278,6 +311,11 @@ export function createOpenShellAgentOsDriver(options: OpenShellAgentOsDriverOpti
         () => runner(buildGatewayStatusArgv(), { timeoutMs: GATEWAY_STATUS_TIMEOUT_MS }),
         GATEWAY_STATUS_TIMEOUT_MS,
       );
+    },
+    // OBS-04: true only when the compute driver's socket, the one the driver binds, accepts a connection within
+    // DRIVER_PROBE_TIMEOUT_MS. A stopped driver unit refuses it while `openshell status` can still exit 0. Runs no OpenShell command.
+    async driverAnswers(): Promise<boolean> {
+      return connectsWithin(driverSocketPath, DRIVER_PROBE_TIMEOUT_MS);
     },
   };
 }

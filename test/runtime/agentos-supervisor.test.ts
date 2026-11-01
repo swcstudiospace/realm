@@ -429,6 +429,7 @@ void test("OBS-04: a runner that exited while the gateway does not answer is OPE
   driver.gatewayDown();
   await assertGatewayLost(supervisor.check());
   assert.equal(driver.gatewayCheckCount(), 1);
+  assert.equal(driver.driverCheckCount(), 0, "a gateway that does not answer ends the classification before the driver is asked");
   assert.equal(driver.callCount("start"), 1, "the supervisor does not restart anything");
 });
 
@@ -438,6 +439,41 @@ void test("OBS-04: a runner that exited while the gateway answers is AGENTOS_CRA
   driver.exitRunner();
   await assertCrashLoop(supervisor.check());
   assert.equal(driver.gatewayCheckCount(), 1, "the failure path asks the gateway once");
+  assert.equal(driver.driverCheckCount(), 1, "a gateway that answers is followed by one driver check");
+});
+
+void test("OBS-04: a compute driver that does not answer while the gateway answers is OPENSHELL_GATEWAY_LOST, not AGENTOS_CRASH_LOOP", async () => {
+  for (const how of ["down", "reject", "hang"] as const) {
+    const { driver, supervisor } = harness();
+    await supervisor.start();
+    driver.exitRunner();
+    driver.driverDown(how);
+    await assertGatewayLost(supervisor.check());
+    assert.equal(driver.gatewayCheckCount(), 1, "the gateway answered, so the driver is the cause that is asked");
+    assert.equal(driver.driverCheckCount(), 1, "the driver was asked once and did not answer");
+    assert.equal(driver.callCount("start"), 1, "the supervisor does not restart anything");
+  }
+});
+
+void test("OBS-04: a probe that fails while the driver does not answer and the gateway does is OPENSHELL_GATEWAY_LOST", async () => {
+  const { driver, supervisor } = harness();
+  await supervisor.start();
+  driver.crash();
+  driver.driverDown();
+  await assertGatewayLost(supervisor.check());
+  assert.equal(driver.driverCheckCount(), 1);
+});
+
+void test("OBS-04: a stop during the driver check makes check return false and leaves the supervisor stopped", async () => {
+  const { driver, supervisor } = harness();
+  await supervisor.start();
+  driver.exitRunner();
+  driver.driverDown("hang");
+  const pending = supervisor.check();
+  await nextTurn();
+  await supervisor.stop();
+  assert.equal(await pending, false);
+  assert.equal(await supervisor.check(), false, "a stopped supervisor does not probe");
 });
 
 void test("OBS-04: a probe that answers false while the gateway answers is AGENTOS_CRASH_LOOP, and while it does not is OPENSHELL_GATEWAY_LOST", async () => {

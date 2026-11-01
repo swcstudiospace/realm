@@ -61,6 +61,9 @@ function productionAgentOsDriver(env: EnvironmentLike): AgentOsDriver {
     spawnRunner: productionRunnerChild(env),
     startTimeoutMs: AGENTOS_START_TIMEOUT_MS,
     callTimeoutMs: AGENTOS_CALL_TIMEOUT_MS,
+    // The compute driver's socket, as the daemon's environment names it. An unset variable is "" here, which driverAnswers
+    // treats as a driver that does not answer; realm doctor reports the unset variable.
+    driverSocketPath: env["REALM_DRIVER_SOCKET"] ?? "",
   });
 }
 
