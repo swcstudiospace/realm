@@ -29,6 +29,7 @@ import { controlSocketPath, type EnvironmentLike } from "../../src/session/paths
 export const LIVE_PRODUCTION_VARIABLE = "REALM_LIVE_PRODUCTION";
 export const LIVE_IMAGE_VARIABLE = "REALM_LIVE_IMAGE";
 export const LIVE_DRIVER_CONFIG_VARIABLE = "REALM_LIVE_DRIVER_CONFIG";
+export const LIVE_DRIVER_SOCKET_VARIABLE = "REALM_DRIVER_SOCKET";
 
 // The host facts the gate decides from. Each is injected, so the hermetic file can cover every branch.
 export interface ProductionGateInputs {
@@ -46,8 +47,8 @@ export interface ProductionGateInputs {
 }
 
 // The reason the production live suite cannot run, or false when every prerequisite holds. The reason names the FIRST missing
-// prerequisite, in this order: the operator opt-in, Podman 5.x, the image, REALM_LIVE_DRIVER_CONFIG, the rootless socket, the
-// openshell CLI and the built CLI. The opt-in is exactly "1": the test never sets it.
+// prerequisite, in this order: the operator opt-in, Podman 5.x, the image, REALM_LIVE_DRIVER_CONFIG, REALM_DRIVER_SOCKET, the
+// rootless socket, the openshell CLI and the built CLI. The opt-in is exactly "1": the test never sets it.
 export function productionSkipReason(inputs: ProductionGateInputs): string | false {
   const { env } = inputs;
   if (env[LIVE_PRODUCTION_VARIABLE] !== "1") {
@@ -66,6 +67,10 @@ export function productionSkipReason(inputs: ProductionGateInputs): string | fal
   }
   if (!readableDriverConfig(driverConfig, inputs.readConfig ?? ((path) => readFileSync(path, "utf8")))) {
     return `${LIVE_DRIVER_CONFIG_VARIABLE} is not a readable runtime config; it must be the config.json the running driver reads`;
+  }
+  const driverSocket = env[LIVE_DRIVER_SOCKET_VARIABLE];
+  if (driverSocket === undefined || !isAbsolute(driverSocket) || !inputs.isSocket(driverSocket)) {
+    return `${LIVE_DRIVER_SOCKET_VARIABLE} is not an absolute path to the socket the running compute driver binds; it must be the socket the daemon probes`;
   }
   const socket = podmanSocketPath(env);
   if (socket === undefined) {
@@ -462,6 +467,8 @@ export interface LiveInputs {
   readonly cliPath: string;
   // PATH, HOME and XDG_RUNTIME_DIR from the test's own environment: all the openshell CLI and podman receive.
   readonly hostEnvironment: Readonly<Record<string, string>>;
+  // The compute driver's socket the daemon probes (REALM_DRIVER_SOCKET), when the operator's environment names it.
+  readonly driverSocketPath?: string;
 }
 
 // Reads the live inputs after the gate has passed. A missing value throws naming the variable, never its content.
@@ -474,6 +481,7 @@ export function readLiveInputs(env: EnvironmentLike, cliPath: string): LiveInput
     return value;
   };
   const configPath = required(LIVE_DRIVER_CONFIG_VARIABLE);
+  const driverSocket = env[LIVE_DRIVER_SOCKET_VARIABLE];
   const roots = runtimeRootsOf(loadRuntimeConfig(JSON.parse(readFileSync(configPath, "utf8"))));
   return {
     image: required(LIVE_IMAGE_VARIABLE),
@@ -482,6 +490,7 @@ export function readLiveInputs(env: EnvironmentLike, cliPath: string): LiveInput
     workspaceRoot: roots.workspaceRoot,
     cliPath,
     hostEnvironment: selectOpenShellEnvironment(env),
+    ...(driverSocket === undefined ? {} : { driverSocketPath: driverSocket }),
   };
 }
 
@@ -539,6 +548,7 @@ export function createScenarioEnvironment(inputs: LiveInputs, spec: ScenarioSpec
     cliEnvironment: {
       ...inputs.hostEnvironment,
       XDG_CONFIG_HOME: configHome,
+      ...(inputs.driverSocketPath === undefined ? {} : { REALM_DRIVER_SOCKET: inputs.driverSocketPath }),
     },
   };
 }

@@ -5,8 +5,9 @@
 // it as if the process died, and alive() reports it.
 // gatewayAnswers() reports the gateway: up by default, so a hold keeps AGENTOS_CRASH_LOOP. gatewayDown() makes it answer
 // false (the status exits non-zero), or reject or hang; gatewayUp() restores it. Gateway checks are counted apart from
-// calls(), which lists the runner operations only. driverAnswers() reports the compute driver's socket: up by default, and
-// driverDown() makes it answer false, reject or hang; driverUp() restores it. Driver checks are counted apart from calls().
+// calls(), which lists the runner operations only. driverAnswers() reports the compute driver's socket: up by default,
+// driverDown() makes it answer false, reject or hang, driverUnset() makes it answer null (no absolute socket is configured),
+// and driverUp() restores it. Driver checks are counted apart from calls().
 // holdAlive() and holdGateway() park every later alive() or gatewayAnswers() call until releaseAlive() or releaseGateway()
 // frees the oldest one, which then answers from the state at that moment. The executor form is used because tsconfig's
 // ES2023 lib has no Promise.withResolvers.
@@ -24,7 +25,7 @@ export class FakeAgentOsDriver implements AgentOsDriver {
   private running = false;
   private gateway: "up" | "down" | "reject" | "hang" = "up";
   private gatewayChecks = 0;
-  private driverSocket: "up" | "down" | "reject" | "hang" = "up";
+  private driverSocket: "up" | "down" | "reject" | "hang" | "unset" = "up";
   private driverChecks = 0;
   private aliveHeld = false;
   private gatewayHeld = false;
@@ -90,10 +91,13 @@ export class FakeAgentOsDriver implements AgentOsDriver {
     return this.gateway === "up";
   }
 
-  async driverAnswers(): Promise<boolean> {
+  async driverAnswers(): Promise<boolean | null> {
     this.driverChecks += 1;
     if (this.driverSocket === "reject") {
       throw new Error("scripted driver socket failure");
+    }
+    if (this.driverSocket === "unset") {
+      return null;
     }
     if (this.driverSocket === "hang") {
       return new Promise<boolean>(() => {});
@@ -117,6 +121,11 @@ export class FakeAgentOsDriver implements AgentOsDriver {
   // The compute driver's socket: "down" answers false (the socket refuses), "reject" rejects, "hang" never settles.
   driverDown(how: "down" | "reject" | "hang" = "down"): void {
     this.driverSocket = how;
+  }
+
+  // No absolute socket path is configured: driverAnswers answers null, so the driver is not probed and not claimed down.
+  driverUnset(): void {
+    this.driverSocket = "unset";
   }
 
   driverUp(): void {

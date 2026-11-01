@@ -16,9 +16,9 @@
 // covers a stale heartbeat and an OpenShell failure), holds the supervisor, and check throws a catalogue code, so the
 // session moves to error with that code. Phase 17 (OBS-04) tells the causes apart. The failure path asks the driver
 // whether the gateway answers (gatewayAnswers): a gateway that does not answer throws OPENSHELL_GATEWAY_LOST. A gateway
-// that answers is asked whether the compute driver behind it answers (driverAnswers): a driver that does not answer also
-// throws OPENSHELL_GATEWAY_LOST, and only a gateway and a driver that both answer throw AGENTOS_CRASH_LOOP. A healthy check
-// asks nothing extra. Recovery is realm down then realm up, or the
+// that answers is asked whether the compute driver behind it answers (driverAnswers): a driver that answers, or whose socket
+// is not configured so is not probed, throws AGENTOS_CRASH_LOOP; a driver that does not answer throws OPENSHELL_GATEWAY_LOST.
+// A healthy check asks nothing extra. Recovery is realm down then realm up, or the
 // retry command: the next stop removes the sandbox and an explicit start() begins again. The ruling applies only after
 // the initial start has finished: a check made while that start is still pending (for example realm doctor during
 // realm up) answers false and changes nothing, because the runner is not ready to be probed yet.
@@ -45,9 +45,10 @@ export interface AgentOsDriver {
   // True when the OpenShell gateway, and the compute driver behind it, answers a status request in time. A rejection, a
   // missed bound and a non-zero exit are all false. The session is not named: the gateway is shared by every session.
   gatewayAnswers(): Promise<boolean>;
-  // True when the compute driver behind the gateway accepts a connection on its socket in time. A refused, absent or missed
-  // connection is false. It is asked only after gatewayAnswers() is true. The socket is shared, so no session is named.
-  driverAnswers(): Promise<boolean>;
+  // True when the compute driver behind the gateway accepts a connection on its socket in time: true. A refused, absent,
+  // non-socket or missed connection is false. null when no absolute socket path is configured: the driver is not probed and
+  // is not claimed down. It is asked only after gatewayAnswers() is true. The socket is shared, so no session is named.
+  driverAnswers(): Promise<boolean | null>;
 }
 
 export const AGENTOS_BACKOFF_BASE_MS = 500;
@@ -305,7 +306,10 @@ export class AgentOsSupervisor {
     if (this.phase !== "held" || this.epoch !== epoch) {
       return null;
     }
-    const code: ErrorCode = driver?.ok && driver.value ? "AGENTOS_CRASH_LOOP" : "OPENSHELL_GATEWAY_LOST";
+    // Only a driver that answers, or one with no socket to probe (null), leaves the runner's crash as the cause. A driver that
+    // answers false, or whose probe failed or timed out, is the driver the gateway lost.
+    const driverAnswers = driver?.ok === true && driver.value !== false;
+    const code: ErrorCode = driverAnswers ? "AGENTOS_CRASH_LOOP" : "OPENSHELL_GATEWAY_LOST";
     this.heldCode = code;
     return code;
   }

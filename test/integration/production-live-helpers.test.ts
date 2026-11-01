@@ -324,11 +324,12 @@ function openInputs(overrides: Partial<ProductionGateInputs> = {}): ProductionGa
       REALM_LIVE_PRODUCTION: "1",
       REALM_LIVE_IMAGE: "localhost/realm-agentos@sha256:" + "a".repeat(64),
       REALM_LIVE_DRIVER_CONFIG: "/driver-config.json",
+      REALM_DRIVER_SOCKET: "/run-user/realm/driver.sock",
       XDG_RUNTIME_DIR: "/run-user",
       PATH: "/bin",
     },
     podman: PODMAN_5,
-    isSocket: (path) => path === "/run-user/podman/podman.sock",
+    isSocket: (path) => path === "/run-user/podman/podman.sock" || path === "/run-user/realm/driver.sock",
     onPath: (name) => name === "openshell",
     exists: () => true,
     isDirectory: () => true,
@@ -399,6 +400,13 @@ void test("productionSkipReason names REALM_LIVE_DRIVER_CONFIG when it is missin
   assert.ok(absent.startsWith("REALM_LIVE_DRIVER_CONFIG is not an absolute path"), absent);
 });
 
+void test("productionSkipReason names REALM_DRIVER_SOCKET after the driver config when it is missing, relative or not a socket", () => {
+  for (const value of [undefined, "", "driver.sock", "/run-user/realm/not-a-socket"]) {
+    const reason = String(productionSkipReason(withEnv("REALM_DRIVER_SOCKET", value)));
+    assert.ok(reason.startsWith("REALM_DRIVER_SOCKET is not an absolute path"), reason);
+  }
+});
+
 void test("productionSkipReason names an unreadable or malformed driver config instead of throwing", () => {
   const unreadable = String(productionSkipReason(openInputs({ readConfig: () => { throw new Error("EISDIR"); } })));
   assert.match(unreadable, /not a readable runtime config/);
@@ -411,7 +419,7 @@ void test("productionSkipReason names the rootless socket: an unusable XDG_RUNTI
   for (const value of [undefined, "", "run-user"]) {
     assert.match(String(productionSkipReason(withEnv("XDG_RUNTIME_DIR", value))), /XDG_RUNTIME_DIR is not an absolute path/);
   }
-  assert.match(String(productionSkipReason(openInputs({ isSocket: () => false }))), /no rootless Podman API socket/);
+  assert.match(String(productionSkipReason(openInputs({ isSocket: (path) => path !== "/run-user/podman/podman.sock" }))), /no rootless Podman API socket/);
 });
 
 void test("productionSkipReason names the openshell CLI, then the built CLI", () => {
@@ -423,7 +431,7 @@ void test("productionSkipReason reports the earlier prerequisite when two are mi
   // No openshell and no built CLI: the openshell CLI comes first.
   assert.match(String(productionSkipReason(openInputs({ onPath: () => false, exists: (path) => path !== CLI_PATH }))), /no openshell CLI/);
   // No socket and no openshell: the socket comes first.
-  assert.match(String(productionSkipReason(openInputs({ isSocket: () => false, onPath: () => false }))), /no rootless Podman API socket/);
+  assert.match(String(productionSkipReason(openInputs({ isSocket: (path) => path !== "/run-user/podman/podman.sock", onPath: () => false }))), /no rootless Podman API socket/);
   // No image and no socket: the image comes first.
   assert.match(String(productionSkipReason({ ...withEnv("REALM_LIVE_IMAGE", undefined), isSocket: () => false })), /REALM_LIVE_IMAGE not set/);
 });

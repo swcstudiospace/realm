@@ -11,9 +11,10 @@
 //   3. REALM_LIVE_IMAGE: the digest-pinned image the running driver was given.
 //   4. REALM_LIVE_DRIVER_CONFIG: absolute path of the config.json the running driver reads. The roots come from that file.
 //      A stale REALM_DRIVER_*_ROOT variable is ignored.
-//   5. A rootless Podman API socket under XDG_RUNTIME_DIR.
-//   6. The openshell CLI on PATH.
-//   7. The built CLI at dist/src/cli/main.js, next to the compiled tests (npm run build).
+//   5. REALM_DRIVER_SOCKET: absolute path of the compute driver's socket, the one the daemon's driver probe connects to.
+//   6. A rootless Podman API socket under XDG_RUNTIME_DIR.
+//   7. The openshell CLI on PATH.
+//   8. The built CLI at dist/src/cli/main.js, next to the compiled tests (npm run build).
 // A default npm test therefore skips every scenario below (ten in all: default policy, immediate cycle, egress allowlist, wrong
 // image digest, crash recovery, MCP exec, the MCP exec timeout, the AgentOS runner exit, the daemon-side startup budget and a stopped gateway) and
 // reports each as skipped.
@@ -26,7 +27,7 @@
 // Removal scope. The suite creates and removes only its own sandbox (realm-daemon) and its own temporary directories. Each
 // scenario builds its own XDG config home with realm/config.json and a policy.json, and runs the CLI through execFile on the
 // current node binary with an explicit environment: PATH, HOME and XDG_RUNTIME_DIR from the test's own environment, the
-// scenario's XDG_CONFIG_HOME and the three driver roots. Every scenario runs `realm down` in its cleanup, even on failure, and
+// scenario's XDG_CONFIG_HOME, the three driver roots and REALM_DRIVER_SOCKET. Every scenario runs `realm down` in its cleanup, even on failure, and
 // then waits (bounded at 90 s) for zero containers, zero realm-* sandboxes, no realm-daemon directory under the secret and
 // sandbox-state roots, and an empty pinned workspace. The scenarios share one pinned root, so they run one after another.
 // Files the suite may leave in the pinned workspace are named in WORKSPACE_FILES below; cleanup removes exactly those names.

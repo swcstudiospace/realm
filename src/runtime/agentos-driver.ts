@@ -47,8 +47,8 @@ export interface OpenShellAgentOsDriverOptions {
   // Upper bound for one probe.
   readonly callTimeoutMs: number;
   // The compute driver's socket: the path the driver binds, which the daemon reads from REALM_DRIVER_SOCKET. driverAnswers
-  // connects to it. A path that is not absolute answers false.
-  readonly driverSocketPath: string;
+  // connects to it when it is an absolute path. Absent, or not absolute, the driver is not probed (driverAnswers answers null).
+  readonly driverSocketPath?: string;
   // The pause between readiness probes. Defaults to one second.
   readonly probeIntervalMs?: number;
 }
@@ -82,13 +82,10 @@ async function succeeds(run: () => Promise<OpenShellRunOutcome>, budgetMs: numbe
   }
 }
 
-// Connects to a unix socket and reports whether it accepted the connection within timeoutMs. A relative path, a refused or
-// absent socket and a missed bound are all false. The connection is closed as soon as the answer is known, and the OS error
-// is not read, so no path or OS text leaves the probe.
+// Connects to an absolute unix socket path and reports whether it accepted the connection within timeoutMs. A refused or
+// absent socket, a path that is not a socket and a missed bound are all false. The connection is closed as soon as the answer
+// is known, and the OS error is not read, so no path or OS text leaves the probe.
 function connectsWithin(socketPath: string, timeoutMs: number): Promise<boolean> {
-  if (!isAbsolute(socketPath)) {
-    return Promise.resolve(false);
-  }
   return new Promise<boolean>((resolve) => {
     const timer = setTimeout(() => {
       finish(false);
@@ -312,9 +309,14 @@ export function createOpenShellAgentOsDriver(options: OpenShellAgentOsDriverOpti
         GATEWAY_STATUS_TIMEOUT_MS,
       );
     },
-    // OBS-04: true only when the compute driver's socket, the one the driver binds, accepts a connection within
-    // DRIVER_PROBE_TIMEOUT_MS. A stopped driver unit refuses it while `openshell status` can still exit 0. Runs no OpenShell command.
-    async driverAnswers(): Promise<boolean> {
+    // OBS-04: true when the compute driver's socket, the one the driver binds, accepts a connection within
+    // DRIVER_PROBE_TIMEOUT_MS; false when it does not. null when no absolute socket path is configured: the driver is not
+    // probed and is not claimed down. A stopped driver unit refuses the socket while `openshell status` can still exit 0.
+    // Runs no OpenShell command.
+    async driverAnswers(): Promise<boolean | null> {
+      if (driverSocketPath === undefined || !isAbsolute(driverSocketPath)) {
+        return null;
+      }
       return connectsWithin(driverSocketPath, DRIVER_PROBE_TIMEOUT_MS);
     },
   };

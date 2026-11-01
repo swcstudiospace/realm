@@ -442,6 +442,17 @@ void test("OBS-04: a runner that exited while the gateway answers is AGENTOS_CRA
   assert.equal(driver.driverCheckCount(), 1, "a gateway that answers is followed by one driver check");
 });
 
+void test("OBS-04: a runner that exited while the gateway answers and the driver socket is not configured is AGENTOS_CRASH_LOOP", async () => {
+  const { driver, supervisor } = harness();
+  await supervisor.start();
+  driver.exitRunner();
+  driver.driverUnset();
+  await assertCrashLoop(supervisor.check());
+  assert.equal(driver.gatewayCheckCount(), 1, "the gateway answered, so the driver is asked");
+  assert.equal(driver.driverCheckCount(), 1, "a driver with no socket to probe is not a driver that does not answer");
+  assert.equal(driver.callCount("start"), 1, "the supervisor does not restart anything");
+});
+
 void test("OBS-04: a compute driver that does not answer while the gateway answers is OPENSHELL_GATEWAY_LOST, not AGENTOS_CRASH_LOOP", async () => {
   for (const how of ["down", "reject", "hang"] as const) {
     const { driver, supervisor } = harness();

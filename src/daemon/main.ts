@@ -56,14 +56,15 @@ const AGENTOS_START_TIMEOUT_MS = 180_000;
 const AGENTOS_CALL_TIMEOUT_MS = 30_000;
 
 function productionAgentOsDriver(env: EnvironmentLike): AgentOsDriver {
+  const driverSocket = env["REALM_DRIVER_SOCKET"];
   return createOpenShellAgentOsDriver({
     runner: productionOpenShellRunner(env),
     spawnRunner: productionRunnerChild(env),
     startTimeoutMs: AGENTOS_START_TIMEOUT_MS,
     callTimeoutMs: AGENTOS_CALL_TIMEOUT_MS,
-    // The compute driver's socket, as the daemon's environment names it. An unset variable is "" here, which driverAnswers
-    // treats as a driver that does not answer; realm doctor reports the unset variable.
-    driverSocketPath: env["REALM_DRIVER_SOCKET"] ?? "",
+    // The compute driver's socket, as the daemon's environment names it. Unset, no socket is configured: driverAnswers is not
+    // probed and the supervisor does not claim the driver is down. realm doctor reports the unset variable.
+    ...(driverSocket === undefined ? {} : { driverSocketPath: driverSocket }),
   });
 }
 
