@@ -21,6 +21,7 @@ import {
   guardHostToolCall,
   registerRealmPlugin,
   renderRealmStatus,
+  type DaemonAttach,
   type HostToolCall,
   type HostToolSet,
   type HostToolVerdict,
@@ -39,6 +40,7 @@ import {
 const CLOCK_ISO = "2026-10-21T09:30:00.000Z";
 const ACTIVE: StateSnapshot = { state: "active", reason: "container running", lastTransitionAt: CLOCK_ISO };
 const CONNECTING: StateSnapshot = { state: "connecting", reason: "connecting", lastTransitionAt: CLOCK_ISO };
+const UNBOUND: StateSnapshot = { state: "unbound", reason: "no workspace", lastTransitionAt: CLOCK_ISO };
 const ACTIVE_LABEL = `● ${STATUS_LABELS.active}`;
 const DEGRADED_LABEL = `● ${STATUS_LABELS.active} [degraded]`;
 const DISCONNECTED_LABEL = `○ ${STATUS_LABELS.disconnected}`;
@@ -291,7 +293,7 @@ interface FixtureOptions {
   // One entry per attach, in order: a code rejects that attach with it; an absent entry resolves.
   readonly attachErrors?: readonly ErrorCode[];
   // Replaces the default attach; it receives the fixture daemon. The fixture still records each attach's workspace root.
-  readonly attach?: (daemon: FakeDaemon) => Promise<DaemonClient>;
+  readonly attach?: (daemon: FakeDaemon) => Promise<DaemonAttach>;
 }
 
 interface Fixture {
@@ -319,7 +321,7 @@ function makeFixture(options: FixtureOptions = {}): Fixture {
       if (code !== undefined) {
         return Promise.reject(makeRealmError(code));
       }
-      return Promise.resolve(daemon);
+      return Promise.resolve({ client: daemon, refusal: null });
     },
   };
   registerRealmPlugin(pi, pluginOptions);
@@ -409,7 +411,7 @@ void test("OMP-01: session start attaches the daemon for the session cwd and ret
   const fixture = makeFixture({
     attach: async (daemon) => {
       await gate.promise;
-      return daemon;
+      return { client: daemon, refusal: null };
     },
   });
 
@@ -476,12 +478,59 @@ void test("OMP-01 (a): an attach failure settles disconnected with the catalogue
   assert.deepEqual(await toolCallOf(fixture.pi)({ toolName: "edit" }), { block: true, reason: "REALM_NOT_ACTIVE" });
 });
 
+void test("OMP-01 (c): a refused up with a live status paints the refusal code and still forwards tool calls (P5-D8)", async () => {
+  const fixture = makeFixture({
+    snapshot: UNBOUND,
+    attach: (daemon) => Promise.resolve({ client: daemon, refusal: makeRealmError("PODMAN_UNSUPPORTED_VERSION") }),
+  });
+  startHandlerOf(fixture.pi)(fixture.ctx);
+
+  await waitForDetail(fixture.ui, "PODMAN_UNSUPPORTED_VERSION");
+  assert.equal(lastLabel(fixture.ui), DISCONNECTED_LABEL);
+  assert.match(lastDetail(fixture.ui) ?? "", /^PODMAN_UNSUPPORTED_VERSION · /);
+  assert.ok(
+    !statusTexts(fixture.ui).some((text) => text.includes(displayStatus(UNBOUND).reason)),
+    "the refusal replaces the daemon's own unbound reason",
+  );
+
+  // The client is adopted, so a Realm tool call still reaches the daemon.
+  fixture.daemon.callOutcome = { outcome: "refused", tool: "status", code: "REALM_UNBOUND", retryable: false };
+  await toolOf(fixture.pi, "status").execute("call-1", {});
+  assert.deepEqual(fixture.daemon.dispatched.at(-1), { status: {} }, "a Realm tool call reaches the adopted daemon");
+  assert.equal(fixture.daemon.count("close"), 0, "the live client is not released");
+});
+
+void test("OMP-01 (c): a status read that reports a different state replaces the refusal, and a read of the same state keeps it (P5-D8)", async () => {
+  const fixture = makeFixture({
+    snapshot: UNBOUND,
+    attach: (daemon) => Promise.resolve({ client: daemon, refusal: makeRealmError("PODMAN_UNSUPPORTED_VERSION") }),
+  });
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitForDetail(fixture.ui, "PODMAN_UNSUPPORTED_VERSION");
+
+  // A repaint tick that reads the same state keeps the refusal on screen, and paints nothing new.
+  const paintsBefore = statusTexts(fixture.ui).length;
+  const readsBefore = fixture.daemon.count("status");
+  pollOf(fixture.ctx).callback();
+  await waitUntil(() => fixture.daemon.count("status") > readsBefore);
+  await yieldTurn();
+  assert.match(lastDetail(fixture.ui) ?? "", /^PODMAN_UNSUPPORTED_VERSION · /);
+  assert.equal(statusTexts(fixture.ui).length, paintsBefore, "a repeat tick of the same state paints nothing");
+
+  // A status read that reports a different state replaces the refusal text.
+  fixture.daemon.snapshot = ACTIVE;
+  pollOf(fixture.ctx).callback();
+  await waitForDetail(fixture.ui, "container running");
+  assert.equal(lastLabel(fixture.ui), ACTIVE_LABEL);
+  assert.equal(lastDetail(fixture.ui)?.includes("PODMAN_UNSUPPORTED_VERSION"), false);
+});
+
 void test("OMP-01 (a): an attach that outlives the startup budget settles disconnected and releases its late client (P5-D8)", async () => {
   const gate = makeGate();
   const fixture = makeFixture({
     attach: async (daemon) => {
       await gate.promise;
-      return daemon;
+      return { client: daemon, refusal: null };
     },
   });
   startHandlerOf(fixture.pi)(fixture.ctx);
@@ -802,7 +851,7 @@ void test("timers: session shutdown clears the attach budget and the poll, and a
   const fixture = makeFixture({
     attach: async (daemon) => {
       await gate.promise;
-      return daemon;
+      return { client: daemon, refusal: null };
     },
   });
   startHandlerOf(fixture.pi)(fixture.ctx);
@@ -983,7 +1032,7 @@ void test("OMPX-03: before the first attach settles no mode is known, so a host 
     mode: "fail-closed",
     attach: async (daemon) => {
       await gate.promise;
-      return daemon;
+      return { client: daemon, refusal: null };
     },
   });
   startHandlerOf(fixture.pi)(fixture.ctx);

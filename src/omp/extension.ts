@@ -7,12 +7,13 @@
 
 import { startDetachedDaemon } from "../cli/main.js";
 import { fileURLToPath } from "node:url";
-import { connectDaemon, type DaemonClient } from "../daemon/client.js";
+import { connectDaemon } from "../daemon/client.js";
 import { CONTROL_TIMEOUT_MS } from "../daemon/channel.js";
 import { daemonAnswers, ensureDaemon, reportingStartFailure } from "../daemon/ensure.js";
 import { readHostRuntime } from "../runtime/host-paths.js";
 import { controlSocketPath } from "../session/paths.js";
-import { registerRealmPlugin, type OmpExtensionApi } from "./plugin.js";
+import { makeRealmError, RealmError } from "../core/errors.js";
+import { registerRealmPlugin, type DaemonAttach, type OmpExtensionApi } from "./plugin.js";
 
 export default function realmExtension(pi: OmpExtensionApi): void {
   // Read once, at the edge: the config's stateDir, the value the CLI and the daemon use. An invalid config throws here.
@@ -20,7 +21,7 @@ export default function realmExtension(pi: OmpExtensionApi): void {
   const socketPath = controlSocketPath(stateDir);
   const daemonEntry = fileURLToPath(new URL("../daemon/main.js", import.meta.url));
 
-  const attachDaemon = async (workspaceRoot: string): Promise<DaemonClient> => {
+  const attachDaemon = async (workspaceRoot: string): Promise<DaemonAttach> => {
     await ensureDaemon({
       socketPath,
       probe: reportingStartFailure(daemonAnswers(connectDaemon), stateDir),
@@ -34,17 +35,19 @@ export default function realmExtension(pi: OmpExtensionApi): void {
     const client = connectDaemon(socketPath);
     try {
       await client.up(workspaceRoot);
+      return { client, refusal: null };
     } catch (error: unknown) {
-      // A refused up still leaves a daemon that answers. Keep its client when its status answers, so the plugin reads the
-      // realm state and forwards tool calls (reachable, inactive). A dead channel closes the client and rethrows the up error.
+      // A refused up still leaves a daemon that answers. Keep its client when its status answers: the refusal is returned with
+      // it, so the plugin shows the refusal code and forwards tool calls (reachable, inactive). A dead channel closes the client
+      // and rethrows the up error.
       try {
         await client.status();
       } catch {
         client.close();
         throw error;
       }
+      return { client, refusal: error instanceof RealmError ? error : makeRealmError("SCHEMA_INVALID") };
     }
-    return client;
   };
 
   registerRealmPlugin(pi, { attachDaemon });
