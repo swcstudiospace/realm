@@ -38,11 +38,14 @@ import type { PolicyMode } from "../contract/validate.js";
 import type { StateSnapshot } from "../core/state-machine.js";
 import { STATUS_LABELS, displayStatus } from "../core/status.js";
 import {
+  DISCONNECTED_HIDDEN_TOOL_NAMES,
   PASS_THROUGH_HOST_TOOLS,
-  failClosedToolNames,
+  REALM_WRITE_NAME,
+  planHostTools,
   realmToolDefinitions,
   sameToolNames,
   type DaemonCall,
+  type HostPosture,
   type HostToolDefinition,
 } from "./tools.js";
 
@@ -136,10 +139,11 @@ export const STATUS_POLL_MS = 2_000;
 export const REALM_STATUS_KEY = "realm";
 export const REALM_RETRY_COMMAND = "realm-retry";
 
-// Host tools the tool_call guard checks against the daemon status: edit, the built-in that writes outside the realm. The Realm
-// write is not guarded here. It replaces the built-in write (spike S1) and reaches the daemon, whose dispatcher waits out
-// connecting and runs the mutation gate, so a write is decided there rather than refused early. The pass-through names
-// (PASS_THROUGH_HOST_TOOLS) pass the guard; in fail-closed mode the backstop refuses every other tool name.
+// Host tools the tool_call guard checks against the daemon status: edit, the built-in that writes outside the realm. While the
+// Realm write is hidden (R1), a call named write is that built-in too, and the guard judges it the same way. Otherwise the Realm
+// write is not guarded here: it replaces the built-in write (spike S1) and reaches the daemon, whose dispatcher waits out
+// connecting and runs the mutation gate. The names in PASS_THROUGH_HOST_TOOLS pass the guard; in fail-closed mode the backstop
+// refuses every other tool name.
 export const GUARDED_HOST_TOOLS: readonly string[] = Object.freeze(["edit"]);
 
 // ---- Status rendering (OMP-02, OMP-03; P5-D5) -------------------------------
@@ -204,7 +208,7 @@ export function registerRealmPlugin(pi: OmpExtensionApi, options: RealmPluginOpt
   let live: ActiveSession | null = null;
   let attempt = 0;
   // The host tool set, shared by every session of this registration.
-  const hostTools: HostToolSet = { pi, mode: null, removed: [], queue: Promise.resolve() };
+  const hostTools: HostToolSet = { pi, removed: [], queue: Promise.resolve() };
 
   // Ends the captured session. Every timer it armed is cleared and its wait settled, and the poll
   // is cleared, so the host runs no callback for an ended session. The client is closed, never taken
@@ -267,7 +271,7 @@ export function registerRealmPlugin(pi: OmpExtensionApi, options: RealmPluginOpt
       .then(async (client) => {
         try {
           const status = await client.status();
-          await setHostMode(session.tools, status.mode, () => isCurrent() && !spent);
+          await setHostMode(session.tools, postureOf(status), () => isCurrent() && !spent);
           return { client, status };
         } catch (error: unknown) {
           client.close();
@@ -326,15 +330,24 @@ export function registerRealmPlugin(pi: OmpExtensionApi, options: RealmPluginOpt
         const at = session.errorStamp?.code === code ? session.errorStamp.at : nowIso();
         session.errorStamp = { code, at };
         renderRealmStatus(session.ctx.ui, { state: "error", reason: code, lastTransitionAt: at });
+        try {
+          await setDisconnectedPosture(session, isCurrent);
+        } catch {
+          if (isCurrent()) {
+            const denied = "POLICY_DENIED";
+            const deniedAt = session.errorStamp.code === denied ? session.errorStamp.at : nowIso();
+            session.errorStamp = { code: denied, at: deniedAt };
+            renderRealmStatus(session.ctx.ui, { state: "error", reason: denied, lastTransitionAt: deniedAt });
+          }
+        }
         return;
       }
       if (!isCurrent()) {
         return;
       }
-      session.mode = status.mode;
       // The poll moves the host tool set with the mode it reports, so a change does not wait for a guarded call.
       try {
-        await setHostMode(session.tools, status.mode, isCurrent);
+        await setHostMode(session.tools, postureOf(status), isCurrent);
       } catch {
         if (isCurrent()) {
           const code = "POLICY_DENIED";
@@ -347,6 +360,7 @@ export function registerRealmPlugin(pi: OmpExtensionApi, options: RealmPluginOpt
       if (!isCurrent()) {
         return;
       }
+      session.mode = status.mode;
       session.errorStamp = null;
       renderRealmStatus(session.ctx.ui, status.snapshot);
     } finally {
@@ -409,7 +423,7 @@ export function registerRealmPlugin(pi: OmpExtensionApi, options: RealmPluginOpt
     pi.registerTool(tool);
   }
 
-  pi.on("tool_call", (call) => guardHostToolCall(call.toolName, live));
+  pi.on("tool_call", (call) => guardHostToolCall(call.toolName, live, hostTools));
 
   pi.registerCommand(REALM_RETRY_COMMAND, {
     description: "Retry the realm startup through the daemon attach path.",
@@ -423,15 +437,16 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
-// ---- tool_call guard (OMP-05; P5-D6; OMPX-03 backstop) ----------------------
+// ---- tool_call guard (OMP-05; P5-D6; OMPX-03 backstop; R1) ----------------
 // Residual risk (OQ-P5-02): the block holds inside the extension pipeline. The tool_call hook
 // returns { block: true } and the host fails closed on error or timeout. Any host path that
 // bypasses the extension pipeline (launch-time tool flags, SDK sessions, or a host that ignores the
 // hook) is NOT covered by this guard and must not be claimed as covered. Required mode is the
 // fail-closed policy mode (the default); advisory mode, set explicitly in the policy file, warns and lets the call through.
 //
-// The Realm tools pass the guard. write, read, list, exec and status reach the daemon, whose own dispatcher waits out
-// connecting and runs the mutation gate, so a write is decided there and is not refused early here.
+// The Realm tools pass the guard. read, list, exec and status reach the daemon, whose own dispatcher waits out connecting
+// and runs the mutation gate. The Realm write is the one exception that is read first: its posture may hide it (R1), so a call
+// named write is then Omp's built-in write and is judged like edit.
 //
 // Edit is the mutation check. It reads the daemon status: the state decides, and the mode decides a non-active state
 // (advisory warns, fail-closed blocks). It mirrors decideMutation (src/core/policy.ts) and the gate outcomes of
@@ -441,27 +456,26 @@ function nowIso(): string {
 // is the primary control: a removed tool is refused by Omp before this hook runs, so the backstop answers the calls that
 // do reach it, such as a tool another extension registers.
 //
-// The state comes from a daemon status read bounded by GUARD_STATUS_BUDGET_MS. When edit's state cannot be read, the last
-// known mode decides: advisory (explicit opt-in) warns; fail-closed, or no mode yet, blocks. Any other host tool whose status
-// cannot be read is refused, because its mode is unconfirmed.
+// The state comes from a daemon status read bounded by GUARD_STATUS_BUDGET_MS. When the status cannot be read the realm is
+// disconnected: the last known mode sets the posture, so advisory hides the Realm write and a guarded call warns; fail-closed,
+// or no mode yet, refuses a guarded call. Any other host tool whose status cannot be read is refused, because its mode is unconfirmed.
 
 export async function guardHostToolCall(
   toolName: unknown,
   session: ActiveSession | null,
+  tools: HostToolSet,
 ): Promise<HostToolVerdict | undefined> {
   if (typeof toolName !== "string") {
     // A call the guard cannot classify is refused, never waved through (LOW-01).
     return { block: true, reason: "realm bad tool call" };
   }
-  const guarded = GUARDED_HOST_TOOLS.includes(toolName);
-  const passThrough = PASS_THROUGH_HOST_TOOLS.includes(toolName);
   if (session === null) {
-    if (guarded) {
+    if (GUARDED_HOST_TOOLS.includes(toolName) || hiddenRealmTool(tools, toolName)) {
       return { block: true, reason: "realm not started" };
     }
-    return passThrough ? undefined : { block: true, reason: "POLICY_DENIED" };
+    return PASS_THROUGH_HOST_TOOLS.includes(toolName) ? undefined : { block: true, reason: "POLICY_DENIED" };
   }
-  if (passThrough) {
+  if (PASS_THROUGH_HOST_TOOLS.includes(toolName) && toolName !== REALM_WRITE_NAME) {
     return undefined;
   }
   // Any other host tool is decided by the mode the daemon reports now, so the status is read here, not taken from an earlier read.
@@ -469,6 +483,7 @@ export async function guardHostToolCall(
   // The session can move to another client while this guard awaits (a retry, a reattach or a shutdown). Any verdict built on
   // the earlier client is stale, so a moved session refuses the call with REALM_NOT_ACTIVE instead.
   const moved = (): boolean => session.client !== client;
+  const isCurrent = (): boolean => session.client === client;
   let status: DaemonStatus;
   try {
     status = await readStatus(session);
@@ -476,15 +491,26 @@ export async function guardHostToolCall(
     if (moved()) {
       return { block: true, reason: "REALM_NOT_ACTIVE" };
     }
-    return guarded ? unreadableVerdict(session, error) : { block: true, reason: "POLICY_DENIED" };
+    try {
+      await setDisconnectedPosture(session, isCurrent);
+    } catch {
+      return { block: true, reason: "POLICY_DENIED" };
+    }
+    if (toolName === REALM_WRITE_NAME && !hiddenRealmTool(tools, toolName)) {
+      // The Realm write is still visible, so the daemon decides it, as it did before this read.
+      return undefined;
+    }
+    if (hiddenRealmTool(tools, toolName) || GUARDED_HOST_TOOLS.includes(toolName)) {
+      return unreadableVerdict(session, error);
+    }
+    return { block: true, reason: "POLICY_DENIED" };
   }
   if (moved()) {
     return { block: true, reason: "REALM_NOT_ACTIVE" };
   }
-  session.mode = status.mode;
   renderRealmStatus(session.ctx.ui, status.snapshot);
   try {
-    await setHostMode(session.tools, status.mode, () => session.client === client);
+    await setHostMode(tools, postureOf(status), isCurrent);
   } catch {
     return { block: true, reason: "POLICY_DENIED" };
   }
@@ -492,7 +518,13 @@ export async function guardHostToolCall(
   if (moved()) {
     return { block: true, reason: "REALM_NOT_ACTIVE" };
   }
-  if (guarded) {
+  // The mode is published only once the tool set has taken it (P16 b): a refused change leaves the last published mode in place.
+  session.mode = status.mode;
+  const hidden = hiddenRealmTool(tools, toolName);
+  if (toolName === REALM_WRITE_NAME && !hidden) {
+    return undefined;
+  }
+  if (hidden || GUARDED_HOST_TOOLS.includes(toolName)) {
     const verdict = stateVerdict(session, status.mode, status.snapshot.state);
     if (verdict !== undefined) {
       return verdict;
@@ -502,23 +534,48 @@ export async function guardHostToolCall(
   return status.mode === "advisory" ? undefined : { block: true, reason: "POLICY_DENIED" };
 }
 
-// The host's tool set as this plugin left it (OMPX-03, OMPX-04). Omp keeps every removal for the life of the process, so one
+// The host's tool set as this plugin left it (OMPX-03, OMPX-04, R1). Omp keeps every removal for the life of the process, so one
 // set serves every session of the registration: a new session, a retry or a restarted daemon starts from what was last applied.
 export interface HostToolSet {
   readonly pi: OmpExtensionApi;
-  // The mode the tool set reflects; null until one has been applied.
-  mode: PolicyMode | null;
-  // Built-ins this plugin removed and has not put back. An advisory change restores them.
+  // The tools this plugin removed and has not put back: built-ins removed in fail-closed mode, and the Realm write hidden while
+  // the realm is not active in advisory mode. A plan that no longer hides one gives it back.
   removed: string[];
   // Changes run one at a time, so a setter already in flight finishes before the next one starts.
   queue: Promise<void>;
 }
 
-// Brings the host tool set to mode. A change starts only if isCurrent still holds when its turn in the queue comes, so a
+// The posture a daemon status gives. A status whose mode cannot be read is refused: it changes no host tool.
+function postureOf(status: DaemonStatus): HostPosture {
+  if (!isPolicyMode(status.mode)) {
+    throw makeRealmError("POLICY_DENIED");
+  }
+  return { mode: status.mode, realmActive: status.snapshot.state === "active" };
+}
+
+function isPolicyMode(value: unknown): value is PolicyMode {
+  return value === "advisory" || value === "fail-closed";
+}
+
+// The realm cannot be read, so it counts as disconnected under the last known mode. Fail-closed changes nothing here: its
+// allowlist already keeps the Realm tools. Advisory hides the Realm write (R1).
+function setDisconnectedPosture(session: ActiveSession, isCurrent: () => boolean): Promise<void> {
+  if (session.mode === null) {
+    return Promise.resolve();
+  }
+  return setHostMode(session.tools, { mode: session.mode, realmActive: false }, isCurrent);
+}
+
+// True while the Realm write is hidden (R1): a call named write is then Omp's built-in write.
+function hiddenRealmTool(tools: HostToolSet, toolName: string): boolean {
+  return DISCONNECTED_HIDDEN_TOOL_NAMES.includes(toolName) && tools.removed.includes(toolName);
+}
+
+// Brings the host tool set to posture. A change starts only if isCurrent still holds when its turn in the queue comes, so a
 // superseded attempt, an attempt past its budget, or a shut-down session changes nothing. Rejects with POLICY_DENIED when the
 // set does not read back as wanted.
-function setHostMode(tools: HostToolSet, mode: PolicyMode, isCurrent: () => boolean): Promise<void> {
-  const change = tools.queue.then(() => applyHostMode(tools, mode, isCurrent));
+function setHostMode(tools: HostToolSet, posture: HostPosture, isCurrent: () => boolean): Promise<void> {
+  const change = tools.queue.then(() => applyHostMode(tools, posture, isCurrent));
   tools.queue = change.then(
     () => undefined,
     () => undefined,
@@ -526,34 +583,27 @@ function setHostMode(tools: HostToolSet, mode: PolicyMode, isCurrent: () => bool
   return change;
 }
 
-async function applyHostMode(tools: HostToolSet, mode: PolicyMode, isCurrent: () => boolean): Promise<void> {
-  if (tools.mode === mode || !isCurrent()) {
+// Plans from what Omp reports now, not from the last applied posture, so a drift in the same posture is restored too (P16 c).
+async function applyHostMode(tools: HostToolSet, posture: HostPosture, isCurrent: () => boolean): Promise<void> {
+  if (!isCurrent()) {
     return;
   }
   const { pi } = tools;
+  const active = pi.getActiveTools();
+  const plan = planHostTools(posture, pi.getAllTools().map((tool) => tool.name), active, tools.removed);
+  // Recorded before the setter runs, so a removal that only partly holds is still owed a restore.
+  tools.removed = [...plan.owed];
+  if (sameToolNames(active, plan.wanted)) {
+    return;
+  }
   try {
-    if (mode === "fail-closed") {
-      // The allowlist (spike rule 1). Recorded before the setter runs, so a removal that only partly holds is still owed a restore.
-      const wanted = failClosedToolNames(pi.getAllTools().map((tool) => tool.name));
-      const removing = pi.getActiveTools().filter((name) => !wanted.includes(name));
-      tools.removed = [...new Set([...tools.removed, ...removing])];
-      await pi.setActiveTools(wanted);
-      if (!sameToolNames(pi.getActiveTools(), wanted)) {
-        throw new Error("the removal did not hold");
-      }
-    } else if (tools.removed.length > 0) {
-      // Advisory keeps the built-ins available, so the ones this plugin removed come back.
-      const wanted = [...new Set([...pi.getActiveTools(), ...tools.removed])];
-      await pi.setActiveTools(wanted);
-      if (!sameToolNames(pi.getActiveTools(), wanted)) {
-        throw new Error("the restore did not hold");
-      }
-      tools.removed = [];
+    await pi.setActiveTools(plan.wanted);
+    if (!sameToolNames(pi.getActiveTools(), plan.wanted)) {
+      throw new Error("the active set did not read back as wanted");
     }
   } catch {
     throw makeRealmError("POLICY_DENIED");
   }
-  tools.mode = mode;
 }
 
 // One status read under a managed timer. The timer expiry rejects with TOOL_TIMEOUT, so a hung

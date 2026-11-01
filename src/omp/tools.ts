@@ -7,7 +7,7 @@
 // shares a built-in's name the built-in's place (spike S1), so the Realm read and write replace the
 // built-ins of the same name. There is no glob tool, and retry is the realm-retry command, not a tool.
 
-import type { ToolCall, ToolName } from "../contract/validate.js";
+import type { PolicyMode, ToolCall, ToolName } from "../contract/validate.js";
 import { makeRealmError, RealmError, type ErrorCode } from "../core/errors.js";
 import type { ToolOutcome } from "../tools/dispatch.js";
 
@@ -41,6 +41,51 @@ export function sameToolNames(left: readonly string[], right: readonly string[])
   const a = [...left].sort();
   const b = [...right].sort();
   return a.length === b.length && a.every((name, index) => name === b[index]);
+}
+
+// R1 (advisory, realm not active). The Realm tools hidden while advisory mode runs with the realm not active, so Omp's built-in
+// of the same name runs under the guard's notice. Only write shares a name with a built-in that changes files. Realm has no edit
+// tool: the built-in edit stays a guarded host tool.
+export const REALM_WRITE_NAME = "write";
+export const DISCONNECTED_HIDDEN_TOOL_NAMES: readonly string[] = Object.freeze([REALM_WRITE_NAME]);
+
+// The posture the host tool set follows: the policy mode the daemon reports, and whether its realm is active. A realm that is not
+// active, or whose status cannot be read, is not active.
+export interface HostPosture {
+  readonly mode: PolicyMode;
+  readonly realmActive: boolean;
+}
+
+export interface HostToolPlan {
+  // The active set the host should hold.
+  readonly wanted: string[];
+  // The tools this plugin removed and has not put back. The next plan gives back the ones it no longer hides.
+  readonly owed: string[];
+}
+
+// Plans the host tool set for a posture (OMPX-03, OMPX-04, R1). registered is every tool Omp reports, active the active set now,
+// and owed the tools this plugin removed before. Fail-closed keeps the allowlist and removes the rest. Advisory keeps every tool
+// except the Realm tools hidden while the realm is not active.
+export function planHostTools(
+  posture: HostPosture,
+  registered: readonly string[],
+  active: readonly string[],
+  owed: readonly string[],
+): HostToolPlan {
+  if (posture.mode === "fail-closed") {
+    const wanted = failClosedToolNames(registered);
+    return { wanted, owed: unionOf(owed, active).filter((name) => !wanted.includes(name)) };
+  }
+  const hidden: readonly string[] = posture.realmActive ? [] : DISCONNECTED_HIDDEN_TOOL_NAMES;
+  const restorable = owed.filter((name) => registered.includes(name));
+  return {
+    wanted: unionOf(active, restorable).filter((name) => !hidden.includes(name)),
+    owed: unionOf(owed, active).filter((name) => hidden.includes(name)),
+  };
+}
+
+function unionOf(left: readonly string[], right: readonly string[]): string[] {
+  return [...new Set([...left, ...right])];
 }
 
 // ---- Definitions -------------------------------------------------------------

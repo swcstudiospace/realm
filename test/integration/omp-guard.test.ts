@@ -4,8 +4,8 @@
 // (dist/src/omp/extension.js), not the spike extension. A scripted provider emits one call, then a final text reply. The
 // policy mode is written into the profile and into the daemon's policy file; nothing here relies on the default.
 //
-//   C1 advisory, realm down: the Realm write is refused with REALM_NOT_ACTIVE and the file is absent. The Realm write goes to
-//      the daemon, so with the daemon down the advisory notice does not apply to it.
+//   C1 advisory, realm down: the Realm write is hidden (R1), so the built-in write runs under the advisory notice and the file
+//      is created with the exact bytes.
 //   C2 fail-closed, realm down: the write is blocked with REALM_NOT_ACTIVE, the file is absent, and the provider's next
 //      request carries that error.
 //   C3 realm active: the write proceeds on the host. The offered tool list is recorded, not asserted; Phase 16 owns removal.
@@ -166,16 +166,15 @@ function toolEndOf(outcome: PromptOutcome, tool: string): ToolEnd {
 }
 
 void test(
-  "C1: advisory with the realm down refuses the Realm write with REALM_NOT_ACTIVE and the file is absent",
+  "C1: advisory with the realm down hides the Realm write, so the built-in write runs under the advisory notice and creates the file",
   { skip, timeout: OMP_SCENARIO_TIMEOUT_MS },
   async (t) => {
     const spec: GuardCase = { name: "c1", mode: "advisory", realm: "down", tool: "write", relativePath: "c1.txt" };
     const { omp, profile, outcome } = await runGuard(t, spec);
-    assert.equal(omp.notices().includes(ADVISORY_NOTICE), false, "the Realm write is not the guard's advisory host path");
+    assert.deepEqual(omp.notices(), [ADVISORY_NOTICE]);
     const end = toolEndOf(outcome, "write");
-    assert.equal(end.isError, true);
-    assert.match(end.text, /REALM_NOT_ACTIVE/);
-    assert.equal(existsSync(join(profile.workspace, spec.relativePath)), false);
+    assert.equal(end.isError, false, end.text);
+    assert.deepEqual(readFileSync(join(profile.workspace, spec.relativePath)), Buffer.from(spec.name));
   },
 );
 
