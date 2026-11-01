@@ -9,6 +9,7 @@
 //
 // Nothing here prints a secret. A failure message carries exit codes, error codes, names and clipped probe output only.
 
+import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, writeFileSync, accessSync, constants, statSync } from "node:fs";
 import { connect } from "node:net";
@@ -1105,4 +1106,50 @@ export function startMcpSession(inputs: LiveInputs, scenario: ScenarioEnvironmen
       return clip(stderrText);
     },
   };
+}
+
+// ---- MCP client helpers -------------------------------------------------------------------------------------------------
+// The MCP calls the live suites make against `realm mcp`. A tool result is checked before its value is returned.
+
+// The legacy revision a realm mcp session handshakes with (src/mcp/protocol.ts), the one Claude Code uses.
+export const MCP_LEGACY_REVISION = "2025-11-25";
+// The bound on every MCP response. The first one, the answer to initialize, is the exception: realm mcp claims the workspace
+// before it reads any input (src/cli/main.ts runMcp: ensure the daemon, then up, then serve), so that answer waits for the
+// attach, which has its own 60 s control bound after the daemon start. A hung server fails the test with a clear message, unless
+// the 5 minute scenario timeout fires first: the sum of the bounds can exceed it.
+export const MCP_RESPONSE_TIMEOUT_MS = 60_000;
+export const MCP_FIRST_RESPONSE_TIMEOUT_MS = 150_000;
+
+// The value under key of a JSON object, or undefined for anything else.
+export function field(value: unknown, key: string): unknown {
+  return typeof value === "object" && value !== null ? Reflect.get(value, key) : undefined;
+}
+
+// One tools/call. The result is an MCP tool result: structuredContent is the dispatcher outcome unchanged ({outcome: "done", tool,
+// value} for a tool that ran) and content carries the same JSON as a text block, which is what a host shows to the model. A refusal
+// or a RealmError comes back as a tool error (isError, structuredContent with the catalogue code), because the daemon client throws
+// the refusal's code. Both fail the scenario with that code.
+export async function callTool(session: McpSession, tool: string, args: Readonly<Record<string, unknown>>): Promise<unknown> {
+  const result = await session.request("tools/call", { name: tool, arguments: args }, MCP_RESPONSE_TIMEOUT_MS);
+  const outcome = field(result, "structuredContent");
+  if (field(result, "isError") === true) {
+    assert.fail(`tools/call ${tool} returned a tool error: ${describeValue(outcome)}; realm mcp stderr ${session.stderr()}`);
+  }
+  assert.equal(field(outcome, "outcome"), "done", `tools/call ${tool}: ${describeValue(result)}; realm mcp stderr ${session.stderr()}`);
+  assert.equal(field(outcome, "tool"), tool, `tools/call ${tool}: the outcome names another tool: ${describeValue(result)}`);
+  const blocks = field(result, "content");
+  const first: unknown = Array.isArray(blocks) ? (blocks as unknown[])[0] : undefined;
+  assert.equal(field(first, "type"), "text", `tools/call ${tool}: the result needs a text content block for the model: ${describeValue(result)}`);
+  return field(outcome, "value");
+}
+
+// The initialize handshake of a realm mcp session with the legacy revision.
+export async function initializeMcp(session: McpSession): Promise<void> {
+  const initialized = await session.request(
+    "initialize",
+    { protocolVersion: MCP_LEGACY_REVISION, capabilities: {}, clientInfo: { name: "realm-live-suite", version: "0" } },
+    MCP_FIRST_RESPONSE_TIMEOUT_MS,
+  );
+  assert.equal(field(initialized, "protocolVersion"), MCP_LEGACY_REVISION, `initialize: ${describeValue(initialized)}`);
+  session.notify("notifications/initialized");
 }
