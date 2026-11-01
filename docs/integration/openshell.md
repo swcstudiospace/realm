@@ -523,6 +523,7 @@ Image distribution. The sandbox image is built locally and is not distributed. I
 | `REALM_LIVE_PRODUCTION` | `1`. An explicit operator opt-in. The test never sets it, and any other value skips the file. |
 | `REALM_LIVE_IMAGE` | The digest-pinned image reference the running driver was given. |
 | `REALM_LIVE_DRIVER_CONFIG` | Absolute path of the `config.json` the running driver reads. The secret, workspace and sandbox-state roots come from that file (`secretRoot`, `workspaceRoot`, `sandboxStateRoot`; omitted secret and sandbox-state roots are `<stateDir>/secrets` and `<stateDir>/sandboxes`). A stale `REALM_DRIVER_SECRET_ROOT`, `REALM_DRIVER_WORKSPACE_ROOT` or `REALM_DRIVER_STATE_ROOT` is ignored. `workspaceRoot` must also be the project directory the policy approves. |
+| `REALM_DRIVER_SOCKET` | Absolute path of the socket the running compute driver binds. It must be a socket, not a regular file. The daemon probes it to tell a driver that does not answer (`OPENSHELL_GATEWAY_LOST`) from a runner crash (`AGENTOS_CRASH_LOOP`). Unset, or not a socket, the gate skips with this name. `realm up` passes it to the daemon it starts when it is set in the CLI's environment. |
 | `XDG_RUNTIME_DIR` | The realm account's runtime directory. The rootless Podman API socket must be at `podman/podman.sock` under it. |
 
 The gate also needs Podman 5.x and the `openshell` CLI on `PATH`, and the built CLI at `dist/src/cli/main.js`, so build first.
