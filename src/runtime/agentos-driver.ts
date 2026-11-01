@@ -82,16 +82,17 @@ async function succeeds(run: () => Promise<OpenShellRunOutcome>, budgetMs: numbe
   }
 }
 
-// Connects to an absolute unix socket path and reports whether it accepted the connection within timeoutMs. A refused or
-// absent socket, a path that is not a socket and a missed bound are all false. The connection is closed as soon as the answer
-// is known, and the OS error is not read, so no path or OS text leaves the probe.
-function connectsWithin(socketPath: string, timeoutMs: number): Promise<boolean> {
-  return new Promise<boolean>((resolve) => {
+// Connects to an absolute unix socket path and reports whether it accepted the connection within timeoutMs: true when it did,
+// false when the socket is refused, absent, not a socket, or the bound is missed. A permission error is no answer at all, see
+// answerOfConnectError. The connection is closed as soon as the answer is known. Only the error code is read, never its
+// message, so no path or OS text leaves the probe.
+function connectsWithin(socketPath: string, timeoutMs: number): Promise<boolean | null> {
+  return new Promise<boolean | null>((resolve) => {
     const timer = setTimeout(() => {
       finish(false);
     }, timeoutMs);
     const socket = createConnection({ path: socketPath });
-    const finish = (answer: boolean): void => {
+    const finish = (answer: boolean | null): void => {
       clearTimeout(timer);
       socket.destroy();
       resolve(answer);
@@ -99,10 +100,16 @@ function connectsWithin(socketPath: string, timeoutMs: number): Promise<boolean>
     socket.once("connect", () => {
       finish(true);
     });
-    socket.once("error", () => {
-      finish(false);
+    socket.once("error", (error: NodeJS.ErrnoException) => {
+      finish(answerOfConnectError(error.code));
     });
   });
+}
+
+// The answer for a failed connect, from its error code alone. EACCES and EPERM mean this daemon may not open the socket (it is
+// neither root nor the socket's owner). That says nothing about the driver, so the answer is null. Any other failure is false.
+export function answerOfConnectError(code: string | undefined): boolean | null {
+  return code === "EACCES" || code === "EPERM" ? null : false;
 }
 
 // A bounded pause between two readiness probes. It ends after ms, or as soon as the runner child exits, so a runner that

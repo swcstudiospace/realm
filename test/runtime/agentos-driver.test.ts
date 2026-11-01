@@ -7,6 +7,7 @@ import { isAbsolute, join, relative } from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { RealmError, type ErrorCode } from "../../src/core/errors.js";
 import {
+  answerOfConnectError,
   createOpenShellAgentOsDriver,
   GATEWAY_STATUS_TIMEOUT_MS,
   type OpenShellAgentOsDriverOptions,
@@ -461,4 +462,12 @@ void test("OBS-04: driverAnswers is null for a relative socket path, which is ne
   const relativePath = relative(process.cwd(), socketPath);
   assert.equal(isAbsolute(relativePath), false, "the path under test is relative");
   assert.equal(await driverOf(harness({ driverSocketPath: relativePath })).driverAnswers(), null, "a relative path is not probed");
+});
+
+void test("OBS-04: a permission error from the driver socket is no answer, while a refused or absent socket is false", () => {
+  assert.equal(answerOfConnectError("EACCES"), null, "a permission error is not evidence that the driver is gone");
+  assert.equal(answerOfConnectError("EPERM"), null, "a permission error is not evidence that the driver is gone");
+  assert.equal(answerOfConnectError("ECONNREFUSED"), false);
+  assert.equal(answerOfConnectError("ENOENT"), false);
+  assert.equal(answerOfConnectError(undefined), false, "an error with no code is a failed probe");
 });
