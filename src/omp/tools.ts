@@ -43,45 +43,33 @@ export function sameToolNames(left: readonly string[], right: readonly string[])
   return a.length === b.length && a.every((name, index) => name === b[index]);
 }
 
-// R1 (advisory, realm not active). The Realm tools hidden while advisory mode runs with the realm not active, so Omp's built-in
-// of the same name runs under the guard's notice. Only write shares a name with a built-in that changes files. Realm has no edit
-// tool: the built-in edit stays a guarded host tool.
+// The name of the Realm write. Omp's built-in write shares it, and the Realm write replaces that built-in (spike S1), so the
+// Realm write is the one Omp runs in every mode and state. The daemon decides each call (B1 to B3).
 export const REALM_WRITE_NAME = "write";
-export const DISCONNECTED_HIDDEN_TOOL_NAMES: readonly string[] = Object.freeze([REALM_WRITE_NAME]);
 
-// The posture the host tool set follows: the policy mode the daemon reports, and whether its realm is active. A realm that is not
-// active, or whose status cannot be read, is not active.
-export interface HostPosture {
-  readonly mode: PolicyMode;
-  readonly realmActive: boolean;
-}
-
+// The tool set the host should hold, and the tools this plugin removed and has not put back.
 export interface HostToolPlan {
   // The active set the host should hold.
   readonly wanted: string[];
-  // The tools this plugin removed and has not put back. The next plan gives back the ones it no longer hides.
+  // The tools this plugin removed and has not put back. A plan that gives one back leaves it out.
   readonly owed: string[];
 }
 
-// Plans the host tool set for a posture (OMPX-03, OMPX-04, R1). registered is every tool Omp reports, active the active set now,
-// and owed the tools this plugin removed before. Fail-closed keeps the allowlist and removes the rest. Advisory keeps every tool
-// except the Realm tools hidden while the realm is not active.
+// Plans the host tool set for a policy mode (OMPX-03, OMPX-04, P16 c and d). registered is every tool Omp reports, active the
+// active set now, and owed the tools this plugin removed before. Fail-closed keeps the allowlist and removes the rest. Advisory
+// keeps every tool Omp reports and gives back the owed tools Omp still registers.
 export function planHostTools(
-  posture: HostPosture,
+  mode: PolicyMode,
   registered: readonly string[],
   active: readonly string[],
   owed: readonly string[],
 ): HostToolPlan {
-  if (posture.mode === "fail-closed") {
+  if (mode === "fail-closed") {
     const wanted = failClosedToolNames(registered);
     return { wanted, owed: unionOf(owed, active).filter((name) => !wanted.includes(name)) };
   }
-  const hidden: readonly string[] = posture.realmActive ? [] : DISCONNECTED_HIDDEN_TOOL_NAMES;
   const restorable = owed.filter((name) => registered.includes(name));
-  return {
-    wanted: unionOf(active, restorable).filter((name) => !hidden.includes(name)),
-    owed: unionOf(owed, active).filter((name) => hidden.includes(name)),
-  };
+  return { wanted: unionOf(active, restorable), owed: [] };
 }
 
 function unionOf(left: readonly string[], right: readonly string[]): string[] {

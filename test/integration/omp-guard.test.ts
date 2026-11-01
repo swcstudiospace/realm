@@ -4,8 +4,9 @@
 // (dist/src/omp/extension.js), not the spike extension. A scripted provider emits one call, then a final text reply. The
 // policy mode is written into the profile and into the daemon's policy file; nothing here relies on the default.
 //
-//   C1 advisory, realm down: the Realm write is hidden (R1), so the built-in write runs under the advisory notice and the file
-//      is created with the exact bytes.
+//   C1 advisory, realm inactive: the daemon answers with its realm in error, so the Realm write is forwarded and lands with the
+//      advisory warning on every call; the file has the exact bytes and the write stays in the offered tool list.
+//   C1b advisory, daemon down: the Realm write is refused with REALM_NOT_ACTIVE and the file is absent. C1 and C1b are authored, not run.
 //   C2 fail-closed, realm down: the write is blocked with REALM_NOT_ACTIVE, the file is absent, and the provider's next
 //      request carries that error.
 //   C3 realm active: the write proceeds on the host. The offered tool list is recorded, not asserted; Phase 16 owns removal.
@@ -25,8 +26,8 @@
 
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import test, { type TestContext } from "node:test";
 import {
   closeWithEvidence,
@@ -48,8 +49,18 @@ import { startRealmDaemon } from "../support/realm-daemon-fixture.js";
 import { ScriptedProvider, type RecordedRequest } from "../support/scripted-provider.js";
 import { classify, defaultAllow, externalConnects, formatOffenders, parseConnects, traceArgv, type NetAllow, type NetConnect } from "../support/net-trace.js";
 import { onPath } from "../support/production-live.js";
+import { sendRequest } from "../../src/daemon/channel.js";
+import { startDaemon } from "../../src/daemon/daemon.js";
+import type { PodmanProbeResult } from "../../src/runtime/podman-probe.js";
+import { FakeBridge } from "../support/fake-bridge.js";
+import { FakeExecutionService } from "../support/fake-execution.js";
 
 const ADVISORY_NOTICE = "realm status unavailable (REALM_NOT_ACTIVE); the write proceeds under advisory policy";
+// The warning the daemon attaches to an advisory write while its realm is in error (decideMutation, src/core/policy.ts).
+const REALM_ERROR_WARNING = "realm is error; the write proceeds under advisory policy";
+const CLOCK_ISO = "2026-10-21T09:30:00.000Z";
+const REALM_IMAGE = `registry.example.com/realm/workload@sha256:${"0".repeat(64)}`;
+const CONTROL_TIMEOUT_MS = 5000;
 const EVIDENCE_DIR_VARIABLE = "REALM_OMP_EVIDENCE_DIR";
 const CLOSE_OPTIONS = { graceMs: 40_000, termMs: 20_000, killMs: 20_000 } as const;
 // Two starts over one profile, each with its own frame-driven startup, prompt and bounded close.
@@ -66,14 +77,49 @@ const traceSkip =
   (onPath("podman", process.env["PATH"]) ? false : "no podman executable on PATH; HARN-03 requires Podman even with a fake-backed daemon");
 const ompVersionText = baseInputs.version.kind === "output" ? (parseOmpVersion(baseInputs.version.stdout)?.text ?? "unknown") : "unknown";
 
+// C1 needs a daemon that answers while its realm is not active. The shared fixture's sandbox always creates, so this starts the
+// real daemon over the same fakes with one container create refused: the state moves to error and the control socket still answers.
+async function startInactiveRealmDaemon(options: {
+  readonly stateDir: string;
+  readonly workspace: string;
+  readonly mode: ProfilePolicyMode;
+}): Promise<{ down(): Promise<void> }> {
+  const policyDir = dirname(options.stateDir);
+  mkdirSync(policyDir, { recursive: true });
+  const policyPath = join(policyDir, "policy.json");
+  writeFileSync(policyPath, JSON.stringify({ mode: options.mode, workspaceRoots: [options.workspace] }));
+  const exec = new FakeExecutionService();
+  exec.failNext("create", "PODMAN_MISSING");
+  const daemon = await startDaemon({
+    runtimeInput: { image: REALM_IMAGE, stateDir: options.stateDir, workspaceRoot: options.workspace },
+    policyPath,
+    sessionId: "sess-harness",
+    exec,
+    bridge: new FakeBridge(),
+    clock: () => new Date(CLOCK_ISO),
+    runOpenShell: () => Promise.resolve({ exitCode: 0, stdout: "", stderr: "", truncated: false }),
+    sweep: () => Promise.resolve(0),
+    probe: () => Promise.resolve<PodmanProbeResult>({ ok: true, version: "5.0.0" }),
+  });
+  return {
+    async down(): Promise<void> {
+      await sendRequest(daemon.socketPath, { id: "c1-down", method: "down" }, { timeoutMs: CONTROL_TIMEOUT_MS });
+      await daemon.done;
+    },
+  };
+}
+
 interface GuardCase {
   readonly name: string;
   readonly mode: ProfilePolicyMode;
-  // down: attach, then remove the realm, then make the call. active: the daemon stays up for the call.
-  readonly realm: "down" | "active";
+  // down: attach, then remove the realm, then make the call. inactive: the daemon answers, but its container create failed, so
+  // the realm is in error while the call is made. active: the daemon stays up for the call.
+  readonly realm: "down" | "inactive" | "active";
   // The tool the model calls: the Realm write, or the built-in edit.
   readonly tool: "write" | "edit";
   readonly relativePath: string;
+  // How many writes the model makes, one after another. Omitted means one.
+  readonly writes?: number;
 }
 
 async function runGuard(
@@ -85,10 +131,12 @@ async function runGuard(
   t.after(() => cleanups.run());
   const provider = new ScriptedProvider();
   cleanups.add(() => provider.stop());
+  let issued = 0;
   provider.onTurn((turn) => {
-    if (turn.lastRole === "tool") {
+    if (turn.lastRole === "tool" && issued >= (spec.writes ?? 1)) {
       return { text: "done" };
     }
+    issued += 1;
     return { call: callOf(spec) };
   });
   const { port } = await provider.start();
@@ -105,7 +153,10 @@ async function runGuard(
   if (spec.tool === "edit") {
     assert.equal(existsSync(join(profile.workspace, spec.relativePath)), false, "native CREATE requires an absent workspace file");
   }
-  const daemon = await startRealmDaemon({ stateDir: profile.stateDir, workspace: profile.workspace, mode: spec.mode });
+  const daemon =
+    spec.realm === "inactive"
+      ? await startInactiveRealmDaemon({ stateDir: profile.stateDir, workspace: profile.workspace, mode: spec.mode })
+      : await startRealmDaemon({ stateDir: profile.stateDir, workspace: profile.workspace, mode: spec.mode });
   let realmUp = true;
   cleanups.add(async () => {
     if (realmUp) {
@@ -137,9 +188,9 @@ async function runGuard(
   );
   await omp.ready(OMP_READY_TIMEOUT_MS);
   await omp.waitFor(
-    (session) => session.status()?.includes("realm active") === true,
+    (session) => session.status()?.includes(spec.realm === "inactive" ? "PODMAN_MISSING" : "realm active") === true,
     OMP_READY_TIMEOUT_MS,
-    "the plugin's realm active status",
+    spec.realm === "inactive" ? "the plugin's realm error status" : "the plugin's realm active status",
   );
   if (spec.realm === "down") {
     realmUp = false;
@@ -166,15 +217,33 @@ function toolEndOf(outcome: PromptOutcome, tool: string): ToolEnd {
 }
 
 void test(
-  "C1: advisory with the realm down hides the Realm write, so the built-in write runs under the advisory notice and creates the file",
+  "C1: advisory with the realm inactive and the daemon reachable forwards the Realm write, which lands with the warning on every call",
   { skip, timeout: OMP_SCENARIO_TIMEOUT_MS },
   async (t) => {
-    const spec: GuardCase = { name: "c1", mode: "advisory", realm: "down", tool: "write", relativePath: "c1.txt" };
-    const { omp, profile, outcome } = await runGuard(t, spec);
-    assert.deepEqual(omp.notices(), [ADVISORY_NOTICE]);
-    const end = toolEndOf(outcome, "write");
-    assert.equal(end.isError, false, end.text);
+    const spec: GuardCase = { name: "c1", mode: "advisory", realm: "inactive", tool: "write", relativePath: "c1.txt", writes: 2 };
+    const { omp, profile, outcome, requests } = await runGuard(t, spec);
+    assert.ok((requests[0]?.toolsOffered ?? []).includes("write"), "the Realm write stays in the offered tool list");
+    assert.deepEqual(omp.notices(), [REALM_ERROR_WARNING, REALM_ERROR_WARNING], "the advisory warning is shown on every call");
+    const ends = outcome.toolEnds.filter((end) => end.toolName === "write");
+    assert.equal(ends.length, 2, "both writes reached the daemon");
+    for (const end of ends) {
+      assert.equal(end.isError, false, end.text);
+    }
     assert.deepEqual(readFileSync(join(profile.workspace, spec.relativePath)), Buffer.from(spec.name));
+  },
+);
+
+void test(
+  "C1b: advisory with the daemon unreachable refuses the Realm write with REALM_NOT_ACTIVE and creates no file",
+  { skip, timeout: OMP_SCENARIO_TIMEOUT_MS },
+  async (t) => {
+    const spec: GuardCase = { name: "c1b", mode: "advisory", realm: "down", tool: "write", relativePath: "c1b.txt" };
+    const { omp, profile, outcome } = await runGuard(t, spec);
+    const end = toolEndOf(outcome, "write");
+    assert.equal(end.isError, true);
+    assert.match(end.text, /REALM_NOT_ACTIVE/);
+    assert.equal(existsSync(join(profile.workspace, spec.relativePath)), false);
+    assert.deepEqual(omp.notices(), [], "the refused write carries no warning");
   },
 );
 

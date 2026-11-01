@@ -177,25 +177,16 @@ void test("OMPX-02: the pass-through names are the Realm tools, the read-only bu
   ]);
 });
 
-// R1 and OMPX-03 / P16 (c): the plan the host tool set is brought to, for a posture, from what Omp reports now.
-void test("R1: advisory with the realm not active plans every tool except the Realm write, which it owes back", () => {
-  const plan = planHostTools({ mode: "advisory", realmActive: false }, OMP_NAMES_WITH_REALM_TOOLS, OMP_NAMES_WITH_REALM_TOOLS, []);
-  assert.ok(!plan.wanted.includes("write"), "the Realm write is not wanted");
-  for (const name of ["edit", "bash", "web_search", "read"]) {
-    assert.ok(plan.wanted.includes(name), `${name} stays wanted`);
-  }
-  assert.deepEqual(plan.owed, ["write"]);
-});
-
-void test("R1: the Realm write is planned again, and owed nothing, once the realm is active", () => {
-  const hidden = planHostTools({ mode: "advisory", realmActive: false }, OMP_NAMES_WITH_REALM_TOOLS, OMP_NAMES_WITH_REALM_TOOLS, []);
-  const back = planHostTools({ mode: "advisory", realmActive: true }, OMP_NAMES_WITH_REALM_TOOLS, hidden.wanted, hidden.owed);
-  assert.ok(back.wanted.includes("write"), "the Realm write is wanted again");
-  assert.deepEqual(back.owed, []);
+// OMPX-03, OMPX-04 and P16 (c, d): the plan the host tool set is brought to, for a policy mode, from what Omp reports now.
+void test("B1 and B9: advisory plans every tool Omp reports, the Realm write included, and owes nothing", () => {
+  const plan = planHostTools("advisory", OMP_NAMES_WITH_REALM_TOOLS, OMP_NAMES_WITH_REALM_TOOLS, []);
+  assert.deepEqual(sortedOf(plan.wanted), sortedOf(OMP_NAMES_WITH_REALM_TOOLS));
+  assert.ok(plan.wanted.includes("write"), "the Realm write is wanted whatever the realm state");
+  assert.deepEqual(plan.owed, []);
 });
 
 void test("OMPX-03: fail-closed plans the allowlist and owes every other registered tool it removes", () => {
-  const plan = planHostTools({ mode: "fail-closed", realmActive: true }, OMP_NAMES_WITH_REALM_TOOLS, OMP_NAMES_WITH_REALM_TOOLS, []);
+  const plan = planHostTools("fail-closed", OMP_NAMES_WITH_REALM_TOOLS, OMP_NAMES_WITH_REALM_TOOLS, []);
   assert.deepEqual(sortedOf(plan.wanted), sortedOf(failClosedToolNames(OMP_NAMES_WITH_REALM_TOOLS)));
   for (const name of ["bash", "edit", "web_search"]) {
     assert.ok(plan.owed.includes(name), `${name} is owed`);
@@ -204,15 +195,15 @@ void test("OMPX-03: fail-closed plans the allowlist and owes every other registe
 });
 
 void test("OMPX-03: leaving fail-closed gives back the built-ins it removed", () => {
-  const closed = planHostTools({ mode: "fail-closed", realmActive: true }, OMP_NAMES_WITH_REALM_TOOLS, OMP_NAMES_WITH_REALM_TOOLS, []);
-  const open = planHostTools({ mode: "advisory", realmActive: true }, OMP_NAMES_WITH_REALM_TOOLS, closed.wanted, closed.owed);
+  const closed = planHostTools("fail-closed", OMP_NAMES_WITH_REALM_TOOLS, OMP_NAMES_WITH_REALM_TOOLS, []);
+  const open = planHostTools("advisory", OMP_NAMES_WITH_REALM_TOOLS, closed.wanted, closed.owed);
   assert.deepEqual(sortedOf(open.wanted), sortedOf(OMP_NAMES_WITH_REALM_TOOLS));
   assert.deepEqual(open.owed, []);
 });
 
 void test("P16 (c): fail-closed plans a tool another extension adds as removed, so a drift in the same mode is restored", () => {
   const plan = planHostTools(
-    { mode: "fail-closed", realmActive: true },
+    "fail-closed",
     [...OMP_NAMES_WITH_REALM_TOOLS, "mcp_tool"],
     [...OMP_NAMES_WITH_REALM_TOOLS, "mcp_tool"],
     [],
@@ -222,7 +213,7 @@ void test("P16 (c): fail-closed plans a tool another extension adds as removed, 
 });
 
 void test("P16 (d): an owed tool Omp no longer registers is not restored, so the plan never waits on a name that cannot come back", () => {
-  const plan = planHostTools({ mode: "advisory", realmActive: true }, ["read"], ["read"], ["bash"]);
+  const plan = planHostTools("advisory", ["read"], ["read"], ["bash"]);
   assert.deepEqual(plan.wanted, ["read"]);
   assert.deepEqual(plan.owed, []);
 });

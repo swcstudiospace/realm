@@ -35,8 +35,14 @@ export default function realmExtension(pi: OmpExtensionApi): void {
     try {
       await client.up(workspaceRoot);
     } catch (error: unknown) {
-      client.close();
-      throw error;
+      // A refused up still leaves a daemon that answers. Keep its client when its status answers, so the plugin reads the
+      // realm state and forwards tool calls (reachable, inactive). A dead channel closes the client and rethrows the up error.
+      try {
+        await client.status();
+      } catch {
+        client.close();
+        throw error;
+      }
     }
     return client;
   };
