@@ -61,9 +61,21 @@ export function defaultPolicyPath(stateDir: string): string {
 
 // True when argv1 and the module file named by moduleUrl are the same file once symbolic
 // links are resolved. An undefined argv1, or one that does not exist, is never the entry.
+// A compiled Omp binary reports its virtual /$bunfs entry as existing, yet realpath fails on
+// it with ENOENT. That path is not a file on disk, so it is not the entry either. Any other
+// realpath error propagates.
 export function isDirectEntry(moduleUrl: string, argv1: string | undefined): boolean {
   if (argv1 === undefined || !existsSync(argv1)) {
     return false;
   }
-  return realpathSync(argv1) === realpathSync(fileURLToPath(moduleUrl));
+  let resolved: string;
+  try {
+    resolved = realpathSync(argv1);
+  } catch (error: unknown) {
+    if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") {
+      return false;
+    }
+    throw error;
+  }
+  return resolved === realpathSync(fileURLToPath(moduleUrl));
 }
