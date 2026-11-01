@@ -19,7 +19,11 @@ async function waitFor(path: string): Promise<string> {
   const started = Date.now();
   while (Date.now() - started < 5_000) {
     if (existsSync(path)) {
-      return readFileSync(path, "utf8");
+      // The child writes one flat JSON object with no trailing newline, so a closing brace marks a complete write.
+      const text = readFileSync(path, "utf8");
+      if (text.endsWith("}")) {
+        return text;
+      }
     }
     await new Promise((resolve) => {
       setTimeout(resolve, 20);
