@@ -4,7 +4,7 @@
 
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeRealmError } from "../../src/core/errors.js";
@@ -16,18 +16,27 @@ import {
   type DaemonStartOptions,
 } from "../../src/daemon/main.js";
 import type { StartedDaemon } from "../../src/daemon/daemon.js";
+import { daemonLogPath, daemonStartFailureSince } from "../../src/daemon/ensure.js";
 import { defaultPolicyPath } from "../../src/runtime/host-paths.js";
 import type { RealmHandle } from "../../src/realm/compose.js";
 import { TEARDOWN_TIMEOUT_MS } from "../../src/lifecycle/controller.js";
 import type { EnvironmentLike } from "../../src/session/paths.js";
 
+// Every entry line is one JSON object written through the logger: ts, level, event, then code. The timestamp is checked
+// and dropped, so the rest of the line compares exactly.
+function entryOf(line: string): Record<string, unknown> {
+  const { ts, ...fields } = JSON.parse(line) as Record<string, unknown>;
+  assert.equal(typeof ts === "string" && !Number.isNaN(Date.parse(ts)), true);
+  return fields;
+}
 
-function failed(code: string): string {
-  return JSON.stringify({ level: "error", event: "daemon.failed", code });
+
+function failed(code: string): Record<string, unknown> {
+  return { level: "error", event: "daemon.failed", code };
 }
 
 function startupOf(lines: readonly string[]): Record<string, unknown> {
-  const value = JSON.parse(lines[0] ?? "") as Record<string, unknown>;
+  const value = entryOf(lines[0] ?? "");
   assert.equal(value["event"], "daemon.startup");
   return value;
 }
@@ -112,7 +121,7 @@ void test("a missing config returns 1 and reports SCHEMA_INVALID without startin
 
   assert.equal(await runDaemon(h.deps), 1);
   assert.equal(starts, 0);
-  assert.deepEqual(h.lines, [failed("SCHEMA_INVALID")]);
+  assert.deepEqual(h.lines.map(entryOf), [failed("SCHEMA_INVALID")]);
 });
 
 void test("a valid config starts once with the derived options and resolves 0 on teardown", async (t) => {
@@ -311,8 +320,9 @@ void test("CRASH-04: a failed reap's partial report is logged, then the start fa
   assert.equal(partial["tempFilesRemoved"], 0);
   assert.equal(partial["auditLinesReconciled"], 0);
   assert.equal(partial["reapFailure"], "REALM_STOPPING");
+  assert.equal(partial["code"], "REALM_STOPPING");
   assert.equal(partial["failures"], 1);
-  assert.equal(h.lines[1], failed("REALM_STOPPING"));
+  assert.deepEqual(entryOf(h.lines[1] ?? ""), failed("REALM_STOPPING"));
 });
 
 void test("STARTUP budget: a long unfinished list is sampled at ten names, the count stays exact, and a truncated audit listing is named", async (t) => {
@@ -402,7 +412,7 @@ void test("a start rejecting with a RealmError returns 1 and writes its code", a
   });
 
   assert.equal(await runDaemon(h.deps), 1);
-  assert.deepEqual(h.lines, [failed("LOCK_CONFLICT")]);
+  assert.deepEqual(h.lines.map(entryOf), [failed("LOCK_CONFLICT")]);
 });
 
 void test("a start rejecting with a non-RealmError is reported as SCHEMA_INVALID", async (t) => {
@@ -412,7 +422,7 @@ void test("a start rejecting with a non-RealmError is reported as SCHEMA_INVALID
   });
 
   assert.equal(await runDaemon(h.deps), 1);
-  assert.deepEqual(h.lines, [failed("SCHEMA_INVALID")]);
+  assert.deepEqual(h.lines.map(entryOf), [failed("SCHEMA_INVALID")]);
 });
 
 void test("a signal runs the control-channel down and resolves 0", async (t) => {
@@ -459,7 +469,7 @@ void test("a down that fails during a signal shutdown returns 1 with its code", 
   handler();
 
   assert.equal(await run, 1);
-  assert.deepEqual(h.lines, [failed("AGENTOS_STOP_FAILED")]);
+  assert.deepEqual(h.lines.map(entryOf), [failed("AGENTOS_STOP_FAILED")]);
 });
 
 void test("the CLI down bound outlasts the daemon teardown bound", () => {
@@ -467,4 +477,35 @@ void test("the CLI down bound outlasts the daemon teardown bound", () => {
     CONTROL_TIMEOUT_MS.down > TEARDOWN_TIMEOUT_MS,
     "the CLI must not give up before the daemon finishes teardown",
   );
+});
+
+void test("OBS-02: an early startup failure is one logger JSON line, and the ensure parser reads its code", async (t) => {
+  const dir = tempDir(t);
+  const raw = validConfig(dir);
+  const stateDir = String(raw["stateDir"]);
+  mkdirSync(stateDir, { recursive: true });
+  const logPath = daemonLogPath(stateDir);
+  const lines: string[] = [];
+  // The detached daemon inherits the startup log as stderr, so each entry line lands in the file the ensure parser reads.
+  const deps: DaemonDeps = {
+    env: writeConfig(dir, raw),
+    writeStderr: (line: string) => {
+      lines.push(line);
+      appendFileSync(logPath, `${line}\n`);
+    },
+    start: () => Promise.reject(makeRealmError("POLICY_DENIED")),
+  };
+
+  assert.equal(await runDaemon(deps), 1);
+  assert.equal(lines.length, 1);
+  const [line] = lines;
+  assert.ok(line !== undefined);
+  const value = JSON.parse(line) as Record<string, unknown>;
+  assert.deepEqual(Object.keys(value), ["ts", "level", "event", "code"]);
+  assert.equal(Number.isNaN(Date.parse(String(value["ts"]))), false);
+  assert.equal(value["level"], "error");
+  assert.equal(value["event"], "daemon.failed");
+  assert.equal(value["code"], "POLICY_DENIED");
+  assert.equal(readFileSync(logPath, "utf8"), `${line}\n`);
+  assert.equal(daemonStartFailureSince(stateDir, 0), "POLICY_DENIED");
 });
