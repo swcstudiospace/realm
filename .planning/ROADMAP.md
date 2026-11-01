@@ -181,6 +181,8 @@ Plans:
 
 **Milestone Goal:** A model working through Omp does its file mutations and commands inside the sandbox by default; the sandbox and its files survive crashes; an operator can see what happened, prove the audit log is intact, and ship with provenance and a rollback path.
 
+**Recovery status (2026-10-31):** `Trealm31-gsd-records`, execution correlation `ut-mvvowl70-29165019`. First joined wave is EDIT ONLY: parent verifies after all owners land; no dependent dispatch, checker/gate run, completion SUMMARY/VERIFICATION, commit or milestone transition here. Existing phase12/13/14/15/17 plans are reused, not discarded. New phase16/18/19/20 context/plan pairs fill missing artifacts; all nine phases remain incomplete. `phases/RECOVERY-2026-10-31.md` maps all52 requirements to code units and exact parent P0/P12–P20 evidence, distinguishing implemented-unverified, genuine missing code, live-gated, historical/decision-recorded and owner-excluded.
+
 - [ ] **Phase 12: Scripted-provider harness and Omp enforcement spike** - A gated harness drives a live Omp through a scripted provider in three cases, the spike answers what the extension API can enforce, and OMP-05 is recorded complete on that evidence (HARN-01..04, OMPX-01)
 - [ ] **Phase 13: Quality ratchet** - Dependency audit and Dependabot, pack checks, coverage floors, de-flaked timing tests, property tests, and a scheduled mutation run (QR-01..08)
 - [ ] **Phase 14: Crash-safety pack** - Orphan temp-file sweep, audit reconciliation, durable record deletion, a visible reap, real-SIGKILL tests, the cause code across the daemon, and retry after a lost container (CRASH-01..07)
@@ -373,12 +375,14 @@ The owner lifted the ship hold on 2026-10-28 for one pull request with autoMerge
 
 **Notes:** Owner decision D2 (2026-10-29): when the harness passes live, the scripted-provider evidence closes OMP-05, with that basis stated. The finding of the OMPX-01 spike gates Phase 16 (owner decision D3). Live runs on the shared realm stack are serialized, because the startup reap is account-wide.
 
-**Plans**: TBD
+**Current semantic/evidence overlay:** Criterion2 above is the preserved historical native-write receipt, not today's registered-write behavior. Accepted phase16 name shadowing replaces native read/write: current disconnected registered write refuses in advisory too; supplied C1–C3 passed on that basis. Separate native advisory C4 CREATE control replaces the known failed unissued-tag probe and is awaiting parent verification; Realm read never issues an Omp edit snapshot. HARN-03 remains FAILED: parent S11 warm38 external+6DNS=44, cold skipped49 separate; same-run refusing proxy0 external/0DNS/7 refused CONNECTs is narrower, not a clean warm harness. Zero-offender criterion is unchanged. HARN repair NOT QUEUED until supported structured handover and future signed dispatch; no repair or acceptance rewrite in this wave.
+
+**Plans**: 1 existing plan (`12-01-PLAN.md`), reused with recovery supersession; no plan completion claimed
 
 ### Phase 13: Quality ratchet
 
 **Goal:** Regressions in dependencies, coverage, packaging and the security-relevant path and policy logic fail in CI or in a scheduled run before they ship, and the test suite no longer fails under load.
-**Depends on:** Nothing (pipeline lane; Phase 20 follows it because both change the CI workflow)
+**Depends on:** Nothing
 **Requirements:** QR-01, QR-02, QR-03, QR-04, QR-05, QR-06, QR-07, QR-08
 **Success Criteria** (what must be TRUE):
   1. `ci.yml` runs `npm audit --omit=dev --audit-level=high`, and `.github/dependabot.yml` exists and covers `github-actions` and `npm` for the repository root and for `site/` (QR-01, QR-02).
@@ -389,7 +393,9 @@ The owner lifted the ship hold on 2026-10-28 for one pull request with autoMerge
 
 **Notes:** Each change under `.github/workflows/**` and `release/**` cites owner decision D6 in its pull request body. The `fast-check` dev dependency carries the justification, licence check and maintenance check that `CONTRIBUTING.md` requires. The property tests add confidence only; FS-02 keeps its status, which is the owner's call.
 
-**Plans**: TBD
+**Recovery dependency/evidence note:** Pipeline root phase; release hardening is downstream, not a dependency on Phase20. Existing audit/Dependabot/coverage/timing/property/export/mutation implementation must not be rebuilt blindly. Remaining gaps include actual Finish-tarball smoke, four malformed real archives, real raised-floor/CI floor provenance, quota-container load proof, export disposition and mutation permission/run evidence (P13A–P13C). Historical canonicalizer break3/11/restored11/11 is accepted, not missing.
+
+**Plans**: 1 existing plan (`13-01-PLAN.md`), reused; implemented-unverified with named code/proof gaps
 
 ### Phase 14: Crash-safety pack
 
@@ -405,7 +411,9 @@ The owner lifted the ship hold on 2026-10-28 for one pull request with autoMerge
 
 **Notes:** CRASH-02 uses an existing catalogue code if one fits; otherwise the one catalogue addition that owner decision D5 allows, with every table, document and test that enumerates codes updated in the same pull request. Phase 17 follows because its hash chain must cover the reconciliation lines. Live runs on the shared realm stack are serialized, because the startup reap is account-wide.
 
-**Plans**: TBD
+**Recovery evidence note:** Sweep and reconciliation are already wired before serving; durable delete, SIGKILL/cause/retry tests and notices exist. Historical real notice/id/count proof is retained. Parent P14 supplies exact test/conditional-skip attribution; phase17 adds explicit live reconciliation-in-chain proof and phase19 selectively adopts rather than discarding valid survivors. No new completion claim from source existence.
+
+**Plans**: 1 existing plan (`14-01-PLAN.md`), reused; implemented-unverified, no SUMMARY/VERIFICATION pass
 
 ### Phase 15: Zero-config onboarding and fail-closed default
 
@@ -421,7 +429,9 @@ The owner lifted the ship hold on 2026-10-28 for one pull request with autoMerge
 
 **Notes:** Owner decision D4 (2026-10-29) flips the default `mode` from `advisory` to `fail-closed`, superseding the earlier decision to keep advisory as the default; the schema default, the loader, `docs/policy-reference.md`, the README, the Omp notes, the doctor output, the `init` templates and every test that relied on the old default change together in one clean cutover. The driver launcher lives outside the repository (TD-02), so moving the roots into `config.json` is coordinated with whoever launches the driver, or the driver and the daemon will disagree. Live runs on the shared realm stack are serialized, because the startup reap is account-wide.
 
-**Plans**: TBD
+**Recovery evidence note:** The observed POLICY_DENIED/unbound came from wrong CLI cwd despite correct generated roots. Independently, init lacked derived private-root creation and doctor fixes lacked a CLI caller/no-follow descriptor cutover; those are signed first-wave edits, not parent-verified yet. TD-02 provisioning remains external. P15 requires a driver reading the same physical init-produced config and correct workspace selection; manual production fixture is not init proof. README install/quickstart/transcript and actionable post-init root advice remain unresolved allocation/evidence, not waived.
+
+**Plans**: 1 existing plan (`15-01-PLAN.md`), reused; first-wave repair plus remaining live/documentation acceptance
 
 ### Phase 16: Omp runs in the sandbox
 
@@ -431,12 +441,12 @@ The owner lifted the ship hold on 2026-10-28 for one pull request with autoMerge
 **Success Criteria** (what must be TRUE):
   1. The extension registers `exec`, `read`, `write`, `list` and `status` as Omp tools, each calling the daemon client with the frozen `ToolCall` shape; `retry` stays the `realm-retry` command, no `glob` tool exists, and the frozen tool schema tests pass unchanged (OMPX-02).
   2. In fail-closed mode the built-in `write`, `edit` and `bash` are removed or blocked by the mechanism the Phase 12 spike proved, the `tool_call` guard stays as a backstop, and a model-issued `bash` call is refused with a catalogue code; where the spike shows the API cannot enforce removal, the status text and the docs say fail-closed is a guard and not containment (OMPX-03).
-  3. In advisory mode the Realm tools are registered, the built-in tools stay available, and the existing notice shows (OMPX-04).
+  3. In advisory mode the Realm tools are registered, the built-in tools other than same-name `read` and `write` stay available, and the existing notice shows for the native advisory host path; registered Realm `read` and `write` displace the built-ins by the already accepted name-shadowing exception (OMPX-04).
   4. In the Phase 12 harness with the realm active, a model-issued write through the registered tool lands in the sandbox's `/workspace` and appears in the host root, and the audit log holds an admission line and a result line for it (OMPX-05).
 
 **Notes:** Owner decision D3 (2026-10-29) permits removal or blocking of the built-ins only by the mechanism the Phase 12 spike proves; the spike answer decides whether criterion 2 reads as containment or as a guard. Live runs on the shared realm stack are serialized, because the startup reap is account-wide.
 
-**Plans**: TBD
+**Plans**: 1 recovery dependency plan (`16-01-PLAN.md`) and `16-CONTEXT.md`; unreviewed, implementation/proof incomplete
 
 ### Phase 17: Observability and tamper-evident audit
 
@@ -451,7 +461,9 @@ The owner lifted the ship hold on 2026-10-28 for one pull request with autoMerge
 
 **Notes:** Owner decision D5 allows the one catalogue addition for gateway or driver loss (TD-05); any other catalogue change needs a reason recorded in the phase context. The design of OBS-01 covers the Merkle anchor and the reconciliation lines of Phase 14. Live runs on the shared realm stack are serialized, because the startup reap is account-wide.
 
-**Plans**: TBD
+**Recovery evidence note:** Basic chain/request logging/metrics and historical real gateway-loss proof exist. Missing approved --session/--file/--anchor/--head verification and uniform timestamped startup/failure logging are real code gaps. Live correlation/reconciliation presence and complete driver-only S17-b exec/realm-status observation remain P17; historical gateway pass is not missing and status-connected alone is not driver-loss proof.
+
+**Plans**: 1 existing plan (`17-01-PLAN.md`), reused with checkpoint/logger/proof recovery units
 
 ### Phase 18: Per-project sandboxes
 
@@ -467,7 +479,7 @@ The owner lifted the ship hold on 2026-10-28 for one pull request with autoMerge
 
 **Notes:** The runtime decision (owner decision D5, item i) is recorded first, before any code that needs it. Live runs on the shared realm stack are serialized, because the startup reap is account-wide.
 
-**Plans**: TBD
+**Plans**: 1 recovery dependency plan (`18-01-PLAN.md`) and `18-CONTEXT.md`; D5/PR36 decision recorded, per-project runtime and acceptance incomplete
 
 ### Phase 19: Resume and checkpoint
 
@@ -483,7 +495,7 @@ The owner lifted the ship hold on 2026-10-28 for one pull request with autoMerge
 
 **Notes:** Owner decision D5, items ii and iii: the startup reaper re-adopts a running container that passes the hardening verifier and removes what cannot be proven good, superseding the "remove everything" form of D-84, D-86 and RT-08 while keeping the no-orphan guarantee in a precise form, and RT-01's mount list gains the scratch volume. Both are recorded before the code. Live runs on the shared realm stack are serialized, because the startup reap is account-wide.
 
-**Plans**: TBD
+**Plans**: 1 recovery dependency plan (`19-01-PLAN.md`) and `19-CONTEXT.md`; D5/PR36 adoption/scratch decisions recorded, missing runtime/checkpoint implementation and live proof
 
 ### Phase 20: Release pipeline hardening
 
@@ -498,7 +510,9 @@ The owner lifted the ship hold on 2026-10-28 for one pull request with autoMerge
 
 **Notes:** Owner decision D6 (2026-10-29) signs off the changes under `.github/workflows/**`, `release/**` and `scripts/release/**`; each pull request cites D6 in its body, and human review before merge still applies (`AGENTS.md`). The repository settings of TD-10 (secret scanning, push protection, branch protection, `sha_pinning_required`) stay the owner's and cannot be changed from the repository; only the job split and the attestation are in this phase. The attestation is unverified until a release built by the new workflow exists.
 
-**Plans**: TBD
+**Recovery evidence note:** PR40 implementation and historical review metadata are not release-run proof; retain current parent approved gated-merge/test-release route after actual current-head review/all gates, never arbitrary production rollback. Reuse split/normal+repair six-file attestation/draft repair logic. Non-revert multi-commit removal semantics and validated known-good docs selection remain actual gaps. P20 must retain real run/subject-digest/attestation/rollback/deployment content evidence; shared runner token separation is not proven OS isolation.
+
+**Plans**: 1 recovery dependency plan (`20-01-PLAN.md`) and `20-CONTEXT.md`; open implementation/proof gaps, no release action authorized to A15
 
 ## Progress
 
@@ -527,12 +541,12 @@ Milestone v3.0 phases (12 to 20) run in three parallel lanes that share no mutab
 | 9.7. Review-Finding Remediation | 1/1 | Complete (2026-10-28): the A10 and A18 findings fixed or recorded; four defects found by the live proof fixed (rlimit REST names, driver shutdown, doctor digest bound, verifier exit-2 classification); nine live scenarios 31 of 31 on the rebuilt image, twice (the second on the final installed build); gates at the closing code commit: 1828 tests, 1818 pass, 0 fail, 10 skipped, test:scripts 109 of 109. Pull request 6 (2026-10-29): Greptile 0, 4, then 5 of 5 over three rounds (six findings, all fixed; one was a regression from an earlier fix), CI green; on the PR head 2c401b5: 1843 tests, 1833 pass, 0 fail, 10 skipped, test:scripts 109 of 109, live suite 31 of 31 on that exact build. The RT-04 wording was amended by the owner to match ruling N1 and the other owner decisions are listed in 09.7-VERIFICATION.md | - |
 | 10. Docs, Packaging, and Release 0.2.0 | 4/4 | Complete (2026-10-29): plans 10-01 to 10-03 done, HOST-03 complete; 10-04: the reserved files were reviewed by four independent lanes plus an adversarial review and a release rehearsal and upgraded (10-04-RESERVED-FILES.md), TOOL-05 was proven live, pull request 6 was merged through the ship flow with a merge commit (550a41f) after Greptile gave 5 of 5 on its final head, the release job published v0.2.0 (84d937c) with checksums and an SBOM, Pages deployed, and the released tarball passed the live suite on the production stack (31 of 31) | 2026-10-29 |
 | 11. Milestone v2.0 Close | 1/1 | Complete (2026-10-29): the milestone audit ran against the built and installed product and found five defects the records had marked complete (the MCP server could not be used from Claude Code, its tool results and an exec descriptor did not match the revision and the Anthropic API, both agent surfaces advertised 0.0.0, and the Omp attach probe), all fixed in pull request 7 and released as 0.2.1 (31 of 31 on the live suite); `milestone complete v2.0 --confirm` then archived the milestone with eight requirements carried (FS-02, ANDA-01 to 04, OMP-05, PRD-DRV-01 open; UI-01 an accepted limitation) | 2026-10-29 |
-| 12. Scripted-provider harness and Omp enforcement spike | 0/TBD | Not started | - |
-| 13. Quality ratchet | 0/TBD | Not started | - |
-| 14. Crash-safety pack | 0/TBD | Not started | - |
-| 15. Zero-config onboarding and fail-closed default | 0/TBD | Not started | - |
-| 16. Omp runs in the sandbox | 0/TBD | Not started | - |
-| 17. Observability and tamper-evident audit | 0/TBD | Not started | - |
-| 18. Per-project sandboxes | 0/TBD | Not started | - |
-| 19. Resume and checkpoint | 0/TBD | Not started | - |
-| 20. Release pipeline hardening | 0/TBD | Not started | - |
+| 12. Scripted-provider harness and Omp enforcement spike | 0/1 | Recovery: current C1–C3 supplied pass, C4 repair unverified, HARN-03 failed44 warm offenders; historical native receipt retained | - |
+| 13. Quality ratchet | 0/1 | Recovery: implemented-unverified plus exact repair/package/coverage/load/run gaps | - |
+| 14. Crash-safety pack | 0/1 | Recovery: implementation and historical real evidence present, scoped parent attribution pending | - |
+| 15. Zero-config onboarding and fail-closed default | 0/1 | Recovery: signed init/doctor edits await parent; generated-config live/docs acceptance open | - |
+| 16. Omp runs in the sandbox | 0/1 | Recovery plan/context authored, unreviewed; lifetime/read/production Omp acceptance incomplete | - |
+| 17. Observability and tamper-evident audit | 0/1 | Recovery: chain/logger code gaps and live evidence open; metrics/gateway historical proof retained | - |
+| 18. Per-project sandboxes | 0/1 | Recovery plan/context authored, unreviewed; decision recorded, runtime missing | - |
+| 19. Resume and checkpoint | 0/1 | Recovery plan/context authored, unreviewed; adoption/scratch/checkpoint missing/live-gated | - |
+| 20. Release pipeline hardening | 0/1 | Recovery plan/context authored, unreviewed; PR40 implementation not release verification | - |
