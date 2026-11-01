@@ -5,6 +5,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { appendAudit } from "../../src/audit/log.js";
+import { buildAnchorRecord, type AnchorRecord } from "../../src/audit/anchor.js";
 import {
   AUDIT_GENESIS_PREV,
   AUDIT_LINE_MAX_BYTES,
@@ -265,28 +266,84 @@ void test("OBS-01 checkpoint: tail loss is reported at the last line still prese
   });
 });
 
-void test("OBS-01 checkpoint: an anchor past the end of a shorter log is reported as shorter-log at the last line", () => {
+// The first `count` lines of a log, as a realm anchor record would commit to them.
+function anchorOver(lines: readonly string[], count: number): AnchorRecord {
+  return buildAnchorRecord({
+    sessionId: SESSION,
+    lines: lines.slice(0, count).map((line) => Buffer.from(line, "utf8")),
+    createdAt: new Date("2026-11-01T00:00:00.000Z"),
+  });
+}
+
+void test("OBS-01 anchor record: an untouched log verifies against the anchor and reports the anchored count", () => {
   withStateDir((stateDir) => {
     const lines = seed(stateDir, 3);
-    writeLines(auditFile(stateDir), lines.slice(0, 1));
-    const check = checkAuditFile(auditFile(stateDir), { anchor: `2:${lineHash(lines, 2)}` });
-    assert.equal(check.exitCode, 1);
-    assert.equal(check.reason, "shorter-log");
-    assert.equal(check.line, 1);
+    const check = checkAuditFile(auditFile(stateDir), { anchor: anchorOver(lines, 2) });
+    assert.equal(check.exitCode, 0);
+    assert.equal(check.ok, true);
+    assert.deepEqual(check.anchor, { ok: true, lines: 3, lineCount: 2 });
   });
 });
 
-void test("OBS-01 checkpoint: a prefix rewritten with a re-linked successor passes the chain but fails the anchor at the anchored line", () => {
+void test("OBS-01 anchor record: lines appended after the anchored count still verify", () => {
+  withStateDir((stateDir) => {
+    const lines = seed(stateDir, 2);
+    const anchor = anchorOver(lines, 2);
+    appendAudit(stateDir, { sessionId: SESSION, tool: "write", outcome: "ok", phase: "result", path: "later.txt" });
+    const check = checkAuditFile(auditFile(stateDir), { anchor });
+    assert.equal(check.exitCode, 0);
+    assert.deepEqual(check.anchor, { ok: true, lines: 3, lineCount: 2 });
+  });
+});
+
+void test("OBS-01 anchor record: a log shorter than the anchored count is shorter-log, naming both counts", () => {
+  withStateDir((stateDir) => {
+    const lines = seed(stateDir, 3);
+    writeLines(auditFile(stateDir), lines.slice(0, 1));
+    const check = checkAuditFile(auditFile(stateDir), { anchor: anchorOver(lines, 2) });
+    assert.equal(check.exitCode, 1);
+    assert.equal(check.ok, false);
+    assert.equal(check.line, undefined);
+    assert.deepEqual(check.anchor, { ok: false, lines: 1, lineCount: 2, reason: "shorter-log" });
+  });
+});
+
+void test("OBS-01 anchor record: a prefix rewritten with a re-linked successor passes the chain but fails the anchor", () => {
   withStateDir((stateDir) => {
     const lines = seed(stateDir, 3);
     const edited2 = JSON.stringify({ ...(JSON.parse(lines[1] ?? "") as Record<string, unknown>), path: "forged.txt" });
     const relinked3 = JSON.stringify({ ...(JSON.parse(lines[2] ?? "") as Record<string, unknown>), prev: sha256(edited2) });
     writeLines(auditFile(stateDir), [lines[0] ?? "", edited2, relinked3]);
     assert.equal(verifyAuditFile(auditFile(stateDir)).ok, true);
-    const check = checkAuditFile(auditFile(stateDir), { anchor: `2:${lineHash(lines, 2)}` });
+    const check = checkAuditFile(auditFile(stateDir), { anchor: anchorOver(lines, 2) });
     assert.equal(check.exitCode, 1);
-    assert.equal(check.reason, "prefix-changed");
-    assert.equal(check.line, 2);
+    assert.equal(check.ok, false);
+    assert.deepEqual(check.anchor, { ok: false, lines: 3, lineCount: 2, reason: "prefix-changed" });
+  });
+});
+
+void test("OBS-01 anchor record: an edit without a re-linked successor is still the chain's break, and the anchor is not checked", () => {
+  withStateDir((stateDir) => {
+    const lines = seed(stateDir, 3);
+    const edited2 = JSON.stringify({ ...(JSON.parse(lines[1] ?? "") as Record<string, unknown>), path: "forged.txt" });
+    writeLines(auditFile(stateDir), [lines[0] ?? "", edited2, lines[2] ?? ""]);
+    const check = checkAuditFile(auditFile(stateDir), { anchor: anchorOver(lines, 2) });
+    assert.equal(check.exitCode, 1);
+    assert.equal(check.reason, "prev-mismatch");
+    assert.equal(check.line, 3);
+    assert.equal(check.anchor, undefined);
+  });
+});
+
+void test("OBS-01 anchor record: a head pin and an anchor record that both hold pass together", () => {
+  withStateDir((stateDir) => {
+    const lines = seed(stateDir, 3);
+    const check = checkAuditFile(auditFile(stateDir), {
+      head: `3:${lineHash(lines, 3)}`,
+      anchor: anchorOver(lines, 1),
+    });
+    assert.equal(check.exitCode, 0);
+    assert.deepEqual(check.anchor, { ok: true, lines: 3, lineCount: 1 });
   });
 });
 

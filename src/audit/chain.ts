@@ -8,13 +8,15 @@
 // closed by the writer and stays its own line; the next line hashes that fragment.
 //
 // The chain alone cannot see a log that was cut short or rewritten consistently from some
-// line on. checkAuditFile adds two externally held pins, each "<seq>:<sha256>" of a chained
-// line: a head (the newest line known at save time) and an anchor (an older line that must
-// stay unchanged). A log shorter than the pin reports tail-loss (head) or shorter-log
-// (anchor); a pinned line whose bytes changed reports prefix-changed at that line.
+// line on. checkAuditFile adds two externally held checks. A head pin, "<seq>:<sha256>" of
+// the newest chained line known at save time, reports tail-loss when the log is shorter, and
+// prefix-changed when that line's bytes differ. An anchor record (realm anchor, see
+// anchor.ts) commits to the first lineCount lines by Merkle root; a shorter log reports
+// shorter-log and a changed prefix reports prefix-changed. Lines past the anchored count pass.
 
 import { createHash } from "node:crypto";
-import { closeSync, constants, fstatSync, openSync, readSync } from "node:fs";
+import { closeSync, constants, fstatSync, openSync, readFileSync, readSync } from "node:fs";
+import { verifyAnchorRecord, type AnchorMismatch, type AnchorRecord } from "./anchor.js";
 
 export const AUDIT_LINE_MAX_BYTES = 4 * 1024 * 1024;
 export const AUDIT_GENESIS_PREV = "0".repeat(64);
@@ -46,8 +48,7 @@ export type ChainBreakReason =
   | "prev-mismatch"
   | "line-too-long"
   | "prefix-changed"
-  | "tail-loss"
-  | "shorter-log";
+  | "tail-loss";
 
 export interface ChainBreak {
   readonly line: number;
@@ -65,9 +66,16 @@ export interface VerifyAuditResult {
   readonly broken?: ChainBreak;
 }
 
-// Typed outcome for a CLI: exit 0 = verified, 1 = the log is broken (line and reason name
-// where), 2 = the check could not run (unreadable file or malformed checkpoint argument).
+// Typed outcome for a CLI: exit 0 = verified, 1 = the log is broken (the line and reason name
+// where a chain or head check failed; an anchor mismatch is in `anchor`), 2 = the check could
+// not run (unreadable file or malformed checkpoint argument).
 export type AuditCheckReason = ChainBreakReason | "bad-checkpoint" | "unreadable";
+
+// Outcome of an anchor record check. ok false names the mismatch; the count and the file's
+// line count let a caller report both.
+export type AnchorCheck =
+  | { readonly ok: true; readonly lines: number; readonly lineCount: number }
+  | { readonly ok: false; readonly lines: number; readonly lineCount: number; readonly reason: AnchorMismatch };
 
 export interface AuditCheck {
   readonly ok: boolean;
@@ -80,22 +88,20 @@ export interface AuditCheck {
   readonly unprotected: number;
   readonly tornTail: boolean;
   readonly head?: AuditHead;
+  // Present when an anchor record was given and the chain verified.
+  readonly anchor?: AnchorCheck;
 }
 
 export interface AuditCheckOptions {
   // "<seq>:<sha256>" saved from an earlier head. Detects tail loss and a changed head line.
   readonly head?: string;
-  // "<seq>:<sha256>" of an older chained line. Detects a shorter log and a changed prefix.
-  readonly anchor?: string;
+  // A realm anchor record (see anchor.ts). Detects a shorter log and a changed first lineCount lines.
+  readonly anchor?: AnchorRecord;
 }
 
 export interface AuditCheckpoint {
   readonly seq: number;
   readonly hash: string;
-}
-
-interface Pin extends AuditCheckpoint {
-  readonly missing: "tail-loss" | "shorter-log";
 }
 
 export function sha256Hex(bytes: Uint8Array): string {
@@ -201,11 +207,11 @@ export function verifyAuditFile(file: string): VerifyAuditResult {
   return verifyWithPins(file, []);
 }
 
-// Verifies the chain and every pin in one pass. A pinned seq whose line hash differs
-// reports prefix-changed at that anchored line (the chain check of its successor still
-// runs first on any line that precedes it). A pin whose seq the log never reaches reports
-// tail-loss or shorter-log at the last line present.
-function verifyWithPins(file: string, pins: readonly Pin[]): VerifyAuditResult {
+// Verifies the chain and the optional head pin in one pass. A pinned seq whose line hash differs
+// reports prefix-changed at that line (the chain check of its successor still runs first on any
+// line that precedes it). A pin whose seq the log never reaches reports tail-loss at the last
+// line present.
+function verifyWithPins(file: string, pins: readonly AuditCheckpoint[]): VerifyAuditResult {
   const fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     if (!fstatSync(fd).isFile()) {
@@ -217,7 +223,7 @@ function verifyWithPins(file: string, pins: readonly Pin[]): VerifyAuditResult {
   }
 }
 
-function verifyDescriptor(fd: number, pins: readonly Pin[]): VerifyAuditResult {
+function verifyDescriptor(fd: number, pins: readonly AuditCheckpoint[]): VerifyAuditResult {
   const unparsedLines: number[] = [];
   let lines = 0;
   let chainedLines = 0;
@@ -293,7 +299,7 @@ function verifyDescriptor(fd: number, pins: readonly Pin[]): VerifyAuditResult {
     if (broken === undefined) {
       for (const expected of pins) {
         if (expected.seq > lastSeq) {
-          broken = { line: lines, reason: expected.missing };
+          broken = { line: lines, reason: "tail-loss" };
           break;
         }
       }
@@ -382,41 +388,61 @@ export function parseAuditCheckpoint(text: string): AuditCheckpoint | undefined 
   return { seq, hash: match[2] ?? "" };
 }
 
-// Checks the chain, then the optional head and anchor pins, and returns a typed outcome.
-// Malformed checkpoint text and an unreadable file are exit 2, never a verification verdict.
+// Checks the chain, then the optional head pin, then the optional anchor record, and returns a typed outcome.
+// The anchor is checked only once the chain verifies, so a broken chain names its own line. Malformed checkpoint
+// text and an unreadable file are exit 2, never a verification verdict.
 export function checkAuditFile(file: string, options: AuditCheckOptions = {}): AuditCheck {
-  const pins: Pin[] = [];
-  const sources: readonly [string | undefined, Pin["missing"]][] = [
-    [options.head, "tail-loss"],
-    [options.anchor, "shorter-log"],
-  ];
-  for (const [text, missing] of sources) {
-    if (text === undefined) {
-      continue;
-    }
-    const parsed = parseAuditCheckpoint(text);
+  const pins: AuditCheckpoint[] = [];
+  if (options.head !== undefined) {
+    const parsed = parseAuditCheckpoint(options.head);
     if (parsed === undefined) {
       return checkError("bad-checkpoint");
     }
-    pins.push({ ...parsed, missing });
+    pins.push(parsed);
   }
   let result: VerifyAuditResult;
+  let anchor: AnchorCheck | undefined;
   try {
     result = verifyWithPins(file, pins);
+    if (result.broken === undefined && options.anchor !== undefined) {
+      anchor = checkAnchor(file, options.anchor);
+    }
   } catch {
     return checkError("unreadable");
   }
   const broken = result.broken;
+  const ok = broken === undefined && (anchor === undefined || anchor.ok);
   return {
-    ok: broken === undefined,
-    exitCode: broken === undefined ? 0 : 1,
+    ok,
+    exitCode: ok ? 0 : 1,
     ...(broken === undefined ? {} : { line: broken.line, reason: broken.reason }),
     lines: result.lines,
     chainedLines: result.chainedLines,
     unprotected: result.legacyLines,
     tornTail: result.tornTail,
     ...(result.head === undefined ? {} : { head: result.head }),
+    ...(anchor === undefined ? {} : { anchor }),
   };
+}
+
+function checkAnchor(file: string, record: AnchorRecord): AnchorCheck {
+  const verdict = verifyAnchorRecord(readRegularFile(file), record);
+  return verdict.ok
+    ? { ok: true, lines: verdict.lines, lineCount: record.lineCount }
+    : { ok: false, lines: verdict.lines, lineCount: record.lineCount, reason: verdict.reason };
+}
+
+// Reads a regular file through the same no-follow open the chain verifier uses.
+function readRegularFile(file: string): Buffer {
+  const fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  try {
+    if (!fstatSync(fd).isFile()) {
+      throw new Error("audit file is not a regular file");
+    }
+    return readFileSync(fd);
+  } finally {
+    closeSync(fd);
+  }
 }
 
 function checkError(reason: AuditCheckReason): AuditCheck {

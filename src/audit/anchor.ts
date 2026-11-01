@@ -24,6 +24,8 @@ export const MEMO_PROGRAM_ID = "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr";
 export const DEVNET_GENESIS_HASH = "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG";
 export const MEMO_MAX_BYTES = 566;
 
+const ROOT_HEX = /^[0-9a-f]{64}$/;
+
 const DEFAULT_RPC_TIMEOUT_MS = 15_000;
 const LEAF_PREFIX = Buffer.from([0x00]);
 const NODE_PREFIX = Buffer.from([0x01]);
@@ -122,6 +124,62 @@ export function buildAnchorRecord(input: {
     rootSha256: Buffer.from(merkleRoot(input.lines)).toString("hex"),
     createdAt: input.createdAt.toISOString(),
   };
+}
+
+// Why an audit file does not match an anchor record. shorter-log: the file has fewer lines than the record covers.
+// prefix-changed: the first lineCount lines hash to a different root.
+export type AnchorMismatch = "shorter-log" | "prefix-changed";
+
+export type AnchorVerdict =
+  | { readonly ok: true; readonly lines: number }
+  | { readonly ok: false; readonly lines: number; readonly reason: AnchorMismatch };
+
+// Checks audit-log bytes against an anchor record. Only the first lineCount lines are hashed, so lines appended after
+// the anchor do not change the verdict.
+export function verifyAnchorRecord(content: Uint8Array, record: AnchorRecord): AnchorVerdict {
+  const lines = splitAuditLines(content);
+  if (lines.length < record.lineCount) {
+    return { ok: false, lines: lines.length, reason: "shorter-log" };
+  }
+  const root = Buffer.from(merkleRoot(lines.slice(0, record.lineCount))).toString("hex");
+  if (root !== record.rootSha256) {
+    return { ok: false, lines: lines.length, reason: "prefix-changed" };
+  }
+  return { ok: true, lines: lines.length };
+}
+
+// Reads an anchor record from parsed JSON: the record itself, or a realm anchor output object whose `record` field
+// holds it. Undefined unless every field has the shape of an AnchorRecord.
+export function parseAnchorRecord(value: unknown): AnchorRecord | undefined {
+  const outer = fieldsOf(value);
+  if (outer === undefined) {
+    return undefined;
+  }
+  const fields = fieldsOf(outer["record"] === undefined ? outer : outer["record"]);
+  if (fields === undefined) {
+    return undefined;
+  }
+  const { version, sessionId, lineCount, rootSha256, createdAt } = fields;
+  if (
+    version !== ANCHOR_RECORD_VERSION ||
+    typeof sessionId !== "string" ||
+    typeof lineCount !== "number" ||
+    !Number.isSafeInteger(lineCount) ||
+    lineCount < 1 ||
+    typeof rootSha256 !== "string" ||
+    !ROOT_HEX.test(rootSha256) ||
+    typeof createdAt !== "string"
+  ) {
+    return undefined;
+  }
+  return { version: ANCHOR_RECORD_VERSION, sessionId, lineCount, rootSha256, createdAt };
+}
+
+function fieldsOf(value: unknown): Record<string, unknown> | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  return value as Record<string, unknown>;
 }
 
 // Canonical single-line JSON with a fixed key order. Over MEMO_MAX_BYTES is an error.

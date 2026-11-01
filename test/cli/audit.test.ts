@@ -8,6 +8,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { buildAnchorRecord, type AnchorRecord } from "../../src/audit/anchor.js";
 import { appendAudit } from "../../src/audit/log.js";
 import { runCli } from "../../src/cli/main.js";
 
@@ -22,6 +23,12 @@ interface FileReport {
   readonly broken?: { readonly line: number; readonly reason: string };
   readonly head?: { readonly seq: number; readonly lineSha256: string };
   readonly unprotected?: number;
+  readonly anchor?: {
+    readonly ok: boolean;
+    readonly lines: number;
+    readonly lineCount: number;
+    readonly reason?: string;
+  };
 }
 
 interface Report {
@@ -154,38 +161,67 @@ void test("audit verify --file --head: a tail cut below the saved head is tail-l
   });
 });
 
-void test("audit verify --file --anchor: a log shorter than the anchor is shorter-log at its last line", async () => {
-  await withState(async (stateDir) => {
-    const lines = seed(stateDir);
-    const file = auditFile(stateDir);
-    const anchor = join(stateDir, "anchor.json");
-    writeFileSync(anchor, JSON.stringify({ seq: 2, lineSha256: hashOf(lines[1]) }));
-    writeLines(file, [lines[0] ?? ""]);
-    const result = await runCli(["audit", "verify", "--file", file, "--anchor", anchor], { env: {} });
-    assert.equal(result.exitCode, 1);
-    assert.match(result.stderr, /log ends at line 1, before the anchor checkpoint \(shorter-log\)/);
-    assert.deepEqual(reportOf(result.stdout).files[0]?.broken, { line: 1, reason: "shorter-log" });
+// The realm anchor record `realm anchor` builds over the first `count` lines of a log.
+function anchorOver(lines: readonly string[], count: number): AnchorRecord {
+  return buildAnchorRecord({
+    sessionId: SESSION,
+    lines: lines.slice(0, count).map((line) => Buffer.from(line, "utf8")),
+    createdAt: new Date("2026-11-01T00:00:00.000Z"),
   });
-});
+}
 
-void test("audit verify --file --anchor: an untouched anchored prefix exits 0", async () => {
+function writeAnchor(stateDir: string, value: unknown): string {
+  const anchor = join(stateDir, "anchor.json");
+  writeFileSync(anchor, typeof value === "string" ? value : JSON.stringify(value));
+  return anchor;
+}
+
+void test("audit verify --file --anchor: an untouched log exits 0 and reports the anchored count", async () => {
   await withState(async (stateDir) => {
     const lines = seed(stateDir);
     const file = auditFile(stateDir);
-    const anchor = join(stateDir, "anchor.json");
-    writeFileSync(anchor, JSON.stringify({ seq: 2, lineSha256: hashOf(lines[1]) }));
+    const anchor = writeAnchor(stateDir, anchorOver(lines, 3));
     const result = await runCli(["audit", "verify", "--file", file, "--anchor", anchor], { env: {} });
     assert.equal(result.exitCode, 0);
     assert.equal(result.stderr, "");
+    const report = reportOf(result.stdout);
+    assert.equal(report.ok, true);
+    assert.deepEqual(report.files[0]?.anchor, { ok: true, lines: 3, lineCount: 3 });
   });
 });
 
-void test("audit verify --file --anchor: a rewritten prefix with a re-linked successor passes the chain and fails the anchor at line 2", async () => {
+void test("audit verify --file --anchor: a log shorter than the anchored count is shorter-log, naming both counts", async () => {
   await withState(async (stateDir) => {
     const lines = seed(stateDir);
     const file = auditFile(stateDir);
-    const anchor = join(stateDir, "anchor.json");
-    writeFileSync(anchor, JSON.stringify({ seq: 2, lineSha256: hashOf(lines[1]) }));
+    const anchor = writeAnchor(stateDir, anchorOver(lines, 2));
+    writeLines(file, [lines[0] ?? ""]);
+    const result = await runCli(["audit", "verify", "--file", file, "--anchor", anchor], { env: {} });
+    assert.equal(result.exitCode, 1);
+    assert.match(result.stderr, /log has 1 line\(s\), fewer than the 2 the anchor covers \(shorter-log\)/);
+    const report = reportOf(result.stdout);
+    assert.equal(report.ok, false);
+    assert.deepEqual(report.files[0]?.anchor, { ok: false, lines: 1, lineCount: 2, reason: "shorter-log" });
+  });
+});
+
+void test("audit verify --file --anchor: lines appended after the anchored count exit 0", async () => {
+  await withState(async (stateDir) => {
+    const lines = seed(stateDir);
+    const file = auditFile(stateDir);
+    const anchor = writeAnchor(stateDir, anchorOver(lines, 2));
+    const result = await runCli(["audit", "verify", "--file", file, "--anchor", anchor], { env: {} });
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.stderr, "");
+    assert.deepEqual(reportOf(result.stdout).files[0]?.anchor, { ok: true, lines: 3, lineCount: 2 });
+  });
+});
+
+void test("audit verify --file --anchor: a rewritten prefix with a re-linked successor passes the chain and fails the anchor with prefix-changed", async () => {
+  await withState(async (stateDir) => {
+    const lines = seed(stateDir);
+    const file = auditFile(stateDir);
+    const anchor = writeAnchor(stateDir, anchorOver(lines, 2));
     const forged = JSON.stringify({ ...(JSON.parse(lines[1] ?? "") as Record<string, unknown>), path: "forged.txt" });
     const relinked = JSON.stringify({
       ...(JSON.parse(lines[2] ?? "") as Record<string, unknown>),
@@ -194,8 +230,30 @@ void test("audit verify --file --anchor: a rewritten prefix with a re-linked suc
     writeLines(file, [lines[0] ?? "", forged, relinked]);
     const result = await runCli(["audit", "verify", "--file", file, "--anchor", anchor], { env: {} });
     assert.equal(result.exitCode, 1);
-    assert.match(result.stderr, /line 2 changed after the anchor \(prefix-changed\)/);
-    assert.deepEqual(reportOf(result.stdout).files[0]?.broken, { line: 2, reason: "prefix-changed" });
+    assert.match(result.stderr, /the anchored prefix of 2 line\(s\) changed \(prefix-changed\)/);
+    const report = reportOf(result.stdout);
+    assert.equal(report.ok, false);
+    assert.equal(report.files[0]?.broken, undefined);
+    assert.deepEqual(report.files[0]?.anchor, { ok: false, lines: 3, lineCount: 2, reason: "prefix-changed" });
+  });
+});
+
+void test("audit verify --file --anchor: a realm anchor output object is accepted through its record field", async () => {
+  await withState(async (stateDir) => {
+    const lines = seed(stateDir);
+    const file = auditFile(stateDir);
+    const record = anchorOver(lines, 3);
+    const output = {
+      mode: "dry-run",
+      record,
+      memo: JSON.stringify(record),
+      memoBytes: Buffer.byteLength(JSON.stringify(record), "utf8"),
+    };
+    const anchor = writeAnchor(stateDir, output);
+    const result = await runCli(["audit", "verify", "--file", file, "--anchor", anchor], { env: {} });
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.stderr, "");
+    assert.deepEqual(reportOf(result.stdout).files[0]?.anchor, { ok: true, lines: 3, lineCount: 3 });
   });
 });
 
@@ -248,24 +306,31 @@ void test("audit verify: a malformed --head exits 2 before any file is read", as
   });
 });
 
-void test("audit verify --anchor: a record that is not {seq, lineSha256} exits 2; an unreadable record exits 1", async () => {
+void test("audit verify --anchor: a value that is not an anchor record exits 2 with bad-anchor; an unreadable record exits 1", async () => {
   await withState(async (stateDir) => {
     const lines = seed(stateDir);
     const file = auditFile(stateDir);
-    const anchor = join(stateDir, "anchor.json");
-    const malformed = [
+    const record = anchorOver(lines, 2);
+    const malformed: readonly unknown[] = [
       "not json",
-      JSON.stringify({ seq: 2 }),
-      JSON.stringify({ seq: 2, lineSha256: hashOf(lines[1]), createdAt: "2026-11-01T00:00:00.000Z" }),
-      JSON.stringify({ seq: 0, lineSha256: hashOf(lines[1]) }),
-      JSON.stringify({ seq: 2.5, lineSha256: hashOf(lines[1]) }),
-      JSON.stringify([2, hashOf(lines[1])]),
+      { seq: 2, lineSha256: hashOf(lines[1]) },
+      [record],
+      { ...record, version: 2 },
+      { ...record, lineCount: 0 },
+      { ...record, lineCount: 2.5 },
+      { ...record, rootSha256: record.rootSha256.toUpperCase() },
+      { ...record, rootSha256: record.rootSha256.slice(0, 63) },
+      { ...record, sessionId: 7 },
+      { ...record, createdAt: 0 },
+      { mode: "dry-run", record: { ...record, version: 2 } },
+      { mode: "dry-run", record: null },
     ];
-    for (const text of malformed) {
-      writeFileSync(anchor, text);
+    for (const value of malformed) {
+      const anchor = writeAnchor(stateDir, value);
       const result = await runCli(["audit", "verify", "--file", file, "--anchor", anchor], { env: {} });
-      assert.equal(result.exitCode, 2, text);
-      assert.equal(result.stdout, "", text);
+      assert.equal(result.exitCode, 2, JSON.stringify(value));
+      assert.equal(result.stdout, "", JSON.stringify(value));
+      assert.match(result.stderr, /realm audit verify: bad-anchor: /, JSON.stringify(value));
     }
     const missing = await runCli(
       ["audit", "verify", "--file", file, "--anchor", join(stateDir, "no-such-anchor.json")],

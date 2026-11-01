@@ -4,11 +4,13 @@
 //
 //   realm audit verify [--file <path> | --session <id>] [--head <seq>:<sha256>] [--anchor <record.json>]
 //
-// --head names a line that must still exist, so a truncated tail is caught. --anchor reads {"seq", "lineSha256"},
-// the head a previous verify printed, and names an older line that must be unchanged and still present. The pins
-// apply to one file, so they need --file or --session. Exit 0: every file verified. 1: a chain or pin broke, a file
-// is missing, a symbolic link, not a regular file or unreadable, or there is no file to verify. 2: usage (a
-// conflicting or malformed selector or pin). Paths are never printed; each failure names the session and the line.
+// --head names a line that must still exist, so a truncated tail is caught. --anchor reads a realm anchor record
+// (the record itself, or a realm anchor output whose `record` field holds it) and checks that the log's first
+// lineCount lines still hash to its root; lines appended after them are allowed. The pins apply to one file, so
+// they need --file or --session. Exit 0: every file verified. 1: a chain, head or anchor check failed, a file is
+// missing, a symbolic link, not a regular file or unreadable, or there is no file to verify. 2: usage (a
+// conflicting or malformed selector or pin, including a record that is not an anchor record). Paths are never
+// printed; each failure names the session and the line, or the anchor's line count.
 
 import { lstatSync, readdirSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
@@ -16,16 +18,19 @@ import {
   checkAuditFile,
   parseAuditCheckpoint,
   verifyAuditFile,
+  type AnchorCheck,
   type AuditCheckOptions,
   type AuditCheckReason,
   type ChainBreakReason,
   type VerifyAuditResult,
 } from "../audit/chain.js";
+import { parseAnchorRecord, type AnchorMismatch, type AnchorRecord } from "../audit/anchor.js";
 import { isSessionId } from "../session/paths.js";
 
 const USAGE =
   "realm audit verify: usage: realm audit verify [--file <path> | --session <id>] [--head <seq>:<sha256>] [--anchor <record.json>]";
-const ANCHOR_USAGE = 'realm audit verify: --anchor expects a JSON object {"seq": <integer>, "lineSha256": "<64 hex>"}';
+const ANCHOR_USAGE =
+  "realm audit verify: bad-anchor: --anchor expects a realm anchor record {version, sessionId, lineCount, rootSha256, createdAt}, or a realm anchor output whose record field is one";
 const NO_STATE_DIR =
   "realm audit verify: cannot resolve a state directory (the realm config file under an absolute XDG_CONFIG_HOME or HOME must be present and valid)";
 const NO_FILE = "realm audit verify: no audit file to verify";
@@ -77,9 +82,17 @@ const BREAK_TEXT: Record<ChainBreakReason, (line: number) => string> = {
   "bad-chain-start": (line) => `line ${String(line)} does not start the chain (bad-chain-start)`,
   "unchained-line": (line) => `line ${String(line)} is not a chained line (unchained-line)`,
   "line-too-long": (line) => `line ${String(line)} exceeds the line bound (line-too-long)`,
-  "prefix-changed": (line) => `line ${String(line)} changed after the anchor (prefix-changed)`,
+  "prefix-changed": (line) => `line ${String(line)} changed after the head checkpoint (prefix-changed)`,
   "tail-loss": (line) => `log ends at line ${String(line)}, before the head checkpoint (tail-loss)`,
-  "shorter-log": (line) => `log ends at line ${String(line)}, before the anchor checkpoint (shorter-log)`,
+};
+
+type AnchorFailure = Pick<AnchorCheck, "lines" | "lineCount">;
+
+const ANCHOR_TEXT: Record<AnchorMismatch, (anchor: AnchorFailure) => string> = {
+  "shorter-log": ({ lines, lineCount }) =>
+    `log has ${String(lines)} line(s), fewer than the ${String(lineCount)} the anchor covers (shorter-log)`,
+  "prefix-changed": ({ lineCount }) =>
+    `the anchored prefix of ${String(lineCount)} line(s) changed (prefix-changed)`,
 };
 
 interface FileReport {
@@ -93,6 +106,7 @@ interface FileReport {
   readonly tornTail?: boolean;
   readonly head?: { readonly seq: number; readonly lineSha256: string };
   readonly broken?: { readonly line: number; readonly reason: ChainBreakReason };
+  readonly anchor?: AnchorCheck;
 }
 
 interface FileOutcome {
@@ -127,7 +141,7 @@ export function runAuditCommand(
         ? [{ sessionId: args.selector.sessionId, file: join(auditDir, `${args.selector.sessionId}${AUDIT_SUFFIX}`) }]
         : auditFilesIn(auditDir);
   }
-  let anchor: string | undefined;
+  let anchor: AnchorRecord | undefined;
   if (args.anchorFile !== undefined) {
     const loaded = loadAnchor(args.anchorFile);
     if ("refusal" in loaded) {
@@ -210,33 +224,24 @@ function auditFilesIn(auditDir: string): Target[] {
     .map((name) => ({ sessionId: name.slice(0, -AUDIT_SUFFIX.length), file: join(auditDir, name) }));
 }
 
-// Reads the anchor record. Unreadable is an I/O failure (exit 1); content that is not {seq, lineSha256} is usage (exit 2).
-function loadAnchor(file: string): Loaded<string> {
+// Reads the anchor record. Unreadable is an I/O failure (exit 1); content that is not an anchor record, bare or as the
+// `record` field of a realm anchor output, is usage (exit 2, reason bad-anchor).
+function loadAnchor(file: string): Loaded<AnchorRecord> {
   let raw: string;
   try {
     raw = readFileSync(file, "utf8");
   } catch {
     return { refusal: { exitCode: 1, stdout: "", stderr: "realm audit verify: the anchor record cannot be read\n" } };
   }
+  const refusal = { exitCode: 2 as const, stdout: "", stderr: `${ANCHOR_USAGE}\n` };
   let value: unknown;
   try {
     value = JSON.parse(raw);
   } catch {
-    value = undefined;
-  }
-  const refusal = { exitCode: 2 as const, stdout: "", stderr: `${ANCHOR_USAGE}\n` };
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return { refusal };
   }
-  const { seq, lineSha256 } = value as { seq?: unknown; lineSha256?: unknown };
-  if (Object.keys(value).length !== 2 || typeof seq !== "number" || typeof lineSha256 !== "string") {
-    return { refusal };
-  }
-  const checkpoint = `${String(seq)}:${lineSha256}`;
-  if (parseAuditCheckpoint(checkpoint) === undefined) {
-    return { refusal };
-  }
-  return { value: checkpoint };
+  const record = parseAnchorRecord(value);
+  return record === undefined ? { refusal } : { value: record };
 }
 
 // Verifies one file. A missing, symbolic-link, non-regular or unreadable file is an I/O failure, never a pass. The
@@ -277,9 +282,13 @@ function verifyOne(target: Target, pins: AuditCheckOptions): FileOutcome {
     tornTail: check.tornTail,
     ...(check.head === undefined ? {} : { head: { seq: check.head.seq, lineSha256: check.head.hash } }),
     ...(broken === undefined ? {} : { broken }),
+    ...(check.anchor === undefined ? {} : { anchor: check.anchor }),
   };
   if (broken !== undefined) {
     return { report, stderr: `${label}${BREAK_TEXT[broken.reason](broken.line)}\n` };
+  }
+  if (check.anchor !== undefined && !check.anchor.ok) {
+    return { report, stderr: `${label}${ANCHOR_TEXT[check.anchor.reason](check.anchor)}\n` };
   }
   if (check.unprotected > 0) {
     return { report, stderr: `${label}${String(check.unprotected)} legacy line(s) are unprotected\n` };
