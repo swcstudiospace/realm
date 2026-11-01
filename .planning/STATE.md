@@ -150,11 +150,14 @@ Live or pending verifications deferred by evidence, most recent first:
 
 | Phase | State | Resume |
 |-------|-------|--------|
+| 12 | verification_deferred_gaps | /gsd:plan-phase 12 --gaps |
 | 3 | verification_deferred_human | /gsd:verify-work 3 |
 | 4 | verification_deferred_human | /gsd:verify-work 4 |
 | 5 | verification_deferred_human | /gsd:verify-work 5 |
 | 6 | verification_deferred_human | /gsd:verify-work 6 |
 | 7 | verification_deferred_human | /gsd:verify-work 7 |
+
+Phase 12, owner decision 2026-11-01: HARN-03 fails on Omp 18.14.2 (warm: 44 offenders, 38 external and 6 DNS). The run starts at Phase 13. Phase 16 depends on Phase 12, so it stays open until 12 closes or the owner waives that dependency.
 
 Detail, by phase: Phase 3 covers RT-01, RT-02, RT-03, RT-09, and the live parts of ANDA-02 and ANDA-03 (host Podman 4.9.3 is below 5.x). RT-04 is deferred, as recorded above. Phase 4 has 5 live items. Phase 5 has 7 live items and limitations a to f. Phase 6 has 6 live items. Phase 7 has 5 human items.
 
