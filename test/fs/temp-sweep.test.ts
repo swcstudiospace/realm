@@ -177,6 +177,16 @@ void test("the sweep does not enter a symlinked directory (CRASH-01)", (t) => {
   assert.deepEqual(audit, []);
 });
 
+// A skip on a CI runner would pass without the cross-device sweep ever running (Q0-015), so there the test fails with
+// the reason. Locally it still skips, and the skip names the reason.
+function unavailable(t: TestContext, reason: string): void {
+  const ci = process.env.CI;
+  if (ci !== undefined && ci !== "" && ci !== "0" && ci !== "false") {
+    assert.fail(`CI cannot exercise the cross-device sweep: ${reason}. Give the runner a second device at /dev/shm.`);
+  }
+  t.skip(reason);
+}
+
 void test("the sweep does not enter a directory on another device (CRASH-01)", (t) => {
   // /dev is a devtmpfs and /dev/shm a separate tmpfs on a Linux host, so /dev/shm is a directory
   // below the root /dev that lies on another device. Without that layout the case is skipped.
@@ -188,14 +198,14 @@ void test("the sweep does not enter a directory on another device (CRASH-01)", (
     usable = false;
   }
   if (!usable) {
-    t.skip("/dev/shm is absent or shares /dev's device, so no second device is available without a mount");
+    unavailable(t, "/dev/shm is absent or shares /dev's device, so no second device is available without a mount");
     return;
   }
   const orphan = join(shm, `.realm-sweep-probe.realm-tmp-${HEX}`);
   try {
     plant(orphan, OLD_MS);
   } catch {
-    t.skip("/dev/shm is not writable by this user");
+    unavailable(t, "/dev/shm is not writable by this user");
     return;
   }
   t.after(() => {
