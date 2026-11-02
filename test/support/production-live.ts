@@ -18,6 +18,7 @@ import { delimiter, isAbsolute, join } from "node:path";
 import { performance } from "node:perf_hooks";
 import type { EgressRule } from "../../src/contract/validate.js";
 import { podmanSocketPath } from "../../src/runtime/host-paths.js";
+import { requestLogPath } from "../../src/daemon/ensure.js";
 import { loadRuntimeConfig, runtimeRootsOf } from "../../src/runtime/config.js";
 import { buildExecArgv, OPENSHELL_BINARY, OPENSHELL_SANDBOX_NAME_LABEL_KEY, REALM_SANDBOX_NAME_PREFIX, realmSandboxName } from "../../src/runtime/openshell.js";
 import { podmanSkipReason, type PodmanProbe } from "../../src/runtime/podman-version.js";
@@ -1162,4 +1163,67 @@ export async function initializeMcp(session: McpSession): Promise<void> {
   );
   assert.equal(field(initialized, "protocolVersion"), MCP_LEGACY_REVISION, `initialize: ${describeValue(initialized)}`);
   session.notify("notifications/initialized");
+}
+
+// ---- Log files ----------------------------------------------------------------------------------------------------------------
+
+// The lines of a log file in file order, without their line ends. A final line end adds no empty line, but an empty line inside
+// the file stays, so a check that every line parses sees it. An absent file has no lines.
+function linesOfFile(path: string): readonly string[] {
+  if (!existsSync(path)) {
+    return [];
+  }
+  const lines = readFileSync(path, "utf8").split(/\r?\n/);
+  if (lines.at(-1) === "") {
+    lines.pop();
+  }
+  return lines;
+}
+
+// The lines of <stateDir>/requests.log (requestLogPath, src/daemon/ensure.ts), in file order. An absent file has no lines.
+export function requestLogLinesOf(stateDir: string): readonly string[] {
+  return linesOfFile(requestLogPath(stateDir));
+}
+
+// One line parsed as JSON. A line that does not parse is reported with the parser's reason, never dropped without one.
+export type JsonLine = { readonly ok: true; readonly value: unknown } | { readonly ok: false; readonly reason: string };
+
+export function parseJsonLine(line: string): JsonLine {
+  try {
+    return { ok: true, value: JSON.parse(line) };
+  } catch (error: unknown) {
+    return { ok: false, reason: error instanceof Error ? error.message : "the line is not JSON" };
+  }
+}
+
+// The 1-based numbers of the lines that do not parse as JSON, in file order.
+export function unparsedLinesOf(lines: readonly string[]): readonly number[] {
+  const numbers: number[] = [];
+  for (const [index, line] of lines.entries()) {
+    if (!parseJsonLine(line).ok) {
+      numbers.push(index + 1);
+    }
+  }
+  return numbers;
+}
+
+// A parsed JSON object that can be a log or audit record: not null and not an array.
+export type LogRecord = Readonly<Record<string, unknown>>;
+
+function isLogRecord(value: unknown): value is LogRecord {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+// The records of an audit file (<stateDir>/audit/<session>.jsonl) whose correlationId equals correlationId, in file order.
+// A line that is not a JSON object cannot carry the id, so it is not returned; `realm audit verify` judges those lines. An
+// absent file has no records.
+export function auditLinesWithCorrelation(auditFile: string, correlationId: string): readonly LogRecord[] {
+  const matches: LogRecord[] = [];
+  for (const line of linesOfFile(auditFile)) {
+    const parsed = parseJsonLine(line);
+    if (parsed.ok && isLogRecord(parsed.value) && field(parsed.value, "correlationId") === correlationId) {
+      matches.push(parsed.value);
+    }
+  }
+  return matches;
 }

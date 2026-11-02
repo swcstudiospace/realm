@@ -51,6 +51,7 @@ import { SANDBOX_WORKSPACE_PATH } from "../../src/runtime/openshell.js";
 import {
   KILL_RUNNER_ARGV,
   UNKNOWN_DIGEST_IMAGE,
+  auditLinesWithCorrelation,
   callTool,
   canConnect,
   field,
@@ -74,6 +75,7 @@ import {
   nodeResolveArgv,
   onPath,
   openshellCli,
+  parseJsonLine,
   parseNodeProbe,
   parseProbeFields,
   pollUntil,
@@ -83,6 +85,7 @@ import {
   readLiveInputs,
   reapCountsOfNotice,
   realmCli,
+  requestLogLinesOf,
   runCommand,
   sandboxExec,
   startMcpSession,
@@ -90,6 +93,7 @@ import {
   stateOfStatus,
   statusFieldsOf,
   toolErrorOf,
+  unparsedLinesOf,
   waitForActive,
   waitForNoContainers,
   waitForNoResidue,
@@ -693,6 +697,29 @@ async function runMcpSession(scenario: Scenario, session: McpSession): Promise<v
   const writeDone = snap.toolCalls?.find((row) => row.tool === "write" && row.outcome === "done");
   assert.ok(writeDone !== undefined && (writeDone.count ?? 0) >= 1, `realm metrics must count the write: ${metrics.stdout}`);
   assert.ok((snap.timings?.attachMs?.count ?? 0) >= 1, `realm metrics must count the attach: ${metrics.stdout}`);
+  // OBS-02: the write's correlation id joins requests.log to the audit file. The last write that finished with outcome done has a
+  // string correlationId, the audit file holds exactly one admission and one result record for that id, every requests.log line
+  // parses as JSON, and the audit file verifies.
+  const stateDir = scenario.environment.stateDir;
+  const requestLines = requestLogLinesOf(stateDir);
+  assert.deepEqual(unparsedLinesOf(requestLines), [], "every requests.log line must parse as JSON");
+  const writeResult = requestLines
+    .map(parseJsonLine)
+    .flatMap((parsed) => (parsed.ok ? [parsed.value] : []))
+    .filter((record) => field(record, "event") === "tool.result" && field(record, "tool") === "write" && field(record, "outcome") === "done")
+    .at(-1);
+  assert.ok(writeResult !== undefined, `requests.log must hold a tool.result line for the write with outcome done; ${String(requestLines.length)} lines were read`);
+  const correlationId = field(writeResult, "correlationId");
+  assert.ok(typeof correlationId === "string" && correlationId !== "", `the write's tool.result line must carry a string correlationId: ${describeValue(writeResult)}`);
+  const auditFile = join(stateDir, "audit", "daemon.jsonl");
+  const joined = auditLinesWithCorrelation(auditFile, correlationId);
+  const phases: readonly unknown[] = joined.map((record) => field(record, "phase"));
+  assert.equal(joined.length, 2, `${auditFile} must hold exactly two records for correlation id ${correlationId}; found ${String(joined.length)} (phases ${describeValue(phases)})`);
+  assert.ok(phases.includes("admission") && phases.includes("result"), `the two records for correlation id ${correlationId} in ${auditFile} must be one admission and one result; phases ${describeValue(phases)}`);
+  const unparsed = unparsedLinesOf(requestLines);
+  assert.deepEqual(unparsed, [], `every requests.log line must parse as JSON; line number(s) ${unparsed.join(", ")} do not`);
+  const verifiedAudit = await realmCli(scenario.inputs, scenario.environment, ["audit", "verify", "--file", auditFile], STATUS_TIMEOUT_MS);
+  assertExit(verifiedAudit, 0, `realm audit verify --file ${auditFile} after the write`);
   // 7. The same process answers a modern request: the protocol version in _meta, resultType on every result, and the model-facing
   // content block beside structuredContent.
   const modernMeta = { "io.modelcontextprotocol/protocolVersion": MCP_MODERN_REVISION };

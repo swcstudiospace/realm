@@ -6,11 +6,13 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Script } from "node:vm";
 import type { PodmanProbe } from "../../src/runtime/podman-version.js";
 import {
+  auditLinesWithCorrelation,
   KILL_RUNNER_ARGV,
   createScenarioEnvironment,
   decodeReadContent,
@@ -23,10 +25,12 @@ import {
   parseProbeFields,
   pollUntil,
   productionSkipReason,
+  requestLogLinesOf,
   splitJsonRpcLines,
   stateOfStatus,
   statusFieldsOf,
   toolErrorOf,
+  unparsedLinesOf,
   type LiveInputs,
   type PollCheck,
   type PollClock,
@@ -622,4 +626,61 @@ void test("parseListeningSockets keeps only this process's listeners", () => {
   assert.deepEqual(parsed.tcp, ["tcp 0100007F:1F90"]);
   assert.deepEqual(parsed.udp, []);
   assert.deepEqual(parsed.unix, ["/run/realm/driver.sock", "/tmp/realm space/control.sock"], "a path with a space keeps every word, and an accepted connection is not a listener");
+});
+
+// ---- requestLogLinesOf, unparsedLinesOf and auditLinesWithCorrelation -----------------------------------------------------------
+
+function withLogDir(body: (dir: string) => void): void {
+  const dir = mkdtempSync(join(tmpdir(), "realm-live-logs-"));
+  try {
+    body(dir);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+void test("requestLogLinesOf reads the lines of requests.log in file order and reports no lines for an absent file", () => {
+  withLogDir((dir) => {
+    assert.deepEqual(requestLogLinesOf(dir), []);
+    writeFileSync(join(dir, "requests.log"), '{"event":"up.end"}\n{"event":"tool.result","tool":"write","outcome":"done"}\n');
+    assert.deepEqual(requestLogLinesOf(dir), ['{"event":"up.end"}', '{"event":"tool.result","tool":"write","outcome":"done"}']);
+  });
+});
+
+void test("requestLogLinesOf keeps a last line with no line end and an empty line inside the file, and unparsedLinesOf names the lines that are not JSON", () => {
+  withLogDir((dir) => {
+    writeFileSync(join(dir, "requests.log"), '{"event":"a"}\nnot json\n\n{"event":"b"}');
+    const lines = requestLogLinesOf(dir);
+    assert.deepEqual(lines, ['{"event":"a"}', "not json", "", '{"event":"b"}']);
+    assert.deepEqual(unparsedLinesOf(lines), [2, 3]);
+  });
+});
+
+void test("auditLinesWithCorrelation returns the records of one correlation id, admission and result, in file order", () => {
+  withLogDir((dir) => {
+    const auditFile = join(dir, "daemon.jsonl");
+    writeFileSync(
+      auditFile,
+      [
+        '{"correlationId":"c-1","phase":"admission","tool":"write"}',
+        '{"correlationId":"c-2","phase":"admission","tool":"read"}',
+        '{"correlationId":"c-1","phase":"result","tool":"write"}',
+        '{"phase":"admission","tool":"status"}',
+      ].join("\n") + "\n",
+    );
+    assert.deepEqual(auditLinesWithCorrelation(auditFile, "c-1"), [
+      { correlationId: "c-1", phase: "admission", tool: "write" },
+      { correlationId: "c-1", phase: "result", tool: "write" },
+    ]);
+    assert.deepEqual(auditLinesWithCorrelation(auditFile, "c-3"), []);
+  });
+});
+
+void test("auditLinesWithCorrelation leaves out a line that is not JSON and a line that is not an object, and has no records for an absent file", () => {
+  withLogDir((dir) => {
+    const auditFile = join(dir, "daemon.jsonl");
+    assert.deepEqual(auditLinesWithCorrelation(auditFile, "c-1"), []);
+    writeFileSync(auditFile, '{"correlationId":"c-1","phase":"admission"}\n{"correlationId":"c-1","phase":"res\n["c-1"]\n7\n');
+    assert.deepEqual(auditLinesWithCorrelation(auditFile, "c-1"), [{ correlationId: "c-1", phase: "admission" }]);
+  });
 });
