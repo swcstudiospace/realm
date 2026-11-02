@@ -446,7 +446,7 @@ The owner lifted the ship hold on 2026-10-28 for one pull request with autoMerge
 
 **Notes:** Owner decision D3 (2026-10-29) permits removal or blocking of the built-ins only by the mechanism the Phase 12 spike proves; the spike answer decides whether criterion 2 reads as containment or as a guard. Live runs on the shared realm stack are serialized, because the startup reap is account-wide.
 
-**Plans**: 1 recovery dependency plan (`16-01-PLAN.md`) and `16-CONTEXT.md`; unreviewed, implementation/proof incomplete
+**Plans**: 4 plans: `16-01` (O1, host-tool policy, lifetime and registered results), `16-02` (O2, consumer controls), `16-03` (O3, production OMPX-05 acceptance; human-needed, not executed), `16-04` (O4, bounded re-attach behind `REALM_OMP_REATTACH`, default off); verification human_needed
 
 ### Phase 17: Observability and tamper-evident audit
 
