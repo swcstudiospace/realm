@@ -1276,7 +1276,15 @@ void test("a refusing profile and its spawned child exclude ambient provider cre
   await session.ready(BOUND_MS);
   const ready = session.frames[0];
   assert.ok(ready !== undefined);
-  assert.deepEqual(ready["env"], Object.keys(profile.env).sort(), "the actual spawned child receives only the isolated profile keys");
+  // node's coverage mode (npm run test:coverage) forwards NODE_V8_COVERAGE into every child process, so that one
+  // variable is not part of what the profile supplied; every other variable must be exactly the profile's keys.
+  const reportedEnv = ready["env"];
+  assert.ok(Array.isArray(reportedEnv), "the child reports its environment keys as a list");
+  assert.deepEqual(
+    reportedEnv.filter((key) => key !== "NODE_V8_COVERAGE"),
+    Object.keys(profile.env).sort(),
+    "the actual spawned child receives only the isolated profile keys",
+  );
   assert.equal(readFileSync(profile.modelsPath, "utf8"), modelsYaml(4321), "only the dummy stub key is configured");
 });
 
