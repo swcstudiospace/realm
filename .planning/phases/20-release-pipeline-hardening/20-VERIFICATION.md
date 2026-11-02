@@ -54,3 +54,48 @@ Full phase gate set run once on the phase 20 tree, after all edits (gate runner 
 - Every GitHub-side behaviour: the release run, attestation verification of downloaded subjects, the rollback dispatch and Pages deployment, deployed known-good content.
 - The `pages` dispatch with `source_ref` against the live default-branch workflow file.
 - omp version (not observed; the shell guard blocks `omp --version` in this lane).
+
+## Wave 2 verification (branch gsd/v3-release-wave2)
+
+Date: 2026-11-02. Tree: `gsd/v3-release-wave2` at `66d315e`. Base `9ab241f`; PR #40 merge at `13a92fe`. Host: 8 CPUs, Node v24.18.0, npm 11.16.0. Heavy jobs ran in the lane's `heavy-slot-2` lock.
+
+**Status: partial.** Offline evidence is recorded for REL-01 to REL-04 and the four Q items. Every live proof is UNVERIFIED and owner-gated.
+
+### Gate runs
+
+Full gate set at `06ff73a`, once:
+
+| Gate | Exit | Result |
+|---|---|---|
+| typecheck | 0 | |
+| lint | 1 at `06ff73a` | two errors in `test/anda/listener-diagnostic.test.ts`, fixed in `66d315e`; lint exit 0 at `66d315e` |
+| test | 0 | 2540 tests, 2507 pass, 0 fail, 33 skipped |
+| build | 0 | |
+| test:integration | 0 | 202 tests, 171 pass, 0 fail, 31 skipped (Podman-gated skips) |
+| test:scripts | 0 | 301 tests, 301 pass, 0 fail |
+| check:docs | 0 | |
+| check:gates | 0 | |
+| build, check:pack, check:mcp | 0 | |
+
+At `66d315e` (after the lint fix), typecheck exit 0, lint exit 0, and the listener test passes (1 of 1). The full set was not re-run at `66d315e`: free disk space on the root filesystem fell to 7.3 to 7.5 GiB, below the 8 GiB floor, so the heavy jobs were stopped. The full re-run is HELD until disk is freed.
+
+Offline REL-01 and REL-02 checks at `13a92fe` (before the Q commits): release tests `node --test scripts/release/*.test.mjs`, 54 pass, 0 fail, 0 skipped; `check:pack` exit 0; `check:mcp` exit 0.
+
+### Quality findings: failing before, passing after
+
+- Q0-012 (`test/anda/listener-diagnostic.test.ts`). Before, against the pre-fix source: `AssertionError: one failed delivery writes one diagnostic`, `0 !== 1`. After: 1 pass. The diagnostic is `warn`, `kind: down`, `code: ANDA_UNREACHABLE`, and the next listener still receives the event. (At the pre-fix commit the test also reported a `logger` option type error, TS2353, because the option did not exist yet.)
+- Q0-014 (`test/daemon/spawn-env.test.ts`). Before, a copy of the HEAD test with a non-atomic brace split: `SyntaxError: Unterminated string in JSON at position 23`. The copy was removed afterwards. After: the round-trip case passes and the sentinel case passes (2 of 2).
+- Q0-015 (`test/fs/temp-sweep.test.ts`). The host has `/dev/shm` on a separate device. To reproduce the unavailable case, a private mount namespace was used (`unshare -m`, with `/dev/shm` bound to `/dev` inside it, nothing on the host). Before, with `CI=true`: the cross-device test is skipped silently, exit 0. After, with `CI=true`: `CI cannot exercise the cross-device sweep: /dev/shm ... shares /dev's device`, exit 1. After, without `CI` (local): the same skip with its reason, exit 0. After, with `CI=true` and a second device present: passes.
+- Q0-007 (`scripts/check/export-usage-gate.test.mjs`). Seven fixture tests cover self-only, a used import, test-only with and without the allowlist, public-signature, forwarded, stale allowlist and the exit code. All 7 pass. On the repository the gate reports 121 failing `public-signature` exports, 0 `self-only`, 158 allowlisted seams and 0 stale entries. It exits 1 and is not in `check:gates` (HELD).
+
+### Acceptance check
+
+- PR #40 local ref equals the GitHub head `cd87368`. Integrated with `--no-ff`, tree unchanged. The D6 gate for merge to main is not affected.
+- No push, no fetch, no `gh` write, no change to main or the WIP worktree, no workflow file merged to main, no CHANGELOG or version edit.
+- Commits `--no-verify` were used once, for the merge commit `13a92fe`. Its tree equals its first parent, so there were no hook results to report.
+
+### UNVERIFIED items
+
+- Every GitHub-side behaviour: the release run, `gh attestation verify` on downloaded assets, the rollback dispatch with `source_ref`, the Pages deployment.
+- The full gate set at `66d315e`.
+- The 158 seam count differs from the 145 in the phase 13 inventory note (`.planning/STATE.md`, recorded at an earlier commit). The allowlist is generated from the current classifier output.

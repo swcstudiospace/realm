@@ -77,3 +77,45 @@ The `test:scripts` count rose from 286 (phase 13) by 8: 6 REL-04 tests and 2 PR 
 ## Omp version
 
 Not observed: `omp --version` is blocked by the shell guard in this lane. The lead's stated version is 18.15.0. UNVERIFIED here.
+
+## Wave 2: branch gsd/v3-release-wave2 (local only)
+
+Date: 2026-11-02. Branch `gsd/v3-release-wave2`, created from `9ab241f` in the lane worktree `agent-realm-lanes/v3-release-wave2`. Local only: no push, no fetch, no `gh` write, no edit to the main worktree or the WIP worktree, no workflow file merged to main. The D6 human review gate for PR #40 is unchanged.
+
+| Commit | Unit | Requirement or finding | Change |
+|---|---|---|---|
+| `13a92fe` | PR #40 local integration | REL-01, REL-02 | `git merge --no-ff ci/release-build-publish-split`; the merged tree is unchanged, see below |
+| `a559e68` | Q0-012 | observability | A failing bridge listener writes one warn line, `anda.listener_failed`, with its catalogue code |
+| `5ca26cc` | Q0-014 | test quality | The spawn-env child renames a complete file into place; a `}` in a value round-trips |
+| `a710667` | Q0-015 | test quality | On CI, a missing second device fails the cross-device sweep test instead of skipping |
+| `06ff73a` | Q0-007 | dead code | `export-usage-gate` fails on src exports with no importer, with an explicit allowlist; not in `check:gates` |
+| `66d315e` | Q0-012 follow-up | lint | Diagnostic assertion rewritten as one structured record (two lint errors) |
+
+### PR #40 integration (REL-01, REL-02, REL-03, REL-04)
+
+- Read-only `gh pr view 40`: OPEN, not a draft, not merged, head `cd873687e88be7525800e6a783c1e42274b29b4e`. It matches the local ref `ci/release-build-publish-split`, so integration went ahead.
+- `git cherry 9ab241f ci/release-build-publish-split`: all seven PR #40 commits (`da68a18`, `61032cf`, `ac972e4`, `a6eb46b`, `14d2fc3`, `cd87368`, `148559e`) have patch-equivalent commits already on `9ab241f`. Lane A cherry-picked them earlier (the wave-1 table above). The merge therefore records the integration without changing the tree.
+- Four files conflicted: `.github/workflows/rollback.yml`, `AGENTS.md`, `scripts/release/changelog.mjs` and `scripts/release/changelog.test.mjs`. Each was resolved to the `60b3934` side (REL-03, REL-04). That side is a superset of PR #40's older variant (`148559e`, `ac972e4`), which it replaces. The merge message records this choice.
+- Requirement status is unchanged from wave 1: REL-01 and REL-02 are configuration only, REL-03 and REL-04 have local evidence, and every live proof is HELD for the owner (L4).
+
+### Quality findings (Q0-007, Q0-012, Q0-014, Q0-015)
+
+Each item has a failing-before and a passing-after result, recorded in the wave-2 section of `20-VERIFICATION.md`.
+
+- Q0-012: `deliver()` in `src/anda/client.ts` logs a failing listener with its catalogue code. The bridge receives the daemon's request logger. The other listeners still run.
+- Q0-014: the spawn-env child writes a temporary file and renames it. `waitFor` reads only the renamed path, and a new case round-trips a `}` inside a value.
+- Q0-015: with `CI` set, a missing or shared `/dev/shm` fails the cross-device test with the reason. Locally the test still skips, with the same reason.
+- Q0-007: `scripts/check/export-usage-gate.mjs` fails on `self-only`, `public-signature` and un-allowlisted `test-only` exports. Its allowlist, `scripts/check/export-usage-allowlist.json`, names 158 seams. Source exports are unchanged.
+
+Q0-001 to Q0-006, Q0-008, Q0-009, Q0-011, Q0-013 and Q0-016 are not in this wave. Q0-010 is held for D6 review because it changes `.github/workflows/mutation.yml`.
+
+## Wave 2 gates
+
+Run once at head `06ff73a` (the four Q commits on top of the merge `13a92fe`). `lint` failed there on two errors in the new listener test. They were fixed in `66d315e`, and `lint` then exited 0. The full set was not re-run at `66d315e` because free disk space fell below the 8 GiB floor (see HELD). Exit codes and counts are in `20-VERIFICATION.md`.
+
+## Wave 2 HELD items
+
+- Live release run, attestation verification on downloaded assets, and the test-release rollback. Owner decision required (L4).
+- Adding `export-usage-gate` to `check:gates`. The gate currently fails on 121 `public-signature` exports. Owner decision: either drop `export` from those names in a source unit, or exempt `public-signature` from the rule.
+- Q0-010 (`.github/workflows/mutation.yml`): owner review under D6.
+- Full gate-set re-run at `66d315e`. Disk free space is below 8 GiB, so the heavy jobs are held. Command: `flock -w 7200 <slot> -c 'bash gate-set'` with the nine gate lines from the run at `06ff73a`.
