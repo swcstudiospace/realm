@@ -1,31 +1,54 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmdirSync, statSync, symlinkSync, unlinkSync, writeFileSync, type Stats } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync, type Stats } from "node:fs";
 import { createServer } from "node:net";
 import { dirname, join } from "node:path";
 import { status } from "@grpc/grpc-js";
 import { makeRealmError, RealmError } from "../../../src/core/errors.js";
+import { bindRoot } from "../../../src/fs/root.js";
 import { ComputeDriver, type ComputeDriverConfig, type DriverSandboxMessage } from "../../../src/runtime/driver/compute-driver.js";
 import { DRIVER_ADMISSION_ACKNOWLEDGEMENT } from "../../../src/runtime/driver/admission.js";
 import { DriverStatusError, driverFailureOf } from "../../../src/runtime/driver/grpc-status.js";
 import type { ContainerSpec, LibpodInspect } from "../../../src/runtime/libpod-client.js";
-import { diskLifecycle, FakeLibpod, FakeLifecycle, FakeRuntime, driverConfig, OTHER_DIGEST_IMAGE, SANDBOX_IMAGE, validSandbox } from "./fakes.js";
+import { recordFileName, sandboxNameOfSession, sessionIdOfWorkspace } from "../../../src/session/paths.js";
+import { workspaceRegistryDirOf, writeWorkspaceEntry } from "../../../src/session/workspace-registry.js";
+import {
+  diskLifecycle,
+  FakeLibpod,
+  FakeLifecycle,
+  FakeRuntime,
+  driverConfig,
+  OTHER_DIGEST_IMAGE,
+  SANDBOX_IMAGE,
+  validSandbox,
+  writeSandboxWorkspaceEntry,
+} from "./fakes.js";
 
+// Binds a project directory under the ceiling: creates it, writes its registry entry, and returns the sandbox name the entry gives
+// and the directory's real path. Every create in these tests names a sandbox bound this way.
+function bindProject(config: ComputeDriverConfig, dirName: string): { name: string; project: string } {
+  const dir = join(config.workspaceRoot, dirName);
+  const name = writeSandboxWorkspaceEntry(config, dir);
+  return { name, project: realpathSync(dir) };
+}
+
+// A driver over one ceiling, with the project directory project-a bound under the name its registry entry gives.
 function harness() {
   const libpod = new FakeLibpod();
   const lifecycle = new FakeLifecycle(libpod);
   const runtime = new FakeRuntime();
   const config = driverConfig();
   const driver = new ComputeDriver(config, { lifecycle, libpod, runtime });
-  return { libpod, lifecycle, runtime, config, driver };
+  const { name, project } = bindProject(config, "project-a");
+  return { libpod, lifecycle, runtime, config, driver, name, project };
 }
 
-// The spec the lifecycle receives for a create of the given container name: its image, workspace, state directory and channel.
-function specOf(config: ComputeDriverConfig, containerName: string): ContainerSpec {
+// The spec the lifecycle receives for a create of the given container name and workspace: its image, workspace, state directory and channel.
+function specOf(config: ComputeDriverConfig, containerName: string, workspaceDir: string): ContainerSpec {
   return {
     sandboxName: containerName,
     image: SANDBOX_IMAGE,
-    workspaceDir: config.workspaceRoot,
+    workspaceDir,
     stateDir: join(config.sandboxStateRoot, containerName),
     channelDir: join(config.secretRoot, containerName, "channel"),
   };
@@ -108,8 +131,8 @@ const REFUSALS: readonly [string, (sandbox: DriverSandboxMessage) => DriverSandb
 
 for (const [label, change] of REFUSALS) {
   void test(`PRD-DRV-02: CreateSandbox refuses ${label} with SCHEMA_INVALID before any create`, async () => {
-    const { driver, lifecycle } = harness();
-    const sandbox = change(validSandbox());
+    const { driver, lifecycle, name } = harness();
+    const sandbox = change(validSandbox({ name }));
     assert.throws(() => driver.validateSandboxCreate(sandbox), expectCode("SCHEMA_INVALID"));
     await assert.rejects(driver.createSandbox(sandbox), expectCode("SCHEMA_INVALID"));
     assert.equal(lifecycle.creates.length, 0);
@@ -117,35 +140,30 @@ for (const [label, change] of REFUSALS) {
 }
 
 void test("PRD-DRV-02: a conforming request is accepted, and only its exact spec reaches the lifecycle, then the runtime's listener is confirmed", async () => {
-  const { driver, lifecycle, runtime, config } = harness();
-  assert.deepEqual(driver.validateSandboxCreate(validSandbox()), {});
-  const created = await driver.createSandbox(validSandbox());
-  assert.equal(created.runtime_identity, "id-realm-session-1");
-  assert.deepEqual(lifecycle.creates, [specOf(config, "realm-session-1")]);
+  const { driver, lifecycle, runtime, config, name, project } = harness();
+  assert.deepEqual(driver.validateSandboxCreate(validSandbox({ name })), {});
+  const created = await driver.createSandbox(validSandbox({ name }));
+  assert.equal(created.runtime_identity, `id-${name}`);
+  assert.deepEqual(lifecycle.creates, [specOf(config, name, project)]);
   assert.deepEqual(
     runtime.confirmations.map((confirmation) => confirmation.controlSocket),
-    [join(config.secretRoot, "realm-session-1", "channel", "control.sock")],
+    [join(config.secretRoot, name, "channel", "control.sock")],
   );
   assert.equal(runtime.supervisors.length, 1);
 });
 
-void test("PRD-DRV-02: a name without the realm prefix is created as realm-<name>, and the lifecycle receives that name", async () => {
-  const { driver, lifecycle, config } = harness();
-  const created = await driver.createSandbox(validSandbox({ name: "agent-1" }));
-  assert.equal(created.runtime_identity, "id-realm-agent-1");
-  assert.deepEqual(lifecycle.creates, [specOf(config, "realm-agent-1")]);
-});
-
-void test("PRD-DRV-02: a name that already has the realm prefix is unchanged, and is not prefixed again", async () => {
-  const { driver, lifecycle, config } = harness();
-  await driver.createSandbox(validSandbox({ name: "realm-agent-2" }));
-  assert.deepEqual(lifecycle.creates, [specOf(config, "realm-agent-2")]);
+void test("PRD-DRV-02: a create mounts only the directory its registry entry names, and the container's mount list names that directory", async () => {
+  const { driver, lifecycle, libpod, config, name, project } = harness();
+  await driver.createSandbox(validSandbox({ name }));
+  assert.equal(lifecycle.creates[0]?.workspaceDir, project);
+  assert.notEqual(project, config.workspaceRoot);
+  assert.equal(libpod.containers.get(name)?.workspace, project);
 });
 
 void test("PRD-DRV-02: a prefixed name whose control socket path exceeds 107 bytes is refused with SCHEMA_INVALID before any write or libpod call", async () => {
   const { driver, lifecycle, config, libpod } = harness();
   const name = "a".repeat(122);
-  const sandbox = validSandbox({ name });
+  const sandbox = validSandbox({ name: `realm-${name}` });
   assert.throws(() => driver.validateSandboxCreate(sandbox), expectCode("SCHEMA_INVALID"));
   await assert.rejects(driver.createSandbox(sandbox), expectCode("SCHEMA_INVALID"));
   assert.equal(lifecycle.creates.length, 0);
@@ -154,36 +172,29 @@ void test("PRD-DRV-02: a prefixed name whose control socket path exceeds 107 byt
   assert.equal(lstatOrUndefined(join(config.secretRoot, `realm-${name}`)), undefined);
 });
 
-void test("PRD-DRV-02: the longest prefixed name whose host and container socket paths both fit 107 bytes is accepted", async () => {
-  const { driver, lifecycle, config, libpod } = harness();
-  // The host control socket is <secretRoot>/<prefixed name>/channel/control.sock. Each name byte adds one byte to that path, so the
-  // longest name that fits is the last length whose path is still 107 bytes or less; one more byte is over the limit.
-  const hostSocketBytes = (length: number): number =>
-    Buffer.byteLength(join(config.secretRoot, `realm-${"a".repeat(length)}`, "channel", "control.sock"), "utf8");
-  let length = 0;
-  while (hostSocketBytes(length + 1) <= 107) {
-    length += 1;
-  }
-  assert.ok(length > 0, "the secret root leaves room for a name");
-  assert.equal(hostSocketBytes(length), 107, "the longest fitting name fills the 107-byte limit exactly");
-  assert.ok(hostSocketBytes(length + 1) > 107, "one more byte is over the limit");
-  const name = "a".repeat(length);
+void test("PRD-DRV-02: the derived sandbox name is accepted when both socket paths fit 107 bytes, and a secret root that pushes the host socket past 107 bytes is refused before any write or libpod call", async () => {
+  const { driver, lifecycle, config, name } = harness();
   const created = await driver.createSandbox(validSandbox({ name }));
-  assert.equal(created.runtime_identity, `id-realm-${name}`);
-  assert.equal(lifecycle.creates[0]?.sandboxName, `realm-${name}`);
-  const longer = `${name}a`;
-  const refused = validSandbox({ name: longer });
-  assert.throws(() => driver.validateSandboxCreate(refused), expectCode("SCHEMA_INVALID"));
-  await assert.rejects(driver.createSandbox(refused), expectCode("SCHEMA_INVALID"));
-  assert.equal(lifecycle.creates.length, 1, "only the accepted create reached the lifecycle");
-  assert.equal(libpod.inspectCalls, 0, "createSandbox makes no libpod inspect call, so the refused create made no libpod call");
-  assert.equal(lstatOrUndefined(join(config.secretRoot, `realm-${longer}`)), undefined);
-  assert.equal(lstatOrUndefined(join(config.sandboxStateRoot, `realm-${longer}`)), undefined);
+  assert.equal(created.runtime_identity, `id-${name}`);
+  assert.equal(lifecycle.creates[0]?.sandboxName, name);
+  // The refusing driver has its own state root, so the state directory the accepted create made is not in its way.
+  const refusedBase = dirname(config.workspaceRoot);
+  const longSecrets = { ...config, secretRoot: join(refusedBase, "s".repeat(80)), sandboxStateRoot: join(refusedBase, "refused-state") };
+  mkdirSync(longSecrets.sandboxStateRoot);
+  const libpod = new FakeLibpod();
+  const refusedLifecycle = new FakeLifecycle(libpod);
+  const refusing = new ComputeDriver(longSecrets, { lifecycle: refusedLifecycle, libpod, runtime: new FakeRuntime() });
+  assert.throws(() => refusing.validateSandboxCreate(validSandbox({ name })), expectCode("SCHEMA_INVALID"));
+  await assert.rejects(refusing.createSandbox(validSandbox({ name })), expectCode("SCHEMA_INVALID"));
+  assert.equal(refusedLifecycle.creates.length, 0);
+  assert.equal(libpod.inspectCalls, 0);
+  assert.equal(lstatOrUndefined(join(longSecrets.secretRoot, name)), undefined);
+  assert.equal(lstatOrUndefined(join(longSecrets.sandboxStateRoot, name)), undefined);
 });
 
 void test("PRD-DRV-02: a name that fails the container-name rule after prefixing is refused with no libpod call and no directory", async () => {
   for (const name of ["agent/1", "a".repeat(123)]) {
-    const { driver, lifecycle, config, libpod } = harness();
+    const { driver, lifecycle, config, libpod, project } = harness();
     const sandbox = validSandbox({ name });
     assert.throws(() => driver.validateSandboxCreate(sandbox), expectCode("SCHEMA_INVALID"));
     await assert.rejects(driver.createSandbox(sandbox), expectCode("SCHEMA_INVALID"));
@@ -191,37 +202,38 @@ void test("PRD-DRV-02: a name that fails the container-name rule after prefixing
     assert.equal(libpod.containers.size, 0);
     assert.equal(lifecycle.creates.length, 0);
     assert.equal(lstatOrUndefined(join(config.sandboxStateRoot, `realm-${name}`)), undefined);
-    assert.deepEqual(readdirSync(config.workspaceRoot), []);
+    assert.deepEqual(readdirSync(project), []);
   }
 });
 
 void test("PRD-DRV-02: an empty argv is accepted, and the lifecycle receives the spec with no command forwarded", async () => {
-  const { driver, lifecycle, config } = harness();
-  const base = validSandbox();
+  const { driver, lifecycle, config, name, project } = harness();
+  const base = validSandbox({ name });
   const sandbox: DriverSandboxMessage = { ...base, spec: { ...base.spec, command: [] } };
   assert.deepEqual(driver.validateSandboxCreate(sandbox), {});
   await driver.createSandbox(sandbox);
-  assert.deepEqual(lifecycle.creates, [specOf(config, "realm-session-1")]);
+  assert.deepEqual(lifecycle.creates, [specOf(config, name, project)]);
 });
 
-void test("PRD-DRV-02: a create makes only the state directory, and the pinned root keeps its mode and is never created", async () => {
+void test("PRD-DRV-02: a create makes only the state directory, and the project keeps its mode and is never created", async () => {
   const config = driverConfig();
-  chmodSync(config.workspaceRoot, 0o755);
-  const stateDir = join(config.sandboxStateRoot, "realm-session-1");
+  const { name, project } = bindProject(config, "project-a");
+  chmodSync(project, 0o755);
+  const stateDir = join(config.sandboxStateRoot, name);
   assert.equal(existsSync(stateDir), false);
   const modesAtCreate: number[][] = [];
   const lifecycle = {
     create: (spec: ContainerSpec) => {
       modesAtCreate.push([statSync(spec.workspaceDir).mode & 0o777, statSync(spec.stateDir).mode & 0o777]);
-      return Promise.resolve("id-realm-session-1");
+      return Promise.resolve(`id-${name}`);
     },
     delete: () => Promise.resolve(),
     stop: () => Promise.resolve(),
   };
   const driver = new ComputeDriver(config, { lifecycle, libpod: new FakeLibpod(), runtime: new FakeRuntime() });
-  await driver.createSandbox(validSandbox());
+  await driver.createSandbox(validSandbox({ name }));
   assert.deepEqual(modesAtCreate, [[0o755, 0o700]]);
-  assert.deepEqual(readdirSync(config.workspaceRoot), []);
+  assert.deepEqual(readdirSync(project), []);
 });
 
 // A libpod whose inspect of a name answers as usual until the given call, and finds no container from then on.
@@ -245,14 +257,16 @@ class UnreadableLibpod extends FakeLibpod {
   }
 }
 
-const SESSION_CONTAINER = "realm-session-1";
-const STATE_DIR_REFUSAL = "realm compute driver refused: rpc=CreateSandbox check=create.state_dir code=SCHEMA_INVALID";
-const SECRET_DIR_REFUSAL = "realm compute driver refused: rpc=CreateSandbox check=create.secret_dir code=SCHEMA_INVALID";
+const STATE_DIR_REFUSAL_CHECK = "check=create.state_dir code=SCHEMA_INVALID";
+const SECRET_DIR_REFUSAL_CHECK = "check=create.secret_dir code=SCHEMA_INVALID";
+const STATE_DIR_REFUSAL = `realm compute driver refused: rpc=CreateSandbox ${STATE_DIR_REFUSAL_CHECK}`;
+const SECRET_DIR_REFUSAL = `realm compute driver refused: rpc=CreateSandbox ${SECRET_DIR_REFUSAL_CHECK}`;
 
 // A driver over the real state and secret directories: the lifecycle's delete removes them from disk. Refusal lines are collected.
 async function diskHarness(libpod: FakeLibpod = new FakeLibpod()) {
   const lines: string[] = [];
   const config = driverConfig({ refusalLog: (line) => lines.push(line) });
+  const { name, project } = bindProject(config, "project-a");
   const lifecycle = await diskLifecycle(config, libpod);
   const runtime = new FakeRuntime();
   const driver = new ComputeDriver(config, { lifecycle, libpod, runtime });
@@ -263,8 +277,10 @@ async function diskHarness(libpod: FakeLibpod = new FakeLibpod()) {
     config,
     driver,
     lines,
-    stateDir: join(config.sandboxStateRoot, SESSION_CONTAINER),
-    secretDir: join(config.secretRoot, SESSION_CONTAINER),
+    name,
+    project,
+    stateDir: join(config.sandboxStateRoot, name),
+    secretDir: join(config.secretRoot, name),
   };
 }
 
@@ -283,54 +299,55 @@ void test("PRD-DRV-02: a create whose state or secret directory exists while a c
   for (const which of ["state", "secret"] as const) {
     const lines: string[] = [];
     const config = driverConfig({ refusalLog: (line) => lines.push(line) });
+    const { name, project } = bindProject(config, "project-a");
     const libpod = new FakeLibpod();
     const lifecycle = new FakeLifecycle(libpod);
     const driver = new ComputeDriver(config, { lifecycle, libpod, runtime: new FakeRuntime() });
-    libpod.add(SESSION_CONTAINER, false);
-    const dir = which === "state" ? join(config.sandboxStateRoot, SESSION_CONTAINER) : join(config.secretRoot, SESSION_CONTAINER);
+    libpod.add(name, false);
+    const dir = which === "state" ? join(config.sandboxStateRoot, name) : join(config.secretRoot, name);
     mkdirSync(dir, { recursive: true });
     const leftover = join(dir, "leftover.txt");
     writeFileSync(leftover, "from an earlier sandbox");
-    await assert.rejects(driver.createSandbox(validSandbox()), expectCode("SCHEMA_INVALID"));
+    await assert.rejects(driver.createSandbox(validSandbox({ name })), expectCode("SCHEMA_INVALID"));
     assert.deepEqual(lines, [which === "state" ? STATE_DIR_REFUSAL : SECRET_DIR_REFUSAL]);
     assert.equal(lifecycle.creates.length, 0);
     assert.deepEqual(lifecycle.deletes, []);
     assert.equal(existsSync(leftover), true);
-    assert.equal(libpod.containers.has(SESSION_CONTAINER), true);
-    assert.deepEqual(readdirSync(config.workspaceRoot), []);
+    assert.equal(libpod.containers.has(name), true);
+    assert.deepEqual(readdirSync(project), []);
   }
 });
 
-void test("PRD-DRV-02: a create whose state directory exists while a running container of that name holds the pinned root is refused with the transition code, and nothing is deleted", async () => {
-  const { driver, lifecycle, libpod, config } = harness();
-  libpod.add(SESSION_CONTAINER, true, config.workspaceRoot);
-  const stateDir = join(config.sandboxStateRoot, SESSION_CONTAINER);
+void test("PRD-DRV-02: a create whose state directory exists while a running container of that name binds its workspace is refused with the transition code, and nothing is deleted", async () => {
+  const { driver, lifecycle, libpod, config, name, project } = harness();
+  libpod.add(name, true, project);
+  const stateDir = join(config.sandboxStateRoot, name);
   mkdirSync(stateDir);
   const leftover = join(stateDir, "leftover.txt");
   writeFileSync(leftover, "live sandbox state");
-  await assert.rejects(driver.createSandbox(validSandbox()), expectCode("REALM_INVALID_TRANSITION"));
+  await assert.rejects(driver.createSandbox(validSandbox({ name })), expectCode("REALM_INVALID_TRANSITION"));
   assert.deepEqual(lifecycle.deletes, []);
   assert.equal(lifecycle.creates.length, 0);
   assert.equal(existsSync(leftover), true);
-  assert.equal(libpod.containers.get(SESSION_CONTAINER)?.running, true);
+  assert.equal(libpod.containers.get(name)?.running, true);
 });
 
 void test("PRD-DRV-02: a create whose state and secret directories remain from a sandbox whose container is gone reclaims them, stops the stale supervisor, and succeeds", async () => {
-  const { driver, lifecycle, libpod, runtime, stateDir, secretDir, lines } = await diskHarness();
-  await driver.createSandbox(validSandbox());
+  const { driver, lifecycle, libpod, runtime, name, stateDir, secretDir, lines } = await diskHarness();
+  await driver.createSandbox(validSandbox({ name }));
   const [stale] = runtime.supervisors;
   assert.ok(stale !== undefined);
   // The crash: the startup sweep removed the container; the directories and the driver's handle for it remain.
-  libpod.containers.delete(SESSION_CONTAINER);
+  libpod.containers.delete(name);
   const stateSentinel = join(stateDir, "sentinel.txt");
   const secretSentinel = join(secretDir, "main-exit");
   writeFileSync(stateSentinel, "from a crashed sandbox");
   writeFileSync(secretSentinel, "from a crashed sandbox", { mode: 0o600 });
   lifecycle.deletes.length = 0;
-  const created = await driver.createSandbox(validSandbox());
-  assert.equal(created.runtime_identity, `id-${SESSION_CONTAINER}`);
+  const created = await driver.createSandbox(validSandbox({ name }));
+  assert.equal(created.runtime_identity, `id-${name}`);
   assert.equal(stale.stops, 1, "the stale supervisor handle was stopped");
-  assert.deepEqual(lifecycle.deletes, [SESSION_CONTAINER]);
+  assert.deepEqual(lifecycle.deletes, [name]);
   assert.equal(existsSync(stateSentinel), false, "the stale state directory's file is gone");
   assert.equal(existsSync(secretSentinel), false, "the stale secret directory's file is gone");
   assert.equal(runtime.supervisors.length, 2, "the new sandbox has its own supervisor");
@@ -340,10 +357,10 @@ void test("PRD-DRV-02: a create whose state and secret directories remain from a
 });
 
 void test("PRD-DRV-02: a create whose stale state directory holds a socket is refused as the create-time check does, and nothing is removed", async () => {
-  const { driver, lifecycle, libpod, runtime, stateDir, secretDir, lines } = await diskHarness();
-  await driver.createSandbox(validSandbox());
+  const { driver, lifecycle, libpod, runtime, name, stateDir, secretDir, lines } = await diskHarness();
+  await driver.createSandbox(validSandbox({ name }));
   const [stale] = runtime.supervisors;
-  libpod.containers.delete(SESSION_CONTAINER);
+  libpod.containers.delete(name);
   writeFileSync(join(stateDir, "sentinel.txt"), "from a crashed sandbox");
   const server = createServer();
   await new Promise<void>((resolve) => {
@@ -351,7 +368,7 @@ void test("PRD-DRV-02: a create whose stale state directory holds a socket is re
   });
   try {
     lifecycle.deletes.length = 0;
-    await assert.rejects(driver.createSandbox(validSandbox()), expectCode("SCHEMA_INVALID"));
+    await assert.rejects(driver.createSandbox(validSandbox({ name })), expectCode("SCHEMA_INVALID"));
     assert.deepEqual(lines, [STATE_DIR_REFUSAL]);
     assert.deepEqual(lifecycle.deletes, []);
     assert.equal(existsSync(join(stateDir, "sentinel.txt")), true);
@@ -363,9 +380,9 @@ void test("PRD-DRV-02: a create whose stale state directory holds a socket is re
 });
 
 void test("PRD-DRV-02: a create whose container lookup cannot be read is refused with the same check, and nothing is removed", async () => {
-  const { driver, lifecycle, stateDir, secretDir, lines } = await diskHarness(new UnreadableLibpod());
+  const { driver, lifecycle, name, stateDir, secretDir, lines } = await diskHarness(new UnreadableLibpod());
   const { stateSentinel, secretSentinel } = leaveStaleDirectories(stateDir, secretDir);
-  await assert.rejects(driver.createSandbox(validSandbox()), expectCode("SCHEMA_INVALID"));
+  await assert.rejects(driver.createSandbox(validSandbox({ name })), expectCode("SCHEMA_INVALID"));
   assert.deepEqual(lines, [STATE_DIR_REFUSAL]);
   assert.deepEqual(lifecycle.deletes, []);
   assert.equal(lifecycle.creates.length, 0);
@@ -375,7 +392,7 @@ void test("PRD-DRV-02: a create whose container lookup cannot be read is refused
 
 void test("PRD-DRV-02: a name the driver tracks as an unremoved container is refused with the same check, whatever a later lookup finds, and nothing is removed", async () => {
   const libpod = new VanishingLibpod();
-  const { lifecycle, runtime, stateDir, secretDir, lines, config } = await diskHarness(libpod);
+  const { lifecycle, runtime, name, stateDir, secretDir, lines, config } = await diskHarness(libpod);
   // A failed create whose container cannot be removed leaves the container in the driver's unremoved set.
   const undeletable = {
     create: lifecycle.create.bind(lifecycle),
@@ -384,16 +401,16 @@ void test("PRD-DRV-02: a name the driver tracks as an unremoved container is ref
   };
   const tracking = new ComputeDriver(config, { lifecycle: undeletable, libpod, runtime });
   runtime.exitOnSpawn = true;
-  await assert.rejects(tracking.createSandbox(validSandbox()), expectCode("OPENSHELL_START_FAILED"));
+  await assert.rejects(tracking.createSandbox(validSandbox({ name })), expectCode("OPENSHELL_START_FAILED"));
   runtime.exitOnSpawn = false;
-  const container = libpod.containers.get(SESSION_CONTAINER);
+  const container = libpod.containers.get(name);
   assert.ok(container !== undefined);
   container.running = false;
   const { stateSentinel, secretSentinel } = leaveStaleDirectories(stateDir, secretDir);
-  // The pinned-root check finds the stopped container, which stays tracked; the next lookup would find nothing.
+  // The workspace check finds the stopped container, which stays tracked; the next lookup would find nothing.
   libpod.vanishAt = libpod.inspectCalls + 2;
   lifecycle.deletes.length = 0;
-  await assert.rejects(tracking.createSandbox(validSandbox()), expectCode("SCHEMA_INVALID"));
+  await assert.rejects(tracking.createSandbox(validSandbox({ name })), expectCode("SCHEMA_INVALID"));
   assert.deepEqual(lifecycle.deletes, []);
   assert.equal(existsSync(stateSentinel), true);
   assert.equal(existsSync(secretSentinel), true);
@@ -401,17 +418,18 @@ void test("PRD-DRV-02: a name the driver tracks as an unremoved container is ref
 });
 
 void test("PRD-DRV-02: a create with no state or secret directory makes the same libpod calls as before: one list, no inspect, no delete", async () => {
-  const { driver, lifecycle, libpod } = harness();
-  await driver.createSandbox(validSandbox());
-  assert.equal(libpod.listCalls, 1, "only the pinned-root check lists containers");
+  const { driver, lifecycle, libpod, name } = harness();
+  await driver.createSandbox(validSandbox({ name }));
+  assert.equal(libpod.listCalls, 1, "only the workspace check lists containers");
   assert.equal(libpod.inspectCalls, 0);
   assert.deepEqual(lifecycle.deletes, []);
   assert.equal(lifecycle.creates.length, 1);
 });
 
-void test("PRD-DRV-02: a lifecycle refusal removes the state directory this call made, keeps the pinned root and its contents, and rethrows the original error", async () => {
+void test("PRD-DRV-02: a lifecycle refusal removes the state directory this call made, keeps the project and its contents, and rethrows the original error", async () => {
   const config = driverConfig();
-  const notes = join(config.workspaceRoot, "notes.txt");
+  const { name, project } = bindProject(config, "project-a");
+  const notes = join(project, "notes.txt");
   writeFileSync(notes, "user data");
   const refusal = new RealmError("SCHEMA_INVALID");
   const stateDirSeen: boolean[] = [];
@@ -420,39 +438,39 @@ void test("PRD-DRV-02: a lifecycle refusal removes the state directory this call
     libpod: new FakeLibpod(),
     runtime: new FakeRuntime(),
   });
-  await assert.rejects(driver.createSandbox(validSandbox()), (error: unknown) => error === refusal);
+  await assert.rejects(driver.createSandbox(validSandbox({ name })), (error: unknown) => error === refusal);
   assert.deepEqual(stateDirSeen, [true]);
-  assert.equal(lstatOrUndefined(join(config.sandboxStateRoot, "realm-session-1")), undefined);
+  assert.equal(lstatOrUndefined(join(config.sandboxStateRoot, name)), undefined);
   assert.equal(existsSync(notes), true);
 });
 
-void test("PRD-DRV-01: a create whose pinned root is replaced by a symbolic link, a file or nothing is refused before any directory is made", async () => {
-  const { driver, lifecycle, config } = harness();
+void test("PRD-DRV-01: a create whose ceiling is replaced by a symbolic link, a file or nothing is refused before any directory is made", async () => {
+  const { driver, lifecycle, config, name } = harness();
   const outside = join(dirname(config.workspaceRoot), "outside");
   mkdirSync(outside);
-  rmdirSync(config.workspaceRoot);
+  rmSync(config.workspaceRoot, { recursive: true, force: true });
   symlinkSync(outside, config.workspaceRoot);
-  await assert.rejects(driver.createSandbox(validSandbox()), expectCode("SCHEMA_INVALID"));
+  await assert.rejects(driver.createSandbox(validSandbox({ name })), expectCode("SCHEMA_INVALID"));
   assert.equal(existsSync(outside), true);
   unlinkSync(config.workspaceRoot);
   writeFileSync(config.workspaceRoot, "not a directory");
-  await assert.rejects(driver.createSandbox(validSandbox()), expectCode("SCHEMA_INVALID"));
+  await assert.rejects(driver.createSandbox(validSandbox({ name })), expectCode("SCHEMA_INVALID"));
   assert.equal(lstatSync(config.workspaceRoot).isFile(), true);
   unlinkSync(config.workspaceRoot);
-  await assert.rejects(driver.createSandbox(validSandbox()), expectCode("SCHEMA_INVALID"));
-  assert.equal(lstatOrUndefined(config.workspaceRoot), undefined, "the driver never creates the pinned root");
+  await assert.rejects(driver.createSandbox(validSandbox({ name })), expectCode("SCHEMA_INVALID"));
+  assert.equal(lstatOrUndefined(config.workspaceRoot), undefined, "the driver never creates the ceiling");
   assert.equal(lifecycle.creates.length, 0);
-  assert.equal(lstatOrUndefined(join(config.sandboxStateRoot, "realm-session-1")), undefined);
+  assert.equal(lstatOrUndefined(join(config.sandboxStateRoot, name)), undefined);
 });
 
 void test("PRD-DRV-02: CPU and memory written another way for the same profile are accepted", () => {
-  const { driver } = harness();
+  const { driver, name } = harness();
   for (const resources of [
     { cpu_limit: "2000m", memory_limit: "1024Mi" },
     { cpu_limit: "2.0", memory_limit: "1073741824" },
     { cpu_request: "", cpu_limit: "", memory_request: "", memory_limit: "" },
   ]) {
-    assert.doesNotThrow(() => driver.validateSandboxCreate(withResources(validSandbox(), resources)));
+    assert.doesNotThrow(() => driver.validateSandboxCreate(withResources(validSandbox({ name }), resources)));
   }
 });
 
@@ -494,8 +512,9 @@ void test("PRD-DRV-01: GetCapabilities accepts a gateway that requires only the 
 
 for (const name of ["realm", "external", "openshell-sandbox", "realm-other", "Realm", ""]) {
   void test(`PRD-DRV-02: a create that selects an isolation backend (name ${JSON.stringify(name)}) is refused before any write or libpod call`, async () => {
-    const { driver, lifecycle, libpod, config } = harness();
+    const { driver, lifecycle, libpod, config, name: sandboxName, project } = harness();
     const sandbox = validSandbox({
+      name: sandboxName,
       spec: {
         ...validSandbox().spec,
         isolation_backend: { name, endpoint: "unix_socket_path", unix_socket_path: "/run/x.sock" },
@@ -505,15 +524,16 @@ for (const name of ["realm", "external", "openshell-sandbox", "realm-other", "Re
     await assert.rejects(driver.createSandbox(sandbox), expectCode("SCHEMA_INVALID"));
     assert.equal(lifecycle.creates.length, 0);
     assert.equal(libpod.containers.size, 0);
-    assert.equal(existsSync(join(config.sandboxStateRoot, "realm-session-1")), false);
-    assert.equal(existsSync(join(config.secretRoot, "realm-session-1")), false);
-    assert.deepEqual(readdirSync(config.workspaceRoot), []);
+    assert.equal(existsSync(join(config.sandboxStateRoot, sandboxName)), false);
+    assert.equal(existsSync(join(config.secretRoot, sandboxName)), false);
+    assert.deepEqual(readdirSync(project), []);
   });
 }
 
 void test("PRD-DRV-02: a create that selects the configured name over a non-unix endpoint is refused", async () => {
-  const { driver, lifecycle, libpod } = harness();
+  const { driver, lifecycle, libpod, name } = harness();
   const sandbox = validSandbox({
+    name,
     spec: {
       ...validSandbox().spec,
       isolation_backend: { name: "realm", endpoint: "tcp", tcp: { authority: "realm.invalid", addresses: ["10.0.0.1:443"] } },
@@ -526,107 +546,110 @@ void test("PRD-DRV-02: a create that selects the configured name over a non-unix
 });
 
 void test("PRD-DRV-03: StopSandbox and StartSandbox refuse with the transition code and read no state", async () => {
-  const { driver, libpod } = harness();
-  await driver.createSandbox(validSandbox());
+  const { driver, libpod, name } = harness();
+  await driver.createSandbox(validSandbox({ name }));
   const inspectsBefore = libpod.inspectCalls;
   assert.throws(() => driver.stopSandbox(), expectCode("REALM_INVALID_TRANSITION"));
   assert.throws(() => driver.startSandbox(), expectCode("REALM_INVALID_TRANSITION"));
   assert.equal(libpod.inspectCalls, inspectsBefore);
-  assert.equal(libpod.containers.get("realm-session-1")?.running, true);
+  assert.equal(libpod.containers.get(name)?.running, true);
   assert.equal(driverFailureOf(new RealmError("REALM_INVALID_TRANSITION")).code, status.FAILED_PRECONDITION);
 });
 
 void test("the driver reports a created sandbox as Ready only while its container runs", async () => {
-  const { driver, libpod } = harness();
-  await driver.createSandbox(validSandbox());
+  const { driver, libpod, name } = harness();
+  await driver.createSandbox(validSandbox({ name }));
   const running = await driver.getSandbox({ sandbox_id: "sandbox-1" });
   assert.equal(running.sandbox.id, "sandbox-1");
   assert.equal(running.sandbox.status.conditions[0]?.status, "True");
-  const container = libpod.containers.get("realm-session-1");
+  const container = libpod.containers.get(name);
   if (container === undefined) {
     throw new Error("container missing from fake");
   }
   container.running = false;
-  const stopped = await driver.getSandbox({ name: "realm-session-1" });
+  const stopped = await driver.getSandbox({ name });
   const [stoppedCondition] = stopped.sandbox.status.conditions;
   assert.equal(stoppedCondition?.status, "False");
   assert.equal(stoppedCondition.reason, "exited");
 });
 
 void test("ListSandboxes lists only realm sandboxes that have both a registry entry and a labelled container", async () => {
-  const { driver, libpod } = harness();
-  await driver.createSandbox(validSandbox());
+  const { driver, libpod, name } = harness();
+  await driver.createSandbox(validSandbox({ name }));
   libpod.add("realm-foreign", true);
   const listed = await driver.listSandboxes();
   assert.deepEqual(
     listed.sandboxes.map((sandbox) => sandbox.name),
-    ["realm-session-1"],
+    [name],
   );
 });
 
 void test("GetSandbox, ListSandboxes and the watch snapshot report the gateway's name, not the container name", async () => {
-  const { driver } = harness();
-  await driver.createSandbox(validSandbox({ name: "agent-1" }));
-  const byName = await driver.getSandbox({ name: "agent-1" });
+  const { driver, name } = harness();
+  await driver.createSandbox(validSandbox({ name }));
+  const byName = await driver.getSandbox({ name });
   const byId = await driver.getSandbox({ sandbox_id: "sandbox-1" });
-  assert.equal(byName.sandbox.name, "agent-1");
-  assert.equal(byName.sandbox.status.name, "agent-1");
-  assert.equal(byId.sandbox.name, "agent-1");
+  assert.equal(byName.sandbox.name, name);
+  assert.equal(byName.sandbox.status.name, name);
+  assert.equal(byId.sandbox.name, name);
   const listed = await driver.listSandboxes();
   assert.deepEqual(
     listed.sandboxes.map((sandbox) => sandbox.name),
-    ["agent-1"],
+    [name],
   );
-  assert.deepEqual([...(await driver.snapshotAll()).keys()], ["agent-1"]);
+  assert.deepEqual([...(await driver.snapshotAll()).keys()], [name]);
 });
 
 void test("GetSandbox of an unknown name or an unknown id is NOT_FOUND", async () => {
-  const { driver } = harness();
-  await assert.rejects(driver.getSandbox({ name: "realm-missing" }), expectNotFound);
+  const { driver, config } = harness();
+  await assert.rejects(driver.getSandbox({ name: sandboxNameOfSession(sessionIdOfWorkspace(join(config.workspaceRoot, "missing"))) }), expectNotFound);
   await assert.rejects(driver.getSandbox({ sandbox_id: "never-created" }), expectNotFound);
 });
 
 void test("DeleteSandbox removes the sandbox, and is idempotent for one that is already gone", async () => {
-  const { driver, lifecycle, libpod } = harness();
-  await driver.createSandbox(validSandbox());
+  const { driver, lifecycle, libpod, name } = harness();
+  await driver.createSandbox(validSandbox({ name }));
   assert.deepEqual(await driver.deleteSandbox({ sandbox_id: "sandbox-1" }), { deleted: true });
-  assert.equal(libpod.containers.has("realm-session-1"), false);
-  assert.deepEqual(lifecycle.deletes, ["realm-session-1"]);
-  assert.deepEqual(await driver.deleteSandbox({ name: "realm-session-1" }), { deleted: false });
+  assert.equal(libpod.containers.has(name), false);
+  assert.deepEqual(lifecycle.deletes, [name]);
+  assert.deepEqual(await driver.deleteSandbox({ name }), { deleted: false });
   assert.deepEqual(await driver.deleteSandbox({ sandbox_id: "sandbox-1" }), { deleted: false });
 });
 
-void test("DeleteSandbox by the gateway's name removes the container under its prefixed name", async () => {
-  const { driver, lifecycle, libpod } = harness();
-  await driver.createSandbox(validSandbox({ name: "agent-1" }));
-  assert.deepEqual(await driver.deleteSandbox({ name: "agent-1" }), { deleted: true });
-  assert.equal(libpod.containers.has("realm-agent-1"), false);
-  assert.deepEqual(lifecycle.deletes, ["realm-agent-1"]);
-  await assert.rejects(driver.getSandbox({ name: "agent-1" }), expectNotFound);
+void test("DeleteSandbox by the gateway's name removes the container under that name", async () => {
+  const { driver, lifecycle, libpod, name } = harness();
+  await driver.createSandbox(validSandbox({ name }));
+  assert.deepEqual(await driver.deleteSandbox({ name }), { deleted: true });
+  assert.equal(libpod.containers.has(name), false);
+  assert.deepEqual(lifecycle.deletes, [name]);
+  await assert.rejects(driver.getSandbox({ name }), expectNotFound);
 });
 
 void test("DeleteSandbox by a name whose container another sandbox holds deletes nothing", async () => {
-  const { driver, lifecycle, libpod } = harness();
-  await driver.createSandbox(validSandbox({ name: "realm-x" }));
-  assert.deepEqual(await driver.deleteSandbox({ name: "x" }), { deleted: false });
-  assert.equal(libpod.containers.has("realm-x"), true);
+  const { driver, lifecycle, libpod, name } = harness();
+  await driver.createSandbox(validSandbox({ name }));
+  // The gateway's name without its realm prefix names the same container, which the registered sandbox holds.
+  assert.deepEqual(await driver.deleteSandbox({ name: name.slice("realm-".length) }), { deleted: false });
+  assert.equal(libpod.containers.has(name), true);
   assert.deepEqual(lifecycle.deletes, []);
   assert.deepEqual(await driver.deleteSandbox({ sandbox_id: "sandbox-1" }), { deleted: true });
-  assert.equal(libpod.containers.has("realm-x"), false);
+  assert.equal(libpod.containers.has(name), false);
 });
 
-void test("PRD-DRV-02: a second create on a pinned root with a live sandbox is refused with REALM_INVALID_TRANSITION, and creates nothing", async () => {
-  const { driver, lifecycle, libpod, config } = harness();
-  await driver.createSandbox(validSandbox());
-  const second = validSandbox({ id: "sandbox-2", name: "realm-session-2" });
+void test("PRD-DRV-02: a second create for a project whose sandbox is live is refused with REALM_INVALID_TRANSITION, and creates nothing", async () => {
+  const { driver, lifecycle, libpod, config, name } = harness();
+  await driver.createSandbox(validSandbox({ name }));
+  const stateBefore = readdirSync(config.sandboxStateRoot);
+  const secretBefore = readdirSync(config.secretRoot);
+  const second = validSandbox({ id: "sandbox-2", name });
   await assert.rejects(driver.createSandbox(second), expectCode("REALM_INVALID_TRANSITION"));
   assert.equal(lifecycle.creates.length, 1);
-  assert.equal(libpod.containers.has("realm-session-2"), false);
-  assert.equal(existsSync(join(config.sandboxStateRoot, "realm-session-2")), false);
-  assert.equal(existsSync(join(config.secretRoot, "realm-session-2")), false);
+  assert.equal(libpod.containers.get(name)?.running, true);
+  assert.deepEqual(readdirSync(config.sandboxStateRoot), stateBefore, "the refused create wrote no state directory");
+  assert.deepEqual(readdirSync(config.secretRoot), secretBefore, "the refused create wrote no launch material");
 });
 
-void test("PRD-DRV-02: a refused second create logs the held-root check and its code, and the line names no path", async () => {
+void test("PRD-DRV-02: a refused second create logs the held-workspace check and its code, and the line names no path", async () => {
   const lines: string[] = [];
   const config = driverConfig({
     refusalLog: (line) => {
@@ -636,16 +659,17 @@ void test("PRD-DRV-02: a refused second create logs the held-root check and its 
   const libpod = new FakeLibpod();
   const lifecycle = new FakeLifecycle(libpod);
   const driver = new ComputeDriver(config, { lifecycle, libpod, runtime: new FakeRuntime() });
-  await driver.createSandbox(validSandbox());
-  await assert.rejects(driver.createSandbox(validSandbox({ id: "sandbox-2", name: "realm-session-2" })), expectCode("REALM_INVALID_TRANSITION"));
+  const { name } = bindProject(config, "project-a");
+  await driver.createSandbox(validSandbox({ name }));
+  await assert.rejects(driver.createSandbox(validSandbox({ id: "sandbox-2", name })), expectCode("REALM_INVALID_TRANSITION"));
   assert.deepEqual(lines, ["realm compute driver refused: rpc=CreateSandbox check=create.pinned_root_held code=REALM_INVALID_TRANSITION"]);
 });
 
-void test("PRD-DRV-02: two concurrent creates on one pinned root: one succeeds, the other is refused with REALM_INVALID_TRANSITION, and one lifecycle create runs", async () => {
-  const { driver, lifecycle } = harness();
+void test("PRD-DRV-02: two concurrent creates under one sandbox name: the second is refused while the first is in flight with REALM_INVALID_TRANSITION, and one lifecycle create runs", async () => {
+  const { driver, lifecycle, name } = harness();
   const results = await Promise.allSettled([
-    driver.createSandbox(validSandbox()),
-    driver.createSandbox(validSandbox({ id: "sandbox-2", name: "realm-session-2" })),
+    driver.createSandbox(validSandbox({ name })),
+    driver.createSandbox(validSandbox({ id: "sandbox-2", name })),
   ]);
   const fulfilled = results.filter((result) => result.status === "fulfilled");
   const rejected = results.filter((result): result is PromiseRejectedResult => result.status === "rejected");
@@ -655,8 +679,19 @@ void test("PRD-DRV-02: two concurrent creates on one pinned root: one succeeds, 
   assert.equal(lifecycle.creates.length, 1);
 });
 
-void test("PRD-DRV-02: a failed create whose container removal fails keeps the pinned root held, so a second create on it is refused", async () => {
-  const { libpod, lifecycle, runtime, config } = harness();
+void test("PRD-DRV-02: two directories under one ceiling create on one driver; a third create for the first directory is refused while its container is live", async () => {
+  const { driver, lifecycle, config, name } = harness();
+  await driver.createSandbox(validSandbox({ name }));
+  const second = bindProject(config, "project-b");
+  await driver.createSandbox(validSandbox({ id: "sandbox-2", name: second.name }));
+  assert.equal(lifecycle.creates.length, 2);
+  assert.notEqual(second.name, name);
+  await assert.rejects(driver.createSandbox(validSandbox({ id: "sandbox-4", name })), expectCode("REALM_INVALID_TRANSITION"));
+  assert.equal(lifecycle.creates.length, 2);
+});
+
+void test("PRD-DRV-02: a failed create whose container removal fails keeps its workspace held, so a second create for it is refused", async () => {
+  const { libpod, lifecycle, runtime, config, name } = harness();
   const undeletable = {
     create: lifecycle.create.bind(lifecycle),
     stop: lifecycle.stop.bind(lifecycle),
@@ -664,15 +699,15 @@ void test("PRD-DRV-02: a failed create whose container removal fails keeps the p
   };
   const driver = new ComputeDriver(config, { lifecycle: undeletable, libpod, runtime });
   runtime.exitOnSpawn = true;
-  await assert.rejects(driver.createSandbox(validSandbox()), expectCode("OPENSHELL_START_FAILED"));
-  assert.equal(libpod.containers.get("realm-session-1")?.running, true);
+  await assert.rejects(driver.createSandbox(validSandbox({ name })), expectCode("OPENSHELL_START_FAILED"));
+  assert.equal(libpod.containers.get(name)?.running, true);
   runtime.exitOnSpawn = false;
-  await assert.rejects(driver.createSandbox(validSandbox({ id: "sandbox-2", name: "realm-session-2" })), expectCode("REALM_INVALID_TRANSITION"));
+  await assert.rejects(driver.createSandbox(validSandbox({ id: "sandbox-2", name })), expectCode("REALM_INVALID_TRANSITION"));
   assert.equal(lifecycle.creates.length, 1);
 });
 
-void test("PRD-DRV-02: a failed create whose container still runs holds the pinned root, so a second create on it is refused", async () => {
-  const { libpod, lifecycle, runtime, config } = harness();
+void test("PRD-DRV-02: a failed create whose container still runs holds its workspace, so a second create for it is refused", async () => {
+  const { libpod, lifecycle, runtime, config, name } = harness();
   const startFailing = {
     create: (spec: ContainerSpec): Promise<string> => {
       lifecycle.creates.push(spec);
@@ -683,14 +718,14 @@ void test("PRD-DRV-02: a failed create whose container still runs holds the pinn
     stop: lifecycle.stop.bind(lifecycle),
   };
   const driver = new ComputeDriver(config, { lifecycle: startFailing, libpod, runtime });
-  await assert.rejects(driver.createSandbox(validSandbox()), expectCode("OPENSHELL_START_FAILED"));
-  assert.equal(libpod.containers.get("realm-session-1")?.running, true);
-  await assert.rejects(driver.createSandbox(validSandbox({ id: "sandbox-2", name: "realm-session-2" })), expectCode("REALM_INVALID_TRANSITION"));
+  await assert.rejects(driver.createSandbox(validSandbox({ name })), expectCode("OPENSHELL_START_FAILED"));
+  assert.equal(libpod.containers.get(name)?.running, true);
+  await assert.rejects(driver.createSandbox(validSandbox({ id: "sandbox-2", name })), expectCode("REALM_INVALID_TRANSITION"));
   assert.equal(lifecycle.creates.length, 1);
-  assert.equal(libpod.containers.get("realm-session-1")?.running, true);
+  assert.equal(libpod.containers.get(name)?.running, true);
 });
 
-void test("PRD-DRV-02: a create whose pinned-root container lookup fails is refused with SCHEMA_INVALID under create.pinned_root_held, and creates nothing", async () => {
+void test("PRD-DRV-02: a create whose workspace container lookup fails is refused with SCHEMA_INVALID under create.pinned_root_held, and creates nothing", async () => {
   const lines: string[] = [];
   const config = driverConfig({
     refusalLog: (line) => {
@@ -700,125 +735,142 @@ void test("PRD-DRV-02: a create whose pinned-root container lookup fails is refu
   const libpod = new FakeLibpod();
   const lifecycle = new FakeLifecycle(libpod);
   const driver = new ComputeDriver(config, { lifecycle, libpod, runtime: new FakeRuntime() });
-  await driver.createSandbox(validSandbox());
+  const { name } = bindProject(config, "project-a");
+  await driver.createSandbox(validSandbox({ name }));
   libpod.inspectContainer = () => Promise.reject(new Error("socket reset"));
-  await assert.rejects(driver.createSandbox(validSandbox({ id: "sandbox-2", name: "realm-session-2" })), expectCode("SCHEMA_INVALID"));
+  await assert.rejects(driver.createSandbox(validSandbox({ id: "sandbox-2", name })), expectCode("SCHEMA_INVALID"));
   assert.equal(lifecycle.creates.length, 1);
   assert.deepEqual(lines, ["realm compute driver refused: rpc=CreateSandbox check=create.pinned_root_held code=SCHEMA_INVALID"]);
 });
 
 void test("PRD-DRV-02: a container no longer found is dropped from the tracked set, so a later create checks no name for it", async () => {
-  const { libpod, lifecycle, runtime, config } = harness();
+  const { libpod, lifecycle, runtime, config, name } = await diskHarness();
   let deleteRefusals = 1;
   const deleteOnce = {
     create: lifecycle.create.bind(lifecycle),
     stop: lifecycle.stop.bind(lifecycle),
-    delete: (name: string): Promise<void> => {
+    delete: (sandboxName: string): Promise<void> => {
       if (deleteRefusals > 0) {
         deleteRefusals -= 1;
         return Promise.reject(new Error("delete refused"));
       }
-      return lifecycle.delete(name);
+      return lifecycle.delete(sandboxName);
     },
   };
   const driver = new ComputeDriver(config, { lifecycle: deleteOnce, libpod, runtime });
   runtime.exitOnSpawn = true;
-  await assert.rejects(driver.createSandbox(validSandbox()), expectCode("OPENSHELL_START_FAILED"));
+  await assert.rejects(driver.createSandbox(validSandbox({ name })), expectCode("OPENSHELL_START_FAILED"));
   runtime.exitOnSpawn = false;
-  libpod.containers.delete("realm-session-1");
-  await driver.createSandbox(validSandbox({ id: "sandbox-2", name: "realm-session-2" }));
+  libpod.containers.delete(name);
+  await driver.createSandbox(validSandbox({ id: "sandbox-2", name }));
   await driver.deleteSandbox({ sandbox_id: "sandbox-2" });
   const before = libpod.inspectCalls;
-  await driver.createSandbox(validSandbox({ id: "sandbox-3", name: "realm-session-3" }));
+  await driver.createSandbox(validSandbox({ id: "sandbox-3", name }));
   assert.equal(libpod.inspectCalls - before, 0);
   assert.equal(lifecycle.creates.length, 3);
 });
 
-void test("PRD-DRV-02: a supervisor exit whose container stop succeeds releases the pinned root, so a create on it succeeds", async () => {
-  const { driver, lifecycle, runtime } = harness();
-  await driver.createSandbox(validSandbox());
+void test("PRD-DRV-02: a supervisor exit whose container stop succeeds releases the workspace; a create for it then reaches the state-directory check (create.state_dir)", async () => {
+  const lines: string[] = [];
+  const config = driverConfig({ refusalLog: (line) => lines.push(line) });
+  const libpod = new FakeLibpod();
+  const lifecycle = new FakeLifecycle(libpod);
+  const runtime = new FakeRuntime();
+  const driver = new ComputeDriver(config, { lifecycle, libpod, runtime });
+  const { name } = bindProject(config, "project-a");
+  await driver.createSandbox(validSandbox({ name }));
   const [supervisor] = runtime.supervisors;
   assert.ok(supervisor !== undefined);
   supervisor.exit();
   await settle();
-  assert.deepEqual(lifecycle.stops, ["realm-session-1"]);
-  await driver.createSandbox(validSandbox({ id: "sandbox-2", name: "realm-session-2" }));
-  assert.equal(lifecycle.creates.length, 2);
+  assert.deepEqual(lifecycle.stops, [name]);
+  // The stopped container holds no workspace, so the create passes the workspace check. Its state directory is still on disk, which
+  // the state directory check refuses, as it does for any sandbox that has not been deleted.
+  await assert.rejects(driver.createSandbox(validSandbox({ id: "sandbox-2", name })), expectCode("SCHEMA_INVALID"));
+  assert.deepEqual(lines, ["realm compute driver refused: rpc=CreateSandbox check=create.state_dir code=SCHEMA_INVALID"]);
+  assert.equal(lifecycle.creates.length, 1);
 });
 
-void test("PRD-DRV-02: a supervisor exit whose container stop fails keeps the pinned root held while the container runs, so a create on it is refused", async () => {
-  const { libpod, lifecycle, runtime, config } = harness();
+void test("PRD-DRV-02: a supervisor exit whose container stop fails keeps the workspace held while the container runs, so a create for it is refused", async () => {
+  const { libpod, lifecycle, runtime, config, name } = harness();
   const unstoppable = {
     create: lifecycle.create.bind(lifecycle),
     delete: lifecycle.delete.bind(lifecycle),
     stop: (): Promise<void> => Promise.reject(new Error("stop refused")),
   };
   const driver = new ComputeDriver(config, { lifecycle: unstoppable, libpod, runtime });
-  await driver.createSandbox(validSandbox());
+  await driver.createSandbox(validSandbox({ name }));
   const [supervisor] = runtime.supervisors;
   assert.ok(supervisor !== undefined);
   supervisor.exit();
   await settle();
-  assert.equal(libpod.containers.get("realm-session-1")?.running, true);
-  await assert.rejects(driver.createSandbox(validSandbox({ id: "sandbox-2", name: "realm-session-2" })), expectCode("REALM_INVALID_TRANSITION"));
+  assert.equal(libpod.containers.get(name)?.running, true);
+  await assert.rejects(driver.createSandbox(validSandbox({ id: "sandbox-2", name })), expectCode("REALM_INVALID_TRANSITION"));
   assert.equal(lifecycle.creates.length, 1);
 });
 
-void test("PRD-DRV-02: a create after the first sandbox on the pinned root is deleted succeeds", async () => {
-  const { driver, lifecycle } = harness();
-  await driver.createSandbox(validSandbox());
+void test("PRD-DRV-02: a create after the first sandbox for its project is deleted succeeds", async () => {
+  const { driver, lifecycle, name } = await diskHarness();
+  await driver.createSandbox(validSandbox({ name }));
   await driver.deleteSandbox({ sandbox_id: "sandbox-1" });
-  await driver.createSandbox(validSandbox({ id: "sandbox-2", name: "realm-session-2" }));
+  await driver.createSandbox(validSandbox({ id: "sandbox-2", name }));
   assert.equal(lifecycle.creates.length, 2);
 });
 
-void test("PRD-DRV-02: a create on a different pinned root is unaffected by a live sandbox on another root", async () => {
-  const { driver: first, lifecycle, libpod } = harness();
-  await first.createSandbox(validSandbox());
-  const other = new ComputeDriver(driverConfig(), { lifecycle, libpod, runtime: new FakeRuntime() });
-  await other.createSandbox(validSandbox({ id: "sandbox-2", name: "realm-session-2" }));
+void test("PRD-DRV-02: a live sandbox for one project does not block a create for another project under the same ceiling", async () => {
+  const { driver, lifecycle, config, name } = harness();
+  await driver.createSandbox(validSandbox({ name }));
+  const other = bindProject(config, "project-b");
+  await driver.createSandbox(validSandbox({ id: "sandbox-2", name: other.name }));
   assert.equal(lifecycle.creates.length, 2);
 });
 
-void test("PRD-DRV-02: a stale record whose container is gone does not block a create on the pinned root", async () => {
-  const { driver, lifecycle, libpod } = harness();
-  await driver.createSandbox(validSandbox());
-  libpod.containers.delete("realm-session-1");
-  await driver.createSandbox(validSandbox({ id: "sandbox-2", name: "realm-session-2" }));
+void test("PRD-DRV-02: a stale record whose container is gone does not block a create for its project", async () => {
+  const { driver, lifecycle, libpod, name } = await diskHarness();
+  await driver.createSandbox(validSandbox({ name }));
+  libpod.containers.delete(name);
+  await driver.createSandbox(validSandbox({ id: "sandbox-2", name }));
   assert.equal(lifecycle.creates.length, 2);
 });
 
-void test("PRD-DRV-02: after a driver restart with no in-memory state, a create on a pinned root held by a running container is refused, and creates nothing", async () => {
-  const { driver, lifecycle, libpod, runtime, config } = harness();
-  await driver.createSandbox(validSandbox());
+void test("PRD-DRV-02: after a driver restart with no in-memory state, a create for a project held by a running container is refused, and creates nothing", async () => {
+  const { driver, lifecycle, libpod, runtime, config, name } = harness();
+  await driver.createSandbox(validSandbox({ name }));
   const restarted = new ComputeDriver(config, { lifecycle, libpod, runtime });
-  await assert.rejects(restarted.createSandbox(validSandbox({ id: "sandbox-2", name: "realm-session-2" })), expectCode("REALM_INVALID_TRANSITION"));
+  await assert.rejects(restarted.createSandbox(validSandbox({ id: "sandbox-2", name })), expectCode("REALM_INVALID_TRANSITION"));
   assert.equal(lifecycle.creates.length, 1);
-  assert.equal(libpod.containers.has("realm-session-2"), false);
-  assert.equal(existsSync(join(config.sandboxStateRoot, "realm-session-2")), false);
+  assert.equal(libpod.containers.get(name)?.running, true);
 });
 
-void test("PRD-DRV-02: a paused container holds the pinned root, so a create on it is refused", async () => {
-  const { driver, lifecycle, libpod } = harness();
-  await driver.createSandbox(validSandbox());
-  const container = libpod.containers.get("realm-session-1");
+void test("PRD-DRV-02: a paused container holds its workspace, so a create for it is refused", async () => {
+  const { driver, lifecycle, libpod, name } = harness();
+  await driver.createSandbox(validSandbox({ name }));
+  const container = libpod.containers.get(name);
   assert.ok(container !== undefined);
   container.paused = true;
-  await assert.rejects(driver.createSandbox(validSandbox({ id: "sandbox-2", name: "realm-session-2" })), expectCode("REALM_INVALID_TRANSITION"));
+  await assert.rejects(driver.createSandbox(validSandbox({ id: "sandbox-2", name })), expectCode("REALM_INVALID_TRANSITION"));
   assert.equal(lifecycle.creates.length, 1);
 });
 
-void test("PRD-DRV-02: an exited container holds no pinned root, so a create on it proceeds", async () => {
-  const { driver, lifecycle, libpod } = harness();
-  await driver.createSandbox(validSandbox());
-  const container = libpod.containers.get("realm-session-1");
+void test("PRD-DRV-02: an exited container holds no workspace; a create for it then reaches the state-directory check (create.state_dir)", async () => {
+  const lines: string[] = [];
+  const config = driverConfig({ refusalLog: (line) => lines.push(line) });
+  const libpod = new FakeLibpod();
+  const lifecycle = new FakeLifecycle(libpod);
+  const driver = new ComputeDriver(config, { lifecycle, libpod, runtime: new FakeRuntime() });
+  const { name } = bindProject(config, "project-a");
+  await driver.createSandbox(validSandbox({ name }));
+  const container = libpod.containers.get(name);
   assert.ok(container !== undefined);
   container.running = false;
-  await driver.createSandbox(validSandbox({ id: "sandbox-2", name: "realm-session-2" }));
-  assert.equal(lifecycle.creates.length, 2);
+  // Refused at the state directory, not at the workspace check: an exited container holds no workspace, but its state directory stays
+  // on disk until the sandbox is deleted.
+  await assert.rejects(driver.createSandbox(validSandbox({ id: "sandbox-2", name })), expectCode("SCHEMA_INVALID"));
+  assert.deepEqual(lines, ["realm compute driver refused: rpc=CreateSandbox check=create.state_dir code=SCHEMA_INVALID"]);
+  assert.equal(lifecycle.creates.length, 1);
 });
 
-void test("PRD-DRV-02: a create whose pinned-root container state cannot be read is refused with SCHEMA_INVALID under create.pinned_root_held, and creates nothing", async () => {
+void test("PRD-DRV-02: a create whose workspace container state cannot be read is refused with SCHEMA_INVALID under create.pinned_root_held, and creates nothing", async () => {
   const lines: string[] = [];
   const config = driverConfig({
     refusalLog: (line) => {
@@ -828,22 +880,23 @@ void test("PRD-DRV-02: a create whose pinned-root container state cannot be read
   const libpod = new FakeLibpod();
   const lifecycle = new FakeLifecycle(libpod);
   const driver = new ComputeDriver(config, { lifecycle, libpod, runtime: new FakeRuntime() });
-  await driver.createSandbox(validSandbox());
-  libpod.inspectContainer = () => Promise.resolve({ Id: "id-realm-session-1", Mounts: [] });
-  await assert.rejects(driver.createSandbox(validSandbox({ id: "sandbox-2", name: "realm-session-2" })), expectCode("SCHEMA_INVALID"));
+  const { name } = bindProject(config, "project-a");
+  await driver.createSandbox(validSandbox({ name }));
+  libpod.inspectContainer = () => Promise.resolve({ Id: `id-${name}`, Mounts: [] });
+  await assert.rejects(driver.createSandbox(validSandbox({ id: "sandbox-2", name })), expectCode("SCHEMA_INVALID"));
   assert.equal(lifecycle.creates.length, 1);
   assert.deepEqual(lines, ["realm compute driver refused: rpc=CreateSandbox check=create.pinned_root_held code=SCHEMA_INVALID"]);
 });
 
-void test("PRD-DRV-02: a running container bound to another workspace does not block a create on the pinned root", async () => {
-  const { driver, lifecycle, libpod, config } = harness();
+void test("PRD-DRV-02: a running container bound to another directory does not block a create for this project", async () => {
+  const { driver, lifecycle, libpod, config, name } = harness();
   libpod.add("realm-other", true, join(dirname(config.workspaceRoot), "other-workspace"));
-  await driver.createSandbox(validSandbox());
+  await driver.createSandbox(validSandbox({ name }));
   assert.equal(lifecycle.creates.length, 1);
-  assert.equal(libpod.containers.has("realm-session-1"), true);
+  assert.equal(libpod.containers.has(name), true);
 });
 
-void test("PRD-DRV-02: a create whose running pinned-root container has unreadable mounts is refused with SCHEMA_INVALID under create.pinned_root_held, and creates nothing", async () => {
+void test("PRD-DRV-02: a create whose running workspace container has unreadable mounts is refused with SCHEMA_INVALID under create.pinned_root_held, and creates nothing", async () => {
   const lines: string[] = [];
   const config = driverConfig({
     refusalLog: (line) => {
@@ -853,34 +906,138 @@ void test("PRD-DRV-02: a create whose running pinned-root container has unreadab
   const libpod = new FakeLibpod();
   const lifecycle = new FakeLifecycle(libpod);
   const driver = new ComputeDriver(config, { lifecycle, libpod, runtime: new FakeRuntime() });
-  await driver.createSandbox(validSandbox());
-  libpod.inspectContainer = () => Promise.resolve({ Id: "id-realm-session-1", State: { Status: "running" }, Mounts: "unreadable" });
-  await assert.rejects(driver.createSandbox(validSandbox({ id: "sandbox-2", name: "realm-session-2" })), expectCode("SCHEMA_INVALID"));
+  const { name } = bindProject(config, "project-a");
+  await driver.createSandbox(validSandbox({ name }));
+  libpod.inspectContainer = () => Promise.resolve({ Id: `id-${name}`, State: { Status: "running" }, Mounts: "unreadable" });
+  await assert.rejects(driver.createSandbox(validSandbox({ id: "sandbox-2", name })), expectCode("SCHEMA_INVALID"));
   assert.equal(lifecycle.creates.length, 1);
   assert.deepEqual(lines, ["realm compute driver refused: rpc=CreateSandbox check=create.pinned_root_held code=SCHEMA_INVALID"]);
 });
 
-void test("EnsureWorkspace checks the pinned root and creates nothing: the root keeps its mode and contents", () => {
-  const { driver, config } = harness();
-  chmodSync(config.workspaceRoot, 0o755);
-  driver.ensureWorkspace({ workspace: "workspace-a" });
-  driver.ensureWorkspace({ workspace: "another-id" });
-  assert.equal(statSync(config.workspaceRoot).mode & 0o777, 0o755);
-  assert.deepEqual(readdirSync(config.workspaceRoot), []);
+void test("PRD-DRV-02: a create whose registry entry is missing, outside the ceiling, or no longer names its directory is refused before any libpod call", async () => {
+  // No entry: the name a project would bind under, with nothing written for it.
+  {
+    const h = refusedHarness();
+    await assertWorkspaceRefused(h, sandboxNameOfSession(sessionIdOfWorkspace(join(h.config.workspaceRoot, "project-b"))));
+  }
+  // An entry for a directory outside the ceiling.
+  {
+    const h = refusedHarness();
+    const outside = join(dirname(h.config.workspaceRoot), "outside");
+    mkdirSync(outside);
+    const pinned = bindRoot(outside);
+    const id = sessionIdOfWorkspace(pinned.realPath);
+    writeWorkspaceEntry(h.config.stateDir, pinned, id);
+    await assertWorkspaceRefused(h, sandboxNameOfSession(id));
+  }
+  // An entry whose directory was replaced at the same path: the entry's device and inode no longer match.
+  {
+    const h = refusedHarness();
+    const { name, project } = bindProject(h.config, "project-a");
+    renameSync(project, join(h.config.workspaceRoot, "project-a-moved"));
+    mkdirSync(project);
+    await assertWorkspaceRefused(h, name);
+  }
 });
 
-void test("PRD-DRV-01: a pinned root replaced by a symbolic link is refused by EnsureWorkspace and DeleteWorkspace, and the link target is untouched", () => {
+void test("PRD-DRV-02: a second name whose entry file is a copy of another directory's entry is refused by the recomputed-id check, and two names cannot resolve to one directory", async () => {
+  const h = refusedHarness();
+  const first = bindProject(h.config, "project-a");
+  const secondDir = join(h.config.workspaceRoot, "project-b");
+  mkdirSync(secondDir);
+  const secondId = sessionIdOfWorkspace(realpathSync(secondDir));
+  const registry = workspaceRegistryDirOf(h.config.stateDir);
+  copyFileSync(join(registry, recordFileName(sessionIdOfWorkspace(first.project))), join(registry, recordFileName(secondId)));
+  await assertWorkspaceRefused(h, sandboxNameOfSession(secondId));
+});
+
+void test("PRD-DRV-02: ValidateSandboxCreate refuses a name with no entry, accepts a name with a valid entry, and writes nothing in either case", async () => {
+  const h = refusedHarness();
+  const { name } = bindProject(h.config, "project-a");
+  assert.deepEqual(h.driver.validateSandboxCreate(validSandbox({ name })), {});
+  assert.equal(h.libpod.listCalls, 0);
+  assert.equal(h.lifecycle.creates.length, 0);
+  assert.equal(lstatOrUndefined(join(h.config.sandboxStateRoot, name)), undefined);
+  assert.equal(lstatOrUndefined(join(h.config.secretRoot, name)), undefined);
+  await assertWorkspaceRefused(h, sandboxNameOfSession(sessionIdOfWorkspace(join(h.config.workspaceRoot, "project-b"))));
+});
+
+void test("PRD-DRV-02: a sandbox name without the realm prefix, or whose remainder fails isSessionId, is refused with create.workspace before any libpod call", async () => {
+  // "agent-1" has no prefix. "realm-session.1" carries the prefix, and its remainder fails the session id rule, though it passes the container-name rule.
+  for (const name of ["agent-1", "realm-session.1"]) {
+    await assertWorkspaceRefused(refusedHarness(), name);
+  }
+});
+
+interface RefusedHarness {
+  readonly driver: ComputeDriver;
+  readonly lifecycle: FakeLifecycle;
+  readonly libpod: FakeLibpod;
+  readonly config: ComputeDriverConfig;
+  readonly lines: string[];
+}
+
+// A driver whose refusals are collected, over a ceiling with no project yet, for the cases the registry refuses.
+function refusedHarness(): RefusedHarness {
+  const lines: string[] = [];
+  const libpod = new FakeLibpod();
+  const lifecycle = new FakeLifecycle(libpod);
+  const config = driverConfig({ refusalLog: (line) => lines.push(line) });
+  const driver = new ComputeDriver(config, { lifecycle, libpod, runtime: new FakeRuntime() });
+  return { driver, lifecycle, libpod, config, lines };
+}
+
+// A create the registry refuses with create.workspace: validation and create both refuse, and nothing reaches libpod, the lifecycle,
+// the state directory or the secret directory.
+async function assertWorkspaceRefused(h: RefusedHarness, name: string): Promise<void> {
+  assert.throws(() => h.driver.validateSandboxCreate(validSandbox({ name })), expectCode("SCHEMA_INVALID"));
+  await assert.rejects(h.driver.createSandbox(validSandbox({ name })), expectCode("SCHEMA_INVALID"));
+  assert.equal(h.lifecycle.creates.length, 0);
+  assert.equal(h.libpod.listCalls, 0);
+  assert.equal(h.libpod.inspectCalls, 0);
+  assert.equal(lstatOrUndefined(join(h.config.sandboxStateRoot, name)), undefined);
+  assert.equal(lstatOrUndefined(join(h.config.secretRoot, name)), undefined);
+  assert.ok(h.lines.length > 0 && h.lines.every((line) => line.endsWith("check=create.workspace code=SCHEMA_INVALID")), h.lines.join("\n"));
+  h.lines.length = 0;
+}
+
+void test("PRD-DRV-02: the constructor refuses a relative state directory", () => {
+  const config = driverConfig();
+  const libpod = new FakeLibpod();
+  const deps = { lifecycle: new FakeLifecycle(libpod), libpod, runtime: new FakeRuntime() };
+  assert.throws(() => new ComputeDriver({ ...config, stateDir: "realm-state" }, deps), expectCode("SCHEMA_INVALID"));
+});
+
+function lstatOrUndefined(path: string): Stats | undefined {
+  try {
+    return lstatSync(path);
+  } catch {
+    return undefined;
+  }
+}
+
+void test("PRD-DRV-01: a workspace replaced by a symbolic link is refused by EnsureWorkspace and DeleteWorkspace, and the link target is untouched", () => {
   const { driver, config } = harness();
   const outside = join(dirname(config.workspaceRoot), "outside");
   mkdirSync(outside);
-  rmdirSync(config.workspaceRoot);
+  rmSync(config.workspaceRoot, { recursive: true, force: true });
   symlinkSync(outside, config.workspaceRoot);
   assert.throws(() => driver.ensureWorkspace({ workspace: "workspace-a" }), expectCode("SCHEMA_INVALID"));
   assert.throws(() => driver.deleteWorkspace({ workspace: "workspace-a" }), expectCode("REALM_INVALID_TRANSITION"));
   assert.equal(existsSync(outside), true);
 });
 
-void test("DeleteWorkspace never removes the pinned root: it is refused with the transition code, empty or not, and the root stays", () => {
+void test("EnsureWorkspace checks the ceiling and creates nothing: the ceiling keeps its mode and contents", () => {
+  const { driver, config } = harness();
+  chmodSync(config.workspaceRoot, 0o755);
+  const before = readdirSync(config.workspaceRoot);
+  driver.ensureWorkspace({ workspace: "workspace-a" });
+  driver.ensureWorkspace({ workspace: "another-id" });
+  assert.equal(statSync(config.workspaceRoot).mode & 0o777, 0o755);
+  assert.deepEqual(readdirSync(config.workspaceRoot), before);
+});
+
+void test("DeleteWorkspace never removes the ceiling: it is refused with the transition code, empty or not, and the ceiling stays", () => {
   const { driver, config } = harness();
   const notes = join(config.workspaceRoot, "notes.txt");
   writeFileSync(notes, "user data");
@@ -891,10 +1048,11 @@ void test("DeleteWorkspace never removes the pinned root: it is refused with the
   assert.equal(statSync(config.workspaceRoot).isDirectory(), true);
 });
 
-void test("PRD-DRV-01: a sandbox delete leaves the pinned root, its mode and its contents in place", async () => {
+void test("PRD-DRV-01: a sandbox delete leaves its project, the project's mode, its contents and the ceiling in place", async () => {
   const config = driverConfig();
+  const { name, project } = bindProject(config, "project-a");
   chmodSync(config.workspaceRoot, 0o755);
-  const notes = join(config.workspaceRoot, "notes.txt");
+  const notes = join(project, "notes.txt");
   writeFileSync(notes, "user data");
   const libpod = new FakeLibpod();
   const driver = new ComputeDriver(config, {
@@ -902,12 +1060,13 @@ void test("PRD-DRV-01: a sandbox delete leaves the pinned root, its mode and its
     libpod,
     runtime: new FakeRuntime(),
   });
-  await driver.createSandbox(validSandbox());
-  const stateDir = join(config.sandboxStateRoot, "realm-session-1");
+  await driver.createSandbox(validSandbox({ name }));
+  const stateDir = join(config.sandboxStateRoot, name);
   assert.equal(existsSync(stateDir), true);
   assert.deepEqual(await driver.deleteSandbox({ sandbox_id: "sandbox-1" }), { deleted: true });
   assert.equal(existsSync(stateDir), false, "the sandbox's own state directory is removed");
   assert.equal(readFileSync(notes, "utf8"), "user data");
+  assert.equal(statSync(project).isDirectory(), true);
   assert.equal(statSync(config.workspaceRoot).isDirectory(), true);
   assert.equal(statSync(config.workspaceRoot).mode & 0o777, 0o755);
 });
@@ -919,14 +1078,6 @@ void test("a workspace id with a path separator, a dot-segment or no value is re
     assert.throws(() => driver.deleteWorkspace({ workspace }), expectCode("SCHEMA_INVALID"));
   }
 });
-
-function lstatOrUndefined(path: string): Stats | undefined {
-  try {
-    return lstatSync(path);
-  } catch {
-    return undefined;
-  }
-}
 
 void test("PD-05: GetCapabilities advertises the configured non-empty implementation version", () => {
   const { driver, config } = harness();
@@ -952,13 +1103,13 @@ void test("PD-05: the constructor refuses an implementation version the gateway 
   }
 });
 
-void test("PRD-DRV-01: the sandbox workspace is the configured root for every workspace id", async () => {
-  const { driver, lifecycle, config } = harness();
-  await driver.createSandbox(validSandbox({ workspace: "another-id" }));
-  assert.equal(lifecycle.creates[0]?.workspaceDir, config.workspaceRoot);
+void test("PRD-DRV-01: the sandbox workspace is the project's entry directory for every workspace id", async () => {
+  const { driver, lifecycle, name, project } = harness();
+  await driver.createSandbox(validSandbox({ name, workspace: "another-id" }));
+  assert.equal(lifecycle.creates[0]?.workspaceDir, project);
 });
 
-void test("PRD-DRV-01: the constructor refuses a pinned root that is relative, missing, a symbolic link, or a file", () => {
+void test("PRD-DRV-01: the constructor refuses a ceiling that is relative, missing, a symbolic link, or a file", () => {
   const config = driverConfig();
   const base = dirname(config.workspaceRoot);
   const link = join(base, "root-link");
@@ -973,7 +1124,7 @@ void test("PRD-DRV-01: the constructor refuses a pinned root that is relative, m
   assert.doesNotThrow(() => new ComputeDriver(config, deps));
 });
 
-void test("PRD-DRV-01: the constructor refuses a state root or secret root that holds the pinned root or lies inside it", () => {
+void test("PRD-DRV-01: the constructor refuses a state root or secret root that holds the ceiling or lies inside it", () => {
   const config = driverConfig();
   const libpod = new FakeLibpod();
   const deps = { lifecycle: new FakeLifecycle(libpod), libpod, runtime: new FakeRuntime() };

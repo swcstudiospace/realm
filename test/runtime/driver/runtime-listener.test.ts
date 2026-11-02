@@ -16,9 +16,11 @@ import { createServer as createTlsServer } from "node:tls";
 import { RealmError, type ErrorCode } from "../../../src/core/errors.js";
 import { assertSocketPathsFit, awaitRuntimeListener, removeKeyFile, removeTlsWorkDirectory, type ListenerTrust } from "../../../src/runtime/driver/channel.js";
 import { ComputeDriver } from "../../../src/runtime/driver/compute-driver.js";
-import { FakeLibpod, FakeRuntime, diskLifecycle, driverConfig, validSandbox } from "./fakes.js";
+import { sandboxNameOfSession, sessionIdOfWorkspace } from "../../../src/session/paths.js";
+import { FakeLibpod, FakeRuntime, diskLifecycle, driverConfig, validSandbox, writeSandboxWorkspaceEntry } from "./fakes.js";
 
-const SANDBOX = "realm-session-1";
+// A derived sandbox name: "realm-" plus a session id of fixed length, so every name a project binds under has this length.
+const SANDBOX = sandboxNameOfSession(sessionIdOfWorkspace("/realm-listen/project"));
 // The bytes of the control socket path after the secret root: "/<sandbox>/channel/control.sock".
 const TAIL_BYTES = Buffer.byteLength(`/${SANDBOX}/channel/control.sock`, "utf8");
 const SOCKET_LIMIT_BYTES = 107;
@@ -195,21 +197,22 @@ void test("a control socket host path of 107 bytes is accepted, and 108 bytes is
     const secretRoot = join(base, "s".repeat(length - TAIL_BYTES - base.length - 1));
     assert.equal(Buffer.byteLength(join(secretRoot, SANDBOX, "channel", "control.sock"), "utf8"), length);
     const config = driverConfig({ secretRoot });
+    const name = writeSandboxWorkspaceEntry(config, join(config.workspaceRoot, "project-a"));
     const libpod = new FakeLibpod();
     const lifecycle = await diskLifecycle(config, libpod);
     const runtime = new FakeRuntime();
     const driver = new ComputeDriver(config, { lifecycle, libpod, runtime });
     if (length === SOCKET_LIMIT_BYTES) {
-      await driver.createSandbox(validSandbox());
+      await driver.createSandbox(validSandbox({ name }));
       assert.equal(runtime.confirmations.length, 1);
       continue;
     }
-    assert.throws(() => driver.validateSandboxCreate(validSandbox()), codeIs("SCHEMA_INVALID"));
-    await assert.rejects(driver.createSandbox(validSandbox()), codeIs("SCHEMA_INVALID"));
+    assert.throws(() => driver.validateSandboxCreate(validSandbox({ name })), codeIs("SCHEMA_INVALID"));
+    await assert.rejects(driver.createSandbox(validSandbox({ name })), codeIs("SCHEMA_INVALID"));
     assert.deepEqual(lifecycle.creates, []);
     assert.equal(libpod.inspectCalls, 0);
     assert.equal(existsSync(secretRoot), false, "no secret directory is written");
-    assert.equal(existsSync(join(config.sandboxStateRoot, SANDBOX)), false, "no state directory is written");
+    assert.equal(existsSync(join(config.sandboxStateRoot, name)), false, "no state directory is written");
   }
 });
 

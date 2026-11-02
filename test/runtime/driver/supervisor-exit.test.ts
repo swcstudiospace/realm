@@ -9,11 +9,16 @@ import { appendFileSync, chmodSync, mkdtempSync, rmSync, writeFileSync } from "n
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeRealmError, RealmError, type ErrorCode } from "../../../src/core/errors.js";
-import { ComputeDriver } from "../../../src/runtime/driver/compute-driver.js";
+import { ComputeDriver, type ComputeDriverConfig } from "../../../src/runtime/driver/compute-driver.js";
 import { spawnSupervisor } from "../../../src/runtime/driver/supervisor.js";
-import { FakeLibpod, FakeRuntime, diskLifecycle, driverConfig, validSandbox } from "./fakes.js";
+import { FakeLibpod, FakeRuntime, diskLifecycle, driverConfig, validSandbox, writeSandboxWorkspaceEntry } from "./fakes.js";
 
-const SANDBOX = "realm-session-1";
+// A driver config, and the sandbox name of a project directory under its ceiling, bound by the registry entry the fixture writes.
+function projectConfig(): { config: ComputeDriverConfig; name: string } {
+  const config = driverConfig();
+  const name = writeSandboxWorkspaceEntry(config, join(config.workspaceRoot, "project-a"));
+  return { config, name };
+}
 
 function codeIs(code: ErrorCode): (error: unknown) => boolean {
   return (error) => error instanceof RealmError && error.code === code;
@@ -27,34 +32,34 @@ function settle(): Promise<void> {
 }
 
 void test("a supervisor that exits before Ready refuses the create, and its container is stopped and removed (phase 9.5, D)", async () => {
-  const config = driverConfig();
+  const { config, name } = projectConfig();
   const libpod = new FakeLibpod();
   const lifecycle = await diskLifecycle(config, libpod);
   const runtime = new FakeRuntime();
   runtime.exitOnSpawn = true;
   const driver = new ComputeDriver(config, { lifecycle, libpod, runtime });
-  await assert.rejects(driver.createSandbox(validSandbox()), codeIs("OPENSHELL_START_FAILED"));
+  await assert.rejects(driver.createSandbox(validSandbox({ name })), codeIs("OPENSHELL_START_FAILED"));
   const [supervisor] = runtime.supervisors;
   assert.ok(supervisor !== undefined);
   assert.equal(supervisor.stops, 1, "the exited supervisor is stopped once by the discard");
-  assert.deepEqual(lifecycle.deletes, [SANDBOX]);
-  assert.equal(libpod.containers.has(SANDBOX), false);
+  assert.deepEqual(lifecycle.deletes, [name]);
+  assert.equal(libpod.containers.has(name), false);
 });
 
 void test("a supervisor that exits while the sandbox runs stops its container and reports the sandbox failed (phase 9.5, D)", async () => {
-  const config = driverConfig();
+  const { config, name } = projectConfig();
   const libpod = new FakeLibpod();
   const lifecycle = await diskLifecycle(config, libpod);
   const runtime = new FakeRuntime();
   const driver = new ComputeDriver(config, { lifecycle, libpod, runtime });
-  await driver.createSandbox(validSandbox());
+  await driver.createSandbox(validSandbox({ name }));
   const [supervisor] = runtime.supervisors;
   assert.ok(supervisor !== undefined);
   supervisor.exit();
   await settle();
-  assert.deepEqual(lifecycle.stops, [SANDBOX]);
+  assert.deepEqual(lifecycle.stops, [name]);
   assert.equal(supervisor.stops, 0, "the driver does not stop a supervisor that has already exited");
-  const { sandbox } = await driver.getSandbox({ name: SANDBOX });
+  const { sandbox } = await driver.getSandbox({ name });
   const ready = sandbox.status.conditions.find((condition) => condition.type === "Ready");
   assert.ok(ready);
   assert.equal(ready.status, "False");
@@ -62,7 +67,7 @@ void test("a supervisor that exits while the sandbox runs stops its container an
 });
 
 void test("a supervisor that exits and whose container stop fails still leaves the sandbox reported failed (phase 9.5, D)", async () => {
-  const config = driverConfig();
+  const { config, name } = projectConfig();
   const libpod = new FakeLibpod();
   const disk = await diskLifecycle(config, libpod);
   const lifecycle = {
@@ -71,12 +76,12 @@ void test("a supervisor that exits and whose container stop fails still leaves t
   };
   const runtime = new FakeRuntime();
   const driver = new ComputeDriver(config, { lifecycle, libpod, runtime });
-  await driver.createSandbox(validSandbox());
+  await driver.createSandbox(validSandbox({ name }));
   const [supervisor] = runtime.supervisors;
   assert.ok(supervisor !== undefined);
   supervisor.exit();
   await settle();
-  const { sandbox } = await driver.getSandbox({ name: SANDBOX });
+  const { sandbox } = await driver.getSandbox({ name });
   const ready = sandbox.status.conditions.find((condition) => condition.type === "Ready");
   assert.ok(ready);
   assert.equal(ready.status, "False");
@@ -84,30 +89,30 @@ void test("a supervisor that exits and whose container stop fails still leaves t
 });
 
 void test("a delete ends the supervisor without a failure: the lifecycle is not asked to stop the container (phase 9.5, D)", async () => {
-  const config = driverConfig();
+  const { config, name } = projectConfig();
   const libpod = new FakeLibpod();
   const lifecycle = await diskLifecycle(config, libpod);
   const runtime = new FakeRuntime();
   const driver = new ComputeDriver(config, { lifecycle, libpod, runtime });
-  await driver.createSandbox(validSandbox());
-  assert.deepEqual(await driver.deleteSandbox({ name: SANDBOX }), { deleted: true });
+  await driver.createSandbox(validSandbox({ name }));
+  assert.deepEqual(await driver.deleteSandbox({ name }), { deleted: true });
   await settle();
   assert.deepEqual(lifecycle.stops, []);
-  assert.deepEqual(lifecycle.deletes, [SANDBOX]);
+  assert.deepEqual(lifecycle.deletes, [name]);
 });
 
 void test("a delete that fails after its supervisor was stopped leaves the sandbox reported Ready False, not Ready with no supervisor (phase 9.5, B2)", async () => {
-  const config = driverConfig();
+  const { config, name } = projectConfig();
   const libpod = new FakeLibpod();
   const disk = await diskLifecycle(config, libpod);
   const lifecycle = { ...disk, delete: (): Promise<void> => Promise.reject(makeRealmError("CLEANUP_FAILED")) };
   const runtime = new FakeRuntime();
   const driver = new ComputeDriver(config, { lifecycle, libpod, runtime });
-  await driver.createSandbox(validSandbox());
-  await assert.rejects(driver.deleteSandbox({ name: SANDBOX }), codeIs("CLEANUP_FAILED"));
+  await driver.createSandbox(validSandbox({ name }));
+  await assert.rejects(driver.deleteSandbox({ name }), codeIs("CLEANUP_FAILED"));
   const [supervisor] = runtime.supervisors;
   assert.equal(supervisor?.stops, 1, "the supervisor was stopped before the delete failed");
-  const { sandbox } = await driver.getSandbox({ name: SANDBOX });
+  const { sandbox } = await driver.getSandbox({ name });
   const ready = sandbox.status.conditions.find((condition) => condition.type === "Ready");
   assert.ok(ready);
   assert.equal(ready.status, "False");

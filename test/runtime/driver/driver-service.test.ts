@@ -21,13 +21,14 @@ import {
 } from "../../../src/runtime/driver/compute-driver.js";
 import { DRIVER_ADMISSION_ACKNOWLEDGEMENT } from "../../../src/runtime/driver/admission.js";
 import { startSocketServer, type SocketServer } from "../../../src/runtime/driver/server.js";
-import { FakeLibpod, FakeLifecycle, FakeRuntime, driverConfig, OTHER_DIGEST_IMAGE, socketDirectory, validSandbox } from "./fakes.js";
+import { FakeLibpod, FakeLifecycle, FakeRuntime, driverConfig, OTHER_DIGEST_IMAGE, socketDirectory, validSandbox, writeSandboxWorkspaceEntry } from "./fakes.js";
 
 interface Harness {
   readonly client: Client;
   readonly lifecycle: FakeLifecycle;
   readonly service: ServiceDefinition;
   readonly server: SocketServer;
+  readonly name: string;
 }
 
 async function harness(t: TestContext): Promise<Harness> {
@@ -35,6 +36,7 @@ async function harness(t: TestContext): Promise<Harness> {
   const lifecycle = new FakeLifecycle(libpod);
   const config = driverConfig();
   mkdirSync(config.workspaceRoot, { recursive: true });
+  const name = writeSandboxWorkspaceEntry(config, join(config.workspaceRoot, "project-a"));
   const driver = new ComputeDriver(config, { lifecycle, libpod, runtime: new FakeRuntime() });
   const service = loadComputeDriverService();
   const socketPath = join(socketDirectory(), "driver.sock");
@@ -47,7 +49,7 @@ async function harness(t: TestContext): Promise<Harness> {
     client.close();
     await server.close();
   });
-  return { client, lifecycle, service, server };
+  return { client, lifecycle, service, server, name };
 }
 
 function methodOf(h: Harness, method: string): ServiceDefinition[string] {
@@ -99,7 +101,7 @@ void test("PRD-GW-03: GetCapabilities over the wire returns the pinned acknowled
 
 void test("PRD-DRV-02: an out-of-profile CreateSandbox reaches the gateway as INVALID_ARGUMENT with no create", async (t) => {
   const h = await harness(t);
-  const sandbox = validSandbox();
+  const sandbox = validSandbox({ name: h.name });
   const bad = { ...sandbox, spec: { ...sandbox.spec, template: { ...sandbox.spec?.template, image: OTHER_DIGEST_IMAGE } } };
   assert.equal(await statusOf(call(h, "CreateSandbox", { sandbox: bad })), status.INVALID_ARGUMENT);
   assert.equal(h.lifecycle.creates.length, 0);
@@ -107,7 +109,7 @@ void test("PRD-DRV-02: an out-of-profile CreateSandbox reaches the gateway as IN
 
 void test("PRD-DRV-02: a non-empty platform config sent on the wire is refused as INVALID_ARGUMENT", async (t) => {
   const h = await harness(t);
-  const sandbox = validSandbox();
+  const sandbox = validSandbox({ name: h.name });
   const withConfig = {
     ...sandbox,
     spec: {
@@ -138,19 +140,19 @@ void test("a sandbox the driver does not hold is NOT_FOUND on the wire", async (
 
 void test("PRD-DRV-01: create, get, delete, and EnsureWorkspace work over the wire", async (t) => {
   const h = await harness(t);
-  const created = await call(h, "CreateSandbox", { sandbox: validSandbox() });
-  assert.equal(created["runtime_identity"], "id-realm-session-1");
+  const created = await call(h, "CreateSandbox", { sandbox: validSandbox({ name: h.name }) });
+  assert.equal(created["runtime_identity"], `id-${h.name}`);
   const got = await call(h, "GetSandbox", { sandbox_id: "sandbox-1" });
   const sandbox = got["sandbox"] as { id: string; name: string };
   assert.equal(sandbox.id, "sandbox-1");
-  assert.equal(sandbox.name, "realm-session-1");
+  assert.equal(sandbox.name, h.name);
   assert.deepEqual(await call(h, "DeleteSandbox", { sandbox_id: "sandbox-1" }), { deleted: true });
   assert.deepEqual(await call(h, "EnsureWorkspace", { workspace: "workspace-a" }), {});
 });
 
 void test("PRD-DRV-01: WatchSandboxes streams the current sandboxes, and the stream ends when the client cancels", async (t) => {
   const h = await harness(t);
-  await call(h, "CreateSandbox", { sandbox: validSandbox() });
+  await call(h, "CreateSandbox", { sandbox: validSandbox({ name: h.name }) });
   const watch = methodOf(h, "WatchSandboxes");
   const stream = h.client.makeServerStreamRequest(
     watch.path,
@@ -166,5 +168,5 @@ void test("PRD-DRV-01: WatchSandboxes streams the current sandboxes, and the str
   });
   stream.cancel();
   const payload = first as { sandbox?: { sandbox?: { name?: string } } };
-  assert.equal(payload.sandbox?.sandbox?.name, "realm-session-1");
+  assert.equal(payload.sandbox?.sandbox?.name, h.name);
 });

@@ -7,13 +7,20 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { makeRealmError, RealmError } from "../../../src/core/errors.js";
-import { ComputeDriver, type DriverSandboxMessage } from "../../../src/runtime/driver/compute-driver.js";
+import { ComputeDriver, type ComputeDriverConfig, type DriverSandboxMessage } from "../../../src/runtime/driver/compute-driver.js";
 import type { ListenerTrust } from "../../../src/runtime/driver/channel.js";
-import { FakeLibpod, FakeLifecycle, FakeRuntime, diskLifecycle, driverConfig, validSandbox } from "./fakes.js";
+import { FakeLibpod, FakeLifecycle, FakeRuntime, diskLifecycle, driverConfig, validSandbox, writeSandboxWorkspaceEntry } from "./fakes.js";
 import { LAUNCH_SESSION_ID } from "../isolation/supervisor-token.js";
 
-const SANDBOX_NAME = "realm-session-1";
 const RUNTIME_FILE_NAMES = ["bootstrap.json", "descriptor.json", "auth.json"];
+
+// A driver config, and the sandbox name of a project directory under its ceiling, bound by the registry entry the fixture writes.
+function projectConfig(): { config: ComputeDriverConfig; name: string; project: string } {
+  const config = driverConfig();
+  const project = join(config.workspaceRoot, "project-a");
+  const name = writeSandboxWorkspaceEntry(config, project);
+  return { config, name, project };
+}
 
 function modeOf(path: string): number {
   return statSync(path).mode & 0o777;
@@ -35,15 +42,15 @@ function namesUnder(root: string): string[] {
 }
 
 void test("a create writes the bootstrap at 0600 in a 0700 channel, and the descriptor and auth bundle at 0600 beside it, none under the state root or the workspace", async () => {
-  const config = driverConfig();
+  const { config, name } = projectConfig();
   const libpod = new FakeLibpod();
   const driver = new ComputeDriver(config, {
     lifecycle: await diskLifecycle(config, libpod),
     libpod,
     runtime: new FakeRuntime(),
   });
-  await driver.createSandbox(validSandbox());
-  const secretDir = join(config.secretRoot, SANDBOX_NAME);
+  await driver.createSandbox(validSandbox({ name }));
+  const secretDir = join(config.secretRoot, name);
   const channelDir = join(secretDir, "channel");
   assert.equal(modeOf(channelDir), 0o700);
   assert.equal(modeOf(join(channelDir, "bootstrap.json")), 0o600);
@@ -53,54 +60,54 @@ void test("a create writes the bootstrap at 0600 in a 0700 channel, and the desc
   assert.equal(descriptor.session_id, LAUNCH_SESSION_ID);
   for (const root of [config.sandboxStateRoot, config.workspaceRoot]) {
     const names = namesUnder(root);
-    for (const name of RUNTIME_FILE_NAMES) {
-      assert.equal(names.includes(name), false, `${name} under ${root}`);
+    for (const fileName of RUNTIME_FILE_NAMES) {
+      assert.equal(names.includes(fileName), false, `${fileName} under ${root}`);
     }
   }
 });
 
 for (const step of ["listenerError", "spawnError"] as const) {
   void test(`a failed runtime step (${step}) removes the container, the state directory and the secret entries, and rethrows the original error`, async () => {
-    const config = driverConfig();
+    const { config, name } = projectConfig();
     const libpod = new FakeLibpod();
     const lifecycle = await diskLifecycle(config, libpod);
     const runtime = new FakeRuntime();
     const failure = new Error("runtime step failed");
     runtime[step] = failure;
     const driver = new ComputeDriver(config, { lifecycle, libpod, runtime });
-    await assert.rejects(driver.createSandbox(validSandbox()), (error: unknown) => error === failure);
-    assert.deepEqual(lifecycle.deletes, [SANDBOX_NAME]);
-    assert.equal(libpod.containers.has(SANDBOX_NAME), false);
+    await assert.rejects(driver.createSandbox(validSandbox({ name })), (error: unknown) => error === failure);
+    assert.deepEqual(lifecycle.deletes, [name]);
+    assert.equal(libpod.containers.has(name), false);
     assert.equal(runtime.supervisors.length, 0);
-    assert.equal(existsSync(join(config.sandboxStateRoot, SANDBOX_NAME)), false);
-    assert.equal(existsSync(join(config.secretRoot, SANDBOX_NAME)), false);
+    assert.equal(existsSync(join(config.sandboxStateRoot, name)), false);
+    assert.equal(existsSync(join(config.secretRoot, name)), false);
   });
 }
 
 void test("DeleteSandbox ends the host supervisor, then removes the container, the state directory and the secret entries", async () => {
-  const config = driverConfig();
+  const { config, name } = projectConfig();
   const libpod = new FakeLibpod();
   const lifecycle = await diskLifecycle(config, libpod);
   const runtime = new FakeRuntime();
   const driver = new ComputeDriver(config, { lifecycle, libpod, runtime });
-  await driver.createSandbox(validSandbox());
+  await driver.createSandbox(validSandbox({ name }));
   const [supervisor] = runtime.supervisors;
   assert.ok(supervisor !== undefined);
   assert.equal(supervisor.stops, 0);
-  assert.deepEqual(await driver.deleteSandbox({ name: SANDBOX_NAME }), { deleted: true });
+  assert.deepEqual(await driver.deleteSandbox({ name }), { deleted: true });
   assert.equal(supervisor.stops, 1);
-  assert.deepEqual(lifecycle.deletes, [SANDBOX_NAME]);
-  assert.equal(libpod.containers.has(SANDBOX_NAME), false);
-  assert.equal(existsSync(join(config.sandboxStateRoot, SANDBOX_NAME)), false);
-  assert.equal(existsSync(join(config.secretRoot, SANDBOX_NAME)), false);
+  assert.deepEqual(lifecycle.deletes, [name]);
+  assert.equal(libpod.containers.has(name), false);
+  assert.equal(existsSync(join(config.sandboxStateRoot, name)), false);
+  assert.equal(existsSync(join(config.secretRoot, name)), false);
 });
 
 void test("a create whose launch material does not decode is refused before any directory is made or libpod call", async () => {
-  const config = driverConfig();
+  const { config, name, project } = projectConfig();
   const libpod = new FakeLibpod();
   const lifecycle = new FakeLifecycle(libpod);
   const driver = new ComputeDriver(config, { lifecycle, libpod, runtime: new FakeRuntime() });
-  const base = validSandbox();
+  const base = validSandbox({ name });
   const sandbox: DriverSandboxMessage = {
     ...base,
     spec: { ...base.spec, launch_authentication: Buffer.from('{"supervisor":', "utf8") },
@@ -112,18 +119,18 @@ void test("a create whose launch material does not decode is refused before any 
   assert.deepEqual(lifecycle.creates, []);
   assert.equal(libpod.inspectCalls, 0);
   assert.equal(libpod.containers.size, 0);
-  assert.equal(existsSync(join(config.sandboxStateRoot, SANDBOX_NAME)), false);
-  assert.equal(existsSync(join(config.secretRoot, SANDBOX_NAME)), false);
-  assert.deepEqual(readdirSync(config.workspaceRoot), []);
+  assert.equal(existsSync(join(config.sandboxStateRoot, name)), false);
+  assert.equal(existsSync(join(config.secretRoot, name)), false);
+  assert.deepEqual(readdirSync(project), []);
 });
 
 void test("after the runtime's listener is confirmed, server.key and the CA private key are gone, and the descriptor keeps the CA certificate", async () => {
-  const config = driverConfig();
+  const { config, name } = projectConfig();
   const libpod = new FakeLibpod();
   const runtime = new FakeRuntime();
   const driver = new ComputeDriver(config, { lifecycle: await diskLifecycle(config, libpod), libpod, runtime });
-  await driver.createSandbox(validSandbox());
-  const secretDir = join(config.secretRoot, SANDBOX_NAME);
+  await driver.createSandbox(validSandbox({ name }));
+  const secretDir = join(config.secretRoot, name);
   const [confirmation] = runtime.confirmations;
   assert.ok(confirmation !== undefined);
   assert.equal(confirmation.keyPresent, true, "server.key was still on disk when the listener was confirmed");
@@ -138,7 +145,7 @@ void test("after the runtime's listener is confirmed, server.key and the CA priv
 });
 
 void test("a failed create whose container delete failed says the container was not removed, when a lookup still finds it (phase 9.5, E)", async () => {
-  const config = driverConfig();
+  const { config, name } = projectConfig();
   const libpod = new FakeLibpod();
   const disk = await diskLifecycle(config, libpod);
   const lifecycle = { ...disk, delete: (): Promise<void> => Promise.reject(makeRealmError("CLEANUP_FAILED")) };
@@ -146,25 +153,25 @@ void test("a failed create whose container delete failed says the container was 
   runtime.listenerError = makeRealmError("OPENSHELL_START_FAILED");
   const driver = new ComputeDriver(config, { lifecycle, libpod, runtime });
   await assert.rejects(
-    driver.createSandbox(validSandbox()),
+    driver.createSandbox(validSandbox({ name })),
     (error: unknown) =>
       error instanceof RealmError &&
       error.code === "OPENSHELL_START_FAILED" &&
       error.message.endsWith("Cleanup failed: The container was not removed.") &&
       !error.message.includes("could not be confirmed"),
   );
-  assert.equal(libpod.containers.has(SANDBOX_NAME), true, "the container is still present");
-  assert.equal(existsSync(join(config.secretRoot, SANDBOX_NAME)), false, "the files are removed although the delete failed");
+  assert.equal(libpod.containers.has(name), true, "the container is still present");
+  assert.equal(existsSync(join(config.secretRoot, name)), false, "the files are removed although the delete failed");
 });
 
 void test("a failed create whose container is gone reports no container problem and no cleanup note (phase 9.5, E)", async () => {
-  const config = driverConfig();
+  const { config, name } = projectConfig();
   const libpod = new FakeLibpod();
   const disk = await diskLifecycle(config, libpod);
   const lifecycle = {
     ...disk,
-    delete: (name: string): Promise<void> => {
-      libpod.containers.delete(name);
+    delete: (sandboxName: string): Promise<void> => {
+      libpod.containers.delete(sandboxName);
       return Promise.reject(makeRealmError("CLEANUP_FAILED"));
     },
   };
@@ -172,7 +179,7 @@ void test("a failed create whose container is gone reports no container problem 
   runtime.listenerError = makeRealmError("OPENSHELL_START_FAILED");
   const driver = new ComputeDriver(config, { lifecycle, libpod, runtime });
   await assert.rejects(
-    driver.createSandbox(validSandbox()),
+    driver.createSandbox(validSandbox({ name })),
     (error: unknown) =>
       error instanceof RealmError && error.code === "OPENSHELL_START_FAILED" && !error.message.includes("Cleanup failed"),
   );
@@ -190,16 +197,16 @@ class UnremovableKeyRuntime extends FakeRuntime {
 }
 
 void test("a server.key that cannot be removed after the listener is confirmed refuses Ready and removes the container (phase 9.5, N2)", async () => {
-  const config = driverConfig();
+  const { config, name } = projectConfig();
   const libpod = new FakeLibpod();
   const runtime = new UnremovableKeyRuntime();
   const driver = new ComputeDriver(config, { lifecycle: await diskLifecycle(config, libpod), libpod, runtime });
   await assert.rejects(
-    driver.createSandbox(validSandbox()),
+    driver.createSandbox(validSandbox({ name })),
     (error: unknown) => error instanceof RealmError && error.code === "CLEANUP_FAILED",
   );
-  assert.equal(libpod.containers.has(SANDBOX_NAME), false, "the container is removed");
+  assert.equal(libpod.containers.has(name), false, "the container is removed");
   assert.equal(runtime.supervisors.length, 0, "no host supervisor is started");
   assert.deepEqual(await driver.listSandboxes(), { sandboxes: [] }, "no sandbox is reported");
-  assert.equal(existsSync(join(config.secretRoot, SANDBOX_NAME)), false, "the secret directory is removed");
+  assert.equal(existsSync(join(config.secretRoot, name)), false, "the secret directory is removed");
 });

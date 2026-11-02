@@ -11,11 +11,8 @@ import { RealmError } from "../../../src/core/errors.js";
 import { ComputeDriver, type ComputeDriverConfig, type DriverSandboxMessage } from "../../../src/runtime/driver/compute-driver.js";
 import { DriverLifecycle, type LifecycleLibpod } from "../../../src/runtime/driver/lifecycle.js";
 import { writeLaunchMaterial } from "../../../src/runtime/driver/secret-store.js";
-import { diskLifecycle, FakeLibpod, FakeLifecycle, FakeRuntime, LAUNCH_KEY, driverConfig, validSandbox } from "./fakes.js";
+import { diskLifecycle, FakeLibpod, FakeLifecycle, FakeRuntime, LAUNCH_KEY, driverConfig, validSandbox, writeSandboxWorkspaceEntry } from "./fakes.js";
 import { launchBody, launchSupervisor } from "../isolation/supervisor-token.js";
-
-// The container name a valid create runs under (validSandbox().name, with the realm prefix).
-const CONTAINER_NAME = "realm-session-1";
 
 function schemaInvalid(error: unknown): boolean {
   return error instanceof RealmError && error.code === "SCHEMA_INVALID";
@@ -26,6 +23,8 @@ interface Harness {
   readonly libpod: FakeLibpod;
   readonly lifecycle: FakeLifecycle;
   readonly driver: ComputeDriver;
+  // The sandbox name the project directory's registry entry gives, which a create of that project uses.
+  readonly name: string;
 }
 
 function harness(): Harness {
@@ -33,19 +32,20 @@ function harness(): Harness {
   const libpod = new FakeLibpod();
   const lifecycle = new FakeLifecycle(libpod);
   const driver = new ComputeDriver(config, { lifecycle, libpod, runtime: new FakeRuntime() });
-  return { config, libpod, lifecycle, driver };
+  const name = writeSandboxWorkspaceEntry(config, join(config.workspaceRoot, "project-a"));
+  return { config, libpod, lifecycle, driver, name };
 }
 
 // A create request whose launch authentication is the given bytes.
-function sandboxWith(body: Uint8Array): DriverSandboxMessage {
-  return validSandbox({ spec: { ...validSandbox().spec, launch_authentication: body } });
+function sandboxWith(name: string, body: Uint8Array): DriverSandboxMessage {
+  return validSandbox({ name, spec: { ...validSandbox().spec, launch_authentication: body } });
 }
 
 // A create request with the launch authentication field absent from its spec.
-function sandboxWithoutLaunch(): DriverSandboxMessage {
+function sandboxWithoutLaunch(name: string): DriverSandboxMessage {
   const spec = { ...validSandbox().spec };
   Reflect.deleteProperty(spec, "launch_authentication");
-  return validSandbox({ spec });
+  return validSandbox({ name, spec });
 }
 
 // The entries of a directory, or none when the directory does not exist.
@@ -67,14 +67,15 @@ function filesNamed(root: string, name: string): string[] {
   return found;
 }
 
-// A refused create touched nothing: no lifecycle create, no libpod call, and no file under any root.
+// A refused create touched nothing: no lifecycle create, no libpod call, and no file under any root. The project directory keeps
+// no entries of its own.
 function assertNothingWritten(h: Harness): void {
   assert.deepEqual(h.lifecycle.creates, []);
   assert.equal(h.libpod.inspectCalls, 0);
   assert.equal(h.libpod.containers.size, 0);
   assert.deepEqual(entriesOf(h.config.secretRoot), []);
   assert.deepEqual(entriesOf(h.config.sandboxStateRoot), []);
-  assert.deepEqual(entriesOf(h.config.workspaceRoot), []);
+  assert.deepEqual(entriesOf(join(h.config.workspaceRoot, "project-a")), []);
 }
 
 // A libpod stub for a lifecycle that never reaches a container: nothing is listed or found, and every removal succeeds.
@@ -89,8 +90,8 @@ function emptyLibpod(): LifecycleLibpod {
 }
 
 void test("PRD-ISO-02: a create stores its launch material under the secret root at 0600, and nowhere under the state or workspace root", async () => {
-  const { config, lifecycle, driver } = harness();
-  await driver.createSandbox(validSandbox());
+  const { config, lifecycle, driver, name } = harness();
+  await driver.createSandbox(validSandbox({ name }));
   const containerName = lifecycle.creates[0]?.sandboxName;
   assert.ok(containerName !== undefined);
   const path = join(config.secretRoot, containerName, "launch.json");
@@ -128,55 +129,56 @@ const MALFORMED: readonly [string, Uint8Array][] = [
 for (const [label, body] of MALFORMED) {
   void test(`PRD-ISO-02: a create whose launch material is ${label} refuses with SCHEMA_INVALID, and writes nothing`, async () => {
     const h = harness();
-    await assert.rejects(h.driver.createSandbox(sandboxWith(body)), schemaInvalid);
+    await assert.rejects(h.driver.createSandbox(sandboxWith(h.name, body)), schemaInvalid);
     assertNothingWritten(h);
   });
 }
 
 void test("PRD-ISO-02: a create with no launch_authentication field refuses with SCHEMA_INVALID, and writes nothing", async () => {
   const h = harness();
-  await assert.rejects(h.driver.createSandbox(sandboxWithoutLaunch()), schemaInvalid);
+  await assert.rejects(h.driver.createSandbox(sandboxWithoutLaunch(h.name)), schemaInvalid);
   assertNothingWritten(h);
 });
 
 void test("PRD-ISO-02: a create with an empty launch_authentication buffer refuses with SCHEMA_INVALID, and writes nothing", async () => {
   const h = harness();
-  await assert.rejects(h.driver.createSandbox(sandboxWith(Buffer.alloc(0))), schemaInvalid);
+  await assert.rejects(h.driver.createSandbox(sandboxWith(h.name, Buffer.alloc(0))), schemaInvalid);
   assertNothingWritten(h);
 });
 
 void test("PRD-ISO-02: a validate with no launch_authentication field passes, and writes nothing and makes no libpod call", () => {
   const h = harness();
-  assert.deepEqual(h.driver.validateSandboxCreate(sandboxWithoutLaunch()), {});
+  assert.deepEqual(h.driver.validateSandboxCreate(sandboxWithoutLaunch(h.name)), {});
   assertNothingWritten(h);
 });
 
 void test("PRD-ISO-02: a validate with an empty launch_authentication buffer passes, and writes nothing and makes no libpod call", () => {
   const h = harness();
-  assert.deepEqual(h.driver.validateSandboxCreate(sandboxWith(Buffer.alloc(0))), {});
+  assert.deepEqual(h.driver.validateSandboxCreate(sandboxWith(h.name, Buffer.alloc(0))), {});
   assertNothingWritten(h);
 });
 
 for (const [label, body] of MALFORMED.filter(([, body]) => body.length > 0)) {
   void test(`PRD-ISO-02: a validate whose launch material is ${label} refuses with SCHEMA_INVALID, and writes nothing`, () => {
     const h = harness();
-    assert.throws(() => h.driver.validateSandboxCreate(sandboxWith(body)), schemaInvalid);
+    assert.throws(() => h.driver.validateSandboxCreate(sandboxWith(h.name, body)), schemaInvalid);
     assertNothingWritten(h);
   });
 }
 
 void test("PRD-ISO-02: delete removes the sandbox's launch material and its secret directory", async () => {
   const config = driverConfig();
+  const name = writeSandboxWorkspaceEntry(config, join(config.workspaceRoot, "project-a"));
   const libpod = new FakeLibpod();
   const driver = new ComputeDriver(config, {
     lifecycle: await diskLifecycle(config, libpod),
     libpod,
     runtime: new FakeRuntime(),
   });
-  await driver.createSandbox(validSandbox());
-  const secretDir = join(config.secretRoot, CONTAINER_NAME);
+  await driver.createSandbox(validSandbox({ name }));
+  const secretDir = join(config.secretRoot, name);
   assert.equal(existsSync(join(secretDir, "launch.json")), true);
-  assert.deepEqual(await driver.deleteSandbox({ name: CONTAINER_NAME }), { deleted: true });
+  assert.deepEqual(await driver.deleteSandbox({ name }), { deleted: true });
   assert.equal(existsSync(secretDir), false);
 });
 

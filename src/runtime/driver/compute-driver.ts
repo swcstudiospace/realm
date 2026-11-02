@@ -4,26 +4,27 @@
 // Create is the only path to a container. Before it reaches the lifecycle, the request is checked against the realm
 // profile: the digest-pinned image, the portable CPU and memory limits, no GPU, no platform or driver config, no
 // environment, no user-namespace request, no isolation backend selection (the built-in path carries none), and a sandbox name
-// that passes the container-name rule once the realm prefix is added. A create carries the gateway's launch material.
+// that carries the realm prefix and passes the container-name rule. A create carries the gateway's launch material.
 // CreateSandbox requires it. ValidateSandboxCreate accepts a create without it, because the gateway validates a create before
 // it mints the material. Launch material that is present must decode for this driver's gateway on both RPCs (launch.ts). Any
 // mismatch is refused with SCHEMA_INVALID, logged with the RPC and the check that refused (refusal.ts), and no libpod call is made.
 // The sandbox runtime is PID 1 whatever the argv. spec.command is checked for empty arguments and is otherwise not forwarded, as at HEAD.
 //
-// A create is refused while a container this driver created is live on the pinned root, or while another create holds the root.
+// A create is refused while a container this driver created is live on the sandbox's workspace, or while another create under the same sandbox name is in flight.
 // Live means any readable state other than configured, created, exited or stopped, so running, paused, stopping and removing all hold.
 // The containers are read from the runtime as well as from memory, so a restarted driver refuses too. A container that is gone,
-// exited, created or stopped holds nothing, so a failed sandbox releases the root once its container has stopped.
-// A create that passes checks the pinned workspace root, which the driver never creates, chmods or removes, and prepares a new state
-// directory. It stores the launch material in a new secret directory outside the state root and the workspace, and it
+// exited, created or stopped holds nothing, so a failed sandbox releases its workspace once its container has stopped.
+// A create that passes resolves the sandbox's workspace from its registry entry and verifies that the directory is still the one
+// that entry pinned. The driver never creates, chmods or removes a workspace, and it prepares a new state directory. It stores the
+// launch material in a new secret directory outside the state root and the workspace, and it
 // makes the channel: a TLS identity for the runtime, and the runtime's bootstrap, descriptor and auth bundle, built and checked
 // for agreement before any libpod call. The lifecycle (DriverLifecycle) then creates the container, and the bootstrap and the
 // rest are written before it starts. The sandbox runtime is the container's main process, so once the container is verified the
 // driver waits for the runtime's listener, removes the runtime's server key, and starts the host supervisor. Any failure removes
 // what this call made, and rethrows the original error.
 //
-// The gateway names a sandbox without the realm prefix, and the container runs under that name with the prefix added.
-// A name that already has the prefix is unchanged. The driver keeps a registry keyed by the gateway's name, holding the
+// The gateway's sandbox name carries the realm prefix. CreateSandbox refuses a name without it (create.workspace), and DeleteSandbox
+// adds it, so both name the same container. The driver keeps a registry keyed by the gateway's name, holding the
 // gateway's sandbox id, its workspace, and the container name. CreateSandbox fills it and DeleteSandbox clears it.
 // The startup sweep removes every realm container before the driver accepts requests, so no sandbox survives a restart
 // without a registry entry. Observed state comes from the labelled containers, and every snapshot carries the gateway's name.
@@ -42,6 +43,9 @@ import {
 } from "@grpc/grpc-js";
 import * as protoLoader from "@grpc/proto-loader";
 import { makeRealmError, RealmError } from "../../core/errors.js";
+import { bindRoot, isInsideRoot } from "../../fs/root.js";
+import { isSessionId } from "../../session/paths.js";
+import { readWorkspaceEntry, verifyWorkspaceEntry } from "../../session/workspace-registry.js";
 import { HARDENING_PROFILE, hardeningEvidenceDigest } from "../hardening.js";
 import type { ContainerSpec, LibpodClient, LibpodInspect } from "../libpod-client.js";
 import { CONTAINER_ID_PATTERN } from "../libpod-routes.js";
@@ -119,9 +123,11 @@ export interface ComputeDriverConfig {
   // Absolute root under which each sandbox's secret directory sits, at <root>/<containerName>. It holds the launch material,
   // the runtime's channel, and the supervisor's files.
   readonly secretRoot: string;
-  // Absolute path of the pinned workspace root, the sandbox's /workspace, bound read-write. It is the root itself, and the
-  // workspace id selects no directory under it. The driver never creates, chmods or removes it.
+  // Absolute ceiling every mounted project must equal or lie below. A sandbox mounts, read-write at /workspace, only the directory its
+  // workspace registry entry names, and the ceiling itself is never mounted on its own. The driver never creates, chmods or removes it.
   readonly workspaceRoot: string;
+  // Absolute realm state directory. Its workspaces/ subdirectory holds the registry entries that map each sandbox to its project.
+  readonly stateDir: string;
   // The build version advertised as the extension implementation version. The gateway refuses an empty or invalid value.
   readonly implementationVersion: string;
   // The gateway this driver serves. Launch material issued for another gateway is refused.
@@ -289,16 +295,17 @@ export class ComputeDriver {
   private readonly registry = new Map<string, SandboxRecord>();
   // The host supervisor of each sandbox, keyed by the container name. It is stopped on delete and on a failed create.
   private readonly supervisors = new Map<string, SupervisorHandle>();
-  // True while a create holds the pinned root, from its check until it returns or fails. It is set before the first await, so a
-  // create that starts meanwhile is refused.
-  private rootReserved = false;
-  // Containers this driver created and could not confirm removed. Each keeps holding the pinned root while it is live.
+  // The sandbox names of the creates in flight, from each create's check until it returns or fails. A name is held before the first
+  // await, so a create under the same name that starts meanwhile is refused.
+  private readonly reservedNames = new Set<string>();
+  // Containers this driver created and could not confirm removed. Each keeps holding its workspace while it is live.
   private readonly unremovedContainers = new Set<string>();
 
   constructor(config: ComputeDriverConfig, deps: ComputeDriverDeps) {
     if (
       !isAbsolute(config.sandboxStateRoot) ||
       !isAbsolute(config.secretRoot) ||
+      !isAbsolute(config.stateDir) ||
       !isAbsolute(config.workspaceRoot) ||
       !isAbsolute(config.supervisor.binary) ||
       !isAbsolute(config.supervisor.gatewayCaPath) ||
@@ -350,8 +357,9 @@ export class ComputeDriver {
 
   // A create without launch material is refused before anything is written, because CreateSandbox requires it.
   // A state or secret directory that exists is reclaimed when its container is gone and the driver tracks none
-  // (reclaimStaleSandbox), and is refused before anything is prepared otherwise, so that refusal creates nothing. Then the pinned
-  // workspace root is checked, which never creates it, and the state directory, the launch material and the channel are prepared.
+  // (reclaimStaleSandbox), and is refused before anything is prepared otherwise, so that refusal creates nothing. Then the sandbox's
+  // workspace is resolved from the registry and checked, which never creates it, and the state directory, the launch material and the
+  // channel are prepared.
   // The channel's bootstrap and descriptor must agree before the lifecycle runs. The lifecycle creates the container and writes the
   // runtime's files before it starts it. Then the runtime starts in the container and the host supervisor starts beside it. Any
   // failure removes what this call made: the container, the state directory, the secret entries, and the supervisor, and the
@@ -364,25 +372,24 @@ export class ComputeDriver {
     if (launch === undefined || authentication === undefined) {
       throw refusal(scope, "create.launch_authentication");
     }
-    // Every sandbox of this driver is bound to the one pinned root. The root is reserved before the first await, so a create that
-    // starts while another is still checking or building is refused too. The reservation ends when its create returns or fails:
-    // after that a running container holds the root.
-    if (this.rootReserved) {
+    // The sandbox name is reserved before the first await, so a create under the same name that starts while this one is still checking
+    // or building is refused too. The reservation ends when its create returns or fails: after that a running container holds its workspace.
+    if (this.reservedNames.has(plan.sandboxName)) {
       throw refusal(scope, "create.pinned_root_held", "REALM_INVALID_TRANSITION");
     }
-    this.rootReserved = true;
+    this.reservedNames.add(plan.sandboxName);
     try {
-      if (await this.pinnedRootHeld(scope)) {
+      if (await this.workspaceHeld(scope, plan.spec.workspaceDir)) {
         throw refusal(scope, "create.pinned_root_held", "REALM_INVALID_TRANSITION");
       }
       return await this.buildSandbox(plan, scope, launch, authentication);
     } finally {
-      this.rootReserved = false;
+      this.reservedNames.delete(plan.sandboxName);
     }
   }
 
-  // The create once the pinned root is reserved and free: the state directory, the launch material and the channel are prepared,
-  // and the container, the runtime and the supervisor are started, as described above.
+  // The create once the sandbox name is reserved and its workspace is free: the state directory, the launch material and the channel are
+  // prepared, and the container, the runtime and the supervisor are started, as described above.
   private async buildSandbox(
     plan: CreatePlan,
     scope: RefusalScope,
@@ -401,7 +408,7 @@ export class ComputeDriver {
       throw refusal(scope, "create.secret_dir");
     }
     atStage(scope, "create.workspace", () => {
-      assertPinnedWorkspaceRoot(this.config.workspaceRoot);
+      assertPinnedWorkspaceRoot(plan.spec.workspaceDir);
     });
     atStage(scope, "create.state_dir", () => {
       mkdirOrRefuse(plan.spec.stateDir);
@@ -444,7 +451,7 @@ export class ComputeDriver {
     } catch (error: unknown) {
       logStageRefusal(scope, "create.container", error);
       const problems = this.discardPrepared(plan);
-      // A container this create made may still run and hold the pinned root. A name already in use belongs to another container, which this create did not make.
+      // A container this create made may still run and hold its workspace. A name already in use belongs to another container, which this create did not make.
       if (!(error instanceof RealmError && error.code === "SANDBOX_NAME_IN_USE")) {
         const containerProblem = await this.containerProblem(sandboxName);
         if (containerProblem !== undefined) {
@@ -560,16 +567,16 @@ export class ComputeDriver {
 
   // Reclaims the state directory and the secret directory of a sandbox whose container is gone: a crashed driver never ran the
   // delete path, so they are still on disk when the gateway creates the same sandbox again. The gateway creates only a name it
-  // holds no live sandbox for, and the pinned root admits one live sandbox, so a directory with no container behind it is an
+  // holds no live sandbox for, and a project directory admits one live sandbox, so a directory with no container behind it is an
   // orphan. The reclaim runs only when all of these hold; otherwise it removes nothing and returns, and the absence checks refuse
   // the create as they always did:
   //   (a) libpod has no container of this sandbox's container name (inspect returns null; an inspect that throws proves nothing);
   //   (b) the driver tracks no live container for the name: it is not in unremovedContainers (that set is pruned of gone
-  //       containers by pinnedRootHeld, so a name left in it was found), and no registry record under another gateway name holds
+  //       containers by workspaceHeld, so a name left in it was found), and no registry record under another gateway name holds
   //       the container name (DeleteSandbox deletes nothing for such a name either);
   //   (c) the driver holds no running supervisor for the name, except a stale handle: with the container proven gone by (a), a
   //       supervisor handle for the name and a registry record under this gateway name belong to the dead sandbox, so they are
-  //       stopped and dropped by the delete path below. A create already in flight is excluded by rootReserved.
+  //       stopped and dropped by the delete path below. A create already in flight is excluded by reservedNames.
   // The cleanup is the delete path (removeSandbox), after the state directory passes the same check a create applies to one
   // (assertStateDirClear). Any failure refuses the create, is logged with the stage's check and no path, and leaves what the
   // failing step left in place.
@@ -605,14 +612,14 @@ export class ComputeDriver {
     throw makeRealmError("REALM_INVALID_TRANSITION");
   }
 
-  // Checks the id and the pinned root. Nothing is created, so the root keeps its mode and contents.
+  // Checks the id and the ceiling. Nothing is created, so the ceiling keeps its mode and contents.
   ensureWorkspace(request: WorkspaceRequest): Record<string, never> {
     assertWorkspaceId(request.workspace);
     assertPinnedWorkspaceRoot(this.config.workspaceRoot);
     return {};
   }
 
-  // The pinned workspace root is never removed, empty or not. The request is refused with the transition code
+  // The ceiling is never removed, empty or not. The request is refused with the transition code
   // (FAILED_PRECONDITION). Only the id is checked first; nothing is read or changed.
   deleteWorkspace(request: WorkspaceRequest): Record<string, never> {
     assertWorkspaceId(request.workspace);
@@ -727,11 +734,11 @@ export class ComputeDriver {
     }
   }
 
-  // True when a container this driver created holds the pinned root. The candidates are the containers in memory (the registry's and
-  // the unconfirmed-removal set) and every container the runtime lists under the driver's own label, so a driver with no memory still
-  // sees a live sandbox. A candidate holds the root when it is live and binds the pinned root. A state or mount list that cannot be
-  // read is not known to be free, so the create is refused, as is a lookup that fails for any other reason.
-  private async pinnedRootHeld(scope: RefusalScope): Promise<boolean> {
+  // True when a container this driver created holds the workspace of the sandbox being created. The candidates are the containers in
+  // memory (the registry's and the unconfirmed-removal set) and every container the runtime lists under the driver's own label, so a
+  // driver with no memory still sees a live sandbox. A candidate holds the workspace when it is live and binds it. A state or mount list
+  // that cannot be read is not known to be free, so the create is refused, as is a lookup that fails for any other reason.
+  private async workspaceHeld(scope: RefusalScope, workspace: string): Promise<boolean> {
     try {
       // One entry per container, keyed by its sandbox name, so a container both in memory and listed is inspected once. A listed container
       // is inspected by the id the runtime reports; a container known only from memory is inspected by its name.
@@ -750,7 +757,7 @@ export class ComputeDriver {
         const inspect = await this.deps.libpod.inspectContainer(reference);
         if (inspect === null) {
           this.unremovedContainers.delete(name);
-        } else if (holdsPinnedRoot(inspect, this.config.workspaceRoot)) {
+        } else if (holdsWorkspace(inspect, workspace)) {
           return true;
         }
       }
@@ -840,6 +847,35 @@ function atStage<T>(scope: RefusalScope, check: RefusalCheck, work: () => T): T 
   }
 }
 
+// The host directory a sandbox mounts at /workspace: the directory its workspace registry entry names, verified now. The sandbox name
+// is "realm-" plus the session id. A name without the prefix, or an id outside the safe set, is refused, and so is a name with no
+// usable entry. Reads only.
+function resolveSandboxWorkspace(config: ComputeDriverConfig, sandboxName: string, scope: RefusalScope): string {
+  const sessionId = sandboxName.startsWith(REALM_SANDBOX_NAME_PREFIX) ? sandboxName.slice(REALM_SANDBOX_NAME_PREFIX.length) : "";
+  if (!isSessionId(sessionId)) {
+    throw refusal(scope, "create.workspace");
+  }
+  const workspace = registeredWorkspaceOf(config, sessionId);
+  if (workspace === undefined) {
+    throw refusal(scope, "create.workspace");
+  }
+  return workspace;
+}
+
+// The verified real path of the directory the registry entry for a session id names. Undefined when there is no entry, the entry
+// lies outside the ceiling, or the registry read or the verify throws. Reads only.
+function registeredWorkspaceOf(config: ComputeDriverConfig, sessionId: string): string | undefined {
+  try {
+    const entry = readWorkspaceEntry(config.stateDir, sessionId);
+    if (entry === null || !isInsideRoot(bindRoot(config.workspaceRoot), entry.workspaceRoot)) {
+      return undefined;
+    }
+    return verifyWorkspaceEntry(entry).realPath;
+  } catch {
+    return undefined;
+  }
+}
+
 // Checks a create request against the realm profile and returns the lifecycle spec and the launch material when it carries any.
 // Every refusal is SCHEMA_INVALID, logged with its RPC and check, and no libpod call is made. Launch material that is present must
 // decode for this driver's gateway, on both RPCs, before any write. An absent bundle is not refused here: CreateSandbox refuses it
@@ -900,10 +936,12 @@ function planCreate(
   atStage(scope, "create.socket_path", () => {
     assertSocketPathsFit([channel.controlSocket, channel.sshSocket, CONTAINER_CONTROL_SOCKET]);
   });
-  // The container's mounts are the sandbox binding, which the lifecycle verifies the container against.
+  // The container's mounts are the sandbox binding, which the lifecycle verifies the container against. Its workspace is the directory
+  // the registry entry for this sandbox names, verified now.
+  const workspaceDir = resolveSandboxWorkspace(config, sandboxName, scope);
   const binding = atStage(scope, "create.identity", () =>
     sandboxBindingOf(
-      { workspaceRoot: config.workspaceRoot, stateRoot: config.sandboxStateRoot, secretRoot: config.secretRoot },
+      { workspaceRoot: workspaceDir, stateRoot: config.sandboxStateRoot, secretRoot: config.secretRoot },
       containerName,
     ),
   );
@@ -1025,13 +1063,13 @@ function runStateOf(inspect: LibpodInspect): string {
   return "unknown";
 }
 
-// States in which a container holds no pinned root: it has not started, or it has stopped. Every other readable state is live,
+// States in which a container holds no workspace: it has not started, or it has stopped. Every other readable state is live,
 // which includes running and paused.
 const NON_HOLDING_STATES: Record<string, true> = { configured: true, created: true, exited: true, stopped: true };
 
-// True when a container holds the pinned root: it is live, and one of its mounts has the pinned root as its source. Throws when the
+// True when a container holds the workspace: it is live, and one of its mounts has the workspace as its source. Throws when the
 // state or the mounts cannot be read, so the caller refuses the create.
-function holdsPinnedRoot(inspect: LibpodInspect, root: string): boolean {
+function holdsWorkspace(inspect: LibpodInspect, workspace: string): boolean {
   const state = runStateOf(inspect);
   if (state === "unknown") {
     throw new Error("container state unreadable");
@@ -1044,7 +1082,7 @@ function holdsPinnedRoot(inspect: LibpodInspect, root: string): boolean {
     throw new Error("container mounts unreadable");
   }
   const entries: readonly unknown[] = mounts;
-  return entries.some((mount) => typeof mount === "object" && mount !== null && "Source" in mount && mount.Source === root);
+  return entries.some((mount) => typeof mount === "object" && mount !== null && "Source" in mount && mount.Source === workspace);
 }
 
 // True when the child is a strict descendant of the parent directory. Both paths are already resolved.
@@ -1116,7 +1154,7 @@ function addCleanupNote(error: unknown, problems: readonly string[]): void {
   }
 }
 
-// The two roots must not hold one another, or be the same path. The pinned workspace root is bound into the sandbox read-write, so no
+// The two roots must not hold one another, or be the same path. The workspace ceiling holds the project directories bound read-write, so no
 // state or secret directory may sit under it or hold it, and a delete of a sandbox's own directories can never reach it. Both are
 // compared as resolved real paths.
 function assertApart(a: string, b: string): void {
@@ -1127,16 +1165,16 @@ function assertApart(a: string, b: string): void {
   }
 }
 
-// The workspace id selects no directory: the sandbox's /workspace is the pinned root. The id is still checked.
+// The workspace id selects no directory: the sandbox's /workspace is the directory its registry entry names. The id is still checked.
 function assertWorkspaceId(workspace: string | undefined): void {
   if (workspace === undefined || !WORKSPACE_ID_PATTERN.test(workspace)) {
     throw makeRealmError("SCHEMA_INVALID");
   }
 }
 
-// The pinned workspace root must be an absolute path to a real directory that the driver's account owns. A missing path, a symbolic
-// link (checked with lstat, never followed), a file, or a directory another account owns is refused. The driver never creates,
-// chmods or removes it, so a refusal here changes nothing.
+// A workspace, the ceiling or a sandbox's own directory, must be an absolute path to a real directory that the driver's account owns.
+// A missing path, a symbolic link (checked with lstat, never followed), a file, or a directory another account owns is refused. The
+// driver never creates, chmods or removes it, so a refusal here changes nothing.
 function assertPinnedWorkspaceRoot(root: string): void {
   const stat = statOrNull(root);
   const uid = process.getuid?.();

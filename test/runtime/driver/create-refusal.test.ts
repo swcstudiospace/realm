@@ -7,10 +7,8 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, symlinkSync
 import { dirname, join } from "node:path";
 import { makeRealmError, RealmError } from "../../../src/core/errors.js";
 import { ComputeDriver, type ComputeDriverConfig, type DriverSandboxMessage } from "../../../src/runtime/driver/compute-driver.js";
-import { FakeLibpod, FakeLifecycle, FakeRuntime, driverConfig, validSandbox } from "./fakes.js";
+import { FakeLibpod, FakeLifecycle, FakeRuntime, driverConfig, validSandbox, writeSandboxWorkspaceEntry } from "./fakes.js";
 import { GATEWAY_LAUNCH_SAMPLE } from "./gateway-launch-sample.js";
-
-const CONTAINER_NAME = "realm-session-1";
 
 function schemaInvalid(error: unknown): boolean {
   return error instanceof RealmError && error.code === "SCHEMA_INVALID";
@@ -23,46 +21,48 @@ class RefusingLifecycle extends FakeLifecycle {
   }
 }
 
-// A driver whose refusal lines go to the returned array, with its fakes.
+// A driver whose refusal lines go to the returned array, with its fakes. The project directory under the ceiling is bound by its
+// registry entry, and name is the sandbox name a create of it uses.
 function harness(overrides: Partial<ComputeDriverConfig> = {}) {
   const lines: string[] = [];
   const config = driverConfig({ refusalLog: (line) => lines.push(line), ...overrides });
   const libpod = new FakeLibpod();
   const lifecycle = new FakeLifecycle(libpod);
   const driver = new ComputeDriver(config, { lifecycle, libpod, runtime: new FakeRuntime() });
-  return { config, libpod, lifecycle, driver, lines };
+  const name = writeSandboxWorkspaceEntry(config, join(config.workspaceRoot, "project-a"));
+  return { config, libpod, lifecycle, driver, lines, name };
 }
 
 function entriesOf(dir: string): string[] {
   return existsSync(dir) ? readdirSync(dir) : [];
 }
 
-function sandboxWith(body: Uint8Array): DriverSandboxMessage {
-  return validSandbox({ spec: { ...validSandbox().spec, launch_authentication: body } });
+function sandboxWith(name: string, body: Uint8Array): DriverSandboxMessage {
+  return validSandbox({ name, spec: { ...validSandbox().spec, launch_authentication: body } });
 }
 
 // A create request with the launch authentication field absent from its spec.
-function sandboxWithoutLaunch(): DriverSandboxMessage {
+function sandboxWithoutLaunch(name: string): DriverSandboxMessage {
   const spec = { ...validSandbox().spec };
   Reflect.deleteProperty(spec, "launch_authentication");
-  return validSandbox({ spec });
+  return validSandbox({ name, spec });
 }
 
 void test("PRD-ISO-02: a create with the gateway's own launch body is accepted, and its material is stored at 0600", async () => {
-  const { config, lifecycle, driver, lines } = harness();
+  const { config, lifecycle, driver, lines, name } = harness();
   const body = Buffer.from(GATEWAY_LAUNCH_SAMPLE, "utf8");
-  await driver.createSandbox(sandboxWith(body));
+  await driver.createSandbox(sandboxWith(name, body));
   assert.equal(lifecycle.creates.length, 1);
-  const path = join(config.secretRoot, CONTAINER_NAME, "launch.json");
+  const path = join(config.secretRoot, name, "launch.json");
   assert.deepEqual(readFileSync(path), body);
   assert.equal(statSync(path).mode & 0o777, 0o600);
   assert.deepEqual(lines, []);
 });
 
 void test("PRD-ISO-02: a create refused for its launch body logs one line with the RPC and the check, and writes nothing", async () => {
-  const { config, libpod, lifecycle, driver, lines } = harness();
+  const { config, libpod, lifecycle, driver, lines, name } = harness();
   const wrongGateway = Buffer.from(GATEWAY_LAUNCH_SAMPLE.replace('"gateway_id":"realm"', '"gateway_id":"other"'), "utf8");
-  await assert.rejects(driver.createSandbox(sandboxWith(wrongGateway)), schemaInvalid);
+  await assert.rejects(driver.createSandbox(sandboxWith(name, wrongGateway)), schemaInvalid);
   assert.deepEqual(lines, ["realm compute driver refused: rpc=CreateSandbox check=launch.gateway_id code=SCHEMA_INVALID"]);
   assert.deepEqual(lifecycle.creates, []);
   assert.equal(libpod.inspectCalls, 0);
@@ -71,8 +71,9 @@ void test("PRD-ISO-02: a create refused for its launch body logs one line with t
 });
 
 void test("PRD-DRV-02: a create refused by the realm profile logs its RPC and check, for both the validate and the create RPC", async () => {
-  const { driver, lines } = harness();
+  const { driver, lines, name } = harness();
   const wrongImage = validSandbox({
+    name,
     spec: { ...validSandbox().spec, template: { ...validSandbox().spec?.template, image: "registry.invalid/realm/sandbox:latest" } },
   });
   assert.throws(() => driver.validateSandboxCreate(wrongImage), schemaInvalid);
@@ -84,16 +85,16 @@ void test("PRD-DRV-02: a create refused by the realm profile logs its RPC and ch
 });
 
 void test("PRD-ISO-02: a validate with no launch material passes and logs nothing; a create without it logs the CreateSandbox check", async () => {
-  const { driver, lines } = harness();
-  assert.deepEqual(driver.validateSandboxCreate(sandboxWithoutLaunch()), {});
-  await assert.rejects(driver.createSandbox(sandboxWithoutLaunch()), schemaInvalid);
+  const { driver, lines, name } = harness();
+  assert.deepEqual(driver.validateSandboxCreate(sandboxWithoutLaunch(name)), {});
+  await assert.rejects(driver.createSandbox(sandboxWithoutLaunch(name)), schemaInvalid);
   assert.deepEqual(lines, ["realm compute driver refused: rpc=CreateSandbox check=create.launch_authentication code=SCHEMA_INVALID"]);
 });
 
 void test("PRD-ISO-02: a validate with present invalid launch material logs the ValidateSandboxCreate RPC and the launch check", () => {
-  const { driver, lines } = harness();
+  const { driver, lines, name } = harness();
   const wrongGateway = Buffer.from(GATEWAY_LAUNCH_SAMPLE.replace('"gateway_id":"realm"', '"gateway_id":"other"'), "utf8");
-  assert.throws(() => driver.validateSandboxCreate(sandboxWith(wrongGateway)), schemaInvalid);
+  assert.throws(() => driver.validateSandboxCreate(sandboxWith(name, wrongGateway)), schemaInvalid);
   assert.deepEqual(lines, ["realm compute driver refused: rpc=ValidateSandboxCreate check=launch.gateway_id code=SCHEMA_INVALID"]);
 });
 
@@ -103,40 +104,41 @@ void test("PRD-ISO-02: a create the lifecycle refuses logs one line naming Creat
   const libpod = new FakeLibpod();
   const lifecycle = new RefusingLifecycle(libpod);
   const driver = new ComputeDriver(config, { lifecycle, libpod, runtime: new FakeRuntime() });
-  await assert.rejects(driver.createSandbox(validSandbox()), schemaInvalid);
+  const name = writeSandboxWorkspaceEntry(config, join(config.workspaceRoot, "project-a"));
+  await assert.rejects(driver.createSandbox(validSandbox({ name })), schemaInvalid);
   assert.deepEqual(lines, ["realm compute driver refused: rpc=CreateSandbox check=create.container code=SCHEMA_INVALID"]);
   assert.deepEqual(entriesOf(config.secretRoot), []);
   assert.deepEqual(entriesOf(config.sandboxStateRoot), []);
 });
 
 void test("PRD-ISO-02: a create whose state directory exists while a container of that name exists logs create.state_dir and deletes nothing", async () => {
-  const { config, libpod, lifecycle, driver, lines } = harness();
-  libpod.add(CONTAINER_NAME, false);
-  mkdirSync(join(config.sandboxStateRoot, CONTAINER_NAME));
-  await assert.rejects(driver.createSandbox(validSandbox()), schemaInvalid);
+  const { config, libpod, lifecycle, driver, lines, name } = harness();
+  libpod.add(name, false);
+  mkdirSync(join(config.sandboxStateRoot, name));
+  await assert.rejects(driver.createSandbox(validSandbox({ name })), schemaInvalid);
   assert.deepEqual(lines, ["realm compute driver refused: rpc=CreateSandbox check=create.state_dir code=SCHEMA_INVALID"]);
   assert.deepEqual(lifecycle.creates, []);
   assert.deepEqual(lifecycle.deletes, []);
-  assert.equal(libpod.containers.has(CONTAINER_NAME), true);
+  assert.equal(libpod.containers.has(name), true);
 });
 
 void test("PRD-ISO-02: a create whose secret directory exists while a container of that name exists logs create.secret_dir and deletes nothing", async () => {
-  const { config, libpod, lifecycle, driver, lines } = harness();
-  libpod.add(CONTAINER_NAME, false);
-  mkdirSync(join(config.secretRoot, CONTAINER_NAME), { recursive: true });
-  await assert.rejects(driver.createSandbox(validSandbox()), schemaInvalid);
+  const { config, libpod, lifecycle, driver, lines, name } = harness();
+  libpod.add(name, false);
+  mkdirSync(join(config.secretRoot, name), { recursive: true });
+  await assert.rejects(driver.createSandbox(validSandbox({ name })), schemaInvalid);
   assert.deepEqual(lines, ["realm compute driver refused: rpc=CreateSandbox check=create.secret_dir code=SCHEMA_INVALID"]);
   assert.deepEqual(lifecycle.creates, []);
   assert.deepEqual(lifecycle.deletes, []);
-  assert.equal(libpod.containers.has(CONTAINER_NAME), true);
+  assert.equal(libpod.containers.has(name), true);
 });
 
 void test("PRD-ISO-02: a create whose state directory is a symbolic link is refused with create.state_dir, and no libpod inspect or delete is made", async () => {
-  const { config, libpod, lifecycle, driver, lines } = harness();
+  const { config, libpod, lifecycle, driver, lines, name } = harness();
   const outside = join(dirname(config.sandboxStateRoot), "outside-state");
   mkdirSync(outside);
-  symlinkSync(outside, join(config.sandboxStateRoot, CONTAINER_NAME));
-  await assert.rejects(driver.createSandbox(validSandbox()), schemaInvalid);
+  symlinkSync(outside, join(config.sandboxStateRoot, name));
+  await assert.rejects(driver.createSandbox(validSandbox({ name })), schemaInvalid);
   assert.deepEqual(lines, ["realm compute driver refused: rpc=CreateSandbox check=create.state_dir code=SCHEMA_INVALID"]);
   assert.deepEqual(lifecycle.creates, []);
   assert.deepEqual(lifecycle.deletes, []);
@@ -145,12 +147,12 @@ void test("PRD-ISO-02: a create whose state directory is a symbolic link is refu
 });
 
 void test("PRD-ISO-02: a create whose secret directory is a symbolic link is refused with create.secret_dir, and no libpod inspect or delete is made", async () => {
-  const { config, libpod, lifecycle, driver, lines } = harness();
+  const { config, libpod, lifecycle, driver, lines, name } = harness();
   const outside = join(dirname(config.secretRoot), "outside-secret");
   mkdirSync(outside);
   mkdirSync(config.secretRoot, { recursive: true, mode: 0o700 });
-  symlinkSync(outside, join(config.secretRoot, CONTAINER_NAME));
-  await assert.rejects(driver.createSandbox(validSandbox()), schemaInvalid);
+  symlinkSync(outside, join(config.secretRoot, name));
+  await assert.rejects(driver.createSandbox(validSandbox({ name })), schemaInvalid);
   assert.deepEqual(lines, ["realm compute driver refused: rpc=CreateSandbox check=create.secret_dir code=SCHEMA_INVALID"]);
   assert.deepEqual(lifecycle.creates, []);
   assert.deepEqual(lifecycle.deletes, []);

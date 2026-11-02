@@ -93,6 +93,7 @@ export function loadDriverProcessConfig(
       sandboxStateRoot: roots.sandboxStateRoot,
       secretRoot: roots.secretRoot,
       workspaceRoot: roots.workspaceRoot,
+      stateDir: roots.stateDir,
       implementationVersion,
       gatewayId,
       supervisor: { binary: supervisorBinary, gatewayEndpoint, gatewayCaPath },

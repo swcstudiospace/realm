@@ -8,7 +8,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { RealmError } from "../../../src/core/errors.js";
 import { ComputeDriver, loadComputeDriverService, type DriverSandboxMessage } from "../../../src/runtime/driver/compute-driver.js";
-import { FakeLibpod, FakeLifecycle, FakeRuntime, driverConfig, validSandbox } from "./fakes.js";
+import { FakeLibpod, FakeLifecycle, FakeRuntime, driverConfig, validSandbox, writeSandboxWorkspaceEntry } from "./fakes.js";
 import { GATEWAY_LAUNCH_SAMPLE } from "./gateway-launch-sample.js";
 
 // The request as the driver receives it after the gateway's bytes pass through the pinned CreateSandbox request codec.
@@ -20,8 +20,9 @@ function onTheWire(sandbox: DriverSandboxMessage): DriverSandboxMessage {
 }
 
 void test("PRD-DRV-02: a create the gateway encodes on the wire is accepted, and its launch material is stored", async () => {
-  const base = validSandbox();
   const config = driverConfig();
+  const name = writeSandboxWorkspaceEntry(config, join(config.workspaceRoot, "project-a"));
+  const base = validSandbox({ name });
   const libpod = new FakeLibpod();
   const driver = new ComputeDriver(config, { lifecycle: new FakeLifecycle(libpod), libpod, runtime: new FakeRuntime() });
   const sandbox = onTheWire({
@@ -29,12 +30,13 @@ void test("PRD-DRV-02: a create the gateway encodes on the wire is accepted, and
     spec: { ...base.spec, launch_authentication: Buffer.from(GATEWAY_LAUNCH_SAMPLE, "utf8") },
   });
   await driver.createSandbox(sandbox);
-  assert.deepEqual(readFileSync(join(config.secretRoot, "realm-session-1", "launch.json")), Buffer.from(GATEWAY_LAUNCH_SAMPLE, "utf8"));
+  assert.deepEqual(readFileSync(join(config.secretRoot, name, "launch.json")), Buffer.from(GATEWAY_LAUNCH_SAMPLE, "utf8"));
 });
 
 void test("PRD-DRV-02: a create the gateway encodes with an isolation backend selection is refused on the wire, before any write", async () => {
-  const base = validSandbox();
   const config = driverConfig();
+  const name = writeSandboxWorkspaceEntry(config, join(config.workspaceRoot, "project-a"));
+  const base = validSandbox({ name });
   const libpod = new FakeLibpod();
   const lifecycle = new FakeLifecycle(libpod);
   const driver = new ComputeDriver(config, { lifecycle, libpod, runtime: new FakeRuntime() });

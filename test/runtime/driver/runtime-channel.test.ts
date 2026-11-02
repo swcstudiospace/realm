@@ -24,6 +24,7 @@ import {
   SUPERVISOR_BINARY,
   driverConfig,
   validSandbox,
+  writeSandboxWorkspaceEntry,
 } from "./fakes.js";
 import { GATEWAY_LAUNCH_SAMPLE, GATEWAY_PUBLIC_KEY_PEM } from "./gateway-launch-sample.js";
 
@@ -94,14 +95,16 @@ for (const [field, value, needle] of DISAGREEMENTS) {
 
 void test("the host supervisor is started with exactly its listed arguments and six environment variables, and no secret reaches either", async () => {
   const config = driverConfig();
+  const name = writeSandboxWorkspaceEntry(config, join(config.workspaceRoot, "project-a"));
   const runtime = new FakeRuntime();
   const libpod = new FakeLibpod();
   const driver = new ComputeDriver(config, { lifecycle: new FakeLifecycle(libpod), libpod, runtime });
-  const sample = { ...validSandbox(), spec: { ...validSandbox().spec, launch_authentication: Buffer.from(GATEWAY_LAUNCH_SAMPLE, "utf8") } };
+  const base = validSandbox({ name });
+  const sample = { ...base, spec: { ...base.spec, launch_authentication: Buffer.from(GATEWAY_LAUNCH_SAMPLE, "utf8") } };
   await driver.createSandbox(sample);
   const [spawn] = runtime.spawns;
   assert.ok(spawn !== undefined);
-  const secretDir = join(config.secretRoot, "realm-session-1");
+  const secretDir = join(config.secretRoot, name);
   assert.equal(spawn.binary, SUPERVISOR_BINARY);
   assert.deepEqual(spawn.args, [
     "--role",
@@ -109,7 +112,7 @@ void test("the host supervisor is started with exactly its listed arguments and 
     "--sandbox-id",
     "sandbox-1",
     "--sandbox",
-    "realm-session-1",
+    name,
     "--openshell-endpoint",
     GATEWAY_ENDPOINT,
     "--ssh-socket-path",
@@ -129,7 +132,7 @@ void test("the host supervisor is started with exactly its listed arguments and 
   assert.deepEqual(spawn.env, {
     OPENSHELL_ADMITTED_ISOLATION_BACKEND: "openshell-sandbox",
     OPENSHELL_SANDBOX_ID: "sandbox-1",
-    OPENSHELL_SANDBOX: "realm-session-1",
+    OPENSHELL_SANDBOX: name,
     OPENSHELL_ENDPOINT: GATEWAY_ENDPOINT,
     OPENSHELL_TLS_CA: GATEWAY_CA_PATH,
     OPENSHELL_CONTAINER_IMAGE: SANDBOX_IMAGE,
@@ -148,12 +151,14 @@ void test("the host supervisor is started with exactly its listed arguments and 
 
 void test("a supervisor spawn without the SSH host key is refused with SCHEMA_INVALID, and no supervisor starts (phase 9.6)", async () => {
   const config = driverConfig();
+  const name = writeSandboxWorkspaceEntry(config, join(config.workspaceRoot, "project-a"));
   const runtime = new FakeRuntime();
   const libpod = new FakeLibpod();
   const driver = new ComputeDriver(config, { lifecycle: new FakeLifecycle(libpod), libpod, runtime });
   const keyless = GATEWAY_LAUNCH_SAMPLE.replace('"ssh_host_private_key":"fixture-ssh-host-key",', "");
   assert.notEqual(keyless, GATEWAY_LAUNCH_SAMPLE, "the sample carries the key the test removes");
-  const sample = { ...validSandbox(), spec: { ...validSandbox().spec, launch_authentication: Buffer.from(keyless, "utf8") } };
+  const base = validSandbox({ name });
+  const sample = { ...base, spec: { ...base.spec, launch_authentication: Buffer.from(keyless, "utf8") } };
   await assert.rejects(driver.createSandbox(sample), (error: unknown) => error instanceof RealmError && error.code === "SCHEMA_INVALID");
   assert.equal(runtime.spawns.length, 0, "no supervisor is spawned");
   assert.equal(JSON.stringify(runtime.spawns).includes("fixture-ssh-host-key"), false);

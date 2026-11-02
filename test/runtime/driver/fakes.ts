@@ -17,6 +17,9 @@ import {
   OPENSHELL_SANDBOX_NAME_LABEL_KEY,
   OPENSHELL_SANDBOX_ROLE_VALUE,
 } from "../../../src/runtime/openshell.js";
+import { bindRoot } from "../../../src/fs/root.js";
+import { sandboxNameOfSession, sessionIdOfWorkspace } from "../../../src/session/paths.js";
+import { writeWorkspaceEntry } from "../../../src/session/workspace-registry.js";
 import { GATEWAY_ID, generateGatewayKey, launchBody } from "../isolation/supervisor-token.js";
 
 export const SANDBOX_IMAGE = `registry.invalid/realm/sandbox@sha256:${"a".repeat(64)}`;
@@ -250,8 +253,8 @@ export class FakeRuntime implements RuntimeHost {
 
 export const IMPLEMENTATION_VERSION = "0.1.2";
 
-// A driver config with fresh temporary roots. The state root and the pinned workspace root exist, so a create starts from real roots.
-// The pinned workspace root stands for the operator's directory, so the fixture creates it; the driver never does. The secret root is
+// A driver config with fresh temporary roots. The state root and the workspace ceiling exist, so a create starts from real roots.
+// The workspace ceiling stands for the operator's directory tree, so the fixture creates it; the driver never does. The secret root is
 // not created here: the secret store creates it at 0700 on the first write. Refusals are logged to a silent sink by default, so the
 // expected refusals of the suite do not fill the test output; a test that checks the refusal log passes its own sink.
 export function driverConfig(overrides: Partial<ComputeDriverConfig> = {}): ComputeDriverConfig {
@@ -260,6 +263,7 @@ export function driverConfig(overrides: Partial<ComputeDriverConfig> = {}): Comp
     driverName: "realm",
     sandboxImage: SANDBOX_IMAGE,
     sandboxStateRoot: join(base, "state"),
+    stateDir: join(base, "realm-state"),
     secretRoot: join(base, "secrets"),
     workspaceRoot: join(base, "workspace"),
     implementationVersion: IMPLEMENTATION_VERSION,
@@ -271,6 +275,17 @@ export function driverConfig(overrides: Partial<ComputeDriverConfig> = {}): Comp
   mkdirSync(config.sandboxStateRoot, { recursive: true });
   mkdirSync(config.workspaceRoot, { recursive: true });
   return config;
+}
+
+// Creates a project directory and writes the registry entry that pins it, as the daemon does when it admits a project. The directory
+// must lie under the config's ceiling. Returns the sandbox name a create binds that directory under: "realm-" plus the session id of its
+// real path.
+export function writeSandboxWorkspaceEntry(config: ComputeDriverConfig, workspaceDir: string): string {
+  mkdirSync(workspaceDir, { recursive: true });
+  const pinned = bindRoot(workspaceDir);
+  const sessionId = sessionIdOfWorkspace(pinned.realPath);
+  writeWorkspaceEntry(config.stateDir, pinned, sessionId);
+  return sandboxNameOfSession(sessionId);
 }
 
 // A create request the realm profile accepts, carrying launch material the driver can verify with. Each test changes one field

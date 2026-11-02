@@ -21,7 +21,7 @@ import { ComputeDriver } from "../../../src/runtime/driver/compute-driver.js";
 import { DriverLifecycle } from "../../../src/runtime/driver/lifecycle.js";
 import { LibpodClient } from "../../../src/runtime/libpod-client.js";
 import { LIBPOD_API_VERSION_HEADER, matchLibpodRoute, PING_PATH } from "../../../src/runtime/libpod-routes.js";
-import { FakeLibpod, FakeRuntime, GATEWAY_ENDPOINT, IMPLEMENTATION_VERSION, SANDBOX_IMAGE, driverConfig, realmLabels, validSandbox } from "./fakes.js";
+import { FakeLibpod, FakeRuntime, GATEWAY_ENDPOINT, IMPLEMENTATION_VERSION, SANDBOX_IMAGE, driverConfig, realmLabels, validSandbox, writeSandboxWorkspaceEntry } from "./fakes.js";
 
 interface Fixtures {
   readonly dir: string;
@@ -99,6 +99,7 @@ void test("PD-05: a complete environment yields the sockets, the libpod socket, 
     driverName: "realm",
     sandboxImage: SANDBOX_IMAGE,
     sandboxStateRoot: SANDBOX_STATE_ROOT,
+    stateDir: "/var/lib/realm/daemon-state",
     secretRoot: SECRET_ROOT,
     workspaceRoot: WORKSPACE_ROOT,
     implementationVersion: IMPLEMENTATION_VERSION,
@@ -459,6 +460,7 @@ void test("PRD-CTR-03: a sweep that fails closes the server, so no socket stays 
 void test("PRD-CTR-03: a create that arrives before the sweep has resolved is refused before it writes anything", async (t) => {
   const engine = await startFakeEngine(t);
   const config = driverConfig();
+  const name = writeSandboxWorkspaceEntry(config, join(config.workspaceRoot, "project-a"));
   t.after(() => {
     rmSync(join(config.sandboxStateRoot, ".."), { recursive: true, force: true });
   });
@@ -477,12 +479,12 @@ void test("PRD-CTR-03: a create that arrives before the sweep has resolved is re
     runtime: new FakeRuntime(),
   });
 
-  await assert.rejects(driver.createSandbox(validSandbox()), refusedWith("REALM_NOT_ACTIVE"));
+  await assert.rejects(driver.createSandbox(validSandbox({ name })), refusedWith("REALM_NOT_ACTIVE"));
 
   assert.equal(libpod.listCalls + libpod.inspectCalls, 0, "the refused create made no libpod call");
   assert.deepEqual(engine.routes, []);
-  assert.equal(existsSync(join(config.sandboxStateRoot, "realm-session-1")), false, "no state directory was made");
-  assert.equal(existsSync(join(config.secretRoot, "realm-session-1")), false, "no launch material was written");
+  assert.equal(existsSync(join(config.sandboxStateRoot, name)), false, "no state directory was made");
+  assert.equal(existsSync(join(config.secretRoot, name)), false, "no launch material was written");
 
   await lifecycle.startupSweep();
   assert.doesNotThrow(() => {
