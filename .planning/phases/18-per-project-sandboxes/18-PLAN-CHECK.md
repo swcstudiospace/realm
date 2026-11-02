@@ -100,3 +100,16 @@ Observed, not edited:
 - `18-12-PLAN.md` line 80 says the three documents are "shared" with Phase 17 plan 04. That overstates the overlap for the same reason; it is outside the cited location, so it was left as written.
 - `18-06-PLAN.md` line 104, `status` bullet, cites "step (2) of `resolveSelection`"; the function has steps (a) and (b). Not a blocker, so not edited.
 - The bare "no git command" rule in `18-02`, `18-03`, `18-09` to `18-12` is unchanged. None of those plans has a git-based check, so it does not conflict.
+
+## Round 3 fixes
+
+Applied to plan text only, on `gsd/v3-integrate-wave2` from head `ebf55f3`. Line numbers are the pre-edit lines. No `npm`, build, test, gate, omp, container or daemon command was run; read-only git (`show --stat`) was used to check commit `9e6ed08`.
+
+- B6, `18-06-PLAN.md` T2 `up` action (lines 101 to 102): gap confirmed; applied. `resolveSelection` step (a) reads `selection.sessionId` (line 90), but the `up` steps did not say where `up` gets it. Holds: `18-01-PLAN.md` line 75 (C4) says `up` carries `workspaceRoot` only and the daemon derives the id; `18-05-PLAN.md` line 77 says `up` carries `workspaceRoot` only, without the derivation. Applied: a new bullet after line 101 states that dispatch canonicalizes the path with `bindRoot` and builds `selection = { workspaceRoot: realPath, sessionId: sessionIdOfWorkspace(realPath) }` before step (2); the wire never carries a `sessionId` for `up`. Done-when T1 case (h) added after line 97: a re-up of a live project returns the existing handle, adds no second registry entry and creates no second handle.
+- W-4, `18-03-PLAN.md` line 67: holds; the standing rule at line 40 says "no commit". Applied: "in the commit message body and in the handoff to the parent" becomes "in the handoff to the parent".
+- W-S, `18-03-PLAN.md` line 74 (stop rule): holds; the B4 threshold (`MemTotal` at least 4 GiB, 4194304 kB; online CPUs at least 4) is at line 67, but the stop rule did not name it as a BLOCKED trigger. Applied: a new bullet after line 74.
+- Observed-1, `18-12-PLAN.md` line 80: holds, with a narrower overlap. `17-04-PLAN.md` `files_modified` lists omp.md, runtime-decision.md, hardening-plan.md and AGENTS.md, and its line 87 forbids editing openshell.md. Only two of this plan's three documents are shared. Applied: line 80 names omp.md and runtime-decision.md as shared and openshell.md as not shared.
+- Observed-2, `18-06-PLAN.md` line 104 (`status` bullet): holds; `resolveSelection` has steps (a) and (b). Applied: "step (2) of `resolveSelection`" becomes "steps (a) and (b) of `resolveSelection`".
+- W-6, `18-12-PLAN.md` line 14 (external_gates): holds; the gate names Phase 17 plan 04 without a commit. `git show --stat 9e6ed08` shows it touches AGENTS.md, docs/integration/hardening-plan.md, docs/integration/omp.md and docs/integration/runtime-decision.md, the four `files_modified` of 17-04; it is listed at `17-VERIFICATION.md` line 120. Applied: line 14 names the commit and its four files.
+
+The two "Observed, not edited" items at lines 100 and 101 are resolved by Observed-1 and Observed-2 above.
