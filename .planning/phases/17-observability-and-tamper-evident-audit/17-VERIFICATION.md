@@ -126,3 +126,17 @@ Earlier live results are not Phase 17 evidence for this tree. Spike S17-a is rec
 - Phase 14 `startupReapLineFor` gap: closed at code level by `652919a`; the live re-run is still needed.
 
 Still open: O-e (D-1701 driver-only probe, owner ratification), O-a (audit.head scan cost), O-b (unreadable audit file diagnostic), O-c (crash stack not logged), O-d (audit.head covers only the daemon's own session file), O-g and O-h. Live items remain human-needed; none has run.
+
+## Owner rulings (2026-11-02)
+
+The owner ruled on O-a to O-e on 2026-11-02. Each ruling is recorded as a dated amendment in `17-CONTEXT.md` (D-1701 and D-1704) and in `docs/integration/runtime-decision.md`. The code change for O-a and O-b follows in the commit titled "fix(audit): read the audit head from the file tail (OBS-02)". The text above is unchanged.
+
+| Item | Outcome |
+| --- | --- |
+| O-a. `audit.head` cost | Ruled: the head is read from the file tail only. It carries `sessionId`, `seq` and `lineSha256`, with no `line` field. The read is bounded to two 4 MiB windows, so its cost no longer grows with the file size. Code change in the commit above. |
+| O-b. unreadable audit file | Ruled: an audit file that exists but cannot be read logs `audit.unreadable` (warn, reason `unreadable`) to `<stateDir>/daemon.log` through the entry writer, at startup and at shutdown. A missing file and a file with no chained line log nothing. Code change in the commit above. |
+| O-c. crash stack | Ruled: accepted as a trade-off. An uncaught failure logs only the catalogue code (`daemon.failed`); stacks are not logged, by the privacy rule. No code change. |
+| O-d. `audit.head` scope | Ruled: documented as is. `audit.head` covers only the daemon's own session file, `audit/daemon.jsonl`. No code change. |
+| O-e. driver-only loss (D-1701) | Ruled: ratified and amended. Driver-only loss is classified as `OPENSHELL_GATEWAY_LOST` when the driver's socket probe fails. The probe runs on the supervisor's failure path (`src/runtime/agentos.ts`, `src/runtime/agentos-driver.ts`). Driver-only loss is removed from the D-1701 coverage limits. No code change. |
+
+O-f, O-g and O-h are not covered by these rulings and remain open. The rulings do not close the live items: scenarios 5, 6 and 10 and spike S17-b have not run, and this addendum claims no live result.
