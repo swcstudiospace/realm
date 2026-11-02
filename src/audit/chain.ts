@@ -17,6 +17,7 @@
 import { createHash, type Hash } from "node:crypto";
 import { closeSync, constants, fstatSync, openSync, readSync } from "node:fs";
 import { AnchorError, newLeafHash, nodeHash, type AnchorMismatch, type AnchorRecord } from "./anchor.js";
+import type { ErrorCode } from "../core/errors.js";
 
 export const AUDIT_LINE_MAX_BYTES = 4 * 1024 * 1024;
 export const AUDIT_GENESIS_PREV = "0".repeat(64);
@@ -82,6 +83,8 @@ export interface AuditCheck {
   readonly exitCode: 0 | 1 | 2;
   readonly line?: number;
   readonly reason?: AuditCheckReason;
+  // The catalogue code of a typed error that stopped the anchor check. Set with exitCode 2 in place of reason.
+  readonly code?: ErrorCode;
   readonly lines: number;
   readonly chainedLines: number;
   // Legacy lines before the chain start. They carry no seq and no checkpoint covers them.
@@ -502,19 +505,27 @@ export function checkAuditFile(file: string, options: AuditCheckOptions = {}): A
   if (options.head !== undefined) {
     const parsed = parseAuditCheckpoint(options.head);
     if (parsed === undefined) {
-      return checkError("bad-checkpoint");
+      return checkError({ reason: "bad-checkpoint" });
     }
     pins.push(parsed);
   }
   let result: VerifyAuditResult;
-  let anchor: AnchorCheck | undefined;
   try {
     result = verifyWithPins(file, pins);
-    if (result.broken === undefined && options.anchor !== undefined) {
-      anchor = checkAnchor(file, options.anchor, result.lines);
-    }
   } catch {
-    return checkError("unreadable");
+    return checkError({ reason: "unreadable" });
+  }
+  let anchor: AnchorCheck | undefined;
+  if (result.broken === undefined && options.anchor !== undefined) {
+    try {
+      anchor = checkAnchor(file, options.anchor, result.lines);
+    } catch (error: unknown) {
+      // A typed error keeps its own code. Any other failure while reading the file is an unreadable file.
+      if (error instanceof AnchorError) {
+        return checkError({ code: error.code });
+      }
+      return checkError({ reason: "unreadable" });
+    }
   }
   const broken = result.broken;
   const ok = broken === undefined && (anchor === undefined || anchor.ok);
@@ -649,11 +660,12 @@ class StreamingMerkleRoot {
   }
 }
 
-function checkError(reason: AuditCheckReason): AuditCheck {
+// A check that could not run, exit 2. It names a reason (a file or checkpoint failure) or the code of a typed error.
+function checkError(failure: { readonly reason: AuditCheckReason } | { readonly code: ErrorCode }): AuditCheck {
   return {
     ok: false,
     exitCode: 2,
-    reason,
+    ...failure,
     lines: 0,
     chainedLines: 0,
     unprotected: 0,
