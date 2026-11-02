@@ -1,9 +1,15 @@
 name: Pages
 
-# Started by the release job in ci.yml after verify and release, and by hand. There is no push
-# trigger: it would deploy a commit whose verify run failed.
+# Started by the release job in ci.yml after verify and release, by rollback.yml with a known-good tag, and by hand. There
+# is no push trigger: it would deploy a commit whose verify run failed. An empty source_ref builds the dispatched branch.
 on:
   workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Release tag to build the documentation from, for example v0.3.3. Empty builds the dispatched branch.
+        required: false
+        default: ""
+        type: string
 
 # No workflow-wide grant: each job declares exactly what its actions call.
 permissions: {}
@@ -23,9 +29,21 @@ jobs:
       contents: read # actions/checkout
       pages: read # actions/configure-pages: GET /repos/{owner}/{repo}/pages
     steps:
+      # The ref is checked before checkout uses it. It reaches the shell only through the environment.
+      - name: Validate source ref
+        env:
+          SOURCE_REF: ${{ inputs.source_ref }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${SOURCE_REF}" && ! "${SOURCE_REF}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::source_ref must be empty or match v<major>.<minor>.<patch>." >&2
+            exit 1
+          fi
+
       - name: Checkout source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ inputs.source_ref }}
           persist-credentials: false
 
       - name: Set up Node.js 22

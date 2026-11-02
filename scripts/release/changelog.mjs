@@ -25,6 +25,8 @@ const CATEGORY_BY_TYPE = new Map([
 const INTERNAL_SCOPES = new Set(['planning']);
 const CONVENTIONAL_HEADER = /^([a-z]+)(?:\(([^)]*)\))?(!)?:/;
 const REVERT_BODY = /^This reverts commit ([0-9a-f]{7,40})\b/m;
+// A commit that removes earlier feature commits without `git revert` names each one in a `Removes: <sha>` trailer.
+const REMOVES_TRAILER = /^Removes: ([0-9a-f]{7,40})$/gm;
 // Log records: each starts with a record separator (0x1e), and its fields are split by a unit separator (0x1f),
 // so a multi-line commit body cannot be mistaken for another record.
 const LOG_FORMAT = '%x1e%H%x1f%h%x1f%s%x1f%b';
@@ -138,9 +140,38 @@ function collectCommits(root, since) {
   return commits;
 }
 
+// A commit that removes earlier feature commits without `git revert` names each one in a `Removes: <sha>` trailer. Each
+// named commit in the range leaves with it. The removal leaves too when every commit it names is in the range; one that
+// names a commit from an earlier release stays, so the removal of a shipped feature is still recorded. Only commits that
+// survived the revert pairing count as removals, so a reverted removal restores the features it removed. Selection is by
+// commit id, never by subject or file: a commit that shares a title or a file with a removed one is kept.
+function dropRemoved(all, remaining) {
+  const gone = new Set();
+  for (const commit of remaining) {
+    const named = [...commit.body.matchAll(REMOVES_TRAILER)].map((match) => match[1]);
+    if (named.length === 0) {
+      continue;
+    }
+    let inRange = true;
+    for (const sha of named) {
+      const target = all.find((other) => other.hash.startsWith(sha));
+      if (target === undefined) {
+        inRange = false;
+      } else {
+        gone.add(target.hash);
+      }
+    }
+    if (inRange) {
+      gone.add(commit.hash);
+    }
+  }
+  return remaining.filter((commit) => !gone.has(commit.hash));
+}
+
 function collectEntries(root, since) {
   const entries = [];
-  for (const { abbrev, subject } of dropReverted(collectCommits(root, since))) {
+  const commits = collectCommits(root, since);
+  for (const { abbrev, subject } of dropRemoved(commits, dropReverted(commits))) {
     if (subject.startsWith('chore(release)') || isInternal(subject)) {
       continue;
     }
