@@ -142,3 +142,19 @@ The owner ruled on O-a to O-e on 2026-11-02. Each ruling is recorded as a dated 
 O-f, O-g and O-h are not covered by these rulings and remain open. The rulings do not close the live items: scenarios 5, 6 and 10 and spike S17-b have not run, and this addendum claims no live result.
 
 Amendment (2026-11-02, later the same day): the owner answered the Phase 18 question on `audit.head` with per-session heads, as Phase 18 plan C6 has it. That amends the O-d row above (documented as is) for each session's audit file, `<stateDir>/audit/<sessionId>.jsonl`. The daemon's own file keeps its head. This amendment is recorded in `.planning/STATE.md` and in the Phase 18 contract (plan 01).
+
+## Addendum (lane B, 2026-11-02): O-g closed in code
+
+Commit `3a6decc` (`fix(observe): put the up correlation id on tool-call audit lines (OBS-02, O-g)`) on `gsd/v3-lane-b`. Record: `17-SUMMARY.md`.
+
+| Item | Status | Evidence |
+|---|---|---|
+| O-g. `up` correlation id on an audit line | Closed in code; owner confirmation requested | A tool call over an attached session carries `upId` on its admission and result audit lines (`src/tools/dispatch.ts` `CallScope`, `src/audit/log.ts`, `src/daemon/daemon.ts` tool case). Failing before: `OBS-02: the up correlation id is on the admission and result audit lines of a tool call in that session` fails on `upId` undefined. Passing after: daemon, dispatcher and audit suites, 236 pass, 0 fail. The O-g text asks the owner to confirm the join is needed for tool calls only; that confirmation is still open. |
+| OBS-02 | Automated: partial (the up id gap closed; rotation and unlogged refusals closed by `a044d12` and `757a6b2`; live scenario 6 not run) | As above, plus `docs/integration/runtime-decision.md` audit section. |
+| D-1703 | Pass (automated), with the up id now on tool-call audit lines | `upId` is additive and optional; calls with no attached session carry none. |
+| O-h | Open | Owner ruling needed. |
+| 17-05 (scenarios 5, 6, 10, S17-b) | HELD-OWNER | Owner live window. Nothing in this addendum claims a live result. |
+
+Gate set on the code tree of `3a6decc`: typecheck 0; lint 0; test 0 (2538 tests, 2505 pass, 0 fail, 33 skipped); build 0; test:integration 0 (202 tests, 171 pass, 0 fail, 31 skipped; Podman-gated items skip on the PATH podman 4.9.3); test:scripts 0 (282 pass); check:docs 0; check:gates 0; check:pack 0; check:mcp 0. omp version: UNVERIFIED in this lane (shell guard refused `omp --version`).
+
+Site build (`site/`, `npm run build`): exit 0 with a logged render `TypeError` on the unchanged page `planning/phases/13-quality-ratchet/13-RESEARCH.md`; whether it predates this lane is UNVERIFIED. See `17-SUMMARY.md`.
