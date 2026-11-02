@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { PassThrough, Writable } from "node:stream";
 import { REALM_TOOL_METHOD, runAcpAgent } from "../../src/acp/agent.js";
 import { sendRequest } from "../../src/daemon/channel.js";
-import { connectDaemon } from "../../src/daemon/client.js";
+import { connectDaemon, selectionOf } from "../../src/daemon/client.js";
 import { type StartedDaemon, startDaemon } from "../../src/daemon/daemon.js";
 import { createMcpServer, type McpDispatcher } from "../../src/mcp/server.js";
 import type { PodmanProbeResult } from "../../src/runtime/podman-probe.js";
@@ -29,7 +29,7 @@ type Answer = (call: unknown) => Promise<ToolOutcome>;
 
 // Starts a real daemon on its control socket with every host seam faked. One t.after brings the daemon down, then
 // removes the scratch directory, so the socket is closed before the directory goes.
-async function startRealDaemon(t: TestContext): Promise<StartedDaemon> {
+async function startRealDaemon(t: TestContext): Promise<{ readonly daemon: StartedDaemon; readonly workspace: string }> {
   const base = realpathSync(mkdtempSync(join(tmpdir(), "realm-daemon-equivalence-")));
   const workspace = join(base, "ws");
   mkdirSync(workspace);
@@ -58,7 +58,7 @@ async function startRealDaemon(t: TestContext): Promise<StartedDaemon> {
     }
     rmSync(base, { recursive: true, force: true });
   });
-  return daemon;
+  return { daemon, workspace };
 }
 
 interface Reply {
@@ -163,9 +163,9 @@ async function overDaemon(
   t: TestContext,
   answer: Answer,
 ): Promise<{ readonly mcp: Seen; readonly acp: Seen }> {
-  const daemon = await startRealDaemon(t);
+  const { daemon, workspace } = await startRealDaemon(t);
   daemon.handle.dispatcher.call = answer;
-  const client = connectDaemon(daemon.socketPath);
+  const client = connectDaemon(daemon.socketPath, selectionOf(workspace));
   t.after(() => {
     client.close();
   });

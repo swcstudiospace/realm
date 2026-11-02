@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { RealmError } from "../../src/core/errors.js";
 import { displayStatus } from "../../src/core/status.js";
 import type { State } from "../../src/core/states.js";
-import { connectDaemon } from "../../src/daemon/client.js";
+import { connectDaemon, selectionOf } from "../../src/daemon/client.js";
 import {
   startRealmDaemon,
   startScriptedControlServer,
@@ -60,8 +60,8 @@ async function failureCode(promise: Promise<unknown>): Promise<string> {
 void test("HARN-02: status is active through the real client, then down removes the socket", async (t) => {
   const { base, daemon } = await startFixture(t, "advisory");
   assert.equal(existsSync(daemon.socketPath), true);
-  const client = connectDaemon(daemon.socketPath);
-  const up = await client.up(join(base, "ws"));
+  const client = connectDaemon(daemon.socketPath, selectionOf(join(base, "ws")));
+  const up = await client.up();
   assert.equal(up.snapshot.state, "active");
   const status = await client.status();
   assert.equal(status.snapshot.state, "active");
@@ -76,9 +76,9 @@ void test("HARN-02: status is active through the real client, then down removes 
 
 for (const mode of ["advisory", "fail-closed"] as const) {
   void test(`HARN-02: the policy.json mode ${mode} is reported by the status reply`, async (t) => {
-    const { daemon } = await startFixture(t, mode);
+    const { base, daemon } = await startFixture(t, mode);
     assert.equal((JSON.parse(readFileSync(daemon.policyPath, "utf8")) as { mode: string }).mode, mode);
-    const client = connectDaemon(daemon.socketPath);
+    const client = connectDaemon(daemon.socketPath, selectionOf(join(base, "ws")));
     assert.equal((await client.status()).mode, mode);
   });
 }
@@ -97,7 +97,7 @@ void test("HARN-02: the scripted control server serves each scripted state", asy
   let current: () => ScriptedReply = () => ({ kind: "hang" });
   const server = await startScriptedControlServer(join(base, "c.sock"), () => current());
   servers.push(server);
-  const client = connectDaemon(server.socketPath);
+  const client = connectDaemon(server.socketPath, selectionOf(join(base, "ws")));
 
   current = () => ({ kind: "reply", result: snapshotFor("connecting", "connecting") });
   const connecting = await client.status();

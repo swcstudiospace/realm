@@ -4,7 +4,7 @@
 
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough, Writable } from "node:stream";
@@ -47,6 +47,11 @@ const ENV: EnvironmentLike = {
 };
 
 const DAEMON_ENTRY = `${STATE_DIR}/daemon/daemon.js`;
+// A real directory for the workspace root the attach names. selectionOf canonicalizes it, so it must exist.
+const WORKSPACE = realpathSync(mkdtempSync(join(tmpdir(), "realm-mcp-attach-ws-")));
+after(() => {
+  rmSync(WORKSPACE, { recursive: true, force: true });
+});
 const STATUS = { mode: "advisory" } as DaemonStatus;
 
 // Collects written text. Each write resolves any waiter whose marker has arrived, so tests await
@@ -86,14 +91,14 @@ void test("realm mcp spawns the detached daemon when none answers, claims the wo
   let statusCalls = 0;
   const upCalled = deferred<undefined>();
   const upSettled = deferred<DaemonStatus>();
-  const connect: ConnectDaemon = () => ({
+  const connect: ConnectDaemon = (_socketPath, selection) => ({
     status: () => {
       statusCalls += 1;
       // The first liveness probe finds no daemon; the probe after the spawn finds one.
       return statusCalls === 1 ? Promise.reject(makeRealmError("REALM_NOT_ACTIVE")) : Promise.resolve(STATUS);
     },
-    up: (workspaceRoot: string) => {
-      upRoots.push(workspaceRoot);
+    up: () => {
+      upRoots.push(selection.workspaceRoot);
       upCalled.resolve(undefined);
       return upSettled.promise;
     },
@@ -111,7 +116,7 @@ void test("realm mcp spawns the detached daemon when none answers, claims the wo
   const input = new PassThrough();
   const output = captureWriter();
   const diagnostics = captureWriter();
-  const pending = runCli(["mcp", "--workspace", "/srv/realm-ws"], {
+  const pending = runCli(["mcp", "--workspace", WORKSPACE], {
     env: ENV,
     daemonEntry: DAEMON_ENTRY,
     spawn,
@@ -124,7 +129,7 @@ void test("realm mcp spawns the detached daemon when none answers, claims the wo
 
   await upCalled.promise;
   assert.deepEqual(spawns, [DAEMON_ENTRY], "exactly one detached daemon is spawned");
-  assert.deepEqual(upRoots, ["/srv/realm-ws"], "up claims the named workspace");
+  assert.deepEqual(upRoots, [WORKSPACE], "up claims the named workspace");
   assert.equal(output.text(), "", "no MCP reply is written while up is pending");
 
   upSettled.resolve(STATUS);
@@ -162,7 +167,7 @@ void test("realm mcp waits for a daemon that holds its socket but has not answer
     const input = new PassThrough();
     const output = captureWriter();
     const diagnostics = captureWriter();
-    const pending = runCli(["mcp", "--workspace", "/srv/realm-ws"], {
+    const pending = runCli(["mcp", "--workspace", WORKSPACE], {
       env: ENV,
       daemonEntry: DAEMON_ENTRY,
       spawn,
@@ -194,7 +199,7 @@ void test("realm mcp with no daemon that ever answers exits 1 with DAEMON_START_
     spawns.push(...args);
     return { unref: () => undefined };
   };
-  const result = await runCli(["mcp", "--workspace", "/srv/realm-ws"], {
+  const result = await runCli(["mcp", "--workspace", WORKSPACE], {
     env: ENV,
     daemonEntry: DAEMON_ENTRY,
     spawn,

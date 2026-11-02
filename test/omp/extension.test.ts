@@ -8,7 +8,7 @@ import { runCli } from "../../src/cli/main.js";
 import realmExtension, { reattachEnabledOf } from "../../src/omp/extension.js";
 import type { OmpExtensionApi, OmpSessionContext } from "../../src/omp/plugin.js";
 import type { HostToolDefinition } from "../../src/omp/tools.js";
-import { controlSocketPath } from "../../src/session/paths.js";
+import { controlSocketPath, sessionIdOfWorkspace } from "../../src/session/paths.js";
 import { RealmError } from "../../src/core/errors.js";
 
 const IMAGE = `registry.example.com/realm/workload@sha256:${"0".repeat(64)}`;
@@ -49,7 +49,7 @@ type StubReply = { readonly result: unknown } | { readonly error: { readonly cod
 function startStub(
   socketPath: string,
   onRequest: (hit: Hit) => void,
-  respond: (request: StubRequest) => StubReply = () => ({ result: ACTIVE_STATUS }),
+  respond: (request: StubRequest) => StubReply = (request) => answeredFor(request, ACTIVE_STATUS),
 ): Promise<Server> {
   const server = createServer((socket) => {
     let text = "";
@@ -72,6 +72,25 @@ function startStub(
   });
 }
 
+// The session id a stand-in daemon answers with for a request: the id of the canonical workspace root the request names,
+// derived the way the daemon derives it. The derivation is pure, so a reply that lands after the project directory has been
+// removed still answers and throws nothing. up names its workspace in workspaceRoot; every selected request names it in its
+// selection, and the client always sends the realpath.
+function sessionIdOfRequest(request: StubRequest): string {
+  const params = request.params as { readonly workspaceRoot?: string; readonly selection?: { readonly workspaceRoot: string } } | undefined;
+  const root = params?.workspaceRoot ?? params?.selection?.workspaceRoot;
+  if (root === undefined) {
+    throw new Error("the request names no workspace");
+  }
+  return sessionIdOfWorkspace(root);
+}
+
+// The reply a stand-in daemon gives: the result, stamped with the session id of the workspace the request named. The
+// client refuses an up reply whose session id is not its own, so the stamp is what a real daemon would report.
+function answeredFor(request: StubRequest, result: unknown): StubReply {
+  return { result: { ...(result as object), sessionId: sessionIdOfRequest(request) } };
+}
+
 // A stand-in daemon pinned to one project. Its status is the given status, up answers for the workspace the host asked for
 // through upReply, and every tool call is refused with REALM_NOT_ACTIVE.
 function pinnedDaemon(status: object, upReply: (workspaceRoot: string) => StubReply): (request: StubRequest) => StubReply {
@@ -81,12 +100,13 @@ function pinnedDaemon(status: object, upReply: (workspaceRoot: string) => StubRe
       if (typeof params !== "object" || params === null || !("workspaceRoot" in params) || typeof params.workspaceRoot !== "string") {
         throw new Error("an up request names no workspaceRoot");
       }
-      return upReply(params.workspaceRoot);
+      const reply = upReply(params.workspaceRoot);
+      return "result" in reply ? answeredFor(request, reply.result) : reply;
     }
     if (request.method === "tool") {
       return { result: REFUSED_WRITE };
     }
-    return { result: status };
+    return answeredFor(request, status);
   };
 }
 
@@ -253,9 +273,6 @@ async function within<T>(promise: Promise<T>, ms: number, message: string): Prom
 
 void test("OMP-01: the Omp entry and the CLI dial one control socket, the state directory the runtime config names (G-07)", async (t) => {
   const base = mkdtempSync(join(tmpdir(), "omp-extension-"));
-  t.after(() => {
-    rmSync(base, { recursive: true, force: true });
-  });
   const stateDir = join(base, "state");
   const xdgStateHome = join(base, "xdg-state");
   const env = { XDG_CONFIG_HOME: join(base, "config"), XDG_STATE_HOME: xdgStateHome };
@@ -291,6 +308,9 @@ void test("OMP-01: the Omp entry and the CLI dial one control socket, the state 
   const { pi, handlers } = createHost();
   t.after(() => {
     handlers.get("session_shutdown")?.();
+  });
+  t.after(() => {
+    rmSync(base, { recursive: true, force: true });
   });
   realmExtension(pi);
 

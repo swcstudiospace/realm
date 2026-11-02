@@ -22,8 +22,9 @@ import {
   SOCKET_TIMEOUT_MS,
   type ControlReply,
   type ControlRequest,
+  type ControlSelection,
 } from "../daemon/channel.js";
-import { connectDaemon, type DaemonClient, type DaemonStatus } from "../daemon/client.js";
+import { connectDaemon, selectionOf, type DaemonClient, type DaemonStatus } from "../daemon/client.js";
 import { daemonSpawnEnv } from "../daemon/spawn-env.js";
 import { ensureDaemon, daemonAnswers, daemonLogPath, reportingStartFailure } from "../daemon/ensure.js";
 import { defaultRunCommand, runChecks, type DoctorOptions } from "../doctor/checks.js";
@@ -110,7 +111,7 @@ export type SendControlRequest = (
   timeoutMs: number,
 ) => Promise<ControlReply>;
 
-export type ConnectDaemon = (socketPath: string) => DaemonClient;
+export type ConnectDaemon = (socketPath: string, selection: ControlSelection) => DaemonClient;
 
 type McpInput = Parameters<typeof createMcpServer>[1];
 type McpOutput = Parameters<typeof createMcpServer>[2];
@@ -402,7 +403,7 @@ async function runUp(deps: ResolvedDeps, socketPath: string, workspaceRoot: stri
   try {
     await ensureDaemon({
       socketPath,
-      probe: reportingStartFailure(daemonAnswers(deps.connect), deps.stateDir),
+      probe: reportingStartFailure(daemonAnswers(deps.connect, selectionOf(workspaceRoot)), deps.stateDir),
       spawnDaemon: spawnDetachedDaemon(deps),
       timeoutMs: upTimeoutMs,
       pollMs: RETRY_INTERVAL_MS,
@@ -416,10 +417,14 @@ async function runUp(deps: ResolvedDeps, socketPath: string, workspaceRoot: stri
   }
 }
 
-async function runDown(deps: ResolvedDeps, socketPath: string): Promise<CliResult> {
+async function runDown(deps: ResolvedDeps, socketPath: string, workspaceRoot: string): Promise<CliResult> {
   try {
     return replyToResult(
-      await deps.send(socketPath, { id: 1, method: "down" }, controlTimeoutOf(deps, "down")),
+      await deps.send(
+        socketPath,
+        { id: 1, method: "down", params: { selection: selectionOf(workspaceRoot) } },
+        controlTimeoutOf(deps, "down"),
+      ),
     );
   } catch (error) {
     if (!isAbsentDaemon(error)) {
@@ -431,10 +436,14 @@ async function runDown(deps: ResolvedDeps, socketPath: string): Promise<CliResul
 }
 
 
-async function runMetrics(deps: ResolvedDeps, socketPath: string): Promise<CliResult> {
+async function runMetrics(deps: ResolvedDeps, socketPath: string, workspaceRoot: string): Promise<CliResult> {
   try {
     return replyToResult(
-      await deps.send(socketPath, { id: 1, method: "metrics" }, controlTimeoutOf(deps, "metrics")),
+      await deps.send(
+        socketPath,
+        { id: 1, method: "metrics", params: { selection: selectionOf(workspaceRoot) } },
+        controlTimeoutOf(deps, "metrics"),
+      ),
     );
   } catch (error) {
     if (!isAbsentDaemon(error)) {
@@ -444,10 +453,14 @@ async function runMetrics(deps: ResolvedDeps, socketPath: string): Promise<CliRe
   }
 }
 
-async function runStatus(deps: ResolvedDeps, socketPath: string): Promise<CliResult> {
+async function runStatus(deps: ResolvedDeps, socketPath: string, workspaceRoot: string): Promise<CliResult> {
   try {
     return replyToResult(
-      await deps.send(socketPath, { id: 1, method: "status" }, controlTimeoutOf(deps, "status")),
+      await deps.send(
+        socketPath,
+        { id: 1, method: "status", params: { selection: selectionOf(workspaceRoot) } },
+        controlTimeoutOf(deps, "status"),
+      ),
     );
   } catch (error) {
     if (!isAbsentDaemon(error)) {
@@ -536,10 +549,10 @@ async function runDoctorFix(
 }
 
 // Ensures the shared daemon answers on the control socket, spawning it detached when none does.
-async function ensureSharedDaemon(deps: ResolvedDeps, socketPath: string): Promise<void> {
+async function ensureSharedDaemon(deps: ResolvedDeps, socketPath: string, selection: ControlSelection): Promise<void> {
   await ensureDaemon({
     socketPath,
-    probe: reportingStartFailure(daemonAnswers(deps.connect), deps.stateDir),
+    probe: reportingStartFailure(daemonAnswers(deps.connect, selection), deps.stateDir),
     spawnDaemon: spawnDetachedDaemon(deps),
     timeoutMs: controlTimeoutOf(deps, "up"),
     pollMs: MCP_POLL_INTERVAL_MS,
@@ -559,14 +572,16 @@ function writeNotice(deps: ResolvedDeps, status: DaemonStatus): void {
 // call crosses the daemon; no handle is built in-process. stdout carries only MCP messages, so a
 // refused up is written to stderr while the server keeps answering.
 async function runMcp(deps: ResolvedDeps, socketPath: string, workspaceRoot: string): Promise<CliResult> {
+  let selection: ControlSelection;
   try {
-    await ensureSharedDaemon(deps, socketPath);
+    selection = selectionOf(workspaceRoot);
+    await ensureSharedDaemon(deps, socketPath, selection);
   } catch (error) {
     return { exitCode: 1, stdout: "", stderr: attachFailure(error, deps.stateDir) };
   }
-  const client = deps.connect(socketPath);
+  const client = deps.connect(socketPath, selection);
   try {
-    const status = await client.up(workspaceRoot);
+    const status = await client.up();
     writeNotice(deps, status);
   } catch (error) {
     deps.diagnostics.write(attachFailure(error, deps.stateDir));
@@ -589,16 +604,18 @@ async function runMcp(deps: ResolvedDeps, socketPath: string, workspaceRoot: str
 // client as its dispatcher. stdout carries only ACP frames, so startup and refusals go to stderr. The
 // session must reach active or degraded before the server starts; any other state exits 1 with its code.
 async function runAcp(deps: ResolvedDeps, socketPath: string, workspaceRoot: string): Promise<CliResult> {
+  let selection: ControlSelection;
   try {
-    await ensureSharedDaemon(deps, socketPath);
+    selection = selectionOf(workspaceRoot);
+    await ensureSharedDaemon(deps, socketPath, selection);
   } catch (error) {
     return { exitCode: 1, stdout: "", stderr: attachFailure(error, deps.stateDir) };
   }
-  const client = deps.connect(socketPath);
+  const client = deps.connect(socketPath, selection);
   try {
     let status: DaemonStatus;
     try {
-      status = await client.up(workspaceRoot);
+      status = await client.up();
     } catch (error) {
       return { exitCode: 1, stdout: "", stderr: attachFailure(error, deps.stateDir) };
     }
@@ -744,11 +761,11 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
       return runAcp(resolved, socketPath, workspaceRoot);
     }
     case "down":
-      return runDown(resolved, socketPath);
+      return runDown(resolved, socketPath, deps.cwd ?? process.cwd());
     case "status":
-      return runStatus(resolved, socketPath);
+      return runStatus(resolved, socketPath, deps.cwd ?? process.cwd());
     case "metrics":
-      return runMetrics(resolved, socketPath);
+      return runMetrics(resolved, socketPath, deps.cwd ?? process.cwd());
     case "doctor":
       return parsed.words.length === 0
         ? runDoctor(resolved, runtimeConfig, socketPath)

@@ -7,9 +7,12 @@ import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { RealmError } from "../../src/core/errors.js";
 import { daemonAnswers, ensureDaemon, type DaemonPresence } from "../../src/daemon/ensure.js";
+import type { ControlSelection } from "../../src/daemon/channel.js";
 import { scaledMs, testTimeout } from "../support/timing.js";
 
 const SOCKET = "/state/run/control.sock";
+// The selection every daemonAnswers probe in this file is built with. daemonAnswers derives none itself.
+const SELECTION: ControlSelection = { workspaceRoot: "/state/workspace", sessionId: "p0123456789ab" };
 // The bound for a daemon that answers after a few polls: far above any host stall.
 const ANSWER_BOUND_MS = 30_000;
 
@@ -203,22 +206,23 @@ function scriptedClient(status: () => Promise<never>): ScriptedClient {
 
 void test("daemonAnswers reports an answering daemon when the status request succeeds, and closes the client", async () => {
   let closed = 0;
-  const answers = daemonAnswers((path) => {
+  const answers = daemonAnswers((path, selection) => {
     assert.equal(path, SOCKET);
+    assert.deepEqual(selection, SELECTION);
     return {
       status: () => Promise.resolve({} as never),
       close: () => {
         closed += 1;
       },
     };
-  });
+  }, SELECTION);
   assert.equal(await answers(SOCKET), "answering");
   assert.equal(closed, 1);
 });
 
 void test("daemonAnswers reports an absent socket for a refused dial", async () => {
   const scripted = scriptedClient(() => Promise.reject(new RealmError("REALM_NOT_ACTIVE")));
-  assert.equal(await daemonAnswers(() => scripted.client)(SOCKET), "absent");
+  assert.equal(await daemonAnswers(() => scripted.client, SELECTION)(SOCKET), "absent");
   assert.equal(scripted.closes(), 1);
 });
 
@@ -227,7 +231,7 @@ void test("daemonAnswers reports a daemon that holds the socket but has not answ
   // binding its socket. Both mean a daemon is there, so the host waits and never spawns another.
   for (const code of ["TOOL_TIMEOUT", "SCHEMA_INVALID"] as const) {
     const scripted = scriptedClient(() => Promise.reject(new RealmError(code)));
-    assert.equal(await daemonAnswers(() => scripted.client)(SOCKET), "starting", code);
+    assert.equal(await daemonAnswers(() => scripted.client, SELECTION)(SOCKET), "starting", code);
     assert.equal(scripted.closes(), 1, `${code} closes the client`);
   }
 });
@@ -235,10 +239,10 @@ void test("daemonAnswers reports a daemon that holds the socket but has not answ
 void test("daemonAnswers propagates any other failure unchanged and still closes the client", async () => {
   const refusal = new RealmError("PODMAN_MISSING");
   const refused = scriptedClient(() => Promise.reject(refusal));
-  await assert.rejects(daemonAnswers(() => refused.client)(SOCKET), (error: unknown) => error === refusal);
+  await assert.rejects(daemonAnswers(() => refused.client, SELECTION)(SOCKET), (error: unknown) => error === refusal);
   assert.equal(refused.closes(), 1);
   const defect = new Error("socket reset");
   const broken = scriptedClient(() => Promise.reject(defect));
-  await assert.rejects(daemonAnswers(() => broken.client)(SOCKET), (error: unknown) => error === defect);
+  await assert.rejects(daemonAnswers(() => broken.client, SELECTION)(SOCKET), (error: unknown) => error === defect);
   assert.equal(broken.closes(), 1);
 });

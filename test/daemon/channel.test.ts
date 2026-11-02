@@ -26,6 +26,7 @@ import {
   replyForMalformedLine,
   sendRequest,
   unknownMethodReply,
+  parseControlSelection,
 } from "../../src/daemon/channel.js";
 import { validate } from "../../src/contract/validate.js";
 import { TOOL_CALL_TIMEOUT_MS } from "../../src/tools/dispatch.js";
@@ -410,4 +411,70 @@ void test("RT-06: a reply longer than MAX_CONTROL_LINE_BYTES is refused with SCH
     (error: unknown) => error,
   );
   assert.ok(failure instanceof RealmError && failure.code === "SCHEMA_INVALID");
+});
+
+const SELECTION_SESSION = "p0123456789ab";
+const SELECTION = { workspaceRoot: "/srv/project", sessionId: SELECTION_SESSION };
+
+void test("MULTI-03: up takes only workspaceRoot, and a sessionId on up is refused with SCHEMA_INVALID", () => {
+  assert.deepEqual(parseControlSelection("up", { workspaceRoot: "/x" }), { selection: null });
+  assertRefusesSchemaInvalid(() => parseControlSelection("up", { workspaceRoot: "/x", sessionId: SELECTION_SESSION }));
+  assertRefusesSchemaInvalid(() => parseControlSelection("up", undefined));
+  assertRefusesSchemaInvalid(() => parseControlSelection("up", { workspaceRoot: "x" }));
+});
+
+void test("MULTI-03: status, down and metrics without a selection are refused with SCHEMA_INVALID", () => {
+  for (const method of ["status", "down", "metrics"] as const) {
+    assertRefusesSchemaInvalid(() => parseControlSelection(method, undefined));
+    assertRefusesSchemaInvalid(() => parseControlSelection(method, {}));
+  }
+});
+
+void test("MULTI-03: a valid selection is returned as parsed for status, down, metrics and tool", () => {
+  for (const method of ["status", "down", "metrics"] as const) {
+    assert.deepEqual(parseControlSelection(method, { selection: SELECTION }), { selection: SELECTION });
+  }
+  assert.deepEqual(parseControlSelection("tool", { tool: { name: "x" }, selection: SELECTION }), {
+    selection: SELECTION,
+  });
+});
+
+void test("MULTI-03: a selection with a missing sessionId or a malformed sessionId is refused", () => {
+  assertRefusesSchemaInvalid(() => parseControlSelection("status", { selection: { workspaceRoot: "/x" } }));
+  assertRefusesSchemaInvalid(() =>
+    parseControlSelection("status", { selection: { workspaceRoot: "/x", sessionId: "p/abc" } }),
+  );
+  assertRefusesSchemaInvalid(() =>
+    parseControlSelection("status", { selection: { workspaceRoot: "/x", sessionId: "p..abc" } }),
+  );
+  assertRefusesSchemaInvalid(() => parseControlSelection("status", { selection: { workspaceRoot: "/x", sessionId: "" } }));
+});
+
+void test("MULTI-03: a relative workspaceRoot, an extra selection key and an extra params key are refused", () => {
+  assertRefusesSchemaInvalid(() =>
+    parseControlSelection("status", { selection: { workspaceRoot: "x", sessionId: SELECTION_SESSION } }),
+  );
+  assertRefusesSchemaInvalid(() =>
+    parseControlSelection("status", { selection: { ...SELECTION, extra: 1 } }),
+  );
+  assertRefusesSchemaInvalid(() => parseControlSelection("status", { selection: SELECTION, extra: 1 }));
+});
+
+void test("MULTI-03: a workspaceRoot of 4096 characters is accepted and one of 4097 is refused", () => {
+  const longest = `/${"a".repeat(4095)}`;
+  assert.equal(longest.length, 4096);
+  assert.deepEqual(parseControlSelection("up", { workspaceRoot: longest }), { selection: null });
+  const tooLong = `/${"a".repeat(4096)}`;
+  assert.equal(tooLong.length, 4097);
+  assertRefusesSchemaInvalid(() => parseControlSelection("up", { workspaceRoot: tooLong }));
+  assertRefusesSchemaInvalid(() =>
+    parseControlSelection("status", { selection: { workspaceRoot: tooLong, sessionId: SELECTION_SESSION } }),
+  );
+});
+
+void test("MULTI-03: doctor with no params returns no selection; a present but malformed selection is refused", () => {
+  assert.deepEqual(parseControlSelection("doctor", undefined), { selection: null });
+  assert.deepEqual(parseControlSelection("doctor", { selection: SELECTION }), { selection: SELECTION });
+  assertRefusesSchemaInvalid(() => parseControlSelection("doctor", {}));
+  assertRefusesSchemaInvalid(() => parseControlSelection("doctor", { selection: { workspaceRoot: "x" } }));
 });

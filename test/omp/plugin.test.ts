@@ -230,7 +230,7 @@ class FakeDaemon implements DaemonClient {
   }
 
   private value(): DaemonStatus {
-    const base = { snapshot: this.snapshot, display: displayStatus(this.snapshot), mode: this.mode };
+    const base = { snapshot: this.snapshot, display: displayStatus(this.snapshot), mode: this.mode, sessionId: "p0123456789ab" };
     return this.notice === undefined ? base : { ...base, notice: this.notice };
   }
 }

@@ -14,6 +14,7 @@
 import { closeSync, openSync, readSync, statSync } from "node:fs";
 import { ERROR_CODES, makeRealmError, RealmError, type ErrorCode } from "../core/errors.js";
 import type { DaemonClient } from "./client.js";
+import type { ControlSelection } from "./channel.js";
 
 // What one probe of the control socket found.
 export type DaemonPresence = "answering" | "starting" | "absent";
@@ -163,10 +164,11 @@ const SOCKET_HELD_NOT_ANSWERING: readonly ErrorCode[] = ["TOOL_TIMEOUT", "SCHEMA
 // from spawning a second daemon over one that is alive but busy, which would only refuse with LOCK_CONFLICT. The Omp
 // extension spawns the daemon itself, so it meets the same reaping and bind races the CLI does.
 export function daemonAnswers(
-  connect: (socketPath: string) => Pick<DaemonClient, "status" | "close">,
+  connect: (socketPath: string, selection: ControlSelection) => Pick<DaemonClient, "status" | "close">,
+  selection: ControlSelection,
 ): (socketPath: string) => Promise<DaemonPresence> {
   return async (socketPath) => {
-    const client = connect(socketPath);
+    const client = connect(socketPath, selection);
     try {
       await client.status();
       return "answering";

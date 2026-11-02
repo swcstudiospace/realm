@@ -8,7 +8,7 @@
 import { startDetachedDaemon } from "../cli/main.js";
 import { fileURLToPath } from "node:url";
 import { existsSync, realpathSync } from "node:fs";
-import { connectDaemon, type DaemonStatus } from "../daemon/client.js";
+import { connectDaemon, selectionOf, type DaemonStatus } from "../daemon/client.js";
 import { CONTROL_TIMEOUT_MS } from "../daemon/channel.js";
 import { daemonAnswers, ensureDaemon, reportingStartFailure } from "../daemon/ensure.js";
 import { readHostRuntime } from "../runtime/host-paths.js";
@@ -36,9 +36,10 @@ export default function realmExtension(pi: OmpExtensionApi): void {
   const daemonEntry = fileURLToPath(new URL("../daemon/main.js", import.meta.url));
 
   const attachDaemon = async (workspaceRoot: string): Promise<DaemonAttach> => {
+    const selection = selectionOf(workspaceRoot);
     await ensureDaemon({
       socketPath,
-      probe: reportingStartFailure(daemonAnswers(connectDaemon), stateDir),
+      probe: reportingStartFailure(daemonAnswers(connectDaemon, selection), stateDir),
       spawnDaemon: () => {
         // startDetachedDaemon allowlists the child environment (spawn-env.ts). A sentinel does not cross.
         startDetachedDaemon(daemonEntry, stateDir);
@@ -46,9 +47,9 @@ export default function realmExtension(pi: OmpExtensionApi): void {
       timeoutMs: CONTROL_TIMEOUT_MS.up,
       pollMs: 100,
     });
-    const client = connectDaemon(socketPath);
+    const client = connectDaemon(socketPath, selection);
     try {
-      await client.up(workspaceRoot);
+      await client.up();
       return { client, refusal: null };
     } catch (error: unknown) {
       // A refused up leaves the daemon pinned to its own root. Keep the client only when its status answers and reports

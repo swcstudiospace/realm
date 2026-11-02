@@ -24,12 +24,20 @@ import {
 } from "../../src/cli/main.js";
 import { CONTROL_TIMEOUT_MS, type ControlReply, type ControlRequest } from "../../src/daemon/channel.js";
 import type { EnvironmentLike } from "../../src/session/paths.js";
-import type { DaemonStatus } from "../../src/daemon/client.js";
+import { selectionOf, type DaemonStatus } from "../../src/daemon/client.js";
 import type { ToolOutcome } from "../../src/tools/dispatch.js";
 import { boundedWait, pollUntil, scaledMs, testTimeout } from "../support/timing.js";
 
 // This file runs from dist/test/cli, so three levels up is the package root.
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
+
+// Real directories for the workspace roots the CLI is given. selectionOf canonicalizes each root, so each must exist.
+const WORKSPACE = realpathSync(mkdtempSync(join(tmpdir(), "realm-cli-ws-")));
+const OTHER_WORKSPACE = realpathSync(mkdtempSync(join(tmpdir(), "realm-cli-other-ws-")));
+after(() => {
+  rmSync(WORKSPACE, { recursive: true, force: true });
+  rmSync(OTHER_WORKSPACE, { recursive: true, force: true });
+});
 
 // The CLI names its state directory from the runtime config file, the file the daemon reads. This file
 // writes one into a scratch XDG_CONFIG_HOME and removes it when the file's tests finish.
@@ -122,7 +130,7 @@ interface FakeDaemon {
 function fakeDaemon(options: FakeDaemonOptions): FakeDaemon {
   const record: FakeDaemonRecord = { connects: 0, closes: 0, upRoots: [] };
   let statusCalls = 0;
-  const connect: ConnectDaemon = () => {
+  const connect: ConnectDaemon = (_socketPath, selection) => {
     record.connects += 1;
     return {
       status: () => {
@@ -136,8 +144,8 @@ function fakeDaemon(options: FakeDaemonOptions): FakeDaemon {
         }
         return Promise.resolve(STATUS);
       },
-      up: async (workspaceRoot: string) => {
-        record.upRoots.push(workspaceRoot);
+      up: async () => {
+        record.upRoots.push(selection.workspaceRoot);
         return options.up === undefined ? STATUS : options.up();
       },
       call: async (tool: unknown) => (options.call === undefined ? REFUSED_STATUS : options.call(tool)),
@@ -182,7 +190,7 @@ void test("realm up with no daemon spawns the detached child then reports over t
   };
   const result = await runCli(["up"], {
     env: ENV,
-    cwd: "/srv/realm-ws",
+    cwd: WORKSPACE,
     timeoutMs: 500,
     daemonEntry: DAEMON_ENTRY,
     spawn: makeSpawn(spawns),
@@ -205,15 +213,15 @@ void test("realm up with no daemon spawns the detached child then reports over t
   const upRequest = sent[0];
   assert.ok(upRequest !== undefined, "up sends one control request");
   assert.equal(upRequest.method, "up");
-  assert.deepEqual(upRequest.params, { workspaceRoot: "/srv/realm-ws" });
+  assert.deepEqual(upRequest.params, { workspaceRoot: WORKSPACE });
 });
 
 void test("realm up sends the --workspace root as the up params and spawns nothing when the daemon answers (CLI-01)", async () => {
   const sent: ControlRequest[] = [];
   const spawns: SpawnCall[] = [];
-  const result = await runCli(["up", "--workspace", "/srv/other-ws"], {
+  const result = await runCli(["up", "--workspace", OTHER_WORKSPACE], {
     env: ENV,
-    cwd: "/srv/realm-ws",
+    cwd: WORKSPACE,
     timeoutMs: 500,
     daemonEntry: DAEMON_ENTRY,
     connect: fakeDaemon({ probes: [true] }).connect,
@@ -227,7 +235,7 @@ void test("realm up sends the --workspace root as the up params and spawns nothi
   });
   assert.equal(result.exitCode, 0);
   assert.equal(sent.length, 1);
-  assert.deepEqual(sent[0]?.params, { workspaceRoot: "/srv/other-ws" });
+  assert.deepEqual(sent[0]?.params, { workspaceRoot: OTHER_WORKSPACE });
   assert.equal(spawns.length, 0);
 });
 
@@ -259,7 +267,7 @@ void test("realm up treats a status timeout as a daemon that is busy: it waits a
   };
   const result = await runCli(["up"], {
     env: ENV,
-    cwd: "/srv/realm-ws",
+    cwd: WORKSPACE,
     timeoutMs: 500,
     daemonEntry: DAEMON_ENTRY,
     spawn: makeSpawn(spawns),
@@ -281,7 +289,7 @@ void test("realm up exits 1 with the catalogue line when the realm is not active
     const reply: ControlReply = { id: request.id, result: errorState };
     return Promise.resolve(reply);
   };
-  const result = await runCli(["up", "--workspace", "/srv/realm-ws"], {
+  const result = await runCli(["up", "--workspace", WORKSPACE], {
     env: ENV,
     timeoutMs: 500,
     connect: fakeDaemon({ probes: [true] }).connect,
@@ -299,7 +307,7 @@ void test("realm up and mcp refuse a non-absolute or missing --workspace value b
   let sends = 0;
   const deps: CliDeps = {
     env: ENV,
-    cwd: "/srv/realm-ws",
+    cwd: WORKSPACE,
     runCommand: () => {
       probes += 1;
       return Promise.resolve({ exitCode: 0, stdout: "podman version 5.5.0\n" });
@@ -520,9 +528,9 @@ void test("realm mcp --workspace claims the named root and attaches without spaw
   const diagnostics = captureDiagnostics();
   const input = new PassThrough();
   input.end();
-  const result = await runCli(["mcp", "--workspace", "/srv/other-ws"], {
+  const result = await runCli(["mcp", "--workspace", OTHER_WORKSPACE], {
     env: ENV,
-    cwd: "/srv/realm-ws",
+    cwd: WORKSPACE,
     spawn: makeSpawn(spawns),
     connect: daemon.connect,
     mcpInput: input,
@@ -531,7 +539,7 @@ void test("realm mcp --workspace claims the named root and attaches without spaw
   });
   assert.equal(result.exitCode, 0);
   assert.equal(spawns.length, 0);
-  assert.deepEqual(daemon.record.upRoots, ["/srv/other-ws"]);
+  assert.deepEqual(daemon.record.upRoots, [OTHER_WORKSPACE]);
   assert.equal(diagnostics.text(), "");
 });
 
@@ -555,7 +563,7 @@ void test("realm mcp still serves when up is refused and writes the refusal code
   output.on("data", (chunk) => {
     stdout += String(chunk);
   });
-  const pending = runCli(["mcp", "--workspace", "/srv/realm-ws"], {
+  const pending = runCli(["mcp", "--workspace", WORKSPACE], {
     env: ENV,
     spawn: makeSpawn(spawns),
     connect: daemon.connect,
@@ -570,7 +578,7 @@ void test("realm mcp still serves when up is refused and writes the refusal code
   const result = await untilShutdown(pending);
   assert.equal(result.exitCode, 0);
   assert.equal(spawns.length, 0);
-  assert.deepEqual(daemon.record.upRoots, ["/srv/realm-ws"]);
+  assert.deepEqual(daemon.record.upRoots, [WORKSPACE]);
   assert.deepEqual(seen, [{ status: {} }]);
   const reply = JSON.parse(stdout) as { result: Record<string, unknown> };
   assert.deepEqual(reply.result["structuredContent"], REFUSED_STATUS);
@@ -588,7 +596,7 @@ void test("realm mcp writes an ensure failure code to stderr and exits 1 without
   });
   const result = await runCli(["mcp"], {
     env: ENV,
-    cwd: "/srv/realm-ws",
+    cwd: WORKSPACE,
     timeoutMs: 50,
     daemonEntry: DAEMON_ENTRY,
     spawn: makeSpawn(spawns),
@@ -609,9 +617,9 @@ void test("realm mcp exits 1 with MCP_INPUT_FAILED on stderr when its input stre
   const daemon = fakeDaemon({ probes: [true] });
   const input = new PassThrough();
   const output = captureDiagnostics();
-  const pending = runCli(["mcp", "--workspace", "/srv/realm-ws"], {
+  const pending = runCli(["mcp", "--workspace", WORKSPACE], {
     env: ENV,
-    cwd: "/srv/realm-ws",
+    cwd: WORKSPACE,
     timeoutMs: 500,
     daemonEntry: DAEMON_ENTRY,
     spawn: makeSpawn([]),
@@ -660,7 +668,7 @@ void test("a detached daemon that fails startup writes its error to <stateDir>/d
     // The CLI never reads the policy file, but the daemon parses it at startup, so this makes the real
     // daemon entry fail after the CLI has spawned it detached.
     writeFileSync(join(stateDir, "policy.json"), "not json");
-    const result = await runCli(["up", "--workspace", "/srv/realm-ws"], {
+    const result = await runCli(["up", "--workspace", WORKSPACE], {
       env: {
         PATH: "/usr/bin",
         HOME: "/root",
@@ -714,7 +722,7 @@ void test("the CLI creates missing ancestors of a fresh state path at the defaul
     const send: SendControlRequest = (_socketPath, request) => Promise.resolve({ id: request.id, result: ACTIVE_RESULT });
     const result = await runCli(["up"], {
       env: { PATH: "/usr/bin", HOME: "/root", XDG_RUNTIME_DIR: "/run/user/0", XDG_CONFIG_HOME: configHome },
-      cwd: "/srv/realm-ws",
+      cwd: WORKSPACE,
       timeoutMs: 500,
       daemonEntry: DAEMON_ENTRY,
       spawn: makeSpawn([]),
@@ -737,7 +745,7 @@ void test("a failed realm acp up prints the code and the daemon log path on stde
   input.end();
   const result = await runCli(["acp"], {
     env: ENV,
-    cwd: "/srv/realm-ws",
+    cwd: WORKSPACE,
     timeoutMs: 500,
     daemonEntry: DAEMON_ENTRY,
     spawn: makeSpawn([]),
@@ -757,9 +765,9 @@ void test("a failed realm mcp up writes the code and the daemon log path to stde
   input.end();
   const diagnostics = captureDiagnostics();
   const result = await untilShutdown(
-    runCli(["mcp", "--workspace", "/srv/realm-ws"], {
+    runCli(["mcp", "--workspace", WORKSPACE], {
       env: ENV,
-      cwd: "/srv/realm-ws",
+      cwd: WORKSPACE,
       timeoutMs: 500,
       daemonEntry: DAEMON_ENTRY,
       spawn: makeSpawn([]),
@@ -779,6 +787,7 @@ const ACTIVE_DAEMON_STATUS: DaemonStatus = {
   snapshot: { state: "active", reason: "realm active", lastTransitionAt: "2026-10-22T00:00:00.000Z" },
   display: { label: "realm active", degraded: false, reason: "realm active", lastTransitionAt: "2026-10-22T00:00:00.000Z" },
   mode: "advisory",
+  sessionId: "p0123456789ab",
 };
 
 void test("realm acp attaches with up for the workspace, forwards _realm/tool to the daemon, and writes only ACP frames to stdout (CLI-01, TOOL-05)", async () => {
@@ -799,9 +808,9 @@ void test("realm acp attaches with up for the workspace, forwards _realm/tool to
   const output = captureDiagnostics();
   const diagnostics = captureDiagnostics();
   const result = await untilShutdown(
-    runCli(["acp", "--workspace", "/srv/acp-ws"], {
+    runCli(["acp", "--workspace", WORKSPACE], {
       env: ENV,
-      cwd: "/srv/realm-ws",
+      cwd: WORKSPACE,
       timeoutMs: 500,
       daemonEntry: DAEMON_ENTRY,
       spawn: makeSpawn([]),
@@ -815,7 +824,7 @@ void test("realm acp attaches with up for the workspace, forwards _realm/tool to
   assert.equal(result.stdout, "");
   assert.equal(result.stderr, "");
   assert.equal(diagnostics.text(), "");
-  assert.deepEqual(daemon.record.upRoots, ["/srv/acp-ws"]);
+  assert.deepEqual(daemon.record.upRoots, [WORKSPACE]);
   assert.deepEqual(forwarded, [{ status: {} }]);
   const frames = output
     .text()
@@ -842,7 +851,7 @@ void test("realm acp exits 1 with the refusal code on stderr when up leaves the 
   const diagnostics = captureDiagnostics();
   const result = await runCli(["acp"], {
     env: ENV,
-    cwd: "/srv/realm-ws",
+    cwd: WORKSPACE,
     timeoutMs: 500,
     daemonEntry: DAEMON_ENTRY,
     spawn: makeSpawn([]),
@@ -864,7 +873,7 @@ void test("realm acp exits 1 with the refused up code on stderr and writes no fr
   const output = captureDiagnostics();
   const result = await runCli(["acp"], {
     env: ENV,
-    cwd: "/srv/realm-ws",
+    cwd: WORKSPACE,
     timeoutMs: 500,
     daemonEntry: DAEMON_ENTRY,
     spawn: makeSpawn([]),
@@ -887,7 +896,7 @@ void test("realm acp writes an ensure failure code to stderr and exits 1 without
   const output = captureDiagnostics();
   const result = await runCli(["acp"], {
     env: ENV,
-    cwd: "/srv/realm-ws",
+    cwd: WORKSPACE,
     timeoutMs: 50,
     daemonEntry: DAEMON_ENTRY,
     spawn: makeSpawn(spawns),
@@ -944,7 +953,7 @@ void test("the default daemon spawn targets daemon/main.js beside the compiled C
     input.end();
     const result = await runCli(argv, {
       env: ENV,
-      cwd: "/srv/realm-ws",
+      cwd: WORKSPACE,
       spawn: makeSpawn(spawns),
       send,
       connect: daemon.connect,
@@ -969,7 +978,7 @@ void test("each control request is bounded by its own CONTROL_TIMEOUT_MS entry (
   };
   const deps: CliDeps = {
     env: ENV,
-    cwd: "/srv/realm-ws",
+    cwd: WORKSPACE,
     send,
     connect: fakeDaemon({ probes: [true] }).connect,
     runCommand: okVersion,
@@ -987,6 +996,30 @@ void test("each control request is bounded by its own CONTROL_TIMEOUT_MS entry (
   ]);
 });
 
+void test("MULTI-03: realm down, status and metrics each send the selection of the default workspace, never a bare request (CLI-01)", async () => {
+  const sent: ControlRequest[] = [];
+  for (const argv of [["down"], ["status"], ["metrics"]]) {
+    const reply: ControlReply = { id: 1, error: { code: "REALM_NOT_ACTIVE" } };
+    await runCli(argv, {
+      env: ENV,
+      cwd: WORKSPACE,
+      send: (_socketPath, request) => {
+        sent.push(request);
+        return Promise.resolve(reply);
+      },
+      connect: fakeDaemon({ probes: [true] }).connect,
+      runCommand: okVersion,
+      connectSocket: acceptConnect,
+    });
+  }
+  const selection = selectionOf(WORKSPACE);
+  assert.deepEqual(sent, [
+    { id: 1, method: "down", params: { selection } },
+    { id: 1, method: "status", params: { selection } },
+    { id: 1, method: "metrics", params: { selection } },
+  ]);
+});
+
 const STARTUP_NOTICE =
   "A previous daemon's sandbox was destroyed at startup: 1 container(s), 0 session record(s). Files in the workspace were kept; state outside it was lost.";
 
@@ -1000,7 +1033,7 @@ void test("realm mcp writes the up notice to diagnostics once, and nothing when 
     input.end();
     const diagnostics = captureDiagnostics();
     const result = await untilShutdown(
-      runCli(["mcp", "--workspace", "/srv/realm-ws"], {
+      runCli(["mcp", "--workspace", WORKSPACE], {
         env: ENV,
         spawn: makeSpawn([]),
         connect: daemon.connect,
@@ -1025,7 +1058,7 @@ void test("realm acp writes the up notice to diagnostics once, and nothing when 
     const output = captureDiagnostics();
     const diagnostics = captureDiagnostics();
     const result = await untilShutdown(
-      runCli(["acp", "--workspace", "/srv/acp-ws"], {
+      runCli(["acp", "--workspace", WORKSPACE], {
         env: ENV,
         timeoutMs: 500,
         spawn: makeSpawn([]),
@@ -1088,7 +1121,7 @@ function doctorFixFixture(t: TestContext): {
     },
     connect: () => {
       effects.push("connect");
-      return fakeDaemon({ probes: [true] }).connect("");
+      return fakeDaemon({ probes: [true] }).connect("", selectionOf(WORKSPACE));
     },
     spawn: () => {
       effects.push("spawn");

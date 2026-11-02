@@ -12,7 +12,7 @@ import { createConnection, type Socket } from "node:net";
 import { chmodSync, mkdirSync, statSync, type Stats } from "node:fs";
 import { ERROR_CODES, makeRealmError, RealmError, type ErrorCode } from "../core/errors.js";
 import { withTimeout } from "../core/timeout.js";
-import { controlSocketPath } from "../session/paths.js";
+import { controlSocketPath, isSessionId } from "../session/paths.js";
 
 export const CONTROL_METHODS = ["status", "up", "down", "doctor", "tool", "metrics"] as const;
 export type ControlMethod = (typeof CONTROL_METHODS)[number];
@@ -86,6 +86,76 @@ export interface ControlReply {
 
 export interface SendOptions {
   readonly timeoutMs?: number;
+}
+
+// The selection a project-addressed control request carries (contract C4): the canonical workspace root
+// and the session id that root maps to. This module checks shape only. Whether sessionId is the id of the
+// daemon's pinned root is the daemon's check, so the validator neither canonicalizes the path nor derives the id.
+export interface ControlSelection {
+  readonly workspaceRoot: string;
+  readonly sessionId: string;
+}
+
+// The longest workspace root a control selection may carry.
+const MAX_WORKSPACE_ROOT_LENGTH = 4096;
+
+function isWorkspaceRoot(value: unknown): value is string {
+  return (
+    typeof value === "string" && value.length >= 1 && value.length <= MAX_WORKSPACE_ROOT_LENGTH && value.startsWith("/")
+  );
+}
+
+// True when the record carries exactly the listed own keys, no more and no fewer.
+function hasExactKeys(record: Record<string, unknown>, keys: readonly string[]): boolean {
+  const own = Object.keys(record);
+  return own.length === keys.length && keys.every((key) => own.includes(key));
+}
+
+function selectionOfRecord(value: unknown): ControlSelection | undefined {
+  if (!isRecord(value) || !hasExactKeys(value, ["workspaceRoot", "sessionId"])) {
+    return undefined;
+  }
+  const workspaceRoot: unknown = value["workspaceRoot"];
+  const sessionId: unknown = value["sessionId"];
+  if (!isWorkspaceRoot(workspaceRoot) || typeof sessionId !== "string" || !isSessionId(sessionId)) {
+    return undefined;
+  }
+  return { workspaceRoot, sessionId };
+}
+
+// The one validator for control selections. The daemon calls it on every request, and the client builds only
+// values it accepts. up carries only workspaceRoot and yields no selection; doctor may carry no params at all.
+// Every refusal is SCHEMA_INVALID.
+export function parseControlSelection(
+  method: ControlMethod,
+  params: unknown,
+): { readonly selection: ControlSelection | null } {
+  if (method === "up") {
+    if (!isRecord(params) || !hasExactKeys(params, ["workspaceRoot"]) || !isWorkspaceRoot(params["workspaceRoot"])) {
+      throw makeRealmError("SCHEMA_INVALID");
+    }
+    return { selection: null };
+  }
+  if (method === "doctor" && params === undefined) {
+    return { selection: null };
+  }
+  if (!isRecord(params)) {
+    throw makeRealmError("SCHEMA_INVALID");
+  }
+  const selection = selectionOfRecord(params["selection"]);
+  if (selection === undefined) {
+    throw makeRealmError("SCHEMA_INVALID");
+  }
+  // tool carries its ToolCall under `tool` beside the selection; every other method carries the selection alone.
+  if (method !== "tool" && !hasExactKeys(params, ["selection"])) {
+    throw makeRealmError("SCHEMA_INVALID");
+  }
+  return { selection };
+}
+
+// The params every selected request sends. Only the two fields are copied, so nothing else crosses the wire.
+export function selectionParams(selection: ControlSelection): { readonly selection: ControlSelection } {
+  return { selection: { workspaceRoot: selection.workspaceRoot, sessionId: selection.sessionId } };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
