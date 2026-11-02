@@ -39,28 +39,44 @@ Every wave equals `max(deps)+1`; no exception remains. No file appears in two pl
 - **Downstream changes:** plan 06 moves from wave 4 to wave 5 and depends on 04b, because both touch `src/daemon/daemon.ts`. Plans 08 and 09 move from wave 5 to wave 6. Plan 07 stays in wave 4 and depends on 04, which owns `sandbox-binding.test.ts`. Plan 10 is now at its expected wave 6.
 - **Text updated for the new numbering:** 05 (plan 06 is wave 5), 06 (04b removes the spread; wave 5), 07 (parallel with 04b), 11 (plan 06 is wave 5), 12 (04b removes the session equality refusal).
 
-## Rulings applied, pending owner ratification (D18-2)
+## Rulings, owner answers of 2026-11-02 (D18-2, binding)
 
-Applied in `18-01-PLAN.md` as labels; no other text of the contract changed. C6 remains the only owner ruling.
+Applied to the plan set at `96642c1`. The C7 values drafted in cycle 2 were replaced by the owner's values; the derivation formula is unchanged.
 
-- C1: `C1 identity. Engineering ruling, pending owner ratification, within the accepted D5(i).`
-- C2: `C2 containment. Engineering ruling, pending owner ratification: the explicit reading of MULTI-02.` Root equality plus descendants, as the existing helper does.
-- C7: `C7 aggregate bound. Engineering ruling, pending owner ratification (proposed values).` `aggregateMemoryBytes = 4 * 1024 ** 3`, `aggregateNanoCpus = 8_000_000_000`, `maxSessions = min(floor(4 GiB / 1 GiB), floor(8e9 / 2e9)) = 4`.
+- C1: ratified by owner 2026-11-02 as drafted. Label in `18-01-PLAN.md`: `C1 identity. Engineering ruling, ratified by owner 2026-11-02, within the accepted D5(i).`
+- C2: ratified by owner 2026-11-02 as drafted. Label in `18-01-PLAN.md`: `C2 containment. Engineering ruling, ratified by owner 2026-11-02: the explicit reading of MULTI-02.` Root equality plus descendants, as the existing helper does.
+- C7: set by owner 2026-11-02, replacing the drafted values. `aggregateMemoryBytes = 4 * 1024 ** 3` (4 GiB, unchanged). `aggregateNanoCpus = 4_000_000_000`. `maxSessions = min(floor(4 GiB / 1 GiB), floor(4e9 / 2e9)) = 2`. Label in `18-01-PLAN.md`: `C7 aggregate bound. Set by owner 2026-11-02 (4 GiB, 4e9 nanoCpus, 2 sessions).`
+- Propagated: `18-01-PLAN.md` (the C7 item, the truth and completion lines, the C6 label and the owner-ruling sentences), `18-03-PLAN.md` (truths, the T2 action and done-when, the host-evidence step), `18-12-PLAN.md` (the resource-bound section now says "the two sessions they admit").
+- C6 remains an owner ruling (2026-11-02). C9 and the other items remain engineering decisions.
 
-The contract truth and the completion note in 01 now name C1, C2 and C7 as engineering rulings pending owner ratification.
+## Structural check, 2026-11-02
+
+Command, run from the lane worktree root after the edits above, once per plan: `node ~/.claude/gsd-core/bin/gsd-tools.cjs query verify plan-structure .planning/phases/18-per-project-sandboxes/18-<NN>-PLAN.md`, for NN in 01 to 14 with 04b.
+
+Result: 15 of 15 valid, `errors: []` on every plan.
+
+Observation: every plan returns the warning `No <task> elements found` with `task_count: 0`. The tool does not parse the `### T<n>` task headings these plans use. The structural check therefore confirms frontmatter and section structure only; it does not count tasks. The task counts in the table above come from the cycle-2 reading of the headings.
 
 ## Warnings not fixed
 
 - Plan 04: 14 files (warning band). Splitting it further breaks its own tests (see above).
 - Plan 05: 14 files (unchanged from cycle 1).
 - Plan 06: 10 files (unchanged from cycle 1).
+- Plan 03, done-when: the case "halving `aggregateMemoryBytes` gives 2" no longer shows that the memory term binds. With the owner values the bound is `min(4, 2) = 2`, and halving memory gives `min(2, 2) = 2`. The assertion still passes if the memory term is ignored. A discriminating case needs a test design choice; it is not changed in this record.
+- Plan 03, host-evidence step: the text says a lowered constant is "an engineering check, not an owner question". C7 is now owner-set, so any lowering of the owner values needs owner approval. The step is not changed in this record.
+- Plan 01, C7 completion note: "if the host cannot hold two sessions, the constants are lowered in that same change" conflicts with the owner-set status for the same reason. Not changed in this record.
 
 ## Decisions still open
 
-1. **D18-1 (owner): which set is execution-ready.** The set is now 15 plans (the 14 plans on HEAD plus 04b), not 14. The re-slice is the planner's decision; naming the execution-ready set remains the owner's.
-2. **D18-2 (owner): ratify C1, C2 and C7** as recorded above.
-3. **Phase 17 external gates** (plans 06, 09, 12 and 13 name Phase 17 plans 02 to 04): not re-checked in this cycle.
-4. **Plan index in `18-CONTEXT.md`:** that file has no plan index, so none was updated. `ROADMAP.md` and `STATE.md` were not edited.
+1. **D18-1 (owner): which set is execution-ready.** Answered by owner 2026-11-02: the execution set is the 15-plan set at `96642c1` (18-01 to 18-14, with 18-04b). Resolved.
+2. **D18-2 (owner): ratify C1, C2 and C7.** Answered by owner 2026-11-02: C1 and C2 ratified as drafted; C7 set to 4 GiB, 4e9 nanoCpus, 2 sessions. Resolved.
+3. **Phase 17 external gates** (plans 06, 09, 12 and 13 name Phase 17 plans 02 to 04): not re-checked in this cycle. This is the remaining named blocker for execution.
+4. **Plan index in `18-CONTEXT.md`:** that file has no plan index, so none was updated. `18-CONTEXT.md` has no C1, C2 or C7 references. `ROADMAP.md` and `STATE.md` were not edited.
+5. **`18-HELD-OWNER.md`** (lane B status note, 2026-11-02) still lists D18-1 and D18-2 as open. It is outside the listed set and was not edited.
+
+## Execution readiness
+
+Plan text: ready in the sense that the set is named, the rulings are resolved, and the structural check is valid on all 15 plans. Blocker: the Phase 17 external gates (plans 06, 09, 12, 13) have not been checked, and no gate has run. Plan 03's two open items above also need an owner decision before its tests can be trusted.
 
 ## Not run in this cycle
 
