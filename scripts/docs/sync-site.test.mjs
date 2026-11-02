@@ -94,6 +94,7 @@ const FIXTURE_TEXT = {
     'Prose with {{ braces }} and <Widget kind="x"> plus <img src="pic.png" alt="pic"> and <p>para</p>.',
     '',
     'Code `{{ inline }}` and `<Inline>` survive.',
+    'Expression `${{ github.event.pull_request.title }}` stays as written.',
     '',
     '```html',
     '{{ fenced }} <Fenced>',
@@ -172,7 +173,8 @@ describe('syncSite', () => {
   it('escapes braces and unknown tags in prose but not inside code', async () => {
     const state = await readContent('planning/STATE.md');
     assert.ok(state.includes('Prose with &#123;&#123; braces &#125;&#125; and &lt;Widget kind="x"> plus'));
-    assert.ok(state.includes('Code `{{ inline }}` and `<Inline>` survive.'));
+    assert.ok(state.includes('Code <span v-pre>`{{ inline }}`</span> and `<Inline>` survive.'));
+    assert.ok(state.includes('Expression <span v-pre>`${{ github.event.pull_request.title }}`</span> stays as written.'));
     assert.ok(state.includes('{{ fenced }} <Fenced>'));
     assert.ok(state.includes('<Tilde> {{ tilde }}'));
   });
