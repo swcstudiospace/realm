@@ -24,6 +24,7 @@ export interface RuntimeRoots {
   readonly secretRoot: string;
   readonly workspaceRoot: string;
   readonly sandboxStateRoot: string;
+  readonly stateDir: string;
 }
 
 const IMAGE_PATTERN = /^[a-z0-9][a-z0-9._/-]*@sha256:[a-f0-9]{64}$/;
@@ -89,13 +90,16 @@ export function andaBridgeRequired(
   return config.andaUrl !== undefined;
 }
 
-// The three roots the daemon and the driver share. secretRoot and sandboxStateRoot default under stateDir when the
-// config omits them. workspaceRoot is required on the config. A stale REALM_DRIVER_*_ROOT variable is not consulted.
+// The roots the daemon and the driver share, all derived from the same config.json. secretRoot and
+// sandboxStateRoot default under stateDir when the config omits them. workspaceRoot is required on the config.
+// stateDir is the fourth shared value: the state directory the workspace registry lives under (<stateDir>/workspaces).
+// A stale REALM_DRIVER_*_ROOT variable is not consulted.
 export function runtimeRootsOf(config: RuntimeConfig): RuntimeRoots {
   return {
     secretRoot: config.secretRoot ?? join(config.stateDir, "secrets"),
     workspaceRoot: config.workspaceRoot,
     sandboxStateRoot: config.sandboxStateRoot ?? join(config.stateDir, "sandboxes"),
+    stateDir: config.stateDir,
   };
 }
 

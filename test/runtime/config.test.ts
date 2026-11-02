@@ -155,7 +155,9 @@ void test("runtimeRootsOf derives the omitted roots under stateDir and keeps an 
     secretRoot: "/var/lib/realm/state/secrets",
     workspaceRoot: "/srv/workspace",
     sandboxStateRoot: "/var/lib/realm/state/sandboxes",
+    stateDir: "/var/lib/realm/state",
   });
+  assert.equal(runtimeRootsOf(config).stateDir, config.stateDir);
   const explicit = loadRuntimeConfig({
     ...validInput(),
     secretRoot: "/srv/secrets",

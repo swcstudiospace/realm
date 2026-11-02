@@ -1,7 +1,8 @@
 // State directory layout (D-37). The environment is passed in, so nothing here reads
 // process.env and tests stay hermetic.
 
-import { join } from "node:path";
+import { createHash } from "node:crypto";
+import { join, posix } from "node:path";
 import { makeRealmError } from "../core/errors.js";
 
 export type EnvironmentLike = Readonly<Record<string, string | undefined>>;
@@ -30,4 +31,42 @@ export function recordFileName(sessionId: string): string {
     throw makeRealmError("SCHEMA_INVALID");
   }
   return `${sessionId}.json`;
+}
+
+// Workspace identity (C1, MULTI-02). A project's session id is a function of its canonical path, so every
+// alias of one directory names the same session and sandbox. sessionIdOfWorkspace is the one derivation.
+export const WORKSPACE_SESSION_PREFIX = "p";
+export const WORKSPACE_ID_HEX_LENGTH = 12;
+
+// The sandbox name is "realm-" plus the session id. SANDBOX_NAME_MAX_LENGTH restates
+// GATEWAY_SANDBOX_NAME_MAX_LENGTH (src/runtime/openshell.ts) without importing it, so this module does not
+// depend on the runtime. The test asserts that both values agree.
+const SANDBOX_NAME_PREFIX = "realm-";
+const SANDBOX_NAME_MAX_LENGTH = 19;
+
+// The id of a project directory. The path must be absolute and already normalized, with no trailing separator
+// unless it is "/". A path that still needs canonicalizing is SCHEMA_INVALID, so callers pass the realpath.
+export function sessionIdOfWorkspace(canonicalPath: string): string {
+  if (!isCanonicalAbsolutePath(canonicalPath)) {
+    throw makeRealmError("SCHEMA_INVALID");
+  }
+  const digest = createHash("sha256").update(canonicalPath, "utf8").digest("hex");
+  return `${WORKSPACE_SESSION_PREFIX}${digest.slice(0, WORKSPACE_ID_HEX_LENGTH)}`;
+}
+
+// The OpenShell sandbox name of a session. Refused unless the id is in the safe set and the name fits the
+// gateway limit.
+export function sandboxNameOfSession(sessionId: string): string {
+  const name = `${SANDBOX_NAME_PREFIX}${sessionId}`;
+  if (!isSessionId(sessionId) || name.length > SANDBOX_NAME_MAX_LENGTH) {
+    throw makeRealmError("SCHEMA_INVALID");
+  }
+  return name;
+}
+
+function isCanonicalAbsolutePath(path: string): boolean {
+  if (!posix.isAbsolute(path) || posix.normalize(path) !== path) {
+    return false;
+  }
+  return path === "/" || !path.endsWith("/");
 }
