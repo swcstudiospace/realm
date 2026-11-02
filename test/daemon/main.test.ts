@@ -600,3 +600,20 @@ void test("uncaught: each failure event writes one daemon.failed line with its c
     }
   }
 });
+
+void test("a failed start writes daemon.failed to <stateDir>/daemon.log, not only to stderr (D-1704)", async (t) => {
+  const dir = tempDir(t);
+  const stateDir = join(dir, "state");
+  mkdirSync(stateDir, { recursive: true });
+  mkdirSync(join(dir, "workspace"), { recursive: true });
+  const deps: DaemonDeps = {
+    env: writeConfig(dir, validConfig(dir)),
+    start: () => Promise.reject(makeRealmError("AGENTOS_CRASH_LOOP")),
+  };
+  assert.equal(await runDaemon(deps), 1);
+  const records = readFileSync(join(stateDir, "daemon.log"), "utf8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+  assert.ok(records.some((record) => record["event"] === "daemon.failed" && record["code"] === "AGENTOS_CRASH_LOOP"));
+});

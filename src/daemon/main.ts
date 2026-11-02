@@ -17,7 +17,7 @@ import { productionOpenShellRunner } from "../runtime/session-execution.js";
 import type { EnvironmentLike } from "../session/paths.js";
 import { createLogger, parseLogLevel, type Logger } from "../observe/logger.js";
 import { createFileSink } from "../observe/log-file.js";
-import { FAILURE_EVENT, requestLogPath } from "./ensure.js";
+import { FAILURE_EVENT, daemonLogPath, requestLogPath } from "./ensure.js";
 import { startDaemon, type StartDaemonOptions, type StartedDaemon, type StartupReport } from "./daemon.js";
 import { CONTROL_TIMEOUT_MS, sendRequest, type ControlReply } from "./channel.js";
 
@@ -82,6 +82,7 @@ export async function runDaemon(deps: DaemonDeps): Promise<number> {
     const libpodSocketPath = podmanSocketPath(deps.env);
     const agentosDriver = productionAgentOsDriver(deps.env);
     const requests = requestLogger(writeStderr, deps.env["REALM_LOG_LEVEL"], requestLogPath(stateDir));
+    const entry = entryWriter(deps.writeStderr, stateDir, writeStderr);
     try {
       started = await start({
         stateDir,
@@ -95,28 +96,30 @@ export async function runDaemon(deps: DaemonDeps): Promise<number> {
         pinnedWorkspaceRoot: roots.workspaceRoot,
         sandboxStateRoot: roots.sandboxStateRoot,
         onStartup: (report) => {
-          emitStartup(writeStderr, report);
+          emitStartup(entry.write, report);
         },
         logger: requests.logger,
       });
     } catch (error: unknown) {
       requests.close();
-      emitFailure(writeStderr, codeOf(error));
+      entry.close();
+      emitFailure(entry.write, codeOf(error));
       return 1;
     }
     // The startup chain head (OBS-02). The scan runs on the event loop, so a large audit file delays requests until it finishes. See emitAuditHead.
-    emitAuditHead(stateDir, writeStderr);
+    emitAuditHead(stateDir, entry.write);
     try {
       const code = await awaitStop(started, {
         sendDown: deps.sendDown ?? requestDown,
         onSignal: deps.onSignal ?? registerSignal,
-        writeStderr,
+        writeStderr: entry.write,
       });
       // The shutdown chain head, read after the teardown has finished and before the request log closes.
-      emitAuditHead(stateDir, writeStderr);
+      emitAuditHead(stateDir, entry.write);
       return code;
     } finally {
       requests.close();
+      entry.close();
     }
   } catch (error: unknown) {
     emitFailure(writeStderr, codeOf(error));
@@ -172,6 +175,34 @@ function emitAuditHead(stateDir: string, writeStderr: (line: string) => void): v
     return;
   }
   entryLogger(writeStderr).info("audit.head", { sessionId: SESSION_ID, seq: head.seq, line: head.line, lineSha256: head.hash });
+}
+
+// The entry records (D-1704) go to <stateDir>/daemon.log through the rotating file sink. A line the sink refuses goes to the
+// stderr writer, so no line is dropped. An injected writer (tests) receives every line itself, and no file is opened.
+function entryWriter(
+  injected: ((line: string) => void) | undefined,
+  stateDir: string,
+  stderr: (line: string) => void,
+): { readonly write: (line: string) => void; readonly close: () => void } {
+  if (injected !== undefined) {
+    return { write: injected, close: () => undefined };
+  }
+  const file = createFileSink({ path: daemonLogPath(stateDir) });
+  return {
+    write: (line) => {
+      try {
+        if (file.write(line)) {
+          return;
+        }
+      } catch {
+        // The file sink refused the path. The stderr writer below still receives the line.
+      }
+      stderr(line);
+    },
+    close: () => {
+      file.close();
+    },
+  };
 }
 
 function requestLogger(
