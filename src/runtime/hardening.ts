@@ -49,6 +49,10 @@ export const HARDENING_PROFILE = Object.freeze({
   pidsLimit: PIDS_LIMIT,
   memoryBytes: 1024 * 1024 * 1024,
   nanoCpus: 2_000_000_000,
+  // Aggregate budget of all concurrent sessions (C7): 4 GiB of memory. The per-container memoryBytes above stays as it is.
+  aggregateMemoryBytes: 4 * 1024 * 1024 * 1024,
+  // Aggregate budget of all concurrent sessions (C7): 4e9 nanoCpus. The per-container nanoCpus above stays as it is.
+  aggregateNanoCpus: 4_000_000_000,
   networkMode: "none",
   socketNames: Object.freeze(["docker.sock", "podman.sock"]),
   // Mount destinations inside the container (R1, D-51). The workspace path is the in-sandbox path that the
@@ -96,6 +100,31 @@ export const HARDENING_PROFILE = Object.freeze({
   maskedPaths: Object.freeze(["/proc/acpi", "/proc/kcore", "/proc/keys", "/proc/scsi", "/sys/firmware"]),
   readonlyPaths: Object.freeze(["/proc/bus", "/proc/irq", "/proc/sys", "/proc/sysrq-trigger"]),
 });
+
+// The most sessions the aggregate budget admits: the smaller of what the memory budget and the CPU budget hold at the
+// per-container caps (C7). A non-positive or non-integer input, or a budget that holds no session, is a defect of the profile.
+export function maxConcurrentSessions(profile: {
+  memoryBytes: number;
+  nanoCpus: number;
+  aggregateMemoryBytes: number;
+  aggregateNanoCpus: number;
+}): number {
+  const inputs = [profile.memoryBytes, profile.nanoCpus, profile.aggregateMemoryBytes, profile.aggregateNanoCpus];
+  if (!inputs.every((value) => Number.isInteger(value) && value > 0)) {
+    throw makeRealmError("SCHEMA_INVALID");
+  }
+  const bound = Math.min(
+    Math.floor(profile.aggregateMemoryBytes / profile.memoryBytes),
+    Math.floor(profile.aggregateNanoCpus / profile.nanoCpus),
+  );
+  if (bound < 1) {
+    throw makeRealmError("SCHEMA_INVALID");
+  }
+  return bound;
+}
+
+// The number of sessions the daemon admits at once. Derived from the profile, never stored apart from it (C7).
+export const MAX_CONCURRENT_SESSIONS = maxConcurrentSessions(HARDENING_PROFILE);
 
 // The options of one tmpfs of the create body: its fixed options and its size cap. A destination without a size is a defect of
 // the profile, and it is refused so that no tmpfs is created unbounded.

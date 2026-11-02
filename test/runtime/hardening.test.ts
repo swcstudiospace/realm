@@ -1,16 +1,19 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import {
   CHANNEL_MOUNT_OPTIONS,
   channelOptionFailures,
   hardeningEvidenceDigest,
   HARDENING_PROFILE,
   HARDENING_PROPERTIES,
+  MAX_CONCURRENT_SESSIONS,
   type HardeningBinding,
   type HardeningProperty,
   RUNTIME_ARGV,
   RUNTIME_BINARY,
   SUPERVISOR_CA_TMPFS_OPTIONS,
+  maxConcurrentSessions,
   tmpfsOptionsOf,
   tmpfsSizeBytes,
   verifyInspect,
@@ -852,4 +855,38 @@ void test("a read-only channel mount (RW false) fails channel-mount-options alon
     { ...bind(CHANNEL, HARDENING_PROFILE.channelDestination, false), Options: ["rw", ...CHANNEL_MOUNT_OPTIONS, "rbind"] },
   ];
   assert.deepEqual(channelOptionFailures(inspect), ["channel-mount-options"]);
+});
+
+void test("the derived concurrent-session bound is 2 with the profile's per-container caps (C7)", () => {
+  assert.equal(MAX_CONCURRENT_SESSIONS, 2);
+  assert.equal(maxConcurrentSessions(HARDENING_PROFILE), 2);
+});
+
+void test("the memory term binds: an aggregate memory of 1 GiB gives 1 while the CPU term gives 2 (C7)", () => {
+  assert.equal(maxConcurrentSessions({ ...HARDENING_PROFILE, aggregateMemoryBytes: 1024 * 1024 * 1024 }), 1);
+});
+
+void test("the CPU term binds: an aggregate of 2e9 nanoCpus gives 1 while the memory term gives 4 (C7)", () => {
+  assert.equal(maxConcurrentSessions({ ...HARDENING_PROFILE, aggregateNanoCpus: 2_000_000_000 }), 1);
+});
+
+void test("a zero, non-integer or sub-session input throws SCHEMA_INVALID (C7)", () => {
+  const refusedSchema = (profile: Parameters<typeof maxConcurrentSessions>[0]): void =>
+    assert.throws(
+      () => maxConcurrentSessions(profile),
+      (error: unknown) => error instanceof RealmError && error.code === "SCHEMA_INVALID",
+    );
+  refusedSchema({ ...HARDENING_PROFILE, memoryBytes: 0 });
+  refusedSchema({ ...HARDENING_PROFILE, nanoCpus: 0 });
+  refusedSchema({ ...HARDENING_PROFILE, aggregateMemoryBytes: 0 });
+  refusedSchema({ ...HARDENING_PROFILE, aggregateNanoCpus: 1.5 });
+  refusedSchema({ ...HARDENING_PROFILE, aggregateMemoryBytes: 512 * 1024 * 1024 });
+});
+
+void test("the aggregate budget fields are in the profile and inside the evidence digest (C7)", () => {
+  const json = JSON.stringify(HARDENING_PROFILE);
+  assert.match(json, /"aggregateMemoryBytes":4294967296/);
+  assert.match(json, /"aggregateNanoCpus":4000000000/);
+  const canonical = JSON.stringify({ profile: HARDENING_PROFILE, properties: HARDENING_PROPERTIES, image: BINDING.image });
+  assert.equal(hardeningEvidenceDigest(BINDING.image), createHash("sha256").update(canonical, "utf8").digest("hex"));
 });
