@@ -100,6 +100,8 @@ export interface BuildDaemonHandleOptions {
   readonly bridge?: BridgePort;
   readonly runOpenShell?: OpenShellRunner;
   readonly clock?: () => Date;
+  // Request log (OBS-02). The Anda bridge built here writes its listener diagnostics to it.
+  readonly logger?: Logger;
   // Production construction seams, used only when exec is omitted.
   readonly libpod?: SessionContainers;
   readonly libpodSocketPath?: string;
@@ -198,7 +200,7 @@ export function buildDaemonHandle(options: BuildDaemonHandleOptions): RealmHandl
   const runOpenShell =
     options.runOpenShell ?? productionOpenShellRunner(options.env ?? {});
   const exec = options.exec ?? defaultExec(config, policy, options, runOpenShell);
-  const bridge = options.bridge ?? defaultBridge(config);
+  const bridge = options.bridge ?? defaultBridge(config, options.logger);
   return createRealmHandle({
     runtimeInput: options.runtimeInput,
     policyPath: options.policyPath,
@@ -1042,11 +1044,11 @@ function defaultExec(
 
 // The Anda bridge over the configured URL, or null when no URL is configured, so the session has no
 // bridge and runs no handshake (C4).
-function defaultBridge(config: RuntimeConfig): BridgePort | null {
+function defaultBridge(config: RuntimeConfig, logger: Logger | undefined): BridgePort | null {
   if (!andaBridgeRequired(config)) {
     return null;
   }
-  return new AndaBridge({ url: config.andaUrl });
+  return new AndaBridge({ url: config.andaUrl, ...(logger === undefined ? {} : { logger }) });
 }
 
 // Dials a Unix socket and closes it at once, mirroring the doctor default

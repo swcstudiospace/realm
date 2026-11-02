@@ -195,6 +195,7 @@ Every line starts with `ts`, `level` and `event`, then `code` when present. `REA
 - `up.begin` (info) and `up.end` (info): with `correlationId` and `upId`; `up.end` carries `durationMs`, and `code` when the attach failed.
 - `tool.result` (info): one per tool call, with `correlationId`, `upId` when known, `tool`, `outcome` (`done`, `refused` or `error`) and `durationMs`; `code` for a refused or failed call.
 - `health.probe_failed` (warn): a failed health probe, with `code` or, when the state carries no catalogue code, `reason`; and `upId` when known.
+- `anda.listener_failed` (warn): a bridge listener threw or rejected while an event was delivered, with `kind` (the event kind) and `code` when the listener threw a catalogue error. The other listeners still receive the event.
 - `control.request` (debug): one per control request, with `method`. It is written only at level `debug`.
 - `control.refused` (warn): a control request refused, with `method` and `code`.
 - `daemon.log-level` (warn): `REALM_LOG_LEVEL` held an unrecognised value, so the level is `info`.

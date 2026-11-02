@@ -39,9 +39,10 @@
 import { type ClientRequest, type IncomingMessage, request as httpRequest, type RequestOptions } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { computeBackoffDelayMs, type RandomSource } from "../core/backoff.js";
-import { type ErrorCode, makeRealmError } from "../core/errors.js";
+import { type ErrorCode, makeRealmError, RealmError } from "../core/errors.js";
 import type { BridgeEvent, BridgeKind, BridgePort } from "../core/ports.js";
 import { errnoOf } from "../fs/canonicalize.js";
+import { nullLogger, type Logger } from "../observe/logger.js";
 import { checkAppInformationShape } from "./shape.js";
 
 export const ANDA_INFORMATION_PATH = "/.well-known/information";
@@ -72,6 +73,9 @@ export interface AndaBridgeOptions {
   readonly requestTimeoutMs?: number;
   readonly backoff?: BackoffOptions;
   readonly transport?: Transport;
+  // A listener that fails writes one warn line, event anda.listener_failed, with its catalogue code when it threw one (OBS-02).
+  // Defaults to a logger that writes nothing.
+  readonly logger?: Logger;
 }
 
 type AttemptOutcome = "ok" | "unreachable" | "mismatch";
@@ -155,6 +159,7 @@ export class AndaBridge implements BridgePort {
   private readonly requestTimeoutMs: number;
   private readonly backoffBaseMs: number;
   private readonly backoffCapMs: number;
+  private readonly logger: Logger;
   // The signal of the current connection. connect() replaces it, and close() aborts it.
   private lifecycle = new AbortController();
   private readonly listeners = new Set<Listener>();
@@ -190,6 +195,7 @@ export class AndaBridge implements BridgePort {
     this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
     this.backoffBaseMs = options.backoff?.baseMs ?? DEFAULT_BACKOFF_BASE_MS;
     this.backoffCapMs = options.backoff?.capMs ?? DEFAULT_BACKOFF_CAP_MS;
+    this.logger = options.logger ?? nullLogger;
   }
 
   // One handshake sequence bounded by deadlineMs, measured from the call. Rejects with
@@ -449,17 +455,26 @@ export class AndaBridge implements BridgePort {
         if (isPromiseLike(result)) {
           // Handling the rejection here keeps it from escaping as an unhandled rejection. It counts as a failed
           // delivery only while this connection is current and no newer transition has been published.
-          result.then(undefined, () => {
+          result.then(undefined, (reason: unknown) => {
+            this.reportListenerFailure(event, reason);
             if (this.lifecycle === owner && this.transitions === transition) {
               this.undelivered = event;
             }
           });
         }
-      } catch {
+      } catch (error: unknown) {
+        this.reportListenerFailure(event, error);
         failed = true;
       }
     }
     this.undelivered = failed ? event : null;
+  }
+
+  // The diagnostic keeps the event kind and, when the listener threw a RealmError, its catalogue code. The message
+  // is never logged, so no raw listener text reaches the log.
+  private reportListenerFailure(event: BridgeEvent, reason: unknown): void {
+    const code = reason instanceof RealmError ? reason.code : undefined;
+    this.logger.warn("anda.listener_failed", { kind: event.kind, ...(code === undefined ? {} : { code }) });
   }
 
   // The monitor stopped without a close, so no further probe runs, and the bridge records that as down
