@@ -16,6 +16,7 @@ import {
   verifyAuditFile,
 } from "../../src/audit/chain.js";
 import { runCli } from "../../src/cli/main.js";
+import { RealmError } from "../../src/core/errors.js";
 
 const SESSION = "11111111-2222-4333-8444-555555555555";
 
@@ -533,4 +534,20 @@ void test("OBS-01 checkpoint: format and parse round-trip, and out-of-shape text
   assert.equal(parseAuditCheckpoint(`0:${hash}`), undefined);
   assert.equal(parseAuditCheckpoint(`9:${"A".repeat(64)}`), undefined);
   assert.equal(parseAuditCheckpoint(`9:${hash}\n`), undefined);
+});
+
+void test("an over-bound tail fails closed with AUDIT_WRITE_FAILED and leaves the file unchanged (OBS-01)", () => {
+  withStateDir((stateDir) => {
+    mkdirSync(join(stateDir, "audit"), { recursive: true });
+    const first = `{"seq":1,"prev":"${AUDIT_GENESIS_PREV}","tool":"write","outcome":"ok"}`;
+    writeFileSync(auditFile(stateDir), `${first}\n${"x".repeat(AUDIT_LINE_MAX_BYTES + 1)}`);
+    const before = readFileSync(auditFile(stateDir), "utf8");
+    assert.throws(
+      () => {
+        appendAudit(stateDir, { sessionId: SESSION, tool: "write", outcome: "ok", phase: "result", path: "a.txt" });
+      },
+      (error: unknown) => error instanceof RealmError && error.code === "AUDIT_WRITE_FAILED",
+    );
+    assert.equal(readFileSync(auditFile(stateDir), "utf8"), before);
+  });
 });

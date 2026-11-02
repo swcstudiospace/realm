@@ -12,6 +12,7 @@ import {
   summarizeExec,
   type AuditEntryInput,
 } from "../../src/audit/log.js";
+import { AUDIT_LINE_MAX_BYTES } from "../../src/audit/chain.js";
 
 const SESSION = "11111111-2222-4333-8444-555555555555";
 const HEX64 = "a".repeat(64);
@@ -441,5 +442,19 @@ void test("CRASH-02: a file that ends with a newline gets no extra blank line, a
     for (const line of lines) {
       assert.equal((JSON.parse(line) as Record<string, unknown>)["tool"], "list");
     }
+  });
+});
+
+void test("an oversize append fails with AUDIT_WRITE_FAILED and leaves the file unchanged (OBS-01)", () => {
+  withStateDir((stateDir) => {
+    appendAudit(stateDir, { sessionId: SESSION, tool: "write", outcome: "ok", path: "a.txt" });
+    const before = readFileSync(auditFile(stateDir), "utf8");
+    assert.throws(
+      () => {
+        appendAudit(stateDir, { sessionId: SESSION, tool: "write", outcome: "ok", path: "x".repeat(AUDIT_LINE_MAX_BYTES) });
+      },
+      isAuditWriteFailed,
+    );
+    assert.equal(readFileSync(auditFile(stateDir), "utf8"), before);
   });
 });
