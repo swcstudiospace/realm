@@ -81,3 +81,22 @@ Plan text: ready in the sense that the set is named, the rulings are resolved, a
 ## Not run in this cycle
 
 No `npm`, build, test, gate or `check:pack`. No push, fetch or `gh` write. No edits outside `.planning/phases/18-per-project-sandboxes/` in the lane worktree.
+
+## Blocker fixes
+
+Applied to plan text only; line numbers are the pre-edit lines, and each edit is one-for-one, so they are unchanged. This section supersedes the "not changed in this record" notes at lines 65 to 67.
+
+- B1, `18-01-PLAN.md` line 81 (C7): the completion clause (constants lowered in the same change, plan 12 amends them) is replaced with "If the host cannot hold two sessions at these bounds, plan 03 reports BLOCKED; only the owner can change these values." Applied. Holds: C7 is owner-set on 2026-11-02.
+- B1, `18-03-PLAN.md` line 67: the phrase "plan 12 amends C7 only on an owner decision" is deleted; the BLOCKED sentence is kept. Applied.
+- B2, `18-06-PLAN.md` line 104, `tool` bullet: prefixed with "resolveSelection first (its refusals as in step (a) and (b)); then no entry gives REALM_NOT_ACTIVE; otherwise the existing call path." Applied. Holds: C4 (`18-01-PLAN.md` line 75) requires POLICY_DENIED for an outside selection before the no-session answer, and names `tool` among the four methods.
+- B3, `18-01-PLAN.md` line 47, `18-04-PLAN.md` line 52, `18-13-PLAN.md` line 45: "no git command" now reads "no git command that writes (read-only git show, grep and diff are allowed)". Applied. `18-04-PLAN.md` line 67 and `18-13-PLAN.md` line 66 hold `git grep` in action or done-when text, with no standing rule on those lines; no edit needed.
+- B3, `18-01-PLAN.md` line 91 (Verify): added `git diff --numstat HEAD -- docs/integration/runtime-decision.md`, which must report zero deleted lines. Applied. The byte-identity done-when at line 90 is now checked.
+- B4, `18-03-PLAN.md` line 67: the numeric pass condition is added (`MemTotal` at least 4 GiB, that is 4194304 kB in `/proc/meminfo`, and online CPU count at least 4); any lower value is BLOCKED with the values read reported. "headroom" is removed; the executor never lowers constants. Applied. Open point for the owner: `MemTotal` reads below installed RAM, so a host with 4 GiB installed may read under 4194304 kB and be BLOCKED by this rule.
+- B5, `18-06-PLAN.md` line 90, resolveSelection step (a): added "and require `sessionIdOfWorkspace(entry.pinned.realPath) === selection.sessionId`, otherwise `POLICY_DENIED`" after `verifyPinnedAt`. Applied. Holds: C2 (`18-01-PLAN.md` line 71) requires that later uses check the id against `sessionIdOfWorkspace` of the pinned realpath. Matching assertion added to T1 done-when item (g) at line 97. Applied.
+- Optional, `18-12-PLAN.md` line 14 (external_gates): "Phase 17 edits these three documents" is corrected to "Phase 17 plan 04 edits omp.md and runtime-decision.md, not openshell.md". Applied. Verified against `17-04-PLAN.md` frontmatter (`files_modified`: omp.md, runtime-decision.md, hardening-plan.md, AGENTS.md) and its scope, which forbids editing openshell.md.
+
+Observed, not edited:
+
+- `18-12-PLAN.md` line 80 says the three documents are "shared" with Phase 17 plan 04. That overstates the overlap for the same reason; it is outside the cited location, so it was left as written.
+- `18-06-PLAN.md` line 104, `status` bullet, cites "step (2) of `resolveSelection`"; the function has steps (a) and (b). Not a blocker, so not edited.
+- The bare "no git command" rule in `18-02`, `18-03`, `18-09` to `18-12` is unchanged. None of those plans has a git-based check, so it does not conflict.
