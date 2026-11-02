@@ -10,6 +10,7 @@ The separate current **C4 native advisory host-create** control replaces the fai
 
 HARN-03 current parent S11 warm FAILED with 38 external+6 DNS=44 offenders; cold separately skipped49. Same-run refusing LOOPBACK PROXY LEVER:0 external,0 DNS,7 refused CONNECTs. The lever is narrower evidence, not a clean warm registered-tool run. Zero external/zero DNS acceptance remains unchanged; research's fallback scoped-claim suggestion cannot waive it. HARN repair NOT QUEUED pending a functioning structured handover route and future signed assignment. No network repair or known-failure rerun occurs now.
 
+SUPERSEDED 2026-11-01. The owner chose to supersede the recovery overlay and start from phase 13. Its edit-only, no-run and no-commit rules do not bind execution. The gsd-autonomous workflow governs execution.
 First joined recovery wave is edit-only; any older permission below to run a spike, gate, commit or amend acceptance is inactive for this wave. Parent alone verifies after C4/init/doctor/records owners land. Reuse existing harness/spike helpers and retain raw historical answers; actual production Omp `/workspace`+host+audit admission/result is required separately for OMPX-05. See `../RECOVERY-2026-10-31.md` P12/P16 and full52-ID mapping. No SUMMARY/VERIFICATION pass is authored here.
 
 
