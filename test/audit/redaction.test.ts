@@ -187,3 +187,8 @@ void test("spec n5 credential leakage: no host secret shape survives a nested to
   }
   assert.match(text, /"PLAIN":"ok"/);
 });
+
+void test("a long name run with many credential words keeps its name and redacts only its own value (OBS-01)", () => {
+  const name = "key".repeat(5000);
+  assert.equal(redactString(`${name}=hunter2 plain=ok`), `${name}=${REDACTED} plain=ok`);
+});

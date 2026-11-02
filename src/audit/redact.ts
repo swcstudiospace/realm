@@ -28,8 +28,12 @@ export const SECRET_VALUE_PATTERNS: readonly RegExp[] = Object.freeze([
 
 // NAME=value where NAME contains TOKEN, SECRET, PASSWORD, or KEY. Only the value is
 // replaced; the NAME is kept so the entry still says which credential was present.
+// The match starts only at the start of a run of name characters, and the keyword is
+// checked once in a lookahead. The earlier form had a name run on both sides of the
+// keyword and backtracked quadratically: a 100 KB name run took about 30 s to redact,
+// which stalled the audit write that runs before every tool call.
 const SECRET_ASSIGNMENT_PATTERN: RegExp =
-  /([A-Za-z0-9_]*(?:token|secret|password|key)[A-Za-z0-9_]*)=\S+/gi;
+  /(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]*(?:token|secret|password|key))([A-Za-z0-9_]+)=\S+/gi;
 
 export function redactString(text: string): string {
   let out = text;
