@@ -42,9 +42,11 @@ void test("a throwing listener is logged with its catalogue code, and the next l
   assert.deepEqual(received, ["down"], "the listener after the failing one still receives the event");
   const diagnostics = lines
     .map((line) => JSON.parse(line) as Record<string, unknown>)
-    .filter((record) => record.event === "anda.listener_failed");
-  assert.equal(diagnostics.length, 1, "one failed delivery writes one diagnostic");
-  assert.equal(diagnostics[0]?.level, "warn");
-  assert.equal(diagnostics[0]?.kind, "down");
-  assert.equal(diagnostics[0]?.code, "ANDA_UNREACHABLE", "the diagnostic carries the listener's catalogue code");
+    .filter((record) => record.event === "anda.listener_failed")
+    .map((record) => [record.level, record.kind, record.code]);
+  assert.deepEqual(
+    diagnostics,
+    [["warn", "down", "ANDA_UNREACHABLE"]],
+    "one failed delivery writes one warn diagnostic that carries the listener's catalogue code",
+  );
 });
