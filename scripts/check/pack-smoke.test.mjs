@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -380,3 +381,51 @@ test("runCheck removes its temporary directories after a failed run", () =>
     assert.deepEqual(removed, created);
     assert.equal(existsSync(created[0]), false);
   }));
+
+// Packs a fixture package that holds every adapter file except `omitted` with the real npm, then runs pack-smoke on that
+// tarball. Resolves to the exit status and stderr of the run; the temporary directories are removed afterwards.
+const PACK_SMOKE_SCRIPT = join(dirname(fileURLToPath(import.meta.url)), "pack-smoke.mjs");
+
+async function runPackSmokeWithoutAdapterFile(omitted) {
+  let result;
+  await withTempRootsAsync("realm-pack-adapter-", 2, async (fixtureRoot, scratch) => {
+    for (const path of ADAPTER_FILES.filter((entry) => entry !== omitted)) {
+      writeFixture(fixtureRoot, path);
+    }
+    writeFixture(fixtureRoot, "package.json", `${JSON.stringify({ name: "agent-realm", version: "1.0.0" })}\n`);
+    const packed = spawnSync("npm", buildPackArgs(scratch), { cwd: fixtureRoot, encoding: "utf8" });
+    assert.equal(packed.status, 0, packed.stderr);
+    const tarball = tarballFromPackOutput(packed.stdout, scratch);
+    const smoke = spawnSync(
+      process.execPath,
+      [PACK_SMOKE_SCRIPT, "--tarball", tarball, "--expect-version", "1.0.0"],
+      { encoding: "utf8" },
+    );
+    result = { status: smoke.status, stderr: smoke.stderr };
+  });
+  return result;
+}
+
+test("pack-smoke fails a real tarball that omits adapters/hermes-agent/mcp.snippet.yaml", async () => {
+  const { status, stderr } = await runPackSmokeWithoutAdapterFile("adapters/hermes-agent/mcp.snippet.yaml");
+  assert.equal(status, 1, stderr);
+  assert.ok(stderr.includes("missing adapter files: adapters/hermes-agent/mcp.snippet.yaml"), stderr);
+});
+
+test("pack-smoke fails a real tarball that omits adapters/muse-code/mcp-settings.snippet.json", async () => {
+  const { status, stderr } = await runPackSmokeWithoutAdapterFile("adapters/muse-code/mcp-settings.snippet.json");
+  assert.equal(status, 1, stderr);
+  assert.ok(stderr.includes("missing adapter files: adapters/muse-code/mcp-settings.snippet.json"), stderr);
+});
+
+test("pack-smoke fails a real tarball that omits adapters/prime-agent/MCP.md", async () => {
+  const { status, stderr } = await runPackSmokeWithoutAdapterFile("adapters/prime-agent/MCP.md");
+  assert.equal(status, 1, stderr);
+  assert.ok(stderr.includes("missing adapter files: adapters/prime-agent/MCP.md"), stderr);
+});
+
+test("pack-smoke fails a real tarball that omits adapters/prime-agent/skills/realm/SKILL.md", async () => {
+  const { status, stderr } = await runPackSmokeWithoutAdapterFile("adapters/prime-agent/skills/realm/SKILL.md");
+  assert.equal(status, 1, stderr);
+  assert.ok(stderr.includes("missing adapter files: adapters/prime-agent/skills/realm/SKILL.md"), stderr);
+});

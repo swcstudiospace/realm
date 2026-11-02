@@ -1,0 +1,110 @@
+name: Rollback
+
+# Manual only. Marks a published release as a prerelease, then publishes the documentation of a known-good release
+# through pages.yml. The default branch is not redeployed: it can still hold the content the rolled-back release withdrew.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to mark as a prerelease, for example v0.3.4
+        required: true
+        type: string
+      docs_tag:
+        description: Known-good release tag whose documentation is published, for example v0.3.3
+        required: true
+        type: string
+
+# No workflow-wide grant: the job declares exactly what its steps call.
+permissions: {}
+
+concurrency:
+  group: rollback
+  cancel-in-progress: false
+
+# Every job runs on the Omega CI runner pool, never on GitHub-hosted runners
+# (swcstudiospace/Omega-Prime docs/ci-runners.md).
+jobs:
+  rollback:
+    name: Mark release as prerelease and publish known-good docs
+    runs-on: [self-hosted, linux, x64, omega-ci]
+    timeout-minutes: 15
+    permissions:
+      contents: write # gh release edit; git fetches the default branch and the known-good tag
+      actions: write # gh workflow run: GITHUB_TOKEN may dispatch pages.yml only with actions: write
+    steps:
+      # Full history and tags are needed for the ancestry check. No credential is kept in .git/config.
+      - name: Checkout source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Both inputs are checked before any command uses them or any remote changes. They reach the shell only
+      # through the environment.
+      - name: Validate tags
+        env:
+          TAG: ${{ inputs.tag }}
+          DOCS_TAG: ${{ inputs.docs_tag }}
+        run: |
+          set -euo pipefail
+          semver='^v[0-9]+\.[0-9]+\.[0-9]+$'
+          if [[ ! "${TAG}" =~ ${semver} ]]; then
+            echo "::error::The tag input must match v<major>.<minor>.<patch>." >&2
+            exit 1
+          fi
+          if [[ ! "${DOCS_TAG}" =~ ${semver} ]]; then
+            echo "::error::The docs_tag input must match v<major>.<minor>.<patch>." >&2
+            exit 1
+          fi
+          if [[ "${DOCS_TAG}" == "${TAG}" ]]; then
+            echo "::error::docs_tag must name a different release from tag, the one being withdrawn." >&2
+            exit 1
+          fi
+
+      # The known-good source must be an existing tag whose commit is on the default branch (ancestry), and whose
+      # release is published, not a draft or a prerelease, so a withdrawn release cannot be the source.
+      - name: Validate the known-good documentation source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          DOCS_TAG: ${{ inputs.docs_tag }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "+refs/heads/${DEFAULT_BRANCH}:refs/remotes/origin/${DEFAULT_BRANCH}"
+          git fetch --no-tags origin "+refs/tags/${DOCS_TAG}:refs/tags/${DOCS_TAG}"
+          if ! commit="$(git rev-parse --verify --quiet "refs/tags/${DOCS_TAG}^{commit}")"; then
+            echo "::error::Tag ${DOCS_TAG} does not exist." >&2
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "${commit}" "refs/remotes/origin/${DEFAULT_BRANCH}"; then
+            echo "::error::Tag ${DOCS_TAG} is not on the default branch." >&2
+            exit 1
+          fi
+          release="$(gh release view "${DOCS_TAG}" --json isDraft,isPrerelease \
+            --jq 'if .isDraft then "draft" elif .isPrerelease then "prerelease" else "published" end')"
+          if [[ "${release}" != "published" ]]; then
+            echo "::error::Release ${DOCS_TAG} is ${release}, not a published known-good release." >&2
+            exit 1
+          fi
+
+      - name: Mark release as prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release edit "${TAG}" --prerelease
+
+      # pages.yml builds the known-good tag's site in its build job, which holds no write grant. Its deploy job runs
+      # no code from that tag.
+      - name: Dispatch Pages for the known-good tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          DOCS_TAG: ${{ inputs.docs_tag }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          gh workflow run pages.yml --ref "${DEFAULT_BRANCH}" -f source_ref="${DOCS_TAG}"

@@ -34,10 +34,11 @@ function git(cwd, args) {
   return execFileSync('git', args, { cwd, encoding: 'utf8', timeout: 30000 });
 }
 
-function commit(cwd, subject, file = 'work.txt') {
+function commit(cwd, subject, file = 'work.txt', body) {
   commitCounter += 1;
   writeFileSync(path.join(cwd, file), `${commitCounter}\n`);
   git(cwd, ['add', '-A']);
+  const messages = body === undefined ? [subject] : [subject, body];
   git(cwd, [
     '-c',
     'user.name=test',
@@ -47,9 +48,9 @@ function commit(cwd, subject, file = 'work.txt') {
     'commit.gpgsign=false',
     'commit',
     '-q',
-    '-m',
-    subject,
+    ...messages.flatMap((message) => ['-m', message]),
   ]);
+  return git(cwd, ['rev-parse', 'HEAD']).trim();
 }
 
 function makeRepo(subjects, changelog = SEED_CHANGELOG) {
@@ -389,4 +390,119 @@ test('lists the commits of a merged branch and not the merge commit itself', () 
   assert.ok(body.includes('- docs: mainline work (SHA)'));
   assert.ok(!body.includes('Merge pull request'));
   assert.ok(!body.includes('base work'));
+});
+
+test('leaves out a reverted feature and its revert and keeps an unrelated feature', () => {
+  const root = makeRepo([]);
+  const reverted = commit(root, 'feat(driver): add the old driver');
+  commit(root, 'feat: add the unrelated feature');
+  commit(root, 'Revert "feat(driver): add the old driver"', 'work.txt', `This reverts commit ${reverted}.`);
+
+  generateChangelog({ root, version: '0.2.0', date: '2026-10-29' });
+
+  assert.equal(
+    normalize(sectionBody(readChangelog(root), '## [0.2.0] - 2026-10-29')),
+    '### Added\n- feat: add the unrelated feature (SHA)',
+  );
+});
+
+test('pairs a revert with the commit its body names, not with a commit that shares the title', () => {
+  const root = makeRepo(['feat: add driver']);
+  const since = git(root, ['rev-parse', 'HEAD']).trim();
+  const reverted = commit(root, 'feat: add driver', 'driver.txt');
+  const unrelated = commit(root, 'feat: add driver', 'driver-copy.txt');
+  commit(root, 'Revert "feat: add driver"', 'driver.txt', `This reverts commit ${reverted}.`);
+
+  generateChangelog({ root, version: '0.2.0', date: '2026-10-29', since });
+
+  assert.equal(
+    sectionBody(readChangelog(root), '## [0.2.0] - 2026-10-29'),
+    `### Added\n- feat: add driver (${unrelated.slice(0, 7)})`,
+  );
+});
+
+test('leaves out the features a non-revert refactor names in Removes trailers, and the refactor too', () => {
+  const root = makeRepo([]);
+  const exporter = commit(root, 'feat: add export');
+  const batch = commit(root, 'feat(api): add batch endpoint');
+  commit(root, 'refactor: drop export and batch', 'work.txt', `Removes: ${exporter}\nRemoves: ${batch}`);
+  commit(root, 'feat: add the unrelated feature');
+
+  generateChangelog({ root, version: '0.2.0', date: '2026-10-29' });
+
+  assert.equal(
+    normalize(sectionBody(readChangelog(root), '## [0.2.0] - 2026-10-29')),
+    '### Added\n- feat: add the unrelated feature (SHA)',
+  );
+});
+
+test('keeps a later fix that touches the same file as a removed feature', () => {
+  const root = makeRepo([]);
+  const removed = commit(root, 'feat: add driver', 'shared.txt');
+  commit(root, 'fix: correct shared settings', 'shared.txt');
+  commit(root, 'refactor: drop driver', 'shared.txt', `Removes: ${removed}`);
+
+  generateChangelog({ root, version: '0.2.0', date: '2026-10-29' });
+
+  assert.equal(
+    normalize(sectionBody(readChangelog(root), '## [0.2.0] - 2026-10-29')),
+    '### Fixed\n- fix: correct shared settings (SHA)',
+  );
+});
+
+test('keeps a later refactor that renames the module of a removed feature', () => {
+  const root = makeRepo([]);
+  const removed = commit(root, 'feat: add driver', 'driver.txt');
+  commit(root, 'refactor: rename driver module', 'renamed.txt');
+  commit(root, 'refactor: drop driver', 'driver.txt', `Removes: ${removed}`);
+
+  generateChangelog({ root, version: '0.2.0', date: '2026-10-29' });
+
+  assert.equal(
+    normalize(sectionBody(readChangelog(root), '## [0.2.0] - 2026-10-29')),
+    '### Changed\n- refactor: rename driver module (SHA)',
+  );
+});
+
+test('removes only the commit a Removes trailer names when another commit has the same title', () => {
+  const root = makeRepo([]);
+  const removed = commit(root, 'feat: add driver', 'driver.txt');
+  const unrelated = commit(root, 'feat: add driver', 'driver-copy.txt');
+  commit(root, 'refactor: drop driver', 'driver.txt', `Removes: ${removed}`);
+
+  generateChangelog({ root, version: '0.2.0', date: '2026-10-29' });
+
+  assert.equal(
+    sectionBody(readChangelog(root), '## [0.2.0] - 2026-10-29'),
+    `### Added\n- feat: add driver (${unrelated.slice(0, 7)})`,
+  );
+});
+
+test('restores the feature a removal names when a revert undoes the removal', () => {
+  const root = makeRepo([]);
+  const feature = commit(root, 'feat: add driver');
+  const removal = commit(root, 'refactor: drop driver', 'work.txt', `Removes: ${feature}`);
+  commit(root, 'Revert "refactor: drop driver"', 'work.txt', `This reverts commit ${removal}.`);
+
+  generateChangelog({ root, version: '0.2.0', date: '2026-10-29' });
+
+  assert.equal(
+    normalize(sectionBody(readChangelog(root), '## [0.2.0] - 2026-10-29')),
+    '### Added\n- feat: add driver (SHA)',
+  );
+});
+
+test('keeps a removal that names a feature shipped in an earlier release, and drops the in-range feature it also names', () => {
+  const root = makeRepo([]);
+  const shipped = commit(root, 'feat: add legacy driver');
+  const since = git(root, ['rev-parse', 'HEAD']).trim();
+  const inRange = commit(root, 'feat: add new driver');
+  commit(root, 'refactor: drop drivers', 'work.txt', `Removes: ${shipped}\nRemoves: ${inRange}`);
+
+  generateChangelog({ root, version: '0.2.0', date: '2026-10-29', since });
+
+  assert.equal(
+    normalize(sectionBody(readChangelog(root), '## [0.2.0] - 2026-10-29')),
+    '### Changed\n- refactor: drop drivers (SHA)',
+  );
 });
