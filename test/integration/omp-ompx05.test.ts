@@ -271,6 +271,9 @@ void test(
     } finally {
       mcp.closeInput();
       mcpExit = await mcp.waitForExit(MCP_EXIT_TIMEOUT_MS);
+      // A child still running after the exit deadline (stuck in attach or a request) is killed here, so its pipes close and the
+      // assertion below reports the failure instead of leaving the test worker holding the child.
+      mcp.kill();
     }
     assert.notEqual(mcpExit, undefined, `realm mcp must exit within ${String(MCP_EXIT_TIMEOUT_MS / 1000)} s; stderr ${mcp.stderr()}`);
 
