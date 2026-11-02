@@ -185,3 +185,36 @@ Applied to plan text only, on `gsd/v3-integrate-wave2` from head `4deee5e`. No `
 Observed, not edited (outside the round's items): `18-03-PLAN.md` line 55 does not say what `markUnproven` does for an id already in `unproven`. A second failed `down` calls it again on such an id. The ledger should treat that as a no-op; the plan should say so when the ledger is built.
 
 Acceptance check: all ten items are applied. No catalogue code is added. Each code cited (`REALM_STOPPING`, `TOOL_TIMEOUT`, `POLICY_DENIED`, `SANDBOX_NAME_IN_USE`) exists in `src/core/errors.ts`. Owner values are unchanged: 15 plans, C1 and C2 ratified, C7 at 4 GiB, 4e9 nanoCpus and 2 sessions.
+
+## Final check after round 9
+
+Checked at f9dbc54 by a general subagent, read-only, because the gsd-plan-checker agent was denied model access. The full report is kept outside the repository. This section is its record, written after the fact.
+
+Verdict: execution-ready: yes. Blockers: none. Warnings W1 to W10 are dispositioned below.
+
+Item verdicts: (1) round-9 items PASS with warnings; (2) settleFailedCreate callers PASS; (3) cases (i), (j) and (k) PASS against steps 4 to 6 and the lock; (4) markUnproven idempotency PASS on the bound (set-based), with the spec gap W7; (5) Phase 17 references PASS (the C6 wording and the 17-02 external gate), with W8 to W10 as wording or drift warnings.
+
+Dispositions, applied in the commit that adds this section:
+- W1 (done-when labels and accessors): applied. Cases (g) and (k) read daemon.committedCount() and daemon.isCommitted(). A T2 label note is added.
+- W2 (stop flags unnamed): applied. downRequested is the flag, set by stop and stopAll, and at the arming decision in down.
+- W3 (release predicate): applied. The predicate is 'a session record exists for the id'.
+- W4 (step 6 rethrows, but create can return an error snapshot): applied in step (6).
+- W5 (down lock wait equals the client bound): applied by a different mechanism. The lock wait is DOWN_LOCK_WAIT_MS (40 s), and a destroy starts only when the post-grant budget covers TEARDOWN_TIMEOUT_MS.
+- W6 (abandoning a waiter needs a cancelable waiter and a test): applied. Cases (m) and (o).
+- W7 (markUnproven on an already-unproven id): applied in 18-03 line 55.
+- W8 (plan 12 must name C6): applied in 18-12 line 19.
+- W9 (17-VERIFICATION line references): historical; not changed.
+- W10 (18-06 line references drift): not changed; re-read the lines at execution.
+
+Review items found after the check, applied in the same commit:
+- The down lock wait plus teardown could exceed the client bound. Fixed by the post-grant check (case (s)).
+- An up waiter had no bound. Fixed by UP_LOCK_WAIT_MS (case (p)).
+- A 15 s cap on the up lock wait refused an idempotent attach behind a live holder. Fixed by the 215 s cap and the live path (case (p)).
+- The budget check refused uncontended up calls when startupBudgetMs exceeded about 215 s. Fixed: only waiters are checked (case (t)). policy.schema.json sets no maximum for startupBudgetMs (lines 32 to 36).
+- Arming counted registry entries only, so an in-flight up was invisible. Fixed by reservedCount() (case (l)).
+- A waiter granted after the arming could create. Fixed: downRequested is set at the decision (case (o)).
+- Arming through shutdown would not stop the daemon, because shutdown returns early when downRequested is set. Fixed: a direct stop call.
+
+Owner items: the TOOL_TIMEOUT reason text; a policy budget above the client's up bound at HEAD; acknowledgement of the pre-record execution (see 18-HELD-OWNER.md).
+
+Execution record (added after the fact): plans 01, 02, 03, 04, 04b, 05 and 07 are committed on gsd/v3-phase18 (4bfca1a through e2baed6). They were executed before this section was committed, so the precondition in 18-HELD-OWNER.md was not met when they ran. No full gate set has run on that head. The external gates of Phase 18 plans 06, 09, 12 and 13 are merged (18-HELD-OWNER.md, D18-1).
