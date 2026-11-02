@@ -200,6 +200,8 @@ function applyAction(action: FixAction, pins: Map<string, PinnedDirectory>, opti
     const through = join(PROC_FD_DIR, String(parent.fd), basename(action.path));
     // Non-recursive mkdir is no-clobber: a concurrent leaf creation is a refusal.
     mkdirSync(through, { mode: action.mode });
+    // The directory now exists, so record it before any later open or check can fail.
+    applied.push(action);
     const observed = observeDirectory(action.path, true);
     if (observed === undefined) throw new FixRefusal(action.path, "changed-directory");
     pin = pinDirectory(action.path, observed, options);
@@ -217,6 +219,6 @@ function applyAction(action: FixAction, pins: Map<string, PinnedDirectory>, opti
   if (after.uid !== before.uid || (after.mode & PERMISSION_BITS) !== action.mode) {
     throw new FixRefusal(action.path, "changed-directory");
   }
-  applied.push(action);
+  if (action.kind === "set-mode") applied.push(action);
   verifyPin(pin);
 }
