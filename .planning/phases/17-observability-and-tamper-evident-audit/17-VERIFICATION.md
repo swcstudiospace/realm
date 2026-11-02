@@ -140,3 +140,5 @@ The owner ruled on O-a to O-e on 2026-11-02. Each ruling is recorded as a dated 
 | O-e. driver-only loss (D-1701) | Ruled: ratified and amended. Driver-only loss is classified as `OPENSHELL_GATEWAY_LOST` when the driver's socket probe fails. The probe runs on the supervisor's failure path (`src/runtime/agentos.ts`, `src/runtime/agentos-driver.ts`). Driver-only loss is removed from the D-1701 coverage limits. No code change. |
 
 O-f, O-g and O-h are not covered by these rulings and remain open. The rulings do not close the live items: scenarios 5, 6 and 10 and spike S17-b have not run, and this addendum claims no live result.
+
+Amendment (2026-11-02, later the same day): the owner answered the Phase 18 question on `audit.head` with per-session heads, as Phase 18 plan C6 has it. That amends the O-d row above (documented as is) for each session's audit file, `<stateDir>/audit/<sessionId>.jsonl`. The daemon's own file keeps its head. This amendment is recorded in `.planning/STATE.md` and in the Phase 18 contract (plan 01).
