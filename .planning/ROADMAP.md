@@ -461,9 +461,9 @@ The owner lifted the ship hold on 2026-10-28 for one pull request with autoMerge
 
 **Notes:** Owner decision D5 allows the one catalogue addition for gateway or driver loss (TD-05); any other catalogue change needs a reason recorded in the phase context. The design of OBS-01 covers the Merkle anchor and the reconciliation lines of Phase 14. Live runs on the shared realm stack are serialized, because the startup reap is account-wide.
 
-**Recovery evidence note:** Basic chain/request logging/metrics and historical real gateway-loss proof exist. Missing approved --session/--file/--anchor/--head verification and uniform timestamped startup/failure logging are real code gaps. Live correlation/reconciliation presence and complete driver-only S17-b exec/realm-status observation remain P17; historical gateway pass is not missing and status-connected alone is not driver-loss proof.
+**Recovery evidence note (superseded 2026-11-02):** the `--session`, `--file`, `--anchor` and `--head` verification, the JSON startup and failure lines, and the metrics and gateway-loss code are on the branch. The daemon log rotates under D-1704 as ratified on 2026-11-02. The remaining gaps are the live runs (scenarios 5, 6 and 10, and S17-b) and the open owner decisions recorded in 17-VERIFICATION.md.
 
-**Plans**: 1 existing plan (`17-01-PLAN.md`), reused with checkpoint/logger/proof recovery units
+**Plans**: 5 plans (17-01 to 17-05). 17-01 to 17-04 are implemented and committed on gsd/v3; 17-05 (live) is held for the owner's batched live window.
 
 ### Phase 18: Per-project sandboxes
 

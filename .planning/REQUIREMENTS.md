@@ -184,7 +184,7 @@ Each v3.0 requirement maps to exactly one phase. The carried requirements keep t
 | CRASH-01 | Phase 14 | Implemented-unverified including startup wiring; conditional negative-case pass/skip attribution pending, P14 |
 | CRASH-02 | Phase 14 | Implemented-unverified planted-start/idempotence; explicit live in-chain presence pending under OBS, P14/P17 |
 | CRASH-03 | Phase 14 | Implemented-unverified durable delete/fsync failure cases, P14 |
-| CRASH-04 | Phase 14 | Live5 passed crash/notice/container-id assertions; logged recordsDeleted count not asserted by live helper, so full acceptance stays unverified, P14/P17; phase19 selective notice remains |
+| CRASH-04 | Phase 14 | Live5 passed crash/notice/container-id assertions on 2026-11-02; the startup reap line helper now also requires recordsDeleted (652919a); the live re-run that confirms it needs owner approval, P14; phase19 selective notice remains |
 | CRASH-05 | Phase 14 | Implemented-unverified four real child SIGKILL stages, original/orphan/sweep controls, P14 |
 | CRASH-06 | Phase 14 | Implemented-unverified cause-code equivalence; no wire-shape-unification expansion, P14 |
 | CRASH-07 | Phase 14 | Implemented-unverified stale-container one-shot controller retry, P14 |
@@ -201,10 +201,10 @@ Each v3.0 requirement maps to exactly one phase. The carried requirements keep t
 | OMPX-03 | Phase 16 | Missing active-set/lifetime transition correctness and actual catalogue bash proof, P12/P16 |
 | OMPX-04 | Phase 16 | Same-name replacement implemented; safe restore/mode publication and current advisory proof incomplete, P12/P16 |
 | OMPX-05 | Phase 16 | Missing real production Omp path coverage; live-gated /workspace+host+actual audit pair, P16 |
-| OBS-01 | Phase 17 | Basic chain implemented; approved selectors/head/anchor/prefix-tail verification missing, P17 |
-| OBS-02 | Phase 17 | Request logger implemented; common startup/failure shape missing; live correlation incomplete, P17 |
-| OBS-03 | Phase 17 | Implemented with historical real metrics/socket-only proof; current joins unverified, P17 |
-| OBS-04 | Phase 17 | Historical real gateway-loss proof accepted; driver-only exec/realm-status observation still live-gated, P17 |
+| OBS-01 | Phase 17 | Automated pass: seq/prev chain, verify with file, session, head and anchor selectors, oversize and over-bound fail closed (1fa6c98, 334c1ad, 2640681); live audit verify in scenarios 5 and 6 human-needed, P17 |
+| OBS-02 | Phase 17 | Automated partial: JSON sinks and events, correlation ids, daemon.log rotation and unrecognized-refusal logging (1829d4f, a044d12, 757a6b2); live scenario 6 human-needed; open owner decisions on audit.head cost, unreadable audit file, crash stack and audit.head coverage, P17 |
+| OBS-03 | Phase 17 | Automated pass: metrics over the control socket only, with the /proc listener test; live scenario 6 metrics counts human-needed, P17 |
+| OBS-04 | Phase 17 | Automated pass for the gateway path; driver-only classification awaits owner ratification of D-1701 (O-e); live scenario 10 human-needed, P17 |
 | MULTI-01 | Phase 18 | Decision recorded2026-10-30/PR36; retain chronology, not runtime completion, P18 |
 | MULTI-02 | Phase 18 | Missing per-project id/registry/mount; existing pin primitives reused, P18 |
 | MULTI-03 | Phase 18 | Missing selected routing/local down; existing per-id stores/handle locks reused, P18 |
