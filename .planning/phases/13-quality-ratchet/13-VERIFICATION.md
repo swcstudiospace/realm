@@ -6,7 +6,7 @@ Date: 2026-11-02. Tree: `gsd/v3-lane-a` at `7c044b6` (commits `e8e0eeb`, `f3e76e
 
 ## Gate runs
 
-- Final gate run: `/tmp/lane-a-p13-final.log` (outside the repo), heavy slot 1, after all three commits. Exit codes: typecheck 0, lint 0, build 0, test 0, test:integration 0, test:scripts 0, check:docs 0, check:gates 0, check:pack 0, check:mcp 0, test:coverage 0. Counts are in `13-SUMMARY.md`.
+- Final gate run: the gate runner's log (kept out of the repository), heavy slot 1, after all three commits. Exit codes: typecheck 0, lint 0, build 0, test 0, test:integration 0, test:scripts 0, check:docs 0, check:gates 0, check:pack 0, check:mcp 0, test:coverage 0. Counts are in `13-SUMMARY.md`.
 - Earlier run on `e8e0eeb` (before the fixes): same set, `test:coverage` exit 1 on OBS-04 "a new start that overtakes" (timing race). Fixed in `f3e76ee`. This is the only red gate observed.
 - CPU-limited: `taskset -c 0 npm test` exit 0 (2537 tests, 2504 pass, 0 fail, 33 skipped, 506.7 s). Affinity to one CPU, not a Podman CPU-quota container.
 
@@ -41,7 +41,7 @@ Date: 2026-11-02. Tree: `gsd/v3-lane-a` at `7c044b6` (commits `e8e0eeb`, `f3e76e
 - UNVERIFIED: the requirement's "CPU-limited container" wording. No Podman container with a CPU quota was run.
 
 ### QR-06: dead exports removed by reference analysis; frozen catalogue unchanged: DONE locally
-- `node scripts/check/export-usage.mjs --list` before the change reported one `self-only` export, `readTailHead` (`src/audit/chain.ts:185`). It loses `export` in `7c044b6`. After the change the listing reports zero `self-only` in every directory (`/tmp/lane-a-exports-after.txt`).
+- `node scripts/check/export-usage.mjs --list` before the change reported one `self-only` export, `readTailHead` (`src/audit/chain.ts:185`). It loses `export` in `7c044b6`. After the change the listing reports zero `self-only` in every directory (listing kept out of the repository).
 - `test-only` seams are kept per D-1306 (the listing's `test-only` column; the counts are in the listing, not re-counted here).
 - `npm run typecheck` (noUnusedLocals in tsconfig) exit 0 after the change.
 - Frozen catalogue, `ports` types, schema validator types: not edited (`git show --stat 7c044b6`: one file, `src/audit/chain.ts`).
@@ -49,8 +49,8 @@ Date: 2026-11-02. Tree: `gsd/v3-lane-a` at `7c044b6` (commits `e8e0eeb`, `f3e76e
 
 ### QR-07: `fast-check` dev dependency; properties in `npm test`; a broken canonicalizer fails one: DONE locally, CONTRIBUTING items UNVERIFIED
 - `package.json` devDependency `fast-check` 4.10.2 (exact). Properties in `test/fs/canonicalize.property.test.ts` and `test/core/policy.property.test.ts`, run by `npm test` (`dist/test/**/*.test.js`).
-- Deliberate breakage, run in this lane and reverted: `src/fs/root.ts` `isInsideRoot` line 92 changed from `return rel.split(sep)[0] !== "..";` to `return true;`. `npx tsc` then `node --test dist/test/fs/canonicalize.property.test.js`: 5 of 11 fail, 6 pass, exit 1 (`/tmp/lane-a-break2.txt`). Failing: no accepted path escapes the root; canonicalize agrees with realpath; absent result names a real directory; a final-segment link refused in write mode; isInsideRoot true inside and false outside. The tsc output also shows `TS6133 'sep' is declared but its value is never read`, expected from the breakage. Restored byte-for-byte: `git status` shows no change to `src/fs/root.ts`.
-- A first breakage attempt, `isAbsolute(rel)` returning `true`, did not fail any property (11 of 11 pass, `/tmp/lane-a-break.txt`). On POSIX `relative()` never returns an absolute path, so that branch is unreachable there. It is recorded here so the reader knows which breakage counts.
+- Deliberate breakage, run in this lane and reverted: `src/fs/root.ts` `isInsideRoot` line 92 changed from `return rel.split(sep)[0] !== "..";` to `return true;`. `npx tsc` then `node --test dist/test/fs/canonicalize.property.test.js`: 5 of 11 fail, 6 pass, exit 1 (run log kept out of the repository). Failing: no accepted path escapes the root; canonicalize agrees with realpath; absent result names a real directory; a final-segment link refused in write mode; isInsideRoot true inside and false outside. The tsc output also shows `TS6133 'sep' is declared but its value is never read`, expected from the breakage. Restored byte-for-byte: `git status` shows no change to `src/fs/root.ts`.
+- A first breakage attempt, `isAbsolute(rel)` returning `true`, did not fail any property (11 of 11 pass; run log kept out of the repository). On POSIX `relative()` never returns an absolute path, so that branch is unreachable there. It is recorded here so the reader knows which breakage counts.
 - UNVERIFIED: the three `CONTRIBUTING.md` items (justification, licence check, maintenance check) for `fast-check` must appear in the PR body. No PR body exists in this lane.
 - Finding (not a defect here): the NUL-after-missing-segment question from D-1307 was not decided in this lane; decide in the PR body.
 
@@ -62,7 +62,7 @@ Date: 2026-11-02. Tree: `gsd/v3-lane-a` at `7c044b6` (commits `e8e0eeb`, `f3e76e
 
 ## Lint of workflows
 
-`actionlint` (1.7.7) on `ci.yml`, `mutation.yml`, `pages.yml`, with `/tmp/lane-a-actionlint.yaml` declaring the self-hosted label `omega-ci`: one finding, `ci.yml:274` SC2016 (info). It is a false positive: the single-quoted block is a `node -e` script with JS template literals on purpose. The bare run without the config reports the unknown-label error only.
+`actionlint` (1.7.7) on `ci.yml`, `mutation.yml`, `pages.yml`, with a temporary config (kept out of the repository) declaring the self-hosted label `omega-ci`: one finding, `ci.yml:274` SC2016 (info). It is a false positive: the single-quoted block is a `node -e` script with JS template literals on purpose. The bare run without the config reports the unknown-label error only.
 
 ## omp version
 

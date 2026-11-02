@@ -18,7 +18,7 @@ Work already present on HEAD and verified here, not re-authored: the `audit` job
 
 ## Gates
 
-Run once on the final phase 13 tree (`e8e0eeb` plus the two source commits; the tree was clean after commit) under heavy slot 1. Exit codes from `/tmp/lane-a-p13-final.log`:
+Run once on the final phase 13 tree (`e8e0eeb` plus the two source commits; the tree was clean after commit) under heavy slot 1. Exit codes from the gate runner's log (kept out of the repository):
 
 | Gate | Exit | Counts |
 |---|---|---|
