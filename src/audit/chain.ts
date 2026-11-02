@@ -145,7 +145,9 @@ export function readChainHead(fd: number): ChainHead {
   };
 }
 
-function nextSeqFromTail(buf: Buffer, lineEnd: number, startsAtFile: boolean): number {
+// The newest chained line within the lookback, searched backward from lineEnd (the index of the newline that ends it, or the
+// end of the window). Undefined when the lookback finds none.
+function lastChainedLine(buf: Buffer, lineEnd: number, startsAtFile: boolean): { readonly seq: number; readonly bytes: Buffer } | undefined {
   let end = lineEnd;
   for (let seen = 0; seen < SEQ_LOOKBACK_LINES && end > 0; seen += 1) {
     const boundary = buf.lastIndexOf(0x0a, end - 1);
@@ -154,16 +156,83 @@ function nextSeqFromTail(buf: Buffer, lineEnd: number, startsAtFile: boolean): n
       break;
     }
     const start = boundary < 0 ? 0 : boundary + 1;
-    const seq = chainedSeq(buf.subarray(start, end));
+    const bytes = buf.subarray(start, end);
+    const seq = chainedSeq(bytes);
     if (seq !== undefined) {
-      return seq + 1;
+      return { seq, bytes };
     }
     if (boundary < 0) {
       break;
     }
     end = boundary;
   }
-  return 1;
+  return undefined;
+}
+
+function nextSeqFromTail(buf: Buffer, lineEnd: number, startsAtFile: boolean): number {
+  const last = lastChainedLine(buf, lineEnd, startsAtFile);
+  return last === undefined ? 1 : last.seq + 1;
+}
+
+// The head of the chain read from the file tail alone: the newest chained line's seq and the sha256 of its raw bytes, the pair
+// the full verifier reports, without its line count. A torn last line is not a complete line and is never the head. Undefined
+// when the tail window holds no chained line. Throws when that line is longer than the bound.
+export interface TailHead {
+  readonly seq: number;
+  readonly hash: string;
+}
+
+export function readTailHead(fd: number): TailHead | undefined {
+  const size = fstatSync(fd).size;
+  if (size === 0) {
+    return undefined;
+  }
+  const physicalMax = AUDIT_LINE_MAX_BYTES + 1;
+  const window = Math.min(size, physicalMax * 2);
+  const start = size - window;
+  const buf = Buffer.alloc(window);
+  if (readSync(fd, buf, 0, window, start) !== window) {
+    throw new Error("audit file tail could not be read");
+  }
+  const lineEnd = buf.lastIndexOf(0x0a);
+  if (lineEnd < 0) {
+    return undefined;
+  }
+  const last = lastChainedLine(buf, lineEnd, start === 0);
+  if (last === undefined) {
+    return undefined;
+  }
+  if (last.bytes.length > AUDIT_LINE_MAX_BYTES) {
+    throw new Error("audit line exceeds the chain bound");
+  }
+  return { seq: last.seq, hash: sha256Hex(last.bytes) };
+}
+
+export type AuditHeadOutcome =
+  | { readonly state: "absent" }
+  | { readonly state: "none" }
+  | { readonly state: "unreadable" }
+  | { readonly state: "head"; readonly head: TailHead };
+
+// The head of one audit file, for the daemon's startup and shutdown records. The file is opened read-only without following a
+// symlink, as the verifier opens it. A missing file is absent. Never throws.
+export function readAuditHead(file: string): AuditHeadOutcome {
+  let fd: number;
+  try {
+    fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  } catch (error: unknown) {
+    const missing = error instanceof Error && (error as NodeJS.ErrnoException).code === "ENOENT";
+    return missing ? { state: "absent" } : { state: "unreadable" };
+  }
+  try {
+    const head = readTailHead(fd);
+    return head === undefined ? { state: "none" } : { state: "head", head };
+  } catch {
+    // The tail could not be read, or its line is over the bound. The caller logs audit.unreadable.
+    return { state: "unreadable" };
+  } finally {
+    closeSync(fd);
+  }
 }
 
 function chainedSeq(line: Uint8Array): number | undefined {

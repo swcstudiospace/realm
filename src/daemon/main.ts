@@ -6,7 +6,7 @@
 // on process.exitCode and the event loop drains.
 
 import { join } from "node:path";
-import { checkAuditFile } from "../audit/chain.js";
+import { readAuditHead } from "../audit/chain.js";
 import { RealmError, type ErrorCode } from "../core/errors.js";
 import { loadRuntimeConfig, runtimeRootsOf } from "../runtime/config.js";
 import { defaultPolicyPath, isDirectEntry, podmanSocketPath, readHostRuntime } from "../runtime/host-paths.js";
@@ -106,7 +106,7 @@ export async function runDaemon(deps: DaemonDeps): Promise<number> {
       emitFailure(entry.write, codeOf(error));
       return 1;
     }
-    // The startup chain head (OBS-02). The scan runs on the event loop, so a large audit file delays requests until it finishes. See emitAuditHead.
+    // The startup chain head (OBS-02). It is read from the file tail only, so its cost does not grow with the audit file. See emitAuditHead.
     emitAuditHead(stateDir, entry.write);
     try {
       const code = await awaitStop(started, {
@@ -166,15 +166,16 @@ function emitStartup(writeStderr: (line: string) => void, report: StartupReport)
   });
 }
 
-// The chain head of the daemon's audit file (OBS-02), logged at startup and again at shutdown. checkAuditFile never throws. A
-// missing or unreadable file, or one with no chained line, has no head and logs nothing. This is an entry record, so it goes
-// to the entry logger (daemon.log in production).
+// The chain head of the daemon's audit file (OBS-02), logged at startup and again at shutdown. It is read from the file tail
+// only. A missing file, or one with no chained line, logs nothing. A file that exists but cannot be read logs audit.unreadable
+// (warn). This is an entry record, so it goes to the entry logger (daemon.log in production).
 function emitAuditHead(stateDir: string, writeStderr: (line: string) => void): void {
-  const { head } = checkAuditFile(join(stateDir, "audit", `${SESSION_ID}.jsonl`));
-  if (head === undefined) {
-    return;
+  const outcome = readAuditHead(join(stateDir, "audit", `${SESSION_ID}.jsonl`));
+  if (outcome.state === "head") {
+    entryLogger(writeStderr).info("audit.head", { sessionId: SESSION_ID, seq: outcome.head.seq, lineSha256: outcome.head.hash });
+  } else if (outcome.state === "unreadable") {
+    entryLogger(writeStderr).warn("audit.unreadable", { sessionId: SESSION_ID, reason: "unreadable" });
   }
-  entryLogger(writeStderr).info("audit.head", { sessionId: SESSION_ID, seq: head.seq, line: head.line, lineSha256: head.hash });
 }
 
 // The entry records (D-1704) go to <stateDir>/daemon.log through the rotating file sink. A line the sink refuses goes to the

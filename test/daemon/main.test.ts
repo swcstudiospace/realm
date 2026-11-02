@@ -4,7 +4,7 @@
 
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { verifyAuditFile } from "../../src/audit/chain.js";
@@ -540,7 +540,6 @@ void test("OBS-02: audit.head logs the chain head of the daemon audit file at st
       event: "audit.head",
       sessionId: "daemon",
       seq: head.seq,
-      line: head.line,
       lineSha256: head.hash,
     });
   }
@@ -554,6 +553,24 @@ void test("OBS-02: audit.head logs nothing when the daemon audit file is missing
 
   assert.equal(await runDaemon(h.deps), 0);
   assert.deepEqual(h.lines, []);
+});
+
+void test("OBS-02: audit.unreadable is logged as a warn at startup and at shutdown when the daemon audit file cannot be read", async (t) => {
+  const dir = tempDir(t);
+  const raw = validConfig(dir);
+  const stateDir = String(raw["stateDir"]);
+  mkdirSync(join(stateDir, "audit"), { recursive: true });
+  // A symlink is refused by the no-follow open, so the file exists and cannot be read.
+  symlinkSync(join(dir, "elsewhere.jsonl"), join(stateDir, "audit", "daemon.jsonl"));
+  const h = harness(writeConfig(dir, raw), {
+    start: () => Promise.resolve(startedWith(Promise.resolve())),
+  });
+
+  assert.equal(await runDaemon(h.deps), 0);
+  assert.equal(h.lines.length, 2, "one audit.unreadable line at startup and one at shutdown");
+  for (const line of h.lines) {
+    assert.deepEqual(entryOf(line), { level: "warn", event: "audit.unreadable", sessionId: "daemon", reason: "unreadable" });
+  }
 });
 
 interface FailureRun {
