@@ -2,9 +2,11 @@
 // startDaemon, and holds the process until a SIGTERM or SIGINT, or a control-channel down, completes
 // teardown. A signal runs the control channel's own down request against the daemon socket, so both
 // shutdown paths share one code path. This module parses no argv. It reads process.env once, in
-// main, and never calls process.exit: the exit code is set on process.exitCode and the event loop
-// drains.
+// main. Only the uncaught-failure handler calls process.exit, after logging `daemon.failed`. Otherwise the exit code is set
+// on process.exitCode and the event loop drains.
 
+import { join } from "node:path";
+import { checkAuditFile } from "../audit/chain.js";
 import { RealmError, type ErrorCode } from "../core/errors.js";
 import { loadRuntimeConfig, runtimeRootsOf } from "../runtime/config.js";
 import { defaultPolicyPath, isDirectEntry, podmanSocketPath, readHostRuntime } from "../runtime/host-paths.js";
@@ -102,12 +104,17 @@ export async function runDaemon(deps: DaemonDeps): Promise<number> {
       emitFailure(writeStderr, codeOf(error));
       return 1;
     }
+    // The startup chain head (OBS-02). The scan runs on the event loop, so a large audit file delays requests until it finishes. See emitAuditHead.
+    emitAuditHead(stateDir, writeStderr);
     try {
-      return await awaitStop(started, {
+      const code = await awaitStop(started, {
         sendDown: deps.sendDown ?? requestDown,
         onSignal: deps.onSignal ?? registerSignal,
         writeStderr,
       });
+      // The shutdown chain head, read after the teardown has finished and before the request log closes.
+      emitAuditHead(stateDir, writeStderr);
+      return code;
     } finally {
       requests.close();
     }
@@ -154,6 +161,17 @@ function emitStartup(writeStderr: (line: string) => void, report: StartupReport)
     ...(report.reapFailure === undefined ? {} : { code: report.reapFailure, reapFailure: report.reapFailure }),
     failures: report.failures,
   });
+}
+
+// The chain head of the daemon's audit file (OBS-02), logged at startup and again at shutdown. checkAuditFile never throws. A
+// missing or unreadable file, or one with no chained line, has no head and logs nothing. This is an entry record, so it goes
+// to the entry logger (daemon.log in production).
+function emitAuditHead(stateDir: string, writeStderr: (line: string) => void): void {
+  const { head } = checkAuditFile(join(stateDir, "audit", `${SESSION_ID}.jsonl`));
+  if (head === undefined) {
+    return;
+  }
+  entryLogger(writeStderr).info("audit.head", { sessionId: SESSION_ID, seq: head.seq, line: head.line, lineSha256: head.hash });
 }
 
 function requestLogger(
@@ -245,10 +263,39 @@ function awaitStop(started: StartedDaemon, wiring: StopWiring): Promise<number> 
 }
 
 export async function main(): Promise<void> {
+  installFailureHandlers(writeLine, exitProcess);
   const env: EnvironmentLike = { ...process.env };
   process.exitCode = await runDaemon({ env });
 }
 
+type FailureEvent = "uncaughtException" | "unhandledRejection";
+const FAILURE_EVENTS: readonly FailureEvent[] = ["uncaughtException", "unhandledRejection"];
+
+// The uncaught-failure handlers (research 3.2). Each writes one daemon.failed line through the entry logger, sets the exit
+// code and exits 1. register defaults to process.on, so a test passes a fake and installs no real process handler.
+export function installFailureHandlers(
+  writeStderr: (line: string) => void,
+  exit: (code: number) => void,
+  register: (event: FailureEvent, listener: (error: unknown) => void) => void = registerProcessFailure,
+): void {
+  for (const event of FAILURE_EVENTS) {
+    register(event, (error: unknown) => {
+      emitFailure(writeStderr, codeOf(error));
+      process.exitCode = 1;
+      exit(1);
+    });
+  }
+}
+
+function registerProcessFailure(event: FailureEvent, listener: (error: unknown) => void): void {
+  process.on(event, listener);
+}
+
+function exitProcess(code: number): void {
+  process.exit(code);
+}
+
+// A non-RealmError maps to SCHEMA_INVALID. For a crash that is the fallback: the catalogue has no generic crash code.
 function codeOf(error: unknown): ErrorCode {
   return error instanceof RealmError ? error.code : "SCHEMA_INVALID";
 }

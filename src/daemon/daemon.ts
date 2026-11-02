@@ -268,6 +268,9 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
       runtimeConfig: config,
     });
 
+  // Lifecycle and control lines go through the caller's logger: requests.log in production (D-1704).
+  const logger = options.logger ?? nullLogger;
+  logger.info("daemon.starting");
   ensureSocketDir(stateDir, options.socketDirDeps);
   const socketPath = controlSocketPath(stateDir);
   // OQ-P6-03: a refused dial means a live owner answers; any other outcome
@@ -288,7 +291,6 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
   // maintenance has run, and unset when nothing was destroyed.
   let startupNotice: string | undefined;
   let upId: string | undefined;
-  const logger = options.logger ?? nullLogger;
   const metrics = createMetrics({ now: () => new Date(), monotonicMs: () => performance.now() });
   const statusOf = (snapshot: StateSnapshot): StatusResult => statusResult(snapshot, handle.policyMode, startupNotice);
   const completed = new Set<Socket>();
@@ -345,6 +347,14 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
   };
   const unsubscribeHealth = handle.controller.events.subscribe((event) => {
     metrics.recordTransition(event.from, event.to);
+    // The reason is free text, so only a catalogue code is taken from it. The line goes to the caller's logger (requests.log).
+    const code = catalogueCode(event.reason);
+    logger.info("lifecycle.transition", {
+      from: event.from,
+      to: event.to,
+      ...(code === undefined ? {} : { code }),
+      ...(upId === undefined ? {} : { upId }),
+    });
     if (event.to === "active" || event.to === "degraded") {
       if (healthTimer === undefined) {
         startHealthLoop();
@@ -411,6 +421,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
   // handle down, and removes the socket file. A down passes its socket and is answered on it. A failed server
   // passes its code as the reason, so done rejects with that code instead of resolving.
   const stop = async (id: ControlId | null, socket: Socket | undefined, reason?: ErrorCode): Promise<void> => {
+    logger.info("daemon.stopping");
     downRequested = true;
     unsubscribeHealth();
     stopHealthLoop();
@@ -425,6 +436,8 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
     } catch (error: unknown) {
       reply = refusalReply(id, error);
     }
+    // Written after the teardown attempt, whether it finished or was refused, and before the socket is removed.
+    logger.info("daemon.stopped");
     server.close();
     // A socket file that cannot be removed is the reply's refusal, never a silent loss. The daemon stops either way.
     const removal = removeSocketFile(socketPath);
@@ -590,8 +603,14 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
     if (!isControlMethod(request.method)) {
       return unknownMethodReply(request.id);
     }
+    // A control line names only the method. Params, ids and payloads are never logged (requests.log, D-1704).
+    logger.debug("control.request", { method: request.method });
     const reply = await dispatch(request.method, request.id, request.params, socket);
-    metrics.recordControl(request.method, reply?.error !== undefined);
+    const refused = reply?.error;
+    metrics.recordControl(request.method, refused !== undefined);
+    if (refused !== undefined) {
+      logger.warn("control.refused", { method: request.method, code: refused.code });
+    }
     return reply;
   };
 
@@ -664,6 +683,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
       server.once("error", reject);
       server.listen(socketPath, () => {
         server.off("error", reject);
+        logger.info("daemon.listening");
         resolve();
       });
     });

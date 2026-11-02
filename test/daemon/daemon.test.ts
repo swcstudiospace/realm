@@ -1006,6 +1006,102 @@ void test("OBS-02: a probe that resolves in error is logged", async (t) => {
   await awaitDone(daemon);
 });
 
+// Each log line parsed to its object, in order.
+function logRowsOf(lines: readonly string[]): Record<string, unknown>[] {
+  return lines.map((line) => JSON.parse(line) as Record<string, unknown>);
+}
+
+void test("OBS-02: lifecycle.transition logs from and to for each state change, and no free-text reason", async (t) => {
+  const lines: string[] = [];
+  const logger = createLogger({
+    sink: { write: (line) => { lines.push(line); return true; } },
+    level: "info",
+    now: () => new Date(CLOCK_ISO),
+  });
+  const fixture = makeDirs();
+  const { options } = daemonParts(fixture);
+  const daemon = await startDaemon({ ...options, logger });
+  t.after(() => cleanupDaemon(daemon));
+  const up = await sendRequest(daemon.socketPath, { id: "u1", method: "up", params: { workspaceRoot: fixture.ws } });
+  assert.equal(snapshotStateOf(up), "active");
+
+  const transitions = logRowsOf(lines).filter((row) => row["event"] === "lifecycle.transition");
+  assert.deepEqual(transitions.map((row) => [row["from"], row["to"]]), [
+    ["unbound", "connecting"],
+    ["connecting", "active"],
+  ]);
+  for (const row of transitions) {
+    assert.equal("reason" in row, false, "the free-text reason is never logged");
+    assert.equal("code" in row, false, "a transition whose reason is not a catalogue code carries no code");
+  }
+  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down" });
+  assert.ok(down.result !== undefined);
+  await awaitDone(daemon);
+});
+
+void test("OBS-02: control.refused warns with the code of a refused tool call, and control.request is logged once per request", async (t) => {
+  const lines: string[] = [];
+  const logger = createLogger({
+    sink: { write: (line) => { lines.push(line); return true; } },
+    level: "debug",
+    now: () => new Date(CLOCK_ISO),
+  });
+  const fixture = makeDirs();
+  const { options } = daemonParts(fixture);
+  const daemon = await startDaemon({ ...options, logger });
+  t.after(() => cleanupDaemon(daemon));
+  const refused = await sendRequest(daemon.socketPath, {
+    id: "tool-refused",
+    method: "tool",
+    params: { tool: "PARAM-MARKER" },
+  });
+  assert.equal(refused.error?.code, "SCHEMA_INVALID");
+  const status = await sendRequest(daemon.socketPath, { id: "status-1", method: "status" });
+  assert.equal(status.error, undefined);
+
+  const rows = logRowsOf(lines);
+  const requested = rows.filter((row) => row["event"] === "control.request");
+  assert.deepEqual(requested.map((row) => [row["method"], row["level"]]), [
+    ["tool", "debug"],
+    ["status", "debug"],
+  ]);
+  const warned = rows.filter((row) => row["event"] === "control.refused");
+  assert.deepEqual(warned.map((row) => [row["method"], row["level"], row["code"]]), [["tool", "warn", "SCHEMA_INVALID"]]);
+  const [requestRow] = requested;
+  const [warnRow] = warned;
+  assert.deepEqual(Object.keys(requestRow ?? {}).sort(), ["event", "level", "method", "ts"]);
+  assert.deepEqual(Object.keys(warnRow ?? {}).sort(), ["code", "event", "level", "method", "ts"]);
+  assert.equal(lines.some((line) => line.includes("PARAM-MARKER")), false, "request params are never logged");
+  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down" });
+  assert.ok(down.result !== undefined);
+  await awaitDone(daemon);
+});
+
+void test("OBS-02: daemon.starting, daemon.listening, daemon.stopping and daemon.stopped each appear once, in order, and daemon.listening has no socket path", async (t) => {
+  const lines: string[] = [];
+  const logger = createLogger({
+    sink: { write: (line) => { lines.push(line); return true; } },
+    level: "info",
+    now: () => new Date(CLOCK_ISO),
+  });
+  const fixture = makeDirs();
+  const { options } = daemonParts(fixture);
+  const daemon = await startDaemon({ ...options, logger });
+  t.after(() => cleanupDaemon(daemon));
+  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down" });
+  assert.ok(down.result !== undefined);
+  await awaitDone(daemon);
+
+  const names = ["daemon.starting", "daemon.listening", "daemon.stopping", "daemon.stopped"];
+  const lifecycle = logRowsOf(lines).filter((row) => names.includes(String(row["event"])));
+  assert.deepEqual(lifecycle.map((row) => row["event"]), names);
+  const listening = lifecycle[1];
+  assert.deepEqual(Object.keys(listening ?? {}).sort(), ["event", "level", "ts"]);
+  const listeningLine = lines.find((line) => line.includes("\"event\":\"daemon.listening\""));
+  assert.ok(listeningLine !== undefined);
+  assert.equal(listeningLine.includes(daemon.socketPath), false);
+});
+
 void test("RT-06: a tool request without a tool object refuses with SCHEMA_INVALID and never reaches the dispatcher (P6-D2, P6-D12)", async (t) => {
   const fixture = makeDirs();
   const { options } = daemonParts(fixture);

@@ -7,10 +7,13 @@ import assert from "node:assert/strict";
 import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { verifyAuditFile } from "../../src/audit/chain.js";
+import { appendAudit } from "../../src/audit/log.js";
 import { makeRealmError } from "../../src/core/errors.js";
 import { CONTROL_TIMEOUT_MS, type ControlReply } from "../../src/daemon/channel.js";
 import {
   runDaemon,
+  installFailureHandlers,
   type DaemonDeps,
   type DaemonSignal,
   type DaemonStartOptions,
@@ -508,4 +511,92 @@ void test("OBS-02: an early startup failure is one logger JSON line, and the ens
   assert.equal(value["code"], "POLICY_DENIED");
   assert.equal(readFileSync(logPath, "utf8"), `${line}\n`);
   assert.equal(daemonStartFailureSince(stateDir, 0), "POLICY_DENIED");
+});
+
+void test("OBS-02: audit.head logs the chain head of the daemon audit file at startup and at shutdown, equal to verifyAuditFile", async (t) => {
+  const dir = tempDir(t);
+  const raw = validConfig(dir);
+  const stateDir = String(raw["stateDir"]);
+  for (const index of [1, 2, 3]) {
+    appendAudit(stateDir, {
+      sessionId: "daemon",
+      tool: "status",
+      outcome: "ok",
+      phase: "admission",
+      correlationId: `head-${String(index)}`,
+    });
+  }
+  const head = verifyAuditFile(join(stateDir, "audit", "daemon.jsonl")).head;
+  assert.ok(head !== undefined);
+  const h = harness(writeConfig(dir, raw), {
+    start: () => Promise.resolve(startedWith(Promise.resolve())),
+  });
+
+  assert.equal(await runDaemon(h.deps), 0);
+  assert.equal(h.lines.length, 2, "one audit.head line at startup and one at shutdown");
+  for (const line of h.lines) {
+    assert.deepEqual(entryOf(line), {
+      level: "info",
+      event: "audit.head",
+      sessionId: "daemon",
+      seq: head.seq,
+      line: head.line,
+      lineSha256: head.hash,
+    });
+  }
+});
+
+void test("OBS-02: audit.head logs nothing when the daemon audit file is missing", async (t) => {
+  const dir = tempDir(t);
+  const h = harness(writeConfig(dir, validConfig(dir)), {
+    start: () => Promise.resolve(startedWith(Promise.resolve())),
+  });
+
+  assert.equal(await runDaemon(h.deps), 0);
+  assert.deepEqual(h.lines, []);
+});
+
+interface FailureRun {
+  readonly lines: string[];
+  readonly exits: number[];
+  readonly listeners: Map<string, (error: unknown) => void>;
+}
+
+// Installs the failure handlers over a fake registry, so no process handler is registered and each exit is recorded.
+function installFailureRun(): FailureRun {
+  const run: FailureRun = { lines: [], exits: [], listeners: new Map<string, (error: unknown) => void>() };
+  installFailureHandlers(
+    (line) => {
+      run.lines.push(line);
+    },
+    (code) => {
+      run.exits.push(code);
+    },
+    (event, listener) => {
+      run.listeners.set(event, listener);
+    },
+  );
+  return run;
+}
+
+void test("uncaught: each failure event writes one daemon.failed line with its code, sets exit code 1, and exits once with 1", (t) => {
+  const previous = process.exitCode;
+  t.after(() => {
+    process.exitCode = previous;
+  });
+  for (const event of ["uncaughtException", "unhandledRejection"]) {
+    for (const [error, code] of [
+      [makeRealmError("LOCK_CONFLICT"), "LOCK_CONFLICT"],
+      [new Error("not a catalogue error"), "SCHEMA_INVALID"],
+    ] as const) {
+      const run = installFailureRun();
+      const listener = run.listeners.get(event);
+      assert.ok(listener !== undefined, `${event} has a handler`);
+      process.exitCode = 0;
+      listener(error);
+      assert.deepEqual(run.lines.map(entryOf), [failed(code)]);
+      assert.equal(process.exitCode, 1);
+      assert.deepEqual(run.exits, [1]);
+    }
+  }
 });
