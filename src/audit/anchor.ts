@@ -4,7 +4,7 @@
 // ever published, never audit content. Node builtins only; no process.env (the CLI entry edge reads it).
 
 import { Buffer } from "node:buffer";
-import { createHash, createPrivateKey, createPublicKey, sign as cryptoSign, timingSafeEqual } from "node:crypto";
+import { createHash, createPrivateKey, createPublicKey, sign as cryptoSign, timingSafeEqual, type Hash } from "node:crypto";
 import { existsSync, lstatSync, readFileSync, realpathSync } from "node:fs";
 import { isAbsolute, resolve, sep } from "node:path";
 import type { ErrorCode } from "../core/errors.js";
@@ -55,12 +55,14 @@ export interface AnchorRpc {
   call(method: string, params: readonly unknown[]): Promise<unknown>;
 }
 
-function sha256(...parts: readonly Uint8Array[]): Uint8Array {
-  const hash = createHash("sha256");
-  for (const part of parts) {
-    hash.update(part);
-  }
-  return hash.digest();
+// Incremental leaf hash, SHA-256(0x00 || line), with the prefix already fed in. The caller feeds the line bytes.
+export function newLeafHash(): Hash {
+  return createHash("sha256").update(LEAF_PREFIX);
+}
+
+// Parent hash, SHA-256(0x01 || left || right).
+export function nodeHash(left: Uint8Array, right: Uint8Array): Buffer {
+  return createHash("sha256").update(NODE_PREFIX).update(left).update(right).digest();
 }
 
 // Splits audit-log bytes on "\n", dropping one trailing empty segment. Each element is one line without its newline.
@@ -88,17 +90,18 @@ function parentLevel(level: readonly Uint8Array[]): Uint8Array[] {
       break;
     }
     // An unpaired node is promoted unchanged.
-    next.push(right === undefined ? left : sha256(NODE_PREFIX, left, right));
+    next.push(right === undefined ? left : nodeHash(left, right));
   }
   return next;
 }
 
-// Leaf = SHA-256(0x00 || line); parent = SHA-256(0x01 || left || right). Empty input is an error.
-export function merkleRoot(lines: readonly Uint8Array[]): Uint8Array {
-  if (lines.length === 0) {
+// Folds leaf hashes into the Merkle root. Each level pairs from the left, and an unpaired node is promoted unchanged.
+// Empty input is an error.
+function merkleRootOfLeaves(leaves: readonly Uint8Array[]): Uint8Array {
+  if (leaves.length === 0) {
     throw new AnchorError("cannot anchor an empty audit log", "SCHEMA_INVALID");
   }
-  let level: Uint8Array[] = lines.map((line) => sha256(LEAF_PREFIX, line));
+  let level: readonly Uint8Array[] = leaves;
   while (level.length > 1) {
     level = parentLevel(level);
   }
@@ -107,6 +110,11 @@ export function merkleRoot(lines: readonly Uint8Array[]): Uint8Array {
     throw new AnchorError("merkle root computation produced no node", "SCHEMA_INVALID");
   }
   return root;
+}
+
+// Leaf = SHA-256(0x00 || line); parent = SHA-256(0x01 || left || right). Empty input is an error.
+export function merkleRoot(lines: readonly Uint8Array[]): Uint8Array {
+  return merkleRootOfLeaves(lines.map((line) => newLeafHash().update(line).digest()));
 }
 
 export function buildAnchorRecord(input: {

@@ -16,7 +16,7 @@
 
 import { createHash, type Hash } from "node:crypto";
 import { closeSync, constants, fstatSync, openSync, readSync } from "node:fs";
-import { AnchorError, type AnchorMismatch, type AnchorRecord } from "./anchor.js";
+import { AnchorError, newLeafHash, nodeHash, type AnchorMismatch, type AnchorRecord } from "./anchor.js";
 
 export const AUDIT_LINE_MAX_BYTES = 4 * 1024 * 1024;
 export const AUDIT_GENESIS_PREV = "0".repeat(64);
@@ -25,8 +25,6 @@ const READ_CHUNK_BYTES = 64 * 1024;
 const SEQ_LOOKBACK_LINES = 64;
 const HEX64 = /^[0-9a-f]{64}$/;
 const CHECKPOINT = /^([1-9][0-9]*):([0-9a-f]{64})$/;
-const LEAF_PREFIX = Buffer.from([0x00]);
-const NODE_PREFIX = Buffer.from([0x01]);
 
 export interface ChainHead {
   readonly nextSeq: number;
@@ -580,14 +578,6 @@ class StreamingMerkleRoot {
     }
     return root.toString("hex");
   }
-}
-
-function newLeafHash(): Hash {
-  return createHash("sha256").update(LEAF_PREFIX);
-}
-
-function nodeHash(left: Uint8Array, right: Uint8Array): Buffer {
-  return createHash("sha256").update(NODE_PREFIX).update(left).update(right).digest();
 }
 
 function checkError(reason: AuditCheckReason): AuditCheck {
