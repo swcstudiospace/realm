@@ -97,6 +97,13 @@ export type ToolOutcome =
       readonly causeCode?: ErrorCode;
     };
 
+// The audit identity of one call (D-1703, O-g). `upId` is the correlation id of the `up` that admitted the call; it is
+// present only when the call arrives over an attached session and names that session on both audit lines.
+interface CallScope {
+  readonly correlationId: string;
+  readonly upId?: string;
+}
+
 export class ToolDispatcher {
   private readonly deps: ToolDispatcherDeps;
   private readonly workspace: Omit<WorkspaceDeps, "audit">;
@@ -115,7 +122,10 @@ export class ToolDispatcher {
   // The only entry point for tool calls (D-88). A refusal is returned, never thrown. Only a defect
   // that is not a RealmError escapes. An absent correlation id is minted here so both audit lines of
   // the call share one (D-1703). The tool result shape is unchanged.
-  async call(raw: unknown, context?: { readonly correlationId?: string }): Promise<ToolOutcome> {
+  async call(
+    raw: unknown,
+    context?: { readonly correlationId?: string; readonly upId?: string },
+  ): Promise<ToolOutcome> {
     const parsed = validate("tools", raw);
     if (!parsed.ok) {
       return refused(null, parsed.error.code);
@@ -125,9 +135,13 @@ export class ToolDispatcher {
     if (supplied !== undefined && !isCorrelationId(supplied)) {
       return refused(tool, "SCHEMA_INVALID");
     }
-    const correlationId = supplied ?? newCorrelationId();
+    const upId = context?.upId;
+    if (upId !== undefined && !isCorrelationId(upId)) {
+      return refused(tool, "SCHEMA_INVALID");
+    }
+    const scope: CallScope = { correlationId: supplied ?? newCorrelationId(), ...(upId === undefined ? {} : { upId }) };
     try {
-      return await this.#run(parsed.value, correlationId);
+      return await this.#run(parsed.value, scope);
     } catch (error: unknown) {
       if (error instanceof RealmError) {
         return refused(tool, error.code, error.causeCode);
@@ -136,20 +150,20 @@ export class ToolDispatcher {
     }
   }
 
-  #workspace(correlationId: string): WorkspaceDeps {
+  #workspace(scope: CallScope): WorkspaceDeps {
     return {
       ...this.workspace,
       audit: (entry) => {
-        appendAudit(this.deps.stateDir, { ...entry, correlationId });
+        appendAudit(this.deps.stateDir, { ...entry, ...scope });
       },
     };
   }
 
   // Dispatches by tool key. Every ToolCall member has a branch; a value that matches none is refused (TOOL-03).
-  async #run(call: ToolCall, correlationId: string): Promise<ToolOutcome> {
-    const workspace = this.#workspace(correlationId);
+  async #run(call: ToolCall, scope: CallScope): Promise<ToolOutcome> {
+    const workspace = this.#workspace(scope);
     if ("exec" in call) {
-      return this.#exec(call.exec, correlationId);
+      return this.#exec(call.exec, scope);
     }
     if ("read" in call) {
       return { outcome: "done", tool: "read", value: readWorkspaceFile(workspace, call.read) };
@@ -161,10 +175,10 @@ export class ToolDispatcher {
       return { outcome: "done", tool: "list", value: listWorkspaceDir(workspace, call.list) };
     }
     if ("status" in call) {
-      return this.#status(correlationId);
+      return this.#status(scope);
     }
     if ("retry" in call) {
-      return this.#retry(correlationId);
+      return this.#retry(scope);
     }
     return refused(null, "SCHEMA_INVALID");
   }
@@ -182,7 +196,7 @@ export class ToolDispatcher {
   // exec runs only while active, in both modes (D-89, D-109). The argv form and the shell form both
   // reach the runner through buildExecArgv and runSandboxExec. The dispatcher also bounds the call with
   // TOOL_CALL_TIMEOUT_MS, so a runner that ignores its own deadline still returns TOOL_TIMEOUT.
-  async #exec(params: ExecParams, correlationId: string): Promise<ToolOutcome> {
+  async #exec(params: ExecParams, scope: CallScope): Promise<ToolOutcome> {
     checkExecPolicy(this.deps.policy, params);
     const workload: readonly string[] = "argv" in params ? params.argv : ["/bin/sh", "-c", params.script];
     // Refuses a malformed argv before admission. runSandboxExec builds the same argv again.
@@ -195,7 +209,7 @@ export class ToolDispatcher {
     if (state !== "active") {
       throw makeRealmError(execRefusalCode(state));
     }
-    const value = await this.#audited("exec", summarizeExec(params), correlationId, () =>
+    const value = await this.#audited("exec", summarizeExec(params), scope, () =>
       withTimeout(
         runSandboxExec(
           this.deps.runOpenShell,
@@ -211,8 +225,8 @@ export class ToolDispatcher {
   }
 
   // status is not gated. It returns the controller snapshot with its display mapping (D-27).
-  async #status(correlationId: string): Promise<ToolOutcome> {
-    const value = await this.#audited("status", null, correlationId, () => {
+  async #status(scope: CallScope): Promise<ToolOutcome> {
+    const value = await this.#audited("status", null, scope, () => {
       const snapshot = this.deps.controller.snapshot();
       return Promise.resolve({ snapshot, display: displayStatus(snapshot) });
     });
@@ -223,9 +237,9 @@ export class ToolDispatcher {
   // unbound and stopping are refused before admission, so the call is not run and not audited. The
   // admission append is I/O, so the state is read again inside the admitted window and the decision
   // uses that read (M-01).
-  async #retry(correlationId: string): Promise<ToolOutcome> {
+  async #retry(scope: CallScope): Promise<ToolOutcome> {
     refuseRetryIn(this.deps.controller.snapshot().state);
-    const value = await this.#audited("retry", null, correlationId, async () => {
+    const value = await this.#audited("retry", null, scope, async () => {
       const current = this.deps.controller.snapshot();
       refuseRetryIn(current.state);
       if (current.state !== "error") {
@@ -247,14 +261,14 @@ export class ToolDispatcher {
   async #audited<T>(
     tool: "exec" | "status" | "retry",
     execSummary: ExecSummary | null,
-    correlationId: string,
+    scope: CallScope,
     execute: () => Promise<T>,
   ): Promise<T> {
     const base: AuditEntryInput = {
       sessionId: this.deps.sessionId,
       tool,
       outcome: "ok",
-      correlationId,
+      ...scope,
       ...(execSummary === null ? {} : { execSummary }),
     };
     appendAudit(this.deps.stateDir, { ...base, phase: "admission" });

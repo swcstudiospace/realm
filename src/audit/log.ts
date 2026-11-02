@@ -49,6 +49,9 @@ export interface AuditEntryInput {
   readonly execSummary?: ExecSummary;
   // Optional join key (D-1703). Present on admission and result lines of one call.
   readonly correlationId?: string;
+  // Optional join key for the attached session (O-g). The correlation id of the `up` that admitted the call; additive, and
+  // present only on the lines of a call made over that session.
+  readonly upId?: string;
 }
 
 export function summarizeExec(exec: ExecShape): ExecSummary {
@@ -77,10 +80,12 @@ export function appendAudit(stateDir: string, input: AuditEntryInput): void {
     throw makeRealmError("SCHEMA_INVALID");
   }
   const correlationId = durableCorrelationId(input.correlationId);
+  const upId = durableCorrelationId(input.upId);
   const redacted = redactValue({
     at: new Date().toISOString(),
     sessionId: input.sessionId,
     correlationId,
+    ...(upId === undefined ? {} : { upId }),
     tool: input.tool,
     outcome: input.outcome,
     phase: input.phase,

@@ -952,6 +952,45 @@ void test("OBS-02: an unknown tool key is logged as unknown, not copied into the
   await awaitDone(daemon);
 });
 
+void test("OBS-02: the up correlation id is on the admission and result audit lines of a tool call in that session", async (t) => {
+  const lines: string[] = [];
+  const logger = createLogger({
+    sink: { write: (line) => { lines.push(line); return true; } },
+    level: "info",
+    now: () => new Date(CLOCK_ISO),
+  });
+  const fixture = makeDirs();
+  const { options } = daemonParts(fixture);
+  const daemon = await startDaemon({ ...options, logger });
+  t.after(() => cleanupDaemon(daemon));
+
+  const up = await sendRequest(daemon.socketPath, { id: "up-1", method: "up", params: { workspaceRoot: fixture.ws } });
+  assert.equal(snapshotStateOf(up), "active");
+  const upEnd = lines
+    .map((line) => JSON.parse(line) as { event?: string; upId?: string })
+    .find((row) => row.event === "up.end");
+  const upId = upEnd?.upId ?? "";
+  assert.match(upId, /^[A-Za-z0-9_-]{1,64}$/);
+
+  const reply = await sendRequest(daemon.socketPath, {
+    id: "tool-up",
+    method: "tool",
+    params: { tool: { status: {} } },
+  });
+  assert.equal(reply.error, undefined);
+  const logged = lines.map((line) => JSON.parse(line) as { event?: string; correlationId?: string }).find((row) => row.event === "tool.result");
+  const correlationId = logged?.correlationId ?? "";
+  const audit = auditLinesOf(fixture, "sess-daemon").filter((row) => row["correlationId"] === correlationId);
+  assert.deepEqual(audit.map((row) => row["phase"]).sort(), ["admission", "result"]);
+  for (const row of audit) {
+    assert.equal(row["upId"], upId, "each audit line of the call names the up that admitted it");
+  }
+
+  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down" });
+  assert.ok(down.result !== undefined);
+  await awaitDone(daemon);
+});
+
 void test("OBS-02: up logs the catalogue code when create returns an error snapshot", async (t) => {
   const lines: string[] = [];
   const logger = createLogger({
