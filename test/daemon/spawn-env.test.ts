@@ -7,23 +7,40 @@ import { launchFilteredDaemon, startDetachedDaemon } from "../../src/cli/main.js
 
 const SENTINEL = "REALM_SENTINEL_MUST_NOT_LEAK";
 
+// The child writes the file through a temporary name and renames it into place, so the path only ever
+// holds a complete object. The test reads that path and nothing else.
 function script(outPath: string): string {
   return [
-    "import { writeFileSync } from 'node:fs';",
-    `writeFileSync(${JSON.stringify(outPath)}, JSON.stringify({ sentinel: process.env.${SENTINEL} ?? null, socket: process.env.REALM_DRIVER_SOCKET ?? null, gateway: process.env.REALM_DRIVER_GATEWAY_ENDPOINT ?? null, level: process.env.REALM_LOG_LEVEL ?? null }));`,
+    "import { writeFileSync, renameSync } from 'node:fs';",
+    `const tmp = ${JSON.stringify(`${outPath}.tmp`)};`,
+    `writeFileSync(tmp, JSON.stringify({ sentinel: process.env.${SENTINEL} ?? null, socket: process.env.REALM_DRIVER_SOCKET ?? null, gateway: process.env.REALM_DRIVER_GATEWAY_ENDPOINT ?? null, level: process.env.REALM_LOG_LEVEL ?? null }));`,
+    `renameSync(tmp, ${JSON.stringify(outPath)});`,
   ].join("\n");
 }
 
-// The child is a real detached process. The file it writes is the signal; the sleep only polls for that file.
+// The socket value holds a closing brace, so the first half of the object already ends with one. The child
+// writes the two halves through the temporary file and renames it only when both are written. The delay is the
+// real partial-write window in a detached child process; fake timers cannot run inside that child.
+function braceScript(outPath: string): string {
+  return [
+    "import { writeFileSync, appendFileSync, renameSync } from 'node:fs';",
+    `const tmp = ${JSON.stringify(`${outPath}.tmp`)};`,
+    "const payload = JSON.stringify({ socket: process.env.REALM_DRIVER_SOCKET ?? null });",
+    "const cut = payload.indexOf('}') + 1;",
+    "writeFileSync(tmp, payload.slice(0, cut));",
+    "setTimeout(() => {",
+    "  appendFileSync(tmp, payload.slice(cut));",
+    `  renameSync(tmp, ${JSON.stringify(outPath)});`,
+    "}, 150);",
+  ].join("\n");
+}
+
+// The child is a real detached process. The renamed file is the signal; the sleep only polls for that file.
 async function waitFor(path: string): Promise<string> {
   const started = Date.now();
   while (Date.now() - started < 5_000) {
     if (existsSync(path)) {
-      // The child writes one flat JSON object with no trailing newline, so a closing brace marks a complete write.
-      const text = readFileSync(path, "utf8");
-      if (text.endsWith("}")) {
-        return text;
-      }
+      return readFileSync(path, "utf8");
     }
     await new Promise((resolve) => {
       setTimeout(resolve, 20);
@@ -89,4 +106,18 @@ void test("a sentinel variable does not reach the daemon on the CLI spawn or sta
       process.env.REALM_LOG_LEVEL = previousLevel;
     }
   }
+});
+
+void test("a closing brace inside a string value round-trips through waitFor (Q0-014)", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "realm-spawn-brace-"));
+  t.after(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const out = join(dir, "brace-env.json");
+  const entry = join(dir, "brace-entry.mjs");
+  writeFileSync(entry, braceScript(out));
+  const socket = "/run/realm/}.sock";
+  launchFilteredDaemon(entry, join(dir, "state"), { PATH: "/usr/bin", REALM_DRIVER_SOCKET: socket });
+  const seen = JSON.parse(await waitFor(out)) as { socket: string | null };
+  assert.equal(seen.socket, socket);
 });
