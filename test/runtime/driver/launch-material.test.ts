@@ -218,7 +218,9 @@ void test("Q0-009: removeSecretEntries refuses a path outside the secret directo
   const outside = join(root, "outside.txt");
   writeFileSync(inside, "{}");
   writeFileSync(outside, "keep");
-  assert.throws(() => removeSecretEntries(secretDir, [inside, outside]), schemaInvalid);
+  assert.throws(() => {
+    removeSecretEntries(secretDir, [inside, outside]);
+  }, schemaInvalid);
   assert.equal(existsSync(outside), true);
   assert.equal(existsSync(inside), true);
 });

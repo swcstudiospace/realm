@@ -318,7 +318,7 @@ void test("gateway verifies the presented certificate against REALM_DRIVER_GATEW
   const gateway = loopbackCertificate(t, "gateway");
   const foreign = loopbackCertificate(t, "foreign");
   const port = await startTlsGateway(t, gateway);
-  const endpoint = `https://127.0.0.1:${port}`;
+  const endpoint = `https://127.0.0.1:${String(port)}`;
   const chains = await gatewayCheck(
     { REALM_DRIVER_GATEWAY_ENDPOINT: endpoint, REALM_DRIVER_GATEWAY_CA: gateway.certPath },
     defaultConnectGateway,
