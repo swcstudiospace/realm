@@ -24,6 +24,12 @@ const CATEGORY_BY_TYPE = new Map([
 // changes, so the generator leaves them out. A breaking-change marker (`!`) keeps a commit.
 const INTERNAL_SCOPES = new Set(['planning']);
 const CONVENTIONAL_HEADER = /^([a-z]+)(?:\(([^)]*)\))?(!)?:/;
+const REVERT_BODY = /^This reverts commit ([0-9a-f]{7,40})\b/m;
+// Log records: each starts with a record separator (0x1e), and its fields are split by a unit separator (0x1f),
+// so a multi-line commit body cannot be mistaken for another record.
+const LOG_FORMAT = '%x1e%H%x1f%h%x1f%s%x1f%b';
+const RECORD_SEPARATOR = '\x1e';
+const FIELD_SEPARATOR = '\x1f';
 
 function assertVersion(version) {
   if (typeof version !== 'string' || !VERSION_PATTERN.test(version)) {
@@ -81,11 +87,34 @@ function isInternal(subject) {
   return match !== null && match[3] === undefined && INTERNAL_SCOPES.has(match[2]);
 }
 
-function collectEntries(root, since) {
+// `git revert` records the commit it undoes in the body of the reverting commit: `This reverts commit <sha>.`
+// Each revert is paired by that sha alone, so a commit that shares the title of a reverted commit is never
+// dropped by mistake. Commits arrive newest first, so a revert of a revert is paired before the revert it
+// undoes. A revert whose named commit is outside the range stays, because the feature it removed is in an
+// earlier release.
+function dropReverted(commits) {
+  const dropped = new Set();
+  for (let index = 0; index < commits.length; index += 1) {
+    const named = REVERT_BODY.exec(commits[index].body)?.[1];
+    if (named === undefined || dropped.has(index)) {
+      continue;
+    }
+    const original = commits.findIndex(
+      (commit, other) => other !== index && !dropped.has(other) && commit.hash.startsWith(named),
+    );
+    if (original !== -1) {
+      dropped.add(index);
+      dropped.add(original);
+    }
+  }
+  return commits.filter((_, index) => !dropped.has(index));
+}
+
+function collectCommits(root, since) {
   const range = since === undefined ? 'HEAD' : `${since}..HEAD`;
   let output;
   try {
-    output = execFileSync('git', ['log', '--no-merges', '--format=%h%x09%s', range], {
+    output = execFileSync('git', ['log', '--no-merges', `--format=${LOG_FORMAT}`, range], {
       cwd: root,
       encoding: 'utf8',
       timeout: 30000,
@@ -94,21 +123,28 @@ function collectEntries(root, since) {
     throw new Error(`git log failed for range "${range}": ${error.message}`, { cause: error });
   }
 
-  const entries = [];
-  for (const line of output.split('\n')) {
-    if (line === '') {
+  const commits = [];
+  for (const record of output.split(RECORD_SEPARATOR)) {
+    if (record === '') {
       continue;
     }
-    const tab = line.indexOf('\t');
-    if (tab === -1) {
-      throw new Error(`unexpected git log output: "${line}"`);
+    const fields = record.split(FIELD_SEPARATOR);
+    if (fields.length !== 4) {
+      throw new Error(`unexpected git log output: "${record.trimEnd()}"`);
     }
-    const sha = line.slice(0, tab);
-    const subject = line.slice(tab + 1);
+    const [hash, abbrev, subject, body] = fields;
+    commits.push({ hash, abbrev, subject, body });
+  }
+  return commits;
+}
+
+function collectEntries(root, since) {
+  const entries = [];
+  for (const { abbrev, subject } of dropReverted(collectCommits(root, since))) {
     if (subject.startsWith('chore(release)') || isInternal(subject)) {
       continue;
     }
-    entries.push({ sha, subject, category: categoryOf(subject) });
+    entries.push({ sha: abbrev, subject, category: categoryOf(subject) });
   }
   return entries;
 }
