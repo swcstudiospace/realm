@@ -182,7 +182,7 @@ export interface TailHead {
   readonly hash: string;
 }
 
-export function readTailHead(fd: number): TailHead | undefined {
+function readTailHead(fd: number): TailHead | undefined {
   const size = fstatSync(fd).size;
   if (size === 0) {
     return undefined;
