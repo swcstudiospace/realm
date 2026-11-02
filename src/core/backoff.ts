@@ -9,6 +9,7 @@
 
 export type RandomSource = () => number;
 
+// The jittered delay, in milliseconds, before retry `attempt` (counted from 0). Throws RangeError on invalid input.
 export function computeBackoffDelayMs(
   attempt: number,
   baseMs: number,

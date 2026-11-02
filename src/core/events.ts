@@ -5,6 +5,7 @@
 
 import type { State } from "./states.js";
 
+// Published once for each state transition the state machine commits.
 export interface StateTransitionEvent {
   readonly type: "state.transition";
   readonly sessionId: string;
@@ -14,15 +15,19 @@ export interface StateTransitionEvent {
   readonly at: string;
 }
 
+// Every event that can be published on the bus. A state transition is the only kind so far.
 export type RealmEvent = StateTransitionEvent;
 
+// A subscriber. The bus calls it synchronously, in subscription order, for each published event.
 export type RealmListener = (event: RealmEvent) => void;
 
+// Publishes events to subscribers. subscribe returns the function that removes that subscription.
 export interface EventBus {
   subscribe(listener: RealmListener): () => void;
   publish(event: RealmEvent): void;
 }
 
+// Returns a bus with no subscribers.
 export function createEventBus(): EventBus {
   // One entry per subscription, so removing one registration never removes another, even when
   // the same listener function is subscribed twice.

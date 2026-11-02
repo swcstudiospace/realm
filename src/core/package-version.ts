@@ -15,6 +15,7 @@ const VERSION_PATTERN = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?
 
 let memo: string | undefined;
 
+// The version from the package manifest. It throws when the manifest has no valid version.
 export function packageVersion(): string {
   if (memo !== undefined) {
     return memo;

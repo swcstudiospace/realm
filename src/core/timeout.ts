@@ -3,6 +3,7 @@
 
 import { makeRealmError, type ErrorCode } from "./errors.js";
 
+// Settles with the work's result, or rejects with the catalogue error for code when ms elapse first.
 export function withTimeout<T>(work: Promise<T>, ms: number, code: ErrorCode): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
   const expiry = new Promise<never>((_resolve, reject) => {
