@@ -627,7 +627,8 @@ void test("OBS-04: a stop during the classification makes both overlapping check
   assert.equal(await second, false);
 });
 
-void test("OBS-04: a stop that overtakes the classification makes check return false and leaves the supervisor stopped", async () => {
+void test("OBS-04: a stop that overtakes the classification makes check return false and leaves the supervisor stopped", async (t) => {
+  holdDeadlines(t);
   const { driver, supervisor } = harness();
   await supervisor.start();
   driver.exitRunner();
@@ -641,7 +642,8 @@ void test("OBS-04: a stop that overtakes the classification makes check return f
   assert.equal(await supervisor.check(), false, "a stopped supervisor does not probe");
 });
 
-void test("OBS-04: a new start that overtakes the classification makes check return false and does not hold the new run", async () => {
+void test("OBS-04: a new start that overtakes the classification makes check return false and does not hold the new run", async (t) => {
+  holdDeadlines(t);
   const { driver, supervisor } = harness();
   await supervisor.start();
   driver.exitRunner();
@@ -649,6 +651,7 @@ void test("OBS-04: a new start that overtakes the classification makes check ret
   const pending = supervisor.check();
   await nextTurn();
   await supervisor.start();
+  t.mock.timers.tick(CALL_TIMEOUT_MS);
   assert.equal(await pending, false);
   driver.gatewayUp();
   assert.equal(await supervisor.check(), true, "the new run is healthy and is not held by the old classification");
