@@ -5,9 +5,10 @@ import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runCli } from "../../src/cli/main.js";
-import realmExtension from "../../src/omp/extension.js";
+import realmExtension, { reattachEnabledOf } from "../../src/omp/extension.js";
 import type { OmpExtensionApi, OmpSessionContext } from "../../src/omp/plugin.js";
 import { controlSocketPath } from "../../src/session/paths.js";
+import { RealmError } from "../../src/core/errors.js";
 
 const IMAGE = `registry.example.com/realm/workload@sha256:${"0".repeat(64)}`;
 const AT = "2026-10-22T00:00:00.000Z";
@@ -178,4 +179,115 @@ void test("OMP-01: the Omp entry and the CLI dial one control socket, the state 
     [],
     "no client dials the socket under XDG_STATE_HOME",
   );
+});
+
+// The Omp entry reads its environment at load. These helpers run one load under a chosen environment and restore every key the
+// load touched, whatever the load did. undefined removes a key.
+function withProcessEnv<T>(values: Readonly<Record<string, string | undefined>>, run: () => T): T {
+  const previous = new Map<string, string | undefined>();
+  for (const key of Object.keys(values)) {
+    previous.set(key, process.env[key]);
+  }
+  try {
+    for (const [key, value] of Object.entries(values)) {
+      if (value === undefined) {
+        Reflect.deleteProperty(process.env, key);
+      } else {
+        process.env[key] = value;
+      }
+    }
+    return run();
+  } finally {
+    for (const [key, value] of previous) {
+      if (value === undefined) {
+        Reflect.deleteProperty(process.env, key);
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+}
+
+// A temp base holding a runtime config, so the Omp entry can load its config.
+function configBase(t: TestContext): string {
+  const base = mkdtempSync(join(tmpdir(), "omp-reattach-"));
+  t.after(() => {
+    rmSync(base, { recursive: true, force: true });
+  });
+  mkdirSync(join(base, "config", "realm"), { recursive: true });
+  mkdirSync(join(base, "state"), { recursive: true });
+  writeFileSync(
+    join(base, "config", "realm", "config.json"),
+    JSON.stringify({ image: IMAGE, stateDir: join(base, "state"), workspaceRoot: base }),
+  );
+  return base;
+}
+
+// A host double that records each event the entry registers, and accepts every other registration the plugin makes.
+function recordingPi(): { readonly pi: OmpExtensionApi; readonly events: string[] } {
+  const events: string[] = [];
+  const pi = {
+    on(event: string): void {
+      events.push(event);
+    },
+    registerCommand(): void {},
+    registerTool(): void {},
+    getAllTools(): { readonly name: string }[] {
+      return [];
+    },
+    getActiveTools(): string[] {
+      return [];
+    },
+    setActiveTools(): Promise<void> {
+      return Promise.resolve();
+    },
+  } as unknown as OmpExtensionApi;
+  return { pi, events };
+}
+
+// Loads the Omp entry with REALM_OMP_REATTACH set to value (undefined leaves it unset).
+function loadEntry(base: string, value: string | undefined, pi: OmpExtensionApi): void {
+  withProcessEnv({ XDG_CONFIG_HOME: join(base, "config"), REALM_OMP_REATTACH: value }, () => {
+    realmExtension(pi);
+  });
+}
+
+const REGISTERED_EVENTS = ["session_start", "session_shutdown", "tool_call"];
+
+void test("O4 edge: REALM_OMP_REATTACH unset or 0 loads the entry with re-attach off", (t) => {
+  const base = configBase(t);
+  for (const value of [undefined, "0"]) {
+    const { pi, events } = recordingPi();
+    loadEntry(base, value, pi);
+    assert.deepEqual(events, REGISTERED_EVENTS, `REALM_OMP_REATTACH=${String(value)} loads`);
+  }
+  assert.equal(reattachEnabledOf(undefined), false, "unset is off");
+  assert.equal(reattachEnabledOf("0"), false, "0 is off");
+});
+
+void test("O4 edge: REALM_OMP_REATTACH 1 loads the entry with re-attach on", (t) => {
+  const base = configBase(t);
+  const { pi, events } = recordingPi();
+  loadEntry(base, "1", pi);
+  assert.deepEqual(events, REGISTERED_EVENTS, "1 loads");
+  assert.equal(reattachEnabledOf("1"), true, "1 is on");
+});
+
+void test("O4 edge: any other REALM_OMP_REATTACH value fails the load with SCHEMA_INVALID before anything registers", (t) => {
+  const base = configBase(t);
+  for (const value of ["", "true", "yes", "2", " 1", "01"]) {
+    const { pi, events } = recordingPi();
+    assert.throws(
+      () => {
+        loadEntry(base, value, pi);
+      },
+      (error: unknown) => error instanceof RealmError && error.code === "SCHEMA_INVALID",
+      `REALM_OMP_REATTACH=${JSON.stringify(value)} fails the load`,
+    );
+    assert.deepEqual(events, [], "nothing is registered");
+    assert.throws(
+      () => reattachEnabledOf(value),
+      (error: unknown) => error instanceof RealmError && error.code === "SCHEMA_INVALID",
+    );
+  }
 });

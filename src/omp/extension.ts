@@ -15,9 +15,22 @@ import { controlSocketPath } from "../session/paths.js";
 import { makeRealmError, RealmError } from "../core/errors.js";
 import { registerRealmPlugin, type DaemonAttach, type OmpExtensionApi } from "./plugin.js";
 
+// The re-attach switch (O4). Unset and 0 leave re-attach off, 1 turns it on. Any other value is a bad setting and fails the load.
+export function reattachEnabledOf(value: string | undefined): boolean {
+  if (value === undefined || value === "0") {
+    return false;
+  }
+  if (value === "1") {
+    return true;
+  }
+  throw makeRealmError("SCHEMA_INVALID");
+}
+
 export default function realmExtension(pi: OmpExtensionApi): void {
   // Read once, at the edge: the config's stateDir, the value the CLI and the daemon use. An invalid config throws here.
   const stateDir = readHostRuntime(process.env).stateDir;
+  // The re-attach switch is read once, here: a value that is neither unset, 0 nor 1 fails the load before anything registers.
+  const reattachEnabled = reattachEnabledOf(process.env.REALM_OMP_REATTACH);
   const socketPath = controlSocketPath(stateDir);
   const daemonEntry = fileURLToPath(new URL("../daemon/main.js", import.meta.url));
 
@@ -50,5 +63,5 @@ export default function realmExtension(pi: OmpExtensionApi): void {
     }
   };
 
-  registerRealmPlugin(pi, { attachDaemon });
+  registerRealmPlugin(pi, { attachDaemon, reattach: { enabled: reattachEnabled, random: Math.random } });
 }

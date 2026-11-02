@@ -31,6 +31,8 @@
 //     policy.startupBudgetMs; the constant mirrors the policy schema default.
 //   - No push channel carries transitions from the daemon. While attached, the indicator repaints on
 //     attach, on retry, on every guarded call, and on a bounded poll (STATUS_POLL_MS) of the daemon status.
+//   - O4 (16-04): bounded re-attach (REALM_OMP_REATTACH) adds no handshake and no protocol version. The control protocol
+//     has none; whether one is required is the owner's decision, recorded in the O4 report and not implemented here.
 
 import { makeRealmError, RealmError } from "../core/errors.js";
 import type { MutationDenyCode } from "../core/policy.js";
@@ -107,6 +109,9 @@ export interface RealmPluginOptions {
   // the idempotent up. Rejects with a RealmError when the attach fails. A refused up that leaves a live daemon resolves with its
   // refusal, so the client is still adopted and the refusal is shown.
   readonly attachDaemon: (workspaceRoot: string) => Promise<DaemonAttach>;
+  // Bounded re-attach after a dropped link (O4). Absent or disabled, the plugin attaches once and behaves as before. random must
+  // return a value in [0, 1]; the extension edge passes Math.random.
+  readonly reattach?: { readonly enabled: boolean; readonly random: () => number };
 }
 
 export interface ActiveSession {
@@ -130,6 +135,14 @@ export interface ActiveSession {
   // The refusal the last attach reported, with the state the daemon reported alongside it. It stays on screen while the
   // daemon keeps reporting that state; a status read that reports a different state replaces it. Null when none stands.
   refusal: { readonly code: string; readonly state: StateSnapshot["state"] } | null;
+  // The re-attach sub-state: "off" while re-attach is disabled, otherwise linked, reconnecting, attaching or failed (ReattachState).
+  link: ReattachState;
+  // Re-attach waits armed in the current streak. It resets on linked and on a user retry.
+  reattachCount: number;
+  // The pending re-attach wait, or null when none is armed.
+  wait: { readonly handle: unknown } | null;
+  // Reports a loss of the client this session holds. Null while re-attach is disabled.
+  onLinkLost: ((code: string) => void) | null;
 }
 
 // Startup budget for attach plus its first status read. The daemon owns the policy, so this mirrors
@@ -225,6 +238,112 @@ function disarmTimer(session: ActiveSession, handle: unknown): void {
   }
 }
 
+// ---- Re-attach (O4; spec SANDBOX_OMP_PLUGIN_CONNECTION) ----------------------
+// Off unless RealmPluginOptions.reattach is enabled. A dropped link (a failed read whose code is in LINK_LOST_CODES) then
+// re-attaches on a bounded schedule: equal-jitter waits grown from REATTACH_BASE_DELAY_MS and capped at REATTACH_DELAY_CAP_MS,
+// at most REATTACH_RETRY_CAP of them. Each attempt runs the attach path under STARTUP_BUDGET_MS, and each status read stays under
+// GUARD_STATUS_BUDGET_MS. The status item keeps the six existing names: the host-side wait paints as connecting, FAILED as error.
+
+export const REATTACH_RETRY_CAP = 8;
+export const REATTACH_BASE_DELAY_MS = 1_000;
+export const REATTACH_DELAY_CAP_MS = 60_000;
+// The codes that mean the link to the daemon is lost: a dropped channel, or a status read that outlived its bound.
+export const LINK_LOST_CODES: readonly string[] = Object.freeze(["REALM_NOT_ACTIVE", "TOOL_TIMEOUT"]);
+// The attach failures worth another attempt. Every other failure, a refusal the daemon answered included, reaches FAILED at once.
+export const RETRYABLE_ATTACH_CODES: readonly string[] = Object.freeze([
+  "REALM_NOT_ACTIVE",
+  "TOOL_TIMEOUT",
+  "STARTUP_BUDGET_EXCEEDED",
+  "DAEMON_START_TIMEOUT",
+]);
+
+// The re-attach sub-states. "off" is the disabled state. The rest are host-side and map onto the existing names: linked is
+// active, attaching and reconnecting are connecting, failed is error. The frozen state table has no wait state, so none is added.
+export type ReattachState = "off" | "linked" | "reconnecting" | "attaching" | "failed";
+
+const REATTACH_TRANSITIONS: Readonly<Record<ReattachState, readonly ReattachState[]>> = {
+  off: [],
+  linked: ["reconnecting", "attaching"],
+  reconnecting: ["attaching"],
+  attaching: ["linked", "reconnecting", "failed"],
+  failed: ["attaching"],
+};
+
+// Whether a sub-state may move to another. Every move the table does not list is refused.
+export function reattachTransitionAllowed(from: ReattachState, to: ReattachState): boolean {
+  return Object.hasOwn(REATTACH_TRANSITIONS, from) && REATTACH_TRANSITIONS[from].includes(to);
+}
+
+// The delay before re-attach attempt `attempt` (1-based): equal jitter over an exponential ceiling, so the delay lies in
+// [ceiling/2, ceiling] and never near zero. random is injected and must return a value in [0, 1].
+export function equalJitterDelayMs(attempt: number, baseMs: number, capMs: number, random: () => number): number {
+  if (!Number.isInteger(attempt) || attempt < 1) {
+    throw new RangeError(`attempt must be a positive integer, got ${String(attempt)}`);
+  }
+  if (!Number.isFinite(baseMs) || baseMs < 0 || !Number.isFinite(capMs) || capMs < 0) {
+    throw new RangeError("base and cap must be finite and not negative");
+  }
+  if (baseMs > capMs) {
+    throw new RangeError(`base ${String(baseMs)} exceeds cap ${String(capMs)}`);
+  }
+  const draw = random();
+  if (!(draw >= 0 && draw <= 1)) {
+    throw new RangeError(`random must return a value in [0, 1], got ${String(draw)}`);
+  }
+  // The exponent is clamped so the power stays finite; the cap bounds every attempt from the point the ceiling reaches it.
+  const ceiling = Math.min(capMs, baseMs * 2 ** Math.min(attempt - 1, 64));
+  return Math.round(ceiling / 2 + (draw * ceiling) / 2);
+}
+
+// Moves the sub-state when the move is legal. An illegal move is refused, named in a notice, and applies nothing.
+function moveLink(session: ActiveSession, to: ReattachState): void {
+  if (!reattachTransitionAllowed(session.link, to)) {
+    session.ctx.ui.notify(`realm link transition ${session.link} -> ${to} rejected`);
+    return;
+  }
+  session.link = to;
+}
+
+// Closes the session's client and forgets it. The daemon keeps its sandbox: closing only ends this host's link.
+function releaseClient(session: ActiveSession): void {
+  const client = session.client;
+  session.client = null;
+  client?.close();
+}
+
+// Cancels the pending re-attach wait, if one is armed.
+function cancelWait(session: ActiveSession): void {
+  if (session.wait !== null) {
+    disarmTimer(session, session.wait.handle);
+    session.wait = null;
+  }
+}
+
+// The catalogue code of a failed call. A failure that is not a RealmError reads as a daemon that did not answer, as refusalOf does.
+function codeOfError(error: unknown): string {
+  return error instanceof RealmError ? error.code : "REALM_NOT_ACTIVE";
+}
+
+// Reports a loss of the client the session holds. A failure from a client the session no longer holds is ignored, so a stale
+// failure never tears down a newer link.
+function reportLinkLoss(session: ActiveSession, code: string, isCurrent: () => boolean): void {
+  if (session.onLinkLost !== null && LINK_LOST_CODES.includes(code) && isCurrent()) {
+    session.onLinkLost(code);
+  }
+}
+
+// The retry command's reply for one attach outcome.
+function describeRetry(outcome: AttachOutcome): string {
+  if (outcome.outcome === "attached") {
+    return `realm retry: ${outcome.snapshot.state} (${outcome.snapshot.reason})`;
+  }
+  if (outcome.outcome === "failed") {
+    return `realm retry refused: ${outcome.code}`;
+  }
+  return "realm retry superseded";
+}
+
+
 // ---- Registration -----------------------------------------------------------
 
 type AttachOutcome =
@@ -241,6 +360,9 @@ export function registerRealmPlugin(pi: OmpExtensionApi, options: RealmPluginOpt
   let attempt = 0;
   // The host tool set, shared by every session of this registration.
   const hostTools = hostToolSetOf(pi);
+  // The re-attach policy, or null while re-attach is off (the default). The plugin reads no environment: the edge passes the switch.
+  const reattachOption = options.reattach;
+  const reattach = reattachOption !== undefined && reattachOption.enabled ? { random: reattachOption.random } : null;
 
   // Ends the captured session. Every timer it armed is cleared and its wait settled, and the poll
   // is cleared, so the host runs no callback for an ended session. The client is closed, never taken
@@ -370,6 +492,83 @@ export function registerRealmPlugin(pi: OmpExtensionApi, options: RealmPluginOpt
     return { outcome: "attached", snapshot: attached.status.snapshot };
   };
 
+  // Settles one re-attach attempt: its outcome decides the next sub-state. Nothing changes once the session has ended.
+  const settleAttempt = (session: ActiveSession, outcome: AttachOutcome): void => {
+    if (reattach === null || live !== session || outcome.outcome === "superseded") {
+      return;
+    }
+    if (outcome.outcome === "attached") {
+      session.reattachCount = 0;
+      moveLink(session, "linked");
+      return;
+    }
+    if (RETRYABLE_ATTACH_CODES.includes(outcome.code) && session.reattachCount < REATTACH_RETRY_CAP) {
+      releaseClient(session);
+      moveLink(session, "reconnecting");
+      scheduleWait(session, outcome.code);
+      return;
+    }
+    moveLink(session, "failed");
+    session.ctx.ui.notify(`realm link failed (${outcome.code}); run /${REALM_RETRY_COMMAND} to try again`);
+  };
+
+  // Arms the next re-attach wait: one timer, one notice, and the connecting paint. Its expiry runs the attempt. Its end action only
+  // clears the handle, so shutdown cancels the wait without attaching.
+  const scheduleWait = (session: ActiveSession, code: string): void => {
+    if (reattach === null) {
+      return;
+    }
+    const attemptNo = session.reattachCount + 1;
+    const delayMs = equalJitterDelayMs(attemptNo, REATTACH_BASE_DELAY_MS, REATTACH_DELAY_CAP_MS, reattach.random);
+    session.reattachCount = attemptNo;
+    const handle = armTimer(
+      session,
+      delayMs,
+      () => {
+        session.wait = null;
+        waitExpired(session, attemptNo);
+      },
+      () => {
+        session.wait = null;
+      },
+    );
+    session.wait = { handle };
+    session.refusal = null;
+    session.errorStamp = null;
+    const nextAt = new Date(Date.now() + delayMs).toISOString();
+    session.ctx.ui.notify(
+      `realm link lost (${code}); re-attach attempt ${String(attemptNo)} of ${String(REATTACH_RETRY_CAP)} at ${nextAt}`,
+    );
+    renderRealmStatus(session.ctx.ui, { state: "connecting", reason: "connecting", lastTransitionAt: nowIso() });
+  };
+
+  // A wait that expires attaches once, and only while it is the armed wait of a live session. Anything else has moved on.
+  const waitExpired = (session: ActiveSession, expected: number): void => {
+    if (live !== session || session.link !== "reconnecting" || session.reattachCount !== expected) {
+      return;
+    }
+    moveLink(session, "attaching");
+    void attachCycle(session);
+  };
+
+  // One re-attach attempt: the attach path, then its outcome sets the next sub-state.
+  const attachCycle = async (session: ActiveSession): Promise<AttachOutcome> => {
+    const outcome = await attach(session);
+    settleAttempt(session, outcome);
+    return outcome;
+  };
+
+  // A loss of the linked client: the client is released, the link waits, and one wait is armed. In any other sub-state, or with
+  // no client held, the loss is already handled or the session is FAILED, so the signal changes nothing.
+  const linkLost = (session: ActiveSession, code: string): void => {
+    if (reattach === null || live !== session || session.link !== "linked" || session.client === null) {
+      return;
+    }
+    releaseClient(session);
+    moveLink(session, "reconnecting");
+    scheduleWait(session, code);
+  };
+
   // One repaint tick: reads the daemon status and paints any transition the tick finds. It paints
   // only for the client it read through; a client replaced or ended meanwhile paints nothing.
   const repaint = async (session: ActiveSession): Promise<void> => {
@@ -387,19 +586,26 @@ export function registerRealmPlugin(pi: OmpExtensionApi, options: RealmPluginOpt
         if (!isCurrent()) {
           return;
         }
-        const code = error instanceof RealmError ? error.code : "REALM_NOT_ACTIVE";
-        const at = session.errorStamp?.code === code ? session.errorStamp.at : nowIso();
-        session.errorStamp = { code, at };
-        renderRealmStatus(session.ctx.ui, { state: "error", reason: code, lastTransitionAt: at });
+        const code = codeOfError(error);
+        // A lost link is not painted as an error: the re-attach wait paints connecting once the mode is restored.
+        const lost = session.link === "linked" && LINK_LOST_CODES.includes(code);
+        if (!lost) {
+          const at = session.errorStamp?.code === code ? session.errorStamp.at : nowIso();
+          session.errorStamp = { code, at };
+          renderRealmStatus(session.ctx.ui, { state: "error", reason: code, lastTransitionAt: at });
+        }
         try {
           await reassertLastMode(session, isCurrent);
         } catch {
           if (isCurrent()) {
             const denied = "POLICY_DENIED";
-            const deniedAt = session.errorStamp.code === denied ? session.errorStamp.at : nowIso();
+            const deniedAt = session.errorStamp?.code === denied ? session.errorStamp.at : nowIso();
             session.errorStamp = { code: denied, at: deniedAt };
             renderRealmStatus(session.ctx.ui, { state: "error", reason: denied, lastTransitionAt: deniedAt });
           }
+        }
+        if (lost) {
+          reportLinkLoss(session, code, isCurrent);
         }
         return;
       }
@@ -434,14 +640,18 @@ export function registerRealmPlugin(pi: OmpExtensionApi, options: RealmPluginOpt
     if (session === null) {
       return "realm not started";
     }
-    const outcome = await attach(session);
-    if (outcome.outcome === "attached") {
-      return `realm retry: ${outcome.snapshot.state} (${outcome.snapshot.reason})`;
+    if (reattach === null) {
+      return describeRetry(await attach(session));
     }
-    if (outcome.outcome === "failed") {
-      return `realm retry refused: ${outcome.code}`;
+    if (session.link === "attaching") {
+      // An attach is already in flight, and a second one would race it. The move is refused and reported by moveLink.
+      moveLink(session, "attaching");
+      return "realm retry: an attach is already in progress";
     }
-    return "realm retry superseded";
+    cancelWait(session);
+    session.reattachCount = 0;
+    moveLink(session, "attaching");
+    return describeRetry(await attachCycle(session));
   };
 
   pi.on("session_start", (_event, ctx) => {
@@ -457,6 +667,12 @@ export function registerRealmPlugin(pi: OmpExtensionApi, options: RealmPluginOpt
       refreshing: false,
       errorStamp: null,
       refusal: null,
+      link: reattach === null ? "off" : "attaching",
+      reattachCount: 0,
+      wait: null,
+      onLinkLost: reattach === null ? null : (code: string) => {
+        linkLost(session, code);
+      },
     };
     live = session;
     session.poll = {
@@ -465,7 +681,11 @@ export function registerRealmPlugin(pi: OmpExtensionApi, options: RealmPluginOpt
       }, STATUS_POLL_MS),
     };
     // Detached: the handler returns while the attach runs, and the outcome paints itself.
-    void attach(session);
+    if (reattach === null) {
+      void attach(session);
+    } else {
+      void attachCycle(session);
+    }
   });
 
   pi.on("session_shutdown", () => {
@@ -481,7 +701,17 @@ export function registerRealmPlugin(pi: OmpExtensionApi, options: RealmPluginOpt
     if (session === null || client === null) {
       throw makeRealmError("REALM_NOT_ACTIVE");
     }
-    const outcome = await client.call(call);
+    const outcome = await client.call(call).catch((error: unknown) => {
+      // A lost link is reported to the re-attach wait. A mutation in flight may have taken effect: it is reported as unknown and
+      // is never dispatched again. A read keeps the code it failed with.
+      if (session.onLinkLost !== null && LINK_LOST_CODES.includes(codeOfError(error))) {
+        reportLinkLoss(session, codeOfError(error), () => live === session && session.client === client);
+        if ("write" in call || "exec" in call) {
+          throw makeRealmError("AUDIT_OUTCOME_UNKNOWN");
+        }
+      }
+      throw error;
+    });
     if (outcome.outcome === "done" && outcome.tool === "write" && outcome.value.warning !== null && live === session) {
       session.ctx.ui.notify(outcome.value.warning);
     }
@@ -565,6 +795,7 @@ export async function guardHostToolCall(
     } catch {
       return { block: true, reason: "POLICY_DENIED" };
     }
+    reportLinkLoss(session, codeOfError(error), isCurrent);
     if (toolName === REALM_WRITE_NAME) {
       // The Realm write is never hidden, so the daemon decides it. With no client the daemon call is refused there (B2).
       return undefined;

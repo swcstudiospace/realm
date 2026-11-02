@@ -22,6 +22,13 @@ import {
   guardHostToolCall,
   registerRealmPlugin,
   renderRealmStatus,
+  equalJitterDelayMs,
+  LINK_LOST_CODES,
+  REATTACH_BASE_DELAY_MS,
+  REATTACH_DELAY_CAP_MS,
+  REATTACH_RETRY_CAP,
+  reattachTransitionAllowed,
+  RETRYABLE_ATTACH_CODES,
   type DaemonAttach,
   type ActiveSession,
   type HostToolCall,
@@ -32,6 +39,7 @@ import {
   type OmpStatusUi,
   type RealmPluginOptions,
   type RealmRetryCommand,
+  type ReattachState,
 } from "../../src/omp/plugin.js";
 
 // OMP-01 to OMP-05 plugin proof (P5-D4 to P5-D6, P5-D8, P5-D14). Every test runs the real plugin
@@ -167,6 +175,8 @@ class FakeDaemon implements DaemonClient {
   mode: PolicyMode;
   hangStatus = false;
   notice: string | undefined = undefined;
+  // When set, every status read is refused by the channel with this code, as a dropped link is.
+  failStatus: ErrorCode | undefined = undefined;
 
   constructor(snapshot: StateSnapshot, mode: PolicyMode) {
     this.snapshot = snapshot;
@@ -175,6 +185,9 @@ class FakeDaemon implements DaemonClient {
 
   status(): Promise<DaemonStatus> {
     this.calls.push("status");
+    if (this.failStatus !== undefined) {
+      return Promise.reject(makeRealmError(this.failStatus));
+    }
     if (this.hangStatus) {
       return new Promise<DaemonStatus>(() => undefined);
     }
@@ -251,6 +264,8 @@ class FakePi implements OmpExtensionApi {
   }
 
   readonly tools = new Map<string, HostToolDefinition>();
+  // Every tool name registerTool was given, in order, so a test can see that a re-attach registers nothing again.
+  readonly registrations: string[] = [];
   // Each setActiveTools call, as the plugin passed it.
   readonly activeSets: string[][] = [];
   // When set, setActiveTools is accepted and changes nothing, so the plugin's read-back must catch it.
@@ -262,6 +277,7 @@ class FakePi implements OmpExtensionApi {
 
   registerTool(tool: HostToolDefinition): void {
     this.tools.set(tool.name, tool);
+    this.registrations.push(tool.name);
     // An extension tool under a built-in's name takes that built-in's place (spike S1).
     this.builtins.delete(tool.name);
     this.active.add(tool.name);
@@ -311,6 +327,8 @@ interface FixtureOptions {
   readonly attachErrors?: readonly ErrorCode[];
   // Replaces the default attach; it receives the fixture daemon. The fixture still records each attach's workspace root.
   readonly attach?: (daemon: FakeDaemon) => Promise<DaemonAttach>;
+  // Bounded re-attach (O4). Omitted means the attach-once behaviour the existing tests pin.
+  readonly reattach?: { readonly enabled: boolean; readonly random: () => number };
 }
 
 interface Fixture {
@@ -341,6 +359,7 @@ function makeFixture(options: FixtureOptions = {}): Fixture {
       }
       return Promise.resolve({ client: daemon, refusal: null });
     },
+    ...(options.reattach === undefined ? {} : { reattach: options.reattach }),
   };
   const tools = registerRealmPlugin(pi, pluginOptions);
   return { ui, ctx, pi, daemon, attachCalls, tools };
@@ -1260,7 +1279,7 @@ function sameActive(pi: FakePi, expected: readonly string[]): boolean {
 
 // A session the guard reads directly, with the client and the mode it last published.
 function sessionOf(fixture: Fixture, client: DaemonClient | null, mode: PolicyMode | null): ActiveSession {
-  return { ctx: fixture.ctx, tools: fixture.tools, client, mode, timers: new Map(), poll: null, refreshing: false, errorStamp: null, refusal: null };
+  return { ctx: fixture.ctx, tools: fixture.tools, client, mode, timers: new Map(), poll: null, refreshing: false, errorStamp: null, refusal: null, link: "off", reattachCount: 0, wait: null, onLinkLost: null };
 }
 
 // The policy mode the plugin last published. The probe reads it through the one path that shows it: with the status unreadable,
@@ -1502,4 +1521,370 @@ void test("OMPX-03 (T2): advisory refuses a host bash call while the status cann
   const verdict = guardHostToolCall("bash", sessionOf(fixture, fixture.daemon, "advisory"), fixture.tools);
   expireTimer(fixture.ctx, GUARD_STATUS_BUDGET_MS);
   assert.deepEqual(await verdict, POLICY_DENIED_VERDICT);
+});
+
+// ---- O4: bounded re-attach (16-04; spec SANDBOX_OMP_PLUGIN_CONNECTION) ------------------------------------------
+// Every timer here is manual, and every jitter draw comes from a seeded PRNG, so no test reads the wall clock or Math.random.
+
+// mulberry32: a small seeded PRNG returning values in [0, 1). It is the injected random of every re-attach test.
+function seededRandom(seed: number): () => number {
+  let state = seed >>> 0;
+  return () => {
+    state = (state + 0x6d2b79f5) >>> 0;
+    let value = state;
+    value = Math.imul(value ^ (value >>> 15), value | 1);
+    value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
+    return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// Every timer the fake host armed and has not cleared.
+function pendingTimers(ctx: FakeCtx): ArmedTimer[] {
+  return ctx.armed.filter((timer) => !ctx.cleared.includes(timer.handle));
+}
+
+// The re-attach waits pending: every pending timer except the attach budget, which always runs at STARTUP_BUDGET_MS.
+function pendingWaits(ctx: FakeCtx): ArmedTimer[] {
+  return pendingTimers(ctx).filter((timer) => timer.ms !== STARTUP_BUDGET_MS);
+}
+
+// The one pending wait. The test fails unless exactly one is pending.
+function soleWait(ctx: FakeCtx): ArmedTimer {
+  const waits = pendingWaits(ctx);
+  assert.equal(waits.length, 1, "exactly one re-attach wait is pending");
+  const [wait] = waits;
+  assert.ok(wait !== undefined, "a re-attach wait is pending");
+  return wait;
+}
+
+// Fires the pending wait the way a host does: the callback runs, then the host clears the handle.
+function fireWait(ctx: FakeCtx): void {
+  const wait = soleWait(ctx);
+  wait.callback();
+  ctx.clearTimer(wait.handle);
+}
+
+// Resolves once a drop has armed its wait. The wait is pending and the status item paints connecting, which the plugin does only
+// after it arms the wait. A guard read still in flight is also pending, so the pending count alone would resolve too early.
+async function waitArmed(fixture: Fixture): Promise<void> {
+  await waitUntil(() => pendingWaits(fixture.ctx).length === 1 && (lastDetail(fixture.ui) ?? "").startsWith("connecting"));
+}
+
+// Drives a streak whose every attach fails: each wait fires in turn, and the last attach exhausts the cap. Returns the wait lengths.
+async function exhaustStreak(fixture: Fixture): Promise<number[]> {
+  const delays: number[] = [];
+  for (let index = 0; index < REATTACH_RETRY_CAP; index += 1) {
+    await waitArmed(fixture);
+    delays.push(soleWait(fixture.ctx).ms);
+    fireWait(fixture.ctx);
+  }
+  await waitUntil(() => fixture.ui.notifications.some((text) => text.includes(`/${REALM_RETRY_COMMAND}`)));
+  return delays;
+}
+
+void test("O4 R1: a dropped link is detected on the poll, paints connecting, and re-attaches after one jittered wait to active", async () => {
+  const fixture = makeFixture({ reattach: { enabled: true, random: seededRandom(1) } });
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitForDetail(fixture.ui, "container running");
+
+  fixture.daemon.failStatus = "REALM_NOT_ACTIVE";
+  pollOf(fixture.ctx).callback();
+  await waitArmed(fixture);
+  const wait = soleWait(fixture.ctx);
+  assert.ok(wait.ms >= 500 && wait.ms <= 1000, `attempt 1 waits within [500, 1000] ms, got ${String(wait.ms)}`);
+  assert.equal(lastLabel(fixture.ui), DISCONNECTED_LABEL);
+  assert.match(lastDetail(fixture.ui) ?? "", /^connecting · /);
+  assert.equal(fixture.daemon.count("close"), 1, "the dropped client is closed once");
+
+  fixture.daemon.failStatus = undefined;
+  fireWait(fixture.ctx);
+  await waitUntil(() => lastLabel(fixture.ui) === ACTIVE_LABEL);
+  assert.equal(fixture.attachCalls.length, 2, "the wait re-attaches once");
+  assert.deepEqual(pendingTimers(fixture.ctx), [], "no timer is pending once the link is back");
+});
+
+void test("O4 R2: delays grow with equal jitter and cap at 60 s", async () => {
+  const ceilings = [1000, 2000, 4000, 8000, 16000, 32000, 60000, 60000];
+  const runStreak = async (random: () => number): Promise<number[]> => {
+    const fixture = makeFixture({
+      attach: () => Promise.reject(makeRealmError("REALM_NOT_ACTIVE")),
+      reattach: { enabled: true, random },
+    });
+    startHandlerOf(fixture.pi)(fixture.ctx);
+    const delays = await exhaustStreak(fixture);
+    assert.equal(fixture.attachCalls.length, 1 + REATTACH_RETRY_CAP, "one attach at start and one per wait");
+    return delays;
+  };
+
+  assert.deepEqual(await runStreak(() => 1), ceilings, "with random at 1 each wait is its ceiling");
+  assert.deepEqual(
+    await runStreak(() => 0),
+    ceilings.map((ceiling) => ceiling / 2),
+    "with random at 0 each wait is half its ceiling",
+  );
+  const seeded = await runStreak(seededRandom(2));
+  seeded.forEach((delay, index) => {
+    const ceiling = ceilings[index] ?? 0;
+    assert.ok(
+      delay >= ceiling / 2 && delay <= ceiling,
+      `wait ${String(index + 1)} is ${String(delay)}, within [${String(ceiling / 2)}, ${String(ceiling)}]`,
+    );
+  });
+});
+
+void test("O4 R3: retry exhaustion reaches FAILED with the catalogue code, notifies the action, and leaves no pending timer", async () => {
+  const fixture = makeFixture({
+    attach: () => Promise.reject(makeRealmError("REALM_NOT_ACTIVE")),
+    reattach: { enabled: true, random: seededRandom(3) },
+  });
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await exhaustStreak(fixture);
+  assert.equal(fixture.attachCalls.length, 1 + REATTACH_RETRY_CAP, "one attach at start and one per wait");
+  assert.equal(lastLabel(fixture.ui), DISCONNECTED_LABEL);
+  assert.match(lastDetail(fixture.ui) ?? "", /^REALM_NOT_ACTIVE · /, "the label carries the catalogue code");
+  assert.ok(
+    fixture.ui.notifications.some((text) => text.includes("REALM_NOT_ACTIVE") && text.includes(`/${REALM_RETRY_COMMAND}`)),
+    "FAILED notifies the code and the /realm-retry action",
+  );
+  assert.deepEqual(pendingTimers(fixture.ctx), [], "FAILED leaves no timer pending");
+  await yieldTurn();
+  assert.equal(fixture.attachCalls.length, 1 + REATTACH_RETRY_CAP, "FAILED makes no automatic attempt");
+});
+
+void test("O4 R4: a non-retryable refusal reaches FAILED at once with no wait", async () => {
+  const cases: ReadonlyArray<{ readonly code: string; readonly attach: (daemon: FakeDaemon) => Promise<DaemonAttach> }> = [
+    {
+      code: "PODMAN_MISSING",
+      attach: (daemon) => Promise.resolve({ client: daemon, refusal: makeRealmError("PODMAN_MISSING") }),
+    },
+    { code: "SCHEMA_INVALID", attach: () => Promise.reject(makeRealmError("SCHEMA_INVALID")) },
+  ];
+  for (const { code, attach } of cases) {
+    const fixture = makeFixture({ attach, reattach: { enabled: true, random: seededRandom(4) } });
+    startHandlerOf(fixture.pi)(fixture.ctx);
+    await waitUntil(() => fixture.ui.notifications.some((text) => text.includes(`/${REALM_RETRY_COMMAND}`)));
+    assert.equal(fixture.attachCalls.length, 1, `${code}: no re-attach is made`);
+    assert.deepEqual(pendingTimers(fixture.ctx), [], `${code}: no wait is armed`);
+    assert.match(lastDetail(fixture.ui) ?? "", new RegExp(`^${code} · `), `${code}: the label carries its own code`);
+  }
+});
+
+void test("O4 R5: shutdown during a backoff clears the wait and starts no attach", async () => {
+  const fixture = makeFixture({ reattach: { enabled: true, random: seededRandom(5) } });
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitForDetail(fixture.ui, "container running");
+  fixture.daemon.failStatus = "REALM_NOT_ACTIVE";
+  pollOf(fixture.ctx).callback();
+  await waitArmed(fixture);
+  const wait = soleWait(fixture.ctx);
+
+  shutdownHandlerOf(fixture.pi)();
+  assert.ok(fixture.ctx.cleared.includes(wait.handle), "shutdown clears the pending wait");
+  assert.deepEqual(pendingTimers(fixture.ctx), [], "no timer survives shutdown");
+  wait.callback();
+  await yieldTurn();
+  assert.equal(fixture.attachCalls.length, 1, "no attach runs after shutdown, even when the wait's callback runs late");
+});
+
+void test("O4 R6: a second loss signal during a wait arms no second timer; realm-retry cancels the wait and attaches once; the counter resets", async () => {
+  const fixture = makeFixture({ reattach: { enabled: true, random: seededRandom(6) } });
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitForDetail(fixture.ui, "container running");
+  fixture.daemon.failStatus = "REALM_NOT_ACTIVE";
+  pollOf(fixture.ctx).callback();
+  await waitArmed(fixture);
+  const first = soleWait(fixture.ctx);
+
+  // A second signal from the guard and one from the poll. The client is already released, so neither arms a timer.
+  assert.deepEqual(await toolCallOf(fixture.pi)({ toolName: "edit" }), { block: true, reason: "REALM_NOT_ACTIVE" });
+  pollOf(fixture.ctx).callback();
+  await yieldTurn();
+  assert.deepEqual(pendingWaits(fixture.ctx).map((timer) => timer.handle), [first.handle], "still the one first wait");
+  assert.equal(fixture.attachCalls.length, 1, "no attach runs while the wait is pending");
+
+  fixture.daemon.failStatus = undefined;
+  const result = await retryCommandOf(fixture.pi).handler();
+  assert.match(result, /active/, "realm-retry reports the active state");
+  assert.ok(fixture.ctx.cleared.includes(first.handle), "realm-retry cancels the pending wait");
+  assert.equal(fixture.attachCalls.length, 2, "realm-retry attaches once");
+  assert.deepEqual(pendingWaits(fixture.ctx), [], "no wait survives the retry");
+
+  fixture.daemon.failStatus = "REALM_NOT_ACTIVE";
+  pollOf(fixture.ctx).callback();
+  await waitArmed(fixture);
+  assert.ok(fixture.ui.notifications.at(-1)?.includes("attempt 1 of 8"), "the counter reset, so the next drop is attempt 1");
+});
+
+void test("O4 R7: with the option absent or disabled, a drop behaves exactly as today", async () => {
+  const variants: ReadonlyArray<FixtureOptions> = [{}, { reattach: { enabled: false, random: seededRandom(7) } }];
+  for (const variant of variants) {
+    const fixture = makeFixture(variant);
+    startHandlerOf(fixture.pi)(fixture.ctx);
+    await waitForDetail(fixture.ui, "container running");
+    fixture.daemon.failStatus = "REALM_NOT_ACTIVE";
+    pollOf(fixture.ctx).callback();
+    await waitUntil(() => lastLabel(fixture.ui) === DISCONNECTED_LABEL);
+    assert.match(lastDetail(fixture.ui) ?? "", /^REALM_NOT_ACTIVE · /, "the poll paints the code, as before");
+    assert.equal(fixture.attachCalls.length, 1, "no re-attach runs");
+    assert.deepEqual(pendingTimers(fixture.ctx), [], "no wait is armed");
+    assert.deepEqual(fixture.ui.notifications, [], "no re-attach notice is shown");
+  }
+});
+
+void test("O4 R8: an in-flight write that loses the link reports AUDIT_OUTCOME_UNKNOWN and is not dispatched again", async () => {
+  const fixture = makeFixture({ reattach: { enabled: true, random: seededRandom(8) } });
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitForDetail(fixture.ui, "container running");
+
+  fixture.daemon.callError = "REALM_NOT_ACTIVE";
+  const result = await toolOf(fixture.pi, "write").execute("call-r8", { path: "a.txt", content: "x" });
+  assert.deepEqual(result.details, { outcome: "refused", tool: "write", code: "AUDIT_OUTCOME_UNKNOWN", retryable: false });
+  assert.equal(result.isError, true);
+  assert.equal(fixture.daemon.dispatched.length, 1, "the write reaches the daemon once and is never dispatched again");
+  assert.equal(pendingWaits(fixture.ctx).length, 1, "the loss arms one re-attach wait");
+});
+
+void test("O4 R8b: a read that loses the link keeps the code it failed with and still arms one wait", async () => {
+  const fixture = makeFixture({ reattach: { enabled: true, random: seededRandom(9) } });
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitForDetail(fixture.ui, "container running");
+
+  fixture.daemon.callError = "TOOL_TIMEOUT";
+  const result = await toolOf(fixture.pi, "read").execute("call-r8b", { path: "a.txt", maxBytes: 16 });
+  const details = result.details as ToolOutcome;
+  assert.ok(details.outcome === "refused" && details.code === "TOOL_TIMEOUT", "the read keeps TOOL_TIMEOUT");
+  assert.equal(pendingWaits(fixture.ctx).length, 1, "the loss arms one re-attach wait");
+});
+
+void test("O4 R9: a hung status read is bounded by GUARD_STATUS_BUDGET_MS and counts as a loss; every wait stays at or below 60 s", async () => {
+  const fixture = makeFixture({ reattach: { enabled: true, random: seededRandom(10) } });
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitForDetail(fixture.ui, "container running");
+
+  fixture.daemon.hangStatus = true;
+  pollOf(fixture.ctx).callback();
+  assert.equal(armedTimer(fixture.ctx, GUARD_STATUS_BUDGET_MS).ms, GUARD_STATUS_BUDGET_MS, "the status read is armed with its bound");
+  expireTimer(fixture.ctx, GUARD_STATUS_BUDGET_MS);
+  await waitArmed(fixture);
+  assert.ok(fixture.ui.notifications.at(-1)?.includes("TOOL_TIMEOUT"), "the timed-out read is reported as the loss");
+  assert.ok(soleWait(fixture.ctx).ms <= REATTACH_DELAY_CAP_MS, "the wait is at or below 60 s");
+
+  fixture.daemon.hangStatus = false;
+  fireWait(fixture.ctx);
+  await waitUntil(() => lastLabel(fixture.ui) === ACTIVE_LABEL);
+});
+
+void test("O4 R10: re-up is idempotent: a re-attach registers no tool again and arms no second poll", async () => {
+  const fixture = makeFixture({ reattach: { enabled: true, random: seededRandom(11) } });
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitForDetail(fixture.ui, "container running");
+  const registeredAtStart = fixture.pi.registrations.length;
+
+  for (let cycle = 0; cycle < 2; cycle += 1) {
+    fixture.daemon.failStatus = "REALM_NOT_ACTIVE";
+    pollOf(fixture.ctx).callback();
+    await waitArmed(fixture);
+    fixture.daemon.failStatus = undefined;
+    fireWait(fixture.ctx);
+    await waitUntil(() => lastLabel(fixture.ui) === ACTIVE_LABEL);
+  }
+  assert.equal(fixture.attachCalls.length, 3, "two re-attaches after the start attach");
+  assert.equal(fixture.pi.registrations.length, registeredAtStart, "no tool is registered again");
+  assert.equal(fixture.ctx.intervals.length, 1, "one poll interval, armed at session start");
+});
+
+void test("O4 R11: a transition outside the table is rejected and reported through ui.notify, and applies nothing", async () => {
+  assert.equal(reattachTransitionAllowed("failed", "reconnecting"), false, "failed to reconnecting is not in the table");
+  const gate = makeGate();
+  const fixture = makeFixture({
+    attach: async (daemon) => {
+      await gate.promise;
+      return { client: daemon, refusal: null };
+    },
+    reattach: { enabled: true, random: seededRandom(12) },
+  });
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitUntil(() => fixture.attachCalls.length === 1);
+
+  // A retry while the start attach is in flight asks for attaching -> attaching, which the table refuses.
+  assert.equal(await retryCommandOf(fixture.pi).handler(), "realm retry: an attach is already in progress");
+  assert.ok(fixture.ui.notifications.some((text) => text.includes("attaching -> attaching")), "the refused move is named");
+  assert.equal(fixture.attachCalls.length, 1, "the refused retry starts no second attach");
+
+  gate.resolve();
+  await waitForDetail(fixture.ui, "container running");
+  assert.equal(lastLabel(fixture.ui), ACTIVE_LABEL);
+});
+
+void test("O4 T1: the equal-jitter delay lies in [ceiling/2, ceiling] for each attempt, and the ceiling caps at 60 s from attempt 7", () => {
+  assert.equal(REATTACH_RETRY_CAP, 8);
+  assert.equal(REATTACH_BASE_DELAY_MS, 1000);
+  assert.equal(REATTACH_DELAY_CAP_MS, 60000);
+  const ceilings = [1000, 2000, 4000, 8000, 16000, 32000, 60000, 60000];
+  ceilings.forEach((ceiling, index) => {
+    const attempt = index + 1;
+    assert.equal(
+      equalJitterDelayMs(attempt, REATTACH_BASE_DELAY_MS, REATTACH_DELAY_CAP_MS, () => 0),
+      ceiling / 2,
+      `attempt ${String(attempt)} at its floor`,
+    );
+    assert.equal(
+      equalJitterDelayMs(attempt, REATTACH_BASE_DELAY_MS, REATTACH_DELAY_CAP_MS, () => 1),
+      ceiling,
+      `attempt ${String(attempt)} at its ceiling`,
+    );
+  });
+  assert.equal(equalJitterDelayMs(50, REATTACH_BASE_DELAY_MS, REATTACH_DELAY_CAP_MS, () => 1), 60000, "a late attempt stays at the cap");
+
+  const random = seededRandom(20);
+  for (let attempt = 1; attempt <= 40; attempt += 1) {
+    const ceiling = Math.min(REATTACH_DELAY_CAP_MS, REATTACH_BASE_DELAY_MS * 2 ** (attempt - 1));
+    const delay = equalJitterDelayMs(attempt, REATTACH_BASE_DELAY_MS, REATTACH_DELAY_CAP_MS, random);
+    assert.ok(
+      delay >= ceiling / 2 && delay <= ceiling,
+      `attempt ${String(attempt)}: ${String(delay)} lies within [${String(ceiling / 2)}, ${String(ceiling)}]`,
+    );
+  }
+});
+
+void test("O4 T1: invalid jitter inputs are a RangeError", () => {
+  const half = (): number => 0.5;
+  assert.throws(() => equalJitterDelayMs(0, 1000, 60000, half), RangeError, "attempt 0 is refused");
+  assert.throws(() => equalJitterDelayMs(1.5, 1000, 60000, half), RangeError, "a non-integer attempt is refused");
+  assert.throws(() => equalJitterDelayMs(-1, 1000, 60000, half), RangeError, "a negative attempt is refused");
+  assert.throws(() => equalJitterDelayMs(1, -1, 60000, half), RangeError, "a negative base is refused");
+  assert.throws(() => equalJitterDelayMs(1, 1000, -1, half), RangeError, "a negative cap is refused");
+  assert.throws(() => equalJitterDelayMs(1, 61000, 60000, half), RangeError, "a base above the cap is refused");
+  assert.throws(() => equalJitterDelayMs(1, 1000, 60000, () => -0.1), RangeError, "a random value below 0 is refused");
+  assert.throws(() => equalJitterDelayMs(1, 1000, 60000, () => 1.1), RangeError, "a random value above 1 is refused");
+  assert.throws(() => equalJitterDelayMs(1, 1000, 60000, () => Number.NaN), RangeError, "a NaN random value is refused");
+});
+
+void test("O4 T1: the re-attach transition table allows exactly the listed moves and refuses the rest", () => {
+  const listed: ReadonlyArray<readonly [ReattachState, ReattachState]> = [
+    ["linked", "reconnecting"],
+    ["linked", "attaching"],
+    ["reconnecting", "attaching"],
+    ["attaching", "linked"],
+    ["attaching", "reconnecting"],
+    ["attaching", "failed"],
+    ["failed", "attaching"],
+  ];
+  const states: readonly ReattachState[] = ["off", "linked", "reconnecting", "attaching", "failed"];
+  for (const from of states) {
+    for (const to of states) {
+      const expected = listed.some(([listedFrom, listedTo]) => listedFrom === from && listedTo === to);
+      assert.equal(reattachTransitionAllowed(from, to), expected, `${from} -> ${to}`);
+    }
+  }
+});
+
+void test("O4 T1: the lost-link and retryable code sets are the ones the plan names", () => {
+  assert.deepEqual([...LINK_LOST_CODES], ["REALM_NOT_ACTIVE", "TOOL_TIMEOUT"]);
+  assert.deepEqual([...RETRYABLE_ATTACH_CODES], [
+    "REALM_NOT_ACTIVE",
+    "TOOL_TIMEOUT",
+    "STARTUP_BUDGET_EXCEEDED",
+    "DAEMON_START_TIMEOUT",
+  ]);
 });
