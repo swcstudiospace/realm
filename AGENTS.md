@@ -68,7 +68,7 @@ Every gate must pass before a change is reviewed (`CONTRIBUTING.md`).
   - `anda/`: Anda Engine HTTP bridge (`client.ts`) and the version-shape check (`shape.ts`).
   - `fs/`: canonical paths, root allowlist, credential-path denial, advisory write locks, atomic writes, read, list, glob, and write, and `temp-sweep.ts` (`src/fs/temp-sweep.ts`, which removes orphaned atomic-write temp files; the daemon calls it at start, before it serves).
   - `audit/`: redacted JSONL audit log, and `reconcile.ts` (`src/audit/reconcile.ts`, which appends `AUDIT_OUTCOME_UNKNOWN` reconciliation lines for admissions with no result; the daemon calls it at start, before it serves).
-  - `observe/`: the JSON-line logger (`logger.ts`), its file and stderr sinks (`log-file.ts`, size-capped, rotated to one `.1` file), correlation ids (`ids.ts`), and the in-memory metrics registry with its strict snapshot validator (`metrics.ts`); libraries only, the daemon does not call them yet.
+  - `observe/`: the JSON-line logger (`logger.ts`), its file and stderr sinks (`log-file.ts`, size-capped, rotated to one `.1` file), correlation ids (`ids.ts`), and the in-memory metrics registry with its strict snapshot validator (`metrics.ts`). The daemon uses them: the entry writes its records to stderr, which is `daemon.log`, through the logger; the daemon writes its lifecycle, control and tool records to `requests.log` through the logger and the file sink; and it counts metrics in memory.
   - `doctor/`: prerequisite checks behind `realm doctor`.
   - `contract/`: tool and session-record schemas and the schema validator (`validate.ts`).
   - `core/`: frozen shared contracts: states and the state machine, status labels, policy loading with `policy.schema.json`, the typed error catalogue (`errors.ts`), the event bus, ports, backoff, and `withTimeout` (`timeout.ts`); and the package version reader (`package-version.ts`).
@@ -152,5 +152,6 @@ Every gate must pass before a change is reviewed (`CONTRIBUTING.md`).
 - No host secrets are injected into the sandbox by default, and no secrets belong in the repository, images, or logs. There is no telemetry that sends data off the machine.
 - Podman runs rootless only. Never use privileged containers, and never mount a host Docker or Podman socket into a container.
 - The control socket is user-only: its directory is mode 0700 and the socket is mode 0600.
+- Metrics are read only over that control socket (`realm metrics`). The daemon has no metrics listener, and no tool exposes metrics.
 - Report suspected vulnerabilities privately through GitHub private vulnerability reporting (`SECURITY.md`). Do not open a public issue, pull request, or discussion for one, and do not put secrets in the report. Only the 0.3.x line is supported, from its first release, 0.3.0.
 - `.env` and `.env.*` files are git-ignored (`.gitignore`).
