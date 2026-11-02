@@ -148,6 +148,14 @@ function noticeOf(reply: ControlReply): unknown {
   return undefined;
 }
 
+// The root a status or up reply names as the daemon's pinned workspace, or undefined when the result has no `boundRoot` key.
+function boundRootOf(reply: ControlReply): unknown {
+  if (typeof reply.result === "object" && reply.result !== null && "boundRoot" in reply.result) {
+    return reply.result.boundRoot;
+  }
+  return undefined;
+}
+
 function hasNoticeKey(reply: ControlReply): boolean {
   return typeof reply.result === "object" && reply.result !== null && "notice" in reply.result;
 }
@@ -773,6 +781,21 @@ void test("CLI-01: up with a healthy probe starts the session and answers the ac
 
   const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down" });
   assert.equal(snapshotStateOf(down), "unbound");
+  await awaitDone(daemon);
+});
+
+void test("RT-06: the status and up replies name the root the daemon is pinned to as a realpath (boundRoot); down names none", async (t) => {
+  const fixture = makeDirs();
+  const { options } = daemonParts(fixture);
+  const daemon = await startDaemon(options);
+  t.after(() => cleanupDaemon(daemon));
+
+  const status = await sendRequest(daemon.socketPath, { id: "s1", method: "status" });
+  assert.equal(boundRootOf(status), fixture.ws, "status names the pinned workspace");
+  const up = await sendRequest(daemon.socketPath, { id: "up-1", method: "up", params: { workspaceRoot: fixture.ws } });
+  assert.equal(boundRootOf(up), fixture.ws, "up names the pinned workspace");
+  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down" });
+  assert.equal(boundRootOf(down), undefined, "down carries no boundRoot key");
   await awaitDone(daemon);
 });
 
