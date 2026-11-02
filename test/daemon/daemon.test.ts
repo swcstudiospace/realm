@@ -1077,6 +1077,28 @@ void test("OBS-02: control.refused warns with the code of a refused tool call, a
   await awaitDone(daemon);
 });
 
+void test("OBS-02: an unknown control method is refused as a warn with method unrecognized, and its text is never logged", async (t) => {
+  const lines: string[] = [];
+  const logger = createLogger({
+    sink: { write: (line) => { lines.push(line); return true; } },
+    level: "debug",
+    now: () => new Date(CLOCK_ISO),
+  });
+  const fixture = makeDirs();
+  const { options } = daemonParts(fixture);
+  const daemon = await startDaemon({ ...options, logger });
+  t.after(() => cleanupDaemon(daemon));
+  const unknown = await sendRequest(daemon.socketPath, { id: "unknown-1", method: "METHOD-MARKER" });
+  const code = unknown.error?.code;
+  assert.ok(code !== undefined, "an unknown method is refused");
+  const warned = logRowsOf(lines).filter((row) => row["event"] === "control.refused");
+  assert.deepEqual(warned.map((row) => [row["method"], row["level"], row["code"]]), [["unrecognized", "warn", code]]);
+  assert.equal(lines.some((line) => line.includes("METHOD-MARKER")), false, "an unknown method name is never logged");
+  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down" });
+  assert.ok(down.result !== undefined);
+  await awaitDone(daemon);
+});
+
 void test("OBS-02: daemon.starting, daemon.listening, daemon.stopping and daemon.stopped each appear once, in order, and daemon.listening has no socket path", async (t) => {
   const lines: string[] = [];
   const logger = createLogger({

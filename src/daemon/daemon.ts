@@ -593,15 +593,24 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
     }
   };
 
+  // A line that names no known method is refused without its text: the method is client text, so the log says "unrecognized".
+  const refuseUnrecognized = (reply: ControlReply | null): ControlReply | null => {
+    const refused = reply?.error;
+    if (refused !== undefined) {
+      logger.warn("control.refused", { method: "unrecognized", code: refused.code });
+    }
+    return reply;
+  };
+
   const dispatchLine = async (line: string, socket: Socket): Promise<ControlReply | null> => {
     let request: ControlRequest;
     try {
       request = decodeRequest(line);
     } catch {
-      return replyForMalformedLine(line);
+      return refuseUnrecognized(replyForMalformedLine(line));
     }
     if (!isControlMethod(request.method)) {
-      return unknownMethodReply(request.id);
+      return refuseUnrecognized(unknownMethodReply(request.id));
     }
     // A control line names only the method. Params, ids and payloads are never logged (requests.log, D-1704).
     logger.debug("control.request", { method: request.method });
