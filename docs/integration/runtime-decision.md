@@ -126,6 +126,8 @@ RT-05 says "IPv6 is disabled". Realm does not create the container and cannot se
 
 A dispatcher call writes two audit lines: an admission line before execution and a result line after. Both use the Phase 2 entry format (D-42) with one additive, optional field, `phase`, valued `admission` or `result`. Outcome alone cannot separate the two lines, because a successful call has outcome `ok` on both. Phase 7 review must read both lines of one call as one call.
 
+The admission and result lines of a call also carry `upId` when the call arrives over an attached session (Phase 17, O-g). It is the correlation id of the `up` that admitted the call, the same id that the `up.end` and `tool.result` log lines carry, so each audit line names the session that admitted it. The field is additive and optional, and a call made with no attached session carries none.
+
 ### Audit: reconciliation and sweep lines (Phase 14, CRASH-02)
 
 Phase 14 adds two values to the audit line format. Both are additive, and a log written before this change still parses.

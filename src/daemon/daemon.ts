@@ -530,7 +530,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
         const correlationId = newCorrelationId();
         const startedAt = performance.now();
         try {
-          const outcome = await handle.dispatcher.call(tool, { correlationId });
+          const outcome = await handle.dispatcher.call(tool, { correlationId, ...(upId === undefined ? {} : { upId }) });
           const elapsed = Math.round(performance.now() - startedAt);
           const toolName = outcome.tool ?? "unknown";
           if (outcome.outcome === "refused") {
