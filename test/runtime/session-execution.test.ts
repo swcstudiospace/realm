@@ -1,6 +1,6 @@
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
@@ -89,7 +89,7 @@ async function fixture(
   });
   const stateDir = join(base, "state");
   const workspaceRoot = join(base, "workspace");
-  // The pinned workspace is a real directory: a create resolves it to compare it with the requested workspace.
+  // The workspace is a real directory that the request names.
   mkdirSync(workspaceRoot, { recursive: true });
   const secretRoot = join(base, "secrets");
   const sandboxStateRoot = join(base, "sandboxes");
@@ -142,7 +142,6 @@ async function fixture(
     agentosFor: (sessionId) => supervisorFor(sessionId),
     config: { image: IMAGE, stateDir },
     secretRoot,
-    pinnedWorkspaceRoot: workspaceRoot,
     sandboxStateRoot,
     egressAllow: EGRESS,
     readProcStatus: () => procStatus.text,
@@ -153,7 +152,6 @@ async function fixture(
     runner,
     config: { image: IMAGE, stateDir },
     secretRoot,
-    pinnedWorkspaceRoot: workspaceRoot,
     sandboxStateRoot,
     egressAllow: EGRESS,
   });
@@ -343,7 +341,6 @@ void test("phase 9.6: a container whose OCI config denies the keyring syscalls v
     agentosFor: (sessionId) => f.supervisorFor(sessionId),
     config: { image: IMAGE, stateDir: f.stateDir },
     secretRoot: f.secretRoot,
-    pinnedWorkspaceRoot: f.workspaceRoot,
     sandboxStateRoot: f.sandboxStateRoot,
     egressAllow: EGRESS,
     readProcStatus: () => f.procStatus.text,
@@ -446,7 +443,6 @@ void test("RT-04, D-18: a session start runs the AgentOS runner as an exec child
     agentosFor: () => supervisor,
     config: { image: IMAGE, stateDir: f.stateDir },
     secretRoot: f.secretRoot,
-    pinnedWorkspaceRoot: f.workspaceRoot,
     sandboxStateRoot: f.sandboxStateRoot,
     egressAllow: EGRESS,
     readProcStatus: () => f.procStatus.text,
@@ -629,7 +625,6 @@ void test("C2: a create with no secret root, or a relative one, is refused with 
       agentosFor: (sessionId) => f.supervisorFor(sessionId),
       config: { image: IMAGE, stateDir: f.stateDir },
       egressAllow: EGRESS,
-      pinnedWorkspaceRoot: f.workspaceRoot,
       sandboxStateRoot: f.sandboxStateRoot,
       ...(secretRoot === undefined ? {} : { secretRoot }),
     });
@@ -640,22 +635,12 @@ void test("C2: a create with no secret root, or a relative one, is refused with 
   assert.equal(existsSync(join(f.stateDir, "runtime")), false, "no policy document is written");
 });
 
-void test("C2: a create with no pinned workspace root, or a relative one, is refused with SCHEMA_INVALID before any libpod or OpenShell call", async (t) => {
+void test("C2: a create whose requested workspaceRoot is relative is refused with SCHEMA_INVALID before any libpod or OpenShell call", async (t) => {
   const f = await fixture(t);
-  const libpod = new LibpodClient(join(f.base, "podman.sock"));
-  for (const pinnedWorkspaceRoot of [undefined, "relative/workspace"]) {
-    const exec = new SessionExecution({
-      libpod,
-      runner: f.openshell.runner,
-      agentosFor: (sessionId) => f.supervisorFor(sessionId),
-      config: { image: IMAGE, stateDir: f.stateDir },
-      secretRoot: f.secretRoot,
-      sandboxStateRoot: f.sandboxStateRoot,
-      egressAllow: EGRESS,
-      ...(pinnedWorkspaceRoot === undefined ? {} : { pinnedWorkspaceRoot }),
-    });
-    await assertCode(exec.create({ idempotencyKey: SESSION, workspaceRoot: f.workspaceRoot }), "SCHEMA_INVALID");
+  for (const workspaceRoot of ["relative/workspace"]) {
+    await assertCode(f.exec.create({ idempotencyKey: SESSION, workspaceRoot }), "SCHEMA_INVALID");
   }
+  assert.equal(f.libpod.requests().length, 0, "no libpod request is made");
   assert.equal(f.openshell.callCount(), 0, "no OpenShell run starts");
   assert.equal(f.store.list().length, 0, "no container is created");
   assert.equal(existsSync(join(f.stateDir, "runtime")), false, "no policy document is written");
@@ -671,7 +656,6 @@ void test("C2: a create with no sandbox state root, or a relative one, is refuse
       agentosFor: (sessionId) => f.supervisorFor(sessionId),
       config: { image: IMAGE, stateDir: f.stateDir },
       secretRoot: f.secretRoot,
-      pinnedWorkspaceRoot: f.workspaceRoot,
       egressAllow: EGRESS,
       ...(sandboxStateRoot === undefined ? {} : { sandboxStateRoot }),
     });
@@ -692,30 +676,25 @@ void test("C2: the session's sandbox binding names the driver's per-sandbox stat
   assert.equal(f.store.list().length, 1, "the container mounted at the driver's state directory is kept");
 });
 
-void test("C2: a create whose request names another root is refused with POLICY_DENIED before any libpod, OpenShell, or policy-file call", async (t) => {
+void test("C2: a create whose workspaceRoot differs from another session's pinned directory is not refused by the session, and binds the request's root", async (t) => {
   const f = await fixture(t);
   const requestRoot = join(f.base, "other-project");
   mkdirSync(requestRoot);
-  await assertCode(f.exec.create({ idempotencyKey: SESSION, workspaceRoot: requestRoot }), "POLICY_DENIED");
-  assert.equal(f.libpod.requests().length, 0, "no libpod request is made");
-  assert.equal(f.openshell.callCount(), 0, "no OpenShell run starts");
-  assert.equal(f.store.list().length, 0, "no container is created");
-  assert.equal(existsSync(join(f.stateDir, "runtime")), false, "no policy document is written");
-});
-
-void test("C2: a create whose approved workspace is a sibling of the pinned root is refused, and one that is the parent of the pinned root is refused", async (t) => {
-  const f = await fixture(t);
-  const sibling = join(f.base, "workspace2");
-  mkdirSync(sibling);
-  await assertCode(f.exec.create({ idempotencyKey: SESSION, workspaceRoot: sibling }), "POLICY_DENIED");
-  // The pinned root names the parent of the approved project: the mount would expose every sibling project.
-  const project = join(f.workspaceRoot, "project");
-  mkdirSync(project);
-  await assertCode(f.exec.create({ idempotencyKey: SESSION, workspaceRoot: project }), "POLICY_DENIED");
-  assert.equal(f.libpod.requests().length, 0, "no libpod request is made");
-  assert.equal(f.openshell.callCount(), 0, "no OpenShell run starts");
-  assert.equal(f.store.list().length, 0, "no container is created");
-  assert.equal(existsSync(join(f.stateDir, "runtime")), false, "no policy document is written");
+  // The session binds the request's root, so the inspect must mount that directory. The fixture's pinned directory is not the request's root.
+  const binding = sandboxBindingOf(
+    { workspaceRoot: requestRoot, stateRoot: f.sandboxStateRoot, secretRoot: f.secretRoot },
+    realmSandboxName(SESSION),
+  );
+  scriptInspect(f, {
+    ...conformingInspect(f, {}, binding),
+    Mounts: [
+      { Type: "bind", Source: requestRoot, Destination: "/workspace", RW: true },
+      { Type: "bind", Source: binding.stateDir, Destination: "/realm-state", RW: false },
+      { Type: "bind", Source: binding.channelDir, Destination: HARDENING_PROFILE.channelDestination, RW: true },
+    ],
+  });
+  await f.exec.create({ idempotencyKey: SESSION, workspaceRoot: requestRoot });
+  assert.equal(f.store.list().length, 1, "the container mounted at the request's root is kept");
 });
 
 void test("C2: a create whose requested workspace does not exist is refused with POLICY_DENIED before any libpod call", async (t) => {
@@ -725,33 +704,32 @@ void test("C2: a create whose requested workspace does not exist is refused with
   assert.equal(f.openshell.callCount(), 0, "no OpenShell run starts");
 });
 
-void test("C2: a create whose requested workspace is a symlink to the pinned root is accepted and verifies a container mounted at the pinned root", async (t) => {
+void test("C2: a create whose workspaceRoot is the realpath of the pinned directory is accepted and verifies a container mounted at it", async (t) => {
   const f = await fixture(t);
-  const link = join(f.base, "workspace-link");
-  symlinkSync(f.workspaceRoot, link);
   scriptInspect(f, conformingInspect(f, {}, sessionBinding(f, SESSION)));
-  await f.exec.create({ idempotencyKey: SESSION, workspaceRoot: link });
+  await f.exec.create({ idempotencyKey: SESSION, workspaceRoot: f.workspaceRoot });
   assert.equal(f.store.list().length, 1, "the conforming container is kept");
 });
 
-void test("C2: a container mounted at the request path instead of the pinned root fails the mounts property through create, and is removed", async (t) => {
+void test("C2: a container mounted at a directory other than the request's root fails the mounts property through create with OPENSHELL_START_FAILED, and is removed", async (t) => {
   const f = await fixture(t);
-  const requestRoot = join(f.base, "workspace-link");
-  symlinkSync(f.workspaceRoot, requestRoot);
+  const mountedRoot = join(f.base, "other-mount");
+  mkdirSync(mountedRoot);
   const binding = sessionBinding(f, SESSION);
   scriptInspect(f, {
     ...conformingInspect(f, {}, binding),
     Mounts: [
-      { Type: "bind", Source: requestRoot, Destination: "/workspace", RW: true },
+      { Type: "bind", Source: mountedRoot, Destination: "/workspace", RW: true },
       { Type: "bind", Source: binding.stateDir, Destination: "/realm-state", RW: false },
       { Type: "bind", Source: binding.channelDir, Destination: HARDENING_PROFILE.channelDestination, RW: true },
     ],
   });
   await assert.rejects(
-    f.exec.create({ idempotencyKey: SESSION, workspaceRoot: requestRoot }),
-    (error: unknown) => error instanceof HardeningFailedError && error.property === "mounts",
+    f.exec.create({ idempotencyKey: SESSION, workspaceRoot: f.workspaceRoot }),
+    (error: unknown) =>
+      error instanceof HardeningFailedError && error.code === "OPENSHELL_START_FAILED" && error.property === "mounts",
   );
-  assert.equal(f.store.list().length, 0, "the container mounted at the request path is removed");
+  assert.equal(f.store.list().length, 0, "the container mounted at another directory is removed");
 });
 
 void test("RT-01, D-51: a libpod that reports rootless false fails the rootless property through create, and the container is removed", async (t) => {
@@ -808,7 +786,6 @@ void test("F5: an AgentOS step that timed out with no code and a container step 
     agentosFor: () => f.supervisor,
     config: { image: IMAGE, stateDir: f.stateDir },
     secretRoot: f.secretRoot,
-    pinnedWorkspaceRoot: f.workspaceRoot,
     sandboxStateRoot: f.sandboxStateRoot,
     egressAllow: EGRESS,
     stopDeadlineMs: 20,
@@ -1158,7 +1135,6 @@ void test("N5: a driver stop that outlives the stop budget is reported as AGENTO
     agentosFor: () => f.supervisor,
     config: { image: IMAGE, stateDir: f.stateDir },
     secretRoot: f.secretRoot,
-    pinnedWorkspaceRoot: f.workspaceRoot,
     sandboxStateRoot: f.sandboxStateRoot,
     egressAllow: EGRESS,
     stopDeadlineMs: 20,
@@ -1234,7 +1210,6 @@ function sessionExecWith(f: Fixture, libpod: SessionContainers, runner: OpenShel
     agentosFor: () => supervisor,
     config: { image: IMAGE, stateDir: f.stateDir },
     secretRoot: f.secretRoot,
-    pinnedWorkspaceRoot: f.workspaceRoot,
     sandboxStateRoot: f.sandboxStateRoot,
     egressAllow: EGRESS,
     readProcStatus: () => f.procStatus.text,
@@ -1337,7 +1312,6 @@ void test("B-3: a stop whose wait for an in-flight create outlasts its deadline 
     agentosFor: () => supervisor,
     config: { image: IMAGE, stateDir: f.stateDir },
     secretRoot: f.secretRoot,
-    pinnedWorkspaceRoot: f.workspaceRoot,
     sandboxStateRoot: f.sandboxStateRoot,
     egressAllow: EGRESS,
     stopDeadlineMs: 20,
@@ -1500,7 +1474,6 @@ void test("RT-03, RT-04, D-18: a session named s1 gets its own sandbox: create, 
     },
     config: { image: IMAGE, stateDir: f.stateDir },
     secretRoot: f.secretRoot,
-    pinnedWorkspaceRoot: f.workspaceRoot,
     sandboxStateRoot: f.sandboxStateRoot,
     egressAllow: EGRESS,
     readProcStatus: () => f.procStatus.text,

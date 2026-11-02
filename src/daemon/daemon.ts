@@ -1031,7 +1031,6 @@ function defaultExec(
     runner: runOpenShell,
     ...(agentosFor !== undefined ? { agentosFor } : {}),
     ...(options.secretRoot !== undefined ? { secretRoot: options.secretRoot } : {}),
-    ...(options.pinnedWorkspaceRoot !== undefined ? { pinnedWorkspaceRoot: options.pinnedWorkspaceRoot } : {}),
     ...(options.sandboxStateRoot !== undefined ? { sandboxStateRoot: options.sandboxStateRoot } : {}),
     config: {
       image: config.image,

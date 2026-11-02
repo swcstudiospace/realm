@@ -17,10 +17,10 @@
 // callers keep working. It removes every realm-labelled container and proves zero survivors.
 
 import { spawn, type ChildProcess, type StdioOptions } from "node:child_process";
-import { realpathSync } from "node:fs";
 import { isAbsolute } from "node:path";
 import { makeRealmError, RealmError, type ErrorCode } from "../core/errors.js";
 import { withTimeout } from "../core/timeout.js";
+import { bindRoot } from "../fs/root.js";
 import type { CreateRequest, ExecutionService, ProbeResult } from "../core/ports.js";
 import type { EgressRule } from "../contract/validate.js";
 import type { EnvironmentLike } from "../session/paths.js";
@@ -92,10 +92,6 @@ export interface SessionExecutionOptions {
   // The realm secret root from config.json (runtimeRootsOf). The sandbox binding derives the channel
   // directory from it. Absent or relative, a create is refused before any libpod, OpenShell, or policy-file call.
   readonly secretRoot?: string;
-  // The pinned workspace root from config.json, mounted at /workspace. The sandbox
-  // binding derives the workspace mount from it, so the session's verifier and the driver share one derivation. Absent or
-  // relative, a create is refused before any libpod, OpenShell, or policy-file call.
-  readonly pinnedWorkspaceRoot?: string;
   // The driver's sandbox state root from config.json. The sandbox binding names each
   // sandbox's state directory under it. Absent or relative, a create is refused before any libpod, OpenShell, or policy-file call.
   readonly sandboxStateRoot?: string;
@@ -157,7 +153,6 @@ export class SessionExecution implements ExecutionService {
   private readonly agentosFor: SupervisorFor | undefined;
   private readonly config: Omit<RuntimeConfig, "workspaceRoot">;
   private readonly secretRoot: string | undefined;
-  private readonly pinnedWorkspaceRoot: string | undefined;
   private readonly sandboxStateRoot: string | undefined;
   private readonly egressAllow: readonly EgressRule[];
   private readonly readProcStatus: (pid: number) => string;
@@ -182,7 +177,6 @@ export class SessionExecution implements ExecutionService {
     this.agentosFor = options.agentosFor;
     this.config = options.config;
     this.secretRoot = options.secretRoot;
-    this.pinnedWorkspaceRoot = options.pinnedWorkspaceRoot;
     this.sandboxStateRoot = options.sandboxStateRoot;
     this.stopDeadlineMs = options.stopDeadlineMs ?? AGENTOS_STOP_DEADLINE_MS;
     if (!(this.stopDeadlineMs > 0) || !Number.isFinite(this.stopDeadlineMs)) {
@@ -196,12 +190,13 @@ export class SessionExecution implements ExecutionService {
     // Refuses before any libpod, OpenShell, or policy-file call when no supervisor is bound (fail closed).
     const agentos = this.requireAgentOs(req.idempotencyKey);
     const secretRoot = this.requireSecretRoot();
-    const pinnedWorkspaceRoot = this.requirePinnedWorkspaceRoot();
     const sandboxStateRoot = this.requireSandboxStateRoot();
-    // The sandbox mounts the pinned root at /workspace, while the file tools use the policy-approved workspace the request names.
-    // The two must be one directory, or exec would reach files the policy never approved. Refused before any libpod, OpenShell,
-    // or policy-file call.
-    requireSameDirectory(req.workspaceRoot, pinnedWorkspaceRoot);
+    // A relative request is refused with SCHEMA_INVALID. A request that does not resolve to a directory is refused with
+    // POLICY_DENIED. Both run before any libpod, OpenShell, or policy-file call. The sandbox binds the canonical directory.
+    if (!isAbsolute(req.workspaceRoot)) {
+      throw makeRealmError("SCHEMA_INVALID");
+    }
+    const workspaceRoot = bindRoot(req.workspaceRoot).realPath;
     // The gateway refuses a longer sandbox name with an opaque create failure. This runs after the configuration
     // checks and before any libpod, OpenShell, or policy-file call.
     if (realmSandboxName(req.idempotencyKey).length > GATEWAY_SANDBOX_NAME_MAX_LENGTH) {
@@ -221,7 +216,7 @@ export class SessionExecution implements ExecutionService {
       const binding: HardeningBinding = {
         image: runtime.image,
         rootless: info.rootless,
-        ...sandboxBindingOf({ workspaceRoot: pinnedWorkspaceRoot, stateRoot: sandboxStateRoot, secretRoot }, sandbox),
+        ...sandboxBindingOf({ workspaceRoot, stateRoot: sandboxStateRoot, secretRoot }, sandbox),
       };
       const policyPath = writePolicyDocument(runtime.stateDir, sessionId, this.egressAllow, AGENTOS_WORKLOAD_BINARY);
       let containerId: string;
@@ -429,15 +424,6 @@ export class SessionExecution implements ExecutionService {
     return this.secretRoot;
   }
 
-  // The pinned workspace root the sandbox binding derives from. Absent or relative, the create is refused with SCHEMA_INVALID
-  // before any libpod, OpenShell, or policy-file call.
-  private requirePinnedWorkspaceRoot(): string {
-    if (this.pinnedWorkspaceRoot === undefined || !isAbsolute(this.pinnedWorkspaceRoot)) {
-      throw makeRealmError("SCHEMA_INVALID");
-    }
-    return this.pinnedWorkspaceRoot;
-  }
-
   // The driver's sandbox state root the sandbox binding derives each state directory from. Absent or relative, the create is refused
   // with SCHEMA_INVALID before any libpod, OpenShell, or policy-file call.
   private requireSandboxStateRoot(): string {
@@ -478,22 +464,6 @@ export class SessionExecution implements ExecutionService {
       throw new HardeningFailedError(first, causeCode);
     }
     throw makeRealmError("OPENSHELL_START_FAILED", causeCode);
-  }
-}
-
-// Refuses with POLICY_DENIED unless both absolute paths name the same directory once symlinks are resolved. A path that cannot be
-// resolved is refused too. The error carries no path.
-function requireSameDirectory(requested: string, pinned: string): void {
-  let requestedReal: string;
-  let pinnedReal: string;
-  try {
-    requestedReal = realpathSync(requested);
-    pinnedReal = realpathSync(pinned);
-  } catch {
-    throw makeRealmError("POLICY_DENIED");
-  }
-  if (requestedReal !== pinnedReal) {
-    throw makeRealmError("POLICY_DENIED");
   }
 }
 

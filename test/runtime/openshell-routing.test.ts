@@ -72,7 +72,7 @@ async function fixture(t: TestContext): Promise<Fixture> {
   });
   const stateDir = join(base, "state");
   const secretRoot = join(base, "secrets");
-  // The pinned workspace is a real directory: a create resolves it to compare it with the requested workspace.
+  // The workspace is a real directory that the request names.
   mkdirSync(join(base, "workspace"));
   const sandboxStateRoot = join(base, "sandboxes");
   const exec = new SessionExecution({
@@ -83,7 +83,6 @@ async function fixture(t: TestContext): Promise<Fixture> {
     readOciConfig: ociReaderOf(RUNTIME_OCI_CONFIG_TEXT),
     config: { image: IMAGE, stateDir },
     secretRoot,
-    pinnedWorkspaceRoot: join(base, "workspace"),
     sandboxStateRoot,
     egressAllow: [],
   });
