@@ -12,6 +12,9 @@
 //   C3 realm active: the write proceeds on the host. The offered tool list is recorded, not asserted; Phase 16 owns removal.
 //   C4 advisory, realm down: the built-in patch-mode edit CREATE is not refused by the guard. The advisory notice shows,
 //      exact bytes are created on the host at an absent path, and the provider's next request carries the successful result.
+//   O2 (gated, skipped without REALM_LIVE_OMP): one session moves from advisory to fail-closed by a daemon restart and /realm-retry.
+//      The offered tools follow the mode, a registered write then read reach the provider with text and digest, and a model-issued
+//      bash is refused with POLICY_DENIED.
 //
 // The plugin reads the mode from the daemon's status, not from the policy file. C2 and C4 therefore attach while the daemon
 // is up (so the explicit mode is known) and only then take the realm down, which is what makes the status unreadable. The
@@ -44,9 +47,9 @@ import {
   writeEvidence,
 } from "../support/omp-live.js";
 import { createOmpProfile, type OmpProfile, type ProfilePolicyMode } from "../support/omp-profile.js";
-import { startOmp, turnFailures, type OmpSession, type PromptOutcome, type ToolEnd } from "../support/omp-rpc.js";
-import { startRealmDaemon } from "../support/realm-daemon-fixture.js";
-import { ScriptedProvider, type RecordedRequest } from "../support/scripted-provider.js";
+import { boundedCapture, scriptedTurnProblem, startOmp, turnFailures, type OmpSession, type PromptOutcome, type ToolEnd } from "../support/omp-rpc.js";
+import { startRealmDaemon, type RealmDaemonFixture } from "../support/realm-daemon-fixture.js";
+import { ScriptedProvider, type ChatMessage, type ProviderTurn, type RecordedRequest, type TurnPlan } from "../support/scripted-provider.js";
 import { classify, defaultAllow, externalConnects, formatOffenders, parseConnects, traceArgv, type NetAllow, type NetConnect } from "../support/net-trace.js";
 import { onPath } from "../support/production-live.js";
 import { sendRequest } from "../../src/daemon/channel.js";
@@ -177,7 +180,7 @@ async function runGuard(
       evidenceDir: process.env[EVIDENCE_DIR_VARIABLE],
       evidence: {
         [`${spec.name}.frames.jsonl`]: () => omp.frames.map((frame) => JSON.stringify(frame)).join("\n"),
-        [`${spec.name}.requests.json`]: () => JSON.stringify(provider.requests, null, 1),
+        [`${spec.name}.requests.json`]: () => boundedCapture(provider.requests),
         [`${spec.name}.proxy-refusals.json`]: () => JSON.stringify(provider.proxyRefusals, null, 1),
       },
       report: (problem) => {
@@ -292,7 +295,208 @@ void test(
     const nextRequest = requests[1];
     assert.ok(nextRequest !== undefined, "the provider must receive the native edit result in its next request");
     assert.equal(nextRequest.lastRole, "tool");
-    assert.equal(nextRequest.toolResultText, end.text, "the provider's next request must carry the successful native edit result");
+    const carried = nextRequest.toolResults.find((result) => result.toolCallId === end.toolCallId);
+    assert.ok(carried !== undefined, "the provider's next request must carry the result of the edit's own tool call");
+    assert.equal(carried.text, end.text, "the provider's next request must carry the successful native edit result");
+  },
+);
+
+// ---- O2 (OMPX-02, OMPX-03, OMPX-04): one session that moves from advisory to fail-closed ------------------------------------
+
+const T3_ADVISORY_PROMPT = "t3-advisory-write-then-read";
+const T3_FAIL_CLOSED_PROMPT = "t3-fail-closed-bash";
+const T3_PATH = "t3.txt";
+const T3_CONTENT = "t3 registered write\nUTF-8: λ\n";
+const T3_SHA = createHash("sha256").update(T3_CONTENT).digest("hex");
+const T3_READ_LIMIT = 4096;
+const T3_BASH_FILE = "t3-bash-denied.txt";
+// What fail-closed offers: the five Realm tools, the read-only built-ins, and bash, which the guard refuses. Sorted.
+const FAIL_CLOSED_OFFERED = ["ask", "bash", "exec", "glob", "grep", "list", "read", "status", "todo", "wait", "write"];
+
+// The scripted turns of the case. An advisory prompt issues a registered write, then a registered read, then text. A fail-closed
+// prompt issues a model-issued bash, then text. Calls are counted from the last user message, so each prompt answers its own calls.
+function t3Turn(turn: ProviderTurn): TurnPlan {
+  const answered = toolRoundsSinceUser(turn.messages);
+  if (turn.userText.includes(T3_ADVISORY_PROMPT)) {
+    if (answered === 0) {
+      return { call: { name: "write", args: { path: T3_PATH, content: T3_CONTENT } } };
+    }
+    if (answered === 1) {
+      return { call: { name: "read", args: { path: T3_PATH, maxBytes: T3_READ_LIMIT } } };
+    }
+    return { text: "advisory done" };
+  }
+  if (turn.userText.includes(T3_FAIL_CLOSED_PROMPT)) {
+    if (answered === 0) {
+      return { call: { name: "bash", args: { command: `echo denied > ${T3_BASH_FILE}` } } };
+    }
+    return { text: "fail-closed done" };
+  }
+  return { text: "ack" };
+}
+
+// How many tool results follow the last user message: the calls already answered in this prompt.
+function toolRoundsSinceUser(messages: readonly ChatMessage[]): number {
+  let rounds = 0;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const role = messages[index]?.role;
+    if (role === "user") {
+      break;
+    }
+    if (role === "tool") {
+      rounds += 1;
+    }
+  }
+  return rounds;
+}
+
+// The details the daemon's outcome carries in the frame, beside the text the model reads.
+function detailsOf(end: ToolEnd): unknown {
+  const result = end.frame["result"];
+  assert.ok(isRecord(result));
+  return result["details"];
+}
+
+void test(
+  "O2 advisory to fail-closed in one session: the offered tools follow the mode, a registered write and read reach the provider with text and digest, and a model bash is POLICY_DENIED",
+  { skip, timeout: OMP_SCENARIO_TIMEOUT_MS },
+  async (t) => {
+    t.diagnostic(`omp/${ompVersionText}; fake-backed daemon and scripted provider, not production containment`);
+    const cleanups = createCleanups();
+    t.after(() => cleanups.run());
+    const provider = new ScriptedProvider();
+    cleanups.add(() => provider.stop());
+    provider.onTurn(t3Turn);
+    const { port } = await provider.start();
+    const pathValue = process.env["PATH"];
+    const profile = createOmpProfile({
+      providerPort: port,
+      refuseExternalNetwork: true,
+      realm: { mode: "advisory" },
+      ...(pathValue === undefined ? {} : { path: pathValue }),
+    });
+    cleanups.add(() => {
+      profile.dispose();
+    });
+    // The daemon reads its mode from its policy file at start, so a mode change is a restart over the same state directory.
+    const realm: { daemon: RealmDaemonFixture | undefined } = {
+      daemon: await startRealmDaemon({ stateDir: profile.stateDir, workspace: profile.workspace, mode: "advisory" }),
+    };
+    cleanups.add(async () => {
+      await realm.daemon?.down();
+    });
+    const tmpDir = join(profile.root, "tmp");
+    mkdirSync(tmpDir);
+    const omp = startOmp({
+      bin: OMP_BIN,
+      env: { ...profile.env, TMPDIR: tmpDir, PI_EDIT_VARIANT: "patch" },
+      cwd: profile.workspace,
+      extensionPath: EXTENSION_PATH,
+    });
+    // Captures are bounded and credential-free: boundedCapture strips authorization, api-key, token and secret fields.
+    const captured: { schemas: Record<string, unknown>; results: Record<string, unknown> } = { schemas: {}, results: {} };
+    cleanups.add(() =>
+      closeWithEvidence({
+        evidenceDir: process.env[EVIDENCE_DIR_VARIABLE],
+        evidence: {
+          "o2-advisory-to-fail-closed.frames.json": () => boundedCapture(omp.frames),
+          "o2-advisory-to-fail-closed.requests.json": () => boundedCapture(provider.requests),
+          "o2-advisory-to-fail-closed.tool-schemas.json": () => boundedCapture(captured.schemas),
+          "o2-advisory-to-fail-closed.tool-results.json": () => boundedCapture(captured.results),
+        },
+        report: (problem) => {
+          t.diagnostic(problem);
+        },
+        close: () => omp.close(CLOSE_OPTIONS),
+      }),
+    );
+    await omp.ready(OMP_READY_TIMEOUT_MS);
+    await omp.waitFor(
+      (session) => session.status()?.includes("realm active") === true,
+      OMP_READY_TIMEOUT_MS,
+      "the plugin's realm active status (advisory)",
+    );
+
+    // Advisory: the built-in edit and bash are offered, and the registered write then read run through the daemon.
+    const advisoryMark = provider.requests.length;
+    const advisory = await omp.prompt(T3_ADVISORY_PROMPT, OMP_PROMPT_TIMEOUT_MS);
+    const advisoryRequests = provider.requests.slice(advisoryMark);
+    assert.equal(scriptedTurnProblem({ prompt: T3_ADVISORY_PROMPT, requests: advisoryRequests, frames: advisory.frames }), undefined);
+    assert.equal(advisoryRequests.length, 3, "a write, a read and the final text: three provider requests");
+    const advisoryOffered = advisoryRequests[0]?.toolsOffered ?? [];
+    assert.ok(advisoryOffered.includes("edit") && advisoryOffered.includes("bash"), "advisory keeps the built-in edit and bash offered");
+    captured.schemas["advisory"] = advisoryRequests[0]?.toolSchemas;
+
+    const writeEnd = toolEndOf(advisory, "write");
+    assert.equal(writeEnd.isError, false, writeEnd.text);
+    const writeResult = { outcome: "done", tool: "write", value: { sha256: T3_SHA, bytes: Buffer.byteLength(T3_CONTENT), warning: null } };
+    assert.deepEqual(JSON.parse(writeEnd.text), writeResult, "the registered write reports its digest and byte count");
+    assert.deepEqual(readFileSync(join(profile.workspace, T3_PATH)), Buffer.from(T3_CONTENT), "the registered write created the exact bytes");
+    const readEnd = toolEndOf(advisory, "read");
+    assert.equal(readEnd.isError, false, readEnd.text);
+    assert.ok(readEnd.text.startsWith(T3_CONTENT) && readEnd.text.includes(T3_SHA), "the registered read returns the text and its digest");
+    assert.deepEqual(detailsOf(readEnd), {
+      outcome: "done",
+      tool: "read",
+      value: { status: "found", sha256: T3_SHA, truncated: false, bytes: Buffer.byteLength(T3_CONTENT) },
+    });
+    const afterWrite = advisoryRequests[1];
+    const afterRead = advisoryRequests[2];
+    assert.ok(afterWrite !== undefined && afterRead !== undefined, "the provider received the write and the read results");
+    const carriedWrite = afterWrite.toolResults.find((result) => result.toolCallId === writeEnd.toolCallId);
+    assert.ok(carriedWrite !== undefined, "the provider's next request carries the result of the write's own call");
+    assert.equal(carriedWrite.text, writeEnd.text);
+    assert.deepEqual(carriedWrite.json, writeResult, "the write result reaches the provider with its digest and byte count");
+    const carriedRead = afterRead.toolResults.find((result) => result.toolCallId === readEnd.toolCallId);
+    assert.ok(carriedRead !== undefined, "the provider's next request carries the result of the read's own call");
+    assert.equal(carriedRead.text, readEnd.text);
+    assert.ok(carriedRead.digests.includes(T3_SHA), "the read result reaches the provider with the file digest");
+    captured.results["write"] = writeEnd.text;
+    captured.results["read"] = readEnd.text;
+
+    // Advisory to fail-closed: the daemon goes down, and the plugin shows the loss on its own status poll. The daemon restarts
+    // with the fail-closed policy, and /realm-retry re-attaches the plugin through its existing attach path.
+    const downed = realm.daemon;
+    realm.daemon = undefined;
+    await downed?.down();
+    await omp.waitFor(
+      (session) => {
+        const status = session.status();
+        return status !== undefined && !status.includes("realm active");
+      },
+      OMP_READY_TIMEOUT_MS,
+      "the plugin's status once the daemon is down",
+    );
+    realm.daemon = await startRealmDaemon({ stateDir: profile.stateDir, workspace: profile.workspace, mode: "fail-closed" });
+    const daemonStatus = await realm.daemon.status();
+    assert.equal(isRecord(daemonStatus.result) ? daemonStatus.result["mode"] : undefined, "fail-closed", "the daemon's own status reports fail-closed");
+    await omp.prompt("/realm-retry", OMP_PROMPT_TIMEOUT_MS);
+    await omp.waitFor(
+      (session) => session.status()?.includes("realm active") === true,
+      OMP_READY_TIMEOUT_MS,
+      "the plugin's realm active status after the re-attach",
+    );
+
+    // Fail-closed: the offered set is the Realm tools, the read-only built-ins and bash. A model-issued bash is refused by the guard.
+    const failClosedMark = provider.requests.length;
+    const failClosed = await omp.prompt(T3_FAIL_CLOSED_PROMPT, OMP_PROMPT_TIMEOUT_MS);
+    const failClosedRequests = provider.requests.slice(failClosedMark);
+    assert.equal(scriptedTurnProblem({ prompt: T3_FAIL_CLOSED_PROMPT, requests: failClosedRequests, frames: failClosed.frames }), undefined);
+    assert.equal(failClosedRequests.length, 2, "a bash call and its final text: two provider requests");
+    const failClosedOffered = [...(failClosedRequests[0]?.toolsOffered ?? [])].sort();
+    assert.deepEqual(failClosedOffered, FAIL_CLOSED_OFFERED, "fail-closed offers the Realm tools, the read-only built-ins and bash, and no edit");
+    captured.schemas["failClosed"] = failClosedRequests[0]?.toolSchemas;
+    const bashEnd = toolEndOf(failClosed, "bash");
+    assert.equal(bashEnd.isError, true, bashEnd.text);
+    assert.match(bashEnd.text, /POLICY_DENIED/, "the model-issued bash is refused with the catalogue code");
+    assert.doesNotMatch(bashEnd.text, /Tool bash not found/, "the refusal is not Omp's native removal text");
+    assert.equal(existsSync(join(profile.workspace, T3_BASH_FILE)), false, "the refused bash never ran");
+    const afterBash = failClosedRequests[1];
+    assert.ok(afterBash !== undefined, "the provider received the bash result");
+    const carriedBash = afterBash.toolResults.find((result) => result.toolCallId === bashEnd.toolCallId);
+    assert.ok(carriedBash !== undefined, "the provider's next request carries the result of the bash call");
+    assert.match(carriedBash.text, /POLICY_DENIED/);
+    captured.results["bash"] = bashEnd.text;
   },
 );
 
@@ -415,7 +619,7 @@ async function tracedRealmWrite(
         [`built-realm-${label}.strace`]: () => readFileSync(traceFile, "utf8"),
         [`built-realm-${label}.frames.jsonl`]: () => omp.frames.map((frame) => JSON.stringify(frame)).join("\n"),
         [`built-realm-${label}.stderr.txt`]: () => omp.stderr(),
-        [`built-realm-${label}.requests.json`]: () => JSON.stringify(provider.requests.slice(requestsBefore), null, 1),
+        [`built-realm-${label}.requests.json`]: () => boundedCapture(provider.requests.slice(requestsBefore)),
         [`built-realm-${label}.provider-failures.json`]: () => JSON.stringify(provider.failures.slice(failuresBefore), null, 1),
         [`built-realm-${label}.proxy-refusals.json`]: () => JSON.stringify(provider.proxyRefusals.slice(refusalsBefore), null, 1),
         [`built-realm-${label}.summary.json`]: () => JSON.stringify({

@@ -28,6 +28,7 @@
 //     close(options?): Promise<OmpExit>           stdin end, wait, SIGTERM, wait, SIGKILL, wait; every wait is bounded
 //   Pure pieces, exported so they are testable without a process: JsonlFramer, ompArgs, ompCommand, toolStartOf, toolEndOf, killGroup,
 //   turnFailures, summariseFrames, scriptedTurnProblem (is a scripted turn proven: a provider request for it, a turn ended with stop, no failed turn).
+//   redactCredentials and boundedCapture: the captures kept as evidence, with no credential field or header and a size bound.
 //
 // Dialogs: Omp asks the extension host with `extension_ui_request` frames. confirm is answered `confirmed: true`; select, input and
 // editor are answered `cancelled: true`. notify and setStatus need no answer.
@@ -284,6 +285,57 @@ export function scriptedTurnProblem(input: {
     problems.push("no turn ended with stopReason stop");
   }
   return problems.length === 0 ? undefined : `${problems.join("; ")}; ${summariseFrames(input.frames)}`;
+}
+
+// ---- Captures --------------------------------------------------------------------------------------------------------------
+
+// The largest serialized capture kept as evidence. A longer capture is clipped, and its marker says how much was kept.
+export const CAPTURE_LIMIT_BYTES = 64 * 1024;
+
+// Names a capture never keeps: an authorization header, an API key, a token or a secret. Case and `-` or `_` are ignored, so
+// api-key, api_key and apiKey are one name.
+const CREDENTIAL_NAMES: Readonly<Record<string, true>> = { authorization: true, apikey: true, token: true, secret: true };
+
+function isCredentialName(key: string): boolean {
+  return Object.hasOwn(CREDENTIAL_NAMES, key.toLowerCase().replace(/[-_]/g, ""));
+}
+
+// A header written as a [name, value] pair whose name is a credential name.
+function isCredentialPair(entry: unknown): boolean {
+  if (!Array.isArray(entry)) {
+    return false;
+  }
+  const name = (entry as unknown[])[0];
+  return typeof name === "string" && isCredentialName(name);
+}
+
+// The value with every credential field, header and header pair removed, at any depth. Other values are kept, and the input is not
+// changed.
+export function redactCredentials(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return (value as unknown[]).filter((entry) => !isCredentialPair(entry)).map((entry) => redactCredentials(entry));
+  }
+  if (!isRecord(value)) {
+    return value;
+  }
+  const kept: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (!isCredentialName(key)) {
+      kept[key] = redactCredentials(entry);
+    }
+  }
+  return kept;
+}
+
+// The JSON text of a value with its credentials removed, clipped to limitBytes. A clipped text ends with a marker that gives the full
+// size, so a reader sees that the capture is partial.
+export function boundedCapture(value: unknown, limitBytes: number = CAPTURE_LIMIT_BYTES): string {
+  const text = JSON.stringify(redactCredentials(value), null, 1);
+  const bytes = Buffer.from(text, "utf8");
+  if (bytes.byteLength <= limitBytes) {
+    return text;
+  }
+  return `${bytes.subarray(0, limitBytes).toString("utf8")}\n[capture clipped: ${String(limitBytes)} of ${String(bytes.byteLength)} bytes kept]`;
 }
 
 // ---- Session ---------------------------------------------------------------------------------------------------------------

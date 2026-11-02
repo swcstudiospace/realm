@@ -47,6 +47,9 @@ import {
 import { PROFILE_IMAGE, createOmpProfile, modelsYaml } from "../support/omp-profile.js";
 import { pollUntil, scaledMs } from "../support/timing.js";
 import {
+  CAPTURE_LIMIT_BYTES,
+  boundedCapture,
+  redactCredentials,
   JsonlFramer,
   OmpSession,
   ompArgs,
@@ -62,6 +65,8 @@ import {
   type OmpFrame,
 } from "../support/omp-rpc.js";
 import {
+  TOOL_RESULT_TEXT_LIMIT_BYTES,
+  toolResultsOfRequest,
   ScriptedProvider,
   completionBody,
   sseBody,
@@ -630,6 +635,129 @@ void test("the encoders are pure: the SSE body is one data event per chunk then 
   assert.equal(textOfContent([{ text: "a" }, { type: "image" }, "x", { text: "b" }]), "ab");
   assert.equal(textOfContent(undefined), "");
   assert.equal(textOfContent({ text: "no" }), "");
+});
+
+// ---- Tool results and captures -----------------------------------------------------------------------------------------------
+
+const SHA_A = "a".repeat(64);
+
+void test("toolResultsOfRequest reads each tool message of a recorded request body with its call id, text, digests and JSON", () => {
+  const writeJson = JSON.stringify({ outcome: "done", tool: "write", value: { sha256: SHA_A, bytes: 6, warning: null } });
+  const body = {
+    model: "scripted",
+    stream: true,
+    messages: [
+      { role: "user", content: "write, then read" },
+      { role: "assistant", content: null, tool_calls: [{ id: "call_1", type: "function", function: { name: "write", arguments: "{}" } }] },
+      { role: "tool", tool_call_id: "call_1", content: writeJson },
+      { role: "assistant", content: null, tool_calls: [{ id: "call_2", type: "function", function: { name: "read", arguments: "{}" } }] },
+      {
+        role: "tool",
+        tool_call_id: "call_2",
+        content: [
+          { type: "text", text: "hello\n" },
+          { type: "text", text: `[realm read] truncated=false sha256=${SHA_A}` },
+        ],
+      },
+    ],
+  };
+  const [write, read, ...rest] = toolResultsOfRequest(body);
+  assert.deepEqual(rest, []);
+  assert.ok(write !== undefined && read !== undefined);
+  assert.equal(write.toolCallId, "call_1");
+  assert.equal(write.text, writeJson);
+  assert.deepEqual(write.json, { outcome: "done", tool: "write", value: { sha256: SHA_A, bytes: 6, warning: null } });
+  assert.deepEqual(write.digests, [SHA_A]);
+  assert.equal(write.textTruncated, false);
+  assert.equal(read.toolCallId, "call_2");
+  assert.equal(read.text, `hello\n[realm read] truncated=false sha256=${SHA_A}`);
+  assert.equal(read.json, undefined);
+  assert.deepEqual(read.digests, [SHA_A]);
+});
+
+void test("a request with no tool message, or a body that is not an object, yields an empty list and no error", () => {
+  assert.deepEqual(toolResultsOfRequest({ messages: [{ role: "user", content: "hi" }] }), []);
+  assert.deepEqual(toolResultsOfRequest({}), []);
+  for (const body of [null, "text", [1, 2], 7]) {
+    assert.deepEqual(toolResultsOfRequest(body), []);
+  }
+});
+
+void test("a tool message with no tool_call_id keeps an undefined call id, and text that is not one JSON object has no json", () => {
+  const [only, ...rest] = toolResultsOfRequest({ messages: [{ role: "tool", content: "plain result" }] });
+  assert.deepEqual(rest, []);
+  assert.ok(only !== undefined);
+  assert.equal(only.toolCallId, undefined);
+  assert.equal(only.text, "plain result");
+  assert.equal(only.json, undefined);
+  assert.deepEqual(only.digests, []);
+});
+
+void test("a tool result longer than the limit is clipped to it and flagged; a shorter one is kept whole", () => {
+  const long = "x".repeat(TOOL_RESULT_TEXT_LIMIT_BYTES + 10);
+  const [clipped, whole, ...rest] = toolResultsOfRequest({
+    messages: [
+      { role: "tool", tool_call_id: "a", content: long },
+      { role: "tool", tool_call_id: "b", content: "short" },
+    ],
+  });
+  assert.deepEqual(rest, []);
+  assert.ok(clipped !== undefined && whole !== undefined);
+  assert.equal(clipped.textTruncated, true);
+  assert.equal(Buffer.byteLength(clipped.text), TOOL_RESULT_TEXT_LIMIT_BYTES);
+  assert.equal(whole.textTruncated, false);
+  assert.equal(whole.text, "short");
+});
+
+void test("the provider records each tool result of a request under its tool_call_id, with the schemas the request offered", async (t) => {
+  const { provider, baseUrl } = await startProvider(t);
+  const body = {
+    model: "scripted",
+    tools: [WRITE_TOOL, READ_TOOL],
+    messages: [
+      { role: "user", content: "go" },
+      { role: "tool", tool_call_id: "call_9", content: "result nine" },
+    ],
+  };
+  assert.equal((await chat(baseUrl, body)).status, 200);
+  const [recorded, ...rest] = provider.requests;
+  assert.deepEqual(rest, []);
+  assert.ok(recorded !== undefined);
+  assert.deepEqual(
+    recorded.toolResults.map((result) => [result.toolCallId, result.text]),
+    [["call_9", "result nine"]],
+  );
+  assert.deepEqual(recorded.toolSchemas, [WRITE_TOOL, READ_TOOL]);
+});
+
+void test("redactCredentials removes authorization, api-key, token and secret fields and header pairs at any depth, and keeps the rest", () => {
+  const capture = {
+    name: "write",
+    headers: { Authorization: "Bearer x", "api-key": "k", "X-Trace": "t", api_key: "k2" },
+    pairs: [
+      ["authorization", "Bearer y"],
+      ["content-type", "application/json"],
+    ],
+    parameters: { token: "t", nested: [{ secret: "s", keep: 1 }] },
+  };
+  assert.deepEqual(redactCredentials(capture), {
+    name: "write",
+    headers: { "X-Trace": "t" },
+    pairs: [["content-type", "application/json"]],
+    parameters: { nested: [{ keep: 1 }] },
+  });
+  assert.equal(capture.headers.Authorization, "Bearer x", "the input is not changed");
+});
+
+void test("boundedCapture keeps a capture with no credential whole, and clips a larger one at the limit with its full size in the marker", () => {
+  assert.equal(boundedCapture({ token: "t", name: "read" }), JSON.stringify({ name: "read" }, null, 1));
+  assert.equal(boundedCapture({ secret: "s" }), "{}");
+  const full = JSON.stringify({ text: "z".repeat(CAPTURE_LIMIT_BYTES * 2) }, null, 1);
+  const clipped = boundedCapture({ text: "z".repeat(CAPTURE_LIMIT_BYTES * 2) });
+  const cut = clipped.indexOf("\n[capture clipped");
+  assert.ok(cut > 0, "a clipped capture carries its marker");
+  assert.equal(Buffer.byteLength(clipped.slice(0, cut)), CAPTURE_LIMIT_BYTES);
+  assert.ok(clipped.endsWith(`of ${String(Buffer.byteLength(full))} bytes kept]`));
 });
 
 // ---- Profile -----------------------------------------------------------------------------------------------------------------

@@ -23,8 +23,11 @@
 //     get requests(): readonly RecordedRequest[]             one entry per chat-completions request, in arrival order
 //     get failures(): readonly string[]                      what went wrong inside the server (a throwing handler, a socket error)
 //     get proxyRefusals(): readonly string[]                 refused proxy request lines, never failed chat turns
+//     requests[i].toolResults   the tool-role messages of that request, each with the tool_call_id it answers (ToolResultRecord)
+//     requests[i].toolSchemas   the tool definitions that request offered, as Omp sent them (raw: redact before any capture)
 //     stop(): Promise<void>                                  closes the listener and every open connection; idempotent
-//   Pure encoders, exported so the protocol is testable without a socket: streamChunks, sseBody, completionBody, textOfContent.
+//   Pure encoders, exported so the protocol is testable without a socket: streamChunks, sseBody, completionBody, textOfContent,
+//   toolResultsOfRequest (the tool-role records of a parsed request body).
 //
 // The provider binds 127.0.0.1 only and never reaches out: the network assertion (HARN-03) counts the connections Omp makes to it.
 
@@ -38,6 +41,20 @@ import { isRecord, within } from "./omp-live.js";
 export interface ChatMessage {
   readonly role: string;
   readonly content?: unknown;
+  readonly toolCallId?: string;
+}
+
+// One tool-role message of a request: the result Omp sent back for an earlier call. The text is the message content as text,
+// clipped to TOOL_RESULT_TEXT_LIMIT_BYTES; textTruncated says whether it was clipped.
+export interface ToolResultRecord {
+  // The tool_call_id of the message, undefined when the message carries none.
+  readonly toolCallId: string | undefined;
+  readonly text: string;
+  readonly textTruncated: boolean;
+  // Every sha256 digest the text names: `sha256=<hex>` in a read note, or `"sha256":"<hex>"` in a JSON result.
+  readonly digests: readonly string[];
+  // The text parsed, when it is one JSON object.
+  readonly json: Readonly<Record<string, unknown>> | undefined;
 }
 
 export interface ProviderTurn {
@@ -70,6 +87,10 @@ export interface RecordedRequest {
   readonly userText: string;
   // The text of the last tool-role message in the request: the result Omp reports for the previous tool call.
   readonly toolResultText: string | undefined;
+  // Every tool-role message the request carried, in order, each with the tool_call_id it answers.
+  readonly toolResults: readonly ToolResultRecord[];
+  // The tool definitions the request offered, as Omp sent them. Raw: a capture must strip credentials before it is kept.
+  readonly toolSchemas: readonly Readonly<Record<string, unknown>>[];
   readonly messageCount: number;
   readonly plan: TurnPlan;
 }
@@ -174,7 +195,9 @@ function readMessages(parsed: Record<string, unknown>): readonly ChatMessage[] {
   const messages: ChatMessage[] = [];
   for (const entry of raw as unknown[]) {
     if (isRecord(entry) && typeof entry["role"] === "string") {
-      messages.push({ role: entry["role"], content: entry["content"] });
+      const toolCallId = entry["tool_call_id"];
+      const message: ChatMessage = { role: entry["role"], content: entry["content"] };
+      messages.push(typeof toolCallId === "string" ? { ...message, toolCallId } : message);
     }
   }
   return messages;
@@ -195,6 +218,15 @@ function readToolNames(parsed: Record<string, unknown>): readonly string[] {
   return names;
 }
 
+// The tool definitions the request offered, each as Omp sent it. A non-object entry is skipped.
+function readToolSchemas(parsed: Record<string, unknown>): readonly Readonly<Record<string, unknown>>[] {
+  const raw = parsed["tools"];
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  return (raw as unknown[]).filter(isRecord);
+}
+
 function lastUserText(messages: readonly ChatMessage[]): string {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
@@ -213,6 +245,53 @@ function lastToolText(messages: readonly ChatMessage[]): string | undefined {
     }
   }
   return undefined;
+}
+
+// The text of a tool result that parses as one JSON object, or undefined.
+function jsonObjectOf(text: string): Readonly<Record<string, unknown>> | undefined {
+  if (!text.trimStart().startsWith("{")) {
+    return undefined;
+  }
+  try {
+    const value: unknown = JSON.parse(text);
+    return isRecord(value) ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// The largest tool-result text a record keeps. A longer one is clipped, and textTruncated says so.
+export const TOOL_RESULT_TEXT_LIMIT_BYTES = 256 * 1024;
+const DIGEST_PATTERN = /sha256(?:=|"\s*:\s*")([0-9a-f]{64})/g;
+
+// The tool-role messages of a request, in order, as ToolResultRecord values.
+function toolResultsOf(messages: readonly ChatMessage[]): ToolResultRecord[] {
+  const results: ToolResultRecord[] = [];
+  for (const message of messages) {
+    if (message.role !== "tool") {
+      continue;
+    }
+    const raw = textOfContent(message.content);
+    const bytes = Buffer.from(raw, "utf8");
+    const textTruncated = bytes.byteLength > TOOL_RESULT_TEXT_LIMIT_BYTES;
+    results.push({
+      toolCallId: message.toolCallId,
+      text: textTruncated ? bytes.subarray(0, TOOL_RESULT_TEXT_LIMIT_BYTES).toString("utf8") : raw,
+      textTruncated,
+      digests: [...raw.matchAll(DIGEST_PATTERN)].flatMap((match) => {
+        const digest = match[1];
+        return digest === undefined ? [] : [digest];
+      }),
+      json: jsonObjectOf(raw),
+    });
+  }
+  return results;
+}
+
+// The tool-role records of a parsed request body, as #complete records them. A body that is not an object, or that has no tool
+// message, yields an empty list.
+export function toolResultsOfRequest(body: unknown): readonly ToolResultRecord[] {
+  return isRecord(body) ? toolResultsOf(readMessages(body)) : [];
 }
 
 // The largest request body the server reads. Omp's requests carry the whole tool list, well under this.
@@ -391,6 +470,7 @@ export class ScriptedProvider {
     }
     const messages = readMessages(parsed);
     const toolsOffered = readToolNames(parsed);
+    const toolSchemas = readToolSchemas(parsed);
     const lastRole = messages[messages.length - 1]?.role;
     const userText = lastUserText(messages);
     const plan = await this.#handler({ userText, toolsOffered, lastRole, messages });
@@ -403,6 +483,8 @@ export class ScriptedProvider {
       lastRole,
       userText,
       toolResultText: lastToolText(messages),
+      toolResults: toolResultsOf(messages),
+      toolSchemas,
       messageCount: messages.length,
       plan,
     });
