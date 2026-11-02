@@ -28,12 +28,16 @@ export const PASS_THROUGH_HOST_TOOLS: readonly string[] = Object.freeze([
   "retry",
 ]);
 
-// The names fail-closed mode keeps callable, computed from the names Omp reports (spike rule 1). web_search is
-// left out: it reaches the network outside the realm's egress policy. Every other tool is removed, including
-// tools another extension or an MCP server registers later.
+// The names fail-closed mode keeps callable, computed from the names Omp reports (spike rule 1). Fail-closed removes every other
+// built-in, and Omp then refuses a call to it before any hook runs. bash stays active on purpose: the tool_call guard refuses a
+// model-issued bash with the catalogue code POLICY_DENIED. Removal alone would give Omp's native "Tool bash not found", which is
+// not a Realm catalogue error. The guard is a backstop, not process containment: it sees only the calls that reach the hook, so
+// fail-closed is a guard for bash, not a sandbox around it. web_search is left out: it reaches the network outside the realm's
+// egress policy. Every other tool is removed, including tools another extension or an MCP server registers later.
+const FAIL_CLOSED_KEEP: readonly string[] = Object.freeze([...READ_ONLY_HOST_TOOLS, ...REALM_TOOL_NAMES, "bash"]);
+
 export function failClosedToolNames(registered: readonly string[]): string[] {
-  const keep = new Set<string>([...READ_ONLY_HOST_TOOLS, ...REALM_TOOL_NAMES]);
-  return [...new Set(registered)].filter((name) => keep.has(name));
+  return [...new Set(registered)].filter((name) => FAIL_CLOSED_KEEP.includes(name));
 }
 
 // Order-insensitive comparison of two tool name lists. A duplicate on either side is a difference.
@@ -56,8 +60,10 @@ export interface HostToolPlan {
 }
 
 // Plans the host tool set for a policy mode (OMPX-03, OMPX-04, P16 c and d). registered is every tool Omp reports, active the
-// active set now, and owed the tools this plugin removed before. Fail-closed keeps the allowlist and removes the rest. Advisory
-// keeps every tool Omp reports and gives back the owed tools Omp still registers.
+// active set now, and owed the tools this plugin removed before. Fail-closed keeps the kept names that are still active, plus
+// every registered Realm tool, so a built-in the user turned off stays off and the Realm tools always come back. Advisory keeps
+// every tool Omp reports and gives back the owed tools Omp still registers. An owed tool Omp no longer registers is not waited
+// on: it leaves the owed list.
 export function planHostTools(
   mode: PolicyMode,
   registered: readonly string[],
@@ -65,8 +71,11 @@ export function planHostTools(
   owed: readonly string[],
 ): HostToolPlan {
   if (mode === "fail-closed") {
-    const wanted = failClosedToolNames(registered);
-    return { wanted, owed: unionOf(owed, active).filter((name) => !wanted.includes(name)) };
+    const wanted = failClosedToolNames(registered).filter(
+      (name) => active.includes(name) || REALM_TOOL_NAMES.some((tool) => tool === name),
+    );
+    const owedNow = unionOf(owed, active).filter((name) => registered.includes(name) && !wanted.includes(name));
+    return { wanted, owed: owedNow };
   }
   const restorable = owed.filter((name) => registered.includes(name));
   return { wanted: unionOf(active, restorable), owed: [] };
@@ -82,7 +91,8 @@ export type JsonSchema = Readonly<Record<string, unknown>>;
 
 export type HostApproval = "read" | "write" | "exec";
 
-// What a successful read reports besides its text: the digest, the truncation flag and the byte count.
+// What a successful read reports besides its text. sha256 covers the whole file. bytes is the length of the content returned, and
+// truncated says the daemon read stopped at maxBytes: it describes daemon read completeness only.
 export interface ReadDetails {
   readonly outcome: "done";
   readonly tool: "read";
@@ -271,15 +281,21 @@ function resultOf(outcome: ToolOutcome): HostToolResult {
 }
 
 // The bytes of a successful read. In-process they are a Uint8Array. Across the daemon connection they arrive in Node's JSON
-// form of a Buffer, { type: "Buffer", data: number[] }, which is rebuilt here. Any other shape is undefined.
+// form of a Buffer, { type: "Buffer", data: number[] }, which is rebuilt here. Any other shape, or a data array holding a value
+// that is not a byte, is undefined, and the read is refused as SCHEMA_INVALID.
 function bytesOf(content: unknown): Buffer | undefined {
   if (content instanceof Uint8Array) {
     return Buffer.from(content.buffer, content.byteOffset, content.byteLength);
   }
   if (typeof content === "object" && content !== null && "type" in content && "data" in content) {
-    if (content.type === "Buffer" && Array.isArray(content.data)) {
-      return Buffer.from(content.data);
+    const { type, data } = content;
+    if (type === "Buffer" && Array.isArray(data) && data.every(isByte)) {
+      return Buffer.from(data);
     }
   }
   return undefined;
+}
+
+function isByte(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 255;
 }

@@ -14,6 +14,7 @@ import type { HostToolDefinition } from "../../src/omp/tools.js";
 import {
   GUARD_STATUS_BUDGET_MS,
   GUARDED_HOST_TOOLS,
+  hostToolSetOf,
   REALM_RETRY_COMMAND,
   REALM_STATUS_KEY,
   STARTUP_BUDGET_MS,
@@ -22,6 +23,7 @@ import {
   registerRealmPlugin,
   renderRealmStatus,
   type DaemonAttach,
+  type ActiveSession,
   type HostToolCall,
   type HostToolSet,
   type HostToolVerdict,
@@ -253,6 +255,8 @@ class FakePi implements OmpExtensionApi {
   readonly activeSets: string[][] = [];
   // When set, setActiveTools is accepted and changes nothing, so the plugin's read-back must catch it.
   ignoreRemoval = false;
+  // When set, a setter applies its change only once this gate opens, so a test can hold a setter past its owner.
+  holdSetters: Promise<void> | null = null;
   private readonly builtins = new Set<string>(OMP_BUILTIN_TOOLS);
   private readonly active = new Set<string>(OMP_BUILTIN_TOOLS);
 
@@ -261,6 +265,12 @@ class FakePi implements OmpExtensionApi {
     // An extension tool under a built-in's name takes that built-in's place (spike S1).
     this.builtins.delete(tool.name);
     this.active.add(tool.name);
+  }
+
+  // Omp stops reporting a built-in, as when the extension that owned it unloads.
+  dropBuiltin(name: string): void {
+    this.builtins.delete(name);
+    this.active.delete(name);
   }
 
   getAllTools(): { readonly name: string }[] {
@@ -273,7 +283,10 @@ class FakePi implements OmpExtensionApi {
 
   setActiveTools(names: string[]): Promise<void> {
     this.activeSets.push([...names]);
-    if (!this.ignoreRemoval) {
+    const apply = (): void => {
+      if (this.ignoreRemoval) {
+        return;
+      }
       const known = new Set(this.getAllTools().map((tool) => tool.name));
       this.active.clear();
       for (const name of names) {
@@ -281,8 +294,12 @@ class FakePi implements OmpExtensionApi {
           this.active.add(name);
         }
       }
+    };
+    if (this.holdSetters === null) {
+      apply();
+      return Promise.resolve();
     }
-    return Promise.resolve();
+    return this.holdSetters.then(apply);
   }
 }
 
@@ -300,6 +317,7 @@ interface Fixture {
   readonly ui: FakeUi;
   readonly ctx: FakeCtx;
   readonly pi: FakePi;
+  readonly tools: HostToolSet;
   readonly daemon: FakeDaemon;
   readonly attachCalls: string[];
 }
@@ -324,8 +342,8 @@ function makeFixture(options: FixtureOptions = {}): Fixture {
       return Promise.resolve({ client: daemon, refusal: null });
     },
   };
-  registerRealmPlugin(pi, pluginOptions);
-  return { ui, ctx, pi, daemon, attachCalls };
+  const tools = registerRealmPlugin(pi, pluginOptions);
+  return { ui, ctx, pi, daemon, attachCalls, tools };
 }
 
 function startHandlerOf(pi: FakePi): (ctx: OmpSessionContext) => void {
@@ -338,7 +356,7 @@ function startHandlerOf(pi: FakePi): (ctx: OmpSessionContext) => void {
 }
 
 function toolSetOf(pi: OmpExtensionApi): HostToolSet {
-  return { pi, removed: [], queue: Promise.resolve() };
+  return hostToolSetOf(pi);
 }
 
 function toolCallOf(pi: FakePi): (call: HostToolCall) => Promise<HostToolVerdict | undefined> {
@@ -394,9 +412,9 @@ function expireTimer(ctx: FakeCtx, ms: number): void {
   ctx.clearTimer(entry.handle);
 }
 
-// The repaint poll armed at session start.
+// The most recent repaint poll: the one armed by the latest session start.
 function pollOf(ctx: FakeCtx): ArmedTimer {
-  const entry = ctx.intervals.find((interval) => interval.ms === STATUS_POLL_MS);
+  const entry = ctx.intervals.findLast((interval) => interval.ms === STATUS_POLL_MS);
   assert.ok(entry !== undefined, `a ${String(STATUS_POLL_MS)} ms poll was armed`);
   return entry;
 }
@@ -937,10 +955,11 @@ void test("OMP-02 / MED-03: a throwing status write leaves the paint cache stale
 
 // ---- OMPX-02, OMPX-03, OMPX-04: Realm tools and built-in removal -----------------
 
-// The fail-closed allowlist (docs/integration/omp.md, Enforcement spike rule 1): the read-only built-ins and the Realm tools.
-const FAIL_CLOSED_ALLOWLIST = ["ask", "exec", "glob", "grep", "list", "read", "status", "todo", "wait", "write"];
+// The fail-closed allowlist (docs/integration/omp.md, Enforcement spike rule 1): the read-only built-ins, the Realm tools, and bash,
+// which the tool_call guard refuses with a catalogue code (OMPX-03).
+const FAIL_CLOSED_ALLOWLIST = ["ask", "bash", "exec", "glob", "grep", "list", "read", "status", "todo", "wait", "write"];
 // Built-ins a fail-closed attach must remove, including web_search (network outside the realm's egress policy).
-const REMOVED_BUILTINS = ["ast_edit", "bash", "debug", "edit", "eval", "lsp", "task", "web_search"];
+const REMOVED_BUILTINS = ["ast_edit", "debug", "edit", "eval", "lsp", "task", "web_search"];
 const REALM_TOOLS = ["exec", "list", "read", "status", "write"];
 
 function sortedNames(names: readonly string[]): string[] {
@@ -1071,7 +1090,7 @@ void test("OMPX-04 / B9: advisory attach with the realm not active changes no to
 
   assert.equal(fixture.pi.activeSets.length, 0, "nothing is removed, so the active set is never set");
   const active = fixture.pi.getActiveTools();
-  for (const name of ["write", ...REMOVED_BUILTINS, "glob", "grep"]) {
+  for (const name of ["write", "bash", ...REMOVED_BUILTINS, "glob", "grep"]) {
     assert.ok(active.includes(name), `${name} stays active`);
   }
   assert.equal(fixture.pi.tools.size, REALM_TOOLS.length, "the Realm tools stay registered");
@@ -1203,9 +1222,9 @@ void test("P16 (c): in the same mode, a built-in that Omp puts back is removed a
   startHandlerOf(fixture.pi)(fixture.ctx);
   await waitForDetail(fixture.ui, "container running");
 
-  await fixture.pi.setActiveTools([...fixture.pi.getActiveTools(), "bash"]);
+  await fixture.pi.setActiveTools([...fixture.pi.getActiveTools(), "edit"]);
   assert.deepEqual(await toolCallOf(fixture.pi)({ toolName: "bash" }), { block: true, reason: "POLICY_DENIED" });
-  assert.ok(!fixture.pi.getActiveTools().includes("bash"), "bash is removed again");
+  assert.ok(!fixture.pi.getActiveTools().includes("edit"), "edit is removed again");
 });
 
 void test("P16 (d): a Realm tool that drops out of the active set is put back by the next guarded call in the same mode", async () => {
@@ -1227,4 +1246,260 @@ void test("P16 (e): a status whose mode cannot be read is refused: no host tool 
   fixture.daemon.mode = "unreadable" as unknown as PolicyMode;
   assert.deepEqual(await toolCallOf(fixture.pi)({ toolName: "bash" }), { block: true, reason: "POLICY_DENIED" });
   assert.equal(fixture.pi.activeSets.length, setsBefore, "an unreadable mode changes no host tool");
+});
+
+// ---- Host tool lifecycle (OMPX-03, OMPX-04; P16 a to g) ---------------------
+
+const POLICY_DENIED_VERDICT: HostToolVerdict = { block: true, reason: "POLICY_DENIED" };
+// Every tool the fake Omp reports once the Realm tools are registered, each name once.
+const EVERY_TOOL: readonly string[] = [...new Set([...OMP_BUILTIN_TOOLS, "exec", "list", "status"])];
+
+function sameActive(pi: FakePi, expected: readonly string[]): boolean {
+  return sortedNames(pi.getActiveTools()).join(",") === sortedNames(expected).join(",");
+}
+
+// A session the guard reads directly, with the client and the mode it last published.
+function sessionOf(fixture: Fixture, client: DaemonClient | null, mode: PolicyMode | null): ActiveSession {
+  return { ctx: fixture.ctx, tools: fixture.tools, client, mode, timers: new Map(), poll: null, refreshing: false, errorStamp: null, refusal: null };
+}
+
+// The policy mode the plugin last published. The probe reads it through the one path that shows it: with the status unreadable,
+// an edit follows the published mode, advisory passing it and fail-closed refusing it. It changes no host tool.
+async function publishedModeOf(fixture: Fixture): Promise<PolicyMode> {
+  fixture.daemon.hangStatus = true;
+  const verdict = toolCallOf(fixture.pi)({ toolName: "edit" });
+  expireTimer(fixture.ctx, GUARD_STATUS_BUDGET_MS);
+  const result = await verdict;
+  fixture.daemon.hangStatus = false;
+  return result === undefined ? "advisory" : "fail-closed";
+}
+
+void test("OMPX-03 (T2): a host bash call in fail-closed is refused with POLICY_DENIED whatever state the status reads", async () => {
+  for (const snapshot of [ACTIVE, CONNECTING, UNBOUND]) {
+    const fixture = makeFixture({ mode: "fail-closed", snapshot });
+    const verdict = await guardHostToolCall("bash", sessionOf(fixture, fixture.daemon, null), fixture.tools);
+    assert.deepEqual(verdict, POLICY_DENIED_VERDICT, `bash is refused while the realm is ${snapshot.state}`);
+  }
+});
+
+void test("OMPX-03 (T2): a host bash call in fail-closed is refused with POLICY_DENIED when the status cannot be read, and when no mode is known", async () => {
+  const published = makeFixture({ mode: "fail-closed" });
+  published.daemon.hangStatus = true;
+  const withMode = guardHostToolCall("bash", sessionOf(published, published.daemon, "fail-closed"), published.tools);
+  expireTimer(published.ctx, GUARD_STATUS_BUDGET_MS);
+  assert.deepEqual(await withMode, POLICY_DENIED_VERDICT, "the last published mode, fail-closed, refuses bash");
+
+  const unknown = makeFixture({ mode: "fail-closed" });
+  unknown.daemon.hangStatus = true;
+  const noMode = guardHostToolCall("bash", sessionOf(unknown, unknown.daemon, null), unknown.tools);
+  expireTimer(unknown.ctx, GUARD_STATUS_BUDGET_MS);
+  assert.deepEqual(await noMode, POLICY_DENIED_VERDICT, "with no mode known, bash is refused");
+});
+
+void test("OMPX-03 (T2): advisory passes a host bash call whose status reads, and a call with no session is refused with POLICY_DENIED", async () => {
+  const fixture = makeFixture({ mode: "advisory" });
+  assert.equal(await guardHostToolCall("bash", sessionOf(fixture, fixture.daemon, null), fixture.tools), undefined);
+  assert.deepEqual(await guardHostToolCall("bash", null, fixture.tools), POLICY_DENIED_VERDICT);
+});
+
+void test("P16 (a): a setter that resolves after its attach budget expired is read back, and the next session reconciles the set", async () => {
+  const fixture = makeFixture({ mode: "fail-closed" });
+  const gate = makeGate();
+  fixture.pi.holdSetters = gate.promise;
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitUntil(() => fixture.pi.activeSets.length === 1);
+  expireTimer(fixture.ctx, STARTUP_BUDGET_MS);
+  await waitForDetail(fixture.ui, "STARTUP_BUDGET_EXCEEDED");
+
+  gate.resolve();
+  await waitUntil(() => fixture.tools.inFlight === 0);
+  assert.ok(sameActive(fixture.pi, FAIL_CLOSED_ALLOWLIST), "the late setter applied the plan");
+  assert.deepEqual(sortedNames(fixture.tools.removed), REMOVED_BUILTINS, "the owed list is read back from Omp");
+
+  fixture.pi.holdSetters = null;
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitForDetail(fixture.ui, "container running");
+  assert.ok(sameActive(fixture.pi, FAIL_CLOSED_ALLOWLIST), "the next session's read leaves the planned set");
+  assert.deepEqual(sortedNames(fixture.tools.removed), REMOVED_BUILTINS);
+  assert.equal(await publishedModeOf(fixture), "fail-closed");
+});
+
+void test("P16 (a): a setter that resolves after session shutdown is read back, paints nothing, and the next session reconciles the set", async () => {
+  const fixture = makeFixture({ mode: "fail-closed" });
+  const gate = makeGate();
+  fixture.pi.holdSetters = gate.promise;
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitUntil(() => fixture.pi.activeSets.length === 1);
+  shutdownHandlerOf(fixture.pi)();
+  const paintsAtShutdown = statusTexts(fixture.ui).length;
+
+  gate.resolve();
+  await waitUntil(() => fixture.tools.inFlight === 0);
+  assert.ok(sameActive(fixture.pi, FAIL_CLOSED_ALLOWLIST), "the setter that outlived the shutdown applied the plan");
+  assert.deepEqual(sortedNames(fixture.tools.removed), REMOVED_BUILTINS);
+  assert.equal(statusTexts(fixture.ui).length, paintsAtShutdown, "the ended attempt paints nothing");
+
+  fixture.pi.holdSetters = null;
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitForDetail(fixture.ui, "container running");
+  assert.ok(sameActive(fixture.pi, FAIL_CLOSED_ALLOWLIST), "the next session finds the planned set");
+  assert.equal(fixture.pi.activeSets.length, 1, "the next session changes nothing");
+});
+
+void test("P16 (a): a setter that resolves after a new session start is read back, and the new session's read finds the plan in place", async () => {
+  const fixture = makeFixture({ mode: "fail-closed" });
+  const gate = makeGate();
+  fixture.pi.holdSetters = gate.promise;
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitUntil(() => fixture.pi.activeSets.length === 1);
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitUntil(() => fixture.tools.inFlight === 2);
+
+  gate.resolve();
+  await waitForDetail(fixture.ui, "container running");
+  assert.equal(fixture.pi.activeSets.length, 1, "the new session finds the set already at the plan and changes nothing");
+  assert.ok(sameActive(fixture.pi, FAIL_CLOSED_ALLOWLIST));
+  assert.deepEqual(sortedNames(fixture.tools.removed), REMOVED_BUILTINS);
+});
+
+void test("P16 (lifecycle a): active-tool drift in the same mode is restored on the next guarded call", async () => {
+  const fixture = makeFixture({ mode: "fail-closed" });
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitForDetail(fixture.ui, "container running");
+
+  await fixture.pi.setActiveTools([...fixture.pi.getActiveTools().filter((name) => name !== "write"), "edit"]);
+  assert.deepEqual(await toolCallOf(fixture.pi)({ toolName: "bash" }), POLICY_DENIED_VERDICT);
+  assert.ok(sameActive(fixture.pi, FAIL_CLOSED_ALLOWLIST), "write is back and edit is off");
+  assert.deepEqual(sortedNames(fixture.tools.removed), REMOVED_BUILTINS);
+});
+
+void test("P16 (lifecycle b): fail-closed, advisory, then fail-closed moves the active set and the published mode at each step", async () => {
+  const fixture = makeFixture({ mode: "fail-closed" });
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitForDetail(fixture.ui, "container running");
+  const toolCall = toolCallOf(fixture.pi);
+  assert.ok(sameActive(fixture.pi, FAIL_CLOSED_ALLOWLIST), "fail-closed holds the allowlist");
+  assert.equal(await publishedModeOf(fixture), "fail-closed");
+
+  fixture.daemon.mode = "advisory";
+  assert.equal(await toolCall({ toolName: "bash" }), undefined, "advisory passes bash");
+  assert.ok(sameActive(fixture.pi, EVERY_TOOL), "advisory gives back every tool");
+  assert.deepEqual(sortedNames(fixture.tools.removed), []);
+  assert.equal(await publishedModeOf(fixture), "advisory");
+
+  fixture.daemon.mode = "fail-closed";
+  assert.deepEqual(await toolCall({ toolName: "bash" }), POLICY_DENIED_VERDICT);
+  assert.ok(sameActive(fixture.pi, FAIL_CLOSED_ALLOWLIST), "fail-closed removes the built-ins again");
+  assert.deepEqual(sortedNames(fixture.tools.removed), REMOVED_BUILTINS);
+  assert.equal(await publishedModeOf(fixture), "fail-closed");
+});
+
+void test("P16 (lifecycle c): a failed restore followed by an unavailable daemon leaves the planned set, and edit follows the last published mode", async () => {
+  const fixture = makeFixture({ mode: "fail-closed" });
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitForDetail(fixture.ui, "container running");
+  const toolCall = toolCallOf(fixture.pi);
+
+  await fixture.pi.setActiveTools(fixture.pi.getActiveTools().filter((name) => name !== "write"));
+  fixture.pi.ignoreRemoval = true;
+  assert.deepEqual(await toolCall({ toolName: "bash" }), POLICY_DENIED_VERDICT, "the restore of write does not hold");
+  assert.ok(!fixture.pi.getActiveTools().includes("write"), "write stays off while the restore fails");
+  assert.deepEqual(sortedNames(fixture.tools.removed), REMOVED_BUILTINS, "the removals still owed are kept");
+
+  fixture.pi.ignoreRemoval = false;
+  fixture.daemon.hangStatus = true;
+  const failClosedEdit = toolCall({ toolName: "edit" });
+  expireTimer(fixture.ctx, GUARD_STATUS_BUDGET_MS);
+  assert.deepEqual(await failClosedEdit, { block: true, reason: "TOOL_TIMEOUT" }, "fail-closed, as published, blocks edit");
+  assert.ok(sameActive(fixture.pi, FAIL_CLOSED_ALLOWLIST), "the unavailable-status path restores the plan");
+
+  fixture.daemon.hangStatus = false;
+  fixture.daemon.mode = "advisory";
+  assert.equal(await toolCall({ toolName: "bash" }), undefined, "a readable advisory status publishes advisory");
+  fixture.daemon.hangStatus = true;
+  const advisoryEdit = toolCall({ toolName: "edit" });
+  expireTimer(fixture.ctx, GUARD_STATUS_BUDGET_MS);
+  assert.equal(await advisoryEdit, undefined, "advisory, as published, lets edit through");
+  fixture.daemon.hangStatus = false;
+  assert.match(fixture.ui.notifications.at(-1) ?? "", /advisory policy/, "the advisory edit carries its warning");
+});
+
+void test("P16 (lifecycle d): a deferred setter outlives its timeout, a retry and a shutdown; a new session is refused while it holds, then the next poll reconciles", async () => {
+  const fixture = makeFixture({ mode: "fail-closed" });
+  const gate = makeGate();
+  fixture.pi.holdSetters = gate.promise;
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitUntil(() => fixture.pi.activeSets.length === 1);
+  expireTimer(fixture.ctx, STARTUP_BUDGET_MS);
+  await waitForDetail(fixture.ui, "STARTUP_BUDGET_EXCEEDED");
+
+  const retry = retryCommandOf(fixture.pi).handler();
+  await waitUntil(() => fixture.tools.inFlight === 2);
+  shutdownHandlerOf(fixture.pi)();
+  assert.equal(await retry, "realm retry superseded");
+
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitForDetail(fixture.ui, "POLICY_DENIED");
+  assert.equal(fixture.pi.activeSets.length, 1, "the refused read changes nothing while the setter holds");
+
+  gate.resolve();
+  await waitUntil(() => fixture.tools.inFlight === 0);
+  pollOf(fixture.ctx).callback();
+  await waitForDetail(fixture.ui, "container running");
+  assert.ok(sameActive(fixture.pi, FAIL_CLOSED_ALLOWLIST), "the poll of the new session leaves the planned set");
+  assert.deepEqual(sortedNames(fixture.tools.removed), REMOVED_BUILTINS);
+  assert.equal(await publishedModeOf(fixture), "fail-closed");
+});
+
+void test("P16 (lifecycle e): a registered tool that disappears from the registry is not restored, and leaves the owed list", async () => {
+  const fixture = makeFixture({ mode: "fail-closed" });
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitForDetail(fixture.ui, "container running");
+  assert.ok(fixture.tools.removed.includes("edit"), "edit is owed while fail-closed removes it");
+
+  fixture.pi.dropBuiltin("edit");
+  fixture.daemon.mode = "advisory";
+  assert.equal(await toolCallOf(fixture.pi)({ toolName: "bash" }), undefined);
+  assert.ok(!fixture.pi.getActiveTools().includes("edit"), "edit is not restored");
+  assert.ok(!(fixture.pi.activeSets.at(-1) ?? []).includes("edit"), "the advisory set never names edit");
+  assert.deepEqual(fixture.tools.removed, [], "edit leaves the owed list, and the other removals are restored");
+});
+
+void test("P16 (lifecycle f): a tool the user deactivated stays deactivated across a mode cycle", async () => {
+  const fixture = makeFixture({ mode: "fail-closed" });
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitForDetail(fixture.ui, "container running");
+  await fixture.pi.setActiveTools(fixture.pi.getActiveTools().filter((name) => name !== "glob"));
+
+  for (const mode of ["advisory", "fail-closed", "advisory", "fail-closed"] as const) {
+    fixture.daemon.mode = mode;
+    await toolCallOf(fixture.pi)({ toolName: "bash" });
+    assert.ok(!fixture.pi.getActiveTools().includes("glob"), `glob stays off after the plan for ${mode}`);
+    assert.equal(await publishedModeOf(fixture), mode, `${mode} is published`);
+  }
+});
+
+void test("P16 (lifecycle g): a refused setter never publishes the new mode", async () => {
+  const fixture = makeFixture({ mode: "advisory" });
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitForDetail(fixture.ui, "container running");
+  assert.equal(await publishedModeOf(fixture), "advisory");
+
+  fixture.daemon.mode = "fail-closed";
+  fixture.pi.ignoreRemoval = true;
+  assert.deepEqual(await toolCallOf(fixture.pi)({ toolName: "bash" }), POLICY_DENIED_VERDICT, "the refused change denies bash");
+  fixture.pi.ignoreRemoval = false;
+  assert.ok(sameActive(fixture.pi, EVERY_TOOL), "the set is unchanged");
+  assert.deepEqual(sortedNames(fixture.tools.removed), []);
+  assert.equal(await publishedModeOf(fixture), "advisory", "the refused fail-closed mode is not published");
+});
+
+// Pins the conservative rule: a non-edit host tool whose status cannot be read is refused, whatever the last published mode. The
+// plan leaves this for the owner to confirm (P16-D6 says host tool behaviour follows the last published mode).
+void test("OMPX-03 (T2): advisory refuses a host bash call while the status cannot be read, because the mode is unconfirmed", async () => {
+  const fixture = makeFixture({ mode: "advisory" });
+  fixture.daemon.hangStatus = true;
+  const verdict = guardHostToolCall("bash", sessionOf(fixture, fixture.daemon, "advisory"), fixture.tools);
+  expireTimer(fixture.ctx, GUARD_STATUS_BUDGET_MS);
+  assert.deepEqual(await verdict, POLICY_DENIED_VERDICT);
 });

@@ -18,7 +18,8 @@
 //   - pi.registerTool(definition) for the five Realm tools (OMPX-02). The definitions and the frozen ToolCall shape are in tools.ts.
 //   - pi.getAllTools(), pi.getActiveTools() and pi.setActiveTools(names) for the fail-closed allowlist (OMPX-03; spike S2a).
 // Tool removal (OMPX-03): a fail-closed attach removes every built-in outside the allowlist with setActiveTools and reads it
-// back. That mechanism is the one the Enforcement spike proved on Omp 18.12.6 (docs/integration/omp.md); no tooltip surface is used.
+// back. bash stays on the allowlist, so the tool_call guard refuses it with a catalogue code (tools.ts). That mechanism is the one
+// the Enforcement spike proved on Omp 18.12.6 (docs/integration/omp.md); no tooltip surface is used.
 // The tool_call guard stays as the backstop. Neither removal nor a hook is documented to cover every host path (OQ-P5-02).
 //
 // Deviations recorded here:
@@ -231,13 +232,15 @@ type AttachOutcome =
   | { readonly outcome: "failed"; readonly code: string }
   | { readonly outcome: "superseded" };
 
-export function registerRealmPlugin(pi: OmpExtensionApi, options: RealmPluginOptions): void {
+// Registers the Realm tools, the retry command and the lifecycle handlers. Returns the host tool set this registration shares,
+// so a host or a test can read what the plugin owes.
+export function registerRealmPlugin(pi: OmpExtensionApi, options: RealmPluginOptions): HostToolSet {
   // The live session, or null after shutdown. A settle compares against it: an attach that ends
   // after shutdown, or after a newer attach started, releases its client and paints nothing.
   let live: ActiveSession | null = null;
   let attempt = 0;
   // The host tool set, shared by every session of this registration.
-  const hostTools: HostToolSet = { pi, removed: [], queue: Promise.resolve() };
+  const hostTools = hostToolSetOf(pi);
 
   // Ends the captured session. Every timer it armed is cleared and its wait settled, and the poll
   // is cleared, so the host runs no callback for an ended session. The client is closed, never taken
@@ -494,6 +497,7 @@ export function registerRealmPlugin(pi: OmpExtensionApi, options: RealmPluginOpt
     description: "Retry the realm startup through the daemon attach path.",
     handler: retryRealm,
   });
+  return hostTools;
 }
 
 // The clock is wall time: the snapshot carries the daemon's own transition instants, and only the
@@ -517,9 +521,9 @@ function nowIso(): string {
 // (advisory warns, fail-closed blocks). It mirrors decideMutation (src/core/policy.ts) and the gate outcomes of
 // src/lifecycle/mutation-gate.ts; the mirror adds no rule of its own. Every other host tool reads the status too and is
 // decided by the mode it reports: fail-closed refuses it, advisory passes it. The backstop (OMPX-03) refuses every other
-// tool name in fail-closed mode and while no mode is known, with the catalogue code POLICY_DENIED. Removal of the built-ins
-// is the primary control: a removed tool is refused by Omp before this hook runs, so the backstop answers the calls that
-// do reach it, such as a tool another extension registers.
+// tool name in fail-closed mode and while no mode is known, with the catalogue code POLICY_DENIED. Removal is the primary control:
+// Omp refuses a removed tool before this hook runs. bash is the one built-in fail-closed keeps active, so this hook is what refuses
+// it, with a catalogue code Omp's own refusal lacks.
 //
 // The state comes from a daemon status read bounded by GUARD_STATUS_BUDGET_MS. When the status cannot be read, the last
 // published mode decides: advisory warns a guarded call, fail-closed, or no mode yet, refuses it. Any other host tool whose
@@ -602,10 +606,22 @@ export async function guardHostToolCall(
 // set serves every session of the registration: a new session, a retry or a restarted daemon starts from what was last applied.
 export interface HostToolSet {
   readonly pi: OmpExtensionApi;
-  // The built-ins this plugin removed in fail-closed mode and has not put back. An advisory plan gives back the ones Omp still registers.
+  // The built-ins this plugin removed in fail-closed mode and has not put back, as the last change read them back from Omp. An
+  // advisory plan gives back the ones Omp still registers.
   removed: string[];
+  // Changes accepted and not yet settled: one running and at most one waiting (MAX_HOST_CHANGES).
+  inFlight: number;
   // Changes run one at a time, so a setter already in flight finishes before the next one starts.
   queue: Promise<void>;
+}
+
+// The most changes the set holds at once: one running and one waiting. A change past that is refused at once, so no queue grows
+// behind a setter that does not return.
+const MAX_HOST_CHANGES = 2;
+
+// A fresh host tool set for one registration: nothing is removed yet and no change is in flight.
+export function hostToolSetOf(pi: OmpExtensionApi): HostToolSet {
+  return { pi, removed: [], inFlight: 0, queue: Promise.resolve() };
 }
 
 // The policy mode a status reports. A mode that cannot be read is refused, so the status changes no host tool (P16 e).
@@ -631,9 +647,15 @@ function reassertLastMode(session: ActiveSession, isCurrent: () => boolean): Pro
 
 // Brings the host tool set to posture. A change starts only if isCurrent still holds when its turn in the queue comes, so a
 // superseded attempt, an attempt past its budget, or a shut-down session changes nothing. Rejects with POLICY_DENIED when the
-// set does not read back as wanted.
+// set does not read back as wanted, and at once when MAX_HOST_CHANGES changes are already accepted and unsettled.
 function setHostMode(tools: HostToolSet, mode: PolicyMode, isCurrent: () => boolean): Promise<void> {
-  const change = tools.queue.then(() => applyHostMode(tools, mode, isCurrent));
+  if (tools.inFlight >= MAX_HOST_CHANGES) {
+    return Promise.reject(makeRealmError("POLICY_DENIED"));
+  }
+  tools.inFlight += 1;
+  const change = tools.queue.then(() => applyHostMode(tools, mode, isCurrent)).finally(() => {
+    tools.inFlight -= 1;
+  });
   tools.queue = change.then(
     () => undefined,
     () => undefined,
@@ -641,30 +663,30 @@ function setHostMode(tools: HostToolSet, mode: PolicyMode, isCurrent: () => bool
   return change;
 }
 
-// Plans from what Omp reports now, not from the last applied mode, so a drift in the same mode is restored too (P16 c). The
-// removals stay owed until the set reads back as wanted, so a refused change still owes its restore (P16 b).
+// Plans from what Omp reports now, not from the last applied mode, so a drift in the same mode is restored too (P16 c). Once a
+// setter has started it runs to the end, whoever owns it by then. The owed list is read back from the set Omp holds, on success or
+// failure, so the next owner plans from actual state (P16 b).
 async function applyHostMode(tools: HostToolSet, mode: PolicyMode, isCurrent: () => boolean): Promise<void> {
   if (!isCurrent()) {
     return;
   }
   const { pi } = tools;
-  const active = pi.getActiveTools();
-  const plan = planHostTools(mode, pi.getAllTools().map((tool) => tool.name), active, tools.removed);
-  // Owed before the setter runs, so a removal that only partly holds is still owed a restore.
-  tools.removed = [...new Set([...tools.removed, ...plan.owed])];
-  if (sameToolNames(active, plan.wanted)) {
-    tools.removed = [...plan.owed];
-    return;
-  }
+  const plan = planHostTools(mode, pi.getAllTools().map((tool) => tool.name), pi.getActiveTools(), tools.removed);
+  // Owed going into the change, so a removal that only partly holds is still owed a restore.
+  const owedIn = [...new Set([...tools.removed, ...plan.owed])];
   try {
-    await pi.setActiveTools(plan.wanted);
     if (!sameToolNames(pi.getActiveTools(), plan.wanted)) {
-      throw new Error("the active set did not read back as wanted");
+      await pi.setActiveTools(plan.wanted);
     }
-  } catch {
+  } finally {
+    // Read back whether or not the setter held, and whether or not this change is still current.
+    const reported = pi.getActiveTools();
+    const registered = pi.getAllTools().map((tool) => tool.name);
+    tools.removed = owedIn.filter((name) => registered.includes(name) && !reported.includes(name));
+  }
+  if (!sameToolNames(pi.getActiveTools(), plan.wanted)) {
     throw makeRealmError("POLICY_DENIED");
   }
-  tools.removed = [...plan.owed];
 }
 
 // One status read under a managed timer. The timer expiry rejects with TOOL_TIMEOUT, so a hung

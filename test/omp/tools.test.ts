@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import type { ToolCall } from "../../src/contract/validate.js";
 import { makeRealmError } from "../../src/core/errors.js";
 import type { StateSnapshot } from "../../src/core/state-machine.js";
@@ -13,6 +14,7 @@ import {
   realmToolDefinitions,
   sameToolNames,
   type HostToolDefinition,
+  type HostToolResult,
 } from "../../src/omp/tools.js";
 
 // OMPX-02 and OMPX-03: the Realm tool definitions and the fail-closed allowlist (src/omp/tools.ts). The daemon is a
@@ -138,9 +140,10 @@ void test("OMPX-02: a RealmError from the daemon keeps its catalogue code and ca
   assert.deepEqual(lost.details, { outcome: "refused", tool: "list", code: "REALM_NOT_ACTIVE", retryable: true });
 });
 
-void test("OMPX-03: failClosedToolNames keeps the read-only built-ins and the Realm tools, and removes every other name", () => {
+void test("OMPX-03: failClosedToolNames keeps bash, the read-only built-ins and the Realm tools, and removes every other name", () => {
   assert.deepEqual(failClosedToolNames(OMP_NAMES_WITH_REALM_TOOLS).sort(), [
     "ask",
+    "bash",
     "exec",
     "glob",
     "grep",
@@ -151,7 +154,7 @@ void test("OMPX-03: failClosedToolNames keeps the read-only built-ins and the Re
     "wait",
     "write",
   ]);
-  assert.deepEqual(failClosedToolNames(["bash", "bash", "edit", "mcp__other__tool"]), []);
+  assert.deepEqual(failClosedToolNames(["bash", "bash", "edit", "mcp__other__tool"]), ["bash"]);
 });
 
 void test("OMPX-03: sameToolNames compares the set of names, not their order, and counts a duplicate as a difference", () => {
@@ -188,9 +191,10 @@ void test("B1 and B9: advisory plans every tool Omp reports, the Realm write inc
 void test("OMPX-03: fail-closed plans the allowlist and owes every other registered tool it removes", () => {
   const plan = planHostTools("fail-closed", OMP_NAMES_WITH_REALM_TOOLS, OMP_NAMES_WITH_REALM_TOOLS, []);
   assert.deepEqual(sortedOf(plan.wanted), sortedOf(failClosedToolNames(OMP_NAMES_WITH_REALM_TOOLS)));
-  for (const name of ["bash", "edit", "web_search"]) {
+  for (const name of ["edit", "web_search"]) {
     assert.ok(plan.owed.includes(name), `${name} is owed`);
   }
+  assert.ok(!plan.owed.includes("bash"), "bash is kept, so it is not owed");
   assert.ok(!plan.owed.includes("write"), "the Realm write is kept, not owed");
 });
 
@@ -221,3 +225,149 @@ void test("P16 (d): an owed tool Omp no longer registers is not restored, so the
 function sortedOf(names: readonly string[]): string[] {
   return [...names].sort();
 }
+
+// P16 (d): the fail-closed plan restores only what the extension owns, and never what the user turned off.
+void test("P16 (d): fail-closed keeps a read-only built-in the user turned off, so it stays off", () => {
+  const active = OMP_NAMES_WITH_REALM_TOOLS.filter((name) => name !== "glob");
+  const plan = planHostTools("fail-closed", OMP_NAMES_WITH_REALM_TOOLS, active, []);
+  assert.ok(!plan.wanted.includes("glob"), "glob stays off");
+  assert.ok(!plan.owed.includes("glob"), "glob is not owed");
+});
+
+void test("P16 (d): fail-closed puts back a Realm tool that dropped out of the active set, and does not owe it", () => {
+  const active = OMP_NAMES_WITH_REALM_TOOLS.filter((name) => name !== "write");
+  const plan = planHostTools("fail-closed", OMP_NAMES_WITH_REALM_TOOLS, active, []);
+  assert.ok(plan.wanted.includes("write"), "the Realm write is put back");
+  assert.ok(!plan.owed.includes("write"), "the Realm write is not owed");
+});
+
+void test("P16 (d): fail-closed drops an owed tool Omp no longer registers from the owed list, and does not want it", () => {
+  const registered = OMP_NAMES_WITH_REALM_TOOLS.filter((name) => name !== "edit");
+  const plan = planHostTools("fail-closed", registered, registered, ["edit"]);
+  assert.ok(!plan.wanted.includes("edit"), "edit is not wanted");
+  assert.ok(!plan.owed.includes("edit"), "the vanished tool leaves the owed list");
+});
+
+void test("P16 (d): advisory restores the owed tools Omp still registers, and drops the one it no longer registers", () => {
+  const plan = planHostTools("advisory", ["read", "bash"], ["read"], ["edit", "bash"]);
+  assert.deepEqual(sortedOf(plan.wanted), ["bash", "read"]);
+  assert.deepEqual(plan.owed, []);
+});
+
+void test("OMPX-03: fail-closed keeps bash active, so the guard can refuse it, and removes edit", () => {
+  assert.deepEqual(sortedOf(failClosedToolNames(["read", "bash", "edit", "write", "grep"])), ["bash", "grep", "read", "write"]);
+  const plan = planHostTools("fail-closed", ["read", "bash", "edit"], ["read", "bash", "edit"], []);
+  assert.ok(plan.wanted.includes("bash"), "bash is wanted");
+  assert.deepEqual(plan.owed, ["edit"]);
+});
+
+// OMPX-02: the registered read renders the decoded text, then a note with the digest and the truncation flag. The digest covers
+// the whole file; the content is what the daemon returned, and details.bytes is its length.
+const READ_INPUT = { path: "notes.txt", maxBytes: 64 };
+const EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+
+function sha256Hex(bytes: Uint8Array): string {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+// A read outcome as the daemon client hands it over. In-process content is a Uint8Array; across the connection it arrives as
+// Node's JSON form of a Buffer, so the content is typed unknown and the renderer checks its shape.
+function readOutcomeOf(content: unknown, sha256: string, truncated: boolean): ToolOutcome {
+  return { outcome: "done", tool: "read", value: { status: "found", content: content as Uint8Array, sha256, truncated } };
+}
+
+async function renderedReadOf(outcome: ToolOutcome): Promise<HostToolResult> {
+  const read = definitionNamed(realmToolDefinitions(() => Promise.resolve(outcome)), "read");
+  return read.execute("call-1", READ_INPUT);
+}
+
+void test("OMPX-02: a Uint8Array read renders its UTF-8 text, then a note with the digest and truncation, and details with the metadata", async () => {
+  const bytes = new TextEncoder().encode("hello wörld\n");
+  const digest = sha256Hex(bytes);
+  const result = await renderedReadOf(readOutcomeOf(bytes, digest, false));
+  assert.equal(result.isError, false);
+  assert.deepEqual(result.content, [
+    { type: "text", text: "hello wörld\n" },
+    { type: "text", text: `[realm read] truncated=false sha256=${digest}` },
+  ]);
+  assert.deepEqual(result.details, {
+    outcome: "done",
+    tool: "read",
+    value: { status: "found", sha256: digest, truncated: false, bytes: bytes.length },
+  });
+});
+
+void test("OMPX-02: a serialized Buffer read, as it arrives across the daemon connection, renders the same text and metadata", async () => {
+  const wire: unknown = JSON.parse(JSON.stringify(Buffer.from("serialized\n")));
+  const digest = sha256Hex(Buffer.from("serialized\n"));
+  const result = await renderedReadOf(readOutcomeOf(wire, digest, false));
+  assert.equal(result.isError, false);
+  assert.deepEqual(result.content, [
+    { type: "text", text: "serialized\n" },
+    { type: "text", text: `[realm read] truncated=false sha256=${digest}` },
+  ]);
+  assert.deepEqual(result.details, {
+    outcome: "done",
+    tool: "read",
+    value: { status: "found", sha256: digest, truncated: false, bytes: 11 },
+  });
+});
+
+void test("OMPX-02: an empty read renders empty text, the digest of no bytes and a zero byte count, from either wire form", async () => {
+  for (const content of [new Uint8Array(0), { type: "Buffer", data: [] }]) {
+    const result = await renderedReadOf(readOutcomeOf(content, EMPTY_SHA256, false));
+    assert.equal(result.isError, false);
+    assert.deepEqual(result.content, [
+      { type: "text", text: "" },
+      { type: "text", text: `[realm read] truncated=false sha256=${EMPTY_SHA256}` },
+    ]);
+    assert.deepEqual(result.details, {
+      outcome: "done",
+      tool: "read",
+      value: { status: "found", sha256: EMPTY_SHA256, truncated: false, bytes: 0 },
+    });
+  }
+});
+
+void test("OMPX-02: a truncated read renders the capped content, and its digest covers the whole file", async () => {
+  const whole = new TextEncoder().encode("abcdefgh");
+  const digest = sha256Hex(whole);
+  const result = await renderedReadOf(readOutcomeOf(whole.subarray(0, 4), digest, true));
+  assert.equal(result.isError, false);
+  assert.deepEqual(result.content, [
+    { type: "text", text: "abcd" },
+    { type: "text", text: `[realm read] truncated=true sha256=${digest}` },
+  ]);
+  assert.deepEqual(result.details, {
+    outcome: "done",
+    tool: "read",
+    value: { status: "found", sha256: digest, truncated: true, bytes: 4 },
+  });
+});
+
+void test("OMPX-02: invalid UTF-8 renders each invalid sequence as U+FFFD, and the digest covers the raw bytes", async () => {
+  const stray = new Uint8Array([0x61, 0xff, 0x62]);
+  const strayResult = await renderedReadOf(readOutcomeOf(stray, sha256Hex(stray), false));
+  assert.equal(strayResult.content[0]?.text, "a\uFFFDb");
+  assert.deepEqual(strayResult.details, {
+    outcome: "done",
+    tool: "read",
+    value: { status: "found", sha256: sha256Hex(stray), truncated: false, bytes: 3 },
+  });
+
+  const cut = new Uint8Array([0x61, 0xc3]);
+  const cutResult = await renderedReadOf(readOutcomeOf(cut, sha256Hex(cut), false));
+  assert.equal(cutResult.content[0]?.text, "a\uFFFD", "a sequence cut short at the end is one U+FFFD");
+});
+
+void test("OMPX-02: a serialized Buffer whose data holds a value that is not a byte is refused as SCHEMA_INVALID, never decoded", async () => {
+  const wire = { type: "Buffer", data: [104, 256] };
+  const result = await renderedReadOf(readOutcomeOf(wire, "0".repeat(64), false));
+  assert.equal(result.isError, true);
+  assert.deepEqual(result.details, {
+    outcome: "refused",
+    tool: "read",
+    code: "SCHEMA_INVALID",
+    retryable: makeRealmError("SCHEMA_INVALID").retryable,
+  });
+});
