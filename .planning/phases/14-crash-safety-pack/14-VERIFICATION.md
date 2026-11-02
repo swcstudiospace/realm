@@ -1,8 +1,8 @@
 # Phase 14 verification: crash-safety pack
 
-Date: 2026-11-01. Tree: `gsd/v3-autonomous` at `1fa69c1`, built on `integrate/omp-18142` at `069b73b`. Source of acceptance: `14-CONTEXT.md`, section Acceptance, items 1 to 6.
+Date: 2026-11-01 for acceptance items 1 to 5 and the plan checks. Live run (item 6): 2026-11-02. Static tree: `gsd/v3-autonomous` at `1fa69c1`, built on `integrate/omp-18142` at `069b73b`. Live tree: the Phase 14 code of `integrate/omp-18142` at `5527882`, with only a test edit on top. Source of acceptance: `14-CONTEXT.md`, section Acceptance, items 1 to 6.
 
-**Status: human_needed.** Items 1 to 5 PASS on the evidence below. Item 6 is NOT RUN. The live scenario needs owner approval for a live window under the live lock. No requirement is checked here; the parent owns REQUIREMENTS.md.
+**Status: gaps_found.** Items 1 to 6 PASS on the evidence below. Open gap: the live helper `startupReapLineFor` does not assert the logged `recordsDeleted` field (CRASH-04 detail). Closing it needs a helper change and another approved live window. No requirement is checked here; the parent owns REQUIREMENTS.md.
 
 ## Acceptance items
 
@@ -36,17 +36,19 @@ Date: 2026-11-01. Tree: `gsd/v3-autonomous` at `1fa69c1`, built on `integrate/om
 ### 5. Controller retry after a removed container reaches `active` with a new id: PASS
 - `test/lifecycle/stale-container.test.ts` line 76: the recorded container is removed; `create` returns `active`; the new `containerId` differs from the old one; the recovery destroy runs before the second create; one resource exists afterwards.
 - Related: line 108 (fail-at-start then gone, active in one call); line 125 (one recovery per call, no loop); line 142 (destroy failure goes to `error` with its own code and creates nothing); line 156 (non-recovery codes keep the container and issue no destroy).
-- These are controller tests with a fake exec adapter. Live container behaviour is item 6.
+- These are controller tests with a fake exec adapter. Item 6 does not exercise this path: scenario 5 covers the daemon-crash reap, not the start-failure retry. No live evidence is claimed for this path.
 
-### 6. Live production scenario 5 shows the notice and the log line: NOT RUN
-- The assertions exist in `test/integration/production-driver.test.ts` (scenario 5, around lines 596 to 622): `realm status` carries the notice with one container and at least one session record; `daemon.log` holds a `daemon.startup` record naming the crashed container; `realm audit verify` reports ok.
-- Not run. A live window needs owner approval under the live lock. No live or container action was taken for this closeout.
-- Known gap in the assertions: `startupReapLineFor` (`test/support/production-live.ts`, line 288) checks the event, `containersRemoved === 1` and the container id, but not `recordsDeleted`. The in-process test in item 3 does check it.
-- Historical record: `REQUIREMENTS.md` (CRASH-04 entry) says production live5 passed on 2026-10-31 with a rebuilt driver. That record is not attributed to tree `1fa69c1` and is not counted here.
+### 6. Live production scenario 5 shows the notice and the log line: PASS (live window 2026-11-02)
+- Window: one approved live window, production live scenario 5 only, run once on 2026-11-02 under the realm live lock, against the Phase 14 code (live tree above). The staged driver was swapped in for the window and the original driver was restored afterwards. After the window, the three realmlive units are active, zero realmlive containers remain, and the window's test-only artifacts were removed.
+- Result: 1 test, 1 pass, 0 fail, 0 skipped.
+- Assertions (`test/integration/production-driver.test.ts`, scenario 5): after the daemon is killed, the next `realm up` reaps the sandbox the crash left and reaches active with exactly one. The checks are: `realm status` reaches active (line 580); after the restart exactly one realm-daemon sandbox and one container exist; `realm status` carries the notice `destroyed at startup` with one container and at least one session record; `daemon.log` holds a `daemon.startup` record naming the crashed container; `realm audit verify` reports ok. The test passed, so every one of these held on the live run.
+- The scenario and helper source are identical at `5527882` and at the lane HEAD `612a6d4`.
+- Open gap: `startupReapLineFor` (`test/support/production-live.ts`, line 288) checks the event, `containersRemoved === 1` and the container id, but not `recordsDeleted`. The in-process test in item 3 does check it. Closing this gap needs a helper change plus another approved live window.
+- Historical record: `REQUIREMENTS.md` (CRASH-04 entry) says production live5 passed on 2026-10-31 with a rebuilt driver. That record is not attributed to a tree and is not counted here. The 2026-11-02 run above is the attributed evidence.
 
 ## Plan-level checks (from `14-01-PLAN.md` Acceptance)
-- Typecheck, lint, `check:docs`, `check:gates`, `test:scripts`, build, `check:pack`, `check:mcp`: exit 0 on this tree (parent run).
-- `npm test` under a one-CPU cgroup quota: 2458 tests, 2426 pass, 0 fail, 32 skipped (parent run). The 32 skips are not itemised here.
+- Typecheck, lint, `check:docs`, `check:gates`, `test:scripts`, build, `check:pack`, `check:mcp`: exit 0 on tree `1fa69c1` (parent run). Not re-run on the live tree `5527882`.
+- `npm test` under a one-CPU cgroup quota, tree `1fa69c1` (parent run): 2458 tests, 2426 pass, 0 fail, 32 skipped. The 32 skips are not itemised here.
 - Catalogue: 30 codes at the Phase 14 commits (`157ebfe` pins `CATALOGUE_SIZE = 30`). Now 31: Phase 17 added `OPENSHELL_GATEWAY_LOST`, and `test/core/errors.test.ts` pins 31.
 - Suppression directives and test skips added by `157ebfe` and `5719f81`: none, apart from the conditional cross-device skip in item 1.
 - "No other frozen contract changed": not separately verified by this closeout.
@@ -57,13 +59,13 @@ Date: 2026-11-01. Tree: `gsd/v3-autonomous` at `1fa69c1`, built on `integrate/om
 | CRASH-01 | Items 1 and 2; sweep before the gate opens (`daemon.ts`, `openGate()` after `runStartupMaintenance`) | Implemented; verified except live path |
 | CRASH-02 | Item 2; catalogue and pairing tests | In-chain live presence is Phase 17 (ledger P17) |
 | CRASH-03 | Item 3 | Implemented; verified |
-| CRASH-04 | Item 3 (unit), item 6 (live) | Live `recordsDeleted` assertion missing; live scenario NOT RUN |
+| CRASH-04 | Item 3 (unit), item 6 (live, PASS 2026-11-02) | Implemented; live `recordsDeleted` assertion is an open gap |
 | CRASH-05 | Item 1 | Implemented; verified |
 | CRASH-06 | Item 4 | Implemented; verified |
 | CRASH-07 | Item 5 | Implemented; verified |
 
 ## Open items for the owner
-1. Approve a live window for scenario 5 under the live lock, then run it (item 6).
-2. Decide whether `startupReapLineFor` should also assert `recordsDeleted` before the live run (CRASH-04 gap).
+1. Done: scenario 5 ran once on 2026-11-02 under the live lock (item 6). No other live step was approved.
+2. Open: close the CRASH-04 gap. Add the `recordsDeleted` assertion to `startupReapLineFor`, then approve another live window for scenario 5 under the live lock.
 3. Confirm the Phase 17 owner of the in-chain live presence for CRASH-02.
 4. Reconcile the CRASH-04 wording in REQUIREMENTS.md with the attribution rule in item 6.
