@@ -1,0 +1,796 @@
+{
+  "version": 1,
+  "note": "Explicit allowlist for scripts/check/export-usage-gate.mjs. Each entry is an export of src/ kept as a documented D-1306 test-only seam. Remove an entry when its export is deleted or gains a src importer; the gate fails on a stale entry.",
+  "allowed": [
+    {
+      "file": "src/acp/agent.ts",
+      "name": "ACP_PROTOCOL_VERSION",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/acp/agent.ts",
+      "name": "agentInfo",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/acp/agent.ts",
+      "name": "REALM_TOOL_METHOD",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/anda/client.ts",
+      "name": "SleepFn",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/anda/client.ts",
+      "name": "sleepUnlessAborted",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/audit/anchor.ts",
+      "name": "ANCHOR_RECORD_VERSION",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/audit/anchor.ts",
+      "name": "base58Decode",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/audit/anchor.ts",
+      "name": "base58Encode",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/audit/anchor.ts",
+      "name": "buildMemoTransaction",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/audit/anchor.ts",
+      "name": "Ed25519Signer",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/audit/anchor.ts",
+      "name": "encodeCompactU16",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/audit/anchor.ts",
+      "name": "MEMO_MAX_BYTES",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/audit/anchor.ts",
+      "name": "MEMO_PROGRAM_ID",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/audit/anchor.ts",
+      "name": "merkleRoot",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/audit/anchor.ts",
+      "name": "verifyAnchorRecord",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/audit/chain.ts",
+      "name": "formatAuditCheckpoint",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/audit/chain.ts",
+      "name": "verifyAuditFile",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/audit/reconcile.ts",
+      "name": "pairingKey",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/audit/reconcile.ts",
+      "name": "RECONCILE_PROGRESS_FILE",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/audit/reconcile.ts",
+      "name": "SCAN_CHECK_LINES",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/audit/reconcile.ts",
+      "name": "SCAN_CHUNK_BYTES",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/audit/redact.ts",
+      "name": "SECRET_VALUE_PATTERNS",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/cli/anchor.ts",
+      "name": "AnchorArgs",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/cli/anchor.ts",
+      "name": "AnchorRunDeps",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/core/events.ts",
+      "name": "RealmEvent",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/core/states.ts",
+      "name": "ALLOWED_TRANSITIONS",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/core/states.ts",
+      "name": "isTransitionAllowed",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/core/status.ts",
+      "name": "StatusSnapshot",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/daemon/channel.ts",
+      "name": "decodeReply",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/daemon/channel.ts",
+      "name": "encodeRequest",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/daemon/channel.ts",
+      "name": "MAX_CONTROL_LINE_BYTES",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/daemon/daemon.ts",
+      "name": "buildDaemonHandle",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/daemon/daemon.ts",
+      "name": "BuildDaemonHandleOptions",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/daemon/daemon.ts",
+      "name": "HEALTH_PROBE_INTERVAL_MS",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/daemon/daemon.ts",
+      "name": "sweepRootsOf",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/daemon/ensure.ts",
+      "name": "daemonLogSize",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/daemon/ensure.ts",
+      "name": "DaemonPresence",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/daemon/ensure.ts",
+      "name": "daemonStartFailureSince",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/doctor/checks.ts",
+      "name": "AndaReply",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/doctor/checks.ts",
+      "name": "CheckId",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/doctor/checks.ts",
+      "name": "FetchInformation",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/doctor/checks.ts",
+      "name": "hostBinaryPinsFromEnv",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/doctor/fix.ts",
+      "name": "ProtectedLocations",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/doctor/runtime-checks.ts",
+      "name": "driverSocketCheck",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/doctor/runtime-checks.ts",
+      "name": "gatewayCheck",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/doctor/runtime-checks.ts",
+      "name": "PathReading",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/doctor/runtime-checks.ts",
+      "name": "runtimeRootsCheck",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/fs/atomic-write.ts",
+      "name": "AtomicWriteStage",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/fs/credentials.ts",
+      "name": "CREDENTIAL_PATTERNS",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/fs/credentials.ts",
+      "name": "isCredentialAllowed",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/fs/credentials.ts",
+      "name": "isCredentialDenied",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/fs/list.ts",
+      "name": "ListFound",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/fs/read.ts",
+      "name": "ReadFound",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/fs/temp-sweep.ts",
+      "name": "TempSweepAuditEntry",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/fs/temp-sweep.ts",
+      "name": "TempSweepOptions",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/lifecycle/mutation-gate.ts",
+      "name": "runGatedMutation",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/mcp/protocol.ts",
+      "name": "MCP_SUPPORTED_VERSIONS",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/mcp/protocol.ts",
+      "name": "UNSUPPORTED_PROTOCOL_VERSION",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/mcp/server.ts",
+      "name": "MCP_TOOL_DESCRIPTORS",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/mcp/server.ts",
+      "name": "McpDispatcher",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/observe/log-file.ts",
+      "name": "createStderrSink",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/observe/log-file.ts",
+      "name": "DEFAULT_LOG_MAX_BYTES",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/observe/logger.ts",
+      "name": "LogFields",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/observe/metrics.ts",
+      "name": "BUCKET_UPPER_BOUNDS_MS",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/observe/metrics.ts",
+      "name": "PROBE_FAILED_REASON",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/omp/plugin.ts",
+      "name": "ActiveSession",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/omp/plugin.ts",
+      "name": "equalJitterDelayMs",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/omp/plugin.ts",
+      "name": "GUARD_STATUS_BUDGET_MS",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/omp/plugin.ts",
+      "name": "GUARDED_HOST_TOOLS",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/omp/plugin.ts",
+      "name": "guardHostToolCall",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/omp/plugin.ts",
+      "name": "HostToolCall",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/omp/plugin.ts",
+      "name": "HostToolSet",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/omp/plugin.ts",
+      "name": "hostToolSetOf",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/omp/plugin.ts",
+      "name": "HostToolVerdict",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/omp/plugin.ts",
+      "name": "LINK_LOST_CODES",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/omp/plugin.ts",
+      "name": "OmpSessionContext",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/omp/plugin.ts",
+      "name": "OmpStatusUi",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/omp/plugin.ts",
+      "name": "REALM_RETRY_COMMAND",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/omp/plugin.ts",
+      "name": "REALM_STATUS_KEY",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/omp/plugin.ts",
+      "name": "RealmPluginOptions",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/omp/plugin.ts",
+      "name": "RealmRetryCommand",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/omp/plugin.ts",
+      "name": "REATTACH_BASE_DELAY_MS",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/omp/plugin.ts",
+      "name": "REATTACH_DELAY_CAP_MS",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/omp/plugin.ts",
+      "name": "REATTACH_RETRY_CAP",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/omp/plugin.ts",
+      "name": "ReattachState",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/omp/plugin.ts",
+      "name": "reattachTransitionAllowed",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/omp/plugin.ts",
+      "name": "renderRealmStatus",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/omp/plugin.ts",
+      "name": "RETRYABLE_ATTACH_CODES",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/omp/plugin.ts",
+      "name": "STARTUP_BUDGET_MS",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/omp/plugin.ts",
+      "name": "STATUS_POLL_MS",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/omp/tools.ts",
+      "name": "failClosedToolNames",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/omp/tools.ts",
+      "name": "HostToolResult",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/omp/tools.ts",
+      "name": "READ_ONLY_HOST_TOOLS",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/omp/tools.ts",
+      "name": "REALM_TOOL_NAMES",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/realm/compose.ts",
+      "name": "CreateRealmHandleOptions",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/agentos-driver.ts",
+      "name": "answerOfConnectError",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/agentos-driver.ts",
+      "name": "DEFAULT_AGENTOS_PROBE_PATH",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/agentos-driver.ts",
+      "name": "DEFAULT_AGENTOS_RUNNER_PATH",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/agentos-driver.ts",
+      "name": "GATEWAY_STATUS_TIMEOUT_MS",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/agentos-driver.ts",
+      "name": "OpenShellAgentOsDriverOptions",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/agentos-workload.ts",
+      "name": "RunnerProcess",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/agentos-workload.ts",
+      "name": "SpawnProcess",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/agentos-workload.ts",
+      "name": "spawnRunnerChild",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/agentos.ts",
+      "name": "AGENTOS_BACKOFF_BASE_MS",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/agentos.ts",
+      "name": "AGENTOS_BACKOFF_CAP_MS",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/agentos.ts",
+      "name": "AGENTOS_MAX_CONSECUTIVE_FAILURES",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/agentos.ts",
+      "name": "AGENTOS_STABLE_WINDOW_MS",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/driver/channel.ts",
+      "name": "removeTlsWorkDirectory",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/driver/compute-driver.ts",
+      "name": "COMPUTE_DRIVER_SERVICE_NAME",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/driver/compute-driver.ts",
+      "name": "DriverSandboxMessage",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/driver/compute-driver.ts",
+      "name": "protoIncludeDirectory",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/driver/grpc-status.ts",
+      "name": "DRIVER_STATUS",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/driver/lifecycle.ts",
+      "name": "BeforeStart",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/driver/lifecycle.ts",
+      "name": "HardeningRefusal",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/driver/lifecycle.ts",
+      "name": "LifecycleLibpod",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/driver/refusal.ts",
+      "name": "DriverRpc",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/driver/runtime-channel.ts",
+      "name": "JsonOut",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/driver/runtime-channel.ts",
+      "name": "RuntimeChannelInput",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/driver/sandbox-binding.ts",
+      "name": "SandboxRoots",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/driver/seccomp-delivery.ts",
+      "name": "SECCOMP_DIRECTORY_NAME",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/driver/seccomp-profile.ts",
+      "name": "SECCOMP_PROFILE",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/driver/seccomp-profile.ts",
+      "name": "SECCOMP_PROFILE_DIGEST_PREFIX",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/driver/seccomp-profile.ts",
+      "name": "SECCOMP_UPSTREAM_SHA256",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/driver/seccomp-profile.ts",
+      "name": "SeccompProfile",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/driver/seccomp-profile.ts",
+      "name": "SeccompRule",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/driver/server.ts",
+      "name": "SHUTDOWN_GRACE_MS",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/gateway-config.ts",
+      "name": "RealmGatewayInput",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/gateway-config.ts",
+      "name": "realmGatewayPkiPaths",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/gateway-config.ts",
+      "name": "renderRealmGatewayConfig",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/hardening.ts",
+      "name": "HARDENING_PROPERTIES",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/hardening.ts",
+      "name": "RUNTIME_BINARY",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/hardening.ts",
+      "name": "SUPERVISOR_CA_TMPFS_OPTIONS",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/hardening.ts",
+      "name": "tmpfsSizeBytes",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/kernel-caps.ts",
+      "name": "kernelStatusOf",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/libpod-client.ts",
+      "name": "DEFAULT_INFO_TIMEOUT_MS",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/libpod-client.ts",
+      "name": "DEFAULT_INFO_TTL_MS",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/libpod-client.ts",
+      "name": "FORCE_REMOVE_STOP_GRACE_SECONDS",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/libpod-routes.ts",
+      "name": "LibpodRouteName",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/libpod-routes.ts",
+      "name": "matchLibpodRoute",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/openshell.ts",
+      "name": "AgentOsSandboxRequest",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/openshell.ts",
+      "name": "buildPolicyDocument",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/openshell.ts",
+      "name": "buildSandboxDeleteArgv",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/openshell.ts",
+      "name": "OpenShellRunOptions",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/openshell.ts",
+      "name": "SANDBOX_WORKSPACE_PATH",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/podman-version.ts",
+      "name": "PodmanProbe",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/podman-version.ts",
+      "name": "podmanSkipReason",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/seccomp-evidence.ts",
+      "name": "cloneRuleConfined",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/seccomp-evidence.ts",
+      "name": "defaultErrnoIsEnosys",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/seccomp-evidence.ts",
+      "name": "isolationSyscallsDenied",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/seccomp-evidence.ts",
+      "name": "keyringSyscallsDenied",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/seccomp-evidence.ts",
+      "name": "SECCOMP_EVIDENCE_FIELD",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/session-execution.ts",
+      "name": "AGENTOS_WORKLOAD_BINARY",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/session-execution.ts",
+      "name": "HardeningFailedError",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/session-execution.ts",
+      "name": "spawnOpenShellRunner",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/sweep.ts",
+      "name": "SWEEP_CALL_TIMEOUT_MS",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/session/reap.ts",
+      "name": "REAP_SWEEP_TIMEOUT_MS",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/tools/dispatch.ts",
+      "name": "DispatcherController",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/tools/dispatch.ts",
+      "name": "TOOL_CALL_TIMEOUT_MS",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    }
+  ]
+}

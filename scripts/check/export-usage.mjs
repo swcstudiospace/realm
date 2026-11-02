@@ -603,7 +603,7 @@ export function formatList(entries) {
 }
 
 // Lists the "/"-joined paths of every .ts file under a root's src/ and test/ directories, sorted.
-function listTypeScript(root) {
+export function listTypeScript(root) {
   const files = {};
   for (const top of ["src", "test"]) {
     for (const relative of readdirSync(join(root, top), { recursive: true }).map(String).sort()) {
