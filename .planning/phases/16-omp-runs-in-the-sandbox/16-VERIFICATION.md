@@ -2,10 +2,9 @@
 
 Date: 2026-11-02. Tree: `gsd/v3-autonomous` at `4b9cebb`. Implementation commits: `2e5e6c5` (O1, plan 16-01), `2af03b6` (O2, plan 16-02), `984d758` (O4, plan 16-04). O3 (plan 16-03) has no commit. Source of acceptance: `16-CONTEXT.md` (Phase 16 criteria 1 to 4 in ROADMAP, the requirement mapping in plans `16-01` to `16-04`, and section "Decisions added 2026-11-01").
 
-**Status: human_needed.** Phase 16 is not passed. Three things block it:
-1. O3 is not run. The live window is not approved, so OMPX-05 has no production proof.
-2. OMPX-05's production proof is part of O3.
-3. The handshake and credential portion of the connection spec is a recorded deviation, awaiting the owner's decision.
+**Status: human_needed.** Phase 16 is not passed. Blockers that remain:
+1. O3 is not run. The production OMPX-05 live proof is held by the owner, and no live window is approved, so OMPX-05 has no production proof.
+2. The re-attach live validation (O4) is pending. `REALM_OMP_REATTACH` stays off until the owner records it.
 
 No requirement is checked in `REQUIREMENTS.md`. This record does not edit `STATE.md` or `REQUIREMENTS.md`.
 
@@ -33,13 +32,13 @@ No requirement is checked in `REQUIREMENTS.md`. This record does not edit `STATE
 - Configuration: `REALM_OMP_REATTACH`. Unset or `0` is off, `1` is on, any other value fails at load with `SCHEMA_INVALID`.
 - **Default: off.** It stays off until the owner records the live validation.
 - **Live validation: pending, not run.** Steps: with `REALM_OMP_REATTACH=1`, stop the daemon while Omp is attached. The status item must read `realm disconnected · connecting`, then `realm active` within the first wait.
-- Not covered by O4: the handshake and credential portion of the spec (see deviation below).
+- Not covered by O4: the handshake and credential portion of the spec, an accepted deviation (owner decision, 2026-11-02; see below).
 
-## Deviation: handshake and credential (open owner decision)
+## Deviation: handshake and credential (accepted by owner, 2026-11-02)
 
 The spec requires a protocol version, a handshake and a credential. The control protocol (`src/daemon/channel.ts`) has no version field and no handshake. The existing boundary is the socket's 0700 directory and 0600 socket. O4 and the other Phase 16 units add no handshake.
 
-Under the spec's rule this is a **BLOCKER for the handshake portion**. It is recorded as an open owner decision: accept the socket modes as the authentication boundary, or name the contract. It is not a passed item.
+Owner decision, 2026-11-02: the socket permissions (0700 directory, 0600 socket) are accepted as the authentication boundary, with no version handshake. This is an accepted deviation from the spec, not a blocker and not an open decision. The spec's version negotiation and credential are still not implemented.
 
 Related open item: in-flight control requests cannot be aborted on shutdown, because `sendRequest` has no abort signal. The bound is `CONTROL_TIMEOUT_MS`. Owner question 4.
 
@@ -66,11 +65,11 @@ Hermetic gates do not close OMPX-05. Fake daemon, fake execution service and fak
 | O2 gated cases | Live Omp consumer controls (`REALM_LIVE_OMP`) | not run | not approved |
 | O4 live validation | Re-attach default decision | not run | pending owner; default stays off |
 
-## Owner decisions open
+## Owner decisions (recorded)
 
 1. Phase 15 PR C gate on Phase 16 (P16-D2).
 2. Guard-blocked `bash` in place of removal (P16-D5).
-3. Handshake, protocol version and credential (blocker for the handshake portion).
+3. Handshake, protocol version and credential: accepted deviation (owner, 2026-11-02); the socket modes are the boundary; version negotiation and credential remain unimplemented.
 4. Abort of in-flight control requests on shutdown.
 5. Re-attach per-attempt budget.
 6. Ownership of `test/omp/extension.test.ts` by O4.

@@ -50,7 +50,7 @@ Results are those reported for each commit and for the merged tree. This closeou
 ## Deviations
 
 1. **Fail-closed `bash` is guard-blocked, not removed** (P16-D5). OMPX-03 allows removal or blocking. Removal would give Omp's native "Tool bash not found" instead of a catalogue code, so `bash` stays active and the guard refuses it. The owner's confirmation of this trade is open (owner question 2).
-2. **Handshake, protocol version and credential are not implemented.** The control protocol (`src/daemon/channel.ts`) has no version field and no handshake. The socket's 0700 directory and 0600 socket are the existing boundary. Under the spec's rule this is a BLOCKER for the handshake portion of `SANDBOX_OMP_PLUGIN_CONNECTION`. It is an open owner decision (owner question 3), not a passed item.
+2. **Handshake, protocol version and credential are not implemented.** The control protocol (`src/daemon/channel.ts`) has no version field and no handshake. The socket's 0700 directory and 0600 socket are the existing boundary. This is an accepted deviation from `SANDBOX_OMP_PLUGIN_CONNECTION` (owner decision, 2026-11-02): the socket modes are the authentication boundary, with no version handshake. Version negotiation and the credential remain unimplemented.
 3. **`test/support/omp-profile.ts`** is listed in plan 16-02 but is not changed by `2af03b6`. Bounded capture was added in `omp-rpc.ts` and `scripted-provider.ts` instead.
 4. **Plan 16-04 front matter** lists OMPX-02 and OMPX-04. The unit's content is the re-attach spec section, which has no requirement ID. O4 claims no requirement status.
 5. **Merge `4b9cebb` carries PR #46 review fixes outside Phase 16 units.** The commits are `ea486f4` (fix(omp), refused attach kept only for the daemon's own root), `59804f5` (fix(audit)), `fcb3d56` (fix(doctor)), `df728fd` (test(omp)) and `618a579` (docs(omp)). The merge diff also touches `src/audit/chain.ts`, `src/cli/audit.ts`, `src/daemon/client.ts`, `src/daemon/daemon.ts`, `src/doctor/fix.ts` and `test/audit`, `test/cli`, `test/daemon`, `test/doctor`. Those belong to the audit and doctor work of other phases and are not assessed here.
@@ -62,7 +62,7 @@ Results are those reported for each commit and for the merged tree. This closeou
 Owner decisions (none is approved by this record):
 1. Keep the Phase 15 PR C gate (P16-D2), or start on PR A and PR B alone.
 2. Accept a guard-blocked `bash` in place of removal (P16-D5).
-3. Handshake, protocol version and credential: accept the socket modes as the authentication boundary, or name the contract. Blocks the handshake portion of the spec.
+3. Handshake, protocol version and credential: accepted deviation (owner decision, 2026-11-02). The socket modes are the authentication boundary, with no version handshake; the spec's version negotiation and credential remain unimplemented.
 4. In-flight control requests cannot be aborted on shutdown (`sendRequest` has no abort signal). Accept the `CONTROL_TIMEOUT_MS` bound, or allow a `channel.ts` change later.
 5. Re-attach per-attempt budget: the 200 s startup budget, or a shorter bound.
 6. Confirm that `test/omp/extension.test.ts` is owned by O4.
