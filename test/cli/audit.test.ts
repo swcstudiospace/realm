@@ -20,6 +20,10 @@ interface FileReport {
   readonly sessionId: string;
   readonly ok: boolean;
   readonly failure?: string;
+  readonly lines?: number;
+  readonly chainedLines?: number;
+  readonly tornTail?: boolean;
+  readonly unparsedLines?: readonly number[];
   readonly broken?: { readonly line: number; readonly reason: string };
   readonly head?: { readonly seq: number; readonly lineSha256: string };
   readonly unprotected?: number;
@@ -382,6 +386,48 @@ void test("audit verify --file: legacy lines before the chain exit 0 and are cou
     assert.equal(result.exitCode, 0);
     assert.match(result.stderr, /1 legacy line\(s\) are unprotected/);
     assert.equal(reportOf(result.stdout).files[0]?.unprotected, 1);
+  });
+});
+
+void test("audit verify --file: unparsed lines, the torn tail and the counts come from one scan and agree", async () => {
+  await withState(async (stateDir) => {
+    const lines = seed(stateDir);
+    const file = auditFile(stateDir);
+    // Line 4 is a complete non-JSON line. Line 5 is a torn fragment with no trailing newline.
+    writeFileSync(file, `${lines.join("\n")}\nnot json\n{"tool":"wri`);
+    const result = await runCli(["audit", "verify", "--file", file], { env: {} });
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.stderr, "");
+    const report = reportOf(result.stdout).files[0];
+    assert.ok(report);
+    assert.equal(report.lines, 5);
+    assert.equal(report.chainedLines, 3);
+    assert.equal(report.tornTail, true);
+    assert.deepEqual(report.unparsedLines, [4, 5]);
+    assert.deepEqual(report.head, { seq: 3, lineSha256: hashOf(lines[2]) });
+
+    // A head pin that fails at line 2 keeps the counts and head at line 2, yet unparsedLines still lists the
+    // non-JSON lines after it, as the plain scan does.
+    writeFileSync(file, `${lines.join("\n")}\nnot json\n{"tool":"wri`);
+    const pinned = await runCli(["audit", "verify", "--file", file, "--head", `2:${"0".repeat(64)}`], { env: {} });
+    assert.equal(pinned.exitCode, 1);
+    const pinnedReport = reportOf(pinned.stdout).files[0];
+    assert.ok(pinnedReport);
+    assert.deepEqual(pinnedReport.broken, { line: 2, reason: "prefix-changed" });
+    assert.equal(pinnedReport.lines, 2);
+    assert.equal(pinnedReport.chainedLines, 2);
+    assert.equal(pinnedReport.tornTail, false);
+    assert.deepEqual(pinnedReport.unparsedLines, [4, 5]);
+    assert.deepEqual(pinnedReport.head, { seq: 2, lineSha256: hashOf(lines[1]) });
+
+    // A chain break at line 2 ends the scan there, so a non-JSON line after it is not listed.
+    writeFileSync(file, `${lines[0] ?? ""}\n${lines[2] ?? ""}\nnot json\n`);
+    const broken = await runCli(["audit", "verify", "--file", file], { env: {} });
+    assert.equal(broken.exitCode, 1);
+    const brokenReport = reportOf(broken.stdout).files[0];
+    assert.ok(brokenReport);
+    assert.deepEqual(brokenReport.broken, { line: 2, reason: "seq-gap" });
+    assert.deepEqual(brokenReport.unparsedLines, []);
   });
 });
 
