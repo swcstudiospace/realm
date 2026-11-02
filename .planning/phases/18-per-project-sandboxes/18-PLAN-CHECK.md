@@ -125,3 +125,10 @@ Applied to plan text only, on `gsd/v3-integrate-wave2` from head `56be821`. Line
 - Observed, not edited:
   - `18-06-PLAN.md` T2 `Files` list, line 102, still omits `test/daemon/realm-daemon-fixture.test.ts`. W1 covers the frontmatter only, as the item asked.
   - `18-06-PLAN.md` step (6), line 104: "if an entry exists" does not say whether the entry is the one read at step (2) or read again. If it is the step (2) value, a request whose probe succeeds after a concurrent request for the same id has finished step (6) (registry entry set, reservation held) builds a second handle and overwrites the registry entry. Re-reading `registry.get(id)` at step (6) would close this. It is outside the four items, so it is left for the owner.
+
+## Round 5 fixes
+
+Applied to plan text only, on `gsd/v3-integrate-wave2` from head `8962b53`. Line numbers are the pre-edit lines. No `npm`, build, test, gate, omp, container or daemon command was run.
+
+- Round 4 observed item, `18-06-PLAN.md` step (6), line 106: applied. Step (6) now re-reads `registry.get(id)` synchronously after the probe, with no `await` between that read and `registry.set`, and uses that read, not the step (2) read. A concurrent request that has already set the entry for the same id is therefore seen, and no second handle is built. The rest of step (6), including the `isCommitted` and `reserveAdmission` branch, is unchanged.
+- New T1 done-when case (j), `18-06-PLAN.md` after line 100: added. It covers two concurrent `up` calls for one new id whose second call completes while the first probe is still held. It asserts the same `sessionId` and `boundRoot` in both replies, one `buildHandle` call, one registry entry, and one fake podman create.
