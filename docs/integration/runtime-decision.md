@@ -216,19 +216,23 @@ Counters and timings are read with `realm metrics`, which sends `metrics` on the
 | `reapFailure` | Present only when the reap failed: the catalogue code. The report is then partial, as described under failure handling. |
 | `failures` | The count described above. |
 
-**The daemon log records.** The daemon entry (`src/daemon/main.ts`) writes these records through its own logger to its standard error. A detached daemon's standard error is `<stateDir>/daemon.log` (`startDetachedDaemon`, `src/cli/main.ts`); a foreground entry writes them to the terminal. The records are written by `emitStartup`, `emitAuditHead` and `emitFailure`:
+**The daemon log records.** The daemon entry (`src/daemon/main.ts`) writes these records through its own logger to its standard error. A detached daemon's standard error is `<stateDir>/daemon.log` (`startDetachedDaemon`, `src/cli/main.ts`); a foreground entry writes them to the terminal. The records are written by `emitStartup`, `emitAuditHead` and `emitFailure`, and by the unreadable-audit check that writes `audit.unreadable` (below):
 
 - `daemon.startup` (info, `emitStartup`): once per start. The object has `level` `info` and `event` `daemon.startup`, then the report fields in the table above. `unfinishedAuditFiles` and `unfinishedSweepRoots` are a sample of at most ten names; `unfinishedAuditFileCount` and `unfinishedSweepRootCount` are the full counts. `reapFailure` is omitted when the reap did not fail. The record is written on every start, including when everything is zero.
-- `audit.head` (info, `emitAuditHead`): the chain head of `<stateDir>/audit/daemon.jsonl`, with `sessionId`, `seq`, `line` and `lineSha256`. It is written after a successful start and again after teardown, and only when the file has a chained line. It covers only the file of session id `daemon`, the session the entry passes to `startDaemon`. The scan that finds the head runs synchronously on the event loop, so a large audit file delays requests until it finishes (open owner decision, below).
+- `audit.head` (info, `emitAuditHead`): the chain head of `<stateDir>/audit/daemon.jsonl`, with `sessionId`, `seq` and `lineSha256`. The head is read from the file tail only. `seq` and `lineSha256` belong to the newest chained line, and `lineSha256` is the SHA-256 of that line's raw bytes. No line count is recorded: the former `line` field is removed. The read is bounded to two 4 MiB windows, so its cost does not grow with the file size. It is written after a successful start and again after teardown, and only when the file has a chained line. It covers only the file of session id `daemon`, the session the entry passes to `startDaemon`.
+- `audit.unreadable` (warn, reason `unreadable`): an audit file that exists but cannot be read. It is logged to `<stateDir>/daemon.log` through the entry writer, at startup and at shutdown. A missing file and a file with no chained line log nothing. This is the one addition to the closed event list of D-1704 (owner ruling O-b, 2026-11-02).
 - `daemon.failed` (error, `emitFailure`): one per start failure, shutdown failure and listening-server failure, carrying the catalogue `code` and nothing else. `src/daemon/ensure.ts` reads this event.
 - The uncaught-failure handlers (`installFailureHandlers`) write `daemon.failed` too, with `SCHEMA_INVALID` for an error that is not a `RealmError`. They then set the exit code to 1 and call `process.exit(1)`. This is the one exception to the rule that the entry does not call `process.exit`, and it runs after the line is written. Once the handler is installed, Node prints no crash trace, and the stack is not logged.
 
-**Open owner decisions and known gaps (Phase 17).** Recorded here; the owner has not ruled on these.
+**Owner decisions (2026-11-02).** Recorded by owner ruling. The amended text of D-1701 and D-1704 is in `.planning/phases/17-observability-and-tamper-evident-audit/17-CONTEXT.md`.
 
-- Open owner decision: the `audit.head` scan is synchronous on the event loop, so a large audit file delays requests until it finishes.
-- Known gap: an audit file that exists but cannot be read produces no `audit.head` line and no diagnostic. Admission still fails closed with `AUDIT_WRITE_FAILED`.
-- Open owner decision: `daemon.failed` carries the catalogue code only, so the stack of an uncaught failure is not logged. This is a recorded trade-off pending a ruling.
-- Known gap: `audit.head` covers `audit/daemon.jsonl` only. No other audit file has a head record.
+- O-a, `audit.head` cost: the head is read from the file tail only. It carries `sessionId`, `seq` and `lineSha256`; the `line` field is removed. The read is bounded to two 4 MiB windows, so its cost no longer grows with the file size. The code change for O-a and O-b is in the commit titled "fix(audit): read the audit head from the file tail (OBS-02)".
+- O-b, unreadable audit file: an audit file that exists but cannot be read logs `audit.unreadable` (warn, reason `unreadable`) to `<stateDir>/daemon.log` through the entry writer, at startup and at shutdown. A missing file, and a file with no chained line, log nothing.
+- O-c, crash stack: accepted as a trade-off. An uncaught failure logs only the catalogue code (`daemon.failed`); the stack is not logged, by the privacy rule.
+- O-d, `audit.head` scope: documented as is. `audit.head` covers only the daemon's own session file, `audit/daemon.jsonl`.
+- O-e, driver-only loss (D-1701): ratified and amended. Driver-only loss is classified as `OPENSHELL_GATEWAY_LOST` when the driver's socket probe fails, on the supervisor's failure path. It is not a coverage limit of D-1701.
+- Known gap: the `audit.head` look-back is at most 64 lines. If the last 64 lines of an audit file have no chain fields, the daemon logs neither `audit.head` nor `audit.unreadable`. The daemon writes chained lines only, so this happens only when a file has been altered; `realm audit verify` is the authority for that case. This is a known gap, not a fix.
+- Rulings O-f, O-g and O-h of the Phase 17 verification record are not decided here.
 - Redaction (`src/audit/redact.ts`) applies to the secret-looking keys and the value patterns that module lists. Its `NAME=value` pattern is linear (commit 1fa6c98). It is not a general guarantee beyond what the code and its tests show.
 - The limits of `realm audit verify` (no tail-truncation check without a head or anchor, no protection against a recomputed chain or forged appended lines) are stated in `docs/integration/hardening-plan.md`, H2.
 
@@ -335,10 +339,11 @@ This section records the third explicit contract extension to the error catalogu
 
 **What is covered and what is not.**
 
-- (a) Driver loss: the compute driver is detected by the driver socket probe, which is authored and not run live. Spike S17-b (2026-10-30, partial) showed that `openshell status --output json` still exits 0 with only the compute-driver unit stopped, so the gateway check alone cannot see driver loss. The driver socket probe is what covers it. Until the live probe is run, the reason text's "or the compute driver behind it" rests on the unit tests, not on a live run.
-- (b) `openshell status` exits 0 with "No gateway configured". If the daemon's `HOME` loses the gateway configuration, the classification reads `AGENTOS_CRASH_LOOP`. The exec path and the status path share one environment, so they stay consistent.
-- (c) A runner that dies in the same second the gateway is restarted reads `AGENTOS_CRASH_LOOP`, because the gateway answers by the time it is asked.
-- (d) A TLS failure of the gateway (for example `BadSignature`) also reads `OPENSHELL_GATEWAY_LOST`. That is intended: the gateway is unusable.
+- (a) `openshell status` exits 0 with "No gateway configured". If the daemon's `HOME` loses the gateway configuration, the classification reads `AGENTOS_CRASH_LOOP`. The exec path and the status path share one environment, so they stay consistent.
+- (b) A runner that dies in the same second the gateway is restarted reads `AGENTOS_CRASH_LOOP`, because the gateway answers by the time it is asked.
+- (c) A TLS failure of the gateway (for example `BadSignature`) also reads `OPENSHELL_GATEWAY_LOST`. That is intended: the gateway is unusable.
+
+Driver loss is not a coverage limit. A compute driver that does not answer while the gateway does is classified as `OPENSHELL_GATEWAY_LOST` by the socket probe, under owner ruling O-e (2026-11-02). The live run that exercises the probe (spike S17-b) is not recorded yet; that is pending evidence, not a limit.
 
 **Not changed.** `create` and `up` with the gateway down still fail with `OPENSHELL_START_FAILED`. The `exec` tool path is unchanged (it returns the command's exit code or `REALM_NOT_ACTIVE`). Only the health-probe path (`AgentOsSupervisor.check`) classifies.
 
