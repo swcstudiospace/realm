@@ -42,16 +42,6 @@ export function readHostRuntime(
   return { runtimeInput, stateDir };
 }
 
-// The validated config for a local doctor run. A missing or invalid file is undefined, so the
-// doctor can report that instead of the CLI naming the daemon's runtime input.
-export function loadHostRuntimeConfig(env: EnvironmentLike): ReturnType<typeof loadRuntimeConfig> | undefined {
-  try {
-    return loadRuntimeConfig(readRuntimeConfigFile(resolveConfigPath(env)));
-  } catch {
-    return undefined;
-  }
-}
-
 // The rootless API socket lives under an absolute XDG_RUNTIME_DIR; otherwise there is no
 // socket path to report. This mirrors the probe's apiSocketPath rule (podman-probe.ts,
 // OQ-P3-13). String operations keep the result exactly that rule.
@@ -71,9 +61,21 @@ export function defaultPolicyPath(stateDir: string): string {
 
 // True when argv1 and the module file named by moduleUrl are the same file once symbolic
 // links are resolved. An undefined argv1, or one that does not exist, is never the entry.
+// A compiled Omp binary reports its virtual /$bunfs entry as existing, yet realpath fails on
+// it with ENOENT. That path is not a file on disk, so it is not the entry either. Any other
+// realpath error propagates.
 export function isDirectEntry(moduleUrl: string, argv1: string | undefined): boolean {
   if (argv1 === undefined || !existsSync(argv1)) {
     return false;
   }
-  return realpathSync(argv1) === realpathSync(fileURLToPath(moduleUrl));
+  let resolved: string;
+  try {
+    resolved = realpathSync(argv1);
+  } catch (error: unknown) {
+    if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") {
+      return false;
+    }
+    throw error;
+  }
+  return resolved === realpathSync(fileURLToPath(moduleUrl));
 }

@@ -21,7 +21,9 @@ import {
   guardHostToolCall,
   registerRealmPlugin,
   renderRealmStatus,
+  type DaemonAttach,
   type HostToolCall,
+  type HostToolSet,
   type HostToolVerdict,
   type OmpExtensionApi,
   type OmpSessionContext,
@@ -38,6 +40,7 @@ import {
 const CLOCK_ISO = "2026-10-21T09:30:00.000Z";
 const ACTIVE: StateSnapshot = { state: "active", reason: "container running", lastTransitionAt: CLOCK_ISO };
 const CONNECTING: StateSnapshot = { state: "connecting", reason: "connecting", lastTransitionAt: CLOCK_ISO };
+const UNBOUND: StateSnapshot = { state: "unbound", reason: "no workspace", lastTransitionAt: CLOCK_ISO };
 const ACTIVE_LABEL = `● ${STATUS_LABELS.active}`;
 const DEGRADED_LABEL = `● ${STATUS_LABELS.active} [degraded]`;
 const DISCONNECTED_LABEL = `○ ${STATUS_LABELS.disconnected}`;
@@ -183,11 +186,16 @@ class FakeDaemon implements DaemonClient {
 
   // The outcome the next dispatch answers with. Unset, a dispatch rejects, so a test that expects none fails loudly.
   callOutcome: ToolOutcome | undefined = undefined;
+  // When set, every dispatch is refused by the daemon with this catalogue code, as client.call rejects with the daemon's refusal.
+  callError: ErrorCode | undefined = undefined;
   readonly dispatched: unknown[] = [];
 
   call(tool: unknown): Promise<ToolOutcome> {
     this.calls.push("call");
     this.dispatched.push(tool);
+    if (this.callError !== undefined) {
+      return Promise.reject(makeRealmError(this.callError));
+    }
     if (this.callOutcome === undefined) {
       return Promise.reject(new Error("no dispatch outcome was configured"));
     }
@@ -285,7 +293,7 @@ interface FixtureOptions {
   // One entry per attach, in order: a code rejects that attach with it; an absent entry resolves.
   readonly attachErrors?: readonly ErrorCode[];
   // Replaces the default attach; it receives the fixture daemon. The fixture still records each attach's workspace root.
-  readonly attach?: (daemon: FakeDaemon) => Promise<DaemonClient>;
+  readonly attach?: (daemon: FakeDaemon) => Promise<DaemonAttach>;
 }
 
 interface Fixture {
@@ -313,7 +321,7 @@ function makeFixture(options: FixtureOptions = {}): Fixture {
       if (code !== undefined) {
         return Promise.reject(makeRealmError(code));
       }
-      return Promise.resolve(daemon);
+      return Promise.resolve({ client: daemon, refusal: null });
     },
   };
   registerRealmPlugin(pi, pluginOptions);
@@ -327,6 +335,10 @@ function startHandlerOf(pi: FakePi): (ctx: OmpSessionContext) => void {
   return (ctx) => {
     handler({ type: "session_start" }, ctx);
   };
+}
+
+function toolSetOf(pi: OmpExtensionApi): HostToolSet {
+  return { pi, removed: [], queue: Promise.resolve() };
 }
 
 function toolCallOf(pi: FakePi): (call: HostToolCall) => Promise<HostToolVerdict | undefined> {
@@ -399,7 +411,7 @@ void test("OMP-01: session start attaches the daemon for the session cwd and ret
   const fixture = makeFixture({
     attach: async (daemon) => {
       await gate.promise;
-      return daemon;
+      return { client: daemon, refusal: null };
     },
   });
 
@@ -466,12 +478,59 @@ void test("OMP-01 (a): an attach failure settles disconnected with the catalogue
   assert.deepEqual(await toolCallOf(fixture.pi)({ toolName: "edit" }), { block: true, reason: "REALM_NOT_ACTIVE" });
 });
 
+void test("OMP-01 (c): a refused up with a live status paints the refusal code and still forwards tool calls (P5-D8)", async () => {
+  const fixture = makeFixture({
+    snapshot: UNBOUND,
+    attach: (daemon) => Promise.resolve({ client: daemon, refusal: makeRealmError("PODMAN_UNSUPPORTED_VERSION") }),
+  });
+  startHandlerOf(fixture.pi)(fixture.ctx);
+
+  await waitForDetail(fixture.ui, "PODMAN_UNSUPPORTED_VERSION");
+  assert.equal(lastLabel(fixture.ui), DISCONNECTED_LABEL);
+  assert.match(lastDetail(fixture.ui) ?? "", /^PODMAN_UNSUPPORTED_VERSION · /);
+  assert.ok(
+    !statusTexts(fixture.ui).some((text) => text.includes(displayStatus(UNBOUND).reason)),
+    "the refusal replaces the daemon's own unbound reason",
+  );
+
+  // The client is adopted, so a Realm tool call still reaches the daemon.
+  fixture.daemon.callOutcome = { outcome: "refused", tool: "status", code: "REALM_UNBOUND", retryable: false };
+  await toolOf(fixture.pi, "status").execute("call-1", {});
+  assert.deepEqual(fixture.daemon.dispatched.at(-1), { status: {} }, "a Realm tool call reaches the adopted daemon");
+  assert.equal(fixture.daemon.count("close"), 0, "the live client is not released");
+});
+
+void test("OMP-01 (c): a status read that reports a different state replaces the refusal, and a read of the same state keeps it (P5-D8)", async () => {
+  const fixture = makeFixture({
+    snapshot: UNBOUND,
+    attach: (daemon) => Promise.resolve({ client: daemon, refusal: makeRealmError("PODMAN_UNSUPPORTED_VERSION") }),
+  });
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitForDetail(fixture.ui, "PODMAN_UNSUPPORTED_VERSION");
+
+  // A repaint tick that reads the same state keeps the refusal on screen, and paints nothing new.
+  const paintsBefore = statusTexts(fixture.ui).length;
+  const readsBefore = fixture.daemon.count("status");
+  pollOf(fixture.ctx).callback();
+  await waitUntil(() => fixture.daemon.count("status") > readsBefore);
+  await yieldTurn();
+  assert.match(lastDetail(fixture.ui) ?? "", /^PODMAN_UNSUPPORTED_VERSION · /);
+  assert.equal(statusTexts(fixture.ui).length, paintsBefore, "a repeat tick of the same state paints nothing");
+
+  // A status read that reports a different state replaces the refusal text.
+  fixture.daemon.snapshot = ACTIVE;
+  pollOf(fixture.ctx).callback();
+  await waitForDetail(fixture.ui, "container running");
+  assert.equal(lastLabel(fixture.ui), ACTIVE_LABEL);
+  assert.equal(lastDetail(fixture.ui)?.includes("PODMAN_UNSUPPORTED_VERSION"), false);
+});
+
 void test("OMP-01 (a): an attach that outlives the startup budget settles disconnected and releases its late client (P5-D8)", async () => {
   const gate = makeGate();
   const fixture = makeFixture({
     attach: async (daemon) => {
       await gate.promise;
-      return daemon;
+      return { client: daemon, refusal: null };
     },
   });
   startHandlerOf(fixture.pi)(fixture.ctx);
@@ -485,6 +544,7 @@ void test("OMP-01 (a): an attach that outlives the startup budget settles discon
   gate.resolve();
   await waitUntil(() => fixture.daemon.count("close") === 1);
   assert.equal(fixture.daemon.count("close"), 1, "the late client is released");
+  assert.equal(fixture.pi.activeSets.length, 0, "a setter queued by the timed-out attempt never applies (P16 a)");
   assert.deepEqual(await toolCallOf(fixture.pi)({ toolName: "edit" }), { block: true, reason: "REALM_NOT_ACTIVE" });
 });
 
@@ -685,9 +745,13 @@ void test("OMP-05: required mode refuses host edit while the realm is non-active
 
   assert.equal(await toolCall({ toolName: "write" }), undefined, "the Realm write goes to the daemon gate, not the guard");
   assert.deepEqual(await toolCall({ toolName: "edit" }), { block: true, reason: "REALM_NOT_ACTIVE" });
-  assert.equal(await guardHostToolCall("write", null), undefined, "a Realm write with no session passes to the tool");
+  assert.equal(
+    await guardHostToolCall("write", null, toolSetOf(fixture.pi)),
+    undefined,
+    "a Realm write with no session passes to the tool",
+  );
   assert.deepEqual(fixture.ui.notifications, [], "refusal carries no advisory warning");
-  assert.equal(fixture.daemon.count("status"), 2, "the attach and the guarded edit each read the daemon status once");
+  assert.equal(fixture.daemon.count("status"), 3, "the attach, the Realm write and the guarded edit each read the daemon status once");
 });
 
 void test("OMP-05 (c): required mode blocks an edit when the status snapshot says not active (P5-D6)", async () => {
@@ -711,9 +775,10 @@ void test("OMP-05: advisory mode warns visibly and lets the guarded call through
   await waitForSettledDetails(fixture);
   const toolCall = toolCallOf(fixture.pi);
 
-  assert.equal(await toolCall({ toolName: "write" }), undefined);
+  // The Realm write reaches the daemon, which carries its warning (B1), so the guard itself warns only for the edit.
+  assert.equal(await toolCall({ toolName: "write" }), undefined, "the Realm write passes the guard to the daemon");
   assert.equal(await toolCall({ toolName: "edit" }), undefined);
-  assert.equal(fixture.ui.notifications.length, 1, "only the guarded edit warns; the Realm write is not the guard's to warn about");
+  assert.equal(fixture.ui.notifications.length, 1, "the guarded edit warns");
   for (const warning of fixture.ui.notifications) {
     assert.match(warning, /connecting/, "warning names the state");
     assert.match(warning, /advisory policy/, "warning states the advisory policy");
@@ -764,9 +829,9 @@ void test("OMP-05 (d): advisory mode only warns when the status fetch times out 
 });
 
 void test("OMP-05 / LOW-01: a tool name the guard cannot classify is refused, never waved through (P5-D6)", async () => {
-  assert.deepEqual(await guardHostToolCall(undefined, null), { block: true, reason: "realm bad tool call" });
-  assert.deepEqual(await guardHostToolCall({ name: "write" }, null), { block: true, reason: "realm bad tool call" });
-  assert.equal(await guardHostToolCall("read", null), undefined);
+  assert.deepEqual(await guardHostToolCall(undefined, null, toolSetOf(new FakePi())), { block: true, reason: "realm bad tool call" });
+  assert.deepEqual(await guardHostToolCall({ name: "write" }, null, toolSetOf(new FakePi())), { block: true, reason: "realm bad tool call" });
+  assert.equal(await guardHostToolCall("read", null, toolSetOf(new FakePi())), undefined);
 });
 
 void test("OMP-05: the package manifest points at the compiled edge entry (P5-D4)", () => {
@@ -786,7 +851,7 @@ void test("timers: session shutdown clears the attach budget and the poll, and a
   const fixture = makeFixture({
     attach: async (daemon) => {
       await gate.promise;
-      return daemon;
+      return { client: daemon, refusal: null };
     },
   });
   startHandlerOf(fixture.pi)(fixture.ctx);
@@ -946,7 +1011,7 @@ void test("OMPX-03: fail-closed attach removes every built-in outside the allowl
   }
 });
 
-void test("OMPX-03: a removal that does not hold fails the attach with POLICY_DENIED, releases the client, and refuses a host bash call", async () => {
+void test("OMPX-03 / B8: a removal that does not hold paints POLICY_DENIED, keeps the client that answered, and refuses a host bash call", async () => {
   const fixture = makeFixture({ mode: "fail-closed" });
   fixture.pi.ignoreRemoval = true;
   startHandlerOf(fixture.pi)(fixture.ctx);
@@ -954,8 +1019,11 @@ void test("OMPX-03: a removal that does not hold fails the attach with POLICY_DE
 
   assert.equal(lastLabel(fixture.ui), DISCONNECTED_LABEL);
   assert.match(lastDetail(fixture.ui) ?? "", /^POLICY_DENIED · /);
-  assert.equal(fixture.daemon.count("close"), 1, "the unadopted client is released");
+  assert.equal(fixture.daemon.count("close"), 0, "the daemon answered its status, so its client is adopted, not released (B8)");
   assert.deepEqual(await toolCallOf(fixture.pi)({ toolName: "bash" }), { block: true, reason: "POLICY_DENIED" });
+  fixture.daemon.callOutcome = { outcome: "refused", tool: "status", code: "REALM_UNBOUND", retryable: false };
+  await toolOf(fixture.pi, "status").execute("call-1", {});
+  assert.deepEqual(fixture.daemon.dispatched.at(-1), { status: {} }, "a Realm tool call still reaches the adopted daemon");
 });
 
 void test("OMPX-03: before the first attach settles no mode is known, so a host bash call is refused with POLICY_DENIED", async () => {
@@ -964,7 +1032,7 @@ void test("OMPX-03: before the first attach settles no mode is known, so a host 
     mode: "fail-closed",
     attach: async (daemon) => {
       await gate.promise;
-      return daemon;
+      return { client: daemon, refusal: null };
     },
   });
   startHandlerOf(fixture.pi)(fixture.ctx);
@@ -996,14 +1064,14 @@ void test("OMPX-03: in fail-closed mode the tool_call backstop refuses a host ba
   assert.equal(await toolCall({ toolName: "write" }), undefined, "the Realm write passes the mutation check with an active realm");
 });
 
-void test("OMPX-04: advisory attach removes nothing: the built-ins stay active, a host bash call passes, and the guarded edit keeps the notice", async () => {
+void test("OMPX-04 / B9: advisory attach with the realm not active changes no tool: the Realm write and the built-ins stay active, a host bash call passes, and the guarded edit keeps the notice", async () => {
   const fixture = makeFixture({ mode: "advisory", snapshot: CONNECTING });
   startHandlerOf(fixture.pi)(fixture.ctx);
   await waitForSettledDetails(fixture);
 
-  assert.equal(fixture.pi.activeSets.length, 0, "advisory never calls setActiveTools");
+  assert.equal(fixture.pi.activeSets.length, 0, "nothing is removed, so the active set is never set");
   const active = fixture.pi.getActiveTools();
-  for (const name of [...REMOVED_BUILTINS, "glob", "grep"]) {
+  for (const name of ["write", ...REMOVED_BUILTINS, "glob", "grep"]) {
     assert.ok(active.includes(name), `${name} stays active`);
   }
   assert.equal(fixture.pi.tools.size, REALM_TOOLS.length, "the Realm tools stay registered");
@@ -1012,4 +1080,151 @@ void test("OMPX-04: advisory attach removes nothing: the built-ins stay active, 
   assert.equal(await toolCall({ toolName: "edit" }), undefined, "edit passes with a warning in advisory mode");
   assert.equal(fixture.ui.notifications.length, 1);
   assert.match(fixture.ui.notifications[0] ?? "", /advisory policy/);
+});
+
+void test("B1 / T1: advisory with the realm not active forwards the Realm write to the daemon, shows its warning on every call, and returns the bytes and digest", async () => {
+  const fixture = makeFixture({ mode: "advisory", snapshot: CONNECTING });
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitForSettledDetails(fixture);
+  const warning = "realm is connecting; the write proceeds under advisory policy";
+  const outcome: ToolOutcome = { outcome: "done", tool: "write", value: { sha256: "a".repeat(64), bytes: 5, warning } };
+  fixture.daemon.callOutcome = outcome;
+  const write = toolOf(fixture.pi, "write");
+
+  for (const callId of ["call-1", "call-2"]) {
+    const result = await write.execute(callId, { path: "notes.txt", content: "hello" });
+    assert.equal(result.isError, false, "the advisory write succeeds");
+    assert.deepEqual(result.details, outcome, "the result carries the daemon's digest and byte count");
+    assert.equal(result.content[0]?.text, JSON.stringify(outcome));
+  }
+  assert.deepEqual(fixture.daemon.dispatched, [
+    { write: { path: "notes.txt", content: "hello" } },
+    { write: { path: "notes.txt", content: "hello" } },
+  ]);
+  assert.deepEqual(fixture.ui.notifications, [warning, warning], "the warning is shown on every call");
+  assert.ok(fixture.pi.getActiveTools().includes("write"), "the Realm write stays in the active set");
+});
+
+void test("B2 / T2: with no daemon attached the Realm write is refused with REALM_NOT_ACTIVE, no daemon is called, and the write stays active", async () => {
+  const fixture = makeFixture({ mode: "advisory", attachErrors: ["ANDA_UNREACHABLE"] });
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitForDetail(fixture.ui, "ANDA_UNREACHABLE");
+
+  assert.equal(await toolCallOf(fixture.pi)({ toolName: "write" }), undefined, "the guard passes the Realm write to the tool");
+  const result = await toolOf(fixture.pi, "write").execute("call-1", { path: "notes.txt", content: "hello" });
+  assert.equal(result.isError, true);
+  assert.deepEqual(result.details, { outcome: "refused", tool: "write", code: "REALM_NOT_ACTIVE", retryable: true });
+  assert.deepEqual(fixture.daemon.dispatched, [], "the daemon is never called");
+  assert.ok(fixture.pi.getActiveTools().includes("write"), "the Realm write stays in the active set");
+  assert.deepEqual(fixture.ui.notifications, [], "no warning is shown");
+});
+
+void test("B3 / T3: reachable, realm not active, fail-closed: the daemon's REALM_NOT_ACTIVE refusal reaches the caller, and the write stays active", async () => {
+  const fixture = makeFixture({ mode: "fail-closed", snapshot: CONNECTING });
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitForSettledDetails(fixture);
+  fixture.daemon.callError = "REALM_NOT_ACTIVE";
+
+  const result = await toolOf(fixture.pi, "write").execute("call-1", { path: "notes.txt", content: "hello" });
+  assert.equal(result.isError, true);
+  assert.deepEqual(result.details, { outcome: "refused", tool: "write", code: "REALM_NOT_ACTIVE", retryable: true });
+  assert.equal(fixture.daemon.count("call"), 1, "the daemon decided the write");
+  assert.ok(fixture.pi.getActiveTools().includes("write"), "the Realm write stays in the active set");
+  assert.deepEqual(fixture.ui.notifications, [], "a refusal carries no warning");
+});
+
+void test("B4 / T4: a host write failure from the daemon propagates as an error and is never reported as success", async () => {
+  const fixture = makeFixture({ mode: "advisory" });
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitForDetail(fixture.ui, "container running");
+  fixture.daemon.callError = "WRITE_NOT_ATOMIC";
+
+  const result = await toolOf(fixture.pi, "write").execute("call-1", { path: "notes.txt", content: "hello" });
+  assert.equal(result.isError, true, "the failed write is an error result");
+  assert.equal(result.details.outcome, "refused");
+  assert.match(result.content[0]?.text ?? "", /"code":"WRITE_NOT_ATOMIC"/);
+  assert.ok(fixture.pi.getActiveTools().includes("write"), "the Realm write stays in the active set");
+  assert.deepEqual(fixture.ui.notifications, [], "no warning is shown for a failed write");
+});
+
+void test("B9 / T5: the Realm write stays active across every realm transition, and the poll never hides it", async () => {
+  const fixture = makeFixture({ mode: "advisory", snapshot: CONNECTING });
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitForSettledDetails(fixture);
+  assert.ok(fixture.pi.getActiveTools().includes("write"), "the Realm write is active while the realm connects");
+
+  fixture.daemon.snapshot = ACTIVE;
+  pollOf(fixture.ctx).callback();
+  await waitUntil(() => lastLabel(fixture.ui) === ACTIVE_LABEL);
+  assert.ok(fixture.pi.getActiveTools().includes("write"), "the Realm write is active with the realm active");
+  assert.equal(fixture.pi.activeSets.length, 0, "advisory mode with nothing removed never sets the active set");
+});
+
+void test("B9 / T6: advisory with an unreadable status keeps the Realm write active, and the call reaches the daemon", async () => {
+  const fixture = makeFixture({ mode: "advisory" });
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitForDetail(fixture.ui, "container running");
+
+  fixture.daemon.hangStatus = true;
+  const verdict = toolCallOf(fixture.pi)({ toolName: "write" });
+  expireTimer(fixture.ctx, GUARD_STATUS_BUDGET_MS);
+  assert.equal(await verdict, undefined, "the Realm write goes to the daemon");
+  assert.ok(fixture.pi.getActiveTools().includes("write"), "the Realm write stays in the active set");
+});
+
+void test("B2: a Realm write with no session passes the guard, and the tool refuses it without a daemon call", async () => {
+  assert.equal(await guardHostToolCall("write", null, toolSetOf(new FakePi())), undefined, "the guard passes the Realm write");
+  const fixture = makeFixture();
+  const result = await toolOf(fixture.pi, "write").execute("call-1", { path: "notes.txt", content: "hello" });
+  assert.deepEqual(result.details, { outcome: "refused", tool: "write", code: "REALM_NOT_ACTIVE", retryable: true });
+  assert.deepEqual(fixture.daemon.calls, [], "no daemon call is made");
+});
+
+void test("P16 (b): the mode is published only after the tool set takes it, so a refused change leaves the last published mode", async () => {
+  const fixture = makeFixture({ mode: "advisory" });
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitForDetail(fixture.ui, "container running");
+  const toolCall = toolCallOf(fixture.pi);
+
+  fixture.daemon.mode = "fail-closed";
+  fixture.pi.ignoreRemoval = true;
+  assert.deepEqual(await toolCall({ toolName: "bash" }), { block: true, reason: "POLICY_DENIED" }, "the refused change denies the call");
+  fixture.pi.ignoreRemoval = false;
+
+  fixture.daemon.hangStatus = true;
+  const verdict = toolCall({ toolName: "edit" });
+  expireTimer(fixture.ctx, GUARD_STATUS_BUDGET_MS);
+  assert.equal(await verdict, undefined, "the unreadable status is judged by the last published mode, advisory");
+  assert.match(fixture.ui.notifications[fixture.ui.notifications.length - 1] ?? "", /advisory policy/);
+});
+
+void test("P16 (c): in the same mode, a built-in that Omp puts back is removed again on the next guarded call", async () => {
+  const fixture = makeFixture({ mode: "fail-closed" });
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitForDetail(fixture.ui, "container running");
+
+  await fixture.pi.setActiveTools([...fixture.pi.getActiveTools(), "bash"]);
+  assert.deepEqual(await toolCallOf(fixture.pi)({ toolName: "bash" }), { block: true, reason: "POLICY_DENIED" });
+  assert.ok(!fixture.pi.getActiveTools().includes("bash"), "bash is removed again");
+});
+
+void test("P16 (d): a Realm tool that drops out of the active set is put back by the next guarded call in the same mode", async () => {
+  const fixture = makeFixture({ mode: "fail-closed" });
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitForDetail(fixture.ui, "container running");
+
+  await fixture.pi.setActiveTools(fixture.pi.getActiveTools().filter((name) => name !== "write"));
+  assert.deepEqual(await toolCallOf(fixture.pi)({ toolName: "bash" }), { block: true, reason: "POLICY_DENIED" });
+  assert.ok(fixture.pi.getActiveTools().includes("write"), "the Realm write is put back");
+});
+
+void test("P16 (e): a status whose mode cannot be read is refused: no host tool changes and the guarded call is refused", async () => {
+  const fixture = makeFixture({ mode: "fail-closed" });
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitForDetail(fixture.ui, "container running");
+
+  const setsBefore = fixture.pi.activeSets.length;
+  fixture.daemon.mode = "unreadable" as unknown as PolicyMode;
+  assert.deepEqual(await toolCallOf(fixture.pi)({ toolName: "bash" }), { block: true, reason: "POLICY_DENIED" });
+  assert.equal(fixture.pi.activeSets.length, setsBefore, "an unreadable mode changes no host tool");
 });

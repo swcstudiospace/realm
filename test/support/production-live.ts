@@ -9,6 +9,7 @@
 //
 // Nothing here prints a secret. A failure message carries exit codes, error codes, names and clipped probe output only.
 
+import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, writeFileSync, accessSync, constants, statSync } from "node:fs";
 import { connect } from "node:net";
@@ -28,6 +29,7 @@ import { controlSocketPath, type EnvironmentLike } from "../../src/session/paths
 export const LIVE_PRODUCTION_VARIABLE = "REALM_LIVE_PRODUCTION";
 export const LIVE_IMAGE_VARIABLE = "REALM_LIVE_IMAGE";
 export const LIVE_DRIVER_CONFIG_VARIABLE = "REALM_LIVE_DRIVER_CONFIG";
+export const LIVE_DRIVER_SOCKET_VARIABLE = "REALM_DRIVER_SOCKET";
 
 // The host facts the gate decides from. Each is injected, so the hermetic file can cover every branch.
 export interface ProductionGateInputs {
@@ -45,8 +47,8 @@ export interface ProductionGateInputs {
 }
 
 // The reason the production live suite cannot run, or false when every prerequisite holds. The reason names the FIRST missing
-// prerequisite, in this order: the operator opt-in, Podman 5.x, the image, REALM_LIVE_DRIVER_CONFIG, the rootless socket, the
-// openshell CLI and the built CLI. The opt-in is exactly "1": the test never sets it.
+// prerequisite, in this order: the operator opt-in, Podman 5.x, the image, REALM_LIVE_DRIVER_CONFIG, REALM_DRIVER_SOCKET, the
+// rootless socket, the openshell CLI and the built CLI. The opt-in is exactly "1": the test never sets it.
 export function productionSkipReason(inputs: ProductionGateInputs): string | false {
   const { env } = inputs;
   if (env[LIVE_PRODUCTION_VARIABLE] !== "1") {
@@ -65,6 +67,10 @@ export function productionSkipReason(inputs: ProductionGateInputs): string | fal
   }
   if (!readableDriverConfig(driverConfig, inputs.readConfig ?? ((path) => readFileSync(path, "utf8")))) {
     return `${LIVE_DRIVER_CONFIG_VARIABLE} is not a readable runtime config; it must be the config.json the running driver reads`;
+  }
+  const driverSocket = env[LIVE_DRIVER_SOCKET_VARIABLE];
+  if (driverSocket === undefined || !isAbsolute(driverSocket) || !inputs.isSocket(driverSocket)) {
+    return `${LIVE_DRIVER_SOCKET_VARIABLE} is not an absolute path to the socket the running compute driver binds; it must be the socket the daemon probes`;
   }
   const socket = podmanSocketPath(env);
   if (socket === undefined) {
@@ -461,6 +467,8 @@ export interface LiveInputs {
   readonly cliPath: string;
   // PATH, HOME and XDG_RUNTIME_DIR from the test's own environment: all the openshell CLI and podman receive.
   readonly hostEnvironment: Readonly<Record<string, string>>;
+  // The compute driver's socket the daemon probes (REALM_DRIVER_SOCKET), when the operator's environment names it.
+  readonly driverSocketPath?: string;
 }
 
 // Reads the live inputs after the gate has passed. A missing value throws naming the variable, never its content.
@@ -473,6 +481,7 @@ export function readLiveInputs(env: EnvironmentLike, cliPath: string): LiveInput
     return value;
   };
   const configPath = required(LIVE_DRIVER_CONFIG_VARIABLE);
+  const driverSocket = env[LIVE_DRIVER_SOCKET_VARIABLE];
   const roots = runtimeRootsOf(loadRuntimeConfig(JSON.parse(readFileSync(configPath, "utf8"))));
   return {
     image: required(LIVE_IMAGE_VARIABLE),
@@ -481,6 +490,7 @@ export function readLiveInputs(env: EnvironmentLike, cliPath: string): LiveInput
     workspaceRoot: roots.workspaceRoot,
     cliPath,
     hostEnvironment: selectOpenShellEnvironment(env),
+    ...(driverSocket === undefined ? {} : { driverSocketPath: driverSocket }),
   };
 }
 
@@ -538,6 +548,7 @@ export function createScenarioEnvironment(inputs: LiveInputs, spec: ScenarioSpec
     cliEnvironment: {
       ...inputs.hostEnvironment,
       XDG_CONFIG_HOME: configHome,
+      ...(inputs.driverSocketPath === undefined ? {} : { REALM_DRIVER_SOCKET: inputs.driverSocketPath }),
     },
   };
 }
@@ -1105,4 +1116,50 @@ export function startMcpSession(inputs: LiveInputs, scenario: ScenarioEnvironmen
       return clip(stderrText);
     },
   };
+}
+
+// ---- MCP client helpers -------------------------------------------------------------------------------------------------
+// The MCP calls the live suites make against `realm mcp`. A tool result is checked before its value is returned.
+
+// The legacy revision a realm mcp session handshakes with (src/mcp/protocol.ts), the one Claude Code uses.
+export const MCP_LEGACY_REVISION = "2025-11-25";
+// The bound on every MCP response. The first one, the answer to initialize, is the exception: realm mcp claims the workspace
+// before it reads any input (src/cli/main.ts runMcp: ensure the daemon, then up, then serve), so that answer waits for the
+// attach, which has its own 60 s control bound after the daemon start. A hung server fails the test with a clear message, unless
+// the 5 minute scenario timeout fires first: the sum of the bounds can exceed it.
+export const MCP_RESPONSE_TIMEOUT_MS = 60_000;
+export const MCP_FIRST_RESPONSE_TIMEOUT_MS = 150_000;
+
+// The value under key of a JSON object, or undefined for anything else.
+export function field(value: unknown, key: string): unknown {
+  return typeof value === "object" && value !== null ? Reflect.get(value, key) : undefined;
+}
+
+// One tools/call. The result is an MCP tool result: structuredContent is the dispatcher outcome unchanged ({outcome: "done", tool,
+// value} for a tool that ran) and content carries the same JSON as a text block, which is what a host shows to the model. A refusal
+// or a RealmError comes back as a tool error (isError, structuredContent with the catalogue code), because the daemon client throws
+// the refusal's code. Both fail the scenario with that code.
+export async function callTool(session: McpSession, tool: string, args: Readonly<Record<string, unknown>>): Promise<unknown> {
+  const result = await session.request("tools/call", { name: tool, arguments: args }, MCP_RESPONSE_TIMEOUT_MS);
+  const outcome = field(result, "structuredContent");
+  if (field(result, "isError") === true) {
+    assert.fail(`tools/call ${tool} returned a tool error: ${describeValue(outcome)}; realm mcp stderr ${session.stderr()}`);
+  }
+  assert.equal(field(outcome, "outcome"), "done", `tools/call ${tool}: ${describeValue(result)}; realm mcp stderr ${session.stderr()}`);
+  assert.equal(field(outcome, "tool"), tool, `tools/call ${tool}: the outcome names another tool: ${describeValue(result)}`);
+  const blocks = field(result, "content");
+  const first: unknown = Array.isArray(blocks) ? (blocks as unknown[])[0] : undefined;
+  assert.equal(field(first, "type"), "text", `tools/call ${tool}: the result needs a text content block for the model: ${describeValue(result)}`);
+  return field(outcome, "value");
+}
+
+// The initialize handshake of a realm mcp session with the legacy revision.
+export async function initializeMcp(session: McpSession): Promise<void> {
+  const initialized = await session.request(
+    "initialize",
+    { protocolVersion: MCP_LEGACY_REVISION, capabilities: {}, clientInfo: { name: "realm-live-suite", version: "0" } },
+    MCP_FIRST_RESPONSE_TIMEOUT_MS,
+  );
+  assert.equal(field(initialized, "protocolVersion"), MCP_LEGACY_REVISION, `initialize: ${describeValue(initialized)}`);
+  session.notify("notifications/initialized");
 }

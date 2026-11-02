@@ -1,8 +1,13 @@
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createServer } from "node:net";
+import { tmpdir } from "node:os";
+import { isAbsolute, join, relative } from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { RealmError, type ErrorCode } from "../../src/core/errors.js";
 import {
+  answerOfConnectError,
   createOpenShellAgentOsDriver,
   GATEWAY_STATUS_TIMEOUT_MS,
   type OpenShellAgentOsDriverOptions,
@@ -15,6 +20,8 @@ const RUNNER = "/usr/local/lib/realm/agentos-runner.js";
 const PROBE = "/usr/local/lib/realm/agentos-probe.js";
 const TIMEOUT_MS = 2500;
 const PROBE_INTERVAL_MS = 5;
+// A socket path with nothing bound to it, for tests that do not exercise the driver probe.
+const ABSENT_DRIVER_SOCKET = "/nonexistent-realm-driver/driver.sock";
 
 // The runner child's argv for one session: the pinned exec form that runs the runner in that session's sandbox (D-92).
 function runnerExecFor(sessionId: string): string[] {
@@ -44,6 +51,10 @@ interface Answers {
   // Makes every spawned runner child exit as soon as it is spawned.
   readonly childExitsOnSpawn?: boolean;
   readonly startTimeoutMs?: number;
+  // The compute driver socket the driver probe connects to. Default: a path that does not exist.
+  readonly driverSocketPath?: string;
+  // Builds the driver with no driverSocketPath at all, so no socket is configured.
+  readonly noDriverSocket?: boolean;
   // Holds every probe until the test releases it, so a stop can overtake a start that is waiting for its runner.
   readonly probeGate?: Promise<void>;
 }
@@ -146,6 +157,7 @@ function harness(answers: Answers = {}): Harness {
     probePath: PROBE,
     startTimeoutMs: answers.startTimeoutMs ?? TIMEOUT_MS,
     callTimeoutMs: TIMEOUT_MS,
+    ...(answers.noDriverSocket === true ? {} : { driverSocketPath: answers.driverSocketPath ?? ABSENT_DRIVER_SOCKET }),
     probeIntervalMs: PROBE_INTERVAL_MS,
   };
   return { options, steps, calls, spawns, children };
@@ -160,6 +172,7 @@ function driverOf(h: Harness) {
     stop: () => driver.stop(SESSION),
     runnerExited: () => driver.runnerExited(SESSION),
     gatewayAnswers: () => driver.gatewayAnswers(),
+    driverAnswers: () => driver.driverAnswers(),
   };
 }
 
@@ -389,4 +402,72 @@ void test("the runner argv carries no privileged flag, no mount, and no host soc
     argv.some((token) => token.includes("podman.sock") || token.includes("docker.sock")),
     false,
   );
+});
+
+void test("OBS-04: driverAnswers is true only while a socket accepts a connection at the driver socket path, and runs no OpenShell command", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "realm-driver-probe-"));
+  t.after(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const socketPath = join(dir, "driver.sock");
+  const h = harness({ driverSocketPath: socketPath });
+  const driver = driverOf(h);
+  assert.equal(await driver.driverAnswers(), false, "no socket at the path is a driver that does not answer");
+  const server = createServer();
+  t.after(() => {
+    server.close();
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(socketPath, () => {
+      resolve();
+    });
+  });
+  assert.equal(await driver.driverAnswers(), true, "a socket that accepts a connection is a driver that answers");
+  assert.equal(h.calls.length, 0, "the driver probe runs no OpenShell command");
+});
+
+void test("OBS-04: driverAnswers is false for a path that is not a listening socket", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "realm-driver-probe-"));
+  t.after(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const plain = join(dir, "not-a-socket");
+  writeFileSync(plain, "");
+  assert.equal(await driverOf(harness({ driverSocketPath: plain })).driverAnswers(), false, "a regular file is not a driver");
+});
+
+void test("OBS-04: driverAnswers is null when no socket path is configured, and runs no connection or OpenShell command", async () => {
+  const h = harness({ noDriverSocket: true });
+  assert.equal(await driverOf(h).driverAnswers(), null, "no configured socket is a driver that is not probed, not one that does not answer");
+  assert.equal(h.calls.length, 0, "the driver probe runs no OpenShell command");
+});
+
+void test("OBS-04: driverAnswers is null for a relative socket path, which is never probed even when it names a listening socket", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "realm-driver-probe-"));
+  t.after(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const socketPath = join(dir, "driver.sock");
+  const server = createServer();
+  t.after(() => {
+    server.close();
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(socketPath, () => {
+      resolve();
+    });
+  });
+  const relativePath = relative(process.cwd(), socketPath);
+  assert.equal(isAbsolute(relativePath), false, "the path under test is relative");
+  assert.equal(await driverOf(harness({ driverSocketPath: relativePath })).driverAnswers(), null, "a relative path is not probed");
+});
+
+void test("OBS-04: a permission error from the driver socket is no answer, while a refused or absent socket is false", () => {
+  assert.equal(answerOfConnectError("EACCES"), null, "a permission error is not evidence that the driver is gone");
+  assert.equal(answerOfConnectError("EPERM"), null, "a permission error is not evidence that the driver is gone");
+  assert.equal(answerOfConnectError("ECONNREFUSED"), false);
+  assert.equal(answerOfConnectError("ENOENT"), false);
+  assert.equal(answerOfConnectError(undefined), false, "an error with no code is a failed probe");
 });

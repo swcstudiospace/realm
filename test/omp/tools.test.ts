@@ -9,6 +9,7 @@ import {
   READ_ONLY_HOST_TOOLS,
   REALM_TOOL_NAMES,
   failClosedToolNames,
+  planHostTools,
   realmToolDefinitions,
   sameToolNames,
   type HostToolDefinition,
@@ -175,3 +176,48 @@ void test("OMPX-02: the pass-through names are the Realm tools, the read-only bu
     "write",
   ]);
 });
+
+// OMPX-03, OMPX-04 and P16 (c, d): the plan the host tool set is brought to, for a policy mode, from what Omp reports now.
+void test("B1 and B9: advisory plans every tool Omp reports, the Realm write included, and owes nothing", () => {
+  const plan = planHostTools("advisory", OMP_NAMES_WITH_REALM_TOOLS, OMP_NAMES_WITH_REALM_TOOLS, []);
+  assert.deepEqual(sortedOf(plan.wanted), sortedOf(OMP_NAMES_WITH_REALM_TOOLS));
+  assert.ok(plan.wanted.includes("write"), "the Realm write is wanted whatever the realm state");
+  assert.deepEqual(plan.owed, []);
+});
+
+void test("OMPX-03: fail-closed plans the allowlist and owes every other registered tool it removes", () => {
+  const plan = planHostTools("fail-closed", OMP_NAMES_WITH_REALM_TOOLS, OMP_NAMES_WITH_REALM_TOOLS, []);
+  assert.deepEqual(sortedOf(plan.wanted), sortedOf(failClosedToolNames(OMP_NAMES_WITH_REALM_TOOLS)));
+  for (const name of ["bash", "edit", "web_search"]) {
+    assert.ok(plan.owed.includes(name), `${name} is owed`);
+  }
+  assert.ok(!plan.owed.includes("write"), "the Realm write is kept, not owed");
+});
+
+void test("OMPX-03: leaving fail-closed gives back the built-ins it removed", () => {
+  const closed = planHostTools("fail-closed", OMP_NAMES_WITH_REALM_TOOLS, OMP_NAMES_WITH_REALM_TOOLS, []);
+  const open = planHostTools("advisory", OMP_NAMES_WITH_REALM_TOOLS, closed.wanted, closed.owed);
+  assert.deepEqual(sortedOf(open.wanted), sortedOf(OMP_NAMES_WITH_REALM_TOOLS));
+  assert.deepEqual(open.owed, []);
+});
+
+void test("P16 (c): fail-closed plans a tool another extension adds as removed, so a drift in the same mode is restored", () => {
+  const plan = planHostTools(
+    "fail-closed",
+    [...OMP_NAMES_WITH_REALM_TOOLS, "mcp_tool"],
+    [...OMP_NAMES_WITH_REALM_TOOLS, "mcp_tool"],
+    [],
+  );
+  assert.ok(!plan.wanted.includes("mcp_tool"), "the added tool is not wanted");
+  assert.ok(plan.owed.includes("mcp_tool"), "the added tool is removed");
+});
+
+void test("P16 (d): an owed tool Omp no longer registers is not restored, so the plan never waits on a name that cannot come back", () => {
+  const plan = planHostTools("advisory", ["read"], ["read"], ["bash"]);
+  assert.deepEqual(plan.wanted, ["read"]);
+  assert.deepEqual(plan.owed, []);
+});
+
+function sortedOf(names: readonly string[]): string[] {
+  return [...names].sort();
+}

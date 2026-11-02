@@ -268,6 +268,20 @@ void test("TOOL-03: write audit lines carry the byte count and sha256 of the con
   assert.equal("content" in result, false);
 });
 
+void test("TOOL-03: a write's admission line carries the sha256 of its input, the digest its result line reports (D-90, D-98)", (t) => {
+  const f = makeFixture(t);
+  const content = "admission digest é€";
+  const result = writeWorkspaceFile(depsFor(f), { path: "doc.txt", content });
+  assert.equal(result.sha256, sha256Of(content));
+
+  const [admission, outcome] = auditLines(f);
+  assert.ok(admission !== undefined, "the admission line is present");
+  assert.equal(admission["phase"], "admission");
+  assert.equal(admission["sha256"], sha256Of(content), "the admission line names the bytes before the write runs");
+  assert.equal(admission["sha256"], outcome?.["sha256"]);
+  assert.equal("bytes" in admission, false, "the admission line records no byte count");
+});
+
 void test("TOOL-03: the byte count of a write is its UTF-8 length, not its character count (D-42)", (t) => {
   const f = makeFixture(t);
   const content = "é€";

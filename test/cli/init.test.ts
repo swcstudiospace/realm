@@ -2,9 +2,9 @@
 // explicit modes. The environment names XDG_CONFIG_HOME and XDG_STATE_HOME inside that directory, so no test
 // reads or writes the host's configuration. Test titles cite their requirement ID.
 
-import { after, test } from "node:test";
+import { after, test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import {
+import fs, {
   chmodSync,
   existsSync,
   lstatSync,
@@ -18,11 +18,12 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { syncBuiltinESMExports } from "node:module";
+import { dirname, join } from "node:path";
 import { CLI_COMMANDS, runCli, type CliResult } from "../../src/cli/main.js";
 import { InitRefusal, runInit as runInitDirect } from "../../src/cli/init.js";
 import { loadPolicyFileDetailed } from "../../src/core/policy.js";
-import { loadRuntimeConfig } from "../../src/runtime/config.js";
+import { loadRuntimeConfig, runtimeRootsOf } from "../../src/runtime/config.js";
 import { resolveConfigPath } from "../../src/runtime/host-paths.js";
 import type { EnvironmentLike } from "../../src/session/paths.js";
 
@@ -83,6 +84,23 @@ function modeOf(path: string): number {
   return statSync(path).mode & 0o777;
 }
 
+// Follow the filesystem spy pattern used by test/support/fsync-spy.ts. Only the selected entry's owner differs;
+// the CLI still observes real directories, permissions and file effects, without requiring a privileged chown.
+function reportForeignOwner(t: TestContext, target: string): void {
+  const real = fs.lstatSync;
+  const mocked = t.mock.method(fs, "lstatSync", ((path: fs.PathLike): fs.Stats => {
+    const stats = real(path);
+    return path === target
+      ? Object.assign(Object.create(stats) as fs.Stats, { uid: (process.getuid?.() ?? 0) + 1 })
+      : stats;
+  }) as typeof fs.lstatSync);
+  syncBuiltinESMExports();
+  t.after(() => {
+    mocked.mock.restore();
+    syncBuiltinESMExports();
+  });
+}
+
 // Nothing a refused run could have created: neither file, the state directory, nor the config directory.
 function assertNothingWritten(f: Fixture): void {
   assert.equal(existsSync(f.configPath), false, "config.json must not be written");
@@ -133,7 +151,7 @@ void test("the written files load through the daemon's own loaders (ONB-01)", as
   assert.equal(loaded.modeSource, "explicit", "the mode is written explicitly, not left to the default");
 });
 
-void test("the state directory is created at mode 0700 and only that directory's mode is set (ONB-01)", async () => {
+void test("the state directory is created at mode 0700 without changing existing ancestor modes (ONB-01)", async () => {
   const f = fixture();
   const parent = join(f.root, "parent");
   mkdirSync(parent);
@@ -144,6 +162,142 @@ void test("the state directory is created at mode 0700 and only that directory's
   assert.equal(modeOf(stateDir), 0o700);
   assert.equal(modeOf(parent), 0o755, "a parent directory keeps its own mode");
   assert.equal(modeOf(f.root), 0o755, "the scratch root keeps its own mode");
+});
+
+void test("init provisions the runtime loader's default private roots, without config overrides (ONB-01, ONB-03)", async () => {
+  for (const mask of [0o022, 0o077]) {
+    const f = fixture();
+    chmodSync(f.workspace, 0o750);
+    const previousMask = process.umask(mask);
+    try {
+      const result = await runInit(f, explicitArgs(f));
+      assert.equal(result.exitCode, 0, result.stderr);
+      const input = JSON.parse(readFileSync(f.configPath, "utf8")) as Record<string, unknown>;
+      const runtime = runtimeRootsOf(loadRuntimeConfig(input));
+      for (const path of [f.stateDir, runtime.secretRoot, runtime.sandboxStateRoot]) {
+        assert.equal(lstatSync(path).isDirectory(), true, path);
+        assert.equal(modeOf(path), 0o700, path);
+      }
+      assert.deepEqual(readdirSync(runtime.secretRoot), []);
+      assert.deepEqual(readdirSync(runtime.sandboxStateRoot), []);
+      assert.equal(Object.hasOwn(input, "secretRoot"), false, "the runtime loader remains the only default derivation");
+      assert.equal(Object.hasOwn(input, "sandboxStateRoot"), false);
+      assert.equal(modeOf(f.configPath), 0o600);
+      assert.equal(modeOf(f.policyPath), 0o600);
+      assert.equal(modeOf(f.workspace), 0o750, "workspace mode is never changed");
+      assert.equal(modeOf(f.root), 0o755, "ancestor mode is never changed");
+    } finally {
+      process.umask(previousMask);
+    }
+  }
+});
+
+void test("safe existing private roots retain their identity and contents while a missing peer is created (ONB-01, ONB-03)", async () => {
+  for (const existing of [["secrets"], ["sandboxes"], ["secrets", "sandboxes"]]) {
+    const f = fixture();
+    mkdirSync(f.stateDir, { mode: 0o700 });
+    const identities = new Map<string, number>();
+    for (const name of existing) {
+      const path = join(f.stateDir, name);
+      mkdirSync(path, { mode: 0o700 });
+      writeFileSync(join(path, "retained"), SENTINEL);
+      identities.set(path, lstatSync(path).ino);
+    }
+    const result = await runInit(f, explicitArgs(f));
+    assert.equal(result.exitCode, 0, result.stderr);
+    for (const name of ["secrets", "sandboxes"]) {
+      const path = join(f.stateDir, name);
+      assert.equal(modeOf(path), 0o700);
+      if (identities.has(path)) {
+        assert.equal(lstatSync(path).ino, identities.get(path));
+        assert.equal(readFileSync(join(path, "retained"), "utf8"), SENTINEL);
+      } else {
+        assert.deepEqual(readdirSync(path), []);
+      }
+    }
+  }
+});
+
+void test("unsafe existing private roots refuse before any template or missing peer is created (ONB-01, ONB-03)", async () => {
+  for (const name of ["secrets", "sandboxes"]) {
+    for (const kind of ["link", "dangling-link", "file", "mode", "special-mode"] as const) {
+      const f = fixture();
+      mkdirSync(f.stateDir, { mode: 0o700 });
+      const path = join(f.stateDir, name);
+      const target = join(f.root, "outside");
+      if (kind === "link") {
+        mkdirSync(target, { mode: 0o755 });
+        writeFileSync(join(target, "retained"), SENTINEL);
+        symlinkSync(target, path);
+      } else if (kind === "dangling-link") {
+        symlinkSync(target, path);
+      } else if (kind === "file") {
+        writeFileSync(path, SENTINEL);
+      } else {
+        mkdirSync(path);
+        chmodSync(path, kind === "mode" ? 0o755 : 0o1700);
+      }
+      const before = lstatSync(path);
+      const result = await runInit(f, explicitArgs(f));
+      assert.equal(result.exitCode, 1, `${name}: ${kind}`);
+      assert.equal(result.stdout, "SCHEMA_INVALID\n");
+      assert.ok(result.stderr.includes(path), result.stderr);
+      assert.equal(existsSync(f.configPath), false);
+      assert.equal(existsSync(f.policyPath), false);
+      assert.equal(existsSync(join(f.root, "config")), false);
+      assert.deepEqual(readdirSync(f.stateDir), [name], "preflight must inspect both roots before creating either");
+      assert.equal(lstatSync(path).ino, before.ino);
+      assert.equal(lstatSync(path).mode, before.mode, "unsafe entries are refused, never repaired");
+      if (kind === "link") {
+        assert.equal(modeOf(target), 0o755);
+        assert.equal(readFileSync(join(target, "retained"), "utf8"), SENTINEL);
+      } else if (kind === "dangling-link") {
+        assert.equal(existsSync(target), false);
+      } else if (kind === "file") {
+        assert.equal(readFileSync(path, "utf8"), SENTINEL);
+      }
+    }
+  }
+});
+
+for (const name of ["state", "secrets", "sandboxes", "workspace"]) {
+  void test(`init refuses a foreign-owned ${name} without changing it (ONB-01, ONB-03)`, async (t) => {
+    const f = fixture();
+    mkdirSync(f.stateDir, { mode: 0o700 });
+    const path = name === "state" ? f.stateDir : name === "workspace" ? f.workspace : join(f.stateDir, name);
+    if (name === "secrets" || name === "sandboxes") {
+      mkdirSync(path, { mode: 0o700 });
+    }
+    const before = lstatSync(path);
+    reportForeignOwner(t, path);
+    const result = await runInit(f, explicitArgs(f));
+    assert.equal(result.exitCode, 1);
+    assert.equal(result.stdout, "SCHEMA_INVALID\n");
+    assert.match(result.stderr, /not owned by this account/);
+    assert.equal(lstatSync(path).ino, before.ino);
+    assert.equal(lstatSync(path).mode, before.mode);
+    assert.equal(existsSync(f.configPath), false);
+    assert.equal(existsSync(f.policyPath), false);
+    assert.equal(existsSync(join(f.root, "config")), false);
+    assert.deepEqual(readdirSync(f.stateDir), name === "secrets" || name === "sandboxes" ? [name] : []);
+  });
+}
+
+void test("a second init refuses without altering templates or private roots (ONB-01, ONB-03)", async () => {
+  const f = fixture();
+  assert.equal((await runInit(f, explicitArgs(f))).exitCode, 0);
+  const config = readFileSync(f.configPath, "utf8");
+  const policy = readFileSync(f.policyPath, "utf8");
+  const secret = join(f.stateDir, "secrets", "retained");
+  writeFileSync(secret, SENTINEL);
+  const result = await runInit(f, explicitArgs(f));
+  assert.equal(result.exitCode, 1);
+  assert.match(result.stderr, /already exists/);
+  assert.equal(readFileSync(f.configPath, "utf8"), config);
+  assert.equal(readFileSync(f.policyPath, "utf8"), policy);
+  assert.equal(readFileSync(secret, "utf8"), SENTINEL);
+  assert.equal(modeOf(join(f.stateDir, "secrets")), 0o700);
+  assert.equal(modeOf(join(f.stateDir, "sandboxes")), 0o700);
 });
 
 void test("without --state-dir the state directory comes from an absolute XDG_STATE_HOME (ONB-01)", async () => {
@@ -486,11 +640,209 @@ void test("a failure after a name is linked leaves no published or temp file (ON
     );
     assert.equal(existsSync(f.policyPath), false, `${failing}: policy.json is removed`);
     assert.equal(existsSync(f.configPath), false, `${failing}: config.json is removed`);
-    assert.deepEqual(readdirSync(f.stateDir), [], `${failing}: the state directory holds no temp file`);
+    assert.deepEqual(readdirSync(f.stateDir).sort(), ["sandboxes", "secrets"], `${failing}: no template or temp remains`);
+    for (const name of ["secrets", "sandboxes"]) {
+      const path = join(f.stateDir, name);
+      assert.deepEqual(readdirSync(path), [], `${failing}: private roots remain empty`);
+      assert.equal(modeOf(path), 0o700);
+    }
     assert.deepEqual(
       readdirSync(join(f.root, "config", "realm")),
       [],
       `${failing}: the config directory holds no temp file`,
     );
   }
+});
+
+void test("a CLI publication failure after preflight rolls back templates and reports retained directories (ONB-01)", async (t) => {
+  const f = fixture();
+  const real = fs.linkSync;
+  const mocked = t.mock.method(fs, "linkSync", (existing: fs.PathLike, target: fs.PathLike): void => {
+    if (target === f.configPath) {
+      throw Object.assign(new Error("injected publication failure"), { code: "EIO" });
+    }
+    real(existing, target);
+  });
+  syncBuiltinESMExports();
+  t.after(() => {
+    mocked.mock.restore();
+    syncBuiltinESMExports();
+  });
+  const result = await runInit(f, explicitArgs(f));
+  assert.equal(result.exitCode, 1);
+  assert.equal(result.stdout, "WRITE_NOT_ATOMIC\n");
+  assert.ok(result.stderr.includes(f.configPath), result.stderr);
+  assert.match(result.stderr, /EIO/);
+  assert.match(result.stderr, /directories created by this run remain/);
+  assert.equal(existsSync(f.policyPath), false, "the first publication is rolled back");
+  assert.equal(existsSync(f.configPath), false);
+  assert.deepEqual(readdirSync(dirname(f.configPath)), [], "no temporary template remains");
+  assert.deepEqual(readdirSync(f.stateDir).sort(), ["sandboxes", "secrets"]);
+  for (const path of [f.stateDir, join(f.stateDir, "secrets"), join(f.stateDir, "sandboxes")]) {
+    assert.equal(modeOf(path), 0o700);
+    assert.ok(result.stderr.includes(path), "retained directories are named rather than silently left behind");
+  }
+});
+
+void test("a racing config publisher is not clobbered and the first template is rolled back (ONB-01)", () => {
+  const f = fixture();
+  assert.throws(
+    () => runInitDirect(
+      { image: IMAGE, workspace: f.workspace, stateDir: f.stateDir },
+      {
+        env: f.env,
+        cwd: f.root,
+        afterLink: (path) => {
+          if (path === f.policyPath) {
+            writeFileSync(f.configPath, SENTINEL, { flag: "wx", mode: 0o600 });
+          }
+        },
+      },
+    ),
+    (error: unknown) => error instanceof InitRefusal && error.code === "SCHEMA_INVALID",
+  );
+  assert.equal(readFileSync(f.configPath, "utf8"), SENTINEL);
+  assert.equal(existsSync(f.policyPath), false);
+  assert.deepEqual(readdirSync(dirname(f.configPath)), ["config.json"]);
+  assert.deepEqual(readdirSync(f.stateDir).sort(), ["sandboxes", "secrets"]);
+});
+
+void test("a file at stateDir is refused without creating private roots or templates (ONB-01)", async () => {
+  const f = fixture();
+  writeFileSync(f.stateDir, SENTINEL);
+  const result = await runInit(f, explicitArgs(f));
+  assert.equal(result.exitCode, 1);
+  assert.equal(result.stdout, "SCHEMA_INVALID\n");
+  assert.match(result.stderr, /not a directory/);
+  assert.equal(readFileSync(f.stateDir, "utf8"), SENTINEL);
+  assert.equal(existsSync(f.configPath), false);
+  assert.equal(existsSync(join(f.root, "config")), false);
+});
+
+void test("a symlinked state ancestor is refused without changing its target (ONB-01, ONB-03)", async () => {
+  const f = fixture();
+  const target = join(f.root, "outside");
+  const alias = join(f.root, "alias");
+  mkdirSync(target);
+  chmodSync(target, 0o755);
+  symlinkSync(target, alias);
+  const result = await runInit(f, [
+    "--image", IMAGE, "--workspace", f.workspace, "--state-dir", join(alias, "state"),
+  ]);
+  assert.equal(result.exitCode, 1);
+  assert.equal(result.stdout, "SCHEMA_INVALID\n");
+  assert.match(result.stderr, /symbolic link/);
+  assert.equal(modeOf(target), 0o755);
+  assert.deepEqual(readdirSync(target), []);
+  assert.equal(existsSync(f.configPath), false);
+  assert.equal(existsSync(join(f.root, "config")), false);
+});
+
+void test("a trailing separator cannot hide a symlinked state directory (ONB-01)", async () => {
+  const f = fixture();
+  const target = join(f.root, "outside");
+  mkdirSync(target, { mode: 0o700 });
+  symlinkSync(target, f.stateDir);
+  const result = await runInit(f, [
+    "--image", IMAGE, "--workspace", f.workspace, "--state-dir", `${f.stateDir}/`,
+  ]);
+  assert.equal(result.exitCode, 1);
+  assert.match(result.stderr, /symbolic link/);
+  assert.deepEqual(readdirSync(target), []);
+  assert.equal(existsSync(f.configPath), false);
+});
+
+void test("a root that becomes unsafe after preflight is refused at creation, not chmodded (ONB-01, ONB-03)", async (t) => {
+  const f = fixture();
+  const sandboxRoot = join(f.stateDir, "sandboxes");
+  const real = fs.mkdirSync;
+  const mocked = t.mock.method(fs, "mkdirSync", ((path: fs.PathLike, options?: fs.MakeDirectoryOptions): string | undefined => {
+    const made = real(path, options);
+    if (path === f.stateDir) {
+      writeFileSync(sandboxRoot, SENTINEL);
+    }
+    return made;
+  }) as typeof fs.mkdirSync);
+  syncBuiltinESMExports();
+  t.after(() => {
+    mocked.mock.restore();
+    syncBuiltinESMExports();
+  });
+  const result = await runInit(f, explicitArgs(f));
+  assert.equal(result.exitCode, 1);
+  assert.equal(result.stdout, "SCHEMA_INVALID\n");
+  assert.ok(result.stderr.includes(sandboxRoot), result.stderr);
+  assert.match(result.stderr, /not a directory/);
+  assert.match(result.stderr, /directories created by this run remain/);
+  assert.equal(readFileSync(sandboxRoot, "utf8"), SENTINEL);
+  assert.equal(existsSync(f.policyPath), false);
+  assert.equal(existsSync(f.configPath), false);
+  assert.equal(existsSync(join(f.root, "config")), false);
+  assert.equal(modeOf(join(f.stateDir, "secrets")), 0o700);
+});
+
+void test("failure to create a private root is a CLI write failure with no published templates (ONB-01, ONB-03)", async (t) => {
+  const f = fixture();
+  const sandboxRoot = join(f.stateDir, "sandboxes");
+  const real = fs.mkdirSync;
+  const mocked = t.mock.method(fs, "mkdirSync", ((path: fs.PathLike, options?: fs.MakeDirectoryOptions): string | undefined => {
+    if (path === sandboxRoot) {
+      throw Object.assign(new Error("injected mkdir refusal"), { code: "EACCES" });
+    }
+    return real(path, options);
+  }) as typeof fs.mkdirSync);
+  syncBuiltinESMExports();
+  t.after(() => {
+    mocked.mock.restore();
+    syncBuiltinESMExports();
+  });
+  const result = await runInit(f, explicitArgs(f));
+  assert.equal(result.exitCode, 1);
+  assert.equal(result.stdout, "WRITE_NOT_ATOMIC\n");
+  assert.ok(result.stderr.includes(sandboxRoot), result.stderr);
+  assert.match(result.stderr, /EACCES/);
+  assert.match(result.stderr, /directories created by this run remain/);
+  assert.equal(existsSync(f.policyPath), false);
+  assert.equal(existsSync(f.configPath), false);
+  assert.equal(existsSync(join(f.root, "config")), false);
+  assert.deepEqual(readdirSync(f.stateDir), ["secrets"]);
+  assert.equal(modeOf(join(f.stateDir, "secrets")), 0o700);
+});
+
+void test("a failed rollback explicitly names the published policy that could not be removed (ONB-01)", (t) => {
+  const f = fixture();
+  const real = fs.unlinkSync;
+  const mocked = t.mock.method(fs, "unlinkSync", (path: fs.PathLike): void => {
+    if (path === f.policyPath) {
+      throw Object.assign(new Error("injected cleanup refusal"), { code: "EACCES" });
+    }
+    real(path);
+  });
+  syncBuiltinESMExports();
+  t.after(() => {
+    mocked.mock.restore();
+    syncBuiltinESMExports();
+  });
+  assert.throws(
+    () => runInitDirect(
+      { image: IMAGE, workspace: f.workspace, stateDir: f.stateDir },
+      {
+        env: f.env,
+        cwd: f.root,
+        afterLink: (path) => {
+          if (path === f.configPath) {
+            throw new Error("injected failure after second publication");
+          }
+        },
+      },
+    ),
+    (error: unknown) => error instanceof InitRefusal
+      && error.code === "CLEANUP_FAILED"
+      && error.detail.includes(f.policyPath)
+      && error.detail.includes("remove it before retrying"),
+  );
+  assert.equal(existsSync(f.configPath), false);
+  assert.equal(existsSync(f.policyPath), true, "the reported failed cleanup is observable");
+  assert.deepEqual(readdirSync(dirname(f.configPath)), []);
+  assert.deepEqual(readdirSync(f.stateDir).sort(), ["policy.json", "sandboxes", "secrets"]);
 });

@@ -2,7 +2,7 @@
 //
 // The plugin composes, never constructs. It holds no lifecycle, policy, or runtime object: the
 // daemon owns the sandbox, the policy, and the session, and this host attaches to it through the
-// DaemonClient that RealmPluginOptions.attachDaemon resolves. src/omp/extension.ts is the edge that
+// DaemonClient, and any refusal it carries, that RealmPluginOptions.attachDaemon resolves. src/omp/extension.ts is the edge that
 // builds that client and the only module in the Omp wiring that reads the environment.
 //
 // Verified host surface (docs/integration/omp.md, Phase 5 verification pass). Only these names are used:
@@ -39,7 +39,8 @@ import type { StateSnapshot } from "../core/state-machine.js";
 import { STATUS_LABELS, displayStatus } from "../core/status.js";
 import {
   PASS_THROUGH_HOST_TOOLS,
-  failClosedToolNames,
+  REALM_WRITE_NAME,
+  planHostTools,
   realmToolDefinitions,
   sameToolNames,
   type DaemonCall,
@@ -93,10 +94,18 @@ export interface OmpExtensionApi {
 
 // ---- Daemon status and plugin options --------------------------------------
 
+// The attach result. refusal is the up error when the daemon answered but refused the realm (for example a Podman probe
+// refusal). The client is adopted for tool calls either way; refusal is null when the up succeeded.
+export interface DaemonAttach {
+  readonly client: DaemonClient;
+  readonly refusal: RealmError | null;
+}
+
 export interface RealmPluginOptions {
   // Resolves the daemon client bound to workspaceRoot: ensures a daemon answers, connects, and runs
-  // the idempotent up. Rejects with a RealmError when the attach fails.
-  readonly attachDaemon: (workspaceRoot: string) => Promise<DaemonClient>;
+  // the idempotent up. Rejects with a RealmError when the attach fails. A refused up that leaves a live daemon resolves with its
+  // refusal, so the client is still adopted and the refusal is shown.
+  readonly attachDaemon: (workspaceRoot: string) => Promise<DaemonAttach>;
 }
 
 export interface ActiveSession {
@@ -117,6 +126,9 @@ export interface ActiveSession {
   // The error the poll last painted, with the stamp it carried. A repeat of the same error reuses the
   // stamp, so the repaint stays quiet until the transition really changes.
   errorStamp: { readonly code: string; readonly at: string } | null;
+  // The refusal the last attach reported, with the state the daemon reported alongside it. It stays on screen while the
+  // daemon keeps reporting that state; a status read that reports a different state replaces it. Null when none stands.
+  refusal: { readonly code: string; readonly state: StateSnapshot["state"] } | null;
 }
 
 // Startup budget for attach plus its first status read. The daemon owns the policy, so this mirrors
@@ -137,9 +149,9 @@ export const REALM_STATUS_KEY = "realm";
 export const REALM_RETRY_COMMAND = "realm-retry";
 
 // Host tools the tool_call guard checks against the daemon status: edit, the built-in that writes outside the realm. The Realm
-// write is not guarded here. It replaces the built-in write (spike S1) and reaches the daemon, whose dispatcher waits out
-// connecting and runs the mutation gate, so a write is decided there rather than refused early. The pass-through names
-// (PASS_THROUGH_HOST_TOOLS) pass the guard; in fail-closed mode the backstop refuses every other tool name.
+// write is never hidden: it replaces the built-in write (spike S1), reaches the daemon in every state, and the daemon decides it
+// (advisory: the write lands with its warning; fail-closed: refused). The names in PASS_THROUGH_HOST_TOOLS pass the guard; in
+// fail-closed mode the backstop refuses every other tool name.
 export const GUARDED_HOST_TOOLS: readonly string[] = Object.freeze(["edit"]);
 
 // ---- Status rendering (OMP-02, OMP-03; P5-D5) -------------------------------
@@ -167,6 +179,27 @@ export function renderRealmStatus(ui: OmpStatusUi, snapshot: StateSnapshot): voi
   // render repaints instead of skipping it (MED-03).
   ui.setStatus(REALM_STATUS_KEY, text);
   lastPainted.set(ui, text);
+}
+
+// Paints a refusal the attach reported, in the same error rendering a thrown attach error uses: the reason is the refusal's code.
+// The stamp is kept while the same code stands, so repaint ticks stay quiet.
+function paintRefusal(session: ActiveSession, code: string): void {
+  const at = session.errorStamp?.code === code ? session.errorStamp.at : nowIso();
+  session.errorStamp = { code, at };
+  renderRealmStatus(session.ctx.ui, { state: "error", reason: code, lastTransitionAt: at });
+}
+
+// Paints one successful status read. While the daemon reports the state a refusal was reported in, the refusal stays on
+// screen. A read that reports a different state replaces it with the snapshot.
+function paintStatusRead(session: ActiveSession, snapshot: StateSnapshot): void {
+  const refusal = session.refusal;
+  if (refusal !== null && refusal.state === snapshot.state) {
+    paintRefusal(session, refusal.code);
+    return;
+  }
+  session.refusal = null;
+  session.errorStamp = null;
+  renderRealmStatus(session.ctx.ui, snapshot);
 }
 
 // ---- Managed timers ----------------------------------------------------------
@@ -204,7 +237,7 @@ export function registerRealmPlugin(pi: OmpExtensionApi, options: RealmPluginOpt
   let live: ActiveSession | null = null;
   let attempt = 0;
   // The host tool set, shared by every session of this registration.
-  const hostTools: HostToolSet = { pi, mode: null, removed: [], queue: Promise.resolve() };
+  const hostTools: HostToolSet = { pi, removed: [], queue: Promise.resolve() };
 
   // Ends the captured session. Every timer it armed is cleared and its wait settled, and the poll
   // is cleared, so the host runs no callback for an ended session. The client is closed, never taken
@@ -239,6 +272,7 @@ export function registerRealmPlugin(pi: OmpExtensionApi, options: RealmPluginOpt
     const isCurrent = (): boolean => live === session && attempt === mine;
     session.client?.close();
     session.client = null;
+    session.refusal = null;
     const { ctx } = session;
     renderRealmStatus(ctx.ui, { state: "connecting", reason: "connecting", lastTransitionAt: nowIso() });
 
@@ -260,22 +294,32 @@ export function registerRealmPlugin(pi: OmpExtensionApi, options: RealmPluginOpt
         rejectBudget(makeRealmError("REALM_NOT_ACTIVE"));
       },
     );
-    // The attach and its first status read share one budget; a client is adopted only with its status. The host tool set
-    // follows the mode that status reports, inside the same budget, and only while this attempt may still change it.
+    // The attach and its first status read share one budget. A client is adopted once the daemon answers its status, even when
+    // the host tool set refuses the mode that status reports: the refusal is painted and the last published mode stays (P16 b).
+    // The host tool set follows the mode inside the same budget, and only while this attempt may still change it.
     const pending = Promise.resolve()
       .then(() => options.attachDaemon(ctx.cwd))
-      .then(async (client) => {
+      .then(async ({ client, refusal }) => {
         try {
           const status = await client.status();
-          await setHostMode(session.tools, status.mode, () => isCurrent() && !spent);
-          return { client, status };
+          const mode = modeOf(status);
+          const hostCode = await setHostMode(session.tools, mode, () => isCurrent() && !spent).then(
+            () => null,
+            () => "POLICY_DENIED" as const,
+          );
+          return { client, refusal, status, hostCode };
         } catch (error: unknown) {
           client.close();
           throw error;
         }
       });
 
-    let attached: { readonly client: DaemonClient; readonly status: DaemonStatus } | null = null;
+    let attached: {
+      readonly client: DaemonClient;
+      readonly status: DaemonStatus;
+      readonly refusal: RealmError | null;
+      readonly hostCode: "POLICY_DENIED" | null;
+    } | null = null;
     let code = "OPENSHELL_START_FAILED";
     try {
       attached = await Promise.race([pending, budget]);
@@ -295,12 +339,30 @@ export function registerRealmPlugin(pi: OmpExtensionApi, options: RealmPluginOpt
       renderRealmStatus(ctx.ui, { state: "error", reason: code, lastTransitionAt: nowIso() });
       return { outcome: "failed", code };
     }
+    // The daemon answered, so the client is adopted for tool calls, a refused up included. The mode is published only once the tool set has taken it.
     session.client = attached.client;
-    session.mode = attached.status.mode;
-    renderRealmStatus(ctx.ui, attached.status.snapshot);
+    session.refusal =
+      attached.refusal === null ? null : { code: attached.refusal.code, state: attached.status.snapshot.state };
+    if (attached.hostCode === null) {
+      session.mode = attached.status.mode;
+      if (attached.refusal === null) {
+        renderRealmStatus(ctx.ui, attached.status.snapshot);
+      } else {
+        session.errorStamp = null;
+        paintRefusal(session, attached.refusal.code);
+      }
+    } else {
+      renderRealmStatus(ctx.ui, { state: "error", reason: attached.hostCode, lastTransitionAt: nowIso() });
+    }
     // The daemon keeps its startup-reap notice for its lifetime; each attach shows it once.
     if (attached.status.notice !== undefined) {
       ctx.ui.notify(attached.status.notice);
+    }
+    if (attached.hostCode !== null) {
+      return { outcome: "failed", code: attached.hostCode };
+    }
+    if (attached.refusal !== null) {
+      return { outcome: "failed", code: attached.refusal.code };
     }
     return { outcome: "attached", snapshot: attached.status.snapshot };
   };
@@ -326,15 +388,24 @@ export function registerRealmPlugin(pi: OmpExtensionApi, options: RealmPluginOpt
         const at = session.errorStamp?.code === code ? session.errorStamp.at : nowIso();
         session.errorStamp = { code, at };
         renderRealmStatus(session.ctx.ui, { state: "error", reason: code, lastTransitionAt: at });
+        try {
+          await reassertLastMode(session, isCurrent);
+        } catch {
+          if (isCurrent()) {
+            const denied = "POLICY_DENIED";
+            const deniedAt = session.errorStamp.code === denied ? session.errorStamp.at : nowIso();
+            session.errorStamp = { code: denied, at: deniedAt };
+            renderRealmStatus(session.ctx.ui, { state: "error", reason: denied, lastTransitionAt: deniedAt });
+          }
+        }
         return;
       }
       if (!isCurrent()) {
         return;
       }
-      session.mode = status.mode;
       // The poll moves the host tool set with the mode it reports, so a change does not wait for a guarded call.
       try {
-        await setHostMode(session.tools, status.mode, isCurrent);
+        await setHostMode(session.tools, modeOf(status), isCurrent);
       } catch {
         if (isCurrent()) {
           const code = "POLICY_DENIED";
@@ -347,8 +418,8 @@ export function registerRealmPlugin(pi: OmpExtensionApi, options: RealmPluginOpt
       if (!isCurrent()) {
         return;
       }
-      session.errorStamp = null;
-      renderRealmStatus(session.ctx.ui, status.snapshot);
+      session.mode = status.mode;
+      paintStatusRead(session, status.snapshot);
     } finally {
       session.refreshing = false;
     }
@@ -382,6 +453,7 @@ export function registerRealmPlugin(pi: OmpExtensionApi, options: RealmPluginOpt
       poll: null,
       refreshing: false,
       errorStamp: null,
+      refusal: null,
     };
     live = session;
     session.poll = {
@@ -398,18 +470,25 @@ export function registerRealmPlugin(pi: OmpExtensionApi, options: RealmPluginOpt
   });
 
   // The Realm tools (OMPX-02) register at load in every mode. Which built-ins stay callable follows the mode the daemon reports.
-  const callDaemon: DaemonCall = (call) => {
-    const client = live?.client ?? null;
-    if (client === null) {
-      return Promise.reject(makeRealmError("REALM_NOT_ACTIVE"));
+  // A call reaches the daemon whenever a client is adopted, whatever state the realm reports (B1, B9); with no client it is refused
+  // before any daemon call (B2). An advisory write that lands in a non-active state carries the daemon's warning, shown on every call.
+  const callDaemon: DaemonCall = async (call) => {
+    const session = live;
+    const client = session?.client ?? null;
+    if (session === null || client === null) {
+      throw makeRealmError("REALM_NOT_ACTIVE");
     }
-    return client.call(call);
+    const outcome = await client.call(call);
+    if (outcome.outcome === "done" && outcome.tool === "write" && outcome.value.warning !== null && live === session) {
+      session.ctx.ui.notify(outcome.value.warning);
+    }
+    return outcome;
   };
   for (const tool of realmToolDefinitions(callDaemon)) {
     pi.registerTool(tool);
   }
 
-  pi.on("tool_call", (call) => guardHostToolCall(call.toolName, live));
+  pi.on("tool_call", (call) => guardHostToolCall(call.toolName, live, hostTools));
 
   pi.registerCommand(REALM_RETRY_COMMAND, {
     description: "Retry the realm startup through the daemon attach path.",
@@ -430,8 +509,9 @@ function nowIso(): string {
 // hook) is NOT covered by this guard and must not be claimed as covered. Required mode is the
 // fail-closed policy mode (the default); advisory mode, set explicitly in the policy file, warns and lets the call through.
 //
-// The Realm tools pass the guard. write, read, list, exec and status reach the daemon, whose own dispatcher waits out
-// connecting and runs the mutation gate, so a write is decided there and is not refused early here.
+// The Realm tools pass the guard. read, list, exec and status reach the daemon, whose own dispatcher waits out connecting
+// and runs the mutation gate. The Realm write also reaches the daemon in every state (B1 to B3): the guard reads the status
+// only to keep the host tool set in step with the mode, and the daemon decides the write.
 //
 // Edit is the mutation check. It reads the daemon status: the state decides, and the mode decides a non-active state
 // (advisory warns, fail-closed blocks). It mirrors decideMutation (src/core/policy.ts) and the gate outcomes of
@@ -441,27 +521,26 @@ function nowIso(): string {
 // is the primary control: a removed tool is refused by Omp before this hook runs, so the backstop answers the calls that
 // do reach it, such as a tool another extension registers.
 //
-// The state comes from a daemon status read bounded by GUARD_STATUS_BUDGET_MS. When edit's state cannot be read, the last
-// known mode decides: advisory (explicit opt-in) warns; fail-closed, or no mode yet, blocks. Any other host tool whose status
-// cannot be read is refused, because its mode is unconfirmed.
+// The state comes from a daemon status read bounded by GUARD_STATUS_BUDGET_MS. When the status cannot be read, the last
+// published mode decides: advisory warns a guarded call, fail-closed, or no mode yet, refuses it. Any other host tool whose
+// status cannot be read is refused, because its mode is unconfirmed.
 
 export async function guardHostToolCall(
   toolName: unknown,
   session: ActiveSession | null,
+  tools: HostToolSet,
 ): Promise<HostToolVerdict | undefined> {
   if (typeof toolName !== "string") {
     // A call the guard cannot classify is refused, never waved through (LOW-01).
     return { block: true, reason: "realm bad tool call" };
   }
-  const guarded = GUARDED_HOST_TOOLS.includes(toolName);
-  const passThrough = PASS_THROUGH_HOST_TOOLS.includes(toolName);
   if (session === null) {
-    if (guarded) {
+    if (GUARDED_HOST_TOOLS.includes(toolName)) {
       return { block: true, reason: "realm not started" };
     }
-    return passThrough ? undefined : { block: true, reason: "POLICY_DENIED" };
+    return PASS_THROUGH_HOST_TOOLS.includes(toolName) ? undefined : { block: true, reason: "POLICY_DENIED" };
   }
-  if (passThrough) {
+  if (PASS_THROUGH_HOST_TOOLS.includes(toolName) && toolName !== REALM_WRITE_NAME) {
     return undefined;
   }
   // Any other host tool is decided by the mode the daemon reports now, so the status is read here, not taken from an earlier read.
@@ -469,6 +548,7 @@ export async function guardHostToolCall(
   // The session can move to another client while this guard awaits (a retry, a reattach or a shutdown). Any verdict built on
   // the earlier client is stale, so a moved session refuses the call with REALM_NOT_ACTIVE instead.
   const moved = (): boolean => session.client !== client;
+  const isCurrent = (): boolean => session.client === client;
   let status: DaemonStatus;
   try {
     status = await readStatus(session);
@@ -476,15 +556,26 @@ export async function guardHostToolCall(
     if (moved()) {
       return { block: true, reason: "REALM_NOT_ACTIVE" };
     }
-    return guarded ? unreadableVerdict(session, error) : { block: true, reason: "POLICY_DENIED" };
+    try {
+      await reassertLastMode(session, isCurrent);
+    } catch {
+      return { block: true, reason: "POLICY_DENIED" };
+    }
+    if (toolName === REALM_WRITE_NAME) {
+      // The Realm write is never hidden, so the daemon decides it. With no client the daemon call is refused there (B2).
+      return undefined;
+    }
+    if (GUARDED_HOST_TOOLS.includes(toolName)) {
+      return unreadableVerdict(session, error);
+    }
+    return { block: true, reason: "POLICY_DENIED" };
   }
   if (moved()) {
     return { block: true, reason: "REALM_NOT_ACTIVE" };
   }
-  session.mode = status.mode;
-  renderRealmStatus(session.ctx.ui, status.snapshot);
+  paintStatusRead(session, status.snapshot);
   try {
-    await setHostMode(session.tools, status.mode, () => session.client === client);
+    await setHostMode(tools, modeOf(status), isCurrent);
   } catch {
     return { block: true, reason: "POLICY_DENIED" };
   }
@@ -492,7 +583,12 @@ export async function guardHostToolCall(
   if (moved()) {
     return { block: true, reason: "REALM_NOT_ACTIVE" };
   }
-  if (guarded) {
+  // The mode is published only once the tool set has taken it (P16 b): a refused change leaves the last published mode in place.
+  session.mode = status.mode;
+  if (toolName === REALM_WRITE_NAME) {
+    return undefined;
+  }
+  if (GUARDED_HOST_TOOLS.includes(toolName)) {
     const verdict = stateVerdict(session, status.mode, status.snapshot.state);
     if (verdict !== undefined) {
       return verdict;
@@ -506,18 +602,37 @@ export async function guardHostToolCall(
 // set serves every session of the registration: a new session, a retry or a restarted daemon starts from what was last applied.
 export interface HostToolSet {
   readonly pi: OmpExtensionApi;
-  // The mode the tool set reflects; null until one has been applied.
-  mode: PolicyMode | null;
-  // Built-ins this plugin removed and has not put back. An advisory change restores them.
+  // The built-ins this plugin removed in fail-closed mode and has not put back. An advisory plan gives back the ones Omp still registers.
   removed: string[];
   // Changes run one at a time, so a setter already in flight finishes before the next one starts.
   queue: Promise<void>;
 }
 
-// Brings the host tool set to mode. A change starts only if isCurrent still holds when its turn in the queue comes, so a
+// The policy mode a status reports. A mode that cannot be read is refused, so the status changes no host tool (P16 e).
+function modeOf(status: DaemonStatus): PolicyMode {
+  if (!isPolicyMode(status.mode)) {
+    throw makeRealmError("POLICY_DENIED");
+  }
+  return status.mode;
+}
+
+function isPolicyMode(value: unknown): value is PolicyMode {
+  return value === "advisory" || value === "fail-closed";
+}
+
+// The realm cannot be read, so it counts as disconnected. The tool set still follows the last published mode, so a drift is
+// restored (P16 c). The Realm write is never hidden (B9).
+function reassertLastMode(session: ActiveSession, isCurrent: () => boolean): Promise<void> {
+  if (session.mode === null) {
+    return Promise.resolve();
+  }
+  return setHostMode(session.tools, session.mode, isCurrent);
+}
+
+// Brings the host tool set to posture. A change starts only if isCurrent still holds when its turn in the queue comes, so a
 // superseded attempt, an attempt past its budget, or a shut-down session changes nothing. Rejects with POLICY_DENIED when the
 // set does not read back as wanted.
-export function setHostMode(tools: HostToolSet, mode: PolicyMode, isCurrent: () => boolean): Promise<void> {
+function setHostMode(tools: HostToolSet, mode: PolicyMode, isCurrent: () => boolean): Promise<void> {
   const change = tools.queue.then(() => applyHostMode(tools, mode, isCurrent));
   tools.queue = change.then(
     () => undefined,
@@ -526,34 +641,30 @@ export function setHostMode(tools: HostToolSet, mode: PolicyMode, isCurrent: () 
   return change;
 }
 
+// Plans from what Omp reports now, not from the last applied mode, so a drift in the same mode is restored too (P16 c). The
+// removals stay owed until the set reads back as wanted, so a refused change still owes its restore (P16 b).
 async function applyHostMode(tools: HostToolSet, mode: PolicyMode, isCurrent: () => boolean): Promise<void> {
-  if (tools.mode === mode || !isCurrent()) {
+  if (!isCurrent()) {
     return;
   }
   const { pi } = tools;
+  const active = pi.getActiveTools();
+  const plan = planHostTools(mode, pi.getAllTools().map((tool) => tool.name), active, tools.removed);
+  // Owed before the setter runs, so a removal that only partly holds is still owed a restore.
+  tools.removed = [...new Set([...tools.removed, ...plan.owed])];
+  if (sameToolNames(active, plan.wanted)) {
+    tools.removed = [...plan.owed];
+    return;
+  }
   try {
-    if (mode === "fail-closed") {
-      // The allowlist (spike rule 1). Recorded before the setter runs, so a removal that only partly holds is still owed a restore.
-      const wanted = failClosedToolNames(pi.getAllTools().map((tool) => tool.name));
-      const removing = pi.getActiveTools().filter((name) => !wanted.includes(name));
-      tools.removed = [...new Set([...tools.removed, ...removing])];
-      await pi.setActiveTools(wanted);
-      if (!sameToolNames(pi.getActiveTools(), wanted)) {
-        throw new Error("the removal did not hold");
-      }
-    } else if (tools.removed.length > 0) {
-      // Advisory keeps the built-ins available, so the ones this plugin removed come back.
-      const wanted = [...new Set([...pi.getActiveTools(), ...tools.removed])];
-      await pi.setActiveTools(wanted);
-      if (!sameToolNames(pi.getActiveTools(), wanted)) {
-        throw new Error("the restore did not hold");
-      }
-      tools.removed = [];
+    await pi.setActiveTools(plan.wanted);
+    if (!sameToolNames(pi.getActiveTools(), plan.wanted)) {
+      throw new Error("the active set did not read back as wanted");
     }
   } catch {
     throw makeRealmError("POLICY_DENIED");
   }
-  tools.mode = mode;
+  tools.removed = [...plan.owed];
 }
 
 // One status read under a managed timer. The timer expiry rejects with TOOL_TIMEOUT, so a hung

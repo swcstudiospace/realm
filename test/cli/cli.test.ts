@@ -4,9 +4,10 @@
 // the daemon client (liveness probes and the mcp dispatcher), and the probe runs against fake
 // runCommand/connectSocket. Test titles cite their requirement ID.
 
-import { after, test } from "node:test";
+import { after, test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { PassThrough, Writable } from "node:stream";
@@ -1053,4 +1054,262 @@ void test("realm status prints the daemon's notice inside the JSON result with n
   assert.equal(result.exitCode, 0);
   const printed = JSON.parse(result.stdout) as Record<string, unknown>;
   assert.equal(printed["notice"], STARTUP_NOTICE);
+});
+
+function doctorFixFixture(t: TestContext): {
+  readonly root: string;
+  readonly stateDir: string;
+  readonly workspace: string;
+  readonly home: string;
+  readonly deps: CliDeps;
+  readonly effects: string[];
+} {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "realm-cli-fix-")));
+  t.after(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+  const home = join(root, "home");
+  const workspace = join(root, "workspace");
+  const stateDir = join(root, "state");
+  mkdirSync(home);
+  mkdirSync(workspace);
+  const effects: string[] = [];
+  const deps: CliDeps = {
+    env: { HOME: home, XDG_CONFIG_HOME: join(root, "config") },
+    cwd: join(root, "not-the-configured-workspace"),
+    readConfig: () => ({
+      image: `registry.example.com/realm/workload@sha256:${"0".repeat(64)}`,
+      stateDir,
+      workspaceRoot: workspace,
+    }),
+    send: (_socketPath, request) => {
+      effects.push(`send:${request.method}`);
+      return Promise.resolve({ id: request.id, result: [] });
+    },
+    connect: () => {
+      effects.push("connect");
+      return fakeDaemon({ probes: [true] }).connect("");
+    },
+    spawn: () => {
+      effects.push("spawn");
+      return { unref: () => undefined };
+    },
+    runCommand: () => Promise.reject(new Error("not installed")),
+    connectSocket: refuseConnect,
+  };
+  return { root, stateDir, workspace, home, deps, effects };
+}
+
+function readFixReport(text: string): { readonly dryRun: unknown; readonly fixes: readonly unknown[]; readonly checks: readonly unknown[] } {
+  const report: unknown = JSON.parse(text);
+  assert.ok(typeof report === "object" && report !== null && "dryRun" in report && "fixes" in report && "checks" in report);
+  assert.equal(typeof report.dryRun, "boolean");
+  assert.ok(Array.isArray(report.fixes));
+  assert.ok(Array.isArray(report.checks));
+  const fixes: readonly unknown[] = report.fixes;
+  const checks: readonly unknown[] = report.checks;
+  return { dryRun: report.dryRun, fixes, checks };
+}
+
+void test("ONB-02: doctor --fix repairs locally even when a daemon answers, reports actions and is idempotent", async (t) => {
+  const { root, stateDir, deps, effects } = doctorFixFixture(t);
+  mkdirSync(stateDir);
+  chmodSync(stateDir, 0o755);
+  writeFileSync(join(stateDir, "keep.txt"), "untouched");
+  const unrelated = join(root, "unrelated");
+  mkdirSync(unrelated);
+  chmodSync(unrelated, 0o755);
+  const ordinary = await runCli(["doctor"], deps);
+  assert.equal(ordinary.exitCode, 0);
+  assert.deepEqual(effects, ["send:doctor"]);
+  effects.length = 0;
+
+  const first = await runCli(["doctor", "--fix"], deps);
+  assert.equal(first.exitCode, 0, first.stderr);
+  const report = readFixReport(first.stdout);
+  assert.equal(report.dryRun, false);
+  const expectedPaths = [stateDir, join(stateDir, "run"), join(stateDir, "sessions")];
+  assert.deepEqual(report.fixes, [
+    { kind: "set-mode", path: stateDir, previousMode: 0o755, mode: 0o700 },
+    { kind: "create-directory", path: join(stateDir, "run"), mode: 0o700 },
+    { kind: "create-directory", path: join(stateDir, "sessions"), mode: 0o700 },
+  ]);
+  for (const path of expectedPaths) {
+    assert.equal(statSync(path).mode & 0o777, 0o700);
+    assert.ok(first.stderr.includes(path));
+  }
+  assert.ok(report.checks.some((check) => typeof check === "object" && check !== null && "id" in check && check.id === "runtime-roots"));
+  assert.deepEqual(effects, [], "repair never asks, starts or connects to the daemon");
+  assert.equal(readFileSync(join(stateDir, "keep.txt"), "utf8"), "untouched");
+  assert.equal(statSync(unrelated).mode & 0o777, 0o755);
+  assert.equal(existsSync(join(stateDir, "secrets")), false, "private-root provisioning is not a repair action");
+  assert.equal(existsSync(join(stateDir, "sandboxes")), false);
+
+  const second = await runCli(["doctor", "--fix"], deps);
+  assert.equal(second.exitCode, 0);
+  assert.deepEqual(readFixReport(second.stdout).fixes, []);
+  assert.deepEqual(effects, []);
+});
+
+void test("ONB-02: doctor --fix --dry-run reports proposed actions without creating or changing anything", async (t) => {
+  const { stateDir, deps, effects } = doctorFixFixture(t);
+  const missing = await runCli(["doctor", "--fix", "--dry-run"], deps);
+  assert.equal(missing.exitCode, 0, missing.stderr);
+  assert.equal(readFixReport(missing.stdout).dryRun, true);
+  assert.equal(existsSync(stateDir), false);
+  mkdirSync(stateDir);
+  chmodSync(stateDir, 0o755);
+  const planned = await runCli(["doctor", "--fix", "--dry-run"], deps);
+  assert.equal(planned.exitCode, 0, planned.stderr);
+  assert.equal(statSync(stateDir).mode & 0o777, 0o755);
+  assert.equal(existsSync(join(stateDir, "run")), false);
+  assert.equal(existsSync(join(stateDir, "sessions")), false);
+  assert.match(planned.stderr, /would/);
+  const applied = await runCli(["doctor", "--fix"], deps);
+  assert.deepEqual(readFixReport(applied.stdout).fixes, readFixReport(planned.stdout).fixes);
+  assert.deepEqual(effects, []);
+});
+
+void test("ONB-02: invalid doctor flags are usage errors before reading config or contacting the daemon", async () => {
+  for (const words of [
+    ["--dry-run"], ["--fix", "--fix"], ["--fix", "--dry-run", "--dry-run"],
+    ["--dry-run", "--fix"], ["--fix", "extra"], ["--fix=true"], ["--force"], ["--workspace", "/tmp"],
+  ]) {
+    const result = await runCli(["doctor", ...words], {
+      env: {},
+      readConfig: () => assert.fail("invalid flags must not read config"),
+      send: () => assert.fail("invalid flags must not contact a daemon"),
+    });
+    assert.equal(result.exitCode, 2);
+    assert.equal(result.stdout, "");
+    assert.match(result.stderr, /doctor.*--fix.*--dry-run/);
+  }
+  for (const command of ["up", "status", "down", "metrics", "mcp", "acp"]) {
+    assert.equal((await runCli([command, "--fix"], { env: {} })).exitCode, 2);
+  }
+});
+
+void test("ONB-02: doctor --fix protects configured workspace and HOME rather than the CLI cwd", async (t) => {
+  const { workspace, home, deps, effects } = doctorFixFixture(t);
+  for (const stateDir of [workspace, home, dirname(workspace)]) {
+    const before = statSync(stateDir).mode;
+    for (const words of [["--fix"], ["--fix", "--dry-run"]]) {
+      const result = await runCli(["doctor", ...words], {
+        ...deps,
+        readConfig: () => ({
+          image: `registry.example.com/realm/workload@sha256:${"0".repeat(64)}`,
+          stateDir,
+          workspaceRoot: workspace,
+        }),
+      });
+      assert.equal(result.exitCode, 1, result.stderr);
+      assert.equal(result.stdout, "SCHEMA_INVALID\n");
+      assert.ok(result.stderr.includes(ERROR_CATALOGUE.SCHEMA_INVALID.reason));
+      assert.equal(statSync(stateDir).mode, before);
+      assert.equal(existsSync(join(stateDir, "run")), false);
+    }
+  }
+  assert.deepEqual(effects, []);
+});
+
+void test("ONB-02: doctor --fix refuses symlink children before tightening the state directory", async (t) => {
+  const { root, stateDir, deps, effects } = doctorFixFixture(t);
+  const outside = join(root, "outside");
+  mkdirSync(outside);
+  chmodSync(outside, 0o755);
+  mkdirSync(stateDir);
+  chmodSync(stateDir, 0o755);
+  symlinkSync(outside, join(stateDir, "sessions"));
+  for (const words of [["--fix"], ["--fix", "--dry-run"]]) {
+    const result = await runCli(["doctor", ...words], deps);
+    assert.equal(result.exitCode, 1);
+    assert.equal(result.stdout, "SCHEMA_INVALID\n");
+    assert.ok(result.stderr.includes(ERROR_CATALOGUE.SCHEMA_INVALID.reason));
+    assert.match(result.stderr, /symlink/);
+    assert.equal(statSync(stateDir).mode & 0o777, 0o755);
+    assert.equal(statSync(outside).mode & 0o777, 0o755);
+    assert.equal(existsSync(join(stateDir, "run")), false);
+  }
+  assert.deepEqual(effects, []);
+});
+
+void test("ONB-02: doctor --fix refuses missing config with an init hint while ordinary doctor stays diagnostic", async (t) => {
+  const { deps, effects } = doctorFixFixture(t);
+  const unreadable = { ...deps, readConfig: () => { throw new RealmError("SCHEMA_INVALID"); } };
+  const fix = await runCli(["doctor", "--fix"], unreadable);
+  assert.equal(fix.exitCode, 1);
+  assert.equal(fix.stdout, "SCHEMA_INVALID\n");
+  assert.match(fix.stderr, /realm init/);
+  const ordinary = await runCli(["doctor"], unreadable);
+  assert.equal(ordinary.exitCode, 0);
+  assert.deepEqual(effects, []);
+});
+
+void test("ONB-02: the real CLI process exposes dry-run, repair, idempotency, refusal and strict usage", testTimeout(120_000), (t) => {
+  const { root, stateDir, workspace, home } = doctorFixFixture(t);
+  const configHome = join(root, "config");
+  mkdirSync(join(configHome, "realm"), { recursive: true });
+  writeFileSync(join(configHome, "realm", "config.json"), JSON.stringify({
+    image: `registry.example.com/realm/workload@sha256:${"0".repeat(64)}`,
+    stateDir,
+    workspaceRoot: workspace,
+  }));
+  mkdirSync(stateDir);
+  chmodSync(stateDir, 0o755);
+  const entry = join(ROOT, "dist", "src", "cli", "main.js");
+  const options = {
+    cwd: root,
+    // An empty PATH and isolated account config keep the real diagnostic probes off the host stack.
+    env: { PATH: join(root, "no-binaries"), HOME: home, XDG_CONFIG_HOME: configHome },
+    encoding: "utf8" as const,
+    timeout: scaledMs(20_000),
+  };
+  const dry = spawnSync(process.execPath, [entry, "doctor", "--fix", "--dry-run"], options);
+  assert.equal(dry.error, undefined);
+  assert.equal(dry.status, 0, dry.stderr);
+  assert.equal(readFixReport(dry.stdout).dryRun, true);
+  assert.equal(statSync(stateDir).mode & 0o777, 0o755);
+  assert.equal(existsSync(join(stateDir, "sessions")), false);
+  const fixed = spawnSync(process.execPath, [entry, "doctor", "--fix"], options);
+  assert.equal(fixed.error, undefined);
+  assert.equal(fixed.status, 0, fixed.stderr);
+  assert.equal(statSync(stateDir).mode & 0o777, 0o700);
+  assert.equal(statSync(join(stateDir, "sessions")).mode & 0o777, 0o700);
+  assert.deepEqual(readFixReport(fixed.stdout).fixes, readFixReport(dry.stdout).fixes);
+  const again = spawnSync(process.execPath, [entry, "doctor", "--fix"], options);
+  assert.equal(again.status, 0, again.stderr);
+  assert.deepEqual(readFixReport(again.stdout).fixes, []);
+  const invalid = spawnSync(process.execPath, [entry, "doctor", "--dry-run"], options);
+  assert.equal(invalid.status, 2);
+  assert.match(invalid.stderr, /Usage:/);
+  rmSync(join(stateDir, "sessions"), { recursive: true });
+  symlinkSync(workspace, join(stateDir, "sessions"));
+  const refused = spawnSync(process.execPath, [entry, "doctor", "--fix"], options);
+  assert.equal(refused.status, 1);
+  assert.equal(refused.stdout, "SCHEMA_INVALID\n");
+  assert.ok(refused.stderr.includes(ERROR_CATALOGUE.SCHEMA_INVALID.reason));
+  const diagnostic = spawnSync(process.execPath, [entry, "doctor"], options);
+  assert.equal(diagnostic.status, 0, diagnostic.stderr);
+});
+
+function hasUidReader(value: NodeJS.Process): value is NodeJS.Process & { getuid: () => number } {
+  return typeof value.getuid === "function";
+}
+
+void test("ONB-02: doctor --fix refuses foreign ownership with a catalogue code and no mutation", async (t) => {
+  const { stateDir, deps, effects } = doctorFixFixture(t);
+  mkdirSync(stateDir);
+  chmodSync(stateDir, 0o755);
+  assert.ok(hasUidReader(process), "foreign ownership test requires the Linux UID reader");
+  const uid = process.getuid();
+  t.mock.method(process, "getuid", () => uid === 0 ? 1 : 0);
+  for (const words of [["--fix"], ["--fix", "--dry-run"]]) {
+    const result = await runCli(["doctor", ...words], deps);
+    assert.equal(result.exitCode, 1);
+    assert.equal(result.stdout, "SCHEMA_INVALID\n");
+    assert.match(result.stderr, /foreign-owner/);
+    assert.equal(statSync(stateDir).mode & 0o777, 0o755);
+    assert.equal(existsSync(join(stateDir, "run")), false);
+  }
+  assert.deepEqual(effects, []);
 });

@@ -15,7 +15,8 @@
 //      append after execution throws AUDIT_WRITE_FAILED and does not roll back the effect (OQ-P4-07).
 //
 // Audit lines carry the byte count and sha256 of the content moved, never the content (D-42,
-// D-90). A write records the UTF-8 byte length and the sha256 of what it wrote. A read records
+// D-90). A write records the UTF-8 byte length and the sha256 of what it wrote, and its admission line the
+// sha256 of its input. A read records
 // the length of the content it returned (at most maxBytes) and the sha256 that readFileCapped
 // reports, which covers the whole file. A list records neither.
 //
@@ -29,6 +30,7 @@
 // The handlers read no process.env. Every dependency arrives through WorkspaceDeps.
 
 import { Buffer } from "node:buffer";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import type { AuditEntryInput } from "../audit/log.js";
 import type { ListParams, ReadParams, WriteParams } from "../contract/validate.js";
@@ -77,6 +79,8 @@ export function writeWorkspaceFile(deps: WorkspaceDeps, params: WriteParams): Wr
   precheckLock(deps.locks, target, deps.sessionId);
 
   const bytes = Buffer.byteLength(params.content, "utf8");
+  // The digest of the input is known before the write, so the admission line names the same bytes as the result line.
+  const sha256 = createHash("sha256").update(params.content, "utf8").digest("hex");
   const written = audited(
     deps,
     "write",
@@ -89,6 +93,7 @@ export function writeWorkspaceFile(deps: WorkspaceDeps, params: WriteParams): Wr
         ...(params.ifMatchSha256 === undefined ? {} : { ifMatchSha256: params.ifMatchSha256 }),
       }),
     (result) => ({ bytes, sha256: result.sha256 }),
+    { sha256 },
   );
   return {
     sha256: written.sha256,
@@ -124,16 +129,18 @@ export function listWorkspaceDir(deps: WorkspaceDeps, params: Pick<ListParams, "
 
 // Runs one file call between its admission and result lines. The admission line is written
 // before execution, so a failed admission runs nothing. A RealmError from execution is recorded
-// as its code and rethrown. The result line carries facts only for a successful call.
+// as its code and rethrown. The result line carries facts only for a successful call. The
+// admission line carries admissionFacts: a write records the digest of its input there.
 function audited<T>(
   deps: WorkspaceDeps,
   tool: string,
   path: string,
   execute: () => T,
   factsOf: (value: T) => AuditFacts,
+  admissionFacts: AuditFacts = {},
 ): T {
   const line = { sessionId: deps.sessionId, tool, path };
-  deps.audit({ ...line, outcome: "ok", phase: "admission" });
+  deps.audit({ ...line, outcome: "ok", phase: "admission", ...admissionFacts });
   let value: T;
   try {
     value = execute();

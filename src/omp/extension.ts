@@ -7,12 +7,14 @@
 
 import { startDetachedDaemon } from "../cli/main.js";
 import { fileURLToPath } from "node:url";
-import { connectDaemon, type DaemonClient } from "../daemon/client.js";
+import { existsSync, realpathSync } from "node:fs";
+import { connectDaemon, type DaemonStatus } from "../daemon/client.js";
 import { CONTROL_TIMEOUT_MS } from "../daemon/channel.js";
 import { daemonAnswers, ensureDaemon, reportingStartFailure } from "../daemon/ensure.js";
 import { readHostRuntime } from "../runtime/host-paths.js";
 import { controlSocketPath } from "../session/paths.js";
-import { registerRealmPlugin, type OmpExtensionApi } from "./plugin.js";
+import { makeRealmError, RealmError } from "../core/errors.js";
+import { registerRealmPlugin, type DaemonAttach, type OmpExtensionApi } from "./plugin.js";
 
 export default function realmExtension(pi: OmpExtensionApi): void {
   // Read once, at the edge: the config's stateDir, the value the CLI and the daemon use. An invalid config throws here.
@@ -20,7 +22,7 @@ export default function realmExtension(pi: OmpExtensionApi): void {
   const socketPath = controlSocketPath(stateDir);
   const daemonEntry = fileURLToPath(new URL("../daemon/main.js", import.meta.url));
 
-  const attachDaemon = async (workspaceRoot: string): Promise<DaemonClient> => {
+  const attachDaemon = async (workspaceRoot: string): Promise<DaemonAttach> => {
     await ensureDaemon({
       socketPath,
       probe: reportingStartFailure(daemonAnswers(connectDaemon), stateDir),
@@ -34,11 +36,26 @@ export default function realmExtension(pi: OmpExtensionApi): void {
     const client = connectDaemon(socketPath);
     try {
       await client.up(workspaceRoot);
+      return { client, refusal: null };
     } catch (error: unknown) {
-      client.close();
-      throw error;
+      // A refused up leaves the daemon pinned to its own root. Keep the client only when its status answers and reports
+      // workspaceRoot as that root: the refusal is then returned with it, and the plugin shows the code and forwards calls
+      // (reachable, inactive). Otherwise the client closes and the refusal is rethrown, so no call can reach another project.
+      // A dead channel also closes the client and rethrows the up error.
+      let status: DaemonStatus;
+      try {
+        status = await client.status();
+      } catch {
+        client.close();
+        throw error;
+      }
+      // The daemon reports its root as a realpath. A daemon that reports no root predates the field, so its root is unknown.
+      if (status.boundRoot === undefined || !existsSync(workspaceRoot) || realpathSync(workspaceRoot) !== status.boundRoot) {
+        client.close();
+        throw error;
+      }
+      return { client, refusal: error instanceof RealmError ? error : makeRealmError("SCHEMA_INVALID") };
     }
-    return client;
   };
 
   registerRealmPlugin(pi, { attachDaemon });

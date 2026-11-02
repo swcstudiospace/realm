@@ -11,9 +11,10 @@
 //   3. REALM_LIVE_IMAGE: the digest-pinned image the running driver was given.
 //   4. REALM_LIVE_DRIVER_CONFIG: absolute path of the config.json the running driver reads. The roots come from that file.
 //      A stale REALM_DRIVER_*_ROOT variable is ignored.
-//   5. A rootless Podman API socket under XDG_RUNTIME_DIR.
-//   6. The openshell CLI on PATH.
-//   7. The built CLI at dist/src/cli/main.js, next to the compiled tests (npm run build).
+//   5. REALM_DRIVER_SOCKET: absolute path of the compute driver's socket, the one the daemon's driver probe connects to.
+//   6. A rootless Podman API socket under XDG_RUNTIME_DIR.
+//   7. The openshell CLI on PATH.
+//   8. The built CLI at dist/src/cli/main.js, next to the compiled tests (npm run build).
 // A default npm test therefore skips every scenario below (ten in all: default policy, immediate cycle, egress allowlist, wrong
 // image digest, crash recovery, MCP exec, the MCP exec timeout, the AgentOS runner exit, the daemon-side startup budget and a stopped gateway) and
 // reports each as skipped.
@@ -26,7 +27,7 @@
 // Removal scope. The suite creates and removes only its own sandbox (realm-daemon) and its own temporary directories. Each
 // scenario builds its own XDG config home with realm/config.json and a policy.json, and runs the CLI through execFile on the
 // current node binary with an explicit environment: PATH, HOME and XDG_RUNTIME_DIR from the test's own environment, the
-// scenario's XDG_CONFIG_HOME and the three driver roots. Every scenario runs `realm down` in its cleanup, even on failure, and
+// scenario's XDG_CONFIG_HOME, the three driver roots and REALM_DRIVER_SOCKET. Every scenario runs `realm down` in its cleanup, even on failure, and
 // then waits (bounded at 90 s) for zero containers, zero realm-* sandboxes, no realm-daemon directory under the secret and
 // sandbox-state roots, and an empty pinned workspace. The scenarios share one pinned root, so they run one after another.
 // Files the suite may leave in the pinned workspace are named in WORKSPACE_FILES below; cleanup removes exactly those names.
@@ -50,7 +51,13 @@ import { SANDBOX_WORKSPACE_PATH } from "../../src/runtime/openshell.js";
 import {
   KILL_RUNNER_ARGV,
   UNKNOWN_DIGEST_IMAGE,
+  callTool,
   canConnect,
+  field,
+  initializeMcp,
+  MCP_FIRST_RESPONSE_TIMEOUT_MS,
+  MCP_LEGACY_REVISION,
+  MCP_RESPONSE_TIMEOUT_MS,
   cleanupScenario,
   createScenarioEnvironment,
   decodeReadContent,
@@ -134,12 +141,6 @@ const CRASH_OBSERVE_TIMEOUT_MS = 10_000;
 const CRASH_OBSERVE_INTERVAL_MS = 500;
 // The bound on `realm status` reaching active after the crashed daemon's replacement came up, and after `realm mcp` attached.
 const ACTIVE_TIMEOUT_MS = 120_000;
-// The bound on every MCP response. The first one, the answer to initialize, is the exception: realm mcp claims the workspace
-// before it reads any input (src/cli/main.ts runMcp: ensure the daemon, then up, then serve), so that answer waits for the
-// attach, which has its own 60 s control bound after the daemon start. A hung server fails the test with a clear message, unless
-// the 5 minute scenario timeout fires first: the sum of the bounds can exceed it.
-const MCP_RESPONSE_TIMEOUT_MS = 60_000;
-const MCP_FIRST_RESPONSE_TIMEOUT_MS = 150_000;
 // The bound on realm mcp exiting after its stdin closes.
 const MCP_EXIT_TIMEOUT_MS = 30_000;
 // The most one MCP file read returns in this suite.
@@ -606,11 +607,12 @@ void test("production live 5: after the daemon is killed, the next realm up reap
     assert.ok(startupReapLineFor(daemonLog, crashedContainerId) !== undefined, `daemon.log must hold a daemon.startup record for one container that names ${crashedContainerId}`);
     assert.equal(jsonLinesSinceStartup(daemonLog), true, "every daemon.log line from the restart's daemon.startup record must be JSON");
     const auditFile = join(scenario.environment.stateDir, "audit", "daemon.jsonl");
-    const verified = await realmCli(scenario.inputs, scenario.environment, ["audit", "verify", auditFile], STATUS_TIMEOUT_MS);
+    const verified = await realmCli(scenario.inputs, scenario.environment, ["audit", "verify", "--file", auditFile], STATUS_TIMEOUT_MS);
     assertExit(verified, 0, "realm audit verify after the restart");
-    const report = JSON.parse(verified.stdout) as { ok?: boolean; unparsedLines?: readonly number[] };
+    const report = JSON.parse(verified.stdout) as { ok?: boolean; files?: readonly { unparsedLines?: readonly number[] }[] };
     assert.equal(report.ok, true, `realm audit verify must report ok: ${verified.stdout}`);
-    assert.ok(Array.isArray(report.unparsedLines) && report.unparsedLines.length <= 1, `unparsedLines must be empty or only a torn tail: ${verified.stdout}`);
+    const unparsedLines = report.files?.[0]?.unparsedLines;
+    assert.ok(Array.isArray(unparsedLines) && unparsedLines.length <= 1, `files[0].unparsedLines must be empty or only a torn tail: ${verified.stdout}`);
   } catch (error) {
     // With no daemon running, `realm down` reports "already down" and reaps nothing, so the sandbox the crash left would stay
     // and block the next scenario. One more realm up lets a daemon reap it for the cleanup's down. Its result is not judged and
@@ -626,32 +628,8 @@ void test("production live 5: after the daemon is killed, the next realm up reap
 
 // The two revisions one realm mcp process serves (src/mcp/protocol.ts): the session below handshakes with a legacy revision the
 // way Claude Code does, and later sends a modern request that names MCP_MODERN_REVISION in its _meta, the way Grok Build does.
-const MCP_LEGACY_REVISION = "2025-11-25";
 const MCP_MODERN_REVISION = "2026-07-28";
 const MCP_TOOL_NAMES: readonly string[] = ["exec", "read", "write", "list", "status", "retry"];
-
-// The value under key of a JSON object, or undefined for anything else.
-function field(value: unknown, key: string): unknown {
-  return typeof value === "object" && value !== null ? Reflect.get(value, key) : undefined;
-}
-
-// One tools/call. The result is an MCP tool result: structuredContent is the dispatcher outcome unchanged ({outcome: "done", tool,
-// value} for a tool that ran) and content carries the same JSON as a text block, which is what a host shows to the model. A refusal
-// or a RealmError comes back as a tool error (isError, structuredContent with the catalogue code), because the daemon client throws
-// the refusal's code. Both fail the scenario with that code.
-async function callTool(session: McpSession, tool: string, args: Readonly<Record<string, unknown>>): Promise<unknown> {
-  const result = await session.request("tools/call", { name: tool, arguments: args }, MCP_RESPONSE_TIMEOUT_MS);
-  const outcome = field(result, "structuredContent");
-  if (field(result, "isError") === true) {
-    assert.fail(`tools/call ${tool} returned a tool error: ${describeValue(outcome)}; realm mcp stderr ${session.stderr()}`);
-  }
-  assert.equal(field(outcome, "outcome"), "done", `tools/call ${tool}: ${describeValue(result)}; realm mcp stderr ${session.stderr()}`);
-  assert.equal(field(outcome, "tool"), tool, `tools/call ${tool}: the outcome names another tool: ${describeValue(result)}`);
-  const blocks = field(result, "content");
-  const first: unknown = Array.isArray(blocks) ? (blocks as unknown[])[0] : undefined;
-  assert.equal(field(first, "type"), "text", `tools/call ${tool}: the result needs a text content block for the model: ${describeValue(result)}`);
-  return field(outcome, "value");
-}
 
 async function runMcpSession(scenario: Scenario, session: McpSession): Promise<void> {
   // 1. The legacy handshake. realm mcp claims the workspace before it reads any input, so the first answer waits for the attach.
@@ -767,17 +745,6 @@ async function statusOf(scenario: Scenario): Promise<StatusFields> {
     assert.fail(`realm status must print the status JSON: ${describeResult(status)}`);
   }
   return fields;
-}
-
-// The initialize handshake of a realm mcp session, as scenario 6 opens it.
-async function initializeMcp(session: McpSession): Promise<void> {
-  const initialized = await session.request(
-    "initialize",
-    { protocolVersion: MCP_LEGACY_REVISION, capabilities: {}, clientInfo: { name: "realm-live-suite", version: "0" } },
-    MCP_FIRST_RESPONSE_TIMEOUT_MS,
-  );
-  assert.equal(field(initialized, "protocolVersion"), MCP_LEGACY_REVISION, `initialize: ${describeValue(initialized)}`);
-  session.notify("notifications/initialized");
 }
 
 void test("production live 7: an exec that outlives the per-call bound fails with a retryable TOOL_TIMEOUT and leaves the session usable", { skip: gate, timeout: SCENARIO_TIMEOUT_MS }, async (t) => {

@@ -495,27 +495,6 @@ export interface ChmodDeps {
   readonly chmod?: (path: string, mode: number) => void;
 }
 
-export interface RunDirObservation {
-  readonly mode: number;
-  readonly uid: number;
-  readonly isDirectory: boolean;
-}
-
-// Human-readable refusal detail for a bad run directory. Modes and uids are not
-// secrets, so naming the expected mode and the observed state is safe; the thrown
-// refusal itself stays a bare catalogue error. Later startup and doctor surfaces
-// reuse this text for their fix lines.
-export function describeRunDirRefusal(observed: RunDirObservation, currentUid: number): string {
-  if (!observed.isDirectory) {
-    return "run directory path is not a directory; expected a directory with mode 700 owned by the current user";
-  }
-  const mode = observed.mode & PERMISSION_BITS;
-  if (mode !== RUN_DIR_MODE) {
-    return `run directory mode is ${mode.toString(8)}, expected 700`;
-  }
-  return `run directory owner uid is ${String(observed.uid)}, expected uid ${String(currentUid)}`;
-}
-
 // Applies SOCKET_MODE to the bound socket path after listen (P6-D3). Any failure
 // refuses with SCHEMA_INVALID so the socket never serves unguarded.
 export function chmodSocket(socketPath: string, deps?: ChmodDeps): void {

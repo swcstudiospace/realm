@@ -15,7 +15,7 @@ import { closeSync, fchmodSync, mkdirSync, openSync } from "node:fs";
 import { createConnection } from "node:net";
 import { runAcpOverStdio } from "../acp/stdio.js";
 import { createJsonRpc, type AnchorRpc } from "../audit/anchor.js";
-import { ERROR_CATALOGUE, ERROR_CODES, RealmError, type ErrorCode } from "../core/errors.js";
+import { ERROR_CATALOGUE, ERROR_CODES, RealmError, makeRealmError, type ErrorCode } from "../core/errors.js";
 import {
   sendRequest,
   CONTROL_TIMEOUT_MS,
@@ -27,10 +27,12 @@ import { connectDaemon, type DaemonClient, type DaemonStatus } from "../daemon/c
 import { daemonSpawnEnv } from "../daemon/spawn-env.js";
 import { ensureDaemon, daemonAnswers, daemonLogPath, reportingStartFailure } from "../daemon/ensure.js";
 import { defaultRunCommand, runChecks, type DoctorOptions } from "../doctor/checks.js";
+import { applySafeFixes, FixRefusal, type FixAction } from "../doctor/fix.js";
 import { runtimeChecks } from "../doctor/runtime-checks.js";
 import { createMcpServer } from "../mcp/server.js";
-import { loadRuntimeConfig } from "../runtime/config.js";
-import { defaultPolicyPath, isDirectEntry, loadHostRuntimeConfig, readHostRuntime } from "../runtime/host-paths.js";
+import { loadRuntimeConfig, type RuntimeConfig } from "../runtime/config.js";
+import { readRuntimeConfigFile } from "../runtime/config-file.js";
+import { defaultPolicyPath, isDirectEntry, resolveConfigPath } from "../runtime/host-paths.js";
 import {
   probePodman,
   type ConnectSocket,
@@ -39,14 +41,14 @@ import {
 } from "../runtime/podman-probe.js";
 import { controlSocketPath, type EnvironmentLike } from "../session/paths.js";
 import { parseAnchorArgs, runAnchor } from "./anchor.js";
-import { runAuditVerify } from "./audit.js";
+import { runAuditCommand } from "./audit.js";
 import { INIT_USAGE, InitRefusal, parseInitArgs, runInit } from "./init.js";
 
 export const CLI_COMMANDS = ["init", "up", "down", "status", "doctor", "mcp", "acp", "anchor", "audit", "metrics"] as const;
 export type CliCommand = (typeof CLI_COMMANDS)[number];
 
 const USAGE =
-  "Usage: realm <init|up|down|status|doctor|mcp|acp|anchor|audit|metrics> (realm init --image <name@sha256:digest> [--workspace <absolute path>] [--state-dir <absolute path>]; realm up|mcp|acp [--workspace <absolute path>]; realm anchor --session <id> [--publish] [--rpc <url>]; realm audit verify <file>)";
+  "Usage: realm <init|up|down|status|doctor|mcp|acp|anchor|audit|metrics> (realm init --image <name@sha256:digest> [--workspace <absolute path>] [--state-dir <absolute path>]; realm up|mcp|acp [--workspace <absolute path>]; realm doctor [--fix [--dry-run]]; realm anchor --session <id> [--publish] [--rpc <url>]; realm audit verify [--file <path> | --session <id>] [--head <seq>:<sha256>] [--anchor <record.json>])";
 const RETRY_INTERVAL_MS = 25;
 const MCP_POLL_INTERVAL_MS = 100;
 
@@ -57,12 +59,12 @@ function isCliCommand(value: string): value is CliCommand {
 interface ParsedArgv {
   readonly command: CliCommand;
   readonly workspace: string | undefined;
-  // The words after `init`, `anchor` or `audit`; empty for every other command.
+  // The words after `init`, `doctor`, `anchor` or `audit`; empty for every other command.
   readonly words: readonly string[];
 }
 
 // `up`, `mcp`, and `acp` take no arguments or `--workspace <path>`. `init`, `anchor` and `audit` take their own words.
-// Every other command takes no arguments. `anchor` flags are checked by parseAnchorArgs.
+// `doctor` takes exactly --fix [--dry-run], or no flags. Every other command takes no arguments.
 function parseArgv(argv: readonly string[]): ParsedArgv | undefined {
   const [command, ...rest] = argv;
   if (command === undefined || !isCliCommand(command)) {
@@ -70,6 +72,12 @@ function parseArgv(argv: readonly string[]): ParsedArgv | undefined {
   }
   if (command === "init" || command === "anchor" || command === "audit") {
     return { command, workspace: undefined, words: rest };
+  }
+  if (command === "doctor") {
+    if (rest.length === 0 || (rest[0] === "--fix" && (rest.length === 1 || (rest.length === 2 && rest[1] === "--dry-run")))) {
+      return { command, workspace: undefined, words: rest };
+    }
+    return undefined;
   }
   if (rest.length === 0) {
     return { command, workspace: undefined, words: [] };
@@ -346,6 +354,11 @@ export function launchFilteredDaemon(
   source: EnvironmentLike,
   spawnImpl: SpawnDaemon = defaultSpawnDaemon,
 ): void {
+  // A Bun host never spawns the daemon: process.execPath there is the Omp binary, which would read the entry as a prompt
+  // and run an unsupervised agent session. The attach refuses with REALM_NOT_ACTIVE until realm up has started the daemon.
+  if (Object.hasOwn(process.versions, "bun")) {
+    throw makeRealmError("REALM_NOT_ACTIVE");
+  }
   withDaemonLog(stateDir, (log) => {
     spawnImpl(process.execPath, [entry], {
       detached: true,
@@ -449,7 +462,11 @@ async function runStatus(deps: ResolvedDeps, socketPath: string): Promise<CliRes
   }
 }
 
-async function runDoctor(deps: ResolvedDeps, stateDir: string, socketPath: string): Promise<CliResult> {
+async function runDoctor(
+  deps: ResolvedDeps,
+  runtimeConfig: RuntimeConfig,
+  socketPath: string,
+): Promise<CliResult> {
   try {
     return replyToResult(
       await deps.send(socketPath, { id: 1, method: "doctor" }, controlTimeoutOf(deps, "doctor")),
@@ -460,21 +477,7 @@ async function runDoctor(deps: ResolvedDeps, stateDir: string, socketPath: strin
     }
   }
   // OQ-P6-02: no daemon, so run the local checks and say the daemon is absent.
-  let runtimeConfig: ReturnType<typeof loadRuntimeConfig> | undefined;
-  try {
-    runtimeConfig = loadHostRuntimeConfig(deps.env);
-  } catch {
-    runtimeConfig = undefined;
-  }
-  const options: DoctorOptions = {
-    stateDir,
-    policyPath: defaultPolicyPath(stateDir),
-    env: deps.env,
-    ...(runtimeConfig === undefined ? {} : { runtimeConfig }),
-    runCommand: deps.runCommand,
-    connectSocket: deps.connectSocket,
-    probeTimeoutMs: deps.timeoutMs ?? SOCKET_TIMEOUT_MS,
-  };
+  const options = localDoctorOptions(deps, runtimeConfig);
   let checks: readonly { readonly id: string }[];
   try {
     checks = await runChecks(options);
@@ -486,6 +489,50 @@ async function runDoctor(deps: ResolvedDeps, stateDir: string, socketPath: strin
     stdout: `${JSON.stringify(checks)}\n`,
     stderr: `realm doctor: daemon absent (REALM_NOT_ACTIVE); ran ${String(checks.length)} local checks\n`,
   };
+}
+
+function localDoctorOptions(deps: ResolvedDeps, runtimeConfig: RuntimeConfig): DoctorOptions {
+  return {
+    stateDir: runtimeConfig.stateDir,
+    policyPath: defaultPolicyPath(runtimeConfig.stateDir),
+    env: deps.env,
+    runtimeConfig,
+    runCommand: deps.runCommand,
+    connectSocket: deps.connectSocket,
+    probeTimeoutMs: deps.timeoutMs ?? SOCKET_TIMEOUT_MS,
+  };
+}
+
+// Fixes are host-local even when a daemon answers. The protected workspace is from config,
+// never the invoking cwd. Diagnostics stay local too, and cannot make dry-run mutate disk.
+async function runDoctorFix(
+  deps: ResolvedDeps,
+  runtimeConfig: RuntimeConfig,
+  dryRun: boolean,
+): Promise<CliResult> {
+  let fixes: readonly FixAction[] = [];
+  try {
+    fixes = applySafeFixes(runtimeConfig.stateDir, dryRun, {
+      home: deps.env["HOME"] ?? "",
+      workspace: runtimeConfig.workspaceRoot,
+    });
+    const checks = await runChecks(localDoctorOptions(deps, runtimeConfig));
+    const lines = fixes.map((fix) =>
+      `realm doctor --fix: ${dryRun ? "would " : ""}${fix.kind} ${fix.path} to 0700\n`,
+    );
+    lines.push(`realm doctor --fix: ran ${String(checks.length)} local checks\n`);
+    return { exitCode: 0, stdout: `${JSON.stringify({ dryRun, fixes, checks })}\n`, stderr: lines.join("") };
+  } catch (error: unknown) {
+    const failure = failureFor(error);
+    const completed = (error instanceof FixRefusal ? error.applied : fixes)
+      .map((fix) => `realm doctor --fix: ${dryRun ? "would " : "applied "}${fix.kind} ${fix.path} to 0700\n`)
+      .join("");
+    if (!(error instanceof FixRefusal)) return { ...failure, stderr: `${failure.stderr}${completed}` };
+    return {
+      ...failure,
+      stderr: `${failure.stderr}${completed}realm doctor --fix: refused ${error.path} (${error.detail}); no further actions applied\n`,
+    };
+  }
 }
 
 // Ensures the shared daemon answers on the control socket, spawning it detached when none does.
@@ -593,13 +640,15 @@ async function runAnchorCommand(words: readonly string[], deps: CliDeps, stateDi
   });
 }
 
-// realm audit verify <file>: a broken chain exits 1 and names the line. Usage errors exit 2.
-function runAuditCommand(words: readonly string[]): CliResult {
-  const [verb, file, extra] = words;
-  if (verb !== "verify" || file === undefined || file.length === 0 || extra !== undefined) {
-    return { exitCode: 2, stdout: "", stderr: `${USAGE}\n` };
+// The state directory for realm audit verify --session and the selector-less form, read from the realm config the
+// way runCli reads it for the other commands. Absent or invalid config yields undefined; the audit command then
+// refuses with usage (exit 2), as realm anchor does.
+function auditStateDir(deps: CliDeps): string | undefined {
+  try {
+    return loadRuntimeConfig((deps.readConfig ?? readRuntimeConfigFile)(resolveConfigPath(deps.env))).stateDir;
+  } catch {
+    return undefined;
   }
-  return runAuditVerify(file);
 }
 
 // realm init (ONB-01) runs before any config is read: it is the command that writes the config. A malformed
@@ -626,17 +675,23 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
     return { exitCode: 2, stdout: "", stderr: `${USAGE}\n` };
   }
   if (parsed.command === "audit") {
-    return runAuditCommand(parsed.words);
+    return runAuditCommand(parsed.words, () => auditStateDir(deps));
   }
   if (parsed.command === "init") {
     return runInitCommand(parsed.words, deps);
   }
   const { command } = parsed;
   let stateDir: string;
+  let runtimeConfig: RuntimeConfig;
   try {
-    stateDir = readHostRuntime(deps.env, deps.readConfig).stateDir;
+    runtimeConfig = loadRuntimeConfig((deps.readConfig ?? readRuntimeConfigFile)(resolveConfigPath(deps.env)));
+    stateDir = runtimeConfig.stateDir;
   } catch {
     if (command === "doctor") {
+      if (parsed.words.length !== 0) {
+        const failure = failureFor(new RealmError("SCHEMA_INVALID"));
+        return { ...failure, stderr: `${failure.stderr}realm doctor --fix: config must be present and valid; run realm init\n` };
+      }
       const checks = await runtimeChecks({ env: deps.env });
       return {
         exitCode: 0,
@@ -695,7 +750,9 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
     case "metrics":
       return runMetrics(resolved, socketPath);
     case "doctor":
-      return runDoctor(resolved, stateDir, socketPath);
+      return parsed.words.length === 0
+        ? runDoctor(resolved, runtimeConfig, socketPath)
+        : runDoctorFix(resolved, runtimeConfig, parsed.words[1] === "--dry-run");
     case "anchor":
       return runAnchorCommand(parsed.words, deps, stateDir);
   }

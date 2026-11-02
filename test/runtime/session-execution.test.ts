@@ -436,6 +436,7 @@ void test("RT-04, D-18: a session start runs the AgentOS runner as an exec child
     },
     startTimeoutMs: 10_000,
     callTimeoutMs: 1000,
+    driverSocketPath: "/nonexistent-realm-driver/driver.sock",
     probeIntervalMs: 1,
   });
   const supervisor = new AgentOsSupervisor({ driver, sessionId: SESSION, callTimeoutMs: 10_000, random: () => 0, sleep: () => Promise.resolve(), now: () => 0 });
@@ -1474,6 +1475,7 @@ void test("RT-03, RT-04, D-18: a session named s1 gets its own sandbox: create, 
     },
     startTimeoutMs: 10_000,
     callTimeoutMs: 1000,
+    driverSocketPath: "/nonexistent-realm-driver/driver.sock",
     probeIntervalMs: 1,
   });
   // One supervisor per session, the same object for the same session on every call.

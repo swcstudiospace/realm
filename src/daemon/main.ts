@@ -15,7 +15,7 @@ import { productionOpenShellRunner } from "../runtime/session-execution.js";
 import type { EnvironmentLike } from "../session/paths.js";
 import { createLogger, parseLogLevel, type Logger } from "../observe/logger.js";
 import { createFileSink } from "../observe/log-file.js";
-import { requestLogPath } from "./ensure.js";
+import { FAILURE_EVENT, requestLogPath } from "./ensure.js";
 import { startDaemon, type StartDaemonOptions, type StartedDaemon, type StartupReport } from "./daemon.js";
 import { CONTROL_TIMEOUT_MS, sendRequest, type ControlReply } from "./channel.js";
 
@@ -56,11 +56,15 @@ const AGENTOS_START_TIMEOUT_MS = 180_000;
 const AGENTOS_CALL_TIMEOUT_MS = 30_000;
 
 function productionAgentOsDriver(env: EnvironmentLike): AgentOsDriver {
+  const driverSocket = env["REALM_DRIVER_SOCKET"];
   return createOpenShellAgentOsDriver({
     runner: productionOpenShellRunner(env),
     spawnRunner: productionRunnerChild(env),
     startTimeoutMs: AGENTOS_START_TIMEOUT_MS,
     callTimeoutMs: AGENTOS_CALL_TIMEOUT_MS,
+    // The compute driver's socket, as the daemon's environment names it. Unset, no socket is configured: driverAnswers is not
+    // probed and the supervisor does not claim the driver is down. realm doctor reports the unset variable.
+    ...(driverSocket === undefined ? {} : { driverSocketPath: driverSocket }),
   });
 }
 
@@ -89,13 +93,13 @@ export async function runDaemon(deps: DaemonDeps): Promise<number> {
         pinnedWorkspaceRoot: roots.workspaceRoot,
         sandboxStateRoot: roots.sandboxStateRoot,
         onStartup: (report) => {
-          writeStderr(startupLine(report));
+          emitStartup(writeStderr, report);
         },
         logger: requests.logger,
       });
     } catch (error: unknown) {
       requests.close();
-      writeStderr(failureLine(codeOf(error)));
+      emitFailure(writeStderr, codeOf(error));
       return 1;
     }
     try {
@@ -108,7 +112,7 @@ export async function runDaemon(deps: DaemonDeps): Promise<number> {
       requests.close();
     }
   } catch (error: unknown) {
-    writeStderr(failureLine(codeOf(error)));
+    emitFailure(writeStderr, codeOf(error));
     return 1;
   }
 }
@@ -119,10 +123,23 @@ export async function runDaemon(deps: DaemonDeps): Promise<number> {
 // daemon.failed line.
 const STARTUP_NAME_CAP = 10;
 
-function startupLine(report: StartupReport): string {
-  return JSON.stringify({
-    level: "info",
-    event: "daemon.startup",
+// The entry's own startup and failure lines go through the logger, so each is one JSON object with the same ts, level,
+// event and code prefix and redaction as the request lines. Its sink is the caller's stderr write.
+function entryLogger(writeStderr: (line: string) => void): Logger {
+  return createLogger({
+    sink: {
+      write: (line) => {
+        writeStderr(line);
+        return true;
+      },
+    },
+    level: "debug",
+    now: () => new Date(),
+  });
+}
+
+function emitStartup(writeStderr: (line: string) => void, report: StartupReport): void {
+  entryLogger(writeStderr).info("daemon.startup", {
     containersRemoved: report.containersRemoved,
     containerIds: report.containerIds,
     recordsDeleted: report.recordsDeleted,
@@ -134,7 +151,7 @@ function startupLine(report: StartupReport): string {
     unfinishedSweepRoots: report.unfinishedSweepRoots.slice(0, STARTUP_NAME_CAP),
     unfinishedSweepRootCount: report.unfinishedSweepRoots.length,
     auditListingTruncated: report.auditListingTruncated,
-    ...(report.reapFailure === undefined ? {} : { reapFailure: report.reapFailure }),
+    ...(report.reapFailure === undefined ? {} : { code: report.reapFailure, reapFailure: report.reapFailure }),
     failures: report.failures,
   });
 }
@@ -189,7 +206,7 @@ function awaitStop(started: StartedDaemon, wiring: StopWiring): Promise<number> 
     const shutdown = async (): Promise<number> => {
       const reply = await wiring.sendDown(started.socketPath);
       if (reply.error !== undefined) {
-        wiring.writeStderr(failureLine(reply.error.code));
+        emitFailure(wiring.writeStderr, reply.error.code);
         return 1;
       }
       await started.done;
@@ -203,7 +220,7 @@ function awaitStop(started: StartedDaemon, wiring: StopWiring): Promise<number> 
           }
           shutdownRequested = true;
           void shutdown().then(settle, (error: unknown) => {
-            wiring.writeStderr(failureLine(codeOf(error)));
+            emitFailure(wiring.writeStderr, codeOf(error));
             settle(1);
           });
         }),
@@ -219,7 +236,7 @@ function awaitStop(started: StartedDaemon, wiring: StopWiring): Promise<number> 
       (error: unknown) => {
         // The listening server failed: its code is the stop reason, and the daemon exits nonzero.
         if (!shutdownRequested) {
-          wiring.writeStderr(failureLine(codeOf(error)));
+          emitFailure(wiring.writeStderr, codeOf(error));
           settle(1);
         }
       },
@@ -236,8 +253,10 @@ function codeOf(error: unknown): ErrorCode {
   return error instanceof RealmError ? error.code : "SCHEMA_INVALID";
 }
 
-function failureLine(code: ErrorCode): string {
-  return JSON.stringify({ level: "error", event: "daemon.failed", code });
+// The entry's failure line goes through the logger: one JSON object with ts, level, event and code, redacted like the
+// request lines. The ensure parser reads it back by event and code (ensure.ts).
+function emitFailure(writeStderr: (line: string) => void, code: ErrorCode): void {
+  entryLogger(writeStderr).error(FAILURE_EVENT, { code });
 }
 
 function writeLine(line: string): void {

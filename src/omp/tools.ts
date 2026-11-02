@@ -7,7 +7,7 @@
 // shares a built-in's name the built-in's place (spike S1), so the Realm read and write replace the
 // built-ins of the same name. There is no glob tool, and retry is the realm-retry command, not a tool.
 
-import type { ToolCall, ToolName } from "../contract/validate.js";
+import type { PolicyMode, ToolCall, ToolName } from "../contract/validate.js";
 import { makeRealmError, RealmError, type ErrorCode } from "../core/errors.js";
 import type { ToolOutcome } from "../tools/dispatch.js";
 
@@ -41,6 +41,39 @@ export function sameToolNames(left: readonly string[], right: readonly string[])
   const a = [...left].sort();
   const b = [...right].sort();
   return a.length === b.length && a.every((name, index) => name === b[index]);
+}
+
+// The name of the Realm write. Omp's built-in write shares it, and the Realm write replaces that built-in (spike S1), so the
+// Realm write is the one Omp runs in every mode and state. The daemon decides each call (B1 to B3).
+export const REALM_WRITE_NAME = "write";
+
+// The tool set the host should hold, and the tools this plugin removed and has not put back.
+export interface HostToolPlan {
+  // The active set the host should hold.
+  readonly wanted: string[];
+  // The tools this plugin removed and has not put back. A plan that gives one back leaves it out.
+  readonly owed: string[];
+}
+
+// Plans the host tool set for a policy mode (OMPX-03, OMPX-04, P16 c and d). registered is every tool Omp reports, active the
+// active set now, and owed the tools this plugin removed before. Fail-closed keeps the allowlist and removes the rest. Advisory
+// keeps every tool Omp reports and gives back the owed tools Omp still registers.
+export function planHostTools(
+  mode: PolicyMode,
+  registered: readonly string[],
+  active: readonly string[],
+  owed: readonly string[],
+): HostToolPlan {
+  if (mode === "fail-closed") {
+    const wanted = failClosedToolNames(registered);
+    return { wanted, owed: unionOf(owed, active).filter((name) => !wanted.includes(name)) };
+  }
+  const restorable = owed.filter((name) => registered.includes(name));
+  return { wanted: unionOf(active, restorable), owed: [] };
+}
+
+function unionOf(left: readonly string[], right: readonly string[]): string[] {
+  return [...new Set([...left, ...right])];
 }
 
 // ---- Definitions -------------------------------------------------------------

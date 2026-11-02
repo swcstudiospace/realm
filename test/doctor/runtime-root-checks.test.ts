@@ -22,8 +22,8 @@ function config() {
   });
 }
 
-function directory(mode: number, uid?: number): PathReading {
-  return { state: "found", stats: { isDirectory: () => true, isSymbolicLink: () => false, isSocket: () => false, mode, ...(uid === undefined ? {} : { uid }) } as Stats };
+function directory(mode: number, uid?: number, symbolicLink = false): PathReading {
+  return { state: "found", stats: { isDirectory: () => !symbolicLink, isSymbolicLink: () => symbolicLink, isSocket: () => false, mode, ...(uid === undefined ? {} : { uid }) } as Stats };
 }
 
 function socket(mode: number): PathReading {
@@ -80,11 +80,10 @@ void test("runtime-roots accepts a workspace at 0755 and rejects one this accoun
   assert.match(foreign.detail, /workspaceRoot is not owned by this account/);
 });
 
-void test("runtime-roots fails when a root is absent or mode-wrong and names realm init", () => {
+void test("runtime-roots fails when a root is absent or mode-wrong", () => {
   const absent = runtimeRootsCheck(config(), statFor({}));
   assert.equal(absent.status, "fail");
   assert.match(absent.detail, /secretRoot is absent/);
-  assert.match(absent.fix ?? "", /realm init/);
   const wrongMode = runtimeRootsCheck(
     config(),
     statFor({
@@ -95,7 +94,115 @@ void test("runtime-roots fails when a root is absent or mode-wrong and names rea
   );
   assert.equal(wrongMode.status, "fail");
   assert.match(wrongMode.detail, /secretRoot mode is 0755/);
-  assert.match(wrongMode.fix ?? "", /realm init/);
+});
+
+void test("configured root failures retain their diagnostics without suggesting reinitialization or automatic root repair", () => {
+  const loaded = config();
+  const conditions: readonly { readonly detail: string; readonly reading: PathReading }[] = [
+    { detail: "is absent", reading: { state: "absent" } },
+    { detail: "cannot be inspected", reading: { state: "unreadable" } },
+    { detail: "is a symbolic link", reading: directory(0o120777, undefined, true) },
+    { detail: "is not a directory", reading: socket(0o100600) },
+  ];
+  for (const key of ["secretRoot", "workspaceRoot", "sandboxStateRoot"] as const) {
+    const root = loaded[key];
+    assert.ok(root);
+    for (const condition of conditions) {
+      const result = runtimeRootsCheck(loaded, statFor({
+        "/var/lib/realm/secrets": directory(0o40700),
+        "/srv/workspace": directory(0o40755, process.getuid?.()),
+        "/var/lib/realm/sandboxes": directory(0o40700),
+        [root]: condition.reading,
+      }));
+      assert.equal(result.status, "fail", `${key}: ${condition.detail}`);
+      assert.equal(result.detail, `${key} ${condition.detail}`);
+      const fix = result.fix ?? "";
+      assert.doesNotMatch(fix, /realm init/);
+      assert.match(fix, /config\.json/);
+      assert.match(fix, /policy\.json/);
+      assert.match(fix, /stateDir\/run/);
+      assert.match(fix, /stateDir\/sessions/);
+      assert.match(fix, /does not repair or provision private roots or the workspace/);
+    }
+  }
+});
+
+void test("private mode failures recommend inspected manual recovery without imposing 0700 on the workspace", () => {
+  const result = runtimeRootsCheck(config(), statFor({
+    "/var/lib/realm/secrets": directory(0o40755),
+    "/srv/workspace": directory(0o40755, process.getuid?.()),
+    "/var/lib/realm/sandboxes": directory(0o40750),
+  }));
+  assert.equal(result.status, "fail");
+  assert.match(result.detail, /secretRoot mode is 0755/);
+  assert.match(result.detail, /sandboxStateRoot mode is 0750/);
+  assert.doesNotMatch(result.detail, /workspaceRoot/);
+  assert.doesNotMatch(result.fix ?? "", /realm init/);
+  assert.match(result.fix ?? "", /0700/);
+  assert.match(result.fix ?? "", /ownership/);
+  assert.match(result.fix ?? "", /symlink/);
+});
+
+void test("omitted healthy private defaults warn, but missing defaults still fail without reinitialization advice", () => {
+  const loaded = loadRuntimeConfig({
+    image: IMAGE,
+    stateDir: "/var/lib/realm/state",
+    workspaceRoot: "/srv/workspace",
+  });
+  const healthyDefaults = {
+    "/var/lib/realm/state/secrets": directory(0o40700),
+    "/var/lib/realm/state/sandboxes": directory(0o40700),
+    "/srv/workspace": directory(0o40755, process.getuid?.()),
+  };
+  const warning = runtimeRootsCheck(loaded, statFor(healthyDefaults));
+  assert.equal(warning.status, "warn");
+  assert.match(warning.detail, /secretRoot not named in config\.json/);
+  assert.match(warning.detail, /sandboxStateRoot not named in config\.json/);
+  assert.doesNotMatch(warning.fix ?? "", /realm init/);
+  assert.match(warning.fix ?? "", /stateDir/);
+  const failed = runtimeRootsCheck(loaded, statFor({
+    ...healthyDefaults,
+    "/var/lib/realm/state/secrets": { state: "absent" },
+  }));
+  assert.equal(failed.status, "fail");
+  assert.match(failed.detail, /secretRoot is absent/);
+  assert.match(failed.detail, /sandboxStateRoot not named in config\.json/);
+  assert.doesNotMatch(failed.fix ?? "", /realm init/);
+});
+
+void test("unusual configured paths never become diagnostic text or executable recovery guidance", () => {
+  const loaded = loadRuntimeConfig({
+    image: IMAGE,
+    stateDir: "/var/lib/realm/state",
+    workspaceRoot: "/srv/project with spaces",
+    secretRoot: "/srv/$(touch SHOULD_NOT_RUN);'private'\nroot",
+    sandboxStateRoot: "/srv/`touch ALSO_NOT_RUN`/sandboxes",
+  });
+  const conditions: readonly PathReading[] = [
+    { state: "absent" },
+    { state: "unreadable" },
+    directory(0o120777, undefined, true),
+    socket(0o100600),
+    directory(0o40755, (process.getuid?.() ?? 0) + 1),
+  ];
+  for (const reading of conditions) {
+    const result = runtimeRootsCheck(loaded, statFor({
+      [loaded.workspaceRoot]: reading,
+      [loaded.secretRoot ?? ""]: reading,
+      [loaded.sandboxStateRoot ?? ""]: reading,
+    }));
+    assert.equal(result.status, "fail");
+    assert.match(result.detail, /secretRoot/);
+    assert.match(result.detail, /workspaceRoot/);
+    assert.match(result.detail, /sandboxStateRoot/);
+    assert.doesNotMatch(result.fix ?? "", /realm init/);
+    for (const path of [loaded.workspaceRoot, loaded.secretRoot, loaded.sandboxStateRoot]) {
+      assert.ok(path);
+      assert.equal(result.detail.includes(path), false);
+      assert.equal((result.fix ?? "").includes(path), false);
+    }
+    assert.doesNotMatch(result.fix ?? "", /SHOULD_NOT_RUN|ALSO_NOT_RUN/);
+  }
 });
 
 void test("driver-socket passes when the socket is 0600, its parent is 0700, and it accepts a connection", async () => {

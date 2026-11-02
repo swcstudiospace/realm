@@ -88,7 +88,8 @@ export function daemonLogSize(stateDir: string): number {
   return statSync(daemonLogPath(stateDir), { throwIfNoEntry: false })?.size ?? 0;
 }
 
-const FAILURE_EVENT = "daemon.failed";
+// Shared with the entry (main.ts), which writes the line this module reads back.
+export const FAILURE_EVENT = "daemon.failed";
 
 function isErrorCode(value: string): value is ErrorCode {
   return ERROR_CODES.some((code) => code === value);
