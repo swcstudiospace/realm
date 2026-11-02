@@ -17,12 +17,10 @@ import { basename, join } from "node:path";
 import {
   checkAuditFile,
   parseAuditCheckpoint,
-  verifyAuditFile,
   type AnchorCheck,
   type AuditCheckOptions,
   type AuditCheckReason,
   type ChainBreakReason,
-  type VerifyAuditResult,
 } from "../audit/chain.js";
 import { parseAnchorRecord, type AnchorMismatch, type AnchorRecord } from "../audit/anchor.js";
 import { isSessionId } from "../session/paths.js";
@@ -253,16 +251,7 @@ function verifyOne(target: Target, pins: AuditCheckOptions): FileOutcome {
     return { report: { sessionId: target.sessionId, ok: false, failure }, stderr: `${label}${FAILURE_TEXT[failure]}\n` };
   }
   const check = checkAuditFile(target.file, pins);
-  // The checkpoint core does not return the unparsed lines, so the plain scan supplies them.
-  let scan: VerifyAuditResult | undefined;
-  if (check.exitCode !== 2) {
-    try {
-      scan = verifyAuditFile(target.file);
-    } catch {
-      scan = undefined;
-    }
-  }
-  if (check.exitCode === 2 || scan === undefined) {
+  if (check.exitCode === 2) {
     return {
       report: { sessionId: target.sessionId, ok: false, failure: "unreadable" },
       stderr: `${label}${FAILURE_TEXT.unreadable}\n`,
@@ -278,7 +267,7 @@ function verifyOne(target: Target, pins: AuditCheckOptions): FileOutcome {
     lines: check.lines,
     chainedLines: check.chainedLines,
     unprotected: check.unprotected,
-    unparsedLines: scan.unparsedLines,
+    unparsedLines: check.unparsedLines,
     tornTail: check.tornTail,
     ...(check.head === undefined ? {} : { head: { seq: check.head.seq, lineSha256: check.head.hash } }),
     ...(broken === undefined ? {} : { broken }),

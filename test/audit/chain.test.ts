@@ -1,11 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { appendAudit } from "../../src/audit/log.js";
-import { buildAnchorRecord, type AnchorRecord } from "../../src/audit/anchor.js";
+import { buildAnchorRecord, verifyAnchorRecord, type AnchorRecord } from "../../src/audit/anchor.js";
 import {
   AUDIT_GENESIS_PREV,
   AUDIT_LINE_MAX_BYTES,
@@ -242,6 +242,7 @@ function lineHash(lines: readonly string[], seq: number): string {
 }
 
 function writeLines(file: string, lines: readonly string[]): void {
+  mkdirSync(dirname(file), { recursive: true });
   writeFileSync(file, `${lines.join("\n")}\n`);
 }
 
@@ -344,6 +345,98 @@ void test("OBS-01 anchor record: a head pin and an anchor record that both hold 
     });
     assert.equal(check.exitCode, 0);
     assert.deepEqual(check.anchor, { ok: true, lines: 3, lineCount: 1 });
+  });
+});
+
+// Chained lines as the writer lays them out. Each pad varies in length so read-chunk boundaries fall mid-line. When
+// editedSeq is set, that line's path is rewritten and every later line is re-linked: the file still verifies as a
+// chain, but its prefix differs from paddedChainLines(count).
+function paddedChainLines(count: number, editedSeq = 0): string[] {
+  const lines: string[] = [];
+  let prev = AUDIT_GENESIS_PREV;
+  for (let seq = 1; seq <= count; seq += 1) {
+    const path = seq === editedSeq ? "forged.txt" : `f${String(seq)}.txt`;
+    const pad = "x".repeat(200 + (seq % 97));
+    const line = JSON.stringify({ seq, prev, tool: "write", outcome: "ok", phase: "result", path, pad });
+    lines.push(line);
+    prev = sha256(line);
+  }
+  return lines;
+}
+
+// The verdict the whole-file check gave before the anchored prefix was streamed: the record hashed against every byte.
+function wholeFileAnchor(file: string, record: AnchorRecord): unknown {
+  const verdict = verifyAnchorRecord(readFileSync(file), record);
+  return verdict.ok
+    ? { ok: true, lines: verdict.lines, lineCount: record.lineCount }
+    : { ok: false, lines: verdict.lines, lineCount: record.lineCount, reason: verdict.reason };
+}
+
+void test("OBS-01 anchor record: a prefix of a multi-chunk file gets the verdict of hashing the whole file", () => {
+  withStateDir((stateDir) => {
+    const lines = paddedChainLines(1200);
+    writeLines(auditFile(stateDir), lines);
+    assert.ok(statSync(auditFile(stateDir)).size > 256 * 1024);
+    for (const count of [1, 2, 700, 1199]) {
+      const record = anchorOver(lines, count);
+      const check = checkAuditFile(auditFile(stateDir), { anchor: record });
+      assert.equal(check.exitCode, 0);
+      assert.deepEqual(check.anchor, wholeFileAnchor(auditFile(stateDir), record), `anchor over ${String(count)} lines`);
+    }
+  });
+});
+
+void test("OBS-01 anchor record: an edit deep in a long file's anchored prefix is prefix-changed, one past it is not", () => {
+  withStateDir((stateDir) => {
+    const original = paddedChainLines(1200);
+    writeLines(auditFile(stateDir), paddedChainLines(1200, 900));
+    const deep = anchorOver(original, 1000);
+    const check = checkAuditFile(auditFile(stateDir), { anchor: deep });
+    assert.equal(check.exitCode, 1);
+    assert.equal(check.line, undefined);
+    assert.deepEqual(check.anchor, { ok: false, lines: 1200, lineCount: 1000, reason: "prefix-changed" });
+    assert.deepEqual(check.anchor, wholeFileAnchor(auditFile(stateDir), deep));
+    const shallow = checkAuditFile(auditFile(stateDir), { anchor: anchorOver(original, 800) });
+    assert.equal(shallow.exitCode, 0);
+    assert.deepEqual(shallow.anchor, { ok: true, lines: 1200, lineCount: 800 });
+  });
+});
+
+void test("OBS-01 anchor record: a file cut inside the anchored prefix is shorter-log, cut at a line or mid-line", () => {
+  withStateDir((stateDir) => {
+    const lines = paddedChainLines(1200);
+    const record = anchorOver(lines, 1000);
+    writeLines(auditFile(stateDir), lines.slice(0, 600));
+    const atLine = checkAuditFile(auditFile(stateDir), { anchor: record });
+    assert.equal(atLine.exitCode, 1);
+    assert.deepEqual(atLine.anchor, { ok: false, lines: 600, lineCount: 1000, reason: "shorter-log" });
+
+    const fragment = (lines[600] ?? "").slice(0, 150);
+    writeFileSync(auditFile(stateDir), `${lines.slice(0, 600).join("\n")}\n${fragment}`);
+    const midLine = checkAuditFile(auditFile(stateDir), { anchor: record });
+    assert.equal(midLine.exitCode, 1);
+    assert.deepEqual(midLine.anchor, { ok: false, lines: 601, lineCount: 1000, reason: "shorter-log" });
+  });
+});
+
+void test("OBS-01 anchor record: a file far longer than the anchor verifies and reports its whole line count", () => {
+  withStateDir((stateDir) => {
+    const lines = paddedChainLines(1200);
+    writeLines(auditFile(stateDir), lines);
+    const check = checkAuditFile(auditFile(stateDir), { anchor: anchorOver(lines, 5) });
+    assert.equal(check.exitCode, 0);
+    assert.deepEqual(check.anchor, { ok: true, lines: 1200, lineCount: 5 });
+  });
+});
+
+void test("OBS-01 anchor record: every prefix of a 40-line file verifies, so the streamed root matches for each tree shape", () => {
+  withStateDir((stateDir) => {
+    const lines = paddedChainLines(40);
+    writeLines(auditFile(stateDir), lines);
+    for (let count = 1; count <= lines.length; count += 1) {
+      const check = checkAuditFile(auditFile(stateDir), { anchor: anchorOver(lines, count) });
+      assert.deepEqual(check.anchor, { ok: true, lines: 40, lineCount: count }, `prefix of ${String(count)} lines`);
+    }
   });
 });
 

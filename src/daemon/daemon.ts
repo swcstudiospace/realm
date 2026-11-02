@@ -233,6 +233,9 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
     ...(libpod === undefined ? {} : { libpod }),
     ...(agentosFor === undefined ? {} : { agentosFor }),
   });
+  // The pinned root the handle binds: createRealmHandle binds this same config.workspaceRoot through bindRoot, so the value
+  // is the one the controller refuses other workspaces against. Status and up replies carry it (boundRoot).
+  const boundRoot = bindRoot(config.workspaceRoot).realPath;
   const stateDir = config.stateDir;
   // The reap's sweep. The default one reports each removed container's id through onRemoved; an injected one reports none.
   const sweep: StartupSweep | undefined =
@@ -454,7 +457,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
   ): Promise<ControlReply | null> => {
     switch (method) {
       case "status": {
-        return { id, result: statusOf(handle.controller.snapshot()) };
+        return { id, result: { ...statusOf(handle.controller.snapshot()), boundRoot } };
       }
       case "up": {
         const workspaceRoot: unknown =
@@ -497,7 +500,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
             state: snapshot.state,
             ...(code === undefined ? {} : { code }),
           });
-          return { id, result: statusOf(snapshot) };
+          return { id, result: { ...statusOf(snapshot), boundRoot } };
         } catch (error: unknown) {
           logger.info("up.end", { correlationId, upId: correlationId, durationMs: finishAttach(), code: codeOf(error) });
           return refusalReply(id, error);
@@ -906,6 +909,8 @@ interface StatusResult {
   readonly display: DisplayStatus;
   readonly mode: PolicyMode;
   readonly notice?: string;
+  // The realpath of the root this daemon is pinned to. Present on status and up replies, never on down.
+  readonly boundRoot?: string;
 }
 
 function statusResult(snapshot: StateSnapshot, mode: PolicyMode, notice: string | undefined): StatusResult {

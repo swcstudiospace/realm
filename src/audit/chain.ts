@@ -14,17 +14,19 @@
 // anchor.ts) commits to the first lineCount lines by Merkle root; a shorter log reports
 // shorter-log and a changed prefix reports prefix-changed. Lines past the anchored count pass.
 
-import { createHash } from "node:crypto";
-import { closeSync, constants, fstatSync, openSync, readFileSync, readSync } from "node:fs";
-import { verifyAnchorRecord, type AnchorMismatch, type AnchorRecord } from "./anchor.js";
+import { createHash, type Hash } from "node:crypto";
+import { closeSync, constants, fstatSync, openSync, readSync } from "node:fs";
+import { AnchorError, type AnchorMismatch, type AnchorRecord } from "./anchor.js";
 
 export const AUDIT_LINE_MAX_BYTES = 4 * 1024 * 1024;
 export const AUDIT_GENESIS_PREV = "0".repeat(64);
 
-const TAIL_CHUNK_BYTES = 64 * 1024;
+const READ_CHUNK_BYTES = 64 * 1024;
 const SEQ_LOOKBACK_LINES = 64;
 const HEX64 = /^[0-9a-f]{64}$/;
 const CHECKPOINT = /^([1-9][0-9]*):([0-9a-f]{64})$/;
+const LEAF_PREFIX = Buffer.from([0x00]);
+const NODE_PREFIX = Buffer.from([0x01]);
 
 export interface ChainHead {
   readonly nextSeq: number;
@@ -87,6 +89,8 @@ export interface AuditCheck {
   // Legacy lines before the chain start. They carry no seq and no checkpoint covers them.
   readonly unprotected: number;
   readonly tornTail: boolean;
+  // Physical lines that are not JSON objects. Taken from the same pass as lines, chainedLines and head.
+  readonly unparsedLines: readonly number[];
   readonly head?: AuditHead;
   // Present when an anchor record was given and the chain verified.
   readonly anchor?: AnchorCheck;
@@ -212,17 +216,28 @@ export function verifyAuditFile(file: string): VerifyAuditResult {
 // line that precedes it). A pin whose seq the log never reaches reports tail-loss at the last
 // line present.
 function verifyWithPins(file: string, pins: readonly AuditCheckpoint[]): VerifyAuditResult {
-  const fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  const fd = openRegularFile(file);
   try {
-    if (!fstatSync(fd).isFile()) {
-      throw new Error("audit file is not a regular file");
-    }
     return verifyDescriptor(fd, pins);
   } finally {
     closeSync(fd);
   }
 }
 
+// The fields a head-pin mismatch reports: the state at the pinned line, which is where a verifier that stopped at the
+// first break would have stopped.
+interface PinBreak {
+  readonly lines: number;
+  readonly chainedLines: number;
+  readonly legacyLines: number;
+  readonly tornTail: boolean;
+  readonly head: AuditHead | undefined;
+  readonly broken: ChainBreak;
+}
+
+// One pass over the file. Chain and line-bound breaks end the pass. A head-pin mismatch does not: the pass goes on so
+// unparsedLines covers the same lines as the plain verifier, and the reported counts, head and break stay at the
+// pinned line. Chain links are checked after a pin mismatch only to decide where the plain pass stops.
 function verifyDescriptor(fd: number, pins: readonly AuditCheckpoint[]): VerifyAuditResult {
   const unparsedLines: number[] = [];
   let lines = 0;
@@ -233,13 +248,24 @@ function verifyDescriptor(fd: number, pins: readonly AuditCheckpoint[]): VerifyA
   let prevRaw = AUDIT_GENESIS_PREV;
   let tornTail = false;
   let head: AuditHead | undefined;
-  let broken: ChainBreak | undefined;
+  let chainBreak: ChainBreak | undefined;
+  let pinBreak: PinBreak | undefined;
   let carry = Buffer.alloc(0);
 
   const pin = (seq: number, lineNo: number, line: Buffer): void => {
+    if (pinBreak !== undefined) {
+      return;
+    }
     for (const expected of pins) {
       if (expected.seq === seq && expected.hash !== sha256Hex(line)) {
-        broken = { line: lineNo, reason: "prefix-changed" };
+        pinBreak = {
+          lines: lineNo,
+          chainedLines,
+          legacyLines,
+          tornTail,
+          head,
+          broken: { line: lineNo, reason: "prefix-changed" },
+        };
         return;
       }
     }
@@ -259,7 +285,7 @@ function verifyDescriptor(fd: number, pins: readonly AuditCheckpoint[]): VerifyA
     lines += 1;
     const lineNo = lines;
     if (line.length > AUDIT_LINE_MAX_BYTES) {
-      broken = { line: lineNo, reason: "line-too-long" };
+      chainBreak = { line: lineNo, reason: "line-too-long" };
       return;
     }
     const parsed = parseObject(line);
@@ -272,7 +298,7 @@ function verifyDescriptor(fd: number, pins: readonly AuditCheckpoint[]): VerifyA
           legacyLines += 1;
         }
       } else if (!acceptChainStart(parsed, lineNo, prevRaw)) {
-        broken = { line: lineNo, reason: "bad-chain-start" };
+        chainBreak = { line: lineNo, reason: "bad-chain-start" };
       } else {
         chainStarted = true;
         accept(parsed["seq"] as number, lineNo, line);
@@ -280,14 +306,14 @@ function verifyDescriptor(fd: number, pins: readonly AuditCheckpoint[]): VerifyA
     } else if (parsed === undefined) {
       unparsedLines.push(lineNo);
     } else if (!chained) {
-      broken = { line: lineNo, reason: "unchained-line" };
+      chainBreak = { line: lineNo, reason: "unchained-line" };
     } else {
       const seq = parsed["seq"] as number;
       const prev = parsed["prev"] as string;
       if (seq !== lastSeq + 1) {
-        broken = { line: lineNo, reason: seq > lastSeq ? "seq-gap" : "seq-regress" };
+        chainBreak = { line: lineNo, reason: seq > lastSeq ? "seq-gap" : "seq-regress" };
       } else if (prev !== prevRaw) {
-        broken = { line: lineNo, reason: "prev-mismatch" };
+        chainBreak = { line: lineNo, reason: "prev-mismatch" };
       } else {
         accept(seq, lineNo, line);
       }
@@ -296,6 +322,19 @@ function verifyDescriptor(fd: number, pins: readonly AuditCheckpoint[]): VerifyA
   };
 
   const done = (): VerifyAuditResult => {
+    if (pinBreak !== undefined) {
+      const pinned = pinBreak;
+      return resultOf(
+        pinned.lines,
+        pinned.chainedLines,
+        pinned.legacyLines,
+        unparsedLines,
+        pinned.tornTail,
+        pinned.broken,
+        pinned.head,
+      );
+    }
+    let broken = chainBreak;
     if (broken === undefined) {
       for (const expected of pins) {
         if (expected.seq > lastSeq) {
@@ -307,9 +346,9 @@ function verifyDescriptor(fd: number, pins: readonly AuditCheckpoint[]): VerifyA
     return resultOf(lines, chainedLines, legacyLines, unparsedLines, tornTail, broken, head);
   };
 
-  const chunk = Buffer.alloc(TAIL_CHUNK_BYTES);
+  const chunk = Buffer.alloc(READ_CHUNK_BYTES);
   for (;;) {
-    const read = readSync(fd, chunk, 0, TAIL_CHUNK_BYTES, null);
+    const read = readSync(fd, chunk, 0, READ_CHUNK_BYTES, null);
     if (read === 0) {
       break;
     }
@@ -321,7 +360,7 @@ function verifyDescriptor(fd: number, pins: readonly AuditCheckpoint[]): VerifyA
         const piece = chunk.subarray(offset, read);
         if (carry.length + piece.length > AUDIT_LINE_MAX_BYTES) {
           lines += 1;
-          broken = { line: lines, reason: "line-too-long" };
+          chainBreak = { line: lines, reason: "line-too-long" };
           return done();
         }
         carry = Buffer.concat([carry, piece]);
@@ -331,7 +370,7 @@ function verifyDescriptor(fd: number, pins: readonly AuditCheckpoint[]): VerifyA
       const line = carry.length === 0 ? Buffer.from(piece) : Buffer.concat([carry, piece]);
       carry = Buffer.alloc(0);
       finish(line, false);
-      if (broken !== undefined) {
+      if (chainBreak !== undefined) {
         return done();
       }
       offset = newline + 1;
@@ -405,7 +444,7 @@ export function checkAuditFile(file: string, options: AuditCheckOptions = {}): A
   try {
     result = verifyWithPins(file, pins);
     if (result.broken === undefined && options.anchor !== undefined) {
-      anchor = checkAnchor(file, options.anchor);
+      anchor = checkAnchor(file, options.anchor, result.lines);
     }
   } catch {
     return checkError("unreadable");
@@ -419,32 +458,147 @@ export function checkAuditFile(file: string, options: AuditCheckOptions = {}): A
     lines: result.lines,
     chainedLines: result.chainedLines,
     unprotected: result.legacyLines,
+    unparsedLines: result.unparsedLines,
     tornTail: result.tornTail,
     ...(result.head === undefined ? {} : { head: result.head }),
     ...(anchor === undefined ? {} : { anchor }),
   };
 }
 
-function checkAnchor(file: string, record: AnchorRecord): AnchorCheck {
-  const verdict = verifyAnchorRecord(readRegularFile(file), record);
-  return verdict.ok
-    ? { ok: true, lines: verdict.lines, lineCount: record.lineCount }
-    : { ok: false, lines: verdict.lines, lineCount: record.lineCount, reason: verdict.reason };
-}
+type AnchoredPrefix =
+  | { readonly complete: true; readonly root: string }
+  | { readonly complete: false; readonly lines: number };
 
-// Reads a regular file through the same no-follow open the chain verifier uses.
-function readRegularFile(file: string): Buffer {
-  const fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+// Checks the record against the first lineCount lines. fileLines is the whole file's line count from the chain pass,
+// which already read every line in bounded memory; the prefix scan stops at the anchored line, so only a file that
+// ends first is read to its end.
+function checkAnchor(file: string, record: AnchorRecord, fileLines: number): AnchorCheck {
+  const fd = openRegularFile(file);
   try {
-    if (!fstatSync(fd).isFile()) {
-      throw new Error("audit file is not a regular file");
+    const prefix = scanAnchoredPrefix(fd, record.lineCount);
+    if (!prefix.complete) {
+      return { ok: false, lines: prefix.lines, lineCount: record.lineCount, reason: "shorter-log" };
     }
-    return readFileSync(fd);
+    if (prefix.root !== record.rootSha256) {
+      return { ok: false, lines: fileLines, lineCount: record.lineCount, reason: "prefix-changed" };
+    }
+    return { ok: true, lines: fileLines, lineCount: record.lineCount };
   } finally {
     closeSync(fd);
   }
 }
 
+// Streams the first lineCount lines into the anchor Merkle root, the same root anchor.ts merkleRoot gives for those
+// lines. Fixed-size reads and a line hashed as its bytes arrive keep memory independent of file and line length; the
+// scan returns at the anchored line.
+function scanAnchoredPrefix(fd: number, lineCount: number): AnchoredPrefix {
+  if (lineCount < 1) {
+    throw new AnchorError("cannot anchor an empty audit log", "SCHEMA_INVALID");
+  }
+  const merkle = new StreamingMerkleRoot();
+  const chunk = Buffer.alloc(READ_CHUNK_BYTES);
+  let open: Hash | undefined;
+  let lines = 0;
+  for (;;) {
+    const read = readSync(fd, chunk, 0, READ_CHUNK_BYTES, null);
+    if (read === 0) {
+      break;
+    }
+    let offset = 0;
+    for (;;) {
+      const newline = chunk.subarray(offset, read).indexOf(0x0a);
+      const end = newline < 0 ? read : offset + newline;
+      if (end > offset) {
+        if (open === undefined) {
+          open = newLeafHash();
+        }
+        open.update(chunk.subarray(offset, end));
+      }
+      if (newline < 0) {
+        break;
+      }
+      merkle.add((open ?? newLeafHash()).digest());
+      open = undefined;
+      lines += 1;
+      if (lines === lineCount) {
+        return { complete: true, root: merkle.rootHex() };
+      }
+      offset = end + 1;
+    }
+  }
+  if (open !== undefined) {
+    merkle.add(open.digest());
+    lines += 1;
+  }
+  return lines < lineCount ? { complete: false, lines } : { complete: true, root: merkle.rootHex() };
+}
+
+// Opens an audit file read-only through a no-follow, non-blocking open. Throws unless the target is a regular file.
+function openRegularFile(file: string): number {
+  const fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  try {
+    if (!fstatSync(fd).isFile()) {
+      throw new Error("audit file is not a regular file");
+    }
+  } catch (error) {
+    closeSync(fd);
+    throw error;
+  }
+  return fd;
+}
+
+// Incremental form of anchor.ts merkleRoot: the same leaf and node hashes, folded as leaves arrive. pending[level]
+// holds a completed subtree of 2^level leaves that still waits for its right neighbour, so memory is one digest per
+// tree level, not one per line.
+class StreamingMerkleRoot {
+  private readonly pending: (Buffer | undefined)[] = [];
+
+  add(leaf: Buffer): void {
+    let node = leaf;
+    let level = 0;
+    let left = this.pending[level];
+    while (left !== undefined) {
+      this.pending[level] = undefined;
+      node = nodeHash(left, node);
+      level += 1;
+      left = this.pending[level];
+    }
+    this.pending[level] = node;
+  }
+
+  // Folds the pending subtrees from the lowest level up. A higher level holds earlier leaves, so it is the left
+  // operand; an empty level contributes nothing, which is the promote-unpaired rule of merkleRoot.
+  rootHex(): string {
+    let root: Buffer | undefined;
+    for (const node of this.pending) {
+      if (node !== undefined) {
+        root = root === undefined ? node : nodeHash(node, root);
+      }
+    }
+    if (root === undefined) {
+      throw new AnchorError("cannot anchor an empty audit log", "SCHEMA_INVALID");
+    }
+    return root.toString("hex");
+  }
+}
+
+function newLeafHash(): Hash {
+  return createHash("sha256").update(LEAF_PREFIX);
+}
+
+function nodeHash(left: Uint8Array, right: Uint8Array): Buffer {
+  return createHash("sha256").update(NODE_PREFIX).update(left).update(right).digest();
+}
+
 function checkError(reason: AuditCheckReason): AuditCheck {
-  return { ok: false, exitCode: 2, reason, lines: 0, chainedLines: 0, unprotected: 0, tornTail: false };
+  return {
+    ok: false,
+    exitCode: 2,
+    reason,
+    lines: 0,
+    chainedLines: 0,
+    unprotected: 0,
+    tornTail: false,
+    unparsedLines: [],
+  };
 }

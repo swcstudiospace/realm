@@ -7,7 +7,8 @@
 
 import { startDetachedDaemon } from "../cli/main.js";
 import { fileURLToPath } from "node:url";
-import { connectDaemon } from "../daemon/client.js";
+import { existsSync, realpathSync } from "node:fs";
+import { connectDaemon, type DaemonStatus } from "../daemon/client.js";
 import { CONTROL_TIMEOUT_MS } from "../daemon/channel.js";
 import { daemonAnswers, ensureDaemon, reportingStartFailure } from "../daemon/ensure.js";
 import { readHostRuntime } from "../runtime/host-paths.js";
@@ -50,12 +51,19 @@ export default function realmExtension(pi: OmpExtensionApi): void {
       await client.up(workspaceRoot);
       return { client, refusal: null };
     } catch (error: unknown) {
-      // A refused up still leaves a daemon that answers. Keep its client when its status answers: the refusal is returned with
-      // it, so the plugin shows the refusal code and forwards tool calls (reachable, inactive). A dead channel closes the client
-      // and rethrows the up error.
+      // A refused up leaves the daemon pinned to its own root. Keep the client only when its status answers and reports
+      // workspaceRoot as that root: the refusal is then returned with it, and the plugin shows the code and forwards calls
+      // (reachable, inactive). Otherwise the client closes and the refusal is rethrown, so no call can reach another project.
+      // A dead channel also closes the client and rethrows the up error.
+      let status: DaemonStatus;
       try {
-        await client.status();
+        status = await client.status();
       } catch {
+        client.close();
+        throw error;
+      }
+      // The daemon reports its root as a realpath. A daemon that reports no root predates the field, so its root is unknown.
+      if (status.boundRoot === undefined || !existsSync(workspaceRoot) || realpathSync(workspaceRoot) !== status.boundRoot) {
         client.close();
         throw error;
       }

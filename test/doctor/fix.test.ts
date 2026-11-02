@@ -109,6 +109,28 @@ void test("a missing state directory is created at 0700 with its run and session
   assert.equal(modeOf(join(stateDir, "sessions")), 0o700);
 });
 
+void test("a state directory created before its open fails is reported in FixRefusal.applied (ONB-02)", (t) => {
+  const { root, places } = fixture(t);
+  const stateDir = join(root, "state");
+  assert.throws(() => applySafeFixes(stateDir, false, places, {
+    stageHook: (stage, path) => {
+      if (stage === "before-open" && path === stateDir) {
+        throw Object.assign(new Error("too many open files"), { code: "EMFILE" });
+      }
+    },
+  }), (error: unknown) => {
+    assert.ok(error instanceof FixRefusal);
+    assert.equal(error.detail, "filesystem-error");
+    assert.deepEqual(error.applied, [
+      { kind: "create-directory", path: stateDir, mode: 0o700 },
+    ], "the directory mkdir created is retained even though its open failed");
+    return true;
+  });
+  assert.equal(statSync(stateDir).isDirectory(), true, "the directory mkdir created remains on disk");
+  assert.equal(existsSync(join(stateDir, "run")), false);
+  assert.equal(existsSync(join(stateDir, "sessions")), false);
+});
+
 void test("a second run changes nothing: it returns no actions and leaves every mode as the first run left it (ONB-02)", (t) => {
   const { root, places } = fixture(t);
   const stateDir = join(root, "state");

@@ -21,6 +21,9 @@ import type { PolicyMode } from "../contract/validate.js";
 export interface DaemonStatus extends StatusValue {
   readonly mode: PolicyMode;
   readonly notice?: string;
+  // boundRoot is the realpath of the root the daemon is pinned to, on status and up replies. Absent from a daemon that predates
+  // the field: the host then cannot know the root, so it keeps no client whose up was refused.
+  readonly boundRoot?: string;
 }
 
 export interface DaemonClient {
@@ -84,6 +87,7 @@ function isDaemonStatus(value: unknown): value is DaemonStatus {
     isRecord(value) &&
     isPolicyMode(value["mode"]) &&
     (value["notice"] === undefined || typeof value["notice"] === "string") &&
+    (value["boundRoot"] === undefined || typeof value["boundRoot"] === "string") &&
     isStatusValue(value)
   );
 }
