@@ -20,7 +20,7 @@ import {
 } from "./compute-driver.js";
 import { awaitRuntimeListener } from "./channel.js";
 import { installSeccompProfile } from "./seccomp-delivery.js";
-import { DriverLifecycle, type AdoptionRoots } from "./lifecycle.js";
+import { DriverLifecycle } from "./lifecycle.js";
 import { GATEWAY_ID_PATTERN } from "../gateway-config.js";
 import { assertSha256OfFile, spawnSupervisor } from "./supervisor.js";
 import { startSocketServer, type SocketServer } from "./server.js";
@@ -208,15 +208,14 @@ export function runtimeHostOf(config: DriverProcessConfig): RuntimeHost {
 }
 
 // Builds the driver. It first writes the sandbox seccomp profile next to the driver's socket, and the libpod client names that file in
-// every create. It then validates the configuration without touching libpod, claims the driver's socket, and adopts the surviving sandboxes.
+// every create. It then validates the configuration without touching libpod, claims the driver's socket, and runs the destroy-all sweep.
 // The socket is claimed first: startSocketServer refuses with LOCK_CONFLICT when a live driver listens on the path and removes only
-// a stale socket, so a second driver started on the same configuration is refused before it removes anything. The adoption then keeps every
-// realm container that still conforms to its retained artifacts, removes the rest, and removes the secret entries of sandboxes it did not keep. It runs while the socket accepts
-// connections, so no request is served ahead of it by construction: the lifecycle refuses create, delete and stop with
-// REALM_NOT_ACTIVE until the adoption has resolved, the compute driver refuses CreateSandbox the same way before it writes anything,
-// and the remaining RPCs only read or answer without touching a container or a secret (PRD-CTR-03). A failed adoption closes the server,
-// which removes the socket, and rethrows, so no half-started driver stays bound. The host supervisors of the previous generation
-// exited when its driver's stdin pipes closed.
+// a stale socket, so a second driver started on the same configuration is refused before it removes anything. The sweep then removes every
+// realm container, the secret entries of every sandbox and every realm volume. It runs while the socket accepts connections, so no request
+// is served ahead of it by construction: the lifecycle refuses create, delete and stop with REALM_NOT_ACTIVE until the sweep has resolved,
+// the compute driver refuses CreateSandbox the same way before it writes anything, and the remaining RPCs only read or answer without
+// touching a container or a secret (PRD-CTR-03). A failed sweep closes the server, which removes the socket, and rethrows, so no
+// half-started driver stays bound. The host supervisors of the previous generation exited when its driver's stdin pipes closed.
 export async function startDriver(config: DriverProcessConfig): Promise<SocketServer> {
   const seccompProfilePath = installSeccompProfile(config.socketPath);
   const libpod = new LibpodClient(config.libpodSocketPath, { seccompProfilePath });
@@ -236,15 +235,10 @@ export async function startDriver(config: DriverProcessConfig): Promise<SocketSe
   const server = await startSocketServer(config.socketPath, [
     { service: loadComputeDriverService(), implementation: computeDriverImplementation(driver) },
   ]);
-  const roots: AdoptionRoots = {
-    workspaceStateDir: config.driver.stateDir,
-    workspaceCeiling: config.driver.workspaceRoot,
-    image: config.driver.sandboxImage,
-  };
   try {
-    await lifecycle.adoptSurvivors(roots);
+    await lifecycle.startupSweep();
   } catch (error: unknown) {
-    // The adoption's own failure is the one reported; a close that also fails must not replace it.
+    // The sweep's own failure is the one reported; a close that also fails must not replace it.
     await server.close().catch(() => undefined);
     throw error;
   }

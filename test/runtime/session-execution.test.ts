@@ -211,6 +211,7 @@ function scratchMountOf(binding: SandboxBinding): Record<string, unknown> {
     Source: `/var/lib/containers/storage/volumes/${name}/_data`,
     Destination: HARDENING_PROFILE.scratchDestination,
     RW: true,
+    Options: ["rw", "noexec", "nosuid", "nodev"],
   };
 }
 

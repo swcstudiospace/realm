@@ -620,7 +620,7 @@ void test("RT-09 (R2): the create body mounts the session's scratch volume read-
     readonly volumes: unknown;
     readonly mounts: readonly { readonly type: string; readonly destination: string }[];
   };
-  assert.deepEqual(body.volumes, [{ name: "realm-scratch-sess-1", dest: "/scratch", options: ["rw"] }]);
+  assert.deepEqual(body.volumes, [{ name: "realm-scratch-sess-1", dest: "/scratch", options: ["rw", "noexec", "nosuid", "nodev"] }]);
   assert.deepEqual(
     body.mounts.filter((mount) => mount.type === "bind").map((mount) => mount.destination),
     ["/workspace", "/realm-state", "/run/openshell/channel"],
@@ -646,4 +646,33 @@ void test("RT-09 (R2): a sandbox name without a session id is refused before any
     "SCHEMA_INVALID",
   );
   assert.deepEqual(requests, []);
+});
+
+const R2_CREATE_SPEC = {
+  sandboxName: "realm-sess-1",
+  image: `registry.invalid/realm/sandbox@sha256:${"a".repeat(64)}`,
+  workspaceDir: "/realm/workspace",
+  stateDir: "/realm/state/realm-sess-1",
+  channelDir: "/realm/secrets/realm-sess-1/channel",
+};
+
+void test("RT-09 (R2): a create route reply of 500 with an engine error envelope is OPENSHELL_START_FAILED, with no catalogue cause", async (t) => {
+  const { socketPath } = await startVolumeFake(t, (request) =>
+    request.route === "createContainer"
+      ? { status: 500, body: JSON.stringify({ cause: "", message: "unknown mount option noexec invalid mount option", response: 500 }) }
+      : { status: 500 },
+  );
+  const client = new LibpodClient(socketPath, { seccompProfilePath: join(tmpdir(), SECCOMP_PROFILE_FILE_NAME) });
+  await assert.rejects(
+    client.createContainer(R2_CREATE_SPEC),
+    (error: unknown) => error instanceof RealmError && error.code === "OPENSHELL_START_FAILED" && error.causeCode === undefined,
+  );
+});
+
+void test("RT-09 (R2): a create route 201 without an id is SCHEMA_INVALID, not a start failure", async (t) => {
+  const { socketPath } = await startVolumeFake(t, (request) =>
+    request.route === "createContainer" ? { status: 201, body: "{}" } : { status: 500 },
+  );
+  const client = new LibpodClient(socketPath, { seccompProfilePath: join(tmpdir(), SECCOMP_PROFILE_FILE_NAME) });
+  await assertCode(client.createContainer(R2_CREATE_SPEC), "SCHEMA_INVALID");
 });

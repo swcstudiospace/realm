@@ -2,6 +2,7 @@ import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { createServer } from "node:http";
 import { join } from "node:path";
 import { makeRealmError, RealmError, type ErrorCode } from "../../../src/core/errors.js";
 import { bindRoot } from "../../../src/fs/root.js";
@@ -16,7 +17,7 @@ import {
   scratchVolumeNameOf,
   tmpfsOptionsOf,
 } from "../../../src/runtime/hardening.js";
-import type { ContainerSpec, LibpodContainerSummary, LibpodInfo, LibpodInspect } from "../../../src/runtime/libpod-client.js";
+import { LibpodClient, type ContainerSpec, type LibpodContainerSummary, type LibpodInfo, type LibpodInspect } from "../../../src/runtime/libpod-client.js";
 import {
   OPENSHELL_ISOLATION_ROLE_LABEL_KEY,
   OPENSHELL_MANAGED_LABEL_KEY,
@@ -28,6 +29,7 @@ import { sandboxNameOfSession, sessionIdOfWorkspace } from "../../../src/session
 import { writeWorkspaceEntry } from "../../../src/session/workspace-registry.js";
 import { CONFORMING_PROC_STATUS, RUNTIME_OCI_CONFIG_TEXT } from "../hardening-fixtures.js";
 import { OCI_CONFIG_PATH, ociReaderOf, STATIC_DIR } from "../seccomp-fixtures.js";
+import { SECCOMP_PROFILE_FILE_NAME } from "../../../src/runtime/driver/seccomp-profile.js";
 
 // The engine answers in memory. Every sandbox here is realm-sess-1, whose session is sess-1, so its scratch volume is
 // realm-scratch-sess-1. Digests and paths come from the hardening profile and the fixtures the create body is verified against.
@@ -54,8 +56,8 @@ class FakeEngine implements LifecycleLibpod {
   readonly containers = new Map<string, Container>();
   readonly volumes = new Map<string, Readonly<Record<string, string>>>();
   readonly calls: string[] = [];
-  // The code a container create is refused with, as an engine that cannot attach the volume refuses it.
-  createError: ErrorCode | undefined;
+  // The create is sent through this client, so the engine's own HTTP reply decides the refusal. Unset, the fake answers in memory.
+  createThrough: LibpodClient | undefined;
   // A container is created without the scratch volume mount.
   omitScratch = false;
   // A volume removal is refused with this code.
@@ -70,11 +72,11 @@ class FakeEngine implements LifecycleLibpod {
 
   createContainer(spec: ContainerSpec): Promise<string> {
     this.calls.push(`createContainer:${spec.sandboxName}`);
-    if (this.createError !== undefined) {
-      return Promise.reject(makeRealmError(this.createError));
-    }
     if (this.findContainer(spec.sandboxName) !== undefined) {
       return Promise.reject(makeRealmError("SANDBOX_NAME_IN_USE"));
+    }
+    if (this.createThrough !== undefined) {
+      return this.createThrough.createContainer(spec);
     }
     this.sequence += 1;
     const id = `ctr-${String(this.sequence)}`;
@@ -172,6 +174,7 @@ function scratchMount(volume: string): Record<string, unknown> {
     Source: `/var/lib/containers/storage/volumes/${volume}/_data`,
     Destination: HARDENING_PROFILE.scratchDestination,
     RW: true,
+    Options: ["rw", "noexec", "nosuid", "nodev"],
   };
 }
 
@@ -275,6 +278,52 @@ interface Harness {
   readonly spec: ContainerSpec;
 }
 
+// An engine that refuses every request it is sent, as Podman refuses a volume attach it cannot make: HTTP 500 with its error envelope,
+// whose message is a string. The ping that opens each libpod call is answered with the pinned API version.
+async function startRefusingEngine(t: TestContext): Promise<string> {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "realm-scratch-engine-")));
+  t.after(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const socketPath = join(dir, "podman.sock");
+  const server = createServer((req, res) => {
+    req.resume();
+    req.on("end", () => {
+      if ((req.url ?? "").split("?")[0] === "/_ping") {
+        res.writeHead(200, { "libpod-api-version": "5.7.1" });
+        res.end();
+        return;
+      }
+      res.writeHead(500, { "content-type": "application/json" });
+      res.end(JSON.stringify({ cause: "", message: `error mounting volume ${VOLUME}: invalid mount option`, response: 500 }));
+    });
+  });
+  let resolveListening: () => void = () => undefined;
+  let rejectListening: (error: Error) => void = () => undefined;
+  const listening = new Promise<void>((resolve, reject) => {
+    resolveListening = resolve;
+    rejectListening = reject;
+  });
+  server.once("error", rejectListening);
+  server.listen(socketPath, () => {
+    server.off("error", rejectListening);
+    resolveListening();
+  });
+  await listening;
+  t.after(async () => {
+    server.closeAllConnections();
+    let resolveClosed: () => void = () => undefined;
+    const closed = new Promise<void>((resolve) => {
+      resolveClosed = resolve;
+    });
+    server.close(() => {
+      resolveClosed();
+    });
+    await closed;
+  });
+  return socketPath;
+}
+
 // A lifecycle over a fresh engine, with real directories for the state, the secrets, the workspace and the registry. The startup
 // adoption runs first unless adopt is false, since create and delete refuse until it has run.
 async function harness(t: TestContext, adopt = true): Promise<Harness> {
@@ -364,11 +413,11 @@ void test("R2: a volume the engine keeps after its removal is reported with its 
 
 void test("R2: the fail-closed attach case refuses with OPENSHELL_START_FAILED, makes no second attempt and no fallback, and removes its volume", async (t) => {
   const h = await harness(t);
-  h.engine.createError = "SCHEMA_INVALID";
+  h.engine.createThrough = new LibpodClient(await startRefusingEngine(t), { seccompProfilePath: join(tmpdir(), SECCOMP_PROFILE_FILE_NAME) });
   await assert.rejects(
     h.lifecycle.create(h.spec),
     (error: unknown) =>
-      error instanceof RealmError && error.code === "OPENSHELL_START_FAILED" && error.causeCode === "SCHEMA_INVALID",
+      error instanceof RealmError && error.code === "OPENSHELL_START_FAILED" && error.causeCode !== "SCHEMA_INVALID",
   );
   assert.deepEqual(
     h.engine.calls.filter((call) => call.startsWith("createContainer:")),

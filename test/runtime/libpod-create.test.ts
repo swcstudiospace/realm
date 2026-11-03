@@ -188,7 +188,7 @@ const EXPECTED_BODY = {
   },
   use_image_resolve_conf: true,
   tty: false,
-  volumes: [{ name: "realm-scratch-sess-1", dest: "/scratch", options: ["rw"] }],
+  volumes: [{ name: "realm-scratch-sess-1", dest: "/scratch", options: ["rw", "noexec", "nosuid", "nodev"] }],
   mounts: [
     { type: "tmpfs", destination: "/tmp", options: ["noexec", "nosuid", "nodev", "size=256m"] },
     { type: "tmpfs", destination: "/run", options: ["noexec", "nosuid", "nodev", "size=16m"] },

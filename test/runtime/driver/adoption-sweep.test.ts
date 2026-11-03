@@ -222,6 +222,7 @@ function conformingInspect(id: string, name: string, binding: SandboxBinding): R
         Source: `/var/lib/containers/storage/volumes/${scratch}/_data`,
         Destination: HARDENING_PROFILE.scratchDestination,
         RW: true,
+        Options: ["rw", "noexec", "nosuid", "nodev"],
       },
     ],
   };
@@ -248,7 +249,7 @@ function isRealmError(code: string): (error: unknown) => boolean {
   return (error: unknown): boolean => error instanceof RealmError && error.code === code;
 }
 
-await test("a verified survivor is adopted: it is kept, its secret entries stay, and the result lists it", async () => {
+void test("a verified survivor is adopted: it is kept, its secret entries stay, and the result lists it", async () => {
   const h = harnessOf();
   const made = madeSandbox(h, "project-a");
   const containerId = addContainer(h, made);
@@ -269,7 +270,7 @@ await test("a verified survivor is adopted: it is kept, its secret entries stay,
   });
 });
 
-await test("a survivor whose binding cannot be rebuilt is removed with cause no-artifacts, and its removal is proven", async () => {
+void test("a survivor whose binding cannot be rebuilt is removed with cause no-artifacts, and its removal is proven", async () => {
   const h = harnessOf();
   const made = madeSandbox(h, "project-b", false);
   const containerId = addContainer(h, made);
@@ -286,7 +287,7 @@ await test("a survivor whose binding cannot be rebuilt is removed with cause no-
   assert.equal(h.libpod.containers.has(containerId), false);
 });
 
-await test("a container whose sandbox retains nothing is removed with cause no-record", async () => {
+void test("a container whose sandbox retains nothing is removed with cause no-record", async () => {
   const h = harnessOf();
   const stray = strayOf(h, "project-c");
   const containerId = addContainer(h, stray);
@@ -302,7 +303,7 @@ await test("a container whose sandbox retains nothing is removed with cause no-r
   assert.equal(h.libpod.containers.has(containerId), false);
 });
 
-await test("a survivor that fails one hardening check is removed with that check's cause, and no other container is touched", async () => {
+void test("a survivor that fails one hardening check is removed with that check's cause, and no other container is touched", async () => {
   const h = harnessOf();
   const bad = madeSandbox(h, "project-d");
   const good = madeSandbox(h, "project-e");
@@ -325,7 +326,7 @@ await test("a survivor that fails one hardening check is removed with that check
   assert.equal(presentSecretEntries(secretDirOfSandbox(h, bad.sandboxName)).length, 0);
 });
 
-await test("an inspect that throws rejects the adoption before any removal, and swept stays false", async () => {
+void test("an inspect that throws rejects the adoption before any removal, and swept stays false", async () => {
   const h = harnessOf();
   const doomed = madeSandbox(h, "project-f", false);
   const doomedId = addContainer(h, doomed);
@@ -342,7 +343,7 @@ await test("an inspect that throws rejects the adoption before any removal, and 
   }, isRealmError("REALM_NOT_ACTIVE"));
 });
 
-await test("a removal that the proving listing still shows rejects the adoption, and that sandbox's secret entries are kept", async () => {
+void test("a removal that the proving listing still shows rejects the adoption, and that sandbox's secret entries are kept", async () => {
   const h = harnessOf();
   const stuck = madeSandbox(h, "project-h");
   const stuckId = addContainer(h, stuck, (inspect) => {
@@ -361,7 +362,7 @@ await test("a removal that the proving listing still shows rejects the adoption,
   }, isRealmError("REALM_NOT_ACTIVE"));
 });
 
-await test("a sandbox with no adopted container has its secret entries removed only after the presence check", async () => {
+void test("a sandbox with no adopted container has its secret entries removed only after the presence check", async () => {
   const h = harnessOf();
   const orphan = madeSandbox(h, "project-i");
   const orphanDir = secretDirOfSandbox(h, orphan.sandboxName);

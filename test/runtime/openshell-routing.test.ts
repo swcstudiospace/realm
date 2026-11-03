@@ -124,7 +124,7 @@ async function createSession(f: Fixture): Promise<{ readonly containerId: string
       { Type: "bind", Source: f.workspaceRoot, Destination: "/workspace", RW: true },
       { Type: "bind", Source: binding.stateDir, Destination: "/realm-state", RW: false },
       { Type: "bind", Source: binding.channelDir, Destination: HARDENING_PROFILE.channelDestination, RW: true },
-      { Type: "volume", Name: scratchVolumeNameOf(SESSION), Source: `/var/lib/containers/storage/volumes/${scratchVolumeNameOf(SESSION)}/_data`, Destination: HARDENING_PROFILE.scratchDestination, RW: true },
+      { Type: "volume", Name: scratchVolumeNameOf(SESSION), Source: `/var/lib/containers/storage/volumes/${scratchVolumeNameOf(SESSION)}/_data`, Destination: HARDENING_PROFILE.scratchDestination, RW: true, Options: ["rw", "noexec", "nosuid", "nodev"] },
     ],
   };
   f.libpod.respondNext("inspectContainer", { status: 200, body: JSON.stringify(inspect) });

@@ -42,7 +42,14 @@ const CHANNEL = "/realm/channel";
 const SUPERVISOR_CA = HARDENING_PROFILE.supervisorCaDestination;
 const SESSION = "sess-1";
 const SCRATCH = scratchVolumeNameOf(SESSION);
-const ALL_SCRATCH = ["scratch-volume-type", "scratch-volume-name", "scratch-volume-session", "scratch-volume-destination", "scratch-volume-read-write"];
+const ALL_SCRATCH = [
+  "scratch-volume-type",
+  "scratch-volume-name",
+  "scratch-volume-session",
+  "scratch-volume-destination",
+  "scratch-volume-read-write",
+  "scratch-volume-options",
+];
 
 const BINDING: HardeningBinding = {
   image: `registry.example.com/realm/session@${DIGEST}`,
@@ -211,6 +218,7 @@ void test("every D-51 property has a named check, and a non-object inspect fails
       "scratch-volume-session",
       "scratch-volume-destination",
       "scratch-volume-read-write",
+      "scratch-volume-options",
       "init-process",
       "socket-path",
       "seccomp-keyring",
@@ -924,6 +932,32 @@ void test("the scratch volume's host mountpoint is not compared, so any Source o
   assert.deepEqual(verifyInspect(BINDING, withMounts([...binds(), mount])), []);
 });
 
+void test("a scratch volume whose Options carry noexec, nosuid and nodev conforms to scratch-volume-options (R2)", () => {
+  const options = ["rw", "noexec", "nosuid", "nodev"];
+  assert.deepEqual(verifyInspect(BINDING, withMounts([...binds(), scratch(SCRATCH, HARDENING_PROFILE.scratchDestination, true, options)])), []);
+});
+
+void test("a scratch volume without noexec fails the scratch-volume-options property alone (R2)", () => {
+  const options = ["rw", "nosuid", "nodev"];
+  assert.deepEqual(verifyInspect(BINDING, withMounts([...binds(), scratch(SCRATCH, HARDENING_PROFILE.scratchDestination, true, options)])), [
+    "scratch-volume-options",
+  ]);
+});
+
+void test("a scratch volume without nosuid fails the scratch-volume-options property alone (R2)", () => {
+  const options = ["rw", "noexec", "nodev"];
+  assert.deepEqual(verifyInspect(BINDING, withMounts([...binds(), scratch(SCRATCH, HARDENING_PROFILE.scratchDestination, true, options)])), [
+    "scratch-volume-options",
+  ]);
+});
+
+void test("a scratch volume without nodev fails the scratch-volume-options property alone (R2)", () => {
+  const options = ["rw", "noexec", "nosuid"];
+  assert.deepEqual(verifyInspect(BINDING, withMounts([...binds(), scratch(SCRATCH, HARDENING_PROFILE.scratchDestination, true, options)])), [
+    "scratch-volume-options",
+  ]);
+});
+
 void test("a scratch volume of another session fails the session property alone (R2)", () => {
   assert.deepEqual(verifyInspect(BINDING, withMounts([...binds(), scratch("realm-scratch-sess-2")])), ["scratch-volume-session"]);
 });
@@ -947,7 +981,7 @@ void test("a scratch volume without an RW field fails the read-write property cl
 });
 
 void test("a tmpfs in place of the scratch volume fails the scratch type and name, and nothing else (R2)", () => {
-  const tmpfs = { Type: "tmpfs", Source: "tmpfs", Destination: HARDENING_PROFILE.scratchDestination, RW: true };
+  const tmpfs = { Type: "tmpfs", Source: "tmpfs", Destination: HARDENING_PROFILE.scratchDestination, RW: true, Options: ["rw", "noexec", "nosuid", "nodev"] };
   assert.deepEqual(verifyInspect(BINDING, withMounts([...binds(), tmpfs])), ["scratch-volume-type", "scratch-volume-name"]);
 });
 
@@ -979,8 +1013,13 @@ function binds(): Record<string, unknown>[] {
 }
 
 // The scratch volume's mount entry, as Podman's inspect reports a named volume.
-function scratch(name: string = SCRATCH, destination: string = HARDENING_PROFILE.scratchDestination, rw = true): Record<string, unknown> {
-  return { Type: "volume", Name: name, Source: `/var/lib/containers/storage/volumes/${name}/_data`, Destination: destination, RW: rw };
+function scratch(
+  name: string = SCRATCH,
+  destination: string = HARDENING_PROFILE.scratchDestination,
+  rw = true,
+  options: readonly string[] = ["rw", "noexec", "nosuid", "nodev"],
+): Record<string, unknown> {
+  return { Type: "volume", Name: name, Source: `/var/lib/containers/storage/volumes/${name}/_data`, Destination: destination, RW: rw, Options: [...options] };
 }
 
 // A conforming inspect whose mounts are the given list.

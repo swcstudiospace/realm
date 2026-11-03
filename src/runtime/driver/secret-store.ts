@@ -167,6 +167,33 @@ export function removeSandboxSecrets(root: string, sandboxName: string): void {
   removeSecretDirIfEmpty(dir);
 }
 
+// Removes the secret entries of every sandbox under the root, at startup. An absent root has none. A symbolic link anywhere
+// under the root is refused before anything is removed, so the sweep never follows a link.
+export function removeAllSecrets(root: string): void {
+  if (lstatOrAbsent(root, "SCHEMA_INVALID") === null) {
+    return;
+  }
+  assertDirectory(root);
+  const dirs: string[] = [];
+  for (const name of listDirectory(root)) {
+    const path = join(root, name);
+    const stat = lstatOrAbsent(path, "SCHEMA_INVALID");
+    if (stat === null) {
+      continue;
+    }
+    if (stat.isSymbolicLink()) {
+      throw makeRealmError("SCHEMA_INVALID");
+    }
+    if (stat.isDirectory()) {
+      dirs.push(path);
+    }
+  }
+  for (const dir of dirs) {
+    removeSecretEntries(presentSecretEntries(dir));
+    removeSecretDirIfEmpty(dir);
+  }
+}
+
 // A sandbox directory under the secret root, by name.
 interface SecretDir {
   readonly name: string;
@@ -273,6 +300,21 @@ function directoryExists(dir: string): boolean {
     throw makeRealmError("SCHEMA_INVALID");
   }
   return true;
+}
+
+function assertDirectory(path: string): void {
+  const stat = lstatOrAbsent(path, "SCHEMA_INVALID");
+  if (stat === null || !stat.isDirectory()) {
+    throw makeRealmError("SCHEMA_INVALID");
+  }
+}
+
+function listDirectory(dir: string): string[] {
+  try {
+    return readdirSync(dir);
+  } catch {
+    throw makeRealmError("SCHEMA_INVALID");
+  }
 }
 
 // The realm account is the process user. A stat with no uid check is never trusted, so an unknown user refuses.

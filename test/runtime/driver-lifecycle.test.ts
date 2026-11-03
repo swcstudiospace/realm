@@ -374,6 +374,7 @@ function goodInspect(stateDir: string, workspaceDir: string, channelDir: string)
       Source: "/var/lib/containers/storage/volumes/realm-scratch-sess-1/_data",
       Destination: HARDENING_PROFILE.scratchDestination,
       RW: true,
+      Options: ["rw", "noexec", "nosuid", "nodev"],
     },
   ];
   return {
@@ -559,11 +560,6 @@ async function harness(t: TestContext, arrangement: Arrangement = {}): Promise<H
 
 function hasCode(code: ErrorCode): (error: unknown) => boolean {
   return (error) => error instanceof RealmError && error.code === code;
-}
-
-// A create the engine refused: OPENSHELL_START_FAILED, with the engine's own code as its cause.
-function startFailedCausedBy(cause: ErrorCode): (error: unknown) => boolean {
-  return (error) => error instanceof RealmError && error.code === "OPENSHELL_START_FAILED" && error.causeCode === cause;
 }
 
 function forcedRemoval(seen: readonly Seen[], containerId: string): boolean {
@@ -1035,14 +1031,14 @@ void test("PRD-CTR-01: a create whose reply never arrives removes its own contai
 
 void test("PRD-CTR-01: a 201 whose body carries no id removes its own container by name, because the labels show it is ours", async (t) => {
   const h = await harness(t, { malformedCreate: true });
-  await assert.rejects(h.lifecycle.create(h.spec), startFailedCausedBy("SCHEMA_INVALID"));
+  await assert.rejects(h.lifecycle.create(h.spec), hasCode("SCHEMA_INVALID"));
   assert.equal(h.fake.store.size, 0);
   assert.equal(forcedRemoval(h.fake.seen, SANDBOX), true);
 });
 
 void test("PRD-CTR-01 (L1): a same-name foreign container without the sandbox labels survives a failed create", async (t) => {
   const h = await harness(t, { foreignOnCreate: true });
-  await assert.rejects(h.lifecycle.create(h.spec), startFailedCausedBy("SCHEMA_INVALID"));
+  await assert.rejects(h.lifecycle.create(h.spec), hasCode("SCHEMA_INVALID"));
   assert.equal(h.fake.store.has(FOREIGN_RACE_ID), true);
   assert.equal(h.fake.seen.some((request) => request.route === "removeContainer"), false);
 });
@@ -1354,6 +1350,25 @@ void test("PRD-CTR-03: create and delete refuse with REALM_NOT_ACTIVE until adop
   await assert.rejects(h.lifecycle.delete(SANDBOX), hasCode("REALM_NOT_ACTIVE"));
   assert.equal(h.fake.seen.length, 0);
   await h.lifecycle.adoptSurvivors(h.roots);
+  mkdirSync(h.spec.channelDir, { recursive: true });
+  assert.equal(await h.lifecycle.create(h.spec), CREATED_ID);
+});
+
+void test("PRD-CTR-03: startupSweep removes realm-labelled orphans before it resolves and leaves foreign containers", async (t) => {
+  const h = await harness(t, { seed: [ORPHAN, FOREIGN], sweep: false });
+  assert.equal(h.fake.store.has(ORPHAN.id), true);
+  const removed = await h.lifecycle.startupSweep();
+  assert.equal(removed, 1);
+  assert.equal(h.fake.store.has(ORPHAN.id), false);
+  assert.equal(h.fake.store.has(FOREIGN.id), true);
+});
+
+void test("PRD-CTR-03: create and delete refuse with REALM_NOT_ACTIVE until startupSweep has resolved", async (t) => {
+  const h = await harness(t, { sweep: false });
+  await assert.rejects(h.lifecycle.create(h.spec), hasCode("REALM_NOT_ACTIVE"));
+  await assert.rejects(h.lifecycle.delete(SANDBOX), hasCode("REALM_NOT_ACTIVE"));
+  assert.equal(h.fake.seen.length, 0);
+  await h.lifecycle.startupSweep();
   mkdirSync(h.spec.channelDir, { recursive: true });
   assert.equal(await h.lifecycle.create(h.spec), CREATED_ID);
 });

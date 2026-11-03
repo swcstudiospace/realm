@@ -2781,7 +2781,7 @@ function survivorOf(
         { Type: "bind", Source: roots.workspaceRoot, Destination: "/workspace", RW: true },
         { Type: "bind", Source: binding.stateDir, Destination: "/realm-state", RW: false },
         { Type: "bind", Source: binding.channelDir, Destination: HARDENING_PROFILE.channelDestination, RW: true },
-        { Type: "volume", Name: scratch, Source: `/var/lib/containers/storage/volumes/${scratch}/_data`, Destination: HARDENING_PROFILE.scratchDestination, RW: true },
+        { Type: "volume", Name: scratch, Source: `/var/lib/containers/storage/volumes/${scratch}/_data`, Destination: HARDENING_PROFILE.scratchDestination, RW: true, Options: ["rw", "noexec", "nosuid", "nodev"] },
       ],
     },
   };

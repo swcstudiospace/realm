@@ -162,6 +162,8 @@ export const SUPERVISOR_CA_TMPFS_OPTIONS: readonly string[] = Object.freeze(["no
 // labels are derived here from the session id, so the driver's create, delete and startup sweep and the verifier read one value.
 // The realm label marks the volume as the realm's, so the startup sweep lists only realm volumes.
 export const SCRATCH_VOLUME_PREFIX = "realm-scratch-";
+// The options the scratch volume's mount carries, so the volume is not executable, suid or device-bearing, as every writable mount is (R2).
+const SCRATCH_VOLUME_REQUIRED_OPTIONS: readonly string[] = Object.freeze(["noexec", "nosuid", "nodev"]);
 export const REALM_MANAGED_LABEL_KEY = "io.realm.managed";
 export const REALM_MANAGED_LABEL_VALUE = "true";
 export const REALM_SESSION_LABEL_KEY = "io.realm.session";
@@ -193,6 +195,7 @@ export const HARDENING_PROPERTIES = Object.freeze([
   "scratch-volume-session",
   "scratch-volume-destination",
   "scratch-volume-read-write",
+  "scratch-volume-options",
   "init-process",
   "socket-path",
   "seccomp-keyring",
@@ -329,6 +332,14 @@ const CHECKS: Readonly<Record<HardeningProperty, Check>> = Object.freeze({
   },
   "scratch-volume-destination": (inspect) => scratchMountOf(inspect)?.["Destination"] === HARDENING_PROFILE.scratchDestination,
   "scratch-volume-read-write": (inspect) => scratchMountOf(inspect)?.["RW"] === true,
+  "scratch-volume-options": (inspect) => {
+    const options: unknown = scratchMountOf(inspect)?.["Options"];
+    if (!Array.isArray(options)) {
+      return false;
+    }
+    const entries: readonly unknown[] = options;
+    return SCRATCH_VOLUME_REQUIRED_OPTIONS.every((option) => entries.includes(option));
+  },
 });
 
 // Returns the failed property names in report order. An empty list means the inspect conforms.

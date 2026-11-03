@@ -68,6 +68,7 @@ function scratchMountsOf(sandboxName: string | undefined): Record<string, unknow
       Source: `/var/lib/containers/storage/volumes/${name}/_data`,
       Destination: HARDENING_PROFILE.scratchDestination,
       RW: true,
+      Options: ["rw", "noexec", "nosuid", "nodev"],
     },
   ];
 }

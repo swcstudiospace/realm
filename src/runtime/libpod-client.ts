@@ -274,6 +274,11 @@ export class LibpodClient {
     if (reply.status === 409) {
       throw makeRealmError("SANDBOX_NAME_IN_USE");
     }
+    // An engine refusal of the create (a non-2xx reply, other than 409, whose body is Podman's error envelope) is the start failure. It
+    // carries no catalogue code of its own: the client maps no code to it. Every other unexpected reply is SCHEMA_INVALID below.
+    if (isEngineRefusal(reply)) {
+      throw makeRealmError("OPENSHELL_START_FAILED");
+    }
     expectStatus(reply, [201]);
     const id = readPath(parseJson(reply.text), [LIBPOD_LIST_ID_FIELD]);
     if (typeof id !== "string" || !CONTAINER_ID_PATTERN.test(id)) {
@@ -454,6 +459,15 @@ function expectStatus(reply: HttpReply, allowed: readonly number[]): void {
   }
 }
 
+// True when a reply is a non-2xx answer whose JSON body is Podman's error envelope, which carries a string message. A non-JSON body
+// fails in parseJson, as any other malformed reply does.
+function isEngineRefusal(reply: HttpReply): boolean {
+  if (reply.status >= 200 && reply.status < 300) {
+    return false;
+  }
+  return typeof readPath(parseJson(reply.text), ["message"]) === "string";
+}
+
 // Podman answers an absent resource with a 404 whose JSON cause names its kind ("no such container", "no such volume"). Any other
 // 404 is a wrong route or an unexpected reply, so it is never read as absence. A non-JSON 404 fails in parseJson.
 function isAbsent(reply: HttpReply, cause: string): boolean {
@@ -593,7 +607,7 @@ function containerCreateBody(spec: ContainerSpec, seccompProfilePath: string): R
     tty: false,
     // The session's scratch volume, a named volume mounted read-write at the scratch destination (R2). Podman's named-volume field
     // carries it beside the bind and tmpfs mounts.
-    volumes: [{ name: scratchVolumeOfSandbox(spec.sandboxName), dest: profile.scratchDestination, options: ["rw"] }],
+    volumes: [{ name: scratchVolumeOfSandbox(spec.sandboxName), dest: profile.scratchDestination, options: ["rw", "noexec", "nosuid", "nodev"] }],
     mounts: [
       ...scratch.map((destination) => ({ type: "tmpfs", destination, options: [...tmpfsOptionsOf(destination)] })),
       { type: "bind", source: spec.workspaceDir, destination: profile.workspaceDestination, options: WORKSPACE_OPTIONS },

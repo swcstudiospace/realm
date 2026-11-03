@@ -553,8 +553,7 @@ void test("PRD-CTR-03: a create that arrives before the sweep has resolved is re
   assert.equal(existsSync(join(config.sandboxStateRoot, name)), false, "no state directory was made");
   assert.equal(existsSync(join(config.secretRoot, name)), false, "no launch material was written");
 
-  const roots = { workspaceStateDir: config.stateDir, workspaceCeiling: config.workspaceRoot, image: config.sandboxImage };
-  await lifecycle.adoptSurvivors(roots);
+  await lifecycle.startupSweep();
   assert.doesNotThrow(() => {
     lifecycle.requireSwept();
   });

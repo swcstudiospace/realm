@@ -1,8 +1,9 @@
 // Hardened container lifecycle of the driver (phase 9.3, PRD-CTR-01..03). create builds the container from a
 // typed spec, runs the caller's before-start step, starts it, and proves it conforms before it is returned. delete removes a
-// sandbox's own containers, its own state directory, and its secret entries. adoptSurvivors runs at every driver start, before the
-// driver serves a request that acts on a container or a secret. It keeps each realm container that still conforms to its retained
-// binding, removes the rest, and removes the secret entries of each sandbox it keeps no container for.
+// sandbox's own containers, its own state directory, and its secret entries. startupSweep runs at every driver start, before the driver
+// serves a request that acts on a container, a volume or a secret: it is the destroy-all sweep the driver keeps until CS-3 and CS-6 land.
+// adoptSurvivors is the selective adoption, kept beside it. It keeps each realm container that still conforms to its retained binding,
+// removes the rest, and removes the secret entries of each sandbox it keeps no container for. The driver does not call it at start yet.
 //
 // Everything here goes through the closed libpod client (PD-11). The verifier is the same one session-execution
 // uses (PD-13): verifyInspect over HARDENING_PROFILE, with the host evidence (the OCI config's fields and the init process's
@@ -46,21 +47,12 @@ import {
   OPENSHELL_SANDBOX_NAME_LABEL_KEY,
   sessionOfRealmSandbox,
 } from "../openshell.js";
-import { listRealmContainers, SWEEP_CALL_TIMEOUT_MS } from "../sweep.js";
-import { presentSecretEntries, removeSecretDirIfEmpty, removeSecretEntries, secretDirExists, secretDirOf, secretDirsUnder } from "./secret-store.js";
+import { listRealmContainers, removeAllRealmContainers, SWEEP_CALL_TIMEOUT_MS } from "../sweep.js";
+import { presentSecretEntries, removeAllSecrets, removeSecretDirIfEmpty, removeSecretEntries, secretDirExists, secretDirOf, secretDirsUnder } from "./secret-store.js";
 import { sandboxBindingOf, type SandboxBinding } from "./sandbox-binding.js";
 
 // Grace period a sandbox container gets to stop before it is killed. Matches the session composition's grace.
 const STOP_GRACE_MS = 10_000;
-
-// The codes that already name a create's failure. A createContainer failure with one of these is rethrown unchanged, so a
-// down podman machine is not reported as an OpenShell start failure. Every other failure is OPENSHELL_START_FAILED.
-const CREATE_PASSTHROUGH_CODES: readonly ErrorCode[] = [
-  "PODMAN_MACHINE_DOWN",
-  "OPENSHELL_GATEWAY_LOST",
-  "REALM_STOPPING",
-  "STARTUP_BUDGET_EXCEEDED",
-];
 
 // C5. An entry whose path under the state directory matches this names a secret. Such an entry (file or directory)
 // must carry no group or world permission bit. The pattern is deliberately broad: a false match only refuses a
@@ -100,7 +92,7 @@ export interface DriverLifecycleOptions {
   // Absolute root of the per-sandbox state directories. A sandbox's state directory is exactly <root>/<sandboxName>.
   readonly sandboxStateRoot: string;
   // Absolute root of the per-sandbox secret directories, <root>/<sandboxName>. It is never bound into a container and
-  // must lie outside the state root. delete and adoptSurvivors remove the sandbox's secret entries from it.
+  // must lie outside the state root. delete, startupSweep and adoptSurvivors remove the sandbox's secret entries from it.
   readonly secretRoot: string;
   // Reads the text of a host process's status file. The create-time check reads the init process through it (D-51).
   readonly readProcStatus?: ((pid: number) => string) | undefined;
@@ -215,6 +207,30 @@ export class DriverLifecycle {
     this.readOciConfig = options.readOciConfig ?? readHostOciConfig;
     this.lstat = options.lstat ?? lstatSync;
     this.removeDirectory = options.removeDirectory ?? removeTree;
+  }
+
+  // The destroy-all sweep the driver keeps until CS-3 and CS-6 land. It removes every realm container, then every sandbox's secret
+  // entries, then every realm volume that remains, and resolves with how many containers it removed. Each volume removal is proven by a
+  // listing; an unproven removal rejects the sweep with REALM_STOPPING. The compute driver keeps its sandbox registry and supervisors in
+  // memory, so an adopted sandbox would be invisible to the gateway after a restart, and the adopted-name refusal would block re-creating
+  // it; the registry rebuild (CS-3) and the supervisor respawn (CS-6) must exist before adoptSurvivors runs at start. The method sets
+  // swept only when it resolves, so create, delete and stop refuse with REALM_NOT_ACTIVE until then.
+  async startupSweep(): Promise<number> {
+    this.swept = false;
+    const removed = await removeAllRealmContainers(this.libpod);
+    removeAllSecrets(this.secretRoot);
+    const volumePlan: VolumePlan[] = (
+      await bounded(this.libpod.listVolumesByLabel(REALM_MANAGED_LABEL_KEY, REALM_MANAGED_LABEL_VALUE))
+    ).map((name) => ({ name, cause: "startup-sweep" }));
+    const volumeFailure = await this.removeVolumes(volumePlan);
+    const stillListed = new Set(
+      await bounded(this.libpod.listVolumesByLabel(REALM_MANAGED_LABEL_KEY, REALM_MANAGED_LABEL_VALUE)),
+    );
+    if (volumePlan.some((volume) => stillListed.has(volume.name))) {
+      throw makeRealmError("REALM_STOPPING", volumeFailure);
+    }
+    this.swept = true;
+    return removed;
   }
 
   // Adopts the realm containers that still conform and removes every other one. It replaces the destroy-all sweep of earlier drivers at a start that
@@ -335,9 +351,8 @@ export class DriverLifecycle {
   }
 
   // Creates the sandbox container on the session's scratch volume, runs the before-start step, starts the container and verifies it.
-  // Each failure removes the container before it is thrown. A create the engine refuses is OPENSHELL_START_FAILED with the engine's code
-  // as its cause, including one that cannot attach the volume at /scratch, unless that code names its own failure, which is rethrown
-  // unchanged. No fallback mount, container or volume is made.
+  // Each failure removes the container before it is thrown, and the error is rethrown unchanged: an engine refusal of the create is
+  // already OPENSHELL_START_FAILED, as the libpod client makes it. No fallback mount, container or volume is made.
   private async createSandboxContainer(spec: ContainerSpec, binding: HardeningBinding, beforeStart?: BeforeStart): Promise<string> {
     let id: string;
     try {
@@ -351,17 +366,10 @@ export class DriverLifecycle {
       // Any other failure may have left this create's own container. It is removed by name only when its labels show
       // it is this spec's sandbox, so a foreign container of the name is left alone.
       const removeCause = await this.discardOwnedByName(spec);
-      if (error instanceof RealmError && CREATE_PASSTHROUGH_CODES.includes(error.code)) {
-        if (removeCause !== undefined) {
-          reportSurvivor(error, spec.sandboxName, removeCause);
-        }
-        throw error;
+      if (error instanceof RealmError && removeCause !== undefined) {
+        reportSurvivor(error, spec.sandboxName, removeCause);
       }
-      const refusal = makeRealmError("OPENSHELL_START_FAILED", codeOf(error));
-      if (removeCause !== undefined) {
-        reportSurvivor(refusal, spec.sandboxName, removeCause);
-      }
-      throw refusal;
+      throw error;
     }
     await this.checkBeforeStart(id);
     if (beforeStart !== undefined) {
@@ -660,7 +668,7 @@ export class DriverLifecycle {
     return failure;
   }
 
-  // Refuses with REALM_NOT_ACTIVE until adoptSurvivors has resolved. create, delete and stop call it first; the compute driver calls it
+  // Refuses with REALM_NOT_ACTIVE until startupSweep or adoptSurvivors has resolved. create, delete and stop call it first; the compute driver calls it
   // before a create writes anything to disk, so no request touches the state or secret roots ahead of the sweep.
   requireSwept(): void {
     if (!this.swept) {
