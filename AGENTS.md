@@ -56,6 +56,7 @@ Every gate must pass before a change is reviewed (`CONTRIBUTING.md`).
 
 - `src/`: strict TypeScript. `npm run build` emits it to `dist/src/`.
   - `cli/main.ts`: entry for the `realm` CLI.
+  - `cli/checkpoint.ts`: the realm checkpoint CLI.
   - `daemon/`: control socket (`channel.ts`), client, daemon, `ensure.ts` (starts the daemon once, only when the socket is absent, and waits for it; the status probe the CLI and the Omp extension share), and `main.ts`, the daemon entry.
   - `omp/`: Omp plugin logic (`plugin.ts`) and its entry (`extension.ts`).
   - `mcp/`: MCP stdio server (`server.ts`: transport and routing) and the protocol versions and result shapes of both eras (`protocol.ts`). It serves revision 2026-07-28 and answers the `initialize` handshake of the legacy revisions that Claude Code speaks (`docs/integration/mcp.md`, Q6).
@@ -64,7 +65,8 @@ Every gate must pass before a change is reviewed (`CONTRIBUTING.md`).
   - `lifecycle/`: `controller.ts` (the lifecycle controller) and `mutation-gate.ts`.
   - `tools/`: the single shared tool dispatcher (`dispatch.ts`) and the workspace file handlers (`workspace.ts`).
   - `runtime/`: Podman probe and version check, libpod client and routes, OpenShell adapter, hardening verifier, seccomp evidence (`seccomp-evidence.ts`), egress rules, session execution, and runtime config. The AgentOS pieces are `agentos.ts` (the port), `agentos-driver.ts` (the OpenShell-carried driver, always bound; its sandbox image is the configured digest-pinned `config.image`, and each session's runner acts on its own sandbox, `realm-<sessionId>`), and `agentos-workload.ts`. `runtime/driver/` holds the compute driver: gRPC server, lifecycle, channel and secret store, supervisor spawn, and seccomp profile delivery.
-  - `session/`: session record store, state-directory paths, and the startup reaper (`reap.ts`).
+  - `runtime/driver/registry-rebuild.ts`: the startup registry rebuild.
+  - `session/`: session record store, state-directory paths, the startup reaper (`reap.ts`), the workspace checkpoint library (`checkpoint.ts`, RES-04), and the runner identity record (`runner-record.ts`).
   - `anda/`: Anda Engine HTTP bridge (`client.ts`) and the version-shape check (`shape.ts`).
   - `fs/`: canonical paths, root allowlist, credential-path denial, advisory write locks, atomic writes, read, list, glob, and write, and `temp-sweep.ts` (`src/fs/temp-sweep.ts`, which removes orphaned atomic-write temp files; the daemon calls it at start, before it serves).
   - `audit/`: redacted JSONL audit log, and `reconcile.ts` (`src/audit/reconcile.ts`, which appends `AUDIT_OUTCOME_UNKNOWN` reconciliation lines for admissions with no result; the daemon calls it at start, before it serves).
@@ -74,6 +76,7 @@ Every gate must pass before a change is reviewed (`CONTRIBUTING.md`).
   - `core/`: frozen shared contracts: states and the state machine, status labels, policy loading with `policy.schema.json`, the typed error catalogue (`errors.ts`), the event bus, ports, backoff, and `withTimeout` (`timeout.ts`); and the package version reader (`package-version.ts`).
 - `test/`: `node:test` suites by area, largely mirroring `src/`. `test/integration/` holds the Podman-gated suites and the Omp live harness. `test/support/` holds shared fakes, `property.ts` (the shared `fast-check` configuration, 200 runs from a fixed seed; `REALM_PROPERTY_SEED` overrides it, used by the `*.property.test.ts` files in `test/fs/` and `test/core/`), and the Omp harness: `omp-live.ts`, `scripted-provider.ts`, `omp-profile.ts`, `omp-rpc.ts`, `realm-daemon-fixture.ts`, `net-trace.ts`, and `omp-spike-extension.ts`.
 - `scripts/`: plain ESM `.mjs` using Node built-ins only (`scripts/check/export-usage.mjs` is the one exception: it also uses the `typescript` devDependency). `scripts/check/` backs `npm run check:docs`, `npm run check:image-digests` (`verify-image-digests.mjs`), `npm run test:coverage` (`coverage.mjs` with `coverage-floors.json`) and `npm run test:scripts`, and holds the informational `export-usage.mjs --list` dead-export analysis. `scripts/image/` backs `npm run build:image` (`build-image.mjs`). `scripts/release/` backs the build and publish jobs (`next-version.mjs`, `version.mjs`, `sync-version.mjs`, `changelog.mjs`, and `assets.mjs`, which writes `SHA256SUMS` and the CycloneDX SBOM).
+- `scripts/spike/`: `workspace-snapshot.mjs`, the RES-04 workspace snapshot spike. It is not a gate.
 - `scripts/check/module-size.mjs` (Q0-002): the module-size ratchet that `npm run check:gates` runs. Its allowlist, `scripts/check/module-size-allowlist.json`, holds the ceilings for `src/**/*.ts` files over 1000 lines. Its unit tests are `scripts/check/module-size.test.mjs`, run by `npm run test:scripts`.
 - `docs/`: `integration/` (integration and decision notes, such as `runtime-decision.md` and `anda-decision.md`), `hosts/snippets/` (host config snippets), `policy-reference.md`, and `specs/realm-spec.xml` (the product spec).
 - `.planning/`: GSD-managed planning state. See Planning artifacts.
