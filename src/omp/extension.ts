@@ -7,7 +7,6 @@
 
 import { startDetachedDaemon } from "../cli/main.js";
 import { fileURLToPath } from "node:url";
-import { existsSync, realpathSync } from "node:fs";
 import { connectDaemon, selectionOf, type DaemonStatus } from "../daemon/client.js";
 import { CONTROL_TIMEOUT_MS } from "../daemon/channel.js";
 import { daemonAnswers, ensureDaemon, reportingStartFailure } from "../daemon/ensure.js";
@@ -63,8 +62,14 @@ export default function realmExtension(pi: OmpExtensionApi): void {
         client.close();
         throw error;
       }
-      // The daemon reports its root as a realpath. A daemon that reports no root predates the field, so its root is unknown.
-      if (status.boundRoot === undefined || !existsSync(workspaceRoot) || realpathSync(workspaceRoot) !== status.boundRoot) {
+      // The daemon reports its root as a realpath and the session id of that root. A daemon that reports no root predates the
+      // field, so its root is unknown. A reply that names another session or another root is not this project's, so it is refused
+      // the same way: the client closes and the refusal is rethrown.
+      if (
+        status.boundRoot === undefined ||
+        status.boundRoot !== selection.workspaceRoot ||
+        status.sessionId !== selection.sessionId
+      ) {
         client.close();
         throw error;
       }

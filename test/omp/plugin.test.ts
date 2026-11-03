@@ -240,16 +240,22 @@ const OMP_BUILTIN_TOOLS: readonly string[] = ["read", "ask", "glob", "grep", "wa
 
 class FakePi implements OmpExtensionApi {
   readonly startHandlers: Array<(event: unknown, ctx: OmpSessionContext) => void> = [];
+  readonly switchHandlers: Array<(event: unknown, ctx: OmpSessionContext) => void> = [];
   readonly shutdownHandlers: Array<() => void> = [];
   readonly toolCallHandlers: Array<(call: HostToolCall) => Promise<HostToolVerdict | undefined>> = [];
   readonly commands = new Map<string, RealmRetryCommand>();
 
   on(event: "session_start", handler: (event: unknown, ctx: OmpSessionContext) => void): void;
+  on(event: "session_switch", handler: (event: unknown, ctx: OmpSessionContext) => void): void;
   on(event: "session_shutdown", handler: () => void): void;
   on(event: "tool_call", handler: (call: HostToolCall) => Promise<HostToolVerdict | undefined>): void;
   on(event: string, handler: unknown): void {
     if (event === "session_start") {
       this.startHandlers.push(handler as (event: unknown, ctx: OmpSessionContext) => void);
+      return;
+    }
+    if (event === "session_switch") {
+      this.switchHandlers.push(handler as (event: unknown, ctx: OmpSessionContext) => void);
       return;
     }
     if (event === "session_shutdown") {
@@ -363,6 +369,16 @@ function makeFixture(options: FixtureOptions = {}): Fixture {
   };
   const tools = registerRealmPlugin(pi, pluginOptions);
   return { ui, ctx, pi, daemon, attachCalls, tools };
+}
+
+// The host calls a session_switch handler with the event first and the context of the session switched to second. The
+// payload is not assumed: a test passes a context without a working directory to read it defensively.
+function switchHandlerOf(pi: FakePi): (ctx: OmpSessionContext) => void {
+  const handler = pi.switchHandlers[0];
+  assert.ok(handler !== undefined, "session_switch handler is registered");
+  return (ctx) => {
+    handler({ type: "session_switch" }, ctx);
+  };
 }
 
 function startHandlerOf(pi: FakePi): (ctx: OmpSessionContext) => void {
@@ -1279,7 +1295,7 @@ function sameActive(pi: FakePi, expected: readonly string[]): boolean {
 
 // A session the guard reads directly, with the client and the mode it last published.
 function sessionOf(fixture: Fixture, client: DaemonClient | null, mode: PolicyMode | null): ActiveSession {
-  return { ctx: fixture.ctx, tools: fixture.tools, client, mode, timers: new Map(), poll: null, refreshing: false, errorStamp: null, refusal: null, link: "off", reattachCount: 0, wait: null, onLinkLost: null };
+  return { ctx: fixture.ctx, attachedCwd: fixture.ctx.cwd, tools: fixture.tools, client, mode, timers: new Map(), poll: null, refreshing: false, errorStamp: null, refusal: null, link: "off", reattachCount: 0, wait: null, onLinkLost: null };
 }
 
 // The policy mode the plugin last published. The probe reads it through the one path that shows it: with the status unreadable,
@@ -1887,4 +1903,41 @@ void test("O4 T1: the lost-link and retryable code sets are the ones the plan na
     "STARTUP_BUDGET_EXCEEDED",
     "DAEMON_START_TIMEOUT",
   ]);
+});
+
+// Omp session_switch (plan 10 T2; docs/integration/omp.md, row S2b).
+void test("plan 10 T2 (a): a session switch to another directory re-attaches with that directory and closes the previous client (MULTI-03)", async () => {
+  const fixture = makeFixture({ attach: async (daemon) => ({ client: daemon, refusal: null }) });
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitUntil(() => lastLabel(fixture.ui) === ACTIVE_LABEL);
+
+  switchHandlerOf(fixture.pi)(new FakeCtx(fixture.ui, "/ws-b"));
+  // attachDaemon is invoked from a microtask, so the new directory is observed after one turn of the event loop.
+  await yieldTurn();
+
+  assert.deepEqual(fixture.attachCalls, [WORKSPACE, "/ws-b"], "the switch re-attaches with the new directory");
+  assert.ok(fixture.daemon.calls.includes("close"), "the previous client is closed");
+  await waitUntil(() => lastLabel(fixture.ui) === ACTIVE_LABEL);
+});
+
+void test("plan 10 T2 (b): a session switch that keeps the working directory keeps the attachment (MULTI-03)", async () => {
+  const fixture = makeFixture({ attach: async (daemon) => ({ client: daemon, refusal: null }) });
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitUntil(() => lastLabel(fixture.ui) === ACTIVE_LABEL);
+
+  switchHandlerOf(fixture.pi)(new FakeCtx(fixture.ui, WORKSPACE));
+
+  assert.deepEqual(fixture.attachCalls, [WORKSPACE], "the same directory does not attach again");
+  assert.equal(fixture.daemon.calls.filter((call) => call === "close").length, 0, "the attachment is kept");
+});
+
+void test("plan 10 T2 (c): a session switch whose context carries no working directory keeps the attachment (MULTI-03)", async () => {
+  const fixture = makeFixture({ attach: async (daemon) => ({ client: daemon, refusal: null }) });
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitUntil(() => lastLabel(fixture.ui) === ACTIVE_LABEL);
+
+  switchHandlerOf(fixture.pi)({} as OmpSessionContext);
+
+  assert.deepEqual(fixture.attachCalls, [WORKSPACE], "a payload without a directory does not attach again");
+  assert.equal(fixture.daemon.calls.filter((call) => call === "close").length, 0, "the attachment is kept");
 });

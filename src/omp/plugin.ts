@@ -6,7 +6,9 @@
 // builds that client and the only module in the Omp wiring that reads the environment.
 //
 // Verified host surface (docs/integration/omp.md, Phase 5 verification pass). Only these names are used:
-//   - pi.on(event, handler) with the session_start, session_shutdown, and tool_call names.
+//   - pi.on(event, handler) with the session_start, session_switch, session_shutdown, and tool_call names. session_switch is
+//     the row S2b of docs/integration/omp.md: its payload is read defensively, and a payload without a working directory keeps
+//     the attachment.
 //   - The tool_call return { block?, reason? }. The handler returns a Promise; the host fails
 //     closed on error or timeout (toolCallTimeoutMs, upstream-sourced).
 //   - ctx.cwd: the session working directory, bound as the workspace root at attach.
@@ -84,6 +86,7 @@ export interface RealmRetryCommand {
 
 export interface OmpExtensionApi {
   on(event: "session_start", handler: (_event: unknown, ctx: OmpSessionContext) => void): void;
+  on(event: "session_switch", handler: (_event: unknown, ctx: OmpSessionContext) => void): void;
   on(event: "session_shutdown", handler: () => void): void;
   on(event: "tool_call", handler: (call: HostToolCall) => Promise<HostToolVerdict | undefined>): void;
   registerCommand(name: string, definition: RealmRetryCommand): void;
@@ -116,6 +119,8 @@ export interface RealmPluginOptions {
 
 export interface ActiveSession {
   readonly ctx: OmpSessionContext;
+  // The working directory this session attached for. A switch re-attaches only when the new context names another one.
+  readonly attachedCwd: string;
   // The host tool set this plugin shares across sessions (see HostToolSet).
   readonly tools: HostToolSet;
   // Live client, or null while the host is disconnected.
@@ -654,11 +659,13 @@ export function registerRealmPlugin(pi: OmpExtensionApi, options: RealmPluginOpt
     return describeRetry(await attachCycle(session));
   };
 
-  pi.on("session_start", (_event, ctx) => {
-    // A second start replaces the first, so the previous client and its timers are released, not orphaned.
+  // Begins a session for the context's working directory: a second begin replaces the first, so the previous client and its
+  // timers are released, not orphaned. The attach runs detached; its outcome paints itself.
+  const beginSession = (ctx: OmpSessionContext): void => {
     endSession();
     const session: ActiveSession = {
       ctx,
+      attachedCwd: ctx.cwd,
       tools: hostTools,
       client: null,
       mode: null,
@@ -686,6 +693,21 @@ export function registerRealmPlugin(pi: OmpExtensionApi, options: RealmPluginOpt
     } else {
       void attachCycle(session);
     }
+  };
+
+  pi.on("session_start", (_event, ctx) => {
+    beginSession(ctx);
+  });
+
+  // session_switch (docs/integration/omp.md, row S2b): the host reports a switch with the context of the session it switched to.
+  // The payload is read defensively. Without a working directory, or with the directory already attached, the attachment is
+  // kept. Another directory ends the attachment and begins one for it, as session_start does.
+  pi.on("session_switch", (_event, ctx) => {
+    const cwd: unknown = (ctx as Partial<OmpSessionContext> | undefined)?.cwd;
+    if (live === null || typeof cwd !== "string" || cwd === live.attachedCwd) {
+      return;
+    }
+    beginSession(ctx);
   });
 
   pi.on("session_shutdown", () => {

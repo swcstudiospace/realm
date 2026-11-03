@@ -416,7 +416,7 @@ function loadEntry(base: string, value: string | undefined, pi: OmpExtensionApi)
   });
 }
 
-const REGISTERED_EVENTS = ["session_start", "session_shutdown", "tool_call"];
+const REGISTERED_EVENTS = ["session_start", "session_switch", "session_shutdown", "tool_call"];
 
 void test("O4 edge: REALM_OMP_REATTACH unset or 0 loads the entry with re-attach off", (t) => {
   const base = configBase(t);
@@ -542,4 +542,98 @@ void test("a daemon that reports no bound root, as one that predates the field d
     "with no client the write is refused before any daemon call",
   );
   assert.deepEqual(hits.filter((hit) => hit.method === "tool"), [], "no tool call reaches a daemon whose root is unknown");
+});
+
+// MULTI-02 and MULTI-03 (plan 10 T1): the attach names its directory's session, and a refused up is kept only for that session.
+// A stand-in daemon answers status normally until it has seen up, so the attach's probe finds a daemon; after the refused up it
+// answers the raw status the test names.
+function raisedAfterUp(status: object): (request: StubRequest) => StubReply {
+  let upSeen = false;
+  return (request) => {
+    if (request.method === "up") {
+      upSeen = true;
+      return { error: { code: "AGENTOS_NOT_CONFIGURED" } };
+    }
+    return upSeen ? { result: status } : answeredFor(request, status);
+  };
+}
+
+void test("an attach for a directory sends up with its realpath, and the status requests carry that directory's session id (MULTI-02)", async (t) => {
+  const base = scratchDir(t);
+  const project = join(base, "project");
+  mkdirSync(project);
+  const root = realpathSync(project);
+  const socketPath = configure(t, base, project);
+  const seen: StubRequest[] = [];
+  await serveDaemon(t, socketPath, [], (request) => {
+    seen.push(request);
+    return answeredFor(request, ACTIVE_STATUS);
+  });
+  const host = createHost();
+  const paints: string[] = [];
+  await startOmpSession(t, host, paints, project, "realm active");
+
+  assert.deepEqual(seen.find((request) => request.method === "up")?.params, { workspaceRoot: root });
+  const statuses = seen.filter((request) => request.method === "status");
+  assert.ok(statuses.length > 0, "the attach read the status");
+  for (const request of statuses) {
+    assert.equal((request.params as { selection?: { sessionId?: string } }).selection?.sessionId, sessionIdOfWorkspace(root));
+  }
+});
+
+void test("a refused up whose status names another session closes the client: the refusal is rethrown and no tool call reaches the daemon (MULTI-03)", async (t) => {
+  const base = scratchDir(t);
+  const project = join(base, "project");
+  const elsewhere = join(base, "elsewhere");
+  mkdirSync(project);
+  mkdirSync(elsewhere);
+  const boundRoot = realpathSync(project);
+  const socketPath = configure(t, base, project);
+  const status = { ...INACTIVE_STATUS, boundRoot, sessionId: sessionIdOfWorkspace(realpathSync(elsewhere)) };
+  const hits: Hit[] = [];
+  await serveDaemon(t, socketPath, hits, raisedAfterUp(status));
+  const host = createHost();
+  const paints: string[] = [];
+  await startOmpSession(t, host, paints, project, "AGENTOS_NOT_CONFIGURED");
+
+  const result = await realmWrite(host).execute("call-1", { path: "notes.txt", content: "hello" });
+  assert.deepEqual(
+    result.details,
+    { outcome: "refused", tool: "write", code: "REALM_NOT_ACTIVE", retryable: true },
+    "with no client the write is refused before any daemon call",
+  );
+  assert.deepEqual(hits.filter((hit) => hit.method === "tool"), [], "no tool call reaches the daemon");
+});
+
+void test("a refused up whose status reports no session id closes the client and rethrows the refusal (MULTI-03)", async (t) => {
+  const base = scratchDir(t);
+  const project = join(base, "project");
+  mkdirSync(project);
+  const socketPath = configure(t, base, project);
+  const status = { ...INACTIVE_STATUS, boundRoot: realpathSync(project) };
+  const hits: Hit[] = [];
+  await serveDaemon(t, socketPath, hits, raisedAfterUp(status));
+  const host = createHost();
+  const paints: string[] = [];
+  await startOmpSession(t, host, paints, project, "AGENTOS_NOT_CONFIGURED");
+
+  const result = await realmWrite(host).execute("call-1", { path: "notes.txt", content: "hello" });
+  assert.deepEqual(
+    result.details,
+    { outcome: "refused", tool: "write", code: "REALM_NOT_ACTIVE", retryable: true },
+    "with no client the write is refused before any daemon call",
+  );
+  assert.deepEqual(hits.filter((hit) => hit.method === "tool"), [], "no tool call reaches a daemon that names no session");
+});
+
+void test("an attach for a directory that does not exist is refused with POLICY_DENIED before any socket is opened (MULTI-02)", async (t) => {
+  const base = scratchDir(t);
+  const socketPath = configure(t, base, base);
+  const hits: Hit[] = [];
+  await serveDaemon(t, socketPath, hits, () => ({ result: ACTIVE_STATUS }));
+  const host = createHost();
+  const paints: string[] = [];
+  await startOmpSession(t, host, paints, join(base, "missing"), "POLICY_DENIED");
+
+  assert.deepEqual(hits, [], "no socket is opened for a directory that does not exist");
 });
