@@ -22,6 +22,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { type ErrorCode, RealmError } from "../../src/core/errors.js";
 import { bindRoot } from "../../src/fs/root.js";
+import { acquireSessionLock, releaseSessionLock } from "../../src/session/checkpoint-lock.js";
 import { restoreWorkspace, type SandboxRunning, snapshotWorkspace } from "../../src/session/checkpoint.js";
 import { checkpointDirOf, checkpointSessionDirOf, sessionIdOfWorkspace } from "../../src/session/paths.js";
 import { writeWorkspaceEntry, type WorkspaceEntry } from "../../src/session/workspace-registry.js";
@@ -676,4 +677,80 @@ void test("a lock from another boot, or whose pid was reused, is taken over", as
   await snapshotWorkspace({ ...scope(f), checkpointId: "c2" });
   assert.equal(existsSync(lock), false);
   assert.equal(existsSync(checkpointPath(f, "c2")), true);
+});
+
+void test("a held lock publishes its full owner record, and release removes it", (t) => {
+  const f = fixture(t);
+  mkdirSync(sessionDirOf(f), { recursive: true });
+  const lock = acquireSessionLock(sessionDirOf(f));
+  assert.equal(lock, join(sessionDirOf(f), ".lock"));
+  assert.equal(
+    readFileSync(lock, "utf8"),
+    lockText({ pid: process.pid, startTicks: ownStartTicks(), bootId: bootId() }),
+  );
+  assert.deepEqual(readdirSync(sessionDirOf(f)).filter((name) => name.startsWith(".lock.tmp-")), []);
+  releaseSessionLock(lock);
+  assert.equal(existsSync(lock), false);
+});
+
+void test("concurrent acquisitions: one holder, one LOCK_CONFLICT, and the held lock is never empty", async (t) => {
+  const f = fixture(t);
+  writeFileSync(join(f.ws, "a.txt"), "content");
+  const lock = join(sessionDirOf(f), ".lock");
+  const expected = lockText({ pid: process.pid, startTicks: ownStartTicks(), bootId: bootId() });
+  // The predicate runs under the lock, so each call sees the lock file as the holder left it.
+  const observed: string[] = [];
+  const watching: SandboxRunning = () => {
+    observed.push(readFileSync(lock, "utf8"));
+    return false;
+  };
+  const outcomes = await Promise.allSettled([
+    snapshotWorkspace({ ...scope(f, watching), checkpointId: "c1" }),
+    snapshotWorkspace({ ...scope(f, watching), checkpointId: "c2" }),
+  ]);
+  const holders = outcomes.filter((outcome) => outcome.status === "fulfilled");
+  const refusalCodes = outcomes.flatMap((outcome) => {
+    if (outcome.status === "fulfilled") {
+      return [];
+    }
+    const reason: unknown = outcome.reason;
+    return [reason instanceof RealmError ? reason.code : "untyped"];
+  });
+  assert.equal(holders.length, 1);
+  assert.deepEqual(refusalCodes, ["LOCK_CONFLICT"]);
+  assert.ok(observed.length > 0);
+  for (const text of observed) {
+    assert.equal(text, expected);
+  }
+  assert.equal(existsSync(lock), false);
+});
+
+void test("a temporary owner file left by a crash before the link does not block a later acquisition", async (t) => {
+  const f = fixture(t);
+  writeFileSync(join(f.ws, "a.txt"), "content");
+  mkdirSync(sessionDirOf(f), { recursive: true });
+  // A crash after the first write and before the link leaves a partial record under the temporary name.
+  writeFileSync(join(sessionDirOf(f), ".lock.tmp-0123456789abcdef"), '{"schema":1,"pi');
+
+  await snapshotWorkspace({ ...scope(f), checkpointId: "c1" });
+
+  assert.equal(existsSync(checkpointPath(f, "c1")), true);
+  assert.equal(existsSync(join(sessionDirOf(f), ".lock")), false);
+});
+
+void test("a sandbox predicate that throws makes snapshot and restore refused with REALM_NOT_ACTIVE", async (t) => {
+  const f = fixture(t);
+  writeFileSync(join(f.ws, "a.txt"), "saved");
+  await snapshotWorkspace({ ...scope(f), checkpointId: "c0" });
+  writeFileSync(join(f.ws, "a.txt"), "current");
+  const silent: SandboxRunning = () => {
+    throw new Error("daemon does not answer");
+  };
+
+  await assert.rejects(snapshotWorkspace({ ...scope(f, silent), checkpointId: "c1" }), codeIs("REALM_NOT_ACTIVE"));
+  await assert.rejects(restoreWorkspace({ ...scope(f, silent), checkpointId: "c0" }), codeIs("REALM_NOT_ACTIVE"));
+
+  assert.equal(existsSync(checkpointPath(f, "c1")), false);
+  assert.equal(readFileSync(join(f.ws, "a.txt"), "utf8"), "current");
+  assert.equal(existsSync(join(sessionDirOf(f), ".lock")), false);
 });

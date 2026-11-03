@@ -9,9 +9,13 @@ import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { makeRealmError } from "../core/errors.js";
+import { sleep } from "../core/timeout.js";
 import { atomicWriteFile, observeSha256 } from "../fs/atomic-write.js";
 import { bindRoot } from "../fs/root.js";
 import { isSessionId } from "./paths.js";
+import { readProcStat } from "./proc-identity.js";
+// The boot id is read in proc-identity.ts. agentos-driver.ts imports it from this module.
+export { currentBootId } from "./proc-identity.js";
 
 const RECORD_SCHEMA = 1;
 const RECORD_SUFFIX = ".runner.json";
@@ -35,12 +39,6 @@ export interface RunnerRecord {
 // holds the pid (none, or a zombie), and "other" when a live process holds the pid with other start ticks, a reused pid.
 export type LeaderState = "same" | "absent" | "other";
 
-interface ProcStat {
-  readonly state: string;
-  readonly pgid: number;
-  readonly startTicks: number;
-}
-
 function isObjectRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -56,42 +54,6 @@ function isNonNegativeInteger(value: unknown): value is number {
 // A zombie or dead process holds no resources and sends no further signals, so it is not live.
 function isLive(state: string): boolean {
   return state !== "Z" && state !== "X";
-}
-
-// Reads /proc/<pid>/stat. The comm field sits in parentheses and may hold spaces or parentheses, so the fields are read
-// after the last ")". After it, the first field is state (field 3), pgrp is field 5 (index 2) and starttime is field 22
-// (index 19). A missing or malformed file is null.
-function readProcStat(pid: number): ProcStat | null {
-  let text: string;
-  try {
-    text = readFileSync(`/proc/${String(pid)}/stat`, "utf8");
-  } catch {
-    return null;
-  }
-  const close = text.lastIndexOf(")");
-  const fields = close < 0 ? [] : text.slice(close + 2).split(" ");
-  const state = fields[0];
-  const pgrp = fields[2];
-  const start = fields[19];
-  if (state === undefined || pgrp === undefined || start === undefined) {
-    return null;
-  }
-  const pgid = Number(pgrp);
-  const startTicks = Number(start);
-  if (!Number.isSafeInteger(pgid) || !Number.isSafeInteger(startTicks) || startTicks < 0) {
-    return null;
-  }
-  return { state, pgid, startTicks };
-}
-
-// The boot id of this kernel boot, or null when it cannot be read. A record from another boot names pids of a dead boot.
-export function currentBootId(): string | null {
-  try {
-    const id = readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
-    return id.length > 0 ? id : null;
-  } catch {
-    return null;
-  }
 }
 
 // The record of a runner just spawned. The runner must lead its own group, pgid equal to pid: a group signal aimed at any other
@@ -199,12 +161,6 @@ export function signalRecordedGroup(record: RunnerRecord, signal: NodeJS.Signals
   }
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise<void>((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
 // Waits until the group has no live members, for at most ms. True when it is empty.
 async function waitGone(pgid: number, ms: number, groupLive: (pgid: number) => boolean): Promise<boolean> {
   const deadline = performance.now() + ms;
@@ -215,7 +171,7 @@ async function waitGone(pgid: number, ms: number, groupLive: (pgid: number) => b
     if (performance.now() >= deadline) {
       return false;
     }
-    await delay(POLL_MS);
+    await sleep(POLL_MS);
   }
 }
 

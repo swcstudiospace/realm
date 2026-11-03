@@ -7,12 +7,12 @@
 // The workspace is identified only by the session's registry entry (workspace-registry.ts). Its directory is verified
 // against the pinned identity before the copy, after it, and before any move.
 //
-// Cross-process lock. Every public operation takes the session lock first: a file, `.lock`, in the session's checkpoint
-// directory, created with O_EXCL. Its content records the owner: pid, start time in clock ticks (field 22 of
-// /proc/<pid>/stat) and the boot id. A lock is taken over only when its owner is provably gone (the pid is not alive,
-// its start time differs, or the boot differs). A live or unprovable owner keeps the lock, and the operation is refused
-// with LOCK_CONFLICT. Under the lock the operation recovers the session's leftover work directories, then runs, then
-// releases the lock. The sweep never runs without the lock.
+// Cross-process lock. Every public operation takes the session lock first (checkpoint-lock.ts): a file, `.lock`, in the
+// session's checkpoint directory. It is published whole, so it is never seen empty. Its content records the owner: pid,
+// start time in clock ticks and the boot id. A lock is taken over only when its owner is provably gone (the pid is not
+// alive, its start time differs, or the boot differs). A live or unprovable owner keeps the lock, and the operation is
+// refused with LOCK_CONFLICT. Under the lock the operation recovers the session's leftover work directories, then runs,
+// then releases the lock. The sweep never runs without the lock.
 //
 // A restore keeps the workspace root directory (its device and inode never change), moves the root's entries aside into
 // a backup, writes a backed-up marker, moves the staged entries in, writes a committed marker, and deletes the backup. A
@@ -24,20 +24,7 @@
 // refused, not taken over, so it needs manual removal.
 
 import { createHash, randomBytes } from "node:crypto";
-import {
-  closeSync,
-  constants,
-  createReadStream,
-  linkSync,
-  lstatSync,
-  openSync,
-  readFileSync,
-  renameSync,
-  unlinkSync,
-  writeSync,
-  type BigIntStats,
-  type Stats,
-} from "node:fs";
+import { constants, createReadStream, type BigIntStats } from "node:fs";
 import {
   chmod,
   copyFile,
@@ -59,6 +46,7 @@ import { type ErrorCode, makeRealmError, RealmError } from "../core/errors.js";
 import { withTimeout } from "../core/timeout.js";
 import { errnoOf } from "../fs/canonicalize.js";
 import { isInsideRoot, type PinnedRoot, verifyPinnedAt } from "../fs/root.js";
+import { acquireSessionLock, releaseSessionLock } from "./checkpoint-lock.js";
 import { checkpointDirOf, checkpointSessionDirOf, checkpointsDirOf } from "./paths.js";
 import { verifyWorkspaceEntry, type WorkspaceEntry } from "./workspace-registry.js";
 
@@ -76,11 +64,6 @@ const BACKUP_DIR = "backup";
 const COMMITTED_FILE = "committed";
 const BACKED_UP_FILE = "backed-up";
 const WORK_DIR_PREFIX = ".restore-";
-const LOCK_FILE = ".lock";
-const LOCK_SCHEMA = 1;
-// A stale lock is taken over at most this many times before the operation is refused.
-const LOCK_TAKEOVER_ATTEMPTS = 3;
-const BOOT_ID_FILE = "/proc/sys/kernel/random/boot_id";
 const SHA256_HEX = /^[0-9a-f]{64}$/;
 
 export interface ManifestEntry {
@@ -139,14 +122,6 @@ interface Scan {
   readonly stamps: Map<string, string>;
 }
 
-// The owner recorded in the lock file.
-interface OwnerRecord {
-  readonly schema: 1;
-  readonly pid: number;
-  readonly startTicks: string;
-  readonly bootId: string;
-}
-
 // Untrusted JSON read from disk. Each field is checked with typeof before it is used.
 interface RawManifest {
   readonly schema?: unknown;
@@ -160,13 +135,6 @@ interface RawEntry {
   readonly size?: unknown;
   readonly linkTarget?: unknown;
   readonly sha256?: unknown;
-}
-
-interface RawOwner {
-  readonly schema?: unknown;
-  readonly pid?: unknown;
-  readonly startTicks?: unknown;
-  readonly bootId?: unknown;
 }
 
 export async function snapshotWorkspace(request: SnapshotRequest): Promise<CheckpointManifest> {
@@ -450,175 +418,6 @@ async function syncDir(dir: string): Promise<void> {
   }
 }
 
-// ---- Session lock ----------------------------------------------------------------------------------------------------
-
-// Takes the session lock or refuses. Returns the lock path, which the caller releases.
-function acquireSessionLock(sessionDir: string): string {
-  const lockPath = join(sessionDir, LOCK_FILE);
-  const text = `${JSON.stringify(ownRecord())}\n`;
-  for (let attempt = 0; attempt < LOCK_TAKEOVER_ATTEMPTS; attempt += 1) {
-    if (createLockFile(lockPath, text)) {
-      return lockPath;
-    }
-    takeOverProvablyGone(lockPath);
-  }
-  throw makeRealmError("LOCK_CONFLICT");
-}
-
-// O_EXCL creates the lock. Returns false when a lock already exists.
-function createLockFile(lockPath: string, text: string): boolean {
-  let fd: number;
-  try {
-    fd = openSync(lockPath, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY, 0o600);
-  } catch (error) {
-    if (errnoOf(error) === "EEXIST") {
-      return false;
-    }
-    throw makeRealmError("WRITE_NOT_ATOMIC");
-  }
-  try {
-    writeSync(fd, text);
-  } catch {
-    closeSync(fd);
-    unlinkSync(lockPath);
-    throw makeRealmError("WRITE_NOT_ATOMIC");
-  }
-  closeSync(fd);
-  return true;
-}
-
-// Removes an existing lock only when its owner is provably gone. A live or unprovable owner is LOCK_CONFLICT.
-function takeOverProvablyGone(lockPath: string): void {
-  const bootId = currentBootId();
-  let seen: Stats;
-  let raw: string;
-  try {
-    seen = lstatSync(lockPath);
-    raw = readFileSync(lockPath, "utf8");
-  } catch (error) {
-    // The lock was released between the failed create and this read. The caller tries again.
-    if (errnoOf(error) === "ENOENT") {
-      return;
-    }
-    throw makeRealmError("LOCK_CONFLICT");
-  }
-  const owner = parseOwner(raw);
-  if (owner === undefined || bootId === undefined || !ownerProvablyGone(owner, bootId)) {
-    throw makeRealmError("LOCK_CONFLICT");
-  }
-  // Move the lock aside before removing it. Another process may have replaced the lock since it was read, so the moved
-  // file must still be the inode that was read. Otherwise the moved lock is put back and the take-over is refused.
-  const tombstone = `${lockPath}.stale-${randomBytes(8).toString("hex")}`;
-  try {
-    renameSync(lockPath, tombstone);
-  } catch (error) {
-    if (errnoOf(error) === "ENOENT") {
-      return;
-    }
-    throw makeRealmError("LOCK_CONFLICT");
-  }
-  if (lstatSync(tombstone).ino !== seen.ino) {
-    let restored: boolean;
-    try {
-      linkSync(tombstone, lockPath);
-      restored = true;
-    } catch {
-      // The path was taken again, so the moved lock stays aside as the tombstone, for its owner to find.
-      restored = false;
-    }
-    if (restored) {
-      unlinkSync(tombstone);
-    }
-    throw makeRealmError("LOCK_CONFLICT");
-  }
-  unlinkSync(tombstone);
-}
-
-function releaseSessionLock(lockPath: string): void {
-  try {
-    unlinkSync(lockPath);
-  } catch (error) {
-    if (errnoOf(error) !== "ENOENT") {
-      throw makeRealmError("CLEANUP_FAILED");
-    }
-  }
-}
-
-// The owner is provably gone when its boot differs, its pid is not alive, or its start time differs (the pid was reused).
-// A live process whose start time cannot be read is unprovable, so it counts as live.
-function ownerProvablyGone(owner: OwnerRecord, bootId: string): boolean {
-  if (owner.bootId !== bootId) {
-    return true;
-  }
-  if (!processAlive(owner.pid)) {
-    return true;
-  }
-  const ticks = startTicksOf(owner.pid);
-  return ticks !== undefined && ticks !== owner.startTicks;
-}
-
-function processAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    // EPERM means the process exists under another user.
-    return errnoOf(error) === "EPERM";
-  }
-}
-
-function ownRecord(): OwnerRecord {
-  const startTicks = startTicksOf(process.pid);
-  const bootId = currentBootId();
-  if (startTicks === undefined || bootId === undefined) {
-    throw makeRealmError("LOCK_CONFLICT");
-  }
-  return { schema: LOCK_SCHEMA, pid: process.pid, startTicks, bootId };
-}
-
-// Field 22 of /proc/<pid>/stat is the start time in clock ticks. The command name sits in parentheses and may hold
-// spaces, so the fields are counted after the last ")". The first field after it is field 3, so field 22 is index 19.
-function startTicksOf(pid: number): string | undefined {
-  try {
-    const text = readFileSync(`/proc/${String(pid)}/stat`, "utf8");
-    return text.slice(text.lastIndexOf(")") + 2).split(" ")[19];
-  } catch {
-    return undefined;
-  }
-}
-
-function currentBootId(): string | undefined {
-  try {
-    const id = readFileSync(BOOT_ID_FILE, "utf8").trim();
-    return id === "" ? undefined : id;
-  } catch {
-    return undefined;
-  }
-}
-
-function parseOwner(text: string): OwnerRecord | undefined {
-  let value: unknown;
-  try {
-    value = JSON.parse(text);
-  } catch {
-    return undefined;
-  }
-  if (typeof value !== "object" || value === null) {
-    return undefined;
-  }
-  const { schema, pid, startTicks, bootId } = value as RawOwner;
-  if (schema !== LOCK_SCHEMA || typeof pid !== "number" || !Number.isInteger(pid) || pid < 1) {
-    return undefined;
-  }
-  if (typeof startTicks !== "string" || !/^\d+$/.test(startTicks)) {
-    return undefined;
-  }
-  if (typeof bootId !== "string" || bootId === "") {
-    return undefined;
-  }
-  return { schema: LOCK_SCHEMA, pid, startTicks, bootId };
-}
-
 // ---- Shared helpers --------------------------------------------------------------------------------------------------
 
 // The state root must lie outside the workspace root. A checkpoint of a root that holds the state directory would copy
@@ -656,13 +455,13 @@ async function makePrivateDir(path: string): Promise<void> {
   await chmod(path, PRIVATE_DIR_MODE);
 }
 
-// A predicate that fails leaves the sandbox state unknown. That is the gateway not answering, so it is refused.
+// A predicate that fails leaves the sandbox state unknown. The daemon cannot answer, so it is refused with REALM_NOT_ACTIVE.
 async function requireSandboxStopped(sandboxRunning: SandboxRunning, sessionId: string): Promise<void> {
   let running: boolean;
   try {
     running = await sandboxRunning(sessionId);
   } catch {
-    throw makeRealmError("OPENSHELL_GATEWAY_LOST");
+    throw makeRealmError("REALM_NOT_ACTIVE");
   }
   if (running) {
     throw makeRealmError("LOCK_CONFLICT");
