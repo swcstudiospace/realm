@@ -14,6 +14,7 @@ import type { ToolOutcome } from "../../src/tools/dispatch.js";
 import { FakeBridge } from "../support/fake-bridge.js";
 import { FakeExecutionService } from "../support/fake-execution.js";
 import { boundedWait, testTimeout } from "../support/timing.js";
+import { startRealmDaemon } from "../support/realm-daemon-fixture.js";
 
 // CRASH-06 (TD-01, D-1406): a refusal cause code reaches a host the same way whether the surface answers from the
 // dispatcher in process or through the daemon. The shapes still differ by design: in process the refused outcome is
@@ -219,4 +220,45 @@ void test("CRASH-06: a refusal without a cause carries no causeCode on any of th
   assert.deepEqual(local.acp, expected, "in-process ACP");
   assert.deepEqual(daemon.mcp, expected, "MCP over the daemon");
   assert.deepEqual(daemon.acp, expected, "ACP over the daemon");
+});
+
+// MULTI-03 (plan 11 T2): two projects under one root on one daemon. The status and up replies for A are the same through the
+// CLI send path, the MCP client and the Omp client calls, and project B's status differs from A's only by session and root.
+void test("two projects on one daemon: status and up for A reply alike through the CLI send path, the MCP client and the Omp client calls (MULTI-03)", async (t) => {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), "realm-equivalence-two-")));
+  const root = join(base, "root");
+  const a = join(root, "a");
+  const b = join(root, "b");
+  mkdirSync(a, { recursive: true });
+  mkdirSync(b, { recursive: true });
+  const fixture = await startRealmDaemon({ stateDir: join(base, "state"), workspace: root, mode: "advisory" });
+  t.after(async () => {
+    // The last release stops the daemon, so a failed release of an already stopped daemon is expected.
+    for (const project of [a, b]) {
+      await fixture.release(project).catch(() => undefined);
+    }
+    rmSync(base, { recursive: true, force: true });
+  });
+  await fixture.up(a);
+  await fixture.up(b);
+
+  const cliStatus = await sendRequest(fixture.socketPath, { id: "eq-cli-status", method: "status", params: { selection: selectionOf(a) } });
+  const mcpStatus = await fixture.connectFor(a).status();
+  const ompClient = connectDaemon(fixture.socketPath, selectionOf(a));
+  const ompStatus = await ompClient.status();
+  const ompUp = await ompClient.up();
+  ompClient.close();
+  const cliUp = await sendRequest(fixture.socketPath, { id: "eq-cli-up", method: "up", params: { workspaceRoot: a } });
+
+  assert.equal(cliStatus.error, undefined);
+  assert.deepEqual(cliStatus.result, mcpStatus, "the CLI status and the MCP client status are the same reply");
+  assert.deepEqual(mcpStatus, ompStatus, "the MCP client status and the Omp status are the same reply");
+  assert.deepEqual(cliUp.result, ompUp, "the CLI up and the Omp up of a live project are the same reply");
+
+  const statusB = await fixture.connectFor(b).status();
+  const { sessionId: sessionA, boundRoot: rootA, ...restA } = ompStatus;
+  const { sessionId: sessionB, boundRoot: rootB, ...restB } = statusB;
+  assert.notEqual(sessionA, sessionB, "each project has its own session");
+  assert.notEqual(rootA, rootB, "each project is bound to its own root");
+  assert.deepEqual(restA, restB, "apart from session and root, the two projects report the same status");
 });

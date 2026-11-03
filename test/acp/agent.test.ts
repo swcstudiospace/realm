@@ -10,6 +10,9 @@
 
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { ACP_PROTOCOL_VERSION, REALM_TOOL_METHOD, runAcpAgent } from "../../src/acp/agent.js";
 import { ERROR_CATALOGUE, ERROR_CODES, makeRealmError } from "../../src/core/errors.js";
@@ -18,6 +21,8 @@ import type { ToolCall } from "../../src/contract/validate.js";
 import type { ToolDispatcher, ToolOutcome } from "../../src/tools/dispatch.js";
 import { makeHarness, REQUIRED, WORKLOAD } from "../support/fake-tools.js";
 import { testTimeout } from "../support/timing.js";
+import { startRealmDaemon } from "../support/realm-daemon-fixture.js";
+import { sessionIdOfWorkspace } from "../../src/session/paths.js";
 
 interface LineWaiter {
   readonly count: number;
@@ -520,3 +525,41 @@ async (t) => {
   );
   await client.close();
 },);
+
+// MULTI-05 (plan 11 T2): one daemon, two projects. The ACP agent attached to project A writes into A and is audited in A's
+// session file only, and project B's session file holds none of it.
+void test("ACP on two projects: the agent's write lands in its own project and its own session's audit file (MULTI-05)", async (t) => {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), "realm-acp-two-")));
+  const root = join(base, "root");
+  const a = join(root, "a");
+  const b = join(root, "b");
+  mkdirSync(a, { recursive: true });
+  mkdirSync(b, { recursive: true });
+  const fixture = await startRealmDaemon({ stateDir: join(base, "state"), workspace: root, mode: "advisory" });
+  t.after(async () => {
+    for (const project of [a, b]) {
+      await fixture.release(project).catch(() => undefined);
+    }
+    rmSync(base, { recursive: true, force: true });
+  });
+  await fixture.up(a);
+  await fixture.up(b);
+
+  const client = startClient(t, fixture.connectFor(a));
+  send(client, realmTool(1, { write: { path: "a-doc.txt", content: "from a" } }));
+  await client.waitFor(1);
+  assert.equal(parseReply(client.lines[0] ?? "").error, undefined, "the write is answered without an error");
+  await client.close();
+
+  assert.equal(readFileSync(join(a, "a-doc.txt"), "utf8"), "from a");
+  assert.equal(existsSync(join(b, "a-doc.txt")), false, "the write is not in B");
+  const linesOf = (project: string): { readonly path?: string }[] =>
+    readFileSync(join(base, "state", "audit", `${sessionIdOfWorkspace(project)}.jsonl`), "utf8")
+      .split("\n")
+      .filter((line) => line.length > 0)
+      .map((line) => JSON.parse(line) as { readonly path?: string });
+  assert.ok(linesOf(a).some((line) => line.path === "a-doc.txt"), "A's audit file holds the agent's write");
+  // B made no tool call, so its session has no audit file; if one exists, it holds none of A's write.
+  const auditOfB = join(base, "state", "audit", `${sessionIdOfWorkspace(b)}.jsonl`);
+  assert.equal(existsSync(auditOfB) && readFileSync(auditOfB, "utf8").includes("a-doc.txt"), false, "B's audit file holds none of it");
+});

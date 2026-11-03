@@ -4,11 +4,12 @@
 // up, status (snapshot, display, mode), tool, and socket disappearance. startScriptedControlServer
 // is the hand-rolled alternative for states the real controller cannot be driven into cheaply.
 
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { createServer, type Server, type Socket } from "node:net";
 import { dirname, join } from "node:path";
 import { sendRequest, type ControlReply } from "../../src/daemon/channel.js";
-import { selectionOf } from "../../src/daemon/client.js";
+import { connectDaemon, type DaemonClient, selectionOf } from "../../src/daemon/client.js";
+import type { ControlSelection } from "../../src/daemon/channel.js";
 import { startDaemon, type StartedDaemon } from "../../src/daemon/daemon.js";
 import type { PolicyMode } from "../../src/contract/validate.js";
 import type { PodmanProbeResult } from "../../src/runtime/podman-probe.js";
@@ -31,10 +32,19 @@ export interface RealmDaemonOptions {
 export interface RealmDaemonFixture {
   readonly socketPath: string;
   readonly policyPath: string;
-  // Sends the same { method: "down" } request `realm down` sends, then awaits the daemon's done.
+  // Sends the same { method: "down" } request `realm down` sends for the configured workspace, then awaits the daemon's done.
   down(): Promise<void>;
-  // The daemon's status reply as the control channel returns it.
-  status(): Promise<ControlReply>;
+  // Sends the same { method: "down" } request for one project and resolves with its reply. The daemon keeps running while
+  // another session is live, so done is not awaited here.
+  release(project: string): Promise<ControlReply>;
+  // Sends the same { method: "up" } request `realm up` sends for one project.
+  up(project: string): Promise<ControlReply>;
+  // The daemon's status reply for one project, as the control channel returns it. Defaults to the configured workspace.
+  status(project?: string): Promise<ControlReply>;
+  // The selection of one project, built by the production selectionOf.
+  selectionFor(project: string): ControlSelection;
+  // A client attached to one project's selection, the client an MCP or ACP surface dispatches through.
+  connectFor(project: string): DaemonClient;
   readonly done: Promise<void>;
 }
 
@@ -67,30 +77,45 @@ export async function startRealmDaemon(options: RealmDaemonOptions): Promise<Rea
     sweep: () => Promise.resolve(0),
     probe: () => Promise.resolve<PodmanProbeResult>({ ok: true, version: "5.0.0" }),
   });
-  let downCount = 0;
+  let requestCount = 0;
+  const nextId = (method: string): string => {
+    requestCount += 1;
+    return `harness-${method}-${String(requestCount)}`;
+  };
+  const release = (project: string): Promise<ControlReply> =>
+    sendRequest(
+      daemon.socketPath,
+      { id: nextId("down"), method: "down", params: { selection: selectionOf(project) } },
+      { timeoutMs: CONTROL_TIMEOUT_MS },
+    );
   return Object.freeze({
     socketPath: daemon.socketPath,
     policyPath,
     done: daemon.done,
     async down(): Promise<void> {
-      downCount += 1;
-      await sendRequest(
-        daemon.socketPath,
-        {
-          id: `harness-down-${String(downCount)}`,
-          method: "down",
-          params: { selection: selectionOf(options.workspace) },
-        },
-        { timeoutMs: CONTROL_TIMEOUT_MS },
-      );
+      await release(options.workspace);
       await awaitDone(daemon);
     },
-    status(): Promise<ControlReply> {
+    release,
+    up(project: string): Promise<ControlReply> {
       return sendRequest(
         daemon.socketPath,
-        { id: "harness-status", method: "status", params: { selection: selectionOf(options.workspace) } },
+        { id: nextId("up"), method: "up", params: { workspaceRoot: realpathSync(project) } },
         { timeoutMs: CONTROL_TIMEOUT_MS },
       );
+    },
+    status(project: string = options.workspace): Promise<ControlReply> {
+      return sendRequest(
+        daemon.socketPath,
+        { id: nextId("status"), method: "status", params: { selection: selectionOf(project) } },
+        { timeoutMs: CONTROL_TIMEOUT_MS },
+      );
+    },
+    selectionFor(project: string): ControlSelection {
+      return selectionOf(project);
+    },
+    connectFor(project: string): DaemonClient {
+      return connectDaemon(daemon.socketPath, selectionOf(project));
     },
   });
 }

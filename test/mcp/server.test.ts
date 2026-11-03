@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough, Writable } from "node:stream";
 import { STATUS_LABELS } from "../../src/core/status.js";
@@ -17,6 +18,8 @@ import {
   UNSUPPORTED_PROTOCOL_VERSION,
 } from "../../src/mcp/protocol.js";
 import { makeHarness, WORKLOAD } from "../support/fake-tools.js";
+import { startRealmDaemon } from "../support/realm-daemon-fixture.js";
+import { sessionIdOfWorkspace } from "../../src/session/paths.js";
 import { boundedWait } from "../support/timing.js";
 
 // TOOL-05 MCP stdio server proof (P5-D2, P5-D9, P5-D11). Every test drives the real
@@ -451,4 +454,41 @@ void test("TOOL-05: a thrown RealmError is a tool error without resultType in th
   assert.equal(result["resultType"], undefined);
   assert.equal(result["isError"], true);
   assert.equal(structuredOf(driven.stdoutLines[1])["code"], "OPENSHELL_START_FAILED");
+});
+
+// MULTI-05 (plan 11 T2): one daemon, two projects. An MCP server dispatching through a project's client writes into that project,
+// and its write is audited in that session's file and in no other.
+void test("MCP on two projects: each server's write lands in its own project and its own session's audit file (MULTI-05)", async (t) => {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), "realm-mcp-two-")));
+  const root = join(base, "root");
+  const a = join(root, "a");
+  const b = join(root, "b");
+  mkdirSync(a, { recursive: true });
+  mkdirSync(b, { recursive: true });
+  const fixture = await startRealmDaemon({ stateDir: join(base, "state"), workspace: root, mode: "advisory" });
+  t.after(async () => {
+    for (const project of [a, b]) {
+      await fixture.release(project).catch(() => undefined);
+    }
+    rmSync(base, { recursive: true, force: true });
+  });
+  await fixture.up(a);
+  await fixture.up(b);
+
+  await drive(fixture.connectFor(a), [toolRequest(1, "write", { path: "a-doc.txt", content: "from a" })]);
+  await drive(fixture.connectFor(b), [toolRequest(1, "write", { path: "b-doc.txt", content: "from b" })]);
+
+  assert.equal(readFileSync(join(a, "a-doc.txt"), "utf8"), "from a");
+  assert.equal(readFileSync(join(b, "b-doc.txt"), "utf8"), "from b");
+  assert.equal(existsSync(join(a, "b-doc.txt")), false, "B's write is not in A");
+  assert.equal(existsSync(join(b, "a-doc.txt")), false, "A's write is not in B");
+  const linesOf = (project: string): { readonly path?: string }[] =>
+    readFileSync(join(base, "state", "audit", `${sessionIdOfWorkspace(project)}.jsonl`), "utf8")
+      .split("\n")
+      .filter((line) => line.length > 0)
+      .map((line) => JSON.parse(line) as { readonly path?: string });
+  assert.ok(linesOf(a).some((line) => line.path === "a-doc.txt"), "A's audit file holds A's write");
+  assert.equal(linesOf(a).some((line) => line.path === "b-doc.txt"), false, "A's audit file holds no line of B");
+  assert.ok(linesOf(b).some((line) => line.path === "b-doc.txt"), "B's audit file holds B's write");
+  assert.equal(linesOf(b).some((line) => line.path === "a-doc.txt"), false, "B's audit file holds no line of A");
 });
