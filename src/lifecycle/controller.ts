@@ -19,10 +19,11 @@ import type { BridgeEvent, BridgePort, ExecutionService, ProbeResult } from "../
 import { INITIAL_REASON, RealmStateMachine, type StateSnapshot } from "../core/state-machine.js";
 import { withTimeout } from "../core/timeout.js";
 import { LockTable } from "../fs/locks.js";
-import { type PinnedRoot, verifyPinnedAt } from "../fs/root.js";
+import { PinnedRoot, verifyPinnedAt } from "../fs/root.js";
 import { realmSandboxName } from "../runtime/openshell.js";
 import { controlSocketPath } from "../session/paths.js";
 import type { SessionStore } from "../session/store.js";
+import { readWorkspaceEntry } from "../session/workspace-registry.js";
 import { type GateOutcome, gateMutation } from "./mutation-gate.js";
 
 // Code for a port failure that is not a RealmError on the create, start, and probe paths.
@@ -48,10 +49,49 @@ const STOPPING_REASON = "stopping";
 // The catalogue has no teardown-timeout code, and none is added.
 export const TEARDOWN_TIMEOUT_MS = 30_000;
 
+// How many adopted sessions hydrate at once. It bounds the libpod requests and the open descriptors hydration holds.
+export const HYDRATE_CONCURRENCY = 4;
+
 // A live session is one whose container is or may be running: connecting, active or degraded. A live session is
 // never created again, and a down of a live session arms the daemon's stop once it is destroyed.
 export function isLiveState(state: StateSnapshot["state"]): boolean {
   return state === "connecting" || state === "active" || state === "degraded";
+}
+
+// The pin of an adopted session, verified against its workspace. The device and inode were recorded in the session's workspace
+// entry at create. An entry that is absent, or that lacks them, is SCHEMA_INVALID; a workspace that is no longer that directory
+// is POLICY_DENIED.
+export function storedPinOf(stateDir: string, sessionId: string, workspaceRoot: string): PinnedRoot {
+  const entry = readWorkspaceEntry(stateDir, sessionId);
+  if (entry === null) {
+    throw makeRealmError("SCHEMA_INVALID");
+  }
+  return verifyPinnedAt(new PinnedRoot(entry.workspaceRoot, entry.dev, entry.ino), workspaceRoot);
+}
+
+// Hydrates the adopted sessions HYDRATE_CONCURRENCY at a time, each under its own startup budget, so one that expires fails that
+// session alone. A session leaves `pending` once its hydration settles. Resolves with how many sessions did not come back active.
+export async function hydrateAdopted(
+  adopted: readonly { readonly sessionId: string; readonly containerId: string }[],
+  hydrate: (sessionId: string, containerId: string) => Promise<StateSnapshot>,
+  budgetMs: number,
+  pending: Set<string>,
+): Promise<number> {
+  let next = 0;
+  let failed = 0;
+  const worker = async (): Promise<void> => {
+    for (let session = adopted[next]; session !== undefined; session = adopted[next]) {
+      next += 1;
+      const work = hydrate(session.sessionId, session.containerId);
+      const snapshot = await withTimeout(work, budgetMs, "STARTUP_BUDGET_EXCEEDED").catch(() => undefined);
+      if (snapshot?.state !== "active") {
+        failed += 1;
+      }
+      pending.delete(session.sessionId);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(HYDRATE_CONCURRENCY, adopted.length) }, worker));
+  return failed;
 }
 
 // A port create that is issued and has not settled. Its owner is the create that issued it,
@@ -387,6 +427,8 @@ export class LifecycleController {
   // the successful tail of create: the port start of the survivor, the bridge connect and
   // subscription, and the transition to active, which it persists with the containerId kept. The
   // whole hydration is bounded by policy.startupBudgetMs, and expiry is STARTUP_BUDGET_EXCEEDED.
+  // The workspace must also still be the pinned directory (verifyPinnedAt, as create checks it), or the call is refused with
+  // POLICY_DENIED before any state change or port call.
   // A stop, destroy, or newer create that begins during hydration owns the session, so the result
   // is stale and changes nothing. A failed start or bridge step moves the session to error with the
   // port's code and removes the survivor through the teardown path (see failHydrate).
@@ -408,6 +450,8 @@ export class LifecycleController {
     }
 
     const deadline = performance.now() + this.deps.policy.startupBudgetMs;
+    // The workspace must still be the pinned directory, as create requires, before any state change or port call.
+    verifyPinnedAt(this.deps.pinnedRoot, record.workspaceRoot);
     this.lifeEpoch += 1;
     const epoch = this.lifeEpoch;
     this.machine.transition("connecting", "hydrating container");

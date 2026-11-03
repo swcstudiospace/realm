@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Policy } from "../../src/contract/validate.js";
@@ -236,4 +236,16 @@ void test("a stop that begins during hydration keeps the session out of active, 
   assert.equal(f.controller.snapshot().state, "unbound");
   assert.notEqual(f.store.load(SESSION)?.state, "active");
   assert.equal(f.bridge.callCount("connect"), 0);
+});
+
+void test("hydration refuses a workspace that is no longer the pinned directory, with no port call and no state change", async (t) => {
+  const f = fixture(t);
+  const survivor = await adoptSurvivor(f);
+  const before = f.exec.calls().length;
+  renameSync(f.workspace, `${f.workspace}-moved`);
+  mkdirSync(f.workspace);
+
+  await assertRejectsWith(f.controller.hydrate(survivor), "POLICY_DENIED");
+  assert.equal(f.exec.calls().length, before, "no port call is made");
+  assert.equal(f.controller.snapshot().state, "unbound", "the session state is unchanged");
 });
