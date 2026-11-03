@@ -9,9 +9,10 @@
 // counts as running, so a state the CLI does not recognise is refused rather than assumed stopped. A daemon that cannot
 // answer refuses with REALM_NOT_ACTIVE before anything is written.
 //
-// Known gap (not closed here): the daemon does not refuse realm up while a checkpoint lock is live, so a restore can
-// race a sandbox start. The library's point-sample manifest check and stamp check detect a writer during a snapshot;
-// closing the start race needs a separately owned daemon change.
+// A sandbox start holds the session's checkpoint lock (src/lifecycle/controller.ts create and hydrate), so a checkpoint
+// refused by a live start gets LOCK_CONFLICT, and a start refused by a checkpoint gets REALM_NOT_ACTIVE. A restore that
+// begins after a start has settled still relies on the stopped-sandbox check, and a start that never settles holds the
+// lock until it settles or the process exits.
 
 import { ERROR_CATALOGUE, makeRealmError, RealmError, type ErrorCode } from "../core/errors.js";
 import type { ControlSelection } from "../daemon/channel.js";
