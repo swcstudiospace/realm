@@ -1,6 +1,11 @@
-import { test } from "node:test";
+import { spawn } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { createOpenShellAgentOsDriver } from "../../src/runtime/agentos-driver.js";
+import { boundedWait } from "../support/timing.js";
 import type { RunnerChild } from "../../src/runtime/agentos-workload.js";
 import type { OpenShellRunner } from "../../src/runtime/openshell.js";
 
@@ -22,14 +27,55 @@ function recordingRunner(): { readonly runner: OpenShellRunner; readonly calls: 
   return { runner, calls };
 }
 
-void test("the readiness probe and the alive probe are each bounded by the call budget, and stop issues no OpenShell call", async () => {
+// A runner stand-in: a sleeping process that leads its own process group, as the production spawn makes the runner, so the record
+// the driver writes names a live leader. The test kills the group when it ends and waits for the exit, so nothing outlives it.
+function sleepingRunner(t: TestContext): RunnerChild {
+  const proc = spawn("sleep", ["30"], { detached: true, stdio: "ignore" });
+  const exited = new Promise<void>((resolve) => {
+    proc.once("exit", () => {
+      resolve();
+    });
+    proc.once("error", () => {
+      resolve();
+    });
+  });
+  const killGroup = (): void => {
+    if (proc.pid !== undefined) {
+      try {
+        process.kill(-proc.pid, "SIGKILL");
+      } catch {
+        // The group is already gone.
+      }
+    }
+  };
+  t.after(async () => {
+    killGroup();
+    await boundedWait(exited, "the runner stand-in exits", 5000);
+  });
+  return {
+    pid: proc.pid,
+    hasExited: () => proc.exitCode !== null || proc.signalCode !== null,
+    exited,
+    terminate: async () => {
+      killGroup();
+      await boundedWait(exited, "the runner stand-in exits", 5000);
+    },
+  };
+}
+
+void test("the readiness probe and the alive probe are each bounded by the call budget, and stop issues no OpenShell call", async (t) => {
   const { runner, calls } = recordingRunner();
+  const stateDir = mkdtempSync(join(tmpdir(), "realm-budget-state-"));
+  t.after(() => {
+    rmSync(stateDir, { recursive: true, force: true });
+  });
   const driver = createOpenShellAgentOsDriver({
     runner,
-    spawnRunner: () => RUNNING_CHILD,
+    spawnRunner: () => sleepingRunner(t),
     startTimeoutMs: 180_000,
     callTimeoutMs: 30_000,
     driverSocketPath: "/nonexistent-realm-driver/driver.sock",
+    stateDir,
   });
   await driver.start(SESSION);
   await driver.alive(SESSION);

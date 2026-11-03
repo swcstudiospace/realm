@@ -50,11 +50,12 @@ interface StopWiring {
 const AGENTOS_START_TIMEOUT_MS = 180_000;
 const AGENTOS_CALL_TIMEOUT_MS = 30_000;
 
-function productionAgentOsDriver(env: EnvironmentLike): AgentOsDriver {
+function productionAgentOsDriver(env: EnvironmentLike, stateDir: string): AgentOsDriver {
   const driverSocket = env["REALM_DRIVER_SOCKET"];
   return createOpenShellAgentOsDriver({
     runner: productionOpenShellRunner(env),
     spawnRunner: productionRunnerChild(env),
+    stateDir,
     startTimeoutMs: AGENTOS_START_TIMEOUT_MS,
     callTimeoutMs: AGENTOS_CALL_TIMEOUT_MS,
     // The compute driver's socket, as the daemon's environment names it. Unset, no socket is configured: driverAnswers is not
@@ -73,7 +74,7 @@ export async function runDaemon(deps: DaemonDeps): Promise<number> {
     const { runtimeInput, stateDir } = readHostRuntime(deps.env, deps.readConfig);
     const roots = runtimeRootsOf(loadRuntimeConfig(runtimeInput));
     const libpodSocketPath = podmanSocketPath(deps.env);
-    const agentosDriver = productionAgentOsDriver(deps.env);
+    const agentosDriver = productionAgentOsDriver(deps.env, stateDir);
     const requests = requestLogger(writeStderr, deps.env["REALM_LOG_LEVEL"], requestLogPath(stateDir));
     const entry = entryWriter(deps.writeStderr, stateDir, writeStderr);
     try {

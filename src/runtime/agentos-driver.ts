@@ -12,6 +12,7 @@ import { isAbsolute } from "node:path";
 import { performance } from "node:perf_hooks";
 import { makeRealmError, RealmError } from "../core/errors.js";
 import { dialWithin, withTimeout } from "../core/timeout.js";
+import { currentBootId, runnerRecordOf, writeRunnerRecord } from "../session/runner-record.js";
 import type { AgentOsDriver } from "./agentos.js";
 import type { RunnerChild, RunnerChildSpawner } from "./agentos-workload.js";
 import {
@@ -50,6 +51,9 @@ export interface OpenShellAgentOsDriverOptions {
   readonly driverSocketPath?: string;
   // The pause between readiness probes. Defaults to one second.
   readonly probeIntervalMs?: number;
+  // The realm state directory where each runner's identity record is written (runner-record.ts). A start without it is refused
+  // before any runner is spawned: a runner that has no record cannot be proven gone after a restart.
+  readonly stateDir?: string;
 }
 
 // The runner of one session. Its methods act on that session's sandbox only.
@@ -76,6 +80,25 @@ async function succeeds(run: () => Promise<OpenShellRunOutcome>, budgetMs: numbe
   try {
     const outcome = await withTimeout(run(), budgetMs, "OPENSHELL_START_FAILED");
     return outcome.exitCode === 0;
+  } catch {
+    return false;
+  }
+}
+
+// Writes the identity record of a runner child just spawned (runner-record.ts). False when the child has no pid, when it is
+// not a live group leader, when no boot id can be read, or when the record cannot be written. The caller then stops the child.
+function recordSpawnedRunner(stateDir: string, sessionId: string, child: RunnerChild): boolean {
+  const bootId = currentBootId();
+  if (child.pid === undefined || bootId === null) {
+    return false;
+  }
+  const record = runnerRecordOf(child.pid, bootId);
+  if (record === null) {
+    return false;
+  }
+  try {
+    writeRunnerRecord(stateDir, sessionId, record);
+    return true;
   } catch {
     return false;
   }
@@ -127,7 +150,7 @@ export function createOpenShellAgentOsDriver(options: OpenShellAgentOsDriverOpti
   assertPositiveFinite(probeIntervalMs);
   const runnerPath = options.runnerPath ?? DEFAULT_AGENTOS_RUNNER_PATH;
   const probePath = options.probePath ?? DEFAULT_AGENTOS_PROBE_PATH;
-  const { runner, spawnRunner, startTimeoutMs, callTimeoutMs, driverSocketPath } = options;
+  const { runner, spawnRunner, startTimeoutMs, callTimeoutMs, driverSocketPath, stateDir } = options;
 
   // The runner of each session, made on that session's first call. A session's argv names its own sandbox, and the
   // builders refuse a malformed session id with SCHEMA_INVALID, before any runner call.
@@ -194,10 +217,21 @@ export function createOpenShellAgentOsDriver(options: OpenShellAgentOsDriverOpti
         throw makeRealmError("OPENSHELL_START_FAILED");
       }
 
+      // Without a state directory no record can be written, and a runner with no record cannot be proven gone after a restart.
+      // This is refused before spawnRunner, so no runner ever runs unrecorded.
+      if (stateDir === undefined) {
+        throw makeRealmError("OPENSHELL_START_FAILED");
+      }
       let spawned: RunnerChild;
       try {
         spawned = spawnRunner(argv.runner);
       } catch {
+        throw makeRealmError("OPENSHELL_START_FAILED");
+      }
+      // The identity is recorded right after the spawn, before any readiness probe. When the record cannot be written, the
+      // runner just started is stopped and the start fails: it is not held, because nothing could prove it gone later.
+      if (!recordSpawnedRunner(stateDir, sessionId, spawned)) {
+        await spawned.terminate(RUNNER_TERMINATE_GRACE_MS);
         throw makeRealmError("OPENSHELL_START_FAILED");
       }
       runnerChild = spawned;

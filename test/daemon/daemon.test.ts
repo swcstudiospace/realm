@@ -49,9 +49,12 @@ import { connectDaemon } from "../../src/daemon/client.js";
 import { ERROR_CATALOGUE } from "../../src/core/errors.js";
 import { renameSync } from "node:fs";
 import { SessionStore } from "../../src/session/store.js";
-import { listWorkspaceEntryIds } from "../../src/session/workspace-registry.js";
+import { listWorkspaceEntryIds, workspaceRegistryDirOf, writeWorkspaceEntry } from "../../src/session/workspace-registry.js";
+import { HYDRATE_CONCURRENCY } from "../../src/lifecycle/controller.js";
+import { bindRoot, PinnedRoot } from "../../src/fs/root.js";
 import type { PodmanProbeResult } from "../../src/runtime/podman-probe.js";
 import { controlSocketPath } from "../../src/session/paths.js";
+import { currentBootId, writeRunnerRecord } from "../../src/session/runner-record.js";
 import type { ToolOutcome } from "../../src/tools/dispatch.js";
 import { FakeBridge } from "../support/fake-bridge.js";
 import { FakeExecutionService } from "../support/fake-execution.js";
@@ -304,9 +307,11 @@ function awaitDone(daemon: StartedDaemon): Promise<void> {
   return boundedWait(daemon.done, "daemon done");
 }
 
+// Stops the daemon and waits for its done, each within a bound, so a teardown that does not finish fails here instead of hanging
+// the file. A case that holds a start releases it before this runs, so no teardown waits on a held call.
 async function cleanupDaemon(daemon: StartedDaemon): Promise<void> {
   try {
-    await daemon.stop();
+    await boundedWait(daemon.stop(), "daemon stop during cleanup");
   } catch {
     // A teardown that failed still leaves the daemon stopped; its failure is reported through done.
   }
@@ -2797,6 +2802,24 @@ function orphanContainer(containerId: string): ContainerSeed {
   };
 }
 
+// A pid no process can hold: Linux caps pids at 4194304, so this names no live runner. The daemon tests run no runner process
+// (their exec is a double), so a survivor's runner record names this pid with the current boot id. The hydration proof reads an
+// absent leader in an empty group, so the survivor hydrates. The cases that signal a live runner are in adopt-hydrate.test.ts.
+const ABSENT_RUNNER_PID = 4194305;
+
+// Writes the runner record a previous daemon leaves for a survivor whose runner is no longer running (see ABSENT_RUNNER_PID).
+function recordAbsentRunner(stateDir: string, sessionId: string): void {
+  const bootId = currentBootId();
+  assert.ok(bootId !== null, "the boot id is readable on this host");
+  writeRunnerRecord(stateDir, sessionId, {
+    schema: 1,
+    pid: ABSENT_RUNNER_PID,
+    pgid: ABSENT_RUNNER_PID,
+    startTicks: 0,
+    bootId,
+  });
+}
+
 // Makes a session's container a survivor of an earlier daemon: the exec double holds it, the record names it, and the libpod
 // double lists it under the session's sandbox. Returns its container id.
 async function seedSurvivor(fixture: Fixture, parts: DaemonParts, workspaceRoot: string): Promise<string> {
@@ -2810,6 +2833,8 @@ async function seedSurvivor(fixture: Fixture, parts: DaemonParts, workspaceRoot:
     controlSocketPath: controlSocketPath(fixture.stateDir),
     containerId,
   });
+  writeWorkspaceEntry(fixture.stateDir, bindRoot(workspaceRoot), sessionId);
+  recordAbsentRunner(fixture.stateDir, sessionId);
   parts.containers.seed(survivorOf(sandboxRootsOf(fixture, workspaceRoot), sessionId, containerId));
   return containerId;
 }
@@ -2827,7 +2852,7 @@ function destroyedNoticeOf(containers: number, records: number): string {
 }
 
 function adoptedNoticeOf(sessions: number): string {
-  return `${String(sessions)} session(s) from the previous daemon were adopted and kept. Their records were kept and each was brought back before serving; a session that did not come back is in error.`;
+  return `${String(sessions)} session(s) from the previous daemon were adopted and kept. Their records were kept and each was brought back while the daemon served; a session that did not come back is in error.`;
 }
 
 void test("startup with a verified survivor: the session is adopted, its record and registry entry are kept, its controller reaches active, its container is not removed", async (t) => {
@@ -2965,4 +2990,200 @@ void test("startup where one adopted session's hydration fails: that session is 
   assert.ok(survivor !== undefined);
   const status = await sendRequest(daemon.socketPath, { id: "hy-status", method: "status", params: selectedBy(survivor.dir) });
   assert.equal(snapshotStateOf(status), "active", "the other adopted session still serves");
+});
+
+// ---- Hydration after serve: the stored pin, the refusal of an unproven pin, serve-then-hydrate, bounded concurrency, the budget ----
+
+void test("startup refuses a survivor whose stored pin no longer names its workspace: it is not adopted and nothing starts", async (t) => {
+  const fixture = makeDirs();
+  const sessionId = sessionOf(fixture);
+  const reports: StartupReport[] = [];
+  const lines: string[] = [];
+  const logger = createLogger({
+    sink: {
+      write: (line) => {
+        lines.push(line);
+        return true;
+      },
+    },
+    level: "info",
+    now: () => new Date(CLOCK_ISO),
+  });
+  const parts = daemonParts(fixture, {
+    ...survivorOptionsOf(fixture),
+    logger,
+    onStartup: (report) => {
+      reports.push(report);
+    },
+  });
+  const containerId = await seedSurvivor(fixture, parts, fixture.ws);
+  // The pin names another inode, so the workspace is not the directory the session was created in.
+  const actual = statSync(fixture.ws);
+  writeWorkspaceEntry(fixture.stateDir, new PinnedRoot(fixture.ws, actual.dev, actual.ino + 1), sessionId);
+  const daemon = await startDaemon(parts.options);
+  t.after(() => cleanupDaemon(daemon));
+  assert.equal(firstReport(reports).adopted, 0, "the session is not adopted");
+  assert.equal(firstReport(reports).containersRemoved, 1, "its container is removed");
+  assert.equal(firstReport(reports).recordsDeleted, 1, "its record is deleted");
+  assert.deepEqual(parts.containers.present(), [], "the container is not left in place");
+  assert.equal(parts.events.includes(`remove:${containerId}`), true);
+  assert.equal(parts.exec.callCount("start"), 0, "no start runs for it");
+  assert.equal(daemon.session(sessionId), undefined, "no session is registered");
+  assert.ok(
+    lines.some((line) => line.includes('"event":"startup.adoption_refused"') && line.includes('"code":"POLICY_DENIED"')),
+    "the refusal is logged with POLICY_DENIED",
+  );
+});
+
+void test("startup refuses a survivor whose workspace entry has no device and inode: refused as SCHEMA_INVALID and not adopted", async (t) => {
+  const fixture = makeDirs();
+  const sessionId = sessionOf(fixture);
+  const reports: StartupReport[] = [];
+  const lines: string[] = [];
+  const logger = createLogger({
+    sink: {
+      write: (line) => {
+        lines.push(line);
+        return true;
+      },
+    },
+    level: "info",
+    now: () => new Date(CLOCK_ISO),
+  });
+  const parts = daemonParts(fixture, {
+    ...survivorOptionsOf(fixture),
+    logger,
+    onStartup: (report) => {
+      reports.push(report);
+    },
+  });
+  const containerId = await seedSurvivor(fixture, parts, fixture.ws);
+  // The entry names the session and the workspace but records no device and inode, so the pin cannot be proven.
+  writeFileSync(
+    join(workspaceRegistryDirOf(fixture.stateDir), `${sessionId}.json`),
+    JSON.stringify({ schema: 1, sessionId, workspaceRoot: fixture.ws }),
+  );
+  const daemon = await startDaemon(parts.options);
+  t.after(() => cleanupDaemon(daemon));
+  assert.equal(firstReport(reports).adopted, 0, "the session is not adopted");
+  assert.equal(firstReport(reports).containersRemoved, 1, "its container is removed");
+  assert.deepEqual(parts.containers.present(), [], "the container is not left in place");
+  assert.equal(parts.events.includes(`remove:${containerId}`), true);
+  assert.equal(parts.exec.callCount("start"), 0, "no start runs for it");
+  assert.equal(daemon.session(sessionId), undefined, "no session is registered");
+  assert.ok(
+    lines.some((line) => line.includes('"event":"startup.adoption_refused"') && line.includes('"code":"SCHEMA_INVALID"')),
+    "the refusal is logged with SCHEMA_INVALID",
+  );
+});
+
+void test("a request for an adopted session whose hydration is pending is refused with REALM_NOT_ACTIVE, and a hydrated one still answers", async (t) => {
+  const fixture = makeDirs();
+  const [a, b] = [projectDir(fixture, "a"), projectDir(fixture, "b")];
+  const parts = daemonParts(fixture, { ...wideOptions(fixture), ...survivorOptionsOf(fixture) });
+  await seedSurvivor(fixture, parts, a);
+  await seedSurvivor(fixture, parts, b);
+  // The first start is held until the test releases it, so one session's hydration stays pending while the other settles.
+  const release = parts.exec.holdNext("start");
+  t.after(release);
+  const starting = startDaemon(parts.options);
+  starting.catch(() => undefined);
+  const socketPath = controlSocketPath(fixture.stateDir);
+  await pollUntil(() => existsSync(socketPath), "the control socket is listening");
+  // A request waits for the gate, then one session is refused at once and the other answers active.
+  await pollUntil(async () => {
+    const replies = await Promise.all(
+      [a, b].map((dir) => sendRequest(socketPath, { id: "pending-status", method: "status", params: selectedBy(dir) })),
+    );
+    const refused = replies.filter((reply) => reply.error?.code === "REALM_NOT_ACTIVE");
+    const active = replies.filter((reply) => snapshotStateOf(reply) === "active");
+    return refused.length === 1 && active.length === 1;
+  }, "one session is refused while its hydration is pending and the other is active");
+  release();
+  const daemon = await starting;
+  t.after(() => cleanupDaemon(daemon));
+  assert.equal(stateOf(daemon, selectionOf(a).sessionId), "active", "the first session comes back");
+  assert.equal(stateOf(daemon, selectionOf(b).sessionId), "active", "the second session comes back");
+});
+
+void test("hydration runs at most HYDRATE_CONCURRENCY sessions at once, and all twelve finish", async (t) => {
+  const fixture = makeDirs();
+  const dirs = Array.from({ length: 12 }, (_, index) => projectDir(fixture, `project-${String(index)}`));
+  const reports: StartupReport[] = [];
+  const parts = daemonParts(fixture, {
+    ...wideOptions(fixture),
+    ...survivorOptionsOf(fixture),
+    onStartup: (report) => {
+      reports.push(report);
+    },
+  });
+  for (const dir of dirs) {
+    await seedSurvivor(fixture, parts, dir);
+  }
+  // Each start takes a while and is counted while in flight, so overlapping hydrations show up in the peak.
+  let inFlight = 0;
+  let peak = 0;
+  const startOne = parts.exec.start.bind(parts.exec);
+  parts.exec.start = async (containerId: string, sandbox: string): Promise<void> => {
+    inFlight += 1;
+    peak = Math.max(peak, inFlight);
+    try {
+      await startOne(containerId, sandbox);
+    } finally {
+      inFlight -= 1;
+    }
+  };
+  parts.exec.setDelay("start", 20);
+  const daemon = await startDaemon(parts.options);
+  t.after(() => cleanupDaemon(daemon));
+  assert.equal(peak, HYDRATE_CONCURRENCY, "at most HYDRATE_CONCURRENCY hydrations are in flight at once");
+  assert.equal(firstReport(reports).adopted, 12, "all twelve sessions are adopted");
+  assert.equal(firstReport(reports).failures, 0, "all twelve hydrations finish");
+  for (const dir of dirs) {
+    assert.equal(stateOf(daemon, selectionOf(dir).sessionId), "active");
+  }
+});
+
+void test("a session whose hydration exceeds startupBudgetMs fails with STARTUP_BUDGET_EXCEEDED, and the other session still hydrates", async (t) => {
+  const fixture = makeDirs();
+  const [a, b] = [projectDir(fixture, "a"), projectDir(fixture, "b")];
+  const reports: StartupReport[] = [];
+  const parts = daemonParts(fixture, {
+    ...wideOptions(fixture),
+    ...survivorOptionsOf(fixture),
+    policyPath: writePolicy(fixture, "budget-policy.json", {
+      mode: "advisory",
+      workspaceRoots: [fixture.base],
+      startupBudgetMs: 300,
+    }),
+    onStartup: (report) => {
+      reports.push(report);
+    },
+  });
+  await seedSurvivor(fixture, parts, a);
+  await seedSurvivor(fixture, parts, b);
+  // The first start never returns until the test releases it, so that session exceeds its budget.
+  const release = parts.exec.holdNext("start");
+  const daemon = await startDaemon(parts.options);
+  t.after(() => cleanupDaemon(daemon));
+  // Registered after the cleanup, so it runs first: after tests run last-in, and a held start must be released before the stop.
+  t.after(release);
+  assert.equal(firstReport(reports).failures, 1, "one hydration failed");
+  const entries = [a, b].map((dir) => {
+    const entry = daemon.session(selectionOf(dir).sessionId);
+    assert.ok(entry !== undefined, "the session is registered");
+    return entry;
+  });
+  // The startup report counts the failure when the start budget expires, and the session records its error in its own controller
+  // when that controller's budget fires. The state can therefore lag the report, so the state is awaited, bounded, before it is read.
+  await pollUntil(
+    () => entries.filter((entry) => entry.handle.controller.snapshot().state === "error").length === 1,
+    "the session that exceeded its budget reaches error",
+    { timeoutMs: 10_000 },
+  );
+  const failed = entries.filter((entry) => entry.handle.controller.snapshot().state === "error");
+  const healthy = entries.filter((entry) => entry.handle.controller.snapshot().state === "active");
+  assert.equal(failed.length, 1, "the session that exceeded its budget is in error");
+  assert.equal(failed[0]?.handle.controller.snapshot().reason, "STARTUP_BUDGET_EXCEEDED");
+  assert.equal(healthy.length, 1, "the other session is unaffected");
 });

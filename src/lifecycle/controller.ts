@@ -19,10 +19,12 @@ import type { BridgeEvent, BridgePort, ExecutionService, ProbeResult } from "../
 import { INITIAL_REASON, RealmStateMachine, type StateSnapshot } from "../core/state-machine.js";
 import { withTimeout } from "../core/timeout.js";
 import { LockTable } from "../fs/locks.js";
-import { type PinnedRoot, verifyPinnedAt } from "../fs/root.js";
+import { PinnedRoot, verifyPinnedAt } from "../fs/root.js";
 import { realmSandboxName } from "../runtime/openshell.js";
 import { controlSocketPath } from "../session/paths.js";
 import type { SessionStore } from "../session/store.js";
+import { currentBootId, groupHasMembers, readRunnerRecord, RUNNER_STOP_GRACE_MS, stopRecordedRunner } from "../session/runner-record.js";
+import { readWorkspaceEntry } from "../session/workspace-registry.js";
 import { type GateOutcome, gateMutation } from "./mutation-gate.js";
 
 // Code for a port failure that is not a RealmError on the create, start, and probe paths.
@@ -48,10 +50,49 @@ const STOPPING_REASON = "stopping";
 // The catalogue has no teardown-timeout code, and none is added.
 export const TEARDOWN_TIMEOUT_MS = 30_000;
 
+// How many adopted sessions hydrate at once. It bounds the libpod requests and the open descriptors hydration holds.
+export const HYDRATE_CONCURRENCY = 4;
+
 // A live session is one whose container is or may be running: connecting, active or degraded. A live session is
 // never created again, and a down of a live session arms the daemon's stop once it is destroyed.
 export function isLiveState(state: StateSnapshot["state"]): boolean {
   return state === "connecting" || state === "active" || state === "degraded";
+}
+
+// The pin of an adopted session, verified against its workspace. The device and inode were recorded in the session's workspace
+// entry at create. An entry that is absent, or that lacks them, is SCHEMA_INVALID; a workspace that is no longer that directory
+// is POLICY_DENIED.
+export function storedPinOf(stateDir: string, sessionId: string, workspaceRoot: string): PinnedRoot {
+  const entry = readWorkspaceEntry(stateDir, sessionId);
+  if (entry === null) {
+    throw makeRealmError("SCHEMA_INVALID");
+  }
+  return verifyPinnedAt(new PinnedRoot(entry.workspaceRoot, entry.dev, entry.ino), workspaceRoot);
+}
+
+// Hydrates the adopted sessions HYDRATE_CONCURRENCY at a time, each under its own startup budget, so one that expires fails that
+// session alone. A session leaves `pending` once its hydration settles. Resolves with how many sessions did not come back active.
+export async function hydrateAdopted(
+  adopted: readonly { readonly sessionId: string; readonly containerId: string }[],
+  hydrate: (sessionId: string, containerId: string) => Promise<StateSnapshot>,
+  budgetMs: number,
+  pending: Set<string>,
+): Promise<number> {
+  let next = 0;
+  let failed = 0;
+  const worker = async (): Promise<void> => {
+    for (let session = adopted[next]; session !== undefined; session = adopted[next]) {
+      next += 1;
+      const work = hydrate(session.sessionId, session.containerId);
+      const snapshot = await withTimeout(work, budgetMs, "STARTUP_BUDGET_EXCEEDED").catch(() => undefined);
+      if (snapshot?.state !== "active") {
+        failed += 1;
+      }
+      pending.delete(session.sessionId);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(HYDRATE_CONCURRENCY, adopted.length) }, worker));
+  return failed;
 }
 
 // A port create that is issued and has not settled. Its owner is the create that issued it,
@@ -92,6 +133,13 @@ export interface LifecycleDeps {
   readonly pinnedRoot: PinnedRoot;
   // The teardown bound in milliseconds. The default is TEARDOWN_TIMEOUT_MS.
   readonly teardownTimeoutMs?: number;
+  // The runner stop of a hydration (runner-record.ts). The grace is the time the recorded group gets after SIGTERM, and
+  // groupLive reports whether any live process still holds a process group. Both default to the production values. Tests
+  // inject a short grace, and a group probe to model a group that survives SIGKILL.
+  readonly runnerStop?: {
+    readonly graceMs?: number;
+    readonly groupLive?: (pgid: number) => boolean;
+  };
 }
 
 export class LifecycleController {
@@ -387,6 +435,8 @@ export class LifecycleController {
   // the successful tail of create: the port start of the survivor, the bridge connect and
   // subscription, and the transition to active, which it persists with the containerId kept. The
   // whole hydration is bounded by policy.startupBudgetMs, and expiry is STARTUP_BUDGET_EXCEEDED.
+  // The workspace must also still be the pinned directory (verifyPinnedAt, as create checks it), or the call is refused with
+  // POLICY_DENIED before any state change or port call.
   // A stop, destroy, or newer create that begins during hydration owns the session, so the result
   // is stale and changes nothing. A failed start or bridge step moves the session to error with the
   // port's code and removes the survivor through the teardown path (see failHydrate).
@@ -408,6 +458,8 @@ export class LifecycleController {
     }
 
     const deadline = performance.now() + this.deps.policy.startupBudgetMs;
+    // The workspace must still be the pinned directory, as create requires, before any state change or port call.
+    verifyPinnedAt(this.deps.pinnedRoot, record.workspaceRoot);
     this.lifeEpoch += 1;
     const epoch = this.lifeEpoch;
     this.machine.transition("connecting", "hydrating container");
@@ -423,6 +475,16 @@ export class LifecycleController {
         if (!this.ownsStartup(epoch)) {
           return this.machine.snapshot();
         }
+      }
+      // Before the survivor starts, the runner of the previous life must be proven gone (runner-record.ts). A refusal throws
+      // here, and failHydrate removes the survivor through the teardown path, so no runner shares its sandbox.
+      await withTimeout(
+        this.proveRunnerStopped(),
+        Math.max(0, deadline - performance.now()),
+        "STARTUP_BUDGET_EXCEEDED",
+      );
+      if (!this.ownsStartup(epoch)) {
+        return this.machine.snapshot();
       }
       this.checkDeadline(deadline);
       const start = this.issueStart(containerId);
@@ -453,6 +515,21 @@ export class LifecycleController {
     this.machine.transition("active", "container running");
     this.writeState();
     return this.machine.snapshot();
+  }
+
+  // Proves the runner of the session's previous life gone (runner-record.ts). The record must be from this boot, and the
+  // recorded group must be empty once the stop settles. A missing, unreadable or other-boot record refuses without any signal,
+  // as does a stop that cannot prove the group empty. The refusal is OPENSHELL_START_FAILED, the code a failed start records.
+  private async proveRunnerStopped(): Promise<void> {
+    const record = readRunnerRecord(this.deps.store.stateDir, this.deps.sessionId);
+    if (record === null || record.bootId !== currentBootId()) {
+      throw makeRealmError("OPENSHELL_START_FAILED");
+    }
+    const graceMs = this.deps.runnerStop?.graceMs ?? RUNNER_STOP_GRACE_MS;
+    const groupLive = this.deps.runnerStop?.groupLive ?? groupHasMembers;
+    if (!(await stopRecordedRunner(record, graceMs, groupLive))) {
+      throw makeRealmError("OPENSHELL_START_FAILED");
+    }
   }
 
   // Host attachments change no state and no record. Attaching the same id twice is

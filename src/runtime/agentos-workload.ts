@@ -24,6 +24,9 @@ export type SpawnProcess = (file: string, args: readonly string[], options: Spaw
 
 // One runner child of one sandbox.
 export interface RunnerChild {
+  // The process id of the runner child, or undefined when it never started. The driver records it with the runner's
+  // start ticks and group id (runner-record.ts), so a restart can prove the runner gone before it adopts the session.
+  readonly pid?: number | undefined;
   // True once the process has exited, or once its spawn failed.
   hasExited(): boolean;
   // Settles once the process has exited, or once its spawn failed. It never rejects.
@@ -84,6 +87,7 @@ function track(proc: RunnerProcess): RunnerChild {
     });
   });
   return {
+    pid: proc.pid,
     hasExited: () => exited,
     exited: gone,
     terminate: async (graceMs) => {
