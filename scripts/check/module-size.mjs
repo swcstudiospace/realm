@@ -66,11 +66,13 @@ function main(root = DEFAULT_ROOT) {
   }
   for (const violation of violations) {
     const detail =
-      violation.reason === "over-limit"
-        ? `${String(violation.count)} lines exceeds the ${String(violation.limit)}-line limit and is not allowlisted`
-        : violation.reason === "grew"
-          ? `${String(violation.count)} lines exceeds its allowlisted ceiling of ${String(violation.ceiling)}`
-          : `${String(violation.count)} lines is at or under the ${String(violation.limit)}-line limit; remove its allowlist entry`;
+      violation.count === null
+        ? "file not found; remove its allowlist entry"
+        : violation.reason === "over-limit"
+          ? `${String(violation.count)} lines exceeds the ${String(violation.limit)}-line limit and is not allowlisted`
+          : violation.reason === "grew"
+            ? `${String(violation.count)} lines exceeds its allowlisted ceiling of ${String(violation.ceiling)}`
+            : `${String(violation.count)} lines is at or under the ${String(violation.limit)}-line limit; remove its allowlist entry`;
     console.error(`module size: ${violation.file}: ${violation.reason}: ${detail}`);
   }
   return 1;
