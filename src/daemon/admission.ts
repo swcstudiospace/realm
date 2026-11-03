@@ -60,6 +60,11 @@ export class AdmissionLedger {
     return this.#countIn(new Set(this.#recordedIds()));
   }
 
+  // The number of in-flight and live reservations: the size of the reserved set. The daemon arms its stop only when none is held.
+  reservedCount(): number {
+    return this.#reserved.size;
+  }
+
   isCommitted(sessionId: string): boolean {
     return this.#recordedIds().includes(sessionId) || this.#reserved.has(sessionId) || this.#unproven.has(sessionId);
   }

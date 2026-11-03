@@ -48,6 +48,12 @@ const STOPPING_REASON = "stopping";
 // The catalogue has no teardown-timeout code, and none is added.
 export const TEARDOWN_TIMEOUT_MS = 30_000;
 
+// A live session is one whose container is or may be running: connecting, active or degraded. A live session is
+// never created again, and a down of a live session arms the daemon's stop once it is destroyed.
+export function isLiveState(state: StateSnapshot["state"]): boolean {
+  return state === "connecting" || state === "active" || state === "degraded";
+}
+
 // A port create that is issued and has not settled. Its owner is the create that issued it,
 // until a stop or destroy takes it (C1). `attempt` numbers the creates, so an abandoned one can
 // tell that a newer create started after it (C2).
@@ -197,7 +203,7 @@ export class LifecycleController {
     const root = verifyPinnedAt(this.deps.pinnedRoot, workspaceRoot);
     const existing = this.deps.store.load(this.deps.sessionId);
     const priorContainerId = existing?.containerId ?? null;
-    const live = state === "connecting" || state === "active" || state === "degraded";
+    const live = isLiveState(state);
     // A record that names a container, or a live session, binds the workspace (S-02, F5).
     const mustMatch = priorContainerId !== null || live;
     if (existing !== null && mustMatch && existing.workspaceRoot !== root.realPath) {

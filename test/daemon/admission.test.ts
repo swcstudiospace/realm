@@ -120,3 +120,16 @@ void test("a maxSessions that is not a positive integer throws SCHEMA_INVALID, a
   }
   assert.doesNotThrow(() => ledgerOf(1));
 });
+
+void test("reservedCount counts an in-flight reservation and is zero after every release (MULTI-06)", () => {
+  const ledger = ledgerOf(2);
+  assert.equal(ledger.reservedCount(), 0);
+  ledger.reserve("p-a");
+  ledger.reserve("p-b");
+  assert.equal(ledger.reservedCount(), 2);
+  ledger.markUnproven("p-a");
+  assert.equal(ledger.reservedCount(), 1, "a session whose removal is unproven leaves the reserved set");
+  ledger.release("p-a");
+  ledger.release("p-b");
+  assert.equal(ledger.reservedCount(), 0);
+});

@@ -1,12 +1,13 @@
-// Daemon: single-owner start, reap-before-serve, method dispatch, and graceful shutdown (P6-D1, P6-D4, P6-D12).
+// Daemon: single-owner start, reap-before-serve, selected method dispatch, and graceful shutdown (P6-D1, P6-D4, P6-D12).
 // buildDaemonHandle wires createRealmHandle with the production adapters (SessionExecution over the
 // libpod client, AndaBridge over the configured URL, the production OpenShell runner, Date clock); tests inject
 // the existing fakes at the same seam. startDaemon binds the control socket once per state directory,
 // runs the startup maintenance before serving (runStartupMaintenance: the reap with the bounded sweep, the orphan
-// temp-file sweep, the audit reconciliation, then the report; CRASH-01, CRASH-02, CRASH-04), dispatches the five
-// CONTROL_METHODS from the 06-01 channel, and tears down on down. The wait for the controller teardown is bounded by
-// TEARDOWN_TIMEOUT_MS; socket I/O keeps SOCKET_TIMEOUT_MS. With no AgentOS driver or supervisor bound,
-// the handle still builds and up refuses with AGENTOS_NOT_CONFIGURED. This module parses no argv,
+// temp-file sweep, the audit reconciliation, then the report; CRASH-01, CRASH-02, CRASH-04), and dispatches the six
+// CONTROL_METHODS from the channel. Each admitted project (MULTI-02) has its own handle, held in a SessionEntry keyed by
+// session id (sessions.ts); every selected request acts on the entry its selection names and on no other. A session's
+// teardown bounds its wait by TEARDOWN_TIMEOUT_MS; socket I/O keeps SOCKET_TIMEOUT_MS. With no AgentOS driver or supervisor
+// bound, a handle still builds and up refuses with AGENTOS_NOT_CONFIGURED. This module parses no argv,
 // spawns no daemon process, and reads no process environment: every host value arrives through its options.
 
 import { rmSync, statSync } from "node:fs";
@@ -20,7 +21,7 @@ import { nullLogger, type Logger } from "../observe/logger.js";
 import { createMetrics } from "../observe/metrics.js";
 import { reconcileAuditLogs } from "../audit/reconcile.js";
 import type { Policy, PolicyMode } from "../contract/validate.js";
-import { ERROR_CODES, makeRealmError, RealmError, type ErrorCode } from "../core/errors.js";
+import { makeRealmError, RealmError, type ErrorCode } from "../core/errors.js";
 import { loadPolicyFile } from "../core/policy.js";
 import type { BridgePort, ExecutionService } from "../core/ports.js";
 import type { StateSnapshot } from "../core/state-machine.js";
@@ -29,10 +30,11 @@ import { withTimeout } from "../core/timeout.js";
 import { defaultRunCommand, runChecks, type AgentOsReading, type CheckResult, type DoctorOptions } from "../doctor/checks.js";
 import { bindRoot, isInsideRoot, type PinnedRoot } from "../fs/root.js";
 import { DEFAULT_SWEEP_DEADLINE_MS, ORPHAN_TEMP_MIN_AGE_MS, sweepOrphanTempFiles } from "../fs/temp-sweep.js";
-import { TEARDOWN_TIMEOUT_MS } from "../lifecycle/controller.js";
+import { isLiveState, TEARDOWN_TIMEOUT_MS } from "../lifecycle/controller.js";
 import { createRealmHandle, type RealmHandle } from "../realm/compose.js";
 import { AgentOsSupervisor, type AgentOsDriver } from "../runtime/agentos.js";
 import { andaBridgeRequired, loadRuntimeConfig, type RuntimeConfig } from "../runtime/config.js";
+import { MAX_CONCURRENT_SESSIONS } from "../runtime/hardening.js";
 import { LibpodClient } from "../runtime/libpod-client.js";
 import {
   productionOpenShellRunner,
@@ -48,16 +50,20 @@ import {
   type RunCommand,
 } from "../runtime/podman-probe.js";
 import { removeAllRealmContainers } from "../runtime/sweep.js";
-import { controlSocketPath, sessionsDirOf, type EnvironmentLike } from "../session/paths.js";
+import { controlSocketPath, sessionIdOfWorkspace, sessionsDirOf, type EnvironmentLike } from "../session/paths.js";
 import { reapStartup, type ReapResult } from "../session/reap.js";
 import { SessionStore } from "../session/store.js";
+import { readWorkspaceEntry, removeWorkspaceEntry, writeWorkspaceEntry } from "../session/workspace-registry.js";
+import { AdmissionLedger } from "./admission.js";
 import {
   chmodSocket,
+  CONTROL_TIMEOUT_MS,
   decodeRequest,
   encodeReply,
   ensureSocketDir,
   isControlMethod,
   oversizedLineReply,
+  parseControlSelection,
   readControlLine,
   replyForMalformedLine,
   SOCKET_TIMEOUT_MS,
@@ -66,8 +72,26 @@ import {
   type ControlMethod,
   type ControlReply,
   type ControlRequest,
+  type ControlSelection,
   type SocketDirDeps,
 } from "./channel.js";
+import {
+  catalogueCode,
+  codeOf,
+  DAEMON_REPLY_ALLOWANCE_MS,
+  downLockWaitMs,
+  isSessionLockHeld,
+  reserveAdmission,
+  resolveSelection,
+  settleFailedCreate,
+  SessionHealth,
+  SessionRegistry,
+  unboundSnapshot,
+  upLockWaitMs,
+  withSessionLock,
+  type ResolvedSelection,
+  type SessionEntry,
+} from "./sessions.js";
 
 // Default bound for one AgentOS driver call in the production supervisor. The
 // only purpose is to keep a hung driver from hanging daemon startup; the
@@ -75,11 +99,6 @@ import {
 // The supervisor wraps every driver call in this budget, and a sandbox create takes tens of seconds. It
 // must exceed the driver's create budget (AGENTOS_START_TIMEOUT_MS in main.ts, 180 s) with margin.
 const AGENTOS_CALL_TIMEOUT_MS = 200_000;
-
-// How often the daemon probes an active session (RT-04, owner ruling N1). A runner that exited while the session is active is
-// reported by the probe as AGENTOS_CRASH_LOOP, and the session moves to error, so the status label tells the truth without a
-// doctor run. One probe runs at a time, and each is bounded by the controller's startup budget.
-export const HEALTH_PROBE_INTERVAL_MS = 10_000;
 
 // The budget of the startup temp-file sweep and audit reconciliation together, counted from the end of the reap. Both are
 // optional cleanup, so a large workspace or audit history must not keep clients waiting: the work that does not fit is
@@ -113,7 +132,6 @@ export interface BuildDaemonHandleOptions {
   // The three roots from config.json (runtimeRootsOf). The driver reads the same file. A stale REALM_DRIVER_*_ROOT
   // variable is ignored. Without a root a session create is refused before any libpod call.
   readonly secretRoot?: string;
-  readonly pinnedWorkspaceRoot?: string;
   readonly sandboxStateRoot?: string;
 }
 
@@ -144,7 +162,7 @@ export interface StartupReport {
   readonly failures: number;
 }
 
-export interface StartDaemonOptions extends BuildDaemonHandleOptions {
+export interface StartDaemonOptions extends Omit<BuildDaemonHandleOptions, "sessionId"> {
   // Probe seam for up (P6-D5). Defaults to the real probePodman over the
   // injected command/socket seams; tests inject a scripted result.
   readonly probe?: () => Promise<PodmanProbeResult>;
@@ -170,7 +188,7 @@ export interface StartDaemonOptions extends BuildDaemonHandleOptions {
   readonly startupMaintenanceBudgetMs?: number;
   // Monotonic clock for that budget, in milliseconds. Defaults to performance.now(); a test injects its own.
   readonly monotonicNow?: () => number;
-  readonly store?: Pick<SessionStore, "list" | "delete">;
+  readonly store?: Pick<SessionStore, "list" | "load" | "delete">;
   readonly socketDirDeps?: SocketDirDeps;
   // Bound for one socket operation and for draining in-flight requests on down.
   readonly timeoutMs?: number;
@@ -178,15 +196,32 @@ export interface StartDaemonOptions extends BuildDaemonHandleOptions {
   readonly onServer?: (server: Server) => void;
   // Request log (OBS-02). Defaults to a logger that writes nothing. The entry passes one whose sink is the daemon log.
   readonly logger?: Logger;
+  // The most sessions the daemon admits at once (C7). Defaults to MAX_CONCURRENT_SESSIONS.
+  readonly maxSessions?: number;
+  // Builds the handle of one admitted session. Defaults to buildDaemonHandle; a test wraps it to patch a controller before up.
+  readonly buildHandle?: (options: BuildDaemonHandleOptions) => RealmHandle;
+  // Called with a session id after its container is created, and after its record and registry entry are removed on its
+  // destroy. The daemon reads no audit file; the caller does.
+  readonly onAuditHead?: (sessionId: string) => void;
+  // The client bound of each method that waits on a lock, in milliseconds. Defaults to CONTROL_TIMEOUT_MS.
+  readonly clientBoundMs?: Partial<Record<"up" | "down", number>>;
+  // The slack kept on a client bound for the reply. Defaults to DAEMON_REPLY_ALLOWANCE_MS.
+  readonly replyAllowanceMs?: number;
 }
 
 export interface StartedDaemon {
   readonly socketPath: string;
-  readonly handle: RealmHandle;
-  // Resolves when the daemon has stopped: down completes teardown, removes the socket, and releases the server.
+  // Resolves when the daemon has stopped: every session is stopped, the server is released and the socket is removed.
   // Rejects with the stop reason when the listening server failed. The entrypoint exits the process then; this
   // module never exits.
   readonly done: Promise<void>;
+  // Stops every admitted session in process and ends the daemon. It sends no control message and writes no reply. Rejects
+  // with the teardown's code when a session did not stop; the daemon has stopped either way.
+  stop(): Promise<void>;
+  // The entry of an admitted session, or undefined. It is the only way to reach a session's handle.
+  session(sessionId: string): SessionEntry | undefined;
+  committedCount(): number;
+  isCommitted(sessionId: string): boolean;
 }
 
 // Builds the shared composition root wiring (P6-D12): the exact
@@ -214,7 +249,7 @@ export function buildDaemonHandle(options: BuildDaemonHandleOptions): RealmHandl
 }
 
 // Starts the daemon: single-owner bind, reap-before-serve, then dispatch until
-// down (P6-D1, P6-D4). A rival owner bound to the same socket refuses with
+// stopped (P6-D1, P6-D4). A rival owner bound to the same socket refuses with
 // LOCK_CONFLICT; a failed sweep rejects before any record is touched and before
 // anything is served.
 export async function startDaemon(options: StartDaemonOptions): Promise<StartedDaemon> {
@@ -222,22 +257,16 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
   const libpod =
     options.libpod ??
     (options.libpodSocketPath !== undefined ? new LibpodClient(options.libpodSocketPath) : undefined);
-  // One supervisor per session: the caller's, or one built over the driver. The handle and the doctor probe share them, so
-  // each session's supervision state is one object.
+  // One supervisor per session: the caller's, or one built over the driver. A session's handle and the doctor probe share
+  // its supervisor, so each session's supervision state is one object.
   const agentosFor =
     options.agentosFor ?? (options.agentosDriver !== undefined ? supervisorsOver(options.agentosDriver) : undefined);
   const config = loadRuntimeConfig(options.runtimeInput);
-  // The policy is loaded once: the handle and the startup sweep roots read the same document.
+  // The policy is loaded once: every session's handle and the startup sweep roots read the same document.
   const policy = options.policy ?? loadPolicyFile(options.policyPath);
-  const handle = buildDaemonHandle({
-    ...options,
-    policy,
-    ...(libpod === undefined ? {} : { libpod }),
-    ...(agentosFor === undefined ? {} : { agentosFor }),
-  });
-  // The pinned root the handle binds: createRealmHandle binds this same config.workspaceRoot through bindRoot, so the value
-  // is the one the controller refuses other workspaces against. Status and up replies carry it (boundRoot).
-  const boundRoot = bindRoot(config.workspaceRoot).realPath;
+  // The ceiling every admitted workspace must lie inside (MULTI-02): the configured workspace root, bound once.
+  const ceiling = bindRoot(config.workspaceRoot);
+  const clock = options.clock ?? (() => new Date());
   const stateDir = config.stateDir;
   // The reap's sweep. The default one reports each removed container's id through onRemoved; an injected one reports none.
   const sweep: StartupSweep | undefined =
@@ -247,6 +276,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
     throw makeRealmError("SCHEMA_INVALID");
   }
   const store = options.store ?? new SessionStore(stateDir);
+  const probeTimeoutMs = options.probeTimeoutMs ?? SOCKET_TIMEOUT_MS;
   const probe =
     options.probe ??
     (() =>
@@ -254,17 +284,38 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
         runCommand: options.runCommand ?? defaultRunCommand,
         connectSocket: options.connectSocket ?? defaultConnectSocket,
         env: options.env ?? {},
-        timeoutMs: options.probeTimeoutMs ?? SOCKET_TIMEOUT_MS,
+        timeoutMs: probeTimeoutMs,
       }));
-  // The AgentOS reading the doctor reports (CLI-03; P6-D14): unbound when no driver is given, otherwise
-  // whether the driver's live session answers.
-  const agentosReading = async (): Promise<AgentOsReading> =>
-    agentosFor === undefined ? { bound: false } : { bound: true, alive: await agentosFor(options.sessionId).check() };
-  const runDoctor = (): Promise<readonly CheckResult[]> =>
+  // The client bound and the reply slack set the lock waits and the post-grant budgets of the locked methods.
+  const clientBoundMs = (method: "up" | "down"): number => options.clientBoundMs?.[method] ?? CONTROL_TIMEOUT_MS[method];
+  const replyAllowanceMs = options.replyAllowanceMs ?? DAEMON_REPLY_ALLOWANCE_MS;
+  const upWaitMs = upLockWaitMs(clientBoundMs("up"), probeTimeoutMs, replyAllowanceMs);
+  const downWaitMs = downLockWaitMs(clientBoundMs("down"), replyAllowanceMs);
+  // The one admission ledger of the daemon: the count of admitted sessions is the daemon's, never the driver's (C7).
+  const ledger = new AdmissionLedger({
+    maxSessions: options.maxSessions ?? MAX_CONCURRENT_SESSIONS,
+    recordedIds: () => store.list(),
+  });
+  const registry = new SessionRegistry();
+  // The correlation id of the up that last admitted each session. The audit lines of its tool calls name it.
+  const upIds = new Map<string, string>();
+  const buildHandle = options.buildHandle ?? buildDaemonHandle;
+  // The options every session's handle is built from. The runtime input and the session id are per session.
+  const handleBase = {
+    ...options,
+    policy,
+    ...(libpod === undefined ? {} : { libpod }),
+    ...(agentosFor === undefined ? {} : { agentosFor }),
+  };
+  // The doctor report. With a session selected, its AgentOS reading is that session's supervisor; with none, unbound (C4).
+  const runDoctor = (sessionId: string | null): Promise<readonly CheckResult[]> =>
     (options.runChecks ?? runChecks)({
       stateDir,
       policyPath: options.policyPath,
-      agentos: agentosReading,
+      agentos: async (): Promise<AgentOsReading> =>
+        sessionId === null || agentosFor === undefined
+          ? { bound: false }
+          : { bound: true, alive: await agentosFor(sessionId).check() },
       env: options.env ?? {},
       ...options.doctorOptions,
       runtimeConfig: config,
@@ -287,102 +338,176 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
 
   let inFlight = 0;
   let draining = false;
+  // Set once a stop has begun: by a down that leaves no live session, by a signal, or by a failed server. Admission refuses
+  // from then on, and the health loops probe nothing.
   let downRequested = false;
+  // Set by a down that leaves no live session. The stop runs after that down's reply is written (serveOne).
+  let stopAfterReply = false;
   // The notice every status, up and down reply carries for the daemon's lifetime once the startup reap destroyed a container or
   // a record (D-1404). It is not consumed on read: Omp attaches with up before it asks for status. Unset until the startup
   // maintenance has run, and unset when nothing was destroyed.
   let startupNotice: string | undefined;
-  let upId: string | undefined;
   const metrics = createMetrics({ now: () => new Date(), monotonicMs: () => performance.now() });
-  const statusOf = (snapshot: StateSnapshot): StatusResult => statusResult(snapshot, handle.policyMode, startupNotice);
   const completed = new Set<Socket>();
 
-  // The health loop (RT-04, N1). It runs while the session is in service, active or degraded: a degraded session (the Anda
-  // bridge is unreachable) still serves tool calls, so a dead runner there must not keep a truthful-looking label. An event
-  // that puts the session in service arms the timer unless one is already armed, so moving between active and degraded keeps
-  // exactly one timer, and any event that leaves service clears it. A tick probes through the controller, which owns the
-  // transition to error and ignores the result of a probe that began in an earlier life of the session. Ticks never overlap:
-  // a tick that finds a probe still running does nothing. The timer is unref'd, so it never keeps the process alive.
-  let healthTimer: NodeJS.Timeout | undefined;
-  let healthProbing = false;
-  const stopHealthLoop = (): void => {
-    if (healthTimer !== undefined) {
-      clearInterval(healthTimer);
-      healthTimer = undefined;
-    }
+  // The reply of status, up and down for a selection: the snapshot, the bound root and the session id the selection names.
+  const selectedResult = (snapshot: StateSnapshot, pinned: PinnedRoot, sessionId: string): StatusResult => ({
+    ...statusResult(snapshot, policy.mode, startupNotice),
+    boundRoot: pinned.realPath,
+    sessionId,
+  });
+  const resolveTarget = (selection: ControlSelection): ResolvedSelection =>
+    resolveSelection({ selection, policy, ceiling, registry });
+
+  // Builds the entry of a new session: its handle, its workspace entry and its health loop. The handle is built for the pinned
+  // directory and nothing is created yet, so a failure here leaves no container.
+  const newEntry = (sessionId: string, pinned: PinnedRoot): SessionEntry => {
+    const handle = buildHandle({
+      ...handleBase,
+      sessionId,
+      runtimeInput: runtimeInputAt(options.runtimeInput, pinned.realPath),
+    });
+    writeWorkspaceEntry(stateDir, pinned, sessionId);
+    const health = new SessionHealth({
+      sessionId,
+      handle,
+      metrics,
+      logger,
+      isStopping: () => downRequested,
+      onProbeFailure: options.onHealthProbeFailure,
+    });
+    return { sessionId, pinned, handle, health };
   };
-  const healthTick = async (): Promise<void> => {
-    const { state } = handle.controller.snapshot();
-    if (healthProbing || downRequested || (state !== "active" && state !== "degraded")) {
-      return;
+
+  const finishUp = (correlationId: string, startedAt: number, state: string | undefined, code: ErrorCode | undefined): void => {
+    const durationMs = Math.round(performance.now() - startedAt);
+    metrics.recordAttach(durationMs);
+    logger.info("up.end", {
+      correlationId,
+      upId: correlationId,
+      durationMs,
+      ...(state === undefined ? {} : { state }),
+      ...(code === undefined ? {} : { code }),
+    });
+  };
+
+  // The admission of one up, run under the lock of its session id. Its steps are numbered as the plan states them: the
+  // stop check (1), the selection (2), the collision check (3), the post-grant check of a waiter, the reservation (4), the probe
+  // (5), the stop check after the probe (5a), and the create on the entry (6). A refusal before (4) takes no slot.
+  const admitUp = async (
+    realPath: string,
+    sessionId: string,
+    correlationId: string,
+    waiter: boolean,
+    dispatchedAt: number,
+  ): Promise<StatusResult> => {
+    if (downRequested) {
+      throw makeRealmError("REALM_STOPPING");
     }
-    healthProbing = true;
+    const resolved = resolveTarget({ workspaceRoot: realPath, sessionId });
+    const { pinned, entry } = resolved;
+    if (entry === null) {
+      const recorded = store.load(sessionId);
+      const registered = readWorkspaceEntry(stateDir, sessionId);
+      if (
+        (recorded !== null && recorded.workspaceRoot !== pinned.realPath) ||
+        (registered !== null && registered.workspaceRoot !== pinned.realPath)
+      ) {
+        throw makeRealmError("SANDBOX_NAME_IN_USE");
+      }
+    }
+    // A waiter that finds its budget spent by the wait is refused before any reservation. A live session is not refused here:
+    // it is admitted through the path below, where its id is already committed and create returns its snapshot.
+    if (waiter) {
+      const live = entry !== null && isLiveState(entry.handle.controller.snapshot().state);
+      const remaining = clientBoundMs("up") - (performance.now() - dispatchedAt) - replyAllowanceMs;
+      if (!live && remaining < 2 * probeTimeoutMs + policy.startupBudgetMs) {
+        throw makeRealmError("STARTUP_BUDGET_EXCEEDED");
+      }
+    }
+    const fresh = reserveAdmission(ledger, sessionId);
+    // A reservation this request created is released when no container can exist for the id.
+    const releaseFresh = (): void => {
+      if (fresh) {
+        ledger.release(sessionId);
+      }
+    };
     try {
-      const snapshot = await handle.controller.probe();
-      if (snapshot.state === "error") {
-        const code = catalogueCode(snapshot.reason);
-        if (code !== undefined) {
-          metrics.recordHealthProbeFailure(code);
-        } else if (snapshot.reason === "probe failed") {
-          metrics.recordHealthProbeFailure(snapshot.reason);
-        }
-        logger.warn("health.probe_failed", {
-          ...(code === undefined ? { reason: snapshot.reason } : { code }),
-          ...(upId === undefined ? {} : { upId }),
-        });
+      const probeResult = await probe();
+      if (!probeResult.ok) {
+        throw makeRealmError(probeResult.code);
       }
     } catch (error: unknown) {
-      const code = codeOf(error);
-      metrics.recordHealthProbeFailure(code);
-      logger.warn("health.probe_failed", { code, ...(upId === undefined ? {} : { upId }) });
-      options.onHealthProbeFailure?.(codeOf(error));
-    } finally {
-      healthProbing = false;
+      releaseFresh();
+      throw error;
     }
-  };
-  const startHealthLoop = (): void => {
-    stopHealthLoop();
-    healthTimer = setInterval(() => {
-      void healthTick();
-    }, HEALTH_PROBE_INTERVAL_MS);
-    healthTimer.unref();
-  };
-  const unsubscribeHealth = handle.controller.events.subscribe((event) => {
-    metrics.recordTransition(event.from, event.to);
-    // The reason is free text, so only a catalogue code is taken from it. The line goes to the caller's logger (requests.log).
-    const code = catalogueCode(event.reason);
-    logger.info("lifecycle.transition", {
-      from: event.from,
-      to: event.to,
-      ...(code === undefined ? {} : { code }),
-      ...(upId === undefined ? {} : { upId }),
-    });
-    if (event.to === "active" || event.to === "degraded") {
-      if (healthTimer === undefined) {
-        startHealthLoop();
+    if (downRequested) {
+      releaseFresh();
+      throw makeRealmError("REALM_STOPPING");
+    }
+    let current = entry;
+    if (current === null) {
+      try {
+        current = newEntry(sessionId, pinned);
+      } catch (error: unknown) {
+        releaseFresh();
+        throw error;
       }
-    } else {
-      stopHealthLoop();
+      registry.set(sessionId, current);
     }
-  });
-  let resolveDone!: () => void;
-  let rejectDone!: (cause: unknown) => void;
-  const done = new Promise<void>((resolve, reject) => {
-    resolveDone = resolve;
-    rejectDone = reject;
-  });
-  // The gate settles with a result and never rejects: a failed start reaches each connection waiting on it
-  // as a typed refusal, so no connection needs a rejection handler.
-  let openGate!: () => void;
-  let failGate!: (cause: unknown) => void;
-  const gate = new Promise<GateOutcome>((resolve) => {
-    openGate = () => {
-      resolve({ ok: true });
-    };
-    failGate = (error: unknown) => {
-      resolve({ ok: false, error });
-    };
-  });
+    const wasLive = isLiveState(current.handle.controller.snapshot().state);
+    let snapshot: StateSnapshot;
+    try {
+      snapshot = await current.handle.controller.create(pinned.realPath);
+    } catch (error: unknown) {
+      settleFailedCreate(ledger, registry, stateDir, sessionId, current.handle, fresh);
+      throw error;
+    }
+    // An error snapshot other than a teardown's keeps its slot as the create settles it (the enterError rule of the controller).
+    if (snapshot.state === "error" && snapshot.reason !== "REALM_STOPPING") {
+      settleFailedCreate(ledger, registry, stateDir, sessionId, current.handle, fresh);
+    }
+    upIds.set(sessionId, correlationId);
+    if (!wasLive && snapshot.state !== "error") {
+      options.onAuditHead?.(sessionId);
+    }
+    return selectedResult(snapshot, pinned, sessionId);
+  };
+
+  // The release of a session, run under the lock of its id. A down of an id with no entry replies the unbound snapshot and
+  // destroys nothing. A down of an entry destroys its container, then removes its record, registry entry and admission slot. A
+  // failed destroy keeps all three and holds the slot as unproven. After a successful destroy, or for a down that names no live
+  // session, the daemon stops once its reply is written when no session is live and no admission is in flight.
+  const releaseSession = async (selection: ControlSelection, waiter: boolean, dispatchedAt: number): Promise<StatusResult> => {
+    const resolved = resolveTarget(selection);
+    const { entry, pinned, sessionId } = resolved;
+    if (entry !== null) {
+      if (waiter) {
+        const remaining = clientBoundMs("down") - (performance.now() - dispatchedAt) - replyAllowanceMs;
+        if (remaining < TEARDOWN_TIMEOUT_MS + replyAllowanceMs) {
+          throw makeRealmError("TOOL_TIMEOUT");
+        }
+      }
+      try {
+        await entry.handle.controller.destroy();
+      } catch (error: unknown) {
+        ledger.markUnproven(sessionId);
+        throw error;
+      }
+      removeWorkspaceEntry(stateDir, sessionId);
+      ledger.release(sessionId);
+      registry.delete(sessionId);
+      entry.health.dispose();
+      upIds.delete(sessionId);
+      options.onAuditHead?.(sessionId);
+    }
+    if (!downRequested && registry.size === 0 && ledger.reservedCount() === 0) {
+      // Set under the lock, so an up queued behind this down is refused with REALM_STOPPING when it is granted.
+      downRequested = true;
+      stopAfterReply = true;
+    }
+    return selectedResult(unboundSnapshot(clock), pinned, sessionId);
+  };
 
   const endSocket = (socket: Socket, reply: ControlReply): void => {
     if (completed.has(socket)) {
@@ -409,7 +534,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
   };
 
   const drainOthers = async (): Promise<void> => {
-    // down keeps its own in-flight count until its finally block, so the drain
+    // A down keeps its own in-flight count until its request is answered, so the drain
     // waits only for the other requests (inFlight above one).
     const deadline = Date.now() + timeoutMs;
     while (inFlight > 1 && Date.now() < deadline) {
@@ -419,107 +544,85 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
     }
   };
 
-  // The one stop path, for a down request and for a failed listening server. It closes the server, tears the
-  // handle down, and removes the socket file. A down passes its socket and is answered on it. A failed server
-  // passes its code as the reason, so done rejects with that code instead of resolving.
-  const stop = async (id: ControlId | null, socket: Socket | undefined, reason?: ErrorCode): Promise<void> => {
+  // The one stop path: a signal, a failed listening server, or the stop a down arms once no session remains. Every admitted
+  // session is stopped (controller.stop keeps its record, so the next start's reap clears it), its health loop is disposed,
+  // the server closes and the socket file is removed. Nothing is written to a socket. Resolves with the teardown's failure
+  // code when a session did not stop, and never rejects. A failed server passes its code as the reason, so done rejects with
+  // that code instead of resolving.
+  const closeEverything = async (reason: ErrorCode | undefined): Promise<ErrorCode | undefined> => {
     logger.info("daemon.stopping");
     downRequested = true;
-    unsubscribeHealth();
-    stopHealthLoop();
     draining = true;
     await drainOthers();
-    let reply: ControlReply;
-    try {
-      // The teardown wait is bounded by TEARDOWN_TIMEOUT_MS. Expiry is REALM_STOPPING, the code the controller
-      // reports for its own teardown bound; the catalogue has no teardown-timeout code.
-      const closed = await withTimeout(handle.close(), TEARDOWN_TIMEOUT_MS, "REALM_STOPPING");
-      reply = { id, result: statusOf(closed) };
-    } catch (error: unknown) {
-      reply = refusalReply(id, error);
+    let failure: ErrorCode | undefined;
+    for (const entry of registry.values()) {
+      entry.health.dispose();
+      try {
+        // The teardown wait is bounded by TEARDOWN_TIMEOUT_MS. Expiry is REALM_STOPPING, the code the controller
+        // reports for its own teardown bound; the catalogue has no teardown-timeout code.
+        await withTimeout(entry.handle.controller.stop(), TEARDOWN_TIMEOUT_MS, "REALM_STOPPING");
+      } catch (error: unknown) {
+        failure ??= codeOf(error);
+      }
     }
     // Written after the teardown attempt, whether it finished or was refused, and before the socket is removed.
     logger.info("daemon.stopped");
     server.close();
-    // A socket file that cannot be removed is the reply's refusal, never a silent loss. The daemon stops either way.
+    // A socket file that cannot be removed is the stop's refusal, never a silent loss. The daemon stops either way.
     const removal = removeSocketFile(socketPath);
-    if (socket !== undefined) {
-      endSocket(socket, removal === undefined ? reply : refusalReply(id, removal));
-    }
-    if (reason === undefined) {
-      resolveDone();
-    } else {
+    if (reason !== undefined) {
       rejectDone(makeRealmError(reason, removal?.code));
+    } else if (removal !== undefined) {
+      // The socket file that cannot be removed is the daemon's failure: done rejects with its code.
+      rejectDone(removal);
+    } else {
+      resolveDone();
     }
+    return failure;
   };
 
-  const shutdown = async (id: ControlId, socket: Socket): Promise<void> => {
-    if (downRequested) {
-      // A second down is a no-op: it answers the current snapshot without
-      // running teardown again (close delegates to controller stop, which is
-      // safe to call twice).
-      endSocket(socket, { id, result: statusOf(handle.controller.snapshot()) });
-      return;
+  let stopping: Promise<ErrorCode | undefined> | undefined;
+  const stopDaemon = (reason?: ErrorCode): Promise<ErrorCode | undefined> => {
+    if (stopping === undefined) {
+      stopping = closeEverything(reason);
     }
-    await stop(id, socket);
+    return stopping;
   };
 
   const dispatch = async (
     method: ControlMethod,
     id: ControlId,
+    selection: ControlSelection | null,
     params: unknown,
-    socket: Socket,
-  ): Promise<ControlReply | null> => {
+  ): Promise<ControlReply> => {
     switch (method) {
       case "status": {
-        return { id, result: { ...statusOf(handle.controller.snapshot()), boundRoot } };
+        const resolved = resolveTarget(requireSelection(selection));
+        const snapshot = resolved.entry === null ? unboundSnapshot(clock) : resolved.entry.handle.controller.snapshot();
+        return { id, result: selectedResult(snapshot, resolved.pinned, resolved.sessionId) };
       }
       case "up": {
-        const workspaceRoot: unknown =
-          typeof params === "object" &&
-          params !== null &&
-          !Array.isArray(params) &&
-          "workspaceRoot" in params
-            ? params.workspaceRoot
-            : undefined;
-        if (typeof workspaceRoot !== "string" || workspaceRoot.length === 0) {
-          return { id, error: { code: "SCHEMA_INVALID" } };
-        }
+        const realPath = bindRoot(workspaceRootOf(params)).realPath;
+        const sessionId = sessionIdOfWorkspace(realPath);
         const correlationId = newCorrelationId();
         const startedAt = performance.now();
-        const finishAttach = (): number => {
-          const elapsed = Math.round(performance.now() - startedAt);
-          metrics.recordAttach(elapsed);
-          return elapsed;
-        };
-        logger.info("up.begin", { correlationId, upId: correlationId });
-        let probeResult: PodmanProbeResult;
+        // A request that finds the lock held is a waiter: only a waiter applies the post-grant checks.
+        const waiter = isSessionLockHeld(sessionId);
+        logger.info("up.begin", { correlationId, upId: correlationId, sessionId });
+        let result: StatusResult;
         try {
-          probeResult = await probe();
+          result = await withSessionLock(
+            sessionId,
+            () => admitUp(realPath, sessionId, correlationId, waiter, startedAt),
+            upWaitMs,
+          );
         } catch (error: unknown) {
-          logger.info("up.end", { correlationId, upId: correlationId, durationMs: finishAttach(), code: codeOf(error) });
-          return refusalReply(id, error);
+          finishUp(correlationId, startedAt, undefined, codeOf(error));
+          throw error;
         }
-        if (!probeResult.ok) {
-          logger.info("up.end", { correlationId, upId: correlationId, durationMs: finishAttach(), code: probeResult.code });
-          return { id, error: { code: probeResult.code } };
-        }
-        try {
-          const snapshot = await handle.controller.create(workspaceRoot);
-          upId = correlationId;
-          const code = snapshot.state === "error" ? catalogueCode(snapshot.reason) : undefined;
-          logger.info("up.end", {
-            correlationId,
-            upId,
-            durationMs: finishAttach(),
-            state: snapshot.state,
-            ...(code === undefined ? {} : { code }),
-          });
-          return { id, result: { ...statusOf(snapshot), boundRoot } };
-        } catch (error: unknown) {
-          logger.info("up.end", { correlationId, upId: correlationId, durationMs: finishAttach(), code: codeOf(error) });
-          return refusalReply(id, error);
-        }
+        const code = result.snapshot.state === "error" ? catalogueCode(result.snapshot.reason) : undefined;
+        finishUp(correlationId, startedAt, result.snapshot.state, code);
+        return { id, result };
       }
       case "tool": {
         const tool: unknown =
@@ -529,16 +632,26 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
         if (typeof tool !== "object" || tool === null || Array.isArray(tool)) {
           return { id, error: { code: "SCHEMA_INVALID" } };
         }
+        const resolved = resolveTarget(requireSelection(selection));
+        if (resolved.entry === null) {
+          throw makeRealmError("REALM_NOT_ACTIVE");
+        }
+        const { sessionId } = resolved;
         const correlationId = newCorrelationId();
+        const upId = upIds.get(sessionId);
         const startedAt = performance.now();
         try {
-          const outcome = await handle.dispatcher.call(tool, { correlationId, ...(upId === undefined ? {} : { upId }) });
+          const outcome = await resolved.entry.handle.dispatcher.call(tool, {
+            correlationId,
+            ...(upId === undefined ? {} : { upId }),
+          });
           const elapsed = Math.round(performance.now() - startedAt);
           const toolName = outcome.tool ?? "unknown";
           if (outcome.outcome === "refused") {
             metrics.recordTool(toolName, "refused", elapsed, outcome.code);
             logger.info("tool.result", {
               correlationId,
+              sessionId,
               ...(upId === undefined ? {} : { upId }),
               tool: toolName,
               outcome: "refused",
@@ -556,6 +669,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
           metrics.recordTool(toolName, "done", elapsed);
           logger.info("tool.result", {
             correlationId,
+            sessionId,
             ...(upId === undefined ? {} : { upId }),
             tool: toolName,
             outcome: "done",
@@ -567,6 +681,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
           metrics.recordTool("unknown", "failed", elapsed, codeOf(error));
           logger.info("tool.result", {
             correlationId,
+            sessionId,
             ...(upId === undefined ? {} : { upId }),
             tool: "unknown",
             outcome: "error",
@@ -577,16 +692,26 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
         }
       }
       case "down": {
-        await shutdown(id, socket);
-        return null;
+        const target = requireSelection(selection);
+        // A request that finds the lock held is a waiter: only a waiter applies the post-grant checks.
+        const waiter = isSessionLockHeld(target.sessionId);
+        const dispatchedAt = performance.now();
+        const result = await withSessionLock(
+          target.sessionId,
+          () => releaseSession(target, waiter, dispatchedAt),
+          downWaitMs,
+        );
+        return { id, result };
       }
       case "metrics": {
+        resolveTarget(requireSelection(selection));
         metrics.setLogLinesDropped(logger.droppedLines());
         return { id, result: metrics.snapshot() };
       }
       case "doctor": {
         try {
-          const results = await runDoctor();
+          const sessionId = selection === null ? null : (resolveTarget(selection).entry?.sessionId ?? null);
+          const results = await runDoctor(sessionId);
           return { id, result: results };
         } catch (error: unknown) {
           return refusalReply(id, error);
@@ -604,7 +729,18 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
     return reply;
   };
 
-  const dispatchLine = async (line: string, socket: Socket): Promise<ControlReply | null> => {
+  // Runs one decoded request. The selection is validated first (parseControlSelection), and any refusal, from the validator or
+  // from the dispatch, becomes the reply under the request's id.
+  const dispatchRequest = async (method: ControlMethod, id: ControlId, params: unknown): Promise<ControlReply> => {
+    try {
+      const { selection } = parseControlSelection(method, params);
+      return await dispatch(method, id, selection, params);
+    } catch (error: unknown) {
+      return refusalReply(id, error);
+    }
+  };
+
+  const dispatchLine = async (line: string): Promise<ControlReply | null> => {
     let request: ControlRequest;
     try {
       request = decodeRequest(line);
@@ -616,8 +752,8 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
     }
     // A control line names only the method. Params, ids and payloads are never logged (requests.log, D-1704).
     logger.debug("control.request", { method: request.method });
-    const reply = await dispatch(request.method, request.id, request.params, socket);
-    const refused = reply?.error;
+    const reply = await dispatchRequest(request.method, request.id, request.params);
+    const refused = reply.error;
     metrics.recordControl(request.method, refused !== undefined);
     if (refused !== undefined) {
       logger.warn("control.refused", { method: request.method, code: refused.code });
@@ -638,11 +774,15 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
         endSocket(socket, oversizedLineReply());
         return;
       }
-      const reply = await dispatchLine(read.line, socket);
+      const reply = await dispatchLine(read.line);
       if (reply === null) {
         dropSocket(socket);
       } else {
         endSocket(socket, reply);
+      }
+      if (stopAfterReply) {
+        stopAfterReply = false;
+        void stopDaemon();
       }
     } catch (error: unknown) {
       endSocket(socket, refusalReply(null, error));
@@ -650,6 +790,27 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
       inFlight -= 1;
     }
   };
+
+  let resolveDone!: () => void;
+  let rejectDone!: (cause: unknown) => void;
+  const done = new Promise<void>((resolve, reject) => {
+    resolveDone = resolve;
+    rejectDone = reject;
+  });
+  // A stop that rejects here is reported to whoever awaits done. A stop that nobody awaits yet is not an unhandled rejection.
+  done.catch(() => undefined);
+  // The gate settles with a result and never rejects: a failed start reaches each connection waiting on it
+  // as a typed refusal, so no connection needs a rejection handler.
+  let openGate!: () => void;
+  let failGate!: (cause: unknown) => void;
+  const gate = new Promise<GateOutcome>((resolve) => {
+    openGate = () => {
+      resolve({ ok: true });
+    };
+    failGate = (error: unknown) => {
+      resolve({ ok: false, error });
+    };
+  });
 
   const track = async (socket: Socket): Promise<void> => {
     const outcome = await gate;
@@ -666,7 +827,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
     });
     // An error on a served socket (a client killed in the middle of its request, a reset or a broken pipe while the reply is
     // written) belongs to that one connection. The read helper removes its own error listener once the request line is read, so
-    // without this one Node rethrows the error as an uncaught exception and the daemon, with its sandbox, dies because a peer
+    // without this one Node rethrows the error as an uncaught exception and the daemon, with its sandboxes, dies because a peer
     // went away. Nobody is left to answer, so the socket is dropped, which also stops a pending reply from being written to it;
     // the work the request started continues. Failures of the listening server are handled on the server, below.
     socket.on("error", () => {
@@ -713,7 +874,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
     if (downRequested) {
       return;
     }
-    void stop(null, undefined, codeOf(error));
+    void stopDaemon(codeOf(error));
   });
   options.onServer?.(server);
 
@@ -728,7 +889,8 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
       sweep,
       policy,
       stateDir,
-      sessionId: options.sessionId,
+      // The orphan sweep names no session yet: no audit line is written for a removal (plan 09 adds the attribution).
+      attributeOrphan: () => undefined,
       now: () => Date.now(),
       monotonicNow: options.monotonicNow ?? (() => performance.now()),
       budgetMs: options.startupMaintenanceBudgetMs ?? STARTUP_MAINTENANCE_BUDGET_MS,
@@ -741,7 +903,19 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
     abortStart(error);
   }
   openGate();
-  return { socketPath, handle, done };
+  return {
+    socketPath,
+    done,
+    stop: async (): Promise<void> => {
+      const failure = await stopDaemon();
+      if (failure !== undefined) {
+        throw makeRealmError(failure);
+      }
+    },
+    session: (sessionId: string): SessionEntry | undefined => registry.get(sessionId),
+    committedCount: (): number => ledger.committedCount(),
+    isCommitted: (sessionId: string): boolean => ledger.isCommitted(sessionId),
+  };
 }
 
 // The reap's sweep: removes every realm container and resolves with the count. `onRemoved` receives each removed id, so the
@@ -753,8 +927,9 @@ interface StartupMaintenanceDeps {
   readonly sweep: StartupSweep;
   readonly policy: Policy;
   readonly stateDir: string;
-  // The session whose audit file records the orphan removals: the daemon's own session.
-  readonly sessionId: string;
+  // The session whose audit file records an orphan removal, or undefined when the removal belongs to no session. The
+  // attribution is plan 09's; until then the caller passes a function that names none.
+  readonly attributeOrphan: (path: string) => string | undefined;
   // Wall-clock milliseconds, for the age of a temp file (its mtime is a wall-clock value).
   readonly now: () => number;
   // Monotonic milliseconds (performance.now()), for the budget. The deadline is read on this clock only.
@@ -834,8 +1009,12 @@ async function runStartupMaintenance(deps: StartupMaintenanceDeps): Promise<void
         ownerUid,
         deadlineMs: Math.min(DEFAULT_SWEEP_DEADLINE_MS, sweepShareMs),
         audit: (entry) => {
+          const sessionId = deps.attributeOrphan(entry.path);
+          if (sessionId === undefined) {
+            return;
+          }
           appendAudit(deps.stateDir, {
-            sessionId: deps.sessionId,
+            sessionId,
             tool: entry.tool,
             outcome: entry.outcome,
             path: entry.path,
@@ -933,18 +1112,23 @@ function startupNoticeOf(report: StartupReport): string | undefined {
   return `A previous daemon's sandbox was destroyed at startup: ${String(report.containersRemoved)} container(s), ${String(report.recordsDeleted)} session record(s). Files in the workspace were kept; state outside it was lost.`;
 }
 
-// The result of status, up and down. `notice` is present only after a startup reap that destroyed something, so a reply with
+// The report of status, up and down. `notice` is present only after a startup reap that destroyed something, so a reply with
 // nothing destroyed has no `notice` key.
-interface StatusResult {
+interface StatusReport {
   readonly snapshot: StateSnapshot;
   readonly display: DisplayStatus;
   readonly mode: PolicyMode;
   readonly notice?: string;
-  // The realpath of the root this daemon is pinned to. Present on status and up replies, never on down.
-  readonly boundRoot?: string;
 }
 
-function statusResult(snapshot: StateSnapshot, mode: PolicyMode, notice: string | undefined): StatusResult {
+// The reply of status, up and down: the report of the selected session, with the realpath of the root the selection names and
+// the session id it maps to.
+interface StatusResult extends StatusReport {
+  readonly boundRoot: string;
+  readonly sessionId: string;
+}
+
+function statusResult(snapshot: StateSnapshot, mode: PolicyMode, notice: string | undefined): StatusReport {
   return {
     snapshot,
     display: displayStatus(snapshot),
@@ -953,17 +1137,33 @@ function statusResult(snapshot: StateSnapshot, mode: PolicyMode, notice: string 
   };
 }
 
-function codeOf(error: unknown): ErrorCode {
-  return error instanceof RealmError ? error.code : "SCHEMA_INVALID";
+// The selection a selected method must carry. parseControlSelection guarantees it for every such method.
+function requireSelection(selection: ControlSelection | null): ControlSelection {
+  if (selection === null) {
+    throw makeRealmError("SCHEMA_INVALID");
+  }
+  return selection;
 }
 
-function catalogueCode(reason: string): ErrorCode | undefined {
-  for (const code of ERROR_CODES) {
-    if (code === reason) {
-      return code;
-    }
+// The workspace root an up names. parseControlSelection has checked its shape.
+function workspaceRootOf(params: unknown): string {
+  if (
+    typeof params === "object" &&
+    params !== null &&
+    "workspaceRoot" in params &&
+    typeof params.workspaceRoot === "string"
+  ) {
+    return params.workspaceRoot;
   }
-  return undefined;
+  throw makeRealmError("SCHEMA_INVALID");
+}
+
+// The runtime input of one session's handle: the daemon's own, with the session's pinned directory as its workspace root.
+function runtimeInputAt(runtimeInput: unknown, workspaceRoot: string): unknown {
+  if (typeof runtimeInput !== "object" || runtimeInput === null || Array.isArray(runtimeInput)) {
+    throw makeRealmError("SCHEMA_INVALID");
+  }
+  return { ...runtimeInput, workspaceRoot };
 }
 
 // The refusal reply for a thrown error: its catalogue code, plus the cause code when the error has one.

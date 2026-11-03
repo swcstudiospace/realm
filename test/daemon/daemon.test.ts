@@ -41,8 +41,14 @@ import {
   type StartDaemonOptions,
   type StartupReport,
 } from "../../src/daemon/daemon.js";
+import { selectionOf } from "../../src/daemon/client.js";
+import type { SessionEntry } from "../../src/daemon/sessions.js";
 import type { CheckResult } from "../../src/doctor/checks.js";
 import { createLogger } from "../../src/observe/logger.js";
+import { connectDaemon } from "../../src/daemon/client.js";
+import { ERROR_CATALOGUE } from "../../src/core/errors.js";
+import { renameSync } from "node:fs";
+import { SessionStore } from "../../src/session/store.js";
 import type { PodmanProbeResult } from "../../src/runtime/podman-probe.js";
 import { controlSocketPath } from "../../src/session/paths.js";
 import type { ToolOutcome } from "../../src/tools/dispatch.js";
@@ -59,6 +65,8 @@ interface Fixture {
   readonly base: string;
   readonly ws: string;
   readonly stateDir: string;
+  // Policy files live here, outside `base`: a policy file inside a workspace root is refused (POLICY_DENIED).
+  readonly policyDir: string;
 }
 
 interface DaemonParts {
@@ -84,11 +92,13 @@ function makeDirs(): Fixture {
   const ws = join(base, "ws");
   mkdirSync(ws, { recursive: true });
   writeFileSync(join(ws, "doc.txt"), "original");
-  return { base, ws, stateDir: join(base, "state") };
+  const policyDir = realpathSync(mkdtempSync(join(tmpdir(), "realm-daemon-policy-")));
+  scratchDirs.push(policyDir);
+  return { base, ws, stateDir: join(base, "state"), policyDir };
 }
 
 function writePolicy(fixture: Fixture, name: string, policy: Record<string, unknown>): string {
-  const path = join(fixture.base, name);
+  const path = join(fixture.policyDir, name);
   writeFileSync(path, JSON.stringify(policy));
   return path;
 }
@@ -111,7 +121,6 @@ function daemonParts(fixture: Fixture, overrides?: Partial<StartDaemonOptions>):
     // advisory mode because the tests below that write while the realm is not
     // active expect the advisory warning; the default is fail-closed.
     policyPath: writePolicy(fixture, "daemon-policy.json", { mode: "advisory", workspaceRoots: [fixture.ws] }),
-    sessionId: "sess-daemon",
     exec,
     bridge,
     clock: () => new Date(CLOCK_ISO),
@@ -185,11 +194,11 @@ function awaitDone(daemon: StartedDaemon): Promise<void> {
 
 async function cleanupDaemon(daemon: StartedDaemon): Promise<void> {
   try {
-    await sendRequest(daemon.socketPath, { id: "cleanup-down", method: "down" });
+    await daemon.stop();
   } catch {
-    // Already down or never served; nothing to tear down.
+    // A teardown that failed still leaves the daemon stopped; its failure is reported through done.
   }
-  await boundedWait(daemon.done, "daemon done during cleanup");
+  await boundedWait(daemon.done, "daemon done during cleanup").catch(() => undefined);
 }
 
 function sendRawLine(socketPath: string, line: string): Promise<string> {
@@ -234,10 +243,27 @@ function replyOn(socket: Socket, line: string): Promise<string> {
   });
 }
 
+// The control selection of a project directory, as the control channel carries it (C4).
+function selectedBy(dir: string) {
+  return { selection: selectionOf(dir) };
+}
+
+// The session id the daemon derives for the fixture's workspace.
+function sessionOf(fixture: Fixture): string {
+  return selectionOf(fixture.ws).sessionId;
+}
+
+// The admitted session of the fixture's workspace. It exists once an up has admitted it.
+function entryOf(daemon: StartedDaemon, fixture: Fixture): SessionEntry {
+  const entry = daemon.session(sessionOf(fixture));
+  assert.ok(entry !== undefined, "the workspace's session is admitted");
+  return entry;
+}
+
 void test("CLI-01: buildDaemonHandle wires the shared composition root and answers snapshot plus dispatcher status (P6-D12)", async () => {
   const fixture = makeDirs();
   const { options } = daemonParts(fixture);
-  const handle = buildDaemonHandle(options);
+  const handle = buildDaemonHandle({ ...options, sessionId: sessionOf(fixture) });
   const snapshot = handle.controller.snapshot();
   assert.equal(snapshot.state, "unbound");
   assert.equal(displayStatus(snapshot).label, STATUS_LABELS.disconnected);
@@ -267,7 +293,7 @@ void test("RT-04, D-47: buildDaemonHandle builds with no AgentOS driver, and an 
       workspaceRoot: fixture.ws,
     },
     policyPath: writePolicy(fixture, "no-driver-policy.json", { workspaceRoots: [fixture.ws] }),
-    sessionId: "sess-no-driver",
+    sessionId: sessionOf(fixture),
     bridge: new FakeBridge(),
     libpodSocketPath: socketPath,
     runOpenShell: openshell.runner,
@@ -288,7 +314,7 @@ void test("RT-04, D-47: buildDaemonHandle builds with no AgentOS driver, and an 
 void test("C4: with no andaUrl the session reaches active with no bridge handshake, and exec and write proceed", async (t) => {
   const fixture = makeDirs();
   const { options, bridge } = daemonParts(fixture);
-  const handle = buildDaemonHandle(options);
+  const handle = buildDaemonHandle({ ...options, sessionId: sessionOf(fixture) });
   t.after(async () => {
     await handle.close();
   });
@@ -337,7 +363,7 @@ void test("C4: with andaUrl set, a bridge that goes down moves active to degrade
     },
     policyPath: writePolicy(fixture, "fail-closed-policy.json", { workspaceRoots: [fixture.ws], mode: "fail-closed" }),
   });
-  const handle = buildDaemonHandle(options);
+  const handle = buildDaemonHandle({ ...options, sessionId: sessionOf(fixture) });
   t.after(async () => {
     await handle.close();
   });
@@ -371,7 +397,7 @@ void test("B2: under advisory policy a write in error proceeds with the advisory
     },
   });
   bridge.failNext("connect", "ANDA_UNREACHABLE");
-  const handle = buildDaemonHandle(options);
+  const handle = buildDaemonHandle({ ...options, sessionId: sessionOf(fixture) });
   t.after(async () => {
     await handle.close();
   });
@@ -398,7 +424,7 @@ void test("C4: with andaUrl set and the bridge unreachable, the start refuses wi
     },
   });
   bridge.failNext("connect", "ANDA_UNREACHABLE");
-  const handle = buildDaemonHandle(options);
+  const handle = buildDaemonHandle({ ...options, sessionId: sessionOf(fixture) });
   t.after(async () => {
     await handle.close();
   });
@@ -415,12 +441,12 @@ void test("RT-06: startDaemon with no owner binds the socket and answers status 
   const daemon = await startDaemon(options);
   t.after(() => cleanupDaemon(daemon));
 
-  const reply = await sendRequest(daemon.socketPath, { id: "s1", method: "status" });
+  const reply = await sendRequest(daemon.socketPath, { id: "s1", method: "status", params: selectedBy(fixture.ws) });
   assert.equal(reply.id, "s1");
   assert.equal(snapshotStateOf(reply), "unbound");
   assert.equal(displayLabelOf(reply), STATUS_LABELS.disconnected);
 
-  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down" });
+  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down", params: selectedBy(fixture.ws) });
   assert.equal(down.id, "d1");
   assert.equal(snapshotStateOf(down), "unbound");
   await awaitDone(daemon);
@@ -437,11 +463,11 @@ void test("RT-06: a second startDaemon against the same state directory refuses 
   );
 
   // The first owner still serves.
-  const reply = await sendRequest(first.socketPath, { id: "s1", method: "status" });
+  const reply = await sendRequest(first.socketPath, { id: "s1", method: "status", params: selectedBy(fixture.ws) });
   assert.equal(reply.id, "s1");
   assert.ok(reply.result !== undefined);
 
-  const down = await sendRequest(first.socketPath, { id: "d1", method: "down" });
+  const down = await sendRequest(first.socketPath, { id: "d1", method: "down", params: selectedBy(fixture.ws) });
   assert.equal(down.id, "d1");
   assert.ok(down.result !== undefined);
   await awaitDone(first);
@@ -460,10 +486,10 @@ void test("CLI-01: startDaemon runs the reap sweep before serving and deletes pr
   assert.deepEqual(events, ["sweep"]);
   assert.equal(existsSync(stale), false);
 
-  const reply = await sendRequest(daemon.socketPath, { id: "s1", method: "status" });
+  const reply = await sendRequest(daemon.socketPath, { id: "s1", method: "status", params: selectedBy(fixture.ws) });
   assert.equal(snapshotStateOf(reply), "unbound");
 
-  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down" });
+  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down", params: selectedBy(fixture.ws) });
   assert.ok(down.result !== undefined);
   await awaitDone(daemon);
 });
@@ -503,9 +529,9 @@ void test("CRASH-01, CRASH-02, CRASH-04: startDaemon sweeps orphan temp files, r
   assert.equal(reconciled.length, 1);
   assert.equal(reconciled[0]?.["outcome"], "AUDIT_OUTCOME_UNKNOWN");
   assert.equal(
-    auditLinesOf(fixture, "sess-daemon").filter((line) => line["tool"] === "temp-sweep").length,
-    2,
-    "each removal is audited in the daemon's own session log",
+    existsSync(join(fixture.stateDir, "audit", "daemon.jsonl")),
+    false,
+    "no removal is written to the daemon's own session log until plan 09 attributes it",
   );
   assert.deepEqual(reports, [
     {
@@ -525,11 +551,11 @@ void test("CRASH-01, CRASH-02, CRASH-04: startDaemon sweeps orphan temp files, r
 
   const notice =
     "A previous daemon's sandbox was destroyed at startup: 1 container(s), 1 session record(s). Files in the workspace were kept; state outside it was lost.";
-  const status = await sendRequest(first.socketPath, { id: "s1", method: "status" });
+  const status = await sendRequest(first.socketPath, { id: "s1", method: "status", params: selectedBy(fixture.ws) });
   assert.equal(noticeOf(status), notice);
-  const again = await sendRequest(first.socketPath, { id: "s2", method: "status" });
+  const again = await sendRequest(first.socketPath, { id: "s2", method: "status", params: selectedBy(fixture.ws) });
   assert.equal(noticeOf(again), notice, "the notice is kept for the daemon's lifetime, not consumed by a read");
-  const down = await sendRequest(first.socketPath, { id: "d1", method: "down" });
+  const down = await sendRequest(first.socketPath, { id: "d1", method: "down", params: selectedBy(fixture.ws) });
   assert.equal(noticeOf(down), notice);
   await awaitDone(first);
 
@@ -542,10 +568,10 @@ void test("CRASH-01, CRASH-02, CRASH-04: startDaemon sweeps orphan temp files, r
   assert.equal(reports[1].tempFilesRemoved, 0);
   assert.equal(reports[1].auditLinesReconciled, 0, "a second start appends no reconciliation line");
   assert.equal(auditLinesOf(fixture, "sess-old").filter((line) => line["phase"] === "reconciliation").length, 1);
-  const quiet = await sendRequest(second.socketPath, { id: "s3", method: "status" });
+  const quiet = await sendRequest(second.socketPath, { id: "s3", method: "status", params: selectedBy(fixture.ws) });
   assert.equal(snapshotStateOf(quiet), "unbound");
   assert.equal(hasNoticeKey(quiet), false, "with nothing destroyed the reply has no notice key");
-  const stopped = await sendRequest(second.socketPath, { id: "d2", method: "down" });
+  const stopped = await sendRequest(second.socketPath, { id: "d2", method: "down", params: selectedBy(fixture.ws) });
   assert.equal(hasNoticeKey(stopped), false);
   await awaitDone(second);
 });
@@ -570,7 +596,7 @@ void test("STARTUP budget: with a zero budget the gate still opens, the report s
   t.after(() => cleanupDaemon(first));
 
   // The gate opened: a status request is answered.
-  const status = await sendRequest(first.socketPath, { id: "s1", method: "status" });
+  const status = await sendRequest(first.socketPath, { id: "s1", method: "status", params: selectedBy(fixture.ws) });
   assert.equal(snapshotStateOf(status), "unbound");
   assert.equal(hasNoticeKey(status), false, "unfinished maintenance does not change the notice");
   assert.equal(existsSync(orphan), true, "the sweep had no time, so the orphan is kept");
@@ -582,7 +608,7 @@ void test("STARTUP budget: with a zero budget the gate still opens, the report s
   assert.equal(unfinished.auditLinesReconciled, 0);
   assert.deepEqual(unfinished.unfinishedAuditFiles, ["sess-old.jsonl"]);
   assert.ok(unfinished.unfinishedSweepRoots.includes(fixture.ws), "the workspace root is reported as unfinished");
-  await sendRequest(first.socketPath, { id: "d1", method: "down" });
+  await sendRequest(first.socketPath, { id: "d1", method: "down", params: selectedBy(fixture.ws) });
   await awaitDone(first);
 
   // The next start has the normal budget and finishes the work.
@@ -597,7 +623,7 @@ void test("STARTUP budget: with a zero budget the gate still opens, the report s
   assert.equal(finished.auditLinesReconciled, 1);
   assert.deepEqual(finished.unfinishedAuditFiles, []);
   assert.deepEqual(finished.unfinishedSweepRoots, []);
-  await sendRequest(second.socketPath, { id: "d2", method: "down" });
+  await sendRequest(second.socketPath, { id: "d2", method: "down", params: selectedBy(fixture.ws) });
   await awaitDone(second);
 });
 
@@ -700,11 +726,10 @@ void test("CRASH-02: the startup sweep removes an aged orphan temp file of the p
   assert.equal(existsSync(orphan), false, "the aged orphan is removed");
   assert.equal(existsSync(young), true, "a temp file younger than the age bound is kept");
   assert.equal(reports[0]?.tempFilesRemoved, 1);
-  const removed = auditLinesOf(fixture, "sess-daemon").filter((line) => line["tool"] === "temp-sweep");
-  assert.equal(removed.length, 1);
+  assert.equal(existsSync(join(fixture.stateDir, "audit", "daemon.jsonl")), false, "no removal is written to the daemon's log until plan 09");
   // The record was not removed by the sweep: it is still a regular file (the reconciliation may have rewritten it).
   assert.equal(statSync(record).isFile(), true);
-  await sendRequest(daemon.socketPath, { id: "d1", method: "down" });
+  await sendRequest(daemon.socketPath, { id: "d1", method: "down", params: selectedBy(fixture.ws) });
   await awaitDone(daemon);
 });
 
@@ -758,7 +783,7 @@ void test("CLI-01: up with a failing probe answers the probe code without starti
   assert.equal(exec.callCount("create"), 0);
   assert.deepEqual(events, ["sweep"]);
 
-  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down" });
+  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down", params: selectedBy(fixture.ws) });
   assert.ok(down.result !== undefined);
   await awaitDone(daemon);
 });
@@ -779,7 +804,7 @@ void test("CLI-01: up with a healthy probe starts the session and answers the ac
   assert.equal(displayLabelOf(reply), STATUS_LABELS.active);
   assert.deepEqual(events, ["sweep", "probe", "create"]);
 
-  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down" });
+  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down", params: selectedBy(fixture.ws) });
   assert.equal(snapshotStateOf(down), "unbound");
   await awaitDone(daemon);
 });
@@ -790,12 +815,12 @@ void test("RT-06: the status and up replies name the root the daemon is pinned t
   const daemon = await startDaemon(options);
   t.after(() => cleanupDaemon(daemon));
 
-  const status = await sendRequest(daemon.socketPath, { id: "s1", method: "status" });
+  const status = await sendRequest(daemon.socketPath, { id: "s1", method: "status", params: selectedBy(fixture.ws) });
   assert.equal(boundRootOf(status), fixture.ws, "status names the pinned workspace");
   const up = await sendRequest(daemon.socketPath, { id: "up-1", method: "up", params: { workspaceRoot: fixture.ws } });
   assert.equal(boundRootOf(up), fixture.ws, "up names the pinned workspace");
-  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down" });
-  assert.equal(boundRootOf(down), undefined, "down carries no boundRoot key");
+  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down", params: selectedBy(fixture.ws) });
+  assert.equal(boundRootOf(down), fixture.ws, "down names the pinned workspace too");
   await awaitDone(daemon);
 });
 
@@ -810,7 +835,7 @@ void test("CLI-01: up with a missing workspaceRoot refuses with SCHEMA_INVALID",
   const absent = await sendRequest(daemon.socketPath, { id: "up-2", method: "up" });
   assert.deepEqual(absent, { id: "up-2", error: { code: "SCHEMA_INVALID" } });
 
-  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down" });
+  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down", params: selectedBy(fixture.ws) });
   assert.ok(down.result !== undefined);
   await awaitDone(daemon);
 });
@@ -834,7 +859,7 @@ void test("CLI-01: doctor dispatches runChecks over the socket", async (t) => {
   assert.equal(reply.id, "doc-1");
   assert.deepEqual(reply.result, report);
 
-  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down" });
+  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down", params: selectedBy(fixture.ws) });
   assert.ok(down.result !== undefined);
   await awaitDone(daemon);
 });
@@ -847,10 +872,10 @@ interface DispatcherRecord {
 // Wraps the daemon's own dispatcher instance so each raw tool object and the outcome it produced
 // are recorded. With no replacement the real pipeline runs; with one, the replacement answers.
 function recordDispatcherCalls(
-  daemon: StartedDaemon,
+  entry: SessionEntry,
   replacement?: (raw: unknown) => Promise<ToolOutcome>,
 ): DispatcherRecord {
-  const dispatcher = daemon.handle.dispatcher;
+  const dispatcher = entry.handle.dispatcher;
   const real = dispatcher.call.bind(dispatcher);
   const record: DispatcherRecord = { raws: [], outcomes: [] };
   dispatcher.call = async (raw: unknown, context?: { readonly correlationId?: string }): Promise<ToolOutcome> => {
@@ -867,12 +892,13 @@ void test("RT-06: a tool request reaches the dispatcher exactly once and answers
   const { options } = daemonParts(fixture);
   const daemon = await startDaemon(options);
   t.after(() => cleanupDaemon(daemon));
-  const record = recordDispatcherCalls(daemon);
+  await sendRequest(daemon.socketPath, { id: "up-1", method: "up", params: { workspaceRoot: fixture.ws } });
+  const record = recordDispatcherCalls(entryOf(daemon, fixture));
 
   const reply = await sendRequest(daemon.socketPath, {
     id: "tool-1",
     method: "tool",
-    params: { tool: { status: {} } },
+    params: { ...selectedBy(fixture.ws), tool: { status: {} } },
   });
   assert.equal(reply.id, "tool-1");
   assert.equal(reply.error, undefined);
@@ -881,7 +907,7 @@ void test("RT-06: a tool request reaches the dispatcher exactly once and answers
   assert.ok(outcome !== undefined, "the dispatcher must answer exactly one outcome");
   assert.deepEqual(reply.result, JSON.parse(JSON.stringify(outcome)));
 
-  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down" });
+  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down", params: selectedBy(fixture.ws) });
   assert.ok(down.result !== undefined);
   await awaitDone(daemon);
 });
@@ -897,31 +923,32 @@ void test("OBS-02: a tool call's log correlation id is the id on both audit line
   const { options } = daemonParts(fixture);
   const daemon = await startDaemon({ ...options, logger });
   t.after(() => cleanupDaemon(daemon));
+  await sendRequest(daemon.socketPath, { id: "up-1", method: "up", params: { workspaceRoot: fixture.ws } });
 
   const reply = await sendRequest(daemon.socketPath, {
     id: "tool-cid",
     method: "tool",
-    params: { tool: { status: {} } },
+    params: { ...selectedBy(fixture.ws), tool: { status: {} } },
   });
   assert.equal(reply.error, undefined);
   const logged = lines.map((line) => JSON.parse(line) as { event?: string; correlationId?: string }).find((row) => row.event === "tool.result");
   assert.equal(typeof logged?.correlationId, "string");
   const correlationId = logged?.correlationId ?? "";
-  const audit = auditLinesOf(fixture, "sess-daemon").filter((row) => row["correlationId"] === correlationId);
+  const audit = auditLinesOf(fixture, sessionOf(fixture)).filter((row) => row["correlationId"] === correlationId);
   assert.deepEqual(audit.map((row) => row["phase"]).sort(), ["admission", "result"]);
   appendAudit(fixture.stateDir, {
-    sessionId: "sess-daemon",
+    sessionId: sessionOf(fixture),
     tool: "status",
     outcome: "ok",
     phase: "admission",
     correlationId,
   });
   assert.equal(reconcileAuditLogs(fixture.stateDir).appended, 1);
-  const closed = auditLinesOf(fixture, "sess-daemon").filter((row) => row["phase"] === "reconciliation");
+  const closed = auditLinesOf(fixture, sessionOf(fixture)).filter((row) => row["phase"] === "reconciliation");
   assert.equal(closed.length, 1);
   assert.equal(closed[0]?.["correlationId"], correlationId);
 
-  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down" });
+  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down", params: selectedBy(fixture.ws) });
   assert.ok(down.result !== undefined);
   await awaitDone(daemon);
 });
@@ -937,17 +964,18 @@ void test("OBS-02: an unknown tool key is logged as unknown, not copied into the
   const { options } = daemonParts(fixture);
   const daemon = await startDaemon({ ...options, logger });
   t.after(() => cleanupDaemon(daemon));
+  await sendRequest(daemon.socketPath, { id: "up-1", method: "up", params: { workspaceRoot: fixture.ws } });
   const key = "not-a-tool-".repeat(20);
   const reply = await sendRequest(daemon.socketPath, {
     id: "tool-unknown",
     method: "tool",
-    params: { tool: { [key]: {} } },
+    params: { ...selectedBy(fixture.ws), tool: { [key]: {} } },
   });
   assert.equal(reply.error?.code, "SCHEMA_INVALID");
   const logged = lines.map((line) => JSON.parse(line) as { event?: string; tool?: string }).find((row) => row.event === "tool.result");
   assert.equal(logged?.tool, "unknown");
   assert.equal(lines.some((line) => line.includes(key)), false);
-  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down" });
+  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down", params: selectedBy(fixture.ws) });
   assert.ok(down.result !== undefined);
   await awaitDone(daemon);
 });
@@ -975,18 +1003,18 @@ void test("OBS-02: the up correlation id is on the admission and result audit li
   const reply = await sendRequest(daemon.socketPath, {
     id: "tool-up",
     method: "tool",
-    params: { tool: { status: {} } },
+    params: { ...selectedBy(fixture.ws), tool: { status: {} } },
   });
   assert.equal(reply.error, undefined);
   const logged = lines.map((line) => JSON.parse(line) as { event?: string; correlationId?: string }).find((row) => row.event === "tool.result");
   const correlationId = logged?.correlationId ?? "";
-  const audit = auditLinesOf(fixture, "sess-daemon").filter((row) => row["correlationId"] === correlationId);
+  const audit = auditLinesOf(fixture, sessionOf(fixture)).filter((row) => row["correlationId"] === correlationId);
   assert.deepEqual(audit.map((row) => row["phase"]).sort(), ["admission", "result"]);
   for (const row of audit) {
     assert.equal(row["upId"], upId, "each audit line of the call names the up that admitted it");
   }
 
-  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down" });
+  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down", params: selectedBy(fixture.ws) });
   assert.ok(down.result !== undefined);
   await awaitDone(daemon);
 });
@@ -1000,19 +1028,27 @@ void test("OBS-02: up logs the catalogue code when create returns an error snaps
   });
   const fixture = makeDirs();
   const { options } = daemonParts(fixture);
-  const daemon = await startDaemon({ ...options, logger });
-  t.after(() => cleanupDaemon(daemon));
-  daemon.handle.controller.create = () => Promise.resolve({
-    state: "error",
-    reason: "OPENSHELL_START_FAILED",
-    lastTransitionAt: CLOCK_ISO,
+  const daemon = await startDaemon({
+    ...options,
+    logger,
+    buildHandle: (handleOptions) => {
+      const handle = buildDaemonHandle(handleOptions);
+      handle.controller.create = () =>
+        Promise.resolve({
+          state: "error",
+          reason: "OPENSHELL_START_FAILED",
+          lastTransitionAt: CLOCK_ISO,
+        });
+      return handle;
+    },
   });
+  t.after(() => cleanupDaemon(daemon));
   const reply = await sendRequest(daemon.socketPath, { id: "up-1", method: "up", params: { workspaceRoot: fixture.ws } });
   assert.equal(reply.error, undefined);
   const logged = lines.map((line) => JSON.parse(line) as { event?: string; code?: string; state?: string }).find((row) => row.event === "up.end");
   assert.equal(logged?.code, "OPENSHELL_START_FAILED");
   assert.equal(logged.state, "error");
-  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down" });
+  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down", params: selectedBy(fixture.ws) });
   assert.ok(down.result !== undefined);
   await awaitDone(daemon);
 });
@@ -1030,7 +1066,7 @@ void test("OBS-02: a probe that resolves in error is logged", async (t) => {
   t.after(() => cleanupDaemon(daemon));
   const up = await sendRequest(daemon.socketPath, { id: "u1", method: "up", params: { workspaceRoot: fixture.ws } });
   assert.equal(snapshotStateOf(up), "active");
-  daemon.handle.controller.probe = () => Promise.resolve({
+  entryOf(daemon, fixture).handle.controller.probe = () => Promise.resolve({
     state: "error",
     reason: "OPENSHELL_GATEWAY_LOST",
     lastTransitionAt: CLOCK_ISO,
@@ -1040,7 +1076,7 @@ void test("OBS-02: a probe that resolves in error is logged", async (t) => {
   });
   const logged = lines.map((line) => JSON.parse(line) as { event?: string; code?: string }).find((row) => row.event === "health.probe_failed");
   assert.equal(logged?.code, "OPENSHELL_GATEWAY_LOST");
-  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down" });
+  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down", params: selectedBy(fixture.ws) });
   assert.ok(down.result !== undefined);
   await awaitDone(daemon);
 });
@@ -1073,7 +1109,7 @@ void test("OBS-02: lifecycle.transition logs from and to for each state change, 
     assert.equal("reason" in row, false, "the free-text reason is never logged");
     assert.equal("code" in row, false, "a transition whose reason is not a catalogue code carries no code");
   }
-  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down" });
+  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down", params: selectedBy(fixture.ws) });
   assert.ok(down.result !== undefined);
   await awaitDone(daemon);
 });
@@ -1092,10 +1128,10 @@ void test("OBS-02: control.refused warns with the code of a refused tool call, a
   const refused = await sendRequest(daemon.socketPath, {
     id: "tool-refused",
     method: "tool",
-    params: { tool: "PARAM-MARKER" },
+    params: { ...selectedBy(fixture.ws), tool: "PARAM-MARKER" },
   });
   assert.equal(refused.error?.code, "SCHEMA_INVALID");
-  const status = await sendRequest(daemon.socketPath, { id: "status-1", method: "status" });
+  const status = await sendRequest(daemon.socketPath, { id: "status-1", method: "status", params: selectedBy(fixture.ws) });
   assert.equal(status.error, undefined);
 
   const rows = logRowsOf(lines);
@@ -1111,7 +1147,7 @@ void test("OBS-02: control.refused warns with the code of a refused tool call, a
   assert.deepEqual(Object.keys(requestRow ?? {}).sort(), ["event", "level", "method", "ts"]);
   assert.deepEqual(Object.keys(warnRow ?? {}).sort(), ["code", "event", "level", "method", "ts"]);
   assert.equal(lines.some((line) => line.includes("PARAM-MARKER")), false, "request params are never logged");
-  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down" });
+  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down", params: selectedBy(fixture.ws) });
   assert.ok(down.result !== undefined);
   await awaitDone(daemon);
 });
@@ -1133,7 +1169,7 @@ void test("OBS-02: an unknown control method is refused as a warn with method un
   const warned = logRowsOf(lines).filter((row) => row["event"] === "control.refused");
   assert.deepEqual(warned.map((row) => [row["method"], row["level"], row["code"]]), [["unrecognized", "warn", code]]);
   assert.equal(lines.some((line) => line.includes("METHOD-MARKER")), false, "an unknown method name is never logged");
-  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down" });
+  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down", params: selectedBy(fixture.ws) });
   assert.ok(down.result !== undefined);
   await awaitDone(daemon);
 });
@@ -1149,7 +1185,7 @@ void test("OBS-02: daemon.starting, daemon.listening, daemon.stopping and daemon
   const { options } = daemonParts(fixture);
   const daemon = await startDaemon({ ...options, logger });
   t.after(() => cleanupDaemon(daemon));
-  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down" });
+  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down", params: selectedBy(fixture.ws) });
   assert.ok(down.result !== undefined);
   await awaitDone(daemon);
 
@@ -1168,7 +1204,8 @@ void test("RT-06: a tool request without a tool object refuses with SCHEMA_INVAL
   const { options } = daemonParts(fixture);
   const daemon = await startDaemon(options);
   t.after(() => cleanupDaemon(daemon));
-  const record = recordDispatcherCalls(daemon);
+  await sendRequest(daemon.socketPath, { id: "up-1", method: "up", params: { workspaceRoot: fixture.ws } });
+  const record = recordDispatcherCalls(entryOf(daemon, fixture));
 
   const withoutTool: ControlRequest[] = [
     { id: "t-1", method: "tool" },
@@ -1184,7 +1221,7 @@ void test("RT-06: a tool request without a tool object refuses with SCHEMA_INVAL
   }
   assert.deepEqual(record.raws, []);
 
-  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down" });
+  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down", params: selectedBy(fixture.ws) });
   assert.ok(down.result !== undefined);
   await awaitDone(daemon);
 });
@@ -1194,17 +1231,18 @@ void test("RT-06: a dispatcher that throws a RealmError answers that error's cat
   const { options } = daemonParts(fixture);
   const daemon = await startDaemon(options);
   t.after(() => cleanupDaemon(daemon));
-  const record = recordDispatcherCalls(daemon, () => Promise.reject(makeRealmError("TOOL_TIMEOUT")));
+  await sendRequest(daemon.socketPath, { id: "up-1", method: "up", params: { workspaceRoot: fixture.ws } });
+  const record = recordDispatcherCalls(entryOf(daemon, fixture), () => Promise.reject(makeRealmError("TOOL_TIMEOUT")));
 
   const reply = await sendRequest(daemon.socketPath, {
     id: "tool-2",
     method: "tool",
-    params: { tool: { status: {} } },
+    params: { ...selectedBy(fixture.ws), tool: { status: {} } },
   });
   assert.deepEqual(reply, { id: "tool-2", error: { code: "TOOL_TIMEOUT" } });
   assert.equal(record.raws.length, 1);
 
-  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down" });
+  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down", params: selectedBy(fixture.ws) });
   assert.ok(down.result !== undefined);
   await awaitDone(daemon);
 });
@@ -1214,8 +1252,9 @@ void test("RT-06: a refused outcome answers its catalogue code and no other fiel
   const { options } = daemonParts(fixture);
   const daemon = await startDaemon(options);
   t.after(() => cleanupDaemon(daemon));
+  await sendRequest(daemon.socketPath, { id: "up-1", method: "up", params: { workspaceRoot: fixture.ws } });
   recordDispatcherCalls(
-    daemon,
+    entryOf(daemon, fixture),
     () =>
       Promise.resolve<ToolOutcome>({
         outcome: "refused",
@@ -1228,11 +1267,11 @@ void test("RT-06: a refused outcome answers its catalogue code and no other fiel
   const reply = await sendRequest(daemon.socketPath, {
     id: "tool-3",
     method: "tool",
-    params: { tool: { read: { path: "doc.txt", maxBytes: 16 } } },
+    params: { ...selectedBy(fixture.ws), tool: { read: { path: "doc.txt", maxBytes: 16 } } },
   });
   assert.deepEqual(reply, { id: "tool-3", error: { code: "POLICY_DENIED" } });
 
-  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down" });
+  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down", params: selectedBy(fixture.ws) });
   assert.ok(down.result !== undefined);
   await awaitDone(daemon);
 });
@@ -1242,8 +1281,9 @@ void test("CRASH-06: a refused outcome that carries a causeCode answers its code
   const { options } = daemonParts(fixture);
   const daemon = await startDaemon(options);
   t.after(() => cleanupDaemon(daemon));
+  await sendRequest(daemon.socketPath, { id: "up-1", method: "up", params: { workspaceRoot: fixture.ws } });
   recordDispatcherCalls(
-    daemon,
+    entryOf(daemon, fixture),
     () =>
       Promise.resolve<ToolOutcome>({
         outcome: "refused",
@@ -1257,11 +1297,11 @@ void test("CRASH-06: a refused outcome that carries a causeCode answers its code
   const reply = await sendRequest(daemon.socketPath, {
     id: "tool-4",
     method: "tool",
-    params: { tool: { retry: {} } },
+    params: { ...selectedBy(fixture.ws), tool: { retry: {} } },
   });
   assert.deepEqual(reply, { id: "tool-4", error: { code: "OPENSHELL_START_FAILED", causeCode: "PODMAN_MACHINE_DOWN" } });
 
-  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down" });
+  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down", params: selectedBy(fixture.ws) });
   assert.ok(down.result !== undefined);
   await awaitDone(daemon);
 });
@@ -1271,7 +1311,8 @@ void test("RT-06: an oversized request line is refused with a null-id SCHEMA_INV
   const { options } = daemonParts(fixture);
   const daemon = await startDaemon(options);
   t.after(() => cleanupDaemon(daemon));
-  const record = recordDispatcherCalls(daemon);
+  await sendRequest(daemon.socketPath, { id: "up-1", method: "up", params: { workspaceRoot: fixture.ws } });
+  const record = recordDispatcherCalls(entryOf(daemon, fixture));
 
   const padding = "x".repeat(MAX_CONTROL_LINE_BYTES);
   const oversized = `{"id":"big-1","method":"tool","params":{"tool":{"status":{}},"pad":"${padding}"}}`;
@@ -1279,7 +1320,7 @@ void test("RT-06: an oversized request line is refused with a null-id SCHEMA_INV
   assert.deepEqual(JSON.parse(raw), { id: null, error: { code: "SCHEMA_INVALID" } });
   assert.deepEqual(record.raws, []);
 
-  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down" });
+  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down", params: selectedBy(fixture.ws) });
   assert.ok(down.result !== undefined);
   await awaitDone(daemon);
 });
@@ -1294,12 +1335,12 @@ void test("CLI-01: a status reply carries the policy mode the daemon loaded (P6-
   const daemon = await startDaemon(options);
   t.after(() => cleanupDaemon(daemon));
 
-  const status = await sendRequest(daemon.socketPath, { id: "s1", method: "status" });
+  const status = await sendRequest(daemon.socketPath, { id: "s1", method: "status", params: selectedBy(fixture.ws) });
   const result: unknown = status.result;
   const mode = typeof result === "object" && result !== null && "mode" in result ? result.mode : undefined;
   assert.equal(mode, "fail-closed");
 
-  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down" });
+  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down", params: selectedBy(fixture.ws) });
   assert.ok(down.result !== undefined);
   await awaitDone(daemon);
 });
@@ -1316,7 +1357,7 @@ void test("RT-06: unknown methods and malformed lines refuse with SCHEMA_INVALID
   const raw = await sendRawLine(daemon.socketPath, '{"id":"raw-1","method":42}\n');
   assert.deepEqual(JSON.parse(raw), { id: "raw-1", error: { code: "SCHEMA_INVALID" } });
 
-  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down" });
+  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down", params: selectedBy(fixture.ws) });
   assert.ok(down.result !== undefined);
   await awaitDone(daemon);
 });
@@ -1327,10 +1368,10 @@ void test("CLI-01: down drains, closes, removes the socket, and resolves done", 
   const daemon = await startDaemon(options);
   t.after(() => cleanupDaemon(daemon));
 
-  const before = await sendRequest(daemon.socketPath, { id: "s1", method: "status" });
+  const before = await sendRequest(daemon.socketPath, { id: "s1", method: "status", params: selectedBy(fixture.ws) });
   assert.equal(snapshotStateOf(before), "unbound");
 
-  const reply = await sendRequest(daemon.socketPath, { id: "d1", method: "down" });
+  const reply = await sendRequest(daemon.socketPath, { id: "d1", method: "down", params: selectedBy(fixture.ws) });
   assert.equal(reply.id, "d1");
   assert.equal(snapshotStateOf(reply), "unbound");
   await awaitDone(daemon);
@@ -1345,8 +1386,8 @@ void test("CLI-01: a second down is a no-op that still answers", async (t) => {
   t.after(() => cleanupDaemon(daemon));
 
   const [first, second] = await Promise.all([
-    sendRequest(daemon.socketPath, { id: "down-1", method: "down" }),
-    sendRequest(daemon.socketPath, { id: "down-2", method: "down" }),
+    sendRequest(daemon.socketPath, { id: "down-1", method: "down", params: selectedBy(fixture.ws) }),
+    sendRequest(daemon.socketPath, { id: "down-2", method: "down", params: selectedBy(fixture.ws) }),
   ]);
   assert.equal(first.id, "down-1");
   assert.ok(first.result !== undefined && first.error === undefined);
@@ -1424,9 +1465,16 @@ void test("QUAL-01: a down whose socket file cannot be removed answers SCHEMA_IN
   rmSync(daemon.socketPath, { force: true });
   mkdirSync(daemon.socketPath);
   writeFileSync(join(daemon.socketPath, "kept"), "not a socket");
-  const raw = await boundedWait(replyOn(client, '{"id":"down-1","method":"down"}\n'), "the down reply");
-  assert.deepEqual(JSON.parse(raw), { id: "down-1", error: { code: "SCHEMA_INVALID" } });
-  await awaitDone(daemon);
+  const raw = await boundedWait(
+    replyOn(client, `${JSON.stringify({ id: "down-1", method: "down", params: selectedBy(fixture.ws) })}\n`),
+    "the down reply",
+  );
+  assert.equal(JSON.parse(raw).error, undefined, "the down is answered with the unbound snapshot");
+  await assert.rejects(
+    awaitDone(daemon),
+    (error: unknown) => error instanceof RealmError && error.code === "SCHEMA_INVALID",
+    "a socket file that cannot be removed fails done",
+  );
 });
 
 void test("QUAL-01: a failed start whose socket file cannot be removed keeps its code and names the removal cause", async () => {
@@ -1459,8 +1507,9 @@ void test("QUAL-01: a reply that cannot be encoded is answered SCHEMA_INVALID, n
   t.after(() => cleanupDaemon(daemon));
   // A BigInt cannot be JSON-encoded, so the outcome cannot be written as dispatched.
   const unencodable: unknown = { outcome: "done", tool: "status", value: { size: BigInt(1) } };
-  recordDispatcherCalls(daemon, () => Promise.resolve(unencodable as ToolOutcome));
-  const reply = await sendRequest(daemon.socketPath, { id: "big-1", method: "tool", params: { tool: { status: {} } } });
+  await sendRequest(daemon.socketPath, { id: "up-1", method: "up", params: { workspaceRoot: fixture.ws } });
+  recordDispatcherCalls(entryOf(daemon, fixture), () => Promise.resolve(unencodable as ToolOutcome));
+  const reply = await sendRequest(daemon.socketPath, { id: "big-1", method: "tool", params: { ...selectedBy(fixture.ws), tool: { status: {} } } });
   assert.deepEqual(reply, { id: "big-1", error: { code: "SCHEMA_INVALID" } });
 });
 
@@ -1542,7 +1591,7 @@ void test("a connection error on a served socket is that connection's failure an
   release();
   await exec.settled();
   await pollUntil(async () => {
-    const reply = await sendRequest(daemon.socketPath, { id: "alive", method: "status" });
+    const reply = await sendRequest(daemon.socketPath, { id: "alive", method: "status", params: selectedBy(fixture.ws) });
     return reply.id === "alive" && snapshotStateOf(reply) === "active";
   }, "the daemon answers a new client and the abandoned up completed");
 });
@@ -1552,15 +1601,16 @@ void test("OBS-03: metrics answers over the control socket and counts the tool c
   const { options } = daemonParts(fixture);
   const daemon = await startDaemon(options);
   t.after(() => cleanupDaemon(daemon));
-  const tool = await sendRequest(daemon.socketPath, { id: "tool-1", method: "tool", params: { tool: { status: {} } } });
+  await sendRequest(daemon.socketPath, { id: "up-1", method: "up", params: { workspaceRoot: fixture.ws } });
+  const tool = await sendRequest(daemon.socketPath, { id: "tool-1", method: "tool", params: { ...selectedBy(fixture.ws), tool: { status: {} } } });
   assert.equal(tool.error, undefined);
-  const reply = await sendRequest(daemon.socketPath, { id: "m1", method: "metrics" });
+  const reply = await sendRequest(daemon.socketPath, { id: "m1", method: "metrics", params: selectedBy(fixture.ws) });
   assert.equal(reply.error, undefined);
   const snap = reply.result as { schema?: number; toolCalls?: { tool?: string; outcome?: string; count?: number }[]; controlRequests?: { method?: string }[] };
   assert.equal(snap.schema, 1);
   assert.equal(snap.toolCalls?.some((row) => row.tool === "status" && row.outcome === "done" && row.count === 1), true);
   assert.equal(snap.controlRequests?.some((row) => row.method === "tool"), true);
-  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down" });
+  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down", params: selectedBy(fixture.ws) });
   assert.ok(down.result !== undefined);
   await awaitDone(daemon);
 });
@@ -1632,7 +1682,7 @@ void test("OBS-03: starting the daemon adds no TCP or UDP listener, only the Uni
   assert.deepEqual(inetListeners(), beforeInet);
   const added = unixPaths().filter((path) => !beforeUnix.has(path));
   assert.deepEqual(added, [daemon.socketPath]);
-  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down" });
+  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down", params: selectedBy(fixture.ws) });
   assert.ok(down.result !== undefined);
   await awaitDone(daemon);
 });
@@ -1644,7 +1694,7 @@ void test("OBS-03: a probe that returns probe failed is counted", async (t) => {
   t.after(() => cleanupDaemon(daemon));
   const up = await sendRequest(daemon.socketPath, { id: "u1", method: "up", params: { workspaceRoot: fixture.ws } });
   assert.equal(snapshotStateOf(up), "active");
-  daemon.handle.controller.probe = () => Promise.resolve({
+  entryOf(daemon, fixture).handle.controller.probe = () => Promise.resolve({
     state: "error",
     reason: "probe failed",
     lastTransitionAt: "2026-01-01T00:00:00.000Z",
@@ -1652,10 +1702,762 @@ void test("OBS-03: a probe that returns probe failed is counted", async (t) => {
   await new Promise<void>((resolve) => {
     setTimeout(resolve, 12_000);
   });
-  const reply = await sendRequest(daemon.socketPath, { id: "m1", method: "metrics" });
+  const reply = await sendRequest(daemon.socketPath, { id: "m1", method: "metrics", params: selectedBy(fixture.ws) });
   const snap = reply.result as { healthProbeFailures?: { code?: string; count?: number }[] };
   assert.equal(snap.healthProbeFailures?.some((row) => row.code === "probe failed" && row.count === 1), true);
-  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down" });
+  const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down", params: selectedBy(fixture.ws) });
   assert.ok(down.result !== undefined);
   await awaitDone(daemon);
+});
+
+// ---- Plan 18-06 (H1): admission (T1) and selected dispatch and session down (T2). Each case names its done-when letter. ----
+
+const OK_PROBE: PodmanProbeResult = { ok: true, version: "5.0.0" };
+
+// Options under which sibling projects below the fixture's base directory can all be admitted by one daemon.
+function wideOptions(fixture: Fixture): Partial<StartDaemonOptions> {
+  return {
+    runtimeInput: { image: IMAGE, stateDir: fixture.stateDir, workspaceRoot: fixture.base },
+    policyPath: writePolicy(fixture, "wide-policy.json", { mode: "advisory", workspaceRoots: [fixture.base] }),
+  };
+}
+
+// A sibling project directory below the fixture's base.
+function projectDir(fixture: Fixture, name: string): string {
+  const dir = join(fixture.base, name);
+  mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+function upRequest(id: string, workspaceRoot: string): ControlRequest {
+  return { id, method: "up", params: { workspaceRoot } };
+}
+
+// A probe whose first call holds until release() runs, then answers `first`. Later calls answer OK.
+function heldFirstProbe(first: PodmanProbeResult): {
+  readonly probe: () => Promise<PodmanProbeResult>;
+  readonly release: () => void;
+  readonly calls: () => number;
+} {
+  let count = 0;
+  let open: () => void = () => undefined;
+  const gate = new Promise<void>((resolve) => {
+    open = resolve;
+  });
+  return {
+    probe: async (): Promise<PodmanProbeResult> => {
+      count += 1;
+      if (count === 1) {
+        await gate;
+        return first;
+      }
+      return OK_PROBE;
+    },
+    release: (): void => {
+      open();
+    },
+    calls: (): number => count,
+  };
+}
+
+function sessionIdOfReply(reply: ControlReply): unknown {
+  return typeof reply.result === "object" && reply.result !== null && "sessionId" in reply.result
+    ? reply.result.sessionId
+    : undefined;
+}
+
+// A real delay, used only to let a request reach the daemon over its live socket before the test releases a held call. The
+// cases that use it wait on the observable state they need, so no assertion depends on the length of the delay.
+function pause(ms: number): Promise<void> {
+  return new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+void test("T1 (a): up for a directory outside every policy root is refused POLICY_DENIED before any probe, container or record write", async (t) => {
+  const fixture = makeDirs();
+  const outside = join(fixture.base, "outside");
+  mkdirSync(outside);
+  const parts = daemonParts(fixture);
+  const daemon = await startDaemon(parts.options);
+  t.after(() => cleanupDaemon(daemon));
+
+  const reply = await sendRequest(daemon.socketPath, upRequest("ua", outside));
+  assert.equal(reply.error?.code, "POLICY_DENIED");
+  assert.equal(parts.events.includes("probe"), false, "no probe ran");
+  assert.equal(parts.exec.callCount("create"), 0, "no container was created");
+  assert.deepEqual(new SessionStore(fixture.stateDir).list(), [], "no record was written");
+});
+
+void test("T1 (b): up for a directory under a policy root but outside the configured workspace root is refused POLICY_DENIED", async (t) => {
+  const fixture = makeDirs();
+  const sibling = projectDir(fixture, "sibling");
+  const parts = daemonParts(fixture, {
+    policyPath: writePolicy(fixture, "base-policy.json", { mode: "advisory", workspaceRoots: [fixture.base] }),
+  });
+  const daemon = await startDaemon(parts.options);
+  t.after(() => cleanupDaemon(daemon));
+
+  const reply = await sendRequest(daemon.socketPath, upRequest("ub", sibling));
+  assert.equal(reply.error?.code, "POLICY_DENIED");
+  assert.equal(parts.events.includes("probe"), false, "no probe ran");
+  assert.equal(parts.exec.callCount("create"), 0, "no container was created");
+  assert.deepEqual(new SessionStore(fixture.stateDir).list(), [], "no record was written");
+});
+
+void test("T1 (c): up for the configured workspace root itself succeeds (equality is accepted)", async (t) => {
+  const fixture = makeDirs();
+  const daemon = await startDaemon(daemonParts(fixture).options);
+  t.after(() => cleanupDaemon(daemon));
+
+  const reply = await sendRequest(daemon.socketPath, upRequest("uc", fixture.ws));
+  assert.equal(snapshotStateOf(reply), "active");
+  assert.equal(boundRootOf(reply), fixture.ws);
+});
+
+void test("T1 (d): after up of directory A, renaming A makes status with the old selection POLICY_DENIED", async (t) => {
+  const fixture = makeDirs();
+  const daemon = await startDaemon(daemonParts(fixture).options);
+  t.after(() => cleanupDaemon(daemon));
+  const id = sessionOf(fixture);
+  assert.equal(snapshotStateOf(await sendRequest(daemon.socketPath, upRequest("u1", fixture.ws))), "active");
+
+  renameSync(fixture.ws, join(fixture.base, "moved"));
+  const reply = await sendRequest(daemon.socketPath, {
+    id: "s-old",
+    method: "status",
+    params: { selection: { workspaceRoot: fixture.ws, sessionId: id } },
+  });
+  assert.equal(reply.error?.code, "POLICY_DENIED");
+});
+
+void test("T1 (e): with maxSessions 2 a third distinct up is POLICY_DENIED and a fourth up for an admitted id succeeds", async (t) => {
+  const fixture = makeDirs();
+  const daemon = await startDaemon(daemonParts(fixture, { ...wideOptions(fixture), maxSessions: 2 }).options);
+  t.after(() => cleanupDaemon(daemon));
+  const [a, b, c] = ["a", "b", "c"].map((name) => projectDir(fixture, name));
+  assert.equal(snapshotStateOf(await sendRequest(daemon.socketPath, upRequest("ea", a!))), "active");
+  assert.equal(snapshotStateOf(await sendRequest(daemon.socketPath, upRequest("eb", b!))), "active");
+  assert.equal((await sendRequest(daemon.socketPath, upRequest("ec", c!))).error?.code, "POLICY_DENIED");
+  assert.equal(snapshotStateOf(await sendRequest(daemon.socketPath, upRequest("ea2", a!))), "active");
+});
+
+void test("T1 (f): a record persisted for B's id that names A makes up of B SANDBOX_NAME_IN_USE with no container call", async (t) => {
+  const fixture = makeDirs();
+  const parts = daemonParts(fixture, wideOptions(fixture));
+  const daemon = await startDaemon(parts.options);
+  t.after(() => cleanupDaemon(daemon));
+  const a = projectDir(fixture, "a");
+  const b = projectDir(fixture, "b");
+  new SessionStore(fixture.stateDir).save({
+    realmId: "realm-f",
+    sessionId: selectionOf(b).sessionId,
+    workspaceRoot: a,
+    state: "unbound",
+    controlSocketPath: controlSocketPath(fixture.stateDir),
+    containerId: null,
+  });
+
+  const reply = await sendRequest(daemon.socketPath, upRequest("uf", b));
+  assert.equal(reply.error?.code, "SANDBOX_NAME_IN_USE");
+  assert.equal(parts.exec.callCount("create"), 0, "no container call");
+});
+
+void test("T1 (g): after up, renaming the directory makes status, tool and down with the old selection POLICY_DENIED and changes nothing", async (t) => {
+  const fixture = makeDirs();
+  const daemon = await startDaemon(daemonParts(fixture).options);
+  t.after(() => cleanupDaemon(daemon));
+  const id = sessionOf(fixture);
+  assert.equal(snapshotStateOf(await sendRequest(daemon.socketPath, upRequest("g1", fixture.ws))), "active");
+  const committed = daemon.committedCount();
+  const records = new SessionStore(fixture.stateDir).list();
+
+  renameSync(fixture.ws, join(fixture.base, "moved"));
+  const old = { workspaceRoot: fixture.ws, sessionId: id };
+  for (const request of [
+    { id: "g-status", method: "status", params: { selection: old } },
+    { id: "g-tool", method: "tool", params: { selection: old, tool: { status: {} } } },
+    { id: "g-down", method: "down", params: { selection: old } },
+  ]) {
+    assert.equal((await sendRequest(daemon.socketPath, request)).error?.code, "POLICY_DENIED", request.id);
+  }
+  assert.equal(daemon.committedCount(), committed);
+  assert.deepEqual(new SessionStore(fixture.stateDir).list(), records);
+  assert.notEqual(daemon.session(id), undefined);
+});
+
+void test("T1 (h): a re-up of a live project returns the same bound root and session id, adds no entry and builds no second handle", async (t) => {
+  const fixture = makeDirs();
+  let built = 0;
+  const daemon = await startDaemon(
+    daemonParts(fixture, {
+      buildHandle: (options) => {
+        built += 1;
+        return buildDaemonHandle(options);
+      },
+    }).options,
+  );
+  t.after(() => cleanupDaemon(daemon));
+  const first = await sendRequest(daemon.socketPath, upRequest("h1", fixture.ws));
+  const second = await sendRequest(daemon.socketPath, upRequest("h2", fixture.ws));
+  assert.equal(boundRootOf(second), boundRootOf(first));
+  assert.equal(sessionIdOfReply(second), sessionIdOfReply(first));
+  assert.equal(built, 1, "buildHandle ran once for the id");
+  assert.equal(daemon.committedCount(), 1);
+});
+
+void test("T1 (i): with maxSessions 2 and a first probe refusal, two concurrent ups for X serialize; X then admits, Y admits, Z is POLICY_DENIED", async (t) => {
+  const fixture = makeDirs();
+  const [x, y, z] = ["x", "y", "z"].map((name) => projectDir(fixture, name));
+  const held = heldFirstProbe({ ok: false, code: "PODMAN_MISSING", reason: "podman is missing" });
+  const parts = daemonParts(fixture, { ...wideOptions(fixture), maxSessions: 2, probe: held.probe });
+  const daemon = await startDaemon(parts.options);
+  t.after(() => cleanupDaemon(daemon));
+
+  const first = sendRequest(daemon.socketPath, upRequest("i1", x!));
+  const second = sendRequest(daemon.socketPath, upRequest("i2", x!));
+  await pause(50);
+  held.release();
+  assert.equal((await first).error?.code, "PODMAN_MISSING");
+  assert.equal(snapshotStateOf(await second), "active");
+  assert.equal(snapshotStateOf(await sendRequest(daemon.socketPath, upRequest("i3", y!))), "active");
+  assert.equal((await sendRequest(daemon.socketPath, upRequest("i4", z!))).error?.code, "POLICY_DENIED");
+  assert.equal(parts.exec.callCount("create"), 2, "X and Y each create once, Z never");
+  assert.ok(parts.exec.callCount("create") - parts.exec.callCount("destroy") <= 2, "at most two live containers");
+});
+
+void test("T1 (j): two concurrent ups for one new id: the second waits, both attach, buildHandle runs once, one entry, one create", async (t) => {
+  const fixture = makeDirs();
+  const held = heldFirstProbe(OK_PROBE);
+  let built = 0;
+  const parts = daemonParts(fixture, {
+    probe: held.probe,
+    buildHandle: (options) => {
+      built += 1;
+      return buildDaemonHandle(options);
+    },
+  });
+  const daemon = await startDaemon(parts.options);
+  t.after(() => cleanupDaemon(daemon));
+
+  const first = sendRequest(daemon.socketPath, upRequest("j1", fixture.ws));
+  const second = sendRequest(daemon.socketPath, upRequest("j2", fixture.ws));
+  await pause(50);
+  held.release();
+  const [a, b] = await Promise.all([first, second]);
+  assert.equal(sessionIdOfReply(a), sessionOf(fixture));
+  assert.equal(sessionIdOfReply(b), sessionOf(fixture));
+  assert.equal(boundRootOf(a), boundRootOf(b));
+  assert.equal(built, 1, "buildHandle once");
+  assert.equal(parts.exec.callCount("create"), 1, "one create");
+  assert.equal(daemon.committedCount(), 1, "one entry");
+});
+
+void test("T1 (k): a down for Q queued behind an up of Q runs after the up, destroys the session, and leaves no container, entry or slot", async (t) => {
+  const fixture = makeDirs();
+  const held = heldFirstProbe(OK_PROBE);
+  const parts = daemonParts(fixture, { probe: held.probe });
+  const daemon = await startDaemon(parts.options);
+  t.after(() => cleanupDaemon(daemon));
+  const id = sessionOf(fixture);
+
+  const up = sendRequest(daemon.socketPath, upRequest("k-up", fixture.ws));
+  await pause(50);
+  const down = sendRequest(daemon.socketPath, { id: "k-down", method: "down", params: selectedBy(fixture.ws) });
+  await pause(50);
+  held.release();
+  assert.equal(snapshotStateOf(await up), "active");
+  assert.equal(snapshotStateOf(await down), "unbound");
+  assert.equal(parts.exec.callCount("destroy"), 1, "the session's container is destroyed");
+  assert.equal(daemon.session(id), undefined, "no registry entry");
+  assert.equal(daemon.isCommitted(id), false, "no admission slot");
+});
+
+void test("T1 (l): with maxSessions 2, a down of W while Y's admission is in flight does not arm the stop; down of Y after it completes does", async (t) => {
+  const fixture = makeDirs();
+  const [w, y] = ["w", "y"].map((name) => projectDir(fixture, name));
+  let hold: Promise<void> | undefined;
+  let open: () => void = () => undefined;
+  const parts = daemonParts(fixture, {
+    ...wideOptions(fixture),
+    maxSessions: 2,
+    probe: async () => {
+      if (hold !== undefined) {
+        await hold;
+        hold = undefined;
+      }
+      return OK_PROBE;
+    },
+  });
+  const daemon = await startDaemon(parts.options);
+  t.after(() => cleanupDaemon(daemon));
+  let doneResolved = false;
+  daemon.done.then(() => {
+    doneResolved = true;
+  }, () => undefined);
+  assert.equal(snapshotStateOf(await sendRequest(daemon.socketPath, upRequest("l-w", w!))), "active");
+
+  hold = new Promise<void>((resolve) => {
+    open = resolve;
+  });
+  const yUp = sendRequest(daemon.socketPath, upRequest("l-y", y!));
+  await pause(50);
+  assert.equal(snapshotStateOf(await sendRequest(daemon.socketPath, { id: "l-dw", method: "down", params: selectedBy(w!) })), "unbound");
+  await pause(50);
+  assert.equal(doneResolved, false, "reservedCount is 1, so the stop is not armed");
+  assert.equal(snapshotStateOf(await sendRequest(daemon.socketPath, { id: "l-sw", method: "status", params: selectedBy(w!) })), "unbound");
+
+  open();
+  assert.equal(snapshotStateOf(await yUp), "active");
+  assert.equal(parts.exec.callCount("create"), 2, "W and Y each create once");
+  assert.equal(snapshotStateOf(await sendRequest(daemon.socketPath, { id: "l-sy", method: "status", params: selectedBy(y!) })), "active");
+  await sendRequest(daemon.socketPath, { id: "l-dy", method: "down", params: selectedBy(y!) });
+  await awaitDone(daemon);
+});
+
+void test("T1 (m): with scaled client bounds, an up and a down queued behind a held up expire with TOOL_TIMEOUT, call no probe or destroy, and Q stays registered", async (t) => {
+  const fixture = makeDirs();
+  const held = heldFirstProbe(OK_PROBE);
+  const parts = daemonParts(fixture, {
+    probe: held.probe,
+    probeTimeoutMs: 20,
+    replyAllowanceMs: 20,
+    clientBoundMs: { up: 300, down: 300 },
+  });
+  const daemon = await startDaemon(parts.options);
+  t.after(() => cleanupDaemon(daemon));
+  const id = sessionOf(fixture);
+
+  const holder = sendRequest(daemon.socketPath, upRequest("m-holder", fixture.ws));
+  await pollUntil(() => held.calls() === 1, "the holder's probe is held");
+  const queuedUp = await sendRequest(daemon.socketPath, upRequest("m-up", fixture.ws));
+  const queuedDown = await sendRequest(daemon.socketPath, { id: "m-down", method: "down", params: selectedBy(fixture.ws) });
+  assert.equal(queuedUp.error?.code, "TOOL_TIMEOUT");
+  assert.equal(queuedDown.error?.code, "TOOL_TIMEOUT");
+  assert.equal(held.calls(), 1, "the waiters ran no probe");
+  assert.equal(parts.exec.callCount("destroy"), 0, "the waiters ran no destroy");
+  // Q is not yet in the registry: its entry is set after the probe (step 6). Its reservation is what the waiters must not drop.
+  assert.equal(daemon.committedCount(), 1, "Q keeps its reservation");
+
+  held.release();
+  assert.equal(snapshotStateOf(await holder), "active");
+  assert.notEqual(daemon.session(id), undefined, "Q is registered once its probe has passed");
+  assert.equal(snapshotStateOf(await sendRequest(daemon.socketPath, { id: "m-later", method: "down", params: selectedBy(fixture.ws) })), "unbound");
+});
+
+void test("T1 (n): a create failing with a code other than REALM_STOPPING keeps its slot unproven until down releases it", async (t) => {
+  const fixture = makeDirs();
+  const [x, y, z] = ["x", "y", "z"].map((name) => projectDir(fixture, name));
+  const parts = daemonParts(fixture, { ...wideOptions(fixture), maxSessions: 2 });
+  parts.exec.failNext("create", "PODMAN_MISSING");
+  const daemon = await startDaemon(parts.options);
+  t.after(() => cleanupDaemon(daemon));
+
+  assert.equal(snapshotStateOf(await sendRequest(daemon.socketPath, upRequest("n1", x!))), "error");
+  assert.equal(snapshotStateOf(await sendRequest(daemon.socketPath, upRequest("n2", y!))), "active");
+  assert.equal((await sendRequest(daemon.socketPath, upRequest("n3", z!))).error?.code, "POLICY_DENIED");
+  await sendRequest(daemon.socketPath, { id: "n4", method: "down", params: selectedBy(x!) });
+  assert.equal(snapshotStateOf(await sendRequest(daemon.socketPath, upRequest("n5", z!))), "active");
+});
+
+void test("T1 (o): a down whose destroy holds, with an up queued behind it: after the destroy the stop is armed and the queued up is REALM_STOPPING with no probe or create", async (t) => {
+  const fixture = makeDirs();
+  const parts = daemonParts(fixture);
+  const releaseDestroy = parts.exec.holdNext("destroy");
+  const daemon = await startDaemon(parts.options);
+  t.after(() => cleanupDaemon(daemon));
+  assert.equal(snapshotStateOf(await sendRequest(daemon.socketPath, upRequest("o-up", fixture.ws))), "active");
+  const probesBefore = parts.events.filter((event) => event === "probe").length;
+
+  const down = sendRequest(daemon.socketPath, { id: "o-down", method: "down", params: selectedBy(fixture.ws) });
+  await pause(50);
+  const queued = sendRequest(daemon.socketPath, upRequest("o-queued", fixture.ws));
+  await pause(50);
+  releaseDestroy();
+  assert.equal(snapshotStateOf(await down), "unbound");
+  assert.equal((await queued).error?.code, "REALM_STOPPING");
+  assert.equal(parts.events.filter((event) => event === "probe").length, probesBefore, "no probe for the queued up");
+  assert.equal(parts.exec.callCount("create"), 1, "no create for the queued up");
+  await awaitDone(daemon);
+});
+
+void test("T1 (p): two concurrent ups for one id while the first create is held: both attach, buildHandle once, create once (lock cap 1.94 s, longer than the 100 ms hold)", async (t) => {
+  const fixture = makeDirs();
+  let built = 0;
+  const parts = daemonParts(fixture, {
+    clientBoundMs: { up: 2000 },
+    probeTimeoutMs: 20,
+    replyAllowanceMs: 20,
+    buildHandle: (options) => {
+      built += 1;
+      return buildDaemonHandle(options);
+    },
+  });
+  const release = parts.exec.holdNext("create");
+  const daemon = await startDaemon(parts.options);
+  t.after(() => cleanupDaemon(daemon));
+
+  const first = sendRequest(daemon.socketPath, upRequest("p1", fixture.ws));
+  await pollUntil(() => parts.exec.callCount("create") === 1, "the first create is held");
+  const second = sendRequest(daemon.socketPath, upRequest("p2", fixture.ws));
+  await pause(100);
+  release();
+  const [a, b] = await Promise.all([first, second]);
+  assert.equal(snapshotStateOf(a), "active");
+  assert.equal(snapshotStateOf(b), "active", "the second attaches to the live session");
+  assert.equal(built, 1, "buildHandle once");
+  assert.equal(parts.exec.callCount("create"), 1, "controller.create ran once");
+});
+
+void test("T1 (q): a waiter granted after a failed holder, with budget below 2 probeTimeoutMs + startupBudgetMs, is STARTUP_BUDGET_EXCEEDED before any reservation", async (t) => {
+  const fixture = makeDirs();
+  const held = heldFirstProbe({ ok: false, code: "PODMAN_MISSING", reason: "podman is missing" });
+  const parts = daemonParts(fixture, { probe: held.probe, probeTimeoutMs: 20, replyAllowanceMs: 20, clientBoundMs: { up: 400 } });
+  const daemon = await startDaemon(parts.options);
+  t.after(() => cleanupDaemon(daemon));
+
+  const holder = sendRequest(daemon.socketPath, upRequest("q1", fixture.ws));
+  await pollUntil(() => held.calls() === 1, "the holder's probe is held");
+  const waiter = sendRequest(daemon.socketPath, upRequest("q2", fixture.ws));
+  await pause(50);
+  held.release();
+  assert.equal((await holder).error?.code, "PODMAN_MISSING");
+  assert.equal((await waiter).error?.code, "STARTUP_BUDGET_EXCEEDED");
+  assert.equal(held.calls(), 1, "the waiter ran no probe");
+  assert.equal(parts.exec.callCount("create"), 0, "no create");
+  assert.equal(daemon.committedCount(), 0, "registry and slots unchanged");
+});
+
+void test("T1 (r): a down granted when its entry is already absent replies the unbound snapshot and calls no destroy", async (t) => {
+  const fixture = makeDirs();
+  const held = heldFirstProbe({ ok: false, code: "PODMAN_MISSING", reason: "podman is missing" });
+  const parts = daemonParts(fixture, { probe: held.probe });
+  const daemon = await startDaemon(parts.options);
+  t.after(() => cleanupDaemon(daemon));
+
+  const holder = sendRequest(daemon.socketPath, upRequest("r1", fixture.ws));
+  await pollUntil(() => held.calls() === 1, "the holder's probe is held");
+  const down = sendRequest(daemon.socketPath, { id: "r-down", method: "down", params: selectedBy(fixture.ws) });
+  await pause(50);
+  held.release();
+  await holder;
+  assert.equal(snapshotStateOf(await down), "unbound");
+  assert.equal(parts.exec.callCount("destroy"), 0, "no destroy");
+});
+
+void test("T1 (s): a waited down granted with budget below TEARDOWN_TIMEOUT_MS + reply allowance replies TOOL_TIMEOUT before destroy, and Q stays registered", async (t) => {
+  const fixture = makeDirs();
+  const held = heldFirstProbe(OK_PROBE);
+  const parts = daemonParts(fixture, {
+    probe: held.probe,
+    probeTimeoutMs: 20,
+    replyAllowanceMs: 20,
+    clientBoundMs: { up: 1000, down: 300 },
+  });
+  const daemon = await startDaemon(parts.options);
+  t.after(() => cleanupDaemon(daemon));
+  const id = sessionOf(fixture);
+
+  const holder = sendRequest(daemon.socketPath, upRequest("s-up", fixture.ws));
+  await pollUntil(() => held.calls() === 1, "the holder's probe is held");
+  const down = sendRequest(daemon.socketPath, { id: "s-down", method: "down", params: selectedBy(fixture.ws) });
+  await pause(50);
+  held.release();
+  assert.equal(snapshotStateOf(await holder), "active");
+  assert.equal((await down).error?.code, "TOOL_TIMEOUT");
+  assert.equal(parts.exec.callCount("destroy"), 0, "no destroy before the refusal");
+  assert.notEqual(daemon.session(id), undefined, "Q stays registered");
+});
+
+void test("T1 (t): an uncontended up with startupBudgetMs above the client bound still creates and replies the snapshot", async (t) => {
+  const fixture = makeDirs();
+  const parts = daemonParts(fixture, {
+    policyPath: writePolicy(fixture, "budget-policy.json", {
+      mode: "advisory",
+      workspaceRoots: [fixture.ws],
+      startupBudgetMs: 900_000,
+    }),
+    clientBoundMs: { up: 1000 },
+  });
+  const daemon = await startDaemon(parts.options);
+  t.after(() => cleanupDaemon(daemon));
+  assert.equal(snapshotStateOf(await sendRequest(daemon.socketPath, upRequest("t1", fixture.ws))), "active");
+  assert.equal(parts.exec.callCount("create"), 1);
+});
+
+void test("T2 (a): two projects admitted on one daemon answer their own tool calls, and each audit file holds only its own lines", async (t) => {
+  const fixture = makeDirs();
+  const daemon = await startDaemon(daemonParts(fixture, wideOptions(fixture)).options);
+  t.after(() => cleanupDaemon(daemon));
+  const [a, b] = ["a", "b"].map((name) => projectDir(fixture, name));
+  await sendRequest(daemon.socketPath, upRequest("a-up", a!));
+  await sendRequest(daemon.socketPath, upRequest("b-up", b!));
+  const idA = selectionOf(a!).sessionId;
+  const idB = selectionOf(b!).sessionId;
+  const callsA = recordDispatcherCalls(entryOf(daemon, { ...fixture, ws: a! }));
+  const callsB = recordDispatcherCalls(entryOf(daemon, { ...fixture, ws: b! }));
+  assert.equal((await sendRequest(daemon.socketPath, { id: "a-tool", method: "tool", params: { ...selectedBy(a!), tool: { status: {} } } })).error, undefined);
+  assert.equal((await sendRequest(daemon.socketPath, { id: "b-tool", method: "tool", params: { ...selectedBy(b!), tool: { status: {} } } })).error, undefined);
+  assert.equal(callsA.raws.length, 1, "A's handle answered A's call");
+  assert.equal(callsB.raws.length, 1, "B's handle answered B's call");
+  const linesA = auditLinesOf(fixture, idA);
+  const linesB = auditLinesOf(fixture, idB);
+  assert.ok(linesA.length > 0 && linesB.length > 0);
+  assert.equal(linesA.every((row) => row["sessionId"] === idA), true, "A's file holds only A's lines");
+  assert.equal(linesB.every((row) => row["sessionId"] === idB), true, "B's file holds only B's lines");
+});
+
+void test("T2 (b): down of A returns the unbound snapshot; B stays active and answers tool calls; A's record and entry are gone and B's remain", async (t) => {
+  const fixture = makeDirs();
+  const daemon = await startDaemon(daemonParts(fixture, wideOptions(fixture)).options);
+  t.after(() => cleanupDaemon(daemon));
+  const [a, b] = ["a", "b"].map((name) => projectDir(fixture, name));
+  const idA = selectionOf(a!).sessionId;
+  const idB = selectionOf(b!).sessionId;
+  await sendRequest(daemon.socketPath, upRequest("b-up", a!));
+  await sendRequest(daemon.socketPath, upRequest("b-up2", b!));
+
+  assert.equal(snapshotStateOf(await sendRequest(daemon.socketPath, { id: "b-down-a", method: "down", params: selectedBy(a!) })), "unbound");
+  assert.equal(snapshotStateOf(await sendRequest(daemon.socketPath, { id: "b-status-b", method: "status", params: selectedBy(b!) })), "active");
+  assert.equal((await sendRequest(daemon.socketPath, { id: "b-tool-b", method: "tool", params: { ...selectedBy(b!), tool: { status: {} } } })).error, undefined);
+  assert.equal(snapshotStateOf(await sendRequest(daemon.socketPath, { id: "b-status-a", method: "status", params: selectedBy(a!) })), "unbound");
+  const store = new SessionStore(fixture.stateDir);
+  assert.equal(store.load(idA), null, "A's record is gone");
+  assert.notEqual(store.load(idB), null, "B's record remains");
+  assert.equal(daemon.session(idA), undefined, "A's entry is gone");
+  assert.notEqual(daemon.session(idB), undefined, "B's entry remains");
+});
+
+void test("T2 (c): with maxSessions 2, a failed destroy of A keeps A registered and its slot committed, and a third admission is still POLICY_DENIED", async (t) => {
+  const fixture = makeDirs();
+  const parts = daemonParts(fixture, { ...wideOptions(fixture), maxSessions: 2 });
+  const daemon = await startDaemon(parts.options);
+  t.after(() => cleanupDaemon(daemon));
+  const [a, b, c] = ["a", "b", "c"].map((name) => projectDir(fixture, name));
+  await sendRequest(daemon.socketPath, upRequest("c-ua", a!));
+  await sendRequest(daemon.socketPath, upRequest("c-ub", b!));
+  const idA = selectionOf(a!).sessionId;
+  parts.exec.failNext("destroy", "REALM_STOPPING");
+
+  assert.equal((await sendRequest(daemon.socketPath, { id: "c-down", method: "down", params: selectedBy(a!) })).error?.code, "REALM_STOPPING");
+  assert.notEqual(daemon.session(idA), undefined, "A stays registered");
+  assert.equal(daemon.isCommitted(idA), true, "A's slot stays committed");
+  assert.equal((await sendRequest(daemon.socketPath, upRequest("c-uc", c!))).error?.code, "POLICY_DENIED");
+  assert.notEqual(new SessionStore(fixture.stateDir).load(idA), null, "A's record is not removed");
+});
+
+void test("T2 (e): a down of the last session makes done resolve", async (t) => {
+  const fixture = makeDirs();
+  const daemon = await startDaemon(daemonParts(fixture).options);
+  t.after(() => cleanupDaemon(daemon));
+  await sendRequest(daemon.socketPath, upRequest("e-up", fixture.ws));
+  await sendRequest(daemon.socketPath, { id: "e-down", method: "down", params: selectedBy(fixture.ws) });
+  await awaitDone(daemon);
+});
+
+void test("T2 (f): stop() on StartedDaemon with two sessions calls controller.stop for each", async (t) => {
+  const fixture = makeDirs();
+  const daemon = await startDaemon(daemonParts(fixture, wideOptions(fixture)).options);
+  t.after(() => cleanupDaemon(daemon));
+  const [a, b] = ["a", "b"].map((name) => projectDir(fixture, name));
+  await sendRequest(daemon.socketPath, upRequest("f-ua", a!));
+  await sendRequest(daemon.socketPath, upRequest("f-ub", b!));
+  let stops = 0;
+  for (const dir of [a!, b!]) {
+    const controller = entryOf(daemon, { ...fixture, ws: dir }).handle.controller;
+    const stopOnce = controller.stop.bind(controller);
+    controller.stop = () => {
+      stops += 1;
+      return stopOnce();
+    };
+  }
+  await daemon.stop();
+  assert.equal(stops, 2, "controller.stop ran for each session");
+  await awaitDone(daemon);
+});
+
+void test("T2 (h): every status, up and down reply carries the sessionId of its selection", async (t) => {
+  const fixture = makeDirs();
+  const daemon = await startDaemon(daemonParts(fixture).options);
+  t.after(() => cleanupDaemon(daemon));
+  const id = sessionOf(fixture);
+  assert.equal(sessionIdOfReply(await sendRequest(daemon.socketPath, { id: "h-s", method: "status", params: selectedBy(fixture.ws) })), id);
+  assert.equal(sessionIdOfReply(await sendRequest(daemon.socketPath, upRequest("h-u", fixture.ws))), id);
+  assert.equal(sessionIdOfReply(await sendRequest(daemon.socketPath, { id: "h-d", method: "down", params: selectedBy(fixture.ws) })), id);
+});
+
+void test("T2 (i): onAuditHead is called with A's id on A's create and again on A's destroy", async (t) => {
+  const fixture = makeDirs();
+  const calls: string[] = [];
+  const daemon = await startDaemon(
+    daemonParts(fixture, {
+      onAuditHead: (sessionId) => {
+        calls.push(sessionId);
+      },
+    }).options,
+  );
+  t.after(() => cleanupDaemon(daemon));
+  const id = sessionOf(fixture);
+  await sendRequest(daemon.socketPath, upRequest("i-up", fixture.ws));
+  await sendRequest(daemon.socketPath, { id: "i-down", method: "down", params: selectedBy(fixture.ws) });
+  assert.deepEqual(calls, [id, id]);
+});
+
+void test("T2 (j): a down that names no live session on an empty daemon resolves done; with B live it does not stop the daemon", async (t) => {
+  const fixture = makeDirs();
+  const empty = await startDaemon(daemonParts(fixture).options);
+  t.after(() => cleanupDaemon(empty));
+  await sendRequest(empty.socketPath, { id: "j-down", method: "down", params: selectedBy(fixture.ws) });
+  await awaitDone(empty);
+
+  const other = makeDirs();
+  const [a, b] = ["a", "b"].map((name) => projectDir(other, name));
+  const live = await startDaemon(daemonParts(other, wideOptions(other)).options);
+  t.after(() => cleanupDaemon(live));
+  await sendRequest(live.socketPath, upRequest("j-b", b!));
+  let stopped = false;
+  live.done.then(() => {
+    stopped = true;
+  }, () => undefined);
+  await sendRequest(live.socketPath, { id: "j-na", method: "down", params: selectedBy(a!) });
+  await pause(50);
+  assert.equal(stopped, false, "B is live, so the daemon keeps running");
+  assert.equal(snapshotStateOf(await sendRequest(live.socketPath, { id: "j-sb", method: "status", params: selectedBy(b!) })), "active");
+});
+
+void test("T2 (k): the object startDaemon resolves to has no handle key, and session(id) returns the entry", async (t) => {
+  const fixture = makeDirs();
+  const daemon = await startDaemon(daemonParts(fixture).options);
+  t.after(() => cleanupDaemon(daemon));
+  assert.equal(Object.keys(daemon).includes("handle"), false);
+  await sendRequest(daemon.socketPath, upRequest("k-up", fixture.ws));
+  const entry = daemon.session(sessionOf(fixture));
+  assert.notEqual(entry, undefined);
+  assert.equal(entry?.sessionId, sessionOf(fixture));
+});
+
+void test("T2 (d): a lock taken through A's handle is absent from B's lock table", async (t) => {
+  const fixture = makeDirs();
+  const daemon = await startDaemon(daemonParts(fixture, wideOptions(fixture)).options);
+  t.after(() => cleanupDaemon(daemon));
+  const [a, b] = ["a", "b"].map((name) => projectDir(fixture, name));
+  await sendRequest(daemon.socketPath, upRequest("d-ua", a!));
+  await sendRequest(daemon.socketPath, upRequest("d-ub", b!));
+  const target = join(a!, "doc.txt");
+  const entryA = entryOf(daemon, { ...fixture, ws: a! });
+  const entryB = entryOf(daemon, { ...fixture, ws: b! });
+  entryA.handle.locks.acquire(target, "owner-a");
+  assert.equal(entryA.handle.locks.isHeldBy(target, "owner-a"), true, "A's table holds the lock");
+  assert.equal(entryB.handle.locks.isHeldBy(target, "owner-a"), false, "B's table does not see it");
+});
+
+void test("T2 (g): a status without a selection is refused SCHEMA_INVALID", async (t) => {
+  const fixture = makeDirs();
+  const daemon = await startDaemon(daemonParts(fixture).options);
+  t.after(() => cleanupDaemon(daemon));
+  const reply = await sendRequest(daemon.socketPath, { id: "g-bare", method: "status" });
+  assert.deepEqual(reply, { id: "g-bare", error: { code: "SCHEMA_INVALID" } });
+});
+
+void test("T2 (g): a daemon refusal rejects with a RealmError carrying the daemon's code, message and causeCode over the real socket", async (t) => {
+  const fixture = makeDirs();
+  const daemon = await startDaemon(daemonParts(fixture).options);
+  t.after(() => cleanupDaemon(daemon));
+  await sendRequest(daemon.socketPath, upRequest("g-up", fixture.ws));
+  const raised: RealmError[] = [];
+  entryOf(daemon, fixture).handle.dispatcher.call = () => {
+    const refusal = makeRealmError("OPENSHELL_START_FAILED", "PODMAN_MACHINE_DOWN");
+    raised.push(refusal);
+    return Promise.reject(refusal);
+  };
+  const client = connectDaemon(daemon.socketPath, selectionOf(fixture.ws));
+  const error = await client.call({ exec: {} }).then(
+    () => undefined,
+    (cause: unknown) => cause,
+  );
+  client.close();
+  assert.ok(error instanceof RealmError, "the refusal arrives as a RealmError");
+  assert.equal(error.code, raised[0]?.code);
+  assert.equal(error.causeCode, "PODMAN_MACHINE_DOWN");
+  assert.equal(error.message, ERROR_CATALOGUE.OPENSHELL_START_FAILED.reason);
+});
+
+void test("T2 (g): a daemon refusal without a cause rejects with no causeCode property", async (t) => {
+  const fixture = makeDirs();
+  const daemon = await startDaemon(daemonParts(fixture).options);
+  t.after(() => cleanupDaemon(daemon));
+  await sendRequest(daemon.socketPath, upRequest("g-up2", fixture.ws));
+  entryOf(daemon, fixture).handle.dispatcher.call = () => Promise.reject(makeRealmError("TOOL_TIMEOUT"));
+  const client = connectDaemon(daemon.socketPath, selectionOf(fixture.ws));
+  const error = await client.call({ status: {} }).then(
+    () => undefined,
+    (cause: unknown) => cause,
+  );
+  client.close();
+  assert.ok(error instanceof RealmError, "the refusal arrives as a RealmError");
+  assert.equal(error.code, "TOOL_TIMEOUT");
+  assert.equal(Object.hasOwn(error, "causeCode"), false);
+});
+
+void test("T2 (g): a refused tool outcome rejects with its catalogue code", async (t) => {
+  const fixture = makeDirs();
+  const daemon = await startDaemon(daemonParts(fixture).options);
+  t.after(() => cleanupDaemon(daemon));
+  await sendRequest(daemon.socketPath, upRequest("g-up3", fixture.ws));
+  entryOf(daemon, fixture).handle.dispatcher.call = () =>
+    Promise.resolve<ToolOutcome>({ outcome: "refused", tool: "read", code: "POLICY_DENIED", retryable: false });
+  const client = connectDaemon(daemon.socketPath, selectionOf(fixture.ws));
+  const error = await client.call({ read: { path: "doc.txt", maxBytes: 16 } }).then(
+    () => undefined,
+    (cause: unknown) => cause,
+  );
+  client.close();
+  assert.ok(error instanceof RealmError, "the refusal arrives as a RealmError");
+  assert.equal(error.code, "POLICY_DENIED");
+  assert.equal(error.message, ERROR_CATALOGUE.POLICY_DENIED.reason);
+  assert.equal(Object.hasOwn(error, "causeCode"), false);
+});
+
+void test("T2 (g): a refused tool outcome that carries a causeCode rejects with that causeCode", async (t) => {
+  const fixture = makeDirs();
+  const daemon = await startDaemon(daemonParts(fixture).options);
+  t.after(() => cleanupDaemon(daemon));
+  await sendRequest(daemon.socketPath, upRequest("g-up4", fixture.ws));
+  entryOf(daemon, fixture).handle.dispatcher.call = () =>
+    Promise.resolve<ToolOutcome>({
+      outcome: "refused",
+      tool: "retry",
+      code: "OPENSHELL_START_FAILED",
+      retryable: true,
+      causeCode: "PODMAN_MACHINE_DOWN",
+    });
+  const client = connectDaemon(daemon.socketPath, selectionOf(fixture.ws));
+  const error = await client.call({ retry: {} }).then(
+    () => undefined,
+    (cause: unknown) => cause,
+  );
+  client.close();
+  assert.ok(error instanceof RealmError, "the refusal arrives as a RealmError");
+  assert.equal(error.code, "OPENSHELL_START_FAILED");
+  assert.equal(error.causeCode, "PODMAN_MACHINE_DOWN");
+  assert.equal(error.message, ERROR_CATALOGUE.OPENSHELL_START_FAILED.reason);
+});
+
+void test("T2 (g): up refused by the podman probe rejects with the probe code over the real socket", async (t) => {
+  const fixture = makeDirs();
+  const daemon = await startDaemon(
+    daemonParts(fixture, {
+      probe: () => Promise.resolve<PodmanProbeResult>({ ok: false, code: "PODMAN_MISSING", reason: "podman is missing" }),
+    }).options,
+  );
+  t.after(() => cleanupDaemon(daemon));
+  const client = connectDaemon(daemon.socketPath, selectionOf(fixture.ws));
+  const error = await client.up().then(
+    () => undefined,
+    (cause: unknown) => cause,
+  );
+  client.close();
+  assert.ok(error instanceof RealmError, "the refusal arrives as a RealmError");
+  assert.equal(error.code, "PODMAN_MISSING");
+  assert.equal(error.message, ERROR_CATALOGUE.PODMAN_MISSING.reason);
 });
