@@ -45,6 +45,9 @@ import {
   OPENSHELL_OUTPUT_LIMIT_BYTES,
   OpenShellRunnerError,
   GATEWAY_SANDBOX_NAME_MAX_LENGTH,
+  OPENSHELL_MANAGED_LABEL_KEY,
+  OPENSHELL_MANAGED_LABEL_VALUE,
+  OPENSHELL_SANDBOX_NAME_LABEL_KEY,
   realmSandboxName,
   runOpenShellCreate,
   writePolicyDocument,
@@ -442,9 +445,10 @@ export class SessionExecution implements ExecutionService {
     let inspectCause: ErrorCode | undefined;
     try {
       const inspect = await this.libpod.inspectContainer(containerId);
-      const attached = inspect === null ? null : attachRuntimeEvidence(inspect, this.readOciConfig, this.readProcStatus);
       failed =
-        attached === null ? null : [...verifyInspect(binding, attached), ...liveCapabilityFailures(attached)];
+        inspect === null
+          ? null
+          : conformanceFailures(inspect, binding, { readOciConfig: this.readOciConfig, readProcStatus: this.readProcStatus });
     } catch (error) {
       failed = null;
       inspectCause = catalogueCodeOf(error);
@@ -472,6 +476,91 @@ export class SessionExecution implements ExecutionService {
 function isRunning(inspect: LibpodInspect): boolean {
   const state: unknown = inspect["State"];
   return typeof state === "object" && state !== null && Reflect.get(state, "Running") === true;
+}
+
+// Which property of a session container the adoption verdict refused it for. The identity properties are checked first, in
+// this order; the rest are the create-time conformance properties.
+export type IdentityProperty = "container-id" | "sandbox-name" | "managed-label" | "sandbox-name-label" | "running";
+export type SessionProperty = IdentityProperty | HardeningProperty | LiveProperty;
+
+// The non-destructive verdict on one container. A refusal names the first failed property and carries the catalogue code the
+// create path refuses that property with, OPENSHELL_START_FAILED. A verdict removes nothing.
+export type SessionVerdict =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly property: SessionProperty; readonly causeCode: "OPENSHELL_START_FAILED" };
+
+// The host readers the conformance checks use. The create path and the verdict take the same ones.
+export interface ConformanceReaders {
+  readonly readOciConfig: (path: string) => string;
+  readonly readProcStatus: (pid: number) => string;
+}
+
+// What a container must be to be the adopted sandbox of a session: the session, the container id its record names, and the
+// binding its mounts derive from.
+export interface SessionExpectation extends ConformanceReaders {
+  readonly sessionId: string;
+  readonly containerId: string;
+  readonly binding: HardeningBinding;
+}
+
+// The adoption verdict over one libpod inspect, or over null when the engine reports no such container. It checks the identity
+// the record and the realm sandbox name give the container (container id, sandbox name, both labels, running), then every
+// conformance property the create path checks. It reads host evidence and removes nothing; the caller decides what a refusal means.
+export function verdictOf(inspect: LibpodInspect | null, expect: SessionExpectation): SessionVerdict {
+  if (inspect === null) {
+    return refusedBy("container-id");
+  }
+  const identity = identityFailureOf(inspect, expect.containerId, realmSandboxName(expect.sessionId));
+  if (identity !== undefined) {
+    return refusedBy(identity);
+  }
+  const [first] = conformanceFailures(inspect, expect.binding, expect);
+  return first === undefined ? { ok: true } : refusedBy(first);
+}
+
+function refusedBy(property: SessionProperty): SessionVerdict {
+  return { ok: false, property, causeCode: "OPENSHELL_START_FAILED" };
+}
+
+// The first identity property the inspect does not carry for this session's container, or undefined when all of them hold.
+function identityFailureOf(inspect: LibpodInspect, containerId: string, sandbox: string): IdentityProperty | undefined {
+  if (inspect["Id"] !== containerId) {
+    return "container-id";
+  }
+  if (!nameIs(inspect, sandbox)) {
+    return "sandbox-name";
+  }
+  if (!hasLabel(inspect, OPENSHELL_MANAGED_LABEL_KEY, OPENSHELL_MANAGED_LABEL_VALUE)) {
+    return "managed-label";
+  }
+  if (!hasLabel(inspect, OPENSHELL_SANDBOX_NAME_LABEL_KEY, sandbox)) {
+    return "sandbox-name-label";
+  }
+  return isRunning(inspect) ? undefined : "running";
+}
+
+// The container name, which libpod reports bare. A leading slash, if present, is removed once, as the driver's own check does.
+function nameIs(inspect: LibpodInspect, sandbox: string): boolean {
+  const name: unknown = inspect["Name"];
+  return typeof name === "string" && name.replace(/^\//, "") === sandbox;
+}
+
+// True when Config.Labels holds the key with exactly this value.
+function hasLabel(inspect: LibpodInspect, key: string, value: string): boolean {
+  const config: unknown = inspect["Config"];
+  const labels: unknown = typeof config === "object" && config !== null ? Reflect.get(config, "Labels") : undefined;
+  return typeof labels === "object" && labels !== null && Reflect.get(labels, key) === value;
+}
+
+// The create-time conformance: every hardening property, then the live capability sets, in report order. The first entry names
+// the refusal. The host evidence is attached first, so a property whose evidence cannot be read fails closed.
+function conformanceFailures(
+  inspect: LibpodInspect,
+  binding: HardeningBinding,
+  readers: ConformanceReaders,
+): readonly (HardeningProperty | LiveProperty)[] {
+  const attached = attachRuntimeEvidence(inspect, readers.readOciConfig, readers.readProcStatus);
+  return [...verifyInspect(binding, attached), ...liveCapabilityFailures(attached)];
 }
 
 // Throws AGENTOS_STOP_FAILED when any stop step failed. The cause is the first defined cause code among the failed steps, in

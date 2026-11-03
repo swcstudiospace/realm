@@ -20,7 +20,10 @@ import {
   buildPolicyDocument,
   GATEWAY_SANDBOX_NAME_MAX_LENGTH,
   OPENSHELL_BINARY,
+  OPENSHELL_MANAGED_LABEL_KEY,
+  OPENSHELL_MANAGED_LABEL_VALUE,
   OPENSHELL_OUTPUT_LIMIT_BYTES,
+  OPENSHELL_SANDBOX_NAME_LABEL_KEY,
   OpenShellRunnerError,
   REALM_SANDBOX_NAME_PREFIX,
   realmSandboxName,
@@ -34,11 +37,18 @@ import {
   type SessionContainers,
   selectOpenShellEnvironment,
   spawnOpenShellRunner,
+  verdictOf,
+  type SessionExpectation,
 } from "../../src/runtime/session-execution.js";
 import { FakeAgentOsDriver } from "../support/fake-agentos.js";
 import { FakeContainerStore, FakeLibpod } from "../support/fake-libpod.js";
 import { FakeOpenShell } from "../support/fake-openshell.js";
-import { CONFORMING_PROC_STATUS, RUNTIME_KEYCTL_ALLOWED_OCI_CONFIG_TEXT, RUNTIME_OCI_CONFIG_TEXT } from "./hardening-fixtures.js";
+import {
+  CONFORMING_PROC_STATUS,
+  procStatusOf,
+  RUNTIME_KEYCTL_ALLOWED_OCI_CONFIG_TEXT,
+  RUNTIME_OCI_CONFIG_TEXT,
+} from "./hardening-fixtures.js";
 import { OCI_CONFIG_PATH, ociReaderOf, STATIC_DIR } from "./seccomp-fixtures.js";
 import { pollUntil, scaledMs } from "../support/timing.js";
 import { FakeBridge } from "../support/fake-bridge.js";
@@ -1503,4 +1513,152 @@ void test("RT-03, RT-04, D-18: a session named s1 gets its own sandbox: create, 
   const everyName = [...argvs, ...spawned].flat();
   assert.equal(everyName.includes("realm-daemon"), false, "no argv names the daemon's sandbox");
   assert.equal(everyName.some((token) => token.startsWith("realm-daemon")), false);
+});
+
+// ---- Adoption verdict (Phase 19, D19-1) ---------------------------------------------------------------------------------
+
+// The container id a session's record names in these tests. The verdict compares it with the inspect's Id.
+const ADOPTED_CONTAINER = "adopted-container-01";
+
+// What the verdict checks a container against: the session, the record's container id, the binding its mounts derive from,
+// and the host readers, which the conforming fixtures serve.
+function expectationOf(f: Fixture, sessionId: string, status = ZERO_STATUS): SessionExpectation {
+  return {
+    sessionId,
+    containerId: ADOPTED_CONTAINER,
+    binding: { image: IMAGE, rootless: true, ...sessionBinding(f, sessionId) },
+    readOciConfig: ociReaderOf(RUNTIME_OCI_CONFIG_TEXT),
+    readProcStatus: () => status,
+  };
+}
+
+// A libpod inspect of a session's sandbox container that the verdict accepts: the container id, the realm sandbox name in the
+// container name, both OpenShell labels, running, and every conformance property. Each shape field replaces its value.
+interface AdoptableShape {
+  readonly id?: string;
+  readonly name?: string;
+  readonly labels?: Readonly<Record<string, string>>;
+  readonly running?: boolean;
+  readonly hostOverrides?: Readonly<Record<string, unknown>>;
+}
+
+function adoptableInspect(f: Fixture, sessionId: string, shape: AdoptableShape = {}): Record<string, unknown> {
+  const sandbox = realmSandboxName(sessionId);
+  return {
+    ...conformingInspect(f, shape.hostOverrides ?? {}, sessionBinding(f, sessionId)),
+    Id: shape.id ?? ADOPTED_CONTAINER,
+    Name: shape.name ?? sandbox,
+    State: { Running: shape.running ?? true, Status: "running", Pid: 4242 },
+    Config: {
+      User: HARDENING_PROFILE.workloadUser,
+      Labels: shape.labels ?? {
+        [OPENSHELL_MANAGED_LABEL_KEY]: OPENSHELL_MANAGED_LABEL_VALUE,
+        [OPENSHELL_SANDBOX_NAME_LABEL_KEY]: sandbox,
+      },
+    },
+  };
+}
+
+void test("D19-1: the adoption verdict accepts a container that carries every identity and conformance property", async (t) => {
+  const f = await fixture(t);
+  assert.deepEqual(verdictOf(adoptableInspect(f, SESSION), expectationOf(f, SESSION)), { ok: true });
+});
+
+void test("D19-1: the adoption verdict accepts the container name with the leading slash libpod may add", async (t) => {
+  const f = await fixture(t);
+  const inspect = adoptableInspect(f, SESSION, { name: `/${realmSandboxName(SESSION)}` });
+  assert.deepEqual(verdictOf(inspect, expectationOf(f, SESSION)), { ok: true });
+});
+
+void test("D19-1: the adoption verdict refuses a container that is absent, with the container id property", async (t) => {
+  const f = await fixture(t);
+  assert.deepEqual(verdictOf(null, expectationOf(f, SESSION)), {
+    ok: false,
+    property: "container-id",
+    causeCode: "OPENSHELL_START_FAILED",
+  });
+});
+
+void test("D19-1: the adoption verdict refuses a container whose id is not the record's container id", async (t) => {
+  const f = await fixture(t);
+  const inspect = adoptableInspect(f, SESSION, { id: "some-other-container" });
+  assert.deepEqual(verdictOf(inspect, expectationOf(f, SESSION)), {
+    ok: false,
+    property: "container-id",
+    causeCode: "OPENSHELL_START_FAILED",
+  });
+});
+
+void test("D19-1: the adoption verdict refuses a container whose name is not the session's realm sandbox name", async (t) => {
+  const f = await fixture(t);
+  const inspect = adoptableInspect(f, SESSION, { name: "realm-another-session" });
+  assert.deepEqual(verdictOf(inspect, expectationOf(f, SESSION)), {
+    ok: false,
+    property: "sandbox-name",
+    causeCode: "OPENSHELL_START_FAILED",
+  });
+});
+
+void test("D19-1: the adoption verdict refuses a container without the OpenShell managed label", async (t) => {
+  const f = await fixture(t);
+  const sandbox = realmSandboxName(SESSION);
+  const inspect = adoptableInspect(f, SESSION, {
+    labels: { [OPENSHELL_MANAGED_LABEL_KEY]: "false", [OPENSHELL_SANDBOX_NAME_LABEL_KEY]: sandbox },
+  });
+  assert.deepEqual(verdictOf(inspect, expectationOf(f, SESSION)), {
+    ok: false,
+    property: "managed-label",
+    causeCode: "OPENSHELL_START_FAILED",
+  });
+});
+
+void test("D19-1: the adoption verdict refuses a container whose sandbox-name label is not the session's realm sandbox name", async (t) => {
+  const f = await fixture(t);
+  const inspect = adoptableInspect(f, SESSION, {
+    labels: { [OPENSHELL_MANAGED_LABEL_KEY]: OPENSHELL_MANAGED_LABEL_VALUE, [OPENSHELL_SANDBOX_NAME_LABEL_KEY]: "realm-other" },
+  });
+  assert.deepEqual(verdictOf(inspect, expectationOf(f, SESSION)), {
+    ok: false,
+    property: "sandbox-name-label",
+    causeCode: "OPENSHELL_START_FAILED",
+  });
+});
+
+void test("D19-1: the adoption verdict refuses a container that is not running", async (t) => {
+  const f = await fixture(t);
+  assert.deepEqual(verdictOf(adoptableInspect(f, SESSION, { running: false }), expectationOf(f, SESSION)), {
+    ok: false,
+    property: "running",
+    causeCode: "OPENSHELL_START_FAILED",
+  });
+});
+
+void test("D19-1: the adoption verdict refuses a container that fails one hardening check, with that property", async (t) => {
+  const f = await fixture(t);
+  const inspect = adoptableInspect(f, SESSION, { hostOverrides: { Privileged: true } });
+  assert.deepEqual(verdictOf(inspect, expectationOf(f, SESSION)), {
+    ok: false,
+    property: "privileged",
+    causeCode: "OPENSHELL_START_FAILED",
+  });
+});
+
+void test("D19-1: the adoption verdict refuses a container that holds a capability in its live init process", async (t) => {
+  const f = await fixture(t);
+  const status = procStatusOf({ CapEff: "0000000000000001" });
+  assert.deepEqual(verdictOf(adoptableInspect(f, SESSION), expectationOf(f, SESSION, status)), {
+    ok: false,
+    property: "cap-drop",
+    causeCode: "OPENSHELL_START_FAILED",
+  });
+});
+
+void test("D19-1: the adoption verdict checks identity before conformance, so the first failure is the identity one", async (t) => {
+  const f = await fixture(t);
+  const inspect = adoptableInspect(f, SESSION, { id: "some-other-container", hostOverrides: { Privileged: true } });
+  assert.deepEqual(verdictOf(inspect, expectationOf(f, SESSION)), {
+    ok: false,
+    property: "container-id",
+    causeCode: "OPENSHELL_START_FAILED",
+  });
 });
