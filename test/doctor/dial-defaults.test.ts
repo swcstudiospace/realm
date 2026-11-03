@@ -50,7 +50,7 @@ void test("Q0-003: the doctor socket dialer resolves when a listener accepts the
   const path = join(socketDir(t), "control.sock");
   const server = await listenAt(path);
   closeAfter(t, server);
-  assert.equal(await defaultConnectSocket(path, 1000).then((outcome: unknown) => outcome), undefined);
+  await assert.doesNotReject(defaultConnectSocket(path, 1000));
 });
 
 void test("Q0-003: the doctor socket dialer rejects with the socket's own ENOENT error when the socket is absent", async (t) => {
@@ -82,7 +82,7 @@ void test("Q0-003: the driver dialer resolves when the driver socket accepts the
   const path = join(socketDir(t), "driver.sock");
   const server = await listenAt(path);
   closeAfter(t, server);
-  assert.equal(await defaultConnectDriver(path, 1000).then((outcome: unknown) => outcome), undefined);
+  await assert.doesNotReject(defaultConnectDriver(path, 1000));
 });
 
 void test("Q0-016: a driver socket that is absent rejects with OPENSHELL_GATEWAY_LOST", async (t) => {

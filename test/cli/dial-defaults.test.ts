@@ -39,7 +39,7 @@ void test("Q0-003: the CLI dialer resolves when a listener accepts the connectio
         });
       }),
   );
-  assert.equal(await defaultConnectSocket(path, 1000).then((outcome: unknown) => outcome), undefined);
+  await assert.doesNotReject(defaultConnectSocket(path, 1000));
 });
 
 void test("Q0-003: the CLI dialer rejects with the socket's own ENOENT error when the socket is absent", async (t) => {
