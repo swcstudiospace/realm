@@ -54,6 +54,7 @@ import { HYDRATE_CONCURRENCY } from "../../src/lifecycle/controller.js";
 import { bindRoot, PinnedRoot } from "../../src/fs/root.js";
 import type { PodmanProbeResult } from "../../src/runtime/podman-probe.js";
 import { controlSocketPath } from "../../src/session/paths.js";
+import { currentBootId, writeRunnerRecord } from "../../src/session/runner-record.js";
 import type { ToolOutcome } from "../../src/tools/dispatch.js";
 import { FakeBridge } from "../support/fake-bridge.js";
 import { FakeExecutionService } from "../support/fake-execution.js";
@@ -306,9 +307,11 @@ function awaitDone(daemon: StartedDaemon): Promise<void> {
   return boundedWait(daemon.done, "daemon done");
 }
 
+// Stops the daemon and waits for its done, each within a bound, so a teardown that does not finish fails here instead of hanging
+// the file. A case that holds a start releases it before this runs, so no teardown waits on a held call.
 async function cleanupDaemon(daemon: StartedDaemon): Promise<void> {
   try {
-    await daemon.stop();
+    await boundedWait(daemon.stop(), "daemon stop during cleanup");
   } catch {
     // A teardown that failed still leaves the daemon stopped; its failure is reported through done.
   }
@@ -2799,6 +2802,24 @@ function orphanContainer(containerId: string): ContainerSeed {
   };
 }
 
+// A pid no process can hold: Linux caps pids at 4194304, so this names no live runner. The daemon tests run no runner process
+// (their exec is a double), so a survivor's runner record names this pid with the current boot id. The hydration proof reads an
+// absent leader in an empty group, so the survivor hydrates. The cases that signal a live runner are in adopt-hydrate.test.ts.
+const ABSENT_RUNNER_PID = 4194305;
+
+// Writes the runner record a previous daemon leaves for a survivor whose runner is no longer running (see ABSENT_RUNNER_PID).
+function recordAbsentRunner(stateDir: string, sessionId: string): void {
+  const bootId = currentBootId();
+  assert.ok(bootId !== null, "the boot id is readable on this host");
+  writeRunnerRecord(stateDir, sessionId, {
+    schema: 1,
+    pid: ABSENT_RUNNER_PID,
+    pgid: ABSENT_RUNNER_PID,
+    startTicks: 0,
+    bootId,
+  });
+}
+
 // Makes a session's container a survivor of an earlier daemon: the exec double holds it, the record names it, and the libpod
 // double lists it under the session's sandbox. Returns its container id.
 async function seedSurvivor(fixture: Fixture, parts: DaemonParts, workspaceRoot: string): Promise<string> {
@@ -2813,6 +2834,7 @@ async function seedSurvivor(fixture: Fixture, parts: DaemonParts, workspaceRoot:
     containerId,
   });
   writeWorkspaceEntry(fixture.stateDir, bindRoot(workspaceRoot), sessionId);
+  recordAbsentRunner(fixture.stateDir, sessionId);
   parts.containers.seed(survivorOf(sandboxRootsOf(fixture, workspaceRoot), sessionId, containerId));
   return containerId;
 }
@@ -3142,15 +3164,23 @@ void test("a session whose hydration exceeds startupBudgetMs fails with STARTUP_
   await seedSurvivor(fixture, parts, b);
   // The first start never returns until the test releases it, so that session exceeds its budget.
   const release = parts.exec.holdNext("start");
-  t.after(release);
   const daemon = await startDaemon(parts.options);
   t.after(() => cleanupDaemon(daemon));
+  // Registered after the cleanup, so it runs first: after tests run last-in, and a held start must be released before the stop.
+  t.after(release);
   assert.equal(firstReport(reports).failures, 1, "one hydration failed");
   const entries = [a, b].map((dir) => {
     const entry = daemon.session(selectionOf(dir).sessionId);
     assert.ok(entry !== undefined, "the session is registered");
     return entry;
   });
+  // The startup report counts the failure when the start budget expires, and the session records its error in its own controller
+  // when that controller's budget fires. The state can therefore lag the report, so the state is awaited, bounded, before it is read.
+  await pollUntil(
+    () => entries.filter((entry) => entry.handle.controller.snapshot().state === "error").length === 1,
+    "the session that exceeded its budget reaches error",
+    { timeoutMs: 10_000 },
+  );
   const failed = entries.filter((entry) => entry.handle.controller.snapshot().state === "error");
   const healthy = entries.filter((entry) => entry.handle.controller.snapshot().state === "active");
   assert.equal(failed.length, 1, "the session that exceeded its budget is in error");

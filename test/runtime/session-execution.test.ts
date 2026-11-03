@@ -1,5 +1,6 @@
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
@@ -51,7 +52,7 @@ import {
   RUNTIME_OCI_CONFIG_TEXT,
 } from "./hardening-fixtures.js";
 import { OCI_CONFIG_PATH, ociReaderOf, STATIC_DIR } from "./seccomp-fixtures.js";
-import { pollUntil, scaledMs } from "../support/timing.js";
+import { boundedWait, pollUntil, scaledMs } from "../support/timing.js";
 import { FakeBridge } from "../support/fake-bridge.js";
 
 const SESSION = "sess-01";
@@ -452,11 +453,12 @@ void test("RT-05, RT-03: a create for the daemon's session writes only that sess
 void test("RT-04, D-18: a session start runs the AgentOS runner as an exec child in the session's sandbox, and starts only after its probe exits 0", async (t) => {
   const f = await fixture(t);
   const spawned: (readonly string[])[] = [];
-  const child: RunnerChild = {
-    hasExited: () => false,
-    exited: new Promise<void>(() => undefined),
-    terminate: () => Promise.resolve(),
-  };
+  const child = sleepingRunner(t);
+  // The runner records of this test go to a directory of its own, removed when the test ends.
+  const runnerStateDir = mkdtempSync(join(tmpdir(), "realm-runner-state-"));
+  t.after(() => {
+    rmSync(runnerStateDir, { recursive: true, force: true });
+  });
   const driver = createOpenShellAgentOsDriver({
     runner: f.openshell.runner,
     spawnRunner: (argv) => {
@@ -466,6 +468,7 @@ void test("RT-04, D-18: a session start runs the AgentOS runner as an exec child
     startTimeoutMs: 10_000,
     callTimeoutMs: 1000,
     driverSocketPath: "/nonexistent-realm-driver/driver.sock",
+    stateDir: runnerStateDir,
     probeIntervalMs: 1,
   });
   const supervisor = new AgentOsSupervisor({ driver, sessionId: SESSION, callTimeoutMs: 10_000, random: () => 0, sleep: () => Promise.resolve(), now: () => 0 });
@@ -1473,11 +1476,12 @@ void test("RT-03, RT-04, D-18: a session named s1 gets its own sandbox: create, 
   const f = await fixture(t);
   const name = realmSandboxName("s1");
   const spawned: (readonly string[])[] = [];
-  const child: RunnerChild = {
-    hasExited: () => false,
-    exited: new Promise<void>(() => undefined),
-    terminate: () => Promise.resolve(),
-  };
+  const child = sleepingRunner(t);
+  // The runner records of this test go to a directory of its own, removed when the test ends.
+  const runnerStateDir = mkdtempSync(join(tmpdir(), "realm-runner-state-"));
+  t.after(() => {
+    rmSync(runnerStateDir, { recursive: true, force: true });
+  });
   const driver = createOpenShellAgentOsDriver({
     runner: f.openshell.runner,
     spawnRunner: (argv) => {
@@ -1487,6 +1491,7 @@ void test("RT-03, RT-04, D-18: a session named s1 gets its own sandbox: create, 
     startTimeoutMs: 10_000,
     callTimeoutMs: 1000,
     driverSocketPath: "/nonexistent-realm-driver/driver.sock",
+    stateDir: runnerStateDir,
     probeIntervalMs: 1,
   });
   // One supervisor per session, the same object for the same session on every call.
@@ -1689,3 +1694,40 @@ void test("D19-1: the adoption verdict checks identity before conformance, so th
     causeCode: "OPENSHELL_START_FAILED",
   });
 });
+
+// A runner stand-in for the driver fixtures: a sleeping process that leads its own process group, as the production spawn
+// makes the runner, so the record the driver writes names a live leader. The test kills the group when it ends and waits for
+// the process to exit, so nothing outlives the test.
+function sleepingRunner(t: TestContext): RunnerChild {
+  const proc = spawn("sleep", ["30"], { detached: true, stdio: "ignore" });
+  const exited = new Promise<void>((resolve) => {
+    proc.once("exit", () => {
+      resolve();
+    });
+    proc.once("error", () => {
+      resolve();
+    });
+  });
+  const killGroup = (): void => {
+    if (proc.pid !== undefined) {
+      try {
+        process.kill(-proc.pid, "SIGKILL");
+      } catch {
+        // The group is already gone.
+      }
+    }
+  };
+  t.after(async () => {
+    killGroup();
+    await boundedWait(exited, "the runner stand-in exits", 5000);
+  });
+  return {
+    pid: proc.pid,
+    hasExited: () => proc.exitCode !== null || proc.signalCode !== null,
+    exited,
+    terminate: async () => {
+      killGroup();
+      await boundedWait(exited, "the runner stand-in exits", 5000);
+    },
+  };
+}

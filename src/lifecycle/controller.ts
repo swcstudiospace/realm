@@ -23,6 +23,7 @@ import { PinnedRoot, verifyPinnedAt } from "../fs/root.js";
 import { realmSandboxName } from "../runtime/openshell.js";
 import { controlSocketPath } from "../session/paths.js";
 import type { SessionStore } from "../session/store.js";
+import { currentBootId, groupHasMembers, readRunnerRecord, RUNNER_STOP_GRACE_MS, stopRecordedRunner } from "../session/runner-record.js";
 import { readWorkspaceEntry } from "../session/workspace-registry.js";
 import { type GateOutcome, gateMutation } from "./mutation-gate.js";
 
@@ -132,6 +133,13 @@ export interface LifecycleDeps {
   readonly pinnedRoot: PinnedRoot;
   // The teardown bound in milliseconds. The default is TEARDOWN_TIMEOUT_MS.
   readonly teardownTimeoutMs?: number;
+  // The runner stop of a hydration (runner-record.ts). The grace is the time the recorded group gets after SIGTERM, and
+  // groupLive reports whether any live process still holds a process group. Both default to the production values. Tests
+  // inject a short grace, and a group probe to model a group that survives SIGKILL.
+  readonly runnerStop?: {
+    readonly graceMs?: number;
+    readonly groupLive?: (pgid: number) => boolean;
+  };
 }
 
 export class LifecycleController {
@@ -468,6 +476,16 @@ export class LifecycleController {
           return this.machine.snapshot();
         }
       }
+      // Before the survivor starts, the runner of the previous life must be proven gone (runner-record.ts). A refusal throws
+      // here, and failHydrate removes the survivor through the teardown path, so no runner shares its sandbox.
+      await withTimeout(
+        this.proveRunnerStopped(),
+        Math.max(0, deadline - performance.now()),
+        "STARTUP_BUDGET_EXCEEDED",
+      );
+      if (!this.ownsStartup(epoch)) {
+        return this.machine.snapshot();
+      }
       this.checkDeadline(deadline);
       const start = this.issueStart(containerId);
       issued.start = start;
@@ -497,6 +515,21 @@ export class LifecycleController {
     this.machine.transition("active", "container running");
     this.writeState();
     return this.machine.snapshot();
+  }
+
+  // Proves the runner of the session's previous life gone (runner-record.ts). The record must be from this boot, and the
+  // recorded group must be empty once the stop settles. A missing, unreadable or other-boot record refuses without any signal,
+  // as does a stop that cannot prove the group empty. The refusal is OPENSHELL_START_FAILED, the code a failed start records.
+  private async proveRunnerStopped(): Promise<void> {
+    const record = readRunnerRecord(this.deps.store.stateDir, this.deps.sessionId);
+    if (record === null || record.bootId !== currentBootId()) {
+      throw makeRealmError("OPENSHELL_START_FAILED");
+    }
+    const graceMs = this.deps.runnerStop?.graceMs ?? RUNNER_STOP_GRACE_MS;
+    const groupLive = this.deps.runnerStop?.groupLive ?? groupHasMembers;
+    if (!(await stopRecordedRunner(record, graceMs, groupLive))) {
+      throw makeRealmError("OPENSHELL_START_FAILED");
+    }
   }
 
   // Host attachments change no state and no record. Attaching the same id twice is

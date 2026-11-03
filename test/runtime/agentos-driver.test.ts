@@ -1,6 +1,7 @@
-import { test, type TestContext } from "node:test";
+import { after, test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawn, type ChildProcess } from "node:child_process";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative } from "node:path";
@@ -14,6 +15,7 @@ import {
 } from "../../src/runtime/agentos-driver.js";
 import type { RunnerChild } from "../../src/runtime/agentos-workload.js";
 import { OPENSHELL_BINARY, type OpenShellRunner } from "../../src/runtime/openshell.js";
+import { boundedWait } from "../support/timing.js";
 
 const SESSION = "sess-driver";
 const RUNNER = "/usr/local/lib/realm/agentos-runner.js";
@@ -57,6 +59,10 @@ interface Answers {
   readonly noDriverSocket?: boolean;
   // Holds every probe until the test releases it, so a stop can overtake a start that is waiting for its runner.
   readonly probeGate?: Promise<void>;
+  // Builds the driver with no stateDir, so no runner record can be written: the start must be refused before any spawn.
+  readonly noStateDir?: boolean;
+  // The directory the runner records go to. Default: a fresh directory of the harness, removed when the file's tests end.
+  readonly stateDir?: string;
 }
 
 interface Recorded {
@@ -76,6 +82,8 @@ interface Harness {
   readonly calls: Recorded[];
   readonly spawns: string[][];
   readonly children: FakeChild[];
+  // The directory the runner records of this harness are written to.
+  readonly stateDir: string;
 }
 
 // Takes the scripted answer for the nth call. The last answer repeats once the script runs out.
@@ -85,7 +93,48 @@ function entry<T>(script: readonly T[], n: number): T {
   return value;
 }
 
+// The process groups the fake runner children stand for. Each child is a real sleeping process that leads its own group, as the
+// production spawn makes the runner, so the record the driver writes names a live leader. Every group is killed when this
+// file's tests end, so no process outlives them.
+const stubGroups = new Map<number, Promise<void>>();
+// The state directories of the harnesses that made their own.
+const stateDirs: string[] = [];
+// Kills every stand-in group, then awaits each process's real exit event, within a bound, so a stand-in that does not exit fails
+// the file instead of hanging it. The harnesses are not given a test context, so this file-level hook is their t.after.
+after(async () => {
+  for (const pid of stubGroups.keys()) {
+    killGroup(pid);
+  }
+  for (const exited of stubGroups.values()) {
+    await boundedWait(exited, "a runner stand-in exits", 5000);
+  }
+  for (const dir of stateDirs) {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+function killGroup(pid: number): void {
+  try {
+    process.kill(-pid, "SIGKILL");
+  } catch {
+    // The group is already gone.
+  }
+}
+
 function fakeChild(steps: string[]): FakeChild {
+  const proc: ChildProcess = spawn("sleep", ["30"], { detached: true, stdio: "ignore" });
+  const pid = proc.pid;
+  const reaped = new Promise<void>((resolve) => {
+    proc.once("exit", () => {
+      resolve();
+    });
+    proc.once("error", () => {
+      resolve();
+    });
+  });
+  if (pid !== undefined) {
+    stubGroups.set(pid, reaped);
+  }
   let exited = false;
   let markExited: () => void = () => undefined;
   const gone = new Promise<void>((resolve) => {
@@ -97,12 +146,22 @@ function fakeChild(steps: string[]): FakeChild {
     exited = true;
     markExited();
   };
+  proc.once("exit", end);
   return {
-    exit: end,
+    pid,
+    exit: () => {
+      if (pid !== undefined) {
+        killGroup(pid);
+      }
+      end();
+    },
     hasExited: () => exited,
     exited: gone,
     terminate: () => {
       steps.push("terminate");
+      if (pid !== undefined) {
+        killGroup(pid);
+      }
       end();
       return Promise.resolve();
     },
@@ -122,6 +181,10 @@ function gate(): { readonly open: Promise<void>; readonly release: () => void } 
 
 function harness(answers: Answers = {}): Harness {
   const steps: string[] = [];
+  const stateDir = answers.stateDir ?? mkdtempSync(join(tmpdir(), "realm-driver-state-"));
+  if (answers.stateDir === undefined) {
+    stateDirs.push(stateDir);
+  }
   const calls: Recorded[] = [];
   const spawns: string[][] = [];
   const children: FakeChild[] = [];
@@ -159,8 +222,9 @@ function harness(answers: Answers = {}): Harness {
     callTimeoutMs: TIMEOUT_MS,
     ...(answers.noDriverSocket === true ? {} : { driverSocketPath: answers.driverSocketPath ?? ABSENT_DRIVER_SOCKET }),
     probeIntervalMs: PROBE_INTERVAL_MS,
+    ...(answers.noStateDir === true ? {} : { stateDir }),
   };
-  return { options, steps, calls, spawns, children };
+  return { options, steps, calls, spawns, children, stateDir };
 }
 
 // The driver as the caller of one session sees it: every call names SESSION.
@@ -470,4 +534,49 @@ void test("OBS-04: a permission error from the driver socket is no answer, while
   assert.equal(answerOfConnectError("ECONNREFUSED"), false);
   assert.equal(answerOfConnectError("ENOENT"), false);
   assert.equal(answerOfConnectError(undefined), false, "an error with no code is a failed probe");
+});
+
+// The start ticks of a process, read from /proc here and not through the driver's parser: field 22, counted after the last ")".
+function startTicksFromProc(pid: number): number {
+  const text = readFileSync(`/proc/${String(pid)}/stat`, "utf8");
+  const fields = text.slice(text.lastIndexOf(")") + 2).split(" ");
+  return Number(fields[19]);
+}
+
+void test("a spawn writes a runner record whose pgid and start ticks match the live process", async () => {
+  const h = harness();
+  const driver = driverOf(h);
+  await driver.start();
+  const pid = childAt(h, 0).pid;
+  assert.ok(pid !== undefined, "the runner child has a pid");
+  const record = JSON.parse(readFileSync(join(h.stateDir, `${SESSION}.runner.json`), "utf8")) as {
+    schema: number;
+    pid: number;
+    pgid: number;
+    startTicks: number;
+  };
+  assert.equal(record.schema, 1);
+  assert.equal(record.pid, pid);
+  assert.equal(record.pgid, pid, "the runner leads its own process group");
+  assert.equal(record.startTicks, startTicksFromProc(pid));
+  await driver.stop();
+});
+
+void test("a failed record write kills the runner and fails the spawn", async () => {
+  // The state directory is a regular file, so the record cannot be written into it.
+  const blockerDir = mkdtempSync(join(tmpdir(), "realm-driver-block-"));
+  stateDirs.push(blockerDir);
+  const blocker = join(blockerDir, "not-a-directory");
+  writeFileSync(blocker, "x");
+  const h = harness({ stateDir: blocker });
+  await assertCode(driverOf(h).start(), "OPENSHELL_START_FAILED");
+  assert.deepEqual(h.steps, ["spawn", "terminate"], "the runner is stopped and no probe runs");
+  assert.equal(childAt(h, 0).hasExited(), true);
+});
+
+void test("a runner is never spawned without a state directory", async () => {
+  const h = harness({ noStateDir: true });
+  await assertCode(driverOf(h).start(), "OPENSHELL_START_FAILED");
+  assert.deepEqual(h.spawns, [], "no runner child is spawned");
+  assert.deepEqual(h.steps, []);
 });
