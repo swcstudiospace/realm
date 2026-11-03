@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { RealmError } from "../../src/core/errors.js";
 import type { EgressRule } from "../../src/contract/validate.js";
 import { buildPolicyDocument, writePolicyDocument } from "../../src/runtime/openshell.js";
+import { HARDENING_PROFILE } from "../../src/runtime/hardening.js";
 import { renderNetworkPolicies } from "../../src/runtime/egress.js";
 
 const SESSION = "sess-01";
@@ -37,12 +38,19 @@ void test("RT-03: the policy declares version 1, a hard-requirement Landlock, an
   assert.notEqual(document.process.run_as_user, "0");
 });
 
-void test("RT-03: the policy grants the workspace and /tmp read-write and the system paths read-only", () => {
+void test("RT-03: the policy grants the workspace, /tmp and the scratch mount point read-write and the system paths read-only", () => {
   const document = buildPolicyDocument(DENY, BINARY);
   assert.deepEqual(document.filesystem_policy, {
     read_only: ["/usr", "/bin", "/lib", "/lib64", "/etc", "/opt", "/proc", "/dev/urandom", "/dev/zero", "/dev/random"],
-    read_write: ["/workspace", "/tmp", "/dev/null"],
+    read_write: ["/workspace", "/tmp", HARDENING_PROFILE.scratchDestination, "/dev/null"],
   });
+});
+
+void test("RT-03: the policy grants the scratch mount point read-write and no other path beyond the workspace, /tmp and /dev/null", () => {
+  const scratch = HARDENING_PROFILE.scratchDestination;
+  const { read_write: readWrite } = buildPolicyDocument(DENY, BINARY).filesystem_policy;
+  assert.ok(readWrite.includes(scratch), `${scratch} is granted read-write`);
+  assert.deepEqual([...readWrite].sort(), ["/dev/null", "/tmp", "/workspace", scratch].sort());
 });
 
 void test("RT-03: /dev/null is the only writable device, and /dev/zero, /dev/random, /dev/urandom are read-only", () => {

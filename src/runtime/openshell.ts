@@ -24,6 +24,7 @@ import { bindRoot } from "../fs/root.js";
 import { isSessionId, recordFileName } from "../session/paths.js";
 import type { LibpodClient, LibpodContainerSummary } from "./libpod-client.js";
 import { renderNetworkPolicies, type NetworkPolicies } from "./egress.js";
+import { HARDENING_PROFILE } from "./hardening.js";
 
 export const OPENSHELL_BINARY = "openshell";
 // OpenShell labels every sandbox container it creates with the sandbox name and its own managed marker.
@@ -86,8 +87,9 @@ const SANDBOX_SYSTEM_READ_ONLY_PATHS: readonly string[] = Object.freeze([
   "/dev/zero",
   "/dev/random",
 ]);
-// The writable scratch paths besides the workspace. The native sidecar keeps temporary state in /tmp.
-const SANDBOX_SCRATCH_PATHS: readonly string[] = Object.freeze(["/tmp"]);
+// The writable scratch paths besides the workspace: the native sidecar keeps temporary state in /tmp, and the scratch volume
+// is mounted at the profile's scratch destination, which must also be writable.
+const SANDBOX_SCRATCH_PATHS: readonly string[] = Object.freeze(["/tmp", HARDENING_PROFILE.scratchDestination]);
 // The one writable device: shell redirects to /dev/null must succeed. No other device is writable.
 const SANDBOX_WRITABLE_DEVICE_PATHS: readonly string[] = Object.freeze(["/dev/null"]);
 
