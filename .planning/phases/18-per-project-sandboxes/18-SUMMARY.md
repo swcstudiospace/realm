@@ -62,12 +62,12 @@ The lane's style notes record a house rule against tiny functions (`ts-no-tiny-f
 
 ## Deviations
 
-Plan 06, recorded in the lane's reports and carried forward unchanged. This run did not re-audit them.
+Plan 06, as recorded by the lane and checked against the test suite. Items 2 to 4 are corrected: the assertions they describe exist and passed in the full gate run.
 
 1. T2 (d) needed a read-only `readonly locks: LockTable` on `RealmHandle` in `src/realm/compose.ts`, which is outside plan 06's file list.
-2. T2 (g): five real-socket cases were reinstated from `5b90aad^` and adapted. The client-side case "an up whose reply names another session is refused by the client" was not written.
-3. T2 (f): the no-control-request part is not asserted.
-4. T2 (i): the destroy line in `audit/<idA>.jsonl` is not asserted. The daemon writes no per-session destroy line; the `onAuditHead` callback fires instead.
+2. T2 (g): five real-socket cases were reinstated from `5b90aad^` and adapted. The client-side case is written: `test/daemon/client.test.ts`, 'up whose reply names another session is refused by the client with SCHEMA_INVALID'.
+3. T2 (f): the no-control-request part is asserted in `test/daemon/daemon.test.ts`, 'T2 (f): stop() on StartedDaemon with two sessions calls controller.stop for each and sends no control request'.
+4. T2 (i): the destroy line in `audit/<idA>.jsonl` is asserted in `test/daemon/daemon.test.ts` (the `session.destroy` lines). Its shape, `{tool: session.destroy, outcome: ok}`, is the lane's choice, because the contract names no shape. Owner review is needed against the audit schema.
 5. Behavior change: `startDaemon` no longer builds a handle eagerly. A handle-build refusal (for example, no libpod configured) now surfaces at `up`, not at start.
 6. `stopDaemon(reason?)` replaces the plan's `stop(id, socket, reason)` helper. A down that arms the stop replies through dispatch and writes nothing to a socket.
 7. A socket-removal failure in `done` now rejects with `SCHEMA_INVALID`, not a refused down reply.
