@@ -40,8 +40,10 @@ export const ERROR_CODES = Object.freeze([
   "OPENSHELL_GATEWAY_LOST",
 ] as const);
 
+// One of the catalogue codes listed in ERROR_CODES.
 export type ErrorCode = (typeof ERROR_CODES)[number];
 
+// The reason text shown for a catalogue code, and whether the caller may retry the failed operation.
 export interface CatalogueEntry {
   readonly reason: string;
   readonly retryable: boolean;

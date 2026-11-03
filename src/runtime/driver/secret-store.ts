@@ -24,7 +24,7 @@ import {
   writeSync,
   type Stats,
 } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { makeRealmError, RealmError, type ErrorCode } from "../../core/errors.js";
 import { CONTAINER_ID_PATTERN } from "../libpod-routes.js";
 import { isRealmSandboxName } from "../openshell.js";
@@ -126,9 +126,16 @@ export function presentSecretEntries(dir: string): string[] {
   return present;
 }
 
-// Removes the given secret entries. A directory is removed with its contents, without following a link inside it. An entry
-// already gone is not an error; any other failure is refused.
-export function removeSecretEntries(paths: readonly string[]): void {
+// Removes the given secret entries of one secret directory. Every path must be a direct child of that directory. All paths are
+// checked before any is removed, so one path outside the directory refuses the whole call with SCHEMA_INVALID and removes
+// nothing. A directory is removed with its contents, without following a link inside it. An entry already gone is not an
+// error; any other failure is refused.
+export function removeSecretEntries(dir: string, paths: readonly string[]): void {
+  for (const path of paths) {
+    if (join(dir, basename(path)) !== path) {
+      throw makeRealmError("SCHEMA_INVALID");
+    }
+  }
   for (const path of paths) {
     try {
       if (SECRET_DIR_NAMES.some((name) => path.endsWith(`/${name}`))) {
@@ -162,7 +169,7 @@ export function removeSecretDirIfEmpty(dir: string): void {
 // Removes one sandbox's secret entries and its directory when it is then empty.
 export function removeSandboxSecrets(root: string, sandboxName: string): void {
   const dir = secretDirOf(root, sandboxName);
-  removeSecretEntries(presentSecretEntries(dir));
+  removeSecretEntries(dir, presentSecretEntries(dir));
   removeSecretDirIfEmpty(dir);
 }
 
@@ -188,7 +195,7 @@ export function removeAllSecrets(root: string): void {
     }
   }
   for (const dir of dirs) {
-    removeSecretEntries(presentSecretEntries(dir));
+    removeSecretEntries(dir, presentSecretEntries(dir));
     removeSecretDirIfEmpty(dir);
   }
 }
@@ -237,7 +244,7 @@ function discardWritten(dir: string): void {
   const entries = SECRET_FILE_NAMES.map((name) => join(dir, name)).concat(SECRET_DIR_NAMES.map((name) => join(dir, name)));
   for (const entry of entries) {
     try {
-      removeSecretEntries([entry]);
+      removeSecretEntries(dir, [entry]);
     } catch {
       // Absent, or already removed by the failure. The directory removal below reports what remains.
     }

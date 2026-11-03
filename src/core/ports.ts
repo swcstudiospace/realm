@@ -8,13 +8,16 @@
 
 import type { ErrorCode } from "./errors.js";
 
+// What the execution service needs to create a sandbox. It carries no host environment.
 export interface CreateRequest {
   readonly idempotencyKey: string;
   readonly workspaceRoot: string;
 }
 
+// The result of probing a container: it is healthy or it is not.
 export type ProbeResult = "healthy" | "unhealthy";
 
+// The execution port: create, start, probe, stop and destroy a session's container. Implemented outside core.
 export interface ExecutionService {
   create(req: CreateRequest): Promise<{ readonly containerId: string }>;
   // sandbox is the session's realm sandbox name, always realm-<sessionId>. Callers pass it on every start, probe, stop and destroy.
@@ -30,6 +33,7 @@ export interface ExecutionService {
 
 export type BridgeKind = "up" | "down" | "mismatch";
 
+// One observation from the bridge: it came up, went down, or mismatched. code is set when the failure has one.
 export interface BridgeEvent {
   readonly kind: BridgeKind;
   readonly code?: ErrorCode;
@@ -37,6 +41,7 @@ export interface BridgeEvent {
   readonly at: string;
 }
 
+// The bridge port: a bounded handshake and the latest bridge event. The controller alone decides session state.
 export interface BridgePort {
   // One handshake attempt sequence bounded by deadlineMs. Rejects when the deadline expires
   // or the handshake fails; the caller maps the rejection to a fixed code.

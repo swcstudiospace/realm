@@ -4,6 +4,7 @@
 
 import { makeRealmError, type RealmError } from "./errors.js";
 
+// Every lifecycle state, in the order the transition table names them.
 export const STATES = Object.freeze([
   "unbound",
   "connecting",
@@ -13,8 +14,10 @@ export const STATES = Object.freeze([
   "stopping",
 ] as const);
 
+// One lifecycle state, a member of STATES.
 export type State = (typeof STATES)[number];
 
+// One allowed transition, as a from and to pair.
 export type Edge = readonly [from: State, to: State];
 
 // Object.freeze is shallow. Each edge is frozen as well as the outer array, the
@@ -43,6 +46,7 @@ export const ALLOWED_TRANSITIONS: readonly Edge[] = freezeEdges([
   ["stopping", "unbound"],
 ]);
 
+// True when the frozen transition table allows the move from one state to the other.
 export function isTransitionAllowed(from: State, to: State): boolean {
   return ALLOWED_TRANSITIONS.some(([f, t]) => f === from && t === to);
 }

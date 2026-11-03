@@ -1,8 +1,13 @@
-import { test } from "node:test";
+import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import type { Stats } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, type Stats } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createServer as createTlsServer, type Server as TlsServer } from "node:tls";
 import { loadRuntimeConfig } from "../../src/runtime/config.js";
 import {
+  defaultConnectGateway,
   driverSocketCheck,
   gatewayCheck,
   runtimeChecks,
@@ -247,17 +252,84 @@ void test("driver-socket fails when the socket is absent or the parent mode is w
 });
 
 void test("gateway passes when the endpoint accepts a connection and fails when it does not", async () => {
-  const passed = await gatewayCheck({ REALM_DRIVER_GATEWAY_ENDPOINT: "https://gateway.example:443" }, () => Promise.resolve(), 50);
+  const env = { REALM_DRIVER_GATEWAY_ENDPOINT: "https://gateway.example:443", REALM_DRIVER_GATEWAY_CA: "/etc/realm/gateway-ca.pem" };
+  const passed = await gatewayCheck(env, () => Promise.resolve(), 50);
   assert.equal(passed.status, "pass");
   assert.equal(passed.fix, null);
-  const failed = await gatewayCheck(
-    { REALM_DRIVER_GATEWAY_ENDPOINT: "https://gateway.example:443" },
-    () => Promise.reject(new Error("refused")),
-    50,
-  );
+  const failed = await gatewayCheck(env, () => Promise.reject(new Error("refused")), 50);
   assert.equal(failed.status, "fail");
   assert.match(failed.detail, /unreachable/);
   const unset = await gatewayCheck({}, () => Promise.resolve(), 50);
   assert.equal(unset.status, "fail");
   assert.match(unset.detail, /unset/);
+  const noCa = await gatewayCheck({ REALM_DRIVER_GATEWAY_ENDPOINT: "https://gateway.example:443" }, () => Promise.resolve(), 50);
+  assert.equal(noCa.status, "fail");
+  assert.match(noCa.detail, /REALM_DRIVER_GATEWAY_CA is unset/);
+});
+
+// A self-signed certificate for the loopback address, with its key. Node trusts it when it is given as the CA.
+function loopbackCertificate(t: TestContext, name: string): { readonly certPath: string; readonly certPem: string; readonly keyPem: string } {
+  const dir = mkdtempSync(join(tmpdir(), "realm-doctor-tls-"));
+  t.after(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const keyPath = join(dir, "key.pem");
+  const certPath = join(dir, "cert.pem");
+  execFileSync(
+    "openssl",
+    [
+      "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1", "-nodes",
+      "-keyout", keyPath, "-out", certPath, "-days", "1", "-subj", `/CN=${name}`,
+      "-addext", "subjectAltName=IP:127.0.0.1", "-addext", "basicConstraints=critical,CA:TRUE",
+      "-addext", "keyUsage=critical,digitalSignature,keyCertSign",
+    ],
+    { stdio: "ignore" },
+  );
+  return { certPath, certPem: readFileSync(certPath, "utf8"), keyPem: readFileSync(keyPath, "utf8") };
+}
+
+// A TLS listener on loopback that presents the certificate and closes each connection once the handshake completes.
+async function startTlsGateway(t: TestContext, certificate: { readonly certPem: string; readonly keyPem: string }): Promise<number> {
+  const server: TlsServer = createTlsServer({ cert: certificate.certPem, key: certificate.keyPem });
+  server.on("secureConnection", (socket) => {
+    socket.on("error", () => {
+      socket.destroy();
+    });
+    socket.end();
+  });
+  server.on("tlsClientError", () => undefined);
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      resolve();
+    });
+  });
+  t.after(() => {
+    server.close();
+  });
+  const address = server.address();
+  if (address === null || typeof address === "string") {
+    throw new Error("the TLS listener has no port");
+  }
+  return address.port;
+}
+
+void test("gateway verifies the presented certificate against REALM_DRIVER_GATEWAY_CA", async (t) => {
+  const gateway = loopbackCertificate(t, "gateway");
+  const foreign = loopbackCertificate(t, "foreign");
+  const port = await startTlsGateway(t, gateway);
+  const endpoint = `https://127.0.0.1:${String(port)}`;
+  const chains = await gatewayCheck(
+    { REALM_DRIVER_GATEWAY_ENDPOINT: endpoint, REALM_DRIVER_GATEWAY_CA: gateway.certPath },
+    defaultConnectGateway,
+    2000,
+  );
+  assert.equal(chains.status, "pass");
+  const notChaining = await gatewayCheck(
+    { REALM_DRIVER_GATEWAY_ENDPOINT: endpoint, REALM_DRIVER_GATEWAY_CA: foreign.certPath },
+    defaultConnectGateway,
+    2000,
+  );
+  assert.equal(notChaining.status, "fail");
+  assert.match(notChaining.detail, /unreachable/);
 });

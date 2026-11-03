@@ -551,3 +551,14 @@ void test("an over-bound tail fails closed with AUDIT_WRITE_FAILED and leaves th
     assert.equal(readFileSync(auditFile(stateDir), "utf8"), before);
   });
 });
+
+void test("Q0-011: a typed error from the anchor check is not reported as an unreadable file", () => {
+  withStateDir((stateDir) => {
+    const lines = seed(stateDir, 3);
+    // An empty anchored prefix makes checkAnchor throw a typed AnchorError (SCHEMA_INVALID).
+    const check = checkAuditFile(auditFile(stateDir), { anchor: { ...anchorOver(lines, 2), lineCount: 0 } });
+    assert.equal(check.exitCode, 2);
+    assert.equal(check.reason, undefined);
+    assert.equal(check.code, "SCHEMA_INVALID");
+  });
+});

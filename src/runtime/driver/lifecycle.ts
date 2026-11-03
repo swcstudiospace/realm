@@ -231,7 +231,7 @@ export class DriverLifecycle {
         throw makeRealmError("CLEANUP_FAILED");
       }
     }
-    removeSecretEntries(secretEntries);
+    removeSecretEntries(secretDir, secretEntries);
     removeSecretDirIfEmpty(secretDir);
   }
 

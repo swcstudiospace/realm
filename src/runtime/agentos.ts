@@ -272,11 +272,29 @@ export class AgentOsSupervisor {
       this.random,
     );
     // The wait is cancelled by stop(), so teardown never sits out a backoff delay.
-    await settle(() => this.sleep(delay), null, this.inFlight);
+    await this.backoff(delay);
   }
 
   private race<T>(work: () => Promise<T>): Promise<Settled<T>> {
     return settle(work, this.callTimeoutMs, this.inFlight);
+  }
+
+  // Waits out one backoff delay through the injected sleep. The delay bounds the wait, so it has no timeout of its own, and
+  // stop() cancels it through inFlight. Whatever the sleep does, the wait ends.
+  private backoff(delay: number): Promise<void> {
+    return new Promise<void>((resolve) => {
+      const cancel = (): void => {
+        finish();
+      };
+      const finish = (): void => {
+        this.inFlight.delete(cancel);
+        resolve();
+      };
+      this.inFlight.add(cancel);
+      Promise.resolve()
+        .then(() => this.sleep(delay))
+        .then(finish, finish);
+    });
   }
 
   // Holds the supervisor after a failed check, classifies the loss, and throws its code. Unlike recordFailure, it does not
@@ -331,7 +349,7 @@ export class AgentOsSupervisor {
 // abandoned, and its late result is ignored.
 function settle<T>(
   work: () => Promise<T>,
-  timeoutMs: number | null,
+  timeoutMs: number,
   inFlight: Set<() => void>,
 ): Promise<Settled<T>> {
   return new Promise<Settled<T>>((resolve) => {
@@ -343,8 +361,7 @@ function settle<T>(
       inFlight.delete(cancel);
       resolve(outcome);
     };
-    const timer =
-      timeoutMs === null ? undefined : setTimeout(() => { finish({ ok: false }); }, timeoutMs);
+    const timer = setTimeout(() => { finish({ ok: false }); }, timeoutMs);
     inFlight.add(cancel);
     Promise.resolve()
       .then(work)

@@ -1,7 +1,8 @@
 // Generates the VitePress content tree (site/content) from the repository's markdown.
 //
 // Prose sanitizing: outside fenced code blocks and inline code spans, `{{` and `}}`
-// are entity-escaped so Vue does not interpolate them, and every tag-like token
+// are entity-escaped so Vue does not interpolate them. An inline code span that holds `{{` is wrapped in a v-pre
+// element instead, so its text shows as written. Every tag-like token
 // (`<name`, `</name`) whose element name is not in ALLOWED_TAGS has its `<` escaped
 // to `&lt;` so it renders as text instead of being compiled as a component.
 // HTML comments (`<!--`) and allowlisted tags pass through untouched.
@@ -425,8 +426,14 @@ function maskCodeSpans(line) {
   }
   return {
     text,
-    restore: (value) => value.replace(CODE_SLOT, (_, slot) => spans[Number(slot)]),
+    restore: (value) => value.replace(CODE_SLOT, (_, slot) => protectCodeSpan(spans[Number(slot)])),
   };
+}
+
+// VitePress compiles each page as a Vue template, which reads `{{` inside an inline code span as an interpolation. A span
+// that holds one is wrapped in a v-pre element, so Vue leaves its text as written.
+function protectCodeSpan(span) {
+  return span.includes('{{') ? `<span v-pre>${span}</span>` : span;
 }
 
 function endOfBacktickRun(line, start) {

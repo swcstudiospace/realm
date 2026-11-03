@@ -5,12 +5,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { RealmError } from "../../../src/core/errors.js";
 import { ComputeDriver, type ComputeDriverConfig, type DriverSandboxMessage } from "../../../src/runtime/driver/compute-driver.js";
 import { DriverLifecycle, type LifecycleLibpod } from "../../../src/runtime/driver/lifecycle.js";
-import { writeLaunchMaterial } from "../../../src/runtime/driver/secret-store.js";
+import { removeSecretEntries, writeLaunchMaterial } from "../../../src/runtime/driver/secret-store.js";
 import { diskLifecycle, FakeLibpod, FakeLifecycle, FakeRuntime, LAUNCH_KEY, driverConfig, validSandbox, writeSandboxWorkspaceEntry } from "./fakes.js";
 import { launchBody, launchSupervisor } from "../isolation/supervisor-token.js";
 
@@ -206,4 +207,22 @@ void test("PRD-ISO-02: a secret root inside the workspace root, or a workspace r
   mkdirSync(join(config.secretRoot, "workspaces"), { recursive: true });
   const workspaceInSecret = { ...config, workspaceRoot: join(config.secretRoot, "workspaces") };
   assert.throws(() => new ComputeDriver(workspaceInSecret, deps), schemaInvalid);
+});
+
+void test("Q0-009: removeSecretEntries refuses a path outside the secret directory with SCHEMA_INVALID and removes nothing", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "realm-secret-entries-"));
+  t.after(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+  const secretDir = join(root, "secrets");
+  mkdirSync(secretDir);
+  const inside = join(secretDir, "launch.json");
+  const outside = join(root, "outside.txt");
+  writeFileSync(inside, "{}");
+  writeFileSync(outside, "keep");
+  assert.throws(() => {
+    removeSecretEntries(secretDir, [inside, outside]);
+  }, schemaInvalid);
+  assert.equal(existsSync(outside), true);
+  assert.equal(existsSync(inside), true);
 });

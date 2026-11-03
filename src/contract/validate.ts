@@ -21,6 +21,7 @@ import { STATES, type State } from "../core/states.js";
 
 export type PolicyMode = "advisory" | "fail-closed";
 
+// One allowed network destination: a host and a port.
 export interface EgressRule {
   readonly host: string;
   readonly port: number;
@@ -37,28 +38,34 @@ export interface Policy {
   readonly toolQueueMs: number;
 }
 
+// The arguments of an exec call: an argv, or a shell script.
 export type ExecParams =
   | { readonly argv: readonly string[] }
   | { readonly shell: true; readonly script: string };
 
+// The arguments of a read call: a path and the most bytes to return.
 export interface ReadParams {
   readonly path: string;
   readonly maxBytes: number;
 }
 
+// The arguments of a write call: a path, its content, and optionally the SHA-256 it must still have.
 export interface WriteParams {
   readonly path: string;
   readonly content: string;
   readonly ifMatchSha256?: string;
 }
 
+// The arguments of a list call: a path and how many levels to descend.
 export interface ListParams {
   readonly path: string;
   readonly depth: number;
 }
 
+// The arguments of a call that takes none.
 export type NoParams = Readonly<Record<string, never>>;
 
+// The arguments of each tool, keyed by tool name.
 export interface ToolParams {
   readonly exec: ExecParams;
   readonly read: ReadParams;
@@ -68,6 +75,7 @@ export interface ToolParams {
   readonly retry: NoParams;
 }
 
+// The name of a tool, one of the keys of ToolParams.
 export type ToolName = keyof ToolParams;
 
 // A tool call: an object with exactly one key, the tool name (D-13 map shape).
@@ -75,6 +83,7 @@ export type ToolCall = {
   [K in ToolName]: { readonly [P in K]: ToolParams[P] };
 }[ToolName];
 
+// A persisted session record. Its workspaceRoot is the directory the session is bound to.
 export interface SessionRecord {
   readonly realmId: string;
   readonly sessionId: string;
@@ -84,12 +93,14 @@ export interface SessionRecord {
   readonly containerId?: string | null;
 }
 
+// The typed value each named schema validates to.
 export interface SchemaValues {
   readonly policy: Policy;
   readonly tools: ToolCall;
   readonly sessionRecord: SessionRecord;
 }
 
+// The name of a schema, one of the keys of SchemaValues.
 export type SchemaName = keyof SchemaValues;
 
 // ---- Results and errors -----------------------------------------------------
@@ -106,16 +117,19 @@ export class SchemaInvalidError extends RealmError {
   }
 }
 
+// A successful validation, carrying the typed value.
 export interface ValidationOk<T> {
   readonly ok: true;
   readonly value: T;
 }
 
+// A failed validation, carrying the SchemaInvalidError that names the offending key.
 export interface ValidationFailure {
   readonly ok: false;
   readonly error: SchemaInvalidError;
 }
 
+// The outcome of validating one value: ok with its value, or a failure.
 export type ValidationResult<T> = ValidationOk<T> | ValidationFailure;
 
 // ---- Schema loading ---------------------------------------------------------

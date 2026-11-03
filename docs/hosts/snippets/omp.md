@@ -143,8 +143,9 @@ project directory too. A wrong-cwd `POLICY_DENIED` is a workspace-pin refusal,
 not evidence that the policy needs broader roots; do not weaken the
 allowlist or pinning to work around it.
 
-For doctor diagnostics, expose the real `REALM_DRIVER_SOCKET` and
-`REALM_DRIVER_GATEWAY_ENDPOINT` in the caller/daemon environment. Those
+For doctor diagnostics, expose the real `REALM_DRIVER_SOCKET`,
+`REALM_DRIVER_GATEWAY_ENDPOINT` and `REALM_DRIVER_GATEWAY_CA` in the
+caller/daemon environment. Those
 diagnostics do not inspect a separately running service's environment;
 exporting the variables does not provision a driver or gateway. The driver
 also needs the remaining environment contract documented in the OpenShell
