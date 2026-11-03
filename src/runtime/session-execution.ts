@@ -219,6 +219,7 @@ export class SessionExecution implements ExecutionService {
       const binding: HardeningBinding = {
         image: runtime.image,
         rootless: info.rootless,
+        sessionId,
         ...sandboxBindingOf({ workspaceRoot, stateRoot: sandboxStateRoot, secretRoot }, sandbox),
       };
       const policyPath = writePolicyDocument(runtime.stateDir, sessionId, this.egressAllow, AGENTOS_WORKLOAD_BINARY);

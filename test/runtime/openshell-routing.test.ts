@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentOsSupervisor } from "../../src/runtime/agentos.js";
-import { HARDENING_PROFILE, RUNTIME_ARGV, RUNTIME_BINARY, tmpfsOptionsOf } from "../../src/runtime/hardening.js";
+import { HARDENING_PROFILE, RUNTIME_ARGV, RUNTIME_BINARY, scratchVolumeNameOf, tmpfsOptionsOf } from "../../src/runtime/hardening.js";
 import { LibpodClient } from "../../src/runtime/libpod-client.js";
 import { sandboxBindingOf } from "../../src/runtime/driver/sandbox-binding.js";
 import { buildExecArgv, OPENSHELL_BINARY, realmSandboxName } from "../../src/runtime/openshell.js";
@@ -124,6 +124,7 @@ async function createSession(f: Fixture): Promise<{ readonly containerId: string
       { Type: "bind", Source: f.workspaceRoot, Destination: "/workspace", RW: true },
       { Type: "bind", Source: binding.stateDir, Destination: "/realm-state", RW: false },
       { Type: "bind", Source: binding.channelDir, Destination: HARDENING_PROFILE.channelDestination, RW: true },
+      { Type: "volume", Name: scratchVolumeNameOf(SESSION), Source: `/var/lib/containers/storage/volumes/${scratchVolumeNameOf(SESSION)}/_data`, Destination: HARDENING_PROFILE.scratchDestination, RW: true },
     ],
   };
   f.libpod.respondNext("inspectContainer", { status: 200, body: JSON.stringify(inspect) });
@@ -154,10 +155,14 @@ void test("RT-03: the libpod client has no exec or attach method, and only conta
     .sort();
   assert.deepEqual(methods, [
     "createContainer",
+    "createVolume",
     "info",
     "inspectContainer",
+    "inspectVolume",
     "listContainersByLabel",
+    "listVolumesByLabel",
     "removeContainer",
+    "removeVolume",
     "startContainer",
     "stopContainer",
   ]);

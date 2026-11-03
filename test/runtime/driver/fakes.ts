@@ -16,8 +16,11 @@ import {
   OPENSHELL_MANAGED_LABEL_VALUE,
   OPENSHELL_SANDBOX_NAME_LABEL_KEY,
   OPENSHELL_SANDBOX_ROLE_VALUE,
+  sessionOfRealmSandbox,
 } from "../../../src/runtime/openshell.js";
 import { bindRoot } from "../../../src/fs/root.js";
+import { makeRealmError } from "../../../src/core/errors.js";
+import { HARDENING_PROFILE, scratchVolumeNameOf } from "../../../src/runtime/hardening.js";
 import { sandboxNameOfSession, sessionIdOfWorkspace } from "../../../src/session/paths.js";
 import { writeWorkspaceEntry } from "../../../src/session/workspace-registry.js";
 import { GATEWAY_ID, generateGatewayKey, launchBody } from "../isolation/supervisor-token.js";
@@ -50,11 +53,31 @@ export function realmLabels(name: string): Record<string, string> {
   };
 }
 
+// The scratch volume mount a realm sandbox carries (R2): named for the session its sandbox name carries, read-write at the scratch
+// destination. A name that is not a realm sandbox's carries none.
+function scratchMountsOf(sandboxName: string | undefined): Record<string, unknown>[] {
+  const session = sessionOfRealmSandbox(sandboxName);
+  if (session === undefined) {
+    return [];
+  }
+  const name = scratchVolumeNameOf(session);
+  return [
+    {
+      Type: "volume",
+      Name: name,
+      Source: `/var/lib/containers/storage/volumes/${name}/_data`,
+      Destination: HARDENING_PROFILE.scratchDestination,
+      RW: true,
+    },
+  ];
+}
+
 // Answers listContainersByLabel and inspectContainer from an in-memory table keyed by container name.
 export class FakeLibpod {
   readonly containers = new Map<string, FakeContainer>();
   inspectCalls = 0;
   listCalls = 0;
+  readonly volumes = new Map<string, Readonly<Record<string, string>>>();
 
   // The workspace is the host path the container binds at /workspace. A container added without one binds no workspace.
   add(name: string, running: boolean, workspace?: string): void {
@@ -79,8 +102,35 @@ export class FakeLibpod {
     return Promise.resolve({
       Id: container.id,
       State: { Status: container.paused ? "paused" : container.running ? "running" : "exited" },
-      Mounts: container.workspace === undefined ? [] : [{ Source: container.workspace, Destination: "/workspace" }],
+      Mounts: [
+        ...(container.workspace === undefined ? [] : [{ Source: container.workspace, Destination: "/workspace" }]),
+        ...scratchMountsOf(container.labels[OPENSHELL_SANDBOX_NAME_LABEL_KEY]),
+      ],
     });
+  }
+
+  // The named volumes, by name, with the labels each was created with. A create makes the sandbox's scratch volume and a delete or an
+  // adoption removes it, so the label listing is the one a removal is proven by.
+  createVolume(name: string, labels: Readonly<Record<string, string>>): Promise<void> {
+    if (this.volumes.has(name)) {
+      return Promise.reject(makeRealmError("SANDBOX_NAME_IN_USE"));
+    }
+    this.volumes.set(name, { ...labels });
+    return Promise.resolve();
+  }
+
+  inspectVolume(name: string): Promise<{ readonly name: string } | null> {
+    return Promise.resolve(this.volumes.has(name) ? { name } : null);
+  }
+
+  listVolumesByLabel(key: string, value: string): Promise<string[]> {
+    const listed = [...this.volumes].filter(([, labels]) => labels[key] === value).map(([name]) => name);
+    return Promise.resolve(listed);
+  }
+
+  removeVolume(name: string): Promise<void> {
+    this.volumes.delete(name);
+    return Promise.resolve();
   }
 }
 
@@ -130,14 +180,19 @@ export interface DiskLifecycle extends Pick<DriverLifecycle, "create" | "delete"
   readonly stops: string[];
 }
 
-// A libpod stub for a lifecycle that never finds a container: nothing is listed or found, and every removal succeeds.
-function noContainers(): LifecycleLibpod {
+// A libpod stub for a lifecycle that never finds a container: nothing is listed or found, and every removal succeeds. Its volume calls
+// are answered by the fake's own volume table, so a removal is proven by the same listing the fake answers.
+function noContainers(libpod: FakeLibpod): LifecycleLibpod {
   const stub = {
     listContainersByLabel: () => Promise.resolve([]),
     info: () => Promise.resolve({ rootless: true }),
     inspectContainer: () => Promise.resolve(null),
     stopContainer: () => Promise.resolve(),
     removeContainer: () => Promise.resolve(),
+    createVolume: (name: string, labels: Readonly<Record<string, string>>) => libpod.createVolume(name, labels),
+    inspectVolume: (name: string) => libpod.inspectVolume(name),
+    listVolumesByLabel: (key: string, value: string) => libpod.listVolumesByLabel(key, value),
+    removeVolume: (name: string) => libpod.removeVolume(name),
   };
   return stub as unknown as LifecycleLibpod;
 }
@@ -147,7 +202,7 @@ function noContainers(): LifecycleLibpod {
 // as the real driver's startup does.
 export async function diskLifecycle(config: ComputeDriverConfig, libpod: FakeLibpod): Promise<DiskLifecycle> {
   const disk = new DriverLifecycle({
-    libpod: noContainers(),
+    libpod: noContainers(libpod),
     sandboxStateRoot: config.sandboxStateRoot,
     secretRoot: config.secretRoot,
   });

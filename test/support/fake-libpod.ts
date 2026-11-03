@@ -18,6 +18,7 @@ import {
   LIBPOD_API_VERSION_HEADER,
   PING_PATH,
   type LibpodRouteName,
+  type MatchedRoute,
 } from "../../src/runtime/libpod-routes.js";
 
 export interface FakeContainer {
@@ -30,6 +31,12 @@ interface MutableContainer {
   readonly id: string;
   readonly labels: Readonly<Record<string, string>>;
   running: boolean;
+}
+
+// A named volume the fake holds, with the labels its create body set.
+interface FakeVolume {
+  readonly name: string;
+  readonly labels: Readonly<Record<string, string>>;
 }
 
 function snapshot(container: MutableContainer): FakeContainer {
@@ -97,6 +104,7 @@ interface Reply {
 }
 
 const NOT_FOUND: Reply = jsonReply(404, { cause: "no such container", message: "no such container", response: 404 });
+const NO_SUCH_VOLUME: Reply = jsonReply(404, { cause: "no such volume", message: "no such volume", response: 404 });
 
 function jsonReply(status: number, value?: unknown): Reply {
   return value === undefined ? { status } : { status, body: JSON.stringify(value) };
@@ -160,6 +168,7 @@ export class FakeLibpod {
   private readonly hangs = new Set<LibpodRouteName>();
   private readonly scripted = new Map<LibpodRouteName, RawReply>();
   private sequence = 0;
+  private readonly volumes = new Map<string, FakeVolume>();
 
   constructor(options: FakeLibpodOptions = {}) {
     this.store = options.store ?? new FakeContainerStore();
@@ -272,6 +281,17 @@ export class FakeLibpod {
       res.end();
       return;
     }
+    // The body is read before the reply, since a create route names the resource it makes in its body.
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk: Buffer) => {
+      chunks.push(chunk);
+    });
+    req.on("end", () => {
+      this.answer(res, matched, url.searchParams, Buffer.concat(chunks).toString("utf8"));
+    });
+  }
+
+  private answer(res: ServerResponse, matched: MatchedRoute | undefined, params: URLSearchParams, body: string): void {
     if (matched === undefined) {
       write(res, jsonReply(404, { message: "page not found" }));
       return;
@@ -286,7 +306,7 @@ export class FakeLibpod {
       this.later(route, res, raw);
       return;
     }
-    this.later(route, res, this.dispatch(route, matched.containerId ?? undefined, url.searchParams));
+    this.later(route, res, this.dispatch(route, matched.containerId ?? undefined, params, body));
   }
 
   private later(route: LibpodRouteName, res: ServerResponse, reply: Reply): void {
@@ -304,7 +324,7 @@ export class FakeLibpod {
     this.timers.add(timer);
   }
 
-  private dispatch(route: LibpodRouteName, id: string | undefined, params: URLSearchParams): Reply {
+  private dispatch(route: LibpodRouteName, id: string | undefined, params: URLSearchParams, body: string): Reply {
     switch (route) {
       case "info":
         return jsonReply(200, {
@@ -323,6 +343,14 @@ export class FakeLibpod {
         return jsonReply(501, { message: "create is not modelled by the in-process fake" });
       case "startContainer":
         return jsonReply(501, { message: "start is not modelled by the in-process fake" });
+      case "createVolume":
+        return this.createVolumeRoute(body);
+      case "inspectVolume":
+        return this.inspectVolumeRoute(id);
+      case "listVolumes":
+        return this.listVolumesRoute(params);
+      case "removeVolume":
+        return this.removeVolumeRoute(id);
     }
   }
 
@@ -388,5 +416,44 @@ export class FakeLibpod {
     }
     this.store.remove(container.id);
     return jsonReply(200, [{ Id: container.id }]);
+  }
+
+  // The volume the create body names, with the labels it sets. A volume of that name already present is a 409, as libpod answers.
+  private createVolumeRoute(body: string): Reply {
+    const spec = JSON.parse(body) as { readonly Name?: unknown; readonly Labels?: Readonly<Record<string, string>> };
+    if (typeof spec.Name !== "string") {
+      return jsonReply(400, { message: "volume name is required" });
+    }
+    if (this.volumes.has(spec.Name)) {
+      return jsonReply(409, { cause: "volume already exists", message: "volume already exists", response: 409 });
+    }
+    const labels = { ...spec.Labels };
+    this.volumes.set(spec.Name, { name: spec.Name, labels });
+    return jsonReply(201, { Name: spec.Name, Labels: labels });
+  }
+
+  private inspectVolumeRoute(name: string | undefined): Reply {
+    const volume = name === undefined ? undefined : this.volumes.get(name);
+    if (volume === undefined) {
+      return NO_SUCH_VOLUME;
+    }
+    return jsonReply(200, { Name: volume.name, Labels: { ...volume.labels } });
+  }
+
+  // The volumes whose labels match every term of the label filter.
+  private listVolumesRoute(params: URLSearchParams): Reply {
+    const terms = labelTerms(params.get("filters"));
+    if (terms === null) {
+      return jsonReply(400, { message: "invalid filters" });
+    }
+    const visible = [...this.volumes.values()].filter((volume) => terms.every((term) => matchesLabel(volume.labels, term)));
+    return jsonReply(200, visible.map((volume) => ({ Name: volume.name, Labels: { ...volume.labels } })));
+  }
+
+  private removeVolumeRoute(name: string | undefined): Reply {
+    if (name === undefined || !this.volumes.delete(name)) {
+      return NO_SUCH_VOLUME;
+    }
+    return jsonReply(200, [name]);
   }
 }

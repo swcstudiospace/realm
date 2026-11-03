@@ -16,6 +16,7 @@
 //
 // Every sandbox container has the same shape: a read-write channel mount for the sandbox runtime, and a noexec tmpfs for the
 // runtime's CA material. The binding names the channel directory, which sandboxBindingOf always derives.
+// It also has one read-write scratch volume at /scratch, named for the session (R2). See scratchVolumeNameOf.
 
 import { createHash } from "node:crypto";
 import { makeRealmError } from "../core/errors.js";
@@ -62,6 +63,9 @@ export const HARDENING_PROFILE = Object.freeze({
   stateDestination: "/realm-state",
   // The channel the sandbox runtime and the host supervisor share: its bootstrap, TLS files and control socket.
   channelDestination: "/run/openshell/channel",
+  // The scratch volume's destination (R2). The session's named volume is mounted read-write here, and it is the only mount
+  // beyond the three binds.
+  scratchDestination: "/scratch",
   // A tmpfs of the runtime's CA material, mounted noexec and mode 1703. The runtime creates its owned material directory under this mount.
   supervisorCaDestination: SUPERVISOR_CA_DESTINATION,
   // The workload identity of the sandbox process. The user namespace maps the realm account to this uid and gid.
@@ -154,6 +158,22 @@ export const CHANNEL_MOUNT_OPTIONS: readonly string[] = Object.freeze(["noexec",
 // SUPERVISOR_CA_RUNTIME_DIR in the runtime contract.
 export const SUPERVISOR_CA_TMPFS_OPTIONS: readonly string[] = Object.freeze(["noexec", "nosuid", "nodev", "mode=1703"]);
 
+// The scratch volume (R2). Each session has one named volume, mounted read-write at the profile's scratch destination. Its name and
+// labels are derived here from the session id, so the driver's create, delete and startup sweep and the verifier read one value.
+// The realm label marks the volume as the realm's, so the startup sweep lists only realm volumes.
+export const SCRATCH_VOLUME_PREFIX = "realm-scratch-";
+export const REALM_MANAGED_LABEL_KEY = "io.realm.managed";
+export const REALM_MANAGED_LABEL_VALUE = "true";
+export const REALM_SESSION_LABEL_KEY = "io.realm.session";
+
+export function scratchVolumeNameOf(sessionId: string): string {
+  return `${SCRATCH_VOLUME_PREFIX}${sessionId}`;
+}
+
+export function scratchVolumeLabelsOf(sessionId: string): Readonly<Record<string, string>> {
+  return Object.freeze({ [REALM_MANAGED_LABEL_KEY]: REALM_MANAGED_LABEL_VALUE, [REALM_SESSION_LABEL_KEY]: sessionId });
+}
+
 // The properties that verifyInspect checks, in report order.
 export const HARDENING_PROPERTIES = Object.freeze([
   "privileged",
@@ -168,6 +188,11 @@ export const HARDENING_PROPERTIES = Object.freeze([
   "network-mode",
   "image-digest",
   "mounts",
+  "scratch-volume-type",
+  "scratch-volume-name",
+  "scratch-volume-session",
+  "scratch-volume-destination",
+  "scratch-volume-read-write",
   "init-process",
   "socket-path",
   "seccomp-keyring",
@@ -198,6 +223,8 @@ export interface HardeningBinding {
   // The sandbox container's channel source, read-write. The container must also carry the CA tmpfs and the channel mount, and
   // nothing else.
   readonly channelDir: string;
+  // The session the sandbox belongs to. Its scratch volume is named for it, so the verifier checks the volume against this id.
+  readonly sessionId: string;
 }
 
 type Check = (inspect: unknown, binding: HardeningBinding) => boolean;
@@ -227,17 +254,19 @@ const CHECKS: Readonly<Record<HardeningProperty, Check>> = Object.freeze({
     const pinned = digestOf(binding.image);
     return pinned !== undefined && field(inspect, ["ImageDigest"]) === pinned;
   },
-  // The bind mounts and no others (D-51). The workspace is read-write, as the OpenShell policy grants /workspace. The state
-  // directory is read-only, which fails closed because D-51 is silent on it. The channel is read-write, so the runtime can write
-  // its socket and remove its bootstrap. An extra mount, or a read-write state mount, fails.
+  // The three bind mounts and the one scratch volume, and no others (D-51, R2). The workspace is read-write, as the OpenShell policy
+  // grants /workspace. The state directory is read-only, which fails closed because D-51 is silent on it. The channel is read-write,
+  // so the runtime can write its socket and remove its bootstrap. The scratch volume is checked by the scratch properties below.
+  // An extra mount, or a read-write state mount, fails.
   mounts: (inspect, binding) => {
     const mounts = field(inspect, ["Mounts"]);
     return (
       Array.isArray(mounts) &&
-      mounts.length === 3 &&
+      mounts.length === 4 &&
       isMountOf(mounts, binding.workspaceRoot, HARDENING_PROFILE.workspaceDestination, true) &&
       isMountOf(mounts, binding.stateDir, HARDENING_PROFILE.stateDestination, false) &&
-      isMountOf(mounts, binding.channelDir, HARDENING_PROFILE.channelDestination, true)
+      isMountOf(mounts, binding.channelDir, HARDENING_PROFILE.channelDestination, true) &&
+      scratchMountOf(inspect) !== undefined
     );
   },
   // PID 1 of a sandbox container is the sandbox runtime, started with its exact argv (phase 9.5, wave 3).
@@ -283,6 +312,23 @@ const CHECKS: Readonly<Record<HardeningProperty, Check>> = Object.freeze({
   sysctls: (inspect) => sysctlsMatch(field(inspect, [OCI_RUNTIME_FIELD, "sysctl"])),
   "masked-paths": (inspect) => includesEvery(field(inspect, [OCI_RUNTIME_FIELD, "maskedPaths"]), HARDENING_PROFILE.maskedPaths),
   "readonly-paths": (inspect) => includesEvery(field(inspect, [OCI_RUNTIME_FIELD, "readonlyPaths"]), HARDENING_PROFILE.readonlyPaths),
+  // The scratch volume is the one mount that is not a bind (R2). Each property checks one field of it, so a refusal names the field
+  // that is wrong. A tmpfs in its place fails the type and the name. A name outside the realm's scratch namespace fails the name and
+  // leaves the session property alone. A name of another session fails the session. With no such mount, or more than one, every
+  // property fails.
+  "scratch-volume-type": (inspect) => scratchMountOf(inspect)?.["Type"] === "volume",
+  "scratch-volume-name": (inspect) => {
+    const name = scratchMountOf(inspect)?.["Name"];
+    return typeof name === "string" && name.startsWith(SCRATCH_VOLUME_PREFIX);
+  },
+  "scratch-volume-session": (inspect, binding) => {
+    const mount = scratchMountOf(inspect);
+    const name = mount?.["Name"];
+    const outside = typeof name !== "string" || !name.startsWith(SCRATCH_VOLUME_PREFIX);
+    return mount !== undefined && (outside || name === scratchVolumeNameOf(binding.sessionId));
+  },
+  "scratch-volume-destination": (inspect) => scratchMountOf(inspect)?.["Destination"] === HARDENING_PROFILE.scratchDestination,
+  "scratch-volume-read-write": (inspect) => scratchMountOf(inspect)?.["RW"] === true,
 });
 
 // Returns the failed property names in report order. An empty list means the inspect conforms.
@@ -442,6 +488,19 @@ function isMountOf(mounts: readonly unknown[], source: string, destination: stri
     only.Destination === destination &&
     only.RW === rw
   );
+}
+
+// The one mount that is not a bind: the scratch volume mount (R2). A bind of any source is not the scratch mount, so a bind that is
+// wrong fails the mounts property alone. Undefined when the mounts are not an array, or when there is not exactly one such mount.
+function scratchMountOf(inspect: unknown): Readonly<Record<string, unknown>> | undefined {
+  const mounts = field(inspect, ["Mounts"]);
+  if (!Array.isArray(mounts)) {
+    return undefined;
+  }
+  const entries: readonly unknown[] = mounts;
+  const others = entries.filter((mount) => !(isRecord(mount) && mount["Type"] === "bind"));
+  const [only] = others;
+  return others.length === 1 && isRecord(only) ? only : undefined;
 }
 
 // A path is clear when it is a string and none of its segments is a container-engine socket.

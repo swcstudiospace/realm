@@ -1,6 +1,7 @@
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ManualClock, pollUntil, scaledMs, testTimeout, yieldUntil } from "../support/timing.js";
@@ -12,7 +13,8 @@ import {
   FORCE_REMOVE_STOP_GRACE_SECONDS,
   LibpodClient,
 } from "../../src/runtime/libpod-client.js";
-import { LIBPOD_ROUTES, type LibpodRouteName } from "../../src/runtime/libpod-routes.js";
+import { LIBPOD_API_VERSION_HEADER, LIBPOD_ROUTES, matchLibpodRoute, PING_PATH, type LibpodRouteName } from "../../src/runtime/libpod-routes.js";
+import { SECCOMP_PROFILE_FILE_NAME } from "../../src/runtime/driver/seccomp-profile.js";
 import { FakeLibpod, type FakeLibpodOptions, type RecordedRequest } from "../support/fake-libpod.js";
 
 const LABEL_KEY = "openshell.managed";
@@ -52,16 +54,20 @@ async function waitForRecorded(fake: FakeLibpod, route: LibpodRouteName, timeout
   return last;
 }
 
-void test("RT-03: the client exposes exactly the seven D-54 methods, and no other instance member", () => {
+void test("RT-03: the client exposes exactly the D-54 methods and the four scratch volume methods, and no other instance member", () => {
   const methods = Object.getOwnPropertyNames(LibpodClient.prototype)
     .filter((name) => name !== "constructor")
     .sort();
   assert.deepEqual(methods, [
     "createContainer",
+    "createVolume",
     "info",
     "inspectContainer",
+    "inspectVolume",
     "listContainersByLabel",
+    "listVolumesByLabel",
     "removeContainer",
+    "removeVolume",
     "startContainer",
     "stopContainer",
   ]);
@@ -435,4 +441,209 @@ void test("RT-09: removeContainer succeeds on the 200 reply Podman 5.7.1 sends, 
     1,
     "one delete request reached the fake",
   );
+});
+
+// A libpod stand-in for the scratch volume routes. FakeLibpod serves the container routes only, so the volume calls are answered here,
+// from the shared route table. The handler decides each reply; "hang" leaves the request unanswered, so the client's bound fires.
+interface VolumeRequest {
+  readonly method: string;
+  readonly route: LibpodRouteName | null;
+  readonly target: string;
+  readonly body: string;
+}
+
+interface VolumeReply {
+  readonly status: number;
+  readonly body?: string;
+}
+
+type VolumeHandler = (request: VolumeRequest) => VolumeReply | "hang";
+
+async function startVolumeFake(
+  t: TestContext,
+  handler: VolumeHandler,
+): Promise<{ readonly socketPath: string; readonly requests: VolumeRequest[] }> {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "realm-volume-")));
+  t.after(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const socketPath = join(dir, "podman.sock");
+  const requests: VolumeRequest[] = [];
+  const server = createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk: Buffer) => {
+      chunks.push(chunk);
+    });
+    req.on("end", () => {
+      const url = new URL(req.url ?? "/", "http://localhost");
+      if (url.pathname === PING_PATH) {
+        res.writeHead(200, { [LIBPOD_API_VERSION_HEADER]: "5.7.1" }).end();
+        return;
+      }
+      const matched = matchLibpodRoute(req.method ?? "", url.pathname);
+      const request: VolumeRequest = {
+        method: req.method ?? "",
+        route: matched?.name ?? null,
+        target: req.url ?? "",
+        body: Buffer.concat(chunks).toString("utf8"),
+      };
+      requests.push(request);
+      const reply = handler(request);
+      if (reply === "hang") {
+        return;
+      }
+      res.writeHead(reply.status, { "Content-Type": "application/json" }).end(reply.body ?? "");
+    });
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(socketPath, () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+  t.after(() => {
+    server.closeAllConnections();
+    server.close();
+  });
+  return { socketPath, requests };
+}
+
+// The reply Podman sends for an absent volume.
+const NO_SUCH_VOLUME: VolumeReply = {
+  status: 404,
+  body: JSON.stringify({ cause: "no such volume", message: "no such volume", response: 404 }),
+};
+
+void test("RT-09 (R2): each scratch volume call is bounded, and a reply that never comes fails it with PODMAN_MACHINE_DOWN", async (t) => {
+  const { socketPath } = await startVolumeFake(t, () => "hang");
+  const client = new LibpodClient(socketPath, { requestTimeoutMs: 200 });
+  await assertCode(client.createVolume("realm-scratch-a", { "io.realm.managed": "true" }), "PODMAN_MACHINE_DOWN");
+  await assertCode(client.inspectVolume("realm-scratch-a"), "PODMAN_MACHINE_DOWN");
+  await assertCode(client.listVolumesByLabel("io.realm.managed", "true"), "PODMAN_MACHINE_DOWN");
+  await assertCode(client.removeVolume("realm-scratch-a"), "PODMAN_MACHINE_DOWN");
+});
+
+void test("RT-09 (R2): createVolume posts the name and labels to the volume create route, and 201 is success", async (t) => {
+  const { socketPath, requests } = await startVolumeFake(t, () => ({ status: 201, body: "{}" }));
+  await new LibpodClient(socketPath).createVolume("realm-scratch-a", { "io.realm.managed": "true", "io.realm.session": "a" });
+  const create = requests.find((request) => request.route === "createVolume");
+  assert.ok(create !== undefined);
+  assert.equal(create.method, "POST");
+  assert.match(create.target, /^\/v5\.7\.1\/libpod\/volumes\/create$/);
+  assert.deepEqual(JSON.parse(create.body), { Name: "realm-scratch-a", Labels: { "io.realm.managed": "true", "io.realm.session": "a" } });
+});
+
+void test("RT-09 (R2): createVolume maps a 409 to SANDBOX_NAME_IN_USE, and any other status to SCHEMA_INVALID with no engine text", async (t) => {
+  const taken = await startVolumeFake(t, () => ({ status: 409, body: '{"message":"volume already exists"}' }));
+  await assertCode(new LibpodClient(taken.socketPath).createVolume("realm-scratch-a", {}), "SANDBOX_NAME_IN_USE");
+  const failing = await startVolumeFake(t, () => ({ status: 500, body: '{"message":"engine internal detail"}' }));
+  await assert.rejects(new LibpodClient(failing.socketPath).createVolume("realm-scratch-a", {}), (error: unknown) => {
+    return (
+      error instanceof RealmError &&
+      error.code === "SCHEMA_INVALID" &&
+      error.causeCode === undefined &&
+      !error.message.includes("engine internal detail")
+    );
+  });
+});
+
+void test("RT-09 (R2): createVolume refuses a malformed name or label key before any request", async (t) => {
+  const { socketPath, requests } = await startVolumeFake(t, () => ({ status: 201 }));
+  const client = new LibpodClient(socketPath);
+  await assertCode(client.createVolume("bad/name", {}), "SCHEMA_INVALID");
+  await assertCode(client.createVolume("", {}), "SCHEMA_INVALID");
+  await assertCode(client.createVolume("realm-scratch-a", { "bad key": "x" }), "SCHEMA_INVALID");
+  assert.deepEqual(requests, []);
+});
+
+void test("RT-09 (R2): inspectVolume is null for no such volume, names the volume on 200, and refuses any other 404 or a name mismatch", async (t) => {
+  const absent = await startVolumeFake(t, () => NO_SUCH_VOLUME);
+  assert.equal(await new LibpodClient(absent.socketPath).inspectVolume("realm-scratch-a"), null);
+  const present = await startVolumeFake(t, () => ({ status: 200, body: JSON.stringify({ Name: "realm-scratch-a" }) }));
+  assert.deepEqual(await new LibpodClient(present.socketPath).inspectVolume("realm-scratch-a"), { name: "realm-scratch-a" });
+  const other = await startVolumeFake(t, () => ({ status: 200, body: JSON.stringify({ Name: "realm-scratch-b" }) }));
+  await assertCode(new LibpodClient(other.socketPath).inspectVolume("realm-scratch-a"), "SCHEMA_INVALID");
+  const wrongKind = await startVolumeFake(t, () => ({ status: 404, body: JSON.stringify({ cause: "no such container" }) }));
+  await assertCode(new LibpodClient(wrongKind.socketPath).inspectVolume("realm-scratch-a"), "SCHEMA_INVALID");
+});
+
+void test("RT-09 (R2): listVolumesByLabel filters on the exact label and returns the names, and a malformed listing is SCHEMA_INVALID", async (t) => {
+  const { socketPath, requests } = await startVolumeFake(t, () => ({
+    status: 200,
+    body: JSON.stringify([{ Name: "realm-scratch-a" }, { Name: "realm-scratch-b" }]),
+  }));
+  assert.deepEqual(await new LibpodClient(socketPath).listVolumesByLabel("io.realm.managed", "true"), [
+    "realm-scratch-a",
+    "realm-scratch-b",
+  ]);
+  const list = requests.find((request) => request.route === "listVolumes");
+  assert.ok(list !== undefined);
+  assert.equal(list.method, "GET");
+  const filters = new URL(list.target, "http://localhost").searchParams.get("filters");
+  assert.deepEqual(JSON.parse(filters ?? "null"), { label: ["io.realm.managed=true"] });
+  const malformed = await startVolumeFake(t, () => ({ status: 200, body: JSON.stringify([{ Name: 7 }]) }));
+  await assertCode(new LibpodClient(malformed.socketPath).listVolumesByLabel("io.realm.managed", "true"), "SCHEMA_INVALID");
+  const notList = await startVolumeFake(t, () => ({ status: 200, body: "{}" }));
+  await assertCode(new LibpodClient(notList.socketPath).listVolumesByLabel("io.realm.managed", "true"), "SCHEMA_INVALID");
+});
+
+void test("RT-09 (R2): removeVolume succeeds on 204, treats no such volume as removed, and refuses a removal Podman declines (409) as SCHEMA_INVALID", async (t) => {
+  const { socketPath, requests } = await startVolumeFake(t, () => ({ status: 204 }));
+  await new LibpodClient(socketPath).removeVolume("realm-scratch-a");
+  const removal = requests.find((request) => request.route === "removeVolume");
+  assert.ok(removal !== undefined);
+  assert.equal(removal.method, "DELETE");
+  assert.match(removal.target, /\/libpod\/volumes\/realm-scratch-a$/);
+  const absent = await startVolumeFake(t, () => NO_SUCH_VOLUME);
+  await new LibpodClient(absent.socketPath).removeVolume("realm-scratch-a");
+  const inUse = await startVolumeFake(t, () => ({ status: 409, body: '{"message":"volume is in use"}' }));
+  await assertCode(new LibpodClient(inUse.socketPath).removeVolume("realm-scratch-a"), "SCHEMA_INVALID");
+});
+
+void test("RT-09 (R2): the create body mounts the session's scratch volume read-write at /scratch, and the three binds stay as they were", async (t) => {
+  const { socketPath, requests } = await startVolumeFake(t, (request) =>
+    request.route === "createContainer" ? { status: 201, body: JSON.stringify({ Id: "0123456789ab" }) } : { status: 500 },
+  );
+  const client = new LibpodClient(socketPath, { seccompProfilePath: join(tmpdir(), SECCOMP_PROFILE_FILE_NAME) });
+  const id = await client.createContainer({
+    sandboxName: "realm-sess-1",
+    image: `registry.invalid/realm/sandbox@sha256:${"a".repeat(64)}`,
+    workspaceDir: "/realm/workspace",
+    stateDir: "/realm/state/realm-sess-1",
+    channelDir: "/realm/secrets/realm-sess-1/channel",
+  });
+  assert.equal(id, "0123456789ab");
+  const create = requests.find((request) => request.route === "createContainer");
+  assert.ok(create !== undefined);
+  const body = JSON.parse(create.body) as {
+    readonly volumes: unknown;
+    readonly mounts: readonly { readonly type: string; readonly destination: string }[];
+  };
+  assert.deepEqual(body.volumes, [{ name: "realm-scratch-sess-1", dest: "/scratch", options: ["rw"] }]);
+  assert.deepEqual(
+    body.mounts.filter((mount) => mount.type === "bind").map((mount) => mount.destination),
+    ["/workspace", "/realm-state", "/run/openshell/channel"],
+  );
+  assert.equal(
+    body.mounts.some((mount) => mount.destination === "/scratch"),
+    false,
+    "the scratch volume is not a bind or tmpfs mount",
+  );
+});
+
+void test("RT-09 (R2): a sandbox name without a session id is refused before any request", async (t) => {
+  const { socketPath, requests } = await startVolumeFake(t, () => ({ status: 201, body: "{}" }));
+  const client = new LibpodClient(socketPath, { seccompProfilePath: join(tmpdir(), SECCOMP_PROFILE_FILE_NAME) });
+  await assertCode(
+    client.createContainer({
+      sandboxName: "realm-a.b",
+      image: `registry.invalid/realm/sandbox@sha256:${"a".repeat(64)}`,
+      workspaceDir: "/realm/workspace",
+      stateDir: "/realm/state/realm-a.b",
+      channelDir: "/realm/secrets/realm-a.b/channel",
+    }),
+    "SCHEMA_INVALID",
+  );
+  assert.deepEqual(requests, []);
 });

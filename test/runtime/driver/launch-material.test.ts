@@ -86,6 +86,10 @@ function emptyLibpod(): LifecycleLibpod {
     inspectContainer: () => Promise.resolve(null),
     stopContainer: () => Promise.resolve(),
     removeContainer: () => Promise.resolve(),
+    createVolume: () => Promise.resolve(),
+    inspectVolume: () => Promise.resolve(null),
+    listVolumesByLabel: () => Promise.resolve([]),
+    removeVolume: () => Promise.resolve(),
   };
   return stub as unknown as LifecycleLibpod;
 }

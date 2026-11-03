@@ -16,6 +16,8 @@ import {
   maxConcurrentSessions,
   tmpfsOptionsOf,
   tmpfsSizeBytes,
+  scratchVolumeLabelsOf,
+  scratchVolumeNameOf,
   verifyInspect,
 } from "../../src/runtime/hardening.js";
 import { RealmError } from "../../src/core/errors.js";
@@ -38,6 +40,9 @@ const WORKSPACE = "/realm/workspace";
 const STATE = "/realm/state";
 const CHANNEL = "/realm/channel";
 const SUPERVISOR_CA = HARDENING_PROFILE.supervisorCaDestination;
+const SESSION = "sess-1";
+const SCRATCH = scratchVolumeNameOf(SESSION);
+const ALL_SCRATCH = ["scratch-volume-type", "scratch-volume-name", "scratch-volume-session", "scratch-volume-destination", "scratch-volume-read-write"];
 
 const BINDING: HardeningBinding = {
   image: `registry.example.com/realm/session@${DIGEST}`,
@@ -45,6 +50,7 @@ const BINDING: HardeningBinding = {
   workspaceRoot: WORKSPACE,
   stateDir: STATE,
   channelDir: CHANNEL,
+  sessionId: SESSION,
 };
 
 // The inspect before the host read: no host evidence attached. The OCI config path is tied to the container's StaticDir.
@@ -81,6 +87,7 @@ function rawConforming(): Record<string, unknown> {
       bind(WORKSPACE, "/workspace", true),
       bind(STATE, "/realm-state", false),
       bind(CHANNEL, HARDENING_PROFILE.channelDestination, true),
+      scratch(),
     ],
   };
 }
@@ -199,6 +206,11 @@ void test("every D-51 property has a named check, and a non-object inspect fails
       "network-mode",
       "image-digest",
       "mounts",
+      "scratch-volume-type",
+      "scratch-volume-name",
+      "scratch-volume-session",
+      "scratch-volume-destination",
+      "scratch-volume-read-write",
       "init-process",
       "socket-path",
       "seccomp-keyring",
@@ -260,6 +272,7 @@ void test("a mount that is not the workspace root and the state directory fails 
     bind(WORKSPACE, "/workspace", true),
     bind("/realm/elsewhere", "/elsewhere", false),
     bind(CHANNEL, HARDENING_PROFILE.channelDestination, true),
+    scratch(),
   ];
   assert.deepEqual(verifyInspect(BINDING, inspect), ["mounts"]);
 });
@@ -270,6 +283,7 @@ void test("a read-write state directory mount fails the mounts property, because
     bind(WORKSPACE, "/workspace", true),
     bind(STATE, "/realm-state", true),
     bind(CHANNEL, HARDENING_PROFILE.channelDestination, true),
+    scratch(),
   ];
   assert.deepEqual(verifyInspect(BINDING, inspect), ["mounts"]);
 });
@@ -280,6 +294,7 @@ void test("a state directory mount at the wrong destination fails the mounts pro
     bind(WORKSPACE, "/workspace", true),
     bind(STATE, "/elsewhere", false),
     bind(CHANNEL, HARDENING_PROFILE.channelDestination, true),
+    scratch(),
   ];
   assert.deepEqual(verifyInspect(BINDING, inspect), ["mounts"]);
 });
@@ -290,6 +305,7 @@ void test("a workspace mount at the wrong destination fails the mounts property 
     bind(WORKSPACE, "/elsewhere", true),
     bind(STATE, "/realm-state", false),
     bind(CHANNEL, HARDENING_PROFILE.channelDestination, true),
+    scratch(),
   ];
   assert.deepEqual(verifyInspect(BINDING, inspect), ["mounts"]);
 });
@@ -300,6 +316,7 @@ void test("a read-only workspace mount fails the mounts property, because the po
     bind(WORKSPACE, "/workspace", false),
     bind(STATE, "/realm-state", false),
     bind(CHANNEL, HARDENING_PROFILE.channelDestination, true),
+    scratch(),
   ];
   assert.deepEqual(verifyInspect(BINDING, inspect), ["mounts"]);
 });
@@ -308,7 +325,7 @@ void test("a mount without a read-write flag fails the mounts property closed (R
   const inspect = conforming();
   const state = bind(STATE, "/realm-state", false);
   Reflect.deleteProperty(state, "RW");
-  inspect.Mounts = [bind(WORKSPACE, "/workspace", true), state, bind(CHANNEL, HARDENING_PROFILE.channelDestination, true)];
+  inspect.Mounts = [bind(WORKSPACE, "/workspace", true), state, bind(CHANNEL, HARDENING_PROFILE.channelDestination, true), scratch()];
   assert.deepEqual(verifyInspect(BINDING, inspect), ["mounts"]);
 });
 
@@ -323,16 +340,7 @@ void test("an extra mount fails the mounts property even when every expected pat
     bind(STATE, "/realm-state", false),
     bind(CHANNEL, HARDENING_PROFILE.channelDestination, true),
     bind("/realm/extra", "/extra", false),
-  ];
-  assert.deepEqual(verifyInspect(BINDING, inspect), ["mounts"]);
-});
-
-void test("a tmpfs entry in the mount list fails the mounts property, because only bind mounts are admitted (RT-01)", () => {
-  const inspect = conforming();
-  inspect.Mounts = [
-    bind(WORKSPACE, "/workspace", true),
-    bind(STATE, "/realm-state", false),
-    { Type: "tmpfs", Source: "tmpfs", Destination: "/scratch" },
+    scratch(),
   ];
   assert.deepEqual(verifyInspect(BINDING, inspect), ["mounts"]);
 });
@@ -344,6 +352,7 @@ void test("a mount of the docker or podman socket fails the socket-path property
       bind(WORKSPACE, "/workspace", true),
       bind(socket, "/run/host.sock", false),
       bind(CHANNEL, HARDENING_PROFILE.channelDestination, true),
+      scratch(),
     ];
     const failed = verifyInspect(BINDING, inspect);
     assert.ok(failed.includes("socket-path"), `socket ${socket} must fail socket-path`);
@@ -357,6 +366,7 @@ void test("a socket name in a mount destination fails the socket-path property (
     bind(WORKSPACE, "/workspace/podman.sock", true),
     bind(STATE, "/realm-state", false),
     bind(CHANNEL, HARDENING_PROFILE.channelDestination, true),
+    scratch(),
   ];
   assert.ok(verifyInspect(BINDING, inspect).includes("socket-path"));
 });
@@ -364,7 +374,7 @@ void test("a socket name in a mount destination fails the socket-path property (
 void test("a missing Mounts field fails the mounts and socket-path properties (RT-01)", () => {
   const inspect = conforming();
   delete inspect.Mounts;
-  assert.deepEqual(verifyInspect(BINDING, inspect), ["mounts", "socket-path"]);
+  assert.deepEqual(verifyInspect(BINDING, inspect), ["mounts", ...ALL_SCRATCH, "socket-path"]);
 });
 
 void test("the digest check compares against the pinned digest of the binding image (RT-01)", () => {
@@ -387,6 +397,7 @@ void test("a read-write channel mount of the wrong source fails the mounts prope
     bind(WORKSPACE, "/workspace", true),
     bind(STATE, "/realm-state", false),
     bind("/realm/elsewhere", HARDENING_PROFILE.channelDestination, true),
+    scratch(),
   ];
   assert.deepEqual(verifyInspect(BINDING, inspect), ["mounts"]);
 });
@@ -397,6 +408,7 @@ void test("a channel binding refuses a read-only channel mount, because the runt
     bind(WORKSPACE, "/workspace", true),
     bind(STATE, "/realm-state", false),
     bind(CHANNEL, HARDENING_PROFILE.channelDestination, false),
+    scratch(),
   ];
   assert.deepEqual(verifyInspect(BINDING, inspect), ["mounts"]);
 });
@@ -825,6 +837,7 @@ function createdSandbox(
     bind(WORKSPACE, "/workspace", true),
     bind(STATE, "/realm-state", false),
     { ...bind(CHANNEL, HARDENING_PROFILE.channelDestination, true), Options: [...channelOptions, "rbind"] },
+    scratch(),
   ];
   return inspect;
 }
@@ -891,3 +904,88 @@ void test("the aggregate budget fields are in the profile and inside the evidenc
   const canonical = JSON.stringify({ profile: HARDENING_PROFILE, properties: HARDENING_PROPERTIES, image: BINDING.image });
   assert.equal(hardeningEvidenceDigest(BINDING.image), createHash("sha256").update(canonical, "utf8").digest("hex"));
 });
+
+// The scratch volume (R2). A named volume is the mount Podman reports with Type volume and its Name, so a wrong field fails that
+// property alone, and each refusal below is checked by the property it names.
+void test("the scratch volume is named for its session, labelled as the realm's, and mounted at /scratch (R2)", () => {
+  assert.equal(scratchVolumeNameOf("sess-1"), "realm-scratch-sess-1");
+  assert.deepEqual(scratchVolumeLabelsOf("sess-1"), { "io.realm.managed": "true", "io.realm.session": "sess-1" });
+  assert.equal(HARDENING_PROFILE.scratchDestination, "/scratch");
+  assert.equal(scratchVolumeNameOf(SESSION), SCRATCH);
+});
+
+void test("the scratch volume is the one mount beyond the three binds, in the shape Podman reports a named volume (R2)", () => {
+  assert.deepEqual(conforming().Mounts, [...binds(), scratch()]);
+  assert.deepEqual(verifyInspect(BINDING, conforming()), []);
+});
+
+void test("the scratch volume's host mountpoint is not compared, so any Source of the volume conforms (R2)", () => {
+  const mount = { ...scratch(), Source: "/somewhere/else/_data" };
+  assert.deepEqual(verifyInspect(BINDING, withMounts([...binds(), mount])), []);
+});
+
+void test("a scratch volume of another session fails the session property alone (R2)", () => {
+  assert.deepEqual(verifyInspect(BINDING, withMounts([...binds(), scratch("realm-scratch-sess-2")])), ["scratch-volume-session"]);
+});
+
+void test("a scratch volume outside the realm's namespace fails the name property alone (R2)", () => {
+  assert.deepEqual(verifyInspect(BINDING, withMounts([...binds(), scratch("elsewhere")])), ["scratch-volume-name"]);
+});
+
+void test("a scratch volume at another destination fails the destination property alone (R2)", () => {
+  assert.deepEqual(verifyInspect(BINDING, withMounts([...binds(), scratch(SCRATCH, "/data")])), ["scratch-volume-destination"]);
+});
+
+void test("a read-only scratch volume fails the read-write property alone (R2)", () => {
+  assert.deepEqual(verifyInspect(BINDING, withMounts([...binds(), scratch(SCRATCH, "/scratch", false)])), ["scratch-volume-read-write"]);
+});
+
+void test("a scratch volume without an RW field fails the read-write property closed (R2)", () => {
+  const mount = scratch();
+  Reflect.deleteProperty(mount, "RW");
+  assert.deepEqual(verifyInspect(BINDING, withMounts([...binds(), mount])), ["scratch-volume-read-write"]);
+});
+
+void test("a tmpfs in place of the scratch volume fails the scratch type and name, and nothing else (R2)", () => {
+  const tmpfs = { Type: "tmpfs", Source: "tmpfs", Destination: HARDENING_PROFILE.scratchDestination, RW: true };
+  assert.deepEqual(verifyInspect(BINDING, withMounts([...binds(), tmpfs])), ["scratch-volume-type", "scratch-volume-name"]);
+});
+
+void test("a missing scratch volume fails the mounts property and every scratch property (R2)", () => {
+  assert.deepEqual(verifyInspect(BINDING, withMounts(binds())), ["mounts", ...ALL_SCRATCH]);
+});
+
+void test("a bind in place of the scratch volume fails the mounts property and every scratch property (R2)", () => {
+  const bindAtScratch = bind("/realm/scratch-host", HARDENING_PROFILE.scratchDestination, true);
+  assert.deepEqual(verifyInspect(BINDING, withMounts([...binds(), bindAtScratch])), ["mounts", ...ALL_SCRATCH]);
+});
+
+void test("two non-bind mounts beside the binds fail the mounts property and every scratch property, since the scratch volume is not identified (R2)", () => {
+  const extra = { Type: "tmpfs", Source: "tmpfs", Destination: "/extra", RW: true };
+  assert.deepEqual(verifyInspect(BINDING, withMounts([...binds(), scratch(), extra])), ["mounts", ...ALL_SCRATCH]);
+});
+
+void test("an extra bind beside the scratch volume fails the mounts property alone (R2)", () => {
+  assert.deepEqual(verifyInspect(BINDING, withMounts([...binds(), scratch(), bind("/realm/extra", "/extra", false)])), ["mounts"]);
+});
+
+// The three bind mounts of a sandbox, in the order the create body names them.
+function binds(): Record<string, unknown>[] {
+  return [
+    bind(WORKSPACE, "/workspace", true),
+    bind(STATE, "/realm-state", false),
+    bind(CHANNEL, HARDENING_PROFILE.channelDestination, true),
+  ];
+}
+
+// The scratch volume's mount entry, as Podman's inspect reports a named volume.
+function scratch(name: string = SCRATCH, destination: string = HARDENING_PROFILE.scratchDestination, rw = true): Record<string, unknown> {
+  return { Type: "volume", Name: name, Source: `/var/lib/containers/storage/volumes/${name}/_data`, Destination: destination, RW: rw };
+}
+
+// A conforming inspect whose mounts are the given list.
+function withMounts(mounts: readonly Record<string, unknown>[]): Inspect {
+  const inspect = conforming();
+  inspect.Mounts = [...mounts];
+  return inspect;
+}

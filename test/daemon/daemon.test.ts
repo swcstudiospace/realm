@@ -58,7 +58,7 @@ import { FakeExecutionService } from "../support/fake-execution.js";
 import { FakeContainerStore, FakeLibpod } from "../support/fake-libpod.js";
 import { FakeOpenShell } from "../support/fake-openshell.js";
 import { boundedWait, pollUntil, scaledMs } from "../support/timing.js";
-import { HARDENING_PROFILE, RUNTIME_ARGV, RUNTIME_BINARY, tmpfsOptionsOf } from "../../src/runtime/hardening.js";
+import { HARDENING_PROFILE, RUNTIME_ARGV, RUNTIME_BINARY, scratchVolumeNameOf, tmpfsOptionsOf } from "../../src/runtime/hardening.js";
 import {
   OPENSHELL_MANAGED_LABEL_KEY,
   OPENSHELL_MANAGED_LABEL_VALUE,
@@ -2736,6 +2736,7 @@ function survivorOf(
 ): ContainerSeed {
   const sandbox = realmSandboxName(sessionId);
   const binding = sandboxBindingOf(roots, sandbox);
+  const scratch = scratchVolumeNameOf(sessionId);
   const ownLabels: Readonly<Record<string, string>> = labels ?? {
     [OPENSHELL_MANAGED_LABEL_KEY]: OPENSHELL_MANAGED_LABEL_VALUE,
     [OPENSHELL_SANDBOX_NAME_LABEL_KEY]: sandbox,
@@ -2780,6 +2781,7 @@ function survivorOf(
         { Type: "bind", Source: roots.workspaceRoot, Destination: "/workspace", RW: true },
         { Type: "bind", Source: binding.stateDir, Destination: "/realm-state", RW: false },
         { Type: "bind", Source: binding.channelDir, Destination: HARDENING_PROFILE.channelDestination, RW: true },
+        { Type: "volume", Name: scratch, Source: `/var/lib/containers/storage/volumes/${scratch}/_data`, Destination: HARDENING_PROFILE.scratchDestination, RW: true },
       ],
     },
   };

@@ -11,12 +11,13 @@ import type { ComputeDriverConfig } from "../../../src/runtime/driver/compute-dr
 import { DriverLifecycle, type AdoptionRoots, type LifecycleLibpod } from "../../../src/runtime/driver/lifecycle.js";
 import { sandboxBindingOf, type SandboxBinding } from "../../../src/runtime/driver/sandbox-binding.js";
 import { presentSecretEntries, secretDirOf, writeLaunchMaterial } from "../../../src/runtime/driver/secret-store.js";
-import { HARDENING_PROFILE, RUNTIME_ARGV, RUNTIME_BINARY, tmpfsOptionsOf } from "../../../src/runtime/hardening.js";
+import { HARDENING_PROFILE, RUNTIME_ARGV, RUNTIME_BINARY, scratchVolumeNameOf, tmpfsOptionsOf } from "../../../src/runtime/hardening.js";
 import type {
   LibpodContainerSummary,
   LibpodInfo,
   LibpodInspect,
 } from "../../../src/runtime/libpod-client.js";
+import { sessionOfRealmSandbox } from "../../../src/runtime/openshell.js";
 import { sandboxNameOfSession, sessionIdOfWorkspace } from "../../../src/session/paths.js";
 import { CONFORMING_PROC_STATUS, RUNTIME_OCI_CONFIG_TEXT } from "../hardening-fixtures.js";
 import { OCI_CONFIG_PATH, ociReaderOf, STATIC_DIR } from "../seccomp-fixtures.js";
@@ -83,6 +84,23 @@ class SurvivorLibpod implements LifecycleLibpod {
   stopContainer(): Promise<void> {
     return Promise.reject(makeRealmError("SCHEMA_INVALID"));
   }
+
+  // An adoption never creates or removes a volume, and no volume exists, so the listing is empty and an inspect finds none.
+  createVolume(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  inspectVolume(): Promise<{ readonly name: string } | null> {
+    return Promise.resolve(null);
+  }
+
+  listVolumesByLabel(): Promise<string[]> {
+    return Promise.resolve([]);
+  }
+
+  removeVolume(): Promise<void> {
+    return Promise.resolve();
+  }
 }
 
 interface Harness {
@@ -137,6 +155,12 @@ function strayOf(h: Harness, project: string): Made {
 // The raw inspect of a conforming sandbox container, bound the way create binds it. The lifecycle attaches the host evidence to it, as it
 // does for a container create starts.
 function conformingInspect(id: string, name: string, binding: SandboxBinding): Record<string, unknown> {
+  // The scratch volume of the sandbox's session (R2), named for the session the sandbox name carries.
+  const session = sessionOfRealmSandbox(name);
+  if (session === undefined) {
+    throw new Error(`the sandbox name ${name} carries no session`);
+  }
+  const scratch = scratchVolumeNameOf(session);
   return {
     Id: id,
     Name: name,
@@ -192,6 +216,13 @@ function conformingInspect(id: string, name: string, binding: SandboxBinding): R
         RW: true,
         Options: ["rbind", "rw", "noexec", "nosuid", "nodev"],
       },
+      {
+        Type: "volume",
+        Name: scratch,
+        Source: `/var/lib/containers/storage/volumes/${scratch}/_data`,
+        Destination: HARDENING_PROFILE.scratchDestination,
+        RW: true,
+      },
     ],
   };
 }
@@ -227,6 +258,7 @@ await test("a verified survivor is adopted: it is kept, its secret entries stay,
   assert.deepEqual(adoption, {
     adopted: [{ sandboxName: made.sandboxName, containerId }],
     removed: [],
+    volumesRemoved: [],
     secretsRemoved: [],
   });
   assert.deepEqual(h.libpod.removals, []);
@@ -247,6 +279,7 @@ await test("a survivor whose binding cannot be rebuilt is removed with cause no-
   assert.deepEqual(adoption, {
     adopted: [],
     removed: [{ containerId, cause: "no-artifacts" }],
+    volumesRemoved: [],
     secretsRemoved: [],
   });
   assert.deepEqual(h.libpod.removals, [containerId]);
@@ -263,6 +296,7 @@ await test("a container whose sandbox retains nothing is removed with cause no-r
   assert.deepEqual(adoption, {
     adopted: [],
     removed: [{ containerId, cause: "no-record" }],
+    volumesRemoved: [],
     secretsRemoved: [],
   });
   assert.equal(h.libpod.containers.has(containerId), false);
@@ -282,6 +316,7 @@ await test("a survivor that fails one hardening check is removed with that check
   assert.deepEqual(adoption, {
     adopted: [{ sandboxName: good.sandboxName, containerId: goodId }],
     removed: [{ containerId: badId, cause: "privileged" }],
+    volumesRemoved: [],
     secretsRemoved: [bad.sandboxName],
   });
   assert.deepEqual(h.libpod.removals, [badId]);
@@ -334,7 +369,7 @@ await test("a sandbox with no adopted container has its secret entries removed o
 
   const adoption = await h.lifecycle.adoptSurvivors(h.roots);
 
-  assert.deepEqual(adoption, { adopted: [], removed: [], secretsRemoved: [orphan.sandboxName] });
+  assert.deepEqual(adoption, { adopted: [], removed: [], volumesRemoved: [], secretsRemoved: [orphan.sandboxName] });
   assert.deepEqual(presentSecretEntries(orphanDir), []);
   assert.equal(existsSync(orphanDir), false);
 });

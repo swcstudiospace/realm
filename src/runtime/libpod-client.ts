@@ -18,10 +18,11 @@ import { request as httpRequest } from "node:http";
 import { basename, isAbsolute } from "node:path";
 import { performance } from "node:perf_hooks";
 import { makeRealmError } from "../core/errors.js";
-import { CHANNEL_MOUNT_OPTIONS, HARDENING_PROFILE, RUNTIME_ARGV, tmpfsOptionsOf } from "./hardening.js";
+import { CHANNEL_MOUNT_OPTIONS, HARDENING_PROFILE, RUNTIME_ARGV, scratchVolumeNameOf, tmpfsOptionsOf } from "./hardening.js";
 import { SECCOMP_PROFILE_FILE_NAME } from "./driver/seccomp-profile.js";
 import {
   isRealmSandboxName,
+  sessionOfRealmSandbox,
   OPENSHELL_ISOLATION_ROLE_LABEL_KEY,
   OPENSHELL_MANAGED_LABEL_KEY,
   OPENSHELL_MANAGED_LABEL_VALUE,
@@ -39,6 +40,7 @@ import {
   LIBPOD_ROUTES,
   PING_PATH,
   routeTarget,
+  VOLUME_NAME_PATTERN,
   type LibpodRoute,
 } from "./libpod-routes.js";
 
@@ -116,7 +118,8 @@ interface HttpReply {
 }
 
 interface RouteCall {
-  readonly containerId?: string;
+  // The value of the route's {id} segment: a container id, or a volume name.
+  readonly id?: string;
   readonly query?: Readonly<Record<string, string>>;
   readonly graceMs?: number;
   // Replaces the transport's request bound for this call only.
@@ -211,8 +214,8 @@ export class LibpodClient {
 
   // The raw inspect object, or null when the container does not exist.
   async inspectContainer(id: string): Promise<LibpodInspect | null> {
-    const reply = await exchangeRoute(this.transport, LIBPOD_ROUTES.inspectContainer, { containerId: id });
-    if (isNoSuchContainer(reply)) {
+    const reply = await exchangeRoute(this.transport, LIBPOD_ROUTES.inspectContainer, { id });
+    if (isAbsent(reply, "no such container")) {
       return null;
     }
     expectStatus(reply, [200]);
@@ -232,7 +235,7 @@ export class LibpodClient {
     }
     const graceSeconds = Math.ceil(timeoutMs / 1000);
     const reply = await exchangeRoute(this.transport, LIBPOD_ROUTES.stopContainer, {
-      containerId: id,
+      id,
       query: { timeout: String(graceSeconds) },
       graceMs: timeoutMs,
     });
@@ -246,13 +249,13 @@ export class LibpodClient {
     // 10 s (SIGTERM, then SIGKILL), so the request outlived the 5 s bound while the removal went on in the background.
     // The query carries the short grace, and the request bound is extended by it the way stopContainer extends its own.
     const reply = await exchangeRoute(this.transport, LIBPOD_ROUTES.removeContainer, {
-      containerId: id,
+      id,
       query: options.force
         ? { force: "true", timeout: String(FORCE_REMOVE_STOP_GRACE_SECONDS) }
         : { force: "false" },
       graceMs: options.force ? FORCE_REMOVE_STOP_GRACE_SECONDS * 1000 : 0,
     });
-    if (isNoSuchContainer(reply)) {
+    if (isAbsent(reply, "no such container")) {
       return;
     }
     // Podman 5.7.1 answers 200 with the removed id in a list. 204 is also accepted. The reply body is not read.
@@ -282,8 +285,68 @@ export class LibpodClient {
   // Starts a created container. Podman answers 304 when it is already running; that counts as started, as
   // stopContainer counts an already-stopped container. The lifecycle reads the state afterwards.
   async startContainer(id: string): Promise<void> {
-    const reply = await exchangeRoute(this.transport, LIBPOD_ROUTES.startContainer, { containerId: id });
+    const reply = await exchangeRoute(this.transport, LIBPOD_ROUTES.startContainer, { id });
     expectStatus(reply, [204, 304]);
+  }
+
+  // Creates a named volume with the given labels. Podman answers 201. A volume of that name already present is a 409, which is the
+  // sandbox name in use: the caller refuses, and removes nothing. Any other status is an unexpected reply.
+  async createVolume(name: string, labels: Readonly<Record<string, string>>): Promise<void> {
+    const labelsValid = Object.keys(labels).every((key) => LABEL_KEY_PATTERN.test(key));
+    if (!VOLUME_NAME_PATTERN.test(name) || !labelsValid) {
+      throw makeRealmError("SCHEMA_INVALID");
+    }
+    const body = JSON.stringify({ Name: name, Labels: { ...labels } });
+    const reply = await exchangeRoute(this.transport, LIBPOD_ROUTES.createVolume, { body });
+    if (reply.status === 409) {
+      throw makeRealmError("SANDBOX_NAME_IN_USE");
+    }
+    expectStatus(reply, [201]);
+  }
+
+  // The volume's name when Podman reports the volume, or null when no such volume exists. A 200 must name the volume asked for.
+  async inspectVolume(name: string): Promise<{ readonly name: string } | null> {
+    const reply = await exchangeRoute(this.transport, LIBPOD_ROUTES.inspectVolume, { id: name });
+    if (isAbsent(reply, "no such volume")) {
+      return null;
+    }
+    expectStatus(reply, [200]);
+    const body = parseJson(reply.text);
+    if (!isRecord(body) || body["Name"] !== name) {
+      throw makeRealmError("SCHEMA_INVALID");
+    }
+    return { name };
+  }
+
+  // The names of the volumes whose label key has exactly the given value. An empty list means none.
+  async listVolumesByLabel(key: string, value: string): Promise<string[]> {
+    if (!LABEL_KEY_PATTERN.test(key)) {
+      throw makeRealmError("SCHEMA_INVALID");
+    }
+    const filters = JSON.stringify({ label: [`${key}=${value}`] });
+    const reply = await exchangeRoute(this.transport, LIBPOD_ROUTES.listVolumes, { query: { filters } });
+    expectStatus(reply, [200]);
+    const body = parseJson(reply.text);
+    if (!Array.isArray(body)) {
+      throw makeRealmError("SCHEMA_INVALID");
+    }
+    return body.map((entry: unknown): string => {
+      const name = readPath(entry, ["Name"]);
+      if (typeof name !== "string" || !VOLUME_NAME_PATTERN.test(name)) {
+        throw makeRealmError("SCHEMA_INVALID");
+      }
+      return name;
+    });
+  }
+
+  // Removes the named volume. A volume already gone counts as removed. Podman refuses a volume a container still uses with a 409;
+  // that is an unexpected status here, so it is SCHEMA_INVALID and is never reported as removed.
+  async removeVolume(name: string): Promise<void> {
+    const reply = await exchangeRoute(this.transport, LIBPOD_ROUTES.removeVolume, { id: name });
+    if (isAbsent(reply, "no such volume")) {
+      return;
+    }
+    expectStatus(reply, [200, 204]);
   }
 }
 
@@ -321,9 +384,9 @@ async function settleInfo(cache: InfoCache, ttlMs: number, load: () => Promise<L
 }
 
 async function exchangeRoute(transport: Transport, route: LibpodRoute, call: RouteCall): Promise<HttpReply> {
-  checkRouteId(route, call.containerId);
+  checkRouteId(route, call.id);
   const apiVersion = await apiVersionOf(transport);
-  const target = routeTarget(route, call.containerId, apiVersion, call.query);
+  const target = routeTarget(route, call.id, apiVersion, call.query);
   return exchange(transport.socketPath, route.method, target, (call.timeoutMs ?? transport.timeoutMs) + (call.graceMs ?? 0), call.body);
 }
 
@@ -391,14 +454,14 @@ function expectStatus(reply: HttpReply, allowed: readonly number[]): void {
   }
 }
 
-// Podman answers a missing container with a 404 whose JSON cause is "no such container". Any other 404 is
-// a wrong route or an unexpected reply, so it is never read as absence. A non-JSON 404 fails in parseJson.
-function isNoSuchContainer(reply: HttpReply): boolean {
+// Podman answers an absent resource with a 404 whose JSON cause names its kind ("no such container", "no such volume"). Any other
+// 404 is a wrong route or an unexpected reply, so it is never read as absence. A non-JSON 404 fails in parseJson.
+function isAbsent(reply: HttpReply, cause: string): boolean {
   if (reply.status !== 404) {
     return false;
   }
   const body = parseJson(reply.text);
-  return isRecord(body) && body["cause"] === "no such container";
+  return isRecord(body) && body["cause"] === cause;
 }
 
 // The API version each transport reported on /_ping. A failed probe is dropped, so the next call asks again.
@@ -458,7 +521,7 @@ const WORKSPACE_OPTIONS: readonly string[] = Object.freeze(["rw", "noexec", "nos
 const STATE_OPTIONS: readonly string[] = Object.freeze(["ro", "noexec", "nosuid", "nodev"]);
 
 // Validates a spec before any engine request. It is pure: it reads no environment and sends nothing. It fails closed
-// on a spec the body must not carry: a sandbox name without the realm prefix or outside the container-id pattern, an
+// on a spec the body must not carry: a sandbox name without the realm prefix, without a session id, or outside the container-id pattern, an
 // image outside the digest-pinned form, a host path that is relative or holds a NUL byte, or a host path that names a
 // container-engine socket.
 export function validateContainerSpec(spec: ContainerSpec): void {
@@ -466,6 +529,7 @@ export function validateContainerSpec(spec: ContainerSpec): void {
   const hostPaths = [spec.workspaceDir, spec.stateDir, spec.channelDir];
   const valid =
     isRealmSandboxName(spec.sandboxName) &&
+    sessionOfRealmSandbox(spec.sandboxName) !== undefined &&
     CONTAINER_ID_PATTERN.test(spec.sandboxName) &&
     DIGEST_PINNED_IMAGE.test(spec.image) &&
     hostPaths.every(
@@ -482,6 +546,16 @@ export function validateContainerSpec(spec: ContainerSpec): void {
 // profile keeps the OCI names, because those are the names the inspect reports and the verifier compares.
 function restRlimitType(type: string): string {
   return type.replace(/^RLIMIT_/, "");
+}
+
+// The scratch volume a sandbox mounts, named for the session its sandbox name carries. A valid spec always carries one, since
+// validateContainerSpec admits no other sandbox name.
+function scratchVolumeOfSandbox(sandboxName: string): string {
+  const sessionId = sessionOfRealmSandbox(sandboxName);
+  if (sessionId === undefined) {
+    throw makeRealmError("SCHEMA_INVALID");
+  }
+  return scratchVolumeNameOf(sessionId);
 }
 
 // The create body. Every field comes from the spec, from HARDENING_PROFILE, or, for seccomp_profile_path, from the profile file
@@ -517,6 +591,9 @@ function containerCreateBody(spec: ContainerSpec, seccompProfilePath: string): R
     sysctl: { ...profile.sysctls },
     use_image_resolve_conf: true,
     tty: false,
+    // The session's scratch volume, a named volume mounted read-write at the scratch destination (R2). Podman's named-volume field
+    // carries it beside the bind and tmpfs mounts.
+    volumes: [{ name: scratchVolumeOfSandbox(spec.sandboxName), dest: profile.scratchDestination, options: ["rw"] }],
     mounts: [
       ...scratch.map((destination) => ({ type: "tmpfs", destination, options: [...tmpfsOptionsOf(destination)] })),
       { type: "bind", source: spec.workspaceDir, destination: profile.workspaceDestination, options: WORKSPACE_OPTIONS },

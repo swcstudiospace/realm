@@ -3,9 +3,9 @@
 // this file is PROVISIONAL. The gated integration suite confirms them on a Podman 5.x host
 // (S-09). They live in this file only, so a correction touches one place.
 //
-// The table holds the routes the closed libpod client uses: the read, stop, and remove routes, and the create and
-// container-start routes of the lifecycle. It has no exec route: the sandbox runtime is the container's main process,
-// so the client starts no process inside a container and takes no attach (RT-03).
+// The table holds the routes the closed libpod client uses: the read, stop, and remove routes, the create and container-start routes
+// of the lifecycle, and the scratch volume routes (create, inspect, list by label, remove). It has no exec route: the sandbox runtime
+// is the container's main process, so the client starts no process inside a container and takes no attach (RT-03).
 
 import { makeRealmError } from "../core/errors.js";
 
@@ -13,7 +13,7 @@ export type LibpodMethod = "GET" | "POST" | "DELETE";
 
 export interface LibpodRoute {
   readonly method: LibpodMethod;
-  // Path template. The single "{id}" segment is a validated container id.
+  // Path template. The single "{id}" segment is a validated resource id: a container id, or a volume name.
   readonly path: string;
 }
 
@@ -29,6 +29,10 @@ export const LIBPOD_ROUTES = Object.freeze({
   removeContainer: route("DELETE", "/libpod/containers/{id}"),
   createContainer: route("POST", "/libpod/containers/create"),
   startContainer: route("POST", "/libpod/containers/{id}/start"),
+  createVolume: route("POST", "/libpod/volumes/create"),
+  inspectVolume: route("GET", "/libpod/volumes/{id}/json"),
+  listVolumes: route("GET", "/libpod/volumes/json"),
+  removeVolume: route("DELETE", "/libpod/volumes/{id}"),
 });
 
 export type LibpodRouteName = keyof typeof LIBPOD_ROUTES;
@@ -41,6 +45,9 @@ export const LIBPOD_LIST_ID_FIELD = "Id";
 // Container ids are validated before they reach a path. The pattern admits only
 // characters that need no escaping, so a caller cannot add a path segment or a query.
 export const CONTAINER_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
+// Volume names use the same pattern. Podman's volume names are of the same character class as its container names, and a volume
+// route takes its name in the {id} segment, so it is validated by the same rule.
+export const VOLUME_NAME_PATTERN = CONTAINER_ID_PATTERN;
 
 // Podman serves libpod only under a versioned path, /v<api-version>/libpod/..., and answers an
 // unversioned libpod path with 404. The version is the one /_ping reports in its Libpod-Api-Version header.

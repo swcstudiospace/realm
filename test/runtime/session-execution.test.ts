@@ -2,7 +2,7 @@ import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { makeRealmError, RealmError, type ErrorCode } from "../../src/core/errors.js";
 import { AgentOsSupervisor } from "../../src/runtime/agentos.js";
@@ -12,7 +12,7 @@ import { SessionStore } from "../../src/session/store.js";
 import { createOpenShellAgentOsDriver, DEFAULT_AGENTOS_PROBE_PATH, DEFAULT_AGENTOS_RUNNER_PATH } from "../../src/runtime/agentos-driver.js";
 import type { RunnerChild } from "../../src/runtime/agentos-workload.js";
 import { renderNetworkPolicies } from "../../src/runtime/egress.js";
-import { HARDENING_PROFILE, RUNTIME_ARGV, RUNTIME_BINARY, tmpfsOptionsOf } from "../../src/runtime/hardening.js";
+import { HARDENING_PROFILE, RUNTIME_ARGV, RUNTIME_BINARY, scratchVolumeNameOf, tmpfsOptionsOf } from "../../src/runtime/hardening.js";
 import { LibpodClient } from "../../src/runtime/libpod-client.js";
 import { sandboxBindingOf, type SandboxBinding } from "../../src/runtime/driver/sandbox-binding.js";
 import {
@@ -27,6 +27,7 @@ import {
   OpenShellRunnerError,
   REALM_SANDBOX_NAME_PREFIX,
   realmSandboxName,
+  sessionOfRealmSandbox,
   type OpenShellRunner,
 } from "../../src/runtime/openshell.js";
 import {
@@ -195,9 +196,28 @@ function sessionBinding(f: Fixture, sessionId: string): SandboxBinding {
   );
 }
 
+// The scratch volume a sandbox mounts (R2): a read-write named volume at the scratch destination, named for the session that the
+// sandbox directory carries. The directory is the sandbox's own, so its base name is the realm sandbox name. Podman reports a volume
+// mount with its storage source, as the socket-path property requires.
+function scratchMountOf(binding: SandboxBinding): Record<string, unknown> {
+  const sessionId = sessionOfRealmSandbox(basename(binding.stateDir));
+  if (sessionId === undefined) {
+    throw new Error(`the sandbox state directory ${binding.stateDir} names no session`);
+  }
+  const name = scratchVolumeNameOf(sessionId);
+  return {
+    Type: "volume",
+    Name: name,
+    Source: `/var/lib/containers/storage/volumes/${name}/_data`,
+    Destination: HARDENING_PROFILE.scratchDestination,
+    RW: true,
+  };
+}
+
 // A libpod inspect object that conforms to every D-51 property, with the overrides merged into HostConfig. The mounts are the
-// workspace root and the sandbox's own state and channel directories, the three the driver creates, and the init process is the
-// sandbox runtime. The binding is the sandbox's own: the fixture's SESSION sandbox unless a test passes another session's.
+// workspace root, the sandbox's own state and channel directories (the three binds the driver creates), and the session's scratch
+// volume (R2). The init process is the sandbox runtime. The binding is the sandbox's own: the fixture's SESSION sandbox unless a test
+// passes another session's.
 function conformingInspect(
   f: Fixture,
   hostOverrides: Readonly<Record<string, unknown>> = {},
@@ -236,6 +256,7 @@ function conformingInspect(
       { Type: "bind", Source: f.workspaceRoot, Destination: "/workspace", RW: true },
       { Type: "bind", Source: binding.stateDir, Destination: "/realm-state", RW: false },
       { Type: "bind", Source: binding.channelDir, Destination: HARDENING_PROFILE.channelDestination, RW: true },
+      scratchMountOf(binding),
     ],
   };
 }
@@ -584,6 +605,7 @@ void test("RT-01, D-51: a state directory mounted read-write fails the mounts pr
     { Type: "bind", Source: f.workspaceRoot, Destination: "/workspace", RW: true },
     { Type: "bind", Source: f.binding.stateDir, Destination: "/realm-state", RW: true },
     { Type: "bind", Source: f.binding.channelDir, Destination: HARDENING_PROFILE.channelDestination, RW: true },
+    scratchMountOf(f.binding),
   ];
   scriptInspect(f, inspect);
   await assert.rejects(
@@ -600,6 +622,7 @@ void test("C2: a container mounted at the realm state root instead of the sandbo
     { Type: "bind", Source: f.workspaceRoot, Destination: "/workspace", RW: true },
     { Type: "bind", Source: f.stateDir, Destination: "/realm-state", RW: false },
     { Type: "bind", Source: f.binding.channelDir, Destination: HARDENING_PROFILE.channelDestination, RW: true },
+    scratchMountOf(f.binding),
   ];
   scriptInspect(f, inspect);
   await assert.rejects(
@@ -615,6 +638,7 @@ void test("C2: a container with no channel mount fails the mounts property, and 
   inspect.Mounts = [
     { Type: "bind", Source: f.workspaceRoot, Destination: "/workspace", RW: true },
     { Type: "bind", Source: f.binding.stateDir, Destination: "/realm-state", RW: false },
+    scratchMountOf(f.binding),
   ];
   scriptInspect(f, inspect);
   await assert.rejects(
@@ -701,6 +725,7 @@ void test("C2: a create whose workspaceRoot differs from another session's pinne
       { Type: "bind", Source: requestRoot, Destination: "/workspace", RW: true },
       { Type: "bind", Source: binding.stateDir, Destination: "/realm-state", RW: false },
       { Type: "bind", Source: binding.channelDir, Destination: HARDENING_PROFILE.channelDestination, RW: true },
+      scratchMountOf(binding),
     ],
   });
   await f.exec.create({ idempotencyKey: SESSION, workspaceRoot: requestRoot });
@@ -732,6 +757,7 @@ void test("C2: a container mounted at a directory other than the request's root 
       { Type: "bind", Source: mountedRoot, Destination: "/workspace", RW: true },
       { Type: "bind", Source: binding.stateDir, Destination: "/realm-state", RW: false },
       { Type: "bind", Source: binding.channelDir, Destination: HARDENING_PROFILE.channelDestination, RW: true },
+      scratchMountOf(binding),
     ],
   });
   await assert.rejects(
@@ -1526,7 +1552,7 @@ function expectationOf(f: Fixture, sessionId: string, status = ZERO_STATUS): Ses
   return {
     sessionId,
     containerId: ADOPTED_CONTAINER,
-    binding: { image: IMAGE, rootless: true, ...sessionBinding(f, sessionId) },
+    binding: { image: IMAGE, rootless: true, ...sessionBinding(f, sessionId), sessionId },
     readOciConfig: ociReaderOf(RUNTIME_OCI_CONFIG_TEXT),
     readProcStatus: () => status,
   };

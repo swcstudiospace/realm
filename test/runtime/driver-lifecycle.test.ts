@@ -134,6 +134,7 @@ function json(status: number, value: unknown): Reply {
 }
 
 const NOT_FOUND: Reply = { status: 404, text: NOT_FOUND_TEXT };
+const NO_SUCH_VOLUME: Reply = { status: 404, text: JSON.stringify({ cause: "no such volume", message: "no such volume", response: 404 }) };
 
 function labelTerms(raw: string | null): readonly string[] {
   if (raw === null) {
@@ -160,6 +161,7 @@ async function startFake(t: TestContext, options: FakeOptions): Promise<Fake> {
   const socketPath = join(tempDir(t, "realm-lifecycle-fake-"), "podman.sock");
   const seen: Seen[] = [];
   const store = new Map<string, Stored>();
+  const volumes = new Map<string, { name: string; labels: Record<string, string> }>();
   for (const seed of options.seed ?? []) {
     store.set(seed.id, { id: seed.id, name: seed.name, labels: { ...seed.labels }, running: seed.running });
   }
@@ -264,6 +266,35 @@ async function startFake(t: TestContext, options: FakeOptions): Promise<Fake> {
         store.delete(container.id);
         return { status: 200, text: "" };
       }
+      case "createVolume": {
+        const spec = JSON.parse(body) as { readonly Name: string; readonly Labels: Record<string, string> };
+        if (volumes.has(spec.Name)) {
+          return json(409, { message: "volume already exists" });
+        }
+        volumes.set(spec.Name, { name: spec.Name, labels: { ...spec.Labels } });
+        return json(201, { Name: spec.Name, Labels: { ...spec.Labels } });
+      }
+      case "inspectVolume": {
+        const volume = key === null ? undefined : volumes.get(key);
+        if (volume === undefined) {
+          return NO_SUCH_VOLUME;
+        }
+        return json(200, { Name: volume.name, Labels: volume.labels });
+      }
+      case "listVolumes": {
+        const terms = labelTerms(query.get("filters"));
+        const visible = [...volumes.values()].filter((volume) => terms.every((term) => labelMatches(volume.labels, term)));
+        return json(
+          200,
+          visible.map((volume) => ({ Name: volume.name, Labels: volume.labels })),
+        );
+      }
+      case "removeVolume": {
+        if (key === null || !volumes.delete(key)) {
+          return NO_SUCH_VOLUME;
+        }
+        return { status: 200, text: "" };
+      }
       default:
         return json(500, { message: "route not served by this fake" });
     }
@@ -335,6 +366,16 @@ function goodInspect(stateDir: string, workspaceDir: string, channelDir: string)
       Options: ["rbind", "rw", "noexec", "nosuid", "nodev"],
     },
   ];
+  // The scratch volume of the sandbox's session (R2). The sandbox name carries session sess-1, so the volume is realm-scratch-sess-1.
+  const scratchMounts = [
+    {
+      Type: "volume",
+      Name: "realm-scratch-sess-1",
+      Source: "/var/lib/containers/storage/volumes/realm-scratch-sess-1/_data",
+      Destination: HARDENING_PROFILE.scratchDestination,
+      RW: true,
+    },
+  ];
   return {
     ImageDigest: IMAGE_DIGEST,
     Path: RUNTIME_BINARY,
@@ -380,6 +421,7 @@ function goodInspect(stateDir: string, workspaceDir: string, channelDir: string)
         Options: ["rbind", "ro", "noexec", "nosuid", "nodev"],
       },
       ...channelMounts,
+      ...scratchMounts,
     ],
   };
 }
@@ -517,6 +559,11 @@ async function harness(t: TestContext, arrangement: Arrangement = {}): Promise<H
 
 function hasCode(code: ErrorCode): (error: unknown) => boolean {
   return (error) => error instanceof RealmError && error.code === code;
+}
+
+// A create the engine refused: OPENSHELL_START_FAILED, with the engine's own code as its cause.
+function startFailedCausedBy(cause: ErrorCode): (error: unknown) => boolean {
+  return (error) => error instanceof RealmError && error.code === "OPENSHELL_START_FAILED" && error.causeCode === cause;
 }
 
 function forcedRemoval(seen: readonly Seen[], containerId: string): boolean {
@@ -669,6 +716,7 @@ void test("PRD-CTR-01: a socket mount fails mounts and socket-path, and create n
   const binding: HardeningBinding = {
     image: SPEC_IMAGE,
     rootless: true,
+    sessionId: "sess-1",
     workspaceRoot: SIMULATED_WORKSPACE,
     stateDir: SIMULATED_STATE_DIR,
     channelDir: SIMULATED_CHANNEL_DIR,
@@ -987,14 +1035,14 @@ void test("PRD-CTR-01: a create whose reply never arrives removes its own contai
 
 void test("PRD-CTR-01: a 201 whose body carries no id removes its own container by name, because the labels show it is ours", async (t) => {
   const h = await harness(t, { malformedCreate: true });
-  await assert.rejects(h.lifecycle.create(h.spec), hasCode("SCHEMA_INVALID"));
+  await assert.rejects(h.lifecycle.create(h.spec), startFailedCausedBy("SCHEMA_INVALID"));
   assert.equal(h.fake.store.size, 0);
   assert.equal(forcedRemoval(h.fake.seen, SANDBOX), true);
 });
 
 void test("PRD-CTR-01 (L1): a same-name foreign container without the sandbox labels survives a failed create", async (t) => {
   const h = await harness(t, { foreignOnCreate: true });
-  await assert.rejects(h.lifecycle.create(h.spec), hasCode("SCHEMA_INVALID"));
+  await assert.rejects(h.lifecycle.create(h.spec), startFailedCausedBy("SCHEMA_INVALID"));
   assert.equal(h.fake.store.has(FOREIGN_RACE_ID), true);
   assert.equal(h.fake.seen.some((request) => request.route === "removeContainer"), false);
 });

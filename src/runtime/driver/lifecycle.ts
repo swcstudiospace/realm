@@ -18,7 +18,19 @@ import { readWorkspaceEntry, verifyWorkspaceEntry } from "../../session/workspac
 import { attachRuntimeEvidence } from "../create-evidence.js";
 import { liveCapabilityFailures, readHostProcStatus, type LiveProperty } from "../kernel-caps.js";
 import { readHostOciConfig } from "../seccomp-evidence.js";
-import { channelOptionFailures, HARDENING_PROFILE, verifyInspect, type ChannelProperty, type HardeningBinding, type HardeningProperty } from "../hardening.js";
+import {
+  channelOptionFailures,
+  HARDENING_PROFILE,
+  REALM_MANAGED_LABEL_KEY,
+  REALM_MANAGED_LABEL_VALUE,
+  SCRATCH_VOLUME_PREFIX,
+  scratchVolumeLabelsOf,
+  scratchVolumeNameOf,
+  verifyInspect,
+  type ChannelProperty,
+  type HardeningBinding,
+  type HardeningProperty,
+} from "../hardening.js";
 import {
   validateContainerSpec,
   type ContainerSpec,
@@ -40,6 +52,15 @@ import { sandboxBindingOf, type SandboxBinding } from "./sandbox-binding.js";
 
 // Grace period a sandbox container gets to stop before it is killed. Matches the session composition's grace.
 const STOP_GRACE_MS = 10_000;
+
+// The codes that already name a create's failure. A createContainer failure with one of these is rethrown unchanged, so a
+// down podman machine is not reported as an OpenShell start failure. Every other failure is OPENSHELL_START_FAILED.
+const CREATE_PASSTHROUGH_CODES: readonly ErrorCode[] = [
+  "PODMAN_MACHINE_DOWN",
+  "OPENSHELL_GATEWAY_LOST",
+  "REALM_STOPPING",
+  "STARTUP_BUDGET_EXCEEDED",
+];
 
 // C5. An entry whose path under the state directory matches this names a secret. Such an entry (file or directory)
 // must carry no group or world permission bit. The pattern is deliberately broad: a false match only refuses a
@@ -64,6 +85,10 @@ export type LifecycleLibpod = Pick<
   | "stopContainer"
   | "removeContainer"
   | "listContainersByLabel"
+  | "createVolume"
+  | "inspectVolume"
+  | "listVolumesByLabel"
+  | "removeVolume"
 >;
 
 // A step run after the container exists and before it starts. The driver writes the runtime's files here, so they are in place
@@ -107,6 +132,8 @@ export interface DriverAdoption {
   readonly adopted: { sandboxName: string; containerId: string }[];
   readonly removed: { containerId: string; cause: string }[];
   readonly secretsRemoved: string[];
+  // The realm volumes removed because no adopted sandbox references them, each with its cause, once a listing proved them gone.
+  readonly volumesRemoved: { name: string; cause: string }[];
 }
 
 // A property a container is refused for: the verifier's properties (D-51), the workspace mount's options and the terminal check
@@ -142,6 +169,13 @@ interface Adoption {
 interface Removal {
   readonly kind: "remove";
   readonly containerId: string;
+  readonly cause: string;
+  readonly sandboxName: string;
+}
+
+// A realm volume to remove, with the cause it is removed for.
+interface VolumePlan {
+  readonly name: string;
   readonly cause: string;
 }
 
@@ -204,10 +238,21 @@ export class DriverLifecycle {
     const secretPlan: SecretPlan[] = secretDirs
       .filter((dir) => !keptSandboxes.has(dir.name))
       .map((dir) => ({ ...dir, entries: presentSecretEntries(dir.path) }));
+    // The realm volumes are listed before the first removal, as the containers are, so a failed listing rejects the adoption with nothing removed.
+    const volumes = await listRealmVolumes(this.libpod);
     const removalFailure = await this.removeContainers(removals);
     const survivors = new Set((await bounded(listRealmContainers(this.libpod))).map((container) => container.id));
     if (removals.some((removal) => survivors.has(removal.containerId))) {
       throw makeRealmError("REALM_STOPPING", removalFailure);
+    }
+    // A realm volume that no adopted sandbox references goes after the containers, since a volume in use is not removed. Its removal is
+    // proven by a listing, as the containers' is. An unproven removal rejects the adoption with REALM_STOPPING. A volume a kept sandbox uses
+    // is never in the plan.
+    const volumePlan = orphanVolumesOf(volumes, adoptions, removals);
+    const volumeFailure = await this.removeVolumes(volumePlan);
+    const stillListed = new Set(await listRealmVolumes(this.libpod));
+    if (volumePlan.some((volume) => stillListed.has(volume.name))) {
+      throw makeRealmError("REALM_STOPPING", volumeFailure);
     }
     const secretsRemoved = removeSecretPlan(secretPlan);
     for (const adoption of adoptions) {
@@ -217,6 +262,7 @@ export class DriverLifecycle {
     return {
       adopted: adoptions.map(({ sandboxName, containerId }) => ({ sandboxName, containerId })),
       removed: removals.map(({ containerId, cause }) => ({ containerId, cause })),
+      volumesRemoved: volumePlan.map(({ name, cause }) => ({ name, cause })),
       secretsRemoved,
     };
   }
@@ -230,6 +276,11 @@ export class DriverLifecycle {
     validateContainerSpec(spec);
     // The sweep removes only realm-prefixed names, so a container with any other name would escape it.
     if (!isRealmSandboxName(spec.sandboxName)) {
+      throw makeRealmError("SCHEMA_INVALID");
+    }
+    // The session the sandbox belongs to names its scratch volume and is part of its binding (R2). A name without one is refused.
+    const sessionId = sessionOfRealmSandbox(spec.sandboxName);
+    if (sessionId === undefined) {
       throw makeRealmError("SCHEMA_INVALID");
     }
     const sandboxBinding = sandboxBindingOf(
@@ -250,6 +301,44 @@ export class DriverLifecycle {
     if (existing !== null || this.adopted.has(spec.sandboxName)) {
       throw makeRealmError("SANDBOX_NAME_IN_USE");
     }
+    // The session's scratch volume is created before the container, which mounts it. A volume of the same name that is already there
+    // belongs to a session that still holds it, so this create refuses it and does not take it over.
+    const volume = scratchVolumeNameOf(sessionId);
+    if ((await bounded(this.libpod.inspectVolume(volume))) !== null) {
+      throw makeRealmError("SANDBOX_NAME_IN_USE");
+    }
+    try {
+      await bounded(this.libpod.createVolume(volume, scratchVolumeLabelsOf(sessionId)));
+    } catch (error) {
+      // A 409 is a volume of the name that this create did not make, so it is rethrown and nothing is removed. Any other failure
+      // may have left this create's volume, so it is removed by name and the removal is proven by a listing.
+      if (codeOf(error) === "SANDBOX_NAME_IN_USE") {
+        throw error;
+      }
+      const removeCause = await this.discardVolume(volume);
+      if (error instanceof RealmError && removeCause !== undefined) {
+        reportSurvivor(error, volume, removeCause, "volume");
+      }
+      throw error;
+    }
+    const binding: HardeningBinding = { image: spec.image, rootless: info.rootless, sessionId, ...sandboxBinding };
+    try {
+      return await this.createSandboxContainer(spec, binding, beforeStart);
+    } catch (error) {
+      // The container's own failure has already removed the container, so this create's volume is removed after it, with proof.
+      const removeCause = await this.discardVolume(volume);
+      if (error instanceof RealmError && removeCause !== undefined) {
+        reportSurvivor(error, volume, removeCause, "volume");
+      }
+      throw error;
+    }
+  }
+
+  // Creates the sandbox container on the session's scratch volume, runs the before-start step, starts the container and verifies it.
+  // Each failure removes the container before it is thrown. A create the engine refuses is OPENSHELL_START_FAILED with the engine's code
+  // as its cause, including one that cannot attach the volume at /scratch, unless that code names its own failure, which is rethrown
+  // unchanged. No fallback mount, container or volume is made.
+  private async createSandboxContainer(spec: ContainerSpec, binding: HardeningBinding, beforeStart?: BeforeStart): Promise<string> {
     let id: string;
     try {
       id = await this.libpod.createContainer(spec);
@@ -262,12 +351,18 @@ export class DriverLifecycle {
       // Any other failure may have left this create's own container. It is removed by name only when its labels show
       // it is this spec's sandbox, so a foreign container of the name is left alone.
       const removeCause = await this.discardOwnedByName(spec);
-      if (error instanceof RealmError && removeCause !== undefined) {
-        reportSurvivor(error, spec.sandboxName, removeCause);
+      if (error instanceof RealmError && CREATE_PASSTHROUGH_CODES.includes(error.code)) {
+        if (removeCause !== undefined) {
+          reportSurvivor(error, spec.sandboxName, removeCause);
+        }
+        throw error;
       }
-      throw error;
+      const refusal = makeRealmError("OPENSHELL_START_FAILED", codeOf(error));
+      if (removeCause !== undefined) {
+        reportSurvivor(refusal, spec.sandboxName, removeCause);
+      }
+      throw refusal;
     }
-    const binding: HardeningBinding = { image: spec.image, rootless: info.rootless, ...sandboxBinding };
     await this.checkBeforeStart(id);
     if (beforeStart !== undefined) {
       try {
@@ -311,6 +406,15 @@ export class DriverLifecycle {
     }
     // The sandbox's containers are gone, so an adopted record of the name no longer refuses a create of it.
     this.adopted.delete(sandboxName);
+    // The sandbox's scratch volume goes after its container, since a container holds its volume while it exists. The removal is
+    // proven by a listing. An unproven removal keeps the sandbox's state directory and secret entries, so a retry of delete can finish.
+    const volume = scratchVolumeOfSandbox(sandboxName);
+    if (volume !== undefined) {
+      const removeCause = await this.discardVolume(volume);
+      if (removeCause !== undefined) {
+        throw makeRealmError("CLEANUP_FAILED", removeCause);
+      }
+    }
     if (dirExists) {
       try {
         this.removeDirectory(dir);
@@ -418,6 +522,39 @@ export class DriverLifecycle {
     }
   }
 
+  // Removes a scratch volume by name, then proves it gone with a listing of the realm's volumes. Returns undefined when the listing no
+  // longer holds it. Otherwise returns the code that keeps it: the removal's own code when it failed, CLEANUP_FAILED when the removal
+  // returned and the volume is still listed, or the listing's code when the listing itself failed.
+  private async discardVolume(volume: string): Promise<ErrorCode | undefined> {
+    let removeCause: ErrorCode | undefined;
+    try {
+      await bounded(this.libpod.removeVolume(volume));
+    } catch (error: unknown) {
+      removeCause = asRealmError(error).code;
+    }
+    let listed: readonly string[];
+    try {
+      listed = await listRealmVolumes(this.libpod);
+    } catch (error: unknown) {
+      return asRealmError(error).code;
+    }
+    return listed.includes(volume) ? (removeCause ?? "CLEANUP_FAILED") : undefined;
+  }
+
+  // Removes each planned volume and returns the code of the first failed removal. A failed removal does not stop the others; the
+  // listing that follows decides which volume is gone.
+  private async removeVolumes(plan: readonly VolumePlan[]): Promise<ErrorCode | undefined> {
+    let failure: ErrorCode | undefined;
+    for (const volume of plan) {
+      try {
+        await bounded(this.libpod.removeVolume(volume.name));
+      } catch (error: unknown) {
+        failure ??= asRealmError(error).code;
+      }
+    }
+    return failure;
+  }
+
   // Inspects every listed container. A container the engine reports absent is not a survivor. A failed inspect rejects the adoption,
   // with the code it carries, before any removal.
   private async inspectAll(
@@ -443,15 +580,15 @@ export class DriverLifecycle {
   private verdictOf(container: LibpodContainerSummary, inspect: LibpodInspect, roots: AdoptionRoots, rootless: boolean): Verdict {
     const sandboxName = container.labels?.[OPENSHELL_SANDBOX_NAME_LABEL_KEY] ?? "";
     if (!namedAs(inspect, sandboxName)) {
-      return { kind: "remove", containerId: container.id, cause: "no-record" };
+      return { kind: "remove", containerId: container.id, cause: "no-record", sandboxName };
     }
     const binding = this.rebuildBinding(sandboxName, roots, rootless);
     if (typeof binding === "string") {
-      return { kind: "remove", containerId: container.id, cause: binding };
+      return { kind: "remove", containerId: container.id, cause: binding, sandboxName };
     }
     const failure = this.verificationFailure(inspect, binding);
     if (failure !== undefined) {
-      return { kind: "remove", containerId: container.id, cause: failure };
+      return { kind: "remove", containerId: container.id, cause: failure, sandboxName };
     }
     return { kind: "adopt", sandboxName, containerId: container.id };
   }
@@ -467,7 +604,7 @@ export class DriverLifecycle {
       if (entry === null && !secretDirExists(this.secretRoot, sandboxName)) {
         return "no-record";
       }
-      if (entry === null || !isInsideRoot(bindRoot(roots.workspaceCeiling), entry.workspaceRoot)) {
+      if (sessionId === undefined || entry === null || !isInsideRoot(bindRoot(roots.workspaceCeiling), entry.workspaceRoot)) {
         return "no-artifacts";
       }
       const workspaceRoot = verifyWorkspaceEntry(entry).realPath;
@@ -479,6 +616,7 @@ export class DriverLifecycle {
       return {
         image: roots.image,
         rootless,
+        sessionId,
         workspaceRoot: binding.workspaceRoot,
         stateDir: binding.stateDir,
         channelDir: binding.channelDir,
@@ -565,10 +703,51 @@ function removeSecretPlan(plan: readonly SecretPlan[]): string[] {
   return removed;
 }
 
+// The realm's scratch volumes: the volumes the realm labels as its own whose name carries the scratch prefix. The listing is bounded.
+async function listRealmVolumes(libpod: LifecycleLibpod): Promise<string[]> {
+  const names = await bounded(libpod.listVolumesByLabel(REALM_MANAGED_LABEL_KEY, REALM_MANAGED_LABEL_VALUE));
+  return names.filter((name) => name.startsWith(SCRATCH_VOLUME_PREFIX));
+}
+
+// The scratch volume of a sandbox, named for its session, or undefined when the sandbox name carries no session.
+function scratchVolumeOfSandbox(sandboxName: string): string | undefined {
+  const sessionId = sessionOfRealmSandbox(sandboxName);
+  return sessionId === undefined ? undefined : scratchVolumeNameOf(sessionId);
+}
+
+// The realm volumes no adopted sandbox references, each with the cause it is removed for: the cause of its sandbox's removal in this
+// adoption, or no-container when no container of its sandbox was removed here.
+function orphanVolumesOf(
+  volumes: readonly string[],
+  adoptions: readonly Adoption[],
+  removals: readonly Removal[],
+): VolumePlan[] {
+  const kept = new Set<string>();
+  for (const adoption of adoptions) {
+    const volume = scratchVolumeOfSandbox(adoption.sandboxName);
+    if (volume !== undefined) {
+      kept.add(volume);
+    }
+  }
+  const causes = new Map<string, string>();
+  for (const removal of removals) {
+    const volume = scratchVolumeOfSandbox(removal.sandboxName);
+    if (volume !== undefined) {
+      causes.set(volume, removal.cause);
+    }
+  }
+  return volumes.filter((name) => !kept.has(name)).map((name) => ({ name, cause: causes.get(name) ?? "no-container" }));
+}
+
 // Adds the survivor's id and the cleanup code to a refusal's message. The refusal keeps its code, its property, and
-// its original cause; only the message gains the note.
-function reportSurvivor(refusal: RealmError, survivorId: string, cleanupCode: ErrorCode): void {
-  refusal.message = `${refusal.message} Cleanup failed: container ${survivorId} survived (cleanup code ${cleanupCode}).`;
+// its original cause; only the message gains the note. The kind names what survived: a container or a volume.
+function reportSurvivor(
+  refusal: RealmError,
+  survivorId: string,
+  cleanupCode: ErrorCode,
+  kind: "container" | "volume" = "container",
+): void {
+  refusal.message = `${refusal.message} Cleanup failed: ${kind} ${survivorId} survived (cleanup code ${cleanupCode}).`;
 }
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {

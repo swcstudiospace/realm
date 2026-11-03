@@ -930,6 +930,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
     const binding: HardeningBinding = {
       image: config.image,
       rootless: info.rootless,
+      sessionId: record.sessionId,
       ...sandboxBindingOf(
         { workspaceRoot: resolved.pinned.realPath, stateRoot: sandboxStateRoot, secretRoot },
         realmSandboxName(record.sessionId),

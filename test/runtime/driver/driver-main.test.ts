@@ -322,6 +322,8 @@ interface FakeEngine {
 async function startFakeEngine(t: TestContext, options: { readonly refuseRemoval?: boolean } = {}): Promise<FakeEngine> {
   const dir = mkdtempSync(join(tmpdir(), "realm-engine-"));
   const engine: FakeEngine = { socketPath: join(dir, "podman.sock"), routes: [], containers: new Map() };
+  // The volumes the engine holds, by name, with the labels each was created with (the driver's scratch volumes).
+  const volumes = new Map<string, Readonly<Record<string, string>>>();
   const server = createHttpServer((req, res) => {
     const url = new URL(req.url ?? "/", "http://engine.invalid");
     if (url.pathname === PING_PATH) {
@@ -331,6 +333,24 @@ async function startFakeEngine(t: TestContext, options: { readonly refuseRemoval
     }
     const matched = matchLibpodRoute(req.method ?? "", url.pathname);
     engine.routes.push(matched?.name ?? "unmatched");
+    if (matched?.name === "createVolume") {
+      const chunks: Buffer[] = [];
+      req.on("data", (chunk: Buffer) => {
+        chunks.push(chunk);
+      });
+      req.on("end", () => {
+        const spec = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { readonly Name: string; readonly Labels: Record<string, string> };
+        if (volumes.has(spec.Name)) {
+          res.writeHead(409, { "content-type": "application/json" });
+          res.end(JSON.stringify({ message: "volume already exists" }));
+          return;
+        }
+        volumes.set(spec.Name, { ...spec.Labels });
+        res.writeHead(201, { "content-type": "application/json" });
+        res.end(JSON.stringify({ Name: spec.Name, Labels: spec.Labels }));
+      });
+      return;
+    }
     if (matched?.name === "listContainers") {
       const listed = [...engine.containers].map(([id, name]) => ({
         Id: id,
@@ -360,6 +380,37 @@ async function startFakeEngine(t: TestContext, options: { readonly refuseRemoval
     }
     if (matched?.name === "removeContainer" && matched.containerId !== null && options.refuseRemoval !== true) {
       engine.containers.delete(matched.containerId);
+      res.writeHead(200);
+      res.end();
+      return;
+    }
+    if (matched?.name === "inspectVolume") {
+      const volume = matched.containerId === null ? undefined : volumes.get(matched.containerId);
+      if (volume === undefined) {
+        res.writeHead(404, { "content-type": "application/json" });
+        res.end(JSON.stringify({ cause: "no such volume", message: "no such volume", response: 404 }));
+        return;
+      }
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ Name: matched.containerId, Labels: volume }));
+      return;
+    }
+    if (matched?.name === "listVolumes") {
+      const filters = JSON.parse(url.searchParams.get("filters") ?? "{}") as { readonly label?: readonly string[] };
+      const terms = filters.label ?? [];
+      const listed = [...volumes]
+        .filter(([, labels]) => terms.every((term) => labels[term.slice(0, term.indexOf("="))] === term.slice(term.indexOf("=") + 1)))
+        .map(([name, labels]) => ({ Name: name, Labels: labels }));
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(listed));
+      return;
+    }
+    if (matched?.name === "removeVolume") {
+      if (matched.containerId === null || !volumes.delete(matched.containerId)) {
+        res.writeHead(404, { "content-type": "application/json" });
+        res.end(JSON.stringify({ cause: "no such volume", message: "no such volume", response: 404 }));
+        return;
+      }
       res.writeHead(200);
       res.end();
       return;
