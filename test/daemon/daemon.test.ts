@@ -49,6 +49,7 @@ import { connectDaemon } from "../../src/daemon/client.js";
 import { ERROR_CATALOGUE } from "../../src/core/errors.js";
 import { renameSync } from "node:fs";
 import { SessionStore } from "../../src/session/store.js";
+import { listWorkspaceEntryIds } from "../../src/session/workspace-registry.js";
 import type { PodmanProbeResult } from "../../src/runtime/podman-probe.js";
 import { controlSocketPath } from "../../src/session/paths.js";
 import type { ToolOutcome } from "../../src/tools/dispatch.js";
@@ -539,6 +540,9 @@ void test("CRASH-01, CRASH-02, CRASH-04: startDaemon sweeps orphan temp files, r
       containersRemoved: 1,
       recordsDeleted: 1,
       tempFilesRemoved: 2,
+      unattributedTempFiles: 2,
+      unattributedRecords: 1,
+      registryEntriesRemoved: 0,
       auditLinesReconciled: 1,
       truncated: false,
       unfinishedSweepRoots: [],
@@ -651,6 +655,9 @@ void test("CRASH-04: a reap that fails after removing a container still reports 
       containersRemoved: 1,
       recordsDeleted: 0,
       tempFilesRemoved: 0,
+      unattributedTempFiles: 0,
+      unattributedRecords: 0,
+      registryEntriesRemoved: 0,
       auditLinesReconciled: 0,
       truncated: false,
       unfinishedSweepRoots: [],
@@ -2476,4 +2483,105 @@ void test("T2 (g): up refused by the podman probe rejects with the probe code ov
   assert.ok(error instanceof RealmError, "the refusal arrives as a RealmError");
   assert.equal(error.code, "PODMAN_MISSING");
   assert.equal(error.message, ERROR_CATALOGUE.PODMAN_MISSING.reason);
+});
+
+// MULTI-03 (plan 09 T1, C9): a startup writes each orphan removal to the audit file of the session whose recorded workspace holds
+// the path, and writes no line under the id daemon. The owners are read before the reap deletes the records.
+void test("MULTI-03: a startup attributes each orphan removal to the session whose recorded workspace holds it, and writes no daemon line", async (t) => {
+  const fixture = makeDirs();
+  const [a, b] = ["a", "b"].map((name) => projectDir(fixture, name));
+  const store = new SessionStore(fixture.stateDir);
+  for (const dir of [a!, b!]) {
+    store.save({
+      realmId: `realm-${selectionOf(dir).sessionId}`,
+      sessionId: selectionOf(dir).sessionId,
+      workspaceRoot: dir,
+      state: "unbound",
+      controlSocketPath: controlSocketPath(fixture.stateDir),
+      containerId: null,
+    });
+  }
+  const hourAgo = new Date(Date.now() - 3_600_000);
+  const orphanA = join(a!, ".fa.txt.realm-tmp-0123456789abcdef");
+  const orphanB = join(b!, ".fb.txt.realm-tmp-0123456789abcdef");
+  const outside = join(fixture.base, ".fo.txt.realm-tmp-0123456789abcdef");
+  for (const orphan of [orphanA, orphanB, outside]) {
+    writeFileSync(orphan, "partial");
+    utimesSync(orphan, hourAgo, hourAgo);
+  }
+  const reports: StartupReport[] = [];
+  const daemon = await startDaemon(
+    daemonParts(fixture, {
+      ...wideOptions(fixture),
+      onStartup: (report) => {
+        reports.push(report);
+      },
+    }).options,
+  );
+  t.after(() => cleanupDaemon(daemon));
+
+  assert.equal(existsSync(orphanA), false);
+  assert.equal(existsSync(orphanB), false);
+  assert.equal(existsSync(outside), false);
+  assert.deepEqual(auditLinesOf(fixture, selectionOf(a!).sessionId).map((line) => line["path"]), [orphanA]);
+  assert.deepEqual(auditLinesOf(fixture, selectionOf(b!).sessionId).map((line) => line["path"]), [orphanB]);
+  assert.equal(existsSync(join(fixture.stateDir, "audit", "daemon.jsonl")), false, "no line is written under the id daemon");
+  assert.equal(reports[0]?.unattributedTempFiles, 1, "the file outside both workspaces is counted, not attributed");
+  assert.equal(reports[0]?.recordsDeleted, 2);
+  assert.deepEqual(store.list(), [], "the reap deleted both records, and the attribution was taken before it");
+});
+
+void test("MULTI-03: a record the startup cannot read is counted in unattributedRecords and the start completes (C9)", async (t) => {
+  const fixture = makeDirs();
+  mkdirSync(join(fixture.stateDir, "sessions"), { recursive: true });
+  writeFileSync(join(fixture.stateDir, "sessions", "bad-session.json"), "{not json");
+  const reports: StartupReport[] = [];
+  const daemon = await startDaemon(
+    daemonParts(fixture, {
+      onStartup: (report) => {
+        reports.push(report);
+      },
+    }).options,
+  );
+  t.after(() => cleanupDaemon(daemon));
+
+  assert.equal(reports.length, 1, "the startup completed its maintenance");
+  assert.equal(reports[0]?.unattributedRecords, 1);
+  assert.equal(reports[0]?.maintenanceComplete, true);
+  assert.equal(snapshotStateOf(await sendRequest(daemon.socketPath, upRequest("bad-s", fixture.ws))), "active");
+});
+
+void test("MULTI-03: a startup removes the registry entries an earlier generation left, and a second startup removes none", async (t) => {
+  const fixture = makeDirs();
+  // A daemon that stops without a down keeps its record and its registry entry, as a killed daemon leaves them.
+  const first = await startDaemon(daemonParts(fixture).options);
+  assert.equal(snapshotStateOf(await sendRequest(first.socketPath, upRequest("g-up", fixture.ws))), "active");
+  assert.equal(listWorkspaceEntryIds(fixture.stateDir).length, 1, "the earlier generation left one registry entry");
+  await first.stop();
+  await awaitDone(first);
+
+  const reports: StartupReport[] = [];
+  const second = await startDaemon(
+    daemonParts(fixture, {
+      onStartup: (report) => {
+        reports.push(report);
+      },
+    }).options,
+  );
+  t.after(() => cleanupDaemon(second));
+  assert.equal(reports[0]?.registryEntriesRemoved, 1);
+  assert.equal(reports[0]?.recordsDeleted, 1);
+  assert.deepEqual(listWorkspaceEntryIds(fixture.stateDir), [], "the entry's file is gone");
+  await second.stop();
+  await awaitDone(second);
+
+  const third = await startDaemon(
+    daemonParts(fixture, {
+      onStartup: (report) => {
+        reports.push(report);
+      },
+    }).options,
+  );
+  t.after(() => cleanupDaemon(third));
+  assert.equal(reports[1]?.registryEntriesRemoved, 0, "a second startup removes nothing");
 });

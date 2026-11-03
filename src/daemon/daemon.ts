@@ -12,7 +12,7 @@
 
 import { rmSync, statSync } from "node:fs";
 import { createConnection, createServer, type Server, type Socket } from "node:net";
-import { join } from "node:path";
+import { isAbsolute, join, relative, sep } from "node:path";
 import { performance } from "node:perf_hooks";
 import { AndaBridge } from "../anda/client.js";
 import { appendAudit } from "../audit/log.js";
@@ -53,7 +53,12 @@ import { removeAllRealmContainers } from "../runtime/sweep.js";
 import { controlSocketPath, sessionIdOfWorkspace, sessionsDirOf, type EnvironmentLike } from "../session/paths.js";
 import { reapStartup, type ReapResult } from "../session/reap.js";
 import { SessionStore } from "../session/store.js";
-import { readWorkspaceEntry, removeWorkspaceEntry, writeWorkspaceEntry } from "../session/workspace-registry.js";
+import {
+  listWorkspaceEntryIds,
+  readWorkspaceEntry,
+  removeWorkspaceEntry,
+  writeWorkspaceEntry,
+} from "../session/workspace-registry.js";
 import { AdmissionLedger } from "./admission.js";
 import {
   chmodSocket,
@@ -159,6 +164,12 @@ export interface StartupReport {
   // Present only when the reap itself failed: the catalogue code it failed with. The report is then partial: it holds what the
   // reap had destroyed before it stopped, no sweep or reconciliation ran, and the start fails with that same error.
   readonly reapFailure?: ErrorCode;
+  // Orphan temp files removed from no recorded workspace. They are counted here and written to no audit file (C9).
+  readonly unattributedTempFiles: number;
+  // Records the startup could not read. Their workspace is unknown, so they own no orphan (C9).
+  readonly unattributedRecords: number;
+  // Registry entries of earlier generations that the startup removed.
+  readonly registryEntriesRemoved: number;
   readonly failures: number;
 }
 
@@ -891,8 +902,6 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
       sweep,
       policy,
       stateDir,
-      // The orphan sweep names no session yet: no audit line is written for a removal (plan 09 adds the attribution).
-      attributeOrphan: () => undefined,
       now: () => Date.now(),
       monotonicNow: options.monotonicNow ?? (() => performance.now()),
       budgetMs: options.startupMaintenanceBudgetMs ?? STARTUP_MAINTENANCE_BUDGET_MS,
@@ -925,13 +934,10 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
 export type StartupSweep = (onRemoved: (id: string) => void) => Promise<number>;
 
 interface StartupMaintenanceDeps {
-  readonly store: Pick<SessionStore, "list" | "delete">;
+  readonly store: Pick<SessionStore, "list" | "load" | "delete">;
   readonly sweep: StartupSweep;
   readonly policy: Policy;
   readonly stateDir: string;
-  // The session whose audit file records an orphan removal, or undefined when the removal belongs to no session. The
-  // attribution is plan 09's; until then the caller passes a function that names none.
-  readonly attributeOrphan: (path: string) => string | undefined;
   // Wall-clock milliseconds, for the age of a temp file (its mtime is a wall-clock value).
   readonly now: () => number;
   // Monotonic milliseconds (performance.now()), for the budget. The deadline is read on this clock only.
@@ -957,8 +963,16 @@ async function runStartupMaintenance(deps: StartupMaintenanceDeps): Promise<void
   const containerIds: string[] = [];
   let sweptCount = 0;
   let recordsDeleted = 0;
+  let registryEntriesRemoved = 0;
+  let unreadableRecords = 0;
+  let unattributedTempFiles = 0;
+  let owners: readonly RecordOwner[] = [];
   let reaped: ReapResult;
   try {
+    // The owners are read before the reap deletes the records, so each orphan's removal can be attributed (C9).
+    const captured = captureOwners(deps.store);
+    owners = captured.owners;
+    unreadableRecords = captured.unreadable;
     reaped = await reapStartup({
       store: {
         list: () => deps.store.list(),
@@ -974,6 +988,11 @@ async function runStartupMaintenance(deps: StartupMaintenanceDeps): Promise<void
         return sweptCount;
       },
     });
+    // The reap deleted every record, so no registry entry is live: each entry left by an earlier generation is removed.
+    for (const id of listWorkspaceEntryIds(deps.stateDir)) {
+      removeWorkspaceEntry(deps.stateDir, id);
+      registryEntriesRemoved += 1;
+    }
   } catch (error: unknown) {
     // The reap failed, possibly after it had removed containers or deleted records. Record what was destroyed and why it
     // stopped, hand it to the observer so the log has it, and rethrow the original error: nothing is served after it.
@@ -989,6 +1008,9 @@ async function runStartupMaintenance(deps: StartupMaintenanceDeps): Promise<void
       auditListingTruncated: false,
       maintenanceComplete: false,
       reapFailure: codeOf(error),
+      unattributedTempFiles,
+      unattributedRecords: unreadableRecords,
+      registryEntriesRemoved,
       failures: 1,
     });
     throw error;
@@ -1011,8 +1033,9 @@ async function runStartupMaintenance(deps: StartupMaintenanceDeps): Promise<void
         ownerUid,
         deadlineMs: Math.min(DEFAULT_SWEEP_DEADLINE_MS, sweepShareMs),
         audit: (entry) => {
-          const sessionId = deps.attributeOrphan(entry.path);
+          const sessionId = ownerOfPath(owners, entry.path);
           if (sessionId === undefined) {
+            unattributedTempFiles += 1;
             return;
           }
           appendAudit(deps.stateDir, {
@@ -1060,8 +1083,53 @@ async function runStartupMaintenance(deps: StartupMaintenanceDeps): Promise<void
     unfinishedAuditFiles,
     auditListingTruncated,
     maintenanceComplete: unfinishedSweepRoots.length === 0 && auditComplete,
+    unattributedTempFiles,
+    unattributedRecords: unreadableRecords,
+    registryEntriesRemoved,
     failures,
   });
+}
+
+// A record as it stood before the reap: the session it names and the workspace it was recorded for.
+interface RecordOwner {
+  readonly sessionId: string;
+  readonly workspaceRoot: string;
+}
+
+// The records the reap is about to delete. A record that cannot be read has no known workspace, so it owns no orphan, and it
+// is counted.
+function captureOwners(store: Pick<SessionStore, "list" | "load">): { readonly owners: RecordOwner[]; readonly unreadable: number } {
+  const owners: RecordOwner[] = [];
+  let unreadable = 0;
+  for (const sessionId of store.list()) {
+    let record: ReturnType<SessionStore["load"]>;
+    try {
+      record = store.load(sessionId);
+    } catch {
+      unreadable += 1;
+      continue;
+    }
+    if (record === null) {
+      unreadable += 1;
+    } else {
+      owners.push({ sessionId, workspaceRoot: record.workspaceRoot });
+    }
+  }
+  return { owners, unreadable };
+}
+
+// The session whose recorded workspace contains the path: an owner whose root is the path or one of its ancestors, the longest
+// root winning. The comparison is by path segment, so /ws-other is not inside /ws. Undefined when no owner contains it.
+function ownerOfPath(owners: readonly RecordOwner[], path: string): string | undefined {
+  let best: RecordOwner | undefined;
+  for (const owner of owners) {
+    const rel = relative(owner.workspaceRoot, path);
+    const contains = rel === "" || (!isAbsolute(rel) && rel.split(sep)[0] !== "..");
+    if (contains && (best === undefined || owner.workspaceRoot.length > best.workspaceRoot.length)) {
+      best = owner;
+    }
+  }
+  return best?.sessionId;
 }
 
 // The roots the orphan sweep walks (D-1401): the policy's workspace roots, the sessions directory, the runtime directory and

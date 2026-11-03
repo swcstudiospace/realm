@@ -199,6 +199,9 @@ void test("CRASH-04: the start's onStartup report is written as one stderr line 
         containersRemoved: 2,
         recordsDeleted: 1,
         tempFilesRemoved: 3,
+        unattributedTempFiles: 0,
+        unattributedRecords: 0,
+        registryEntriesRemoved: 0,
         auditLinesReconciled: 4,
         truncated: false,
         unfinishedSweepRoots: [],
@@ -220,6 +223,9 @@ void test("CRASH-04: the start's onStartup report is written as one stderr line 
     containerIds: ["c0ffee", "decaf1"],
     recordsDeleted: 1,
     tempFilesRemoved: 3,
+    unattributedTempFiles: 0,
+    unattributedRecords: 0,
+    registryEntriesRemoved: 0,
     auditLinesReconciled: 4,
     maintenanceComplete: true,
     unfinishedAuditFiles: [],
@@ -240,6 +246,9 @@ void test("CRASH-04: the startup line has no id brackets when no container was r
         containersRemoved: 0,
         recordsDeleted: 0,
         tempFilesRemoved: 0,
+        unattributedTempFiles: 0,
+        unattributedRecords: 0,
+        registryEntriesRemoved: 0,
         auditLinesReconciled: 0,
         truncated: false,
         unfinishedSweepRoots: [],
@@ -272,6 +281,9 @@ void test("STARTUP budget: the startup line says maintenanceComplete=false and n
         containersRemoved: 0,
         recordsDeleted: 0,
         tempFilesRemoved: 0,
+        unattributedTempFiles: 0,
+        unattributedRecords: 0,
+        registryEntriesRemoved: 0,
         auditLinesReconciled: 0,
         truncated: true,
         unfinishedSweepRoots: ["<workspace>", "<state>/sessions"],
@@ -305,6 +317,9 @@ void test("CRASH-04: a failed reap's partial report is logged, then the start fa
         containersRemoved: 1,
         recordsDeleted: 0,
         tempFilesRemoved: 0,
+        unattributedTempFiles: 0,
+        unattributedRecords: 0,
+        registryEntriesRemoved: 0,
         auditLinesReconciled: 0,
         truncated: false,
         unfinishedSweepRoots: [],
@@ -341,6 +356,9 @@ void test("STARTUP budget: a long unfinished list is sampled at ten names, the c
         containersRemoved: 0,
         recordsDeleted: 0,
         tempFilesRemoved: 0,
+        unattributedTempFiles: 0,
+        unattributedRecords: 0,
+        registryEntriesRemoved: 0,
         auditLinesReconciled: 0,
         truncated: false,
         unfinishedSweepRoots: [],
@@ -651,4 +669,39 @@ void test("a failed start writes daemon.failed to <stateDir>/daemon.log, not onl
     .split("\n")
     .map((line) => JSON.parse(line) as Record<string, unknown>);
   assert.ok(records.some((record) => record["event"] === "daemon.failed" && record["code"] === "AGENTOS_CRASH_LOOP"));
+});
+
+// MULTI-03 (plan 09 T2): the startup line names the registry entries the startup removed and the records it deleted.
+void test("MULTI-03: the startup line carries registryEntriesRemoved and recordsDeleted, with the unattributed counts", async (t) => {
+  const dir = tempDir(t);
+  const h = harness(writeConfig(dir, validConfig(dir)), {
+    start: (options) => {
+      options.onStartup?.({
+        containerIds: [],
+        containersRemoved: 0,
+        recordsDeleted: 1,
+        tempFilesRemoved: 0,
+        unattributedTempFiles: 2,
+        unattributedRecords: 1,
+        registryEntriesRemoved: 1,
+        auditLinesReconciled: 0,
+        truncated: false,
+        unfinishedSweepRoots: [],
+        unfinishedAuditFiles: [],
+        auditListingTruncated: false,
+        maintenanceComplete: true,
+        failures: 0,
+      });
+      return Promise.resolve(startedWith(Promise.resolve()));
+    },
+  });
+
+  assert.equal(await runDaemon(h.deps), 0);
+  assert.equal(h.lines.length, 1);
+  const line = startupOf(h.lines);
+  assert.equal(line["registryEntriesRemoved"], 1);
+  assert.equal(line["recordsDeleted"], 1);
+  assert.equal(line["unattributedTempFiles"], 2);
+  assert.equal(line["unattributedRecords"], 1);
+  assert.equal(line["containersRemoved"], 0, "an existing field keeps its name and value");
 });
