@@ -27,6 +27,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { makeRealmError } from "../../core/errors.js";
+import { sleep } from "../../core/timeout.js";
 import {
   AUTH_FILE_NAME,
   BOOTSTRAP_FILE_NAME,
@@ -183,9 +184,7 @@ export async function awaitRuntimeListener(
     if (Date.now() >= deadline) {
       throw makeRealmError("OPENSHELL_START_FAILED");
     }
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, SOCKET_POLL_MS);
-    });
+    await sleep(SOCKET_POLL_MS);
   }
 }
 

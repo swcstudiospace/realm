@@ -18,7 +18,7 @@ import { isAbsolute, join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { makeRealmError, RealmError, type ErrorCode } from "../core/errors.js";
 import type { EgressRule } from "../contract/validate.js";
-import { withTimeout } from "../core/timeout.js";
+import { sleep, withTimeout } from "../core/timeout.js";
 import { atomicWriteFile, observeSha256 } from "../fs/atomic-write.js";
 import { bindRoot } from "../fs/root.js";
 import { isSessionId, recordFileName } from "../session/paths.js";
@@ -425,10 +425,4 @@ async function lookupWithinDeadline(
     }
     return { kind: "failed", error };
   }
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
 }

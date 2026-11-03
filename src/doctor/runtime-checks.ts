@@ -3,9 +3,10 @@
 // require manual recovery, not reinitialization. This module reads no process environment: the caller hands env in.
 
 import { lstatSync, readFileSync, type Stats } from "node:fs";
-import { connect as netConnect } from "node:net";
 import { connect as tlsConnect } from "node:tls";
 import { isAbsolute, dirname } from "node:path";
+import { dialWithin } from "../core/timeout.js";
+import { makeRealmError } from "../core/errors.js";
 import type { EnvironmentLike } from "../session/paths.js";
 import { runtimeRootsOf, type RuntimeConfig } from "../runtime/config.js";
 
@@ -88,19 +89,19 @@ export function defaultConnectGateway(endpoint: string, caPath: string, timeoutM
     let url: URL;
     try {
       url = new URL(endpoint);
-    } catch (error: unknown) {
-      reject(error instanceof Error ? error : new Error("gateway endpoint is not a URL"));
+    } catch {
+      reject(makeRealmError("SCHEMA_INVALID"));
       return;
     }
     if (url.protocol !== "https:" || url.hostname === "") {
-      reject(new Error("gateway endpoint is not https"));
+      reject(makeRealmError("SCHEMA_INVALID"));
       return;
     }
     let ca: Buffer;
     try {
       ca = readFileSync(caPath);
     } catch {
-      reject(new Error("gateway CA is unreadable"));
+      reject(makeRealmError("SCHEMA_INVALID"));
       return;
     }
     const port = url.port === "" ? 443 : Number(url.port);
@@ -109,17 +110,17 @@ export function defaultConnectGateway(endpoint: string, caPath: string, timeoutM
     const socket = tlsConnect({ host: url.hostname, port, servername: url.hostname, ca });
     const timer = setTimeout(() => {
       socket.destroy();
-      reject(new Error("gateway did not accept a connection in time"));
+      reject(makeRealmError("OPENSHELL_GATEWAY_LOST"));
     }, timeoutMs);
     socket.once("secureConnect", () => {
       clearTimeout(timer);
       socket.destroy();
       resolve();
     });
-    socket.once("error", (error: unknown) => {
+    socket.once("error", () => {
       clearTimeout(timer);
       socket.destroy();
-      reject(error instanceof Error ? error : new Error("gateway connection failed"));
+      reject(makeRealmError("OPENSHELL_GATEWAY_LOST"));
     });
   });
 }
@@ -242,24 +243,17 @@ export async function driverSocketCheck(
   return pass(id, "driver socket accepted a connection, mode 0600, parent mode 0700");
 }
 
-function defaultConnectDriver(socketPath: string, timeoutMs: number): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const socket = netConnect({ path: socketPath });
-    const timer = setTimeout(() => {
+// Dials the compute driver's socket and closes it at once. A missed bound and a refused or absent socket both mean the
+// driver behind the gateway did not answer, so both reject with OPENSHELL_GATEWAY_LOST.
+export function defaultConnectDriver(socketPath: string, timeoutMs: number): Promise<void> {
+  return dialWithin(socketPath, timeoutMs, "OPENSHELL_GATEWAY_LOST").then(
+    (socket) => {
       socket.destroy();
-      reject(new Error("driver socket timed out"));
-    }, timeoutMs);
-    socket.once("connect", () => {
-      clearTimeout(timer);
-      socket.destroy();
-      resolve();
-    });
-    socket.once("error", (error: unknown) => {
-      clearTimeout(timer);
-      socket.destroy();
-      reject(error instanceof Error ? error : new Error("driver socket refused"));
-    });
-  });
+    },
+    () => {
+      throw makeRealmError("OPENSHELL_GATEWAY_LOST");
+    },
+  );
 }
 
 export async function gatewayCheck(

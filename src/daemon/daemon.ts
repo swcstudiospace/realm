@@ -11,7 +11,7 @@
 // spawns no daemon process, and reads no process environment: every host value arrives through its options.
 
 import { rmSync, statSync } from "node:fs";
-import { createConnection, createServer, type Server, type Socket } from "node:net";
+import { createServer, type Server, type Socket } from "node:net";
 import { isAbsolute, join, relative, sep } from "node:path";
 import { performance } from "node:perf_hooks";
 import { AndaBridge } from "../anda/client.js";
@@ -26,7 +26,7 @@ import { loadPolicyFile } from "../core/policy.js";
 import type { BridgePort, ExecutionService } from "../core/ports.js";
 import type { StateSnapshot } from "../core/state-machine.js";
 import { displayStatus, type DisplayStatus } from "../core/status.js";
-import { withTimeout } from "../core/timeout.js";
+import { dialWithin, sleep, withTimeout } from "../core/timeout.js";
 import { defaultRunCommand, runChecks, type AgentOsReading, type CheckResult, type DoctorOptions } from "../doctor/checks.js";
 import { bindRoot, isInsideRoot, type PinnedRoot } from "../fs/root.js";
 import { DEFAULT_SWEEP_DEADLINE_MS, ORPHAN_TEMP_MIN_AGE_MS, sweepOrphanTempFiles } from "../fs/temp-sweep.js";
@@ -265,9 +265,7 @@ export function buildDaemonHandle(options: BuildDaemonHandleOptions): RealmHandl
 // anything is served.
 export async function startDaemon(options: StartDaemonOptions): Promise<StartedDaemon> {
   const timeoutMs = options.timeoutMs ?? SOCKET_TIMEOUT_MS;
-  const libpod =
-    options.libpod ??
-    (options.libpodSocketPath !== undefined ? new LibpodClient(options.libpodSocketPath) : undefined);
+  const libpod = libpodOf(options);
   // One supervisor per session: the caller's, or one built over the driver. A session's handle and the doctor probe share
   // its supervisor, so each session's supervision state is one object.
   const agentosFor =
@@ -553,9 +551,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
     // waits only for the other requests (inFlight above one).
     const deadline = Date.now() + timeoutMs;
     while (inFlight > 1 && Date.now() < deadline) {
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 5);
-      });
+      await sleep(5);
     }
   };
 
@@ -1271,15 +1267,21 @@ function supervisorsOver(driver: AgentOsDriver): SupervisorFor {
       sessionId,
       callTimeoutMs: AGENTOS_CALL_TIMEOUT_MS,
       random: Math.random,
-      sleep: (ms: number) =>
-        new Promise<void>((resolve) => {
-          setTimeout(resolve, ms);
-        }),
+      sleep,
       now: () => Date.now(),
     });
     supervisors.set(sessionId, made);
     return made;
   };
+}
+
+// The libpod client both entry points build: the caller's, or one over libpodSocketPath when the caller names a socket
+// instead, and undefined when neither is given. startDaemon and defaultExec share it, so both reach the same socket.
+function libpodOf(options: {
+  readonly libpod?: SessionContainers;
+  readonly libpodSocketPath?: string;
+}): SessionContainers | undefined {
+  return options.libpod ?? (options.libpodSocketPath !== undefined ? new LibpodClient(options.libpodSocketPath) : undefined);
 }
 
 function defaultExec(
@@ -1288,9 +1290,7 @@ function defaultExec(
   options: BuildDaemonHandleOptions,
   runOpenShell: OpenShellRunner,
 ): ExecutionService {
-  const libpod =
-    options.libpod ??
-    (options.libpodSocketPath !== undefined ? new LibpodClient(options.libpodSocketPath) : undefined);
+  const libpod = libpodOf(options);
   if (libpod === undefined) {
     throw makeRealmError("SCHEMA_INVALID");
   }
@@ -1323,46 +1323,21 @@ function defaultBridge(config: RuntimeConfig, logger: Logger | undefined): Bridg
 }
 
 // Dials a Unix socket and closes it at once, mirroring the doctor default
-// (checks.ts). Rejects on refusal, a missing socket, or no connection within
-// timeoutMs.
-function defaultConnectSocket(socketPath: string, timeoutMs: number): Promise<void> {
-  return new Promise<void>((resolve, reject) => {
-    const socket = createConnection(socketPath);
-    const timer = setTimeout(() => {
-      socket.destroy();
-      reject(new Error(`daemon: connect to ${socketPath} timed out`));
-    }, timeoutMs);
-    socket.once("connect", () => {
-      clearTimeout(timer);
-      socket.destroy();
-      resolve();
-    });
-    socket.once("error", (cause: unknown) => {
-      clearTimeout(timer);
-      socket.destroy();
-      reject(cause instanceof Error ? cause : new Error("daemon: socket dial failed"));
-    });
-  });
+// (checks.ts). Rejects on refusal or a missing socket with the socket's error,
+// and with PODMAN_MACHINE_DOWN when no connection completes within timeoutMs.
+export async function defaultConnectSocket(socketPath: string, timeoutMs: number): Promise<void> {
+  const socket = await dialWithin(socketPath, timeoutMs, "PODMAN_MACHINE_DOWN");
+  socket.destroy();
 }
 
 // True when a live owner answers at the socket path. Any other outcome (absent
 // path, refusal, timeout) means no live owner.
 function probeSocketAlive(socketPath: string, timeoutMs: number): Promise<boolean> {
-  return new Promise<boolean>((resolve) => {
-    const socket = createConnection(socketPath);
-    const timer = setTimeout(() => {
+  return dialWithin(socketPath, timeoutMs, "DAEMON_START_TIMEOUT").then(
+    (socket) => {
       socket.destroy();
-      resolve(false);
-    }, timeoutMs);
-    socket.once("connect", () => {
-      clearTimeout(timer);
-      socket.destroy();
-      resolve(true);
-    });
-    socket.once("error", () => {
-      clearTimeout(timer);
-      socket.destroy();
-      resolve(false);
-    });
-  });
+      return true;
+    },
+    () => false,
+  );
 }

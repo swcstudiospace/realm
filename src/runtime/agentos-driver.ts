@@ -8,11 +8,10 @@
 // bounded: the readiness wait by startTimeoutMs, and the probes by callTimeoutMs. The argv come from src/runtime/openshell.ts,
 // the one module allowed to name the OpenShell binary and the exec builder.
 
-import { createConnection } from "node:net";
 import { isAbsolute } from "node:path";
 import { performance } from "node:perf_hooks";
-import { makeRealmError } from "../core/errors.js";
-import { withTimeout } from "../core/timeout.js";
+import { makeRealmError, RealmError } from "../core/errors.js";
+import { dialWithin, withTimeout } from "../core/timeout.js";
 import type { AgentOsDriver } from "./agentos.js";
 import type { RunnerChild, RunnerChildSpawner } from "./agentos-workload.js";
 import {
@@ -87,23 +86,20 @@ async function succeeds(run: () => Promise<OpenShellRunOutcome>, budgetMs: numbe
 // answerOfConnectError. The connection is closed as soon as the answer is known. Only the error code is read, never its
 // message, so no path or OS text leaves the probe.
 function connectsWithin(socketPath: string, timeoutMs: number): Promise<boolean | null> {
-  return new Promise<boolean | null>((resolve) => {
-    const timer = setTimeout(() => {
-      finish(false);
-    }, timeoutMs);
-    const socket = createConnection({ path: socketPath });
-    const finish = (answer: boolean | null): void => {
-      clearTimeout(timer);
+  return dialWithin(socketPath, timeoutMs, "OPENSHELL_GATEWAY_LOST").then(
+    (socket) => {
       socket.destroy();
-      resolve(answer);
-    };
-    socket.once("connect", () => {
-      finish(true);
-    });
-    socket.once("error", (error: NodeJS.ErrnoException) => {
-      finish(answerOfConnectError(error.code));
-    });
-  });
+      return true;
+    },
+    (error: unknown) => {
+      // A missed bound is no answer from the driver. Any other failure is judged by its errno code alone.
+      if (error instanceof RealmError) {
+        return false;
+      }
+      const code = error instanceof Error && "code" in error && typeof error.code === "string" ? error.code : undefined;
+      return answerOfConnectError(code);
+    },
+  );
 }
 
 // The answer for a failed connect, from its error code alone. EACCES and EPERM mean this daemon may not open the socket (it is
