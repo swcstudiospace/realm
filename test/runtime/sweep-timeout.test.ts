@@ -4,9 +4,22 @@ import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { RealmError, type ErrorCode } from "../../src/core/errors.js";
-import { LibpodClient } from "../../src/runtime/libpod-client.js";
+import { withTimeout } from "../../src/core/timeout.js";
+import { LibpodClient, type LibpodContainerSummary } from "../../src/runtime/libpod-client.js";
+import {
+  isRealmSandboxName,
+  OPENSHELL_MANAGED_LABEL_KEY,
+  OPENSHELL_MANAGED_LABEL_VALUE,
+  OPENSHELL_SANDBOX_NAME_LABEL_KEY,
+} from "../../src/runtime/openshell.js";
 import { removeAllRealmContainers, SWEEP_CALL_TIMEOUT_MS, type SweepClient } from "../../src/runtime/sweep.js";
-import { REAP_SWEEP_TIMEOUT_MS, reapStartup } from "../../src/session/reap.js";
+import {
+  REAP_SWEEP_TIMEOUT_MS,
+  reapStartupSelective,
+  type ReapCandidate,
+  type ReapVerdict,
+  type SelectiveReapDeps,
+} from "../../src/session/reap.js";
 import { FakeContainerStore, FakeLibpod } from "../support/fake-libpod.js";
 
 const REALM_LABELS = { "openshell.managed": "true" };
@@ -18,9 +31,10 @@ function neverSettles<T>(): Promise<T> {
 }
 
 // A record store whose deletions are logged into the shared event log, so ordering against
-// container removal is observable.
+// container removal is observable. The fixture records carry no stored body: load finds none, so each
+// record is deleted as unreadable and no verdict is needed for it.
 function recordStore(ids: readonly string[], log: string[] = []): {
-  readonly store: { list: () => string[]; delete: (id: string) => void };
+  readonly store: SelectiveReapDeps["store"];
   readonly log: string[];
   readonly live: string[];
 } {
@@ -30,6 +44,7 @@ function recordStore(ids: readonly string[], log: string[] = []): {
     live,
     store: {
       list: (): string[] => [...live],
+      load: (): null => null,
       delete: (id: string): void => {
         log.push(`delete:${id}`);
         live.splice(live.indexOf(id), 1);
@@ -68,6 +83,41 @@ function enableMockedTimers(t: TestContext): void {
   });
 }
 
+// The realm's containers as the daemon lists them: the OpenShell managed label, then the realm name prefix. The listing is
+// bounded by SWEEP_CALL_TIMEOUT_MS, as the daemon bounds it.
+async function listRealm(client: SweepClient): Promise<readonly LibpodContainerSummary[]> {
+  const listed = await withTimeout(
+    client.listContainersByLabel(OPENSHELL_MANAGED_LABEL_KEY, OPENSHELL_MANAGED_LABEL_VALUE),
+    SWEEP_CALL_TIMEOUT_MS,
+    "PODMAN_MACHINE_DOWN",
+  );
+  return listed.filter((container) => isRealmSandboxName(container.labels?.[OPENSHELL_SANDBOX_NAME_LABEL_KEY]));
+}
+
+// The verdict these tests use: every container is refused, so every container is removed and every record is deleted, the
+// destroy-all behaviour they cover.
+const REFUSAL: ReapVerdict = { ok: false, property: "test", causeCode: "OPENSHELL_START_FAILED" };
+
+// The selective reap's dependencies over one libpod client. Every listing and removal is bounded by SWEEP_CALL_TIMEOUT_MS, as the
+// daemon bounds its own calls. The verdict never reads the inspect, and SweepClient has no inspect call, so the inspect is empty.
+function destroyAllDeps(client: SweepClient, store: SelectiveReapDeps["store"]): SelectiveReapDeps {
+  return {
+    store,
+    listCandidates: async (): Promise<readonly ReapCandidate[]> =>
+      (await listRealm(client)).map(
+        (container): ReapCandidate => ({
+          containerId: container.id,
+          labels: container.labels ?? {},
+          inspection: { ok: true, inspect: {} },
+        }),
+      ),
+    verdict: () => REFUSAL,
+    remove: (containerId: string): Promise<void> =>
+      withTimeout(client.removeContainer(containerId, { force: true }), SWEEP_CALL_TIMEOUT_MS, "PODMAN_MACHINE_DOWN"),
+    listSurvivors: async (): Promise<readonly string[]> => (await listRealm(client)).map((container) => container.id),
+  };
+}
+
 void test("RT-08: a hung container list ends with PODMAN_MACHINE_DOWN within SWEEP_CALL_TIMEOUT_MS and removes no record", async (t) => {
   enableMockedTimers(t);
   const removals: string[] = [];
@@ -80,7 +130,7 @@ void test("RT-08: a hung container list ends with PODMAN_MACHINE_DOWN within SWE
   };
   const records = recordStore(["session-a", "session-b"]);
 
-  const reaped = reapStartup({ store: records.store, sweep: () => removeAllRealmContainers(hungClient) });
+  const reaped = reapStartupSelective(destroyAllDeps(hungClient, records.store));
   const outcome = observe(reaped);
   await flush();
   t.mock.timers.tick(SWEEP_CALL_TIMEOUT_MS - 1);
@@ -94,7 +144,7 @@ void test("RT-08: a hung container list ends with PODMAN_MACHINE_DOWN within SWE
   assert.deepEqual(records.live, ["session-a", "session-b"]);
 });
 
-void test("RT-08: a hung second listing after a removal ends with PODMAN_MACHINE_DOWN within the bound, and removes no record", async (t) => {
+void test("RT-08: a hung proving listing after a removal ends with REALM_STOPPING within the bound, and deletes no record", async (t) => {
   enableMockedTimers(t);
   const removals: string[] = [];
   let listings = 0;
@@ -110,15 +160,16 @@ void test("RT-08: a hung second listing after a removal ends with PODMAN_MACHINE
   };
   const records = recordStore(["session-a"]);
 
-  const reaped = reapStartup({ store: records.store, sweep: () => removeAllRealmContainers(client) });
+  const reaped = reapStartupSelective(destroyAllDeps(client, records.store));
   const outcome = observe(reaped);
   await flush();
   t.mock.timers.tick(SWEEP_CALL_TIMEOUT_MS - 1);
   await flush();
   assert.equal(outcome.settled(), false, "the proving listing must not end before the bound");
 
+  // A failed proving listing reaches the caller as REALM_STOPPING, not as the listing's own code.
   t.mock.timers.tick(1);
-  await assertCode(reaped, "PODMAN_MACHINE_DOWN");
+  await assertCode(reaped, "REALM_STOPPING");
   assert.deepEqual(removals, ["realm-1"]);
   assert.deepEqual(records.log, [], "no record may be deleted when the proving listing times out");
   assert.deepEqual(records.live, ["session-a"]);
@@ -132,7 +183,7 @@ void test("RT-08: a hung removal is bounded, and the proving listing that still 
   };
   const records = recordStore(["session-a"]);
 
-  const reaped = reapStartup({ store: records.store, sweep: () => removeAllRealmContainers(client) });
+  const reaped = reapStartupSelective(destroyAllDeps(client, records.store));
   const outcome = observe(reaped);
   await flush();
   t.mock.timers.tick(SWEEP_CALL_TIMEOUT_MS - 1);
@@ -145,11 +196,17 @@ void test("RT-08: a hung removal is bounded, and the proving listing that still 
   assert.deepEqual(records.live, ["session-a"]);
 });
 
-void test("RT-08: a sweep that never finishes makes reapStartup reject with PODMAN_MACHINE_DOWN within REAP_SWEEP_TIMEOUT_MS and deletes no record", async (t) => {
+void test("RT-08: a reap that never finishes rejects with PODMAN_MACHINE_DOWN within REAP_SWEEP_TIMEOUT_MS and deletes no record", async (t) => {
   enableMockedTimers(t);
   const records = recordStore(["session-a", "session-b"]);
 
-  const reaped = reapStartup({ store: records.store, sweep: () => neverSettles<number>() });
+  const reaped = reapStartupSelective({
+    store: records.store,
+    listCandidates: () => neverSettles<readonly ReapCandidate[]>(),
+    verdict: () => REFUSAL,
+    remove: () => Promise.resolve(),
+    listSurvivors: () => Promise.resolve([]),
+  });
   const outcome = observe(reaped);
   await flush();
   t.mock.timers.tick(REAP_SWEEP_TIMEOUT_MS - 1);
@@ -179,17 +236,14 @@ void test("RT-08: a hung container list on the real libpod client ends with PODM
   const records = recordStore(["session-a"]);
 
   const started = Date.now();
-  await assertCode(
-    reapStartup({ store: records.store, sweep: () => removeAllRealmContainers(client) }),
-    "PODMAN_MACHINE_DOWN",
-  );
+  await assertCode(reapStartupSelective(destroyAllDeps(client, records.store)), "PODMAN_MACHINE_DOWN");
   assert.ok(Date.now() - started < SWEEP_CALL_TIMEOUT_MS, "the hung listing must end within the sweep bound");
   assert.deepEqual(records.log, []);
   assert.deepEqual(records.live, ["session-a"]);
   assert.notEqual(containers.get("realm-1"), undefined, "a timed-out sweep removes no container");
 });
 
-void test("RT-08: a successful sweep removes every container before any record is deleted", async (t) => {
+void test("RT-08: a successful reap removes and proves every container before any record is deleted", async (t) => {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "realm-sweep-order-")));
   t.after(() => {
     rmSync(dir, { recursive: true, force: true });
@@ -217,24 +271,18 @@ void test("RT-08: a successful sweep removes every container before any record i
   };
   const records = recordStore(["session-a", "session-b"], events);
 
-  const result = await reapStartup({
-    store: records.store,
-    sweep: async () => {
-      const removed = await removeAllRealmContainers(recording);
-      events.push("sweep-done");
-      return removed;
-    },
-  });
+  const result = await reapStartupSelective(destroyAllDeps(recording, records.store));
 
-  assert.deepEqual(result, { containersRemoved: 2, recordsDeleted: 2 });
-  const sweepDone = events.indexOf("sweep-done");
-  assert.ok(sweepDone > 0, "the sweep must finish");
-  const removedBeforeSweepEnd = events
-    .slice(0, sweepDone)
-    .filter((event) => event !== "list")
-    .sort();
-  assert.deepEqual(removedBeforeSweepEnd, ["remove:realm-1", "remove:realm-2"]);
-  assert.deepEqual(events.slice(sweepDone + 1), ["delete:session-a", "delete:session-b"]);
+  assert.deepEqual(result.counts, { adopted: 0, removed: 2, deleted: 2 });
+  const firstDelete = events.findIndex((event) => event.startsWith("delete:"));
+  assert.ok(firstDelete > 0, "the records must be deleted after the removals");
+  const beforeDeletes = events.slice(0, firstDelete);
+  assert.deepEqual(
+    beforeDeletes.filter((event) => event.startsWith("remove:")).sort(),
+    ["remove:realm-1", "remove:realm-2"],
+  );
+  assert.equal(beforeDeletes.at(-1), "list", "the removal proof is the last event before any record is deleted");
+  assert.deepEqual(events.slice(firstDelete), ["delete:session-a", "delete:session-b"]);
   assert.notEqual(containers.get("foreign-1"), undefined, "a foreign container is never removed");
 });
 

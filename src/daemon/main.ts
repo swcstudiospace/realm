@@ -116,7 +116,7 @@ export async function runDaemon(deps: DaemonDeps): Promise<number> {
   }
 }
 
-// The one startup record (CRASH-04): what the reap destroyed, what the orphan sweep removed, what the audit
+// The one startup record (CRASH-04): what the reap destroyed and adopted, what the orphan sweep removed, what the audit
 // reconciliation appended, and whether the budgeted maintenance finished. The container ids are not secrets.
 // When the reap itself failed, reapFailure names the code; the daemon then exits with that code on its own
 // daemon.failed line.
@@ -142,6 +142,7 @@ function emitStartup(writeStderr: (line: string) => void, report: StartupReport)
     containersRemoved: report.containersRemoved,
     containerIds: report.containerIds,
     recordsDeleted: report.recordsDeleted,
+    adopted: report.adopted,
     tempFilesRemoved: report.tempFilesRemoved,
     unattributedTempFiles: report.unattributedTempFiles,
     unattributedRecords: report.unattributedRecords,

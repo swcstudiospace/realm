@@ -74,7 +74,14 @@ export async function startRealmDaemon(options: RealmDaemonOptions): Promise<Rea
     bridge: new FakeBridge(),
     clock: () => new Date(CLOCK_ISO),
     runOpenShell: () => Promise.resolve({ exitCode: 0, stdout: "", stderr: "", truncated: false }),
-    sweep: () => Promise.resolve(0),
+    // A libpod double whose realm listing is empty, so the startup reap removes nothing.
+    libpod: {
+      info: () => Promise.resolve({ rootless: true, version: "5.0.0" }),
+      listContainersByLabel: () => Promise.resolve([]),
+      inspectContainer: () => Promise.resolve(null),
+      stopContainer: () => Promise.resolve(),
+      removeContainer: () => Promise.resolve(),
+    },
     probe: () => Promise.resolve<PodmanProbeResult>({ ok: true, version: "5.0.0" }),
   });
   let requestCount = 0;

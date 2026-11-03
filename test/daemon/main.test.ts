@@ -198,6 +198,7 @@ void test("CRASH-04: the start's onStartup report is written as one stderr line 
         containerIds: ["c0ffee", "decaf1"],
         containersRemoved: 2,
         recordsDeleted: 1,
+        adopted: 0,
         tempFilesRemoved: 3,
         unattributedTempFiles: 0,
         unattributedRecords: 0,
@@ -222,6 +223,7 @@ void test("CRASH-04: the start's onStartup report is written as one stderr line 
     containersRemoved: 2,
     containerIds: ["c0ffee", "decaf1"],
     recordsDeleted: 1,
+    adopted: 0,
     tempFilesRemoved: 3,
     unattributedTempFiles: 0,
     unattributedRecords: 0,
@@ -237,6 +239,39 @@ void test("CRASH-04: the start's onStartup report is written as one stderr line 
   });
 });
 
+void test("CRASH-04: the startup line names the adopted count", async (t) => {
+  const dir = tempDir(t);
+  const h = harness(writeConfig(dir, validConfig(dir)), {
+    start: (options) => {
+      options.onStartup?.({
+        containerIds: [],
+        containersRemoved: 0,
+        recordsDeleted: 0,
+        adopted: 2,
+        tempFilesRemoved: 0,
+        unattributedTempFiles: 0,
+        unattributedRecords: 0,
+        registryEntriesRemoved: 0,
+        auditLinesReconciled: 0,
+        truncated: false,
+        unfinishedSweepRoots: [],
+        unfinishedAuditFiles: [],
+        auditListingTruncated: false,
+        maintenanceComplete: true,
+        failures: 0,
+      });
+      return Promise.resolve(startedWith(Promise.resolve()));
+    },
+  });
+
+  assert.equal(await runDaemon(h.deps), 0);
+  assert.equal(h.lines.length, 1);
+  const adopting = startupOf(h.lines);
+  assert.equal(adopting["adopted"], 2);
+  assert.equal(adopting["containersRemoved"], 0);
+  assert.equal(adopting["recordsDeleted"], 0);
+});
+
 void test("CRASH-04: the startup line has no id brackets when no container was removed, and names failures only when there are some", async (t) => {
   const dir = tempDir(t);
   const h = harness(writeConfig(dir, validConfig(dir)), {
@@ -245,6 +280,7 @@ void test("CRASH-04: the startup line has no id brackets when no container was r
         containerIds: [],
         containersRemoved: 0,
         recordsDeleted: 0,
+        adopted: 0,
         tempFilesRemoved: 0,
         unattributedTempFiles: 0,
         unattributedRecords: 0,
@@ -280,6 +316,7 @@ void test("STARTUP budget: the startup line says maintenanceComplete=false and n
         containerIds: [],
         containersRemoved: 0,
         recordsDeleted: 0,
+        adopted: 0,
         tempFilesRemoved: 0,
         unattributedTempFiles: 0,
         unattributedRecords: 0,
@@ -316,6 +353,7 @@ void test("CRASH-04: a failed reap's partial report is logged, then the start fa
         containerIds: ["0123abcd"],
         containersRemoved: 1,
         recordsDeleted: 0,
+        adopted: 0,
         tempFilesRemoved: 0,
         unattributedTempFiles: 0,
         unattributedRecords: 0,
@@ -355,6 +393,7 @@ void test("STARTUP budget: a long unfinished list is sampled at ten names, the c
         containerIds: [],
         containersRemoved: 0,
         recordsDeleted: 0,
+        adopted: 0,
         tempFilesRemoved: 0,
         unattributedTempFiles: 0,
         unattributedRecords: 0,
@@ -680,6 +719,7 @@ void test("MULTI-03: the startup line carries registryEntriesRemoved and records
         containerIds: [],
         containersRemoved: 0,
         recordsDeleted: 1,
+        adopted: 0,
         tempFilesRemoved: 0,
         unattributedTempFiles: 2,
         unattributedRecords: 1,

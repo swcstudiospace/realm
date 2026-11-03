@@ -1,5 +1,5 @@
 // Daemon tests (CLI-01, RT-06, P6-D1, P6-D4, P6-D12). Every test drives the
-// real module: single-owner start over a live Unix socket, the reap sweep
+// real module: single-owner start over a live Unix socket, the startup reap
 // before serving, all five CONTROL_METHODS over the channel, and graceful
 // shutdown on down. No live Podman, OpenShell, or Anda engine is started: the
 // adapter seam carries the existing fakes and scripted probes.
@@ -24,7 +24,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { appendAudit } from "../../src/audit/log.js";
 import { reconcileAuditLogs } from "../../src/audit/reconcile.js";
-import { makeRealmError, RealmError } from "../../src/core/errors.js";
+import { makeRealmError, RealmError, type ErrorCode } from "../../src/core/errors.js";
 import { displayStatus, STATUS_LABELS } from "../../src/core/status.js";
 import {
   MAX_CONTROL_LINE_BYTES,
@@ -58,8 +58,23 @@ import { FakeExecutionService } from "../support/fake-execution.js";
 import { FakeContainerStore, FakeLibpod } from "../support/fake-libpod.js";
 import { FakeOpenShell } from "../support/fake-openshell.js";
 import { boundedWait, pollUntil, scaledMs } from "../support/timing.js";
+import { HARDENING_PROFILE, RUNTIME_ARGV, RUNTIME_BINARY, tmpfsOptionsOf } from "../../src/runtime/hardening.js";
+import {
+  OPENSHELL_MANAGED_LABEL_KEY,
+  OPENSHELL_MANAGED_LABEL_VALUE,
+  OPENSHELL_SANDBOX_NAME_LABEL_KEY,
+  realmSandboxName,
+} from "../../src/runtime/openshell.js";
+import { sandboxBindingOf, type SandboxRoots } from "../../src/runtime/driver/sandbox-binding.js";
+import { CONFORMING_PROC_STATUS, RUNTIME_OCI_CONFIG_TEXT } from "../runtime/hardening-fixtures.js";
+import { OCI_CONFIG_PATH, STATIC_DIR } from "../runtime/seccomp-fixtures.js";
+import type { LibpodInspect } from "../../src/runtime/libpod-client.js";
+import type { SessionContainers } from "../../src/runtime/session-execution.js";
+import type { State } from "../../src/core/states.js";
 
-const IMAGE = `registry.example.com/realm/workload@sha256:${"0".repeat(64)}`;
+// The digest the test image is pinned to. A survivor's inspect reports it as its image digest.
+const IMAGE_DIGEST = `sha256:${"0".repeat(64)}`;
+const IMAGE = `registry.example.com/realm/workload@${IMAGE_DIGEST}`;
 const CLOCK_ISO = "2026-10-21T09:30:00.000Z";
 
 interface Fixture {
@@ -70,11 +85,37 @@ interface Fixture {
   readonly policyDir: string;
 }
 
+// The resolver of a promise that carries no value. A test holds a listing open until it calls the resolver.
+type Resolve = (value: void | PromiseLike<void>) => void;
+
+// A libpod container the libpod double holds: its id, its labels, and what its inspect reports.
+interface ContainerSeed {
+  readonly id: string;
+  readonly labels: Readonly<Record<string, string>>;
+  readonly inspect: LibpodInspect;
+}
+
+// A listing the libpod double holds open until the test releases it.
+interface HeldListing {
+  readonly entered: Promise<void>;
+  release(): void;
+}
+
+// The libpod double of a start: the containers it holds, and the switches a test flips to fail or hold its listings.
+interface ContainerDouble {
+  readonly libpod: SessionContainers;
+  seed(container: ContainerSeed): void;
+  present(): string[];
+  failListingsFrom(from: number, code: ErrorCode): void;
+  holdNextListing(code: ErrorCode): HeldListing;
+}
+
 interface DaemonParts {
   readonly options: StartDaemonOptions;
   readonly exec: FakeExecutionService;
   readonly bridge: FakeBridge;
   readonly events: string[];
+  readonly containers: ContainerDouble;
 }
 
 // Scratch directories are removed once the whole file has run. A test's daemon is stopped by its own t.after
@@ -104,10 +145,83 @@ function writePolicy(fixture: Fixture, name: string, policy: Record<string, unkn
   return path;
 }
 
+// The libpod double a start reads its containers through. Every call is recorded in events. A listing can be failed from a given
+// call on, or held until the test releases it.
+function containerDoubleOf(events: string[]): ContainerDouble {
+  const containers = new Map<string, ContainerSeed>();
+  let listings = 0;
+  let failure: { readonly from: number; readonly code: ErrorCode } | undefined;
+  let hold: { readonly code: ErrorCode; readonly enter: Resolve; readonly gate: Promise<void> } | undefined;
+  const libpod: SessionContainers = {
+    info: () => {
+      events.push("info");
+      return Promise.resolve({ rootless: true, version: "5.0.0" });
+    },
+    listContainersByLabel: async (key: string, value: string) => {
+      events.push("list");
+      listings += 1;
+      if (hold !== undefined) {
+        const held = hold;
+        hold = undefined;
+        held.enter();
+        await held.gate;
+        throw makeRealmError(held.code);
+      }
+      if (failure !== undefined && listings >= failure.from) {
+        throw makeRealmError(failure.code);
+      }
+      return [...containers.values()]
+        .filter((container) => container.labels[key] === value)
+        .map((container) => ({ id: container.id, labels: container.labels }));
+    },
+    inspectContainer: (id: string) => {
+      events.push(`inspect:${id}`);
+      return Promise.resolve(containers.get(id)?.inspect ?? null);
+    },
+    stopContainer: () => {
+      events.push("stop");
+      return Promise.resolve();
+    },
+    removeContainer: (id: string) => {
+      events.push(`remove:${id}`);
+      containers.delete(id);
+      return Promise.resolve();
+    },
+  };
+  return {
+    libpod,
+    seed: (container) => {
+      containers.set(container.id, container);
+    },
+    present: () => [...containers.keys()],
+    failListingsFrom: (from, code) => {
+      failure = { from, code };
+    },
+    holdNextListing: (code) => {
+      let enter: Resolve = () => undefined;
+      const entered = new Promise<void>((resolve) => {
+        enter = resolve;
+      });
+      let open: Resolve = () => undefined;
+      const gate = new Promise<void>((resolve) => {
+        open = resolve;
+      });
+      hold = { code, enter, gate };
+      return {
+        entered,
+        release: () => {
+          open();
+        },
+      };
+    },
+  };
+}
+
 function daemonParts(fixture: Fixture, overrides?: Partial<StartDaemonOptions>): DaemonParts {
   const events: string[] = [];
   const exec = new FakeExecutionService();
   const bridge = new FakeBridge();
+  const containers = containerDoubleOf(events);
   exec.beforeCall("create", () => {
     events.push("create");
   });
@@ -124,20 +238,17 @@ function daemonParts(fixture: Fixture, overrides?: Partial<StartDaemonOptions>):
     policyPath: writePolicy(fixture, "daemon-policy.json", { mode: "advisory", workspaceRoots: [fixture.ws] }),
     exec,
     bridge,
+    libpod: containers.libpod,
     clock: () => new Date(CLOCK_ISO),
     runOpenShell: () =>
       Promise.resolve({ exitCode: 0, stdout: "", stderr: "", truncated: false }),
-    sweep: () => {
-      events.push("sweep");
-      return Promise.resolve(0);
-    },
     probe: () => {
       events.push("probe");
       return Promise.resolve<PodmanProbeResult>({ ok: true, version: "5.0.0" });
     },
     ...overrides,
   };
-  return { options, exec, bridge, events };
+  return { options, exec, bridge, events, containers };
 }
 
 function snapshotStateOf(reply: ControlReply): unknown {
@@ -259,6 +370,13 @@ function entryOf(daemon: StartedDaemon, fixture: Fixture): SessionEntry {
   const entry = daemon.session(sessionOf(fixture));
   assert.ok(entry !== undefined, "the workspace's session is admitted");
   return entry;
+}
+
+// The first startup report of a start. A start that recorded none fails the test here, with a clear message.
+function firstReport(reports: readonly StartupReport[]): StartupReport {
+  const report: StartupReport | undefined = reports[0];
+  assert.ok(report !== undefined, "the startup recorded a report");
+  return report;
 }
 
 void test("CLI-01: buildDaemonHandle wires the shared composition root and answers snapshot plus dispatcher status (P6-D12)", async () => {
@@ -474,7 +592,7 @@ void test("RT-06: a second startDaemon against the same state directory refuses 
   await awaitDone(first);
 });
 
-void test("CLI-01: startDaemon runs the reap sweep before serving and deletes pre-existing records (P6-D4)", async (t) => {
+void test("CLI-01: startDaemon runs the startup reap before serving and deletes pre-existing records (P6-D4)", async (t) => {
   const fixture = makeDirs();
   const { options, events } = daemonParts(fixture);
   mkdirSync(join(fixture.stateDir, "sessions"), { recursive: true });
@@ -484,7 +602,9 @@ void test("CLI-01: startDaemon runs the reap sweep before serving and deletes pr
   const daemon = await startDaemon(options);
   t.after(() => cleanupDaemon(daemon));
 
-  assert.deepEqual(events, ["sweep"]);
+  // The reap listed the realm containers before the daemon began serving, and it created nothing.
+  assert.equal(events.includes("list"), true, "the startup reap listed the realm containers");
+  assert.equal(events.includes("create"), false, "nothing is created before serving");
   assert.equal(existsSync(stale), false);
 
   const reply = await sendRequest(daemon.socketPath, { id: "s1", method: "status", params: selectedBy(fixture.ws) });
@@ -512,12 +632,14 @@ void test("CRASH-01, CRASH-02, CRASH-04: startDaemon sweeps orphan temp files, r
   appendAudit(fixture.stateDir, { sessionId: "sess-old", tool: "write", outcome: "ok", phase: "admission", path: "doc.txt" });
 
   const reports: StartupReport[] = [];
-  const { options } = daemonParts(fixture, {
-    sweep: () => Promise.resolve(1),
+  const parts = daemonParts(fixture, {
     onStartup: (report) => {
       reports.push(report);
     },
   });
+  // A realm container that no record names: the reap removes it, and it is the one container this start destroys.
+  parts.containers.seed(orphanContainer("orphan-container-01"));
+  const { options } = parts;
   const first = await startDaemon(options);
   t.after(() => cleanupDaemon(first));
 
@@ -536,9 +658,10 @@ void test("CRASH-01, CRASH-02, CRASH-04: startDaemon sweeps orphan temp files, r
   );
   assert.deepEqual(reports, [
     {
-      containerIds: [],
+      containerIds: ["orphan-container-01"],
       containersRemoved: 1,
       recordsDeleted: 1,
+      adopted: 0,
       tempFilesRemoved: 2,
       unattributedTempFiles: 2,
       unattributedRecords: 1,
@@ -564,7 +687,7 @@ void test("CRASH-01, CRASH-02, CRASH-04: startDaemon sweeps orphan temp files, r
   await awaitDone(first);
 
   // A second start over the same state directory has nothing left to destroy, sweep or reconcile.
-  const second = await startDaemon({ ...options, sweep: () => Promise.resolve(0) });
+  const second = await startDaemon(options);
   t.after(() => cleanupDaemon(second));
   assert.equal(reports.length, 2);
   assert.equal(reports[1]?.containersRemoved, 0);
@@ -605,8 +728,7 @@ void test("STARTUP budget: with a zero budget the gate still opens, the report s
   assert.equal(hasNoticeKey(status), false, "unfinished maintenance does not change the notice");
   assert.equal(existsSync(orphan), true, "the sweep had no time, so the orphan is kept");
   assert.equal(reports.length, 1);
-  const unfinished = reports[0];
-  assert.ok(unfinished !== undefined);
+  const unfinished = firstReport(reports);
   assert.equal(unfinished.maintenanceComplete, false);
   assert.equal(unfinished.truncated, true);
   assert.equal(unfinished.auditLinesReconciled, 0);
@@ -634,18 +756,17 @@ void test("STARTUP budget: with a zero budget the gate still opens, the report s
 void test("CRASH-04: a reap that fails after removing a container still reports the removal, and the start fails with the same error", async () => {
   const fixture = makeDirs();
   const reports: StartupReport[] = [];
-  const { options } = daemonParts(fixture, {
-    sweep: (onRemoved) => {
-      onRemoved("0123abcd");
-      return Promise.reject(makeRealmError("REALM_STOPPING", "PODMAN_MACHINE_DOWN"));
-    },
+  const parts = daemonParts(fixture, {
     onStartup: (report) => {
       reports.push(report);
     },
   });
+  parts.containers.seed(orphanContainer("0123abcd"));
+  // The first listing finds the container and its removal resolves; the second listing, the removal proof, then fails.
+  parts.containers.failListingsFrom(2, "PODMAN_MACHINE_DOWN");
 
   await assert.rejects(
-    startDaemon(options),
+    startDaemon(parts.options),
     (error: unknown) =>
       error instanceof RealmError && error.code === "REALM_STOPPING" && error.causeCode === "PODMAN_MACHINE_DOWN",
   );
@@ -654,6 +775,7 @@ void test("CRASH-04: a reap that fails after removing a container still reports 
       containerIds: ["0123abcd"],
       containersRemoved: 1,
       recordsDeleted: 0,
+      adopted: 0,
       tempFilesRemoved: 0,
       unattributedTempFiles: 0,
       unattributedRecords: 0,
@@ -732,7 +854,7 @@ void test("CRASH-02: the startup sweep removes an aged orphan temp file of the p
 
   assert.equal(existsSync(orphan), false, "the aged orphan is removed");
   assert.equal(existsSync(young), true, "a temp file younger than the age bound is kept");
-  assert.equal(reports[0]?.tempFilesRemoved, 1);
+  assert.equal(firstReport(reports).tempFilesRemoved, 1);
   assert.equal(existsSync(join(fixture.stateDir, "audit", "daemon.jsonl")), false, "no removal is written to the daemon's log until plan 09");
   // The record was not removed by the sweep: it is still a regular file (the reconciliation may have rewritten it).
   assert.equal(statSync(record).isFile(), true);
@@ -742,8 +864,10 @@ void test("CRASH-02: the startup sweep removes an aged orphan temp file of the p
 
 void test("CRASH-04: the up reply carries the startup notice when the reap destroyed a container", async (t) => {
   const fixture = makeDirs();
-  const { options } = daemonParts(fixture, { sweep: () => Promise.resolve(2) });
-  const daemon = await startDaemon(options);
+  const parts = daemonParts(fixture);
+  parts.containers.seed(orphanContainer("orphan-container-a"));
+  parts.containers.seed(orphanContainer("orphan-container-b"));
+  const daemon = await startDaemon(parts.options);
   t.after(() => cleanupDaemon(daemon));
 
   const up = await sendRequest(daemon.socketPath, { id: "u1", method: "up", params: { workspaceRoot: fixture.ws } });
@@ -754,17 +878,16 @@ void test("CRASH-04: the up reply carries the startup notice when the reap destr
   );
 });
 
-void test("CLI-01: a failed sweep rejects startup before any record is touched (P6-D4)", async () => {
+void test("CLI-01: a failed reap rejects startup before any record is touched (P6-D4)", async () => {
   const fixture = makeDirs();
   mkdirSync(join(fixture.stateDir, "sessions"), { recursive: true });
   const kept = join(fixture.stateDir, "sessions", "kept-session.json");
   writeFileSync(kept, "{}");
-  const { options } = daemonParts(fixture, {
-    sweep: () => Promise.reject(makeRealmError("REALM_STOPPING")),
-  });
+  const parts = daemonParts(fixture);
+  parts.containers.failListingsFrom(1, "REALM_STOPPING");
 
   await assert.rejects(
-    startDaemon(options),
+    startDaemon(parts.options),
     (error: unknown) => error instanceof RealmError && error.code === "REALM_STOPPING",
   );
   assert.equal(existsSync(kept), true);
@@ -788,7 +911,7 @@ void test("CLI-01: up with a failing probe answers the probe code without starti
   });
   assert.deepEqual(reply, { id: "up-1", error: { code: "PODMAN_MISSING" } });
   assert.equal(exec.callCount("create"), 0);
-  assert.deepEqual(events, ["sweep"]);
+  assert.equal(events.includes("list"), true, "the startup reap listed the realm containers before the up");
 
   const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down", params: selectedBy(fixture.ws) });
   assert.ok(down.result !== undefined);
@@ -809,7 +932,8 @@ void test("CLI-01: up with a healthy probe starts the session and answers the ac
   assert.equal(reply.id, "up-1");
   assert.equal(snapshotStateOf(reply), "active");
   assert.equal(displayLabelOf(reply), STATUS_LABELS.active);
-  assert.deepEqual(events, ["sweep", "probe", "create"]);
+  assert.deepEqual(events.filter((event) => event === "probe" || event === "create"), ["probe", "create"]);
+  assert.ok(events.indexOf("list") < events.indexOf("probe"), "the startup reap ran before the probe");
 
   const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down", params: selectedBy(fixture.ws) });
   assert.equal(snapshotStateOf(down), "unbound");
@@ -1406,35 +1530,26 @@ void test("CLI-01: a second down is a no-op that still answers", async (t) => {
 
 void test("QUAL-01: a connection that waits on a failed start is answered with the start's refusal code", async () => {
   const fixture = makeDirs();
-  let sweepEntered!: () => void;
-  const entered = new Promise<void>((resolve) => {
-    sweepEntered = resolve;
-  });
   let connectionAccepted!: () => void;
   const accepted = new Promise<void>((resolve) => {
     connectionAccepted = resolve;
   });
-  let failSweep!: (cause: unknown) => void;
-  const { options } = daemonParts(fixture, {
+  const parts = daemonParts(fixture, {
     onServer: (server) => {
       server.once("connection", () => {
         connectionAccepted();
       });
     },
-    sweep: () => {
-      sweepEntered();
-      return new Promise<number>((_resolve, reject) => {
-        failSweep = reject;
-      });
-    },
   });
-  const starting = startDaemon(options);
-  await boundedWait(entered, "the start sweep");
+  // The start's reap is held inside its first listing, with the server already listening, until the test fails it.
+  const held = parts.containers.holdNextListing("REALM_STOPPING");
+  const starting = startDaemon(parts.options);
+  await boundedWait(held.entered, "the start reap");
   const waiting = sendRawLine(controlSocketPath(fixture.stateDir), '{"id":"early","method":"status"}\n');
   // The start fails only once the server has accepted this connection. Closing the listening socket first would
   // reset the connection still in the accept queue, and the client would see a reset rather than the refusal.
   await boundedWait(accepted, "the early connection");
-  failSweep(makeRealmError("REALM_STOPPING"));
+  held.release();
   await boundedWait(
     assert.rejects(starting, (error: unknown) => error instanceof RealmError && error.code === "REALM_STOPPING"),
     "the failed start",
@@ -1488,19 +1603,18 @@ void test("QUAL-01: a down whose socket file cannot be removed answers SCHEMA_IN
 void test("QUAL-01: a failed start whose socket file cannot be removed keeps its code and names the removal cause", async () => {
   const fixture = makeDirs();
   const socketPath = controlSocketPath(fixture.stateDir);
-  const { options } = daemonParts(fixture, {
-    sweep: () =>
-      new Promise<number>((_resolve, reject) => {
-        // The socket is listening here: a non-empty directory takes its file's place, then the start fails.
-        rmSync(socketPath, { force: true });
-        mkdirSync(socketPath);
-        writeFileSync(join(socketPath, "kept"), "not a socket");
-        reject(makeRealmError("REALM_STOPPING"));
-      }),
-  });
+  const parts = daemonParts(fixture);
+  const held = parts.containers.holdNextListing("REALM_STOPPING");
+  const starting = startDaemon(parts.options);
+  await boundedWait(held.entered, "the start reap");
+  // The socket is listening here: a non-empty directory takes its file's place, then the start fails.
+  rmSync(socketPath, { force: true });
+  mkdirSync(socketPath);
+  writeFileSync(join(socketPath, "kept"), "not a socket");
+  held.release();
   await boundedWait(
     assert.rejects(
-      startDaemon(options),
+      starting,
       (error: unknown) =>
         error instanceof RealmError && error.code === "REALM_STOPPING" && error.causeCode === "SCHEMA_INVALID",
     ),
@@ -2527,8 +2641,8 @@ void test("MULTI-03: a startup attributes each orphan removal to the session who
   assert.deepEqual(auditLinesOf(fixture, selectionOf(a).sessionId).map((line) => line["path"]), [orphanA]);
   assert.deepEqual(auditLinesOf(fixture, selectionOf(b).sessionId).map((line) => line["path"]), [orphanB]);
   assert.equal(existsSync(join(fixture.stateDir, "audit", "daemon.jsonl")), false, "no line is written under the id daemon");
-  assert.equal(reports[0]?.unattributedTempFiles, 1, "the file outside both workspaces is counted, not attributed");
-  assert.equal(reports[0].recordsDeleted, 2);
+  assert.equal(firstReport(reports).unattributedTempFiles, 1, "the file outside both workspaces is counted, not attributed");
+  assert.equal(firstReport(reports).recordsDeleted, 2);
   assert.deepEqual(store.list(), [], "the reap deleted both records, and the attribution was taken before it");
 });
 
@@ -2547,8 +2661,8 @@ void test("MULTI-03: a record the startup cannot read is counted in unattributed
   t.after(() => cleanupDaemon(daemon));
 
   assert.equal(reports.length, 1, "the startup completed its maintenance");
-  assert.equal(reports[0]?.unattributedRecords, 1);
-  assert.equal(reports[0].maintenanceComplete, true);
+  assert.equal(firstReport(reports).unattributedRecords, 1);
+  assert.equal(firstReport(reports).maintenanceComplete, true);
   assert.equal(snapshotStateOf(await sendRequest(daemon.socketPath, upRequest("bad-s", fixture.ws))), "active");
 });
 
@@ -2570,8 +2684,8 @@ void test("MULTI-03: a startup removes the registry entries an earlier generatio
     }).options,
   );
   t.after(() => cleanupDaemon(second));
-  assert.equal(reports[0]?.registryEntriesRemoved, 1);
-  assert.equal(reports[0].recordsDeleted, 1);
+  assert.equal(firstReport(reports).registryEntriesRemoved, 1);
+  assert.equal(firstReport(reports).recordsDeleted, 1);
   assert.deepEqual(listWorkspaceEntryIds(fixture.stateDir), [], "the entry's file is gone");
   await second.stop();
   await awaitDone(second);
@@ -2585,4 +2699,268 @@ void test("MULTI-03: a startup removes the registry entries an earlier generatio
   );
   t.after(() => cleanupDaemon(third));
   assert.equal(reports[1]?.registryEntriesRemoved, 0, "a second startup removes nothing");
+});
+// ---- Startup reap and adoption: a survivor is adopted when its record names it and its inspect conforms to the verdict ----
+// The secret root and the sandbox state root a startup derives a survivor's binding from. Both are absolute.
+function secretRootOf(fixture: Fixture): string {
+  return join(fixture.base, "secret");
+}
+
+function sandboxStateRootOf(fixture: Fixture): string {
+  return join(fixture.base, "sandbox-state");
+}
+
+// The roots a survivor in one workspace is bound from, as the startup verdict derives them.
+function sandboxRootsOf(fixture: Fixture, workspaceRoot: string): SandboxRoots {
+  return { workspaceRoot, stateRoot: sandboxStateRootOf(fixture), secretRoot: secretRootOf(fixture) };
+}
+
+// The options a startup needs to judge a survivor: the two roots, and the host readers its conformance check reads.
+function survivorOptionsOf(fixture: Fixture): Partial<StartDaemonOptions> {
+  return {
+    secretRoot: secretRootOf(fixture),
+    sandboxStateRoot: sandboxStateRootOf(fixture),
+    readOciConfig: () => RUNTIME_OCI_CONFIG_TEXT,
+    readProcStatus: () => CONFORMING_PROC_STATUS,
+  };
+}
+
+// A libpod container of a session's sandbox that the adoption verdict accepts: the container id, the realm sandbox name, both
+// OpenShell labels, running, and every conformance property for the binding the roots derive. A test passes other labels to make
+// the verdict refuse the container.
+function survivorOf(
+  roots: SandboxRoots,
+  sessionId: string,
+  containerId: string,
+  labels?: Readonly<Record<string, string>>,
+): ContainerSeed {
+  const sandbox = realmSandboxName(sessionId);
+  const binding = sandboxBindingOf(roots, sandbox);
+  const ownLabels: Readonly<Record<string, string>> = labels ?? {
+    [OPENSHELL_MANAGED_LABEL_KEY]: OPENSHELL_MANAGED_LABEL_VALUE,
+    [OPENSHELL_SANDBOX_NAME_LABEL_KEY]: sandbox,
+  };
+  return {
+    id: containerId,
+    labels: ownLabels,
+    inspect: {
+      Id: containerId,
+      Name: sandbox,
+      ImageDigest: IMAGE_DIGEST,
+      Path: RUNTIME_BINARY,
+      Args: RUNTIME_ARGV.slice(1),
+      State: { Running: true, Status: "running", Pid: 4242 },
+      StaticDir: STATIC_DIR,
+      OCIConfigPath: OCI_CONFIG_PATH,
+      Config: { User: HARDENING_PROFILE.workloadUser, Labels: ownLabels },
+      HostConfig: {
+        Privileged: false,
+        CapAdd: [],
+        SecurityOpt: ["no-new-privileges"],
+        ReadonlyRootfs: true,
+        Tmpfs: Object.fromEntries(
+          [...HARDENING_PROFILE.tmpfs, HARDENING_PROFILE.supervisorCaDestination].map((destination) => [
+            destination,
+            tmpfsOptionsOf(destination).join(","),
+          ]),
+        ),
+        PidsLimit: HARDENING_PROFILE.pidsLimit,
+        Memory: HARDENING_PROFILE.memoryBytes,
+        MemorySwap: HARDENING_PROFILE.memoryBytes,
+        NanoCpus: HARDENING_PROFILE.nanoCpus,
+        NetworkMode: HARDENING_PROFILE.networkMode,
+        Devices: [],
+        PidMode: "private",
+        IpcMode: "shareable",
+        UTSMode: "private",
+        CgroupMode: "private",
+        UsernsMode: "keep-id:uid=1001,gid=1001",
+      },
+      Mounts: [
+        { Type: "bind", Source: roots.workspaceRoot, Destination: "/workspace", RW: true },
+        { Type: "bind", Source: binding.stateDir, Destination: "/realm-state", RW: false },
+        { Type: "bind", Source: binding.channelDir, Destination: HARDENING_PROFILE.channelDestination, RW: true },
+      ],
+    },
+  };
+}
+
+// A realm container that no session record names. The startup reap removes it.
+function orphanContainer(containerId: string): ContainerSeed {
+  const sandbox = realmSandboxName(containerId);
+  return {
+    id: containerId,
+    labels: { [OPENSHELL_MANAGED_LABEL_KEY]: OPENSHELL_MANAGED_LABEL_VALUE, [OPENSHELL_SANDBOX_NAME_LABEL_KEY]: sandbox },
+    inspect: { Id: containerId, Name: sandbox, State: { Running: true, Status: "running", Pid: 4242 } },
+  };
+}
+
+// Makes a session's container a survivor of an earlier daemon: the exec double holds it, the record names it, and the libpod
+// double lists it under the session's sandbox. Returns its container id.
+async function seedSurvivor(fixture: Fixture, parts: DaemonParts, workspaceRoot: string): Promise<string> {
+  const sessionId = selectionOf(workspaceRoot).sessionId;
+  const { containerId } = await parts.exec.create({ idempotencyKey: sessionId, workspaceRoot });
+  new SessionStore(fixture.stateDir).save({
+    realmId: `realm-${sessionId}`,
+    sessionId,
+    workspaceRoot,
+    state: "active",
+    controlSocketPath: controlSocketPath(fixture.stateDir),
+    containerId,
+  });
+  parts.containers.seed(survivorOf(sandboxRootsOf(fixture, workspaceRoot), sessionId, containerId));
+  return containerId;
+}
+
+// The state the controller of a registered session reports. The session must be registered.
+function stateOf(daemon: StartedDaemon, sessionId: string): State {
+  const entry = daemon.session(sessionId);
+  assert.ok(entry !== undefined, "the session is registered");
+  return entry.handle.controller.snapshot().state;
+}
+
+// The startup notice sentences the daemon words. The destroy sentence keeps the wording it has always carried.
+function destroyedNoticeOf(containers: number, records: number): string {
+  return `A previous daemon's sandbox was destroyed at startup: ${String(containers)} container(s), ${String(records)} session record(s). Files in the workspace were kept; state outside it was lost.`;
+}
+
+function adoptedNoticeOf(sessions: number): string {
+  return `${String(sessions)} session(s) from the previous daemon were adopted and kept. Their records were kept and each was brought back before serving; a session that did not come back is in error.`;
+}
+
+void test("startup with a verified survivor: the session is adopted, its record and registry entry are kept, its controller reaches active, its container is not removed", async (t) => {
+  const fixture = makeDirs();
+  // A previous daemon admitted the session and stopped without a down, so its record and registry entry remain.
+  const earlier = await startDaemon(daemonParts(fixture).options);
+  assert.equal(snapshotStateOf(await sendRequest(earlier.socketPath, upRequest("v-up", fixture.ws))), "active");
+  await earlier.stop();
+  await awaitDone(earlier);
+  assert.equal(listWorkspaceEntryIds(fixture.stateDir).length, 1, "the earlier generation left one registry entry");
+  const reports: StartupReport[] = [];
+  const parts = daemonParts(fixture, {
+    ...survivorOptionsOf(fixture),
+    onStartup: (report) => {
+      reports.push(report);
+    },
+  });
+  const containerId = await seedSurvivor(fixture, parts, fixture.ws);
+  const daemon = await startDaemon(parts.options);
+  t.after(() => cleanupDaemon(daemon));
+  assert.equal(firstReport(reports).adopted, 1, "the verified survivor is adopted");
+  assert.equal(firstReport(reports).containersRemoved, 0);
+  assert.equal(firstReport(reports).recordsDeleted, 0);
+  assert.equal(firstReport(reports).registryEntriesRemoved, 0, "the adopted session's registry entry is kept");
+  assert.deepEqual(parts.containers.present(), [containerId], "the survivor's container is not removed");
+  assert.equal(parts.events.includes(`remove:${containerId}`), false);
+  assert.equal(new SessionStore(fixture.stateDir).load(sessionOf(fixture))?.containerId, containerId, "its record is kept");
+  assert.equal(listWorkspaceEntryIds(fixture.stateDir).length, 1, "its registry entry is kept");
+  assert.equal(stateOf(daemon, sessionOf(fixture)), "active", "its controller reaches active");
+  const status = await sendRequest(daemon.socketPath, { id: "v-status", method: "status", params: selectedBy(fixture.ws) });
+  assert.equal(snapshotStateOf(status), "active");
+  await sendRequest(daemon.socketPath, { id: "v-down", method: "down", params: selectedBy(fixture.ws) });
+  await awaitDone(daemon);
+});
+
+void test("the startup notice for an adoption alone is the adoption sentence, with no destroy sentence", async (t) => {
+  const fixture = makeDirs();
+  const parts = daemonParts(fixture, survivorOptionsOf(fixture));
+  await seedSurvivor(fixture, parts, fixture.ws);
+  const daemon = await startDaemon(parts.options);
+  t.after(() => cleanupDaemon(daemon));
+  const status = await sendRequest(daemon.socketPath, { id: "an-status", method: "status", params: selectedBy(fixture.ws) });
+  assert.equal(noticeOf(status), adoptedNoticeOf(1));
+});
+
+void test("the startup notice names the containers destroyed, then the sessions adopted, joined by one space", async (t) => {
+  const fixture = makeDirs();
+  const parts = daemonParts(fixture, survivorOptionsOf(fixture));
+  await seedSurvivor(fixture, parts, fixture.ws);
+  parts.containers.seed(orphanContainer("orphan-container-c"));
+  const daemon = await startDaemon(parts.options);
+  t.after(() => cleanupDaemon(daemon));
+  const status = await sendRequest(daemon.socketPath, { id: "dn-status", method: "status", params: selectedBy(fixture.ws) });
+  assert.equal(noticeOf(status), `${destroyedNoticeOf(1, 0)} ${adoptedNoticeOf(1)}`);
+});
+
+void test("startup with an unverified container: the container is removed, and its record is deleted", async (t) => {
+  const fixture = makeDirs();
+  const sessionId = sessionOf(fixture);
+  const containerId = "unverified-container-01";
+  new SessionStore(fixture.stateDir).save({
+    realmId: `realm-${sessionId}`,
+    sessionId,
+    workspaceRoot: fixture.ws,
+    state: "active",
+    controlSocketPath: controlSocketPath(fixture.stateDir),
+    containerId,
+  });
+  const reports: StartupReport[] = [];
+  const parts = daemonParts(fixture, {
+    ...survivorOptionsOf(fixture),
+    onStartup: (report) => {
+      reports.push(report);
+    },
+  });
+  // The container's sandbox-name label names another sandbox, so the verdict refuses it and the reap removes it.
+  parts.containers.seed(
+    survivorOf(sandboxRootsOf(fixture, fixture.ws), sessionId, containerId, {
+      [OPENSHELL_MANAGED_LABEL_KEY]: OPENSHELL_MANAGED_LABEL_VALUE,
+      [OPENSHELL_SANDBOX_NAME_LABEL_KEY]: "realm-another-session",
+    }),
+  );
+  const daemon = await startDaemon(parts.options);
+  t.after(() => cleanupDaemon(daemon));
+  assert.deepEqual(parts.containers.present(), [], "the unverified container is removed");
+  assert.equal(parts.events.includes(`remove:${containerId}`), true);
+  assert.equal(new SessionStore(fixture.stateDir).load(sessionId), null, "its record is deleted");
+  assert.equal(firstReport(reports).adopted, 0);
+  assert.deepEqual(firstReport(reports).containerIds, [containerId]);
+  assert.equal(firstReport(reports).containersRemoved, 1);
+  assert.equal(firstReport(reports).recordsDeleted, 1);
+  assert.equal(daemon.session(sessionId), undefined, "no session is adopted");
+});
+
+void test("startup where the reap rejects: startup fails, nothing is served, the registry entries are untouched", async () => {
+  const fixture = makeDirs();
+  // A previous daemon admitted the session and stopped without a down: its record and registry entry remain.
+  const earlier = await startDaemon(daemonParts(fixture).options);
+  assert.equal(snapshotStateOf(await sendRequest(earlier.socketPath, upRequest("rj-up", fixture.ws))), "active");
+  await earlier.stop();
+  await awaitDone(earlier);
+  const parts = daemonParts(fixture);
+  parts.containers.failListingsFrom(1, "PODMAN_MACHINE_DOWN");
+  await assert.rejects(startDaemon(parts.options), (error) => error instanceof RealmError && error.code === "PODMAN_MACHINE_DOWN");
+  assert.equal(listWorkspaceEntryIds(fixture.stateDir).length, 1, "the registry entry is untouched");
+  assert.equal(new SessionStore(fixture.stateDir).list().length, 1, "no record is deleted");
+  await assert.rejects(sendRequest(controlSocketPath(fixture.stateDir), { id: "rj-status", method: "status" }));
+});
+
+void test("startup where one adopted session's hydration fails: that session is in error and another adopted session still serves", async (t) => {
+  const fixture = makeDirs();
+  const [a, b] = [projectDir(fixture, "a"), projectDir(fixture, "b")];
+  const reports: StartupReport[] = [];
+  const parts = daemonParts(fixture, {
+    ...wideOptions(fixture),
+    ...survivorOptionsOf(fixture),
+    onStartup: (report) => {
+      reports.push(report);
+    },
+  });
+  await seedSurvivor(fixture, parts, a);
+  await seedSurvivor(fixture, parts, b);
+  // The next start the hydration issues fails. Which session that is depends on the order of hydration, so the test reads the
+  // states back instead of assuming one.
+  parts.exec.failNext("start", "OPENSHELL_START_FAILED");
+  const daemon = await startDaemon(parts.options);
+  t.after(() => cleanupDaemon(daemon));
+  assert.equal(firstReport(reports).adopted, 2, "both survivors are adopted");
+  assert.equal(firstReport(reports).failures, 1, "one hydration failed");
+  const sessions = [a, b].map((dir) => ({ dir, state: stateOf(daemon, selectionOf(dir).sessionId) }));
+  assert.equal(sessions.filter((session) => session.state === "error").length, 1, "the failed session is in error");
+  const healthy = sessions.filter((session) => session.state === "active");
+  const [survivor] = healthy;
+  assert.equal(healthy.length, 1, "the other session came back");
+  assert.ok(survivor !== undefined);
+  const status = await sendRequest(daemon.socketPath, { id: "hy-status", method: "status", params: selectedBy(survivor.dir) });
+  assert.equal(snapshotStateOf(status), "active", "the other adopted session still serves");
 });
