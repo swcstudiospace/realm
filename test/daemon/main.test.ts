@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { verifyAuditFile } from "../../src/audit/chain.js";
 import { appendAudit } from "../../src/audit/log.js";
 import { makeRealmError } from "../../src/core/errors.js";
-import { CONTROL_TIMEOUT_MS, type ControlReply } from "../../src/daemon/channel.js";
+import { CONTROL_TIMEOUT_MS } from "../../src/daemon/channel.js";
 import {
   runDaemon,
   installFailureHandlers,
@@ -21,7 +21,6 @@ import {
 import type { StartedDaemon } from "../../src/daemon/daemon.js";
 import { daemonLogPath, daemonStartFailureSince } from "../../src/daemon/ensure.js";
 import { defaultPolicyPath } from "../../src/runtime/host-paths.js";
-import type { RealmHandle } from "../../src/realm/compose.js";
 import { TEARDOWN_TIMEOUT_MS } from "../../src/lifecycle/controller.js";
 import type { EnvironmentLike } from "../../src/session/paths.js";
 
@@ -46,8 +45,7 @@ function startupOf(lines: readonly string[]): Record<string, unknown> {
 const SOCKET_PATH = "/run/realm-test/control.sock";
 const IMAGE = `registry.example/realm/workload@sha256:${"a".repeat(64)}`;
 
-// runDaemon never touches the handle; the control-channel down is the only shutdown path.
-const UNUSED_HANDLE = {} as RealmHandle;
+// runDaemon never reaches a session: a signal stops the started daemon in process, and no control message is sent for it.
 
 function tempDir(t: TestContext): string {
   const dir = mkdtempSync(join(tmpdir(), "realm-daemon-main-"));
@@ -73,7 +71,14 @@ function validConfig(dir: string): Record<string, unknown> {
 }
 
 function startedWith(done: Promise<void>): StartedDaemon {
-  return { socketPath: SOCKET_PATH, handle: UNUSED_HANDLE, done };
+  return {
+    socketPath: SOCKET_PATH,
+    done,
+    stop: () => Promise.resolve(),
+    session: () => undefined,
+    committedCount: () => 0,
+    isCommitted: () => false,
+  };
 }
 
 interface Harness {
@@ -145,11 +150,9 @@ void test("a valid config starts once with the derived options and resolves 0 on
   assert.ok(call !== undefined);
   assert.equal(call.stateDir, raw["stateDir"]);
   assert.equal(call.policyPath, defaultPolicyPath(String(raw["stateDir"])));
-  assert.equal(call.sessionId, "daemon");
   assert.deepEqual(call.runtimeInput, raw);
   assert.equal(call.libpodSocketPath, undefined);
   assert.equal(call.secretRoot, join(String(raw["stateDir"]), "secrets"));
-  assert.equal(call.pinnedWorkspaceRoot, raw["workspaceRoot"]);
   assert.equal(call.sandboxStateRoot, join(String(raw["stateDir"]), "sandboxes"));
   assert.deepEqual(call.env, env);
   assert.deepEqual(h.lines, []);
@@ -384,7 +387,6 @@ void test("secretRoot and sandboxStateRoot in config.json are passed to the daem
   const started = calls[0];
   assert.ok(started);
   assert.equal(started.secretRoot, secretRoot);
-  assert.equal(started.pinnedWorkspaceRoot, join(dir, "workspace"));
   assert.equal(started.sandboxStateRoot, sandboxStateRoot);
 });
 
@@ -404,7 +406,6 @@ void test("omitted secret and sandbox roots are derived under stateDir even when
     assert.ok(started);
     assert.equal(started.secretRoot, join(String(raw["stateDir"]), "secrets"));
     assert.equal(started.sandboxStateRoot, join(String(raw["stateDir"]), "sandboxes"));
-    assert.equal(started.pinnedWorkspaceRoot, join(dir, "workspace"));
   }
 });
 
@@ -428,7 +429,7 @@ void test("a start rejecting with a non-RealmError is reported as SCHEMA_INVALID
   assert.deepEqual(h.lines.map(entryOf), [failed("SCHEMA_INVALID")]);
 });
 
-void test("a signal runs the control-channel down and resolves 0", async (t) => {
+void test("a signal stops the started daemon in process and resolves 0, with no socket line", async (t) => {
   const dir = tempDir(t);
   let finishTeardown: () => void = () => undefined;
   const done = new Promise<void>((resolve) => {
@@ -436,14 +437,17 @@ void test("a signal runs the control-channel down and resolves 0", async (t) => 
       resolve();
     };
   });
-  const downs: string[] = [];
+  let stops = 0;
   const h = harness(writeConfig(dir, validConfig(dir)), {
-    start: () => Promise.resolve(startedWith(done)),
-    sendDown: (socketPath) => {
-      downs.push(socketPath);
-      finishTeardown();
-      return Promise.resolve({ id: "shutdown", result: {} });
-    },
+    start: () =>
+      Promise.resolve({
+        ...startedWith(done),
+        stop: () => {
+          stops += 1;
+          finishTeardown();
+          return Promise.resolve();
+        },
+      }),
   });
 
   const run = runDaemon(h.deps);
@@ -453,16 +457,19 @@ void test("a signal runs the control-channel down and resolves 0", async (t) => 
   handler();
 
   assert.equal(await run, 0);
-  assert.deepEqual(downs, [SOCKET_PATH]);
+  assert.equal(stops, 1);
   assert.equal(h.handlers.size, 0, "signal listeners are removed once the daemon stops");
   assert.deepEqual(h.lines, []);
 });
 
-void test("a down that fails during a signal shutdown returns 1 with its code", async (t) => {
+void test("a stop that rejects during a signal shutdown returns 1 with its code", async (t) => {
   const dir = tempDir(t);
   const h = harness(writeConfig(dir, validConfig(dir)), {
-    start: () => Promise.resolve(startedWith(new Promise<void>(() => undefined))),
-    sendDown: () => Promise.resolve<ControlReply>({ id: "shutdown", error: { code: "AGENTOS_STOP_FAILED" } }),
+    start: () =>
+      Promise.resolve({
+        ...startedWith(new Promise<void>(() => undefined)),
+        stop: () => Promise.reject(makeRealmError("AGENTOS_STOP_FAILED")),
+      }),
   });
 
   const run = runDaemon(h.deps);
@@ -513,64 +520,75 @@ void test("OBS-02: an early startup failure is one logger JSON line, and the ens
   assert.equal(daemonStartFailureSince(stateDir, 0), "POLICY_DENIED");
 });
 
-void test("OBS-02: audit.head logs the chain head of the daemon audit file at startup and at shutdown, equal to verifyAuditFile", async (t) => {
+void test("OBS-02: audit.head logs the chain head of a session's audit file when the session is created, not the daemon's", async (t) => {
   const dir = tempDir(t);
   const raw = validConfig(dir);
   const stateDir = String(raw["stateDir"]);
-  for (const index of [1, 2, 3]) {
+  mkdirSync(join(stateDir, "audit"), { recursive: true });
+  for (let index = 0; index < 3; index += 1) {
     appendAudit(stateDir, {
-      sessionId: "daemon",
+      sessionId: "sess-main",
       tool: "status",
       outcome: "ok",
       phase: "admission",
       correlationId: `head-${String(index)}`,
     });
   }
-  const head = verifyAuditFile(join(stateDir, "audit", "daemon.jsonl")).head;
+  const head = verifyAuditFile(join(stateDir, "audit", "sess-main.jsonl")).head;
   assert.ok(head !== undefined);
   const h = harness(writeConfig(dir, raw), {
-    start: () => Promise.resolve(startedWith(Promise.resolve())),
+    start: (options) => {
+      options.onAuditHead?.("sess-main");
+      return Promise.resolve(startedWith(Promise.resolve()));
+    },
   });
 
   assert.equal(await runDaemon(h.deps), 0);
-  assert.equal(h.lines.length, 2, "one audit.head line at startup and one at shutdown");
-  for (const line of h.lines) {
-    assert.deepEqual(entryOf(line), {
-      level: "info",
-      event: "audit.head",
-      sessionId: "daemon",
-      seq: head.seq,
-      lineSha256: head.hash,
-    });
-  }
+  assert.equal(h.lines.length, 1, "one audit.head line for the session's create");
+  assert.deepEqual(entryOf(h.lines[0] ?? ""), {
+    level: "info",
+    event: "audit.head",
+    sessionId: "sess-main",
+    seq: head.seq,
+    lineSha256: head.hash,
+  });
 });
 
-void test("OBS-02: audit.head logs nothing when the daemon audit file is missing", async (t) => {
+void test("OBS-02: audit.head logs nothing when the session's audit file is missing", async (t) => {
   const dir = tempDir(t);
   const h = harness(writeConfig(dir, validConfig(dir)), {
-    start: () => Promise.resolve(startedWith(Promise.resolve())),
+    start: (options) => {
+      options.onAuditHead?.("sess-absent");
+      return Promise.resolve(startedWith(Promise.resolve()));
+    },
   });
 
   assert.equal(await runDaemon(h.deps), 0);
   assert.deepEqual(h.lines, []);
 });
 
-void test("OBS-02: audit.unreadable is logged as a warn at startup and at shutdown when the daemon audit file cannot be read", async (t) => {
+void test("OBS-02: audit.unreadable is logged as a warn when the session's audit file cannot be read", async (t) => {
   const dir = tempDir(t);
   const raw = validConfig(dir);
   const stateDir = String(raw["stateDir"]);
   mkdirSync(join(stateDir, "audit"), { recursive: true });
   // A symlink is refused by the no-follow open, so the file exists and cannot be read.
-  symlinkSync(join(dir, "elsewhere.jsonl"), join(stateDir, "audit", "daemon.jsonl"));
+  symlinkSync(join(dir, "elsewhere.jsonl"), join(stateDir, "audit", "sess-link.jsonl"));
   const h = harness(writeConfig(dir, raw), {
-    start: () => Promise.resolve(startedWith(Promise.resolve())),
+    start: (options) => {
+      options.onAuditHead?.("sess-link");
+      return Promise.resolve(startedWith(Promise.resolve()));
+    },
   });
 
   assert.equal(await runDaemon(h.deps), 0);
-  assert.equal(h.lines.length, 2, "one audit.unreadable line at startup and one at shutdown");
-  for (const line of h.lines) {
-    assert.deepEqual(entryOf(line), { level: "warn", event: "audit.unreadable", sessionId: "daemon", reason: "unreadable" });
-  }
+  assert.equal(h.lines.length, 1, "one audit.unreadable line for the session");
+  assert.deepEqual(entryOf(h.lines[0] ?? ""), {
+    level: "warn",
+    event: "audit.unreadable",
+    sessionId: "sess-link",
+    reason: "unreadable",
+  });
 });
 
 interface FailureRun {

@@ -1,7 +1,7 @@
 // Daemon entry (RT-01, P6-D1, P6-D4). Reads the runtime config file, starts the daemon through
 // startDaemon, and holds the process until a SIGTERM or SIGINT, or a control-channel down, completes
-// teardown. A signal runs the control channel's own down request against the daemon socket, so both
-// shutdown paths share one code path. This module parses no argv. It reads process.env once, in
+// teardown. A signal stops the daemon in process and sends no control message, so a signal and a control-channel down both
+// reach the daemon's one stop path. This module parses no argv. It reads process.env once, in
 // main. Only the uncaught-failure handler calls process.exit, after logging `daemon.failed`. Otherwise the exit code is set
 // on process.exitCode and the event loop drains.
 
@@ -19,13 +19,10 @@ import { createLogger, parseLogLevel, type Logger } from "../observe/logger.js";
 import { createFileSink } from "../observe/log-file.js";
 import { FAILURE_EVENT, daemonLogPath, requestLogPath } from "./ensure.js";
 import { startDaemon, type StartDaemonOptions, type StartedDaemon, type StartupReport } from "./daemon.js";
-import { CONTROL_TIMEOUT_MS, sendRequest, type ControlReply } from "./channel.js";
 
 export type DaemonSignal = "SIGTERM" | "SIGINT";
 
 const SIGNALS: readonly DaemonSignal[] = ["SIGTERM", "SIGINT"];
-const SESSION_ID = "daemon";
-const DOWN_REQUEST_ID = "shutdown";
 
 // startDaemon derives the state directory from runtimeInput; stateDir is carried alongside so the
 // entry derives the policy path from the same value.
@@ -35,15 +32,11 @@ export interface DaemonDeps {
   readonly env: EnvironmentLike;
   readonly readConfig?: (path: string) => unknown;
   readonly start?: (options: DaemonStartOptions) => Promise<StartedDaemon>;
-  // Sends the control channel's down to the daemon socket. Defaults to sendRequest bounded by
-  // CONTROL_TIMEOUT_MS.down, so the signal path runs the same teardown a CLI down runs.
-  readonly sendDown?: (socketPath: string) => Promise<ControlReply>;
   readonly writeStderr?: (line: string) => void;
   readonly onSignal?: (signal: DaemonSignal, handler: () => void) => () => void;
 }
 
 interface StopWiring {
-  readonly sendDown: (socketPath: string) => Promise<ControlReply>;
   readonly onSignal: (signal: DaemonSignal, handler: () => void) => () => void;
   readonly writeStderr: (line: string) => void;
 }
@@ -88,15 +81,16 @@ export async function runDaemon(deps: DaemonDeps): Promise<number> {
         stateDir,
         runtimeInput,
         policyPath: defaultPolicyPath(stateDir),
-        sessionId: SESSION_ID,
         env: deps.env,
         ...(libpodSocketPath === undefined ? {} : { libpodSocketPath }),
         agentosDriver,
         secretRoot: roots.secretRoot,
-        pinnedWorkspaceRoot: roots.workspaceRoot,
         sandboxStateRoot: roots.sandboxStateRoot,
         onStartup: (report) => {
           emitStartup(entry.write, report);
+        },
+        onAuditHead: (sessionId) => {
+          emitAuditHead(stateDir, sessionId, entry.write);
         },
         logger: requests.logger,
       });
@@ -106,16 +100,11 @@ export async function runDaemon(deps: DaemonDeps): Promise<number> {
       emitFailure(entry.write, codeOf(error));
       return 1;
     }
-    // The startup chain head (OBS-02). It is read from the file tail only, so its cost does not grow with the audit file. See emitAuditHead.
-    emitAuditHead(stateDir, entry.write);
     try {
       const code = await awaitStop(started, {
-        sendDown: deps.sendDown ?? requestDown,
         onSignal: deps.onSignal ?? registerSignal,
         writeStderr: entry.write,
       });
-      // The shutdown chain head, read after the teardown has finished and before the request log closes.
-      emitAuditHead(stateDir, entry.write);
       return code;
     } finally {
       requests.close();
@@ -166,15 +155,15 @@ function emitStartup(writeStderr: (line: string) => void, report: StartupReport)
   });
 }
 
-// The chain head of the daemon's audit file (OBS-02), logged at startup and again at shutdown. It is read from the file tail
-// only. A missing file, or one with no chained line, logs nothing. A file that exists but cannot be read logs audit.unreadable
-// (warn). This is an entry record, so it goes to the entry logger (daemon.log in production).
-function emitAuditHead(stateDir: string, writeStderr: (line: string) => void): void {
-  const outcome = readAuditHead(join(stateDir, "audit", `${SESSION_ID}.jsonl`));
+// The chain head of one session's audit file (OBS-02), logged when the session is created and when it is destroyed. It is read
+// from the file tail only. A missing file, or one with no chained line, logs nothing. A file that exists but cannot be read logs
+// audit.unreadable (warn). This is an entry record, so it goes to the entry logger (daemon.log in production).
+function emitAuditHead(stateDir: string, sessionId: string, writeStderr: (line: string) => void): void {
+  const outcome = readAuditHead(join(stateDir, "audit", `${sessionId}.jsonl`));
   if (outcome.state === "head") {
-    entryLogger(writeStderr).info("audit.head", { sessionId: SESSION_ID, seq: outcome.head.seq, lineSha256: outcome.head.hash });
+    entryLogger(writeStderr).info("audit.head", { sessionId, seq: outcome.head.seq, lineSha256: outcome.head.hash });
   } else if (outcome.state === "unreadable") {
-    entryLogger(writeStderr).warn("audit.unreadable", { sessionId: SESSION_ID, reason: "unreadable" });
+    entryLogger(writeStderr).warn("audit.unreadable", { sessionId, reason: "unreadable" });
   }
 }
 
@@ -236,8 +225,8 @@ function requestLogger(
   return { logger, close: () => { file.close(); } };
 }
 
-// Resolves once the daemon has stopped. A signal runs the down request and settles with its
-// outcome. A down that arrives over the control channel completes done, and the process drains.
+// Resolves once the daemon has stopped. A signal stops the daemon in process and settles with the outcome of that stop. A stop
+// that arrives over the control channel completes done, and the process drains.
 function awaitStop(started: StartedDaemon, wiring: StopWiring): Promise<number> {
   return new Promise<number>((resolve) => {
     const unregister: (() => void)[] = [];
@@ -254,12 +243,7 @@ function awaitStop(started: StartedDaemon, wiring: StopWiring): Promise<number> 
       resolve(code);
     };
     const shutdown = async (): Promise<number> => {
-      const reply = await wiring.sendDown(started.socketPath);
-      if (reply.error !== undefined) {
-        emitFailure(wiring.writeStderr, reply.error.code);
-        return 1;
-      }
-      await started.done;
+      await started.stop();
       return 0;
     };
     for (const signal of SIGNALS) {
@@ -347,14 +331,6 @@ function registerSignal(signal: DaemonSignal, handler: () => void): () => void {
   return () => {
     process.off(signal, handler);
   };
-}
-
-function requestDown(socketPath: string): Promise<ControlReply> {
-  return sendRequest(
-    socketPath,
-    { id: DOWN_REQUEST_ID, method: "down" },
-    { timeoutMs: CONTROL_TIMEOUT_MS.down },
-  );
 }
 
 if (isDirectEntry(import.meta.url, process.argv[1])) {

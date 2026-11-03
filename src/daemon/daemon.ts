@@ -499,6 +499,8 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
       registry.delete(sessionId);
       entry.health.dispose();
       upIds.delete(sessionId);
+      // The destroy of the session is one line in its own audit file, written before the head of that file is read.
+      appendAudit(stateDir, { sessionId, tool: "session.destroy", outcome: "ok" });
       options.onAuditHead?.(sessionId);
     }
     if (!downRequested && registry.size === 0 && ledger.reservedCount() === 0) {

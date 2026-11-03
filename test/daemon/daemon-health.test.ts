@@ -13,7 +13,9 @@ import { makeRealmError, RealmError, type ErrorCode } from "../../src/core/error
 import type { ProbeResult } from "../../src/core/ports.js";
 import { STATUS_LABELS } from "../../src/core/status.js";
 import { sendRequest, type ControlReply } from "../../src/daemon/channel.js";
-import { HEALTH_PROBE_INTERVAL_MS, startDaemon, type StartedDaemon } from "../../src/daemon/daemon.js";
+import { selectionOf } from "../../src/daemon/client.js";
+import { startDaemon, type StartedDaemon } from "../../src/daemon/daemon.js";
+import { HEALTH_PROBE_INTERVAL_MS, type SessionEntry } from "../../src/daemon/sessions.js";
 import { AgentOsSupervisor } from "../../src/runtime/agentos.js";
 import { FakeAgentOsDriver } from "../support/fake-agentos.js";
 import { FakeBridge } from "../support/fake-bridge.js";
@@ -151,12 +153,13 @@ async function startIdle(t: TestContext, andaUrl?: string): Promise<Running> {
       ...(andaUrl === undefined ? {} : { andaUrl }),
     },
     policyPath,
-    sessionId: "sess-health",
     exec,
     bridge,
     clock: () => new Date(CLOCK_ISO),
     runOpenShell: () => Promise.resolve({ exitCode: 0, stdout: "", stderr: "", truncated: false }),
     sweep: () => Promise.resolve(0),
+    // The admission probe of up is the podman probe; the health loop's probe is the execution service's, held and failed by the tests.
+    probe: () => Promise.resolve({ ok: true, version: "5.0.0" }),
     onHealthProbeFailure: (code) => {
       failures.push(code);
     },
@@ -166,7 +169,7 @@ async function startIdle(t: TestContext, andaUrl?: string): Promise<Running> {
   });
   t.after(async () => {
     try {
-      await sendRequest(daemon.socketPath, { id: "cleanup-down", method: "down" });
+      await daemon.stop();
     } catch {
       // The test already took the daemon down, so there is nothing left to stop.
     }
@@ -176,9 +179,17 @@ async function startIdle(t: TestContext, andaUrl?: string): Promise<Running> {
 
 async function startActive(t: TestContext, andaUrl?: string): Promise<Running> {
   const running = await startIdle(t, andaUrl);
-  const snapshot = await running.daemon.handle.controller.create(running.workspace);
-  assert.equal(snapshot.state, "active");
+  const reply = await sendRequest(running.daemon.socketPath, { id: "up-start", method: "up", params: { workspaceRoot: running.workspace } });
+  assert.equal(reply.error, undefined);
+  assert.equal(entryOf(running).handle.controller.snapshot().state, "active");
   return running;
+}
+
+// The admitted session of the running daemon's workspace. It exists once an up has admitted it.
+function entryOf(running: Running): SessionEntry {
+  const entry = running.daemon.session(selectionOf(running.workspace).sessionId);
+  assert.ok(entry !== undefined, "the workspace's session is admitted");
+  return entry;
 }
 
 function containerIdOf(running: Running): string {
@@ -197,11 +208,11 @@ async function settle(): Promise<void> {
 }
 
 function stateOf(running: Running): string {
-  return running.daemon.handle.controller.snapshot().state;
+  return entryOf(running).handle.controller.snapshot().state;
 }
 
 async function statusLabelOf(running: Running): Promise<unknown> {
-  const reply: ControlReply = await sendRequest(running.daemon.socketPath, { id: "status", method: "status" });
+  const reply: ControlReply = await sendRequest(running.daemon.socketPath, { id: "status", method: "status", params: { selection: selectionOf(running.workspace) } });
   const result: unknown = reply.result;
   if (typeof result === "object" && result !== null && "display" in result) {
     const display: unknown = result.display;
@@ -213,7 +224,7 @@ async function statusLabelOf(running: Running): Promise<unknown> {
 }
 
 async function statusReasonOf(running: Running): Promise<unknown> {
-  const reply: ControlReply = await sendRequest(running.daemon.socketPath, { id: "status-reason", method: "status" });
+  const reply: ControlReply = await sendRequest(running.daemon.socketPath, { id: "status-reason", method: "status", params: { selection: selectionOf(running.workspace) } });
   const result: unknown = reply.result;
   if (typeof result === "object" && result !== null && "display" in result) {
     const display: unknown = result.display;
@@ -233,7 +244,7 @@ void test("RT-04: the timer is armed only when the session becomes active, at th
   const running = await startIdle(t);
   assert.equal(timers.armed.length, 0, "an unbound session arms no timer");
 
-  await running.daemon.handle.controller.create(running.workspace);
+  await sendRequest(running.daemon.socketPath, { id: "up-live", method: "up", params: { workspaceRoot: running.workspace } });
 
   const live = timers.live();
   assert.equal(live.length, 1);
@@ -277,7 +288,7 @@ void test("RT-04, N1: a probe that throws AGENTOS_CRASH_LOOP moves the session t
   timers.fire();
   await settle();
 
-  const snapshot = running.daemon.handle.controller.snapshot();
+  const snapshot = entryOf(running).handle.controller.snapshot();
   assert.equal(snapshot.state, "error");
   assert.equal(snapshot.reason, "AGENTOS_CRASH_LOOP");
   assert.equal(await statusLabelOf(running), STATUS_LABELS.disconnected);
@@ -308,7 +319,7 @@ void test("OBS-04: a health tick that finds the runner gone and the gateway sile
   timers.fire();
   await settle();
 
-  const snapshot = running.daemon.handle.controller.snapshot();
+  const snapshot = entryOf(running).handle.controller.snapshot();
   assert.equal(snapshot.state, "error");
   assert.equal(snapshot.reason, "OPENSHELL_GATEWAY_LOST");
   assert.equal(await statusLabelOf(running), STATUS_LABELS.disconnected);
@@ -328,7 +339,7 @@ void test("OBS-04: the same health tick with the gateway answering still shows A
   timers.fire();
   await settle();
 
-  assert.equal(running.daemon.handle.controller.snapshot().reason, "AGENTOS_CRASH_LOOP");
+  assert.equal(entryOf(running).handle.controller.snapshot().reason, "AGENTOS_CRASH_LOOP");
   assert.equal(await statusReasonOf(running), "AGENTOS_CRASH_LOOP");
 });
 
@@ -370,7 +381,7 @@ void test("RT-04: probes never overlap: a tick that finds a probe running does n
 void test("RT-04: no probe runs and no timer is live once the session is no longer active", async (t) => {
   const timers = fakeIntervals(t);
   const running = await startActive(t);
-  await running.daemon.handle.controller.stop();
+  await entryOf(running).handle.controller.stop();
 
   assert.equal(timers.live().length, 0, "leaving active cleared the timer");
   timers.fire();
@@ -428,7 +439,7 @@ void test("RT-04: a dead runner in degraded moves the session to error with AGEN
   timers.fire();
   await settle();
 
-  const snapshot = running.daemon.handle.controller.snapshot();
+  const snapshot = entryOf(running).handle.controller.snapshot();
   assert.equal(snapshot.state, "error");
   assert.equal(snapshot.reason, "AGENTOS_CRASH_LOOP");
   assert.equal(await statusLabelOf(running), STATUS_LABELS.disconnected);
@@ -442,7 +453,7 @@ void test("RT-04: a timer armed in degraded is cleared when the session leaves d
   assert.equal(stateOf(running), "degraded");
   assert.equal(timers.live().length, 1);
 
-  await running.daemon.handle.controller.stop();
+  await entryOf(running).handle.controller.stop();
 
   assert.equal(stateOf(running), "unbound");
   assert.equal(timers.live().length, 0, "leaving degraded cleared the timer");
@@ -471,7 +482,7 @@ void test("RT-04: the timer is cleared on down, and no probe runs afterwards", a
   const running = await startActive(t);
   assert.equal(timers.live().length, 1);
 
-  await sendRequest(running.daemon.socketPath, { id: "down-1", method: "down" });
+  await sendRequest(running.daemon.socketPath, { id: "down-1", method: "down", params: { selection: selectionOf(running.workspace) } });
   await running.daemon.done;
 
   assert.equal(timers.live().length, 0);
@@ -506,13 +517,15 @@ void test("RT-04: an unhealthy result that lands after down began does not resur
   timers.fire();
   await settle();
   assert.equal(running.exec.heldCount(), 1);
+  // The down removes the registry entry, so the destroyed session's controller is read through the entry taken before it.
+  const entry = entryOf(running);
 
-  await sendRequest(running.daemon.socketPath, { id: "down-1", method: "down" });
+  await sendRequest(running.daemon.socketPath, { id: "down-1", method: "down", params: { selection: selectionOf(running.workspace) } });
   await running.daemon.done;
-  assert.equal(stateOf(running), "unbound");
+  assert.equal(entry.handle.controller.snapshot().state, "unbound");
   running.exec.releaseNext("unhealthy");
   await settle();
 
-  assert.equal(stateOf(running), "unbound", "the late result is ignored");
+  assert.equal(entry.handle.controller.snapshot().state, "unbound", "the late result is ignored");
   assert.deepEqual(running.failures, []);
 });

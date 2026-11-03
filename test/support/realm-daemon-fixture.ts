@@ -8,6 +8,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { createServer, type Server, type Socket } from "node:net";
 import { dirname, join } from "node:path";
 import { sendRequest, type ControlReply } from "../../src/daemon/channel.js";
+import { selectionOf } from "../../src/daemon/client.js";
 import { startDaemon, type StartedDaemon } from "../../src/daemon/daemon.js";
 import type { PolicyMode } from "../../src/contract/validate.js";
 import type { PodmanProbeResult } from "../../src/runtime/podman-probe.js";
@@ -59,7 +60,6 @@ export async function startRealmDaemon(options: RealmDaemonOptions): Promise<Rea
   const daemon = await startDaemon({
     runtimeInput: { image: IMAGE, stateDir: options.stateDir, workspaceRoot: options.workspace },
     policyPath,
-    sessionId: "sess-harness",
     exec: new FakeExecutionService(),
     bridge: new FakeBridge(),
     clock: () => new Date(CLOCK_ISO),
@@ -76,13 +76,21 @@ export async function startRealmDaemon(options: RealmDaemonOptions): Promise<Rea
       downCount += 1;
       await sendRequest(
         daemon.socketPath,
-        { id: `harness-down-${String(downCount)}`, method: "down" },
+        {
+          id: `harness-down-${String(downCount)}`,
+          method: "down",
+          params: { selection: selectionOf(options.workspace) },
+        },
         { timeoutMs: CONTROL_TIMEOUT_MS },
       );
       await awaitDone(daemon);
     },
     status(): Promise<ControlReply> {
-      return sendRequest(daemon.socketPath, { id: "harness-status", method: "status" }, { timeoutMs: CONTROL_TIMEOUT_MS });
+      return sendRequest(
+        daemon.socketPath,
+        { id: "harness-status", method: "status", params: { selection: selectionOf(options.workspace) } },
+        { timeoutMs: CONTROL_TIMEOUT_MS },
+      );
     },
   });
 }

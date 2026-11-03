@@ -92,7 +92,8 @@ void test("HARN-02: the scripted control server serves each scripted state", asy
   });
   const snapshotFor = (state: State, reason: string): unknown => {
     const snapshot = { state, reason, lastTransitionAt: AT };
-    return { snapshot, display: displayStatus(snapshot), mode: "fail-closed" };
+    // A status reply names the session of its selection (C4), so the scripted reply does too.
+    return { snapshot, display: displayStatus(snapshot), mode: "fail-closed", sessionId: selectionOf(join(base, "ws")).sessionId };
   };
   let current: () => ScriptedReply = () => ({ kind: "hang" });
   const server = await startScriptedControlServer(join(base, "c.sock"), () => current());

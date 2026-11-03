@@ -167,6 +167,14 @@ void test("status rejects a reply with no sessionId or a malformed one with SCHE
   );
 });
 
+void test("up whose reply names another session is refused by the client with SCHEMA_INVALID", async (t) => {
+  const selection = projectSelection(t);
+  const other = `${selection.sessionId}-other`;
+  const stub = await startStub(t, (request) => encodeReply({ id: request.id, result: statusOf(other) }));
+  const client = connectDaemon(stub.socketPath, selection);
+  await assert.rejects(client.up(), assertRealmError("SCHEMA_INVALID"));
+});
+
 void test("up sends only workspaceRoot and returns the daemon status", async (t) => {
   const selection = projectSelection(t);
   const stub = await startStub(t, (request) =>

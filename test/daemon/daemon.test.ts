@@ -44,7 +44,7 @@ import {
 import { selectionOf } from "../../src/daemon/client.js";
 import type { SessionEntry } from "../../src/daemon/sessions.js";
 import type { CheckResult } from "../../src/doctor/checks.js";
-import { createLogger } from "../../src/observe/logger.js";
+import { createLogger, nullLogger, type Logger } from "../../src/observe/logger.js";
 import { connectDaemon } from "../../src/daemon/client.js";
 import { ERROR_CATALOGUE } from "../../src/core/errors.js";
 import { renameSync } from "node:fs";
@@ -2255,13 +2255,25 @@ void test("T2 (e): a down of the last session makes done resolve", async (t) => 
   await awaitDone(daemon);
 });
 
-void test("T2 (f): stop() on StartedDaemon with two sessions calls controller.stop for each", async (t) => {
+void test("T2 (f): stop() on StartedDaemon with two sessions calls controller.stop for each and sends no control request", async (t) => {
   const fixture = makeDirs();
-  const daemon = await startDaemon(daemonParts(fixture, wideOptions(fixture)).options);
+  // Every control request is logged once as control.request (OBS-02), so the count is the number of requests the daemon served.
+  let controlRequests = 0;
+  const logger: Logger = {
+    ...nullLogger,
+    debug: (event) => {
+      if (event === "control.request") {
+        controlRequests += 1;
+      }
+    },
+  };
+  const daemon = await startDaemon(daemonParts(fixture, { ...wideOptions(fixture), logger }).options);
   t.after(() => cleanupDaemon(daemon));
   const [a, b] = ["a", "b"].map((name) => projectDir(fixture, name));
   await sendRequest(daemon.socketPath, upRequest("f-ua", a!));
   await sendRequest(daemon.socketPath, upRequest("f-ub", b!));
+  const servedBeforeStop = controlRequests;
+  assert.equal(servedBeforeStop, 2, "the two ups were served over the socket");
   let stops = 0;
   for (const dir of [a!, b!]) {
     const controller = entryOf(daemon, { ...fixture, ws: dir }).handle.controller;
@@ -2273,6 +2285,7 @@ void test("T2 (f): stop() on StartedDaemon with two sessions calls controller.st
   }
   await daemon.stop();
   assert.equal(stops, 2, "controller.stop ran for each session");
+  assert.equal(controlRequests, servedBeforeStop, "stop sent no control request");
   await awaitDone(daemon);
 });
 
@@ -2301,6 +2314,9 @@ void test("T2 (i): onAuditHead is called with A's id on A's create and again on 
   await sendRequest(daemon.socketPath, upRequest("i-up", fixture.ws));
   await sendRequest(daemon.socketPath, { id: "i-down", method: "down", params: selectedBy(fixture.ws) });
   assert.deepEqual(calls, [id, id]);
+  const destroyLines = auditLinesOf(fixture, id).filter((line) => line["tool"] === "session.destroy");
+  assert.equal(destroyLines.length, 1, "the destroy line lands in the session's audit file");
+  assert.equal(destroyLines[0]?.["outcome"], "ok");
 });
 
 void test("T2 (j): a down that names no live session on an empty daemon resolves done; with B live it does not stop the daemon", async (t) => {

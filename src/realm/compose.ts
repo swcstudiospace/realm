@@ -21,6 +21,8 @@ import { ToolDispatcher } from "../tools/dispatch.js";
 export interface RealmHandle {
   readonly controller: LifecycleController;
   readonly dispatcher: ToolDispatcher;
+  // The lock table the controller and the dispatcher share. Read-only: a test observes one handle's locks through it.
+  readonly locks: LockTable;
   // The policy's mode, read by surfaces that must not load the policy themselves.
   readonly policyMode: PolicyMode;
   close(): Promise<StateSnapshot>;
@@ -96,6 +98,7 @@ export function createRealmHandle(options: CreateRealmHandleOptions): RealmHandl
   return {
     controller,
     dispatcher,
+    locks,
     policyMode: policy.mode,
     close: () => controller.stop(),
   };

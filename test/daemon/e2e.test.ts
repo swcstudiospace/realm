@@ -26,6 +26,7 @@ import { ERROR_CATALOGUE } from "../../src/core/errors.js";
 import { STATUS_LABELS } from "../../src/core/status.js";
 import { runCli, type SpawnDaemon } from "../../src/cli/main.js";
 import { sendRequest } from "../../src/daemon/channel.js";
+import { selectionOf } from "../../src/daemon/client.js";
 import { startDaemon, type StartedDaemon, type StartDaemonOptions } from "../../src/daemon/daemon.js";
 import { runDaemon } from "../../src/daemon/main.js";
 import type { CheckId, CheckResult } from "../../src/doctor/checks.js";
@@ -113,7 +114,6 @@ function daemonOptions(fixture: Fixture, overrides?: Partial<StartDaemonOptions>
       workspaceRoot: fixture.ws,
     },
     policyPath: writePolicy(fixture, "e2e-policy.json"),
-    sessionId: "sess-e2e",
     exec: new FakeExecutionService(),
     bridge: new FakeBridge(),
     clock: () => new Date(CLOCK_ISO),
@@ -136,7 +136,7 @@ async function awaitDone(daemon: StartedDaemon): Promise<void> {
 // no-op in that case.
 async function cleanupDaemon(daemon: StartedDaemon): Promise<void> {
   try {
-    await sendRequest(daemon.socketPath, { id: "e2e-cleanup", method: "down" }, { timeoutMs: 1000 });
+    await daemon.stop();
   } catch {
     // The test already tore the daemon down, or it never started serving.
   }
@@ -178,6 +178,8 @@ void test("up then status-active then down-to-disconnected flows through the CLI
   const spawns: { readonly file: string; readonly args: readonly string[] }[] = [];
   const cliBase = {
     env: cliEnv(fixture),
+    // status and down act on the workspace the CLI runs in (CliDeps.cwd), so the CLI runs in the fixture workspace.
+    cwd: fixture.ws,
     timeoutMs: 2000,
     spawn: recordingSpawn(spawns),
     runCommand: okVersion,
@@ -351,13 +353,13 @@ void test("the CLI and the daemon entry resolve one state directory from the run
   assert.ok(started !== undefined, "the daemon entry starts a daemon before the CLI runs");
   assert.equal(startedStateDir, fixture.stateDir);
 
-  const status = await runCli(["status"], { env, timeoutMs: 2000 });
+  const status = await runCli(["status"], { env, cwd: fixture.ws, timeoutMs: 2000 });
   assert.equal(status.exitCode, 0);
   assert.equal(status.stderr, "", "the CLI reaches the daemon the config names, so it reports no absent daemon");
   const body = JSON.parse(status.stdout) as StatusBody;
   assert.equal(body.snapshot.state, "unbound");
 
-  const down = await runCli(["down"], { env, timeoutMs: 2000 });
+  const down = await runCli(["down"], { env, cwd: fixture.ws, timeoutMs: 2000 });
   assert.equal(down.exitCode, 0);
   await awaitDone(started);
   assert.equal(await daemonRun, 0);
@@ -421,7 +423,7 @@ void test("the socket directory is 0700 with a 0600 socket after daemon start (R
   assert.equal(statSync(runDir).mode & 0o777, 0o700);
   assert.equal(statSync(daemon.socketPath).mode & 0o777, 0o600);
 
-  const down = await sendRequest(daemon.socketPath, { id: "perm-down", method: "down" }, { timeoutMs: 2000 });
+  const down = await sendRequest(daemon.socketPath, { id: "perm-down", method: "down", params: { selection: selectionOf(fixture.ws) } }, { timeoutMs: 2000 });
   assert.ok(down.result !== undefined);
   await awaitDone(daemon);
   assert.equal(existsSync(daemon.socketPath), false);

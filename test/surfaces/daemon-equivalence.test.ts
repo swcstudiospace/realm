@@ -38,7 +38,6 @@ async function startRealDaemon(t: TestContext): Promise<{ readonly daemon: Start
   const daemon = await startDaemon({
     runtimeInput: { image: IMAGE, stateDir: join(base, "state"), workspaceRoot: workspace },
     policyPath,
-    sessionId: "sess-daemon-equivalence",
     exec: new FakeExecutionService(),
     bridge: new FakeBridge(),
     clock: () => new Date(TS),
@@ -51,7 +50,7 @@ async function startRealDaemon(t: TestContext): Promise<{ readonly daemon: Start
   });
   t.after(async () => {
     try {
-      await sendRequest(daemon.socketPath, { id: "equivalence-down", method: "down" });
+      await sendRequest(daemon.socketPath, { id: "equivalence-down", method: "down", params: { selection: selectionOf(workspace) } });
       await daemon.done;
     } catch {
       // The daemon already went down, so only the scratch directory is left to remove.
@@ -164,7 +163,10 @@ async function overDaemon(
   answer: Answer,
 ): Promise<{ readonly mcp: Seen; readonly acp: Seen }> {
   const { daemon, workspace } = await startRealDaemon(t);
-  daemon.handle.dispatcher.call = answer;
+  await sendRequest(daemon.socketPath, { id: "equivalence-up", method: "up", params: { workspaceRoot: workspace } });
+  const entry = daemon.session(selectionOf(workspace).sessionId);
+  assert.ok(entry !== undefined, "the workspace's session is admitted");
+  entry.handle.dispatcher.call = answer;
   const client = connectDaemon(daemon.socketPath, selectionOf(workspace));
   t.after(() => {
     client.close();

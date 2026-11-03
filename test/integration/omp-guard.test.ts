@@ -53,6 +53,7 @@ import { ScriptedProvider, type ChatMessage, type ProviderTurn, type RecordedReq
 import { classify, defaultAllow, externalConnects, formatOffenders, parseConnects, traceArgv, type NetAllow, type NetConnect } from "../support/net-trace.js";
 import { onPath } from "../support/production-live.js";
 import { sendRequest } from "../../src/daemon/channel.js";
+import { selectionOf } from "../../src/daemon/client.js";
 import { startDaemon } from "../../src/daemon/daemon.js";
 import type { PodmanProbeResult } from "../../src/runtime/podman-probe.js";
 import { FakeBridge } from "../support/fake-bridge.js";
@@ -96,7 +97,6 @@ async function startInactiveRealmDaemon(options: {
   const daemon = await startDaemon({
     runtimeInput: { image: REALM_IMAGE, stateDir: options.stateDir, workspaceRoot: options.workspace },
     policyPath,
-    sessionId: "sess-harness",
     exec,
     bridge: new FakeBridge(),
     clock: () => new Date(CLOCK_ISO),
@@ -106,7 +106,7 @@ async function startInactiveRealmDaemon(options: {
   });
   return {
     async down(): Promise<void> {
-      await sendRequest(daemon.socketPath, { id: "c1-down", method: "down" }, { timeoutMs: CONTROL_TIMEOUT_MS });
+      await sendRequest(daemon.socketPath, { id: "c1-down", method: "down", params: { selection: selectionOf(options.workspace) } }, { timeoutMs: CONTROL_TIMEOUT_MS });
       await daemon.done;
     },
   };
