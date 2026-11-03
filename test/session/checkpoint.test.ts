@@ -1,5 +1,6 @@
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import {
   chmodSync,
   existsSync,
@@ -18,6 +19,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { type ErrorCode, RealmError } from "../../src/core/errors.js";
 import { bindRoot } from "../../src/fs/root.js";
 import { restoreWorkspace, type SandboxRunning, snapshotWorkspace } from "../../src/session/checkpoint.js";
@@ -415,6 +417,179 @@ void test("the next restore first returns a crashed restore's tree to its origin
   assert.equal(readFileSync(join(f.ws, "a.txt"), "utf8"), "A-current");
   assert.equal(readFileSync(join(f.ws, "b.txt"), "utf8"), "B-current");
   assert.equal(readFileSync(join(f.ws, "c.txt"), "utf8"), "C-current");
+  assert.deepEqual(workDirsOf(f), []);
+});
+
+// The halt point of a crash child. The child halts before it moves `name`, once every name in `present` is in the root and
+// no name in `absent` is.
+interface HaltPoint {
+  readonly name: string;
+  readonly present: readonly string[];
+  readonly absent: readonly string[];
+}
+
+const HALTED = "halted\n";
+
+// Runs as `node -e`. It restores through the compiled module that dist/ provides, and halts at the requested point by
+// writing a line and blocking. The parent SIGKILLs it there, so no in-process rollback runs.
+const CRASH_CHILD = `
+const { existsSync } = require("node:fs");
+const { join } = require("node:path");
+const { pathToFileURL } = require("node:url");
+const request = JSON.parse(process.argv[1]);
+const { halt, root } = request;
+function beforeMoveHalts(name) {
+  if (name !== halt.name) {
+    return false;
+  }
+  return halt.present.every((entry) => existsSync(join(root, entry))) && !halt.absent.some((entry) => existsSync(join(root, entry)));
+}
+function beforeMove(name) {
+  if (beforeMoveHalts(name)) {
+    process.stdout.write("halted\\n");
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
+  }
+}
+import(pathToFileURL(request.modulePath).href)
+  .then(({ restoreWorkspace }) =>
+    restoreWorkspace({
+      entry: request.entry,
+      stateRoot: request.stateRoot,
+      checkpointId: request.checkpointId,
+      sandboxRunning: () => false,
+      beforeMove,
+    }),
+  )
+  .catch((error) => {
+    process.stderr.write(String(error));
+    process.exit(1);
+  });
+`;
+
+// Runs a restore in a child process, waits until it reaches the halt point, then SIGKILLs it. The kill leaves the root and
+// the work directory as a crash leaves them, and the session lock with a dead owner.
+async function crashRestoreAt(f: Fixture, checkpointId: string, halt: HaltPoint): Promise<void> {
+  const request = JSON.stringify({
+    modulePath: fileURLToPath(new URL("../../src/session/checkpoint.js", import.meta.url)),
+    entry: f.entry,
+    stateRoot: f.state,
+    checkpointId,
+    root: f.ws,
+    halt,
+  });
+  const child = spawn(process.execPath, ["-e", CRASH_CHILD, request], { stdio: ["ignore", "pipe", "pipe"] });
+  const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+    child.once("exit", (code, signal) => {
+      resolve({ code, signal });
+    });
+  });
+  let stdout = "";
+  let stderr = "";
+  child.stderr.on("data", (chunk: Buffer) => {
+    stderr += chunk.toString("utf8");
+  });
+  const halted = new Promise<void>((resolve, reject) => {
+    child.stdout.on("data", (chunk: Buffer) => {
+      stdout += chunk.toString("utf8");
+      if (stdout.includes(HALTED)) {
+        resolve();
+      }
+    });
+    void exited.then(({ code, signal }) => {
+      reject(new Error(`restore child ended before its halt point: code ${String(code)}, signal ${String(signal)}: ${stderr}`));
+    });
+  });
+  await halted;
+  child.kill("SIGKILL");
+  assert.equal((await exited).signal, "SIGKILL");
+}
+
+void test("a SIGKILL after a snapshot-only name moves into the root recovers the pre-restore tree", async (t) => {
+  const f = fixture(t);
+  writeFileSync(join(f.ws, "a.txt"), "A-saved");
+  writeFileSync(join(f.ws, "b.txt"), "B-saved");
+  writeFileSync(join(f.ws, "c.txt"), "C-saved");
+  await snapshotWorkspace({ ...scope(f), checkpointId: "c1" });
+
+  // b.txt is in the snapshot only: the workspace has deleted it since.
+  rmSync(join(f.ws, "b.txt"));
+  writeFileSync(join(f.ws, "a.txt"), "A-now");
+  writeFileSync(join(f.ws, "c.txt"), "C-now");
+  writeFileSync(join(f.ws, "extra.txt"), "E-now");
+  await snapshotWorkspace({ ...scope(f), checkpointId: "pre" });
+  const preManifest = readFileSync(join(checkpointPath(f, "pre"), "manifest.json"));
+
+  // The restore has moved a.txt and the snapshot-only b.txt into the root when it is killed, before c.txt moves.
+  await crashRestoreAt(f, "c1", { name: "c.txt", present: ["b.txt"], absent: [] });
+  assert.equal(readFileSync(join(f.ws, "b.txt"), "utf8"), "B-saved");
+  assert.equal(workDirsOf(f).length, 1);
+
+  await snapshotWorkspace({ ...scope(f), checkpointId: "post" });
+  assert.deepEqual(readFileSync(join(checkpointPath(f, "post"), "manifest.json")), preManifest);
+  assert.deepEqual(readdirSync(f.ws).sort(), ["a.txt", "c.txt", "extra.txt"]);
+  assert.equal(readFileSync(join(f.ws, "a.txt"), "utf8"), "A-now");
+  assert.equal(readFileSync(join(f.ws, "c.txt"), "utf8"), "C-now");
+  assert.deepEqual(workDirsOf(f), []);
+});
+
+void test("a SIGKILL during the backup phase, before the backed-up marker exists, recovers the pre-restore tree", async (t) => {
+  const f = fixture(t);
+  writeFileSync(join(f.ws, "a.txt"), "A-saved");
+  writeFileSync(join(f.ws, "b.txt"), "B-saved");
+  writeFileSync(join(f.ws, "c.txt"), "C-saved");
+  await snapshotWorkspace({ ...scope(f), checkpointId: "c1" });
+
+  rmSync(join(f.ws, "b.txt"));
+  writeFileSync(join(f.ws, "a.txt"), "A-now");
+  writeFileSync(join(f.ws, "c.txt"), "C-now");
+  writeFileSync(join(f.ws, "extra.txt"), "E-now");
+  await snapshotWorkspace({ ...scope(f), checkpointId: "pre" });
+  const preManifest = readFileSync(join(checkpointPath(f, "pre"), "manifest.json"));
+
+  // a.txt has moved into the backup when the restore is killed, before c.txt moves. No phase-B move has started.
+  await crashRestoreAt(f, "c1", { name: "c.txt", present: [], absent: ["a.txt"] });
+  assert.equal(existsSync(join(f.ws, "a.txt")), false);
+  assert.equal(workDirsOf(f).length, 1);
+
+  await snapshotWorkspace({ ...scope(f), checkpointId: "post" });
+  assert.deepEqual(readFileSync(join(checkpointPath(f, "post"), "manifest.json")), preManifest);
+  assert.deepEqual(readdirSync(f.ws).sort(), ["a.txt", "c.txt", "extra.txt"]);
+  assert.equal(readFileSync(join(f.ws, "a.txt"), "utf8"), "A-now");
+  assert.equal(readFileSync(join(f.ws, "c.txt"), "utf8"), "C-now");
+  assert.deepEqual(workDirsOf(f), []);
+});
+
+void test("a failure after the backed-up marker rolls back, and the original tree returns", async (t) => {
+  const f = fixture(t);
+  writeFileSync(join(f.ws, "a.txt"), "A-saved");
+  writeFileSync(join(f.ws, "b.txt"), "B-saved");
+  await snapshotWorkspace({ ...scope(f), checkpointId: "c1" });
+  writeFileSync(join(f.ws, "a.txt"), "A-now");
+  writeFileSync(join(f.ws, "b.txt"), "B-now");
+  writeFileSync(join(f.ws, "z.txt"), "Z-now");
+
+  // Calls 1 to 3 move the three originals aside. Call 4 moves a.txt in. Call 5 fails before b.txt moves in, so the
+  // rollback runs with the marker written and one staged entry in the root.
+  const calls: string[] = [];
+  await assert.rejects(
+    restoreWorkspace({
+      ...scope(f),
+      checkpointId: "c1",
+      beforeMove: (name) => {
+        calls.push(name);
+        if (calls.length === 5) {
+          throw new Error("injected move failure");
+        }
+      },
+    }),
+    codeIs("WRITE_NOT_ATOMIC"),
+  );
+
+  assert.deepEqual(calls, ["a.txt", "b.txt", "z.txt", "a.txt", "b.txt"]);
+  assert.deepEqual(readdirSync(f.ws).sort(), ["a.txt", "b.txt", "z.txt"]);
+  assert.equal(readFileSync(join(f.ws, "a.txt"), "utf8"), "A-now");
+  assert.equal(readFileSync(join(f.ws, "b.txt"), "utf8"), "B-now");
+  assert.equal(readFileSync(join(f.ws, "z.txt"), "utf8"), "Z-now");
   assert.deepEqual(workDirsOf(f), []);
 });
 

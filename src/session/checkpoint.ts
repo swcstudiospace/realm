@@ -15,8 +15,9 @@
 // releases the lock. The sweep never runs without the lock.
 //
 // A restore keeps the workspace root directory (its device and inode never change), moves the root's entries aside into
-// a backup, moves the staged entries in, writes a committed marker, and deletes the backup. A crash before the marker is
-// undone by recovery, which moves the backup's originals back and discards the staged copy.
+// a backup, writes a backed-up marker, moves the staged entries in, writes a committed marker, and deletes the backup. A
+// crash before the committed marker is undone by recovery. Without the backed-up marker, recovery moves the backup's
+// originals back. With it, every root entry is a staged entry, so recovery sets those aside before the originals return.
 //
 // Documented limits: a hard link becomes a separate file. Content is not filtered, so the state root must lie outside
 // the workspace root; a root that holds the state directory is refused. A lock file that is empty or unreadable is
@@ -42,6 +43,7 @@ import {
   copyFile,
   lstat,
   mkdir,
+  open,
   readdir,
   readFile,
   readlink,
@@ -72,6 +74,7 @@ const TREE_DIR = "tree";
 const STAGE_DIR = "stage";
 const BACKUP_DIR = "backup";
 const COMMITTED_FILE = "committed";
+const BACKED_UP_FILE = "backed-up";
 const WORK_DIR_PREFIX = ".restore-";
 const LOCK_FILE = ".lock";
 const LOCK_SCHEMA = 1;
@@ -280,12 +283,12 @@ async function restoreLocked(
       // A checkpoint whose content differs from its manifest is corrupt. Nothing has moved yet.
       throw makeRealmError("SCHEMA_INVALID");
     }
-    await swapEntries(request, pinned, stage, backup, stored, steps, moved);
+    await swapEntries(request, pinned, workDir, stored, steps, moved);
     await writeFile(join(workDir, COMMITTED_FILE), "", { flag: "wx" });
   } catch (error) {
     await steps.pending?.catch(() => undefined);
     if (moved.movedOut.length > 0 || moved.movedIn.length > 0) {
-      await rollback(pinned.realPath, stage, backup, moved, steps);
+      await rollback(pinned.realPath, workDir, moved, steps);
     }
     await rm(workDir, { recursive: true, force: true }).catch(() => undefined);
     throw error;
@@ -326,21 +329,27 @@ async function recoverSession(
   }
 }
 
-// A crash leaves the original entries in the backup, and some restored entries in the root. A restored entry that shares
-// a name with a backed-up original is set aside into the stage. Then every backed-up original moves back.
+// A crash leaves the original entries in the backup, and some restored entries in the root. Without the backed-up marker,
+// phase A was not finished and no restored entry is in the root, so a root entry is set aside only when its name is also
+// a backed-up original. With the marker, phase A had finished, so every root entry is a staged entry, and all of them are
+// set aside into the stage. Then every backed-up original moves back.
 async function returnOriginalTree(workDir: string, root: string, steps: Steps): Promise<void> {
   const backup = join(workDir, BACKUP_DIR);
   const stage = join(workDir, STAGE_DIR);
   const backedUp = await readdir(backup).catch((): string[] => []);
-  if (backedUp.length === 0) {
+  const allBackedUp = (await lstat(join(workDir, BACKED_UP_FILE)).catch(() => undefined)) !== undefined;
+  if (!allBackedUp && backedUp.length === 0) {
     return;
   }
   await mkdir(stage, { recursive: true, mode: PRIVATE_DIR_MODE });
   for (const name of await readdir(root)) {
-    if (backedUp.includes(name)) {
+    if (allBackedUp || backedUp.includes(name)) {
       await bounded(steps, rename(join(root, name), join(stage, name)));
     }
   }
+  // The marker goes before any original moves back: once an original is in the root, the root holds more than staged
+  // entries, and a marker left in place would make the next recovery set that original aside.
+  await bounded(steps, removeBackedUpMarker(workDir));
   for (const name of backedUp) {
     await bounded(steps, rename(join(backup, name), join(root, name)));
   }
@@ -349,17 +358,21 @@ async function returnOriginalTree(workDir: string, root: string, steps: Steps): 
 async function swapEntries(
   request: RestoreRequest,
   pinned: PinnedRoot,
-  stage: string,
-  backup: string,
+  workDir: string,
   stored: CheckpointManifest,
   steps: Steps,
   moved: MovedNames,
 ): Promise<void> {
+  const stage = join(workDir, STAGE_DIR);
+  const backup = join(workDir, BACKUP_DIR);
   for (const name of (await readdir(pinned.realPath)).sort()) {
     request.beforeMove?.(name);
     moved.movedOut.push(name);
     await bounded(steps, rename(join(pinned.realPath, name), join(backup, name)));
   }
+  // Every root entry is in the backup now. The marker is durable before the first move into the root, so a crash after
+  // this point leaves a marker that means the root holds only staged entries.
+  await bounded(steps, writeBackedUpMarker(workDir));
   for (const name of (await readdir(stage)).sort()) {
     request.beforeMove?.(name);
     moved.movedIn.push(name);
@@ -372,22 +385,68 @@ async function swapEntries(
   }
 }
 
-// Moves back every entry that was moved, newest first. The original tree returns when this succeeds. A failure keeps
-// the work directory, which still holds the original entries, for recovery.
-async function rollback(root: string, stage: string, backup: string, moved: MovedNames, steps: Steps): Promise<void> {
-  const undo: [from: string, to: string][] = [
-    ...[...moved.movedIn].reverse().map((name): [string, string] => [join(root, name), join(stage, name)]),
-    ...[...moved.movedOut].reverse().map((name): [string, string] => [join(backup, name), join(root, name)]),
-  ];
+// Moves back every entry that was moved: the staged entries first, newest first, then the originals. The original tree
+// returns when this succeeds. A failure keeps the work directory, which still holds the original entries, for recovery.
+async function rollback(root: string, workDir: string, moved: MovedNames, steps: Steps): Promise<void> {
+  const stage = join(workDir, STAGE_DIR);
+  const backup = join(workDir, BACKUP_DIR);
+  const stagedBack: [from: string, to: string][] = [...moved.movedIn]
+    .reverse()
+    .map((name): [string, string] => [join(root, name), join(stage, name)]);
+  const originalsBack: [from: string, to: string][] = [...moved.movedOut]
+    .reverse()
+    .map((name): [string, string] => [join(backup, name), join(root, name)]);
   try {
-    for (const [from, to] of undo) {
-      if ((await lstat(from).catch(() => undefined)) !== undefined) {
-        await bounded(steps, rename(from, to));
-      }
+    for (const [from, to] of stagedBack) {
+      await moveIfPresent(from, to, steps);
+    }
+    // Once an original is back in the root, the root holds more than staged entries, so the marker must be gone first.
+    await bounded(steps, removeBackedUpMarker(workDir));
+    for (const [from, to] of originalsBack) {
+      await moveIfPresent(from, to, steps);
     }
   } catch {
     // The original tree is not back in full, so the work directory is kept for recovery.
     throw makeRealmError("CLEANUP_FAILED", "WRITE_NOT_ATOMIC");
+  }
+}
+
+async function moveIfPresent(from: string, to: string, steps: Steps): Promise<void> {
+  if ((await lstat(from).catch(() => undefined)) !== undefined) {
+    await bounded(steps, rename(from, to));
+  }
+}
+
+// Writes the backed-up marker and makes it durable: the file is synced, then its directory. Nothing moves into the root
+// until this returns.
+async function writeBackedUpMarker(workDir: string): Promise<void> {
+  const handle = await open(join(workDir, BACKED_UP_FILE), "wx", 0o600);
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+  await syncDir(workDir);
+}
+
+// Removes the backed-up marker and makes the removal durable. Recovery reads the marker as "every root entry came from
+// the stage", so the marker is gone before any original moves back into the root.
+async function removeBackedUpMarker(workDir: string): Promise<void> {
+  const marker = join(workDir, BACKED_UP_FILE);
+  if ((await lstat(marker).catch(() => undefined)) === undefined) {
+    return;
+  }
+  await rm(marker);
+  await syncDir(workDir);
+}
+
+// Flushes a directory's entries to disk, so a file created or removed in it survives a crash.
+async function syncDir(dir: string): Promise<void> {
+  const handle = await open(dir, "r");
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close();
   }
 }
 
