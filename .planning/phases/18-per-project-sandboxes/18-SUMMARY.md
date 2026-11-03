@@ -1,6 +1,6 @@
 # Phase 18 (per-project sandboxes): lane run summary
 
-Lane: gsd/v3-phase18, worktree /root/src/repos/agent-realm-lanes/v3-phase18, run 2026-11-02.
+Lane: gsd/v3-phase18, worktree (repository root of this lane checkout), run 2026-11-02.
 Status: BLOCKED at plan 18-06, task T1. Plans 18-08 to 18-13 were not started; plan 18-14 is HELD. The full gate set was not run, because the stop rule forbids advancing past a red verify.
 
 ## Plan status
@@ -34,7 +34,7 @@ src/daemon/daemon.ts(33,10): error TS2305: Module '"../lifecycle/controller.js"'
 test/daemon/daemon.test.ts(2449,33): error TS2554: Expected 0 arguments, but got 1.
 ```
 
-Under the plan's stop rule, plan 18-06 stops at T1. No further edits were made to it and no dependent plan was started. The uncommitted work (12 modified files and one new file, `src/daemon/sessions.ts`) is kept as a patch at `/root/src/repos/agent-realm-lanes/gate-runs/2026-11-02-phase18/18-06-wip.patch`, outside the repository. Nothing from 18-06 is committed.
+Under the plan's stop rule, plan 18-06 stops at T1. No further edits were made to it and no dependent plan was started. The uncommitted work (12 modified files and one new file, `src/daemon/sessions.ts`) is kept as a patch at `gate-runs/2026-11-02-phase18/18-06-wip.patch`, in the gate-runs directory beside the lane worktrees, outside the repository. Nothing from 18-06 is committed.
 
 Known gaps in the 18-06 test set, separate from the compile errors:
 - T2 (d) needed one read-only accessor, `readonly locks: LockTable` on `RealmHandle` in `src/realm/compose.ts`. That file is outside the plan's files list. It is recorded here as a deviation.
@@ -59,5 +59,5 @@ The build result is for the working tree with the 18-06 WIP, not the committed h
 
 ## Operational notes
 - Disk floor: 13.5 GB free at the start of the heavy job, above the 8 GiB floor.
-- Heavy slot: `flock -w 7200 /root/src/repos/agent-realm-lanes/heavy-slot-1.lock`, one job at a time, used once.
+- Heavy slot: `flock -w 7200 heavy-slot-1.lock`, in the lane root that holds the lane worktrees, one job at a time, used once.
 - No push, fetch, GitHub write, merge, rebase, reset, `npm ci` or lockfile change. Nothing was committed except the plan-text fix and the two reports.
