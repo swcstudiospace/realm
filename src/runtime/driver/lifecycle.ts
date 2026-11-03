@@ -48,7 +48,7 @@ import {
   sessionOfRealmSandbox,
 } from "../openshell.js";
 import { listRealmContainers, SWEEP_CALL_TIMEOUT_MS } from "../sweep.js";
-import { presentSecretEntries, removeSecretDirIfEmpty, removeSecretEntries, secretDirExists, secretDirOf, secretDirsUnder } from "./secret-store.js";
+import { LAUNCH_FILE_NAME, presentSecretEntries, removeSecretDirIfEmpty, removeSecretEntries, secretDirExists, secretDirOf, secretDirsUnder } from "./secret-store.js";
 import { sandboxBindingOf, type SandboxBinding } from "./sandbox-binding.js";
 
 // Grace period a sandbox container gets to stop before it is killed. Matches the session composition's grace.
@@ -63,9 +63,6 @@ const GROUP_OR_WORLD_BITS = 0o077;
 
 // C1. The options every workspace mount must carry, so the workspace is not executable, suid or device-bearing.
 const WORKSPACE_REQUIRED_OPTIONS: readonly string[] = Object.freeze(["noexec", "nosuid", "nodev"]);
-
-// The launch material's file in a sandbox's secret directory. secret-store writes it and does not export its name.
-const LAUNCH_FILE_NAME = "launch.json";
 
 // The libpod calls the lifecycle needs. The closed client satisfies it.
 export type LifecycleLibpod = Pick<
@@ -407,7 +404,7 @@ export class DriverLifecycle {
         throw makeRealmError("CLEANUP_FAILED");
       }
     }
-    removeSecretEntries(secretEntries);
+    removeSecretEntries(secretDir, secretEntries);
     removeSecretDirIfEmpty(secretDir);
   }
 
@@ -675,7 +672,7 @@ function bounded<T>(call: Promise<T>): Promise<T> {
 function removeSecretPlan(plan: readonly SecretPlan[]): string[] {
   const removed: string[] = [];
   for (const { name, path, entries } of plan) {
-    removeSecretEntries(entries);
+    removeSecretEntries(path, entries);
     if (presentSecretEntries(path).length > 0) {
       throw makeRealmError("CLEANUP_FAILED");
     }

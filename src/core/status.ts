@@ -4,11 +4,13 @@
 
 import type { State } from "./states.js";
 
+// The two labels a user sees for the session status.
 export const STATUS_LABELS = Object.freeze({
   active: "realm active",
   disconnected: "realm disconnected",
 } as const);
 
+// One of the status labels in STATUS_LABELS.
 export type StatusLabel = (typeof STATUS_LABELS)[keyof typeof STATUS_LABELS];
 
 // The lifecycle snapshot the mapping reads: current state, its reason, and the
@@ -19,6 +21,7 @@ export interface StatusSnapshot {
   readonly lastTransitionAt: string;
 }
 
+// The status a host shows: its label, whether it is degraded, the reason, and the time of the last transition.
 export interface DisplayStatus {
   readonly label: StatusLabel;
   readonly degraded: boolean;
@@ -35,6 +38,7 @@ const FIXED_REASON = Object.freeze({
   stopping: "stopping",
 } as const);
 
+// Maps a lifecycle snapshot to the status a user sees. It reads the snapshot and changes nothing.
 export function displayStatus(snapshot: StatusSnapshot): DisplayStatus {
   const { state, reason, lastTransitionAt } = snapshot;
   switch (state) {

@@ -8,10 +8,10 @@
 // the filesystem guards only; it starts no long-running process and parses no argv.
 // Request lines are capped at MAX_CONTROL_LINE_BYTES; a longer line is refused unread with a null-id SCHEMA_INVALID reply.
 
-import { createConnection, type Socket } from "node:net";
+import type { Socket } from "node:net";
 import { chmodSync, mkdirSync, statSync, type Stats } from "node:fs";
 import { ERROR_CODES, makeRealmError, RealmError, type ErrorCode } from "../core/errors.js";
-import { withTimeout } from "../core/timeout.js";
+import { dialWithin, withTimeout } from "../core/timeout.js";
 import { controlSocketPath, isSessionId } from "../session/paths.js";
 
 export const CONTROL_METHODS = ["status", "up", "down", "doctor", "tool", "metrics"] as const;
@@ -307,20 +307,9 @@ function ioFailure(error: unknown): RealmError {
 }
 
 async function dial(socketPath: string, timeoutMs: number): Promise<Socket> {
-  const socket = createConnection(socketPath);
-  const connected = new Promise<Socket>((resolve, reject) => {
-    socket.once("connect", () => {
-      resolve(socket);
-    });
-    socket.once("error", (cause: unknown) => {
-      socket.destroy();
-      reject(ioFailure(cause));
-    });
-  });
   try {
-    return await withTimeout(connected, timeoutMs, "TOOL_TIMEOUT");
+    return await dialWithin(socketPath, timeoutMs, "TOOL_TIMEOUT");
   } catch (error: unknown) {
-    socket.destroy();
     throw ioFailure(error);
   }
 }

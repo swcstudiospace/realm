@@ -24,6 +24,7 @@ import type { State } from "./states.js";
 // names none so the schema default applied ("default"), or there is no file ("no-file").
 export type ModeSource = "explicit" | "default" | "no-file";
 
+// A parsed policy and the source its mode was read from.
 export interface LoadedPolicy {
   readonly policy: Policy;
   readonly modeSource: ModeSource;
@@ -138,6 +139,7 @@ function isInside(root: string, path: string): boolean {
 
 export type MutationDenyCode = "REALM_UNBOUND" | "REALM_STOPPING" | "REALM_NOT_ACTIVE";
 
+// The outcome of one file mutation under the policy: allowed, allowed with a warning, or denied with its code.
 export type MutationDecision =
   | { readonly decision: "allow" }
   | { readonly decision: "allow-with-warning"; readonly warning: string }

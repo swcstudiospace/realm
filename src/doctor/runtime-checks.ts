@@ -2,10 +2,11 @@
 // A missing or unloadable config is one item with first-time setup guidance. Configured root failures
 // require manual recovery, not reinitialization. This module reads no process environment: the caller hands env in.
 
-import { lstatSync, type Stats } from "node:fs";
-import { connect as netConnect } from "node:net";
+import { lstatSync, readFileSync, type Stats } from "node:fs";
 import { connect as tlsConnect } from "node:tls";
 import { isAbsolute, dirname } from "node:path";
+import { dialWithin } from "../core/timeout.js";
+import { makeRealmError } from "../core/errors.js";
 import type { EnvironmentLike } from "../session/paths.js";
 import { runtimeRootsOf, type RuntimeConfig } from "../runtime/config.js";
 
@@ -29,7 +30,7 @@ export interface RuntimeCheckOptions {
   readonly config?: RuntimeConfig;
   readonly env: EnvironmentLike;
   readonly stat?: (path: string) => PathReading;
-  readonly connectGateway?: (endpoint: string, timeoutMs: number) => Promise<void>;
+  readonly connectGateway?: (endpoint: string, caPath: string, timeoutMs: number) => Promise<void>;
   readonly connectDriver?: (socketPath: string, timeoutMs: number) => Promise<void>;
   readonly probeTimeoutMs?: number;
 }
@@ -39,6 +40,7 @@ const SOCKET_MODE = 0o600;
 const PERMISSION_BITS = 0o777;
 const DRIVER_SOCKET_ENV = "REALM_DRIVER_SOCKET";
 const GATEWAY_ENDPOINT_ENV = "REALM_DRIVER_GATEWAY_ENDPOINT";
+const GATEWAY_CA_ENV = "REALM_DRIVER_GATEWAY_CA";
 const INIT_FIX = "For first-time setup with no config.json or policy.json, run realm init to write the config and prepare private roots at mode 0700. If either template already exists, preserve the templates and data and repair the existing config instead. A stale REALM_DRIVER_*_ROOT variable is ignored.";
 
 // The fix for each driver-root condition. A fix names the root in its detail, never a path value.
@@ -82,34 +84,43 @@ function defaultStat(path: string): PathReading {
   }
 }
 
-function defaultConnectGateway(endpoint: string, timeoutMs: number): Promise<void> {
+export function defaultConnectGateway(endpoint: string, caPath: string, timeoutMs: number): Promise<void> {
   return new Promise((resolve, reject) => {
     let url: URL;
     try {
       url = new URL(endpoint);
-    } catch (error: unknown) {
-      reject(error instanceof Error ? error : new Error("gateway endpoint is not a URL"));
+    } catch {
+      reject(makeRealmError("SCHEMA_INVALID"));
       return;
     }
     if (url.protocol !== "https:" || url.hostname === "") {
-      reject(new Error("gateway endpoint is not https"));
+      reject(makeRealmError("SCHEMA_INVALID"));
+      return;
+    }
+    let ca: Buffer;
+    try {
+      ca = readFileSync(caPath);
+    } catch {
+      reject(makeRealmError("SCHEMA_INVALID"));
       return;
     }
     const port = url.port === "" ? 443 : Number(url.port);
-    const socket = tlsConnect({ host: url.hostname, port, servername: url.hostname, rejectUnauthorized: false });
+    // The certificate must chain to the configured CA and name the endpoint host. Node verifies both by default, and `ca`
+    // replaces the system roots, so only REALM_DRIVER_GATEWAY_CA is trusted.
+    const socket = tlsConnect({ host: url.hostname, port, servername: url.hostname, ca });
     const timer = setTimeout(() => {
       socket.destroy();
-      reject(new Error("gateway did not accept a connection in time"));
+      reject(makeRealmError("OPENSHELL_GATEWAY_LOST"));
     }, timeoutMs);
     socket.once("secureConnect", () => {
       clearTimeout(timer);
       socket.destroy();
       resolve();
     });
-    socket.once("error", (error: unknown) => {
+    socket.once("error", () => {
       clearTimeout(timer);
       socket.destroy();
-      reject(error instanceof Error ? error : new Error("gateway connection failed"));
+      reject(makeRealmError("OPENSHELL_GATEWAY_LOST"));
     });
   });
 }
@@ -232,29 +243,22 @@ export async function driverSocketCheck(
   return pass(id, "driver socket accepted a connection, mode 0600, parent mode 0700");
 }
 
-function defaultConnectDriver(socketPath: string, timeoutMs: number): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const socket = netConnect({ path: socketPath });
-    const timer = setTimeout(() => {
+// Dials the compute driver's socket and closes it at once. A missed bound and a refused or absent socket both mean the
+// driver behind the gateway did not answer, so both reject with OPENSHELL_GATEWAY_LOST.
+export function defaultConnectDriver(socketPath: string, timeoutMs: number): Promise<void> {
+  return dialWithin(socketPath, timeoutMs, "OPENSHELL_GATEWAY_LOST").then(
+    (socket) => {
       socket.destroy();
-      reject(new Error("driver socket timed out"));
-    }, timeoutMs);
-    socket.once("connect", () => {
-      clearTimeout(timer);
-      socket.destroy();
-      resolve();
-    });
-    socket.once("error", (error: unknown) => {
-      clearTimeout(timer);
-      socket.destroy();
-      reject(error instanceof Error ? error : new Error("driver socket refused"));
-    });
-  });
+    },
+    () => {
+      throw makeRealmError("OPENSHELL_GATEWAY_LOST");
+    },
+  );
 }
 
 export async function gatewayCheck(
   env: EnvironmentLike,
-  connectGateway: (endpoint: string, timeoutMs: number) => Promise<void>,
+  connectGateway: (endpoint: string, caPath: string, timeoutMs: number) => Promise<void>,
   timeoutMs: number,
 ): Promise<RuntimeCheckResult> {
   const id: RuntimeCheckId = "gateway";
@@ -262,12 +266,16 @@ export async function gatewayCheck(
   if (endpoint === undefined || endpoint === "") {
     return fail(id, "REALM_DRIVER_GATEWAY_ENDPOINT is unset", "Set REALM_DRIVER_GATEWAY_ENDPOINT to the gateway's https URL and confirm the gateway is listening.");
   }
-  try {
-    await connectGateway(endpoint, timeoutMs);
-  } catch {
-    return fail(id, "gateway is unreachable", "Start the OpenShell gateway and confirm REALM_DRIVER_GATEWAY_ENDPOINT is the https URL it listens on.");
+  const caPath = env[GATEWAY_CA_ENV];
+  if (caPath === undefined || caPath === "") {
+    return fail(id, "REALM_DRIVER_GATEWAY_CA is unset", "Set REALM_DRIVER_GATEWAY_CA to the CA file that signs the gateway certificate.");
   }
-  return pass(id, "gateway accepted a connection");
+  try {
+    await connectGateway(endpoint, caPath, timeoutMs);
+  } catch {
+    return fail(id, "gateway is unreachable or its certificate does not chain to REALM_DRIVER_GATEWAY_CA", "Start the OpenShell gateway, confirm REALM_DRIVER_GATEWAY_ENDPOINT is the https URL it listens on, and confirm REALM_DRIVER_GATEWAY_CA is the CA that signed its certificate.");
+  }
+  return pass(id, "gateway presented a certificate that chains to REALM_DRIVER_GATEWAY_CA");
 }
 
 // One item when config is absent. Three items when a config is handed in.

@@ -13,6 +13,7 @@
 
 import { closeSync, openSync, readSync, statSync } from "node:fs";
 import { ERROR_CODES, makeRealmError, RealmError, type ErrorCode } from "../core/errors.js";
+import { sleep } from "../core/timeout.js";
 import type { DaemonClient } from "./client.js";
 import type { ControlSelection } from "./channel.js";
 
@@ -30,12 +31,6 @@ export interface EnsureDaemonOptions {
   readonly timeoutMs: number;
   // Interval, in milliseconds, between probes while waiting. Finite and positive.
   readonly pollMs: number;
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise<void>((resolve) => {
-    setTimeout(resolve, ms);
-  });
 }
 
 export async function ensureDaemon(options: EnsureDaemonOptions): Promise<void> {

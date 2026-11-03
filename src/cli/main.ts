@@ -12,9 +12,9 @@
 
 import { spawn } from "node:child_process";
 import { closeSync, fchmodSync, mkdirSync, openSync } from "node:fs";
-import { createConnection } from "node:net";
 import { runAcpOverStdio } from "../acp/stdio.js";
 import { createJsonRpc, type AnchorRpc } from "../audit/anchor.js";
+import { dialWithin } from "../core/timeout.js";
 import { ERROR_CATALOGUE, ERROR_CODES, RealmError, makeRealmError, type ErrorCode } from "../core/errors.js";
 import {
   sendRequest,
@@ -173,26 +173,11 @@ interface ResolvedDeps {
   readonly diagnostics: McpOutput;
 }
 
-// Dials a Unix socket and closes it at once, mirroring the doctor default (checks.ts).
-// Rejects on refusal, a missing socket, or no connection within timeoutMs.
-function defaultConnectSocket(socketPath: string, timeoutMs: number): Promise<void> {
-  return new Promise<void>((resolve, reject) => {
-    const socket = createConnection(socketPath);
-    const timer = setTimeout(() => {
-      socket.destroy();
-      reject(new Error("cli: socket did not connect in time"));
-    }, timeoutMs);
-    socket.once("connect", () => {
-      clearTimeout(timer);
-      socket.destroy();
-      resolve();
-    });
-    socket.once("error", (error) => {
-      clearTimeout(timer);
-      socket.destroy();
-      reject(error);
-    });
-  });
+// Dials a Unix socket and closes it at once, mirroring the doctor default (checks.ts). Rejects on refusal or a missing
+// socket with the socket's error, and with PODMAN_MACHINE_DOWN when no connection completes within timeoutMs.
+export async function defaultConnectSocket(socketPath: string, timeoutMs: number): Promise<void> {
+  const socket = await dialWithin(socketPath, timeoutMs, "PODMAN_MACHINE_DOWN");
+  socket.destroy();
 }
 
 function defaultSend(

@@ -42,7 +42,7 @@ import { computeBackoffDelayMs, type RandomSource } from "../core/backoff.js";
 import { type ErrorCode, makeRealmError, RealmError } from "../core/errors.js";
 import type { BridgeEvent, BridgeKind, BridgePort } from "../core/ports.js";
 import { errnoOf } from "../fs/canonicalize.js";
-import { nullLogger, type Logger } from "../observe/logger.js";
+import { type LogFields, nullLogger, type Logger } from "../observe/logger.js";
 import { checkAppInformationShape } from "./shape.js";
 
 export const ANDA_INFORMATION_PATH = "/.well-known/information";
@@ -73,7 +73,8 @@ export interface AndaBridgeOptions {
   readonly requestTimeoutMs?: number;
   readonly backoff?: BackoffOptions;
   readonly transport?: Transport;
-  // A listener that fails writes one warn line, event anda.listener_failed, with its catalogue code when it threw one (OBS-02).
+  // A listener that fails writes one warn line, event anda.listener_failed, with its catalogue code when it threw a RealmError,
+  // otherwise with the generic reason listener_error (OBS-02).
   // Defaults to a logger that writes nothing.
   readonly logger?: Logger;
 }
@@ -470,11 +471,11 @@ export class AndaBridge implements BridgePort {
     this.undelivered = failed ? event : null;
   }
 
-  // The diagnostic keeps the event kind and, when the listener threw a RealmError, its catalogue code. The message
-  // is never logged, so no raw listener text reaches the log.
+  // The diagnostic keeps the event kind. A RealmError adds its catalogue code; any other reason adds the generic
+  // reason listener_error. The message of a non-RealmError is never logged, so no raw listener text reaches the log.
   private reportListenerFailure(event: BridgeEvent, reason: unknown): void {
-    const code = reason instanceof RealmError ? reason.code : undefined;
-    this.logger.warn("anda.listener_failed", { kind: event.kind, ...(code === undefined ? {} : { code }) });
+    const detail: LogFields = reason instanceof RealmError ? { code: reason.code } : { reason: "listener_error" };
+    this.logger.warn("anda.listener_failed", { kind: event.kind, ...detail });
   }
 
   // The monitor stopped without a close, so no further probe runs, and the bridge records that as down

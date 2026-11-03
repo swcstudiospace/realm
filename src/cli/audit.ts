@@ -23,6 +23,7 @@ import {
   type ChainBreakReason,
 } from "../audit/chain.js";
 import { parseAnchorRecord, type AnchorMismatch, type AnchorRecord } from "../audit/anchor.js";
+import { ERROR_CATALOGUE, type ErrorCode } from "../core/errors.js";
 import { isSessionId } from "../session/paths.js";
 
 const USAGE =
@@ -97,6 +98,8 @@ interface FileReport {
   readonly sessionId: string;
   readonly ok: boolean;
   readonly failure?: FileFailure;
+  // The catalogue code of a typed error that stopped the check, when there is one.
+  readonly code?: ErrorCode;
   readonly lines?: number;
   readonly chainedLines?: number;
   readonly unprotected?: number;
@@ -252,6 +255,13 @@ function verifyOne(target: Target, pins: AuditCheckOptions): FileOutcome {
   }
   const check = checkAuditFile(target.file, pins);
   if (check.exitCode === 2) {
+    const code = check.code;
+    if (code !== undefined) {
+      return {
+        report: { sessionId: target.sessionId, ok: false, code },
+        stderr: `${label}${ERROR_CATALOGUE[code].reason}\n`,
+      };
+    }
     return {
       report: { sessionId: target.sessionId, ok: false, failure: "unreadable" },
       stderr: `${label}${FAILURE_TEXT.unreadable}\n`,

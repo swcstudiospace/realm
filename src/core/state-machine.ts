@@ -5,14 +5,17 @@
 import type { EventBus } from "./events.js";
 import { checkTransition, type State } from "./states.js";
 
+// The reason recorded for the unbound state before any workspace is bound.
 export const INITIAL_REASON = "no workspace";
 
+// The current state, the reason it was entered, and when that transition was committed.
 export interface StateSnapshot {
   readonly state: State;
   readonly reason: string;
   readonly lastTransitionAt: string;
 }
 
+// The session's lifecycle state machine. It commits each allowed transition, then publishes one event for it.
 export class RealmStateMachine {
   private readonly sessionId: string;
   private readonly bus: EventBus;

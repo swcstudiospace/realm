@@ -17,14 +17,13 @@ import { createHash } from "node:crypto";
 import { accessSync, constants, createReadStream, existsSync, readFileSync, statSync, type ReadStream, type Stats } from "node:fs";
 import { request as httpRequest, type ClientRequest, type IncomingMessage, type RequestOptions } from "node:http";
 import { request as httpsRequest } from "node:https";
-import { createConnection } from "node:net";
 import { dirname, isAbsolute, join } from "node:path";
 import { ANDA_INFORMATION_PATH } from "../anda/client.js";
 import { checkAppInformationShape } from "../anda/shape.js";
 import { SchemaInvalidError } from "../contract/validate.js";
 import { ERROR_CATALOGUE, RealmError } from "../core/errors.js";
 import { loadPolicyFileDetailed, type LoadedPolicy } from "../core/policy.js";
-import { withTimeout } from "../core/timeout.js";
+import { dialWithin, withTimeout } from "../core/timeout.js";
 import { buildCreateArgv, OPENSHELL_BINARY } from "../runtime/openshell.js";
 import {
   probePodman,
@@ -993,26 +992,11 @@ export function defaultRunCommand(file: string, args: readonly string[], options
   });
 }
 
-// Dials a Unix socket and closes it at once. Rejects on refusal, a missing socket, or no connection
-// within timeoutMs.
-function defaultConnectSocket(socketPath: string, timeoutMs: number): Promise<void> {
-  return new Promise<void>((resolve, reject) => {
-    const socket = createConnection(socketPath);
-    const timer = setTimeout(() => {
-      socket.destroy();
-      reject(new Error("socket did not connect in time"));
-    }, timeoutMs);
-    socket.once("connect", () => {
-      clearTimeout(timer);
-      socket.destroy();
-      resolve();
-    });
-    socket.once("error", (error) => {
-      clearTimeout(timer);
-      socket.destroy();
-      reject(error);
-    });
-  });
+// Dials a Unix socket and closes it at once. Rejects on refusal or a missing socket with the socket's error, and with
+// PODMAN_MACHINE_DOWN when no connection completes within timeoutMs.
+export async function defaultConnectSocket(socketPath: string, timeoutMs: number): Promise<void> {
+  const socket = await dialWithin(socketPath, timeoutMs, "PODMAN_MACHINE_DOWN");
+  socket.destroy();
 }
 
 type HttpTransport = (options: RequestOptions, onResponse: (res: IncomingMessage) => void) => ClientRequest;

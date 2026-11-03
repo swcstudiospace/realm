@@ -1,0 +1,7 @@
+{
+  "src/daemon/daemon.ts": 1343,
+  "src/runtime/driver/compute-driver.ts": 1328,
+  "src/doctor/checks.ts": 1051,
+  "src/lifecycle/controller.ts": 1029,
+  "src/omp/plugin.ts": 1013
+}
