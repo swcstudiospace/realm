@@ -15,8 +15,8 @@
 //   6. A rootless Podman API socket under XDG_RUNTIME_DIR.
 //   7. The openshell CLI on PATH.
 //   8. The built CLI at dist/src/cli/main.js, next to the compiled tests (npm run build).
-// A default npm test therefore skips every scenario below (ten in all: default policy, immediate cycle, egress allowlist, wrong
-// image digest, crash recovery, MCP exec, the MCP exec timeout, the AgentOS runner exit, the daemon-side startup budget and a stopped gateway) and
+// A default npm test therefore skips every scenario below (eleven in all: default policy, immediate cycle, egress allowlist, wrong
+// image digest, crash recovery, MCP exec, the MCP exec timeout, the AgentOS runner exit, the daemon-side startup budget, a stopped gateway and two projects) and
 // reports each as skipped.
 //
 // Preconditions the suite cannot check and the operator must provide:
@@ -24,11 +24,11 @@
 //   - The openshell CLI has the realm gateway registered as its default (the CLI receives only PATH, HOME and XDG_RUNTIME_DIR).
 //   - The pinned workspace root is empty, no other live sandbox holds it, and the account's Podman holds no other container.
 //
-// Removal scope. The suite creates and removes only its own sandbox (realm-daemon) and its own temporary directories. Each
+// Removal scope. The suite creates and removes only the sandboxes of the projects it brings up, each named from its own canonical path, and its own temporary directories. Each
 // scenario builds its own XDG config home with realm/config.json and a policy.json, and runs the CLI through execFile on the
 // current node binary with an explicit environment: PATH, HOME and XDG_RUNTIME_DIR from the test's own environment, the
 // scenario's XDG_CONFIG_HOME, the three driver roots and REALM_DRIVER_SOCKET. Every scenario runs `realm down` in its cleanup, even on failure, and
-// then waits (bounded at 90 s) for zero containers, zero realm-* sandboxes, no realm-daemon directory under the secret and
+// then waits (bounded at 90 s) for zero containers and zero sandboxes of the names it used, no directory of those names under the secret and
 // sandbox-state roots, and an empty pinned workspace. The scenarios share one pinned root, so they run one after another.
 // Files the suite may leave in the pinned workspace are named in WORKSPACE_FILES below; cleanup removes exactly those names.
 // The only host process it ever signals is the one daemon the crash scenario's own `realm up` started: the process whose whole
@@ -40,7 +40,7 @@
 // Nothing here prints a secret. Failure messages carry exit codes, error codes, names and clipped probe output.
 
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { test, type TestContext } from "node:test";
 import { tmpdir } from "node:os";
@@ -48,6 +48,8 @@ import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
 import { DEFAULT_AGENTOS_PROBE_PATH } from "../../src/runtime/agentos-driver.js";
 import { SANDBOX_WORKSPACE_PATH } from "../../src/runtime/openshell.js";
+import { recordFileName, sandboxNameOfSession, sessionIdOfWorkspace, sessionsDirOf } from "../../src/session/paths.js";
+import { workspaceRegistryDirOf } from "../../src/session/workspace-registry.js";
 import {
   KILL_RUNNER_ARGV,
   UNKNOWN_DIGEST_IMAGE,
@@ -68,8 +70,8 @@ import {
   isBenchmarkAddress,
   isDirectory,
   isSocket,
-  listDaemonContainers,
-  listDaemonSandboxes,
+  listSandboxContainers,
+  listSandboxesNamed,
   listeningSocketsOf,
   nodeConnectArgv,
   nodeResolveArgv,
@@ -85,6 +87,7 @@ import {
   readLiveInputs,
   reapCountsOfNotice,
   realmCli,
+  realmCliWithWorkspace,
   requestLogLinesOf,
   runCommand,
   sandboxExec,
@@ -97,7 +100,9 @@ import {
   waitForActive,
   waitForNoContainers,
   waitForNoResidue,
-  DAEMON_SANDBOX_NAME,
+  RESIDUE_TIMEOUT_MS,
+  sandboxNameFor,
+  sessionIdFor,
   type CommandResult,
   type StatusFields,
   type NodeProbeResult,
@@ -203,19 +208,29 @@ function up(scenario: Scenario): Promise<CommandResult> {
   return realmCli(scenario.inputs, scenario.environment, ["up", "--workspace", scenario.inputs.workspaceRoot], UP_TIMEOUT_MS);
 }
 
-function down(scenario: Scenario): Promise<CommandResult> {
-  return realmCli(scenario.inputs, scenario.environment, ["down"], DOWN_TIMEOUT_MS);
+function down(scenario: Scenario, workspace: string = scenario.inputs.workspaceRoot): Promise<CommandResult> {
+  return realmCliWithWorkspace(scenario.inputs, scenario.environment, ["down"], workspace, DOWN_TIMEOUT_MS);
+}
+
+// realm status for the scenario's pinned project.
+function statusCli(scenario: Scenario): Promise<CommandResult> {
+  return realmCliWithWorkspace(scenario.inputs, scenario.environment, ["status"], scenario.inputs.workspaceRoot, STATUS_TIMEOUT_MS);
 }
 
 function exec(scenario: Scenario, workload: readonly string[]): Promise<CommandResult> {
-  return sandboxExec(scenario.inputs, workload);
+  return sandboxExec(scenario.inputs, sessionIdFor(scenario.inputs.workspaceRoot), workload);
+}
+
+// The sandbox name of the scenario's pinned project, derived from its canonical path.
+function sandboxOf(scenario: Scenario): string {
+  return sandboxNameFor(scenario.inputs.workspaceRoot);
 }
 
 // realm up exits 0 and realm status reports active.
 async function assertActive(scenario: Scenario): Promise<void> {
   const started = await up(scenario);
   assert.equal(started.exitCode, 0, `realm up: ${describeResult(started)}`);
-  const status = await realmCli(scenario.inputs, scenario.environment, ["status"], STATUS_TIMEOUT_MS);
+  const status = await statusCli(scenario);
   assert.equal(status.exitCode, 0, `realm status: ${describeResult(status)}`);
   assert.equal(stateOfStatus(status.stdout), "active", `realm status: ${describeResult(status)}`);
 }
@@ -224,7 +239,7 @@ async function assertActive(scenario: Scenario): Promise<void> {
 async function assertDownAndClean(scenario: Scenario): Promise<void> {
   const stopped = await down(scenario);
   assert.equal(stopped.exitCode, 0, `realm down: ${describeResult(stopped)}`);
-  const outcome = await waitForNoResidue(scenario.inputs);
+  const outcome = await waitForNoResidue(scenario.inputs, [sandboxOf(scenario)]);
   assert.ok(outcome.ok, `residue after realm down: ${outcome.detail}`);
 }
 
@@ -254,7 +269,7 @@ void test("production live 1: the default policy confines the sandbox and keeps 
   await assertActive(scenario);
 
   await t.test("realm status reports fail-closed for the suite's policy, which sets no mode (the real default)", async () => {
-    const status = await realmCli(scenario.inputs, scenario.environment, ["status"], STATUS_TIMEOUT_MS);
+    const status = await statusCli(scenario);
     assert.equal(status.exitCode, 0, `realm status: ${describeResult(status)}`);
     assert.equal(field(JSON.parse(status.stdout) as unknown, "mode"), "fail-closed", `realm status: ${describeResult(status)}`);
   });
@@ -347,12 +362,12 @@ void test("production live 1: the default policy confines the sandbox and keeps 
     const downloadTarget = join(scenario.environment.root, "download");
     writeFileSync(uploadSource, bytes);
     const root = scenario.environment.root;
-    const uploaded = await openshellCli(scenario.inputs, ["sandbox", "upload", "--no-git-ignore", DAEMON_SANDBOX_NAME, uploadSource, TRANSFER_REMOTE_PATH], root, TRANSFER_TIMEOUT_MS);
+    const uploaded = await openshellCli(scenario.inputs, ["sandbox", "upload", "--no-git-ignore", sandboxOf(scenario), uploadSource, TRANSFER_REMOTE_PATH], root, TRANSFER_TIMEOUT_MS);
     assertExit(uploaded, 0, "openshell sandbox upload");
     const inside = await exec(scenario, ["sha256sum", TRANSFER_REMOTE_PATH]);
     assertExit(inside, 0, "sha256sum in the sandbox");
     assert.equal(hashOf(inside.stdout), expected, "the SHA-256 inside the sandbox must match the host's");
-    const downloaded = await openshellCli(scenario.inputs, ["sandbox", "download", DAEMON_SANDBOX_NAME, TRANSFER_REMOTE_PATH, downloadTarget], root, TRANSFER_TIMEOUT_MS);
+    const downloaded = await openshellCli(scenario.inputs, ["sandbox", "download", sandboxOf(scenario), TRANSFER_REMOTE_PATH, downloadTarget], root, TRANSFER_TIMEOUT_MS);
     assertExit(downloaded, 0, "openshell sandbox download");
     const roundTrip = readFileSync(downloadedFile(downloadTarget, TRANSFER_REMOTE_PATH));
     assert.equal(roundTrip.length, TRANSFER_BYTES, "the downloaded size");
@@ -380,7 +395,7 @@ void test("production live 2: realm up right after a down reaches active without
   const started = await up(scenario);
   assert.equal(started.exitCode, 0, `realm up: ${describeResult(started)}`);
   assert.doesNotMatch(`${started.stdout}\n${started.stderr}`, /PODMAN_MACHINE_DOWN/, "realm up must not report PODMAN_MACHINE_DOWN");
-  const status = await realmCli(scenario.inputs, scenario.environment, ["status"], STATUS_TIMEOUT_MS);
+  const status = await statusCli(scenario);
   assert.equal(status.exitCode, 0, `realm status: ${describeResult(status)}`);
   assert.equal(stateOfStatus(status.stdout), "active", `realm status: ${describeResult(status)}`);
   await assertDownAndClean(scenario);
@@ -535,6 +550,7 @@ function jsonLinesSinceStartup(log: string): boolean {
 void test("production live 5: after the daemon is killed, the next realm up reaps the sandbox it left and reaches active with exactly one", { skip: gate, timeout: SCENARIO_TIMEOUT_MS }, async (t) => {
   const scenario = startScenario(t, { image: inputs().image });
   await assertActive(scenario);
+  const sandbox = sandboxOf(scenario);
 
   // The daemon this scenario's own realm up started: the one process whose whole command is the node binary and the daemon entry.
   const started = await daemonPids(scenario);
@@ -553,8 +569,8 @@ void test("production live 5: after the daemon is killed, the next realm up reap
 
   try {
     // The container the crash will leave behind, listed before the kill: the restarted daemon must report destroying this one.
-    const before = await itemsOf(listDaemonContainers(scenario.inputs), `the ${DAEMON_SANDBOX_NAME} containers before the kill`);
-    assert.equal(before.length, 1, `exactly one ${DAEMON_SANDBOX_NAME} container must exist before the kill; found ${String(before.length)}`);
+    const before = await itemsOf(listSandboxContainers(scenario.inputs, sandbox), `the ${sandbox} containers before the kill`);
+    assert.equal(before.length, 1, `exactly one ${sandbox} container must exist before the kill; found ${String(before.length)}`);
     const crashedContainerId = before[0];
     assert.ok(crashedContainerId !== undefined && crashedContainerId !== "", "the id of the container the crash leaves behind");
     process.kill(daemonPid, "SIGKILL");
@@ -570,8 +586,8 @@ void test("production live 5: after the daemon is killed, the next realm up reap
     // The crash never ran the daemon's shutdown, so its sandbox is still there. This is what proves the crash was real.
     const left = await pollUntil(
       async () => {
-        const containers = await itemsOf(listDaemonContainers(scenario.inputs), `the ${DAEMON_SANDBOX_NAME} containers`);
-        return containers.length > 0 ? { done: true } : { done: false, detail: `no ${DAEMON_SANDBOX_NAME} container is left behind` };
+        const containers = await itemsOf(listSandboxContainers(scenario.inputs, sandbox), `the ${sandbox} containers`);
+        return containers.length > 0 ? { done: true } : { done: false, detail: `no ${sandbox} container is left behind` };
       },
       { timeoutMs: CRASH_OBSERVE_TIMEOUT_MS, intervalMs: CRASH_OBSERVE_INTERVAL_MS },
     );
@@ -588,18 +604,18 @@ void test("production live 5: after the daemon is killed, the next realm up reap
     assert.notEqual(replacement[0], daemonPid, "the restarted daemon must be a new process");
     const replacementReady = await pollUntil(
       async () => {
-        const sandboxes = await itemsOf(listDaemonSandboxes(scenario.inputs), "the realm-daemon sandboxes");
-        const containers = await itemsOf(listDaemonContainers(scenario.inputs), `the ${DAEMON_SANDBOX_NAME} containers`);
+        const sandboxes = await itemsOf(listSandboxesNamed(scenario.inputs, sandbox), `the ${sandbox} sandboxes`);
+        const containers = await itemsOf(listSandboxContainers(scenario.inputs, sandbox), `the ${sandbox} containers`);
         return sandboxes.length === 1 && containers.length === 1
           ? { done: true }
           : { done: false, detail: `sandboxes ${String(sandboxes.length)}, containers ${String(containers.length)}` };
       },
       { timeoutMs: CRASH_OBSERVE_TIMEOUT_MS, intervalMs: CRASH_OBSERVE_INTERVAL_MS },
     );
-    assert.ok(replacementReady.ok, `exactly one ${DAEMON_SANDBOX_NAME} sandbox and container after the restart: ${replacementReady.detail}`);
+    assert.ok(replacementReady.ok, `exactly one ${sandbox} sandbox and container after the restart: ${replacementReady.detail}`);
 
     // D-1410: the startup reap is visible. The notice rides on the status reply, and the daemon log names the destroyed container.
-    const status = await realmCli(scenario.inputs, scenario.environment, ["status"], STATUS_TIMEOUT_MS);
+    const status = await statusCli(scenario);
     assertExit(status, 0, "realm status after the daemon crash");
     const notice = noticeOfStatus(status.stdout);
     assert.ok(notice !== undefined && notice.includes("destroyed at startup"), `realm status must carry the startup notice: ${describeResult(status)}`);
@@ -610,7 +626,7 @@ void test("production live 5: after the daemon is killed, the next realm up reap
     const daemonLog = readFileSync(join(scenario.environment.stateDir, "daemon.log"), "utf8");
     assert.ok(startupReapLineFor(daemonLog, crashedContainerId) !== undefined, `daemon.log must hold a daemon.startup record for one container that names ${crashedContainerId}`);
     assert.equal(jsonLinesSinceStartup(daemonLog), true, "every daemon.log line from the restart's daemon.startup record must be JSON");
-    const auditFile = join(scenario.environment.stateDir, "audit", "daemon.jsonl");
+    const auditFile = join(scenario.environment.stateDir, "audit", `${sessionIdFor(scenario.inputs.workspaceRoot)}.jsonl`);
     const verified = await realmCli(scenario.inputs, scenario.environment, ["audit", "verify", "--file", auditFile], STATUS_TIMEOUT_MS);
     assertExit(verified, 0, "realm audit verify after the restart");
     const report = JSON.parse(verified.stdout) as { ok?: boolean; files?: readonly { unparsedLines?: readonly number[] }[] };
@@ -711,7 +727,7 @@ async function runMcpSession(scenario: Scenario, session: McpSession): Promise<v
   assert.ok(writeResult !== undefined, `requests.log must hold a tool.result line for the write with outcome done; ${String(requestLines.length)} lines were read`);
   const correlationId = field(writeResult, "correlationId");
   assert.ok(typeof correlationId === "string" && correlationId !== "", `the write's tool.result line must carry a string correlationId: ${describeValue(writeResult)}`);
-  const auditFile = join(stateDir, "audit", "daemon.jsonl");
+  const auditFile = join(stateDir, "audit", `${sessionIdFor(scenario.inputs.workspaceRoot)}.jsonl`);
   const joined = auditLinesWithCorrelation(auditFile, correlationId);
   const phases: readonly unknown[] = joined.map((record) => field(record, "phase"));
   assert.equal(joined.length, 2, `${auditFile} must hold exactly two records for correlation id ${correlationId}; found ${String(joined.length)} (phases ${describeValue(phases)})`);
@@ -765,7 +781,7 @@ const TOOL_TIMEOUT_SLEEP_SECONDS = "45";
 
 // `realm status` printed as its lifecycle fields. The CLI exits 0 and prints JSON for any lifecycle state.
 async function statusOf(scenario: Scenario): Promise<StatusFields> {
-  const status = await realmCli(scenario.inputs, scenario.environment, ["status"], STATUS_TIMEOUT_MS);
+  const status = await statusCli(scenario);
   assert.equal(status.exitCode, 0, `realm status: ${describeResult(status)}`);
   const fields = statusFieldsOf(status.stdout);
   if (fields === undefined) {
@@ -830,7 +846,7 @@ void test("production live 8: after the AgentOS runner is killed the session mov
     // The health loop notices that the runner is gone and moves the session to error.
     const errored = await pollUntil(
       async () => {
-        const status = await realmCli(scenario.inputs, scenario.environment, ["status"], STATUS_TIMEOUT_MS);
+        const status = await statusCli(scenario);
         const fields = status.exitCode === 0 ? statusFieldsOf(status.stdout) : undefined;
         const reached = fields?.state === "error" && fields.reason === "AGENTOS_CRASH_LOOP" && fields.label === "realm disconnected";
         return reached ? { done: true } : { done: false, detail: `realm status: ${describeResult(status)}` };
@@ -882,12 +898,12 @@ void test("production live 9: a startup budget of 1 ms fails realm up with START
 
   const stopped = await down(scenario);
   assertExit(stopped, 0, "realm down after the expired budget");
-  let residue = await waitForNoResidue(scenario.inputs, BUDGET_RESIDUE_TIMEOUT_MS);
+  let residue = await waitForNoResidue(scenario.inputs, [sandboxOf(scenario)], BUDGET_RESIDUE_TIMEOUT_MS);
   if (!residue.ok) {
     // The late create may have finished after the first down; one more down removes what it left. Its own result is not judged:
     // the residue wait below is the verdict.
     await down(scenario);
-    residue = await waitForNoResidue(scenario.inputs, BUDGET_RESIDUE_TIMEOUT_MS);
+    residue = await waitForNoResidue(scenario.inputs, [sandboxOf(scenario)], BUDGET_RESIDUE_TIMEOUT_MS);
   }
   assert.ok(residue.ok, `residue after realm down with an expired budget: ${residue.detail}`);
 });
@@ -934,7 +950,7 @@ void test("production live 10: a stopped gateway is OPENSHELL_GATEWAY_LOST, not 
     let sawCrashLoop = false;
     const errored = await pollUntil(
       async () => {
-        const status = await realmCli(scenario.inputs, scenario.environment, ["status"], STATUS_TIMEOUT_MS);
+        const status = await statusCli(scenario);
         const fields = status.exitCode === 0 ? statusFieldsOf(status.stdout) : undefined;
         if (fields?.reason === "AGENTOS_CRASH_LOOP") {
           sawCrashLoop = true;
@@ -960,4 +976,137 @@ void test("production live 10: a stopped gateway is OPENSHELL_GATEWAY_LOST, not 
   } finally {
     await restoreGateway();
   }
+});
+
+// ---- Scenario 11: two projects ------------------------------------------------------------------------------------------
+
+const MARKER_NAME = "marker.txt";
+const ONLY_IN_A_NAME = "only-in-a.txt";
+const MARKER_IN_A = "marker written for project A";
+const MARKER_IN_B = "marker written for project B";
+const INSPECT_TIMEOUT_MS = 30_000;
+const TEARDOWN_INTERVAL_MS = 2_000;
+
+interface Mount {
+  readonly source: string;
+  readonly destination: string;
+}
+
+// The mounts of the one container that carries sandboxName, as podman reports them (Source and Destination).
+async function mountsOfSandbox(liveInputs: LiveInputs, sandboxName: string): Promise<readonly Mount[]> {
+  const containers = await itemsOf(listSandboxContainers(liveInputs, sandboxName), `the ${sandboxName} containers`);
+  assert.equal(containers.length, 1, `exactly one ${sandboxName} container must exist; found ${String(containers.length)}`);
+  const containerId = containers[0];
+  assert.ok(containerId !== undefined, `the id of the ${sandboxName} container`);
+  const inspected = await runCommand("podman", ["inspect", "--format", "{{json .Mounts}}", containerId], {
+    env: liveInputs.hostEnvironment,
+    timeoutMs: INSPECT_TIMEOUT_MS,
+    cwd: tmpdir(),
+  });
+  assertExit(inspected, 0, `podman inspect ${containerId}`);
+  const reported: unknown = JSON.parse(inspected.stdout);
+  assert.ok(Array.isArray(reported), `podman inspect must report a mount list: ${describeValue(reported)}`);
+  return reported.map((mount: unknown): Mount => {
+    const source = field(mount, "Source");
+    const destination = field(mount, "Destination");
+    assert.ok(typeof source === "string" && typeof destination === "string", `a mount must carry Source and Destination: ${describeValue(mount)}`);
+    return { source, destination };
+  });
+}
+
+// Two projects under one configured root. Each gets its own sandbox, session and /workspace: a write in one is absent from the
+// other, and down of one leaves the other active with its sandbox answering. Gated like every scenario here, so a default run skips it.
+void test("production live: two projects get their own sandboxes, workspaces and sessions, and down of one leaves the other active", { skip: gate, timeout: SCENARIO_TIMEOUT_MS }, async (t) => {
+  const liveInputs = inputs();
+  const environment = createScenarioEnvironment(liveInputs, { image: liveInputs.image });
+  const scenario: Scenario = { inputs: liveInputs, environment };
+  const projectA = join(liveInputs.workspaceRoot, "project-a");
+  const projectB = join(liveInputs.workspaceRoot, "project-b");
+  mkdirSync(projectA);
+  mkdirSync(projectB);
+  const idA = sessionIdOfWorkspace(realpathSync(projectA));
+  const idB = sessionIdOfWorkspace(realpathSync(projectB));
+  const sandboxA = sandboxNameOfSession(idA);
+  const sandboxB = sandboxNameOfSession(idB);
+
+  // Cleanup runs whatever the body reached: down of each project (its result is not judged here), removal of the project
+  // directories and the scenario's temporary directory, then the residue wait for the two sandboxes this scenario named.
+  t.after(async () => {
+    await down(scenario, projectA);
+    await down(scenario, projectB);
+    rmSync(projectA, { recursive: true, force: true });
+    rmSync(projectB, { recursive: true, force: true });
+    rmSync(environment.root, { recursive: true, force: true });
+    const outcome = await waitForNoResidue(liveInputs, [sandboxA, sandboxB]);
+    assert.ok(outcome.ok, `residue after the two-project cleanup: ${outcome.detail}`);
+  });
+  writeFileSync(join(projectA, MARKER_NAME), MARKER_IN_A);
+  writeFileSync(join(projectB, MARKER_NAME), MARKER_IN_B);
+
+  // (1) Project A comes up, and its status reports active with its own session id.
+  const upA = await realmCli(liveInputs, environment, ["up", "--workspace", projectA], UP_TIMEOUT_MS);
+  assertExit(upA, 0, "realm up --workspace A");
+  const statusA = await realmCliWithWorkspace(liveInputs, environment, ["status"], projectA, STATUS_TIMEOUT_MS);
+  assertExit(statusA, 0, "realm status --workspace A");
+  assert.equal(stateOfStatus(statusA.stdout), "active", `realm status --workspace A: ${describeResult(statusA)}`);
+  assert.equal(field(JSON.parse(statusA.stdout) as unknown, "sessionId"), idA, "realm status must report A's session id");
+
+  // (2) Project B comes up under the same root, with a different session id.
+  const upB = await realmCli(liveInputs, environment, ["up", "--workspace", projectB], UP_TIMEOUT_MS);
+  assertExit(upB, 0, "realm up --workspace B");
+  const statusB = await realmCliWithWorkspace(liveInputs, environment, ["status"], projectB, STATUS_TIMEOUT_MS);
+  assertExit(statusB, 0, "realm status --workspace B");
+  assert.equal(stateOfStatus(statusB.stdout), "active", `realm status --workspace B: ${describeResult(statusB)}`);
+  assert.equal(field(JSON.parse(statusB.stdout) as unknown, "sessionId"), idB, "realm status must report B's session id");
+  assert.notEqual(idA, idB, "the two projects must have different session ids");
+
+  // (3) Each sandbox has one mount at /workspace, and its source is its own project's canonical path.
+  const workspaceMountsA = (await mountsOfSandbox(liveInputs, sandboxA)).filter((mount) => mount.destination === SANDBOX_WORKSPACE_PATH);
+  const workspaceMountsB = (await mountsOfSandbox(liveInputs, sandboxB)).filter((mount) => mount.destination === SANDBOX_WORKSPACE_PATH);
+  assert.equal(workspaceMountsA.length, 1, `${sandboxA} must carry exactly one mount at ${SANDBOX_WORKSPACE_PATH}`);
+  assert.equal(workspaceMountsB.length, 1, `${sandboxB} must carry exactly one mount at ${SANDBOX_WORKSPACE_PATH}`);
+  assert.equal(workspaceMountsA[0]?.source, realpathSync(projectA), `${sandboxA}'s ${SANDBOX_WORKSPACE_PATH} must be project A`);
+  assert.equal(workspaceMountsB[0]?.source, realpathSync(projectB), `${sandboxB}'s ${SANDBOX_WORKSPACE_PATH} must be project B`);
+  assert.notEqual(workspaceMountsA[0]?.source, workspaceMountsB[0]?.source, "the two sandboxes must mount different sources");
+
+  // (4) Inside each sandbox, /workspace/marker.txt holds that project's bytes.
+  const markerPath = `${SANDBOX_WORKSPACE_PATH}/${MARKER_NAME}`;
+  const markerInA = await sandboxExec(liveInputs, idA, ["cat", markerPath]);
+  assertExit(markerInA, 0, "cat the marker in A's sandbox");
+  assert.equal(markerInA.stdout, MARKER_IN_A, "A's sandbox must read A's marker");
+  const markerInB = await sandboxExec(liveInputs, idB, ["cat", markerPath]);
+  assertExit(markerInB, 0, "cat the marker in B's sandbox");
+  assert.equal(markerInB.stdout, MARKER_IN_B, "B's sandbox must read B's marker");
+
+  // (5) A file written in A's sandbox is absent from B's sandbox and from B's project directory on the host.
+  const onlyInAPath = `${SANDBOX_WORKSPACE_PATH}/${ONLY_IN_A_NAME}`;
+  assertExit(await sandboxExec(liveInputs, idA, ["sh", "-c", WRITE_SCRIPT, "sh", "only in A", onlyInAPath]), 0, "write only-in-a.txt in A's sandbox");
+  assertExit(await sandboxExec(liveInputs, idB, ["test", "!", "-e", onlyInAPath]), 0, "only-in-a.txt must be absent from B's sandbox");
+  assert.equal(existsSync(join(projectB, ONLY_IN_A_NAME)), false, "only-in-a.txt must be absent from B's project directory on the host");
+
+  // (6) down of A removes its sandbox, session record and registry entry, and keeps its audit file. B stays active, and its
+  // sandbox still answers with its own marker.
+  assertExit(await down(scenario, projectA), 0, "realm down --workspace A");
+  const absentA = await pollUntil(
+    async () => {
+      const containers = await listSandboxContainers(liveInputs, sandboxA);
+      const sandboxes = await listSandboxesNamed(liveInputs, sandboxA);
+      if (!containers.ok || !sandboxes.ok) {
+        return { done: false, detail: `listing ${sandboxA} failed` };
+      }
+      const remaining = containers.items.length + sandboxes.items.length;
+      return remaining === 0 ? { done: true } : { done: false, detail: `${String(remaining)} item(s) of ${sandboxA} remain` };
+    },
+    { timeoutMs: RESIDUE_TIMEOUT_MS, intervalMs: TEARDOWN_INTERVAL_MS },
+  );
+  assert.ok(absentA.ok, `A's sandbox must be gone after realm down --workspace A: ${absentA.detail}`);
+  assert.equal(existsSync(join(sessionsDirOf(environment.stateDir), recordFileName(idA))), false, "A's session record must be gone after down");
+  assert.equal(existsSync(join(workspaceRegistryDirOf(environment.stateDir), recordFileName(idA))), false, "A's registry entry must be gone after down");
+  assert.equal(existsSync(join(environment.stateDir, "audit", `${idA}.jsonl`)), true, "A's audit file must be kept after down");
+  const statusBAfter = await realmCliWithWorkspace(liveInputs, environment, ["status"], projectB, STATUS_TIMEOUT_MS);
+  assertExit(statusBAfter, 0, "realm status --workspace B after down of A");
+  assert.equal(stateOfStatus(statusBAfter.stdout), "active", `B must stay active after down of A: ${describeResult(statusBAfter)}`);
+  const markerStillInB = await sandboxExec(liveInputs, idB, ["cat", markerPath]);
+  assertExit(markerStillInB, 0, "cat the marker in B's sandbox after down of A");
+  assert.equal(markerStillInB.stdout, MARKER_IN_B, "B's sandbox must still answer with B's marker");
 });

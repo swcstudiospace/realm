@@ -20,10 +20,10 @@ import type { EgressRule } from "../../src/contract/validate.js";
 import { podmanSocketPath } from "../../src/runtime/host-paths.js";
 import { requestLogPath } from "../../src/daemon/ensure.js";
 import { loadRuntimeConfig, runtimeRootsOf } from "../../src/runtime/config.js";
-import { buildExecArgv, OPENSHELL_BINARY, OPENSHELL_SANDBOX_NAME_LABEL_KEY, REALM_SANDBOX_NAME_PREFIX, realmSandboxName } from "../../src/runtime/openshell.js";
+import { buildExecArgv, OPENSHELL_BINARY, OPENSHELL_SANDBOX_NAME_LABEL_KEY, REALM_SANDBOX_NAME_PREFIX } from "../../src/runtime/openshell.js";
 import { podmanSkipReason, type PodmanProbe } from "../../src/runtime/podman-version.js";
 import { selectOpenShellEnvironment } from "../../src/runtime/session-execution.js";
-import { controlSocketPath, type EnvironmentLike } from "../../src/session/paths.js";
+import { controlSocketPath, sandboxNameOfSession, sessionIdOfWorkspace, type EnvironmentLike } from "../../src/session/paths.js";
 
 // ---- Gate ---------------------------------------------------------------------------------------------------------------
 
@@ -456,9 +456,16 @@ export function canConnect(host: string, port: number, timeoutMs: number): Promi
 
 // ---- Live inputs and scenario isolation ---------------------------------------------------------------------------------
 
-// The daemon's session is "daemon", so its sandbox is realm-daemon, the only sandbox the suite creates.
-export const DAEMON_SESSION_ID = "daemon";
-export const DAEMON_SANDBOX_NAME = realmSandboxName(DAEMON_SESSION_ID);
+// Each project's session id and sandbox name come from its canonical path, through the daemon's own derivation
+// (sessionIdOfWorkspace, sandboxNameOfSession), so a suite names the sandbox and audit file of its own workspace.
+export function sessionIdFor(workspaceRoot: string): string {
+  return sessionIdOfWorkspace(realpathSync(workspaceRoot));
+}
+
+export function sandboxNameFor(workspaceRoot: string): string {
+  return sandboxNameOfSession(sessionIdOfWorkspace(realpathSync(workspaceRoot)));
+}
+
 // The 107-byte limit of a Unix socket path (sun_path is 108 bytes with its terminator).
 const SOCKET_PATH_LIMIT_BYTES = 107;
 
@@ -561,14 +568,29 @@ export function realmCli(inputs: LiveInputs, scenario: ScenarioEnvironment, args
   return runCommand(process.execPath, [inputs.cliPath, ...args], { env: scenario.cliEnvironment, timeoutMs, cwd: scenario.root });
 }
 
+// Runs `realm status` or `realm down` for the project at workspace (an absolute path), so the command never depends on the
+// current directory. Any other command is refused: `realm up` takes its workspace in its own arguments through realmCli.
+export function realmCliWithWorkspace(
+  inputs: LiveInputs,
+  scenario: ScenarioEnvironment,
+  args: readonly string[],
+  workspace: string,
+  timeoutMs: number,
+): Promise<CommandResult> {
+  if (args.length !== 1 || (args[0] !== "status" && args[0] !== "down")) {
+    throw new Error("realmCliWithWorkspace runs only realm status or realm down");
+  }
+  return realmCli(inputs, scenario, [...args, "--workspace", workspace], timeoutMs);
+}
+
 // The bound for one openshell CLI call or probe.
 export const PROBE_TIMEOUT_MS = 60_000;
 
-// Runs one workload in realm-daemon through the pinned exec form: openshell sandbox exec --name realm-daemon --workdir
-// /workspace --no-tty --no-login-shell -- <argv>. buildExecArgv owns that form, so the probes use the realm's own argv.
-// The workload is an argv array; no probe interpolates a string into a shell.
-export function sandboxExec(inputs: LiveInputs, workload: readonly string[], timeoutMs: number = PROBE_TIMEOUT_MS): Promise<CommandResult> {
-  const argv = buildExecArgv(DAEMON_SESSION_ID, workload);
+// Runs one workload in the sandbox of the project whose session id is sessionId, through the pinned exec form: openshell sandbox
+// exec --name <sandbox> --workdir /workspace --no-tty --no-login-shell -- <argv>. buildExecArgv owns that form, so the probes use
+// the realm's own argv. The workload is an argv array; no probe interpolates a string into a shell.
+export function sandboxExec(inputs: LiveInputs, sessionId: string, workload: readonly string[], timeoutMs: number = PROBE_TIMEOUT_MS): Promise<CommandResult> {
+  const argv = buildExecArgv(sessionId, workload);
   return runCommand(OPENSHELL_BINARY, argv.slice(1), { env: inputs.hostEnvironment, timeoutMs, cwd: tmpdir() });
 }
 
@@ -651,28 +673,31 @@ export async function listRealmSandboxes(inputs: LiveInputs): Promise<Listing> {
   return { ok: true, items: lines(result.stdout).filter((name) => name.startsWith(REALM_SANDBOX_NAME_PREFIX)) };
 }
 
-// What a finished scenario left behind. Empty means clean: zero containers, zero realm-* sandboxes, no realm-daemon directory
-// under the secret or sandbox-state root, and an empty pinned workspace. A listing that fails is a problem, never "clean".
-export async function residueProblems(inputs: LiveInputs): Promise<readonly string[]> {
+// What a finished scenario left behind, for each sandbox named in sandboxNames. Empty means clean: zero containers and zero
+// sandboxes of those names, no directory of those names under the secret or sandbox-state root, and an empty pinned workspace.
+// A listing that fails is a problem, never "clean".
+export async function residueProblems(inputs: LiveInputs, sandboxNames: readonly string[]): Promise<readonly string[]> {
   const problems: string[] = [];
-  const containers = await listContainers(inputs);
-  if (!containers.ok) {
-    problems.push(containers.detail);
-  } else if (containers.items.length > 0) {
-    problems.push(`${String(containers.items.length)} container(s) remain`);
-  }
-  const sandboxes = await listRealmSandboxes(inputs);
-  if (!sandboxes.ok) {
-    problems.push(sandboxes.detail);
-  } else if (sandboxes.items.length > 0) {
-    problems.push(`sandbox(es) remain: ${sandboxes.items.join(", ")}`);
-  }
-  for (const [label, root] of [
-    ["secret root", inputs.secretRoot],
-    ["sandbox state root", inputs.stateRoot],
-  ] as const) {
-    if (existsSync(join(root, DAEMON_SANDBOX_NAME))) {
-      problems.push(`the ${label} still holds ${DAEMON_SANDBOX_NAME}`);
+  for (const sandboxName of sandboxNames) {
+    const containers = await listSandboxContainers(inputs, sandboxName);
+    if (!containers.ok) {
+      problems.push(containers.detail);
+    } else if (containers.items.length > 0) {
+      problems.push(`${String(containers.items.length)} container(s) remain for ${sandboxName}`);
+    }
+    const sandboxes = await listSandboxesNamed(inputs, sandboxName);
+    if (!sandboxes.ok) {
+      problems.push(sandboxes.detail);
+    } else if (sandboxes.items.length > 0) {
+      problems.push(`sandbox ${sandboxName} remains`);
+    }
+    for (const [label, root] of [
+      ["secret root", inputs.secretRoot],
+      ["sandbox state root", inputs.stateRoot],
+    ] as const) {
+      if (existsSync(join(root, sandboxName))) {
+        problems.push(`the ${label} still holds ${sandboxName}`);
+      }
     }
   }
   try {
@@ -691,10 +716,10 @@ export const RESIDUE_TIMEOUT_MS = 90_000;
 const RESIDUE_INTERVAL_MS = 2_000;
 
 // Polls until residueProblems is empty, bounded at timeoutMs (RESIDUE_TIMEOUT_MS unless the caller needs longer).
-export function waitForNoResidue(inputs: LiveInputs, timeoutMs: number = RESIDUE_TIMEOUT_MS): Promise<PollOutcome> {
+export function waitForNoResidue(inputs: LiveInputs, sandboxNames: readonly string[], timeoutMs: number = RESIDUE_TIMEOUT_MS): Promise<PollOutcome> {
   return pollUntil(
     async () => {
-      const problems = await residueProblems(inputs);
+      const problems = await residueProblems(inputs, sandboxNames);
       return problems.length === 0 ? { done: true } : { done: false, detail: problems.join("; ") };
     },
     { timeoutMs, intervalMs: RESIDUE_INTERVAL_MS },
@@ -723,7 +748,7 @@ export async function cleanupScenario(
   scenario: ScenarioEnvironment,
   workspaceFiles: readonly string[],
 ): Promise<PollOutcome> {
-  await realmCli(inputs, scenario, ["down"], 120_000);
+  await realmCliWithWorkspace(inputs, scenario, ["down"], inputs.workspaceRoot, 120_000);
   for (const name of workspaceFiles) {
     if (name === "" || name.includes("/") || name === "." || name === "..") {
       throw new Error("a workspace cleanup name must be a plain file name");
@@ -731,7 +756,7 @@ export async function cleanupScenario(
     rmSync(join(inputs.workspaceRoot, name), { force: true });
   }
   rmSync(scenario.root, { recursive: true, force: true });
-  return waitForNoResidue(inputs);
+  return waitForNoResidue(inputs, [sandboxNameFor(inputs.workspaceRoot)]);
 }
 
 // ---- Crash recovery -----------------------------------------------------------------------------------------------------
@@ -871,9 +896,9 @@ export function listeningSocketsOf(pid: number): ListeningSockets {
   });
 }
 
-// The container ids that carry the realm-daemon sandbox-name label, stopped ones included.
-export async function listDaemonContainers(inputs: LiveInputs): Promise<Listing> {
-  const label = `label=${OPENSHELL_SANDBOX_NAME_LABEL_KEY}=${DAEMON_SANDBOX_NAME}`;
+// The container ids that carry the sandbox-name label of sandboxName, stopped ones included.
+export async function listSandboxContainers(inputs: LiveInputs, sandboxName: string): Promise<Listing> {
+  const label = `label=${OPENSHELL_SANDBOX_NAME_LABEL_KEY}=${sandboxName}`;
   const result = await runCommand("podman", ["ps", "-a", "--filter", label, "--format", "{{.ID}}"], { env: inputs.hostEnvironment, timeoutMs: 30_000, cwd: tmpdir() });
   if (result.exitCode !== 0) {
     return { ok: false, detail: `podman ps failed (${describeResult(result)})` };
@@ -881,17 +906,17 @@ export async function listDaemonContainers(inputs: LiveInputs): Promise<Listing>
   return { ok: true, items: lines(result.stdout) };
 }
 
-// The OpenShell sandboxes named exactly realm-daemon.
-export async function listDaemonSandboxes(inputs: LiveInputs): Promise<Listing> {
+// The OpenShell sandboxes named exactly sandboxName.
+export async function listSandboxesNamed(inputs: LiveInputs, sandboxName: string): Promise<Listing> {
   const listed = await listRealmSandboxes(inputs);
-  return listed.ok ? { ok: true, items: listed.items.filter((name) => name === DAEMON_SANDBOX_NAME) } : listed;
+  return listed.ok ? { ok: true, items: listed.items.filter((name) => name === sandboxName) } : listed;
 }
 
 // Polls `realm status` until it reports active, bounded at timeoutMs. The detail of a failed poll is the last status output.
 export function waitForActive(inputs: LiveInputs, scenario: ScenarioEnvironment, timeoutMs: number): Promise<PollOutcome> {
   return pollUntil(
     async () => {
-      const status = await realmCli(inputs, scenario, ["status"], 30_000);
+      const status = await realmCliWithWorkspace(inputs, scenario, ["status"], inputs.workspaceRoot, 30_000);
       const state = status.exitCode === 0 ? stateOfStatus(status.stdout) : undefined;
       return state === "active" ? { done: true } : { done: false, detail: `realm status: ${describeResult(status)}` };
     },

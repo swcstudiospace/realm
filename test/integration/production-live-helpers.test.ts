@@ -6,13 +6,15 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Script } from "node:vm";
 import type { PodmanProbe } from "../../src/runtime/podman-version.js";
+import { sandboxNameOfSession, sessionIdOfWorkspace } from "../../src/session/paths.js";
 import {
   auditLinesWithCorrelation,
+  sandboxNameFor,
   KILL_RUNNER_ARGV,
   createScenarioEnvironment,
   decodeReadContent,
@@ -683,4 +685,17 @@ void test("auditLinesWithCorrelation leaves out a line that is not JSON and a li
     writeFileSync(auditFile, '{"correlationId":"c-1","phase":"admission"}\n{"correlationId":"c-1","phase":"res\n["c-1"]\n7\n');
     assert.deepEqual(auditLinesWithCorrelation(auditFile, "c-1"), [{ correlationId: "c-1", phase: "admission" }]);
   });
+});
+
+// ---- Workspace sandbox names --------------------------------------------------------------------------------------------
+
+void test("sandboxNameFor names a project's sandbox from its canonical path, within the gateway's 19-character bound", () => {
+  const dir = mkdtempSync(join(tmpdir(), "rlh-"));
+  try {
+    const name = sandboxNameFor(dir);
+    assert.equal(name, sandboxNameOfSession(sessionIdOfWorkspace(realpathSync(dir))));
+    assert.ok(name.length <= 19, `the sandbox name must be at most 19 characters: ${name}`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

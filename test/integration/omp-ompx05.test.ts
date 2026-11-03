@@ -5,8 +5,8 @@
 // message. Three assertions then check that one write from three sides:
 //   (a) the host workspace root holds the file with exactly the written bytes;
 //   (b) a Realm `exec` in the sandbox runs `cat` and `sha256sum` on the same path under /workspace. The sandbox's bytes and digest
-//       are the written ones, and the container that ran the exec is the session's, named realm-daemon;
-//   (c) the daemon's session audit file, <stateDir>/audit/daemon.jsonl, holds the admission and result lines of that write. Both
+//       are the written ones, and the container that ran the exec is the session's, named for the project (realm-<session id>);
+//   (c) the daemon's session audit file, <stateDir>/audit/<session id>.jsonl, holds the admission and result lines of that write. Both
 //       carry the same path, the same correlationId and the sha256 of the write. The result line carries the byte count too.
 //
 // Gate. The file skips, naming the first missing prerequisite, unless both of these hold:
@@ -43,14 +43,15 @@ import { ScriptedProvider } from "../support/scripted-provider.js";
 import {
   callTool,
   createScenarioEnvironment,
-  DAEMON_SESSION_ID,
+  sandboxNameFor,
+  sessionIdFor,
   describeResult,
   describeValue,
   field,
   initializeMcp,
   isDirectory,
   isSocket,
-  listDaemonContainers,
+  listSandboxContainers,
   type LiveInputs,
   type McpExit,
   onPath,
@@ -58,6 +59,7 @@ import {
   productionSkipReason,
   readLiveInputs,
   realmCli,
+  realmCliWithWorkspace,
   runCommand,
   startMcpSession,
   type ScenarioEnvironment,
@@ -127,19 +129,23 @@ void test(
     const expectedSha256 = createHash("sha256").update(expected).digest("hex");
     const prompt = `ompx05 write ${name}`;
 
+    // The project is the pinned workspace root: its session id and sandbox name are derived from its canonical path.
+    const sessionId = sessionIdFor(inputs.workspaceRoot);
+    const sandbox = sandboxNameFor(inputs.workspaceRoot);
+
     // Cleanups run last-in, first-out: Omp is closed first, then the daemon is stopped and the scenario's files are removed.
     const cleanups = createCleanups();
     t.after(() => cleanups.run());
     cleanups.add(async () => {
-      const stopped = await realmCli(inputs, scenario, ["down"], DOWN_TIMEOUT_MS);
+      const stopped = await realmCliWithWorkspace(inputs, scenario, ["down"], inputs.workspaceRoot, DOWN_TIMEOUT_MS);
       assert.equal(stopped.exitCode, 0, `realm down: ${describeResult(stopped)}`);
       rmSync(join(inputs.workspaceRoot, name), { force: true });
       rmSync(scenario.root, { recursive: true, force: true });
-      const residue = await waitForNoResidue(inputs);
+      const residue = await waitForNoResidue(inputs, [sandbox]);
       assert.ok(residue.ok, `residue after realm down: ${residue.detail}`);
-      const containers = await listDaemonContainers(inputs);
+      const containers = await listSandboxContainers(inputs, sandbox);
       assert.ok(containers.ok, `list the daemon containers after realm down: ${describeValue(containers)}`);
-      assert.deepEqual(containers.items, [], "no container named for the daemon session may remain after realm down");
+      assert.deepEqual(containers.items, [], "no container of this project's sandbox may remain after realm down");
     });
 
     const provider = new ScriptedProvider();
@@ -248,12 +254,12 @@ void test(
         `the sandbox's sha256sum of ${sandboxPath} must match the written bytes: ${describeValue(digestLine)}`,
       );
 
-      const containers = await listDaemonContainers(inputs);
+      const containers = await listSandboxContainers(inputs, sandbox);
       assert.ok(containers.ok, `list the daemon containers: ${describeValue(containers)}`);
       assert.equal(
         containers.items.length,
         1,
-        `exactly one container carries the realm-${DAEMON_SESSION_ID} sandbox label: ${describeValue(containers.items)}`,
+        `exactly one container carries the ${sandbox} sandbox label: ${describeValue(containers.items)}`,
       );
       const [containerId] = containers.items;
       assert.ok(containerId !== undefined);
@@ -265,8 +271,8 @@ void test(
       assert.equal(inspected.exitCode, 0, `podman inspect ${containerId}: ${describeResult(inspected)}`);
       assert.equal(
         inspected.stdout.trim(),
-        `realm-${DAEMON_SESSION_ID}`,
-        `the container that ran the sandbox exec must be the session's realm-${DAEMON_SESSION_ID} container`,
+        sandbox,
+        `the container that ran the sandbox exec must be the session's ${sandbox} container`,
       );
     } finally {
       mcp.closeInput();
@@ -278,8 +284,8 @@ void test(
     assert.notEqual(mcpExit, undefined, `realm mcp must exit within ${String(MCP_EXIT_TIMEOUT_MS / 1000)} s; stderr ${mcp.stderr()}`);
 
     // (c) The daemon's audit file holds the admission and result lines of this write, paired on one correlationId.
-    // The daemon writes its session's audit under its own session id, so the file is audit/daemon.jsonl.
-    const auditFile = join(scenario.stateDir, "audit", `${DAEMON_SESSION_ID}.jsonl`);
+    // The daemon writes its session's audit under the project's session id, so the file is audit/<session id>.jsonl.
+    const auditFile = join(scenario.stateDir, "audit", `${sessionId}.jsonl`);
     assert.ok(existsSync(auditFile), `the daemon's audit file must exist: ${auditFile}`);
     const writes = auditEntries(auditFile).filter((entry) => entry["tool"] === "write" && entry["path"] === name);
     const admissions = writes.filter((entry) => entry["phase"] === "admission");
