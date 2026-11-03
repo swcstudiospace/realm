@@ -1065,9 +1065,11 @@ void test("production live: two projects get their own sandboxes, workspaces and
   const workspaceMountsB = (await mountsOfSandbox(liveInputs, sandboxB)).filter((mount) => mount.destination === SANDBOX_WORKSPACE_PATH);
   assert.equal(workspaceMountsA.length, 1, `${sandboxA} must carry exactly one mount at ${SANDBOX_WORKSPACE_PATH}`);
   assert.equal(workspaceMountsB.length, 1, `${sandboxB} must carry exactly one mount at ${SANDBOX_WORKSPACE_PATH}`);
-  assert.equal(workspaceMountsA[0]?.source, realpathSync(projectA), `${sandboxA}'s ${SANDBOX_WORKSPACE_PATH} must be project A`);
-  assert.equal(workspaceMountsB[0]?.source, realpathSync(projectB), `${sandboxB}'s ${SANDBOX_WORKSPACE_PATH} must be project B`);
-  assert.notEqual(workspaceMountsA[0]?.source, workspaceMountsB[0]?.source, "the two sandboxes must mount different sources");
+  const sourceA = workspaceMountsA[0]?.source;
+  const sourceB = workspaceMountsB[0]?.source;
+  assert.equal(sourceA, realpathSync(projectA), `${sandboxA}'s ${SANDBOX_WORKSPACE_PATH} must be project A`);
+  assert.equal(sourceB, realpathSync(projectB), `${sandboxB}'s ${SANDBOX_WORKSPACE_PATH} must be project B`);
+  assert.notEqual(sourceA, sourceB, "the two sandboxes must mount different sources");
 
   // (4) Inside each sandbox, /workspace/marker.txt holds that project's bytes.
   const markerPath = `${SANDBOX_WORKSPACE_PATH}/${MARKER_NAME}`;

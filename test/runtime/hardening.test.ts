@@ -871,11 +871,12 @@ void test("the CPU term binds: an aggregate of 2e9 nanoCpus gives 1 while the me
 });
 
 void test("a zero, non-integer or sub-session input throws SCHEMA_INVALID (C7)", () => {
-  const refusedSchema = (profile: Parameters<typeof maxConcurrentSessions>[0]): void =>
+  const refusedSchema = (profile: Parameters<typeof maxConcurrentSessions>[0]): void => {
     assert.throws(
       () => maxConcurrentSessions(profile),
       (error: unknown) => error instanceof RealmError && error.code === "SCHEMA_INVALID",
     );
+  };
   refusedSchema({ ...HARDENING_PROFILE, memoryBytes: 0 });
   refusedSchema({ ...HARDENING_PROFILE, nanoCpus: 0 });
   refusedSchema({ ...HARDENING_PROFILE, aggregateMemoryBytes: 0 });

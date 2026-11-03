@@ -18,14 +18,16 @@ void test("a third distinct reservation in one synchronous turn is refused with 
   const ledger = ledgerOf(2);
   ledger.reserve("p-a");
   ledger.reserve("p-b");
-  assert.throws(() => ledger.reserve("p-c"), refusedWith("POLICY_DENIED"));
+  assert.throws(() => { ledger.reserve("p-c"); }, refusedWith("POLICY_DENIED"));
   assert.equal(ledger.committedCount(), 2);
   assert.equal(ledger.isCommitted("p-c"), false);
 });
 
 void test("reserve is synchronous: it returns undefined, never a promise (MULTI-06)", () => {
   const ledger = ledgerOf(2);
-  assert.equal(ledger.reserve("p-a"), undefined);
+  const reserveFn: (id: string) => unknown = ledger.reserve.bind(ledger);
+  const returned = reserveFn("p-a");
+  assert.equal(returned, undefined);
   assert.equal(ledger.committedCount(), 1);
 });
 
@@ -45,7 +47,7 @@ void test("a recorded id counts once, and a reservation of the same id does not 
   assert.equal(ledger.committedCount(), 1);
   ledger.reserve("p-b");
   assert.equal(ledger.committedCount(), 2);
-  assert.throws(() => ledger.reserve("p-c"), refusedWith("POLICY_DENIED"));
+  assert.throws(() => { ledger.reserve("p-c"); }, refusedWith("POLICY_DENIED"));
 });
 
 void test("the recorded ids are read at every call, so a record written after construction is counted (MULTI-06)", () => {
@@ -54,7 +56,7 @@ void test("the recorded ids are read at every call, so a record written after co
   recorded.push("p-x");
   ledger.reserve("p-a");
   assert.equal(ledger.committedCount(), 2);
-  assert.throws(() => ledger.reserve("p-b"), refusedWith("POLICY_DENIED"));
+  assert.throws(() => { ledger.reserve("p-b"); }, refusedWith("POLICY_DENIED"));
 });
 
 void test("a failed removal keeps the id committed and the slot held (MULTI-06)", () => {
@@ -64,7 +66,7 @@ void test("a failed removal keeps the id committed and the slot held (MULTI-06)"
   ledger.markUnproven("p-a");
   assert.equal(ledger.isCommitted("p-a"), true);
   assert.equal(ledger.committedCount(), 2);
-  assert.throws(() => ledger.reserve("p-c"), refusedWith("POLICY_DENIED"));
+  assert.throws(() => { ledger.reserve("p-c"); }, refusedWith("POLICY_DENIED"));
 });
 
 void test("release after markUnproven frees the slot and a new reservation succeeds (MULTI-06)", () => {
@@ -86,7 +88,7 @@ void test("markUnproven on an id already unproven is a no-op: one release frees 
   ledger.markUnproven("p-a");
   assert.equal(ledger.committedCount(), 1);
   ledger.reserve("p-b");
-  assert.throws(() => ledger.reserve("p-c"), refusedWith("POLICY_DENIED"));
+  assert.throws(() => { ledger.reserve("p-c"); }, refusedWith("POLICY_DENIED"));
   ledger.release("p-a");
   assert.equal(ledger.committedCount(), 1);
   ledger.reserve("p-c");

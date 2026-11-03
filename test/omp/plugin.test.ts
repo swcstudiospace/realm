@@ -245,8 +245,7 @@ class FakePi implements OmpExtensionApi {
   readonly toolCallHandlers: Array<(call: HostToolCall) => Promise<HostToolVerdict | undefined>> = [];
   readonly commands = new Map<string, RealmRetryCommand>();
 
-  on(event: "session_start", handler: (event: unknown, ctx: OmpSessionContext) => void): void;
-  on(event: "session_switch", handler: (event: unknown, ctx: OmpSessionContext) => void): void;
+  on(event: "session_start" | "session_switch", handler: (event: unknown, ctx: OmpSessionContext) => void): void;
   on(event: "session_shutdown", handler: () => void): void;
   on(event: "tool_call", handler: (call: HostToolCall) => Promise<HostToolVerdict | undefined>): void;
   on(event: string, handler: unknown): void {
@@ -1907,7 +1906,7 @@ void test("O4 T1: the lost-link and retryable code sets are the ones the plan na
 
 // Omp session_switch (plan 10 T2; docs/integration/omp.md, row S2b).
 void test("plan 10 T2 (a): a session switch to another directory re-attaches with that directory and closes the previous client (MULTI-03)", async () => {
-  const fixture = makeFixture({ attach: async (daemon) => ({ client: daemon, refusal: null }) });
+  const fixture = makeFixture({ attach: (daemon) => Promise.resolve({ client: daemon, refusal: null }) });
   startHandlerOf(fixture.pi)(fixture.ctx);
   await waitUntil(() => lastLabel(fixture.ui) === ACTIVE_LABEL);
 
@@ -1921,7 +1920,7 @@ void test("plan 10 T2 (a): a session switch to another directory re-attaches wit
 });
 
 void test("plan 10 T2 (b): a session switch that keeps the working directory keeps the attachment (MULTI-03)", async () => {
-  const fixture = makeFixture({ attach: async (daemon) => ({ client: daemon, refusal: null }) });
+  const fixture = makeFixture({ attach: (daemon) => Promise.resolve({ client: daemon, refusal: null }) });
   startHandlerOf(fixture.pi)(fixture.ctx);
   await waitUntil(() => lastLabel(fixture.ui) === ACTIVE_LABEL);
 
@@ -1932,7 +1931,7 @@ void test("plan 10 T2 (b): a session switch that keeps the working directory kee
 });
 
 void test("plan 10 T2 (c): a session switch whose context carries no working directory keeps the attachment (MULTI-03)", async () => {
-  const fixture = makeFixture({ attach: async (daemon) => ({ client: daemon, refusal: null }) });
+  const fixture = makeFixture({ attach: (daemon) => Promise.resolve({ client: daemon, refusal: null }) });
   startHandlerOf(fixture.pi)(fixture.ctx);
   await waitUntil(() => lastLabel(fixture.ui) === ACTIVE_LABEL);
 

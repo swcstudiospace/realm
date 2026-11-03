@@ -85,8 +85,7 @@ export interface RealmRetryCommand {
 }
 
 export interface OmpExtensionApi {
-  on(event: "session_start", handler: (_event: unknown, ctx: OmpSessionContext) => void): void;
-  on(event: "session_switch", handler: (_event: unknown, ctx: OmpSessionContext) => void): void;
+  on(event: "session_start" | "session_switch", handler: (_event: unknown, ctx: OmpSessionContext) => void): void;
   on(event: "session_shutdown", handler: () => void): void;
   on(event: "tool_call", handler: (call: HostToolCall) => Promise<HostToolVerdict | undefined>): void;
   registerCommand(name: string, definition: RealmRetryCommand): void;

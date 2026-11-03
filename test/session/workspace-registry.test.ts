@@ -184,11 +184,11 @@ void test("reading an absent entry returns null, and an absent registry director
 void test("removeWorkspaceEntry on an absent id is a no-op, with or without a registry directory (C3)", (t) => {
   const { stateDir, ws } = fixture(t);
   const id = sessionIdOfWorkspace(realpathSync(ws));
-  assert.doesNotThrow(() => removeWorkspaceEntry(stateDir, id));
+  assert.doesNotThrow(() => { removeWorkspaceEntry(stateDir, id); });
   writeWorkspaceEntry(stateDir, bindRoot(ws), id);
   removeWorkspaceEntry(stateDir, id);
   assert.equal(readWorkspaceEntry(stateDir, id), null);
-  assert.doesNotThrow(() => removeWorkspaceEntry(stateDir, id));
+  assert.doesNotThrow(() => { removeWorkspaceEntry(stateDir, id); });
 });
 
 void test("listWorkspaceEntryIds ignores non-.json files, directories and stems that fail isSessionId, and sorts the rest (C3)", (t) => {

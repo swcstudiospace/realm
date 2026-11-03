@@ -87,14 +87,7 @@ function parseArgv(argv: readonly string[]): ParsedArgv | undefined {
     return { command, workspace: undefined, words: [] };
   }
   const [flag, value] = rest;
-  const takesWorkspace =
-    command === "up" ||
-    command === "mcp" ||
-    command === "acp" ||
-    command === "status" ||
-    command === "down" ||
-    command === "metrics";
-  if (takesWorkspace && rest.length === 2 && flag === "--workspace" && value !== undefined) {
+  if (rest.length === 2 && flag === "--workspace" && value !== undefined) {
     return { command, workspace: value, words: [] };
   }
   return undefined;

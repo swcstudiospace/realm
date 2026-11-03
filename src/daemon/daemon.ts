@@ -352,6 +352,8 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
   // Set once a stop has begun: by a down that leaves no live session, by a signal, or by a failed server. Admission refuses
   // from then on, and the health loops probe nothing.
   let downRequested = false;
+  // The flag changes across awaits, which control-flow narrowing does not track.
+  const isDownRequested = (): boolean => downRequested;
   // Set by a down that leaves no live session. The stop runs after that down's reply is written (serveOne).
   let stopAfterReply = false;
   // The notice every status, up and down reply carries for the daemon's lifetime once the startup reap destroyed a container or
@@ -452,7 +454,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
       releaseFresh();
       throw error;
     }
-    if (downRequested) {
+    if (isDownRequested()) {
       releaseFresh();
       throw makeRealmError("REALM_STOPPING");
     }

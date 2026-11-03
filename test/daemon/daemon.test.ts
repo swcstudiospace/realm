@@ -1476,7 +1476,8 @@ void test("QUAL-01: a down whose socket file cannot be removed answers SCHEMA_IN
     replyOn(client, `${JSON.stringify({ id: "down-1", method: "down", params: selectedBy(fixture.ws) })}\n`),
     "the down reply",
   );
-  assert.equal(JSON.parse(raw).error, undefined, "the down is answered with the unbound snapshot");
+  const downReply: unknown = JSON.parse(raw);
+  assert.equal(typeof downReply === "object" && downReply !== null && "error" in downReply ? downReply.error : undefined, undefined, "the down is answered with the unbound snapshot");
   await assert.rejects(
     awaitDone(daemon),
     (error: unknown) => error instanceof RealmError && error.code === "SCHEMA_INVALID",
@@ -1842,11 +1843,11 @@ void test("T1 (e): with maxSessions 2 a third distinct up is POLICY_DENIED and a
   const fixture = makeDirs();
   const daemon = await startDaemon(daemonParts(fixture, { ...wideOptions(fixture), maxSessions: 2 }).options);
   t.after(() => cleanupDaemon(daemon));
-  const [a, b, c] = ["a", "b", "c"].map((name) => projectDir(fixture, name));
-  assert.equal(snapshotStateOf(await sendRequest(daemon.socketPath, upRequest("ea", a!))), "active");
-  assert.equal(snapshotStateOf(await sendRequest(daemon.socketPath, upRequest("eb", b!))), "active");
-  assert.equal((await sendRequest(daemon.socketPath, upRequest("ec", c!))).error?.code, "POLICY_DENIED");
-  assert.equal(snapshotStateOf(await sendRequest(daemon.socketPath, upRequest("ea2", a!))), "active");
+  const [a, b, c]: [string, string, string] = [projectDir(fixture, "a"), projectDir(fixture, "b"), projectDir(fixture, "c")];
+  assert.equal(snapshotStateOf(await sendRequest(daemon.socketPath, upRequest("ea", a))), "active");
+  assert.equal(snapshotStateOf(await sendRequest(daemon.socketPath, upRequest("eb", b))), "active");
+  assert.equal((await sendRequest(daemon.socketPath, upRequest("ec", c))).error?.code, "POLICY_DENIED");
+  assert.equal(snapshotStateOf(await sendRequest(daemon.socketPath, upRequest("ea2", a))), "active");
 });
 
 void test("T1 (f): a record persisted for B's id that names A makes up of B SANDBOX_NAME_IN_USE with no container call", async (t) => {
@@ -1915,20 +1916,20 @@ void test("T1 (h): a re-up of a live project returns the same bound root and ses
 
 void test("T1 (i): with maxSessions 2 and a first probe refusal, two concurrent ups for X serialize; X then admits, Y admits, Z is POLICY_DENIED", async (t) => {
   const fixture = makeDirs();
-  const [x, y, z] = ["x", "y", "z"].map((name) => projectDir(fixture, name));
+  const [x, y, z]: [string, string, string] = [projectDir(fixture, "x"), projectDir(fixture, "y"), projectDir(fixture, "z")];
   const held = heldFirstProbe({ ok: false, code: "PODMAN_MISSING", reason: "podman is missing" });
   const parts = daemonParts(fixture, { ...wideOptions(fixture), maxSessions: 2, probe: held.probe });
   const daemon = await startDaemon(parts.options);
   t.after(() => cleanupDaemon(daemon));
 
-  const first = sendRequest(daemon.socketPath, upRequest("i1", x!));
-  const second = sendRequest(daemon.socketPath, upRequest("i2", x!));
+  const first = sendRequest(daemon.socketPath, upRequest("i1", x));
+  const second = sendRequest(daemon.socketPath, upRequest("i2", x));
   await pause(50);
   held.release();
   assert.equal((await first).error?.code, "PODMAN_MISSING");
   assert.equal(snapshotStateOf(await second), "active");
-  assert.equal(snapshotStateOf(await sendRequest(daemon.socketPath, upRequest("i3", y!))), "active");
-  assert.equal((await sendRequest(daemon.socketPath, upRequest("i4", z!))).error?.code, "POLICY_DENIED");
+  assert.equal(snapshotStateOf(await sendRequest(daemon.socketPath, upRequest("i3", y))), "active");
+  assert.equal((await sendRequest(daemon.socketPath, upRequest("i4", z))).error?.code, "POLICY_DENIED");
   assert.equal(parts.exec.callCount("create"), 2, "X and Y each create once, Z never");
   assert.ok(parts.exec.callCount("create") - parts.exec.callCount("destroy") <= 2, "at most two live containers");
 });
@@ -1982,7 +1983,7 @@ void test("T1 (k): a down for Q queued behind an up of Q runs after the up, dest
 
 void test("T1 (l): with maxSessions 2, a down of W while Y's admission is in flight does not arm the stop; down of Y after it completes does", async (t) => {
   const fixture = makeDirs();
-  const [w, y] = ["w", "y"].map((name) => projectDir(fixture, name));
+  const [w, y]: [string, string] = [projectDir(fixture, "w"), projectDir(fixture, "y")];
   let hold: Promise<void> | undefined;
   let open: () => void = () => undefined;
   const parts = daemonParts(fixture, {
@@ -2002,23 +2003,23 @@ void test("T1 (l): with maxSessions 2, a down of W while Y's admission is in fli
   daemon.done.then(() => {
     doneResolved = true;
   }, () => undefined);
-  assert.equal(snapshotStateOf(await sendRequest(daemon.socketPath, upRequest("l-w", w!))), "active");
+  assert.equal(snapshotStateOf(await sendRequest(daemon.socketPath, upRequest("l-w", w))), "active");
 
   hold = new Promise<void>((resolve) => {
     open = resolve;
   });
-  const yUp = sendRequest(daemon.socketPath, upRequest("l-y", y!));
+  const yUp = sendRequest(daemon.socketPath, upRequest("l-y", y));
   await pause(50);
-  assert.equal(snapshotStateOf(await sendRequest(daemon.socketPath, { id: "l-dw", method: "down", params: selectedBy(w!) })), "unbound");
+  assert.equal(snapshotStateOf(await sendRequest(daemon.socketPath, { id: "l-dw", method: "down", params: selectedBy(w) })), "unbound");
   await pause(50);
   assert.equal(doneResolved, false, "reservedCount is 1, so the stop is not armed");
-  assert.equal(snapshotStateOf(await sendRequest(daemon.socketPath, { id: "l-sw", method: "status", params: selectedBy(w!) })), "unbound");
+  assert.equal(snapshotStateOf(await sendRequest(daemon.socketPath, { id: "l-sw", method: "status", params: selectedBy(w) })), "unbound");
 
   open();
   assert.equal(snapshotStateOf(await yUp), "active");
   assert.equal(parts.exec.callCount("create"), 2, "W and Y each create once");
-  assert.equal(snapshotStateOf(await sendRequest(daemon.socketPath, { id: "l-sy", method: "status", params: selectedBy(y!) })), "active");
-  await sendRequest(daemon.socketPath, { id: "l-dy", method: "down", params: selectedBy(y!) });
+  assert.equal(snapshotStateOf(await sendRequest(daemon.socketPath, { id: "l-sy", method: "status", params: selectedBy(y) })), "active");
+  await sendRequest(daemon.socketPath, { id: "l-dy", method: "down", params: selectedBy(y) });
   await awaitDone(daemon);
 });
 
@@ -2054,17 +2055,17 @@ void test("T1 (m): with scaled client bounds, an up and a down queued behind a h
 
 void test("T1 (n): a create failing with a code other than REALM_STOPPING keeps its slot unproven until down releases it", async (t) => {
   const fixture = makeDirs();
-  const [x, y, z] = ["x", "y", "z"].map((name) => projectDir(fixture, name));
+  const [x, y, z]: [string, string, string] = [projectDir(fixture, "x"), projectDir(fixture, "y"), projectDir(fixture, "z")];
   const parts = daemonParts(fixture, { ...wideOptions(fixture), maxSessions: 2 });
   parts.exec.failNext("create", "PODMAN_MISSING");
   const daemon = await startDaemon(parts.options);
   t.after(() => cleanupDaemon(daemon));
 
-  assert.equal(snapshotStateOf(await sendRequest(daemon.socketPath, upRequest("n1", x!))), "error");
-  assert.equal(snapshotStateOf(await sendRequest(daemon.socketPath, upRequest("n2", y!))), "active");
-  assert.equal((await sendRequest(daemon.socketPath, upRequest("n3", z!))).error?.code, "POLICY_DENIED");
-  await sendRequest(daemon.socketPath, { id: "n4", method: "down", params: selectedBy(x!) });
-  assert.equal(snapshotStateOf(await sendRequest(daemon.socketPath, upRequest("n5", z!))), "active");
+  assert.equal(snapshotStateOf(await sendRequest(daemon.socketPath, upRequest("n1", x))), "error");
+  assert.equal(snapshotStateOf(await sendRequest(daemon.socketPath, upRequest("n2", y))), "active");
+  assert.equal((await sendRequest(daemon.socketPath, upRequest("n3", z))).error?.code, "POLICY_DENIED");
+  await sendRequest(daemon.socketPath, { id: "n4", method: "down", params: selectedBy(x) });
+  assert.equal(snapshotStateOf(await sendRequest(daemon.socketPath, upRequest("n5", z))), "active");
 });
 
 void test("T1 (o): a down whose destroy holds, with an up queued behind it: after the destroy the stop is armed and the queued up is REALM_STOPPING with no probe or create", async (t) => {
@@ -2196,15 +2197,15 @@ void test("T2 (a): two projects admitted on one daemon answer their own tool cal
   const fixture = makeDirs();
   const daemon = await startDaemon(daemonParts(fixture, wideOptions(fixture)).options);
   t.after(() => cleanupDaemon(daemon));
-  const [a, b] = ["a", "b"].map((name) => projectDir(fixture, name));
-  await sendRequest(daemon.socketPath, upRequest("a-up", a!));
-  await sendRequest(daemon.socketPath, upRequest("b-up", b!));
-  const idA = selectionOf(a!).sessionId;
-  const idB = selectionOf(b!).sessionId;
-  const callsA = recordDispatcherCalls(entryOf(daemon, { ...fixture, ws: a! }));
-  const callsB = recordDispatcherCalls(entryOf(daemon, { ...fixture, ws: b! }));
-  assert.equal((await sendRequest(daemon.socketPath, { id: "a-tool", method: "tool", params: { ...selectedBy(a!), tool: { status: {} } } })).error, undefined);
-  assert.equal((await sendRequest(daemon.socketPath, { id: "b-tool", method: "tool", params: { ...selectedBy(b!), tool: { status: {} } } })).error, undefined);
+  const [a, b]: [string, string] = [projectDir(fixture, "a"), projectDir(fixture, "b")];
+  await sendRequest(daemon.socketPath, upRequest("a-up", a));
+  await sendRequest(daemon.socketPath, upRequest("b-up", b));
+  const idA = selectionOf(a).sessionId;
+  const idB = selectionOf(b).sessionId;
+  const callsA = recordDispatcherCalls(entryOf(daemon, { ...fixture, ws: a }));
+  const callsB = recordDispatcherCalls(entryOf(daemon, { ...fixture, ws: b }));
+  assert.equal((await sendRequest(daemon.socketPath, { id: "a-tool", method: "tool", params: { ...selectedBy(a), tool: { status: {} } } })).error, undefined);
+  assert.equal((await sendRequest(daemon.socketPath, { id: "b-tool", method: "tool", params: { ...selectedBy(b), tool: { status: {} } } })).error, undefined);
   assert.equal(callsA.raws.length, 1, "A's handle answered A's call");
   assert.equal(callsB.raws.length, 1, "B's handle answered B's call");
   const linesA = auditLinesOf(fixture, idA);
@@ -2218,16 +2219,16 @@ void test("T2 (b): down of A returns the unbound snapshot; B stays active and an
   const fixture = makeDirs();
   const daemon = await startDaemon(daemonParts(fixture, wideOptions(fixture)).options);
   t.after(() => cleanupDaemon(daemon));
-  const [a, b] = ["a", "b"].map((name) => projectDir(fixture, name));
-  const idA = selectionOf(a!).sessionId;
-  const idB = selectionOf(b!).sessionId;
-  await sendRequest(daemon.socketPath, upRequest("b-up", a!));
-  await sendRequest(daemon.socketPath, upRequest("b-up2", b!));
+  const [a, b]: [string, string] = [projectDir(fixture, "a"), projectDir(fixture, "b")];
+  const idA = selectionOf(a).sessionId;
+  const idB = selectionOf(b).sessionId;
+  await sendRequest(daemon.socketPath, upRequest("b-up", a));
+  await sendRequest(daemon.socketPath, upRequest("b-up2", b));
 
-  assert.equal(snapshotStateOf(await sendRequest(daemon.socketPath, { id: "b-down-a", method: "down", params: selectedBy(a!) })), "unbound");
-  assert.equal(snapshotStateOf(await sendRequest(daemon.socketPath, { id: "b-status-b", method: "status", params: selectedBy(b!) })), "active");
-  assert.equal((await sendRequest(daemon.socketPath, { id: "b-tool-b", method: "tool", params: { ...selectedBy(b!), tool: { status: {} } } })).error, undefined);
-  assert.equal(snapshotStateOf(await sendRequest(daemon.socketPath, { id: "b-status-a", method: "status", params: selectedBy(a!) })), "unbound");
+  assert.equal(snapshotStateOf(await sendRequest(daemon.socketPath, { id: "b-down-a", method: "down", params: selectedBy(a) })), "unbound");
+  assert.equal(snapshotStateOf(await sendRequest(daemon.socketPath, { id: "b-status-b", method: "status", params: selectedBy(b) })), "active");
+  assert.equal((await sendRequest(daemon.socketPath, { id: "b-tool-b", method: "tool", params: { ...selectedBy(b), tool: { status: {} } } })).error, undefined);
+  assert.equal(snapshotStateOf(await sendRequest(daemon.socketPath, { id: "b-status-a", method: "status", params: selectedBy(a) })), "unbound");
   const store = new SessionStore(fixture.stateDir);
   assert.equal(store.load(idA), null, "A's record is gone");
   assert.notEqual(store.load(idB), null, "B's record remains");
@@ -2240,16 +2241,16 @@ void test("T2 (c): with maxSessions 2, a failed destroy of A keeps A registered 
   const parts = daemonParts(fixture, { ...wideOptions(fixture), maxSessions: 2 });
   const daemon = await startDaemon(parts.options);
   t.after(() => cleanupDaemon(daemon));
-  const [a, b, c] = ["a", "b", "c"].map((name) => projectDir(fixture, name));
-  await sendRequest(daemon.socketPath, upRequest("c-ua", a!));
-  await sendRequest(daemon.socketPath, upRequest("c-ub", b!));
-  const idA = selectionOf(a!).sessionId;
+  const [a, b, c]: [string, string, string] = [projectDir(fixture, "a"), projectDir(fixture, "b"), projectDir(fixture, "c")];
+  await sendRequest(daemon.socketPath, upRequest("c-ua", a));
+  await sendRequest(daemon.socketPath, upRequest("c-ub", b));
+  const idA = selectionOf(a).sessionId;
   parts.exec.failNext("destroy", "REALM_STOPPING");
 
-  assert.equal((await sendRequest(daemon.socketPath, { id: "c-down", method: "down", params: selectedBy(a!) })).error?.code, "REALM_STOPPING");
+  assert.equal((await sendRequest(daemon.socketPath, { id: "c-down", method: "down", params: selectedBy(a) })).error?.code, "REALM_STOPPING");
   assert.notEqual(daemon.session(idA), undefined, "A stays registered");
   assert.equal(daemon.isCommitted(idA), true, "A's slot stays committed");
-  assert.equal((await sendRequest(daemon.socketPath, upRequest("c-uc", c!))).error?.code, "POLICY_DENIED");
+  assert.equal((await sendRequest(daemon.socketPath, upRequest("c-uc", c))).error?.code, "POLICY_DENIED");
   assert.notEqual(new SessionStore(fixture.stateDir).load(idA), null, "A's record is not removed");
 });
 
@@ -2276,13 +2277,13 @@ void test("T2 (f): stop() on StartedDaemon with two sessions calls controller.st
   };
   const daemon = await startDaemon(daemonParts(fixture, { ...wideOptions(fixture), logger }).options);
   t.after(() => cleanupDaemon(daemon));
-  const [a, b] = ["a", "b"].map((name) => projectDir(fixture, name));
-  await sendRequest(daemon.socketPath, upRequest("f-ua", a!));
-  await sendRequest(daemon.socketPath, upRequest("f-ub", b!));
+  const [a, b]: [string, string] = [projectDir(fixture, "a"), projectDir(fixture, "b")];
+  await sendRequest(daemon.socketPath, upRequest("f-ua", a));
+  await sendRequest(daemon.socketPath, upRequest("f-ub", b));
   const servedBeforeStop = controlRequests;
   assert.equal(servedBeforeStop, 2, "the two ups were served over the socket");
   let stops = 0;
-  for (const dir of [a!, b!]) {
+  for (const dir of [a, b]) {
     const controller = entryOf(daemon, { ...fixture, ws: dir }).handle.controller;
     const stopOnce = controller.stop.bind(controller);
     controller.stop = () => {
@@ -2334,18 +2335,18 @@ void test("T2 (j): a down that names no live session on an empty daemon resolves
   await awaitDone(empty);
 
   const other = makeDirs();
-  const [a, b] = ["a", "b"].map((name) => projectDir(other, name));
+  const [a, b]: [string, string] = [projectDir(other, "a"), projectDir(other, "b")];
   const live = await startDaemon(daemonParts(other, wideOptions(other)).options);
   t.after(() => cleanupDaemon(live));
-  await sendRequest(live.socketPath, upRequest("j-b", b!));
+  await sendRequest(live.socketPath, upRequest("j-b", b));
   let stopped = false;
   live.done.then(() => {
     stopped = true;
   }, () => undefined);
-  await sendRequest(live.socketPath, { id: "j-na", method: "down", params: selectedBy(a!) });
+  await sendRequest(live.socketPath, { id: "j-na", method: "down", params: selectedBy(a) });
   await pause(50);
   assert.equal(stopped, false, "B is live, so the daemon keeps running");
-  assert.equal(snapshotStateOf(await sendRequest(live.socketPath, { id: "j-sb", method: "status", params: selectedBy(b!) })), "active");
+  assert.equal(snapshotStateOf(await sendRequest(live.socketPath, { id: "j-sb", method: "status", params: selectedBy(b) })), "active");
 });
 
 void test("T2 (k): the object startDaemon resolves to has no handle key, and session(id) returns the entry", async (t) => {
@@ -2363,12 +2364,12 @@ void test("T2 (d): a lock taken through A's handle is absent from B's lock table
   const fixture = makeDirs();
   const daemon = await startDaemon(daemonParts(fixture, wideOptions(fixture)).options);
   t.after(() => cleanupDaemon(daemon));
-  const [a, b] = ["a", "b"].map((name) => projectDir(fixture, name));
-  await sendRequest(daemon.socketPath, upRequest("d-ua", a!));
-  await sendRequest(daemon.socketPath, upRequest("d-ub", b!));
-  const target = join(a!, "doc.txt");
-  const entryA = entryOf(daemon, { ...fixture, ws: a! });
-  const entryB = entryOf(daemon, { ...fixture, ws: b! });
+  const [a, b]: [string, string] = [projectDir(fixture, "a"), projectDir(fixture, "b")];
+  await sendRequest(daemon.socketPath, upRequest("d-ua", a));
+  await sendRequest(daemon.socketPath, upRequest("d-ub", b));
+  const target = join(a, "doc.txt");
+  const entryA = entryOf(daemon, { ...fixture, ws: a });
+  const entryB = entryOf(daemon, { ...fixture, ws: b });
   entryA.handle.locks.acquire(target, "owner-a");
   assert.equal(entryA.handle.locks.isHeldBy(target, "owner-a"), true, "A's table holds the lock");
   assert.equal(entryB.handle.locks.isHeldBy(target, "owner-a"), false, "B's table does not see it");
@@ -2489,9 +2490,9 @@ void test("T2 (g): up refused by the podman probe rejects with the probe code ov
 // the path, and writes no line under the id daemon. The owners are read before the reap deletes the records.
 void test("MULTI-03: a startup attributes each orphan removal to the session whose recorded workspace holds it, and writes no daemon line", async (t) => {
   const fixture = makeDirs();
-  const [a, b] = ["a", "b"].map((name) => projectDir(fixture, name));
+  const [a, b]: [string, string] = [projectDir(fixture, "a"), projectDir(fixture, "b")];
   const store = new SessionStore(fixture.stateDir);
-  for (const dir of [a!, b!]) {
+  for (const dir of [a, b]) {
     store.save({
       realmId: `realm-${selectionOf(dir).sessionId}`,
       sessionId: selectionOf(dir).sessionId,
@@ -2502,8 +2503,8 @@ void test("MULTI-03: a startup attributes each orphan removal to the session who
     });
   }
   const hourAgo = new Date(Date.now() - 3_600_000);
-  const orphanA = join(a!, ".fa.txt.realm-tmp-0123456789abcdef");
-  const orphanB = join(b!, ".fb.txt.realm-tmp-0123456789abcdef");
+  const orphanA = join(a, ".fa.txt.realm-tmp-0123456789abcdef");
+  const orphanB = join(b, ".fb.txt.realm-tmp-0123456789abcdef");
   const outside = join(fixture.base, ".fo.txt.realm-tmp-0123456789abcdef");
   for (const orphan of [orphanA, orphanB, outside]) {
     writeFileSync(orphan, "partial");
@@ -2523,11 +2524,11 @@ void test("MULTI-03: a startup attributes each orphan removal to the session who
   assert.equal(existsSync(orphanA), false);
   assert.equal(existsSync(orphanB), false);
   assert.equal(existsSync(outside), false);
-  assert.deepEqual(auditLinesOf(fixture, selectionOf(a!).sessionId).map((line) => line["path"]), [orphanA]);
-  assert.deepEqual(auditLinesOf(fixture, selectionOf(b!).sessionId).map((line) => line["path"]), [orphanB]);
+  assert.deepEqual(auditLinesOf(fixture, selectionOf(a).sessionId).map((line) => line["path"]), [orphanA]);
+  assert.deepEqual(auditLinesOf(fixture, selectionOf(b).sessionId).map((line) => line["path"]), [orphanB]);
   assert.equal(existsSync(join(fixture.stateDir, "audit", "daemon.jsonl")), false, "no line is written under the id daemon");
   assert.equal(reports[0]?.unattributedTempFiles, 1, "the file outside both workspaces is counted, not attributed");
-  assert.equal(reports[0]?.recordsDeleted, 2);
+  assert.equal(reports[0].recordsDeleted, 2);
   assert.deepEqual(store.list(), [], "the reap deleted both records, and the attribution was taken before it");
 });
 
@@ -2547,7 +2548,7 @@ void test("MULTI-03: a record the startup cannot read is counted in unattributed
 
   assert.equal(reports.length, 1, "the startup completed its maintenance");
   assert.equal(reports[0]?.unattributedRecords, 1);
-  assert.equal(reports[0]?.maintenanceComplete, true);
+  assert.equal(reports[0].maintenanceComplete, true);
   assert.equal(snapshotStateOf(await sendRequest(daemon.socketPath, upRequest("bad-s", fixture.ws))), "active");
 });
 
@@ -2570,7 +2571,7 @@ void test("MULTI-03: a startup removes the registry entries an earlier generatio
   );
   t.after(() => cleanupDaemon(second));
   assert.equal(reports[0]?.registryEntriesRemoved, 1);
-  assert.equal(reports[0]?.recordsDeleted, 1);
+  assert.equal(reports[0].recordsDeleted, 1);
   assert.deepEqual(listWorkspaceEntryIds(fixture.stateDir), [], "the entry's file is gone");
   await second.stop();
   await awaitDone(second);
