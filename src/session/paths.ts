@@ -33,6 +33,27 @@ export function recordFileName(sessionId: string): string {
   return `${sessionId}.json`;
 }
 
+// Checkpoints (RES-04) live under the state directory, outside every workspace root. Each session has one
+// directory, and each checkpoint has one directory inside it. Both names come from the safe session id set.
+export function checkpointsDirOf(stateDir: string): string {
+  return join(stateDir, "checkpoints");
+}
+
+export function checkpointSessionDirOf(stateDir: string, sessionId: string): string {
+  if (!isSessionId(sessionId)) {
+    throw makeRealmError("SCHEMA_INVALID");
+  }
+  return join(checkpointsDirOf(stateDir), sessionId);
+}
+
+// The directory of one checkpoint. The checkpoint id is a directory name too, so it must be in the safe set.
+export function checkpointDirOf(stateDir: string, sessionId: string, checkpointId: string): string {
+  if (!isSessionId(checkpointId)) {
+    throw makeRealmError("SCHEMA_INVALID");
+  }
+  return join(checkpointSessionDirOf(stateDir, sessionId), checkpointId);
+}
+
 // Workspace identity (C1, MULTI-02). A project's session id is a function of its canonical path, so every
 // alias of one directory names the same session and sandbox. sessionIdOfWorkspace is the one derivation.
 export const WORKSPACE_SESSION_PREFIX = "p";
