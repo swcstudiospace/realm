@@ -172,7 +172,7 @@ async function runAgainstDaemon(
       stderr: "",
     };
   } catch (error) {
-    // The library maps a throwing predicate to OPENSHELL_GATEWAY_LOST. Here the daemon is the thing that cannot answer,
+    // The library maps a throwing predicate to REALM_NOT_ACTIVE. Here the daemon is the thing that cannot answer,
     // so the refusal is the daemon-unreachable code whatever the library reported.
     return refusal(state.daemonSilent ? makeRealmError("REALM_NOT_ACTIVE") : error);
   } finally {

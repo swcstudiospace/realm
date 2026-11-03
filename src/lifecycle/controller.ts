@@ -21,9 +21,11 @@ import { withTimeout } from "../core/timeout.js";
 import { LockTable } from "../fs/locks.js";
 import { PinnedRoot, verifyPinnedAt } from "../fs/root.js";
 import { realmSandboxName } from "../runtime/openshell.js";
+import { withStartLock } from "../session/checkpoint-lock.js";
 import { controlSocketPath } from "../session/paths.js";
 import type { SessionStore } from "../session/store.js";
-import { currentBootId, groupHasMembers, readRunnerRecord, RUNNER_STOP_GRACE_MS, stopRecordedRunner } from "../session/runner-record.js";
+import { currentBootId } from "../session/proc-identity.js";
+import { groupHasMembers, readRunnerRecord, RUNNER_STOP_GRACE_MS, stopRecordedRunner } from "../session/runner-record.js";
 import { readWorkspaceEntry } from "../session/workspace-registry.js";
 import { type GateOutcome, gateMutation } from "./mutation-gate.js";
 
@@ -204,6 +206,13 @@ export class LifecycleController {
     return gateMutation(this.deps.policy, this.machine.snapshot().state);
   }
 
+  // Creates or refreshes the session's container under the session's start lock (checkpoint-lock.ts). The lock is taken
+  // before any state is read, so a checkpoint that holds the session refuses the start with REALM_NOT_ACTIVE. Starts in this
+  // process share the lock. Both the daemon's up and the tool retry reach create, so this is the one place a start is taken.
+  create(workspaceRoot: string): Promise<StateSnapshot> {
+    return withStartLock(this.deps.store.stateDir, this.deps.sessionId, () => this.createHeld(workspaceRoot), () => this.unsettledStarts());
+  }
+
   // Verifies the requested workspace against the pinned root, writes the record with containerId
   // null before the port create (RT-07), stores the returned containerId, then starts the
   // container. A
@@ -231,7 +240,7 @@ export class LifecycleController {
   // budget keeps its port call, and a container the call later produces is destroyed (C2).
   // A port start still in flight when a teardown begins is waited for, and its container is stopped
   // once the start settles (F1).
-  async create(workspaceRoot: string): Promise<StateSnapshot> {
+  private async createHeld(workspaceRoot: string): Promise<StateSnapshot> {
     const { state } = this.machine.snapshot();
     if (state === "stopping") {
       throw makeRealmError("REALM_STOPPING");
@@ -429,6 +438,26 @@ export class LifecycleController {
     return this.machine.snapshot();
   }
 
+  // Hydrates an adopted survivor under the session's start lock (checkpoint-lock.ts), as create is.
+  hydrate(containerId: string): Promise<StateSnapshot> {
+    const expiry: { removal: Promise<StateSnapshot> | null } = { removal: null };
+    return withStartLock(
+      this.deps.store.stateDir,
+      this.deps.sessionId,
+      async () => {
+        const snapshot = await this.hydrateHeld(containerId, expiry);
+        return expiry.removal === null ? snapshot : await expiry.removal;
+      },
+      () => this.unsettledStarts(),
+    );
+  }
+
+  // The port starts this controller has in flight. A start that outlived its caller still runs on the port, so the start lock
+  // is released only after these settle.
+  private unsettledStarts(): readonly Promise<unknown>[] {
+    return [...this.pendingStarts].map((start) => start.settled);
+  }
+
   // Brings an adopted survivor back to active. The startup reaper verifies the survivor and keeps
   // its record, so the record must name exactly that containerId: any other value is refused with
   // SCHEMA_INVALID before any port call. Hydration never creates or recreates a container. It runs
@@ -440,7 +469,7 @@ export class LifecycleController {
   // A stop, destroy, or newer create that begins during hydration owns the session, so the result
   // is stale and changes nothing. A failed start or bridge step moves the session to error with the
   // port's code and removes the survivor through the teardown path (see failHydrate).
-  async hydrate(containerId: string): Promise<StateSnapshot> {
+  private async hydrateHeld(containerId: string, expiry: { removal: Promise<StateSnapshot> | null }): Promise<StateSnapshot> {
     const { state } = this.machine.snapshot();
     if (state === "stopping") {
       throw makeRealmError("REALM_STOPPING");
@@ -464,6 +493,14 @@ export class LifecycleController {
     const epoch = this.lifeEpoch;
     this.machine.transition("connecting", "hydrating container");
     const issued: { start: PendingStart | null } = { start: null };
+    // The budget backstop. It is armed before any await, so it is the first timer of its length: hydrateAdopted arms its own
+    // budget timer of the same length after this call returns, and timers of equal length fire in the order they were armed.
+    // Expiry records the failure through failHydrate and keeps its removal in expiry. hydrate resolves only after that removal.
+    const backstop = setTimeout(() => {
+      if (this.ownsStartup(epoch)) {
+        expiry.removal = this.failHydrate(makeRealmError("STARTUP_BUDGET_EXCEEDED"), containerId, issued.start, epoch);
+      }
+    }, this.deps.policy.startupBudgetMs);
     try {
       if (this.deps.bridge !== null) {
         this.subscribeBridge(this.deps.bridge);
@@ -506,7 +543,9 @@ export class LifecycleController {
         );
       }
     } catch (error: unknown) {
-      return this.failHydrate(error, containerId, issued.start, epoch);
+      return await this.failHydrate(error, containerId, issued.start, epoch);
+    } finally {
+      clearTimeout(backstop);
     }
     if (!this.ownsStartup(epoch)) {
       return this.machine.snapshot();
@@ -1000,9 +1039,12 @@ export class LifecycleController {
     );
     const pending: PendingStart = { containerId, started, settled };
     this.pendingStarts.add(pending);
-    void settled.then(() => {
+    // Leaves the in-flight set as soon as the port call settles. This reaction is registered before any caller waits on
+    // started, so a caller that resumes sees the start already gone.
+    const forget = (): void => {
       this.pendingStarts.delete(pending);
-    });
+    };
+    void started.then(forget, forget);
     return pending;
   }
 

@@ -14,8 +14,6 @@ import { atomicWriteFile, observeSha256 } from "../fs/atomic-write.js";
 import { bindRoot } from "../fs/root.js";
 import { isSessionId } from "./paths.js";
 import { readProcStat } from "./proc-identity.js";
-// The boot id is read in proc-identity.ts. agentos-driver.ts imports it from this module.
-export { currentBootId } from "./proc-identity.js";
 
 const RECORD_SCHEMA = 1;
 const RECORD_SUFFIX = ".runner.json";

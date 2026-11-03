@@ -12,7 +12,8 @@ import { isAbsolute } from "node:path";
 import { performance } from "node:perf_hooks";
 import { makeRealmError, RealmError } from "../core/errors.js";
 import { dialWithin, withTimeout } from "../core/timeout.js";
-import { currentBootId, runnerRecordOf, writeRunnerRecord } from "../session/runner-record.js";
+import { currentBootId } from "../session/proc-identity.js";
+import { runnerRecordOf, writeRunnerRecord } from "../session/runner-record.js";
 import type { AgentOsDriver } from "./agentos.js";
 import type { RunnerChild, RunnerChildSpawner } from "./agentos-workload.js";
 import {

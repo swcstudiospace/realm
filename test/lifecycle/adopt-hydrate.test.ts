@@ -15,7 +15,8 @@ import { controlSocketPath } from "../../src/session/paths.js";
 import { SessionStore } from "../../src/session/store.js";
 import { FakeBridge } from "../support/fake-bridge.js";
 import { FakeExecutionService } from "../support/fake-execution.js";
-import { currentBootId, groupHasMembers, runnerRecordOf, writeRunnerRecord, type RunnerRecord } from "../../src/session/runner-record.js";
+import { currentBootId } from "../../src/session/proc-identity.js";
+import { groupHasMembers, runnerRecordOf, writeRunnerRecord, type RunnerRecord } from "../../src/session/runner-record.js";
 import { boundedWait } from "../support/timing.js";
 
 const SESSION = "session-1";

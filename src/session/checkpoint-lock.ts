@@ -16,6 +16,7 @@ import {
   fsyncSync,
   linkSync,
   lstatSync,
+  mkdirSync,
   openSync,
   readFileSync,
   renameSync,
@@ -24,9 +25,10 @@ import {
   type Stats,
 } from "node:fs";
 import { join } from "node:path";
-import { makeRealmError } from "../core/errors.js";
+import { makeRealmError, RealmError } from "../core/errors.js";
 import { errnoOf } from "../fs/canonicalize.js";
 import { currentBootId, startTicksOf } from "./proc-identity.js";
+import { checkpointSessionDirOf } from "./paths.js";
 
 const LOCK_FILE = ".lock";
 // A temporary owner record is named with this prefix in the session directory until it is linked to the lock.
@@ -71,6 +73,90 @@ export function releaseSessionLock(lockPath: string): void {
     if (errnoOf(error) !== "ENOENT") {
       throw makeRealmError("CLEANUP_FAILED");
     }
+  }
+}
+
+const SESSION_DIR_MODE = 0o700;
+
+// Sandbox starts in this process that hold the session lock, by lock path. The lock file records one owner, this process, so a
+// second start here cannot take it again; it shares the held file instead. The count rises for each start, and the file is
+// released when the last start settles. A checkpoint in this process finds the file held, so it is refused with LOCK_CONFLICT
+// exactly as one in another process is. Starts never hold the file while a checkpoint does.
+const startHolders = new Map<string, number>();
+
+// Holds the session lock for a sandbox start. The lock is taken before fn runs. Its share is dropped once fn has settled and
+// every start still in flight has settled, so a start that outlives its caller keeps the lock until it settles, and a checkpoint
+// cannot run while the sandbox is still starting. The caller gets fn's outcome when fn settles. The share is taken once per
+// process and shared by the starts in it. While a checkpoint holds the session, in this process or another, a start is refused
+// with REALM_NOT_ACTIVE (retryable): a checkpoint is in progress, so the caller retries.
+export async function withStartLock<T>(
+  stateRoot: string,
+  sessionId: string,
+  fn: () => Promise<T>,
+  inFlight: () => readonly Promise<unknown>[],
+): Promise<T> {
+  const sessionDir = checkpointSessionDirOf(stateRoot, sessionId);
+  const lockPath = join(sessionDir, LOCK_FILE);
+  const holders = startHolders.get(lockPath);
+  if (holders === undefined) {
+    acquireForStart(sessionDir);
+  }
+  startHolders.set(lockPath, (holders ?? 0) + 1);
+  // fn is called here, before any await, so a timer it arms is armed before the caller's next step.
+  const outcome = fn();
+  // Registered before the caller can await outcome, so the share is dropped before the caller resumes.
+  const release = (): void => {
+    releaseWhenDrained(lockPath, inFlight);
+  };
+  void outcome.then(release, release);
+  return outcome;
+}
+
+// Takes the file lock for a start. The session directory is created when it is absent. A held lock is refused as
+// REALM_NOT_ACTIVE, not LOCK_CONFLICT, because for a start the holder is a checkpoint in progress.
+function acquireForStart(sessionDir: string): void {
+  try {
+    mkdirSync(sessionDir, { recursive: true, mode: SESSION_DIR_MODE });
+  } catch {
+    throw makeRealmError("WRITE_NOT_ATOMIC");
+  }
+  try {
+    acquireSessionLock(sessionDir);
+  } catch (error) {
+    if (error instanceof RealmError && error.code === "LOCK_CONFLICT") {
+      throw makeRealmError("REALM_NOT_ACTIVE");
+    }
+    throw error;
+  }
+}
+
+// Releases the share once no start is in flight. A start still in flight is waited for, and the check runs again when it
+// settles, since another start may have been issued meanwhile.
+function releaseWhenDrained(lockPath: string, inFlight: () => readonly Promise<unknown>[]): void {
+  const waiting = inFlight();
+  if (waiting.length > 0) {
+    void Promise.all(waiting).then(() => {
+      releaseWhenDrained(lockPath, inFlight);
+    });
+    return;
+  }
+  dropStartShare(lockPath);
+}
+
+// Drops one start's share. The file is released with the last share, and the count is cleared before the release, so a
+// failed release leaves no stale count behind.
+function dropStartShare(lockPath: string): void {
+  const remaining = (startHolders.get(lockPath) ?? 0) - 1;
+  if (remaining > 0) {
+    startHolders.set(lockPath, remaining);
+    return;
+  }
+  startHolders.delete(lockPath);
+  try {
+    releaseSessionLock(lockPath);
+  } catch {
+    // Nothing receives an error from this background release. The file names this process, so a later start is refused until
+    // the process exits and a takeover can prove its owner gone.
   }
 }
 
