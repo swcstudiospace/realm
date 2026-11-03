@@ -9,9 +9,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough, Writable } from "node:stream";
 import { runCli, type ConnectDaemon, type SpawnDaemon } from "../../src/cli/main.js";
-import type { DaemonStatus } from "../../src/daemon/client.js";
+import { selectionOf, type DaemonStatus } from "../../src/daemon/client.js";
+import type { ControlSelection } from "../../src/daemon/channel.js";
 import { makeRealmError } from "../../src/core/errors.js";
-import type { EnvironmentLike } from "../../src/session/paths.js";
+import { controlSocketPath, type EnvironmentLike } from "../../src/session/paths.js";
 
 /** A promise with its resolver exposed; Promise.withResolvers is not in this target lib (ES2023). */
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
@@ -213,4 +214,104 @@ void test("realm mcp with no daemon that ever answers exits 1 with DAEMON_START_
   assert.equal(result.exitCode, 1);
   assert.deepEqual(spawns, [DAEMON_ENTRY], "one spawn is attempted before the bounded wait");
   assert.match(result.stderr, /^DAEMON_START_TIMEOUT: /, "the refusal names the daemon start timeout");
+});
+
+// MULTI-03 (plan 08 T2): realm mcp and realm acp attach their client to the selection of their workspace.
+void test("realm mcp --workspace attaches its client to the selection of that workspace and calls up with no argument (MULTI-03)", async () => {
+  const connected: { readonly socketPath: string; readonly selection: ControlSelection }[] = [];
+  const upArgs: unknown[][] = [];
+  const connect: ConnectDaemon = (socketPath, selection) => {
+    connected.push({ socketPath, selection });
+    return {
+      status: () => Promise.resolve(STATUS),
+      up: (...args: unknown[]) => {
+        upArgs.push(args);
+        return Promise.resolve(STATUS);
+      },
+      call: () => Promise.resolve({ outcome: "refused", tool: null, code: "REALM_NOT_ACTIVE", retryable: false }),
+      metrics: () => Promise.reject(makeRealmError("REALM_NOT_ACTIVE")),
+      close: () => undefined,
+    };
+  };
+  const input = new PassThrough();
+  input.end();
+  const result = await runCli(["mcp", "--workspace", WORKSPACE], {
+    env: ENV,
+    cwd: WORKSPACE,
+    daemonEntry: DAEMON_ENTRY,
+    connect,
+    mcpInput: input,
+    mcpOutput: new PassThrough(),
+    diagnostics: captureWriter().stream,
+  });
+  assert.equal(result.exitCode, 0);
+  assert.ok(connected.length > 0, "the client is connected");
+  for (const call of connected) {
+    assert.equal(call.socketPath, controlSocketPath(STATE_DIR));
+    assert.deepEqual(call.selection, selectionOf(WORKSPACE));
+  }
+  assert.deepEqual(upArgs, [[]], "up is called once, with no argument");
+});
+
+void test("realm acp --workspace attaches its client to the selection of that workspace and calls up with no argument (MULTI-03)", async () => {
+  const connected: { readonly socketPath: string; readonly selection: ControlSelection }[] = [];
+  const upArgs: unknown[][] = [];
+  const connect: ConnectDaemon = (socketPath, selection) => {
+    connected.push({ socketPath, selection });
+    return {
+      status: () => Promise.resolve(STATUS),
+      up: (...args: unknown[]) => {
+        upArgs.push(args);
+        return Promise.resolve(STATUS);
+      },
+      call: () => Promise.resolve({ outcome: "refused", tool: null, code: "REALM_NOT_ACTIVE", retryable: false }),
+      metrics: () => Promise.reject(makeRealmError("REALM_NOT_ACTIVE")),
+      close: () => undefined,
+    };
+  };
+  const input = new PassThrough();
+  input.end();
+  await runCli(["acp", "--workspace", WORKSPACE], {
+    env: ENV,
+    cwd: WORKSPACE,
+    daemonEntry: DAEMON_ENTRY,
+    connect,
+    acpInput: input,
+    acpOutput: new PassThrough(),
+    diagnostics: captureWriter().stream,
+  });
+  assert.ok(connected.length > 0, "the client is connected");
+  for (const call of connected) {
+    assert.equal(call.socketPath, controlSocketPath(STATE_DIR));
+    assert.deepEqual(call.selection, selectionOf(WORKSPACE));
+  }
+  assert.deepEqual(upArgs, [[]], "up is called once, with no argument");
+});
+
+void test("realm acp --workspace refuses an up whose reply names another session: SCHEMA_INVALID on stderr, exit 1, no frames (MULTI-03)", async () => {
+  // The real client throws SCHEMA_INVALID for an up reply that names another session; this fake throws the same code.
+  const connect: ConnectDaemon = () => ({
+    status: () => Promise.resolve(STATUS),
+    up: () => Promise.reject(makeRealmError("SCHEMA_INVALID")),
+    call: () => Promise.resolve({ outcome: "refused", tool: null, code: "REALM_NOT_ACTIVE", retryable: false }),
+    metrics: () => Promise.reject(makeRealmError("REALM_NOT_ACTIVE")),
+    close: () => undefined,
+  });
+  const input = new PassThrough();
+  input.end();
+  const output = captureWriter();
+  const result = await runCli(["acp", "--workspace", WORKSPACE], {
+    env: ENV,
+    cwd: WORKSPACE,
+    daemonEntry: DAEMON_ENTRY,
+    spawn: () => ({ unref: () => undefined }),
+    connect,
+    acpInput: input,
+    acpOutput: output.stream,
+    diagnostics: captureWriter().stream,
+  });
+  assert.equal(result.exitCode, 1);
+  assert.equal(result.stdout, "");
+  assert.ok(result.stderr.startsWith("SCHEMA_INVALID: "), result.stderr);
+  assert.equal(output.text(), "", "no frames are written");
 });

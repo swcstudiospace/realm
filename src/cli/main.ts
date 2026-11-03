@@ -49,7 +49,7 @@ export const CLI_COMMANDS = ["init", "up", "down", "status", "doctor", "mcp", "a
 export type CliCommand = (typeof CLI_COMMANDS)[number];
 
 const USAGE =
-  "Usage: realm <init|up|down|status|doctor|mcp|acp|anchor|audit|metrics> (realm init --image <name@sha256:digest> [--workspace <absolute path>] [--state-dir <absolute path>]; realm up|mcp|acp [--workspace <absolute path>]; realm doctor [--fix [--dry-run]]; realm anchor --session <id> [--publish] [--rpc <url>]; realm audit verify [--file <path> | --session <id>] [--head <seq>:<sha256>] [--anchor <record.json>])";
+  "Usage: realm <init|up|down|status|doctor|mcp|acp|anchor|audit|metrics> (realm init --image <name@sha256:digest> [--workspace <absolute path>] [--state-dir <absolute path>]; realm up|mcp|acp|status|down|metrics [--workspace <absolute path>]; realm doctor [--workspace <absolute path> | --fix [--dry-run]]; realm anchor --session <id> [--publish] [--rpc <url>]; realm audit verify [--file <path> | --session <id>] [--head <seq>:<sha256>] [--anchor <record.json>])";
 const RETRY_INTERVAL_MS = 25;
 const MCP_POLL_INTERVAL_MS = 100;
 
@@ -64,8 +64,8 @@ interface ParsedArgv {
   readonly words: readonly string[];
 }
 
-// `up`, `mcp`, and `acp` take no arguments or `--workspace <path>`. `init`, `anchor` and `audit` take their own words.
-// `doctor` takes exactly --fix [--dry-run], or no flags. Every other command takes no arguments.
+// `up`, `mcp`, `acp`, `status`, `down` and `metrics` take no arguments or `--workspace <path>`. `init`, `anchor` and `audit`
+// take their own words. `doctor` takes --workspace <path>, --fix [--dry-run], or no flags.
 function parseArgv(argv: readonly string[]): ParsedArgv | undefined {
   const [command, ...rest] = argv;
   if (command === undefined || !isCliCommand(command)) {
@@ -78,13 +78,22 @@ function parseArgv(argv: readonly string[]): ParsedArgv | undefined {
     if (rest.length === 0 || (rest[0] === "--fix" && (rest.length === 1 || (rest.length === 2 && rest[1] === "--dry-run")))) {
       return { command, workspace: undefined, words: rest };
     }
+    if (rest.length === 2 && rest[0] === "--workspace" && rest[1] !== undefined) {
+      return { command, workspace: rest[1], words: [] };
+    }
     return undefined;
   }
   if (rest.length === 0) {
     return { command, workspace: undefined, words: [] };
   }
   const [flag, value] = rest;
-  const takesWorkspace = command === "up" || command === "mcp" || command === "acp";
+  const takesWorkspace =
+    command === "up" ||
+    command === "mcp" ||
+    command === "acp" ||
+    command === "status" ||
+    command === "down" ||
+    command === "metrics";
   if (takesWorkspace && rest.length === 2 && flag === "--workspace" && value !== undefined) {
     return { command, workspace: value, words: [] };
   }
@@ -479,11 +488,15 @@ async function runDoctor(
   deps: ResolvedDeps,
   runtimeConfig: RuntimeConfig,
   socketPath: string,
+  workspace: string | undefined,
 ): Promise<CliResult> {
   try {
-    return replyToResult(
-      await deps.send(socketPath, { id: 1, method: "doctor" }, controlTimeoutOf(deps, "doctor")),
-    );
+    // Without --workspace doctor names no session, so the daemon reports its agent-OS reading as unbound (C4).
+    const request =
+      workspace === undefined
+        ? { id: 1, method: "doctor" }
+        : { id: 1, method: "doctor", params: { selection: selectionOf(workspace) } };
+    return replyToResult(await deps.send(socketPath, request, controlTimeoutOf(deps, "doctor")));
   } catch (error) {
     if (!isAbsentDaemon(error)) {
       return failureFor(error);
@@ -761,14 +774,14 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
       return runAcp(resolved, socketPath, workspaceRoot);
     }
     case "down":
-      return runDown(resolved, socketPath, deps.cwd ?? process.cwd());
+      return runDown(resolved, socketPath, parsed.workspace ?? deps.cwd ?? process.cwd());
     case "status":
-      return runStatus(resolved, socketPath, deps.cwd ?? process.cwd());
+      return runStatus(resolved, socketPath, parsed.workspace ?? deps.cwd ?? process.cwd());
     case "metrics":
-      return runMetrics(resolved, socketPath, deps.cwd ?? process.cwd());
+      return runMetrics(resolved, socketPath, parsed.workspace ?? deps.cwd ?? process.cwd());
     case "doctor":
       return parsed.words.length === 0
-        ? runDoctor(resolved, runtimeConfig, socketPath)
+        ? runDoctor(resolved, runtimeConfig, socketPath, parsed.workspace)
         : runDoctorFix(resolved, runtimeConfig, parsed.words[1] === "--dry-run");
     case "anchor":
       return runAnchorCommand(parsed.words, deps, stateDir);

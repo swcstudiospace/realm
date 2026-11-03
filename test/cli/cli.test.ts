@@ -25,6 +25,7 @@ import {
 import { CONTROL_TIMEOUT_MS, type ControlReply, type ControlRequest } from "../../src/daemon/channel.js";
 import type { EnvironmentLike } from "../../src/session/paths.js";
 import { selectionOf, type DaemonStatus } from "../../src/daemon/client.js";
+import { sessionIdOfWorkspace } from "../../src/session/paths.js";
 import type { ToolOutcome } from "../../src/tools/dispatch.js";
 import { boundedWait, pollUntil, scaledMs, testTimeout } from "../support/timing.js";
 
@@ -1020,6 +1021,104 @@ void test("MULTI-03: realm down, status and metrics each send the selection of t
   ]);
 });
 
+void test("MULTI-03: realm status, down, metrics and up act on --workspace, not the current directory (CLI-01)", async () => {
+  for (const [argv, method] of [
+    [["status"], "status"],
+    [["down"], "down"],
+    [["metrics"], "metrics"],
+  ] as const) {
+    const sent: ControlRequest[] = [];
+    await runCli([...argv, "--workspace", WORKSPACE], {
+      env: ENV,
+      cwd: OTHER_WORKSPACE,
+      send: (_socketPath, request) => {
+        sent.push(request);
+        return Promise.resolve({ id: request.id, result: "ok" });
+      },
+      connect: fakeDaemon({ probes: [true] }).connect,
+      runCommand: okVersion,
+      connectSocket: acceptConnect,
+    });
+    // One request, of this method, carrying the selection of --workspace: its sessionId is the id of its realpath.
+    assert.deepEqual(sent, [{ id: 1, method, params: { selection: selectionOf(WORKSPACE) } }], method);
+    assert.equal(selectionOf(WORKSPACE).sessionId, sessionIdOfWorkspace(WORKSPACE));
+  }
+
+  const upSent: ControlRequest[] = [];
+  await runCli(["up", "--workspace", WORKSPACE], {
+    env: ENV,
+    cwd: OTHER_WORKSPACE,
+    timeoutMs: 500,
+    send: (_socketPath, request) => {
+      upSent.push(request);
+      return Promise.resolve({ id: request.id, result: ACTIVE_RESULT });
+    },
+    connect: fakeDaemon({ probes: [true] }).connect,
+    runCommand: okVersion,
+    connectSocket: acceptConnect,
+  });
+  assert.deepEqual(upSent, [{ id: 1, method: "up", params: { workspaceRoot: WORKSPACE } }], "up carries no selection");
+});
+
+void test("MULTI-03: realm doctor sends no params without --workspace, and the selection with it (CLI-01)", async () => {
+  const sent: ControlRequest[] = [];
+  const deps: CliDeps = {
+    env: ENV,
+    cwd: WORKSPACE,
+    send: (_socketPath, request) => {
+      sent.push(request);
+      return Promise.resolve({ id: request.id, result: [] });
+    },
+    connect: fakeDaemon({ probes: [true] }).connect,
+    runCommand: okVersion,
+    connectSocket: acceptConnect,
+  };
+  assert.equal((await runCli(["doctor"], deps)).exitCode, 0);
+  assert.equal((await runCli(["doctor", "--workspace", WORKSPACE], deps)).exitCode, 0);
+  assert.deepEqual(sent, [
+    { id: 1, method: "doctor" },
+    { id: 1, method: "doctor", params: { selection: selectionOf(WORKSPACE) } },
+  ]);
+});
+
+void test("MULTI-03: realm status --workspace of a missing directory exits 1 with POLICY_DENIED before any send (CLI-01)", async () => {
+  let sends = 0;
+  const result = await runCli(["status", "--workspace", join(WORKSPACE, "does-not-exist")], {
+    env: ENV,
+    cwd: WORKSPACE,
+    send: (_socketPath, request) => {
+      sends += 1;
+      return Promise.resolve({ id: request.id, result: "ok" });
+    },
+    connect: fakeDaemon({ probes: [true] }).connect,
+    runCommand: okVersion,
+    connectSocket: acceptConnect,
+  });
+  assert.equal(result.exitCode, 1);
+  assert.equal(result.stdout, "POLICY_DENIED\n");
+  assert.equal(sends, 0, "no request reaches the socket");
+});
+
+void test("MULTI-03: a POLICY_DENIED reply to status, metrics or down prints the code with exit 1 and sends no further request (CLI-01)", async () => {
+  for (const argv of [["status"], ["metrics"], ["down"]]) {
+    const sent: ControlRequest[] = [];
+    const result = await runCli([...argv, "--workspace", OTHER_WORKSPACE], {
+      env: ENV,
+      cwd: WORKSPACE,
+      send: (_socketPath, request) => {
+        sent.push(request);
+        return Promise.resolve({ id: request.id, error: { code: "POLICY_DENIED" } });
+      },
+      connect: fakeDaemon({ probes: [true] }).connect,
+      runCommand: okVersion,
+      connectSocket: acceptConnect,
+    });
+    assert.equal(result.exitCode, 1, argv[0]);
+    assert.equal(result.stdout, "POLICY_DENIED\n", argv[0]);
+    assert.equal(sent.length, 1, `${String(argv[0])} sends one request`);
+  }
+});
+
 const STARTUP_NOTICE =
   "A previous daemon's sandbox was destroyed at startup: 1 container(s), 0 session record(s). Files in the workspace were kept; state outside it was lost.";
 
@@ -1206,7 +1305,7 @@ void test("ONB-02: doctor --fix --dry-run reports proposed actions without creat
 void test("ONB-02: invalid doctor flags are usage errors before reading config or contacting the daemon", async () => {
   for (const words of [
     ["--dry-run"], ["--fix", "--fix"], ["--fix", "--dry-run", "--dry-run"],
-    ["--dry-run", "--fix"], ["--fix", "extra"], ["--fix=true"], ["--force"], ["--workspace", "/tmp"],
+    ["--dry-run", "--fix"], ["--fix", "extra"], ["--fix=true"], ["--force"], ["--workspace"], ["--workspace", "/tmp", "extra"],
   ]) {
     const result = await runCli(["doctor", ...words], {
       env: {},
