@@ -43,13 +43,14 @@ import {
 import { controlSocketPath, type EnvironmentLike } from "../session/paths.js";
 import { parseAnchorArgs, runAnchor } from "./anchor.js";
 import { runAuditCommand } from "./audit.js";
+import { runCheckpointCommand } from "./checkpoint.js";
 import { INIT_USAGE, InitRefusal, parseInitArgs, runInit } from "./init.js";
 
-export const CLI_COMMANDS = ["init", "up", "down", "status", "doctor", "mcp", "acp", "anchor", "audit", "metrics"] as const;
+export const CLI_COMMANDS = ["init", "up", "down", "status", "doctor", "mcp", "acp", "anchor", "audit", "metrics", "checkpoint"] as const;
 export type CliCommand = (typeof CLI_COMMANDS)[number];
 
 const USAGE =
-  "Usage: realm <init|up|down|status|doctor|mcp|acp|anchor|audit|metrics> (realm init --image <name@sha256:digest> [--workspace <absolute path>] [--state-dir <absolute path>]; realm up|mcp|acp|status|down|metrics [--workspace <absolute path>]; realm doctor [--workspace <absolute path> | --fix [--dry-run]]; realm anchor --session <id> [--publish] [--rpc <url>]; realm audit verify [--file <path> | --session <id>] [--head <seq>:<sha256>] [--anchor <record.json>])";
+  "Usage: realm <init|up|down|status|doctor|mcp|acp|anchor|audit|metrics|checkpoint> (realm init --image <name@sha256:digest> [--workspace <absolute path>] [--state-dir <absolute path>]; realm up|mcp|acp|status|down|metrics [--workspace <absolute path>]; realm doctor [--workspace <absolute path> | --fix [--dry-run]]; realm anchor --session <id> [--publish] [--rpc <url>]; realm audit verify [--file <path> | --session <id>] [--head <seq>:<sha256>] [--anchor <record.json>]; realm checkpoint create|restore --workspace <absolute path> --id <checkpointId>)";
 const RETRY_INTERVAL_MS = 25;
 const MCP_POLL_INTERVAL_MS = 100;
 
@@ -60,18 +61,18 @@ function isCliCommand(value: string): value is CliCommand {
 interface ParsedArgv {
   readonly command: CliCommand;
   readonly workspace: string | undefined;
-  // The words after `init`, `doctor`, `anchor` or `audit`; empty for every other command.
+  // The words after `init`, `doctor`, `anchor`, `audit` or `checkpoint`; empty for every other command.
   readonly words: readonly string[];
 }
 
-// `up`, `mcp`, `acp`, `status`, `down` and `metrics` take no arguments or `--workspace <path>`. `init`, `anchor` and `audit`
+// `up`, `mcp`, `acp`, `status`, `down` and `metrics` take no arguments or `--workspace <path>`. `init`, `anchor`, `audit` and `checkpoint`
 // take their own words. `doctor` takes --workspace <path>, --fix [--dry-run], or no flags.
 function parseArgv(argv: readonly string[]): ParsedArgv | undefined {
   const [command, ...rest] = argv;
   if (command === undefined || !isCliCommand(command)) {
     return undefined;
   }
-  if (command === "init" || command === "anchor" || command === "audit") {
+  if (command === "init" || command === "anchor" || command === "audit" || command === "checkpoint") {
     return { command, workspace: undefined, words: rest };
   }
   if (command === "doctor") {
@@ -702,6 +703,9 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
   }
   if (parsed.command === "init") {
     return runInitCommand(parsed.words, deps);
+  }
+  if (parsed.command === "checkpoint") {
+    return runCheckpointCommand(parsed.words, deps);
   }
   const { command } = parsed;
   let stateDir: string;

@@ -7,7 +7,7 @@
 import { after, test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { PassThrough, Writable } from "node:stream";
@@ -26,6 +26,8 @@ import { CONTROL_TIMEOUT_MS, type ControlReply, type ControlRequest } from "../.
 import type { EnvironmentLike } from "../../src/session/paths.js";
 import { selectionOf, type DaemonStatus } from "../../src/daemon/client.js";
 import { sessionIdOfWorkspace } from "../../src/session/paths.js";
+import { bindRoot } from "../../src/fs/root.js";
+import { writeWorkspaceEntry } from "../../src/session/workspace-registry.js";
 import type { ToolOutcome } from "../../src/tools/dispatch.js";
 import { boundedWait, pollUntil, scaledMs, testTimeout } from "../support/timing.js";
 
@@ -1444,4 +1446,207 @@ void test("ONB-02: doctor --fix refuses foreign ownership with a catalogue code 
     assert.equal(existsSync(join(stateDir, "run")), false);
   }
   assert.deepEqual(effects, []);
+});
+
+// realm checkpoint (RES-04): the CLI over the checkpoint library, on real directories. The registry, the pinned roots and
+// the library are the real ones; the daemon's status answer is the only fake.
+type CheckpointDaemonAnswer = "unbound" | "active" | "unreachable";
+
+interface CheckpointFixture {
+  readonly workspace: string;
+  readonly stateDir: string;
+  readonly sessionId: string;
+  readonly daemon: { answer: CheckpointDaemonAnswer; connects: number };
+  readonly deps: CliDeps;
+}
+
+function checkpointStatus(answer: CheckpointDaemonAnswer): Promise<DaemonStatus> {
+  if (answer === "unreachable") {
+    return Promise.reject(new RealmError("REALM_NOT_ACTIVE"));
+  }
+  const state: "active" | "unbound" = answer === "active" ? "active" : "unbound";
+  return Promise.resolve<DaemonStatus>({
+    ...ACTIVE_DAEMON_STATUS,
+    snapshot: { state, reason: "realm checkpoint test", lastTransitionAt: ACTIVE_DAEMON_STATUS.snapshot.lastTransitionAt },
+  });
+}
+
+function checkpointFixture(t: TestContext): CheckpointFixture {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "realm-cli-ckpt-")));
+  t.after(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+  const workspace = join(root, "workspace");
+  const stateDir = join(root, "state");
+  mkdirSync(workspace);
+  mkdirSync(join(workspace, "nested"));
+  writeFileSync(join(workspace, "a.txt"), "alpha\n");
+  writeFileSync(join(workspace, "nested", "b.txt"), "beta\n");
+  const daemon: { answer: CheckpointDaemonAnswer; connects: number } = { answer: "unbound", connects: 0 };
+  const deps: CliDeps = {
+    env: { HOME: join(root, "home"), XDG_CONFIG_HOME: join(root, "config") },
+    readConfig: () => ({
+      image: `registry.example.com/realm/workload@sha256:${"0".repeat(64)}`,
+      stateDir,
+      workspaceRoot: workspace,
+    }),
+    connect: () => {
+      daemon.connects += 1;
+      return {
+        status: () => checkpointStatus(daemon.answer),
+        up: () => Promise.reject(new RealmError("REALM_NOT_ACTIVE")),
+        call: () => Promise.reject(new RealmError("REALM_NOT_ACTIVE")),
+        metrics: () => Promise.reject(new RealmError("REALM_NOT_ACTIVE")),
+        close: () => undefined,
+      };
+    },
+  };
+  return { workspace, stateDir, sessionId: selectionOf(workspace).sessionId, daemon, deps };
+}
+
+// The workspace's registry entry, written as the daemon writes it when a session starts.
+function registerWorkspace(fx: CheckpointFixture): void {
+  writeWorkspaceEntry(fx.stateDir, bindRoot(fx.workspace), fx.sessionId);
+}
+
+function checkpointArgv(command: "create" | "restore", fx: CheckpointFixture, id: string): string[] {
+  return ["checkpoint", command, "--workspace", fx.workspace, "--id", id];
+}
+
+// Every path under a directory: a directory maps to "" under a trailing slash, a file to its bytes.
+function treeBytes(dir: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  const walk = (current: string, prefix: string): void => {
+    for (const item of readdirSync(current, { withFileTypes: true })) {
+      const rel = prefix === "" ? item.name : `${prefix}/${item.name}`;
+      const abs = join(current, item.name);
+      if (item.isDirectory()) {
+        out[`${rel}/`] = "";
+        walk(abs, rel);
+      } else {
+        out[rel] = readFileSync(abs, "utf8");
+      }
+    }
+  };
+  walk(dir, "");
+  return out;
+}
+
+// The success line: one JSON object on stdout.
+function jsonLine(text: string): Record<string, unknown> {
+  const value: unknown = JSON.parse(text);
+  assert.ok(typeof value === "object" && value !== null && !Array.isArray(value));
+  return value as Record<string, unknown>;
+}
+
+void test("RES-04 CLI: restore puts back the exact bytes the snapshot recorded after the workspace changes", async (t) => {
+  const fx = checkpointFixture(t);
+  registerWorkspace(fx);
+  const original = treeBytes(fx.workspace);
+  const created = await runCli(checkpointArgv("create", fx, "before-edit"), fx.deps);
+  assert.equal(created.exitCode, 0, created.stderr);
+  writeFileSync(join(fx.workspace, "a.txt"), "edited\n");
+  rmSync(join(fx.workspace, "nested"), { recursive: true });
+  writeFileSync(join(fx.workspace, "added.txt"), "new\n");
+  assert.notDeepEqual(treeBytes(fx.workspace), original);
+  const restored = await runCli(checkpointArgv("restore", fx, "before-edit"), fx.deps);
+  assert.equal(restored.exitCode, 0, restored.stderr);
+  assert.deepEqual(treeBytes(fx.workspace), original);
+  assert.equal(readFileSync(join(fx.workspace, "nested", "b.txt"), "utf8"), "beta\n");
+});
+
+void test("RES-04 CLI: a malformed id, a relative workspace, a missing flag and an unknown flag exit 2 and change nothing", async (t) => {
+  const fx = checkpointFixture(t);
+  registerWorkspace(fx);
+  const before = treeBytes(fx.workspace);
+  const cases: readonly (readonly string[])[] = [
+    ["create", "--workspace", fx.workspace, "--id", "bad id!"],
+    ["create", "--workspace", fx.workspace, "--id", "../escape"],
+    ["restore", "--workspace", "relative/workspace", "--id", "before-edit"],
+    ["create", "--workspace", fx.workspace],
+    ["restore", "--id", "before-edit"],
+    ["create", "--workspace", fx.workspace, "--id", "before-edit", "--force"],
+    ["create", "--workspace", fx.workspace, "--id", "first", "--id", "second"],
+  ];
+  for (const words of cases) {
+    const result = await runCli(["checkpoint", ...words], fx.deps);
+    assert.equal(result.exitCode, 2, words.join(" "));
+    assert.equal(result.stdout, "");
+    assert.match(result.stderr, /^realm checkpoint: usage:/);
+  }
+  assert.deepEqual(treeBytes(fx.workspace), before);
+  assert.equal(existsSync(join(fx.stateDir, "checkpoints")), false);
+  assert.equal(fx.daemon.connects, 0);
+});
+
+void test("RES-04 CLI: a workspace with no session is refused with REALM_UNBOUND and nothing is written", async (t) => {
+  const fx = checkpointFixture(t);
+  const before = treeBytes(fx.workspace);
+  for (const command of ["create", "restore"] as const) {
+    const result = await runCli(checkpointArgv(command, fx, "before-edit"), fx.deps);
+    assert.equal(result.exitCode, 1, command);
+    assert.equal(result.stdout, "REALM_UNBOUND\n");
+    assert.ok(result.stderr.includes(ERROR_CATALOGUE.REALM_UNBOUND.reason));
+  }
+  assert.deepEqual(treeBytes(fx.workspace), before);
+  assert.equal(existsSync(join(fx.stateDir, "checkpoints")), false);
+  assert.equal(fx.daemon.connects, 0);
+});
+
+void test("RES-04 CLI: a daemon that cannot answer refuses create and restore with REALM_NOT_ACTIVE and writes nothing", async (t) => {
+  const fx = checkpointFixture(t);
+  registerWorkspace(fx);
+  const made = await runCli(checkpointArgv("create", fx, "before-edit"), fx.deps);
+  assert.equal(made.exitCode, 0, made.stderr);
+  writeFileSync(join(fx.workspace, "a.txt"), "edited\n");
+  const edited = treeBytes(fx.workspace);
+  const checkpoints = treeBytes(join(fx.stateDir, "checkpoints"));
+  fx.daemon.answer = "unreachable";
+  const created = await runCli(checkpointArgv("create", fx, "after-silence"), fx.deps);
+  assert.equal(created.exitCode, 1);
+  assert.equal(created.stdout, "REALM_NOT_ACTIVE\n");
+  assert.ok(created.stderr.includes(ERROR_CATALOGUE.REALM_NOT_ACTIVE.reason));
+  const restored = await runCli(checkpointArgv("restore", fx, "before-edit"), fx.deps);
+  assert.equal(restored.exitCode, 1);
+  assert.equal(restored.stdout, "REALM_NOT_ACTIVE\n");
+  assert.ok(restored.stderr.includes(ERROR_CATALOGUE.REALM_NOT_ACTIVE.reason));
+  assert.deepEqual(treeBytes(fx.workspace), edited);
+  assert.deepEqual(treeBytes(join(fx.stateDir, "checkpoints")), checkpoints);
+});
+
+void test("RES-04 CLI: a running sandbox refuses create and restore with LOCK_CONFLICT and the workspace unchanged", async (t) => {
+  const fx = checkpointFixture(t);
+  registerWorkspace(fx);
+  const made = await runCli(checkpointArgv("create", fx, "before-edit"), fx.deps);
+  assert.equal(made.exitCode, 0, made.stderr);
+  writeFileSync(join(fx.workspace, "a.txt"), "edited\n");
+  const edited = treeBytes(fx.workspace);
+  fx.daemon.answer = "active";
+  const restored = await runCli(checkpointArgv("restore", fx, "before-edit"), fx.deps);
+  assert.equal(restored.exitCode, 1);
+  assert.equal(restored.stdout, "LOCK_CONFLICT\n");
+  assert.ok(restored.stderr.includes(ERROR_CATALOGUE.LOCK_CONFLICT.reason));
+  assert.deepEqual(treeBytes(fx.workspace), edited);
+  const during = await runCli(checkpointArgv("create", fx, "while-running"), fx.deps);
+  assert.equal(during.exitCode, 1);
+  assert.equal(during.stdout, "LOCK_CONFLICT\n");
+  assert.equal(existsSync(join(fx.stateDir, "checkpoints", fx.sessionId, "while-running")), false);
+  assert.deepEqual(treeBytes(fx.workspace), edited);
+});
+
+void test("RES-04 CLI: create and restore print one JSON line whose entries count matches the stored manifest", async (t) => {
+  const fx = checkpointFixture(t);
+  registerWorkspace(fx);
+  const created = await runCli(checkpointArgv("create", fx, "before-edit"), fx.deps);
+  assert.equal(created.exitCode, 0, created.stderr);
+  assert.equal(created.stderr, "");
+  const stored = JSON.parse(
+    readFileSync(join(fx.stateDir, "checkpoints", fx.sessionId, "before-edit", "manifest.json"), "utf8"),
+  ) as { readonly entries: readonly unknown[] };
+  assert.deepEqual(Object.keys(jsonLine(created.stdout)).sort(), ["checkpointId", "command", "entries"]);
+  assert.deepEqual(jsonLine(created.stdout), { command: "create", checkpointId: "before-edit", entries: stored.entries.length });
+  const restored = await runCli(checkpointArgv("restore", fx, "before-edit"), fx.deps);
+  assert.equal(restored.exitCode, 0, restored.stderr);
+  assert.equal(restored.stderr, "");
+  assert.deepEqual(jsonLine(restored.stdout), { command: "restore", checkpointId: "before-edit", entries: stored.entries.length });
 });
