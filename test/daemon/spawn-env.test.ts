@@ -7,6 +7,14 @@ import { launchFilteredDaemon, startDetachedDaemon } from "../../src/cli/main.js
 
 const SENTINEL = "REALM_SENTINEL_MUST_NOT_LEAK";
 
+// What a child wrote about its environment. A value is null when the variable was absent.
+type ChildEnv = {
+  readonly sentinel: string | null;
+  readonly socket: string | null;
+  readonly gateway: string | null;
+  readonly level: string | null;
+};
+
 // The child writes the file through a temporary name and renames it into place, so the path only ever
 // holds a complete object. The test reads that path and nothing else.
 function script(outPath: string): string {
@@ -35,12 +43,14 @@ function braceScript(outPath: string): string {
   ].join("\n");
 }
 
-// The child is a real detached process. The renamed file is the signal; the sleep only polls for that file.
-async function waitFor(path: string): Promise<string> {
+// The child is a real detached process. The renamed file is the signal: waitFor reads that one path, only once it
+// exists, and parses it, so it never sees a partly written object. The sleep only polls for the file.
+async function waitFor(path: string): Promise<unknown> {
   const started = Date.now();
   while (Date.now() - started < 5_000) {
     if (existsSync(path)) {
-      return readFileSync(path, "utf8");
+      const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
+      return parsed;
     }
     await new Promise((resolve) => {
       setTimeout(resolve, 20);
@@ -79,8 +89,8 @@ void test("a sentinel variable does not reach the daemon on the CLI spawn or sta
   process.env.REALM_LOG_LEVEL = "error";
   try {
     startDetachedDaemon(ompEntry, stateDir);
-    const cli = JSON.parse(await waitFor(cliOut)) as { sentinel: string | null; socket: string | null; gateway: string | null; level: string | null };
-    const omp = JSON.parse(await waitFor(ompOut)) as { sentinel: string | null; socket: string | null; gateway: string | null; level: string | null };
+    const cli = (await waitFor(cliOut)) as ChildEnv;
+    const omp = (await waitFor(ompOut)) as ChildEnv;
     assert.equal(cli.sentinel, null);
     assert.equal(cli.socket, "/run/realm/driver.sock");
     assert.equal(cli.gateway, "https://127.0.0.1:17671");
@@ -118,6 +128,6 @@ void test("a closing brace inside a string value round-trips through waitFor (Q0
   writeFileSync(entry, braceScript(out));
   const socket = "/run/realm/}.sock";
   launchFilteredDaemon(entry, join(dir, "state"), { PATH: "/usr/bin", REALM_DRIVER_SOCKET: socket });
-  const seen = JSON.parse(await waitFor(out)) as { socket: string | null };
+  const seen = (await waitFor(out)) as Pick<ChildEnv, "socket">;
   assert.equal(seen.socket, socket);
 });

@@ -177,35 +177,91 @@ void test("the sweep does not enter a symlinked directory (CRASH-01)", (t) => {
   assert.deepEqual(audit, []);
 });
 
-// A skip on a CI runner would pass without the cross-device sweep ever running (Q0-015), so there the test fails with
-// the reason. Locally it still skips, and the skip names the reason.
-function unavailable(t: TestContext, reason: string): void {
-  const ci = process.env.CI;
+// The Q0-015 policy. On a CI runner (CI set to anything but an empty, "0" or "false" value) a skip would pass without
+// the cross-device sweep ever running, so the case fails with the reason. Elsewhere it skips and names the reason.
+type UnavailableDecision =
+  | { readonly outcome: "fail"; readonly message: string }
+  | { readonly outcome: "skip"; readonly reason: string };
+
+function unavailableDecision(reason: string, ci: string | undefined): UnavailableDecision {
   if (ci !== undefined && ci !== "" && ci !== "0" && ci !== "false") {
-    assert.fail(`CI cannot exercise the cross-device sweep: ${reason}. Give the runner a second device at /dev/shm.`);
+    return {
+      outcome: "fail",
+      message: `CI cannot exercise the cross-device sweep: ${reason}. Give the runner a second device at /dev/shm.`,
+    };
   }
-  t.skip(reason);
+  return { outcome: "skip", reason };
 }
+
+function applyUnavailable(t: TestContext, reason: string): void {
+  const decision = unavailableDecision(reason, process.env.CI);
+  if (decision.outcome === "fail") {
+    assert.fail(decision.message);
+  } else {
+    t.skip(decision.reason);
+  }
+}
+
+// Whether a second device exists, from the device numbers of /dev/shm and /dev. A number that cannot be read means
+// the path is absent, so there is no second device.
+type SecondDevice = { readonly usable: true } | { readonly usable: false; readonly reason: string };
+
+function secondDevice(shmDev: number | undefined, devDev: number | undefined): SecondDevice {
+  if (shmDev === undefined || devDev === undefined || shmDev === devDev) {
+    return {
+      usable: false,
+      reason: "/dev/shm is absent or shares /dev's device, so no second device is available without a mount",
+    };
+  }
+  return { usable: true };
+}
+
+// The device number of path, or undefined when the path cannot be statted.
+function deviceOf(path: string): number | undefined {
+  try {
+    return statSync(path).dev;
+  } catch {
+    return undefined;
+  }
+}
+
+void test("Q0-015: on CI a missing second device fails the cross-device case with the reason", () => {
+  for (const ci of ["true", "1"]) {
+    assert.deepEqual(unavailableDecision("/dev/shm is not writable by this user", ci), {
+      outcome: "fail",
+      message:
+        "CI cannot exercise the cross-device sweep: /dev/shm is not writable by this user. Give the runner a second device at /dev/shm.",
+    });
+  }
+});
+
+void test("Q0-015: off CI a missing second device skips the cross-device case and names the reason", () => {
+  for (const ci of [undefined, "", "0", "false"]) {
+    assert.deepEqual(unavailableDecision("R", ci), { outcome: "skip", reason: "R" }, `CI=${String(ci)}`);
+  }
+});
+
+void test("Q0-015: the cross-device case runs only when /dev/shm is a second device", () => {
+  assert.deepEqual(secondDevice(2, 1), { usable: true });
+  assert.equal(secondDevice(1, 1).usable, false);
+  assert.equal(secondDevice(undefined, 1).usable, false);
+  assert.equal(secondDevice(2, undefined).usable, false);
+});
 
 void test("the sweep does not enter a directory on another device (CRASH-01)", (t) => {
   // /dev is a devtmpfs and /dev/shm a separate tmpfs on a Linux host, so /dev/shm is a directory
   // below the root /dev that lies on another device. Without that layout the case is skipped.
   const shm = "/dev/shm";
-  let usable: boolean;
-  try {
-    usable = statSync(shm).dev !== statSync("/dev").dev;
-  } catch {
-    usable = false;
-  }
-  if (!usable) {
-    unavailable(t, "/dev/shm is absent or shares /dev's device, so no second device is available without a mount");
+  const verdict = secondDevice(deviceOf(shm), deviceOf("/dev"));
+  if (!verdict.usable) {
+    applyUnavailable(t, verdict.reason);
     return;
   }
   const orphan = join(shm, `.realm-sweep-probe.realm-tmp-${HEX}`);
   try {
     plant(orphan, OLD_MS);
   } catch {
-    unavailable(t, "/dev/shm is not writable by this user");
+    applyUnavailable(t, "/dev/shm is not writable by this user");
     return;
   }
   t.after(() => {
