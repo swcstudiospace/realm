@@ -1,7 +1,7 @@
 // Lifecycle controller for one session (D-38, D-28, D-43, RT-07, CORE-06). The controller
 // composes the state machine, the session record, the advisory lock table, and the
 // execution port. Every ExecutionService call is raced against a budget (D-28). Startup
-// calls (create, start, and probe) share policy.startupBudgetMs and map expiry to
+// calls (create, start, probe, and hydrate) share policy.startupBudgetMs and map expiry to
 // STARTUP_BUDGET_EXCEEDED. Teardown calls (stop and destroy) use the single
 // TEARDOWN_TIMEOUT_MS bound. Expiry and any other port failure map to REALM_STOPPING. A call
 // that times out is never awaited again, so no operation hangs.
@@ -381,6 +381,80 @@ export class LifecycleController {
     return this.machine.snapshot();
   }
 
+  // Brings an adopted survivor back to active. The startup reaper verifies the survivor and keeps
+  // its record, so the record must name exactly that containerId: any other value is refused with
+  // SCHEMA_INVALID before any port call. Hydration never creates or recreates a container. It runs
+  // the successful tail of create: the port start of the survivor, the bridge connect and
+  // subscription, and the transition to active, which it persists with the containerId kept. The
+  // whole hydration is bounded by policy.startupBudgetMs, and expiry is STARTUP_BUDGET_EXCEEDED.
+  // A stop, destroy, or newer create that begins during hydration owns the session, so the result
+  // is stale and changes nothing. A failed start or bridge step moves the session to error with the
+  // port's code and removes the survivor through the teardown path (see failHydrate).
+  async hydrate(containerId: string): Promise<StateSnapshot> {
+    const { state } = this.machine.snapshot();
+    if (state === "stopping") {
+      throw makeRealmError("REALM_STOPPING");
+    }
+    // A startup mismatch is not retryable (D-64), as create refuses it.
+    if (state === "error" && this.machine.snapshot().reason === "ANDA_VERSION_MISMATCH") {
+      throw makeRealmError("ANDA_VERSION_MISMATCH");
+    }
+    const record = this.deps.store.load(this.deps.sessionId);
+    if (record === null || record.containerId !== containerId) {
+      throw makeRealmError("SCHEMA_INVALID");
+    }
+    if (isLiveState(state)) {
+      return this.machine.snapshot();
+    }
+
+    const deadline = performance.now() + this.deps.policy.startupBudgetMs;
+    this.lifeEpoch += 1;
+    const epoch = this.lifeEpoch;
+    this.machine.transition("connecting", "hydrating container");
+    const issued: { start: PendingStart | null } = { start: null };
+    try {
+      if (this.deps.bridge !== null) {
+        this.subscribeBridge(this.deps.bridge);
+      }
+      // A recovery destroy from an earlier create removes a container by this session's sandbox name,
+      // so the survivor starts only after that destroy has finished (see awaitRecoveryDestroy).
+      if (this.recoveryDestroy !== null) {
+        await this.awaitRecoveryDestroy(deadline);
+        if (!this.ownsStartup(epoch)) {
+          return this.machine.snapshot();
+        }
+      }
+      this.checkDeadline(deadline);
+      const start = this.issueStart(containerId);
+      issued.start = start;
+      await withTimeout(
+        start.started,
+        Math.max(0, deadline - performance.now()),
+        "STARTUP_BUDGET_EXCEEDED",
+      );
+      if (!this.ownsStartup(epoch)) {
+        return this.machine.snapshot();
+      }
+      if (this.deps.bridge !== null) {
+        const remaining = Math.max(0, deadline - performance.now());
+        await withTimeout(
+          this.connectBridge(this.deps.bridge, remaining),
+          remaining,
+          "STARTUP_BUDGET_EXCEEDED",
+        );
+      }
+    } catch (error: unknown) {
+      return this.failHydrate(error, containerId, issued.start, epoch);
+    }
+    if (!this.ownsStartup(epoch)) {
+      return this.machine.snapshot();
+    }
+
+    this.machine.transition("active", "container running");
+    this.writeState();
+    return this.machine.snapshot();
+  }
+
   // Host attachments change no state and no record. Attaching the same id twice is
   // the same as attaching it once.
   attach(hostAttachmentId: string): StateSnapshot {
@@ -556,6 +630,54 @@ export class LifecycleController {
     this.machine.transition("error", error.code);
     this.persist(realmId, root, containerId);
     return this.machine.snapshot();
+  }
+
+  // Disposes of a failed hydration, as failCreate does for a create. A stop, destroy or newer create that
+  // began during the hydration owns the session and the survivor, so this hydration records nothing more,
+  // and a REALM_STOPPING from the stop reaches the caller. Otherwise the session moves to error with the
+  // port's code and the survivor is removed (removeSurvivor). The record keeps the containerId only while
+  // that removal is unproven, so the next start retries the same container.
+  private async failHydrate(
+    error: unknown,
+    containerId: string,
+    start: PendingStart | null,
+    epoch: number,
+  ): Promise<StateSnapshot> {
+    if (!this.ownsStartup(epoch)) {
+      if (error instanceof RealmError && error.code === "REALM_STOPPING") {
+        throw error;
+      }
+      return this.machine.snapshot();
+    }
+    this.machine.transition("error", portFailureCode(error));
+    this.writeState();
+    const unproven = await this.removeSurvivor(containerId, start);
+    if (unproven === null) {
+      if (this.lifeEpoch === epoch && this.machine.snapshot().state === "error") {
+        this.forgetContainer(containerId);
+      }
+    } else {
+      this.orphanFailure = unproven;
+    }
+    if (!(error instanceof RealmError)) {
+      throw makeRealmError(PORT_FAILURE_CODE);
+    }
+    return this.machine.snapshot();
+  }
+
+  // Removes a survivor that hydration could not bring up. A start still in flight is waited for first, so
+  // the removal never races it (F1). The removal runs under the teardown bound. Returns null when the
+  // removal is proven, and the typed code of its failure when it is not. Never throws.
+  private async removeSurvivor(containerId: string, start: PendingStart | null): Promise<ErrorCode | null> {
+    try {
+      if (start !== null) {
+        await withTimeout(start.settled, this.teardownBound(), "REALM_STOPPING");
+      }
+      await this.teardownCall(this.deps.exec.destroy(containerId, this.sandboxName()));
+      return null;
+    } catch (error: unknown) {
+      return portFailureCode(error);
+    }
   }
 
   // Moves a session to error for a failed port call. A RealmError keeps its code as the
