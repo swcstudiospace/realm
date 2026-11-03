@@ -306,7 +306,7 @@ function startConfigWithGatewayId(gatewayId: string): DriverProcessConfig {
   };
 }
 
-void test("PRD-ISO-02: startup refuses an invalid gateway id with SCHEMA_INVALID before the sweep", async () => {
+void test("PRD-ISO-02: startup refuses an invalid gateway id with SCHEMA_INVALID before adoption", async () => {
   await assert.rejects(startDriver(startConfigWithGatewayId("-invalid")), refusedWithSchemaInvalid());
 });
 
@@ -524,7 +524,7 @@ void test("PRD-CTR-03: a sweep that fails closes the server, so no socket stays 
   assert.equal(await listening(config.socketPath), false);
 });
 
-void test("PRD-CTR-03: a create that arrives before the sweep has resolved is refused before it writes anything", async (t) => {
+void test("PRD-CTR-03: a create that arrives before the adoption has resolved is refused before it writes anything", async (t) => {
   const engine = await startFakeEngine(t);
   const config = driverConfig();
   const name = writeSandboxWorkspaceEntry(config, join(config.workspaceRoot, "project-a"));
@@ -553,7 +553,11 @@ void test("PRD-CTR-03: a create that arrives before the sweep has resolved is re
   assert.equal(existsSync(join(config.sandboxStateRoot, name)), false, "no state directory was made");
   assert.equal(existsSync(join(config.secretRoot, name)), false, "no launch material was written");
 
-  await lifecycle.startupSweep();
+  await lifecycle.adoptSurvivors({
+    workspaceStateDir: config.stateDir,
+    workspaceCeiling: config.workspaceRoot,
+    image: config.sandboxImage,
+  });
   assert.doesNotThrow(() => {
     lifecycle.requireSwept();
   });

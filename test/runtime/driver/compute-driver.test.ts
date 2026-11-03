@@ -337,7 +337,7 @@ void test("PRD-DRV-02: a create whose state and secret directories remain from a
   await driver.createSandbox(validSandbox({ name }));
   const [stale] = runtime.supervisors;
   assert.ok(stale !== undefined);
-  // The crash: the startup sweep removed the container; the directories and the driver's handle for it remain.
+  // The crash: a restart removed the container; the directories and the driver's handle for it remain.
   libpod.containers.delete(name);
   const stateSentinel = join(stateDir, "sentinel.txt");
   const secretSentinel = join(secretDir, "main-exit");

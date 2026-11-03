@@ -159,8 +159,8 @@ export const CHANNEL_MOUNT_OPTIONS: readonly string[] = Object.freeze(["noexec",
 export const SUPERVISOR_CA_TMPFS_OPTIONS: readonly string[] = Object.freeze(["noexec", "nosuid", "nodev", "mode=1703"]);
 
 // The scratch volume (R2). Each session has one named volume, mounted read-write at the profile's scratch destination. Its name and
-// labels are derived here from the session id, so the driver's create, delete and startup sweep and the verifier read one value.
-// The realm label marks the volume as the realm's, so the startup sweep lists only realm volumes.
+// labels are derived here from the session id, so the driver's create, delete and adoption and the verifier read one value.
+// The realm label marks the volume as the realm's, so adoption lists only realm volumes.
 export const SCRATCH_VOLUME_PREFIX = "realm-scratch-";
 // The options the scratch volume's mount carries, so the volume is not executable, suid or device-bearing, as every writable mount is (R2).
 const SCRATCH_VOLUME_REQUIRED_OPTIONS: readonly string[] = Object.freeze(["noexec", "nosuid", "nodev"]);

@@ -190,11 +190,11 @@ function startConfigFor(layout: Layout): DriverProcessConfig {
   };
 }
 
-void test("phase 9.6: startDriver writes the profile before the sweep, and binds no socket when the sweep fails", async (t) => {
+void test("phase 9.6: startDriver writes the profile before adoption, and leaves no socket behind when adoption fails", async (t) => {
   const layout = layoutFor(t);
   await assert.rejects(startDriver(startConfigFor(layout)), (error: unknown) => error instanceof RealmError && error.code === "PODMAN_MACHINE_DOWN");
-  assert.equal(readFileSync(layout.file, "utf8"), SECCOMP_PROFILE_TEXT, "the profile was in place before the sweep ran");
-  assert.equal(existsSync(layout.socketPath), false, "no socket is bound ahead of the sweep");
+  assert.equal(readFileSync(layout.file, "utf8"), SECCOMP_PROFILE_TEXT, "the profile was in place before adoption ran");
+  assert.equal(existsSync(layout.socketPath), false, "no socket is left bound after the failed adoption");
 });
 
 void test("phase 9.6: startDriver refuses a tampered profile file before it touches libpod, and leaves the file as found", async (t) => {

@@ -1354,23 +1354,16 @@ void test("PRD-CTR-03: create and delete refuse with REALM_NOT_ACTIVE until adop
   assert.equal(await h.lifecycle.create(h.spec), CREATED_ID);
 });
 
-void test("PRD-CTR-03: startupSweep removes realm-labelled orphans before it resolves and leaves foreign containers", async (t) => {
+void test("PRD-CTR-03: adoption removes realm-labelled orphans before it resolves and leaves foreign containers", async (t) => {
   const h = await harness(t, { seed: [ORPHAN, FOREIGN], sweep: false });
   assert.equal(h.fake.store.has(ORPHAN.id), true);
-  const removed = await h.lifecycle.startupSweep();
-  assert.equal(removed, 1);
+  const adoption = await h.lifecycle.adoptSurvivors(h.roots);
+  assert.deepEqual(
+    adoption.removed.map((removal) => removal.containerId),
+    [ORPHAN.id],
+  );
   assert.equal(h.fake.store.has(ORPHAN.id), false);
   assert.equal(h.fake.store.has(FOREIGN.id), true);
-});
-
-void test("PRD-CTR-03: create and delete refuse with REALM_NOT_ACTIVE until startupSweep has resolved", async (t) => {
-  const h = await harness(t, { sweep: false });
-  await assert.rejects(h.lifecycle.create(h.spec), hasCode("REALM_NOT_ACTIVE"));
-  await assert.rejects(h.lifecycle.delete(SANDBOX), hasCode("REALM_NOT_ACTIVE"));
-  assert.equal(h.fake.seen.length, 0);
-  await h.lifecycle.startupSweep();
-  mkdirSync(h.spec.channelDir, { recursive: true });
-  assert.equal(await h.lifecycle.create(h.spec), CREATED_ID);
 });
 
 void test("PRD-CTR-02 (secret): delete removes launch.json and active from the sandbox secret directory, then the empty directory", async (t) => {

@@ -30,7 +30,7 @@ import { makeRealmError, RealmError, type ErrorCode } from "../../core/errors.js
 import { CONTAINER_ID_PATTERN } from "../libpod-routes.js";
 import { isRealmSandboxName } from "../openshell.js";
 
-const LAUNCH_FILE_NAME = "launch.json";
+export const LAUNCH_FILE_NAME = "launch.json";
 export const DESCRIPTOR_FILE_NAME = "descriptor.json";
 export const AUTH_FILE_NAME = "auth.json";
 export const MAIN_EXIT_MARKER_NAME = "main-exit";
@@ -45,7 +45,7 @@ export const TLS_WORK_DIR_NAME = "tls";
 const LAUNCH_STAGING_NAME = "launch.json.tmp";
 const ACTIVE_FILE_NAME = "active";
 // The files of a sandbox's secret directory that removal deletes. The staging copy is included, so a crash mid-write
-// leaves nothing behind once the sweep or a delete runs.
+// leaves nothing behind once a delete or an adoption runs.
 const SECRET_FILE_NAMES: readonly string[] = Object.freeze([
   LAUNCH_FILE_NAME,
   LAUNCH_STAGING_NAME,
@@ -167,33 +167,6 @@ export function removeSandboxSecrets(root: string, sandboxName: string): void {
   removeSecretDirIfEmpty(dir);
 }
 
-// Removes the secret entries of every sandbox under the root, at startup. An absent root has none. A symbolic link anywhere
-// under the root is refused before anything is removed, so the sweep never follows a link.
-export function removeAllSecrets(root: string): void {
-  if (lstatOrAbsent(root, "SCHEMA_INVALID") === null) {
-    return;
-  }
-  assertDirectory(root);
-  const dirs: string[] = [];
-  for (const name of listDirectory(root)) {
-    const path = join(root, name);
-    const stat = lstatOrAbsent(path, "SCHEMA_INVALID");
-    if (stat === null) {
-      continue;
-    }
-    if (stat.isSymbolicLink()) {
-      throw makeRealmError("SCHEMA_INVALID");
-    }
-    if (stat.isDirectory()) {
-      dirs.push(path);
-    }
-  }
-  for (const dir of dirs) {
-    removeSecretEntries(presentSecretEntries(dir));
-    removeSecretDirIfEmpty(dir);
-  }
-}
-
 // A sandbox directory under the secret root, by name.
 interface SecretDir {
   readonly name: string;
@@ -267,7 +240,7 @@ function writeFileAtomically(dir: string, body: Uint8Array): void {
   }
 }
 
-// Removes what a failed write of this directory left. Best effort: a failure here leaves the directory for the sweep.
+// Removes what a failed write of this directory left. Best effort: a failure here leaves the directory for the next adoption.
 function discardWritten(dir: string): void {
   const entries = SECRET_FILE_NAMES.map((name) => join(dir, name)).concat(SECRET_DIR_NAMES.map((name) => join(dir, name)));
   for (const entry of entries) {
@@ -280,7 +253,7 @@ function discardWritten(dir: string): void {
   try {
     rmdirSync(dir);
   } catch {
-    // The directory still holds an entry the write did not make; it is left for the sweep.
+    // The directory still holds an entry the write did not make; it is left for the next adoption.
   }
 }
 
@@ -300,21 +273,6 @@ function directoryExists(dir: string): boolean {
     throw makeRealmError("SCHEMA_INVALID");
   }
   return true;
-}
-
-function assertDirectory(path: string): void {
-  const stat = lstatOrAbsent(path, "SCHEMA_INVALID");
-  if (stat === null || !stat.isDirectory()) {
-    throw makeRealmError("SCHEMA_INVALID");
-  }
-}
-
-function listDirectory(dir: string): string[] {
-  try {
-    return readdirSync(dir);
-  } catch {
-    throw makeRealmError("SCHEMA_INVALID");
-  }
 }
 
 // The realm account is the process user. A stat with no uid check is never trusted, so an unknown user refuses.

@@ -7,6 +7,7 @@ import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { makeRealmError, RealmError } from "../../core/errors.js";
+import { supervisorArguments, supervisorEnvironment } from "./runtime-channel.js";
 
 // How long a supervisor gets to exit after SIGTERM before it is killed.
 const STOP_GRACE_MS = 5000;
@@ -96,6 +97,43 @@ export function spawnSupervisor(options: SupervisorSpawn): Promise<SupervisorHan
         },
       });
     });
+  });
+}
+
+// What one sandbox's host supervisor is started for: the sandbox it serves, its files, and the gateway it dials. create and the startup
+// respawn both start it through launchSandboxSupervisor, so the argument array and the environment are built in one place.
+export interface SandboxSupervisorLaunch {
+  readonly binary: string;
+  readonly gatewayEndpoint: string;
+  readonly gatewayCaPath: string;
+  readonly image: string;
+  readonly sandboxId: string;
+  readonly sandboxName: string;
+  readonly secretDir: string;
+  readonly sshSocketPath: string;
+}
+
+// Starts the sandbox's host supervisor through the runtime host's spawn, with the argument array and the environment the channel builds.
+export function launchSandboxSupervisor(
+  runtime: { spawnSupervisor(options: SupervisorSpawn): Promise<SupervisorHandle> },
+  launch: SandboxSupervisorLaunch,
+): Promise<SupervisorHandle> {
+  return runtime.spawnSupervisor({
+    binary: launch.binary,
+    args: supervisorArguments({
+      sandboxId: launch.sandboxId,
+      sandboxName: launch.sandboxName,
+      gatewayEndpoint: launch.gatewayEndpoint,
+      secretDir: launch.secretDir,
+      sshSocketPath: launch.sshSocketPath,
+    }),
+    env: supervisorEnvironment({
+      sandboxId: launch.sandboxId,
+      sandboxName: launch.sandboxName,
+      gatewayEndpoint: launch.gatewayEndpoint,
+      gatewayCaPath: launch.gatewayCaPath,
+      image: launch.image,
+    }),
   });
 }
 

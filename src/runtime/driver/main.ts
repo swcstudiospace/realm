@@ -1,7 +1,7 @@
 // The compute driver process (phase 9.4, PD-05; phase 9.5 starts the sandbox runtime on the built-in path). It runs as its own
 // process under the realm account's user unit (HC-04). This module is the only place the driver reads process.env. It reads the
-// configuration, validates it, writes the sandbox seccomp profile, claims the driver's socket, and adopts the surviving sandboxes before
-// any request can act on a container or a secret (PRD-CTR-03).
+// configuration, validates it, writes the sandbox seccomp profile, claims the driver's socket, adopts the surviving sandboxes, and rebuilds
+// the registry of each before any request can act on a container or a secret (PRD-CTR-03).
 
 import { accessSync, constants, readFileSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -20,9 +20,10 @@ import {
 } from "./compute-driver.js";
 import { awaitRuntimeListener } from "./channel.js";
 import { installSeccompProfile } from "./seccomp-delivery.js";
-import { DriverLifecycle } from "./lifecycle.js";
+import { DriverLifecycle, type AdoptionRoots, type LifecycleLibpod } from "./lifecycle.js";
 import { GATEWAY_ID_PATTERN } from "../gateway-config.js";
 import { assertSha256OfFile, spawnSupervisor } from "./supervisor.js";
+import { rebuildRegistry } from "./registry-rebuild.js";
 import { startSocketServer, type SocketServer } from "./server.js";
 
 export const DRIVER_ENV = Object.freeze({
@@ -207,22 +208,36 @@ export function runtimeHostOf(config: DriverProcessConfig): RuntimeHost {
   };
 }
 
+// Replacements for what startDriver reads from the process, for tests. Each one is the real one when it is absent.
+export interface DriverStartSeams {
+  // The libpod calls of the lifecycle and the driver. A LibpodClient on the configured socket when absent.
+  readonly libpod?: LifecycleLibpod;
+  // The host supervisor spawn and the listener check. The runtime host of the process configuration when absent.
+  readonly runtime?: RuntimeHost;
+  readonly readProcStatus?: (pid: number) => string;
+  readonly readOciConfig?: (path: string) => string;
+}
+
 // Builds the driver. It first writes the sandbox seccomp profile next to the driver's socket, and the libpod client names that file in
-// every create. It then validates the configuration without touching libpod, claims the driver's socket, and runs the destroy-all sweep.
-// The socket is claimed first: startSocketServer refuses with LOCK_CONFLICT when a live driver listens on the path and removes only
-// a stale socket, so a second driver started on the same configuration is refused before it removes anything. The sweep then removes every
-// realm container, the secret entries of every sandbox and every realm volume. It runs while the socket accepts connections, so no request
-// is served ahead of it by construction: the lifecycle refuses create, delete and stop with REALM_NOT_ACTIVE until the sweep has resolved,
-// the compute driver refuses CreateSandbox the same way before it writes anything, and the remaining RPCs only read or answer without
-// touching a container or a secret (PRD-CTR-03). A failed sweep closes the server, which removes the socket, and rethrows, so no
-// half-started driver stays bound. The host supervisors of the previous generation exited when its driver's stdin pipes closed.
-export async function startDriver(config: DriverProcessConfig): Promise<SocketServer> {
+// every create. It then validates the configuration without touching libpod, and claims the driver's socket. The socket is claimed first:
+// startSocketServer refuses with LOCK_CONFLICT when a live driver listens on the path and removes only a stale socket, so a second driver
+// started on the same configuration is refused before it removes anything. The adoption then keeps each realm container that conforms to
+// its retained binding and removes the rest, with their secret entries and volumes. The registry rebuild gives each kept sandbox its
+// registry entry and a respawned host supervisor (registry-rebuild.ts). No request acts on a container or a secret ahead of either: the
+// lifecycle refuses create, delete and stop with REALM_NOT_ACTIVE until the adoption has resolved, the compute driver refuses CreateSandbox
+// the same way before it writes anything, and the remaining RPCs only read, so until the rebuild resolves List and Get answer from a
+// partial registry (PRD-CTR-03). A failed start closes the server, which removes the socket, and rethrows, so no half-started driver stays
+// bound. The host supervisors of the previous generation exited when its driver's stdin pipes closed.
+export async function startDriver(config: DriverProcessConfig, seams: DriverStartSeams = {}): Promise<SocketServer> {
   const seccompProfilePath = installSeccompProfile(config.socketPath);
-  const libpod = new LibpodClient(config.libpodSocketPath, { seccompProfilePath });
+  const libpod: LifecycleLibpod = seams.libpod ?? new LibpodClient(config.libpodSocketPath, { seccompProfilePath });
+  const runtime = seams.runtime ?? runtimeHostOf(config);
   const lifecycle = new DriverLifecycle({
     libpod,
     sandboxStateRoot: config.driver.sandboxStateRoot,
     secretRoot: config.driver.secretRoot,
+    readProcStatus: seams.readProcStatus,
+    readOciConfig: seams.readOciConfig,
   });
   const driver = new ComputeDriver(config.driver, {
     lifecycle,
@@ -230,15 +245,21 @@ export async function startDriver(config: DriverProcessConfig): Promise<SocketSe
       lifecycle.requireSwept();
     },
     libpod,
-    runtime: runtimeHostOf(config),
+    runtime,
   });
   const server = await startSocketServer(config.socketPath, [
     { service: loadComputeDriverService(), implementation: computeDriverImplementation(driver) },
   ]);
   try {
-    await lifecycle.startupSweep();
+    const roots: AdoptionRoots = {
+      workspaceStateDir: config.driver.stateDir,
+      workspaceCeiling: config.driver.workspaceRoot,
+      image: config.driver.sandboxImage,
+    };
+    const adoption = await lifecycle.adoptSurvivors(roots);
+    await rebuildRegistry({ driver, lifecycle, config: config.driver, runtime }, adoption.adopted);
   } catch (error: unknown) {
-    // The sweep's own failure is the one reported; a close that also fails must not replace it.
+    // The failure that stopped the start is the one reported; a close that also fails must not replace it.
     await server.close().catch(() => undefined);
     throw error;
   }

@@ -1,9 +1,9 @@
 // Hardened container lifecycle of the driver (phase 9.3, PRD-CTR-01..03). create builds the container from a
 // typed spec, runs the caller's before-start step, starts it, and proves it conforms before it is returned. delete removes a
-// sandbox's own containers, its own state directory, and its secret entries. startupSweep runs at every driver start, before the driver
-// serves a request that acts on a container, a volume or a secret: it is the destroy-all sweep the driver keeps until CS-3 and CS-6 land.
-// adoptSurvivors is the selective adoption, kept beside it. It keeps each realm container that still conforms to its retained binding,
-// removes the rest, and removes the secret entries of each sandbox it keeps no container for. The driver does not call it at start yet.
+// sandbox's own containers, its own state directory, and its secret entries. adoptSurvivors runs at every driver start, before the driver
+// serves a request that acts on a container, a volume or a secret. It keeps each realm container that still conforms to its retained
+// binding, removes the rest, and removes the secret entries of each sandbox it keeps no container for. startDriver rebuilds the registry
+// from what it keeps (registry-rebuild.ts).
 //
 // Everything here goes through the closed libpod client (PD-11). The verifier is the same one session-execution
 // uses (PD-13): verifyInspect over HARDENING_PROFILE, with the host evidence (the OCI config's fields and the init process's
@@ -47,8 +47,8 @@ import {
   OPENSHELL_SANDBOX_NAME_LABEL_KEY,
   sessionOfRealmSandbox,
 } from "../openshell.js";
-import { listRealmContainers, removeAllRealmContainers, SWEEP_CALL_TIMEOUT_MS } from "../sweep.js";
-import { presentSecretEntries, removeAllSecrets, removeSecretDirIfEmpty, removeSecretEntries, secretDirExists, secretDirOf, secretDirsUnder } from "./secret-store.js";
+import { listRealmContainers, SWEEP_CALL_TIMEOUT_MS } from "../sweep.js";
+import { presentSecretEntries, removeSecretDirIfEmpty, removeSecretEntries, secretDirExists, secretDirOf, secretDirsUnder } from "./secret-store.js";
 import { sandboxBindingOf, type SandboxBinding } from "./sandbox-binding.js";
 
 // Grace period a sandbox container gets to stop before it is killed. Matches the session composition's grace.
@@ -92,7 +92,7 @@ export interface DriverLifecycleOptions {
   // Absolute root of the per-sandbox state directories. A sandbox's state directory is exactly <root>/<sandboxName>.
   readonly sandboxStateRoot: string;
   // Absolute root of the per-sandbox secret directories, <root>/<sandboxName>. It is never bound into a container and
-  // must lie outside the state root. delete, startupSweep and adoptSurvivors remove the sandbox's secret entries from it.
+  // must lie outside the state root. delete and adoptSurvivors remove the sandbox's secret entries from it.
   readonly secretRoot: string;
   // Reads the text of a host process's status file. The create-time check reads the init process through it (D-51).
   readonly readProcStatus?: ((pid: number) => string) | undefined;
@@ -209,35 +209,11 @@ export class DriverLifecycle {
     this.removeDirectory = options.removeDirectory ?? removeTree;
   }
 
-  // The destroy-all sweep the driver keeps until CS-3 and CS-6 land. It removes every realm container, then every sandbox's secret
-  // entries, then every realm volume that remains, and resolves with how many containers it removed. Each volume removal is proven by a
-  // listing; an unproven removal rejects the sweep with REALM_STOPPING. The compute driver keeps its sandbox registry and supervisors in
-  // memory, so an adopted sandbox would be invisible to the gateway after a restart, and the adopted-name refusal would block re-creating
-  // it; the registry rebuild (CS-3) and the supervisor respawn (CS-6) must exist before adoptSurvivors runs at start. The method sets
-  // swept only when it resolves, so create, delete and stop refuse with REALM_NOT_ACTIVE until then.
-  async startupSweep(): Promise<number> {
-    this.swept = false;
-    const removed = await removeAllRealmContainers(this.libpod);
-    removeAllSecrets(this.secretRoot);
-    const volumePlan: VolumePlan[] = (
-      await bounded(this.libpod.listVolumesByLabel(REALM_MANAGED_LABEL_KEY, REALM_MANAGED_LABEL_VALUE))
-    ).map((name) => ({ name, cause: "startup-sweep" }));
-    const volumeFailure = await this.removeVolumes(volumePlan);
-    const stillListed = new Set(
-      await bounded(this.libpod.listVolumesByLabel(REALM_MANAGED_LABEL_KEY, REALM_MANAGED_LABEL_VALUE)),
-    );
-    if (volumePlan.some((volume) => stillListed.has(volume.name))) {
-      throw makeRealmError("REALM_STOPPING", volumeFailure);
-    }
-    this.swept = true;
-    return removed;
-  }
-
   // Adopts the realm containers that still conform and removes every other one. It replaces the destroy-all sweep of earlier drivers at a start that
   // keeps live sandboxes. Every listing, inspect and retained artifact is read before the first removal, so a failure there rejects the
   // adoption with nothing removed, and the next start retries. A container is adopted only when its binding rebuilds from its retained
   // artifacts and it passes the checks create runs after start. A removal counts only when a listing taken after all of them no longer
-  // holds the container; an unproven removal rejects the adoption with REALM_STOPPING, as the sweep does. The secret entries of a sandbox
+  // holds the container; an unproven removal rejects the adoption with REALM_STOPPING. The secret entries of a sandbox
   // with no adopted container are removed after the removals are proven, and each removal is confirmed by a presence check. The method
   // sets swept only when it resolves, so create, delete and stop refuse with REALM_NOT_ACTIVE until then.
   async adoptSurvivors(roots: AdoptionRoots): Promise<DriverAdoption> {
@@ -668,8 +644,8 @@ export class DriverLifecycle {
     return failure;
   }
 
-  // Refuses with REALM_NOT_ACTIVE until startupSweep or adoptSurvivors has resolved. create, delete and stop call it first; the compute driver calls it
-  // before a create writes anything to disk, so no request touches the state or secret roots ahead of the sweep.
+  // Refuses with REALM_NOT_ACTIVE until adoptSurvivors has resolved. create, delete and stop call it first; the compute driver calls it
+  // before a create writes anything to disk, so no request touches the state or secret roots ahead of the adoption.
   requireSwept(): void {
     if (!this.swept) {
       throw makeRealmError("REALM_NOT_ACTIVE");

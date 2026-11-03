@@ -26,8 +26,8 @@
 // The gateway's sandbox name carries the realm prefix. CreateSandbox refuses a name without it (create.workspace), and DeleteSandbox
 // adds it, so both name the same container. The driver keeps a registry keyed by the gateway's name, holding the
 // gateway's sandbox id, its workspace, and the container name. CreateSandbox fills it and DeleteSandbox clears it.
-// The startup sweep removes every realm container before the driver accepts requests, so no sandbox survives a restart
-// without a registry entry. Observed state comes from the labelled containers, and every snapshot carries the gateway's name.
+// At startup the driver adopts the verified containers and rebuilds the registry from them (registry-rebuild.ts), so a restarted
+// driver serves each adopted sandbox under its gateway name, and the containers that do not conform are removed before it serves.
 // StopSandbox and StartSandbox refuse with the transition code, which maps to FAILED_PRECONDITION (PD-08).
 // AuthenticateSandbox is not implemented: the driver does not advertise sandbox authentication.
 
@@ -67,15 +67,13 @@ import {
   CONTAINER_CONTROL_SOCKET,
   buildRuntimeChannel,
   runtimeServerName,
-  supervisorArguments,
-  supervisorEnvironment,
   type RuntimeChannel,
   type RuntimeVerificationKey,
 } from "./runtime-channel.js";
 import { GATEWAY_ID_PATTERN } from "../gateway-config.js";
 import { removeSandboxSecrets, secretDirExists, secretDirOf, writeLaunchMaterial } from "./secret-store.js";
 import { sandboxBindingOf } from "./sandbox-binding.js";
-import type { SupervisorHandle, SupervisorSpawn } from "./supervisor.js";
+import { launchSandboxSupervisor, type SupervisorHandle, type SupervisorSpawn } from "./supervisor.js";
 
 export const COMPUTE_DRIVER_SERVICE_NAME = "openshell.compute.v1.ComputeDriver";
 const PROTO_FILE = "compute_driver.proto";
@@ -155,8 +153,8 @@ export interface RuntimeHost {
 export interface ComputeDriverDeps {
   readonly lifecycle: Pick<DriverLifecycle, "create" | "delete" | "stop">;
   // The check a create runs before it touches the disk. The driver process passes the lifecycle's requireSwept, so a create that
-  // arrives while the startup sweep runs is refused before it writes a state directory or launch material the sweep would then
-  // race. Omitted by a caller whose lifecycle needs no sweep.
+  // arrives while the startup adoption runs is refused before it writes a state directory or launch material the adoption would then
+  // race. Omitted by a caller whose lifecycle needs no adoption.
   readonly requireSwept?: () => void;
   readonly libpod: Pick<LibpodClient, "inspectContainer" | "listContainersByLabel">;
   readonly runtime: RuntimeHost;
@@ -229,7 +227,7 @@ export interface DriverSandboxOut {
   };
 }
 
-interface SandboxRecord {
+export interface SandboxRecord {
   readonly id: string;
   readonly workspace: string;
   // The container name the sandbox runs under: the gateway's name with the realm prefix added when it lacks it.
@@ -472,22 +470,15 @@ export class ComputeDriver {
       if (!authentication.supervisor.hasSshHostPrivateKey) {
         throw makeRealmError("SCHEMA_INVALID");
       }
-      const supervisor = await this.deps.runtime.spawnSupervisor({
+      const supervisor = await launchSandboxSupervisor(this.deps.runtime, {
         binary: this.config.supervisor.binary,
-        args: supervisorArguments({
-          sandboxId: plan.sandboxId,
-          sandboxName: plan.sandboxName,
-          gatewayEndpoint: this.config.supervisor.gatewayEndpoint,
-          secretDir: channel.secretDir,
-          sshSocketPath: channel.sshSocket,
-        }),
-        env: supervisorEnvironment({
-          sandboxId: plan.sandboxId,
-          sandboxName: plan.sandboxName,
-          gatewayEndpoint: this.config.supervisor.gatewayEndpoint,
-          gatewayCaPath: this.config.supervisor.gatewayCaPath,
-          image: plan.spec.image,
-        }),
+        gatewayEndpoint: this.config.supervisor.gatewayEndpoint,
+        gatewayCaPath: this.config.supervisor.gatewayCaPath,
+        image: plan.spec.image,
+        sandboxId: plan.sandboxId,
+        sandboxName: plan.sandboxName,
+        secretDir: channel.secretDir,
+        sshSocketPath: channel.sshSocket,
       });
       this.supervisors.set(sandboxName, supervisor);
       void supervisor.exited.then(() => this.onSupervisorExit(sandboxName, supervisor));
@@ -509,6 +500,14 @@ export class ComputeDriver {
       supervisorExited: false,
     });
     return { runtime_identity: containerId };
+  }
+
+  // Registers a sandbox the startup rebuild found, with the supervisor it respawned. The supervisor is tracked as createSandbox tracks one,
+  // and the record is the registry entry createSandbox writes (registry-rebuild.ts).
+  adoptSandbox(name: string, record: SandboxRecord, supervisor: SupervisorHandle): void {
+    this.supervisors.set(name, supervisor);
+    void supervisor.exited.then(() => this.onSupervisorExit(name, supervisor));
+    this.registry.set(name, record);
   }
 
   async getSandbox(request: SandboxIdentityRequest): Promise<{ sandbox: DriverSandboxOut }> {
