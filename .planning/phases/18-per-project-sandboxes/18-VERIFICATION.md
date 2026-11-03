@@ -1,69 +1,74 @@
 # Phase 18 (per-project sandboxes): verification
 
-Lane: gsd/v3-phase18, run 2026-11-02. Overall status: NOT VERIFIED. Plan 18-06 is BLOCKED at T1 (red build), so plans 18-08 to 18-13 were not run, and the gate set has not run on a complete phase. See 18-SUMMARY.md for the stop point.
+Branch: gsd/v3-phase18, final gate run 2026-11-02.
+Overall: the full gate set is green on the phase head (`5ddc95e`, plus this documentation commit). Every plan 01 to 13 is committed. Plan 14 is HELD. The MULTI-05 live step has not run. The phase is not verified against the live stack. See `18-SUMMARY.md` for the plan table, deviations and HELD items.
+
+## Gate results on the phase head
+
+Run through the heavy-slot lock, in this order. Every gate exited 0 on the final pass. Logs are in `gate-runs/2026-11-02-phase18-final/` (outside the repository).
+
+| # | Gate | Exit | Counts |
+|---|---|---|---|
+| 1 | `npm run typecheck` | 0 | none |
+| 2 | `npm run lint` | 0 | 0 problems (first run exit 1, 80 errors, fixed in `5ddc95e`) |
+| 3 | `npm test` | 0 | 2664 tests, 2630 pass, 0 fail, 34 skipped |
+| 4 | `npm run build` | 0 | none |
+| 5 | `npm run test:integration` | 0 | 204 tests, 172 pass, 0 fail, 32 skipped |
+| 6 | `npm run test:scripts` | 0 | 301 tests, 301 pass, 0 fail, 0 skipped |
+| 7 | `npm run check:docs` | 0 | host paths ok, agents sync ok, default mode ok |
+| 8 | `npm run check:gates` | 0 | gate closure: 4 modules, no violations |
+| 9 | `npm run build && npm run check:pack && npm run check:mcp` | 0 | MCP smoke: refused attach fail-closed (`PODMAN_MACHINE_DOWN`); status disconnected |
+
+Not in the gate set and not run: `npm run test:coverage`, `npm run check:image-digests`. No live step was run: no `REALM_LIVE_*` variable was set and no omp, container or gateway workload was started.
 
 ## Per-requirement evidence
 
-| Req | Status | Evidence in this run |
-|---|---|---|
-| MULTI-01 | Decision recorded; runtime not implemented | `docs/integration/runtime-decision.md` holds the per-project session decision (D5(i), accepted 2026-10-30) and the C1 to C7 rulings that plan 01 recorded (commit 4bfca1a). The runtime itself is not implemented. Not re-verified in this run. |
-| MULTI-02 | Partly implemented; daemon wiring not verified | Plans 02 (86e5cc2), 04 (276e64e), 04b (ff80844), 05 (5b90aad) and 07 (e2baed6) are committed, per the earlier lane records. Plan 06, which hosts the per-project handles and the selected dispatch, is BLOCKED (T1 build, TS2305 and TS2554). The end-to-end per-project `up` refusal and per-session pin are therefore not verified on this head. |
-| MULTI-03 | Not verified | Requires 18-06 (per-session handles), 18-08 (CLI selection), 18-09 (maintenance attribution), 18-10 (Omp attach) and 18-11 (two-project surface tests). None of these ran. |
-| MULTI-04 | Partly implemented; docs and scenario not done | Plan 04 (276e64e) resolves the driver's sandbox mount from the workspace registry. Plan 12 (docs) and plan 13 (scenario authoring) are not started. |
-| MULTI-05 | HELD for the owner's live window; not authored | Plan 13 (two-project scenario, default-skipped) is not started. Plan 14 (live checkpoint) is HELD, and no live step was run. The owner's live window is not open for Phase 18 (`.planning/STATE.md`, 2026-11-02). |
-| MULTI-06 | Ledger committed; daemon wiring not verified; docs not done | Plan 03 (c7469dc) adds the aggregate admission ledger and derived `maxSessions`. The daemon wiring of `reservedCount()` and the admission path sits in plan 06, which is BLOCKED. Plan 12 (documentation of the bound) is not started. The owner's C7 setting is 4 GiB aggregate memory, 4e9 aggregate nanoCpus and 2 concurrent sessions (D18-2). |
+Counts are passing unit tests whose titles carry the requirement tag, from the `npm test` log of this run. A tag count is a count of passes, not proof of full coverage.
+
+| Req | Status | Tagged passes | Evidence |
+|---|---|---|---|
+| MULTI-01 | Decision recorded; implementation committed; not tag-verified | 0 (no tagged title) | `docs/integration/runtime-decision.md` (D5(i)), plan 01 `4bfca1a`. Implementation in `86e5cc2`, `552434e`, `bd43453`. Covered by the green suite only. |
+| MULTI-02 | Gate-verified | 14 | Plans 02 `86e5cc2`, 04 `276e64e`, 04b `ff80844`, 05 `5b90aad`, 06 `552434e` and `bd43453`, 08 `b42cb35`, 10 `e7c2cb6`. |
+| MULTI-03 | Gate-verified | 32 | Plans 05, 06, 08 `b42cb35`, 09 `c42b312` (startup orphan attribution), 10, 11 `7eb19f7`. |
+| MULTI-04 | Implemented; not tag-verified; live scenario HELD | 0 (no tagged title) | Plan 04 `276e64e` (driver mount from the registry). Plan 12 docs `a7f2ce2`, `b1378dd` (the `check:docs` gate passes). Plan 13 scenario `b18b20e`, default-skipped. |
+| MULTI-05 | Unit level verified; live step HELD | 5 | Unit: two projects give distinct sandbox bindings, each pinned to its own workspace, state directory and channel directory; sandbox name length within the 19-character gateway limit; a name with a path separator is refused; ACP and MCP two-project writes land in their own project and audit file (plan 11 `7eb19f7`). Live: the two-project scenario in `test/integration/production-driver.test.ts` is gated by `REALM_LIVE_PRODUCTION` and was not run. |
+| MULTI-06 | Gate-verified | 12 | Plan 03 `c7469dc` (aggregate ledger and derived `maxSessions`); plan 06 `552434e` (admission); plan 12 documents the bound. |
 
 ## Plan status
 
-| Plan | Status |
-|---|---|
-| 18-01 | Committed earlier (4bfca1a); not re-run |
-| 18-02 | Committed earlier (86e5cc2); not re-run |
-| 18-03 | Committed earlier (c7469dc); not re-run |
-| 18-04 | Committed earlier (276e64e); not re-run |
-| 18-04b | Committed earlier (ff80844); not re-run |
-| 18-05 | Committed earlier (5b90aad); not re-run |
-| 18-06 | BLOCKED at T1 (verify exit 2; `isLiveState` not exported from `src/lifecycle/controller.ts`; `test/daemon/daemon.test.ts(2449)` calls `client.up` with an argument it does not take). Uncommitted WIP saved at `gate-runs/2026-11-02-phase18/18-06-wip.patch`. |
-| 18-07 | Committed earlier (e2baed6); not re-run |
-| 18-08 | NOT STARTED (depends on 18-06) |
-| 18-09 | NOT STARTED (depends on 18-06) |
-| 18-10 | NOT STARTED (depends on 18-05, 18-06) |
-| 18-11 | NOT STARTED (depends on 18-06, 18-08, 18-09, 18-10) |
-| 18-12 | NOT STARTED (depends on 18-07, 18-10, 18-11) |
-| 18-13 | NOT STARTED (depends on 18-07, 18-11) |
-| 18-14 | HELD (human checkpoint; not reached; no step run) |
+| Plan | Status | Commit(s) |
+|---|---|---|
+| 01 | committed | 4bfca1a |
+| 02 | committed | 86e5cc2 |
+| 03 | committed | c7469dc |
+| 04 | committed | 276e64e |
+| 04b | committed | ff80844 |
+| 05 | committed | 5b90aad |
+| 06 | committed (T1, T2) | 552434e, bd43453 |
+| 07 | committed | e2baed6 |
+| 08 | committed | b42cb35 |
+| 09 | committed | c42b312 |
+| 10 | committed | e7c2cb6 |
+| 11 | committed | 7eb19f7 |
+| 12 | committed | a7f2ce2, b1378dd |
+| 13 | committed (default-skipped live scenario) | b18b20e |
+| 14 | HELD (human checkpoint, not reached, no step run) | none |
 
-## Verify output recorded
-
-Plan 18-06, T1 verify (`npm run build && node --test dist/test/daemon/daemon.test.js`), run once in the heavy slot under `flock -w 7200 .../heavy-slot-1.lock`, wall 302.9 s:
-
-```
-> agent-realm@0.3.26 build
-> tsc -p tsconfig.json
-
-src/daemon/daemon.ts(33,10): error TS2305: Module '"../lifecycle/controller.js"' has no exported member 'isLiveState'.
-test/daemon/daemon.test.ts(2449,33): error TS2554: Expected 0 arguments, but got 1.
-EXIT=2
-```
-
-Log: `gate-runs/2026-11-02-phase18/18-06-T1.log`. Because the build failed, `node --test` did not run, and no test count exists for this step.
-
-## Gate results
-
-Not run. The full gate set (typecheck, lint, test, build, test:integration, test:scripts, check:docs, check:gates, then build, check:pack, check:mcp) is scheduled after the last plan. The lane stopped at the red build of 18-06, so the set has not run on a complete phase. The red build above is the only gate evidence.
+The build failures recorded in the earlier lane run (`TS2305` for `isLiveState`, `TS2554` in `daemon.test.ts`) do not reproduce: the build and typecheck gates exit 0 on this head.
 
 ## HELD items and the owner decision each needs
 
-1. **MULTI-05 and the two-project live scenario (plan 13 and plan 14).** Decision needed: open the owner live window for Phase 18, batched with Phase 17 plan 05 (`.planning/STATE.md`), under the `realmlive` account, one live run at a time, with the shared live lock. Until then no live step runs and MULTI-05 stays HELD.
-2. **Plan 06 (BLOCKED).** Decision needed: authorise a bounded fix to the two compile errors (export `isLiveState` from `src/lifecycle/controller.ts`; correct the `client.up` call at `test/daemon/daemon.test.ts` line 2449) and the T2 gaps in 18-SUMMARY.md, then the lane re-runs the 18-06 verify. The plan's stop rule forbids this without that approval.
-3. **T2 (d) read-only accessor in `src/realm/compose.ts`.** Decision needed: confirm that the read-only `locks` accessor on `RealmHandle` is acceptable, since compose.ts is outside plan 06's files list.
-4. **Owner items from `18-HELD-OWNER.md`, unchanged by this run:**
-   - (a) keep or change the `TOOL_TIMEOUT` reason text, which now also answers lock-wait expiry for `up` and `down`;
-   - (b) choose a schema maximum for `startupBudgetMs`, or a client bound derived from the policy, since a policy budget above the client's `up` bound (about 230 s) lets the create outlive the client's bound (`src/daemon/channel.ts` lines 26 to 29);
-   - (c) acknowledge the seven commits made before the plan-check verdict was recorded (4bfca1a to e2baed6), before any merge toward trunk.
-5. **Plan 14 checkpoint.** Preconditions the owner confirms before any live run are in `18-14-PLAN.md`: Phase 17 plan 05's preconditions met or a Phase 18-only decision; the commit under test recorded; the `realmlive` stack up; the shared live lock taken.
+1. **MULTI-05 live step (plans 13 and 14).** Decision: open the owner live window for Phase 18, batched with Phase 17 plan 05 (`.planning/STATE.md`). Run under the `realmlive` account, one live run at a time, under the shared live lock. Preconditions are in `18-14-PLAN.md`.
+2. **Seven pre-record commits** (`4bfca1a` to `e2baed6`). Decision: acknowledge them before any merge toward trunk (`18-HELD-OWNER.md`, D18-1).
+3. **Owner items** (`18-HELD-OWNER.md`): (a) `TOOL_TIMEOUT` reason text; (b) `startupBudgetMs` schema maximum or a client bound derived from policy.
+4. **Phase 17 precondition:** the merge is the gate. Phase 17 plan 03 scenario 6 and skip-path checks have not run (`17-VERIFICATION.md`, rows T2 and T3).
 
-## Commits in this run
+## Unverified items
 
-- `fe0c231` docs(phase-18): add waitMs to the withSessionLock signature in plan 06 (plan-text fix, committed alone).
-- This report commit (18-SUMMARY.md and 18-VERIFICATION.md) only. No code commit was made for plan 18-06, because its T1 verify is red.
+- MULTI-01 and MULTI-04 have no tagged test; their status rests on decision documents, commits and the green suite.
+- Plans 01 to 05, 04b, 07 and 08 to 13 were not re-run one by one. The full gate set is the only evidence in this run.
+- The 34 unit and 32 integration skips are live-gated; one skip reason names the `REALM_LIVE_*` prerequisites; the others were not reviewed individually.
+- The MULTI-05 live two-project scenario has not run against a live stack.
+- The audit line shape `{tool: session.destroy, outcome: ok}` needs owner review against the audit schema.
+- The `isDownRequested` accessor in `src/daemon/daemon.ts` may conflict with the house tiny-function style note; owner review requested.
+- The sub-agent write to the owner's main checkout (`docs/integration/omp.md`) was restored to HEAD; the diff is saved outside the repositories and was not re-inspected here.
