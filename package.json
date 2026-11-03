@@ -62,7 +62,7 @@
     "check:pack": "node scripts/check/pack-smoke.mjs",
     "check:image-digests": "node scripts/check/verify-image-digests.mjs",
     "build:image": "node scripts/image/build-image.mjs",
-    "check:gates": "node scripts/check/gate-closure.mjs",
+    "check:gates": "node scripts/check/gate-closure.mjs && node scripts/check/module-size.mjs",
     "release:next": "node scripts/release/next-version.mjs",
     "release:sync": "node scripts/release/sync-version.mjs",
     "release:changelog": "node scripts/release/changelog.mjs"
