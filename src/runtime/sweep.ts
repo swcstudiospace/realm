@@ -74,7 +74,7 @@ export async function removeAllRealmContainers(
 }
 
 // The realm's containers: the OpenShell-managed sandboxes whose sandbox name carries the realm prefix.
-async function listRealmContainers(libpod: SweepClient): Promise<readonly LibpodContainerSummary[]> {
+export async function listRealmContainers(libpod: SweepClient): Promise<readonly LibpodContainerSummary[]> {
   const listed = await withTimeout(
     libpod.listContainersByLabel(OPENSHELL_MANAGED_LABEL_KEY, OPENSHELL_MANAGED_LABEL_VALUE),
     SWEEP_CALL_TIMEOUT_MS,
