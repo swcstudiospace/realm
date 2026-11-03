@@ -1,5 +1,5 @@
 // Behaviour of the launch material the driver keeps for each sandbox: a create stores it under the secret root, a refused create
-// writes nothing and reaches no libpod call, delete and the startup sweep remove it, and the secret and workspace roots must not
+// writes nothing and reaches no libpod call, delete and the startup adoption remove it, and the secret and workspace roots must not
 // hold one another. No test reads source text.
 
 import { test } from "node:test";
@@ -82,6 +82,7 @@ function assertNothingWritten(h: Harness): void {
 function emptyLibpod(): LifecycleLibpod {
   const stub = {
     listContainersByLabel: () => Promise.resolve([]),
+    info: () => Promise.resolve({ rootless: true }),
     inspectContainer: () => Promise.resolve(null),
     stopContainer: () => Promise.resolve(),
     removeContainer: () => Promise.resolve(),
@@ -182,7 +183,7 @@ void test("PRD-ISO-02: delete removes the sandbox's launch material and its secr
   assert.equal(existsSync(secretDir), false);
 });
 
-void test("PRD-ISO-02: the startup sweep removes leftover launch material and its directory", async () => {
+void test("PRD-ISO-02: the startup adoption removes leftover launch material and its directory", async () => {
   const config = driverConfig();
   writeLaunchMaterial(config.secretRoot, "realm-leftover-1", launchBody(LAUNCH_KEY));
   assert.equal(existsSync(join(config.secretRoot, "realm-leftover-1", "launch.json")), true);
@@ -191,7 +192,8 @@ void test("PRD-ISO-02: the startup sweep removes leftover launch material and it
     sandboxStateRoot: config.sandboxStateRoot,
     secretRoot: config.secretRoot,
   });
-  await lifecycle.startupSweep();
+  const roots = { workspaceStateDir: config.stateDir, workspaceCeiling: config.workspaceRoot, image: config.sandboxImage };
+  await lifecycle.adoptSurvivors(roots);
   assert.equal(existsSync(join(config.secretRoot, "realm-leftover-1")), false);
   assert.deepEqual(entriesOf(config.secretRoot), []);
 });

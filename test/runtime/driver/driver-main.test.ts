@@ -342,6 +342,22 @@ async function startFakeEngine(t: TestContext, options: { readonly refuseRemoval
       res.end(JSON.stringify(listed));
       return;
     }
+    if (matched?.name === "info") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ host: { security: { rootless: true } }, version: { Version: "5.7.1" } }));
+      return;
+    }
+    if (matched?.name === "inspectContainer" && matched.containerId !== null) {
+      const name = engine.containers.get(matched.containerId);
+      if (name === undefined) {
+        res.writeHead(404, { "content-type": "application/json" });
+        res.end(JSON.stringify({ cause: "no such container", message: "no such container", response: 404 }));
+        return;
+      }
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ Id: matched.containerId, Name: `/${name}` }));
+      return;
+    }
     if (matched?.name === "removeContainer" && matched.containerId !== null && options.refuseRemoval !== true) {
       engine.containers.delete(matched.containerId);
       res.writeHead(200);
@@ -486,7 +502,8 @@ void test("PRD-CTR-03: a create that arrives before the sweep has resolved is re
   assert.equal(existsSync(join(config.sandboxStateRoot, name)), false, "no state directory was made");
   assert.equal(existsSync(join(config.secretRoot, name)), false, "no launch material was written");
 
-  await lifecycle.startupSweep();
+  const roots = { workspaceStateDir: config.stateDir, workspaceCeiling: config.workspaceRoot, image: config.sandboxImage };
+  await lifecycle.adoptSurvivors(roots);
   assert.doesNotThrow(() => {
     lifecycle.requireSwept();
   });

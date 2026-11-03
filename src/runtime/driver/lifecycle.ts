@@ -1,8 +1,8 @@
 // Hardened container lifecycle of the driver (phase 9.3, PRD-CTR-01..03). create builds the container from a
 // typed spec, runs the caller's before-start step, starts it, and proves it conforms before it is returned. delete removes a
-// sandbox's own containers, its own state directory, and its secret entries. startupSweep removes every realm-labelled container,
-// and every sandbox's secret entries, before the driver serves a request that acts on a container or a secret. adoptSurvivors is
-// the start that keeps live sandboxes: it keeps each realm container that still conforms to its retained binding, and removes the rest.
+// sandbox's own containers, its own state directory, and its secret entries. adoptSurvivors runs at every driver start, before the
+// driver serves a request that acts on a container or a secret. It keeps each realm container that still conforms to its retained
+// binding, removes the rest, and removes the secret entries of each sandbox it keeps no container for.
 //
 // Everything here goes through the closed libpod client (PD-11). The verifier is the same one session-execution
 // uses (PD-13): verifyInspect over HARDENING_PROFILE, with the host evidence (the OCI config's fields and the init process's
@@ -34,8 +34,8 @@ import {
   OPENSHELL_SANDBOX_NAME_LABEL_KEY,
   sessionOfRealmSandbox,
 } from "../openshell.js";
-import { listRealmContainers, removeAllRealmContainers, SWEEP_CALL_TIMEOUT_MS } from "../sweep.js";
-import { presentSecretEntries, removeAllSecrets, removeSecretDirIfEmpty, removeSecretEntries, secretDirExists, secretDirOf, secretDirsUnder } from "./secret-store.js";
+import { listRealmContainers, SWEEP_CALL_TIMEOUT_MS } from "../sweep.js";
+import { presentSecretEntries, removeSecretDirIfEmpty, removeSecretEntries, secretDirExists, secretDirOf, secretDirsUnder } from "./secret-store.js";
 import { sandboxBindingOf, type SandboxBinding } from "./sandbox-binding.js";
 
 // Grace period a sandbox container gets to stop before it is killed. Matches the session composition's grace.
@@ -75,7 +75,7 @@ export interface DriverLifecycleOptions {
   // Absolute root of the per-sandbox state directories. A sandbox's state directory is exactly <root>/<sandboxName>.
   readonly sandboxStateRoot: string;
   // Absolute root of the per-sandbox secret directories, <root>/<sandboxName>. It is never bound into a container and
-  // must lie outside the state root. delete and startupSweep remove the sandbox's secret entries from it.
+  // must lie outside the state root. delete and adoptSurvivors remove the sandbox's secret entries from it.
   readonly secretRoot: string;
   // Reads the text of a host process's status file. The create-time check reads the init process through it (D-51).
   readonly readProcStatus?: ((pid: number) => string) | undefined;
@@ -183,18 +183,7 @@ export class DriverLifecycle {
     this.removeDirectory = options.removeDirectory ?? removeTree;
   }
 
-  // Removes every realm-owned container and every sandbox's secret entries, and resolves with how many containers it removed.
-  // create, delete and stop refuse with REALM_NOT_ACTIVE until this has resolved, so no request acts on a container or a secret ahead of the sweep (PRD-CTR-03).
-  // A symbolic link under the secret root refuses the sweep, so the driver does not start on it.
-  async startupSweep(): Promise<number> {
-    this.swept = false;
-    const removed = await removeAllRealmContainers(this.libpod);
-    removeAllSecrets(this.secretRoot);
-    this.swept = true;
-    return removed;
-  }
-
-  // Adopts the realm containers that still conform and removes every other one. It replaces startupSweep's destroy-all at a start that
+  // Adopts the realm containers that still conform and removes every other one. It replaces the destroy-all sweep of earlier drivers at a start that
   // keeps live sandboxes. Every listing, inspect and retained artifact is read before the first removal, so a failure there rejects the
   // adoption with nothing removed, and the next start retries. A container is adopted only when its binding rebuilds from its retained
   // artifacts and it passes the checks create runs after start. A removal counts only when a listing taken after all of them no longer
@@ -533,7 +522,7 @@ export class DriverLifecycle {
     return failure;
   }
 
-  // Refuses with REALM_NOT_ACTIVE until startupSweep has resolved. create, delete and stop call it first; the compute driver calls it
+  // Refuses with REALM_NOT_ACTIVE until adoptSurvivors has resolved. create, delete and stop call it first; the compute driver calls it
   // before a create writes anything to disk, so no request touches the state or secret roots ahead of the sweep.
   requireSwept(): void {
     if (!this.swept) {

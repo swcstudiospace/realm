@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { ComputeDriverConfig, DriverSandboxMessage, RuntimeHost } from "../../../src/runtime/driver/compute-driver.js";
 import type { ListenerTrust } from "../../../src/runtime/driver/channel.js";
-import { DriverLifecycle, type BeforeStart, type LifecycleLibpod } from "../../../src/runtime/driver/lifecycle.js";
+import { DriverLifecycle, type AdoptionRoots, type BeforeStart, type LifecycleLibpod } from "../../../src/runtime/driver/lifecycle.js";
 import type { SupervisorHandle, SupervisorSpawn } from "../../../src/runtime/driver/supervisor.js";
 import type { ContainerSpec, LibpodContainerSummary, LibpodInspect } from "../../../src/runtime/libpod-client.js";
 import {
@@ -134,6 +134,7 @@ export interface DiskLifecycle extends Pick<DriverLifecycle, "create" | "delete"
 function noContainers(): LifecycleLibpod {
   const stub = {
     listContainersByLabel: () => Promise.resolve([]),
+    info: () => Promise.resolve({ rootless: true }),
     inspectContainer: () => Promise.resolve(null),
     stopContainer: () => Promise.resolve(),
     removeContainer: () => Promise.resolve(),
@@ -142,7 +143,7 @@ function noContainers(): LifecycleLibpod {
 }
 
 // A lifecycle that keeps files on disk the way the real one does. Create runs the beforeStart hook and records the container in
-// the libpod fake; delete removes the sandbox's state directory and secret entries through DriverLifecycle. The sweep runs first,
+// the libpod fake; delete removes the sandbox's state directory and secret entries through DriverLifecycle. The adoption runs first,
 // as the real driver's startup does.
 export async function diskLifecycle(config: ComputeDriverConfig, libpod: FakeLibpod): Promise<DiskLifecycle> {
   const disk = new DriverLifecycle({
@@ -150,7 +151,8 @@ export async function diskLifecycle(config: ComputeDriverConfig, libpod: FakeLib
     sandboxStateRoot: config.sandboxStateRoot,
     secretRoot: config.secretRoot,
   });
-  await disk.startupSweep();
+  const roots: AdoptionRoots = { workspaceStateDir: config.stateDir, workspaceCeiling: config.workspaceRoot, image: config.sandboxImage };
+  await disk.adoptSurvivors(roots);
   const creates: ContainerSpec[] = [];
   const deletes: string[] = [];
   const stops: string[] = [];

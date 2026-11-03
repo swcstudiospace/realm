@@ -18,7 +18,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { RealmError, type ErrorCode } from "../../src/core/errors.js";
-import { DriverLifecycle, HardeningRefusal } from "../../src/runtime/driver/lifecycle.js";
+import { DriverLifecycle, HardeningRefusal, type AdoptionRoots } from "../../src/runtime/driver/lifecycle.js";
 import { attachRuntimeEvidence } from "../../src/runtime/create-evidence.js";
 import type { LiveProperty } from "../../src/runtime/kernel-caps.js";
 import {
@@ -448,11 +448,12 @@ interface Harness {
   readonly stateDir: string;
   readonly workspaceDir: string;
   readonly secretRoot: string;
+  readonly roots: AdoptionRoots;
   readonly spec: ContainerSpec;
 }
 
 // Builds a fake, a lifecycle over a client on it, a sandbox state directory under the state root, and a workspace
-// directory. The sweep runs first unless the arrangement turns it off, since create and delete refuse before the sweep.
+// directory. The adoption runs first unless the arrangement turns it off, since create and delete refuse before the adoption.
 async function harness(t: TestContext, arrangement: Arrangement = {}): Promise<Harness> {
   const stateRoot = arrangement.stateRoot ?? tempDir(t, "realm-lifecycle-state-");
   const stateDir = join(stateRoot, SANDBOX);
@@ -460,6 +461,11 @@ async function harness(t: TestContext, arrangement: Arrangement = {}): Promise<H
   const workspaceDir = arrangement.workspaceDir ?? tempDir(t, "realm-lifecycle-workspace-");
   mkdirSync(workspaceDir, { recursive: true });
   const secretRoot = arrangement.secretRoot ?? tempDir(t, "realm-lifecycle-secret-");
+  const roots: AdoptionRoots = {
+    workspaceStateDir: tempDir(t, "realm-lifecycle-registry-"),
+    workspaceCeiling: tempDir(t, "realm-lifecycle-ceiling-"),
+    image: SPEC_IMAGE,
+  };
   const channelDir = join(secretRoot, SANDBOX, "channel");
   const fake = await startFake(t, {
     inspect: goodInspect(stateDir, workspaceDir, channelDir),
@@ -492,7 +498,7 @@ async function harness(t: TestContext, arrangement: Arrangement = {}): Promise<H
     removeDirectory: arrangement.removeDirectory,
   });
   if (arrangement.sweep !== false) {
-    await lifecycle.startupSweep();
+    await lifecycle.adoptSurvivors(roots);
   }
   if (arrangement.noChannel !== true) {
     mkdirSync(channelDir, { recursive: true });
@@ -504,6 +510,7 @@ async function harness(t: TestContext, arrangement: Arrangement = {}): Promise<H
     stateDir,
     workspaceDir,
     secretRoot,
+    roots,
     spec: { sandboxName: SANDBOX, image: SPEC_IMAGE, workspaceDir, stateDir, channelDir },
   };
 }
@@ -768,15 +775,11 @@ async function nestedWorkspace(
   return { h, nested, statted };
 }
 
-// True when nothing but the startup sweep's listing reached the engine.
-function reachedNoEngineRoute(seen: readonly Seen[]): boolean {
-  return seen.every((request) => request.route === "listContainers");
-}
-
 void test("F7: a directory on another device under the workspace refuses create with SCHEMA_INVALID before any libpod call", async (t) => {
   const { h } = await nestedWorkspace(t, 2);
+  const before = h.fake.seen.length;
   await assert.rejects(h.lifecycle.create(h.spec), hasCode("SCHEMA_INVALID"));
-  assert.equal(reachedNoEngineRoute(h.fake.seen), true, "no info, inspect or create request was sent");
+  assert.equal(h.fake.seen.length, before, "no info, inspect or create request was sent");
 });
 
 void test("F7: the same nested layout on one device is created, and only the root and the directories are stat-ed", async (t) => {
@@ -814,11 +817,13 @@ void test("F7: a device reader that fails on the root or on a directory refuses 
   const workspaceDir = tempDir(t, "realm-lifecycle-workspace-");
   mkdirSync(join(workspaceDir, "projects"), { recursive: true });
   const onRoot = await harness(t, { workspaceDir, lstat: failing((path) => path === workspaceDir) });
+  const beforeRoot = onRoot.fake.seen.length;
   await assert.rejects(onRoot.lifecycle.create(onRoot.spec), hasCode("SCHEMA_INVALID"));
-  assert.equal(reachedNoEngineRoute(onRoot.fake.seen), true);
+  assert.equal(onRoot.fake.seen.length, beforeRoot);
   const onDirectory = await harness(t, { workspaceDir, lstat: failing((path) => path !== workspaceDir) });
+  const beforeDirectory = onDirectory.fake.seen.length;
   await assert.rejects(onDirectory.lifecycle.create(onDirectory.spec), hasCode("SCHEMA_INVALID"));
-  assert.equal(reachedNoEngineRoute(onDirectory.fake.seen), true);
+  assert.equal(onDirectory.fake.seen.length, beforeDirectory);
 });
 
 void test("PRD-CTR-01: a conforming container is returned by id, kept, and posted with tty false (C6)", async (t) => {
@@ -1285,21 +1290,22 @@ const FOREIGN: SeedContainer = {
   running: true,
 };
 
-void test("PRD-CTR-03: startupSweep removes realm-labelled orphans before it resolves and leaves foreign containers", async (t) => {
+void test("PRD-CTR-03: adoptSurvivors removes realm-labelled orphans before it resolves and leaves foreign containers", async (t) => {
   const h = await harness(t, { seed: [ORPHAN, FOREIGN], sweep: false });
   assert.equal(h.fake.store.has(ORPHAN.id), true);
-  const removed = await h.lifecycle.startupSweep();
-  assert.equal(removed, 1);
+  const adoption = await h.lifecycle.adoptSurvivors(h.roots);
+  assert.deepEqual(adoption.adopted, []);
+  assert.deepEqual(adoption.removed, [{ containerId: ORPHAN.id, cause: "no-record" }]);
   assert.equal(h.fake.store.has(ORPHAN.id), false);
   assert.equal(h.fake.store.has(FOREIGN.id), true);
 });
 
-void test("PRD-CTR-03: create and delete refuse with REALM_NOT_ACTIVE until startupSweep has resolved", async (t) => {
+void test("PRD-CTR-03: create and delete refuse with REALM_NOT_ACTIVE until adoptSurvivors has resolved", async (t) => {
   const h = await harness(t, { sweep: false });
   await assert.rejects(h.lifecycle.create(h.spec), hasCode("REALM_NOT_ACTIVE"));
   await assert.rejects(h.lifecycle.delete(SANDBOX), hasCode("REALM_NOT_ACTIVE"));
   assert.equal(h.fake.seen.length, 0);
-  await h.lifecycle.startupSweep();
+  await h.lifecycle.adoptSurvivors(h.roots);
   mkdirSync(h.spec.channelDir, { recursive: true });
   assert.equal(await h.lifecycle.create(h.spec), CREATED_ID);
 });
