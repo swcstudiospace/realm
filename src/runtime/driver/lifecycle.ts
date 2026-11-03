@@ -1,7 +1,8 @@
 // Hardened container lifecycle of the driver (phase 9.3, PRD-CTR-01..03). create builds the container from a
 // typed spec, runs the caller's before-start step, starts it, and proves it conforms before it is returned. delete removes a
 // sandbox's own containers, its own state directory, and its secret entries. startupSweep removes every realm-labelled container,
-// and every sandbox's secret entries, before the driver serves a request that acts on a container or a secret.
+// and every sandbox's secret entries, before the driver serves a request that acts on a container or a secret. adoptSurvivors is
+// the start that keeps live sandboxes: it keeps each realm container that still conforms to its retained binding, and removes the rest.
 //
 // Everything here goes through the closed libpod client (PD-11). The verifier is the same one session-execution
 // uses (PD-13): verifyInspect over HARDENING_PROFILE, with the host evidence (the OCI config's fields and the init process's
@@ -11,6 +12,9 @@
 import { lstatSync, readdirSync, realpathSync, rmSync, type Dirent, type Stats } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { makeRealmError, RealmError, type ErrorCode } from "../../core/errors.js";
+import { withTimeout } from "../../core/timeout.js";
+import { bindRoot, isInsideRoot } from "../../fs/root.js";
+import { readWorkspaceEntry, verifyWorkspaceEntry } from "../../session/workspace-registry.js";
 import { attachRuntimeEvidence } from "../create-evidence.js";
 import { liveCapabilityFailures, readHostProcStatus, type LiveProperty } from "../kernel-caps.js";
 import { readHostOciConfig } from "../seccomp-evidence.js";
@@ -28,9 +32,10 @@ import {
   OPENSHELL_MANAGED_LABEL_KEY,
   OPENSHELL_MANAGED_LABEL_VALUE,
   OPENSHELL_SANDBOX_NAME_LABEL_KEY,
+  sessionOfRealmSandbox,
 } from "../openshell.js";
-import { removeAllRealmContainers } from "../sweep.js";
-import { presentSecretEntries, removeAllSecrets, removeSecretDirIfEmpty, removeSecretEntries, secretDirOf } from "./secret-store.js";
+import { listRealmContainers, removeAllRealmContainers, SWEEP_CALL_TIMEOUT_MS } from "../sweep.js";
+import { presentSecretEntries, removeAllSecrets, removeSecretDirIfEmpty, removeSecretEntries, secretDirExists, secretDirOf, secretDirsUnder } from "./secret-store.js";
 import { sandboxBindingOf, type SandboxBinding } from "./sandbox-binding.js";
 
 // Grace period a sandbox container gets to stop before it is killed. Matches the session composition's grace.
@@ -45,6 +50,9 @@ const GROUP_OR_WORLD_BITS = 0o077;
 
 // C1. The options every workspace mount must carry, so the workspace is not executable, suid or device-bearing.
 const WORKSPACE_REQUIRED_OPTIONS: readonly string[] = Object.freeze(["noexec", "nosuid", "nodev"]);
+
+// The launch material's file in a sandbox's secret directory. secret-store writes it and does not export its name.
+const LAUNCH_FILE_NAME = "launch.json";
 
 // The libpod calls the lifecycle needs. The closed client satisfies it.
 export type LifecycleLibpod = Pick<
@@ -81,6 +89,26 @@ export interface DriverLifecycleOptions {
   readonly removeDirectory?: ((dir: string) => void) | undefined;
 }
 
+// The driver configuration an adoption rebuilds a survivor's binding from. The lifecycle holds none of these values: the state
+// directory that holds the workspace registry, the pinned workspace ceiling and the sandbox image are the driver's configuration.
+export interface AdoptionRoots {
+  // The driver's state directory. The workspace registry, which names each sandbox's workspace, lives under it.
+  readonly workspaceStateDir: string;
+  // The pinned workspace ceiling. A survivor's workspace must lie inside it.
+  readonly workspaceCeiling: string;
+  // The one digest-pinned sandbox image the driver creates.
+  readonly image: string;
+}
+
+// The outcome of an adoption. adopted lists the containers kept, each with its sandbox name. removed lists every other realm
+// container, with the cause it was removed for, once a listing proved it gone. secretsRemoved names the sandboxes whose secret
+// entries were removed.
+export interface DriverAdoption {
+  readonly adopted: { sandboxName: string; containerId: string }[];
+  readonly removed: { containerId: string; cause: string }[];
+  readonly secretsRemoved: string[];
+}
+
 // A property a container is refused for: the verifier's properties (D-51), the workspace mount's options and the terminal check
 // made after start (C1, C6), and the channel options checked before start (phase 9.5, F).
 // "mounts-options" is the workspace mount's options (C1). "tty" is a container that has a terminal (C6).
@@ -101,6 +129,34 @@ export class HardeningRefusal extends RealmError {
   }
 }
 
+// Why a survivor is removed without a failed property. no-record: nothing is retained for its sandbox, or the container is not
+// named as its sandbox. no-artifacts: something is retained, but the binding cannot be rebuilt from it.
+type RemovalCause = "no-record" | "no-artifacts";
+
+interface Adoption {
+  readonly kind: "adopt";
+  readonly sandboxName: string;
+  readonly containerId: string;
+}
+
+interface Removal {
+  readonly kind: "remove";
+  readonly containerId: string;
+  readonly cause: string;
+}
+
+type Verdict = Adoption | Removal;
+
+// A sandbox directory under the secret root. Its entries are read before any container is removed.
+interface SecretDir {
+  readonly name: string;
+  readonly path: string;
+}
+
+interface SecretPlan extends SecretDir {
+  readonly entries: readonly string[];
+}
+
 export class DriverLifecycle {
   private readonly libpod: LifecycleLibpod;
   private readonly sandboxStateRoot: string;
@@ -110,6 +166,8 @@ export class DriverLifecycle {
   private readonly lstat: (path: string) => Pick<Stats, "dev">;
   private readonly removeDirectory: (dir: string) => void;
   private swept = false;
+  // The sandbox names this start adopted. A create of such a name is refused until delete removes the sandbox.
+  private readonly adopted = new Set<string>();
 
   constructor(options: DriverLifecycleOptions) {
     if (!isAbsolute(options.sandboxStateRoot)) {
@@ -136,6 +194,44 @@ export class DriverLifecycle {
     return removed;
   }
 
+  // Adopts the realm containers that still conform and removes every other one. It replaces startupSweep's destroy-all at a start that
+  // keeps live sandboxes. Every listing, inspect and retained artifact is read before the first removal, so a failure there rejects the
+  // adoption with nothing removed, and the next start retries. A container is adopted only when its binding rebuilds from its retained
+  // artifacts and it passes the checks create runs after start. A removal counts only when a listing taken after all of them no longer
+  // holds the container; an unproven removal rejects the adoption with REALM_STOPPING, as the sweep does. The secret entries of a sandbox
+  // with no adopted container are removed after the removals are proven, and each removal is confirmed by a presence check. The method
+  // sets swept only when it resolves, so create, delete and stop refuse with REALM_NOT_ACTIVE until then.
+  async adoptSurvivors(roots: AdoptionRoots): Promise<DriverAdoption> {
+    this.swept = false;
+    this.adopted.clear();
+    const listed = await bounded(listRealmContainers(this.libpod));
+    const secretDirs = secretDirsUnder(this.secretRoot);
+    const info = await bounded(this.libpod.info());
+    const inspected = await this.inspectAll(listed);
+    const verdicts = inspected.map(({ container, inspect }) => this.verdictOf(container, inspect, roots, info.rootless));
+    const adoptions = verdicts.filter((verdict): verdict is Adoption => verdict.kind === "adopt");
+    const removals = verdicts.filter((verdict): verdict is Removal => verdict.kind === "remove");
+    const keptSandboxes = new Set(adoptions.map((adoption) => adoption.sandboxName));
+    const secretPlan: SecretPlan[] = secretDirs
+      .filter((dir) => !keptSandboxes.has(dir.name))
+      .map((dir) => ({ ...dir, entries: presentSecretEntries(dir.path) }));
+    const removalFailure = await this.removeContainers(removals);
+    const survivors = new Set((await bounded(listRealmContainers(this.libpod))).map((container) => container.id));
+    if (removals.some((removal) => survivors.has(removal.containerId))) {
+      throw makeRealmError("REALM_STOPPING", removalFailure);
+    }
+    const secretsRemoved = removeSecretPlan(secretPlan);
+    for (const adoption of adoptions) {
+      this.adopted.add(adoption.sandboxName);
+    }
+    this.swept = true;
+    return {
+      adopted: adoptions.map(({ sandboxName, containerId }) => ({ sandboxName, containerId })),
+      removed: removals.map(({ containerId, cause }) => ({ containerId, cause })),
+      secretsRemoved,
+    };
+  }
+
   // Creates, starts, and verifies one sandbox container, and returns its id. A conforming container is kept. Any
   // other outcome removes it before the error is thrown. Every refusal that the spec and the host can decide comes
   // before the first libpod request: the spec, the state directory, the workspace, the channel, and the name being free.
@@ -159,9 +255,10 @@ export class DriverLifecycle {
     assertWorkspaceHasNoSocket(spec.workspaceDir, this.lstat);
     const info = await this.libpod.info();
     // A container of this name is a live sandbox this create did not make, so it is refused and never removed. The
-    // check is by name, so a container without the sandbox label is refused too.
+    // check is by name, so a container without the sandbox label is refused too. A sandbox this start adopted is refused
+    // by name as well, even when its container is gone, until delete removes it.
     const existing = await this.libpod.inspectContainer(spec.sandboxName);
-    if (existing !== null) {
+    if (existing !== null || this.adopted.has(spec.sandboxName)) {
       throw makeRealmError("SANDBOX_NAME_IN_USE");
     }
     let id: string;
@@ -223,6 +320,8 @@ export class DriverLifecycle {
         await this.libpod.removeContainer(container.id, { force: true });
       }
     }
+    // The sandbox's containers are gone, so an adopted record of the name no longer refuses a create of it.
+    this.adopted.delete(sandboxName);
     if (dirExists) {
       try {
         this.removeDirectory(dir);
@@ -330,6 +429,110 @@ export class DriverLifecycle {
     }
   }
 
+  // Inspects every listed container. A container the engine reports absent is not a survivor. A failed inspect rejects the adoption,
+  // with the code it carries, before any removal.
+  private async inspectAll(
+    listed: readonly LibpodContainerSummary[],
+  ): Promise<{ container: LibpodContainerSummary; inspect: LibpodInspect }[]> {
+    const inspected: { container: LibpodContainerSummary; inspect: LibpodInspect }[] = [];
+    for (const container of listed) {
+      let inspect: LibpodInspect | null;
+      try {
+        inspect = await bounded(this.libpod.inspectContainer(container.id));
+      } catch (error: unknown) {
+        throw asRealmError(error);
+      }
+      if (inspect !== null) {
+        inspected.push({ container, inspect });
+      }
+    }
+    return inspected;
+  }
+
+  // The verdict on one survivor. It is adopted when its name matches its sandbox, its binding rebuilds from its retained artifacts, and it
+  // passes the checks create runs after start. Otherwise it is removed, with the cause.
+  private verdictOf(container: LibpodContainerSummary, inspect: LibpodInspect, roots: AdoptionRoots, rootless: boolean): Verdict {
+    const sandboxName = container.labels?.[OPENSHELL_SANDBOX_NAME_LABEL_KEY] ?? "";
+    if (!namedAs(inspect, sandboxName)) {
+      return { kind: "remove", containerId: container.id, cause: "no-record" };
+    }
+    const binding = this.rebuildBinding(sandboxName, roots, rootless);
+    if (typeof binding === "string") {
+      return { kind: "remove", containerId: container.id, cause: binding };
+    }
+    const failure = this.verificationFailure(inspect, binding);
+    if (failure !== undefined) {
+      return { kind: "remove", containerId: container.id, cause: failure };
+    }
+    return { kind: "adopt", sandboxName, containerId: container.id };
+  }
+
+  // The binding a sandbox's container must carry, rebuilt from the artifacts the driver retains for the sandbox: its workspace registry
+  // entry, which names the workspace root, and its launch material. The state and channel directories are derived from the name, as create
+  // derives them. The image comes from the driver's configuration and rootless from the engine. Returns the cause when the binding cannot be
+  // rebuilt: no-record when nothing is retained for the sandbox, otherwise no-artifacts.
+  private rebuildBinding(sandboxName: string, roots: AdoptionRoots, rootless: boolean): HardeningBinding | RemovalCause {
+    try {
+      const sessionId = sessionOfRealmSandbox(sandboxName);
+      const entry = sessionId === undefined ? null : readWorkspaceEntry(roots.workspaceStateDir, sessionId);
+      if (entry === null && !secretDirExists(this.secretRoot, sandboxName)) {
+        return "no-record";
+      }
+      if (entry === null || !isInsideRoot(bindRoot(roots.workspaceCeiling), entry.workspaceRoot)) {
+        return "no-artifacts";
+      }
+      const workspaceRoot = verifyWorkspaceEntry(entry).realPath;
+      const secretDir = secretDirOf(this.secretRoot, sandboxName);
+      if (!presentSecretEntries(secretDir).includes(join(secretDir, LAUNCH_FILE_NAME))) {
+        return "no-artifacts";
+      }
+      const binding = sandboxBindingOf({ workspaceRoot, stateRoot: this.sandboxStateRoot, secretRoot: this.secretRoot }, sandboxName);
+      return {
+        image: roots.image,
+        rootless,
+        workspaceRoot: binding.workspaceRoot,
+        stateDir: binding.stateDir,
+        channelDir: binding.channelDir,
+      };
+    } catch {
+      // An artifact that cannot be read or verified leaves the binding unbuilt, so the container is not verified.
+      return "no-artifacts";
+    }
+  }
+
+  // The first failed property of a survivor against its rebuilt binding, with the checks create runs after start: the verifier, the live
+  // capability proof, and the workspace and terminal checks. Undefined when it conforms. A check that throws fails the survivor with the
+  // code its error carries.
+  private verificationFailure(inspect: LibpodInspect, binding: HardeningBinding): string | undefined {
+    try {
+      const attached = attachRuntimeEvidence(inspect, this.readOciConfig, this.readProcStatus);
+      const failed: readonly LifecycleProperty[] = [
+        ...verifyInspect(binding, attached),
+        ...liveCapabilityFailures(attached),
+        ...postCreateFailures(inspect),
+      ];
+      return failed[0];
+    } catch (error: unknown) {
+      return asRealmError(error).code;
+    }
+  }
+
+  // Force-removes each container. A failed removal is not reported here: the listing that follows decides whether it is gone. Returns
+  // the code of the first failed removal, which a rejection keeps.
+  private async removeContainers(removals: readonly Removal[]): Promise<ErrorCode | undefined> {
+    let failure: ErrorCode | undefined;
+    for (const removal of removals) {
+      try {
+        await bounded(this.libpod.removeContainer(removal.containerId, { force: true }));
+      } catch (error: unknown) {
+        if (failure === undefined) {
+          failure = asRealmError(error).code;
+        }
+      }
+    }
+    return failure;
+  }
+
   // Refuses with REALM_NOT_ACTIVE until startupSweep has resolved. create, delete and stop call it first; the compute driver calls it
   // before a create writes anything to disk, so no request touches the state or secret roots ahead of the sweep.
   requireSwept(): void {
@@ -342,6 +545,35 @@ export class DriverLifecycle {
 // The catalogue code of a RealmError, or undefined for any other error.
 function codeOf(error: unknown): ErrorCode | undefined {
   return error instanceof RealmError ? error.code : undefined;
+}
+
+// The RealmError a failure reports. A failure that is not a RealmError has no catalogue code of its own, so it is SCHEMA_INVALID, as the
+// sweep reports it.
+function asRealmError(error: unknown): RealmError {
+  return error instanceof RealmError ? error : makeRealmError("SCHEMA_INVALID");
+}
+
+// Bounds one libpod call by the sweep's per-call bound, so a hung engine cannot block the adoption. A call that does not answer in time
+// gives PODMAN_MACHINE_DOWN, as the sweep's does.
+function bounded<T>(call: Promise<T>): Promise<T> {
+  return withTimeout(call, SWEEP_CALL_TIMEOUT_MS, "PODMAN_MACHINE_DOWN");
+}
+
+// Removes the planned secret entries of each sandbox directory, confirms by a presence check that none is left, then removes the directory
+// when it is empty. Returns the sandboxes whose entries were removed.
+function removeSecretPlan(plan: readonly SecretPlan[]): string[] {
+  const removed: string[] = [];
+  for (const { name, path, entries } of plan) {
+    removeSecretEntries(entries);
+    if (presentSecretEntries(path).length > 0) {
+      throw makeRealmError("CLEANUP_FAILED");
+    }
+    removeSecretDirIfEmpty(path);
+    if (entries.length > 0) {
+      removed.push(name);
+    }
+  }
+  return removed;
 }
 
 // Adds the survivor's id and the cleanup code to a refusal's message. The refusal keeps its code, its property, and

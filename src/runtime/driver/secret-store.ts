@@ -22,6 +22,7 @@ import {
   rmSync,
   unlinkSync,
   writeSync,
+  type Dirent,
   type Stats,
 } from "node:fs";
 import { join } from "node:path";
@@ -191,6 +192,40 @@ export function removeAllSecrets(root: string): void {
     removeSecretEntries(presentSecretEntries(dir));
     removeSecretDirIfEmpty(dir);
   }
+}
+
+// A sandbox directory under the secret root, by name.
+interface SecretDir {
+  readonly name: string;
+  readonly path: string;
+}
+
+// The sandbox directories under the secret root, by name. A symbolic link under the root refuses the adoption, so nothing is removed
+// through it. An absent root has none.
+export function secretDirsUnder(root: string): SecretDir[] {
+  const stat = lstatOrAbsent(root, "SCHEMA_INVALID");
+  if (stat === null) {
+    return [];
+  }
+  if (!stat.isDirectory()) {
+    throw makeRealmError("SCHEMA_INVALID");
+  }
+  let entries: Dirent[];
+  try {
+    entries = readdirSync(root, { withFileTypes: true });
+  } catch {
+    throw makeRealmError("SCHEMA_INVALID");
+  }
+  const dirs: SecretDir[] = [];
+  for (const entry of entries) {
+    if (entry.isSymbolicLink()) {
+      throw makeRealmError("SCHEMA_INVALID");
+    }
+    if (entry.isDirectory()) {
+      dirs.push({ name: entry.name, path: join(root, entry.name) });
+    }
+  }
+  return dirs;
 }
 
 // The root is created at 0700 when absent, then must be a private directory the realm account owns.
