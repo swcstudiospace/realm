@@ -770,20 +770,42 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
   }
 }
 
+// Resolves once text has been handed to the stream, so its bytes have left this process before the caller goes on.
+function flushTo(stream: NodeJS.WriteStream, text: string): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    stream.write(text, (error) => {
+      if (error) {
+        reject(error);
+      } else {
+        resolve();
+      }
+    });
+  });
+}
+
 export async function main(): Promise<void> {
+  const argv = process.argv.slice(2);
   // The only host environment read in this module: the entry edge hands it to
   // runCli, which never reads it itself.
-  const result = await runCli(process.argv.slice(2), {
+  const result = await runCli(argv, {
     env: process.env,
     anchorKeyFile: process.env.REALM_ANCHOR_KEY_FILE,
   });
   if (result.stdout !== "") {
-    process.stdout.write(result.stdout);
+    await flushTo(process.stdout, result.stdout);
   }
   if (result.stderr !== "") {
-    process.stderr.write(result.stderr);
+    await flushTo(process.stderr, result.stderr);
   }
-  process.exitCode = result.exitCode;
+  // mcp and acp serve over stdio until their input closes. The entry leaves them to end the process themselves, so a reply
+  // still in flight is never cut short.
+  if (argv[0] === "mcp" || argv[0] === "acp") {
+    process.exitCode = result.exitCode;
+    return;
+  }
+  // The command has finished and its output is written. Exit now: an in-flight call that never settles (a FIFO open blocked
+  // in the threadpool, for one) keeps the event loop alive, and would hold the shell after the command's result is known.
+  process.exit(result.exitCode);
 }
 
 if (isDirectEntry(import.meta.url, process.argv[1])) {
