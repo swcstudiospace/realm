@@ -1,15 +1,18 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync, type Stats } from "node:fs";
+import { EventEmitter } from "node:events";
+import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync, type Stats } from "node:fs";
 import { createServer } from "node:net";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { status } from "@grpc/grpc-js";
 import { makeRealmError, RealmError } from "../../../src/core/errors.js";
 import { bindRoot } from "../../../src/fs/root.js";
-import { ComputeDriver, type ComputeDriverConfig, type DriverSandboxMessage } from "../../../src/runtime/driver/compute-driver.js";
+import { ComputeDriver, computeDriverImplementation, type ComputeDriverConfig, type DriverSandboxMessage } from "../../../src/runtime/driver/compute-driver.js";
 import { DRIVER_ADMISSION_ACKNOWLEDGEMENT } from "../../../src/runtime/driver/admission.js";
 import { DriverStatusError, driverFailureOf } from "../../../src/runtime/driver/grpc-status.js";
-import type { ContainerSpec, LibpodInspect } from "../../../src/runtime/libpod-client.js";
+import { DriverLifecycle, type AdoptionRoots, type LifecycleLibpod } from "../../../src/runtime/driver/lifecycle.js";
+import type { ContainerSpec, LibpodContainerSummary, LibpodInspect } from "../../../src/runtime/libpod-client.js";
 import { recordFileName, sandboxNameOfSession, sessionIdOfWorkspace } from "../../../src/session/paths.js";
 import { workspaceRegistryDirOf, writeWorkspaceEntry } from "../../../src/session/workspace-registry.js";
 import {
@@ -1135,4 +1138,227 @@ void test("PRD-DRV-01: the constructor refuses a state root or secret root that 
   ]) {
     assert.throws(() => new ComputeDriver({ ...config, ...change }, deps), expectCode("SCHEMA_INVALID"));
   }
+});
+
+// The readiness bounds the readiness tests give the driver. The driver's own timer ends each wait at its bound, so these tests exercise
+// real timer behavior on purpose. The bound is short to keep each test brief, and each test waits on a promise the driver settles.
+const SHORT_READY_WAIT_MS = 30;
+const LONG_READY_WAIT_MS = 2_000;
+const WATCH_TICK_MS = 5;
+
+// A libpod whose next container listing waits for a gate. The startup rebuild lists the realm's containers first, so holding that
+// listing holds the rebuild in progress: DriverLifecycle.adoptSurvivors keeps its swept flag down until the listing is released.
+// It holds no containers of its own, so the rebuild adopts nothing and only reaches its readiness.
+class RebuildingLibpod extends FakeLibpod {
+  private gate: Promise<void> | undefined;
+
+  // Holds the next container listing until the returned function is called. The executor form is used because tsconfig's ES2023
+  // lib has no Promise.withResolvers.
+  holdNextListing(): () => void {
+    let release: () => void = () => undefined;
+    this.gate = new Promise<void>((resolve) => {
+      release = () => {
+        resolve();
+      };
+    });
+    return release;
+  }
+
+  override listContainersByLabel(key: string, value: string): Promise<LibpodContainerSummary[]> {
+    const gate = this.gate;
+    this.gate = undefined;
+    return (gate ?? Promise.resolve()).then(() => super.listContainersByLabel(key, value));
+  }
+
+  info(): Promise<{ rootless: boolean }> {
+    return Promise.resolve({ rootless: true });
+  }
+}
+
+// A driver whose readiness is the real startup rebuild: DriverLifecycle's adoption over a RebuildingLibpod the test can hold. The
+// sandbox is created after the first rebuild has finished, so the driver's registry holds it. startRebuild begins a second rebuild,
+// whose listing waits until the test releases it; the readiness check refuses until that rebuild resolves.
+async function rebuildHarness(readyWaitMs: number) {
+  const libpod = new FakeLibpod();
+  const config = driverConfig();
+  const { name } = bindProject(config, "project-a");
+  const rebuildLibpod = new RebuildingLibpod();
+  const rebuild = new DriverLifecycle({
+    libpod: rebuildLibpod as unknown as LifecycleLibpod,
+    sandboxStateRoot: config.sandboxStateRoot,
+    secretRoot: mkdtempSync(join(tmpdir(), "realm-rebuild-secrets-")),
+  });
+  const roots: AdoptionRoots = { workspaceStateDir: config.stateDir, workspaceCeiling: config.workspaceRoot, image: config.sandboxImage };
+  await rebuild.adoptSurvivors(roots);
+  const driver = new ComputeDriver(config, {
+    lifecycle: new FakeLifecycle(libpod),
+    libpod,
+    runtime: new FakeRuntime(),
+    requireSwept: () => {
+      rebuild.requireSwept();
+    },
+    readyWaitMs,
+  });
+  await driver.createSandbox(validSandbox({ name }));
+  const startRebuild = (): { rebuilding: Promise<unknown>; release: () => void } => {
+    const release = rebuildLibpod.holdNextListing();
+    return { rebuilding: rebuild.adoptSurvivors(roots), release };
+  };
+  return { driver, name, startRebuild };
+}
+
+// The messages the Watch stream writes: a sandbox as it stands, or the id of one that is gone.
+type WatchMessage =
+  | { readonly sandbox: { readonly sandbox: { readonly name: string } } }
+  | { readonly deleted: { readonly sandbox_id: string } };
+
+// A Watch call the test reads and ends, as the server stream is read.
+class FakeWatchCall extends EventEmitter {
+  readonly written: WatchMessage[] = [];
+  private readonly waiters: ((message: WatchMessage) => void)[] = [];
+
+  write(message: WatchMessage): boolean {
+    this.written.push(message);
+    for (const waiter of this.waiters.splice(0)) {
+      waiter(message);
+    }
+    return true;
+  }
+
+  // Resolves with the next message the stream writes. It is taken before the write it awaits, so no write is missed. The executor form
+  // is used because tsconfig's ES2023 lib has no Promise.withResolvers.
+  nextWrite(): Promise<WatchMessage> {
+    return new Promise<WatchMessage>((resolve) => {
+      this.waiters.push(resolve);
+    });
+  }
+}
+
+type WatchHandler = (call: FakeWatchCall) => void;
+// The unary form the bound GetSandbox handler takes, as the test calls it.
+type UnaryHandler = (
+  call: { request: unknown },
+  callback: (error: { code: number } | null, response?: { readonly sandbox: { readonly name: string } }) => void,
+) => void;
+
+// The WatchSandboxes handler the service binds over the driver, at the given poll interval. The loader types bound handlers untyped,
+// so the cast names the one call shape the test uses.
+function watchOf(driver: ComputeDriver, intervalMs: number): WatchHandler {
+  const handler = computeDriverImplementation(driver, intervalMs).WatchSandboxes;
+  assert.ok(handler !== undefined);
+  return handler as unknown as WatchHandler;
+}
+
+// Calls GetSandbox over the bound service the way gRPC does. Resolves with the wire code of its error, or with the name it answers.
+function invokeGet(driver: ComputeDriver, request: unknown): Promise<{ code?: number | undefined; name?: string | undefined }> {
+  const handler = computeDriverImplementation(driver).GetSandbox;
+  assert.ok(handler !== undefined);
+  const get = handler as unknown as UnaryHandler;
+  return new Promise((resolve) => {
+    get({ request }, (error, response) => {
+      resolve(error === null ? { name: response?.sandbox.name } : { code: error.code });
+    });
+  });
+}
+
+// The sandbox a Watch message reports.
+function sandboxNameOf(message: WatchMessage): string | undefined {
+  return "sandbox" in message ? message.sandbox.sandbox.name : undefined;
+}
+
+void test("PRD-DRV-01: a List during a rebuild waits for readiness, then returns the sandboxes", { timeout: 10_000 }, async () => {
+  const { driver, name, startRebuild } = await rebuildHarness(LONG_READY_WAIT_MS);
+  const { rebuilding, release } = startRebuild();
+  let answered = false;
+  const listing = driver.listSandboxes().then((listed) => {
+    answered = true;
+    return listed;
+  });
+  // The rebuild holds readiness, so the listing cannot answer, however many turns of the event loop pass.
+  await settle();
+  assert.equal(answered, false, "List does not answer while the rebuild holds readiness");
+  release();
+  await rebuilding;
+  const listed = await listing;
+  assert.deepEqual(
+    listed.sandboxes.map((sandbox) => sandbox.name),
+    [name],
+  );
+});
+
+void test("PRD-DRV-01: a Get during a held rebuild fails UNAVAILABLE once the readiness bound passes, and answers after the rebuild", { timeout: 10_000 }, async () => {
+  const { driver, name, startRebuild } = await rebuildHarness(SHORT_READY_WAIT_MS);
+  const { rebuilding, release } = startRebuild();
+  const refused = await invokeGet(driver, { name });
+  assert.equal(refused.code, status.UNAVAILABLE);
+  release();
+  await rebuilding;
+  const answered = await invokeGet(driver, { name });
+  assert.equal(answered.code, undefined);
+  assert.equal(answered.name, name);
+});
+
+void test("PRD-DRV-01: a Watch poll the driver rejects during a rebuild is retried on its next tick, and the stream stays open", { timeout: 10_000 }, async () => {
+  const { driver, name, startRebuild } = await rebuildHarness(SHORT_READY_WAIT_MS);
+  const { rebuilding, release } = startRebuild();
+  // Counts the polls the driver rejects, so the test waits for two rejected ticks rather than for a guessed time.
+  const snapshotAll = driver.snapshotAll.bind(driver);
+  let rejections = 0;
+  let twoRejected: () => void = () => undefined;
+  const rejectedTwice = new Promise<void>((resolve) => {
+    twoRejected = () => {
+      resolve();
+    };
+  });
+  driver.snapshotAll = async () => {
+    try {
+      return await snapshotAll();
+    } catch (error: unknown) {
+      rejections += 1;
+      if (rejections === 2) {
+        twoRejected();
+      }
+      throw error;
+    }
+  };
+  const call = new FakeWatchCall();
+  const errors: unknown[] = [];
+  call.on("error", (error: unknown) => {
+    errors.push(error);
+  });
+  watchOf(driver, WATCH_TICK_MS)(call);
+  await rejectedTwice;
+  assert.deepEqual(errors, []);
+  assert.deepEqual(call.written, []);
+  const written = call.nextWrite();
+  release();
+  await rebuilding;
+  assert.equal(sandboxNameOf(await written), name);
+  assert.deepEqual(errors, []);
+  call.emit("cancelled");
+});
+
+void test("PRD-DRV-01: a Watch poll whose listing fails is retried on its next tick, and the stream reports no error", { timeout: 10_000 }, async () => {
+  const { driver, libpod, name } = harness();
+  await driver.createSandbox(validSandbox({ name }));
+  const listContainers = libpod.listContainersByLabel.bind(libpod);
+  let failures = 1;
+  libpod.listContainersByLabel = (key: string, value: string) => {
+    if (failures > 0) {
+      failures -= 1;
+      return Promise.reject(new Error("socket reset"));
+    }
+    return listContainers(key, value);
+  };
+  const call = new FakeWatchCall();
+  const errors: unknown[] = [];
+  call.on("error", (error: unknown) => {
+    errors.push(error);
+  });
+  const first = call.nextWrite();
+  watchOf(driver, WATCH_TICK_MS)(call);
+  assert.equal(sandboxNameOf(await first), name);
+  assert.deepEqual(errors, []);
+  assert.equal(failures, 0);
+  call.emit("cancelled");
 });

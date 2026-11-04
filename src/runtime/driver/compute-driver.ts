@@ -43,6 +43,7 @@ import {
 } from "@grpc/grpc-js";
 import * as protoLoader from "@grpc/proto-loader";
 import { makeRealmError, RealmError } from "../../core/errors.js";
+import { sleep, withTimeout } from "../../core/timeout.js";
 import type { LibpodClient } from "../libpod-client.js";
 import { hardeningEvidenceDigest } from "../hardening.js";
 import { OPENSHELL_ISOLATION_ROLE_LABEL_KEY, OPENSHELL_SANDBOX_NAME_LABEL_KEY, OPENSHELL_SANDBOX_ROLE_VALUE } from "../openshell.js";
@@ -87,6 +88,11 @@ const SUPPORTED_CAPABILITIES: readonly string[] = Object.freeze([
 ]);
 
 const DEFAULT_WATCH_INTERVAL_MS = 1000;
+// The longest a List, Get or Watch poll waits for the startup rebuild before it fails with REALM_NOT_ACTIVE, which the gRPC mapping
+// reports as UNAVAILABLE. It is under the 5 s client request bound (sweep.ts), so a caller gets the answer before it gives up.
+const READY_WAIT_MS = 4_000;
+// How often that wait checks the rebuild's readiness.
+const READY_POLL_MS = 50;
 
 // The gateway accepts an implementation version of 1 to 128 bytes that is not blank and holds no control characters
 // (openshell-core extension_protocol validate_text). The driver applies the same rule, so an invalid value fails here.
@@ -143,10 +149,11 @@ export interface RuntimeHost {
 
 export interface ComputeDriverDeps {
   readonly lifecycle: Pick<DriverLifecycle, "create" | "delete" | "stop">;
-  // The check a create runs before it touches the disk. The driver process passes the lifecycle's requireSwept, so a create that
-  // arrives while the startup adoption runs is refused before it writes a state directory or launch material the adoption would then
-  // race. Omitted by a caller whose lifecycle needs no adoption.
+  // The check a create runs before it touches the disk. The driver process passes a check that holds only after the startup adoption and the registry rebuild have finished, so a create
+  // that arrives while either runs is refused before it writes a state directory or launch material the adoption would then race. Omitted by a caller whose lifecycle needs no adoption.
   readonly requireSwept?: () => void;
+  // The longest a List, Get or Watch poll waits for requireSwept to pass, in ms. Omitted, the driver waits READY_WAIT_MS.
+  readonly readyWaitMs?: number;
   readonly libpod: Pick<LibpodClient, "inspectContainer" | "listContainersByLabel">;
   readonly runtime: RuntimeHost;
 }
@@ -490,6 +497,8 @@ export class ComputeDriver {
   }
 
   async getSandbox(request: SandboxIdentityRequest): Promise<{ sandbox: DriverSandboxOut }> {
+    // Waits for the rebuild first, so the id lookup reads the registry the rebuild left.
+    await this.awaitReady();
     const name = this.nameOf(request);
     const sandbox = name === undefined ? undefined : await this.snapshotOf(name);
     if (sandbox === undefined) {
@@ -604,8 +613,24 @@ export class ComputeDriver {
     throw makeRealmError("REALM_INVALID_TRANSITION");
   }
 
+  // Waits for the startup rebuild before a List, Get or Watch poll reads the registry, for at most the bound. Resolves at once when no
+  // rebuild is wired. Rejects with REALM_NOT_ACTIVE when the bound passes first.
+  private async awaitReady(): Promise<void> {
+    const requireSwept = this.deps.requireSwept;
+    if (requireSwept === undefined) {
+      return;
+    }
+    const waiting = { active: true };
+    try {
+      await withTimeout(untilReady(requireSwept, waiting), this.deps.readyWaitMs ?? READY_WAIT_MS, "REALM_NOT_ACTIVE");
+    } finally {
+      waiting.active = false;
+    }
+  }
+
   // Every sandbox that has both a registry entry and a labelled container, keyed by the gateway's name.
   async snapshotAll(): Promise<Map<string, DriverSandboxOut>> {
+    await this.awaitReady();
     const listed = await this.deps.libpod.listContainersByLabel(
       OPENSHELL_ISOLATION_ROLE_LABEL_KEY,
       OPENSHELL_SANDBOX_ROLE_VALUE,
@@ -800,6 +825,25 @@ export class ComputeDriver {
   }
 }
 
+// Runs the readiness check every READY_POLL_MS until it passes. It returns at its next tick once the bound has ended the wait
+// (waiting.active is cleared), so no poll outlives its wait. A failure other than REALM_NOT_ACTIVE is thrown.
+async function untilReady(requireSwept: () => void, waiting: { active: boolean }): Promise<void> {
+  for (;;) {
+    try {
+      requireSwept();
+      return;
+    } catch (error: unknown) {
+      if (!(error instanceof RealmError && error.code === "REALM_NOT_ACTIVE")) {
+        throw error;
+      }
+    }
+    if (!waiting.active) {
+      return;
+    }
+    await sleep(READY_POLL_MS);
+  }
+}
+
 // Wraps a promise-returning RPC as a unary handler. A thrown value becomes its gRPC status and nothing else.
 function unary<Req, Res>(
   handle: (request: Req) => Promise<Res>,
@@ -858,7 +902,13 @@ function watchSandboxes(
       }
       polling = true;
       try {
-        const next = await driver.snapshotAll();
+        let next: Map<string, DriverSandboxOut>;
+        try {
+          next = await driver.snapshotAll();
+        } catch {
+          // A rejected poll, such as one that finds the rebuild still running, sends nothing and ends nothing: the next tick polls.
+          return;
+        }
         if (cancelled.signal.aborted) {
           return;
         }
@@ -877,6 +927,7 @@ function watchSandboxes(
         }
         previous = current;
       } catch (error: unknown) {
+        // A write the stream cannot take ends it with the error, as before.
         stop();
         call.emit("error", toServerError(driverFailureOf(error)));
       } finally {

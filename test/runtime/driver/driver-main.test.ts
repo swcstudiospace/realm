@@ -7,7 +7,8 @@ import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { RealmError } from "../../../src/core/errors.js";
+import { credentials, makeClientConstructor, status, type ServiceError } from "@grpc/grpc-js";
+import { makeRealmError, RealmError } from "../../../src/core/errors.js";
 import {
   DRIVER_ENV,
   loadDriverProcessConfig,
@@ -15,13 +16,15 @@ import {
   runtimeHostOf,
   startDriver,
   type DriverProcessConfig,
+  type DriverStartSeams,
 } from "../../../src/runtime/driver/main.js";
 import { GATEWAY_ID } from "../isolation/supervisor-token.js";
-import { ComputeDriver } from "../../../src/runtime/driver/compute-driver.js";
-import { DriverLifecycle } from "../../../src/runtime/driver/lifecycle.js";
+import { COMPUTE_DRIVER_SERVICE_NAME, ComputeDriver, loadComputeDriverService, type ComputeDriverConfig, type SandboxRecord } from "../../../src/runtime/driver/compute-driver.js";
+import { DriverLifecycle, type LifecycleLibpod } from "../../../src/runtime/driver/lifecycle.js";
+import type { RegistryRebuildDeps } from "../../../src/runtime/driver/registry-rebuild.js";
 import { LibpodClient } from "../../../src/runtime/libpod-client.js";
 import { LIBPOD_API_VERSION_HEADER, matchLibpodRoute, PING_PATH } from "../../../src/runtime/libpod-routes.js";
-import { FakeLibpod, FakeRuntime, GATEWAY_ENDPOINT, IMPLEMENTATION_VERSION, SANDBOX_IMAGE, driverConfig, realmLabels, validSandbox, writeSandboxWorkspaceEntry } from "./fakes.js";
+import { FakeLibpod, FakeRuntime, FakeSupervisor, GATEWAY_ENDPOINT, IMPLEMENTATION_VERSION, SANDBOX_IMAGE, driverConfig, realmLabels, validSandbox, writeSandboxWorkspaceEntry } from "./fakes.js";
 
 interface Fixtures {
   readonly dir: string;
@@ -437,8 +440,9 @@ async function startFakeEngine(t: TestContext, options: { readonly refuseRemoval
   return engine;
 }
 
-// A process configuration over the fake engine, with its own socket directory and roots, removed when the test ends.
-function startConfigOver(t: TestContext, engine: FakeEngine): DriverProcessConfig {
+// A process configuration with a socket in its own directory and no libpod engine behind it. The seams stand in for the engine. Removed
+// when the test ends.
+function unboundStartConfig(t: TestContext): DriverProcessConfig {
   const base = mkdtempSync(join(tmpdir(), "realm-driver-start-"));
   t.after(() => {
     rmSync(base, { recursive: true, force: true });
@@ -446,9 +450,14 @@ function startConfigOver(t: TestContext, engine: FakeEngine): DriverProcessConfi
   mkdirSync(join(base, "run"));
   return {
     socketPath: join(base, "run", "driver.sock"),
-    libpodSocketPath: engine.socketPath,
+    libpodSocketPath: join(base, "podman.sock"),
     driver: driverConfig(),
   };
+}
+
+// A process configuration over the fake engine, with its own socket directory and roots, removed when the test ends.
+function startConfigOver(t: TestContext, engine: FakeEngine): DriverProcessConfig {
+  return { ...unboundStartConfig(t), libpodSocketPath: engine.socketPath };
 }
 
 // Leaves a sandbox's launch material under the secret root, as a previous generation would, and returns its path.
@@ -561,4 +570,165 @@ void test("PRD-CTR-03: a create that arrives before the adoption has resolved is
   assert.doesNotThrow(() => {
     lifecycle.requireSwept();
   });
+});
+
+// A libpod for a start over the seams. It answers the info the adoption reads and holds only the containers a test adds.
+class StartLibpod extends FakeLibpod {
+  info(): Promise<{ rootless: boolean }> {
+    return Promise.resolve({ rootless: true });
+  }
+}
+
+// The seams of a start over that libpod: the runtime fake, and the registry rebuild the test drives in place of rebuildRegistry.
+function startSeams(libpod: StartLibpod, rebuild: NonNullable<DriverStartSeams["rebuild"]>): DriverStartSeams {
+  return { libpod: libpod as unknown as LifecycleLibpod, runtime: new FakeRuntime(), rebuild };
+}
+
+// A promise and the function that settles it, for a test to wait on a point the code under test reaches. The executor form is used
+// because tsconfig's ES2023 lib has no Promise.withResolvers (compute-driver.test.ts uses it for the same reason).
+interface Milestone {
+  readonly reached: Promise<void>;
+  readonly fire: () => void;
+}
+
+function milestone(): Milestone {
+  let fire: () => void = () => undefined;
+  const reached = new Promise<void>((resolve) => {
+    fire = () => {
+      resolve();
+    };
+  });
+  return { reached, fire };
+}
+
+// Resolves after the given time. This is a real wait on purpose: the readiness wait the List sits in is a real timer inside the driver
+// (a 50 ms poll under a 4 s bound), and the List's answer crosses a real unix socket, so no fake clock reaches either. The test uses it
+// only to observe that the List has not answered yet, never to wait for the code under test to finish.
+function delay(ms: number): Promise<void> {
+  return new Promise<void>((resolve) => {
+    setTimeout(() => {
+      resolve();
+    }, ms);
+  });
+}
+
+// Creates a project directory under the workspace ceiling and the registry entry that pins it. Returns the sandbox name it binds.
+function projectOf(config: ComputeDriverConfig, dirName: string): { readonly name: string; readonly workspace: string } {
+  const workspace = join(config.workspaceRoot, dirName);
+  return { name: writeSandboxWorkspaceEntry(config, workspace), workspace };
+}
+
+// The registry entry a rebuild gives a sandbox: its gateway id, its workspace, and the container the test lists under its name.
+function recordOf(id: string, name: string, workspace: string): SandboxRecord {
+  return { id, workspace, containerName: name, runtimeIdentity: `id-${name}`, supervisorExited: false };
+}
+
+// The outcome of a ListSandboxes call: the sandbox names it lists, or the wire code it failed with.
+type ListOutcome = { readonly names: readonly string[] } | { readonly code: number };
+
+// The sandbox names a ListSandboxes response carries. A response without a sandbox list names none.
+function namesOf(response: unknown): string[] {
+  const sandboxes: unknown =
+    typeof response === "object" && response !== null && "sandboxes" in response ? response.sandboxes : undefined;
+  if (!Array.isArray(sandboxes)) {
+    return [];
+  }
+  return sandboxes.map((sandbox: unknown) =>
+    typeof sandbox === "object" && sandbox !== null && "name" in sandbox ? String(sandbox.name) : "",
+  );
+}
+
+// A ListSandboxes call on the driver's socket, as the gateway makes it. Each call resolves with the names it lists, or with the wire code
+// of its failure.
+function listOver(t: TestContext, socketPath: string): () => Promise<ListOutcome> {
+  const service = loadComputeDriverService();
+  const Constructor = makeClientConstructor(service, COMPUTE_DRIVER_SERVICE_NAME);
+  const client = new Constructor(`unix:${socketPath}`, credentials.createInsecure());
+  t.after(() => {
+    client.close();
+  });
+  const definition = service["ListSandboxes"];
+  assert.ok(definition !== undefined);
+  return () =>
+    new Promise<ListOutcome>((resolve) => {
+      client.makeUnaryRequest(
+        definition.path,
+        definition.requestSerialize,
+        definition.responseDeserialize,
+        {},
+        (error: ServiceError | null, response: unknown) => {
+          resolve(error === null ? { names: namesOf(response) } : { code: error.code });
+        },
+      );
+    });
+}
+
+// How long a List is held while a rebuild is part-way. A List that did not wait would have answered within this time over a real socket.
+// It is a real wait for the reason given at delay().
+const HOLD_MS = 200;
+// The least time a List that waits for the readiness bound takes to fail. The bound is 4 s (READY_WAIT_MS in compute-driver.ts). It is
+// observed in real time for the same reason as delay(); a refusal at once would be a connection failure, not the readiness wait.
+const MIN_BOUND_WAIT_MS = 3_000;
+
+void test("PRD-CTR-03: a List that starts while the registry rebuild is part-way waits for the rebuild, then returns every sandbox", { timeout: 15_000 }, async (t) => {
+  const config = unboundStartConfig(t);
+  const libpod = new StartLibpod();
+  const first = projectOf(config.driver, "project-a");
+  const second = projectOf(config.driver, "project-b");
+  const firstRegistered = milestone();
+  const releaseRebuild = milestone();
+  const rebuild = async ({ driver }: RegistryRebuildDeps): Promise<void> => {
+    libpod.add(first.name, true);
+    driver.adoptSandbox(first.name, recordOf("sandbox-a", first.name, first.workspace), new FakeSupervisor(false));
+    firstRegistered.fire();
+    await releaseRebuild.reached;
+    libpod.add(second.name, true);
+    driver.adoptSandbox(second.name, recordOf("sandbox-b", second.name, second.workspace), new FakeSupervisor(false));
+  };
+  const starting = startDriver(config, startSeams(libpod, rebuild));
+  t.after(async () => {
+    const server = await starting.catch(() => undefined);
+    await server?.close();
+  });
+  await firstRegistered.reached;
+  const list = listOver(t, config.socketPath);
+  let answered = false;
+  const listing = list().then((outcome) => {
+    answered = true;
+    return outcome;
+  });
+  await delay(HOLD_MS);
+  assert.equal(answered, false, "the List does not answer while the rebuild is part-way");
+  releaseRebuild.fire();
+  await starting;
+  assert.deepEqual(await listing, { names: [first.name, second.name] }, "the List returns the complete registry");
+});
+
+void test("PRD-CTR-03: a failed registry rebuild leaves the driver not ready, so a List that waits fails UNAVAILABLE once the bound passes", { timeout: 15_000 }, async (t) => {
+  const config = unboundStartConfig(t);
+  const libpod = new StartLibpod();
+  const first = projectOf(config.driver, "project-a");
+  const rebuildHeld = milestone();
+  const listFailed = milestone();
+  const rebuild = async ({ driver }: RegistryRebuildDeps): Promise<void> => {
+    libpod.add(first.name, true);
+    driver.adoptSandbox(first.name, recordOf("sandbox-a", first.name, first.workspace), new FakeSupervisor(false));
+    rebuildHeld.fire();
+    await listFailed.reached;
+    throw makeRealmError("SCHEMA_INVALID");
+  };
+  const starting = startDriver(config, startSeams(libpod, rebuild));
+  t.after(async () => {
+    const server = await starting.catch(() => undefined);
+    await server?.close();
+  });
+  await rebuildHeld.reached;
+  const startedAt = Date.now();
+  const outcome = await listOver(t, config.socketPath)();
+  const waitedMs = Date.now() - startedAt;
+  listFailed.fire();
+  await assert.rejects(starting, refusedWith("SCHEMA_INVALID"));
+  assert.deepEqual(outcome, { code: status.UNAVAILABLE }, "the List fails UNAVAILABLE and never returns the partial registry");
+  assert.ok(waitedMs >= MIN_BOUND_WAIT_MS, "the List waited for the readiness bound before it failed");
+  assert.equal(await listening(config.socketPath), false, "the failed start left no socket");
 });

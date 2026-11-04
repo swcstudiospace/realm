@@ -214,6 +214,8 @@ export interface DriverStartSeams {
   readonly libpod?: LifecycleLibpod;
   // The host supervisor spawn and the listener check. The runtime host of the process configuration when absent.
   readonly runtime?: RuntimeHost;
+  // The startup registry rebuild. The real one (registry-rebuild.ts) when absent.
+  readonly rebuild?: typeof rebuildRegistry;
   readonly readProcStatus?: (pid: number) => string;
   readonly readOciConfig?: (path: string) => string;
 }
@@ -224,9 +226,9 @@ export interface DriverStartSeams {
 // started on the same configuration is refused before it removes anything. The adoption then keeps each realm container that conforms to
 // its retained binding and removes the rest, with their secret entries and volumes. The registry rebuild gives each kept sandbox its
 // registry entry and a respawned host supervisor (registry-rebuild.ts). No request acts on a container or a secret ahead of either: the
-// lifecycle refuses create, delete and stop with REALM_NOT_ACTIVE until the adoption has resolved, the compute driver refuses CreateSandbox
-// the same way before it writes anything, and the remaining RPCs only read, so until the rebuild resolves List and Get answer from a
-// partial registry (PRD-CTR-03). A failed start closes the server, which removes the socket, and rethrows, so no half-started driver stays
+// lifecycle refuses create, delete and stop with REALM_NOT_ACTIVE until the adoption has resolved, and the compute driver's readiness also
+// waits for the rebuild. Create is refused until then, and List, Get and Watch wait for the rebuild rather than read a partial registry
+// (PRD-CTR-03). A failed start closes the server, which removes the socket, and rethrows, so no half-started driver stays
 // bound. The host supervisors of the previous generation exited when its driver's stdin pipes closed.
 export async function startDriver(config: DriverProcessConfig, seams: DriverStartSeams = {}): Promise<SocketServer> {
   const seccompProfilePath = installSeccompProfile(config.socketPath);
@@ -239,10 +241,16 @@ export async function startDriver(config: DriverProcessConfig, seams: DriverStar
     readProcStatus: seams.readProcStatus,
     readOciConfig: seams.readOciConfig,
   });
+  // The readiness the compute driver waits on: the adoption has swept (lifecycle.requireSwept) and the registry rebuild below has resolved.
+  // The flag is set only on resolution, so a rejected rebuild leaves the driver not ready.
+  let rebuilt = false;
   const driver = new ComputeDriver(config.driver, {
     lifecycle,
     requireSwept: () => {
       lifecycle.requireSwept();
+      if (!rebuilt) {
+        throw makeRealmError("REALM_NOT_ACTIVE");
+      }
     },
     libpod,
     runtime,
@@ -257,7 +265,8 @@ export async function startDriver(config: DriverProcessConfig, seams: DriverStar
       image: config.driver.sandboxImage,
     };
     const adoption = await lifecycle.adoptSurvivors(roots);
-    await rebuildRegistry({ driver, lifecycle, config: config.driver, runtime }, adoption.adopted);
+    await (seams.rebuild ?? rebuildRegistry)({ driver, lifecycle, config: config.driver, runtime }, adoption.adopted);
+    rebuilt = true;
   } catch (error: unknown) {
     // The failure that stopped the start is the one reported; a close that also fails must not replace it.
     await server.close().catch(() => undefined);
