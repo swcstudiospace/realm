@@ -5,9 +5,10 @@
 // any config is read or any file is touched, so a usage error changes nothing. Every refusal is a catalogue code on
 // stdout with its reason on stderr, the convention of the other subcommands.
 //
-// The library's sandboxRunning predicate is the daemon's status call for the session. Any state other than unbound
-// counts as running, so a state the CLI does not recognise is refused rather than assumed stopped. A daemon that cannot
-// answer refuses with REALM_NOT_ACTIVE before anything is written.
+// The library's sandboxRunning predicate is the daemon's status call for the session, and only a bound session has one.
+// Any state other than unbound counts as running, so a state the CLI does not recognise is refused rather than assumed
+// stopped. A daemon that cannot answer refuses with REALM_NOT_ACTIVE before anything is written. An unbound session (no
+// registry entry) makes no daemon call: the library checks its pin, and its sandbox counts as stopped.
 //
 // A sandbox start holds the session's checkpoint lock (src/lifecycle/controller.ts create and hydrate), so a checkpoint
 // refused by a live start gets LOCK_CONFLICT, and a start refused by a checkpoint gets REALM_NOT_ACTIVE. A restore that
@@ -26,6 +27,7 @@ import {
   restoreWorkspace,
   snapshotWorkspace,
   type CheckpointResult,
+  type CheckpointScope,
   type SandboxRunning,
 } from "../session/checkpoint.js";
 import { controlSocketPath, isSessionId, type EnvironmentLike } from "../session/paths.js";
@@ -126,8 +128,9 @@ export async function runCheckpointCommand(words: readonly string[], deps: Check
   } catch (error) {
     return refusal(error);
   }
-  // The registry entry is the trust anchor the library pins the workspace against. Without one the workspace names no
-  // session, which is the code the status path reports for it (the daemon's unbound state, REALM_UNBOUND).
+  // The registry entry decides whether the session is bound. An entry means bound: the daemon answers the sandbox state,
+  // as before. No entry means unbound: the library resolves the pin, with no daemon call. No entry and no pin is
+  // REALM_UNBOUND, which the library refuses before it writes anything.
   let entry: WorkspaceEntry | null;
   try {
     entry = readWorkspaceEntry(stateRoot, selection.sessionId);
@@ -135,7 +138,11 @@ export async function runCheckpointCommand(words: readonly string[], deps: Check
     return refusal(error);
   }
   if (entry === null) {
-    return refusal(makeRealmError("REALM_UNBOUND"));
+    try {
+      return await runLibrary(args, { entry: null, sessionId: selection.sessionId, stateRoot });
+    } catch (error) {
+      return refusal(error);
+    }
   }
   let client: DaemonClient;
   try {
@@ -146,6 +153,8 @@ export async function runCheckpointCommand(words: readonly string[], deps: Check
   return runAgainstDaemon(client, args, entry, stateRoot);
 }
 
+// The bound path. The daemon is the sandbox's status source: its pre-flight call must answer before the library writes
+// anything, and a daemon that goes silent during the operation is REALM_NOT_ACTIVE.
 async function runAgainstDaemon(
   client: DaemonClient,
   args: CheckpointArgs,
@@ -166,15 +175,7 @@ async function runAgainstDaemon(
   try {
     // Pre-flight: the daemon must answer before the library writes anything, so an absent daemon refuses here.
     await sandboxRunning(entry.sessionId);
-    const scope = { entry, stateRoot, sandboxRunning, checkpointId: args.checkpointId };
-    const result: CheckpointResult =
-      args.command === "create" ? await snapshotWorkspace(scope) : await restoreWorkspace(scope);
-    return {
-      exitCode: 0,
-      stdout: `${JSON.stringify({ command: args.command, checkpointId: args.checkpointId, entries: result.manifest.entries.length })}\n`,
-      // One stderr line per cleanup warning. The commit held, so the exit code stays 0.
-      stderr: result.warnings.map((warning) => `warning: ${warning}\n`).join(""),
-    };
+    return await runLibrary(args, { entry, stateRoot, sandboxRunning });
   } catch (error) {
     // The library maps a throwing predicate to REALM_NOT_ACTIVE. Here the daemon is the thing that cannot answer,
     // so the refusal is the daemon-unreachable code whatever the library reported.
@@ -182,4 +183,18 @@ async function runAgainstDaemon(
   } finally {
     client.close();
   }
+}
+
+// Runs the library operation for the scope and formats its result. A refusal is thrown for the caller to map.
+async function runLibrary(args: CheckpointArgs, scope: CheckpointScope): Promise<CliResult> {
+  const result: CheckpointResult =
+    args.command === "create"
+      ? await snapshotWorkspace({ ...scope, checkpointId: args.checkpointId })
+      : await restoreWorkspace({ ...scope, checkpointId: args.checkpointId });
+  return {
+    exitCode: 0,
+    stdout: `${JSON.stringify({ command: args.command, checkpointId: args.checkpointId, entries: result.manifest.entries.length })}\n`,
+    // One stderr line per cleanup warning. The commit held, so the exit code stays 0.
+    stderr: result.warnings.map((warning) => `warning: ${warning}\n`).join(""),
+  };
 }

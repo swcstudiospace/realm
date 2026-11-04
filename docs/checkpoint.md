@@ -80,9 +80,9 @@ Restore replaces the workspace contents. The current entries under the root are 
 
 ## Stopped projects
 
-A checkpoint needs the workspace's session to be registered, and the daemon to report that session as unbound. `realm down` removes the registration. For a project that has been brought down, create and restore refuse with `REALM_UNBOUND`.
+`realm down` removes the registry entry and keeps the workspace's pin, so create and restore for a brought-down project resolve the workspace from the pin, with no daemon call, and treat its sandbox as stopped. A workspace with neither a registry entry nor a pin is refused with `REALM_UNBOUND`.
 
-Checkpointing a stopped project is not supported yet. How it should work is an open decision, recorded as an open item in D19-9.
+The current code never removes a pin. When a pin should be removed is an open decision, recorded in D19-10.
 
 ## Limits
 

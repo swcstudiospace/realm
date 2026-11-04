@@ -4,8 +4,9 @@
 // between the scan before the copy and the scan after it, so a host writer that changes and reverts a file during the
 // copy is seen. The stamps are never stored: restored files get new inodes.
 //
-// The workspace is identified only by the session's registry entry (workspace-registry.ts). Its directory is verified
-// against the pinned identity before the copy, after it, and before any move.
+// The workspace is identified by the session's registry entry (workspace-registry.ts) when the session is bound, and by
+// its pin (workspace-pin.ts) when it is unbound. Its directory is verified against that identity before the copy, after
+// it, and before any move. An entry means bound. No entry with a pin means unbound and stopped. Neither means REALM_UNBOUND.
 //
 // Cross-process lock. Every public operation takes the session lock first (checkpoint-lock.ts): a file, `.lock`, in the
 // session's checkpoint directory. It is published whole, so it is never seen empty. Its content records the owner: pid,
@@ -51,6 +52,7 @@ import { errnoOf } from "../fs/canonicalize.js";
 import { isInsideRoot, type PinnedRoot, verifyPinnedAt } from "../fs/root.js";
 import { acquireSessionLock, releaseSessionLock } from "./checkpoint-lock.js";
 import { checkpointDirOf, checkpointSessionDirOf, checkpointsDirOf } from "./paths.js";
+import { readWorkspacePin, verifyWorkspacePin } from "./workspace-pin.js";
 import { verifyWorkspaceEntry, type WorkspaceEntry } from "./workspace-registry.js";
 
 // Each copy, scan and move runs under this bound. A workspace tree can be large, so a copy of it on a loaded disk can
@@ -95,26 +97,33 @@ export interface CheckpointResult {
 // move, and again after the copy or restore. A predicate that throws leaves the state unknown, so the operation is refused.
 export type SandboxRunning = (sessionId: string) => boolean | Promise<boolean>;
 
-export interface CheckpointScope {
-  // The session's registry entry. Its directory is verified against the pinned identity before the copy, after it, and
-  // before any move. The session id comes from the entry.
-  readonly entry: WorkspaceEntry;
-  readonly stateRoot: string;
-  readonly sandboxRunning: SandboxRunning;
-}
+// The workspace an operation runs against. A bound session names its registry entry, which verifies the directory, and
+// its sandbox is asked. An unbound session names no entry: its pin, under the session id, verifies the directory, and
+// its sandbox is stopped, so the sandbox is never asked.
+export type CheckpointScope =
+  | {
+      readonly entry: WorkspaceEntry;
+      readonly stateRoot: string;
+      readonly sandboxRunning: SandboxRunning;
+    }
+  | {
+      readonly entry: null;
+      readonly sessionId: string;
+      readonly stateRoot: string;
+    };
 
-export interface SnapshotRequest extends CheckpointScope {
+export type SnapshotRequest = CheckpointScope & {
   readonly checkpointId: string;
-}
+};
 
-export interface RestoreRequest extends CheckpointScope {
+export type RestoreRequest = CheckpointScope & {
   readonly checkpointId: string;
   // Test seam. Awaited inside the bounded step of each move, before its rename. A throw aborts the restore, and the tree is
   // rolled back. A promise that never settles hits the step bound.
   readonly beforeMove?: (entryName: string) => void | Promise<void>;
   // Test seam. Removes the work directory after the commit, in place of rm. A rejection is reported as a warning.
   readonly removeWorkDir?: (workDir: string) => Promise<void>;
-}
+};
 
 // The step most recently started, and whether a step has run past its bound and is still running. A failure can leave a
 // step running after its bound has expired, so cleanup waits for it, under the same bound, before it touches the tree, the
@@ -168,26 +177,59 @@ export async function restoreWorkspace(request: RestoreRequest): Promise<Checkpo
   }
 }
 
+// The workspace an operation runs against, resolved once from its scope. The sandbox predicate is the scope's when the
+// session is bound, and the stopped predicate when it is not.
+interface Workspace {
+  readonly sessionId: string;
+  readonly workspaceRoot: string;
+  readonly pinned: PinnedRoot;
+  readonly sandboxRunning: SandboxRunning;
+}
+
+// The one resolver for both states. A registry entry means bound: the directory is verified against the entry and the
+// sandbox is asked. No entry but a pin means unbound: the directory is verified against the pin, and the sandbox counts as
+// stopped. No entry and no pin means the session was never bound, so the operation is refused before anything is written.
+function resolveWorkspace(scope: CheckpointScope): Workspace {
+  if (scope.entry !== null) {
+    return {
+      sessionId: scope.entry.sessionId,
+      workspaceRoot: scope.entry.workspaceRoot,
+      pinned: verifyWorkspaceEntry(scope.entry),
+      sandboxRunning: scope.sandboxRunning,
+    };
+  }
+  const pin = readWorkspacePin(scope.stateRoot, scope.sessionId);
+  if (pin === null) {
+    throw makeRealmError("REALM_UNBOUND");
+  }
+  return {
+    sessionId: pin.sessionId,
+    workspaceRoot: pin.workspaceRoot,
+    pinned: verifyWorkspacePin(pin),
+    sandboxRunning: () => false,
+  };
+}
+
 async function takeSnapshot(request: SnapshotRequest): Promise<CheckpointResult> {
-  const { entry, stateRoot } = request;
-  const checkpointDir = checkpointDirOf(stateRoot, entry.sessionId, request.checkpointId);
-  const pinned = verifyWorkspaceEntry(entry);
-  await refuseStateInsideRoot(pinned, stateRoot);
-  await ensureSessionDir(stateRoot, entry.sessionId);
-  const lockPath = acquireSessionLock(checkpointSessionDirOf(stateRoot, entry.sessionId));
+  const { stateRoot } = request;
+  const workspace = resolveWorkspace(request);
+  const checkpointDir = checkpointDirOf(stateRoot, workspace.sessionId, request.checkpointId);
+  await refuseStateInsideRoot(workspace.pinned, stateRoot);
+  await ensureSessionDir(stateRoot, workspace.sessionId);
+  const lockPath = acquireSessionLock(checkpointSessionDirOf(stateRoot, workspace.sessionId));
   const steps: Steps = { pending: undefined, stuck: false };
-  return settleUnderLock(lockPath, steps, () => snapshotLocked(request, pinned, checkpointDir, steps));
+  return settleUnderLock(lockPath, steps, () => snapshotLocked(stateRoot, workspace, checkpointDir, steps));
 }
 
 async function snapshotLocked(
-  request: SnapshotRequest,
-  pinned: PinnedRoot,
+  stateRoot: string,
+  workspace: Workspace,
   checkpointDir: string,
   steps: Steps,
 ): Promise<CheckpointResult> {
-  const { entry, stateRoot, sandboxRunning } = request;
-  await requireSandboxStopped(sandboxRunning, entry.sessionId);
-  await recoverSession(stateRoot, entry.sessionId, pinned, entry.workspaceRoot, steps);
+  const { pinned, sessionId, workspaceRoot, sandboxRunning } = workspace;
+  await requireSandboxStopped(sandboxRunning, sessionId);
+  await recoverSession(stateRoot, sessionId, pinned, workspaceRoot, steps);
   // The reservation runs outside the try below: a collision must not remove the checkpoint that already holds the id.
   await reserveCheckpointDir(checkpointDir);
   try {
@@ -195,8 +237,8 @@ async function snapshotLocked(
     const treeDir = join(checkpointDir, TREE_DIR);
     await makePrivateDir(treeDir);
     await bounded(steps, copyTree(pinned.realPath, treeDir));
-    verifyPinnedAt(pinned, entry.workspaceRoot);
-    await requireSandboxStopped(sandboxRunning, entry.sessionId);
+    verifyPinnedAt(pinned, workspaceRoot);
+    await requireSandboxStopped(sandboxRunning, sessionId);
     const after = await bounded(steps, scanTree(pinned.realPath, pinned));
     if (!sameEntries(before.entries, after.entries) || !sameStamps(before.stamps, after.stamps)) {
       throw makeRealmError("LOCK_CONFLICT");
@@ -223,31 +265,32 @@ async function undoSnapshot(error: unknown, checkpointDir: string, steps: Steps)
 }
 
 async function restoreFromCheckpoint(request: RestoreRequest): Promise<CheckpointResult> {
-  const { entry, stateRoot } = request;
-  const checkpointDir = checkpointDirOf(stateRoot, entry.sessionId, request.checkpointId);
-  const pinned = verifyWorkspaceEntry(entry);
-  await refuseStateInsideRoot(pinned, stateRoot);
+  const { stateRoot } = request;
+  const workspace = resolveWorkspace(request);
+  const checkpointDir = checkpointDirOf(stateRoot, workspace.sessionId, request.checkpointId);
+  await refuseStateInsideRoot(workspace.pinned, stateRoot);
   // A checkpoint is immutable once written, so it is read before the lock; a missing one is refused here.
   const stored = await readCheckpoint(checkpointDir);
-  const lockPath = acquireSessionLock(checkpointSessionDirOf(stateRoot, entry.sessionId));
+  const lockPath = acquireSessionLock(checkpointSessionDirOf(stateRoot, workspace.sessionId));
   const steps: Steps = { pending: undefined, stuck: false };
-  return settleUnderLock(lockPath, steps, () => restoreLocked(request, pinned, checkpointDir, stored, steps));
+  return settleUnderLock(lockPath, steps, () => restoreLocked(request, workspace, checkpointDir, stored, steps));
 }
 
 async function restoreLocked(
   request: RestoreRequest,
-  pinned: PinnedRoot,
+  workspace: Workspace,
   checkpointDir: string,
   stored: CheckpointManifest,
   steps: Steps,
 ): Promise<CheckpointResult> {
-  const { entry, stateRoot, sandboxRunning } = request;
-  await requireSandboxStopped(sandboxRunning, entry.sessionId);
-  await recoverSession(stateRoot, entry.sessionId, pinned, entry.workspaceRoot, steps);
+  const { stateRoot } = request;
+  const { pinned, sessionId, workspaceRoot, sandboxRunning } = workspace;
+  await requireSandboxStopped(sandboxRunning, sessionId);
+  await recoverSession(stateRoot, sessionId, pinned, workspaceRoot, steps);
 
   // The work directory sits beside the checkpoints, outside the root. It holds the staged copy and the backup.
   const workDir = join(
-    checkpointSessionDirOf(stateRoot, entry.sessionId),
+    checkpointSessionDirOf(stateRoot, sessionId),
     `${WORK_DIR_PREFIX}${randomBytes(8).toString("hex")}`,
   );
   const stage = join(workDir, STAGE_DIR);
@@ -261,14 +304,14 @@ async function restoreLocked(
     await makePrivateDir(stage);
     await makePrivateDir(backup);
     await bounded(steps, copyTree(join(checkpointDir, TREE_DIR), stage));
-    verifyPinnedAt(pinned, entry.workspaceRoot);
-    await requireSandboxStopped(sandboxRunning, entry.sessionId);
+    verifyPinnedAt(pinned, workspaceRoot);
+    await requireSandboxStopped(sandboxRunning, sessionId);
     const staged = await bounded(steps, scanTree(stage));
     if (!sameEntries(staged.entries, stored.entries)) {
       // A checkpoint whose content differs from its manifest is corrupt. Nothing has moved yet.
       throw makeRealmError("SCHEMA_INVALID");
     }
-    await swapEntries(request, pinned, workDir, stored, steps, moved);
+    await swapEntries(request, workspace, workDir, stored, steps, moved);
     await writeFile(join(workDir, COMMITTED_FILE), "", { flag: "wx" });
   } catch (error) {
     throw await undoRestore(error, pinned.realPath, workDir, moved, steps);
@@ -380,12 +423,13 @@ async function returnOriginalTree(workDir: string, root: string, steps: Steps): 
 
 async function swapEntries(
   request: RestoreRequest,
-  pinned: PinnedRoot,
+  workspace: Workspace,
   workDir: string,
   stored: CheckpointManifest,
   steps: Steps,
   moved: MovedNames,
 ): Promise<void> {
+  const { pinned, sessionId, sandboxRunning } = workspace;
   const stage = join(workDir, STAGE_DIR);
   const backup = join(workDir, BACKUP_DIR);
   for (const name of (await readdir(pinned.realPath)).sort()) {
@@ -400,7 +444,7 @@ async function swapEntries(
     moved.movedIn.push(name);
     await bounded(steps, moveEntry(request.beforeMove, name, join(stage, name), join(pinned.realPath, name)));
   }
-  await requireSandboxStopped(request.sandboxRunning, request.entry.sessionId);
+  await requireSandboxStopped(sandboxRunning, sessionId);
   const restored = await bounded(steps, scanTree(pinned.realPath, pinned));
   if (!sameEntries(restored.entries, stored.entries)) {
     throw makeRealmError("WRITE_NOT_ATOMIC");
