@@ -269,6 +269,16 @@ Captured live on 2026-10-25 through the realm gateway, with debug spans on. One 
 
 Phase 9.4 closed on its code and on the live checks it could reach. Historical: a sandbox stayed Provisioning (ConfigurationPending) in that capture, until the phase 9.5 supervisor reported its effective configuration, so the PD-08 stop and start calls were not reached then. See PD-08 above for the state on the built-in path, including the open owner decision. `AuthenticateSandbox` is not part of that: see the RPC table above.
 
+### Open questions
+
+1. Startup reconcile and UNAVAILABLE. How does the gateway treat an `UNAVAILABLE` status from `ListSandboxes`, `GetSandbox` or `WatchSandboxes` during its startup reconcile: retry, fail startup, or drop the watch stream? This is unverified and has not been observed live.
+
+Evidence in this document: the RPC table gives `ListSandboxes` the errors entry "none" (its row reads "Lists, under the gateway's name, the sandboxes that have a registry entry and a labelled container. | none") and gives `WatchSandboxes` the errors entry "none" (its row reads "Sends every sandbox on connect, then each change, and each removal as a deleted event. Polls until the client cancels. | none"). The `GetSandbox` row lists only "`NOT_FOUND` when the driver does not hold the sandbox." The call-site capture gives the startup order as "At startup: GetCapabilities (driver.initialize), WatchSandboxes, ListSandboxes (reconcile)." That line does not name `GetSandbox`, so this document does not record where `GetSandbox` runs during startup. The capture records which RPCs ran, not the status any of them returned. The adoption paragraph says that until the rebuild resolves, "`List` and `Get` answer from a partial registry", which is not an UNAVAILABLE status.
+
+The planned driver readiness wait is expected to return UNAVAILABLE only after the startup budget is exhausted. That is a plan, not an observed behaviour, and this document does not describe it. Whether that status reaches the gateway's reconcile at all is therefore unknown.
+
+To close this: run a live start with the driver not yet ready, record the status of each of these RPCs and the gateway's next action, or read the gateway source at the pinned OpenShell version (0.1.5).
+
 ## Resource bound (Phase 18, MULTI-06)
 
 The daemon admits a bounded number of concurrent sessions. The bound is derived from the profile in `HARDENING_PROFILE`, and the driver never counts sessions (evidence: src/runtime/hardening.ts; src/daemon/admission.ts).
