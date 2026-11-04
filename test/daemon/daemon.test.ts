@@ -49,7 +49,7 @@ import { ERROR_CATALOGUE } from "../../src/core/errors.js";
 import { renameSync } from "node:fs";
 import { SessionStore } from "../../src/session/store.js";
 import { listWorkspaceEntryIds, workspaceRegistryDirOf, writeWorkspaceEntry } from "../../src/session/workspace-registry.js";
-import { HYDRATE_CONCURRENCY } from "../../src/lifecycle/controller.js";
+import { HYDRATE_CONCURRENCY } from "../../src/lifecycle/bounds.js";
 import { bindRoot, PinnedRoot } from "../../src/fs/root.js";
 import type { PodmanProbeResult } from "../../src/runtime/podman-probe.js";
 import { controlSocketPath } from "../../src/session/paths.js";

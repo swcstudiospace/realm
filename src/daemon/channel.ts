@@ -24,7 +24,7 @@ const KNOWN_CODES: readonly string[] = ERROR_CODES;
 export const SOCKET_TIMEOUT_MS = 5000;
 
 // Bound for one control request, per method. down must outlast the controller teardown bound
-// (TEARDOWN_TIMEOUT_MS in lifecycle/controller.ts, 30 s), or the CLI gives up while the daemon is
+// (TEARDOWN_TIMEOUT_MS in lifecycle/bounds.ts, 30 s), or the CLI gives up while the daemon is
 // still tearing down. up must outlast the policy startup budget plus a margin for the reply, or the
 // caller reports TOOL_TIMEOUT while the daemon is still inside its own budget. doctor runs the registered items plus the
 // runtime checks; probes run together, each bounded at 5 s, so it gets 60 s. tool runs one dispatcher call under its

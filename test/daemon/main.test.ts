@@ -21,7 +21,7 @@ import {
 import type { StartedDaemon } from "../../src/daemon/daemon.js";
 import { daemonLogPath, daemonStartFailureSince } from "../../src/daemon/ensure.js";
 import { defaultPolicyPath } from "../../src/runtime/host-paths.js";
-import { TEARDOWN_TIMEOUT_MS } from "../../src/lifecycle/controller.js";
+import { TEARDOWN_TIMEOUT_MS } from "../../src/lifecycle/bounds.js";
 import type { EnvironmentLike } from "../../src/session/paths.js";
 
 // Every entry line is one JSON object written through the logger: ts, level, event, then code. The timestamp is checked
