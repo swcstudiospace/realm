@@ -31,8 +31,8 @@
 // StopSandbox and StartSandbox refuse with the transition code, which maps to FAILED_PRECONDITION (PD-08).
 // AuthenticateSandbox is not implemented: the driver does not advertise sandbox authentication.
 
-import { existsSync, lstatSync, mkdirSync, realpathSync, rmSync, type Stats } from "node:fs";
-import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
+import { existsSync } from "node:fs";
+import { dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   type ServerUnaryCall,
@@ -43,38 +43,38 @@ import {
 } from "@grpc/grpc-js";
 import * as protoLoader from "@grpc/proto-loader";
 import { makeRealmError, RealmError } from "../../core/errors.js";
-import { bindRoot, isInsideRoot } from "../../fs/root.js";
-import { isSessionId } from "../../session/paths.js";
-import { readWorkspaceEntry, verifyWorkspaceEntry } from "../../session/workspace-registry.js";
-import { HARDENING_PROFILE, hardeningEvidenceDigest } from "../hardening.js";
-import type { ContainerSpec, LibpodClient, LibpodInspect } from "../libpod-client.js";
-import { CONTAINER_ID_PATTERN } from "../libpod-routes.js";
-import {
-  isRealmSandboxName,
-  OPENSHELL_ISOLATION_ROLE_LABEL_KEY,
-  OPENSHELL_SANDBOX_NAME_LABEL_KEY,
-  OPENSHELL_SANDBOX_ROLE_VALUE,
-  REALM_SANDBOX_NAME_PREFIX,
-} from "../openshell.js";
+import type { LibpodClient } from "../libpod-client.js";
+import { hardeningEvidenceDigest } from "../hardening.js";
+import { OPENSHELL_ISOLATION_ROLE_LABEL_KEY, OPENSHELL_SANDBOX_NAME_LABEL_KEY, OPENSHELL_SANDBOX_ROLE_VALUE } from "../openshell.js";
 import { DRIVER_ADMISSION_ACKNOWLEDGEMENT } from "./admission.js";
-import { assertSocketPathsFit, channelPathsOf, generateRuntimeTls, makeChannelDirectory, removeKeyFile, writeRuntimeFiles, type ListenerTrust } from "./channel.js";
+import { channelPathsOf, generateRuntimeTls, makeChannelDirectory, removeKeyFile, writeRuntimeFiles, type ListenerTrust } from "./channel.js";
 import { driverFailureOf, DriverStatusError, driverNotFound, driverUnimplemented, toServerError } from "./grpc-status.js";
 import { assertStateDirClear } from "./lifecycle-guards.js";
 import type { DriverLifecycle } from "./lifecycle.js";
-import { decodeLaunchAuthentication, type LaunchAuthentication } from "./isolation/launch.js";
+import type { LaunchAuthentication } from "./isolation/launch.js";
 import { logStageRefusal, refusal, refusalScope, type RefusalCheck, type RefusalLog, type RefusalScope } from "./refusal.js";
-import {
-  assertRuntimeFilesAgree,
-  CONTAINER_CONTROL_SOCKET,
-  buildRuntimeChannel,
-  runtimeServerName,
-  type RuntimeChannel,
-  type RuntimeVerificationKey,
-} from "./runtime-channel.js";
+import { assertRuntimeFilesAgree, buildRuntimeChannel, runtimeServerName, type RuntimeChannel } from "./runtime-channel.js";
 import { GATEWAY_ID_PATTERN } from "../gateway-config.js";
-import { removeSandboxSecrets, secretDirExists, secretDirOf, writeLaunchMaterial } from "./secret-store.js";
-import { sandboxBindingOf } from "./sandbox-binding.js";
+import { secretDirExists, secretDirOf, writeLaunchMaterial } from "./secret-store.js";
 import { launchSandboxSupervisor, type SupervisorHandle, type SupervisorSpawn } from "./supervisor.js";
+import { lstatOrAbsent, realPathOrRefuse } from "./fs-guards.js";
+import { atStage, planCreate, runtimeKeysOf, type CreatePlan } from "./compute-driver-create.js";
+import {
+  addCleanupNote,
+  assertApart,
+  assertPinnedWorkspaceRoot,
+  assertStateDirAbsent,
+  assertWorkspaceId,
+  containerNameOf,
+  CONTAINER_NOT_REMOVED,
+  CONTAINER_UNCONFIRMED,
+  FILES_LEFT_IN_PLACE,
+  mkdirOrRefuse,
+  removeLaunchMaterial,
+  removeStateDir,
+  SUPERVISOR_NOT_STOPPED,
+} from "./compute-driver-state.js";
+import { holdsWorkspace, sandboxOut } from "./compute-driver-output.js";
 
 export const COMPUTE_DRIVER_SERVICE_NAME = "openshell.compute.v1.ComputeDriver";
 const PROTO_FILE = "compute_driver.proto";
@@ -85,17 +85,7 @@ const SUPPORTED_CAPABILITIES: readonly string[] = Object.freeze([
   "openshell.compute.contract",
   "openshell.compute.launch-authentication",
 ]);
-const WORKSPACE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
-const CPU_QUANTITY_PATTERN = /^([0-9]+(?:\.[0-9]+)?)(m)?$/;
-const MEMORY_QUANTITY_PATTERN = /^([0-9]+)(Ki|Mi|Gi|Ti)?$/;
-const MEMORY_UNIT_BYTES: Readonly<Record<string, number>> = Object.freeze({
-  "": 1,
-  Ki: 1024,
-  Mi: 1024 ** 2,
-  Gi: 1024 ** 3,
-  Ti: 1024 ** 4,
-});
-const NANOCPUS_PER_CORE = 1_000_000_000;
+
 const DEFAULT_WATCH_INTERVAL_MS = 1000;
 
 // The gateway accepts an implementation version of 1 to 128 bytes that is not blank and holds no control characters
@@ -169,7 +159,7 @@ interface PeerMetadataMessage {
 export interface GetCapabilitiesRequest {
   readonly gateway?: PeerMetadataMessage | null;
 }
-interface ResourceQuantityMessage {
+export interface ResourceQuantityMessage {
   readonly cpu_request?: string;
   readonly cpu_limit?: string;
   readonly memory_request?: string;
@@ -237,18 +227,6 @@ export interface SandboxRecord {
   readonly runtimeIdentity: string;
   // Set when the sandbox's host supervisor exits. The sandbox then reports failed, whether or not its container stop worked.
   supervisorExited: boolean;
-}
-
-// A validated create: the gateway's sandbox name and id, its workspace, the spec the lifecycle takes, and the launch material
-// the driver stores for the sandbox, with its decoded authentication.
-interface CreatePlan {
-  readonly sandboxName: string;
-  readonly sandboxId: string;
-  readonly workspace: string;
-  readonly spec: ContainerSpec;
-  // The launch material, or undefined when the request carries none. CreateSandbox refuses a plan without it.
-  readonly launch: Uint8Array | undefined;
-  readonly authentication: LaunchAuthentication | undefined;
 }
 
 // The service's method map, loaded from the vendored protos with the pinned loader. The protos are read from disk at
@@ -553,9 +531,9 @@ export class ComputeDriver {
   // logs nothing.
   private staleDirectoryCheck(plan: CreatePlan): RefusalCheck | undefined {
     try {
-      realpathOrRefuse(dirname(plan.spec.stateDir));
-      const state = statOrNull(plan.spec.stateDir);
-      const secret = statOrNull(secretDirOf(this.config.secretRoot, plan.spec.sandboxName));
+      realPathOrRefuse(dirname(plan.spec.stateDir));
+      const state = lstatOrAbsent(plan.spec.stateDir, "SCHEMA_INVALID");
+      const secret = lstatOrAbsent(secretDirOf(this.config.secretRoot, plan.spec.sandboxName), "SCHEMA_INVALID");
       if ((state !== null && !state.isDirectory()) || (secret !== null && !secret.isDirectory())) {
         return undefined;
       }
@@ -593,7 +571,7 @@ export class ComputeDriver {
       return;
     }
     try {
-      if (statOrNull(plan.spec.stateDir) !== null) {
+      if (lstatOrAbsent(plan.spec.stateDir, "SCHEMA_INVALID") !== null) {
         assertStateDirClear(plan.spec.stateDir);
       }
       await this.removeSandbox(plan.sandboxName, containerName);
@@ -820,397 +798,6 @@ export class ComputeDriver {
   private scopeOf(rpc: "ValidateSandboxCreate" | "CreateSandbox"): RefusalScope {
     return refusalScope(rpc, this.config.refusalLog);
   }
-}
-
-// The container name for a gateway sandbox name: the realm prefix is added when the name lacks it. Undefined when the
-// result fails the container-name rule, which also bounds the length, so the caller refuses it.
-function containerNameOf(sandboxName: string): string | undefined {
-  const name = isRealmSandboxName(sandboxName) ? sandboxName : `${REALM_SANDBOX_NAME_PREFIX}${sandboxName}`;
-  return CONTAINER_ID_PATTERN.test(name) ? name : undefined;
-}
-
-// The built-in path carries no isolation backend selection: the gateway selects the built-in backend by name, and the
-// driver is not told of it. A selection that arrives anyway is refused before any write or libpod call.
-function refuseIsolationSelection(selection: unknown, scope: RefusalScope): void {
-  if (selection !== undefined && selection !== null) {
-    throw refusal(scope, "create.isolation_backend");
-  }
-}
-
-// Runs one stage of the create path. A SCHEMA_INVALID the stage raises is logged with the stage's check, and the error is rethrown unchanged.
-function atStage<T>(scope: RefusalScope, check: RefusalCheck, work: () => T): T {
-  try {
-    return work();
-  } catch (error: unknown) {
-    logStageRefusal(scope, check, error);
-    throw error;
-  }
-}
-
-// The host directory a sandbox mounts at /workspace: the directory its workspace registry entry names, verified now. The sandbox name
-// is "realm-" plus the session id. A name without the prefix, or an id outside the safe set, is refused, and so is a name with no
-// usable entry. Reads only.
-function resolveSandboxWorkspace(config: ComputeDriverConfig, sandboxName: string, scope: RefusalScope): string {
-  const sessionId = sandboxName.startsWith(REALM_SANDBOX_NAME_PREFIX) ? sandboxName.slice(REALM_SANDBOX_NAME_PREFIX.length) : "";
-  if (!isSessionId(sessionId)) {
-    throw refusal(scope, "create.workspace");
-  }
-  const workspace = registeredWorkspaceOf(config, sessionId);
-  if (workspace === undefined) {
-    throw refusal(scope, "create.workspace");
-  }
-  return workspace;
-}
-
-// The verified real path of the directory the registry entry for a session id names. Undefined when there is no entry, the entry
-// lies outside the ceiling, or the registry read or the verify throws. Reads only.
-function registeredWorkspaceOf(config: ComputeDriverConfig, sessionId: string): string | undefined {
-  try {
-    const entry = readWorkspaceEntry(config.stateDir, sessionId);
-    if (entry === null || !isInsideRoot(bindRoot(config.workspaceRoot), entry.workspaceRoot)) {
-      return undefined;
-    }
-    return verifyWorkspaceEntry(entry).realPath;
-  } catch {
-    return undefined;
-  }
-}
-
-// Checks a create request against the realm profile and returns the lifecycle spec and the launch material when it carries any.
-// Every refusal is SCHEMA_INVALID, logged with its RPC and check, and no libpod call is made. Launch material that is present must
-// decode for this driver's gateway, on both RPCs, before any write. An absent bundle is not refused here: CreateSandbox refuses it
-// (createSandbox), so ValidateSandboxCreate can run before the gateway mints the bundle.
-function planCreate(
-  sandbox: DriverSandboxMessage | null | undefined,
-  config: ComputeDriverConfig,
-  scope: RefusalScope,
-): CreatePlan {
-  if (sandbox === null || sandbox === undefined) {
-    throw refusal(scope, "create.sandbox");
-  }
-  const sandboxId = sandbox.id ?? "";
-  const sandboxName = sandbox.name ?? "";
-  const workspace = sandbox.workspace ?? "";
-  const containerName = sandboxName === "" ? undefined : containerNameOf(sandboxName);
-  if (sandboxId === "" || containerName === undefined) {
-    throw refusal(scope, "create.identity");
-  }
-  if (!WORKSPACE_ID_PATTERN.test(workspace)) {
-    throw refusal(scope, "create.workspace");
-  }
-  const spec = sandbox.spec;
-  const template = spec?.template;
-  if (spec === null || spec === undefined || template === null || template === undefined) {
-    throw refusal(scope, "create.spec");
-  }
-  // The image must be the configured digest exactly. A tag, or any other digest, is refused.
-  if (template.image !== config.sandboxImage) {
-    throw refusal(scope, "create.image");
-  }
-  const gpu = spec.resource_requirements?.gpu;
-  if (gpu !== undefined && gpu !== null) {
-    throw refusal(scope, "create.gpu");
-  }
-  checkResources(template.resources, scope);
-  // The container is built from the realm profile alone. Caller-supplied platform or driver config could reach the
-  // network, mounts or capabilities, so it is refused. So are environment and a user-namespace request.
-  if (!structIsEmpty(template.platform_config) || !structIsEmpty(template.driver_config)) {
-    throw refusal(scope, "create.runtime_config");
-  }
-  if (template.user_namespaces === true) {
-    throw refusal(scope, "create.user_namespaces");
-  }
-  refuseIsolationSelection(spec.isolation_backend, scope);
-  if (hasEntries(spec.environment) || hasEntries(template.environment)) {
-    throw refusal(scope, "create.environment");
-  }
-  // The runtime is PID 1 whatever the argv, so an empty argv is not refused. An empty argument is still refused, as at HEAD.
-  if ((spec.command ?? []).some((argument) => argument === "")) {
-    throw refusal(scope, "create.command");
-  }
-  const launch = launchMaterialOf(spec.launch_authentication);
-  const authentication = launch === undefined ? undefined : decodeLaunchAuthentication(launch, config.gatewayId, scope);
-  // The control socket and the SSH socket must fit a unix socket address on the host, and the control socket in the container.
-  // Checked before any write or libpod call.
-  const channel = atStage(scope, "create.identity", () => channelPathsOf(secretDirOf(config.secretRoot, containerName)));
-  atStage(scope, "create.socket_path", () => {
-    assertSocketPathsFit([channel.controlSocket, channel.sshSocket, CONTAINER_CONTROL_SOCKET]);
-  });
-  // The container's mounts are the sandbox binding, which the lifecycle verifies the container against. Its workspace is the directory
-  // the registry entry for this sandbox names, verified now.
-  const workspaceDir = resolveSandboxWorkspace(config, sandboxName, scope);
-  const binding = atStage(scope, "create.identity", () =>
-    sandboxBindingOf(
-      { workspaceRoot: workspaceDir, stateRoot: config.sandboxStateRoot, secretRoot: config.secretRoot },
-      containerName,
-    ),
-  );
-  return {
-    sandboxName,
-    sandboxId,
-    workspace,
-    launch,
-    authentication,
-    spec: {
-      sandboxName: containerName,
-      image: template.image,
-      workspaceDir: binding.workspaceRoot,
-      stateDir: binding.stateDir,
-      channelDir: binding.channelDir,
-    },
-  };
-}
-
-// The launch material a request carries, or undefined when it carries none. proto3 bytes arrive empty when unset, so an empty
-// buffer is no material.
-function launchMaterialOf(value: Uint8Array | null | undefined): Uint8Array | undefined {
-  return value === undefined || value === null || value.length === 0 ? undefined : value;
-}
-
-// The gateway's verification keys as the runtime's bootstrap names them: each PEM as text. A key that is not UTF-8 is refused.
-function runtimeKeysOf(authentication: LaunchAuthentication): RuntimeVerificationKey[] {
-  const decoder = new TextDecoder("utf-8", { fatal: true });
-  return authentication.verificationKeys.map((key) => {
-    try {
-      return { keyId: key.keyId, publicKeyPem: decoder.decode(key.publicKeyPem) };
-    } catch {
-      throw makeRealmError("SCHEMA_INVALID");
-    }
-  });
-}
-
-// Each non-empty CPU and memory value must equal the realm profile. An empty value means the request did not set it.
-function checkResources(resources: ResourceQuantityMessage | null | undefined, scope: RefusalScope): void {
-  for (const cpu of [resources?.cpu_request, resources?.cpu_limit]) {
-    if (cpu !== undefined && cpu !== "" && cpuNanos(cpu) !== HARDENING_PROFILE.nanoCpus) {
-      throw refusal(scope, "create.resources");
-    }
-  }
-  for (const memory of [resources?.memory_request, resources?.memory_limit]) {
-    if (memory !== undefined && memory !== "" && memoryBytes(memory) !== HARDENING_PROFILE.memoryBytes) {
-      throw refusal(scope, "create.resources");
-    }
-  }
-}
-
-// A Kubernetes-style CPU quantity ("2", "0.5", "2000m") as nanocpus. An unparseable value gives undefined, which never
-// matches the profile.
-function cpuNanos(quantity: string): number | undefined {
-  const match = CPU_QUANTITY_PATTERN.exec(quantity);
-  if (match === null) {
-    return undefined;
-  }
-  const cores = Number(match[1]) * (match[2] === "m" ? 0.001 : 1);
-  return cores * NANOCPUS_PER_CORE;
-}
-
-// A memory quantity ("1Gi", "1024Mi", "1073741824") as bytes. An unparseable value gives undefined.
-function memoryBytes(quantity: string): number | undefined {
-  const match = MEMORY_QUANTITY_PATTERN.exec(quantity);
-  if (match === null) {
-    return undefined;
-  }
-  const unit = MEMORY_UNIT_BYTES[match[2] ?? ""];
-  return unit === undefined ? undefined : Number(match[1]) * unit;
-}
-
-// google.protobuf.Struct as the loader delivers it: {fields: {...}}. An unset Struct is null.
-function structIsEmpty(value: unknown): boolean {
-  if (value === null || value === undefined) {
-    return true;
-  }
-  if (typeof value !== "object") {
-    return false;
-  }
-  const fields: unknown = "fields" in value ? value.fields : value;
-  return fields === null || fields === undefined || (typeof fields === "object" && Object.keys(fields).length === 0);
-}
-
-// The observed state of one sandbox, named by the gateway. Ready is True only while the container is running and its host
-// supervisor has not exited.
-function sandboxOut(name: string, record: SandboxRecord, inspect: LibpodInspect): DriverSandboxOut {
-  const state = runStateOf(inspect);
-  const ready = state === "running" && !record.supervisorExited;
-  const instance: unknown = inspect["Id"];
-  return {
-    id: record.id,
-    name,
-    namespace: "",
-    workspace: record.workspace,
-    status: {
-      name,
-      instance_id: typeof instance === "string" ? instance : "",
-      agent_fd: "",
-      sandbox_fd: "",
-      conditions: [
-        {
-          type: "Ready",
-          status: ready ? "True" : "False",
-          reason: record.supervisorExited ? "supervisor-exited" : state,
-          message: "",
-        },
-      ],
-      deleting: false,
-    },
-  };
-}
-
-function runStateOf(inspect: LibpodInspect): string {
-  const state: unknown = inspect["State"];
-  if (typeof state === "object" && state !== null && "Status" in state && typeof state.Status === "string") {
-    return state.Status;
-  }
-  return "unknown";
-}
-
-// States in which a container holds no workspace: it has not started, or it has stopped. Every other readable state is live,
-// which includes running and paused.
-const NON_HOLDING_STATES: Record<string, true> = { configured: true, created: true, exited: true, stopped: true };
-
-// True when a container holds the workspace: it is live, and one of its mounts has the workspace as its source. Throws when the
-// state or the mounts cannot be read, so the caller refuses the create.
-function holdsWorkspace(inspect: LibpodInspect, workspace: string): boolean {
-  const state = runStateOf(inspect);
-  if (state === "unknown") {
-    throw new Error("container state unreadable");
-  }
-  if (NON_HOLDING_STATES[state] === true) {
-    return false;
-  }
-  const mounts: unknown = inspect["Mounts"];
-  if (!Array.isArray(mounts)) {
-    throw new Error("container mounts unreadable");
-  }
-  const entries: readonly unknown[] = mounts;
-  return entries.some((mount) => typeof mount === "object" && mount !== null && "Source" in mount && mount.Source === workspace);
-}
-
-// True when the child is a strict descendant of the parent directory. Both paths are already resolved.
-function isStrictlyInside(parent: string, child: string): boolean {
-  const rel = relative(parent, child);
-  return rel !== "" && rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
-}
-
-// The filesystem helpers. A failure is a catalogue code or SCHEMA_INVALID. The raw error is never copied.
-function statOrNull(path: string): Stats | null {
-  try {
-    return lstatSync(path);
-  } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
-      return null;
-    }
-    throw makeRealmError("SCHEMA_INVALID");
-  }
-}
-
-// A new state directory must not exist yet, and its root must. Both are checked before anything is created, so a
-// refusal here leaves the disk as it was. A leftover directory is never reused.
-function assertStateDirAbsent(stateDir: string): void {
-  realpathOrRefuse(dirname(stateDir));
-  if (statOrNull(stateDir) !== null) {
-    throw makeRealmError("SCHEMA_INVALID");
-  }
-}
-
-function mkdirOrRefuse(dir: string): void {
-  try {
-    mkdirSync(dir, { mode: 0o700 });
-  } catch {
-    throw makeRealmError("SCHEMA_INVALID");
-  }
-}
-
-// Removes the state directory a create made. Returns false when the removal failed, and the directory is left in place.
-function removeStateDir(dir: string): boolean {
-  try {
-    rmSync(dir, { recursive: true, force: true });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-// Removes the launch material and the channel a create stored. Returns false when the removal failed, and they are left in place.
-function removeLaunchMaterial(secretRoot: string, sandboxName: string): boolean {
-  try {
-    removeSandboxSecrets(secretRoot, sandboxName);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-// The cleanup problems a failed create reports. Each names only what is true of the removal that failed.
-const SUPERVISOR_NOT_STOPPED = "The host supervisor did not stop.";
-const CONTAINER_NOT_REMOVED = "The container was not removed.";
-const CONTAINER_UNCONFIRMED = "The container's removal could not be confirmed.";
-const FILES_LEFT_IN_PLACE = "The sandbox state directory or launch material was left in place.";
-
-// Adds the cleanup problems to a refusal's message. Only a RealmError carries a message the driver owns. A refusal with no
-// problems is left as it is.
-function addCleanupNote(error: unknown, problems: readonly string[]): void {
-  if (problems.length > 0 && error instanceof RealmError) {
-    error.message = `${error.message} Cleanup failed: ${problems.join(" ")}`;
-  }
-}
-
-// The two roots must not hold one another, or be the same path. The workspace ceiling holds the project directories bound read-write, so no
-// state or secret directory may sit under it or hold it, and a delete of a sandbox's own directories can never reach it. Both are
-// compared as resolved real paths.
-function assertApart(a: string, b: string): void {
-  const left = resolvedPathOf(a);
-  const right = resolvedPathOf(b);
-  if (left === right || isStrictlyInside(left, right) || isStrictlyInside(right, left)) {
-    throw makeRealmError("SCHEMA_INVALID");
-  }
-}
-
-// The workspace id selects no directory: the sandbox's /workspace is the directory its registry entry names. The id is still checked.
-function assertWorkspaceId(workspace: string | undefined): void {
-  if (workspace === undefined || !WORKSPACE_ID_PATTERN.test(workspace)) {
-    throw makeRealmError("SCHEMA_INVALID");
-  }
-}
-
-// A workspace, the ceiling or a sandbox's own directory, must be an absolute path to a real directory that the driver's account owns.
-// A missing path, a symbolic link (checked with lstat, never followed), a file, or a directory another account owns is refused. The
-// driver never creates, chmods or removes it, so a refusal here changes nothing.
-function assertPinnedWorkspaceRoot(root: string): void {
-  const stat = statOrNull(root);
-  const uid = process.getuid?.();
-  if (!isAbsolute(root) || stat === null || !stat.isDirectory() || uid === undefined || stat.uid !== uid) {
-    throw makeRealmError("SCHEMA_INVALID");
-  }
-}
-
-// The real location of a path that may not exist yet: the nearest existing ancestor, resolved through any symbolic link, with the
-// rest of the path appended. A path that cannot be resolved is refused.
-function resolvedPathOf(path: string): string {
-  const missing: string[] = [];
-  let current = path;
-  for (;;) {
-    try {
-      return join(realpathSync(current), ...missing);
-    } catch (error: unknown) {
-      const parent = dirname(current);
-      if (!(error instanceof Error && "code" in error && error.code === "ENOENT") || parent === current) {
-        throw makeRealmError("SCHEMA_INVALID");
-      }
-      missing.unshift(basename(current));
-      current = parent;
-    }
-  }
-}
-
-function realpathOrRefuse(path: string): string {
-  try {
-    return realpathSync(path);
-  } catch {
-    throw makeRealmError("SCHEMA_INVALID");
-  }
-}
-function hasEntries(map: Readonly<Record<string, string>> | null | undefined): boolean {
-  return map !== null && map !== undefined && Object.keys(map).length > 0;
 }
 
 // Wraps a promise-returning RPC as a unary handler. A thrown value becomes its gRPC status and nothing else.
