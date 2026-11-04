@@ -3175,16 +3175,12 @@ void test("a session whose hydration exceeds startupBudgetMs fails with STARTUP_
     assert.ok(entry !== undefined, "the session is registered");
     return entry;
   });
-  // The startup report counts the failure when the start budget expires, and the session records its error in its own controller
-  // when that controller's budget fires. The state can therefore lag the report, so the state is awaited, bounded, before it is read.
-  await pollUntil(
-    () => entries.filter((entry) => entry.handle.controller.snapshot().state === "error").length === 1,
-    "the session that exceeded its budget reaches error",
-    { timeoutMs: 10_000 },
-  );
-  const failed = entries.filter((entry) => entry.handle.controller.snapshot().state === "error");
-  const healthy = entries.filter((entry) => entry.handle.controller.snapshot().state === "active");
+  // The budget backstop of this session is armed before hydrateAdopted arms its own budget timer, and it sets the error state
+  // synchronously. So by the time the report counts the failure, the state is already error. The state is read once, here.
+  const snapshots = entries.map((entry) => entry.handle.controller.snapshot());
+  const failed = snapshots.filter((snapshot) => snapshot.state === "error");
+  const healthy = snapshots.filter((snapshot) => snapshot.state === "active");
   assert.equal(failed.length, 1, "the session that exceeded its budget is in error");
-  assert.equal(failed[0]?.handle.controller.snapshot().reason, "STARTUP_BUDGET_EXCEEDED");
+  assert.equal(failed[0]?.reason, "STARTUP_BUDGET_EXCEEDED");
   assert.equal(healthy.length, 1, "the other session is unaffected");
 });
