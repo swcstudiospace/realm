@@ -526,5 +526,11 @@ The crash defect, a restore that crashed after a snapshot-only name moved in, is
 Open items:
 
 - **Orphaned start.** A start that never settles holds the session lock until it settles or the process exits.
-- **Stopped projects.** `realm down` removes the workspace registration, so a stopped project refuses with `REALM_UNBOUND`. How stopped projects should be checkpointed is undecided, and until it is decided the command covers only the registered-but-unbound case.
+- **Stopped projects.** Resolved by D19-10: a stopped project checkpoints from its workspace pin. Pin removal is open and is recorded in D19-10.
 - **CLEANUP_FAILED after completed work.** A checkpoint or restore that completed can still exit 1 with `CLEANUP_FAILED` when only the lock unlink or the work-directory removal failed, so that exit must not be read as a failed snapshot.
+
+**D19-10 (2026-11-03). Workspace pin for stopped projects. Engineering decision.** The workspace identity of a session outlives its registry entry. `up` writes a pin for the session when it has none (`src/session/workspace-pin.ts`, at `<state>/workspace-pins/<session-id>.json`, directory mode 0700 and file mode 0600) and verifies the pin on each later `up`. A same-path replacement of the root is refused with `POLICY_DENIED`. `down` removes the registry entry and keeps the pin. Startup removes registry entries only. Checkpoint and restore resolve the workspace from the registry entry when one exists, and the sandbox state then comes from the daemon as before. Without an entry they resolve it from the pin, treat the sandbox as stopped, and make no daemon call. A workspace with neither refuses with `REALM_UNBOUND`.
+
+Evidence: `test/cli/checkpoint-pin-e2e.test.ts` runs up, down, checkpoint create, a change to the workspace, checkpoint restore and up again through the control path. On the pre-change commit `f815416` it fails at the checkpoint after down with `REALM_UNBOUND`. With this change it passes.
+
+Open: pins are never removed, so they accumulate per session id. The removal rule (on teardown, on checkpoint delete, or never) is undecided. A moved root derives a new session id and is not refused; refusing a move needs its own decision.
