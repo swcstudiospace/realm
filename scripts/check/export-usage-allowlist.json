@@ -163,17 +163,12 @@
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
-      "file": "src/daemon/daemon.ts",
-      "name": "BuildDaemonHandleOptions",
-      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
-    },
-    {
-      "file": "src/daemon/daemon.ts",
+      "file": "src/daemon/sessions.ts",
       "name": "HEALTH_PROBE_INTERVAL_MS",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
-      "file": "src/daemon/daemon.ts",
+      "file": "src/daemon/startup.ts",
       "name": "sweepRootsOf",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
@@ -308,28 +303,13 @@
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
-      "file": "src/observe/logger.ts",
-      "name": "LogFields",
-      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
-    },
-    {
       "file": "src/observe/metrics.ts",
       "name": "BUCKET_UPPER_BOUNDS_MS",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
-      "file": "src/observe/metrics.ts",
-      "name": "PROBE_FAILED_REASON",
-      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
-    },
-    {
       "file": "src/omp/plugin.ts",
       "name": "ActiveSession",
-      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
-    },
-    {
-      "file": "src/omp/reattach.ts",
-      "name": "equalJitterDelayMs",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
@@ -353,23 +333,8 @@
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
-      "file": "src/omp/host-tools.ts",
-      "name": "HostToolSet",
-      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
-    },
-    {
-      "file": "src/omp/host-tools.ts",
-      "name": "hostToolSetOf",
-      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
-    },
-    {
       "file": "src/omp/plugin.ts",
       "name": "HostToolVerdict",
-      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
-    },
-    {
-      "file": "src/omp/reattach.ts",
-      "name": "LINK_LOST_CODES",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
@@ -403,38 +368,8 @@
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
-      "file": "src/omp/reattach.ts",
-      "name": "REATTACH_BASE_DELAY_MS",
-      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
-    },
-    {
-      "file": "src/omp/reattach.ts",
-      "name": "REATTACH_DELAY_CAP_MS",
-      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
-    },
-    {
-      "file": "src/omp/reattach.ts",
-      "name": "REATTACH_RETRY_CAP",
-      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
-    },
-    {
-      "file": "src/omp/reattach.ts",
-      "name": "ReattachState",
-      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
-    },
-    {
-      "file": "src/omp/reattach.ts",
-      "name": "reattachTransitionAllowed",
-      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
-    },
-    {
       "file": "src/omp/plugin.ts",
       "name": "renderRealmStatus",
-      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
-    },
-    {
-      "file": "src/omp/reattach.ts",
-      "name": "RETRYABLE_ATTACH_CODES",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
@@ -565,11 +500,6 @@
     {
       "file": "src/runtime/driver/lifecycle.ts",
       "name": "HardeningRefusal",
-      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
-    },
-    {
-      "file": "src/runtime/driver/lifecycle.ts",
-      "name": "LifecycleLibpod",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
@@ -765,11 +695,6 @@
     {
       "file": "src/runtime/session-execution.ts",
       "name": "spawnOpenShellRunner",
-      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
-    },
-    {
-      "file": "src/runtime/sweep.ts",
-      "name": "SWEEP_CALL_TIMEOUT_MS",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
