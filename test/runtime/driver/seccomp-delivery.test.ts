@@ -181,7 +181,7 @@ void test("phase 9.6: a socket path that is not absolute is refused", () => {
   assert.throws(() => installSeccompProfile("run/driver.sock"), (error: unknown) => error instanceof RealmError && error.code === "SCHEMA_INVALID");
 });
 
-// A process configuration whose libpod socket does not exist, so a start that reaches the sweep fails there.
+// A process configuration whose libpod socket does not exist, so a start that reaches adoption fails there.
 function startConfigFor(layout: Layout): DriverProcessConfig {
   return {
     socketPath: layout.socketPath,

@@ -294,7 +294,7 @@ void test("PD-05: a manifest that cannot be read refuses with SCHEMA_INVALID", (
   assert.throws(() => readPackageVersion(join(tmpdir(), "realm-no-such-package.json")), refusedWithSchemaInvalid());
 });
 
-// A process configuration whose libpod socket does not exist. A start that reached the sweep would fail on that socket, so a
+// A process configuration whose libpod socket does not exist. A start that reached adoption would fail on that socket, so a
 // refusal with SCHEMA_INVALID shows the gateway id was checked first, before any container was touched.
 function startConfigWithGatewayId(gatewayId: string): DriverProcessConfig {
   const base = mkdtempSync(join(tmpdir(), "realm-driver-start-"));
@@ -492,7 +492,7 @@ void test("PRD-CTR-03: a start removes the previous generation's containers and 
   });
   assert.equal(engine.containers.size, 0, "the leftover container was removed");
   assert.equal(existsSync(secret), false, "the leftover secret entry was removed");
-  assert.equal(await listening(config.socketPath), true, "the driver serves once the sweep has finished");
+  assert.equal(await listening(config.socketPath), true, "the driver serves once the adoption has resolved");
 });
 
 void test("PRD-CTR-03: a second start against a live driver's socket refuses with LOCK_CONFLICT and removes nothing", async (t) => {
@@ -515,7 +515,7 @@ void test("PRD-CTR-03: a second start against a live driver's socket refuses wit
   assert.equal(await listening(config.socketPath), true, "the live driver still serves");
 });
 
-void test("PRD-CTR-03: a sweep that fails closes the server, so no socket stays bound", async (t) => {
+void test("PRD-CTR-03: an adoption that fails closes the server, so no socket stays bound", async (t) => {
   const engine = await startFakeEngine(t, { refuseRemoval: true });
   engine.containers.set("0123456789ab", "realm-leftover");
   const config = startConfigOver(t, engine);
