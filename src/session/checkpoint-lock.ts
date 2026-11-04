@@ -147,7 +147,8 @@ function acquireForStart(sessionDir: string): void {
 function releaseWhenDrained(lockPath: string, inFlight: () => readonly Promise<unknown>[]): void {
   const waiting = inFlight();
   if (waiting.length > 0) {
-    void Promise.all(waiting).then(() => {
+    // allSettled, not all: a rejected start settles too, so the share is still dropped and no rejection is left unhandled.
+    void Promise.allSettled(waiting).then(() => {
       releaseWhenDrained(lockPath, inFlight);
     });
     return;

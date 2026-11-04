@@ -853,3 +853,28 @@ void test("a failed lock release of a start is refused as CLEANUP_FAILED until t
   assert.equal(await start(), "started");
   assert.equal(existsSync(lock), false);
 });
+
+void test("a rejected in-flight start settles before the share is dropped, so no lock is held and the next checkpoint is not refused", async (t) => {
+  const f = fixture(t);
+  writeFileSync(join(f.ws, "a.txt"), "content");
+  const lock = join(sessionDirOf(f), ".lock");
+  const failure = new Error("start rejected");
+  // The start outlives its caller: fn settles first, and the start stays in flight until it rejects. The executor form is
+  // used because tsconfig's ES2023 lib has no Promise.withResolvers.
+  let rejectStart: (error: Error) => void = () => undefined;
+  const start = new Promise<never>((_resolve, reject) => {
+    rejectStart = reject;
+  });
+  let inFlight: readonly Promise<unknown>[] = [start];
+  const outcome = withStartLock(f.state, f.entry.sessionId, () => Promise.resolve("started"), () => inFlight);
+  assert.equal(await outcome, "started");
+  assert.equal(existsSync(lock), true, "the start in flight keeps the lock");
+
+  inFlight = [];
+  rejectStart(failure);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+
+  assert.equal(existsSync(lock), false, "the rejected start drops its share and releases the lock");
+  await snapshotWorkspace({ ...scope(f), checkpointId: "c1" });
+  assert.equal(existsSync(checkpointPath(f, "c1")), true);
+});
