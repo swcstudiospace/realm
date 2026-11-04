@@ -22,7 +22,12 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { type ErrorCode, RealmError } from "../../src/core/errors.js";
 import { bindRoot } from "../../src/fs/root.js";
-import { acquireSessionLock, releaseSessionLock } from "../../src/session/checkpoint-lock.js";
+import {
+  acquireSessionLock,
+  lockRemoval,
+  releaseSessionLock,
+  withStartLock,
+} from "../../src/session/checkpoint-lock.js";
 import { restoreWorkspace, type SandboxRunning, snapshotWorkspace } from "../../src/session/checkpoint.js";
 import { checkpointDirOf, checkpointSessionDirOf, sessionIdOfWorkspace } from "../../src/session/paths.js";
 import { writeWorkspaceEntry, type WorkspaceEntry } from "../../src/session/workspace-registry.js";
@@ -118,7 +123,8 @@ void test("round trip is byte-exact across every byte value, deep nesting, modes
 
   const restored = await restoreWorkspace({ ...scope(f), checkpointId: "c1" });
 
-  assert.deepStrictEqual(restored, snapshot);
+  assert.deepStrictEqual(restored.manifest, snapshot.manifest);
+  assert.deepEqual(restored.warnings, []);
   assert.deepEqual(readFileSync(join(f.ws, "bytes.bin")), allBytes);
   assert.equal(readFileSync(join(f.ws, "empty.bin")).length, 0);
   assert.equal(readFileSync(join(deepDir, "deep.txt"), "utf8"), "nine levels down");
@@ -370,6 +376,74 @@ void test("a failed restore step rolls back and the original tree returns", asyn
   assert.equal(readFileSync(join(f.ws, "z.txt"), "utf8"), "Z-now");
   assert.equal(existsSync(join(f.ws, "sub")), false);
   assert.deepEqual(workDirsOf(f), []);
+});
+
+void test("a restore whose work directory cannot be removed after the commit succeeds with one warning", async (t) => {
+  const f = fixture(t);
+  writeFileSync(join(f.ws, "a.txt"), "saved");
+  mkdirSync(join(f.ws, "sub"));
+  writeFileSync(join(f.ws, "sub", "b.txt"), "nested");
+  const snapshot = await snapshotWorkspace({ ...scope(f), checkpointId: "c1" });
+  rmSync(join(f.ws, "sub"), { recursive: true });
+  writeFileSync(join(f.ws, "a.txt"), "current");
+
+  const restored = await restoreWorkspace({
+    ...scope(f),
+    checkpointId: "c1",
+    removeWorkDir: () => Promise.reject(new Error("injected removal failure")),
+  });
+
+  const [workDir] = workDirsOf(f);
+  assert.ok(workDir !== undefined, "the work directory stays, since its removal failed");
+  assert.deepStrictEqual(restored.manifest, snapshot.manifest);
+  assert.deepEqual(restored.warnings, [`CLEANUP_FAILED: ${join(sessionDirOf(f), workDir)}`]);
+  assert.deepEqual(readdirSync(f.ws).sort(), ["a.txt", "sub"]);
+  assert.equal(readFileSync(join(f.ws, "a.txt"), "utf8"), "saved");
+  assert.equal(readFileSync(join(f.ws, "sub", "b.txt"), "utf8"), "nested");
+  assert.equal(existsSync(join(sessionDirOf(f), ".lock")), false);
+
+  // The next operation removes the directory that the committed restore left behind.
+  await snapshotWorkspace({ ...scope(f), checkpointId: "c2" });
+  assert.deepEqual(workDirsOf(f), []);
+});
+
+void test("a step that never settles fails with TOOL_TIMEOUT, and the lock and work directory stay for recovery", async (t) => {
+  const f = fixture(t);
+  writeFileSync(join(f.ws, "a.txt"), "original");
+  await snapshotWorkspace({ ...scope(f), checkpointId: "c1" });
+  writeFileSync(join(f.ws, "a.txt"), "current");
+
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  t.after(() => {
+    t.mock.timers.reset();
+  });
+  let reached: () => void = () => undefined;
+  const firstMove = new Promise<void>((resolve) => {
+    reached = () => {
+      resolve();
+    };
+  });
+  const restoring = restoreWorkspace({
+    ...scope(f),
+    checkpointId: "c1",
+    beforeMove: async () => {
+      reached();
+      await new Promise<void>(() => undefined);
+    },
+  });
+  const failed = assert.rejects(restoring, codeIs("TOOL_TIMEOUT"));
+
+  // The first move never settles. Its bound expires first. Cleanup then waits for that same step under the bound, and
+  // that wait expires too. Each expiry is a virtual tick.
+  await firstMove;
+  t.mock.timers.tick(300_000);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  t.mock.timers.tick(300_000);
+  await failed;
+
+  assert.equal(existsSync(join(sessionDirOf(f), ".lock")), true);
+  assert.equal(workDirsOf(f).length, 1);
+  assert.equal(readFileSync(join(f.ws, "a.txt"), "utf8"), "current");
 });
 
 void test("a leftover .restore directory is removed by the next snapshot without touching the workspace", async (t) => {
@@ -689,7 +763,7 @@ void test("a held lock publishes its full owner record, and release removes it",
     lockText({ pid: process.pid, startTicks: ownStartTicks(), bootId: bootId() }),
   );
   assert.deepEqual(readdirSync(sessionDirOf(f)).filter((name) => name.startsWith(".lock.tmp-")), []);
-  releaseSessionLock(lock);
+  assert.deepEqual(releaseSessionLock(lock), { ok: true });
   assert.equal(existsSync(lock), false);
 });
 
@@ -753,4 +827,29 @@ void test("a sandbox predicate that throws makes snapshot and restore refused wi
   assert.equal(existsSync(checkpointPath(f, "c1")), false);
   assert.equal(readFileSync(join(f.ws, "a.txt"), "utf8"), "current");
   assert.equal(existsSync(join(sessionDirOf(f), ".lock")), false);
+});
+
+void test("a failed lock release of a start is refused as CLEANUP_FAILED until the lock file is gone", async (t) => {
+  const f = fixture(t);
+  const lock = join(sessionDirOf(f), ".lock");
+  const unlink = lockRemoval.unlink;
+  t.after(() => {
+    lockRemoval.unlink = unlink;
+  });
+  const start = (): Promise<string> =>
+    withStartLock(f.state, f.entry.sessionId, () => Promise.resolve("started"), () => []);
+
+  lockRemoval.unlink = () => {
+    throw new Error("injected unlink failure");
+  };
+  assert.equal(await start(), "started");
+  assert.equal(existsSync(lock), true, "the failed release leaves the file naming this process");
+
+  lockRemoval.unlink = unlink;
+  await assert.rejects(start(), codeIs("CLEANUP_FAILED"));
+  assert.equal(existsSync(lock), true);
+
+  rmSync(lock);
+  assert.equal(await start(), "started");
+  assert.equal(existsSync(lock), false);
 });

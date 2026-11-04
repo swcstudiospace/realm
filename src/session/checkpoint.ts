@@ -14,6 +14,9 @@
 // refused with LOCK_CONFLICT. Under the lock the operation recovers the session's leftover work directories, then runs,
 // then releases the lock. The sweep never runs without the lock.
 //
+// A step still running past its bound keeps the lock, the tree and the work directory for recovery. Cleanup waits for
+// that step under the bound and never acts while the step may still write.
+//
 // A restore keeps the workspace root directory (its device and inode never change), moves the root's entries aside into
 // a backup, writes a backed-up marker, moves the staged entries in, writes a committed marker, and deletes the backup. A
 // crash before the committed marker is undone by recovery. Without the backed-up marker, recovery moves the backup's
@@ -81,6 +84,13 @@ export interface CheckpointManifest {
   readonly entries: readonly ManifestEntry[];
 }
 
+// The result of a committed operation. A cleanup that failed after the commit is a warning, one per failure, naming the
+// stable code and the path. It is empty when every cleanup succeeded.
+export interface CheckpointResult {
+  readonly manifest: CheckpointManifest;
+  readonly warnings: readonly string[];
+}
+
 // Answers whether the sandbox that owns the session is running. It is called under the lock, before the first copy or
 // move, and again after the copy or restore. A predicate that throws leaves the state unknown, so the operation is refused.
 export type SandboxRunning = (sessionId: string) => boolean | Promise<boolean>;
@@ -99,14 +109,19 @@ export interface SnapshotRequest extends CheckpointScope {
 
 export interface RestoreRequest extends CheckpointScope {
   readonly checkpointId: string;
-  // Test seam. Called before each move during a restore. A throw aborts the restore, and the tree is rolled back.
-  readonly beforeMove?: (entryName: string) => void;
+  // Test seam. Awaited inside the bounded step of each move, before its rename. A throw aborts the restore, and the tree is
+  // rolled back. A promise that never settles hits the step bound.
+  readonly beforeMove?: (entryName: string) => void | Promise<void>;
+  // Test seam. Removes the work directory after the commit, in place of rm. A rejection is reported as a warning.
+  readonly removeWorkDir?: (workDir: string) => Promise<void>;
 }
 
-// The step most recently started. A failure can leave a step running after its bound has expired, so cleanup and
-// rollback wait for that step before they touch the tree.
+// The step most recently started, and whether a step has run past its bound and is still running. A failure can leave a
+// step running after its bound has expired, so cleanup waits for it, under the same bound, before it touches the tree, the
+// work directory or the lock. A wait that expires leaves the operation stuck: cleanup then keeps everything for recovery.
 interface Steps {
   pending: Promise<unknown> | undefined;
+  stuck: boolean;
 }
 
 // The names moved aside and moved in, in order. A name is logged before its move starts, so rollback can find a move
@@ -137,7 +152,7 @@ interface RawEntry {
   readonly sha256?: unknown;
 }
 
-export async function snapshotWorkspace(request: SnapshotRequest): Promise<CheckpointManifest> {
+export async function snapshotWorkspace(request: SnapshotRequest): Promise<CheckpointResult> {
   try {
     return await takeSnapshot(request);
   } catch (error) {
@@ -145,7 +160,7 @@ export async function snapshotWorkspace(request: SnapshotRequest): Promise<Check
   }
 }
 
-export async function restoreWorkspace(request: RestoreRequest): Promise<CheckpointManifest> {
+export async function restoreWorkspace(request: RestoreRequest): Promise<CheckpointResult> {
   try {
     return await restoreFromCheckpoint(request);
   } catch (error) {
@@ -153,27 +168,24 @@ export async function restoreWorkspace(request: RestoreRequest): Promise<Checkpo
   }
 }
 
-async function takeSnapshot(request: SnapshotRequest): Promise<CheckpointManifest> {
+async function takeSnapshot(request: SnapshotRequest): Promise<CheckpointResult> {
   const { entry, stateRoot } = request;
   const checkpointDir = checkpointDirOf(stateRoot, entry.sessionId, request.checkpointId);
   const pinned = verifyWorkspaceEntry(entry);
   await refuseStateInsideRoot(pinned, stateRoot);
   await ensureSessionDir(stateRoot, entry.sessionId);
   const lockPath = acquireSessionLock(checkpointSessionDirOf(stateRoot, entry.sessionId));
-  try {
-    return await snapshotLocked(request, pinned, checkpointDir);
-  } finally {
-    releaseSessionLock(lockPath);
-  }
+  const steps: Steps = { pending: undefined, stuck: false };
+  return settleUnderLock(lockPath, steps, () => snapshotLocked(request, pinned, checkpointDir, steps));
 }
 
 async function snapshotLocked(
   request: SnapshotRequest,
   pinned: PinnedRoot,
   checkpointDir: string,
-): Promise<CheckpointManifest> {
+  steps: Steps,
+): Promise<CheckpointResult> {
   const { entry, stateRoot, sandboxRunning } = request;
-  const steps: Steps = { pending: undefined };
   await requireSandboxStopped(sandboxRunning, entry.sessionId);
   await recoverSession(stateRoot, entry.sessionId, pinned, entry.workspaceRoot, steps);
   // The reservation runs outside the try below: a collision must not remove the checkpoint that already holds the id.
@@ -194,15 +206,23 @@ async function snapshotLocked(
       flag: "wx",
       mode: 0o600,
     });
-    return manifest;
+    return { manifest, warnings: [] };
   } catch (error) {
-    await steps.pending?.catch(() => undefined);
-    await rm(checkpointDir, { recursive: true, force: true }).catch(() => undefined);
-    throw error;
+    throw await undoSnapshot(error, checkpointDir, steps);
   }
 }
 
-async function restoreFromCheckpoint(request: RestoreRequest): Promise<CheckpointManifest> {
+// A failed snapshot removes its partial checkpoint. A step still running keeps it, since the step may still write there.
+async function undoSnapshot(error: unknown, checkpointDir: string, steps: Steps): Promise<RealmError> {
+  const stuck = await quiesce(steps);
+  if (stuck !== undefined) {
+    return stuck;
+  }
+  const removal = await tryRemove(removeDir, checkpointDir);
+  return removal === undefined ? asRealmError(error, "WRITE_NOT_ATOMIC") : withCleanupCause(error, removal);
+}
+
+async function restoreFromCheckpoint(request: RestoreRequest): Promise<CheckpointResult> {
   const { entry, stateRoot } = request;
   const checkpointDir = checkpointDirOf(stateRoot, entry.sessionId, request.checkpointId);
   const pinned = verifyWorkspaceEntry(entry);
@@ -210,11 +230,8 @@ async function restoreFromCheckpoint(request: RestoreRequest): Promise<Checkpoin
   // A checkpoint is immutable once written, so it is read before the lock; a missing one is refused here.
   const stored = await readCheckpoint(checkpointDir);
   const lockPath = acquireSessionLock(checkpointSessionDirOf(stateRoot, entry.sessionId));
-  try {
-    return await restoreLocked(request, pinned, checkpointDir, stored);
-  } finally {
-    releaseSessionLock(lockPath);
-  }
+  const steps: Steps = { pending: undefined, stuck: false };
+  return settleUnderLock(lockPath, steps, () => restoreLocked(request, pinned, checkpointDir, stored, steps));
 }
 
 async function restoreLocked(
@@ -222,9 +239,9 @@ async function restoreLocked(
   pinned: PinnedRoot,
   checkpointDir: string,
   stored: CheckpointManifest,
-): Promise<CheckpointManifest> {
+  steps: Steps,
+): Promise<CheckpointResult> {
   const { entry, stateRoot, sandboxRunning } = request;
-  const steps: Steps = { pending: undefined };
   await requireSandboxStopped(sandboxRunning, entry.sessionId);
   await recoverSession(stateRoot, entry.sessionId, pinned, entry.workspaceRoot, steps);
 
@@ -254,21 +271,59 @@ async function restoreLocked(
     await swapEntries(request, pinned, workDir, stored, steps, moved);
     await writeFile(join(workDir, COMMITTED_FILE), "", { flag: "wx" });
   } catch (error) {
-    await steps.pending?.catch(() => undefined);
-    if (moved.movedOut.length > 0 || moved.movedIn.length > 0) {
-      await rollback(pinned.realPath, workDir, moved, steps);
-    }
-    await rm(workDir, { recursive: true, force: true }).catch(() => undefined);
-    throw error;
+    throw await undoRestore(error, pinned.realPath, workDir, moved, steps);
   }
 
   // The restored manifest matched and the commit marker is written, so the moved-aside originals are no longer needed.
-  try {
-    await rm(workDir, { recursive: true, force: true });
-  } catch {
-    throw makeRealmError("CLEANUP_FAILED");
+  // The restore has committed, so a failed removal is a warning, not an error: the next operation removes the directory.
+  const removal = await tryRemove(request.removeWorkDir ?? removeDir, workDir);
+  return { manifest: stored, warnings: removal === undefined ? [] : [`${removal.code}: ${workDir}`] };
+}
+
+// Undoes a failed restore. Once every step has settled, the moved entries go back and the work directory is removed. A
+// rollback that fails throws, and the work directory is then kept for recovery.
+async function undoRestore(
+  error: unknown,
+  root: string,
+  workDir: string,
+  moved: MovedNames,
+  steps: Steps,
+): Promise<RealmError> {
+  const stuck = await quiesce(steps);
+  if (stuck !== undefined) {
+    return stuck;
   }
-  return stored;
+  if (moved.movedOut.length > 0 || moved.movedIn.length > 0) {
+    await rollback(root, workDir, moved, steps);
+  }
+  const removal = await tryRemove(removeDir, workDir);
+  return removal === undefined ? asRealmError(error, "WRITE_NOT_ATOMIC") : withCleanupCause(error, removal);
+}
+
+// Runs body under the session lock, then releases the lock. A failed body has undone its own work when it throws. The lock
+// is released only once no step is still running. A step still running keeps the lock, with the tree and the work
+// directory, for recovery, and the operation fails with TOOL_TIMEOUT. A failed release after a commit is a warning. A failed
+// release of a failed operation becomes the cause of its error, so it never masks that error.
+async function settleUnderLock(
+  lockPath: string,
+  steps: Steps,
+  body: () => Promise<CheckpointResult>,
+): Promise<CheckpointResult> {
+  let result: CheckpointResult;
+  try {
+    result = await body();
+  } catch (error) {
+    const stuck = await quiesce(steps);
+    if (stuck !== undefined) {
+      throw stuck;
+    }
+    const release = releaseSessionLock(lockPath);
+    throw release.ok ? asRealmError(error, "WRITE_NOT_ATOMIC") : withCleanupCause(error, release.error);
+  }
+  const release = releaseSessionLock(lockPath);
+  return release.ok
+    ? result
+    : { manifest: result.manifest, warnings: [...result.warnings, `${release.error.code}: ${lockPath}`] };
 }
 
 // Recovers the work directories that a crashed operation left in the session's directory. Runs under the lock. A
@@ -289,7 +344,7 @@ async function recoverSession(
   verifyPinnedAt(pinned, workspaceRoot);
   for (const name of workNames) {
     const workDir = join(sessionDir, name);
-    const committed = (await lstat(join(workDir, COMMITTED_FILE)).catch(() => undefined)) !== undefined;
+    const committed = await presentAt(join(workDir, COMMITTED_FILE));
     if (!committed) {
       await returnOriginalTree(workDir, pinned.realPath, steps);
     }
@@ -304,8 +359,8 @@ async function recoverSession(
 async function returnOriginalTree(workDir: string, root: string, steps: Steps): Promise<void> {
   const backup = join(workDir, BACKUP_DIR);
   const stage = join(workDir, STAGE_DIR);
-  const backedUp = await readdir(backup).catch((): string[] => []);
-  const allBackedUp = (await lstat(join(workDir, BACKED_UP_FILE)).catch(() => undefined)) !== undefined;
+  const backedUp = (await presentAt(backup)) ? await readdir(backup) : [];
+  const allBackedUp = await presentAt(join(workDir, BACKED_UP_FILE));
   if (!allBackedUp && backedUp.length === 0) {
     return;
   }
@@ -334,17 +389,16 @@ async function swapEntries(
   const stage = join(workDir, STAGE_DIR);
   const backup = join(workDir, BACKUP_DIR);
   for (const name of (await readdir(pinned.realPath)).sort()) {
-    request.beforeMove?.(name);
+    // A name is logged before its move starts, so rollback can find a move that completed after its bound expired.
     moved.movedOut.push(name);
-    await bounded(steps, rename(join(pinned.realPath, name), join(backup, name)));
+    await bounded(steps, moveEntry(request.beforeMove, name, join(pinned.realPath, name), join(backup, name)));
   }
   // Every root entry is in the backup now. The marker is durable before the first move into the root, so a crash after
   // this point leaves a marker that means the root holds only staged entries.
   await bounded(steps, writeBackedUpMarker(workDir));
   for (const name of (await readdir(stage)).sort()) {
-    request.beforeMove?.(name);
     moved.movedIn.push(name);
-    await bounded(steps, rename(join(stage, name), join(pinned.realPath, name)));
+    await bounded(steps, moveEntry(request.beforeMove, name, join(stage, name), join(pinned.realPath, name)));
   }
   await requireSandboxStopped(request.sandboxRunning, request.entry.sessionId);
   const restored = await bounded(steps, scanTree(pinned.realPath, pinned));
@@ -353,8 +407,21 @@ async function swapEntries(
   }
 }
 
+// One move of swapEntries, run as a bounded step. The seam runs inside the step, so a seam that never settles hits
+// the step bound.
+async function moveEntry(
+  beforeMove: RestoreRequest["beforeMove"],
+  name: string,
+  from: string,
+  to: string,
+): Promise<void> {
+  await beforeMove?.(name);
+  await rename(from, to);
+}
+
 // Moves back every entry that was moved: the staged entries first, newest first, then the originals. The original tree
 // returns when this succeeds. A failure keeps the work directory, which still holds the original entries, for recovery.
+// A step past its bound keeps its TOOL_TIMEOUT code, so the caller keeps the lock and the work directory.
 async function rollback(root: string, workDir: string, moved: MovedNames, steps: Steps): Promise<void> {
   const stage = join(workDir, STAGE_DIR);
   const backup = join(workDir, BACKUP_DIR);
@@ -373,15 +440,32 @@ async function rollback(root: string, workDir: string, moved: MovedNames, steps:
     for (const [from, to] of originalsBack) {
       await moveIfPresent(from, to, steps);
     }
-  } catch {
+  } catch (error) {
+    if (error instanceof RealmError && error.code === "TOOL_TIMEOUT") {
+      throw error;
+    }
     // The original tree is not back in full, so the work directory is kept for recovery.
     throw makeRealmError("CLEANUP_FAILED", "WRITE_NOT_ATOMIC");
   }
 }
 
 async function moveIfPresent(from: string, to: string, steps: Steps): Promise<void> {
-  if ((await lstat(from).catch(() => undefined)) !== undefined) {
+  if (await presentAt(from)) {
     await bounded(steps, rename(from, to));
+  }
+}
+
+// Whether a path exists. Only a missing path counts as absent; any other failure to look is refused as
+// WRITE_NOT_ATOMIC, so a rollback never skips a move it could not check.
+async function presentAt(path: string): Promise<boolean> {
+  try {
+    await lstat(path);
+    return true;
+  } catch (error) {
+    if (errnoOf(error) === "ENOENT") {
+      return false;
+    }
+    throw asRealmError(error, "WRITE_NOT_ATOMIC");
   }
 }
 
@@ -401,7 +485,7 @@ async function writeBackedUpMarker(workDir: string): Promise<void> {
 // the stage", so the marker is gone before any original moves back into the root.
 async function removeBackedUpMarker(workDir: string): Promise<void> {
   const marker = join(workDir, BACKED_UP_FILE);
-  if ((await lstat(marker).catch(() => undefined)) === undefined) {
+  if (!(await presentAt(marker))) {
     return;
   }
   await rm(marker);
@@ -445,8 +529,8 @@ async function reserveCheckpointDir(path: string): Promise<void> {
   try {
     await chmod(path, PRIVATE_DIR_MODE);
   } catch (error) {
-    await rm(path, { recursive: true, force: true }).catch(() => undefined);
-    throw asRealmError(error, "WRITE_NOT_ATOMIC");
+    const removal = await tryRemove(removeDir, path);
+    throw removal === undefined ? asRealmError(error, "WRITE_NOT_ATOMIC") : withCleanupCause(error, removal);
   }
 }
 
@@ -472,6 +556,47 @@ async function requireSandboxStopped(sandboxRunning: SandboxRunning, sessionId: 
 function bounded<T>(steps: Steps, work: Promise<T>): Promise<T> {
   steps.pending = work;
   return withTimeout(work, CHECKPOINT_OP_TIMEOUT_MS, "TOOL_TIMEOUT");
+}
+
+// Waits, under the bound, for the step most recently started to settle. Cleanup touches the tree, the work directory and
+// the lock only after this returns undefined. A step still running at expiry makes the operation stuck: from then on the
+// tree, the work directory and the lock stay in place for recovery, and TOOL_TIMEOUT is returned.
+async function quiesce(steps: Steps): Promise<RealmError | undefined> {
+  if (steps.stuck) {
+    return makeRealmError("TOOL_TIMEOUT");
+  }
+  if (steps.pending === undefined) {
+    return undefined;
+  }
+  try {
+    // A step's outcome already reached its caller through bounded(), or the caller had already failed with its timeout, so
+    // only the step's settling is awaited here.
+    await withTimeout(steps.pending.then(() => undefined, () => undefined), CHECKPOINT_OP_TIMEOUT_MS, "TOOL_TIMEOUT");
+    return undefined;
+  } catch (error) {
+    steps.stuck = true;
+    return asRealmError(error, "TOOL_TIMEOUT");
+  }
+}
+
+// Removes a directory. A failure is returned as CLEANUP_FAILED, never thrown, so the caller decides whether it is a warning
+// after a commit or the cause of the error it already throws.
+async function tryRemove(remove: (path: string) => Promise<void>, path: string): Promise<RealmError | undefined> {
+  try {
+    await remove(path);
+    return undefined;
+  } catch {
+    return makeRealmError("CLEANUP_FAILED");
+  }
+}
+
+function removeDir(path: string): Promise<void> {
+  return rm(path, { recursive: true, force: true });
+}
+
+// The operation's own error, with a failed cleanup recorded as its cause. The primary code stays the operation's.
+function withCleanupCause(error: unknown, cleanup: RealmError): RealmError {
+  return makeRealmError(asRealmError(error, "WRITE_NOT_ATOMIC").code, cleanup.code);
 }
 
 function asRealmError(error: unknown, code: ErrorCode): RealmError {

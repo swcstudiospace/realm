@@ -25,7 +25,7 @@ import {
   type Stats,
 } from "node:fs";
 import { join } from "node:path";
-import { makeRealmError, RealmError } from "../core/errors.js";
+import { type ErrorCode, makeRealmError, RealmError } from "../core/errors.js";
 import { errnoOf } from "../fs/canonicalize.js";
 import { currentBootId, startTicksOf } from "./proc-identity.js";
 import { checkpointSessionDirOf } from "./paths.js";
@@ -37,6 +37,8 @@ const LOCK_SCHEMA = 1;
 const OWNER_FILE_MODE = 0o600;
 // A stale lock is taken over at most this many times before the operation is refused.
 const LOCK_TAKEOVER_ATTEMPTS = 3;
+// Test seam: removes a lock file. A test replaces unlink to make a release fail, and restores unlinkSync afterwards.
+export const lockRemoval: { unlink: (path: string) => void } = { unlink: unlinkSync };
 
 // The owner recorded in the lock file. The start time is kept as its decimal text, as the file stores it.
 interface OwnerRecord {
@@ -57,6 +59,7 @@ interface RawOwner {
 // Takes the session lock or refuses. Returns the lock path, which the caller releases.
 export function acquireSessionLock(sessionDir: string): string {
   const lockPath = join(sessionDir, LOCK_FILE);
+  refuseAfterFailedRelease(lockPath);
   for (let attempt = 0; attempt < LOCK_TAKEOVER_ATTEMPTS; attempt += 1) {
     if (publishLock(sessionDir, lockPath)) {
       return lockPath;
@@ -66,13 +69,19 @@ export function acquireSessionLock(sessionDir: string): string {
   throw makeRealmError("LOCK_CONFLICT");
 }
 
-export function releaseSessionLock(lockPath: string): void {
+// The release is returned, not thrown, so the caller decides: a warning after a commit, or the cause of the error it is
+// already throwing. Nothing is thrown from a finally.
+export function releaseSessionLock(
+  lockPath: string,
+): { readonly ok: true } | { readonly ok: false; readonly error: RealmError } {
   try {
-    unlinkSync(lockPath);
+    lockRemoval.unlink(lockPath);
+    return { ok: true };
   } catch (error) {
-    if (errnoOf(error) !== "ENOENT") {
-      throw makeRealmError("CLEANUP_FAILED");
+    if (errnoOf(error) === "ENOENT") {
+      return { ok: true };
     }
+    return { ok: false, error: makeRealmError("CLEANUP_FAILED") };
   }
 }
 
@@ -83,6 +92,9 @@ const SESSION_DIR_MODE = 0o700;
 // released when the last start settles. A checkpoint in this process finds the file held, so it is refused with LOCK_CONFLICT
 // exactly as one in another process is. Starts never hold the file while a checkpoint does.
 const startHolders = new Map<string, number>();
+
+// Starts whose release of the lock file failed, by lock path, with the catalogue code. See refuseAfterFailedRelease.
+const failedReleases = new Map<string, ErrorCode>();
 
 // Holds the session lock for a sandbox start. The lock is taken before fn runs. Its share is dropped once fn has settled and
 // every start still in flight has settled, so a start that outlives its caller keeps the lock until it settles, and a checkpoint
@@ -109,7 +121,7 @@ export async function withStartLock<T>(
     releaseWhenDrained(lockPath, inFlight);
   };
   void outcome.then(release, release);
-  return outcome;
+  return await outcome;
 }
 
 // Takes the file lock for a start. The session directory is created when it is absent. A held lock is refused as
@@ -152,24 +164,75 @@ function dropStartShare(lockPath: string): void {
     return;
   }
   startHolders.delete(lockPath);
-  try {
-    releaseSessionLock(lockPath);
-  } catch {
-    // Nothing receives an error from this background release. The file names this process, so a later start is refused until
-    // the process exits and a takeover can prove its owner gone.
+  // A start's release has no caller to report to: the start settles in the background. A failed release is recorded, so
+  // the next acquisition is refused with the recorded code while the file still names this process.
+  const release = releaseSessionLock(lockPath);
+  if (release.ok) {
+    failedReleases.delete(lockPath);
+  } else {
+    failedReleases.set(lockPath, release.error.code);
   }
 }
 
+// A failed release leaves the lock file naming this process. While that file names this process, an acquisition is
+// refused with the recorded code, so the failure stays visible. The record is cleared once the file no longer names it.
+function refuseAfterFailedRelease(lockPath: string): void {
+  const code = failedReleases.get(lockPath);
+  if (code === undefined) {
+    return;
+  }
+  if (namesThisProcess(lockPath)) {
+    throw makeRealmError(code);
+  }
+  failedReleases.delete(lockPath);
+}
+
+// Whether the lock file names this process. An absent file names no one. A file that cannot be read is refused as
+// LOCK_CONFLICT.
+function namesThisProcess(lockPath: string): boolean {
+  let raw: string;
+  try {
+    raw = readFileSync(lockPath, "utf8");
+  } catch (error) {
+    if (errnoOf(error) === "ENOENT") {
+      return false;
+    }
+    throw makeRealmError("LOCK_CONFLICT");
+  }
+  const owner = parseOwner(raw);
+  const bootId = currentBootId();
+  const startTicks = startTicksOf(process.pid);
+  return (
+    owner !== undefined &&
+    bootId !== null &&
+    startTicks !== undefined &&
+    owner.pid === process.pid &&
+    owner.startTicks === String(startTicks) &&
+    owner.bootId === bootId
+  );
+}
+
 // Publishes the owner record at lockPath. Returns false when a lock already exists. The temporary name is removed on
-// every path.
+// every path. A temporary name that cannot be removed refuses the acquisition with CLEANUP_FAILED; a lock this call
+// published is released first, so a refused acquisition holds no lock.
 function publishLock(sessionDir: string, lockPath: string): boolean {
   const tempPath = join(sessionDir, `${TEMP_PREFIX}${randomBytes(8).toString("hex")}`);
+  let published: boolean;
   try {
     writeOwnerFile(tempPath, `${JSON.stringify(ownRecord())}\n`);
-    return linkLock(tempPath, lockPath);
-  } finally {
-    removeTempFile(tempPath);
+    published = linkLock(tempPath, lockPath);
+  } catch (error) {
+    throw operationError(error, removeTempFile(tempPath));
   }
+  const removal = removeTempFile(tempPath);
+  if (removal === undefined) {
+    return published;
+  }
+  if (published) {
+    const release = releaseSessionLock(lockPath);
+    throw release.ok ? removal : operationError(removal, release.error);
+  }
+  throw removal;
 }
 
 // Creates the temporary owner file and syncs its content before it is linked.
@@ -203,14 +266,26 @@ function linkLock(tempPath: string, lockPath: string): boolean {
   }
 }
 
-// The temporary name is removed once the lock is published or refused. A file that cannot be removed holds no lock and
-// no reader opens a temporary name, so its failure does not fail an acquisition that already succeeded.
-function removeTempFile(path: string): void {
+// The temporary name is removed once the lock is published or refused. An absent name is already removed. A name that
+// cannot be removed is returned as CLEANUP_FAILED, and publishLock refuses the acquisition on it.
+function removeTempFile(path: string): RealmError | undefined {
   try {
     unlinkSync(path);
-  } catch {
-    // Already gone, or left behind. Either way it is never read as a lock.
+    return undefined;
+  } catch (error) {
+    if (errnoOf(error) === "ENOENT") {
+      return undefined;
+    }
+    return makeRealmError("CLEANUP_FAILED");
   }
+}
+
+// The error an operation throws. A failed cleanup is recorded as its cause; the primary code stays the operation's.
+function operationError(error: unknown, cleanup: RealmError | undefined): RealmError {
+  if (cleanup === undefined && error instanceof RealmError) {
+    return error;
+  }
+  return makeRealmError(error instanceof RealmError ? error.code : "WRITE_NOT_ATOMIC", cleanup?.code);
 }
 
 // Removes an existing lock only when its owner is provably gone. A live or unprovable owner is LOCK_CONFLICT.

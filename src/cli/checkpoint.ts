@@ -13,6 +13,8 @@
 // refused by a live start gets LOCK_CONFLICT, and a start refused by a checkpoint gets REALM_NOT_ACTIVE. A restore that
 // begins after a start has settled still relies on the stopped-sandbox check, and a start that never settles holds the
 // lock until it settles or the process exits.
+//
+// A cleanup that fails after the commit is one `warning:` line on stderr; the exit code stays 0.
 
 import { ERROR_CATALOGUE, makeRealmError, RealmError, type ErrorCode } from "../core/errors.js";
 import type { ControlSelection } from "../daemon/channel.js";
@@ -23,7 +25,7 @@ import { resolveConfigPath } from "../runtime/host-paths.js";
 import {
   restoreWorkspace,
   snapshotWorkspace,
-  type CheckpointManifest,
+  type CheckpointResult,
   type SandboxRunning,
 } from "../session/checkpoint.js";
 import { controlSocketPath, isSessionId, type EnvironmentLike } from "../session/paths.js";
@@ -165,12 +167,13 @@ async function runAgainstDaemon(
     // Pre-flight: the daemon must answer before the library writes anything, so an absent daemon refuses here.
     await sandboxRunning(entry.sessionId);
     const scope = { entry, stateRoot, sandboxRunning, checkpointId: args.checkpointId };
-    const manifest: CheckpointManifest =
+    const result: CheckpointResult =
       args.command === "create" ? await snapshotWorkspace(scope) : await restoreWorkspace(scope);
     return {
       exitCode: 0,
-      stdout: `${JSON.stringify({ command: args.command, checkpointId: args.checkpointId, entries: manifest.entries.length })}\n`,
-      stderr: "",
+      stdout: `${JSON.stringify({ command: args.command, checkpointId: args.checkpointId, entries: result.manifest.entries.length })}\n`,
+      // One stderr line per cleanup warning. The commit held, so the exit code stays 0.
+      stderr: result.warnings.map((warning) => `warning: ${warning}\n`).join(""),
     };
   } catch (error) {
     // The library maps a throwing predicate to REALM_NOT_ACTIVE. Here the daemon is the thing that cannot answer,
