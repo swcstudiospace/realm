@@ -38,6 +38,7 @@ import {
 } from "../runtime/podman-probe.js";
 import { controlSocketPath, sessionIdOfWorkspace } from "../session/paths.js";
 import { SessionStore } from "../session/store.js";
+import { writeWorkspacePin } from "../session/workspace-pin.js";
 import { readWorkspaceEntry, removeWorkspaceEntry, writeWorkspaceEntry } from "../session/workspace-registry.js";
 import { AdmissionLedger } from "./admission.js";
 import {
@@ -302,9 +303,11 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
     return resolveSelection({ selection, policy, ceiling, registry });
   };
 
-  // Builds the entry of a new session: its handle, its workspace entry and its health loop. The handle is built for the pinned
-  // directory and nothing is created yet, so a failure here leaves no container.
+  // Builds the entry of a new session: its pin, its handle, its workspace entry and its health loop. The pin is verified or
+  // written first, so a moved or replaced root is refused before the handle exists. Nothing is created yet, so a failure here
+  // leaves no container.
   const newEntry = (sessionId: string, pinned: PinnedRoot): SessionEntry => {
+    writeWorkspacePin(stateDir, pinned, sessionId);
     const handle = buildHandle({
       ...handleBase,
       sessionId,
@@ -437,6 +440,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
         ledger.markUnproven(sessionId);
         throw error;
       }
+      // The pin is not removed here: it survives down by design, and the next up verifies it again.
       removeWorkspaceEntry(stateDir, sessionId);
       ledger.release(sessionId);
       registry.delete(sessionId);
