@@ -1,11 +1,12 @@
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import {
+import fs, {
   chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
+  type PathLike,
   readdirSync,
   readFileSync,
   readlinkSync,
@@ -17,6 +18,7 @@ import {
   utimesSync,
   writeFileSync,
 } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -877,4 +879,123 @@ void test("a rejected in-flight start settles before the share is dropped, so no
   assert.equal(existsSync(lock), false, "the rejected start drops its share and releases the lock");
   await snapshotWorkspace({ ...scope(f), checkpointId: "c1" });
   assert.equal(existsSync(checkpointPath(f, "c1")), true);
+});
+
+// Routes the take-over of a stale lock through the real fs, with injected events. Before the stale lock is moved aside,
+// another owner replaces it, so the moved file is not the inode that was read and the take-over puts it back. The stale
+// inode is first kept under another name, so the replacement cannot reuse its number. afterMove is published at the lock
+// path once the lock is moved aside, so the restoring link finds the path taken again. linkFailure makes the restoring
+// link fail with that code instead of running.
+interface TakeOverSeam {
+  readonly replacement: string;
+  readonly afterMove?: string;
+  readonly linkFailure?: string;
+}
+
+function seamTakeOver(t: TestContext, lock: string, seam: TakeOverSeam): void {
+  const realRename = fs.renameSync;
+  const realLink = fs.linkSync;
+  const renames = t.mock.method(fs, "renameSync", (from: PathLike, to: PathLike): void => {
+    if (String(from) !== lock) {
+      realRename(from, to);
+      return;
+    }
+    realRename(lock, `${lock}.held`);
+    writeFileSync(lock, seam.replacement);
+    realRename(lock, to);
+    if (seam.afterMove !== undefined) {
+      writeFileSync(lock, seam.afterMove);
+    }
+  });
+  const links = t.mock.method(fs, "linkSync", (from: PathLike, to: PathLike): void => {
+    if (seam.linkFailure !== undefined && String(from).includes(".lock.stale-")) {
+      throw Object.assign(new Error(seam.linkFailure), { code: seam.linkFailure });
+    }
+    realLink(from, to);
+  });
+  syncBuiltinESMExports();
+  t.after(() => {
+    renames.mock.restore();
+    links.mock.restore();
+    syncBuiltinESMExports();
+  });
+}
+
+// Publishes a lock whose owner is gone, as a crashed process would leave it. Returns the lock path.
+function publishStaleLock(f: Fixture): string {
+  mkdirSync(sessionDirOf(f), { recursive: true });
+  const lock = join(sessionDirOf(f), ".lock");
+  writeFileSync(lock, lockText({ pid: DEAD_PID, startTicks: "1", bootId: bootId() }));
+  return lock;
+}
+
+void test("a take-over whose restoring link finds the path taken again keeps the moved lock as the tombstone", (t) => {
+  const f = fixture(t);
+  const lock = publishStaleLock(f);
+  const replacement = lockText({ pid: DEAD_PID, startTicks: "2", bootId: bootId() });
+  const takenAgain = lockText({ pid: DEAD_PID, startTicks: "3", bootId: bootId() });
+  seamTakeOver(t, lock, { replacement, afterMove: takenAgain });
+
+  assert.throws(() => acquireSessionLock(sessionDirOf(f)), codeIs("LOCK_CONFLICT"));
+
+  assert.equal(readFileSync(lock, "utf8"), takenAgain, "the path holds the lock that took it again");
+  const tombstones = readdirSync(sessionDirOf(f)).filter((name) => name.startsWith(".lock.stale-"));
+  assert.equal(tombstones.length, 1);
+  assert.equal(readFileSync(join(sessionDirOf(f), tombstones[0] ?? ""), "utf8"), replacement);
+});
+
+void test("a take-over whose restoring link fails for another reason is refused as WRITE_NOT_ATOMIC and keeps the tombstone", (t) => {
+  const f = fixture(t);
+  const lock = publishStaleLock(f);
+  const replacement = lockText({ pid: DEAD_PID, startTicks: "2", bootId: bootId() });
+  seamTakeOver(t, lock, { replacement, linkFailure: "EACCES" });
+
+  assert.throws(() => acquireSessionLock(sessionDirOf(f)), codeIs("WRITE_NOT_ATOMIC"));
+
+  assert.equal(existsSync(lock), false, "a failed restore does not put the moved lock back");
+  const tombstones = readdirSync(sessionDirOf(f)).filter((name) => name.startsWith(".lock.stale-"));
+  assert.equal(tombstones.length, 1);
+  assert.equal(readFileSync(join(sessionDirOf(f), tombstones[0] ?? ""), "utf8"), replacement);
+});
+
+void test("a state root whose path holds a symlink loop is refused as SCHEMA_INVALID, not climbed past the loop", async (t) => {
+  const f = fixture(t);
+  writeFileSync(join(f.ws, "a.txt"), "content");
+  symlinkSync("loop", join(f.base, "loop"));
+  const stateRoot = join(f.base, "loop", "state");
+
+  await assert.rejects(
+    snapshotWorkspace({ ...scope(f), stateRoot, checkpointId: "c1" }),
+    codeIs("SCHEMA_INVALID"),
+  );
+  assert.equal(readFileSync(join(f.ws, "a.txt"), "utf8"), "content");
+});
+
+void test("a partial checkpoint with no manifest is removed under the lock, so a new snapshot takes its id", async (t) => {
+  const f = fixture(t);
+  writeFileSync(join(f.ws, "a.txt"), "content");
+  await snapshotWorkspace({ ...scope(f), checkpointId: "c0" });
+  const partial = checkpointPath(f, "c1");
+  mkdirSync(join(partial, "tree"), { recursive: true });
+  writeFileSync(join(partial, "tree", "stale.txt"), "left by a snapshot that stopped before its manifest");
+
+  const snapshot = await snapshotWorkspace({ ...scope(f), checkpointId: "c1" });
+
+  assert.deepEqual(snapshot.manifest.entries.map((entry) => entry.path), ["a.txt"]);
+  assert.deepEqual(readdirSync(join(partial, "tree")), ["a.txt"]);
+  assert.equal(readFileSync(join(checkpointPath(f, "c0"), "tree", "a.txt"), "utf8"), "content", "c0 is untouched");
+});
+
+void test("a complete checkpoint keeps its id: a snapshot with that id is refused as SCHEMA_INVALID and leaves it intact", async (t) => {
+  const f = fixture(t);
+  writeFileSync(join(f.ws, "a.txt"), "saved");
+  await snapshotWorkspace({ ...scope(f), checkpointId: "c1" });
+  const manifestPath = join(checkpointPath(f, "c1"), "manifest.json");
+  const manifestBefore = readFileSync(manifestPath, "utf8");
+  writeFileSync(join(f.ws, "a.txt"), "changed");
+
+  await assert.rejects(snapshotWorkspace({ ...scope(f), checkpointId: "c1" }), codeIs("SCHEMA_INVALID"));
+
+  assert.equal(readFileSync(manifestPath, "utf8"), manifestBefore);
+  assert.equal(readFileSync(join(checkpointPath(f, "c1"), "tree", "a.txt"), "utf8"), "saved");
 });

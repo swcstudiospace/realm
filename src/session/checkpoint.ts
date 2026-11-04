@@ -12,8 +12,8 @@
 // session's checkpoint directory. It is published whole, so it is never seen empty. Its content records the owner: pid,
 // start time in clock ticks and the boot id. A lock is taken over only when its owner is provably gone (the pid is not
 // alive, its start time differs, or the boot differs). A live or unprovable owner keeps the lock, and the operation is
-// refused with LOCK_CONFLICT. Under the lock the operation recovers the session's leftover work directories, then runs,
-// then releases the lock. The sweep never runs without the lock.
+// refused with LOCK_CONFLICT. Under the lock the operation recovers leftover work directories, removes any partial
+// checkpoint (a directory with no manifest), then runs, then releases the lock. The sweep never runs without the lock.
 //
 // A step still running past its bound keeps the lock, the tree and the work directory for recovery. Cleanup waits for
 // that step under the bound and never acts while the step may still write.
@@ -230,6 +230,7 @@ async function snapshotLocked(
   const { pinned, sessionId, workspaceRoot, sandboxRunning } = workspace;
   await requireSandboxStopped(sandboxRunning, sessionId);
   await recoverSession(stateRoot, sessionId, pinned, workspaceRoot, steps);
+  await removePartialCheckpoint(checkpointDir);
   // The reservation runs outside the try below: a collision must not remove the checkpoint that already holds the id.
   await reserveCheckpointDir(checkpointDir);
   try {
@@ -578,6 +579,29 @@ async function reserveCheckpointDir(path: string): Promise<void> {
   }
 }
 
+// A checkpoint directory without a manifest is the partial of a snapshot that stopped before its manifest, which is
+// written last. A partial holds no reservation, so it is removed under the lock before the id is reserved. A directory
+// whose manifest can be read is complete and is left for the reservation to refuse. A manifest that is present but
+// unreadable refuses the snapshot, so nothing is removed.
+async function removePartialCheckpoint(checkpointDir: string): Promise<void> {
+  const info = await withTimeout(lstatIfPresent(checkpointDir), CHECKPOINT_OP_TIMEOUT_MS, "TOOL_TIMEOUT");
+  if (info === undefined || !info.isDirectory()) {
+    return;
+  }
+  const manifest = await withTimeout(
+    readManifestText(join(checkpointDir, MANIFEST_FILE)),
+    CHECKPOINT_OP_TIMEOUT_MS,
+    "TOOL_TIMEOUT",
+  );
+  if (manifest !== undefined) {
+    return;
+  }
+  const removal = await tryRemove(removeDir, checkpointDir);
+  if (removal !== undefined) {
+    throw removal;
+  }
+}
+
 async function makePrivateDir(path: string): Promise<void> {
   await mkdir(path, { mode: PRIVATE_DIR_MODE });
   await chmod(path, PRIVATE_DIR_MODE);
@@ -648,14 +672,19 @@ function asRealmError(error: unknown, code: ErrorCode): RealmError {
 }
 
 // The real path of the nearest existing ancestor, with the missing tail appended. A link target that does not exist yet
-// is still resolved through any link above it.
+// is still resolved through any link above it. Only a missing component climbs to its parent. Any other failure, such
+// as a symlink loop or a denied directory, is refused as SCHEMA_INVALID, the code lstatIfPresent uses for an unreadable
+// path.
 async function realpathOfNearest(path: string): Promise<string> {
   const missing: string[] = [];
   let existing = path;
   for (;;) {
     try {
       return join(await realpath(existing), ...missing);
-    } catch {
+    } catch (error: unknown) {
+      if (errnoOf(error) !== "ENOENT") {
+        throw makeRealmError("SCHEMA_INVALID");
+      }
       const parent = dirname(existing);
       if (parent === existing) {
         return path;

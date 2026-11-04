@@ -320,17 +320,15 @@ function takeOverProvablyGone(lockPath: string): void {
     throw makeRealmError("LOCK_CONFLICT");
   }
   if (lstatSync(tombstone).ino !== seen.ino) {
-    let restored: boolean;
+    // The moved file is not the lock that was read, so it goes back. EEXIST means the path was taken again: the
+    // moved lock stays aside as the tombstone, for its owner to find. Any other failure keeps it there too, and is
+    // refused as WRITE_NOT_ATOMIC, the code linkLock uses for a failed link.
     try {
       linkSync(tombstone, lockPath);
-      restored = true;
-    } catch {
-      // The path was taken again, so the moved lock stays aside as the tombstone, for its owner to find.
-      restored = false;
+    } catch (error) {
+      throw makeRealmError(errnoOf(error) === "EEXIST" ? "LOCK_CONFLICT" : "WRITE_NOT_ATOMIC");
     }
-    if (restored) {
-      unlinkSync(tombstone);
-    }
+    unlinkSync(tombstone);
     throw makeRealmError("LOCK_CONFLICT");
   }
   unlinkSync(tombstone);
