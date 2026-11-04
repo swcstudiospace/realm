@@ -18,7 +18,8 @@ import type { EnvironmentLike } from "../session/paths.js";
 import { createLogger, parseLogLevel, type Logger } from "../observe/logger.js";
 import { createFileSink } from "../observe/log-file.js";
 import { FAILURE_EVENT, daemonLogPath, requestLogPath } from "./ensure.js";
-import { startDaemon, type StartDaemonOptions, type StartedDaemon, type StartupReport } from "./daemon.js";
+import { startDaemon, type StartDaemonOptions, type StartedDaemon } from "./daemon.js";
+import type { StartupReport } from "./startup.js";
 
 export type DaemonSignal = "SIGTERM" | "SIGINT";
 

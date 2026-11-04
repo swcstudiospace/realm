@@ -34,13 +34,12 @@ import {
 } from "../../src/daemon/channel.js";
 import {
   buildDaemonHandle,
-  type BuildDaemonHandleOptions,
   startDaemon,
-  sweepRootsOf,
   type StartedDaemon,
   type StartDaemonOptions,
-  type StartupReport,
 } from "../../src/daemon/daemon.js";
+import type { BuildDaemonHandleOptions } from "../../src/daemon/seams.js";
+import { sweepRootsOf, type StartupReport } from "../../src/daemon/startup.js";
 import { selectionOf } from "../../src/daemon/client.js";
 import type { SessionEntry } from "../../src/daemon/sessions.js";
 import type { CheckResult } from "../../src/doctor/checks.js";

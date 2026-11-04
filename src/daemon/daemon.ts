@@ -10,42 +10,24 @@
 // bound, a handle still builds and up refuses with AGENTOS_NOT_CONFIGURED. This module parses no argv,
 // spawns no daemon process, and reads no process environment: every host value arrives through its options.
 
-import { rmSync, statSync } from "node:fs";
 import { createServer, type Server, type Socket } from "node:net";
-import { isAbsolute, join, relative, sep } from "node:path";
 import { performance } from "node:perf_hooks";
-import { AndaBridge } from "../anda/client.js";
 import { appendAudit } from "../audit/log.js";
 import { newCorrelationId } from "../observe/ids.js";
 import { nullLogger, type Logger } from "../observe/logger.js";
 import { createMetrics } from "../observe/metrics.js";
-import { reconcileAuditLogs } from "../audit/reconcile.js";
-import type { Policy, PolicyMode, SessionRecord } from "../contract/validate.js";
-import { makeRealmError, RealmError, type ErrorCode } from "../core/errors.js";
+import { makeRealmError, type ErrorCode } from "../core/errors.js";
 import { loadPolicyFile } from "../core/policy.js";
-import type { BridgePort, ExecutionService } from "../core/ports.js";
 import type { StateSnapshot } from "../core/state-machine.js";
-import { displayStatus, type DisplayStatus } from "../core/status.js";
-import { dialWithin, sleep, withTimeout } from "../core/timeout.js";
+import { sleep, withTimeout } from "../core/timeout.js";
 import { defaultRunCommand, runChecks, type AgentOsReading, type CheckResult, type DoctorOptions } from "../doctor/checks.js";
-import { bindRoot, isInsideRoot, type PinnedRoot } from "../fs/root.js";
-import { DEFAULT_SWEEP_DEADLINE_MS, ORPHAN_TEMP_MIN_AGE_MS, sweepOrphanTempFiles } from "../fs/temp-sweep.js";
-import { hydrateAdopted, isLiveState, storedPinOf, TEARDOWN_TIMEOUT_MS } from "../lifecycle/controller.js";
+import { bindRoot, type PinnedRoot } from "../fs/root.js";
+import { isLiveState, storedPinOf, TEARDOWN_TIMEOUT_MS } from "../lifecycle/controller.js";
 import { createRealmHandle, type RealmHandle } from "../realm/compose.js";
-import { AgentOsSupervisor, type AgentOsDriver } from "../runtime/agentos.js";
-import { andaBridgeRequired, loadRuntimeConfig, type RuntimeConfig } from "../runtime/config.js";
-import { MAX_CONCURRENT_SESSIONS, type HardeningBinding } from "../runtime/hardening.js";
-import { LibpodClient } from "../runtime/libpod-client.js";
-import { sandboxBindingOf } from "../runtime/driver/sandbox-binding.js";
+import { loadRuntimeConfig } from "../runtime/config.js";
+import { MAX_CONCURRENT_SESSIONS } from "../runtime/hardening.js";
 import { readHostProcStatus } from "../runtime/kernel-caps.js";
-import {
-  productionOpenShellRunner,
-  SessionExecution,
-  verdictOf,
-  type SessionContainers,
-  type SupervisorFor,
-} from "../runtime/session-execution.js";
-import { realmSandboxName, type OpenShellRunner } from "../runtime/openshell.js";
+import { productionOpenShellRunner } from "../runtime/session-execution.js";
 import { readHostOciConfig } from "../runtime/seccomp-evidence.js";
 import {
   probePodman,
@@ -53,24 +35,9 @@ import {
   type PodmanProbeResult,
   type RunCommand,
 } from "../runtime/podman-probe.js";
-import { listRealmContainers, SWEEP_CALL_TIMEOUT_MS } from "../runtime/sweep.js";
-import { controlSocketPath, sessionIdOfWorkspace, sessionsDirOf, type EnvironmentLike } from "../session/paths.js";
-import {
-  reapStartupSelective,
-  type InspectedCandidate,
-  type ReapCandidate,
-  type ReapInspection,
-  type ReapVerdict,
-  type SelectiveReapDeps,
-  type SelectiveReapResult,
-} from "../session/reap.js";
+import { controlSocketPath, sessionIdOfWorkspace } from "../session/paths.js";
 import { SessionStore } from "../session/store.js";
-import {
-  listWorkspaceEntryIds,
-  readWorkspaceEntry,
-  removeWorkspaceEntry,
-  writeWorkspaceEntry,
-} from "../session/workspace-registry.js";
+import { readWorkspaceEntry, removeWorkspaceEntry, writeWorkspaceEntry } from "../session/workspace-registry.js";
 import { AdmissionLedger } from "./admission.js";
 import {
   chmodSocket,
@@ -93,6 +60,22 @@ import {
   type SocketDirDeps,
 } from "./channel.js";
 import {
+  defaultBridge,
+  defaultConnectSocket,
+  defaultExec,
+  libpodOf,
+  probeSocketAlive,
+  refusalReply,
+  removeSocketFile,
+  requireSelection,
+  runtimeInputAt,
+  statusResult,
+  supervisorsOver,
+  workspaceRootOf,
+  type BuildDaemonHandleOptions,
+  type StatusResult,
+} from "./seams.js";
+import {
   catalogueCode,
   codeOf,
   DAEMON_REPLY_ALLOWANCE_MS,
@@ -109,88 +92,18 @@ import {
   type ResolvedSelection,
   type SessionEntry,
 } from "./sessions.js";
-
-// Default bound for one AgentOS driver call in the production supervisor. The
-// only purpose is to keep a hung driver from hanging daemon startup; the
-// controller still enforces the policy startup budget around the whole path.
-// The supervisor wraps every driver call in this budget, and a sandbox create takes tens of seconds. It
-// must exceed the driver's create budget (AGENTOS_START_TIMEOUT_MS in main.ts, 180 s) with margin.
-const AGENTOS_CALL_TIMEOUT_MS = 200_000;
-
-// The budget of the startup temp-file sweep and audit reconciliation together, counted from the end of the reap. Both are
-// optional cleanup, so a large workspace or audit history must not keep clients waiting: the work that does not fit is
-// reported as unfinished and a later start finishes it. The gate opens once this work is done: the reconciliation needs no call in flight.
-const STARTUP_MAINTENANCE_BUDGET_MS = 10_000;
+import {
+  adoptionVerdictOver,
+  runStartupMaintenance,
+  startupNoticeOf,
+  startupReapSeamsOver,
+  STARTUP_MAINTENANCE_BUDGET_MS,
+  type StartupReapSeams,
+  type StartupReport,
+} from "./startup.js";
 
 // How the start gate settles: open for serving, or failed with the start error.
 type GateOutcome = { readonly ok: true } | { readonly ok: false; readonly error: unknown };
-
-export interface BuildDaemonHandleOptions {
-  readonly runtimeInput: unknown;
-  readonly policyPath: string;
-  readonly policy?: Policy;
-  readonly sessionId: string;
-  // Adapter seam (P6-D12). When exec or bridge is omitted the production
-  // adapter is built from the seams below; tests inject the existing fakes here.
-  readonly exec?: ExecutionService;
-  readonly bridge?: BridgePort;
-  readonly runOpenShell?: OpenShellRunner;
-  readonly clock?: () => Date;
-  // Request log (OBS-02). The Anda bridge built here writes its listener diagnostics to it.
-  readonly logger?: Logger;
-  // Production construction seams, used only when exec is omitted.
-  readonly libpod?: SessionContainers;
-  readonly libpodSocketPath?: string;
-  readonly agentosFor?: SupervisorFor;
-  readonly agentosDriver?: AgentOsDriver;
-  // Host environment filtered to OPENSHELL_ENV_NAMES for the runner (never
-  // read from the process: this module reads no environment).
-  readonly env?: EnvironmentLike;
-  // The three roots from config.json (runtimeRootsOf). The driver reads the same file. A stale REALM_DRIVER_*_ROOT
-  // variable is ignored. Without a root a session create is refused before any libpod call.
-  readonly secretRoot?: string;
-  readonly sandboxStateRoot?: string;
-  // Host readers of the create-time conformance proof: the container's OCI config text and its /proc status. Absent, the host
-  // reads are used. The startup adoption verdict takes the same readers.
-  readonly readOciConfig?: (path: string) => string;
-  readonly readProcStatus?: (pid: number) => string;
-}
-
-// What the startup maintenance did, handed to onStartup. The stable seam for the startup log line (Phases 17 and 19 reshape
-// the reap and the logger, not this object). `failures` counts the maintenance steps that threw and the entries the sweeps
-// report as failed; a failure never aborts the start.
-export interface StartupReport {
-  // The ids of the realm containers the reap removed and proved gone, in removal order.
-  readonly containerIds: readonly string[];
-  readonly containersRemoved: number;
-  readonly recordsDeleted: number;
-  // The sessions the reap adopted: their containers and records were kept. Each is hydrated after the gate opens.
-  readonly adopted: number;
-  readonly tempFilesRemoved: number;
-  readonly auditLinesReconciled: number;
-  // True when the temp-file sweep stopped at its wall or entry bound before it had seen every directory.
-  readonly truncated: boolean;
-  // The sweep roots the budget left unfinished (the root being walked when it ran out, and every root not reached), as paths.
-  readonly unfinishedSweepRoots: readonly string[];
-  // The audit logs the budget left unfinished, as base names without a directory. A later start finishes them.
-  readonly unfinishedAuditFiles: readonly string[];
-  // True when the audit directory held more logs than one start considers, or the deadline ended its listing, so logs that
-  // were not considered cannot be named in `unfinishedAuditFiles`.
-  readonly auditListingTruncated: boolean;
-  // True when no sweep root and no audit log is unfinished. It says nothing about the notice, which is about the reap and the
-  // adoptions only.
-  readonly maintenanceComplete: boolean;
-  // Present only when the reap itself failed: the catalogue code it failed with. The report is then partial: it holds what the
-  // reap had destroyed before it stopped, no sweep or reconciliation ran, and the start fails with that same error.
-  readonly reapFailure?: ErrorCode;
-  // Orphan temp files removed from no recorded workspace. They are counted here and written to no audit file (C9).
-  readonly unattributedTempFiles: number;
-  // Records the startup could not read. Their workspace is unknown, so they own no orphan (C9).
-  readonly unattributedRecords: number;
-  // Registry entries of earlier generations that the startup removed.
-  readonly registryEntriesRemoved: number;
-  readonly failures: number;
-}
 
 export interface StartDaemonOptions extends Omit<BuildDaemonHandleOptions, "sessionId"> {
   // Probe seam for up (P6-D5). Defaults to the real probePodman over the
@@ -907,78 +820,22 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
   });
   options.onServer?.(server);
 
-  // The adoption verdict of one session record against its container candidate (verdictOf). The record's workspace resolves
-  // under the rules of a selection, and the binding is the one the create path derives for the session's sandbox. Only a
-  // refusal of the record's own workspace is a verdict here; a libpod failure rejects the whole reap, which then removes nothing.
-  const readOciConfig = options.readOciConfig ?? readHostOciConfig;
-  const readProcStatus = options.readProcStatus ?? readHostProcStatus;
-  const judgeSurvivor = async (record: SessionRecord, candidate: InspectedCandidate): Promise<ReapVerdict> => {
-    let resolved: ResolvedSelection;
-    try {
-      resolved = resolveTarget({ workspaceRoot: record.workspaceRoot, sessionId: record.sessionId });
-    } catch (error: unknown) {
-      return { ok: false, property: "workspace-root", causeCode: codeOf(error) };
-    }
-    try {
-      storedPinOf(stateDir, record.sessionId, record.workspaceRoot);
-    } catch (error: unknown) {
-      logger.info("startup.adoption_refused", { sessionId: record.sessionId, code: codeOf(error) });
-      return { ok: false, property: "workspace-pin", causeCode: codeOf(error) };
-    }
-    const { secretRoot, sandboxStateRoot } = options;
-    if (
-      secretRoot === undefined ||
-      sandboxStateRoot === undefined ||
-      !isAbsolute(secretRoot) ||
-      !isAbsolute(sandboxStateRoot)
-    ) {
-      return { ok: false, property: "binding-roots", causeCode: "SCHEMA_INVALID" };
-    }
-    const info = await withTimeout(libpod.info(), SWEEP_CALL_TIMEOUT_MS, "PODMAN_MACHINE_DOWN");
-    const binding: HardeningBinding = {
+  // The reap's container seams over the libpod client, and the adoption verdict each session record is judged by (startup.ts,
+  // D-1409). The verdict resolves a record's workspace by the rules of a selection, so it is given resolveTarget.
+  const reapSeams: StartupReapSeams = startupReapSeamsOver(
+    libpod,
+    adoptionVerdictOver({
+      libpod,
+      stateDir,
+      logger,
       image: config.image,
-      rootless: info.rootless,
-      sessionId: record.sessionId,
-      ...sandboxBindingOf(
-        { workspaceRoot: resolved.pinned.realPath, stateRoot: sandboxStateRoot, secretRoot },
-        realmSandboxName(record.sessionId),
-      ),
-    };
-    return verdictOf(candidate.inspect, {
-      sessionId: record.sessionId,
-      containerId: candidate.containerId,
-      binding,
-      readOciConfig,
-      readProcStatus,
-    });
-  };
-
-  // The reap's container seams over the libpod client. Every call is bounded. An inspection that fails is kept as the
-  // candidate's failure (the reap then rejects before any removal); it is not swallowed.
-  const reapSeams: StartupReapSeams = {
-    listCandidates: async (): Promise<readonly ReapCandidate[]> => {
-      const candidates: ReapCandidate[] = [];
-      for (const container of await listRealmContainers(libpod)) {
-        let inspection: ReapInspection;
-        try {
-          inspection = {
-            ok: true,
-            inspect: await withTimeout(libpod.inspectContainer(container.id), SWEEP_CALL_TIMEOUT_MS, "PODMAN_MACHINE_DOWN"),
-          };
-        } catch (error: unknown) {
-          inspection = { ok: false, error };
-        }
-        candidates.push({ containerId: container.id, labels: container.labels ?? {}, inspection });
-      }
-      return candidates;
-    },
-    verdict: judgeSurvivor,
-    remove: async (containerId: string): Promise<void> => {
-      await withTimeout(libpod.removeContainer(containerId, { force: true }), SWEEP_CALL_TIMEOUT_MS, "PODMAN_MACHINE_DOWN");
-    },
-    listSurvivors: async (): Promise<readonly string[]> =>
-      (await listRealmContainers(libpod)).map((container) => container.id),
-  };
+      secretRoot: options.secretRoot,
+      sandboxStateRoot: options.sandboxStateRoot,
+      readOciConfig: options.readOciConfig ?? readHostOciConfig,
+      readProcStatus: options.readProcStatus ?? readHostProcStatus,
+      resolve: resolveTarget,
+    }),
+  );
 
   // Hydrates one adopted session on the pin its workspace entry recorded at create, so a replaced directory is refused.
   const hydrateSurvivor = async (sessionId: string, containerId: string): Promise<StateSnapshot> => {
@@ -1030,452 +887,4 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
     committedCount: (): number => ledger.committedCount(),
     isCommitted: (sessionId: string): boolean => ledger.isCommitted(sessionId),
   };
-}
-
-// The reap's container seams, as startDaemon builds them over the libpod client. The store is the caller's.
-type StartupReapSeams = Omit<SelectiveReapDeps, "store">;
-
-interface StartupMaintenanceDeps {
-  readonly store: Pick<SessionStore, "list" | "load" | "delete">;
-  // The reap's container seams: the listing, the verdict, the removal and the removal proof.
-  readonly reap: StartupReapSeams;
-  // Hydrates the container of one adopted session and resolves with the session's snapshot.
-  readonly hydrate: (sessionId: string, containerId: string) => Promise<StateSnapshot>;
-  // Opens the gate: the daemon serves from here on. Called once the reap, the sweep and the reconciliation are done.
-  readonly serve: () => void;
-  // The adopted sessions whose hydration has not settled. A session is added after the reap and removed when its hydration settles.
-  readonly pending: Set<string>;
-  readonly policy: Policy;
-  readonly stateDir: string;
-  // Wall-clock milliseconds, for the age of a temp file (its mtime is a wall-clock value).
-  readonly now: () => number;
-  // Monotonic milliseconds (performance.now()), for the budget. The deadline is read on this clock only.
-  readonly monotonicNow: () => number;
-  // The budget of the temp-file sweep and the audit reconciliation together, counted from the end of the reap.
-  readonly budgetMs: number;
-  // Receives the report once: the full one when the maintenance ended, a partial one (with `reapFailure`) when the reap failed.
-  readonly onReport: (report: StartupReport) => void;
-}
-
-// The whole startup block (D-1409), in this order: the selective reap, the registry cleanup, the temp-file sweep, the audit
-// reconciliation, the gate, the hydration of the adopted sessions, the report. The reap's failure rejects and nothing is served;
-// a failure of any later step is counted in the report and never aborts the start. The sweep and the reconciliation share ONE
-// deadline, budgetMs after the reap; work cut off by it is reported as unfinished and finished by a later start. The reconciliation
-// runs before the gate because it assumes no call is in flight.
-async function runStartupMaintenance(deps: StartupMaintenanceDeps): Promise<void> {
-  // The reap's progress outlives its call, so a reap that fails halfway still reports what it destroyed.
-  const containerIds: string[] = [];
-  let failures = 0;
-  let registryEntriesRemoved = 0;
-  let unreadableRecords = 0;
-  let unattributedTempFiles = 0;
-  let owners: readonly RecordOwner[] = [];
-  let reaped: SelectiveReapResult;
-  try {
-    // The owners are read before the reap deletes the records, so each orphan's removal can be attributed (C9).
-    const captured = captureOwners(deps.store);
-    owners = captured.owners;
-    unreadableRecords = captured.unreadable;
-    reaped = await reapStartupSelective({
-      store: deps.store,
-      listCandidates: deps.reap.listCandidates,
-      verdict: deps.reap.verdict,
-      remove: async (containerId) => {
-        await deps.reap.remove(containerId);
-        containerIds.push(containerId);
-      },
-      listSurvivors: deps.reap.listSurvivors,
-    });
-  } catch (error: unknown) {
-    // The reap failed, possibly after it had removed containers. Record what was destroyed and why it stopped, hand it to the
-    // observer so the log has it, and rethrow the original error: nothing is served after it. The reap deleted no record.
-    deps.onReport({
-      containerIds,
-      containersRemoved: containerIds.length,
-      recordsDeleted: 0,
-      adopted: 0,
-      tempFilesRemoved: 0,
-      auditLinesReconciled: 0,
-      truncated: false,
-      unfinishedSweepRoots: [],
-      unfinishedAuditFiles: [],
-      auditListingTruncated: false,
-      maintenanceComplete: false,
-      reapFailure: codeOf(error),
-      unattributedTempFiles,
-      unattributedRecords: unreadableRecords,
-      registryEntriesRemoved: 0,
-      failures: 1,
-    });
-    throw error;
-  }
-  // A removal the reap proved gone is named even when its call was never seen to resolve.
-  for (const removal of reaped.removed) {
-    if (!containerIds.includes(removal.containerId)) {
-      containerIds.push(removal.containerId);
-    }
-  }
-  // The deadline counts from the end of the reap, as the sweep and the reconciliation have always been bounded. The hydration
-  // below has its own bound (the controller's startup budget), so it is not counted against this one.
-  const deadline = deps.monotonicNow() + deps.budgetMs;
-  // The reap deleted the records of every session it did not adopt, so no registry entry of those sessions is live: each is
-  // removed. An adopted session's entry is written again by its hydration.
-  const adoptedIds = new Set(reaped.adopted.map((adopted) => adopted.sessionId));
-  try {
-    for (const id of listWorkspaceEntryIds(deps.stateDir)) {
-      if (!adoptedIds.has(id)) {
-        removeWorkspaceEntry(deps.stateDir, id);
-        registryEntriesRemoved += 1;
-      }
-    }
-  } catch {
-    // A registry entry that cannot be read or removed is counted; the next start removes it.
-    failures += 1;
-  }
-  for (const session of reaped.adopted) {
-    deps.pending.add(session.sessionId);
-  }
-  let tempFilesRemoved = 0;
-  let truncated = false;
-  let unfinishedSweepRoots: readonly string[] = [];
-  const ownerUid = process.getuid?.();
-  if (ownerUid === undefined) {
-    // Without a uid the owner rule cannot be applied, so nothing is removed; the report counts the gap.
-    failures += 1;
-  } else {
-    try {
-      const sweepShareMs = Math.max(0, Math.floor((deadline - deps.monotonicNow()) / 2));
-      const swept = sweepOrphanTempFiles(sweepRootsOf(deps.policy.workspaceRoots, deps.stateDir), {
-        now: deps.now(),
-        minAgeMs: ORPHAN_TEMP_MIN_AGE_MS,
-        ownerUid,
-        deadlineMs: Math.min(DEFAULT_SWEEP_DEADLINE_MS, sweepShareMs),
-        audit: (entry) => {
-          const sessionId = ownerOfPath(owners, entry.path);
-          if (sessionId === undefined) {
-            unattributedTempFiles += 1;
-            return;
-          }
-          appendAudit(deps.stateDir, {
-            sessionId,
-            tool: entry.tool,
-            outcome: entry.outcome,
-            path: entry.path,
-            bytes: entry.bytes,
-          });
-        },
-      });
-      tempFilesRemoved = swept.removed.length;
-      truncated = swept.truncated;
-      unfinishedSweepRoots = swept.unfinishedRoots;
-      failures += swept.failed;
-    } catch {
-      // The sweep never throws on a bad root or file; this is a failure of the sweep itself, counted in the report.
-      failures += 1;
-    }
-  }
-  let auditLinesReconciled = 0;
-  let unfinishedAuditFiles: readonly string[] = [];
-  let auditListingTruncated = false;
-  let auditComplete: boolean;
-  try {
-    const reconciled = reconcileAuditLogs(deps.stateDir, { now: deps.monotonicNow, deadline });
-    auditLinesReconciled = reconciled.appended;
-    unfinishedAuditFiles = reconciled.unfinished;
-    auditListingTruncated = reconciled.listingTruncated;
-    auditComplete = reconciled.complete;
-    failures += reconciled.failed;
-  } catch {
-    // A failure of the reconciliation itself is counted in the report; the lines it appended before it stopped are not.
-    failures += 1;
-    auditComplete = false;
-  }
-  // The gate opens once the reap, the sweep and the reconciliation are done; the adopted sessions then hydrate (hydrateAdopted).
-  deps.serve();
-  const hydrated = await hydrateAdopted(reaped.adopted, deps.hydrate, deps.policy.startupBudgetMs, deps.pending);
-  deps.onReport({
-    containerIds,
-    containersRemoved: reaped.counts.removed,
-    recordsDeleted: reaped.counts.deleted,
-    adopted: reaped.counts.adopted,
-    tempFilesRemoved,
-    auditLinesReconciled,
-    truncated,
-    unfinishedSweepRoots,
-    unfinishedAuditFiles,
-    auditListingTruncated,
-    maintenanceComplete: unfinishedSweepRoots.length === 0 && auditComplete,
-    unattributedTempFiles,
-    unattributedRecords: unreadableRecords,
-    registryEntriesRemoved,
-    failures: failures + hydrated,
-  });
-}
-
-// A record as it stood before the reap: the session it names and the workspace it was recorded for.
-interface RecordOwner {
-  readonly sessionId: string;
-  readonly workspaceRoot: string;
-}
-
-// The records the reap is about to delete. A record that cannot be read has no known workspace, so it owns no orphan, and it
-// is counted.
-function captureOwners(store: Pick<SessionStore, "list" | "load">): { readonly owners: RecordOwner[]; readonly unreadable: number } {
-  const owners: RecordOwner[] = [];
-  let unreadable = 0;
-  for (const sessionId of store.list()) {
-    let record: ReturnType<SessionStore["load"]>;
-    try {
-      record = store.load(sessionId);
-    } catch {
-      unreadable += 1;
-      continue;
-    }
-    if (record === null) {
-      unreadable += 1;
-    } else {
-      owners.push({ sessionId, workspaceRoot: record.workspaceRoot });
-    }
-  }
-  return { owners, unreadable };
-}
-
-// The session whose recorded workspace contains the path: an owner whose root is the path or one of its ancestors, the longest
-// root winning. The comparison is by path segment, so /ws-other is not inside /ws. Undefined when no owner contains it.
-function ownerOfPath(owners: readonly RecordOwner[], path: string): string | undefined {
-  let best: RecordOwner | undefined;
-  for (const owner of owners) {
-    const rel = relative(owner.workspaceRoot, path);
-    const contains = rel === "" || (!isAbsolute(rel) && rel.split(sep)[0] !== "..");
-    if (contains && (best === undefined || owner.workspaceRoot.length > best.workspaceRoot.length)) {
-      best = owner;
-    }
-  }
-  return best?.sessionId;
-}
-
-// The roots the orphan sweep walks (D-1401): the policy's workspace roots, the sessions directory, the runtime directory and
-// the audit directory (where a kill during the atomic write of the reconciliation's progress record leaves a temp file).
-// A root that lies inside an earlier one is dropped only when that earlier root's walk reaches it, that is when both are on
-// the same device: the walk never crosses into another device, so a root on its own mount (for example /projects/ssd under
-// /projects) is kept. When either device cannot be read the root is kept too, because walking a directory twice costs time
-// and dropping one that is not covered costs the cleanup. A root that does not bind (for example a runtime directory that
-// was never created) is passed on as it is: the sweep counts it as skipped and walks nothing. `deviceOf` is the stat seam.
-export function sweepRootsOf(
-  workspaceRoots: readonly string[],
-  stateDir: string,
-  deviceOf: (path: string) => number = (path) => statSync(path).dev,
-): readonly string[] {
-  const candidates = [...workspaceRoots, sessionsDirOf(stateDir), join(stateDir, "runtime"), join(stateDir, "audit")];
-  const bound: PinnedRoot[] = [];
-  const roots: string[] = [];
-  for (const candidate of candidates) {
-    let pinned: PinnedRoot;
-    try {
-      pinned = bindRoot(candidate);
-    } catch {
-      roots.push(candidate);
-      continue;
-    }
-    if (bound.some((earlier) => isInsideRoot(earlier, pinned.realPath) && sameDevice(deviceOf, earlier.realPath, pinned.realPath))) {
-      continue;
-    }
-    bound.push(pinned);
-    roots.push(pinned.realPath);
-  }
-  return roots;
-}
-
-// True only when both devices are read and equal. A stat that throws means "not known to be covered", so it is false.
-function sameDevice(deviceOf: (path: string) => number, covering: string, nested: string): boolean {
-  try {
-    return deviceOf(covering) === deviceOf(nested);
-  } catch {
-    // The root is kept and walked on its own, which is the conservative answer to an unreadable device.
-    return false;
-  }
-}
-
-// The notice text (D-1404): present only when the startup maintenance destroyed a container or a session record, or adopted a
-// session. The destroyed and the adopted sessions are two sentences, joined by a space.
-function startupNoticeOf(report: StartupReport): string | undefined {
-  if (report.containersRemoved === 0 && report.recordsDeleted === 0 && report.adopted === 0) {
-    return undefined;
-  }
-  const parts: string[] = [];
-  if (report.containersRemoved > 0 || report.recordsDeleted > 0) {
-    parts.push(
-      `A previous daemon's sandbox was destroyed at startup: ${String(report.containersRemoved)} container(s), ${String(report.recordsDeleted)} session record(s). Files in the workspace were kept; state outside it was lost.`,
-    );
-  }
-  if (report.adopted > 0) {
-    parts.push(
-      `${String(report.adopted)} session(s) from the previous daemon were adopted and kept. Their records were kept and each was brought back while the daemon served; a session that did not come back is in error.`,
-    );
-  }
-  return parts.join(" ");
-}
-
-// The report of status, up and down. `notice` is present only after a startup reap that destroyed something, so a reply with
-// nothing destroyed has no `notice` key.
-interface StatusReport {
-  readonly snapshot: StateSnapshot;
-  readonly display: DisplayStatus;
-  readonly mode: PolicyMode;
-  readonly notice?: string;
-}
-
-// The reply of status, up and down: the report of the selected session, with the realpath of the root the selection names and
-// the session id it maps to.
-interface StatusResult extends StatusReport {
-  readonly boundRoot: string;
-  readonly sessionId: string;
-}
-
-function statusResult(snapshot: StateSnapshot, mode: PolicyMode, notice: string | undefined): StatusReport {
-  return {
-    snapshot,
-    display: displayStatus(snapshot),
-    mode,
-    ...(notice === undefined ? {} : { notice }),
-  };
-}
-
-// The selection a selected method must carry. parseControlSelection guarantees it for every such method.
-function requireSelection(selection: ControlSelection | null): ControlSelection {
-  if (selection === null) {
-    throw makeRealmError("SCHEMA_INVALID");
-  }
-  return selection;
-}
-
-// The workspace root an up names. parseControlSelection has checked its shape.
-function workspaceRootOf(params: unknown): string {
-  if (
-    typeof params === "object" &&
-    params !== null &&
-    "workspaceRoot" in params &&
-    typeof params.workspaceRoot === "string"
-  ) {
-    return params.workspaceRoot;
-  }
-  throw makeRealmError("SCHEMA_INVALID");
-}
-
-// The runtime input of one session's handle: the daemon's own, with the session's pinned directory as its workspace root.
-function runtimeInputAt(runtimeInput: unknown, workspaceRoot: string): unknown {
-  if (typeof runtimeInput !== "object" || runtimeInput === null || Array.isArray(runtimeInput)) {
-    throw makeRealmError("SCHEMA_INVALID");
-  }
-  return { ...runtimeInput, workspaceRoot };
-}
-
-// The refusal reply for a thrown error: its catalogue code, plus the cause code when the error has one.
-function refusalReply(id: ControlId | null, error: unknown): ControlReply {
-  if (error instanceof RealmError && error.causeCode !== undefined) {
-    return { id, error: { code: error.code, causeCode: error.causeCode } };
-  }
-  return { id, error: { code: codeOf(error) } };
-}
-
-// Removes the control socket file. A failure is returned as SCHEMA_INVALID, the refusal every other filesystem
-// failure in this module uses, so it is never dropped.
-function removeSocketFile(socketPath: string): RealmError | undefined {
-  try {
-    rmSync(socketPath, { force: true });
-    return undefined;
-  } catch {
-    return makeRealmError("SCHEMA_INVALID");
-  }
-}
-
-// The supervisors of one driver, one per session. Each is built on the session's first use and returned for that session from
-// then on, so a session's supervision state is one object, shared by the execution path and the doctor probe.
-function supervisorsOver(driver: AgentOsDriver): SupervisorFor {
-  const supervisors = new Map<string, AgentOsSupervisor>();
-  return (sessionId: string): AgentOsSupervisor => {
-    const existing = supervisors.get(sessionId);
-    if (existing !== undefined) {
-      return existing;
-    }
-    const made = new AgentOsSupervisor({
-      driver,
-      sessionId,
-      callTimeoutMs: AGENTOS_CALL_TIMEOUT_MS,
-      random: Math.random,
-      sleep,
-      now: () => Date.now(),
-    });
-    supervisors.set(sessionId, made);
-    return made;
-  };
-}
-
-// The libpod client both entry points build: the caller's, or one over libpodSocketPath when the caller names a socket
-// instead, and undefined when neither is given. startDaemon and defaultExec share it, so both reach the same socket.
-function libpodOf(options: {
-  readonly libpod?: SessionContainers;
-  readonly libpodSocketPath?: string;
-}): SessionContainers | undefined {
-  return options.libpod ?? (options.libpodSocketPath !== undefined ? new LibpodClient(options.libpodSocketPath) : undefined);
-}
-
-function defaultExec(
-  config: RuntimeConfig,
-  policy: Policy,
-  options: BuildDaemonHandleOptions,
-  runOpenShell: OpenShellRunner,
-): ExecutionService {
-  const libpod = libpodOf(options);
-  if (libpod === undefined) {
-    throw makeRealmError("SCHEMA_INVALID");
-  }
-  const agentosFor =
-    options.agentosFor ?? (options.agentosDriver !== undefined ? supervisorsOver(options.agentosDriver) : undefined);
-  // No driver and no supervisor leaves AgentOS unbound: SessionExecution then refuses every runtime-touching
-  // call with AGENTOS_NOT_CONFIGURED, so the handle still builds.
-  return new SessionExecution({
-    libpod,
-    runner: runOpenShell,
-    ...(agentosFor !== undefined ? { agentosFor } : {}),
-    ...(options.secretRoot !== undefined ? { secretRoot: options.secretRoot } : {}),
-    ...(options.sandboxStateRoot !== undefined ? { sandboxStateRoot: options.sandboxStateRoot } : {}),
-    ...(options.readOciConfig !== undefined ? { readOciConfig: options.readOciConfig } : {}),
-    ...(options.readProcStatus !== undefined ? { readProcStatus: options.readProcStatus } : {}),
-    config: {
-      image: config.image,
-      stateDir: config.stateDir,
-      ...(config.andaUrl !== undefined ? { andaUrl: config.andaUrl } : {}),
-    },
-    egressAllow: policy.egressAllow,
-  });
-}
-
-// The Anda bridge over the configured URL, or null when no URL is configured, so the session has no
-// bridge and runs no handshake (C4).
-function defaultBridge(config: RuntimeConfig, logger: Logger | undefined): BridgePort | null {
-  if (!andaBridgeRequired(config)) {
-    return null;
-  }
-  return new AndaBridge({ url: config.andaUrl, ...(logger === undefined ? {} : { logger }) });
-}
-
-// Dials a Unix socket and closes it at once, mirroring the doctor default
-// (checks.ts). Rejects on refusal or a missing socket with the socket's error,
-// and with PODMAN_MACHINE_DOWN when no connection completes within timeoutMs.
-export async function defaultConnectSocket(socketPath: string, timeoutMs: number): Promise<void> {
-  const socket = await dialWithin(socketPath, timeoutMs, "PODMAN_MACHINE_DOWN");
-  socket.destroy();
-}
-
-// True when a live owner answers at the socket path. Any other outcome (absent
-// path, refusal, timeout) means no live owner.
-function probeSocketAlive(socketPath: string, timeoutMs: number): Promise<boolean> {
-  return dialWithin(socketPath, timeoutMs, "DAEMON_START_TIMEOUT").then(
-    (socket) => {
-      socket.destroy();
-      return true;
-    },
-    () => false,
-  );
 }

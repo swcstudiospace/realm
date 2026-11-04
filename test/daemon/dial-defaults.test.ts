@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test, type TestContext } from "node:test";
 import { RealmError } from "../../src/core/errors.js";
-import { defaultConnectSocket } from "../../src/daemon/daemon.js";
+import { defaultConnectSocket } from "../../src/daemon/seams.js";
 import { testTimeout } from "../support/timing.js";
 
 function socketDir(t: TestContext): string {
