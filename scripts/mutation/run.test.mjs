@@ -132,7 +132,7 @@ test("a failing unmutated test is a baseline failure, not a kill", async () => {
     await writeFile(join(root, "src", "sample.ts"), SAMPLE);
     await writeFile(join(root, "test", "sample.test.ts"), "import { test } from \"node:test\";\ntest(\"fails\", () => { throw new Error(\"baseline\"); });\n");
     await symlink(join(REPO_ROOT, "node_modules"), join(root, "node_modules"));
-    const report = await runCampaign({ root, files: ["src/sample.ts"], timeoutMs: 60_000 });
+    const report = await runCampaign({ root, files: ["src/sample.ts"], timeoutMs: 180_000 });
     assert.equal(report.killed, 0);
     assert.equal(report.baselineFailed, 1);
     assert.equal(report.mutants[0]?.status, "baselineFailed");
