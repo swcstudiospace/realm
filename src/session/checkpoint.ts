@@ -27,15 +27,15 @@
 // refused, not taken over, so it needs manual removal.
 
 import { createHash, randomBytes } from "node:crypto";
-import { constants, createReadStream, type BigIntStats } from "node:fs";
+import { constants, createReadStream, type BigIntStats, type Stats } from "node:fs";
 import {
+  type FileHandle,
   chmod,
   copyFile,
   lstat,
   mkdir,
   open,
   readdir,
-  readFile,
   readlink,
   realpath,
   rename,
@@ -712,13 +712,81 @@ function sameStamps(a: ReadonlyMap<string, string>, b: ReadonlyMap<string, strin
   return a.size === b.size && [...a].every(([path, stamp]) => b.get(path) === stamp);
 }
 
+// Reads the checkpoint's two entries before the lock, each under the operation bound. A missing entry is absent; any other
+// failure is refused with a typed error, never dropped.
 async function readCheckpoint(checkpointDir: string): Promise<CheckpointManifest> {
-  const text = await readFile(join(checkpointDir, MANIFEST_FILE), "utf8").catch(() => undefined);
-  const tree = await lstat(join(checkpointDir, TREE_DIR)).catch(() => undefined);
+  const text = await withTimeout(
+    readManifestText(join(checkpointDir, MANIFEST_FILE)),
+    CHECKPOINT_OP_TIMEOUT_MS,
+    "TOOL_TIMEOUT",
+  );
+  const tree = await withTimeout(
+    lstatIfPresent(join(checkpointDir, TREE_DIR)),
+    CHECKPOINT_OP_TIMEOUT_MS,
+    "TOOL_TIMEOUT",
+  );
   if (text === undefined || tree === undefined || !tree.isDirectory()) {
     throw makeRealmError("SCHEMA_INVALID");
   }
   return parseManifest(text);
+}
+
+// Reads a manifest without blocking on a special file. The open is non-blocking and never follows a link, so a FIFO, a
+// device or a socket returns at once and is refused by fstat before any read. A link is refused at the open. The descriptor
+// is closed on every path. A missing manifest is undefined.
+async function readManifestText(path: string): Promise<string | undefined> {
+  let handle: FileHandle;
+  try {
+    handle = await open(path, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW);
+  } catch (error: unknown) {
+    if (isAbsent(error)) {
+      return undefined;
+    }
+    throw makeRealmError(isNonRegularOpenError(error) ? "POLICY_DENIED" : "SCHEMA_INVALID");
+  }
+  try {
+    const info = await handle.stat();
+    if (!info.isFile()) {
+      throw makeRealmError("POLICY_DENIED");
+    }
+    return await handle.readFile("utf8");
+  } catch (error: unknown) {
+    throw asRealmError(error, "SCHEMA_INVALID");
+  } finally {
+    await closeHandle(handle);
+  }
+}
+
+// An open that fails on a path which is not a regular file: a link (ELOOP under O_NOFOLLOW), or a socket or a device with
+// no driver (ENXIO). Both are refused with the non-regular-file code scanTree uses.
+function isNonRegularOpenError(error: unknown): boolean {
+  const code = errnoOf(error);
+  return code === "ELOOP" || code === "ENXIO";
+}
+
+// A path that does not exist, or whose parent is not a directory, is absent rather than a failure.
+function isAbsent(error: unknown): boolean {
+  const code = errnoOf(error);
+  return code === "ENOENT" || code === "ENOTDIR";
+}
+
+async function lstatIfPresent(path: string): Promise<Stats | undefined> {
+  try {
+    return await lstat(path);
+  } catch (error: unknown) {
+    if (isAbsent(error)) {
+      return undefined;
+    }
+    throw makeRealmError("SCHEMA_INVALID");
+  }
+}
+
+async function closeHandle(handle: FileHandle): Promise<void> {
+  try {
+    await handle.close();
+  } catch {
+    throw makeRealmError("SCHEMA_INVALID");
+  }
 }
 
 // A manifest read from disk is untrusted. Every path must stay inside the tree, so a restore cannot write outside it.
