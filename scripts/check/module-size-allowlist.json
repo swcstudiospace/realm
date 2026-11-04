@@ -1,8 +1,6 @@
 {
   "src/daemon/daemon.ts": 1481,
   "src/runtime/driver/compute-driver.ts": 1327,
-  "src/doctor/checks.ts": 1051,
   "src/lifecycle/controller.ts": 1270,
-  "src/omp/plugin.ts": 1013,
   "src/runtime/driver/lifecycle.ts": 1012
 }

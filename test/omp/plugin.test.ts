@@ -14,7 +14,6 @@ import type { HostToolDefinition } from "../../src/omp/tools.js";
 import {
   GUARD_STATUS_BUDGET_MS,
   GUARDED_HOST_TOOLS,
-  hostToolSetOf,
   REALM_RETRY_COMMAND,
   REALM_STATUS_KEY,
   STARTUP_BUDGET_MS,
@@ -22,6 +21,17 @@ import {
   guardHostToolCall,
   registerRealmPlugin,
   renderRealmStatus,
+  type DaemonAttach,
+  type ActiveSession,
+  type HostToolCall,
+  type HostToolVerdict,
+  type OmpExtensionApi,
+  type OmpSessionContext,
+  type OmpStatusUi,
+  type RealmPluginOptions,
+  type RealmRetryCommand,
+} from "../../src/omp/plugin.js";
+import {
   equalJitterDelayMs,
   LINK_LOST_CODES,
   REATTACH_BASE_DELAY_MS,
@@ -29,18 +39,9 @@ import {
   REATTACH_RETRY_CAP,
   reattachTransitionAllowed,
   RETRYABLE_ATTACH_CODES,
-  type DaemonAttach,
-  type ActiveSession,
-  type HostToolCall,
-  type HostToolSet,
-  type HostToolVerdict,
-  type OmpExtensionApi,
-  type OmpSessionContext,
-  type OmpStatusUi,
-  type RealmPluginOptions,
-  type RealmRetryCommand,
   type ReattachState,
-} from "../../src/omp/plugin.js";
+} from "../../src/omp/reattach.js";
+import { hostToolSetOf, type HostToolSet } from "../../src/omp/host-tools.js";
 
 // OMP-01 to OMP-05 plugin proof (P5-D4 to P5-D6, P5-D8, P5-D14). Every test runs the real plugin
 // wiring against a FakeDaemon injected through attachDaemon. The doubles are the FakePi host

@@ -45,12 +45,21 @@ import { STATUS_LABELS, displayStatus } from "../core/status.js";
 import {
   PASS_THROUGH_HOST_TOOLS,
   REALM_WRITE_NAME,
-  planHostTools,
   realmToolDefinitions,
-  sameToolNames,
   type DaemonCall,
   type HostToolDefinition,
 } from "./tools.js";
+import {
+  equalJitterDelayMs,
+  LINK_LOST_CODES,
+  REATTACH_BASE_DELAY_MS,
+  REATTACH_DELAY_CAP_MS,
+  REATTACH_RETRY_CAP,
+  reattachTransitionAllowed,
+  RETRYABLE_ATTACH_CODES,
+  type ReattachState,
+} from "./reattach.js";
+import { hostToolSetOf, modeOf, setHostMode, type HostToolSet } from "./host-tools.js";
 
 // ---- Verified host surface (minimal structural reads) ----------------------
 // Each interface names only members the plugin calls. A richer host object is
@@ -240,63 +249,6 @@ function disarmTimer(session: ActiveSession, handle: unknown): void {
   if (session.timers.delete(handle)) {
     session.ctx.clearTimer(handle);
   }
-}
-
-// ---- Re-attach (O4; spec SANDBOX_OMP_PLUGIN_CONNECTION) ----------------------
-// Off unless RealmPluginOptions.reattach is enabled. A dropped link (a failed read whose code is in LINK_LOST_CODES) then
-// re-attaches on a bounded schedule: equal-jitter waits grown from REATTACH_BASE_DELAY_MS and capped at REATTACH_DELAY_CAP_MS,
-// at most REATTACH_RETRY_CAP of them. Each attempt runs the attach path under STARTUP_BUDGET_MS, and each status read stays under
-// GUARD_STATUS_BUDGET_MS. The status item keeps the six existing names: the host-side wait paints as connecting, FAILED as error.
-
-export const REATTACH_RETRY_CAP = 8;
-export const REATTACH_BASE_DELAY_MS = 1_000;
-export const REATTACH_DELAY_CAP_MS = 60_000;
-// The codes that mean the link to the daemon is lost: a dropped channel, or a status read that outlived its bound.
-export const LINK_LOST_CODES: readonly string[] = Object.freeze(["REALM_NOT_ACTIVE", "TOOL_TIMEOUT"]);
-// The attach failures worth another attempt. Every other failure, a refusal the daemon answered included, reaches FAILED at once.
-export const RETRYABLE_ATTACH_CODES: readonly string[] = Object.freeze([
-  "REALM_NOT_ACTIVE",
-  "TOOL_TIMEOUT",
-  "STARTUP_BUDGET_EXCEEDED",
-  "DAEMON_START_TIMEOUT",
-]);
-
-// The re-attach sub-states. "off" is the disabled state. The rest are host-side and map onto the existing names: linked is
-// active, attaching and reconnecting are connecting, failed is error. The frozen state table has no wait state, so none is added.
-export type ReattachState = "off" | "linked" | "reconnecting" | "attaching" | "failed";
-
-const REATTACH_TRANSITIONS: Readonly<Record<ReattachState, readonly ReattachState[]>> = {
-  off: [],
-  linked: ["reconnecting", "attaching"],
-  reconnecting: ["attaching"],
-  attaching: ["linked", "reconnecting", "failed"],
-  failed: ["attaching"],
-};
-
-// Whether a sub-state may move to another. Every move the table does not list is refused.
-export function reattachTransitionAllowed(from: ReattachState, to: ReattachState): boolean {
-  return Object.hasOwn(REATTACH_TRANSITIONS, from) && REATTACH_TRANSITIONS[from].includes(to);
-}
-
-// The delay before re-attach attempt `attempt` (1-based): equal jitter over an exponential ceiling, so the delay lies in
-// [ceiling/2, ceiling] and never near zero. random is injected and must return a value in [0, 1].
-export function equalJitterDelayMs(attempt: number, baseMs: number, capMs: number, random: () => number): number {
-  if (!Number.isInteger(attempt) || attempt < 1) {
-    throw new RangeError(`attempt must be a positive integer, got ${String(attempt)}`);
-  }
-  if (!Number.isFinite(baseMs) || baseMs < 0 || !Number.isFinite(capMs) || capMs < 0) {
-    throw new RangeError("base and cap must be finite and not negative");
-  }
-  if (baseMs > capMs) {
-    throw new RangeError(`base ${String(baseMs)} exceeds cap ${String(capMs)}`);
-  }
-  const draw = random();
-  if (!(draw >= 0 && draw <= 1)) {
-    throw new RangeError(`random must return a value in [0, 1], got ${String(draw)}`);
-  }
-  // The exponent is clamped so the power stays finite; the cap bounds every attempt from the point the ceiling reaches it.
-  const ceiling = Math.min(capMs, baseMs * 2 ** Math.min(attempt - 1, 64));
-  return Math.round(ceiling / 2 + (draw * ceiling) / 2);
 }
 
 // Moves the sub-state when the move is legal. An illegal move is refused, named in a notice, and applies nothing.
@@ -854,40 +806,6 @@ export async function guardHostToolCall(
   return status.mode === "advisory" ? undefined : { block: true, reason: "POLICY_DENIED" };
 }
 
-// The host's tool set as this plugin left it (OMPX-03, OMPX-04). Omp keeps every removal for the life of the process, so one
-// set serves every session of the registration: a new session, a retry or a restarted daemon starts from what was last applied.
-export interface HostToolSet {
-  readonly pi: OmpExtensionApi;
-  // The built-ins this plugin removed in fail-closed mode and has not put back, as the last change read them back from Omp. An
-  // advisory plan gives back the ones Omp still registers.
-  removed: string[];
-  // Changes accepted and not yet settled: one running and at most one waiting (MAX_HOST_CHANGES).
-  inFlight: number;
-  // Changes run one at a time, so a setter already in flight finishes before the next one starts.
-  queue: Promise<void>;
-}
-
-// The most changes the set holds at once: one running and one waiting. A change past that is refused at once, so no queue grows
-// behind a setter that does not return.
-const MAX_HOST_CHANGES = 2;
-
-// A fresh host tool set for one registration: nothing is removed yet and no change is in flight.
-export function hostToolSetOf(pi: OmpExtensionApi): HostToolSet {
-  return { pi, removed: [], inFlight: 0, queue: Promise.resolve() };
-}
-
-// The policy mode a status reports. A mode that cannot be read is refused, so the status changes no host tool (P16 e).
-function modeOf(status: DaemonStatus): PolicyMode {
-  if (!isPolicyMode(status.mode)) {
-    throw makeRealmError("POLICY_DENIED");
-  }
-  return status.mode;
-}
-
-function isPolicyMode(value: unknown): value is PolicyMode {
-  return value === "advisory" || value === "fail-closed";
-}
-
 // The realm cannot be read, so it counts as disconnected. The tool set still follows the last published mode, so a drift is
 // restored (P16 c). The Realm write is never hidden (B9).
 function reassertLastMode(session: ActiveSession, isCurrent: () => boolean): Promise<void> {
@@ -895,50 +813,6 @@ function reassertLastMode(session: ActiveSession, isCurrent: () => boolean): Pro
     return Promise.resolve();
   }
   return setHostMode(session.tools, session.mode, isCurrent);
-}
-
-// Brings the host tool set to posture. A change starts only if isCurrent still holds when its turn in the queue comes, so a
-// superseded attempt, an attempt past its budget, or a shut-down session changes nothing. Rejects with POLICY_DENIED when the
-// set does not read back as wanted, and at once when MAX_HOST_CHANGES changes are already accepted and unsettled.
-function setHostMode(tools: HostToolSet, mode: PolicyMode, isCurrent: () => boolean): Promise<void> {
-  if (tools.inFlight >= MAX_HOST_CHANGES) {
-    return Promise.reject(makeRealmError("POLICY_DENIED"));
-  }
-  tools.inFlight += 1;
-  const change = tools.queue.then(() => applyHostMode(tools, mode, isCurrent)).finally(() => {
-    tools.inFlight -= 1;
-  });
-  tools.queue = change.then(
-    () => undefined,
-    () => undefined,
-  );
-  return change;
-}
-
-// Plans from what Omp reports now, not from the last applied mode, so a drift in the same mode is restored too (P16 c). Once a
-// setter has started it runs to the end, whoever owns it by then. The owed list is read back from the set Omp holds, on success or
-// failure, so the next owner plans from actual state (P16 b).
-async function applyHostMode(tools: HostToolSet, mode: PolicyMode, isCurrent: () => boolean): Promise<void> {
-  if (!isCurrent()) {
-    return;
-  }
-  const { pi } = tools;
-  const plan = planHostTools(mode, pi.getAllTools().map((tool) => tool.name), pi.getActiveTools(), tools.removed);
-  // Owed going into the change, so a removal that only partly holds is still owed a restore.
-  const owedIn = [...new Set([...tools.removed, ...plan.owed])];
-  try {
-    if (!sameToolNames(pi.getActiveTools(), plan.wanted)) {
-      await pi.setActiveTools(plan.wanted);
-    }
-  } finally {
-    // Read back whether or not the setter held, and whether or not this change is still current.
-    const reported = pi.getActiveTools();
-    const registered = pi.getAllTools().map((tool) => tool.name);
-    tools.removed = owedIn.filter((name) => registered.includes(name) && !reported.includes(name));
-  }
-  if (!sameToolNames(pi.getActiveTools(), plan.wanted)) {
-    throw makeRealmError("POLICY_DENIED");
-  }
 }
 
 // One status read under a managed timer. The timer expiry rejects with TOOL_TIMEOUT, so a hung

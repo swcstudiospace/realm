@@ -208,11 +208,6 @@
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
-      "file": "src/doctor/checks.ts",
-      "name": "hostBinaryPinsFromEnv",
-      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
-    },
-    {
       "file": "src/doctor/fix.ts",
       "name": "ProtectedLocations",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
@@ -333,7 +328,7 @@
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
-      "file": "src/omp/plugin.ts",
+      "file": "src/omp/reattach.ts",
       "name": "equalJitterDelayMs",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
@@ -358,12 +353,12 @@
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
-      "file": "src/omp/plugin.ts",
+      "file": "src/omp/host-tools.ts",
       "name": "HostToolSet",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
-      "file": "src/omp/plugin.ts",
+      "file": "src/omp/host-tools.ts",
       "name": "hostToolSetOf",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
@@ -373,7 +368,7 @@
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
-      "file": "src/omp/plugin.ts",
+      "file": "src/omp/reattach.ts",
       "name": "LINK_LOST_CODES",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
@@ -408,27 +403,27 @@
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
-      "file": "src/omp/plugin.ts",
+      "file": "src/omp/reattach.ts",
       "name": "REATTACH_BASE_DELAY_MS",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
-      "file": "src/omp/plugin.ts",
+      "file": "src/omp/reattach.ts",
       "name": "REATTACH_DELAY_CAP_MS",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
-      "file": "src/omp/plugin.ts",
+      "file": "src/omp/reattach.ts",
       "name": "REATTACH_RETRY_CAP",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
-      "file": "src/omp/plugin.ts",
+      "file": "src/omp/reattach.ts",
       "name": "ReattachState",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
-      "file": "src/omp/plugin.ts",
+      "file": "src/omp/reattach.ts",
       "name": "reattachTransitionAllowed",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
@@ -438,7 +433,7 @@
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
-      "file": "src/omp/plugin.ts",
+      "file": "src/omp/reattach.ts",
       "name": "RETRYABLE_ATTACH_CODES",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },

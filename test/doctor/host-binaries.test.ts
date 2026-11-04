@@ -4,7 +4,8 @@ import { createHash } from "node:crypto";
 import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import { hostBinaryPinsFromEnv, runChecks, type CheckResult, type DoctorOptions } from "../../src/doctor/checks.js";
+import { runChecks, type CheckResult, type DoctorOptions } from "../../src/doctor/checks.js";
+import { hostBinaryPinsFromEnv } from "../../src/doctor/checks-host.js";
 import type { RunCommand } from "../../src/runtime/podman-probe.js";
 
 // The four host binaries are fake executable files in a temporary directory, and every --version call goes through an injected
