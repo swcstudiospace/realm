@@ -1,11 +1,10 @@
 // Export usage gate (Q0-007, D-1306). It fails on a src export that no other file imports:
 //   self-only         only its own file uses it, so `export` can be dropped;
-//   public-signature  no other file names it, only a sibling export's signature does;
 //   test-only         only test files use it. D-1306 keeps those as documented seams, so they pass only when the
 //                     explicit allowlist (export-usage-allowlist.json) names them with a reason.
-// Forwarded re-exports and entries the analysis cannot classify are not failures: they are public surface or a
-// resolution gap the analysis reports itself. An allowlist entry that matches no export of a failing class is stale
-// and fails the gate, so a removed or re-used seam cannot stay listed. The classes come from export-usage.mjs.
+// Forwarded re-exports, public-signature exports and entries the analysis cannot classify are not failures: they are
+// public surface, a sibling's signature, or a resolution gap the analysis reports itself. An allowlist entry that matches
+// no export of a failing class is stale and fails the gate, so a removed or re-used seam cannot stay listed. The classes come from export-usage.mjs.
 //
 // Usage: export-usage-gate.mjs. Exit 0 when every failing export is allowlisted and no entry is stale, 1 otherwise.
 // It is not in check:gates until the findings it reports are resolved (phase 20 record, HELD).
@@ -17,7 +16,8 @@ import { analyze, listTypeScript } from "./export-usage.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 export const ALLOWLIST_FILE = "scripts/check/export-usage-allowlist.json";
-export const FAILING_CLASSES = Object.freeze(["self-only", "public-signature", "test-only"]);
+// public-signature is not a failure: a sibling export's signature names it, so it is public API (export-usage.mjs:27-31).
+export const FAILING_CLASSES = Object.freeze(["self-only", "test-only"]);
 
 function keyOf(file, name) {
   return `${file}#${name}`;

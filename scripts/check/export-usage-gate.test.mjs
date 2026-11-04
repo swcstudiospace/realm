@@ -34,12 +34,12 @@ test("a test-only seam fails unless the allowlist names it with a reason", () =>
   assert.deepEqual(result.stale, []);
 });
 
-test("a type that only a sibling export's signature names fails as public-signature", () => {
+test("a type that only a sibling export's signature names is not a failure", () => {
   const files = {
     "src/d/sig.ts": "export interface Shape {\n  n: number;\n}\nexport function make(): Shape {\n  return { n: 1 };\n}\nconsole.log(make());\n",
   };
-  // make is a function, so it is self-only; only the type takes the public-signature class.
-  assert.deepEqual(failuresOf(files), ["src/d/sig.ts#Shape:public-signature", "src/d/sig.ts#make:self-only"]);
+  // make is a function, so it is self-only and still fails; the type is public-signature and does not.
+  assert.deepEqual(failuresOf(files), ["src/d/sig.ts#make:self-only"]);
 });
 
 test("a re-exported name is forwarded and never fails", () => {

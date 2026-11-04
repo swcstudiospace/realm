@@ -13,6 +13,7 @@ import {
   resolveSpecifier,
   runCheck,
 } from "./export-usage.mjs";
+import { evaluate } from "./export-usage-gate.mjs";
 
 function namesOf(source) {
   return collectExports(source, "src/a/x.ts").exports.map((found) => `${found.kind}:${found.name}`);
@@ -903,6 +904,41 @@ test("a comparison after a property is not unclassified and keeps the type it na
     analyze({ "src/a/one.ts": source }).entries.filter((entry) => entry.class === "unclassified"),
     [],
   );
+});
+
+// --- The gate: which classes fail (export-usage-gate.mjs) -----------------------------------------------------------------
+
+test("the gate fails a self-only export that no other file uses", () => {
+  const { failures } = evaluate({ "src/a/one.ts": "export const nowhere = 1;\n" }, []);
+  assert.deepEqual(failures.map((entry) => [entry.name, entry.class]), [["nowhere", "self-only"]]);
+});
+
+test("the gate fails a test-only export that the allowlist does not name", () => {
+  const files = {
+    "src/a/one.ts": "export const seam = 1;\n",
+    "test/a/one.test.ts": 'import { seam } from "../../src/a/one.js";\nvoid seam;\n',
+  };
+  const { failures, stale } = evaluate(files, []);
+  assert.deepEqual(failures.map((entry) => [entry.name, entry.class]), [["seam", "test-only"]]);
+  assert.deepEqual(stale, []);
+});
+
+test("the gate passes a public-signature export that a sibling export's signature names", () => {
+  const files = {
+    "src/a/one.ts": "export interface Options { readonly n: number }\nexport function make(options: Options): number { return options.n; }\n",
+    "src/b/two.ts": 'import { make } from "../a/one.js";\nmake({ n: 1 });\n',
+  };
+  assert.equal(classOf(analyze(files).entries, "Options"), "public-signature");
+  assert.deepEqual(evaluate(files, []).failures, []);
+});
+
+test("the gate passes a test-only export that the allowlist names, and reports no stale entry", () => {
+  const files = {
+    "src/a/one.ts": "export const seam = 1;\n",
+    "test/a/one.test.ts": 'import { seam } from "../../src/a/one.js";\nvoid seam;\n',
+  };
+  const allowlist = [{ file: "src/a/one.ts", name: "seam", reason: "documented D-1306 seam" }];
+  assert.deepEqual(evaluate(files, allowlist), { failures: [], stale: [], allowlisted: 1 });
 });
 
 // --- The real tree -------------------------------------------------------------------------------------------------------
