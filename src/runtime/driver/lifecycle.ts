@@ -10,8 +10,8 @@
 // /proc status) attached first by attachRuntimeEvidence. The checks the verifier does not make are added here, after it. The
 // state root is a constructor argument; this module reads no host environment. The secret directories are handled by secret-store.ts.
 
-import { lstatSync, readdirSync, realpathSync, rmSync, type Dirent, type Stats } from "node:fs";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { lstatSync, rmSync, type Stats } from "node:fs";
+import { isAbsolute, join, resolve } from "node:path";
 import { makeRealmError, RealmError, type ErrorCode } from "../../core/errors.js";
 import { withTimeout } from "../../core/timeout.js";
 import { bindRoot, isInsideRoot } from "../../fs/root.js";
@@ -49,17 +49,19 @@ import {
 } from "../openshell.js";
 import { listRealmContainers, SWEEP_CALL_TIMEOUT_MS } from "../sweep.js";
 import { LAUNCH_FILE_NAME, presentSecretEntries, removeSecretDirIfEmpty, removeSecretEntries, secretDirExists, secretDirOf, secretDirsUnder } from "./secret-store.js";
-import { sandboxBindingOf, type SandboxBinding } from "./sandbox-binding.js";
+import { assertStrictlyInside, isInsideInclusive, lstatOrAbsent } from "./fs-guards.js";
+import {
+  assertNoOverlap,
+  assertNoOverlapPair,
+  assertSandboxStateDir,
+  assertSpecBinding,
+  assertStateDirClear,
+  assertWorkspaceHasNoSocket,
+} from "./lifecycle-guards.js";
+import { sandboxBindingOf } from "./sandbox-binding.js";
 
 // Grace period a sandbox container gets to stop before it is killed. Matches the session composition's grace.
 const STOP_GRACE_MS = 10_000;
-
-// C5. An entry whose path under the state directory matches this names a secret. Such an entry (file or directory)
-// must carry no group or world permission bit. The pattern is deliberately broad: a false match only refuses a
-// create, which fails closed. It matches case-insensitively.
-const SECRET_NAME_PATTERN =
-  /secret|token|credential|passw|private|apikey|id_rsa|id_ed25519|kubeconfig|\.npmrc|\.netrc|\.pgpass|\.htpasswd|\.key$|\.pem$|\.env$|\.p12$|\.pfx$|\.jks$/i;
-const GROUP_OR_WORLD_BITS = 0o077;
 
 // C1. The options every workspace mount must carry, so the workspace is not executable, suid or device-bearing.
 const WORKSPACE_REQUIRED_OPTIONS: readonly string[] = Object.freeze(["noexec", "nosuid", "nodev"]);
@@ -661,8 +663,8 @@ function asRealmError(error: unknown): RealmError {
   return error instanceof RealmError ? error : makeRealmError("SCHEMA_INVALID");
 }
 
-// Bounds one libpod call by the sweep's per-call bound, so a hung engine cannot block the adoption. A call that does not answer in time
-// gives PODMAN_MACHINE_DOWN, as the sweep's does.
+// Bounds one libpod call by the realm listing's per-call bound, so a hung engine cannot block the adoption. A call that does not answer in time
+// gives PODMAN_MACHINE_DOWN, as the realm listing's does.
 function bounded<T>(call: Promise<T>): Promise<T> {
   return withTimeout(call, SWEEP_CALL_TIMEOUT_MS, "PODMAN_MACHINE_DOWN");
 }
@@ -733,149 +735,6 @@ function reportSurvivor(
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-// The real location of a path. A path that does not resolve is refused, and the error names no path.
-function realPathOf(path: string): string {
-  try {
-    return realpathSync(path);
-  } catch {
-    throw makeRealmError("SCHEMA_INVALID");
-  }
-}
-
-// The state directory must be exactly <root>/<sandboxName>, with no symlink in any ancestor and none at the end.
-// The given root and the given state directory must each already be their own real path. A symlink anywhere on the
-// way makes the given path differ from its real path, so it is refused. The final component is also lstat-ed.
-function assertSandboxStateDir(root: string, spec: ContainerSpec): void {
-  const givenRoot = resolve(root);
-  const givenDir = resolve(spec.stateDir);
-  if (
-    givenDir !== join(givenRoot, spec.sandboxName) ||
-    realPathOf(givenRoot) !== givenRoot ||
-    realPathOf(givenDir) !== givenDir
-  ) {
-    throw makeRealmError("SCHEMA_INVALID");
-  }
-  let isDirectory: boolean;
-  try {
-    isDirectory = lstatSync(givenDir).isDirectory();
-  } catch {
-    isDirectory = false;
-  }
-  if (!isDirectory) {
-    throw makeRealmError("SCHEMA_INVALID");
-  }
-}
-
-// The container's state and channel directories must be the sandbox binding's, so the mounts it is created with are the paths the
-// verifier checks. A spec that names other paths is refused before any libpod call.
-function assertSpecBinding(spec: ContainerSpec, binding: SandboxBinding): void {
-  if (spec.stateDir !== binding.stateDir || spec.channelDir !== binding.channelDir) {
-    throw makeRealmError("SCHEMA_INVALID");
-  }
-}
-
-// True when child is parent or lies inside it.
-function within(child: string, parent: string): boolean {
-  const prefix = parent.endsWith(sep) ? parent : parent + sep;
-  return child === parent || child.startsWith(prefix);
-}
-
-// Refuses a removal target that does not lie strictly inside its root, on resolved paths. Every delete target is derived from a
-// validated sandbox name, so this holds for every delete; the check keeps the removal structurally unable to reach the root itself.
-function assertStrictlyInside(target: string, root: string): void {
-  const rel = relative(resolve(root), resolve(target));
-  if (rel === "" || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
-    throw makeRealmError("SCHEMA_INVALID");
-  }
-}
-
-// The workspace, the state root and the state directory must not overlap in either direction, on real paths. The
-// workspace is bound read-write, so it must not contain the state directory or the state root, and must not sit inside
-// either of them.
-function assertNoOverlap(workspaceDir: string, stateRoot: string, stateDir: string): void {
-  const workspace = realPathOf(workspaceDir);
-  const root = realPathOf(stateRoot);
-  const dir = realPathOf(stateDir);
-  const overlaps = (a: string, b: string): boolean => within(a, b) || within(b, a);
-  if (overlaps(workspace, dir) || overlaps(workspace, root)) {
-    throw makeRealmError("SCHEMA_INVALID");
-  }
-}
-
-// The workspace and the channel must not overlap in either direction, on real paths. Both are bound read-write.
-function assertNoOverlapPair(workspaceDir: string, channelDir: string): void {
-  const workspace = realPathOf(workspaceDir);
-  const channel = realPathOf(channelDir);
-  if (within(workspace, channel) || within(channel, workspace)) {
-    throw makeRealmError("SCHEMA_INVALID");
-  }
-}
-
-// Refuses a state directory that a sandbox must not bind (C5): one holding any socket, or a secret-named entry
-// that group or world can access. The error names no path. The driver also runs it on a stale directory before reclaiming it.
-export function assertStateDirClear(stateDir: string): void {
-  visitTree(stateDir, (path, entry) => {
-    if (entry.isSocket()) {
-      throw makeRealmError("SCHEMA_INVALID");
-    }
-    const secretAndOpen =
-      SECRET_NAME_PATTERN.test(relative(stateDir, path)) && (lstatSync(path).mode & GROUP_OR_WORLD_BITS) !== 0;
-    if (secretAndOpen) {
-      throw makeRealmError("SCHEMA_INVALID");
-    }
-  });
-}
-
-// Refuses a workspace that holds any socket, or a directory on another device than the workspace's, since the workspace is bound
-// into the container read-write. A directory whose device differs from the workspace root's is a mount of another filesystem
-// nested in the workspace, which the container would reach through the workspace mount, so it is refused. A bind mount of a
-// directory on the same filesystem shares its parent's device, and a file bind mount is not a directory, so neither is detected
-// by this scan. The root's device is read from its real path, so a symlinked workspace root compares its target's device and not
-// the link's. The scan runs at create only. A socket or a mount made in the workspace after the container starts is not
-// detected: the owner accepted that as a residual risk, and a re-scan at ListSandboxes would walk the whole tree synchronously on
-// the event loop.
-function assertWorkspaceHasNoSocket(workspaceDir: string, lstat: (path: string) => Pick<Stats, "dev">): void {
-  const rootDevice = deviceOf(realPathOf(workspaceDir), lstat);
-  visitTree(workspaceDir, (path, entry) => {
-    if (entry.isSocket()) {
-      throw makeRealmError("SCHEMA_INVALID");
-    }
-    if (entry.isDirectory() && lstat(path).dev !== rootDevice) {
-      throw makeRealmError("SCHEMA_INVALID");
-    }
-  });
-}
-
-// The device of a path, or SCHEMA_INVALID when it cannot be read. The error names no path.
-function deviceOf(path: string, lstat: (path: string) => Pick<Stats, "dev">): number {
-  try {
-    return lstat(path).dev;
-  } catch {
-    throw makeRealmError("SCHEMA_INVALID");
-  }
-}
-
-// Visits every entry under dir, depth first, without following a symlink: a symlink is an entry and is never
-// entered. Any read failure, or any refusal the visitor throws, becomes SCHEMA_INVALID. The error names no path.
-// A tree that cannot be read cannot be proven clear, so it is refused as well.
-function visitTree(dir: string, visit: (path: string, entry: Dirent) => void): void {
-  try {
-    walkTree(dir, visit);
-  } catch {
-    throw makeRealmError("SCHEMA_INVALID");
-  }
-}
-
-function walkTree(dir: string, visit: (path: string, entry: Dirent) => void): void {
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const path = join(dir, entry.name);
-    visit(path, entry);
-    if (entry.isDirectory()) {
-      walkTree(path, visit);
-    }
-  }
 }
 
 // The checks the verifier does not make. C1: every workspace mount carries noexec, nosuid and nodev. C6: the
@@ -985,24 +844,11 @@ function removeTree(dir: string): void {
   rmSync(dir, { recursive: true, force: true });
 }
 
-// The entry at path, or null when it is absent. Any other lstat failure is reported as the given code; the error
-// names no path.
-function lstatOrAbsent(path: string, failure: ErrorCode): Stats | null {
-  try {
-    return lstatSync(path);
-  } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
-      return null;
-    }
-    throw makeRealmError(failure);
-  }
-}
-
 // The secret root must be absolute, must be neither the bound state directory nor inside it, and must not be a
-// symbolic link. A missing secret root is allowed; the store creates it at the first write, and the sweep and delete
+// symbolic link. A missing secret root is allowed; the store creates it at the first write, and the adoption and delete
 // then have nothing to remove there.
 function assertSecretRoot(secretRoot: string, stateRoot: string): void {
-  if (!isAbsolute(secretRoot) || within(resolve(secretRoot), resolve(stateRoot))) {
+  if (!isAbsolute(secretRoot) || isInsideInclusive(resolve(stateRoot), resolve(secretRoot))) {
     throw makeRealmError("SCHEMA_INVALID");
   }
   const stat = lstatOrAbsent(resolve(secretRoot), "SCHEMA_INVALID");

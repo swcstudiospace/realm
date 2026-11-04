@@ -59,7 +59,8 @@ import {
 import { DRIVER_ADMISSION_ACKNOWLEDGEMENT } from "./admission.js";
 import { assertSocketPathsFit, channelPathsOf, generateRuntimeTls, makeChannelDirectory, removeKeyFile, writeRuntimeFiles, type ListenerTrust } from "./channel.js";
 import { driverFailureOf, DriverStatusError, driverNotFound, driverUnimplemented, toServerError } from "./grpc-status.js";
-import { assertStateDirClear, type DriverLifecycle } from "./lifecycle.js";
+import { assertStateDirClear } from "./lifecycle-guards.js";
+import type { DriverLifecycle } from "./lifecycle.js";
 import { decodeLaunchAuthentication, type LaunchAuthentication } from "./isolation/launch.js";
 import { logStageRefusal, refusal, refusalScope, type RefusalCheck, type RefusalLog, type RefusalScope } from "./refusal.js";
 import {
@@ -1208,7 +1209,6 @@ function realpathOrRefuse(path: string): string {
     throw makeRealmError("SCHEMA_INVALID");
   }
 }
-
 function hasEntries(map: Readonly<Record<string, string>> | null | undefined): boolean {
   return map !== null && map !== undefined && Object.keys(map).length > 0;
 }
