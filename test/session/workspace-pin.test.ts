@@ -66,7 +66,7 @@ void test("a written pin reads back equal to what was written, at mode 0600 in a
   assert.equal(verifyWorkspacePin(written).realPath, ws);
 });
 
-void test("a second write with the same identity returns the existing pin and leaves the record unchanged", (t) => {
+void test("a second write with the same identity returns an equal pin and leaves the record unchanged", (t) => {
   const { stateDir, ws, pinDir } = fixture(t);
   const id = sessionIdOfWorkspace(bindRoot(ws).realPath);
   const first = writeWorkspacePin(stateDir, bindRoot(ws), id);
@@ -77,23 +77,34 @@ void test("a second write with the same identity returns the existing pin and le
   assert.equal(readFileSync(file, "utf8"), before);
 });
 
-void test("a root replaced at the pinned path is refused by a second write with POLICY_DENIED, and the pin is unchanged", (t) => {
+void test("a root replaced at the pinned path is bound again by a second write, and the pin holds the new identity", (t) => {
   const { base, stateDir, ws } = fixture(t);
   const id = sessionIdOfWorkspace(bindRoot(ws).realPath);
   const first = writeWorkspacePin(stateDir, bindRoot(ws), id);
   renameSync(ws, join(base, "ws-aside"));
   mkdirSync(ws);
-  assertRejectsWith(() => writeWorkspacePin(stateDir, bindRoot(ws), id), "POLICY_DENIED");
-  assert.deepEqual(readWorkspacePin(stateDir, id), first);
+  const replacement = bindRoot(ws);
+  const rebound = writeWorkspacePin(stateDir, replacement, id);
+  assert.notEqual(rebound.ino, first.ino);
+  assert.deepEqual(rebound, {
+    schema: 1,
+    sessionId: id,
+    workspaceRoot: ws,
+    realPath: ws,
+    dev: replacement.dev,
+    ino: replacement.ino,
+  });
+  assert.deepEqual(readWorkspacePin(stateDir, id), rebound);
+  assert.equal(verifyWorkspacePin(rebound).realPath, ws);
 });
 
-void test("a root moved away from the pinned path is refused by a write for its old session id with POLICY_DENIED", (t) => {
+void test("a root moved away from the pinned path is refused by a write for its old session id with SCHEMA_INVALID, and the pin is unchanged", (t) => {
   const { base, stateDir, ws } = fixture(t);
   const id = sessionIdOfWorkspace(bindRoot(ws).realPath);
   const first = writeWorkspacePin(stateDir, bindRoot(ws), id);
   const moved = join(base, "moved");
   renameSync(ws, moved);
-  assertRejectsWith(() => writeWorkspacePin(stateDir, bindRoot(moved), id), "POLICY_DENIED");
+  assertRejectsWith(() => writeWorkspacePin(stateDir, bindRoot(moved), id), "SCHEMA_INVALID");
   assert.deepEqual(readWorkspacePin(stateDir, id), first);
 });
 

@@ -1,10 +1,10 @@
-// The up path writes the workspace pin, down keeps it, and an up after down verifies it again (RES-04). The
+// The up path writes the workspace pin, down keeps it, and an up after down binds the directory at the path again (RES-04). The
 // scripted-provider fixture runs the real daemon in process; it does not expose its execution double, so the
-// no-start observable here is the registry entry, which is written only after the pin is accepted and before create.
+// no-start observable here is the registry entry, which is written only after the pin is written and before create.
 
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { recordFileName, sessionIdOfWorkspace } from "../../src/session/paths.js";
@@ -88,7 +88,7 @@ void test("RES-04: down removes the registry entry and keeps the pin, and an up 
   await h.stop();
 });
 
-void test("RES-04: an up after down with a replaced root is refused with POLICY_DENIED and writes no registry entry", async (t) => {
+void test("RES-04: an up after down with a replaced root binds the replacement: the pin holds its inode and the registry entry is written", async (t) => {
   const h = harness(t);
   const sessionId = sessionIdOfWorkspace(h.workspace);
   const first = await h.start();
@@ -99,12 +99,13 @@ void test("RES-04: an up after down with a replaced root is refused with POLICY_
   // reuse its inode and the pin's identity check sees a different directory.
   renameSync(h.workspace, join(h.base, "ws-replaced"));
   mkdirSync(h.workspace);
+  const replacedIno = statSync(h.workspace).ino;
 
   const second = await h.start();
-  const reply = await second.up(h.workspace);
-  assert.equal(reply.error?.code, "POLICY_DENIED");
-  // The pin refuses before the registry entry is written, and create runs only after that write.
-  assert.deepEqual(listWorkspaceEntryIds(h.stateDir), []);
-  assert.deepEqual(readWorkspacePin(h.stateDir, sessionId), pinBefore);
+  await upActive(second, h.workspace);
+  const pinAfter = readWorkspacePin(h.stateDir, sessionId);
+  assert.equal(pinAfter?.ino, replacedIno);
+  assert.notEqual(pinAfter.ino, pinBefore?.ino);
+  assert.deepEqual(listWorkspaceEntryIds(h.stateDir), [sessionId]);
   await h.stop();
 });

@@ -82,6 +82,8 @@ Restore replaces the workspace contents. The current entries under the root are 
 
 `realm down` removes the registry entry and keeps the workspace's pin, so create and restore for a brought-down project resolve the workspace from the pin, with no daemon call, and treat its sandbox as stopped. A workspace with neither a registry entry nor a pin is refused with `REALM_UNBOUND`.
 
+`realm up` binds the directory at the session's path: it writes the pin, or rewrites an existing pin to the identity of that directory. If the directory is replaced while the project is down, create and restore refuse it with `POLICY_DENIED` until `realm up` binds the replacement.
+
 The current code never removes a pin. When a pin should be removed is an open decision, recorded in D19-10.
 
 ## Limits
@@ -90,9 +92,9 @@ The current code never removes a pin. When a pin should be removed is an open de
 - **Ownership, extended attributes and ACLs are not preserved.** Restored entries belong to the user who runs the command.
 - **File times are not restored.** The library sets no times, and restored entries are new inodes.
 - **Special files are refused.** A socket, named pipe or device file in the tree refuses the operation with `POLICY_DENIED`.
-- **Symbolic links are recreated, not followed.** A link is recreated with its target text. A link whose target resolves outside the workspace root refuses create with `PATH_ESCAPE`.
+- **Symbolic links are recreated, not followed.** A link is recreated with its target text. A link whose target resolves outside the workspace root refuses create with `PATH_ESCAPE`. A link whose target loops, cannot be read, or runs through a file refuses create with `SCHEMA_INVALID`.
 - **A restore that crashes is recovered by the next operation.** The crash leaves a work directory named `.restore-<random>` in the session directory. The next create or restore for that session recovers it under the lock, after the sandbox check passes and before its own work.
-- **A create that crashes keeps its id.** A crash before the manifest is written leaves the checkpoint directory without `manifest.json`. The library does not sweep it, so that id stays in use: create and restore for it refuse with `SCHEMA_INVALID`. Use a new id, or remove the directory by hand.
+- **A create that crashes leaves a partial checkpoint.** A crash before the manifest is written leaves the checkpoint directory without `manifest.json`. A create with the same id removes that directory under the session lock, then runs. Restore for that id refuses with `SCHEMA_INVALID`, because there is no manifest.
 - **A temporary lock file is not swept.** A crash between writing the owner record and publishing the lock leaves a file named `.lock.tmp-<random>` in the session directory. No reader opens it, and the library does not remove it. It can be removed by hand.
 - **The state directory must share the workspace's filesystem.** A restore refuses with `POLICY_DENIED` otherwise.
 - **Each copy, scan or move step is bounded to five minutes.** A step that runs longer fails with `TOOL_TIMEOUT`. The command then waits for that step to finish before it removes a partial checkpoint or rolls back a restore. A step that never returns therefore also stops the command.

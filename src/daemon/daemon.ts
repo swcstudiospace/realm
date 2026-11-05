@@ -303,9 +303,9 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
     return resolveSelection({ selection, policy, ceiling, registry });
   };
 
-  // Builds the entry of a new session: its pin, its handle, its workspace entry and its health loop. The pin is verified or
-  // written first, so a moved or replaced root is refused before the handle exists. Nothing is created yet, so a failure here
-  // leaves no container.
+  // Builds the entry of a new session: its pin, its handle, its workspace entry and its health loop. The pin is written
+  // first: up binds the current directory identity at the path into the pin before the handle exists. Nothing is created
+  // yet, so a failure here leaves no container.
   const newEntry = (sessionId: string, pinned: PinnedRoot): SessionEntry => {
     writeWorkspacePin(stateDir, pinned, sessionId);
     const handle = buildHandle({

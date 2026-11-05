@@ -1,6 +1,6 @@
 // Workspace pin record. Each session has one pin at <stateDir>/workspace-pins/<sessionId>.json,
-// holding { schema, sessionId, workspaceRoot, realPath, dev, ino }. The pin is written on the first
-// bind and is independent of the workspace registry entry, so it survives the registry entry's removal
+// holding { schema, sessionId, workspaceRoot, realPath, dev, ino }. Each bind (up) writes the pin, replacing any
+// earlier pin for the session. It is independent of the workspace registry entry, so it survives that entry's removal
 // on down. The directory is mode 0700, each file mode 0600, and every write is atomic (the record
 // store's primitive).
 //
@@ -33,25 +33,21 @@ export function workspacePinDirOf(stateDir: string): string {
   return join(stateDir, "workspace-pins");
 }
 
-// Returns the pin for a session. When one exists whose identity matches the pinned root, that pin is
-// returned and nothing is written. When one exists for a different or replaced root, the write is
-// POLICY_DENIED and the pin is left as it was. A pin is created only when none exists, and only when
-// the session id derives from the pinned real path (otherwise SCHEMA_INVALID, and nothing is written).
+// Binds the directory at the session path: writes the pin for the session id, replacing any pin stored under it. up is the
+// caller that binds, so a directory replaced while the project was down is bound again here. create and restore verify
+// the stored pin with verifyWorkspacePin from then on. A stored record that is malformed or names another id is SCHEMA_INVALID,
+// and it is left as it is. The session id must derive from the pinned real path, otherwise the write is SCHEMA_INVALID and
+// nothing is written. Returns the pin as written.
 export function writeWorkspacePin(stateDir: string, pinned: PinnedRoot, sessionId: string): WorkspacePin {
   const fileName = recordFileName(sessionId);
   const dir = workspacePinDirOf(stateDir);
   mkdirSync(dir, { recursive: true, mode: DIRECTORY_MODE });
   assertPrivateDirectory(dir);
   const target = join(bindRoot(dir).realPath, fileName);
-  // Observed before the record is read, so the rename below refuses a record that changed in between.
+  // Observed before the stored record is read, so the rename below refuses a record that changed in between.
   const priorSha256 = observeSha256(target);
-  const existing = readWorkspacePin(stateDir, sessionId);
-  if (existing !== null) {
-    if (existing.realPath !== pinned.realPath || existing.dev !== pinned.dev || existing.ino !== pinned.ino) {
-      throw makeRealmError("POLICY_DENIED");
-    }
-    return existing;
-  }
+  // The stored record is read only to refuse a malformed one before it is replaced. Its content is not used.
+  readWorkspacePin(stateDir, sessionId);
   if (sessionId !== sessionIdOfWorkspace(pinned.realPath)) {
     throw makeRealmError("SCHEMA_INVALID");
   }
