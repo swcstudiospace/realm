@@ -31,7 +31,7 @@
 // StopSandbox and StartSandbox refuse with the transition code, which maps to FAILED_PRECONDITION (PD-08).
 // AuthenticateSandbox is not implemented: the driver does not advertise sandbox authentication.
 
-import { existsSync } from "node:fs";
+import { existsSync, type Stats } from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -42,7 +42,7 @@ import {
   type UntypedServiceImplementation,
 } from "@grpc/grpc-js";
 import * as protoLoader from "@grpc/proto-loader";
-import { makeRealmError, RealmError } from "../../core/errors.js";
+import { makeRealmError, RealmError, type ErrorCode } from "../../core/errors.js";
 import { sleep, withTimeout } from "../../core/timeout.js";
 import type { LibpodClient } from "../libpod-client.js";
 import { hardeningEvidenceDigest } from "../hardening.js";
@@ -385,9 +385,12 @@ export class ComputeDriver {
     authentication: LaunchAuthentication,
   ): Promise<{ runtime_identity: string }> {
     const sandboxName = plan.spec.sandboxName;
-    const staleCheck = this.staleDirectoryCheck(plan);
-    if (staleCheck !== undefined) {
-      await this.reclaimStaleSandbox(plan, scope, staleCheck);
+    const stale = this.staleDirectoryCheck(plan);
+    if (stale?.code !== undefined) {
+      throw refusal(scope, stale.check, stale.code);
+    }
+    if (stale !== undefined) {
+      await this.reclaimStaleSandbox(plan, scope, stale.check);
     }
     atStage(scope, "create.state_dir", () => {
       assertStateDirAbsent(plan.spec.stateDir);
@@ -540,22 +543,25 @@ export class ComputeDriver {
     return existed;
   }
 
-  // The check a create reports for a stale entry, when the sandbox's state directory or secret directory exists and every entry
-  // that exists is a real directory. Undefined means there is nothing to reclaim, or an entry is a symbolic link, a wrong kind, or
-  // cannot be read; the absence checks then refuse it as they always did. Reads the filesystem only, makes no libpod call, and
-  // logs nothing.
-  private staleDirectoryCheck(plan: CreatePlan): RefusalCheck | undefined {
+  // The check a create reports for a stale entry, when the state or secret directory exists and every entry that exists is a real
+  // directory. Undefined means nothing to reclaim, or an entry is a symbolic link or a wrong kind. An entry that cannot be read returns
+  // its check and code, and buildSandbox refuses the create with them. Reads the filesystem only and makes no libpod call.
+  private staleDirectoryCheck(plan: CreatePlan): { readonly check: RefusalCheck; readonly code?: ErrorCode } | undefined {
+    let state: Stats | null;
+    let secret: Stats | null;
+    let reading: RefusalCheck = "create.state_dir";
     try {
       realPathOrRefuse(dirname(plan.spec.stateDir));
-      const state = lstatOrAbsent(plan.spec.stateDir, "SCHEMA_INVALID");
-      const secret = lstatOrAbsent(secretDirOf(this.config.secretRoot, plan.spec.sandboxName), "SCHEMA_INVALID");
-      if ((state !== null && !state.isDirectory()) || (secret !== null && !secret.isDirectory())) {
-        return undefined;
-      }
-      return state !== null ? "create.state_dir" : secret !== null ? "create.secret_dir" : undefined;
-    } catch {
+      state = lstatOrAbsent(plan.spec.stateDir, "SCHEMA_INVALID");
+      reading = state !== null ? "create.state_dir" : "create.secret_dir";
+      secret = lstatOrAbsent(secretDirOf(this.config.secretRoot, plan.spec.sandboxName), "SCHEMA_INVALID");
+    } catch (error: unknown) {
+      return { check: reading, code: recordedCodeOf(error) };
+    }
+    if ((state !== null && !state.isDirectory()) || (secret !== null && !secret.isDirectory())) {
       return undefined;
     }
+    return state !== null ? { check: "create.state_dir" } : secret !== null ? { check: "create.secret_dir" } : undefined;
   }
 
   // Reclaims the state directory and the secret directory of a sandbox whose container is gone: a crashed driver never ran the

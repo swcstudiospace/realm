@@ -409,6 +409,27 @@ void test("PRD-DRV-02: a create whose container lookup cannot be read is refused
   assert.equal(existsSync(secretSentinel), true);
 });
 
+void test("PRD-DRV-02: a create whose state or secret directory cannot be read is refused at the stale check with the read's code, and nothing is written", async () => {
+  for (const which of ["state", "secret"] as const) {
+    const lines: string[] = [];
+    const config = driverConfig({ refusalLog: splitLog(lines, []) });
+    const { name, project } = bindProject(config, "project-a");
+    const libpod = new FakeLibpod();
+    const lifecycle = new FakeLifecycle(libpod);
+    const driver = new ComputeDriver(config, { lifecycle, libpod, runtime: new FakeRuntime() });
+    // The root of the directory is a regular file, so lstat of the directory under it fails with ENOTDIR, which is not a missing entry.
+    const root = which === "state" ? config.sandboxStateRoot : config.secretRoot;
+    rmSync(root, { recursive: true, force: true });
+    writeFileSync(root, "not a directory");
+    await assert.rejects(driver.createSandbox(validSandbox({ name })), expectCode("SCHEMA_INVALID"));
+    assert.deepEqual(lines, [which === "state" ? STATE_DIR_REFUSAL : SECRET_DIR_REFUSAL]);
+    assert.equal(lifecycle.creates.length, 0);
+    assert.deepEqual(lifecycle.deletes, []);
+    assert.equal(libpod.containers.has(name), false);
+    assert.deepEqual(readdirSync(project), []);
+  }
+});
+
 void test("PRD-DRV-02: a name the driver tracks as an unremoved container is refused with the same check, whatever a later lookup finds, and nothing is removed", async () => {
   const libpod = new VanishingLibpod();
   const { lifecycle, runtime, name, stateDir, secretDir, lines, config } = await diskHarness(libpod);
