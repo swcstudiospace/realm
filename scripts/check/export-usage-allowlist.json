@@ -9,12 +9,12 @@
     },
     {
       "file": "src/acp/agent.ts",
-      "name": "agentInfo",
+      "name": "REALM_TOOL_METHOD",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
       "file": "src/acp/agent.ts",
-      "name": "REALM_TOOL_METHOD",
+      "name": "agentInfo",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
@@ -34,6 +34,21 @@
     },
     {
       "file": "src/audit/anchor.ts",
+      "name": "Ed25519Signer",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/audit/anchor.ts",
+      "name": "MEMO_MAX_BYTES",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/audit/anchor.ts",
+      "name": "MEMO_PROGRAM_ID",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/audit/anchor.ts",
       "name": "base58Decode",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
@@ -49,22 +64,7 @@
     },
     {
       "file": "src/audit/anchor.ts",
-      "name": "Ed25519Signer",
-      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
-    },
-    {
-      "file": "src/audit/anchor.ts",
       "name": "encodeCompactU16",
-      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
-    },
-    {
-      "file": "src/audit/anchor.ts",
-      "name": "MEMO_MAX_BYTES",
-      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
-    },
-    {
-      "file": "src/audit/anchor.ts",
-      "name": "MEMO_PROGRAM_ID",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
@@ -89,11 +89,6 @@
     },
     {
       "file": "src/audit/reconcile.ts",
-      "name": "pairingKey",
-      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
-    },
-    {
-      "file": "src/audit/reconcile.ts",
       "name": "RECONCILE_PROGRESS_FILE",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
@@ -105,6 +100,11 @@
     {
       "file": "src/audit/reconcile.ts",
       "name": "SCAN_CHUNK_BYTES",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/audit/reconcile.ts",
+      "name": "pairingKey",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
@@ -120,6 +120,11 @@
     {
       "file": "src/cli/anchor.ts",
       "name": "AnchorRunDeps",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/cli/checkpoint.ts",
+      "name": "CHECKPOINT_USAGE",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
@@ -144,6 +149,11 @@
     },
     {
       "file": "src/daemon/channel.ts",
+      "name": "MAX_CONTROL_LINE_BYTES",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/daemon/channel.ts",
       "name": "decodeReply",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
@@ -153,13 +163,23 @@
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
-      "file": "src/daemon/channel.ts",
-      "name": "MAX_CONTROL_LINE_BYTES",
+      "file": "src/daemon/daemon.ts",
+      "name": "buildDaemonHandle",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
-      "file": "src/daemon/daemon.ts",
-      "name": "buildDaemonHandle",
+      "file": "src/daemon/ensure.ts",
+      "name": "DaemonPresence",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/daemon/ensure.ts",
+      "name": "daemonLogSize",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/daemon/ensure.ts",
+      "name": "daemonStartFailureSince",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
@@ -170,21 +190,6 @@
     {
       "file": "src/daemon/startup.ts",
       "name": "sweepRootsOf",
-      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
-    },
-    {
-      "file": "src/daemon/ensure.ts",
-      "name": "daemonLogSize",
-      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
-    },
-    {
-      "file": "src/daemon/ensure.ts",
-      "name": "DaemonPresence",
-      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
-    },
-    {
-      "file": "src/daemon/ensure.ts",
-      "name": "daemonStartFailureSince",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
@@ -209,17 +214,27 @@
     },
     {
       "file": "src/doctor/runtime-checks.ts",
+      "name": "PathReading",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/doctor/runtime-checks.ts",
+      "name": "defaultConnectDriver",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/doctor/runtime-checks.ts",
+      "name": "defaultConnectGateway",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/doctor/runtime-checks.ts",
       "name": "driverSocketCheck",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
       "file": "src/doctor/runtime-checks.ts",
       "name": "gatewayCheck",
-      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
-    },
-    {
-      "file": "src/doctor/runtime-checks.ts",
-      "name": "PathReading",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
@@ -294,12 +309,12 @@
     },
     {
       "file": "src/observe/log-file.ts",
-      "name": "createStderrSink",
+      "name": "DEFAULT_LOG_MAX_BYTES",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
       "file": "src/observe/log-file.ts",
-      "name": "DEFAULT_LOG_MAX_BYTES",
+      "name": "createStderrSink",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
@@ -314,17 +329,12 @@
     },
     {
       "file": "src/omp/plugin.ts",
-      "name": "GUARD_STATUS_BUDGET_MS",
-      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
-    },
-    {
-      "file": "src/omp/plugin.ts",
       "name": "GUARDED_HOST_TOOLS",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
       "file": "src/omp/plugin.ts",
-      "name": "guardHostToolCall",
+      "name": "GUARD_STATUS_BUDGET_MS",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
@@ -369,11 +379,6 @@
     },
     {
       "file": "src/omp/plugin.ts",
-      "name": "renderRealmStatus",
-      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
-    },
-    {
-      "file": "src/omp/plugin.ts",
       "name": "STARTUP_BUDGET_MS",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
@@ -383,8 +388,13 @@
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
-      "file": "src/omp/tools.ts",
-      "name": "failClosedToolNames",
+      "file": "src/omp/plugin.ts",
+      "name": "guardHostToolCall",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/omp/plugin.ts",
+      "name": "renderRealmStatus",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
@@ -403,13 +413,13 @@
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
-      "file": "src/realm/compose.ts",
-      "name": "CreateRealmHandleOptions",
+      "file": "src/omp/tools.ts",
+      "name": "failClosedToolNames",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
-      "file": "src/runtime/agentos-driver.ts",
-      "name": "answerOfConnectError",
+      "file": "src/realm/compose.ts",
+      "name": "CreateRealmHandleOptions",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
@@ -430,6 +440,11 @@
     {
       "file": "src/runtime/agentos-driver.ts",
       "name": "OpenShellAgentOsDriverOptions",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/agentos-driver.ts",
+      "name": "answerOfConnectError",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
@@ -479,11 +494,6 @@
     },
     {
       "file": "src/runtime/driver/compute-driver.ts",
-      "name": "DriverSandboxMessage",
-      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
-    },
-    {
-      "file": "src/runtime/driver/compute-driver.ts",
       "name": "protoIncludeDirectory",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
@@ -505,6 +515,11 @@
     {
       "file": "src/runtime/driver/refusal.ts",
       "name": "DriverRpc",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/driver/registry-rebuild.ts",
+      "name": "RegistryRebuildDeps",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
@@ -589,6 +604,11 @@
     },
     {
       "file": "src/runtime/hardening.ts",
+      "name": "maxConcurrentSessions",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/hardening.ts",
       "name": "tmpfsSizeBytes",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
@@ -613,8 +633,18 @@
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
+      "file": "src/runtime/libpod-client.ts",
+      "name": "LibpodInfo",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
       "file": "src/runtime/libpod-routes.ts",
       "name": "LibpodRouteName",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/libpod-routes.ts",
+      "name": "MatchedRoute",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
@@ -629,22 +659,22 @@
     },
     {
       "file": "src/runtime/openshell.ts",
-      "name": "buildPolicyDocument",
-      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
-    },
-    {
-      "file": "src/runtime/openshell.ts",
-      "name": "buildSandboxDeleteArgv",
-      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
-    },
-    {
-      "file": "src/runtime/openshell.ts",
       "name": "OpenShellRunOptions",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
       "file": "src/runtime/openshell.ts",
       "name": "SANDBOX_WORKSPACE_PATH",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/openshell.ts",
+      "name": "buildPolicyDocument",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/openshell.ts",
+      "name": "buildSandboxDeleteArgv",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
@@ -655,6 +685,11 @@
     {
       "file": "src/runtime/podman-version.ts",
       "name": "podmanSkipReason",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/seccomp-evidence.ts",
+      "name": "SECCOMP_EVIDENCE_FIELD",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
@@ -678,11 +713,6 @@
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
-      "file": "src/runtime/seccomp-evidence.ts",
-      "name": "SECCOMP_EVIDENCE_FIELD",
-      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
-    },
-    {
       "file": "src/runtime/session-execution.ts",
       "name": "AGENTOS_WORKLOAD_BINARY",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
@@ -694,12 +724,57 @@
     },
     {
       "file": "src/runtime/session-execution.ts",
+      "name": "SessionExpectation",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/session-execution.ts",
       "name": "spawnOpenShellRunner",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/session/checkpoint-lock.ts",
+      "name": "lockRemoval",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/session/paths.ts",
+      "name": "WORKSPACE_ID_HEX_LENGTH",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/session/paths.ts",
+      "name": "WORKSPACE_SESSION_PREFIX",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/session/paths.ts",
+      "name": "sandboxNameOfSession",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/session/proc-identity.ts",
+      "name": "parseProcStat",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
       "file": "src/session/reap.ts",
       "name": "REAP_SWEEP_TIMEOUT_MS",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/session/runner-record.ts",
+      "name": "RunnerRecord",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/session/workspace-pin.ts",
+      "name": "workspacePinDirOf",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/session/workspace-registry.ts",
+      "name": "workspaceRegistryDirOf",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {

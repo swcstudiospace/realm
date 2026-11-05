@@ -166,7 +166,7 @@ export const SCRATCH_VOLUME_PREFIX = "realm-scratch-";
 const SCRATCH_VOLUME_REQUIRED_OPTIONS: readonly string[] = Object.freeze(["noexec", "nosuid", "nodev"]);
 export const REALM_MANAGED_LABEL_KEY = "io.realm.managed";
 export const REALM_MANAGED_LABEL_VALUE = "true";
-export const REALM_SESSION_LABEL_KEY = "io.realm.session";
+const REALM_SESSION_LABEL_KEY = "io.realm.session";
 
 export function scratchVolumeNameOf(sessionId: string): string {
   return `${SCRATCH_VOLUME_PREFIX}${sessionId}`;

@@ -120,7 +120,7 @@ export function readRunnerRecord(stateDir: string, sessionId: string): RunnerRec
 }
 
 // The state of the recorded leader now (see LeaderState).
-export function leaderStateOf(record: RunnerRecord): LeaderState {
+function leaderStateOf(record: RunnerRecord): LeaderState {
   const stat = readProcStat(record.pid);
   if (stat === null || !isLive(stat.state)) {
     return "absent";
@@ -147,7 +147,7 @@ export function groupHasMembers(pgid: number): boolean {
 // absent or reused is never signalled. Linux gives Node no pidfd here, so a race remains between the check and the kill:
 // the leader can exit, and its pid be reused, in the gap. The gap is one system call wide and cannot be closed without a
 // pidfd. Returns true when the signal was sent.
-export function signalRecordedGroup(record: RunnerRecord, signal: NodeJS.Signals): boolean {
+function signalRecordedGroup(record: RunnerRecord, signal: NodeJS.Signals): boolean {
   if (leaderStateOf(record) !== "same") {
     return false;
   }
