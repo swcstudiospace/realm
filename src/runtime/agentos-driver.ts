@@ -184,13 +184,15 @@ export function createOpenShellAgentOsDriver(options: OpenShellAgentOsDriverOpti
     let stopInFlight: Promise<void> | undefined;
 
     // Detaches the held runner child and terminates it. Detaching first means a stop never reads as a crash, and a
-    // later failed step leaves no held child to be terminated twice. terminate never rejects.
-    async function stopRunner(): Promise<void> {
+    // later failed step leaves no held child to be terminated twice. terminate never rejects; its result is returned,
+    // so a CLEANUP_FAILED from it reaches the caller that asked for the stop.
+    async function stopRunner(): Promise<RealmError | undefined> {
       const held = runnerChild;
       runnerChild = undefined;
-      if (held !== undefined) {
-        await held.terminate(RUNNER_TERMINATE_GRACE_MS);
+      if (held === undefined) {
+        return undefined;
       }
+      return held.terminate(RUNNER_TERMINATE_GRACE_MS);
     }
 
     // One start: the runner child for the sandbox the session's create made. It waits for the stop before it, if one is in
@@ -208,7 +210,11 @@ export function createOpenShellAgentOsDriver(options: OpenShellAgentOsDriverOpti
       if (priorStart !== undefined) {
         await ignoreOutcome(priorStart);
       }
-      await stopRunner();
+      // A previous runner that could not be terminated may still be alive: the start spawns nothing, and fails with its cause.
+      let cleanup = await stopRunner();
+      if (cleanup !== undefined) {
+        throw makeRealmError("OPENSHELL_START_FAILED", cleanup.code);
+      }
       // The readiness wait gets the whole start budget.
       const deadline = performance.now() + startTimeoutMs;
       const left = (): number => deadline - performance.now();
@@ -232,8 +238,8 @@ export function createOpenShellAgentOsDriver(options: OpenShellAgentOsDriverOpti
       // The identity is recorded right after the spawn, before any readiness probe. When the record cannot be written, the
       // runner just started is stopped and the start fails: it is not held, because nothing could prove it gone later.
       if (!recordSpawnedRunner(stateDir, sessionId, spawned)) {
-        await spawned.terminate(RUNNER_TERMINATE_GRACE_MS);
-        throw makeRealmError("OPENSHELL_START_FAILED");
+        const cleanup = await spawned.terminate(RUNNER_TERMINATE_GRACE_MS);
+        throw makeRealmError("OPENSHELL_START_FAILED", cleanup?.code);
       }
       runnerChild = spawned;
 
@@ -256,21 +262,26 @@ export function createOpenShellAgentOsDriver(options: OpenShellAgentOsDriverOpti
         }
         await pauseUnlessExited(spawned.exited, pauseMs);
       }
-      await stopRunner();
-      throw makeRealmError("OPENSHELL_START_FAILED");
+      cleanup = await stopRunner();
+      throw makeRealmError("OPENSHELL_START_FAILED", cleanup instanceof RealmError ? cleanup.code : undefined);
     }
 
     // One stop. It stops the runner child at once, so a start still in its readiness wait sees the stop at its next check,
     // then waits for the stop before it and for the start it overtakes. It runs no OpenShell command: SessionExecution owns
     // the session's sandbox and deletes it after this stop, so the sandbox has exactly one deleter.
-    async function runStop(previous: Promise<void> | undefined, starting: Promise<void> | undefined): Promise<void> {
-      await stopRunner();
+    async function runStop(
+      previous: Promise<void> | undefined,
+      starting: Promise<void> | undefined,
+    ): Promise<RealmError | undefined> {
+      // The cleanup result of this stop's runner child is returned to stop(), which reports it.
+      const cleanup = await stopRunner();
       if (previous !== undefined) {
         await ignoreOutcome(previous);
       }
       if (starting !== undefined) {
         await ignoreOutcome(starting);
       }
+      return cleanup;
     }
 
     return {
@@ -304,7 +315,12 @@ export function createOpenShellAgentOsDriver(options: OpenShellAgentOsDriverOpti
         stops += 1;
         const previous = stopInFlight;
         const starting = startInFlight;
-        const attempt = runStop(previous, starting);
+        const attempt = runStop(previous, starting).then((cleanup): void => {
+          // A runner child that could not be cleaned up fails the stop: the cause is attached and no success is reported.
+          if (cleanup !== undefined) {
+            throw makeRealmError("AGENTOS_STOP_FAILED", cleanup.code);
+          }
+        });
         stopInFlight = attempt;
         const clear = (): void => {
           if (stopInFlight === attempt) {

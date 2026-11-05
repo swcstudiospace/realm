@@ -29,7 +29,7 @@
 // timed-out work is abandoned and never awaited again, so a hung driver cannot hang supervision.
 
 import { computeBackoffDelayMs, type RandomSource } from "../core/backoff.js";
-import { makeRealmError, type ErrorCode } from "../core/errors.js";
+import { makeRealmError, RealmError, type ErrorCode } from "../core/errors.js";
 import type { SandboxCreateRequest } from "./openshell.js";
 
 export interface AgentOsDriver {
@@ -72,7 +72,9 @@ export interface AgentOsSupervisorOptions {
 // so the supervisor does not probe.
 type Phase = "idle" | "running" | "held" | "stopped";
 
-type Settled<T> = { readonly ok: true; readonly value: T } | { readonly ok: false };
+// The settled outcome of one call. A rejection with a RealmError keeps that error's cause code, so the caller can attach it.
+type Settled<T> = { readonly ok: true; readonly value: T } | Failed;
+type Failed = { readonly ok: false; readonly causeCode?: ErrorCode };
 
 export class AgentOsSupervisor {
   private readonly driver: AgentOsDriver;
@@ -196,7 +198,7 @@ export class AgentOsSupervisor {
     }
     const stopped = await this.race(() => this.driver.stop(this.sessionId));
     if (!stopped.ok) {
-      throw makeRealmError("AGENTOS_STOP_FAILED");
+      throw makeRealmError("AGENTOS_STOP_FAILED", stopped.causeCode);
     }
   }
 
@@ -367,7 +369,15 @@ function settle<T>(
       .then(work)
       .then(
         (value) => { finish({ ok: true, value }); },
-        () => { finish({ ok: false }); },
+        (error: unknown) => { finish(failureOf(error)); },
       );
   });
+}
+
+// The failed outcome of a call that rejected. A RealmError keeps its cause code; any other rejection carries none.
+function failureOf(error: unknown): Failed {
+  if (error instanceof RealmError && error.causeCode !== undefined) {
+    return { ok: false, causeCode: error.causeCode };
+  }
+  return { ok: false };
 }

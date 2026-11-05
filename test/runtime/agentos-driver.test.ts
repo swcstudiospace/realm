@@ -13,6 +13,7 @@ import {
   GATEWAY_STATUS_TIMEOUT_MS,
   type OpenShellAgentOsDriverOptions,
 } from "../../src/runtime/agentos-driver.js";
+import { AgentOsSupervisor } from "../../src/runtime/agentos.js";
 import type { RunnerChild } from "../../src/runtime/agentos-workload.js";
 import { OPENSHELL_BINARY, type OpenShellRunner } from "../../src/runtime/openshell.js";
 import { boundedWait } from "../support/timing.js";
@@ -52,6 +53,8 @@ interface Answers {
   readonly probes?: readonly Answer[];
   // Makes every spawned runner child exit as soon as it is spawned.
   readonly childExitsOnSpawn?: boolean;
+  // Makes every spawned runner child's terminate report CLEANUP_FAILED, as a child whose group cannot be signalled does.
+  readonly terminateCleanupFails?: boolean;
   readonly startTimeoutMs?: number;
   // The compute driver socket the driver probe connects to. Default: a path that does not exist.
   readonly driverSocketPath?: string;
@@ -121,7 +124,7 @@ function killGroup(pid: number): void {
   }
 }
 
-function fakeChild(steps: string[]): FakeChild {
+function fakeChild(steps: string[], cleanupFails: boolean): FakeChild {
   const proc: ChildProcess = spawn("sleep", ["30"], { detached: true, stdio: "ignore" });
   const pid = proc.pid;
   const reaped = new Promise<void>((resolve) => {
@@ -163,7 +166,7 @@ function fakeChild(steps: string[]): FakeChild {
         killGroup(pid);
       }
       end();
-      return Promise.resolve();
+      return Promise.resolve(cleanupFails ? new RealmError("CLEANUP_FAILED") : undefined);
     },
   };
 }
@@ -206,7 +209,7 @@ function harness(answers: Answers = {}): Harness {
   const spawnRunner = (argv: readonly string[]): FakeChild => {
     steps.push("spawn");
     spawns.push([...argv]);
-    const child = fakeChild(steps);
+    const child = fakeChild(steps, answers.terminateCleanupFails === true);
     if (answers.childExitsOnSpawn === true) {
       child.exit();
     }
@@ -329,6 +332,50 @@ void test("a second stop kills nothing more", async () => {
   await driver.stop();
   await driver.stop();
   assert.deepEqual(h.steps, ["spawn", "probe", "terminate"]);
+});
+
+void test("a stop whose runner child cannot be cleaned up rejects with AGENTOS_STOP_FAILED, carrying CLEANUP_FAILED as its cause", async () => {
+  const h = harness({ terminateCleanupFails: true });
+  const driver = driverOf(h);
+  await driver.start();
+  await assert.rejects(
+    driver.stop(),
+    (error: unknown) =>
+      error instanceof RealmError && error.code === "AGENTOS_STOP_FAILED" && error.causeCode === "CLEANUP_FAILED",
+  );
+});
+
+void test("the supervisor's stop carries the driver's CLEANUP_FAILED cause to its caller", async () => {
+  const h = harness({ terminateCleanupFails: true });
+  const driver = createOpenShellAgentOsDriver(h.options);
+  await driver.start(SESSION);
+  const supervisor = new AgentOsSupervisor({
+    driver,
+    sessionId: SESSION,
+    callTimeoutMs: TIMEOUT_MS,
+    random: () => 1,
+    sleep: () => Promise.resolve(),
+    now: () => 0,
+  });
+  await assert.rejects(
+    supervisor.stop(),
+    (error: unknown) =>
+      error instanceof RealmError && error.code === "AGENTOS_STOP_FAILED" && error.causeCode === "CLEANUP_FAILED",
+  );
+});
+
+void test("a start whose previous runner cannot be terminated rejects with OPENSHELL_START_FAILED, carrying CLEANUP_FAILED as its cause, and spawns no second runner", async () => {
+  const h = harness({ terminateCleanupFails: true });
+  const driver = driverOf(h);
+  await driver.start();
+  await assert.rejects(
+    driver.start(),
+    (error: unknown) =>
+      error instanceof RealmError &&
+      error.code === "OPENSHELL_START_FAILED" &&
+      error.causeCode === "CLEANUP_FAILED",
+  );
+  assert.equal(h.spawns.length, 1, "no second runner is spawned while the first may still be alive");
 });
 
 void test("a stop during start waits for the start it overtakes, and the start is not reported as up (N2)", async () => {
