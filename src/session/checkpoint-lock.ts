@@ -7,7 +7,7 @@
 //
 // A lock is taken over only when its owner is provably gone (the pid is not alive, its start time differs, or the boot
 // differs). A live or unprovable owner keeps the lock, and the caller is refused with LOCK_CONFLICT. A lock file that is
-// empty or unreadable, as an older release could leave after a crash, is refused, not taken over.
+// not a regular file, empty or unreadable, as an older release could leave after a crash, is refused, not taken over.
 
 import { randomBytes } from "node:crypto";
 import {
@@ -19,6 +19,7 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  realpathSync,
   renameSync,
   unlinkSync,
   writeFileSync,
@@ -26,7 +27,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { type ErrorCode, makeRealmError, RealmError } from "../core/errors.js";
-import { errnoOf } from "../fs/canonicalize.js";
+import { errnoOf, openVerified } from "../fs/canonicalize.js";
 import { currentBootId, startTicksOf } from "./proc-identity.js";
 import { checkpointSessionDirOf } from "./paths.js";
 
@@ -191,14 +192,9 @@ function refuseAfterFailedRelease(lockPath: string): void {
 // Whether the lock file names this process. An absent file names no one. A file that cannot be read is refused as
 // LOCK_CONFLICT.
 function namesThisProcess(lockPath: string): boolean {
-  let raw: string;
-  try {
-    raw = readFileSync(lockPath, "utf8");
-  } catch (error) {
-    if (errnoOf(error) === "ENOENT") {
-      return false;
-    }
-    throw makeRealmError("LOCK_CONFLICT");
+  const raw = readLockFile(lockPath);
+  if (raw === undefined) {
+    return false;
   }
   const owner = parseOwner(raw);
   const bootId = currentBootId();
@@ -211,6 +207,48 @@ function namesThisProcess(lockPath: string): boolean {
     owner.startTicks === String(startTicks) &&
     owner.bootId === bootId
   );
+}
+
+// Reads the lock file through openVerified, on the real path of the lock. Returns undefined when the lock is absent, which
+// is the meaning of ENOENT. A lock that is not a regular file, or that cannot be verified or read, is LOCK_CONFLICT.
+// openVerified refuses a FIFO without blocking on it, so a FIFO at the lock path is refused rather than hanging the open.
+function readLockFile(lockPath: string): string | undefined {
+  let realPath: string;
+  try {
+    realPath = realpathSync(lockPath);
+  } catch (error) {
+    if (errnoOf(error) === "ENOENT") {
+      return undefined;
+    }
+    throw makeRealmError("LOCK_CONFLICT");
+  }
+  let fd: number;
+  try {
+    fd = openVerified(realPath);
+  } catch {
+    // openVerified refuses every failed open as PATH_ESCAPE, so a lock removed after realpathSync lands here too.
+    if (lockIsAbsent(lockPath)) {
+      return undefined;
+    }
+    throw makeRealmError("LOCK_CONFLICT");
+  }
+  try {
+    return readFileSync(fd, "utf8");
+  } catch {
+    throw makeRealmError("LOCK_CONFLICT");
+  } finally {
+    closeSync(fd);
+  }
+}
+
+// Whether nothing exists at the lock path. Any other lstat failure is not absence.
+function lockIsAbsent(lockPath: string): boolean {
+  try {
+    lstatSync(lockPath);
+    return false;
+  } catch (error) {
+    return errnoOf(error) === "ENOENT";
+  }
 }
 
 // Publishes the owner record at lockPath. Returns false when a lock already exists. The temporary name is removed on
@@ -293,16 +331,18 @@ function operationError(error: unknown, cleanup: RealmError | undefined): RealmE
 function takeOverProvablyGone(lockPath: string): void {
   const bootId = currentBootId();
   let seen: Stats;
-  let raw: string;
   try {
     seen = lstatSync(lockPath);
-    raw = readFileSync(lockPath, "utf8");
   } catch (error) {
-    // The lock was released between the failed link and this read. The caller tries again.
     if (errnoOf(error) === "ENOENT") {
       return;
     }
     throw makeRealmError("LOCK_CONFLICT");
+  }
+  // The lock was released between the failed link and this read. The caller tries again.
+  const raw = readLockFile(lockPath);
+  if (raw === undefined) {
+    return;
   }
   const owner = parseOwner(raw);
   if (owner === undefined || bootId === null || !ownerProvablyGone(owner, bootId)) {

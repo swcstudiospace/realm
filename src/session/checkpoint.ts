@@ -24,15 +24,23 @@
 // originals back. With it, every root entry is a staged entry, so recovery sets those aside before the originals return.
 //
 // Documented limits: a hard link becomes a separate file. Content is not filtered, so the state root must lie outside
-// the workspace root; a root that holds the state directory is refused. A lock file that is empty or unreadable is
-// refused, not taken over, so it needs manual removal.
+// the workspace root; a root that holds the state directory is refused. A lock file that is not a regular file, empty or
+// unreadable is refused, not taken over, so it needs manual removal.
 
 import { createHash, randomBytes } from "node:crypto";
-import { constants, createReadStream, type BigIntStats, type Stats } from "node:fs";
+import {
+  type BigIntStats,
+  type Stats,
+  closeSync,
+  constants,
+  createReadStream,
+  createWriteStream,
+  fstatSync,
+  openSync,
+} from "node:fs";
 import {
   type FileHandle,
   chmod,
-  copyFile,
   lstat,
   mkdir,
   open,
@@ -46,9 +54,10 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
+import { pipeline } from "node:stream/promises";
 import { type ErrorCode, makeRealmError, RealmError } from "../core/errors.js";
 import { withTimeout } from "../core/timeout.js";
-import { errnoOf } from "../fs/canonicalize.js";
+import { errnoOf, verifyDescriptor } from "../fs/canonicalize.js";
 import { isInsideRoot, type PinnedRoot, verifyPinnedAt } from "../fs/root.js";
 import { acquireSessionLock, releaseSessionLock } from "./checkpoint-lock.js";
 import { checkpointDirOf, checkpointSessionDirOf, checkpointsDirOf } from "./paths.js";
@@ -60,6 +69,7 @@ import { verifyWorkspaceEntry, type WorkspaceEntry } from "./workspace-registry.
 // sandbox's stop open indefinitely.
 const CHECKPOINT_OP_TIMEOUT_MS = 300_000;
 const PRIVATE_DIR_MODE = 0o700;
+const COPY_FILE_MODE = 0o600;
 const MODE_BITS = 0o7777;
 const MANIFEST_SCHEMA = 1;
 const MANIFEST_FILE = "manifest.json";
@@ -735,13 +745,61 @@ function stampOf(info: BigIntStats): string {
   return `${String(info.dev)}:${String(info.ino)}:${String(info.size)}:${String(info.mtimeNs)}:${String(info.ctimeNs)}`;
 }
 
+// Opens a source file for hashing or copying. Only the parent directory is resolved, with realpath. The basename is joined
+// to that real parent and is never resolved, so a link at the final component is not followed. O_NOFOLLOW refuses a link
+// swapped in after the scan with ELOOP, which is PATH_ESCAPE; any other open failure is WRITE_NOT_ATOMIC. O_NONBLOCK keeps
+// a FIFO swapped in after the scan from blocking the open, and the regular-file check then refuses it as POLICY_DENIED.
+// verifyDescriptor checks the descriptor against the joined path. A failure after the open closes the descriptor first.
+// The caller owns the returned descriptor.
+async function openSourceFile(path: string): Promise<number> {
+  let realPath: string;
+  let fd: number;
+  try {
+    realPath = join(await realpath(dirname(path)), basename(path));
+    fd = openSync(realPath, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  } catch (error: unknown) {
+    throw makeRealmError(errnoOf(error) === "ELOOP" ? "PATH_ESCAPE" : "WRITE_NOT_ATOMIC");
+  }
+  try {
+    if (!fstatSync(fd).isFile()) {
+      throw makeRealmError("POLICY_DENIED");
+    }
+    verifyDescriptor(fd, realPath);
+  } catch (error: unknown) {
+    throw closeAfterFailure(fd, asRealmError(error, "WRITE_NOT_ATOMIC"));
+  }
+  return fd;
+}
+
+// Closes the descriptor after a failed step and returns the error to throw. The first error stays the one thrown. A failed
+// close makes it CLEANUP_FAILED, with the first error's code as its cause, as openVerified reports it.
+function closeAfterFailure(fd: number, error: RealmError): RealmError {
+  try {
+    closeSync(fd);
+  } catch {
+    return makeRealmError(error.code, "CLEANUP_FAILED");
+  }
+  return error;
+}
+
+// Hashes a regular file through a descriptor from openSourceFile, so a FIFO swapped in after the scan is refused instead of
+// blocking the open. The read stream owns the descriptor and closes it when the file ends or the read fails.
 async function hashFile(path: string): Promise<string> {
+  const fd = await openSourceFile(path);
   const hash = createHash("sha256");
-  const stream: AsyncIterable<Buffer> = createReadStream(path);
+  const stream: AsyncIterable<Buffer> = createReadStream(path, { fd });
   for await (const chunk of stream) {
     hash.update(chunk);
   }
   return hash.digest("hex");
+}
+
+// Copies a regular file through a descriptor from openSourceFile, as hashFile does. The read stream closes the descriptor
+// on success and on failure, since pipeline destroys it when the copy fails. The destination is created exclusively, as
+// COPYFILE_EXCL made it; the caller sets its mode afterwards.
+async function copyRegularFile(from: string, to: string): Promise<void> {
+  const fd = await openSourceFile(from);
+  await pipeline(createReadStream(from, { fd }), createWriteStream(to, { flags: "wx", mode: COPY_FILE_MODE }));
 }
 
 // Copies a tree entry by entry. Links are recreated with their target text, never followed. A directory is created
@@ -756,7 +814,7 @@ async function copyTree(source: string, destination: string): Promise<void> {
       await copyTree(from, to);
       await chmod(to, info.mode & MODE_BITS);
     } else if (info.isFile()) {
-      await copyFile(from, to, constants.COPYFILE_EXCL);
+      await copyRegularFile(from, to);
       await chmod(to, info.mode & MODE_BITS);
     } else if (info.isSymbolicLink()) {
       await symlink(await readlink(from), to);

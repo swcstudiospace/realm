@@ -803,8 +803,9 @@ export async function main(): Promise<void> {
     process.exitCode = result.exitCode;
     return;
   }
-  // The command has finished and its output is written. Exit now: an in-flight call that never settles (a FIFO open blocked
-  // in the threadpool, for one) keeps the event loop alive, and would hold the shell after the command's result is known.
+  // The command has finished and its output is written. Exit now: a timer or socket left open after the output keeps the event
+  // loop alive and would hold the shell after the command's result is known. The explicit exit does not cover a blocked
+  // threadpool call: a pending FIFO open makes process.exit hang. Such a call must be made non-blocking, not left to the exit.
   process.exit(result.exitCode);
 }
 
