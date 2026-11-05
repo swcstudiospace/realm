@@ -137,7 +137,7 @@ export async function runAnchor(args: AnchorArgs, deps: AnchorRunDeps): Promise<
     return { exitCode: 0, stdout: `${JSON.stringify(out)}\n`, stderr: "" };
   } catch (error) {
     if (error instanceof AnchorError) {
-      return { exitCode: 1, stdout: "", stderr: `realm anchor: ${error.message}\n` };
+      return { exitCode: 1, stdout: "", stderr: `realm anchor: ${error.message} (${error.code})\n` };
     }
     throw error;
   }

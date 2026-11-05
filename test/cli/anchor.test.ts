@@ -194,7 +194,7 @@ void test("realm anchor fails with exitCode 1 and a stderr line when the session
   const result = await runAnchor(parsed(["--session", SESSION]), depsFor(stateDir, node, undefined));
   assert.equal(result.exitCode, 1);
   assert.equal(result.stdout, "");
-  assert.equal(result.stderr, `realm anchor: no audit log exists for session ${SESSION}\n`);
+  assert.equal(result.stderr, `realm anchor: no audit log exists for session ${SESSION} (SCHEMA_INVALID)\n`);
   assert.deepEqual(node.methods, []);
 });
 
@@ -204,7 +204,7 @@ void test("realm anchor fails with exitCode 1 and a stderr line when the audit f
   const result = await runAnchor(parsed(["--session", SESSION]), depsFor(stateDir, node, undefined));
   assert.equal(result.exitCode, 1);
   assert.equal(result.stdout, "");
-  assert.equal(result.stderr, `realm anchor: audit log for session ${SESSION} has no lines\n`);
+  assert.equal(result.stderr, `realm anchor: audit log for session ${SESSION} has no lines (SCHEMA_INVALID)\n`);
   assert.deepEqual(node.methods, []);
 });
 
@@ -222,7 +222,7 @@ void test("realm anchor turns a failing audit read into exitCode 1 with a fixed 
   assert.ok(attemptedPath !== undefined, "the injected reader was used");
   assert.equal(result.exitCode, 1);
   assert.equal(result.stdout, "");
-  assert.equal(result.stderr, `realm anchor: audit log for session ${SESSION} could not be read\n`);
+  assert.equal(result.stderr, `realm anchor: audit log for session ${SESSION} could not be read (SCHEMA_INVALID)\n`);
   assert.equal(result.stderr.includes(stateDir), false, "no host path in the output");
   assert.deepEqual(node.methods, []);
 });
@@ -234,7 +234,7 @@ void test("realm anchor reports a directory where the audit file is expected as 
   const result = await runAnchor(parsed(["--session", SESSION]), depsFor(stateDir, node, undefined));
   assert.equal(result.exitCode, 1);
   assert.equal(result.stdout, "");
-  assert.equal(result.stderr, `realm anchor: audit log for session ${SESSION} is not a regular file\n`);
+  assert.equal(result.stderr, `realm anchor: audit log for session ${SESSION} is not a regular file (PATH_ESCAPE)\n`);
   assert.equal(result.stderr.includes(stateDir), false, "no host path in the output");
   assert.deepEqual(node.methods, []);
 });
@@ -247,7 +247,7 @@ void test("realm anchor --publish without a key file fails before any RPC call, 
   assert.equal(result.stdout, "");
   assert.equal(
     result.stderr,
-    "realm anchor: REALM_ANCHOR_KEY_FILE is not set; --publish needs the anchor key file\n",
+    "realm anchor: REALM_ANCHOR_KEY_FILE is not set; --publish needs the anchor key file (POLICY_DENIED)\n",
   );
   assert.deepEqual(node.urls, []);
   assert.deepEqual(node.methods, []);
@@ -307,7 +307,7 @@ void test("realm anchor --publish refuses a non-devnet endpoint with exitCode 1,
   assert.equal(result.stdout, "");
   assert.equal(
     result.stderr,
-    "realm anchor: refusing to publish: the endpoint's genesis hash is not the expected cluster; nothing was sent\n",
+    "realm anchor: refusing to publish: the endpoint's genesis hash is not the expected cluster; nothing was sent (POLICY_DENIED)\n",
   );
   assert.deepEqual(node.methods, ["getGenesisHash"]);
   assert.deepEqual(node.sent, []);

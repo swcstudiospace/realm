@@ -419,7 +419,7 @@ async function runDown(deps: ResolvedDeps, socketPath: string, workspaceRoot: st
       return failureFor(error);
     }
     // CORE-06: down is idempotent, so a realm with no daemon is already down.
-    return { exitCode: 0, stdout: "disconnected\n", stderr: "already down\n" };
+    return { exitCode: 0, stdout: "disconnected\n", stderr: "already down (REALM_NOT_ACTIVE)\n" };
   }
 }
 
@@ -650,13 +650,14 @@ async function runAnchorCommand(words: readonly string[], deps: CliDeps, stateDi
 }
 
 // The state directory for realm audit verify --session and the selector-less form, read from the realm config the
-// way runCli reads it for the other commands. Absent or invalid config yields undefined; the audit command then
-// refuses with usage (exit 2), as realm anchor does.
-function auditStateDir(deps: CliDeps): string | undefined {
+// way runCli reads it for the other commands. Absent or invalid config yields the loader's catalogue code; the audit
+// command then refuses with usage (exit 2) and prints that code.
+function auditStateDir(deps: CliDeps): { readonly stateDir: string } | { readonly code: ErrorCode } {
   try {
-    return loadRuntimeConfig((deps.readConfig ?? readRuntimeConfigFile)(resolveConfigPath(deps.env))).stateDir;
-  } catch {
-    return undefined;
+    const config = loadRuntimeConfig((deps.readConfig ?? readRuntimeConfigFile)(resolveConfigPath(deps.env)));
+    return { stateDir: config.stateDir };
+  } catch (error) {
+    return { code: refusalOf(error).code };
   }
 }
 
@@ -698,7 +699,8 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
   try {
     runtimeConfig = loadRuntimeConfig((deps.readConfig ?? readRuntimeConfigFile)(resolveConfigPath(deps.env)));
     stateDir = runtimeConfig.stateDir;
-  } catch {
+  } catch (error) {
+    const { code } = refusalOf(error);
     if (command === "doctor") {
       if (parsed.words.length !== 0) {
         const failure = failureFor(new RealmError("SCHEMA_INVALID"));
@@ -708,13 +710,13 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
       return {
         exitCode: 0,
         stdout: `${JSON.stringify(checks)}\n`,
-        stderr: `realm doctor: config is absent; ran ${String(checks.length)} local check\n`,
+        stderr: `realm doctor: config is absent; ran ${String(checks.length)} local check (${code})\n`,
       };
     }
     return {
       exitCode: 2,
       stdout: "",
-      stderr: `realm ${command}: cannot resolve a state directory (the realm config file under an absolute XDG_CONFIG_HOME or HOME must be present and valid)\n`,
+      stderr: `realm ${command}: cannot resolve a state directory (the realm config file under an absolute XDG_CONFIG_HOME or HOME must be present and valid) (${code})\n`,
     };
   }
   const resolved: ResolvedDeps = {

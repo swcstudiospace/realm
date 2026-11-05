@@ -369,7 +369,7 @@ void test("realm down with no daemon is idempotent and says already down (CORE-0
   const result = await runCli(["down"], { env: ENV, timeoutMs: 500, send: absent });
   assert.equal(result.exitCode, 0);
   assert.equal(result.stdout, "disconnected\n");
-  assert.equal(result.stderr, "already down\n");
+  assert.equal(result.stderr, "already down (REALM_NOT_ACTIVE)\n");
   const failing: SendControlRequest = () => {
     return Promise.reject(new RealmError("TOOL_TIMEOUT"));
   };
@@ -926,6 +926,13 @@ void test("a runtime config that cannot be read makes status exit 2 before any d
   assert.equal(result.exitCode, 2);
   assert.ok(result.stderr.startsWith("realm status: cannot resolve a state directory"), result.stderr);
   assert.equal(daemon.record.connects, 0);
+});
+
+void test("a runtime config the loader refuses names its catalogue code on the state-directory refusal line (CLI-01)", async () => {
+  const result = await runCli(["status"], { env: ENV, readConfig: () => ({ hostNetwork: true }) });
+  assert.equal(result.exitCode, 2);
+  assert.equal(result.stdout, "");
+  assert.match(result.stderr, /^realm status: cannot resolve a state directory .*\(SCHEMA_INVALID\)\n$/);
 });
 
 void test("realm doctor with no config returns the init check and does not dial a daemon", async () => {
@@ -1587,6 +1594,15 @@ void test("RES-04 CLI: a malformed id, a relative workspace, a missing flag and 
   assert.deepEqual(treeBytes(fx.workspace), before);
   assert.equal(existsSync(join(fx.stateDir, "checkpoints")), false);
   assert.equal(fx.daemon.connects, 0);
+});
+
+void test("RES-04 CLI: a runtime config the loader refuses makes checkpoint exit 2 and names the catalogue code", async (t) => {
+  const fx = checkpointFixture(t);
+  const refused = { ...fx.deps, readConfig: () => ({ hostNetwork: true }) };
+  const result = await runCli(checkpointArgv("create", fx, "before-edit"), refused);
+  assert.equal(result.exitCode, 2);
+  assert.equal(result.stdout, "");
+  assert.match(result.stderr, /^realm checkpoint: cannot resolve a state directory .*\(SCHEMA_INVALID\)\n$/);
 });
 
 void test("RES-04 CLI: a workspace with no session is refused with REALM_UNBOUND and nothing is written", async (t) => {

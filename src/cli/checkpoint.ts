@@ -99,12 +99,13 @@ function refusal(error: unknown): CliResult {
 }
 
 // The state directory from the runtime config, through the loader the status path uses. Absent or invalid config yields
-// undefined, so the command refuses with usage (exit 2) as the other state-directory commands do.
-function stateDirOf(deps: CheckpointDeps): string | undefined {
+// the loader's catalogue code, so the command refuses with usage (exit 2) and prints that code.
+function stateDirOf(deps: CheckpointDeps): { readonly stateDir: string } | { readonly code: ErrorCode } {
   try {
-    return loadRuntimeConfig((deps.readConfig ?? readRuntimeConfigFile)(resolveConfigPath(deps.env))).stateDir;
-  } catch {
-    return undefined;
+    const config = loadRuntimeConfig((deps.readConfig ?? readRuntimeConfigFile)(resolveConfigPath(deps.env)));
+    return { stateDir: config.stateDir };
+  } catch (error) {
+    return { code: error instanceof RealmError ? error.code : "SCHEMA_INVALID" };
   }
 }
 
@@ -113,14 +114,15 @@ export async function runCheckpointCommand(words: readonly string[], deps: Check
   if (args === undefined) {
     return { exitCode: 2, stdout: "", stderr: `${CHECKPOINT_USAGE}\n` };
   }
-  const stateRoot = stateDirOf(deps);
-  if (stateRoot === undefined) {
+  const resolved = stateDirOf(deps);
+  if (!("stateDir" in resolved)) {
     return {
       exitCode: 2,
       stdout: "",
-      stderr: "realm checkpoint: cannot resolve a state directory (the realm config file under an absolute XDG_CONFIG_HOME or HOME must be present and valid)\n",
+      stderr: `realm checkpoint: cannot resolve a state directory (the realm config file under an absolute XDG_CONFIG_HOME or HOME must be present and valid) (${resolved.code})\n`,
     };
   }
+  const stateRoot = resolved.stateDir;
   // The same selection realm status --workspace makes: the canonical root and the session it maps to.
   let selection: ControlSelection;
   try {

@@ -120,10 +120,10 @@ interface FileOutcome {
 type Loaded<T> = { readonly value: T } | { readonly refusal: AuditCommandResult };
 
 // The entry point. resolveStateDir runs only for --session and the selector-less form, so --file never reads the
-// realm config. It returns undefined when the config is absent or invalid.
+// realm config. It returns the loader's catalogue code when the config is absent or invalid.
 export function runAuditCommand(
   words: readonly string[],
-  resolveStateDir: () => string | undefined,
+  resolveStateDir: () => { readonly stateDir: string } | { readonly code: ErrorCode },
 ): AuditCommandResult {
   const args = parseAuditVerifyArgs(words);
   if (args === undefined) {
@@ -134,11 +134,11 @@ export function runAuditCommand(
     const stem = basename(args.selector.file, AUDIT_SUFFIX);
     targets = [{ sessionId: isSessionId(stem) ? stem : "file", file: args.selector.file }];
   } else {
-    const stateDir = resolveStateDir();
-    if (stateDir === undefined) {
-      return { exitCode: 2, stdout: "", stderr: `${NO_STATE_DIR}\n` };
+    const resolved = resolveStateDir();
+    if (!("stateDir" in resolved)) {
+      return { exitCode: 2, stdout: "", stderr: `${NO_STATE_DIR} (${resolved.code})\n` };
     }
-    const auditDir = join(stateDir, "audit");
+    const auditDir = join(resolved.stateDir, "audit");
     if (args.selector.kind === "session") {
       targets = [{ sessionId: args.selector.sessionId, file: join(auditDir, `${args.selector.sessionId}${AUDIT_SUFFIX}`) }];
     } else {
