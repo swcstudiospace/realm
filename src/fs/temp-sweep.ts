@@ -65,7 +65,8 @@ export interface TempSweepOptions {
   readonly minAgeMs: number;
   // Only files owned by this uid are removed. The caller supplies process.getuid().
   readonly ownerUid: number;
-  // Appends one audit line. A throw keeps the file and counts it as skipped, and the result carries AUDIT_WRITE_FAILED.
+  // Appends one audit line. A refused removal line keeps the file and counts it as failed. A refused exclusion line counts
+  // as failed while the candidate stays skipped. Either way the result carries AUDIT_WRITE_FAILED.
   readonly audit: (entry: TempSweepAuditEntry) => void;
   // Directory entries to examine before the walk stops with `truncated`. Default 500 000.
   readonly maxEntries?: number;
@@ -81,11 +82,12 @@ export interface TempSweepRemoved {
 }
 
 // skipped: roots that could not be bound, subdirectories not entered (a symlink, another device, a failed open or check). These
-// are design exclusions: they are audited and skipped, and add no entry to errors.
+// are design exclusions: they are audited and skipped. A refused exclusion line is counted in `failed` and adds
+// AUDIT_WRITE_FAILED to `errors`.
 // failed: unlinks that failed, directories that could not be read, candidates that could not be examined, roots that could not
-// be pinned, and every audit line the callback refused for a failure or a removal.
+// be pinned, and every audit line the callback refused for a failure, a removal or an exclusion.
 // errors: the catalogue code of each failure counted in `failed`, in the order they happened, and AUDIT_WRITE_FAILED for each
-// audit line the callback refused for a failure or a removal.
+// audit line the callback refused for a failure, a removal or an exclusion.
 // unfinishedRoots: the roots given to the call whose walk was cut off by a budget, in order, followed by every root not
 // reached. Empty when `truncated` is false.
 export interface TempSweepResult {
@@ -180,12 +182,14 @@ function countFailure(state: SweepState, code: ErrorCode, path: string, bytes: n
 }
 
 // Audits a design exclusion (a symlink, another device, a root re-checked and changed, a subdirectory whose pin check fails):
-// the line is attempted and the candidate is skipped. A refused line is not a failure, so it adds no entry to errors.
+// the line is attempted and the candidate is skipped; the caller moves `skipped`. A refused line is a failure of its own:
+// it is counted in `failed` and AUDIT_WRITE_FAILED is pushed to `errors`.
 function recordExclusion(state: SweepState, outcome: ErrorCode, path: string, bytes: number): void {
   try {
     state.options.audit({ tool: "temp-sweep", outcome, path, bytes });
   } catch {
-    // The exclusion is the outcome; the refused line is not counted.
+    state.failed += 1;
+    state.errors.push("AUDIT_WRITE_FAILED");
   }
 }
 

@@ -298,6 +298,20 @@ void test("a failing audit callback keeps the file and counts it (D-1402)", (t) 
   assert.deepEqual(result.errors, ["AUDIT_WRITE_FAILED"], "the refused removal line carries its code");
 });
 
+void test("a refused exclusion audit line is counted with AUDIT_WRITE_FAILED", (t) => {
+  const { base } = setup(t);
+  const result = sweepOrphanTempFiles([join(base, "missing")], {
+    ...sweepOptions([]),
+    audit: () => {
+      throw new Error("audit append failed");
+    },
+  });
+  assert.equal(result.skipped, 1, "the root that does not bind is still skipped");
+  assert.equal(result.failed, 1, "the refused exclusion line is counted as a failure");
+  assert.deepEqual(result.errors, ["AUDIT_WRITE_FAILED"], "the refused exclusion line carries its code");
+  assert.deepEqual(result.removed, []);
+});
+
 void test("a failed unlink appends a second CLEANUP_FAILED line (D-1402)", (t) => {
   const { root } = setup(t);
   const orphan = join(root, `.target.txt.realm-tmp-${HEX}`);
