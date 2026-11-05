@@ -7,7 +7,7 @@
 // no export of a failing class is stale and fails the gate, so a removed or re-used seam cannot stay listed. The classes come from export-usage.mjs.
 //
 // Usage: export-usage-gate.mjs. Exit 0 when every failing export is allowlisted and no entry is stale, 1 otherwise.
-// It is not in check:gates until the findings it reports are resolved (phase 20 record, HELD).
+// It runs in check:gates (package.json). Its findings are resolved (Q0-007, E-11), and the allowlist names every D-1306 seam.
 
 import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";

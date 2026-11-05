@@ -5,7 +5,7 @@
 // verdict that throws. A record with a null container id (a crash during realm up, D-86) is reaped by the label sweep.
 //
 // The reap is not silent: it returns what it adopted, removed and deleted, and the daemon reports it. startDaemon runs it inside
-// runStartupMaintenance (src/daemon/daemon.ts), which hands the counts and the removed container ids to its onStartup
+// runStartupMaintenance (src/daemon/startup.ts), which hands the counts and the removed container ids to its onStartup
 // observer (the daemon entry logs them on one line) and carries a notice on the status, up and down replies for its lifetime.
 //
 // Single-owner precondition (D-87, OQ-P4-06): the reap must run before any LifecycleController or ToolDispatcher exists in the

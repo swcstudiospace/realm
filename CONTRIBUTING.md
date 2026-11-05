@@ -27,7 +27,7 @@ A change must pass every gate below before it is reviewed.
 | `npm run test:scripts` | Tests for the scripts under `scripts/` |
 | `npm run check:docs` | Documentation checks |
 | `npm run build` | Compile to `dist/` |
-| `npm run check:gates` | Gate closure (TOOL-02): the exec gate modules' import closure reaches no forbidden module and no `child_process` (`scripts/check/gate-closure.mjs`) |
+| `npm run check:gates` | Gate closure (TOOL-02): the exec gate modules' import closure reaches no forbidden module and no `child_process` (`scripts/check/gate-closure.mjs`); module-size ratchet: a src file over 1000 lines fails unless its entry in `scripts/check/module-size-allowlist.json` sets a ceiling at or above its line count (`scripts/check/module-size.mjs`); export-usage gate: fails on a src export that only its own file or only test files use, unless `scripts/check/export-usage-allowlist.json` names it (`scripts/check/export-usage-gate.mjs`) |
 | `npm run check:pack` | Pack smoke test: packs the package, installs the tarball into a throwaway consumer and loads the schemas and adapter manifests; run `npm run build` first |
 | `npm audit --omit=dev --audit-level=high` | Dependency audit of production dependencies; CI runs it as the `audit` job and release waits for it. Needs the npm registry |
 | `npm run check:mcp` | MCP smoke test: spawns the built `realm mcp` over stdio, drives one session in both protocol eras and checks the result shapes and the status call; run `npm run build` first |

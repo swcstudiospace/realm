@@ -185,7 +185,7 @@ A policy that has no `mode` key, or no policy file at all, used to load as `advi
   `renderNetworkPolicies`).
 - **Enforced by:**
   - Daemon passes `policy.egressAllow` into the execution service
-    (`defaultExec`, `src/daemon/daemon.ts`).
+    (`defaultExec`, `src/daemon/seams.ts`).
   - `buildPolicyDocument` embeds the D-78 rendering alongside the fixed
     filesystem/landlock/process stanza (`src/runtime/openshell.ts`).
   - `writePolicyDocument` renders before creating the runtime directory, so a
@@ -246,7 +246,7 @@ A policy that has no `mode` key, or no policy file at all, used to load as `advi
   the `up` request limit; the plugin's own 200 s timer is unchanged and fires
   first.
 - **Also see:** the single teardown bound `TEARDOWN_TIMEOUT_MS` (30000 ms) is a separate
-  constant, not this key (`TEARDOWN_TIMEOUT_MS`, `src/lifecycle/controller.ts`).
+  constant, not this key (`TEARDOWN_TIMEOUT_MS`, `src/lifecycle/bounds.ts`).
 
 ## `toolQueueMs`
 
@@ -275,7 +275,7 @@ a policy key (D-101)" (`TOOL_CALL_TIMEOUT_MS`, `src/tools/dispatch.ts`).
 | Name | Value / site | Scope (not per-project policy) |
 | --- | --- | --- |
 | `TOOL_CALL_TIMEOUT_MS` | `30_000` (`src/tools/dispatch.ts`) | Bounds one awaited tool call: the `exec` sandbox run (`ToolDispatcher.#exec`) and the `retry` create (`ToolDispatcher.#retry`). Expiry maps to `TOOL_TIMEOUT`. |
-| `TEARDOWN_TIMEOUT_MS` | `30_000` (`src/lifecycle/controller.ts`) | Single bound for `stop`/`destroy`; expiry returns `REALM_STOPPING` (header comment and `teardownBound` of `LifecycleController`, `src/lifecycle/controller.ts`). |
+| `TEARDOWN_TIMEOUT_MS` | `30_000` (`src/lifecycle/bounds.ts`) | Single bound for `stop`/`destroy`; expiry returns `REALM_STOPPING` (header comment and `teardownBound` of `LifecycleController`, `src/lifecycle/controller.ts`). |
 | `OPENSHELL_CREATE_DEADLINE_MS` | `60_000` (`src/runtime/session-execution.ts`) | Bound for the whole OpenShell create including the label poll (`OPENSHELL_CREATE_DEADLINE_MS`, `src/runtime/session-execution.ts`). |
 | `CONTAINER_STOP_GRACE_MS` | `10_000` (`src/runtime/session-execution.ts`) | Libpod stop timeout grace period (`CONTAINER_STOP_GRACE_MS`, `src/runtime/session-execution.ts`). |
 | `AGENTOS_STOP_DEADLINE_MS` | `15_000` (`src/runtime/session-execution.ts`) | Backstop on the AgentOS stop; a missed deadline is a failed stop and maps to `AGENTOS_STOP_FAILED` (`AGENTOS_STOP_DEADLINE_MS` and `stopDeadlineMs`, `src/runtime/session-execution.ts`). |
