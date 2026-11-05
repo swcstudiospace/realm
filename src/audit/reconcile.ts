@@ -26,6 +26,7 @@ import { Buffer } from "node:buffer";
 import { closeSync, constants, fstatSync, lstatSync, openSync, opendirSync, readSync, realpathSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
+import { makeRealmError, RealmError, type ErrorCode } from "../core/errors.js";
 import { atomicWriteFile, observeSha256 } from "../fs/atomic-write.js";
 import { appendAudit, type ExecSummary } from "./log.js";
 
@@ -62,8 +63,9 @@ export interface ReconcileResult {
   readonly files: number;
   // Reconciliation lines appended across all files.
   readonly appended: number;
-  // Refused entries (a symlinked directory or file, a non-regular file, an unsafe name), files over the size
-  // cap, files that could not be read, files whose append failed, and a failed write of the progress record.
+  // Failures counted: refused entries (a symlinked directory or file, a non-regular file, an unsafe name), files over the size
+  // cap, files that could not be read, files whose append failed, and a failed write of the progress record. Each failure
+  // caught in the run carries its code in `failures`; a refused entry or an over-cap file is counted without one.
   readonly failed: number;
   // Base names (no directory) of the logs the deadline left unfinished, including every log not reached. A later run
   // without the deadline finishes them.
@@ -72,10 +74,21 @@ export interface ReconcileResult {
   readonly complete: boolean;
   // How many of `files` were skipped without being read because the progress record matched their size and mtime.
   readonly skippedUnchanged: number;
-  // True when the listing stopped at its entry bound (RECONCILE_MAX_LISTED_ENTRIES) or at the deadline, so logs may exist that
-  // were not listed. They cannot be named, so they are not in `unfinished`. A start that hit RECONCILE_MAX_FILES is not this:
-  // the logs it did not reach are listed in `unfinished`.
+  // True when the listing stopped at its entry bound (RECONCILE_MAX_LISTED_ENTRIES), at the deadline, or because the audit
+  // directory could not be listed (PATH_ESCAPE in `failures`), so logs may exist that were not listed. They cannot be named,
+  // so they are not in `unfinished`. A start that hit RECONCILE_MAX_FILES is not this: the logs it did not reach are listed
+  // in `unfinished`.
   readonly listingTruncated: boolean;
+  // The catalogue code of each caught failure, in the order they happened. `file` is the base name of the log or the progress
+  // record it belongs to; a failure of the audit directory has none.
+  readonly failures: readonly ReconcileFailure[];
+}
+
+// One failure caught in a run. `code` is the catalogue code the error carries. A raw filesystem error carries none, and the
+// path it came from could not be examined, so its code is PATH_ESCAPE.
+export interface ReconcileFailure {
+  readonly file?: string;
+  readonly code: ErrorCode;
 }
 
 export interface PairingEntry {
@@ -128,6 +141,8 @@ function parseLine(bytes: Uint8Array): { readonly phase: string; readonly pendin
   try {
     value = JSON.parse(Buffer.from(bytes).toString("utf8"));
   } catch {
+    // Not JSON: a torn line left by a crash mid-append (see writeAuditLine). A torn admission means nothing ran, so the line
+    // is ignored by design and is not a failure.
     return undefined;
   }
   if (!isRecord(value)) {
@@ -193,7 +208,7 @@ function scanFile(file: string, maxBytes: number, maxLineBytes: number, expired:
   try {
     const stat = fstatSync(fd);
     if (!stat.isFile()) {
-      throw new Error("audit log is not a regular file");
+      throw makeRealmError("PATH_ESCAPE");
     }
     if (stat.size > maxBytes) {
       return { kind: "over-cap" };
@@ -365,6 +380,8 @@ interface Progress {
   // False when the record exists but could not be used whole (unreadable, corrupt, wrong shape, over a limit, not a regular
   // file): the run then rewrites it, which heals it.
   readonly clean: boolean;
+  // The code of a failure to read or parse the record (PATH_ESCAPE or SCHEMA_INVALID). The run counts it as failed. Absent when none.
+  readonly failure?: ErrorCode | undefined;
 }
 
 function isMissing(error: unknown): boolean {
@@ -385,24 +402,35 @@ function readUpTo(fd: number, limit: number): Buffer | undefined {
   return total > limit ? undefined : buffer.subarray(0, total);
 }
 
-// The record, or an empty map when it is absent, unreadable, corrupt, over a limit or of the wrong shape: it is never an
-// error, because the cost of an empty record is one rescan. The file is opened without following a link and read through the
-// descriptor, at most maxBytes, so a symlink, a device, a huge file or a file that grows while it is read cannot hurt.
+// The record, or an empty map when it is absent, unreadable, corrupt, over a limit or of the wrong shape. None of these stops
+// the run, because the cost of an empty record is one rescan. A failure is returned as `failure` and counted by the run:
+// PATH_ESCAPE when the record cannot be opened or is not a regular file (a link, a device, a directory), SCHEMA_INVALID when
+// its content is not a record this module writes. An absent record is clean and counts nothing. The file is opened without
+// following a link and read through the descriptor, at most its reported size, so a symlink, a device, a huge file or a file
+// that grows while it is read cannot hurt.
 function readProgress(dir: string, maxBytes: number, maxEntries: number): Progress {
-  const empty = (clean: boolean): Progress => ({ checked: new Map<string, Checked>(), clean });
+  const empty = (clean: boolean, failure?: ErrorCode): Progress => ({
+    checked: new Map<string, Checked>(),
+    clean,
+    failure,
+  });
   let text: string;
   try {
     const fd = openSync(join(dir, RECONCILE_PROGRESS_FILE), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     try {
       const opened = fstatSync(fd);
-      if (!opened.isFile() || opened.size > maxBytes) {
-        return empty(false);
+      if (!opened.isFile()) {
+        return empty(false, "PATH_ESCAPE");
+      }
+      if (opened.size > maxBytes) {
+        return empty(false, "SCHEMA_INVALID");
       }
       // At most the size the descriptor reported: a record that grew since is longer than that and is refused, so the buffer
       // is as large as the record, never as large as the limit.
       const bytes = readUpTo(fd, opened.size);
+      // The record is longer than the size the descriptor reported, so it grew while it was read and is not a record this run uses.
       if (bytes === undefined) {
-        return empty(false);
+        return empty(false, "SCHEMA_INVALID");
       }
       text = bytes.toString("utf8");
     } finally {
@@ -410,25 +438,26 @@ function readProgress(dir: string, maxBytes: number, maxEntries: number): Progre
     }
   } catch (error: unknown) {
     // An absent record is a clean empty one. Any other failure to read it (a link, no permission) is an empty one that the
-    // run rewrites: the logs are rescanned and the record is replaced.
-    return empty(isMissing(error));
+    // run rewrites, and it is counted: the logs are rescanned and the record is replaced.
+    return isMissing(error) ? empty(true) : empty(false, "PATH_ESCAPE");
   }
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
   } catch {
-    // Corrupt content is an empty record, by design.
-    return empty(false);
+    // Corrupt content is an empty record, by design, and it is counted: the run rewrites the record and reports the failure.
+    return empty(false, "SCHEMA_INVALID");
   }
   if (!isRecord(parsed)) {
-    return empty(false);
+    return empty(false, "SCHEMA_INVALID");
   }
   const entries = Object.entries(parsed);
   if (entries.length > maxEntries) {
-    return empty(false);
+    return empty(false, "SCHEMA_INVALID");
   }
   const checked = new Map<string, Checked>();
   let clean = true;
+  let failure: ErrorCode | undefined;
   for (const [name, value] of entries) {
     if (
       LOG_NAME.test(name) &&
@@ -441,9 +470,10 @@ function readProgress(dir: string, maxBytes: number, maxEntries: number): Progre
       checked.set(name, { size: value["size"], mtimeMs: value["mtimeMs"] });
     } else {
       clean = false;
+      failure = "SCHEMA_INVALID";
     }
   }
-  return { checked, clean };
+  return { checked, clean, failure };
 }
 
 // The text of the record: the entries for logs that still exist (when the listing was complete; `present` is undefined
@@ -502,13 +532,18 @@ function writeRecordAtomically(maxBytes: number): (target: string, content: stri
   };
 }
 
-// Writes the record. Returns false when the write failed: a lost record is one rescan, so the caller counts it and goes on.
-function persistProgress(dir: string, content: string, write: (target: string, content: string) => void): boolean {
+// Writes the record. Returns undefined when it was written and AUDIT_WRITE_FAILED when the write failed: a lost record is one
+// rescan, so the caller counts it and goes on.
+function persistProgress(
+  dir: string,
+  content: string,
+  write: (target: string, content: string) => void,
+): ErrorCode | undefined {
   try {
     write(join(realpathSync(dir), RECONCILE_PROGRESS_FILE), content);
-    return true;
+    return undefined;
   } catch {
-    return false;
+    return "AUDIT_WRITE_FAILED";
   }
 }
 
@@ -554,9 +589,10 @@ function newestFirst(
   dir: string,
   names: readonly string[],
   expired: () => boolean,
-): { readonly ordered: string[]; readonly unreached: string[] } {
+): { readonly ordered: string[]; readonly unreached: string[]; readonly deferred: ReadonlyMap<string, ErrorCode> } {
   const stated: { readonly name: string; readonly mtimeMs: number }[] = [];
   const unreached: string[] = [];
+  const deferred = new Map<string, ErrorCode>();
   for (const [index, name] of names.entries()) {
     if (expired()) {
       unreached.push(...names.slice(index));
@@ -565,8 +601,9 @@ function newestFirst(
     let mtimeMs = Number.NEGATIVE_INFINITY;
     try {
       mtimeMs = lstatSync(join(dir, name)).mtimeMs;
-    } catch {
-      // Counted when the loop reaches this log and its own lstat fails again.
+    } catch (error: unknown) {
+      // The loop counts this log at its turn, with this code, and does not examine it.
+      deferred.set(name, error instanceof RealmError ? error.code : "PATH_ESCAPE");
     }
     stated.push({ name, mtimeMs });
   }
@@ -577,11 +614,26 @@ function newestFirst(
     }
     return a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
   });
-  return { ordered: stated.map((entry) => entry.name), unreached };
+  return { ordered: stated.map((entry) => entry.name), unreached, deferred };
 }
 
-function emptyResult(failed: number): ReconcileResult {
-  return { files: 0, appended: 0, failed, unfinished: [], complete: true, skippedUnchanged: 0, listingTruncated: false };
+function emptyResult(failures: readonly ReconcileFailure[]): ReconcileResult {
+  return {
+    files: 0,
+    appended: 0,
+    failed: failures.length,
+    unfinished: [],
+    complete: true,
+    skippedUnchanged: 0,
+    listingTruncated: false,
+    failures,
+  };
+}
+
+// The result of an audit directory that exists but could not be listed (a link, not a directory, no permission). No log was
+// examined and logs may exist that were not listed, so the run is incomplete. The cause is the PATH_ESCAPE failure.
+function unlistedResult(): ReconcileResult {
+  return { ...emptyResult([{ code: "PATH_ESCAPE" }]), complete: false, listingTruncated: true };
 }
 
 // Reconciles every `<stateDir>/audit/*.jsonl`, newest modified first. A missing audit directory is zero work. A failure on one
@@ -609,15 +661,15 @@ export function reconcileAuditLogs(stateDir: string, options: ReconcileOptions =
   try {
     const dirStat = lstatSync(dir);
     if (!dirStat.isDirectory() || dirStat.isSymbolicLink()) {
-      return emptyResult(1);
+      return unlistedResult();
     }
     listing = listLogs(dir, maxListed, expired);
   } catch (error: unknown) {
-    return emptyResult(isMissing(error) ? 0 : 1);
+    return isMissing(error) ? emptyResult([]) : unlistedResult();
   }
   const progress = readProgress(dir, maxProgressBytes, maxProgressEntries);
   const checked = progress.checked;
-  const { ordered, unreached } = newestFirst(dir, listing.names, expired);
+  const { ordered, unreached, deferred } = newestFirst(dir, listing.names, expired);
   // Entries of logs that are gone are dropped from the record, which needs a complete listing to know.
   const present = listing.truncated ? undefined : new Set(listing.names);
   let dirty = !progress.clean;
@@ -625,16 +677,20 @@ export function reconcileAuditLogs(stateDir: string, options: ReconcileOptions =
   let files = 0;
   let appended = 0;
   let failed = 0;
+  const failures: ReconcileFailure[] = [];
+  if (progress.failure !== undefined) {
+    failed += 1;
+    failures.push({ file: RECONCILE_PROGRESS_FILE, code: progress.failure });
+  }
   let skippedUnchanged = 0;
   const unfinished: string[] = [];
   // Logs whose content was scanned so far, against maxFiles. A refused log (not a regular file, an unsafe name, over a limit)
   // is not counted: it is never recorded, so counting it would let a crowd of refused logs use the cap every start.
   let considered = 0;
-  // Index of the log being handled, so an error that escapes the per-log guard still reports the rest as unfinished.
-  let reached = 0;
+  let outerFailure = false;
+  let outerCause: ErrorCode | undefined;
   try {
     for (const [index, name] of ordered.entries()) {
-      reached = index;
       if (expired()) {
         unfinished.push(...ordered.slice(index));
         break;
@@ -642,6 +698,12 @@ export function reconcileAuditLogs(stateDir: string, options: ReconcileOptions =
       const sessionId = name.slice(0, -JSONL_SUFFIX.length);
       const file = join(dir, name);
       try {
+        const deferredCode = deferred.get(name);
+        if (deferredCode !== undefined) {
+          // The stat in the ordering pass failed. The log is counted here, at its turn, with that code, and is not examined;
+          // the next run retries it.
+          throw makeRealmError(deferredCode);
+        }
         const stat = lstatSync(file);
         if (!stat.isFile() || stat.isSymbolicLink() || !SAFE_SESSION_ID.test(sessionId)) {
           failed += 1;
@@ -691,17 +753,18 @@ export function reconcileAuditLogs(stateDir: string, options: ReconcileOptions =
           checked.set(name, { size: after.size, mtimeMs: after.mtimeMs });
           dirty = true;
         }
-      } catch {
+      } catch (error: unknown) {
         // A per-file failure (unreadable file, refused path, failed append) is counted, not fatal: the other
-        // logs are still reconciled and the caller reports the count.
+        // logs are still reconciled and the caller reports the count with its code.
         failed += 1;
+        failures.push({ file: name, code: error instanceof RealmError ? error.code : "PATH_ESCAPE" });
       }
     }
-  } catch {
-    // An error outside the per-log guard (a throwing clock, say) ends the loop. It is counted, the logs from the current one
-    // on are reported unfinished, and the counts so far and the record are kept.
-    failed += 1;
-    unfinished.push(...ordered.slice(reached));
+  } catch (error: unknown) {
+    // An error outside the per-log guard (a throwing clock, say) ends the loop. The record is still written below; the call
+    // then throws AUDIT_WRITE_FAILED, carrying the cause's code when the error has one, rather than a count that looks complete.
+    outerFailure = true;
+    outerCause = error instanceof RealmError ? error.code : undefined;
   } finally {
     // One write of the record per run, whatever ended the run, and only when it changed, needs healing, or holds entries of
     // logs that are gone. A record that was read is within the limits, so an unchanged one needs no size check, and the body
@@ -709,12 +772,26 @@ export function reconcileAuditLogs(stateDir: string, options: ReconcileOptions =
     const stale = present !== undefined && [...checked.keys()].some((name) => !present.has(name));
     if (dirty || stale) {
       const body = recordBody(checked, present, maxProgressEntries, maxProgressBytes);
-      if (!persistProgress(dir, body.text, writeRecord)) {
+      const persistCode = persistProgress(dir, body.text, writeRecord);
+      if (persistCode !== undefined) {
         failed += 1;
+        failures.push({ file: RECONCILE_PROGRESS_FILE, code: persistCode });
       }
     }
   }
+  if (outerFailure) {
+    throw makeRealmError("AUDIT_WRITE_FAILED", outerCause);
+  }
   unfinished.push(...unreached);
   const complete = unfinished.length === 0 && !listing.truncated;
-  return { files, appended, failed, unfinished, complete, skippedUnchanged, listingTruncated: listing.truncated };
+  return {
+    files,
+    appended,
+    failed,
+    unfinished,
+    complete,
+    skippedUnchanged,
+    listingTruncated: listing.truncated,
+    failures,
+  };
 }

@@ -275,6 +275,10 @@ void test("the sweep does not enter a directory on another device (CRASH-01)", (
     false,
   );
   assert.ok(result.skipped >= 1, "the other-device directory is counted as skipped");
+  assert.ok(
+    audit.some((entry) => entry.path === shm && entry.outcome === "PATH_ESCAPE"),
+    "the other-device directory is audited as a refused path",
+  );
 });
 
 void test("a failing audit callback keeps the file and counts it (D-1402)", (t) => {

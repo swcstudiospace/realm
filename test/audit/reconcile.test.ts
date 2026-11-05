@@ -25,6 +25,7 @@ import {
   SCAN_CHECK_LINES,
   SCAN_CHUNK_BYTES,
 } from "../../src/audit/reconcile.js";
+import { RealmError } from "../../src/core/errors.js";
 import { atomicWriteFile, observeSha256 } from "../../src/fs/atomic-write.js";
 
 const SESSION = "11111111-2222-4333-8444-555555555555";
@@ -81,7 +82,7 @@ void test("CRASH-02: an admission with no result gets exactly one reconciliation
 
     const outcome = reconcileAuditLogs(stateDir);
 
-    assert.deepEqual(outcome, { files: 1, appended: 1, failed: 0, unfinished: [], complete: true, skippedUnchanged: 0, listingTruncated: false });
+    assert.deepEqual(outcome, { files: 1, appended: 1, failed: 0, unfinished: [], complete: true, skippedUnchanged: 0, listingTruncated: false, failures: [] });
     const lines = reconciliations(stateDir);
     assert.equal(lines.length, 1);
     assert.equal(lines[0]?.["tool"], "write");
@@ -95,7 +96,7 @@ void test("CRASH-02: a balanced admission and result pair gets no line", () => {
     admit(stateDir, "write", { path: "a.txt" });
     result(stateDir, "write", { path: "a.txt", bytes: 3, sha256: HEX64 });
 
-    assert.deepEqual(reconcileAuditLogs(stateDir), { files: 1, appended: 0, failed: 0, unfinished: [], complete: true, skippedUnchanged: 0, listingTruncated: false });
+    assert.deepEqual(reconcileAuditLogs(stateDir), { files: 1, appended: 0, failed: 0, unfinished: [], complete: true, skippedUnchanged: 0, listingTruncated: false, failures: [] });
     assert.equal(readEntries(stateDir).length, 2);
   });
 });
@@ -132,7 +133,7 @@ void test("CRASH-02: a second run appends nothing, because every admission is cl
     assert.equal(reconcileAuditLogs(stateDir).appended, 3);
     const before = readFileSync(auditFile(stateDir), "utf8");
 
-    assert.deepEqual(reconcileAuditLogs(stateDir), { files: 1, appended: 0, failed: 0, unfinished: [], complete: true, skippedUnchanged: 1, listingTruncated: false });
+    assert.deepEqual(reconcileAuditLogs(stateDir), { files: 1, appended: 0, failed: 0, unfinished: [], complete: true, skippedUnchanged: 1, listingTruncated: false, failures: [] });
     assert.equal(readFileSync(auditFile(stateDir), "utf8"), before);
   });
 });
@@ -157,7 +158,7 @@ void test("CRASH-02: lines with no phase, unparseable lines and a torn last line
     appendAudit(stateDir, { sessionId: SESSION, tool: "sweep", outcome: "ok", path: "x.tmp" });
     writeFileSync(auditFile(stateDir), `${readFileSync(auditFile(stateDir), "utf8")}not json\n[1,2]\n{"phase":"admission","tool":"wri`);
 
-    assert.deepEqual(reconcileAuditLogs(stateDir), { files: 1, appended: 0, failed: 0, unfinished: [], complete: true, skippedUnchanged: 0, listingTruncated: false });
+    assert.deepEqual(reconcileAuditLogs(stateDir), { files: 1, appended: 0, failed: 0, unfinished: [], complete: true, skippedUnchanged: 0, listingTruncated: false, failures: [] });
   });
 });
 
@@ -165,7 +166,7 @@ void test("CRASH-02: a result with no admission is ignored", () => {
   withStateDir((stateDir) => {
     result(stateDir, "write", { path: "a.txt", bytes: 1, sha256: HEX64 });
 
-    assert.deepEqual(reconcileAuditLogs(stateDir), { files: 1, appended: 0, failed: 0, unfinished: [], complete: true, skippedUnchanged: 0, listingTruncated: false });
+    assert.deepEqual(reconcileAuditLogs(stateDir), { files: 1, appended: 0, failed: 0, unfinished: [], complete: true, skippedUnchanged: 0, listingTruncated: false, failures: [] });
     assert.equal(readEntries(stateDir).length, 1);
   });
 });
@@ -192,7 +193,7 @@ void test("CRASH-02: each session's log is reconciled on its own", () => {
     appendAudit(stateDir, { sessionId: OTHER_SESSION, tool: "write", outcome: "ok", phase: "admission", path: "a.txt" });
     appendAudit(stateDir, { sessionId: OTHER_SESSION, tool: "write", outcome: "ok", phase: "result", path: "a.txt" });
 
-    assert.deepEqual(reconcileAuditLogs(stateDir), { files: 2, appended: 1, failed: 0, unfinished: [], complete: true, skippedUnchanged: 0, listingTruncated: false });
+    assert.deepEqual(reconcileAuditLogs(stateDir), { files: 2, appended: 1, failed: 0, unfinished: [], complete: true, skippedUnchanged: 0, listingTruncated: false, failures: [] });
     assert.equal(reconciliations(stateDir).length, 1);
     assert.equal(reconciliations(stateDir, OTHER_SESSION).length, 0);
   });
@@ -200,7 +201,7 @@ void test("CRASH-02: each session's log is reconciled on its own", () => {
 
 void test("CRASH-02: a missing audit directory is zero work", () => {
   withStateDir((stateDir) => {
-    assert.deepEqual(reconcileAuditLogs(stateDir), { files: 0, appended: 0, failed: 0, unfinished: [], complete: true, skippedUnchanged: 0, listingTruncated: false });
+    assert.deepEqual(reconcileAuditLogs(stateDir), { files: 0, appended: 0, failed: 0, unfinished: [], complete: true, skippedUnchanged: 0, listingTruncated: false, failures: [] });
     assert.deepEqual(readdirSync(stateDir), []);
   });
 });
@@ -211,7 +212,7 @@ void test("CRASH-02: a symlinked audit directory is refused and nothing is writt
     symlinkSync(outside, join(stateDir, "audit"), "dir");
     const before = readFileSync(join(outside, `${SESSION}.jsonl`), "utf8");
 
-    assert.deepEqual(reconcileAuditLogs(stateDir), { files: 0, appended: 0, failed: 1, unfinished: [], complete: true, skippedUnchanged: 0, listingTruncated: false });
+    assert.deepEqual(reconcileAuditLogs(stateDir), { files: 0, appended: 0, failed: 1, unfinished: [], complete: false, skippedUnchanged: 0, listingTruncated: true, failures: [{ code: "PATH_ESCAPE" }] });
     assert.equal(readFileSync(join(outside, `${SESSION}.jsonl`), "utf8"), before);
     assert.deepEqual(readdirSync(outside), [`${SESSION}.jsonl`]);
   });
@@ -225,7 +226,7 @@ void test("CRASH-02: a symlinked audit file is refused and the file it points at
     const before = readFileSync(target, "utf8");
     symlinkSync(target, auditFile(stateDir));
 
-    assert.deepEqual(reconcileAuditLogs(stateDir), { files: 0, appended: 0, failed: 1, unfinished: [], complete: true, skippedUnchanged: 0, listingTruncated: false });
+    assert.deepEqual(reconcileAuditLogs(stateDir), { files: 0, appended: 0, failed: 1, unfinished: [], complete: true, skippedUnchanged: 0, listingTruncated: false, failures: [] });
     assert.equal(readFileSync(target, "utf8"), before);
   });
 });
@@ -235,7 +236,7 @@ void test("CRASH-02: a log whose name is not a safe session id is refused, and t
     admit(stateDir, "write", { path: "a.txt" });
     writeFileSync(join(stateDir, "audit", ".hidden.jsonl"), `${JSON.stringify({ tool: "write", phase: "admission" })}\n`);
 
-    assert.deepEqual(reconcileAuditLogs(stateDir), { files: 1, appended: 1, failed: 1, unfinished: [], complete: true, skippedUnchanged: 0, listingTruncated: false });
+    assert.deepEqual(reconcileAuditLogs(stateDir), { files: 1, appended: 1, failed: 1, unfinished: [], complete: true, skippedUnchanged: 0, listingTruncated: false, failures: [] });
     assert.equal(readFileSync(join(stateDir, "audit", ".hidden.jsonl"), "utf8").split("\n").length, 2);
   });
 });
@@ -245,7 +246,7 @@ void test("CRASH-02: a log over the size cap is skipped and counted, not read", 
     admit(stateDir, "write", { path: "a.txt" });
     const before = readFileSync(auditFile(stateDir), "utf8");
 
-    assert.deepEqual(reconcileAuditLogs(stateDir, { maxFileBytes: 10 }), { files: 0, appended: 0, failed: 1, unfinished: [], complete: true, skippedUnchanged: 0, listingTruncated: false });
+    assert.deepEqual(reconcileAuditLogs(stateDir, { maxFileBytes: 10 }), { files: 0, appended: 0, failed: 1, unfinished: [], complete: true, skippedUnchanged: 0, listingTruncated: false, failures: [] });
     assert.equal(readFileSync(auditFile(stateDir), "utf8"), before);
   });
 });
@@ -389,6 +390,7 @@ void test("STARTUP budget: a deadline already in the past appends nothing and re
       complete: false,
       skippedUnchanged: 0,
       listingTruncated: false,
+      failures: [],
     });
     assert.deepEqual([readFileSync(auditFile(stateDir), "utf8"), readFileSync(auditFile(stateDir, OTHER_SESSION), "utf8")], before);
   });
@@ -403,14 +405,14 @@ void test("STARTUP budget: a deadline that expires between two logs reconciles t
       deadline: 1,
     });
 
-    assert.deepEqual(outcome, { files: 1, appended: 1, failed: 0, unfinished: [`${OTHER_SESSION}.jsonl`], complete: false, skippedUnchanged: 0, listingTruncated: false });
+    assert.deepEqual(outcome, { files: 1, appended: 1, failed: 0, unfinished: [`${OTHER_SESSION}.jsonl`], complete: false, skippedUnchanged: 0, listingTruncated: false, failures: [] });
     assert.equal(reconciliations(stateDir).length, 1);
     assert.equal(hasReconciliation(stateDir, OTHER_SESSION), false);
 
     // The log the first run completed is skipped through the progress record; the other one is scanned.
     const rest = reconcileAuditLogs(stateDir);
-    assert.deepEqual(rest, { files: 2, appended: 1, failed: 0, unfinished: [], complete: true, skippedUnchanged: 1, listingTruncated: false });
-    assert.deepEqual(reconcileAuditLogs(stateDir), { files: 2, appended: 0, failed: 0, unfinished: [], complete: true, skippedUnchanged: 2, listingTruncated: false });
+    assert.deepEqual(rest, { files: 2, appended: 1, failed: 0, unfinished: [], complete: true, skippedUnchanged: 1, listingTruncated: false, failures: [] });
+    assert.deepEqual(reconcileAuditLogs(stateDir), { files: 2, appended: 0, failed: 0, unfinished: [], complete: true, skippedUnchanged: 2, listingTruncated: false, failures: [] });
 
     // The lines of the two runs together are those one complete run appends.
     withStateDir((reference) => {
@@ -440,9 +442,9 @@ void test("STARTUP budget: a deadline that expires in the middle of a log append
       deadline: 1,
     });
 
-    assert.deepEqual(outcome, { files: 0, appended: 0, failed: 0, unfinished: [`${SESSION}.jsonl`], complete: false, skippedUnchanged: 0, listingTruncated: false });
+    assert.deepEqual(outcome, { files: 0, appended: 0, failed: 0, unfinished: [`${SESSION}.jsonl`], complete: false, skippedUnchanged: 0, listingTruncated: false, failures: [] });
     assert.equal(readFileSync(auditFile(stateDir), "utf8"), before, "a partial scan appends no line");
-    assert.deepEqual(reconcileAuditLogs(stateDir), { files: 1, appended: 1, failed: 0, unfinished: [], complete: true, skippedUnchanged: 0, listingTruncated: false });
+    assert.deepEqual(reconcileAuditLogs(stateDir), { files: 1, appended: 1, failed: 0, unfinished: [], complete: true, skippedUnchanged: 0, listingTruncated: false, failures: [] });
   });
 });
 
@@ -517,7 +519,7 @@ void test("STARTUP budget: restarts with the same small budget make progress thr
     assert.equal(third.complete, true);
 
     const fourth = reconcileAuditLogs(stateDir);
-    assert.deepEqual(fourth, { files: 5, appended: 0, failed: 0, unfinished: [], complete: true, skippedUnchanged: 5, listingTruncated: false });
+    assert.deepEqual(fourth, { files: 5, appended: 0, failed: 0, unfinished: [], complete: true, skippedUnchanged: 5, listingTruncated: false, failures: [] });
     for (const id of ids) {
       assert.equal(reconciliations(stateDir, id).length, 1, `${id} has exactly one reconciliation line`);
     }
@@ -554,7 +556,7 @@ void test("STARTUP budget: a log that changed since it was recorded is scanned a
   });
 });
 
-void test("STARTUP budget: a corrupt, wrong-shaped or unreadable record is ignored and rewritten", () => {
+void test("STARTUP budget: a corrupt or wrong-shaped record is ignored, counted as SCHEMA_INVALID, and rewritten", () => {
   const bad: readonly string[] = ["{not json", "[1,2,3]", "null", '{"x.jsonl": {"size": "a", "mtimeMs": 1}}', ""];
   for (const content of bad) {
     withStateDir((stateDir) => {
@@ -562,7 +564,7 @@ void test("STARTUP budget: a corrupt, wrong-shaped or unreadable record is ignor
       writeFileSync(join(stateDir, "audit", RECONCILE_PROGRESS_FILE), content);
 
       const outcome = reconcileAuditLogs(stateDir);
-      assert.deepEqual(outcome, { files: 1, appended: 1, failed: 0, unfinished: [], complete: true, skippedUnchanged: 0, listingTruncated: false });
+      assert.deepEqual(outcome, { files: 1, appended: 1, failed: 1, unfinished: [], complete: true, skippedUnchanged: 0, listingTruncated: false, failures: [{ file: RECONCILE_PROGRESS_FILE, code: "SCHEMA_INVALID" }] });
       assert.deepEqual(Object.keys(JSON.parse(readFileSync(join(stateDir, "audit", RECONCILE_PROGRESS_FILE), "utf8")) as object), [
         `${SESSION}.jsonl`,
       ]);
@@ -683,7 +685,29 @@ void test("STARTUP budget: a failed write of the record is counted and keeps the
         throw new Error("disk full");
       },
     });
-    assert.deepEqual(outcome, { files: 1, appended: 1, failed: 1, unfinished: [], complete: true, skippedUnchanged: 0, listingTruncated: false });
+    assert.deepEqual(outcome, { files: 1, appended: 1, failed: 1, unfinished: [], complete: true, skippedUnchanged: 0, listingTruncated: false, failures: [{ file: RECONCILE_PROGRESS_FILE, code: "AUDIT_WRITE_FAILED" }] });
+  });
+});
+
+void test("STARTUP budget: a clock that fails mid-pass ends the run with a typed AUDIT_WRITE_FAILED", () => {
+  withStateDir((stateDir) => {
+    admit(stateDir, "write", { path: "a.txt" });
+    let reads = 0;
+    assert.throws(
+      () =>
+        reconcileAuditLogs(stateDir, {
+          now: () => {
+            reads += 1;
+            if (reads > 1) {
+              throw new Error("clock failed");
+            }
+            return 0;
+          },
+          deadline: 1,
+        }),
+      (error: unknown) => error instanceof RealmError && error.code === "AUDIT_WRITE_FAILED",
+    );
+    assert.equal(reconciliations(stateDir).length, 0, "the failed pass appended nothing");
   });
 });
 
@@ -749,7 +773,7 @@ void test("STARTUP budget: the record, its temp files and other files in the aud
     writeFileSync(join(dir, "notes.txt"), "x");
     writeFileSync(join(dir, RECONCILE_PROGRESS_FILE), "{}");
     const outcome = reconcileAuditLogs(stateDir);
-    assert.deepEqual(outcome, { files: 1, appended: 1, failed: 0, unfinished: [], complete: true, skippedUnchanged: 0, listingTruncated: false });
+    assert.deepEqual(outcome, { files: 1, appended: 1, failed: 0, unfinished: [], complete: true, skippedUnchanged: 0, listingTruncated: false, failures: [] });
   });
 });
 
@@ -761,7 +785,8 @@ void test("STARTUP budget: a symlinked record is replaced by a regular file, and
     symlinkSync(target, join(stateDir, "audit", RECONCILE_PROGRESS_FILE));
 
     const outcome = reconcileAuditLogs(stateDir);
-    assert.equal(outcome.failed, 0);
+    assert.equal(outcome.failed, 1);
+    assert.deepEqual(outcome.failures, [{ file: RECONCILE_PROGRESS_FILE, code: "PATH_ESCAPE" }]);
     assert.equal(readFileSync(target, "utf8"), "keep me");
     assert.equal(lstatSync(join(stateDir, "audit", RECONCILE_PROGRESS_FILE)).isFile(), true);
     assert.deepEqual(recordKeys(stateDir), [`${SESSION}.jsonl`]);
@@ -773,7 +798,8 @@ void test("STARTUP budget: a record over the byte limit is replaced without bein
     admit(stateDir, "write", { path: "a.txt" });
     writeFileSync(join(stateDir, "audit", RECONCILE_PROGRESS_FILE), " ".repeat(5000));
     const outcome = reconcileAuditLogs(stateDir, { maxProgressBytes: 1000 });
-    assert.equal(outcome.failed, 0);
+    assert.equal(outcome.failed, 1);
+    assert.deepEqual(outcome.failures, [{ file: RECONCILE_PROGRESS_FILE, code: "SCHEMA_INVALID" }]);
     assert.ok(readFileSync(join(stateDir, "audit", RECONCILE_PROGRESS_FILE)).length <= 1000);
     assert.deepEqual(recordKeys(stateDir), [`${SESSION}.jsonl`]);
   });
@@ -847,11 +873,11 @@ void test("STARTUP budget: with more logs than the per-start scan cap, repeated 
     assert.deepEqual(ids.map(linesOf), [1, 1, 1, 1, 1, 1, 0]);
 
     const third = reconcileAuditLogs(stateDir, { maxFiles: 3 });
-    assert.deepEqual(third, { files: 7, appended: 1, failed: 0, unfinished: [], complete: true, skippedUnchanged: 6, listingTruncated: false });
+    assert.deepEqual(third, { files: 7, appended: 1, failed: 0, unfinished: [], complete: true, skippedUnchanged: 6, listingTruncated: false, failures: [] });
     assert.deepEqual(ids.map(linesOf), [1, 1, 1, 1, 1, 1, 1]);
 
     const fourth = reconcileAuditLogs(stateDir, { maxFiles: 3 });
-    assert.deepEqual(fourth, { files: 7, appended: 0, failed: 0, unfinished: [], complete: true, skippedUnchanged: 7, listingTruncated: false });
+    assert.deepEqual(fourth, { files: 7, appended: 0, failed: 0, unfinished: [], complete: true, skippedUnchanged: 7, listingTruncated: false, failures: [] });
   });
 });
 

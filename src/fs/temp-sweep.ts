@@ -15,6 +15,8 @@
 // Each removal is audited BEFORE the unlink, so a deletion is never unrecorded. If the audit
 // callback throws, the file is kept. The module reads no process state and no environment: the
 // clock, the owner, the age bound and the audit sink are all injected.
+// Each failure the sweep cannot carry out is audited with its catalogue code too. A sink that throws is reported in the
+// result as AUDIT_WRITE_FAILED.
 
 import {
   closeSync,
@@ -30,6 +32,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
+import { RealmError, type ErrorCode } from "../core/errors.js";
 import { assertDirectoryPinned, pinDirectory, TEMP_NAME_PATTERN } from "./atomic-write.js";
 import { PROC_FD_DIR } from "./canonicalize.js";
 import { bindRoot } from "./root.js";
@@ -45,11 +48,12 @@ const DEFAULT_SWEEP_MAX_ENTRIES = 500_000;
 export const DEFAULT_SWEEP_DEADLINE_MS = 15_000;
 
 // One audit line. There is no `phase`, so the line keeps the pre-stage audit shape and is never
-// mistaken for an admission. `outcome` is "ok" for the removal line and "CLEANUP_FAILED" for the
-// second line written when the unlink then failed.
+// mistaken for an admission. `outcome` is "ok" for the removal line. Any other outcome is the catalogue code of the
+// failure the line records: CLEANUP_FAILED for a directory or candidate that could not be read or removed, PATH_ESCAPE
+// for a path that was refused or could not be pinned, POLICY_DENIED for a root that was refused.
 export interface TempSweepAuditEntry {
   readonly tool: "temp-sweep";
-  readonly outcome: "ok" | "CLEANUP_FAILED";
+  readonly outcome: "ok" | ErrorCode;
   readonly path: string;
   readonly bytes: number;
 }
@@ -61,7 +65,7 @@ export interface TempSweepOptions {
   readonly minAgeMs: number;
   // Only files owned by this uid are removed. The caller supplies process.getuid().
   readonly ownerUid: number;
-  // Appends one audit line. A throw keeps the file and counts it as skipped.
+  // Appends one audit line. A throw keeps the file and counts it as skipped, and the result carries AUDIT_WRITE_FAILED.
   readonly audit: (entry: TempSweepAuditEntry) => void;
   // Directory entries to examine before the walk stops with `truncated`. Default 500 000.
   readonly maxEntries?: number;
@@ -76,16 +80,19 @@ export interface TempSweepRemoved {
   readonly bytes: number;
 }
 
-// skipped: roots that could not be bound or pinned, subdirectories not entered (a symlink, another
+// skipped: roots that could not be bound, pinned or re-checked, subdirectories not entered (a symlink, another
 // device, a failed open or check), and candidates kept because the audit callback threw.
 // failed: unlinks that failed, directories that could not be read or a candidate that could not be
 // examined, and a failed audit of the CLEANUP_FAILED line. Each failing step counts once.
+// errors: one AUDIT_WRITE_FAILED for each audit line the callback refused. The failure that line was to record is still
+// counted in skipped or failed.
 // unfinishedRoots: the roots given to the call whose walk was cut off by a budget, in order, followed by every root not
 // reached. Empty when `truncated` is false.
 export interface TempSweepResult {
   readonly removed: readonly TempSweepRemoved[];
   readonly skipped: number;
   readonly failed: number;
+  readonly errors: readonly ErrorCode[];
   readonly truncated: boolean;
   readonly unfinishedRoots: readonly string[];
 }
@@ -99,6 +106,7 @@ interface SweepState {
   readonly removed: TempSweepRemoved[];
   skipped: number;
   failed: number;
+  readonly errors: ErrorCode[];
   truncated: boolean;
   entries: number;
 }
@@ -114,6 +122,7 @@ export function sweepOrphanTempFiles(roots: readonly string[], options: TempSwee
     removed: [],
     skipped: 0,
     failed: 0,
+    errors: [],
     truncated: false,
     entries: 0,
   };
@@ -132,6 +141,7 @@ export function sweepOrphanTempFiles(roots: readonly string[], options: TempSwee
     removed: state.removed,
     skipped: state.skipped,
     failed: state.failed,
+    errors: state.errors,
     truncated: state.truncated,
     unfinishedRoots,
   };
@@ -140,6 +150,23 @@ export function sweepOrphanTempFiles(roots: readonly string[], options: TempSwee
 // A function call, not a property read, so the compiler does not keep the narrowing from the check before sweepRoot ran.
 function sweepTruncated(state: SweepState): boolean {
   return state.truncated;
+}
+
+// The catalogue code a caught error carries. A raw Node error carries none, so the site's fallback code is used.
+function codeOfError(error: unknown, fallback: ErrorCode): ErrorCode {
+  return error instanceof RealmError ? error.code : fallback;
+}
+
+// Records one failure as an audit line. The caller moves the count of the failure itself. A sink that throws leaves that
+// failure counted and surfaces AUDIT_WRITE_FAILED; the call returns false in that case.
+function recordFailure(state: SweepState, outcome: ErrorCode, path: string, bytes: number): boolean {
+  try {
+    state.options.audit({ tool: "temp-sweep", outcome, path, bytes });
+    return true;
+  } catch {
+    state.errors.push("AUDIT_WRITE_FAILED");
+    return false;
+  }
 }
 
 function sweepRoot(root: string, state: SweepState): void {
@@ -151,26 +178,30 @@ function sweepRoot(root: string, state: SweepState): void {
     realPath = pinned.realPath;
     dev = pinned.dev;
     ino = pinned.ino;
-  } catch {
+  } catch (error: unknown) {
     state.skipped += 1;
+    recordFailure(state, codeOfError(error, "POLICY_DENIED"), root, 0);
     return;
   }
   let fd: number;
   try {
     fd = pinDirectory(realPath, state.procFdDir);
-  } catch {
+  } catch (error: unknown) {
     state.skipped += 1;
+    recordFailure(state, codeOfError(error, "PATH_ESCAPE"), realPath, 0);
     return;
   }
   try {
     const opened = fstatSync(fd);
     if (opened.dev !== dev || opened.ino !== ino) {
       state.skipped += 1;
+      recordFailure(state, "PATH_ESCAPE", realPath, 0);
       return;
     }
     walk(fd, realPath, dev, state);
-  } catch {
+  } catch (error: unknown) {
     state.failed += 1;
+    recordFailure(state, codeOfError(error, "PATH_ESCAPE"), realPath, 0);
   } finally {
     closeSync(fd);
   }
@@ -182,8 +213,9 @@ function walk(fd: number, dirPath: string, rootDev: number, state: SweepState): 
   let dir: Dir;
   try {
     dir = opendirSync(viaDir, { bufferSize: DIR_READ_BATCH });
-  } catch {
+  } catch (error: unknown) {
     state.failed += 1;
+    recordFailure(state, codeOfError(error, "CLEANUP_FAILED"), dirPath, 0);
     return;
   }
   try {
@@ -197,8 +229,9 @@ function walk(fd: number, dirPath: string, rootDev: number, state: SweepState): 
       let entry: Dirent | null;
       try {
         entry = dir.readSync();
-      } catch {
+      } catch (error: unknown) {
         state.failed += 1;
+        recordFailure(state, codeOfError(error, "CLEANUP_FAILED"), dirPath, 0);
         return;
       }
       if (entry === null) {
@@ -231,17 +264,23 @@ function enterDirectory(viaDir: string, dirPath: string, name: string, rootDev: 
       join(viaDir, name),
       constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NONBLOCK | constants.O_NOFOLLOW,
     );
-  } catch {
+  } catch (error: unknown) {
     state.skipped += 1;
+    recordFailure(state, codeOfError(error, "PATH_ESCAPE"), childPath, 0);
     return;
   }
   try {
     let enter = false;
     try {
       assertDirectoryPinned(fd, childPath, state.procFdDir);
-      enter = fstatSync(fd).dev === rootDev;
-    } catch {
+      const device = fstatSync(fd).dev;
+      enter = device === rootDev;
+      if (!enter) {
+        recordFailure(state, "PATH_ESCAPE", childPath, 0);
+      }
+    } catch (error: unknown) {
       enter = false;
+      recordFailure(state, codeOfError(error, "PATH_ESCAPE"), childPath, 0);
     }
     if (!enter) {
       state.skipped += 1;
@@ -256,30 +295,32 @@ function enterDirectory(viaDir: string, dirPath: string, name: string, rootDev: 
 function considerFile(viaDir: string, dirPath: string, name: string, state: SweepState): void {
   const { options } = state;
   const via = join(viaDir, name);
+  const path = join(dirPath, name);
   let stats: Stats;
   try {
     stats = lstatSync(via);
-  } catch {
+  } catch (error: unknown) {
     state.failed += 1;
+    recordFailure(state, codeOfError(error, "CLEANUP_FAILED"), path, 0);
     return;
   }
   if (!stats.isFile() || stats.uid !== options.ownerUid || options.now - stats.mtimeMs < options.minAgeMs) {
     return;
   }
-  const path = join(dirPath, name);
   try {
     options.audit({ tool: "temp-sweep", outcome: "ok", path, bytes: stats.size });
   } catch {
+    // The removal is not recorded, so the file is kept. The result carries the refused line.
     state.skipped += 1;
+    state.errors.push("AUDIT_WRITE_FAILED");
     return;
   }
   try {
     unlinkSync(via);
   } catch {
     state.failed += 1;
-    try {
-      options.audit({ tool: "temp-sweep", outcome: "CLEANUP_FAILED", path, bytes: stats.size });
-    } catch {
+    // A second line records the failed unlink. If that line cannot be written, the failure is counted once more.
+    if (!recordFailure(state, "CLEANUP_FAILED", path, stats.size)) {
       state.failed += 1;
     }
     return;
