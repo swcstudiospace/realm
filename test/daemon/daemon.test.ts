@@ -3158,6 +3158,46 @@ void test("startup refuses a survivor whose workspace entry has no device and in
   );
 });
 
+void test("startup refuses a survivor whose workspace is gone: its container is removed and the refusal is logged with its code", async (t) => {
+  const fixture = makeDirs();
+  const sessionId = sessionOf(fixture);
+  const reports: StartupReport[] = [];
+  const lines: string[] = [];
+  const logger = createLogger({
+    sink: {
+      write: (line) => {
+        lines.push(line);
+        return true;
+      },
+    },
+    level: "info",
+    now: () => new Date(CLOCK_ISO),
+  });
+  const parts = daemonParts(fixture, {
+    ...survivorOptionsOf(fixture),
+    ...wideOptions(fixture),
+    logger,
+    onStartup: (report) => {
+      reports.push(report);
+    },
+  });
+  const containerId = await seedSurvivor(fixture, parts, fixture.ws);
+  // The workspace directory is removed after the container was created, so its record cannot be resolved at startup.
+  rmSync(fixture.ws, { recursive: true, force: true });
+  const daemon = await startDaemon(parts.options);
+  t.after(() => cleanupDaemon(daemon));
+  assert.equal(firstReport(reports).adopted, 0, "the session is not adopted");
+  assert.equal(firstReport(reports).containersRemoved, 1, "its container is removed");
+  assert.deepEqual(parts.containers.present(), [], "the container is not left in place");
+  assert.equal(parts.events.includes(`remove:${containerId}`), true);
+  assert.equal(parts.exec.callCount("start"), 0, "no start runs for it");
+  assert.equal(daemon.session(sessionId), undefined, "no session is registered");
+  assert.ok(
+    lines.some((line) => line.includes('"event":"startup.adoption_refused"') && line.includes('"code":"POLICY_DENIED"')),
+    "the refusal is logged with POLICY_DENIED",
+  );
+});
+
 void test("a request for an adopted session whose hydration is pending is refused with REALM_NOT_ACTIVE, and a hydrated one still answers", async (t) => {
   const fixture = makeDirs();
   const [a, b] = [projectDir(fixture, "a"), projectDir(fixture, "b")];

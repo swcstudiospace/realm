@@ -465,6 +465,7 @@ export function adoptionVerdictOver(
     try {
       resolved = deps.resolve({ workspaceRoot: record.workspaceRoot, sessionId: record.sessionId });
     } catch (error: unknown) {
+      deps.logger.info("startup.adoption_refused", { sessionId: record.sessionId, code: codeOf(error) });
       return { ok: false, property: "workspace-root", causeCode: codeOf(error) };
     }
     try {
