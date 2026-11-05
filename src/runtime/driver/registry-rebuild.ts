@@ -13,6 +13,7 @@ import { makeRealmError, RealmError } from "../../core/errors.js";
 import { sessionOfRealmSandbox } from "../openshell.js";
 import { channelPathsOf } from "./channel.js";
 import type { ComputeDriver, ComputeDriverConfig, RuntimeHost, SandboxRecord } from "./compute-driver.js";
+import { addCleanupNote, SUPERVISOR_NOT_STOPPED } from "./compute-driver-state.js";
 import { decodeLaunchAuthentication } from "./isolation/launch.js";
 import type { DriverLifecycle } from "./lifecycle.js";
 import { refusalScope } from "./refusal.js";
@@ -50,8 +51,13 @@ export async function rebuildRegistry(deps: RegistryRebuildDeps, adopted: readon
     try {
       respawned.push({ sandboxName, started: await respawnSupervisor(deps, sandboxName, containerId) });
     } catch (error: unknown) {
-      await Promise.allSettled(respawned.map(({ started }) => started.supervisor.stop()));
-      throw await destroySurvivor(deps.lifecycle, sandboxName, error);
+      const stops = await Promise.allSettled(respawned.map(({ started }) => started.supervisor.stop()));
+      const refusal = await destroySurvivor(deps.lifecycle, sandboxName, error);
+      // A supervisor that did not stop is named beside the failure, which it does not replace.
+      if (stops.some((stop) => stop.status === "rejected")) {
+        addCleanupNote(refusal, [SUPERVISOR_NOT_STOPPED]);
+      }
+      throw refusal;
     }
   }
   for (const { sandboxName, started } of respawned) {

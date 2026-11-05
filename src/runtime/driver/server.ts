@@ -14,12 +14,15 @@ import { chmodSync, lstatSync, mkdirSync, unlinkSync, type Stats } from "node:fs
 import { connect } from "node:net";
 import { dirname, isAbsolute } from "node:path";
 import { RealmError, makeRealmError } from "../../core/errors.js";
+import { addCleanupNote } from "./compute-driver-state.js";
 
 const PARENT_MODE = 0o700;
 const SOCKET_MODE = 0o600;
 // The umask that makes a newly bound socket 0600: no group or world bits are granted.
 const SOCKET_UMASK = 0o177;
 const PERMISSION_BITS = 0o777;
+// The problem a failed close after a verify failure reports. It names the catalogue code, as the note on the refusal does.
+const SOCKET_NOT_REMOVED = "The socket was not closed and removed (cleanup code CLEANUP_FAILED).";
 
 // One gRPC service bound on a socket, with its handlers.
 export interface BoundService {
@@ -69,8 +72,17 @@ export async function startSocketServer(
   try {
     verifySocket(socketPath, uid);
   } catch (error: unknown) {
-    await closeAndRemove(server, socketPath, graceMs).catch(() => undefined);
-    throw error;
+    const closed = await closeAndRemove(server, socketPath, graceMs).then(
+      () => true,
+      () => false,
+    );
+    if (closed) {
+      throw error;
+    }
+    // The refusal keeps its own code and cause. A socket that could not be closed and removed is named in its message.
+    const refusal = error instanceof RealmError ? error : makeRealmError("SCHEMA_INVALID");
+    addCleanupNote(refusal, [SOCKET_NOT_REMOVED]);
+    throw refusal;
   }
   let closing: Promise<void> | undefined;
   return {
@@ -126,18 +138,23 @@ async function clearStaleSocket(socketPath: string, uid: number): Promise<void> 
   unlinkSync(socketPath);
 }
 
-// True when a connection to the path succeeds, so a live server owns it. A refused or missing connection means nothing
-// listens there.
+// True when a connection to the path succeeds, so a live server owns it. A refused or missing connection means nothing listens
+// there. Any other connect failure does not show that nothing listens, so the probe rejects with LOCK_CONFLICT and the path is
+// refused, never removed.
 function isListening(socketPath: string): Promise<boolean> {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const probe = connect(socketPath);
     probe.once("connect", () => {
       probe.destroy();
       resolve(true);
     });
-    probe.once("error", () => {
+    probe.once("error", (error: Error) => {
       probe.destroy();
-      resolve(false);
+      if ("code" in error && (error.code === "ECONNREFUSED" || error.code === "ENOENT")) {
+        resolve(false);
+        return;
+      }
+      reject(makeRealmError("LOCK_CONFLICT"));
     });
   });
 }

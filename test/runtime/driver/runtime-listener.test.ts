@@ -100,6 +100,15 @@ void test("a regular file at the control socket path is not confirmed, and the w
   await assert.rejects(awaitRuntimeListener(socketPath, trust, 0), codeIs("OPENSHELL_START_FAILED"));
 });
 
+void test("a control socket path under a regular file fails the wait at once with OPENSHELL_START_FAILED, not at its deadline (phase 9.5, wave 3)", async (t) => {
+  const trust = tlsFixture(t);
+  const parent = join(scratchDirectory(t), "not-a-directory");
+  writeFileSync(parent, "");
+  const started = Date.now();
+  await assert.rejects(awaitRuntimeListener(join(parent, "control.sock"), trust, 15_000), codeIs("OPENSHELL_START_FAILED"));
+  assert.ok(Date.now() - started < 5_000, "the wait did not run to its deadline");
+});
+
 void test("a fake TLS listener is confirmed by a completed handshake, even when the wait starts before it binds (phase 9.5, wave 3)", async (t) => {
   const trust = tlsFixture(t);
   const socketPath = join(scratchDirectory(t), "control.sock");

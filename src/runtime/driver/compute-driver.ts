@@ -73,6 +73,8 @@ import {
   mkdirOrRefuse,
   removeLaunchMaterial,
   removeStateDir,
+  recordCode,
+  recordedCodeOf,
   SUPERVISOR_NOT_STOPPED,
 } from "./compute-driver-state.js";
 import { holdsWorkspace, sandboxOut } from "./compute-driver-output.js";
@@ -149,8 +151,9 @@ export interface RuntimeHost {
 
 export interface ComputeDriverDeps {
   readonly lifecycle: Pick<DriverLifecycle, "create" | "delete" | "stop">;
-  // The check a create runs before it touches the disk. The driver process passes a check that holds only after the startup adoption and the registry rebuild have finished, so a create
-  // that arrives while either runs is refused before it writes a state directory or launch material the adoption would then race. Omitted by a caller whose lifecycle needs no adoption.
+  // The check a create and a delete run before they touch the disk. The driver process passes a check that holds only after the startup
+  // adoption and the registry rebuild have finished, so a create or a delete that arrives while either runs is refused before it writes,
+  // removes or stops anything the adoption would then race. Omitted by a caller whose lifecycle needs no adoption.
   readonly requireSwept?: () => void;
   // The longest a List, Get or Watch poll waits for requireSwept to pass, in ms. Omitted, the driver waits READY_WAIT_MS.
   readonly readyWaitMs?: number;
@@ -423,7 +426,7 @@ export class ComputeDriver {
       assertRuntimeFilesAgree(files.bootstrap, files.descriptor);
     } catch (error: unknown) {
       logStageRefusal(scope, stage, error);
-      addCleanupNote(error, this.discardPrepared(plan));
+      addCleanupNote(error, this.discardPrepared(plan, scope));
       throw error;
     }
     let containerId: string;
@@ -434,10 +437,10 @@ export class ComputeDriver {
       });
     } catch (error: unknown) {
       logStageRefusal(scope, "create.container", error);
-      const problems = this.discardPrepared(plan);
+      const problems = this.discardPrepared(plan, scope);
       // A container this create made may still run and hold its workspace. A name already in use belongs to another container, which this create did not make.
       if (!(error instanceof RealmError && error.code === "SANDBOX_NAME_IN_USE")) {
-        const containerProblem = await this.containerProblem(sandboxName);
+        const containerProblem = await this.containerProblem(sandboxName, scope, "create.container");
         if (containerProblem !== undefined) {
           this.unremovedContainers.add(sandboxName);
           problems.push(containerProblem);
@@ -475,7 +478,7 @@ export class ComputeDriver {
       }
     } catch (error: unknown) {
       logStageRefusal(scope, "create.start", error);
-      addCleanupNote(error, await this.discardCreated(plan));
+      addCleanupNote(error, await this.discardCreated(plan, scope));
       throw error;
     }
     this.registry.set(plan.sandboxName, {
@@ -509,8 +512,10 @@ export class ComputeDriver {
 
   // Idempotent: a sandbox that is already gone deletes nothing and succeeds. A name whose container a different
   // registered sandbox holds deletes nothing, so a request never removes a sandbox it does not name. The host supervisor
-  // is stopped first, then the lifecycle removes the container, the state directory and the secret entries.
+  // is stopped first, then the lifecycle removes the container, the state directory and the secret entries. Like a create, it is
+  // refused with REALM_NOT_ACTIVE, before it reads or removes anything, while the startup rebuild runs.
   async deleteSandbox(request: SandboxIdentityRequest): Promise<{ deleted: boolean }> {
+    this.deps.requireSwept?.();
     const name = this.nameOf(request);
     if (name === undefined) {
       return { deleted: false };
@@ -576,7 +581,9 @@ export class ComputeDriver {
       if ((await this.deps.libpod.inspectContainer(containerName)) !== null) {
         return;
       }
-    } catch {
+    } catch (error: unknown) {
+      // An inspect that throws proves nothing. The reclaim is skipped, and the absence check of the same stage refuses the create; the code is logged.
+      recordCode(scope, check, recordedCodeOf(error));
       return;
     }
     try {
@@ -732,8 +739,9 @@ export class ComputeDriver {
     this.markSupervisorExited(containerName);
     try {
       await this.deps.lifecycle.stop(containerName);
-    } catch {
-      // The mark above already reports the sandbox as failed, and no caller can receive this error.
+    } catch (error: unknown) {
+      // The mark above already reports the sandbox as failed, and no caller can receive this error. The line the driver writes names its code.
+      this.recordEvent("supervisor stop failed", error);
     }
   }
 
@@ -775,46 +783,56 @@ export class ComputeDriver {
   }
 
   // Removes what a create made before its container existed: the state directory and the secret entries. Returns what was left
-  // in place, as cleanup problems. An empty list means every removal succeeded.
-  private discardPrepared(plan: CreatePlan): string[] {
-    const stateRemoved = removeStateDir(plan.spec.stateDir);
-    const materialRemoved = removeLaunchMaterial(this.config.secretRoot, plan.spec.sandboxName);
-    return stateRemoved && materialRemoved ? [] : [FILES_LEFT_IN_PLACE];
+  // in place, as cleanup problems. An empty list means every removal succeeded. A removal that failed is logged under its check.
+  private discardPrepared(plan: CreatePlan, scope: RefusalScope): string[] {
+    const stateFailure = removeStateDir(plan.spec.stateDir);
+    const materialFailure = removeLaunchMaterial(this.config.secretRoot, plan.spec.sandboxName);
+    if (stateFailure !== undefined) {
+      recordCode(scope, "create.state_dir", stateFailure);
+    }
+    if (materialFailure !== undefined) {
+      recordCode(scope, "create.launch_material", materialFailure);
+    }
+    return stateFailure === undefined && materialFailure === undefined ? [] : [FILES_LEFT_IN_PLACE];
   }
 
   // Removes what a create made after its container existed: the host supervisor, the container, and the files. Every removal is
-  // attempted, so one failure does not skip the rest. Returns what was left in place, each named as it is.
-  private async discardCreated(plan: CreatePlan): Promise<string[]> {
+  // attempted, so one failure does not skip the rest. Returns what was left in place, each named as it is. A failed removal is logged
+  // under the start check with its code.
+  private async discardCreated(plan: CreatePlan, scope: RefusalScope): Promise<string[]> {
     const problems: string[] = [];
     try {
       await this.stopSupervisor(plan.spec.sandboxName);
-    } catch {
+    } catch (error: unknown) {
+      recordCode(scope, "create.start", recordedCodeOf(error));
       problems.push(SUPERVISOR_NOT_STOPPED);
     }
     let deleted = true;
     try {
       await this.deps.lifecycle.delete(plan.spec.sandboxName);
-    } catch {
+    } catch (error: unknown) {
+      recordCode(scope, "create.start", recordedCodeOf(error));
       deleted = false;
     }
     if (!deleted) {
-      const containerProblem = await this.containerProblem(plan.spec.sandboxName);
+      const containerProblem = await this.containerProblem(plan.spec.sandboxName, scope, "create.start");
       if (containerProblem !== undefined) {
         problems.push(containerProblem);
         this.unremovedContainers.add(plan.spec.sandboxName);
       }
     }
-    problems.push(...this.discardPrepared(plan));
+    problems.push(...this.discardPrepared(plan, scope));
     return problems;
   }
 
   // The problem with a container that the lifecycle failed to remove. A lookup that still finds it names it as present; a lookup
-  // that fails names the removal as unconfirmed. Undefined means the container is gone.
-  private async containerProblem(containerName: string): Promise<string | undefined> {
+  // that fails names the removal as unconfirmed, and logs that lookup's code under the check. Undefined means the container is gone.
+  private async containerProblem(containerName: string, scope: RefusalScope, check: RefusalCheck): Promise<string | undefined> {
     try {
       const inspect = await this.deps.libpod.inspectContainer(containerName);
       return inspect === null ? undefined : CONTAINER_NOT_REMOVED;
-    } catch {
+    } catch (error: unknown) {
+      recordCode(scope, check, recordedCodeOf(error));
       return CONTAINER_UNCONFIRMED;
     }
   }
@@ -822,6 +840,12 @@ export class ComputeDriver {
   // The refusal scope of one RPC: its name, and the sink this driver was configured with.
   private scopeOf(rpc: "ValidateSandboxCreate" | "CreateSandbox"): RefusalScope {
     return refusalScope(rpc, this.config.refusalLog);
+  }
+
+  // Writes one line for a failure that no RPC returns to a caller: the event and the catalogue code, to the sink the driver was
+  // configured with. The scope supplies only that sink, so the line names no RPC.
+  recordEvent(event: "supervisor stop failed" | "watch poll failed", error: unknown): void {
+    this.scopeOf("CreateSandbox").log(`realm compute driver ${event}: code=${recordedCodeOf(error)}`);
   }
 }
 
@@ -905,8 +929,10 @@ function watchSandboxes(
         let next: Map<string, DriverSandboxOut>;
         try {
           next = await driver.snapshotAll();
-        } catch {
-          // A rejected poll, such as one that finds the rebuild still running, sends nothing and ends nothing: the next tick polls.
+        } catch (error: unknown) {
+          // A rejected poll, such as one that finds the rebuild still running, sends nothing and ends nothing: its code is logged, and
+          // the next tick polls.
+          driver.recordEvent("watch poll failed", error);
           return;
         }
         if (cancelled.signal.aborted) {

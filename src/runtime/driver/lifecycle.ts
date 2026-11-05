@@ -485,8 +485,10 @@ export class DriverLifecycle {
     let inspect: LibpodInspect | null;
     try {
       inspect = await this.libpod.inspectContainer(spec.sandboxName);
-    } catch {
-      return undefined;
+    } catch (error) {
+      // Not inspected, so the container is not proven to be this create's, and it stays. The failure is reported beside the
+      // original one, as a failed removal is.
+      return asRealmError(error).code;
     }
     if (inspect === null || !carriesSandboxLabels(inspect, spec.sandboxName)) {
       return undefined;
@@ -501,7 +503,7 @@ export class DriverLifecycle {
       await this.libpod.removeContainer(target, { force: true });
       return undefined;
     } catch (error) {
-      return codeOf(error);
+      return asRealmError(error).code;
     }
   }
 

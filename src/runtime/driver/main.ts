@@ -18,6 +18,7 @@ import {
   type ComputeDriverConfig,
   type RuntimeHost,
 } from "./compute-driver.js";
+import { addCleanupNote } from "./compute-driver-state.js";
 import { awaitRuntimeListener } from "./channel.js";
 import { installSeccompProfile } from "./seccomp-delivery.js";
 import { DriverLifecycle, type AdoptionRoots, type LifecycleLibpod } from "./lifecycle.js";
@@ -46,6 +47,8 @@ const SHA256_HEX_PATTERN = /^[a-f0-9]{64}$/;
 // The package manifest sits four levels above the built module, dist/src/runtime/driver/main.js. The driver runs from dist.
 // The release job bumps the manifest, so the version is read at startup, never copied into source.
 const PACKAGE_JSON_RELATIVE_PATH = "../../../../package.json";
+// The problem a failed close after a start failure reports. It names the catalogue code, as the note on the refusal does.
+const SERVER_NOT_CLOSED = "The server was not closed and its socket removed (cleanup code CLEANUP_FAILED).";
 
 export interface DriverProcessConfig {
   readonly socketPath: string;
@@ -268,9 +271,17 @@ export async function startDriver(config: DriverProcessConfig, seams: DriverStar
     await (seams.rebuild ?? rebuildRegistry)({ driver, lifecycle, config: config.driver, runtime }, adoption.adopted);
     rebuilt = true;
   } catch (error: unknown) {
-    // The failure that stopped the start is the one reported; a close that also fails must not replace it.
-    await server.close().catch(() => undefined);
-    throw error;
+    // The failure that stopped the start is the one reported. A close that also fails is named in its message, and does not replace it.
+    const closed = await server.close().then(
+      () => true,
+      () => false,
+    );
+    if (closed) {
+      throw error;
+    }
+    const refusal = error instanceof RealmError ? error : makeRealmError("SCHEMA_INVALID");
+    addCleanupNote(refusal, [SERVER_NOT_CLOSED]);
+    throw refusal;
   }
   return server;
 }
@@ -285,7 +296,10 @@ export async function main(): Promise<void> {
       () => {
         process.exit(0);
       },
-      () => {
+      (error: unknown) => {
+        // Only the catalogue code is printed. A raw error message can carry a path or a value.
+        const code = error instanceof RealmError ? error.code : "SCHEMA_INVALID";
+        process.stderr.write(`realm compute driver failed to stop: ${code}\n`);
         process.exit(1);
       },
     );

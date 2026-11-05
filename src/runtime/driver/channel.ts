@@ -28,6 +28,7 @@ import {
 import { join } from "node:path";
 import { makeRealmError } from "../../core/errors.js";
 import { sleep } from "../../core/timeout.js";
+import { lstatOrAbsent } from "./fs-guards.js";
 import {
   AUTH_FILE_NAME,
   BOOTSTRAP_FILE_NAME,
@@ -188,12 +189,11 @@ export async function awaitRuntimeListener(
   }
 }
 
+// A missing path is not yet a socket, so the wait goes on. Any other lstat failure refuses the start at once, instead of
+// leaving the caller to see only the deadline.
 function isSocket(path: string): boolean {
-  try {
-    return lstatSync(path).isSocket();
-  } catch {
-    return false;
-  }
+  const stat = lstatOrAbsent(path, "OPENSHELL_START_FAILED");
+  return stat !== null && stat.isSocket();
 }
 
 // The time one handshake probe may take: the probe bound, and never past the deadline. It is at least one millisecond.

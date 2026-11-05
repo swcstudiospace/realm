@@ -15,7 +15,7 @@ import { CONTAINER_CONTROL_SOCKET, type RuntimeVerificationKey } from "./runtime
 import { sandboxBindingOf } from "./sandbox-binding.js";
 import { secretDirOf } from "./secret-store.js";
 import type { ComputeDriverConfig, DriverSandboxMessage, ResourceQuantityMessage } from "./compute-driver.js";
-import { containerNameOf, WORKSPACE_ID_PATTERN } from "./compute-driver-state.js";
+import { containerNameOf, recordCode, recordedCodeOf, WORKSPACE_ID_PATTERN } from "./compute-driver-state.js";
 
 const CPU_QUANTITY_PATTERN = /^([0-9]+(?:\.[0-9]+)?)(m)?$/;
 const MEMORY_QUANTITY_PATTERN = /^([0-9]+)(Ki|Mi|Gi|Ti)?$/;
@@ -66,7 +66,7 @@ function resolveSandboxWorkspace(config: ComputeDriverConfig, sandboxName: strin
   if (!isSessionId(sessionId)) {
     throw refusal(scope, "create.workspace");
   }
-  const workspace = registeredWorkspaceOf(config, sessionId);
+  const workspace = registeredWorkspaceOf(config, sessionId, scope);
   if (workspace === undefined) {
     throw refusal(scope, "create.workspace");
   }
@@ -74,15 +74,16 @@ function resolveSandboxWorkspace(config: ComputeDriverConfig, sandboxName: strin
 }
 
 // The verified real path of the directory the registry entry for a session id names. Undefined when there is no entry, the entry
-// lies outside the ceiling, or the registry read or the verify throws. Reads only.
-function registeredWorkspaceOf(config: ComputeDriverConfig, sessionId: string): string | undefined {
+// lies outside the ceiling, or the registry read or the verify throws. A throw is recorded under the check with its code. Reads only.
+function registeredWorkspaceOf(config: ComputeDriverConfig, sessionId: string, scope: RefusalScope): string | undefined {
   try {
     const entry = readWorkspaceEntry(config.stateDir, sessionId);
     if (entry === null || !isInsideRoot(bindRoot(config.workspaceRoot), entry.workspaceRoot)) {
       return undefined;
     }
     return verifyWorkspaceEntry(entry).realPath;
-  } catch {
+  } catch (error: unknown) {
+    recordCode(scope, "create.workspace", recordedCodeOf(error));
     return undefined;
   }
 }

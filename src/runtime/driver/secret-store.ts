@@ -59,6 +59,7 @@ const SECRET_DIR_NAMES: readonly string[] = Object.freeze([CHANNEL_DIR_NAME, TLS
 const GROUP_OR_WORLD_BITS = 0o077;
 const PRIVATE_DIR_MODE = 0o700;
 const PRIVATE_FILE_MODE = 0o600;
+const LAUNCH_LEFT_IN_PLACE = "The launch material or its directory was left in place for the next adoption";
 
 // The sandbox's own secret directory. The name must be a realm sandbox name and one container-name-safe segment, which admits
 // no separator, so the join stays under the root.
@@ -76,7 +77,7 @@ export function secretDirExists(root: string, sandboxName: string): boolean {
 
 // Writes the launch material of a new sandbox. The root is created at 0700 when absent. The sandbox's directory must not
 // exist; it is created at 0700, and launch.json is written at 0600 through a staging file and a rename. A refusal after the
-// directory was created removes what this call wrote, so a failed write leaves nothing.
+// directory was created removes what this call wrote. A removal that fails is named on the refusal.
 export function writeLaunchMaterial(root: string, sandboxName: string, body: Uint8Array): void {
   const dir = secretDirOf(root, sandboxName);
   ensurePrivateRoot(root);
@@ -87,10 +88,12 @@ export function writeLaunchMaterial(root: string, sandboxName: string, body: Uin
     assertPrivateDir(dir);
     writeFileAtomically(dir, body);
   } catch (error: unknown) {
-    if (created) {
-      discardWritten(dir);
+    const refusal = error instanceof RealmError ? error : makeRealmError("SCHEMA_INVALID");
+    const cleanup = created ? discardWritten(dir) : undefined;
+    if (cleanup !== undefined) {
+      refusal.message = `${refusal.message} Cleanup failed: ${LAUNCH_LEFT_IN_PLACE} (cleanup code ${cleanup}).`;
     }
-    throw error instanceof RealmError ? error : makeRealmError("SCHEMA_INVALID");
+    throw refusal;
   }
 }
 
@@ -247,21 +250,28 @@ function writeFileAtomically(dir: string, body: Uint8Array): void {
   }
 }
 
-// Removes what a failed write of this directory left. Best effort: a failure here leaves the directory for the next adoption.
-function discardWritten(dir: string): void {
+// Removes what a failed write of this directory left. Best effort. Returns CLEANUP_FAILED when an entry or the directory is still
+// there after the attempt, so the caller can name it; undefined when everything it could remove is gone. A directory left behind is
+// removed by the next adoption.
+function discardWritten(dir: string): ErrorCode | undefined {
+  let failure: ErrorCode | undefined;
   const entries = SECRET_FILE_NAMES.map((name) => join(dir, name)).concat(SECRET_DIR_NAMES.map((name) => join(dir, name)));
   for (const entry of entries) {
     try {
       removeSecretEntries(dir, [entry]);
     } catch {
-      // Absent, or already removed by the failure. The directory removal below reports what remains.
+      failure = "CLEANUP_FAILED";
     }
   }
   try {
     rmdirSync(dir);
-  } catch {
-    // The directory still holds an entry the write did not make; it is left for the next adoption.
+  } catch (error: unknown) {
+    // A directory that is already gone is not a failure. Any other failure leaves it in place.
+    if (errorCodeOf(error) !== "ENOENT") {
+      failure = "CLEANUP_FAILED";
+    }
   }
+  return failure;
 }
 
 function assertPrivateDir(path: string): void {

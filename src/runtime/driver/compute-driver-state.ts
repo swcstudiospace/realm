@@ -3,10 +3,11 @@
 
 import { mkdirSync, realpathSync, rmSync } from "node:fs";
 import { basename, dirname, isAbsolute, join } from "node:path";
-import { makeRealmError, RealmError } from "../../core/errors.js";
+import { makeRealmError, RealmError, type ErrorCode } from "../../core/errors.js";
 import { CONTAINER_ID_PATTERN } from "../libpod-routes.js";
 import { isRealmSandboxName, REALM_SANDBOX_NAME_PREFIX } from "../openshell.js";
 import { isStrictlyInside, lstatOrAbsent, realPathOrRefuse } from "./fs-guards.js";
+import { refusal, type RefusalCheck, type RefusalScope } from "./refusal.js";
 import { removeSandboxSecrets } from "./secret-store.js";
 
 export const WORKSPACE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
@@ -35,24 +36,35 @@ export function mkdirOrRefuse(dir: string): void {
   }
 }
 
-// Removes the state directory a create made. Returns false when the removal failed, and the directory is left in place.
-export function removeStateDir(dir: string): boolean {
+// Removes the state directory a create made. Returns CLEANUP_FAILED when the removal failed, and the directory is left in place.
+export function removeStateDir(dir: string): "CLEANUP_FAILED" | undefined {
   try {
     rmSync(dir, { recursive: true, force: true });
-    return true;
+    return undefined;
   } catch {
-    return false;
+    return "CLEANUP_FAILED";
   }
 }
 
-// Removes the launch material and the channel a create stored. Returns false when the removal failed, and they are left in place.
-export function removeLaunchMaterial(secretRoot: string, sandboxName: string): boolean {
+// Removes the launch material and the channel a create stored. Returns CLEANUP_FAILED when the removal failed, and they are left in place.
+export function removeLaunchMaterial(secretRoot: string, sandboxName: string): "CLEANUP_FAILED" | undefined {
   try {
     removeSandboxSecrets(secretRoot, sandboxName);
-    return true;
+    return undefined;
   } catch {
-    return false;
+    return "CLEANUP_FAILED";
   }
+}
+
+// The catalogue code a failure is recorded under. A RealmError keeps its own code. Any other failure has none, so it is
+// SCHEMA_INVALID, as the sweep reports it.
+export function recordedCodeOf(error: unknown): ErrorCode {
+  return error instanceof RealmError ? error.code : "SCHEMA_INVALID";
+}
+
+// Writes one refusal line for a failure a create records without rethrowing it: the RPC, the check that met it, and the code.
+export function recordCode(scope: RefusalScope, check: RefusalCheck, code: ErrorCode): void {
+  refusal(scope, check, code);
 }
 
 // The cleanup problems a failed create reports. Each names only what is true of the removal that failed.

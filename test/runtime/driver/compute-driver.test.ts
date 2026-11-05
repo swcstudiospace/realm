@@ -386,7 +386,8 @@ void test("PRD-DRV-02: a create whose container lookup cannot be read is refused
   const { driver, lifecycle, name, stateDir, secretDir, lines } = await diskHarness(new UnreadableLibpod());
   const { stateSentinel, secretSentinel } = leaveStaleDirectories(stateDir, secretDir);
   await assert.rejects(driver.createSandbox(validSandbox({ name })), expectCode("SCHEMA_INVALID"));
-  assert.deepEqual(lines, [STATE_DIR_REFUSAL]);
+  // The failed inspect is recorded under the same check first; the absence check then refuses the create as it did.
+  assert.deepEqual(lines, [STATE_DIR_REFUSAL, STATE_DIR_REFUSAL]);
   assert.deepEqual(lifecycle.deletes, []);
   assert.equal(lifecycle.creates.length, 0);
   assert.equal(existsSync(stateSentinel), true);
@@ -1000,7 +1001,11 @@ async function assertWorkspaceRefused(h: RefusedHarness, name: string): Promise<
   assert.equal(h.libpod.inspectCalls, 0);
   assert.equal(lstatOrUndefined(join(h.config.sandboxStateRoot, name)), undefined);
   assert.equal(lstatOrUndefined(join(h.config.secretRoot, name)), undefined);
-  assert.ok(h.lines.length > 0 && h.lines.every((line) => line.endsWith("check=create.workspace code=SCHEMA_INVALID")), h.lines.join("\n"));
+  // Each line names create.workspace. A registry read or verify failure logs its own code before the refusal, which is SCHEMA_INVALID.
+  assert.ok(
+    h.lines.length > 0 && h.lines.every((line) => line.includes("check=create.workspace code=")) && h.lines.at(-1)?.endsWith("code=SCHEMA_INVALID") === true,
+    h.lines.join("\n"),
+  );
   h.lines.length = 0;
 }
 
@@ -1361,4 +1366,93 @@ void test("PRD-DRV-01: a Watch poll whose listing fails is retried on its next t
   assert.deepEqual(errors, []);
   assert.equal(failures, 0);
   call.emit("cancelled");
+});
+
+// Calls DeleteSandbox over the bound service the way gRPC does. Resolves with the wire code of its error, or with no code when it succeeds.
+function invokeDelete(driver: ComputeDriver, request: unknown): Promise<{ code?: number | undefined }> {
+  const handler = computeDriverImplementation(driver).DeleteSandbox;
+  assert.ok(handler !== undefined);
+  const remove = handler as unknown as (call: { request: unknown }, callback: (error: { code: number } | null) => void) => void;
+  return new Promise((resolve) => {
+    remove({ request }, (error) => {
+      resolve(error === null ? {} : { code: error.code });
+    });
+  });
+}
+
+void test("PRD-DRV-01: a DeleteSandbox during a held rebuild fails UNAVAILABLE, and the container is still present", { timeout: 10_000 }, async () => {
+  const { driver, name, startRebuild } = await rebuildHarness(SHORT_READY_WAIT_MS);
+  const { rebuilding, release } = startRebuild();
+  const refused = await invokeDelete(driver, { name });
+  assert.equal(refused.code, status.UNAVAILABLE);
+  release();
+  await rebuilding;
+  // The refusal removed nothing: the container and its registry entry still answer under the sandbox's name.
+  const answered = await invokeGet(driver, { name });
+  assert.equal(answered.code, undefined);
+  assert.equal(answered.name, name);
+});
+
+// A lifecycle whose stop refuses, as a container that cannot be stopped does. Its create and delete are the fake's.
+class StopRefusingLifecycle extends FakeLifecycle {
+  override stop(): Promise<void> {
+    return Promise.reject(makeRealmError("REALM_STOPPING"));
+  }
+}
+
+void test("a supervisor that exits while its container cannot be stopped logs the stop's code through the refusal log", async () => {
+  const lines: string[] = [];
+  const config = driverConfig({ refusalLog: (line) => lines.push(line) });
+  const { name } = bindProject(config, "project-a");
+  const libpod = new FakeLibpod();
+  const runtime = new FakeRuntime();
+  const driver = new ComputeDriver(config, { lifecycle: new StopRefusingLifecycle(libpod), libpod, runtime });
+  await driver.createSandbox(validSandbox({ name }));
+  const [supervisor] = runtime.supervisors;
+  assert.ok(supervisor !== undefined);
+  supervisor.exit();
+  await settle();
+  assert.deepEqual(lines, ["realm compute driver supervisor stop failed: code=REALM_STOPPING"]);
+});
+
+void test("PRD-DRV-01: a Watch poll the driver rejects is logged with its code, and the stream keeps polling", { timeout: 10_000 }, async () => {
+  const lines: string[] = [];
+  // Resolves once two rejected polls are logged, so the test waits for the next tick rather than for a guessed time.
+  let resolveTwo: () => void = () => undefined;
+  const twoLogged = new Promise<void>((resolve) => {
+    resolveTwo = () => {
+      resolve();
+    };
+  });
+  const config = driverConfig({
+    refusalLog: (line) => {
+      lines.push(line);
+      if (lines.length === 2) {
+        resolveTwo();
+      }
+    },
+  });
+  const libpod = new FakeLibpod();
+  const driver = new ComputeDriver(config, {
+    lifecycle: new FakeLifecycle(libpod),
+    libpod,
+    runtime: new FakeRuntime(),
+    // Every readiness check refuses, so each poll waits out its bound and is rejected.
+    requireSwept: () => {
+      throw makeRealmError("REALM_NOT_ACTIVE");
+    },
+    readyWaitMs: SHORT_READY_WAIT_MS,
+  });
+  const call = new FakeWatchCall();
+  const errors: unknown[] = [];
+  call.on("error", (error: unknown) => {
+    errors.push(error);
+  });
+  watchOf(driver, WATCH_TICK_MS)(call);
+  await twoLogged;
+  call.emit("cancelled");
+  assert.ok(lines.length >= 2);
+  assert.ok(lines.every((line) => line === "realm compute driver watch poll failed: code=REALM_NOT_ACTIVE"));
+  assert.deepEqual(call.written, []);
+  assert.deepEqual(errors, []);
 });
