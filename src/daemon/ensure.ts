@@ -103,38 +103,47 @@ function readLogFrom(stateDir: string, offset: number, length: number): string {
   }
 }
 
-// The catalogue code of the last complete daemon.failed line written at or after offset, or
-// undefined. A trailing line without a newline is not yet complete and is ignored. A log shorter than
-// offset, or a missing log, yields undefined. A LOCK_CONFLICT line is not a start failure: it is what a rival daemon
-// writes when it finds the socket owned, so a daemon is alive and the hosts waiting for it must keep waiting.
-// A line that is not that JSON event is ignored, so a startup record cannot be mistaken for a failure.
-export function daemonStartFailureSince(stateDir: string, offset: number): ErrorCode | undefined {
+// The result of scanning the startup log from an offset: the catalogue code of the last complete daemon.failed line, or
+// undefined, and how many complete lines were not JSON. A line that is not JSON is skipped and counted, never read as a failure.
+export interface StartFailureScan {
+  readonly code: ErrorCode | undefined;
+  readonly skippedLines: number;
+}
+
+// The scan of the last complete daemon.failed line written at or after offset. A trailing line without a newline is not yet
+// complete and is ignored. A log shorter than offset, or a missing log, yields no code. A LOCK_CONFLICT line is not a start
+// failure: it is what a rival daemon writes when it finds the socket owned, so a daemon is alive and the hosts waiting for it
+// must keep waiting. A line that is not that JSON event is ignored, so a startup record cannot be mistaken for a failure.
+export function daemonStartFailureSince(stateDir: string, offset: number): StartFailureScan {
   const size = daemonLogSize(stateDir);
   if (size <= offset) {
-    return undefined;
+    return { code: undefined, skippedLines: 0 };
   }
   const text = readLogFrom(stateDir, offset, size - offset);
   const lastNewline = text.lastIndexOf("\n");
   if (lastNewline < 0) {
-    return undefined;
+    return { code: undefined, skippedLines: 0 };
   }
-  let found: ErrorCode | undefined;
+  let code: ErrorCode | undefined;
+  let skippedLines = 0;
   for (const line of text.slice(0, lastNewline).split("\n")) {
-    const code = failedCode(line);
-    if (code !== undefined) {
-      found = code;
+    let value: unknown;
+    try {
+      value = JSON.parse(line);
+    } catch {
+      // Not JSON, so it cannot be a daemon.failed event: the line is skipped and counted in the scan.
+      skippedLines += 1;
+      continue;
+    }
+    const found = failedCode(value);
+    if (found !== undefined) {
+      code = found;
     }
   }
-  return found;
+  return { code, skippedLines };
 }
 
-function failedCode(line: string): ErrorCode | undefined {
-  let value: unknown;
-  try {
-    value = JSON.parse(line);
-  } catch {
-    return undefined;
-  }
+function failedCode(value: unknown): ErrorCode | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return undefined;
   }
@@ -199,7 +208,7 @@ export function reportingStartFailure(
     }
     const start = offset ?? daemonLogSize(stateDir);
     offset = start;
-    const code = daemonStartFailureSince(stateDir, start);
+    const { code } = daemonStartFailureSince(stateDir, start);
     if (code !== undefined) {
       throw makeRealmError(code);
     }

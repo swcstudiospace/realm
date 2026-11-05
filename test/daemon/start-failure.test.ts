@@ -31,26 +31,26 @@ void test("a failure line appended after an offset is returned as its code", (t)
   writeFileSync(daemonLogPath(stateDir), "earlier startup output\n");
   const offset = daemonLogSize(stateDir);
   appendFileSync(daemonLogPath(stateDir), failed("POLICY_DENIED"));
-  assert.equal(daemonStartFailureSince(stateDir, offset), "POLICY_DENIED");
+  assert.equal(daemonStartFailureSince(stateDir, offset).code, "POLICY_DENIED");
 });
 
 void test("a failure line written before the offset is ignored", (t) => {
   const stateDir = scratchStateDir(t);
   writeFileSync(daemonLogPath(stateDir), failed("POLICY_DENIED"));
   const offset = daemonLogSize(stateDir);
-  assert.equal(daemonStartFailureSince(stateDir, offset), undefined);
+  assert.equal(daemonStartFailureSince(stateDir, offset).code, undefined);
 });
 
 void test("a failure line without a trailing newline is ignored", (t) => {
   const stateDir = scratchStateDir(t);
   writeFileSync(daemonLogPath(stateDir), JSON.stringify({ level: "error", event: "daemon.failed", code: "POLICY_DENIED" }));
-  assert.equal(daemonStartFailureSince(stateDir, 0), undefined);
+  assert.equal(daemonStartFailureSince(stateDir, 0).code, undefined);
 });
 
 void test("an uncatalogued failure token is ignored", (t) => {
   const stateDir = scratchStateDir(t);
   writeFileSync(daemonLogPath(stateDir), `${JSON.stringify({ level: "error", event: "daemon.failed", code: "NOT_A_CODE" })}\n`);
-  assert.equal(daemonStartFailureSince(stateDir, 0), undefined);
+  assert.equal(daemonStartFailureSince(stateDir, 0).code, undefined);
 });
 
 void test("malformed JSON, null, an array, another event and a non-string code are not failures", (t) => {
@@ -63,7 +63,7 @@ void test("malformed JSON, null, an array, another event and a non-string code a
     JSON.stringify({ event: "daemon.failed", code: 1 }),
     "",
   ].join("\n"));
-  assert.equal(daemonStartFailureSince(stateDir, 0), undefined);
+  assert.equal(daemonStartFailureSince(stateDir, 0).code, undefined);
 });
 
 void test("a mixed log still reports the valid failure that follows the rejected records", (t) => {
@@ -71,13 +71,22 @@ void test("a mixed log still reports the valid failure that follows the rejected
   writeFileSync(daemonLogPath(stateDir), "realm daemon: POLICY_DENIED\n");
   appendFileSync(daemonLogPath(stateDir), "not json\n");
   appendFileSync(daemonLogPath(stateDir), failed("POLICY_DENIED"));
-  assert.equal(daemonStartFailureSince(stateDir, 0), "POLICY_DENIED");
+  assert.equal(daemonStartFailureSince(stateDir, 0).code, "POLICY_DENIED");
 });
 
 void test("a missing startup log has size 0 and yields no failure code", (t) => {
   const stateDir = scratchStateDir(t);
   assert.equal(daemonLogSize(stateDir), 0);
-  assert.equal(daemonStartFailureSince(stateDir, 0), undefined);
+  assert.equal(daemonStartFailureSince(stateDir, 0).code, undefined);
+});
+
+void test("an unparsable line is skipped and counted; a line that parses but is not a failure is not counted", (t) => {
+  const stateDir = scratchStateDir(t);
+  writeFileSync(
+    daemonLogPath(stateDir),
+    `startup output that is not JSON\n{"level":"info","event":"daemon.listening"}\n${failed("POLICY_DENIED")}`,
+  );
+  assert.deepEqual(daemonStartFailureSince(stateDir, 0), { code: "POLICY_DENIED", skippedLines: 1 });
 });
 
 void test("the wrapper passes an answering daemon through", async (t) => {
@@ -110,10 +119,10 @@ void test("the wrapper rejects with the daemon's code when a failure line appear
 void test("a LOCK_CONFLICT line is not a start failure: it is what a rival daemon writes when a live daemon owns the socket", (t) => {
   const stateDir = scratchStateDir(t);
   writeFileSync(daemonLogPath(stateDir), failed("LOCK_CONFLICT"));
-  assert.equal(daemonStartFailureSince(stateDir, 0), undefined);
+  assert.equal(daemonStartFailureSince(stateDir, 0).code, undefined);
   // A real failure on a later line is still reported, and the rival's line does not hide it.
   appendFileSync(daemonLogPath(stateDir), `${failed("POLICY_DENIED")}${failed("LOCK_CONFLICT")}`);
-  assert.equal(daemonStartFailureSince(stateDir, 0), "POLICY_DENIED");
+  assert.equal(daemonStartFailureSince(stateDir, 0).code, "POLICY_DENIED");
 });
 
 void test("a host that waits for a live daemon keeps waiting when another host's spawn lost the race", async (t) => {

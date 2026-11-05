@@ -209,6 +209,8 @@ void test("CRASH-04: the start's onStartup report is written as one stderr line 
         unfinishedAuditFiles: [],
         auditListingTruncated: false,
         maintenanceComplete: true,
+        failureCodes: [],
+        unattributedRecordCodes: [],
         failures: 0,
       });
       return Promise.resolve(startedWith(Promise.resolve()));
@@ -258,6 +260,8 @@ void test("CRASH-04: the startup line names the adopted count", async (t) => {
         unfinishedAuditFiles: [],
         auditListingTruncated: false,
         maintenanceComplete: true,
+        failureCodes: [],
+        unattributedRecordCodes: [],
         failures: 0,
       });
       return Promise.resolve(startedWith(Promise.resolve()));
@@ -291,6 +295,8 @@ void test("CRASH-04: the startup line has no id brackets when no container was r
         unfinishedAuditFiles: [],
         auditListingTruncated: false,
         maintenanceComplete: true,
+        failureCodes: [],
+        unattributedRecordCodes: [],
         failures: 2,
       });
       return Promise.resolve(startedWith(Promise.resolve()));
@@ -327,6 +333,8 @@ void test("STARTUP budget: the startup line says maintenanceComplete=false and n
         unfinishedAuditFiles: ["a.jsonl", "daemon.jsonl"],
         auditListingTruncated: false,
         maintenanceComplete: false,
+        failureCodes: [],
+        unattributedRecordCodes: [],
         failures: 0,
       });
       return Promise.resolve(startedWith(Promise.resolve()));
@@ -364,6 +372,8 @@ void test("CRASH-04: a failed reap's partial report is logged, then the start fa
         unfinishedAuditFiles: [],
         auditListingTruncated: false,
         maintenanceComplete: false,
+        failureCodes: [],
+        unattributedRecordCodes: [],
         reapFailure: "REALM_STOPPING",
         failures: 1,
       });
@@ -404,6 +414,8 @@ void test("STARTUP budget: a long unfinished list is sampled at ten names, the c
         unfinishedAuditFiles: names,
         auditListingTruncated: true,
         maintenanceComplete: false,
+        failureCodes: [],
+        unattributedRecordCodes: [],
         failures: 0,
       });
       return Promise.resolve(startedWith(Promise.resolve()));
@@ -574,7 +586,7 @@ void test("OBS-02: an early startup failure is one logger JSON line, and the ens
   assert.equal(value["event"], "daemon.failed");
   assert.equal(value["code"], "POLICY_DENIED");
   assert.equal(readFileSync(logPath, "utf8"), `${line}\n`);
-  assert.equal(daemonStartFailureSince(stateDir, 0), "POLICY_DENIED");
+  assert.equal(daemonStartFailureSince(stateDir, 0).code, "POLICY_DENIED");
 });
 
 void test("OBS-02: audit.head logs the chain head of a session's audit file when the session is created, not the daemon's", async (t) => {
@@ -730,6 +742,8 @@ void test("MULTI-03: the startup line carries registryEntriesRemoved and records
         unfinishedAuditFiles: [],
         auditListingTruncated: false,
         maintenanceComplete: true,
+        failureCodes: [],
+        unattributedRecordCodes: ["SCHEMA_INVALID"],
         failures: 0,
       });
       return Promise.resolve(startedWith(Promise.resolve()));

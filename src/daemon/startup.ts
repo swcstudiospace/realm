@@ -3,7 +3,7 @@
 // supplies the container seams, the store and the hydration; this module owns the order of the steps, their shared budget
 // and the report they produce (CRASH-01, CRASH-02, CRASH-04).
 
-import { statSync } from "node:fs";
+import { lstatSync, statSync } from "node:fs";
 import { isAbsolute, join, relative, sep } from "node:path";
 import { appendAudit } from "../audit/log.js";
 import { reconcileAuditLogs } from "../audit/reconcile.js";
@@ -11,6 +11,7 @@ import type { Policy, SessionRecord } from "../contract/validate.js";
 import type { ErrorCode } from "../core/errors.js";
 import type { StateSnapshot } from "../core/state-machine.js";
 import { withTimeout } from "../core/timeout.js";
+import { errnoOf } from "../fs/canonicalize.js";
 import { bindRoot, isInsideRoot, type PinnedRoot } from "../fs/root.js";
 import { DEFAULT_SWEEP_DEADLINE_MS, ORPHAN_TEMP_MIN_AGE_MS, sweepOrphanTempFiles } from "../fs/temp-sweep.js";
 import { hydrateAdopted } from "../lifecycle/adoption.js";
@@ -72,9 +73,16 @@ export interface StartupReport {
   readonly unattributedTempFiles: number;
   // Records the startup could not read. Their workspace is unknown, so they own no orphan (C9).
   readonly unattributedRecords: number;
+  // The catalogue codes of the records whose read threw, one per such record. `unattributedRecords` also counts a record that
+  // read as absent, which has no code.
+  readonly unattributedRecordCodes: readonly ErrorCode[];
   // Registry entries of earlier generations that the startup removed.
   readonly registryEntriesRemoved: number;
   readonly failures: number;
+  // The catalogue codes of the counted failures that carry one, in the order they happened: a registry cleanup, a sweep or a
+  // reconciliation that threw, a sweep root that did not bind, and a device that could not be read. `failures` also counts the
+  // entries the sweep and the reconciliation report as failed, which carry no code. A failed reap is `reapFailure`, not here.
+  readonly failureCodes: readonly ErrorCode[];
 }
 
 // The reap's container seams, as startDaemon builds them over the libpod client. The store is the caller's.
@@ -111,8 +119,10 @@ export async function runStartupMaintenance(deps: StartupMaintenanceDeps): Promi
   // The reap's progress outlives its call, so a reap that fails halfway still reports what it destroyed.
   const containerIds: string[] = [];
   let failures = 0;
+  const failureCodes: ErrorCode[] = [];
   let registryEntriesRemoved = 0;
   let unreadableRecords = 0;
+  let unreadableRecordCodes: readonly ErrorCode[] = [];
   let unattributedTempFiles = 0;
   let owners: readonly RecordOwner[] = [];
   let reaped: SelectiveReapResult;
@@ -121,6 +131,7 @@ export async function runStartupMaintenance(deps: StartupMaintenanceDeps): Promi
     const captured = captureOwners(deps.store);
     owners = captured.owners;
     unreadableRecords = captured.unreadable;
+    unreadableRecordCodes = captured.unreadableCodes;
     reaped = await reapStartupSelective({
       store: deps.store,
       listCandidates: deps.reap.listCandidates,
@@ -149,8 +160,10 @@ export async function runStartupMaintenance(deps: StartupMaintenanceDeps): Promi
       reapFailure: codeOf(error),
       unattributedTempFiles,
       unattributedRecords: unreadableRecords,
+      unattributedRecordCodes: unreadableRecordCodes,
       registryEntriesRemoved: 0,
       failures: 1,
+      failureCodes: [],
     });
     throw error;
   }
@@ -173,9 +186,10 @@ export async function runStartupMaintenance(deps: StartupMaintenanceDeps): Promi
         registryEntriesRemoved += 1;
       }
     }
-  } catch {
-    // A registry entry that cannot be read or removed is counted; the next start removes it.
+  } catch (error: unknown) {
+    // A registry entry that cannot be read or removed is counted with its code; the next start removes it.
     failures += 1;
+    failureCodes.push(codeOf(error));
   }
   for (const session of reaped.adopted) {
     deps.pending.add(session.sessionId);
@@ -190,7 +204,10 @@ export async function runStartupMaintenance(deps: StartupMaintenanceDeps): Promi
   } else {
     try {
       const sweepShareMs = Math.max(0, Math.floor((deadline - deps.monotonicNow()) / 2));
-      const swept = sweepOrphanTempFiles(sweepRootsOf(deps.policy.workspaceRoots, deps.stateDir), {
+      const sweepRoots = sweepRootsOf(deps.policy.workspaceRoots, deps.stateDir);
+      failures += sweepRoots.failureCodes.length;
+      failureCodes.push(...sweepRoots.failureCodes);
+      const swept = sweepOrphanTempFiles(sweepRoots.roots, {
         now: deps.now(),
         minAgeMs: ORPHAN_TEMP_MIN_AGE_MS,
         ownerUid,
@@ -214,9 +231,10 @@ export async function runStartupMaintenance(deps: StartupMaintenanceDeps): Promi
       truncated = swept.truncated;
       unfinishedSweepRoots = swept.unfinishedRoots;
       failures += swept.failed;
-    } catch {
-      // The sweep never throws on a bad root or file; this is a failure of the sweep itself, counted in the report.
+    } catch (error: unknown) {
+      // The sweep never throws on a bad root or file; this is a failure of the sweep itself, counted in the report with its code.
       failures += 1;
+      failureCodes.push(codeOf(error));
     }
   }
   let auditLinesReconciled = 0;
@@ -230,9 +248,10 @@ export async function runStartupMaintenance(deps: StartupMaintenanceDeps): Promi
     auditListingTruncated = reconciled.listingTruncated;
     auditComplete = reconciled.complete;
     failures += reconciled.failed;
-  } catch {
-    // A failure of the reconciliation itself is counted in the report; the lines it appended before it stopped are not.
+  } catch (error: unknown) {
+    // A failure of the reconciliation itself is counted in the report with its code; the lines it appended before it stopped are not.
     failures += 1;
+    failureCodes.push(codeOf(error));
     auditComplete = false;
   }
   // The gate opens once the reap, the sweep and the reconciliation are done; the adopted sessions then hydrate (hydrateAdopted).
@@ -252,8 +271,10 @@ export async function runStartupMaintenance(deps: StartupMaintenanceDeps): Promi
     maintenanceComplete: unfinishedSweepRoots.length === 0 && auditComplete,
     unattributedTempFiles,
     unattributedRecords: unreadableRecords,
+    unattributedRecordCodes: unreadableRecordCodes,
     registryEntriesRemoved,
     failures: failures + hydrated,
+    failureCodes,
   });
 }
 
@@ -264,16 +285,22 @@ interface RecordOwner {
 }
 
 // The records the reap is about to delete. A record that cannot be read has no known workspace, so it owns no orphan, and it
-// is counted.
-function captureOwners(store: Pick<SessionStore, "list" | "load">): { readonly owners: RecordOwner[]; readonly unreadable: number } {
+// is counted. The code of a read that threw is kept beside the count.
+function captureOwners(store: Pick<SessionStore, "list" | "load">): {
+  readonly owners: RecordOwner[];
+  readonly unreadable: number;
+  readonly unreadableCodes: ErrorCode[];
+} {
   const owners: RecordOwner[] = [];
   let unreadable = 0;
+  const unreadableCodes: ErrorCode[] = [];
   for (const sessionId of store.list()) {
-    let record: ReturnType<SessionStore["load"]>;
+    let record: SessionRecord | null;
     try {
       record = store.load(sessionId);
-    } catch {
+    } catch (error: unknown) {
       unreadable += 1;
+      unreadableCodes.push(codeOf(error));
       continue;
     }
     if (record === null) {
@@ -282,7 +309,7 @@ function captureOwners(store: Pick<SessionStore, "list" | "load">): { readonly o
       owners.push({ sessionId, workspaceRoot: record.workspaceRoot });
     }
   }
-  return { owners, unreadable };
+  return { owners, unreadable, unreadableCodes };
 }
 
 // The session whose recorded workspace contains the path: an owner whose root is the path or one of its ancestors, the longest
@@ -304,40 +331,78 @@ function ownerOfPath(owners: readonly RecordOwner[], path: string): string | und
 // A root that lies inside an earlier one is dropped only when that earlier root's walk reaches it, that is when both are on
 // the same device: the walk never crosses into another device, so a root on its own mount (for example /projects/ssd under
 // /projects) is kept. When either device cannot be read the root is kept too, because walking a directory twice costs time
-// and dropping one that is not covered costs the cleanup. A root that does not bind (for example a runtime directory that
-// was never created) is passed on as it is: the sweep counts it as skipped and walks nothing. `deviceOf` is the stat seam.
+// and dropping one that is not covered costs the cleanup. A root that does not exist yet (for example the runtime directory, which
+// is created only when a session writes its policy) has nothing to sweep: it is skipped and is not a failure. A root that exists but
+// does not bind is passed on as it is: the sweep counts it as skipped and walks nothing. Both failures are returned with their
+// catalogue codes. `deviceOf` is the stat seam.
 export function sweepRootsOf(
   workspaceRoots: readonly string[],
   stateDir: string,
   deviceOf: (path: string) => number = (path) => statSync(path).dev,
-): readonly string[] {
+): SweepRoots {
   const candidates = [...workspaceRoots, sessionsDirOf(stateDir), join(stateDir, "runtime"), join(stateDir, "audit")];
   const bound: PinnedRoot[] = [];
   const roots: string[] = [];
+  const failureCodes: ErrorCode[] = [];
   for (const candidate of candidates) {
+    if (isAbsent(candidate)) {
+      continue;
+    }
     let pinned: PinnedRoot;
     try {
       pinned = bindRoot(candidate);
-    } catch {
+    } catch (error: unknown) {
+      failureCodes.push(codeOf(error));
       roots.push(candidate);
       continue;
     }
-    if (bound.some((earlier) => isInsideRoot(earlier, pinned.realPath) && sameDevice(deviceOf, earlier.realPath, pinned.realPath))) {
+    let covered = false;
+    for (const earlier of bound) {
+      if (!isInsideRoot(earlier, pinned.realPath)) {
+        continue;
+      }
+      const relation = deviceRelation(deviceOf, earlier.realPath, pinned.realPath);
+      if (!relation.known) {
+        failureCodes.push(relation.failure);
+      } else if (relation.same) {
+        covered = true;
+        break;
+      }
+    }
+    if (covered) {
       continue;
     }
     bound.push(pinned);
     roots.push(pinned.realPath);
   }
-  return roots;
+  return { roots, failureCodes };
 }
 
-// True only when both devices are read and equal. A stat that throws means "not known to be covered", so it is false.
-function sameDevice(deviceOf: (path: string) => number, covering: string, nested: string): boolean {
+// Whether nothing is at the path. Only ENOENT counts: any other stat failure is left to bindRoot, which counts it as before.
+function isAbsent(path: string): boolean {
   try {
-    return deviceOf(covering) === deviceOf(nested);
-  } catch {
-    // The root is kept and walked on its own, which is the conservative answer to an unreadable device.
+    lstatSync(path);
     return false;
+  } catch (error: unknown) {
+    return errnoOf(error) === "ENOENT";
+  }
+}
+
+// The sweep roots, and the catalogue code of each failure met while finding them.
+export interface SweepRoots {
+  readonly roots: readonly string[];
+  readonly failureCodes: readonly ErrorCode[];
+}
+
+// Whether two roots lie on one device. A device that cannot be read gives an unknown relation, carrying the code of the failed stat.
+type DeviceRelation = { readonly known: true; readonly same: boolean } | { readonly known: false; readonly failure: ErrorCode };
+
+function deviceRelation(deviceOf: (path: string) => number, covering: string, nested: string): DeviceRelation {
+  try {
+    return { known: true, same: deviceOf(covering) === deviceOf(nested) };
+  } catch (error: unknown) {
+    // The root is kept and walked on its own, the conservative answer to an unreadable device; the caller counts the code.
+    return { known: false, failure: codeOf(error) };
   }
 }
 

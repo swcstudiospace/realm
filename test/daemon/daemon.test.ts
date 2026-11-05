@@ -678,6 +678,8 @@ void test("CRASH-01, CRASH-02, CRASH-04: startDaemon sweeps orphan temp files, r
       auditListingTruncated: false,
       maintenanceComplete: true,
       failures: 0,
+      failureCodes: [],
+      unattributedRecordCodes: ["SCHEMA_INVALID"],
     },
   ]);
 
@@ -791,6 +793,8 @@ void test("CRASH-04: a reap that fails after removing a container still reports 
       unfinishedAuditFiles: [],
       auditListingTruncated: false,
       maintenanceComplete: false,
+      failureCodes: [],
+      unattributedRecordCodes: [],
       reapFailure: "REALM_STOPPING",
       failures: 1,
     },
@@ -801,18 +805,19 @@ void test("D-1401: a nested sweep root on another device is kept, one on the sam
   const fixture = makeDirs();
   const child = join(fixture.ws, "ssd");
   mkdirSync(child);
-  const sessions = join(fixture.stateDir, "sessions");
-  const runtime = join(fixture.stateDir, "runtime");
-  const audit = join(fixture.stateDir, "audit");
-  const tail = [sessions, runtime, audit];
+  const tail = [join(fixture.stateDir, "sessions"), join(fixture.stateDir, "runtime"), join(fixture.stateDir, "audit")];
+  // The tail roots exist: an absent root is skipped by the sweep, so these assertions need them on disk.
+  for (const dir of tail) {
+    mkdirSync(dir, { recursive: true });
+  }
 
   assert.deepEqual(
-    sweepRootsOf([fixture.ws, child], fixture.stateDir, () => 7),
+    sweepRootsOf([fixture.ws, child], fixture.stateDir, () => 7).roots,
     [fixture.ws, ...tail],
     "the same device: the parent walk reaches the child",
   );
   assert.deepEqual(
-    sweepRootsOf([fixture.ws, child], fixture.stateDir, (path) => (path === child ? 8 : 7)),
+    sweepRootsOf([fixture.ws, child], fixture.stateDir, (path) => (path === child ? 8 : 7)).roots,
     [fixture.ws, child, ...tail],
     "another device: the parent walk stops at the mount, so the child is a root of its own",
   );
@@ -822,15 +827,39 @@ void test("D-1401: a nested sweep root on another device is kept, one on the sam
         throw new Error("stat failed");
       }
       return 7;
-    }),
+    }).roots,
     [fixture.ws, child, ...tail],
     "an unreadable device: the root is kept",
   );
   assert.deepEqual(
-    sweepRootsOf([fixture.ws, fixture.ws], fixture.stateDir, () => 7),
+    sweepRootsOf([fixture.ws, fixture.ws], fixture.stateDir, () => 7).roots,
     [fixture.ws, ...tail],
     "a repeated root is still dropped",
   );
+});
+
+void test("D-1401: the sweep roots return the code of a root that does not bind and of a device that cannot be read", () => {
+  const fixture = makeDirs();
+  const child = join(fixture.ws, "ssd");
+  mkdirSync(child);
+  // The refused root is a regular file: it exists and is not a directory, so it does not bind (POLICY_DENIED).
+  const refused = join(fixture.base, "refused");
+  writeFileSync(refused, "not a directory");
+  assert.equal(statSync(refused).isFile(), true, "the refused root is a file, so it exists and does not bind");
+  const sessions = join(fixture.stateDir, "sessions");
+  const runtime = join(fixture.stateDir, "runtime");
+  const audit = join(fixture.stateDir, "audit");
+  for (const dir of [sessions, runtime, audit]) {
+    mkdirSync(dir, { recursive: true });
+  }
+  const result = sweepRootsOf([fixture.ws, refused, child], fixture.stateDir, (path) => {
+    if (path === child) {
+      throw new Error("stat failed");
+    }
+    return 7;
+  });
+  assert.deepEqual(result.failureCodes, ["POLICY_DENIED", "SCHEMA_INVALID"], "a root that does not bind, then a device that cannot be read");
+  assert.deepEqual(result.roots, [fixture.ws, refused, child, sessions, runtime, audit], "every failed root is kept and walked");
 });
 
 void test("CRASH-02: the startup sweep removes an aged orphan temp file of the progress record in the audit directory, and never the record itself", async (t) => {
@@ -2416,6 +2445,26 @@ void test("T2 (f): stop() on StartedDaemon with two sessions calls controller.st
   await awaitDone(daemon);
 });
 
+void test("T2 (stop-log): a session whose stop fails is logged as daemon.session_stop_failed with its code, and stop() rejects with that code", async (t) => {
+  const fixture = makeDirs();
+  const stopFailureCodes: unknown[] = [];
+  const logger: Logger = {
+    ...nullLogger,
+    warn: (event, fields) => {
+      if (event === "daemon.session_stop_failed") {
+        stopFailureCodes.push(fields?.["code"]);
+      }
+    },
+  };
+  const daemon = await startDaemon(daemonParts(fixture, { logger }).options);
+  t.after(() => cleanupDaemon(daemon));
+  await sendRequest(daemon.socketPath, upRequest("i-up", fixture.ws));
+  entryOf(daemon, fixture).handle.controller.stop = () => Promise.reject(makeRealmError("PODMAN_MACHINE_DOWN"));
+
+  await assert.rejects(daemon.stop(), (error: unknown) => error instanceof RealmError && error.code === "PODMAN_MACHINE_DOWN");
+  assert.deepEqual(stopFailureCodes, ["PODMAN_MACHINE_DOWN"]);
+});
+
 void test("T2 (h): every status, up and down reply carries the sessionId of its selection", async (t) => {
   const fixture = makeDirs();
   const daemon = await startDaemon(daemonParts(fixture).options);
@@ -2669,6 +2718,24 @@ void test("MULTI-03: a record the startup cannot read is counted in unattributed
   assert.equal(firstReport(reports).unattributedRecords, 1);
   assert.equal(firstReport(reports).maintenanceComplete, true);
   assert.equal(snapshotStateOf(await sendRequest(daemon.socketPath, upRequest("bad-s", fixture.ws))), "active");
+});
+
+void test("MULTI-03: the startup report names the code of a record it could not read, beside unattributedRecords", async (t) => {
+  const fixture = makeDirs();
+  mkdirSync(join(fixture.stateDir, "sessions"), { recursive: true });
+  writeFileSync(join(fixture.stateDir, "sessions", "bad-session.json"), "{not json");
+  const reports: StartupReport[] = [];
+  const daemon = await startDaemon(
+    daemonParts(fixture, {
+      onStartup: (report) => {
+        reports.push(report);
+      },
+    }).options,
+  );
+  t.after(() => cleanupDaemon(daemon));
+
+  assert.equal(firstReport(reports).unattributedRecords, 1);
+  assert.deepEqual(firstReport(reports).unattributedRecordCodes, ["SCHEMA_INVALID"]);
 });
 
 void test("MULTI-03: a startup removes the registry entries an earlier generation left, and a second startup removes none", async (t) => {
