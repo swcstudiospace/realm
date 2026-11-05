@@ -190,6 +190,25 @@ void test("OBS-02: a request line falls back to stderr when the log path is not 
   assert.equal(h.lines.some((line) => line.includes("up.begin")), true);
 });
 
+void test("OBS-02: a request line the file sink refuses reaches stderr and is not counted as dropped", async (t) => {
+  const dir = tempDir(t);
+  const raw = validConfig(dir);
+  const env = writeConfig(dir, raw);
+  mkdirSync(String(raw["stateDir"]), { recursive: true });
+  mkdirSync(join(String(raw["stateDir"]), "requests.log"));
+  let dropped: number | undefined;
+  const h = harness(env, {
+    start: (options) => {
+      options.logger?.info("up.begin", { correlationId: "c1" });
+      dropped = options.logger?.droppedLines();
+      return Promise.resolve(startedWith(Promise.resolve()));
+    },
+  });
+  assert.equal(await runDaemon(h.deps), 0);
+  assert.equal(h.lines.some((line) => line.includes("up.begin")), true);
+  assert.equal(dropped, 0, "the stderr fallback delivers the line, so the sink does not report it as refused");
+});
+
 void test("CRASH-04: the start's onStartup report is written as one stderr line with the container ids", async (t) => {
   const dir = tempDir(t);
   const h = harness(writeConfig(dir, validConfig(dir)), {

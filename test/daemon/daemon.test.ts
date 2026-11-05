@@ -862,6 +862,20 @@ void test("D-1401: the sweep roots return the code of a root that does not bind 
   assert.deepEqual(result.roots, [fixture.ws, refused, child, sessions, runtime, audit], "every failed root is kept and walked");
 });
 
+void test("D-1401: a state directory whose runtime root is absent sweeps the other roots with no failure code, and omits that root", () => {
+  const fixture = makeDirs();
+  const sessions = join(fixture.stateDir, "sessions");
+  const runtime = join(fixture.stateDir, "runtime");
+  const audit = join(fixture.stateDir, "audit");
+  for (const dir of [sessions, audit]) {
+    mkdirSync(dir, { recursive: true });
+  }
+  assert.equal(existsSync(runtime), false, "the runtime root is absent");
+  const result = sweepRootsOf([fixture.ws], fixture.stateDir, () => 7);
+  assert.deepEqual(result.failureCodes, [], "an absent root is skipped, not a failure");
+  assert.deepEqual(result.roots, [fixture.ws, sessions, audit], "the absent runtime root is omitted");
+});
+
 void test("CRASH-02: the startup sweep removes an aged orphan temp file of the progress record in the audit directory, and never the record itself", async (t) => {
   const fixture = makeDirs();
   const audit = join(fixture.stateDir, "audit");
@@ -2445,14 +2459,14 @@ void test("T2 (f): stop() on StartedDaemon with two sessions calls controller.st
   await awaitDone(daemon);
 });
 
-void test("T2 (stop-log): a session whose stop fails is logged as daemon.session_stop_failed with its code, and stop() rejects with that code", async (t) => {
+void test("T2 (stop-log): a session whose stop fails is carried as the code on daemon.stopped, and stop() rejects with that code", async (t) => {
   const fixture = makeDirs();
-  const stopFailureCodes: unknown[] = [];
+  const stoppedCodes: unknown[] = [];
   const logger: Logger = {
     ...nullLogger,
-    warn: (event, fields) => {
-      if (event === "daemon.session_stop_failed") {
-        stopFailureCodes.push(fields?.["code"]);
+    info: (event, fields) => {
+      if (event === "daemon.stopped") {
+        stoppedCodes.push(fields?.["code"]);
       }
     },
   };
@@ -2462,7 +2476,7 @@ void test("T2 (stop-log): a session whose stop fails is logged as daemon.session
   entryOf(daemon, fixture).handle.controller.stop = () => Promise.reject(makeRealmError("PODMAN_MACHINE_DOWN"));
 
   await assert.rejects(daemon.stop(), (error: unknown) => error instanceof RealmError && error.code === "PODMAN_MACHINE_DOWN");
-  assert.deepEqual(stopFailureCodes, ["PODMAN_MACHINE_DOWN"]);
+  assert.deepEqual(stoppedCodes, ["PODMAN_MACHINE_DOWN"]);
 });
 
 void test("T2 (h): every status, up and down reply carries the sessionId of its selection", async (t) => {

@@ -509,14 +509,13 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
         // reports for its own teardown bound; the catalogue has no teardown-timeout code.
         await withTimeout(entry.handle.controller.stop(), TEARDOWN_TIMEOUT_MS, "REALM_STOPPING");
       } catch (error: unknown) {
-        // The callers that stop the daemon without awaiting the stop discard its result, so the failure is logged here.
+        // Callers that stop the daemon without awaiting the stop discard its result; daemon.stopped carries the failure code.
         const code = codeOf(error);
         failure ??= code;
-        logger.warn("daemon.session_stop_failed", { code });
       }
     }
     // Written after the teardown attempt, whether it finished or was refused, and before the socket is removed.
-    logger.info("daemon.stopped");
+    logger.info("daemon.stopped", { ...(failure === undefined ? {} : { code: failure }) });
     server.close();
     // A socket file that cannot be removed is the stop's refusal, never a silent loss. The daemon stops either way.
     const removal = removeSocketFile(socketPath);
