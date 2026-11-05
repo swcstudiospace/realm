@@ -12,12 +12,11 @@ concurrency:
   group: pages
   cancel-in-progress: false
 
-# Every job runs on the Omega CI runner pool, never on GitHub-hosted runners
-# (swcstudiospace/Omega-Prime docs/ci-runners.md).
+# Every job runs on a GitHub-hosted ubuntu-latest runner.
 jobs:
   build:
     name: Build site
-    runs-on: [self-hosted, linux, x64, omega-ci]
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: read # actions/checkout
@@ -59,7 +58,7 @@ jobs:
   deploy:
     name: Deploy to GitHub Pages
     needs: build
-    runs-on: [self-hosted, linux, x64, omega-ci]
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       pages: write # actions/deploy-pages: POST and GET /repos/{owner}/{repo}/pages/deployments

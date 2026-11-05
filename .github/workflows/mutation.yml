@@ -12,12 +12,11 @@ on:
 permissions:
   contents: read
 
-# Every job runs on the Omega CI runner pool, never on GitHub-hosted runners
-# (swcstudiospace/Omega-Prime docs/ci-runners.md).
+# Every job runs on a GitHub-hosted ubuntu-latest runner.
 jobs:
   mutation:
     name: Mutation
-    runs-on: [self-hosted, linux, x64, omega-ci]
+    runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
       contents: read
