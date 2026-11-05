@@ -128,7 +128,8 @@ export class AgentOsSupervisor {
   }
 
   // Starts the driver. A failed start is retried under the policy. Rejects with
-  // AGENTOS_CRASH_LOOP when the fifth consecutive failure holds the supervisor. Calling it
+  // AGENTOS_CRASH_LOOP when the fifth consecutive failure holds the supervisor, and with OPENSHELL_START_FAILED when a backoff
+  // wait rejects. Calling it
   // again after a hold is the explicit retry, and it starts a fresh count.
   async start(): Promise<void> {
     this.epoch += 1;
@@ -282,9 +283,9 @@ export class AgentOsSupervisor {
   }
 
   // Waits out one backoff delay through the injected sleep. The delay bounds the wait, so it has no timeout of its own, and
-  // stop() cancels it through inFlight. Whatever the sleep does, the wait ends.
+  // stop() cancels it through inFlight. A sleep that rejects rejects the wait with OPENSHELL_START_FAILED, so no retry follows it.
   private backoff(delay: number): Promise<void> {
-    return new Promise<void>((resolve) => {
+    return new Promise<void>((resolve, reject) => {
       const cancel = (): void => {
         finish();
       };
@@ -292,10 +293,15 @@ export class AgentOsSupervisor {
         this.inFlight.delete(cancel);
         resolve();
       };
+      // A sleep that rejects is not a wait that ended. The start rejects instead, so no retry runs after it.
+      const fail = (): void => {
+        this.inFlight.delete(cancel);
+        reject(makeRealmError("OPENSHELL_START_FAILED"));
+      };
       this.inFlight.add(cancel);
       Promise.resolve()
         .then(() => this.sleep(delay))
-        .then(finish, finish);
+        .then(finish, fail);
     });
   }
 

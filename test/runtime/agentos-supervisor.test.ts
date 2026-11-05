@@ -387,6 +387,53 @@ void test("stopping during the initial start's backoff wait leaves no restart af
   }
 });
 
+void test("a backoff wait whose sleep rejects is not a resolved wait: start rejects with OPENSHELL_START_FAILED and no retry follows (RT-04)", async () => {
+  const driver = new FakeAgentOsDriver();
+  let waits = 0;
+  const supervisor = new AgentOsSupervisor({
+    driver,
+    sessionId: "sess-supervisor",
+    callTimeoutMs: CALL_TIMEOUT_MS,
+    random: () => 1,
+    sleep: () => {
+      waits += 1;
+      return Promise.reject(new Error("sleep failed"));
+    },
+    now: () => 0,
+  });
+  driver.script("start", "reject");
+  await assert.rejects(
+    supervisor.start(),
+    (error: unknown) =>
+      error instanceof RealmError && error.code === "OPENSHELL_START_FAILED" && error.retryable,
+  );
+  assert.equal(waits, 1, "the failed sleep is the only wait");
+  assert.equal(driver.callCount("start"), 1, "no retry may follow a failed wait");
+});
+
+void test("a backoff wait that stop cancels still ends normally when its sleep rejects afterwards (RT-04, G1)", async () => {
+  const driver = new FakeAgentOsDriver();
+  let fail: (error: Error) => void = () => {};
+  const supervisor = new AgentOsSupervisor({
+    driver,
+    sessionId: "sess-supervisor",
+    callTimeoutMs: CALL_TIMEOUT_MS,
+    random: () => 1,
+    sleep: () =>
+      new Promise<void>((_resolve, reject) => {
+        fail = reject;
+      }),
+    now: () => 0,
+  });
+  driver.script("start", "reject");
+  const started = supervisor.start();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  await supervisor.stop();
+  fail(new Error("sleep failed"));
+  await started;
+  assert.equal(driver.callCount("start"), 1, "no retry may follow a stop");
+});
+
 void test("a runner that exited while the session was active is reported as AGENTOS_CRASH_LOOP at once, with no probe and no restart (RT-04)", async () => {
   const { driver, supervisor } = harness();
   await supervisor.start();

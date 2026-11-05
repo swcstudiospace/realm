@@ -32,7 +32,7 @@ async function main(): Promise<void> {
     clearInterval(timer);
     void vm.dispose().then(
       () => process.exit(0),
-      () => process.exit(1),
+      () => failFixed(),
     );
   };
   process.once("SIGTERM", shutdown);
