@@ -209,6 +209,28 @@ void test("OBS-02: a request line the file sink refuses reaches stderr and is no
   assert.equal(dropped, 0, "the stderr fallback delivers the line, so the sink does not report it as refused");
 });
 
+void test("P17-O4: an unrecognised REALM_LOG_LEVEL logs one daemon.log-level warn line", async (t) => {
+  const dir = tempDir(t);
+  const raw = validConfig(dir);
+  mkdirSync(String(raw["stateDir"]), { recursive: true });
+  let starts = 0;
+  const h = harness({ ...writeConfig(dir, raw), REALM_LOG_LEVEL: "verbose" }, {
+    start: () => {
+      starts += 1;
+      return Promise.resolve(startedWith(Promise.resolve()));
+    },
+  });
+  assert.equal(await runDaemon(h.deps), 0);
+  assert.equal(starts, 1);
+  const warns = readFileSync(join(String(raw["stateDir"]), "requests.log"), "utf8")
+    .split("\n")
+    .filter((line) => line.length > 0)
+    .map(entryOf)
+    .filter((entry) => entry["event"] === "daemon.log-level");
+  assert.equal(warns.length, 1);
+  assert.equal(warns[0]?.["level"], "warn");
+});
+
 void test("CRASH-04: the start's onStartup report is written as one stderr line with the container ids", async (t) => {
   const dir = tempDir(t);
   const h = harness(writeConfig(dir, validConfig(dir)), {
