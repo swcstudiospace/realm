@@ -7,7 +7,7 @@ import { performance } from "node:perf_hooks";
 import type { Policy } from "../../src/contract/validate.js";
 import { LifecycleController } from "../../src/lifecycle/controller.js";
 import type { StateSnapshot } from "../../src/core/state-machine.js";
-import { type ErrorCode, RealmError } from "../../src/core/errors.js";
+import { type ErrorCode, makeRealmError, RealmError } from "../../src/core/errors.js";
 import { bindWorkspaceUnderPolicy } from "../../src/fs/root.js";
 import { SessionStore } from "../../src/session/store.js";
 import { FakeExecutionService } from "../support/fake-execution.js";
@@ -480,4 +480,39 @@ void test("a background stop and destroy that both fail are kept, and the next d
   assert.equal(exec.resources().length, 0);
   assert.equal(store.load(SESSION), null);
   assertOvertaken(await creating);
+});
+
+void test("a bridge connect that fails after a stop began is kept, and the next destroy reports it as the cause of its own failure (C1, G-04)", async (t) => {
+  const { workspace, exec, bridge, controller } = fixture(t);
+  // The connect is held behind a gate, so the stop begins while the bridge handshake is in flight. The connect then fails with
+  // a port code that no background step records.
+  let connectCalled: () => void = () => undefined;
+  const inConnect = new Promise<void>((resolve) => {
+    connectCalled = resolve;
+  });
+  let openGate: () => void = () => undefined;
+  const gate = new Promise<void>((resolve) => {
+    openGate = () => {
+      resolve();
+    };
+  });
+  bridge.connect = async () => {
+    connectCalled();
+    await gate;
+    throw makeRealmError("PODMAN_MACHINE_DOWN");
+  };
+
+  const creating = controller.create(workspace);
+  await inConnect;
+  const stopped = await controller.stop();
+  openGate();
+  await creating;
+  assert.equal(stopped.state, "unbound");
+
+  exec.failNext("destroy", "OPENSHELL_START_FAILED");
+  await assert.rejects(
+    controller.destroy(),
+    (error: unknown) =>
+      error instanceof RealmError && error.code === "OPENSHELL_START_FAILED" && error.causeCode === "PODMAN_MACHINE_DOWN",
+  );
 });

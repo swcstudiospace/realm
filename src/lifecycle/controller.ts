@@ -675,15 +675,13 @@ export class LifecycleController {
     containerId: string | null,
     epoch: number,
   ): StateSnapshot {
-    // The transition is valid only for the startup that owns the session. A stop that began during the
-    // create, or a newer create that replaced it, owns the session now, so this create records nothing
-    // more and returns the state the owner left. The stop owns the outcome, so a port failure of the
-    // overtaken call is not reported, and the record already names any container that survives. A
-    // REALM_STOPPING from the stop call made here still reaches the caller (C1).
+    // The transition is valid only for the startup that owns the session. A stop or newer create that owns it instead
+    // changes no state here. Its port failure is kept for the next destroy, except a startup budget expiry.
     if (!this.ownsStartup(epoch)) {
       if (error instanceof RealmError && error.code === "REALM_STOPPING") {
         throw error;
       }
+      if (portFailureCode(error) !== "STARTUP_BUDGET_EXCEEDED") this.orphanFailure = portFailureCode(error);
       return this.machine.snapshot();
     }
     if (!(error instanceof RealmError)) {
@@ -696,9 +694,9 @@ export class LifecycleController {
     return this.machine.snapshot();
   }
 
-  // Disposes of a failed hydration, as failCreate does for a create. A stop, destroy or newer create that
-  // began during the hydration owns the session and the survivor, so this hydration records nothing more,
-  // and a REALM_STOPPING from the stop reaches the caller. Otherwise the session moves to error with the
+  // Disposes of a failed hydration, as failCreate does for a create. A stop, destroy or newer create that began during
+  // the hydration owns the session and the survivor, so this hydration changes no state and keeps its port failure for
+  // the next destroy. A REALM_STOPPING from the stop reaches the caller. Otherwise the session moves to error with the
   // port's code and the survivor is removed (removeSurvivor). The record keeps the containerId only while
   // that removal is unproven, so the next start retries the same container.
   private async failHydrate(
@@ -711,6 +709,7 @@ export class LifecycleController {
       if (error instanceof RealmError && error.code === "REALM_STOPPING") {
         throw error;
       }
+      if (portFailureCode(error) !== "STARTUP_BUDGET_EXCEEDED") this.orphanFailure = portFailureCode(error);
       return this.machine.snapshot();
     }
     this.machine.transition("error", portFailureCode(error));

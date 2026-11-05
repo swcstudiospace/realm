@@ -6,7 +6,7 @@ import { mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync } from "node:f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Policy } from "../../src/contract/validate.js";
-import { ERROR_CATALOGUE, RealmError } from "../../src/core/errors.js";
+import { ERROR_CATALOGUE, makeRealmError, RealmError } from "../../src/core/errors.js";
 import { LockTable } from "../../src/fs/locks.js";
 import { bindWorkspaceUnderPolicy } from "../../src/fs/root.js";
 import { hydrateAdopted } from "../../src/lifecycle/adoption.js";
@@ -309,6 +309,42 @@ void test("a stop that begins during hydration keeps the session out of active, 
   assert.equal(f.controller.snapshot().state, "unbound");
   assert.notEqual(f.store.load(SESSION)?.state, "active");
   assert.equal(f.bridge.callCount("connect"), 0);
+});
+
+void test("a bridge connect that fails after a stop began during hydration is kept, and the next destroy reports it as the cause of its own failure (C1, G-04)", async (t) => {
+  const f = fixture(t);
+  const survivor = await adoptSurvivor(f);
+  // The connect is held behind a gate, so the stop begins while the bridge handshake is in flight. The connect then fails with
+  // a port code that no background step records.
+  let connectCalled: () => void = () => undefined;
+  const inConnect = new Promise<void>((resolve) => {
+    connectCalled = resolve;
+  });
+  let openGate: () => void = () => undefined;
+  const gate = new Promise<void>((resolve) => {
+    openGate = () => {
+      resolve();
+    };
+  });
+  f.bridge.connect = async () => {
+    connectCalled();
+    await gate;
+    throw makeRealmError("PODMAN_MACHINE_DOWN");
+  };
+
+  const hydrating = f.controller.hydrate(survivor);
+  await inConnect;
+  const stopped = await f.controller.stop();
+  openGate();
+  await hydrating;
+  assert.equal(stopped.state, "unbound");
+
+  f.exec.failNext("destroy", "OPENSHELL_START_FAILED");
+  await assert.rejects(
+    f.controller.destroy(),
+    (error: unknown) =>
+      error instanceof RealmError && error.code === "OPENSHELL_START_FAILED" && error.causeCode === "PODMAN_MACHINE_DOWN",
+  );
 });
 
 void test("hydration refuses a workspace that is no longer the pinned directory, with no port call and no state change", async (t) => {
