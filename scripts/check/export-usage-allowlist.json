@@ -169,11 +169,6 @@
     },
     {
       "file": "src/daemon/ensure.ts",
-      "name": "DaemonPresence",
-      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
-    },
-    {
-      "file": "src/daemon/ensure.ts",
       "name": "daemonLogSize",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
