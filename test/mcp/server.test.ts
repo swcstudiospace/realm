@@ -103,6 +103,7 @@ void test("TOOL-05: malformed input and server logging go to stderr, never stdou
   assert.equal(malformed.stdout, "", "malformed input writes nothing to stdout");
   assert.deepEqual(malformed.stdoutLines, []);
   assert.match(malformed.stderr, /mcp: /, "the rejection is diagnosed on stderr");
+  assert.equal(malformed.stderr, "mcp: rejected malformed line reason=SCHEMA_INVALID\n", "the malformed-line diagnostic carries the SCHEMA_INVALID code");
 
   const mixed = await drive(h.dispatcher, ["{oops", request(2, "server/discover", {})]);
   assert.equal(mixed.stdoutLines.length, 1, "only the well-formed request replies");
@@ -375,7 +376,7 @@ void test("TOOL-05: a thrown defect answers -32603 on the wire and records only 
   const driven = await drive(dispatcher, [toolRequest(1, "status", {})]);
   assert.equal(driven.stdoutLines.length, 1);
   assert.deepEqual(parseLine(driven.stdoutLines[0] as string)["error"], { code: -32603, message: "Internal error" });
-  assert.equal(driven.stderr, "mcp: tool call failed\n");
+  assert.equal(driven.stderr, "mcp: tool call failed reason=internal\n");
 });
 
 void test("TOOL-05: a failing input stream rejects closed with MCP_INPUT_FAILED and writes only the fixed diagnostic", async () => {

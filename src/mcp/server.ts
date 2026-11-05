@@ -213,7 +213,7 @@ async function callTool(ctx: Context, era: McpEra, params: unknown): Promise<Met
     if (error instanceof RealmError) {
       return { result: toolErrorResult(era, error) };
     }
-    ctx.diagnostics.write("mcp: tool call failed\n");
+    ctx.diagnostics.write("mcp: tool call failed reason=internal\n");
     return { error: { code: -32603, message: "Internal error" } };
   }
 }
@@ -255,7 +255,7 @@ async function handleLine(ctx: Context, line: string, output: Writable): Promise
     message = JSON.parse(line);
   } catch {
     // Fixed text only: the line is untrusted bytes and may carry a credential.
-    ctx.diagnostics.write("mcp: rejected malformed line\n");
+    ctx.diagnostics.write("mcp: rejected malformed line reason=SCHEMA_INVALID\n");
     return;
   }
   const request = parseRequest(message);
