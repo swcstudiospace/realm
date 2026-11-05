@@ -15,7 +15,7 @@ const SESSION = "sess-budget";
 const RUNNING_CHILD: RunnerChild = {
   hasExited: () => false,
   exited: new Promise<void>(() => undefined),
-  terminate: () => Promise.resolve(),
+  terminate: () => Promise.resolve(undefined),
 };
 
 function recordingRunner(): { readonly runner: OpenShellRunner; readonly calls: { binary: string; timeoutMs: number }[] } {
@@ -59,6 +59,7 @@ function sleepingRunner(t: TestContext): RunnerChild {
     terminate: async () => {
       killGroup();
       await boundedWait(exited, "the runner stand-in exits", 5000);
+      return undefined;
     },
   };
 }

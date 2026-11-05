@@ -482,3 +482,13 @@ void test("audit verify (no selector): an empty or absent audit directory has no
     assert.deepEqual(reportOf(absent.stdout), { ok: false, files: [] });
   });
 });
+
+void test("audit verify (no selector): an audit path that is a file, not a directory (ENOTDIR), is unreadable and exits 1", async () => {
+  await withState(async (stateDir) => {
+    writeFileSync(join(stateDir, "audit"), "not a directory\n");
+    const unreadable = await runCli(["audit", "verify"], depsFor(stateDir));
+    assert.equal(unreadable.exitCode, 1);
+    assert.equal(unreadable.stderr, "realm audit verify: the audit directory cannot be read\n");
+    assert.deepEqual(reportOf(unreadable.stdout), { ok: false, files: [] });
+  });
+});

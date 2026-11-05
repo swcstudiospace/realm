@@ -1728,6 +1728,7 @@ function sleepingRunner(t: TestContext): RunnerChild {
     terminate: async () => {
       killGroup();
       await boundedWait(exited, "the runner stand-in exits", 5000);
+      return undefined;
     },
   };
 }

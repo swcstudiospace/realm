@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import type { SpawnOptions } from "node:child_process";
@@ -34,15 +34,17 @@ interface Spawned {
 }
 
 // A process the test controls. kill() records each signal, and a signal listed in exitsOn ends the process the way a
-// cooperative runner does. pid is absent, so the test never signals a real process group.
+// cooperative runner does. pid is absent unless a test gives one; such a test mocks process.kill, so no real group is
+// signalled.
 class FakeProcess extends EventEmitter implements RunnerProcess {
-  readonly pid = undefined;
   readonly signals: NodeJS.Signals[] = [];
   private readonly exitsOn: readonly NodeJS.Signals[];
+  readonly pid: number | undefined;
 
-  constructor(exitsOn: readonly NodeJS.Signals[]) {
+  constructor(exitsOn: readonly NodeJS.Signals[], pid: number | undefined) {
     super();
     this.exitsOn = exitsOn;
+    this.pid = pid;
   }
 
   kill(signal: NodeJS.Signals): boolean {
@@ -58,7 +60,7 @@ class FakeProcess extends EventEmitter implements RunnerProcess {
   }
 }
 
-function recorder(exitsOn: readonly NodeJS.Signals[] = []): {
+function recorder(exitsOn: readonly NodeJS.Signals[] = [], pid?: number): {
   readonly spawnProcess: SpawnProcess;
   readonly spawned: Spawned[];
   readonly processes: FakeProcess[];
@@ -67,7 +69,7 @@ function recorder(exitsOn: readonly NodeJS.Signals[] = []): {
   const processes: FakeProcess[] = [];
   const spawnProcess: SpawnProcess = (file, args, options) => {
     spawned.push({ file, args: [...args], options: { ...options } });
-    const proc = new FakeProcess(exitsOn);
+    const proc = new FakeProcess(exitsOn, pid);
     processes.push(proc);
     return proc;
   };
@@ -142,5 +144,44 @@ void test("terminate is bounded: a child that survives SIGKILL is abandoned, not
   const child = spawnRunnerChild({}, spawnProcess)(EXEC_ARGV);
   await child.terminate(20);
   assert.deepEqual(processes[0]?.signals, ["SIGTERM", "SIGKILL"]);
+  assert.equal(child.hasExited(), false);
+});
+
+// The group id a test gives its fake child. process.kill is mocked for these tests, so no real group receives a signal.
+const GROUP_PID = 4242;
+
+// A group signal that fails with the given code. process.kill is only called for the group, so the direct signal is not
+// affected.
+function groupSignalFails(t: TestContext, code: string): void {
+  t.mock.method(process, "kill", (): true => {
+    throw Object.assign(new Error(code), { code });
+  });
+}
+
+void test("terminate reports CLEANUP_FAILED when the process group cannot be signalled, and still signals the child", async (t) => {
+  groupSignalFails(t, "EPERM");
+  const { spawnProcess, processes } = recorder(["SIGTERM"], GROUP_PID);
+  const child = spawnRunnerChild({}, spawnProcess)(EXEC_ARGV);
+  const cleanup = await child.terminate(1000);
+  assert.equal(cleanup?.code, "CLEANUP_FAILED");
+  assert.deepEqual(processes[0]?.signals, ["SIGTERM"]);
+  assert.equal(child.hasExited(), true);
+});
+
+void test("a process group that is already gone (ESRCH) is not a failure, and the child is signalled directly", async (t) => {
+  groupSignalFails(t, "ESRCH");
+  const { spawnProcess, processes } = recorder(["SIGTERM"], GROUP_PID);
+  const child = spawnRunnerChild({}, spawnProcess)(EXEC_ARGV);
+  assert.equal(await child.terminate(1000), undefined);
+  assert.deepEqual(processes[0]?.signals, ["SIGTERM"]);
+  assert.equal(child.hasExited(), true);
+});
+
+void test("a child that outlives SIGKILL is reported as CLEANUP_FAILED once terminate gives up on it", async () => {
+  const { spawnProcess, processes } = recorder([]);
+  const child = spawnRunnerChild({}, spawnProcess)(EXEC_ARGV);
+  const cleanup = await child.terminate(20);
+  assert.deepEqual(processes[0]?.signals, ["SIGTERM", "SIGKILL"]);
+  assert.equal(cleanup?.code, "CLEANUP_FAILED");
   assert.equal(child.hasExited(), false);
 });

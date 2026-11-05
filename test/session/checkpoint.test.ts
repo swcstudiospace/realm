@@ -958,6 +958,43 @@ void test("a take-over whose restoring link fails for another reason is refused 
   assert.equal(readFileSync(join(sessionDirOf(f), tombstones[0] ?? ""), "utf8"), replacement);
 });
 
+// Makes the liveness probe of one pid fail with the given code. Every other kill passes through unchanged.
+function seamProbe(t: TestContext, pid: number, code: string): void {
+  const realKill = process.kill.bind(process);
+  t.mock.method(process, "kill", (target: number, signal?: string | number): true => {
+    if (target === pid && signal === 0) {
+      throw Object.assign(new Error(code), { code });
+    }
+    return realKill(target, signal);
+  });
+}
+
+void test("an owner whose liveness cannot be proven keeps its lock: an unexpected probe failure is LOCK_CONFLICT", (t) => {
+  const f = fixture(t);
+  const lock = publishStaleLock(f);
+  const before = readFileSync(lock, "utf8");
+  seamProbe(t, DEAD_PID, "EACCES");
+
+  assert.throws(() => acquireSessionLock(sessionDirOf(f)), codeIs("LOCK_CONFLICT"));
+
+  assert.equal(readFileSync(lock, "utf8"), before, "the lock of an owner that cannot be proven gone is not taken over");
+  assert.deepEqual(readdirSync(sessionDirOf(f)).filter((name) => name.startsWith(".lock.stale-")), []);
+});
+
+void test("a start whose lock owner cannot be proven gone is refused as REALM_NOT_ACTIVE, and the lock is kept", async (t) => {
+  const f = fixture(t);
+  const lock = publishStaleLock(f);
+  const before = readFileSync(lock, "utf8");
+  seamProbe(t, DEAD_PID, "EIO");
+
+  await assert.rejects(
+    withStartLock(f.state, f.entry.sessionId, () => Promise.resolve("started"), () => []),
+    codeIs("REALM_NOT_ACTIVE"),
+  );
+
+  assert.equal(readFileSync(lock, "utf8"), before);
+});
+
 void test("a state root whose path holds a symlink loop is refused as SCHEMA_INVALID, not climbed past the loop", async (t) => {
   const f = fixture(t);
   writeFileSync(join(f.ws, "a.txt"), "content");

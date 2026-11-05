@@ -387,13 +387,21 @@ function ownerProvablyGone(owner: OwnerRecord, bootId: string): boolean {
   return ticks !== undefined && String(ticks) !== owner.startTicks;
 }
 
+// Whether the pid names a live process. ESRCH proves it gone, and EPERM means it exists under another user. Any other
+// failure leaves the owner unproven, so it is LOCK_CONFLICT, the code a take-over refuses with.
 function processAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
   } catch (error) {
-    // EPERM means the process exists under another user.
-    return errnoOf(error) === "EPERM";
+    const code = errnoOf(error);
+    if (code === "ESRCH") {
+      return false;
+    }
+    if (code === "EPERM") {
+      return true;
+    }
+    throw makeRealmError("LOCK_CONFLICT");
   }
 }
 

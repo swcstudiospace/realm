@@ -4,8 +4,9 @@
 // stdio is ignored, so no byte it writes is captured, logged or copied into an error.
 
 import { spawn, type SpawnOptions } from "node:child_process";
-import { makeRealmError } from "../core/errors.js";
+import { makeRealmError, type RealmError } from "../core/errors.js";
 import { withTimeout } from "../core/timeout.js";
+import { errnoOf } from "../fs/canonicalize.js";
 import type { EnvironmentLike } from "../session/paths.js";
 import { selectOpenShellEnvironment } from "./session-execution.js";
 
@@ -32,8 +33,9 @@ export interface RunnerChild {
   // Settles once the process has exited, or once its spawn failed. It never rejects.
   readonly exited: Promise<void>;
   // Stops the process: SIGTERM, then SIGKILL when it has not exited within graceMs. Each wait is bounded by graceMs,
-  // so the call always settles. It never rejects and never reports the child's output.
-  terminate(graceMs: number): Promise<void>;
+  // so the call always settles. It never rejects and never reports the child's output. It resolves to CLEANUP_FAILED
+  // when the process group could not be signalled for a reason other than ESRCH, or when the child outlives SIGKILL.
+  terminate(graceMs: number): Promise<RealmError | undefined>;
 }
 
 // Starts the runner child for one argv (argv[0] is the binary, with no shell). Throws when it cannot be started.
@@ -91,34 +93,46 @@ function track(proc: RunnerProcess): RunnerChild {
     hasExited: () => exited,
     exited: gone,
     terminate: async (graceMs) => {
+      let cleanup: RealmError | undefined;
       if (!exited) {
-        signalRunner(proc, "SIGTERM");
+        cleanup = signalRunner(proc, "SIGTERM");
       }
       await settleWithin(gone, graceMs);
       if (!exited) {
-        signalRunner(proc, "SIGKILL");
+        const killed = signalRunner(proc, "SIGKILL");
+        cleanup ??= killed;
       }
       await settleWithin(gone, graceMs);
+      // A child that outlives the SIGKILL wait is abandoned, which is a failed cleanup.
+      if (!exited) {
+        cleanup ??= makeRealmError("CLEANUP_FAILED");
+      }
+      return cleanup;
     },
   };
 }
 
 // Sends one signal to the runner child and, on POSIX, to the process group it leads. When the group cannot be
-// signalled, the child alone gets the signal.
-function signalRunner(proc: RunnerProcess, name: NodeJS.Signals): void {
+// signalled, the child alone gets the signal. A group that is already gone (ESRCH) is not a failure. Any other errno
+// is returned as CLEANUP_FAILED, and the child still gets the signal.
+function signalRunner(proc: RunnerProcess, name: NodeJS.Signals): RealmError | undefined {
+  let cleanup: RealmError | undefined;
   if (OWN_PROCESS_GROUP && proc.pid !== undefined) {
     try {
       process.kill(-proc.pid, name);
-      return;
-    } catch {
-      // The group is already gone or cannot be signalled. The direct signal below still reaches the child.
+      return undefined;
+    } catch (error) {
+      if (errnoOf(error) !== "ESRCH") {
+        cleanup = makeRealmError("CLEANUP_FAILED");
+      }
     }
   }
   proc.kill(name);
+  return cleanup;
 }
 
 // Resolves once promise settles or after ms, whichever comes first. The bound is the codebase timeout helper. Its
-// expiry is swallowed here, because terminate only needs the wait to end, and the caller checks hasExited afterwards.
+// expiry is swallowed here, because terminate only needs the wait to end: it reads hasExited after each wait.
 async function settleWithin(promise: Promise<void>, ms: number): Promise<void> {
   await withTimeout(promise, ms, "OPENSHELL_START_FAILED").catch(() => undefined);
 }

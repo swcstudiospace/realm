@@ -24,6 +24,7 @@ import {
 } from "../audit/chain.js";
 import { parseAnchorRecord, type AnchorMismatch, type AnchorRecord } from "../audit/anchor.js";
 import { ERROR_CATALOGUE, type ErrorCode } from "../core/errors.js";
+import { errnoOf } from "../fs/canonicalize.js";
 import { isSessionId } from "../session/paths.js";
 
 const USAGE =
@@ -33,6 +34,7 @@ const ANCHOR_USAGE =
 const NO_STATE_DIR =
   "realm audit verify: cannot resolve a state directory (the realm config file under an absolute XDG_CONFIG_HOME or HOME must be present and valid)";
 const NO_FILE = "realm audit verify: no audit file to verify";
+const UNREADABLE_DIR = "realm audit verify: the audit directory cannot be read";
 const AUDIT_SUFFIX = ".jsonl";
 
 export interface AuditCommandResult {
@@ -137,10 +139,15 @@ export function runAuditCommand(
       return { exitCode: 2, stdout: "", stderr: `${NO_STATE_DIR}\n` };
     }
     const auditDir = join(stateDir, "audit");
-    targets =
-      args.selector.kind === "session"
-        ? [{ sessionId: args.selector.sessionId, file: join(auditDir, `${args.selector.sessionId}${AUDIT_SUFFIX}`) }]
-        : auditFilesIn(auditDir);
+    if (args.selector.kind === "session") {
+      targets = [{ sessionId: args.selector.sessionId, file: join(auditDir, `${args.selector.sessionId}${AUDIT_SUFFIX}`) }];
+    } else {
+      const listed = auditFilesIn(auditDir);
+      if (listed === "unreadable") {
+        return { exitCode: 1, stdout: `${JSON.stringify({ ok: false, files: [] })}\n`, stderr: `${UNREADABLE_DIR}\n` };
+      }
+      targets = listed;
+    }
   }
   let anchor: AnchorRecord | undefined;
   if (args.anchorFile !== undefined) {
@@ -211,13 +218,14 @@ function parseAuditVerifyArgs(words: readonly string[]): AuditVerifyArgs | undef
   return { selector, head, anchorFile };
 }
 
-// Every <stateDir>/audit/*.jsonl in name order. A missing or unreadable audit directory has no files to verify.
-function auditFilesIn(auditDir: string): Target[] {
+// Every <stateDir>/audit/*.jsonl in name order. An absent audit directory has no files to verify. Any other failure to
+// list it is unreadable: an I/O failure, never an empty log.
+function auditFilesIn(auditDir: string): Target[] | "unreadable" {
   let names: string[];
   try {
     names = readdirSync(auditDir);
-  } catch {
-    return [];
+  } catch (error) {
+    return errnoOf(error) === "ENOENT" ? [] : "unreadable";
   }
   return names
     .filter((name) => name.endsWith(AUDIT_SUFFIX))
