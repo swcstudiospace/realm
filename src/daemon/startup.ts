@@ -80,8 +80,10 @@ export interface StartupReport {
   readonly registryEntriesRemoved: number;
   readonly failures: number;
   // The catalogue codes of the counted failures that carry one, in the order they happened: a registry cleanup, a sweep or a
-  // reconciliation that threw, a sweep root that did not bind, and a device that could not be read. `failures` also counts the
-  // entries the sweep and the reconciliation report as failed, which carry no code. A failed reap is `reapFailure`, not here.
+  // reconciliation that threw, a sweep root that did not bind, a device that could not be read, and every failure the sweep and
+  // the reconciliation report with its code. `failures` also counts the failures that carry none (a missing uid, a failed
+  // hydration), so it can be larger than this list. A failed reap sets `failures` to 1 and leaves this list empty; its code is
+  // `reapFailure`.
   readonly failureCodes: readonly ErrorCode[];
 }
 
@@ -196,18 +198,24 @@ export async function runStartupMaintenance(deps: StartupMaintenanceDeps): Promi
   }
   let tempFilesRemoved = 0;
   let truncated = false;
-  let unfinishedSweepRoots: readonly string[] = [];
+  let unfinishedSweepRoots: readonly string[];
+  // Whether the sweep ran to its end. A sweep that did not (no uid, or a throw) walked none of its roots, so the maintenance is not complete.
+  let sweepFinished = false;
   const ownerUid = process.getuid?.();
-  if (ownerUid === undefined) {
-    // Without a uid the owner rule cannot be applied, so nothing is removed; the report counts the gap.
-    failures += 1;
-  } else {
-    try {
+  // The roots the sweep was to walk, once sweepRootsOf has returned. A sweep that does not finish leaves every one of them unfinished.
+  let sweepRootList: readonly string[] = [];
+  try {
+    const sweepRoots = sweepRootsOf(deps.policy.workspaceRoots, deps.stateDir);
+    sweepRootList = sweepRoots.roots;
+    failures += sweepRoots.failureCodes.length;
+    failureCodes.push(...sweepRoots.failureCodes);
+    if (ownerUid === undefined) {
+      // Without a uid the owner rule cannot be applied, so nothing is removed; the report counts the gap and every root is unwalked.
+      failures += 1;
+      unfinishedSweepRoots = sweepRootList;
+    } else {
       const sweepShareMs = Math.max(0, Math.floor((deadline - deps.monotonicNow()) / 2));
-      const sweepRoots = sweepRootsOf(deps.policy.workspaceRoots, deps.stateDir);
-      failures += sweepRoots.failureCodes.length;
-      failureCodes.push(...sweepRoots.failureCodes);
-      const swept = sweepOrphanTempFiles(sweepRoots.roots, {
+      const swept = sweepOrphanTempFiles(sweepRootList, {
         now: deps.now(),
         minAgeMs: ORPHAN_TEMP_MIN_AGE_MS,
         ownerUid,
@@ -230,12 +238,17 @@ export async function runStartupMaintenance(deps: StartupMaintenanceDeps): Promi
       tempFilesRemoved = swept.removed.length;
       truncated = swept.truncated;
       unfinishedSweepRoots = swept.unfinishedRoots;
-      failures += swept.failed;
-    } catch (error: unknown) {
-      // The sweep never throws on a bad root or file; this is a failure of the sweep itself, counted in the report with its code.
-      failures += 1;
-      failureCodes.push(codeOf(error));
+      sweepFinished = true;
+      // Each failure the sweep counted carries its code in `errors`, and a refused audit line is one entry more.
+      failures += swept.errors.length;
+      failureCodes.push(...swept.errors);
     }
+  } catch (error: unknown) {
+    // The sweep never throws on a bad root or file; this is a failure of the sweep itself, counted in the report with its code.
+    // Every root it was to walk is left unwalked.
+    failures += 1;
+    failureCodes.push(codeOf(error));
+    unfinishedSweepRoots = sweepRootList;
   }
   let auditLinesReconciled = 0;
   let unfinishedAuditFiles: readonly string[] = [];
@@ -248,6 +261,7 @@ export async function runStartupMaintenance(deps: StartupMaintenanceDeps): Promi
     auditListingTruncated = reconciled.listingTruncated;
     auditComplete = reconciled.complete;
     failures += reconciled.failed;
+    failureCodes.push(...reconciled.failures.map((failure) => failure.code));
   } catch (error: unknown) {
     // A failure of the reconciliation itself is counted in the report with its code; the lines it appended before it stopped are not.
     failures += 1;
@@ -268,7 +282,7 @@ export async function runStartupMaintenance(deps: StartupMaintenanceDeps): Promi
     unfinishedSweepRoots,
     unfinishedAuditFiles,
     auditListingTruncated,
-    maintenanceComplete: unfinishedSweepRoots.length === 0 && auditComplete,
+    maintenanceComplete: sweepFinished && unfinishedSweepRoots.length === 0 && auditComplete,
     unattributedTempFiles,
     unattributedRecords: unreadableRecords,
     unattributedRecordCodes: unreadableRecordCodes,

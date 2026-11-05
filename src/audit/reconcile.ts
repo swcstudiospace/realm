@@ -65,7 +65,7 @@ export interface ReconcileResult {
   readonly appended: number;
   // Failures counted: refused entries (a symlinked directory or file, a non-regular file, an unsafe name), files over the size
   // cap, files that could not be read, files whose append failed, and a failed write of the progress record. Each failure
-  // caught in the run carries its code in `failures`; a refused entry or an over-cap file is counted without one.
+  // caught in the run carries its code in `failures`: `failures` has one entry for each count of `failed`.
   readonly failed: number;
   // Base names (no directory) of the logs the deadline left unfinished, including every log not reached. A later run
   // without the deadline finishes them.
@@ -80,12 +80,13 @@ export interface ReconcileResult {
   // in `unfinished`.
   readonly listingTruncated: boolean;
   // The catalogue code of each caught failure, in the order they happened. `file` is the base name of the log or the progress
-  // record it belongs to; a failure of the audit directory has none.
+  // record it belongs to; a failure of the audit directory, or of the run as a whole, has none.
   readonly failures: readonly ReconcileFailure[];
 }
 
 // One failure caught in a run. `code` is the catalogue code the error carries. A raw filesystem error carries none, and the
-// path it came from could not be examined, so its code is PATH_ESCAPE.
+// path it came from could not be examined, so its code is PATH_ESCAPE. `file` is absent when the failure belongs to no log:
+// the audit directory, or the run itself (a clock that throws ends the run with AUDIT_WRITE_FAILED and no file).
 export interface ReconcileFailure {
   readonly file?: string;
   readonly code: ErrorCode;
@@ -581,6 +582,14 @@ function listLogs(dir: string, maxEntries: number, expired: () => boolean): List
   }
 }
 
+// The result of ordering the listed logs: the logs in newest-first order, the logs not stat'ed before the deadline, and the
+// error code of each log that could not be stat'ed (it is counted at its turn).
+interface Ordering {
+  readonly ordered: string[];
+  readonly unreached: string[];
+  readonly deferred: ReadonlyMap<string, ErrorCode>;
+}
+
 // Orders ALL listed logs newest modified first, ties by name: a crash leaves unmatched admissions in the logs written last, so
 // the logs that matter are reached first, changed or not, recorded or not. There is one ordering and no grouping by the
 // progress record. The deadline is checked before each stat: logs not stat'ed before it expired are returned in `unreached`,
@@ -589,7 +598,7 @@ function newestFirst(
   dir: string,
   names: readonly string[],
   expired: () => boolean,
-): { readonly ordered: string[]; readonly unreached: string[]; readonly deferred: ReadonlyMap<string, ErrorCode> } {
+): Ordering {
   const stated: { readonly name: string; readonly mtimeMs: number }[] = [];
   const unreached: string[] = [];
   const deferred = new Map<string, ErrorCode>();
@@ -640,6 +649,8 @@ function unlistedResult(): ReconcileResult {
 // file is counted in `failed` and does not stop the others. With a deadline, a file whose scan or appends do not finish in time
 // is listed in `unfinished` together with every file not reached, and `complete` is false. A log that was completely checked
 // in an earlier run and has not changed since (same size and mtime, per the progress record) is not read again.
+// A failure of the run itself (a clock that throws) is counted once, as AUDIT_WRITE_FAILED with no file: the run returns
+// instead of throwing, and the logs it did not reach are unfinished.
 //
 // Single-owner guarantee (why no append can race with the scan): the daemon runs this inside runStartupMaintenance, before
 // its gate opens. Its control socket is bound first, so a second daemon on the same state directory fails with LOCK_CONFLICT
@@ -669,7 +680,17 @@ export function reconcileAuditLogs(stateDir: string, options: ReconcileOptions =
   }
   const progress = readProgress(dir, maxProgressBytes, maxProgressEntries);
   const checked = progress.checked;
-  const { ordered, unreached, deferred } = newestFirst(dir, listing.names, expired);
+  // The ordering reads the clock too. A clock that throws here is the same run failure as one that throws in the loop: nothing is
+  // ordered, every listed log is unreached, and the run returns its counts instead of throwing.
+  let ordering: Ordering;
+  let orderingFailed = false;
+  try {
+    ordering = newestFirst(dir, listing.names, expired);
+  } catch {
+    orderingFailed = true;
+    ordering = { ordered: [], unreached: [...listing.names], deferred: new Map() };
+  }
+  const { ordered, unreached, deferred } = ordering;
   // Entries of logs that are gone are dropped from the record, which needs a complete listing to know.
   const present = listing.truncated ? undefined : new Set(listing.names);
   let dirty = !progress.clean;
@@ -682,15 +703,20 @@ export function reconcileAuditLogs(stateDir: string, options: ReconcileOptions =
     failed += 1;
     failures.push({ file: RECONCILE_PROGRESS_FILE, code: progress.failure });
   }
+  if (orderingFailed) {
+    failed += 1;
+    failures.push({ code: "AUDIT_WRITE_FAILED" });
+  }
   let skippedUnchanged = 0;
   const unfinished: string[] = [];
   // Logs whose content was scanned so far, against maxFiles. A refused log (not a regular file, an unsafe name, over a limit)
   // is not counted: it is never recorded, so counting it would let a crowd of refused logs use the cap every start.
   let considered = 0;
-  let outerFailure = false;
-  let outerCause: ErrorCode | undefined;
+  // The index of the log the loop is at, so a run that stops outside the per-log guard knows which logs it did not reach.
+  let position = 0;
   try {
     for (const [index, name] of ordered.entries()) {
+      position = index;
       if (expired()) {
         unfinished.push(...ordered.slice(index));
         break;
@@ -705,8 +731,16 @@ export function reconcileAuditLogs(stateDir: string, options: ReconcileOptions =
           throw makeRealmError(deferredCode);
         }
         const stat = lstatSync(file);
-        if (!stat.isFile() || stat.isSymbolicLink() || !SAFE_SESSION_ID.test(sessionId)) {
+        if (stat.isSymbolicLink() || !SAFE_SESSION_ID.test(sessionId)) {
+          // A symlink, or a name that is not a safe session id: the path is refused.
           failed += 1;
+          failures.push({ file: name, code: "PATH_ESCAPE" });
+          continue;
+        }
+        if (!stat.isFile()) {
+          // Not a regular file (a directory, a device): its content is not a log the realm wrote.
+          failed += 1;
+          failures.push({ file: name, code: "SCHEMA_INVALID" });
           continue;
         }
         const prior = checked.get(name);
@@ -726,6 +760,7 @@ export function reconcileAuditLogs(stateDir: string, options: ReconcileOptions =
         const scanned = scanFile(file, maxBytes, maxLineBytes, expired);
         if (scanned.kind === "over-cap") {
           failed += 1;
+          failures.push({ file: name, code: "SCHEMA_INVALID" });
           continue;
         }
         if (scanned.kind === "expired") {
@@ -760,11 +795,13 @@ export function reconcileAuditLogs(stateDir: string, options: ReconcileOptions =
         failures.push({ file: name, code: error instanceof RealmError ? error.code : "PATH_ESCAPE" });
       }
     }
-  } catch (error: unknown) {
-    // An error outside the per-log guard (a throwing clock, say) ends the loop. The record is still written below; the call
-    // then throws AUDIT_WRITE_FAILED, carrying the cause's code when the error has one, rather than a count that looks complete.
-    outerFailure = true;
-    outerCause = error instanceof RealmError ? error.code : undefined;
+  } catch {
+    // An error outside the per-log guard (a throwing clock, say) ends the loop before the log at `position` is examined. The
+    // run counts it as one failure with no log, AUDIT_WRITE_FAILED, and returns rather than throwing: the logs from `position`
+    // on are unfinished, and nothing is appended for the log that was not examined.
+    failed += 1;
+    failures.push({ code: "AUDIT_WRITE_FAILED" });
+    unfinished.push(...ordered.slice(position));
   } finally {
     // One write of the record per run, whatever ended the run, and only when it changed, needs healing, or holds entries of
     // logs that are gone. A record that was read is within the limits, so an unchanged one needs no size check, and the body
@@ -778,9 +815,6 @@ export function reconcileAuditLogs(stateDir: string, options: ReconcileOptions =
         failures.push({ file: RECONCILE_PROGRESS_FILE, code: persistCode });
       }
     }
-  }
-  if (outerFailure) {
-    throw makeRealmError("AUDIT_WRITE_FAILED", outerCause);
   }
   unfinished.push(...unreached);
   const complete = unfinished.length === 0 && !listing.truncated;

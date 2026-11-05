@@ -25,7 +25,6 @@ import {
   SCAN_CHECK_LINES,
   SCAN_CHUNK_BYTES,
 } from "../../src/audit/reconcile.js";
-import { RealmError } from "../../src/core/errors.js";
 import { atomicWriteFile, observeSha256 } from "../../src/fs/atomic-write.js";
 
 const SESSION = "11111111-2222-4333-8444-555555555555";
@@ -226,7 +225,7 @@ void test("CRASH-02: a symlinked audit file is refused and the file it points at
     const before = readFileSync(target, "utf8");
     symlinkSync(target, auditFile(stateDir));
 
-    assert.deepEqual(reconcileAuditLogs(stateDir), { files: 0, appended: 0, failed: 1, unfinished: [], complete: true, skippedUnchanged: 0, listingTruncated: false, failures: [] });
+    assert.deepEqual(reconcileAuditLogs(stateDir), { files: 0, appended: 0, failed: 1, unfinished: [], complete: true, skippedUnchanged: 0, listingTruncated: false, failures: [{ file: `${SESSION}.jsonl`, code: "PATH_ESCAPE" }] });
     assert.equal(readFileSync(target, "utf8"), before);
   });
 });
@@ -236,7 +235,7 @@ void test("CRASH-02: a log whose name is not a safe session id is refused, and t
     admit(stateDir, "write", { path: "a.txt" });
     writeFileSync(join(stateDir, "audit", ".hidden.jsonl"), `${JSON.stringify({ tool: "write", phase: "admission" })}\n`);
 
-    assert.deepEqual(reconcileAuditLogs(stateDir), { files: 1, appended: 1, failed: 1, unfinished: [], complete: true, skippedUnchanged: 0, listingTruncated: false, failures: [] });
+    assert.deepEqual(reconcileAuditLogs(stateDir), { files: 1, appended: 1, failed: 1, unfinished: [], complete: true, skippedUnchanged: 0, listingTruncated: false, failures: [{ file: ".hidden.jsonl", code: "PATH_ESCAPE" }] });
     assert.equal(readFileSync(join(stateDir, "audit", ".hidden.jsonl"), "utf8").split("\n").length, 2);
   });
 });
@@ -246,7 +245,7 @@ void test("CRASH-02: a log over the size cap is skipped and counted, not read", 
     admit(stateDir, "write", { path: "a.txt" });
     const before = readFileSync(auditFile(stateDir), "utf8");
 
-    assert.deepEqual(reconcileAuditLogs(stateDir, { maxFileBytes: 10 }), { files: 0, appended: 0, failed: 1, unfinished: [], complete: true, skippedUnchanged: 0, listingTruncated: false, failures: [] });
+    assert.deepEqual(reconcileAuditLogs(stateDir, { maxFileBytes: 10 }), { files: 0, appended: 0, failed: 1, unfinished: [], complete: true, skippedUnchanged: 0, listingTruncated: false, failures: [{ file: `${SESSION}.jsonl`, code: "SCHEMA_INVALID" }] });
     assert.equal(readFileSync(auditFile(stateDir), "utf8"), before);
   });
 });
@@ -689,25 +688,54 @@ void test("STARTUP budget: a failed write of the record is counted and keeps the
   });
 });
 
-void test("STARTUP budget: a clock that fails mid-pass ends the run with a typed AUDIT_WRITE_FAILED", () => {
+void test("STARTUP budget: a clock that fails mid-pass is counted as one AUDIT_WRITE_FAILED failure, and the run does not throw", () => {
   withStateDir((stateDir) => {
     admit(stateDir, "write", { path: "a.txt" });
     let reads = 0;
-    assert.throws(
-      () =>
-        reconcileAuditLogs(stateDir, {
-          now: () => {
-            reads += 1;
-            if (reads > 1) {
-              throw new Error("clock failed");
-            }
-            return 0;
-          },
-          deadline: 1,
-        }),
-      (error: unknown) => error instanceof RealmError && error.code === "AUDIT_WRITE_FAILED",
-    );
+    const outcome = reconcileAuditLogs(stateDir, {
+      now: () => {
+        reads += 1;
+        if (reads > 1) {
+          throw new Error("clock failed");
+        }
+        return 0;
+      },
+      deadline: 1,
+    });
+    assert.deepEqual(outcome, {
+      files: 0,
+      appended: 0,
+      failed: 1,
+      unfinished: [`${SESSION}.jsonl`],
+      complete: false,
+      skippedUnchanged: 0,
+      listingTruncated: false,
+      failures: [{ code: "AUDIT_WRITE_FAILED" }],
+    });
     assert.equal(reconciliations(stateDir).length, 0, "the failed pass appended nothing");
+  });
+});
+
+void test("STARTUP budget: a clock that fails while the logs are ordered is one AUDIT_WRITE_FAILED failure, and the run does not throw", () => {
+  withStateDir((stateDir) => {
+    admit(stateDir, "write", { path: "a.txt" });
+    const outcome = reconcileAuditLogs(stateDir, {
+      now: () => {
+        throw new Error("clock failed");
+      },
+      deadline: 1,
+    });
+    assert.deepEqual(outcome, {
+      files: 0,
+      appended: 0,
+      failed: 1,
+      unfinished: [`${SESSION}.jsonl`],
+      complete: false,
+      skippedUnchanged: 0,
+      listingTruncated: false,
+      failures: [{ code: "AUDIT_WRITE_FAILED" }],
+    });
+    assert.equal(reconciliations(stateDir).length, 0, "nothing was ordered, so nothing was appended");
   });
 });
 

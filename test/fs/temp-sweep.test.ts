@@ -293,8 +293,9 @@ void test("a failing audit callback keeps the file and counts it (D-1402)", (t) 
   });
   assert.equal(existsSync(orphan), true);
   assert.deepEqual(result.removed, []);
-  assert.equal(result.skipped, 1);
-  assert.equal(result.failed, 0);
+  assert.equal(result.skipped, 0, "a refused removal line is a failure, not a skip");
+  assert.equal(result.failed, 1, "the refused removal line is counted as a failure");
+  assert.deepEqual(result.errors, ["AUDIT_WRITE_FAILED"], "the refused removal line carries its code");
 });
 
 void test("a failed unlink appends a second CLEANUP_FAILED line (D-1402)", (t) => {
@@ -316,6 +317,7 @@ void test("a failed unlink appends a second CLEANUP_FAILED line (D-1402)", (t) =
   ]);
   assert.deepEqual(result.removed, []);
   assert.equal(result.failed, 1);
+  assert.deepEqual(result.errors, ["CLEANUP_FAILED"], "the failed unlink carries its code");
 });
 
 void test("the sweep stops at maxEntries and reports truncated (D-1401)", (t) => {
