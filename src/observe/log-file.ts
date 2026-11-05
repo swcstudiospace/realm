@@ -84,7 +84,14 @@ export function createFileSink(options: FileSinkOptions): LogSink & { close(): b
     if (existingNonRegular(options.path)) {
       throw new Error("log path is not a regular file");
     }
-    needsBoundary = tailNeedsBoundary();
+    // A tail probe failure is kept and rethrown after the open. The tail is unknown, so the next line starts with a newline.
+    let probeFailure: Error | undefined;
+    try {
+      needsBoundary = tailNeedsBoundary();
+    } catch (error) {
+      probeFailure = error instanceof Error ? error : new Error("log tail probe failed");
+      needsBoundary = true;
+    }
     const opened = fs.open(options.path, OPEN_FLAGS, LOG_MODE);
     try {
       fs.fchmod(opened, LOG_MODE);
@@ -97,6 +104,11 @@ export function createFileSink(options: FileSinkOptions): LogSink & { close(): b
       throw error;
     }
     fd = opened;
+    if (probeFailure !== undefined) {
+      // The open restored the mode and the descriptor is kept, so later writes do not probe again. This line is refused
+      // and recorded under the probe's category through write's catch; the next line is written.
+      throw probeFailure;
+    }
   };
 
   // The write descriptor is O_WRONLY, so the tail is read through a separate descriptor.
@@ -107,7 +119,7 @@ export function createFileSink(options: FileSinkOptions): LogSink & { close(): b
     try {
       probe = fs.open(options.path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK, LOG_MODE);
     } catch (error) {
-      // Only ENOENT is absence. Any other failure is the open's, thrown to write, which records it.
+      // Only ENOENT is absence. Any other failure is thrown to openLog, which treats the tail as unknown and rethrows it after the open.
       if (errnoCode(error) === "ENOENT") {
         return false;
       }

@@ -3,7 +3,7 @@
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { chmodSync, closeSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync, writeSync } from "node:fs";
+import { chmodSync, closeSync, constants, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DEFAULT_LOG_MAX_BYTES, createFileSink, createStderrSink } from "../../src/observe/log-file.js";
@@ -227,6 +227,33 @@ void test("an open that fails with an error other than ENOENT is recorded as ope
   assert.equal(sink.write("next"), false);
   assert.equal(sink.lastFailure(), "open");
   assert.equal(readFileSync(path, "utf8"), "partial");
+});
+
+void test("a tail probe that fails with EACCES does not block the log: the first line is refused as open, and the next is written after a newline", () => {
+  const dir = tmp();
+  const path = join(dir, "daemon.log");
+  let probeFailed = false;
+  const sink = createFileSink({
+    path,
+    fs: {
+      open: (target, flags, fileMode) => {
+        // The tail probe is the only read-only open. Its first call fails; every later open is real.
+        if (!probeFailed && (flags & constants.O_WRONLY) === 0) {
+          probeFailed = true;
+          throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+        }
+        return openSync(target, flags, fileMode);
+      },
+    },
+  });
+  assert.equal(sink.write("first"), false);
+  assert.equal(probeFailed, true);
+  assert.equal(sink.lastFailure(), "open");
+  assert.equal(mode(path), 0o600);
+  assert.equal(sink.write("second"), true);
+  assert.equal(sink.lastFailure(), undefined);
+  sink.close();
+  assert.equal(readFileSync(path, "utf8"), "\nsecond\n");
 });
 
 void test("a failed write is recorded as write, and the next good write clears it", () => {
