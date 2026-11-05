@@ -15,7 +15,7 @@ import { productionRunnerChild } from "../runtime/agentos-workload.js";
 import type { AgentOsDriver } from "../runtime/agentos.js";
 import { productionOpenShellRunner } from "../runtime/session-execution.js";
 import type { EnvironmentLike } from "../session/paths.js";
-import { createLogger, parseLogLevel, type Logger } from "../observe/logger.js";
+import { createLogger, parseLogLevel, type LogFailureCategory, type Logger } from "../observe/logger.js";
 import { createFileSink } from "../observe/log-file.js";
 import { FAILURE_EVENT, daemonLogPath, requestLogPath } from "./ensure.js";
 import { startDaemon, type StartDaemonOptions, type StartedDaemon } from "./daemon.js";
@@ -98,8 +98,8 @@ export async function runDaemon(deps: DaemonDeps): Promise<number> {
       });
     } catch (error: unknown) {
       requests.close();
-      entry.close();
       emitFailure(entry.write, codeOf(error));
+      closeEntry(entry, writeStderr);
       return 1;
     }
     try {
@@ -110,7 +110,7 @@ export async function runDaemon(deps: DaemonDeps): Promise<number> {
       return code;
     } finally {
       requests.close();
-      entry.close();
+      closeEntry(entry, writeStderr);
     }
   } catch (error: unknown) {
     emitFailure(writeStderr, codeOf(error));
@@ -179,7 +179,7 @@ function entryWriter(
   injected: ((line: string) => void) | undefined,
   stateDir: string,
   stderr: (line: string) => void,
-): { readonly write: (line: string) => void; readonly close: () => void } {
+): { readonly write: (line: string) => void; readonly close: () => LogFailureCategory | undefined } {
   if (injected !== undefined) {
     return { write: injected, close: () => undefined };
   }
@@ -195,10 +195,17 @@ function entryWriter(
       }
       stderr(line);
     },
-    close: () => {
-      file.close();
-    },
+    // undefined when the file closed; otherwise the category the file sink named for the failed close.
+    close: () => (file.close() ? undefined : (file.lastFailure() ?? "close")),
   };
+}
+
+// The entry file closes last. A close failure goes to stderr as daemon.log-close, because the file can no longer take the line.
+function closeEntry(entry: { readonly close: () => LogFailureCategory | undefined }, writeStderr: (line: string) => void): void {
+  const failure = entry.close();
+  if (failure !== undefined) {
+    entryLogger(writeStderr).warn("daemon.log-close", { category: failure });
+  }
 }
 
 function requestLogger(
@@ -208,19 +215,25 @@ function requestLogger(
 ): { readonly logger: Logger; readonly close: () => void } {
   const parsed = parseLogLevel(rawLevel);
   const file = createFileSink({ path: logPath });
+  // The category of the file's most recent failed write. The logger names a dropped line under it through lastFailure.
+  let fileFailure: LogFailureCategory | undefined;
   const logger = createLogger({
     sink: {
       write: (line) => {
+        fileFailure = undefined;
         try {
           if (file.write(line)) {
             return true;
           }
+          fileFailure = file.lastFailure();
         } catch {
           // The file sink refused the path. stderr still receives the line.
         }
         writeStderr(line);
-        return true;
+        // The line reached stderr. The logger counts the drop under the category the file sink named.
+        return false;
       },
+      lastFailure: () => fileFailure,
     },
     level: parsed.level,
     now: () => new Date(),
@@ -228,7 +241,13 @@ function requestLogger(
   if (parsed.invalid) {
     logger.warn("daemon.log-level", { value: parsed.level });
   }
-  return { logger, close: () => { file.close(); } };
+  // A close failure is recorded as a warn line on stderr, the same way closeEntry records one for daemon.log.
+  const close = (): void => {
+    if (!file.close()) {
+      entryLogger(writeStderr).warn("requests.log-close", { category: "close" });
+    }
+  };
+  return { logger, close };
 }
 
 // Resolves once the daemon has stopped. A signal stops the daemon in process and settles with the outcome of that stop. A stop

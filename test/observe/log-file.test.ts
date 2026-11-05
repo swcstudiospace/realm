@@ -3,10 +3,11 @@
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync, writeSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DEFAULT_LOG_MAX_BYTES, createFileSink, createStderrSink } from "../../src/observe/log-file.js";
+import { createLogger } from "../../src/observe/logger.js";
 
 const roots: string[] = [];
 function tmp(): string {
@@ -198,4 +199,139 @@ void test("the stderr sink writes one line per call and reports a throwing strea
     },
   });
   assert.equal(broken.write("x"), false);
+});
+
+void test("a path under a regular file is recorded as an open failure and creates nothing", () => {
+  const dir = tmp();
+  const parent = join(dir, "plain-file");
+  writeFileSync(parent, "x");
+  const sink = createFileSink({ path: join(parent, "daemon.log") });
+  assert.equal(sink.write("x"), false);
+  assert.equal(sink.lastFailure(), "open");
+  assert.equal(sink.close(), true);
+  assert.equal(existsSync(join(parent, "daemon.log")), false);
+});
+
+void test("an open that fails with an error other than ENOENT is recorded as open, and nothing is written", () => {
+  const dir = tmp();
+  const path = join(dir, "daemon.log");
+  writeFileSync(path, "partial", { mode: 0o600 });
+  const sink = createFileSink({
+    path,
+    fs: {
+      open: () => {
+        throw Object.assign(new Error("denied"), { code: "EACCES" });
+      },
+    },
+  });
+  assert.equal(sink.write("next"), false);
+  assert.equal(sink.lastFailure(), "open");
+  assert.equal(readFileSync(path, "utf8"), "partial");
+});
+
+void test("a failed write is recorded as write, and the next good write clears it", () => {
+  const dir = tmp();
+  let fail = true;
+  const sink = createFileSink({
+    path: join(dir, "daemon.log"),
+    fs: {
+      write: (_fd, bytes, offset) => {
+        if (fail) {
+          throw new Error("ENOSPC");
+        }
+        return bytes.length - offset;
+      },
+    },
+  });
+  assert.equal(sink.write("a"), false);
+  assert.equal(sink.lastFailure(), "write");
+  fail = false;
+  assert.equal(sink.write("b"), true);
+  assert.equal(sink.lastFailure(), undefined);
+  sink.close();
+});
+
+void test("a failed rename during rotation is recorded as rotate, and the next write retries the rotation", () => {
+  const dir = tmp();
+  const path = join(dir, "daemon.log");
+  let failRename = true;
+  const sink = createFileSink({
+    path,
+    maxBytes: 16,
+    fs: {
+      rename: (from, to) => {
+        if (failRename) {
+          throw new Error("EBUSY");
+        }
+        renameSync(from, to);
+      },
+    },
+  });
+  assert.equal(sink.write("a".repeat(10)), true);
+  assert.equal(sink.write("b".repeat(10)), false);
+  assert.equal(sink.lastFailure(), "rotate");
+  failRename = false;
+  assert.equal(sink.write("b".repeat(10)), true);
+  assert.equal(sink.lastFailure(), undefined);
+  sink.close();
+  assert.equal(readFileSync(`${path}.1`, "utf8"), `${"a".repeat(10)}\n`);
+  assert.equal(readFileSync(path, "utf8"), `${"b".repeat(10)}\n`);
+});
+
+void test("a close that fails is recorded as close and returned as false", () => {
+  const dir = tmp();
+  let failClose = false;
+  const sink = createFileSink({
+    path: join(dir, "daemon.log"),
+    fs: {
+      close: (fd) => {
+        closeSync(fd);
+        if (failClose) {
+          throw new Error("EIO");
+        }
+      },
+    },
+  });
+  assert.equal(sink.write("x"), true);
+  failClose = true;
+  assert.equal(sink.close(), false);
+  assert.equal(sink.lastFailure(), "close");
+});
+
+void test("a stream that throws is recorded as stderr, and a good write clears it", () => {
+  let broken = true;
+  const sink = createStderrSink({
+    write: () => {
+      if (broken) {
+        throw new Error("EPIPE");
+      }
+      return true;
+    },
+  });
+  assert.equal(sink.write("x"), false);
+  assert.equal(sink.lastFailure(), "stderr");
+  broken = false;
+  assert.equal(sink.write("y"), true);
+  assert.equal(sink.lastFailure(), undefined);
+});
+
+void test("a file sink's failure category is counted by the logger under that category", () => {
+  const dir = tmp();
+  const log = createLogger({
+    sink: createFileSink({
+      path: join(dir, "daemon.log"),
+      fs: {
+        write: () => {
+          throw new Error("ENOSPC");
+        },
+      },
+    }),
+    level: "debug",
+    now: () => new Date("2026-10-29T12:00:00.000Z"),
+  });
+  log.info("a");
+  log.info("b");
+  assert.equal(log.droppedLines(), 2);
+  assert.equal(log.droppedLines("write"), 2);
+  assert.equal(log.droppedLines("open"), 0);
 });

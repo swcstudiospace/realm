@@ -176,3 +176,65 @@ void test("correlation ids: fresh, unique, and accepted by the pattern", () => {
   assert.equal(isCorrelationId("line\nbreak"), false);
   assert.equal(isCorrelationId(42), false);
 });
+
+void test("a refused line is counted under the category its sink names, and the total counts every drop", () => {
+  let category: "open" | "write" = "open";
+  const log = createLogger({
+    sink: { write: () => false, lastFailure: () => category },
+    level: "debug",
+    now: () => FIXED,
+  });
+  log.info("a");
+  category = "write";
+  log.info("b");
+  log.info("c");
+  assert.equal(log.droppedLines(), 3);
+  assert.equal(log.droppedLines("open"), 1);
+  assert.equal(log.droppedLines("write"), 2);
+  assert.equal(log.droppedLines("stderr"), 0);
+});
+
+void test("a refusal that names no category, and a sink that throws, are both counted under sink", () => {
+  const refusing = createLogger({ sink: { write: () => false }, level: "debug", now: () => FIXED });
+  refusing.info("a");
+  assert.equal(refusing.droppedLines("sink"), 1);
+  const throwing = createLogger({
+    sink: {
+      write: () => {
+        throw new Error("gone");
+      },
+    },
+    level: "debug",
+    now: () => FIXED,
+  });
+  throwing.info("b");
+  assert.equal(throwing.droppedLines("sink"), 1);
+  assert.equal(throwing.droppedLines("emit"), 0);
+});
+
+void test("a clock that throws is counted under emit", () => {
+  const log = createLogger({
+    sink: recording().sink,
+    level: "debug",
+    now: () => {
+      throw new Error("clock");
+    },
+  });
+  log.info("a");
+  assert.equal(log.droppedLines("emit"), 1);
+  assert.equal(log.droppedLines(), 1);
+});
+
+void test("a child whose field getter throws is counted under child", () => {
+  const log = createLogger({ sink: recording().sink, level: "debug", now: () => FIXED });
+  const fields: LogFields = {};
+  Object.defineProperty(fields, "bad", {
+    enumerable: true,
+    get() {
+      throw new Error("boom");
+    },
+  });
+  log.child(fields);
+  assert.equal(log.droppedLines("child"), 1);
+  assert.equal(log.droppedLines("sink"), 0);
+});

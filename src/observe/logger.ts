@@ -2,7 +2,7 @@
 // ts, level, event, then code when present, then the other fields; a field can never
 // override a reserved key. Every string value and every secret-looking key is redacted
 // through the audit redactor. Logger methods never throw: they are called from event-bus
-// listeners, so a failing sink is counted (droppedLines) and the line is lost.
+// listeners, so a failing sink is counted (droppedLines, by failure category) and the line is lost.
 //
 // This module reads no environment: the daemon entry reads REALM_LOG_LEVEL and passes the
 // raw value to parseLogLevel.
@@ -16,9 +16,16 @@ const LOG_LEVELS: readonly LogLevel[] = Object.freeze(["debug", "info", "warn", 
 
 const LEVEL_RANK: Readonly<Record<LogLevel, number>> = Object.freeze({ debug: 0, info: 1, warn: 2, error: 3 });
 
+// Why a line was lost. A sink names its failure through lastFailure; "sink" covers a sink that refuses or throws without
+// naming one. "emit" is a line the logger could not build (the clock or a field), "child" a child whose fields could not be
+// copied. The file sink names open, rotate, write and close; the stderr sink names stderr.
+export type LogFailureCategory = "open" | "write" | "rotate" | "close" | "stderr" | "sink" | "emit" | "child";
+
 export interface LogSink {
   // Returns false when the line could not be written.
   write(line: string): boolean;
+  // The category of the failure behind the most recent false return from write; undefined after a write that succeeded.
+  lastFailure?(): LogFailureCategory | undefined;
 }
 
 type FieldValue = string | number | boolean | null | readonly (string | number)[] | undefined;
@@ -38,8 +45,9 @@ export interface Logger {
   warn(event: string, fields?: LogFields): void;
   error(event: string, fields?: LogFields): void;
   child(fields: LogFields): Logger;
-  // Lines lost to a failing sink or a failed serialization, shared with every child.
-  droppedLines(): number;
+  // Lines lost to a failing sink or a failed serialization, shared with every child. With a category, the lines lost under
+  // that category.
+  droppedLines(category?: LogFailureCategory): number;
 }
 
 export interface LoggerOptions {
@@ -51,25 +59,45 @@ export interface LoggerOptions {
 const RESERVED_KEYS: ReadonlySet<string> = new Set(["ts", "level", "event", "code"]);
 
 export function createLogger(options: LoggerOptions): Logger {
-  const counter = { dropped: 0 };
+  const counter: DropCounter = { dropped: 0, byCategory: emptyCounts() };
   return build(options, {}, counter);
 }
 
-function build(options: LoggerOptions, bound: Readonly<Record<string, unknown>>, counter: { dropped: number }): Logger {
+interface DropCounter {
+  dropped: number;
+  byCategory: Record<LogFailureCategory, number>;
+}
+
+function emptyCounts(): Record<LogFailureCategory, number> {
+  return { open: 0, write: 0, rotate: 0, close: 0, stderr: 0, sink: 0, emit: 0, child: 0 };
+}
+
+function drop(counter: DropCounter, category: LogFailureCategory): void {
+  counter.dropped += 1;
+  counter.byCategory[category] += 1;
+}
+
+function build(options: LoggerOptions, bound: Readonly<Record<string, unknown>>, counter: DropCounter): Logger {
   const threshold = LEVEL_RANK[options.level];
   const emit = (level: LogLevel, event: string, fields: LogFields | undefined): void => {
     if (LEVEL_RANK[level] < threshold) {
       return;
     }
-    // QUAL-01 named exception (i): a catch that records the failure as counted state and
-    // never throws. A logger is called from event-bus listeners and must not throw.
+    // A line the logger cannot build is counted under "emit". A sink that refuses is counted under the category it names, or
+    // "sink"; a sink that throws is counted under "sink". The logger never throws.
+    let line: string;
     try {
-      const line = formatLine(options.now(), level, event, bound, fields);
+      line = formatLine(options.now(), level, event, bound, fields);
+    } catch {
+      drop(counter, "emit");
+      return;
+    }
+    try {
       if (!options.sink.write(line)) {
-        counter.dropped += 1;
+        drop(counter, options.sink.lastFailure?.() ?? "sink");
       }
     } catch {
-      counter.dropped += 1;
+      drop(counter, "sink");
     }
   };
   return {
@@ -81,12 +109,12 @@ function build(options: LoggerOptions, bound: Readonly<Record<string, unknown>>,
       try {
         return build(options, { ...bound, ...ownFields(fields) }, counter);
       } catch {
-        // QUAL-01 named exception (i): copying fields must not throw. The child keeps the parent's fields.
-        counter.dropped += 1;
+        // Copying the fields must not throw; the child keeps the parent's fields. The drop is counted under "child".
+        drop(counter, "child");
         return build(options, bound, counter);
       }
     },
-    droppedLines: () => counter.dropped,
+    droppedLines: (category) => (category === undefined ? counter.dropped : counter.byCategory[category]),
   };
 }
 
