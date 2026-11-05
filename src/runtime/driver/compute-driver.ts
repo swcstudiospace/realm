@@ -73,6 +73,7 @@ import {
   mkdirOrRefuse,
   removeLaunchMaterial,
   removeStateDir,
+  recordCause,
   recordCode,
   recordedCodeOf,
   SUPERVISOR_NOT_STOPPED,
@@ -583,7 +584,7 @@ export class ComputeDriver {
       }
     } catch (error: unknown) {
       // An inspect that throws proves nothing. The reclaim is skipped, and the absence check of the same stage refuses the create; the code is logged.
-      recordCode(scope, check, recordedCodeOf(error));
+      recordCause(scope, "stale sandbox inspect failed", recordedCodeOf(error));
       return;
     }
     try {
@@ -845,7 +846,7 @@ export class ComputeDriver {
   // Writes one line for a failure that no RPC returns to a caller: the event and the catalogue code, to the sink the driver was
   // configured with. The scope supplies only that sink, so the line names no RPC.
   recordEvent(event: "supervisor stop failed" | "watch poll failed", error: unknown): void {
-    this.scopeOf("CreateSandbox").log(`realm compute driver ${event}: code=${recordedCodeOf(error)}`);
+    recordCause(this.scopeOf("CreateSandbox"), event, recordedCodeOf(error));
   }
 }
 

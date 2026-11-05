@@ -265,10 +265,24 @@ const SECRET_DIR_REFUSAL_CHECK = "check=create.secret_dir code=SCHEMA_INVALID";
 const STATE_DIR_REFUSAL = `realm compute driver refused: rpc=CreateSandbox ${STATE_DIR_REFUSAL_CHECK}`;
 const SECRET_DIR_REFUSAL = `realm compute driver refused: rpc=CreateSandbox ${SECRET_DIR_REFUSAL_CHECK}`;
 
-// A driver over the real state and secret directories: the lifecycle's delete removes them from disk. Refusal lines are collected.
+const REFUSAL_PREFIX = "realm compute driver refused:";
+
+// A cause line is not a refusal; refusal lines and cause lines are collected apart.
+function splitLog(refusals: string[], causes: string[]): (line: string) => void {
+  return (line) => {
+    if (line.startsWith(REFUSAL_PREFIX)) {
+      refusals.push(line);
+    } else {
+      causes.push(line);
+    }
+  };
+}
+
+// A driver over the real state and secret directories: the lifecycle's delete removes them from disk. Refusal and cause lines are collected apart.
 async function diskHarness(libpod: FakeLibpod = new FakeLibpod()) {
   const lines: string[] = [];
-  const config = driverConfig({ refusalLog: (line) => lines.push(line) });
+  const causes: string[] = [];
+  const config = driverConfig({ refusalLog: splitLog(lines, causes) });
   const { name, project } = bindProject(config, "project-a");
   const lifecycle = await diskLifecycle(config, libpod);
   const runtime = new FakeRuntime();
@@ -280,6 +294,7 @@ async function diskHarness(libpod: FakeLibpod = new FakeLibpod()) {
     config,
     driver,
     lines,
+    causes,
     name,
     project,
     stateDir: join(config.sandboxStateRoot, name),
@@ -301,7 +316,7 @@ function leaveStaleDirectories(stateDir: string, secretDir: string): { stateSent
 void test("PRD-DRV-02: a create whose state or secret directory exists while a container of that name exists is refused with the same check, and nothing is deleted", async () => {
   for (const which of ["state", "secret"] as const) {
     const lines: string[] = [];
-    const config = driverConfig({ refusalLog: (line) => lines.push(line) });
+    const config = driverConfig({ refusalLog: splitLog(lines, []) });
     const { name, project } = bindProject(config, "project-a");
     const libpod = new FakeLibpod();
     const lifecycle = new FakeLifecycle(libpod);
@@ -383,11 +398,11 @@ void test("PRD-DRV-02: a create whose stale state directory holds a socket is re
 });
 
 void test("PRD-DRV-02: a create whose container lookup cannot be read is refused with the same check, and nothing is removed", async () => {
-  const { driver, lifecycle, name, stateDir, secretDir, lines } = await diskHarness(new UnreadableLibpod());
+  const { driver, lifecycle, name, stateDir, secretDir, lines, causes } = await diskHarness(new UnreadableLibpod());
   const { stateSentinel, secretSentinel } = leaveStaleDirectories(stateDir, secretDir);
   await assert.rejects(driver.createSandbox(validSandbox({ name })), expectCode("SCHEMA_INVALID"));
-  // The failed inspect is recorded under the same check first; the absence check then refuses the create as it did.
-  assert.deepEqual(lines, [STATE_DIR_REFUSAL, STATE_DIR_REFUSAL]);
+  assert.deepEqual(lines, [STATE_DIR_REFUSAL]);
+  assert.deepEqual(causes, ["realm compute driver stale sandbox inspect failed: code=SCHEMA_INVALID"]);
   assert.deepEqual(lifecycle.deletes, []);
   assert.equal(lifecycle.creates.length, 0);
   assert.equal(existsSync(stateSentinel), true);
@@ -656,9 +671,7 @@ void test("PRD-DRV-02: a second create for a project whose sandbox is live is re
 void test("PRD-DRV-02: a refused second create logs the held-workspace check and its code, and the line names no path", async () => {
   const lines: string[] = [];
   const config = driverConfig({
-    refusalLog: (line) => {
-      lines.push(line);
-    },
+    refusalLog: splitLog(lines, []),
   });
   const libpod = new FakeLibpod();
   const lifecycle = new FakeLifecycle(libpod);
@@ -732,9 +745,7 @@ void test("PRD-DRV-02: a failed create whose container still runs holds its work
 void test("PRD-DRV-02: a create whose workspace container lookup fails is refused with SCHEMA_INVALID under create.pinned_root_held, and creates nothing", async () => {
   const lines: string[] = [];
   const config = driverConfig({
-    refusalLog: (line) => {
-      lines.push(line);
-    },
+    refusalLog: splitLog(lines, []),
   });
   const libpod = new FakeLibpod();
   const lifecycle = new FakeLifecycle(libpod);
@@ -776,7 +787,7 @@ void test("PRD-DRV-02: a container no longer found is dropped from the tracked s
 
 void test("PRD-DRV-02: a supervisor exit whose container stop succeeds releases the workspace; a create for it then reaches the state-directory check (create.state_dir)", async () => {
   const lines: string[] = [];
-  const config = driverConfig({ refusalLog: (line) => lines.push(line) });
+  const config = driverConfig({ refusalLog: splitLog(lines, []) });
   const libpod = new FakeLibpod();
   const lifecycle = new FakeLifecycle(libpod);
   const runtime = new FakeRuntime();
@@ -858,7 +869,7 @@ void test("PRD-DRV-02: a paused container holds its workspace, so a create for i
 
 void test("PRD-DRV-02: an exited container holds no workspace; a create for it then reaches the state-directory check (create.state_dir)", async () => {
   const lines: string[] = [];
-  const config = driverConfig({ refusalLog: (line) => lines.push(line) });
+  const config = driverConfig({ refusalLog: splitLog(lines, []) });
   const libpod = new FakeLibpod();
   const lifecycle = new FakeLifecycle(libpod);
   const driver = new ComputeDriver(config, { lifecycle, libpod, runtime: new FakeRuntime() });
@@ -877,9 +888,7 @@ void test("PRD-DRV-02: an exited container holds no workspace; a create for it t
 void test("PRD-DRV-02: a create whose workspace container state cannot be read is refused with SCHEMA_INVALID under create.pinned_root_held, and creates nothing", async () => {
   const lines: string[] = [];
   const config = driverConfig({
-    refusalLog: (line) => {
-      lines.push(line);
-    },
+    refusalLog: splitLog(lines, []),
   });
   const libpod = new FakeLibpod();
   const lifecycle = new FakeLifecycle(libpod);
@@ -903,9 +912,7 @@ void test("PRD-DRV-02: a running container bound to another directory does not b
 void test("PRD-DRV-02: a create whose running workspace container has unreadable mounts is refused with SCHEMA_INVALID under create.pinned_root_held, and creates nothing", async () => {
   const lines: string[] = [];
   const config = driverConfig({
-    refusalLog: (line) => {
-      lines.push(line);
-    },
+    refusalLog: splitLog(lines, []),
   });
   const libpod = new FakeLibpod();
   const lifecycle = new FakeLifecycle(libpod);
@@ -986,7 +993,7 @@ function refusedHarness(): RefusedHarness {
   const lines: string[] = [];
   const libpod = new FakeLibpod();
   const lifecycle = new FakeLifecycle(libpod);
-  const config = driverConfig({ refusalLog: (line) => lines.push(line) });
+  const config = driverConfig({ refusalLog: splitLog(lines, []) });
   const driver = new ComputeDriver(config, { lifecycle, libpod, runtime: new FakeRuntime() });
   return { driver, lifecycle, libpod, config, lines };
 }
@@ -1001,11 +1008,7 @@ async function assertWorkspaceRefused(h: RefusedHarness, name: string): Promise<
   assert.equal(h.libpod.inspectCalls, 0);
   assert.equal(lstatOrUndefined(join(h.config.sandboxStateRoot, name)), undefined);
   assert.equal(lstatOrUndefined(join(h.config.secretRoot, name)), undefined);
-  // Each line names create.workspace. A registry read or verify failure logs its own code before the refusal, which is SCHEMA_INVALID.
-  assert.ok(
-    h.lines.length > 0 && h.lines.every((line) => line.includes("check=create.workspace code=")) && h.lines.at(-1)?.endsWith("code=SCHEMA_INVALID") === true,
-    h.lines.join("\n"),
-  );
+  assert.ok(h.lines.length > 0 && h.lines.every((line) => line.endsWith("check=create.workspace code=SCHEMA_INVALID")), h.lines.join("\n"));
   h.lines.length = 0;
 }
 

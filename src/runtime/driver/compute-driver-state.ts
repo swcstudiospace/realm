@@ -67,6 +67,14 @@ export function recordCode(scope: RefusalScope, check: RefusalCheck, code: Error
   refusal(scope, check, code);
 }
 
+// The four failures the driver writes a cause line for. A cause line is not a refusal; the refusal line of the same request names its check.
+export type CauseEvent = "supervisor stop failed" | "watch poll failed" | "stale sandbox inspect failed" | "workspace verify failed";
+
+// Writes one cause line for a failure: the event and the catalogue code, to the scope's sink. It names no RPC and no check, and carries no value.
+export function recordCause(scope: RefusalScope, event: CauseEvent, code: ErrorCode): void {
+  scope.log(`realm compute driver ${event}: code=${code}`);
+}
+
 // The cleanup problems a failed create reports. Each names only what is true of the removal that failed.
 export const SUPERVISOR_NOT_STOPPED = "The host supervisor did not stop.";
 export const CONTAINER_NOT_REMOVED = "The container was not removed.";

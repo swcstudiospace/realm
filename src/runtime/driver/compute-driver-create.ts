@@ -15,7 +15,7 @@ import { CONTAINER_CONTROL_SOCKET, type RuntimeVerificationKey } from "./runtime
 import { sandboxBindingOf } from "./sandbox-binding.js";
 import { secretDirOf } from "./secret-store.js";
 import type { ComputeDriverConfig, DriverSandboxMessage, ResourceQuantityMessage } from "./compute-driver.js";
-import { containerNameOf, recordCode, recordedCodeOf, WORKSPACE_ID_PATTERN } from "./compute-driver-state.js";
+import { containerNameOf, recordCause, recordedCodeOf, WORKSPACE_ID_PATTERN } from "./compute-driver-state.js";
 
 const CPU_QUANTITY_PATTERN = /^([0-9]+(?:\.[0-9]+)?)(m)?$/;
 const MEMORY_QUANTITY_PATTERN = /^([0-9]+)(Ki|Mi|Gi|Ti)?$/;
@@ -74,7 +74,7 @@ function resolveSandboxWorkspace(config: ComputeDriverConfig, sandboxName: strin
 }
 
 // The verified real path of the directory the registry entry for a session id names. Undefined when there is no entry, the entry
-// lies outside the ceiling, or the registry read or the verify throws. A throw is recorded under the check with its code. Reads only.
+// lies outside the ceiling, or the registry read or the verify throws. A throw is recorded as a cause line with its code. Reads only.
 function registeredWorkspaceOf(config: ComputeDriverConfig, sessionId: string, scope: RefusalScope): string | undefined {
   try {
     const entry = readWorkspaceEntry(config.stateDir, sessionId);
@@ -83,7 +83,7 @@ function registeredWorkspaceOf(config: ComputeDriverConfig, sessionId: string, s
     }
     return verifyWorkspaceEntry(entry).realPath;
   } catch (error: unknown) {
-    recordCode(scope, "create.workspace", recordedCodeOf(error));
+    recordCause(scope, "workspace verify failed", recordedCodeOf(error));
     return undefined;
   }
 }
