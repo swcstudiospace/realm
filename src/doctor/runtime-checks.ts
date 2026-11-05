@@ -6,7 +6,7 @@ import { lstatSync, readFileSync, type Stats } from "node:fs";
 import { connect as tlsConnect } from "node:tls";
 import { isAbsolute, dirname } from "node:path";
 import { dialWithin } from "../core/timeout.js";
-import { makeRealmError } from "../core/errors.js";
+import { makeRealmError, RealmError } from "../core/errors.js";
 import type { EnvironmentLike } from "../session/paths.js";
 import { runtimeRootsOf, type RuntimeConfig } from "../runtime/config.js";
 
@@ -237,8 +237,10 @@ export async function driverSocketCheck(
   }
   try {
     await connect(socketPath, timeoutMs);
-  } catch {
-    return fail(id, "driver socket is not accepting connections", "Start the compute driver. A leftover socket file is not a running driver.");
+  } catch (error: unknown) {
+    // A non-RealmError is an endpoint that did not answer, the case OPENSHELL_GATEWAY_LOST names.
+    const code = error instanceof RealmError ? error.code : "OPENSHELL_GATEWAY_LOST";
+    return fail(id, `${code}: driver socket is not accepting connections`, "Start the compute driver. A leftover socket file is not a running driver.");
   }
   return pass(id, "driver socket accepted a connection, mode 0600, parent mode 0700");
 }
@@ -272,8 +274,9 @@ export async function gatewayCheck(
   }
   try {
     await connectGateway(endpoint, caPath, timeoutMs);
-  } catch {
-    return fail(id, "gateway is unreachable or its certificate does not chain to REALM_DRIVER_GATEWAY_CA", "Start the OpenShell gateway, confirm REALM_DRIVER_GATEWAY_ENDPOINT is the https URL it listens on, and confirm REALM_DRIVER_GATEWAY_CA is the CA that signed its certificate.");
+  } catch (error: unknown) {
+    const code = error instanceof RealmError ? error.code : "OPENSHELL_GATEWAY_LOST";
+    return fail(id, `${code}: gateway is unreachable or its certificate does not chain to REALM_DRIVER_GATEWAY_CA`, "Start the OpenShell gateway, confirm REALM_DRIVER_GATEWAY_ENDPOINT is the https URL it listens on, and confirm REALM_DRIVER_GATEWAY_CA is the CA that signed its certificate.");
   }
   return pass(id, "gateway presented a certificate that chains to REALM_DRIVER_GATEWAY_CA");
 }

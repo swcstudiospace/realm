@@ -528,7 +528,7 @@ async function andaBridgeCheck(context: CheckContext): Promise<CheckResult> {
     };
   }
   if (!isEngineUrl(url)) {
-    return { id, status: "fail", detail: "andaUrl is not an http or https URL without user information", fix: FIX_ANDA_URL };
+    return { id, status: "fail", detail: "SCHEMA_INVALID: andaUrl is not an http or https URL without user information", fix: FIX_ANDA_URL };
   }
   let reply: AndaReply;
   try {

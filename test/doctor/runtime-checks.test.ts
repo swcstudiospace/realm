@@ -333,6 +333,12 @@ void test("ANDA-02: anda-bridge refuses an andaUrl with user information, contac
   assert.doesNotMatch(`${result.detail} ${fixOf(result)}`, /secret-pass|engine-user/);
 });
 
+void test("ANDA-02: anda-bridge names SCHEMA_INVALID for an andaUrl that does not parse (ANDA-02)", async (t) => {
+  const host = fakeHost({ andaUrl: "not a url", engine: ANDA_OK });
+  const result = resultOf(await runtimeChecks(t, host), "anda-bridge");
+  assert.match(result.detail, /^SCHEMA_INVALID: andaUrl is not an http or https URL/);
+});
+
 // The probe must end at its deadline. The server keeps the socket active by sending a byte every 20 ms,
 // so the idle timeout never fires, and it ends its own reply after trickleMs so that a probe without a
 // deadline finishes with a body that fails the JSON parse instead of hanging the run. This test waits in

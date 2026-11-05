@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer as createTlsServer, type Server as TlsServer } from "node:tls";
 import { loadRuntimeConfig } from "../../src/runtime/config.js";
+import { makeRealmError } from "../../src/core/errors.js";
 import {
   defaultConnectGateway,
   driverSocketCheck,
@@ -236,6 +237,18 @@ void test("driver-socket fails when a correctly permissioned socket does not acc
   assert.match(result.detail, /not accepting connections/);
 });
 
+void test("driver-socket names the catalogue code of a failed connect", async () => {
+  const result = await driverSocketCheck(
+    { REALM_DRIVER_SOCKET: "/run/realm/driver.sock" },
+    statFor({
+      "/run/realm/driver.sock": socket(0o10600),
+      "/run/realm": directory(0o40700),
+    }),
+    () => Promise.reject(makeRealmError("OPENSHELL_GATEWAY_LOST")),
+  );
+  assert.match(result.detail, /^OPENSHELL_GATEWAY_LOST: driver socket is not accepting connections$/);
+});
+
 void test("driver-socket fails when the socket is absent or the parent mode is wrong", async () => {
   const absent = await driverSocketCheck({ REALM_DRIVER_SOCKET: "/run/realm/driver.sock" }, statFor({}));
   assert.equal(absent.status, "fail");
@@ -265,6 +278,12 @@ void test("gateway passes when the endpoint accepts a connection and fails when 
   const noCa = await gatewayCheck({ REALM_DRIVER_GATEWAY_ENDPOINT: "https://gateway.example:443" }, () => Promise.resolve(), 50);
   assert.equal(noCa.status, "fail");
   assert.match(noCa.detail, /REALM_DRIVER_GATEWAY_CA is unset/);
+});
+
+void test("gateway names the catalogue code of a failed connect", async () => {
+  const env = { REALM_DRIVER_GATEWAY_ENDPOINT: "https://gateway.example:443", REALM_DRIVER_GATEWAY_CA: "/etc/realm/gateway-ca.pem" };
+  const result = await gatewayCheck(env, () => Promise.reject(makeRealmError("SCHEMA_INVALID")), 50);
+  assert.match(result.detail, /^SCHEMA_INVALID: gateway is unreachable/);
 });
 
 // A self-signed certificate for the loopback address, with its key. Node trusts it when it is given as the CA.
