@@ -142,8 +142,9 @@ function parseLine(bytes: Uint8Array): { readonly phase: string; readonly pendin
   try {
     value = JSON.parse(Buffer.from(bytes).toString("utf8"));
   } catch {
-    // Not JSON: a torn line left by a crash mid-append (see writeAuditLine). A torn admission means nothing ran, so the line
-    // is ignored by design and is not a failure.
+    // Not JSON: a torn line left by a crash mid-append (see writeAuditLine). A torn admission means nothing ran, so pairing
+    // ignores the line. A torn last line also makes this log's append refuse (runtime-decision item 15), and that refusal is
+    // the failure the reconciliation counts.
     return undefined;
   }
   if (!isRecord(value)) {
