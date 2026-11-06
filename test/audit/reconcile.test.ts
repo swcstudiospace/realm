@@ -150,14 +150,29 @@ void test("CRASH-02: exec admissions pair by their argv summary, and the reconci
   });
 });
 
-void test("CRASH-02: lines with no phase, unparseable lines and a torn last line are ignored", () => {
+void test("CRASH-02: lines with no phase are ignored; an unparseable line is counted as a failure of its log, and nothing is refused", () => {
   withStateDir((stateDir) => {
     // A pre-stage line and a sweep-style line carry no phase.
     appendAudit(stateDir, { sessionId: SESSION, tool: "write", outcome: "ok", path: "a.txt" });
     appendAudit(stateDir, { sessionId: SESSION, tool: "sweep", outcome: "ok", path: "x.tmp" });
     writeFileSync(auditFile(stateDir), `${readFileSync(auditFile(stateDir), "utf8")}not json\n[1,2]\n{"phase":"admission","tool":"wri`);
+    const before = readFileSync(auditFile(stateDir), "utf8");
 
-    assert.deepEqual(reconcileAuditLogs(stateDir), { files: 1, appended: 0, failed: 0, unfinished: [], complete: true, skippedUnchanged: 0, listingTruncated: false, failures: [] });
+    // "[1,2]" is JSON that is not an audit line, so it is ignored. "not json" and the torn last line are not JSON, so each is a failure.
+    const expected = {
+      files: 1,
+      appended: 0,
+      failed: 1,
+      unfinished: [],
+      complete: true,
+      skippedUnchanged: 0,
+      listingTruncated: false,
+      failures: [{ file: `${SESSION}.jsonl`, code: "SCHEMA_INVALID" }],
+    };
+    assert.deepEqual(reconcileAuditLogs(stateDir), expected);
+    // The log is not recorded as checked, so the same count is reported again, and nothing is written to it.
+    assert.deepEqual(reconcileAuditLogs(stateDir), expected);
+    assert.equal(readFileSync(auditFile(stateDir), "utf8"), before);
   });
 });
 
@@ -250,7 +265,7 @@ void test("CRASH-02: a log over the size cap is skipped and counted, not read", 
   });
 });
 
-void test("item 15: a log with a torn last line is not reconciled: the append refuses, counted as a failure", () => {
+void test("item 15: a log with a torn last line is not reconciled: the append refuses, and the torn line is counted too", () => {
   withStateDir((stateDir) => {
     admit(stateDir, "write", { path: "a.txt" });
     const torn = '{"phase":"result","tool":"wri';
@@ -258,8 +273,26 @@ void test("item 15: a log with a torn last line is not reconciled: the append re
 
     const outcome = reconcileAuditLogs(stateDir);
     assert.equal(outcome.appended, 0);
-    assert.equal(outcome.failed, 1);
+    assert.equal(outcome.failed, 2);
+    assert.deepEqual(outcome.failures, [
+      { file: `${SESSION}.jsonl`, code: "SCHEMA_INVALID" },
+      { file: `${SESSION}.jsonl`, code: "AUDIT_WRITE_FAILED" },
+    ]);
     assert.equal(readFileSync(auditFile(stateDir), "utf8").endsWith(torn), true);
+  });
+});
+
+void test("item 2: an unparseable line older than the 64-line lookback is counted as a failure of its log, and nothing is refused", () => {
+  withStateDir((stateDir) => {
+    // The bad line sits more than the append lookback above the end of the file, so no append reads it.
+    const later = Array.from({ length: 70 }, (_, index) => JSON.stringify({ phase: "result", tool: "write", path: `f${String(index)}.txt` }));
+    mkdirSync(join(stateDir, "audit"), { recursive: true });
+    writeFileSync(auditFile(stateDir), `not json\n${later.join("\n")}\n`);
+
+    const outcome = reconcileAuditLogs(stateDir);
+    assert.equal(outcome.appended, 0);
+    assert.equal(outcome.failed, 1);
+    assert.deepEqual(outcome.failures, [{ file: `${SESSION}.jsonl`, code: "SCHEMA_INVALID" }]);
   });
 });
 

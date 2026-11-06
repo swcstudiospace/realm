@@ -8,6 +8,8 @@
 // A line that carries a correlation id pairs on that id; a line without one keeps the (tool, path,
 // execSummary) key. Lines are appended only through `appendAudit`, which stays the single writer of the
 // file. After an append the counts are equal, so a second run appends nothing.
+// A line that is not JSON pairs with nothing. The scan counts it as a failure of its log (SCHEMA_INVALID), once per run. The log is not
+// recorded as checked, so the count repeats on each run until the line is repaired. Nothing is refused, and the rest of the log is reconciled.
 // Single-owner precondition: run this before any dispatcher exists in the process, as the startup reaper
 // does, because a call that is still running would otherwise be labelled unknown.
 //
@@ -64,7 +66,8 @@ export interface ReconcileResult {
   // Reconciliation lines appended across all files.
   readonly appended: number;
   // Failures counted: refused entries (a symlinked directory or file, a non-regular file, an unsafe name), files over the size
-  // cap, files that could not be read, files whose append failed, and a failed write of the progress record. Each failure
+  // cap, files that could not be read, files with a line that is not JSON (SCHEMA_INVALID), files whose append failed, and a failed
+  // write of the progress record. Each failure
   // caught in the run carries its code in `failures`: `failures` has one entry for each count of `failed`.
   readonly failed: number;
   // Base names (no directory) of the logs the deadline left unfinished, including every log not reached. A later run
@@ -135,17 +138,17 @@ function isExecSummary(value: unknown): value is ExecSummary {
   return value["shell"] === true && typeof value["scriptBytes"] === "number" && typeof value["sha256"] === "string";
 }
 
-// One parsed line, or undefined when the line is ignorable: not JSON, not an object, no phase, or a field of
-// the wrong type. A torn admission means nothing ran, because the admission is appended before execution.
-function parseLine(bytes: Uint8Array): { readonly phase: string; readonly pending: Pending } | undefined {
+// One parsed line. "unparsable" is a line that is not JSON: a torn line left by a crash mid-append (see writeAuditLine), or a line the
+// realm did not write. It pairs with nothing, and the scan counts it as a failure of its log. undefined is JSON that is not an audit
+// line this pairing reads: not an object, no phase, or a field of the wrong type. A torn admission means nothing ran, because the
+// admission is appended before execution.
+function parseLine(bytes: Uint8Array): { readonly phase: string; readonly pending: Pending } | "unparsable" | undefined {
   let value: unknown;
   try {
     value = JSON.parse(Buffer.from(bytes).toString("utf8"));
   } catch {
-    // Not JSON: a torn line left by a crash mid-append (see writeAuditLine). A torn admission means nothing ran, so pairing
-    // ignores the line. A torn last line also makes this log's append refuse (runtime-decision item 15), and that refusal is
-    // the failure the reconciliation counts.
-    return undefined;
+    // Not JSON. A torn last line also makes this log's append refuse (runtime-decision item 15), and that refusal is counted too.
+    return "unparsable";
   }
   if (!isRecord(value)) {
     return undefined;
@@ -197,6 +200,8 @@ type ScanOutcome =
   | {
       readonly kind: "done";
       readonly counts: Map<string, Pending>;
+      // Lines that are not JSON. Each counts as a failure of the log; reconcileAuditLogs reports it.
+      readonly unparsed: number;
       // The size and mtime of the log read from the same descriptor after the last byte was read.
       readonly end: { readonly size: number; readonly mtimeMs: number };
     };
@@ -217,10 +222,16 @@ function scanFile(file: string, maxBytes: number, maxLineBytes: number, expired:
     }
     const counts = new Map<string, Pending>();
     let tooManyKeys = false;
+    let unparsed = 0;
     // Read through a function: `tally` assigns the flag in a closure, which the compiler's flow analysis does not see.
     const keysExceeded = (): boolean => tooManyKeys;
+    const unparsedLines = (): number => unparsed;
     const tally = (raw: Uint8Array): void => {
       const parsed = parseLine(raw);
+      if (parsed === "unparsable") {
+        unparsed += 1;
+        return;
+      }
       if (parsed === undefined) {
         return;
       }
@@ -306,7 +317,7 @@ function scanFile(file: string, maxBytes: number, maxLineBytes: number, expired:
       return { kind: "over-cap" };
     }
     const end = fstatSync(fd);
-    return { kind: "done", counts, end: { size: end.size, mtimeMs: end.mtimeMs } };
+    return { kind: "done", counts, end: { size: end.size, mtimeMs: end.mtimeMs }, unparsed: unparsedLines() };
   } finally {
     closeSync(fd);
   }
@@ -772,6 +783,11 @@ export function reconcileAuditLogs(stateDir: string, options: ReconcileOptions =
         }
         files += 1;
         considered += 1;
+        if (scanned.unparsed > 0) {
+          // A line that is not JSON is a failure of this log, counted once per run. Nothing is refused: the rest of the log is reconciled.
+          failed += 1;
+          failures.push({ file: name, code: "SCHEMA_INVALID" });
+        }
         const before = appended;
         const finished = reconcileFile(stateDir, sessionId, scanned.counts, expired, () => {
           appended += 1;
@@ -785,7 +801,8 @@ export function reconcileAuditLogs(stateDir: string, options: ReconcileOptions =
         const after = lstatSync(file);
         const scannedWhatWasStatted = scanned.end.size === stat.size && scanned.end.mtimeMs === stat.mtimeMs;
         const changedOnlyByUs = appended > before || (after.size === stat.size && after.mtimeMs === stat.mtimeMs);
-        if (scannedWhatWasStatted && changedOnlyByUs) {
+        // A log with a line that is not JSON is not recorded, so its count repeats on the next run until the line is repaired.
+        if (scanned.unparsed === 0 && scannedWhatWasStatted && changedOnlyByUs) {
           checked.set(name, { size: after.size, mtimeMs: after.mtimeMs });
           dirty = true;
         }
