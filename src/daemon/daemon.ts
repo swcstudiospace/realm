@@ -265,15 +265,19 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
   logger.info("daemon.starting");
   ensureSocketDir(stateDir, options.socketDirDeps);
   const socketPath = controlSocketPath(stateDir);
-  // OQ-P6-03: a refused dial or a missing path means no live owner, so the path is stale or absent and is removed. A dial
-  // that times out is unknown, not absent: a slow live owner may hold the socket (owner ruling, runtime-decision item 12).
-  // This start is refused and the socket is left in place.
+  // OQ-P6-03: only a refused connection or a missing path proves that no owner holds the socket, so only those remove it.
+  // A dial that times out, or fails any other way (EAGAIN from a full accept backlog, for one), may still have a live owner
+  // behind it (owner ruling, runtime-decision item 12): the start refuses and the path stays. isListening in
+  // src/runtime/driver/server.ts follows the same rule.
   const socketProbe = await (options.probeSocket ?? probeSocketAlive)(socketPath, timeoutMs);
   if (socketProbe === "alive") {
     throw makeRealmError("LOCK_CONFLICT");
   }
-  if (socketProbe === "unknown") {
+  if (socketProbe === "timeout") {
     throw makeRealmError("LOCK_CONFLICT", "DAEMON_START_TIMEOUT");
+  }
+  if (socketProbe === "unknown") {
+    throw makeRealmError("LOCK_CONFLICT");
   }
   const stale = removeSocketFile(socketPath);
   if (stale !== undefined) {

@@ -211,12 +211,14 @@ export async function defaultConnectSocket(socketPath: string, timeoutMs: number
   socket.destroy();
 }
 
-// What a probe of the control socket path found. "alive": a live owner answered. "absent": no owner, a missing path or a
-// refused dial. "unknown": the dial timed out, so a slow owner may still hold the socket.
-export type SocketProbe = "alive" | "absent" | "unknown";
+// What a probe of the control socket path found. "alive": a connection completed, so a live owner answers. "absent": nothing
+// listens there (a refused connection or a missing path), so the path is stale and may be removed. "timeout": no connection
+// completed within the bound. "unknown": any other dial failure, such as EAGAIN from a full accept backlog. Only "absent"
+// proves that no owner holds the path (the same rule as isListening in src/runtime/driver/server.ts).
+export type SocketProbe = "alive" | "absent" | "timeout" | "unknown";
 
-// Probes the control socket path. dialWithin rejects with a RealmError only on a timeout, and a socket error (a refusal or
-// a missing path) is never a RealmError, so only a timeout is unknown. The dial is a parameter so a test can fail it.
+// Probes the control socket path. dialWithin rejects with a RealmError only on a timeout; any other failure arrives as the
+// socket's own Error, whose code says why the dial failed. The dial is a parameter so a test can fail it deterministically.
 export function probeSocketAlive(
   socketPath: string,
   timeoutMs: number,
@@ -227,6 +229,12 @@ export function probeSocketAlive(
       socket.destroy();
       return "alive";
     },
-    (error: unknown): SocketProbe => (error instanceof RealmError ? "unknown" : "absent"),
+    (error: unknown): SocketProbe => {
+      if (error instanceof RealmError) {
+        return "timeout";
+      }
+      const code = error instanceof Error && "code" in error ? error.code : undefined;
+      return code === "ECONNREFUSED" || code === "ENOENT" ? "absent" : "unknown";
+    },
   );
 }

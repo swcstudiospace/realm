@@ -605,11 +605,24 @@ void test("item 12: a timed-out socket probe refuses the start with LOCK_CONFLIC
   writeFileSync(socketPath, "held by a slow owner");
 
   await assert.rejects(
-    startDaemon(daemonParts(fixture, { probeSocket: () => Promise.resolve("unknown") }).options),
+    startDaemon(daemonParts(fixture, { probeSocket: () => Promise.resolve("timeout") }).options),
     (error: unknown) =>
       error instanceof RealmError && error.code === "LOCK_CONFLICT" && error.causeCode === "DAEMON_START_TIMEOUT",
   );
   assert.equal(readFileSync(socketPath, "utf8"), "held by a slow owner");
+});
+
+void test("item 12: a start whose socket probe fails on EAGAIN refuses with LOCK_CONFLICT and keeps the socket path", async () => {
+  const fixture = makeDirs();
+  const socketPath = controlSocketPath(fixture.stateDir);
+  mkdirSync(dirname(socketPath), { recursive: true, mode: 0o700 });
+  writeFileSync(socketPath, "held by a full backlog");
+
+  await assert.rejects(
+    startDaemon(daemonParts(fixture, { probeSocket: () => Promise.resolve("unknown") }).options),
+    (error: unknown) => error instanceof RealmError && error.code === "LOCK_CONFLICT" && error.causeCode === undefined,
+  );
+  assert.equal(readFileSync(socketPath, "utf8"), "held by a full backlog");
 });
 
 void test("item 12: an absent socket probe removes the stale socket path and the start serves", async (t) => {
@@ -647,11 +660,15 @@ void test("item 12: probeSocketAlive reports absent for a missing path and alive
   assert.equal(await probeSocketAlive(socketPath, 1000), "alive");
 });
 
-void test("item 12: probeSocketAlive reports unknown on a dial timeout and absent on any other dial failure", async () => {
-  const timedOut = (): Promise<never> => Promise.reject(makeRealmError("DAEMON_START_TIMEOUT"));
-  const refused = (): Promise<never> => Promise.reject(new Error("connect ECONNREFUSED"));
-  assert.equal(await probeSocketAlive("/unused/control.sock", 1, timedOut), "unknown");
-  assert.equal(await probeSocketAlive("/unused/control.sock", 1, refused), "absent");
+void test("item 12: probeSocketAlive maps a timeout to timeout, a refusal or missing path to absent, and any other dial failure to unknown", async () => {
+  const dialFailing = (error: Error) => (): Promise<never> => Promise.reject(error);
+  const errnoOf = (code: string): Error => Object.assign(new Error(`connect ${code}`), { code });
+  const path = "/unused/control.sock";
+  assert.equal(await probeSocketAlive(path, 1, dialFailing(makeRealmError("DAEMON_START_TIMEOUT"))), "timeout");
+  assert.equal(await probeSocketAlive(path, 1, dialFailing(errnoOf("ECONNREFUSED"))), "absent");
+  assert.equal(await probeSocketAlive(path, 1, dialFailing(errnoOf("ENOENT"))), "absent");
+  assert.equal(await probeSocketAlive(path, 1, dialFailing(errnoOf("EAGAIN"))), "unknown");
+  assert.equal(await probeSocketAlive(path, 1, dialFailing(new Error("no code"))), "unknown");
 });
 
 void test("CLI-01: startDaemon runs the startup reap before serving and deletes pre-existing records (P6-D4)", async (t) => {
