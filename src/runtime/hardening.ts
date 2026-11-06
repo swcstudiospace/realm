@@ -527,7 +527,8 @@ function digestOf(imageRef: string): string | undefined {
 
 // The properties a sandbox container is refused for before it starts (phase 9.5, wave 3, F): the CA tmpfs options and the
 // channel mount options. A missing or mistyped field fails its check.
-export type ChannelProperty = "ca-tmpfs-options" | "channel-mount-options";
+export const CHANNEL_PROPERTIES = Object.freeze(["ca-tmpfs-options", "channel-mount-options"] as const);
+export type ChannelProperty = (typeof CHANNEL_PROPERTIES)[number];
 
 // The channel checks run on the container as created, before the runtime's files are written and before it starts. Reports
 // in the order of ChannelProperty; an empty list means the container conforms.

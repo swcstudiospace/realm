@@ -26,6 +26,7 @@ import { GATEWAY_ID_PATTERN } from "../gateway-config.js";
 import { assertSha256OfFile, spawnSupervisor } from "./supervisor.js";
 import { rebuildRegistry } from "./registry-rebuild.js";
 import { startSocketServer, type SocketServer } from "./server.js";
+import { logAdoptionKept, logAdoptionRemoved } from "./refusal.js";
 
 export const DRIVER_ENV = Object.freeze({
   name: "REALM_DRIVER_NAME",
@@ -268,7 +269,13 @@ export async function startDriver(config: DriverProcessConfig, seams: DriverStar
       image: config.driver.sandboxImage,
     };
     const adoption = await lifecycle.adoptSurvivors(roots);
+    for (const removal of adoption.removed) {
+      logAdoptionRemoved(config.driver.refusalLog, removal.containerId, removal.cause);
+    }
     await (seams.rebuild ?? rebuildRegistry)({ driver, lifecycle, config: config.driver, runtime }, adoption.adopted);
+    for (const kept of adoption.adopted) {
+      logAdoptionKept(config.driver.refusalLog, kept.containerId);
+    }
     rebuilt = true;
   } catch (error: unknown) {
     // The failure that stopped the start is the one reported. A close that also fails is named in its message, and does not replace it.

@@ -12,16 +12,18 @@
 
 import { lstatSync, rmSync, type Stats } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
-import { makeRealmError, RealmError, type ErrorCode } from "../../core/errors.js";
+import { ERROR_CODES, makeRealmError, RealmError, type ErrorCode } from "../../core/errors.js";
 import { withTimeout } from "../../core/timeout.js";
 import { bindRoot, isInsideRoot } from "../../fs/root.js";
 import { readWorkspaceEntry, verifyWorkspaceEntry } from "../../session/workspace-registry.js";
 import { attachRuntimeEvidence } from "../create-evidence.js";
-import { liveCapabilityFailures, readHostProcStatus, type LiveProperty } from "../kernel-caps.js";
+import { LIVE_PROPERTIES, liveCapabilityFailures, readHostProcStatus, type LiveProperty } from "../kernel-caps.js";
 import { readHostOciConfig } from "../seccomp-evidence.js";
 import {
   channelOptionFailures,
+  CHANNEL_PROPERTIES,
   HARDENING_PROFILE,
+  HARDENING_PROPERTIES,
   REALM_MANAGED_LABEL_KEY,
   REALM_MANAGED_LABEL_VALUE,
   SCRATCH_VOLUME_PREFIX,
@@ -121,7 +123,7 @@ export interface AdoptionRoots {
 // entries were removed.
 export interface DriverAdoption {
   readonly adopted: { sandboxName: string; containerId: string }[];
-  readonly removed: { containerId: string; cause: string }[];
+  readonly removed: { containerId: string; cause: AdoptionCause }[];
   readonly secretsRemoved: string[];
   // The realm volumes removed because no adopted sandbox references them, each with its cause, once a listing proved them gone.
   readonly volumesRemoved: { name: string; cause: string }[];
@@ -130,7 +132,21 @@ export interface DriverAdoption {
 // A property a container is refused for: the verifier's properties (D-51), the workspace mount's options and the terminal check
 // made after start (C1, C6), and the channel options checked before start (phase 9.5, F).
 // "mounts-options" is the workspace mount's options (C1). "tty" is a container that has a terminal (C6).
-export type LifecycleProperty = HardeningProperty | LiveProperty | "mounts-options" | "tty" | ChannelProperty;
+export const LIFECYCLE_OWN_PROPERTIES = Object.freeze(["mounts-options", "tty"] as const);
+export type LifecycleProperty = HardeningProperty | LiveProperty | (typeof LIFECYCLE_OWN_PROPERTIES)[number] | ChannelProperty;
+
+// The closed set of causes an adoption removal names. refusal.ts writes only these names on a removal line, so no other value reaches
+// the log. It is the lifecycle properties, the two rebuild causes, and the catalogue codes a verifier can raise.
+export const ADOPTION_CAUSES = Object.freeze([
+  "no-record",
+  "no-artifacts",
+  ...HARDENING_PROPERTIES,
+  ...LIVE_PROPERTIES,
+  ...LIFECYCLE_OWN_PROPERTIES,
+  ...CHANNEL_PROPERTIES,
+  ...ERROR_CODES,
+] as const);
+export type AdoptionCause = (typeof ADOPTION_CAUSES)[number];
 
 // The refusal of a container that fails a create check. Its property is the first failed property, and its message
 // lists every failed property in report order, with that first name first. The refusal is a RealmError with the
@@ -160,7 +176,7 @@ interface Adoption {
 interface Removal {
   readonly kind: "remove";
   readonly containerId: string;
-  readonly cause: string;
+  readonly cause: AdoptionCause;
   readonly sandboxName: string;
 }
 
@@ -615,7 +631,7 @@ export class DriverLifecycle {
   // The first failed property of a survivor against its rebuilt binding, with the checks create runs after start: the verifier, the live
   // capability proof, and the workspace and terminal checks. Undefined when it conforms. A check that throws fails the survivor with the
   // code its error carries.
-  private verificationFailure(inspect: LibpodInspect, binding: HardeningBinding): string | undefined {
+  private verificationFailure(inspect: LibpodInspect, binding: HardeningBinding): AdoptionCause | undefined {
     try {
       const attached = attachRuntimeEvidence(inspect, this.readOciConfig, this.readProcStatus);
       const failed: readonly LifecycleProperty[] = [

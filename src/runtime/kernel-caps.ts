@@ -7,7 +7,9 @@ import type { LibpodInspect } from "./libpod-client.js";
 
 // The property the live capability proof reports. The seccomp mode and no_new_privs flag are verifier properties
 // (hardening.ts), which read the KernelStatus evidence attached here.
-export type LiveProperty = "cap-drop";
+// The properties the live capability check refuses for. The list is the runtime value of the type, which the adoption cause set reads.
+export const LIVE_PROPERTIES = Object.freeze(["cap-drop"] as const);
+export type LiveProperty = (typeof LIVE_PROPERTIES)[number];
 
 // The synthetic inspect field that carries the Seccomp and NoNewPrivs values of /proc/<pid>/status, as the host's text gives them.
 export const KERNEL_STATUS_FIELD = "KernelStatus";

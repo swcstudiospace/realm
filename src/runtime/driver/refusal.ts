@@ -2,8 +2,12 @@
 // or a create stage (compute-driver.ts) raises writes one line: the RPC it arrived on, the check that refused it,
 // and the catalogue code. The RPC and the check are closed sets of constant names, so a line never carries a value, a path, a key
 // or a token. An operator reads the check name to see why a create was refused.
+//
+// Adoption lines (RES-02) share this sink. An adoption writes one line for each container it keeps and one for each it removes, with
+// the closed cause it was removed for. They name a container id and a cause, and no other value (logAdoptionKept, logAdoptionRemoved).
 
 import { makeRealmError, RealmError, type ErrorCode } from "../../core/errors.js";
+import { ADOPTION_CAUSES, type AdoptionCause } from "./lifecycle.js";
 
 // The driver entry point a refusal arrived on. Both are compute RPCs.
 const DRIVER_RPCS = ["ValidateSandboxCreate", "CreateSandbox"] as const;
@@ -107,4 +111,32 @@ export function logStageRefusal(scope: RefusalScope, check: RefusalCheck, error:
   if (error instanceof RealmError && error.code === "SCHEMA_INVALID") {
     logRefusal(scope, check, "SCHEMA_INVALID");
   }
+}
+
+// Whether a name belongs to the adoption cause set. A name outside it is never written.
+function isAdoptionCause(value: string): value is AdoptionCause {
+  const causes: readonly string[] = ADOPTION_CAUSES;
+  return causes.includes(value);
+}
+
+// The container id an adoption line names: a container id or name. A value of any other shape is refused, so no line can carry a
+// separator or a line break.
+const ADOPTION_CONTAINER_ID = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
+
+// Writes the adoption line of a kept container: its id, and nothing else.
+export function logAdoptionKept(log: RefusalLog | undefined, containerId: string): void {
+  if (!ADOPTION_CONTAINER_ID.test(containerId)) {
+    throw makeRealmError("SCHEMA_INVALID");
+  }
+  const sink = log ?? stderrRefusalLog;
+  sink(`realm compute driver adoption adopted: container=${containerId}`);
+}
+
+// Writes the adoption line of a removed container: its id, and the closed cause it was removed for.
+export function logAdoptionRemoved(log: RefusalLog | undefined, containerId: string, cause: AdoptionCause): void {
+  if (!ADOPTION_CONTAINER_ID.test(containerId) || !isAdoptionCause(cause)) {
+    throw makeRealmError("SCHEMA_INVALID");
+  }
+  const sink = log ?? stderrRefusalLog;
+  sink(`realm compute driver adoption removed: container=${containerId} cause=${cause}`);
 }

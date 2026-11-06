@@ -338,3 +338,33 @@ void test("restart: a survivor whose supervisor cannot be respawned is destroyed
   assert.equal(existsSync(secretDirOf(config.secretRoot, name)), false, "the survivor's secret directory was removed");
   assert.equal(existsSync(processConfig.socketPath), false, "the failed start left no socket");
 });
+
+void test("restart: the start logs an adopted line for the kept container, and a removed line with its cause for one with no record", async (t) => {
+  const config = driverConfig();
+  t.after(() => {
+    rmSync(dirname(config.sandboxStateRoot), { recursive: true, force: true });
+  });
+  const engine = new RestartEngine();
+  const kept = leaveSurvivor(engine, config);
+  // A realm container whose sandbox has no registry entry and no secret directory: nothing is retained for it, so the start removes it.
+  const orphan = "realm-0123abcd-0000-4000-8000-000000000001";
+  const orphanId = `c-${orphan}`;
+  engine.containers.set(orphanId, { id: orphanId, labels: realmLabels(orphan), inspect: { Id: orphanId, Name: orphan } });
+  const lines: string[] = [];
+  const logged: ComputeDriverConfig = {
+    ...config,
+    refusalLog: (line: string): void => {
+      lines.push(line);
+    },
+  };
+  const server = await startDriver(processConfigOf(logged), seamsOver(engine, new FakeRuntime()));
+  t.after(async () => {
+    await server.close();
+  });
+
+  assert.deepEqual(engine.removals, [orphanId], "the start removed the container with no record, and no other");
+  assert.deepEqual(lines, [
+    `realm compute driver adoption removed: container=${orphanId} cause=no-record`,
+    `realm compute driver adoption adopted: container=c-${kept}`,
+  ]);
+});
