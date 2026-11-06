@@ -149,27 +149,31 @@ export function readChainHead(fd: number): ChainHead {
 }
 
 // The newest chained line within the lookback, searched backward from lineEnd (the index of the newline that ends it, or the
-// end of the window). Undefined when the lookback finds none.
+// end of the window). Fails closed (owner ruling, runtime-decision item 15): an unparsable line throws, and so does a window
+// cut mid-file or a lookback that runs out first. Undefined only when the scan reaches the file start with no chained line.
 function lastChainedLine(buf: Buffer, lineEnd: number, startsAtFile: boolean): { readonly seq: number; readonly bytes: Buffer } | undefined {
   let end = lineEnd;
   for (let seen = 0; seen < SEQ_LOOKBACK_LINES && end > 0; seen += 1) {
     const boundary = buf.lastIndexOf(0x0a, end - 1);
-    // A window that starts mid-file must not parse the cut prefix as a record.
+    // A window that starts mid-file must not parse the cut prefix as a record, and it cannot reach the chain head.
     if (boundary < 0 && !startsAtFile) {
-      break;
+      throw new Error("audit chain head is outside the tail window");
     }
     const start = boundary < 0 ? 0 : boundary + 1;
     const bytes = buf.subarray(start, end);
-    const seq = chainedSeq(bytes);
-    if (seq !== undefined) {
-      return { seq, bytes };
+    const record = parseObject(bytes);
+    if (record === undefined) {
+      throw new Error("audit line is not a JSON object");
+    }
+    if (isChained(record)) {
+      return { seq: record["seq"] as number, bytes };
     }
     if (boundary < 0) {
-      break;
+      return undefined;
     }
     end = boundary;
   }
-  return undefined;
+  throw new Error("audit chain head is outside the lookback");
 }
 
 function nextSeqFromTail(buf: Buffer, lineEnd: number, startsAtFile: boolean): number {
@@ -236,14 +240,6 @@ export function readAuditHead(file: string): AuditHeadOutcome {
   } finally {
     closeSync(fd);
   }
-}
-
-function chainedSeq(line: Uint8Array): number | undefined {
-  const parsed = parseObject(line);
-  if (parsed === undefined || !isChained(parsed)) {
-    return undefined;
-  }
-  return parsed["seq"] as number;
 }
 
 function parseObject(line: Uint8Array): Record<string, unknown> | undefined {

@@ -412,22 +412,22 @@ void test("CRASH-02: an append to a file whose last line has no newline yields t
   });
 });
 
-void test("CRASH-02: an append after a line cut short by a crash closes the cut line and writes its own line intact (D-1403)", () => {
+void test("item 15: an append after a line cut short by a crash refuses and leaves the cut line untouched (D-1403)", () => {
   withStateDir((stateDir) => {
     appendAudit(stateDir, { sessionId: SESSION, tool: "write", outcome: "ok", phase: "admission", path: "a.txt" });
     // A crash mid-append: a valid first line, then a second line cut short with no newline.
     const torn = '{"at":"2026-10-29T00:00:00.000Z","sessionId":"x","tool":"wri';
     fs.appendFileSync(auditFile(stateDir), torn);
 
-    appendAudit(stateDir, { sessionId: SESSION, tool: "write", outcome: "ok", phase: "result", path: "a.txt" });
-
+    assert.throws(
+      () => {
+        appendAudit(stateDir, { sessionId: SESSION, tool: "write", outcome: "ok", phase: "result", path: "a.txt" });
+      },
+      (error: unknown) => isAuditWriteFailed(error),
+    );
     const text = readFileSync(auditFile(stateDir), "utf8");
-    assert.equal(text.endsWith("\n"), true);
-    const lines = text.slice(0, -1).split("\n");
-    assert.equal(lines.length, 3);
-    assert.equal(lines[1], torn);
-    assert.equal((JSON.parse(lines[0] ?? "") as Record<string, unknown>)["phase"], "admission");
-    assert.equal((JSON.parse(lines[2] ?? "") as Record<string, unknown>)["phase"], "result");
+    assert.equal(text.endsWith(torn), true);
+    assert.equal(text.split("\n").length, 2);
   });
 });
 

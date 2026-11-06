@@ -12,7 +12,6 @@ import {
   checkAuditFile,
   formatAuditCheckpoint,
   parseAuditCheckpoint,
-  sha256Hex,
   verifyAuditFile,
 } from "../../src/audit/chain.js";
 import { runCli } from "../../src/cli/main.js";
@@ -57,25 +56,18 @@ void test("OBS-01: each append carries seq and prev, and the first line uses 64 
   });
 });
 
-void test("OBS-01: a torn tail is closed and the next line hashes the fragment, not a glued record (D-1702)", () => {
+void test("item 15: an append after a torn tail refuses with AUDIT_WRITE_FAILED and leaves the fragment untouched", () => {
   withStateDir((stateDir) => {
     mkdirSync(join(stateDir, "audit"), { recursive: true });
     const torn = '{"tool":"wri';
     writeFileSync(auditFile(stateDir), torn);
-    appendAudit(stateDir, { sessionId: SESSION, tool: "write", outcome: "ok", phase: "result", path: "a.txt" });
-    const text = readFileSync(auditFile(stateDir), "utf8");
-    const lines = text.slice(0, -1).split("\n");
-    assert.equal(lines.length, 2);
-    assert.equal(lines[0], torn);
-    const next = JSON.parse(lines[1] ?? "") as { seq: number; prev: string; phase: string };
-    assert.equal(next.phase, "result");
-    assert.equal(next.seq, 1);
-    assert.equal(next.prev, sha256Hex(Buffer.from(torn, "utf8")));
-    assert.equal(text.includes(`${torn}{`), false);
-    const verified = verifyAuditFile(auditFile(stateDir));
-    assert.equal(verified.ok, true);
-    assert.equal(verified.tornTail, false);
-    assert.deepEqual(verified.unparsedLines, [1]);
+    assert.throws(
+      () => {
+        appendAudit(stateDir, { sessionId: SESSION, tool: "write", outcome: "ok", phase: "result", path: "a.txt" });
+      },
+      (error: unknown) => error instanceof RealmError && error.code === "AUDIT_WRITE_FAILED",
+    );
+    assert.equal(readFileSync(auditFile(stateDir), "utf8"), torn);
   });
 });
 
@@ -96,7 +88,7 @@ void test("OBS-01: a line at the JSON bound can be followed by another append", 
   });
 });
 
-void test("OBS-01: a torn fragment cannot hide the last complete seq", () => {
+void test("item 15: a torn fragment after a complete seq refuses the append and leaves the file untouched", () => {
   withStateDir((stateDir) => {
     mkdirSync(join(stateDir, "audit"), { recursive: true });
     const prefix = `{"seq":4,"prev":"${AUDIT_GENESIS_PREV}","tool":"write","pad":"`;
@@ -104,11 +96,28 @@ void test("OBS-01: a torn fragment cannot hide the last complete seq", () => {
     const complete = prefix + "y".repeat(2 * 1024 * 1024 - Buffer.byteLength(prefix + suffix)) + suffix;
     const fragment = "z".repeat(3 * 1024 * 1024);
     writeFileSync(auditFile(stateDir), `${complete}\n${fragment}`);
-    appendAudit(stateDir, { sessionId: SESSION, tool: "write", outcome: "ok", phase: "result", path: "a.txt" });
-    const parts = linesOf(auditFile(stateDir));
-    const next = JSON.parse(parts[parts.length - 1] ?? "") as { seq: number; prev: string };
-    assert.equal(next.seq, 5);
-    assert.equal(next.prev, sha256(fragment));
+    assert.throws(
+      () => {
+        appendAudit(stateDir, { sessionId: SESSION, tool: "write", outcome: "ok", phase: "result", path: "a.txt" });
+      },
+      (error: unknown) => error instanceof RealmError && error.code === "AUDIT_WRITE_FAILED",
+    );
+    assert.equal(readFileSync(auditFile(stateDir), "utf8"), `${complete}\n${fragment}`);
+  });
+});
+
+void test("item 15: an unparsable complete last line refuses the append, even with a chained line before it", () => {
+  withStateDir((stateDir) => {
+    appendAudit(stateDir, { sessionId: SESSION, tool: "write", outcome: "ok", phase: "admission", path: "a.txt" });
+    const before = readFileSync(auditFile(stateDir), "utf8");
+    writeFileSync(auditFile(stateDir), `${before}not json\n`);
+    assert.throws(
+      () => {
+        appendAudit(stateDir, { sessionId: SESSION, tool: "write", outcome: "ok", phase: "result", path: "a.txt" });
+      },
+      (error: unknown) => error instanceof RealmError && error.code === "AUDIT_WRITE_FAILED",
+    );
+    assert.equal(readFileSync(auditFile(stateDir), "utf8"), `${before}not json\n`);
   });
 });
 
