@@ -8,8 +8,9 @@
 // A line that carries a correlation id pairs on that id; a line without one keeps the (tool, path,
 // execSummary) key. Lines are appended only through `appendAudit`, which stays the single writer of the
 // file. After an append the counts are equal, so a second run appends nothing.
-// A line that is not JSON pairs with nothing. The scan counts it as a failure of its log (SCHEMA_INVALID), once per run. The log is not
-// recorded as checked, so the count repeats on each run until the line is repaired. Nothing is refused, and the rest of the log is reconciled.
+// A line that is not JSON pairs with nothing. The scan counts it as a failure of its log (SCHEMA_INVALID) on the start that reads the
+// log, and the log is recorded with an unparsable flag, so each later start counts it again without a scan. Nothing is refused, and the
+// rest of the log is reconciled. No command repairs the line: an operator repairs the file by hand (runtime-decision item 15).
 // Single-owner precondition: run this before any dispatcher exists in the process, as the startup reaper
 // does, because a call that is still running would otherwise be labelled unknown.
 //
@@ -386,6 +387,8 @@ const LOG_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}\.jsonl$/;
 interface Checked {
   readonly size: number;
   readonly mtimeMs: number;
+  // True when the log held a line that is not JSON when it was last read. Its failure is reported again on each start, without a scan.
+  readonly unparsable?: boolean;
 }
 
 interface Progress {
@@ -480,7 +483,8 @@ function readProgress(dir: string, maxBytes: number, maxEntries: number): Progre
       typeof value["mtimeMs"] === "number" &&
       Number.isFinite(value["mtimeMs"])
     ) {
-      checked.set(name, { size: value["size"], mtimeMs: value["mtimeMs"] });
+      // The flag is read as set only when it is `true`; any other value of it is read as absent.
+      checked.set(name, { size: value["size"], mtimeMs: value["mtimeMs"], ...(value["unparsable"] === true ? { unparsable: true } : {}) });
     } else {
       clean = false;
       failure = "SCHEMA_INVALID";
@@ -512,7 +516,8 @@ function recordBody(
     if (parts.length >= maxEntries) {
       break;
     }
-    const part = `${JSON.stringify(name)}:${JSON.stringify({ size: entry.size, mtimeMs: entry.mtimeMs })}`;
+    const value = entry.unparsable === true ? { size: entry.size, mtimeMs: entry.mtimeMs, unparsable: true } : { size: entry.size, mtimeMs: entry.mtimeMs };
+    const part = `${JSON.stringify(name)}:${JSON.stringify(value)}`;
     const added = Buffer.byteLength(part, "utf8") + (parts.length > 0 ? 1 : 0);
     if (bytes + added > maxBytes) {
       break;
@@ -760,6 +765,11 @@ export function reconcileAuditLogs(stateDir: string, options: ReconcileOptions =
           // A stat is cheap and bounded by the deadline and the listing bound, so a skip does not count against the cap.
           files += 1;
           skippedUnchanged += 1;
+          if (prior.unparsable === true) {
+            // The log is unchanged and held a line that is not JSON when it was last read: the failure is reported again, without a scan.
+            failed += 1;
+            failures.push({ file: name, code: "SCHEMA_INVALID" });
+          }
           continue;
         }
         if (considered >= maxFiles) {
@@ -801,9 +811,9 @@ export function reconcileAuditLogs(stateDir: string, options: ReconcileOptions =
         const after = lstatSync(file);
         const scannedWhatWasStatted = scanned.end.size === stat.size && scanned.end.mtimeMs === stat.mtimeMs;
         const changedOnlyByUs = appended > before || (after.size === stat.size && after.mtimeMs === stat.mtimeMs);
-        // A log with a line that is not JSON is not recorded, so its count repeats on the next run until the line is repaired.
-        if (scanned.unparsed === 0 && scannedWhatWasStatted && changedOnlyByUs) {
-          checked.set(name, { size: after.size, mtimeMs: after.mtimeMs });
+        // A log that holds a line that is not JSON is recorded with its flag, so a later start reports it without reading the log again.
+        if (scannedWhatWasStatted && changedOnlyByUs) {
+          checked.set(name, { size: after.size, mtimeMs: after.mtimeMs, ...(scanned.unparsed > 0 ? { unparsable: true } : {}) });
           dirty = true;
         }
       } catch (error: unknown) {

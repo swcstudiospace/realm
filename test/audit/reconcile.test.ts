@@ -170,8 +170,8 @@ void test("CRASH-02: lines with no phase are ignored; an unparseable line is cou
       failures: [{ file: `${SESSION}.jsonl`, code: "SCHEMA_INVALID" }],
     };
     assert.deepEqual(reconcileAuditLogs(stateDir), expected);
-    // The log is not recorded as checked, so the same count is reported again, and nothing is written to it.
-    assert.deepEqual(reconcileAuditLogs(stateDir), expected);
+    // The log is recorded with its flag, so the second start reports the same failure without reading the log again.
+    assert.deepEqual(reconcileAuditLogs(stateDir), { ...expected, skippedUnchanged: 1 });
     assert.equal(readFileSync(auditFile(stateDir), "utf8"), before);
   });
 });
@@ -293,6 +293,19 @@ void test("item 2: an unparseable line older than the 64-line lookback is counte
     assert.equal(outcome.appended, 0);
     assert.equal(outcome.failed, 1);
     assert.deepEqual(outcome.failures, [{ file: `${SESSION}.jsonl`, code: "SCHEMA_INVALID" }]);
+  });
+});
+
+void test("item 2: a log with an unparseable line still gets its reconciliation line appended, and only the failure is counted", () => {
+  withStateDir((stateDir) => {
+    admit(stateDir, "write", { path: "a.txt" });
+    writeFileSync(auditFile(stateDir), `not json\n${readFileSync(auditFile(stateDir), "utf8")}`);
+
+    const outcome = reconcileAuditLogs(stateDir);
+    assert.equal(outcome.appended, 1, "the unfinished admission gets its line, though the log holds a line that is not JSON");
+    assert.deepEqual(outcome.failures, [{ file: `${SESSION}.jsonl`, code: "SCHEMA_INVALID" }]);
+    assert.equal(outcome.failed, 1);
+    assert.equal(readFileSync(auditFile(stateDir), "utf8").split("\n").filter((line) => line.includes("AUDIT_OUTCOME_UNKNOWN")).length, 1);
   });
 });
 
