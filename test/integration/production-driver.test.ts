@@ -15,9 +15,9 @@
 //   6. A rootless Podman API socket under XDG_RUNTIME_DIR.
 //   7. The openshell CLI on PATH.
 //   8. The built CLI at dist/src/cli/main.js, next to the compiled tests (npm run build).
-// A default npm test therefore skips every scenario below (eleven in all: default policy, immediate cycle, egress allowlist, wrong
-// image digest, crash recovery, MCP exec, the MCP exec timeout, the AgentOS runner exit, the daemon-side startup budget, a stopped gateway and two projects) and
-// reports each as skipped.
+// A default npm test therefore skips every scenario below (fourteen in all: default policy, immediate cycle, egress allowlist, wrong
+// image digest, crash recovery, MCP exec, the MCP exec timeout, the AgentOS runner exit, the daemon-side startup budget, a stopped gateway,
+// two projects, a verifier-failed stand-in, a scratch file and a snapshot round trip) and reports each as skipped.
 //
 // Preconditions the suite cannot check and the operator must provide:
 //   - The gateway and the compute driver run under the realm account with the same image and roots the variables above name.
@@ -47,7 +47,8 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
 import { DEFAULT_AGENTOS_PROBE_PATH } from "../../src/runtime/agentos-driver.js";
-import { SANDBOX_WORKSPACE_PATH } from "../../src/runtime/openshell.js";
+import { OPENSHELL_MANAGED_LABEL_KEY, OPENSHELL_MANAGED_LABEL_VALUE, OPENSHELL_SANDBOX_NAME_LABEL_KEY, SANDBOX_WORKSPACE_PATH } from "../../src/runtime/openshell.js";
+import { HARDENING_PROFILE, scratchVolumeNameOf } from "../../src/runtime/hardening.js";
 import { recordFileName, sandboxNameOfSession, sessionIdOfWorkspace, sessionsDirOf } from "../../src/session/paths.js";
 import { workspaceRegistryDirOf } from "../../src/session/workspace-registry.js";
 import {
@@ -85,14 +86,14 @@ import {
   noticeOfStatus,
   productionSkipReason,
   readLiveInputs,
-  reapCountsOfNotice,
+  createUnstartedContainer,
   realmCli,
   realmCliWithWorkspace,
   requestLogLinesOf,
   runCommand,
   sandboxExec,
   startMcpSession,
-  startupReapLineFor,
+  podmanCli,
   stateOfStatus,
   statusFieldsOf,
   toolErrorOf,
@@ -111,6 +112,8 @@ import {
   type McpSession,
   type ScenarioEnvironment,
   type ScenarioSpec,
+  startupRecordOf,
+  volumeExists,
 } from "../support/production-live.js";
 
 // The compiled CLI beside the compiled tests: this file runs from dist/test/integration, the CLI from dist/src/cli.
@@ -547,16 +550,40 @@ function jsonLinesSinceStartup(log: string): boolean {
   }
   return true;
 }
-void test("production live 5: after the daemon is killed, the next realm up reaps the sandbox it left and reaches active with exactly one", { skip: gate, timeout: SCENARIO_TIMEOUT_MS }, async (t) => {
-  const scenario = startScenario(t, { image: inputs().image });
-  await assertActive(scenario);
-  const sandbox = sandboxOf(scenario);
 
-  // The daemon this scenario's own realm up started: the one process whose whole command is the node binary and the daemon entry.
+// The labels a realm sandbox's container carries: the OpenShell pair that names its owner and its sandbox.
+function sandboxLabelsOf(sandbox: string): Readonly<Record<string, string>> {
+  return { [OPENSHELL_MANAGED_LABEL_KEY]: OPENSHELL_MANAGED_LABEL_VALUE, [OPENSHELL_SANDBOX_NAME_LABEL_KEY]: sandbox };
+}
+
+// SIGKILLs the one daemon this scenario's realm up started, and waits until none runs. The crash never runs the daemon's shutdown, so
+// the sandbox it left is still there; each caller checks that. Returns the killed pid.
+async function crashDaemon(scenario: Scenario): Promise<number> {
   const started = await daemonPids(scenario);
   assert.equal(started.length, 1, `exactly one daemon process must run from the compiled daemon entry; found ${String(started.length)} (pids: ${started.length === 0 ? "none" : started.join(", ")})`);
   const daemonPid = started[0];
   assert.ok(daemonPid !== undefined, "the daemon pid");
+  process.kill(daemonPid, "SIGKILL");
+  const gone = await pollUntil(
+    async () => {
+      const remaining = await daemonPids(scenario);
+      return remaining.length === 0 ? { done: true } : { done: false, detail: `daemon pid(s) still running: ${remaining.join(", ")}` };
+    },
+    { timeoutMs: CRASH_OBSERVE_TIMEOUT_MS, intervalMs: CRASH_OBSERVE_INTERVAL_MS },
+  );
+  assert.ok(gone.ok, `the daemon must be gone after SIGKILL: ${gone.detail}`);
+  return daemonPid;
+}
+
+// The workspace marker scenario 5 writes before the crash, and the text it reads back after the restart.
+const RESTART_MARKER_FILE = "restart-marker.txt";
+const RESTART_MARKER_TEXT = "kept across the daemon crash";
+void test("production live 5: after the daemon is killed, the next realm up keeps the sandbox and its container, and destroys a stray", { skip: gate, timeout: SCENARIO_TIMEOUT_MS }, async (t) => {
+  const scenario = startScenario(t, { image: inputs().image }, [RESTART_MARKER_FILE]);
+  await assertActive(scenario);
+  const sandbox = sandboxOf(scenario);
+  writeFileSync(join(scenario.inputs.workspaceRoot, RESTART_MARKER_FILE), RESTART_MARKER_TEXT);
+
   const primed = startMcpSession(scenario.inputs, scenario.environment);
   try {
     await initializeMcp(primed);
@@ -568,20 +595,12 @@ void test("production live 5: after the daemon is killed, the next realm up reap
   }
 
   try {
-    // The container the crash will leave behind, listed before the kill: the restarted daemon must report destroying this one.
+    // The container the crash will leave behind, listed before the kill: the restarted daemon must adopt this same container.
     const before = await itemsOf(listSandboxContainers(scenario.inputs, sandbox), `the ${sandbox} containers before the kill`);
     assert.equal(before.length, 1, `exactly one ${sandbox} container must exist before the kill; found ${String(before.length)}`);
-    const crashedContainerId = before[0];
-    assert.ok(crashedContainerId !== undefined && crashedContainerId !== "", "the id of the container the crash leaves behind");
-    process.kill(daemonPid, "SIGKILL");
-    const gone = await pollUntil(
-      async () => {
-        const remaining = await daemonPids(scenario);
-        return remaining.length === 0 ? { done: true } : { done: false, detail: `daemon pid(s) still running: ${remaining.join(", ")}` };
-      },
-      { timeoutMs: CRASH_OBSERVE_TIMEOUT_MS, intervalMs: CRASH_OBSERVE_INTERVAL_MS },
-    );
-    assert.ok(gone.ok, `the daemon must be gone after SIGKILL: ${gone.detail}`);
+    const keptContainerId = before[0];
+    assert.ok(keptContainerId !== undefined && keptContainerId !== "", "the id of the container the crash leaves behind");
+    const crashedPid = await crashDaemon(scenario);
 
     // The crash never ran the daemon's shutdown, so its sandbox is still there. This is what proves the crash was real.
     const left = await pollUntil(
@@ -593,7 +612,13 @@ void test("production live 5: after the daemon is killed, the next realm up reap
     );
     assert.ok(left.ok, `the crash must leave the sandbox container behind: ${left.detail}`);
 
-    // The next start reaps what the crash left and creates the sandbox again. Its failure is reported with the CLI's reason code.
+    // A stray: a container that carries the sandbox's labels and is named otherwise, so no record holds it. The next start destroys it.
+    const stray = await createUnstartedContainer(scenario.inputs, `realm-stray-${randomUUID().slice(0, 8)}`, sandboxLabelsOf(sandbox));
+    assertExit(stray, 0, "creating the stray container");
+    const strayId = stray.stdout.trim();
+    assert.notEqual(strayId, "", "the stray container's id");
+
+    // The next start adopts the sandbox the crash left, and reaches active with that same container.
     const restarted = await up(scenario);
     assertExit(restarted, 0, "realm up after the daemon crash");
     const active = await waitForActive(scenario.inputs, scenario.environment, ACTIVE_TIMEOUT_MS);
@@ -601,31 +626,38 @@ void test("production live 5: after the daemon is killed, the next realm up reap
 
     const replacement = await daemonPids(scenario);
     assert.equal(replacement.length, 1, `exactly one daemon process must run after the restart; found ${String(replacement.length)} (pids: ${replacement.length === 0 ? "none" : replacement.join(", ")})`);
-    assert.notEqual(replacement[0], daemonPid, "the restarted daemon must be a new process");
-    const replacementReady = await pollUntil(
+    assert.notEqual(replacement[0], crashedPid, "the restarted daemon must be a new process");
+    // RES-05: the one container is the one the crash left. The stray carries the sandbox's label, so a listing that still held it
+    // would not match.
+    const adopted = await pollUntil(
       async () => {
-        const sandboxes = await itemsOf(listSandboxesNamed(scenario.inputs, sandbox), `the ${sandbox} sandboxes`);
         const containers = await itemsOf(listSandboxContainers(scenario.inputs, sandbox), `the ${sandbox} containers`);
-        return sandboxes.length === 1 && containers.length === 1
+        return containers.length === 1 && containers[0] === keptContainerId
           ? { done: true }
-          : { done: false, detail: `sandboxes ${String(sandboxes.length)}, containers ${String(containers.length)}` };
+          : { done: false, detail: `containers ${containers.join(", ") || "none"}; expected only ${keptContainerId}` };
       },
       { timeoutMs: CRASH_OBSERVE_TIMEOUT_MS, intervalMs: CRASH_OBSERVE_INTERVAL_MS },
     );
-    assert.ok(replacementReady.ok, `exactly one ${sandbox} sandbox and container after the restart: ${replacementReady.detail}`);
+    assert.ok(adopted.ok, `the restart must keep ${keptContainerId} and remove the stray ${strayId}: ${adopted.detail}`);
+    const sandboxes = await itemsOf(listSandboxesNamed(scenario.inputs, sandbox), `the ${sandbox} sandboxes`);
+    assert.equal(sandboxes.length, 1, `exactly one ${sandbox} sandbox must exist after the restart; found ${String(sandboxes.length)}`);
 
-    // D-1410: the startup reap is visible. The notice rides on the status reply, and the daemon log names the destroyed container.
+    // The status notice reports the adoption, and the restarted daemon's startup record counts the one session it kept.
     const status = await statusCli(scenario);
     assertExit(status, 0, "realm status after the daemon crash");
     const notice = noticeOfStatus(status.stdout);
-    assert.ok(notice !== undefined && notice.includes("destroyed at startup"), `realm status must carry the startup notice: ${describeResult(status)}`);
-    const counts = reapCountsOfNotice(notice);
-    assert.ok(counts !== undefined, `the notice must state its counts: ${notice}`);
-    assert.equal(counts.containers, 1, `the notice must count one container: ${notice}`);
-    assert.ok(counts.sessionRecords >= 1, `the notice must count at least one session record: ${notice}`);
+    assert.ok(notice !== undefined && notice.includes("adopted and kept"), `realm status must report the adoption: ${describeResult(status)}`);
     const daemonLog = readFileSync(join(scenario.environment.stateDir, "daemon.log"), "utf8");
-    assert.ok(startupReapLineFor(daemonLog, crashedContainerId) !== undefined, `daemon.log must hold a daemon.startup record for one container that names ${crashedContainerId}`);
     assert.equal(jsonLinesSinceStartup(daemonLog), true, "every daemon.log line from the restart's daemon.startup record must be JSON");
+    const startup = startupRecordOf(daemonLog);
+    assert.ok(startup !== undefined, "daemon.log must hold a daemon.startup record");
+    assert.equal(startup["adopted"], 1, `the restart must adopt exactly one session: ${JSON.stringify(startup)}`);
+
+    // /workspace is intact: the marker written before the crash reads back, unchanged, from inside the sandbox.
+    const marker = await exec(scenario, ["cat", `${SANDBOX_WORKSPACE_PATH}/${RESTART_MARKER_FILE}`]);
+    assertExit(marker, 0, "reading the workspace marker from the sandbox after the restart");
+    assert.equal(marker.stdout.trim(), RESTART_MARKER_TEXT, "the workspace marker must read back unchanged");
+
     const auditFile = join(scenario.environment.stateDir, "audit", `${sessionIdFor(scenario.inputs.workspaceRoot)}.jsonl`);
     const verified = await realmCli(scenario.inputs, scenario.environment, ["audit", "verify", "--file", auditFile], STATUS_TIMEOUT_MS);
     assertExit(verified, 0, "realm audit verify after the restart");
@@ -1111,4 +1143,119 @@ void test("production live: two projects get their own sandboxes, workspaces and
   const markerStillInB = await sandboxExec(liveInputs, idB, ["cat", markerPath]);
   assertExit(markerStillInB, 0, "cat the marker in B's sandbox after down of A");
   assert.equal(markerStillInB.stdout, MARKER_IN_B, "B's sandbox must still answer with B's marker");
+});
+
+// ---- Scenario 11: a container that fails the create-time verifier --------------------------------------------------------------------
+
+void test("production live 11: a container that fails the create-time verifier is removed at the next start, and the sandbox is created again", { skip: gate, timeout: SCENARIO_TIMEOUT_MS }, async (t) => {
+  const scenario = startScenario(t, { image: inputs().image });
+  await assertActive(scenario);
+  const sandbox = sandboxOf(scenario);
+  const before = await itemsOf(listSandboxContainers(scenario.inputs, sandbox), `the ${sandbox} containers before the crash`);
+  assert.equal(before.length, 1, `exactly one ${sandbox} container must exist before the crash; found ${String(before.length)}`);
+  const conformingId = before[0];
+  assert.ok(conformingId !== undefined && conformingId !== "", "the id of the conforming container");
+
+  try {
+    await crashDaemon(scenario);
+    // The conforming container is removed, and a container with the sandbox's own name takes its place. It carries the labels and the
+    // name, so the adoption matches it to its record, but it has none of the hardening, so it fails the verifier.
+    const removed = await podmanCli(scenario.inputs, ["rm", "-f", conformingId]);
+    assertExit(removed, 0, "removing the conforming container before the stand-in is created");
+    const standIn = await createUnstartedContainer(scenario.inputs, sandbox, sandboxLabelsOf(sandbox));
+    assertExit(standIn, 0, "creating the non-conforming stand-in");
+    const standInId = standIn.stdout.trim();
+    assert.notEqual(standInId, "", "the stand-in container's id");
+
+    const restarted = await up(scenario);
+    assertExit(restarted, 0, "realm up after the daemon crash");
+    const active = await waitForActive(scenario.inputs, scenario.environment, ACTIVE_TIMEOUT_MS);
+    assert.ok(active.ok, `realm status must reach active after the restart: ${active.detail}`);
+
+    // RES-05: the stand-in fails the verifier and is removed, and the sandbox is created again as one new container.
+    const recreated = await pollUntil(
+      async () => {
+        const containers = await itemsOf(listSandboxContainers(scenario.inputs, sandbox), `the ${sandbox} containers`);
+        return containers.length === 1 && containers[0] !== standInId
+          ? { done: true }
+          : { done: false, detail: `containers ${containers.join(", ") || "none"}; the stand-in ${standInId} must be gone` };
+      },
+      { timeoutMs: CRASH_OBSERVE_TIMEOUT_MS, intervalMs: CRASH_OBSERVE_INTERVAL_MS },
+    );
+    assert.ok(recreated.ok, `exactly one new ${sandbox} container must replace the stand-in: ${recreated.detail}`);
+  } catch (error) {
+    await up(scenario);
+    throw error;
+  }
+
+  await assertDownAndClean(scenario);
+});
+
+// ---- Scenario 12: the scratch volume ------------------------------------------------------------------------------------------------
+
+const SCRATCH_TEXT = "scratch survives the restart";
+
+void test("production live 12: a scratch file survives a daemon restart, and down removes the scratch volume", { skip: gate, timeout: SCENARIO_TIMEOUT_MS }, async (t) => {
+  const scenario = startScenario(t, { image: inputs().image });
+  await assertActive(scenario);
+  const volume = scratchVolumeNameOf(sessionIdFor(scenario.inputs.workspaceRoot));
+  const scratchFile = `${HARDENING_PROFILE.scratchDestination}/marker.txt`;
+  const written = await exec(scenario, ["sh", "-c", `printf '%s' '${SCRATCH_TEXT}' > ${scratchFile}`]);
+  assertExit(written, 0, "writing the scratch marker");
+  assert.equal(await volumeExists(scenario.inputs, volume), true, `the scratch volume ${volume} must exist while the sandbox runs`);
+
+  try {
+    await crashDaemon(scenario);
+    const restarted = await up(scenario);
+    assertExit(restarted, 0, "realm up after the daemon crash");
+    const active = await waitForActive(scenario.inputs, scenario.environment, ACTIVE_TIMEOUT_MS);
+    assert.ok(active.ok, `realm status must reach active after the restart: ${active.detail}`);
+    const read = await exec(scenario, ["cat", scratchFile]);
+    assertExit(read, 0, "reading the scratch marker after the restart");
+    assert.equal(read.stdout, SCRATCH_TEXT, "the scratch file must survive the daemon restart");
+  } catch (error) {
+    await up(scenario);
+    throw error;
+  }
+
+  await assertDownAndClean(scenario);
+  assert.equal(await volumeExists(scenario.inputs, volume), false, `down must remove the scratch volume ${volume}`);
+});
+
+// ---- Scenario 13: the snapshot round trip -------------------------------------------------------------------------------------------
+
+const SNAPSHOT_ID = "snapshot-one";
+const SNAPSHOT_KEEP = "snapshot-keep.txt";
+const SNAPSHOT_DELETE = "snapshot-delete.txt";
+const SNAPSHOT_EXTRA = "snapshot-extra.txt";
+
+void test("production live 13: a checkpoint restores the workspace byte for byte after its files change", { skip: gate, timeout: SCENARIO_TIMEOUT_MS }, async (t) => {
+  const scenario = startScenario(t, { image: inputs().image }, [SNAPSHOT_KEEP, SNAPSHOT_DELETE, SNAPSHOT_EXTRA]);
+  const workspace = scenario.inputs.workspaceRoot;
+  await assertActive(scenario);
+  writeFileSync(join(workspace, SNAPSHOT_KEEP), "before the snapshot");
+  writeFileSync(join(workspace, SNAPSHOT_DELETE), "deleted after the snapshot");
+
+  // A checkpoint is taken and restored only with the sandbox stopped (src/session/checkpoint.ts, the stopped-sandbox check).
+  assertExit(await down(scenario), 0, "realm down before the checkpoint");
+  const created = await realmCli(scenario.inputs, scenario.environment, ["checkpoint", "create", "--workspace", workspace, "--id", SNAPSHOT_ID], STATUS_TIMEOUT_MS);
+  assertExit(created, 0, "realm checkpoint create");
+
+  // The workspace changes after the snapshot: one file is overwritten, one is removed, and one is added.
+  writeFileSync(join(workspace, SNAPSHOT_KEEP), "after the snapshot");
+  rmSync(join(workspace, SNAPSHOT_DELETE), { force: true });
+  writeFileSync(join(workspace, SNAPSHOT_EXTRA), "added after the snapshot");
+
+  const restored = await realmCli(scenario.inputs, scenario.environment, ["checkpoint", "restore", "--workspace", workspace, "--id", SNAPSHOT_ID], STATUS_TIMEOUT_MS);
+  assertExit(restored, 0, "realm checkpoint restore");
+  assert.equal(readFileSync(join(workspace, SNAPSHOT_KEEP), "utf8"), "before the snapshot", "the overwritten file must be restored");
+  assert.equal(readFileSync(join(workspace, SNAPSHOT_DELETE), "utf8"), "deleted after the snapshot", "the removed file must be restored");
+  assert.equal(existsSync(join(workspace, SNAPSHOT_EXTRA)), false, "the file added after the snapshot must be removed");
+
+  // The restored workspace is what the sandbox sees when it starts again.
+  await assertActive(scenario);
+  const seen = await exec(scenario, ["cat", `${SANDBOX_WORKSPACE_PATH}/${SNAPSHOT_KEEP}`]);
+  assertExit(seen, 0, "reading the restored file from the sandbox");
+  assert.equal(seen.stdout, "before the snapshot", "the sandbox must see the restored file");
+  await assertDownAndClean(scenario);
 });

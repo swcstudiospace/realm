@@ -14,6 +14,7 @@ import type { PodmanProbe } from "../../src/runtime/podman-version.js";
 import { sandboxNameOfSession, sessionIdOfWorkspace } from "../../src/session/paths.js";
 import {
   auditLinesWithCorrelation,
+  startupRecordOf,
   sandboxNameFor,
   KILL_RUNNER_ARGV,
   createScenarioEnvironment,
@@ -698,4 +699,15 @@ void test("sandboxNameFor names a project's sandbox from its canonical path, wit
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+void test("startupRecordOf returns the last daemon.startup record of a log, and none when the log holds none", () => {
+  const log = [
+    JSON.stringify({ event: "daemon.starting" }),
+    JSON.stringify({ event: "daemon.startup", adopted: 1 }),
+    "not json",
+    JSON.stringify({ event: "daemon.startup", adopted: 2 }),
+  ].join("\n");
+  assert.equal(startupRecordOf(log)?.["adopted"], 2, "the last daemon.startup record wins, and a line that is not JSON is skipped");
+  assert.equal(startupRecordOf(JSON.stringify({ event: "daemon.starting" })), undefined, "a log with no daemon.startup record has none");
 });

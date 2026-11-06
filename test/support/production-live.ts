@@ -275,38 +275,6 @@ export function noticeOfStatus(stdout: string): string | undefined {
   return stringField(parsed, "notice");
 }
 
-// The counts the startup-reap notice states: "<n> container(s), <m> session record(s)". Undefined when the text states neither.
-export function reapCountsOfNotice(notice: string): { readonly containers: number; readonly sessionRecords: number } | undefined {
-  const match = /(\d+) container\(s\), (\d+) session record\(s\)/.exec(notice);
-  if (match === null) {
-    return undefined;
-  }
-  return { containers: Number(match[1]), sessionRecords: Number(match[2]) };
-}
-
-// The daemon.startup record that reports a reap of exactly one container and one session record, and names the container. The
-// id is matched by prefix: the list the suite takes before the kill prints Podman's short id, the daemon logs the full one.
-// Undefined when no line matches.
-export function startupReapLineFor(log: string, containerId: string): string | undefined {
-  if (containerId === "") {
-    return undefined;
-  }
-  return log.split(/\r?\n/).find((line) => {
-    const parsed = parseJsonLine(line);
-    if (!parsed.ok) {
-      return false;
-    }
-    const value = parsed.value as { event?: unknown; containersRemoved?: unknown; recordsDeleted?: unknown; containerIds?: unknown };
-    return (
-      value.event === "daemon.startup" &&
-      value.containersRemoved === 1 &&
-      value.recordsDeleted === 1 &&
-      Array.isArray(value.containerIds) &&
-      value.containerIds.some((id) => typeof id === "string" && (id === containerId || id.startsWith(containerId)))
-    );
-  });
-}
-
 // The error an MCP tools/call result carries: isError true with structuredContent {code, retryable}. Undefined when the result is
 // not a tool error, or when the code or the retryable flag is missing or of the wrong type.
 export interface ToolErrorFields {
@@ -1253,4 +1221,39 @@ export function auditLinesWithCorrelation(auditFile: string, correlationId: stri
     }
   }
   return matches;
+}
+
+// ---- Adoption and scratch (phase 19, RES-05) ----------------------------------------------------------------------------------------
+
+// One podman call with the account's environment. The exit code is the answer; a call that does not exit is a failed result.
+export function podmanCli(inputs: LiveInputs, args: readonly string[]): Promise<CommandResult> {
+  return runCommand("podman", [...args], { env: inputs.hostEnvironment, timeoutMs: 60_000, cwd: tmpdir() });
+}
+
+// Creates a container that is never started, named name and carrying labels, on the scenario's own image, so a test can plant a
+// container the adoption must judge. The id is on stdout.
+export function createUnstartedContainer(inputs: LiveInputs, name: string, labels: Readonly<Record<string, string>>): Promise<CommandResult> {
+  const labelArgs = Object.entries(labels).flatMap(([key, value]) => ["--label", `${key}=${value}`]);
+  return podmanCli(inputs, ["create", "--name", name, ...labelArgs, inputs.image, "sleep", "600"]);
+}
+
+// Whether a named volume exists: exit 0 is true, exit 1 is false, and any other result is undefined, which a caller reports as failed.
+export async function volumeExists(inputs: LiveInputs, name: string): Promise<boolean | undefined> {
+  const result = await podmanCli(inputs, ["volume", "exists", name]);
+  if (result.exitCode === 0) {
+    return true;
+  }
+  return result.exitCode === 1 ? false : undefined;
+}
+
+// The last daemon.startup record of a daemon log, parsed. Undefined when the log holds none.
+export function startupRecordOf(log: string): LogRecord | undefined {
+  let found: LogRecord | undefined;
+  for (const line of log.split(/\r?\n/)) {
+    const parsed = parseJsonLine(line);
+    if (parsed.ok && isLogRecord(parsed.value) && field(parsed.value, "event") === "daemon.startup") {
+      found = parsed.value;
+    }
+  }
+  return found;
 }
