@@ -149,15 +149,15 @@ export function readChainHead(fd: number): ChainHead {
 }
 
 // The newest chained line within the lookback, searched backward from lineEnd (the index of the newline that ends it, or the
-// end of the window). Fails closed (owner ruling, runtime-decision item 15): an unparsable line throws, and so does a window
-// cut mid-file or a lookback that runs out first. Undefined only when the scan reaches the file start with no chained line.
+// end of the window). Undefined when the lookback finds none, which is how a pre-chain log continues (D-1702). An unparsable
+// line throws (runtime-decision item 15): the append refuses rather than chain from a line it cannot read.
 function lastChainedLine(buf: Buffer, lineEnd: number, startsAtFile: boolean): { readonly seq: number; readonly bytes: Buffer } | undefined {
   let end = lineEnd;
   for (let seen = 0; seen < SEQ_LOOKBACK_LINES && end > 0; seen += 1) {
     const boundary = buf.lastIndexOf(0x0a, end - 1);
-    // A window that starts mid-file must not parse the cut prefix as a record, and it cannot reach the chain head.
+    // A window that starts mid-file must not parse the cut prefix as a record.
     if (boundary < 0 && !startsAtFile) {
-      throw new Error("audit chain head is outside the tail window");
+      break;
     }
     const start = boundary < 0 ? 0 : boundary + 1;
     const bytes = buf.subarray(start, end);
@@ -169,11 +169,11 @@ function lastChainedLine(buf: Buffer, lineEnd: number, startsAtFile: boolean): {
       return { seq: record["seq"] as number, bytes };
     }
     if (boundary < 0) {
-      return undefined;
+      break;
     }
     end = boundary;
   }
-  throw new Error("audit chain head is outside the lookback");
+  return undefined;
 }
 
 function nextSeqFromTail(buf: Buffer, lineEnd: number, startsAtFile: boolean): number {

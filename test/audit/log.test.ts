@@ -412,7 +412,7 @@ void test("CRASH-02: an append to a file whose last line has no newline yields t
   });
 });
 
-void test("item 15: an append after a line cut short by a crash refuses and leaves the cut line untouched (D-1403)", () => {
+void test("item 15: an append after a line cut short by a crash refuses and leaves the cut line untouched (replaces the D-1403 rewrite)", () => {
   withStateDir((stateDir) => {
     appendAudit(stateDir, { sessionId: SESSION, tool: "write", outcome: "ok", phase: "admission", path: "a.txt" });
     // A crash mid-append: a valid first line, then a second line cut short with no newline.

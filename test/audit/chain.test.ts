@@ -139,6 +139,33 @@ void test("OBS-01: a legacy file continues without a marker, and verify reports 
   });
 });
 
+void test("D-1702: a pre-chain log longer than the lookback continues, and its first chained line commits to the last legacy line", () => {
+  withStateDir((stateDir) => {
+    mkdirSync(join(stateDir, "audit"), { recursive: true });
+    const legacy = Array.from({ length: 65 }, (_, index) => JSON.stringify({ tool: "legacy", index }));
+    writeFileSync(auditFile(stateDir), `${legacy.join("\n")}\n`);
+    appendAudit(stateDir, { sessionId: SESSION, tool: "write", outcome: "ok", phase: "result", path: "a.txt" });
+    const lines = linesOf(auditFile(stateDir));
+    const chained = JSON.parse(lines[65] ?? "") as { seq: number; prev: string };
+    assert.equal(chained.seq, 1);
+    assert.equal(chained.prev, sha256(legacy[64] ?? ""));
+  });
+});
+
+void test("D-1702: a pre-chain log whose tail window starts inside a line continues, and its first chained line is seq 1", () => {
+  withStateDir((stateDir) => {
+    mkdirSync(join(stateDir, "audit"), { recursive: true });
+    const pad = "x".repeat(3 * 1024 * 1024);
+    const legacy = [0, 1, 2].map((index) => JSON.stringify({ tool: "legacy", index, pad }));
+    writeFileSync(auditFile(stateDir), `${legacy.join("\n")}\n`);
+    appendAudit(stateDir, { sessionId: SESSION, tool: "write", outcome: "ok", phase: "result", path: "a.txt" });
+    const lines = linesOf(auditFile(stateDir));
+    const chained = JSON.parse(lines[3] ?? "") as { seq: number; prev: string };
+    assert.equal(chained.seq, 1);
+    assert.equal(chained.prev, sha256(legacy[2] ?? ""));
+  });
+});
+
 void test("OBS-01: verify names the first line after an edit, a deletion, or a reorder (D-1702)", () => {
   withStateDir((stateDir) => {
     appendAudit(stateDir, { sessionId: SESSION, tool: "write", outcome: "ok", phase: "admission", path: "a.txt" });

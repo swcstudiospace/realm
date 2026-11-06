@@ -423,14 +423,10 @@ void test("STARTUP budget: a deadline that expires between two logs reconciles t
   });
 });
 
-// Filler lines the chain reads as chained: an integer seq and a 64-hex prev. Without them the lookback finds no chained line, and
-// an append after them must refuse rather than restart the sequence at 1 (runtime-decision item 15).
-const FILLER_CHAIN = { seq: 2, prev: "0".repeat(64) } as const;
-
 void test("STARTUP budget: a deadline that expires in the middle of a log appends nothing for that log", () => {
   withStateDir((stateDir) => {
     admit(stateDir, "write", { path: "a.txt" });
-    const filler = `${JSON.stringify({ ...FILLER_CHAIN, phase: "result", tool: "filler", outcome: "ok" })}\n`;
+    const filler = `${JSON.stringify({ phase: "result", tool: "filler", outcome: "ok" })}\n`;
     appendFileSync(auditFile(stateDir), filler.repeat(SCAN_CHECK_LINES + 100));
     const before = readFileSync(auditFile(stateDir), "utf8");
 
@@ -454,7 +450,7 @@ void test("STARTUP budget: a deadline that expires in the middle of a log append
 void test("STARTUP budget: a log larger than one read step is scanned completely, lines split across steps included", () => {
   withStateDir((stateDir) => {
     const padding = "p".repeat(100);
-    const filler = `${JSON.stringify({ ...FILLER_CHAIN, phase: "result", tool: "filler", outcome: "ok", path: padding })}\n`;
+    const filler = `${JSON.stringify({ phase: "result", tool: "filler", outcome: "ok", path: padding })}\n`;
     const count = Math.ceil((SCAN_CHUNK_BYTES * 2) / filler.length);
     admit(stateDir, "write", { path: "first.txt" });
     admit(stateDir, "write", { path: "last.txt" });
@@ -586,7 +582,7 @@ void test("STARTUP budget: a corrupt or wrong-shaped record is ignored, counted 
 void test("STARTUP budget: a log cut off by the deadline records nothing", () => {
   withStateDir((stateDir) => {
     admit(stateDir, "write", { path: "a.txt" });
-    appendFileSync(auditFile(stateDir), `${JSON.stringify({ ...FILLER_CHAIN, phase: "result", tool: "filler", outcome: "ok" })}\n`.repeat(SCAN_CHECK_LINES + 10));
+    appendFileSync(auditFile(stateDir), `${JSON.stringify({ phase: "result", tool: "filler", outcome: "ok" })}\n`.repeat(SCAN_CHECK_LINES + 10));
     let reads = 0;
     const cut = reconcileAuditLogs(stateDir, {
       now: () => {
