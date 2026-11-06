@@ -330,7 +330,7 @@ The claim "a run makes no network call outside loopback" does not hold for a def
 
 The historical cold proxy lever demonstrated a refusing loopback destination without a version-bound provider denylist. It does not make cache warmth a reliable control or prove the later warm run. In the actual parent recovery evidence supplied on 2026-10-31, the unproxied warm profile **failed** with 38 external connections plus 6 DNS connections, 44 offenders total. The cold result was separately **skipped** with 49 offenders. The separate same-run refusing-proxy lever observed 0 external, 0 DNS and 7 refused CONNECTs. These three outcomes remain distinct; the proxy lever cannot stand in for the warm scripted-tool turn. The failed configuration was not rerun by the edit-only repair worker.
 
-#### Authored corrective measurement (2026-10-31; latest correction awaits execution)
+#### Authored corrective measurement (2026-10-31; first executed 2026-11-06, see the bounded probe run below)
 
 `test/integration/omp-spike.test.ts` now supplies the existing `RefusingProxy` to the actual measured **warm** Omp process, using both uppercase and lowercase HTTP/HTTPS proxy variables and `NO_PROXY`/`no_proxy` for `127.0.0.1,localhost`. The same profile first has a separately labelled unproxied cold warm-up, whose trace and skip reason remain separate. A fresh-profile proxy lever remains a third, independent measurement. Cache warming alone is not the control. No provider denylist, external-host exemption, DNS allowance or native snapshot tag is introduced.
 
@@ -344,20 +344,20 @@ Parent evidence from the attempted corrected suite showed a successful S11 `stat
 
 #### Bounded probe run (2026-11-06, Omp 18.16.0)
 
-Owner authorisation P-1 (2026-11-06) allowed one bounded scripted run of the existing spike test, with no provider key, an isolated profile per test and a loopback stub. The run used `gsd/v3-backlog` at `bd1aa12`, after `npm run build`, with provider keys removed from the environment and under the heavy-slot lock: `REALM_LIVE_OMP=1 REALM_OMP_NET_TRACE=1 node --test --test-concurrency=1 dist/test/integration/omp-spike.test.js`. The test took 47 seconds of its own time.
+This is the first execution of the corrected proxied warm measurement described above. The warm profile reaches the refusing proxy through `HTTP_PROXY` and `HTTPS_PROXY`. Owner authorisation P-1 (2026-11-06) allowed one bounded run of the existing spike test, with no provider key, an isolated profile per test and a loopback stub. The run used `gsd/v3-backlog` at `bd1aa12`, after `npm run build`, with provider keys removed from the environment and under the heavy-slot lock: `REALM_LIVE_OMP=1 REALM_OMP_NET_TRACE=1 node --test --test-concurrency=1 dist/test/integration/omp-spike.test.js`. The test took 47 seconds of its own time.
 
-The Omp binary on PATH reports `omp/18.16.0`. The earlier record names 18.15.0, and this run does not reproduce that version.
+The Omp binary on PATH reports `omp/18.16.0`. The earlier 18.15.0 record does not match that binary.
 
-Result: S11 failed. Of 14 tests, 11 passed, 2 failed and 1 was skipped by design (the cold warm-up).
+Result: S11 failed. Of 14 tests, 11 passed, 2 failed and 1 was skipped by design (the unproxied cold warm-up).
 
-- Warm profile (proxied registered-tool turn): 0 external connects and 0 DNS connects. The zero-offender check failed on 2 loopback connects to `127.0.0.1:9931`, both in state EINPROGRESS.
-- Port 9931 lies outside the ephemeral range (32768 to 60999), is not defined anywhere in this repository, and had no listener when checked. The harness proxy binds port 0 and is allowlisted separately, so these two connects are not that proxy. The process behind 9931 is not identified, and no retained trace named it.
-- Cold profile (unproxied warm-up, reported as skipped by design): 48 external connects, 7 DNS connects and 57 connections outside the allowlist. This is the cold start and sits outside the warm claim.
+- Warm profile (proxied registered-tool turn): 0 external connects and 0 DNS connects. Both counts come from the refusing-proxy route, so they are not comparable with the unproxied warm run of 2026-10-31 on 18.14.2, which recorded 44 offenders (38 external, 6 DNS). The zero-offender check failed on 2 loopback connects to `127.0.0.1:9931`, both in state EINPROGRESS.
+- Port 9931 is llama.cpp auto-discovery, not an unknown listener. The 18.16.0 binary defines `ZOe = ["http://127.0.0.1:8080", "http://127.0.0.1:9931"]` as the llama.cpp default base URLs, so discovery reaches 9931 when nothing answers on 8080. Port 8080 is on the allowlist and 9931 is not. The default came in with 18.13.0 (changelog entry under that version), so it is not new in 18.16.0. No listener was on 9931 when checked.
+- Cold profile (unproxied warm-up, skipped by design): 48 external and 7 DNS connects, against the historical cold row of 46 and 7 (2026-10-29).
 - Separate proxy lever: 0 external and 0 DNS connects. The proxy refused 7 CONNECT requests.
 
-Verdict: this run does not verify HARN-03 on 18.16.0. The 44 offenders recorded for 18.14.2 on 2026-10-31 (38 external, 6 DNS) did not recur: the warm run made no external or DNS connects. The loopback peer still fails the zero-offender check. This is one run, and it claims no pass.
+Verdict: this run does not verify HARN-03 on 18.16.0. The zero-offender check fails on the llama.cpp discovery port. This is one run, and it claims no pass.
 
-Open for the owner: identify the process behind `127.0.0.1:9931` and decide whether it is an allowed egress. Adding the port to the allowlist changes the acceptance, so it needs an owner ruling first. The raw run log is kept outside the repository.
+Owner decisions: (a) whether llama.cpp discovery port 9931 belongs on the allowlist beside 8080, 11434 and 1234. Adding it changes the acceptance, so it needs an owner ruling. (b) A lever that keeps the allowlist unchanged exists. In the 18.16.0 binary, `fallbackBaseUrls` is `undefined` when `LLAMA_CPP_BASE_URL` is set, so setting that variable (to 8080) stops the 9931 probe. The same expression also changes the provider's `optional` flag, so the owner should confirm that side effect before the lever is used. The raw run log is kept outside the repository.
 
 ### Run record
 
