@@ -342,6 +342,23 @@ With `REALM_OMP_EVIDENCE_DIR` set by the parent, each `s11-cold`, `s11-warm` and
 
 Parent evidence from the attempted corrected suite showed a successful S11 `status` execution and `SPIKE-STATUS {}` provider continuation, followed by failure of the harness's byte-equality assertion on the opaque enriched user message. The cold warm-up therefore **failed**, rather than earning a successful cold skip, and the warm measurement did not run. That result is distinct from the earlier historical cold skip with 49 offenders. Parent reported 15 independent live cases passing, including C1–C4 and the non-network spikes; those passes do not prove either network measurement. The latest source-only correction replaces the brittle prompt-byte pins with the per-run handler phases and request window above. The worker ran no tests, checks, build, lint, formatter, smoke, gate or service operation and made no commit. Parent verification must exercise the corrected proxied warm registered-tool turn and retain its version, strace, offered/issued tool, extension, RPC and provider evidence alongside an honestly labelled cold outcome before claiming a current S11 network pass. This spike-extension proxy lever is not the separately owned built-Realm network proof. No new live pass or phase/milestone completion is claimed.
 
+#### Bounded probe run (2026-11-06, Omp 18.16.0)
+
+Owner authorisation P-1 (2026-11-06) allowed one bounded scripted run of the existing spike test, with no provider key, an isolated profile per test and a loopback stub. The run used `gsd/v3-backlog` at `bd1aa12`, after `npm run build`, with provider keys removed from the environment and under the heavy-slot lock: `REALM_LIVE_OMP=1 REALM_OMP_NET_TRACE=1 node --test --test-concurrency=1 dist/test/integration/omp-spike.test.js`. The test took 47 seconds of its own time.
+
+The Omp binary on PATH reports `omp/18.16.0`. The earlier record names 18.15.0, and this run does not reproduce that version.
+
+Result: S11 failed. Of 14 tests, 11 passed, 2 failed and 1 was skipped by design (the cold warm-up).
+
+- Warm profile (proxied registered-tool turn): 0 external connects and 0 DNS connects. The zero-offender check failed on 2 loopback connects to `127.0.0.1:9931`, both in state EINPROGRESS.
+- Port 9931 lies outside the ephemeral range (32768 to 60999), is not defined anywhere in this repository, and had no listener when checked. The harness proxy binds port 0 and is allowlisted separately, so these two connects are not that proxy. The process behind 9931 is not identified, and no retained trace named it.
+- Cold profile (unproxied warm-up, reported as skipped by design): 48 external connects, 7 DNS connects and 57 connections outside the allowlist. This is the cold start and sits outside the warm claim.
+- Separate proxy lever: 0 external and 0 DNS connects. The proxy refused 7 CONNECT requests.
+
+Verdict: this run does not verify HARN-03 on 18.16.0. The 44 offenders recorded for 18.14.2 on 2026-10-31 (38 external, 6 DNS) did not recur: the warm run made no external or DNS connects. The loopback peer still fails the zero-offender check. This is one run, and it claims no pass.
+
+Open for the owner: identify the process behind `127.0.0.1:9931` and decide whether it is an allowed egress. Adding the port to the allowlist changes the acceptance, so it needs an owner ruling first. The raw run log is kept outside the repository.
+
 ### Run record
 
 The suite (twelve tests: S1 S9 S10, S2a, S2a shadow, S2b S8, S2c S3, S7, S4, S5, S6, S12, S13 S14 and S11) passed live on Omp 18.12.6 in two consecutive runs on 2026-10-29, each with 12 of 12 passing and 0 skipped (each run took about 23 minutes; the load average was 27 and 41 when the two runs started). Command: `REALM_LIVE_OMP=1 REALM_OMP_NET_TRACE=1 node --test --test-concurrency=1 dist/test/integration/omp-spike.test.js` after building with `tsc -p tsconfig.json`. The raw logs, RPC frames, provider requests and strace output were kept outside the repository. Two earlier attempts of the finished suite failed under a load average near 100 on a wait bound, not on an assertion: the 60 second bound of the first prompt of a cold profile, and of an `eval` call. The bounds of runtime-starting calls (`eval`, `bash`) and of that first prompt were then widened to the startup bound; every wait still resolves from the frame handler.
