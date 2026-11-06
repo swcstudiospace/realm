@@ -132,7 +132,7 @@ export interface DriverAdoption {
 // A property a container is refused for: the verifier's properties (D-51), the workspace mount's options and the terminal check
 // made after start (C1, C6), and the channel options checked before start (phase 9.5, F).
 // "mounts-options" is the workspace mount's options (C1). "tty" is a container that has a terminal (C6).
-export const LIFECYCLE_OWN_PROPERTIES = Object.freeze(["mounts-options", "tty"] as const);
+const LIFECYCLE_OWN_PROPERTIES = Object.freeze(["mounts-options", "tty"] as const);
 export type LifecycleProperty = HardeningProperty | LiveProperty | (typeof LIFECYCLE_OWN_PROPERTIES)[number] | ChannelProperty;
 
 // The closed set of causes an adoption removal names. refusal.ts writes only these names on a removal line, so no other value reaches

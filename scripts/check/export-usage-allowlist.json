@@ -584,11 +584,6 @@
     },
     {
       "file": "src/runtime/hardening.ts",
-      "name": "HARDENING_PROPERTIES",
-      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
-    },
-    {
-      "file": "src/runtime/hardening.ts",
       "name": "RUNTIME_BINARY",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
