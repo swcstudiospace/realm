@@ -114,6 +114,7 @@ import {
   type ScenarioSpec,
   startupRecordOf,
   volumeExists,
+  removedIdsOf,
 } from "../support/production-live.js";
 
 // The compiled CLI beside the compiled tests: this file runs from dist/test/integration, the CLI from dist/src/cli.
@@ -652,6 +653,10 @@ void test("production live 5: after the daemon is killed, the next realm up keep
     const startup = startupRecordOf(daemonLog);
     assert.ok(startup !== undefined, "daemon.log must hold a daemon.startup record");
     assert.equal(startup["adopted"], 1, `the restart must adopt exactly one session: ${JSON.stringify(startup)}`);
+    // The restart's daemon removed the stray, the one container the reap found with no record, and deleted no record: the startup record names it.
+    assert.equal(startup["containersRemoved"], 1, `the restart must remove exactly the stray: ${JSON.stringify(startup)}`);
+    assert.equal(startup["recordsDeleted"], 0, `the restart must delete no session record: ${JSON.stringify(startup)}`);
+    assert.ok(removedIdsOf(startup).some((id) => id.startsWith(strayId)), `daemon.startup must name the stray ${strayId}: ${JSON.stringify(startup)}`);
 
     // /workspace is intact: the marker written before the crash reads back, unchanged, from inside the sandbox.
     const marker = await exec(scenario, ["cat", `${SANDBOX_WORKSPACE_PATH}/${RESTART_MARKER_FILE}`]);
@@ -1145,9 +1150,9 @@ void test("production live: two projects get their own sandboxes, workspaces and
   assert.equal(markerStillInB.stdout, MARKER_IN_B, "B's sandbox must still answer with B's marker");
 });
 
-// ---- Scenario 11: a container that fails the create-time verifier --------------------------------------------------------------------
+// ---- Scenario 11: a container whose pids limit no longer matches its profile is judged by the verifier at the next start -------------
 
-void test("production live 11: a container that fails the create-time verifier is removed at the next start, and the sandbox is created again", { skip: gate, timeout: SCENARIO_TIMEOUT_MS }, async (t) => {
+void test("production live 11: a container whose pids limit no longer matches its profile is destroyed at the next start, and the sandbox is created again", { skip: gate, timeout: SCENARIO_TIMEOUT_MS }, async (t) => {
   const scenario = startScenario(t, { image: inputs().image });
   await assertActive(scenario);
   const sandbox = sandboxOf(scenario);
@@ -1157,32 +1162,40 @@ void test("production live 11: a container that fails the create-time verifier i
   assert.ok(conformingId !== undefined && conformingId !== "", "the id of the conforming container");
 
   try {
+    // The container keeps its id, so its session record still names it and the reap calls the verifier. The pids limit now differs from
+    // the profile's pids-limit property (hardening.ts). A replacement with a new id would have no record, and no verifier would run.
+    const changed = await podmanCli(scenario.inputs, ["update", "--pids-limit", "100", conformingId]);
+    assertExit(changed, 0, "changing the pids limit of the conforming container");
     await crashDaemon(scenario);
-    // The conforming container is removed, and a container with the sandbox's own name takes its place. It carries the labels and the
-    // name, so the adoption matches it to its record, but it has none of the hardening, so it fails the verifier.
-    const removed = await podmanCli(scenario.inputs, ["rm", "-f", conformingId]);
-    assertExit(removed, 0, "removing the conforming container before the stand-in is created");
-    const standIn = await createUnstartedContainer(scenario.inputs, sandbox, sandboxLabelsOf(sandbox));
-    assertExit(standIn, 0, "creating the non-conforming stand-in");
-    const standInId = standIn.stdout.trim();
-    assert.notEqual(standInId, "", "the stand-in container's id");
 
     const restarted = await up(scenario);
     assertExit(restarted, 0, "realm up after the daemon crash");
     const active = await waitForActive(scenario.inputs, scenario.environment, ACTIVE_TIMEOUT_MS);
     assert.ok(active.ok, `realm status must reach active after the restart: ${active.detail}`);
 
-    // RES-05: the stand-in fails the verifier and is removed, and the sandbox is created again as one new container.
+    // The verifier fails the container, the reap removes it and deletes its record, and the sandbox is created again as a new container.
     const recreated = await pollUntil(
       async () => {
         const containers = await itemsOf(listSandboxContainers(scenario.inputs, sandbox), `the ${sandbox} containers`);
-        return containers.length === 1 && containers[0] !== standInId
+        return containers.length === 1 && containers[0] !== conformingId
           ? { done: true }
-          : { done: false, detail: `containers ${containers.join(", ") || "none"}; the stand-in ${standInId} must be gone` };
+          : { done: false, detail: `containers ${containers.join(", ") || "none"}; ${conformingId} must be gone` };
       },
       { timeoutMs: CRASH_OBSERVE_TIMEOUT_MS, intervalMs: CRASH_OBSERVE_INTERVAL_MS },
     );
-    assert.ok(recreated.ok, `exactly one new ${sandbox} container must replace the stand-in: ${recreated.detail}`);
+    assert.ok(recreated.ok, `exactly one new ${sandbox} container must replace the verifier-failed one: ${recreated.detail}`);
+
+    // The restarted daemon's startup record counts the removal and names the container, and the status notice reports the destruction.
+    const daemonLog = readFileSync(join(scenario.environment.stateDir, "daemon.log"), "utf8");
+    const startup = startupRecordOf(daemonLog);
+    assert.ok(startup !== undefined, "daemon.log must hold a daemon.startup record");
+    assert.equal(startup["containersRemoved"], 1, `the restart must remove exactly the verifier-failed container: ${JSON.stringify(startup)}`);
+    assert.equal(startup["recordsDeleted"], 1, `the restart must delete exactly its record: ${JSON.stringify(startup)}`);
+    assert.ok(removedIdsOf(startup).some((id) => id.startsWith(conformingId)), `daemon.startup must name ${conformingId}: ${JSON.stringify(startup)}`);
+    const status = await statusCli(scenario);
+    assertExit(status, 0, "realm status after the restart");
+    const notice = noticeOfStatus(status.stdout);
+    assert.ok(notice?.includes("destroyed at startup: 1 container(s), 1 session record(s)"), `realm status must report the destruction: ${describeResult(status)}`);
   } catch (error) {
     await up(scenario);
     throw error;

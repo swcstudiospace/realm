@@ -1257,3 +1257,9 @@ export function startupRecordOf(log: string): LogRecord | undefined {
   }
   return found;
 }
+
+// The container ids a daemon.startup record names as removed. A missing or mistyped field reads as empty.
+export function removedIdsOf(startup: LogRecord): readonly string[] {
+  const ids = field(startup, "containerIds");
+  return Array.isArray(ids) ? ids.filter((id): id is string => typeof id === "string") : [];
+}
