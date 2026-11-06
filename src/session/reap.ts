@@ -51,26 +51,26 @@ export interface InspectedCandidate {
   readonly inspect: ReapInspect;
 }
 
-// The caller's verdict on a candidate. A refusal names the failed property and carries its catalogue code.
-export type ReapVerdict = { readonly ok: true } | { readonly ok: false; readonly property: string; readonly causeCode: ErrorCode };
+// The caller's verdict on a candidate. A refusal names the failed property, typed by the caller, and carries its catalogue code.
+export type ReapVerdict<Property extends string = string> = { readonly ok: true } | { readonly ok: false; readonly property: Property; readonly causeCode: ErrorCode };
 
-export interface SelectiveReapDeps {
+export interface SelectiveReapDeps<Property extends string = string> {
   readonly store: Pick<SessionStore, "list" | "load" | "delete">;
   // Lists the realm containers and inspects each one. Called once, before any verdict or removal.
   readonly listCandidates: () => Promise<readonly ReapCandidate[]>;
   // Judges a candidate against the record that names its container. Called once per record, before any removal.
-  readonly verdict: (record: SessionRecord, candidate: InspectedCandidate) => ReapVerdict | Promise<ReapVerdict>;
+  readonly verdict: (record: SessionRecord, candidate: InspectedCandidate) => ReapVerdict<Property> | Promise<ReapVerdict<Property>>;
   // Removes one container. A rejection leaves that container unproven unless the proof below no longer lists it.
   readonly remove: (containerId: string) => Promise<void>;
   // Lists the realm containers that still exist. Called once, after every removal; it is the removal proof.
   readonly listSurvivors: () => Promise<readonly string[]>;
 }
 
-export interface SelectiveReapResult {
+export interface SelectiveReapResult<Property extends string = string> {
   // Containers that passed the verdict. Their records are kept.
   readonly adopted: readonly { readonly sessionId: string; readonly containerId: string }[];
   // Containers removed and proven gone. The cause is the verdict property that failed, or "no-record".
-  readonly removed: readonly { readonly containerId: string; readonly cause: string }[];
+  readonly removed: readonly { readonly containerId: string; readonly cause: Property | "no-record" }[];
   // Records deleted. The cause is "unreadable" (the record could not be loaded), "no-container" (no candidate names its
   // container) or "verdict-failed" (its container failed the verdict and was removed).
   readonly deleted: readonly { readonly sessionId: string; readonly cause: string }[];
@@ -82,9 +82,9 @@ interface StoredRecord {
   readonly record: SessionRecord | undefined;
 }
 
-interface SweepPlan {
+interface SweepPlan<Property extends string = string> {
   readonly adopted: SelectiveReapResult["adopted"];
-  readonly removed: SelectiveReapResult["removed"];
+  readonly removed: SelectiveReapResult<Property>["removed"];
   readonly deleted: SelectiveReapResult["deleted"];
 }
 
@@ -92,7 +92,7 @@ interface SweepPlan {
 // with every removal proven. A sweep that misses the bound rejects, and its late result is ignored, so it deletes no record.
 // Once the bound expires the sweep starts no further removal, so a late sweep cannot remove a container either. The promise
 // settles only after every removal and the proof have finished, or the bound has rejected it.
-export async function reapStartupSelective(deps: SelectiveReapDeps): Promise<SelectiveReapResult> {
+export async function reapStartupSelective<Property extends string>(deps: SelectiveReapDeps<Property>): Promise<SelectiveReapResult<Property>> {
   const sweep = { open: true };
   const plan = await withTimeout(runSelectiveSweep(deps, sweep), REAP_SWEEP_TIMEOUT_MS, "PODMAN_MACHINE_DOWN").catch(
     (error: unknown) => {
@@ -112,7 +112,7 @@ export async function reapStartupSelective(deps: SelectiveReapDeps): Promise<Sel
 }
 
 // Reads the records, lists and inspects the candidates, judges them, then removes and proves the removals. Nothing is deleted here.
-async function runSelectiveSweep(deps: SelectiveReapDeps, sweep: { open: boolean }): Promise<SweepPlan> {
+async function runSelectiveSweep<Property extends string>(deps: SelectiveReapDeps<Property>, sweep: { open: boolean }): Promise<SweepPlan<Property>> {
   const records = readRecords(deps.store);
   const candidates = (await deps.listCandidates()).map(inspectedOrThrow);
   const plan = await judge(deps, records, candidates);
@@ -146,17 +146,17 @@ function inspectedOrThrow(candidate: ReapCandidate): InspectedCandidate {
 
 // Matches each record to the candidate that carries its container id, and decides adoption, removal and deletion. Every
 // verdict is taken here, before any removal, so a verdict that throws rejects the reap with nothing removed.
-async function judge(
-  deps: SelectiveReapDeps,
+async function judge<Property extends string>(
+  deps: SelectiveReapDeps<Property>,
   records: readonly StoredRecord[],
   candidates: readonly InspectedCandidate[],
-): Promise<SweepPlan> {
+): Promise<SweepPlan<Property>> {
   const byContainer = new Map<string, InspectedCandidate>(
     candidates.map((candidate): [string, InspectedCandidate] => [candidate.containerId, candidate]),
   );
   const named = new Set<string>();
   const adopted: { sessionId: string; containerId: string }[] = [];
-  const removed = new Map<string, string>();
+  const removed = new Map<string, Property | "no-record">();
   const deleted: { sessionId: string; cause: string }[] = [];
   for (const { sessionId, record } of records) {
     if (record === undefined) {

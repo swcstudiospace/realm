@@ -3081,6 +3081,8 @@ void test("startup with an unverified container: the container is removed, and i
     controlSocketPath: controlSocketPath(fixture.stateDir),
     containerId,
   });
+  // The workspace entry holds the pin that the record's workspace resolves to, so the verdict reaches the identity checks.
+  writeWorkspaceEntry(fixture.stateDir, bindRoot(fixture.ws), sessionId);
   const reports: StartupReport[] = [];
   const parts = daemonParts(fixture, {
     ...survivorOptionsOf(fixture),
@@ -3102,6 +3104,7 @@ void test("startup with an unverified container: the container is removed, and i
   assert.equal(new SessionStore(fixture.stateDir).load(sessionId), null, "its record is deleted");
   assert.equal(firstReport(reports).adopted, 0);
   assert.deepEqual(firstReport(reports).containerIds, [containerId]);
+  assert.deepEqual(firstReport(reports).removedCauses, [`${containerId} sandbox-name-label`], "the removal names the identity property that failed");
   assert.equal(firstReport(reports).containersRemoved, 1);
   assert.equal(firstReport(reports).recordsDeleted, 1);
   assert.equal(daemon.session(sessionId), undefined, "no session is adopted");

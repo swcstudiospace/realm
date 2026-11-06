@@ -20,7 +20,7 @@ import type { Logger } from "../observe/logger.js";
 import { sandboxBindingOf } from "../runtime/driver/sandbox-binding.js";
 import type { HardeningBinding } from "../runtime/hardening.js";
 import { realmSandboxName } from "../runtime/openshell.js";
-import { type SessionContainers, verdictOf } from "../runtime/session-execution.js";
+import { type SessionContainers, type SessionProperty, verdictOf } from "../runtime/session-execution.js";
 import { listRealmContainers, SWEEP_CALL_TIMEOUT_MS } from "../runtime/sweep.js";
 import { sessionsDirOf } from "../session/paths.js";
 import {
@@ -52,8 +52,8 @@ export interface StartupReport {
   readonly recordsDeleted: number;
   // The sessions the reap adopted: their containers and records were kept. Each is hydrated after the gate opens.
   readonly adopted: number;
-  // One entry per removal in containerIds: the container id and the cause, separated by one space. The cause is the verdict
-  // property that failed, or "no-record". Empty when the reap failed, because the reap then returns no result to read the causes from.
+  // One entry per container in containerIds, in no particular order: the container id and its RemovalCause, separated by one space.
+  // Empty when the reap failed, because the reap then returns no result to read the causes from.
   readonly removedCauses: readonly string[];
   // The containers of the sessions the reap adopted, in adoption order. Each is hydrated after the gate opens.
   readonly adoptedContainerIds: readonly string[];
@@ -92,8 +92,13 @@ export interface StartupReport {
   readonly failureCodes: readonly ErrorCode[];
 }
 
+// Every cause a startup removal can carry, and so every cause daemon.startup logs: a property the adoption verdict can fail
+// (SessionProperty, or one of the three names adoptionVerdictOver adds), or "no-record" for a container that no session record names.
+// The compiler holds the set: a verdict that returns another property name does not typecheck.
+export type RemovalCause = SessionProperty | "workspace-root" | "workspace-pin" | "binding-roots" | "no-record";
+
 // The reap's container seams, as startDaemon builds them over the libpod client. The store is the caller's.
-export type StartupReapSeams = Omit<SelectiveReapDeps, "store">;
+export type StartupReapSeams = Omit<SelectiveReapDeps<RemovalCause>, "store">;
 
 interface StartupMaintenanceDeps {
   readonly store: Pick<SessionStore, "list" | "load" | "delete">;
@@ -468,8 +473,8 @@ export interface AdoptionVerdictDeps {
 // refusal of the record's own workspace is a verdict here; a libpod failure rejects the whole reap, which then removes nothing.
 export function adoptionVerdictOver(
   deps: AdoptionVerdictDeps,
-): (record: SessionRecord, candidate: InspectedCandidate) => Promise<ReapVerdict> {
-  return async (record: SessionRecord, candidate: InspectedCandidate): Promise<ReapVerdict> => {
+): (record: SessionRecord, candidate: InspectedCandidate) => Promise<ReapVerdict<RemovalCause>> {
+  return async (record: SessionRecord, candidate: InspectedCandidate): Promise<ReapVerdict<RemovalCause>> => {
     let resolved: ResolvedSelection;
     try {
       resolved = deps.resolve({ workspaceRoot: record.workspaceRoot, sessionId: record.sessionId });
