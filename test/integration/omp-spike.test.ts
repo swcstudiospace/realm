@@ -1071,6 +1071,9 @@ void test("S11: a proxied warm registered-tool turn connects only to allowed loo
     https_proxy: proxyUrl,
     NO_PROXY: "127.0.0.1,localhost",
     no_proxy: "127.0.0.1,localhost",
+    // Owner ruling 2026-11-06 (HARN-03, omp.md bounded probe): the proxied runs point llama.cpp discovery at 8080. In the 18.16.0
+    // binary that drops the 9931 fallback. The allowlist and the unproxied cold run are unchanged.
+    LLAMA_CPP_BASE_URL: "http://127.0.0.1:8080",
   };
   // Only the actual stub, documented loopback discovery ports and this owned proxy port are allowed. DNS remains an offender.
   const proxyAllow: NetAllow = { loopbackPorts: [...allow.loopbackPorts, proxyPort] };
