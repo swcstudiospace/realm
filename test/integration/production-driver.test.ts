@@ -115,6 +115,8 @@ import {
   startupRecordOf,
   volumeExists,
   removedIdsOf,
+  removedCausesOf,
+  adoptedIdsOf,
 } from "../support/production-live.js";
 
 // The compiled CLI beside the compiled tests: this file runs from dist/test/integration, the CLI from dist/src/cli.
@@ -653,6 +655,7 @@ void test("production live 5: after the daemon is killed, the next realm up keep
     const startup = startupRecordOf(daemonLog);
     assert.ok(startup !== undefined, "daemon.log must hold a daemon.startup record");
     assert.equal(startup["adopted"], 1, `the restart must adopt exactly one session: ${JSON.stringify(startup)}`);
+    assert.ok(adoptedIdsOf(startup).some((id) => id.startsWith(keptContainerId)), `daemon.startup must name the kept container ${keptContainerId}: ${JSON.stringify(startup)}`);
     // The restart's daemon removed the stray, the one container the reap found with no record, and deleted no record: the startup record names it.
     assert.equal(startup["containersRemoved"], 1, `the restart must remove exactly the stray: ${JSON.stringify(startup)}`);
     assert.equal(startup["recordsDeleted"], 0, `the restart must delete no session record: ${JSON.stringify(startup)}`);
@@ -1192,6 +1195,7 @@ void test("production live 11: a container whose pids limit no longer matches it
     assert.equal(startup["containersRemoved"], 1, `the restart must remove exactly the verifier-failed container: ${JSON.stringify(startup)}`);
     assert.equal(startup["recordsDeleted"], 1, `the restart must delete exactly its record: ${JSON.stringify(startup)}`);
     assert.ok(removedIdsOf(startup).some((id) => id.startsWith(conformingId)), `daemon.startup must name ${conformingId}: ${JSON.stringify(startup)}`);
+    assert.ok(removedCausesOf(startup).some((removal) => removal.containerId.startsWith(conformingId) && removal.cause === "pids-limit"), `daemon.startup must name ${conformingId} with its failed property pids-limit: ${JSON.stringify(startup)}`);
     const status = await statusCli(scenario);
     assertExit(status, 0, "realm status after the restart");
     const notice = noticeOfStatus(status.stdout);

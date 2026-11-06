@@ -237,9 +237,11 @@ void test("CRASH-04: the start's onStartup report is written as one stderr line 
     start: (options) => {
       options.onStartup?.({
         containerIds: ["c0ffee", "decaf1"],
+        removedCauses: ["c0ffee pids-limit", "decaf1 no-record"],
         containersRemoved: 2,
         recordsDeleted: 1,
         adopted: 0,
+        adoptedContainerIds: [],
         tempFilesRemoved: 3,
         unattributedTempFiles: 0,
         unattributedRecords: 0,
@@ -265,8 +267,10 @@ void test("CRASH-04: the start's onStartup report is written as one stderr line 
     event: "daemon.startup",
     containersRemoved: 2,
     containerIds: ["c0ffee", "decaf1"],
+    removedCauses: ["c0ffee pids-limit", "decaf1 no-record"],
     recordsDeleted: 1,
     adopted: 0,
+    adoptedContainerIds: [],
     tempFilesRemoved: 3,
     unattributedTempFiles: 0,
     unattributedRecords: 0,
@@ -288,9 +292,11 @@ void test("CRASH-04: the startup line names the adopted count", async (t) => {
     start: (options) => {
       options.onStartup?.({
         containerIds: [],
+        removedCauses: [],
         containersRemoved: 0,
         recordsDeleted: 0,
         adopted: 2,
+        adoptedContainerIds: ["aa11bb", "cc22dd"],
         tempFilesRemoved: 0,
         unattributedTempFiles: 0,
         unattributedRecords: 0,
@@ -313,6 +319,7 @@ void test("CRASH-04: the startup line names the adopted count", async (t) => {
   assert.equal(h.lines.length, 1);
   const adopting = startupOf(h.lines);
   assert.equal(adopting["adopted"], 2);
+  assert.deepEqual(adopting["adoptedContainerIds"], ["aa11bb", "cc22dd"]);
   assert.equal(adopting["containersRemoved"], 0);
   assert.equal(adopting["recordsDeleted"], 0);
 });
@@ -323,6 +330,8 @@ void test("CRASH-04: the startup line has no id brackets when no container was r
     start: (options) => {
       options.onStartup?.({
         containerIds: [],
+        removedCauses: [],
+        adoptedContainerIds: [],
         containersRemoved: 0,
         recordsDeleted: 0,
         adopted: 0,
@@ -361,6 +370,8 @@ void test("STARTUP budget: the startup line says maintenanceComplete=false and n
     start: (options) => {
       options.onStartup?.({
         containerIds: [],
+        removedCauses: [],
+        adoptedContainerIds: [],
         containersRemoved: 0,
         recordsDeleted: 0,
         adopted: 0,
@@ -400,6 +411,8 @@ void test("CRASH-04: a failed reap's partial report is logged, then the start fa
     start: (options) => {
       options.onStartup?.({
         containerIds: ["0123abcd"],
+        removedCauses: [],
+        adoptedContainerIds: [],
         containersRemoved: 1,
         recordsDeleted: 0,
         adopted: 0,
@@ -442,6 +455,8 @@ void test("STARTUP budget: a long unfinished list is sampled at ten names, the c
     start: (options) => {
       options.onStartup?.({
         containerIds: [],
+        removedCauses: [],
+        adoptedContainerIds: [],
         containersRemoved: 0,
         recordsDeleted: 0,
         adopted: 0,
@@ -770,6 +785,8 @@ void test("MULTI-03: the startup line carries registryEntriesRemoved and records
     start: (options) => {
       options.onStartup?.({
         containerIds: [],
+        removedCauses: [],
+        adoptedContainerIds: [],
         containersRemoved: 0,
         recordsDeleted: 1,
         adopted: 0,

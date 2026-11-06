@@ -15,6 +15,7 @@ import { sandboxNameOfSession, sessionIdOfWorkspace } from "../../src/session/pa
 import {
   auditLinesWithCorrelation,
   startupRecordOf,
+  removedCausesOf,
   sandboxNameFor,
   KILL_RUNNER_ARGV,
   createScenarioEnvironment,
@@ -710,4 +711,12 @@ void test("startupRecordOf returns the last daemon.startup record of a log, and 
   ].join("\n");
   assert.equal(startupRecordOf(log)?.["adopted"], 2, "the last daemon.startup record wins, and a line that is not JSON is skipped");
   assert.equal(startupRecordOf(JSON.stringify({ event: "daemon.starting" })), undefined, "a log with no daemon.startup record has none");
+});
+
+void test("removedCausesOf reads each removal as its container id and cause, and skips an entry of any other shape", () => {
+  const startup = startupRecordOf(
+    JSON.stringify({ event: "daemon.startup", removedCauses: ["0a1b pids-limit", "no-space", "2c3d no-record extra", 7] }),
+  );
+  assert.ok(startup !== undefined, "the record parses");
+  assert.deepEqual(removedCausesOf(startup), [{ containerId: "0a1b", cause: "pids-limit" }]);
 });

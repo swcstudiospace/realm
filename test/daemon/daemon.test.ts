@@ -738,9 +738,11 @@ void test("CRASH-01, CRASH-02, CRASH-04: startDaemon sweeps orphan temp files, r
   assert.deepEqual(reports, [
     {
       containerIds: ["orphan-container-01"],
+      removedCauses: ["orphan-container-01 no-record"],
       containersRemoved: 1,
       recordsDeleted: 1,
       adopted: 0,
+      adoptedContainerIds: [],
       tempFilesRemoved: 2,
       unattributedTempFiles: 2,
       unattributedRecords: 1,
@@ -854,9 +856,11 @@ void test("CRASH-04: a reap that fails after removing a container still reports 
   assert.deepEqual(reports, [
     {
       containerIds: ["0123abcd"],
+      removedCauses: [],
       containersRemoved: 1,
       recordsDeleted: 0,
       adopted: 0,
+      adoptedContainerIds: [],
       tempFilesRemoved: 0,
       unattributedTempFiles: 0,
       unattributedRecords: 0,
@@ -3029,6 +3033,7 @@ void test("startup with a verified survivor: the session is adopted, its record 
   const daemon = await startDaemon(parts.options);
   t.after(() => cleanupDaemon(daemon));
   assert.equal(firstReport(reports).adopted, 1, "the verified survivor is adopted");
+  assert.deepEqual(firstReport(reports).adoptedContainerIds, [containerId], "the report names the adopted container");
   assert.equal(firstReport(reports).containersRemoved, 0);
   assert.equal(firstReport(reports).recordsDeleted, 0);
   assert.equal(firstReport(reports).registryEntriesRemoved, 0, "the adopted session's registry entry is kept");
@@ -3100,6 +3105,26 @@ void test("startup with an unverified container: the container is removed, and i
   assert.equal(firstReport(reports).containersRemoved, 1);
   assert.equal(firstReport(reports).recordsDeleted, 1);
   assert.equal(daemon.session(sessionId), undefined, "no session is adopted");
+});
+
+void test("startup with a realm container that no session record names: it is removed with the no-record cause, and no record is deleted", async (t) => {
+  const fixture = makeDirs();
+  const sessionId = sessionOf(fixture);
+  const reports: StartupReport[] = [];
+  const parts = daemonParts(fixture, {
+    ...survivorOptionsOf(fixture),
+    onStartup: (report) => {
+      reports.push(report);
+    },
+  });
+  // The container carries the realm's labels and sandbox name, and no session record names it.
+  parts.containers.seed(survivorOf(sandboxRootsOf(fixture, fixture.ws), sessionId, "orphan-no-record-01"));
+  const daemon = await startDaemon(parts.options);
+  t.after(() => cleanupDaemon(daemon));
+  assert.deepEqual(parts.containers.present(), [], "the container with no record is removed");
+  assert.equal(firstReport(reports).containersRemoved, 1);
+  assert.equal(firstReport(reports).recordsDeleted, 0, "no record is deleted");
+  assert.deepEqual(firstReport(reports).removedCauses, ["orphan-no-record-01 no-record"], "the removal names no-record as its cause");
 });
 
 void test("startup where the reap rejects: startup fails, nothing is served, the registry entries are untouched", async () => {
@@ -3179,6 +3204,7 @@ void test("startup refuses a survivor whose stored pin no longer names its works
   t.after(() => cleanupDaemon(daemon));
   assert.equal(firstReport(reports).adopted, 0, "the session is not adopted");
   assert.equal(firstReport(reports).containersRemoved, 1, "its container is removed");
+  assert.deepEqual(firstReport(reports).removedCauses, [`${containerId} workspace-pin`], "the removal names the pin property that failed");
   assert.equal(firstReport(reports).recordsDeleted, 1, "its record is deleted");
   assert.deepEqual(parts.containers.present(), [], "the container is not left in place");
   assert.equal(parts.events.includes(`remove:${containerId}`), true);

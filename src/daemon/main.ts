@@ -143,8 +143,10 @@ function emitStartup(writeStderr: (line: string) => void, report: StartupReport)
   entryLogger(writeStderr).info("daemon.startup", {
     containersRemoved: report.containersRemoved,
     containerIds: report.containerIds,
+    removedCauses: report.removedCauses,
     recordsDeleted: report.recordsDeleted,
     adopted: report.adopted,
+    adoptedContainerIds: report.adoptedContainerIds,
     tempFilesRemoved: report.tempFilesRemoved,
     unattributedTempFiles: report.unattributedTempFiles,
     unattributedRecords: report.unattributedRecords,

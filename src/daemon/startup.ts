@@ -52,6 +52,11 @@ export interface StartupReport {
   readonly recordsDeleted: number;
   // The sessions the reap adopted: their containers and records were kept. Each is hydrated after the gate opens.
   readonly adopted: number;
+  // One entry per removal in containerIds: the container id and the cause, separated by one space. The cause is the verdict
+  // property that failed, or "no-record". Empty when the reap failed, because the reap then returns no result to read the causes from.
+  readonly removedCauses: readonly string[];
+  // The containers of the sessions the reap adopted, in adoption order. Each is hydrated after the gate opens.
+  readonly adoptedContainerIds: readonly string[];
   readonly tempFilesRemoved: number;
   readonly auditLinesReconciled: number;
   // True when the temp-file sweep stopped at its wall or entry bound before it had seen every directory.
@@ -152,6 +157,8 @@ export async function runStartupMaintenance(deps: StartupMaintenanceDeps): Promi
       containersRemoved: containerIds.length,
       recordsDeleted: 0,
       adopted: 0,
+      removedCauses: [],
+      adoptedContainerIds: [],
       tempFilesRemoved: 0,
       auditLinesReconciled: 0,
       truncated: false,
@@ -276,6 +283,8 @@ export async function runStartupMaintenance(deps: StartupMaintenanceDeps): Promi
     containersRemoved: reaped.counts.removed,
     recordsDeleted: reaped.counts.deleted,
     adopted: reaped.counts.adopted,
+    removedCauses: reaped.removed.map((removal) => `${removal.containerId} ${removal.cause}`),
+    adoptedContainerIds: reaped.adopted.map((session) => session.containerId),
     tempFilesRemoved,
     auditLinesReconciled,
     truncated,

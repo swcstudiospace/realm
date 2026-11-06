@@ -1263,3 +1263,26 @@ export function removedIdsOf(startup: LogRecord): readonly string[] {
   const ids = field(startup, "containerIds");
   return Array.isArray(ids) ? ids.filter((id): id is string => typeof id === "string") : [];
 }
+
+// The removals a daemon.startup record names with their causes: one "<containerId> <cause>" entry each. An entry of any other shape
+// is skipped, and a missing or mistyped field reads as empty.
+export function removedCausesOf(startup: LogRecord): readonly { readonly containerId: string; readonly cause: string }[] {
+  const entries = field(startup, "removedCauses");
+  if (!Array.isArray(entries)) {
+    return [];
+  }
+  return entries.flatMap((entry: unknown): { readonly containerId: string; readonly cause: string }[] => {
+    if (typeof entry !== "string") {
+      return [];
+    }
+    const parts = entry.split(" ");
+    const [containerId, cause] = parts;
+    return parts.length === 2 && containerId !== undefined && cause !== undefined ? [{ containerId, cause }] : [];
+  });
+}
+
+// The container ids a daemon.startup record names as adopted. A missing or mistyped field reads as empty.
+export function adoptedIdsOf(startup: LogRecord): readonly string[] {
+  const ids = field(startup, "adoptedContainerIds");
+  return Array.isArray(ids) ? ids.filter((id): id is string => typeof id === "string") : [];
+}
