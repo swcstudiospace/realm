@@ -75,6 +75,7 @@ import {
   supervisorsOver,
   workspaceRootOf,
   type BuildDaemonHandleOptions,
+  type SocketProbe,
   type StatusResult,
 } from "./seams.js";
 import {
@@ -133,6 +134,8 @@ export interface StartDaemonOptions extends Omit<BuildDaemonHandleOptions, "sess
   readonly socketDirDeps?: SocketDirDeps;
   // Bound for one socket operation and for draining in-flight requests on down.
   readonly timeoutMs?: number;
+  // Test seam: the probe of the control socket path that runs before a stale socket is removed. Defaults to probeSocketAlive.
+  readonly probeSocket?: (socketPath: string, timeoutMs: number) => Promise<SocketProbe>;
   // Test seam: receives the listening server, so a test can fail it the way the runtime would.
   readonly onServer?: (server: Server) => void;
   // Request log (OBS-02). Defaults to a logger that writes nothing. The entry passes one whose sink is the daemon log.
@@ -262,10 +265,15 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
   logger.info("daemon.starting");
   ensureSocketDir(stateDir, options.socketDirDeps);
   const socketPath = controlSocketPath(stateDir);
-  // OQ-P6-03: a refused dial means a live owner answers; any other outcome
-  // means the path is stale or absent, so it is removed and this start proceeds.
-  if (await probeSocketAlive(socketPath, timeoutMs)) {
+  // OQ-P6-03: a refused dial or a missing path means no live owner, so the path is stale or absent and is removed. A dial
+  // that times out is unknown, not absent: a slow live owner may hold the socket (owner ruling, runtime-decision item 12).
+  // This start is refused and the socket is left in place.
+  const socketProbe = await (options.probeSocket ?? probeSocketAlive)(socketPath, timeoutMs);
+  if (socketProbe === "alive") {
     throw makeRealmError("LOCK_CONFLICT");
+  }
+  if (socketProbe === "unknown") {
+    throw makeRealmError("LOCK_CONFLICT", "DAEMON_START_TIMEOUT");
   }
   const stale = removeSocketFile(socketPath);
   if (stale !== undefined) {

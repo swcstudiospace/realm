@@ -6,6 +6,7 @@
 
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
+import { once } from "node:events";
 import {
   existsSync,
   mkdirSync,
@@ -19,9 +20,9 @@ import {
   utimesSync,
   writeFileSync,
 } from "node:fs";
-import { createConnection, type Server, type Socket } from "node:net";
+import { createConnection, createServer, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { appendAudit } from "../../src/audit/log.js";
 import { reconcileAuditLogs } from "../../src/audit/reconcile.js";
 import { makeRealmError, RealmError, type ErrorCode } from "../../src/core/errors.js";
@@ -38,7 +39,7 @@ import {
   type StartedDaemon,
   type StartDaemonOptions,
 } from "../../src/daemon/daemon.js";
-import type { BuildDaemonHandleOptions } from "../../src/daemon/seams.js";
+import { type BuildDaemonHandleOptions, probeSocketAlive } from "../../src/daemon/seams.js";
 import { sweepRootsOf, type StartupReport } from "../../src/daemon/startup.js";
 import { selectionOf } from "../../src/daemon/client.js";
 import type { SessionEntry } from "../../src/daemon/sessions.js";
@@ -595,6 +596,62 @@ void test("RT-06: a second startDaemon against the same state directory refuses 
   assert.equal(down.id, "d1");
   assert.ok(down.result !== undefined);
   await awaitDone(first);
+});
+
+void test("item 12: a timed-out socket probe refuses the start with LOCK_CONFLICT and keeps the socket path", async () => {
+  const fixture = makeDirs();
+  const socketPath = controlSocketPath(fixture.stateDir);
+  mkdirSync(dirname(socketPath), { recursive: true, mode: 0o700 });
+  writeFileSync(socketPath, "held by a slow owner");
+
+  await assert.rejects(
+    startDaemon(daemonParts(fixture, { probeSocket: () => Promise.resolve("unknown") }).options),
+    (error: unknown) =>
+      error instanceof RealmError && error.code === "LOCK_CONFLICT" && error.causeCode === "DAEMON_START_TIMEOUT",
+  );
+  assert.equal(readFileSync(socketPath, "utf8"), "held by a slow owner");
+});
+
+void test("item 12: an absent socket probe removes the stale socket path and the start serves", async (t) => {
+  const fixture = makeDirs();
+  const socketPath = controlSocketPath(fixture.stateDir);
+  mkdirSync(dirname(socketPath), { recursive: true, mode: 0o700 });
+  writeFileSync(socketPath, "stale");
+  const started = await startDaemon(daemonParts(fixture, { probeSocket: () => Promise.resolve("absent") }).options);
+  t.after(() => cleanupDaemon(started));
+
+  const reply = await sendRequest(started.socketPath, { id: "s1", method: "status", params: selectedBy(fixture.ws) });
+  assert.equal(reply.id, "s1");
+  assert.ok(reply.result !== undefined);
+
+  const down = await sendRequest(started.socketPath, { id: "d1", method: "down", params: selectedBy(fixture.ws) });
+  assert.equal(down.id, "d1");
+  assert.ok(down.result !== undefined);
+  await awaitDone(started);
+});
+
+void test("item 12: probeSocketAlive reports absent for a missing path and alive for a live owner", async (t) => {
+  const fixture = makeDirs();
+  const socketPath = controlSocketPath(fixture.stateDir);
+  mkdirSync(dirname(socketPath), { recursive: true, mode: 0o700 });
+  assert.equal(await probeSocketAlive(socketPath, 1000), "absent");
+  const owner = createServer();
+  const listening = once(owner, "listening");
+  owner.listen(socketPath);
+  await listening;
+  t.after(async () => {
+    const closed = once(owner, "close");
+    owner.close();
+    await closed;
+  });
+  assert.equal(await probeSocketAlive(socketPath, 1000), "alive");
+});
+
+void test("item 12: probeSocketAlive reports unknown on a dial timeout and absent on any other dial failure", async () => {
+  const timedOut = (): Promise<never> => Promise.reject(makeRealmError("DAEMON_START_TIMEOUT"));
+  const refused = (): Promise<never> => Promise.reject(new Error("connect ECONNREFUSED"));
+  assert.equal(await probeSocketAlive("/unused/control.sock", 1, timedOut), "unknown");
+  assert.equal(await probeSocketAlive("/unused/control.sock", 1, refused), "absent");
 });
 
 void test("CLI-01: startDaemon runs the startup reap before serving and deletes pre-existing records (P6-D4)", async (t) => {

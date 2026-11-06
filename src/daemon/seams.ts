@@ -211,14 +211,22 @@ export async function defaultConnectSocket(socketPath: string, timeoutMs: number
   socket.destroy();
 }
 
-// True when a live owner answers at the socket path. Any other outcome (absent
-// path, refusal, timeout) means no live owner.
-export function probeSocketAlive(socketPath: string, timeoutMs: number): Promise<boolean> {
-  return dialWithin(socketPath, timeoutMs, "DAEMON_START_TIMEOUT").then(
-    (socket) => {
+// What a probe of the control socket path found. "alive": a live owner answered. "absent": no owner, a missing path or a
+// refused dial. "unknown": the dial timed out, so a slow owner may still hold the socket.
+export type SocketProbe = "alive" | "absent" | "unknown";
+
+// Probes the control socket path. dialWithin rejects with a RealmError only on a timeout, and a socket error (a refusal or
+// a missing path) is never a RealmError, so only a timeout is unknown. The dial is a parameter so a test can fail it.
+export function probeSocketAlive(
+  socketPath: string,
+  timeoutMs: number,
+  dial: typeof dialWithin = dialWithin,
+): Promise<SocketProbe> {
+  return dial(socketPath, timeoutMs, "DAEMON_START_TIMEOUT").then(
+    (socket): SocketProbe => {
       socket.destroy();
-      return true;
+      return "alive";
     },
-    () => false,
+    (error: unknown): SocketProbe => (error instanceof RealmError ? "unknown" : "absent"),
   );
 }
