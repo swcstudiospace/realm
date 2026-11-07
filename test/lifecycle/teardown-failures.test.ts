@@ -73,16 +73,23 @@ async function waitUntil(predicate: () => boolean, label: string): Promise<void>
   }
 }
 
-void test("a bridge event whose state write fails keeps the write's code as the unpersisted cause (QUAL-01)", async (t) => {
+void test("a bridge event whose state write fails keeps the write's code, and the next transition carries it (QUAL-01)", async (t) => {
   const { workspace, store, bridge, controller } = fixture(t);
   const started = await controller.create(workspace);
   assert.equal(started.state, "active");
+  const transitions: { readonly persistCode?: string }[] = [];
+  controller.events.subscribe((event) => {
+    transitions.push(event);
+  });
 
   store.failWrites = true;
   bridge.emit({ kind: "down" });
+  assert.equal(controller.snapshot().state, "degraded");
 
-  assert.equal(controller.hasUnpersistedState(), true);
-  assert.equal(controller.unpersistedCause(), "LOCK_CONFLICT");
+  store.failWrites = false;
+  bridge.emit({ kind: "up" });
+  assert.equal(controller.snapshot().state, "active");
+  assert.deepEqual(transitions.map((event) => event.persistCode), [undefined, "LOCK_CONFLICT"]);
 });
 
 void test("a stop whose fallback destroy also fails throws the destroy error with the stop error as its cause (QUAL-01)", async (t) => {

@@ -3,6 +3,7 @@
 // after all of them have run, the first listener error is rethrown to the publisher.
 // Nothing is swallowed.
 
+import type { ErrorCode } from "./errors.js";
 import type { State } from "./states.js";
 
 // Published once for each state transition the state machine commits.
@@ -13,6 +14,10 @@ export interface StateTransitionEvent {
   readonly to: State;
   readonly reason: string;
   readonly at: string;
+  // The code of the start failure a stale container's recovery replaced, carried by the first transition after the recovery.
+  readonly recoveredCode?: ErrorCode;
+  // The code of a state write that failed, carried by the first transition after the failure until a later write persists the state.
+  readonly persistCode?: ErrorCode;
 }
 
 // Every event that can be published on the bus. A state transition is the only kind so far.

@@ -373,9 +373,13 @@ void test("a bridge subscribe that throws moves the session to error instead of 
   assert.equal(store.load(SESSION)?.state, "error");
 });
 
-void test("a store write that throws during a bridge down event keeps the degraded state, does not throw, and the next write persists it (F7)", async (t) => {
+void test("a store write that throws during a bridge down event keeps the degraded state, does not throw, and the next transition carries the write's code (F7)", async (t) => {
   const { workspace, store, bridge, controller } = fixture(t);
   await controller.create(workspace);
+  const transitions: { readonly persistCode?: string }[] = [];
+  controller.events.subscribe((event) => {
+    transitions.push(event);
+  });
   const save = store.save.bind(store);
   store.save = () => {
     throw new Error("disk full");
@@ -387,15 +391,14 @@ void test("a store write that throws during a bridge down event keeps the degrad
 
   assert.equal(controller.snapshot().state, "degraded");
   assert.equal(controller.snapshot().reason, "ANDA_UNREACHABLE");
-  assert.equal(controller.hasUnpersistedState(), true);
   assert.equal(store.load(SESSION)?.state, "active");
 
   store.save = save;
   bridge.emit({ kind: "up" });
 
   assert.equal(controller.snapshot().state, "active");
-  assert.equal(controller.hasUnpersistedState(), false);
   assert.equal(store.load(SESSION)?.state, "active");
+  assert.deepEqual(transitions.map((event) => event.persistCode), [undefined, "WRITE_NOT_ATOMIC"]);
 });
 
 void test("a background stop and destroy that both fail are kept, and the next destroy reports them as the cause of its own failure (G-04, F1)", async (t) => {

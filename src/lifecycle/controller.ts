@@ -121,8 +121,6 @@ export class LifecycleController {
   // the next destroy retries it. If that retry fails too, this code is the causeCode of the error
   // that destroy throws, and a retry that succeeds clears it (G-04).
   private orphanFailure: ErrorCode | null = null;
-  // The code of the write failure that left the record behind the in-memory state, or null (F7).
-  private unpersistedFailure: ErrorCode | null = null;
   // Counts the starts and ends of a session's life: it advances when a create begins and when a
   // stop or destroy takes the session. A probe compares it before and after its port call, so the
   // result of a probe that began in an earlier life is never applied to a later one.
@@ -136,16 +134,6 @@ export class LifecycleController {
 
   snapshot(): StateSnapshot {
     return this.machine.snapshot();
-  }
-
-  // True while the record lags the in-memory state, because its last write failed (F7).
-  hasUnpersistedState(): boolean {
-    return this.unpersistedFailure !== null;
-  }
-
-  // The code of the write failure behind hasUnpersistedState, or null when the record is current.
-  unpersistedCause(): ErrorCode | null {
-    return this.unpersistedFailure;
   }
 
   // The CORE-05 gate for a file-mutating call, decided from the current state (D-63). It
@@ -285,6 +273,7 @@ export class LifecycleController {
         if (replacement === null) {
           return this.machine.snapshot();
         }
+        this.machine.holdRecoveredCode(PORT_FAILURE_CODE);
         await startOnce(replacement);
       }
       if (!this.ownsStartup(epoch)) {
@@ -802,12 +791,11 @@ export class LifecycleController {
     } else {
       return;
     }
-    // The listener must not throw. The transition above stays in memory, and a failed write is
-    // recorded with its code in unpersistedFailure. The next write persists the current state (F7).
+    // The listener must not throw. The transition above stays in memory, and a failed write holds its code for the next transition (F7).
     try {
       this.writeState();
     } catch (error: unknown) {
-      this.unpersistedFailure = error instanceof RealmError ? error.code : "WRITE_NOT_ATOMIC";
+      this.machine.holdPersistCode(error instanceof RealmError ? error.code : "WRITE_NOT_ATOMIC");
     }
   }
 
@@ -1198,7 +1186,7 @@ export class LifecycleController {
       return;
     }
     this.deps.store.save({ ...record, state: this.machine.snapshot().state });
-    this.unpersistedFailure = null;
+    this.machine.releasePersistCode();
   }
 
   // Writes the record with the current state. The record is the only place the
@@ -1212,6 +1200,6 @@ export class LifecycleController {
       controlSocketPath: controlSocketPath(this.deps.store.stateDir),
       containerId,
     });
-    this.unpersistedFailure = null;
+    this.machine.releasePersistCode();
   }
 }

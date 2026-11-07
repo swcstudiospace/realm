@@ -244,6 +244,8 @@ export class SessionHealth {
         from: event.from,
         to: event.to,
         ...(code === undefined ? {} : { code }),
+        ...(event.recoveredCode === undefined ? {} : { recoveredCode: event.recoveredCode }),
+        ...(event.persistCode === undefined ? {} : { persistCode: event.persistCode }),
         sessionId: this.#options.sessionId,
       });
       if (event.to === "active" || event.to === "degraded") {

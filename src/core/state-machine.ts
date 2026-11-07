@@ -1,3 +1,4 @@
+import type { ErrorCode } from "./errors.js";
 // RealmStateMachine (D-25, CORE-01). Wraps the frozen checkTransition and never
 // redefines the table. A disallowed transition throws before anything changes. An
 // allowed transition commits the state first and publishes exactly one event after.
@@ -17,6 +18,8 @@ export interface StateSnapshot {
 
 // The session's lifecycle state machine. It commits each allowed transition, then publishes one event for it.
 export class RealmStateMachine {
+  // Codes held for the next transition: recoveredCode and persistCode. A transition publishes them once and then holds none.
+  private held: { recoveredCode?: ErrorCode; persistCode?: ErrorCode } = {};
   private readonly sessionId: string;
   private readonly bus: EventBus;
   private readonly clock: () => Date;
@@ -39,6 +42,21 @@ export class RealmStateMachine {
     };
   }
 
+  // Holds the code of a start failure that a stale container's recovery replaced. The next transition carries it.
+  holdRecoveredCode(code: ErrorCode): void {
+    this.held = { ...this.held, recoveredCode: code };
+  }
+
+  // Holds the code of a state write that failed. The next transition carries it until releasePersistCode runs.
+  holdPersistCode(code: ErrorCode): void {
+    this.held = { ...this.held, persistCode: code };
+  }
+
+  // A later write persisted the state, so the failed write's code is no longer pending.
+  releasePersistCode(): void {
+    this.held = this.held.recoveredCode === undefined ? {} : { recoveredCode: this.held.recoveredCode };
+  }
+
   // Throws the REALM_INVALID_TRANSITION error for a disallowed edge, including every
   // self-transition, and leaves state, reason, time, and events unchanged.
   transition(to: State, reason: string): StateSnapshot {
@@ -51,7 +69,9 @@ export class RealmStateMachine {
     this.state = to;
     this.reason = reason;
     this.lastTransitionAt = at;
-    this.bus.publish({ type: "state.transition", sessionId: this.sessionId, from, to, reason, at });
+    const codes = this.held;
+    this.held = {};
+    this.bus.publish({ type: "state.transition", sessionId: this.sessionId, from, to, reason, at, ...codes });
     return this.snapshot();
   }
 }

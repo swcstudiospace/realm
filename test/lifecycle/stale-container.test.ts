@@ -139,6 +139,24 @@ void test("TD-04: recovery runs once per call; a second start failure ends in er
   assert.equal(typeof f.store.load(SESSION)?.containerId, "string");
 });
 
+void test("TD-04: exactly one transition after a recovery carries the recovered start failure's code as recoveredCode", async (t) => {
+  const f = fixture(t);
+  await activeThenRemoved(f);
+  const transitions: { readonly recoveredCode?: string }[] = [];
+  f.controller.events.subscribe((event) => {
+    transitions.push(event);
+  });
+  f.exec.failNext("start", "OPENSHELL_START_FAILED");
+
+  const snapshot = await f.controller.create(f.workspace);
+
+  assert.equal(snapshot.state, "active");
+  assert.deepEqual(
+    transitions.flatMap((event) => (event.recoveredCode === undefined ? [] : [event.recoveredCode])),
+    ["OPENSHELL_START_FAILED"],
+  );
+});
+
 void test("TD-04: a destroy failure goes to error with its own code, keeps the old id, and creates nothing", async (t) => {
   const f = fixture(t);
   const oldId = await activeThenRemoved(f);
