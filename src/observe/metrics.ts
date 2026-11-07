@@ -61,6 +61,8 @@ export interface MetricsSnapshot {
   readonly timings: { readonly attachMs: Timing; readonly toolCallMs: Timing };
   readonly healthProbeFailures: readonly HealthProbeFailureCount[];
   readonly logLinesDropped: number;
+  // Lines a file sink refused or threw and that stderr received instead (owner ruling 2026-11-07, item 14).
+  readonly logLinesFallback: number;
 }
 
 export interface Metrics {
@@ -70,6 +72,7 @@ export interface Metrics {
   recordAttach(durationMs: number): void;
   recordHealthProbeFailure(code: string): void;
   setLogLinesDropped(count: number): void;
+  setLogLinesFallback(count: number): void;
   snapshot(): MetricsSnapshot;
 }
 
@@ -164,6 +167,7 @@ export function createMetrics(options: MetricsOptions): Metrics {
   const attachMs = emptyTiming();
   const toolCallMs = emptyTiming();
   let logLinesDropped = 0;
+  let logLinesFallback = 0;
 
   return {
     recordControl(method, refused) {
@@ -210,6 +214,9 @@ export function createMetrics(options: MetricsOptions): Metrics {
     setLogLinesDropped(count) {
       logLinesDropped = Number.isFinite(count) ? Math.max(0, Math.floor(count)) : logLinesDropped;
     },
+    setLogLinesFallback(count) {
+      logLinesFallback = Number.isFinite(count) ? Math.max(0, Math.floor(count)) : logLinesFallback;
+    },
     snapshot() {
       const at = options.now();
       return {
@@ -237,6 +244,7 @@ export function createMetrics(options: MetricsOptions): Metrics {
           .sort((left, right) => left[0].localeCompare(right[0]))
           .map(([code, count]) => ({ code, count })),
         logLinesDropped,
+        logLinesFallback,
       };
     },
   };
@@ -253,6 +261,7 @@ const SNAPSHOT_KEYS = [
   "timings",
   "healthProbeFailures",
   "logLinesDropped",
+  "logLinesFallback",
 ] as const;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -297,6 +306,7 @@ export function isMetricsSnapshot(value: unknown): value is MetricsSnapshot {
     typeof value["now"] !== "string" ||
     !isFiniteNumber(value["uptimeMs"]) ||
     !isFiniteNumber(value["logLinesDropped"]) ||
+    !isFiniteNumber(value["logLinesFallback"]) ||
     !Array.isArray(value["controlRequests"]) ||
     !Array.isArray(value["toolCalls"]) ||
     !Array.isArray(value["transitions"]) ||

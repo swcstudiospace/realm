@@ -28,6 +28,7 @@ void test("OBS-03: a snapshot starts empty and names when counting began", () =>
   assert.deepEqual(snap.transitions, []);
   assert.deepEqual(snap.healthProbeFailures, []);
   assert.equal(snap.logLinesDropped, 0);
+  assert.equal(snap.logLinesFallback, 0);
   assert.equal(snap.timings.attachMs.count, 0);
   assert.deepEqual(snap.timings.toolCallMs.bucketUpperBoundsMs, BUCKET_UPPER_BOUNDS_MS);
   assert.equal(snap.timings.toolCallMs.bucketCounts.length, BUCKET_UPPER_BOUNDS_MS.length + 1);
@@ -48,6 +49,7 @@ void test("OBS-03: tool calls, attach duration, and probe failures stay inside t
   registry.recordTransition("unbound", "active");
   registry.recordTransition("nope", "active");
   registry.setLogLinesDropped(2.9);
+  registry.setLogLinesFallback(3.7);
   const snap = registry.snapshot();
   assert.deepEqual(snap.toolCalls.map((row) => row.tool), ["read", "unknown", "write"]);
   assert.equal(snap.toolCalls.find((row) => row.tool === "unknown")?.code, "SCHEMA_INVALID");
@@ -62,6 +64,7 @@ void test("OBS-03: tool calls, attach duration, and probe failures stay inside t
   assert.deepEqual(snap.controlRequests, [{ method: "status", count: 2, refused: 1 }]);
   assert.deepEqual(snap.transitions, [{ from: "unbound", to: "active", count: 1 }]);
   assert.equal(snap.logLinesDropped, 2);
+  assert.equal(snap.logLinesFallback, 3);
   assert.equal(JSON.stringify(snap).includes("not-a-tool"), false);
   assert.equal(JSON.stringify(snap).includes("free text"), false);
 });

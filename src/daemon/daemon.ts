@@ -140,6 +140,8 @@ export interface StartDaemonOptions extends Omit<BuildDaemonHandleOptions, "sess
   readonly onServer?: (server: Server) => void;
   // Request log (OBS-02). Defaults to a logger that writes nothing. The entry passes one whose sink is the daemon log.
   readonly logger?: Logger;
+  // Lines the entry's file sinks wrote to stderr instead (owner ruling 2026-11-07, item 14). Defaults to zero.
+  readonly logLinesFallback?: () => number;
   // The most sessions the daemon admits at once (C7). Defaults to MAX_CONCURRENT_SESSIONS.
   readonly maxSessions?: number;
   // Builds the handle of one admitted session. Defaults to buildDaemonHandle; a test wraps it to patch a controller before up.
@@ -669,6 +671,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
       case "metrics": {
         resolveTarget(requireSelection(selection));
         metrics.setLogLinesDropped(logger.droppedLines());
+        metrics.setLogLinesFallback(options.logLinesFallback?.() ?? 0);
         return { id, result: metrics.snapshot() };
       }
       case "doctor": {

@@ -76,8 +76,10 @@ export async function runDaemon(deps: DaemonDeps): Promise<number> {
     const roots = runtimeRootsOf(loadRuntimeConfig(runtimeInput));
     const libpodSocketPath = podmanSocketPath(deps.env);
     const agentosDriver = productionAgentOsDriver(deps.env, stateDir);
-    const requests = requestLogger(writeStderr, deps.env["REALM_LOG_LEVEL"], requestLogPath(stateDir));
-    const entry = entryWriter(deps.writeStderr, stateDir, writeStderr);
+    // Lines the file sinks refused or threw and that stderr received instead. The daemon reports the count as logLinesFallback.
+    const fallbacks = { lines: 0 };
+    const requests = requestLogger(writeStderr, deps.env["REALM_LOG_LEVEL"], requestLogPath(stateDir), fallbacks);
+    const entry = entryWriter(deps.writeStderr, stateDir, writeStderr, fallbacks);
     // A close that fails is logged under its own name to stderr, the channel that does not depend on the file that failed to close.
     const closeRequestLog = (): void => {
       if (!requests.close()) {
@@ -106,6 +108,7 @@ export async function runDaemon(deps: DaemonDeps): Promise<number> {
           emitAuditHead(stateDir, sessionId, entry.write);
         },
         logger: requests.logger,
+        logLinesFallback: () => fallbacks.lines,
       });
     } catch (error: unknown) {
       closeRequestLog();
@@ -192,6 +195,7 @@ function entryWriter(
   injected: ((line: string) => void) | undefined,
   stateDir: string,
   stderr: (line: string) => void,
+  fallbacks: { lines: number },
 ): { readonly write: (line: string) => void; readonly close: () => boolean } {
   if (injected !== undefined) {
     return { write: injected, close: () => true };
@@ -206,6 +210,7 @@ function entryWriter(
       } catch {
         // The file sink refused the path. The stderr writer below still receives the line.
       }
+      fallbacks.lines += 1;
       stderr(line);
     },
     close: () => file.close(),
@@ -216,6 +221,7 @@ function requestLogger(
   writeStderr: (line: string) => void,
   rawLevel: string | undefined,
   logPath: string,
+  fallbacks: { lines: number },
 ): { readonly logger: Logger; readonly close: () => boolean } {
   const parsed = parseLogLevel(rawLevel);
   const file = createFileSink({ path: logPath });
@@ -229,6 +235,7 @@ function requestLogger(
         } catch {
           // The file sink refused the path. stderr still receives the line.
         }
+        fallbacks.lines += 1;
         writeStderr(line);
         return true;
       },
