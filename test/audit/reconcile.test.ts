@@ -296,6 +296,32 @@ void test("item 2: an unparseable line older than the 64-line lookback is counte
   });
 });
 
+void test("item 2 (listing): a clock that throws while the audit directory is listed is one AUDIT_WRITE_FAILED failure with no file, and the run does not throw", () => {
+  withStateDir((stateDir) => {
+    // The listing reads the clock every 256 entries, and a directory entry counts whether or not it is a log, so 300 entries reach it.
+    mkdirSync(join(stateDir, "audit"), { recursive: true });
+    for (let index = 0; index < 300; index += 1) {
+      writeFileSync(join(stateDir, "audit", `junk-${String(index)}.txt`), "");
+    }
+    const outcome = reconcileAuditLogs(stateDir, {
+      now: () => {
+        throw new Error("clock failed");
+      },
+      deadline: 1,
+    });
+    assert.deepEqual(outcome, {
+      files: 0,
+      appended: 0,
+      failed: 1,
+      unfinished: [],
+      complete: false,
+      skippedUnchanged: 0,
+      listingTruncated: true,
+      failures: [{ code: "AUDIT_WRITE_FAILED" }],
+    });
+  });
+});
+
 void test("item 2: a log with an unparseable line still gets its reconciliation line appended, and only the failure is counted", () => {
   withStateDir((stateDir) => {
     admit(stateDir, "write", { path: "a.txt" });

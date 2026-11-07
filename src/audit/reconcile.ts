@@ -79,7 +79,7 @@ export interface ReconcileResult {
   // How many of `files` were skipped without being read because the progress record matched their size and mtime.
   readonly skippedUnchanged: number;
   // True when the listing stopped at its entry bound (RECONCILE_MAX_LISTED_ENTRIES), at the deadline, or because the audit
-  // directory could not be listed (PATH_ESCAPE in `failures`), so logs may exist that were not listed. They cannot be named,
+  // directory could not be listed (its code is in `failures`), so logs may exist that were not listed. They cannot be named,
   // so they are not in `unfinished`. A start that hit RECONCILE_MAX_FILES is not this: the logs it did not reach are listed
   // in `unfinished`.
   readonly listingTruncated: boolean;
@@ -656,10 +656,17 @@ function emptyResult(failures: readonly ReconcileFailure[]): ReconcileResult {
   };
 }
 
-// The result of an audit directory that exists but could not be listed (a link, not a directory, no permission). No log was
-// examined and logs may exist that were not listed, so the run is incomplete. The cause is the PATH_ESCAPE failure.
-function unlistedResult(): ReconcileResult {
-  return { ...emptyResult([{ code: "PATH_ESCAPE" }]), complete: false, listingTruncated: true };
+// The code of an error that stopped the listing of the audit directory. A catalogue code is kept. An error without one (a raw
+// filesystem error, or a clock that throws) is AUDIT_WRITE_FAILED with no file, and the run does not throw.
+function listingFailureCode(error: unknown): ErrorCode {
+  return error instanceof RealmError ? error.code : "AUDIT_WRITE_FAILED";
+}
+
+// The result of an audit directory that exists but could not be listed: a link, or a path that is not a directory (PATH_ESCAPE),
+// or an error that stopped the listing (listingFailureCode). No log was examined, so logs may exist that were not listed, and the
+// run is incomplete.
+function unlistedResult(code: ErrorCode): ReconcileResult {
+  return { ...emptyResult([{ code }]), complete: false, listingTruncated: true };
 }
 
 // Reconciles every `<stateDir>/audit/*.jsonl`, newest modified first. A missing audit directory is zero work. A failure on one
@@ -689,11 +696,11 @@ export function reconcileAuditLogs(stateDir: string, options: ReconcileOptions =
   try {
     const dirStat = lstatSync(dir);
     if (!dirStat.isDirectory() || dirStat.isSymbolicLink()) {
-      return unlistedResult();
+      return unlistedResult("PATH_ESCAPE");
     }
     listing = listLogs(dir, maxListed, expired);
   } catch (error: unknown) {
-    return isMissing(error) ? emptyResult([]) : unlistedResult();
+    return isMissing(error) ? emptyResult([]) : unlistedResult(listingFailureCode(error));
   }
   const progress = readProgress(dir, maxProgressBytes, maxProgressEntries);
   const checked = progress.checked;
