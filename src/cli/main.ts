@@ -391,7 +391,7 @@ async function runUp(deps: ResolvedDeps, socketPath: string, workspaceRoot: stri
   try {
     await ensureDaemon({
       socketPath,
-      probe: reportingStartFailure(daemonAnswers(deps.connect, selectionOf(workspaceRoot)), deps.stateDir),
+      probe: reportingStartFailure(daemonAnswers(deps.connect, selectionOf(workspaceRoot)), deps.stateDir, deps.diagnostics),
       spawnDaemon: spawnDetachedDaemon(deps),
       timeoutMs: upTimeoutMs,
       pollMs: RETRY_INTERVAL_MS,
@@ -544,7 +544,7 @@ async function runDoctorFix(
 async function ensureSharedDaemon(deps: ResolvedDeps, socketPath: string, selection: ControlSelection): Promise<void> {
   await ensureDaemon({
     socketPath,
-    probe: reportingStartFailure(daemonAnswers(deps.connect, selection), deps.stateDir),
+    probe: reportingStartFailure(daemonAnswers(deps.connect, selection), deps.stateDir, deps.diagnostics),
     spawnDaemon: spawnDetachedDaemon(deps),
     timeoutMs: controlTimeoutOf(deps, "up"),
     pollMs: MCP_POLL_INTERVAL_MS,

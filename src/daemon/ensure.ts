@@ -113,9 +113,10 @@ function readLogFrom(stateDir: string, offset: number, length: number): string {
 }
 
 // The result of scanning the startup log from an offset: the catalogue code of the last complete daemon.failed line, or
-// undefined. A line that is not JSON is skipped and never read as a failure.
+// undefined, and the count of the lines that are not JSON and were skipped. A line that is not JSON is never read as a failure.
 export interface StartFailureScan {
   readonly code: ErrorCode | undefined;
+  readonly skippedLines: number;
 }
 
 // The scan of the last complete daemon.failed line written at or after offset. A trailing line without a newline is not yet
@@ -125,20 +126,22 @@ export interface StartFailureScan {
 export function daemonStartFailureSince(stateDir: string, offset: number): StartFailureScan {
   const size = daemonLogSize(stateDir);
   if (size <= offset) {
-    return { code: undefined };
+    return { code: undefined, skippedLines: 0 };
   }
   const text = readLogFrom(stateDir, offset, size - offset);
   const lastNewline = text.lastIndexOf("\n");
   if (lastNewline < 0) {
-    return { code: undefined };
+    return { code: undefined, skippedLines: 0 };
   }
   let code: ErrorCode | undefined;
+  let skippedLines = 0;
   for (const line of text.slice(0, lastNewline).split("\n")) {
     let value: unknown;
     try {
       value = JSON.parse(line);
     } catch {
       // Not JSON, so it cannot be a daemon.failed event: the line is skipped.
+      skippedLines += 1;
       continue;
     }
     const found = failedCode(value);
@@ -146,7 +149,7 @@ export function daemonStartFailureSince(stateDir: string, offset: number): Start
       code = found;
     }
   }
-  return { code };
+  return { code, skippedLines };
 }
 
 function failedCode(value: unknown): ErrorCode | undefined {
@@ -201,12 +204,15 @@ export function daemonAnswers(
 // Wraps a status probe for ensureDaemon. An answer passes through. On the first miss the log's
 // current size is recorded; ensureDaemon spawns the daemon after that miss when the socket is absent, so the recorded
 // offset precedes the new daemon's output. Every miss then looks for a failure line after the offset and
-// rejects with its code; otherwise the miss resolves with what the probe found.
+// rejects with its code; otherwise the miss resolves with what the probe found. Lines the scan skips as not JSON are reported to
+// diagnostics as a count, once each time the count grows.
 export function reportingStartFailure(
   probe: (socketPath: string) => Promise<ProbeResult>,
   stateDir: string,
+  diagnostics: { write(text: string): void },
 ): (socketPath: string) => Promise<ProbeResult> {
   let offset: number | undefined;
+  let reported = 0;
   return async (socketPath) => {
     const finding = await probe(socketPath);
     if (finding.presence === "answering") {
@@ -214,7 +220,11 @@ export function reportingStartFailure(
     }
     const start = offset ?? daemonLogSize(stateDir);
     offset = start;
-    const { code } = daemonStartFailureSince(stateDir, start);
+    const { code, skippedLines } = daemonStartFailureSince(stateDir, start);
+    if (skippedLines > reported) {
+      reported = skippedLines;
+      diagnostics.write(`daemon.log: skipped ${String(skippedLines)} line(s) that are not JSON while waiting for the daemon\n`);
+    }
     if (code !== undefined) {
       throw makeRealmError(code);
     }

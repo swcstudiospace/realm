@@ -94,34 +94,51 @@ void test("an unparsable line is skipped; a line that parses but is not a failur
     daemonLogPath(stateDir),
     `startup output that is not JSON\n{"level":"info","event":"daemon.listening"}\n${failed("POLICY_DENIED")}`,
   );
-  assert.deepEqual(daemonStartFailureSince(stateDir, 0), { code: "POLICY_DENIED" });
+  assert.deepEqual(daemonStartFailureSince(stateDir, 0), { code: "POLICY_DENIED", skippedLines: 1 });
 });
+
+const SILENT = { write: (): void => undefined };
 
 void test("the wrapper passes an answering daemon through", async (t) => {
   const stateDir = scratchStateDir(t);
-  const probe = reportingStartFailure(() => Promise.resolve(ANSWERING), stateDir);
+  const probe = reportingStartFailure(() => Promise.resolve(ANSWERING), stateDir, SILENT);
   assert.deepEqual(await probe("/state/run/control.sock"), ANSWERING);
 });
 
 void test("the wrapper returns what the inner probe found on every miss while the log shows no failure line", async (t) => {
   const stateDir = scratchStateDir(t);
   writeFileSync(daemonLogPath(stateDir), "startup output with no failure line\n");
-  const absent = reportingStartFailure(() => Promise.resolve(ABSENT), stateDir);
+  const absent = reportingStartFailure(() => Promise.resolve(ABSENT), stateDir, SILENT);
   assert.deepEqual(await absent("/state/run/control.sock"), ABSENT);
   assert.deepEqual(await absent("/state/run/control.sock"), ABSENT);
-  const starting = reportingStartFailure(() => Promise.resolve(STARTING), stateDir);
+  const starting = reportingStartFailure(() => Promise.resolve(STARTING), stateDir, SILENT);
   assert.deepEqual(await starting("/state/run/control.sock"), STARTING);
 });
 
 void test("the wrapper rejects with the daemon's code when a failure line appears after the first miss", async (t) => {
   const stateDir = scratchStateDir(t);
-  const probe = reportingStartFailure(() => Promise.resolve(ABSENT), stateDir);
+  const probe = reportingStartFailure(() => Promise.resolve(ABSENT), stateDir, SILENT);
   assert.deepEqual(await probe("/state/run/control.sock"), ABSENT);
   appendFileSync(daemonLogPath(stateDir), failed("POLICY_DENIED"));
   await assert.rejects(
     probe("/state/run/control.sock"),
     (error: unknown) => error instanceof RealmError && error.code === "POLICY_DENIED",
   );
+});
+
+void test("the wrapper reports the lines the scan skipped as not JSON, when the count grows and not on every miss", async (t) => {
+  const stateDir = scratchStateDir(t);
+  const reports: string[] = [];
+  const probe = reportingStartFailure(() => Promise.resolve(ABSENT), stateDir, { write: (text) => { reports.push(text); } });
+  assert.deepEqual(await probe("/state/run/control.sock"), ABSENT);
+  appendFileSync(daemonLogPath(stateDir), "not json\nstill not json\n");
+  assert.deepEqual(await probe("/state/run/control.sock"), ABSENT);
+  assert.deepEqual(await probe("/state/run/control.sock"), ABSENT);
+  assert.deepEqual(reports, ["daemon.log: skipped 2 line(s) that are not JSON while waiting for the daemon\n"]);
+  appendFileSync(daemonLogPath(stateDir), "one more\n");
+  assert.deepEqual(await probe("/state/run/control.sock"), ABSENT);
+  assert.equal(reports.length, 2);
+  assert.equal(reports[1], "daemon.log: skipped 3 line(s) that are not JSON while waiting for the daemon\n");
 });
 
 void test("a LOCK_CONFLICT line is not a start failure: it is what a rival daemon writes when a live daemon owns the socket", (t) => {
@@ -135,7 +152,7 @@ void test("a LOCK_CONFLICT line is not a start failure: it is what a rival daemo
 
 void test("a host that waits for a live daemon keeps waiting when another host's spawn lost the race", async (t) => {
   const stateDir = scratchStateDir(t);
-  const probe = reportingStartFailure(() => Promise.resolve(STARTING), stateDir);
+  const probe = reportingStartFailure(() => Promise.resolve(STARTING), stateDir, SILENT);
   assert.deepEqual(await probe("/state/run/control.sock"), STARTING);
   // The other host spawned a second daemon over the first, and the second refused and exited.
   appendFileSync(daemonLogPath(stateDir), failed("LOCK_CONFLICT"));
