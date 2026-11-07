@@ -97,17 +97,17 @@ void test("TOOL-05: a well-formed request yields exactly one newline-terminated 
   assert.equal(driven.stderr, "", "a well-formed request logs nothing");
 });
 
-void test("TOOL-05: malformed input and server logging go to stderr, never stdout", async (t) => {
+void test("TOOL-05: a malformed line gets a parse error reply on stdout, and its diagnostic goes to stderr", async (t) => {
   const h = makeHarness(t);
   const malformed = await drive(h.dispatcher, ["{not json"]);
-  assert.equal(malformed.stdout, "", "malformed input writes nothing to stdout");
-  assert.deepEqual(malformed.stdoutLines, []);
+  assert.deepEqual(malformed.stdoutLines.map((line) => parseLine(line)), [{ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error" } }]);
   assert.match(malformed.stderr, /mcp: /, "the rejection is diagnosed on stderr");
   assert.equal(malformed.stderr, "mcp: rejected malformed line reason=SCHEMA_INVALID\n", "the malformed-line diagnostic carries the SCHEMA_INVALID code");
 
   const mixed = await drive(h.dispatcher, ["{oops", request(2, "server/discover", {})]);
-  assert.equal(mixed.stdoutLines.length, 1, "only the well-formed request replies");
-  assert.equal(parseLine(mixed.stdoutLines[0] as string)["id"], 2);
+  assert.equal(mixed.stdoutLines.length, 2, "the malformed line and the well-formed request each get one reply");
+  assert.equal(parseLine(mixed.stdoutLines[0] as string)["id"], null);
+  assert.equal(parseLine(mixed.stdoutLines[1] as string)["id"], 2);
   assert.match(mixed.stderr, /mcp: /, "the malformed fragment is still diagnosed on stderr");
 });
 

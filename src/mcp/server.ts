@@ -256,6 +256,8 @@ async function handleLine(ctx: Context, line: string, output: Writable): Promise
   } catch {
     // Fixed text only: the line is untrusted bytes and may carry a credential.
     ctx.diagnostics.write("mcp: rejected malformed line reason=SCHEMA_INVALID\n");
+    // JSON-RPC answers a line that is not JSON with a parse error whose id is null.
+    writeReply(output, null, { error: { code: -32700, message: "Parse error" } });
     return;
   }
   const request = parseRequest(message);
