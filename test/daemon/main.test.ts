@@ -231,6 +231,47 @@ void test("P17-O4: an unrecognised REALM_LOG_LEVEL logs one daemon.log-level war
   assert.equal(warns[0]?.["level"], "warn");
 });
 
+void test("ruling 1: a request log that fails to close is named on stderr once, and the start still returns", async (t) => {
+  const dir = tempDir(t);
+  const raw = validConfig(dir);
+  mkdirSync(String(raw["stateDir"]), { recursive: true });
+  // An empty log, so the first write opens the descriptor that close fails on, and the boundary probe does not run.
+  writeFileSync(join(String(raw["stateDir"]), "requests.log"), "");
+  const h = harness(writeConfig(dir, raw), {
+    logFs: {
+      close: () => {
+        throw new Error("close failed");
+      },
+    },
+    start: (options) => {
+      options.logger?.info("up.end");
+      return Promise.resolve(startedWith(Promise.resolve()));
+    },
+  });
+  assert.equal(await runDaemon(h.deps), 0);
+  assert.equal(h.lines.filter((line) => line.includes('"event":"requests.log-close"')).length, 1, "the failed close is named once");
+});
+
+void test("ruling 14: a request log line the file cannot take goes to stderr, and the start sees it counted in logLinesFallback", async (t) => {
+  const dir = tempDir(t);
+  let fallbacks: number | undefined;
+  const h = harness(writeConfig(dir, validConfig(dir)), {
+    logFs: {
+      write: () => {
+        throw new Error("disk full");
+      },
+    },
+    start: (options) => {
+      options.logger?.info("up.end");
+      fallbacks = options.logLinesFallback?.();
+      return Promise.resolve(startedWith(Promise.resolve()));
+    },
+  });
+  assert.equal(await runDaemon(h.deps), 0);
+  assert.equal(fallbacks, 1, "the one line that went to stderr is counted");
+  assert.ok(h.lines.some((line) => line.includes('"event":"up.end"')), "the line reached stderr");
+});
+
 void test("CRASH-04: the start's onStartup report is written as one stderr line with the container ids", async (t) => {
   const dir = tempDir(t);
   const h = harness(writeConfig(dir, validConfig(dir)), {

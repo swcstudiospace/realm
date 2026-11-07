@@ -16,7 +16,7 @@ import type { AgentOsDriver } from "../runtime/agentos.js";
 import { productionOpenShellRunner } from "../runtime/session-execution.js";
 import type { EnvironmentLike } from "../session/paths.js";
 import { createLogger, parseLogLevel, type Logger } from "../observe/logger.js";
-import { createFileSink } from "../observe/log-file.js";
+import { createFileSink, type FileSinkOptions } from "../observe/log-file.js";
 import { FAILURE_EVENT, daemonLogPath, requestLogPath } from "./ensure.js";
 import { startDaemon, type StartDaemonOptions, type StartedDaemon } from "./daemon.js";
 import type { StartupReport } from "./startup.js";
@@ -35,6 +35,8 @@ export interface DaemonDeps {
   readonly start?: (options: DaemonStartOptions) => Promise<StartedDaemon>;
   readonly writeStderr?: (line: string) => void;
   readonly onSignal?: (signal: DaemonSignal, handler: () => void) => () => void;
+  // The file system the two log sinks write through. Tests inject one whose calls fail; production leaves it unset.
+  readonly logFs?: FileSinkOptions["fs"];
 }
 
 interface StopWiring {
@@ -78,8 +80,8 @@ export async function runDaemon(deps: DaemonDeps): Promise<number> {
     const agentosDriver = productionAgentOsDriver(deps.env, stateDir);
     // Lines the file sinks refused or threw and that stderr received instead. The daemon reports the count as logLinesFallback.
     const fallbacks = { lines: 0 };
-    const requests = requestLogger(writeStderr, deps.env["REALM_LOG_LEVEL"], requestLogPath(stateDir), fallbacks);
-    const entry = entryWriter(deps.writeStderr, stateDir, writeStderr, fallbacks);
+    const requests = requestLogger(writeStderr, deps.env["REALM_LOG_LEVEL"], requestLogPath(stateDir), fallbacks, deps.logFs);
+    const entry = entryWriter(deps.writeStderr, stateDir, writeStderr, fallbacks, deps.logFs);
     // A close that fails is logged under its own name to stderr, the channel that does not depend on the file that failed to close.
     const closeRequestLog = (): void => {
       if (!requests.close()) {
@@ -197,11 +199,12 @@ function entryWriter(
   stateDir: string,
   stderr: (line: string) => void,
   fallbacks: { lines: number },
+  fs: FileSinkOptions["fs"],
 ): { readonly write: (line: string) => void; readonly close: () => boolean } {
   if (injected !== undefined) {
     return { write: injected, close: () => true };
   }
-  const file = createFileSink({ path: daemonLogPath(stateDir) });
+  const file = createFileSink({ path: daemonLogPath(stateDir), ...(fs === undefined ? {} : { fs }) });
   return {
     write: (line) => {
       try {
@@ -223,9 +226,10 @@ function requestLogger(
   rawLevel: string | undefined,
   logPath: string,
   fallbacks: { lines: number },
+  fs: FileSinkOptions["fs"],
 ): { readonly logger: Logger; readonly close: () => boolean } {
   const parsed = parseLogLevel(rawLevel);
-  const file = createFileSink({ path: logPath });
+  const file = createFileSink({ path: logPath, ...(fs === undefined ? {} : { fs }) });
   const logger = createLogger({
     sink: {
       write: (line) => {
