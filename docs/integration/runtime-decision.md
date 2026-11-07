@@ -208,6 +208,7 @@ Counters and timings are read with `realm metrics`, which sends `metrics` on the
 | --- | --- |
 | `containerIds` | Ids of the realm containers the reap removed, in removal order. Empty when an injected sweep names none. |
 | `removedCauses` | One entry per container in `containerIds`, in no particular order: the container id and its cause, separated by one space. The cause is a `RemovalCause` (`src/daemon/startup.ts`): a property the adoption verdict can fail, `workspace-root`, `workspace-pin`, `binding-roots`, or `no-record`. Empty when the reap failed, because the reap then returns no result to read the causes from. |
+| `removalCodes` | One entry per removal whose own failure carried a catalogue code, when a later listing proved its container gone: the container id and that code, separated by one space. Empty when the reap failed, because the reap then returns no result to read it from. |
 | `containersRemoved` | Number of containers the reap removed. |
 | `recordsDeleted` | Number of session records the reap deleted. |
 | `adopted` | Number of sessions the reap adopted. Their containers and records were kept, and each is hydrated after the gate opens. |

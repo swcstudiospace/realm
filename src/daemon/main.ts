@@ -158,6 +158,7 @@ function emitStartup(writeStderr: (line: string) => void, report: StartupReport)
     containersRemoved: report.containersRemoved,
     containerIds: report.containerIds,
     removedCauses: report.removedCauses,
+    removalCodes: report.removalCodes,
     recordsDeleted: report.recordsDeleted,
     adopted: report.adopted,
     adoptedContainerIds: report.adoptedContainerIds,

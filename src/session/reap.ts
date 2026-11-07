@@ -69,8 +69,9 @@ export interface SelectiveReapDeps<Property extends string = string> {
 export interface SelectiveReapResult<Property extends string = string> {
   // Containers that passed the verdict. Their records are kept.
   readonly adopted: readonly { readonly sessionId: string; readonly containerId: string }[];
-  // Containers removed and proven gone. The cause is the verdict property that failed, or "no-record".
-  readonly removed: readonly { readonly containerId: string; readonly cause: Property | "no-record" }[];
+  // Containers removed and proven gone. The cause is the verdict property that failed, or "no-record". removalCode is the code of
+  // the removal's own failure, when the removal threw but the listing proved the container gone: that code is kept, not dropped.
+  readonly removed: readonly { readonly containerId: string; readonly cause: Property | "no-record"; readonly removalCode?: ErrorCode }[];
   // Records deleted. The cause is "unreadable" (the record could not be loaded), "no-container" (no candidate names its
   // container) or "verdict-failed" (its container failed the verdict and was removed).
   readonly deleted: readonly { readonly sessionId: string; readonly cause: string }[];
@@ -116,12 +117,18 @@ async function runSelectiveSweep<Property extends string>(deps: SelectiveReapDep
   const records = readRecords(deps.store);
   const candidates = (await deps.listCandidates()).map(inspectedOrThrow);
   const plan = await judge(deps, records, candidates);
-  await removeAndProve(
+  const removalCodes = await removeAndProve(
     deps,
     plan.removed.map((entry) => entry.containerId),
     sweep,
   );
-  return plan;
+  return {
+    ...plan,
+    removed: plan.removed.map((entry) => {
+      const removalCode = removalCodes.get(entry.containerId);
+      return removalCode === undefined ? entry : { ...entry, removalCode };
+    }),
+  };
 }
 
 // Every stored record. A record that cannot be loaded names no container, so it is deleted as unreadable. Its container, if one
@@ -191,10 +198,10 @@ async function judge<Property extends string>(
 
 // Removes every planned container, then proves the removals with one listing taken after all of them. A removal that
 // throws is still proven when the listing no longer holds the container, as the sweep's own removal is. A container the
-// listing still holds, or a listing that fails, rejects the reap with REALM_STOPPING. The cause is the removal's code.
-async function removeAndProve(deps: SelectiveReapDeps, containerIds: readonly string[], sweep: { open: boolean }): Promise<void> {
+// listing still holds, or a listing that fails, rejects the reap with REALM_STOPPING. Every removal's code is returned, proven or not.
+async function removeAndProve(deps: SelectiveReapDeps, containerIds: readonly string[], sweep: { open: boolean }): Promise<ReadonlyMap<string, ErrorCode | undefined>> {
   if (containerIds.length === 0) {
-    return;
+    return new Map();
   }
   const failures = new Map<string, ErrorCode | undefined>();
   for (const containerId of containerIds) {
@@ -218,6 +225,7 @@ async function removeAndProve(deps: SelectiveReapDeps, containerIds: readonly st
       throw makeRealmError("REALM_STOPPING", failures.get(containerId));
     }
   }
+  return failures;
 }
 
 // The catalogue code of a RealmError, or undefined for any other error.

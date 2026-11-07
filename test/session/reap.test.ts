@@ -81,6 +81,8 @@ interface SelectiveOptions {
   readonly stubborn?: readonly string[];
   // Removals that reject and leave the container listed.
   readonly failRemoval?: readonly string[];
+  // Removals that reject after the engine has removed the container, so the proof no longer lists it.
+  readonly failButGone?: readonly string[];
 }
 
 // Selective dependencies over a container set the fake engine keeps: a removal drops the id from the listing unless it is
@@ -90,6 +92,7 @@ function selectiveDeps(options: SelectiveOptions): SelectiveReapDeps {
   const refuse = options.refuse ?? {};
   const stubborn = options.stubborn ?? [];
   const failRemoval = options.failRemoval ?? [];
+  const failButGone = options.failButGone ?? [];
   return {
     store: loggedStore(options.store, options.events),
     listCandidates: () => Promise.resolve(options.candidates),
@@ -100,6 +103,10 @@ function selectiveDeps(options: SelectiveOptions): SelectiveReapDeps {
     remove: (containerId) => {
       options.events.push(`remove:${containerId}`);
       if (failRemoval.includes(containerId)) {
+        return Promise.reject(makeRealmError("PODMAN_MACHINE_DOWN"));
+      }
+      if (failButGone.includes(containerId)) {
+        present.delete(containerId);
         return Promise.reject(makeRealmError("PODMAN_MACHINE_DOWN"));
       }
       if (!stubborn.includes(containerId)) {
@@ -202,6 +209,14 @@ void test("D19-1: a container with no record is removed with cause no-record, an
   assert.deepEqual(result.removed, [{ containerId: "c-orphan", cause: "no-record" }]);
   assert.deepEqual(result.deleted, []);
   assert.deepEqual(events, ["remove:c-orphan", "proof"]);
+});
+
+void test("D19-1: a removal that throws but is proven gone keeps its code on the removed entry", async (t) => {
+  const { store } = await startFixture(t);
+  const events: string[] = [];
+  const result = await reapStartupSelective(selectiveDeps({ store, events, candidates: [candidate("c-gone")], failButGone: ["c-gone"] }));
+  assert.deepEqual(result.removed, [{ containerId: "c-gone", cause: "no-record", removalCode: "PODMAN_MACHINE_DOWN" }]);
+  assert.deepEqual(events, ["remove:c-gone", "proof"]);
 });
 
 void test("D19-1: a record whose container is not adopted is deleted only after every removal is proven", async (t) => {

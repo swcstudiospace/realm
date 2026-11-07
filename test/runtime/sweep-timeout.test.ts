@@ -318,7 +318,7 @@ void test("RT-08: the sweep bound is 30 s, so a removal that outlasts the old 10
   assert.equal(present.size, 1);
 
   t.mock.timers.tick(2_000);
-  assert.equal(await sweep, 1, "the removal finished and the container is counted");
+  assert.equal((await sweep).removed, 1, "the removal finished and the container is counted");
   assert.equal(present.size, 0);
 });
 

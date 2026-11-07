@@ -37,9 +37,9 @@ export const SWEEP_CALL_TIMEOUT_MS = 30_000;
 export async function removeAllRealmContainers(
   libpod: SweepClient,
   onRemoved?: (id: string) => void,
-): Promise<number> {
+): Promise<{ readonly removed: number; readonly firstRemovalCode: ErrorCode | undefined }> {
   const found = await listRealmContainers(libpod);
-  // The first removal failure keeps its code, so a refusal names what stopped the sweep.
+  // The first removal failure keeps its code. It is returned even when the listing proves the container gone, so a caller can name it.
   let removalFailure: ErrorCode | undefined;
   const reported = new Set<string>();
   for (const container of found) {
@@ -70,7 +70,7 @@ export async function removeAllRealmContainers(
   if (survivors.length > 0) {
     throw makeRealmError("REALM_STOPPING", removalFailure);
   }
-  return found.length;
+  return { removed: found.length, firstRemovalCode: removalFailure };
 }
 
 // The realm's containers: the OpenShell-managed sandboxes whose sandbox name carries the realm prefix.

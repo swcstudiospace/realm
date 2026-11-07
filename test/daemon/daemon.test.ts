@@ -739,6 +739,7 @@ void test("CRASH-01, CRASH-02, CRASH-04: startDaemon sweeps orphan temp files, r
     {
       containerIds: ["orphan-container-01"],
       removedCauses: ["orphan-container-01 no-record"],
+      removalCodes: [],
       containersRemoved: 1,
       recordsDeleted: 1,
       adopted: 0,
@@ -857,6 +858,7 @@ void test("CRASH-04: a reap that fails after removing a container still reports 
     {
       containerIds: ["0123abcd"],
       removedCauses: [],
+      removalCodes: [],
       containersRemoved: 1,
       recordsDeleted: 0,
       adopted: 0,

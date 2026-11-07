@@ -238,6 +238,7 @@ void test("CRASH-04: the start's onStartup report is written as one stderr line 
       options.onStartup?.({
         containerIds: ["c0ffee", "decaf1"],
         removedCauses: ["c0ffee pids-limit", "decaf1 no-record"],
+        removalCodes: [],
         containersRemoved: 2,
         recordsDeleted: 1,
         adopted: 0,
@@ -268,6 +269,7 @@ void test("CRASH-04: the start's onStartup report is written as one stderr line 
     containersRemoved: 2,
     containerIds: ["c0ffee", "decaf1"],
     removedCauses: ["c0ffee pids-limit", "decaf1 no-record"],
+    removalCodes: [],
     recordsDeleted: 1,
     adopted: 0,
     adoptedContainerIds: [],
@@ -293,6 +295,7 @@ void test("CRASH-04: the startup line names the adopted count", async (t) => {
       options.onStartup?.({
         containerIds: [],
         removedCauses: [],
+        removalCodes: [],
         containersRemoved: 0,
         recordsDeleted: 0,
         adopted: 2,
@@ -331,6 +334,7 @@ void test("CRASH-04: the startup line has no id brackets when no container was r
       options.onStartup?.({
         containerIds: [],
         removedCauses: [],
+        removalCodes: [],
         adoptedContainerIds: [],
         containersRemoved: 0,
         recordsDeleted: 0,
@@ -371,6 +375,7 @@ void test("STARTUP budget: the startup line says maintenanceComplete=false and n
       options.onStartup?.({
         containerIds: [],
         removedCauses: [],
+        removalCodes: [],
         adoptedContainerIds: [],
         containersRemoved: 0,
         recordsDeleted: 0,
@@ -412,6 +417,7 @@ void test("CRASH-04: a failed reap's partial report is logged, then the start fa
       options.onStartup?.({
         containerIds: ["0123abcd"],
         removedCauses: [],
+        removalCodes: [],
         adoptedContainerIds: [],
         containersRemoved: 1,
         recordsDeleted: 0,
@@ -456,6 +462,7 @@ void test("STARTUP budget: a long unfinished list is sampled at ten names, the c
       options.onStartup?.({
         containerIds: [],
         removedCauses: [],
+        removalCodes: [],
         adoptedContainerIds: [],
         containersRemoved: 0,
         recordsDeleted: 0,
@@ -786,6 +793,7 @@ void test("MULTI-03: the startup line carries registryEntriesRemoved and records
       options.onStartup?.({
         containerIds: [],
         removedCauses: [],
+        removalCodes: [],
         adoptedContainerIds: [],
         containersRemoved: 0,
         recordsDeleted: 1,

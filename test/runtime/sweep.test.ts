@@ -36,14 +36,14 @@ void test("CRASH-04: onRemoved receives the id of each removed container, and no
   const count = await removeAllRealmContainers(listClient(["aaa", "bbb"]), (id) => {
     removed.push(id);
   });
-  assert.equal(count, 2);
+  assert.equal(count.removed, 2);
   assert.deepEqual(removed, ["aaa", "bbb"]);
 
   const clean: string[] = [];
   const none = await removeAllRealmContainers(listClient([]), (id) => {
     clean.push(id);
   });
-  assert.equal(none, 0);
+  assert.equal(none.removed, 0);
   assert.deepEqual(clean, []);
 });
 
@@ -72,7 +72,7 @@ void test("CRASH-04: a removal whose reply is lost but whose container is gone i
   const count = await removeAllRealmContainers(client, (id) => {
     removed.push(id);
   });
-  assert.equal(count, 2);
+  assert.equal(count.removed, 2);
   assert.deepEqual([...removed].sort(), ["fine", "lost-reply"], "the ids match the count, each once");
 });
 
