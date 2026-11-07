@@ -2540,11 +2540,13 @@ void test("T2 (f): stop() on StartedDaemon with two sessions calls controller.st
 void test("T2 (stop-log): a session whose stop fails is carried as the code on daemon.stopped, and stop() rejects with that code", async (t) => {
   const fixture = makeDirs();
   const stoppedCodes: unknown[] = [];
+  const failedCounts: unknown[] = [];
   const logger: Logger = {
     ...nullLogger,
     info: (event, fields) => {
       if (event === "daemon.stopped") {
         stoppedCodes.push(fields?.["code"]);
+        failedCounts.push(fields?.["failedTeardowns"]);
       }
     },
   };
@@ -2555,6 +2557,7 @@ void test("T2 (stop-log): a session whose stop fails is carried as the code on d
 
   await assert.rejects(daemon.stop(), (error: unknown) => error instanceof RealmError && error.code === "PODMAN_MACHINE_DOWN");
   assert.deepEqual(stoppedCodes, ["PODMAN_MACHINE_DOWN"]);
+  assert.deepEqual(failedCounts, [1], "the one session that did not stop is counted on daemon.stopped");
 });
 
 void test("T2 (h): every status, up and down reply carries the sessionId of its selection", async (t) => {

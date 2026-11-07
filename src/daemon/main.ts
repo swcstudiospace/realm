@@ -78,6 +78,17 @@ export async function runDaemon(deps: DaemonDeps): Promise<number> {
     const agentosDriver = productionAgentOsDriver(deps.env, stateDir);
     const requests = requestLogger(writeStderr, deps.env["REALM_LOG_LEVEL"], requestLogPath(stateDir));
     const entry = entryWriter(deps.writeStderr, stateDir, writeStderr);
+    // A close that fails is logged under its own name to stderr, the channel that does not depend on the file that failed to close.
+    const closeRequestLog = (): void => {
+      if (!requests.close()) {
+        entryLogger(writeStderr).warn("requests.log-close", { category: "close" });
+      }
+    };
+    const closeEntryLog = (): void => {
+      if (!entry.close()) {
+        entryLogger(writeStderr).warn("daemon.log-close", { category: "close" });
+      }
+    };
     try {
       started = await start({
         stateDir,
@@ -97,9 +108,9 @@ export async function runDaemon(deps: DaemonDeps): Promise<number> {
         logger: requests.logger,
       });
     } catch (error: unknown) {
-      requests.close();
+      closeRequestLog();
       emitFailure(entry.write, codeOf(error));
-      entry.close();
+      closeEntryLog();
       return 1;
     }
     try {
@@ -109,8 +120,8 @@ export async function runDaemon(deps: DaemonDeps): Promise<number> {
       });
       return code;
     } finally {
-      requests.close();
-      entry.close();
+      closeRequestLog();
+      closeEntryLog();
     }
   } catch (error: unknown) {
     emitFailure(writeStderr, codeOf(error));
@@ -181,9 +192,9 @@ function entryWriter(
   injected: ((line: string) => void) | undefined,
   stateDir: string,
   stderr: (line: string) => void,
-): { readonly write: (line: string) => void; readonly close: () => void } {
+): { readonly write: (line: string) => void; readonly close: () => boolean } {
   if (injected !== undefined) {
-    return { write: injected, close: () => undefined };
+    return { write: injected, close: () => true };
   }
   const file = createFileSink({ path: daemonLogPath(stateDir) });
   return {
@@ -197,9 +208,7 @@ function entryWriter(
       }
       stderr(line);
     },
-    close: () => {
-      file.close();
-    },
+    close: () => file.close(),
   };
 }
 
@@ -207,7 +216,7 @@ function requestLogger(
   writeStderr: (line: string) => void,
   rawLevel: string | undefined,
   logPath: string,
-): { readonly logger: Logger; readonly close: () => void } {
+): { readonly logger: Logger; readonly close: () => boolean } {
   const parsed = parseLogLevel(rawLevel);
   const file = createFileSink({ path: logPath });
   const logger = createLogger({
@@ -230,7 +239,7 @@ function requestLogger(
   if (parsed.invalid) {
     logger.warn("daemon.log-level", { value: parsed.level });
   }
-  return { logger, close: () => { file.close(); } };
+  return { logger, close: () => file.close() };
 }
 
 // Resolves once the daemon has stopped. A signal stops the daemon in process and settles with the outcome of that stop. A stop
