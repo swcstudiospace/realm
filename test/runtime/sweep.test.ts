@@ -73,6 +73,7 @@ void test("CRASH-04: a removal whose reply is lost but whose container is gone i
     removed.push(id);
   });
   assert.equal(count.removed, 2);
+  assert.equal(count.firstRemovalCode, "PODMAN_MACHINE_DOWN", "the lost reply's code is kept, although its container is gone");
   assert.deepEqual([...removed].sort(), ["fine", "lost-reply"], "the ids match the count, each once");
 });
 
