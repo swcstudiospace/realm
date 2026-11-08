@@ -1,4 +1,7 @@
 import { test } from "node:test";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
 import {
   validate,
@@ -47,6 +50,25 @@ void test("D4: the schema default mode is fail-closed, and advisory still loads 
   assert.equal(value(validate("policy", {})).mode, "fail-closed");
   assert.equal(value(validate("policy", { workspaceRoots: ["/ws"] })).mode, "fail-closed");
   assert.equal(value(validate("policy", { mode: "advisory" })).mode, "advisory");
+});
+
+void test("D-1501: the schema file itself declares fail-closed as the only mode default", () => {
+  // The compiled test lives in dist/test/core, so three levels up is the repository root.
+  const schemaPath = join(
+    dirname(fileURLToPath(import.meta.url)),
+    "..",
+    "..",
+    "..",
+    "src",
+    "core",
+    "policy.schema.json",
+  );
+  const schema = JSON.parse(readFileSync(schemaPath, "utf8")) as {
+    properties: { mode: { default: unknown; enum: unknown } };
+  };
+  assert.equal(schema.properties.mode.default, "fail-closed");
+  assert.deepEqual(schema.properties.mode.enum, ["advisory", "fail-closed"]);
+  assert.equal(value(validate("policy", {})).mode, schema.properties.mode.default);
 });
 
 void test("mode fail-closed is accepted", () => {

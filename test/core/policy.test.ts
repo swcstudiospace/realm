@@ -87,6 +87,17 @@ void test("D4: loadPolicyFileDetailed reports where the mode came from", () => {
   });
 });
 
+void test("D-1501: loadPolicyFile returns the policy that loadPolicyFileDetailed reports, for every mode source", () => {
+  withTempDir((dir) => {
+    const absent = join(dir, "absent.json");
+    const unnamed = writeJson(join(dir, "unnamed.json"), { shellEnabled: true });
+    const advisory = writeJson(join(dir, "advisory.json"), { mode: "advisory" });
+    for (const path of [absent, unnamed, advisory]) {
+      assert.deepEqual(loadPolicyFile(path), loadPolicyFileDetailed(path).policy);
+    }
+  });
+});
+
 void test("CORE-03: keys missing from a policy file take the validated defaults", () => {
   withTempDir((dir) => {
     const policy = loadPolicyFile(writeJson(join(dir, "policy.json"), { mode: "fail-closed" }));
