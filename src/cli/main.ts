@@ -14,6 +14,7 @@ import { spawn } from "node:child_process";
 import { closeSync, fchmodSync, lstatSync, mkdirSync, openSync } from "node:fs";
 import { runAcpOverStdio } from "../acp/stdio.js";
 import { createJsonRpc, type AnchorRpc } from "../audit/anchor.js";
+import type { Policy } from "../contract/validate.js";
 import { dialWithin } from "../core/timeout.js";
 import { ERROR_CATALOGUE, ERROR_CODES, RealmError, makeRealmError, type ErrorCode } from "../core/errors.js";
 import {
@@ -142,6 +143,10 @@ export interface CliDeps {
   readonly diagnostics?: McpOutput;
   // Reads the runtime config file that names the state directory (default readRuntimeConfigFile).
   readonly readConfig?: (path: string) => unknown;
+  // Loads the policy file for realm checkpoint on a project that has no registry entry (default loadPolicyFile).
+  readonly readPolicy?: (path: string) => Policy;
+  // The libpod inspect of a named container for realm checkpoint; resolves null for an absent one (default: host Podman).
+  readonly inspectContainer?: (containerName: string) => Promise<unknown>;
   // REALM_ANCHOR_KEY_FILE, read once by the entry edge (main) and used only by `realm anchor --publish`.
   readonly anchorKeyFile?: string | undefined;
   // RPC factory for realm anchor --publish (default createJsonRpc); tests inject a fake.

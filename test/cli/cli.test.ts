@@ -1678,14 +1678,14 @@ void test("RES-04 CLI: a malformed id, a relative workspace, a missing flag and 
   assert.equal(fx.daemon.connects, 0);
 });
 
-void test("RES-04 CLI: a workspace with no session is refused with REALM_UNBOUND and nothing is written", async (t) => {
+void test("RES-04 CLI: an unregistered workspace under a policy with no workspace roots is refused with POLICY_DENIED and nothing is written", async (t) => {
   const fx = checkpointFixture(t);
   const before = treeBytes(fx.workspace);
   for (const command of ["create", "restore"] as const) {
     const result = await runCli(checkpointArgv(command, fx, "before-edit"), fx.deps);
     assert.equal(result.exitCode, 1, command);
-    assert.equal(result.stdout, "REALM_UNBOUND\n");
-    assert.ok(result.stderr.includes(ERROR_CATALOGUE.REALM_UNBOUND.reason));
+    assert.equal(result.stdout, "POLICY_DENIED\n");
+    assert.ok(result.stderr.includes(ERROR_CATALOGUE.POLICY_DENIED.reason));
   }
   assert.deepEqual(treeBytes(fx.workspace), before);
   assert.equal(existsSync(join(fx.stateDir, "checkpoints")), false);

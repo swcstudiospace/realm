@@ -38,11 +38,10 @@ Each refusal is a catalogue code. The retry column is the catalogue's `retryable
 
 | Code | Retry | What it means |
 | --- | --- | --- |
-| `REALM_UNBOUND` | no | The workspace has no registered session. See [Stopped projects](#stopped-projects). |
-| `REALM_NOT_ACTIVE` | yes | The daemon cannot answer. The control socket is absent, or the daemon refuses the status request, for example for a session that is still waiting to be hydrated after a daemon restart. The code is also what `realm up` gets when a checkpoint holds the session lock. A checkpoint is never refused with this code because of a lock. |
+| `REALM_NOT_ACTIVE` | yes | The sandbox could not be proven stopped. The daemon cannot answer: the control socket is absent or refuses the connection for a project that still has a registry entry, or the daemon is silent, answers with an error or drops the connection, for example for a session that is still waiting to be hydrated after a daemon restart. Or, for a project with no registry entry, there is no daemon and Podman holds a container named `realm-<session id>` in any state, cannot be reached, or fails or exceeds its bound when asked. See [Stopped projects](#stopped-projects). The code is also what `realm up` gets when a checkpoint holds the session lock. A checkpoint is never refused with this code because of a lock. |
 | `LOCK_CONFLICT` | yes | One of these holds. The sandbox is not in the unbound state, so it counts as running. A sandbox start holds the session's lock. Another checkpoint operation holds it. A snapshot saw a workspace entry change during the copy. See [Quiescence](#quiescence). |
-| `POLICY_DENIED` | no | The workspace path does not resolve. Or the workspace is not the directory the registry pinned: it was moved, replaced, or reached through a link. Or the state directory lies inside the workspace root. Or the tree holds a special file. Or, on restore, the state directory is on a different filesystem from the workspace. |
-| `SCHEMA_INVALID` | no | On create, the checkpoint id is already used. On restore, the checkpoint is unknown, its manifest cannot be read or is invalid, or its tree does not match its manifest. A restore refused for the last reason moves nothing. |
+| `POLICY_DENIED` | no | The workspace path does not resolve. Or, for a project with no registry entry, the path is outside the policy `workspaceRoots` or outside the configured workspace root. Or the workspace is not the directory that was pinned: it was moved, replaced, or reached through a link. Or the state directory lies inside the workspace root. Or the tree holds a special file. Or, on restore, the state directory is on a different filesystem from the workspace. |
+| `SCHEMA_INVALID` | no | On create, the checkpoint id is already used. On restore, the checkpoint is unknown, its manifest cannot be read or is invalid, or its tree does not match its manifest. A restore refused for the last reason moves nothing. Or, for a project with no registry entry, the policy file cannot be loaded. |
 | `PATH_ESCAPE` | no | On create, a symbolic link in the workspace resolves outside the workspace root. Links are never followed, so this refuses the create. |
 | `WRITE_NOT_ATOMIC` | yes | A copy, scan or move failed for a reason outside the catalogue, for example a full disk or a permission error. Or a checkpoint directory could not be created. Or, on restore, the tree did not match its manifest after the move. In that case the tree is moved back. |
 | `TOOL_TIMEOUT` | yes | A copy, scan or move step ran for more than five minutes. See [Limits](#limits). |
@@ -80,9 +79,23 @@ Restore replaces the workspace contents. The current entries under the root are 
 
 ## Stopped projects
 
-A checkpoint needs the workspace's session to be registered, and the daemon to report that session as unbound. `realm down` removes the registration. For a project that has been brought down, create and restore refuse with `REALM_UNBOUND`.
+`realm down` removes the project's registration, and a stopped project usually has no daemon. Create and restore still work for it. When the workspace has no registry entry, the command pins the workspace itself, in memory, with the rules `realm up` applies to a project it has not seen:
 
-Checkpointing a stopped project is not supported yet. How it should work is an open decision, recorded as an open item in D19-9.
+- the real path must lie under the policy file's `workspaceRoots`, and inside the configured workspace root, or the command refuses with `POLICY_DENIED`;
+- the session id must be the one the real path derives, or the command refuses with `SCHEMA_INVALID`;
+- a policy file or runtime config that cannot be loaded refuses. A runtime config that cannot be loaded is a usage error, exit code 2.
+
+The pin lives only for the command. Nothing is written to the registry and nothing is removed, so there is nothing to clean up, and a command that crashes leaves no registration behind. The library still verifies the pinned directory before every copy and move, so a directory swapped in after the pin is refused with `POLICY_DENIED`.
+
+The sandbox is proven stopped before anything is written, and the proof is repeated on every check the library makes. In order:
+
+1. The daemon answers, and the session's state is `unbound`.
+2. There is no daemon, meaning the control socket is absent or refuses the connection, and Podman holds no container named `realm-<session id>`.
+3. A daemon that exists but did not answer, because it timed out, replied with an error or dropped the connection, is never read as "no daemon". The command refuses with `REALM_NOT_ACTIVE` and does not ask Podman.
+
+The refusals that remain: `REALM_NOT_ACTIVE` for a container in any state, a Podman that cannot be resolved or reached, an inspect that fails or exceeds its bound, or a silent daemon; `LOCK_CONFLICT` when a daemon answers with a state other than `unbound`; `POLICY_DENIED` outside the roots or the workspace root, through a link, or for a swapped directory; `SCHEMA_INVALID` for an id mismatch or a policy that cannot be loaded.
+
+A project that still has a registry entry is handled as before: the daemon's status call is the only proof, and a daemon that is absent refuses with `REALM_NOT_ACTIVE`. A registration left behind with no daemon, for example by a crash, is therefore refused. Run `realm up` and then `realm down` to clear it, then retry.
 
 ## Limits
 
