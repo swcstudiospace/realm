@@ -1,7 +1,8 @@
 // Hermetic tests for the pieces of the production live suite that need no host: probe output parsing, the polling helper
 // (with an injected clock), the 198.18.0.0/15 range check, the skip-reason selection, the daemon process finder's parsing of
 // ps output, the MCP line framing and the JSON-RPC response matcher, the status, tool-error, daemon.startup line and startup notice readers, the policyExtra merge into
-// policy.json and the runner-kill workload's syntax. This file always runs. The live scenarios themselves are in
+// policy.json, the runner-kill workload's syntax, the audit pair validator and the scratch volume parser. This file always runs.
+// The live scenarios themselves are in
 // production-driver.test.ts and run only when its gate opens.
 
 import { test } from "node:test";
@@ -15,6 +16,7 @@ import { sandboxNameOfSession, sessionIdOfWorkspace } from "../../src/session/pa
 import {
   adoptedCountOfNotice,
   auditLinesWithCorrelation,
+  auditPairProblems,
   sandboxNameFor,
   KILL_RUNNER_ARGV,
   createScenarioEnvironment,
@@ -26,6 +28,7 @@ import {
   parseListeningSockets,
   parseNodeProbe,
   parseProbeFields,
+  parseSessionVolumeNames,
   pollUntil,
   productionSkipReason,
   readLiveInputs,
@@ -854,4 +857,127 @@ void test("adoptedCountOfNotice is undefined for a notice that only reports a de
 
 void test("adoptedCountOfNotice reads the adopted count from a notice that carries both sentences, as startupNoticeOf joins them", () => {
   assert.equal(adoptedCountOfNotice(`${DESTROYED_NOTICE} 3 ${ADOPTED_NOTICE_TAIL}`), 3);
+});
+
+// ---- auditPairProblems and parseSessionVolumeNames ----------------------------------------------------------------------------
+
+const PAIR_EXPECTED = { tool: "write", sessionId: "sess-1", outcome: "ok" };
+
+// One audit line as the write path records it, with the correlation id auditLinesWithCorrelation joins on.
+function pairLine(phase: string, overrides: Readonly<Record<string, unknown>> = {}): Readonly<Record<string, unknown>> {
+  return { phase, tool: "write", sessionId: "sess-1", correlationId: "c-1", outcome: "ok", ...overrides };
+}
+
+void test("auditPairProblems returns no problem for one admission line followed by one result line that carry the expected fields", () => {
+  assert.deepEqual(auditPairProblems([pairLine("admission"), pairLine("result")], PAIR_EXPECTED), []);
+});
+
+void test("auditPairProblems compares only the result line's outcome, so an ok admission line pairs with a result carrying the expected error code", () => {
+  const records = [pairLine("admission"), pairLine("result", { outcome: "OPENSHELL_START_FAILED" })];
+  assert.deepEqual(auditPairProblems(records, { tool: "write", sessionId: "sess-1", outcome: "OPENSHELL_START_FAILED" }), []);
+});
+
+void test("auditPairProblems reports a missing result line", () => {
+  assert.deepEqual(auditPairProblems([pairLine("admission")], PAIR_EXPECTED), ["exactly one result line is required; found 0"]);
+});
+
+void test("auditPairProblems reports a missing admission line", () => {
+  assert.deepEqual(auditPairProblems([pairLine("result")], PAIR_EXPECTED), ["exactly one admission line is required; found 0"]);
+});
+
+void test("auditPairProblems reports a duplicate admission line", () => {
+  assert.deepEqual(auditPairProblems([pairLine("admission"), pairLine("admission"), pairLine("result")], PAIR_EXPECTED), [
+    "exactly one admission line is required; found 2",
+  ]);
+});
+
+void test("auditPairProblems reports a duplicate result line", () => {
+  assert.deepEqual(auditPairProblems([pairLine("admission"), pairLine("result"), pairLine("result")], PAIR_EXPECTED), [
+    "exactly one result line is required; found 2",
+  ]);
+});
+
+void test("auditPairProblems reports a result line that comes before the admission line", () => {
+  assert.deepEqual(auditPairProblems([pairLine("result"), pairLine("admission")], PAIR_EXPECTED), [
+    "the result line comes before the admission line",
+  ]);
+});
+
+void test("auditPairProblems reports an admission and a result line that carry different correlation ids", () => {
+  assert.deepEqual(auditPairProblems([pairLine("admission"), pairLine("result", { correlationId: "c-2" })], PAIR_EXPECTED), [
+    `the admission and result lines carry different correlation ids: ${describeValue("c-1")} and ${describeValue("c-2")}`,
+  ]);
+});
+
+void test("auditPairProblems reports both lines when they share an id that is not the expected one", () => {
+  assert.deepEqual(auditPairProblems([pairLine("admission"), pairLine("result")], { ...PAIR_EXPECTED, correlationId: "c-9" }), [
+    `the admission line must carry correlation id ${describeValue("c-9")}; found ${describeValue("c-1")}`,
+    `the result line must carry correlation id ${describeValue("c-9")}; found ${describeValue("c-1")}`,
+  ]);
+});
+
+void test("auditPairProblems reports a line whose session id is not the expected one", () => {
+  assert.deepEqual(auditPairProblems([pairLine("admission", { sessionId: "sess-2" }), pairLine("result")], PAIR_EXPECTED), [
+    `the admission line must carry session id ${describeValue("sess-1")}; found ${describeValue("sess-2")}`,
+  ]);
+});
+
+void test("auditPairProblems reports a wrong tool on each line and a wrong result outcome", () => {
+  assert.deepEqual(auditPairProblems([pairLine("admission", { tool: "read" }), pairLine("result", { tool: "read" })], PAIR_EXPECTED), [
+    `the admission line must name tool ${describeValue("write")}; found ${describeValue("read")}`,
+    `the result line must name tool ${describeValue("write")}; found ${describeValue("read")}`,
+  ]);
+  assert.deepEqual(auditPairProblems([pairLine("admission"), pairLine("result", { outcome: "OPENSHELL_START_FAILED" })], PAIR_EXPECTED), [
+    `the result line must record outcome ${describeValue("ok")}; found ${describeValue("OPENSHELL_START_FAILED")}`,
+  ]);
+});
+
+void test("auditPairProblems reports a missing, empty or non-string correlation id on either line", () => {
+  const bare = { phase: "result", tool: "write", sessionId: "sess-1", outcome: "ok" };
+  assert.deepEqual(auditPairProblems([pairLine("admission"), bare], PAIR_EXPECTED), [
+    `the result line must carry a non-empty string correlationId; found ${describeValue(undefined)}`,
+  ]);
+  assert.deepEqual(auditPairProblems([pairLine("admission", { correlationId: "" }), pairLine("result", { correlationId: "" })], PAIR_EXPECTED), [
+    `the admission line must carry a non-empty string correlationId; found ${describeValue("")}`,
+    `the result line must carry a non-empty string correlationId; found ${describeValue("")}`,
+  ]);
+  assert.deepEqual(auditPairProblems([pairLine("admission", { correlationId: 7 }), pairLine("result", { correlationId: 7 })], PAIR_EXPECTED), [
+    `the admission line must carry a non-empty string correlationId; found ${describeValue(7)}`,
+    `the result line must carry a non-empty string correlationId; found ${describeValue(7)}`,
+  ]);
+});
+
+void test("auditPairProblems reports a record whose phase is neither admission nor result", () => {
+  assert.deepEqual(auditPairProblems([pairLine("admission"), pairLine("reconciliation"), pairLine("result")], PAIR_EXPECTED), [
+    `record 2 has phase ${describeValue("reconciliation")}; only admission and result lines belong to the pair`,
+  ]);
+});
+
+void test("auditPairProblems reports the missing admission and result for an empty record list, never an empty list", () => {
+  assert.deepEqual(auditPairProblems([], PAIR_EXPECTED), [
+    "exactly one admission line is required; found 0",
+    "exactly one result line is required; found 0",
+  ]);
+});
+
+// ---- parseSessionVolumeNames --------------------------------------------------------------------------------------------------
+
+void test("parseSessionVolumeNames returns no name for empty output", () => {
+  assert.deepEqual(parseSessionVolumeNames("", "sess-1"), []);
+});
+
+void test("parseSessionVolumeNames keeps the line that is the session's scratch volume name", () => {
+  assert.deepEqual(parseSessionVolumeNames("realm-scratch-sess-1\n", "sess-1"), ["realm-scratch-sess-1"]);
+});
+
+void test("parseSessionVolumeNames ignores other sessions' volumes, a name that only starts with the session's, and blank lines", () => {
+  assert.deepEqual(parseSessionVolumeNames("realm-scratch-sess-10\nrealm-scratch-sess-2\nrealm-scratch-sess-1-old\n\nother\n", "sess-1"), []);
+});
+
+void test("parseSessionVolumeNames accepts CRLF line ends and surrounding spaces", () => {
+  assert.deepEqual(parseSessionVolumeNames("  realm-scratch-sess-1  \r\nrealm-scratch-sess-2\r\n", "sess-1"), ["realm-scratch-sess-1"]);
+});
+
+void test("parseSessionVolumeNames returns both entries when the same name is listed twice", () => {
+  assert.deepEqual(parseSessionVolumeNames("realm-scratch-sess-1\nrealm-scratch-sess-1\n", "sess-1"), ["realm-scratch-sess-1", "realm-scratch-sess-1"]);
 });

@@ -55,6 +55,7 @@ import {
   UNKNOWN_DIGEST_IMAGE,
   adoptedCountOfNotice,
   auditLinesWithCorrelation,
+  auditPairProblems,
   callTool,
   canConnect,
   field,
@@ -73,6 +74,7 @@ import {
   isSocket,
   listSandboxContainers,
   listSandboxesNamed,
+  listSessionVolumes,
   listeningSocketsOf,
   nodeConnectArgv,
   nodeResolveArgv,
@@ -88,6 +90,7 @@ import {
   readLiveInputs,
   realmCli,
   realmCliWithWorkspace,
+  reapCountsOfNotice,
   requestLogLinesOf,
   runCommand,
   sandboxExec,
@@ -672,6 +675,180 @@ void test("production live 5: after the daemon is killed, the next realm up re-a
   await assertDownAndClean(scenario);
 });
 
+// ---- Scenario 5b: a SIGTERM destroys the sandbox ------------------------------------------------------------------------------
+
+// A SIGTERM runs the daemon's shutdown, which removes its container (docs/integration/omp-lifecycle-runbook.md, section C: about
+// 30 s). The session record stays, so the next start reports a destroyed sandbox with no container and at least one record.
+void test("production live 5b: after the daemon is stopped with SIGTERM, the next realm up reports the destroyed record and reaches active with a new container", { skip: gate, timeout: SCENARIO_TIMEOUT_MS }, async (t) => {
+  const scenario = startScenario(t, { image: inputs().image });
+  await assertActive(scenario);
+  const sandbox = sandboxOf(scenario);
+
+  const before = await itemsOf(listSandboxContainers(scenario.inputs, sandbox), `the ${sandbox} containers before the stop`);
+  assert.equal(before.length, 1, `exactly one ${sandbox} container must exist before the stop; found ${String(before.length)}`);
+  const firstContainerId = before[0];
+  assert.ok(firstContainerId !== undefined && firstContainerId !== "", "the id of the container before the stop");
+
+  // The daemon this scenario's own realm up started: the one process whose whole command is the node binary and the daemon entry.
+  const started = await daemonPids(scenario);
+  assert.equal(started.length, 1, `exactly one daemon process must run from the compiled daemon entry; found ${String(started.length)} (pids: ${started.length === 0 ? "none" : started.join(", ")})`);
+  const daemonPid = started[0];
+  assert.ok(daemonPid !== undefined, "the daemon pid");
+  process.kill(daemonPid, "SIGTERM");
+
+  const stopped = await pollUntil(
+    async () => {
+      const remaining = await daemonPids(scenario);
+      const containers = await itemsOf(listSandboxContainers(scenario.inputs, sandbox), `the ${sandbox} containers`);
+      return remaining.length === 0 && containers.length === 0
+        ? { done: true }
+        : { done: false, detail: `daemon pid(s) still running: ${String(remaining.length)}; ${sandbox} container(s) still present: ${String(containers.length)}` };
+    },
+    { timeoutMs: RESIDUE_TIMEOUT_MS, intervalMs: CRASH_OBSERVE_INTERVAL_MS },
+  );
+  assert.ok(stopped.ok, `after SIGTERM the daemon must exit and its container must be removed: ${stopped.detail}`);
+
+  // daemon.log is the detached daemon's inherited stderr and is never rotated, so the restart's records are the bytes after this offset.
+  const daemonLog = join(scenario.environment.stateDir, "daemon.log");
+  const logOffset = statSync(daemonLog).size;
+
+  try {
+    const restarted = await up(scenario);
+    assertExit(restarted, 0, "realm up after the SIGTERM");
+    const active = await waitForActive(scenario.inputs, scenario.environment, ACTIVE_TIMEOUT_MS);
+    assert.ok(active.ok, `realm status must reach active after the restart: ${active.detail}`);
+
+    const replacement = await daemonPids(scenario);
+    assert.equal(replacement.length, 1, `exactly one daemon process must run after the restart; found ${String(replacement.length)} (pids: ${replacement.length === 0 ? "none" : replacement.join(", ")})`);
+    assert.notEqual(replacement[0], daemonPid, "the restarted daemon must be a new process");
+
+    // A new container, not the one the stop removed. Podman's list prints the short id, so the two ids are compared by prefix in either direction.
+    const after = await itemsOf(listSandboxContainers(scenario.inputs, sandbox), `the ${sandbox} containers after the restart`);
+    assert.equal(after.length, 1, `exactly one ${sandbox} container must exist after the restart; found ${String(after.length)}`);
+    const newContainerId = after[0];
+    assert.ok(
+      newContainerId !== undefined && !(newContainerId.startsWith(firstContainerId) || firstContainerId.startsWith(newContainerId)),
+      `the restart must create a new container; the stopped one was ${firstContainerId} and the sandbox now holds ${describeValue(after)}`,
+    );
+
+    const status = await statusCli(scenario);
+    assertExit(status, 0, "realm status after the SIGTERM restart");
+    const notice = noticeOfStatus(status.stdout);
+    assert.ok(notice !== undefined && notice.includes("destroyed at startup"), `realm status must carry the destroyed-sandbox notice: ${describeResult(status)}`);
+    const counts = reapCountsOfNotice(notice);
+    assert.ok(counts !== undefined && counts.containers === 0 && counts.sessionRecords >= 1, `the notice must count 0 containers and at least one session record: ${notice}`);
+
+    const restartLog = readFileSync(daemonLog).subarray(logOffset).toString("utf8");
+    const startup = startupLineWith(restartLog, { adopted: 0, containersRemoved: 0 });
+    assert.ok(startup !== undefined, "daemon.log must hold the restart's daemon.startup record, which adopts nothing and removes no container");
+    const parsedStartup = parseJsonLine(startup);
+    const recordsDeleted = parsedStartup.ok ? field(parsedStartup.value, "recordsDeleted") : undefined;
+    assert.ok(typeof recordsDeleted === "number" && recordsDeleted >= 1, `the restart's daemon.startup record must count at least one session record deleted (CRASH-04): ${startup}`);
+
+    const auditFile = join(scenario.environment.stateDir, "audit", `${sessionIdFor(scenario.inputs.workspaceRoot)}.jsonl`);
+    const verified = await realmCli(scenario.inputs, scenario.environment, ["audit", "verify", "--file", auditFile], STATUS_TIMEOUT_MS);
+    assertExit(verified, 0, "realm audit verify after the SIGTERM restart");
+    const report = JSON.parse(verified.stdout) as { ok?: boolean };
+    assert.equal(report.ok, true, `realm audit verify must report ok: ${verified.stdout}`);
+  } catch (error) {
+    // With no daemon running, `realm down` reports "already down" and leaves the sandbox in place, which would block the next scenario. One more
+    // realm up lets a daemon re-adopt or reap it, so the cleanup's down can remove it. Its result is not judged and the original failure is rethrown.
+    await up(scenario);
+    throw error;
+  }
+
+  await assertDownAndClean(scenario);
+});
+
+// ---- Scenario 5c: the scratch volume ------------------------------------------------------------------------------------------
+
+// The file the scratch scenario writes. It lives in the session's scratch volume at /scratch, never in the pinned workspace.
+const SCRATCH_MARKER_PATH = "/scratch/realm-live-scratch-marker";
+const SCRATCH_VOLUME_POLL_INTERVAL_MS = 2_000;
+
+// Ends one MCP session the way the other scenarios do: stdin closes, the child is waited for, then it is killed.
+async function closeMcpSession(session: McpSession): Promise<void> {
+  session.closeInput();
+  await session.waitForExit(MCP_EXIT_TIMEOUT_MS);
+  session.kill();
+}
+
+// The scratch volume is the session's named volume, mounted read-write at /scratch (src/runtime/hardening.ts). A crash leaves it
+// in place and realm down removes it. A marker written before the crash must read back byte for byte after the restart.
+void test("production live 5c: the scratch volume survives a daemon crash and is gone after realm down", { skip: gate, timeout: SCENARIO_TIMEOUT_MS }, async (t) => {
+  const scenario = startScenario(t, { image: inputs().image });
+  await assertActive(scenario);
+  const sessionId = sessionIdFor(scenario.inputs.workspaceRoot);
+  const marker = `realm-scratch-${randomBytes(6).toString("hex")}`;
+
+  const writer = startMcpSession(scenario.inputs, scenario.environment);
+  try {
+    await initializeMcp(writer);
+    // The marker and the path are positional arguments of the shell script, never interpolated into it.
+    const written = await callTool(writer, "exec", { argv: ["sh", "-c", WRITE_SCRIPT, "sh", marker, SCRATCH_MARKER_PATH] });
+    assert.equal(field(written, "exitCode"), 0, `exec writing ${SCRATCH_MARKER_PATH}: ${describeValue(written)}`);
+  } finally {
+    await closeMcpSession(writer);
+  }
+
+  const volumesBefore = await itemsOf(listSessionVolumes(scenario.inputs, sessionId), "the session's scratch volumes before the crash");
+  assert.equal(volumesBefore.length, 1, `exactly one scratch volume must exist for the session before the crash; found ${describeValue(volumesBefore)}`);
+
+  try {
+    const daemons = await daemonPids(scenario);
+    assert.equal(daemons.length, 1, `exactly one daemon process must run from the compiled daemon entry; found ${String(daemons.length)}`);
+    const daemonPid = daemons[0];
+    assert.ok(daemonPid !== undefined, "the daemon pid");
+    process.kill(daemonPid, "SIGKILL");
+    const gone = await pollUntil(
+      async () => {
+        const remaining = await daemonPids(scenario);
+        return remaining.length === 0 ? { done: true } : { done: false, detail: `daemon pid(s) still running: ${remaining.join(", ")}` };
+      },
+      { timeoutMs: CRASH_OBSERVE_TIMEOUT_MS, intervalMs: CRASH_OBSERVE_INTERVAL_MS },
+    );
+    assert.ok(gone.ok, `the daemon must be gone after SIGKILL: ${gone.detail}`);
+
+    assertExit(await up(scenario), 0, "realm up after the daemon crash");
+    const active = await waitForActive(scenario.inputs, scenario.environment, ACTIVE_TIMEOUT_MS);
+    assert.ok(active.ok, `realm status must reach active after the restart: ${active.detail}`);
+
+    const volumesAfter = await itemsOf(listSessionVolumes(scenario.inputs, sessionId), "the session's scratch volumes after the crash");
+    assert.equal(volumesAfter.length, 1, `the scratch volume must survive the crash; found ${describeValue(volumesAfter)}`);
+
+    const reader = startMcpSession(scenario.inputs, scenario.environment);
+    try {
+      await initializeMcp(reader);
+      const read = await callTool(reader, "exec", { argv: ["cat", SCRATCH_MARKER_PATH] });
+      assert.equal(field(read, "exitCode"), 0, `exec reading ${SCRATCH_MARKER_PATH}: ${describeValue(read)}`);
+      assert.notEqual(field(read, "truncated"), true, `the read of ${SCRATCH_MARKER_PATH} must not be truncated: ${describeValue(read)}`);
+      assert.equal(field(read, "stdout"), marker, `the marker must read back byte for byte after the restart: ${describeValue(read)}`);
+    } finally {
+      await closeMcpSession(reader);
+    }
+
+    assertExit(await down(scenario), 0, "realm down");
+    const residue = await waitForNoResidue(scenario.inputs, [sandboxOf(scenario)]);
+    assert.ok(residue.ok, `realm down must leave no residue: ${residue.detail}`);
+    // A failed listing is a failed poll, never "removed".
+    const removed = await pollUntil(
+      async () => {
+        const remaining = await listSessionVolumes(scenario.inputs, sessionId);
+        if (!remaining.ok) {
+          return { done: false, detail: remaining.detail };
+        }
+        return remaining.items.length === 0 ? { done: true } : { done: false, detail: `${String(remaining.items.length)} scratch volume(s) remain` };
+      },
+      { timeoutMs: RESIDUE_TIMEOUT_MS, intervalMs: SCRATCH_VOLUME_POLL_INTERVAL_MS },
+    );
+    assert.ok(removed.ok, `realm down must remove the session's scratch volume: ${removed.detail}`);
+  } catch (error) {
+    // Same as scenario 5: one more realm up lets the cleanup's down remove what the failed run left. Its result is not judged.
+    await up(scenario);
+    throw error;
+  }
+});
+
 // ---- Scenario 6: MCP exec -----------------------------------------------------------------------------------------------
 
 // The two revisions one realm mcp process serves (src/mcp/protocol.ts): the session below handshakes with a legacy revision the
@@ -757,9 +934,8 @@ async function runMcpSession(scenario: Scenario, session: McpSession): Promise<v
   assert.ok(typeof correlationId === "string" && correlationId !== "", `the write's tool.result line must carry a string correlationId: ${describeValue(writeResult)}`);
   const auditFile = join(stateDir, "audit", `${sessionIdFor(scenario.inputs.workspaceRoot)}.jsonl`);
   const joined = auditLinesWithCorrelation(auditFile, correlationId);
-  const phases: readonly unknown[] = joined.map((record) => field(record, "phase"));
-  assert.equal(joined.length, 2, `${auditFile} must hold exactly two records for correlation id ${correlationId}; found ${String(joined.length)} (phases ${describeValue(phases)})`);
-  assert.ok(phases.includes("admission") && phases.includes("result"), `the two records for correlation id ${correlationId} in ${auditFile} must be one admission and one result; phases ${describeValue(phases)}`);
+  const pairProblems = auditPairProblems(joined, { tool: "write", sessionId: sessionIdFor(scenario.inputs.workspaceRoot), outcome: "ok", correlationId });
+  assert.deepEqual(pairProblems, [], `${auditFile} must hold exactly one admission and one result line for the write under correlation id ${correlationId}; found ${describeValue(joined)}`);
   const unparsed = unparsedLinesOf(requestLines);
   assert.deepEqual(unparsed, [], `every requests.log line must parse as JSON; line number(s) ${unparsed.join(", ")} do not`);
   const verifiedAudit = await realmCli(scenario.inputs, scenario.environment, ["audit", "verify", "--file", auditFile], STATUS_TIMEOUT_MS);

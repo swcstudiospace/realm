@@ -41,6 +41,7 @@ import { createOmpProfile, type OmpProfile } from "../support/omp-profile.js";
 import { scriptedTurnProblem, startOmp, type OmpSession } from "../support/omp-rpc.js";
 import { ScriptedProvider } from "../support/scripted-provider.js";
 import {
+  auditPairProblems,
   callTool,
   createScenarioEnvironment,
   sandboxNameFor,
@@ -288,20 +289,11 @@ void test(
     const auditFile = join(scenario.stateDir, "audit", `${sessionId}.jsonl`);
     assert.ok(existsSync(auditFile), `the daemon's audit file must exist: ${auditFile}`);
     const writes = auditEntries(auditFile).filter((entry) => entry["tool"] === "write" && entry["path"] === name);
-    const admissions = writes.filter((entry) => entry["phase"] === "admission");
-    const results = writes.filter((entry) => entry["phase"] === "result");
-    assert.equal(admissions.length, 1, `exactly one admission line for ${name}: ${describeValue(writes)}`);
-    assert.equal(results.length, 1, `exactly one result line for ${name}: ${describeValue(writes)}`);
-    const [admission] = admissions;
-    const [result] = results;
+    const pairProblems = auditPairProblems(writes, { tool: "write", sessionId, outcome: "ok" });
+    assert.deepEqual(pairProblems, [], `the audit lines of ${name} in ${auditFile} must be one admission and one result line of the write, with outcome ok: ${describeValue(writes)}`);
+    const [admission] = writes.filter((entry) => entry["phase"] === "admission");
+    const [result] = writes.filter((entry) => entry["phase"] === "result");
     assert.ok(admission !== undefined && result !== undefined);
-    assert.equal(result["outcome"], "ok", `the result line must record success: ${describeValue(result)}`);
-    assert.equal(typeof result["correlationId"], "string", `the result line must carry a correlationId: ${describeValue(result)}`);
-    assert.equal(
-      admission["correlationId"],
-      result["correlationId"],
-      `the admission and result lines must share one correlationId: ${describeValue(writes)}`,
-    );
     assert.equal(result["bytes"], expected.byteLength, `the result line's byte count: ${describeValue(result)}`);
     assert.equal(result["sha256"], expectedSha256, `the result line's sha256 must match the written bytes: ${describeValue(result)}`);
     assert.equal(admission["sha256"], expectedSha256, `the admission line's sha256 must match the written bytes: ${describeValue(admission)}`);

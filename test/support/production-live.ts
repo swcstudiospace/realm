@@ -21,6 +21,7 @@ import { podmanSocketPath } from "../../src/runtime/host-paths.js";
 import { requestLogPath } from "../../src/daemon/ensure.js";
 import { loadRuntimeConfig, runtimeRootsOf } from "../../src/runtime/config.js";
 import { buildExecArgv, OPENSHELL_BINARY, OPENSHELL_SANDBOX_NAME_LABEL_KEY, REALM_SANDBOX_NAME_PREFIX } from "../../src/runtime/openshell.js";
+import { scratchVolumeNameOf } from "../../src/runtime/hardening.js";
 import { podmanSkipReason, type PodmanProbe } from "../../src/runtime/podman-version.js";
 import { selectOpenShellEnvironment } from "../../src/runtime/session-execution.js";
 import { controlSocketPath, sandboxNameOfSession, sessionIdOfWorkspace, type EnvironmentLike } from "../../src/session/paths.js";
@@ -922,6 +923,23 @@ export async function listSandboxesNamed(inputs: LiveInputs, sandboxName: string
   return listed.ok ? { ok: true, items: listed.items.filter((name) => name === sandboxName) } : listed;
 }
 
+// The scratch volumes this account holds whose name is the session's (scratchVolumeNameOf, src/runtime/hardening.ts). Podman's
+// --filter name= is a substring match and would also list another session's volume, so the listing is account-wide and the
+// names are compared exactly here. Blank lines and surrounding spaces are dropped; a name listed twice is kept twice.
+export function parseSessionVolumeNames(output: string, sessionId: string): readonly string[] {
+  const name = scratchVolumeNameOf(sessionId);
+  return lines(output).filter((line) => line === name);
+}
+
+// The scratch volumes of the session, read with `podman volume ls`. A listing that fails is a problem, never "none left".
+export async function listSessionVolumes(inputs: LiveInputs, sessionId: string): Promise<Listing> {
+  const result = await runCommand("podman", ["volume", "ls", "--format", "{{.Name}}"], { env: inputs.hostEnvironment, timeoutMs: 30_000, cwd: tmpdir() });
+  if (result.exitCode !== 0) {
+    return { ok: false, detail: `podman volume ls failed (${describeResult(result)})` };
+  }
+  return { ok: true, items: parseSessionVolumeNames(result.stdout, sessionId) };
+}
+
 // Polls `realm status` until it reports active, bounded at timeoutMs. The detail of a failed poll is the last status output.
 export function waitForActive(inputs: LiveInputs, scenario: ScenarioEnvironment, timeoutMs: number): Promise<PollOutcome> {
   return pollUntil(
@@ -1263,4 +1281,77 @@ export function auditLinesWithCorrelation(auditFile: string, correlationId: stri
     }
   }
   return matches;
+}
+
+// What auditPairProblems expects of one tool call: its tool, the session it ran in, the outcome of its result line, and, when
+// given, the correlation id both lines must carry.
+export interface AuditPairExpectation {
+  readonly tool: string;
+  readonly sessionId: string;
+  readonly outcome: string;
+  readonly correlationId?: string;
+}
+
+// The problems with the audit lines of one tool call. The pair is one admission line, then one result line, with the same
+// correlationId (src/tools/dispatch.ts and src/tools/workspace.ts write the lines; src/audit/log.ts adds the id), and the
+// expected tool and session id on each. Only the result line is compared with expected.outcome: the admission line always
+// carries "ok", since it is written before the call runs. Empty means the pair is as expected. Pure: it returns text and never
+// throws or asserts.
+export function auditPairProblems(records: readonly LogRecord[], expected: AuditPairExpectation): readonly string[] {
+  const problems: string[] = [];
+  const admissions: { readonly index: number; readonly record: LogRecord }[] = [];
+  const results: { readonly index: number; readonly record: LogRecord }[] = [];
+  for (const [index, record] of records.entries()) {
+    const phase = field(record, "phase");
+    if (phase === "admission") {
+      admissions.push({ index, record });
+    } else if (phase === "result") {
+      results.push({ index, record });
+    } else {
+      problems.push(`record ${String(index + 1)} has phase ${describeValue(phase)}; only admission and result lines belong to the pair`);
+    }
+  }
+  if (admissions.length !== 1) {
+    problems.push(`exactly one admission line is required; found ${String(admissions.length)}`);
+  }
+  if (results.length !== 1) {
+    problems.push(`exactly one result line is required; found ${String(results.length)}`);
+  }
+  for (const [label, entries] of [
+    ["admission", admissions],
+    ["result", results],
+  ] as const) {
+    for (const { record } of entries) {
+      if (field(record, "tool") !== expected.tool) {
+        problems.push(`the ${label} line must name tool ${describeValue(expected.tool)}; found ${describeValue(field(record, "tool"))}`);
+      }
+      if (field(record, "sessionId") !== expected.sessionId) {
+        problems.push(`the ${label} line must carry session id ${describeValue(expected.sessionId)}; found ${describeValue(field(record, "sessionId"))}`);
+      }
+      const correlationId = field(record, "correlationId");
+      if (typeof correlationId !== "string" || correlationId === "") {
+        problems.push(`the ${label} line must carry a non-empty string correlationId; found ${describeValue(correlationId)}`);
+      } else if (expected.correlationId !== undefined && correlationId !== expected.correlationId) {
+        problems.push(`the ${label} line must carry correlation id ${describeValue(expected.correlationId)}; found ${describeValue(correlationId)}`);
+      }
+    }
+  }
+  for (const { record } of results) {
+    if (field(record, "outcome") !== expected.outcome) {
+      problems.push(`the result line must record outcome ${describeValue(expected.outcome)}; found ${describeValue(field(record, "outcome"))}`);
+    }
+  }
+  const [admission] = admissions;
+  const [result] = results;
+  if (admission !== undefined && result !== undefined) {
+    if (admission.index > result.index) {
+      problems.push("the result line comes before the admission line");
+    }
+    const admitted = field(admission.record, "correlationId");
+    const resulted = field(result.record, "correlationId");
+    if (typeof admitted === "string" && typeof resulted === "string" && admitted !== resulted) {
+      problems.push(`the admission and result lines carry different correlation ids: ${describeValue(admitted)} and ${describeValue(resulted)}`);
+    }
+  }
+  return problems;
 }
