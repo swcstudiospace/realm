@@ -238,7 +238,7 @@ The sandbox binding is one derivation, `sandboxBindingOf` (`src/runtime/driver/s
 - The daemon and the driver must read the same `config.json`. A change to its roots takes effect only when both processes are restarted.
 - A stale root variable left in a unit is ignored, so an unedited unit keeps running with the roots from `config.json`: the derived defaults (`<state dir>/secrets` and `<state dir>/sandboxes`) when the file omits them, which equal the old values on a host that already used those directories.
 - To make `runtime-roots` pass on an otherwise healthy host, name `secretRoot` and `sandboxStateRoot` explicitly in `config.json`; omitted roots whose defaults are healthy still warn.
-- A driver restart reaps every realm container of the account. Restart only when no sandbox must survive.
+- A driver start does not sweep every realm container (decision D19-5, `docs/integration/runtime-decision.md`). It runs `DriverLifecycle.adoptSurvivors`, which keeps each realm container whose binding rebuilds from its retained artifacts and that passes the post-start checks, and removes every other realm container with its secret entries and with the scratch volumes no adopted sandbox references. Removing the three root variables from a unit whose values already equal the roots the config yields changes no root, so conforming sandboxes are adopted. After a change to `secretRoot`, `sandboxStateRoot` or the workspace root, `adoptSurvivors` decides the outcome for each existing container, because the binding it rebuilds uses the new roots. Restart only when no sandbox must survive.
 
 ### Shutdown (phase 9.7)
 
