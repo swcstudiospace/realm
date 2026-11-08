@@ -3,14 +3,17 @@ gsd_state_version: "1.0"
 milestone: v3.0
 milestone_name: Containment by Default
 status: planning
-last_updated: "2026-10-31"
+stopped_at: Completed 15-01-PLAN.md
+last_updated: "2026-11-08T15:35:18.980Z"
 last_activity: 2026-10-31
+last_activity_desc: actual lifecycle/doctor/C4 evidence reconciled; normalized onboarding docs authored; no checks, commits or phase completion by this worker
+state_head: 6afaade08e631163012a603038c423be4627d4cb
 progress:
   total_phases: 9
   completed_phases: 0
-  total_plans: 9
-  completed_plans: 0
-  percent: 0
+  total_plans: 45
+  completed_plans: 1
+  percent: 2
 ---
 
 # Project State
@@ -47,7 +50,6 @@ Last activity: 2026-10-31 — actual lifecycle/doctor/C4 evidence reconciled; no
 The accumulated context and older run sections below are historical records,
 not a fresh instruction to restart discovery, install a runtime or close a phase.
 
-
 ## Performance Metrics
 
 **Velocity:**
@@ -68,6 +70,11 @@ not a fresh instruction to restart discovery, install a runtime or close a phase
 - Trend: N/A
 
 *Updated after each plan completion*
+**Per-Plan Metrics:**
+
+| Plan | Duration | Tasks | Files |
+|------|----------|-------|-------|
+| Phase 15 P01 | 15min | 4 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -169,9 +176,9 @@ Detail, by phase: Phase 3 covers RT-01, RT-02, RT-03, RT-09, and the live parts 
 
 ## Session Continuity
 
-Last session: 2026-10-28T20:55:00.000Z
-Stopped at: Milestone v2.0 completed and archived (2026-10-29)
-Resume file: none (the milestone is complete; start with /gsd-new-milestone)
+Last session: 2026-11-08T15:35:18.868Z
+Stopped at: Completed 15-01-PLAN.md
+Resume file: None
 
 Recorded commits (closure run): 72817e9 (private flag restored, engines >=22.13.0); 390f511 (causeCode and catalogue codes, host paths, lifecycle bound, root identity, exec margin); b6bc892 (daemon entry, AgentOS fail-closed, catalogue refusals, per-method control bounds); 8088159 (daemon owns sessions; tool method; daemon client; Omp and MCP attach); 4b1d4ab (smoke fixes: CLI probe, up and down exits, state-dir 0700); c55056a (traceability: requirements by evidence, spike facts, runtime config, Omp attach contract); a999c17 (audit gap closure: realm acp, refusal code mapping, one state-dir resolver, Omp status, pinned-root rebind, catch-site fixes, daemon server-failure stop); dd02034 (re-audit, planning, and docs); 54bc236 (MCP tool-call diagnostic); plus the decisions commit (see git log).
 
