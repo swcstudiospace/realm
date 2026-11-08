@@ -284,25 +284,35 @@ export function reapCountsOfNotice(notice: string): { readonly containers: numbe
   return { containers: Number(match[1]), sessionRecords: Number(match[2]) };
 }
 
-// The daemon.startup record that reports a reap of exactly one container and one session record, and names the container. The
-// id is matched by prefix: the list the suite takes before the kill prints Podman's short id, the daemon logs the full one.
-// Undefined when no line matches.
-export function startupReapLineFor(log: string, containerId: string): string | undefined {
-  if (containerId === "") {
-    return undefined;
-  }
+// The count the adopted sentence of the startup notice states: "<n> session(s) from the previous daemon were adopted and kept"
+// (startupNoticeOf, src/daemon/daemon.ts). Undefined when the notice does not state it.
+export function adoptedCountOfNotice(notice: string): number | undefined {
+  const match = /(\d+) session\(s\) from the previous daemon were adopted and kept/.exec(notice);
+  return match === null ? undefined : Number(match[1]);
+}
+
+// The counts a daemon.startup record must carry for startupLineWith. A count left out is not compared.
+export interface StartupLineExpectation {
+  readonly adopted?: number;
+  readonly containersRemoved?: number;
+  readonly recordsDeleted?: number;
+}
+
+// The first daemon.startup record whose counts are the ones expected. The log may hold lines from several daemon starts, so the
+// caller states the counts it expects. A line that is not JSON, and a JSON line of another event, is skipped. The container id
+// is not part of this check: containerIds names only the containers the reap removed, so an adopted container never appears in
+// it, and the container's identity is checked against the sandbox's container list instead. Undefined when no line matches.
+export function startupLineWith(log: string, expected: StartupLineExpectation): string | undefined {
+  const counted = (value: unknown, key: "adopted" | "containersRemoved" | "recordsDeleted", want: number | undefined): boolean =>
+    want === undefined || field(value, key) === want;
   return log.split(/\r?\n/).find((line) => {
     const parsed = parseJsonLine(line);
-    if (!parsed.ok) {
-      return false;
-    }
-    const value = parsed.value as { event?: unknown; containersRemoved?: unknown; recordsDeleted?: unknown; containerIds?: unknown };
     return (
-      value.event === "daemon.startup" &&
-      value.containersRemoved === 1 &&
-      value.recordsDeleted === 1 &&
-      Array.isArray(value.containerIds) &&
-      value.containerIds.some((id) => typeof id === "string" && (id === containerId || id.startsWith(containerId)))
+      parsed.ok &&
+      field(parsed.value, "event") === "daemon.startup" &&
+      counted(parsed.value, "adopted", expected.adopted) &&
+      counted(parsed.value, "containersRemoved", expected.containersRemoved) &&
+      counted(parsed.value, "recordsDeleted", expected.recordsDeleted)
     );
   });
 }

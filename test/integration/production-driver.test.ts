@@ -53,6 +53,7 @@ import { workspaceRegistryDirOf } from "../../src/session/workspace-registry.js"
 import {
   KILL_RUNNER_ARGV,
   UNKNOWN_DIGEST_IMAGE,
+  adoptedCountOfNotice,
   auditLinesWithCorrelation,
   callTool,
   canConnect,
@@ -85,14 +86,13 @@ import {
   noticeOfStatus,
   productionSkipReason,
   readLiveInputs,
-  reapCountsOfNotice,
   realmCli,
   realmCliWithWorkspace,
   requestLogLinesOf,
   runCommand,
   sandboxExec,
   startMcpSession,
-  startupReapLineFor,
+  startupLineWith,
   stateOfStatus,
   statusFieldsOf,
   toolErrorOf,
@@ -171,7 +171,9 @@ const TRANSFER_REMOTE_PATH = `/workspace/${WORKSPACE_TRANSFER_NAME}`;
 const WORKSPACE_WRITE_NAME = "realm-live-write-probe";
 const WORKSPACE_HOST_NAME = "realm-live-host-visible";
 const WORKSPACE_MCP_NAME = "realm-live-mcp-roundtrip";
-const WORKSPACE_FILES: readonly string[] = [WORKSPACE_WRITE_NAME, WORKSPACE_HOST_NAME, WORKSPACE_TRANSFER_NAME, WORKSPACE_MCP_NAME];
+// The marker scenario 5 writes before the kill and reads back after the restart.
+const WORKSPACE_ADOPT_NAME = "realm-live-adopt-marker";
+const WORKSPACE_FILES: readonly string[] = [WORKSPACE_WRITE_NAME, WORKSPACE_HOST_NAME, WORKSPACE_TRANSFER_NAME, WORKSPACE_MCP_NAME, WORKSPACE_ADOPT_NAME];
 
 // The one shell script the write probes run. The target is a positional argument, never interpolated.
 const WRITE_SCRIPT = 'printf %s "$1" > "$2"';
@@ -523,8 +525,8 @@ function jsonLinesSinceStartup(log: string): boolean {
       continue;
     }
     try {
-      const value = JSON.parse(line) as { event?: unknown; containersRemoved?: unknown };
-      if (value.event === "daemon.startup" && value.containersRemoved === 1) {
+      const value = JSON.parse(line) as { event?: unknown; adopted?: unknown };
+      if (value.event === "daemon.startup" && value.adopted === 1) {
         start = index;
       }
     } catch {
@@ -547,8 +549,8 @@ function jsonLinesSinceStartup(log: string): boolean {
   }
   return true;
 }
-void test("production live 5: after the daemon is killed, the next realm up reaps the sandbox it left and reaches active with exactly one", { skip: gate, timeout: SCENARIO_TIMEOUT_MS }, async (t) => {
-  const scenario = startScenario(t, { image: inputs().image });
+void test("production live 5: after the daemon is killed, the next realm up re-adopts the sandbox it left and reaches active with exactly one", { skip: gate, timeout: SCENARIO_TIMEOUT_MS }, async (t) => {
+  const scenario = startScenario(t, { image: inputs().image }, WORKSPACE_FILES);
   await assertActive(scenario);
   const sandbox = sandboxOf(scenario);
 
@@ -557,10 +559,15 @@ void test("production live 5: after the daemon is killed, the next realm up reap
   assert.equal(started.length, 1, `exactly one daemon process must run from the compiled daemon entry; found ${String(started.length)} (pids: ${started.length === 0 ? "none" : started.join(", ")})`);
   const daemonPid = started[0];
   assert.ok(daemonPid !== undefined, "the daemon pid");
+  // The marker the restarted daemon must keep: written through the MCP write tool before the kill, read back after the restart.
+  const content = `realm-live-adopt-${randomUUID()}`;
   const primed = startMcpSession(scenario.inputs, scenario.environment);
   try {
     await initializeMcp(primed);
     await callTool(primed, "status", {});
+    const written = await callTool(primed, "write", { path: WORKSPACE_ADOPT_NAME, content });
+    assert.equal(field(written, "bytes"), Buffer.byteLength(content), `write bytes: ${describeValue(written)}`);
+    assert.equal(field(written, "sha256"), sha256Hex(Buffer.from(content)), `write sha256: ${describeValue(written)}`);
   } finally {
     primed.closeInput();
     await primed.waitForExit(MCP_EXIT_TIMEOUT_MS);
@@ -568,7 +575,7 @@ void test("production live 5: after the daemon is killed, the next realm up reap
   }
 
   try {
-    // The container the crash will leave behind, listed before the kill: the restarted daemon must report destroying this one.
+    // The container the crash will leave behind, listed before the kill: the restarted daemon must re-adopt this one.
     const before = await itemsOf(listSandboxContainers(scenario.inputs, sandbox), `the ${sandbox} containers before the kill`);
     assert.equal(before.length, 1, `exactly one ${sandbox} container must exist before the kill; found ${String(before.length)}`);
     const crashedContainerId = before[0];
@@ -593,7 +600,7 @@ void test("production live 5: after the daemon is killed, the next realm up reap
     );
     assert.ok(left.ok, `the crash must leave the sandbox container behind: ${left.detail}`);
 
-    // The next start reaps what the crash left and creates the sandbox again. Its failure is reported with the CLI's reason code.
+    // The next start re-adopts the container the crash left, with its session record (D5). Its failure is reported with the CLI's reason code.
     const restarted = await up(scenario);
     assertExit(restarted, 0, "realm up after the daemon crash");
     const active = await waitForActive(scenario.inputs, scenario.environment, ACTIVE_TIMEOUT_MS);
@@ -613,19 +620,41 @@ void test("production live 5: after the daemon is killed, the next realm up reap
       { timeoutMs: CRASH_OBSERVE_TIMEOUT_MS, intervalMs: CRASH_OBSERVE_INTERVAL_MS },
     );
     assert.ok(replacementReady.ok, `exactly one ${sandbox} sandbox and container after the restart: ${replacementReady.detail}`);
+    // D5: the container is the one the crash left, re-adopted and not recreated. Podman's list prints the short id and the daemon
+    // logs the full one, so the two ids are compared by prefix in either direction.
+    const after = await itemsOf(listSandboxContainers(scenario.inputs, sandbox), `the ${sandbox} containers after the restart`);
+    const readopted = after[0];
+    assert.ok(
+      readopted !== undefined && (readopted.startsWith(crashedContainerId) || crashedContainerId.startsWith(readopted)),
+      `the restarted daemon must re-adopt container ${crashedContainerId}; the sandbox now holds ${readopted ?? "none"}`,
+    );
 
-    // D-1410: the startup reap is visible. The notice rides on the status reply, and the daemon log names the destroyed container.
+    // D5: the startup re-adoption is visible. The notice rides on the status reply, and the daemon log holds the daemon.startup record.
     const status = await statusCli(scenario);
     assertExit(status, 0, "realm status after the daemon crash");
     const notice = noticeOfStatus(status.stdout);
-    assert.ok(notice !== undefined && notice.includes("destroyed at startup"), `realm status must carry the startup notice: ${describeResult(status)}`);
-    const counts = reapCountsOfNotice(notice);
-    assert.ok(counts !== undefined, `the notice must state its counts: ${notice}`);
-    assert.equal(counts.containers, 1, `the notice must count one container: ${notice}`);
-    assert.ok(counts.sessionRecords >= 1, `the notice must count at least one session record: ${notice}`);
+    assert.ok(notice !== undefined && notice.includes("adopted and kept"), `realm status must carry the adopted-session notice: ${describeResult(status)}`);
+    assert.equal(adoptedCountOfNotice(notice), 1, `the notice must count one adopted session: ${notice}`);
+    assert.equal(notice.includes("destroyed at startup"), false, `the notice must not report a destroyed sandbox: ${notice}`);
     const daemonLog = readFileSync(join(scenario.environment.stateDir, "daemon.log"), "utf8");
-    assert.ok(startupReapLineFor(daemonLog, crashedContainerId) !== undefined, `daemon.log must hold a daemon.startup record for one container that names ${crashedContainerId}`);
+    assert.ok(
+      startupLineWith(daemonLog, { adopted: 1, containersRemoved: 0, recordsDeleted: 0 }) !== undefined,
+      `daemon.log must hold a daemon.startup record that adopts one session and removes nothing (the container is ${crashedContainerId})`,
+    );
     assert.equal(jsonLinesSinceStartup(daemonLog), true, "every daemon.log line from the restart's daemon.startup record must be JSON");
+    // The marker the primed session wrote before the kill reads back byte for byte through a session of the restarted daemon.
+    const reader = startMcpSession(scenario.inputs, scenario.environment);
+    try {
+      await initializeMcp(reader);
+      const readBack = await callTool(reader, "read", { path: WORKSPACE_ADOPT_NAME, maxBytes: MCP_READ_MAX_BYTES });
+      assert.equal(field(readBack, "status"), "found", `read status: ${describeValue(readBack)}`);
+      assert.equal(decodeReadContent(field(readBack, "content")), content, `read content: ${describeValue(readBack)}`);
+      assert.equal(field(readBack, "truncated"), false, `read truncated: ${describeValue(readBack)}`);
+    } finally {
+      reader.closeInput();
+      await reader.waitForExit(MCP_EXIT_TIMEOUT_MS);
+      reader.kill();
+    }
     const auditFile = join(scenario.environment.stateDir, "audit", `${sessionIdFor(scenario.inputs.workspaceRoot)}.jsonl`);
     const verified = await realmCli(scenario.inputs, scenario.environment, ["audit", "verify", "--file", auditFile], STATUS_TIMEOUT_MS);
     assertExit(verified, 0, "realm audit verify after the restart");
@@ -634,8 +663,7 @@ void test("production live 5: after the daemon is killed, the next realm up reap
     const unparsedLines = report.files?.[0]?.unparsedLines;
     assert.ok(Array.isArray(unparsedLines) && unparsedLines.length <= 1, `files[0].unparsedLines must be empty or only a torn tail: ${verified.stdout}`);
   } catch (error) {
-    // With no daemon running, `realm down` reports "already down" and reaps nothing, so the sandbox the crash left would stay
-    // and block the next scenario. One more realm up lets a daemon reap it for the cleanup's down. Its result is not judged and
+    // With no daemon running, `realm down` reports "already down" and leaves the sandbox the crash left in place, which would block the next scenario. One more realm up lets a daemon re-adopt or reap it, so the cleanup's down can remove it. Its result is not judged and
     // the original failure is rethrown.
     await up(scenario);
     throw error;

@@ -1,6 +1,6 @@
 // Hermetic tests for the pieces of the production live suite that need no host: probe output parsing, the polling helper
 // (with an injected clock), the 198.18.0.0/15 range check, the skip-reason selection, the daemon process finder's parsing of
-// ps output, the MCP line framing and the JSON-RPC response matcher, the status and tool-error readers, the policyExtra merge into
+// ps output, the MCP line framing and the JSON-RPC response matcher, the status, tool-error, daemon.startup line and startup notice readers, the policyExtra merge into
 // policy.json and the runner-kill workload's syntax. This file always runs. The live scenarios themselves are in
 // production-driver.test.ts and run only when its gate opens.
 
@@ -13,6 +13,7 @@ import { Script } from "node:vm";
 import type { PodmanProbe } from "../../src/runtime/podman-version.js";
 import { sandboxNameOfSession, sessionIdOfWorkspace } from "../../src/session/paths.js";
 import {
+  adoptedCountOfNotice,
   auditLinesWithCorrelation,
   sandboxNameFor,
   KILL_RUNNER_ARGV,
@@ -30,6 +31,7 @@ import {
   readLiveInputs,
   requestLogLinesOf,
   splitJsonRpcLines,
+  startupLineWith,
   stateOfStatus,
   statusFieldsOf,
   toolErrorOf,
@@ -791,4 +793,65 @@ void test("ONB-03: a scenario config writes the explicit roots and the CLI envir
   for (const stale of ["REALM_DRIVER_STATE_ROOT", "REALM_DRIVER_SECRET_ROOT", "REALM_DRIVER_WORKSPACE_ROOT"]) {
     assert.equal(names.includes(stale), false, stale);
   }
+});
+
+// ---- startupLineWith and adoptedCountOfNotice ---------------------------------------------------------------------------------
+
+// A daemon.startup record as emitStartup writes it (src/daemon/main.ts), with the given event and counts.
+function startupRecord(event: string, adopted: number, containersRemoved: number, recordsDeleted: number): string {
+  return JSON.stringify({ event, containersRemoved, containerIds: [], recordsDeleted, adopted, tempFilesRemoved: 0 });
+}
+
+void test("startupLineWith returns the exact daemon.startup line whose counts are the ones expected", () => {
+  const adopting = startupRecord("daemon.startup", 1, 0, 0);
+  assert.equal(startupLineWith(`${adopting}\n`, { adopted: 1, containersRemoved: 0, recordsDeleted: 0 }), adopting);
+});
+
+void test("startupLineWith rejects a line whose adopted, containersRemoved or recordsDeleted count differs", () => {
+  const adopting = startupRecord("daemon.startup", 1, 0, 0);
+  assert.equal(startupLineWith(adopting, { adopted: 0 }), undefined);
+  assert.equal(startupLineWith(adopting, { containersRemoved: 1 }), undefined);
+  assert.equal(startupLineWith(adopting, { recordsDeleted: 1 }), undefined);
+});
+
+void test("startupLineWith does not compare a count the expectation leaves out", () => {
+  const reaping = startupRecord("daemon.startup", 1, 1, 0);
+  assert.equal(startupLineWith(reaping, { adopted: 1 }), reaping);
+  assert.equal(startupLineWith(reaping, {}), reaping);
+});
+
+void test("startupLineWith skips lines that are not JSON, a torn line included, before a later match", () => {
+  const adopting = startupRecord("daemon.startup", 1, 0, 0);
+  assert.equal(startupLineWith(`not json\n{"event":"daemon.startup","adopted":1,\n${adopting}\n`, { adopted: 1 }), adopting);
+});
+
+void test("startupLineWith rejects a JSON line of another event that carries the same counts", () => {
+  assert.equal(startupLineWith(startupRecord("daemon.failed", 1, 0, 0), { adopted: 1 }), undefined);
+});
+
+void test("startupLineWith picks the matching line when the log holds several daemon starts", () => {
+  const reaping = startupRecord("daemon.startup", 0, 1, 1);
+  const adopting = startupRecord("daemon.startup", 1, 0, 0);
+  assert.equal(startupLineWith(`${reaping}\n${adopting}\n`, { adopted: 1, containersRemoved: 0 }), adopting);
+});
+
+void test("startupLineWith reports no line for an empty log", () => {
+  assert.equal(startupLineWith("", { adopted: 1 }), undefined);
+});
+
+const DESTROYED_NOTICE =
+  "A previous daemon's sandbox was destroyed at startup: 1 container(s), 1 session record(s). Files in the workspace were kept; state outside it was lost.";
+const ADOPTED_NOTICE_TAIL =
+  "session(s) from the previous daemon were adopted and kept. Their records were kept and each was brought back while the daemon served; a session that did not come back is in error.";
+
+void test("adoptedCountOfNotice reads the count of the adopted sentence", () => {
+  assert.equal(adoptedCountOfNotice(`1 ${ADOPTED_NOTICE_TAIL}`), 1);
+});
+
+void test("adoptedCountOfNotice is undefined for a notice that only reports a destroyed sandbox", () => {
+  assert.equal(adoptedCountOfNotice(DESTROYED_NOTICE), undefined);
+});
+
+void test("adoptedCountOfNotice reads the adopted count from a notice that carries both sentences, as startupNoticeOf joins them", () => {
+  assert.equal(adoptedCountOfNotice(`${DESTROYED_NOTICE} 3 ${ADOPTED_NOTICE_TAIL}`), 3);
 });
