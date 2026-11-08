@@ -11,6 +11,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { RealmError, ERROR_CATALOGUE, type ErrorCode } from "../../src/core/errors.js";
 import {
+  DaemonAbsentError,
   CONTROL_METHODS,
   MAX_CONTROL_LINE_BYTES,
   oversizedLineReply,
@@ -303,6 +304,45 @@ void test("RT-06: a peer that never answers rejects with TOOL_TIMEOUT inside the
     (error: unknown) => error instanceof RealmError && error.code === "TOOL_TIMEOUT",
   );
   assert.ok(Date.now() - start < 2000, "the bounded wait must return promptly, never hang");
+});
+
+void test("RT-04: a missing socket path and a path that refuses the connection are DaemonAbsentError, still REALM_NOT_ACTIVE", async (t) => {
+  const base = scratchBase(t);
+  const refusing = join(base, "not-a-socket");
+  writeFileSync(refusing, "");
+  for (const socketPath of [join(base, "missing.sock"), refusing]) {
+    await assert.rejects(
+      sendRequest(socketPath, { id: 1, method: "status" }),
+      (error: unknown) =>
+        error instanceof DaemonAbsentError &&
+        error instanceof RealmError &&
+        error.code === "REALM_NOT_ACTIVE" &&
+        error.message === ERROR_CATALOGUE["REALM_NOT_ACTIVE"].reason &&
+        error.causeCode === undefined,
+    );
+  }
+});
+
+void test("RT-04: a silent daemon is TOOL_TIMEOUT and a peer that closes before replying is a plain REALM_NOT_ACTIVE, neither is DaemonAbsentError", async (t) => {
+  const silentPath = await listenUnix(t, createServer(() => undefined));
+  await assert.rejects(
+    sendRequest(silentPath, { id: 1, method: "status" }, { timeoutMs: 50 }),
+    (error: unknown) =>
+      error instanceof RealmError && !(error instanceof DaemonAbsentError) && error.code === "TOOL_TIMEOUT",
+  );
+  const droppingPath = await listenUnix(
+    t,
+    createServer((socket) => {
+      socket.on("data", () => {
+        socket.destroy();
+      });
+    }),
+  );
+  await assert.rejects(
+    sendRequest(droppingPath, { id: 1, method: "status" }),
+    (error: unknown) =>
+      error instanceof RealmError && !(error instanceof DaemonAbsentError) && error.code === "REALM_NOT_ACTIVE",
+  );
 });
 
 void test("RT-06: garbage bytes and an id mismatch from the peer surface SCHEMA_INVALID, never a raw error (P6-D2)", async (t) => {

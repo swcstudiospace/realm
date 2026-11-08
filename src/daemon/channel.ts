@@ -297,6 +297,29 @@ export function decodeReply(line: string): ControlReply {
   return { id, result: parsed["result"] };
 }
 
+// The control socket path names no daemon: nothing listens there (the socket file is missing, ENOENT) or nothing
+// accepts the connection (ECONNREFUSED). It is still REALM_NOT_ACTIVE, so every caller that handles that code is
+// unchanged; a caller that must tell "no daemon" from "a daemon that did not answer" tests instanceof. A dial timeout,
+// a peer that closes before replying and an error reply are never this class.
+export class DaemonAbsentError extends RealmError {
+  constructor() {
+    super("REALM_NOT_ACTIVE");
+    this.name = "DaemonAbsentError";
+  }
+}
+
+// The errno codes of a dial that reached no listener.
+const NO_DAEMON_ERRNO: readonly string[] = ["ENOENT", "ECONNREFUSED"];
+
+function isNoDaemonError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    "code" in error &&
+    typeof error.code === "string" &&
+    NO_DAEMON_ERRNO.includes(error.code)
+  );
+}
+
 // Any socket IO failure that is neither a timeout nor a decode refusal surfaces
 // REALM_NOT_ACTIVE: the peer is absent or went away. RealmError instances
 // (timeouts, decode refusals) pass through untouched, so every failure that
@@ -312,6 +335,9 @@ async function dial(socketPath: string, timeoutMs: number): Promise<Socket> {
   try {
     return await dialWithin(socketPath, timeoutMs, "TOOL_TIMEOUT");
   } catch (error: unknown) {
+    if (isNoDaemonError(error)) {
+      throw new DaemonAbsentError();
+    }
     throw ioFailure(error);
   }
 }
