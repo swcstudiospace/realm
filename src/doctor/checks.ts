@@ -98,6 +98,12 @@ export interface DoctorOptions {
   // Loaded runtime config. Absent, the runtime checks are one item whose fix names realm init.
   readonly runtimeConfig?: RuntimeConfig;
   readonly statPath?: RuntimeCheckOptions["stat"];
+  // The resolved config.json path, for the check that config.json sits outside the workspace root.
+  readonly configPath?: string;
+  // Key-level problems that kept the config from loading. Each entry is a complete fixed phrase.
+  readonly configProblems?: readonly string[];
+  // The compute driver's socket path. Absent, the driver-socket item reads REALM_DRIVER_SOCKET from env.
+  readonly driverSocketPath?: string;
 }
 
 export type HostBinaryName = "supervisor" | "openshell" | "openshell-gateway" | "podman";
@@ -187,6 +193,9 @@ export async function runChecks(options: DoctorOptions): Promise<readonly CheckR
     ...(options.runtimeConfig === undefined ? {} : { config: options.runtimeConfig }),
     env: options.env,
     ...(options.statPath === undefined ? {} : { stat: options.statPath }),
+    ...(options.configPath === undefined ? {} : { configPath: options.configPath }),
+    ...(options.configProblems === undefined ? {} : { configProblems: options.configProblems }),
+    ...(options.driverSocketPath === undefined ? {} : { driverSocketPath: options.driverSocketPath }),
     runCommand: options.runCommand ?? defaultRunCommand,
     ...(options.probeTimeoutMs === undefined ? {} : { probeTimeoutMs: options.probeTimeoutMs }),
   });

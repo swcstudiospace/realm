@@ -32,6 +32,8 @@ export type PathReading =
 export interface RuntimeCheckOptions {
   // Absent, or a config the loader refused, produces the one-item report.
   readonly config?: RuntimeConfig;
+  // Why the config did not load, as complete fixed phrases. They are used verbatim as the one-item report's detail.
+  readonly configProblems?: readonly string[];
   readonly env: EnvironmentLike;
   readonly stat?: (path: string) => PathReading;
   // The resolved config.json path. When it lies inside workspaceRoot the sandboxed agent could rewrite it.
@@ -377,10 +379,12 @@ function gatewayStatusOf(stdout: string): string | undefined {
   return typeof status === "string" ? status : undefined;
 }
 
-// One item when config is absent. Three items when a config is handed in.
+// One item when config is absent: runtime-roots, whose detail is the configProblems joined, or `runtime config is absent`. Three
+// items when a config is handed in.
 export async function runtimeChecks(options: RuntimeCheckOptions): Promise<readonly RuntimeCheckResult[]> {
   if (options.config === undefined) {
-    return [fail("runtime-roots", "runtime config is absent", INIT_FIX)];
+    const problems = options.configProblems ?? [];
+    return [fail("runtime-roots", problems.length > 0 ? problems.join("; ") : "runtime config is absent", INIT_FIX)];
   }
   if (options.runCommand === undefined) {
     // A caller that hands in a config must also hand in the runner, so the gateway item never guesses how to run openshell.

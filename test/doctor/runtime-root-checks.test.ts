@@ -68,6 +68,47 @@ void test("a missing config is a one-item report whose fix names realm init", as
   assert.match(item.fix ?? "", /realm init/);
 });
 
+void test("ONB-04: a config that does not load is one runtime-roots item whose detail names the problem keys and whose fix names realm init", async () => {
+  const report = await runtimeChecks({ env: {}, configProblems: ["image is absent or not a digest-pinned reference", "stateDir is absent or not an absolute path"] });
+  assert.equal(report.length, 1);
+  const item = report[0];
+  assert.ok(item);
+  assert.equal(item.id, "runtime-roots");
+  assert.equal(item.status, "fail");
+  assert.equal(item.detail, "image is absent or not a digest-pinned reference; stateDir is absent or not an absolute path");
+  assert.match(item.fix ?? "", /realm init/);
+});
+
+void test("ONB-04: an absent config with no problems names the absence", async () => {
+  for (const options of [{ env: {} }, { env: {}, configProblems: [] }]) {
+    const report = await runtimeChecks(options);
+    assert.equal(report.length, 1);
+    assert.equal(report[0]?.detail, "runtime config is absent");
+  }
+});
+
+void test("ONB-04: the one-item report never runs the driver, gateway or roots checks", async () => {
+  let calls = 0;
+  const report = await runtimeChecks({
+    env: { REALM_DRIVER_SOCKET: "/run/realm/driver.sock" },
+    configProblems: ["config.json is absent"],
+    runCommand: () => {
+      calls += 1;
+      return connectedGateway();
+    },
+    connectDriver: () => {
+      calls += 1;
+      return Promise.resolve();
+    },
+    stat: (path) => {
+      calls += 1;
+      return statFor({})(path);
+    },
+  });
+  assert.deepEqual(report.map((item) => item.detail), ["config.json is absent"]);
+  assert.equal(calls, 0);
+});
+
 void test("runtime-roots passes when the three roots are absolute directories at mode 0700", () => {
   const loaded = config();
   const result = runtimeRootsCheck(
