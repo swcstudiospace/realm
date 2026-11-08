@@ -4,10 +4,10 @@ milestone: v3.0
 milestone_name: Containment by Default
 status: planning
 stopped_at: Completed 15-09-PLAN.md
-last_updated: "2026-11-08T17:39:09.986Z"
+last_updated: "2026-11-08T17:51:34.936Z"
 last_activity: 2026-10-31
 last_activity_desc: actual lifecycle/doctor/C4 evidence reconciled; normalized onboarding docs authored; no checks, commits or phase completion by this worker
-state_head: 94590fd7dd5b6baab6a5223e55fd3b9302440fab
+state_head: 6735d4bd588df9000dde110d44da418d6dffac4c
 progress:
   total_phases: 9
   completed_phases: 18
@@ -160,6 +160,7 @@ Open follow-ups: the AgentOS sandbox runner in the follow-up milestone (RT-04, C
 | 261108-ncg | Finish the QR-05 timing migration: caps and the two blind sleeps (Phase 13) | 2026-11-08 | 26e9470 | [261108-ncg-finish-the-qr-05-timing-migration-caps-a](./quick/261108-ncg-finish-the-qr-05-timing-migration-caps-a/) |
 | 261108-nca | Commands that cannot load the config name the failing key and point at realm doctor | 2026-11-08 | eb056f1 | [261108-nca-commands-that-cannot-load-the-config-nam](./quick/261108-nca-commands-that-cannot-load-the-config-nam/) |
 | 261108-ncf | Pin the daemon invalid log level warning in test/daemon/main.test.ts (Phase 17 gap 2) | 2026-11-08 | 94590fd | [261108-ncf-pin-the-daemon-invalid-log-level-warning](./quick/261108-ncf-pin-the-daemon-invalid-log-level-warning/) |
+| 261108-ncd | Close the offline Phase 17 gaps: rotation-aware startup reader, anchor export, audit tests | 2026-11-08 | 6735d4b | [261108-ncd-close-the-offline-phase-17-gaps-rotation](./quick/261108-ncd-close-the-offline-phase-17-gaps-rotation/) |
 
 ## Deferred Items
 
