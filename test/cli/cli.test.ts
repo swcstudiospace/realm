@@ -73,11 +73,12 @@ interface SpawnCall {
   readonly args: readonly string[];
   readonly detached: boolean;
   readonly stdio: readonly (string | number)[];
+  readonly env: EnvironmentLike;
 }
 
 function makeSpawn(spawns: SpawnCall[]): SpawnDaemon {
   return (file, args, options) => {
-    spawns.push({ file, args: [...args], detached: options.detached, stdio: options.stdio });
+    spawns.push({ file, args: [...args], detached: options.detached, stdio: options.stdio, env: options.env });
     return { unref: () => undefined };
   };
 }
@@ -217,6 +218,36 @@ void test("realm up with no daemon spawns the detached child then reports over t
   assert.ok(upRequest !== undefined, "up sends one control request");
   assert.equal(upRequest.method, "up");
   assert.deepEqual(upRequest.params, { workspaceRoot: WORKSPACE });
+});
+
+void test("ONB-07: the CLI spawn passes only the allowlisted environment", async () => {
+  const spawns: SpawnCall[] = [];
+  const daemon = fakeDaemon({ probes: [false, true] });
+  const send: SendControlRequest = (_socketPath, request) => Promise.resolve({ id: request.id, result: ACTIVE_RESULT });
+  const result = await runCli(["up"], {
+    env: {
+      ...ENV,
+      REALM_DRIVER_SOCKET: "/run/user/0/realm-driver.sock",
+      REALM_DRIVER_SECRET_ROOT: "/stale/secrets",
+      REALM_SENTINEL_CLI_LEAK: "leak",
+    },
+    cwd: WORKSPACE,
+    timeoutMs: 500,
+    daemonEntry: DAEMON_ENTRY,
+    spawn: makeSpawn(spawns),
+    connect: daemon.connect,
+    send,
+    runCommand: okVersion,
+    connectSocket: acceptConnect,
+  });
+  assert.equal(result.exitCode, 0);
+  assert.equal(spawns.length, 1);
+  const spawnCall = spawns[0];
+  assert.ok(spawnCall !== undefined, "up spawns exactly one child");
+  assert.equal(spawnCall.env["PATH"], "/usr/bin");
+  assert.equal(spawnCall.env["REALM_DRIVER_SOCKET"], "/run/user/0/realm-driver.sock");
+  assert.equal(Object.hasOwn(spawnCall.env, "REALM_SENTINEL_CLI_LEAK"), false);
+  assert.equal(Object.hasOwn(spawnCall.env, "REALM_DRIVER_SECRET_ROOT"), false);
 });
 
 void test("realm up sends the --workspace root as the up params and spawns nothing when the daemon answers (CLI-01)", async () => {
@@ -942,6 +973,74 @@ void test("realm doctor with no config returns the init check and does not dial 
   assert.equal(check.id, "runtime-roots");
   assert.equal(check.status, "fail");
   assert.match(check.fix, /realm init/);
+});
+
+void test("ONB-04: realm doctor with a present but invalid config is one runtime-roots item that names the bad key and not its value, with exit 0", async (t) => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "realm-cli-invalid-")));
+  t.after(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+  const stateDir = join(root, "state");
+  const workspaceRoot = join(root, "workspace");
+  const result = await runCli(["doctor"], {
+    env: ENV,
+    timeoutMs: 500,
+    send: () => Promise.reject(new RealmError("REALM_NOT_ACTIVE")),
+    readConfig: () => ({ image: "not-a-digest-VALUE-s3cr3t", stateDir, workspaceRoot }),
+  });
+  assert.equal(result.exitCode, 0);
+  const checks = JSON.parse(result.stdout) as { id: string; status: string; detail: string }[];
+  assert.equal(checks.length, 1);
+  const check = checks[0];
+  assert.ok(check);
+  assert.equal(check.id, "runtime-roots");
+  assert.equal(check.status, "fail");
+  assert.ok(check.detail.includes("image is absent or not a digest-pinned reference"), check.detail);
+  assert.match(result.stderr, /config is absent or invalid; ran 1 local check/);
+  for (const leaked of ["VALUE", "s3cr3t", stateDir, workspaceRoot]) {
+    assert.equal(result.stdout.includes(leaked), false, `stdout carries ${leaked}`);
+    assert.equal(result.stderr.includes(leaked), false, `stderr carries ${leaked}`);
+  }
+});
+
+void test("ONB-04: realm doctor with an absent config file names the absence", async (t) => {
+  const configHome = realpathSync(mkdtempSync(join(tmpdir(), "realm-cli-no-config-")));
+  t.after(() => {
+    rmSync(configHome, { recursive: true, force: true });
+  });
+  const result = await runCli(["doctor"], {
+    env: { ...ENV, XDG_CONFIG_HOME: configHome },
+    timeoutMs: 500,
+    send: () => Promise.reject(new RealmError("REALM_NOT_ACTIVE")),
+    readConfig: () => {
+      throw new RealmError("SCHEMA_INVALID");
+    },
+  });
+  assert.equal(result.exitCode, 0);
+  const checks = JSON.parse(result.stdout) as { id: string; status: string; detail: string }[];
+  assert.equal(checks.length, 1);
+  const check = checks[0];
+  assert.ok(check);
+  assert.equal(check.id, "runtime-roots");
+  assert.equal(check.detail, "config.json is absent");
+});
+
+void test("ONB-04: realm doctor with a present config file that is not readable JSON says so", async (t) => {
+  const configHome = realpathSync(mkdtempSync(join(tmpdir(), "realm-cli-bad-json-")));
+  t.after(() => {
+    rmSync(configHome, { recursive: true, force: true });
+  });
+  mkdirSync(join(configHome, "realm"));
+  writeFileSync(join(configHome, "realm", "config.json"), "{ not json");
+  const result = await runCli(["doctor"], {
+    env: { ...ENV, XDG_CONFIG_HOME: configHome },
+    timeoutMs: 500,
+    send: () => Promise.reject(new RealmError("REALM_NOT_ACTIVE")),
+  });
+  assert.equal(result.exitCode, 0);
+  const checks = JSON.parse(result.stdout) as { id: string; detail: string }[];
+  assert.equal(checks.length, 1);
+  assert.equal(checks[0]?.detail, "config.json is not a readable JSON file");
 });
 
 void test("the default daemon spawn targets daemon/main.js beside the compiled CLI for up and mcp (CLI-01)", async () => {
