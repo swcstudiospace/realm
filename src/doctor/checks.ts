@@ -98,7 +98,6 @@ export interface DoctorOptions {
   // Loaded runtime config. Absent, the runtime checks are one item whose fix names realm init.
   readonly runtimeConfig?: RuntimeConfig;
   readonly statPath?: RuntimeCheckOptions["stat"];
-  readonly connectGateway?: RuntimeCheckOptions["connectGateway"];
 }
 
 export type HostBinaryName = "supervisor" | "openshell" | "openshell-gateway" | "podman";
@@ -188,7 +187,7 @@ export async function runChecks(options: DoctorOptions): Promise<readonly CheckR
     ...(options.runtimeConfig === undefined ? {} : { config: options.runtimeConfig }),
     env: options.env,
     ...(options.statPath === undefined ? {} : { stat: options.statPath }),
-    ...(options.connectGateway === undefined ? {} : { connectGateway: options.connectGateway }),
+    runCommand: options.runCommand ?? defaultRunCommand,
     ...(options.probeTimeoutMs === undefined ? {} : { probeTimeoutMs: options.probeTimeoutMs }),
   });
   return [...registered, ...runtime];

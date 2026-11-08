@@ -2,8 +2,7 @@
 // A missing or unloadable config is one item with first-time setup guidance. Configured root failures
 // require manual recovery, not reinitialization. This module reads no process environment: the caller hands env in.
 
-import { lstatSync, readFileSync, realpathSync, type Stats } from "node:fs";
-import { connect as tlsConnect } from "node:tls";
+import { lstatSync, realpathSync, type Stats } from "node:fs";
 import { isAbsolute, dirname, relative, sep } from "node:path";
 import { dialWithin } from "../core/timeout.js";
 import { makeRealmError } from "../core/errors.js";
@@ -11,7 +10,9 @@ import type { EnvironmentLike } from "../session/paths.js";
 import { runtimeRootsOf, type RuntimeConfig } from "../runtime/config.js";
 import { assertSocketPathsFit, channelPathsOf } from "../runtime/driver/channel.js";
 import { secretDirOf } from "../runtime/driver/secret-store.js";
-import { realmSandboxName } from "../runtime/openshell.js";
+import { OPENSHELL_BINARY, realmSandboxName } from "../runtime/openshell.js";
+import type { CommandOutcome, RunCommand } from "../runtime/podman-probe.js";
+import { selectOpenShellEnvironment } from "../runtime/session-execution.js";
 
 export type RuntimeCheckId = "runtime-roots" | "driver-socket" | "gateway";
 export type RuntimeCheckStatus = "pass" | "warn" | "fail";
@@ -39,7 +40,8 @@ export interface RuntimeCheckOptions {
   readonly realpath?: (path: string) => string;
   // The driver socket path. When absent, REALM_DRIVER_SOCKET from env is the source.
   readonly driverSocketPath?: string;
-  readonly connectGateway?: (endpoint: string, caPath: string, timeoutMs: number) => Promise<void>;
+  // Runs the openshell status probe. Required whenever config is present; runChecks passes the doctor's own runner.
+  readonly runCommand?: RunCommand;
   readonly connectDriver?: (socketPath: string, timeoutMs: number) => Promise<void>;
   readonly probeTimeoutMs?: number;
 }
@@ -48,8 +50,6 @@ const PRIVATE_DIR_MODE = 0o700;
 const SOCKET_MODE = 0o600;
 const PERMISSION_BITS = 0o777;
 const DRIVER_SOCKET_ENV = "REALM_DRIVER_SOCKET";
-const GATEWAY_ENDPOINT_ENV = "REALM_DRIVER_GATEWAY_ENDPOINT";
-const GATEWAY_CA_ENV = "REALM_DRIVER_GATEWAY_CA";
 const INIT_FIX = "For first-time setup with no config.json or policy.json, run realm init to write the config and prepare private roots at mode 0700. If either template already exists, preserve the templates and data and repair the existing config instead. A stale REALM_DRIVER_*_ROOT variable is ignored.";
 
 // The fix for each driver-root condition. A fix names the root in its detail, never a path value.
@@ -103,47 +103,6 @@ function defaultStat(path: string): PathReading {
     }
     return { state: "unreadable" };
   }
-}
-
-export function defaultConnectGateway(endpoint: string, caPath: string, timeoutMs: number): Promise<void> {
-  return new Promise((resolve, reject) => {
-    let url: URL;
-    try {
-      url = new URL(endpoint);
-    } catch {
-      reject(makeRealmError("SCHEMA_INVALID"));
-      return;
-    }
-    if (url.protocol !== "https:" || url.hostname === "") {
-      reject(makeRealmError("SCHEMA_INVALID"));
-      return;
-    }
-    let ca: Buffer;
-    try {
-      ca = readFileSync(caPath);
-    } catch {
-      reject(makeRealmError("SCHEMA_INVALID"));
-      return;
-    }
-    const port = url.port === "" ? 443 : Number(url.port);
-    // The certificate must chain to the configured CA and name the endpoint host. Node verifies both by default, and `ca`
-    // replaces the system roots, so only REALM_DRIVER_GATEWAY_CA is trusted.
-    const socket = tlsConnect({ host: url.hostname, port, servername: url.hostname, ca });
-    const timer = setTimeout(() => {
-      socket.destroy();
-      reject(makeRealmError("OPENSHELL_GATEWAY_LOST"));
-    }, timeoutMs);
-    socket.once("secureConnect", () => {
-      clearTimeout(timer);
-      socket.destroy();
-      resolve();
-    });
-    socket.once("error", () => {
-      clearTimeout(timer);
-      socket.destroy();
-      reject(makeRealmError("OPENSHELL_GATEWAY_LOST"));
-    });
-  });
 }
 
 // The three roots the driver and the daemon share (ONB-04). The workspace is held to no mode: the driver accepts any mode for a
@@ -359,26 +318,63 @@ export function defaultConnectDriver(socketPath: string, timeoutMs: number): Pro
   );
 }
 
-export async function gatewayCheck(
-  env: EnvironmentLike,
-  connectGateway: (endpoint: string, caPath: string, timeoutMs: number) => Promise<void>,
-  timeoutMs: number,
-): Promise<RuntimeCheckResult> {
+// Thrown into the race when the probe outlives its bound. It is private, so no other rejection is mistaken for a timeout.
+class DeadlineExceeded extends Error {}
+
+const FIX_GATEWAY = "Register and start the realm gateway for this account as docs/integration/openshell.md describes, then rerun realm doctor.";
+const FIX_GATEWAY_INSTALL = "Install the pinned OpenShell 0.1.5 CLI on PATH for this account, then rerun realm doctor.";
+
+// Runs `openshell status -o json` and reads the one field `status`. The probe gets only the OpenShell environment names, and its
+// output is parsed for that field and then dropped: no detail carries command output, an error message or an errno code.
+export async function gatewayCheck(env: EnvironmentLike, runCommand: RunCommand, timeoutMs: number): Promise<RuntimeCheckResult> {
   const id: RuntimeCheckId = "gateway";
-  const endpoint = env[GATEWAY_ENDPOINT_ENV];
-  if (endpoint === undefined || endpoint === "") {
-    return fail(id, "REALM_DRIVER_GATEWAY_ENDPOINT is unset", "Set REALM_DRIVER_GATEWAY_ENDPOINT to the gateway's https URL and confirm the gateway is listening.");
-  }
-  const caPath = env[GATEWAY_CA_ENV];
-  if (caPath === undefined || caPath === "") {
-    return fail(id, "REALM_DRIVER_GATEWAY_CA is unset", "Set REALM_DRIVER_GATEWAY_CA to the CA file that signs the gateway certificate.");
-  }
+  let timer: NodeJS.Timeout | undefined;
+  // The seam may not honour timeoutMs itself, so the wait is bounded here as well.
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      reject(new DeadlineExceeded());
+    }, timeoutMs);
+  });
+  let outcome: CommandOutcome;
   try {
-    await connectGateway(endpoint, caPath, timeoutMs);
-  } catch {
-    return fail(id, "gateway is unreachable or its certificate does not chain to REALM_DRIVER_GATEWAY_CA", "Start the OpenShell gateway, confirm REALM_DRIVER_GATEWAY_ENDPOINT is the https URL it listens on, and confirm REALM_DRIVER_GATEWAY_CA is the CA that signed its certificate.");
+    outcome = await Promise.race([runCommand(OPENSHELL_BINARY, ["status", "-o", "json"], { env: selectOpenShellEnvironment(env), timeoutMs }), deadline]);
+  } catch (error: unknown) {
+    if (error instanceof DeadlineExceeded) {
+      return fail(id, "gateway status did not answer in time", FIX_GATEWAY);
+    }
+    return fail(id, "openshell cannot be started", FIX_GATEWAY_INSTALL);
+  } finally {
+    clearTimeout(timer);
   }
-  return pass(id, "gateway presented a certificate that chains to REALM_DRIVER_GATEWAY_CA");
+  if (outcome.exitCode !== 0) {
+    return fail(id, `gateway status exited with status ${String(outcome.exitCode)}`, FIX_GATEWAY);
+  }
+  const status = gatewayStatusOf(outcome.stdout);
+  if (status === undefined) {
+    return fail(id, "gateway status is not JSON", FIX_GATEWAY);
+  }
+  if (status === "connected") {
+    return pass(id, "gateway is connected");
+  }
+  if (status === "not_configured") {
+    return fail(id, "no gateway is registered for this account", FIX_GATEWAY);
+  }
+  return fail(id, "gateway is not connected", FIX_GATEWAY);
+}
+
+// The top-level string `status` of the JSON object the probe printed, or undefined when the text is not such an object.
+function gatewayStatusOf(stdout: string): string | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    return undefined;
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    return undefined;
+  }
+  const status = (parsed as Record<string, unknown>)["status"];
+  return typeof status === "string" ? status : undefined;
 }
 
 // One item when config is absent. Three items when a config is handed in.
@@ -386,11 +382,15 @@ export async function runtimeChecks(options: RuntimeCheckOptions): Promise<reado
   if (options.config === undefined) {
     return [fail("runtime-roots", "runtime config is absent", INIT_FIX)];
   }
+  if (options.runCommand === undefined) {
+    // A caller that hands in a config must also hand in the runner, so the gateway item never guesses how to run openshell.
+    throw makeRealmError("SCHEMA_INVALID");
+  }
   const stat = options.stat ?? defaultStat;
   const timeoutMs = options.probeTimeoutMs ?? 5000;
   return [
     runtimeRootsCheck(options.config, stat, options.realpath ?? realpathSync, options.configPath),
     await driverSocketCheck(options.driverSocketPath ?? options.env[DRIVER_SOCKET_ENV], stat, options.connectDriver ?? defaultConnectDriver, timeoutMs),
-    await gatewayCheck(options.env, options.connectGateway ?? defaultConnectGateway, timeoutMs),
+    await gatewayCheck(options.env, options.runCommand, timeoutMs),
   ];
 }

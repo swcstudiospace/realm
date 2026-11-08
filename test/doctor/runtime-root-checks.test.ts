@@ -1,16 +1,12 @@
-import { test, type TestContext } from "node:test";
+import { test } from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, type Stats } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { createServer as createTlsServer, type Server as TlsServer } from "node:tls";
+import type { Stats } from "node:fs";
 import { loadRuntimeConfig, type RuntimeConfig } from "../../src/runtime/config.js";
 import { channelPathsOf } from "../../src/runtime/driver/channel.js";
 import { secretDirOf } from "../../src/runtime/driver/secret-store.js";
 import { realmSandboxName } from "../../src/runtime/openshell.js";
+import type { CommandOutcome, RunCommand } from "../../src/runtime/podman-probe.js";
 import {
-  defaultConnectGateway,
   driverSocketCheck,
   gatewayCheck,
   runtimeChecks,
@@ -413,7 +409,7 @@ void test("ONB-04: runtimeChecks uses driverSocketPath before REALM_DRIVER_SOCKE
     driverSocketPath: "/run/realm/driver.sock",
     stat: statFor({ "/run/realm/driver.sock": socket(0o10600), "/run/realm": directory(0o40700) }),
     connectDriver: () => Promise.resolve(),
-    connectGateway: () => Promise.resolve(),
+    runCommand: connectedGateway,
     probeTimeoutMs: 50,
   });
   const item = report.find((entry) => entry.id === "driver-socket");
@@ -423,98 +419,100 @@ void test("ONB-04: runtimeChecks uses driverSocketPath before REALM_DRIVER_SOCKE
     env: { REALM_DRIVER_SOCKET: "/run/realm/driver.sock" },
     stat: statFor({ "/run/realm/driver.sock": socket(0o10600), "/run/realm": directory(0o40700) }),
     connectDriver: () => Promise.resolve(),
-    connectGateway: () => Promise.resolve(),
+    runCommand: connectedGateway,
     probeTimeoutMs: 50,
   });
   assert.equal(fallback.find((entry) => entry.id === "driver-socket")?.status, "pass");
 });
 
 void test("ONB-04: driver-socket with neither driverSocketPath nor REALM_DRIVER_SOCKET fails as unset", async () => {
-  const report = await runtimeChecks({ config: config(), env: {}, stat: statFor({}), connectGateway: () => Promise.resolve(), probeTimeoutMs: 50 });
+  const report = await runtimeChecks({ config: config(), env: {}, stat: statFor({}), runCommand: connectedGateway, probeTimeoutMs: 50 });
   const item = report.find((entry) => entry.id === "driver-socket");
   assert.equal(item?.status, "fail");
   assert.equal(item?.detail, "REALM_DRIVER_SOCKET is unset or not absolute");
 });
 
-void test("gateway passes when the endpoint accepts a connection and fails when it does not", async () => {
-  const env = { REALM_DRIVER_GATEWAY_ENDPOINT: "https://gateway.example:443", REALM_DRIVER_GATEWAY_CA: "/etc/realm/gateway-ca.pem" };
-  const passed = await gatewayCheck(env, () => Promise.resolve(), 50);
-  assert.equal(passed.status, "pass");
-  assert.equal(passed.fix, null);
-  const failed = await gatewayCheck(env, () => Promise.reject(new Error("refused")), 50);
-  assert.equal(failed.status, "fail");
-  assert.match(failed.detail, /unreachable/);
-  const unset = await gatewayCheck({}, () => Promise.resolve(), 50);
-  assert.equal(unset.status, "fail");
-  assert.match(unset.detail, /unset/);
-  const noCa = await gatewayCheck({ REALM_DRIVER_GATEWAY_ENDPOINT: "https://gateway.example:443" }, () => Promise.resolve(), 50);
-  assert.equal(noCa.status, "fail");
-  assert.match(noCa.detail, /REALM_DRIVER_GATEWAY_CA is unset/);
+// The reply of a gateway that `openshell status -o json` reports as connected.
+function connectedGateway(): Promise<CommandOutcome> {
+  return Promise.resolve({ exitCode: 0, stdout: '{"status":"connected","gateway":"realm"}' });
+}
+
+interface RecordedCall {
+  readonly file: string;
+  readonly args: readonly string[];
+  readonly env: Readonly<Record<string, string>>;
+}
+
+// A runner that records each call and answers with the outcome, or rejects with the error.
+function recordingRunner(answer: CommandOutcome | Error): { readonly run: RunCommand; readonly calls: RecordedCall[] } {
+  const calls: RecordedCall[] = [];
+  const run: RunCommand = (file, args, options) => {
+    calls.push({ file, args, env: options.env });
+    return answer instanceof Error ? Promise.reject(answer) : Promise.resolve(answer);
+  };
+  return { run, calls };
+}
+
+const GATEWAY_ENV = { PATH: "/usr/bin", HOME: "/home/realm", XDG_RUNTIME_DIR: "/run/user/1000", REALM_SENTINEL_MUST_NOT_LEAK: "leak" };
+
+void test("ONB-04: gateway passes only when openshell status reports connected, and runs nothing else", async () => {
+  const runner = recordingRunner({ exitCode: 0, stdout: '{"status":"connected","gateway":"realm"}' });
+  const result = await gatewayCheck(GATEWAY_ENV, runner.run, 1000);
+  assert.equal(result.status, "pass");
+  assert.equal(result.fix, null);
+  assert.equal(runner.calls.length, 1);
+  const call = runner.calls[0];
+  assert.ok(call);
+  assert.equal(call.file, "openshell");
+  assert.deepEqual(call.args, ["status", "-o", "json"]);
+  assert.deepEqual(Object.keys(call.env).sort(), ["HOME", "PATH", "XDG_RUNTIME_DIR"]);
 });
 
-// A self-signed certificate for the loopback address, with its key. Node trusts it when it is given as the CA.
-function loopbackCertificate(t: TestContext, name: string): { readonly certPath: string; readonly certPem: string; readonly keyPem: string } {
-  const dir = mkdtempSync(join(tmpdir(), "realm-doctor-tls-"));
-  t.after(() => {
-    rmSync(dir, { recursive: true, force: true });
-  });
-  const keyPath = join(dir, "key.pem");
-  const certPath = join(dir, "cert.pem");
-  execFileSync(
-    "openssl",
-    [
-      "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1", "-nodes",
-      "-keyout", keyPath, "-out", certPath, "-days", "1", "-subj", `/CN=${name}`,
-      "-addext", "subjectAltName=IP:127.0.0.1", "-addext", "basicConstraints=critical,CA:TRUE",
-      "-addext", "keyUsage=critical,digitalSignature,keyCertSign",
-    ],
-    { stdio: "ignore" },
-  );
-  return { certPath, certPem: readFileSync(certPath, "utf8"), keyPem: readFileSync(keyPath, "utf8") };
-}
+void test("ONB-04: gateway fails for not_configured with its own phrase", async () => {
+  const result = await gatewayCheck(GATEWAY_ENV, recordingRunner({ exitCode: 0, stdout: '{"status":"not_configured"}' }).run, 1000);
+  assert.equal(result.status, "fail");
+  assert.equal(result.detail, "no gateway is registered for this account");
+  assert.match(result.fix ?? "", /openshell\.md/);
+});
 
-// A TLS listener on loopback that presents the certificate and closes each connection once the handshake completes.
-async function startTlsGateway(t: TestContext, certificate: { readonly certPem: string; readonly keyPem: string }): Promise<number> {
-  const server: TlsServer = createTlsServer({ cert: certificate.certPem, key: certificate.keyPem });
-  server.on("secureConnection", (socket) => {
-    socket.on("error", () => {
-      socket.destroy();
-    });
-    socket.end();
-  });
-  server.on("tlsClientError", () => undefined);
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      resolve();
-    });
-  });
-  t.after(() => {
-    server.close();
-  });
-  const address = server.address();
-  if (address === null || typeof address === "string") {
-    throw new Error("the TLS listener has no port");
+void test("ONB-04: gateway fails for another status without echoing it", async () => {
+  const result = await gatewayCheck(GATEWAY_ENV, recordingRunner({ exitCode: 0, stdout: '{"status":"degraded"}' }).run, 1000);
+  assert.equal(result.status, "fail");
+  assert.equal(result.detail, "gateway is not connected");
+  assert.equal(result.detail.includes("degraded"), false);
+  assert.equal((result.fix ?? "").includes("degraded"), false);
+});
+
+void test("ONB-04: gateway fails for output that is not a JSON object with a string status, and never echoes it", async () => {
+  for (const stdout of ["Gateway: realm (connected)", "[]", "null", '{"status":1}', '{"state":"connected"}']) {
+    const result = await gatewayCheck(GATEWAY_ENV, recordingRunner({ exitCode: 0, stdout }).run, 1000);
+    assert.equal(result.status, "fail", stdout);
+    assert.equal(result.detail, "gateway status is not JSON", stdout);
+    assert.equal(result.detail.includes(stdout), false);
+    assert.equal((result.fix ?? "").includes(stdout), false);
   }
-  return address.port;
-}
+});
 
-void test("gateway verifies the presented certificate against REALM_DRIVER_GATEWAY_CA", async (t) => {
-  const gateway = loopbackCertificate(t, "gateway");
-  const foreign = loopbackCertificate(t, "foreign");
-  const port = await startTlsGateway(t, gateway);
-  const endpoint = `https://127.0.0.1:${String(port)}`;
-  const chains = await gatewayCheck(
-    { REALM_DRIVER_GATEWAY_ENDPOINT: endpoint, REALM_DRIVER_GATEWAY_CA: gateway.certPath },
-    defaultConnectGateway,
-    2000,
-  );
-  assert.equal(chains.status, "pass");
-  const notChaining = await gatewayCheck(
-    { REALM_DRIVER_GATEWAY_ENDPOINT: endpoint, REALM_DRIVER_GATEWAY_CA: foreign.certPath },
-    defaultConnectGateway,
-    2000,
-  );
-  assert.equal(notChaining.status, "fail");
-  assert.match(notChaining.detail, /unreachable/);
+void test("ONB-04: gateway fails for a non-zero exit, whatever the output says", async () => {
+  const result = await gatewayCheck(GATEWAY_ENV, recordingRunner({ exitCode: 1, stdout: '{"status":"connected"} error: boom' }).run, 1000);
+  assert.equal(result.status, "fail");
+  assert.equal(result.detail, "gateway status exited with status 1");
+  assert.equal(result.detail.includes("boom"), false);
+});
+
+void test("ONB-04: gateway fails when openshell cannot be started, without the error text or code", async () => {
+  const failure = Object.assign(new Error("spawn openshell ENOENT"), { code: "ENOENT" });
+  const result = await gatewayCheck(GATEWAY_ENV, recordingRunner(failure).run, 1000);
+  assert.equal(result.status, "fail");
+  assert.equal(result.detail, "openshell cannot be started");
+  assert.equal(result.detail.includes("ENOENT"), false);
+  assert.match(result.fix ?? "", /0\.1\.5/);
+});
+
+void test("ONB-04: gateway fails when the probe never answers, within its own bound", async () => {
+  const started = Date.now();
+  const result = await gatewayCheck(GATEWAY_ENV, () => new Promise<CommandOutcome>(() => undefined), 50);
+  assert.equal(result.status, "fail");
+  assert.equal(result.detail, "gateway status did not answer in time");
+  assert.ok(Date.now() - started < 2000);
 });

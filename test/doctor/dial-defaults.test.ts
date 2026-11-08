@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { test, type TestContext } from "node:test";
 import { ERROR_CODES, RealmError } from "../../src/core/errors.js";
 import { defaultConnectSocket } from "../../src/doctor/checks.js";
-import { defaultConnectDriver, defaultConnectGateway } from "../../src/doctor/runtime-checks.js";
+import { defaultConnectDriver } from "../../src/doctor/runtime-checks.js";
 import { testTimeout } from "../support/timing.js";
 
 function socketDir(t: TestContext): string {
@@ -105,30 +105,6 @@ void test("Q0-016: a driver socket that misses its deadline rejects with OPENSHE
   t.mock.timers.tick(50);
   await assert.rejects(dialed, (error: unknown) => {
     assertCatalogueError(error, "OPENSHELL_GATEWAY_LOST");
-    return true;
-  });
-});
-
-void test("Q0-016: a gateway endpoint that is not a URL rejects with SCHEMA_INVALID", async (t) => {
-  const caPath = join(socketDir(t), "ca.pem");
-  await assert.rejects(defaultConnectGateway("not a url", caPath, 1000), (error: unknown) => {
-    assertCatalogueError(error, "SCHEMA_INVALID");
-    return true;
-  });
-});
-
-void test("Q0-016: a gateway endpoint that is not https rejects with SCHEMA_INVALID", async (t) => {
-  const caPath = join(socketDir(t), "ca.pem");
-  await assert.rejects(defaultConnectGateway("http://127.0.0.1:443", caPath, 1000), (error: unknown) => {
-    assertCatalogueError(error, "SCHEMA_INVALID");
-    return true;
-  });
-});
-
-void test("Q0-016: a gateway CA file that cannot be read rejects with SCHEMA_INVALID", async (t) => {
-  const caPath = join(socketDir(t), "missing-ca.pem");
-  await assert.rejects(defaultConnectGateway("https://127.0.0.1:443", caPath, 1000), (error: unknown) => {
-    assertCatalogueError(error, "SCHEMA_INVALID");
     return true;
   });
 });
