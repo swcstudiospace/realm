@@ -176,7 +176,9 @@ const WORKSPACE_HOST_NAME = "realm-live-host-visible";
 const WORKSPACE_MCP_NAME = "realm-live-mcp-roundtrip";
 // The marker scenario 5 writes before the kill and reads back after the restart.
 const WORKSPACE_ADOPT_NAME = "realm-live-adopt-marker";
-const WORKSPACE_FILES: readonly string[] = [WORKSPACE_WRITE_NAME, WORKSPACE_HOST_NAME, WORKSPACE_TRANSFER_NAME, WORKSPACE_MCP_NAME, WORKSPACE_ADOPT_NAME];
+// The file scenario 5b's audited write creates before its SIGTERM. Cleanup removes it on failure as well.
+const WORKSPACE_DESTROY_NAME = "realm-live-destroy-marker";
+const WORKSPACE_FILES: readonly string[] = [WORKSPACE_WRITE_NAME, WORKSPACE_HOST_NAME, WORKSPACE_TRANSFER_NAME, WORKSPACE_MCP_NAME, WORKSPACE_ADOPT_NAME, WORKSPACE_DESTROY_NAME];
 
 // The one shell script the write probes run. The target is a positional argument, never interpolated.
 const WRITE_SCRIPT = 'printf %s "$1" > "$2"';
@@ -672,6 +674,8 @@ void test("production live 5: after the daemon is killed, the next realm up re-a
     throw error;
   }
 
+  // Removes the host copy of the MCP marker write, as scenarios 1 and 6 do, so the residue check after realm down sees an empty pinned workspace.
+  rmSync(join(scenario.inputs.workspaceRoot, WORKSPACE_ADOPT_NAME), { force: true });
   await assertDownAndClean(scenario);
 });
 
@@ -680,7 +684,7 @@ void test("production live 5: after the daemon is killed, the next realm up re-a
 // A SIGTERM runs the daemon's shutdown, which removes its container (docs/integration/omp-lifecycle-runbook.md, section C: about
 // 30 s). The session record stays, so the next start reports a destroyed sandbox with no container and at least one record.
 void test("production live 5b: after the daemon is stopped with SIGTERM, the next realm up reports the destroyed record and reaches active with a new container", { skip: gate, timeout: SCENARIO_TIMEOUT_MS }, async (t) => {
-  const scenario = startScenario(t, { image: inputs().image });
+  const scenario = startScenario(t, { image: inputs().image }, WORKSPACE_FILES);
   await assertActive(scenario);
   const sandbox = sandboxOf(scenario);
 
@@ -694,6 +698,21 @@ void test("production live 5b: after the daemon is stopped with SIGTERM, the nex
   assert.equal(started.length, 1, `exactly one daemon process must run from the compiled daemon entry; found ${String(started.length)} (pids: ${started.length === 0 ? "none" : started.join(", ")})`);
   const daemonPid = started[0];
   assert.ok(daemonPid !== undefined, "the daemon pid");
+
+  // One audited write before the SIGTERM. The session's audit file is created on its first audited admission, and the audit verify after the restart reads it.
+  const destroyContent = `realm-live-destroy-${randomUUID()}`;
+  const destroyWriter = startMcpSession(scenario.inputs, scenario.environment);
+  try {
+    await initializeMcp(destroyWriter);
+    await callTool(destroyWriter, "status", {});
+    const written = await callTool(destroyWriter, "write", { path: WORKSPACE_DESTROY_NAME, content: destroyContent });
+    assert.equal(field(written, "bytes"), Buffer.byteLength(destroyContent), `write bytes: ${describeValue(written)}`);
+    assert.equal(field(written, "sha256"), sha256Hex(Buffer.from(destroyContent)), `write sha256: ${describeValue(written)}`);
+  } finally {
+    destroyWriter.closeInput();
+    await destroyWriter.waitForExit(MCP_EXIT_TIMEOUT_MS);
+    destroyWriter.kill();
+  }
   process.kill(daemonPid, "SIGTERM");
 
   const stopped = await pollUntil(
@@ -757,6 +776,8 @@ void test("production live 5b: after the daemon is stopped with SIGTERM, the nex
     throw error;
   }
 
+  // Removes the host copy of the file the audited write created, so the residue check after realm down sees an empty pinned workspace.
+  rmSync(join(scenario.inputs.workspaceRoot, WORKSPACE_DESTROY_NAME), { force: true });
   await assertDownAndClean(scenario);
 });
 
@@ -909,7 +930,8 @@ async function runMcpSession(scenario: Scenario, session: McpSession): Promise<v
   assert.equal(decodeReadContent(field(readBack, "content")), content, `read content: ${describeValue(readBack)}`);
   assert.equal(field(readBack, "truncated"), false, `read truncated: ${describeValue(readBack)}`);
   rmSync(hostPath);
-  const metrics = await realmCli(scenario.inputs, scenario.environment, ["metrics"], STATUS_TIMEOUT_MS);
+  // The call names the pinned project explicitly: the test runner's directory is not an admitted project.
+  const metrics = await realmCli(scenario.inputs, scenario.environment, ["metrics", "--workspace", scenario.inputs.workspaceRoot], STATUS_TIMEOUT_MS);
   assertExit(metrics, 0, "realm metrics after the write");
   const snap = JSON.parse(metrics.stdout) as {
     toolCalls?: readonly { tool?: string; outcome?: string; count?: number }[];
