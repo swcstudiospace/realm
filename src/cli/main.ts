@@ -11,7 +11,7 @@
 // hermetic under test.
 
 import { spawn } from "node:child_process";
-import { closeSync, fchmodSync, mkdirSync, openSync } from "node:fs";
+import { closeSync, fchmodSync, lstatSync, mkdirSync, openSync } from "node:fs";
 import { runAcpOverStdio } from "../acp/stdio.js";
 import { createJsonRpc, type AnchorRpc } from "../audit/anchor.js";
 import { dialWithin } from "../core/timeout.js";
@@ -31,7 +31,7 @@ import { defaultRunCommand, runChecks, type DoctorOptions } from "../doctor/chec
 import { applySafeFixes, FixRefusal, type FixAction } from "../doctor/fix.js";
 import { runtimeChecks } from "../doctor/runtime-checks.js";
 import { createMcpServer } from "../mcp/server.js";
-import { loadRuntimeConfig, type RuntimeConfig } from "../runtime/config.js";
+import { describeRuntimeConfigProblems, loadRuntimeConfig, type RuntimeConfig } from "../runtime/config.js";
 import { readRuntimeConfigFile } from "../runtime/config-file.js";
 import { defaultPolicyPath, isDirectEntry, resolveConfigPath } from "../runtime/host-paths.js";
 import {
@@ -497,15 +497,42 @@ async function runDoctor(
 }
 
 function localDoctorOptions(deps: ResolvedDeps, runtimeConfig: RuntimeConfig): DoctorOptions {
+  const driverSocket = deps.env["REALM_DRIVER_SOCKET"];
   return {
     stateDir: runtimeConfig.stateDir,
     policyPath: defaultPolicyPath(runtimeConfig.stateDir),
     env: deps.env,
     runtimeConfig,
+    configPath: resolveConfigPath(deps.env),
+    ...(driverSocket === undefined ? {} : { driverSocketPath: driverSocket }),
     runCommand: deps.runCommand,
     connectSocket: deps.connectSocket,
     probeTimeoutMs: deps.timeoutMs ?? SOCKET_TIMEOUT_MS,
   };
+}
+
+// Why the config did not load, as key-level phrases only (D-1506): never a value, never a path. A file that is absent at
+// configPath, or a location that cannot be resolved, is `config.json is absent`; a present file that cannot be read as JSON
+// is named as such; a file that parsed is described key by key.
+function configProblemsOf(raw: unknown, readFailed: boolean, configPath: string | undefined): readonly string[] {
+  if (readFailed) {
+    return [configFileIsAbsent(configPath) ? "config.json is absent" : "config.json is not a readable JSON file"];
+  }
+  const problems = describeRuntimeConfigProblems(raw);
+  return problems.length === 0 ? ["config.json does not load"] : problems;
+}
+
+function configFileIsAbsent(configPath: string | undefined): boolean {
+  if (configPath === undefined) {
+    return true;
+  }
+  try {
+    lstatSync(configPath);
+    return false;
+  } catch (error: unknown) {
+    const code = typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
+    return code === "ENOENT" || code === "ENOTDIR";
+  }
 }
 
 // Fixes are host-local even when a daemon answers. The protected workspace is from config,
@@ -695,8 +722,20 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
   const { command } = parsed;
   let stateDir: string;
   let runtimeConfig: RuntimeConfig;
+  let configPath: string | undefined;
+  let raw: unknown;
+  let readFailed = false;
   try {
-    runtimeConfig = loadRuntimeConfig((deps.readConfig ?? readRuntimeConfigFile)(resolveConfigPath(deps.env)));
+    configPath = resolveConfigPath(deps.env);
+    raw = (deps.readConfig ?? readRuntimeConfigFile)(configPath);
+  } catch {
+    readFailed = true;
+  }
+  try {
+    if (readFailed) {
+      throw makeRealmError("SCHEMA_INVALID");
+    }
+    runtimeConfig = loadRuntimeConfig(raw);
     stateDir = runtimeConfig.stateDir;
   } catch {
     if (command === "doctor") {
@@ -704,11 +743,11 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
         const failure = failureFor(new RealmError("SCHEMA_INVALID"));
         return { ...failure, stderr: `${failure.stderr}realm doctor --fix: config must be present and valid; run realm init\n` };
       }
-      const checks = await runtimeChecks({ env: deps.env });
+      const checks = await runtimeChecks({ env: deps.env, configProblems: configProblemsOf(raw, readFailed, configPath) });
       return {
         exitCode: 0,
         stdout: `${JSON.stringify(checks)}\n`,
-        stderr: `realm doctor: config is absent; ran ${String(checks.length)} local check\n`,
+        stderr: `realm doctor: config is absent or invalid; ran ${String(checks.length)} local check\n`,
       };
     }
     return {
