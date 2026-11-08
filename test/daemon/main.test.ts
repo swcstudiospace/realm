@@ -190,6 +190,69 @@ void test("OBS-02: a request line falls back to stderr when the log path is not 
   assert.equal(h.lines.some((line) => line.includes("up.begin")), true);
 });
 
+const INVALID_LEVEL_SENTINEL = "SENTINEL-LEVEL-VALUE";
+const LOG_LEVEL_EVENT = "daemon.log-level";
+
+function eventOf(line: string): unknown {
+  return (JSON.parse(line) as Record<string, unknown>)["event"];
+}
+
+// Runs the daemon with REALM_LOG_LEVEL set to level, or with the key absent when level is undefined. The start fake logs
+// one debug and one info line through the request logger, then the daemon stops at once.
+async function runWithLogLevel(
+  t: TestContext,
+  level: string | undefined,
+): Promise<{ readonly code: number; readonly requests: readonly string[]; readonly stderr: readonly string[] }> {
+  const dir = tempDir(t);
+  const raw = validConfig(dir);
+  const stateDir = String(raw["stateDir"]);
+  mkdirSync(stateDir, { recursive: true });
+  const base = writeConfig(dir, raw);
+  const env: EnvironmentLike = level === undefined ? base : { ...base, REALM_LOG_LEVEL: level };
+  const h = harness(env, {
+    start: (options) => {
+      options.logger?.debug("probe.debug", {});
+      options.logger?.info("probe.info", {});
+      return Promise.resolve(startedWith(Promise.resolve()));
+    },
+  });
+  const code = await runDaemon(h.deps);
+  const requests = readFileSync(join(stateDir, "requests.log"), "utf8").split("\n").filter((line) => line !== "");
+  return { code, requests, stderr: h.lines };
+}
+
+void test("OBS-02: an invalid REALM_LOG_LEVEL writes one daemon.log-level warning with the effective level, and filters as info", async (t) => {
+  const run = await runWithLogLevel(t, INVALID_LEVEL_SENTINEL);
+  assert.equal(run.code, 0);
+  const warnings = run.requests.filter((line) => eventOf(line) === LOG_LEVEL_EVENT);
+  assert.equal(warnings.length, 1);
+  const [warning] = warnings;
+  assert.ok(warning !== undefined);
+  assert.deepEqual(entryOf(warning), { level: "warn", event: LOG_LEVEL_EVENT, value: "info" });
+  assert.equal(run.requests.some((line) => eventOf(line) === "probe.info"), true);
+  assert.equal(run.requests.some((line) => eventOf(line) === "probe.debug"), false);
+  assert.equal(run.requests.join("\n").includes(INVALID_LEVEL_SENTINEL), false);
+  assert.equal(run.stderr.some((line) => line.includes(INVALID_LEVEL_SENTINEL)), false);
+  assert.equal(run.stderr.some((line) => eventOf(line) === LOG_LEVEL_EVENT), false);
+});
+
+void test("OBS-02: a valid REALM_LOG_LEVEL writes no daemon.log-level warning and keeps the debug line", async (t) => {
+  const run = await runWithLogLevel(t, "debug");
+  assert.equal(run.code, 0);
+  assert.equal(run.requests.some((line) => eventOf(line) === LOG_LEVEL_EVENT), false);
+  assert.equal(run.stderr.some((line) => eventOf(line) === LOG_LEVEL_EVENT), false);
+  assert.equal(run.requests.some((line) => eventOf(line) === "probe.debug"), true);
+});
+
+void test("OBS-02: an unset REALM_LOG_LEVEL writes no daemon.log-level warning and filters debug as the default", async (t) => {
+  const run = await runWithLogLevel(t, undefined);
+  assert.equal(run.code, 0);
+  assert.equal(run.requests.some((line) => eventOf(line) === LOG_LEVEL_EVENT), false);
+  assert.equal(run.stderr.some((line) => eventOf(line) === LOG_LEVEL_EVENT), false);
+  assert.equal(run.requests.some((line) => eventOf(line) === "probe.info"), true);
+  assert.equal(run.requests.some((line) => eventOf(line) === "probe.debug"), false);
+});
+
 void test("CRASH-04: the start's onStartup report is written as one stderr line with the container ids", async (t) => {
   const dir = tempDir(t);
   const h = harness(writeConfig(dir, validConfig(dir)), {
