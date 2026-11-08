@@ -4,10 +4,10 @@ milestone: v3.0
 milestone_name: Containment by Default
 status: planning
 stopped_at: Completed 15-09-PLAN.md
-last_updated: "2026-11-08T16:59:22.819Z"
+last_updated: "2026-11-08T17:14:04.588Z"
 last_activity: 2026-10-31
 last_activity_desc: actual lifecycle/doctor/C4 evidence reconciled; normalized onboarding docs authored; no checks, commits or phase completion by this worker
-state_head: a7b765cc8def75958a985d5998c7157c089986b6
+state_head: 455671a8880d6c5160672b1c51ed5e24af2bca97
 progress:
   total_phases: 9
   completed_phases: 18
@@ -156,6 +156,7 @@ Open follow-ups: the AgentOS sandbox runner in the follow-up milestone (RT-04, C
 |---|-------------|------|--------|-----------|
 | 261029-g7m | Lifecycle and persistence findings: Omp sandbox attach, abrupt-end persistence, live verification and eight proposals | 2026-10-29 | 85cb740 | [261029-g7m-lifecycle-and-persistence-findings](./quick/261029-g7m-lifecycle-and-persistence-findings/) |
 | 261108-nc7 | Cap policy startupBudgetMs at the client up bound in the schema (Phase 18 owner item b) | 2026-11-08 | a7b765c | [261108-nc7-cap-policy-startupbudgetms-at-the-client](./quick/261108-nc7-cap-policy-startupbudgetms-at-the-client/) |
+| 261108-nc8 | realm checkpoint pins the workspace itself for a stopped project (RES-04 owner decision) | 2026-11-08 | 455671a | [261108-nc8-realm-checkpoint-pins-the-workspace-itse](./quick/261108-nc8-realm-checkpoint-pins-the-workspace-itse/) |
 
 ## Deferred Items
 
