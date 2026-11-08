@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { readAuditHead } from "../audit/chain.js";
 import { RealmError, type ErrorCode } from "../core/errors.js";
 import { loadRuntimeConfig, runtimeRootsOf } from "../runtime/config.js";
-import { defaultPolicyPath, isDirectEntry, podmanSocketPath, readHostRuntime } from "../runtime/host-paths.js";
+import { defaultPolicyPath, isDirectEntry, podmanSocketPath, readHostRuntime, resolveConfigPath } from "../runtime/host-paths.js";
 import { createOpenShellAgentOsDriver } from "../runtime/agentos-driver.js";
 import { productionRunnerChild } from "../runtime/agentos-workload.js";
 import type { AgentOsDriver } from "../runtime/agentos.js";
@@ -75,6 +75,7 @@ export async function runDaemon(deps: DaemonDeps): Promise<number> {
     const roots = runtimeRootsOf(loadRuntimeConfig(runtimeInput));
     const libpodSocketPath = podmanSocketPath(deps.env);
     const agentosDriver = productionAgentOsDriver(deps.env, stateDir);
+    const driverSocket = deps.env["REALM_DRIVER_SOCKET"];
     const requests = requestLogger(writeStderr, deps.env["REALM_LOG_LEVEL"], requestLogPath(stateDir));
     const entry = entryWriter(deps.writeStderr, stateDir, writeStderr);
     try {
@@ -85,6 +86,11 @@ export async function runDaemon(deps: DaemonDeps): Promise<number> {
         env: deps.env,
         ...(libpodSocketPath === undefined ? {} : { libpodSocketPath }),
         agentosDriver,
+        // The doctor reads the same config file and driver socket the daemon starts with (ONB-03, ONB-04).
+        doctorOptions: {
+          configPath: resolveConfigPath(deps.env),
+          ...(driverSocket === undefined ? {} : { driverSocketPath: driverSocket }),
+        },
         secretRoot: roots.secretRoot,
         sandboxStateRoot: roots.sandboxStateRoot,
         onStartup: (report) => {

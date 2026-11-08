@@ -447,6 +447,30 @@ void test("secretRoot and sandboxStateRoot in config.json are passed to the daem
   assert.equal(started.sandboxStateRoot, sandboxStateRoot);
 });
 
+void test("ONB-04: the daemon's doctor options carry the config path and the driver socket from the entry environment", async (t) => {
+  const dir = tempDir(t);
+  const socket = join(dir, "driver.sock");
+  for (const [env, expectSocket] of [
+    [{ ...writeConfig(dir, validConfig(dir)), REALM_DRIVER_SOCKET: socket }, true],
+    [writeConfig(dir, validConfig(dir)), false],
+  ] as const) {
+    const calls: DaemonStartOptions[] = [];
+    const h = harness(env, {
+      start: (options) => {
+        calls.push(options);
+        return Promise.resolve(startedWith(Promise.resolve()));
+      },
+    });
+    assert.equal(await runDaemon(h.deps), 0);
+    const started = calls[0];
+    assert.ok(started);
+    const doctorOptions = started.doctorOptions;
+    assert.ok(doctorOptions);
+    assert.equal(doctorOptions.configPath, join(dir, "realm", "config.json"));
+    assert.equal(doctorOptions.driverSocketPath, expectSocket ? socket : undefined);
+  }
+});
+
 void test("omitted secret and sandbox roots are derived under stateDir even when the environment variables are empty", async (t) => {
   const dir = tempDir(t);
   const raw = validConfig(dir);
