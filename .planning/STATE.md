@@ -3,17 +3,17 @@ gsd_state_version: "1.0"
 milestone: v3.0
 milestone_name: Containment by Default
 status: planning
-stopped_at: Completed 15-04-PLAN.md
-last_updated: "2026-11-08T15:44:32.115Z"
+stopped_at: Completed 15-05-PLAN.md
+last_updated: "2026-11-08T15:49:22.974Z"
 last_activity: 2026-10-31
 last_activity_desc: actual lifecycle/doctor/C4 evidence reconciled; normalized onboarding docs authored; no checks, commits or phase completion by this worker
-state_head: 93455cb6572f19cdb78aee234691b2b31d742c4a
+state_head: 196f6762dabe0c1b1f909dbe68c51f7fc2822c56
 progress:
   total_phases: 9
   completed_phases: 18
   total_plans: 45
-  completed_plans: 4
-  percent: 9
+  completed_plans: 5
+  percent: 11
 ---
 
 # Project State
@@ -78,6 +78,7 @@ not a fresh instruction to restart discovery, install a runtime or close a phase
 | Phase 15 P02 | 5min | 2 tasks | 1 files |
 | Phase 15 P03 | 10min | 3 tasks | 2 files |
 | Phase 15 P04 | 20min | 3 tasks | 4 files |
+| Phase 15 P05 | 20min | 2 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -116,6 +117,7 @@ Full log lives in PROJECT.md Key Decisions table. Recent decisions affecting cur
 - [Phase 7]: Phase 9 closed on evidence: libpod routes versioned from /_ping Libpod-Api-Version; live daemon on Podman 5.7.1 passes startup reaping; realm status disconnected with reason no workspace; OMP-LIVE-02 refreshed; OMP-LIVE-01/03/04 remain descoped; UI-01 accepted limitation
 - [Phase 15]: D-1503: default-mode guard scan lists verified; wiring and repo-tree tests added (15-02)
 - [Phase ?]: 15-04 D-1504: explicit secretRoot/sandboxStateRoot/workspaceRoot overlap refused lexically at load; describeRuntimeConfigProblems names keys without values
+- [Phase 15]: 15-05 D-1505: allowlist names held in one constant at the top of test/daemon/spawn-env.test.ts; plan 15-06 edits that constant when it removes the gateway names
 
 ### Parked
 
@@ -181,8 +183,8 @@ Detail, by phase: Phase 3 covers RT-01, RT-02, RT-03, RT-09, and the live parts 
 
 ## Session Continuity
 
-Last session: 2026-11-08T15:44:31.982Z
-Stopped at: Completed 15-04-PLAN.md
+Last session: 2026-11-08T15:49:22.868Z
+Stopped at: Completed 15-05-PLAN.md
 Resume file: None
 
 Recorded commits (closure run): 72817e9 (private flag restored, engines >=22.13.0); 390f511 (causeCode and catalogue codes, host paths, lifecycle bound, root identity, exec margin); b6bc892 (daemon entry, AgentOS fail-closed, catalogue refusals, per-method control bounds); 8088159 (daemon owns sessions; tool method; daemon client; Omp and MCP attach); 4b1d4ab (smoke fixes: CLI probe, up and down exits, state-dir 0700); c55056a (traceability: requirements by evidence, spike facts, runtime config, Omp attach contract); a999c17 (audit gap closure: realm acp, refusal code mapping, one state-dir resolver, Omp status, pinned-root rebind, catch-site fixes, daemon server-failure stop); dd02034 (re-audit, planning, and docs); 54bc236 (MCP tool-call diagnostic); plus the decisions commit (see git log).
