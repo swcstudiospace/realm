@@ -4,10 +4,10 @@ milestone: v3.0
 milestone_name: Containment by Default
 status: planning
 stopped_at: Completed 15-09-PLAN.md
-last_updated: "2026-11-08T18:24:56.538Z"
+last_updated: "2026-11-08T18:35:41.944Z"
 last_activity: 2026-10-31
 last_activity_desc: actual lifecycle/doctor/C4 evidence reconciled; normalized onboarding docs authored; no checks, commits or phase completion by this worker
-state_head: a833ecedeaf5647416bccbe1510342d4da10de8b
+state_head: 9cdbe8e6eb44d5b74edeff514292823032d8dde2
 progress:
   total_phases: 9
   completed_phases: 18
@@ -165,6 +165,7 @@ Open follow-ups: the AgentOS sandbox runner in the follow-up milestone (RT-04, C
 | 261108-ovn | Pin the in-place truncation branch of the start-failure reader (Phase 17, OBS-02): a test-only change | 2026-11-08 | b9cd28c | [261108-ovn-pin-the-in-place-truncation-branch-of-th](./quick/261108-ovn-pin-the-in-place-truncation-branch-of-th/) |
 | 261108-nci | Drop actions write from the mutation workflow by cherry-picking 33dd980 (QR-08, D-1308) | 2026-11-08 | 9e2142f | [261108-nci-drop-actions-write-from-the-mutation-wor](./quick/261108-nci-drop-actions-write-from-the-mutation-wor/) |
 | 261108-ncb | Rewrite live scenario 5 to the startup re-adoption behaviour (Phase 14 and 17 live suite) | 2026-11-08 | a833ece | [261108-ncb-rewrite-live-scenario-5-to-the-startup-r](./quick/261108-ncb-rewrite-live-scenario-5-to-the-startup-r/) |
+| 261108-ncc | Live scenarios 5b and 5c and the audit-pair validator (Phase 14 and 17 live suite) | 2026-11-08 | 9cdbe8e | [261108-ncc-live-scenarios-5b-and-5c-and-the-audit-p](./quick/261108-ncc-live-scenarios-5b-and-5c-and-the-audit-p/) |
 
 ## Deferred Items
 
