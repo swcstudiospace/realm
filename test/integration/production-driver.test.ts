@@ -27,7 +27,7 @@
 // Removal scope. The suite creates and removes only the sandboxes of the projects it brings up, each named from its own canonical path, and its own temporary directories. Each
 // scenario builds its own XDG config home with realm/config.json and a policy.json, and runs the CLI through execFile on the
 // current node binary with an explicit environment: PATH, HOME and XDG_RUNTIME_DIR from the test's own environment, the
-// scenario's XDG_CONFIG_HOME, the three driver roots and REALM_DRIVER_SOCKET. Every scenario runs `realm down` in its cleanup, even on failure, and
+// scenario's XDG_CONFIG_HOME and REALM_DRIVER_SOCKET (when the operator's environment names it); the driver roots are written into the scenario's own config.json. Every scenario runs `realm down` in its cleanup, even on failure, and
 // then waits (bounded at 90 s) for zero containers and zero sandboxes of the names it used, no directory of those names under the secret and
 // sandbox-state roots, and an empty pinned workspace. The scenarios share one pinned root, so they run one after another.
 // Files the suite may leave in the pinned workspace are named in WORKSPACE_FILES below; cleanup removes exactly those names.
