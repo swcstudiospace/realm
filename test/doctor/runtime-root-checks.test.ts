@@ -5,13 +5,16 @@ import { mkdtempSync, readFileSync, rmSync, type Stats } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer as createTlsServer, type Server as TlsServer } from "node:tls";
-import { loadRuntimeConfig } from "../../src/runtime/config.js";
+import { loadRuntimeConfig, type RuntimeConfig } from "../../src/runtime/config.js";
+import { channelPathsOf } from "../../src/runtime/driver/channel.js";
+import { secretDirOf } from "../../src/runtime/driver/secret-store.js";
+import { realmSandboxName } from "../../src/runtime/openshell.js";
 import {
   defaultConnectGateway,
   driverSocketCheck,
   gatewayCheck,
   runtimeChecks,
-  runtimeRootsCheck,
+  runtimeRootsCheck as checkRoots,
   type PathReading,
 } from "../../src/doctor/runtime-checks.js";
 
@@ -37,6 +40,26 @@ function socket(mode: number): PathReading {
 
 function statFor(modes: Readonly<Record<string, PathReading>>): (path: string) => PathReading {
   return (path) => modes[path] ?? { state: "absent" };
+}
+
+// The roots check with a realpath that reports every path as already canonical.
+function runtimeRootsCheck(loaded: RuntimeConfig, stat: (path: string) => PathReading, configPath?: string) {
+  return checkRoots(loaded, stat, (path: string) => path, configPath);
+}
+
+// The longest host socket path the roots check measures under a secretRoot, in bytes.
+function longestSocketBytes(secretRoot: string): number {
+  const paths = channelPathsOf(secretDirOf(secretRoot, realmSandboxName("daemon")));
+  return Math.max(Buffer.byteLength(paths.controlSocket, "utf8"), Buffer.byteLength(paths.sshSocket, "utf8"));
+}
+
+// A healthy stat map for config(): the private roots at 0700 and the workspace owned by this account.
+function healthyRoots(): Readonly<Record<string, PathReading>> {
+  return {
+    "/var/lib/realm/secrets": directory(0o40700),
+    "/srv/workspace": directory(0o40755, process.getuid?.()),
+    "/var/lib/realm/sandboxes": directory(0o40700),
+  };
 }
 
 void test("a missing config is a one-item report whose fix names realm init", async () => {
@@ -208,6 +231,98 @@ void test("unusual configured paths never become diagnostic text or executable r
     }
     assert.doesNotMatch(result.fix ?? "", /SHOULD_NOT_RUN|ALSO_NOT_RUN/);
   }
+});
+
+void test("ONB-04: the channel socket path under secretRoot fits 107 bytes exactly and a byte longer is refused", () => {
+  const base = "/srv/x";
+  const fitting = base + "a".repeat(107 - longestSocketBytes(base));
+  assert.equal(longestSocketBytes(fitting), 107);
+  const tooLong = `${fitting}a`;
+  assert.equal(longestSocketBytes(tooLong), 108);
+  for (const [root, status] of [[fitting, "pass"], [tooLong, "fail"]] as const) {
+    const loaded = loadRuntimeConfig({
+      image: IMAGE,
+      stateDir: "/var/lib/realm/state",
+      workspaceRoot: "/srv/workspace",
+      secretRoot: root,
+      sandboxStateRoot: "/var/lib/realm/sandboxes",
+    });
+    const result = runtimeRootsCheck(loaded, statFor({
+      ...healthyRoots(),
+      [root]: directory(0o40700),
+    }));
+    assert.equal(result.status, status);
+    if (status === "fail") {
+      assert.equal(result.detail, "secretRoot is too long for a socket path under session daemon");
+      assert.equal(result.detail.includes(root), false);
+      assert.equal((result.fix ?? "").includes(root), false);
+    }
+  }
+});
+
+void test("ONB-04: a secretRoot or sandboxStateRoot inside the workspace fails as an overlap", () => {
+  const loaded = loadRuntimeConfig({ image: IMAGE, stateDir: "/srv/workspace/state", workspaceRoot: "/srv/workspace" });
+  const result = runtimeRootsCheck(loaded, statFor({
+    "/srv/workspace": directory(0o40755, process.getuid?.()),
+    "/srv/workspace/state/secrets": directory(0o40700),
+    "/srv/workspace/state/sandboxes": directory(0o40700),
+  }));
+  assert.equal(result.status, "fail");
+  assert.match(result.detail, /secretRoot overlaps workspaceRoot/);
+  assert.match(result.detail, /sandboxStateRoot overlaps workspaceRoot/);
+  assert.match(result.detail, /stateDir overlaps workspaceRoot/);
+  assert.equal(result.detail.includes("/srv"), false);
+});
+
+void test("ONB-04: derived roots that overlap each other fail", () => {
+  const loaded = loadRuntimeConfig({ image: IMAGE, stateDir: "/var/lib/realm/state", workspaceRoot: "/srv/workspace", secretRoot: "/var/lib/realm/state/sandboxes/secrets" });
+  const result = runtimeRootsCheck(loaded, statFor({
+    "/srv/workspace": directory(0o40755, process.getuid?.()),
+    "/var/lib/realm/state/sandboxes/secrets": directory(0o40700),
+    "/var/lib/realm/state/sandboxes": directory(0o40700),
+  }));
+  assert.equal(result.status, "fail");
+  assert.match(result.detail, /secretRoot overlaps sandboxStateRoot/);
+});
+
+void test("ONB-04: config.json inside workspaceRoot fails and the detail names no path", () => {
+  const inside = runtimeRootsCheck(config(), statFor(healthyRoots()), "/srv/workspace/.config/realm/config.json");
+  assert.equal(inside.status, "fail");
+  assert.match(inside.detail, /config\.json is inside workspaceRoot/);
+  assert.equal(inside.detail.includes("/srv"), false);
+  assert.equal((inside.fix ?? "").includes("/srv"), false);
+  const prefixSibling = runtimeRootsCheck(config(), statFor(healthyRoots()), "/srv/workspace-old/config.json");
+  assert.equal(prefixSibling.status, "pass");
+  const outside = runtimeRootsCheck(config(), statFor(healthyRoots()), "/home/realm/.config/realm/config.json");
+  assert.equal(outside.status, "pass");
+});
+
+void test("ONB-04: a root that is not canonical fails", () => {
+  const result = checkRoots(config(), statFor(healthyRoots()), (path) => (path === "/var/lib/realm/secrets" ? `${path}/.` : path));
+  assert.equal(result.status, "fail");
+  assert.equal(result.detail, "secretRoot is not canonical");
+  const unreadable = checkRoots(config(), statFor(healthyRoots()), (path) => {
+    if (path === "/srv/workspace") {
+      throw new Error("ELOOP");
+    }
+    return path;
+  });
+  assert.equal(unreadable.status, "fail");
+  assert.equal(unreadable.detail, "workspaceRoot cannot be inspected");
+});
+
+void test("ONB-04: a private root owned by another uid fails", (t) => {
+  const uid = process.getuid?.();
+  if (uid === undefined) {
+    t.skip("this platform has no process uid");
+    return;
+  }
+  const result = runtimeRootsCheck(config(), statFor({
+    ...healthyRoots(),
+    "/var/lib/realm/secrets": directory(0o40700, uid + 1),
+  }));
+  assert.equal(result.status, "fail");
+  assert.equal(result.detail, "secretRoot is not owned by this account");
 });
 
 void test("driver-socket passes when the socket is 0600, its parent is 0700, and it accepts a connection", async () => {

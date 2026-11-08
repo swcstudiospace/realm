@@ -2,13 +2,16 @@
 // A missing or unloadable config is one item with first-time setup guidance. Configured root failures
 // require manual recovery, not reinitialization. This module reads no process environment: the caller hands env in.
 
-import { lstatSync, readFileSync, type Stats } from "node:fs";
+import { lstatSync, readFileSync, realpathSync, type Stats } from "node:fs";
 import { connect as tlsConnect } from "node:tls";
-import { isAbsolute, dirname } from "node:path";
+import { isAbsolute, dirname, relative, sep } from "node:path";
 import { dialWithin } from "../core/timeout.js";
 import { makeRealmError } from "../core/errors.js";
 import type { EnvironmentLike } from "../session/paths.js";
 import { runtimeRootsOf, type RuntimeConfig } from "../runtime/config.js";
+import { assertSocketPathsFit, channelPathsOf } from "../runtime/driver/channel.js";
+import { secretDirOf } from "../runtime/driver/secret-store.js";
+import { realmSandboxName } from "../runtime/openshell.js";
 
 export type RuntimeCheckId = "runtime-roots" | "driver-socket" | "gateway";
 export type RuntimeCheckStatus = "pass" | "warn" | "fail";
@@ -30,6 +33,10 @@ export interface RuntimeCheckOptions {
   readonly config?: RuntimeConfig;
   readonly env: EnvironmentLike;
   readonly stat?: (path: string) => PathReading;
+  // The resolved config.json path. When it lies inside workspaceRoot the sandboxed agent could rewrite it.
+  readonly configPath?: string;
+  // Resolves a root to its canonical path. Defaults to realpathSync.
+  readonly realpath?: (path: string) => string;
   readonly connectGateway?: (endpoint: string, caPath: string, timeoutMs: number) => Promise<void>;
   readonly connectDriver?: (socketPath: string, timeoutMs: number) => Promise<void>;
   readonly probeTimeoutMs?: number;
@@ -59,6 +66,18 @@ const FIX_ROOT_MODE =
   "Inspect ownership and the non-symlink directory and ancestors for the private root named in the detail. Only after confirming this account owns the intended private directory, manually set that directory's mode to 0700, without recursive permission or ownership changes. Do not change workspaceRoot permissions.";
 const FIX_ROOT_MANUAL =
   "Preserve config.json, policy.json and existing data; do not reinitialize. The driver and daemon must select the same physical config.json. realm doctor --fix only creates or tightens stateDir, stateDir/run and stateDir/sessions; it does not repair or provision private roots or the workspace, or change ownership. Rerun realm doctor after manual recovery.";
+const FIX_ROOT_CANONICAL =
+  "Set the root named in the detail to its real directory path in config.json, with no symlinked ancestor, and keep the data where it is.";
+const FIX_ROOT_OWNER =
+  "Check the root named in the detail in the existing config.json and select the intended directory owned by the runtime account. Preserve the current data and mode; do not take ownership of another account's directory.";
+const FIX_ROOT_SOCKET_PATH =
+  "Choose a shorter absolute directory for secretRoot in config.json so that the channel socket paths stay within 107 bytes. Do not move existing data until the sandboxes that use it are stopped.";
+const FIX_ROOT_OVERLAP =
+  "Set secretRoot, sandboxStateRoot and workspaceRoot in config.json to apart directories, and keep stateDir outside workspaceRoot. The driver refuses overlapping roots, so the realm cannot start until they are apart.";
+const FIX_CONFIG_IN_WORKSPACE =
+  "Move config.json out of the workspace root, updating XDG_CONFIG_HOME or the unit, because a sandboxed agent that can write config.json can rewrite the image and the roots.";
+// The sandbox session the socket-path check measures. The path length grows with the name, so a fixed short name keeps the check stable.
+const SOCKET_PATH_SESSION = "daemon";
 
 function fail(id: RuntimeCheckId, detail: string, fix: string): RuntimeCheckResult {
   return { id, status: "fail", detail, fix };
@@ -138,8 +157,14 @@ interface RootFinding {
 }
 
 // The condition a root is in, or undefined when it passes. The checks run in this order, and the first that holds is reported:
-// unset, relative, then what the path is on disk. A detail names a root key, a mode or a rule, never a path value.
-function rootFinding(key: DriverRootKey, path: string, stat: (path: string) => PathReading): RootFinding | undefined {
+// unset, relative, then what the path is on disk, whether it is canonical, who owns it, and its mode.
+// A detail names a root key, a mode or a rule, never a path value.
+function rootFinding(
+  key: DriverRootKey,
+  path: string,
+  stat: (path: string) => PathReading,
+  realpath: (path: string) => string,
+): RootFinding | undefined {
   // The empty and the missing are both unset. A config built without the loader can carry any value in a root.
   if (typeof path !== "string" || path.trim() === "") {
     return { severity: "fail", detail: `${key} is unset`, fix: FIX_ROOT_UNSET };
@@ -160,11 +185,21 @@ function rootFinding(key: DriverRootKey, path: string, stat: (path: string) => P
   if (!found.stats.isDirectory()) {
     return { severity: "fail", detail: `${key} is not a directory`, fix: FIX_ROOT_TYPE };
   }
+  // The driver refuses a root that is not its own canonical path, so a symlinked ancestor is a finding here too.
+  let canonical: string;
+  try {
+    canonical = realpath(path);
+  } catch {
+    return { severity: "fail", detail: `${key} cannot be inspected`, fix: FIX_ROOT_UNREADABLE };
+  }
+  if (canonical !== path) {
+    return { severity: "fail", detail: `${key} is not canonical`, fix: FIX_ROOT_CANONICAL };
+  }
+  const uid = process.getuid?.();
+  if (uid !== undefined && typeof found.stats.uid === "number" && found.stats.uid !== uid) {
+    return { severity: "fail", detail: `${key} is not owned by this account`, fix: key === "workspaceRoot" ? FIX_WORKSPACE_OWNER : FIX_ROOT_OWNER };
+  }
   if (key === "workspaceRoot") {
-    const uid = process.getuid?.();
-    if (uid !== undefined && typeof found.stats.uid === "number" && found.stats.uid !== uid) {
-      return { severity: "fail", detail: "workspaceRoot is not owned by this account", fix: FIX_WORKSPACE_OWNER };
-    }
     return undefined;
   }
   const mode = found.stats.mode & PERMISSION_BITS;
@@ -172,6 +207,59 @@ function rootFinding(key: DriverRootKey, path: string, stat: (path: string) => P
     return { severity: "fail", detail: `${key} mode is 0${octal(mode)}, expected 0700`, fix: FIX_ROOT_MODE };
   }
   return undefined;
+}
+
+// Lexical only, no filesystem access: true when the two paths are equal or one lies inside the other. This repeats the loader's
+// rule in src/runtime/config.ts (rootsOverlap), which is not exported. A prefix sibling such as /srv/secrets-old against
+// /srv/secrets is not overlap.
+function rootsOverlap(a: string, b: string): boolean {
+  return isSameOrInside(relative(a, b)) || isSameOrInside(relative(b, a));
+}
+
+function isSameOrInside(relativePath: string): boolean {
+  return relativePath === "" || (relativePath !== ".." && !relativePath.startsWith(`..${sep}`) && !isAbsolute(relativePath));
+}
+
+// True when inner equals outer or lies inside it.
+function isInside(outer: string, inner: string): boolean {
+  return isSameOrInside(relative(outer, inner));
+}
+
+function isAbsolutePath(value: unknown): value is string {
+  return typeof value === "string" && isAbsolute(value);
+}
+
+// The layout conditions of the effective roots. The loader refuses explicit overlap only; a derived default can still sit inside the
+// workspace, and a config.json inside the workspace could be rewritten by the sandboxed agent.
+function layoutFindings(config: RuntimeConfig, configPath: string | undefined): readonly RootFinding[] {
+  const roots = runtimeRootsOf(config);
+  const findings: RootFinding[] = [];
+  if (isAbsolutePath(roots.secretRoot)) {
+    try {
+      const paths = channelPathsOf(secretDirOf(roots.secretRoot, realmSandboxName(SOCKET_PATH_SESSION)));
+      assertSocketPathsFit([paths.controlSocket, paths.sshSocket]);
+    } catch {
+      findings.push({ severity: "fail", detail: `secretRoot is too long for a socket path under session ${SOCKET_PATH_SESSION}`, fix: FIX_ROOT_SOCKET_PATH });
+    }
+  }
+  const { secretRoot, sandboxStateRoot, workspaceRoot } = roots;
+  if (isAbsolutePath(secretRoot) && isAbsolutePath(sandboxStateRoot) && rootsOverlap(secretRoot, sandboxStateRoot)) {
+    findings.push({ severity: "fail", detail: "secretRoot overlaps sandboxStateRoot", fix: FIX_ROOT_OVERLAP });
+  }
+  if (isAbsolutePath(workspaceRoot)) {
+    for (const [key, root] of [["secretRoot", secretRoot], ["sandboxStateRoot", sandboxStateRoot]] as const) {
+      if (isAbsolutePath(root) && rootsOverlap(root, workspaceRoot)) {
+        findings.push({ severity: "fail", detail: `${key} overlaps workspaceRoot`, fix: FIX_ROOT_OVERLAP });
+      }
+    }
+    if (isAbsolutePath(roots.stateDir) && isInside(workspaceRoot, roots.stateDir)) {
+      findings.push({ severity: "fail", detail: "stateDir overlaps workspaceRoot", fix: FIX_ROOT_OVERLAP });
+    }
+    if (configPath !== undefined && isAbsolutePath(configPath) && isInside(workspaceRoot, configPath)) {
+      findings.push({ severity: "fail", detail: "config.json is inside workspaceRoot", fix: FIX_CONFIG_IN_WORKSPACE });
+    }
+  }
+  return findings;
 }
 
 // A private root that config.json omits takes its default under stateDir. That is a warning only when the root has no condition of
@@ -183,14 +271,21 @@ function omittedFinding(key: DriverRootKey, config: RuntimeConfig): RootFinding 
   return { severity: "warn", detail: `${key} not named in config.json; the default under stateDir is in effect`, fix: FIX_ROOT_UNSET };
 }
 
-// One runtime-roots item for the three roots. Each root contributes at most one finding. Any fail makes the item fail; otherwise an
-// omitted private root makes it warn; otherwise it passes with the detail the item has always reported.
-export function runtimeRootsCheck(config: RuntimeConfig, stat: (path: string) => PathReading): RuntimeCheckResult {
+// One runtime-roots item for the three roots. Each root contributes at most one finding, and the layout findings follow. Any fail
+// makes the item fail; otherwise an omitted private root makes it warn; otherwise it passes with the detail the item has always
+// reported.
+export function runtimeRootsCheck(
+  config: RuntimeConfig,
+  stat: (path: string) => PathReading,
+  realpath: (path: string) => string,
+  configPath?: string,
+): RuntimeCheckResult {
   const roots = runtimeRootsOf(config);
-  const findings = DRIVER_ROOT_KEYS.flatMap((key) => {
-    const finding = rootFinding(key, roots[key], stat) ?? omittedFinding(key, config);
+  const rootFindings = DRIVER_ROOT_KEYS.flatMap((key) => {
+    const finding = rootFinding(key, roots[key], stat, realpath) ?? omittedFinding(key, config);
     return finding === undefined ? [] : [finding];
   });
+  const findings = [...rootFindings, ...layoutFindings(config, configPath)];
   if (findings.length === 0) {
     return pass("runtime-roots", "secretRoot and sandboxStateRoot are absolute directories at mode 0700; workspaceRoot is an account-owned directory");
   }
@@ -286,7 +381,7 @@ export async function runtimeChecks(options: RuntimeCheckOptions): Promise<reado
   const stat = options.stat ?? defaultStat;
   const timeoutMs = options.probeTimeoutMs ?? 5000;
   return [
-    runtimeRootsCheck(options.config, stat),
+    runtimeRootsCheck(options.config, stat, options.realpath ?? realpathSync, options.configPath),
     await driverSocketCheck(options.env, stat, options.connectDriver ?? defaultConnectDriver, timeoutMs),
     await gatewayCheck(options.env, options.connectGateway ?? defaultConnectGateway, timeoutMs),
   ];
