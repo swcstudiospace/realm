@@ -3,7 +3,7 @@
 
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { appendFileSync, mkdtempSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdtempSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { RealmError } from "../../src/core/errors.js";
@@ -12,6 +12,7 @@ import {
   daemonLogPath,
   daemonLogSize,
   daemonStartFailureSince,
+  type DaemonLogMark,
   reportingStartFailure,
 } from "../../src/daemon/ensure.js";
 
@@ -30,6 +31,18 @@ function failed(code: string): string {
 function rotate(stateDir: string, replacement: string): void {
   renameSync(daemonLogPath(stateDir), `${daemonLogPath(stateDir)}.1`);
   writeFileSync(daemonLogPath(stateDir), replacement);
+}
+
+// One startup record of the kind the daemon writes before it serves: 42 bytes, and not a failure.
+const NON_FAILURE_LINE = `${JSON.stringify({ level: "info", event: "daemon.started" })}\n`;
+
+// Writes the startup log and marks its end, then rewrites the SAME path in place. writeFileSync opens the existing file with
+// truncation, so the inode is kept and the replacement is shorter than the mark: only the size rule can decide it.
+function truncateInPlaceAfterMark(stateDir: string): DaemonLogMark {
+  writeFileSync(daemonLogPath(stateDir), NON_FAILURE_LINE.repeat(7));
+  const mark = daemonLogMark(stateDir);
+  writeFileSync(daemonLogPath(stateDir), `startup output after truncation, before the failure\n${failed("POLICY_DENIED")}`);
+  return mark;
 }
 
 void test("a failure line appended after an offset is returned as its code", (t) => {
@@ -176,4 +189,23 @@ void test("a LOCK_CONFLICT line in a replacement log is not a start failure", (t
   const mark = daemonLogMark(stateDir);
   rotate(stateDir, failed("LOCK_CONFLICT"));
   assert.equal(daemonStartFailureSince(stateDir, mark.offset, mark.identity), undefined);
+});
+
+void test("OBS-02: a log truncated in place keeps its inode and is read from byte 0 when it shrank below the mark", (t) => {
+  const stateDir = scratchStateDir(t);
+  const mark = truncateInPlaceAfterMark(stateDir);
+  const { identity } = mark;
+  assert.ok(identity !== undefined, "the mark records the startup log's identity");
+  const after = statSync(daemonLogPath(stateDir), { bigint: true });
+  assert.equal(after.dev, identity.dev, "the rewrite kept the device, so it is not a rotation");
+  assert.equal(after.ino, identity.ino, "the rewrite kept the inode, so it is not a rotation");
+  assert.ok(daemonLogSize(stateDir) < mark.offset, "the replacement is shorter than the mark, so the size rule is the deciding term");
+  assert.equal(daemonStartFailureSince(stateDir, mark.offset, identity), "POLICY_DENIED");
+});
+
+void test("OBS-02: the two-argument reader also reads an in-place truncated log from byte 0", (t) => {
+  const stateDir = scratchStateDir(t);
+  const mark = truncateInPlaceAfterMark(stateDir);
+  assert.ok(daemonLogSize(stateDir) < mark.offset, "the replacement is shorter than the mark, so the size rule is the deciding term");
+  assert.equal(daemonStartFailureSince(stateDir, mark.offset), "POLICY_DENIED");
 });
