@@ -23,6 +23,7 @@ import {
   encodeMemo,
   loadAnchorKey,
   merkleRoot,
+  merkleRootOfLeaves,
   publishAnchor,
   type AnchorRecord,
   type AnchorRpc,
@@ -78,6 +79,9 @@ const A = encoder.encode("alpha");
 const B = encoder.encode("bravo");
 const C = encoder.encode("charlie");
 const D = encoder.encode("delta");
+const E = encoder.encode("echo");
+const F = encoder.encode("foxtrot");
+const G = encoder.encode("golf");
 
 const SAMPLE_ROOT = hex(node(node(leaf(A), leaf(B)), leaf(C)));
 const SAMPLE_RECORD: AnchorRecord = {
@@ -277,6 +281,58 @@ void test("merkleRoot changes when one line changes, and is stable for the same 
   const original = hex(merkleRoot([A, B, C]));
   assert.equal(hex(merkleRoot([A, B, C])), original);
   assert.notEqual(hex(merkleRoot([A, encoder.encode("bravO"), C])), original);
+});
+
+// merkleRootOfLeaves: the fold over leaf hashes. Every expected root is built here from leaf() and node() with node:crypto.
+
+void test("merkleRootOfLeaves refuses an empty leaf list (H1 Merkle)", () => {
+  assert.equal(thrownAnchorError(() => merkleRootOfLeaves([])).code, "SCHEMA_INVALID");
+});
+
+void test("merkleRootOfLeaves of one leaf returns that leaf unchanged (H1 Merkle)", () => {
+  assert.equal(hex(merkleRootOfLeaves([leaf(A)])), hex(leaf(A)));
+});
+
+void test("merkleRootOfLeaves of two leaves is one parent node (H1 Merkle)", () => {
+  assert.equal(hex(merkleRootOfLeaves([leaf(A), leaf(B)])), hex(node(leaf(A), leaf(B))));
+});
+
+void test("merkleRootOfLeaves of three leaves promotes the third unchanged and never duplicates it (H1 Merkle)", () => {
+  const root = merkleRootOfLeaves([leaf(A), leaf(B), leaf(C)]);
+  assert.equal(hex(root), hex(node(node(leaf(A), leaf(B)), leaf(C))));
+  assert.notEqual(hex(root), hex(node(node(leaf(A), leaf(B)), node(leaf(C), leaf(C)))));
+});
+
+void test("merkleRootOfLeaves of four leaves pairs each level from the left (H1 Merkle)", () => {
+  assert.equal(
+    hex(merkleRootOfLeaves([leaf(A), leaf(B), leaf(C), leaf(D)])),
+    hex(node(node(leaf(A), leaf(B)), node(leaf(C), leaf(D)))),
+  );
+});
+
+void test("merkleRootOfLeaves of five leaves promotes the fifth leaf through two levels and never duplicates it (H1 Merkle)", () => {
+  const root = merkleRootOfLeaves([leaf(A), leaf(B), leaf(C), leaf(D), leaf(E)]);
+  const left = node(node(leaf(A), leaf(B)), node(leaf(C), leaf(D)));
+  assert.equal(hex(root), hex(node(left, leaf(E))));
+  assert.notEqual(hex(root), hex(node(left, node(leaf(E), leaf(E)))));
+});
+
+void test("merkleRootOfLeaves of six leaves pairs the last two at the first level (H1 Merkle)", () => {
+  const left = node(node(leaf(A), leaf(B)), node(leaf(C), leaf(D)));
+  assert.equal(hex(merkleRootOfLeaves([A, B, C, D, E, F].map((line) => leaf(line)))), hex(node(left, node(leaf(E), leaf(F)))));
+});
+
+void test("merkleRootOfLeaves of seven leaves promotes the seventh at the first level and pairs it at the second (H1 Merkle)", () => {
+  const left = node(node(leaf(A), leaf(B)), node(leaf(C), leaf(D)));
+  const root = merkleRootOfLeaves([A, B, C, D, E, F, G].map((line) => leaf(line)));
+  const expected = node(left, node(node(leaf(E), leaf(F)), leaf(G)));
+  assert.equal(hex(root), hex(expected));
+  assert.notEqual(hex(root), hex(node(left, node(node(leaf(E), leaf(F)), node(leaf(G), leaf(G))))));
+});
+
+void test("merkleRoot of lines equals merkleRootOfLeaves of their leaf hashes for three and five lines (H1 Merkle)", () => {
+  assert.equal(hex(merkleRoot([A, B, C])), hex(merkleRootOfLeaves([leaf(A), leaf(B), leaf(C)])));
+  assert.equal(hex(merkleRoot([A, B, C, D, E])), hex(merkleRootOfLeaves([A, B, C, D, E].map((line) => leaf(line)))));
 });
 
 void test("buildAnchorRecord fills version, session, line count, root and an ISO-8601 UTC time (H1 record)", () => {

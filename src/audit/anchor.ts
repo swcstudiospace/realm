@@ -95,9 +95,10 @@ function parentLevel(level: readonly Uint8Array[]): Uint8Array[] {
   return next;
 }
 
-// Folds leaf hashes into the Merkle root. Each level pairs from the left, and an unpaired node is promoted unchanged.
-// Empty input is an error.
-function merkleRootOfLeaves(leaves: readonly Uint8Array[]): Uint8Array {
+// Folds leaf hashes into the Merkle root. Each leaf is already SHA-256(0x00 || line). Each level pairs from the left with
+// parent = SHA-256(0x01 || left || right); an unpaired node is promoted unchanged, never duplicated. Empty input throws
+// AnchorError with code SCHEMA_INVALID. merkleRoot is the entry point for audit lines.
+export function merkleRootOfLeaves(leaves: readonly Uint8Array[]): Uint8Array {
   if (leaves.length === 0) {
     throw new AnchorError("cannot anchor an empty audit log", "SCHEMA_INVALID");
   }
