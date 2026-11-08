@@ -3,17 +3,17 @@ gsd_state_version: "1.0"
 milestone: v3.0
 milestone_name: Containment by Default
 status: planning
-stopped_at: Completed 15-03-PLAN.md
-last_updated: "2026-11-08T15:39:58.981Z"
+stopped_at: Completed 15-04-PLAN.md
+last_updated: "2026-11-08T15:44:32.115Z"
 last_activity: 2026-10-31
 last_activity_desc: actual lifecycle/doctor/C4 evidence reconciled; normalized onboarding docs authored; no checks, commits or phase completion by this worker
-state_head: 0643ad34562a9e9d66dd248ea9d6b35ae0762d9d
+state_head: 93455cb6572f19cdb78aee234691b2b31d742c4a
 progress:
   total_phases: 9
   completed_phases: 18
   total_plans: 45
-  completed_plans: 3
-  percent: 7
+  completed_plans: 4
+  percent: 9
 ---
 
 # Project State
@@ -77,6 +77,7 @@ not a fresh instruction to restart discovery, install a runtime or close a phase
 | Phase 15 P01 | 15min | 4 tasks | 3 files |
 | Phase 15 P02 | 5min | 2 tasks | 1 files |
 | Phase 15 P03 | 10min | 3 tasks | 2 files |
+| Phase 15 P04 | 20min | 3 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -114,6 +115,7 @@ Full log lives in PROJECT.md Key Decisions table. Recent decisions affecting cur
 - [Phase Run start]: Ultrathink run for graph ut-mvlt86oy-3817dec5 on the v2.0 milestone: phases 9 to 11 outstanding; phase 8 complete on evidence. Defaults applied: unclear TODOs stay UNSCHEDULED; an AWAITING_USER phase holds later phases in its milestone unless ROADMAP documents independence; per-phase local commits, nothing pushed; accepted decisions recorded in STATE carry forward; the quality bar applies to produced code only; the full verification set runs at each phase exit and is diffed against the recorded baseline. Clarifications q1 to q4 are non-blocking and take their recommended defaults: bar for produced code, large TODOs left open, repository sources only, ask before upgrading. The planning pass's n7 wave plan is fallback content and unverified, so the wave plan is written from n1 to n6. Ship is not invoked: the owner's hold of 2026-10-24 stands, and the spec's own OUT_OF_SCOPE list excludes pull requests. — Start-of-run assumptions from the planning spec, recorded so later steps cite them rather than re-decide them.
 - [Phase 7]: Phase 9 closed on evidence: libpod routes versioned from /_ping Libpod-Api-Version; live daemon on Podman 5.7.1 passes startup reaping; realm status disconnected with reason no workspace; OMP-LIVE-02 refreshed; OMP-LIVE-01/03/04 remain descoped; UI-01 accepted limitation
 - [Phase 15]: D-1503: default-mode guard scan lists verified; wiring and repo-tree tests added (15-02)
+- [Phase ?]: 15-04 D-1504: explicit secretRoot/sandboxStateRoot/workspaceRoot overlap refused lexically at load; describeRuntimeConfigProblems names keys without values
 
 ### Parked
 
@@ -179,8 +181,8 @@ Detail, by phase: Phase 3 covers RT-01, RT-02, RT-03, RT-09, and the live parts 
 
 ## Session Continuity
 
-Last session: 2026-11-08T15:39:58.870Z
-Stopped at: Completed 15-03-PLAN.md
+Last session: 2026-11-08T15:44:31.982Z
+Stopped at: Completed 15-04-PLAN.md
 Resume file: None
 
 Recorded commits (closure run): 72817e9 (private flag restored, engines >=22.13.0); 390f511 (causeCode and catalogue codes, host paths, lifecycle bound, root identity, exec margin); b6bc892 (daemon entry, AgentOS fail-closed, catalogue refusals, per-method control bounds); 8088159 (daemon owns sessions; tool method; daemon client; Omp and MCP attach); 4b1d4ab (smoke fixes: CLI probe, up and down exits, state-dir 0700); c55056a (traceability: requirements by evidence, spike facts, runtime config, Omp attach contract); a999c17 (audit gap closure: realm acp, refusal code mapping, one state-dir resolver, Omp status, pinned-root rebind, catch-site fixes, daemon server-failure stop); dd02034 (re-audit, planning, and docs); 54bc236 (MCP tool-call diagnostic); plus the decisions commit (see git log).
