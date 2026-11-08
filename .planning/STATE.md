@@ -4,13 +4,13 @@ milestone: v3.0
 milestone_name: Containment by Default
 status: planning
 stopped_at: Completed 15-09-PLAN.md
-last_updated: "2026-11-08T19:14:33.000Z"
+last_updated: "2026-11-08T19:20:25.522Z"
 last_activity: 2026-10-31
 last_activity_desc: actual lifecycle/doctor/C4 evidence reconciled; normalized onboarding docs authored; no checks, commits or phase completion by this worker
-state_head: 131b4a9be2b83278b1fa4dd082c7d0738c9e94e2
+state_head: 09ec888507595da3ed60e506c45255153444558a
 progress:
   total_phases: 9
-  completed_phases: 18
+  completed_phases: 0
   total_plans: 45
   completed_plans: 9
   percent: 20
@@ -167,7 +167,9 @@ Open follow-ups: the AgentOS sandbox runner in the follow-up milestone (RT-04, C
 | 261108-ncb | Rewrite live scenario 5 to the startup re-adoption behaviour (Phase 14 and 17 live suite) | 2026-11-08 | a833ece | [261108-ncb-rewrite-live-scenario-5-to-the-startup-r](./quick/261108-ncb-rewrite-live-scenario-5-to-the-startup-r/) |
 | 261108-ncc | Live scenarios 5b and 5c and the audit-pair validator (Phase 14 and 17 live suite) | 2026-11-08 | 9cdbe8e | [261108-ncc-live-scenarios-5b-and-5c-and-the-audit-p](./quick/261108-ncc-live-scenarios-5b-and-5c-and-the-audit-p/) |
 | 261108-qkn | Fix gateway live scenario metrics workspace selection and stale log rotation comment | 2026-11-08 | e9e0c39 | [261108-qkn-fix-gateway-live-scenario-metrics-worksp](./quick/261108-qkn-fix-gateway-live-scenario-metrics-worksp/) |
-| 261108-q1v | Fix three live-suite test defects found by the first non-gateway window: scenario 5 marker cleanup, scenario 5b audited write before the stop, scenario 6 metrics with the workspace argument | 2026-11-08 | 131b4a9 | [261108-q1v-fix-three-live-suite-test-defects-found-](./quick/261108-q1v-fix-three-live-suite-test-defects-found-/) |
+| 261108-q1v | Fix three live-suite test defects found by the first non-gateway window: scenario 5 marker cleanup, scenario 5b audited write before the stop, scenario 6 metrics with the workspace argument | 2026-11-08 | a8cee97 | [261108-q1v-fix-three-live-suite-test-defects-found-](./quick/261108-q1v-fix-three-live-suite-test-defects-found-/) |
+| 261108-puz | Reconcile v3.0 planning records with integration evidence | 2026-11-08 | pending orchestrator records commit | [261108-puz-reconcile-the-v3-0-planning-records-with](./quick/261108-puz-reconcile-the-v3-0-planning-records-with/) |
+| 261108-puz | Reconcile the v3.0 planning records with the integration line: stale STATE progress, REQUIREMENTS checkboxes, phase 13, 14, 17, 18, 19 and 20 verification and held-owner notes, scenario counts in AGENTS.md, README.md and openshell.md, and the live window results | 2026-11-08 | 09ec888 | [261108-puz-reconcile-the-v3-0-planning-records-with](./quick/261108-puz-reconcile-the-v3-0-planning-records-with/) |
 
 ## Deferred Items
 
