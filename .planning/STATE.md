@@ -3,17 +3,17 @@ gsd_state_version: "1.0"
 milestone: v3.0
 milestone_name: Containment by Default
 status: planning
-stopped_at: Completed 15-01-PLAN.md
-last_updated: "2026-11-08T15:35:18.980Z"
+stopped_at: Completed 15-02-PLAN.md
+last_updated: "2026-11-08T15:36:46.328Z"
 last_activity: 2026-10-31
 last_activity_desc: actual lifecycle/doctor/C4 evidence reconciled; normalized onboarding docs authored; no checks, commits or phase completion by this worker
-state_head: 6afaade08e631163012a603038c423be4627d4cb
+state_head: 092844d7265118f1711a63a7cf717ffc219403de
 progress:
   total_phases: 9
   completed_phases: 0
   total_plans: 45
-  completed_plans: 1
-  percent: 2
+  completed_plans: 2
+  percent: 4
 ---
 
 # Project State
@@ -75,6 +75,7 @@ not a fresh instruction to restart discovery, install a runtime or close a phase
 | Plan | Duration | Tasks | Files |
 |------|----------|-------|-------|
 | Phase 15 P01 | 15min | 4 tasks | 3 files |
+| Phase 15 P02 | 5min | 2 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -111,6 +112,7 @@ Full log lives in PROJECT.md Key Decisions table. Recent decisions affecting cur
 - [Phase Phase 9 checkpoint]: Phase 9 libpod fix, in progress under the owner's accepted expansion. Verified on Podman 5.7.1: GET /_ping returns 200 with a Libpod-Api-Version header; a missing container returns 404 with a JSON body whose cause is 'no such container' (inspect and remove); an unknown route returns 404 with plain text 'Not Found'; the versioned paths return 200. Remaining steps, in order: (1) libpod-routes: matchLibpodRoute accepts only a /v<semver> prefix, and routeTarget takes the API version; (2) libpod-client: discover the version from /_ping and validate it, otherwise fail with SCHEMA_INVALID; cache it per client and prefix every route; exchange returns headers; inspect and remove accept a 404 only when the JSON cause is 'no such container'; (3) test/support/fake-libpod: answer /_ping with the version header, and give the 404 body its cause and response fields; (4) new unit tests for versioning, the plain 404 failing closed, and the cause 404 accepted; (5) typecheck, lint, unit tests, and build, all green before any further step; (6) rebuild the dedicated user's copy and rerun the daemon, expecting the reaper to pass; (7) record phase 9 evidence, then start phase 10. No source edits were made in this checkpoint. — Resume plan for the libpod fix (see the phase 9 decision in STATE for the verified facts and the ordered steps).
 - [Phase Run start]: Ultrathink run for graph ut-mvlt86oy-3817dec5 on the v2.0 milestone: phases 9 to 11 outstanding; phase 8 complete on evidence. Defaults applied: unclear TODOs stay UNSCHEDULED; an AWAITING_USER phase holds later phases in its milestone unless ROADMAP documents independence; per-phase local commits, nothing pushed; accepted decisions recorded in STATE carry forward; the quality bar applies to produced code only; the full verification set runs at each phase exit and is diffed against the recorded baseline. Clarifications q1 to q4 are non-blocking and take their recommended defaults: bar for produced code, large TODOs left open, repository sources only, ask before upgrading. The planning pass's n7 wave plan is fallback content and unverified, so the wave plan is written from n1 to n6. Ship is not invoked: the owner's hold of 2026-10-24 stands, and the spec's own OUT_OF_SCOPE list excludes pull requests. — Start-of-run assumptions from the planning spec, recorded so later steps cite them rather than re-decide them.
 - [Phase 7]: Phase 9 closed on evidence: libpod routes versioned from /_ping Libpod-Api-Version; live daemon on Podman 5.7.1 passes startup reaping; realm status disconnected with reason no workspace; OMP-LIVE-02 refreshed; OMP-LIVE-01/03/04 remain descoped; UI-01 accepted limitation
+- [Phase 15]: D-1503: default-mode guard scan lists verified; wiring and repo-tree tests added (15-02)
 
 ### Parked
 
@@ -176,8 +178,8 @@ Detail, by phase: Phase 3 covers RT-01, RT-02, RT-03, RT-09, and the live parts 
 
 ## Session Continuity
 
-Last session: 2026-11-08T15:35:18.868Z
-Stopped at: Completed 15-01-PLAN.md
+Last session: 2026-11-08T15:36:46.226Z
+Stopped at: Completed 15-02-PLAN.md
 Resume file: None
 
 Recorded commits (closure run): 72817e9 (private flag restored, engines >=22.13.0); 390f511 (causeCode and catalogue codes, host paths, lifecycle bound, root identity, exec margin); b6bc892 (daemon entry, AgentOS fail-closed, catalogue refusals, per-method control bounds); 8088159 (daemon owns sessions; tool method; daemon client; Omp and MCP attach); 4b1d4ab (smoke fixes: CLI probe, up and down exits, state-dir 0700); c55056a (traceability: requirements by evidence, spike facts, runtime config, Omp attach contract); a999c17 (audit gap closure: realm acp, refusal code mapping, one state-dir resolver, Omp status, pinned-root rebind, catch-site fixes, daemon server-failure stop); dd02034 (re-audit, planning, and docs); 54bc236 (MCP tool-call diagnostic); plus the decisions commit (see git log).
