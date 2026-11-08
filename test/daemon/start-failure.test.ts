@@ -3,11 +3,12 @@
 
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { appendFileSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdtempSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { RealmError } from "../../src/core/errors.js";
 import {
+  daemonLogMark,
   daemonLogPath,
   daemonLogSize,
   daemonStartFailureSince,
@@ -24,6 +25,11 @@ function scratchStateDir(t: TestContext): string {
 
 function failed(code: string): string {
   return `${JSON.stringify({ level: "error", event: "daemon.failed", code })}\n`;
+}
+
+function rotate(stateDir: string, replacement: string): void {
+  renameSync(daemonLogPath(stateDir), `${daemonLogPath(stateDir)}.1`);
+  writeFileSync(daemonLogPath(stateDir), replacement);
 }
 
 void test("a failure line appended after an offset is returned as its code", (t) => {
@@ -123,4 +129,51 @@ void test("a host that waits for a live daemon keeps waiting when another host's
   // The other host spawned a second daemon over the first, and the second refused and exited.
   appendFileSync(daemonLogPath(stateDir), failed("LOCK_CONFLICT"));
   assert.equal(await probe("/state/run/control.sock"), "starting", "the original daemon is still starting, so the wait goes on");
+});
+
+void test("a failure line appended to a replacement log after rotation is returned", (t) => {
+  const stateDir = scratchStateDir(t);
+  writeFileSync(daemonLogPath(stateDir), "earlier startup output that the replacement is shorter than\n");
+  const mark = daemonLogMark(stateDir);
+  rotate(stateDir, "short\n");
+  appendFileSync(daemonLogPath(stateDir), failed("POLICY_DENIED"));
+  assert.equal(daemonStartFailureSince(stateDir, mark.offset, mark.identity), "POLICY_DENIED");
+});
+
+void test("a failure line near the start of a replacement longer than the old offset is read from its first byte", (t) => {
+  const stateDir = scratchStateDir(t);
+  writeFileSync(daemonLogPath(stateDir), "earlier startup output\n");
+  const mark = daemonLogMark(stateDir);
+  rotate(stateDir, `${failed("POLICY_DENIED")}${"filler line, longer than the old offset\n".repeat(4)}`);
+  assert.equal(daemonStartFailureSince(stateDir, mark.offset, mark.identity), "POLICY_DENIED");
+});
+
+void test("the wrapper rejects with the daemon's code when the log rotates after the first miss", async (t) => {
+  const stateDir = scratchStateDir(t);
+  writeFileSync(daemonLogPath(stateDir), "earlier startup output, longer than the replacement\n");
+  const probe = reportingStartFailure(() => Promise.resolve("absent"), stateDir);
+  assert.equal(await probe("/state/run/control.sock"), "absent");
+  rotate(stateDir, "short\n");
+  appendFileSync(daemonLogPath(stateDir), failed("POLICY_DENIED"));
+  await assert.rejects(
+    probe("/state/run/control.sock"),
+    (error: unknown) => error instanceof RealmError && error.code === "POLICY_DENIED",
+  );
+});
+
+void test("a failure line written before the mark stays ignored when the log rotates to a replacement with no failure line", (t) => {
+  const stateDir = scratchStateDir(t);
+  writeFileSync(daemonLogPath(stateDir), failed("POLICY_DENIED"));
+  const mark = daemonLogMark(stateDir);
+  assert.equal(daemonStartFailureSince(stateDir, mark.offset, mark.identity), undefined);
+  rotate(stateDir, "startup output with no failure line\n".repeat(4));
+  assert.equal(daemonStartFailureSince(stateDir, mark.offset, mark.identity), undefined);
+});
+
+void test("a LOCK_CONFLICT line in a replacement log is not a start failure", (t) => {
+  const stateDir = scratchStateDir(t);
+  writeFileSync(daemonLogPath(stateDir), "earlier startup output\n");
+  const mark = daemonLogMark(stateDir);
+  rotate(stateDir, failed("LOCK_CONFLICT"));
+  assert.equal(daemonStartFailureSince(stateDir, mark.offset, mark.identity), undefined);
 });
