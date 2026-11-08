@@ -71,7 +71,17 @@ The runtime-config section, the doctor-item rules and the driver-roots cutover n
 **3. [Plan text vs tree] The one-item report fix**
 - The plan said the fix "names `realm init`". The source's fix reads as first-time setup with `realm init` when neither file exists, and repair of the existing config otherwise. The doc states that.
 
-**Total deviations:** 3, none beyond the plan's intent.
+**4. [Plan vs code] Driver-restart reap claim corrected after orchestrator verification**
+- Plan step (f) asked for the bullet "A driver restart reaps every realm container". That came from research that predates decision D19-5; it is false. Fixed in 8d4d9c0.
+
+**Total deviations:** 4, one a plan-vs-code correction.
+
+## Corrections after orchestrator verification
+
+- False: the last bullet of `### Driver roots in config.json (phase 15)` in docs/integration/openshell.md said a driver restart reaps every realm container of the account.
+- Why: plan step (f) copied it from 15-RESEARCH.md, which predates D19-5. The driver start no longer sweeps; `DriverLifecycle.adoptSurvivors` keeps conforming containers and removes the rest with their secrets and scratch volumes.
+- Fix: commit 8d4d9c0 replaced the bullet, citing D19-5 and `adoptSurvivors`. A grep of openshell.md, host-binaries.md, policy-reference.md and AGENTS.md found no other sentence claiming a restart reaps all containers; the remaining sweep and reaper mentions describe the daemon-side startup reaper and dated evidence.
+- `npm run check:docs` after the fix: exit 0.
 
 ## Issues Encountered
 
