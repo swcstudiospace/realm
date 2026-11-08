@@ -302,11 +302,15 @@ Keys (`ACCEPTED_KEYS`, `src/runtime/config.ts`). The key set is closed, and any 
 - `image` (required): a digest-pinned reference in the form `name@sha256:<64 hex>`. The name starts with a lowercase letter or digit and continues with lowercase letters, digits, `.`, `_`, `/`, or `-`. A tag-only reference is refused.
 - `stateDir` (required): an absolute path.
 - `workspaceRoot` (required): an absolute path.
+- `secretRoot` (optional): an absolute path, the directory that holds per-sandbox secret directories. When omitted it is `<stateDir>/secrets`, derived by `runtimeRootsOf` (`src/runtime/config.ts`).
+- `sandboxStateRoot` (optional): an absolute path, the directory that holds per-sandbox state. When omitted it is `<stateDir>/sandboxes`.
 - `andaUrl` (optional): an `http:` or `https:` URL with no userinfo. Its presence decides whether the Anda bridge is required (`andaBridgeRequired`, `src/runtime/config.ts`).
   - Set: the bridge is required at start. The start runs the bridge handshake, and an unreachable bridge refuses the start with `ANDA_UNREACHABLE`.
   - Absent: no Anda bridge is attached and there is no handshake, so the session goes `active` once the runner start succeeds. While `active` with no bridge, `exec` and `write` run exactly as they do with a bridge, in both policy modes. `status`, `read`, `list`, and `retry` do not need the bridge. If a configured bridge later goes down, the session moves to `degraded` and `exec` and `write` are refused as in any non-active state.
 
-The CLI and the daemon both read `stateDir` from this file, and a config that omits it is `SCHEMA_INVALID`.
+An explicit `secretRoot` or `sandboxStateRoot` that equals, contains or lies inside the other explicit root or `workspaceRoot` is refused when the file loads (`SCHEMA_INVALID`). That check is lexical; the doctor's `runtime-roots` item also checks the effective (derived) roots.
+
+The CLI, the daemon and the compute driver all read this file. A config that omits `stateDir` or `workspaceRoot` is `SCHEMA_INVALID`. The driver does not read `REALM_DRIVER_SECRET_ROOT`, `REALM_DRIVER_WORKSPACE_ROOT` or `REALM_DRIVER_STATE_ROOT`, and a stale one left in the environment is ignored.
 
 Reading (`readRuntimeConfigFile`, `src/runtime/config-file.ts`):
 
