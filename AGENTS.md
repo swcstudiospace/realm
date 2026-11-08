@@ -57,7 +57,7 @@ Every gate must pass before a change is reviewed (`CONTRIBUTING.md`).
 - `src/`: strict TypeScript. `npm run build` emits it to `dist/src/`.
   - `cli/main.ts`: entry for the `realm` CLI.
   - `cli/checkpoint.ts`: the realm checkpoint CLI.
-  - `daemon/`: control socket (`channel.ts`), client, daemon, `ensure.ts` (starts the daemon once, only when the socket is absent, and waits for it; the status probe the CLI and the Omp extension share), and `main.ts`, the daemon entry.
+  - `daemon/`: control socket (`channel.ts`), client, daemon, `ensure.ts` (starts the daemon once, only when the socket is absent, and waits for it; the status probe the CLI and the Omp extension share), `main.ts`, the daemon entry, and `spawn-env.ts` (the allowlisted environment a detached daemon inherits).
   - `omp/`: Omp plugin logic (`plugin.ts`) and its entry (`extension.ts`).
   - `mcp/`: MCP stdio server (`server.ts`: transport and routing) and the protocol versions and result shapes of both eras (`protocol.ts`). It serves revision 2026-07-28 and answers the `initialize` handshake of the legacy revisions that Claude Code speaks (`docs/integration/mcp.md`, Q6).
   - `acp/`: ACP agent (`agent.ts`) and its stdio entry (`stdio.ts`).
@@ -71,7 +71,7 @@ Every gate must pass before a change is reviewed (`CONTRIBUTING.md`).
   - `fs/`: canonical paths, root allowlist, credential-path denial, advisory write locks, atomic writes, read, list, glob, and write, and `temp-sweep.ts` (`src/fs/temp-sweep.ts`, which removes orphaned atomic-write temp files; the daemon calls it at start, before it serves).
   - `audit/`: redacted JSONL audit log, and `reconcile.ts` (`src/audit/reconcile.ts`, which appends `AUDIT_OUTCOME_UNKNOWN` reconciliation lines for admissions with no result; the daemon calls it at start, before it serves).
   - `observe/`: the JSON-line logger (`logger.ts`), its file and stderr sinks (`log-file.ts`, size-capped, rotated to one `.1` file), correlation ids (`ids.ts`), and the in-memory metrics registry with its strict snapshot validator (`metrics.ts`). The daemon uses them: the entry writes its records to stderr, which is `daemon.log`, through the logger; the daemon writes its lifecycle, control and tool records to `requests.log` through the logger and the file sink; and it counts metrics in memory.
-  - `doctor/`: prerequisite checks behind `realm doctor`.
+  - `doctor/`: prerequisite checks behind `realm doctor`, including `runtime-checks.ts` (the runtime roots, the driver socket and the gateway, ONB-04).
   - `contract/`: tool and session-record schemas and the schema validator (`validate.ts`).
   - `core/`: frozen shared contracts: states and the state machine, status labels, policy loading with `policy.schema.json`, the typed error catalogue (`errors.ts`), the event bus, ports, backoff, and `withTimeout` (`timeout.ts`); and the package version reader (`package-version.ts`).
 - `test/`: `node:test` suites by area, largely mirroring `src/`. `test/integration/` holds the Podman-gated suites and the Omp live harness. `test/support/` holds shared fakes, `property.ts` (the shared `fast-check` configuration, 200 runs from a fixed seed; `REALM_PROPERTY_SEED` overrides it, used by the `*.property.test.ts` files in `test/fs/` and `test/core/`), and the Omp harness: `omp-live.ts`, `scripted-provider.ts`, `omp-profile.ts`, `omp-rpc.ts`, `realm-daemon-fixture.ts`, `net-trace.ts`, and `omp-spike-extension.ts`.
