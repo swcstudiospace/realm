@@ -27,6 +27,7 @@ import {
   parseProbeFields,
   pollUntil,
   productionSkipReason,
+  readLiveInputs,
   requestLogLinesOf,
   splitJsonRpcLines,
   stateOfStatus,
@@ -697,5 +698,97 @@ void test("sandboxNameFor names a project's sandbox from its canonical path, wit
     assert.ok(name.length <= 19, `the sandbox name must be at most 19 characters: ${name}`);
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ---- ONB-03: the roots come from the config file ---------------------------------------------------------------------------
+
+const ONB03_IMAGE = `localhost/realm-agentos@sha256:${"c".repeat(64)}`;
+
+// Writes a driver config.json into a fresh temporary directory and returns the directory and the file path.
+function writeDriverConfig(config: Readonly<Record<string, unknown>>): { readonly dir: string; readonly path: string } {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "realm-live-")));
+  const path = join(dir, "config.json");
+  writeFileSync(path, `${JSON.stringify(config)}\n`, { mode: 0o600 });
+  return { dir, path };
+}
+
+void test("ONB-03: readLiveInputs takes the roots from the config file and ignores the stale driver variables", (t) => {
+  const { dir, path } = writeDriverConfig({
+    image: ONB03_IMAGE,
+    stateDir: "/onb03/state",
+    workspaceRoot: "/onb03/workspace",
+    secretRoot: "/onb03/secret-store",
+    sandboxStateRoot: "/onb03/sandbox-store",
+  });
+  t.after(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const inputs = readLiveInputs(
+    {
+      REALM_LIVE_IMAGE: ONB03_IMAGE,
+      REALM_LIVE_DRIVER_CONFIG: path,
+      REALM_DRIVER_SECRET_ROOT: "/stale/s",
+      REALM_DRIVER_STATE_ROOT: "/stale/t",
+      REALM_DRIVER_WORKSPACE_ROOT: "/stale/w",
+      PATH: "/bin",
+    },
+    "/cli.js",
+  );
+  assert.equal(inputs.secretRoot, "/onb03/secret-store");
+  assert.equal(inputs.stateRoot, "/onb03/sandbox-store");
+  assert.equal(inputs.workspaceRoot, "/onb03/workspace");
+  for (const value of [inputs.image, inputs.secretRoot, inputs.stateRoot, inputs.workspaceRoot, inputs.cliPath, ...Object.values(inputs.hostEnvironment)]) {
+    assert.equal(value.includes("/stale/"), false, value);
+  }
+});
+
+void test("ONB-03: readLiveInputs derives the omitted secret and sandbox roots under stateDir", (t) => {
+  const { dir, path } = writeDriverConfig({ image: ONB03_IMAGE, stateDir: "/onb03/state", workspaceRoot: "/onb03/workspace" });
+  t.after(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const inputs = readLiveInputs({ REALM_LIVE_IMAGE: ONB03_IMAGE, REALM_LIVE_DRIVER_CONFIG: path, PATH: "/bin" }, "/cli.js");
+  assert.equal(inputs.secretRoot, join("/onb03/state", "secrets"));
+  assert.equal(inputs.stateRoot, join("/onb03/state", "sandboxes"));
+  assert.equal(inputs.workspaceRoot, "/onb03/workspace");
+});
+
+void test("ONB-03: the gate names REALM_LIVE_DRIVER_CONFIG when the file is valid JSON that the loader refuses", () => {
+  const refused = String(
+    productionSkipReason(
+      openInputs({ readConfig: () => JSON.stringify({ image: "not-digest-pinned", stateDir: "/s", workspaceRoot: "/w" }) }),
+    ),
+  );
+  assert.match(refused, /^REALM_LIVE_DRIVER_CONFIG is not a readable runtime config/);
+  assert.match(refused, /not a readable runtime config/);
+});
+
+void test("ONB-03: a scenario config writes the explicit roots and the CLI environment carries no driver root variable", (t) => {
+  const inputs: LiveInputs = {
+    image: ONB03_IMAGE,
+    stateRoot: "/onb03/sandbox-store",
+    secretRoot: "/onb03/secret-store",
+    workspaceRoot: "/onb03/workspace",
+    cliPath: "/cli.js",
+    hostEnvironment: { PATH: "/bin" },
+  };
+  const scenario = createScenarioEnvironment(inputs, { image: inputs.image });
+  t.after(() => {
+    rmSync(scenario.root, { recursive: true, force: true });
+  });
+  const configHome = scenario.cliEnvironment["XDG_CONFIG_HOME"];
+  assert.notEqual(configHome, undefined);
+  const written: unknown = JSON.parse(readFileSync(join(configHome ?? "", "realm", "config.json"), "utf8"));
+  assert.deepEqual(written, {
+    image: inputs.image,
+    stateDir: scenario.stateDir,
+    workspaceRoot: "/onb03/workspace",
+    secretRoot: "/onb03/secret-store",
+    sandboxStateRoot: "/onb03/sandbox-store",
+  });
+  const names = Object.keys(scenario.cliEnvironment);
+  for (const stale of ["REALM_DRIVER_STATE_ROOT", "REALM_DRIVER_SECRET_ROOT", "REALM_DRIVER_WORKSPACE_ROOT"]) {
+    assert.equal(names.includes(stale), false, stale);
   }
 });
