@@ -33,9 +33,7 @@ import { withTimeout } from "../core/timeout.js";
 import { DaemonAbsentError, type ControlSelection } from "../daemon/channel.js";
 import { connectDaemon, selectionOf, type DaemonClient, type DaemonStatus } from "../daemon/client.js";
 import { bindRoot, bindWorkspaceUnderPolicy, isInsideRoot, type PinnedRoot } from "../fs/root.js";
-import { loadRuntimeConfig, type RuntimeConfig } from "../runtime/config.js";
-import { readRuntimeConfigFile } from "../runtime/config-file.js";
-import { defaultPolicyPath, podmanSocketPath, resolveConfigPath } from "../runtime/host-paths.js";
+import { defaultPolicyPath, podmanSocketPath } from "../runtime/host-paths.js";
 import { LibpodClient } from "../runtime/libpod-client.js";
 import { realmSandboxName } from "../runtime/openshell.js";
 import {
@@ -46,6 +44,7 @@ import {
 } from "../session/checkpoint.js";
 import { controlSocketPath, isSessionId, type EnvironmentLike } from "../session/paths.js";
 import { readWorkspaceEntry, workspaceEntryOf, type WorkspaceEntry } from "../session/workspace-registry.js";
+import { noStateDirectoryText, readConfigOutcome } from "./config-problems.js";
 import type { CliResult } from "./main.js";
 
 export const CHECKPOINT_USAGE =
@@ -119,16 +118,6 @@ function refusal(error: unknown): CliResult {
   return { exitCode: 1, stdout: `${code}\n`, stderr: `${ERROR_CATALOGUE[code].reason}\n` };
 }
 
-// The runtime config, through the loader the status path uses. Absent or invalid config yields undefined, so the command
-// refuses with usage (exit 2) as the other state-directory commands do.
-function runtimeConfigOf(deps: CheckpointDeps): RuntimeConfig | undefined {
-  try {
-    return loadRuntimeConfig((deps.readConfig ?? readRuntimeConfigFile)(resolveConfigPath(deps.env)));
-  } catch {
-    return undefined;
-  }
-}
-
 // The entry for a project that has no registry entry, built in memory and written nowhere. It applies the rules realm up
 // applies to an unknown project (resolveSelection in src/daemon/sessions.ts) with the same functions: the path must bind
 // under the policy workspaceRoots and lie inside the configured workspace root (POLICY_DENIED), and the id must be the
@@ -155,14 +144,15 @@ export async function runCheckpointCommand(words: readonly string[], deps: Check
   if (args === undefined) {
     return { exitCode: 2, stdout: "", stderr: `${CHECKPOINT_USAGE}\n` };
   }
-  const config = runtimeConfigOf(deps);
-  if (config === undefined) {
+  const outcome = readConfigOutcome(deps);
+  if ("problems" in outcome) {
     return {
       exitCode: 2,
       stdout: "",
-      stderr: "realm checkpoint: cannot resolve a state directory (the realm config file under an absolute XDG_CONFIG_HOME or HOME must be present and valid)\n",
+      stderr: `${noStateDirectoryText("realm checkpoint", outcome.problems)}\n`,
     };
   }
+  const config = outcome.config;
   const stateRoot = config.stateDir;
   // The same selection realm status --workspace makes: the canonical root and the session it maps to.
   let selection: ControlSelection;

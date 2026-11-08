@@ -57,6 +57,7 @@ Every gate must pass before a change is reviewed (`CONTRIBUTING.md`).
 - `src/`: strict TypeScript. `npm run build` emits it to `dist/src/`.
   - `cli/main.ts`: entry for the `realm` CLI.
   - `cli/checkpoint.ts`: the realm checkpoint CLI.
+  - `cli/config-problems.ts`: the key-level reasons a command that cannot load the config prints, with a pointer to `realm doctor`; the one derivation that `main.ts`, `audit.ts` and `checkpoint.ts` share.
   - `daemon/`: control socket (`channel.ts`), client, daemon, `ensure.ts` (starts the daemon once, only when the socket is absent, and waits for it; the status probe the CLI and the Omp extension share), `main.ts`, the daemon entry, and `spawn-env.ts` (the allowlisted environment a detached daemon inherits).
   - `omp/`: Omp plugin logic (`plugin.ts`) and its entry (`extension.ts`).
   - `mcp/`: MCP stdio server (`server.ts`: transport and routing) and the protocol versions and result shapes of both eras (`protocol.ts`). It serves revision 2026-07-28 and answers the `initialize` handshake of the legacy revisions that Claude Code speaks (`docs/integration/mcp.md`, Q6).

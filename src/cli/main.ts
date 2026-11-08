@@ -11,7 +11,7 @@
 // hermetic under test.
 
 import { spawn } from "node:child_process";
-import { closeSync, fchmodSync, lstatSync, mkdirSync, openSync } from "node:fs";
+import { closeSync, fchmodSync, mkdirSync, openSync } from "node:fs";
 import { runAcpOverStdio } from "../acp/stdio.js";
 import { createJsonRpc, type AnchorRpc } from "../audit/anchor.js";
 import type { Policy } from "../contract/validate.js";
@@ -32,7 +32,7 @@ import { defaultRunCommand, runChecks, type DoctorOptions } from "../doctor/chec
 import { applySafeFixes, FixRefusal, type FixAction } from "../doctor/fix.js";
 import { runtimeChecks } from "../doctor/runtime-checks.js";
 import { createMcpServer } from "../mcp/server.js";
-import { describeRuntimeConfigProblems, loadRuntimeConfig, type RuntimeConfig } from "../runtime/config.js";
+import { loadRuntimeConfig, type RuntimeConfig } from "../runtime/config.js";
 import { readRuntimeConfigFile } from "../runtime/config-file.js";
 import { defaultPolicyPath, isDirectEntry, resolveConfigPath } from "../runtime/host-paths.js";
 import {
@@ -45,6 +45,7 @@ import { controlSocketPath, type EnvironmentLike } from "../session/paths.js";
 import { parseAnchorArgs, runAnchor } from "./anchor.js";
 import { runAuditCommand } from "./audit.js";
 import { runCheckpointCommand } from "./checkpoint.js";
+import { configProblemsOf, noStateDirectoryText, readConfigOutcome } from "./config-problems.js";
 import { INIT_USAGE, InitRefusal, parseInitArgs, runInit } from "./init.js";
 
 export const CLI_COMMANDS = ["init", "up", "down", "status", "doctor", "mcp", "acp", "anchor", "audit", "metrics", "checkpoint"] as const;
@@ -516,30 +517,6 @@ function localDoctorOptions(deps: ResolvedDeps, runtimeConfig: RuntimeConfig): D
   };
 }
 
-// Why the config did not load, as key-level phrases only (D-1506): never a value, never a path. A file that is absent at
-// configPath, or a location that cannot be resolved, is `config.json is absent`; a present file that cannot be read as JSON
-// is named as such; a file that parsed is described key by key.
-function configProblemsOf(raw: unknown, readFailed: boolean, configPath: string | undefined): readonly string[] {
-  if (readFailed) {
-    return [configFileIsAbsent(configPath) ? "config.json is absent" : "config.json is not a readable JSON file"];
-  }
-  const problems = describeRuntimeConfigProblems(raw);
-  return problems.length === 0 ? ["config.json does not load"] : problems;
-}
-
-function configFileIsAbsent(configPath: string | undefined): boolean {
-  if (configPath === undefined) {
-    return true;
-  }
-  try {
-    lstatSync(configPath);
-    return false;
-  } catch (error: unknown) {
-    const code = typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
-    return code === "ENOENT" || code === "ENOTDIR";
-  }
-}
-
 // Fixes are host-local even when a daemon answers. The protected workspace is from config,
 // never the invoking cwd. Diagnostics stay local too, and cannot make dry-run mutate disk.
 async function runDoctorFix(
@@ -681,17 +658,6 @@ async function runAnchorCommand(words: readonly string[], deps: CliDeps, stateDi
   });
 }
 
-// The state directory for realm audit verify --session and the selector-less form, read from the realm config the
-// way runCli reads it for the other commands. Absent or invalid config yields undefined; the audit command then
-// refuses with usage (exit 2), as realm anchor does.
-function auditStateDir(deps: CliDeps): string | undefined {
-  try {
-    return loadRuntimeConfig((deps.readConfig ?? readRuntimeConfigFile)(resolveConfigPath(deps.env))).stateDir;
-  } catch {
-    return undefined;
-  }
-}
-
 // realm init (ONB-01) runs before any config is read: it is the command that writes the config. A malformed
 // invocation is a usage error (exit 2). A refusal or write failure is its catalogue code on stdout and its detail
 // on stderr (exit 1). Success prints one JSON line of paths and the mode; no file content is printed.
@@ -716,7 +682,7 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
     return { exitCode: 2, stdout: "", stderr: `${USAGE}\n` };
   }
   if (parsed.command === "audit") {
-    return runAuditCommand(parsed.words, () => auditStateDir(deps));
+    return runAuditCommand(parsed.words, () => readConfigOutcome(deps));
   }
   if (parsed.command === "init") {
     return runInitCommand(parsed.words, deps);
@@ -758,7 +724,7 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
     return {
       exitCode: 2,
       stdout: "",
-      stderr: `realm ${command}: cannot resolve a state directory (the realm config file under an absolute XDG_CONFIG_HOME or HOME must be present and valid)\n`,
+      stderr: `${noStateDirectoryText(`realm ${command}`, configProblemsOf(raw, readFailed, configPath))}\n`,
     };
   }
   const resolved: ResolvedDeps = {

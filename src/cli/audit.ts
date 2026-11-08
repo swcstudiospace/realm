@@ -25,13 +25,12 @@ import {
 import { parseAnchorRecord, type AnchorMismatch, type AnchorRecord } from "../audit/anchor.js";
 import { ERROR_CATALOGUE, type ErrorCode } from "../core/errors.js";
 import { isSessionId } from "../session/paths.js";
+import { noStateDirectoryText, type ConfigOutcome } from "./config-problems.js";
 
 const USAGE =
   "realm audit verify: usage: realm audit verify [--file <path> | --session <id>] [--head <seq>:<sha256>] [--anchor <record.json>]";
 const ANCHOR_USAGE =
   "realm audit verify: bad-anchor: --anchor expects a realm anchor record {version, sessionId, lineCount, rootSha256, createdAt}, or a realm anchor output whose record field is one";
-const NO_STATE_DIR =
-  "realm audit verify: cannot resolve a state directory (the realm config file under an absolute XDG_CONFIG_HOME or HOME must be present and valid)";
 const NO_FILE = "realm audit verify: no audit file to verify";
 const AUDIT_SUFFIX = ".jsonl";
 
@@ -117,11 +116,11 @@ interface FileOutcome {
 
 type Loaded<T> = { readonly value: T } | { readonly refusal: AuditCommandResult };
 
-// The entry point. resolveStateDir runs only for --session and the selector-less form, so --file never reads the
-// realm config. It returns undefined when the config is absent or invalid.
+// The entry point. resolveConfig runs only for --session and the selector-less form, so --file never reads the
+// realm config. When the config does not load, the refusal names the key-level reasons (config-problems.ts).
 export function runAuditCommand(
   words: readonly string[],
-  resolveStateDir: () => string | undefined,
+  resolveConfig: () => ConfigOutcome,
 ): AuditCommandResult {
   const args = parseAuditVerifyArgs(words);
   if (args === undefined) {
@@ -132,11 +131,11 @@ export function runAuditCommand(
     const stem = basename(args.selector.file, AUDIT_SUFFIX);
     targets = [{ sessionId: isSessionId(stem) ? stem : "file", file: args.selector.file }];
   } else {
-    const stateDir = resolveStateDir();
-    if (stateDir === undefined) {
-      return { exitCode: 2, stdout: "", stderr: `${NO_STATE_DIR}\n` };
+    const outcome = resolveConfig();
+    if ("problems" in outcome) {
+      return { exitCode: 2, stdout: "", stderr: `${noStateDirectoryText("realm audit verify", outcome.problems)}\n` };
     }
-    const auditDir = join(stateDir, "audit");
+    const auditDir = join(outcome.config.stateDir, "audit");
     targets =
       args.selector.kind === "session"
         ? [{ sessionId: args.selector.sessionId, file: join(auditDir, `${args.selector.sessionId}${AUDIT_SUFFIX}`) }]
