@@ -1,10 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { RealmError } from "../../src/core/errors.js";
 import { daemonSpawnEnv } from "../../src/daemon/spawn-env.js";
-import { launchFilteredDaemon, startDetachedDaemon } from "../../src/cli/main.js";
+import { launchFilteredDaemon, runCli, startDetachedDaemon, type ConnectDaemon } from "../../src/cli/main.js";
 
 const SENTINEL = "REALM_SENTINEL_MUST_NOT_LEAK";
 
@@ -190,4 +191,52 @@ void test("daemonSpawnEnv skips undefined values and returns a fresh object each
   assert.equal(Object.values(first).every((value) => typeof value === "string"), true);
   assert.notEqual(first, second);
   assert.deepEqual(first, second);
+});
+
+void test("ONB-07: a real daemon started by runCli up with the default spawn sees no sentinel and no stale root", async (t) => {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "realm-spawn-cli-")));
+  t.after(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const stateDir = join(dir, "state");
+  mkdirSync(stateDir, { mode: 0o700 });
+  const out = join(dir, "cli-up-env.json");
+  const probeEntry = join(dir, "probe-entry.mjs");
+  writeFileSync(probeEntry, script(out));
+  // No daemon answers: every status probe reports an absent socket, so runCli spawns the entry once with the
+  // default spawn and then runs out of time. The probe entry is not a daemon, so it writes its file and exits.
+  const connect: ConnectDaemon = () => ({
+    status: () => Promise.reject(new RealmError("REALM_NOT_ACTIVE")),
+    up: () => Promise.reject(new RealmError("REALM_NOT_ACTIVE")),
+    call: () => Promise.reject(new RealmError("REALM_NOT_ACTIVE")),
+    metrics: () => Promise.reject(new RealmError("REALM_NOT_ACTIVE")),
+    close: () => undefined,
+  });
+  const result = await runCli(["up", "--workspace", dir], {
+    env: {
+      PATH: "/usr/bin",
+      HOME: dir,
+      XDG_RUNTIME_DIR: dir,
+      XDG_CONFIG_HOME: dir,
+      REALM_DRIVER_SOCKET: "/run/realm/driver.sock",
+      REALM_DRIVER_SECRET_ROOT: "/stale/secrets",
+      [SENTINEL]: "leak",
+    },
+    readConfig: () => ({
+      image: `registry.example.com/realm/workload@sha256:${"0".repeat(64)}`,
+      stateDir,
+      workspaceRoot: dir,
+    }),
+    daemonEntry: probeEntry,
+    runCommand: () => Promise.resolve({ exitCode: 0, stdout: "podman version 5.5.0\n" }),
+    connectSocket: () => Promise.resolve(),
+    connect,
+    send: () => Promise.reject(new RealmError("REALM_NOT_ACTIVE")),
+    timeoutMs: 400,
+  });
+  assert.notEqual(result.exitCode, 0);
+  const seen = (await waitFor(out)) as ChildEnv;
+  assert.equal(seen.sentinel, null);
+  assert.equal(seen.staleSecretRoot, null);
+  assert.equal(seen.socket, "/run/realm/driver.sock");
 });
