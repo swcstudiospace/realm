@@ -12,6 +12,7 @@ import {
   checkAuditFile,
   formatAuditCheckpoint,
   parseAuditCheckpoint,
+  readAuditHead,
   sha256Hex,
   verifyAuditFile,
 } from "../../src/audit/chain.js";
@@ -560,5 +561,102 @@ void test("Q0-011: a typed error from the anchor check is not reported as an unr
     assert.equal(check.exitCode, 2);
     assert.equal(check.reason, undefined);
     assert.equal(check.code, "SCHEMA_INVALID");
+  });
+});
+
+// readAuditHead (the daemon's head read): the head is found within 64 lines and within the tail window. Each boundary is
+// checked against verifyAuditFile on the chained prefix, and an altered file is reported broken at its first unchained line.
+const PAD_OVERHEAD = '{"pad":""}'.length;
+const PAD_MIB = 1024 * 1024;
+const TAIL_WINDOW = 2 * (AUDIT_LINE_MAX_BYTES + 1);
+
+// A JSON object line of exactly `bytes` bytes with no seq or prev: it parses but is not a chained record.
+function padLine(bytes: number): string {
+  return `{"pad":"${"x".repeat(bytes - PAD_OVERHEAD)}"}`;
+}
+
+function padLines(count: number): string[] {
+  const lines: string[] = [];
+  for (let i = 0; i < count; i += 1) {
+    lines.push(padLine(PAD_OVERHEAD + i));
+  }
+  return lines;
+}
+
+// Lines that put the last chained line (the second of lines) `distance` bytes before the end of the file. Two pad lines
+// follow it: one MiB, then whatever the distance leaves.
+function linesWithTail(lines: readonly string[], distance: number): string[] {
+  const second = distance - ((lines[1] ?? "").length + 1) - (PAD_MIB + 1) - 1;
+  return [...lines.slice(0, 2), padLine(PAD_MIB), padLine(second)];
+}
+
+void test("OBS-01 head: a chained line exactly 64 lines from the end is the head, and the verifier agrees on the chained prefix", () => {
+  withStateDir((stateDir) => {
+    const lines = seed(stateDir, 2);
+    writeLines(auditFile(stateDir), [...lines, ...padLines(63)]);
+    assert.deepEqual(readAuditHead(auditFile(stateDir)), { state: "head", head: { seq: 2, hash: lineHash(lines, 2) } });
+    const prefix = join(stateDir, "audit", "prefix.jsonl");
+    writeLines(prefix, lines);
+    assert.deepEqual(verifyAuditFile(prefix).head, { seq: 2, line: 2, hash: lineHash(lines, 2) });
+    assert.deepEqual(verifyAuditFile(auditFile(stateDir)).broken, { line: 3, reason: "unchained-line" });
+  });
+});
+
+void test("OBS-01 head: a chained line 65 lines from the end is outside the look-back, so the head is none", () => {
+  withStateDir((stateDir) => {
+    const lines = seed(stateDir, 2);
+    writeLines(auditFile(stateDir), [...lines, ...padLines(64)]);
+    assert.deepEqual(readAuditHead(auditFile(stateDir)), { state: "none" });
+    assert.deepEqual(verifyAuditFile(auditFile(stateDir)).broken, { line: 3, reason: "unchained-line" });
+  });
+});
+
+void test("OBS-01 head: a torn final line is never the head, and the verifier reports the same head with tornTail", () => {
+  withStateDir((stateDir) => {
+    const lines = seed(stateDir, 2);
+    writeFileSync(auditFile(stateDir), `${lines.join("\n")}\n{"seq":3,"prev":"`);
+    assert.deepEqual(readAuditHead(auditFile(stateDir)), { state: "head", head: { seq: 2, hash: lineHash(lines, 2) } });
+    const verdict = verifyAuditFile(auditFile(stateDir));
+    assert.equal(verdict.tornTail, true);
+    assert.deepEqual(verdict.head, { seq: 2, line: 2, hash: lineHash(lines, 2) });
+  });
+});
+
+void test("OBS-01 head: a file that holds only a torn fragment has no head", () => {
+  withStateDir((stateDir) => {
+    mkdirSync(join(stateDir, "audit"), { recursive: true });
+    writeFileSync(auditFile(stateDir), '{"seq":1,"prev":"0000');
+    assert.deepEqual(readAuditHead(auditFile(stateDir)), { state: "none" });
+    const verdict = verifyAuditFile(auditFile(stateDir));
+    assert.equal(verdict.tornTail, true);
+    assert.equal(verdict.head, undefined);
+  });
+});
+
+void test("OBS-01 head: a legacy-only file has no head, and the verifier reports every line as unprotected", () => {
+  withStateDir((stateDir) => {
+    writeLines(auditFile(stateDir), [1, 2, 3].map((n) => JSON.stringify({ tool: "write", outcome: "ok", n })));
+    assert.deepEqual(readAuditHead(auditFile(stateDir)), { state: "none" });
+    const verdict = verifyAuditFile(auditFile(stateDir));
+    assert.equal(verdict.ok, true);
+    assert.equal(verdict.lines, 3);
+    assert.equal(verdict.legacyLines, 3);
+    assert.equal(verdict.chainedLines, 0);
+    assert.equal(verdict.head, undefined);
+  });
+});
+
+void test("OBS-01 head: a chained line one byte inside the tail window is the head, and one byte outside it is none", () => {
+  withStateDir((stateDir) => {
+    const lines = seed(stateDir, 2);
+    writeLines(auditFile(stateDir), linesWithTail(lines, TAIL_WINDOW - 1));
+    assert.deepEqual(readAuditHead(auditFile(stateDir)), { state: "head", head: { seq: 2, hash: lineHash(lines, 2) } });
+    const prefix = join(stateDir, "audit", "prefix.jsonl");
+    writeLines(prefix, lines);
+    assert.deepEqual(verifyAuditFile(prefix).head, { seq: 2, line: 2, hash: lineHash(lines, 2) });
+    assert.deepEqual(verifyAuditFile(auditFile(stateDir)).broken, { line: 3, reason: "unchained-line" });
+    writeLines(auditFile(stateDir), linesWithTail(lines, TAIL_WINDOW));
+    assert.deepEqual(readAuditHead(auditFile(stateDir)), { state: "none" });
+    assert.deepEqual(verifyAuditFile(auditFile(stateDir)).broken, { line: 3, reason: "unchained-line" });
   });
 });
