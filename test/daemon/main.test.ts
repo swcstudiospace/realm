@@ -466,6 +466,24 @@ void test("omitted secret and sandbox roots are derived under stateDir even when
   }
 });
 
+void test("ONB-03: an explicit secretRoot that overlaps the workspace refuses the start with SCHEMA_INVALID before startDaemon is called", async (t) => {
+  const dir = tempDir(t);
+  const workspaceRoot = join(dir, "workspace");
+  const raw = { ...validConfig(dir), secretRoot: workspaceRoot, sandboxStateRoot: join(dir, "sandboxes") };
+  const calls: DaemonStartOptions[] = [];
+  const h = harness(writeConfig(dir, raw), {
+    start: (options) => {
+      calls.push(options);
+      return Promise.resolve(startedWith(Promise.resolve()));
+    },
+  });
+
+  assert.equal(await runDaemon(h.deps), 1);
+  assert.deepEqual(calls, []);
+  assert.deepEqual(h.lines.map(entryOf), [failed("SCHEMA_INVALID")]);
+  assert.ok(h.lines.every((line) => !line.includes(workspaceRoot)));
+});
+
 void test("a start rejecting with a RealmError returns 1 and writes its code", async (t) => {
   const dir = tempDir(t);
   const h = harness(writeConfig(dir, validConfig(dir)), {
