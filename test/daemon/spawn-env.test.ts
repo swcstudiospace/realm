@@ -12,6 +12,7 @@ type ChildEnv = {
   readonly sentinel: string | null;
   readonly socket: string | null;
   readonly gateway: string | null;
+  readonly ca: string | null;
   readonly level: string | null;
 };
 
@@ -21,7 +22,7 @@ function script(outPath: string): string {
   return [
     "import { writeFileSync, renameSync } from 'node:fs';",
     `const tmp = ${JSON.stringify(`${outPath}.tmp`)};`,
-    `writeFileSync(tmp, JSON.stringify({ sentinel: process.env.${SENTINEL} ?? null, socket: process.env.REALM_DRIVER_SOCKET ?? null, gateway: process.env.REALM_DRIVER_GATEWAY_ENDPOINT ?? null, level: process.env.REALM_LOG_LEVEL ?? null }));`,
+    `writeFileSync(tmp, JSON.stringify({ sentinel: process.env.${SENTINEL} ?? null, socket: process.env.REALM_DRIVER_SOCKET ?? null, gateway: process.env.REALM_DRIVER_GATEWAY_ENDPOINT ?? null, ca: process.env.REALM_DRIVER_GATEWAY_CA ?? null, level: process.env.REALM_LOG_LEVEL ?? null }));`,
     `renameSync(tmp, ${JSON.stringify(outPath)});`,
   ].join("\n");
 }
@@ -75,18 +76,30 @@ void test("a sentinel variable does not reach the daemon on the CLI spawn or sta
     PATH: "/usr/bin",
     REALM_DRIVER_SOCKET: "/run/realm/driver.sock",
     REALM_DRIVER_GATEWAY_ENDPOINT: "https://127.0.0.1:17671",
+    REALM_DRIVER_GATEWAY_CA: "/run/realm/ca.crt",
     REALM_LOG_LEVEL: "error",
     [SENTINEL]: "leak",
     REALM_DRIVER_SECRET_ROOT: "/stale/secrets",
   };
   launchFilteredDaemon(cliEntry, stateDir, source);
-  const previous = process.env[SENTINEL];
-  const previousGateway = process.env.REALM_DRIVER_GATEWAY_ENDPOINT;
-  const previousLevel = process.env.REALM_LOG_LEVEL;
-  process.env[SENTINEL] = "leak";
-  process.env.REALM_DRIVER_SOCKET = "/run/realm/driver.sock";
-  process.env.REALM_DRIVER_GATEWAY_ENDPOINT = "https://127.0.0.1:17671";
-  process.env.REALM_LOG_LEVEL = "error";
+  const restored = [
+    SENTINEL,
+    "REALM_DRIVER_SOCKET",
+    "REALM_DRIVER_GATEWAY_ENDPOINT",
+    "REALM_DRIVER_GATEWAY_CA",
+    "REALM_LOG_LEVEL",
+  ] as const;
+  const previous = new Map(restored.map((name) => [name, process.env[name]]));
+  const assigned = {
+    [SENTINEL]: "leak",
+    REALM_DRIVER_SOCKET: "/run/realm/driver.sock",
+    REALM_DRIVER_GATEWAY_ENDPOINT: "https://127.0.0.1:17671",
+    REALM_DRIVER_GATEWAY_CA: "/run/realm/ca.crt",
+    REALM_LOG_LEVEL: "error",
+  };
+  for (const name of restored) {
+    process.env[name] = assigned[name];
+  }
   try {
     startDetachedDaemon(ompEntry, stateDir);
     const cli = (await waitFor(cliOut)) as ChildEnv;
@@ -94,26 +107,21 @@ void test("a sentinel variable does not reach the daemon on the CLI spawn or sta
     assert.equal(cli.sentinel, null);
     assert.equal(cli.socket, "/run/realm/driver.sock");
     assert.equal(cli.gateway, "https://127.0.0.1:17671");
+    assert.equal(cli.ca, "/run/realm/ca.crt");
     assert.equal(cli.level, "error");
     assert.equal(omp.sentinel, null);
     assert.equal(omp.socket, "/run/realm/driver.sock");
     assert.equal(omp.gateway, "https://127.0.0.1:17671");
+    assert.equal(omp.ca, "/run/realm/ca.crt");
     assert.equal(omp.level, "error");
   } finally {
-    if (previous === undefined) {
-      Reflect.deleteProperty(process.env, SENTINEL);
-    } else {
-      process.env[SENTINEL] = previous;
-    }
-    if (previousGateway === undefined) {
-      Reflect.deleteProperty(process.env, "REALM_DRIVER_GATEWAY_ENDPOINT");
-    } else {
-      process.env.REALM_DRIVER_GATEWAY_ENDPOINT = previousGateway;
-    }
-    if (previousLevel === undefined) {
-      Reflect.deleteProperty(process.env, "REALM_LOG_LEVEL");
-    } else {
-      process.env.REALM_LOG_LEVEL = previousLevel;
+    for (const name of restored) {
+      const prior = previous.get(name);
+      if (prior === undefined) {
+        Reflect.deleteProperty(process.env, name);
+      } else {
+        process.env[name] = prior;
+      }
     }
   }
 });
