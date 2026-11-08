@@ -469,8 +469,9 @@ void test("ONB-04: runtimeChecks uses driverSocketPath before REALM_DRIVER_SOCKE
 void test("ONB-04: driver-socket with neither driverSocketPath nor REALM_DRIVER_SOCKET fails as unset", async () => {
   const report = await runtimeChecks({ config: config(), env: {}, stat: statFor({}), runCommand: connectedGateway, probeTimeoutMs: 50 });
   const item = report.find((entry) => entry.id === "driver-socket");
-  assert.equal(item?.status, "fail");
-  assert.equal(item?.detail, "REALM_DRIVER_SOCKET is unset or not absolute");
+  assert.ok(item);
+  assert.equal(item.status, "fail");
+  assert.equal(item.detail, "REALM_DRIVER_SOCKET is unset or not absolute");
 });
 
 // The reply of a gateway that `openshell status -o json` reports as connected.

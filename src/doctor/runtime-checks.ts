@@ -10,9 +10,10 @@ import type { EnvironmentLike } from "../session/paths.js";
 import { runtimeRootsOf, type RuntimeConfig } from "../runtime/config.js";
 import { assertSocketPathsFit, channelPathsOf } from "../runtime/driver/channel.js";
 import { secretDirOf } from "../runtime/driver/secret-store.js";
-import { OPENSHELL_BINARY, realmSandboxName } from "../runtime/openshell.js";
+import { gatewayStatusJsonCommand, realmSandboxName } from "../runtime/openshell.js";
 import type { CommandOutcome, RunCommand } from "../runtime/podman-probe.js";
 import { selectOpenShellEnvironment } from "../runtime/session-execution.js";
+import type { DoctorOptions } from "./checks.js";
 
 export type RuntimeCheckId = "runtime-roots" | "driver-socket" | "gateway";
 export type RuntimeCheckStatus = "pass" | "warn" | "fail";
@@ -337,9 +338,10 @@ export async function gatewayCheck(env: EnvironmentLike, runCommand: RunCommand,
       reject(new DeadlineExceeded());
     }, timeoutMs);
   });
+  const command = gatewayStatusJsonCommand();
   let outcome: CommandOutcome;
   try {
-    outcome = await Promise.race([runCommand(OPENSHELL_BINARY, ["status", "-o", "json"], { env: selectOpenShellEnvironment(env), timeoutMs }), deadline]);
+    outcome = await Promise.race([runCommand(command.file, command.args, { env: selectOpenShellEnvironment(env), timeoutMs }), deadline]);
   } catch (error: unknown) {
     if (error instanceof DeadlineExceeded) {
       return fail(id, "gateway status did not answer in time", FIX_GATEWAY);
@@ -377,6 +379,26 @@ function gatewayStatusOf(stdout: string): string | undefined {
   }
   const status = (parsed as Record<string, unknown>)["status"];
   return typeof status === "string" ? status : undefined;
+}
+
+// The slice of the doctor options the runtime items read.
+export type RuntimeDoctorOptions = Pick<
+  DoctorOptions,
+  "runtimeConfig" | "env" | "statPath" | "configPath" | "configProblems" | "driverSocketPath" | "probeTimeoutMs"
+>;
+
+// Builds the runtime-check options from the doctor options and the resolved runner. An option the caller left unset stays absent.
+export function runtimeCheckOptionsOf(options: RuntimeDoctorOptions, runCommand: RunCommand): RuntimeCheckOptions {
+  return {
+    ...(options.runtimeConfig === undefined ? {} : { config: options.runtimeConfig }),
+    env: options.env,
+    ...(options.statPath === undefined ? {} : { stat: options.statPath }),
+    ...(options.configPath === undefined ? {} : { configPath: options.configPath }),
+    ...(options.configProblems === undefined ? {} : { configProblems: options.configProblems }),
+    ...(options.driverSocketPath === undefined ? {} : { driverSocketPath: options.driverSocketPath }),
+    runCommand,
+    ...(options.probeTimeoutMs === undefined ? {} : { probeTimeoutMs: options.probeTimeoutMs }),
+  };
 }
 
 // One item when config is absent: runtime-roots, whose detail is the configProblems joined, or `runtime config is absent`. Three

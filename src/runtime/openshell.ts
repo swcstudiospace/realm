@@ -230,6 +230,12 @@ export function buildGatewayStatusArgv(): readonly string[] {
   return Object.freeze([OPENSHELL_BINARY, "status"]);
 }
 
+// The command that reads the OpenShell gateway status as JSON for the doctor's gateway item. It names the binary here so that
+// the doctor holds no binary name. Frozen, so a caller cannot alter the shared value.
+export function gatewayStatusJsonCommand(): { readonly file: string; readonly args: readonly string[] } {
+  return Object.freeze({ file: OPENSHELL_BINARY, args: Object.freeze(["status", "-o", "json"]) });
+}
+
 // Deletes one realm sandbox and resolves true only when the delete exits 0 within timeoutMs. A refused name, a rejected
 // run and a non-zero exit are all false, so no OpenShell text reaches the caller, which maps the false result to its code.
 export async function deleteSandbox(runner: OpenShellRunner, sandboxName: string, timeoutMs: number): Promise<boolean> {

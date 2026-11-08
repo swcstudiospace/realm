@@ -9,6 +9,7 @@ import {
   buildCreateArgv,
   buildExecArgv,
   buildGatewayStatusArgv,
+  gatewayStatusJsonCommand,
   runOpenShellCreate,
   type SandboxCreateRequest,
 } from "../../src/runtime/openshell.js";
@@ -250,6 +251,14 @@ void test("OBS-04: the gateway status argv is exactly `openshell status`, with n
   const argv = buildGatewayStatusArgv();
   assert.deepEqual(argv, ["openshell", "status"]);
   assert.equal(Object.isFrozen(argv), true);
+});
+
+void test("ONB-04: the gateway JSON status command is exactly `openshell status -o json`, and the value and its args are frozen", () => {
+  const command = gatewayStatusJsonCommand();
+  assert.equal(command.file, "openshell");
+  assert.deepEqual(command.args, ["status", "-o", "json"]);
+  assert.equal(Object.isFrozen(command), true);
+  assert.equal(Object.isFrozen(command.args), true);
 });
 
 void test("RT-05: neither builder emits any D-80 forbidden flag, as an element or as a prefixed form, before the separator", () => {

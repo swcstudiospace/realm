@@ -37,7 +37,7 @@ import { selectOpenShellEnvironment } from "../runtime/session-execution.js";
 import { SOCKET_TIMEOUT_MS } from "../daemon/channel.js";
 import { controlSocketPath, type EnvironmentLike, sessionsDirOf } from "../session/paths.js";
 import type { RuntimeConfig } from "../runtime/config.js";
-import { runtimeChecks, type RuntimeCheckOptions } from "./runtime-checks.js";
+import { runtimeCheckOptionsOf, runtimeChecks, type RuntimeCheckOptions } from "./runtime-checks.js";
 export type { ConnectSocket } from "../runtime/podman-probe.js";
 
 export type CheckId =
@@ -189,16 +189,7 @@ export async function runChecks(options: DoctorOptions): Promise<readonly CheckR
     },
   };
   const registered = await Promise.all(REGISTERED.map(async (check) => await check(context)));
-  const runtime = await runtimeChecks({
-    ...(options.runtimeConfig === undefined ? {} : { config: options.runtimeConfig }),
-    env: options.env,
-    ...(options.statPath === undefined ? {} : { stat: options.statPath }),
-    ...(options.configPath === undefined ? {} : { configPath: options.configPath }),
-    ...(options.configProblems === undefined ? {} : { configProblems: options.configProblems }),
-    ...(options.driverSocketPath === undefined ? {} : { driverSocketPath: options.driverSocketPath }),
-    runCommand: options.runCommand ?? defaultRunCommand,
-    ...(options.probeTimeoutMs === undefined ? {} : { probeTimeoutMs: options.probeTimeoutMs }),
-  });
+  const runtime = await runtimeChecks(runtimeCheckOptionsOf(options, options.runCommand ?? defaultRunCommand));
   return [...registered, ...runtime];
 }
 
