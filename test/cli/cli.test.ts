@@ -668,8 +668,8 @@ void test("a detached daemon that fails startup writes its error to <stateDir>/d
         workspaceRoot: "/srv/realm-ws",
       }),
     );
-    // The CLI never reads the policy file, but the daemon parses it at startup, so this makes the real
-    // daemon entry fail after the CLI has spawned it detached.
+    // The up path does not read the policy file, but the daemon parses it at startup, so this file makes the
+    // real daemon entry fail after the CLI has spawned it detached.
     writeFileSync(join(stateDir, "policy.json"), "not json");
     const result = await runCli(["up", "--workspace", WORKSPACE], {
       env: {
