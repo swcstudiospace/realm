@@ -1686,6 +1686,17 @@ function isAlive(pid: number): boolean {
   }
 }
 
+// Signals a process that may already be gone: it can exit between an isAlive check and the signal, which is ESRCH. Any other error is real.
+function killIfPresent(pid: number, signal: NodeJS.Signals): void {
+  try {
+    process.kill(pid, signal);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
+      throw error;
+    }
+  }
+}
+
 void test(
   "close ends a command that ignores end of input and SIGTERM, and the child it started, by signalling the process group",
   { skip: existsSync("/proc/self/stat") ? false : "needs /proc to tell a running process from an exited one" },
@@ -1703,7 +1714,7 @@ void test(
       await session.close({ graceMs: 100, termMs: 100, killMs: scaledMs(2000) }).catch(() => undefined);
       for (const pid of pids) {
         if (isAlive(pid)) {
-          process.kill(pid, "SIGKILL");
+          killIfPresent(pid, "SIGKILL");
         }
       }
     });
