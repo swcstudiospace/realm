@@ -1,0 +1,3 @@
+# Fix scenario 10 metrics selection
+
+The gateway-stopping live test in test/integration/production-driver.test.ts invokes realm metrics without --workspace. realmCli runs from the scenario root rather than the selected workspace, causing POLICY_DENIED. Pass ["metrics", "--workspace", scenario.inputs.workspaceRoot], matching scenario 6. Preserve all existing assertions. Correct the scenario 5b comment that incorrectly says daemon.log never rotates: it uses the rotating sink; do not change its log assertion. No live stack operations during implementation. Run typecheck, lint, check:gates and hermetic live-helper tests using the orchestrator-provided lock. Scenario 10 runs separately only after gates, under explicit owner approval.
