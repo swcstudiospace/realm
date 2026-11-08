@@ -34,8 +34,8 @@ function directory(mode: number, uid?: number, symbolicLink = false): PathReadin
   return { state: "found", stats: { isDirectory: () => !symbolicLink, isSymbolicLink: () => symbolicLink, isSocket: () => false, mode, ...(uid === undefined ? {} : { uid }) } as Stats };
 }
 
-function socket(mode: number): PathReading {
-  return { state: "found", stats: { isDirectory: () => false, isSymbolicLink: () => false, isSocket: () => true, mode } as Stats };
+function socket(mode: number, uid?: number): PathReading {
+  return { state: "found", stats: { isDirectory: () => false, isSymbolicLink: () => false, isSocket: () => true, mode, ...(uid === undefined ? {} : { uid }) } as Stats };
 }
 
 function statFor(modes: Readonly<Record<string, PathReading>>): (path: string) => PathReading {
@@ -327,7 +327,7 @@ void test("ONB-04: a private root owned by another uid fails", (t) => {
 
 void test("driver-socket passes when the socket is 0600, its parent is 0700, and it accepts a connection", async () => {
   const result = await driverSocketCheck(
-    { REALM_DRIVER_SOCKET: "/run/realm/driver.sock" },
+    "/run/realm/driver.sock",
     statFor({
       "/run/realm/driver.sock": socket(0o10600),
       "/run/realm": directory(0o40700),
@@ -340,7 +340,7 @@ void test("driver-socket passes when the socket is 0600, its parent is 0700, and
 
 void test("driver-socket fails when a correctly permissioned socket does not accept a connection", async () => {
   const result = await driverSocketCheck(
-    { REALM_DRIVER_SOCKET: "/run/realm/driver.sock" },
+    "/run/realm/driver.sock",
     statFor({
       "/run/realm/driver.sock": socket(0o10600),
       "/run/realm": directory(0o40700),
@@ -352,11 +352,11 @@ void test("driver-socket fails when a correctly permissioned socket does not acc
 });
 
 void test("driver-socket fails when the socket is absent or the parent mode is wrong", async () => {
-  const absent = await driverSocketCheck({ REALM_DRIVER_SOCKET: "/run/realm/driver.sock" }, statFor({}));
+  const absent = await driverSocketCheck("/run/realm/driver.sock", statFor({}));
   assert.equal(absent.status, "fail");
   assert.match(absent.detail, /absent/);
   const parent = await driverSocketCheck(
-    { REALM_DRIVER_SOCKET: "/run/realm/driver.sock" },
+    "/run/realm/driver.sock",
     statFor({
       "/run/realm/driver.sock": socket(0o10600),
       "/run/realm": directory(0o40755),
@@ -364,6 +364,76 @@ void test("driver-socket fails when the socket is absent or the parent mode is w
   );
   assert.equal(parent.status, "fail");
   assert.match(parent.detail, /parent mode is 0755/);
+});
+
+void test("ONB-04: driver-socket fails for a socket owned by another uid", async (t) => {
+  const uid = process.getuid?.();
+  if (uid === undefined) {
+    t.skip("this platform has no process uid");
+    return;
+  }
+  const result = await driverSocketCheck(
+    "/run/realm/driver.sock",
+    statFor({ "/run/realm/driver.sock": socket(0o10600, uid + 1), "/run/realm": directory(0o40700, uid) }),
+    () => Promise.resolve(),
+  );
+  assert.equal(result.status, "fail");
+  assert.equal(result.detail, "driver socket is not owned by this account");
+});
+
+void test("ONB-04: driver-socket fails when its parent is owned by another uid", async (t) => {
+  const uid = process.getuid?.();
+  if (uid === undefined) {
+    t.skip("this platform has no process uid");
+    return;
+  }
+  const result = await driverSocketCheck(
+    "/run/realm/driver.sock",
+    statFor({ "/run/realm/driver.sock": socket(0o10600, uid), "/run/realm": directory(0o40700, uid + 1) }),
+    () => Promise.resolve(),
+  );
+  assert.equal(result.status, "fail");
+  assert.equal(result.detail, "driver socket parent is not owned by this account");
+});
+
+void test("ONB-04: driver-socket fails when the parent is a symbolic link", async () => {
+  const result = await driverSocketCheck(
+    "/run/realm/driver.sock",
+    statFor({ "/run/realm/driver.sock": socket(0o10600), "/run/realm": directory(0o40700, undefined, true) }),
+    () => Promise.resolve(),
+  );
+  assert.equal(result.status, "fail");
+  assert.equal(result.detail, "driver socket parent is not a directory");
+});
+
+void test("ONB-04: runtimeChecks uses driverSocketPath before REALM_DRIVER_SOCKET", async () => {
+  const report = await runtimeChecks({
+    config: config(),
+    env: { REALM_DRIVER_SOCKET: "/run/absent/driver.sock" },
+    driverSocketPath: "/run/realm/driver.sock",
+    stat: statFor({ "/run/realm/driver.sock": socket(0o10600), "/run/realm": directory(0o40700) }),
+    connectDriver: () => Promise.resolve(),
+    connectGateway: () => Promise.resolve(),
+    probeTimeoutMs: 50,
+  });
+  const item = report.find((entry) => entry.id === "driver-socket");
+  assert.equal(item?.status, "pass");
+  const fallback = await runtimeChecks({
+    config: config(),
+    env: { REALM_DRIVER_SOCKET: "/run/realm/driver.sock" },
+    stat: statFor({ "/run/realm/driver.sock": socket(0o10600), "/run/realm": directory(0o40700) }),
+    connectDriver: () => Promise.resolve(),
+    connectGateway: () => Promise.resolve(),
+    probeTimeoutMs: 50,
+  });
+  assert.equal(fallback.find((entry) => entry.id === "driver-socket")?.status, "pass");
+});
+
+void test("ONB-04: driver-socket with neither driverSocketPath nor REALM_DRIVER_SOCKET fails as unset", async () => {
+  const report = await runtimeChecks({ config: config(), env: {}, stat: statFor({}), connectGateway: () => Promise.resolve(), probeTimeoutMs: 50 });
+  const item = report.find((entry) => entry.id === "driver-socket");
+  assert.equal(item?.status, "fail");
+  assert.equal(item?.detail, "REALM_DRIVER_SOCKET is unset or not absolute");
 });
 
 void test("gateway passes when the endpoint accepts a connection and fails when it does not", async () => {

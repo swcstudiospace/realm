@@ -37,6 +37,8 @@ export interface RuntimeCheckOptions {
   readonly configPath?: string;
   // Resolves a root to its canonical path. Defaults to realpathSync.
   readonly realpath?: (path: string) => string;
+  // The driver socket path. When absent, REALM_DRIVER_SOCKET from env is the source.
+  readonly driverSocketPath?: string;
   readonly connectGateway?: (endpoint: string, caPath: string, timeoutMs: number) => Promise<void>;
   readonly connectDriver?: (socketPath: string, timeoutMs: number) => Promise<void>;
   readonly probeTimeoutMs?: number;
@@ -298,13 +300,12 @@ export function runtimeRootsCheck(
 }
 
 export async function driverSocketCheck(
-  env: EnvironmentLike,
+  socketPath: string | undefined,
   stat: (path: string) => PathReading,
   connect: (socketPath: string, timeoutMs: number) => Promise<void> = defaultConnectDriver,
   timeoutMs = 5000,
 ): Promise<RuntimeCheckResult> {
   const id: RuntimeCheckId = "driver-socket";
-  const socketPath = env[DRIVER_SOCKET_ENV];
   if (socketPath === undefined || socketPath === "" || !isAbsolute(socketPath)) {
     return fail(id, "REALM_DRIVER_SOCKET is unset or not absolute", "Set REALM_DRIVER_SOCKET to the driver's socket path. The socket must be mode 0600 and its parent directory mode 0700.");
   }
@@ -318,6 +319,10 @@ export async function driverSocketCheck(
   if (found.stats.isSymbolicLink() || !found.stats.isSocket()) {
     return fail(id, "driver socket path is not a socket", "Remove the non-socket at REALM_DRIVER_SOCKET and start the compute driver.");
   }
+  const uid = process.getuid?.();
+  if (uid !== undefined && typeof found.stats.uid === "number" && found.stats.uid !== uid) {
+    return fail(id, "driver socket is not owned by this account", "Remove the foreign socket and start the compute driver as this account.");
+  }
   const mode = found.stats.mode & PERMISSION_BITS;
   if (mode !== SOCKET_MODE) {
     return fail(id, `driver socket mode is 0${octal(mode)}, expected 0600`, "chmod 0600 the driver socket. The parent directory must be 0700.");
@@ -325,6 +330,9 @@ export async function driverSocketCheck(
   const parent = stat(dirname(socketPath));
   if (parent.state !== "found" || parent.stats.isSymbolicLink() || !parent.stats.isDirectory()) {
     return fail(id, "driver socket parent is not a directory", "The directory that holds REALM_DRIVER_SOCKET must be a real directory of mode 0700.");
+  }
+  if (uid !== undefined && typeof parent.stats.uid === "number" && parent.stats.uid !== uid) {
+    return fail(id, "driver socket parent is not owned by this account", "The directory that holds REALM_DRIVER_SOCKET must belong to this account.");
   }
   const parentMode = parent.stats.mode & PERMISSION_BITS;
   if (parentMode !== PRIVATE_DIR_MODE) {
@@ -382,7 +390,7 @@ export async function runtimeChecks(options: RuntimeCheckOptions): Promise<reado
   const timeoutMs = options.probeTimeoutMs ?? 5000;
   return [
     runtimeRootsCheck(options.config, stat, options.realpath ?? realpathSync, options.configPath),
-    await driverSocketCheck(options.env, stat, options.connectDriver ?? defaultConnectDriver, timeoutMs),
+    await driverSocketCheck(options.driverSocketPath ?? options.env[DRIVER_SOCKET_ENV], stat, options.connectDriver ?? defaultConnectDriver, timeoutMs),
     await gatewayCheck(options.env, options.connectGateway ?? defaultConnectGateway, timeoutMs),
   ];
 }
