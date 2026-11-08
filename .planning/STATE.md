@@ -3,17 +3,17 @@ gsd_state_version: "1.0"
 milestone: v3.0
 milestone_name: Containment by Default
 status: planning
-stopped_at: Completed 15-08-PLAN.md
-last_updated: "2026-11-08T16:24:50.349Z"
+stopped_at: Completed 15-07-PLAN.md
+last_updated: "2026-11-08T16:34:44.720Z"
 last_activity: 2026-10-31
 last_activity_desc: actual lifecycle/doctor/C4 evidence reconciled; normalized onboarding docs authored; no checks, commits or phase completion by this worker
-state_head: 4cd8cc7878526c35081067acc41df39866bbfcd3
+state_head: 151410627d8e1408fa4f275d436387f71d65fbb2
 progress:
   total_phases: 9
   completed_phases: 18
   total_plans: 45
-  completed_plans: 7
-  percent: 16
+  completed_plans: 8
+  percent: 18
 ---
 
 # Project State
@@ -81,6 +81,7 @@ not a fresh instruction to restart discovery, install a runtime or close a phase
 | Phase 15 P05 | 20min | 2 tasks | 1 files |
 | Phase 15 P06 | 75min | 4 tasks | 7 files |
 | Phase 15 P08 | 15min | 2 tasks | 2 files |
+| Phase 15 P07 | 25min | 3 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -122,6 +123,7 @@ Full log lives in PROJECT.md Key Decisions table. Recent decisions affecting cur
 - [Phase 15]: 15-05 D-1505: allowlist names held in one constant at the top of test/daemon/spawn-env.test.ts; plan 15-06 edits that constant when it removes the gateway names
 - [Phase ?]: 15-06: driverSocketPath wins over REALM_DRIVER_SOCKET with no stateDir fallback; the gateway item parses only the string status of openshell status -o json and never echoes command output
 - [Phase ?]: 15-06: REALM_DRIVER_GATEWAY_ENDPOINT and REALM_DRIVER_GATEWAY_CA removed from the daemon allowlist together with the TLS dial
+- [Phase ?]: 15-07: plain doctor reports an absent or invalid config.json as one runtime-roots item naming keys only; ENOENT/ENOTDIR is absent
 
 ### Parked
 
@@ -187,8 +189,8 @@ Detail, by phase: Phase 3 covers RT-01, RT-02, RT-03, RT-09, and the live parts 
 
 ## Session Continuity
 
-Last session: 2026-11-08T16:24:50.259Z
-Stopped at: Completed 15-08-PLAN.md
+Last session: 2026-11-08T16:34:44.624Z
+Stopped at: Completed 15-07-PLAN.md
 Resume file: None
 
 Recorded commits (closure run): 72817e9 (private flag restored, engines >=22.13.0); 390f511 (causeCode and catalogue codes, host paths, lifecycle bound, root identity, exec margin); b6bc892 (daemon entry, AgentOS fail-closed, catalogue refusals, per-method control bounds); 8088159 (daemon owns sessions; tool method; daemon client; Omp and MCP attach); 4b1d4ab (smoke fixes: CLI probe, up and down exits, state-dir 0700); c55056a (traceability: requirements by evidence, spike facts, runtime config, Omp attach contract); a999c17 (audit gap closure: realm acp, refusal code mapping, one state-dir resolver, Omp status, pinned-root rebind, catch-site fixes, daemon server-failure stop); dd02034 (re-audit, planning, and docs); 54bc236 (MCP tool-call diagnostic); plus the decisions commit (see git log).
