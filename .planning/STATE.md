@@ -3,17 +3,17 @@ gsd_state_version: "1.0"
 milestone: v3.0
 milestone_name: Containment by Default
 status: planning
-stopped_at: Completed 15-02-PLAN.md
-last_updated: "2026-11-08T15:36:46.328Z"
+stopped_at: Completed 15-03-PLAN.md
+last_updated: "2026-11-08T15:39:58.981Z"
 last_activity: 2026-10-31
 last_activity_desc: actual lifecycle/doctor/C4 evidence reconciled; normalized onboarding docs authored; no checks, commits or phase completion by this worker
-state_head: 092844d7265118f1711a63a7cf717ffc219403de
+state_head: 0643ad34562a9e9d66dd248ea9d6b35ae0762d9d
 progress:
   total_phases: 9
-  completed_phases: 0
+  completed_phases: 18
   total_plans: 45
-  completed_plans: 2
-  percent: 4
+  completed_plans: 3
+  percent: 7
 ---
 
 # Project State
@@ -76,6 +76,7 @@ not a fresh instruction to restart discovery, install a runtime or close a phase
 |------|----------|-------|-------|
 | Phase 15 P01 | 15min | 4 tasks | 3 files |
 | Phase 15 P02 | 5min | 2 tasks | 1 files |
+| Phase 15 P03 | 10min | 3 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -178,8 +179,8 @@ Detail, by phase: Phase 3 covers RT-01, RT-02, RT-03, RT-09, and the live parts 
 
 ## Session Continuity
 
-Last session: 2026-11-08T15:36:46.226Z
-Stopped at: Completed 15-02-PLAN.md
+Last session: 2026-11-08T15:39:58.870Z
+Stopped at: Completed 15-03-PLAN.md
 Resume file: None
 
 Recorded commits (closure run): 72817e9 (private flag restored, engines >=22.13.0); 390f511 (causeCode and catalogue codes, host paths, lifecycle bound, root identity, exec margin); b6bc892 (daemon entry, AgentOS fail-closed, catalogue refusals, per-method control bounds); 8088159 (daemon owns sessions; tool method; daemon client; Omp and MCP attach); 4b1d4ab (smoke fixes: CLI probe, up and down exits, state-dir 0700); c55056a (traceability: requirements by evidence, spike facts, runtime config, Omp attach contract); a999c17 (audit gap closure: realm acp, refusal code mapping, one state-dir resolver, Omp status, pinned-root rebind, catch-site fixes, daemon server-failure stop); dd02034 (re-audit, planning, and docs); 54bc236 (MCP tool-call diagnostic); plus the decisions commit (see git log).

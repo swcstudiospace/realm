@@ -434,8 +434,8 @@ The owner lifted the ship hold on 2026-10-28 for one pull request with autoMerge
 **Plans**: 1 existing plan (`15-01-PLAN.md`), reused; first-wave repair plus remaining live/documentation acceptance
 - [x] 15-01-PLAN.md
 - [x] 15-02-PLAN.md
-- [ ] 15-03-PLAN.md
-- [ ] 15-04-PLAN.md
+- [x] 15-03-PLAN.md
+- [x] 15-04-PLAN.md
 - [ ] 15-05-PLAN.md
 - [ ] 15-06-PLAN.md
 - [ ] 15-07-PLAN.md
@@ -560,7 +560,7 @@ Milestone v3.0 phases (12 to 20) run in three parallel lanes that share no mutab
 | 12. Scripted-provider harness and Omp enforcement spike | 0/1 | Recovery: current C1–C3 supplied pass, C4 repair unverified, HARN-03 failed44 warm offenders; historical native receipt retained | - |
 | 13. Quality ratchet | 0/1 | Recovery: implemented-unverified plus exact repair/package/coverage/load/run gaps | - |
 | 14. Crash-safety pack | 0/1 | Recovery: implementation and historical real evidence present, scoped parent attribution pending | - |
-| 15. Zero-config onboarding and fail-closed default | 2/16 | Recovery: signed init/doctor edits await parent; generated-config live/docs acceptance open | - |
+| 15. Zero-config onboarding and fail-closed default | 3/16 | Recovery: signed init/doctor edits await parent; generated-config live/docs acceptance open | - |
 | 16. Omp runs in the sandbox | 0/1 | Recovery plan/context authored, unreviewed; lifetime/read/production Omp acceptance incomplete | - |
 | 17. Observability and tamper-evident audit | 0/1 | Recovery: chain/logger code gaps and live evidence open; metrics/gateway historical proof retained | - |
 | 18. Per-project sandboxes | 0/1 | Recovery plan/context authored, unreviewed; decision recorded, runtime missing | - |
