@@ -4,7 +4,7 @@
 // Numeric limits live only in HARDENING_PROFILE (src/runtime/hardening.ts) and in the backoff
 // defaults, never here.
 
-import { isAbsolute, join } from "node:path";
+import { isAbsolute, join, relative, sep } from "node:path";
 import { makeRealmError } from "../core/errors.js";
 
 export interface RuntimeConfig {
@@ -71,6 +71,9 @@ export function loadRuntimeConfig(input: unknown): RuntimeConfig {
   const secretRoot = record["secretRoot"] === undefined ? undefined : requireAbsolutePath(record["secretRoot"]);
   const sandboxStateRoot = record["sandboxStateRoot"] === undefined ? undefined : requireAbsolutePath(record["sandboxStateRoot"]);
   const andaUrl = record["andaUrl"] === undefined ? undefined : requireAndaUrl(record["andaUrl"]);
+  if (overlapProblems(secretRoot, sandboxStateRoot, workspaceRoot).length > 0) {
+    reject();
+  }
   return Object.freeze({
     image,
     stateDir,
@@ -79,6 +82,48 @@ export function loadRuntimeConfig(input: unknown): RuntimeConfig {
     ...(secretRoot === undefined ? {} : { secretRoot }),
     ...(sandboxStateRoot === undefined ? {} : { sandboxStateRoot }),
   });
+}
+
+// A key-level description of why an input would not load, for the doctor's report. Every phrase is
+// fixed text: no value and no unknown key name is ever included, so arbitrary input is never echoed.
+export function describeRuntimeConfigProblems(input: unknown): readonly string[] {
+  if (typeof input !== "object" || input === null || Array.isArray(input)) {
+    return ["config.json is not a JSON object"];
+  }
+  const record = input as Record<string, unknown>;
+  const problems: string[] = [];
+  if (Object.keys(record).some((key) => Object.hasOwn(DENIED_KEYS, key) || !Object.hasOwn(ACCEPTED_KEYS, key))) {
+    problems.push("config.json has a key that is not accepted");
+  }
+  if (!isImageReference(record["image"])) {
+    problems.push("image is absent or not a digest-pinned reference");
+  }
+  if (!isAbsolutePathValue(record["stateDir"])) {
+    problems.push("stateDir is absent or not an absolute path");
+  }
+  if (!isAbsolutePathValue(record["workspaceRoot"])) {
+    problems.push("workspaceRoot is absent or not an absolute path");
+  }
+  if (record["secretRoot"] !== undefined && !isAbsolutePathValue(record["secretRoot"])) {
+    problems.push("secretRoot is not an absolute path");
+  }
+  if (record["sandboxStateRoot"] !== undefined && !isAbsolutePathValue(record["sandboxStateRoot"])) {
+    problems.push("sandboxStateRoot is not an absolute path");
+  }
+  if (record["andaUrl"] !== undefined && !isAndaUrl(record["andaUrl"])) {
+    problems.push("andaUrl is not an http or https URL without userinfo");
+  }
+  const secretRoot = record["secretRoot"];
+  const sandboxStateRoot = record["sandboxStateRoot"];
+  const workspaceRoot = record["workspaceRoot"];
+  problems.push(
+    ...overlapProblems(
+      isAbsolutePathValue(secretRoot) ? secretRoot : undefined,
+      isAbsolutePathValue(sandboxStateRoot) ? sandboxStateRoot : undefined,
+      isAbsolutePathValue(workspaceRoot) ? workspaceRoot : undefined,
+    ),
+  );
+  return problems;
 }
 
 // The Anda bridge is required exactly when an Anda Engine URL is configured (C4). Without one, a
@@ -114,36 +159,77 @@ function plainRecord(input: unknown): Record<string, unknown> {
   return input as Record<string, unknown>;
 }
 
+function isImageReference(value: unknown): value is string {
+  return typeof value === "string" && IMAGE_PATTERN.test(value);
+}
+
 function requireImage(value: unknown): string {
-  if (typeof value !== "string" || !IMAGE_PATTERN.test(value)) {
+  if (!isImageReference(value)) {
     reject();
   }
   return value;
+}
+
+function isAbsolutePathValue(value: unknown): value is string {
+  return typeof value === "string" && isAbsolute(value);
 }
 
 // D-73: a relative state directory or workspace root is SCHEMA_INVALID.
 function requireAbsolutePath(value: unknown): string {
-  if (typeof value !== "string" || !isAbsolute(value)) {
+  if (!isAbsolutePathValue(value)) {
     reject();
   }
   return value;
 }
 
-function requireAndaUrl(value: unknown): string {
+function isAndaUrl(value: unknown): value is string {
   if (typeof value !== "string") {
-    reject();
+    return false;
   }
   let url: URL;
   try {
     url = new URL(value);
   } catch {
-    reject();
+    return false;
   }
   if (url.protocol !== "http:" && url.protocol !== "https:") {
-    reject();
+    return false;
   }
-  if (url.username !== "" || url.password !== "" || USERINFO_PATTERN.test(value)) {
+  return url.username === "" && url.password === "" && !USERINFO_PATTERN.test(value);
+}
+
+function requireAndaUrl(value: unknown): string {
+  if (!isAndaUrl(value)) {
     reject();
   }
   return value;
+}
+
+// Lexical only, no filesystem access: true when the two paths are equal or one lies inside the
+// other. A prefix sibling such as /srv/realm/secrets-old against /srv/realm/secrets is not overlap.
+function rootsOverlap(a: string, b: string): boolean {
+  return isSameOrInside(relative(a, b)) || isSameOrInside(relative(b, a));
+}
+
+function isSameOrInside(relativePath: string): boolean {
+  return relativePath === "" || (relativePath !== ".." && !relativePath.startsWith(`..${sep}`) && !isAbsolute(relativePath));
+}
+
+// Explicit values only: a derived default is checked by the doctor, not here.
+function overlapProblems(
+  secretRoot: string | undefined,
+  sandboxStateRoot: string | undefined,
+  workspaceRoot: string | undefined,
+): readonly string[] {
+  const problems: string[] = [];
+  if (secretRoot !== undefined && sandboxStateRoot !== undefined && rootsOverlap(secretRoot, sandboxStateRoot)) {
+    problems.push("secretRoot overlaps sandboxStateRoot");
+  }
+  if (secretRoot !== undefined && workspaceRoot !== undefined && rootsOverlap(secretRoot, workspaceRoot)) {
+    problems.push("secretRoot overlaps workspaceRoot");
+  }
+  if (sandboxStateRoot !== undefined && workspaceRoot !== undefined && rootsOverlap(sandboxStateRoot, workspaceRoot)) {
+    problems.push("sandboxStateRoot overlaps workspaceRoot");
+  }
+  return problems;
 }
