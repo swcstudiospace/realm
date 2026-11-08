@@ -4,7 +4,7 @@
 // shutdown on down. No live Podman, OpenShell, or Anda engine is started: the
 // adapter seam carries the existing fakes and scripted probes.
 
-import { after, test } from "node:test";
+import { after, test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import {
   existsSync,
@@ -42,7 +42,7 @@ import {
   type StartupReport,
 } from "../../src/daemon/daemon.js";
 import { selectionOf } from "../../src/daemon/client.js";
-import type { SessionEntry } from "../../src/daemon/sessions.js";
+import { HEALTH_PROBE_INTERVAL_MS, type SessionEntry } from "../../src/daemon/sessions.js";
 import type { CheckResult } from "../../src/doctor/checks.js";
 import { createLogger, nullLogger, type Logger } from "../../src/observe/logger.js";
 import { connectDaemon } from "../../src/daemon/client.js";
@@ -1199,6 +1199,7 @@ void test("OBS-02: a probe that resolves in error is logged", async (t) => {
   });
   const fixture = makeDirs();
   const { options } = daemonParts(fixture);
+  const health = healthIntervals(t);
   const daemon = await startDaemon({ ...options, logger });
   t.after(() => cleanupDaemon(daemon));
   const up = await sendRequest(daemon.socketPath, { id: "u1", method: "up", params: { workspaceRoot: fixture.ws } });
@@ -1208,9 +1209,12 @@ void test("OBS-02: a probe that resolves in error is logged", async (t) => {
     reason: "OPENSHELL_GATEWAY_LOST",
     lastTransitionAt: CLOCK_ISO,
   });
-  await new Promise<void>((resolve) => {
-    setTimeout(resolve, 12_000);
-  });
+  health.fire();
+  await pollUntil(
+    () => lines.some((line) => (JSON.parse(line) as { event?: string }).event === "health.probe_failed"),
+    "the health.probe_failed log row",
+    { timeoutMs: 5000 },
+  );
   const logged = lines.map((line) => JSON.parse(line) as { event?: string; code?: string }).find((row) => row.event === "health.probe_failed");
   assert.equal(logged?.code, "OPENSHELL_GATEWAY_LOST");
   const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down", params: selectedBy(fixture.ws) });
@@ -1818,6 +1822,7 @@ void test("OBS-03: starting the daemon adds no TCP or UDP listener, only the Uni
 void test("OBS-03: a probe that returns probe failed is counted", async (t) => {
   const fixture = makeDirs();
   const { options } = daemonParts(fixture);
+  const health = healthIntervals(t);
   const daemon = await startDaemon(options);
   t.after(() => cleanupDaemon(daemon));
   const up = await sendRequest(daemon.socketPath, { id: "u1", method: "up", params: { workspaceRoot: fixture.ws } });
@@ -1827,11 +1832,13 @@ void test("OBS-03: a probe that returns probe failed is counted", async (t) => {
     reason: "probe failed",
     lastTransitionAt: "2026-01-01T00:00:00.000Z",
   });
-  await new Promise<void>((resolve) => {
-    setTimeout(resolve, 12_000);
-  });
-  const reply = await sendRequest(daemon.socketPath, { id: "m1", method: "metrics", params: selectedBy(fixture.ws) });
-  const snap = reply.result as { healthProbeFailures?: { code?: string; count?: number }[] };
+  health.fire();
+  let snap: { healthProbeFailures?: { code?: string; count?: number }[] } = {};
+  await pollUntil(async () => {
+    const reply = await sendRequest(daemon.socketPath, { id: "m1", method: "metrics", params: selectedBy(fixture.ws) });
+    snap = reply.result as { healthProbeFailures?: { code?: string; count?: number }[] };
+    return snap.healthProbeFailures?.some((row) => row.code === "probe failed") === true;
+  }, "the metrics report a probe failed health probe failure", { timeoutMs: 5000 });
   assert.equal(snap.healthProbeFailures?.some((row) => row.code === "probe failed" && row.count === 1), true);
   const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down", params: selectedBy(fixture.ws) });
   assert.ok(down.result !== undefined);
@@ -1900,6 +1907,44 @@ function pause(ms: number): Promise<void> {
   return new Promise<void>((resolve) => {
     setTimeout(resolve, ms);
   });
+}
+
+// The session health interval period is the fixed HEALTH_PROBE_INTERVAL_MS, so a test that observes a probe fires the interval by
+// hand instead of sleeping through a period. Only an interval of that period is recorded; every other timer runs for real.
+function healthIntervals(t: TestContext): { fire(): void } {
+  const realSetInterval = globalThis.setInterval;
+  const realClearInterval = globalThis.clearInterval;
+  const armed: { readonly callback: () => void; readonly handle: NodeJS.Timeout; cleared: boolean }[] = [];
+  t.mock.method(globalThis, "setInterval", (callback: () => void, ms?: number): NodeJS.Timeout => {
+    if (ms !== HEALTH_PROBE_INTERVAL_MS) {
+      return realSetInterval(callback, ms);
+    }
+    const handle = setTimeout(() => undefined, 2 ** 31 - 1);
+    armed.push({ callback, handle, cleared: false });
+    return handle;
+  });
+  t.mock.method(globalThis, "clearInterval", (handle: NodeJS.Timeout | string | number | undefined): void => {
+    const entry = armed.find((candidate) => candidate.handle === handle);
+    if (entry === undefined) {
+      realClearInterval(handle);
+    } else {
+      entry.cleared = true;
+    }
+  });
+  t.after(() => {
+    for (const entry of armed) {
+      clearTimeout(entry.handle);
+    }
+  });
+  return {
+    fire: () => {
+      for (const entry of armed) {
+        if (!entry.cleared) {
+          entry.callback();
+        }
+      }
+    },
+  };
 }
 
 void test("T1 (a): up for a directory outside every policy root is refused POLICY_DENIED before any probe, container or record write", async (t) => {
