@@ -16,6 +16,7 @@ key-files:
   modified:
     - src/doctor/runtime-checks.ts
     - src/doctor/checks.ts
+    - src/runtime/openshell.ts
     - src/daemon/spawn-env.ts
     - test/doctor/runtime-root-checks.test.ts
     - test/doctor/checks.test.ts
@@ -95,7 +96,25 @@ actuals:
 - **Fix:** `runtimeChecks` throws `SCHEMA_INVALID` (a catalogue code) in that case rather than falling back to a guessed runner. `runChecks` always passes `defaultRunCommand`, so no caller in the tree hits it.
 - **Committed in:** 35ae71f
 
-**Total deviations:** 4 (2 blocking, 1 missing critical, 1 plan-vs-tree). **Impact:** none beyond the plan's intent.
+**5. [Rule 1 - Boundary] `OPENSHELL_BINARY` may not be imported into `src/doctor/runtime-checks.ts`**
+- **Found during:** orchestrator verification (full `npm run lint`)
+- **Issue:** Plan task 3 told the executor to import `OPENSHELL_BINARY` into `runtime-checks.ts`. The ESLint rule D-99/C-5 (`openshellBinary` in `eslint.config.js`) allows that identifier only in `src/tools/`, `src/runtime/openshell.ts`, `src/runtime/session-execution.ts` and `src/doctor/checks.ts`. The plan text is wrong on this point.
+- **Fix:** `src/runtime/openshell.ts` gained `gatewayStatusJsonCommand()`, returning a frozen `{ file, args }` for `openshell status -o json`. `gatewayCheck` runs `command.file` and `command.args` and names no binary. A test beside the OBS-04 one pins the file, the args and the frozen state. The rule, its allowlist and `buildGatewayStatusArgv` are unchanged.
+- **Committed in:** 8d0be55
+
+**Total deviations:** 5 (2 blocking, 1 missing critical, 1 plan-vs-tree, 1 boundary rule). **Impact:** none beyond the plan's intent.
+
+## Corrections after orchestrator verification
+
+This summary first said the plan was verified with targeted tests only. The orchestrator's full-gate run on the plan tip (7f6ef64) found that `npm run lint` and `npm run check:gates` failed for three reasons the targeted tests could not show:
+
+1. **Lint, ESLint rule D-99/C-5:** `src/doctor/runtime-checks.ts` imported and used `OPENSHELL_BINARY` (deviation 5).
+2. **Lint, `@typescript-eslint/no-unnecessary-condition`:** `test/doctor/runtime-root-checks.test.ts` used `item?.detail` after an assertion had narrowed `item`.
+3. **Gate, module-size ratchet:** `src/doctor/checks.ts` grew to 1059 lines against its allowlisted ceiling of 1051 (`scripts/check/module-size-allowlist.json`), because the three new `DoctorOptions` fields and the longer `runtimeChecks({...})` call added lines.
+
+Commit 8d0be55 (`fix(15-06)`) closed all three. The runtime option building moved into `runtimeCheckOptionsOf` in `src/doctor/runtime-checks.ts` (same conditional-spread rules, no behaviour change), so `runChecks` makes one call and `src/doctor/checks.ts` is 1050 lines. The three `DoctorOptions` fields and their comments stay for plan 15-07. The allowlist, the lint rule and every suppression policy are untouched. The `item` assertion in the test now narrows first and reads `item.detail` without a chain.
+
+Results observed after the fix, each run through the heavy-slot lock: `npm run typecheck` exit 0; `npm run lint` exit 0; `npm run check:gates` exit 0 (module size: 106 files, no violations); `npm run build` exit 0; the eight targeted test files (runtime-root-checks, checks, control-channel, runtime-checks, daemon e2e, spawn-env, dial-defaults, openshell-argv) pass, 138 tests, 0 failures. The full `npm test` was not run here; the orchestrator runs it.
 
 ## Issues Encountered
 
