@@ -12,6 +12,7 @@ import { AndaBridge, sleepUnlessAborted, type SleepFn } from "../../src/anda/cli
 import { RealmError } from "../../src/core/errors.js";
 import type { BridgeEvent } from "../../src/core/ports.js";
 import { FakeAnda, HEALTHY_INFORMATION } from "../support/fake-anda.js";
+import { testTimeout } from "../support/timing.js";
 
 // Count of live timers the runtime reports. A timer left behind after close shows here.
 function liveTimers(): number {
@@ -333,7 +334,7 @@ void test("ANDA-03: a connect that exhausts its deadline is retryable, and the r
 
 // Real timer: a connect must reject at its own deadline, not at the per-attempt request timeout,
 // because each attempt is clamped to the budget that remains (F1).
-void test("ANDA-03: a connect against a hung engine rejects at its deadline, not at the request timeout", { timeout: 20000 }, async (t) => {
+void test("ANDA-03: a connect against a hung engine rejects at its deadline, not at the request timeout", testTimeout(20000), async (t) => {
   const fake = new FakeAnda();
   await fake.start();
   t.after(() => fake.stop());
@@ -471,7 +472,7 @@ void test("ANDA-02/ANDA-03: connect, close, connect again succeeds against the f
 // The failed up stays pending and is delivered again on the next probe tick, so the listener that
 // failed once receives up again. The snapshot stays up while the delivery is pending: the engine
 // is up, and a failed delivery must not report a contradicting down.
-void test("ANDA-03: a listener that throws on up keeps the monitor running and re-delivers up on the next probe tick", { timeout: 5000 }, async (t) => {
+void test("ANDA-03: a listener that throws on up keeps the monitor running and re-delivers up on the next probe tick", testTimeout(5000), async (t) => {
   const fake = new FakeAnda();
   await fake.start();
   t.after(() => fake.stop());
@@ -537,7 +538,7 @@ void test("ANDA-03: a listener that throws on up keeps the monitor running and r
 // Real timers: an async listener whose promise rejects is a failed delivery, the same as a listener
 // that throws (F2). The rejection must not escape as an unhandled rejection, and the event is
 // delivered again on the next probe tick.
-void test("ANDA-03: an async listener that rejects is a failed delivery, not an unhandled rejection", { timeout: 5000 }, async (t) => {
+void test("ANDA-03: an async listener that rejects is a failed delivery, not an unhandled rejection", testTimeout(5000), async (t) => {
   const fake = new FakeAnda();
   await fake.start();
   t.after(() => fake.stop());
@@ -585,7 +586,7 @@ void test("ANDA-03: an async listener that rejects is a failed delivery, not an 
 // Real timers: a monitor that fails after its connection was closed must not write the snapshot of
 // the newer connection (F4). Its wait rejects only when its own connection aborts, so the failure
 // lands after a newer connect has started.
-void test("ANDA-03: a failure of a superseded monitor does not change the snapshot of a newer connection", { timeout: 5000 }, async (t) => {
+void test("ANDA-03: a failure of a superseded monitor does not change the snapshot of a newer connection", testTimeout(5000), async (t) => {
   const fake = new FakeAnda();
   await fake.start();
   t.after(() => fake.stop());
@@ -617,7 +618,7 @@ void test("ANDA-03: a failure of a superseded monitor does not change the snapsh
 // Real timers: the monitor's own loop fails on its first backoff draw. The monitor's terminal
 // handler records that as down with ANDA_UNREACHABLE, and close still resolves with no unhandled
 // rejection (A1).
-void test("ANDA-03: a monitor loop that fails on its own ends cleanly on close and records down with ANDA_UNREACHABLE", { timeout: 5000 }, async (t) => {
+void test("ANDA-03: a monitor loop that fails on its own ends cleanly on close and records down with ANDA_UNREACHABLE", testTimeout(5000), async (t) => {
   const fake = new FakeAnda();
   await fake.start();
   t.after(() => fake.stop());
@@ -647,7 +648,7 @@ void test("ANDA-03: a monitor loop that fails on its own ends cleanly on close a
 
 // Real timers: a throwing clock must not make up a stamp (site 448). The transition stays unstamped and undelivered,
 // the monitor keeps probing and retries it, and once the clock works again it is stamped and delivered.
-void test("ANDA-03: a throwing clock leaves a transition unstamped and undelivered, and a working clock later stamps and delivers it", { timeout: 5000 }, async (t) => {
+void test("ANDA-03: a throwing clock leaves a transition unstamped and undelivered, and a working clock later stamps and delivers it", testTimeout(5000), async (t) => {
   const fake = new FakeAnda();
   await fake.start();
   t.after(() => fake.stop());

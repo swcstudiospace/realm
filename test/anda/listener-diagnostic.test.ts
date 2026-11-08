@@ -4,6 +4,7 @@ import { AndaBridge } from "../../src/anda/client.js";
 import { makeRealmError } from "../../src/core/errors.js";
 import { createLogger, type LogSink, type Logger } from "../../src/observe/logger.js";
 import { FakeAnda } from "../support/fake-anda.js";
+import { testTimeout } from "../support/timing.js";
 
 // A debug-level logger whose JSON lines are collected in lines.
 function collectingLogger(lines: string[]): Logger {
@@ -61,7 +62,7 @@ void test("a throwing listener is logged with its catalogue code, and the next l
 
 // At-least-once (ANDA-03): a listener that throws has not received the event, so the event stays undelivered. The
 // monitor delivers it again on the next tick, and every listener runs again, the one that failed included.
-void test("a failed delivery stays undelivered, and the next tick delivers it to every listener again", { timeout: 5000 }, async (t) => {
+void test("a failed delivery stays undelivered, and the next tick delivers it to every listener again", testTimeout(5000), async (t) => {
   const fake = new FakeAnda();
   await fake.start();
   t.after(() => fake.stop());

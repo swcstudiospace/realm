@@ -19,6 +19,7 @@ import {
 } from "@grpc/grpc-js";
 import { SHUTDOWN_GRACE_MS, startSocketServer, type SocketServer } from "../../../src/runtime/driver/server.js";
 import { FakeLibpod, FakeLifecycle, FakeRuntime, driverConfig, socketDirectory } from "./fakes.js";
+import { testTimeout } from "../../support/timing.js";
 
 async function startOn(socketPath: string): Promise<SocketServer> {
   const libpod = new FakeLibpod();
@@ -160,7 +161,7 @@ async function openNeverEndingWatch(shutdownGraceMs: number): Promise<OpenWatch>
   return { server, socketPath, finished, closeClient: () => { client.close(); } };
 }
 
-void test("PRD-DRV-01: close cancels a stream the implementation never ends once the grace passes, and removes the socket", { timeout: 20_000 }, async () => {
+void test("PRD-DRV-01: close cancels a stream the implementation never ends once the grace passes, and removes the socket", testTimeout(20_000), async () => {
   const open = await openNeverEndingWatch(100);
   const started = Date.now();
   await open.server.close();
@@ -171,7 +172,7 @@ void test("PRD-DRV-01: close cancels a stream the implementation never ends once
   open.closeClient();
 });
 
-void test("PRD-DRV-01: close with no open calls resolves at once and removes the socket, and a second close is the same close", { timeout: 20_000 }, async () => {
+void test("PRD-DRV-01: close with no open calls resolves at once and removes the socket, and a second close is the same close", testTimeout(20_000), async () => {
   const socketPath = join(socketDirectory(), "driver.sock");
   const server = await startOn(socketPath);
   const started = Date.now();
@@ -183,7 +184,7 @@ void test("PRD-DRV-01: close with no open calls resolves at once and removes the
   assert.equal(existsSync(socketPath), false);
 });
 
-void test("PRD-DRV-01: a shutdown grace of zero cancels an open never-ending call at once and removes the socket", { timeout: 20_000 }, async () => {
+void test("PRD-DRV-01: a shutdown grace of zero cancels an open never-ending call at once and removes the socket", testTimeout(20_000), async () => {
   const open = await openNeverEndingWatch(0);
   const started = Date.now();
   await open.server.close();
@@ -194,7 +195,7 @@ void test("PRD-DRV-01: a shutdown grace of zero cancels an open never-ending cal
   open.closeClient();
 });
 
-void test("PRD-DRV-01: close after something else already removed the socket path resolves without error", { timeout: 20_000 }, async () => {
+void test("PRD-DRV-01: close after something else already removed the socket path resolves without error", testTimeout(20_000), async () => {
   const socketPath = join(socketDirectory(), "driver.sock");
   const server = await startOn(socketPath);
   unlinkSync(socketPath);
