@@ -75,7 +75,7 @@ Each run through the heavy-slot lock: `npm run typecheck`, `npm run lint`, `npm 
 
 ## Issues Encountered
 
-A first edit call used a repo-relative path from the wrong checkout (`/root/src/repos/agent-realm`); the edit tool rejected it on the hash mismatch and nothing was written there. All edits landed in the pinned root.
+A first edit call used a repo-relative path from the wrong checkout (the main checkout); the edit tool rejected it on the hash mismatch and nothing was written there. All edits landed in the pinned root.
 
 ## Known Stubs
 
