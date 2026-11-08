@@ -430,7 +430,7 @@ The live runs on the production stack (OpenShell 0.1.5 gateway, the Realm comput
 - The sandbox resolver is synthetic and answers only A queries. Every A query, including one for a made-up name or a `.invalid` name, gets the next address from `198.18.0.0/15`. Policy is enforced at connect time on the name behind that address. A host packet capture on ports 53 and 853 showed zero DNS packets for a made-up name, a `.invalid` name and a denied host name, and packets for the allowed host name only, so a name outside the allowlist is never forwarded as a DNS query (verified on the rebuilt image, 2026-10-28).
 - `realm down` leaves zero containers, sandboxes, supervisors and secret directories.
 - A wrong image digest fails closed.
-- The gated production live suite passes in full: ten scenarios, 33 of 33 assertions, exit 0, in 5.3 minutes (2026-10-30; the stack and the history are under "Running the production live suite").
+- The gated production live suite passed in full on 2026-10-30: ten scenarios, 33 of 33 assertions, exit 0, in 5.3 minutes (the stack and history are under "Running the production live suite"). The current suite has twelve numbered scenarios including 5b and 5c, plus the two-project scenario (`test/integration/production-driver.test.ts`); later window results are recorded in `.planning/phases/14-crash-safety-pack/14-VERIFICATION.md`.
 
 Decisions recorded with this evidence:
 
