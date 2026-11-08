@@ -727,7 +727,8 @@ void test("production live 5b: after the daemon is stopped with SIGTERM, the nex
   );
   assert.ok(stopped.ok, `after SIGTERM the daemon must exit and its container must be removed: ${stopped.detail}`);
 
-  // daemon.log is the detached daemon's inherited stderr and is never rotated, so the restart's records are the bytes after this offset.
+  // Daemon entry records use a rotating file sink. Read the current log from this saved offset;
+  // this assumes no rotation occurs during the interval.
   const daemonLog = join(scenario.environment.stateDir, "daemon.log");
   const logOffset = statSync(daemonLog).size;
 
@@ -1188,7 +1189,7 @@ void test("production live 10: a stopped gateway is OPENSHELL_GATEWAY_LOST, not 
     );
     assert.equal(sawCrashLoop, false, "a stopped gateway must not be reported as AGENTOS_CRASH_LOOP");
     assert.ok(errored.ok, `realm status must report OPENSHELL_GATEWAY_LOST within ${String(RUNNER_EXIT_OBSERVE_TIMEOUT_MS / 1000)} s: ${errored.detail}`);
-    const metrics = await realmCli(scenario.inputs, scenario.environment, ["metrics"], STATUS_TIMEOUT_MS);
+    const metrics = await realmCli(scenario.inputs, scenario.environment, ["metrics", "--workspace", scenario.inputs.workspaceRoot], STATUS_TIMEOUT_MS);
     assertExit(metrics, 0, "realm metrics after the gateway stop");
     const snap = JSON.parse(metrics.stdout) as { healthProbeFailures?: readonly { code?: string; count?: number }[] };
     const lost = snap.healthProbeFailures?.find((row) => row.code === "OPENSHELL_GATEWAY_LOST");
