@@ -3,9 +3,33 @@ import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { daemonSpawnEnv } from "../../src/daemon/spawn-env.js";
 import { launchFilteredDaemon, startDetachedDaemon } from "../../src/cli/main.js";
 
 const SENTINEL = "REALM_SENTINEL_MUST_NOT_LEAK";
+
+// The exact names daemonSpawnEnv keeps, besides the REALM_HOST_PIN_ prefix. Plan 15-06 removes the two gateway names.
+const ALLOWED_NAMES = [
+  "PATH",
+  "HOME",
+  "XDG_RUNTIME_DIR",
+  "XDG_CONFIG_HOME",
+  "REALM_DRIVER_SOCKET",
+  "REALM_DRIVER_GATEWAY_ENDPOINT",
+  "REALM_DRIVER_GATEWAY_CA",
+  "REALM_DRIVER_SUPERVISOR_BINARY",
+  "REALM_DRIVER_SUPERVISOR_SHA256",
+  "REALM_LOG_LEVEL",
+] as const;
+const HOST_PIN_NAMES = ["REALM_HOST_PIN_PODMAN_SHA256", "REALM_HOST_PIN_OPENSHELL_VERSION"] as const;
+const REFUSED_NAMES = [
+  "ANTHROPIC_API_KEY",
+  "AWS_SECRET_ACCESS_KEY",
+  "REALM_DRIVER_SECRET_ROOT",
+  "REALM_DRIVER_STATE_ROOT",
+  "REALM_DRIVER_WORKSPACE_ROOT",
+  "UNDEFINED_NAME",
+] as const;
 
 // What a child wrote about its environment. A value is null when the variable was absent.
 type ChildEnv = {
@@ -14,6 +38,7 @@ type ChildEnv = {
   readonly gateway: string | null;
   readonly ca: string | null;
   readonly level: string | null;
+  readonly staleSecretRoot: string | null;
 };
 
 // The child writes the file through a temporary name and renames it into place, so the path only ever
@@ -22,7 +47,7 @@ function script(outPath: string): string {
   return [
     "import { writeFileSync, renameSync } from 'node:fs';",
     `const tmp = ${JSON.stringify(`${outPath}.tmp`)};`,
-    `writeFileSync(tmp, JSON.stringify({ sentinel: process.env.${SENTINEL} ?? null, socket: process.env.REALM_DRIVER_SOCKET ?? null, gateway: process.env.REALM_DRIVER_GATEWAY_ENDPOINT ?? null, ca: process.env.REALM_DRIVER_GATEWAY_CA ?? null, level: process.env.REALM_LOG_LEVEL ?? null }));`,
+    `writeFileSync(tmp, JSON.stringify({ sentinel: process.env.${SENTINEL} ?? null, socket: process.env.REALM_DRIVER_SOCKET ?? null, gateway: process.env.REALM_DRIVER_GATEWAY_ENDPOINT ?? null, ca: process.env.REALM_DRIVER_GATEWAY_CA ?? null, level: process.env.REALM_LOG_LEVEL ?? null, staleSecretRoot: process.env.REALM_DRIVER_SECRET_ROOT ?? null }));`,
     `renameSync(tmp, ${JSON.stringify(outPath)});`,
   ].join("\n");
 }
@@ -88,6 +113,7 @@ void test("a sentinel variable does not reach the daemon on the CLI spawn or sta
     "REALM_DRIVER_GATEWAY_ENDPOINT",
     "REALM_DRIVER_GATEWAY_CA",
     "REALM_LOG_LEVEL",
+    "REALM_DRIVER_SECRET_ROOT",
   ] as const;
   const previous = new Map(restored.map((name) => [name, process.env[name]]));
   const assigned = {
@@ -96,6 +122,7 @@ void test("a sentinel variable does not reach the daemon on the CLI spawn or sta
     REALM_DRIVER_GATEWAY_ENDPOINT: "https://127.0.0.1:17671",
     REALM_DRIVER_GATEWAY_CA: "/run/realm/ca.crt",
     REALM_LOG_LEVEL: "error",
+    REALM_DRIVER_SECRET_ROOT: "/stale/secrets",
   };
   for (const name of restored) {
     process.env[name] = assigned[name];
@@ -109,11 +136,13 @@ void test("a sentinel variable does not reach the daemon on the CLI spawn or sta
     assert.equal(cli.gateway, "https://127.0.0.1:17671");
     assert.equal(cli.ca, "/run/realm/ca.crt");
     assert.equal(cli.level, "error");
+    assert.equal(cli.staleSecretRoot, null);
     assert.equal(omp.sentinel, null);
     assert.equal(omp.socket, "/run/realm/driver.sock");
     assert.equal(omp.gateway, "https://127.0.0.1:17671");
     assert.equal(omp.ca, "/run/realm/ca.crt");
     assert.equal(omp.level, "error");
+    assert.equal(omp.staleSecretRoot, null);
   } finally {
     for (const name of restored) {
       const prior = previous.get(name);
@@ -138,4 +167,27 @@ void test("a closing brace inside a string value round-trips through waitFor (Q0
   launchFilteredDaemon(entry, join(dir, "state"), { PATH: "/usr/bin", REALM_DRIVER_SOCKET: socket });
   const seen = (await waitFor(out)) as Pick<ChildEnv, "socket">;
   assert.equal(seen.socket, socket);
+});
+
+void test("daemonSpawnEnv keeps exactly the allowlisted names and the host-pin prefix", () => {
+  const source: Record<string, string | undefined> = {};
+  for (const name of [...ALLOWED_NAMES, ...HOST_PIN_NAMES, ...REFUSED_NAMES]) {
+    source[name] = `value-of-${name}`;
+  }
+  source["UNDEFINED_NAME"] = undefined;
+  const selected = daemonSpawnEnv(source);
+  assert.deepEqual(Object.keys(selected).sort(), [...ALLOWED_NAMES, ...HOST_PIN_NAMES].sort());
+  for (const name of REFUSED_NAMES) {
+    assert.equal(Object.hasOwn(selected, name), false, `${name} must not be selected`);
+  }
+});
+
+void test("daemonSpawnEnv skips undefined values and returns a fresh object each call", () => {
+  const source = { PATH: "/usr/bin", HOME: undefined, REALM_LOG_LEVEL: "error" };
+  const first = daemonSpawnEnv(source);
+  const second = daemonSpawnEnv(source);
+  assert.deepEqual(first, { PATH: "/usr/bin", REALM_LOG_LEVEL: "error" });
+  assert.equal(Object.values(first).every((value) => typeof value === "string"), true);
+  assert.notEqual(first, second);
+  assert.deepEqual(first, second);
 });
