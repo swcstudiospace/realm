@@ -109,6 +109,19 @@ void test("CORE-03: keys missing from a policy file take the validated defaults"
   });
 });
 
+void test("a policy file with startupBudgetMs above the client up wait fails SCHEMA_INVALID, and 200000 loads", () => {
+  withTempDir((dir) => {
+    const error = thrown(() =>
+      loadPolicyFile(writeJson(join(dir, "over.json"), { startupBudgetMs: 200001 })),
+    );
+    assert.ok(error instanceof SchemaInvalidError);
+    assert.equal(error.code, "SCHEMA_INVALID");
+    assert.match(error.detail, /\/startupBudgetMs/);
+    const policy = loadPolicyFile(writeJson(join(dir, "max.json"), { startupBudgetMs: 200000 }));
+    assert.equal(policy.startupBudgetMs, 200000);
+  });
+});
+
 void test("CORE-03: an unknown key in a policy file fails SCHEMA_INVALID and names the key", () => {
   withTempDir((dir) => {
     const error = thrown(() =>

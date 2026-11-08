@@ -29,10 +29,12 @@ export const SOCKET_TIMEOUT_MS = 5000;
 // caller reports TOOL_TIMEOUT while the daemon is still inside its own budget. doctor runs the registered items plus the
 // runtime checks; probes run together, each bounded at 5 s, so it gets 60 s. tool runs one dispatcher call under its
 // own bound, so it gets that bound plus 10 s for the reply.
-// The policy schema default for startupBudgetMs (policy.schema.json). It is mirrored, not imported:
-// this module keeps its five-import allowlist (P6-D10), and no control caller reads the daemon-owned
-// policy, so the up bound is built from the default. The channel test derives the default from the
-// schema and asserts the up bound exceeds it.
+// STARTUP_BUDGET_DEFAULT_MS mirrors both the default and the maximum of startupBudgetMs in
+// policy.schema.json, so policy load refuses a budget the up request cannot wait for. The up bound is
+// that maximum plus UP_REPLY_MARGIN_MS. It is mirrored, not imported: this module keeps its
+// five-import allowlist (P6-D10), and no control caller reads the daemon-owned policy. The channel
+// test asserts the schema maximum equals this constant and that the maximum plus the margin is no
+// more than the up bound.
 const STARTUP_BUDGET_DEFAULT_MS = 200_000;
 // Slack on top of the startup budget for the daemon's reply and the socket round trip.
 const UP_REPLY_MARGIN_MS = 30_000;

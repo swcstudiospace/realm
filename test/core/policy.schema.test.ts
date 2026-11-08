@@ -99,6 +99,25 @@ void test("a positive integer budget is accepted", () => {
   assert.equal(policy.toolQueueMs, 1);
 });
 
+void test("startupBudgetMs accepts the bounds 1 and 200000", () => {
+  assert.equal(value(validate("policy", { startupBudgetMs: 1 })).startupBudgetMs, 1);
+  assert.equal(value(validate("policy", { startupBudgetMs: 200000 })).startupBudgetMs, 200000);
+});
+
+void test("startupBudgetMs above the client up wait is rejected and the key is named", () => {
+  const error = rejection(validate("policy", { startupBudgetMs: 200001 }));
+  assert.equal(error.code, "SCHEMA_INVALID");
+  assert.match(error.detail, /\/startupBudgetMs/);
+});
+
+void test("startupBudgetMs rejects a non-integer, a string and null", () => {
+  for (const bad of [1.5, "1", null]) {
+    const error = rejection(validate("policy", { startupBudgetMs: bad }));
+    assert.equal(error.code, "SCHEMA_INVALID");
+    assert.match(error.detail, /\/startupBudgetMs/);
+  }
+});
+
 void test("an unknown key is rejected and named", () => {
   const error = rejection(validate("policy", { allowAll: true }));
   assert.equal(error.code, "SCHEMA_INVALID");

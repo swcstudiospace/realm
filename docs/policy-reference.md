@@ -212,8 +212,10 @@ A policy that has no `mode` key, or no policy file at all, used to load as `advi
 
 ## `startupBudgetMs`
 
-- **Type:** `integer`, minimum 1 (the `startupBudgetMs` property of
+- **Type:** `integer`, minimum 1, maximum 200000 (the `startupBudgetMs` property of
   `src/core/policy.schema.json`; `Policy.startupBudgetMs` in `src/contract/validate.ts`).
+  A value above 200000 is refused at policy load with `SCHEMA_INVALID`, so the
+  daemon does not start; lowering is allowed down to 1.
 - **Default:** `200000` ms (the `startupBudgetMs` property of `src/core/policy.schema.json`). The default covers the AgentOS start timeout of 180 s with margin.
 - **Effect:** one deadline covering the whole startup path. In
   `LifecycleController.create` the deadline is armed before the pinned-root
@@ -238,13 +240,16 @@ A policy that has no `mode` key, or no policy file at all, used to load as `advi
   `src/omp/plugin.ts`). Catalogue entry:
   `STARTUP_BUDGET_EXCEEDED` is retryable
   (`ERROR_CATALOGUE` in `src/core/errors.ts`).
-  The control channel's `up` request waits 230 s (the 200 s default plus a
-  30 s reply margin; `CONTROL_TIMEOUT_MS`, `src/daemon/channel.ts`) before
-  the caller reports `TOOL_TIMEOUT`, while `status`, `down`, `doctor` and
-  `tool` keep their own limits. No CLI or plugin caller reads the
-  daemon-owned policy, so a `startupBudgetMs` above 200 s can still outlast
-  the `up` request limit; the plugin's own 200 s timer is unchanged and fires
-  first.
+  The control channel's `up` request waits 230 s (the 200000 ms maximum of
+  this key plus a 30 s reply margin; `CONTROL_TIMEOUT_MS`,
+  `src/daemon/channel.ts`) before the caller reports `TOOL_TIMEOUT`, while
+  `status`, `down`, `doctor` and `tool` keep their own limits. Because the
+  key's maximum equals the `up` request's startup allowance, the `up` wait
+  always outlasts any accepted budget. The plugin's own timer
+  (`STARTUP_BUDGET_MS`, 200000) equals the maximum and the default, and a
+  lower configured budget does not change it. The daemon's runtime guard in
+  `src/daemon/daemon.ts` remains as defence in depth for a waiter whose
+  remaining client wait is shorter than the budget.
 - **Also see:** the single teardown bound `TEARDOWN_TIMEOUT_MS` (30000 ms) is a separate
   constant, not this key (`TEARDOWN_TIMEOUT_MS`, `src/lifecycle/controller.ts`).
 

@@ -4,10 +4,11 @@
 
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createConnection, createServer, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { RealmError, ERROR_CATALOGUE, type ErrorCode } from "../../src/core/errors.js";
 import {
   CONTROL_METHODS,
@@ -136,6 +137,28 @@ void test("RT-06: the up request outlasts the policy startup budget by a positiv
   assert.equal(CONTROL_TIMEOUT_MS.down, 45_000);
   assert.equal(CONTROL_TIMEOUT_MS.doctor, 60_000);
   assert.equal(CONTROL_TIMEOUT_MS.tool, TOOL_CALL_TIMEOUT_MS + 10_000);
+});
+
+void test("RT-06: the schema maximum of startupBudgetMs equals its default and the channel's mirrored default, and the up request outlasts it plus the reply margin", () => {
+  // Mirrors UP_REPLY_MARGIN_MS in src/daemon/channel.ts (not exported there).
+  const UP_REPLY_MARGIN_MS = 30_000;
+  // The compiled test lives in dist/test/daemon, so three levels up is the repository root.
+  const schemaPath = join(
+    dirname(fileURLToPath(import.meta.url)),
+    "..",
+    "..",
+    "..",
+    "src",
+    "core",
+    "policy.schema.json",
+  );
+  const schema = JSON.parse(readFileSync(schemaPath, "utf8")) as {
+    properties: { startupBudgetMs: { maximum: number; default: number } };
+  };
+  const { maximum, default: budgetDefault } = schema.properties.startupBudgetMs;
+  assert.equal(maximum, budgetDefault);
+  assert.equal(CONTROL_TIMEOUT_MS.up - UP_REPLY_MARGIN_MS, maximum);
+  assert.ok(maximum + UP_REPLY_MARGIN_MS <= CONTROL_TIMEOUT_MS.up);
 });
 
 void test("RT-06: a request line over MAX_CONTROL_LINE_BYTES is refused with a null-id SCHEMA_INVALID and never reaches the dispatcher (P6-D2, P6-D12)", async (t) => {

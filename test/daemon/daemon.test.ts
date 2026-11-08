@@ -2297,13 +2297,13 @@ void test("T1 (s): a waited down granted with budget below TEARDOWN_TIMEOUT_MS +
   assert.notEqual(daemon.session(id), undefined, "Q stays registered");
 });
 
-void test("T1 (t): an uncontended up with startupBudgetMs above the client bound still creates and replies the snapshot", async (t) => {
+void test("T1 (t): an uncontended up with startupBudgetMs at the schema maximum and an injected client bound below it still creates and replies the snapshot", async (t) => {
   const fixture = makeDirs();
   const parts = daemonParts(fixture, {
     policyPath: writePolicy(fixture, "budget-policy.json", {
       mode: "advisory",
       workspaceRoots: [fixture.ws],
-      startupBudgetMs: 900_000,
+      startupBudgetMs: 200_000,
     }),
     clientBoundMs: { up: 1000 },
   });
