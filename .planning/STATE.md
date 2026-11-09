@@ -4,10 +4,10 @@ milestone: v3.0
 milestone_name: Containment by Default
 status: planning
 stopped_at: Completed 15-09-PLAN.md
-last_updated: "2026-11-09T05:26:55.469Z"
+last_updated: "2026-11-09T05:40:16.932Z"
 last_activity: 2026-10-31
 last_activity_desc: actual lifecycle/doctor/C4 evidence reconciled; normalized onboarding docs authored; no checks, commits or phase completion by this worker
-state_head: 75631f465cb30a31140f0aec4a017f112c60257d
+state_head: 315b4fd869ce2a700fcd9d7dfa2503d4847aac46
 progress:
   total_phases: 9
   completed_phases: 0
@@ -172,6 +172,8 @@ Open follow-ups: the AgentOS sandbox runner in the follow-up milestone (RT-04, C
 | 261108-puz | Reconcile the v3.0 planning records with the integration line: stale STATE progress, REQUIREMENTS checkboxes, phase 13, 14, 17, 18, 19 and 20 verification and held-owner notes, scenario counts in AGENTS.md, README.md and openshell.md, and the live window results | 2026-11-08 | 09ec888 | [261108-puz-reconcile-the-v3-0-planning-records-with](./quick/261108-puz-reconcile-the-v3-0-planning-records-with/) |
 | 261109-6t9 | Disclose Omp fail-closed guard limitations in session status | 2026-11-09 | 63f4262 | [261109-6t9-disclose-omp-fail-closed-guard-limitatio](./quick/261109-6t9-disclose-omp-fail-closed-guard-limitatio/) |
 | 261109-6ta | Verify exact release repair tarball before artifact publication | 2026-11-09 | 75631f4 | [261109-6ta-verify-exact-release-repair-tarball-befo](./quick/261109-6ta-verify-exact-release-repair-tarball-befo/) |
+| 261109-7lk | Fail closed on name or label match in daemonless checkpoint proof | 2026-11-09 | dd568c6 | [261109-7lk-fail-closed-on-name-or-label-match-in-da](./quick/261109-7lk-fail-closed-on-name-or-label-match-in-da/) |
+| 261109-7ll | Diagnose two-project startup refusal with offline evidence | 2026-11-09 | 315b4fd | [261109-7ll-diagnose-two-project-startup-refusal-wit](./quick/261109-7ll-diagnose-two-project-startup-refusal-wit/) |
 
 ## Deferred Items
 
