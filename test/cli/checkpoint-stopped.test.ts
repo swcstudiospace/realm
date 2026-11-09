@@ -21,7 +21,9 @@ import { runCli, type CliDeps } from "../../src/cli/main.js";
 import { DaemonAbsentError } from "../../src/daemon/channel.js";
 import { selectionOf, type DaemonClient, type DaemonStatus } from "../../src/daemon/client.js";
 import { bindRoot } from "../../src/fs/root.js";
-import { realmSandboxName } from "../../src/runtime/openshell.js";
+import { OPENSHELL_SANDBOX_NAME_LABEL_KEY, realmSandboxName } from "../../src/runtime/openshell.js";
+import type { LibpodContainerSummary } from "../../src/runtime/libpod-client.js";
+import { FakeLibpod } from "../support/fake-libpod.js";
 import { snapshotWorkspace } from "../../src/session/checkpoint.js";
 import { workspaceRegistryDirOf } from "../../src/session/workspace-registry.js";
 
@@ -37,6 +39,7 @@ interface Fixture {
   readonly policyRoots: string[];
   readonly daemon: { mode: DaemonMode; connects: number };
   readonly podman: { mode: PodmanMode; calls: string[] };
+  readonly listing: { calls: [string, string][]; result: unknown; failAfter: number | undefined; matchAfter: number | undefined; hangs: boolean };
   readonly deps: CheckpointDeps;
 }
 
@@ -92,6 +95,7 @@ function fixture(t: TestContext): Fixture {
   const policyRoots = [root];
   const daemon: { mode: DaemonMode; connects: number } = { mode: "absent", connects: 0 };
   const podman: { mode: PodmanMode; calls: string[] } = { mode: "absent", calls: [] };
+  const listing: Fixture["listing"] = { calls: [], result: [], failAfter: undefined, matchAfter: undefined, hangs: false };
   const client: DaemonClient = {
     status: () => statusFor(daemon.mode),
     up: () => Promise.reject(new RealmError("REALM_NOT_ACTIVE")),
@@ -126,8 +130,19 @@ function fixture(t: TestContext): Fixture {
           return new Promise<never>(() => undefined);
       }
     },
+    listContainersByLabel: (key, value) => {
+      listing.calls.push([key, value]);
+      if (listing.hangs) return new Promise<never>(() => undefined);
+      if (listing.failAfter !== undefined && listing.calls.length > listing.failAfter) {
+        return Promise.reject(new Error("private engine detail"));
+      }
+      if (listing.matchAfter !== undefined && listing.calls.length > listing.matchAfter) {
+        return Promise.resolve([{ id: "different-name" }]);
+      }
+      return Promise.resolve(listing.result as LibpodContainerSummary[]);
+    },
   };
-  return { root, workspace, outside, stateDir, sessionId: selectionOf(workspace).sessionId, policyRoots, daemon, podman, deps };
+  return { root, workspace, outside, stateDir, sessionId: selectionOf(workspace).sessionId, policyRoots, daemon, podman, listing, deps };
 }
 
 function argv(command: "create" | "restore", workspace: string, id: string): string[] {
@@ -188,6 +203,8 @@ void test("RES-04 stopped: create and restore work with no entry, no daemon and 
   assertNoRegistry(fx);
   assert.ok(fx.podman.calls.length >= 2, "the proof repeats on every operation");
   assert.ok(fx.podman.calls.every((name) => name === realmSandboxName(fx.sessionId)));
+  assert.equal(fx.listing.calls.length, fx.podman.calls.length);
+  assert.ok(fx.listing.calls.every(([key, value]) => key === OPENSHELL_SANDBOX_NAME_LABEL_KEY && value === realmSandboxName(fx.sessionId)));
 });
 
 void test("RES-04 stopped: a daemon that answers unbound for an unregistered project proceeds, and the registry stays untouched", async (t) => {
@@ -199,6 +216,7 @@ void test("RES-04 stopped: a daemon that answers unbound for an unregistered pro
   assert.equal(restored.exitCode, 0, restored.stderr);
   assertNoRegistry(fx);
   assert.deepEqual(fx.podman.calls, [], "an answering daemon is the proof; Podman is not consulted");
+  assert.deepEqual(fx.listing.calls, []);
 });
 
 void test("RES-04 stopped: a daemon that answers active refuses with LOCK_CONFLICT and writes nothing", async (t) => {
@@ -273,6 +291,7 @@ void test("RES-04 stopped: a daemon that exists but did not answer is never trea
       assertRefused(await runCheckpointCommand(argv(command, fx.workspace, "before-edit"), fx.deps), "REALM_NOT_ACTIVE");
     }
     assert.deepEqual(fx.podman.calls, [], mode);
+    assert.deepEqual(fx.listing.calls, []);
     assertNothingWritten(fx);
     assert.deepEqual(treeBytes(fx.workspace), before);
   }
@@ -347,10 +366,107 @@ void test("RES-04 stopped: runCli passes the policy and inspect seams to the che
     ...(fx.deps.connect === undefined ? {} : { connect: fx.deps.connect }),
     ...(fx.deps.readPolicy === undefined ? {} : { readPolicy: fx.deps.readPolicy }),
     ...(fx.deps.inspectContainer === undefined ? {} : { inspectContainer: fx.deps.inspectContainer }),
+    ...(fx.deps.listContainersByLabel === undefined ? {} : { listContainersByLabel: fx.deps.listContainersByLabel }),
   };
   const result = await runCli(["checkpoint", ...argv("create", fx.workspace, "via-cli")], cliDeps);
   assert.equal(result.exitCode, 0, result.stderr);
   const printed: unknown = JSON.parse(result.stdout);
   assert.deepEqual(printed, { command: "create", checkpointId: "via-cli", entries: 3 });
   assertNoRegistry(fx);
+  assert.ok(fx.listing.calls.length > 0);
+});
+
+void test("RES-04 stopped: label matches and indeterminate listings refuse both operations without mutation", async (t) => {
+  const empty = fixture(t);
+  empty.listing.result = [{ id: "different-name" }];
+  assertRefused(await runCheckpointCommand(argv("create", empty.workspace, "new"), empty.deps), "REALM_NOT_ACTIVE");
+  assertNothingWritten(empty);
+  for (const result of [[{ id: "differently-named-container" }], null, {}, [undefined]] as unknown[]) {
+    const fx = fixture(t);
+    assert.equal((await runCheckpointCommand(argv("create", fx.workspace, "saved"), fx.deps)).exitCode, 0);
+    writeFileSync(join(fx.workspace, "a.txt"), "current\n");
+    const before = treeBytes(fx.workspace);
+    const checkpoint = join(fx.stateDir, "checkpoints", fx.sessionId, "saved");
+    const saved = treeBytes(checkpoint);
+    fx.listing.result = result;
+    for (const command of ["create", "restore"] as const) {
+      const response = await runCheckpointCommand(argv(command, fx.workspace, command === "create" ? "new" : "saved"), fx.deps);
+      assertRefused(response, "REALM_NOT_ACTIVE");
+      assert.deepEqual(treeBytes(fx.workspace), before);
+      assert.deepEqual(treeBytes(checkpoint), saved);
+      assert.equal(existsSync(join(fx.stateDir, "checkpoints", fx.sessionId, "new")), false);
+      assertNoRegistry(fx);
+    }
+  }
+});
+
+void test("RES-04 stopped: listing rejection and timeout refuse without leaking engine output", async (t) => {
+  const fx = fixture(t);
+  fx.listing.failAfter = 0;
+  for (const command of ["create", "restore"] as const) {
+    const response = await runCheckpointCommand(argv(command, fx.workspace, "x"), fx.deps);
+    assertRefused(response, "REALM_NOT_ACTIVE");
+    assert.doesNotMatch(response.stdout + response.stderr, /private engine detail/);
+  }
+  assertNothingWritten(fx);
+  fx.listing.hangs = true;
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const pending = runCheckpointCommand(argv("create", fx.workspace, "x"), fx.deps);
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
+  t.mock.timers.tick(PODMAN_PROOF_TIMEOUT_MS);
+  assertRefused(await pending, "REALM_NOT_ACTIVE");
+  assertNothingWritten(fx);
+});
+
+void test("RES-04 stopped: a later listing failure aborts create and restore safely", async (t) => {
+  for (const [command, mode] of [["create", "failure"], ["restore", "failure"], ["create", "match"], ["restore", "match"]] as const) {
+    const fx = fixture(t);
+    assert.equal((await runCheckpointCommand(argv("create", fx.workspace, "saved"), fx.deps)).exitCode, 0);
+    writeFileSync(join(fx.workspace, "a.txt"), "current\n");
+    const before = treeBytes(fx.workspace);
+    const checkpoint = join(fx.stateDir, "checkpoints", fx.sessionId, "saved");
+    const saved = treeBytes(checkpoint);
+    if (mode === "failure") fx.listing.failAfter = fx.listing.calls.length + 1;
+    else fx.listing.matchAfter = fx.listing.calls.length + 1;
+    const result = await runCheckpointCommand(argv(command, fx.workspace, command === "create" ? "new" : "saved"), fx.deps);
+    assertRefused(result, "REALM_NOT_ACTIVE");
+    assert.deepEqual(treeBytes(fx.workspace), before);
+    assert.deepEqual(treeBytes(checkpoint), saved);
+    assert.equal(existsSync(join(fx.stateDir, "checkpoints", fx.sessionId, "new")), false);
+    assertNoRegistry(fx);
+  }
+});
+
+void test("RES-04 stopped: default libpod transport filters all containers and rejects incomplete listings", async (t) => {
+  const fx = fixture(t);
+  const runtime = join(fx.root, "runtime");
+  mkdirSync(join(runtime, "podman"), { recursive: true });
+  const fake = new FakeLibpod();
+  await fake.start(join(runtime, "podman", "podman.sock"));
+  t.after(() => fake.stop());
+  const deps: CheckpointDeps = {
+    env: { ...fx.deps.env, XDG_RUNTIME_DIR: runtime },
+    ...(fx.deps.readConfig === undefined ? {} : { readConfig: fx.deps.readConfig }),
+    ...(fx.deps.readPolicy === undefined ? {} : { readPolicy: fx.deps.readPolicy }),
+    ...(fx.deps.connect === undefined ? {} : { connect: fx.deps.connect }),
+  };
+  assert.equal((await runCheckpointCommand(argv("create", fx.workspace, "saved"), deps)).exitCode, 0);
+  const listings = fake.requests().filter((request) => request.route === "listContainers");
+  assert.ok(listings.length > 0);
+  for (const listing of listings) {
+    const query = new URLSearchParams(listing.target.split("?")[1] ?? "");
+    assert.equal(query.get("all"), "true");
+    assert.deepEqual(JSON.parse(query.get("filters") ?? ""), {
+      label: [`${OPENSHELL_SANDBOX_NAME_LABEL_KEY}=${realmSandboxName(fx.sessionId)}`],
+    });
+  }
+  fake.store.add({ id: "different-name", labels: { [OPENSHELL_SANDBOX_NAME_LABEL_KEY]: realmSandboxName(fx.sessionId) }, running: false });
+  assertRefused(await runCheckpointCommand(argv("restore", fx.workspace, "saved"), deps), "REALM_NOT_ACTIVE");
+  fake.store.remove("different-name");
+  for (const body of ["{}", '[{}]', "["]) {
+    fake.respondNext("listContainers", { status: 200, body });
+    assertRefused(await runCheckpointCommand(argv("restore", fx.workspace, "saved"), deps), "REALM_NOT_ACTIVE");
+  }
 });

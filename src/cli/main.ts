@@ -35,6 +35,7 @@ import { createMcpServer } from "../mcp/server.js";
 import { loadRuntimeConfig, type RuntimeConfig } from "../runtime/config.js";
 import { readRuntimeConfigFile } from "../runtime/config-file.js";
 import { defaultPolicyPath, isDirectEntry, resolveConfigPath } from "../runtime/host-paths.js";
+import type { LibpodClient } from "../runtime/libpod-client.js";
 import {
   probePodman,
   type ConnectSocket,
@@ -148,6 +149,8 @@ export interface CliDeps {
   readonly readPolicy?: (path: string) => Policy;
   // The libpod inspect of a named container for realm checkpoint; resolves null for an absent one (default: host Podman).
   readonly inspectContainer?: (containerName: string) => Promise<unknown>;
+  // The filtered all-container listing used by the daemonless checkpoint proof.
+  readonly listContainersByLabel?: LibpodClient["listContainersByLabel"];
   // REALM_ANCHOR_KEY_FILE, read once by the entry edge (main) and used only by `realm anchor --publish`.
   readonly anchorKeyFile?: string | undefined;
   // RPC factory for realm anchor --publish (default createJsonRpc); tests inject a fake.

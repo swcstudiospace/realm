@@ -15,8 +15,8 @@
 // The library's sandboxRunning predicate proves the sandbox is stopped, in full on every call, in this order:
 //   1. the daemon answers: state unbound is stopped, any other state is running;
 //   2. there is no daemon (the control socket is absent or refuses the connection, DaemonAbsentError) and the entry was
-//      pinned in memory: Podman holds no container named for the session. A container in any state, an unresolvable
-//      or unreachable Podman, a failed or overlong inspect all leave the proof unfinished and refuse;
+//      pinned in memory: Podman holds neither a container named for the session nor one with its sandbox-name label.
+//      A container in any state, failed or overlong calls, or an invalid listing leave the proof unfinished and refuse;
 //   3. every other failure (a daemon that did not answer in time, an error or malformed reply, a connection dropped
 //      mid-reply), and no daemon for a registered project, refuse with REALM_NOT_ACTIVE without consulting Podman.
 // A daemon that exists but did not answer is never "no daemon": it may be running a sandbox.
@@ -34,8 +34,8 @@ import { DaemonAbsentError, type ControlSelection } from "../daemon/channel.js";
 import { connectDaemon, selectionOf, type DaemonClient, type DaemonStatus } from "../daemon/client.js";
 import { bindRoot, bindWorkspaceUnderPolicy, isInsideRoot, type PinnedRoot } from "../fs/root.js";
 import { defaultPolicyPath, podmanSocketPath } from "../runtime/host-paths.js";
-import { LibpodClient } from "../runtime/libpod-client.js";
-import { realmSandboxName } from "../runtime/openshell.js";
+import { LibpodClient, type LibpodContainerSummary } from "../runtime/libpod-client.js";
+import { OPENSHELL_SANDBOX_NAME_LABEL_KEY, realmSandboxName } from "../runtime/openshell.js";
 import {
   restoreWorkspace,
   snapshotWorkspace,
@@ -64,6 +64,8 @@ export interface CheckpointDeps {
   readonly readPolicy?: (path: string) => Policy;
   // The libpod inspect of the named container; resolves null for an absent one (default: the host Podman socket).
   readonly inspectContainer?: (containerName: string) => Promise<unknown>;
+  // The filtered libpod listing, including stopped containers (default: the host Podman socket).
+  readonly listContainersByLabel?: LibpodClient["listContainersByLabel"];
 }
 
 interface CheckpointArgs {
@@ -139,6 +141,14 @@ async function inspectThroughPodman(env: EnvironmentLike, containerName: string)
   return new LibpodClient(socketPath).inspectContainer(containerName);
 }
 
+async function listThroughPodman(env: EnvironmentLike, key: string, value: string): Promise<LibpodContainerSummary[]> {
+  const socketPath = podmanSocketPath(env);
+  if (socketPath === undefined) {
+    throw makeRealmError("REALM_NOT_ACTIVE");
+  }
+  return new LibpodClient(socketPath).listContainersByLabel(key, value);
+}
+
 export async function runCheckpointCommand(words: readonly string[], deps: CheckpointDeps): Promise<CliResult> {
   const args = parseCheckpointArgs(words);
   if (args === undefined) {
@@ -185,7 +195,9 @@ export async function runCheckpointCommand(words: readonly string[], deps: Check
   }
   const inspectContainer =
     deps.inspectContainer ?? ((containerName: string) => inspectThroughPodman(deps.env, containerName));
-  return runAgainstDaemon(client, args, entry, stateRoot, pinnedInMemory ? inspectContainer : undefined);
+  const listContainersByLabel =
+    deps.listContainersByLabel ?? ((key: string, value: string) => listThroughPodman(deps.env, key, value));
+  return runAgainstDaemon(client, args, entry, stateRoot, pinnedInMemory ? { inspectContainer, listContainersByLabel } : undefined);
 }
 
 // The inspect of the session's sandbox container: null when Podman holds none. Any failure or an overlong call rejects,
@@ -201,14 +213,13 @@ async function containerOf(
   );
 }
 
-// The library's predicate for a stopped sandbox. inspectContainer is present only for an entry pinned in memory: it is
-// the second proof, taken only when no daemon exists. It is bounded, and anything but an absent container fails the proof.
+// Only an in-memory-pinned entry can use the bounded dual-identity proof when the daemon is absent.
 async function runAgainstDaemon(
   client: DaemonClient,
   args: CheckpointArgs,
   entry: WorkspaceEntry,
   stateRoot: string,
-  inspectContainer: ((containerName: string) => Promise<unknown>) | undefined,
+  podman: Pick<CheckpointDeps, "inspectContainer" | "listContainersByLabel"> | undefined,
 ): Promise<CliResult> {
   // A property, not a let: the closure below sets it, and a narrowed local would read as constant at the catch.
   const state = { proofFailed: false };
@@ -218,14 +229,22 @@ async function runAgainstDaemon(
       return status.snapshot.state !== "unbound";
     } catch (error) {
       state.proofFailed = true;
-      if (error instanceof DaemonAbsentError && inspectContainer !== undefined) {
-        // No daemon: the proof is Podman's, and only an absent container finishes it.
-        const found = await containerOf(inspectContainer, entry.sessionId);
-        if (found === null) {
-          state.proofFailed = false;
-          return false;
+      if (error instanceof DaemonAbsentError && podman?.inspectContainer !== undefined && podman.listContainersByLabel !== undefined) {
+        const found = await containerOf(podman.inspectContainer, entry.sessionId);
+        if (found !== null) {
+          throw makeRealmError("REALM_NOT_ACTIVE");
         }
-        throw makeRealmError("REALM_NOT_ACTIVE");
+        const listContainersByLabel = podman.listContainersByLabel;
+        const listed: unknown = await withTimeout(
+          Promise.resolve().then(() => listContainersByLabel(OPENSHELL_SANDBOX_NAME_LABEL_KEY, realmSandboxName(entry.sessionId))),
+          PODMAN_PROOF_TIMEOUT_MS,
+          "TOOL_TIMEOUT",
+        );
+        if (!Array.isArray(listed) || listed.length !== 0) {
+          throw makeRealmError("REALM_NOT_ACTIVE");
+        }
+        state.proofFailed = false;
+        return false;
       }
       throw error;
     }
