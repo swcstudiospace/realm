@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -428,4 +428,165 @@ test("pack-smoke fails a real tarball that omits adapters/prime-agent/skills/rea
   const { status, stderr } = await runPackSmokeWithoutAdapterFile("adapters/prime-agent/skills/realm/SKILL.md");
   assert.equal(status, 1, stderr);
   assert.ok(stderr.includes("missing adapter files: adapters/prime-agent/skills/realm/SKILL.md"), stderr);
+});
+
+// Execute the checked-in shell block with local command fakes. The fixture "tarball" is a JSON
+// archive: fake npm installs its actual bytes without a registry, while runCheck and its probe are real.
+function milestoneBuildBlock() {
+  const workflow = readFileSync(join(REPO_ROOT, ".github/workflows/ci.yml"), "utf8");
+  const matches = [...workflow.matchAll(/^ {6}- name: Build milestone files\n(?:(?! {6}- name:)[\s\S])*? {8}run: \|\n((?: {10}.*\n|\n)+)/gm)];
+  assert.equal(matches.length, 1, "expected exactly one milestone build block");
+  const block = matches[0][1].replace(/^ {10}/gm, "");
+  assert.doesNotMatch(block, /\$\{\{/);
+  return block;
+}
+
+function fixtureArchive(root) {
+  const files = {};
+  function visit(dir, prefix = "") {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const name = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) visit(join(dir, entry.name), name);
+      else files[name] = readFileSync(join(dir, entry.name), "utf8");
+    }
+  }
+  visit(root);
+  return JSON.stringify(files);
+}
+
+function runMilestoneFixture(options = {}) {
+  let result;
+  withTempRoots("realm-milestone-workflow-", 1, (root) => {
+    const workspace = join(root, "workspace");
+    const historical = join(root, "historical");
+    const packageRoot = join(root, "package");
+    const bin = join(root, "bin");
+    const temp = join(root, "runner");
+    const events = join(root, "events");
+    const version = "0.3.42";
+    for (const dir of [workspace, historical, packageRoot, bin, temp]) mkdirSync(dir, { recursive: true });
+    for (const file of ["scripts/check/pack-smoke.mjs", "scripts/release/sync-version.mjs"]) {
+      mkdirSync(dirname(join(workspace, file)), { recursive: true });
+      cpSync(join(REPO_ROOT, file), join(workspace, file));
+    }
+    writeFixture(workspace, "adapters/current-only.txt", "not in the tag\n");
+    writePackageTree(historical, version);
+    writePackageTree(packageRoot, options.packageVersion ?? version);
+    writeFixture(packageRoot, "package.json", JSON.stringify({
+      name: "agent-realm", type: "module", version: options.packageVersion ?? version,
+      bin: { realm: "./dist/src/cli/main.js" }, omp: { extensions: ["./dist/src/omp/extension.js"] },
+    }));
+    writeFixture(packageRoot, "dist/src/contract/validate.js", "export function validate() { return { ok: true }; }\n");
+    if (options.adapterVersion) writeFixture(packageRoot, "adapters/hermes-agent/plugin.json", JSON.stringify({ version: options.adapterVersion }));
+    if (options.omit) rmSync(join(packageRoot, options.omit));
+    if (options.sourceExtra) writeFixture(historical, "adapters/tag-only.txt", "required by the tag\n");
+    if (options.oldChecker) writeFixture(historical, "scripts/check/pack-smoke.mjs", "export async function runCheck() { return 0; }\n");
+    writeFixture(historical, "CHANGELOG.md", `## [${version}]\n`);
+    const archive = fixtureArchive(packageRoot);
+    const archivePath = join(root, "fixture.tgz");
+    writeFileSync(archivePath, archive);
+    const fake = `#!${process.execPath}
+const fs = require("node:fs");
+const path = require("node:path");
+const cp = require("node:child_process");
+const name = path.basename(process.argv[1]);
+const args = process.argv.slice(2);
+const log = (event) => fs.appendFileSync(process.env.EVENTS, event + "\\n");
+const fail = () => { console.error("unexpected " + name + " " + args.join(" ")); process.exit(90); };
+if (name === "git") {
+  if (args.join(" ") === "worktree prune") log("prune");
+  else if (args[0] === "worktree" && args[1] === "add" && args[2] === "--detach" && args[4] === "refs/tags/v0.3.42") {
+    fs.cpSync(process.env.HISTORICAL, args[3], { recursive: true }); log("worktree-add");
+  } else if (args[0] === "worktree" && args[1] === "remove" && args[2] === "--force" && args.length === 4) {
+    fs.rmSync(args[3], { recursive: true, force: true }); log("worktree-remove");
+  } else fail();
+} else if (name === "npm") {
+  if (args.join(" ") === "ci --ignore-scripts") log("ci");
+  else if (args.join(" ") === "run build") log("build");
+  else if (args.join(" ") === "pack") {
+    log("pack");
+    if (process.env.MISSING_TARBALL !== "1") fs.copyFileSync(process.env.ARCHIVE, "agent-realm-0.3.42.tgz");
+  } else if (args.length === 5 && args.slice(0, 4).join(" ") === "install --no-audit --no-fund --ignore-scripts") {
+    log("install:" + args[4]);
+    const files = JSON.parse(fs.readFileSync(args[4], "utf8"));
+    for (const [file, content] of Object.entries(files)) {
+      const dest = path.join(process.cwd(), "node_modules/agent-realm", file);
+      fs.mkdirSync(path.dirname(dest), { recursive: true }); fs.writeFileSync(dest, content);
+    }
+  } else fail();
+} else if (name === "node") {
+  if (args[0] === "scripts/release/changelog.mjs") {
+    log("notes"); fs.writeFileSync("notes.md", "notes\\n");
+  } else if (args[0] === path.join(process.env.GITHUB_WORKSPACE, "scripts/release/assets.mjs")) {
+    if (args.length !== 7 || args[1] !== "--root" || args[3] !== "--tarball" || args[5] !== "--out") fail();
+    log("assets:" + args[4]);
+    fs.mkdirSync(args[6], { recursive: true });
+    fs.writeFileSync(path.join(args[6], "SHA256SUMS"), "fixture\\n");
+    fs.writeFileSync(path.join(args[6], "agent-realm-0.3.42.cdx.json"), "{}\\n");
+  } else {
+    const child = cp.spawnSync(process.execPath, args, { stdio: "inherit", env: process.env });
+    process.exit(child.status === null ? 91 : child.status);
+  }
+} else fail();
+`;
+    for (const name of ["git", "npm", "node", "gh", "curl", "wget"]) {
+      const path = join(bin, name);
+      writeFileSync(path, fake);
+      chmodSync(path, 0o755);
+    }
+    if (options.breakChecker) rmSync(join(workspace, "scripts/check/pack-smoke.mjs"));
+    const child = spawnSync("/bin/bash", ["-c", milestoneBuildBlock()], {
+      cwd: workspace,
+      encoding: "utf8",
+      timeout: 15000,
+      env: {
+        PATH: `${bin}:/usr/bin:/bin`, HOME: root, TMPDIR: temp,
+        GITHUB_WORKSPACE: workspace, RUNNER_TEMP: temp, TAG: `v${version}`,
+        RELEASE_DATE: "2026-11-09", HISTORICAL: historical, ARCHIVE: archivePath, EVENTS: events,
+        MISSING_TARBALL: options.missingTarball ? "1" : "0",
+      },
+    });
+    const out = join(temp, "milestone-files");
+    result = {
+      ...child,
+      events: existsSync(events) ? readFileSync(events, "utf8").trim().split("\n") : [],
+      handoff: existsSync(out) ? readdirSync(out).sort() : [],
+      copied: existsSync(join(out, `agent-realm-${version}.tgz`)) ? readFileSync(join(out, `agent-realm-${version}.tgz`), "utf8") : null,
+      archive,
+      worktreeExists: existsSync(join(temp, `finish-${version}`)),
+      tarball: join(temp, `finish-${version}`, `agent-realm-${version}.tgz`),
+    };
+  });
+  return result;
+}
+
+test("milestone build checks the historical package before producing and handing off the same bytes", () => {
+  for (const oldChecker of [false, true]) {
+    const result = runMilestoneFixture({ oldChecker });
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(result.events, ["prune", "worktree-add", "ci", "build", "pack", `install:${result.tarball}`, "notes", `assets:${result.tarball}`, "worktree-remove"]);
+    assert.deepEqual(result.handoff, ["SHA256SUMS", "agent-realm-0.3.42.cdx.json", "agent-realm-0.3.42.tgz", "milestone-tag.txt", "notes.md"]);
+    assert.equal(result.copied, result.archive);
+    assert.equal(result.worktreeExists, false);
+  }
+});
+
+test("milestone build fails closed on bad tarballs and checker failures", () => {
+  for (const [options, diagnostic] of [
+    [{ packageVersion: "0.3.41" }, "packed package is not at version"],
+    [{ adapterVersion: "0.3.41" }, "adapters/hermes-agent/plugin.json"],
+    [{ omit: "adapters/prime-agent/MCP.md" }, "missing adapter files"],
+    [{ missingTarball: true }, "does not exist"],
+    [{ sourceExtra: true }, "adapters/tag-only.txt"],
+    [{ breakChecker: true }, "pack-smoke.mjs"],
+    [{ oldChecker: true, packageVersion: "0.3.41" }, "packed package is not at version"],
+  ]) {
+    const result = runMilestoneFixture(options);
+    assert.notEqual(result.status, 0, JSON.stringify(options));
+    assert.ok(result.stderr.includes(diagnostic), result.stderr);
+    assert.equal(result.events.some((event) => event === "notes" || event.startsWith("assets:")), false);
+    assert.deepEqual(result.handoff, []);
+    assert.equal(result.events.at(-1), "worktree-remove");
+    assert.equal(result.worktreeExists, false);
+  }
 });
