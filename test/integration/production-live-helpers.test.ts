@@ -13,6 +13,7 @@ import { join } from "node:path";
 import { Script } from "node:vm";
 import type { PodmanProbe } from "../../src/runtime/podman-version.js";
 import { sandboxNameOfSession, sessionIdOfWorkspace } from "../../src/session/paths.js";
+import { driverConfig } from "../runtime/driver/fakes.js";
 import {
   adoptedCountOfNotice,
   auditLinesWithCorrelation,
@@ -770,17 +771,19 @@ void test("ONB-03: the gate names REALM_LIVE_DRIVER_CONFIG when the file is vali
 });
 
 void test("ONB-03: a scenario config writes the explicit roots and the CLI environment carries no driver root variable", (t) => {
+  const driver = driverConfig();
   const inputs: LiveInputs = {
     image: ONB03_IMAGE,
-    stateRoot: "/onb03/sandbox-store",
-    secretRoot: "/onb03/secret-store",
-    workspaceRoot: "/onb03/workspace",
+    stateRoot: driver.sandboxStateRoot,
+    secretRoot: driver.secretRoot,
+    workspaceRoot: driver.workspaceRoot,
     cliPath: "/cli.js",
     hostEnvironment: { PATH: "/bin" },
   };
   const scenario = createScenarioEnvironment(inputs, { image: inputs.image });
   t.after(() => {
     rmSync(scenario.root, { recursive: true, force: true });
+    rmSync(join(driver.workspaceRoot, ".."), { recursive: true, force: true });
   });
   const configHome = scenario.cliEnvironment["XDG_CONFIG_HOME"];
   assert.notEqual(configHome, undefined);
@@ -788,10 +791,13 @@ void test("ONB-03: a scenario config writes the explicit roots and the CLI envir
   assert.deepEqual(written, {
     image: inputs.image,
     stateDir: scenario.stateDir,
-    workspaceRoot: "/onb03/workspace",
-    secretRoot: "/onb03/secret-store",
-    sandboxStateRoot: "/onb03/sandbox-store",
+    workspaceRoot: driver.workspaceRoot,
+    secretRoot: driver.secretRoot,
+    sandboxStateRoot: driver.sandboxStateRoot,
   });
+  assert.notEqual(scenario.stateDir, driver.stateDir);
+  assert.notEqual(scenario.stateDir, inputs.stateRoot);
+  assert.notEqual(driver.stateDir, driver.sandboxStateRoot);
   const names = Object.keys(scenario.cliEnvironment);
   for (const stale of ["REALM_DRIVER_STATE_ROOT", "REALM_DRIVER_SECRET_ROOT", "REALM_DRIVER_WORKSPACE_ROOT"]) {
     assert.equal(names.includes(stale), false, stale);
