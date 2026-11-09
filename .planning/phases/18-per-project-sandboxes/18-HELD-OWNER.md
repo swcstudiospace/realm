@@ -4,6 +4,8 @@ Recorded by lane B (`gsd/v3-lane-b`), 2026-11-02; updated after the owner's answ
 
 Requirements held: MULTI-01 to MULTI-06 (`.planning/REQUIREMENTS.md`, lines 84 to 89). MULTI-01 has its decision recorded in `docs/integration/runtime-decision.md` (D5(i), 2026-10-30); the runtime is not implemented.
 
+**2026-11-08 reconciliation:** MULTI-02/03/06 and the offline parts of MULTI-04/05 are implemented with authored tests; live acceptance remains held (`.planning/REQUIREMENTS.md`, MULTI-02 through MULTI-06). The statements above describe the earlier lane.
+
 ## Why it is held
 
 1. **The execution set is chosen; it is not yet checked beyond structure.** The owner chose the 15-plan set at 96642c1 (18-01 to 18-14 with 18-04b). Its structural check passes. The plan-checker pass beyond structure and the Phase 17 precondition check are pending.
@@ -17,8 +19,12 @@ Requirements held: MULTI-01 to MULTI-06 (`.planning/REQUIREMENTS.md`, lines 84 t
 - **D18-3 (owner live window): the two-project scenario** (MULTI-05) is held with the other live items in the batched owner window.
 - **Owner items (not decided here):** (a) the `TOOL_TIMEOUT` reason, 'A tool call did not finish within its queue timeout.', now also answers lock-wait expiry for `up` and `down`. Keep it or change the text; no new code is added without owner approval. (b) At HEAD, a policy `startupBudgetMs` above the client's `up` bound (about 230 s) lets the create outlive the client's bound (`src/daemon/channel.ts` lines 26 to 29 document this). Choose a schema maximum, or a client bound derived from the policy. (c) Acknowledge the seven pre-record commits before any merge toward trunk.
 
+**2026-11-08 owner decisions:** (a) Keep the `TOOL_TIMEOUT` reason text; no code change. (b) Use a schema maximum of 200000 for `startupBudgetMs` (`src/core/policy.schema.json`, QUICK-SB `a7b765c`, records `91d4afe`). (c) The seven commits `4bfca1a` through `e2baed6` stand; none is merged to trunk and human review remains required before merge (`261108-puz-CONTEXT.md`, owner decisions).
+
 ## What is not done
 
 - Plans 01, 02, 03, 04, 04b, 05 and 07 are implemented and committed on `gsd/v3-phase18`. The lane's focused suites are lane-reported and were not re-run here. Plans 06 and 08 to 14 are not executed.
 - No full gate set (typecheck, lint, test, build, test:integration, test:scripts, check:docs, check:gates, check:pack, check:mcp) has run on any Phase 18 head.
+
+**2026-11-08 reconciliation:** The plan-status statements above describe this record, not all later integration work; see `.planning/REQUIREMENTS.md`, MULTI rows. The lane gate set at `9cdbe8e` and `c39abe6` recorded typecheck 0, lint 0, npm test 2936 passed/0 failed/37 skipped, test:scripts 0, check:docs 0, check:gates 0, check:pack 0 and check:mcp 0 (`261108-puz-CONTEXT.md`, verified facts); this is not live acceptance.
 - Phase 19 depends on Phase 18 and is held with it (`19-HELD-OWNER.md`).
