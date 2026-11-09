@@ -5,36 +5,17 @@
 // DaemonClient, and any refusal it carries, that RealmPluginOptions.attachDaemon resolves. src/omp/extension.ts is the edge that
 // builds that client and the only module in the Omp wiring that reads the environment.
 //
-// Verified host surface (docs/integration/omp.md, Phase 5 verification pass). Only these names are used:
-//   - pi.on(event, handler) with the session_start, session_switch, session_shutdown, and tool_call names. session_switch is
-//     the row S2b of docs/integration/omp.md: its payload is read defensively, and a payload without a working directory keeps
-//     the attachment.
-//   - The tool_call return { block?, reason? }. The handler returns a Promise; the host fails
-//     closed on error or timeout (toolCallTimeoutMs, upstream-sourced).
-//   - ctx.cwd: the session working directory, bound as the workspace root at attach.
-//   - ctx.ui.setStatus(key, text) per-key storage, plus ctx.ui.notify for the advisory warning.
-//     The exact setStatus key-plus-text signature was found only upstream (OQ-P5-01).
-//   - Managed timers ctx.setTimeout() / ctx.setInterval() / ctx.clearTimer(). The host clears its
-//     managed callbacks on session shutdown; the plugin also clears every timer it armed there.
-//   - pi.registerCommand(name, { description, handler }) for the retry command.
-//   - pi.registerTool(definition) for the five Realm tools (OMPX-02). The definitions and the frozen ToolCall shape are in tools.ts.
-//   - pi.getAllTools(), pi.getActiveTools() and pi.setActiveTools(names) for the fail-closed allowlist (OMPX-03; spike S2a).
-// Tool removal (OMPX-03): a fail-closed attach removes every built-in outside the allowlist with setActiveTools and reads it
-// back. bash stays on the allowlist, so the tool_call guard refuses it with a catalogue code (tools.ts). That mechanism is the one
-// the Enforcement spike proved on Omp 18.12.6 (docs/integration/omp.md); no tooltip surface is used.
-// The tool_call guard stays as the backstop. Neither removal nor a hook is documented to cover every host path (OQ-P5-02).
-//
-// Deviations recorded here:
-//   - P5-D5: the label, the reason, and the last-transition time share one status item
-//     (REALM_STATUS_KEY). The host offers no tooltip, so the reason and time ride in that item's text.
-//   - Required mode is the fail-closed policy mode (the default; advisory is an explicit opt-in). The mode is the policy
-//     mode the daemon reports in its status value; the plugin reads no policy file.
-//   - The startup budget is STARTUP_BUDGET_MS. The policy is daemon-owned, so the plugin cannot read
-//     policy.startupBudgetMs; the constant mirrors the policy schema default.
-//   - No push channel carries transitions from the daemon. While attached, the indicator repaints on
-//     attach, on retry, on every guarded call, and on a bounded poll (STATUS_POLL_MS) of the daemon status.
-//   - O4 (16-04): bounded re-attach (REALM_OMP_REATTACH) adds no handshake and no protocol version. The control protocol
-//     has none; whether one is required is the owner's decision, recorded in the O4 report and not implemented here.
+// The host surface and its evidence are recorded in docs/integration/omp.md:
+//   - pi.on handles session_start, session_switch, session_shutdown and tool_call.
+//   - session_switch keeps the attachment when its payload has no working directory.
+//   - ctx.cwd selects the workspace; ctx.ui.setStatus and notify carry status and warnings.
+//   - Managed timers are cleared by the host at shutdown and by the plugin when it ends the session.
+//   - pi.registerCommand registers retry; pi.registerTool registers the five Realm tools.
+//   - getAllTools/getActiveTools/setActiveTools maintain the fail-closed allowlist.
+// bash remains on the allowlist and the tool_call backstop refuses it. Neither removal nor
+// the hook covers every host path (OQ-P5-02). The host fails closed on hook errors or timeouts.
+// One status item carries label, reason and time (P5-D5); changes are polled without a push channel.
+// The daemon owns policy; STARTUP_BUDGET_MS mirrors its default. Bounded re-attach adds no handshake (O4).
 
 import { makeRealmError, RealmError } from "../core/errors.js";
 import type { MutationDenyCode } from "../core/policy.js";
@@ -124,7 +105,7 @@ export interface ActiveSession {
   readonly tools: HostToolSet;
   // Live client, or null while the host is disconnected.
   client: DaemonClient | null;
-  // Policy mode from the last status the daemon reported; null until one arrives.
+  // Last mode successfully applied and read back for this session; null until the first success.
   mode: PolicyMode | null;
   // Managed timers armed and not yet cleared, each with the action that ends its wait at shutdown.
   // Shutdown clears every handle and runs its action, so no timer outlives the session.
@@ -173,23 +154,19 @@ export const REALM_RETRY_COMMAND = "realm-retry";
 export const GUARDED_HOST_TOOLS: readonly string[] = Object.freeze(["edit"]);
 
 // ---- Status rendering (OMP-02, OMP-03; P5-D5) -------------------------------
-// One shared label from displayStatus, the only label source. The leading
-// marker (● active family, ○ disconnected family) and the [degraded] flag are
-// text, so the state stays readable without colour. Degraded keeps the active
-// label with its flag; it is never a third label. The reason and the last
-// transition time follow the label in the same text.
-//
-// Each real transition paints once. Attach, retry, every guarded status read, and every poll tick
-// render the snapshot, so the last painted text is kept per indicator and a render equal to it is
-// skipped (OMP-03). A changed reason or time always paints.
+// One shared label with a readable marker, degraded flag, reason, time and mode disclosure.
+// Cache the full text per UI so any change repaints and identical status reads stay quiet.
+// A known mode is current only after a successful status read and active-tool readback.
+// On a failed read or application, it describes the last success, not the present tool set.
 
 const lastPainted = new WeakMap<OmpStatusUi, string>();
 
-export function renderRealmStatus(ui: OmpStatusUi, snapshot: StateSnapshot): void {
+export function renderRealmStatus(ui: OmpStatusUi, snapshot: StateSnapshot, mode: PolicyMode | null, confirmed: boolean, reconnectCode?: string): void {
   const display = displayStatus(snapshot);
   const marker = display.label === STATUS_LABELS.active ? "●" : "○";
   const flag = display.degraded ? " [degraded]" : "";
-  const text = `${marker} ${display.label}${flag} · ${display.reason} · ${display.lastTransitionAt}`;
+  const modeText = mode === null ? "mode: unknown" : `${confirmed ? "applied mode" : "last successfully applied mode"}: ${mode}${mode === "fail-closed" ? " (Omp host-tool guard; not host process containment)" : ""}`;
+  const text = `${marker} ${display.label}${flag} · ${display.reason}${reconnectCode === undefined ? "" : ` (${reconnectCode})`} · ${display.lastTransitionAt} · ${modeText}`;
   if (lastPainted.get(ui) === text) {
     return;
   }
@@ -201,10 +178,10 @@ export function renderRealmStatus(ui: OmpStatusUi, snapshot: StateSnapshot): voi
 
 // Paints a refusal the attach reported, in the same error rendering a thrown attach error uses: the reason is the refusal's code.
 // The stamp is kept while the same code stands, so repaint ticks stay quiet.
-function paintRefusal(session: ActiveSession, code: string): void {
+function paintRefusal(session: ActiveSession, code: string, confirmed = false): void {
   const at = session.errorStamp?.code === code ? session.errorStamp.at : nowIso();
   session.errorStamp = { code, at };
-  renderRealmStatus(session.ctx.ui, { state: "error", reason: code, lastTransitionAt: at });
+  renderRealmStatus(session.ctx.ui, { state: "error", reason: code, lastTransitionAt: at }, session.mode, confirmed);
 }
 
 // Paints one successful status read. While the daemon reports the state a refusal was reported in, the refusal stays on
@@ -212,12 +189,12 @@ function paintRefusal(session: ActiveSession, code: string): void {
 function paintStatusRead(session: ActiveSession, snapshot: StateSnapshot): void {
   const refusal = session.refusal;
   if (refusal !== null && refusal.state === snapshot.state) {
-    paintRefusal(session, refusal.code);
+    paintRefusal(session, refusal.code, true);
     return;
   }
   session.refusal = null;
   session.errorStamp = null;
-  renderRealmStatus(session.ctx.ui, snapshot);
+  renderRealmStatus(session.ctx.ui, snapshot, session.mode, true);
 }
 
 // ---- Managed timers ----------------------------------------------------------
@@ -403,7 +380,8 @@ export function registerRealmPlugin(pi: OmpExtensionApi, options: RealmPluginOpt
     session.client = null;
     session.refusal = null;
     const { ctx } = session;
-    renderRealmStatus(ctx.ui, { state: "connecting", reason: "connecting", lastTransitionAt: nowIso() });
+    const previousError = reattach !== null ? session.errorStamp : null;
+    renderRealmStatus(ctx.ui, { state: "connecting", reason: "connecting", lastTransitionAt: previousError?.at ?? nowIso() }, session.mode, false, previousError?.code);
 
     let rejectBudget: (reason: unknown) => void = () => undefined;
     const budget = new Promise<never>((_resolve, reject) => {
@@ -465,7 +443,7 @@ export function registerRealmPlugin(pi: OmpExtensionApi, options: RealmPluginOpt
     if (attached === null) {
       // The budget or the attach failed. A client that lands later is released, never adopted.
       void pending.then(({ client }) => { client.close(); }, () => undefined);
-      renderRealmStatus(ctx.ui, { state: "error", reason: code, lastTransitionAt: nowIso() });
+      paintRefusal(session, code);
       return { outcome: "failed", code };
     }
     // The daemon answered, so the client is adopted for tool calls, a refused up included. The mode is published only once the tool set has taken it.
@@ -475,13 +453,14 @@ export function registerRealmPlugin(pi: OmpExtensionApi, options: RealmPluginOpt
     if (attached.hostCode === null) {
       session.mode = attached.status.mode;
       if (attached.refusal === null) {
-        renderRealmStatus(ctx.ui, attached.status.snapshot);
+        session.errorStamp = null;
+        renderRealmStatus(ctx.ui, attached.status.snapshot, session.mode, true);
       } else {
         session.errorStamp = null;
-        paintRefusal(session, attached.refusal.code);
+        paintRefusal(session, attached.refusal.code, true);
       }
     } else {
-      renderRealmStatus(ctx.ui, { state: "error", reason: attached.hostCode, lastTransitionAt: nowIso() });
+      paintRefusal(session, attached.hostCode);
     }
     // The daemon keeps its startup-reap notice for its lifetime; each attach shows it once.
     if (attached.status.notice !== undefined) {
@@ -538,12 +517,12 @@ export function registerRealmPlugin(pi: OmpExtensionApi, options: RealmPluginOpt
     );
     session.wait = { handle };
     session.refusal = null;
-    session.errorStamp = null;
+    session.errorStamp = { code, at: session.errorStamp?.code === code ? session.errorStamp.at : nowIso() };
     const nextAt = new Date(Date.now() + delayMs).toISOString();
     session.ctx.ui.notify(
       `realm link lost (${code}); re-attach attempt ${String(attemptNo)} of ${String(REATTACH_RETRY_CAP)} at ${nextAt}`,
     );
-    renderRealmStatus(session.ctx.ui, { state: "connecting", reason: "connecting", lastTransitionAt: nowIso() });
+    renderRealmStatus(session.ctx.ui, { state: "connecting", reason: "connecting", lastTransitionAt: session.errorStamp.at }, session.mode, false, code);
   };
 
   // A wait that expires attaches once, and only while it is the armed wait of a live session. Anything else has moved on.
@@ -596,7 +575,7 @@ export function registerRealmPlugin(pi: OmpExtensionApi, options: RealmPluginOpt
         if (!lost) {
           const at = session.errorStamp?.code === code ? session.errorStamp.at : nowIso();
           session.errorStamp = { code, at };
-          renderRealmStatus(session.ctx.ui, { state: "error", reason: code, lastTransitionAt: at });
+          renderRealmStatus(session.ctx.ui, { state: "error", reason: code, lastTransitionAt: at }, session.mode, false);
         }
         try {
           await reassertLastMode(session, isCurrent);
@@ -605,7 +584,7 @@ export function registerRealmPlugin(pi: OmpExtensionApi, options: RealmPluginOpt
             const denied = "POLICY_DENIED";
             const deniedAt = session.errorStamp?.code === denied ? session.errorStamp.at : nowIso();
             session.errorStamp = { code: denied, at: deniedAt };
-            renderRealmStatus(session.ctx.ui, { state: "error", reason: denied, lastTransitionAt: deniedAt });
+            renderRealmStatus(session.ctx.ui, { state: "error", reason: denied, lastTransitionAt: deniedAt }, session.mode, false);
           }
         }
         if (lost) {
@@ -624,7 +603,7 @@ export function registerRealmPlugin(pi: OmpExtensionApi, options: RealmPluginOpt
           const code = "POLICY_DENIED";
           const at = session.errorStamp?.code === code ? session.errorStamp.at : nowIso();
           session.errorStamp = { code, at };
-          renderRealmStatus(session.ctx.ui, { state: "error", reason: code, lastTransitionAt: at });
+          renderRealmStatus(session.ctx.ui, { state: "error", reason: code, lastTransitionAt: at }, session.mode, false);
         }
         return;
       }
@@ -814,7 +793,16 @@ export async function guardHostToolCall(
     try {
       await reassertLastMode(session, isCurrent);
     } catch {
+      if (!moved()) {
+        paintRefusal(session, "POLICY_DENIED");
+      }
       return { block: true, reason: "POLICY_DENIED" };
+    }
+    if (moved()) {
+      return { block: true, reason: "REALM_NOT_ACTIVE" };
+    }
+    if (client !== null) {
+      paintRefusal(session, codeOfError(error));
     }
     reportLinkLoss(session, codeOfError(error), isCurrent);
     if (toolName === REALM_WRITE_NAME) {
@@ -829,10 +817,12 @@ export async function guardHostToolCall(
   if (moved()) {
     return { block: true, reason: "REALM_NOT_ACTIVE" };
   }
-  paintStatusRead(session, status.snapshot);
   try {
     await setHostMode(tools, modeOf(status), isCurrent);
   } catch {
+    if (!moved()) {
+      paintRefusal(session, "POLICY_DENIED");
+    }
     return { block: true, reason: "POLICY_DENIED" };
   }
   // setHostMode resolves without a change when its turn comes after the session moved, so the check runs again here.
@@ -841,6 +831,7 @@ export async function guardHostToolCall(
   }
   // The mode is published only once the tool set has taken it (P16 b): a refused change leaves the last published mode in place.
   session.mode = status.mode;
+  paintStatusRead(session, status.snapshot);
   if (toolName === REALM_WRITE_NAME) {
     return undefined;
   }
