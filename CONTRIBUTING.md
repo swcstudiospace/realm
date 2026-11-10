@@ -39,6 +39,7 @@ Property tests use `fast-check` and live next to the example tests as `*.propert
 ## Mutation
 
 A weekly scheduled mutation run (`node scripts/mutation/run.mjs`, `.github/workflows/mutation.yml`) is non-blocking and covers `src/fs`, `src/core/policy.ts` and `src/audit/redact.ts`; Stryker was not installed because research recorded a 188-package tree and an unproven fit with `node:test` on compiled output.
+The report distinguishes compile errors and compile timeouts from outcomes of tests run against a compiled mutant. Setup, campaign and artifact-upload failures remain visible in the workflow but do not fail it.
 
 ## Branches and pull requests
 

@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { readdirSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { cp, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
@@ -229,6 +229,7 @@ export function selectMutants(files, cap) {
  *   cap?: number,
  *   timeoutMs?: number,
  *   files?: string[],
+ *   runProcess?: typeof runLimited,
  * }} [options]
  */
 export async function runCampaign(options = {}) {
@@ -236,7 +237,8 @@ export async function runCampaign(options = {}) {
   const cap = Math.min(options.cap ?? MAX_MUTANTS, MAX_MUTANTS);
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const reportPath = resolve(options.reportPath ?? join(root, "mutation-report.json"));
-  /** @type {{ file: string, status: "killed" | "survived" | "timedOut" | "untested" | "compileError" | "baselineFailed" | "error", description: string }[]} */
+  const runProcess = options.runProcess ?? runLimited;
+  /** @type {{ file: string, status: "killed" | "survived" | "timedOut" | "untested" | "compileError" | "baselineFailed" | "error", description: string, stage?: string, outcome?: string }[]} */
   const mutants = [];
 
   try {
@@ -250,27 +252,31 @@ export async function runCampaign(options = {}) {
       const sandbox = await mkdtemp(join(tmpdir(), "realm-mutation-"));
       try {
         await prepareSandbox(root, sandbox);
-        const baseline = await compileSandbox(sandbox, timeoutMs);
+        const baseline = await compileSandbox(sandbox, timeoutMs, runProcess);
         if (baseline.timedOut || baseline.code !== 0) {
           mutants.push({
             file: "(compile)",
             status: "compileError",
             description: baseline.timedOut ? "unmutated build timed out" : "unmutated build failed",
+            stage: "baselineCompile",
+            outcome: baseline.timedOut ? "timedOut" : "failed",
           });
         } else {
           const blocked = new Set();
           for (const file of [...new Set(selected.map((mutant) => mutant.file))]) {
-            const tests = testsFor(file, sandbox);
-            if (tests.length === 0) {
+            const tests = availableTests(file, sandbox);
+            if (tests === null) {
               continue;
             }
-            const tested = await runLimited(process.execPath, ["--test", ...tests], sandbox, timeoutMs);
+            const tested = await runProcess(process.execPath, ["--test", ...tests], sandbox, timeoutMs);
             if (tested.timedOut || tested.code !== 0) {
               blocked.add(file);
               mutants.push({
                 file,
                 status: "baselineFailed",
                 description: tested.timedOut ? "unmutated tests timed out" : "unmutated tests failed",
+                stage: "baselineTest",
+                outcome: tested.timedOut ? "timedOut" : "failed",
               });
             }
           }
@@ -290,30 +296,42 @@ export async function runCampaign(options = {}) {
             }
             const applied = original.slice(0, mutant.start) + mutant.replacement + original.slice(mutant.end);
             await writeFile(absolute, applied);
-            let status = /** @type {"killed" | "survived" | "timedOut" | "untested"} */ ("killed");
+            let status = /** @type {"killed" | "survived" | "timedOut" | "untested" | "compileError" | "error"} */ ("error");
+            let stage = "compile";
+            let outcome = "failed";
             try {
-              const compiled = await compileSandbox(sandbox, timeoutMs);
+              const compiled = await compileSandbox(sandbox, timeoutMs, runProcess);
               if (compiled.timedOut) {
                 status = "timedOut";
+                outcome = "timedOut";
               } else if (compiled.code !== 0) {
-                status = "killed";
+                status = "compileError";
               } else {
-                const tests = testsFor(mutant.file, sandbox);
-                if (tests.length === 0) {
+                stage = "test";
+                const tests = availableTests(mutant.file, sandbox);
+                if (tests === null) {
                   status = "untested";
+                  outcome = "missingTests";
                 } else {
-                  const tested = await runLimited(process.execPath, ["--test", ...tests], sandbox, timeoutMs);
+                  const tested = await runProcess(process.execPath, ["--test", ...tests], sandbox, timeoutMs);
                   if (tested.timedOut) {
                     status = "timedOut";
+                    outcome = "timedOut";
                   } else if (tested.code === 0) {
                     status = "survived";
+                    outcome = "passed";
+                  } else if (tested.code !== null && tested.code > 0) {
+                    status = "killed";
+                    outcome = "failed";
+                  } else {
+                    outcome = "processError";
                   }
                 }
               }
             } finally {
               await writeFile(absolute, original);
             }
-            mutants.push({ file: mutant.file, status, description: mutant.description });
+            mutants.push({ file: mutant.file, status, description: mutant.description, stage, outcome });
           }
         }
       } finally {
@@ -373,16 +391,17 @@ function parseArgs(argv) {
 async function main() {
   const report = await runCampaign(parseArgs(process.argv.slice(2)));
   console.log(
-    `mutation: killed=${report.killed} survived=${report.survived} timedOut=${report.timedOut} cap=${MAX_MUTANTS}`,
+    `mutation: killed=${report.killed} survived=${report.survived} timedOut=${report.timedOut} untested=${report.untested} compileError=${report.compileError} baselineFailed=${report.baselineFailed} error=${report.error} cap=${MAX_MUTANTS}`,
   );
-  process.exitCode = 0;
+  process.exitCode = report.error > 0 || report.baselineFailed > 0 ||
+    report.mutants.some((row) => row.stage === "baselineCompile") ? 1 : 0;
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   main().catch((error) => {
     const reason = error instanceof Error ? error.message : "unknown failure";
     console.error(`mutation: ${reason}`);
-    process.exitCode = 0;
+    process.exitCode = 1;
   });
 }
 
@@ -611,8 +630,13 @@ async function prepareSandbox(root, sandbox) {
   await symlink(join(root, "node_modules"), join(sandbox, "node_modules"));
 }
 
-function compileSandbox(sandbox, timeoutMs) {
-  return runLimited(
+function availableTests(file, sandbox) {
+  const tests = testsFor(file, sandbox);
+  return tests.length > 0 && tests.every((test) => existsSync(resolve(sandbox, test))) ? tests : null;
+}
+
+function compileSandbox(sandbox, timeoutMs, runProcess) {
+  return runProcess(
     process.execPath,
     ["node_modules/typescript/lib/tsc.js", "-p", "tsconfig.json", "--incremental", "--tsBuildInfoFile", ".mutation.tsbuildinfo"],
     sandbox,
@@ -656,10 +680,10 @@ function runLimited(command, args, cwd, timeoutMs) {
       finish({ code: null, timedOut: true });
     }, timeoutMs);
     child.on("error", () => {
-      finish({ code: 1, timedOut: false });
+      finish({ code: null, timedOut: false });
     });
     child.on("close", (code) => {
-      finish({ code: code ?? 1, timedOut: false });
+      finish({ code, timedOut: false });
     });
   });
 }
