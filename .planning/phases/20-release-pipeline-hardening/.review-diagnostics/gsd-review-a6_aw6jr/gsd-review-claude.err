@@ -1,0 +1,5 @@
+Permission allow rule (/root/.claude/settings.json): Write(**) is not matched by file permission checks — only Edit(path) rules are. Use Edit(**) instead (Edit rules cover all file-editing tools).
+Permission allow rule (/root/.claude/settings.json): MultiEdit(**) is not matched by file permission checks — only Edit(path) rules are. Use Edit(**) instead (Edit rules cover all file-editing tools).
+Permission allow rule (/root/.claude/settings.json): NotebookEdit(**) is not matched by file permission checks — only Edit(path) rules are. Use Edit(**) instead (Edit rules cover all file-editing tools).
+Permission allow rule (/root/.claude/settings.json): Glob(**) is not matched by file permission checks — only Read(path) rules are. Use Read(**) instead (Read rules cover all file-reading tools).
+⚠ claude.ai connectors are disabled because ANTHROPIC_API_KEY or another auth source is set and takes precedence over your claude.ai login · Unset it to load your organization's connectors

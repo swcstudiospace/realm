@@ -526,9 +526,8 @@ async (t) => {
   await client.close();
 },);
 
-// MULTI-05 (plan 11 T2): one daemon, two projects. The ACP agent attached to project A writes into A and is audited in A's
-// session file only, and project B's session file holds none of it.
-void test("ACP on two projects: the agent's write lands in its own project and its own session's audit file (MULTI-05)", async (t) => {
+// MULTI-05 (plan 11 T2): each ACP agent writes and is audited only in its selected project's session.
+void test("ACP on two projects: each agent writes and is audited only in its own project (MULTI-05)", testTimeout(10_000), async (t) => {
   const base = realpathSync(mkdtempSync(join(tmpdir(), "realm-acp-two-")));
   const root = join(base, "root");
   const a = join(root, "a");
@@ -545,21 +544,37 @@ void test("ACP on two projects: the agent's write lands in its own project and i
   await fixture.up(a);
   await fixture.up(b);
 
-  const client = startClient(t, fixture.connectFor(a));
-  send(client, realmTool(1, { write: { path: "a-doc.txt", content: "from a" } }));
-  await client.waitFor(1);
-  assert.equal(parseReply(client.lines[0] ?? "").error, undefined, "the write is answered without an error");
-  await client.close();
+  const clientA = startClient(t, fixture.connectFor(a));
+  send(clientA, realmTool(1, { write: { path: "a-doc.txt", content: "from a" } }));
+  await clientA.waitFor(1);
+  const replyA = parseReply(clientA.lines[0] ?? "");
+  assert.equal(replyA.id, 1);
+  assert.equal(replyA.error, undefined, "A's write is answered without an error");
+  assert.equal((replyA.result as ToolOutcome).outcome, "done", "A's write succeeds");
+  await clientA.close();
+
+  const clientB = startClient(t, fixture.connectFor(b));
+  send(clientB, realmTool(2, { write: { path: "b-doc.txt", content: "from b" } }));
+  await clientB.waitFor(1);
+  const replyB = parseReply(clientB.lines[0] ?? "");
+  assert.equal(replyB.id, 2);
+  assert.equal(replyB.error, undefined, "B's write is answered without an error");
+  assert.equal((replyB.result as ToolOutcome).outcome, "done", "B's write succeeds");
+  await clientB.close();
 
   assert.equal(readFileSync(join(a, "a-doc.txt"), "utf8"), "from a");
-  assert.equal(existsSync(join(b, "a-doc.txt")), false, "the write is not in B");
+  assert.equal(readFileSync(join(b, "b-doc.txt"), "utf8"), "from b");
+  assert.equal(existsSync(join(b, "a-doc.txt")), false, "A's write is not in B");
+  assert.equal(existsSync(join(a, "b-doc.txt")), false, "B's write is not in A");
   const linesOf = (project: string): { readonly path?: string }[] =>
     readFileSync(join(base, "state", "audit", `${sessionIdOfWorkspace(project)}.jsonl`), "utf8")
       .split("\n")
       .filter((line) => line.length > 0)
       .map((line) => JSON.parse(line) as { readonly path?: string });
-  assert.ok(linesOf(a).some((line) => line.path === "a-doc.txt"), "A's audit file holds the agent's write");
-  // B made no tool call, so its session has no audit file; if one exists, it holds none of A's write.
-  const auditOfB = join(base, "state", "audit", `${sessionIdOfWorkspace(b)}.jsonl`);
-  assert.equal(existsSync(auditOfB) && readFileSync(auditOfB, "utf8").includes("a-doc.txt"), false, "B's audit file holds none of it");
+  const auditA = linesOf(a);
+  const auditB = linesOf(b);
+  assert.ok(auditA.some((line) => line.path === "a-doc.txt"), "A's audit file holds A's write");
+  assert.equal(auditA.some((line) => line.path === "b-doc.txt"), false, "A's audit file holds no line of B");
+  assert.ok(auditB.some((line) => line.path === "b-doc.txt"), "B's audit file holds B's write");
+  assert.equal(auditB.some((line) => line.path === "a-doc.txt"), false, "B's audit file holds no line of A");
 });

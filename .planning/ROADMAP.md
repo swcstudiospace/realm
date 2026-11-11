@@ -496,6 +496,21 @@ The owner lifted the ship hold on 2026-10-28 for one pull request with autoMerge
 **Notes:** The runtime decision (owner decision D5, item i) is recorded first, before any code that needs it. Live runs on the shared realm stack are serialized, because the startup reap is account-wide.
 
 **Plans**: 1 recovery dependency plan (`18-01-PLAN.md`) and `18-CONTEXT.md`; D5/PR36 decision recorded, per-project runtime and acceptance incomplete
+- [x] 18-01-PLAN.md
+- [ ] 18-02-PLAN.md
+- [ ] 18-03-PLAN.md
+- [ ] 18-04-PLAN.md
+- [ ] 18-04b-PLAN.md
+- [ ] 18-05-PLAN.md
+- [ ] 18-06-PLAN.md
+- [ ] 18-07-PLAN.md
+- [ ] 18-08-PLAN.md
+- [ ] 18-09-PLAN.md
+- [ ] 18-10-PLAN.md
+- [x] 18-11-PLAN.md
+- [ ] 18-12-PLAN.md
+- [ ] 18-13-PLAN.md
+- [ ] 18-14-PLAN.md
 
 ### Phase 19: Resume and checkpoint
 
@@ -511,7 +526,8 @@ The owner lifted the ship hold on 2026-10-28 for one pull request with autoMerge
 
 **Notes:** Owner decision D5, items ii and iii: the startup reaper re-adopts a running container that passes the hardening verifier and removes what cannot be proven good, superseding the "remove everything" form of D-84, D-86 and RT-08 while keeping the no-orphan guarantee in a precise form, and RT-01's mount list gains the scratch volume. Both are recorded before the code. Live runs on the shared realm stack are serialized, because the startup reap is account-wide.
 
-**Plans**: 1 recovery dependency plan (`19-01-PLAN.md`) and `19-CONTEXT.md`; D5/PR36 adoption/scratch decisions recorded, missing runtime/checkpoint implementation and live proof
+**Plans**: `19-01-PLAN.md` reconciles the existing offline implementation and received independent plan review; Phase 14/18 prerequisites, decision ancestry and current live acceptance remain open.
+- [ ] 19-01-PLAN.md
 
 ### Phase 20: Release pipeline hardening
 
@@ -526,9 +542,12 @@ The owner lifted the ship hold on 2026-10-28 for one pull request with autoMerge
 
 **Notes:** Owner decision D6 (2026-10-29) signs off the changes under `.github/workflows/**`, `release/**` and `scripts/release/**`; each pull request cites D6 in its body, and human review before merge still applies (`AGENTS.md`). The repository settings of TD-10 (secret scanning, push protection, branch protection, `sha_pinning_required`) stay the owner's and cannot be changed from the repository; only the job split and the attestation are in this phase. The attestation is unverified until a release built by the new workflow exists.
 
-**Recovery evidence note:** PR40 implementation and historical review metadata are not release-run proof; retain current parent approved gated-merge/test-release route after actual current-head review/all gates, never arbitrary production rollback. Reuse split/normal+repair six-file attestation/draft repair logic. Non-revert multi-commit removal semantics and validated known-good docs selection remain actual gaps. P20 must retain real run/subject-digest/attestation/rollback/deployment content evidence; shared runner token separation is not proven OS isolation.
+**Recovery evidence note:** PR40 implementation and historical review metadata are not release-run proof; retain the gated-merge/test-release route only after actual current-head review and all gates, never arbitrary production rollback. The integration lane contains split release, removal semantics and known-good tag validation; its mutable-tag rollback handoff needs an immutable-commit fix. P20 retains real run, subject-digest, attestation, rollback and deployment-content evidence; shared-runner token separation is not proven OS isolation.
 
-**Plans**: 1 recovery dependency plan (`20-01-PLAN.md`) and `20-CONTEXT.md`; open implementation/proof gaps, no release action authorized to A15
+**Plans**: `20-01-PLAN.md` covers implementation and local readiness; `20-02-PLAN.md` depends on it and reserves exact-head human review and authorized live acceptance. Both passed independent plan review; no release action has been performed.
+- [x] 20-01-PLAN.md
+- [ ] 20-02-PLAN.md
+- [ ] 20-03-PLAN.md
 
 ## Progress
 
@@ -563,6 +582,6 @@ Milestone v3.0 phases (12 to 20) run in three parallel lanes that share no mutab
 | 15. Zero-config onboarding and fail-closed default | 9/16 | Recovery: signed init/doctor edits await parent; generated-config live/docs acceptance open | - |
 | 16. Omp runs in the sandbox | 0/1 | Recovery plan/context authored, unreviewed; lifetime/read/production Omp acceptance incomplete | - |
 | 17. Observability and tamper-evident audit | 0/1 | Recovery: chain/logger code gaps and live evidence open; metrics/gateway historical proof retained | - |
-| 18. Per-project sandboxes | 0/1 | Recovery plan/context authored, unreviewed; decision recorded, runtime missing | - |
-| 19. Resume and checkpoint | 0/1 | Recovery plan/context authored, unreviewed; adoption/scratch/checkpoint missing/live-gated | - |
-| 20. Release pipeline hardening | 0/1 | Recovery plan/context authored, unreviewed; PR40 implementation not release verification | - |
+| 18. Per-project sandboxes | 1/15 | Fourteen historical plans have committed code; one plan summary is present. Revised plan 11 checks pass locally, while live acceptance and human gates remain open | - |
+| 19. Resume and checkpoint | 0/1 | Recovery plan independently checked; upstream prerequisites and live acceptance open | - |
+| 20. Release pipeline hardening | 0/3 | Recovery plans independently checked; immutable rollback handoff, human review and live evidence open | - |
