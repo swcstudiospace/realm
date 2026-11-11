@@ -229,9 +229,8 @@ void test("CRASH-06: a refusal without a cause carries no causeCode on any of th
   assert.deepEqual(daemon.acp, expected, "ACP over the daemon");
 });
 
-// MULTI-03 (plan 11 T2): two projects under one root on one daemon. The status and up replies for A are the same through the
-// CLI send path, the MCP client and the Omp client calls, and project B's status differs from A's only by session and root.
-void test("two projects on one daemon: status and up for A reply alike through the CLI send path, the MCP client and the Omp client calls (MULTI-03)", async (t) => {
+// MULTI-03: both selections share one daemon, but taking either session down leaves the other active.
+void test("two projects: CLI, MCP and Omp observe their selected lifecycle on one daemon (MULTI-03)", async (t) => {
   const base = realpathSync(mkdtempSync(join(tmpdir(), "realm-equivalence-two-")));
   const root = join(base, "root");
   const a = join(root, "a");
@@ -246,26 +245,81 @@ void test("two projects on one daemon: status and up for A reply alike through t
     }
     rmSync(base, { recursive: true, force: true });
   });
-  await fixture.up(a);
-  await fixture.up(b);
+  const projects = [a, b] as const;
+  const selections = projects.map((project) => fixture.selectionFor(project));
+  assert.deepEqual(selections[0], selectionOf(a));
+  assert.deepEqual(selections[1], selectionOf(b));
+  assert.notEqual(selections[0].sessionId, selections[1].sessionId);
 
-  const cliStatus = await sendRequest(fixture.socketPath, { id: "eq-cli-status", method: "status", params: { selection: selectionOf(a) } });
-  const mcpStatus = await fixture.connectFor(a).status();
-  const ompClient = connectDaemon(fixture.socketPath, selectionOf(a));
-  const ompStatus = await ompClient.status();
-  const ompUp = await ompClient.up();
-  ompClient.close();
-  const cliUp = await sendRequest(fixture.socketPath, { id: "eq-cli-up", method: "up", params: { workspaceRoot: a } });
+  const mcpClients = projects.map((project) => fixture.connectFor(project));
+  const ompClients = projects.map((project) => connectDaemon(fixture.socketPath, selectionOf(project)));
+  t.after(() => {
+    for (const client of [...mcpClients, ...ompClients]) client.close();
+  });
 
-  assert.equal(cliStatus.error, undefined);
-  assert.deepEqual(cliStatus.result, mcpStatus, "the CLI status and the MCP client status are the same reply");
-  assert.deepEqual(mcpStatus, ompStatus, "the MCP client status and the Omp status are the same reply");
-  assert.deepEqual(cliUp.result, ompUp, "the CLI up and the Omp up of a live project are the same reply");
+  const cli = (project: string, method: "status" | "up" | "down") =>
+    sendRequest(fixture.socketPath, {
+      id: `eq-cli-${method}`,
+      method,
+      params: method === "up" ? { workspaceRoot: project } : { selection: selectionOf(project) },
+    });
+  const result = async (project: string, method: "status" | "up" | "down"): Promise<unknown> => {
+    const reply = await cli(project, method);
+    assert.equal(reply.error, undefined, `${method} should succeed for ${project}`);
+    assert.notEqual(reply.result, undefined);
+    return reply.result;
+  };
 
-  const statusB = await fixture.connectFor(b).status();
-  const { sessionId: sessionA, boundRoot: rootA, ...restA } = ompStatus;
-  const { sessionId: sessionB, boundRoot: rootB, ...restB } = statusB;
-  assert.notEqual(sessionA, sessionB, "each project has its own session");
-  assert.notEqual(rootA, rootB, "each project is bound to its own root");
-  assert.deepEqual(restA, restB, "apart from session and root, the two projects report the same status");
+  for (const client of mcpClients) {
+    const up = await client.up();
+    assert.equal(up.snapshot.state, "active");
+  }
+
+  for (const [index, project] of projects.entries()) {
+    const other = projects[1 - index];
+    const mcp = mcpClients[index];
+    const omp = ompClients[index];
+    const otherMcp = mcpClients[1 - index];
+    const selection = selections[index];
+    assert.ok(other !== undefined && mcp !== undefined && omp !== undefined && otherMcp !== undefined && selection !== undefined);
+
+    const initial = await mcp.status();
+    assert.equal(initial.snapshot.state, "active");
+    assert.equal(initial.boundRoot, project);
+    assert.equal(initial.sessionId, selection.sessionId);
+    assert.deepEqual(await result(project, "status"), initial);
+    assert.deepEqual(await omp.status(), initial);
+    assert.deepEqual(await result(project, "up"), initial);
+    assert.deepEqual(await mcp.up(), initial);
+    assert.deepEqual(await omp.up(), initial);
+
+    const peer = await otherMcp.status();
+    assert.equal(peer.snapshot.state, "active");
+    assert.equal(peer.boundRoot, other);
+    assert.notEqual(peer.sessionId, initial.sessionId);
+    assert.deepEqual({ ...initial, sessionId: peer.sessionId, boundRoot: peer.boundRoot }, peer);
+
+    // Each real up path re-establishes a session after CLI down, not merely an already-active attachment.
+    for (const upPath of ["cli", "mcp", "omp"] as const) {
+      const down = await result(project, "down");
+      const downStatus = await mcp.status();
+      assert.equal(downStatus.snapshot.state, "unbound");
+      assert.equal(downStatus.boundRoot, project);
+      assert.equal(downStatus.sessionId, selection.sessionId);
+      assert.deepEqual(down, downStatus);
+      assert.deepEqual(await result(project, "status"), downStatus);
+      assert.deepEqual(await omp.status(), downStatus);
+      assert.deepEqual(await otherMcp.status(), peer, "the other project remains active after down");
+
+      const up: unknown = upPath === "cli" ? await result(project, "up") : await (upPath === "mcp" ? mcp : omp).up();
+      const active = await mcp.status();
+      assert.equal(active.snapshot.state, "active");
+      assert.equal(active.boundRoot, project);
+      assert.equal(active.sessionId, selection.sessionId);
+      assert.deepEqual(up, active);
+      assert.deepEqual(await result(project, "status"), active);
+      assert.deepEqual(await omp.status(), active);
+      assert.deepEqual(await otherMcp.status(), peer);
+    }
+  }
 });

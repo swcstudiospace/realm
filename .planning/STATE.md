@@ -2,11 +2,11 @@
 gsd_state_version: "1.0"
 milestone: v3.0
 milestone_name: Containment by Default
-status: planning
-stopped_at: Completed 15-09-PLAN.md
-last_updated: "2026-11-09T05:40:16.932Z"
-last_activity: 2026-10-31
-last_activity_desc: actual lifecycle/doctor/C4 evidence reconciled; normalized onboarding docs authored; no checks, commits or phase completion by this worker
+status: blocked
+stopped_at: "Phase 20 provisional implementation awaits independent external plan review"
+last_updated: "2026-11-11"
+last_activity: 2026-11-11
+last_activity_desc: "User approved provisional offline release sequencing; external reviewers were unavailable"
 state_head: 315b4fd869ce2a700fcd9d7dfa2503d4847aac46
 progress:
   total_phases: 9
@@ -23,16 +23,18 @@ progress:
 See: .planning/PROJECT.md (updated 2026-10-29)
 
 **Core value:** Every file mutation by an agent either lands inside the realm under policy or fails closed, and the user can always see whether the realm is active or disconnected.
-**Current focus:** v3.0 recovery, phases 12–20, original association `ut-mvvowl70-29165019`. Continue the existing invoked GSD-autonomous flat workflow, not a new discovery or phase-closeout run. Original GSD/docs tasks and accepted outputs remain DONE/preserved. New bounded docs task `Trealm31-prereq-onboarding-evidence` (`realm-prerequisites-onb-network-oct31`) owns only README, AGENTS, the Omp host snippet, REQUIREMENTS and this STATE; separate signed owners handle built-Realm network coverage and the original spike's two lint causes. The original 52-ID/code/proof snapshot in `phases/RECOVERY-2026-10-31.md` is preserved; the individual updates in REQUIREMENTS and this current section supersede only their stale evidence status.
+**Current focus:** v3.0 recovery across phases 12–20. This isolated integration lane contains prior Phase 18/19 work; current Omp and quality-ratchet changes remain in a separate worktree and are not integrated here. The current milestone is not complete.
 
 ## Current Position
 
-Phase: Recovery across phases 12–20; zero completed
-Plan: Five existing plans reused; four missing context/plan pairs authored (nine plans total, none recorded complete)
-Status: Bounded prerequisite edit-only wave after actual first-wave parent verification; literal built-Realm warm proof and current joined verification pending
-Last activity: 2026-10-31 — actual lifecycle/doctor/C4 evidence reconciled; normalized onboarding docs authored; no checks, commits or phase completion by this worker
+Phase: Recovery across phases 12–20; zero v3.0 phases completed.
+Plan: Phase 18 plan 11 has a user-approved contract reconciliation and passing fake-backed checks. Phase 19 plan 01 and Phase 20 plans 01–03 have independent internal plan-review passes.
+Status: The user approved provisional offline Phase 20 implementation before live prerequisites, conditional on independent external plan review. The attempted review produced no usable review: Claude returned a credit-balance error and Qwen's configured model returned HTTP 404. Upstream verification, original historical evidence, rootless Podman 5.x production runs, and release trust and human gates also remain open.
+Last activity: 2026-11-11 — recorded the approved sequencing exception and failed external review attempt; no release implementation, live run, merge or milestone completion.
 
 ## Current Recovery Boundaries
+
+The following recovery-boundary entries are historical snapshots, not current work assignments or fresh verification results.
 
 - Parent alone verifies the joined union after all three disjoint owners settle. Specialists run no tests, builds, typecheck, lint, formatters, docs checkers, gates, smokes, commits, git mutations, services or live actions. `docs_bundle` twins and GSD checker/executor/verifier are NOT RUN here. No SUMMARY/VERIFICATION passing report, milestone transition, archival, cleanup, gate dispatch or original downstream code is authorized by this unit.
 - Workflow provenance retained: the original GSD discovery reported nine phases, zero completed, five existing plans; four missing context/plan pairs were authored in the accepted records task. This unit reads the matching GSD-autonomous skill/workflow and uses the already invoked flat workflow; it does not restart discovery, mark a plan complete or claim a Skill/checker execution. All nine phases and all nine plans remain incomplete.
