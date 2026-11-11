@@ -57,6 +57,11 @@ const DEGRADED_LABEL = `● ${STATUS_LABELS.active} [degraded]`;
 const DISCONNECTED_LABEL = `○ ${STATUS_LABELS.disconnected}`;
 const WORKSPACE = "/ws";
 const SEPARATOR = " · ";
+const FAIL_CLOSED_STATUS = "applied mode: fail-closed (Omp host-tool guard; not host process containment)";
+const LAST_FAIL_CLOSED_STATUS = "last successfully applied mode: fail-closed (Omp host-tool guard; not host process containment)";
+const ADVISORY_STATUS = "applied mode: advisory";
+const LAST_ADVISORY_STATUS = "last successfully applied mode: advisory";
+const UNKNOWN_STATUS = "mode: unknown";
 
 // Yields one turn of the event loop. No wall-clock wait: the awaited conditions settle on promises.
 // Every promise chain in these tests settles in microtasks, so one turn flushes a completed tick.
@@ -97,14 +102,14 @@ class FakeUi implements OmpStatusUi {
   }
 }
 
-// The status item text is "<label> · <reason> · <time>". The label is the first segment.
+// The status item is "<label> · <reason> · <time> · <mode disclosure>".
 function labelOf(text: string): string {
   return text.split(SEPARATOR)[0] ?? "";
 }
 
-// The detail is everything after the label: "<reason> · <time>".
+// Existing detail checks cover the reason and time; mode checks use the complete status text.
 function detailOf(text: string): string {
-  return text.slice(labelOf(text).length + SEPARATOR.length);
+  return text.split(SEPARATOR).slice(1, -1).join(SEPARATOR);
 }
 
 function statusTexts(ui: FakeUi): string[] {
@@ -276,8 +281,12 @@ class FakePi implements OmpExtensionApi {
   readonly activeSets: string[][] = [];
   // When set, setActiveTools is accepted and changes nothing, so the plugin's read-back must catch it.
   ignoreRemoval = false;
+  // A rejecting host setter models a different failure from a setter that returns without applying.
+  rejectSetter = false;
   // When set, a setter applies its change only once this gate opens, so a test can hold a setter past its owner.
   holdSetters: Promise<void> | null = null;
+  activeReads = 0;
+  activeReadOverride: ((count: number, actual: string[]) => string[]) | null = null;
   private readonly builtins = new Set<string>(OMP_BUILTIN_TOOLS);
   private readonly active = new Set<string>(OMP_BUILTIN_TOOLS);
 
@@ -300,11 +309,16 @@ class FakePi implements OmpExtensionApi {
   }
 
   getActiveTools(): string[] {
-    return [...this.active];
+    this.activeReads += 1;
+    const actual = [...this.active];
+    return this.activeReadOverride?.(this.activeReads, actual) ?? actual;
   }
 
   setActiveTools(names: string[]): Promise<void> {
     this.activeSets.push([...names]);
+    if (this.rejectSetter) {
+      return Promise.reject(new Error("host setter rejected"));
+    }
     const apply = (): void => {
       if (this.ignoreRemoval) {
         return;
@@ -655,7 +669,7 @@ void test("OMP-02: every status read paints one shared label across every transi
   // One status item carries the label, the reason, and the time: no second key competes with it.
   const keys = new Set(fixture.ui.calls.map((call) => call.key));
   assert.deepEqual(keys, new Set([REALM_STATUS_KEY]));
-  assert.equal(statusTexts(fixture.ui).at(-1), `${DEGRADED_LABEL} · ANDA_VERSION_MISMATCH · ${CLOCK_ISO}`);
+  assert.equal(statusTexts(fixture.ui).at(-1), `${DEGRADED_LABEL} · ANDA_VERSION_MISMATCH · ${CLOCK_ISO} · ${FAIL_CLOSED_STATUS}`);
 });
 
 void test("OMP-03: the reason and last-transition time follow the label in the one status item on every transition (P5-D5)", async () => {
@@ -741,6 +755,7 @@ void test("OMP-02: a failed poll read paints its code once, and a repeat of the 
   expireTimer(fixture.ctx, GUARD_STATUS_BUDGET_MS);
   await waitUntil(() => lastLabel(fixture.ui) === DISCONNECTED_LABEL);
   assert.match(lastDetail(fixture.ui) ?? "", /^TOOL_TIMEOUT · /);
+  assert.ok(statusTexts(fixture.ui).at(-1)?.endsWith(LAST_FAIL_CLOSED_STATUS));
   const paintsAfterFirstFailure = fixture.ui.calls.length;
 
   pollOf(fixture.ctx).callback();
@@ -979,12 +994,12 @@ void test("OMP-02 / MED-03: a throwing status write leaves the paint cache stale
   };
   const snapshot: StateSnapshot = { state: "error", reason: "STARTUP_BUDGET_EXCEEDED", lastTransitionAt: CLOCK_ISO };
 
-  assert.throws(() => { renderRealmStatus(ui, snapshot); }, /rpc transport/);
-  renderRealmStatus(ui, snapshot);
-  renderRealmStatus(ui, snapshot);
+  assert.throws(() => { renderRealmStatus(ui, snapshot, null, false); }, /rpc transport/);
+  renderRealmStatus(ui, snapshot, null, false);
+  renderRealmStatus(ui, snapshot, null, false);
 
   assert.deepEqual(writes, [
-    { key: REALM_STATUS_KEY, text: `${DISCONNECTED_LABEL} · STARTUP_BUDGET_EXCEEDED · ${CLOCK_ISO}` },
+    { key: REALM_STATUS_KEY, text: `${DISCONNECTED_LABEL} · STARTUP_BUDGET_EXCEEDED · ${CLOCK_ISO} · ${UNKNOWN_STATUS}` },
   ]);
 });
 
@@ -1345,6 +1360,7 @@ void test("P16 (a): a setter that resolves after its attach budget expired is re
   await waitUntil(() => fixture.pi.activeSets.length === 1);
   expireTimer(fixture.ctx, STARTUP_BUDGET_MS);
   await waitForDetail(fixture.ui, "STARTUP_BUDGET_EXCEEDED");
+  assert.ok(statusTexts(fixture.ui).at(-1)?.endsWith(UNKNOWN_STATUS));
 
   gate.resolve();
   await waitUntil(() => fixture.tools.inFlight === 0);
@@ -1367,6 +1383,7 @@ void test("P16 (a): a setter that resolves after session shutdown is read back, 
   await waitUntil(() => fixture.pi.activeSets.length === 1);
   shutdownHandlerOf(fixture.pi)();
   const paintsAtShutdown = statusTexts(fixture.ui).length;
+  assert.ok(statusTexts(fixture.ui).at(-1)?.endsWith(UNKNOWN_STATUS));
 
   gate.resolve();
   await waitUntil(() => fixture.tools.inFlight === 0);
@@ -1379,6 +1396,7 @@ void test("P16 (a): a setter that resolves after session shutdown is read back, 
   await waitForDetail(fixture.ui, "container running");
   assert.ok(sameActive(fixture.pi, FAIL_CLOSED_ALLOWLIST), "the next session finds the planned set");
   assert.equal(fixture.pi.activeSets.length, 1, "the next session changes nothing");
+  assert.ok(statusTexts(fixture.ui).at(-1)?.endsWith(FAIL_CLOSED_STATUS));
 });
 
 void test("P16 (a): a setter that resolves after a new session start is read back, and the new session's read finds the plan in place", async () => {
@@ -1609,7 +1627,7 @@ void test("O4 R1: a dropped link is detected on the poll, paints connecting, and
   const wait = soleWait(fixture.ctx);
   assert.ok(wait.ms >= 500 && wait.ms <= 1000, `attempt 1 waits within [500, 1000] ms, got ${String(wait.ms)}`);
   assert.equal(lastLabel(fixture.ui), DISCONNECTED_LABEL);
-  assert.match(lastDetail(fixture.ui) ?? "", /^connecting · /);
+  assert.match(lastDetail(fixture.ui) ?? "", /^connecting \(REALM_NOT_ACTIVE\) · /);
   assert.equal(fixture.daemon.count("close"), 1, "the dropped client is closed once");
 
   fixture.daemon.failStatus = undefined;
@@ -1940,4 +1958,278 @@ void test("plan 10 T2 (c): a session switch whose context carries no working dir
 
   assert.deepEqual(fixture.attachCalls, [WORKSPACE], "a payload without a directory does not attach again");
   assert.equal(fixture.daemon.calls.filter((call) => call === "close").length, 0, "the attachment is kept");
+});
+
+void test("status disclosure follows read-back on attach and mode-only poll changes", async () => {
+  const fixture = makeFixture();
+  const gate = makeGate();
+  fixture.pi.holdSetters = gate.promise;
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitUntil(() => fixture.pi.activeSets.length === 1);
+  assert.ok(statusTexts(fixture.ui).at(-1)?.endsWith(UNKNOWN_STATUS));
+  assert.ok(sameActive(fixture.pi, EVERY_TOOL));
+
+  gate.resolve();
+  await waitUntil(() => statusTexts(fixture.ui).at(-1)?.endsWith(FAIL_CLOSED_STATUS) === true);
+  assert.ok(sameActive(fixture.pi, FAIL_CLOSED_ALLOWLIST));
+  fixture.pi.holdSetters = null;
+  const initialPaints = statusTexts(fixture.ui).length;
+  pollOf(fixture.ctx).callback();
+  await yieldTurn();
+  assert.equal(statusTexts(fixture.ui).length, initialPaints);
+
+  fixture.daemon.mode = "advisory";
+  pollOf(fixture.ctx).callback();
+  await waitUntil(() => statusTexts(fixture.ui).at(-1)?.endsWith(ADVISORY_STATUS) === true);
+  assert.ok(sameActive(fixture.pi, EVERY_TOOL));
+  assert.equal(statusTexts(fixture.ui).length, initialPaints + 1);
+  fixture.daemon.mode = "fail-closed";
+  pollOf(fixture.ctx).callback();
+  await waitUntil(() => statusTexts(fixture.ui).at(-1)?.endsWith(FAIL_CLOSED_STATUS) === true);
+  assert.ok(sameActive(fixture.pi, FAIL_CLOSED_ALLOWLIST));
+  assert.equal(statusTexts(fixture.ui).length, initialPaints + 2);
+});
+
+void test("guarded mode change waits for the setter and read-back before repainting", async () => {
+  const fixture = makeFixture({ mode: "advisory" });
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitForDetail(fixture.ui, "container running");
+  const gate = makeGate();
+  fixture.pi.holdSetters = gate.promise;
+  fixture.daemon.mode = "fail-closed";
+  const pending = toolCallOf(fixture.pi)({ toolName: "bash" });
+  await waitUntil(() => fixture.pi.activeSets.length === 1);
+  assert.ok(statusTexts(fixture.ui).at(-1)?.endsWith(ADVISORY_STATUS));
+  assert.ok(sameActive(fixture.pi, EVERY_TOOL));
+  gate.resolve();
+  assert.deepEqual(await pending, POLICY_DENIED_VERDICT);
+  assert.ok(sameActive(fixture.pi, FAIL_CLOSED_ALLOWLIST));
+  assert.ok(statusTexts(fixture.ui).at(-1)?.endsWith(FAIL_CLOSED_STATUS));
+});
+
+void test("initial rejected or nonholding setter reports unknown and preserves POLICY_DENIED", async () => {
+  for (const failure of ["reject", "mismatch"] as const) {
+    const fixture = makeFixture();
+    fixture.pi.rejectSetter = failure === "reject";
+    fixture.pi.ignoreRemoval = failure === "mismatch";
+    startHandlerOf(fixture.pi)(fixture.ctx);
+    await waitForDetail(fixture.ui, "POLICY_DENIED");
+    assert.ok(statusTexts(fixture.ui).at(-1)?.endsWith(UNKNOWN_STATUS), failure);
+    assert.ok(sameActive(fixture.pi, EVERY_TOOL), failure);
+    assert.deepEqual(await toolCallOf(fixture.pi)({ toolName: "bash" }), POLICY_DENIED_VERDICT);
+    assert.ok(statusTexts(fixture.ui).at(-1)?.endsWith(UNKNOWN_STATUS), failure);
+  }
+});
+
+void test("already-correct host tools require a successful read-back before publication", async () => {
+  const fixture = makeFixture({ mode: "advisory" });
+  fixture.pi.activeReadOverride = (count, actual) => count >= 3 ? [] : actual;
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitForDetail(fixture.ui, "POLICY_DENIED");
+  assert.equal(fixture.pi.activeSets.length, 0, "no setter was needed");
+  assert.ok(fixture.pi.activeReads >= 4, "the unchanged set was read back");
+  assert.ok(statusTexts(fixture.ui).at(-1)?.endsWith(UNKNOWN_STATUS));
+  fixture.pi.activeReadOverride = null;
+  pollOf(fixture.ctx).callback();
+  await waitUntil(() => statusTexts(fixture.ui).at(-1)?.endsWith(ADVISORY_STATUS) === true);
+  assert.ok(sameActive(fixture.pi, EVERY_TOOL));
+});
+
+void test("failed poll mode changes retain last applied posture and unreadable guard decisions", async () => {
+  for (const previous of ["advisory", "fail-closed"] as const) {
+    for (const failure of ["reject", "mismatch"] as const) {
+      const fixture = makeFixture({ mode: previous });
+      startHandlerOf(fixture.pi)(fixture.ctx);
+      await waitForDetail(fixture.ui, "container running");
+      fixture.daemon.mode = previous === "advisory" ? "fail-closed" : "advisory";
+      fixture.pi.rejectSetter = failure === "reject";
+      fixture.pi.ignoreRemoval = failure === "mismatch";
+      pollOf(fixture.ctx).callback();
+      await waitForDetail(fixture.ui, "POLICY_DENIED");
+      const retained = previous === "advisory" ? LAST_ADVISORY_STATUS : LAST_FAIL_CLOSED_STATUS;
+      assert.ok(statusTexts(fixture.ui).at(-1)?.endsWith(retained), `${previous}, ${failure}`);
+      assert.ok(sameActive(fixture.pi, previous === "advisory" ? EVERY_TOOL : FAIL_CLOSED_ALLOWLIST));
+      fixture.pi.rejectSetter = false;
+      fixture.pi.ignoreRemoval = false;
+      fixture.daemon.hangStatus = true;
+      const pending = toolCallOf(fixture.pi)({ toolName: "edit" });
+      expireTimer(fixture.ctx, GUARD_STATUS_BUDGET_MS);
+      const verdict = await pending;
+      if (previous === "advisory") {
+        assert.equal(verdict, undefined);
+        assert.match(fixture.ui.notifications.at(-1) ?? "", /advisory policy/);
+      } else {
+        assert.deepEqual(verdict, { block: true, reason: "TOOL_TIMEOUT" });
+      }
+      assert.ok(statusTexts(fixture.ui).at(-1)?.endsWith(retained));
+    }
+  }
+});
+
+void test("failed guarded mode changes never paint the requested posture", async () => {
+  for (const previous of ["advisory", "fail-closed"] as const) {
+    for (const failure of ["reject", "mismatch"] as const) {
+      const fixture = makeFixture({ mode: previous });
+      startHandlerOf(fixture.pi)(fixture.ctx);
+      await waitForDetail(fixture.ui, "container running");
+      fixture.daemon.mode = previous === "advisory" ? "fail-closed" : "advisory";
+      fixture.pi.rejectSetter = failure === "reject";
+      fixture.pi.ignoreRemoval = failure === "mismatch";
+      assert.deepEqual(await toolCallOf(fixture.pi)({ toolName: "bash" }), POLICY_DENIED_VERDICT);
+      const text = statusTexts(fixture.ui).at(-1) ?? "";
+      assert.match(text, /POLICY_DENIED/);
+      assert.ok(text.endsWith(previous === "advisory" ? LAST_ADVISORY_STATUS : LAST_FAIL_CLOSED_STATUS));
+      assert.ok(sameActive(fixture.pi, previous === "advisory" ? EVERY_TOOL : FAIL_CLOSED_ALLOWLIST));
+      fixture.pi.rejectSetter = false;
+      fixture.pi.ignoreRemoval = false;
+      fixture.daemon.hangStatus = true;
+      const pending = toolCallOf(fixture.pi)({ toolName: "edit" });
+      expireTimer(fixture.ctx, GUARD_STATUS_BUDGET_MS);
+      const verdict = await pending;
+      if (previous === "advisory") {
+        assert.equal(verdict, undefined);
+        assert.match(fixture.ui.notifications.at(-1) ?? "", /advisory policy/);
+      } else {
+        assert.deepEqual(verdict, { block: true, reason: "TOOL_TIMEOUT" });
+      }
+      assert.ok(statusTexts(fixture.ui).at(-1)?.endsWith(previous === "advisory" ? LAST_ADVISORY_STATUS : LAST_FAIL_CLOSED_STATUS));
+    }
+  }
+});
+
+void test("disconnect keeps last applied mode and error until successful reconnect", async () => {
+  const reconnect = makeGate();
+  let attaches = 0;
+  const fixture = makeFixture({
+    mode: "advisory",
+    reattach: { enabled: true, random: seededRandom(1) },
+    attach: async (daemon) => {
+      attaches += 1;
+      if (attaches === 2) await reconnect.promise;
+      return { client: daemon, refusal: null };
+    },
+  });
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitForDetail(fixture.ui, "container running");
+  fixture.daemon.failStatus = "REALM_NOT_ACTIVE";
+  pollOf(fixture.ctx).callback();
+  await waitArmed(fixture);
+  assert.match(statusTexts(fixture.ui).at(-1) ?? "", /connecting \(REALM_NOT_ACTIVE\) · /);
+  assert.ok(statusTexts(fixture.ui).at(-1)?.endsWith(LAST_ADVISORY_STATUS));
+  const disconnectedText = statusTexts(fixture.ui).at(-1);
+  fixture.daemon.failStatus = undefined;
+  fixture.daemon.mode = "fail-closed";
+  fireWait(fixture.ctx);
+  await waitUntil(() => attaches === 2);
+  assert.equal(statusTexts(fixture.ui).at(-1), disconnectedText, "the retry retains the error code and its time");
+  reconnect.resolve();
+  await waitUntil(() => statusTexts(fixture.ui).at(-1)?.endsWith(FAIL_CLOSED_STATUS) === true);
+  assert.ok(sameActive(fixture.pi, FAIL_CLOSED_ALLOWLIST));
+});
+
+void test("a superseded guarded setter cannot paint into the switched session", async () => {
+  const nextAttach = makeGate();
+  let attaches = 0;
+  const fixture = makeFixture({
+    mode: "fail-closed",
+    attach: async (daemon) => {
+      attaches += 1;
+      if (attaches === 2) await nextAttach.promise;
+      return { client: daemon, refusal: null };
+    },
+  });
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitForDetail(fixture.ui, "container running");
+  const setter = makeGate();
+  fixture.pi.holdSetters = setter.promise;
+  fixture.daemon.mode = "advisory";
+  const pending = toolCallOf(fixture.pi)({ toolName: "bash" });
+  await waitUntil(() => fixture.pi.activeSets.length === 2);
+  switchHandlerOf(fixture.pi)(new FakeCtx(fixture.ui, "/ws-b"));
+  assert.ok(statusTexts(fixture.ui).at(-1)?.endsWith(UNKNOWN_STATUS));
+  const switchedPaints = statusTexts(fixture.ui).length;
+  setter.resolve();
+  assert.deepEqual(await pending, { block: true, reason: "REALM_NOT_ACTIVE" });
+  assert.equal(statusTexts(fixture.ui).length, switchedPaints);
+  fixture.pi.holdSetters = null;
+  nextAttach.resolve();
+  await waitUntil(() => statusTexts(fixture.ui).at(-1)?.endsWith(ADVISORY_STATUS) === true);
+  assert.ok(sameActive(fixture.pi, EVERY_TOOL));
+});
+
+void test("invalid daemon mode reports the error without publishing it", async () => {
+  const fixture = makeFixture({ mode: "advisory" });
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitForDetail(fixture.ui, "container running");
+  fixture.daemon.mode = "invalid" as unknown as PolicyMode;
+  pollOf(fixture.ctx).callback();
+  await waitForDetail(fixture.ui, "POLICY_DENIED");
+  assert.ok(statusTexts(fixture.ui).at(-1)?.endsWith(LAST_ADVISORY_STATUS));
+  assert.ok(sameActive(fixture.pi, EVERY_TOOL));
+  const paints = statusTexts(fixture.ui).length;
+  pollOf(fixture.ctx).callback();
+  await yieldTurn();
+  assert.equal(statusTexts(fixture.ui).length, paints, "the same failure and timestamp stay quiet");
+});
+
+void test("a failed UI write for a mode-only change remains retryable", () => {
+  const writes: string[] = [];
+  let reject = false;
+  const ui: OmpStatusUi = {
+    setStatus(_key, text) {
+      if (reject) throw new Error("rpc transport");
+      writes.push(text);
+    },
+    notify() {},
+  };
+  renderRealmStatus(ui, ACTIVE, "fail-closed", true);
+  reject = true;
+  assert.throws(() => { renderRealmStatus(ui, ACTIVE, "advisory", true); }, /rpc transport/);
+  reject = false;
+  renderRealmStatus(ui, ACTIVE, "advisory", true);
+  renderRealmStatus(ui, ACTIVE, "advisory", true);
+  assert.equal(writes.length, 2);
+  assert.ok(writes[0]?.endsWith(FAIL_CLOSED_STATUS));
+  assert.ok(writes[1]?.endsWith(ADVISORY_STATUS));
+});
+
+void test("an invalid initial mode and an unreadable status remain unknown", async () => {
+  const fixture = makeFixture();
+  fixture.daemon.mode = "invalid" as unknown as PolicyMode;
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitForDetail(fixture.ui, "POLICY_DENIED");
+  assert.ok(statusTexts(fixture.ui).at(-1)?.endsWith(UNKNOWN_STATUS));
+  assert.ok(sameActive(fixture.pi, EVERY_TOOL));
+  assert.deepEqual(await toolCallOf(fixture.pi)({ toolName: "bash" }), POLICY_DENIED_VERDICT);
+  assert.ok(statusTexts(fixture.ui).at(-1)?.endsWith(UNKNOWN_STATUS));
+});
+
+void test("a same-state attach refusal survives a later successful mode reconciliation", async () => {
+  const fixture = makeFixture({
+    snapshot: UNBOUND,
+    attach: (daemon) => Promise.resolve({ client: daemon, refusal: makeRealmError("PODMAN_UNSUPPORTED_VERSION") }),
+  });
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitForDetail(fixture.ui, "PODMAN_UNSUPPORTED_VERSION");
+  fixture.daemon.mode = "advisory";
+  fixture.pi.rejectSetter = true;
+  assert.deepEqual(await toolCallOf(fixture.pi)({ toolName: "bash" }), POLICY_DENIED_VERDICT);
+  assert.match(statusTexts(fixture.ui).at(-1) ?? "", /POLICY_DENIED/);
+  assert.ok(statusTexts(fixture.ui).at(-1)?.endsWith(LAST_FAIL_CLOSED_STATUS));
+  fixture.pi.rejectSetter = false;
+  assert.equal(await toolCallOf(fixture.pi)({ toolName: "bash" }), undefined);
+  assert.match(statusTexts(fixture.ui).at(-1) ?? "", /PODMAN_UNSUPPORTED_VERSION/);
+  assert.ok(statusTexts(fixture.ui).at(-1)?.endsWith(ADVISORY_STATUS));
+  assert.ok(sameActive(fixture.pi, EVERY_TOOL));
+});
+
+void test("reconnect error is disclosed without changing the shared connecting reason", () => {
+  const ui = new FakeUi();
+  const connecting = { ...CONNECTING, reason: "daemon detail is normalized" };
+  renderRealmStatus(ui, connecting, "advisory", false);
+  assert.equal(statusTexts(ui).at(-1), `${DISCONNECTED_LABEL} · connecting · ${CLOCK_ISO} · ${LAST_ADVISORY_STATUS}`);
+  renderRealmStatus(ui, connecting, "advisory", false, "REALM_NOT_ACTIVE");
+  assert.equal(statusTexts(ui).at(-1), `${DISCONNECTED_LABEL} · connecting (REALM_NOT_ACTIVE) · ${CLOCK_ISO} · ${LAST_ADVISORY_STATUS}`);
+  renderRealmStatus(ui, connecting, "advisory", false, "REALM_NOT_ACTIVE");
+  assert.equal(statusTexts(ui).length, 2, "unchanged full reconnect status stays deduplicated");
 });

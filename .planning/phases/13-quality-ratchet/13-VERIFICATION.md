@@ -1,78 +1,123 @@
-# Phase 13 verification: quality ratchet
+---
+phase: 13-quality-ratchet
+verified: 2026-11-08T19:25:02Z
+status: gaps_found
+score: 1/6 must-haves verified
+behavior_unverified: 4
+overrides_applied: 0
+covered_files:
+  - .github/dependabot.yml
+  - .github/workflows/ci.yml
+  - .github/workflows/mutation.yml
+  - .planning/REQUIREMENTS.md
+  - .planning/ROADMAP.md
+  - .planning/phases/13-quality-ratchet/13-01-PLAN.md
+  - .planning/phases/13-quality-ratchet/13-CONTEXT.md
+  - .planning/phases/13-quality-ratchet/13-RESEARCH.md
+  - .planning/phases/13-quality-ratchet/13-SUMMARY.md
+  - .planning/quick/261108-puz-reconcile-the-v3-0-planning-records-with/261108-puz-CONTEXT.md
+  - package.json
+  - scripts/check/coverage-floors.json
+  - scripts/check/coverage.mjs
+  - scripts/check/coverage.test.mjs
+  - scripts/check/export-usage.mjs
+  - scripts/check/pack-smoke.mjs
+  - scripts/check/pack-smoke.test.mjs
+  - scripts/mutation/run.mjs
+  - scripts/mutation/run.test.mjs
+  - src/audit/chain.ts
+  - src/runtime/libpod-client.ts
+  - test/anda/listener-diagnostic.test.ts
+  - test/anda/reconnect.test.ts
+  - test/core/policy.property.test.ts
+  - test/daemon/daemon.test.ts
+  - test/fs/canonicalize.property.test.ts
+  - test/integration/omp-live-helpers.test.ts
+  - test/runtime/agentos-supervisor.test.ts
+  - test/runtime/driver/socket-server.test.ts
+  - test/runtime/libpod-client.test.ts
+  - test/support/fake-execution.ts
+  - test/support/timing.ts
+covered_digest: "v4:sha256:bdc51bf3cfd6a9d5019b2a74d4388e15607a7d5e96cd95738a3860d441161e8c"
+gaps:
+  - truth: "The Finish/repair worktree smokes its actual release tarball before remote mutation."
+    status: failed
+    reason: "The Finish branch builds, packs and copies its tarball without invoking pack-smoke; the smoke step is conditional on the normal release branch."
+    artifacts:
+      - path: .github/workflows/ci.yml
+        issue: "Build milestone files at lines 384-414 does not invoke pack-smoke; the smoke at lines 456-462 is guarded by action == normal."
+    missing:
+      - "Run pack-smoke against the actual Finish tarball with the expected tag version before publishing, and obtain the required workflow review and evidence."
+behavior_unverified_items:
+  - truth: "Missing adapter files fail pack-smoke and the normal release smokes its version-synced tarball."
+    test: "On the current revision, exercise the named positive and four malformed actual-tarball cases and the normal release CI path."
+    expected: "Each missing file is rejected by name and the exact version-synced tarball is checked before publication."
+    why_human: "Historical local results are recorded, but no current CI run is evidenced and this verification was expressly prohibited from running tests."
+  - truth: "Coverage floors enforce CI regressions and dead exports are disposed of by reference analysis."
+    test: "Review Node 22.x and 24.x CI coverage logs, establish 22.x floor provenance, demonstrate a below-floor CI failure, and review the current export inventory and seam dispositions."
+    expected: "The gate fails below CI-derived floors and all reference-analysis findings have an appropriate disposition without changing frozen contracts."
+    why_human: "Host measurements and an older inventory do not establish current CI provenance or current inventory."
+  - truth: "Timing tests use the deterministic seams and the current full suite passes in a one-CPU container."
+    test: "Review current-revision test evidence and the timing migration, including the TTL and lifecycle cases."
+    expected: "The suite passes under the CPU quota without deleting or skipping tests to obtain green, and the clock/hold ordering is deterministic."
+    why_human: "The recorded container run predates the current integration revision; its skipped tests and historical source need attribution."
+  - truth: "Property tests and the non-blocking scheduled mutation workflow execute for the required targets."
+    test: "Review current CI property results and a workflow_dispatch mutation artifact, including target groups, and review the workflow and required PR-body material."
+    expected: "Properties pass, the recorded deliberate break is represented, mutation reaches all three groups without blocking release, and required human approvals are documented."
+    why_human: "The workflow and test sources alone cannot prove a hosted execution, artifact contents, PR-body evidence, or human review."
+---
 
-Date: 2026-11-02. Tree: `gsd/v3-lane-a` at `7c044b6` (commits `e8e0eeb`, `f3e76ee`, `7c044b6` on top of `a47016f`). Host: 8 CPUs, load 12 to 40 during runs; Node v24.18.0; Podman 5.7.1; omp not probed (see the omp note below). Source of acceptance: `13-CONTEXT.md` acceptance items 1 to 5 and `.planning/REQUIREMENTS.md` QR-01 to QR-08.
+# Phase 13: Quality ratchet — verification
 
-**Status: gaps_found.** Local evidence closes the code-side of QR-01, QR-02, QR-03, QR-05, QR-06 and QR-07. QR-04 needs a CI floor run. QR-08 is HELD-OWNER. Nothing here is CI evidence; CI has not run on this lane.
+**Goal:** Regressions in dependencies, coverage, packaging and security-relevant path and policy logic fail in CI or a scheduled run before shipping; the suite no longer fails under load.
 
-## Gate runs
+**Verdict: gaps_found.** This is a fresh goal-backward reassessment of the earlier narrative report, not a GSD structured re-verification: the earlier report had no YAML `gaps:` section. No tests, builds, lint, probes, or live operations were run in this assessment, as assigned. Recorded historical runs below are not newly observed results. A missing Finish-path check is a blocker; missing CI provenance, PR evidence, workflow execution, and human review remain open independently. Do not mark the phase complete.
 
-- Final gate run: the gate runner's log (kept out of the repository), heavy slot 1, after all three commits. Exit codes: typecheck 0, lint 0, build 0, test 0, test:integration 0, test:scripts 0, check:docs 0, check:gates 0, check:pack 0, check:mcp 0, test:coverage 0. Counts are in `13-SUMMARY.md`.
-- Earlier run on `e8e0eeb` (before the fixes): same set, `test:coverage` exit 1 on OBS-04 "a new start that overtakes" (timing race). Fixed in `f3e76ee`. This is the only red gate observed.
-- CPU-limited: `taskset -c 0 npm test` exit 0 (2537 tests, 2504 pass, 0 fail, 33 skipped, 506.7 s). Affinity to one CPU, not a Podman CPU-quota container.
+## Observable truths
 
-## Requirements
+| # | Truth | Status | Evidence |
+|---|---|---|---|
+| 1 | Audit job and three Dependabot targets are configured | VERIFIED | `.github/workflows/ci.yml:140-165` runs the exact audit and makes build depend on it; `.github/dependabot.yml` declares root Actions, root npm and site npm weekly. This verifies configuration, not an actual hosted run. |
+| 2 | Four missing packaged files fail and the normal release checks the version-synced tarball | UNCERTAIN — behavior unverified | `scripts/check/pack-smoke.mjs` and its tests implement the checks; `ci.yml:428-462` wires the normal path. Earlier report records four real-tarball negative passes and a local positive, but no current CI execution. |
+| 3 | Coverage gates CI below CI-derived floors and export cleanup is complete | UNCERTAIN — behavior unverified | `package.json:57`, `scripts/check/coverage.mjs:434-555`, and `ci.yml:68-74` wire the 22.x gate. Historical host floor experiment is not CI provenance; the current export inventory/disposition is not in evidence. |
+| 4 | Timing fixes and one-CPU container suite pass | UNCERTAIN — behavior unverified | `test/runtime/libpod-client.test.ts:355-360` injects `ManualClock`; ACP tests use `testTimeout`; `test/runtime/agentos-supervisor.test.ts:596-625` holds deadlines. The 2026-11-08 quota run is positive historical evidence, not a run of the current integration revision or CI. |
+| 5 | Properties run and scheduled non-blocking mutation covers required targets | UNCERTAIN — behavior unverified | `package.json:55,74`, property sources, `.github/workflows/mutation.yml`, and `scripts/mutation/run.mjs:156-168,178-222,571-572` provide substantive wiring. No current hosted result or mutation artifact is available. |
+| 6 | Finish/repair worktree checks its actual tarball before remote mutation (D-1303) | FAILED — BLOCKER | `ci.yml:384-414` packs and copies without smoke; `ci.yml:456-462` smoke is guarded by `steps.tag_check.outputs.action == 'normal'`. The Finish branch is not covered. |
 
-### QR-01: `ci.yml` runs `npm audit --omit=dev --audit-level=high`: local evidence, CI UNVERIFIED
-- `.github/workflows/ci.yml` lines 140 to 162: job `audit` runs `npm audit --omit=dev --audit-level=high` on Node 24.x; `release.needs` includes `audit` (line 165).
-- Local run on this lane, 2026-11-02: `npm audit --omit=dev --audit-level=high` exit 0, `found 0 vulnerabilities`.
-- UNVERIFIED: an actual CI run of the job. D-1301 blocking-on-release is configuration only here.
+## Requirements and evidence
 
-### QR-02: `.github/dependabot.yml` covers the three targets: DONE (configuration)
-- File content: `github-actions` at `/`; `npm` at `/`; `npm` at `/site`; weekly; `ci` and `build` prefixes; grouped updates; `@types/node` semver-major ignored.
-- UNVERIFIED: Dependabot's live behaviour and the owner's security-update setting (TD-10, owner's).
+| ID | Assessment | Evidence and remaining action |
+|---|---|---|
+| QR-01 | Configuration verified; CI unverified | Node 24.x audit job is a build prerequisite. The previous report records a local audit exit 0; the actual CI job remains unobserved. |
+| QR-02 | Configuration verified | Three weekly targets are present. Dependabot live behavior and owner-controlled security-update settings are not proven by this file. |
+| QR-03 | BLOCKED | Normal path wired; Finish path missing as above. The previous report records four local real-tarball negative passes and a positive check, with logs outside the repo; these do not prove the current Finish or hosted path. |
+| QR-04 | UNCERTAIN | On 2026-11-08, `node scripts/check/coverage.mjs --lcov coverage/lcov.info --floors <scratch>` reportedly failed with `src/fs` branches 88.89 below the raised 95 floor; committed floors passed all nine metrics on Node 24.18. Source: `.planning/quick/261108-puz-reconcile-the-v3-0-planning-records-with/261108-puz-CONTEXT.md:33`. This closes the **local** raised-floor demonstration, not the D-1304 CI floor provenance: Node 22.x gate and 24.x CI evidence remain needed. |
+| QR-05 | UNCERTAIN | The same context records `npm test` in rootless Podman `--cpus=1`, image `localhost/realm-qr05-runner:0626abe261`, Node 24.22.1, lane copy e34da60: 2799 passed, 0 failed, 34 skipped, 169.7 s; host load 10.0 before and 11.9 after on eight CPUs. This is real recorded quota evidence, not merely affinity, and not CI or current-revision proof. Timing migration commits `e46b4b1`, `98a20e7`, `26e9470` are recorded in that context; current source includes deterministic seams and `holdDeadlines`. No claim that the 34 skips were newly introduced or harmless is made. |
+| QR-06 | UNCERTAIN | Earlier report records `export-usage.mjs --list` with one self-only export removed in `7c044b6`, subsequent zero self-only entries and typecheck exit 0, with inventory stored outside the repository. Current inventory and intentional test-only seam dispositions are not available. Both roadmap and requirements already say reference analysis; no wording correction is needed. Frozen-catalogue invariance across the current integration tree is not established by that one-file commit. |
+| QR-07 | UNCERTAIN | Properties are authored and included by the test glob. The earlier report records a local break of `isInsideRoot` with 5/11 property failures and restoration; the recovery note separately records historical break 3/11 and restored 11/11. These are distinct historical records, not a current CI result. `fast-check` justification, licence and maintenance checks must be attached to the PR body; no such body is evidenced. FS-02 remains an owner decision. |
+| QR-08 | UNCERTAIN | The 2026-11-08 owner chose the D-1308 permission drop; `9e2142f` applied it. Current `.github/workflows/mutation.yml` grants only `contents: read`, schedules weekly, permits dispatch and uploads an artifact; mutation and upload steps are non-blocking. `run.mjs` selects the three target groups, but no hosted dispatch/report proves execution. The permission decision is closed; **human review of the workflow change remains open**. |
 
-### QR-03: `pack-smoke` includes the four adapter files and the release reruns `check:pack`: DONE locally
-- `scripts/check/pack-smoke.mjs` lists the four files (lines 35 to 39) and walks `adapters/` and `licenses/`; `--tarball` and `--expect-version` parse (lines 84 to 96).
-- Real-tarball negatives, by name, run in this lane (`node --test --test-name-pattern="real tarball that omits" scripts/check/pack-smoke.test.mjs`): `omits adapters/hermes-agent/mcp.snippet.yaml`, `omits adapters/muse-code/mcp-settings.snippet.json`, `omits adapters/prime-agent/MCP.md`, `omits adapters/prime-agent/skills/realm/SKILL.md`. All four pass (4 pass, 0 fail, 41.0 s). Each packs a fixture missing one file and expects exit 1 naming it. Commit `e8e0eeb` (cherry-pick of PR #47 `9a2a25b`).
-- Positive: `npm run check:pack` exit 0.
-- Release job: `ci.yml` line 391 runs `pack-smoke.mjs --tarball ... --expect-version ...` after the version sync.
-- UNVERIFIED: the Finish/repair path in CI. PR #40 (`ci/release-build-publish-split`) carries the release smoke in its build job; see phase 20.
+All QR-01 through QR-08 are mapped by `13-01-PLAN.md`; no phase-mapped requirement is orphaned. D6 requires the workflow/dependency PR bodies to cite owner approval; PR-body evidence and workflow human review cannot be inferred from a source comment or the permission decision.
 
-### QR-04: coverage output and a per-directory floor ratchet: PARTIAL, HELD on CI provenance
-- `npm run test:coverage` exit 0. Re-evaluating the saved lcov (`node scripts/check/coverage.mjs --lcov coverage/lcov.info`, exit 0): every metric at or above its floor, every source loaded. Per directory, actual vs floor: `src/fs` lines 92.54/91, branches 88.82/87, functions 100/99; `src/core` lines 98.82/97, branches 96.06/95, functions 97.37/96; `src/tools` lines 97.36/96, branches 93.33/92, functions 100/99.
-- Provenance gap: each floor equals floor(measured) minus tolerance 1 on this host (Node 24.18), not on the gate leg (22.x) in CI. D-1304 requires the floors to come from a CI run. `reportOnly` is `false` in `scripts/check/coverage-floors.json`.
-- Not shown: a CI run of both legs, and a gate run red against a raised floor. Both are required before the floor claim is closed.
-- Owner/CI action: one CI run on 22.x and one on 24.x, then set floors and show a red run against a raised floor.
+## Artifacts, links, and data flow
 
-### QR-05: fixed-timeout tests use injected clocks, hold gates or the scaled helper; suite passes CPU-limited: DONE locally, container quota UNVERIFIED
-- Helper and seams on HEAD: `test/support/timing.ts` (`TIMEOUT_SCALE`, `scaledMs`, `testTimeout`, `boundedWait`, `pollUntil`, `ManualClock`), `test/support/timing.test.ts`, the `now` option in `src/runtime/libpod-client.ts`, the hold gate in `test/support/fake-execution.ts`.
-- Fix in this lane, `f3e76ee`: `test/runtime/agentos-supervisor.test.ts` OBS-04 overtake tests hold call deadlines and the new-start test fires the held deadline after the overtaking start. Before the fix, the test failed under the coverage run's load: the pending check rejected with a RealmError ("the OpenShell gateway, or the compute driver behind it, did not answer") where the test expects `false`. After the fix the two overtake tests pass (2 of 2) and the full gate set is green.
-- CPU-limited: `taskset -c 0 npm test` exit 0 (2537 tests, 2504 pass, 0 fail, 33 skipped), start load 35.4. This is one-CPU affinity on a shared host.
-- UNVERIFIED: the requirement's "CPU-limited container" wording. No Podman container with a CPU quota was run.
+- `ci.yml` → audit → build dependency is wired; `ci.yml` → 22.x `test:coverage` → lcov comparison/floor exit is wired. CI execution and provenance are not established.
+- Normal version sync → pack → `pack-smoke --tarball ... --expect-version ...` is wired. Finish worktree → pack → assets has **no** corresponding smoke call, a concrete missing link.
+- `npm test` → compiled `dist/test/**/*.test.js` → path and policy property tests is wired; their authored generators include traversal, symlinks, NUL, unicode and repeated separators. Historical deliberate break evidence is above; current execution is not established.
+- Mutation schedule/dispatch → `scripts/mutation/run.mjs` → JSON report → artifact upload is wired in configuration. The runner enumerates filesystem sources plus policy and redact; artifact presence and successful target execution are unobserved. Rendering/data-flow UI checks are not applicable.
+- Timing helper and fake-execution hold gates are substantive; source-level presence cannot alone prove all current timing invariants.
 
-### QR-06: dead exports removed by reference analysis; frozen catalogue unchanged: DONE locally
-- `node scripts/check/export-usage.mjs --list` before the change reported one `self-only` export, `readTailHead` (`src/audit/chain.ts:185`). It loses `export` in `7c044b6`. After the change the listing reports zero `self-only` in every directory (listing kept out of the repository).
-- `test-only` seams are kept per D-1306 (the listing's `test-only` column; the counts are in the listing, not re-counted here).
-- `npm run typecheck` (noUnusedLocals in tsconfig) exit 0 after the change.
-- Frozen catalogue, `ports` types, schema validator types: not edited (`git show --stat 7c044b6`: one file, `src/audit/chain.ts`).
-- Requirement wording: QR-06 says "found with the coverage output" in the requirement text. D-1306 amends it to "found by reference analysis". The wording change belongs in REQUIREMENTS.md and ROADMAP.md, which are integrated by the main agent (see the delta in the yield).
+## Verification and review limitations
 
-### QR-07: `fast-check` dev dependency; properties in `npm test`; a broken canonicalizer fails one: DONE locally, CONTRIBUTING items UNVERIFIED
-- `package.json` devDependency `fast-check` 4.10.2 (exact). Properties in `test/fs/canonicalize.property.test.ts` and `test/core/policy.property.test.ts`, run by `npm test` (`dist/test/**/*.test.js`).
-- Deliberate breakage, run in this lane and reverted: `src/fs/root.ts` `isInsideRoot` line 92 changed from `return rel.split(sep)[0] !== "..";` to `return true;`. `npx tsc` then `node --test dist/test/fs/canonicalize.property.test.js`: 5 of 11 fail, 6 pass, exit 1 (run log kept out of the repository). Failing: no accepted path escapes the root; canonicalize agrees with realpath; absent result names a real directory; a final-segment link refused in write mode; isInsideRoot true inside and false outside. The tsc output also shows `TS6133 'sep' is declared but its value is never read`, expected from the breakage. Restored byte-for-byte: `git status` shows no change to `src/fs/root.ts`.
-- A first breakage attempt, `isAbsolute(rel)` returning `true`, did not fail any property (11 of 11 pass; run log kept out of the repository). On POSIX `relative()` never returns an absolute path, so that branch is unreachable there. It is recorded here so the reader knows which breakage counts.
-- UNVERIFIED: the three `CONTRIBUTING.md` items (justification, licence check, maintenance check) for `fast-check` must appear in the PR body. No PR body exists in this lane.
-- Finding (not a defect here): the NUL-after-missing-segment question from D-1307 was not decided in this lane; decide in the PR body.
+**Behavioral spot-checks and probes:** not run; the assignment expressly forbids tests, builds, lint, formatters and live stack operations. No phase-declared `probe-*.sh` was found in the plan or summary. Historical command results above are attributed records, not this verifier's runs.
 
-### QR-08: scheduled, non-blocking mutation run covering `src/fs`, `src/core/policy.ts`, `src/audit/redact.ts`: HELD-OWNER
-- `.github/workflows/mutation.yml` exists: weekly schedule plus `workflow_dispatch`, `permissions: contents: read` at top level, job `actions: write` (line 25 region). The steps use `continue-on-error: true` and upload the report as an artifact. `scripts/mutation/run.mjs` and `run.test.mjs` exist.
-- HELD-OWNER: the D-1308 permission choice. `actions: write` is still granted. PR #47 commit `33dd980` drops it; it is not taken here because the choice belongs to the owner.
-- UNVERIFIED: a `workflow_dispatch` run and the artifact. Coverage of the three named paths by `run.mjs` was not checked in this lane.
-- `actionlint` on `mutation.yml` with a temporary config declaring the `omega-ci` label: clean.
+**Anti-patterns:** targeted scan of the principal pack, coverage, export, mutation and timing sources found no `TBD`, `FIXME`, or `XXX` markers. This is not a full code-quality or security audit. No unqualified claim is made that all tests, suppressions or thresholds satisfy the plan's prohibitions across the integration history.
 
-## Lint of workflows
+**Decision coverage:** the read-only GSD decision-coverage query returned `skipped: true`, `No trackable decisions in CONTEXT.md.` This heuristic does not waive D6 or D-1308 human review.
 
-`actionlint` (1.7.7) on `ci.yml`, `mutation.yml`, `pages.yml`, with a temporary config (kept out of the repository) declaring the self-hosted label `omega-ci`: one finding, `ci.yml:274` SC2016 (info). It is a false positive: the single-quoted block is a `node -e` script with JS template literals on purpose. The bare run without the config reports the unknown-label error only.
+**Human/CI decision items:** obtain and inspect both CI matrix legs and the audit/release runs; establish 22.x floor provenance and a CI below-floor failure; review a current export inventory and seam dispositions; attach the three dependency checks and D6 citations to the relevant PR bodies; obtain human review of workflow changes; dispatch mutation and inspect its report; obtain current-revision timing/property evidence. Do not infer any of these from the recorded local runs. The Finish smoke is a present code gap, not merely a request for review.
 
-## omp version
+**Deferred items:** None. Phase 20 covers release hardening, but the Finish smoke is explicitly required by this phase's D-1303 and acceptance plan; its absence is not silently deferred.
 
-`omp --version` was blocked by the shell guard (`BLOCKED needs: human-approval (mcp: nested-agent)`), so no omp version was observed in this lane. The lead's stated version is 18.15.0. UNVERIFIED here.
-
-## UNVERIFIED items
-
-- CI runs of the audit job, the coverage report, and the release `check:pack` step on GitHub.
-- CI floor provenance for QR-04 and the red-against-raised-floor demonstration.
-- A CPU-quota container run for QR-05 (one-CPU affinity was run instead).
-- CONTRIBUTING.md items for `fast-check` in the PR body (QR-07).
-- The mutation workflow's `workflow_dispatch` run and artifact (QR-08).
-- omp version (see above).
+---
+_Verified from source and recorded evidence: 2026-11-08T19:25:02Z_

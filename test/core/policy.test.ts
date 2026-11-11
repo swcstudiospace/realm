@@ -87,6 +87,17 @@ void test("D4: loadPolicyFileDetailed reports where the mode came from", () => {
   });
 });
 
+void test("D-1501: loadPolicyFile returns the policy that loadPolicyFileDetailed reports, for every mode source", () => {
+  withTempDir((dir) => {
+    const absent = join(dir, "absent.json");
+    const unnamed = writeJson(join(dir, "unnamed.json"), { shellEnabled: true });
+    const advisory = writeJson(join(dir, "advisory.json"), { mode: "advisory" });
+    for (const path of [absent, unnamed, advisory]) {
+      assert.deepEqual(loadPolicyFile(path), loadPolicyFileDetailed(path).policy);
+    }
+  });
+});
+
 void test("CORE-03: keys missing from a policy file take the validated defaults", () => {
   withTempDir((dir) => {
     const policy = loadPolicyFile(writeJson(join(dir, "policy.json"), { mode: "fail-closed" }));
@@ -95,6 +106,19 @@ void test("CORE-03: keys missing from a policy file take the validated defaults"
     assert.equal(policy.startupBudgetMs, 200000);
     assert.equal(policy.toolQueueMs, 2000);
     assert.deepEqual(policy.workspaceRoots, []);
+  });
+});
+
+void test("a policy file with startupBudgetMs above the client up wait fails SCHEMA_INVALID, and 200000 loads", () => {
+  withTempDir((dir) => {
+    const error = thrown(() =>
+      loadPolicyFile(writeJson(join(dir, "over.json"), { startupBudgetMs: 200001 })),
+    );
+    assert.ok(error instanceof SchemaInvalidError);
+    assert.equal(error.code, "SCHEMA_INVALID");
+    assert.match(error.detail, /\/startupBudgetMs/);
+    const policy = loadPolicyFile(writeJson(join(dir, "max.json"), { startupBudgetMs: 200000 }));
+    assert.equal(policy.startupBudgetMs, 200000);
   });
 });
 

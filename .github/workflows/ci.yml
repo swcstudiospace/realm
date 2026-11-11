@@ -390,6 +390,7 @@ jobs:
           set -euo pipefail
           version="${TAG#v}"
           dir="${RUNNER_TEMP}/finish-${version}"
+          tarball="${dir}/agent-realm-${version}.tgz"
           rm -rf "${dir}"
           git worktree prune
           git worktree add --detach "${dir}" "refs/tags/${TAG}"
@@ -399,16 +400,23 @@ jobs:
             npm ci --ignore-scripts
             npm run build
             npm pack
+            # Use the triggering checkout's checker, but walk the tagged source tree.
+            node --input-type=module - "${GITHUB_WORKSPACE}/scripts/check/pack-smoke.mjs" "${dir}" "${tarball}" "${version}" <<'NODE'
+          import { pathToFileURL } from "node:url";
+          const [checker, root, tarball, version] = process.argv.slice(2);
+          const { runCheck } = await import(pathToFileURL(checker).href);
+          process.exitCode = await runCheck(["--tarball", tarball, "--expect-version", version], { root });
+          NODE
             if ! grep -qF "## [${version}]" CHANGELOG.md; then
               echo "CHANGELOG.md has no section for ${version}; refusing to regenerate notes for a published tag." >&2
               exit 1
             fi
             node scripts/release/changelog.mjs --version "${version}" --date "${RELEASE_DATE}" --notes-out notes.md
-            node "$(cd "${GITHUB_WORKSPACE}" && pwd -P)/scripts/release/assets.mjs" --root "${dir}" --tarball "${dir}/agent-realm-${version}.tgz" --out "${dir}/assets"
+            node "$(cd "${GITHUB_WORKSPACE}" && pwd -P)/scripts/release/assets.mjs" --root "${dir}" --tarball "${tarball}" --out "${dir}/assets"
           )
           out="${RUNNER_TEMP}/milestone-files"
           mkdir -p "${out}"
-          cp "${dir}/agent-realm-${version}.tgz" "${dir}/assets/SHA256SUMS" "${dir}/assets/agent-realm-${version}.cdx.json" "${dir}/notes.md" "${out}/"
+          cp "${tarball}" "${dir}/assets/SHA256SUMS" "${dir}/assets/agent-realm-${version}.cdx.json" "${dir}/notes.md" "${out}/"
           printf '%s\n' "${TAG}" > "${out}/milestone-tag.txt"
           git worktree remove --force "${dir}"
           trap - EXIT

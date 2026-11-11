@@ -1,0 +1,21 @@
+# Quick task O: close the offline Phase 17 gaps (OBS-01, OBS-02)
+
+Specs: `.planning/phases/17-observability-and-tamper-evident-audit/17-01-PLAN.md`, `17-02-PLAN.md`, `17-VERIFICATION.md`, and the Phase 17 section of `docs/integration/runtime-decision.md`.
+
+## Locked decisions
+
+1. Startup-failure reader and log rotation (17-02 T3/T5, owner ruling O-f). The daemon's log is a rotating file sink (`src/daemon/main.ts` around lines 174-199). The reader in `src/daemon/ensure.ts` (around lines 60-120 and 195-205) remembers a byte offset, returns no failure whenever the current file is SHORTER than that offset, and keeps the offset across polls. Decide from the code whether a rotation after the first poll (file replaced by a new, shorter or already regrown file) can hide a later `daemon.failed` line, so `realm up` waits for the timeout instead of reporting the daemon's own failure code. If it can: make the tracking rotation-aware (detect a replaced file by a device and inode change, or a size smaller than the offset, and read the replacement from its start; a replacement that already regrew past the old offset is caught by the inode change), preserving: failures logged BEFORE the start are ignored, LOCK_CONFLICT handling, and the reader never echoes log content. Add fixture-only regression tests in `test/daemon/start-failure.test.ts`: rotation to a shorter file; rotation to a file already longer than the old offset; a failure line appended after rotation is found; a pre-start failure is still ignored. Fix the stale "no rotation" comment near `ensure.ts` lines 72-74. If the reader is already correct, say so with evidence and add only the tests.
+2. `merkleRootOfLeaves` export (17-01 T1). `src/audit/anchor.ts` keeps it private (around line 100); the plan requires it exported. Export it with a doc comment. Add direct tests in `test/audit/anchor.test.ts`: empty list, one leaf, even and odd leaf counts (the unpaired node is promoted, never duplicated) against roots computed INDEPENDENTLY in the test with node:crypto from the prefixes the module exports (do not copy the implementation). No hash byte changes.
+3. Unreadable audit file and head look-back boundary (17-01 CLI contract and 17-02 T4).
+   - `test/cli/audit.test.ts` covers symlink, directory and missing audit paths but not an unreadable regular audit file. Add a test for `realm audit verify --file <regular file with mode 0o000>`: exit 1, the documented unreadable failure value (see `src/cli/audit.ts` around lines 250-308), no success output, no host path in stdout or stderr. Permission bits do not restrict root, so when the process runs as uid 0 use the repo's existing conditional skip with a stated reason (see the ONB-02 mode-0000 test in `test/doctor/fix.test.ts` for the idiom). Restore the mode in t.after.
+   - `src/audit/chain.ts` (about lines 153-241) finds the audit head by searching a bounded tail; `docs/integration/runtime-decision.md` (about line 237) records that when the last 64 lines hold no chained record the head is `none` and the daemon logs nothing. Add deterministic boundary tests in `test/audit/chain.test.ts`: a chained record exactly at the look-back edge is found; one line beyond it gives none; a torn final line; a legacy-only (unchained) file; the byte-window edge; each compared with the full verifier where that applies. Do NOT change `chain.ts` behaviour (an accepted, documented limitation). If a test exposes a real defect, report it in the SUMMARY; do not fix it.
+
+## Files in scope
+
+`src/daemon/ensure.ts`, `test/daemon/start-failure.test.ts`, `src/audit/anchor.ts`, `test/audit/anchor.test.ts`, `test/cli/audit.test.ts`, `test/audit/chain.test.ts`. Nothing else.
+
+## Execution notes
+
+- Behaviour changes are limited to task 1 (only if the defect is real) and the task 2 export.
+- Every heavy command through `flock -w 7200 <heavy-slot lock> <command>`. Run the targeted test files (start-failure, anchor, cli/audit, chain, daemon main), typecheck and lint; the orchestrator runs the full suite.
+- Do not touch the live stack. Do not edit CHANGELOG.md, package.json, package-lock.json, `.github/**` or `release/**`. `.planning/config.json` has an uncommitted orchestrator change: never stage it.

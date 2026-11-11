@@ -79,7 +79,7 @@ Supersession. The product spec (`docs/specs/realm-spec.xml`, read-only) still ca
 
 ### Upgrading
 
-A policy that has no `mode` key, or no policy file at all, used to load as `advisory`. It now loads as `fail-closed`. While the realm is not active (not yet started, connecting, degraded, stopping or in error), host writes that used to proceed with a warning are refused: the Omp guard blocks `write` and `edit` with `REALM_NOT_ACTIVE` (or `REALM_UNBOUND` or `REALM_STOPPING` for those states), and `write` through the tool dispatcher is denied the same way. Start the realm (`realm up`, or `/realm-retry` in Omp) to proceed. To keep the earlier behaviour, add `"mode": "advisory"` to `<stateDir>/policy.json` and restart the daemon; to take the new default, change nothing. `exec` is unchanged: it was already refused outside `active` in both modes.
+A policy that has no `mode` key, or no policy file at all, used to load as `advisory`. It now loads as `fail-closed`. While the realm is not active (not yet started, connecting, degraded, stopping or in error), host writes that used to proceed with a warning are refused: the Omp guard blocks `write` and `edit` with `REALM_NOT_ACTIVE` (or `REALM_UNBOUND` or `REALM_STOPPING` for those states), and `write` through the tool dispatcher is denied the same way. Start the realm (`realm up`, or `/realm-retry` in Omp) to proceed. To keep the earlier behaviour, add `"mode": "advisory"` to `<stateDir>/policy.json` and restart the daemon; to take the new default, change nothing. `exec` is unchanged: it was already refused outside `active` in both modes. `realm doctor` names the mode and its source in its `policy-file` check, warns for an explicit `advisory`, and exits 0 whatever its checks report.
 
 ## `workspaceRoots`
 
@@ -212,8 +212,10 @@ A policy that has no `mode` key, or no policy file at all, used to load as `advi
 
 ## `startupBudgetMs`
 
-- **Type:** `integer`, minimum 1 (the `startupBudgetMs` property of
+- **Type:** `integer`, minimum 1, maximum 200000 (the `startupBudgetMs` property of
   `src/core/policy.schema.json`; `Policy.startupBudgetMs` in `src/contract/validate.ts`).
+  A value above 200000 is refused at policy load with `SCHEMA_INVALID`, so the
+  daemon does not start; lowering is allowed down to 1.
 - **Default:** `200000` ms (the `startupBudgetMs` property of `src/core/policy.schema.json`). The default covers the AgentOS start timeout of 180 s with margin.
 - **Effect:** one deadline covering the whole startup path. In
   `LifecycleController.create` the deadline is armed before the pinned-root
@@ -238,13 +240,16 @@ A policy that has no `mode` key, or no policy file at all, used to load as `advi
   `src/omp/plugin.ts`). Catalogue entry:
   `STARTUP_BUDGET_EXCEEDED` is retryable
   (`ERROR_CATALOGUE` in `src/core/errors.ts`).
-  The control channel's `up` request waits 230 s (the 200 s default plus a
-  30 s reply margin; `CONTROL_TIMEOUT_MS`, `src/daemon/channel.ts`) before
-  the caller reports `TOOL_TIMEOUT`, while `status`, `down`, `doctor` and
-  `tool` keep their own limits. No CLI or plugin caller reads the
-  daemon-owned policy, so a `startupBudgetMs` above 200 s can still outlast
-  the `up` request limit; the plugin's own 200 s timer is unchanged and fires
-  first.
+  The control channel's `up` request waits 230 s (the 200000 ms maximum of
+  this key plus a 30 s reply margin; `CONTROL_TIMEOUT_MS`,
+  `src/daemon/channel.ts`) before the caller reports `TOOL_TIMEOUT`, while
+  `status`, `down`, `doctor` and `tool` keep their own limits. Because the
+  key's maximum equals the `up` request's startup allowance, the `up` wait
+  always outlasts any accepted budget. The plugin's own timer
+  (`STARTUP_BUDGET_MS`, 200000) equals the maximum and the default, and a
+  lower configured budget does not change it. The daemon's runtime guard in
+  `src/daemon/daemon.ts` remains as defence in depth for a waiter whose
+  remaining client wait is shorter than the budget.
 - **Also see:** the single teardown bound `TEARDOWN_TIMEOUT_MS` (30000 ms) is a separate
   constant, not this key (`TEARDOWN_TIMEOUT_MS`, `src/lifecycle/bounds.ts`).
 
@@ -302,11 +307,15 @@ Keys (`ACCEPTED_KEYS`, `src/runtime/config.ts`). The key set is closed, and any 
 - `image` (required): a digest-pinned reference in the form `name@sha256:<64 hex>`. The name starts with a lowercase letter or digit and continues with lowercase letters, digits, `.`, `_`, `/`, or `-`. A tag-only reference is refused.
 - `stateDir` (required): an absolute path.
 - `workspaceRoot` (required): an absolute path.
+- `secretRoot` (optional): an absolute path, the directory that holds per-sandbox secret directories. When omitted it is `<stateDir>/secrets`, derived by `runtimeRootsOf` (`src/runtime/config.ts`).
+- `sandboxStateRoot` (optional): an absolute path, the directory that holds per-sandbox state. When omitted it is `<stateDir>/sandboxes`.
 - `andaUrl` (optional): an `http:` or `https:` URL with no userinfo. Its presence decides whether the Anda bridge is required (`andaBridgeRequired`, `src/runtime/config.ts`).
   - Set: the bridge is required at start. The start runs the bridge handshake, and an unreachable bridge refuses the start with `ANDA_UNREACHABLE`.
   - Absent: no Anda bridge is attached and there is no handshake, so the session goes `active` once the runner start succeeds. While `active` with no bridge, `exec` and `write` run exactly as they do with a bridge, in both policy modes. `status`, `read`, `list`, and `retry` do not need the bridge. If a configured bridge later goes down, the session moves to `degraded` and `exec` and `write` are refused as in any non-active state.
 
-The CLI and the daemon both read `stateDir` from this file, and a config that omits it is `SCHEMA_INVALID`.
+An explicit `secretRoot` or `sandboxStateRoot` that equals, contains or lies inside the other explicit root or `workspaceRoot` is refused when the file loads (`SCHEMA_INVALID`). That check is lexical; the doctor's `runtime-roots` item also checks the effective (derived) roots.
+
+The CLI, the daemon and the compute driver all read this file. A config that omits `stateDir` or `workspaceRoot` is `SCHEMA_INVALID`. The driver does not read `REALM_DRIVER_SECRET_ROOT`, `REALM_DRIVER_WORKSPACE_ROOT` or `REALM_DRIVER_STATE_ROOT`, and a stale one left in the environment is ignored.
 
 Reading (`readRuntimeConfigFile`, `src/runtime/config-file.ts`):
 

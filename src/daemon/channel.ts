@@ -29,10 +29,12 @@ export const SOCKET_TIMEOUT_MS = 5000;
 // caller reports TOOL_TIMEOUT while the daemon is still inside its own budget. doctor runs the registered items plus the
 // runtime checks; probes run together, each bounded at 5 s, so it gets 60 s. tool runs one dispatcher call under its
 // own bound, so it gets that bound plus 10 s for the reply.
-// The policy schema default for startupBudgetMs (policy.schema.json). It is mirrored, not imported:
-// this module keeps its five-import allowlist (P6-D10), and no control caller reads the daemon-owned
-// policy, so the up bound is built from the default. The channel test derives the default from the
-// schema and asserts the up bound exceeds it.
+// STARTUP_BUDGET_DEFAULT_MS mirrors both the default and the maximum of startupBudgetMs in
+// policy.schema.json, so policy load refuses a budget the up request cannot wait for. The up bound is
+// that maximum plus UP_REPLY_MARGIN_MS. It is mirrored, not imported: this module keeps its
+// five-import allowlist (P6-D10), and no control caller reads the daemon-owned policy. The channel
+// test asserts the schema maximum equals this constant and that the maximum plus the margin is no
+// more than the up bound.
 const STARTUP_BUDGET_DEFAULT_MS = 200_000;
 // Slack on top of the startup budget for the daemon's reply and the socket round trip.
 const UP_REPLY_MARGIN_MS = 30_000;
@@ -295,6 +297,29 @@ export function decodeReply(line: string): ControlReply {
   return { id, result: parsed["result"] };
 }
 
+// The control socket path names no daemon: nothing listens there (the socket file is missing, ENOENT) or nothing
+// accepts the connection (ECONNREFUSED). It is still REALM_NOT_ACTIVE, so every caller that handles that code is
+// unchanged; a caller that must tell "no daemon" from "a daemon that did not answer" tests instanceof. A dial timeout,
+// a peer that closes before replying and an error reply are never this class.
+export class DaemonAbsentError extends RealmError {
+  constructor() {
+    super("REALM_NOT_ACTIVE");
+    this.name = "DaemonAbsentError";
+  }
+}
+
+// The errno codes of a dial that reached no listener.
+const NO_DAEMON_ERRNO: readonly string[] = ["ENOENT", "ECONNREFUSED"];
+
+function isNoDaemonError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    "code" in error &&
+    typeof error.code === "string" &&
+    NO_DAEMON_ERRNO.includes(error.code)
+  );
+}
+
 // Any socket IO failure that is neither a timeout nor a decode refusal surfaces
 // REALM_NOT_ACTIVE: the peer is absent or went away. RealmError instances
 // (timeouts, decode refusals) pass through untouched, so every failure that
@@ -310,6 +335,9 @@ async function dial(socketPath: string, timeoutMs: number): Promise<Socket> {
   try {
     return await dialWithin(socketPath, timeoutMs, "TOOL_TIMEOUT");
   } catch (error: unknown) {
+    if (isNoDaemonError(error)) {
+      throw new DaemonAbsentError();
+    }
     throw ioFailure(error);
   }
 }

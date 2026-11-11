@@ -3,14 +3,17 @@ gsd_state_version: "1.0"
 milestone: v3.0
 milestone_name: Containment by Default
 status: planning
-last_updated: "2026-10-31"
+stopped_at: Completed 15-09-PLAN.md
+last_updated: "2026-11-09T05:40:16.932Z"
 last_activity: 2026-10-31
+last_activity_desc: actual lifecycle/doctor/C4 evidence reconciled; normalized onboarding docs authored; no checks, commits or phase completion by this worker
+state_head: 315b4fd869ce2a700fcd9d7dfa2503d4847aac46
 progress:
   total_phases: 9
   completed_phases: 0
-  total_plans: 9
-  completed_plans: 0
-  percent: 0
+  total_plans: 45
+  completed_plans: 9
+  percent: 20
 ---
 
 # Project State
@@ -47,7 +50,6 @@ Last activity: 2026-10-31 — actual lifecycle/doctor/C4 evidence reconciled; no
 The accumulated context and older run sections below are historical records,
 not a fresh instruction to restart discovery, install a runtime or close a phase.
 
-
 ## Performance Metrics
 
 **Velocity:**
@@ -68,6 +70,19 @@ not a fresh instruction to restart discovery, install a runtime or close a phase
 - Trend: N/A
 
 *Updated after each plan completion*
+**Per-Plan Metrics:**
+
+| Plan | Duration | Tasks | Files |
+|------|----------|-------|-------|
+| Phase 15 P01 | 15min | 4 tasks | 3 files |
+| Phase 15 P02 | 5min | 2 tasks | 1 files |
+| Phase 15 P03 | 10min | 3 tasks | 2 files |
+| Phase 15 P04 | 20min | 3 tasks | 4 files |
+| Phase 15 P05 | 20min | 2 tasks | 1 files |
+| Phase 15 P06 | 75min | 4 tasks | 7 files |
+| Phase 15 P08 | 15min | 2 tasks | 2 files |
+| Phase 15 P07 | 25min | 3 tasks | 4 files |
+| Phase 15 P09 | 15min | 4 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -104,6 +119,12 @@ Full log lives in PROJECT.md Key Decisions table. Recent decisions affecting cur
 - [Phase Phase 9 checkpoint]: Phase 9 libpod fix, in progress under the owner's accepted expansion. Verified on Podman 5.7.1: GET /_ping returns 200 with a Libpod-Api-Version header; a missing container returns 404 with a JSON body whose cause is 'no such container' (inspect and remove); an unknown route returns 404 with plain text 'Not Found'; the versioned paths return 200. Remaining steps, in order: (1) libpod-routes: matchLibpodRoute accepts only a /v<semver> prefix, and routeTarget takes the API version; (2) libpod-client: discover the version from /_ping and validate it, otherwise fail with SCHEMA_INVALID; cache it per client and prefix every route; exchange returns headers; inspect and remove accept a 404 only when the JSON cause is 'no such container'; (3) test/support/fake-libpod: answer /_ping with the version header, and give the 404 body its cause and response fields; (4) new unit tests for versioning, the plain 404 failing closed, and the cause 404 accepted; (5) typecheck, lint, unit tests, and build, all green before any further step; (6) rebuild the dedicated user's copy and rerun the daemon, expecting the reaper to pass; (7) record phase 9 evidence, then start phase 10. No source edits were made in this checkpoint. — Resume plan for the libpod fix (see the phase 9 decision in STATE for the verified facts and the ordered steps).
 - [Phase Run start]: Ultrathink run for graph ut-mvlt86oy-3817dec5 on the v2.0 milestone: phases 9 to 11 outstanding; phase 8 complete on evidence. Defaults applied: unclear TODOs stay UNSCHEDULED; an AWAITING_USER phase holds later phases in its milestone unless ROADMAP documents independence; per-phase local commits, nothing pushed; accepted decisions recorded in STATE carry forward; the quality bar applies to produced code only; the full verification set runs at each phase exit and is diffed against the recorded baseline. Clarifications q1 to q4 are non-blocking and take their recommended defaults: bar for produced code, large TODOs left open, repository sources only, ask before upgrading. The planning pass's n7 wave plan is fallback content and unverified, so the wave plan is written from n1 to n6. Ship is not invoked: the owner's hold of 2026-10-24 stands, and the spec's own OUT_OF_SCOPE list excludes pull requests. — Start-of-run assumptions from the planning spec, recorded so later steps cite them rather than re-decide them.
 - [Phase 7]: Phase 9 closed on evidence: libpod routes versioned from /_ping Libpod-Api-Version; live daemon on Podman 5.7.1 passes startup reaping; realm status disconnected with reason no workspace; OMP-LIVE-02 refreshed; OMP-LIVE-01/03/04 remain descoped; UI-01 accepted limitation
+- [Phase 15]: D-1503: default-mode guard scan lists verified; wiring and repo-tree tests added (15-02)
+- [Phase ?]: 15-04 D-1504: explicit secretRoot/sandboxStateRoot/workspaceRoot overlap refused lexically at load; describeRuntimeConfigProblems names keys without values
+- [Phase 15]: 15-05 D-1505: allowlist names held in one constant at the top of test/daemon/spawn-env.test.ts; plan 15-06 edits that constant when it removes the gateway names
+- [Phase ?]: 15-06: driverSocketPath wins over REALM_DRIVER_SOCKET with no stateDir fallback; the gateway item parses only the string status of openshell status -o json and never echoes command output
+- [Phase ?]: 15-06: REALM_DRIVER_GATEWAY_ENDPOINT and REALM_DRIVER_GATEWAY_CA removed from the daemon allowlist together with the TLS dial
+- [Phase ?]: 15-07: plain doctor reports an absent or invalid config.json as one runtime-roots item naming keys only; ENOENT/ENOTDIR is absent
 
 ### Parked
 
@@ -134,6 +155,24 @@ Open follow-ups: the AgentOS sandbox runner in the follow-up milestone (RT-04, C
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
 | 261029-g7m | Lifecycle and persistence findings: Omp sandbox attach, abrupt-end persistence, live verification and eight proposals | 2026-10-29 | 85cb740 | [261029-g7m-lifecycle-and-persistence-findings](./quick/261029-g7m-lifecycle-and-persistence-findings/) |
+| 261108-nc7 | Cap policy startupBudgetMs at the client up bound in the schema (Phase 18 owner item b) | 2026-11-08 | a7b765c | [261108-nc7-cap-policy-startupbudgetms-at-the-client](./quick/261108-nc7-cap-policy-startupbudgetms-at-the-client/) |
+| 261108-nc8 | realm checkpoint pins the workspace itself for a stopped project (RES-04 owner decision) | 2026-11-08 | 455671a | [261108-nc8-realm-checkpoint-pins-the-workspace-itse](./quick/261108-nc8-realm-checkpoint-pins-the-workspace-itse/) |
+| 261108-ncg | Finish the QR-05 timing migration: caps and the two blind sleeps (Phase 13) | 2026-11-08 | 26e9470 | [261108-ncg-finish-the-qr-05-timing-migration-caps-a](./quick/261108-ncg-finish-the-qr-05-timing-migration-caps-a/) |
+| 261108-nca | Commands that cannot load the config name the failing key and point at realm doctor | 2026-11-08 | eb056f1 | [261108-nca-commands-that-cannot-load-the-config-nam](./quick/261108-nca-commands-that-cannot-load-the-config-nam/) |
+| 261108-ncf | Pin the daemon invalid log level warning in test/daemon/main.test.ts (Phase 17 gap 2) | 2026-11-08 | 94590fd | [261108-ncf-pin-the-daemon-invalid-log-level-warning](./quick/261108-ncf-pin-the-daemon-invalid-log-level-warning/) |
+| 261108-ncd | Close the offline Phase 17 gaps: rotation-aware startup reader, anchor export, audit tests | 2026-11-08 | 6735d4b | [261108-ncd-close-the-offline-phase-17-gaps-rotation](./quick/261108-ncd-close-the-offline-phase-17-gaps-rotation/) |
+| 261108-nch | Phase 20 offline release-script coverage: rollback script and changelog fixtures (REL-03, REL-04) | 2026-11-08 | 27c9782 | [261108-nch-phase-20-offline-release-script-coverage](./quick/261108-nch-phase-20-offline-release-script-coverage/) |
+| 261108-ovn | Pin the in-place truncation branch of the start-failure reader (Phase 17, OBS-02): a test-only change | 2026-11-08 | b9cd28c | [261108-ovn-pin-the-in-place-truncation-branch-of-th](./quick/261108-ovn-pin-the-in-place-truncation-branch-of-th/) |
+| 261108-nci | Drop actions write from the mutation workflow by cherry-picking 33dd980 (QR-08, D-1308) | 2026-11-08 | 9e2142f | [261108-nci-drop-actions-write-from-the-mutation-wor](./quick/261108-nci-drop-actions-write-from-the-mutation-wor/) |
+| 261108-ncb | Rewrite live scenario 5 to the startup re-adoption behaviour (Phase 14 and 17 live suite) | 2026-11-08 | a833ece | [261108-ncb-rewrite-live-scenario-5-to-the-startup-r](./quick/261108-ncb-rewrite-live-scenario-5-to-the-startup-r/) |
+| 261108-ncc | Live scenarios 5b and 5c and the audit-pair validator (Phase 14 and 17 live suite) | 2026-11-08 | 9cdbe8e | [261108-ncc-live-scenarios-5b-and-5c-and-the-audit-p](./quick/261108-ncc-live-scenarios-5b-and-5c-and-the-audit-p/) |
+| 261108-qkn | Fix gateway live scenario metrics workspace selection and stale log rotation comment | 2026-11-08 | e9e0c39 | [261108-qkn-fix-gateway-live-scenario-metrics-worksp](./quick/261108-qkn-fix-gateway-live-scenario-metrics-worksp/) |
+| 261108-q1v | Fix three live-suite test defects found by the first non-gateway window: scenario 5 marker cleanup, scenario 5b audited write before the stop, scenario 6 metrics with the workspace argument | 2026-11-08 | a8cee97 | [261108-q1v-fix-three-live-suite-test-defects-found-](./quick/261108-q1v-fix-three-live-suite-test-defects-found-/) |
+| 261108-puz | Reconcile the v3.0 planning records with the integration line: stale STATE progress, REQUIREMENTS checkboxes, phase 13, 14, 17, 18, 19 and 20 verification and held-owner notes, scenario counts in AGENTS.md, README.md and openshell.md, and the live window results | 2026-11-08 | 09ec888 | [261108-puz-reconcile-the-v3-0-planning-records-with](./quick/261108-puz-reconcile-the-v3-0-planning-records-with/) |
+| 261109-6t9 | Disclose Omp fail-closed guard limitations in session status | 2026-11-09 | 63f4262 | [261109-6t9-disclose-omp-fail-closed-guard-limitatio](./quick/261109-6t9-disclose-omp-fail-closed-guard-limitatio/) |
+| 261109-6ta | Verify exact release repair tarball before artifact publication | 2026-11-09 | 75631f4 | [261109-6ta-verify-exact-release-repair-tarball-befo](./quick/261109-6ta-verify-exact-release-repair-tarball-befo/) |
+| 261109-7lk | Fail closed on name or label match in daemonless checkpoint proof | 2026-11-09 | dd568c6 | [261109-7lk-fail-closed-on-name-or-label-match-in-da](./quick/261109-7lk-fail-closed-on-name-or-label-match-in-da/) |
+| 261109-7ll | Diagnose two-project startup refusal with offline evidence | 2026-11-09 | 315b4fd | [261109-7ll-diagnose-two-project-startup-refusal-wit](./quick/261109-7ll-diagnose-two-project-startup-refusal-wit/) |
 
 ## Deferred Items
 
@@ -169,9 +208,9 @@ Detail, by phase: Phase 3 covers RT-01, RT-02, RT-03, RT-09, and the live parts 
 
 ## Session Continuity
 
-Last session: 2026-10-28T20:55:00.000Z
-Stopped at: Milestone v2.0 completed and archived (2026-10-29)
-Resume file: none (the milestone is complete; start with /gsd-new-milestone)
+Last session: 2026-11-08T16:41:15.821Z
+Stopped at: Completed 15-09-PLAN.md
+Resume file: None
 
 Recorded commits (closure run): 72817e9 (private flag restored, engines >=22.13.0); 390f511 (causeCode and catalogue codes, host paths, lifecycle bound, root identity, exec margin); b6bc892 (daemon entry, AgentOS fail-closed, catalogue refusals, per-method control bounds); 8088159 (daemon owns sessions; tool method; daemon client; Omp and MCP attach); 4b1d4ab (smoke fixes: CLI probe, up and down exits, state-dir 0700); c55056a (traceability: requirements by evidence, spike facts, runtime config, Omp attach contract); a999c17 (audit gap closure: realm acp, refusal code mapping, one state-dir resolver, Omp status, pinned-root rebind, catch-site fixes, daemon server-failure stop); dd02034 (re-audit, planning, and docs); 54bc236 (MCP tool-call diagnostic); plus the decisions commit (see git log).
 

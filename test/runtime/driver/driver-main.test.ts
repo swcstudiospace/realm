@@ -201,6 +201,37 @@ void test("a stale REALM_DRIVER_*_ROOT variable is ignored; the roots come from 
   assert.equal(config.driver.sandboxStateRoot, SANDBOX_STATE_ROOT);
 });
 
+// The roots come from the config object the seam returns; the seam records which path the driver asked for.
+function configPathRead(env: Readonly<Record<string, string | undefined>>): string {
+  const paths: string[] = [];
+  const config = loadDriverProcessConfig(env, IMPLEMENTATION_VERSION, (path) => {
+    paths.push(path);
+    return { image: SANDBOX_IMAGE, stateDir: "/var/lib/realm/daemon-state", workspaceRoot: WORKSPACE_ROOT };
+  });
+  assert.equal(config.driver.workspaceRoot, WORKSPACE_ROOT);
+  assert.equal(paths.length, 1);
+  return paths[0] ?? "";
+}
+
+void test("ONB-03: with XDG_CONFIG_HOME unset the driver reads HOME/.config/realm/config.json", (t) => {
+  const fixtures = fixturesFor(t);
+  const env = { ...completeEnv(fixtures), XDG_CONFIG_HOME: undefined, HOME: fixtures.dir };
+  assert.equal(configPathRead(env), join(fixtures.dir, ".config", "realm", "config.json"));
+});
+
+void test("ONB-03: a relative XDG_CONFIG_HOME is ignored and the driver falls back to HOME/.config", (t) => {
+  const fixtures = fixturesFor(t);
+  const env = { ...completeEnv(fixtures), XDG_CONFIG_HOME: "relative/config", HOME: fixtures.dir };
+  assert.equal(configPathRead(env), join(fixtures.dir, ".config", "realm", "config.json"));
+});
+
+void test("ONB-03: DRIVER_ENV names no root variable", () => {
+  const rootVariables = ["REALM_DRIVER_STATE_ROOT", "REALM_DRIVER_SECRET_ROOT", "REALM_DRIVER_WORKSPACE_ROOT"];
+  for (const name of Object.values(DRIVER_ENV)) {
+    assert.ok(!rootVariables.includes(name));
+  }
+});
+
 void test("an absent config file refuses with SCHEMA_INVALID and does not fall back to the stale root variables", (t) => {
   const fixtures = fixturesFor(t);
   const env = { ...completeEnv(fixtures), XDG_CONFIG_HOME: undefined, HOME: undefined };

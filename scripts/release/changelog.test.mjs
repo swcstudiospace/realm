@@ -34,23 +34,21 @@ function git(cwd, args) {
   return execFileSync('git', args, { cwd, encoding: 'utf8', timeout: 30000 });
 }
 
+const IDENTITY = ['-c', 'user.name=test', '-c', 'user.email=test@example.invalid', '-c', 'commit.gpgsign=false'];
+
+// Commits whatever the caller already staged. It never writes or re-adds files, so a `git mv` or `git rm` stays a
+// real rename or deletion.
+function commitStaged(cwd, subject, body) {
+  const messages = body === undefined ? [subject] : [subject, body];
+  git(cwd, [...IDENTITY, 'commit', '-q', ...messages.flatMap((message) => ['-m', message])]);
+  return git(cwd, ['rev-parse', 'HEAD']).trim();
+}
+
 function commit(cwd, subject, file = 'work.txt', body) {
   commitCounter += 1;
   writeFileSync(path.join(cwd, file), `${commitCounter}\n`);
   git(cwd, ['add', '-A']);
-  const messages = body === undefined ? [subject] : [subject, body];
-  git(cwd, [
-    '-c',
-    'user.name=test',
-    '-c',
-    'user.email=test@example.invalid',
-    '-c',
-    'commit.gpgsign=false',
-    'commit',
-    '-q',
-    ...messages.flatMap((message) => ['-m', message]),
-  ]);
-  return git(cwd, ['rev-parse', 'HEAD']).trim();
+  return commitStaged(cwd, subject, body);
 }
 
 function makeRepo(subjects, changelog = SEED_CHANGELOG) {
@@ -505,4 +503,76 @@ test('keeps a removal that names a feature shipped in an earlier release, and dr
     normalize(sectionBody(readChangelog(root), '## [0.2.0] - 2026-10-29')),
     '### Changed\n- refactor: drop drivers (SHA)',
   );
+});
+
+function assertTailPreserved(root) {
+  const text = readChangelog(root);
+  assert.ok(text.endsWith(`\n${SEED_TAIL}`), 'published sections must stay unchanged');
+  assert.equal(text.split('\n').filter((line) => line.trimEnd() === '## [Unreleased]').length, 1);
+}
+
+test('keeps a real git mv rename of a removed feature module and drops the feature and its removal', () => {
+  const root = makeRepo([]);
+  const feature = commit(root, 'feat: add driver', 'driver.txt');
+  git(root, ['mv', 'driver.txt', 'renamed.txt']);
+  const rename = commitStaged(root, 'refactor: rename driver module');
+  assert.match(git(root, ['show', '--name-status', '-M', '--format=', rename]), /^R\d+\tdriver\.txt\trenamed\.txt$/m);
+  git(root, ['rm', '-q', 'renamed.txt']);
+  commitStaged(root, 'refactor: drop driver', `Removes: ${feature}`);
+
+  generateChangelog({ root, version: '0.2.0', date: '2026-10-29' });
+
+  assert.equal(
+    normalize(sectionBody(readChangelog(root), '## [0.2.0] - 2026-10-29')),
+    '### Changed\n- refactor: rename driver module (SHA)',
+  );
+  assertTailPreserved(root);
+});
+
+test('keeps the surviving feature in a shared file when the removal edits only the removed lines', () => {
+  const root = makeRepo([]);
+  const sharedPath = path.join(root, 'shared.txt');
+  writeFileSync(sharedPath, 'driver: on\n');
+  git(root, ['add', 'shared.txt']);
+  const driver = commitStaged(root, 'feat: add driver');
+  writeFileSync(sharedPath, 'driver: on\nexporter: on\n');
+  git(root, ['add', 'shared.txt']);
+  commitStaged(root, 'feat: add exporter');
+  writeFileSync(sharedPath, 'exporter: on\n');
+  git(root, ['add', 'shared.txt']);
+  commitStaged(root, 'refactor: drop driver', `Removes: ${driver}`);
+
+  generateChangelog({ root, version: '0.2.0', date: '2026-10-29' });
+
+  assert.equal(readFileSync(sharedPath, 'utf8'), 'exporter: on\n');
+  assert.equal(git(root, ['show', '--name-status', '--format=', 'HEAD']).trim(), 'M\tshared.txt');
+  assert.equal(
+    normalize(sectionBody(readChangelog(root), '## [0.2.0] - 2026-10-29')),
+    '### Added\n- feat: add exporter (SHA)',
+  );
+  assertTailPreserved(root);
+});
+
+test('keeps a feature after a canonical revert and the revert of that revert', () => {
+  const root = makeRepo([]);
+  git(root, ['add', 'CHANGELOG.md']);
+  commitStaged(root, 'chore(release): v0.1.9 [skip ci]');
+  const feature = commit(root, 'feat: add driver', 'driver.txt');
+  git(root, [...IDENTITY, 'revert', '--no-edit', feature]);
+  const revert = git(root, ['rev-parse', 'HEAD']).trim();
+  git(root, [...IDENTITY, 'revert', '--no-edit', revert]);
+
+  // git words a revert of a revert as "Reapply ..." on recent versions, so the body names the commit it undoes.
+  const records = git(root, ['log', '--format=%s%n%b%x1e', '-n', '2']).split('\x1e');
+  const [reapply, reverted] = records.map((record) => record.trim());
+  assert.match(reapply, new RegExp(`This reverts commit ${revert}\\.`));
+  assert.ok(reverted.startsWith('Revert "feat: add driver"'), reverted);
+
+  generateChangelog({ root, version: '0.2.0', date: '2026-10-29' });
+
+  assert.equal(
+    normalize(sectionBody(readChangelog(root), '## [0.2.0] - 2026-10-29')),
+    '### Added\n- feat: add driver (SHA)',
+  );
+  assertTailPreserved(root);
 });

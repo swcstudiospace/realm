@@ -85,7 +85,10 @@ const policyArb: fc.Arbitrary<Policy> = fc.record(
     credentialAllow: fc.array(textArb(8), { maxLength: 4 }),
     egressAllow: fc.array(egressRuleArb, { maxLength: 3 }),
     shellEnabled: fc.boolean(),
-    startupBudgetMs: fc.integer({ min: schema.properties["startupBudgetMs"]?.minimum ?? 1, max: MAX_BUDGET }),
+    startupBudgetMs: fc.integer({
+      min: schema.properties["startupBudgetMs"]?.minimum ?? 1,
+      max: schema.properties["startupBudgetMs"]?.maximum ?? MAX_BUDGET,
+    }),
     toolQueueMs: fc.integer({ min: schema.properties["toolQueueMs"]?.minimum ?? 1, max: MAX_BUDGET }),
   },
   PLAIN,

@@ -946,6 +946,45 @@ void test("PRD-DRV-02: a create whose running workspace container has unreadable
   assert.deepEqual(lines, ["realm compute driver refused: rpc=CreateSandbox check=create.pinned_root_held code=SCHEMA_INVALID"]);
 });
 
+void test("registry stateDir split refuses the same pinned projects that a shared stateDir validates", async (t) => {
+  for (const projectCount of [1, 2]) {
+    const h = refusedHarness();
+    const base = dirname(h.config.workspaceRoot);
+    t.after(() => {
+      rmSync(base, { recursive: true, force: true });
+    });
+    const daemonConfig = { ...h.config, stateDir: join(base, "daemon-state") };
+    const shared = new ComputeDriver(daemonConfig, {
+      lifecycle: h.lifecycle,
+      libpod: h.libpod,
+      runtime: new FakeRuntime(),
+    });
+    const names = Array.from({ length: projectCount }, (_, index) =>
+      bindProject(daemonConfig, `project-${String(index)}`).name,
+    );
+    for (const name of names) {
+      const request = validSandbox({ name });
+      assert.deepEqual(shared.validateSandboxCreate(request), {});
+      await assertWorkspaceRefused(h, name);
+    }
+    assert.deepEqual(h.lifecycle.creates, []);
+    assert.deepEqual(h.lifecycle.deletes, []);
+    assert.deepEqual(h.lifecycle.stops, []);
+    assert.equal(h.libpod.containers.size, 0);
+    assert.equal(h.libpod.volumes.size, 0);
+  }
+});
+
+void test("an invalid workspace id is refused despite a valid pinned registry entry", async (t) => {
+  const h = refusedHarness();
+  t.after(() => {
+    rmSync(dirname(h.config.workspaceRoot), { recursive: true, force: true });
+  });
+  const { name } = bindProject(h.config, "project-a");
+  assert.deepEqual(h.driver.validateSandboxCreate(validSandbox({ name })), {});
+  await assertWorkspaceRefused(h, name, "../elsewhere");
+});
+
 void test("PRD-DRV-02: a create whose registry entry is missing, outside the ceiling, or no longer names its directory is refused before any libpod call", async () => {
   // No entry: the name a project would bind under, with nothing written for it.
   {
@@ -994,10 +1033,16 @@ void test("PRD-DRV-02: ValidateSandboxCreate refuses a name with no entry, accep
   await assertWorkspaceRefused(h, sandboxNameOfSession(sessionIdOfWorkspace(join(h.config.workspaceRoot, "project-b"))));
 });
 
-void test("PRD-DRV-02: a sandbox name without the realm prefix, or whose remainder fails isSessionId, is refused with create.workspace before any libpod call", async () => {
+void test("PRD-DRV-02: a sandbox name without the realm prefix, or whose remainder fails isSessionId, is refused with create.workspace before any libpod call", async (t) => {
   // "agent-1" has no prefix. "realm-session.1" carries the prefix, and its remainder fails the session id rule, though it passes the container-name rule.
+  const h = refusedHarness();
+  t.after(() => {
+    rmSync(dirname(h.config.workspaceRoot), { recursive: true, force: true });
+  });
+  const valid = bindProject(h.config, "project-a");
+  assert.deepEqual(h.driver.validateSandboxCreate(validSandbox({ name: valid.name })), {});
   for (const name of ["agent-1", "realm-session.1"]) {
-    await assertWorkspaceRefused(refusedHarness(), name);
+    await assertWorkspaceRefused(h, name);
   }
 });
 
@@ -1021,15 +1066,19 @@ function refusedHarness(): RefusedHarness {
 
 // A create the registry refuses with create.workspace: validation and create both refuse, and nothing reaches libpod, the lifecycle,
 // the state directory or the secret directory.
-async function assertWorkspaceRefused(h: RefusedHarness, name: string): Promise<void> {
-  assert.throws(() => h.driver.validateSandboxCreate(validSandbox({ name })), expectCode("SCHEMA_INVALID"));
-  await assert.rejects(h.driver.createSandbox(validSandbox({ name })), expectCode("SCHEMA_INVALID"));
+async function assertWorkspaceRefused(h: RefusedHarness, name: string, workspace = "workspace-a"): Promise<void> {
+  const request = validSandbox({ name, workspace });
+  assert.throws(() => h.driver.validateSandboxCreate(request), expectCode("SCHEMA_INVALID"));
+  await assert.rejects(h.driver.createSandbox(request), expectCode("SCHEMA_INVALID"));
   assert.equal(h.lifecycle.creates.length, 0);
   assert.equal(h.libpod.listCalls, 0);
   assert.equal(h.libpod.inspectCalls, 0);
   assert.equal(lstatOrUndefined(join(h.config.sandboxStateRoot, name)), undefined);
   assert.equal(lstatOrUndefined(join(h.config.secretRoot, name)), undefined);
-  assert.ok(h.lines.length > 0 && h.lines.every((line) => line.endsWith("check=create.workspace code=SCHEMA_INVALID")), h.lines.join("\n"));
+  assert.deepEqual(h.lines, [
+    "realm compute driver refused: rpc=ValidateSandboxCreate check=create.workspace code=SCHEMA_INVALID",
+    "realm compute driver refused: rpc=CreateSandbox check=create.workspace code=SCHEMA_INVALID",
+  ]);
   h.lines.length = 0;
 }
 

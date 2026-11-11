@@ -5,7 +5,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildAnchorRecord, type AnchorRecord } from "../../src/audit/anchor.js";
@@ -373,6 +373,34 @@ void test("audit verify --file: a missing audit file exits 1, never a pass", asy
     assert.match(result.stderr, /audit file is missing/);
     assert.equal(reportOf(result.stdout).ok, false);
     assert.equal(reportOf(result.stdout).files[0]?.failure, "missing");
+  });
+});
+
+// Permission bits do not restrict root, so an unreadable regular file cannot be reproduced as uid 0.
+const UNREADABLE_SKIP =
+  process.getuid?.() === 0 ? "running as root: permission bits do not restrict root, so an unreadable audit file cannot be reproduced" : false;
+
+void test("audit verify --file: a regular file at mode 0000 exits 1 as unreadable, and neither output names a path (OBS-01)", { skip: UNREADABLE_SKIP }, async () => {
+  await withState(async (stateDir) => {
+    seed(stateDir);
+    const file = auditFile(stateDir);
+    chmodSync(file, 0o000);
+    try {
+      const result = await runCli(["audit", "verify", "--file", file], { env: {} });
+      assert.equal(result.exitCode, 1);
+      assert.match(result.stderr, /audit file cannot be read/);
+      const report = reportOf(result.stdout);
+      assert.equal(report.ok, false);
+      assert.equal(report.files.some((entry) => entry.ok), false);
+      assert.equal(report.files[0]?.failure, "unreadable");
+      for (const output of [result.stdout, result.stderr]) {
+        assert.equal(output.includes(file), false);
+        assert.equal(output.includes(join(stateDir, "audit")), false);
+        assert.equal(output.includes(stateDir), false);
+      }
+    } finally {
+      chmodSync(file, 0o600);
+    }
   });
 });
 

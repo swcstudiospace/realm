@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   collectFiles,
@@ -279,4 +280,15 @@ test("formatFinding names file, line and phrase", () => {
     formatFinding({ file: "README.md", line: 7, phrase: "advisory default" }),
     'README.md:7: asserts advisory is the default: "advisory default"',
   );
+});
+
+test("check:docs runs the default-mode guard (D-1503)", () => {
+  const manifest = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8"));
+  assert.match(manifest.scripts["check:docs"], /node scripts\/check\/default-mode\.mjs/);
+});
+
+test("the repository's own documents pass the guard (D-1503)", () => {
+  const result = runCheck([]);
+  assert.equal(result.code, 0, result.output);
+  assert.match(result.output, /no advisory-default claim/);
 });

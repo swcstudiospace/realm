@@ -4,12 +4,14 @@
 
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createConnection, createServer, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { RealmError, ERROR_CATALOGUE, type ErrorCode } from "../../src/core/errors.js";
 import {
+  DaemonAbsentError,
   CONTROL_METHODS,
   MAX_CONTROL_LINE_BYTES,
   oversizedLineReply,
@@ -136,6 +138,28 @@ void test("RT-06: the up request outlasts the policy startup budget by a positiv
   assert.equal(CONTROL_TIMEOUT_MS.down, 45_000);
   assert.equal(CONTROL_TIMEOUT_MS.doctor, 60_000);
   assert.equal(CONTROL_TIMEOUT_MS.tool, TOOL_CALL_TIMEOUT_MS + 10_000);
+});
+
+void test("RT-06: the schema maximum of startupBudgetMs equals its default and the channel's mirrored default, and the up request outlasts it plus the reply margin", () => {
+  // Mirrors UP_REPLY_MARGIN_MS in src/daemon/channel.ts (not exported there).
+  const UP_REPLY_MARGIN_MS = 30_000;
+  // The compiled test lives in dist/test/daemon, so three levels up is the repository root.
+  const schemaPath = join(
+    dirname(fileURLToPath(import.meta.url)),
+    "..",
+    "..",
+    "..",
+    "src",
+    "core",
+    "policy.schema.json",
+  );
+  const schema = JSON.parse(readFileSync(schemaPath, "utf8")) as {
+    properties: { startupBudgetMs: { maximum: number; default: number } };
+  };
+  const { maximum, default: budgetDefault } = schema.properties.startupBudgetMs;
+  assert.equal(maximum, budgetDefault);
+  assert.equal(CONTROL_TIMEOUT_MS.up - UP_REPLY_MARGIN_MS, maximum);
+  assert.ok(maximum + UP_REPLY_MARGIN_MS <= CONTROL_TIMEOUT_MS.up);
 });
 
 void test("RT-06: a request line over MAX_CONTROL_LINE_BYTES is refused with a null-id SCHEMA_INVALID and never reaches the dispatcher (P6-D2, P6-D12)", async (t) => {
@@ -280,6 +304,45 @@ void test("RT-06: a peer that never answers rejects with TOOL_TIMEOUT inside the
     (error: unknown) => error instanceof RealmError && error.code === "TOOL_TIMEOUT",
   );
   assert.ok(Date.now() - start < 2000, "the bounded wait must return promptly, never hang");
+});
+
+void test("RT-04: a missing socket path and a path that refuses the connection are DaemonAbsentError, still REALM_NOT_ACTIVE", async (t) => {
+  const base = scratchBase(t);
+  const refusing = join(base, "not-a-socket");
+  writeFileSync(refusing, "");
+  for (const socketPath of [join(base, "missing.sock"), refusing]) {
+    await assert.rejects(
+      sendRequest(socketPath, { id: 1, method: "status" }),
+      (error: unknown) =>
+        error instanceof DaemonAbsentError &&
+        error instanceof RealmError &&
+        error.code === "REALM_NOT_ACTIVE" &&
+        error.message === ERROR_CATALOGUE["REALM_NOT_ACTIVE"].reason &&
+        error.causeCode === undefined,
+    );
+  }
+});
+
+void test("RT-04: a silent daemon is TOOL_TIMEOUT and a peer that closes before replying is a plain REALM_NOT_ACTIVE, neither is DaemonAbsentError", async (t) => {
+  const silentPath = await listenUnix(t, createServer(() => undefined));
+  await assert.rejects(
+    sendRequest(silentPath, { id: 1, method: "status" }, { timeoutMs: 50 }),
+    (error: unknown) =>
+      error instanceof RealmError && !(error instanceof DaemonAbsentError) && error.code === "TOOL_TIMEOUT",
+  );
+  const droppingPath = await listenUnix(
+    t,
+    createServer((socket) => {
+      socket.on("data", () => {
+        socket.destroy();
+      });
+    }),
+  );
+  await assert.rejects(
+    sendRequest(droppingPath, { id: 1, method: "status" }),
+    (error: unknown) =>
+      error instanceof RealmError && !(error instanceof DaemonAbsentError) && error.code === "REALM_NOT_ACTIVE",
+  );
 });
 
 void test("RT-06: garbage bytes and an id mismatch from the peer surface SCHEMA_INVALID, never a raw error (P6-D2)", async (t) => {

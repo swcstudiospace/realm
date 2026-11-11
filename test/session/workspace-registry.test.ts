@@ -23,6 +23,7 @@ import {
   readWorkspaceEntry,
   removeWorkspaceEntry,
   verifyWorkspaceEntry,
+  workspaceEntryOf,
   workspaceRegistryDirOf,
   writeWorkspaceEntry,
   type WorkspaceEntry,
@@ -62,6 +63,17 @@ void test("a written entry reads back equal to what was written, at mode 0600 in
   assert.equal(modeOf(registry), 0o700);
   assert.equal(modeOf(join(registry, `${id}.json`)), 0o600);
   assert.equal(verifyWorkspaceEntry(written).realPath, ws);
+});
+
+void test("workspaceEntryOf builds exactly the entry a write stores, writes nothing, and refuses a mismatched id (MULTI-02, C3)", (t) => {
+  const { stateDir, ws, registry } = fixture(t);
+  const pinned = bindRoot(ws);
+  const id = sessionIdOfWorkspace(pinned.realPath);
+  const built = workspaceEntryOf(pinned, id);
+  assert.equal(existsSync(registry), false, "building an entry touches no disk");
+  assert.deepEqual(built, writeWorkspaceEntry(stateDir, pinned, id));
+  assert.deepEqual(built, { schema: 1, sessionId: id, workspaceRoot: ws, dev: pinned.dev, ino: pinned.ino });
+  assertRejectsWith(() => workspaceEntryOf(pinned, "0".repeat(id.length)), "SCHEMA_INVALID");
 });
 
 void test("the file holds exactly the five fields of the contract (C3)", (t) => {

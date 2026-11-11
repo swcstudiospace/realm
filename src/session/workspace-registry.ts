@@ -34,24 +34,31 @@ export function workspaceRegistryDirOf(stateDir: string): string {
   return join(stateDir, "workspaces");
 }
 
-// Writes the entry for a pinned project. The id must be the one derived from the pinned realpath; any
-// other id is SCHEMA_INVALID and nothing is written.
-export function writeWorkspaceEntry(stateDir: string, pinned: PinnedRoot, sessionId: string): WorkspaceEntry {
+// The entry for a pinned project, built in memory and written nowhere. The id must be the one derived from the pinned
+// realpath; any other id is SCHEMA_INVALID. writeWorkspaceEntry stores exactly this value, and a caller that pins a
+// project for one command without registering it (realm checkpoint) builds the same value, so the two cannot drift.
+export function workspaceEntryOf(pinned: PinnedRoot, sessionId: string): WorkspaceEntry {
   if (sessionId !== sessionIdOfWorkspace(pinned.realPath)) {
     throw makeRealmError("SCHEMA_INVALID");
   }
-  const fileName = recordFileName(sessionId);
-  const dir = workspaceRegistryDirOf(stateDir);
-  mkdirSync(dir, { recursive: true, mode: DIRECTORY_MODE });
-  assertPrivateDirectory(dir);
-  const root = bindRoot(dir);
-  const entry: WorkspaceEntry = {
+  return {
     schema: ENTRY_SCHEMA,
     sessionId,
     workspaceRoot: pinned.realPath,
     dev: pinned.dev,
     ino: pinned.ino,
   };
+}
+
+// Writes the entry for a pinned project. The id must be the one derived from the pinned realpath; any
+// other id is SCHEMA_INVALID and nothing is written.
+export function writeWorkspaceEntry(stateDir: string, pinned: PinnedRoot, sessionId: string): WorkspaceEntry {
+  const entry = workspaceEntryOf(pinned, sessionId);
+  const fileName = recordFileName(sessionId);
+  const dir = workspaceRegistryDirOf(stateDir);
+  mkdirSync(dir, { recursive: true, mode: DIRECTORY_MODE });
+  assertPrivateDirectory(dir);
+  const root = bindRoot(dir);
   const target = join(root.realPath, fileName);
   const text = `${JSON.stringify(entry, null, 2)}\n`;
   atomicWriteFile(target, text, { expectedPriorSha256: observeSha256(target) });
