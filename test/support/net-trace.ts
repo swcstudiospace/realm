@@ -41,10 +41,11 @@ export interface NetAllow {
 }
 
 // Omp's local-model discovery probes these loopback ports at startup whatever the configuration: Ollama (11434), llama.cpp
-// (8080) and LM Studio (1234) (12-RESEARCH.md 2.6). The probes are loopback only and carry no request to a remote host.
-export const OMP_DISCOVERY_PORTS: readonly number[] = [11434, 8080, 1234];
+// (8080 and its newer default 9931, both in Omp 18.15.0's LLAMA_CPP_DEFAULT_BASE_URLS) and LM Studio (1234) (12-RESEARCH.md 2.6).
+// The probes are loopback only and carry no request to a remote host.
+export const OMP_DISCOVERY_PORTS: readonly number[] = [11434, 8080, 1234, 9931];
 
-/** The default allowlist: the scripted stub's port plus Omp's three local-model discovery ports. DNS stays an offender. */
+/** The default allowlist: the scripted stub's port plus Omp's four local-model discovery ports. DNS stays an offender. */
 export function defaultAllow(stubPort: number): NetAllow {
   return { loopbackPorts: [stubPort, ...OMP_DISCOVERY_PORTS] };
 }

@@ -291,10 +291,10 @@ void test("windows line endings do not break the parse", () => {
   );
 });
 
-void test("the default allowlist covers the stub port and Omp's three local-model discovery ports", () => {
+void test("the default allowlist covers the stub port and Omp's four local-model discovery ports", () => {
   const allow = defaultAllow(43210);
-  assert.deepEqual([...allow.loopbackPorts].sort((a, b) => a - b), [1234, 8080, 11434, 43210]);
-  const probes = [43210, 11434, 8080, 1234].map(
+  assert.deepEqual([...allow.loopbackPorts].sort((a, b) => a - b), [1234, 8080, 9931, 11434, 43210]);
+  const probes = [43210, 11434, 8080, 1234, 9931].map(
     (port): NetConnect => ({ pid: 1, family: "AF_INET", address: "127.0.0.1", port, result: "0" }),
   );
   assert.deepEqual(offenders(probes, allow), []);
