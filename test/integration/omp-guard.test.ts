@@ -456,7 +456,8 @@ void test(
     assert.deepEqual(carriedWrite.json, writeResult, "the write result reaches the provider with its digest and byte count");
     const carriedRead = afterRead.toolResults.find((result) => result.toolCallId === readEnd.toolCallId);
     assert.ok(carriedRead !== undefined, "the provider's next request carries the result of the read's own call");
-    assert.equal(carriedRead.text, readEnd.text);
+    // Omp joins the file text and the "[realm read]" note with one more newline when it builds the model request; the RPC frame keeps them as two parts.
+    assert.equal(carriedRead.text, readEnd.text.replace("\n[realm read]", "\n\n[realm read]"), "the provider receives the read text and note in the order the frame carries them");
     assert.ok(carriedRead.digests.includes(T3_SHA), "the read result reaches the provider with the file digest");
     captured.results["write"] = writeEnd.text;
     captured.results["read"] = readEnd.text;
