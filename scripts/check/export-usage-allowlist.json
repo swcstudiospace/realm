@@ -776,6 +776,31 @@
       "file": "src/tools/dispatch.ts",
       "name": "TOOL_CALL_TIMEOUT_MS",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/audit/anchor.ts",
+      "name": "merkleRootOfLeaves",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/daemon/channel.ts",
+      "name": "DaemonAbsentError",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/config.ts",
+      "name": "describeRuntimeConfigProblems",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/openshell.ts",
+      "name": "gatewayStatusJsonCommand",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/session/workspace-registry.ts",
+      "name": "workspaceEntryOf",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     }
   ]
 }
