@@ -215,7 +215,7 @@ OQ-P19-01 is an owned-driver volume implementation/live-attachment question, not
 
 The closed libpod API has stop/start but no pause/freeze/checkpoint, OpenShell driver `StartSandbox`/`StopSandbox` are refused, `StateSnapshot` is lifecycle metadata, and `atomicWriteFile` replaces one file rather than a tree. None proves a running workload can be frozen, a reflink is available, or a whole-tree restore is atomic. Do not stop/start the sandbox runtime behind the gateway and call that a supported checkpoint barrier: runtime channel/bootstrap and workload reconnection must be proved too.
 
-The parent reported a metadata-only `findmnt --json --target /home/realmlive --output TARGET,FSTYPE,OPTIONS` result: target `/`, filesystem `ext4`, options `rw,relatime,discard,errors=remount-ro,commit=30`, exit 0. This is supplied parent observation, **not** an operation probe or evidence of copy/reflink/snapshot/quiescence guarantees.
+The parent reported a metadata-only `findmnt --json --target <host-home> --output TARGET,FSTYPE,OPTIONS` result: target `/`, filesystem `ext4`, options `rw,relatime,discard,errors=remount-ro,commit=30`, exit 0. This is supplied parent observation, **not** an operation probe or evidence of copy/reflink/snapshot/quiescence guarantees.
 
 Select ordinary byte-copy as the implementation **candidate** available without new dependencies or a nonexistent runtime snapshot RPC. The final mechanism decision remains gated on the parent's actual target-filesystem operation and quiescence spike, as RES-04 requires. Do not label the mechanism selected by an executed spike, or implement/advertise successful checkpoint guarantees, before that receipt. No new approval of D5 is needed; the missing input is physical evidence, not policy permission.
 

@@ -8,24 +8,24 @@ Task `Trealm31-phase12-artifacts`; correlation `realm-phase12-records-oct31`; A1
 
 The current owner answer overrides contradictory older packet/scout interpretations, not their recorded bytes: **advisory_write = WARN AND ALLOW**. A reachable inactive advisory registered write must emit the existing notice every time and perform the actual host write. Unreachable registered write refuses/no file; reachable inactive fail-closed refuses/no file. Current source tests and runtime proof must distinguish these states.
 
-Repository source read: `/root/src/repos/agent-realm-lanes/recovery-oct31`, package version `0.3.26` from `package.json`. Retained Omp observations below are version `18.12.6`. Main privately integrated PR40 at historical `d25c8c1ce4da96d05b49b6bb1185bc80bd3e2843` per current binding authority; that is not a source identifier for this uncommitted joined wave. No new commit/build digest, current check exit or cryptographic verification is invented here.
+Repository source read: `<src-root>/repos/agent-realm-lanes/recovery-oct31`, package version `0.3.26` from `package.json`. Retained Omp observations below are version `18.12.6`. Main privately integrated PR40 at historical `d25c8c1ce4da96d05b49b6bb1185bc80bd3e2843` per current binding authority; that is not a source identifier for this uncommitted joined wave. No new commit/build digest, current check exit or cryptographic verification is invented here.
 
 Absolute input directory E0:
 
-`/root/.omp/agent/sessions/-src-repos-agent-realm/2026-10-21T23-22-33-866Z_01a160c6-0a0a-7319-a4ef-5d9c4e2438e7/local/`
+`<omp-home>/agent/sessions/-src-repos-agent-realm/2026-10-21T23-22-33-866Z_01a160c6-0a0a-7319-a4ef-5d9c4e2438e7/local/`
 
 | Ref | Actual input / record | Use and limit |
 | --- | --- | --- |
 | E1 | E0 `realm-recovery-brief-oct31.md`; `realm-evidence-oct31.json` | Original brief and five scouts (9+9+11+19+4 rows). Scout assertions are candidates/source observations, not current execution or permission to waive HARN-02. |
 | E2 | E0 `realm-parent-verification-packet-oct31.json` | `firstWaveVerification`, `lastJoinedAttempt`, `currentHarnProof`, `actualProductionOmp`, `cpuQuotaProof`, `formalFirstWaveQuality` keep distinct runs. Earlier advisory-refusal interpretation and old PR40 permission are not current authority. |
 | E3 | E0 `realm-full-continuation-verified-runtime-oct31.md` | Original flat autonomous continuation, accepted DAG and parent postjoin ownership; superseded state/approval details are not silently reused. |
-| E4 | `/root/.omp/agent/sessions/-src-repos-agent-realm/2026-10-21T23-22-33-866Z_01a160c6-0a0a-7319-a4ef-5d9c4e2438e7/8785.bash.log` | Lines 3–13: old C1–C4 passes; 19–40: 11 independent non-network spike passes; full run 15 pass/6 fail, NOT all-green. Network failures remain in the same log. |
-| E5 | `/root/gsd-phase9-evidence/harn31-02hxpj5r/c4.frames.jsonl`, `c4.requests.json` | Genuine native C4 notice, CREATE result, `newText`, matching provider tool message and `done`; pre-answer evidence. |
-| E6 | `/root/gsd-phase9-evidence/harn31-approved-0g2wtnam` | Approved bounded corrected trace evidence; built-Realm versus S11, cold versus warm/proxy labels remain separate. Earlier build, not current answered-source verification. |
+| E4 | `<omp-home>/agent/sessions/-src-repos-agent-realm/2026-10-21T23-22-33-866Z_01a160c6-0a0a-7319-a4ef-5d9c4e2438e7/8785.bash.log` | Lines 3–13: old C1–C4 passes; 19–40: 11 independent non-network spike passes; full run 15 pass/6 fail, NOT all-green. Network failures remain in the same log. |
+| E5 | `<evidence-dir>/harn31-02hxpj5r/c4.frames.jsonl`, `c4.requests.json` | Genuine native C4 notice, CREATE result, `newText`, matching provider tool message and `done`; pre-answer evidence. |
+| E6 | `<evidence-dir>/harn31-approved-0g2wtnam` | Approved bounded corrected trace evidence; built-Realm versus S11, cold versus warm/proxy labels remain separate. Earlier build, not current answered-source verification. |
 | E7 | E0 `harn03-missing-podman-proof-oct31.json` | Actual isolated-PATH result: exit 0, 0 pass/0 fail/1 named skip. Not a network pass. |
-| E8 | `/root/gsd-phase9-evidence/omp-production-driver-rootless-ns-oct31.json` | Actual real production registered write/host/sandbox/audit observation; scripted NOT LLM-driven and NOT strace HARN-03. |
-| E9 | `/root/gsd-phase9-evidence/recovery-controller-oct31/2026-10-31T01-24-17-595Z_01a18f8e-b83b-745d-9b26-7e9630cb2ea4/RealmRecoveryWaveOne/RealmRecoveryWaveOne.RealmWaveOneQa.json` | Actual A08 gate execution/receipt. Later canonical DONE/exact-three-row settlement comes from current binding authority; this writer did not issue or cryptographically reverify it. |
-| E10 | `/root/gsd-phase9-evidence/qr05-cpu-quota-2870c80bf0.json` (E2 `cpuQuotaProof`) | Separate loaded CPU-quota suite; matching totals do not make it E9. |
+| E8 | `<evidence-dir>/omp-production-driver-rootless-ns-oct31.json` | Actual real production registered write/host/sandbox/audit observation; scripted NOT LLM-driven and NOT strace HARN-03. |
+| E9 | `<evidence-dir>/recovery-controller-oct31/2026-10-31T01-24-17-595Z_01a18f8e-b83b-745d-9b26-7e9630cb2ea4/RealmRecoveryWaveOne/RealmRecoveryWaveOne.RealmWaveOneQa.json` | Actual A08 gate execution/receipt. Later canonical DONE/exact-three-row settlement comes from current binding authority; this writer did not issue or cryptographically reverify it. |
+| E10 | `<evidence-dir>/qr05-cpu-quota-2870c80bf0.json` (E2 `cpuQuotaProof`) | Separate loaded CPU-quota suite; matching totals do not make it E9. |
 
 The original unissued-tag failure, historical warm 44 offenders/cold skip 49, failed intermediate run, same-task attempt2/rework2 approved correction, extra-attempt approval and old no-implementation results are preserved. None was rerun here merely to confirm it.
 
