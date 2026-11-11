@@ -9,6 +9,7 @@
 //
 // Nothing here prints a secret. A failure message carries exit codes, error codes, names and clipped probe output only.
 
+import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, writeFileSync, accessSync, constants, statSync } from "node:fs";
 import { connect } from "node:net";
@@ -277,18 +278,20 @@ export function reapCountsOfNotice(notice: string): { readonly containers: numbe
   return { containers: Number(match[1]), sessionRecords: Number(match[2]) };
 }
 
-// The daemon.startup record that reports a reap of exactly one container and names it. The id is matched by prefix: the
-// list the suite takes before the kill prints Podman's short id, the daemon logs the full one. Undefined when no line matches.
-export function startupReapLineFor(log: string, containerId: string): string | undefined {
-  if (containerId === "") {
+// The daemon.startup record for exactly one removed container AND the independently counted pre-restart session records.
+// Podman lists short ids but the daemon logs full ones, so a listed id may be a prefix of the logged id, never the reverse.
+// Undefined when no line matches; callers must supply the expected count from the quiescent session store, not from the log.
+export function startupReapLineFor(log: string, containerId: string, expectedRecordsDeleted: number): string | undefined {
+  if (containerId === "" || !Number.isSafeInteger(expectedRecordsDeleted) || expectedRecordsDeleted < 0) {
     return undefined;
   }
   return log.split(/\r?\n/).find((line) => {
     try {
-      const value = JSON.parse(line) as { event?: unknown; containersRemoved?: unknown; containerIds?: unknown };
+      const value = JSON.parse(line) as { event?: unknown; containersRemoved?: unknown; recordsDeleted?: unknown; containerIds?: unknown };
       return (
         value.event === "daemon.startup" &&
         value.containersRemoved === 1 &&
+        value.recordsDeleted === expectedRecordsDeleted &&
         Array.isArray(value.containerIds) &&
         value.containerIds.some((id) => typeof id === "string" && (id === containerId || id.startsWith(containerId)))
       );
@@ -296,6 +299,14 @@ export function startupReapLineFor(log: string, containerId: string): string | u
       return false;
     }
   });
+}
+
+// Shared by the real scenario 5 consumer and its hermetic sensitivity tests, so a parser miss fails the live scenario.
+export function assertStartupReapLogged(log: string, containerId: string, expectedRecordsDeleted: number): void {
+  assert.ok(
+    startupReapLineFor(log, containerId, expectedRecordsDeleted) !== undefined,
+    `daemon.log must hold a daemon.startup record for one container that names ${containerId} and reports recordsDeleted=${String(expectedRecordsDeleted)}`,
+  );
 }
 
 // The error an MCP tools/call result carries: isError true with structuredContent {code, retryable}. Undefined when the result is

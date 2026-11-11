@@ -10,6 +10,7 @@ import { dirname, join } from "node:path";
 import { sendRequest, type ControlReply } from "../../src/daemon/channel.js";
 import { startDaemon, type StartedDaemon } from "../../src/daemon/daemon.js";
 import type { PolicyMode } from "../../src/contract/validate.js";
+import type { StateSnapshot } from "../../src/core/state-machine.js";
 import type { PodmanProbeResult } from "../../src/runtime/podman-probe.js";
 import { FakeBridge } from "./fake-bridge.js";
 import { FakeExecutionService } from "./fake-execution.js";
@@ -30,6 +31,10 @@ export interface RealmDaemonOptions {
 export interface RealmDaemonFixture {
   readonly socketPath: string;
   readonly policyPath: string;
+  readonly handle: StartedDaemon["handle"];
+  // Fail the public execution-port health reading, then let the real controller enter error.
+  // Unlike down() or controller.stop(), this keeps the real control listener and workspace binding.
+  failHealthProbe(): Promise<StateSnapshot>;
   // Sends the same { method: "down" } request `realm down` sends, then awaits the daemon's done.
   down(): Promise<void>;
   // The daemon's status reply as the control channel returns it.
@@ -56,11 +61,12 @@ export async function startRealmDaemon(options: RealmDaemonOptions): Promise<Rea
   mkdirSync(policyDir, { recursive: true });
   const policyPath = join(policyDir, "policy.json");
   writeFileSync(policyPath, JSON.stringify({ mode: options.mode, workspaceRoots: [options.workspace] }));
+  const exec = new FakeExecutionService();
   const daemon = await startDaemon({
     runtimeInput: { image: IMAGE, stateDir: options.stateDir, workspaceRoot: options.workspace },
     policyPath,
     sessionId: "sess-harness",
-    exec: new FakeExecutionService(),
+    exec,
     bridge: new FakeBridge(),
     clock: () => new Date(CLOCK_ISO),
     runOpenShell: () => Promise.resolve({ exitCode: 0, stdout: "", stderr: "", truncated: false }),
@@ -72,6 +78,16 @@ export async function startRealmDaemon(options: RealmDaemonOptions): Promise<Rea
     socketPath: daemon.socketPath,
     policyPath,
     done: daemon.done,
+    handle: daemon.handle,
+    async failHealthProbe(): Promise<StateSnapshot> {
+      const resources = exec.resources();
+      const resource = resources[0];
+      if (resources.length !== 1 || resource === undefined || !resource.started) {
+        throw new Error("a failed health probe requires exactly one started fixture resource");
+      }
+      exec.setHealth(resource.containerId, "unhealthy");
+      return daemon.handle.controller.probe();
+    },
     async down(): Promise<void> {
       downCount += 1;
       await sendRequest(

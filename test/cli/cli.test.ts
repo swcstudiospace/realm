@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { PassThrough, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
+import { appendAudit } from "../../src/audit/log.js";
 import { ERROR_CATALOGUE, RealmError } from "../../src/core/errors.js";
 import {
   CLI_COMMANDS,
@@ -426,6 +427,103 @@ void test("unknown argv exits 2 with usage on stderr (CLI-01)", async () => {
     }
     assert.equal(result.stdout, "");
   }
+});
+
+void test("OBS-01: general CLI usage advertises the checkpoint selectors, not the removed positional interface", async () => {
+  const result = await runCli([], { env: {} });
+  assert.equal(result.exitCode, 2);
+  assert.equal(result.stdout, "");
+  assert.ok(result.stderr.includes(
+    "realm audit verify [--session <id> | --file <absolute path>] [--anchor <record.json>] [--head <seq>:<sha256>]",
+  ));
+  assert.equal(result.stderr.includes("realm audit verify <file>"), false);
+});
+
+void test("OBS-01: the real CLI process verifies configured sessions, exported anchors and retained heads with exact exits", testTimeout(120_000), (t) => {
+  const root = mkdtempSync(join(tmpdir(), "realm-cli-audit-process-"));
+  t.after(() => { rmSync(root, { recursive: true, force: true }); });
+  const stateDir = join(root, "state");
+  const configHome = join(root, "config");
+  const home = join(root, "home");
+  mkdirSync(join(configHome, "realm"), { recursive: true });
+  mkdirSync(home);
+  writeFileSync(join(configHome, "realm", "config.json"), JSON.stringify({
+    image: `registry.example.com/realm/workload@sha256:${"0".repeat(64)}`,
+    stateDir,
+    workspaceRoot: join(root, "workspace"),
+  }));
+  const sessionId = "cli-checkpoint-session";
+  appendAudit(stateDir, { sessionId, tool: "write", outcome: "ok", phase: "admission" });
+  appendAudit(stateDir, { sessionId, tool: "write", outcome: "ok", phase: "result" });
+  const file = join(stateDir, "audit", `${sessionId}.jsonl`);
+  const entry = join(ROOT, "dist", "src", "cli", "main.js");
+  const options = {
+    cwd: root,
+    env: { PATH: join(root, "no-binaries"), HOME: home, XDG_CONFIG_HOME: configHome },
+    encoding: "utf8" as const,
+    timeout: scaledMs(20_000),
+  };
+  const selected = spawnSync(process.execPath, [entry, "audit", "verify", "--session", sessionId], options);
+  assert.equal(selected.error, undefined);
+  assert.equal(selected.status, 0, selected.stderr);
+  const report = JSON.parse(selected.stdout) as {
+    ok: boolean;
+    files: { sessionId: string; ok: boolean; head: { seq: number; lineSha256: string }; unparsedLines: number[] }[];
+  };
+  assert.equal(report.ok, true);
+  assert.equal(report.files.length, 1);
+  const selectedFile = report.files[0];
+  assert.ok(selectedFile);
+  assert.equal(selectedFile.sessionId, sessionId);
+  assert.equal(selectedFile.ok, true);
+  assert.deepEqual(selectedFile.unparsedLines, []);
+  const head = `${String(selectedFile.head.seq)}:${selectedFile.head.lineSha256}`;
+  const all = spawnSync(process.execPath, [entry, "audit", "verify"], options);
+  assert.equal(all.status, 0, all.stderr);
+  assert.deepEqual(JSON.parse(all.stdout) as unknown, report);
+  const exported = spawnSync(process.execPath, [entry, "anchor", "--session", sessionId], options);
+  assert.equal(exported.status, 0, exported.stderr);
+  const anchor = JSON.parse(exported.stdout) as { record: unknown };
+  const anchorFile = join(root, "anchor.json");
+  writeFileSync(anchorFile, JSON.stringify(anchor.record));
+  const flags = ["--file", file, "--anchor", anchorFile, "--head", head];
+  // No account configuration is available here: --file must remain independently usable.
+  const offline = { ...options, env: { PATH: join(root, "no-binaries") } };
+  const checkpointed = spawnSync(process.execPath, [entry, "audit", "verify", ...flags], offline);
+  assert.equal(checkpointed.status, 0, checkpointed.stderr);
+  const checkpointedReport: unknown = JSON.parse(checkpointed.stdout);
+  assert.ok(typeof checkpointedReport === "object" && checkpointedReport !== null && "ok" in checkpointedReport);
+  assert.equal(checkpointedReport.ok, true);
+  assert.match(checkpointed.stderr, /origin is not authenticated here/);
+  const invalid = spawnSync(process.execPath, [entry, "audit", "verify", "--session", sessionId, "--file", file], options);
+  assert.equal(invalid.status, 2);
+  assert.equal(invalid.stdout, "");
+  assert.match(invalid.stderr, /usage: realm audit verify/);
+  const oldPositional = spawnSync(process.execPath, [entry, "audit", "verify", file], options);
+  assert.equal(oldPositional.status, 2);
+  assert.equal(oldPositional.stdout, "");
+  const unconfigured = spawnSync(process.execPath, [entry, "audit", "verify", "--session", sessionId], offline);
+  assert.equal(unconfigured.status, 2);
+  assert.equal(unconfigured.stdout, "");
+  assert.match(unconfigured.stderr, /cannot resolve a state directory/);
+  writeFileSync(file, "");
+  for (const [checkpointFlags, reason] of [
+    [["--head", head], "shorter-than-head"],
+    [["--anchor", anchorFile], "shorter-than-anchor"],
+  ] as const) {
+    const truncated = spawnSync(process.execPath, [entry, "audit", "verify", "--file", file, ...checkpointFlags], offline);
+    assert.equal(truncated.status, 1);
+    const failure = JSON.parse(truncated.stdout) as { ok: boolean; files: { broken: { reason: string } }[] };
+    assert.equal(failure.ok, false);
+    assert.equal(failure.files[0]?.broken.reason, reason);
+  }
+  const link = join(root, "audit-link.jsonl");
+  symlinkSync(file, link);
+  const symlink = spawnSync(process.execPath, [entry, "audit", "verify", "--file", link], offline);
+  assert.equal(symlink.status, 1);
+  const symlinkReport: unknown = JSON.parse(symlink.stdout);
+  assert.ok(typeof symlinkReport === "object" && symlinkReport !== null && "ok" in symlinkReport);
+  assert.equal(symlinkReport.ok, false);
 });
 
 void test("realm up with Podman missing reports PODMAN_MISSING and exits promptly with no spawn (CLI-02)", async () => {

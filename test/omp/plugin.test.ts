@@ -1,9 +1,17 @@
 import { test } from "node:test";
+import type { TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ERROR_CODES, makeRealmError, type ErrorCode } from "../../src/core/errors.js";
+import { createEventBus } from "../../src/core/events.js";
+import { validate } from "../../src/contract/validate.js";
+import { LockTable } from "../../src/fs/locks.js";
+import { bindRoot } from "../../src/fs/root.js";
+import { gateMutation } from "../../src/lifecycle/mutation-gate.js";
+import { ToolDispatcher } from "../../src/tools/dispatch.js";
 import type { StateSnapshot } from "../../src/core/state-machine.js";
 import { STATUS_LABELS, displayStatus } from "../../src/core/status.js";
 import type { DaemonClient, DaemonStatus } from "../../src/daemon/client.js";
@@ -245,6 +253,9 @@ class FakePi implements OmpExtensionApi {
   readonly activeSets: string[][] = [];
   // When set, setActiveTools is accepted and changes nothing, so the plugin's read-back must catch it.
   ignoreRemoval = false;
+  // Host seam only: tests pause or reject the actual setter, never mock the plugin.
+  setterGate: Gate | null = null;
+  rejectSetter = false;
   private readonly builtins = new Set<string>(OMP_BUILTIN_TOOLS);
   private readonly active = new Set<string>(OMP_BUILTIN_TOOLS);
 
@@ -263,8 +274,16 @@ class FakePi implements OmpExtensionApi {
     return [...this.active];
   }
 
-  setActiveTools(names: string[]): Promise<void> {
+  async setActiveTools(names: string[]): Promise<void> {
     this.activeSets.push([...names]);
+    const gate = this.setterGate;
+    this.setterGate = null;
+    if (gate !== null) {
+      await gate.promise;
+    }
+    if (this.rejectSetter) {
+      throw new Error("host setter failed");
+    }
     if (!this.ignoreRemoval) {
       const known = new Set(this.getAllTools().map((tool) => tool.name));
       this.active.clear();
@@ -274,7 +293,16 @@ class FakePi implements OmpExtensionApi {
         }
       }
     }
-    return Promise.resolve();
+  }
+
+  addHostTool(name: string): void {
+    this.builtins.add(name);
+    this.active.add(name);
+  }
+
+  removeHostTool(name: string): void {
+    this.builtins.delete(name);
+    this.active.delete(name);
   }
 }
 
@@ -282,6 +310,7 @@ interface FixtureOptions {
   // The mode the fake daemon reports. Omitted means fail-closed, the policy default; advisory tests say so.
   readonly mode?: PolicyMode;
   readonly snapshot?: StateSnapshot;
+  readonly cwd?: string;
   // One entry per attach, in order: a code rejects that attach with it; an absent entry resolves.
   readonly attachErrors?: readonly ErrorCode[];
   // Replaces the default attach; it receives the fixture daemon. The fixture still records each attach's workspace root.
@@ -298,7 +327,7 @@ interface Fixture {
 
 function makeFixture(options: FixtureOptions = {}): Fixture {
   const ui = new FakeUi();
-  const ctx = new FakeCtx(ui, WORKSPACE);
+  const ctx = new FakeCtx(ui, options.cwd ?? WORKSPACE);
   const pi = new FakePi();
   const daemon = new FakeDaemon(options.snapshot ?? ACTIVE, options.mode ?? "fail-closed");
   const attachCalls: string[] = [];
@@ -1013,3 +1042,329 @@ void test("OMPX-04: advisory attach removes nothing: the built-ins stay active, 
   assert.equal(fixture.ui.notifications.length, 1);
   assert.match(fixture.ui.notifications[0] ?? "", /advisory policy/);
 });
+
+for (const trigger of ["poll", "guard", "retry"] as const) {
+  void test(`OMPX-03: ${trigger} reconciles same-mode drift without redundant setters`, async () => {
+    const fixture = makeFixture();
+    startHandlerOf(fixture.pi)(fixture.ctx);
+    await waitForDetail(fixture.ui, "container running");
+    const sets = fixture.pi.activeSets.length;
+    fixture.pi.addHostTool("mcp__unsafe__write");
+    if (trigger === "poll") {
+      pollOf(fixture.ctx).callback();
+      await yieldTurn();
+    } else if (trigger === "guard") {
+      assert.deepEqual(await toolCallOf(fixture.pi)({ toolName: "mcp__unsafe__write" }), {
+        block: true, reason: "POLICY_DENIED",
+      });
+    } else {
+      assert.match(await retryCommandOf(fixture.pi).handler(), /active/);
+    }
+    assert.ok(!fixture.pi.getActiveTools().includes("mcp__unsafe__write"));
+    assert.equal(fixture.pi.activeSets.length, sets + 1);
+    await toolCallOf(fixture.pi)({ toolName: "bash" });
+    assert.equal(fixture.pi.activeSets.length, sets + 1, "an already-correct set needs no setter");
+  });
+}
+
+void test("OMPX-04: transitions restore only owned, still-registered removals and preserve manual deactivation", async () => {
+  const fixture = makeFixture();
+  await fixture.pi.setActiveTools(fixture.pi.getActiveTools().filter((name) => name !== "bash" && name !== "glob"));
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitForDetail(fixture.ui, "container running");
+  fixture.pi.removeHostTool("eval");
+  fixture.daemon.mode = "advisory";
+  assert.equal(await toolCallOf(fixture.pi)({ toolName: "edit" }), undefined);
+  const restored = fixture.pi.getActiveTools();
+  assert.ok(restored.includes("edit"));
+  assert.ok(!restored.includes("eval"), "a vanished tool is not requested from the host");
+  assert.ok(!restored.includes("bash"), "Realm never removed the manually disabled tool");
+  assert.ok(!restored.includes("glob"), "read-only manual choices stay inactive too");
+  fixture.daemon.mode = "fail-closed";
+  assert.deepEqual(await toolCallOf(fixture.pi)({ toolName: "edit" }), { block: true, reason: "POLICY_DENIED" });
+  assert.ok(!fixture.pi.getActiveTools().includes("edit"));
+  assert.ok(!fixture.pi.getActiveTools().includes("bash"));
+});
+
+for (const trigger of ["poll", "guard"] as const) {
+  for (const failure of ["reject", "readback"] as const) {
+    void test(`OMPX-03: failed advisory ${trigger} restore (${failure}) cannot authorize a disconnected edit`, async () => {
+      const fixture = makeFixture();
+      startHandlerOf(fixture.pi)(fixture.ctx);
+      await waitForDetail(fixture.ui, "container running");
+      fixture.daemon.mode = "advisory";
+      fixture.pi.rejectSetter = failure === "reject";
+      fixture.pi.ignoreRemoval = failure === "readback";
+      if (trigger === "poll") {
+        pollOf(fixture.ctx).callback();
+        await waitForDetail(fixture.ui, "POLICY_DENIED");
+      } else {
+        assert.deepEqual(await toolCallOf(fixture.pi)({ toolName: "edit" }), { block: true, reason: "POLICY_DENIED" });
+      }
+      fixture.daemon.hangStatus = true;
+      const verdict = toolCallOf(fixture.pi)({ toolName: "edit" });
+      expireTimer(fixture.ctx, GUARD_STATUS_BUDGET_MS);
+      assert.deepEqual(await verdict, { block: true, reason: "TOOL_TIMEOUT" });
+      assert.deepEqual(fixture.ui.notifications, []);
+    });
+  }
+}
+
+for (const invalidate of ["timeout", "shutdown", "retry", "new-session"] as const) {
+  void test(`OMPX-03/04: deferred advisory setter is corrected after ${invalidate}, without stale adoption or paint`, async () => {
+    const oldDaemon = new FakeDaemon(ACTIVE, "fail-closed");
+    const nextDaemon = new FakeDaemon({ ...ACTIVE, reason: "current owner" }, "fail-closed");
+    let attaches = 0;
+    const fixture = makeFixture({
+      attach: () => {
+        attaches += 1;
+        return Promise.resolve(attaches <= 2 ? oldDaemon : nextDaemon);
+      },
+    });
+    startHandlerOf(fixture.pi)(fixture.ctx);
+    await waitForDetail(fixture.ui, "container running");
+    oldDaemon.mode = "advisory";
+    oldDaemon.snapshot = { ...ACTIVE, reason: "obsolete owner" };
+    const gate = makeGate();
+    fixture.pi.setterGate = gate;
+    const sets = fixture.pi.activeSets.length;
+    const obsolete = retryCommandOf(fixture.pi).handler();
+    await waitUntil(() => fixture.pi.activeSets.length === sets + 1);
+    let current: Promise<string> | undefined;
+    let nextUi: FakeUi | undefined;
+    if (invalidate === "timeout") {
+      expireTimer(fixture.ctx, STARTUP_BUDGET_MS);
+      assert.match(await obsolete, /STARTUP_BUDGET_EXCEEDED/);
+    } else if (invalidate === "shutdown") {
+      shutdownHandlerOf(fixture.pi)();
+      assert.match(await obsolete, /superseded/);
+    } else if (invalidate === "retry") {
+      current = retryCommandOf(fixture.pi).handler();
+    } else {
+      nextUi = new FakeUi();
+      startHandlerOf(fixture.pi)(new FakeCtx(nextUi, "/next-workspace"));
+    }
+    const paints = fixture.ui.calls.length;
+    gate.resolve();
+    if (current !== undefined) {
+      assert.match(await current, /active/);
+    }
+    await obsolete;
+    if (nextUi !== undefined) {
+      await waitForDetail(nextUi, "current owner");
+    }
+    await yieldTurn();
+    assert.deepEqual(sortedNames(fixture.pi.getActiveTools()), FAIL_CLOSED_ALLOWLIST);
+    assert.ok(!detailsOf(fixture.ui).some((detail) => detail.startsWith("obsolete owner")));
+    if (invalidate !== "retry") {
+      assert.equal(fixture.ui.calls.length, paints, "late work cannot repaint the old owner");
+    }
+    assert.ok(oldDaemon.count("close") >= 2, "both the prior client and the stale attach are released");
+    if (invalidate === "timeout" || invalidate === "shutdown") {
+      const result = await toolOf(fixture.pi, "write").execute("late-write", { path: "late.txt", content: "no" });
+      assert.equal(result.isError, true, "an expired attach is not adopted by registered tools");
+      assert.deepEqual(oldDaemon.dispatched, []);
+    } else {
+      nextDaemon.callOutcome = { outcome: "refused", tool: "status", code: "REALM_UNBOUND", retryable: false };
+      await toolOf(fixture.pi, "status").execute("current-status", {});
+      assert.deepEqual(nextDaemon.dispatched, [{ status: {} }], "only the current client is adopted");
+    }
+  });
+}
+
+void test("OMPX-04: an in-flight poll restore is fenced by shutdown and a new advisory owner reconciles after correction", async () => {
+  const oldDaemon = new FakeDaemon(ACTIVE, "fail-closed");
+  const nextDaemon = new FakeDaemon({ ...ACTIVE, reason: "new advisory owner" }, "advisory");
+  let attaches = 0;
+  const fixture = makeFixture({
+    attach: () => Promise.resolve(++attaches === 1 ? oldDaemon : nextDaemon),
+  });
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitForDetail(fixture.ui, "container running");
+  oldDaemon.mode = "advisory";
+  oldDaemon.snapshot = { ...ACTIVE, reason: "stale poll" };
+  const gate = makeGate();
+  fixture.pi.setterGate = gate;
+  pollOf(fixture.ctx).callback();
+  await waitUntil(() => fixture.pi.activeSets.length === 2);
+  const nextUi = new FakeUi();
+  startHandlerOf(fixture.pi)(new FakeCtx(nextUi, "/next-workspace"));
+  gate.resolve();
+  await waitForDetail(nextUi, "new advisory owner");
+  assert.ok(fixture.pi.getActiveTools().includes("edit"), "current advisory owner restores after the safe correction");
+  assert.ok(!detailsOf(fixture.ui).some((detail) => detail.startsWith("stale poll")));
+});
+
+// Registered execution reaches the real dispatcher, validation, mutation gate, pinned
+// filesystem write and audit sink. Only the daemon transport/lifecycle is a host double.
+function makeRegisteredWorkspace(t: TestContext, mode: PolicyMode): {
+  readonly fixture: Fixture;
+  readonly workspace: string;
+  readonly stateDir: string;
+} {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), "realm-omp-")));
+  t.after(() => { rmSync(base, { recursive: true, force: true }); });
+  const workspace = join(base, "ws");
+  mkdirSync(workspace);
+  const stateDir = join(base, "state");
+  const parsed = validate("policy", { mode, workspaceRoots: [workspace] });
+  assert.ok(parsed.ok);
+  const fixture = makeFixture({ cwd: workspace, mode, snapshot: { state: "degraded", reason: "bridge unavailable", lastTransitionAt: CLOCK_ISO } });
+  const dispatcher = new ToolDispatcher({
+    sessionId: "sess-omp-registered",
+    boundRoot: bindRoot(workspace),
+    policy: parsed.value,
+    controller: {
+      events: createEventBus(),
+      snapshot: () => fixture.daemon.snapshot,
+      mutationGate: () => gateMutation(parsed.value, fixture.daemon.snapshot.state),
+      create: () => Promise.reject(new Error("registered writes must not create a sandbox")),
+    },
+    locks: new LockTable(),
+    stateDir,
+    runOpenShell: () => Promise.reject(new Error("registered writes must not execute a command")),
+  });
+  fixture.daemon.call = (call: unknown) => dispatcher.call(call);
+  return { fixture, workspace, stateDir };
+}
+
+void test("HARN-02 C1: registered advisory write warns on every inactive invocation and writes exact host bytes", async (t) => {
+  const { fixture, workspace, stateDir } = makeRegisteredWorkspace(t, "advisory");
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitForDetail(fixture.ui, "bridge unavailable");
+  const write = toolOf(fixture.pi, "write");
+  for (const [index, content] of ["first π\n", "second 🙂\n"].entries()) {
+    const result = await write.execute(`advisory-${String(index)}`, { path: "c1.txt", content });
+    assert.equal(result.isError, false);
+    assert.deepEqual(readFileSync(join(workspace, "c1.txt")), Buffer.from(content));
+    assert.equal(fixture.ui.notifications.length, index + 1, "the same notice is never deduplicated");
+    assert.equal(fixture.ui.notifications[index], "realm is degraded; the write proceeds under advisory policy");
+  }
+  const read = await toolOf(fixture.pi, "read").execute("consumer-read", { path: "c1.txt", maxBytes: 100 });
+  assert.equal(read.content[0]?.text, "second 🙂\n");
+  const entries = readFileSync(join(stateDir, "audit", "sess-omp-registered.jsonl"), "utf8")
+    .trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
+  assert.deepEqual(entries.filter((entry) => entry["tool"] === "write").map((entry) => entry["phase"]),
+    ["admission", "result", "admission", "result"]);
+});
+
+void test("HARN-02 C2: registered inactive fail-closed write refuses REALM_NOT_ACTIVE without a host file", async (t) => {
+  const { fixture, workspace } = makeRegisteredWorkspace(t, "fail-closed");
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitForDetail(fixture.ui, "bridge unavailable");
+  const result = await toolOf(fixture.pi, "write").execute("inactive", { path: "c2.txt", content: "denied" });
+  assert.deepEqual(result.details, { outcome: "refused", tool: "write", code: "REALM_NOT_ACTIVE", retryable: true });
+  assert.ok(!existsSync(join(workspace, "c2.txt")));
+  assert.deepEqual(fixture.ui.notifications, []);
+});
+
+for (const mode of ["advisory", "fail-closed"] as const) {
+  void test(`HARN-02: registered ${mode} write refuses an unreachable daemon without host fallback`, async (t) => {
+    const { fixture, workspace } = makeRegisteredWorkspace(t, mode);
+    startHandlerOf(fixture.pi)(fixture.ctx);
+    await waitForDetail(fixture.ui, "bridge unavailable");
+    fixture.daemon.call = () => Promise.reject(new Error("daemon socket closed"));
+    const result = await toolOf(fixture.pi, "write").execute("unreachable", { path: "offline.txt", content: "denied" });
+    assert.deepEqual(result.details, { outcome: "refused", tool: "write", code: "REALM_NOT_ACTIVE", retryable: true });
+    assert.ok(!existsSync(join(workspace, "offline.txt")));
+    assert.deepEqual(fixture.ui.notifications, [], "cached advisory mode cannot authorize a registered write");
+  });
+}
+
+void test("HARN-02 C1: registered advisory writes propagate validation, path and conditional-write failures", async (t) => {
+  const { fixture, workspace } = makeRegisteredWorkspace(t, "advisory");
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitForDetail(fixture.ui, "bridge unavailable");
+  writeFileSync(join(workspace, "existing.txt"), "original");
+  symlinkSync(join(workspace, "existing.txt"), join(workspace, "link.txt"));
+  const write = toolOf(fixture.pi, "write");
+  const cases = [
+    { params: { path: "invalid.txt", content: 42 }, code: "SCHEMA_INVALID" },
+    { params: { path: "../escaped.txt", content: "no" }, code: "SCHEMA_INVALID" },
+    { params: { path: "link.txt", content: "no" }, code: "PATH_ESCAPE" },
+    { params: { path: "existing.txt", content: "no", ifMatchSha256: "0".repeat(64) }, code: "LOCK_CONFLICT" },
+  ];
+  for (const entry of cases) {
+    const result = await write.execute("refused", entry.params);
+    assert.equal(result.isError, true);
+    assert.equal(result.details.outcome, "refused");
+    assert.equal(result.details.code, entry.code);
+  }
+  assert.equal(readFileSync(join(workspace, "existing.txt"), "utf8"), "original");
+  assert.ok(!existsSync(join(workspace, "invalid.txt")));
+  assert.ok(!existsSync(join(workspace, "..", "escaped.txt")));
+});
+
+void test("OMPX-03/04: a deferred guarded restore cannot publish or allow edit after shutdown", async () => {
+  const fixture = makeFixture();
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitForDetail(fixture.ui, "container running");
+  fixture.daemon.mode = "advisory";
+  fixture.daemon.snapshot = { ...ACTIVE, reason: "late guard" };
+  const gate = makeGate();
+  fixture.pi.setterGate = gate;
+  const verdict = toolCallOf(fixture.pi)({ toolName: "edit" });
+  await waitUntil(() => fixture.pi.activeSets.length === 2);
+  shutdownHandlerOf(fixture.pi)();
+  const paints = fixture.ui.calls.length;
+  gate.resolve();
+  assert.deepEqual(await verdict, { block: true, reason: "REALM_NOT_ACTIVE" });
+  assert.deepEqual(sortedNames(fixture.pi.getActiveTools()), FAIL_CLOSED_ALLOWLIST);
+  assert.equal(fixture.ui.calls.length, paints);
+  assert.deepEqual(fixture.ui.notifications, []);
+});
+
+void test("HARN-02 C3: active registered write uses the same real filesystem path without an advisory notice", async (t) => {
+  const { fixture, workspace } = makeRegisteredWorkspace(t, "advisory");
+  fixture.daemon.snapshot = ACTIVE;
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitForDetail(fixture.ui, "container running");
+  const result = await toolOf(fixture.pi, "write").execute("active-write", { path: "active.txt", content: "active\n" });
+  assert.equal(result.isError, false);
+  assert.deepEqual(readFileSync(join(workspace, "active.txt")), Buffer.from("active\n"));
+  assert.deepEqual(fixture.ui.notifications, []);
+});
+
+void test("HARN-02: registered advisory write propagates a real failed audit admission without writing", async (t) => {
+  const { fixture, workspace, stateDir } = makeRegisteredWorkspace(t, "advisory");
+  mkdirSync(stateDir);
+  writeFileSync(join(stateDir, "audit"), "not an audit directory");
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitForDetail(fixture.ui, "bridge unavailable");
+  const result = await toolOf(fixture.pi, "write").execute("failed-admission", { path: "unaudited.txt", content: "no" });
+  assert.deepEqual(result.details, { outcome: "refused", tool: "write", code: "AUDIT_WRITE_FAILED", retryable: true });
+  assert.ok(!existsSync(join(workspace, "unaudited.txt")));
+});
+
+for (const trigger of ["poll", "guard"] as const) {
+  void test(`OMPX-03/04: ${trigger} read from before retry is stale even when attach reuses the same client`, async () => {
+    const fixture = makeFixture();
+    startHandlerOf(fixture.pi)(fixture.ctx);
+    await waitForDetail(fixture.ui, "container running");
+    const originalStatus = fixture.daemon.status.bind(fixture.daemon);
+    const gate = makeGate();
+    const snapshot = { ...ACTIVE, reason: "stale advisory read" };
+    fixture.daemon.status = async () => {
+      await gate.promise;
+      return { snapshot, display: displayStatus(snapshot), mode: "advisory" };
+    };
+    let pending: Promise<HostToolVerdict | undefined> | undefined;
+    if (trigger === "poll") {
+      pollOf(fixture.ctx).callback();
+    } else {
+      pending = toolCallOf(fixture.pi)({ toolName: "edit" });
+    }
+    await yieldTurn();
+    fixture.daemon.status = originalStatus;
+    assert.match(await retryCommandOf(fixture.pi).handler(), /active/);
+    const paints = fixture.ui.calls.length;
+    gate.resolve();
+    if (pending !== undefined) {
+      assert.deepEqual(await pending, { block: true, reason: "REALM_NOT_ACTIVE" });
+    }
+    await yieldTurn();
+    assert.equal(fixture.ui.calls.length, paints);
+    assert.deepEqual(sortedNames(fixture.pi.getActiveTools()), FAIL_CLOSED_ALLOWLIST);
+    assert.deepEqual(fixture.ui.notifications, []);
+  });
+}

@@ -18,6 +18,8 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { appendAudit, type AuditEntryInput } from "../../src/audit/log.js";
+import { verifyAuditFile } from "../../src/audit/chain.js";
+import { buildAnchorRecord, splitAuditLines } from "../../src/audit/anchor.js";
 import {
   pairingKey,
   RECONCILE_PROGRESS_FILE,
@@ -87,6 +89,9 @@ void test("CRASH-02: an admission with no result gets exactly one reconciliation
     assert.equal(lines[0]?.["tool"], "write");
     assert.equal(lines[0]["path"], "a.txt");
     assert.equal(readEntries(stateDir).length, 2);
+    const verified = verifyAuditFile(auditFile(stateDir));
+    assert.equal(verified.ok, true);
+    assert.equal(verified.chainedLines, 2);
   });
 });
 
@@ -134,6 +139,7 @@ void test("CRASH-02: a second run appends nothing, because every admission is cl
 
     assert.deepEqual(reconcileAuditLogs(stateDir), { files: 1, appended: 0, failed: 0, unfinished: [], complete: true, skippedUnchanged: 1, listingTruncated: false });
     assert.equal(readFileSync(auditFile(stateDir), "utf8"), before);
+    assert.equal(verifyAuditFile(auditFile(stateDir)).ok, true);
   });
 });
 
@@ -259,6 +265,10 @@ void test("CRASH-02: a log with a torn last line still reconciles, and the appen
     const lines = readFileSync(auditFile(stateDir), "utf8").split("\n").filter((line) => line.length > 0);
     assert.equal(lines.length, 3);
     assert.equal((JSON.parse(lines[2] ?? "") as Record<string, unknown>)["phase"], "reconciliation");
+    const verified = verifyAuditFile(auditFile(stateDir));
+    assert.equal(verified.ok, true);
+    assert.deepEqual(verified.unparsedLines, [2]);
+    assert.equal(verified.chainedLines, 2);
     assert.equal(reconcileAuditLogs(stateDir).appended, 0);
   });
 });
@@ -310,6 +320,7 @@ void test("OBS-02: a correlation id pairs its own admission, and a line without 
     const closed = lines.filter((line) => line["phase"] === "reconciliation");
     assert.equal(closed.length, 1);
     assert.equal(closed[0]?.["correlationId"], "call-a");
+    assert.equal(verifyAuditFile(auditFile(stateDir)).ok, true);
     assert.equal(reconcileAuditLogs(stateDir).appended, 0);
   });
 });
@@ -342,6 +353,60 @@ void test("OBS-02: a correlation id redaction would rewrite is stored so the unf
     assert.equal(line["outcome"], "AUDIT_OUTCOME_UNKNOWN");
   });
 });
+
+for (const correlationId of [undefined, "checkpoint-call"]) {
+  void test(`OBS-01: real reconciliation retains legacy/torn checkpoints and is idempotent (${correlationId ?? "legacy pairing"})`, () => {
+    withStateDir((stateDir) => {
+      mkdirSync(join(stateDir, "audit"));
+      const file = auditFile(stateDir);
+      writeFileSync(file, '{"tool":"legacy","outcome":"ok"}\n');
+      admit(stateDir, "write", {
+        path: "unfinished.txt",
+        ...(correlationId === undefined ? {} : { correlationId }),
+      });
+      // The original checkpoint commits to the admission and legacy prefix.
+      const beforeHead = verifyAuditFile(file).head;
+      assert.ok(beforeHead);
+      const beforeAnchor = buildAnchorRecord({
+        sessionId: SESSION,
+        lines: splitAuditLines(readFileSync(file)),
+        createdAt: new Date("2026-10-31T00:00:00.000Z"),
+      });
+      writeFileSync(file, `${readFileSync(file, "utf8")}{"phase":"result","tool":"wri`);
+      assert.equal(reconcileAuditLogs(stateDir).appended, 1);
+      const verified = verifyAuditFile(file, { head: beforeHead, anchor: beforeAnchor });
+      assert.equal(verified.ok, true);
+      assert.equal(verified.legacyLines, 1);
+      assert.equal(verified.chainStartLine, 2);
+      assert.equal(verified.chainedLines, 2);
+      assert.deepEqual(verified.unparsedLines, [3]);
+      const bytes = readFileSync(file);
+      const entries = splitAuditLines(bytes);
+      const lastRaw = entries[entries.length - 1];
+      assert.ok(lastRaw);
+      const last: unknown = JSON.parse(Buffer.from(lastRaw).toString("utf8"));
+      assert.ok(typeof last === "object" && last !== null && "phase" in last && "outcome" in last);
+      assert.equal(last.phase, "reconciliation");
+      assert.equal(last.outcome, "AUDIT_OUTCOME_UNKNOWN");
+      if (correlationId !== undefined) {
+        assert.ok("correlationId" in last);
+        assert.equal(last.correlationId, correlationId);
+      }
+      const head = verified.head;
+      assert.ok(head);
+      const anchor = buildAnchorRecord({ sessionId: SESSION, lines: entries, createdAt: new Date("2026-10-31T00:00:00.000Z") });
+      assert.equal(head.seq, 4, "head is a physical line position, not reconciliation seq=2");
+      assert.equal(reconcileAuditLogs(stateDir).appended, 0);
+      assert.deepEqual(readFileSync(file), bytes);
+      assert.equal(verifyAuditFile(file, { head, anchor }).ok, true);
+      writeFileSync(file, `${entries.slice(0, 3).map((line) => Buffer.from(line).toString("utf8")).join("\n")}\n`);
+      assert.equal(verifyAuditFile(file).ok, true, "unanchored truncation remains unverifiable");
+      assert.equal(verifyAuditFile(file, { head }).broken?.reason, "shorter-than-head");
+      assert.equal(verifyAuditFile(file, { anchor }).broken?.reason, "shorter-than-anchor");
+    });
+  });
+}
+
 // What the reconciliation lines of a log say, without their timestamps, so two runs compare by content.
 function reconciledContent(stateDir: string, sessionId: string): string[] {
   return reconciliations(stateDir, sessionId).map((entry) =>

@@ -4,7 +4,7 @@
 
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeRealmError } from "../../src/core/errors.js";
@@ -22,14 +22,26 @@ import { TEARDOWN_TIMEOUT_MS } from "../../src/lifecycle/controller.js";
 import type { EnvironmentLike } from "../../src/session/paths.js";
 
 
-function failed(code: string): string {
-  return JSON.stringify({ level: "error", event: "daemon.failed", code });
+function logRecord(line: string, level: string, event: string): Record<string, unknown> {
+  assert.equal(line.includes("\n"), false, "one logger call is one physical JSON line");
+  const value = JSON.parse(line) as Record<string, unknown>;
+  assert.deepEqual(Object.keys(value).slice(0, 3), ["ts", "level", "event"]);
+  const ts = value["ts"];
+  assert.equal(typeof ts, "string");
+  assert.equal(new Date(String(ts)).toISOString(), ts);
+  assert.equal(value["level"], level);
+  assert.equal(value["event"], event);
+  return value;
+}
+
+function assertFailureLines(lines: readonly string[], code: string): void {
+  assert.equal(lines.length, 1);
+  const value = logRecord(lines[0] ?? "", "error", "daemon.failed");
+  assert.deepEqual(value, { ts: value["ts"], level: "error", event: "daemon.failed", code });
 }
 
 function startupOf(lines: readonly string[]): Record<string, unknown> {
-  const value = JSON.parse(lines[0] ?? "") as Record<string, unknown>;
-  assert.equal(value["event"], "daemon.startup");
-  return value;
+  return logRecord(lines[0] ?? "", "info", "daemon.startup");
 }
 const SOCKET_PATH = "/run/realm-test/control.sock";
 const IMAGE = `registry.example/realm/workload@sha256:${"a".repeat(64)}`;
@@ -112,7 +124,7 @@ void test("a missing config returns 1 and reports SCHEMA_INVALID without startin
 
   assert.equal(await runDaemon(h.deps), 1);
   assert.equal(starts, 0);
-  assert.deepEqual(h.lines, [failed("SCHEMA_INVALID")]);
+  assertFailureLines(h.lines, "SCHEMA_INVALID");
 });
 
 void test("a valid config starts once with the derived options and resolves 0 on teardown", async (t) => {
@@ -198,7 +210,9 @@ void test("CRASH-04: the start's onStartup report is written as one stderr line 
 
   assert.equal(await runDaemon(h.deps), 0);
   assert.equal(h.lines.length, 1);
-  assert.deepEqual(startupOf(h.lines), {
+  const startup = startupOf(h.lines);
+  assert.deepEqual(startup, {
+    ts: startup["ts"],
     level: "info",
     event: "daemon.startup",
     containersRemoved: 2,
@@ -312,7 +326,7 @@ void test("CRASH-04: a failed reap's partial report is logged, then the start fa
   assert.equal(partial["auditLinesReconciled"], 0);
   assert.equal(partial["reapFailure"], "REALM_STOPPING");
   assert.equal(partial["failures"], 1);
-  assert.equal(h.lines[1], failed("REALM_STOPPING"));
+  assertFailureLines(h.lines.slice(1), "REALM_STOPPING");
 });
 
 void test("STARTUP budget: a long unfinished list is sampled at ten names, the count stays exact, and a truncated audit listing is named", async (t) => {
@@ -402,7 +416,7 @@ void test("a start rejecting with a RealmError returns 1 and writes its code", a
   });
 
   assert.equal(await runDaemon(h.deps), 1);
-  assert.deepEqual(h.lines, [failed("LOCK_CONFLICT")]);
+  assertFailureLines(h.lines, "LOCK_CONFLICT");
 });
 
 void test("a start rejecting with a non-RealmError is reported as SCHEMA_INVALID", async (t) => {
@@ -412,7 +426,7 @@ void test("a start rejecting with a non-RealmError is reported as SCHEMA_INVALID
   });
 
   assert.equal(await runDaemon(h.deps), 1);
-  assert.deepEqual(h.lines, [failed("SCHEMA_INVALID")]);
+  assertFailureLines(h.lines, "SCHEMA_INVALID");
 });
 
 void test("a signal runs the control-channel down and resolves 0", async (t) => {
@@ -459,7 +473,7 @@ void test("a down that fails during a signal shutdown returns 1 with its code", 
   handler();
 
   assert.equal(await run, 1);
-  assert.deepEqual(h.lines, [failed("AGENTOS_STOP_FAILED")]);
+  assertFailureLines(h.lines, "AGENTOS_STOP_FAILED");
 });
 
 void test("the CLI down bound outlasts the daemon teardown bound", () => {
@@ -467,4 +481,145 @@ void test("the CLI down bound outlasts the daemon teardown bound", () => {
     CONTROL_TIMEOUT_MS.down > TEARDOWN_TIMEOUT_MS,
     "the CLI must not give up before the daemon finishes teardown",
   );
+});
+
+void test("OBS-02: startup names are redacted and line-safe, with both samples capped and counts exact", async (t) => {
+  const dir = tempDir(t);
+  const credential = "sk-abcdefghijklmnopqrstuvwxyz";
+  const injected = 'name\n{"event":"daemon.failed","code":"POLICY_DENIED"}';
+  const names = [credential, injected, ...Array.from({ length: 10 }, (_unused, index) => `file${String(index)}`)];
+  const h = harness(writeConfig(dir, validConfig(dir)), {
+    start: (options) => {
+      options.onStartup?.({
+        containerIds: [credential],
+        containersRemoved: 1,
+        recordsDeleted: 2,
+        tempFilesRemoved: 3,
+        auditLinesReconciled: 4,
+        truncated: true,
+        unfinishedSweepRoots: names,
+        unfinishedAuditFiles: names,
+        auditListingTruncated: true,
+        maintenanceComplete: false,
+        failures: 0,
+      });
+      return Promise.resolve(startedWith(Promise.resolve()));
+    },
+  });
+
+  assert.equal(await runDaemon(h.deps), 0);
+  assert.equal(h.lines.length, 1);
+  const record = startupOf(h.lines);
+  const expectedNames = ["[REDACTED]", injected, ...names.slice(2, 10)];
+  assert.deepEqual(record["containerIds"], ["[REDACTED]"]);
+  assert.deepEqual(record["unfinishedAuditFiles"], expectedNames);
+  assert.deepEqual(record["unfinishedSweepRoots"], expectedNames);
+  assert.equal(record["unfinishedAuditFileCount"], 12);
+  assert.equal(record["unfinishedSweepRootCount"], 12);
+  assert.equal(record["recordsDeleted"], 2);
+  assert.equal(record["auditListingTruncated"], true);
+  assert.equal(h.lines.some((line) => line.includes(credential)), false);
+  assert.equal(names[0], credential, "logging does not mutate the startup report");
+});
+
+for (const level of ["debug", "info", "warn", "error", "invalid"]) {
+  void test(`OBS-02: ${level} request logging preserves mandatory startup and failure diagnostics`, async (t) => {
+    const dir = tempDir(t);
+    const raw = validConfig(dir);
+    mkdirSync(String(raw["stateDir"]), { recursive: true });
+    const env = { ...writeConfig(dir, raw), REALM_LOG_LEVEL: level };
+    const h = harness(env, {
+      start: (options) => {
+        options.logger?.info("up.begin", { correlationId: "c1" });
+        options.onStartup?.({
+          containerIds: [],
+          containersRemoved: 0,
+          recordsDeleted: 0,
+          tempFilesRemoved: 0,
+          auditLinesReconciled: 0,
+          truncated: false,
+          unfinishedSweepRoots: [],
+          unfinishedAuditFiles: [],
+          auditListingTruncated: false,
+          maintenanceComplete: true,
+          failures: 0,
+        });
+        return Promise.reject(makeRealmError("POLICY_DENIED"));
+      },
+    });
+
+    assert.equal(await runDaemon(h.deps), 1);
+    assert.equal(h.lines.length, 2);
+    startupOf(h.lines);
+    assertFailureLines(h.lines.slice(1), "POLICY_DENIED");
+    const path = join(String(raw["stateDir"]), "requests.log");
+    const requests = existsSync(path) ? readFileSync(path, "utf8").trimEnd().split("\n") : [];
+    const events = requests.map((line) => (JSON.parse(line) as Record<string, unknown>)["event"]);
+    assert.deepEqual(events, level === "invalid" ? ["daemon.log-level", "up.begin"] : level === "debug" || level === "info" ? ["up.begin"] : []);
+  });
+}
+
+void test("OBS-02: a thrown shutdown request is reported through the timestamped failure logger", async (t) => {
+  const dir = tempDir(t);
+  const h = harness(writeConfig(dir, validConfig(dir)), {
+    start: () => Promise.resolve(startedWith(new Promise<void>(() => undefined))),
+    sendDown: () => Promise.reject(makeRealmError("TOOL_TIMEOUT")),
+  });
+  const run = runDaemon(h.deps);
+  await h.registered;
+  const handler = h.handlers.get("SIGTERM");
+  assert.ok(handler);
+  handler();
+
+  assert.equal(await run, 1);
+  assertFailureLines(h.lines, "TOOL_TIMEOUT");
+  assert.equal(h.handlers.size, 0);
+});
+
+void test("OBS-02: a listening-server failure logs only its catalogue code and exits nonzero", async (t) => {
+  const dir = tempDir(t);
+  let failServer: (error: Error) => void = () => undefined;
+  const done = new Promise<void>((_resolve, reject) => {
+    failServer = reject;
+  });
+  const h = harness(writeConfig(dir, validConfig(dir)), {
+    start: () => Promise.resolve(startedWith(done)),
+  });
+  const run = runDaemon(h.deps);
+  await h.registered;
+  failServer(new Error("API_KEY=private-server-detail"));
+
+  assert.equal(await run, 1);
+  assertFailureLines(h.lines, "SCHEMA_INVALID");
+  assert.equal(h.handlers.size, 0);
+});
+
+void test("OBS-02: an unwritable diagnostics sink cannot turn a dropped startup report into a clean exit", async (t) => {
+  const dir = tempDir(t);
+  let attempts = 0;
+  const h = harness(writeConfig(dir, validConfig(dir)), {
+    writeStderr: () => {
+      attempts += 1;
+      throw new Error("stderr unavailable");
+    },
+    start: (options) => {
+      options.onStartup?.({
+        containerIds: [],
+        containersRemoved: 0,
+        recordsDeleted: 0,
+        tempFilesRemoved: 0,
+        auditLinesReconciled: 0,
+        truncated: false,
+        unfinishedSweepRoots: [],
+        unfinishedAuditFiles: [],
+        auditListingTruncated: false,
+        maintenanceComplete: true,
+        failures: 0,
+      });
+      return Promise.resolve(startedWith(Promise.resolve()));
+    },
+  });
+
+  assert.equal(await runDaemon(h.deps), 1);
+  assert.equal(attempts, 1);
 });

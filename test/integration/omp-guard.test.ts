@@ -1,22 +1,25 @@
 // The write-guard suite (HARN-02; decisions D-1201, D-1202, D-1203 of phase 12).
 //
-// Four guard cases and one separately gated warm network case, against the built Realm plugin
-// (dist/src/omp/extension.js), not the spike extension. A scripted provider emits one call, then a final text reply. The
-// policy mode is written into the profile and into the daemon's policy file; nothing here relies on the default.
+// Four guard cases, separate unreachable/filesystem negatives, and a separately gated warm network case,
+// against the built Realm plugin (dist/src/omp/extension.js), not the spike extension. Each invocation
+// has its own scripted call and actual HTTP tool-result continuation, with explicit profile/daemon policy.
 //
-//   C1 advisory, realm down: the Realm write is refused with REALM_NOT_ACTIVE and the file is absent. The Realm write goes to
-//      the daemon, so with the daemon down the advisory notice does not apply to it.
-//   C2 fail-closed, realm down: the write is blocked with REALM_NOT_ACTIVE, the file is absent, and the provider's next
-//      request carries that error.
-//   C3 realm active: the write proceeds on the host. The offered tool list is recorded, not asserted; Phase 16 owns removal.
-//   C4 advisory, realm down: the built-in patch-mode edit CREATE is not refused by the guard. The advisory notice shows,
-//      exact bytes are created on the host at an absent path, and the provider's next request carries the successful result.
+//   C1 reachable error, advisory: TWO registered writes in the SAME Omp child each notify, write exact
+//      host bytes, and return the metadata-only Realm outcome to the provider. A missing-parent negative
+//      separately proves that advisory policy does not turn a real filesystem refusal into success.
+//   C2 reachable error, fail-closed: REALM_NOT_ACTIVE, no host file, actual provider error continuation.
+//   C3 active: the registered write succeeds on the host; offered tools remain a recorded baseline.
+//   C4 unreachable, advisory: native patch-mode edit CREATE retains its distinct unavailable-status notice,
+//      exact host bytes and successful provider continuation. Only this child gets PI_EDIT_VARIANT=patch.
+//   Unreachable registered writes in BOTH modes refuse/no file; old C1/C2 receipts belong to this negative.
 //
-// The plugin reads the mode from the daemon's status, not from the policy file. C2 and C4 therefore attach while the daemon
-// is up (so the explicit mode is known) and only then take the realm down, which is what makes the status unreadable. The
-// daemon is listening before Omp is spawned, so ensureDaemon never starts a detached daemon (D-1203).
-// C4 selects PI_EDIT_VARIANT=patch only in its Omp child. Realm read/write do not issue native hashline snapshots; CREATE
-// needs no snapshot tag. These fake-backed cases prove host-path/guard behaviour, not production sandbox/audit containment.
+// C1/C2 attach while active, then the fixture drives the public fake execution health port unhealthy and
+// calls the REAL controller probe. The daemon stays bound/listening in error ("probe failed"), NOT down
+// or unbound. Real status replies, local controller snapshots and a synchronous transition subscription
+// establish the state/mode before, during and after each guarded exchange, including its actual tool start.
+// The daemon is listening before Omp starts, preventing a detached ensureDaemon spawn (D-1203).
+// C4 CREATE needs no hashline snapshot tag. These fake-runtime cases prove the real host-path/guard
+// behavior, NOT production sandbox containment.
 // The separate traced warm case measures Omp network attempts with the stub port itself acting as a refusing proxy.
 //
 // Gate. The file skips, naming the first missing prerequisite, unless REALM_LIVE_OMP=1 and the Omp executable, its version
@@ -50,6 +53,7 @@ import { classify, defaultAllow, externalConnects, formatOffenders, parseConnect
 import { onPath } from "../support/production-live.js";
 
 const ADVISORY_NOTICE = "realm status unavailable (REALM_NOT_ACTIVE); the write proceeds under advisory policy";
+const INACTIVE_ADVISORY_NOTICE = "realm is error; the write proceeds under advisory policy";
 const EVIDENCE_DIR_VARIABLE = "REALM_OMP_EVIDENCE_DIR";
 const CLOSE_OPTIONS = { graceMs: 40_000, termMs: 20_000, killMs: 20_000 } as const;
 // Two starts over one profile, each with its own frame-driven startup, prompt and bounded close.
@@ -69,28 +73,32 @@ const ompVersionText = baseInputs.version.kind === "output" ? (parseOmpVersion(b
 interface GuardCase {
   readonly name: string;
   readonly mode: ProfilePolicyMode;
-  // down: attach, then remove the realm, then make the call. active: the daemon stays up for the call.
-  readonly realm: "down" | "active";
+  // inactive: reachable controller error; down: attach then remove listener/socket; active: unchanged.
+  readonly realm: "inactive" | "down" | "active";
   // The tool the model calls: the Realm write, or the built-in edit.
   readonly tool: "write" | "edit";
   readonly relativePath: string;
 }
 
+interface GuardInvocation {
+  readonly outcome: PromptOutcome;
+  readonly requests: readonly RecordedRequest[];
+  readonly notices: readonly string[];
+}
+
 async function runGuard(
   t: TestContext,
   spec: GuardCase,
-): Promise<{ omp: OmpSession; profile: OmpProfile; outcome: PromptOutcome; requests: readonly RecordedRequest[] }> {
+): Promise<{
+  omp: OmpSession;
+  profile: OmpProfile;
+  invoke(relativePath?: string, content?: string): Promise<GuardInvocation>;
+}> {
   t.diagnostic(`omp/${ompVersionText}`);
   const cleanups = createCleanups();
   t.after(() => cleanups.run());
   const provider = new ScriptedProvider();
   cleanups.add(() => provider.stop());
-  provider.onTurn((turn) => {
-    if (turn.lastRole === "tool") {
-      return { text: "done" };
-    }
-    return { call: callOf(spec) };
-  });
   const { port } = await provider.start();
   const pathValue = process.env["PATH"];
   const profile = createOmpProfile({
@@ -113,6 +121,27 @@ async function runGuard(
       await daemon.down();
     }
   });
+  const observations: unknown[] = [];
+  const transitions: unknown[] = [];
+  const expectedState = spec.realm === "inactive" ? "error" : "active";
+  const assertSnapshot = (): void => {
+    const snapshot = daemon.handle.controller.snapshot();
+    assert.equal(snapshot.state, expectedState);
+    if (expectedState === "error") {
+      assert.equal(snapshot.reason, "probe failed", "health failure, not stop()/unbound, must establish the inactive realm");
+    }
+    assert.equal(daemon.handle.policyMode, spec.mode);
+  };
+  const observeReachable = async (phase: string): Promise<void> => {
+    const reply = await daemon.status();
+    assert.equal(reply.error, undefined, `${phase}: the REAL daemon must answer the control channel`);
+    assert.ok(isRecord(reply.result));
+    assert.equal(reply.result["mode"], spec.mode, `${phase}: require explicit daemon policy, not a cached default`);
+    assertSnapshot();
+    assert.deepEqual(reply.result["snapshot"], daemon.handle.controller.snapshot(), `${phase}: wire and independent controller snapshots agree`);
+    assert.equal(existsSync(daemon.socketPath), true);
+    observations.push({ phase, reply, snapshot: daemon.handle.controller.snapshot(), mode: daemon.handle.policyMode });
+  };
   const tmpDir = join(profile.root, "tmp");
   mkdirSync(tmpDir);
   const omp = startOmp({
@@ -127,7 +156,10 @@ async function runGuard(
       evidence: {
         [`${spec.name}.frames.jsonl`]: () => omp.frames.map((frame) => JSON.stringify(frame)).join("\n"),
         [`${spec.name}.requests.json`]: () => JSON.stringify(provider.requests, null, 1),
+        [`${spec.name}.provider-failures.json`]: () => JSON.stringify(provider.failures, null, 1),
         [`${spec.name}.proxy-refusals.json`]: () => JSON.stringify(provider.proxyRefusals, null, 1),
+        [`${spec.name}.states.json`]: () => JSON.stringify(observations, null, 1),
+        [`${spec.name}.transitions.json`]: () => JSON.stringify(transitions, null, 1),
       },
       report: (problem) => {
         t.diagnostic(problem);
@@ -144,17 +176,102 @@ async function runGuard(
   if (spec.realm === "down") {
     realmUp = false;
     await daemon.down();
+    assert.equal(existsSync(daemon.socketPath), false, "the unreachable negative removes the actual socket");
+    await assert.rejects(daemon.status(), "the unreachable negative must not have a replying status server");
+  } else {
+    if (spec.realm === "inactive") {
+      const snapshot = await daemon.failHealthProbe();
+      assert.equal(snapshot.state, "error");
+      assert.equal(snapshot.reason, "probe failed");
+    }
+    await observeReachable("fixture-ready");
   }
-  const outcome = await omp.prompt(`${spec.tool} ${spec.relativePath}`, OMP_PROMPT_TIMEOUT_MS);
-  return { omp, profile, outcome, requests: provider.requests };
+  let invocation = 0;
+  return {
+    omp,
+    profile,
+    async invoke(relativePath = spec.relativePath, content = spec.name): Promise<GuardInvocation> {
+      invocation += 1;
+      const label = `${spec.name}-${String(invocation)}`;
+      const call = callOf(spec, relativePath, content);
+      const requestsBefore = provider.requests.length;
+      const noticesBefore = omp.notices().length;
+      const failuresBefore = provider.failures.length;
+      const startsBefore = omp.toolStarts().length;
+      const transitionsBefore = transitions.length;
+      // Synchronous lifecycle events rule out even a transient return to active during a fast write.
+      // No method is replaced: the registered call still crosses the real daemon/dispatcher/gate/fs.
+      const unsubscribe = daemon.handle.controller.events.subscribe((event) => {
+        transitions.push({ invocation: label, event });
+      });
+      const script: { phase: "issue" | "continuation" | "done" } = { phase: "issue" };
+      provider.onTurn(async (turn) => {
+        if (spec.realm !== "down") {
+          await observeReachable(`${label}-during-provider-${script.phase}`);
+        }
+        switch (script.phase) {
+          case "issue":
+            assert.ok(turn.toolsOffered.includes(spec.tool), `the provider must be offered ${spec.tool}`);
+            script.phase = "continuation";
+            return { call };
+          case "continuation":
+            assert.equal(turn.lastRole, "tool", "the next actual HTTP request must carry the tool result");
+            script.phase = "done";
+            return { text: "done" };
+          case "done":
+            throw new Error(`${label}: unexpected extra provider request`);
+        }
+      });
+      try {
+        if (spec.realm !== "down") {
+          await observeReachable(`${label}-before`);
+        }
+        const started = omp.waitFor(
+          (session) => session.toolStarts().length > startsBefore,
+          OMP_PROMPT_TIMEOUT_MS,
+          `${label}: actual registered/native tool start`,
+        ).then(() => {
+          if (spec.realm !== "down") {
+            assertSnapshot();
+            observations.push({ phase: `${label}-during-tool-start`, snapshot: daemon.handle.controller.snapshot(), mode: daemon.handle.policyMode });
+          }
+        });
+        const [outcome] = await Promise.all([omp.prompt(`${spec.tool} ${relativePath}`, OMP_PROMPT_TIMEOUT_MS), started]);
+        if (spec.realm !== "down") {
+          await observeReachable(`${label}-after`);
+          assert.equal(transitions.length, transitionsBefore, "the realm must stay in the observed state throughout this invocation");
+        }
+        const requests = provider.requests.slice(requestsBefore);
+        assert.equal(script.phase, "done");
+        assert.deepEqual(provider.failures.slice(failuresBefore), []);
+        assert.deepEqual(turnFailures(outcome.frames), []);
+        assert.ok(outcome.frames.some((frame) => frame["type"] === "turn_end" && isRecord(frame["message"]) && frame["message"]["stopReason"] === "stop"));
+        assert.equal(requests.length, 2, "each invocation needs its own issue and actual provider continuation");
+        assert.deepEqual(requests[0]?.plan, { call });
+        assert.equal(outcome.toolStarts.length, 1);
+        const start = outcome.toolStarts[0];
+        assert.ok(start !== undefined);
+        assert.equal(start.toolName, spec.tool);
+        assert.deepEqual(start.args, call.args);
+        const end = toolEndOf(outcome, spec.tool);
+        assert.equal(end.toolCallId, start.toolCallId);
+        assert.equal(requests[1]?.lastRole, "tool");
+        assert.equal(requests[1]?.toolResultText, end.text, "the next provider request must carry THIS invocation's actual tool result");
+        assert.deepEqual(requests[1]?.plan, { text: "done" });
+        return { outcome, requests, notices: omp.notices().slice(noticesBefore) };
+      } finally {
+        unsubscribe();
+      }
+    },
+  };
 }
 
 // The scripted call: the Realm write of the case's content, or a tag-free native patch CREATE for C4.
-function callOf(spec: GuardCase): { name: string; args: Record<string, unknown> } {
+function callOf(spec: GuardCase, relativePath = spec.relativePath, content = spec.name): { name: string; args: Record<string, unknown> } {
   if (spec.tool === "write") {
-    return { name: "write", args: { path: spec.relativePath, content: spec.name } };
+    return { name: "write", args: { path: relativePath, content } };
   }
-  return { name: "edit", args: { path: spec.relativePath, edits: [{ op: "create", diff: "c4\n" }] } };
+  return { name: "edit", args: { path: relativePath, edits: [{ op: "create", diff: "c4\n" }] } };
 }
 
 function toolEndOf(outcome: PromptOutcome, tool: string): ToolEnd {
@@ -165,42 +282,94 @@ function toolEndOf(outcome: PromptOutcome, tool: string): ToolEnd {
   return end;
 }
 
+function assertRegisteredRefusal(end: ToolEnd, code: "REALM_NOT_ACTIVE" | "PATH_ESCAPE"): void {
+  assert.equal(end.isError, true, end.text);
+  const expected = { outcome: "refused", tool: "write", code, retryable: code === "REALM_NOT_ACTIVE" };
+  assert.deepEqual(JSON.parse(end.text), expected, "require the catalogue refusal, not native success or echoed arguments");
+  const result = end.frame["result"];
+  assert.ok(isRecord(result));
+  assert.deepEqual(result["details"], expected);
+}
+
 void test(
-  "C1: advisory with the realm down refuses the Realm write with REALM_NOT_ACTIVE and the file is absent",
+  "C1: reachable error/advisory registered writes EACH warn, write exact bytes, and continue to the provider",
   { skip, timeout: OMP_SCENARIO_TIMEOUT_MS },
   async (t) => {
-    const spec: GuardCase = { name: "c1", mode: "advisory", realm: "down", tool: "write", relativePath: "c1.txt" };
-    const { omp, profile, outcome } = await runGuard(t, spec);
-    assert.equal(omp.notices().includes(ADVISORY_NOTICE), false, "the Realm write is not the guard's advisory host path");
-    const end = toolEndOf(outcome, "write");
-    assert.equal(end.isError, true);
-    assert.match(end.text, /REALM_NOT_ACTIVE/);
-    assert.equal(existsSync(join(profile.workspace, spec.relativePath)), false);
+    const spec: GuardCase = { name: "c1", mode: "advisory", realm: "inactive", tool: "write", relativePath: "c1.txt" };
+    const { profile, invoke } = await runGuard(t, spec);
+    for (const [relativePath, content] of [
+      ["c1-first.txt", "first advisory write\nUTF-8: λ\n"],
+      ["c1-second.txt", "second advisory write\nUTF-8: 雪\n"],
+    ] as const) {
+      assert.equal(existsSync(join(profile.workspace, relativePath)), false);
+      const { outcome, notices } = await invoke(relativePath, content);
+      assert.deepEqual(notices, [INACTIVE_ADVISORY_NOTICE], "each registered write must forward its own existing daemon notice");
+      const end = toolEndOf(outcome, "write");
+      assert.equal(end.isError, false, end.text);
+      const expected = {
+        outcome: "done",
+        tool: "write",
+        value: { sha256: createHash("sha256").update(content).digest("hex"), bytes: Buffer.byteLength(content), warning: INACTIVE_ADVISORY_NOTICE },
+      };
+      assert.deepEqual(JSON.parse(end.text), expected, "registered writes return metadata, not raw file contents");
+      const result = end.frame["result"];
+      assert.ok(isRecord(result));
+      assert.deepEqual(result["details"], expected);
+      assert.deepEqual(readFileSync(join(profile.workspace, relativePath)), Buffer.from(content), "actual host bytes, not result text, prove the effect");
+    }
   },
 );
 
 void test(
-  "C2: fail-closed with the realm down blocks the write with REALM_NOT_ACTIVE and the next request carries the error",
+  "C1 filesystem negative: reachable error/advisory preserves a real missing-parent refusal",
   { skip, timeout: OMP_SCENARIO_TIMEOUT_MS },
   async (t) => {
-    const spec: GuardCase = { name: "c2", mode: "fail-closed", realm: "down", tool: "write", relativePath: "c2.txt" };
-    const { omp, profile, outcome, requests } = await runGuard(t, spec);
-    assert.equal(omp.notices().includes(ADVISORY_NOTICE), false);
-    const end = toolEndOf(outcome, "write");
-    assert.equal(end.isError, true);
-    assert.match(end.text, /REALM_NOT_ACTIVE/);
+    const spec: GuardCase = { name: "c1-filesystem", mode: "advisory", realm: "inactive", tool: "write", relativePath: "missing-parent/c1.txt" };
+    const { profile, invoke } = await runGuard(t, spec);
+    assert.equal(existsSync(join(profile.workspace, "missing-parent")), false);
+    const { outcome, notices } = await invoke();
+    assertRegisteredRefusal(toolEndOf(outcome, "write"), "PATH_ESCAPE");
+    assert.deepEqual(notices, [], "a refused filesystem write must not be reported as advisory success");
     assert.equal(existsSync(join(profile.workspace, spec.relativePath)), false);
-    const carried = requests.find((request) => request.toolResultText?.includes("REALM_NOT_ACTIVE") === true);
-    assert.ok(carried !== undefined, "the provider's next request did not carry REALM_NOT_ACTIVE");
+    assert.equal(existsSync(join(profile.workspace, "missing-parent")), false);
   },
 );
+
+void test(
+  "C2: reachable error/fail-closed refuses with REALM_NOT_ACTIVE, no file, and actual provider error continuation",
+  { skip, timeout: OMP_SCENARIO_TIMEOUT_MS },
+  async (t) => {
+    const spec: GuardCase = { name: "c2", mode: "fail-closed", realm: "inactive", tool: "write", relativePath: "c2.txt" };
+    const { profile, invoke } = await runGuard(t, spec);
+    const { outcome, notices } = await invoke();
+    assert.deepEqual(notices, []);
+    assertRegisteredRefusal(toolEndOf(outcome, "write"), "REALM_NOT_ACTIVE");
+    assert.equal(existsSync(join(profile.workspace, spec.relativePath)), false);
+  },
+);
+
+for (const mode of ["advisory", "fail-closed"] as const) {
+  void test(
+    `unreachable negative (${mode}): registered write refuses/no file; NOT reachable-inactive C1/C2 proof`,
+    { skip, timeout: OMP_SCENARIO_TIMEOUT_MS },
+    async (t) => {
+      const spec: GuardCase = { name: `unreachable-${mode}`, mode, realm: "down", tool: "write", relativePath: `unreachable-${mode}.txt` };
+      const { profile, invoke } = await runGuard(t, spec);
+      const { outcome, notices } = await invoke();
+      assert.deepEqual(notices, [], "cached advisory mode does not authorize a transport fallback");
+      assertRegisteredRefusal(toolEndOf(outcome, "write"), "REALM_NOT_ACTIVE");
+      assert.equal(existsSync(join(profile.workspace, spec.relativePath)), false);
+    },
+  );
+}
 
 void test(
   "C3: with the realm active the write proceeds on the host; the offered tool list is the Phase 16 baseline",
   { skip, timeout: OMP_SCENARIO_TIMEOUT_MS },
   async (t) => {
     const spec: GuardCase = { name: "c3", mode: "fail-closed", realm: "active", tool: "write", relativePath: "c3.txt" };
-    const { profile, outcome, requests } = await runGuard(t, spec);
+    const { profile, invoke } = await runGuard(t, spec);
+    const { outcome, requests } = await invoke();
     const offered = requests[0]?.toolsOffered ?? [];
     t.diagnostic(`offered tools: ${[...offered].sort().join(", ")}`);
     const end = toolEndOf(outcome, "write");
@@ -214,8 +383,9 @@ void test(
   { skip, timeout: OMP_SCENARIO_TIMEOUT_MS },
   async (t) => {
     const spec: GuardCase = { name: "c4", mode: "advisory", realm: "down", tool: "edit", relativePath: "c4-created.txt" };
-    const { omp, profile, outcome, requests } = await runGuard(t, spec);
-    assert.deepEqual(omp.notices(), [ADVISORY_NOTICE]);
+    const { profile, invoke } = await runGuard(t, spec);
+    const { outcome, requests, notices } = await invoke();
+    assert.deepEqual(notices, [ADVISORY_NOTICE]);
     const end = toolEndOf(outcome, "edit");
     t.diagnostic(`edit result: ${end.text}`);
     assert.equal(end.isError, false, end.text);

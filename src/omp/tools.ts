@@ -245,6 +245,13 @@ function bytesOf(content: unknown): Buffer | undefined {
   }
   if (typeof content === "object" && content !== null && "type" in content && "data" in content) {
     if (content.type === "Buffer" && Array.isArray(content.data)) {
+      // Buffer.from coerces strings, fractions and out-of-range numbers. A malformed
+      // wire payload must be refused, not silently changed into different file bytes.
+      for (const byte of content.data as unknown[]) {
+        if (typeof byte !== "number" || !Number.isInteger(byte) || byte < 0 || byte > 255) {
+          return undefined;
+        }
+      }
       return Buffer.from(content.data);
     }
   }

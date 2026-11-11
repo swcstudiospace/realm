@@ -1,9 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { RELEASE_VERSION_FILES } from "../release/sync-version.mjs";
 import {
   ADAPTER_FILES,
@@ -22,6 +24,7 @@ import {
 } from "./pack-smoke.mjs";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
+const execFileAsync = promisify(execFile);
 
 function writeFixture(root, path, content = "{}\n") {
   mkdirSync(dirname(join(root, path)), { recursive: true });
@@ -379,4 +382,64 @@ test("runCheck removes its temporary directories after a failed run", () =>
     assert.equal(created.length, 1);
     assert.deepEqual(removed, created);
     assert.equal(existsSync(created[0]), false);
+  }));
+
+test("pack-smoke CLI rejects real tarballs with each required snippet or guide omitted", async (t) =>
+  withTempRootsAsync("realm-pack-real-omissions-", 2, async (sourceRoot, scratch) => {
+    const version = "1.0.0";
+    writePackageTree(sourceRoot, version);
+    const env = {
+      ...process.env,
+      npm_config_cache: join(scratch, "npm-cache"),
+      npm_config_offline: "true",
+      npm_config_update_notifier: "false",
+    };
+    const commandOptions = { encoding: "utf8", timeout: 30_000, env };
+    const packed = await execFileAsync(
+      "npm",
+      [...buildPackArgs(scratch), "--ignore-scripts"],
+      { ...commandOptions, cwd: sourceRoot },
+    );
+    const intactTarball = tarballFromPackOutput(packed.stdout, scratch);
+    const listed = await execFileAsync("tar", ["-tzf", intactTarball], commandOptions);
+    const intactFiles = listed.stdout.trim().split("\n").filter((path) => !path.endsWith("/")).sort();
+    const requiredFiles = [
+      "adapters/hermes-agent/mcp.snippet.yaml",
+      "adapters/muse-code/mcp-settings.snippet.json",
+      "adapters/prime-agent/MCP.md",
+      "adapters/prime-agent/skills/realm/SKILL.md",
+    ];
+    for (const file of requiredFiles) {
+      assert.ok(intactFiles.includes(`package/${file}`), `${file} is in the intact npm tarball`);
+    }
+
+    // Exercise the real CLI, npm installer and archive bytes, not runWithFakeNpm. A refusal must name the
+    // omitted adapter, rather than fail on archive installation or reach the fixture's schema probe.
+    for (const [index, missing] of requiredFiles.entries()) {
+      await t.test(missing, async () => {
+        const extracted = join(scratch, `case-${index}`);
+        mkdirSync(extracted);
+        await execFileAsync("tar", ["-xzf", intactTarball, "-C", extracted], commandOptions);
+        rmSync(join(extracted, "package", missing));
+        const damagedTarball = join(scratch, `missing-${index}.tgz`);
+        await execFileAsync("tar", ["-czf", damagedTarball, "-C", extracted, "package"], commandOptions);
+        const damaged = await execFileAsync("tar", ["-tzf", damagedTarball], commandOptions);
+        const damagedFiles = damaged.stdout.trim().split("\n").filter((path) => !path.endsWith("/")).sort();
+        assert.deepEqual(damagedFiles, intactFiles.filter((path) => path !== `package/${missing}`));
+
+        await assert.rejects(
+          execFileAsync(
+            process.execPath,
+            [join(REPO_ROOT, "scripts/check/pack-smoke.mjs"), "--tarball", damagedTarball, "--expect-version", version],
+            { ...commandOptions, cwd: scratch },
+          ),
+          (error) => {
+            assert.equal(error.code, 1, error.stderr);
+            assert.equal(error.stderr.trim(), `check:pack failed: packed package is missing adapter files: ${missing}`);
+            assert.doesNotMatch(error.stdout, /schemas loaded|adapter files:|version:/);
+            return true;
+          },
+        );
+      });
+    }
   }));

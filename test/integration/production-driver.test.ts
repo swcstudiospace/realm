@@ -47,9 +47,11 @@ import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
 import { DEFAULT_AGENTOS_PROBE_PATH } from "../../src/runtime/agentos-driver.js";
 import { SANDBOX_WORKSPACE_PATH } from "../../src/runtime/openshell.js";
+import { SessionStore } from "../../src/session/store.js";
 import {
   KILL_RUNNER_ARGV,
   UNKNOWN_DIGEST_IMAGE,
+  assertStartupReapLogged,
   canConnect,
   cleanupScenario,
   createScenarioEnvironment,
@@ -79,7 +81,6 @@ import {
   runCommand,
   sandboxExec,
   startMcpSession,
-  startupReapLineFor,
   stateOfStatus,
   statusFieldsOf,
   toolErrorOf,
@@ -87,6 +88,7 @@ import {
   waitForNoContainers,
   waitForNoResidue,
   DAEMON_SANDBOX_NAME,
+  DAEMON_SESSION_ID,
   type CommandResult,
   type StatusFields,
   type NodeProbeResult,
@@ -572,6 +574,13 @@ void test("production live 5: after the daemon is killed, the next realm up reap
     );
     assert.ok(left.ok, `the crash must leave the sandbox container behind: ${left.detail}`);
 
+    // The daemon and the priming MCP child are gone: no session writer runs between this snapshot and startup.
+    // reapStartup deletes every SessionStore.list() entry after a successful container sweep, even a torn/null-id record.
+    // Count that real isolated state BEFORE up recreates the daemon record; neither the log nor the notice is the oracle.
+    const recordsBeforeRestart = new SessionStore(scenario.environment.stateDir).list();
+    assert.ok(recordsBeforeRestart.includes(DAEMON_SESSION_ID), "the crash must leave the daemon's session record for startup to delete");
+    const expectedRecordsDeleted = recordsBeforeRestart.length;
+
     // The next start reaps what the crash left and creates the sandbox again. Its failure is reported with the CLI's reason code.
     const restarted = await up(scenario);
     assertExit(restarted, 0, "realm up after the daemon crash");
@@ -602,15 +611,21 @@ void test("production live 5: after the daemon is killed, the next realm up reap
     assert.ok(counts !== undefined, `the notice must state its counts: ${notice}`);
     assert.equal(counts.containers, 1, `the notice must count one container: ${notice}`);
     assert.ok(counts.sessionRecords >= 1, `the notice must count at least one session record: ${notice}`);
+    assert.equal(counts.sessionRecords, expectedRecordsDeleted, `the notice must count the pre-restart session records: ${notice}`);
     const daemonLog = readFileSync(join(scenario.environment.stateDir, "daemon.log"), "utf8");
-    assert.ok(startupReapLineFor(daemonLog, crashedContainerId) !== undefined, `daemon.log must hold a daemon.startup record for one container that names ${crashedContainerId}`);
+    assertStartupReapLogged(daemonLog, crashedContainerId, expectedRecordsDeleted);
     assert.equal(jsonLinesSinceStartup(daemonLog), true, "every daemon.log line from the restart's daemon.startup record must be JSON");
     const auditFile = join(scenario.environment.stateDir, "audit", "daemon.jsonl");
-    const verified = await realmCli(scenario.inputs, scenario.environment, ["audit", "verify", auditFile], STATUS_TIMEOUT_MS);
+    const verified = await realmCli(scenario.inputs, scenario.environment, ["audit", "verify", "--file", auditFile], STATUS_TIMEOUT_MS);
     assertExit(verified, 0, "realm audit verify after the restart");
-    const report = JSON.parse(verified.stdout) as { ok?: boolean; unparsedLines?: readonly number[] };
+    const report = JSON.parse(verified.stdout) as { ok?: boolean; files?: readonly { sessionId?: string; ok?: boolean; unparsedLines?: readonly number[] }[] };
     assert.equal(report.ok, true, `realm audit verify must report ok: ${verified.stdout}`);
-    assert.ok(Array.isArray(report.unparsedLines) && report.unparsedLines.length <= 1, `unparsedLines must be empty or only a torn tail: ${verified.stdout}`);
+    assert.ok(Array.isArray(report.files) && report.files.length === 1, `--file must verify exactly the daemon audit file: ${verified.stdout}`);
+    const daemonAudit = report.files[0];
+    assert.ok(daemonAudit !== undefined, `the daemon audit report must exist: ${verified.stdout}`);
+    assert.equal(daemonAudit.sessionId, DAEMON_SESSION_ID, `the audit report must name the daemon session: ${verified.stdout}`);
+    assert.equal(daemonAudit.ok, true, `the daemon audit chain must verify: ${verified.stdout}`);
+    assert.ok(Array.isArray(daemonAudit.unparsedLines) && daemonAudit.unparsedLines.length <= 1, `unparsedLines must be empty or only a torn tail: ${verified.stdout}`);
   } catch (error) {
     // With no daemon running, `realm down` reports "already down" and reaps nothing, so the sandbox the crash left would stay
     // and block the next scenario. One more realm up lets a daemon reap it for the cleanup's down. Its result is not judged and

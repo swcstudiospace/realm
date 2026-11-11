@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import type { ToolCall } from "../../src/contract/validate.js";
 import { makeRealmError } from "../../src/core/errors.js";
 import type { StateSnapshot } from "../../src/core/state-machine.js";
@@ -174,4 +175,56 @@ void test("OMPX-02: the pass-through names are the Realm tools, the read-only bu
     "wait",
     "write",
   ]);
+});
+
+for (const wire of [false, true]) {
+  for (const sample of [
+    { text: "héllo 🙂\n", truncated: false },
+    { text: "", truncated: false },
+    { text: "prefix", truncated: true },
+  ]) {
+    void test(`OMPX-02: registered read renders ${wire ? "serialized Buffer" : "Uint8Array"} (${sample.text.length === 0 ? "empty" : sample.truncated ? "truncated" : "UTF-8"}) text and metadata`, async () => {
+      const buffer = Buffer.from(sample.text);
+      const sha256 = createHash("sha256").update(buffer).digest("hex");
+      const value = { status: "found" as const, content: wire ? buffer : new Uint8Array(buffer), sha256, truncated: sample.truncated };
+      const done: ToolOutcome = { outcome: "done", tool: "read", value };
+      // Serialize the whole Buffer outcome exactly as the daemon channel does.
+      const outcome: ToolOutcome = wire ? JSON.parse(JSON.stringify(done)) as ToolOutcome : done;
+      const sent: ToolCall[] = [];
+      const defs = realmToolDefinitions((call) => {
+        sent.push(call);
+        return Promise.resolve(outcome);
+      });
+      const result = await definitionNamed(defs, "read").execute("read-consumer", { path: "notes.txt", maxBytes: 100 });
+      assert.deepEqual(sent, [{ read: { path: "notes.txt", maxBytes: 100 } }]);
+      assert.equal(result.isError, false);
+      assert.deepEqual(result.content, [
+        { type: "text", text: sample.text },
+        { type: "text", text: `[realm read] truncated=${String(sample.truncated)} sha256=${sha256}` },
+      ]);
+      assert.deepEqual(result.details, {
+        outcome: "done", tool: "read",
+        value: { status: "found", sha256, truncated: sample.truncated, bytes: buffer.byteLength },
+      });
+    });
+  }
+}
+
+void test("OMPX-02: registered read rejects malformed serialized bytes instead of coercing them into file text", async () => {
+  for (const content of [
+    null, "not bytes", { type: "Buffer", data: "text" }, { type: "Other", data: [65] },
+    { type: "Buffer", data: [-1] }, { type: "Buffer", data: [256] },
+    { type: "Buffer", data: [65.5] }, { type: "Buffer", data: ["65"] },
+    { type: "Buffer", data: [null] },
+  ]) {
+    const outcome = JSON.parse(JSON.stringify({
+      outcome: "done", tool: "read",
+      value: { status: "found", content, sha256: "a".repeat(64), truncated: false },
+    })) as ToolOutcome;
+    const read = definitionNamed(realmToolDefinitions(() => Promise.resolve(outcome)), "read");
+    const result = await read.execute("invalid-read", { path: "notes.txt", maxBytes: 100 });
+    assert.equal(result.isError, true);
+    assert.deepEqual(result.details, { outcome: "refused", tool: "read", code: "SCHEMA_INVALID", retryable: false });
+    assert.deepEqual(result.content, [{ type: "text", text: JSON.stringify(result.details) }]);
+  }
 });

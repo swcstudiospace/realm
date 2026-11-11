@@ -43,7 +43,7 @@ export interface DaemonDeps {
 interface StopWiring {
   readonly sendDown: (socketPath: string) => Promise<ControlReply>;
   readonly onSignal: (signal: DaemonSignal, handler: () => void) => () => void;
-  readonly writeStderr: (line: string) => void;
+  readonly logger: Logger;
 }
 
 // The AgentOS driver is always bound. Its sandbox image is config.image alone: the digest-pinned value the runtime
@@ -65,10 +65,23 @@ function productionAgentOsDriver(env: EnvironmentLike): AgentOsDriver {
 }
 
 // Starts the daemon and resolves with its exit code once it has stopped: 0 after a clean teardown,
-// 1 when start, the shutdown, or the listening server fails. Each failure writes one line carrying only a catalogue code.
+// 1 when start, the shutdown, the listening server, or diagnostic delivery fails. Failures expose only a catalogue code.
 export async function runDaemon(deps: DaemonDeps): Promise<number> {
   const start = deps.start ?? startDaemon;
   const writeStderr = deps.writeStderr ?? writeLine;
+  // Lifecycle diagnostics must reach inherited stderr even before stateDir is known. They use the
+  // common schema/redactor, but not the request threshold: the startup report is required on every
+  // start. Keep this stream separate from the rotating requests.log descriptor.
+  const diagnostics = createLogger({
+    sink: {
+      write: (line) => {
+        writeStderr(line);
+        return true;
+      },
+    },
+    level: "info",
+    now: () => new Date(),
+  });
   let started: StartedDaemon;
   try {
     const { runtimeInput, stateDir } = readHostRuntime(deps.env, deps.readConfig);
@@ -89,26 +102,29 @@ export async function runDaemon(deps: DaemonDeps): Promise<number> {
         pinnedWorkspaceRoot: roots.workspaceRoot,
         sandboxStateRoot: roots.sandboxStateRoot,
         onStartup: (report) => {
-          writeStderr(startupLine(report));
+          logStartup(diagnostics, report);
         },
         logger: requests.logger,
       });
     } catch (error: unknown) {
       requests.close();
-      writeStderr(failureLine(codeOf(error)));
+      diagnostics.error("daemon.failed", { code: codeOf(error) });
       return 1;
     }
     try {
-      return await awaitStop(started, {
+      const exitCode = await awaitStop(started, {
         sendDown: deps.sendDown ?? requestDown,
         onSignal: deps.onSignal ?? registerSignal,
-        writeStderr,
+        logger: diagnostics,
       });
+      // The logger counts sink/serialization failures instead of throwing through startup
+      // observers or signal callbacks. A lost mandatory diagnostic is not a clean exit.
+      return diagnostics.droppedLines() === 0 ? exitCode : 1;
     } finally {
       requests.close();
     }
   } catch (error: unknown) {
-    writeStderr(failureLine(codeOf(error)));
+    diagnostics.error("daemon.failed", { code: codeOf(error) });
     return 1;
   }
 }
@@ -119,10 +135,8 @@ export async function runDaemon(deps: DaemonDeps): Promise<number> {
 // daemon.failed line.
 const STARTUP_NAME_CAP = 10;
 
-function startupLine(report: StartupReport): string {
-  return JSON.stringify({
-    level: "info",
-    event: "daemon.startup",
+function logStartup(logger: Logger, report: StartupReport): void {
+  logger.info("daemon.startup", {
     containersRemoved: report.containersRemoved,
     containerIds: report.containerIds,
     recordsDeleted: report.recordsDeleted,
@@ -189,7 +203,7 @@ function awaitStop(started: StartedDaemon, wiring: StopWiring): Promise<number> 
     const shutdown = async (): Promise<number> => {
       const reply = await wiring.sendDown(started.socketPath);
       if (reply.error !== undefined) {
-        wiring.writeStderr(failureLine(reply.error.code));
+        wiring.logger.error("daemon.failed", { code: reply.error.code });
         return 1;
       }
       await started.done;
@@ -203,7 +217,7 @@ function awaitStop(started: StartedDaemon, wiring: StopWiring): Promise<number> 
           }
           shutdownRequested = true;
           void shutdown().then(settle, (error: unknown) => {
-            wiring.writeStderr(failureLine(codeOf(error)));
+            wiring.logger.error("daemon.failed", { code: codeOf(error) });
             settle(1);
           });
         }),
@@ -219,7 +233,7 @@ function awaitStop(started: StartedDaemon, wiring: StopWiring): Promise<number> 
       (error: unknown) => {
         // The listening server failed: its code is the stop reason, and the daemon exits nonzero.
         if (!shutdownRequested) {
-          wiring.writeStderr(failureLine(codeOf(error)));
+          wiring.logger.error("daemon.failed", { code: codeOf(error) });
           settle(1);
         }
       },
@@ -234,10 +248,6 @@ export async function main(): Promise<void> {
 
 function codeOf(error: unknown): ErrorCode {
   return error instanceof RealmError ? error.code : "SCHEMA_INVALID";
-}
-
-function failureLine(code: ErrorCode): string {
-  return JSON.stringify({ level: "error", event: "daemon.failed", code });
 }
 
 function writeLine(line: string): void {

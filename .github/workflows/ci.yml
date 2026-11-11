@@ -399,6 +399,8 @@ jobs:
             npm ci --ignore-scripts
             npm run build
             npm pack
+            # D-1303: smoke this tag's exact tarball and version before the artifact handoff to publish.
+            node scripts/check/pack-smoke.mjs --tarball "${dir}/agent-realm-${version}.tgz" --expect-version "${version}"
             if ! grep -qF "## [${version}]" CHANGELOG.md; then
               echo "CHANGELOG.md has no section for ${version}; refusing to regenerate notes for a published tag." >&2
               exit 1

@@ -6,12 +6,16 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Script } from "node:vm";
 import type { PodmanProbe } from "../../src/runtime/podman-version.js";
+import { createLogger, type LogFields } from "../../src/observe/logger.js";
+import { SessionStore } from "../../src/session/store.js";
 import {
   KILL_RUNNER_ARGV,
+  assertStartupReapLogged,
   createScenarioEnvironment,
   decodeReadContent,
   describeValue,
@@ -24,6 +28,7 @@ import {
   pollUntil,
   productionSkipReason,
   splitJsonRpcLines,
+  startupReapLineFor,
   stateOfStatus,
   statusFieldsOf,
   toolErrorOf,
@@ -120,6 +125,113 @@ void test("toolErrorOf refuses a result that is not a complete tool error", () =
   assert.equal(toolErrorOf({ isError: true, structuredContent: { code: 5, retryable: true } }), undefined);
   assert.equal(toolErrorOf({ isError: true, structuredContent: { code: "TOOL_TIMEOUT", retryable: "yes" } }), undefined);
   assert.equal(toolErrorOf(null), undefined);
+});
+
+// ---- CRASH-04 startup reap log -----------------------------------------------------------------------------------------------
+
+const CRASH_CONTAINER_ID = "c0ffee1234567890";
+
+// Hermetic parser input emitted through the real timestamped logger, not evidence of a live daemon reap.
+function startupLog(fields: LogFields = {}, event = "daemon.startup"): string {
+  const lines: string[] = [];
+  const logger = createLogger({
+    level: "info",
+    now: () => new Date("2026-10-31T15:08:44.000Z"),
+    sink: { write: (line) => { lines.push(line); return true; } },
+  });
+  logger.info(event, { containersRemoved: 1, containerIds: [CRASH_CONTAINER_ID], recordsDeleted: 2, ...fields });
+  return `${lines.join("\n")}\n`;
+}
+
+void test("CRASH-04: startupReapLineFor and the live consumer assertion use the independently listed session-record count", (t) => {
+  const stateDir = realpathSync(mkdtempSync(join(tmpdir(), "realm-startup-log-")));
+  t.after(() => rmSync(stateDir, { recursive: true, force: true }));
+  const store = new SessionStore(stateDir);
+  for (const [sessionId, containerId] of [["crash-bound", CRASH_CONTAINER_ID], ["crash-pending", null]] as const) {
+    store.save({
+      realmId: "7b1c2d3e-4f50-4a61-8b72-9c83d4e5f601",
+      sessionId,
+      workspaceRoot: join(stateDir, "workspace"),
+      state: "connecting",
+      controlSocketPath: join(stateDir, "control.sock"),
+      containerId,
+    });
+  }
+  // The real reaper lists names without parsing records: a torn record is deleted too, but non-record entries are not.
+  const directory = join(stateDir, "sessions");
+  writeFileSync(join(directory, "crash-torn.json"), '{"sessionId":');
+  writeFileSync(join(directory, "notes.txt"), "not a record");
+  writeFileSync(join(directory, "invalid name.json"), "{}");
+  mkdirSync(join(directory, "directory.json"));
+  const recordsBeforeRestart = store.list();
+  assert.deepEqual(recordsBeforeRestart, ["crash-bound", "crash-pending", "crash-torn"]);
+  const expectedRecordsDeleted = recordsBeforeRestart.length;
+  const log = startupLog({ recordsDeleted: expectedRecordsDeleted });
+  assert.equal(startupReapLineFor(log, CRASH_CONTAINER_ID, expectedRecordsDeleted), log.trimEnd());
+  assert.doesNotThrow(() => assertStartupReapLogged(log, CRASH_CONTAINER_ID, expectedRecordsDeleted));
+  // One removed container does not imply one deleted session record.
+  assert.equal(startupReapLineFor(log, CRASH_CONTAINER_ID, 1), undefined);
+  assert.throws(() => assertStartupReapLogged(log, CRASH_CONTAINER_ID, 1), /recordsDeleted=1/);
+});
+
+void test("CRASH-04: the parser and actual live consumer assertion reject missing, wrong-type and wrong-count recordsDeleted", () => {
+  for (const recordsDeleted of [undefined, null, "2", true, [], 0, 1, 3, -1, 1.5]) {
+    const log = startupLog({ recordsDeleted });
+    assert.equal(startupReapLineFor(log, CRASH_CONTAINER_ID, 2), undefined, `recordsDeleted=${JSON.stringify(recordsDeleted)}`);
+    assert.throws(() => assertStartupReapLogged(log, CRASH_CONTAINER_ID, 2), /recordsDeleted=2/);
+  }
+});
+
+void test("CRASH-04: startupReapLineFor matches exact ids and Podman short-id prefixes, never the reverse or a different id", () => {
+  const log = startupLog();
+  for (const id of [CRASH_CONTAINER_ID, CRASH_CONTAINER_ID.slice(0, 12)]) {
+    assert.equal(startupReapLineFor(log, id, 2), log.trimEnd());
+    assert.doesNotThrow(() => assertStartupReapLogged(log, id, 2));
+  }
+  for (const id of ["", "deadbeef1234", `${CRASH_CONTAINER_ID}extra`]) {
+    assert.equal(startupReapLineFor(log, id, 2), undefined);
+    assert.throws(() => assertStartupReapLogged(log, id, 2), /daemon\.startup/);
+  }
+  const shortLoggedId = startupLog({ containerIds: [CRASH_CONTAINER_ID.slice(0, 12)] });
+  assert.equal(startupReapLineFor(shortLoggedId, CRASH_CONTAINER_ID, 2), undefined);
+  assert.throws(() => assertStartupReapLogged(shortLoggedId, CRASH_CONTAINER_ID, 2), /daemon\.startup/);
+});
+
+void test("CRASH-04: matching a record count does not excuse a wrong event, container count or container-id field", () => {
+  const fields: readonly LogFields[] = [
+    { containersRemoved: undefined },
+    { containersRemoved: "1" },
+    { containersRemoved: 0 },
+    { containersRemoved: 2 },
+    { containerIds: undefined },
+    { containerIds: null },
+    { containerIds: CRASH_CONTAINER_ID },
+    { containerIds: [7] },
+    { containerIds: ["deadbeef1234"] },
+  ];
+  for (const log of [startupLog({}, "daemon.shutdown"), ...fields.map((value) => startupLog(value))]) {
+    assert.equal(startupReapLineFor(log, CRASH_CONTAINER_ID, 2), undefined);
+    assert.throws(() => assertStartupReapLogged(log, CRASH_CONTAINER_ID, 2), /daemon\.startup/);
+  }
+});
+
+void test("CRASH-04: startupReapLineFor skips malformed and nonmatching lines and keeps the exact matching JSON line", () => {
+  const matching = startupLog();
+  const log = `not json\r\nnull\r\n7\r\n[]\r\n${startupLog({ recordsDeleted: undefined })}${startupLog({ recordsDeleted: 1 })}${matching}\n`;
+  assert.equal(startupReapLineFor(log, CRASH_CONTAINER_ID, 2), matching.trimEnd());
+  assert.doesNotThrow(() => assertStartupReapLogged(log, CRASH_CONTAINER_ID, 2));
+  assert.equal(startupReapLineFor("not json\nnull\n", CRASH_CONTAINER_ID, 2), undefined);
+  assert.throws(() => assertStartupReapLogged("", CRASH_CONTAINER_ID, 2), /daemon\.startup/);
+});
+
+void test("CRASH-04: startupReapLineFor requires an exact nonnegative safe-integer expected record count, including zero", () => {
+  const log = startupLog({ recordsDeleted: 0 });
+  assert.equal(startupReapLineFor(log, CRASH_CONTAINER_ID, 0), log.trimEnd());
+  assert.doesNotThrow(() => assertStartupReapLogged(log, CRASH_CONTAINER_ID, 0));
+  for (const expected of [-1, 0.5, Number.NaN, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1]) {
+    assert.equal(startupReapLineFor(log, CRASH_CONTAINER_ID, expected), undefined);
+    assert.throws(() => assertStartupReapLogged(log, CRASH_CONTAINER_ID, expected), /daemon\.startup/);
+  }
 });
 
 void test("createScenarioEnvironment merges policyExtra into policy.json next to the pinned root", () => {

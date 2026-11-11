@@ -41,14 +41,14 @@ import {
 } from "../runtime/podman-probe.js";
 import { controlSocketPath, type EnvironmentLike } from "../session/paths.js";
 import { parseAnchorArgs, runAnchor } from "./anchor.js";
-import { runAuditVerify } from "./audit.js";
+import { AUDIT_VERIFY_USAGE, parseAuditVerifyArgs, runAuditVerifySelection } from "./audit.js";
 import { INIT_USAGE, InitRefusal, parseInitArgs, runInit } from "./init.js";
 
 export const CLI_COMMANDS = ["init", "up", "down", "status", "doctor", "mcp", "acp", "anchor", "audit", "metrics"] as const;
 export type CliCommand = (typeof CLI_COMMANDS)[number];
 
 const USAGE =
-  "Usage: realm <init|up|down|status|doctor|mcp|acp|anchor|audit|metrics> (realm init --image <name@sha256:digest> [--workspace <absolute path>] [--state-dir <absolute path>]; realm up|mcp|acp [--workspace <absolute path>]; realm doctor [--fix [--dry-run]]; realm anchor --session <id> [--publish] [--rpc <url>]; realm audit verify <file>)";
+  `Usage: realm <init|up|down|status|doctor|mcp|acp|anchor|audit|metrics> (realm init --image <name@sha256:digest> [--workspace <absolute path>] [--state-dir <absolute path>]; realm up|mcp|acp [--workspace <absolute path>]; realm doctor [--fix [--dry-run]]; realm anchor --session <id> [--publish] [--rpc <url>]; ${AUDIT_VERIFY_USAGE})`;
 const RETRY_INTERVAL_MS = 25;
 const MCP_POLL_INTERVAL_MS = 100;
 
@@ -635,15 +635,6 @@ async function runAnchorCommand(words: readonly string[], deps: CliDeps, stateDi
   });
 }
 
-// realm audit verify <file>: a broken chain exits 1 and names the line. Usage errors exit 2.
-function runAuditCommand(words: readonly string[]): CliResult {
-  const [verb, file, extra] = words;
-  if (verb !== "verify" || file === undefined || file.length === 0 || extra !== undefined) {
-    return { exitCode: 2, stdout: "", stderr: `${USAGE}\n` };
-  }
-  return runAuditVerify(file);
-}
-
 // realm init (ONB-01) runs before any config is read: it is the command that writes the config. A malformed
 // invocation is a usage error (exit 2). A refusal or write failure is its catalogue code on stdout and its detail
 // on stderr (exit 1). Success prints one JSON line of paths and the mode; no file content is printed.
@@ -668,7 +659,16 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
     return { exitCode: 2, stdout: "", stderr: `${USAGE}\n` };
   }
   if (parsed.command === "audit") {
-    return runAuditCommand(parsed.words);
+    const [verb, ...words] = parsed.words;
+    const args = verb === "verify" ? parseAuditVerifyArgs(words) : undefined;
+    if (args === undefined) {
+      return { exitCode: 2, stdout: "", stderr: `realm audit verify: usage: ${AUDIT_VERIFY_USAGE}\n` };
+    }
+    if (args.file !== undefined) {
+      // An explicit absolute file is independent of runtime config. The selector
+      // runner never consults stateDir in this mode; session selectors below do.
+      return runAuditVerifySelection(words, { stateDir: "" });
+    }
   }
   if (parsed.command === "init") {
     return runInitCommand(parsed.words, deps);
@@ -748,6 +748,8 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
         : runDoctorFix(resolved, runtimeConfig, parsed.words[1] === "--dry-run");
     case "anchor":
       return runAnchorCommand(parsed.words, deps, stateDir);
+    case "audit":
+      return runAuditVerifySelection(parsed.words.slice(1), { stateDir });
   }
 }
 

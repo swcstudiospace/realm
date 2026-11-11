@@ -9,6 +9,9 @@
 
 import { createHash } from "node:crypto";
 import { closeSync, constants, fstatSync, openSync, readSync } from "node:fs";
+import { basename, extname } from "node:path";
+import { ANCHOR_RECORD_VERSION, merkleRoot, type AnchorRecord } from "./anchor.js";
+import { isSessionId } from "../session/paths.js";
 
 export const AUDIT_LINE_MAX_BYTES = 4 * 1024 * 1024;
 export const AUDIT_GENESIS_PREV = "0".repeat(64);
@@ -29,11 +32,28 @@ export type ChainBreakReason =
   | "seq-gap"
   | "seq-regress"
   | "prev-mismatch"
-  | "line-too-long";
+  | "line-too-long"
+  | "shorter-than-anchor"
+  | "anchor-root-mismatch"
+  | "shorter-than-head"
+  | "head-mismatch";
 
 export interface ChainBreak {
   readonly line: number;
   readonly reason: ChainBreakReason;
+}
+
+// `seq` here is a 1-based PHYSICAL line position, not the JSON record's chain seq.
+// This makes a printed head reusable across legacy prefixes and torn fragments.
+export interface AuditCheckpointHead {
+  readonly seq: number;
+  readonly lineSha256: string;
+}
+
+export interface VerifyAuditOptions {
+  readonly head?: AuditCheckpointHead;
+  readonly anchor?: AnchorRecord;
+  readonly sessionId?: string;
 }
 
 export interface VerifyAuditResult {
@@ -43,11 +63,50 @@ export interface VerifyAuditResult {
   readonly legacyLines: number;
   readonly unparsedLines: readonly number[];
   readonly tornTail: boolean;
+  readonly chainStartLine: number | null;
+  readonly head: AuditCheckpointHead | null;
+  readonly anchor?: { readonly ok: boolean; readonly lineCount: number };
   readonly broken?: ChainBreak;
 }
 
 export function sha256Hex(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
+}
+
+export function parseAuditHead(value: string): AuditCheckpointHead | undefined {
+  const match = /^([1-9][0-9]*):([0-9a-f]{64})$/.exec(value);
+  if (match === null || match[0] !== value) {
+    return undefined;
+  }
+  const seq = Number(match[1]);
+  const lineSha256 = match[2];
+  return Number.isSafeInteger(seq) && lineSha256 !== undefined ? { seq, lineSha256 } : undefined;
+}
+
+// Parse the record itself (the `record` member of anchor's dry-run output), never a
+// signature or a claim about its origin. Authenticating the supplied checkpoint is
+// the operator's responsibility; verification makes no network request.
+export function parseAuditAnchor(value: unknown): AnchorRecord | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const { version, sessionId, lineCount, rootSha256, createdAt } = record;
+  if (
+    Object.keys(record).length !== 5 ||
+    version !== ANCHOR_RECORD_VERSION ||
+    typeof sessionId !== "string" || !isSessionId(sessionId) || sessionId.trim() !== sessionId ||
+    typeof lineCount !== "number" || !Number.isSafeInteger(lineCount) || lineCount < 1 ||
+    typeof rootSha256 !== "string" || rootSha256.length !== 64 || !HEX64.test(rootSha256) ||
+    typeof createdAt !== "string"
+  ) {
+    return undefined;
+  }
+  const time = new Date(createdAt);
+  if (Number.isNaN(time.getTime()) || time.toISOString() !== createdAt) {
+    return undefined;
+  }
+  return { version, sessionId, lineCount, rootSha256, createdAt };
 }
 
 // Reads the chain head from an already-open descriptor. A physical line is the JSON
@@ -136,23 +195,39 @@ function isChained(record: Record<string, unknown>): boolean {
     seq >= 1 &&
     seq <= Number.MAX_SAFE_INTEGER &&
     typeof prev === "string" &&
-    HEX64.test(prev)
+    prev.length === 64 && HEX64.test(prev)
   );
 }
 
-export function verifyAuditFile(file: string): VerifyAuditResult {
+export function verifyAuditFile(file: string, options: VerifyAuditOptions = {}): VerifyAuditResult {
+  const stem = basename(file, extname(file));
+  const sessionId = options.sessionId ?? (isSessionId(stem) && stem.trim() === stem ? stem : "file");
+  if (!isSessionId(sessionId) || sessionId.trim() !== sessionId) {
+    throw new TypeError("invalid audit session id");
+  }
+  if (options.head !== undefined && (
+    !Number.isSafeInteger(options.head.seq) || options.head.seq < 1 ||
+    options.head.lineSha256.length !== 64 || !HEX64.test(options.head.lineSha256)
+  )) {
+    throw new TypeError("invalid retained audit head");
+  }
+  if (options.anchor !== undefined && (
+    parseAuditAnchor(options.anchor) === undefined || options.anchor.sessionId !== sessionId
+  )) {
+    throw new TypeError("invalid audit anchor or session mismatch");
+  }
   const fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     if (!fstatSync(fd).isFile()) {
       throw new Error("audit file is not a regular file");
     }
-    return verifyDescriptor(fd);
+    return verifyDescriptor(fd, options);
   } finally {
     closeSync(fd);
   }
 }
 
-function verifyDescriptor(fd: number): VerifyAuditResult {
+function verifyDescriptor(fd: number, options: VerifyAuditOptions): VerifyAuditResult {
   const unparsedLines: number[] = [];
   let lines = 0;
   let chainedLines = 0;
@@ -163,6 +238,37 @@ function verifyDescriptor(fd: number): VerifyAuditResult {
   let tornTail = false;
   let broken: ChainBreak | undefined;
   let carry = Buffer.alloc(0);
+  let chainStartLine: number | null = null;
+  let headLine = 0;
+  let retainedHash: string | undefined;
+  let anchor: VerifyAuditResult["anchor"];
+  const anchoredLines: Uint8Array[] = [];
+  const checkpoint = options.anchor;
+
+  const result = (atEof: boolean): VerifyAuditResult => {
+    if (atEof && broken === undefined) {
+      if (checkpoint !== undefined && lines < checkpoint.lineCount) {
+        anchor = { ok: false, lineCount: checkpoint.lineCount };
+        broken = { line: lines + 1, reason: "shorter-than-anchor" };
+      } else if (anchor?.ok === false) {
+        broken = { line: checkpoint?.lineCount ?? lines, reason: "anchor-root-mismatch" };
+      }
+      if (broken === undefined && options.head !== undefined) {
+        if (lines < options.head.seq) {
+          broken = { line: lines + 1, reason: "shorter-than-head" };
+        } else if (retainedHash !== options.head.lineSha256) {
+          broken = { line: options.head.seq, reason: "head-mismatch" };
+        }
+      }
+    }
+    return {
+      ok: broken === undefined,
+      lines, chainedLines, legacyLines, chainStartLine, unparsedLines, tornTail,
+      head: headLine === 0 ? null : { seq: headLine, lineSha256: prevRaw },
+      ...(broken === undefined ? {} : { broken }),
+      ...(anchor === undefined ? {} : { anchor }),
+    };
+  };
 
   const finish = (line: Buffer, atEof: boolean): void => {
     if (line.length === 0 && atEof && !tornTail) {
@@ -187,6 +293,7 @@ function verifyDescriptor(fd: number): VerifyAuditResult {
         broken = { line: lineNo, reason: "bad-chain-start" };
       } else {
         chainStarted = true;
+        chainStartLine = lineNo;
         lastSeq = parsed["seq"] as number;
         chainedLines += 1;
       }
@@ -207,9 +314,26 @@ function verifyDescriptor(fd: number): VerifyAuditResult {
       }
     }
     prevRaw = sha256Hex(line);
+    headLine = lineNo;
+    if (lineNo === options.head?.seq) {
+      retainedHash = prevRaw;
+    }
+    if (checkpoint !== undefined && lineNo <= checkpoint.lineCount) {
+      anchoredLines.push(line);
+      if (lineNo === checkpoint.lineCount) {
+        anchor = {
+          ok: Buffer.from(merkleRoot(anchoredLines)).toString("hex") === checkpoint.rootSha256,
+          lineCount: checkpoint.lineCount,
+        };
+        anchoredLines.length = 0;
+      }
+    }
   };
 
-  const chunk = Buffer.alloc(TAIL_CHUNK_BYTES);
+  // Until the anchored prefix is consumed, keep chunk-backed views alive for the
+  // existing public Merkle API. No JSON reserialization, duplicate hash algorithm,
+  // second file read, or per-line copy. Afterwards reuse the single read buffer.
+  let chunk = Buffer.alloc(TAIL_CHUNK_BYTES);
   for (;;) {
     const read = readSync(fd, chunk, 0, TAIL_CHUNK_BYTES, null);
     if (read === 0) {
@@ -224,26 +348,30 @@ function verifyDescriptor(fd: number): VerifyAuditResult {
         if (carry.length + piece.length > AUDIT_LINE_MAX_BYTES) {
           lines += 1;
           broken = { line: lines, reason: "line-too-long" };
-          return resultOf(lines, chainedLines, legacyLines, unparsedLines, true, broken);
+          tornTail = true;
+          return result(false);
         }
         carry = Buffer.concat([carry, piece]);
         break;
       }
       const piece = chunk.subarray(offset, newline);
-      const line = carry.length === 0 ? Buffer.from(piece) : Buffer.concat([carry, piece]);
+      const line = carry.length === 0 ? piece : Buffer.concat([carry, piece]);
       carry = Buffer.alloc(0);
       finish(line, false);
       if (broken !== undefined) {
-        return resultOf(lines, chainedLines, legacyLines, unparsedLines, false, broken);
+        return result(false);
       }
       offset = newline + 1;
+    }
+    if (checkpoint !== undefined && lines < checkpoint.lineCount) {
+      chunk = Buffer.alloc(TAIL_CHUNK_BYTES);
     }
   }
   if (carry.length > 0) {
     tornTail = true;
     finish(carry, true);
   }
-  return resultOf(lines, chainedLines, legacyLines, unparsedLines, tornTail, broken);
+  return result(true);
 }
 
 function acceptChainStart(record: Record<string, unknown>, lineNo: number, prevRaw: string): boolean {
@@ -251,21 +379,3 @@ function acceptChainStart(record: Record<string, unknown>, lineNo: number, prevR
   return record["seq"] === 1 && record["prev"] === expected;
 }
 
-function resultOf(
-  lines: number,
-  chainedLines: number,
-  legacyLines: number,
-  unparsedLines: readonly number[],
-  tornTail: boolean,
-  broken: ChainBreak | undefined,
-): VerifyAuditResult {
-  return {
-    ok: broken === undefined,
-    lines,
-    chainedLines,
-    legacyLines,
-    unparsedLines,
-    tornTail,
-    ...(broken === undefined ? {} : { broken }),
-  };
-}
