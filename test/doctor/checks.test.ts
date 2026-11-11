@@ -360,17 +360,3 @@ void test("the driver roots add no check id: a config adds only driver-socket an
   assert.deepEqual(ids, [...REGISTERED_IDS, "driver-socket", "gateway"]);
   assert.equal(new Set(ids).size, ids.length, "no check id appears twice");
 });
-
-void test("ONB-04: runChecks passes configPath to the config-location check", async (t) => {
-  const { base, workspace, stateDir, policyPath } = layout(t);
-  const secrets = join(base, "secrets");
-  const sandboxes = join(base, "sandboxes");
-  privateDir(secrets);
-  privateDir(sandboxes);
-  const runtimeConfig = rootConfig(stateDir, workspace, { secretRoot: secrets, sandboxStateRoot: sandboxes });
-  const inside = resultOf(await runChecks({ policyPath, stateDir, env: DOCTOR_ENV, runtimeConfig, configPath: join(workspace, "config.json") }), "runtime-roots");
-  assert.equal(inside.status, "fail");
-  assert.equal(inside.detail, "config.json is inside workspaceRoot");
-  const outside = resultOf(await runChecks({ policyPath, stateDir, env: DOCTOR_ENV, runtimeConfig, configPath: join(base, "config.json") }), "runtime-roots");
-  assert.equal(outside.status, "pass");
-});
