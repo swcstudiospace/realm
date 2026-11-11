@@ -4,6 +4,46 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.3.27] - 2026-11-02
+
+### Added
+- feat(omp): forward the registered write to a reachable daemon while the realm is inactive, and refuse when unreachable (phase 16, OMPX-04) (4cea401)
+- feat(audit): verify --anchor against realm anchor records by lineCount and Merkle root (phase 17, OBS-01) (d91deb0)
+- feat(tools): record the sha256 of a write's input on its admission line (phase 16, OMPX-05) (6639cf6)
+- feat(audit): wire checkpoint verification into realm audit verify with --file, --session, --head and --anchor (phase 17, OBS-01) (1fa8f1b)
+- feat(omp): hide the same-name Realm write while disconnected in advisory mode, and restore built-ins on drift (phase 16, OMPX-02, OMPX-03, OMPX-04) (b0055ae)
+- feat(daemon): write startup and early-failure lines as JSON with ts, event and code (phase 17, OBS-02) (2e48073)
+- feat(audit): name the successor line and verify tail loss, prefix change and legacy lines (phase 17, OBS-01) (2aafd01)
+
+### Changed
+- refactor(runtime): remove qualified unused loader and refusal seams (a884c7d)
+
+### Fixed
+- fix(doctor): report a created state directory before its open can fail (fcb3d56)
+- fix(audit): read unparsed lines in one scan and stream the anchor prefix (59804f5)
+- fix(omp): keep a refused attach only for the daemon's own root (ea486f4)
+- fix(runtime): a permission error on the driver socket is no answer, not driver loss (5a68eea)
+- fix(omp): show the refusal code when up is refused with a live daemon (dccd974)
+- fix(omp): never spawn the daemon under a Bun host (600d1a7)
+- fix(omp): load the realm plugin inside the compiled Omp binary (27891df)
+- fix(runtime): an unprobeable driver socket is not driver loss (76a5dc0)
+- fix(runtime): report a compute driver that does not answer as OPENSHELL_GATEWAY_LOST (a24cdc2)
+- fix(onboarding): safely initialize roots and expose doctor repairs (b6eaf27)
+
+### Documentation
+- docs(omp): describe the refused-up rule and its pre-upgrade case (618a579)
+- docs(omp): the pinned root is the directory itself; a subdirectory is refused too (069b73b)
+- docs(omp): a session outside the pinned root is refused with POLICY_DENIED (0aba1ea)
+- docs: name REALM_DRIVER_SOCKET in the live prerequisites; realm up, then /realm-retry (b26b062)
+
+### Maintenance
+- test(omp): kill the MCP child when its exit deadline is missed (df728fd)
+- test(omp): ignore the coverage env in the spawned-child assertion (5527882)
+- test(omp): start the OMPX-05 Omp in the pinned project (8196485)
+- test(daemon): wait for the spawn-env probe's complete output (c522c74)
+- test(omp): add the gated real-stack OMPX-05 case and export its shared live helpers (phase 16) (beb2a28)
+- test(omp): repair native create and isolate measured tool traces (6444eb2)
+
 ## [0.3.26] - 2026-10-30
 
 ### Documentation
