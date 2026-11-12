@@ -16,13 +16,12 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-# Every job runs on the Omega CI runner pool, never on GitHub-hosted runners
-# (swcstudiospace/Omega-Prime docs/ci-runners.md).
+# The PR gate jobs (verify, site, audit) run on GitHub-hosted runners. The build and publish jobs, which run only on main,
+# run on the Omega CI runner pool (swcstudiospace/Omega-Prime docs/ci-runners.md).
 jobs:
   verify:
     name: Verify (Node ${{ matrix.node-version }})
-    # Fork pull requests are skipped instead of queuing: the Omega CI pool only runs this
-    # organisation's own code.
+    # Fork pull requests are skipped instead of queuing: this repository's own code is the only code that runs.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 30
