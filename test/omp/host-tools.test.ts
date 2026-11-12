@@ -70,6 +70,44 @@ void test("a host tool setter that never settles fails its change at the budget 
   assert.deepEqual([...active].sort(), [...FAIL_CLOSED_TOOLS].sort());
 });
 
+void test("a host tool setter that applies after its budget keeps the removal record in step with the host", { timeout: 10_000 }, async (t: TestContext) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let active: string[] = [...REGISTERED];
+  let setterCalls = 0;
+  const late: { release: (() => void) | undefined } = { release: undefined };
+  const pi = {
+    getAllTools: (): { name: string }[] => REGISTERED.map((name) => ({ name })),
+    getActiveTools: (): string[] => [...active],
+    setActiveTools: (names: string[]): Promise<void> => {
+      setterCalls += 1;
+      if (setterCalls === 1) {
+        return new Promise<void>((resolve) => {
+          late.release = () => {
+            active = [...names];
+            resolve();
+          };
+        });
+      }
+      active = [...names];
+      return Promise.resolve();
+    },
+  };
+  const tools = hostToolSetOf(pi);
+
+  const first = setHostMode(tools, "fail-closed", () => true);
+  await yieldTurn();
+  t.mock.timers.tick(HOST_TOOL_SET_BUDGET_MS);
+  await assert.rejects(first, (error: unknown) => error instanceof RealmError && error.code === "TOOL_TIMEOUT");
+
+  // The host applies the fail-closed set after the budget has already expired.
+  late.release?.();
+  await yieldTurn();
+  assert.deepEqual([...tools.removed].sort(), ["edit", "web_search"]);
+
+  await setHostMode(tools, "advisory", () => true);
+  assert.ok(active.includes("edit") && active.includes("web_search"), "the advisory change restores the tools the late setter removed");
+});
+
 // A status UI whose writes can be made to throw. A refused write is still recorded as an attempt.
 class StatusWriteUi implements OmpStatusUi {
   failing = false;

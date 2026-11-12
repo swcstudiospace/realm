@@ -81,15 +81,24 @@ async function applyHostMode(tools: HostToolSet, mode: PolicyMode, isCurrent: ()
   const plan = planHostTools(mode, pi.getAllTools().map((tool) => tool.name), pi.getActiveTools(), tools.removed);
   // Owed going into the change, so a removal that only partly holds is still owed a restore.
   const owedIn = [...new Set([...tools.removed, ...plan.owed])];
-  try {
-    if (!sameToolNames(pi.getActiveTools(), plan.wanted)) {
-      await withTimeout(pi.setActiveTools(plan.wanted), HOST_TOOL_SET_BUDGET_MS, "TOOL_TIMEOUT");
-    }
-  } finally {
-    // Read back whether or not the setter held, and whether or not this change is still current.
+  const readBack = (): void => {
     const reported = pi.getActiveTools();
     const registered = pi.getAllTools().map((tool) => tool.name);
     tools.removed = owedIn.filter((name) => registered.includes(name) && !reported.includes(name));
+  };
+  let setter: Promise<void> | undefined;
+  try {
+    if (!sameToolNames(pi.getActiveTools(), plan.wanted)) {
+      setter = pi.setActiveTools(plan.wanted);
+      await withTimeout(setter, HOST_TOOL_SET_BUDGET_MS, "TOOL_TIMEOUT");
+    }
+  } finally {
+    // Read back whether or not the setter held, and whether or not this change is still current.
+    readBack();
+    if (setter !== undefined) {
+      // A setter past its budget may still apply later. Its read-back then replaces the record, so the next owner plans from the host.
+      setter.then(readBack, readBack);
+    }
   }
   if (!sameToolNames(pi.getActiveTools(), plan.wanted)) {
     throw makeRealmError("POLICY_DENIED");
