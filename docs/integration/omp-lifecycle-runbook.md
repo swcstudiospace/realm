@@ -89,7 +89,7 @@ Who removes the orphan: the sweep in `src/fs/temp-sweep.ts` (`sweepOrphanTempFil
 
 ## The gated guard suite
 
-The four cases in `test/integration/omp-guard.test.ts` run against the built Realm plugin. Each writes its policy mode explicitly, starts an in-process daemon over `FakeExecutionService` and `FakeBridge`, and drives a real Omp with the scripted provider. C1–C3 call the registered Realm `write`; C4 calls the retained native `edit`. This is not an LLM-driven run. The isolated profile needs no Podman, gateway or image for these fake-backed cases.
+The six guard cases in `test/integration/omp-guard.test.ts` (C1, C1b, C2, C3, C4 and C4b) run against the built Realm plugin. Each writes its policy mode explicitly, starts an in-process daemon over `FakeExecutionService` and `FakeBridge`, and drives a real Omp with the scripted provider. C1, C1b, C2 and C3 call the registered Realm `write`; C4 and C4b call the retained native `edit`. This is not an LLM-driven run. The isolated profile needs no Podman, gateway or image for these fake-backed cases.
 
 Opt in to C1–C4 with `REALM_LIVE_OMP=1`. `REALM_OMP_BIN` optionally names the Omp executable. Each built-Realm guard profile now opts in to `refuseExternalNetwork`: HTTP(S)/ALL_PROXY (upper- and lowercase) point at the already-listening scripted-provider port, with NO_PROXY/no_proxy limited to `127.0.0.1,localhost`. No ambient credentials or proxy configuration are copied into the child. The helper defaults to false, leaving the separate spike's cold/proxy controls unchanged. This is a harness network control, not an OS egress boundary. Parent verification runs this command only after the joined edit wave and build:
 
@@ -101,10 +101,12 @@ When `REALM_LIVE_OMP` is unset, or Omp is absent, the file skips and names the f
 
 | Case | Script and required observable result |
 |---|---|
-| C1 | Attach advisory, await active, take the daemon down, call registered `write`. `REALM_NOT_ACTIVE`, `isError: true`, absent target, no host advisory notice. |
+| C1 | Attach advisory with the realm inactive and the daemon reachable (the container create is refused, so the daemon answers with its realm in error), await that status, then call registered `write` twice. `isError: false` each time, the realm error warning on every call, exact host bytes after each write, and the write stays in the offered tool list. |
+| C1b | Attach advisory, await active, take the daemon down, call registered `write`. `REALM_NOT_ACTIVE`, `isError: true`, absent target, no notice. |
 | C2 | Attach fail-closed, await active, take the daemon down, call registered `write`. `REALM_NOT_ACTIVE`, `isError: true`, absent target, error on the provider's next request. |
 | C3 | Keep the daemon active and call registered `write`. `isError: false`, exact host workspace bytes; record the offered tool names. This fake-backed result is not sandbox containment proof. |
-| C4 | Set `PI_EDIT_VARIANT=patch` only for this case's Omp child. Begin with absent `c4-created.txt`; attach advisory, await active, take the daemon down, then call native `edit {path:"c4-created.txt",edits:[{op:"create",diff:"c4\n"}]}`. Require the advisory notice, `isError: false`, exact host bytes `c4\n`, and that successful result in the provider's next request. |
+| C4 | Native positive control. Set `PI_EDIT_VARIANT=patch` only for this case's Omp child. Begin with absent `c4-created.txt`; attach advisory with the realm inactive and the daemon reachable, await that status, then call native `edit {path:"c4-created.txt",edits:[{op:"create",diff:"c4\n"}]}`. Require the realm error warning as the only notice, `isError: false`, exact host bytes `c4\n`, and that successful result in the provider's next request. |
+| C4b | Native refusal. Set `PI_EDIT_VARIANT=patch`; attach advisory, await active, take the daemon down, then call native `edit {path:"c4b-refused.txt",...}`. `isError: true`, a `REALM_NOT_ACTIVE` result text, absent target, and no notice. |
 
 C4 uses the installed native patch variant's supported tag-free CREATE, not a fabricated hashline tag. Realm `read` does not register native edit snapshots, and its SHA-256 is not a native snapshot tag. No Realm-read preflight, snapshot registration workaround or weakened validation is needed.
 
