@@ -58,7 +58,7 @@ providers:
 |---|---|---|
 | 3, 4 | status moves from `○ realm disconnected · connecting` to `● realm active · container running`; the write succeeds and the file exists | status stays `connecting` beyond the 200 s budget, or ends with a code such as `POLICY_DENIED`, `SCHEMA_INVALID` or `PODMAN_MACHINE_DOWN` (see `SANDBOX-LIFECYCLE-FINDINGS.md`, section 4) |
 | 5 | status `○ realm disconnected · REALM_NOT_ACTIVE`; the write ends with `isError` true and the text `REALM_NOT_ACTIVE`; `guard-default.txt` does not exist | the file exists |
-| 6 | status `○ realm disconnected · REALM_NOT_ACTIVE`; a notice `realm status unavailable (REALM_NOT_ACTIVE); the write proceeds under advisory policy`; the file exists | the write fails, or no notice appears |
+| 6 | status `○ realm disconnected · REALM_NOT_ACTIVE`. If the status cannot be read (daemon gone): the write ends with `isError` true and the code of the failed read (`REALM_NOT_ACTIVE` or `TOOL_TIMEOUT`), no notice that the write proceeds appears, and `guard-advisory.txt` does not exist. If a daemon answers in a state other than active: the write is forwarded with the notice `realm is <state>; the write proceeds under advisory policy`, and the file exists | the write proceeds on an unreadable status, or a notice `realm status unavailable` appears |
 
 The first request that the provider logs lists the tools Omp offered the model: expect Omp's own tools only, with no Realm tool.
 
