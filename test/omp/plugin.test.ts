@@ -1313,15 +1313,15 @@ function sessionOf(fixture: Fixture, client: DaemonClient | null, mode: PolicyMo
   return { ctx: fixture.ctx, attachedCwd: fixture.ctx.cwd, tools: fixture.tools, client, mode, timers: new Map(), poll: null, refreshing: false, errorStamp: null, refusal: null, link: "off", reattachCount: 0, wait: null, onLinkLost: null };
 }
 
-// The policy mode the plugin last published. The probe reads it through the one path that shows it: with the status unreadable,
-// an edit follows the published mode, advisory passing it and fail-closed refusing it. It changes no host tool.
+// The policy mode the plugin last published. With the status unreadable, the Realm write is the one guarded call whose verdict
+// still follows the published mode: fail-closed lets it reach the daemon (undefined), advisory refuses it. The probe changes no host tool.
 async function publishedModeOf(fixture: Fixture): Promise<PolicyMode> {
   fixture.daemon.hangStatus = true;
-  const verdict = toolCallOf(fixture.pi)({ toolName: "edit" });
+  const verdict = toolCallOf(fixture.pi)({ toolName: "write" });
   expireTimer(fixture.ctx, GUARD_STATUS_BUDGET_MS);
   const result = await verdict;
   fixture.daemon.hangStatus = false;
-  return result === undefined ? "advisory" : "fail-closed";
+  return result === undefined ? "fail-closed" : "advisory";
 }
 
 void test("OMPX-03 (T2): a host bash call in fail-closed is refused with POLICY_DENIED whatever state the status reads", async () => {

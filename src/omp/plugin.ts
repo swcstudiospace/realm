@@ -707,9 +707,10 @@ function nowIso(): string {
 // Omp refuses a removed tool before this hook runs. bash is the one built-in fail-closed keeps active, so this hook is what refuses
 // it, with a catalogue code Omp's own refusal lacks.
 //
-// The state comes from a daemon status read bounded by GUARD_STATUS_BUDGET_MS. When the status cannot be read, the last
-// published mode decides: advisory warns a guarded call, fail-closed, or no mode yet, refuses it. Any other host tool whose
-// status cannot be read is refused, because its mode is unconfirmed.
+// The state comes from a daemon status read bounded by GUARD_STATUS_BUDGET_MS. When the status cannot be read, a guarded call
+// (edit) is refused in every mode (CR-01): the advisory allowance needs a reachable daemon, which an unreadable status does not
+// confirm. The Realm write is refused under advisory and otherwise reaches the daemon, which decides it. Any other host tool
+// whose status cannot be read is refused, because its mode is unconfirmed.
 
 export async function guardHostToolCall(
   toolName: unknown,
@@ -757,12 +758,13 @@ export async function guardHostToolCall(
       paintRefusal(session, codeOfError(error));
     }
     reportLinkLoss(session, codeOfError(error), isCurrent);
-    if (toolName === REALM_WRITE_NAME) {
-      // The Realm write is never hidden, so the daemon decides it. With no client the daemon call is refused there (B2).
+    if (toolName === REALM_WRITE_NAME && session.mode !== "advisory") {
+      // Fail-closed never hides the Realm write, so the daemon decides it. With no client the daemon call is refused there (B2).
       return undefined;
     }
-    if (GUARDED_HOST_TOOLS.includes(toolName)) {
-      return unreadableVerdict(session, error);
+    if (toolName === REALM_WRITE_NAME || GUARDED_HOST_TOOLS.includes(toolName)) {
+      // Advisory is the exception: its allowance needs a reachable daemon, which an unreadable status does not confirm.
+      return unreadableVerdict(error);
     }
     return { block: true, reason: "POLICY_DENIED" };
   }
@@ -840,12 +842,8 @@ function readStatus(session: ActiveSession): Promise<DaemonStatus> {
   });
 }
 
-function unreadableVerdict(session: ActiveSession, error: unknown): HostToolVerdict | undefined {
+function unreadableVerdict(error: unknown): HostToolVerdict {
   const code = error instanceof RealmError ? error.code : "REALM_NOT_ACTIVE";
-  if (session.mode === "advisory") {
-    session.ctx.ui.notify(`realm status unavailable (${code}); the write proceeds under advisory policy`);
-    return undefined;
-  }
   return { block: true, reason: code };
 }
 
