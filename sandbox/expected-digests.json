@@ -8,7 +8,7 @@
   },
   "agentosRunner": {
     "path": "/usr/local/lib/realm/agentos-runner.js",
-    "sha256": "320a8b5b4095cd7aac86d2828283baa8c3aadd410700fddc01a43d6e1cd717f5"
+    "sha256": "af6dbf982858a4ac6c12fbae6e9de2ecc9c2e6011e8c1c802fbd2730cb2ed5b9"
   },
   "agentosProbe": {
     "path": "/usr/local/lib/realm/agentos-probe.js",
