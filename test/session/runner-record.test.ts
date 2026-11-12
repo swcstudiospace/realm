@@ -10,7 +10,7 @@ import { groupHasMembers, runnerRecordOf, stopRecordedRunner } from "../../src/s
 const LEADER_SCRIPT = "sleep 600 & sleep 0.5";
 const GRACE_MS = 200;
 
-void test("stopping a recorded runner kills group members that outlive their exited leader", async () => {
+void test("stopping a recorded runner with an absent leader signals no group member and refuses adoption", async () => {
   const leader = spawn("sh", ["-c", LEADER_SCRIPT], { detached: true, stdio: "ignore" });
   const pid = leader.pid;
   assert.ok(pid !== undefined);
@@ -20,8 +20,8 @@ void test("stopping a recorded runner kills group members that outlive their exi
     await once(leader, "exit");
     assert.equal(groupHasMembers(pid), true, "the grandchild is still in the group once the leader has exited");
 
-    assert.equal(await stopRecordedRunner(record, GRACE_MS, groupHasMembers), true);
-    assert.equal(groupHasMembers(pid), false, "no member of the recorded group survives the stop");
+    assert.equal(await stopRecordedRunner(record, GRACE_MS, groupHasMembers), false, "adoption is refused while members remain");
+    assert.equal(groupHasMembers(pid), true, "the group is not signalled once its leader is absent");
   } finally {
     if (groupHasMembers(pid)) {
       process.kill(-pid, "SIGKILL");

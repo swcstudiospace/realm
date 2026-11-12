@@ -184,7 +184,9 @@ async function waitGone(pgid: number, ms: number, groupLive: (pgid: number) => b
 // Stops the runner of a recorded session. True only when the session may be adopted: the recorded group has no live member
 // left. A leader that is other, a reused pid, is refused and nothing is signalled. A live leader gets SIGTERM; an absent
 // leader gets none. The group is then awaited for at most graceMs, so an unreaped zombie leader has time to be reaped. When
-// members still remain, the group gets SIGKILL even if its leader has exited, and it must be empty once the kill settles.
+// members still remain, the group gets SIGKILL only while its recorded leader is the same process. An absent leader leaves the
+// group unsignalled, so the stop returns false and adoption is refused: a group id can be reused by another job, so the
+// members cannot be tied to this runner once its leader is gone.
 // Every wait is bounded, and a wait that expires returns false.
 export async function stopRecordedRunner(
   record: RunnerRecord,
@@ -198,6 +200,6 @@ export async function stopRecordedRunner(
   if (await waitGone(record.pgid, graceMs, groupLive)) {
     return true;
   }
-  signalGroup(record.pgid, "SIGKILL");
+  signalRecordedGroup(record, "SIGKILL");
   return waitGone(record.pgid, KILL_SETTLE_MS, groupLive);
 }
