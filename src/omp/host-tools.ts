@@ -84,7 +84,8 @@ async function applyHostMode(tools: HostToolSet, mode: PolicyMode, isCurrent: ()
   const readBack = (): void => {
     const reported = pi.getActiveTools();
     const registered = pi.getAllTools().map((tool) => tool.name);
-    tools.removed = owedIn.filter((name) => registered.includes(name) && !reported.includes(name));
+    const owed = new Set([...tools.removed, ...owedIn]);
+    tools.removed = [...owed].filter((name) => registered.includes(name) && !reported.includes(name));
   };
   let setter: Promise<void> | undefined;
   try {

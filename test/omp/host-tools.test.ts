@@ -283,3 +283,45 @@ void test("a notice that itself throws is written to stderr, not an unhandled re
 
   assert.deepEqual(written, ["realm status update failed and its notice could not be shown: unexpected error\n"]);
 });
+
+void test("a late setter that rejects does not erase a newer removal record", { timeout: 10_000 }, async (t: TestContext) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let active: string[] = [...REGISTERED];
+  let registered: string[] = [...REGISTERED];
+  let setterCalls = 0;
+  const late: { reject: ((reason: unknown) => void) | undefined } = { reject: undefined };
+  const pi = {
+    getAllTools: (): { name: string }[] => registered.map((name) => ({ name })),
+    getActiveTools: (): string[] => [...active],
+    setActiveTools: (names: string[]): Promise<void> => {
+      setterCalls += 1;
+      if (setterCalls === 1) {
+        return new Promise<void>((_resolve, reject) => {
+          late.reject = reject;
+        });
+      }
+      active = [...names];
+      return Promise.resolve();
+    },
+  };
+  const tools = hostToolSetOf(pi);
+
+  const first = setHostMode(tools, "fail-closed", () => true);
+  await yieldTurn();
+  t.mock.timers.tick(HOST_TOOL_SET_BUDGET_MS);
+  await assert.rejects(first, (error: unknown) => error instanceof RealmError && error.code === "TOOL_TIMEOUT");
+
+  // An MCP tool appears while the first setter is still pending; a second change removes it.
+  registered = [...REGISTERED, "mcp_tool"];
+  active = [...active, "mcp_tool"];
+  await setHostMode(tools, "fail-closed", () => true);
+  assert.ok(tools.removed.includes("mcp_tool"));
+
+  // The first setter now fails. Its read-back must not drop the newer removal.
+  late.reject?.(new Error("late failure"));
+  await yieldTurn();
+  assert.ok(tools.removed.includes("mcp_tool"), "the older setter must not erase the newer removal");
+
+  await setHostMode(tools, "advisory", () => true);
+  assert.ok(active.includes("mcp_tool"), "the advisory change restores the tool the newer change removed");
+});
