@@ -10,8 +10,11 @@
 //   C2 fail-closed, realm down: the write is blocked with REALM_NOT_ACTIVE, the file is absent, and the provider's next
 //      request carries that error.
 //   C3 realm active: the write proceeds on the host. The offered tool list is recorded, not asserted; Phase 16 owns removal.
-//   C4 advisory, realm down: the built-in patch-mode edit CREATE is not refused by the guard. The advisory notice shows,
-//      exact bytes are created on the host at an absent path, and the provider's next request carries the successful result.
+//   C4 native positive control, advisory, daemon reachable with the realm inactive: the built-in patch-mode edit CREATE is not
+//      refused by the guard. The realm error warning shows, exact bytes are created on the host at an absent path, and the
+//      provider's next request carries the successful result.
+//   C4b native refusal, advisory, daemon down: the built-in patch-mode edit CREATE is refused by the guard with REALM_NOT_ACTIVE,
+//      no file is created and no notice is shown.
 //   O2 (gated, skipped without REALM_LIVE_OMP): one session moves from advisory to fail-closed by a daemon restart and /realm-retry.
 //      The offered tools follow the mode, a registered write then read reach the provider with text and digest, and a model-issued
 //      bash is refused with POLICY_DENIED.
@@ -59,7 +62,6 @@ import type { PodmanProbeResult } from "../../src/runtime/podman-probe.js";
 import { FakeBridge } from "../support/fake-bridge.js";
 import { FakeExecutionService } from "../support/fake-execution.js";
 
-const ADVISORY_NOTICE = "realm status unavailable (REALM_NOT_ACTIVE); the write proceeds under advisory policy";
 // The warning the daemon attaches to an advisory write while its realm is in error (decideMutation, src/core/policy.ts).
 const REALM_ERROR_WARNING = "realm is error; the write proceeds under advisory policy";
 const CLOCK_ISO = "2026-10-21T09:30:00.000Z";
@@ -263,7 +265,7 @@ void test(
   async (t) => {
     const spec: GuardCase = { name: "c2", mode: "fail-closed", realm: "down", tool: "write", relativePath: "c2.txt" };
     const { omp, profile, outcome, requests } = await runGuard(t, spec);
-    assert.equal(omp.notices().includes(ADVISORY_NOTICE), false);
+    assert.deepEqual(omp.notices(), [], "a refused fail-closed write carries no notice");
     const end = toolEndOf(outcome, "write");
     assert.equal(end.isError, true);
     assert.match(end.text, /REALM_NOT_ACTIVE/);
@@ -288,12 +290,12 @@ void test(
 );
 
 void test(
-  "C4: advisory with the realm down permits native patch CREATE on the host and forwards its successful result",
+  "C4: advisory with the daemon reachable and the realm inactive permits native patch CREATE on the host and forwards its successful result",
   { skip, timeout: OMP_SCENARIO_TIMEOUT_MS },
   async (t) => {
-    const spec: GuardCase = { name: "c4", mode: "advisory", realm: "down", tool: "edit", relativePath: "c4-created.txt" };
+    const spec: GuardCase = { name: "c4", mode: "advisory", realm: "inactive", tool: "edit", relativePath: "c4-created.txt" };
     const { omp, profile, outcome, requests } = await runGuard(t, spec);
-    assert.deepEqual(omp.notices(), [ADVISORY_NOTICE]);
+    assert.deepEqual(omp.notices(), [REALM_ERROR_WARNING]);
     const end = toolEndOf(outcome, "edit");
     t.diagnostic(`edit result: ${end.text}`);
     assert.equal(end.isError, false, end.text);
@@ -305,6 +307,20 @@ void test(
     const carried = nextRequest.toolResults.find((result) => result.toolCallId === end.toolCallId);
     assert.ok(carried !== undefined, "the provider's next request must carry the result of the edit's own tool call");
     assert.equal(carried.text, end.text, "the provider's next request must carry the successful native edit result");
+  },
+);
+
+void test(
+  "C4b: advisory with the daemon unreachable refuses native patch CREATE with the read's code, creates no file and shows no notice",
+  { skip, timeout: OMP_SCENARIO_TIMEOUT_MS },
+  async (t) => {
+    const spec: GuardCase = { name: "c4b", mode: "advisory", realm: "down", tool: "edit", relativePath: "c4b-refused.txt" };
+    const { omp, profile, outcome } = await runGuard(t, spec);
+    const end = toolEndOf(outcome, "edit");
+    assert.equal(end.isError, true, end.text);
+    assert.match(end.text, /REALM_NOT_ACTIVE/);
+    assert.equal(existsSync(join(profile.workspace, spec.relativePath)), false);
+    assert.deepEqual(omp.notices(), []);
   },
 );
 

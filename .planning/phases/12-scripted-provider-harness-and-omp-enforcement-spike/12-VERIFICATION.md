@@ -1,132 +1,211 @@
-# Phase 12 verification: scripted-provider harness and Omp enforcement spike
+---
+phase: 12-scripted-provider-harness-and-omp-enforcement-spike
+verified: 2026-11-12T09:13:03Z
+status: gaps_found
+score: 3/11 must-haves verified (6 present but live-unverified, 1 uncertain pending live measurement, 1 failed)
+covered_files:
+  - ".planning/REQUIREMENTS.md"
+  - ".planning/phases/12-scripted-provider-harness-and-omp-enforcement-spike/12-01-PLAN.md"
+  - ".planning/phases/12-scripted-provider-harness-and-omp-enforcement-spike/12-01-SUMMARY.md"
+  - ".planning/phases/12-scripted-provider-harness-and-omp-enforcement-spike/12-02-PLAN.md"
+  - ".planning/phases/12-scripted-provider-harness-and-omp-enforcement-spike/12-02-SUMMARY.md"
+  - ".planning/phases/12-scripted-provider-harness-and-omp-enforcement-spike/12-03-PLAN.md"
+  - ".planning/phases/12-scripted-provider-harness-and-omp-enforcement-spike/12-03-SUMMARY.md"
+  - "docs/integration/omp-lifecycle-runbook.md"
+  - "docs/integration/omp.md"
+  - "docs/policy-reference.md"
+  - "src/omp/plugin.ts"
+  - "test/integration/omp-guard.test.ts"
+  - "test/omp/plugin.test.ts"
+covered_digest: "v4:sha256:8b53c3072540ddec23d9a88264046c596cf3db860c469ea8a11eb034f013fe1f"
+behavior_unverified: 6
+behavior_unverified_items:
+  - truth: "C1: advisory, realm inactive, daemon reachable. The Realm write is forwarded, the warning shows on every call, and exact bytes land on the host"
+    test: "npm run build, then REALM_LIVE_OMP=1 node --test --test-concurrency=1 dist/test/integration/omp-guard.test.js (case C1), with REALM_OMP_BIN set to the Omp being recorded"
+    expected: "Two advisory notices, two successful writes, exact bytes on disk"
+    why_human: "Needs a live Omp and a real daemon; offline registered-write unit test passes but does not drive Omp's model-issued call"
+  - truth: "C1b: advisory, daemon unreachable. The Realm write is refused with REALM_NOT_ACTIVE and no host file is created"
+    test: "Case C1b of omp-guard.test.js, live"
+    expected: "isError true, REALM_NOT_ACTIVE, no file, no notice"
+    why_human: "Live case authored, not run on the current source"
+  - truth: "C2: fail-closed, realm down. The write is blocked with REALM_NOT_ACTIVE, no file, the next provider request carries the error"
+    test: "Case C2 of omp-guard.test.js, live"
+    expected: "Refusal with REALM_NOT_ACTIVE, no file, carried error in the next request"
+    why_human: "The only pass is a 2026-10-30 user-reported run that predates the current source; not re-run"
+  - truth: "C3: realm active. The write proceeds and the exact bytes land in the workspace"
+    test: "Case C3 of omp-guard.test.js, live"
+    expected: "isError false, file content equals the case name"
+    why_human: "Only historical evidence exists; not re-run on the current source"
+  - truth: "C4 and C4b: advisory native patch-mode edit CREATE. C4 (daemon reachable, realm inactive) is permitted and its result is carried; C4b (daemon down) is refused with REALM_NOT_ACTIVE with no file and no notice"
+    test: "Cases C4 and C4b of omp-guard.test.js, live (REALM_LIVE_OMP=1, one run of the file)"
+    expected: "C4: warning shown, exact bytes at the absent path, successful tool result carried. C4b: refusal, no file, no notice"
+    why_human: "The C4 replacement is authored and not run; the 2026-10-31 C4 failure was a native snapshot tag problem, and C4b has no live record"
+  - truth: "HARN-01: one gated command runs the harness against the built extension and a local Omp, passes, and records the Omp version"
+    test: "Same live command as C1; read the recorded Omp version from the run output"
+    expected: "All live cases pass; the version is recorded in the run output"
+    why_human: "No passing run of the current source is recorded in the repository; REQUIREMENTS calls HARN-01 implemented-unverified"
+uncertain_items:
+  - truth: "HARN-03: a warm profile on the current build makes no connection beyond the stub and ports 11434, 8080 and 1234, with zero external and zero DNS"
+    status: uncertain
+    evidence: "docs/integration/omp.md records the default-configuration warm run as FAILED: 38 external plus 6 DNS (44 offenders) on 18.14.2, and 2 EINPROGRESS connects to 127.0.0.1:9931 on 18.16.0. The only pass uses the LLAMA_CPP_BASE_URL lever on 18.16.0 in a scripted proxied configuration, which the record itself says is not the default configuration. The installed Omp was not re-observed in this pass."
+    owner_decision_needed: "(a) Run the built-Realm warm trace on the current source against the installed Omp and record the raw summary. (b) Rule whether port 9931 joins the allowlist, or whether the LLAMA_CPP_BASE_URL lever counts as passing the zero-offender acceptance."
+---
 
-Status: **PARTIAL / current-source verification UNVERIFIED** (2026-10-31). This records retained execution and current source separately. It is not a new test run, signed verdict, phase completion or all-milestone clearance. HARN-02, HARN-04 and OMP-05 remain in progress/reopened until current answered C1–C4 AND HARN-03 pass.
+# Phase 12: Scripted-provider harness and Omp enforcement spike - Verification
 
-Task `Trealm31-phase12-artifacts`; correlation `realm-phase12-records-oct31`; A15 attempt 2. Original graph/correlation `ut-mvvowl70-29165019`, accepted 27 tasks/52 criteria and D1–D6 unchanged. No DONE task or historical result/hash was rewritten. The previous no-edit attempt remains history; this attempt actually writes the five scoped documentation artifacts.
+**Phase Goal:** A live Omp, driven by a scripted model provider with no credentials, shows what the Realm extension does with a model-issued `write` in each mode, and the extension API's enforcement limits are known and recorded.
+**Verified:** 2026-11-12T09:13:03Z
+**Status:** gaps_found
+**Re-verification:** Yes. The prior report (gaps_found, 2 of 11, dated 2026-11-12T08:03:19Z) is superseded. Gap closure plans 12-02 (merge aae0e96) and 12-03 (merge d4a5e50) are in HEAD d4a5e50.
 
-## Evidence authority and source identity
+## Method and limits
 
-The current owner answer overrides contradictory older packet/scout interpretations, not their recorded bytes: **advisory_write = WARN AND ALLOW**. A reachable inactive advisory registered write must emit the existing notice every time and perform the actual host write. Unreachable registered write refuses/no file; reachable inactive fail-closed refuses/no file. Current source tests and runtime proof must distinguish these states.
+- Read the PLAN, SUMMARY, REQUIREMENTS, and the phase-12 documentation. The 12-02 and 12-03 summaries were not trusted: each claim was checked against `src/omp/plugin.ts`, `test/omp/plugin.test.ts`, and `test/integration/omp-guard.test.ts`.
+- Ran `node --test dist/test/omp/plugin.test.js` (the built output): 102 pass, 0 fail, 0 skipped. Ran `node --test --test-name-pattern=HARN-02 dist/test/omp/plugin.test.js`: 5 pass, 0 fail.
+- Did not run any live Omp suite. `REALM_LIVE_OMP` and `REALM_LIVE_PRODUCTION` were not set. Live cases C1, C1b, C2, C3, C4, C4b and the HARN-03 warm run are treated as human items, not passes.
+- Did not run `npm run build`, typecheck, or lint in this pass. The unit run used the existing `dist/` output.
+- Did not edit any source, test, or `.planning` file other than this report. `.planning/REQUIREMENTS.md` was read and not changed.
+- Omp version: the 18.18.8 reading from the prior report was not re-observed in this pass. Recorded evidence names Omp 18.12.6 (spike, OMP-05), 18.16.0 (HARN-03 lever run), and 18.18.1 (Realm tool-list observation). No run exists for the version currently on PATH.
 
-Repository source read: `<src-root>/repos/agent-realm-lanes/recovery-oct31`, package version `0.3.26` from `package.json`. Retained Omp observations below are version `18.12.6`. Main privately integrated PR40 at historical `d25c8c1ce4da96d05b49b6bb1185bc80bd3e2843` per current binding authority; that is not a source identifier for this uncommitted joined wave. No new commit/build digest, current check exit or cryptographic verification is invented here.
+## Goal Achievement
 
-Absolute input directory E0:
+### Observable Truths
 
-`<omp-home>/agent/sessions/-src-repos-agent-realm/2026-10-21T23-22-33-866Z_01a160c6-0a0a-7319-a4ef-5d9c4e2438e7/local/`
+| # | Truth (source) | Status | Evidence |
+| - | -------------- | ------ | -------- |
+| 1 | HARN-01: one gated command runs the harness, passes, and records the Omp version | PRESENT_BEHAVIOR_UNVERIFIED | `test/integration/omp-guard.test.ts` and `omp-spike.test.ts` skip unless `REALM_LIVE_OMP=1` (`ompSkipReason`). No passing run of the current source is recorded in the repository. |
+| 2 | C1: advisory, realm inactive, daemon reachable. The write is forwarded with the warning on every call and exact bytes land | PRESENT_BEHAVIOR_UNVERIFIED | Code: `callDaemon` notifies on `outcome.value.warning` (`src/omp/plugin.ts:667-669`). Offline: `HARN-02 C1: registered advisory write warns on every inactive invocation and writes exact host bytes` passes against a real `ToolDispatcher` (`test/omp/plugin.test.ts:1292-1310`). Live case (`omp-guard.test.ts:231-246`) not run. |
+| 3 | C1b: advisory, daemon unreachable. The write is refused with REALM_NOT_ACTIVE and no host file | PRESENT_BEHAVIOR_UNVERIFIED | Code: the status-failure branch refuses an advisory Realm write through `unreadableVerdict` (`plugin.ts:761-767`, `845-848`). Offline: `HARN-02: registered advisory write refuses an unreachable daemon without host fallback` passes. Live case (`omp-guard.test.ts:248-260`) not run. |
+| 4 | C2: fail-closed, realm down. The write is blocked with REALM_NOT_ACTIVE and no file | PRESENT_BEHAVIOR_UNVERIFIED | Offline: `HARN-02 C2` passes (`plugin.test.ts:1312-1320`). Live case (`omp-guard.test.ts:262-276`) not run; the only live pass is a 2026-10-30 user-reported record that predates the current source. |
+| 5 | C3: realm active. The write proceeds and the exact bytes land | PRESENT_BEHAVIOR_UNVERIFIED | Live case (`omp-guard.test.ts:278-290`) present and gated. Only historical evidence. Not re-run. |
+| 6 | C4 and C4b: advisory native patch-mode `edit` CREATE. C4 (daemon reachable, realm inactive) is permitted; C4b (daemon down) is refused with REALM_NOT_ACTIVE, no file, no notice | PRESENT_BEHAVIOR_UNVERIFIED | Guard code: `edit` is a `GUARDED_HOST_TOOLS` entry refused by `unreadableVerdict` when the status is unreadable (`plugin.ts:765-767`); the reachable-inactive case reaches `stateVerdict`, which advisory allows with a notice (`plugin.ts:858-860`). Live cases (`omp-guard.test.ts:292-325`) are authored; `docs/integration/omp.md` (around line 398) states C1, C1b, C4 and C4b are not run on the current source. |
+| 7 | CR-01 fix: advisory with an unreadable status refuses guarded calls (host `edit`, Realm `write`) with the read's code | VERIFIED | Source: `unreadableVerdict` returns `{ block: true, reason: code }` in every mode (`src/omp/plugin.ts:845-848`). The Realm write reaches the daemon only when the last published mode is not advisory (`plugin.ts:761-764`). Tests pin the refusal: `plugin.test.ts:888-896` (OMP-05 d), `:1237-1248` (B9 / T6), `:1380` (P16 b), `:1590` (P16 lifecycle c), `:2173` and `:2200`. `node --test dist/test/omp/plugin.test.js`: 102 pass, 0 fail. The prior gap's defect no longer exists in source. |
+| 8 | HARN-02 registered-write tests exist and run over the real dispatcher, pinned filesystem, lock table and audit | VERIFIED | `test/omp/plugin.test.ts:1258-1363`: `makeRegisteredWorkspace` builds a real `ToolDispatcher` over `bindRoot`, `LockTable`, `gateMutation` and a temp state directory. Only the daemon transport is a double. The five HARN-02 cases pass by name (`--test-name-pattern=HARN-02`: 5 pass, 0 fail). Mutation evidence in 12-03-SUMMARY.md was not re-run. |
+| 9 | HARN-03: a warm profile on the current build with the default configuration makes no connection beyond the stub and ports 11434, 8080 and 1234, with zero external and zero DNS | UNCERTAIN | `docs/integration/omp.md` records the default warm run as FAILED (44 offenders: 38 external, 6 DNS, on 18.14.2) and a failure on loopback 127.0.0.1:9931 on 18.16.0. The only pass uses the `LLAMA_CPP_BASE_URL` lever in a proxied, scripted configuration. Owner ruling needed on the lever and port 9931. No current-source measurement exists. |
+| 10 | OMPX-01: enforcement limits are known and recorded with the Omp version (registerTool reach, setActiveTools removal and enforcement, registerFileWriteFallback behaviour, OQ-P5-01 closed, OQ-P5-02 restated) | VERIFIED | `docs/integration/omp.md` enforcement-spike table (rows S1 to S10, VERIFIED_BY_EXECUTION) records Omp 18.12.6. `test/integration/omp-spike.test.ts` is gated and version-pinned to 18.12.6 (line 8). Caveat: the spike is recorded on 18.12.6 only; the spike is not re-run on the installed Omp. |
+| 11 | Closure: OMP-05 and HARN-04 (and HARN-02) are recorded complete on current evidence, as the phase's own success criterion requires (current answered C1 to C4 and HARN-03 passes) | FAILED (BLOCKER) | `.planning/REQUIREMENTS.md` marks HARN-02 (`[x]`), HARN-04 (`[x]`) and OMP-05 (`[x]`) complete on the 2026-10-30 run (Omp 18.12.6, 3 of 3). `docs/integration/omp.md` (around line 398) and the 12-03 summary state that those receipts predate the 2026-11-12 ruling on an unreadable status, that C1, C1b, C4 and C4b are not run on the current source, and that no current pass is recorded for them. HARN-03 has no current pass either. The checkboxes contradict the phase's own records. |
 
-| Ref | Actual input / record | Use and limit |
-| --- | --- | --- |
-| E1 | E0 `realm-recovery-brief-oct31.md`; `realm-evidence-oct31.json` | Original brief and five scouts (9+9+11+19+4 rows). Scout assertions are candidates/source observations, not current execution or permission to waive HARN-02. |
-| E2 | E0 `realm-parent-verification-packet-oct31.json` | `firstWaveVerification`, `lastJoinedAttempt`, `currentHarnProof`, `actualProductionOmp`, `cpuQuotaProof`, `formalFirstWaveQuality` keep distinct runs. Earlier advisory-refusal interpretation and old PR40 permission are not current authority. |
-| E3 | E0 `realm-full-continuation-verified-runtime-oct31.md` | Original flat autonomous continuation, accepted DAG and parent postjoin ownership; superseded state/approval details are not silently reused. |
-| E4 | `<omp-home>/agent/sessions/-src-repos-agent-realm/2026-10-21T23-22-33-866Z_01a160c6-0a0a-7319-a4ef-5d9c4e2438e7/8785.bash.log` | Lines 3–13: old C1–C4 passes; 19–40: 11 independent non-network spike passes; full run 15 pass/6 fail, NOT all-green. Network failures remain in the same log. |
-| E5 | `<evidence-dir>/harn31-02hxpj5r/c4.frames.jsonl`, `c4.requests.json` | Genuine native C4 notice, CREATE result, `newText`, matching provider tool message and `done`; pre-answer evidence. |
-| E6 | `<evidence-dir>/harn31-approved-0g2wtnam` | Approved bounded corrected trace evidence; built-Realm versus S11, cold versus warm/proxy labels remain separate. Earlier build, not current answered-source verification. |
-| E7 | E0 `harn03-missing-podman-proof-oct31.json` | Actual isolated-PATH result: exit 0, 0 pass/0 fail/1 named skip. Not a network pass. |
-| E8 | `<evidence-dir>/omp-production-driver-rootless-ns-oct31.json` | Actual real production registered write/host/sandbox/audit observation; scripted NOT LLM-driven and NOT strace HARN-03. |
-| E9 | `<evidence-dir>/recovery-controller-oct31/2026-10-31T01-24-17-595Z_01a18f8e-b83b-745d-9b26-7e9630cb2ea4/RealmRecoveryWaveOne/RealmRecoveryWaveOne.RealmWaveOneQa.json` | Actual A08 gate execution/receipt. Later canonical DONE/exact-three-row settlement comes from current binding authority; this writer did not issue or cryptographically reverify it. |
-| E10 | `<evidence-dir>/qr05-cpu-quota-2870c80bf0.json` (E2 `cpuQuotaProof`) | Separate loaded CPU-quota suite; matching totals do not make it E9. |
+**Score:** 3/11 truths verified (truths 7, 8, 10). Six are present, wired, and live-unverified (truths 1 to 6). One is uncertain pending a live measurement (truth 9). One fails (truth 11).
 
-The original unissued-tag failure, historical warm 44 offenders/cold skip 49, failed intermediate run, same-task attempt2/rework2 approved correction, extra-attempt approval and old no-implementation results are preserved. None was rerun here merely to confirm it.
+### Required Artifacts
 
-## Criterion matrix
+| Artifact | Expected | Status | Details |
+| -------- | -------- | ------ | ------- |
+| `src/omp/plugin.ts` | Guard, forwarding and advisory semantics | VERIFIED (exists, substantive, wired) | Contains the CR-01 fix (`plugin.ts:761-767`, `845-848`). 876 lines. Warnings WR-02, WR-03 and WR-04 remain (see Anti-Patterns). |
+| `test/omp/plugin.test.ts` | Pins the CR-01 refusal and the HARN-02 registered-write tests | VERIFIED | 2342 lines. 102 unit tests pass. The HARN-02 tests use the real dispatcher. |
+| `test/integration/omp-guard.test.ts` | C1, C1b, C2, C3, C4, C4b live cases | PRESENT_BEHAVIOR_UNVERIFIED | Gated. Eight cases skip without `REALM_LIVE_OMP=1` (the 12-03 run recorded this). Live cases are not run on the current source. |
+| `test/integration/omp-spike.test.ts`, `test/support/omp-spike-extension.ts` | OMPX-01 spike | VERIFIED (exists, version-gated) | Spike results recorded for Omp 18.12.6. |
+| `docs/integration/omp.md` | Version-stamped enforcement answers and the HARN-03 record | VERIFIED for OMPX-01; the HARN-03 section records a failed default run | Sections are internally consistent with the spike table. |
+| `docs/integration/omp-lifecycle-runbook.md`, `docs/policy-reference.md` | Operator text for advisory and the guard cases | VERIFIED (text) | Describes the owner's 2026-11-12 ruling. |
+| `.planning/REQUIREMENTS.md` | Requirement status | FAILED for the closure record (truth 11) | Read only. Not edited. |
 
-Implementation labels: IMPLEMENTED means source exists at the cited symbol, not that it passes. PARTIAL means an actual requirement dependency remains. STUB_OR_MISSING is reserved for absent implementation, not a missing execution. UNVERIFIABLE means required evidence is unavailable. All **current-source execution** in this attempt is UNVERIFIED; only Main's actual command plus exit/evidence can change that.
+### Key Link Verification
 
-| Criterion | Current source / authored behavior | Retained versioned execution | Current disposition and prospective proof |
-| --- | --- | --- | --- |
-| HARN-01: isolated local scripted-provider Omp RPC against built extension, no real credentials/tokens | IMPLEMENTED: `createOmpProfile` in `test/support/omp-profile.ts`; `ScriptedProvider`; `startOmp` in `test/support/omp-rpc.ts`; `runGuard`/`tracedRealmWrite` in `test/integration/omp-guard.test.ts`. Profile supplies private HOME/config/agent, caller-supplied PATH, child-private TMPDIR, local dummy provider key. | E6 warm requests offer/issue registered `write`, matching successful result and `done`; version 18.12.6, built Recovery extension. E4 records actual real Omp starts, not mocked Omp. | IMPLEMENTED; current-source UNVERIFIED. Main builds then runs helpers and full live guard cases; retain ready/start/end, provider requests, version and current source identity. |
-| HARN-02 C1: reachable inactive advisory warns on every registered invocation and creates exact host bytes | PARTIAL at live-harness level. `registerRealmPlugin` → `callDaemon` now forwards each successful write's non-null `outcome.value.warning` to current `ctx.ui.notify`. Existing `ToolDispatcher.call` → `writeWorkspaceFile` → `lockedWrite` supplies the actual write, not a no-op/local fallback. `makeRegisteredWorkspace` plus authored C1 test uses real dispatcher/fs/lock/audit. | E4's old C1 passed an unreachable-daemon refusal/no-notice assertion. It does NOT satisfy the answered criterion. Historical native 3-case closure likewise is not registered C1. | PARTIAL, in progress/reopened. Main must execute authored real-dispatcher tests AND a correctly aligned real Omp reachable-inactive C1, repeated notices, exact UTF-8 bytes, result/details/provider continuation and failure propagation. Current live C1 still calls `daemon.down()`; alignment is outside the five records/four Omp paths. |
-| HARN-02 C2: inactive fail-closed refuses `REALM_NOT_ACTIVE`, no host file, provider sees error | Registered behavioral case authored in `test/omp/plugin.test.ts`, degraded state, real dispatcher. Live `runGuard` C2 currently removes daemon/socket. | E4 old C2 refusal/no file/provider error on Omp 18.12.6. | PARTIAL current verification. Main must retain reachable-inactive fail-closed proof separately from unreachable refusal; no status/error weakening. |
-| HARN-02 negative: unreachable daemon refuses registered write/no host file in either mode | `callDaemon` requires a live client; `realmToolDefinitions`/`definitionOf` maps call failures as refusal. Authored tests reject transport in both policy modes and assert no bytes/no cached-mode fallback. | E4 old C1/C2 are useful historical unreachable controls, not a positive advisory-write result. | IMPLEMENTED source; UNVERIFIED current. Main executes both policy cases and records absence plus error to the actual registered caller. |
-| HARN-02 C3: active registered write succeeds | Existing registered tool → shared dispatcher; live `runGuard` C3 checks exact fake-backed workspace bytes. | E4 C3 pass/offered tool list; E6 warm registered-write bytes/details/provider proof. E8 provides separate real production observation. | IMPLEMENTED source; UNVERIFIED current. Main's current C3 must record offered registered name, matching successful result, exact bytes and provider continuation. |
-| Native C4 host-create control | `callOf` emits supported patch CREATE; only native-edit child gets `PI_EDIT_VARIANT=patch`. No native snapshot tag or Realm digest conversion. Assertions in `omp-guard.test.ts` require notice, success, exact bytes and carried result. | E4 lines 10–13 and E5 frames 17–23/requests: notice; `isError=false`; `newText="c4\n"`; `[c4-created.txt]\n1:c4` carried to next tool-role request. Omp 18.12.6. | IMPLEMENTED with genuine historical pass, no longer “authored but not run.” Current-source rerun remains required, not inferred from E5. Distinct from optional production C4 in original research. |
-| HARN-03: one versioned warm built-extension registered-write command; only stub + three discovery peers, zero external/DNS/offenders; named prerequisite/cold skips | IMPLEMENTED: `tracedRealmWrite` binds per-run issue/continuation phases, matching RPC IDs/details, file bytes, final stop and no errors; `defaultAllow`/parser/classifier in `test/support/net-trace.ts`; `createOmpProfile({refuseExternalNetwork:true})` sends proxies to provider port itself. Trace gate checks Podman executable after normal prerequisites. | E6 warm: 0/0/0, only 42461/11434/8080/1234, completed tool exchange/cleanup. Cold explicitly skipped. E7 missing Podman: 0 passes/1 skip. E2 actual scoped run: 6 tests/4 pass/0 fail/2 honest cold skips (includes separate S11). | IMPLEMENTED measurement, UNVERIFIED current source. Main reruns after all owners join; unchanged strict allowlist, same-turn bytes/RPC/provider plus trace, no acceptance relaxation. No pass from summary counts alone, cold zero counts, source proxy configuration or S11. |
-| HARN-04 / OMP-05: record completion only on passing current harness and label scripted NOT LLM-driven | PARTIAL: owned plan/context/guide now restore criterion and retain history. Global REQUIREMENTS/ROADMAP/STATE are explicitly unowned; their old checked/supersession rows remain a separate allocation gap. | Historical 2026-10-30 native closure, E4 old registered-refusal/native control, E6 earlier warm and E9 first quality remain valid for their own scope only. | In progress/reopened. Current C1–C4 AND HARN-03 must pass, then sole authorized global A15 reconciles with actual evidence. No `phase.complete` or global promotion here. |
-| OMPX-01: versioned spike answers registration/removal/fallback; close/restate OQ-P5-01/02 honestly | IMPLEMENTED: `test/support/omp-spike-extension.ts`, permanent `test/integration/omp-spike.test.ts`, S1–S14 table/Q4/OQ answers in `docs/integration/omp.md`. | Historical two 12/12 runs on 2026-10-29; E4 11 independent non-network recovery cases passed, Omp18.12.6. E6 S11 evidence separate. | IMPLEMENTED/version-scoped historical execution. Current-source suite still unverified. OQ-P5-01 closed for 18.12.6; OQ-P5-02 narrowly restated, not universal host containment or Phase16 clearance. |
+| From | To | Via | Status | Details |
+| ---- | -- | --- | ------ | ------- |
+| `guardHostToolCall` | `unreadableVerdict` | status-read failure, for the Realm write under advisory and for `edit` | WIRED, correct | `plugin.ts:761-767` refuses in advisory. Fail-closed passes the Realm write to the daemon, which decides. |
+| `callDaemon` | `ToolDispatcher` write path | `client.call` (registered-write tests substitute `fixture.daemon.call` with `dispatcher.call`) | WIRED | `plugin.test.ts:1288`. Live path not exercised. |
+| `callDaemon` warning | UI notify | `outcome.value.warning` at `plugin.ts:667-669` | WIRED (guarded by `!== null`, see WR-02) | Notice shown on each advisory write, asserted by HARN-02 C1. |
+| `test/integration/omp-guard.test.ts` C4/C4b | native `edit` CREATE in the Omp child | `PI_EDIT_VARIANT=patch` in the Omp child | WIRED in code; not run | Live record absent. |
 
-## Exact advisory interface and authored tests
+### Requirements Coverage
 
-`src/omp/plugin.ts: registerRealmPlugin/callDaemon` captures the current session/client, awaits `client.call`, and notifies only if that same session/client is still current and the returned outcome is `done/write` with non-null warning. The returned outcome is unchanged. Shared `decideMutation` supplies `realm is <state>; the write proceeds under advisory policy` for reachable inactive advisory writes. Native C4 after unreachable status has the distinct historical `realm status unavailable (REALM_NOT_ACTIVE); ...` notice. No second writer or cached-mode disconnected fallback is added.
+| Requirement | Source | Description | Status | Evidence |
+| ----------- | ------ | ----------- | ------ | -------- |
+| HARN-01 | ROADMAP phase 12 | Gated harness command with recorded Omp version | PRESENT_BEHAVIOR_UNVERIFIED | Truth 1. The record calls it implemented-unverified. |
+| HARN-02 | Phase 12 IDs | Advisory with the realm down (notice and file), fail-closed refusal, realm active proceeds | PARTIAL: code and unit tests VERIFIED (truths 7, 8). Live half PRESENT_BEHAVIOR_UNVERIFIED (truths 2 to 5). `REQUIREMENTS.md` `[x]` is not supported by current-source live evidence. | Truths 2 to 5, 7, 8, 11. |
+| HARN-03 | ROADMAP phase 12 | Warm-profile network capture with zero offenders | UNCERTAIN | Truth 9. No current default-configuration pass. Recorded default run failed. |
+| HARN-04 | Phase 12 IDs | OMP-05 recorded complete with a scripted basis | FAILED for closure | Truth 11. The literal basis text ("scripted provider drove Omp's own write; not LLM-driven") is present in `REQUIREMENTS.md`, but closure is not supported on current evidence. |
+| OMP-05 | Phase 5 row, closed by HARN-04 | Disconnected: report and apply the policy; never fall back silently to unsandboxed mutation | PARTIAL: the code path now refuses under advisory with an unreachable status (truth 7). Closure is the same as HARN-04 (truth 11). | Truths 7, 11. |
+| OMPX-01 | ROADMAP phase 12 | Enforcement spike recorded with version | SATISFIED (on 18.12.6) | Truth 10. |
 
-Source tests, authored by the Omp owner and **NOT EXECUTED here** (`test/omp/plugin.test.ts`, `makeRegisteredWorkspace`):
+Orphaned requirements: none. Every ID that ROADMAP.md assigns to phase 12 is listed above.
 
-| Test name | Real behavior asserted / seam |
-| --- | --- |
-| `HARN-02 C1: registered advisory write warns on every inactive invocation and writes exact host bytes` | Registered execute, two Unicode writes, exact filesystem bytes, one visible warning per invocation, registered readback and two admission/result audit pairs. Real dispatcher/fs, transport/lifecycle double only. |
-| `HARN-02 C2: registered inactive fail-closed write refuses REALM_NOT_ACTIVE without a host file` | Reachable degraded controller with actual fail-closed mutation gate, refusal and absent path/no notice. |
-| `HARN-02: registered advisory write refuses an unreachable daemon without host fallback` and fail-closed counterpart | Client rejects; registered execution returns REALM_NOT_ACTIVE, absent file, no notification; prior advisory state cannot authorize fallback. |
-| `HARN-02 C1: registered advisory writes propagate validation, path and conditional-write failures` | Schema-invalid content/traversal, symlink PATH_ESCAPE, conditional LOCK_CONFLICT; failures preserve existing bytes/no invalid or escaped file. |
+### Anti-Patterns and Review Findings
 
-These tests do not mock the changed module or grep source strings; they also do not substitute for real Omp live evidence. No behavioral tests were authored by A15 outside its five documentation paths.
+Status of the 12-REVIEW.md findings, re-checked against HEAD d4a5e50:
 
-## Retained warm/cold/proxy and production evidence
+| File | Line | Pattern | Severity | Impact |
+| ---- | ---- | ------- | -------- | ------ |
+| `src/omp/plugin.ts` | 845-848 (CR-01) | Advisory allow on an unreadable status | RESOLVED | Fixed by 12-02 (commit 38d5778). |
+| `test/omp/plugin.test.ts` | (absent HARN-02 tests) (WR-01) | Registered-write tests missing | RESOLVED | Present at HEAD (`:1258-1363`) and passing (commit bff9168). |
+| `src/omp/plugin.ts` | 667 | Notify on `warning !== null` with no wire-shape check (WR-02) | WARNING (open) | An undefined or malformed warning is forwarded to the UI. Not in the gap-closure scope. |
+| `src/omp/plugin.ts` | 774-780 | `setHostMode` throw refuses the Realm write with POLICY_DENIED and no notice or daemon call (WR-03) | WARNING (open) | Fails closed, so it is not a bypass. Breaks the advisory forwarding contract on that edge. |
+| `src/omp/plugin.ts` | 656-663 | `AUDIT_OUTCOME_UNKNOWN` only when `onLinkLost` is set (WR-04) | WARNING (open) | With the default configuration, a write that may have landed is reported as a plain refusal. |
+| `test/integration/omp-guard.test.ts` | 84-120, 229-244 | C1 uses an inactive-daemon helper (INFO) | INFO | The 12-01 summary's claim that C1 uses `daemon.down()` is stale; C1b does. |
 
-E6 `built-realm-warm.summary.json` records version `18.12.6`, actual built extension, `scriptPhase=done`, `turnProven=true`, `processClosed=true`, allowlist `[42461,11434,8080,1234]`, `offenders=[]`, `external=0`, `dns=0`. The companion requests/frames bind offered/issued `write` to the exact successful result: 39 UTF-8 bytes, SHA-256 `075d35c7cd91e5ffa0c45f790d2924956038d8b5f948df6feeef18f849d6a838`, then `done`. Source assertions check actual workspace bytes and RPC details, not text-only hello. A summary says “measured; assertions determine result”; it is not itself a formal verdict. Actual execution scope is E2 `currentHarnProof`.
+Debt-marker gate: no TBD, FIXME or XXX in the phase-touched source, test, or doc files. PASS (the prior report's result, not re-run in this pass).
 
-`built-realm-cold.summary.json` remains `status=skipped` with the reason “cold built-Realm warm-up; startup catalog refresh is outside the measured warm network claim,” despite completed exchange and zero observed offenders. E7's Podman-missing skip is separate. Omp opt-in/platform/binary/version/built-extension/trace prerequisites are evaluated before that extra Podman executable check; the fake-backed test does not start Podman.
+Probe execution: no probes are declared for this phase. Behavioral spot-checks: the offline plugin suite was run (102 pass). The live suites were not run, by instruction.
 
-S11 `s11-{cold,warm,proxy}` uses the spike extension's registered `status` and separate proxy allowance. Preserve its per-run `.script-state.json`/`.log.jsonl`/`.proxy-requests.json`; they do not widen the stricter built-Realm allowlist. Historical unproxied warm 38 external + 6 DNS = 44 offenders, cold skipped 49, same-run 0 external/0 DNS/7 refused CONNECT proxy lever, and failed intermediate cold/warm attempts all remain history. Cache warmth is not a reliable isolation control and no scope amendment is approved.
+### Human Verification Required
 
-E8's `realOmpScenario.returncode=0` records UID5002, actual production daemon, offered/issued/successful registered write, provider continuation, exact **21 bytes** in host root and sandbox `/workspace`, SHA-256 `cf99298da1f40b967fcc5fa77605f4e77e3b60be3ea034057e8bf6cea2f6d0e3`, admission/result correlation `20756919-94ff-4d8f-a577-7e9cf2389b8f`. Cleanup records original service restored and zero remaining containers. `productionScenarios.executed=false` explicitly avoids rerunning previously verified live5/6. This is scripted NOT LLM-driven and not strace HARN-03. Permanent production Omp coverage remains downstream; no OMPX-05 or Phase16 completion is inferred.
+These are the live and measurement items. They are not counted in the score and remain open even after the blocker below is resolved.
 
-## Distinct execution ledger and quality authority
+### 1. Gated live harness on the current source and the installed Omp
 
-| Run | Actual result from retained record | Boundary |
-| --- | --- | --- |
-| Baseline E2 `baseline` | 2347 tests, 2317 pass, 0 fail, 30 skip; 282 scripts | Baseline only; MCP catalogue/disconnected refusal, not sandbox proof. |
-| First wave E2 `firstWaveVerification` | 2380 tests, 2351 pass, 0 fail, 29 skip; 282 scripts; native C4 1 pass/0 skip; nonroot doctor 31 pass/0 skip | Not the later full union or answered advisory proof. |
-| Host union E2 `lastJoinedAttempt`, original `8791.bash-original.log`/`8792.async.log` as retained by E9 | 2388 tests, 2358 pass, 0 fail, 30 skip; 282 scripts; chained docs/gates/build/pack/MCP reported pass | Before final trace-body delta; later separate checks are not a retroactive rerun of this union. |
-| Intermediate live E4 | 21 tests, 15 pass, 6 fail, 0 skip; C1–C4 plus 11 non-network passed | Network failure remains failed; do not sum passing subcases into whole-suite green. |
-| Approved scoped trace E2 `currentHarnProof`, E6 | 6 tests, 4 pass, 0 fail, 2 honest cold skips | Earlier source semantics; only measured warm cases positive. Missing-Podman 1 skip is E7, not added to this run. |
-| Independent CPU quota E2 `cpuQuotaProof` / E10 | 2388 tests, 2359 pass, 0 fail, 29 skip, 0 cancelled; UID1001, Node24.22.1, cpu.max 50000/100000, two competing CPU workers, throttling 1→1902 | Not formal A08 quality even though totals match. Earlier OpenSSL-absent 67 TLS failures stay historical. |
-| Formal first quality E9 | `npm test`, exit 0, 2388 tests, 2359 pass, 0 fail, 29 skip, once; A08 attempt1/RW0 | Event `404adf8fffef4a2ea4e61c5fdef4692a`, 2026-10-31T10:26:12Z. Unit/integration pass; e2e/perf not selected. No new live smoke from its gated skips. |
+**Test:** `npm run build`, then `REALM_LIVE_OMP=1 REALM_OMP_BIN=<omp-bin> node --test --test-concurrency=1 dist/test/integration/omp-guard.test.js`
+**Expected:** C1, C1b, C2, C3, C4 and C4b pass on the current source. The Omp version is recorded from the run.
+**Why human:** Live Omp, a real daemon, and roughly 20 minutes of wall time.
 
-Current binding authority confirms canonical ingest settled `Trealm31-wave1-quality` DONE and exactly these three signed quality PASS target rows: `Trealm31-c4-native-create`, `Trealm31-init-private-roots`, `Trealm31-doctor-fix-cli`. Producers remain IN_REVIEW/review OPEN. E9 retains the actual gate event and signature-presence metadata, not a signature invented here. The worker's earlier row-binding caveat and outer-low versus effective-medium metadata discrepancy remain in E9; the later canonical settlement does not rewrite that receipt. No current-source signed gate is claimed.
+### 2. C1 reachable-inactive advisory warning and bytes
 
-AF-DOC-1/QF-101 is supplementary and absent from the original signed gate findings. Its stale C4-not-run and unproxied guard descriptions are corrected in the owned guide. No backfilled findings/signature or fabricated scan result is issued. Full skip identities are not reconstructed from E9's bounded tail; historical skip names stay with their own runs.
+**Test:** Confirm C1 shows the advisory notice on both writes and that the exact bytes `c1` are on disk.
+**Expected:** Two notices and the exact bytes.
+**Why human:** Live model-issued call through Omp.
 
-## Commands and evidence recipes for Main only
+### 3. C4 native CREATE and C4b native refusal
 
-**Not executed by this worker.** Main must wait for all owners, align the out-of-scope live C1/C2 fixture through authorized ownership, build current source, then retain command/exit/source identity/raw files. Reuse the established isolated/rootless live wrapper and lock; do not start services or publish as a side effect of these docs. Exact historical wrapper is E0 `realm-isolated-harn-command-oct31.txt`, including `realm-live-lock`, `runuser`, `env -i`, `podman unshare`, read-only-root `bwrap`, private HOME/TMPDIR, credential-directory mask and owned evidence bind. That command targets E5's directory and the old source; do not overwrite its evidence when constructing a new run.
+**Test:** Confirm C4 creates the exact bytes at the absent path with the realm inactive and the daemon reachable, and that C4b refuses with REALM_NOT_ACTIVE with no file and no notice when the daemon is down.
+**Expected:** C4: one warning, exact bytes, successful result carried to the next provider request. C4b: `isError` true, REALM_NOT_ACTIVE, no file, no notice.
+**Why human:** The C4 replacement was authored and has no live record. The C4b code is inferred from the channel analysis.
 
-Prospective current repository checks (existing package scripts):
+### 4. Historical C2 and C3 passes
 
-```sh
-npm run typecheck
-npm run lint
-npm test
-npm run test:scripts
-npm run check:docs
-npm run check:gates
-npm run build
-npm run check:pack
-npm run check:mcp
+**Test:** Decide whether the 2026-10-30 "user-reported" C2 and C3 passes count for the current source. They predate the current plugin changes.
+**Expected:** Either re-run them (item 1) or record an explicit owner acceptance.
+**Why human:** The evidence is outside the repository and predates the current source.
+
+### 5. HARN-03 warm trace on the current build
+
+**Test:** Run the warm built-Realm trace on the installed Omp and record the raw summary and version.
+**Expected:** Zero external, zero DNS and zero offenders, with only the stub and ports 11434, 8080 and 1234 allowed.
+**Why human:** Needs a live Omp. The owner must rule on the `LLAMA_CPP_BASE_URL` lever and on port 9931 before the result can be accepted.
+
+### 6. Owner ruling on the timeout over-refusal (12-02 residual risk T-12-04)
+
+**Test:** Confirm whether a slow but live daemon whose status read exceeds the 5 s guard budget should be refused under advisory (current code) or allowed.
+**Expected:** An explicit owner decision recorded in the docs.
+**Why human:** A policy decision, not a code check.
+
+## Gaps Summary
+
+One BLOCKER remains. The two prior code-level blockers are closed.
+
+1. **Closure recorded without current evidence (truth 11, BLOCKER).** `.planning/REQUIREMENTS.md` marks HARN-02, HARN-04 and OMP-05 complete on the 2026-10-30 run. The phase's own records say that run predates the 2026-11-12 ruling and that no current pass exists for C1, C1b, C4, C4b or HARN-03. The owner should reopen these rows through a GSD command, or record an explicit acceptance of the historical receipts. This report did not edit `.planning/`.
+
+Closed since the prior report:
+
+- Truth 6 (CR-01): the advisory unreachable-status path refuses guarded calls in source, and the tests pin the refusal (`src/omp/plugin.ts:761-767, 845-848`).
+- Truth 7 (registered-write tests): present at HEAD and passing over the real dispatcher (`test/omp/plugin.test.ts:1258-1363`).
+
+Not closed (human or live items, in the Human Verification section): the live cases C1, C1b, C2, C3, C4 and C4b on the current source (truths 2 to 6), HARN-01 (truth 1), HARN-03 (truth 9), and the timeout over-refusal ruling. WR-02, WR-03 and WR-04 remain open warnings.
+
+The spike goal (OMPX-01, truth 10) is achieved on its recorded Omp version and is the one fully verified part of the phase.
+
+## check:docs
+
+`npm run check:docs` was run before this report was written (exit 1; the prior report's own host-path line was the second hit).
+
+Run after this report was written (exit 1). The only hit is:
+
+```
+.planning/phases/12-scripted-provider-harness-and-omp-enforcement-spike/12-03-SUMMARY.md:138:115: <host path>
 ```
 
-After current build, source-specific compiled consumers for Main:
+This file contributes no hit. The remaining failure is a committed file (12-03-SUMMARY.md, commit 86ee9b9) that this pass may not edit. Fixing it needs a GSD-owned edit to that summary. The host-path scan fails until that line is changed.
 
-```sh
-node --test dist/test/omp/plugin.test.js dist/test/omp/tools.test.js
-node --test dist/test/integration/omp-live-helpers.test.js dist/test/integration/net-trace.test.js
-```
+---
 
-Live command body inside the established isolated wrapper, with a new owned evidence directory prepared by Main (not the historical E5/E6 directory):
-
-```sh
-REALM_LIVE_OMP=1 REALM_OMP_NET_TRACE=1 REALM_OMP_EVIDENCE_DIR=<new-owned-evidence-directory> node --test --test-concurrency=1 dist/test/integration/omp-guard.test.js dist/test/integration/omp-spike.test.js
-```
-
-`REALM_OMP_BIN` can name the existing executable; record its actual version. Missing opt-in/platform/Omp/version/build/strace/Podman prerequisite must remain an explicitly named skip, not a substitute for current positive evidence. No requested acceptance is satisfied by running only a narrower source-string/count check. For C1, retain repeat-call notice count, exact host bytes, dispatcher result/details and provider continuation; for unreachable/fail-closed retain actual absence/error. For HARN-03 require the matching current warm turn and strict unchanged allowlist; keep cold/network failures distinct.
-
-## Remaining ownership and completion blockers
-
-- Current-source postjoin execution and current answered C1–C4/HARN-03 are UNVERIFIED. Authored tests and retained earlier passes cannot close that gap.
-- `test/integration/omp-guard.test.ts` live C1/C2 fixture alignment is outside A15's five paths and A05's four signed paths. No worker expands its scope; A01 routes the actual dependency without inventing an amended DAG/task.
-- Separate global allocation is unavailable here: REQUIREMENTS/ROADMAP/STATE are untouched. REQUIREMENTS' historical checked HARN-02/HARN-04/OMP-05 and obsolete recovery interpretation need sole separately authorized A15 reconciliation, preserving original receipts and reflecting reopened status. No `phase.complete`, acceptance rewrite, raw DAG write or new tracking/reconciliation vehicle.
-- Lifecycle runbook stale network text is outside ownership. OMPX-02..05/permanent production case and remaining 52-row milestone work are not closed. Individual CRASH-02..07, OBS-03..04, ONB-07, DEF-01..02 coverage and explicit logged `recordsDeleted` proof remain separately accepted/unverified until actual implementation and parent recipes exist.
-- No merge/release/publication/workflow dispatch/backport is authorized without new written parent approval. No global planning, signing/key/guard, legal/spec/changelog/version or main/sibling mutation.
-
-## Worker execution statement
-
-Five scoped Markdown paths actually changed; both new-file parents and existing owned paths resolved inside the expected Recovery realpath before writes. No tests/build/typecheck/lint/formatter/gates/smokes, no indirect check script or `docs_bundle` twin, no live/service action, no commit/Git mutation, no signature/key access, no global/task-state update and no phase/milestone completion command was performed. Documentation scanners/link/readability/coverage checks are **not run under the edit-only assignment**, not falsely marked pass. Main owns the sole joined verification.
+_Verified: 2026-11-12T09:13:03Z_
+_Verifier: Claude (gsd-verifier)_

@@ -199,6 +199,14 @@ void test("write mode refuses a symlink at the target even when it resolves insi
   });
 });
 
+void test("write mode refuses a symlink named with a trailing slash or /. exactly as without it (D-34)", (t) => {
+  const { root, rootDir } = fixture(t);
+  symlinkSync("real.txt", join(rootDir, "alias.txt"));
+  assertRejectsWith(() => canonicalize(root, "alias.txt", { mode: "write" }), "PATH_ESCAPE");
+  assertRejectsWith(() => canonicalize(root, "alias.txt/", { mode: "write" }), "PATH_ESCAPE");
+  assertRejectsWith(() => canonicalize(root, "alias.txt/.", { mode: "write" }), "PATH_ESCAPE");
+});
+
 void test("write mode still follows a symlink that is an intermediate directory (D-34)", (t) => {
   const { root, rootDir } = fixture(t);
   symlinkSync("a", join(rootDir, "dirlink"));

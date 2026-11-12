@@ -2,8 +2,9 @@
 // that spawned it. Right after its spawn, the driver writes <stateDir>/<sessionId>.runner.json naming the leader's pid,
 // its process group id, its start time in clock ticks (field 22 of /proc/<pid>/stat) and the boot id. Before a restart
 // hydrates an adopted session, the controller reads that record and stops the recorded group, so a new runner never shares
-// a sandbox with an old one. Every check reads /proc. Nothing is signalled unless the recorded leader is still the same
-// process, and a pid whose start ticks differ is a different process that is never signalled.
+// a sandbox with an old one. Every check reads /proc. The SIGTERM goes only to a recorded leader that is still the same
+// process, and a pid whose start ticks differ is a different process that is never signalled. The SIGKILL goes to the
+// record's group id, which the record proves is this runner's.
 
 import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -143,20 +144,27 @@ export function groupHasMembers(pgid: number): boolean {
   }
 }
 
-// Sends one signal to the recorded group, and only while the recorded leader is still the same process. A leader that is
-// absent or reused is never signalled. Linux gives Node no pidfd here, so a race remains between the check and the kill:
+// Sends one signal to a process group. The caller must hold the group as this runner's. The record names pgid equal to pid,
+// and a group that still has members keeps that id reserved, so while it is live the id cannot belong to another group.
+// Returns true when the signal was sent.
+function signalGroup(pgid: number, signal: NodeJS.Signals): boolean {
+  try {
+    process.kill(-pgid, signal);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Sends one signal to the recorded group, and only while the recorded leader is still the same process. An absent or reused
+// leader gets nothing from this function. Linux gives Node no pidfd here, so a race remains between the check and the kill:
 // the leader can exit, and its pid be reused, in the gap. The gap is one system call wide and cannot be closed without a
 // pidfd. Returns true when the signal was sent.
 function signalRecordedGroup(record: RunnerRecord, signal: NodeJS.Signals): boolean {
   if (leaderStateOf(record) !== "same") {
     return false;
   }
-  try {
-    process.kill(-record.pgid, signal);
-    return true;
-  } catch {
-    return false;
-  }
+  return signalGroup(record.pgid, signal);
 }
 
 // Waits until the group has no live members, for at most ms. True when it is empty.
@@ -174,21 +182,19 @@ async function waitGone(pgid: number, ms: number, groupLive: (pgid: number) => b
 }
 
 // Stops the runner of a recorded session. True only when the session may be adopted: the recorded group has no live member
-// left. A leader that is other, a reused pid, is refused and never signalled. A leader that is absent is never signalled: its
-// group is only awaited, for at most graceMs, so an unreaped zombie leader has time to be reaped, and a member still alive
-// then refuses the session. A live leader gets SIGTERM, then SIGKILL when the group still has members after graceMs, and the
-// group must be empty once the kill settles. Every wait is bounded, and a wait that expires returns false.
+// left. A leader that is other, a reused pid, is refused and nothing is signalled. A live leader gets SIGTERM; an absent
+// leader gets none. The group is then awaited for at most graceMs, so an unreaped zombie leader has time to be reaped. When
+// members still remain, the group gets SIGKILL only while its recorded leader is the same process. An absent leader leaves the
+// group unsignalled, so the stop returns false and adoption is refused: a group id can be reused by another job, so the
+// members cannot be tied to this runner once its leader is gone.
+// Every wait is bounded, and a wait that expires returns false.
 export async function stopRecordedRunner(
   record: RunnerRecord,
   graceMs: number,
   groupLive: (pgid: number) => boolean,
 ): Promise<boolean> {
-  const leader = leaderStateOf(record);
-  if (leader === "other") {
+  if (leaderStateOf(record) === "other") {
     return false;
-  }
-  if (leader === "absent") {
-    return waitGone(record.pgid, graceMs, groupLive);
   }
   signalRecordedGroup(record, "SIGTERM");
   if (await waitGone(record.pgid, graceMs, groupLive)) {

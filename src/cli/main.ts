@@ -679,7 +679,17 @@ function runInitCommand(words: readonly string[], deps: CliDeps): CliResult {
     return failureFor(error);
   }
 }
+// Every failure the command raises, including a rejection from a seam, becomes one catalogue-coded stderr line and exit 1.
+// No rejection escapes runCli, so the entry edge never sees an unhandled rejection.
 export async function runCli(argv: readonly string[], deps: CliDeps): Promise<CliResult> {
+  try {
+    return await dispatchCli(argv, deps);
+  } catch (error: unknown) {
+    return { exitCode: 1, stdout: "", stderr: diagnosticFor(error) };
+  }
+}
+
+async function dispatchCli(argv: readonly string[], deps: CliDeps): Promise<CliResult> {
   const parsed = parseArgv(argv);
   if (parsed === undefined) {
     return { exitCode: 2, stdout: "", stderr: `${USAGE}\n` };
@@ -812,5 +822,10 @@ export async function main(): Promise<void> {
 }
 
 if (isDirectEntry(import.meta.url, process.argv[1])) {
-  void main();
+  // runCli never rejects, so only an output flush can fail here. That failure is one catalogue-coded stderr line and exit 1.
+  main().catch((error: unknown) => {
+    process.stderr.write(diagnosticFor(error), () => {
+      process.exit(1);
+    });
+  });
 }

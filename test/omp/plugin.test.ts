@@ -1,15 +1,20 @@
-import { test } from "node:test";
+import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ERROR_CODES, makeRealmError, type ErrorCode } from "../../src/core/errors.js";
+import { createEventBus } from "../../src/core/events.js";
 import type { StateSnapshot } from "../../src/core/state-machine.js";
 import { STATUS_LABELS, displayStatus } from "../../src/core/status.js";
 import type { DaemonClient, DaemonStatus } from "../../src/daemon/client.js";
 import type { MetricsSnapshot } from "../../src/observe/metrics.js";
-import type { PolicyMode } from "../../src/contract/validate.js";
-import type { ToolOutcome } from "../../src/tools/dispatch.js";
+import { validate, type PolicyMode } from "../../src/contract/validate.js";
+import { LockTable } from "../../src/fs/locks.js";
+import { bindRoot } from "../../src/fs/root.js";
+import { gateMutation } from "../../src/lifecycle/mutation-gate.js";
+import { ToolDispatcher, type ToolOutcome } from "../../src/tools/dispatch.js";
 import type { HostToolDefinition } from "../../src/omp/tools.js";
 import {
   GUARD_STATUS_BUDGET_MS,
@@ -342,6 +347,8 @@ class FakePi implements OmpExtensionApi {
 interface FixtureOptions {
   // The mode the fake daemon reports. Omitted means fail-closed, the policy default; advisory tests say so.
   readonly mode?: PolicyMode;
+  // The session working directory the host reports. Omitted means the shared WORKSPACE constant.
+  readonly cwd?: string;
   readonly snapshot?: StateSnapshot;
   // One entry per attach, in order: a code rejects that attach with it; an absent entry resolves.
   readonly attachErrors?: readonly ErrorCode[];
@@ -362,7 +369,7 @@ interface Fixture {
 
 function makeFixture(options: FixtureOptions = {}): Fixture {
   const ui = new FakeUi();
-  const ctx = new FakeCtx(ui, WORKSPACE);
+  const ctx = new FakeCtx(ui, options.cwd ?? WORKSPACE);
   const pi = new FakePi();
   const daemon = new FakeDaemon(options.snapshot ?? ACTIVE, options.mode ?? "fail-closed");
   const attachCalls: string[] = [];
@@ -881,7 +888,7 @@ void test("OMP-05 (d): required mode blocks an edit when the status fetch times 
   assert.deepEqual(fixture.ui.notifications, [], "required mode does not warn on an unreadable status");
 });
 
-void test("OMP-05 (d): advisory mode only warns when the status fetch times out and lets the call through (P5-D6)", async () => {
+void test("OMP-05 (d): advisory mode refuses an edit when the status fetch times out and warns nothing (P5-D6, CR-01)", async () => {
   const fixture = makeFixture({ mode: "advisory" });
   startHandlerOf(fixture.pi)(fixture.ctx);
   await waitForDetail(fixture.ui, "container running");
@@ -890,10 +897,8 @@ void test("OMP-05 (d): advisory mode only warns when the status fetch times out 
   const verdict = toolCallOf(fixture.pi)({ toolName: "edit" });
   expireTimer(fixture.ctx, GUARD_STATUS_BUDGET_MS);
 
-  assert.equal(await verdict, undefined, "advisory mode never blocks on an unreadable status");
-  assert.equal(fixture.ui.notifications.length, 1);
-  assert.match(fixture.ui.notifications[0] ?? "", /TOOL_TIMEOUT/);
-  assert.match(fixture.ui.notifications[0] ?? "", /advisory policy/);
+  assert.deepEqual(await verdict, { block: true, reason: "TOOL_TIMEOUT" }, "advisory refuses an edit the daemon has not confirmed");
+  assert.deepEqual(fixture.ui.notifications, [], "a refused edit raises no warning");
 });
 
 void test("OMP-05 / LOW-01: a tool name the guard cannot classify is refused, never waved through (P5-D6)", async () => {
@@ -1229,7 +1234,7 @@ void test("B9 / T5: the Realm write stays active across every realm transition, 
   assert.equal(fixture.pi.activeSets.length, 0, "advisory mode with nothing removed never sets the active set");
 });
 
-void test("B9 / T6: advisory with an unreadable status keeps the Realm write active, and the call reaches the daemon", async () => {
+void test("B9 / T6: advisory with an unreadable status refuses the Realm write before any daemon call, and the write stays active", async () => {
   const fixture = makeFixture({ mode: "advisory" });
   startHandlerOf(fixture.pi)(fixture.ctx);
   await waitForDetail(fixture.ui, "container running");
@@ -1237,7 +1242,8 @@ void test("B9 / T6: advisory with an unreadable status keeps the Realm write act
   fixture.daemon.hangStatus = true;
   const verdict = toolCallOf(fixture.pi)({ toolName: "write" });
   expireTimer(fixture.ctx, GUARD_STATUS_BUDGET_MS);
-  assert.equal(await verdict, undefined, "the Realm write goes to the daemon");
+  assert.deepEqual(await verdict, { block: true, reason: "TOOL_TIMEOUT" }, "the Realm write is refused under advisory");
+  assert.equal(fixture.daemon.count("call"), 0, "the refused Realm write makes no daemon call");
   assert.ok(fixture.pi.getActiveTools().includes("write"), "the Realm write stays in the active set");
 });
 
@@ -1247,6 +1253,113 @@ void test("B2: a Realm write with no session passes the guard, and the tool refu
   const result = await toolOf(fixture.pi, "write").execute("call-1", { path: "notes.txt", content: "hello" });
   assert.deepEqual(result.details, { outcome: "refused", tool: "write", code: "REALM_NOT_ACTIVE", retryable: true });
   assert.deepEqual(fixture.daemon.calls, [], "no daemon call is made");
+});
+
+// HARN-02: registered execution reaches the real dispatcher, validation, mutation gate, pinned filesystem
+// write and audit sink. Only the daemon transport is a host double: the fake daemon's dispatch is routed
+// through the dispatcher built here.
+function makeRegisteredWorkspace(t: TestContext, mode: PolicyMode): {
+  readonly fixture: Fixture;
+  readonly workspace: string;
+  readonly stateDir: string;
+} {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), "realm-omp-")));
+  t.after(() => { rmSync(base, { recursive: true, force: true }); });
+  const workspace = join(base, "ws");
+  mkdirSync(workspace);
+  const stateDir = join(base, "state");
+  const parsed = validate("policy", { mode, workspaceRoots: [workspace] });
+  assert.ok(parsed.ok);
+  const fixture = makeFixture({ cwd: workspace, mode, snapshot: { state: "degraded", reason: "bridge unavailable", lastTransitionAt: CLOCK_ISO } });
+  const dispatcher = new ToolDispatcher({
+    sessionId: "sess-omp-registered",
+    boundRoot: bindRoot(workspace),
+    policy: parsed.value,
+    controller: {
+      events: createEventBus(),
+      snapshot: () => fixture.daemon.snapshot,
+      mutationGate: () => gateMutation(parsed.value, fixture.daemon.snapshot.state),
+      create: () => Promise.reject(new Error("registered writes must not create a sandbox")),
+    },
+    locks: new LockTable(),
+    stateDir,
+    runOpenShell: () => Promise.reject(new Error("registered writes must not execute a command")),
+  });
+  fixture.daemon.call = (call: unknown) => dispatcher.call(call);
+  return { fixture, workspace, stateDir };
+}
+
+void test("HARN-02 C1: registered advisory write warns on every inactive invocation and writes exact host bytes", async (t) => {
+  const { fixture, workspace, stateDir } = makeRegisteredWorkspace(t, "advisory");
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitForDetail(fixture.ui, "bridge unavailable");
+  const write = toolOf(fixture.pi, "write");
+  for (const [index, content] of ["first π\n", "second 🙂\n"].entries()) {
+    const result = await write.execute(`advisory-${String(index)}`, { path: "c1.txt", content });
+    assert.equal(result.isError, false);
+    assert.deepEqual(readFileSync(join(workspace, "c1.txt")), Buffer.from(content));
+    assert.equal(fixture.ui.notifications.length, index + 1, "the same notice is never deduplicated");
+    assert.equal(fixture.ui.notifications[index], "realm is degraded; the write proceeds under advisory policy");
+  }
+  const read = await toolOf(fixture.pi, "read").execute("consumer-read", { path: "c1.txt", maxBytes: 100 });
+  assert.equal(read.content[0]?.text, "second 🙂\n");
+  const entries = readFileSync(join(stateDir, "audit", "sess-omp-registered.jsonl"), "utf8")
+    .trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
+  assert.deepEqual(entries.filter((entry) => entry["tool"] === "write").map((entry) => entry["phase"]),
+    ["admission", "result", "admission", "result"]);
+});
+
+void test("HARN-02 C2: registered inactive fail-closed write refuses REALM_NOT_ACTIVE without a host file", async (t) => {
+  const { fixture, workspace } = makeRegisteredWorkspace(t, "fail-closed");
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitForDetail(fixture.ui, "bridge unavailable");
+  const result = await toolOf(fixture.pi, "write").execute("inactive", { path: "c2.txt", content: "denied" });
+  assert.deepEqual(result.details, { outcome: "refused", tool: "write", code: "REALM_NOT_ACTIVE", retryable: true });
+  assert.ok(!existsSync(join(workspace, "c2.txt")));
+  assert.deepEqual(fixture.ui.notifications, []);
+});
+
+// The daemon is unreachable: its status read and its dispatch both refuse with REALM_NOT_ACTIVE, as a refused connection does.
+// Under advisory the guard refuses the Realm write (the owner ruling, plan 12-02); under fail-closed it passes the call to the daemon.
+for (const mode of ["advisory", "fail-closed"] as const) {
+  void test(`HARN-02: registered ${mode} write refuses an unreachable daemon without host fallback`, async (t) => {
+    const { fixture, workspace } = makeRegisteredWorkspace(t, mode);
+    startHandlerOf(fixture.pi)(fixture.ctx);
+    await waitForDetail(fixture.ui, "bridge unavailable");
+    fixture.daemon.failStatus = "REALM_NOT_ACTIVE";
+    // The dispatch replaces the real dispatcher route, so the refusal is set on the dispatch itself.
+    fixture.daemon.call = () => Promise.reject(makeRealmError("REALM_NOT_ACTIVE"));
+    const verdict = await toolCallOf(fixture.pi)({ toolName: "write" });
+    assert.deepEqual(verdict, mode === "advisory" ? { block: true, reason: "REALM_NOT_ACTIVE" } : undefined);
+    const result = await toolOf(fixture.pi, "write").execute("unreachable", { path: "offline.txt", content: "denied" });
+    assert.deepEqual(result.details, { outcome: "refused", tool: "write", code: "REALM_NOT_ACTIVE", retryable: true });
+    assert.ok(!existsSync(join(workspace, "offline.txt")));
+    assert.deepEqual(fixture.ui.notifications, [], "cached advisory mode cannot authorize a registered write");
+  });
+}
+
+void test("HARN-02 C1: registered advisory writes propagate validation, path and conditional-write failures", async (t) => {
+  const { fixture, workspace } = makeRegisteredWorkspace(t, "advisory");
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitForDetail(fixture.ui, "bridge unavailable");
+  writeFileSync(join(workspace, "existing.txt"), "original");
+  symlinkSync(join(workspace, "existing.txt"), join(workspace, "link.txt"));
+  const write = toolOf(fixture.pi, "write");
+  const cases = [
+    { params: { path: "invalid.txt", content: 42 }, code: "SCHEMA_INVALID" },
+    { params: { path: "../escaped.txt", content: "no" }, code: "SCHEMA_INVALID" },
+    { params: { path: "link.txt", content: "no" }, code: "PATH_ESCAPE" },
+    { params: { path: "existing.txt", content: "no", ifMatchSha256: "0".repeat(64) }, code: "LOCK_CONFLICT" },
+  ];
+  for (const entry of cases) {
+    const result = await write.execute("refused", entry.params);
+    assert.equal(result.isError, true);
+    assert.equal(result.details.outcome, "refused");
+    assert.equal(result.details.code, entry.code);
+  }
+  assert.equal(readFileSync(join(workspace, "existing.txt"), "utf8"), "original");
+  assert.ok(!existsSync(join(workspace, "invalid.txt")));
+  assert.ok(!existsSync(join(workspace, "..", "escaped.txt")));
 });
 
 void test("P16 (b): the mode is published only after the tool set takes it, so a refused change leaves the last published mode", async () => {
@@ -1261,10 +1374,11 @@ void test("P16 (b): the mode is published only after the tool set takes it, so a
   fixture.pi.ignoreRemoval = false;
 
   fixture.daemon.hangStatus = true;
+  const noticesBeforeEdit = fixture.ui.notifications.length;
   const verdict = toolCall({ toolName: "edit" });
   expireTimer(fixture.ctx, GUARD_STATUS_BUDGET_MS);
-  assert.equal(await verdict, undefined, "the unreadable status is judged by the last published mode, advisory");
-  assert.match(fixture.ui.notifications[fixture.ui.notifications.length - 1] ?? "", /advisory policy/);
+  assert.deepEqual(await verdict, { block: true, reason: "TOOL_TIMEOUT" }, "the unreadable status refuses edit under the last published mode, advisory");
+  assert.equal(fixture.ui.notifications.length, noticesBeforeEdit, "the refused edit adds no notification");
 });
 
 void test("P16 (c): in the same mode, a built-in that Omp puts back is removed again on the next guarded call", async () => {
@@ -1313,15 +1427,15 @@ function sessionOf(fixture: Fixture, client: DaemonClient | null, mode: PolicyMo
   return { ctx: fixture.ctx, attachedCwd: fixture.ctx.cwd, tools: fixture.tools, client, mode, timers: new Map(), poll: null, refreshing: false, errorStamp: null, refusal: null, link: "off", reattachCount: 0, wait: null, onLinkLost: null };
 }
 
-// The policy mode the plugin last published. The probe reads it through the one path that shows it: with the status unreadable,
-// an edit follows the published mode, advisory passing it and fail-closed refusing it. It changes no host tool.
+// The policy mode the plugin last published. With the status unreadable, the Realm write is the one guarded call whose verdict
+// still follows the published mode: fail-closed lets it reach the daemon (undefined), advisory refuses it. The probe changes no host tool.
 async function publishedModeOf(fixture: Fixture): Promise<PolicyMode> {
   fixture.daemon.hangStatus = true;
-  const verdict = toolCallOf(fixture.pi)({ toolName: "edit" });
+  const verdict = toolCallOf(fixture.pi)({ toolName: "write" });
   expireTimer(fixture.ctx, GUARD_STATUS_BUDGET_MS);
   const result = await verdict;
   fixture.daemon.hangStatus = false;
-  return result === undefined ? "advisory" : "fail-closed";
+  return result === undefined ? "fail-closed" : "advisory";
 }
 
 void test("OMPX-03 (T2): a host bash call in fail-closed is refused with POLICY_DENIED whatever state the status reads", async () => {
@@ -1447,7 +1561,7 @@ void test("P16 (lifecycle b): fail-closed, advisory, then fail-closed moves the 
   assert.equal(await publishedModeOf(fixture), "fail-closed");
 });
 
-void test("P16 (lifecycle c): a failed restore followed by an unavailable daemon leaves the planned set, and edit follows the last published mode", async () => {
+void test("P16 (lifecycle c): a failed restore followed by an unavailable daemon leaves the planned set, and edit is refused on an unreadable status whatever the last published mode", async () => {
   const fixture = makeFixture({ mode: "fail-closed" });
   startHandlerOf(fixture.pi)(fixture.ctx);
   await waitForDetail(fixture.ui, "container running");
@@ -1470,11 +1584,12 @@ void test("P16 (lifecycle c): a failed restore followed by an unavailable daemon
   fixture.daemon.mode = "advisory";
   assert.equal(await toolCall({ toolName: "bash" }), undefined, "a readable advisory status publishes advisory");
   fixture.daemon.hangStatus = true;
+  const noticesBeforeAdvisoryEdit = fixture.ui.notifications.length;
   const advisoryEdit = toolCall({ toolName: "edit" });
   expireTimer(fixture.ctx, GUARD_STATUS_BUDGET_MS);
-  assert.equal(await advisoryEdit, undefined, "advisory, as published, lets edit through");
+  assert.deepEqual(await advisoryEdit, { block: true, reason: "TOOL_TIMEOUT" }, "advisory, as published, refuses edit on an unreadable status");
   fixture.daemon.hangStatus = false;
-  assert.match(fixture.ui.notifications.at(-1) ?? "", /advisory policy/, "the advisory edit carries its warning");
+  assert.equal(fixture.ui.notifications.length, noticesBeforeAdvisoryEdit, "the refused advisory edit adds no notification");
 });
 
 void test("P16 (lifecycle d): a deferred setter outlives its timeout, a retry and a shutdown; a new session is refused while it holds, then the next poll reconciles", async () => {
@@ -2052,15 +2167,11 @@ void test("failed poll mode changes retain last applied posture and unreadable g
       fixture.pi.rejectSetter = false;
       fixture.pi.ignoreRemoval = false;
       fixture.daemon.hangStatus = true;
+      const noticesBeforeEdit = fixture.ui.notifications.length;
       const pending = toolCallOf(fixture.pi)({ toolName: "edit" });
       expireTimer(fixture.ctx, GUARD_STATUS_BUDGET_MS);
-      const verdict = await pending;
-      if (previous === "advisory") {
-        assert.equal(verdict, undefined);
-        assert.match(fixture.ui.notifications.at(-1) ?? "", /advisory policy/);
-      } else {
-        assert.deepEqual(verdict, { block: true, reason: "TOOL_TIMEOUT" });
-      }
+      assert.deepEqual(await pending, { block: true, reason: "TOOL_TIMEOUT" }, `${previous}, ${failure}: an unreadable status refuses edit`);
+      assert.equal(fixture.ui.notifications.length, noticesBeforeEdit, `${previous}, ${failure}: the refused edit adds no notification`);
       assert.ok(statusTexts(fixture.ui).at(-1)?.endsWith(retained));
     }
   }
@@ -2083,15 +2194,11 @@ void test("failed guarded mode changes never paint the requested posture", async
       fixture.pi.rejectSetter = false;
       fixture.pi.ignoreRemoval = false;
       fixture.daemon.hangStatus = true;
+      const noticesBeforeEdit = fixture.ui.notifications.length;
       const pending = toolCallOf(fixture.pi)({ toolName: "edit" });
       expireTimer(fixture.ctx, GUARD_STATUS_BUDGET_MS);
-      const verdict = await pending;
-      if (previous === "advisory") {
-        assert.equal(verdict, undefined);
-        assert.match(fixture.ui.notifications.at(-1) ?? "", /advisory policy/);
-      } else {
-        assert.deepEqual(verdict, { block: true, reason: "TOOL_TIMEOUT" });
-      }
+      assert.deepEqual(await pending, { block: true, reason: "TOOL_TIMEOUT" }, `${previous}, ${failure}: an unreadable status refuses edit`);
+      assert.equal(fixture.ui.notifications.length, noticesBeforeEdit, `${previous}, ${failure}: the refused edit adds no notification`);
       assert.ok(statusTexts(fixture.ui).at(-1)?.endsWith(previous === "advisory" ? LAST_ADVISORY_STATUS : LAST_FAIL_CLOSED_STATUS));
     }
   }

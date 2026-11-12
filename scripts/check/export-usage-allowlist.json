@@ -801,6 +801,26 @@
       "file": "src/session/workspace-registry.ts",
       "name": "workspaceEntryOf",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/omp/host-tools.ts",
+      "name": "HOST_TOOL_SET_BUDGET_MS",
+      "reason": "D-1306 test-only seam: the test asserts the setter bound against this constant"
+    },
+    {
+      "file": "src/runtime/driver/supervisor.ts",
+      "name": "endSupervisorProcess",
+      "reason": "D-1306 test-only seam: the test drives the post-SIGKILL bound directly with a fake child"
+    },
+    {
+      "file": "src/runtime/sweep.ts",
+      "name": "SweepClient",
+      "reason": "D-1306 test-only seam: the sweep tests type their fake libpod client against it"
+    },
+    {
+      "file": "src/runtime/sweep.ts",
+      "name": "removeAllRealmContainers",
+      "reason": "D-1306 test-only seam: the sweep tests drive the zero-orphan sweep with fake clients"
     }
   ]
 }

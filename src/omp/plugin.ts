@@ -265,6 +265,20 @@ function reportLinkLoss(session: ActiveSession, code: string, isCurrent: () => b
   }
 }
 
+// Runs a task the handler does not wait for. Its own outcome paints the status, but a failure it raises (a status write that
+// throws, for one) is routed to the notice surface, so it never ends as an unhandled rejection.
+function runDetached(session: ActiveSession, work: Promise<unknown>): void {
+  void work.catch((error: unknown) => {
+    const code = error instanceof RealmError ? error.code : "unexpected error";
+    try {
+      session.ctx.ui.notify(`realm status update failed: ${code}`);
+    } catch {
+      // The notice surface itself failed, so the last resort is stderr. Only the catalogue code is written.
+      process.stderr.write(`realm status update failed and its notice could not be shown: ${code}\n`);
+    }
+  });
+}
+
 // The retry command's reply for one attach outcome.
 function describeRetry(outcome: AttachOutcome): string {
   if (outcome.outcome === "attached") {
@@ -483,7 +497,7 @@ export function registerRealmPlugin(pi: OmpExtensionApi, options: RealmPluginOpt
       return;
     }
     moveLink(session, "attaching");
-    void attachCycle(session);
+    runDetached(session, attachCycle(session));
   };
 
   // One re-attach attempt: the attach path, then its outcome sets the next sub-state.
@@ -614,14 +628,14 @@ export function registerRealmPlugin(pi: OmpExtensionApi, options: RealmPluginOpt
     live = session;
     session.poll = {
       handle: ctx.setInterval(() => {
-        void repaint(session);
+        runDetached(session, repaint(session));
       }, STATUS_POLL_MS),
     };
     // Detached: the handler returns while the attach runs, and the outcome paints itself.
     if (reattach === null) {
-      void attach(session);
+      runDetached(session, attach(session));
     } else {
-      void attachCycle(session);
+      runDetached(session, attachCycle(session));
     }
   };
 
@@ -707,9 +721,10 @@ function nowIso(): string {
 // Omp refuses a removed tool before this hook runs. bash is the one built-in fail-closed keeps active, so this hook is what refuses
 // it, with a catalogue code Omp's own refusal lacks.
 //
-// The state comes from a daemon status read bounded by GUARD_STATUS_BUDGET_MS. When the status cannot be read, the last
-// published mode decides: advisory warns a guarded call, fail-closed, or no mode yet, refuses it. Any other host tool whose
-// status cannot be read is refused, because its mode is unconfirmed.
+// The state comes from a daemon status read bounded by GUARD_STATUS_BUDGET_MS. When the status cannot be read, a guarded call
+// (edit) is refused in every mode (CR-01): the advisory allowance needs a reachable daemon, which an unreadable status does not
+// confirm. The Realm write is refused under advisory and otherwise reaches the daemon, which decides it. Any other host tool
+// whose status cannot be read is refused, because its mode is unconfirmed.
 
 export async function guardHostToolCall(
   toolName: unknown,
@@ -757,12 +772,13 @@ export async function guardHostToolCall(
       paintRefusal(session, codeOfError(error));
     }
     reportLinkLoss(session, codeOfError(error), isCurrent);
-    if (toolName === REALM_WRITE_NAME) {
-      // The Realm write is never hidden, so the daemon decides it. With no client the daemon call is refused there (B2).
+    if (toolName === REALM_WRITE_NAME && session.mode !== "advisory") {
+      // Fail-closed never hides the Realm write, so the daemon decides it. With no client the daemon call is refused there (B2).
       return undefined;
     }
-    if (GUARDED_HOST_TOOLS.includes(toolName)) {
-      return unreadableVerdict(session, error);
+    if (toolName === REALM_WRITE_NAME || GUARDED_HOST_TOOLS.includes(toolName)) {
+      // Advisory is the exception: its allowance needs a reachable daemon, which an unreadable status does not confirm.
+      return unreadableVerdict(error);
     }
     return { block: true, reason: "POLICY_DENIED" };
   }
@@ -840,12 +856,8 @@ function readStatus(session: ActiveSession): Promise<DaemonStatus> {
   });
 }
 
-function unreadableVerdict(session: ActiveSession, error: unknown): HostToolVerdict | undefined {
+function unreadableVerdict(error: unknown): HostToolVerdict {
   const code = error instanceof RealmError ? error.code : "REALM_NOT_ACTIVE";
-  if (session.mode === "advisory") {
-    session.ctx.ui.notify(`realm status unavailable (${code}); the write proceeds under advisory policy`);
-    return undefined;
-  }
   return { block: true, reason: code };
 }
 

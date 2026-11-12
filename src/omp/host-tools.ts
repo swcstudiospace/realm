@@ -2,6 +2,7 @@
 // This module does not import plugin.ts. It reads Omp through the structural HostToolsApi, which OmpExtensionApi satisfies.
 
 import { makeRealmError } from "../core/errors.js";
+import { withTimeout } from "../core/timeout.js";
 import type { PolicyMode } from "../contract/validate.js";
 import type { DaemonStatus } from "../daemon/client.js";
 import { planHostTools, sameToolNames } from "./tools.js";
@@ -29,6 +30,10 @@ export interface HostToolSet {
 // The most changes the set holds at once: one running and one waiting. A change past that is refused at once, so no queue grows
 // behind a setter that does not return.
 const MAX_HOST_CHANGES = 2;
+
+// The longest one host tool setter may take. A setter that has not settled by then fails its change with TOOL_TIMEOUT, so the
+// queue moves on and no later change is refused behind it.
+export const HOST_TOOL_SET_BUDGET_MS = 5_000;
 
 // A fresh host tool set for one registration: nothing is removed yet and no change is in flight.
 export function hostToolSetOf(pi: HostToolsApi): HostToolSet {
@@ -76,15 +81,25 @@ async function applyHostMode(tools: HostToolSet, mode: PolicyMode, isCurrent: ()
   const plan = planHostTools(mode, pi.getAllTools().map((tool) => tool.name), pi.getActiveTools(), tools.removed);
   // Owed going into the change, so a removal that only partly holds is still owed a restore.
   const owedIn = [...new Set([...tools.removed, ...plan.owed])];
+  const readBack = (): void => {
+    const reported = pi.getActiveTools();
+    const registered = pi.getAllTools().map((tool) => tool.name);
+    const owed = new Set([...tools.removed, ...owedIn]);
+    tools.removed = [...owed].filter((name) => registered.includes(name) && !reported.includes(name));
+  };
+  let setter: Promise<void> | undefined;
   try {
     if (!sameToolNames(pi.getActiveTools(), plan.wanted)) {
-      await pi.setActiveTools(plan.wanted);
+      setter = pi.setActiveTools(plan.wanted);
+      await withTimeout(setter, HOST_TOOL_SET_BUDGET_MS, "TOOL_TIMEOUT");
     }
   } finally {
     // Read back whether or not the setter held, and whether or not this change is still current.
-    const reported = pi.getActiveTools();
-    const registered = pi.getAllTools().map((tool) => tool.name);
-    tools.removed = owedIn.filter((name) => registered.includes(name) && !reported.includes(name));
+    readBack();
+    if (setter !== undefined) {
+      // A setter past its budget may still apply later. Its read-back then replaces the record, so the next owner plans from the host.
+      setter.then(readBack, readBack);
+    }
   }
   if (!sameToolNames(pi.getActiveTools(), plan.wanted)) {
     throw makeRealmError("POLICY_DENIED");
