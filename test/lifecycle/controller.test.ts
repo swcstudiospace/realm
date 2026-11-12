@@ -511,7 +511,7 @@ void test("a record write that fails as create commits active leaves the session
   assert.equal(store.load(SESSION)?.state, "error");
 });
 
-void test("a record write that fails as probe records an unhealthy result leaves the session active, matching its record", async (t) => {
+void test("a record write that fails as probe still takes the realm out of service in memory", async (t) => {
   const { controller, store, exec, workspace } = fixture(t);
   await controller.create(workspace);
   const containerId = store.load(SESSION)?.containerId;
@@ -520,17 +520,17 @@ void test("a record write that fails as probe records an unhealthy result leaves
   failWritesOfState(store, "error");
 
   await assert.rejects(controller.probe(), (error: unknown) => error instanceof Error && error.message === "disk full");
-  assert.equal(controller.snapshot().state, "active");
-  assert.equal(store.load(SESSION)?.state, "active");
+  assert.equal(controller.snapshot().state, "error");
+  assert.equal(store.load(SESSION)?.state, "active", "the failed write leaves the last saved record");
 });
 
-void test("a record write that fails as a raw probe failure is recorded leaves the session active, matching its record", async (t) => {
+void test("a record write that fails as a raw probe failure still takes the realm out of service in memory", async (t) => {
   const { controller, store, exec, workspace } = fixture(t);
   await controller.create(workspace);
   exec.failNext("probe", new Error(`probe exploded with ${RAW_SECRET}`));
   failWritesOfState(store, "error");
 
   await assert.rejects(controller.probe(), (error: unknown) => error instanceof Error && error.message === "disk full");
-  assert.equal(controller.snapshot().state, "active");
-  assert.equal(store.load(SESSION)?.state, "active");
+  assert.equal(controller.snapshot().state, "error");
+  assert.equal(store.load(SESSION)?.state, "active", "the failed write leaves the last saved record");
 });

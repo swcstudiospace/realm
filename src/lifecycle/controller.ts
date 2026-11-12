@@ -370,10 +370,9 @@ export class LifecycleController {
     // A stop may have taken the session while the probe was in flight. Only the active and degraded
     // states take the outcome of a probe (F4).
     if (health === "unhealthy" && epoch === this.lifeEpoch && this.isInService()) {
-      // The record is written before the in-memory transition commits, so a failed write leaves
-      // memory and record both in service.
-      this.writeState("error");
+      // The realm leaves service first, so a failed record write cannot leave it active; the write error then surfaces.
       this.machine.transition("error", "probe failed");
+      this.writeState("error");
     }
     return this.machine.snapshot();
   }
@@ -746,12 +745,12 @@ export class LifecycleController {
       return this.machine.snapshot();
     }
     if (!(error instanceof RealmError)) {
-      this.writeState("error");
       this.machine.transition("error", PORT_FAILURE_CODE);
+      this.writeState("error");
       throw makeRealmError(PORT_FAILURE_CODE);
     }
-    this.writeState("error");
     this.machine.transition("error", error.code);
+    this.writeState("error");
     return this.machine.snapshot();
   }
 
