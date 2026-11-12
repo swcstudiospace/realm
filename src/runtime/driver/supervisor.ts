@@ -7,10 +7,14 @@ import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { makeRealmError, RealmError } from "../../core/errors.js";
+import { withTimeout } from "../../core/timeout.js";
 import { supervisorArguments, supervisorEnvironment } from "./runtime-channel.js";
 
 // How long a supervisor gets to exit after SIGTERM before it is killed.
 const STOP_GRACE_MS = 5000;
+// How long a supervisor gets to exit after SIGKILL before the stop gives up. SIGKILL cannot be caught, so this only covers kernel
+// delivery and reaping.
+const KILL_WAIT_MS = 5000;
 
 export interface SupervisorSpawn {
   // The absolute path of the supervisor executable.
@@ -88,12 +92,7 @@ export function spawnSupervisor(options: SupervisorSpawn): Promise<SupervisorHan
           if (child.exitCode !== null || child.signalCode !== null) {
             return;
           }
-          child.kill("SIGTERM");
-          const exitedInGrace = await settledWithin(exited, STOP_GRACE_MS);
-          if (!exitedInGrace) {
-            child.kill("SIGKILL");
-            await exited;
-          }
+          await endSupervisorProcess(child, exited);
         },
       });
     });
@@ -135,6 +134,21 @@ export function launchSandboxSupervisor(
       image: launch.image,
     }),
   });
+}
+
+// Ends a supervisor process: SIGTERM, then SIGKILL when it has not exited within graceMs. Rejects with CLEANUP_FAILED when it still has
+// not exited within killWaitMs after SIGKILL, so a stop that cannot finish fails instead of hanging the delete that awaits it.
+export async function endSupervisorProcess(
+  child: { kill(signal: NodeJS.Signals): boolean },
+  exited: Promise<void>,
+  bounds: { readonly graceMs: number; readonly killWaitMs: number } = { graceMs: STOP_GRACE_MS, killWaitMs: KILL_WAIT_MS },
+): Promise<void> {
+  child.kill("SIGTERM");
+  const exitedInGrace = await settledWithin(exited, bounds.graceMs);
+  if (!exitedInGrace) {
+    child.kill("SIGKILL");
+    await withTimeout(exited, bounds.killWaitMs, "CLEANUP_FAILED");
+  }
 }
 
 // Resolves true when the promise settles within the given time, and false when the time runs out first.

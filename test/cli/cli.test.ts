@@ -1681,3 +1681,30 @@ void test("RES-04 CLI: create and restore print one JSON line whose entries coun
   assert.equal(restored.stderr, "");
   assert.deepEqual(jsonLine(restored.stdout), { command: "restore", checkpointId: "before-edit", entries: stored.entries.length });
 });
+
+void test("CLI-01: a non-RealmError thrown by the dial after attach is one catalogue-coded stderr line with exit 1 and no rejection", async () => {
+  const daemon = fakeDaemon({ probes: [true] });
+  const diagnostics = captureDiagnostics();
+  let dials = 0;
+  // The first dial is the attach probe, which answers. The second is the dispatcher dial made after attach, which throws.
+  const connect: ConnectDaemon = (socketPath, selection) => {
+    dials += 1;
+    if (dials > 1) {
+      throw new Error("dial exploded");
+    }
+    return daemon.connect(socketPath, selection);
+  };
+  const result = await runCli(["mcp", "--workspace", WORKSPACE], {
+    env: ENV,
+    cwd: WORKSPACE,
+    timeoutMs: 500,
+    daemonEntry: DAEMON_ENTRY,
+    connect,
+    diagnostics: diagnostics.stream,
+  });
+  assert.equal(dials, 2);
+  assert.equal(result.exitCode, 1);
+  assert.equal(result.stdout, "");
+  assert.equal(result.stderr, `SCHEMA_INVALID: ${ERROR_CATALOGUE.SCHEMA_INVALID.reason}\n`);
+  assert.equal(diagnostics.text(), "");
+});

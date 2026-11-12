@@ -490,3 +490,47 @@ void test("a teardown that fails keeps host attachments, since the session has n
   await assertRejectsWith(controller.stop(), "REALM_STOPPING");
   assert.deepEqual(controller.attachments(), ["a"]);
 });
+
+// Makes every store write of the given state throw. Other writes reach the real store.
+function failWritesOfState(store: SessionStore, state: SessionRecord["state"]): void {
+  const save = store.save.bind(store);
+  store.save = (record) => {
+    if (record.state === state) {
+      throw new Error("disk full");
+    }
+    save(record);
+  };
+}
+
+void test("a record write that fails as create commits active leaves the session in error, not active", async (t) => {
+  const { controller, store, workspace } = fixture(t);
+  failWritesOfState(store, "active");
+
+  await assertRejectsRedacted(controller.create(workspace), "OPENSHELL_START_FAILED");
+  assert.equal(controller.snapshot().state, "error");
+  assert.equal(store.load(SESSION)?.state, "error");
+});
+
+void test("a record write that fails as probe records an unhealthy result leaves the session active, matching its record", async (t) => {
+  const { controller, store, exec, workspace } = fixture(t);
+  await controller.create(workspace);
+  const containerId = store.load(SESSION)?.containerId;
+  assert.ok(containerId);
+  exec.setHealth(containerId, "unhealthy");
+  failWritesOfState(store, "error");
+
+  await assert.rejects(controller.probe(), (error: unknown) => error instanceof Error && error.message === "disk full");
+  assert.equal(controller.snapshot().state, "active");
+  assert.equal(store.load(SESSION)?.state, "active");
+});
+
+void test("a record write that fails as a raw probe failure is recorded leaves the session active, matching its record", async (t) => {
+  const { controller, store, exec, workspace } = fixture(t);
+  await controller.create(workspace);
+  exec.failNext("probe", new Error(`probe exploded with ${RAW_SECRET}`));
+  failWritesOfState(store, "error");
+
+  await assert.rejects(controller.probe(), (error: unknown) => error instanceof Error && error.message === "disk full");
+  assert.equal(controller.snapshot().state, "active");
+  assert.equal(store.load(SESSION)?.state, "active");
+});

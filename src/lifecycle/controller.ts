@@ -289,6 +289,14 @@ export class LifecycleController {
           "STARTUP_BUDGET_EXCEEDED",
         );
       }
+      if (!this.ownsStartup(epoch)) {
+        // A stop began during the bridge handshake. It closed the bridge and stopped the container.
+        return this.machine.snapshot();
+      }
+      // The record is written as active before the in-memory transition commits. A failed write
+      // is routed to failCreate while the session is still connecting, so memory and record agree.
+      this.persist(realmId, root, current.id, "active");
+      this.machine.transition("active", "container running");
     } catch (error: unknown) {
       // A start the budget gave up on is still in flight. adoptStart keeps its outcome, unless a
       // stop is in progress, which reclaims that start itself.
@@ -302,13 +310,6 @@ export class LifecycleController {
       }
       return this.failCreate(error, realmId, root, current.id, epoch);
     }
-    if (!this.ownsStartup(epoch)) {
-      // A stop began during the bridge handshake. It closed the bridge and stopped the container.
-      return this.machine.snapshot();
-    }
-
-    this.machine.transition("active", "container running");
-    this.persist(realmId, root, current.id);
     return this.machine.snapshot();
   }
 
@@ -369,8 +370,10 @@ export class LifecycleController {
     // A stop may have taken the session while the probe was in flight. Only the active and degraded
     // states take the outcome of a probe (F4).
     if (health === "unhealthy" && epoch === this.lifeEpoch && this.isInService()) {
+      // The record is written before the in-memory transition commits, so a failed write leaves
+      // memory and record both in service.
+      this.writeState("error");
       this.machine.transition("error", "probe failed");
-      this.writeState();
     }
     return this.machine.snapshot();
   }
@@ -479,17 +482,18 @@ export class LifecycleController {
           "STARTUP_BUDGET_EXCEEDED",
         );
       }
+      if (!this.ownsStartup(epoch)) {
+        return this.machine.snapshot();
+      }
+      // The record is written as active before the in-memory transition commits. A failed write
+      // is routed to failHydrate while the session is still connecting, so memory and record agree.
+      this.writeState("active");
+      this.machine.transition("active", "container running");
     } catch (error: unknown) {
       return await this.failHydrate(error, containerId, issued.start, epoch);
     } finally {
       clearTimeout(backstop);
     }
-    if (!this.ownsStartup(epoch)) {
-      return this.machine.snapshot();
-    }
-
-    this.machine.transition("active", "container running");
-    this.writeState();
     return this.machine.snapshot();
   }
 
@@ -742,12 +746,12 @@ export class LifecycleController {
       return this.machine.snapshot();
     }
     if (!(error instanceof RealmError)) {
+      this.writeState("error");
       this.machine.transition("error", PORT_FAILURE_CODE);
-      this.writeState();
       throw makeRealmError(PORT_FAILURE_CODE);
     }
+    this.writeState("error");
     this.machine.transition("error", error.code);
-    this.writeState();
     return this.machine.snapshot();
   }
 
@@ -1180,23 +1184,23 @@ export class LifecycleController {
 
   // Writes the record with the current state, keeping its identity and containerId. A
   // session with no record has nothing that survives a restart, so nothing is written.
-  private writeState(): void {
+  private writeState(state: StateSnapshot["state"] = this.machine.snapshot().state): void {
     const record = this.deps.store.load(this.deps.sessionId);
     if (record === null) {
       return;
     }
-    this.deps.store.save({ ...record, state: this.machine.snapshot().state });
+    this.deps.store.save({ ...record, state });
     this.machine.releasePersistCode();
   }
 
   // Writes the record with the current state. The record is the only place the
   // containerId survives a restart, so every change of it goes through here.
-  private persist(realmId: string, root: PinnedRoot, containerId: string | null): void {
+  private persist(realmId: string, root: PinnedRoot, containerId: string | null, state: StateSnapshot["state"] = this.machine.snapshot().state): void {
     this.deps.store.save({
       realmId,
       sessionId: this.deps.sessionId,
       workspaceRoot: root.realPath,
-      state: this.machine.snapshot().state,
+      state,
       controlSocketPath: controlSocketPath(this.deps.store.stateDir),
       containerId,
     });

@@ -118,7 +118,8 @@ export function canonicalize(
       continue;
     }
     if (stats.isSymbolicLink()) {
-      if (writing && queue.length === 0) {
+      // Empty and "." segments name nothing, so `link/` and `link/.` are final too.
+      if (writing && queue.every((rest) => rest === "" || rest === ".")) {
         throw makeRealmError("PATH_ESCAPE");
       }
       hops += 1;

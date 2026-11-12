@@ -510,7 +510,7 @@ void test("PRD-DRV-02: CPU and memory written another way for the same profile a
     { cpu_limit: "2.0", memory_limit: "1073741824" },
     { cpu_request: "", cpu_limit: "", memory_request: "", memory_limit: "" },
   ]) {
-    assert.doesNotThrow(() => driver.validateSandboxCreate(withResources(validSandbox({ name }), resources)));
+    assert.deepEqual(driver.validateSandboxCreate(withResources(validSandbox({ name }), resources)), {});
   }
 });
 
@@ -545,8 +545,9 @@ void test("PRD-DRV-01: GetCapabilities refuses a gateway that requires a capabil
 
 void test("PRD-DRV-01: GetCapabilities accepts a gateway that requires only the capabilities the driver advertises", () => {
   const { driver } = harness();
-  assert.doesNotThrow(() =>
+  assert.deepEqual(
     driver.getCapabilities({ gateway: { required_capabilities: ["openshell.compute.launch-authentication"] } }),
+    driver.getCapabilities({}),
   );
 });
 

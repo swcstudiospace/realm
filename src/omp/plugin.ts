@@ -265,6 +265,14 @@ function reportLinkLoss(session: ActiveSession, code: string, isCurrent: () => b
   }
 }
 
+// Runs a task the handler does not wait for. Its own outcome paints the status, but a failure it raises (a status write that
+// throws, for one) is routed to the notice surface, so it never ends as an unhandled rejection.
+function runDetached(session: ActiveSession, work: Promise<unknown>): void {
+  void work.catch((error: unknown) => {
+    session.ctx.ui.notify(`realm status update failed: ${error instanceof RealmError ? error.code : "unexpected error"}`);
+  });
+}
+
 // The retry command's reply for one attach outcome.
 function describeRetry(outcome: AttachOutcome): string {
   if (outcome.outcome === "attached") {
@@ -483,7 +491,7 @@ export function registerRealmPlugin(pi: OmpExtensionApi, options: RealmPluginOpt
       return;
     }
     moveLink(session, "attaching");
-    void attachCycle(session);
+    runDetached(session, attachCycle(session));
   };
 
   // One re-attach attempt: the attach path, then its outcome sets the next sub-state.
@@ -614,14 +622,14 @@ export function registerRealmPlugin(pi: OmpExtensionApi, options: RealmPluginOpt
     live = session;
     session.poll = {
       handle: ctx.setInterval(() => {
-        void repaint(session);
+        runDetached(session, repaint(session));
       }, STATUS_POLL_MS),
     };
     // Detached: the handler returns while the attach runs, and the outcome paints itself.
     if (reattach === null) {
-      void attach(session);
+      runDetached(session, attach(session));
     } else {
-      void attachCycle(session);
+      runDetached(session, attachCycle(session));
     }
   };
 

@@ -213,6 +213,20 @@ function namesThisProcess(lockPath: string): boolean {
 // is the meaning of ENOENT. A lock that is not a regular file, or that cannot be verified or read, is LOCK_CONFLICT.
 // openVerified refuses a FIFO without blocking on it, so a FIFO at the lock path is refused rather than hanging the open.
 function readLockFile(lockPath: string): string | undefined {
+  let entry: Stats;
+  try {
+    entry = lstatSync(lockPath);
+  } catch (error) {
+    if (errnoOf(error) === "ENOENT") {
+      return undefined;
+    }
+    throw makeRealmError("LOCK_CONFLICT");
+  }
+  // A symbolic link at the lock path is refused, not followed: its target is not the lock, and a take-over would move
+  // the link aside. Only a regular file is read.
+  if (!entry.isFile()) {
+    throw makeRealmError("LOCK_CONFLICT");
+  }
   let realPath: string;
   try {
     realPath = realpathSync(lockPath);

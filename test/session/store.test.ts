@@ -129,11 +129,15 @@ void test("CRASH-03: delete of an existing record fsyncs the sessions directory 
 });
 
 void test("CRASH-03: delete of an absent record throws nothing, with and without a sessions directory", (t) => {
-  const { store, stateDir } = fixture(t);
-  spyOnFsync(t);
+  const { store, stateDir, sessionsDir } = fixture(t);
+  const spy = spyOnFsync(t);
   store.delete("never-saved");
+  assert.equal(existsSync(sessionsDir), false, "no sessions directory is created");
+  assert.deepEqual(spy.calls, [], "an absent sessions directory is not synced");
   store.save(recordFor(stateDir, "session-1"));
   store.delete("never-saved");
+  assert.deepEqual(store.list(), ["session-1"]);
+  assert.deepEqual(store.load("session-1"), recordFor(stateDir, "session-1"));
 });
 
 void test("CRASH-03: a failing directory fsync on delete is a RealmError WRITE_NOT_ATOMIC", (t) => {

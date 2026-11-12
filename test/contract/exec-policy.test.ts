@@ -28,10 +28,21 @@ function withTempDir(body: (dir: string) => void): void {
   }
 }
 
+// The gate's decision for one exec: "allowed", or the code of the RealmError it refuses with.
+function decisionOf(policy: Policy, exec: Parameters<typeof checkExecPolicy>[1]): string {
+  try {
+    checkExecPolicy(policy, exec);
+    return "allowed";
+  } catch (error: unknown) {
+    if (error instanceof RealmError) {
+      return error.code;
+    }
+    throw error;
+  }
+}
+
 void test("TOOL-02: the argv form is allowed when shell is disabled", () => {
-  assert.doesNotThrow(() => {
-    checkExecPolicy(CLOSED, { argv: ["ls", "-la"] });
-  });
+  assert.equal(decisionOf(CLOSED, { argv: ["ls", "-la"] }), "allowed");
 });
 
 void test("TOOL-02: the shell form is rejected with SHELL_NOT_ALLOWED when shellEnabled is false", () => {
@@ -48,9 +59,8 @@ void test("TOOL-02: the shell form is rejected with SHELL_NOT_ALLOWED when shell
 });
 
 void test("TOOL-02: the shell form is allowed when shellEnabled is true", () => {
-  assert.doesNotThrow(() => {
-    checkExecPolicy(OPEN, { shell: true, script: "ls | wc -l" });
-  });
+  assert.equal(decisionOf(OPEN, { shell: true, script: "ls | wc -l" }), "allowed");
+  assert.equal(decisionOf(CLOSED, { shell: true, script: "ls | wc -l" }), "SHELL_NOT_ALLOWED");
 });
 
 void test("TOOL-02: the exec gate never executes a command, for argv or shell form", () => {

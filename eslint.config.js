@@ -308,6 +308,14 @@ export default tseslint.config(
     },
   },
   {
+    // host-tools.ts bounds Omp's setActiveTools host-API call with withTimeout. That is a host configuration
+    // call, not tool logic, so the dispatcher-internal ban is lifted for this one file only.
+    files: ["src/omp/host-tools.ts"],
+    rules: {
+      "no-restricted-syntax": ["error", ...GENERIC.map((key) => SYNTAX[key]), ...ADAPTER_INTERNALS.filter((name) => name !== "withTimeout").map(adapterInternal)],
+    },
+  },
+  {
     files: ["src/omp/**/*.ts"],
     rules: {
       "no-restricted-imports": [

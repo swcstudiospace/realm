@@ -3,7 +3,7 @@
 
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
-import { createServer, type Server } from "node:net";
+import { createServer, Socket, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test, type TestContext } from "node:test";
@@ -39,7 +39,11 @@ void test("Q0-003: the CLI dialer resolves when a listener accepts the connectio
         });
       }),
   );
-  await assert.doesNotReject(defaultConnectSocket(path, 1000));
+  const accepted = new Promise<Socket>((resolve) => {
+    server.once("connection", resolve);
+  });
+  await defaultConnectSocket(path, 1000);
+  assert.ok((await accepted) instanceof Socket);
 });
 
 void test("Q0-003: the CLI dialer rejects with the socket's own ENOENT error when the socket is absent", async (t) => {

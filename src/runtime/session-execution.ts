@@ -13,8 +13,8 @@
 // container is created. stop and destroy still stop and remove the container, and delete the session's realm sandbox: with
 // no AgentOS step to run, there is nothing to stop first.
 //
-// Sweep (D-68, RT-09, D-84): the zero-orphan sweep lives in sweep.ts and is re-exported below so existing
-// callers keep working. It removes every realm-labelled container and proves zero survivors.
+// Sweep (D-68, RT-09, D-84): the zero-orphan sweep lives in sweep.ts. It removes every realm-labelled
+// container and proves zero survivors.
 
 import { spawn, type ChildProcess, type StdioOptions } from "node:child_process";
 import { isAbsolute } from "node:path";
@@ -606,9 +606,6 @@ function sessionOf(sandbox: string): string {
 function catalogueCodeOf(error: unknown): ErrorCode | undefined {
   return error instanceof RealmError ? error.code : undefined;
 }
-
-// The zero-orphan sweep moved to sweep.ts (D-84). It is re-exported here so existing callers keep working.
-export { removeAllRealmContainers, type SweepClient } from "./sweep.js";
 
 // Picks the allowed names from a caller-supplied environment. The caller decides the source. Names
 // that are absent from the source are left out, so the result never carries a made-up value.

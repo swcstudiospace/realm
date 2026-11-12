@@ -2,6 +2,7 @@
 // This module does not import plugin.ts. It reads Omp through the structural HostToolsApi, which OmpExtensionApi satisfies.
 
 import { makeRealmError } from "../core/errors.js";
+import { withTimeout } from "../core/timeout.js";
 import type { PolicyMode } from "../contract/validate.js";
 import type { DaemonStatus } from "../daemon/client.js";
 import { planHostTools, sameToolNames } from "./tools.js";
@@ -29,6 +30,10 @@ export interface HostToolSet {
 // The most changes the set holds at once: one running and one waiting. A change past that is refused at once, so no queue grows
 // behind a setter that does not return.
 const MAX_HOST_CHANGES = 2;
+
+// The longest one host tool setter may take. A setter that has not settled by then fails its change with TOOL_TIMEOUT, so the
+// queue moves on and no later change is refused behind it.
+export const HOST_TOOL_SET_BUDGET_MS = 5_000;
 
 // A fresh host tool set for one registration: nothing is removed yet and no change is in flight.
 export function hostToolSetOf(pi: HostToolsApi): HostToolSet {
@@ -78,7 +83,7 @@ async function applyHostMode(tools: HostToolSet, mode: PolicyMode, isCurrent: ()
   const owedIn = [...new Set([...tools.removed, ...plan.owed])];
   try {
     if (!sameToolNames(pi.getActiveTools(), plan.wanted)) {
-      await pi.setActiveTools(plan.wanted);
+      await withTimeout(pi.setActiveTools(plan.wanted), HOST_TOOL_SET_BUDGET_MS, "TOOL_TIMEOUT");
     }
   } finally {
     // Read back whether or not the setter held, and whether or not this change is still current.

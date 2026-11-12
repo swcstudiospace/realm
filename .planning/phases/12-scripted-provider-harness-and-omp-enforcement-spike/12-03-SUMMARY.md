@@ -135,7 +135,7 @@ None of the following was run. No `REALM_LIVE_OMP` or `REALM_LIVE_PRODUCTION` wa
 
 **2. [Precondition, dependencies] Ran `npm ci`.** `node_modules` was absent and `fast-check` was missing. The install exited 0 and `fast-check` is present. No tracked file changed.
 
-**3. [Plan file location] Read the plan from the main checkout.** `12-03-PLAN.md` is untracked and lives only in `/root/src/repos/agent-realm/.planning/phases/12-.../`, not in the worktree or any ref. I read it from there and wrote this SUMMARY into the worktree's phase directory. Only the SUMMARY is committed from `.planning`.
+**3. [Plan file location] Read the plan from the main checkout.** `12-03-PLAN.md` is untracked and lives only in the main checkout's `.planning/phases/12-.../` directory, not in the worktree or any ref. I read it from there and wrote this SUMMARY into the worktree's phase directory. Only the SUMMARY is committed from `.planning`.
 
 **4. [Test setup, own RED] The unreachable test first failed in my own test code.** I set `callError` on the fake daemon, but the helper had already replaced `call` with the real dispatcher route, so the write landed. The product behaviour was correct: the guard refuses before execute, and a direct `execute` bypasses the hook. I changed the test to make the dispatch itself reject, as the plan specifies. The assertion was not loosened.
 
