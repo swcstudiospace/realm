@@ -269,7 +269,13 @@ function reportLinkLoss(session: ActiveSession, code: string, isCurrent: () => b
 // throws, for one) is routed to the notice surface, so it never ends as an unhandled rejection.
 function runDetached(session: ActiveSession, work: Promise<unknown>): void {
   void work.catch((error: unknown) => {
-    session.ctx.ui.notify(`realm status update failed: ${error instanceof RealmError ? error.code : "unexpected error"}`);
+    const code = error instanceof RealmError ? error.code : "unexpected error";
+    try {
+      session.ctx.ui.notify(`realm status update failed: ${code}`);
+    } catch {
+      // The notice surface itself failed, so the last resort is stderr. Only the catalogue code is written.
+      process.stderr.write(`realm status update failed and its notice could not be shown: ${code}\n`);
+    }
   });
 }
 

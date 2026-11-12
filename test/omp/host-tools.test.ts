@@ -113,6 +113,7 @@ class StatusWriteUi implements OmpStatusUi {
   failing = false;
   readonly attempts: string[] = [];
   readonly notifications: string[] = [];
+  noticesFail = false;
 
   setStatus(_key: string, text: string): void {
     this.attempts.push(text);
@@ -122,6 +123,9 @@ class StatusWriteUi implements OmpStatusUi {
   }
 
   notify(message: string): void {
+    if (this.noticesFail) {
+      throw new Error("notice surface unavailable");
+    }
     this.notifications.push(message);
   }
 }
@@ -260,4 +264,22 @@ void test("a status write that throws during a repaint tick is surfaced as a not
 
   assert.equal(ui.attempts.length, before + 1);
   assert.deepEqual(ui.notifications, [STATUS_WRITE_FAILED]);
+});
+
+void test("a notice that itself throws is written to stderr, not an unhandled rejection", async (t: TestContext) => {
+  const ui = new StatusWriteUi();
+  ui.failing = true;
+  ui.noticesFail = true;
+  const written: string[] = [];
+  t.mock.method(process.stderr, "write", (chunk: string) => {
+    written.push(chunk);
+    return true;
+  });
+  const pi = new HostPi();
+  registerRealmPlugin(pi, { attachDaemon: () => Promise.resolve({ client: new StatusDaemon(), refusal: null }) });
+
+  startSession(pi, new PollingCtx(ui, "/ws"));
+  await yieldTurn();
+
+  assert.deepEqual(written, ["realm status update failed and its notice could not be shown: unexpected error\n"]);
 });
