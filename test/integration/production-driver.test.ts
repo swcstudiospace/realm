@@ -90,6 +90,8 @@ import {
   realmCli,
   realmCliWithWorkspace,
   requestLogLinesOf,
+  removeSharedStateCreatedBy,
+  restoreSharedPolicy,
   runCommand,
   sandboxExec,
   startMcpSession,
@@ -247,10 +249,14 @@ async function assertActive(scenario: Scenario): Promise<void> {
   assert.equal(stateOfStatus(status.stdout), "active", `realm status: ${describeResult(status)}`);
 }
 
-// realm down exits 0 and the residue checks pass.
-async function assertDownAndClean(scenario: Scenario): Promise<void> {
+// realm down exits 0, the scenario's own workspace files named in workspaceFiles are removed, and the residue checks pass.
+// The names are the files the test wrote; cleanup would remove them, but only after this check.
+async function assertDownAndClean(scenario: Scenario, workspaceFiles: readonly string[] = []): Promise<void> {
   const stopped = await down(scenario);
   assert.equal(stopped.exitCode, 0, `realm down: ${describeResult(stopped)}`);
+  for (const name of workspaceFiles) {
+    rmSync(join(scenario.inputs.workspaceRoot, name), { force: true });
+  }
   const outcome = await waitForNoResidue(scenario.inputs, [sandboxOf(scenario)]);
   assert.ok(outcome.ok, `residue after realm down: ${outcome.detail}`);
 }
@@ -688,7 +694,7 @@ void test("production live 5: after the daemon is killed, the next realm up keep
     throw error;
   }
 
-  await assertDownAndClean(scenario);
+  await assertDownAndClean(scenario, [RESTART_MARKER_FILE]);
 });
 
 // ---- Scenario 6: MCP exec -----------------------------------------------------------------------------------------------
@@ -1083,6 +1089,8 @@ void test("production live: two projects get their own sandboxes, workspaces and
     await down(scenario, projectB);
     rmSync(projectA, { recursive: true, force: true });
     rmSync(projectB, { recursive: true, force: true });
+    restoreSharedPolicy(environment);
+    removeSharedStateCreatedBy(environment);
     rmSync(environment.root, { recursive: true, force: true });
     const outcome = await waitForNoResidue(liveInputs, [sandboxA, sandboxB]);
     assert.ok(outcome.ok, `residue after the two-project cleanup: ${outcome.detail}`);
@@ -1281,5 +1289,5 @@ void test("production live 13: a checkpoint restores the workspace byte for byte
   const seen = await exec(scenario, ["cat", `${SANDBOX_WORKSPACE_PATH}/${SNAPSHOT_KEEP}`]);
   assertExit(seen, 0, "reading the restored file from the sandbox");
   assert.equal(seen.stdout, "before the snapshot", "the sandbox must see the restored file");
-  await assertDownAndClean(scenario);
+  await assertDownAndClean(scenario, [SNAPSHOT_KEEP, SNAPSHOT_DELETE, SNAPSHOT_EXTRA]);
 });

@@ -768,7 +768,7 @@ export async function residueProblems(inputs: LiveInputs, sandboxNames: readonly
   try {
     const entries = readdirSync(inputs.workspaceRoot);
     if (entries.length > 0) {
-      problems.push(`the pinned workspace holds ${String(entries.length)} entr${entries.length === 1 ? "y" : "ies"}`);
+      problems.push(`the pinned workspace holds ${String(entries.length)} entr${entries.length === 1 ? "y" : "ies"}: ${entries.join(", ")}`);
     }
   } catch {
     problems.push("the pinned workspace cannot be read");
