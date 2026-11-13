@@ -47,6 +47,7 @@ export class FakeOpenShell {
   private readonly store: FakeContainerStore;
   private readonly log: FakeOpenShellCall[] = [];
   private readonly script: OpenShellStep[] = [];
+  private readonly held = new Set<string>();
   private sequence = 0;
 
   constructor(store: FakeContainerStore) {
@@ -67,7 +68,21 @@ export class FakeOpenShell {
   }
 
   private async run(argv: readonly string[], options: OpenShellRunOptions): Promise<OpenShellRunOutcome> {
+    // `sandbox list --names` is a read the gateway answers from the names it holds. It is not a run that changes the gateway,
+    // so it is neither logged nor given a scripted step.
+    if (argv[2] === "list") {
+      return { exitCode: 0, stdout: [...this.held].map((name) => `${name}\n`).join(""), stderr: "" };
+    }
     this.log.push({ argv: [...argv], timeoutMs: options.timeoutMs, captureOutput: options.captureOutput === true });
+    const outcome = await this.answer(argv);
+    // A successful delete releases the name at once; a create holds it (see answer).
+    if (argv[2] === "delete" && outcome.exitCode === 0 && argv[3] !== undefined) {
+      this.held.delete(argv[3]);
+    }
+    return outcome;
+  }
+
+  private async answer(argv: readonly string[]): Promise<OpenShellRunOutcome> {
     const step = this.script.shift() ?? (argv[2] === "delete" ? "silent" : "create");
     if (typeof step === "object") {
       return step.output;
@@ -80,6 +95,7 @@ export class FakeOpenShell {
           labels: openShellLabels(argv),
           running: true,
         });
+        this.held.add(openShellLabels(argv)["openshell.ai/sandbox-name"] ?? "");
         return { exitCode: 0 };
       case "silent":
         return { exitCode: 0 };

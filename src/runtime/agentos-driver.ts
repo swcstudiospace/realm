@@ -12,11 +12,14 @@ import { isAbsolute } from "node:path";
 import { performance } from "node:perf_hooks";
 import { makeRealmError, RealmError } from "../core/errors.js";
 import { dialWithin, withTimeout } from "../core/timeout.js";
+import { redactString } from "../audit/redact.js";
 import { currentBootId } from "../session/proc-identity.js";
 import { runnerRecordOf, writeRunnerRecord } from "../session/runner-record.js";
 import type { AgentOsDriver } from "./agentos.js";
 import type { RunnerChild, RunnerChildSpawner } from "./agentos-workload.js";
 import {
+  buildSandboxNamesArgv,
+  realmSandboxName,
   buildAgentOsSandboxArgv,
   buildGatewayStatusArgv,
   buildCreateArgv,
@@ -34,6 +37,53 @@ const PROBE_INTERVAL_MS = 1000;
 const RUNNER_TERMINATE_GRACE_MS = 2000;
 // The bound for one `openshell status` (OBS-04). A status that misses it counts as a gateway that does not answer.
 export const GATEWAY_STATUS_TIMEOUT_MS = 10_000;
+
+// The bound of the wait, before a create, for the gateway to stop listing the session's sandbox name. A name still listed at
+// the bound is refused, because the create would fail "already exists".
+const NAME_RELEASE_BOUND_MS = 30_000;
+const NAME_RELEASE_POLL_MS = 1_000;
+
+// The sandbox names the gateway lists, or undefined when the list exits non-zero or cannot be read within timeoutMs.
+async function listedSandboxNames(run: OpenShellRunner, timeoutMs: number): Promise<readonly string[] | undefined> {
+  if (!(timeoutMs > 0)) {
+    return undefined;
+  }
+  try {
+    const outcome = await withTimeout(
+      run(buildSandboxNamesArgv(), { timeoutMs, captureOutput: true }),
+      timeoutMs,
+      "OPENSHELL_START_FAILED",
+    );
+    if (outcome.exitCode !== 0) {
+      return undefined;
+    }
+    return (outcome.stdout ?? "")
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line !== "");
+  } catch {
+    return undefined;
+  }
+}
+
+// True once the gateway no longer lists name. False when it still lists the name at boundMs, or when the list cannot be read.
+async function nameReleased(run: OpenShellRunner, name: string, boundMs: number): Promise<boolean> {
+  const deadline = performance.now() + boundMs;
+  for (;;) {
+    const names = await listedSandboxNames(run, deadline - performance.now());
+    if (names === undefined) {
+      return false;
+    }
+    if (!names.includes(name)) {
+      return true;
+    }
+    const left = deadline - performance.now();
+    if (left <= 0) {
+      return false;
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, Math.min(NAME_RELEASE_POLL_MS, left)));
+  }
+}
 // The bound for the compute driver's socket probe (OBS-04). A driver that does not accept a connection within it does not answer.
 const DRIVER_PROBE_TIMEOUT_MS = 5_000;
 
@@ -55,6 +105,8 @@ export interface OpenShellAgentOsDriverOptions {
   // The realm state directory where each runner's identity record is written (runner-record.ts). A start without it is refused
   // before any runner is spawned: a runner that has no record cannot be proven gone after a restart.
   readonly stateDir?: string;
+  // The bound of the wait, before a create, for the gateway to stop listing the session's sandbox name. Defaults to 30 seconds.
+  readonly nameReleaseMs?: number;
 }
 
 // The runner of one session. Its methods act on that session's sandbox only.
@@ -84,6 +136,30 @@ async function succeeds(run: () => Promise<OpenShellRunOutcome>, budgetMs: numbe
   } catch {
     return false;
   }
+}
+
+// The create's outcome for the failure line: the exit code as text, or why there is none, and the runner's stderr. A rejection
+// or a missed budget keeps no text, so no error message from the runner reaches the journal.
+async function createOutcomeOf(
+  run: () => Promise<OpenShellRunOutcome>,
+  budgetMs: number,
+): Promise<{ readonly exitCode: string; readonly stderr: string }> {
+  if (!(budgetMs > 0)) {
+    return { exitCode: "no budget", stderr: "" };
+  }
+  try {
+    const outcome = await withTimeout(run(), budgetMs, "OPENSHELL_START_FAILED");
+    return { exitCode: String(outcome.exitCode), stderr: outcome.stderr ?? "" };
+  } catch {
+    return { exitCode: "no exit (rejected or over budget)", stderr: "" };
+  }
+}
+
+// One journal line for a failed create: the exit code, then the first 800 characters of the runner's stderr, redacted. Line
+// breaks become " | " so the record stays on one line.
+function createFailureLine(outcome: { readonly exitCode: string; readonly stderr: string }): string {
+  const clipped = redactString(outcome.stderr).replace(/\s*\r?\n\s*/g, " | ").slice(0, 800);
+  return `realm compute driver create failed: exit=${outcome.exitCode} stderr=${clipped === "" ? "(none)" : clipped}\n`;
 }
 
 // Writes the identity record of a runner child just spawned (runner-record.ts). False when the child has no pid, when it is
@@ -152,6 +228,8 @@ export function createOpenShellAgentOsDriver(options: OpenShellAgentOsDriverOpti
   const runnerPath = options.runnerPath ?? DEFAULT_AGENTOS_RUNNER_PATH;
   const probePath = options.probePath ?? DEFAULT_AGENTOS_PROBE_PATH;
   const { runner, spawnRunner, startTimeoutMs, callTimeoutMs, driverSocketPath, stateDir } = options;
+  const nameReleaseMs = options.nameReleaseMs ?? NAME_RELEASE_BOUND_MS;
+  assertPositiveFinite(nameReleaseMs);
 
   // The runner of each session, made on that session's first call. A session's argv names its own sandbox, and the
   // builders refuse a malformed session id with SCHEMA_INVALID, before any runner call.
@@ -339,7 +417,16 @@ export function createOpenShellAgentOsDriver(options: OpenShellAgentOsDriverOpti
     // non-zero exit or a missed budget is OPENSHELL_START_FAILED.
     async create(request: SandboxCreateRequest, timeoutMs: number): Promise<void> {
       const createArgv = buildCreateArgv(request);
-      if (!(await succeeds(() => runner(createArgv, { timeoutMs }), timeoutMs))) {
+      const sandboxName = realmSandboxName(request.sessionId);
+      if (!(await nameReleased(runner, sandboxName, Math.min(nameReleaseMs, timeoutMs)))) {
+        process.stderr.write(
+          `realm compute driver create failed: the gateway still lists sandbox ${sandboxName} (wait bound ${String(nameReleaseMs)} ms)\n`,
+        );
+        throw makeRealmError("OPENSHELL_START_FAILED");
+      }
+      const outcome = await createOutcomeOf(() => runner(createArgv, { timeoutMs, captureOutput: true }), timeoutMs);
+      if (outcome.exitCode !== "0") {
+        process.stderr.write(createFailureLine(outcome));
         throw makeRealmError("OPENSHELL_START_FAILED");
       }
     },

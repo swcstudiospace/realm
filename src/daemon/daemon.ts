@@ -29,6 +29,7 @@ import { loadRuntimeConfig } from "../runtime/config.js";
 import { MAX_CONCURRENT_SESSIONS } from "../runtime/hardening.js";
 import { readHostProcStatus } from "../runtime/kernel-caps.js";
 import { productionOpenShellRunner } from "../runtime/session-execution.js";
+import { deleteSandbox } from "../runtime/openshell.js";
 import { readHostOciConfig } from "../runtime/seccomp-evidence.js";
 import {
   probePodman,
@@ -846,6 +847,10 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
 
   // The reap's container seams over the libpod client, and the adoption verdict each session record is judged by (startup.ts,
   // D-1409). The verdict resolves a record's workspace by the rules of a selection, so it is given resolveTarget.
+  // The gateway sandbox of a container the startup reap removes is deleted with the production OpenShell runner, under the
+  // stop path's deadline (session-execution.ts SANDBOX_DELETE_DEADLINE_MS).
+  const gatewayRunner = productionOpenShellRunner(options.env ?? {});
+  const gatewaySandboxDeadlineMs = 15_000;
   const reapSeams: StartupReapSeams = startupReapSeamsOver(
     libpod,
     adoptionVerdictOver({
@@ -859,6 +864,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
       readProcStatus: options.readProcStatus ?? readHostProcStatus,
       resolve: resolveTarget,
     }),
+    (sandboxName: string) => deleteSandbox(gatewayRunner, sandboxName, gatewaySandboxDeadlineMs),
   );
 
   // Hydrates one adopted session on the pin its workspace entry recorded at create, so a replaced directory is refused.

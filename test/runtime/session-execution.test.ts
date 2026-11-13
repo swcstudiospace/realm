@@ -115,8 +115,11 @@ async function fixture(
   const openshell = new FakeOpenShell(store);
   const policyAtRun: (string | undefined)[] = [];
   const runner: OpenShellRunner = (argv, options) => {
-    const policy = argv[argv.indexOf("--policy") + 1];
-    policyAtRun.push(policy !== undefined && existsSync(policy) ? readFileSync(policy, "utf8") : undefined);
+    // Only a create names a policy, so the sandbox list the create makes first is not recorded here.
+    if (argv.includes("--policy")) {
+      const policy = argv[argv.indexOf("--policy") + 1];
+      policyAtRun.push(policy !== undefined && existsSync(policy) ? readFileSync(policy, "utf8") : undefined);
+    }
     return openshell.runner(argv, options);
   };
   const driver = new FakeAgentOsDriver(runner);
