@@ -18,7 +18,10 @@ verification host, so every snippet says so and gives no install path.
 
 Realm was not registered in any live host configuration (Claude Code, Grok
 Build, Muse Code, Hermes Agent, Prime Agent, or the persistent Omp config).
-Registration needs explicit approval per host.
+The Omp link recorded on 2026-11-13 (`docs/hosts/snippets/omp.md`) is in an
+isolated profile, not the persistent config. Its status item read
+`realm disconnected` with `REALM_NOT_ACTIVE`, and `realm status` in the same run
+reported daemon absent. Registration needs explicit approval per host.
 
 
 ## Gate note (FOUND-03)
@@ -93,6 +96,8 @@ For each host:
 Q1 (Node or Bun). Answer: Bun 1.3.14 or later for the recommended install. The README lists "macOS · Linux · Windows · bun ≥ 1.3.14" and gives the install command `bun install -g @oh-my-pi/pi-coding-agent` under "Bun (recommended)". It also states: "Without a usable bun (or with `--binary`), the install scripts fetch the prebuilt binary from `build.stencil.so` and check its SHA-256 before installing it." Node: not documented.
 
 Q2 (plugin loading). Answer, from the README: "Ask omp to write the piece you're missing, then `/reload-plugins`. Keep it local, ship it in a `marketplace`, or publish it to npm." Extension discovery is controlled by `--no-extensions` ("to skip ambient extension discovery") and `--trusted-extension /absolute/path/to/file.ts` ("for an exact extension allowlist"). Opening a repository "loads its project inputs by design: settings, extensions, hooks, tools, commands, skills, rules, and project MCP configuration." The plugin manifest file name, package key, lifecycle hook names and status API are not documented in the README. Those are the gate questions for omp.md (Phase 1, gate 4), not answered here.
+
+Observed later, not from the README: on 2026-11-13 (omp 18.20.0, isolated profile), `omp plugin list --json` listed a linked checkout's package with manifest `extensions` `./dist/src/omp/extension.js` (`docs/hosts/snippets/omp.md`).
 
 Q3 (MCP loading). Answer: project MCP configuration loads when a repository is opened. It is excluded for one invocation with `--config <file>` and the YAML key `mcp.enableProjectConfig: false`. The README also says omp reads "MCP servers from `.claude`, `.cursor`, `.windsurf`, `.gemini`, `.codex`, `.cline`, `.github/copilot`, and `.vscode`."
 
