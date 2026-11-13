@@ -65,6 +65,8 @@ import {
   type ScenarioEnvironment,
   waitForActive,
   waitForNoResidue,
+  removeSharedStateCreatedBy,
+  restoreSharedPolicy,
 } from "../support/production-live.js";
 
 // The compiled CLI beside the compiled tests: this file runs from dist/test/integration, the CLI from dist/src/cli.
@@ -139,6 +141,8 @@ void test(
     cleanups.add(async () => {
       const stopped = await realmCliWithWorkspace(inputs, scenario, ["down"], inputs.workspaceRoot, DOWN_TIMEOUT_MS);
       assert.equal(stopped.exitCode, 0, `realm down: ${describeResult(stopped)}`);
+      restoreSharedPolicy(scenario);
+      removeSharedStateCreatedBy(scenario);
       rmSync(join(inputs.workspaceRoot, name), { force: true });
       rmSync(scenario.root, { recursive: true, force: true });
       const residue = await waitForNoResidue(inputs, [sandbox]);
