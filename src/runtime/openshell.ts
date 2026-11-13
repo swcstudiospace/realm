@@ -223,6 +223,12 @@ export function buildSandboxDeleteArgv(sandboxName: string): readonly string[] {
   return Object.freeze([OPENSHELL_BINARY, "sandbox", "delete", sandboxName]);
 }
 
+// The argv that lists the names of the sandboxes the gateway holds, one per line (`openshell sandbox list --names`). The
+// driver reads it to wait for a deleted sandbox's name to be released before a create.
+export function buildSandboxNamesArgv(): readonly string[] {
+  return Object.freeze([OPENSHELL_BINARY, "sandbox", "list", "--names"]);
+}
+
 // The argv that asks the OpenShell gateway whether it answers (OBS-04, "Catalogue extension (Phase 17)" in
 // docs/integration/runtime-decision.md). The verb takes no flags and no session: the gateway is shared. Its exit code is the
 // only thing read; the supervisor runs it only after a failed probe.

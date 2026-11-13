@@ -19,7 +19,7 @@ import { storedPinOf } from "../lifecycle/session-state.js";
 import type { Logger } from "../observe/logger.js";
 import { sandboxBindingOf } from "../runtime/driver/sandbox-binding.js";
 import type { HardeningBinding } from "../runtime/hardening.js";
-import { realmSandboxName } from "../runtime/openshell.js";
+import { isRealmSandboxName, OPENSHELL_SANDBOX_NAME_LABEL_KEY, realmSandboxName } from "../runtime/openshell.js";
 import { type SessionContainers, type SessionProperty, verdictOf } from "../runtime/session-execution.js";
 import { listRealmContainers, SWEEP_CALL_TIMEOUT_MS } from "../runtime/sweep.js";
 import { sessionsDirOf } from "../session/paths.js";
@@ -101,7 +101,10 @@ export interface StartupReport {
 export type RemovalCause = SessionProperty | "workspace-root" | "workspace-pin" | "binding-roots" | "no-record";
 
 // The reap's container seams, as startDaemon builds them over the libpod client. The store is the caller's.
-export type StartupReapSeams = Omit<SelectiveReapDeps<RemovalCause>, "store">;
+export type StartupReapSeams = Omit<SelectiveReapDeps<RemovalCause>, "store"> & {
+  // Runs once the reap has ended, to delete the gateway sandboxes of the containers it removed (startupReapSeamsOver).
+  readonly settle?: () => Promise<void>;
+};
 
 interface StartupMaintenanceDeps {
   readonly store: Pick<SessionStore, "list" | "load" | "delete">;
@@ -157,6 +160,7 @@ export async function runStartupMaintenance(deps: StartupMaintenanceDeps): Promi
       },
       listSurvivors: deps.reap.listSurvivors,
     });
+    await deps.reap.settle?.();
   } catch (error: unknown) {
     // The reap failed, possibly after it had removed containers. Record what was destroyed and why it stopped, hand it to the
     // observer so the log has it, and rethrow the original error: nothing is served after it. The reap deleted no record.
@@ -523,12 +527,25 @@ export function adoptionVerdictOver(
 }
 
 // The reap's container seams over the libpod client. Every call is bounded. An inspection that fails is kept as the
-// candidate's failure (the reap then rejects before any removal); it is not swallowed.
-export function startupReapSeamsOver(libpod: SessionContainers, verdict: StartupReapSeams["verdict"]): StartupReapSeams {
+// candidate's failure (the reap then rejects before any removal); it is not swallowed. When deleteGatewaySandbox is given, the
+// OpenShell sandbox of each removed realm container is deleted too. The container is gone, so the gateway still holds the
+// sandbox name, and the session's next create would be refused as "already exists" (driver waits for the name to be released).
+// A failed delete is written to the daemon's stderr and does not stop the reap.
+export function startupReapSeamsOver(
+  libpod: SessionContainers,
+  verdict: StartupReapSeams["verdict"],
+  deleteGatewaySandbox?: (sandboxName: string) => Promise<boolean>,
+): StartupReapSeams {
+  const sandboxOf = new Map<string, string>();
+  const removedSandboxes = new Set<string>();
   return {
     listCandidates: async (): Promise<readonly ReapCandidate[]> => {
       const candidates: ReapCandidate[] = [];
       for (const container of await listRealmContainers(libpod)) {
+        const sandbox = container.labels?.[OPENSHELL_SANDBOX_NAME_LABEL_KEY];
+        if (sandbox !== undefined && isRealmSandboxName(sandbox)) {
+          sandboxOf.set(container.id, sandbox);
+        }
         let inspection: ReapInspection;
         try {
           inspection = {
@@ -545,6 +562,38 @@ export function startupReapSeamsOver(libpod: SessionContainers, verdict: Startup
     verdict,
     remove: async (containerId: string): Promise<void> => {
       await withTimeout(libpod.removeContainer(containerId, { force: true }), SWEEP_CALL_TIMEOUT_MS, "PODMAN_MACHINE_DOWN");
+      const sandbox = sandboxOf.get(containerId);
+      sandboxOf.delete(containerId);
+      if (sandbox !== undefined) {
+        removedSandboxes.add(sandbox);
+      }
+    },
+    // Called once the reap has ended. A removed container's gateway sandbox is deleted only when no surviving realm container
+    // carries its name: a stray can share its session's name with a container that stays. The deletes are not awaited, because
+    // the gateway can outlast the startup budget; the session's next create waits for the name to be released (agentos-driver.ts).
+    settle: async (): Promise<void> => {
+      let liveNames: Set<string>;
+      try {
+        liveNames = new Set(
+          (await listRealmContainers(libpod)).map((container) => container.labels?.[OPENSHELL_SANDBOX_NAME_LABEL_KEY] ?? ""),
+        );
+      } catch {
+        process.stderr.write(
+          `realm daemon: ${String(removedSandboxes.size)} gateway sandbox(es) of removed containers were not deleted: the container list failed\n`,
+        );
+        removedSandboxes.clear();
+        return;
+      }
+      for (const sandbox of removedSandboxes) {
+        if (!liveNames.has(sandbox) && deleteGatewaySandbox !== undefined) {
+          void deleteGatewaySandbox(sandbox).then((deleted) => {
+            if (!deleted) {
+              process.stderr.write(`realm daemon: the gateway sandbox ${sandbox} of a removed container was not deleted\n`);
+            }
+          });
+        }
+      }
+      removedSandboxes.clear();
     },
     listSurvivors: async (): Promise<readonly string[]> =>
       (await listRealmContainers(libpod)).map((container) => container.id),
