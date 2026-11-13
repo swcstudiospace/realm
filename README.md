@@ -21,7 +21,7 @@ The core guarantee, under the fail-closed policy: every file mutation either lan
 - v0.1.x was the first release line, for milestone v1.0 (a provisional name), and v0.2.x was the line of milestone v2.0. v0.3.x, for milestone v3.0, becomes the current line with its first release and is the only line that is supported.
 - `realm up` binds the AgentOS driver from the configured digest-pinned image. The production stack is the OpenShell 0.1.5 gateway, the Realm compute driver, and rootless Podman 5.x (`docs/integration/openshell.md`).
 - Linux is the only verified platform. Podman 5.x is required, and Realm does not install it.
-- The Podman-gated production live suite and Omp status checks have versioned historical receipts in [OpenShell integration](docs/integration/openshell.md), [Omp integration](docs/integration/omp.md) and [ACP integration](docs/integration/acp.md). On 2026-10-31 the parent exercised compiled Realm 0.3.26 with a temporary matching rebuilt driver on rootless Podman 5.7.1: fresh generated-config `init` → active `up`/`status` → unbound `down`, then production crash/reap/reattach and real MCP exec/write/read (2 passed, 0 skipped). See the normalized transcript below. This is not installer provisioning or Omp containment proof. Other platforms and the Anda engine remain unverified live.
+- The Podman-gated production live suite and Omp status checks have versioned historical receipts in [OpenShell integration](docs/integration/openshell.md), [Omp integration](docs/integration/omp.md) and [ACP integration](docs/integration/acp.md). On 2026-10-31 the parent exercised compiled Realm 0.3.26 with a temporary matching rebuilt driver on rootless Podman 5.7.1: fresh generated-config `init` → active `up`/`status` → unbound `down`, then production crash/reap/reattach and real MCP exec/write/read (2 passed, 0 skipped). The 2026-11-13 quickstart on Realm 0.3.29 is in the transcript below and covers `init`, `up`, `status` and `down` only. This is not installer provisioning or Omp containment proof. Other platforms and the Anda engine remain unverified live.
 
 ## Quick start
 
@@ -97,7 +97,8 @@ realm down
 Use that image reference only if it is actually provisioned for your driver;
 otherwise pass your real matching digest pin, never a tag or invented digest.
 The image digest above comes from the parent's actual 2026-10-31 lifecycle
-capture, not a registry-publication or reproducible-build attestation.
+capture, not a registry-publication or reproducible-build attestation. The
+2026-11-13 transcript below shows `<digest>` in its place.
 
 Init creates `STATE_DIR`, its derived `secrets` and `sandboxes` directories
 at 0700, and `CONFIG_HOME/realm/config.json` and `STATE_DIR/policy.json` at
@@ -107,44 +108,37 @@ chmodded; existing workspace and ancestor modes are preserved. A failed
 write reports template cleanup and any new private directories retained for
 inspection. See [the Omp setup notes](docs/hosts/snippets/omp.md#initialize-realm-before-launching-omp).
 
-`up` uses `--workspace` or the current directory, not the saved
-`workspaceRoot`. The `cd` above is required for the captured no-argument
-`realm up`; from another directory use `realm up --workspace "$WORKSPACE"`.
+`up`, `status` and `down` use `--workspace` or the current directory, not the
+saved `workspaceRoot`. Run them from `$WORKSPACE`, as above, or pass
+`--workspace "$WORKSPACE"` to each from another directory, for example
+`realm status --workspace "$WORKSPACE"`.
 Start Omp in that same workspace. A `POLICY_DENIED` from the wrong directory
 is not a reason to broaden the policy.
 
 ### Captured lifecycle transcript
 
-Actual parent capture, 2026-10-31: compiled Realm **0.3.26**, Linux runtime
-account uid 5002, rootless **Podman 5.7.1**, preconfigured OpenShell stack
-and temporary matching rebuilt compute driver. All four commands exited 0
-with empty stderr. Only the host-local paths have been normalized below:
-`CONFIG_HOME`, `STATE_DIR` and `WORKSPACE` are literal placeholders for the
-paths defined above, not JSON values to copy into a configuration file.
+Actual capture, 2026-11-13: Realm **0.3.29** built from `origin/main` at
+`1ddfc45`, with rootless **Podman 5.7.1**. The existing config and policy were
+moved aside, so `init` wrote new templates. Each command exited 0. Host paths
+are normalized to the placeholders defined above: `<workspace>`,
+`<state-dir>`, `<config-home>` and `<digest>`. `up`, `status` and `down` ran
+from the workspace. The container count was 0 before and after the run.
 
 ```text
-$ realm init --image localhost/realm-agentos@sha256:9511929b0b1a23120c30c04d2383317c7b8108ec8ee915e9a1538920e1c9596b --workspace WORKSPACE --state-dir STATE_DIR
-{"config":"CONFIG_HOME/realm/config.json","policy":"STATE_DIR/policy.json","stateDir":"STATE_DIR","mode":"fail-closed"}
-$ realm up
-{"snapshot":{"state":"active","reason":"container running","lastTransitionAt":"2026-10-31T05:48:21.267Z"},"display":{"label":"realm active","degraded":false,"reason":"container running","lastTransitionAt":"2026-10-31T05:48:21.267Z"},"mode":"fail-closed"}
-$ realm status
-{"snapshot":{"state":"active","reason":"container running","lastTransitionAt":"2026-10-31T05:48:21.267Z"},"display":{"label":"realm active","degraded":false,"reason":"container running","lastTransitionAt":"2026-10-31T05:48:21.267Z"},"mode":"fail-closed"}
-$ realm down
-{"snapshot":{"state":"unbound","reason":"no workspace","lastTransitionAt":"2026-10-31T05:48:37.069Z"},"display":{"label":"realm disconnected","degraded":false,"reason":"no workspace","lastTransitionAt":"2026-10-31T05:48:37.069Z"},"mode":"fail-closed"}
+$ realm init --image <digest> --workspace <workspace> --state-dir <state-dir>
+{"config":"<config-home>/realm/config.json","policy":"<state-dir>/policy.json","stateDir":"<state-dir>","mode":"fail-closed"}
+$ realm up   (from the workspace)
+{"snapshot":{"state":"active","reason":"container running","lastTransitionAt":"2026-11-13T18:29:41.624Z"},"display":{"label":"realm active","degraded":false,"reason":"container running","lastTransitionAt":"2026-11-13T18:29:41.624Z"},"mode":"fail-closed","boundRoot":"<workspace>","sessionId":"pda297968e47c"}
+$ realm status   (from the workspace)
+{"snapshot":{"state":"active","reason":"container running","lastTransitionAt":"2026-11-13T18:29:41.624Z"},"display":{"label":"realm active","degraded":false,"reason":"container running","lastTransitionAt":"2026-11-13T18:29:41.624Z"},"mode":"fail-closed","boundRoot":"<workspace>","sessionId":"pda297968e47c"}
+$ realm down   (from the workspace)
+{"snapshot":{"state":"unbound","reason":"no workspace","lastTransitionAt":"2026-11-13T18:29:57.820Z"},"display":{"label":"realm disconnected","degraded":false,"reason":"no workspace","lastTransitionAt":"2026-11-13T18:29:57.820Z"},"mode":"fail-closed","boundRoot":"<workspace>","sessionId":"pda297968e47c"}
 ```
 
-There was exactly one actual rootless container while active. Driver and
-daemon used the freshly generated config, with no legacy root environment
-variables and no manual JSON edits. The existing production live scenarios 5
-(real daemon crash, reap and reattach) and 6 (actual MCP exec/write/read)
-then passed: **2 passed, 0 failed, 0 skipped**. Cleanup restored the original
-driver service active, left zero containers and removed the owned temporary
-config; no permanent unit or package changes were made. The older stale-image
-failure is historical, not the outcome of this run.
-
-This transcript is lifecycle/MCP evidence, not a model-driven Omp sandbox
-write or a clean built-Realm warm-network trace. Those remain separate proof
-obligations. These documentation edits still require the parent's docs checks.
+This is lifecycle evidence for `init`, `up`, `status` and `down` only. It does
+not repeat the production crash, reap and MCP scenarios recorded for 0.3.26,
+and it is not a model-driven Omp sandbox write or a clean built-Realm
+warm-network trace. Those remain separate proof obligations.
 
 ### Diagnose and apply only safe local fixes
 
@@ -154,7 +148,6 @@ With a valid generated config selected by the same `XDG_CONFIG_HOME`:
 realm doctor
 realm doctor --fix --dry-run
 # Review the proposed actions, then apply if appropriate.
-realm doctor --fix
 realm doctor --fix
 ```
 

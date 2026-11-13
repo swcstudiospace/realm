@@ -2,7 +2,7 @@
 
 Sources: `package.json`, `src/omp/extension.ts`, `src/cli/init.ts`,
 `src/cli/main.ts` and `docs/integration/omp.md`. The isolated local-link
-receipt below is historical (2026-10-30, Omp18.12.6). The separate actual
+record below is dated 2026-11-13 (omp 18.20.0). The separate actual
 parent lifecycle capture is dated 2026-10-31 (Realm0.3.26, Podman5.7.1);
 its normalized command/stdout transcript is in [README Quick start](../../../README.md#captured-lifecycle-transcript).
 Neither receipt proves Omp containment or a registry installation.
@@ -59,26 +59,95 @@ mkdir -p "$OMP_HOME" "$OMP_HOME/agent" "$OMP_HOME/config"
 )
 ```
 
-These commands adapt the retained local-link procedure; they are not a new
-successful install/load capture for the current package. The subshell leaves
-the caller's home/config selection unchanged. A path install links the
-checkout, so keep its directory, dependencies and build in place.
-`--scope=user` is not needed: the record below shows Omp ignores it for local
-links. Do not run this rehearsal against a real home by accident; a deliberate
-persistent install needs the operator's configuration backup and approval.
-Registry and marketplace installs remain unverified.
+The headless status check in the record below runs `omp --mode=rpc-ui` from the
+workspace directory, with the same isolated `HOME`, `PI_CODING_AGENT_DIR` and
+`XDG_CONFIG_HOME`, and with no `-e` and no `--no-extensions`: the installed link
+supplies the extension.
+
+The record below captured these commands on the current checkout. The subshell
+leaves the caller's home/config selection unchanged. A path install links the
+checkout, so keep its directory, dependencies and build in place. `--scope` is not
+passed, and the record below does not test it. Do not run this rehearsal against a
+real home by accident; a deliberate persistent install needs the operator's
+configuration backup and approval. Registry and marketplace installs remain
+unverified.
 
 ## Live install record (ONB-05)
 
-Run on 2026-10-30 with Omp 18.12.6 (`omp --version`), under an isolated `HOME`,
-so the real Omp home was not read or changed (its listing was compared before
-and after). The package in this historical receipt was 0.3.24, not 0.3.26:
+Run on 2026-11-13 from checkout `<checkout>` (origin/main 1ddfc45) with
+omp/18.20.0 (`omp --version`). The plan expected 18.12.6; this record uses the
+actual value. The run used an isolated profile: `HOME=<isolated-home>`,
+`PI_CODING_AGENT_DIR=<isolated-home>/agent` and `XDG_CONFIG_HOME=<config-home>`.
+Afterward the run ran `realm down`, which reported the daemon already down,
+restored the account's realm config and policy, and deleted the isolated home.
+The transcript is normalized: placeholders replace host paths, and every other
+line is from the run.
 
-- `omp plugin install --dry-run <workspace>/agent-realm --json`: exit 0, action `link`, the package path reported.
-- `omp plugin install <workspace>/agent-realm --scope=user`: exit 0, linked `agent-realm`. Omp printed that `--scope` applies only to marketplace installs and ignored it for a path.
-- `omp plugin list --json`: one npm entry `agent-realm` 0.3.24, `enabled: true`, `extensions: ["./dist/src/omp/extension.js"]`.
+```text
+$ omp plugin install --dry-run <checkout> --json
+{
+  "dryRun": true,
+  "action": "link",
+  "path": "<checkout>"
+}
+exit=0
+$ omp plugin install <checkout>
+✔ Linked agent-realm from <checkout>
+exit=0
+$ omp plugin list --json
+{
+  "npm": [
+    {
+      "name": "agent-realm",
+      "version": "0.3.29",
+      "path": "<isolated-home>/.omp/plugins/node_modules/agent-realm",
+      "manifest": {
+        "extensions": [
+          "./dist/src/omp/extension.js"
+        ],
+        "version": "0.3.29"
+      },
+      "enabledFeatures": null,
+      "enabled": true
+    }
+  ],
+  "marketplace": []
+}
+exit=0
+$ omp plugin doctor
+Plugin Health Check
 
-This is a link to a local checkout, not a registry install. The published package and a marketplace install are not verified. The persistent install into the real `~/.omp` is still not run.
+✔ plugins_directory: Found at <isolated-home>/.omp/plugins
+⚠ package_manifest: Not created yet
+✔ node_modules: Found
+✔ plugin:agent-realm: v0.3.29 - Realm: strict ESM TypeScript package
+
+Summary: 3 ok, 1 warnings, 0 errors
+exit=0
+$ cd <workspace> && env HOME=<isolated-home> PI_CODING_AGENT_DIR=<isolated-home>/agent XDG_CONFIG_HOME=<config-home> omp --mode=rpc-ui
+(stdin: get_available_commands, get_state; stdin held open until the setStatus realm frames appeared)
+rpc exit=0
+setStatus realm frames: 2
+{"type":"extension_ui_request","id":"15ccd8a18fd9f940","method":"setStatus","statusKey":"realm","statusText":"○ realm disconnected · connecting · 2026-11-13T18:30:49.662Z · mode: unknown"}
+{"type":"extension_ui_request","id":"15ccd8a1a199f942","method":"setStatus","statusKey":"realm","statusText":"○ realm disconnected · REALM_NOT_ACTIVE · 2026-11-13T18:30:49.734Z · mode: unknown"}
+realm-retry listed
+extension_error lines: 0
+$ realm down ; realm status (config home of the account)
+disconnected
+already down (REALM_NOT_ACTIVE)
+down exit=0
+disconnected
+realm status: daemon absent (REALM_NOT_ACTIVE); local report
+status exit=0
+```
+
+The status item read `realm disconnected · REALM_NOT_ACTIVE`, and `realm status`
+in the same run reported daemon absent with the same code. The stdin carried
+only `get_available_commands` and `get_state`, so no tool call was exercised.
+This is a link to a local checkout in an isolated profile, not a registry
+install, not a persistent install into the real `~/.omp`, not a registration in
+the persistent Omp config, and not containment. The published package and a
+marketplace install are not verified.
 
 ## Initialize Realm before launching Omp
 
@@ -246,5 +315,4 @@ with `"mode": "advisory"` in `<state-dir>/policy.json`
 ## Not documented
 
 Omp's plugin manifest key names for an MCP server entry are not verified, so
-this snippet gives none. Realm reaches Omp through the extension above, not
-through an MCP entry. A local path install is a link to the checkout, as the live record above shows for Omp 18.12.6. A registry or marketplace install is not verified; use `--dry-run` first.
+this snippet gives none. Realm reaches Omp through the extension above, not through an MCP entry. A local path install is a link to the checkout, as the live record above shows for Omp 18.20.0. A registry or marketplace install is not verified; use `--dry-run` first.
