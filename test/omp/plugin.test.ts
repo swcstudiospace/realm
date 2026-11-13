@@ -9,6 +9,7 @@ import { createEventBus } from "../../src/core/events.js";
 import type { StateSnapshot } from "../../src/core/state-machine.js";
 import { STATUS_LABELS, displayStatus } from "../../src/core/status.js";
 import type { DaemonClient, DaemonStatus } from "../../src/daemon/client.js";
+import { SentRequestError } from "../../src/daemon/channel.js";
 import type { MetricsSnapshot } from "../../src/observe/metrics.js";
 import { validate, type PolicyMode } from "../../src/contract/validate.js";
 import { LockTable } from "../../src/fs/locks.js";
@@ -214,11 +215,16 @@ class FakeDaemon implements DaemonClient {
   callOutcome: ToolOutcome | undefined = undefined;
   // When set, every dispatch is refused by the daemon with this catalogue code, as client.call rejects with the daemon's refusal.
   callError: ErrorCode | undefined = undefined;
+  // When set, every dispatch is delivered and its reply is lost or undecodable: client.call rejects with a SentRequestError carrying this code.
+  lostReply: ErrorCode | undefined = undefined;
   readonly dispatched: unknown[] = [];
 
   call(tool: unknown): Promise<ToolOutcome> {
     this.calls.push("call");
     this.dispatched.push(tool);
+    if (this.lostReply !== undefined) {
+      return Promise.reject(new SentRequestError(this.lostReply));
+    }
     if (this.callError !== undefined) {
       return Promise.reject(makeRealmError(this.callError));
     }
@@ -1885,12 +1891,50 @@ void test("O4 R8: an in-flight write that loses the link reports AUDIT_OUTCOME_U
   startHandlerOf(fixture.pi)(fixture.ctx);
   await waitForDetail(fixture.ui, "container running");
 
-  fixture.daemon.callError = "REALM_NOT_ACTIVE";
+  fixture.daemon.lostReply = "REALM_NOT_ACTIVE";
   const result = await toolOf(fixture.pi, "write").execute("call-r8", { path: "a.txt", content: "x" });
   assert.deepEqual(result.details, { outcome: "refused", tool: "write", code: "AUDIT_OUTCOME_UNKNOWN", retryable: false });
   assert.equal(result.isError, true);
   assert.equal(fixture.daemon.dispatched.length, 1, "the write reaches the daemon once and is never dispatched again");
   assert.equal(pendingWaits(fixture.ctx).length, 1, "the loss arms one re-attach wait");
+});
+
+void test("CR-01: with re-attach off, a write whose reply is lost after delivery reports AUDIT_OUTCOME_UNKNOWN and is not dispatched again", async () => {
+  const fixture = makeFixture();
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitForDetail(fixture.ui, "container running");
+
+  fixture.daemon.lostReply = "REALM_NOT_ACTIVE";
+  const result = await toolOf(fixture.pi, "write").execute("call-cr01", { path: "a.txt", content: "x" });
+  assert.deepEqual(result.details, { outcome: "refused", tool: "write", code: "AUDIT_OUTCOME_UNKNOWN", retryable: false });
+  assert.equal(result.isError, true);
+  assert.equal(fixture.daemon.dispatched.length, 1, "the write reaches the daemon once and is never dispatched again");
+  assert.deepEqual(pendingWaits(fixture.ctx), [], "re-attach is off, so no wait is armed");
+});
+
+void test("WR-01: a write whose delivered reply is undecodable reports AUDIT_OUTCOME_UNKNOWN, with one dispatch and no re-attach wait", async () => {
+  const fixture = makeFixture({ reattach: { enabled: true, random: seededRandom(11) } });
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitForDetail(fixture.ui, "container running");
+
+  fixture.daemon.lostReply = "SCHEMA_INVALID";
+  const result = await toolOf(fixture.pi, "write").execute("call-wr01", { path: "a.txt", content: "x" });
+  assert.deepEqual(result.details, { outcome: "refused", tool: "write", code: "AUDIT_OUTCOME_UNKNOWN", retryable: false });
+  assert.equal(result.isError, true);
+  assert.equal(fixture.daemon.dispatched.length, 1, "the write reaches the daemon once and is never dispatched again");
+  assert.deepEqual(pendingWaits(fixture.ctx), [], "an undecodable reply is not a lost link, so no wait is armed");
+});
+
+void test("CR-01: a write the daemon refuses with REALM_NOT_ACTIVE in its reply keeps that code and is not reported as unknown", async () => {
+  const fixture = makeFixture({ reattach: { enabled: true, random: seededRandom(10) } });
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitForDetail(fixture.ui, "container running");
+
+  fixture.daemon.callError = "REALM_NOT_ACTIVE";
+  const result = await toolOf(fixture.pi, "write").execute("call-refused", { path: "a.txt", content: "x" });
+  assert.deepEqual(result.details, { outcome: "refused", tool: "write", code: "REALM_NOT_ACTIVE", retryable: true });
+  assert.equal(result.isError, true);
+  assert.equal(fixture.daemon.dispatched.length, 1, "the daemon decided the write once");
 });
 
 void test("O4 R8b: a read that loses the link keeps the code it failed with and still arms one wait", async () => {
