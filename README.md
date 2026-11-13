@@ -114,6 +114,9 @@ saved `workspaceRoot`. Run them from `$WORKSPACE`, as above, or pass
 `realm status --workspace "$WORKSPACE"`.
 Start Omp in that same workspace. A `POLICY_DENIED` from the wrong directory
 is not a reason to broaden the policy.
+While a daemon is running, `realm status` and `realm down` are refused with
+`POLICY_DENIED` when run from outside the workspace. Run them from the
+workspace directory, as the `cd` above does.
 
 ### Captured lifecycle transcript
 

@@ -149,6 +149,28 @@ install, not a persistent install into the real `~/.omp`, not a registration in
 the persistent Omp config, and not containment. The published package and a
 marketplace install are not verified.
 
+### Daemon-up status frame (L-D2, 2026-11-13)
+
+Omp 18.20.0 (`omp --version`); the plan expected 18.12.6, and this record uses
+the actual value. The realm daemon was started with `realm up` from the
+workspace before the session and stopped with `realm down` after it. The
+session used the isolated profile above in `--mode=rpc-ui`.
+
+```text
+setStatus realm frames: 2
+{"type":"extension_ui_request","id":"15ccdbfa841a628a","method":"setStatus","statusKey":"realm","statusText":"○ realm disconnected · connecting · 2026-11-13T18:45:27.184Z · mode: unknown"}
+{"type":"extension_ui_request","id":"15ccdbfbd95a628c","method":"setStatus","statusKey":"realm","statusText":"● realm active · container running · 2026-11-13T18:45:22.872Z · applied mode: fail-closed (Omp host-tool guard; not host proc
+realm-retry listed: 2; extension_error: 0
+```
+
+The active line is reproduced as recorded: the stored line ends inside its
+status text, and the rest of that string was not captured. The first frame has
+the same form as the connecting frame in the no-daemon record above; without a
+daemon the second frame is `REALM_NOT_ACTIVE`, and with the daemon up it reads
+`realm active` with `applied mode: fail-closed`. This records the status item
+only. It is not a sandbox write, not containment, and not a registry or
+persistent install.
+
 ## Initialize Realm before launching Omp
 
 `init` writes local templates; it does **not** provision the runtime stack.
