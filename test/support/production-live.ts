@@ -11,7 +11,7 @@
 
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, writeFileSync, accessSync, constants, statSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, writeFileSync, accessSync, constants, statSync } from "node:fs";
 import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { delimiter, isAbsolute, join } from "node:path";
@@ -517,6 +517,12 @@ export function createScenarioEnvironment(inputs: LiveInputs, spec: ScenarioSpec
     `${JSON.stringify({ image: spec.image, stateDir, workspaceRoot: inputs.workspaceRoot, secretRoot: inputs.secretRoot, sandboxStateRoot: inputs.stateRoot })}\n`,
     { mode: 0o600 },
   );
+  // The OpenShell CLI finds the realm gateway under XDG_CONFIG_HOME, which the scenario overrides. Carry the host's gateway
+  // registration into the scenario's own config home; the copy lives in the 0700 temporary directory and is removed with it.
+  const hostHome = inputs.hostEnvironment["HOME"];
+  if (hostHome !== undefined && isAbsolute(hostHome) && existsSync(join(hostHome, ".config", "openshell"))) {
+    cpSync(join(hostHome, ".config", "openshell"), join(configHome, "openshell"), { recursive: true });
+  }
   const egressAllow = spec.egressAllow ?? [];
   const policy = { workspaceRoots: [inputs.workspaceRoot], ...(egressAllow.length > 0 ? { egressAllow } : {}), ...spec.policyExtra };
   writeFileSync(join(stateDir, "policy.json"), `${JSON.stringify(policy)}\n`, { mode: 0o600 });
