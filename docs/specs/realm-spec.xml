@@ -186,7 +186,7 @@
   <ASSUMPTIONS>
     The repo's conventions follow TypeScript strict mode with ESM modules and a single package at the repo root. This is a choice, not a verified fact, and should be confirmed against the USSR Stack.
     The Omp status indicator is the UI bar referred to in the request.
-    Default mode is advisory, with fail-closed available as an opt-in. Required mode is enabled per project.
+    Default mode is fail-closed (owner decision D4, 2026-10-29), with advisory available only as an explicit opt-in. Required mode is enabled per project.
     Startup budget defaults to a short bounded value that is configurable.
     Podman is the only supported container engine in v1.
     The Anda boundary is decided by the documentation spike, not by this spec.
@@ -197,7 +197,7 @@
     The skill argument placeholder was not expanded in the invocation. Treated as no additional arguments.
     "AgentOS" with a rivet.dev reference: it is unclear whether this means a Rivet actor-based service or a separate product. Resolve during the documentation step.
     Whether Anda is consumed through a TypeScript-native boundary or requires a Rust shim. Resolve during the Anda bridge spike.
-    The default policy when realm is disconnected: fail-closed or advisory. Confirm with the team.
+    The default policy when realm is disconnected is fail-closed (owner decision D4, 2026-10-29). Advisory requires an explicit value.
     Whether realm is one container per session or one container per workspace. This affects the Swarm seam.
     macOS support requirements and the Podman machine version to target.
     Whether the existing C# OmpOS and Grok Bot implementations are available to read in this session.
@@ -264,7 +264,7 @@
     Open questions:
     - AgentOS: Rivet actor service or separate product? Blocks src/runtime/agentos.ts and the session model. Default: ExecutionService interface; no actor design until rivet.dev docs are read.
     - Anda boundary: TypeScript-native or Rust shim? Blocks src/anda/ and rust/. Default: TypeScript client over the boundary Anda docs confirm; Rust only if none exists.
-    - Default policy mode: advisory or fail-closed? Spec conflicts. Blocks src/policy/defaults.ts. Default: advisory with visible warning; fail-closed when required mode is set.
+    - Default policy mode: resolved by owner decision D4 (2026-10-29). The default is fail-closed; advisory is an explicit opt-in. src/policy/defaults.ts follows that default.
     - Container granularity: per session or per workspace? Blocks src/runtime/session.ts and the Swarm seam. Default: one container per session.
     - Omp plugin manifest and status-bar API? Blocks plugin/. Default: adapter module; read Omp docs first; sibling format wins if one exists.
     - Podman machine and macOS behaviour? Blocks CI matrix and platform probe. Default: Linux only in v1; macOS unverified.

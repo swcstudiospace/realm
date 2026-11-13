@@ -154,7 +154,7 @@ Every gate must pass before a change is reviewed (`CONTRIBUTING.md`).
 - The published entry points are `README.md` and `CHANGELOG.md`. The release tarball (`npm pack`; nothing is published to npm) ships them with `LICENSE`, `NOTICE`, `licenses/`, `adapters/`, the driver protos, the schemas and `dist/src` (`files` in `package.json`).
 - Documentation is published as a GitHub Pages site (`homepage` in `package.json`; `CHANGELOG.md`). `.github/workflows/pages.yml` has no push trigger: it runs when the publish job dispatches it after a release, when `rollback.yml` dispatches it, or by hand (`workflow_dispatch`). Its permissions are set per job.
 - Integration notes under `docs/integration/` cite each official source's URL and read date. Read the official documentation and record it there before writing integration code against it. Record anything unverified as an open question, not as a fact.
-- `docs/specs/realm-spec.xml` is the authoritative product spec. It is read-only: do not modify it.
+- `docs/specs/realm-spec.xml` is the authoritative product spec. Agents do not edit it on their own initiative. An owner-directed edit is allowed when the owner asks for it, and the pull request must record the owner's instruction and the reason.
 - Update the docs in the same pull request as the change they describe.
 
 ## Progressive updates
