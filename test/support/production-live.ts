@@ -11,7 +11,7 @@
 
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, writeFileSync, accessSync, constants, statSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, writeFileSync, accessSync, constants, statSync } from "node:fs";
 import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { delimiter, isAbsolute, join } from "node:path";
@@ -447,6 +447,8 @@ export interface LiveInputs {
   readonly hostEnvironment: Readonly<Record<string, string>>;
   // The compute driver's socket the daemon probes (REALM_DRIVER_SOCKET), when the operator's environment names it.
   readonly driverSocketPath?: string;
+  // The driver's own state directory. A live scenario's daemon uses it, so the driver can read the workspace registry it writes.
+  readonly driverStateDir?: string;
 }
 
 // Reads the live inputs after the gate has passed. A missing value throws naming the variable, never its content.
@@ -460,7 +462,8 @@ export function readLiveInputs(env: EnvironmentLike, cliPath: string): LiveInput
   };
   const configPath = required(LIVE_DRIVER_CONFIG_VARIABLE);
   const driverSocket = env[LIVE_DRIVER_SOCKET_VARIABLE];
-  const roots = runtimeRootsOf(loadRuntimeConfig(JSON.parse(readFileSync(configPath, "utf8"))));
+  const runtime = loadRuntimeConfig(JSON.parse(readFileSync(configPath, "utf8")));
+  const roots = runtimeRootsOf(runtime);
   return {
     image: required(LIVE_IMAGE_VARIABLE),
     stateRoot: roots.sandboxStateRoot,
@@ -468,6 +471,7 @@ export function readLiveInputs(env: EnvironmentLike, cliPath: string): LiveInput
     workspaceRoot: roots.workspaceRoot,
     cliPath,
     hostEnvironment: selectOpenShellEnvironment(env),
+    driverStateDir: runtime.stateDir,
     ...(driverSocket === undefined ? {} : { driverSocketPath: driverSocket }),
   };
 }
@@ -492,6 +496,8 @@ export interface ScenarioEnvironment {
   readonly stateDir: string;
   // The environment the realm CLI (and the daemon it spawns) runs with.
   readonly cliEnvironment: Readonly<Record<string, string>>;
+  // Set only for a live run on the driver's state root: the record that restores the operator's policy and removes what the run created.
+  readonly sharedState?: SharedStateRecord;
 }
 
 // Builds one scenario's own XDG config home with realm/config.json and a policy.json in a short temporary state directory,
@@ -505,10 +511,12 @@ export function createScenarioEnvironment(inputs: LiveInputs, spec: ScenarioSpec
   }
   const root = realpathSync(mkdtempSync(join(tmpdir(), "rlv-")));
   const configHome = join(root, "c");
-  const stateDir = join(root, "s");
+  const stateDir = inputs.driverStateDir ?? join(root, "s");
   mkdirSync(join(configHome, "realm"), { recursive: true });
-  mkdirSync(stateDir, { mode: 0o700 });
-  chmodSync(stateDir, 0o700);
+  if (inputs.driverStateDir === undefined) {
+    mkdirSync(stateDir, { mode: 0o700 });
+    chmodSync(stateDir, 0o700);
+  }
   if (Buffer.byteLength(controlSocketPath(stateDir)) > SOCKET_PATH_LIMIT_BYTES) {
     throw new Error("the temporary state directory is too long for the control socket path; set TMPDIR to a shorter directory");
   }
@@ -517,8 +525,15 @@ export function createScenarioEnvironment(inputs: LiveInputs, spec: ScenarioSpec
     `${JSON.stringify({ image: spec.image, stateDir, workspaceRoot: inputs.workspaceRoot, secretRoot: inputs.secretRoot, sandboxStateRoot: inputs.stateRoot })}\n`,
     { mode: 0o600 },
   );
+  // The OpenShell CLI finds the realm gateway under XDG_CONFIG_HOME, which the scenario overrides. Carry the host's gateway
+  // registration into the scenario's own config home; the copy lives in the 0700 temporary directory and is removed with it.
+  const hostHome = inputs.hostEnvironment["HOME"];
+  if (hostHome !== undefined && isAbsolute(hostHome) && existsSync(join(hostHome, ".config", "openshell"))) {
+    cpSync(join(hostHome, ".config", "openshell"), join(configHome, "openshell"), { recursive: true });
+  }
   const egressAllow = spec.egressAllow ?? [];
   const policy = { workspaceRoots: [inputs.workspaceRoot], ...(egressAllow.length > 0 ? { egressAllow } : {}), ...spec.policyExtra };
+  const shared = inputs.driverStateDir === undefined ? undefined : backupSharedState(stateDir);
   writeFileSync(join(stateDir, "policy.json"), `${JSON.stringify(policy)}\n`, { mode: 0o600 });
   return {
     root,
@@ -528,7 +543,89 @@ export function createScenarioEnvironment(inputs: LiveInputs, spec: ScenarioSpec
       XDG_CONFIG_HOME: configHome,
       ...(inputs.driverSocketPath === undefined ? {} : { REALM_DRIVER_SOCKET: inputs.driverSocketPath }),
     },
+    ...(shared === undefined ? {} : { sharedState: shared }),
   };
+}
+
+// ---- Shared live state ---------------------------------------------------------------------------------------------------
+// A live scenario's daemon uses the driver's own state directory. The driver reads the workspace registry from there, so a
+// temporary state directory makes every create refuse with create.workspace. The run therefore writes into the live state
+// root under two rules: the operator's policy.json is backed up before the run and restored after it, and every entry the
+// run creates in the state root is removed after `realm down`. The daemon and driver logs are appended to, not removed.
+
+// The state-root entries the run may create, by directory. Entries already present are never removed.
+const SHARED_STATE_DIRECTORIES: readonly string[] = Object.freeze([
+  "audit",
+  "checkpoints",
+  "runtime",
+  "run",
+  "sandboxes",
+  "secrets",
+  "sessions",
+  "workspace-pins",
+  "workspaces",
+]);
+
+export interface SharedStateRecord {
+  // The relative paths under the state root that existed before the run.
+  readonly preexisting: ReadonlySet<string>;
+  // The bytes of the root's policy.json before the run, or null when the file did not exist.
+  readonly policyBefore: Buffer | null;
+}
+
+function listSharedState(stateDir: string): Set<string> {
+  const found = new Set<string>(readdirSync(stateDir));
+  const walk = (relative: string): void => {
+    for (const entry of readdirSync(join(stateDir, relative), { withFileTypes: true })) {
+      const child = `${relative}/${entry.name}`;
+      found.add(child);
+      if (entry.isDirectory()) {
+        walk(child);
+      }
+    }
+  };
+  for (const directory of SHARED_STATE_DIRECTORIES) {
+    if (existsSync(join(stateDir, directory))) {
+      found.add(directory);
+      walk(directory);
+    }
+  }
+  return found;
+}
+
+function backupSharedState(stateDir: string): SharedStateRecord {
+  const policyPath = join(stateDir, "policy.json");
+  return {
+    preexisting: listSharedState(stateDir),
+    policyBefore: existsSync(policyPath) ? readFileSync(policyPath) : null,
+  };
+}
+
+// Restores the operator's policy.json byte-for-byte, or removes the scenario's copy when there was none before the run.
+export function restoreSharedPolicy(scenario: ScenarioEnvironment): void {
+  if (scenario.sharedState === undefined) {
+    return;
+  }
+  const policyPath = join(scenario.stateDir, "policy.json");
+  const before = scenario.sharedState.policyBefore;
+  if (before === null) {
+    rmSync(policyPath, { force: true });
+  } else {
+    writeFileSync(policyPath, before);
+  }
+}
+
+// Removes each state-root entry the run created, parents before children, and nothing that existed before the run.
+export function removeSharedStateCreatedBy(scenario: ScenarioEnvironment): void {
+  if (scenario.sharedState === undefined) {
+    return;
+  }
+  const { preexisting } = scenario.sharedState;
+  const created = [...listSharedState(scenario.stateDir)].filter((relative) => !preexisting.has(relative));
+  created.sort((a, b) => a.length - b.length);
+  for (const relative of created) {
+    rmSync(join(scenario.stateDir, relative), { recursive: true, force: true });
+  }
 }
 
 // Runs the built realm CLI through node, with the scenario's own environment.
@@ -671,7 +768,7 @@ export async function residueProblems(inputs: LiveInputs, sandboxNames: readonly
   try {
     const entries = readdirSync(inputs.workspaceRoot);
     if (entries.length > 0) {
-      problems.push(`the pinned workspace holds ${String(entries.length)} entr${entries.length === 1 ? "y" : "ies"}`);
+      problems.push(`the pinned workspace holds ${String(entries.length)} entr${entries.length === 1 ? "y" : "ies"}: ${entries.join(", ")}`);
     }
   } catch {
     problems.push("the pinned workspace cannot be read");
@@ -717,6 +814,8 @@ export async function cleanupScenario(
   workspaceFiles: readonly string[],
 ): Promise<PollOutcome> {
   await realmCliWithWorkspace(inputs, scenario, ["down"], inputs.workspaceRoot, 120_000);
+  restoreSharedPolicy(scenario);
+  removeSharedStateCreatedBy(scenario);
   for (const name of workspaceFiles) {
     if (name === "" || name.includes("/") || name === "." || name === "..") {
       throw new Error("a workspace cleanup name must be a plain file name");
