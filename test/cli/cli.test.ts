@@ -1384,7 +1384,86 @@ void test("ONB-02: doctor --fix refuses missing config with an init hint while o
   assert.match(fix.stderr, /realm init/);
   const ordinary = await runCli(["doctor"], unreadable);
   assert.equal(ordinary.exitCode, 0);
+  const dry = await runCli(["doctor", "--fix", "--dry-run"], unreadable);
+  assert.equal(dry.exitCode, 1);
+  assert.equal(dry.stdout, "SCHEMA_INVALID\n");
+  assert.match(dry.stderr, /realm init/);
   assert.deepEqual(effects, []);
+});
+
+void test("ONB-01: init is dispatched before config resolution, exits by the documented codes, and never contacts a daemon", async (t) => {
+  const { root, stateDir, workspace, home, deps, effects } = doctorFixFixture(t);
+  const image = `registry.example.com/realm/workload@sha256:${"0".repeat(64)}`;
+  let configReads = 0;
+  const initDeps: CliDeps = {
+    ...deps,
+    env: { PATH: "/usr/bin", HOME: home, XDG_CONFIG_HOME: join(root, "config") },
+    cwd: root,
+    readConfig: () => {
+      configReads += 1;
+      throw new RealmError("SCHEMA_INVALID");
+    },
+  };
+  const usage = await runCli(["init"], initDeps);
+  assert.equal(usage.exitCode, 2);
+  assert.equal(usage.stdout, "");
+  assert.match(usage.stderr, /realm init: usage:/);
+
+  const initArgs = ["init", "--image", image, "--workspace", workspace, "--state-dir", stateDir];
+  const written = await runCli(initArgs, initDeps);
+  assert.equal(written.exitCode, 0, written.stderr);
+  assert.equal(written.stdout.endsWith("\n") && written.stdout.trimEnd().split("\n").length === 1, true, "one JSON line on stdout");
+  const summary: unknown = JSON.parse(written.stdout);
+  assert.ok(typeof summary === "object" && summary !== null && "mode" in summary);
+  assert.equal(summary.mode, "fail-closed");
+  assert.equal(existsSync(join(root, "config", "realm", "config.json")), true);
+
+  const refused = await runCli(initArgs, initDeps);
+  assert.equal(refused.exitCode, 1);
+  assert.equal(refused.stdout, "SCHEMA_INVALID\n");
+  assert.match(refused.stderr, /realm init:/);
+
+  assert.equal(configReads, 0, "init never reads the runtime config");
+  assert.deepEqual(effects, [], "init never contacts or starts a daemon");
+});
+
+void test("ONB-02: doctor --fix with no HOME refuses every target and changes nothing", async (t) => {
+  const { root, stateDir, workspace, deps, effects } = doctorFixFixture(t);
+  mkdirSync(stateDir);
+  chmodSync(stateDir, 0o755);
+  const noHome: CliDeps = {
+    ...deps,
+    env: { PATH: "/usr/bin", XDG_CONFIG_HOME: join(root, "config") },
+    readConfig: () => ({
+      image: `registry.example.com/realm/workload@sha256:${"0".repeat(64)}`,
+      stateDir,
+      workspaceRoot: workspace,
+    }),
+  };
+  for (const words of [["--fix"], ["--fix", "--dry-run"]]) {
+    const result = await runCli(["doctor", ...words], noHome);
+    assert.equal(result.exitCode, 1, result.stderr);
+    assert.equal(result.stdout, "SCHEMA_INVALID\n");
+    assert.match(result.stderr, /refused .* \(unsafe-target\)/);
+    assert.doesNotMatch(result.stderr, /realm init/);
+    assert.equal(statSync(stateDir).mode & 0o777, 0o755);
+    assert.equal(existsSync(join(stateDir, "run")), false);
+    assert.equal(existsSync(join(stateDir, "sessions")), false);
+  }
+  assert.deepEqual(effects, []);
+});
+
+void test("P15-O3: plain doctor exits 0 whatever check statuses a daemon reports", async (t) => {
+  const { deps } = doctorFixFixture(t);
+  const replies: readonly (readonly unknown[])[] = [[], [{ id: "runtime-roots", status: "fail", fix: "realm init" }]];
+  for (const result of replies) {
+    const reply = await runCli(["doctor"], {
+      ...deps,
+      send: (_socketPath, request) => Promise.resolve({ id: request.id, result }),
+    });
+    assert.equal(reply.exitCode, 0, reply.stderr);
+    assert.ok(Array.isArray(JSON.parse(reply.stdout)));
+  }
 });
 
 void test("ONB-02: the real CLI process exposes dry-run, repair, idempotency, refusal and strict usage", testTimeout(120_000), (t) => {
