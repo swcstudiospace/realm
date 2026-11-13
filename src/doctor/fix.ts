@@ -5,7 +5,7 @@
 // Unreadable directories and umasks that prevent opening new directories fail closed; the
 // operator must restore owner read/search access before retrying. Dry-run never mutates disk.
 
-import { closeSync, constants, fchmodSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readlinkSync, realpathSync, type Stats } from "node:fs";
+import { accessSync, closeSync, constants, fchmodSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readlinkSync, realpathSync, type Stats } from "node:fs";
 import { basename, dirname, isAbsolute, join, parse, resolve, sep } from "node:path";
 import { RealmError } from "../core/errors.js";
 import { sessionsDirOf } from "../session/paths.js";
@@ -24,7 +24,7 @@ export type FixAction =
   | { readonly kind: "create-directory"; readonly path: string; readonly mode: number }
   | { readonly kind: "set-mode"; readonly path: string; readonly previousMode: number; readonly mode: number };
 
-type RefusalDetail = "unsafe-target" | "symlink" | "not-a-directory" | "foreign-owner" | "unreadable-directory" | "changed-directory" | "unsafe-umask" | "filesystem-error";
+type RefusalDetail = "unsafe-target" | "symlink" | "not-a-directory" | "foreign-owner" | "unreadable-directory" | "changed-directory" | "unsafe-umask" | "unwritable-parent" | "filesystem-error";
 
 // A catalogue error plus fixed, non-runtime detail. Already-applied actions are retained if a
 // later write fails; callers must not report that a partial repair changed nothing.
@@ -67,7 +67,8 @@ export function applySafeFixes(
     const parent = dirname(target);
     const parentStats = observeDirectory(parent, false);
     if (parentStats === undefined) throw new FixRefusal(target, "unsafe-target");
-    pins.set(parent, pinDirectory(parent, parentStats, options));
+    const parentPin = pinDirectory(parent, parentStats, options);
+    pins.set(parent, parentPin);
     const actions: FixAction[] = [];
     let stateExists = false;
     for (const path of paths) {
@@ -82,6 +83,9 @@ export function applySafeFixes(
         if (mode !== PRIVATE_DIR_MODE) actions.push({ kind: "set-mode", path, previousMode: mode, mode: PRIVATE_DIR_MODE });
       }
     }
+    // A missing state directory is created as an entry of the pinned parent. Ask the kernel now, through
+    // that descriptor, whether the entry can be made, so a dry run refuses exactly where a real run would.
+    if (!stateExists && !canCreateEntry(parentPin)) throw new FixRefusal(target, "unwritable-parent");
     // mkdir applies umask before an fd can be opened. Read Linux's proc status without
     // changing the process-wide mask; process.umask() would write it twice and race threads.
     // Do not create an unreadable leaf and then follow its path to chmod it, even as root.
@@ -188,6 +192,16 @@ function verifyPin(pin: PinnedDirectory): void {
     realpathSync(pin.path) !== pin.path || readlinkSync(join(PROC_FD_DIR, String(pin.fd))) !== pin.path
   ) {
     throw new FixRefusal(pin.path, "changed-directory");
+  }
+}
+
+// access(2) through the pinned descriptor applies the same permission rules as the mkdir that follows.
+function canCreateEntry(pin: PinnedDirectory): boolean {
+  try {
+    accessSync(join(PROC_FD_DIR, String(pin.fd)), constants.W_OK | constants.X_OK);
+    return true;
+  } catch {
+    return false;
   }
 }
 

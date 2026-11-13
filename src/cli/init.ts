@@ -26,7 +26,10 @@ import { RealmError, type ErrorCode } from "../core/errors.js";
 import { syncDirectory, tempFileName } from "../fs/atomic-write.js";
 import { loadRuntimeConfig, runtimeRootsOf, type RuntimeRoots } from "../runtime/config.js";
 import { defaultPolicyPath, resolveConfigPath } from "../runtime/host-paths.js";
-import type { EnvironmentLike } from "../session/paths.js";
+import { channelPathsOf } from "../runtime/driver/channel.js";
+import { secretDirOf } from "../runtime/driver/secret-store.js";
+import { realmSandboxName } from "../runtime/openshell.js";
+import { controlSocketPath, sessionIdOfWorkspace, type EnvironmentLike } from "../session/paths.js";
 
 export const INIT_USAGE =
   "realm init: usage: realm init --image <name@sha256:64-hex-digest> [--workspace <absolute path>] [--state-dir <absolute path>]";
@@ -228,6 +231,10 @@ function preflightAncestors(path: string): void {
   }
 }
 
+// sun_path holds 108 bytes including the terminating NUL, so a unix socket path holds at most 107 bytes. The same limit
+// is UNIX_SOCKET_PATH_MAX_BYTES in src/runtime/driver/channel.ts, which does not export it.
+const UNIX_SOCKET_PATH_MAX_BYTES = 107;
+
 // Every refusal in this section is raised before the first write, so a refused run leaves nothing behind.
 function preflight(
   image: string,
@@ -283,6 +290,26 @@ function preflight(
   ] as const) {
     preflightAncestors(path);
     directoryIfSafe(label, path);
+  }
+  // The daemon binds its sockets under the sandbox name its session derives from the workspace (controller.ts
+  // sandboxName, session/paths.ts sessionIdOfWorkspace). That name is always 19 bytes, so the paths are known now.
+  // Arithmetic with the default roots: the channel control socket is <stateDir>/secrets/<name>/channel/control.sock,
+  // 49 bytes longer than the state directory; the ssh socket is 41 bytes longer; the daemon control socket
+  // <stateDir>/run/control.sock is 17 bytes longer. A state directory over 58 bytes is therefore refused.
+  const sandboxName = realmSandboxName(sessionIdOfWorkspace(realWorkspace));
+  const channel = channelPathsOf(secretDirOf(roots.secretRoot, sandboxName));
+  for (const [label, path] of [
+    ["the daemon control socket", controlSocketPath(stateDir)],
+    ["the daemon channel control socket", channel.controlSocket],
+    ["the daemon ssh socket", channel.sshSocket],
+  ] as const) {
+    const bytes = Buffer.byteLength(path, "utf8");
+    if (bytes > UNIX_SOCKET_PATH_MAX_BYTES) {
+      throw new InitRefusal(
+        "SCHEMA_INVALID",
+        `${label} path is ${String(bytes)} bytes; a unix socket path holds at most ${String(UNIX_SOCKET_PATH_MAX_BYTES)} bytes; pass a shorter --state-dir`,
+      );
+    }
   }
   preflightAncestors(dirname(configPath));
   directoryIfSafe("the config directory", dirname(configPath), false);

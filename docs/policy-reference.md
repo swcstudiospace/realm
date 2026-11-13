@@ -334,3 +334,37 @@ Example. The digest is a placeholder of 64 zeros. It is not a real image, and th
 }
 ```
 
+## realm init
+
+- Syntax: `realm init --image <name@sha256:64-hex-digest> [--workspace <absolute path>] [--state-dir <absolute path>]`. It runs before any config is read, because it writes the config. Each flag may appear once; an unknown flag, a repeated flag or a missing value is a usage error (exit 2).
+- `--image` is required. Realm does not look up a digest: pass the digest the driver runs (`REALM_DRIVER_SANDBOX_IMAGE`). A tag-only or malformed reference is refused, by the same rule as the runtime configuration loader.
+- `--workspace` defaults to the current directory. It must be an existing directory owned by this account; a symbolic link and `/` are refused.
+- `--state-dir` defaults to `$XDG_STATE_HOME/realm` when `XDG_STATE_HOME` is absolute, else `$HOME/.local/state/realm`. When neither base is absolute and the flag is absent, init refuses.
+- Writes, in this order:
+  - the private roots: the state directory and its `secrets` and `sandboxes` roots at 0700, and the config directory at 0700 only when init creates it;
+  - `<state dir>/policy.json`: `{"mode": "fail-closed", "workspaceRoots": ["<workspace>"]}`;
+  - the config file, `$XDG_CONFIG_HOME/realm/config.json` (or `$HOME/.config/realm/config.json`): `{"image", "stateDir", "workspaceRoot"}`.
+  Both files are created at mode 0600 and published without overwrite. A failed write removes the files it published; the refusal names any directory it created, which stays for a retry.
+- Refuses before any write (exit 1):
+  - an existing `config.json` or `policy.json` in any form, including a symbolic link and a dangling one;
+  - a symbolic link at the workspace, the state directory, its roots, the config directory, or an ancestor of any of them;
+  - an existing state directory or private root that is not an account-owned directory at 0700. Init never changes an existing directory; `realm doctor --fix` is the command that tightens the state directory;
+  - an existing config directory that is not an account-owned real directory, or a missing or non-directory parent;
+  - a state directory inside the workspace (`POLICY_DENIED`), a workspace inside the state directory, or a config file inside the workspace;
+  - a daemon socket path over 107 bytes (the control socket, the channel control socket or the ssh socket): pass a shorter `--state-dir`.
+- Output: on success, one JSON line on stdout with `config`, `policy`, `stateDir` and `mode` (`"fail-closed"`). A refusal prints its catalogue code on stdout and the reason on stderr.
+- Does not provision Podman, the OpenShell gateway, the host supervisor, the compute driver or the image. Those are outside this repository (`docs/integration/openshell.md`). Init does not check for them, and `realm up` still needs them.
+- Exit codes: 0 written; 1 a catalogue-coded refusal or write failure; 2 usage.
+
+## realm doctor --fix
+
+- Syntax: `realm doctor --fix [--dry-run]`. `--dry-run` is accepted only with `--fix`; `--dry-run` alone is a usage error (exit 2).
+- Needs a valid runtime configuration (`$XDG_CONFIG_HOME/realm/config.json`, see "Runtime configuration file"). Without one it exits 1 and says to run `realm init`. It runs locally even when a daemon answers.
+- Targets: the configured state directory, its `run` child and its `sessions` child. Nothing else: not `policy.json`, `config.json`, the `secrets` or `sandboxes` roots, the workspace, a socket or any other file.
+- A missing target is created at 0700. An existing target at another mode is set to 0700 through a descriptor-pinned `fchmod`.
+- Refuses (exit 1) a target or its parent when it is a symbolic link, not a directory, owned by another account, or not readable and searchable by its owner; when it is the filesystem root, the home directory, the workspace, a directory containing the workspace, or inside it; when the parent of the state directory is missing, a symbolic link or not a directory; when the umask would leave a new directory unreadable; or when the parent does not accept a new entry. Every such refusal is decided before the first write. A refusal stops the run and no further action is applied. A failure during the writes keeps the actions already applied and reports them.
+- `--dry-run` reports the same actions and writes nothing. A repeat run after a successful run reports `"fixes": []`.
+- Output: stdout is one JSON object `{"dryRun":…,"fixes":[…],"checks":[…]}`, where `checks` are the local doctor checks. Stderr has one line per fix and a summary line. A refusal prints `SCHEMA_INVALID` on stdout and names the path and detail on stderr.
+- Exit codes: 0 when nothing is refused; 1 on a refusal, a failure, or no valid config; 2 on usage.
+- Does not provision anything and changes nothing else: no ownership change, no secret or sandbox root, no workspace mode, no policy or config write, and no Podman, gateway, supervisor, driver or image. Every other doctor item stays a prose fix for the operator. `--fix` is a local, narrow repair of directory modes; it is not containment.
+

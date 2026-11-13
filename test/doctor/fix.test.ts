@@ -1,6 +1,6 @@
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { RealmError } from "../../src/core/errors.js";
@@ -515,4 +515,79 @@ void test("a regular-file child is refused before creating siblings or changing 
   assertRefused(() => applySafeFixes(stateDir, false, places));
   assert.equal(modeOf(stateDir), 0o755);
   assert.equal(existsSync(join(stateDir, "run")), false);
+});
+
+void test("an empty HOME refuses every target and changes nothing (ONB-02)", (t) => {
+  const root = base(t);
+  const workspace = join(root, "workspace");
+  directoryAt(workspace, 0o755);
+  const places: ProtectedLocations = { home: "", workspace };
+  const stateDir = join(root, "state");
+  directoryAt(stateDir, 0o755);
+
+  assertRefused(() => applySafeFixes(stateDir, true, places));
+  assertRefused(() => applySafeFixes(stateDir, false, places));
+  assert.equal(modeOf(stateDir), 0o755);
+  assert.equal(existsSync(join(stateDir, "run")), false);
+});
+
+void test("a run symlink that resolves to the workspace is refused, and neither the workspace nor the state directory changes (ONB-02)", (t) => {
+  const { root, places } = fixture(t);
+  chmodSync(places.workspace, 0o755);
+  const stateDir = join(root, "state");
+  directoryAt(stateDir, 0o755);
+  symlinkSync(places.workspace, join(stateDir, "run"));
+
+  assertRefused(() => applySafeFixes(stateDir, true, places));
+  assertRefused(() => applySafeFixes(stateDir, false, places));
+  assert.equal(modeOf(places.workspace), 0o755);
+  assert.equal(modeOf(stateDir), 0o755);
+  assert.equal(existsSync(join(places.workspace, "sessions")), false);
+});
+
+void test("a regular file at run is refused before any sibling is created or the state mode changes (ONB-02)", (t) => {
+  const { root, places } = fixture(t);
+  const stateDir = join(root, "state");
+  directoryAt(stateDir, 0o755);
+  writeFileSync(join(stateDir, "run"), "keep these bytes");
+
+  assertRefused(() => applySafeFixes(stateDir, true, places));
+  assertRefused(() => applySafeFixes(stateDir, false, places));
+  assert.equal(modeOf(stateDir), 0o755);
+  assert.equal(existsSync(join(stateDir, "sessions")), false);
+});
+
+void test("a file inside the state directory keeps its mode and bytes after a repair (ONB-02)", (t) => {
+  const { root, places } = fixture(t);
+  const stateDir = join(root, "state");
+  directoryAt(stateDir, 0o755);
+  const policy = join(stateDir, "policy.json");
+  writeFileSync(policy, "{}");
+  chmodSync(policy, 0o644);
+
+  applySafeFixes(stateDir, false, places);
+
+  assert.equal(modeOf(stateDir), 0o700);
+  assert.equal(modeOf(join(stateDir, "run")), 0o700);
+  assert.equal(modeOf(join(stateDir, "sessions")), 0o700);
+  assert.equal(modeOf(policy), 0o644);
+  assert.equal(readFileSync(policy, "utf8"), "{}");
+});
+
+void test("a missing state directory in an unwritable parent is refused alike by dry run and repair, and nothing is created (ONB-02)", { skip: LOCKED_SKIP }, (t) => {
+  const { root, places } = fixture(t);
+  const parent = join(root, "parent");
+  directoryAt(parent, 0o555);
+  const stateDir = join(parent, "state");
+
+  for (const dryRun of [true, false]) {
+    assert.throws(() => applySafeFixes(stateDir, dryRun, places), (error: unknown) => {
+      assert.ok(error instanceof FixRefusal);
+      assert.equal(error.detail, "unwritable-parent");
+      assert.deepEqual(error.applied, []);
+      return true;
+    });
+  }
+  assert.equal(existsSync(stateDir), false);
+  assert.equal(modeOf(parent), 0o555);
 });

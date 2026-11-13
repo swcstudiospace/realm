@@ -12,6 +12,7 @@ import fs, {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -25,7 +26,10 @@ import { InitRefusal, runInit as runInitDirect } from "../../src/cli/init.js";
 import { loadPolicyFileDetailed } from "../../src/core/policy.js";
 import { loadRuntimeConfig, runtimeRootsOf } from "../../src/runtime/config.js";
 import { resolveConfigPath } from "../../src/runtime/host-paths.js";
-import type { EnvironmentLike } from "../../src/session/paths.js";
+import { channelPathsOf } from "../../src/runtime/driver/channel.js";
+import { secretDirOf } from "../../src/runtime/driver/secret-store.js";
+import { realmSandboxName } from "../../src/runtime/openshell.js";
+import { sessionIdOfWorkspace, type EnvironmentLike } from "../../src/session/paths.js";
 
 const IMAGE = `registry.example.com/realm/workload@sha256:${"a".repeat(64)}`;
 const SENTINEL = "SENTINEL-DO-NOT-PRINT-OR-OVERWRITE";
@@ -82,6 +86,18 @@ function explicitArgs(f: Fixture): string[] {
 
 function modeOf(path: string): number {
   return statSync(path).mode & 0o777;
+}
+
+// The channel control socket path a state directory yields, by the derivation the daemon uses (the sandbox name comes
+// from the workspace's session id, and the secret root defaults under the state directory).
+function channelControlPathOf(stateDir: string, workspace: string): string {
+  const sandboxName = realmSandboxName(sessionIdOfWorkspace(realpathSync(workspace)));
+  return channelPathsOf(secretDirOf(join(stateDir, "secrets"), sandboxName)).controlSocket;
+}
+
+// The bytes a state directory gains on that path. The sandbox name has a fixed length, so this is the same for any state directory.
+function channelSocketExtraBytes(workspace: string): number {
+  return Buffer.byteLength(channelControlPathOf("/s", workspace)) - Buffer.byteLength("/s");
 }
 
 // Follow the filesystem spy pattern used by test/support/fsync-spy.ts. Only the selected entry's owner differs;
@@ -546,6 +562,76 @@ void test("a workspace inside the state directory is refused and writes nothing 
   assert.match(result.stderr, /inside the state directory/);
   assert.equal(existsSync(f.policyPath), false);
   assert.equal(existsSync(f.configPath), false);
+});
+
+void test("a state directory that puts the daemon channel socket over 107 bytes is refused and writes nothing (ONB-01)", async () => {
+  const f = fixture();
+  assert.ok(Buffer.byteLength(f.root) < 40, "scratch root too long for the boundary test");
+  const extra = channelSocketExtraBytes(f.workspace);
+  const stateDir = join(f.root, "s".repeat(108 - extra - Buffer.byteLength(f.root) - 1));
+  assert.equal(Buffer.byteLength(channelControlPathOf(stateDir, f.workspace)), 108);
+
+  const result = await runCli(["init", "--image", IMAGE, "--workspace", f.workspace, "--state-dir", stateDir], {
+    env: f.env,
+    cwd: f.root,
+  });
+  assert.equal(result.exitCode, 1);
+  assert.equal(result.stdout, "SCHEMA_INVALID\n");
+  assert.match(result.stderr, /107 bytes/);
+  assert.match(result.stderr, /--state-dir/);
+  assert.equal(existsSync(stateDir), false, "the state directory must not be created");
+  assert.equal(existsSync(join(stateDir, "policy.json")), false, "policy.json must not be written");
+  assert.equal(existsSync(f.configPath), false, "config.json must not be written");
+});
+
+void test("a state directory that puts the daemon channel socket at exactly 107 bytes is accepted (ONB-01)", async () => {
+  const f = fixture();
+  assert.ok(Buffer.byteLength(f.root) < 40, "scratch root too long for the boundary test");
+  const extra = channelSocketExtraBytes(f.workspace);
+  const stateDir = join(f.root, "s".repeat(107 - extra - Buffer.byteLength(f.root) - 1));
+  assert.equal(Buffer.byteLength(channelControlPathOf(stateDir, f.workspace)), 107);
+
+  const result = await runCli(["init", "--image", IMAGE, "--workspace", f.workspace, "--state-dir", stateDir], {
+    env: f.env,
+    cwd: f.root,
+  });
+  assert.equal(result.exitCode, 0, result.stderr);
+  assert.equal(modeOf(stateDir), 0o700);
+});
+
+void test("a workspace that is a symbolic link is refused and writes nothing (ONB-01)", async () => {
+  const f = fixture();
+  const link = join(f.root, "workspace-link");
+  symlinkSync(f.workspace, link);
+  const result = await runInit(f, ["--image", IMAGE, "--workspace", link, "--state-dir", f.stateDir]);
+  assert.equal(result.exitCode, 1);
+  assert.equal(result.stdout, "SCHEMA_INVALID\n");
+  assert.match(result.stderr, /--workspace must be an existing directory/);
+  assertNothingWritten(f);
+});
+
+void test("a config.json inside the workspace is refused and writes nothing (ONB-01)", async () => {
+  const f = fixture();
+  const env: EnvironmentLike = { ...f.env, XDG_CONFIG_HOME: join(f.workspace, "config") };
+  const result = await runCli(["init", ...explicitArgs(f)], { env, cwd: f.root });
+  assert.equal(result.exitCode, 1);
+  assert.equal(result.stdout, "SCHEMA_INVALID\n");
+  assert.match(result.stderr, /config\.json must not be inside the workspace root/);
+  assert.equal(existsSync(f.stateDir), false, "the state directory must not be created");
+  assert.equal(existsSync(join(f.workspace, "config")), false, "the config directory must not be created");
+});
+
+void test("an existing config directory keeps its mode, and only the two templates are written (ONB-01)", async () => {
+  const f = fixture();
+  const dir = join(f.root, "config", "realm");
+  mkdirSync(dir, { recursive: true });
+  chmodSync(dir, 0o755);
+  const result = await runInit(f, explicitArgs(f));
+  assert.equal(result.exitCode, 0, result.stderr);
+  assert.equal(modeOf(dir), 0o755, "an existing config directory is not chmodded");
+  assert.deepEqual(readdirSync(dir).sort(), ["config.json"]);
+  assert.equal(modeOf(f.configPath), 0o600);
+  assert.equal(modeOf(f.policyPath), 0o600);
 });
 
 void test("a missing config home is refused and writes nothing (ONB-01)", async () => {

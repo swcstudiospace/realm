@@ -55,7 +55,7 @@ Every gate must pass before a change is reviewed (`CONTRIBUTING.md`).
 ## Layout
 
 - `src/`: strict TypeScript. `npm run build` emits it to `dist/src/`.
-  - `cli/main.ts`: entry for the `realm` CLI.
+  - `cli/main.ts`: entry for the `realm` CLI; `cli/init.ts` holds `realm init`, its preflight and its no-clobber publish of the two templates.
   - `cli/checkpoint.ts`: the realm checkpoint CLI.
   - `daemon/`: control socket (`channel.ts`), client, daemon, `ensure.ts` (starts the daemon once, only when the socket is absent, and waits for it; the status probe the CLI and the Omp extension share), `startup.ts` (the startup maintenance block and its adoption and reap seams), `seams.ts` (the status, socket and libpod helpers the daemon uses), and `main.ts`, the daemon entry.
   - `omp/`: Omp plugin logic (`plugin.ts`), its re-attach policy (`reattach.ts`), its host tool set (`host-tools.ts`), and its entry (`extension.ts`).
@@ -72,7 +72,7 @@ Every gate must pass before a change is reviewed (`CONTRIBUTING.md`).
   - `fs/`: canonical paths, root allowlist, credential-path denial, advisory write locks, atomic writes, read, list, glob, and write, and `temp-sweep.ts` (`src/fs/temp-sweep.ts`, which removes orphaned atomic-write temp files; the daemon calls it at start, before it serves).
   - `audit/`: redacted JSONL audit log, and `reconcile.ts` (`src/audit/reconcile.ts`, which appends `AUDIT_OUTCOME_UNKNOWN` reconciliation lines for admissions with no result; the daemon calls it at start, before it serves).
   - `observe/`: the JSON-line logger (`logger.ts`), its file and stderr sinks (`log-file.ts`, size-capped, rotated to one `.1` file), correlation ids (`ids.ts`), and the in-memory metrics registry with its strict snapshot validator (`metrics.ts`). The daemon uses them: the entry writes its records to stderr, which is `daemon.log`, through the logger; the daemon writes its lifecycle, control and tool records to `requests.log` through the logger and the file sink; and it counts metrics in memory.
-  - `doctor/`: prerequisite checks behind `realm doctor`, with the host-binary checks in `checks-host.ts`.
+  - `doctor/`: prerequisite checks behind `realm doctor`, with the host-binary checks in `checks-host.ts`, and `fix.ts`, the local safe subset that `realm doctor --fix` applies.
   - `contract/`: tool and session-record schemas and the schema validator (`validate.ts`).
   - `core/`: frozen shared contracts: states and the state machine, status labels, policy loading with `policy.schema.json`, the typed error catalogue (`errors.ts`), the event bus, ports, backoff, and `withTimeout` (`timeout.ts`); and the package version reader (`package-version.ts`).
 - `test/`: `node:test` suites by area, largely mirroring `src/`. `test/integration/` holds the Podman-gated suites and the Omp live harness. `test/support/` holds shared fakes, `property.ts` (the shared `fast-check` configuration, 200 runs from a fixed seed; `REALM_PROPERTY_SEED` overrides it, used by the `*.property.test.ts` files in `test/fs/` and `test/core/`), and the Omp harness: `omp-live.ts`, `scripted-provider.ts`, `omp-profile.ts`, `omp-rpc.ts`, `realm-daemon-fixture.ts`, `net-trace.ts`, and `omp-spike-extension.ts`.
