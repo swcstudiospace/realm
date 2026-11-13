@@ -308,6 +308,20 @@ export class DaemonAbsentError extends RealmError {
   }
 }
 
+// The request was written to the socket and a failure followed before its reply was read and decoded: the peer closed,
+// the reply timed out, or the reply was oversized, undecodable or for another request. The daemon may have received and
+// acted on the request. The catalogue code is the code that failure carries: a transport code, or SCHEMA_INVALID for a
+// reply that cannot be used. sent is always true. A failure before the write is never this class, and a reply the
+// daemon answered with an error code is not a failure here.
+export class SentRequestError extends RealmError {
+  readonly sent = true;
+
+  constructor(code: ErrorCode) {
+    super(code);
+    this.name = "SentRequestError";
+  }
+}
+
 // The errno codes of a dial that reached no listener.
 const NO_DAEMON_ERRNO: readonly string[] = ["ENOENT", "ECONNREFUSED"];
 
@@ -467,9 +481,27 @@ export async function readControlLine(socket: Socket, timeoutMs: number): Promis
   }
 }
 
+// Reads and decodes the reply to a request already written to the socket. Any failure from here on means the request was
+// delivered and the daemon may have acted on it, so it surfaces as SentRequestError with the failure's catalogue code:
+// a transport code when the peer closed or went silent, SCHEMA_INVALID when the reply is oversized, undecodable or for
+// another request.
+async function readSentReply(socket: Socket, timeoutMs: number, id: ControlId): Promise<ControlReply> {
+  try {
+    const reply = decodeReply(await readBounded(socket, timeoutMs));
+    if (reply.id !== id) {
+      throw makeRealmError("SCHEMA_INVALID");
+    }
+    return reply;
+  } catch (error: unknown) {
+    throw new SentRequestError(ioFailure(error).code);
+  }
+}
+
 // Sends one request over the socket at socketPath and resolves with the reply.
 // Connect, write, and read are each bounded by timeoutMs (default
-// SOCKET_TIMEOUT_MS); a peer that never answers rejects with TOOL_TIMEOUT.
+// SOCKET_TIMEOUT_MS); a peer that never answers rejects with TOOL_TIMEOUT. A failure once the request
+// is written and its reply is read or decoded surfaces as SentRequestError, so a caller can tell an unknown outcome
+// from a request never delivered. A dial or write failure is never SentRequestError.
 export async function sendRequest(
   socketPath: string,
   request: ControlRequest,
@@ -480,14 +512,12 @@ export async function sendRequest(
   const socket = await dial(socketPath, timeoutMs);
   try {
     await writeBounded(socket, line, timeoutMs);
-    const raw = await readBounded(socket, timeoutMs);
-    const reply = decodeReply(raw);
-    if (reply.id !== request.id) {
-      throw makeRealmError("SCHEMA_INVALID");
-    }
-    return reply;
   } catch (error: unknown) {
+    socket.destroy();
     throw ioFailure(error);
+  }
+  try {
+    return await readSentReply(socket, timeoutMs, request.id);
   } finally {
     socket.destroy();
   }

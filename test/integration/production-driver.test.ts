@@ -650,6 +650,7 @@ void test("production live 5: after the daemon is killed, the next realm up keep
     assertExit(status, 0, "realm status after the daemon crash");
     const notice = noticeOfStatus(status.stdout);
     assert.ok(notice !== undefined && notice.includes("adopted and kept"), `realm status must report the adoption: ${describeResult(status)}`);
+    assert.ok(notice.includes("destroyed at startup: 1 container(s), 0 session record(s)"), `realm status must report the destroyed stray: ${describeResult(status)}`);
     const daemonLog = readFileSync(join(scenario.environment.stateDir, "daemon.log"), "utf8");
     assert.equal(jsonLinesSinceStartup(daemonLog), true, "every daemon.log line from the restart's daemon.startup record must be JSON");
     const startup = startupRecordOf(daemonLog);

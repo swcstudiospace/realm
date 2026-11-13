@@ -20,6 +20,7 @@
 import { makeRealmError, RealmError } from "../core/errors.js";
 import type { MutationDenyCode } from "../core/policy.js";
 import type { DaemonClient, DaemonStatus } from "../daemon/client.js";
+import { SentRequestError } from "../daemon/channel.js";
 import type { PolicyMode } from "../contract/validate.js";
 import type { StateSnapshot } from "../core/state-machine.js";
 import { STATUS_LABELS, displayStatus } from "../core/status.js";
@@ -668,13 +669,14 @@ export function registerRealmPlugin(pi: OmpExtensionApi, options: RealmPluginOpt
       throw makeRealmError("REALM_NOT_ACTIVE");
     }
     const outcome = await client.call(call).catch((error: unknown) => {
-      // A lost link is reported to the re-attach wait. A mutation in flight may have taken effect: it is reported as unknown and
-      // is never dispatched again. A read keeps the code it failed with.
+      // A lost link is reported to the re-attach wait while re-attach is on. A write or exec whose request was delivered and
+      // whose reply was then lost or undecodable may have taken effect: it is reported as unknown and is never dispatched again. A daemon
+      // refusal and a request that never reached the socket keep their code. A read keeps the code it failed with.
       if (session.onLinkLost !== null && LINK_LOST_CODES.includes(codeOfError(error))) {
         reportLinkLoss(session, codeOfError(error), () => live === session && session.client === client);
-        if ("write" in call || "exec" in call) {
-          throw makeRealmError("AUDIT_OUTCOME_UNKNOWN");
-        }
+      }
+      if (("write" in call || "exec" in call) && error instanceof SentRequestError) {
+        throw makeRealmError("AUDIT_OUTCOME_UNKNOWN");
       }
       throw error;
     });
