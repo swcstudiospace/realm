@@ -751,7 +751,7 @@ async function runMcpSession(scenario: Scenario, session: McpSession): Promise<v
   assert.equal(decodeReadContent(field(readBack, "content")), content, `read content: ${describeValue(readBack)}`);
   assert.equal(field(readBack, "truncated"), false, `read truncated: ${describeValue(readBack)}`);
   rmSync(hostPath);
-  const metrics = await realmCli(scenario.inputs, scenario.environment, ["metrics"], STATUS_TIMEOUT_MS);
+  const metrics = await realmCli(scenario.inputs, scenario.environment, ["metrics", "--workspace", scenario.inputs.workspaceRoot], STATUS_TIMEOUT_MS);
   assertExit(metrics, 0, "realm metrics after the write");
   const snap = JSON.parse(metrics.stdout) as {
     toolCalls?: readonly { tool?: string; outcome?: string; count?: number }[];
@@ -1009,7 +1009,7 @@ void test("production live 10: a stopped gateway is OPENSHELL_GATEWAY_LOST, not 
     );
     assert.equal(sawCrashLoop, false, "a stopped gateway must not be reported as AGENTOS_CRASH_LOOP");
     assert.ok(errored.ok, `realm status must report OPENSHELL_GATEWAY_LOST within ${String(RUNNER_EXIT_OBSERVE_TIMEOUT_MS / 1000)} s: ${errored.detail}`);
-    const metrics = await realmCli(scenario.inputs, scenario.environment, ["metrics"], STATUS_TIMEOUT_MS);
+    const metrics = await realmCli(scenario.inputs, scenario.environment, ["metrics", "--workspace", scenario.inputs.workspaceRoot], STATUS_TIMEOUT_MS);
     assertExit(metrics, 0, "realm metrics after the gateway stop");
     const snap = JSON.parse(metrics.stdout) as { healthProbeFailures?: readonly { code?: string; count?: number }[] };
     const lost = snap.healthProbeFailures?.find((row) => row.code === "OPENSHELL_GATEWAY_LOST");
