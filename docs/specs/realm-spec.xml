@@ -224,7 +224,7 @@
 
     Defer: advisory file locks, atomic write path, MCP and ACP surfaces, the Omp plugin and status bar, and any Rust shim unless the Anda spike forces one.
 
-    Record these decisions before the final plan: AgentOS identity, Anda boundary, default policy mode, and container granularity. Tentative defaults: advisory mode by default with fail-closed as opt-in, per the spec; TypeScript-native Anda only if its docs confirm a supported boundary.</CONCLUSION>
+    Record these decisions before the final plan: AgentOS identity, Anda boundary, default policy mode, and container granularity. Tentative defaults: fail-closed as the default policy mode (superseded: owner decision D4, 2026-10-29, advisory is opt-in), per the spec; TypeScript-native Anda only if its docs confirm a supported boundary.</CONCLUSION>
 	</NODE>
 	<NODE id="n2" kind="decompose" title="Decompose Realm into buildable modules" issue="SPE-18514" issueUrl="https://linear.app/swcstudio/issue/SPE-18514/n2-decompose-realm-into-buildable-modules" notionUrl="https://app.notion.com/p/400bc1a0c7ae819cb82ce3f681d3a5dc?pvs=204">
 		<QUESTION>How should Realm be split into independently buildable modules under ~/src/repos/agent-realm/ (src/core for state machine, policy engine and event bus; src/fs for canonicalization, advisory locks and atomic write; src/runtime for the Podman, OpenShell and AgentOS adapters; src/anda for the bridge; src/contract for shared tool schemas; src/omp for the plugin; src/mcp; src/acp; src/cli with doctor; src/audit; src/session for the on-disk session record), and for each module, what are its inputs, outputs, owned files, and which other modules it must wait for?</QUESTION>
@@ -253,7 +253,7 @@
 		<QUESTION>What information is missing or ambiguous that would materially change the implementation? Specifically: is AgentOS a Rivet actor-based service or a separate product; can Anda be consumed through a TypeScript-native boundary or does it need a Rust shim; is the default policy fail-closed or advisory; is the container one per session or one per workspace; what is the Omp plugin manifest format and status-bar API (and is any sibling product's format authoritative); what Podman machine version and macOS behaviour must be targeted; are the C# OmpOS and Grok Bot sources readable in this session; and which Node or Bun version does each host support? For each item, name the modules or files it blocks and whether a stated default lets work proceed without an answer.</QUESTION>
 		<DEPENDS_ON>n1</DEPENDS_ON>
 		<RATIONALE>1. Extract the unknowns named in the node question and in the spec's AMBIGUITIES section, and check each against the spec text.
-    2. Flag the policy default as a spec contradiction, not an unknown: ASSUMPTIONS and POLICY_MODE say advisory by default, while GRACEFUL_DEGRADATION says fail-closed when required mode is on.
+    2. Flag the policy default as a spec contradiction, not an unknown: ASSUMPTIONS and POLICY_MODE said advisory by default, while GRACEFUL_DEGRADATION says fail-closed when required mode is on. Resolved by owner decision D4 (2026-10-29): fail-closed is the default.
     3. Mark AgentOS identity and the Anda boundary as blocking the vertical slice, because the runtime and bridge adapters cannot be typed without them.
     4. Mark container granularity as blocking the session record and the Swarm seam, but not the slice, since a one-container-per-session default is reversible.
     5. Mark the Omp manifest and status-bar API, Podman machine and macOS behaviour, and Node or Bun per host as blocking only their own module or CI matrix, so they can sit behind adapters.
@@ -362,7 +362,7 @@
 		<CONCLUSION>Ask (default applies if unanswered):
     AgentOS actor service or separate product? Default: ExecutionService interface, no actor design.
     Anda TypeScript client or Rust shim? Default: TypeScript over the boundary anda.md confirms.
-    Default policy mode? Default: advisory with visible warning; fail-closed when required mode is set.
+    Default policy mode? Default: fail-closed (owner decision D4, 2026-10-29); advisory is an explicit opt-in.
     One container per session or per workspace? Default: per session.
     Omp manifest and status API? Default: adapter module in plugin/omp; sibling format wins if one exists.
     macOS and Podman machine target? Default: Linux only in v1.
@@ -373,7 +373,7 @@
     Wave 0 (parallel): frozen contracts — files: src/core/states.ts, src/core/errors.ts, src/core/policy.schema.json, src/contract/tools.schema.json, src/contract/session-record.schema.json — done when: typecheck passes
     Wave 0 (parallel): doc gates A — files: docs/integration/agentos.md, podman.md, openshell.md — done when: each cites official URL, read date, and answer or not documented
     Wave 0 (parallel): doc gates B — files: docs/integration/anda.md, omp.md, mcp.md, acp.md, hosts.md — done when: same check as gates A
-    Wave 1 (parallel): policy — files: src/policy/engine.ts, src/policy/defaults.ts, test/policy/ — done when: credential paths denied; advisory is default
+    Wave 1 (parallel): policy — files: src/policy/engine.ts, src/policy/defaults.ts, test/policy/ — done when: credential paths denied; fail-closed is the default (owner decision D4, 2026-10-29)
     Wave 1 (parallel): state machine — files: src/core/machine.ts, test/core/machine.test.ts — done when: invalid edges return REALM_INVALID_TRANSITION
     Wave 1 (parallel): fs lockdown — files: src/fs/canonicalize.ts, src/fs/lock.ts, src/fs/atomic-write.ts, test/fs/ — done when: traversal, lock conflict, and interrupted-write tests pass
     Wave 1 (parallel): validation and audit — files: src/contract/validate.ts, src/audit/redact.ts, src/audit/log.ts, test/contract/, test/audit/ — done when: no seeded secret reaches JSONL
