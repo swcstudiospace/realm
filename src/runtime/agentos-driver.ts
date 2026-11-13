@@ -12,6 +12,7 @@ import { isAbsolute } from "node:path";
 import { performance } from "node:perf_hooks";
 import { makeRealmError, RealmError } from "../core/errors.js";
 import { dialWithin, withTimeout } from "../core/timeout.js";
+import { redactString } from "../audit/redact.js";
 import { currentBootId } from "../session/proc-identity.js";
 import { runnerRecordOf, writeRunnerRecord } from "../session/runner-record.js";
 import type { AgentOsDriver } from "./agentos.js";
@@ -84,6 +85,30 @@ async function succeeds(run: () => Promise<OpenShellRunOutcome>, budgetMs: numbe
   } catch {
     return false;
   }
+}
+
+// The create's outcome for the failure line: the exit code as text, or why there is none, and the runner's stderr. A rejection
+// or a missed budget keeps no text, so no error message from the runner reaches the journal.
+async function createOutcomeOf(
+  run: () => Promise<OpenShellRunOutcome>,
+  budgetMs: number,
+): Promise<{ readonly exitCode: string; readonly stderr: string }> {
+  if (!(budgetMs > 0)) {
+    return { exitCode: "no budget", stderr: "" };
+  }
+  try {
+    const outcome = await withTimeout(run(), budgetMs, "OPENSHELL_START_FAILED");
+    return { exitCode: String(outcome.exitCode), stderr: outcome.stderr ?? "" };
+  } catch {
+    return { exitCode: "no exit (rejected or over budget)", stderr: "" };
+  }
+}
+
+// One journal line for a failed create: the exit code, then the first 800 characters of the runner's stderr, redacted. Line
+// breaks become " | " so the record stays on one line.
+function createFailureLine(outcome: { readonly exitCode: string; readonly stderr: string }): string {
+  const clipped = redactString(outcome.stderr).replace(/\s*\r?\n\s*/g, " | ").slice(0, 800);
+  return `realm compute driver create failed: exit=${outcome.exitCode} stderr=${clipped === "" ? "(none)" : clipped}\n`;
 }
 
 // Writes the identity record of a runner child just spawned (runner-record.ts). False when the child has no pid, when it is
@@ -339,7 +364,9 @@ export function createOpenShellAgentOsDriver(options: OpenShellAgentOsDriverOpti
     // non-zero exit or a missed budget is OPENSHELL_START_FAILED.
     async create(request: SandboxCreateRequest, timeoutMs: number): Promise<void> {
       const createArgv = buildCreateArgv(request);
-      if (!(await succeeds(() => runner(createArgv, { timeoutMs }), timeoutMs))) {
+      const outcome = await createOutcomeOf(() => runner(createArgv, { timeoutMs, captureOutput: true }), timeoutMs);
+      if (outcome.exitCode !== "0") {
+        process.stderr.write(createFailureLine(outcome));
         throw makeRealmError("OPENSHELL_START_FAILED");
       }
     },
