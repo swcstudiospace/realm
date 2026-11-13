@@ -1679,7 +1679,7 @@ function isAlive(pid: number): boolean {
   try {
     return !/^\d+ \(.*\) Z /.test(readFileSync(`/proc/${String(pid)}/stat`, "utf8"));
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+    if (["ENOENT", "ESRCH"].includes((error as NodeJS.ErrnoException).code ?? "")) {
       return false;
     }
     throw error;
