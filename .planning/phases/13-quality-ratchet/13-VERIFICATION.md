@@ -46,7 +46,7 @@ covered_files:
   - test/support/property.ts
   - test/support/timing.test.ts
   - test/support/timing.ts
-covered_digest: "v3:sha256:d6422b6cbf41b7ad1939e4fff88f254665f9a31c80599632599e3f4521278248"
+covered_digest: "v4:sha256:40d542e0cfa35db1ae8721bbcb747a8642b05a80721aae8a92c6f18b4f3a7460"
 re_verification:
   previous_status: human_needed
   previous_score: 4/6
@@ -100,10 +100,10 @@ human_verification:
 - Orchestrator-supplied evidence, cited and not re-observed here:
   - Hosted CI on PR 59 head: Dependency audit, Build docs site, Verify on Node 22.x and 24.x, all passed, including `npm run test:coverage`, the property tests and the full suite (3041 tests, 0 failures).
   - Mutation run `43387372658`: success; killed 7, survived 5, timedOut 0, untested 0; `src/fs` 9, `src/core` 2, `src/audit` 1 mutants.
-  - QR-04 local demonstration: `node scripts/check/coverage.mjs --lcov coverage/lcov.info --floors /tmp/high-floors.json` exits non-zero with "7 metric(s) below a floor". The scratch file is not committed.
-  - QR-05 quota run: `systemd-run --scope -p CPUQuota=100% -- npm test` at the repository root exited 0 with 3047 tests, 3009 pass, 0 fail and 38 skipped (log `/tmp/cpu1-test.txt`, outside the repository, digest not recorded).
+  - QR-04 local demonstration: `node scripts/check/coverage.mjs --lcov coverage/lcov.info` run with a scratch floor file with every floor set to 99, not committed, exits non-zero with "7 metric(s) below a floor". The scratch file is not committed.
+  - QR-05 quota run: `systemd-run --scope -p CPUQuota=100% -- npm test` at the repository root exited 0 with 3047 tests, 3009 pass, 0 fail and 38 skipped (log: a host evidence log outside the repository, not committed; digest not recorded).
   - QR-06 inventory from `node scripts/check/export-usage.mjs --list`: used-in-src 541, test-only 165, self-only 1, forwarded 2, unclassified 1, excluded 63, public-signature 138. `node scripts/check/export-usage-gate.mjs` exits 0: "0 failing export(s), 164 allowlisted seam(s), 0 stale allowlist entries".
-- Covered set: five phase-13 artifacts that the 08:06 report omitted are added: `scripts/check/export-usage-gate.mjs`, `scripts/check/export-usage-gate.test.mjs`, `scripts/check/export-usage-allowlist.json`, `scripts/check/export-usage.test.mjs` and `test/support/timing.test.ts`. The digest was computed over the 40 repository-relative files above. The tool emitted the `v3` prefix; the 08:06 report carried `v4`. The two digests are not comparable.
+- Covered set: five phase-13 artifacts that the 08:06 report omitted are added: `scripts/check/export-usage-gate.mjs`, `scripts/check/export-usage-gate.test.mjs`, `scripts/check/export-usage-allowlist.json`, `scripts/check/export-usage.test.mjs` and `test/support/timing.test.ts`. The digest was computed over the 40 repository-relative files above with `gsd-tools query verification.fingerprint`. That tool now emits the `v4` prefix; the prior `v3` digest (`d6422b6c…`) is not comparable to it.
 - Test-file check (read-only grep): `test/runtime/agentos-supervisor.test.ts`, `test/runtime/libpod-client.test.ts`, `test/acp/agent.test.ts`, `test/support/timing.ts` and `test/support/fake-execution.ts` contain no skip markers (`.skip`, `skip:`, `{ skip`).
 - `gsd-tools phase complete 13` was not run, because it writes ROADMAP and STATE, which are out of scope.
 
