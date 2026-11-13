@@ -78,7 +78,7 @@
   "dependencies": {
     "@grpc/grpc-js": "1.14.6",
     "@grpc/proto-loader": "0.8.1",
-    "@rivet-dev/agentos-core": "0.4.4",
+    "@rivet-dev/agentos-core": "0.4.7",
     "ajv": "8.20.0"
   }
 }
