@@ -203,7 +203,13 @@ interface Scenario {
 function startScenario(t: TestContext, spec: ScenarioSpec, workspaceFiles: readonly string[] = []): Scenario {
   const liveInputs = inputs();
   const environment = createScenarioEnvironment(liveInputs, spec);
+  // REALM_LIVE_KEEP_SCENARIO_STATE=1 keeps the scenario's directory, daemon log and sandbox for diagnosis. It skips the
+  // cleanup, so the operator removes the sandbox and runs realm down afterwards. Off by default; no other run sets it.
   t.after(async () => {
+    if (process.env["REALM_LIVE_KEEP_SCENARIO_STATE"] === "1") {
+      t.diagnostic(`scenario state kept at ${environment.root}; cleanup skipped by REALM_LIVE_KEEP_SCENARIO_STATE`);
+      return;
+    }
     const outcome = await cleanupScenario(liveInputs, environment, workspaceFiles);
     assert.ok(outcome.ok, `residue after the scenario's cleanup: ${outcome.detail}`);
   });
