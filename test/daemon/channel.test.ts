@@ -27,6 +27,7 @@ import {
   isControlMethod,
   replyForMalformedLine,
   sendRequest,
+  SentRequestError,
   unknownMethodReply,
   parseControlSelection,
 } from "../../src/daemon/channel.js";
@@ -363,6 +364,39 @@ void test("RT-06: garbage bytes and an id mismatch from the peer surface SCHEMA_
   );
   const mismatchPath = await startServer(t, () => encodeReply({ id: 999, result: {} }));
   await assertRejectsSchemaInvalid(() => sendRequest(mismatchPath, { id: 1, method: "status" }));
+});
+
+void test("WR-01: a delivered request whose reply is not JSON rejects with SentRequestError carrying SCHEMA_INVALID (P6-D2)", async (t) => {
+  const garbagePath = await listenUnix(
+    t,
+    createServer((socket) => {
+      socket.write(`not json {{{ ${SECRET}\n`);
+      socket.end();
+    }),
+  );
+  await assert.rejects(
+    sendRequest(garbagePath, { id: 1, method: "status" }),
+    (error: unknown) =>
+      error instanceof SentRequestError &&
+      error.code === "SCHEMA_INVALID" &&
+      !error.message.includes(SECRET),
+  );
+});
+
+void test("WR-01: a delivered request whose reply carries another id rejects with SentRequestError carrying SCHEMA_INVALID (P6-D2)", async (t) => {
+  const mismatchPath = await startServer(t, () => encodeReply({ id: 999, result: {} }));
+  await assert.rejects(
+    sendRequest(mismatchPath, { id: 1, method: "status" }),
+    (error: unknown) => error instanceof SentRequestError && error.code === "SCHEMA_INVALID",
+  );
+});
+
+void test("WR-01: a dial refusal is DaemonAbsentError and never a SentRequestError (P6-D2)", async (t) => {
+  const missingPath = join(scratchBase(t), "missing.sock");
+  await assert.rejects(
+    sendRequest(missingPath, { id: 1, method: "status" }),
+    (error: unknown) => error instanceof DaemonAbsentError && !(error instanceof SentRequestError),
+  );
 });
 
 void test("RT-06: ensureSocketDir creates stateDir/run at mode 0700 when absent and accepts it on return (P6-D3)", (t) => {
