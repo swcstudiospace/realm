@@ -562,7 +562,7 @@ async function syncDir(dir: string): Promise<void> {
 // The state root must lie outside the workspace root. A checkpoint of a root that holds the state directory would copy
 // the state directory, and any secrets or OpenShell files in it, into the checkpoint.
 async function refuseStateInsideRoot(pinned: PinnedRoot, stateRoot: string): Promise<void> {
-  if (isInsideRoot(pinned, await realpathOfNearest(stateRoot))) {
+  if (isInsideRoot(pinned, await realpathOfNearest(stateRoot, false))) {
     throw makeRealmError("POLICY_DENIED");
   }
 }
@@ -681,18 +681,17 @@ function asRealmError(error: unknown, code: ErrorCode): RealmError {
   return error instanceof RealmError ? error : makeRealmError(code);
 }
 
-// The real path of the nearest existing ancestor, with the missing tail appended. A link target that does not exist yet
-// is still resolved through any link above it. Only a missing component climbs to its parent. Any other failure, such
-// as a symlink loop or a denied directory, is refused as SCHEMA_INVALID, the code lstatIfPresent uses for an unreadable
-// path.
-async function realpathOfNearest(path: string): Promise<string> {
+// Climbs past ENOENT, and past ENOTDIR and ELOOP for a link target, to the nearest existing ancestor.
+async function realpathOfNearest(path: string, linkTarget: boolean): Promise<string> {
   const missing: string[] = [];
   let existing = path;
   for (;;) {
     try {
       return join(await realpath(existing), ...missing);
     } catch (error: unknown) {
-      if (errnoOf(error) !== "ENOENT") {
+      const code = errnoOf(error);
+      const climbs = code === "ENOENT" || (linkTarget && (code === "ENOTDIR" || code === "ELOOP"));
+      if (!climbs) {
         throw makeRealmError("SCHEMA_INVALID");
       }
       const parent = dirname(existing);
@@ -730,7 +729,7 @@ async function scanDirectory(dir: string, prefix: string, containment: PinnedRoo
       out.entries.push({ path: relPath, type: "file", mode, size, sha256: await hashFile(path) });
     } else if (info.isSymbolicLink()) {
       const target = await readlink(path);
-      const resolved = await realpathOfNearest(resolve(dirname(path), target));
+      const resolved = await realpathOfNearest(resolve(dirname(path), target), true);
       if (containment !== undefined && !isInsideRoot(containment, resolved)) {
         throw makeRealmError("PATH_ESCAPE");
       }
