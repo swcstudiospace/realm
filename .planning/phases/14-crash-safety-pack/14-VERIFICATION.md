@@ -1,27 +1,31 @@
 ---
 phase: 14-crash-safety-pack
-verified: 2026-11-08T19:24:58Z
-status: gaps_found
-score: 0/7 must-haves verified
+verified: 2026-11-14T21:00:37Z
+status: passed
+score: 5/5 roadmap success criteria verified
+behavior_unverified: 0
 covered_files:
   - .planning/REQUIREMENTS.md
   - .planning/ROADMAP.md
   - .planning/phases/14-crash-safety-pack/14-01-PLAN.md
-  - .planning/phases/14-crash-safety-pack/14-CONTEXT.md
+  - .planning/phases/14-crash-safety-pack/14-01-SUMMARY.md
   - .planning/phases/14-crash-safety-pack/14-SUMMARY.md
-  - .planning/quick/261108-puz-reconcile-the-v3-0-planning-records-with/261108-puz-SUMMARY.md
+  - src/acp/agent.ts
   - src/audit/log.ts
   - src/audit/reconcile.ts
+  - src/cli/main.ts
+  - src/core/errors.ts
+  - src/daemon/channel.ts
   - src/daemon/daemon.ts
   - src/daemon/main.ts
+  - src/daemon/startup.ts
   - src/fs/atomic-write.ts
   - src/fs/temp-sweep.ts
   - src/lifecycle/controller.ts
-  - src/session/reap.ts
+  - src/mcp/protocol.ts
+  - src/omp/plugin.ts
   - src/session/store.ts
-  - src/tools/dispatch.ts
   - test/audit/reconcile.test.ts
-  - test/cli/cli.test.ts
   - test/daemon/daemon.test.ts
   - test/daemon/main.test.ts
   - test/fs/atomic-write-sigkill.test.ts
@@ -30,117 +34,109 @@ covered_files:
   - test/lifecycle/stale-container.test.ts
   - test/omp/plugin.test.ts
   - test/session/store.test.ts
-  - test/support/production-live.ts
   - test/surfaces/daemon-equivalence.test.ts
-covered_digest: "v4:sha256:12a6d39649335fcd4d51c94dff294677d2b44340bcc3021b5c12025aac23e102"
-behavior_unverified: 5
-behavior_unverified_items:
-  - truth: "Four SIGKILL stages preserve original bytes and startup sweep removes only eligible orphans with audit."
-    test: "Run the named SIGKILL, sweep-negative and startup-maintenance tests on the integration revision."
-    expected: "Each stage preserves the original and the eligible orphan is audited and removed; negatives remain untouched."
-    why_human: "Existing historical run is on an earlier revision and no current test was run in this assignment; the stage test calls the sweep directly."
-  - truth: "A planted unmatched admission is reconciled exactly once across two starts."
-    test: "Run the named startup reconciliation and pairing tests on the integration revision."
-    expected: "First startup writes one reconciliation, second startup writes none."
-    why_human: "Current test execution was prohibited; earlier reported full-suite evidence is for another tree."
-  - truth: "Durable deletion, startup removal logging and all required notice surfaces work."
-    test: "Run the named fsync, startup report and surface tests on the integration revision and verify the missing live removal case."
-    expected: "Directory is synced; removed IDs and deletion count are logged and notices reach all required surfaces."
-    why_human: "Recorded live 5b observes deletion without a startup container removal; current offline tests were not run."
-  - truth: "Refusal cause codes match across in-process and daemon MCP and ACP paths."
-    test: "Run the named daemon equivalence and dispatcher tests on the integration revision."
-    expected: "The same refusal cause reaches all four paths."
-    why_human: "Authored assertions are present but no current-revision execution was permitted."
-  - truth: "Retry after the recorded container is lost reaches active with a different container."
-    test: "Run the named stale-container controller test on the integration revision."
-    expected: "Recovery destroys the stale reference before creating a new container and returns active."
-    why_human: "The existing test uses a fake adapter and was not executed on this revision."
-overrides_applied: 0
-re_verification:
-  previous_status: gaps_found
-  previous_score: not recorded
-  gaps_closed:
-    - "The current live scenario 5b asserts the startup log recordsDeleted count, and its pass at a8cee97 is recorded."
-  gaps_remaining:
-    - "Current live proof of startup removal naming the removed container ID together with deletion count and destroyed notice remains absent."
-  regressions: []
-gaps:
-  - truth: "The live suite scenario 5 shows the destroyed-sandbox notice and startup log line naming the removed container on the production stack."
-    status: failed
-    reason: "Current scenario 5 asserts re-adoption with zero removals; scenario 5b proves record deletion after SIGTERM removed the container before startup, not a startup removal and logged removed ID. The deployed driver was older than the current closure."
-    artifacts:
-      - path: test/integration/production-driver.test.ts
-        issue: "Scenario 5 tests adoption; scenario 5b asserts containersRemoved=0 and recordsDeleted>=1, not a removed ID."
-    missing:
-      - "A current-production-stack scenario exercising an actually removed startup candidate, asserting its ID, counts and destroyed notice, or an explicit owner-approved change to the literal Phase 14 acceptance."
-      - "Attributed live evidence against the current driver closure, in an approved serialized window."
+covered_digest: "v4:sha256:184d1bb33a89e8d33b168d46dd38c004a9b6121b9e004384c3f3a738be59aab4"
 ---
 
-# Phase 14: Crash-safety pack — re-verification
+# Phase 14: Crash-safety pack: Verification at de7bafc
 
-**Goal:** A daemon or process killed at any point leaves no unrecorded debris, no silent loss of a sandbox, and no audit admission without an outcome.  
-**Status:** gaps_found. **Revision inspected:** `f581e5cdfd145a00a6e54dae69a892754d559826`.  
-**Method:** source and recorded evidence only; no build, test, lint, formatter, probe or live operation was run. Previous report had no machine-readable frontmatter or score; its stated live-record-count gap was rechecked. No override was recorded.
+**Goal:** A daemon or process killed at any point leaves no unrecorded debris, no silent loss of a sandbox, and no audit admission without an outcome.
 
-## Observable truths
+**verdict: passed.** All five roadmap success criteria (`.planning/ROADMAP.md` Phase 14, l.400-410) have code and test evidence on `de7bafc` (= `origin/main` tip). Live evidence: 37 of 37 TAP tests pass. Residuals are non-blocking and listed below.
 
-| # | Contract | Status | Evidence and limit |
-|---|---|---|---|
-| 1 | Four real SIGKILL stages and safe audited startup sweep (roadmap SC1, CRASH-01/05). | ⚠️ PRESENT_BEHAVIOR_UNVERIFIED | `test/fs/atomic-write-sigkill.test.ts:20,79-110` asserts signal, original, one orphan, direct sweep and audit; `test/fs/temp-sweep.test.ts:106-180` covers age, pattern, owner and symlinks. `src/daemon/daemon.ts:1001-1005,1147-1151` connects startup sweep before serving. The stage tests call the sweep directly, not a full subsequent daemon startup for each stage. Earlier 124-test/zero-skip result was recorded for `1fa69c1`, not this revision. |
-| 2 | Unmatched admission reconciled once across two starts (SC2, CRASH-02). | ⚠️ PRESENT_BEHAVIOR_UNVERIFIED | `test/daemon/daemon.test.ts:624-703` plants the admission and asserts the reconciliation and second-start idempotence; `src/daemon/daemon.ts:1181-1183` invokes reconciliation. Historical full-suite result was at `1fa69c1`; current test not run. |
-| 3 | Directory-synced deletion, removal IDs and counts, attach notices (SC3, CRASH-03/04). | ⚠️ PRESENT_BEHAVIOR_UNVERIFIED | `test/session/store.test.ts:116-143` covers fsync and failure; `test/daemon/main.test.ts:256-288` asserts IDs and `recordsDeleted`; daemon report/notice wiring is `src/daemon/daemon.ts:1012-1014,1198-1200,1301-1308`. CLI and Omp tests exist in `test/cli/cli.test.ts` and `test/omp/plugin.test.ts`. Live 5b proves count/notice for a record without a container, not removed IDs. See blocker below. |
-| 4 | Equivalent refusal cause over daemon and in-process MCP/ACP (SC4, CRASH-06). | ⚠️ PRESENT_BEHAVIOR_UNVERIFIED | `test/surfaces/daemon-equivalence.test.ts:195-214` compares four paths using a scripted refusal; dispatcher propagation is separately covered in `test/tools/dispatch.test.ts`. No current execution. |
-| 5 | Lost recorded container retries from error to active with new ID (SC5, CRASH-07). | ⚠️ PRESENT_BEHAVIOR_UNVERIFIED | `test/lifecycle/stale-container.test.ts:65-104` asserts error, active, changed ID and destruction before create with a fake exec adapter. No current execution; live 5b is not this controller error-retry test. |
-| 6 | Live scenario 5 shows destroyed notice and removed-ID startup log (context acceptance 6, D-1410). | ✗ FAILED / BLOCKER | Current scenario 5 re-adopts the same container and asserts `adopted: 1, containersRemoved: 0, recordsDeleted: 0` (`test/integration/production-driver.test.ts:557-646`), so it cannot assert the required removed ID. Scenario 5b asserts `containersRemoved: 0` and `recordsDeleted >= 1` (`:680-766`). No live startup-removal ID assertion is evidenced for the current behavior. |
-| 7 | Plan acceptance gates, no skips/suppressions used to pass, catalogue and frozen contracts. | ? UNCERTAIN / WARNING | Prior report recorded gates on `1fa69c1`, including 2,426 passes and 32 unitemized skips; those results do not establish the current revision or whether any skip was used to pass. Phase 17 added the approved 31st catalogue code; no complete current frozen-contract comparison is recorded. |
+**Method.** Worktree `<tmp>/wt-p14-sum`, HEAD `de7bafc`. Static reads and greps only. The cited anchors were re-read in the worktree with `sed` and `grep`. No tests, lint, typecheck, build or formatters were run by this verifier. Nothing was committed. Test evidence is the orchestrator's full hermetic suite on `de7bafc`: 3025 pass, 0 fail. That suite covers the six test files cited here (see Residual 4). Digest: `gsd-tools query verification.fingerprint` (v4), run from the worktree root over the declared files above; PLAN and SUMMARY files in the phase directory are added by the tool.
 
-**Score:** 0/7 verified; five behavior-unverified, one failed, one uncertain. This is an evidence score, not a claim that all implementations are absent. No later roadmap phase specifically substitutes for the Phase 14 live removed-ID acceptance; Phase 19 adoption is an intentional subsequent behavior change, not an automatic override.
+## Goal Achievement: Roadmap Success Criteria
 
-## Live evidence and limits
+### 1. Temp-file stages, SIGKILL, sweep (CRASH-01, CRASH-05): VERIFIED
 
-The prior report documented a 2026-11-02 scenario 5 pass at `5527882`, with a staged driver, a destroyed notice and removed container ID. Its then-helper did not assert the startup log's `recordsDeleted`. That historical result does not prove current selective reaping.
+Code:
+- `src/fs/atomic-write.ts:34` stage type (`after-temp-write`, `after-fsync`, `before-rename`, `after-recheck`).
+- `src/fs/atomic-write.ts:68` `TEMP_NAME_PATTERN = /^\.(.+)\.realm-tmp-[0-9a-f]{16}$/s`; `:71` temp name generation.
+- `src/fs/atomic-write.ts:203`, `:205`, `:206`, `:211` stage hooks; all precede `renameSync` at `:212`.
+- `src/fs/temp-sweep.ts:45` `ORPHAN_TEMP_MIN_AGE_MS = 60_000`; `:267` removes only `isFile()` entries matching the pattern; `:276-285` directories opened with `O_NOFOLLOW|O_DIRECTORY`; `:321` `lstatSync`, with regular-file, owner and age checks; `:330` `audit({ tool: "temp-sweep", outcome: "ok", ... })` before unlink.
 
-The orchestrator-recorded window in `.planning/quick/261108-puz-reconcile-the-v3-0-planning-records-with/261108-puz-SUMMARY.md:12` reports scenarios 5, 5b and 6 passed at `a8cee97`. This is reported evidence, not an independently observed run here. Scenario 5 checks SIGKILL re-adoption and preservation. Scenario 5b stops the daemon with SIGTERM; shutdown removes the container, then startup reports `recordsDeleted >= 1` and a destroyed notice with **zero** containers removed (`test/integration/production-driver.test.ts:680-766`). Thus the old claim that live `recordsDeleted` is not asserted is obsolete: scenario 5b explicitly asserts it, independently of the optional count filter in `test/support/production-live.ts:295-316`. It does **not** prove the startup reap logs an actually removed container ID. The deployed driver predates the newer driver import closure; the current closure was not restarted or live-verified (`261108-puz-CONTEXT.md`, driver caveat). The 5b pass does not resolve that limitation.
+Tests:
+- `test/fs/atomic-write-sigkill.test.ts:31` child calls `process.kill(process.pid, "SIGKILL")` from the stage hook; `:79-80` one test per stage; `:84` asserts `signal === "SIGKILL"`. Asserts original bytes intact, one orphan, and that the sweep removes it with an audit line.
+- `test/fs/atomic-write-sigkill.test.ts:114` control (no kill, no orphan); `:125` production age bound keeps a fresh orphan.
+- `test/fs/temp-sweep.test.ts:65` aged exact-pattern file removed and audited; `:106` younger file kept; `:117` non-pattern names kept; `:151` symlink named like a temp file not followed; `:166` symlinked directory not entered.
+- `test/daemon/daemon.test.ts:697` `startDaemon` sweeps aged orphans in the workspace root and sessions dir before serving.
 
-## Artifacts and links
+Caveat: `test/fs/temp-sweep.test.ts:251` (other-device directory) is skipped off CI under Q0-015 (`:180-201`). It is not a stated criterion.
 
-| Artifact / link | Assessment |
-|---|---|
-| `src/fs/atomic-write.ts` → `src/fs/temp-sweep.ts` → `src/daemon/daemon.ts` | Present and wired to startup before `serve`; the per-stage tests invoke the sweep directly. |
-| `src/audit/reconcile.ts` → daemon startup | Present and invoked before the serving gate; authored two-start test exists. |
-| `src/session/store.ts` → directory sync | Implementation and fsync-spy tests exist; current execution unobserved. |
-| `src/session/reap.ts:95-114,148-180` → startup report → `src/daemon/main.ts:96-97` | Selective reap plans removal/deletion, proves removal, deletes records, and reports counts; main routes report to startup logging. Actual removed-ID live path remains unproven on current stack. |
-| Dispatcher → daemon → MCP/ACP | Authored equivalence test covers four paths with a scripted dispatcher refusal; current execution unobserved. |
-| Live 5/5b → startup log and status | Both assertions are wired, but neither covers a container removed by startup. |
+### 2. Admission without result gets one reconciliation line; second start appends none (CRASH-02): VERIFIED
 
-Dynamic UI data-flow trace: not applicable to this infrastructure phase; notice/report propagation is traced above.
+Code:
+- `src/audit/reconcile.ts:347-348` appends `outcome: "AUDIT_OUTCOME_UNKNOWN"` and `phase: "reconciliation"`, so the line is not an execution result; `:683` `reconcileAuditLogs`.
+- `src/audit/log.ts:36-39` `AuditPhase = "admission" | "result" | "reconciliation"`.
+- `src/core/errors.ts:39`, `:186-189` `AUDIT_OUTCOME_UNKNOWN` catalogue entry (`retryable: false`).
+- `src/daemon/startup.ts:278` runs `reconcileAuditLogs` before serving.
 
-## Requirements coverage
+Tests:
+- `test/audit/reconcile.test.ts:78` admission with no result gets exactly one reconciliation line; `:126` second run appends nothing.
+- `test/daemon/daemon.test.ts:697-781` `startDaemon` reconciles and reports before serving; `:730` one reconciliation line with `AUDIT_OUTCOME_UNKNOWN`; `:780` second start reports `auditLinesReconciled === 0`.
 
-| Requirement | Source | Disposition |
-|---|---|---|
-| CRASH-01, CRASH-05 | plan requirement mapping; roadmap SC1 | Implementation and tests present; current behavior unverified (truth 1). |
-| CRASH-02 | plan mapping; SC2 | Implementation and tests present; current behavior unverified (truth 2). Live in-chain presence is separately scoped to Phase 17; not counted as Phase 14 proof. |
-| CRASH-03 | plan mapping; SC3 | Fsync implementation and tests present; current behavior unverified (truth 3). |
-| CRASH-04 | plan mapping; SC3 and context item 6 | Record deletion count has a recorded 5b pass, but startup removal ID plus notice on current stack remains open (truths 3 and 6). |
-| CRASH-06 | plan mapping; SC4 | Test and wiring present; current behavior unverified (truth 4). |
-| CRASH-07 | plan mapping; SC5 | Test present; current behavior unverified (truth 5). |
+Caveat: the daemon test writes the admission line directly and comments that the writer "was killed in between" (`:710`). No test produces the orphan admission by killing a process. See Residual 1.
 
-All seven roadmap-mapped requirements appear in the plan mapping; none is orphaned. This report does not modify requirement checkboxes.
+### 3. Durable delete, reap log, status notice (CRASH-03, CRASH-04): VERIFIED
 
-## Checks and review
+Code:
+- `src/session/store.ts:17` imports `syncDirectory`; `:90-104` `delete` unlinks the record, then calls `syncDirectory(realPath)` at `:99`; a failure maps to `WriteNotAtomicError` (`:104`).
+- `src/fs/atomic-write.ts:311` `syncDirectory`.
+- `src/daemon/startup.ts:296-299` the report carries `containersRemoved`, container ids, `recordsDeleted` and `removedCauses`.
+- `src/daemon/main.ts:158` `emitStartup` logs the `daemon.startup` line.
+- `src/daemon/startup.ts:448` `startupNoticeOf` builds the "destroyed at startup" notice; `src/daemon/daemon.ts:302`, `:900` hold it for the daemon's lifetime.
+- `src/omp/plugin.ts:432-434` each attach calls `ctx.ui.notify(attached.status.notice)`; `src/cli/main.ts:557` CLI diagnostics.
 
-- **Behavioral checks and probes:** not run; assignment explicitly prohibits tests, builds and live operations. No current pass is inferred from source or historical summaries.
-- **Historical plan gates:** prior report attributes typecheck, lint, docs, gates, scripts, build, pack and MCP passes to `1fa69c1`; full suite reported 2,426 pass, 0 fail and 32 skips, not itemized. No current gate results supplied.
-- **Anti-pattern scan:** no `TBD`, `FIXME` or `XXX` found in inspected phase source paths. This limited scan is not a full security or quality audit.
-- **Decision coverage:** GSD query returned skipped, “No trackable decisions in CONTEXT.md”; locked prose decisions were considered in the criteria above.
-- **Test quality:** checks contain meaningful signal, state and count assertions, but scenario 5's adoption pass is not evidence for startup removal, and scenario 5b's record-only deletion does not test removal-ID logging. Current execution and full test-quality gate were not performed.
-- **Advisory (new scope, unevidenced):** None.
+Tests:
+- `test/session/store.test.ts:116` delete fsyncs the sessions directory after the unlink; `:143` failing directory fsync is `WRITE_NOT_ATOMIC`.
+- `test/daemon/main.test.ts:275` the start's report is written as one stderr line with the container ids and counts.
+- `test/daemon/daemon.test.ts:766` notice asserted on status, on repeated status and on `down`.
+- `test/omp/plugin.test.ts:526` an attach whose status carries a notice shows it once through `ui.notify`.
+- Live: `test/integration/production-driver.test.ts:596` (production live 5) asserts the restarted daemon's `daemon.startup` names the stray container id and `realm status` shows the notice. `ok 5` passes in the live log.
 
-## Required follow-through
+### 4. Same refusal cause code over MCP and ACP, in process and over the daemon (CRASH-06): VERIFIED
 
-1. Resolve the literal live-removal acceptance: exercise an ineligible startup container and demonstrate its removed ID, deletion count and destroyed notice together, against the current driver closure in an approved serialized live window; alternatively obtain an explicit owner-approved acceptance change. Do not treat scenario 5b as that proof.
-2. Run the named behavior tests and required plan gates on the integrated revision under the appropriate owner-controlled verification workflow; account for skips and frozen-contract changes. The four-stage tests currently exercise the sweep directly, so establish whether the separate startup wiring test meets the literal next-start criterion or add attributed end-to-end evidence.
-3. Reconcile the stale CRASH-04 wording in REQUIREMENTS.md through its owner; this assignment intentionally does not edit it. Phase 17 owns its separate in-chain live presence evidence.
+Code:
+- `src/daemon/channel.ts:77-79` `ControlError` carries `code` and optional `causeCode`.
+- `src/mcp/protocol.ts:107` and `src/acp/agent.ts:98` surface `causeCode` on the MCP and ACP error payloads.
 
-_Verified by source inspection and attributed existing records; no tests or live actions performed._
+Tests:
+- `test/surfaces/daemon-equivalence.test.ts:195-217` cause code `PODMAN_MACHINE_DOWN` under `OPENSHELL_START_FAILED` agrees across in-process MCP, in-process ACP, MCP over the daemon and ACP over the daemon.
+- `test/surfaces/daemon-equivalence.test.ts:219-230` a refusal without a cause carries no `causeCode` on any of the four paths.
+
+Caveat: the dispatcher answer is scripted. The test proves that the surfaces and the daemon transport agree on the code. It does not prove where a real cause code originates.
+
+### 5. Retry after lost container reaches `active`, not `OPENSHELL_START_FAILED` (CRASH-07): VERIFIED
+
+Code:
+- `src/lifecycle/controller.ts:263-272` recovery applies only to the recorded container, with no create in this call, and only for `OPENSHELL_START_FAILED`; the recovery call is at `:272`.
+- `src/lifecycle/controller.ts:912` (TD-04 comment) and `:919` `recoverStaleContainer`: destroy the stale container, clear the record, create one new container.
+
+Tests:
+- `test/lifecycle/stale-container.test.ts:76-93` container removed behind the controller's back; the probe moves state to `error` with `OPENSHELL_START_FAILED`; `create()` on retry returns `active` with a new container id (`:85` `assert.notEqual(newId, oldId)`), with two creates and two destroys.
+
+Caveat: this test is tagged TD-04, not CRASH-07. See Residual 2.
+
+## Live Evidence
+
+File: `<home>/realmlive/realm-evidence/phase14/14-live-main3.txt` (read-only).
+
+- TAP footer: `# tests 37`, `# pass 37`, `# fail 0`, `# cancelled 0`, `# skipped 0`, `# todo 0`.
+- 14 top-level scenarios (`ok 1` through `ok 14`), 37 test cases including nested subtests.
+- The log has no commit SHA. Attribution to `de7bafc` is by file name and date only.
+- Its predecessor `14-live-main2.txt` reported 36 pass and 1 fail. That run is superseded.
+- Live coverage is limited to criterion 3 (`ok 5`). The live log does not exercise criteria 1, 2, 4 or 5 directly.
+
+## Residuals (non-blocking)
+
+1. Criterion 2's crash is simulated by writing the admission line directly (`test/daemon/daemon.test.ts:710`), not by a killed process. The reconciliation logic and the second-start idempotency are covered. The phase summary lists "real-SIGKILL tests", but criterion 2's text does not require a kill. A real-SIGKILL admission test would close that gap if the phase summary is read as a requirement.
+2. Criterion 5's test is tagged TD-04 (`test/lifecycle/stale-container.test.ts:76`), not CRASH-07, and no test carries the CRASH-07 tag. Tagging it would make the traceability direct.
+3. The cross-device sweep case (`test/fs/temp-sweep.test.ts:251`) skips off CI by design (Q0-015).
+4. The six cited test files were not executed by this verifier: `test/fs/atomic-write-sigkill.test.ts`, `test/fs/temp-sweep.test.ts`, `test/audit/reconcile.test.ts`, `test/session/store.test.ts`, `test/surfaces/daemon-equivalence.test.ts`, `test/lifecycle/stale-container.test.ts`. Their test evidence is the orchestrator's full hermetic suite on `de7bafc` (3025 pass, 0 fail).
+5. The live log has no commit SHA (see Live Evidence).
+
+---
+
+_Verified: 2026-11-14T21:00:37Z_
+_Verifier: Claude (gsd-verifier)_
