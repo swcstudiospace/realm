@@ -1264,6 +1264,10 @@ const SNAPSHOT_EXTRA = "snapshot-extra.txt";
 void test("production live 13: a checkpoint restores the workspace byte for byte after its files change", { skip: gate, timeout: SCENARIO_TIMEOUT_MS }, async (t) => {
   const scenario = startScenario(t, { image: inputs().image }, [SNAPSHOT_KEEP, SNAPSHOT_DELETE, SNAPSHOT_EXTRA]);
   const workspace = scenario.inputs.workspaceRoot;
+  // The checkpoint lives in the shared host state root. It is removed whatever happens here, so the next run can take the same id.
+  t.after(() => {
+    rmSync(join(scenario.environment.stateDir, "checkpoints", sessionIdFor(workspace), SNAPSHOT_ID), { recursive: true, force: true });
+  });
   await assertActive(scenario);
   writeFileSync(join(workspace, SNAPSHOT_KEEP), "before the snapshot");
   writeFileSync(join(workspace, SNAPSHOT_DELETE), "deleted after the snapshot");
