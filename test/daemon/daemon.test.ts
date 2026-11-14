@@ -1431,6 +1431,8 @@ void test("OBS-02: an unknown control method is refused as a warn with method un
   assert.ok(code !== undefined, "an unknown method is refused");
   const warned = logRowsOf(lines).filter((row) => row["event"] === "control.refused");
   assert.deepEqual(warned.map((row) => [row["method"], row["level"], row["code"]]), [["unrecognized", "warn", code]]);
+  const requested = logRowsOf(lines).filter((row) => row["event"] === "control.request");
+  assert.deepEqual(requested.map((row) => [row["method"], row["level"]]), [["unrecognized", "debug"]], "the unknown request is one control.request");
   assert.equal(lines.some((line) => line.includes("METHOD-MARKER")), false, "an unknown method name is never logged");
   const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down", params: selectedBy(fixture.ws) });
   assert.ok(down.result !== undefined);

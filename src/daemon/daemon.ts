@@ -687,8 +687,10 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
     }
   };
 
-  // A line that names no known method is refused without its text: the method is client text, so the log says "unrecognized".
+  // A line that names no known method, or does not decode as a request, is refused without its text: the method is client text,
+  // so the log says "unrecognized". Each such line is still one request, so it gets one control.request debug line (OBS-02).
   const refuseUnrecognized = (reply: ControlReply | null): ControlReply | null => {
+    logger.debug("control.request", { method: "unrecognized" });
     const refused = reply?.error;
     if (refused !== undefined) {
       logger.warn("control.refused", { method: "unrecognized", code: refused.code });
