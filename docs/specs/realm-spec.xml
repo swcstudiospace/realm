@@ -325,7 +325,7 @@
     - src/core/errors.ts: typed RealmError {code, reason, retryable}. Codes: REALM_UNBOUND, REALM_NOT_ACTIVE, REALM_STOPPING, REALM_INVALID_TRANSITION, STARTUP_BUDGET_EXCEEDED, TOOL_TIMEOUT, PODMAN_MISSING, PODMAN_MACHINE_DOWN, OPENSHELL_START_FAILED, AGENTOS_CRASH_LOOP, ANDA_UNREACHABLE, ANDA_VERSION_MISMATCH, POLICY_DENIED, PATH_ESCAPE, CREDENTIAL_PATH_DENIED, LOCK_CONFLICT, WRITE_NOT_ATOMIC, EGRESS_DENIED, SHELL_NOT_ALLOWED, SCHEMA_INVALID.
     - src/contract/tools.schema.json: exec {argv[]} or {shell:true, script} if policy.shellEnabled; read {path, maxBytes}; write {path, content, ifMatchSha256?} locks per call; list {path, depth}; status and retry {}. No extra keys; paths workspace-relative.
     - src/contract/session-record.schema.json: realmId, sessionId, workspaceRoot, state, containerId, controlSocketPath. No secrets.
-    - src/core/policy.schema.json: mode advisory(default)|fail-closed, workspaceRoots, credentialAllow globs (credential paths denied by default), egressAllow [{host, port}], shellEnabled false, startupBudgetMs, toolQueueMs.</CONCLUSION>
+    - src/core/policy.schema.json: mode advisory(default; superseded by owner decision D4, 2026-10-29: fail-closed is the default)|fail-closed, workspaceRoots, credentialAllow globs (credential paths denied by default), egressAllow [{host, port}], shellEnabled false, startupBudgetMs, toolQueueMs.</CONCLUSION>
 	</NODE>
 	<NODE id="n7" kind="refine" title="Gate the documentation reads" issue="SPE-18518" issueUrl="https://linear.app/swcstudio/issue/SPE-18518/n7-gate-the-documentation-reads" notionUrl="https://app.notion.com/p/400bc1a0c7ae81779e0be69662d1de27?pvs=204">
 		<QUESTION>For each external source (Rivet for AgentOS, Podman, NVIDIA OpenShell, Anda, the Omp plugin and status API, the MCP specification and its transport, the ACP specification and its transport, and the Node or Bun runtime constraints of each host), which specific questions must be answered from the official documentation, with the URL and read date recorded in docs/integration/&lt;name&gt;.md, before which module may write integration code? Also state which tests can run with no dependency present so that wave 1 is not blocked on documentation.</QUESTION>
@@ -477,10 +477,10 @@
 
 <CLARIFICATIONS>
 	<CLARIFICATION id="q1" header="Policy mode" blocking="true">
-		<QUESTION>Should Realm default to advisory or fail-closed when realm is disconnected and a file-mutating tool is called?</QUESTION>
+		<QUESTION>Should Realm default to advisory or fail-closed when realm is disconnected and a file-mutating tool is called? Resolved by owner decision D4 (2026-10-29): fail-closed is the default; the advisory option below is an explicit opt-in only.</QUESTION>
 		<WHY>Determines whether writes proceed unsandboxed with a warning or return a structured error, which changes the controller, dispatcher, and default policy file.</WHY>
 		<OPTIONS>
-			<OPTION recommended="true">Advisory with warning — Writes proceed while disconnected and the status bar warns. Lowest friction, but mutations can land outside the sandbox.</OPTION>
+			<OPTION recommended="true">Advisory with warning (superseded by owner decision D4, 2026-10-29: no longer the recommendation; fail-closed is the default) — Writes proceed while disconnected and the status bar warns. Lowest friction, but mutations can land outside the sandbox.</OPTION>
 			<OPTION>Fail-closed by default — Mutating tools return REALM_NOT_ACTIVE while disconnected. Strongest guarantee, but a Podman outage blocks all edits until realm recovers.</OPTION>
 			<OPTION>Fail-closed for writes only — Reads stay available while disconnected, and every write is rejected. Keeps the session usable without allowing unsandboxed mutation.</OPTION>
 		</OPTIONS>
