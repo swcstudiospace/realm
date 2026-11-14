@@ -2,18 +2,20 @@
 gsd_state_version: "1.0"
 milestone: v3.0
 milestone_name: Containment by Default
-status: blocked
-stopped_at: "Phase 20 provisional implementation awaits independent external plan review"
-last_updated: "2026-11-11"
-last_activity: 2026-11-11
-last_activity_desc: "User approved provisional offline release sequencing; external reviewers were unavailable"
-state_head: 315b4fd869ce2a700fcd9d7dfa2503d4847aac46
+current_phase: 12
+current_phase_name: Scripted-provider harness and Omp enforcement spike
+status: verifying
+stopped_at: Phase 15 complete, ready to verify Phase 12
+last_updated: "2026-11-14T08:46:18.959Z"
+last_activity: 2026-11-14
+last_activity_desc: Phase 15 complete, transitioned to Phase 12
+state_head: 724f4876945de994d26089bab7c78e4383f06bc9
 progress:
   total_phases: 9
-  completed_phases: 0
-  total_plans: 45
-  completed_plans: 9
-  percent: 20
+  completed_phases: 19
+  total_plans: 49
+  completed_plans: 20
+  percent: 70
 ---
 
 # Project State
@@ -27,10 +29,10 @@ See: .planning/PROJECT.md (updated 2026-10-29)
 
 ## Current Position
 
-Phase: Recovery across phases 12–20; zero v3.0 phases completed.
-Plan: Phase 18 plan 11 has a user-approved contract reconciliation and passing fake-backed checks. Phase 19 plan 01 and Phase 20 plans 01–03 have independent internal plan-review passes.
-Status: The user approved provisional offline Phase 20 implementation before live prerequisites, conditional on independent external plan review. The attempted review produced no usable review: Claude returned a credit-balance error and Qwen's configured model returned HTTP 404. Upstream verification, original historical evidence, rootless Podman 5.x production runs, and release trust and human gates also remain open.
-Last activity: 2026-11-11 — recorded the approved sequencing exception and failed external review attempt; no release implementation, live run, merge or milestone completion.
+Phase: 12 — Scripted-provider harness and Omp enforcement spike
+Plan: 3
+Status: Phase complete — ready for verification
+Last activity: 2026-11-14 — Phase 15 complete, transitioned to Phase 12
 
 ## Current Recovery Boundaries
 
@@ -56,7 +58,7 @@ not a fresh instruction to restart discovery, install a runtime or close a phase
 
 **Velocity:**
 
-- Total plans completed: 0
+- Total plans completed: 17
 - Average duration: N/A
 - Total execution time: 0 hours
 
@@ -64,7 +66,7 @@ not a fresh instruction to restart discovery, install a runtime or close a phase
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| - | - | - | - |
+| 15 | 17 | - | - |
 
 **Recent Trend:**
 
@@ -211,7 +213,7 @@ Detail, by phase: Phase 3 covers RT-01, RT-02, RT-03, RT-09, and the live parts 
 ## Session Continuity
 
 Last session: 2026-11-08T16:41:15.821Z
-Stopped at: Completed 15-09-PLAN.md
+Stopped at: Phase 15 complete, ready to verify Phase 12
 Resume file: None
 
 Recorded commits (closure run): 72817e9 (private flag restored, engines >=22.13.0); 390f511 (causeCode and catalogue codes, host paths, lifecycle bound, root identity, exec margin); b6bc892 (daemon entry, AgentOS fail-closed, catalogue refusals, per-method control bounds); 8088159 (daemon owns sessions; tool method; daemon client; Omp and MCP attach); 4b1d4ab (smoke fixes: CLI probe, up and down exits, state-dir 0700); c55056a (traceability: requirements by evidence, spike facts, runtime config, Omp attach contract); a999c17 (audit gap closure: realm acp, refusal code mapping, one state-dir resolver, Omp status, pinned-root rebind, catch-site fixes, daemon server-failure stop); dd02034 (re-audit, planning, and docs); 54bc236 (MCP tool-call diagnostic); plus the decisions commit (see git log).
