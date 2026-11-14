@@ -185,7 +185,7 @@ Plans:
 
 - [ ] **Phase 12: Scripted-provider harness and Omp enforcement spike** - A gated harness drives a live Omp through a scripted provider in three cases, the spike answers what the extension API can enforce, and OMP-05 is recorded complete on that evidence (HARN-01..04, OMPX-01)
 - [ ] **Phase 13: Quality ratchet** - Dependency audit and Dependabot, pack checks, coverage floors, de-flaked timing tests, property tests, and a scheduled mutation run (QR-01..08)
-- [ ] **Phase 14: Crash-safety pack** - Orphan temp-file sweep, audit reconciliation, durable record deletion, a visible reap, real-SIGKILL tests, the cause code across the daemon, and retry after a lost container (CRASH-01..07)
+- [x] **Phase 14: Crash-safety pack** - Orphan temp-file sweep, audit reconciliation, durable record deletion, a visible reap, real-SIGKILL tests, the cause code across the daemon, and retry after a lost container (CRASH-01..07) (completed 2026-11-14)
 - [x] **Phase 15: Zero-config onboarding and fail-closed default** - `realm init`, `doctor --fix`, driver roots in `config.json`, an allowlisted daemon environment, a verified Omp install path, and fail-closed as the default policy mode (ONB-01..07, DEF-01..02) (completed 2026-11-14)
 - [ ] **Phase 16: Omp runs in the sandbox** - Realm's tools are registered in Omp, and in fail-closed mode the built-in `write`, `edit` and `bash` are removed or blocked by the mechanism the spike proved (OMPX-02..05)
 - [ ] **Phase 17: Observability and tamper-evident audit** - A hash-chained audit log with `realm audit verify`, structured logs with correlation ids, counters over the control socket, and a distinct code for gateway or driver loss (OBS-01..04)
@@ -578,7 +578,7 @@ Milestone v3.0 phases (12 to 20) run in three parallel lanes that share no mutab
 | 11. Milestone v2.0 Close | 1/1 | Complete (2026-10-29): the milestone audit ran against the built and installed product and found five defects the records had marked complete (the MCP server could not be used from Claude Code, its tool results and an exec descriptor did not match the revision and the Anthropic API, both agent surfaces advertised 0.0.0, and the Omp attach probe), all fixed in pull request 7 and released as 0.2.1 (31 of 31 on the live suite); `milestone complete v2.0 --confirm` then archived the milestone with eight requirements carried (FS-02, ANDA-01 to 04, OMP-05, PRD-DRV-01 open; UI-01 an accepted limitation) | 2026-10-29 |
 | 12. Scripted-provider harness and Omp enforcement spike | 0/1 | Recovery: current C1–C3 supplied pass, C4 repair unverified, HARN-03 failed44 warm offenders; historical native receipt retained | - |
 | 13. Quality ratchet | 0/1 | Recovery: implemented-unverified plus exact repair/package/coverage/load/run gaps | - |
-| 14. Crash-safety pack | 0/1 | Recovery: implementation and historical real evidence present, scoped parent attribution pending | - |
+| 14. Crash-safety pack | 2/1 | Complete    | 2026-11-14 |
 | 15. Zero-config onboarding and fail-closed default | 17/16 | Complete    | 2026-11-14 |
 | 16. Omp runs in the sandbox | 0/1 | Recovery plan/context authored, unreviewed; lifetime/read/production Omp acceptance incomplete | - |
 | 17. Observability and tamper-evident audit | 0/1 | Recovery: chain/logger code gaps and live evidence open; metrics/gateway historical proof retained | - |

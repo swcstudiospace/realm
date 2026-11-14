@@ -5,17 +5,17 @@ milestone_name: Containment by Default
 current_phase: 12
 current_phase_name: Scripted-provider harness and Omp enforcement spike
 status: verifying
-stopped_at: Phase 15 complete, ready to verify Phase 12
-last_updated: "2026-11-14T08:46:18.959Z"
+stopped_at: Phase 14 complete, ready to verify Phase 12
+last_updated: "2026-11-14T23:44:09.682Z"
 last_activity: 2026-11-14
-last_activity_desc: Phase 15 complete, transitioned to Phase 12
-state_head: 724f4876945de994d26089bab7c78e4383f06bc9
+last_activity_desc: Phase 14 complete, transitioned to Phase 12
+state_head: de1d3817604c24a737e46f5c9dcdedba91ffcf48
 progress:
   total_phases: 9
-  completed_phases: 19
-  total_plans: 49
+  completed_phases: 20
+  total_plans: 47
   completed_plans: 20
-  percent: 70
+  percent: 74
 ---
 
 # Project State
@@ -30,9 +30,9 @@ See: .planning/PROJECT.md (updated 2026-10-29)
 ## Current Position
 
 Phase: 12 — Scripted-provider harness and Omp enforcement spike
-Plan: 3
+Plan: 1
 Status: Phase complete — ready for verification
-Last activity: 2026-11-14 — Phase 15 complete, transitioned to Phase 12
+Last activity: 2026-11-14 — Phase 14 complete, transitioned to Phase 12
 
 ## Current Recovery Boundaries
 
@@ -58,7 +58,7 @@ not a fresh instruction to restart discovery, install a runtime or close a phase
 
 **Velocity:**
 
-- Total plans completed: 17
+- Total plans completed: 19
 - Average duration: N/A
 - Total execution time: 0 hours
 
@@ -67,6 +67,7 @@ not a fresh instruction to restart discovery, install a runtime or close a phase
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 15 | 17 | - | - |
+| 14 | 2 | - | - |
 
 **Recent Trend:**
 
@@ -213,7 +214,7 @@ Detail, by phase: Phase 3 covers RT-01, RT-02, RT-03, RT-09, and the live parts 
 ## Session Continuity
 
 Last session: 2026-11-08T16:41:15.821Z
-Stopped at: Phase 15 complete, ready to verify Phase 12
+Stopped at: Phase 14 complete, ready to verify Phase 12
 Resume file: None
 
 Recorded commits (closure run): 72817e9 (private flag restored, engines >=22.13.0); 390f511 (causeCode and catalogue codes, host paths, lifecycle bound, root identity, exec margin); b6bc892 (daemon entry, AgentOS fail-closed, catalogue refusals, per-method control bounds); 8088159 (daemon owns sessions; tool method; daemon client; Omp and MCP attach); 4b1d4ab (smoke fixes: CLI probe, up and down exits, state-dir 0700); c55056a (traceability: requirements by evidence, spike facts, runtime config, Omp attach contract); a999c17 (audit gap closure: realm acp, refusal code mapping, one state-dir resolver, Omp status, pinned-root rebind, catch-site fixes, daemon server-failure stop); dd02034 (re-audit, planning, and docs); 54bc236 (MCP tool-call diagnostic); plus the decisions commit (see git log).

@@ -106,7 +106,7 @@
     {
       "number": "14",
       "name": "Crash-safety pack",
-      "status": "pending"
+      "status": "complete"
     },
     {
       "number": "15",
@@ -142,7 +142,7 @@
   "next": {
     "command": "/gsd-progress --next",
     "label": "Advance to the next step (verify)",
-    "reason": "Phase 1 of 9 · 70% · ready to verify"
+    "reason": "Phase 1 of 9 · 74% · ready to verify"
   },
-  "updated_at": "2026-11-14T08:46:18.998Z"
+  "updated_at": "2026-11-14T23:44:09.708Z"
 }
