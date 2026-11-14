@@ -1,105 +1,87 @@
 ---
 phase: 16-omp-runs-in-the-sandbox
-verified: 2026-11-08T19:25:32Z
-status: gaps_found
-score: 0/4 must-haves verified
-behavior_unverified: 2
-overrides_applied: 0
-covered_files:
-  - .planning/REQUIREMENTS.md
-  - .planning/ROADMAP.md
-  - .planning/phases/16-omp-runs-in-the-sandbox/16-01-PLAN.md
-  - .planning/phases/16-omp-runs-in-the-sandbox/16-02-PLAN.md
-  - .planning/phases/16-omp-runs-in-the-sandbox/16-03-PLAN.md
-  - .planning/phases/16-omp-runs-in-the-sandbox/16-04-PLAN.md
-  - .planning/phases/16-omp-runs-in-the-sandbox/16-SUMMARY.md
-  - .planning/quick/261108-puz-reconcile-the-v3-0-planning-records-with/261108-puz-SUMMARY.md
-  - docs/integration/omp.md
-  - src/omp/extension.ts
-  - src/omp/plugin.ts
-  - src/omp/tools.ts
-  - test/integration/omp-guard.test.ts
-  - test/integration/omp-live-helpers.test.ts
-  - test/integration/omp-ompx05.test.ts
-  - test/integration/production-live-helpers.test.ts
-  - test/omp/extension.test.ts
-  - test/omp/plugin.test.ts
-  - test/omp/tools.test.ts
-  - test/support/omp-profile.ts
-  - test/support/omp-rpc.ts
-  - test/support/production-live.ts
-  - test/support/scripted-provider.ts
-covered_digest: "v4:sha256:892c8a04c005e4a10875c719263beb5ed5ad36110c1b28724378bfbb4485d203"
-gaps:
-  - truth: "Fail-closed status text and docs say the mechanism is a guard, not containment when removal cannot be enforced."
-    status: failed
-    reason: "The status renderer emits only label, degradation, reason and transition time; it does not identify the fail-closed guard or its containment limits."
-    artifacts:
-      - path: src/omp/plugin.ts
-        issue: "renderRealmStatus at lines 187-197 has no policy-mode or guard/containment disclosure."
-    missing:
-      - "Display the required guard-not-containment qualification in fail-closed status, or obtain a documented owner-approved override."
-behavior_unverified_items:
-  - truth: "The five tools use frozen ToolCall shapes and schema tests pass unchanged."
-    test: "Run the relevant named tool and frozen schema tests, and observe registered read/write through Omp."
-    expected: "All five calls reach the daemon with the frozen shape and successful read content and metadata reach the model."
-    why_human: "Source wiring and unexecuted tests cannot establish passing runtime behavior in this restricted verification."
-  - truth: "Advisory keeps eligible native tools and restores the active set safely across mode changes, with the native-path notice."
-    test: "Run the named active-set transition tests and the actual Omp advisory-to-fail-closed consumer control."
-    expected: "Only still-registered extension-removed tools are restored, manually disabled tools stay disabled, the mode is published after readback, and the native advisory notice appears."
-    why_human: "The current verification cannot execute tests or live Omp, and transition correctness cannot be established by presence alone."
+verified: 2026-11-14
+verdict: human_needed
+status: human_needed
+ref: origin/main 06a3e40 (PR 77; includes 4b9cebb, 63f4262, 38d5778, 9cdbe8e)
+supersedes: 16-VERIFICATION.md at 4b9cebb (2026-11-08, gaps_found 0/4)
 ---
 
-# Phase 16: Omp runs in the sandbox — Verification Report
+# Phase 16: Omp runs in the sandbox: Re-verification at 06a3e40
 
 **Goal:** A model working through Omp does its file mutations and commands through Realm's tools in the sandbox, and in fail-closed mode its built-in host `write`, `edit` and `bash` are gone or refused.
 
-**Status:** gaps_found. **Score:** 0/4 roadmap truths verified; two present but behavior-unverified, one failed, one uncertain. Prior report dated 2026-11-02 had `human_needed` and no structured `gaps:` frontmatter; this is a fresh goal-backward verification, not a gap-closure re-verification. No tests, builds, probes, services, or live operations were run under the assignment's restrictions.
+**verdict: human_needed.** Criteria 1 to 3 (OMPX-02, OMPX-03, OMPX-04) have code and test evidence on `origin/main` 06a3e40. Criterion 4 (OMPX-05) needs the owner-authorised production live run, which has not been executed and has no approval recorded. The one gap in the 2026-11-08 report, the missing guard-not-containment disclosure in fail-closed status text, is closed on main (`src/omp/plugin.ts:178`, commit 63f4262).
 
-## Observable truths
+**Method.** Worktree `<tmp>/wt-p16v` on branch `gsd/phase-16-verify` from `origin/main` 06a3e40. Static reads, greps, and `git diff`/`git log` only. No tests, lint, typecheck, build, formatters, or live operations were run. Read-only evidence: `<home>/realm-evidence/phase12/12-omp-guard.txt`. Nothing was committed. Line numbers are at 06a3e40.
 
-| # | Roadmap acceptance | Status | Evidence |
-|---|---|---|---|
-| 1 | Five registered Realm tools use the frozen ToolCall; retry remains a command, no Realm glob, and frozen schemas pass unchanged. | WARNING — PRESENT_BEHAVIOR_UNVERIFIED | `src/omp/tools.ts:15-16,210-237` defines the five names and maps inputs to calls; `src/omp/plugin.ts:730-746` calls the daemon and registers definitions; `:747-750` registers retry. `test/omp/tools.test.ts:61-105` exercises the shape using a stub, not an actual daemon. Test and frozen-schema pass status was not independently checked. |
-| 2 | Fail-closed removes or blocks native tools, guard refuses model bash with a catalogue code, and status and docs disclose guard-not-containment. | **BLOCKER — FAILED** | `src/omp/tools.ts:28-40` keeps bash and filters others; `src/omp/plugin.ts:783-855,920-945` guards and reads back host tool changes, with `POLICY_DENIED`. However `renderRealmStatus` at `:187-197` only prints label, degraded flag, reason and time: it does not state guard-not-containment. Docs discuss limitations (`docs/integration/omp.md:293-303`), but do not repair the missing status disclosure. Actual model-issued bash denial remains unverified here. |
-| 3 | Advisory registers Realm tools, preserves other eligible native tools and emits the native advisory notice. | WARNING — PRESENT_BEHAVIOR_UNVERIFIED | `src/omp/tools.ts:62-105` plans restoration; plugin serializes changes and reads back the set (`plugin.ts:900-945`), and notifies advisory host calls (`:979-997`). Shadowing is assumed by the host API and documented in `tools.ts:6-9`; actual mode-transition and Omp notice tests were not executed. |
-| 4 | Phase 12 harness live registered write matches host and `/workspace` bytes and paired real audit entries. | WARNING — UNCERTAIN | `test/integration/omp-ompx05.test.ts:121-299` exercises a scripted provider, real Omp and production setup, checks host bytes, `/workspace` text and SHA-256, container identity, and paired audit entries. Orchestrator reports 1/1 passed on Omp 18.18.1 at snapshot `9cdbe8e`; `.planning/quick/261108-puz-reconcile-the-v3-0-planning-records-with/261108-puz-SUMMARY.md:12` records the same as orchestrator-reported. No independent TAP/RPC/audit receipt was supplied or inspected here, and the deployed driver predates newer driver changes. This is meaningful reported evidence, not a verifier-observed pass for the current tree. Scripted-provider evidence is not LLM-driven. |
+**Old must-have list (2026-11-08 report).** The old report's four roadmap truths are the basis of the table below. Its residual items are checked in "Old report items": the status-disclosure gap is closed, and the behavior-unverified items are now covered by test presence plus the Phase 12 record.
 
-## Artifacts, key links and data flow
+## Goal Achievement: Roadmap Success Criteria
 
-| Artifact / link | Assessment |
-|---|---|
-| `src/omp/extension.ts:33-80` → plugin | Substantive and wired: extension parses the reattach setting and registers the plugin. |
-| `src/omp/plugin.ts:730-746` → `src/omp/tools.ts:210-237` → daemon client | Substantive and wired: five definitions call `client.call` with single-key ToolCalls; no static output substitutes for the daemon. |
-| `src/omp/tools.ts:250-290` → model-visible read | Successful daemon bytes are decoded, with digest/truncation metadata; actual current-host result unverified. |
-| `src/omp/plugin.ts:783-855,900-945` → Omp active set and guard | Substantive and wired; runtime ordering and catalogue response still require execution. |
-| `test/integration/omp-ompx05.test.ts:121-299` → Omp / real daemon / sandbox / audit | Substantive, doubly gated integration scenario; reported prior execution is not an independently inspected receipt. No fallback to a fake daemon is shown in that scenario. |
+Criteria text: `.planning/ROADMAP.md` Phase 16 block, at 06a3e40.
+
+| # | Criterion | Status | Evidence on origin/main (06a3e40) |
+| --- | --- | --- | --- |
+| 1 | Extension registers `exec`, `read`, `write`, `list`, `status` as Omp tools, each calling the daemon client with the frozen `ToolCall`; `retry` stays the `realm-retry` command; no `glob` tool; frozen tool schema tests pass unchanged (OMPX-02) | VERIFIED (code and test presence; runtime pass from Phase 12 record, see Residual 1) | Names: `src/omp/tools.ts:16` (`REALM_TOOL_NAMES`). Registration: `src/omp/plugin.ts:688-689` (`realmToolDefinitions`, `tools.ts:211-213`). One-key frozen call: `tools.ts` `callOf`/`definitionOf`. Retry command: `plugin.ts:158`, `:694-697`. No glob: `tools.ts:16`, glob only in the read-only built-in list `tools.ts:20`. Frozen contract: `src/contract/tools.schema.json` has no diff since 4b9cebb; `src/contract/validate.ts` changed since 4b9cebb only in comments. Model-visible read: `tools.ts:255-275` returns decoded text plus a digest/truncation note. Tests: `test/omp/tools.test.ts:60-66` (names, no glob, no retry), `:67` (definitions), `:91` (one frozen call per tool), `:114`, `:126`; `test/omp/plugin.test.ts:1036-1047` (registration, no glob), `:1048` (frozen call), `:1072` (no daemon: `REALM_NOT_ACTIVE`). |
+| 2 | Fail-closed: built-in `write`, `edit`, `bash` removed or blocked by the spike-proven mechanism; `tool_call` guard stays as backstop; model `bash` refused with a catalogue code; status text and docs say guard, not containment (OMPX-03) | VERIFIED (code and test presence; see Residual 2 for the `write` reading) | Allowlist: `tools.ts:37` (`FAIL_CLOSED_KEEP`: read-only built-ins, Realm tools, `bash`), `tools.ts:39-41` (`failClosedToolNames`), `tools.ts:67-80` (`planHostTools`, fail-closed branch). Applied and read back before publish: `src/omp/host-tools.ts:58` (`setHostMode`), `plugin.ts:803` (`session.mode` set after readback). Backstop: `plugin.ts:731-815`; bash refused with `POLICY_DENIED`: `plugin.ts:744` (no session), `plugin.ts:815` (fail-closed, not pass-through); `bash` is not in `PASS_THROUGH_HOST_TOOLS` (`tools.ts:25-29`). Not containment: `plugin.ts:147-164` comments; status text `plugin.ts:178` ("(Omp host-tool guard; not host process containment)"); `docs/integration/omp.md:148`. Tests: `test/omp/tools.test.ts:143` (allowlist), `:166`; `test/omp/plugin.test.ts:1080` (removes built-ins outside the allowlist), `:1094` (removal refused, bash denied), `:1109`, `:1128`, `:1447`, `:1455`; `test/integration/omp-guard.test.ts:383` (O2: model `bash` `POLICY_DENIED`). |
+| 3 | Advisory: Realm tools registered; built-ins other than same-name `read`/`write` stay available; existing native advisory notice shows; Realm `read`/`write` displace built-ins by the accepted name-shadowing exception (OMPX-04) | VERIFIED (code and test presence) | Advisory plan keeps every active tool and gives back owed tools still registered: `tools.ts:80-81`. Same-name displacement: `tools.ts:6-8` (comment), `tools.ts:52` (`REALM_WRITE_NAME`). Advisory notice: `plugin.ts:874-875` (`realm is <state>; the write proceeds under advisory policy`). Advisory mode published only after readback: `plugin.ts:803`. Tests: `test/omp/tools.test.ts:183` (B1 and B9: advisory plans every tool, owes nothing), `test/omp/plugin.test.ts:1147` (advisory attach with realm not active changes nothing); `test/integration/omp-guard.test.ts:292` (C4: native edit CREATE allowed, notice shown), `:313` (C4b: refused, no notice). |
+| 4 | In the Phase 12 harness with the realm active, a model-issued write through the registered tool lands in the sandbox's `/workspace` and appears in the host root; audit log holds an admission line and a result line for it (OMPX-05) | HUMAN_NEEDED | Gated scenario present: `test/integration/omp-ompx05.test.ts:87-88` (skip gate: `REALM_LIVE_OMP=1` and `REALM_LIVE_PRODUCTION=1`, prerequisites named in the skip reason), `:124` (scenario). Assertions: host root bytes (`:226`), sandbox `/workspace` read via `exec` (`:242-252`, container named for the session), paired admission and result audit lines by session id, op id, correlationId and sha256 (`:255` onward; header lines 1-11). Not executed in this verification. No owner approval for a live window is recorded at 06a3e40 (`.planning/phases/16-omp-runs-in-the-sandbox/16-03-PLAN.md` external gate `owner-live-approval: NOT GRANTED`; `16-SUMMARY.md` "not approved as of 2026-11-02"). The earlier 9cdbe8e run (orchestrator-reported 1/1) predates later driver changes and the a8cee97 `OPENSHELL_START_FAILED` observation, and is recorded as historical, not Phase 16 evidence (`.planning/quick/261108-puz-reconcile-the-v3-0-planning-records-with/261108-puz-SUMMARY.md:12`; `16-SUMMARY.md`). |
+
+**Score:** 3/4 roadmap criteria VERIFIED on code and test evidence; criterion 4 HUMAN_NEEDED.
 
 ## Requirements coverage
 
-| Requirement | Plan | Disposition |
-|---|---|---|
-| OMPX-02 | 16-01, 16-02, 16-04 | WARNING: implementation and tests present; current passing frozen-schema and actual consumer read evidence not independently established. |
-| OMPX-03 | 16-01, 16-02 | **BLOCKED:** required fail-closed status disclosure is absent; live model bash refusal also needs evidence. |
-| OMPX-04 | 16-01, 16-02, 16-04 | WARNING: host transition and advisory path exist; runtime results need verification. |
-| OMPX-05 | 16-03 | WARNING: reported 1/1 historical live result at `9cdbe8e`; independently inspect its receipt and determine applicability to the current integrated stack. |
+| Requirement | Plan | Status | Basis |
+| --- | --- | --- | --- |
+| OMPX-02 | 16-01, 16-02 | SATISFIED on code and tests | Criterion 1 |
+| OMPX-03 | 16-01, 16-02 | SATISFIED on code and tests | Criterion 2 |
+| OMPX-04 | 16-01, 16-02 | SATISFIED on code and tests | Criterion 3 |
+| OMPX-05 | 16-03 | NEEDS HUMAN | Criterion 4; live run not executed |
 
-All four phase-mapped IDs appear in plan frontmatter; no orphaned phase requirement identified.
+`.planning/REQUIREMENTS.md:201-204` still carries the 2026-11-08 traceability wording ("incomplete"). It is not updated by this report.
 
-## Remaining conditions and evidence boundary
+## Old report items (2026-11-08, 4b9cebb)
 
-1. Correct the observable fail-closed status wording, or have the owner explicitly accept an override; documentation alone is not the status criterion.
-2. Independently inspect the OMPX-05 run's TAP, Omp/provider capture, exact snapshot and audit-pair evidence; confirm whether the owner accepts that run for this integrated tree. The prior production window used an older, unrestarted deployed driver and cannot validate newer driver closure.
-3. Exercise the named Omp consumer control for model-visible successful read metadata, mode changes, native advisory notice and model-issued bash `POLICY_DENIED`, plus the frozen schemas and relevant active-set tests. No claims of passing these checks are made here.
-4. O4 re-attach remains default-off (`src/omp/extension.ts:19-33`); owner live stop/re-attach validation and default decision remain outstanding. The existing control protocol lacks handshake/version/credential negotiation; the previous verification records an accepted 2026-11-02 deviation, not implementation of those features. In-flight requests lack abort support. These limitations are not evidence of failure of the four roadmap criteria.
-5. Separate orchestrator-reported windows: `9cdbe8e` production suite 31 pass/3 failures subsequently fixed; `a8cee97` scenarios 5, 5b, 6 passed and two-project first up failed `OPENSHELL_START_FAILED` with driver `create.workspace` `SCHEMA_INVALID`; separate gateway scenario 10 at `e9e0c39` passed 1/1. These do not establish OMPX-05 on the later tree. S17-b and driver restage/unit edit were not approved and were not run by this verifier.
+| Old item | Status on 06a3e40 | Evidence |
+| --- | --- | --- |
+| Gap: fail-closed status lacks guard/containment disclosure (`plugin.ts:187-197` at 4b9cebb) | CLOSED | `src/omp/plugin.ts:178`; commit 63f4262 "fix(omp): disclose host-tool guard limits"; asserted by `test/omp/plugin.test.ts:66-67`, `:685`, `:771`, `:1519`. |
+| Behavior-unverified: five tools use frozen ToolCall shapes; registered read/write reach model | Presence and wiring verified; runtime pass recorded in Phase 12 file | Tests in criterion 1 rows; `<home>/realm-evidence/phase12/12-omp-guard.txt` (Residual 1). |
+| Behavior-unverified: advisory keeps native tools and restores active set across mode changes; native notice | Tests present; runtime pass recorded in Phase 12 file | `test/omp/plugin.test.ts` P16 (b)-(e) at `:1371-1410`; `omp-guard.test.ts` C4/C4b/O2; Phase 12 file `ok 5`, `ok 6`, `ok 7`. |
+| OMPX-05 "1/1 historical live" | Still not Phase 16 evidence | See criterion 4. |
+| O4 re-attach default off (`src/omp/extension.ts:33`) | Unchanged; not a criterion | `16-SUMMARY.md` open items (Residual 4). |
+
+## Phase 12 record (read-only)
+
+`<home>/realm-evidence/phase12/12-omp-guard.txt`: TAP, `omp/18.20.0`, `fake-backed daemon and scripted provider, not production containment`. Pass 7, fail 0, skipped 1 (HARN-03, `REALM_OMP_NET_TRACE` not set). Relevant passes: C1 (ok 1), C1b (ok 2), C2 (ok 3), C3 with offered tool list `ask, bash, exec, glob, grep, list, read, status, todo, wait, write` (ok 4), C4 (ok 5), C4b (ok 6), O2 advisory to fail-closed with registered write and read reaching the provider and model `bash` `POLICY_DENIED` (ok 7). The offered tool list matches the fail-closed allowlist in `test/omp/plugin.test.ts:1021`. The file has no commit header, so the tree it ran on is not identified (Residual 1).
 
 ## Anti-patterns and checks
 
-A targeted scan of `src/omp`, `test/omp`, and the Omp guard/live acceptance tests found no `TBD`, `FIXME`, `XXX`, `TODO`, `HACK` or `PLACEHOLDER` markers. No test quality verdict is inferred from names alone: the frozen-call test explicitly uses a daemon stub, and is not a production-path proof. Behavioral spot-checks and live probes were not run: this assignment forbids tests, builds and live operations. No named shell probe was declared by the phase plans.
+- Scan of `src/omp`, `test/omp`, and `test/integration/omp-*.ts` for `TODO`, `FIXME`, `XXX`, `HACK`, `PLACEHOLDER`: none found in the code paths cited above. Not re-run as a formal scan; stated from reads.
+- No test, probe, or live command was executed in this verification.
 
-### Decision Coverage
+## Open items
 
-GSD decision-coverage query returned `skipped: true`, reason `no trackable decisions` (0/0); this is not a substantive decision audit.
+1. **OMPX-05 production acceptance (criterion 4). Needs owner approval and this run:**
+   - Precondition: the owner approves a live window for the production daemon, driver, OpenShell and rootless Podman stack. Shared-stack runs are serialized (ROADMAP Phase 16 Notes).
+   - Build: `npm run build` in a checkout of the tree to be accepted (main at 06a3e40 or later).
+   - Run: `REALM_LIVE_OMP=1 REALM_LIVE_PRODUCTION=1 node --test dist/test/integration/omp-ompx05.test.js`, with the matching production config and the selected workspace. The file never sets either variable. Any skipped prerequisite is reported as skipped, not passed.
+   - Pass needs all of: host workspace root holds the written bytes; sandbox `/workspace` `cat` and `sha256sum` return the same bytes, run in the session's container; audit `<stateDir>/audit/<session id>.jsonl` holds one paired admission and result line (same path, correlationId, sha256; result carries bytes); `realm down` leaves no sandbox container.
+   - Evidence to return: Omp version, provider, RPC log, container identity, audit excerpt, TAP output.
+   - Owner reply form: approved with the window, or declined. Record it in `16-CONTEXT.md` before any run.
+2. **Plan-file drift.** `16-03-PLAN.md` names `test/integration/production-driver.test.ts` for the OMPX-05 scenario. On 06a3e40 the scenario is in `test/integration/omp-ompx05.test.ts`, and `production-driver.test.ts` has no OMPX-05 case. Traceability should cite the actual file. Not blocking.
+3. **Test re-run not performed here.** Criteria 1 to 3 rely on test presence plus the Phase 12 record. The recorded run is fake-backed, on Omp 18.20.0, and its tree is unidentified. Whether to re-run the named suites (`test/omp/tools.test.ts`, `test/omp/plugin.test.ts`, `test/integration/omp-guard.test.ts`) on 06a3e40 is for the main agent to decide.
 
-_Verified by source inspection and qualified inherited evidence; no commits made._
+## Residuals (not verdict-blocking)
+
+1. **Phase 12 record provenance.** `12-omp-guard.txt` has no commit or date header. Its test names match the cases in `test/integration/omp-guard.test.ts` on 06a3e40, so it is consistent with this tree, but this verification did not confirm the tree it ran on. Omp 18.20.0 differs from the 18.12.6 spike (`docs/integration/omp.md:76`) and the 18.18.1 record for 9cdbe8e.
+2. **Criterion 2 wording on `write`.** The roadmap says built-in `write` is "removed or blocked". On 06a3e40 the built-in `write` is displaced by the same-named Realm `write` in both modes (`tools.ts:6-8`, `FAIL_CLOSED_KEEP` includes `REALM_TOOL_NAMES`), which is the accepted name-shadowing exception (spike S1, `docs/integration/omp.md`). This report reads criterion 2 as satisfied by that displacement plus removal of `edit` and the other built-ins.
+3. **Enforcement limits.** Fail-closed is an allowlist and a `tool_call` backstop, not process containment. Host paths that bypass the extension pipeline are not covered (`docs/integration/omp.md:148`). The status text and docs say so.
+4. **O4 re-attach.** Default off (`src/omp/extension.ts:33`). Owner live stop and re-attach validation is outstanding (`16-SUMMARY.md` open items). Not a Phase 16 success criterion.
+5. **Spec read was not executed.** Criteria 1 to 3 are judged on code and test presence. A passing run on this tree is not established by this report.
+
+## Verdict
+
+verdict: human_needed
+
+Criteria 1 to 3 have code and test evidence on `origin/main` 06a3e40, and the 2026-11-08 gap is closed. Criterion 4 (OMPX-05) is the only open item. It needs the owner-authorised production live run described in Open item 1. It is not marked passed.
