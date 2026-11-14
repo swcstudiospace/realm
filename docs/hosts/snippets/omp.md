@@ -72,7 +72,7 @@ real home by accident; a deliberate persistent install needs the operator's
 configuration backup and approval. Registry and marketplace installs remain
 unverified.
 
-## Live install record (ONB-05)
+## Current install record (ONB-05)
 
 Run on 2026-11-13 from checkout `<checkout>` (origin/main 1ddfc45) with
 omp/18.20.0 (`omp --version`). The plan expected 18.12.6; this record uses the
@@ -171,6 +171,19 @@ daemon the second frame is `REALM_NOT_ACTIVE`, and with the daemon up it reads
 only. It is not a sandbox write, not containment, and not a registry or
 persistent install.
 
+## Historical install record (Realm 0.3.24, 2026-10-30)
+
+Historical: this is not the current build. Run on 2026-10-30 with Omp 18.12.6
+(`omp --version`), under an isolated `HOME`, so the real Omp home was not read
+or changed (its listing was compared before and after). The package in this
+historical receipt was 0.3.24, not 0.3.26:
+
+- `omp plugin install --dry-run <workspace>/agent-realm --json`: exit 0, action `link`, the package path reported.
+- `omp plugin install <workspace>/agent-realm --scope=user`: exit 0, linked `agent-realm`. Omp printed that `--scope` applies only to marketplace installs and ignored it for a path.
+- `omp plugin list --json`: one npm entry `agent-realm` 0.3.24, `enabled: true`, `extensions: ["./dist/src/omp/extension.js"]`.
+
+This is a link to a local checkout, not a registry install. The published package and a marketplace install are not verified. The persistent install into the real `~/.omp` is still not run.
+
 ## Initialize Realm before launching Omp
 
 `init` writes local templates; it does **not** provision the runtime stack.
@@ -240,7 +253,8 @@ caller/daemon environment. Those
 diagnostics do not inspect a separately running service's environment;
 exporting the variables does not provision a driver or gateway. The driver
 also needs the remaining environment contract documented in the OpenShell
-integration guide. In the actual 2026-10-31 parent capture, the matching rebuilt
+integration guide. In the historical 2026-10-31 parent capture (Realm 0.3.26),
+the matching rebuilt
 driver and daemon used one freshly generated config, no legacy root variables
 and no manual JSON edits: init reported `mode: fail-closed`; up/status reported
 `snapshot.state: active`, reason `container running`; down reported
@@ -260,7 +274,6 @@ Use the same generated config selection as the daemon:
 node "$REALM_CHECKOUT/dist/src/cli/main.js" doctor
 node "$REALM_CHECKOUT/dist/src/cli/main.js" doctor --fix --dry-run
 # Review proposals, then apply only if appropriate.
-node "$REALM_CHECKOUT/dist/src/cli/main.js" doctor --fix
 node "$REALM_CHECKOUT/dist/src/cli/main.js" doctor --fix
 ```
 
@@ -322,9 +335,10 @@ with `"mode": "advisory"` in `<state-dir>/policy.json`
 (`docs/policy-reference.md`).
 
 - `fail-closed`: attaching removes Omp's built-in tools that are outside a
-  fixed allowlist (`setActiveTools`, read back), such as `bash`, `edit` and
-  `eval`, and Realm `write` replaces the built-in `write`. The guard refuses
-  `bash` and `eval` unless the mode is advisory, and refuses host `edit` and
+  fixed allowlist (`setActiveTools`, read back), such as `edit` and `eval`,
+  and Realm `write` replaces the built-in `write`. `bash` stays active: the
+  guard refuses it with `POLICY_DENIED` unless the mode is advisory. It refuses
+  host `edit` and
   Realm `write` while the realm is not active, with `REALM_NOT_ACTIVE` or the
   code of the realm's state. This is a guard, not containment: the spike
   recorded a `write` transport that survived removal of the built-in write, and

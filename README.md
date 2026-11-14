@@ -54,6 +54,10 @@ runtime account needs:
   `HOME`/`XDG_CONFIG_HOME`, workspace and image. The removed legacy driver-root
   environment variables are not a configuration path.
 
+A clean host has the gateway, the compute driver, its supervisor and the image
+provisioned, and no `config.json` or `policy.json` for Realm; `init` writes
+both. That provisioning is outside this repository (TD-02).
+
 The parent temporarily deployed the matching rebuilt driver for the observed
 run, then restored the old service. That does not establish that a released
 installer or package provisions this stack. Do not restart a shared driver
@@ -96,9 +100,11 @@ realm down
 
 Use that image reference only if it is actually provisioned for your driver;
 otherwise pass your real matching digest pin, never a tag or invented digest.
-The image digest above comes from the parent's actual 2026-10-31 lifecycle
-capture, not a registry-publication or reproducible-build attestation. The
-2026-11-13 transcript below shows `<digest>` in its place.
+To read the local digest, run `podman images --digests localhost/realm-agentos`
+and use the digest it prints for the driver's configured image. The image
+digest above is the one from the parent's 2026-10-31 lifecycle capture
+(Realm 0.3.26), not a registry-publication or reproducible-build attestation.
+The 2026-11-13 transcript below shows `<digest>` in its place.
 
 Init creates `STATE_DIR`, its derived `secrets` and `sandboxes` directories
 at 0700, and `CONFIG_HOME/realm/config.json` and `STATE_DIR/policy.json` at
@@ -144,6 +150,43 @@ not repeat the production crash, reap and MCP scenarios recorded for 0.3.26,
 and it is not a model-driven Omp sandbox write or a clean built-Realm
 warm-network trace. Those remain separate proof obligations.
 
+#### Historical capture, Realm 0.3.26 (2026-10-31)
+
+Historical: this capture predates the publish-path change in `b6eaf27` (safe
+publish, preflight, 0600/0700 modes and `doctor --fix` refusals). The current
+transcript above is the reference for `init`, `up`, `status` and `down`.
+
+Actual parent capture, 2026-10-31: compiled Realm **0.3.26**, Linux runtime
+account uid 5002, rootless **Podman 5.7.1**, preconfigured OpenShell stack
+and temporary matching rebuilt compute driver. All four commands exited 0
+with empty stderr. Only the host-local paths have been normalized below:
+`<config-home>`, `<state-dir>` and `<workspace>` are placeholders for the
+paths defined above, not JSON values to copy into a configuration file.
+
+```text
+$ realm init --image localhost/realm-agentos@sha256:9511929b0b1a23120c30c04d2383317c7b8108ec8ee915e9a1538920e1c9596b --workspace <workspace> --state-dir <state-dir>
+{"config":"<config-home>/realm/config.json","policy":"<state-dir>/policy.json","stateDir":"<state-dir>","mode":"fail-closed"}
+$ realm up
+{"snapshot":{"state":"active","reason":"container running","lastTransitionAt":"2026-10-31T05:48:21.267Z"},"display":{"label":"realm active","degraded":false,"reason":"container running","lastTransitionAt":"2026-10-31T05:48:21.267Z"},"mode":"fail-closed"}
+$ realm status
+{"snapshot":{"state":"active","reason":"container running","lastTransitionAt":"2026-10-31T05:48:21.267Z"},"display":{"label":"realm active","degraded":false,"reason":"container running","lastTransitionAt":"2026-10-31T05:48:21.267Z"},"mode":"fail-closed"}
+$ realm down
+{"snapshot":{"state":"unbound","reason":"no workspace","lastTransitionAt":"2026-10-31T05:48:37.069Z"},"display":{"label":"realm disconnected","degraded":false,"reason":"no workspace","lastTransitionAt":"2026-10-31T05:48:37.069Z"},"mode":"fail-closed"}
+```
+
+There was exactly one actual rootless container while active. Driver and
+daemon used the freshly generated config, with no legacy root environment
+variables and no manual JSON edits. The existing production live scenarios 5
+(real daemon crash, reap and reattach) and 6 (actual MCP exec/write/read)
+then passed: **2 passed, 0 failed, 0 skipped**. Cleanup restored the original
+driver service active, left zero containers and removed the owned temporary
+config; no permanent unit or package changes were made. The older stale-image
+failure is historical, not the outcome of this run.
+
+This transcript is lifecycle/MCP evidence, not a model-driven Omp sandbox
+write or a clean built-Realm warm-network trace. Those remain separate proof
+obligations. These documentation edits still require the parent's docs checks.
+
 ### Diagnose and apply only safe local fixes
 
 With a valid generated config selected by the same `XDG_CONFIG_HOME`:
@@ -174,8 +217,9 @@ idempotence; that predates these docs edits.
 
 ### Install the Omp extension from a local checkout
 
-The verified installation scope is an **isolated local link on Omp 18.12.6**
-(2026-10-30, package then 0.3.24), not registry or marketplace publication.
+The verified installation scope is an **isolated local link on Omp 18.20.0**
+(2026-11-13, package 0.3.29), not registry or marketplace publication. The
+2026-10-30 Omp 18.12.6 record for package 0.3.24 is historical, not the current build.
 With `REALM_CHECKOUT` set as above, choose a fresh isolated directory:
 
 ```sh
