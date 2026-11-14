@@ -1,218 +1,87 @@
 ---
 phase: 15-zero-config-onboarding-and-fail-closed-default
-verified: 2026-11-13T19:30:00Z
-status: human_needed
-score: 5/5 roadmap success criteria verified on evidence; 4 human items open
-behavior_unverified: 0
-overrides_applied: 0
-covered_files:
-  - .planning/REQUIREMENTS.md
-  - .planning/ROADMAP.md
-  - .planning/phases/15-zero-config-onboarding-and-fail-closed-default/15-01-PLAN.md
-  - .planning/phases/15-zero-config-onboarding-and-fail-closed-default/15-01-SUMMARY.md
-  - .planning/phases/15-zero-config-onboarding-and-fail-closed-default/15-02-PLAN.md
-  - .planning/phases/15-zero-config-onboarding-and-fail-closed-default/15-02-SUMMARY.md
-  - .planning/phases/15-zero-config-onboarding-and-fail-closed-default/15-03-PLAN.md
-  - .planning/phases/15-zero-config-onboarding-and-fail-closed-default/15-03-SUMMARY.md
-  - .planning/phases/15-zero-config-onboarding-and-fail-closed-default/15-04-PLAN.md
-  - .planning/phases/15-zero-config-onboarding-and-fail-closed-default/15-04-SUMMARY.md
-  - .planning/phases/15-zero-config-onboarding-and-fail-closed-default/15-05-PLAN.md
-  - .planning/phases/15-zero-config-onboarding-and-fail-closed-default/15-05-SUMMARY.md
-  - .planning/phases/15-zero-config-onboarding-and-fail-closed-default/15-06-PLAN.md
-  - .planning/phases/15-zero-config-onboarding-and-fail-closed-default/15-06-SUMMARY.md
-  - .planning/phases/15-zero-config-onboarding-and-fail-closed-default/15-07-PLAN.md
-  - .planning/phases/15-zero-config-onboarding-and-fail-closed-default/15-07-SUMMARY.md
-  - .planning/phases/15-zero-config-onboarding-and-fail-closed-default/15-08-PLAN.md
-  - .planning/phases/15-zero-config-onboarding-and-fail-closed-default/15-08-SUMMARY.md
-  - .planning/phases/15-zero-config-onboarding-and-fail-closed-default/15-09-PLAN.md
-  - .planning/phases/15-zero-config-onboarding-and-fail-closed-default/15-09-SUMMARY.md
-  - .planning/phases/15-zero-config-onboarding-and-fail-closed-default/15-10-PLAN.md
-  - .planning/phases/15-zero-config-onboarding-and-fail-closed-default/15-11-PLAN.md
-  - .planning/phases/15-zero-config-onboarding-and-fail-closed-default/15-12-PLAN.md
-  - .planning/phases/15-zero-config-onboarding-and-fail-closed-default/15-13-PLAN.md
-  - .planning/phases/15-zero-config-onboarding-and-fail-closed-default/15-14-PLAN.md
-  - .planning/phases/15-zero-config-onboarding-and-fail-closed-default/15-15-PLAN.md
-  - .planning/phases/15-zero-config-onboarding-and-fail-closed-default/15-16-PLAN.md
-  - .planning/phases/15-zero-config-onboarding-and-fail-closed-default/15-CONTEXT.md
-  - .planning/phases/15-zero-config-onboarding-and-fail-closed-default/15-SUMMARY.md
-  - AGENTS.md
-  - README.md
-  - docs/hosts/snippets/omp.md
-  - docs/integration/host-binaries.md
-  - docs/integration/hosts.md
-  - docs/integration/omp.md
-  - docs/integration/openshell.md
-  - docs/policy-reference.md
-  - package.json
-  - scripts/check/default-mode.mjs
-  - scripts/check/default-mode.test.mjs
-  - src/cli/init.ts
-  - src/cli/main.ts
-  - src/contract/validate.ts
-  - src/core/policy.schema.json
-  - src/core/policy.ts
-  - src/daemon/main.ts
-  - src/daemon/spawn-env.ts
-  - src/doctor/checks.ts
-  - src/doctor/fix.ts
-  - src/doctor/runtime-checks.ts
-  - src/omp/extension.ts
-  - src/runtime/config.ts
-  - src/runtime/driver/main.ts
-  - src/runtime/openshell.ts
-  - test/cli/cli.test.ts
-  - test/cli/init.test.ts
-  - test/core/policy.schema.test.ts
-  - test/core/policy.test.ts
-  - test/daemon/main.test.ts
-  - test/daemon/spawn-env.test.ts
-  - test/doctor/checks.test.ts
-  - test/doctor/dial-defaults.test.ts
-  - test/doctor/fix.test.ts
-  - test/doctor/runtime-root-checks.test.ts
-  - test/integration/production-driver.test.ts
-  - test/integration/production-live-helpers.test.ts
-  - test/runtime/config.test.ts
-  - test/runtime/driver/driver-main.test.ts
-  - test/support/production-live.ts
-covered_digest: "v3:sha256:a54c03e356b53331cd5c11949e857f4d0f4db0aee41fdc355029101cbf88051a"
-re_verification:
-  previous_status: gaps_found
-  previous_score: "0/5 roadmap criteria verified"
-  gaps_closed:
-    - "Current-build L-D evidence (omp plugin install, list, rpc-ui, realm-retry) now recorded (15-16-L-D-evidence)"
-    - "Current-build L-C2 quickstart on Podman 5.7.1 (init, up, status, down) now recorded (15-16-transcript-evidence)"
-    - "L-C attempt 1 failure (status and down denied from outside the pinned workspace) closed by attempt 2 in the same transcript (15-15-LC-transcript)"
-    - "Full live suite L-A: clean runs at 37/37 on the combined build (15-10 evidence)"
-    - "L-B checkpoint: owner decision to keep the new build and edited unit recorded (15-15-LC-transcript)"
-  gaps_remaining:
-    - "docs/specs/realm-spec.xml still lists the advisory-versus-fail-closed default as an open question (see human item 1)"
-  regressions: []
-human_verification:
-  - test: "Decide whether docs/specs/realm-spec.xml is within DEF-02's document search. Its open question (around line 200) still asks whether the default is fail-closed or advisory, and its note (around line 256) describes advisory as the default contradiction."
-    expected: "Either the spec is updated to record fail-closed as the decided default, or it is recorded as a historical spec outside DEF-02 scope."
-    why_human: "This is a scope judgment on a planning-era document; the verifier does not edit docs."
-  - test: "Decide whether an rpc-ui capture with the daemon active is required for ONB-06. The recorded L-D frames show 'realm disconnected · REALM_NOT_ACTIVE' because the daemon was down; the extension registered and realm-retry was listed, with no extension_error."
-    expected: "Either accept the disconnected capture as sufficient for the install record, or capture one active-state setStatus frame with the daemon up."
-    why_human: "The success criterion is the recorded install result; whether the active state must also be shown is an owner decision."
-  - test: "Confirm that status and down run from outside the pinned workspace are POLICY_DENIED while a daemon is running. Attempt 1 of L-C recorded this; attempt 2 ran them from the workspace and passed."
-    expected: "Accept it as intended behavior and confirm the README and runbook say to run status and down from the bound workspace."
-    why_human: "Whether this is intended product behavior is a product decision; the verifier only checked the observed result."
-  - test: "Re-run the hermetic test suite on the merged main tree. This pass skipped tests, as the assignment required."
-    expected: "The suite is green on main (the orchestrator reported 3025 pass, 0 fail, 39 skipped at PR 66 head)."
-    why_human: "Test execution was out of scope for this verification and is the main agent's gate."
+verified: 2026-11-14
+verdict: passed
+status: passed
+ref: origin/main 724f487 (PRs 72, 73, 74 merged; 080d864, ca527cc)
+supersedes: /root/15-VERIFICATION-final.md (origin/main 5f5b185)
 ---
 
-# Phase 15: Zero-config onboarding and fail-closed default — Verification Report
+# Phase 15: Zero-config onboarding and fail-closed default: Re-verification at 724f487
 
-**Phase Goal:** A new user on a Podman 5.x host reaches an active sandbox with `realm init` and `realm up` and no manual edit, and a policy that says nothing about its mode contains the agent.
-**Verified:** 2026-11-13T19:30:00Z
-**Status:** human_needed
-**Re-verification:** Yes — after gap closure (previous report: gaps_found, 0/5)
+**Goal:** A new user on a Podman 5.x host reaches an active sandbox with `realm init` and `realm up` and no manual edit, and a policy that says nothing about its mode contains the agent.
 
-Scope of this pass: goal-backward verification of the five roadmap success criteria against the merged code (PR 66 code at 0f141fe / 1ddfc45 on main; PR 67 docs at b09ac75), the orchestrator-observed test and live results, and the live transcripts. No tests, lint, typecheck, build, formatters or check:docs were run here. No live operation was run here; live results are cited from the transcripts and not re-executed. No source, test, docs, workflow, REQUIREMENTS, ROADMAP or STATE file was edited.
+**verdict: passed.** All five roadmap success criteria have evidence on `origin/main` 724f487. No unannotated default-mode statement remains in `docs/specs/realm-spec.xml`.
 
-## Goal Achievement
+**Method.** Worktree `/tmp/verify-724` at `origin/main` 724f487, removed after this report was written. Static reads and greps only. No tests, lint, typecheck, build, formatters, `check:docs` or `scripts/check/default-mode.mjs` were run. Line numbers are at 724f487. Nothing was committed.
 
-### Observable Truths
+**Drift since the live evidence build.** The live transcripts were captured at `1ddfc45`, which is an ancestor of `origin/main`. `git diff 1ddfc45 HEAD -- src test scripts package.json` is not empty (3 files, 56 insertions, 9 deletions). It is `src/session/checkpoint.ts` and `test/session/checkpoint-symlink.test.ts` (ef9f68a, PR 73), plus `package.json` `@rivet-dev/agentos-core` 0.4.4 to 0.4.7 (4b73f77). None of these is on a Phase 15 criterion path (`src/cli/init.ts`, `src/doctor/*`, `src/runtime/config.ts`, `src/core/policy*`). See residual 2.
 
-| #   | Truth (roadmap success criterion) | Status | Evidence |
+## Goal Achievement: Roadmap Success Criteria
+
+Criteria text: `.planning/ROADMAP.md` l.418-427 at 724f487.
+
+| # | Criterion | Status | Evidence on main (724f487) |
 | --- | --- | --- | --- |
-| 1 | Clean host: `realm init` then `realm up` reaches active with no manual edit; init writes templates, state dir 0700, refuses overwrite, digest by argument or from release/ and never invented (ONB-01) | ✓ VERIFIED | `src/cli/init.ts`: 0700 enforcement and refusal of a mode-wrong directory (≈l.208), refusal of an existing file (≈l.327, ≈l.415 EEXIST via linkSync), `--image` must be digest-pinned (≈l.246–253), file header states it never invents a digest. Live L-C2 (15-16-transcript-evidence, Podman 5.7.1): init exit 0 with mode fail-closed, up active, status active, down unbound, containers 0 before and after. L-C attempt 2 (15-15-LC-transcript): init 0, up 0 active. |
-| 2 | Doctor fails with a named check and fix for unset/relative/mode-wrong driver roots and unreachable socket or gateway; `doctor --fix` 0755→0700, second run no change, dry-run no change, symlinked dir refused (ONB-02, ONB-04) | ✓ VERIFIED (presence + live evidence) | `src/doctor/fix.ts`: `PRIVATE_DIR_MODE = 0o700`, `FixRefusal(path, "symlink")` on symbolic links, descriptor-based ancestor checks. Live L-C scratch run (15-15-LC-transcript): state 755 forced; dry-run lists set-mode and two create-directory fixes, exit 0, mode still 755; real run sets 700; repeat returns `fixes: []`. Unit tests exist in test/doctor/fix.test.ts and runtime-root-checks.test.ts; test execution not re-run here (see human item 4). |
-| 3 | Secret, workspace and state roots read from `config.json` with a default under stateDir; `REALM_DRIVER_SECRET_ROOT`/`_WORKSPACE_ROOT`/`_STATE_ROOT` gone; driver and daemon read the same source; sentinel env does not reach the daemon (ONB-03, ONB-07) | ✓ VERIFIED (presence; sentinel test exists, not re-run) | `src/runtime/config.ts` `runtimeRootsOf` derives `<stateDir>/secrets` and `<stateDir>/sandboxes` when omitted. `src/daemon/main.ts` (l.50–51) and `src/runtime/driver/main.ts` (l.66) both read the same config and ignore the three stale variables. `docs/policy-reference.md` l.318 and `docs/integration/openshell.md` l.214 state the same. Sentinel test: `test/daemon/spawn-env.test.ts` exists (`src/daemon/spawn-env.ts`). `REALM_DRIVER_SOCKET` and other `REALM_DRIVER_*` variables are unchanged per docs. |
-| 4 | Policy with no `mode` loads as fail-closed; schema default and loader agree; advisory needs explicit value; policy reference, README, Omp notes, doctor output and init templates state fail-closed; no document calls advisory the default; tests asserting old default updated (DEF-01, DEF-02) | ✓ VERIFIED (with human item 1) | `src/core/policy.schema.json` `"mode"` default `"fail-closed"`; `src/core/policy.ts` validated defaults fail-closed (l.34), advisory warning only under explicit advisory (l.151–160). README.md states the default and an upgrade note for policies without `mode`; `docs/integration/omp.md` and `docs/integration/openshell.md` consistent. `scripts/check/default-mode.mjs` exists as a guard. Residual: `docs/specs/realm-spec.xml` (≈l.200, ≈l.256) still frames the default as an open fail-closed-or-advisory question. |
-| 5 | `omp plugin install` run live under isolated profile and recorded in `docs/hosts/snippets/omp.md`; README carries install steps and a quickstart transcript of init, up, status, down on a real Podman 5.x host (ONB-05, ONB-06) | ✓ VERIFIED (with deviation and human items 2–3) | `docs/hosts/snippets/omp.md` records the dated 2026-11-13 install: `omp/18.20.0` (the plan expected 18.12.6; the record states the actual value), dry-run, install (linked agent-realm 0.3.29), list (enabled), doctor (0 errors). Live L-D (15-16-L-D-evidence): rpc-ui shows two realm setStatus frames, realm-retry listed, no extension_error; originals restored with matching hashes. README transcript (quickstart) captured on Podman 5.7.1 with `<digest>` substituted, covering init, up, status and down only, as the criterion specifies. |
+| 1 | Clean host: `init` then `up` reaches active with no manual edit; `init` writes `config.json` and `policy.json` templates; state dir 0700; refuses overwrite; digest as argument or from `release/`, never invented (ONB-01) | VERIFIED | `src/cli/init.ts`: wrong-mode state dir refused (l.204-208); `--image` must be `<name>@sha256:<64 hex>` (l.244-256, message l.253); no digest source other than the argument, which the criterion permits; templates `config.json` and `policy.json` (l.317-318); new directory created at 0700 (l.342) and `fchmod` 0700 on a no-follow fd (l.358); existing target refused, `linkSync` `EEXIST` refused (`publishNew`, ~l.392-421). Command surface: `README.md` l.94-96 (`init` then `up`). Live: `README.md` "Captured lifecycle transcript" (l.~124-150): `init`, `up`, `status`, `down` each exit 0, `"mode":"fail-closed"`, `state: active`, rootless Podman 5.7.1, Realm 0.3.29 at `1ddfc45`. Second live run: `README.md` l.160-170 (`localhost/realm-agentos@sha256:…` digest). |
+| 2 | `doctor` fails with a named check and fix for an unset, relative or mode-wrong driver root, or an unreachable driver socket or gateway; a unit test per check. `doctor --fix` on 0755 sets 0700; second run and dry run change nothing; symlinked dir refused (ONB-02, ONB-04) | VERIFIED | `src/doctor/runtime-checks.ts`: root conditions `is unset` (l.145), `is not absolute` (l.148), `is absent` (l.152), `is a symbolic link` (l.158), `mode is 0NNN, expected 0700` (l.172), each with a fix string (fix table l.46-61). Driver socket `id = "driver-socket"` (l.211), parent-mode check. Gateway `id = "gateway"` (l.261-281): endpoint unset (l.269), CA unset (l.273), unreachable or chain mismatch (l.279). `src/doctor/fix.ts`: `PRIVATE_DIR_MODE = 0o700` (l.13), symlink refusal `FixRefusal(…, "symlink")` (l.163). Unit tests: `test/doctor/checks.test.ts` l.283-355 (runtime-roots per condition, one each for unset, relative, mode 0755); `test/doctor/runtime-root-checks.test.ts` l.214-269 (driver-socket pass/fail/code/absent-or-mode; gateway pass/fail); `test/doctor/fix.test.ts` l.68 (0755 to 0700), l.134 (second run no-op), l.148 and l.162 (dry run), l.177, l.191, l.228, l.265 (symlinked dirs refused), l.395 and l.447 (swapped-for-symlink). |
+| 3 | Secret, workspace and state roots read from `config.json`, default under `stateDir`; `REALM_DRIVER_SECRET_ROOT`, `_WORKSPACE_ROOT`, `_STATE_ROOT` gone, other `REALM_DRIVER_*` unchanged; driver and daemon read the same source; sentinel env var does not reach the daemon from `startDetachedDaemon` or the CLI spawn (ONB-03, ONB-07) | VERIFIED | `src/runtime/config.ts`: `secretRoot` and `sandboxStateRoot` optional, relative value refused (l.17-20, l.107-111); `runtimeRootsOf` defaults them to `<stateDir>/secrets` and `<stateDir>/sandboxes` (l.139-146). Daemon: `src/daemon/main.ts` l.11, l.78 calls `runtimeRootsOf(loadRuntimeConfig(…))`; stale names ignored (l.50-51). Driver: `src/runtime/driver/main.ts` l.9, l.66 (stale names ignored), l.112 same call. Stale names are read by no code. Sentinel tests: `test/daemon/spawn-env.test.ts` l.89 (sentinel not reaching CLI spawn or `startDetachedDaemon`), l.196 (ONB-07, real daemon via `runCli up` sees no sentinel and no stale root). Config tests: `test/runtime/config.test.ts`, `test/daemon/main.test.ts`, `test/runtime/driver-lifecycle.test.ts`. Docs: `docs/policy-reference.md` l.318; `docs/integration/openshell.md` l.269, l.591; `docs/integration/omp-lifecycle-runbook.md` l.24. |
+| 4 | Policy with no `mode` loads as fail-closed; schema default and loader agree; advisory needs the explicit value; policy reference, README, Omp notes, doctor output and `init` templates state fail-closed; no document calls advisory the default; tests relying on the old default state their mode or assert the new one (DEF-01, DEF-02) | VERIFIED | Schema: `src/core/policy.schema.json` l.8-12 (`enum ["advisory","fail-closed"]`, `"default": "fail-closed"`). Loader: `src/contract/validate.ts` l.165 `useDefaults: true`, so the schema default is applied. `src/core/policy.ts` l.42-56 records `modeSource` (`explicit`/`default`/`no-file`); the advisory-only path is gated on `policy.mode === "advisory"` (l.157-162). Doctor: `src/doctor/checks.ts` l.218 and l.257 say fail-closed is the default; l.246-250 warn only on explicit advisory. `init` templates: `src/cli/init.ts` l.3 header and l.69 summary `mode: "fail-closed"`, and the template writes `"mode": "fail-closed"` explicitly. Reference: `docs/policy-reference.md` l.38-46 (Default fail-closed, D4), l.82 (prior default recorded as history), l.318. README: l.15 and l.17 (default fail-closed; upgrade note). `AGENTS.md` l.169 (never call advisory the default). `site/content/index.md` l.21. Omp notes: `docs/hosts/snippets/omp.md` l.162 and l.170 (`applied mode: fail-closed`). Tests: `test/doctor/checks.test.ts` l.92 (no mode says fail-closed is the default), l.101, l.110 (explicit advisory warns). Doc-wide search (grep over README, AGENTS, docs excluding `docs/specs`, site index for "advisory" near "default"): every hit is either the fail-closed default, an upgrade note, a history line, or an explicit-opt-in description. Enforcement exists in `scripts/check/default-mode.mjs` (not run here). |
+| 5 | `omp plugin install` run live under an isolated profile and recorded in `docs/hosts/snippets/omp.md`; README carries install steps and a quickstart transcript of `init`, `up`, `status`, `down` on a real Podman 5.x host (ONB-05, ONB-06) | VERIFIED | `docs/hosts/snippets/omp.md` "Current install record (ONB-05)" l.75-~110: dated 2026-11-13, checkout at origin/main `1ddfc45`, isolated `HOME`, `PI_CODING_AGENT_DIR` and `XDG_CONFIG_HOME` (l.79-81), dry-run (l.87) and real install (l.94). Daemon-up status frame: l.152-170 (`realm active`, `applied mode: fail-closed`). Install steps: `README.md` l.232-233. Quickstart transcript: `README.md` "Captured lifecycle transcript" (l.~124-150), Podman 5.7.1. |
 
-**Score:** 5/5 roadmap criteria verified on evidence (criteria 3 and 4 rely partly on test presence; see human items 1 and 4).
+Criterion 5's install is the owner-accepted record at `1ddfc45` (residual 2).
 
-### Live checkpoints
+### Criterion 4: default-mode statements in `docs/specs/realm-spec.xml`
 
-| Checkpoint | Result | Verdict on this pass |
+Every spec line containing "advisory" (26 lines) and every "default" line that concerns mode or policy was classified:
+
+| Line | Content (abridged) | Class | Result |
+| --- | --- | --- | --- |
+| 83 | per-file advisory write locks | lock reference | OK |
+| 132 | "Default to fail-closed when the user has enabled realm required mode. Default to visible warning in advisory mode." | first clause is fail-closed; second describes explicit advisory behaviour, not the policy default (see residual 4) | OK |
+| 168 | advisory lock conflict | lock reference | OK |
+| 189 | "Default mode is fail-closed (owner decision D4, 2026-10-29), with advisory available only as an explicit opt-in." | D4 statement | OK |
+| 200 | "The default policy when realm is disconnected is fail-closed (owner decision D4 ...). Advisory requires an explicit value." | D4 statement | OK |
+| 225, 230, 233, 242 | advisory locks in module and deferral lists | lock reference | OK |
+| 227 | "Tentative defaults: fail-closed as the default policy mode (superseded: owner decision D4, 2026-10-29, advisory is opt-in)" | annotated as superseded | OK |
+| 253 | open question on whether the default is fail-closed or advisory | question, resolved at l.256 and l.267 | OK (not a statement) |
+| 256 | "Flag the policy default as a spec contradiction ... Resolved by owner decision D4 ...: fail-closed is the default." | annotated, resolved in the same sentence | OK |
+| 267 | "Default policy mode: resolved by owner decision D4 ... fail-closed; advisory is an explicit opt-in." | D4 statement | OK |
+| 279, 307, 311, 358, 434, 447 | advisory lock table, locks, granularity | lock reference | OK |
+| 282, 291 | "in advisory mode it returns the write with a visible warning" | explicit advisory behaviour | OK |
+| 295 | "Should required mode also gate reads? Default: gate writes only." | required-mode design default; not a mode-default statement | OK |
+| 315 | question listing fail-closed or advisory as schema options | question | OK (not a statement) |
+| 328 | "mode advisory(default; superseded by owner decision D4 ...)" | annotated as superseded | OK |
+| 365 | "Default policy mode? Default: fail-closed (owner decision D4 ...); advisory is an explicit opt-in." | D4 statement | OK |
+| 376 | "fail-closed is the default (owner decision D4, 2026-10-29)" | D4 statement | OK |
+| 480 | question, "Resolved by owner decision D4 ...: fail-closed is the default" | annotated | OK |
+| 483 | option, "Advisory with warning (superseded by owner decision D4 ...: no longer the recommendation; fail-closed is the default)" | annotated as superseded | OK |
+
+**Unannotated default statements remaining: none.**
+
+## Required Artifacts
+
+| Artifact | Status | Detail |
 | --- | --- | --- |
-| L-A (plan 15-10): full live suite, two clean runs | 37 of 37 each on the combined build, no keep flags (orchestrator-observed; clean-run transcript shows 37 pass, 0 fail, 0 skipped) | Closes the previous "L-A not green" gap |
-| L-B (plan 15-10): edited unit and new build | 37 of 37; runtime-roots, driver-socket, gateway doctor checks pass; host restored | Closes the previous "L-B unapproved" gap; owner decision recorded |
-| Kept install (main 1ddfc45) | 37 of 37 rerun; doctor runtime items pass | Accepted |
-| L-C (plan 15-15), attempt 1 | init 0 fail-closed; up 0 active; status and down POLICY_DENIED (exit 1) because they ran outside the pinned workspace while the daemon was up | Recorded failure; not a pass for status and down in attempt 1 |
-| L-C (plan 15-15), attempt 2 | init 0; up 0 active; status 0 showing mode fail-closed; down 0 unbound; originals restored with matching hashes | Closes the attempt-1 failure for those steps |
-| L-C2 (plan 15-16 Task 1) | init 0 fail-closed, up active, status active, down unbound, containers 0 before and after on Podman 5.7.1 | Pass |
-| L-D (plan 15-16 Task 2) | omp 18.20.0; install dry-run, install, list, doctor exit 0; two realm setStatus frames ("realm disconnected · connecting", then "realm disconnected · REALM_NOT_ACTIVE"); realm-retry listed; no extension_error; daemon not running at capture; originals restored with matching hashes | Pass for install and registration; active-state frame not captured (human item 2) |
+| `src/cli/init.ts` | VERIFIED | Criteria 1 and 4 |
+| `src/doctor/runtime-checks.ts`, `src/doctor/fix.ts`, `src/doctor/checks.ts` | VERIFIED | Criteria 2 and 4 |
+| `src/runtime/config.ts`, `src/daemon/main.ts`, `src/runtime/driver/main.ts` | VERIFIED | Criterion 3 |
+| `src/core/policy.ts`, `src/core/policy.schema.json`, `src/contract/validate.ts` | VERIFIED | Criterion 4 |
+| `README.md` | VERIFIED | Criteria 1, 4, 5 |
+| `docs/policy-reference.md` | VERIFIED | Criterion 4 |
+| `docs/hosts/snippets/omp.md` | VERIFIED | Criteria 4 and 5 |
+| `docs/specs/realm-spec.xml` | VERIFIED | Criterion 4: no unannotated default statement |
 
-### Residuals stated honestly
+## Residuals (not verdict-blocking)
 
-- **Omp version:** the live install ran on omp 18.20.0. The plan expected 18.12.6. The install record uses the actual value.
-- **L-D rpc-ui state:** the captured frames are disconnected, with REALM_NOT_ACTIVE, because the daemon was down. No active-state frame is recorded.
-- **Status and down from outside the workspace:** while a daemon is running, these are POLICY_DENIED. The passing run executed them from the bound workspace. Whether this is intended behavior is for a human (item 3).
-- **L-C2 config restore:** the config and policy were moved aside for L-C2 and restored after L-D. The restore hashes match (config 1838f4c8…, policy e66c7871…). The L-C2 transcript notes the restore.
-- **Spec document:** `docs/specs/realm-spec.xml` is not updated (human item 1).
+1. **Policy hash change, 15-15 (owner-accepted gap).** The restored policy hash `e66c7871…` appears on main only in `.planning/phases/15-zero-config-onboarding-and-fail-closed-default/15-VERIFICATION.md` l.146 ("policy e66c7871…"). The pre-change hash `e46ee5` appears nowhere on main, in the working tree, or in `git log --all -S e46ee5`. The change is therefore not reconstructible from the repo. Owner-accepted; the verdict is unchanged.
+2. **Live evidence predates three commits on main.** The `init`/`up`/`status`/`down` transcript and the ONB-05 `omp plugin install` record were captured at `1ddfc45`. Since then main has changed `src/session/checkpoint.ts` (ef9f68a, PR 73) and `package.json` `@rivet-dev/agentos-core` 0.4.4 to 0.4.7 (4b73f77). None touches a Phase 15 criterion file. The agentos-core bump could affect the live AgentOS `up` path; no live re-run was performed here. The previous template's claim that the diff since `1ddfc45` is empty no longer holds.
+3. **Gates not run.** Per the assignment, no tests, lint, typecheck, build, formatter, `check:docs` or `scripts/check/default-mode.mjs` was run. Test references above were read, not executed. The advisory-default scan was done by hand with grep.
+4. **Spec line 132.** "Default to visible warning in advisory mode" describes explicit advisory behaviour. It does not name advisory as the policy default, so it is classed OK, not annotated.
+5. **Criterion 1 digest source.** The implementation takes the digest only from `--image` (`src/cli/init.ts` l.244-256). Criterion 1 allows "as an argument or from `release/`", so this satisfies it. No `release/` lookup exists.
 
-### Required Artifacts
+## Verdict
 
-| Artifact | Expected | Status | Details |
-| -------- | -------- | ------ | ------- |
-| `src/cli/init.ts` | Template write, 0700, refuse overwrite, digest validation | ✓ VERIFIED | Refusal paths and digest check present in code; exercised live (L-C2, L-C attempt 2) |
-| `src/doctor/fix.ts` | Descriptor-based fixes, 0700, symlink refusal, dry-run | ✓ VERIFIED | Exercised in the L-C scratch run (dry-run, fix, repeat) |
-| `src/runtime/config.ts` | `runtimeRootsOf` with stateDir defaults | ✓ VERIFIED | Derives secrets and sandboxes roots when omitted |
-| `src/daemon/main.ts`, `src/runtime/driver/main.ts` | Read the same config; ignore stale root variables | ✓ VERIFIED | Lines cited above |
-| `src/core/policy.schema.json`, `src/core/policy.ts` | `mode` default fail-closed, loader agrees | ✓ VERIFIED | Schema default and loader fallback both fail-closed |
-| `docs/hosts/snippets/omp.md` | Dated install record | ✓ VERIFIED | Records omp 18.20.0, install, list and doctor |
-| `README.md` | Install steps and init/up/status/down transcript | ✓ VERIFIED | Transcript on Podman 5.7.1 with `<digest>` substituted |
-| `docs/specs/realm-spec.xml` | Default-mode consistent with decision | ⚠️ NOT UPDATED | Open question still present (human item 1). Not in the covered_files list |
+verdict: passed
 
-### Key Link Verification
-
-| From | To | Via | Status | Details |
-| ---- | -- | --- | ------ | ------- |
-| `realm init` | `config.json` and `policy.json` | writes templates with 0700 directory | ✓ WIRED | Live L-C2 and L-C attempt 2 |
-| `config.json` | daemon and driver roots | `runtimeRootsOf` read by both processes | ✓ WIRED | Code and docs consistent; live up active in L-C2 |
-| `doctor --fix` | state directory | descriptor-based set-mode and create-directory | ✓ WIRED | Live scratch run (dry-run, fix, repeat) |
-| Omp extension | daemon status | setStatus frames, realm-retry | ✓ WIRED (disconnected state observed) | L-D frames; active state not captured |
-
-### Data-Flow Trace (Level 4)
-
-| Artifact | Data Variable | Source | Produces Real Data | Status |
-| -------- | ------------- | ------ | ------------------ | ------ |
-| Quickstart status | `mode`, `boundRoot`, `sessionId` | daemon snapshot | Yes (live) | ✓ FLOWING |
-| Doctor fixes | `fixes` list | filesystem state | Yes (live scratch run) | ✓ FLOWING |
-
-### Behavioral Spot-Checks
-
-Not run in this pass. The assignment prohibited tests, builds and live operations. Behavioral evidence is cited from the orchestrator-observed hermetic run (3025 pass, 0 fail, 39 skipped at PR 66 head; typecheck, lint, build and check:docs green) and the live transcripts above. No new probe or spot-check outcome is claimed.
-
-### Probe Execution
-
-Not run (no probe scripts were executed in this pass). No `MISSING_PROBE` items were identified for this phase.
-
-### Requirements Coverage
-
-| Requirement | Source Plan | Description | Status | Evidence |
-| ----------- | ----------- | ----------- | ------ | -------- |
-| ONB-01 | 15-01 to 15-16 | realm init writes templates, state 0700, refuses overwrite, digest pinned | ✓ SATISFIED | Criterion 1 |
-| ONB-02 | 15-01 to 15-16 | doctor named checks and fixes | ✓ SATISFIED | Criterion 2 |
-| ONB-03 | 15-01 to 15-16 | roots read from config.json | ✓ SATISFIED | Criterion 3 |
-| ONB-04 | 15-01 to 15-16 | doctor --fix on mode 0755 and symlink refusal | ✓ SATISFIED | Criterion 2 |
-| ONB-05 | 15-16 | omp plugin install recorded | ✓ SATISFIED | Criterion 5 (version deviation noted) |
-| ONB-06 | 15-16 | README install and quickstart | ✓ SATISFIED | Criterion 5 |
-| ONB-07 | 15-01 to 15-16 | sentinel env does not reach daemon | ✓ SATISFIED (test presence) | Criterion 3; test not re-run |
-| DEF-01 | 15-01 to 15-16 | policy without mode is fail-closed | ✓ SATISFIED | Criterion 4 |
-| DEF-02 | 15-01 to 15-16 | docs state fail-closed default | ⚠️ SATISFIED WITH RESIDUAL | Criterion 4; spec doc open question (human item 1) |
-
-### Anti-Patterns Found
-
-No new source edits were made in this pass, so no new anti-pattern scan was run on changed code. The only documentation residual is `docs/specs/realm-spec.xml` (see Requirements Coverage and human item 1).
-
-### Human Verification Required
-
-1. **Spec document scope (DEF-02).** `docs/specs/realm-spec.xml` still asks whether the default is fail-closed or advisory (≈l.200) and describes advisory as the default contradiction (≈l.256). Decide whether this file is within DEF-02's document search. If it is, it needs updating in a separate change.
-2. **Active-state rpc-ui capture (ONB-06).** The recorded frames show REALM_NOT_ACTIVE because the daemon was down. Decide whether an active-state frame with the daemon up is required, or whether the disconnected capture is enough for the install record.
-3. **Status and down outside the workspace.** While a daemon runs, these are POLICY_DENIED from outside the pinned workspace. Confirm this is intended and that README and the runbook say to run them from the bound workspace.
-4. **Test gate on merged main.** Re-run the hermetic suite on the merged main tree. Test execution was excluded from this pass.
-
-### Gaps Summary
-
-No blocker gaps. All five roadmap success criteria have evidence. The prior gaps (missing L-D and L-C2 current-build evidence, L-A not green, L-B unapproved, and the L-C attempt-1 failure) are closed or recorded as above. The phase is not marked `passed` because four human items remain open, including one document residual.
-
----
-
-_Verified: 2026-11-13T19:30:00Z_
-_Verifier: Claude (gsd-verifier)_
+All five criteria have evidence on `origin/main` 724f487, and no unannotated default-mode statement remains in `docs/specs/realm-spec.xml`. Residuals 1 and 2 are recorded; neither changes the verdict.
