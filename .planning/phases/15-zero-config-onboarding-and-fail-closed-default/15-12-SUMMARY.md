@@ -37,7 +37,7 @@ The shipped `doctor --fix` scope matches the plan: state directory, `run`, `sess
 
 ## Verification
 
-- Not run (contract forbids tests). No file under `/home/realmlive/realm-evidence/phase15/` is named 15-12.
+- Not run (contract forbids tests). No file under `<home>/realm-evidence/phase15/` is named 15-12.
 - NOT VERIFIED: `npm run build && node --test dist/test/doctor/fix.test.js` exit 0; the four new tests passing; any live refusal case; the plan's "no existing fix test changed its assertions" (the 0f141fe test diff removes only the import line).
 
 ## Deviations from Plan

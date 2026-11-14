@@ -42,7 +42,7 @@ Evidence for L-C2, L-D, L-D2 and the --workspace check is recorded and checked a
 ## Verification
 
 - PASS: init/up/status/down exit codes; L-D install, dry run and list exit codes; no `-e` in the recorded session command; restore hashes; --workspace results.
-- FAIL, plan hermetic check: `/home/realmlive/` paths remain unnormalized in the evidence files (transcript 4 lines, L-D 4, L-D2 3, workspace-flag 1). Plan steps 9 required normalization before saving.
+- FAIL, plan hermetic check: `<home>/` paths remain unnormalized in the evidence files (transcript 4 lines, L-D 4, L-D2 3, workspace-flag 1). Plan steps 9 required normalization before saving.
 - Task 3 not done (grep of tree): README has no clean-host sentence (P15-O2) and no `podman images --digests` line (P15-O1); README line 99 keeps the 2026-10-31 digest sentence; the 0.3.26 capture heading is absent (capture removed, not kept). Snippet still duplicates `doctor --fix` (lines 263-264); the 0.3.24 record was removed, not kept as historical; the heading is still `Live install record (ONB-05)`; line 326 still says the guard refuses `bash`/`eval` unless advisory. `docs/integration/omp.md` has no `## Plugin install under an isolated profile (ONB-05)` section.
 - Not run by me: `npm run check:docs`, `npm run build`.
 

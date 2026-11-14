@@ -36,7 +36,7 @@ The plan's tests are present in `test/cli/cli.test.ts` at HEAD. No run is record
 
 ## Verification
 
-- NOT RUN, by contract. No file in `/home/realmlive/realm-evidence/phase15/` is named `15-13*` or references these titles. The plan's `npm run build && node --test dist/test/cli/cli.test.js` has no recorded exit status.
+- NOT RUN, by contract. No file in `<home>/realm-evidence/phase15/` is named `15-13*` or references these titles. The plan's `npm run build && node --test dist/test/cli/cli.test.js` has no recorded exit status.
 - Source read only: `runInitCommand` (`src/cli/main.ts:667-681`) and init dispatch before config (`:700-702`) match Task 1. `runDoctorFix` (`:513-541`) passes `HOME` or `""`; `applySafeFixes` refuses empty home at `src/doctor/fix.ts:128`. `runDoctor` returns 0 locally (`:492-496`).
 - Not traced: `failureFor` mapping `FixRefusal` to `SCHEMA_INVALID`.
 

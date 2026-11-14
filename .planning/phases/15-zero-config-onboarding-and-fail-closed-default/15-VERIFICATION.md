@@ -4,7 +4,7 @@ verified: 2026-11-14
 verdict: passed
 status: passed
 ref: origin/main 724f487 (PRs 72, 73, 74 merged; 080d864, ca527cc)
-supersedes: /root/15-VERIFICATION-final.md (origin/main 5f5b185)
+supersedes: <report> (origin/main 5f5b185)
 ---
 
 # Phase 15: Zero-config onboarding and fail-closed default: Re-verification at 724f487
@@ -13,7 +13,7 @@ supersedes: /root/15-VERIFICATION-final.md (origin/main 5f5b185)
 
 **verdict: passed.** All five roadmap success criteria have evidence on `origin/main` 724f487. No unannotated default-mode statement remains in `docs/specs/realm-spec.xml`.
 
-**Method.** Worktree `/tmp/verify-724` at `origin/main` 724f487, removed after this report was written. Static reads and greps only. No tests, lint, typecheck, build, formatters, `check:docs` or `scripts/check/default-mode.mjs` were run. Line numbers are at 724f487. Nothing was committed.
+**Method.** Worktree `<tmp>` at `origin/main` 724f487, removed after this report was written. Static reads and greps only. No tests, lint, typecheck, build, formatters, `check:docs` or `scripts/check/default-mode.mjs` were run. Line numbers are at 724f487. Nothing was committed.
 
 **Drift since the live evidence build.** The live transcripts were captured at `1ddfc45`, which is an ancestor of `origin/main`. `git diff 1ddfc45 HEAD -- src test scripts package.json` is not empty (3 files, 56 insertions, 9 deletions). It is `src/session/checkpoint.ts` and `test/session/checkpoint-symlink.test.ts` (ef9f68a, PR 73), plus `package.json` `@rivet-dev/agentos-core` 0.4.4 to 0.4.7 (4b73f77). None of these is on a Phase 15 criterion path (`src/cli/init.ts`, `src/doctor/*`, `src/runtime/config.ts`, `src/core/policy*`). See residual 2.
 

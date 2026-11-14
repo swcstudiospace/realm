@@ -42,7 +42,7 @@ Doctor ran with no daemon ("ran 14 local checks", 15-10-L-B-doctor.err); non-pas
 - attempt1, attempt2, attempt3-main: 14 tests, 2 pass, 12 fail; OPENSHELL_START_FAILED.
 - prev, run-flaky11: 36/37 (scenario 11 fails): AGENTOS_STOP_FAILED; AGENTOS_CRASH_LOOP.
 - capture-1: 36/37 (scenario 13 fails): SCHEMA_INVALID.
-- L-A-keep: 37/37 with 13 unredacted `/tmp/rlv-*` paths (keep-state run).
+- L-A-keep: 37/37 with 13 unredacted `<tmp>*` paths (keep-state run).
 - L-A-after-keep-residue: interrupted, no TAP summary. L-B-A-broken-attempt: 14 skipped; REALM_DRIVER_SOCKET not absolute.
 - 37/37, not designated: L-A-clean-run1, L-A-11-rerun, L-A-tmp, L-B-A-prev.
 

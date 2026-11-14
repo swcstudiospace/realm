@@ -36,7 +36,7 @@ The socket-path preflight and the five named tests exist in the tree. No evidenc
 
 ## Verification
 
-- Evidence files: none. `/home/realmlive/realm-evidence/phase15/` has no file named `15-11-*`, and no file in it mentions 15-11.
+- Evidence files: none. `<home>/realm-evidence/phase15/` has no file named `15-11-*`, and no file in it mentions 15-11.
 - Git: no commit message names 15-11. The socket check and all five tests first appear in 0f141fe (2026-11-13, phase 15 code commit). Working tree diff touches only 15-VERIFICATION.md.
 - `npm run build && node --test dist/test/cli/init.test.js`: NOT RUN (this assignment forbids tests). Result: NOT VERIFIED.
 - Acceptance "count of `UNIX_SOCKET_PATH_MAX_BYTES = 107` is 1": the line is seen at init.ts:236; the count was not run. NOT VERIFIED.
