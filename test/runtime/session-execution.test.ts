@@ -861,6 +861,13 @@ void test("RT-03, RT-01: a failed AgentOS stop keeps the supervisor's catalogue 
   );
 });
 
+void test("RT-03, RT-01: a failed AgentOS stop that carries its own cause keeps that cause, not the primary AGENTOS_STOP_FAILED, as the causeCode", async (t) => {
+  const f = await fixture(t);
+  const { containerId } = await createSession(f);
+  f.supervisor.stop = () => Promise.reject(makeRealmError("AGENTOS_STOP_FAILED", "OPENSHELL_GATEWAY_LOST"));
+  await assertStopFailedWithCause(f.exec.stop(containerId, realmSandboxName(SESSION)), "OPENSHELL_GATEWAY_LOST");
+});
+
 void test("RT-03, RT-04, RT-01: destroy stops AgentOS while the container still exists, and removes the container even when that stop throws", async (t) => {
   const f = await fixture(t);
   const { containerId } = await createSession(f);
