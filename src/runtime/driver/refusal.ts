@@ -156,7 +156,7 @@ function supervisorNameOf(sandboxName: string | undefined): string {
 
 // Writes the line of a supervisor that spawned: its sandbox and its process id.
 export function logSupervisorSpawned(sandboxName: string | undefined, pid: number | undefined): void {
-  stderrRefusalLog(`realm compute driver supervisor spawned: sandbox=${supervisorNameOf(sandboxName)} pid=${pid ?? "none"}`);
+  stderrRefusalLog(`realm compute driver supervisor spawned: sandbox=${supervisorNameOf(sandboxName)} pid=${String(pid ?? "none")}`);
 }
 
 // Writes the line of a supervisor that exited, however it exited: its pid, the exit code, and the signal that ended it.
@@ -167,7 +167,7 @@ export function logSupervisorExited(
   signal: NodeJS.Signals | null,
 ): void {
   stderrRefusalLog(
-    `realm compute driver supervisor exited: sandbox=${supervisorNameOf(sandboxName)} pid=${pid ?? "none"} code=${code ?? "none"} signal=${signal ?? "none"}`,
+    `realm compute driver supervisor exited: sandbox=${supervisorNameOf(sandboxName)} pid=${String(pid ?? "none")} code=${String(code ?? "none")} signal=${signal ?? "none"}`,
   );
 }
 
