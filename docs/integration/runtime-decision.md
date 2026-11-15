@@ -404,7 +404,7 @@ This section records the third explicit contract extension to the error catalogu
 - (b) A runner that dies in the same second the gateway is restarted reads `AGENTOS_CRASH_LOOP`, because the gateway answers by the time it is asked.
 - (c) A TLS failure of the gateway (for example `BadSignature`) also reads `OPENSHELL_GATEWAY_LOST`. That is intended: the gateway is unusable.
 
-Driver loss is not a coverage limit. A compute driver that does not answer while the gateway does is classified as `OPENSHELL_GATEWAY_LOST` by the socket probe, under owner ruling O-e (2026-11-02). The live run that exercises the probe (spike S17-b) is not recorded yet; that is pending evidence, not a limit.
+Driver loss is not a coverage limit. A compute driver that does not answer while the gateway does is classified as `OPENSHELL_GATEWAY_LOST` by the socket probe, under owner ruling O-e (2026-11-02). The live run that exercises the probe (spike S17-b, 2026-11-15, checkout a796b34) observed `realm status` report `OPENSHELL_GATEWAY_LOST` at about 10 s and again at about 45 s after only the compute-driver unit was stopped, so no coverage limit was added for driver-only loss. The same run did not return the state to active within about 40 s after the unit was restarted and the gateway reported connected; the state stayed `error` with the same reason. That recovery result and the inconclusive exec probe are recorded in `openshell.md`.
 
 **Not changed.** `create` and `up` with the gateway down still fail with `OPENSHELL_START_FAILED`. The `exec` tool path is unchanged (it returns the command's exit code or `REALM_NOT_ACTIVE`). Only the health-probe path (`AgentOsSupervisor.check`) classifies.
 
