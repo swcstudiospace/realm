@@ -189,7 +189,7 @@ Plans:
 - [x] **Phase 15: Zero-config onboarding and fail-closed default** - `realm init`, `doctor --fix`, driver roots in `config.json`, an allowlisted daemon environment, a verified Omp install path, and fail-closed as the default policy mode (ONB-01..07, DEF-01..02) (completed 2026-11-14)
 - [x] **Phase 16: Omp runs in the sandbox** - Realm's tools are registered in Omp, and in fail-closed mode the built-in `write`, `edit` and `bash` are removed or blocked by the mechanism the spike proved (OMPX-02..05) (completed 2026-11-15)
 - [x] **Phase 17: Observability and tamper-evident audit** - A hash-chained audit log with `realm audit verify`, structured logs with correlation ids, counters over the control socket, and a distinct code for gateway or driver loss (OBS-01..04) (completed 2026-11-15)
-- [ ] **Phase 18: Per-project sandboxes** - One session, sandbox, audit file and lock table per project workspace under the configured roots (MULTI-01..06)
+- [x] **Phase 18: Per-project sandboxes** - One session, sandbox, audit file and lock table per project workspace under the configured roots (MULTI-01..06) (completed 2026-11-15)
 - [ ] **Phase 19: Resume and checkpoint** - A surviving sandbox that passes the hardening verifier is re-adopted after a daemon restart, a session-owned scratch volume, and workspace snapshot and restore (RES-01..05)
 - [ ] **Phase 20: Release pipeline hardening** - Unprivileged build job and privileged publish job, build provenance attestation, a rollback workflow, and a changelog filter for removed features (REL-01..04)
 
@@ -497,20 +497,20 @@ The owner lifted the ship hold on 2026-10-28 for one pull request with autoMerge
 
 **Plans**: 1 recovery dependency plan (`18-01-PLAN.md`) and `18-CONTEXT.md`; D5/PR36 decision recorded, per-project runtime and acceptance incomplete
 - [x] 18-01-PLAN.md
-- [ ] 18-02-PLAN.md
-- [ ] 18-03-PLAN.md
-- [ ] 18-04-PLAN.md
-- [ ] 18-04b-PLAN.md
-- [ ] 18-05-PLAN.md
-- [ ] 18-06-PLAN.md
-- [ ] 18-07-PLAN.md
-- [ ] 18-08-PLAN.md
-- [ ] 18-09-PLAN.md
-- [ ] 18-10-PLAN.md
+- [x] 18-02-PLAN.md
+- [x] 18-03-PLAN.md
+- [x] 18-04-PLAN.md
+- [x] 18-04b-PLAN.md
+- [x] 18-05-PLAN.md
+- [x] 18-06-PLAN.md
+- [x] 18-07-PLAN.md
+- [x] 18-08-PLAN.md
+- [x] 18-09-PLAN.md
+- [x] 18-10-PLAN.md
 - [x] 18-11-PLAN.md
-- [ ] 18-12-PLAN.md
-- [ ] 18-13-PLAN.md
-- [ ] 18-14-PLAN.md
+- [x] 18-12-PLAN.md
+- [x] 18-13-PLAN.md
+- [x] 18-14-PLAN.md
 
 ### Phase 19: Resume and checkpoint
 
@@ -582,6 +582,6 @@ Milestone v3.0 phases (12 to 20) run in three parallel lanes that share no mutab
 | 15. Zero-config onboarding and fail-closed default | 17/16 | Complete    | 2026-11-14 |
 | 16. Omp runs in the sandbox | 5/4 | Complete    | 2026-11-15 |
 | 17. Observability and tamper-evident audit | 6/5 | Complete    | 2026-11-15 |
-| 18. Per-project sandboxes | 1/15 | Fourteen historical plans have committed code; one plan summary is present. Revised plan 11 checks pass locally, while live acceptance and human gates remain open | - |
+| 18. Per-project sandboxes | 16/15 | Complete    | 2026-11-15 |
 | 19. Resume and checkpoint | 0/1 | Recovery plan independently checked; upstream prerequisites and live acceptance open | - |
 | 20. Release pipeline hardening | 0/3 | Recovery plans independently checked; immutable rollback handoff, human review and live evidence open | - |

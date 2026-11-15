@@ -126,7 +126,7 @@
     {
       "number": "18",
       "name": "Per-project sandboxes",
-      "status": "pending"
+      "status": "complete"
     },
     {
       "number": "19",
@@ -142,7 +142,7 @@
   "next": {
     "command": "/gsd-progress --next",
     "label": "Advance to the next step",
-    "reason": "Phase 7 of 9 · 89% · executing"
+    "reason": "Phase 8 of 9 · 93% · executing"
   },
-  "updated_at": "2026-11-15T02:48:57.782Z"
+  "updated_at": "2026-11-15T04:32:13.947Z"
 }

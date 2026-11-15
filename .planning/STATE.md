@@ -2,20 +2,20 @@
 gsd_state_version: "1.0"
 milestone: v3.0
 milestone_name: Containment by Default
-current_phase: 18
-current_phase_name: Per-project sandboxes
+current_phase: 19
+current_phase_name: Resume and checkpoint
 status: executing
-stopped_at: Phase 17 complete, ready to execute Phase 18
-last_updated: "2026-11-15T02:48:57.682Z"
+stopped_at: Phase 18 complete, ready to execute Phase 19
+last_updated: "2026-11-15T04:32:13.854Z"
 last_activity: 2026-11-15
-last_activity_desc: Phase 17 complete, transitioned to Phase 18
-state_head: 6ac902ecaf23aa2b6e6884bec82174c635b8bbac
+last_activity_desc: Phase 18 complete, transitioned to Phase 19
+state_head: 2a3ae60ebebd0be8ad406e57cfdc065388c6ae48
 progress:
   total_phases: 9
-  completed_phases: 24
+  completed_phases: 25
   total_plans: 47
-  completed_plans: 29
-  percent: 89
+  completed_plans: 43
+  percent: 93
 ---
 
 # Project State
@@ -29,10 +29,10 @@ See: .planning/PROJECT.md (updated 2026-10-29)
 
 ## Current Position
 
-Phase: 18 — Per-project sandboxes
-Plan: 2
+Phase: 19 — Resume and checkpoint
+Plan: Not started
 Status: Ready to execute
-Last activity: 2026-11-15 — Phase 17 complete, transitioned to Phase 18
+Last activity: 2026-11-15 — Phase 18 complete, transitioned to Phase 19
 
 ## Current Recovery Boundaries
 
@@ -58,7 +58,7 @@ not a fresh instruction to restart discovery, install a runtime or close a phase
 
 **Velocity:**
 
-- Total plans completed: 35
+- Total plans completed: 51
 - Average duration: N/A
 - Total execution time: 0 hours
 
@@ -72,6 +72,7 @@ not a fresh instruction to restart discovery, install a runtime or close a phase
 | 16 | 5 | - | - |
 | 13 | 2 | - | - |
 | 17 | 6 | - | - |
+| 18 | 16 | - | - |
 
 **Recent Trend:**
 
@@ -218,7 +219,7 @@ Detail, by phase: Phase 3 covers RT-01, RT-02, RT-03, RT-09, and the live parts 
 ## Session Continuity
 
 Last session: 2026-11-08T16:41:15.821Z
-Stopped at: Phase 17 complete, ready to execute Phase 18
+Stopped at: Phase 18 complete, ready to execute Phase 19
 Resume file: None
 
 Recorded commits (closure run): 72817e9 (private flag restored, engines >=22.13.0); 390f511 (causeCode and catalogue codes, host paths, lifecycle bound, root identity, exec margin); b6bc892 (daemon entry, AgentOS fail-closed, catalogue refusals, per-method control bounds); 8088159 (daemon owns sessions; tool method; daemon client; Omp and MCP attach); 4b1d4ab (smoke fixes: CLI probe, up and down exits, state-dir 0700); c55056a (traceability: requirements by evidence, spike facts, runtime config, Omp attach contract); a999c17 (audit gap closure: realm acp, refusal code mapping, one state-dir resolver, Omp status, pinned-root rebind, catch-site fixes, daemon server-failure stop); dd02034 (re-audit, planning, and docs); 54bc236 (MCP tool-call diagnostic); plus the decisions commit (see git log).
