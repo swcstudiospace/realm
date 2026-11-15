@@ -15,9 +15,9 @@
 //   6. A rootless Podman API socket under XDG_RUNTIME_DIR.
 //   7. The openshell CLI on PATH.
 //   8. The built CLI at dist/src/cli/main.js, next to the compiled tests (npm run build).
-// A default npm test therefore skips every scenario below (fourteen in all: default policy, immediate cycle, egress allowlist, wrong
+// A default npm test therefore skips every scenario below (fifteen in all: default policy, immediate cycle, egress allowlist, wrong
 // image digest, crash recovery, MCP exec, the MCP exec timeout, the AgentOS runner exit, the daemon-side startup budget, a stopped gateway,
-// two projects, a verifier-failed stand-in, a scratch file and a snapshot round trip) and reports each as skipped.
+// two projects, a verifier-failed stand-in, a scratch file, a snapshot round trip and a stopped checkpoint round trip) and reports each as skipped.
 //
 // Preconditions the suite cannot check and the operator must provide:
 //   - The gateway and the compute driver run under the realm account with the same image and roots the variables above name.
@@ -40,7 +40,7 @@
 // Nothing here prints a secret. Failure messages carry exit codes, error codes, names and clipped probe output.
 
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { test, type TestContext } from "node:test";
 import { tmpdir } from "node:os";
@@ -49,7 +49,7 @@ import assert from "node:assert/strict";
 import { DEFAULT_AGENTOS_PROBE_PATH } from "../../src/runtime/agentos-driver.js";
 import { OPENSHELL_MANAGED_LABEL_KEY, OPENSHELL_MANAGED_LABEL_VALUE, OPENSHELL_SANDBOX_NAME_LABEL_KEY, SANDBOX_WORKSPACE_PATH } from "../../src/runtime/openshell.js";
 import { HARDENING_PROFILE, scratchVolumeNameOf } from "../../src/runtime/hardening.js";
-import { recordFileName, sandboxNameOfSession, sessionIdOfWorkspace, sessionsDirOf } from "../../src/session/paths.js";
+import { checkpointDirOf, recordFileName, sandboxNameOfSession, sessionIdOfWorkspace, sessionsDirOf } from "../../src/session/paths.js";
 import { workspaceRegistryDirOf } from "../../src/session/workspace-registry.js";
 import {
   KILL_RUNNER_ARGV,
@@ -1269,6 +1269,7 @@ void test("production live 13: a checkpoint restores the workspace byte for byte
     rmSync(join(scenario.environment.stateDir, "checkpoints", sessionIdFor(workspace), SNAPSHOT_ID), { recursive: true, force: true });
   });
   await assertActive(scenario);
+  const rootBefore = statSync(workspace);
   writeFileSync(join(workspace, SNAPSHOT_KEEP), "before the snapshot");
   writeFileSync(join(workspace, SNAPSHOT_DELETE), "deleted after the snapshot");
 
@@ -1287,6 +1288,11 @@ void test("production live 13: a checkpoint restores the workspace byte for byte
   assert.equal(readFileSync(join(workspace, SNAPSHOT_KEEP), "utf8"), "before the snapshot", "the overwritten file must be restored");
   assert.equal(readFileSync(join(workspace, SNAPSHOT_DELETE), "utf8"), "deleted after the snapshot", "the removed file must be restored");
   assert.equal(existsSync(join(workspace, SNAPSHOT_EXTRA)), false, "the file added after the snapshot must be removed");
+  // The restore keeps the workspace root's device and inode, and the restored file lives on that device.
+  const rootAfter = statSync(workspace);
+  assert.equal(rootAfter.dev, rootBefore.dev, "the workspace root must stay on its device");
+  assert.equal(rootAfter.ino, rootBefore.ino, "the workspace root must keep its inode");
+  assert.equal(statSync(join(workspace, SNAPSHOT_KEEP)).dev, rootBefore.dev, "the restored file must be on the root's device");
 
   // The restored workspace is what the sandbox sees when it starts again.
   await assertActive(scenario);
@@ -1294,4 +1300,73 @@ void test("production live 13: a checkpoint restores the workspace byte for byte
   assertExit(seen, 0, "reading the restored file from the sandbox");
   assert.equal(seen.stdout, "before the snapshot", "the sandbox must see the restored file");
   await assertDownAndClean(scenario, [SNAPSHOT_KEEP, SNAPSHOT_DELETE, SNAPSHOT_EXTRA]);
+});
+
+// ---- Scenario 19b: a stopped project checkpoints and restores with no registration ----------------------------------------------
+
+const ROUNDTRIP_ID = "roundtrip-one";
+const ROUNDTRIP_BINARY = "roundtrip-binary.bin";
+const ROUNDTRIP_NESTED_DIR = "roundtrip-nested";
+const ROUNDTRIP_NESTED_FILE = `${ROUNDTRIP_NESTED_DIR}/inner.txt`;
+const ROUNDTRIP_DELETE = "roundtrip-delete.txt";
+const ROUNDTRIP_EXTRA = "roundtrip-extra.txt";
+const ROUNDTRIP_BINARY_MODE = 0o751;
+
+void test("production live 19 checkpoint-roundtrip", { skip: gate, timeout: SCENARIO_TIMEOUT_MS }, async (t) => {
+  const scenario = startScenario(t, { image: inputs().image }, [ROUNDTRIP_BINARY, ROUNDTRIP_DELETE, ROUNDTRIP_EXTRA]);
+  const workspace = scenario.inputs.workspaceRoot;
+  const sessionId = sessionIdFor(workspace);
+  const registryEntry = join(workspaceRegistryDirOf(scenario.environment.stateDir), `${sessionId}.json`);
+  // The checkpoint lives in the shared host state root, so it is removed here whatever happens, and the next run can take the same id.
+  t.after(() => {
+    rmSync(checkpointDirOf(scenario.environment.stateDir, sessionId, ROUNDTRIP_ID), { recursive: true, force: true });
+  });
+  const binary = Buffer.from(Array.from({ length: 1024 }, (_, index) => (index * 7) % 256));
+
+  // The project is up first, so a registry entry exists; down must remove it, and the checkpoint then runs with none.
+  await assertActive(scenario);
+  assert.equal(existsSync(registryEntry), true, "realm up must hold a registry entry for the project");
+  writeFileSync(join(workspace, ROUNDTRIP_BINARY), binary);
+  chmodSync(join(workspace, ROUNDTRIP_BINARY), ROUNDTRIP_BINARY_MODE);
+  mkdirSync(join(workspace, ROUNDTRIP_NESTED_DIR));
+  writeFileSync(join(workspace, ROUNDTRIP_NESTED_FILE), "nested before the checkpoint");
+  writeFileSync(join(workspace, ROUNDTRIP_DELETE), "deleted after the checkpoint");
+  const rootBefore = statSync(workspace);
+
+  try {
+    assertExit(await down(scenario), 0, "realm down before the checkpoint");
+    assert.equal(existsSync(registryEntry), false, "a stopped project must hold no registry entry");
+
+    const created = await realmCli(scenario.inputs, scenario.environment, ["checkpoint", "create", "--workspace", workspace, "--id", ROUNDTRIP_ID], STATUS_TIMEOUT_MS);
+    assertExit(created, 0, "realm checkpoint create on the stopped project");
+    assert.equal(existsSync(registryEntry), false, "the checkpoint must register nothing");
+
+    // Changes after the checkpoint: the binary is rewritten with a new mode, the nested file changes, one file is deleted and one added.
+    writeFileSync(join(workspace, ROUNDTRIP_BINARY), "changed after the checkpoint");
+    chmodSync(join(workspace, ROUNDTRIP_BINARY), 0o600);
+    writeFileSync(join(workspace, ROUNDTRIP_NESTED_FILE), "nested changed after the checkpoint");
+    rmSync(join(workspace, ROUNDTRIP_DELETE), { force: true });
+    writeFileSync(join(workspace, ROUNDTRIP_EXTRA), "added after the checkpoint");
+
+    const restored = await realmCli(scenario.inputs, scenario.environment, ["checkpoint", "restore", "--workspace", workspace, "--id", ROUNDTRIP_ID], STATUS_TIMEOUT_MS);
+    assertExit(restored, 0, "realm checkpoint restore on the stopped project");
+    assert.deepEqual(readFileSync(join(workspace, ROUNDTRIP_BINARY)), binary, "the binary must return byte for byte");
+    assert.equal((statSync(join(workspace, ROUNDTRIP_BINARY)).mode & 0o7777).toString(8), ROUNDTRIP_BINARY_MODE.toString(8), "the binary's mode must return");
+    assert.equal(readFileSync(join(workspace, ROUNDTRIP_NESTED_FILE), "utf8"), "nested before the checkpoint", "the nested file must return");
+    assert.equal(readFileSync(join(workspace, ROUNDTRIP_DELETE), "utf8"), "deleted after the checkpoint", "the deleted file must return");
+    assert.equal(existsSync(join(workspace, ROUNDTRIP_EXTRA)), false, "the file added after the checkpoint must be removed");
+    // The restore keeps the workspace root's device and inode, and the restored file lives on that device.
+    const rootAfter = statSync(workspace);
+    assert.equal(rootAfter.dev, rootBefore.dev, "the workspace root must stay on its device");
+    assert.equal(rootAfter.ino, rootBefore.ino, "the workspace root must keep its inode");
+    assert.equal(statSync(join(workspace, ROUNDTRIP_NESTED_FILE)).dev, rootBefore.dev, "the restored nested file must be on the root's device");
+    assert.equal(existsSync(registryEntry), false, "the restore must register nothing");
+  } finally {
+    for (const name of [ROUNDTRIP_BINARY, ROUNDTRIP_DELETE, ROUNDTRIP_EXTRA]) {
+      rmSync(join(workspace, name), { force: true });
+    }
+    rmSync(join(workspace, ROUNDTRIP_NESTED_DIR), { recursive: true, force: true });
+  }
+  const outcome = await waitForNoResidue(scenario.inputs, [sandboxOf(scenario)]);
+  assert.ok(outcome.ok, `residue after the stopped checkpoint round trip: ${outcome.detail}`);
 });
