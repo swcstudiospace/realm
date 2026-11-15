@@ -8,6 +8,7 @@ import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { makeRealmError, RealmError } from "../../core/errors.js";
 import { withTimeout } from "../../core/timeout.js";
+import { logSupervisorExited, logSupervisorSpawned, logSupervisorSpawnFailed } from "./refusal.js";
 import { supervisorArguments, supervisorEnvironment } from "./runtime-channel.js";
 
 // How long a supervisor gets to exit after SIGTERM before it is killed.
@@ -27,6 +28,8 @@ export interface SupervisorSpawn {
   // the file. It does not protect against a writer with the same uid: the file is hashed by path and spawned by path, so a swap
   // between the hash and the spawn is not detected.
   readonly expectedSha256?: string;
+  // The sandbox the supervisor serves. Its log lines name it, and they name none when it is absent.
+  readonly sandboxName?: string;
 }
 
 // A started supervisor. stop ends it: SIGTERM, then SIGKILL after a bounded wait. Stopping an exited supervisor does nothing.
@@ -64,7 +67,9 @@ export function spawnSupervisor(options: SupervisorSpawn): Promise<SupervisorHan
       try {
         assertSha256OfFile(options.binary, options.expectedSha256);
       } catch (error: unknown) {
-        reject(error instanceof RealmError ? error : makeRealmError("SCHEMA_INVALID"));
+        const failure = error instanceof RealmError ? error : makeRealmError("SCHEMA_INVALID");
+        logSupervisorSpawnFailed(options.sandboxName, failure.code);
+        reject(failure);
         return;
       }
     }
@@ -76,15 +81,24 @@ export function spawnSupervisor(options: SupervisorSpawn): Promise<SupervisorHan
     });
     let exitedNow = false;
     const exited = new Promise<void>((resolveExit) => {
-      child.once("exit", () => {
+      child.once("exit", (code, signal) => {
         exitedNow = true;
+        logSupervisorExited(options.sandboxName, child.pid, code, signal);
         resolveExit();
       });
     });
+    let spawnedNow = false;
     child.on("error", () => {
-      reject(makeRealmError("OPENSHELL_START_FAILED"));
+      const failure = makeRealmError("OPENSHELL_START_FAILED");
+      // An error after the spawn leaves the start resolved, so it is not a spawn failure and is not logged as one.
+      if (!spawnedNow) {
+        logSupervisorSpawnFailed(options.sandboxName, failure.code);
+      }
+      reject(failure);
     });
     child.once("spawn", () => {
+      spawnedNow = true;
+      logSupervisorSpawned(options.sandboxName, child.pid);
       resolve({
         exited,
         hasExited: () => exitedNow,
@@ -119,6 +133,7 @@ export function launchSandboxSupervisor(
 ): Promise<SupervisorHandle> {
   return runtime.spawnSupervisor({
     binary: launch.binary,
+    sandboxName: launch.sandboxName,
     args: supervisorArguments({
       sandboxId: launch.sandboxId,
       sandboxName: launch.sandboxName,
