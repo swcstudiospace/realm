@@ -378,7 +378,7 @@ class SshAtSpawnRuntime extends FakeRuntime {
     super();
     this.sshDir = sshDir;
   }
-  spawnSupervisor(options: SupervisorSpawn): Promise<SupervisorHandle> {
+  override spawnSupervisor(options: SupervisorSpawn): Promise<SupervisorHandle> {
     this.sshDirAtSpawn.push(existsSync(this.sshDir));
     return super.spawnSupervisor(options);
   }
