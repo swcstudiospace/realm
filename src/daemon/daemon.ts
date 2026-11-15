@@ -239,7 +239,8 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
     recordedIds: () => store.list(),
   });
   const registry = new SessionRegistry();
-  // The correlation id of the up that last admitted each session. The audit lines of its tool calls name it.
+  // The correlation id of the up that last reached the create of each session. Its tool calls and its lifecycle transitions
+  // name it; the transitions of a create fire before the create settles, so the id is set before create runs.
   const upIds = new Map<string, string>();
   const buildHandle = options.buildHandle ?? buildDaemonHandle;
   // The options every session's handle is built from. The runtime input and the session id are per session.
@@ -336,6 +337,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
       logger,
       isStopping: () => downRequested,
       onProbeFailure: options.onHealthProbeFailure,
+      upIdOf: (sessionId) => upIds.get(sessionId),
     });
     return { sessionId, pinned, handle, health };
   };
@@ -418,6 +420,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
     }
     const wasLive = isLiveState(current.handle.controller.snapshot().state);
     let snapshot: StateSnapshot;
+    upIds.set(sessionId, correlationId);
     try {
       snapshot = await current.handle.controller.create(pinned.realPath);
     } catch (error: unknown) {
@@ -428,7 +431,6 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
     if (snapshot.state === "error" && snapshot.reason !== "REALM_STOPPING") {
       settleFailedCreate(ledger, registry, stateDir, sessionId, current.handle, fresh);
     }
-    upIds.set(sessionId, correlationId);
     if (!wasLive && snapshot.state !== "error") {
       options.onAuditHead?.(sessionId);
     }
@@ -687,8 +689,10 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
     }
   };
 
-  // A line that names no known method is refused without its text: the method is client text, so the log says "unrecognized".
+  // A line that names no known method, or does not decode as a request, is refused without its text: the method is client text,
+  // so the log says "unrecognized". Each such line is still one request, so it gets one control.request debug line (OBS-02).
   const refuseUnrecognized = (reply: ControlReply | null): ControlReply | null => {
+    logger.debug("control.request", { method: "unrecognized" });
     const refused = reply?.error;
     if (refused !== undefined) {
       logger.warn("control.refused", { method: "unrecognized", code: refused.code });

@@ -1372,6 +1372,12 @@ void test("OBS-02: lifecycle.transition logs from and to for each state change, 
     assert.equal("reason" in row, false, "the free-text reason is never logged");
     assert.equal("code" in row, false, "a transition whose reason is not a catalogue code carries no code");
   }
+  // The transitions the up's create fires run before the create settles; each names the up through upId.
+  const upEnd = logRowsOf(lines).find((row) => row["event"] === "up.end");
+  assert.match(String(upEnd?.["upId"]), /^[A-Za-z0-9_-]{1,64}$/);
+  for (const row of transitions) {
+    assert.equal(row["upId"], upEnd?.["upId"], "each transition of the up names it with upId");
+  }
   const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down", params: selectedBy(fixture.ws) });
   assert.ok(down.result !== undefined);
   await awaitDone(daemon);
@@ -1431,6 +1437,8 @@ void test("OBS-02: an unknown control method is refused as a warn with method un
   assert.ok(code !== undefined, "an unknown method is refused");
   const warned = logRowsOf(lines).filter((row) => row["event"] === "control.refused");
   assert.deepEqual(warned.map((row) => [row["method"], row["level"], row["code"]]), [["unrecognized", "warn", code]]);
+  const requested = logRowsOf(lines).filter((row) => row["event"] === "control.request");
+  assert.deepEqual(requested.map((row) => [row["method"], row["level"]]), [["unrecognized", "debug"]], "the unknown request is one control.request");
   assert.equal(lines.some((line) => line.includes("METHOD-MARKER")), false, "an unknown method name is never logged");
   const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down", params: selectedBy(fixture.ws) });
   assert.ok(down.result !== undefined);
