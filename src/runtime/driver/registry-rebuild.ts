@@ -17,7 +17,7 @@ import { addCleanupNote, SUPERVISOR_NOT_STOPPED } from "./compute-driver-state.j
 import { decodeLaunchAuthentication } from "./isolation/launch.js";
 import type { DriverLifecycle } from "./lifecycle.js";
 import { refusalScope } from "./refusal.js";
-import { LAUNCH_FILE_NAME, secretDirOf } from "./secret-store.js";
+import { LAUNCH_FILE_NAME, removeSecretEntries, SSH_DIR_NAME, secretDirOf } from "./secret-store.js";
 import { launchSandboxSupervisor, type SupervisorHandle } from "./supervisor.js";
 
 // One sandbox the adoption kept: its gateway name and its container id.
@@ -89,6 +89,10 @@ async function respawnSupervisor(
   if (!authentication.supervisor.hasSshHostPrivateKey) {
     throw makeRealmError("SCHEMA_INVALID");
   }
+  // The supervisor of the previous generation created the sandbox's ssh directory and the socket in it, and it exited with that driver.
+  // Nothing removes them while the sandbox is kept, so the directory is removed before the new supervisor starts, as create starts from a
+  // secret directory that holds none.
+  removeSecretEntries(secretDir, [join(secretDir, SSH_DIR_NAME)]);
   const supervisor = await launchSandboxSupervisor(deps.runtime, {
     binary: config.supervisor.binary,
     gatewayEndpoint: config.supervisor.gatewayEndpoint,
