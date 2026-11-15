@@ -748,7 +748,7 @@ void test("production live 5c: the scratch volume is the exact named volume at /
   const [namedVolume] = JSON.parse(inspectedVolume.stdout) as readonly { readonly Name?: string; readonly Labels?: Readonly<Record<string, string>> }[];
   assert.equal(namedVolume?.Name, volume, "the inspected volume must carry the exact name");
   for (const [key, value] of Object.entries(scratchVolumeLabelsOf(sessionId))) {
-    assert.equal(namedVolume?.Labels?.[key], value, `the scratch volume must carry the label ${key}=${value}`);
+    assert.equal(namedVolume.Labels?.[key], value, `the scratch volume must carry the label ${key}=${value}`);
   }
 
   assertExit(await exec(scenario, ["sh", "-c", `printf '%s' '${SCRATCH_5C_TEXT}' > ${scratchFile}`]), 0, "writing the scratch marker");
