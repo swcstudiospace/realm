@@ -2,20 +2,20 @@
 gsd_state_version: "1.0"
 milestone: v3.0
 milestone_name: Containment by Default
-current_phase: 13
-current_phase_name: Quality ratchet
+current_phase: 17
+current_phase_name: Observability and tamper-evident audit
 status: executing
-stopped_at: Phase 16 complete, ready to execute Phase 13
-last_updated: "2026-11-15T00:03:48.376Z"
+stopped_at: Phase 13 complete, ready to execute Phase 17
+last_updated: "2026-11-15T00:18:26.351Z"
 last_activity: 2026-11-15
-last_activity_desc: Phase 16 complete, transitioned to Phase 13
-state_head: d5e587ab55bfa509d794a4e81ef49189f17b3a93
+last_activity_desc: Phase 13 complete, transitioned to Phase 17
+state_head: aa6fb89bd2a3856eea475db83e0d6b5bcc601656
 progress:
   total_phases: 9
-  completed_phases: 22
+  completed_phases: 23
   total_plans: 47
-  completed_plans: 23
-  percent: 81
+  completed_plans: 24
+  percent: 85
 ---
 
 # Project State
@@ -29,10 +29,10 @@ See: .planning/PROJECT.md (updated 2026-10-29)
 
 ## Current Position
 
-Phase: 13 — Quality ratchet
+Phase: 17 — Observability and tamper-evident audit
 Plan: Not started
 Status: Ready to execute
-Last activity: 2026-11-15 — Phase 16 complete, transitioned to Phase 13
+Last activity: 2026-11-15 — Phase 13 complete, transitioned to Phase 17
 
 ## Current Recovery Boundaries
 
@@ -58,7 +58,7 @@ not a fresh instruction to restart discovery, install a runtime or close a phase
 
 **Velocity:**
 
-- Total plans completed: 27
+- Total plans completed: 29
 - Average duration: N/A
 - Total execution time: 0 hours
 
@@ -70,6 +70,7 @@ not a fresh instruction to restart discovery, install a runtime or close a phase
 | 14 | 2 | - | - |
 | 12 | 3 | - | - |
 | 16 | 5 | - | - |
+| 13 | 2 | - | - |
 
 **Recent Trend:**
 
@@ -216,7 +217,7 @@ Detail, by phase: Phase 3 covers RT-01, RT-02, RT-03, RT-09, and the live parts 
 ## Session Continuity
 
 Last session: 2026-11-08T16:41:15.821Z
-Stopped at: Phase 16 complete, ready to execute Phase 13
+Stopped at: Phase 13 complete, ready to execute Phase 17
 Resume file: None
 
 Recorded commits (closure run): 72817e9 (private flag restored, engines >=22.13.0); 390f511 (causeCode and catalogue codes, host paths, lifecycle bound, root identity, exec margin); b6bc892 (daemon entry, AgentOS fail-closed, catalogue refusals, per-method control bounds); 8088159 (daemon owns sessions; tool method; daemon client; Omp and MCP attach); 4b1d4ab (smoke fixes: CLI probe, up and down exits, state-dir 0700); c55056a (traceability: requirements by evidence, spike facts, runtime config, Omp attach contract); a999c17 (audit gap closure: realm acp, refusal code mapping, one state-dir resolver, Omp status, pinned-root rebind, catch-site fixes, daemon server-failure stop); dd02034 (re-audit, planning, and docs); 54bc236 (MCP tool-call diagnostic); plus the decisions commit (see git log).
