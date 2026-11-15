@@ -4,9 +4,9 @@
 // between the scan before the copy and the scan after it, so a host writer that changes and reverts a file during the
 // copy is seen. The stamps are never stored: restored files get new inodes.
 //
-// The workspace is identified by the session's registry entry (workspace-registry.ts) when the session is bound, and by
-// its pin (workspace-pin.ts) when it is unbound. Its directory is verified against that identity before the copy, after
-// it, and before any move. An entry means bound. No entry with a pin means unbound and stopped. Neither means REALM_UNBOUND.
+// The workspace is identified by the session's registry entry (workspace-registry.ts). The entry is the scope's, and the
+// caller supplies it: a registered project's stored entry, or for a project stopped with realm down, an entry pinned in
+// memory by the CLI. Its directory is verified against that identity before the copy, after it, and before any move.
 //
 // Cross-process lock. Every public operation takes the session lock first (checkpoint-lock.ts): a file, `.lock`, in the
 // session's checkpoint directory. It is published whole, so it is never seen empty. Its content records the owner: pid,
@@ -61,7 +61,6 @@ import { errnoOf, verifyDescriptor } from "../fs/canonicalize.js";
 import { isInsideRoot, type PinnedRoot, verifyPinnedAt } from "../fs/root.js";
 import { acquireSessionLock, releaseSessionLock } from "./checkpoint-lock.js";
 import { checkpointDirOf, checkpointSessionDirOf, checkpointsDirOf } from "./paths.js";
-import { readWorkspacePin, verifyWorkspacePin } from "./workspace-pin.js";
 import { verifyWorkspaceEntry, type WorkspaceEntry } from "./workspace-registry.js";
 
 // Each copy, scan and move runs under this bound. A workspace tree can be large, so a copy of it on a loaded disk can
@@ -107,20 +106,13 @@ export interface CheckpointResult {
 // move, and again after the copy or restore. A predicate that throws leaves the state unknown, so the operation is refused.
 export type SandboxRunning = (sessionId: string) => boolean | Promise<boolean>;
 
-// The workspace an operation runs against. A bound session names its registry entry, which verifies the directory, and
-// its sandbox is asked. An unbound session names no entry: its pin, under the session id, verifies the directory, and
-// its sandbox is stopped, so the sandbox is never asked.
-export type CheckpointScope =
-  | {
-      readonly entry: WorkspaceEntry;
-      readonly stateRoot: string;
-      readonly sandboxRunning: SandboxRunning;
-    }
-  | {
-      readonly entry: null;
-      readonly sessionId: string;
-      readonly stateRoot: string;
-    };
+// The workspace an operation runs against. Its registry entry verifies the directory before the copy, after it, and before
+// any move. The session id comes from the entry, and the sandbox predicate is asked before every copy and move.
+export interface CheckpointScope {
+  readonly entry: WorkspaceEntry;
+  readonly stateRoot: string;
+  readonly sandboxRunning: SandboxRunning;
+}
 
 export type SnapshotRequest = CheckpointScope & {
   readonly checkpointId: string;
@@ -187,8 +179,7 @@ export async function restoreWorkspace(request: RestoreRequest): Promise<Checkpo
   }
 }
 
-// The workspace an operation runs against, resolved once from its scope. The sandbox predicate is the scope's when the
-// session is bound, and the stopped predicate when it is not.
+// The workspace an operation runs against, resolved once from its scope's entry.
 interface Workspace {
   readonly sessionId: string;
   readonly workspaceRoot: string;
@@ -196,27 +187,12 @@ interface Workspace {
   readonly sandboxRunning: SandboxRunning;
 }
 
-// The one resolver for both states. A registry entry means bound: the directory is verified against the entry and the
-// sandbox is asked. No entry but a pin means unbound: the directory is verified against the pin, and the sandbox counts as
-// stopped. No entry and no pin means the session was never bound, so the operation is refused before anything is written.
 function resolveWorkspace(scope: CheckpointScope): Workspace {
-  if (scope.entry !== null) {
-    return {
-      sessionId: scope.entry.sessionId,
-      workspaceRoot: scope.entry.workspaceRoot,
-      pinned: verifyWorkspaceEntry(scope.entry),
-      sandboxRunning: scope.sandboxRunning,
-    };
-  }
-  const pin = readWorkspacePin(scope.stateRoot, scope.sessionId);
-  if (pin === null) {
-    throw makeRealmError("REALM_UNBOUND");
-  }
   return {
-    sessionId: pin.sessionId,
-    workspaceRoot: pin.workspaceRoot,
-    pinned: verifyWorkspacePin(pin),
-    sandboxRunning: () => false,
+    sessionId: scope.entry.sessionId,
+    workspaceRoot: scope.entry.workspaceRoot,
+    pinned: verifyWorkspaceEntry(scope.entry),
+    sandboxRunning: scope.sandboxRunning,
   };
 }
 

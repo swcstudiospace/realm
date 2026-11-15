@@ -5,10 +5,23 @@
 // any config is read or any file is touched, so a usage error changes nothing. Every refusal is a catalogue code on
 // stdout with its reason on stderr, the convention of the other subcommands.
 //
-// The library's sandboxRunning predicate is the daemon's status call for the session, and only a bound session has one.
-// Any state other than unbound counts as running, so a state the CLI does not recognise is refused rather than assumed
-// stopped. A daemon that cannot answer refuses with REALM_NOT_ACTIVE before anything is written. An unbound session (no
-// registry entry) makes no daemon call: the library checks its pin, and its sandbox counts as stopped.
+// The project's entry is the trust anchor the library pins the workspace against. A registered project uses its
+// registry entry unchanged. A project stopped with realm down has no entry and usually no daemon, so the command pins
+// the workspace itself, in memory, by the rules realm up applies to an unknown project (pinStoppedProject: the policy
+// workspaceRoots, the configured workspace root, the id check). The library takes the entry inside its request and
+// verifies it against the directory before every copy and move, so the in-memory entry is the whole mechanism: the
+// command writes no workspaces/<id>.json and removes none, and a crash leaves nothing behind.
+//
+// The library's sandboxRunning predicate proves the sandbox is stopped, in full on every call, in this order:
+//   1. the daemon answers: state unbound is stopped, any other state is running. Any state the CLI does not recognise
+//      is refused rather than assumed stopped;
+//   2. there is no daemon (the control socket is absent or refuses the connection, DaemonAbsentError) and the entry was
+//      pinned in memory: Podman holds neither a container named for the session nor one with its sandbox-name label.
+//      A container in any state, an unresolvable or unreachable Podman, a failed or overlong call, or a listing that is
+//      not empty or not well formed all leave the proof unfinished and refuse;
+//   3. every other failure (a daemon that did not answer in time, an error or malformed reply, a connection dropped
+//      mid-reply), and no daemon for a registered project, refuse with REALM_NOT_ACTIVE without consulting Podman.
+// A daemon that exists but did not answer is never "no daemon": it may be running a sandbox.
 //
 // A sandbox start holds the session's checkpoint lock (src/lifecycle/controller.ts create and hydrate), so a checkpoint
 // refused by a live start gets LOCK_CONFLICT, and a start refused by a checkpoint gets REALM_NOT_ACTIVE. A restore that
@@ -17,12 +30,18 @@
 //
 // A cleanup that fails after the commit is one `warning:` line on stderr; the exit code stays 0.
 
+import type { Policy } from "../contract/validate.js";
 import { ERROR_CATALOGUE, makeRealmError, RealmError, type ErrorCode } from "../core/errors.js";
-import type { ControlSelection } from "../daemon/channel.js";
+import { loadPolicyFile } from "../core/policy.js";
+import { withTimeout } from "../core/timeout.js";
+import { DaemonAbsentError, type ControlSelection } from "../daemon/channel.js";
 import { connectDaemon, selectionOf, type DaemonClient, type DaemonStatus } from "../daemon/client.js";
-import { loadRuntimeConfig } from "../runtime/config.js";
+import { bindRoot, bindWorkspaceUnderPolicy, isInsideRoot, type PinnedRoot } from "../fs/root.js";
+import { loadRuntimeConfig, type RuntimeConfig } from "../runtime/config.js";
 import { readRuntimeConfigFile } from "../runtime/config-file.js";
-import { resolveConfigPath } from "../runtime/host-paths.js";
+import { defaultPolicyPath, podmanSocketPath, resolveConfigPath } from "../runtime/host-paths.js";
+import { LibpodClient, type LibpodContainerSummary } from "../runtime/libpod-client.js";
+import { OPENSHELL_SANDBOX_NAME_LABEL_KEY, realmSandboxName } from "../runtime/openshell.js";
 import {
   restoreWorkspace,
   snapshotWorkspace,
@@ -31,11 +50,14 @@ import {
   type SandboxRunning,
 } from "../session/checkpoint.js";
 import { controlSocketPath, isSessionId, type EnvironmentLike } from "../session/paths.js";
-import { readWorkspaceEntry, type WorkspaceEntry } from "../session/workspace-registry.js";
+import { readWorkspaceEntry, workspaceEntryOf, type WorkspaceEntry } from "../session/workspace-registry.js";
 import type { CliResult } from "./main.js";
 
 export const CHECKPOINT_USAGE =
   "realm checkpoint: usage: realm checkpoint create|restore --workspace <absolute path> --id <checkpointId>";
+
+// The bound on one Podman call of the stopped-sandbox proof, in milliseconds.
+export const PODMAN_PROOF_TIMEOUT_MS = 10_000;
 
 // The seams the command reads. CliDeps satisfies this shape, so the entry edge passes its own deps through.
 export interface CheckpointDeps {
@@ -44,6 +66,12 @@ export interface CheckpointDeps {
   readonly readConfig?: (path: string) => unknown;
   // Dials the control socket for the status call (default connectDaemon).
   readonly connect?: (socketPath: string, selection: ControlSelection) => DaemonClient;
+  // Loads the policy file a project that has no registry entry is bound under (default loadPolicyFile).
+  readonly readPolicy?: (path: string) => Policy;
+  // The libpod inspect of the named container; resolves null for an absent one (default: the host Podman socket).
+  readonly inspectContainer?: (containerName: string) => Promise<unknown>;
+  // The filtered libpod listing, including stopped containers (default: the host Podman socket).
+  readonly listContainersByLabel?: LibpodClient["listContainersByLabel"];
 }
 
 interface CheckpointArgs {
@@ -98,15 +126,43 @@ function refusal(error: unknown): CliResult {
   return { exitCode: 1, stdout: `${code}\n`, stderr: `${ERROR_CATALOGUE[code].reason}\n` };
 }
 
-// The state directory from the runtime config, through the loader the status path uses. Absent or invalid config yields
-// the loader's catalogue code, so the command refuses with usage (exit 2) and prints that code.
-function stateDirOf(deps: CheckpointDeps): { readonly stateDir: string } | { readonly code: ErrorCode } {
+// The runtime config, through the loader the status path uses. Absent or invalid config yields the loader's catalogue
+// code, so the command refuses with usage (exit 2) and prints that code.
+function configOf(deps: CheckpointDeps): { readonly config: RuntimeConfig } | { readonly code: ErrorCode } {
   try {
-    const config = loadRuntimeConfig((deps.readConfig ?? readRuntimeConfigFile)(resolveConfigPath(deps.env)));
-    return { stateDir: config.stateDir };
+    return { config: loadRuntimeConfig((deps.readConfig ?? readRuntimeConfigFile)(resolveConfigPath(deps.env))) };
   } catch (error) {
     return { code: error instanceof RealmError ? error.code : "SCHEMA_INVALID" };
   }
+}
+
+// The entry for a project that has no registry entry, built in memory and written nowhere. It applies the rules realm up
+// applies to an unknown project (resolveSelection in src/daemon/sessions.ts) with the same functions: the path must bind
+// under the policy workspaceRoots and lie inside the configured workspace root (POLICY_DENIED), and the id must be the
+// one the bound path derives (SCHEMA_INVALID).
+export function pinStoppedProject(selection: ControlSelection, policy: Policy, ceiling: PinnedRoot): WorkspaceEntry {
+  const pinned = bindWorkspaceUnderPolicy(policy.workspaceRoots, selection.workspaceRoot);
+  if (!isInsideRoot(ceiling, pinned.realPath)) {
+    throw makeRealmError("POLICY_DENIED");
+  }
+  return workspaceEntryOf(pinned, selection.sessionId);
+}
+
+// The libpod calls through the host Podman socket. An unresolvable socket rejects, so the proof stays unfinished.
+async function inspectThroughPodman(env: EnvironmentLike, containerName: string): Promise<unknown> {
+  const socketPath = podmanSocketPath(env);
+  if (socketPath === undefined) {
+    throw makeRealmError("REALM_NOT_ACTIVE");
+  }
+  return new LibpodClient(socketPath).inspectContainer(containerName);
+}
+
+async function listThroughPodman(env: EnvironmentLike, key: string, value: string): Promise<LibpodContainerSummary[]> {
+  const socketPath = podmanSocketPath(env);
+  if (socketPath === undefined) {
+    throw makeRealmError("REALM_NOT_ACTIVE");
+  }
+  return new LibpodClient(socketPath).listContainersByLabel(key, value);
 }
 
 export async function runCheckpointCommand(words: readonly string[], deps: CheckpointDeps): Promise<CliResult> {
@@ -114,15 +170,16 @@ export async function runCheckpointCommand(words: readonly string[], deps: Check
   if (args === undefined) {
     return { exitCode: 2, stdout: "", stderr: `${CHECKPOINT_USAGE}\n` };
   }
-  const resolved = stateDirOf(deps);
-  if (!("stateDir" in resolved)) {
+  const resolved = configOf(deps);
+  if (!("config" in resolved)) {
     return {
       exitCode: 2,
       stdout: "",
       stderr: `realm checkpoint: cannot resolve a state directory (the realm config file under an absolute XDG_CONFIG_HOME or HOME must be present and valid) (${resolved.code})\n`,
     };
   }
-  const stateRoot = resolved.stateDir;
+  const { config } = resolved;
+  const stateRoot = config.stateDir;
   // The same selection realm status --workspace makes: the canonical root and the session it maps to.
   let selection: ControlSelection;
   try {
@@ -130,21 +187,21 @@ export async function runCheckpointCommand(words: readonly string[], deps: Check
   } catch (error) {
     return refusal(error);
   }
-  // The registry entry decides whether the session is bound. An entry means bound: the daemon answers the sandbox state,
-  // as before. No entry means unbound: the library resolves the pin, with no daemon call. No entry and no pin is
-  // REALM_UNBOUND, which the library refuses before it writes anything.
-  let entry: WorkspaceEntry | null;
+  // A registered project uses its entry as it is. An unregistered one (the usual state after realm down) is pinned in
+  // memory under the policy and the workspace root, before the daemon is touched; nothing is written either way.
+  let entry: WorkspaceEntry;
+  let pinnedInMemory = false;
   try {
-    entry = readWorkspaceEntry(stateRoot, selection.sessionId);
+    const registered = readWorkspaceEntry(stateRoot, selection.sessionId);
+    if (registered === null) {
+      const policy = (deps.readPolicy ?? loadPolicyFile)(defaultPolicyPath(stateRoot));
+      entry = pinStoppedProject(selection, policy, bindRoot(config.workspaceRoot));
+      pinnedInMemory = true;
+    } else {
+      entry = registered;
+    }
   } catch (error) {
     return refusal(error);
-  }
-  if (entry === null) {
-    try {
-      return await runLibrary(args, { entry: null, sessionId: selection.sessionId, stateRoot });
-    } catch (error) {
-      return refusal(error);
-    }
   }
   let client: DaemonClient;
   try {
@@ -152,36 +209,88 @@ export async function runCheckpointCommand(words: readonly string[], deps: Check
   } catch {
     return refusal(makeRealmError("REALM_NOT_ACTIVE"));
   }
-  return runAgainstDaemon(client, args, entry, stateRoot);
+  const podman: PodmanProof | undefined = pinnedInMemory
+    ? {
+        inspectContainer: deps.inspectContainer ?? ((containerName) => inspectThroughPodman(deps.env, containerName)),
+        listContainersByLabel:
+          deps.listContainersByLabel ?? ((key, value) => listThroughPodman(deps.env, key, value)),
+      }
+    : undefined;
+  return runAgainstDaemon(client, args, entry, stateRoot, podman);
 }
 
-// The bound path. The daemon is the sandbox's status source: its pre-flight call must answer before the library writes
-// anything, and a daemon that goes silent during the operation is REALM_NOT_ACTIVE.
+// The Podman calls of the daemonless proof. They exist only for an entry pinned in memory.
+interface PodmanProof {
+  readonly inspectContainer: (containerName: string) => Promise<unknown>;
+  readonly listContainersByLabel: LibpodClient["listContainersByLabel"];
+}
+
+// The inspect of the session's sandbox container: null when Podman holds none. Any failure or an overlong call rejects,
+// so the proof stays unfinished.
+async function containerOf(
+  inspectContainer: (containerName: string) => Promise<unknown>,
+  sessionId: string,
+): Promise<unknown> {
+  return withTimeout(
+    Promise.resolve().then(() => inspectContainer(realmSandboxName(sessionId))),
+    PODMAN_PROOF_TIMEOUT_MS,
+    "TOOL_TIMEOUT",
+  );
+}
+
+// The listing of containers that carry the session's sandbox-name label, stopped ones included. Any failure or an
+// overlong call rejects.
+async function labelledContainersOf(
+  listContainersByLabel: LibpodClient["listContainersByLabel"],
+  sessionId: string,
+): Promise<unknown> {
+  return withTimeout(
+    Promise.resolve().then(() => listContainersByLabel(OPENSHELL_SANDBOX_NAME_LABEL_KEY, realmSandboxName(sessionId))),
+    PODMAN_PROOF_TIMEOUT_MS,
+    "TOOL_TIMEOUT",
+  );
+}
+
+// The library's predicate for a stopped sandbox. The daemon is the first proof. Only when the daemon is absent and the
+// entry was pinned in memory does the Podman proof decide: no container of the name, and an empty listing of the label.
+// Anything else refuses.
 async function runAgainstDaemon(
   client: DaemonClient,
   args: CheckpointArgs,
   entry: WorkspaceEntry,
   stateRoot: string,
+  podman: PodmanProof | undefined,
 ): Promise<CliResult> {
   // A property, not a let: the closure below sets it, and a narrowed local would read as constant at the catch.
-  const state = { daemonSilent: false };
+  const state = { proofFailed: false };
   const sandboxRunning: SandboxRunning = async () => {
     try {
       const status: DaemonStatus = await client.status();
       return status.snapshot.state !== "unbound";
     } catch (error) {
-      state.daemonSilent = true;
+      state.proofFailed = true;
+      if (error instanceof DaemonAbsentError && podman !== undefined) {
+        if ((await containerOf(podman.inspectContainer, entry.sessionId)) !== null) {
+          throw makeRealmError("REALM_NOT_ACTIVE");
+        }
+        const listed = await labelledContainersOf(podman.listContainersByLabel, entry.sessionId);
+        if (!Array.isArray(listed) || listed.length !== 0) {
+          throw makeRealmError("REALM_NOT_ACTIVE");
+        }
+        state.proofFailed = false;
+        return false;
+      }
       throw error;
     }
   };
   try {
-    // Pre-flight: the daemon must answer before the library writes anything, so an absent daemon refuses here.
+    // Pre-flight: the proof must finish before the library writes anything, so an unproven sandbox refuses here.
     await sandboxRunning(entry.sessionId);
     return await runLibrary(args, { entry, stateRoot, sandboxRunning });
   } catch (error) {
-    // The library maps a throwing predicate to REALM_NOT_ACTIVE. Here the daemon is the thing that cannot answer,
-    // so the refusal is the daemon-unreachable code whatever the library reported.
-    return refusal(state.daemonSilent ? makeRealmError("REALM_NOT_ACTIVE") : error);
+    // The library maps a throwing predicate to REALM_NOT_ACTIVE. Here the proof is the thing that could not finish,
+    // so the refusal is the not-active code whatever the library reported.
+    return refusal(state.proofFailed ? makeRealmError("REALM_NOT_ACTIVE") : error);
   } finally {
     client.close();
   }

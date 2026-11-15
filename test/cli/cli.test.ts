@@ -22,12 +22,12 @@ import {
   type SendControlRequest,
   type SpawnDaemon,
 } from "../../src/cli/main.js";
-import { CONTROL_TIMEOUT_MS, type ControlReply, type ControlRequest } from "../../src/daemon/channel.js";
+import { CONTROL_TIMEOUT_MS, DaemonAbsentError, type ControlReply, type ControlRequest } from "../../src/daemon/channel.js";
 import type { EnvironmentLike } from "../../src/session/paths.js";
 import { selectionOf, type DaemonStatus } from "../../src/daemon/client.js";
 import { sessionIdOfWorkspace } from "../../src/session/paths.js";
 import { bindRoot } from "../../src/fs/root.js";
-import { writeWorkspacePin } from "../../src/session/workspace-pin.js";
+import { validate, type Policy } from "../../src/contract/validate.js";
 import { removeWorkspaceEntry, writeWorkspaceEntry } from "../../src/session/workspace-registry.js";
 import type { ToolOutcome } from "../../src/tools/dispatch.js";
 import { boundedWait, pollUntil, scaledMs, testTimeout } from "../support/timing.js";
@@ -1550,12 +1550,18 @@ interface CheckpointFixture {
 
 function checkpointStatus(answer: CheckpointDaemonAnswer): Promise<DaemonStatus> {
   if (answer === "unreachable") {
-    return Promise.reject(new RealmError("REALM_NOT_ACTIVE"));
+    return Promise.reject(new DaemonAbsentError());
   }
   return Promise.resolve<DaemonStatus>({
     ...ACTIVE_DAEMON_STATUS,
     snapshot: { state: "active", reason: "realm checkpoint test", lastTransitionAt: ACTIVE_DAEMON_STATUS.snapshot.lastTransitionAt },
   });
+}
+
+function policyOf(roots: readonly string[]): Policy {
+  const result = validate("policy", { workspaceRoots: roots });
+  assert.ok(result.ok, "the policy fixture must validate");
+  return result.value;
 }
 
 function checkpointFixture(t: TestContext): CheckpointFixture {
@@ -1577,6 +1583,11 @@ function checkpointFixture(t: TestContext): CheckpointFixture {
       stateDir,
       workspaceRoot: workspace,
     }),
+    // A project stopped with realm down is pinned under the policy roots, which here are the workspace's parent.
+    readPolicy: () => policyOf([dirname(workspace)]),
+    // No sandbox container, and no container carrying its label: the second half of the stopped proof.
+    inspectContainer: () => Promise.resolve(null),
+    listContainersByLabel: () => Promise.resolve([]),
     connect: () => {
       daemon.connects += 1;
       return {
@@ -1591,13 +1602,13 @@ function checkpointFixture(t: TestContext): CheckpointFixture {
   return { workspace, stateDir, sessionId: selectionOf(workspace).sessionId, daemon, deps };
 }
 
-// What up leaves for the workspace: the pin, then the registry entry that marks the session bound.
+// What up leaves for a bound project: the registry entry, which marks the session bound. The pin that up writes for the
+// daemon is not read by the checkpoint command.
 function bindWorkspace(fx: CheckpointFixture): void {
-  writeWorkspacePin(fx.stateDir, bindRoot(fx.workspace), fx.sessionId);
   writeWorkspaceEntry(fx.stateDir, bindRoot(fx.workspace), fx.sessionId);
 }
 
-// What down leaves: the registry entry is removed and the pin stays, so the session is unbound.
+// What down leaves: the registry entry is removed, so the project is stopped and the command pins it in memory.
 function unbindWorkspace(fx: CheckpointFixture): void {
   removeWorkspaceEntry(fx.stateDir, fx.sessionId);
 }
@@ -1647,7 +1658,7 @@ void test("RES-04 CLI: after down, restore puts back the exact bytes the snapsho
   assert.equal(restored.exitCode, 0, restored.stderr);
   assert.deepEqual(treeBytes(fx.workspace), original);
   assert.equal(readFileSync(join(fx.workspace, "nested", "b.txt"), "utf8"), "beta\n");
-  assert.equal(fx.daemon.connects, 0);
+  assert.ok(fx.daemon.connects > 0, "the stopped proof asks the daemon first, then Podman");
 });
 
 void test("RES-04 CLI: a malformed id, a relative workspace, a missing flag and an unknown flag exit 2 and change nothing", async (t) => {
@@ -1684,18 +1695,21 @@ void test("RES-04 CLI: a runtime config the loader refuses makes checkpoint exit
   assert.match(result.stderr, /^realm checkpoint: cannot resolve a state directory .*\(SCHEMA_INVALID\)\n$/);
 });
 
-void test("RES-04 CLI: a workspace with no session is refused with REALM_UNBOUND and nothing is written", async (t) => {
+void test("RES-04 CLI: an unregistered workspace outside the policy roots is refused with POLICY_DENIED and nothing is written", async (t) => {
   const fx = checkpointFixture(t);
+  const elsewhere = join(dirname(fx.workspace), "elsewhere");
+  mkdirSync(elsewhere);
+  const denied = { ...fx.deps, readPolicy: () => policyOf([elsewhere]) };
   const before = treeBytes(fx.workspace);
   for (const command of ["create", "restore"] as const) {
-    const result = await runCli(checkpointArgv(command, fx, "before-edit"), fx.deps);
+    const result = await runCli(checkpointArgv(command, fx, "before-edit"), denied);
     assert.equal(result.exitCode, 1, command);
-    assert.equal(result.stdout, "REALM_UNBOUND\n");
-    assert.ok(result.stderr.includes(ERROR_CATALOGUE.REALM_UNBOUND.reason));
+    assert.equal(result.stdout, "POLICY_DENIED\n");
+    assert.ok(result.stderr.includes(ERROR_CATALOGUE.POLICY_DENIED.reason));
   }
   assert.deepEqual(treeBytes(fx.workspace), before);
   assert.equal(existsSync(join(fx.stateDir, "checkpoints")), false);
-  assert.equal(fx.daemon.connects, 0);
+  assert.equal(existsSync(join(fx.stateDir, "workspaces")), false, "no registry entry may be written");
 });
 
 void test("RES-04 CLI: a daemon that cannot answer for a bound session refuses create and restore with REALM_NOT_ACTIVE and writes nothing", async (t) => {

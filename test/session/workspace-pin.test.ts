@@ -8,7 +8,6 @@ import {
   renameSync,
   rmSync,
   statSync,
-  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -18,7 +17,6 @@ import { bindRoot } from "../../src/fs/root.js";
 import { recordFileName, sessionIdOfWorkspace } from "../../src/session/paths.js";
 import {
   readWorkspacePin,
-  verifyWorkspacePin,
   workspacePinDirOf,
   writeWorkspacePin,
 } from "../../src/session/workspace-pin.js";
@@ -149,31 +147,4 @@ void test("a malformed pin record is refused with SCHEMA_INVALID on read and on 
     assertRejectsWith(() => writeWorkspacePin(stateDir, pinned, id), "SCHEMA_INVALID");
     assert.equal(readFileSync(file, "utf8"), text);
   }
-});
-
-void test("verifyWorkspacePin refuses a pinned root that moved, with POLICY_DENIED", (t) => {
-  const { base, stateDir, ws } = fixture(t);
-  const id = sessionIdOfWorkspace(bindRoot(ws).realPath);
-  const pin = writeWorkspacePin(stateDir, bindRoot(ws), id);
-  renameSync(ws, join(base, "moved"));
-  assertRejectsWith(() => verifyWorkspacePin(pin), "POLICY_DENIED");
-});
-
-void test("verifyWorkspacePin refuses a directory replaced at the pinned path, with POLICY_DENIED", (t) => {
-  const { base, stateDir, ws } = fixture(t);
-  const id = sessionIdOfWorkspace(bindRoot(ws).realPath);
-  const pin = writeWorkspacePin(stateDir, bindRoot(ws), id);
-  renameSync(ws, join(base, "ws-aside"));
-  mkdirSync(ws);
-  assertRejectsWith(() => verifyWorkspacePin(pin), "POLICY_DENIED");
-});
-
-void test("verifyWorkspacePin refuses a pinned root that moved and is reached through a link, with POLICY_DENIED", (t) => {
-  const { base, stateDir, ws } = fixture(t);
-  const id = sessionIdOfWorkspace(bindRoot(ws).realPath);
-  const pin = writeWorkspacePin(stateDir, bindRoot(ws), id);
-  const moved = join(base, "moved");
-  renameSync(ws, moved);
-  symlinkSync(moved, ws);
-  assertRejectsWith(() => verifyWorkspacePin(pin), "POLICY_DENIED");
 });
