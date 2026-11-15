@@ -585,9 +585,16 @@ void test("OBS-04: a held supervisor keeps its code when the gateway comes back,
   await assertGatewayLost(supervisor.check());
   assert.equal(driver.gatewayCheckCount(), 1, "a held supervisor classifies once");
   assert.equal(driver.callCount("alive"), 0);
+  // The hold is retry-only: a check made while held throws the held code and asks neither the gateway nor the driver.
+  const gatewayChecks = driver.gatewayCheckCount();
+  await assertGatewayLost(supervisor.check());
+  assert.equal(driver.gatewayCheckCount(), gatewayChecks, "a held check makes no gatewayAnswers call");
+  assert.equal(driver.callCount("alive"), 0, "a held check makes no alive call");
+  assert.equal(driver.driverCheckCount(), 0, "a held check makes no driver socket call");
 
   await supervisor.start();
   assert.equal(await supervisor.check(), true, "an explicit start is the retry and clears the held code");
+  assert.equal(driver.callCount("alive"), 1, "start() clears the hold, so the check after it probes the driver again");
   driver.exitRunner();
   await assertCrashLoop(supervisor.check());
 });

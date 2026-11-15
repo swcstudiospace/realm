@@ -380,7 +380,11 @@ export class SessionExecution implements ExecutionService {
       await withTimeout(agentosFor(sessionId).stop(), this.stopDeadlineMs, "AGENTOS_STOP_FAILED");
       return { ok: true };
     } catch (error) {
-      // The deadline's own AGENTOS_STOP_FAILED adds nothing, so only a different code is kept as the cause.
+      // A failed AgentOS stop that carries its own cause keeps that cause, so the operator sees the reason, not the primary
+      // AGENTOS_STOP_FAILED. Otherwise only a code other than the stop's own is kept as the cause.
+      if (error instanceof RealmError && error.causeCode !== undefined) {
+        return { ok: false, causeCode: error.causeCode };
+      }
       const code = catalogueCodeOf(error);
       return { ok: false, causeCode: code === "AGENTOS_STOP_FAILED" ? undefined : code };
     }
