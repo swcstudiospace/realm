@@ -2189,6 +2189,32 @@ void test("T1 (g): after up, renaming the directory makes status, tool and down 
   assert.notEqual(daemon.session(id), undefined);
 });
 
+void test("T1 (g, swap): after up, replacing the directory at its pinned path makes status, tool and down with the old selection POLICY_DENIED and changes nothing", async (t) => {
+  const fixture = makeDirs();
+  const daemon = await startDaemon(daemonParts(fixture).options);
+  t.after(() => cleanupDaemon(daemon));
+  const id = sessionOf(fixture);
+  assert.equal(snapshotStateOf(await sendRequest(daemon.socketPath, upRequest("gs1", fixture.ws))), "active");
+  const committed = daemon.committedCount();
+  const records = new SessionStore(fixture.stateDir).list();
+
+  renameSync(fixture.ws, join(fixture.base, "moved-aside"));
+  mkdirSync(fixture.ws);
+  writeFileSync(join(fixture.ws, "doc.txt"), "replacement");
+  assert.equal(realpathSync(fixture.ws), fixture.ws, "the swapped directory sits at the same pinned path");
+  const old = { workspaceRoot: fixture.ws, sessionId: id };
+  for (const request of [
+    { id: "gs-status", method: "status", params: { selection: old } },
+    { id: "gs-tool", method: "tool", params: { selection: old, tool: { status: {} } } },
+    { id: "gs-down", method: "down", params: { selection: old } },
+  ]) {
+    assert.equal((await sendRequest(daemon.socketPath, request)).error?.code, "POLICY_DENIED", request.id);
+  }
+  assert.equal(daemon.committedCount(), committed);
+  assert.deepEqual(new SessionStore(fixture.stateDir).list(), records);
+  assert.notEqual(daemon.session(id), undefined);
+});
+
 void test("T1 (h): a re-up of a live project returns the same bound root and session id, adds no entry and builds no second handle", async (t) => {
   const fixture = makeDirs();
   let built = 0;

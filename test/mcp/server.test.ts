@@ -476,8 +476,18 @@ void test("MCP on two projects: each server's write lands in its own project and
   await fixture.up(a);
   await fixture.up(b);
 
-  await drive(fixture.connectFor(a), [toolRequest(1, "write", { path: "a-doc.txt", content: "from a" })]);
-  await drive(fixture.connectFor(b), [toolRequest(1, "write", { path: "b-doc.txt", content: "from b" })]);
+  const driveA = await drive(fixture.connectFor(a), [toolRequest(1, "write", { path: "a-doc.txt", content: "from a" })]);
+  assert.equal(driveA.stdoutLines.length, 1, "A's write gets one reply");
+  const replyA = resultRecord(driveA.stdoutLines[0]);
+  assert.equal(parseLine(driveA.stdoutLines[0] as string)["id"], 1);
+  assert.equal(replyA["isError"], false, "A's write is answered without an error");
+  assert.equal(structuredOf(driveA.stdoutLines[0])["outcome"], "done", "A's write succeeds");
+  const driveB = await drive(fixture.connectFor(b), [toolRequest(1, "write", { path: "b-doc.txt", content: "from b" })]);
+  assert.equal(driveB.stdoutLines.length, 1, "B's write gets one reply");
+  const replyB = resultRecord(driveB.stdoutLines[0]);
+  assert.equal(parseLine(driveB.stdoutLines[0] as string)["id"], 1);
+  assert.equal(replyB["isError"], false, "B's write is answered without an error");
+  assert.equal(structuredOf(driveB.stdoutLines[0])["outcome"], "done", "B's write succeeds");
 
   assert.equal(readFileSync(join(a, "a-doc.txt"), "utf8"), "from a");
   assert.equal(readFileSync(join(b, "b-doc.txt"), "utf8"), "from b");

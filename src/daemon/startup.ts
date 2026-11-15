@@ -87,11 +87,11 @@ export interface StartupReport {
   // Registry entries of earlier generations that the startup removed.
   readonly registryEntriesRemoved: number;
   readonly failures: number;
-  // The catalogue codes of the counted failures that carry one, in the order they happened: a registry cleanup, a sweep or a
-  // reconciliation that threw, a sweep root that did not bind, a device that could not be read, and every failure the sweep and
-  // the reconciliation report with its code. `failures` also counts the failures that carry none (a missing uid, a failed
-  // hydration), so it can be larger than this list. A failed reap sets `failures` to 1 and leaves this list empty; its code is
-  // `reapFailure`.
+  // The catalogue codes of the counted failures that carry one, in the order they happened: a sweep or a reconciliation that
+  // threw, a sweep root that did not bind, a device that could not be read, and every failure the sweep and the reconciliation
+  // report with its code. `failures` also counts the failures that carry none (a missing uid, a failed hydration), so it can be
+  // larger than this list. A failed reap, or a registry cleanup that failed after it, sets `failures` to 1 and leaves this list
+  // empty; its code is `reapFailure`.
   readonly failureCodes: readonly ErrorCode[];
 }
 
@@ -162,31 +162,18 @@ export async function runStartupMaintenance(deps: StartupMaintenanceDeps): Promi
     });
     await deps.reap.settle?.();
   } catch (error: unknown) {
-    // The reap failed, possibly after it had removed containers. Record what was destroyed and why it stopped, hand it to the
-    // observer so the log has it, and rethrow the original error: nothing is served after it. The reap deleted no record.
-    deps.onReport({
-      containerIds,
-      containersRemoved: containerIds.length,
-      recordsDeleted: 0,
-      adopted: 0,
-      removedCauses: [],
-      adoptedContainerIds: [],
-      removalCodes: [],
-      tempFilesRemoved: 0,
-      auditLinesReconciled: 0,
-      truncated: false,
-      unfinishedSweepRoots: [],
-      unfinishedAuditFiles: [],
-      auditListingTruncated: false,
-      maintenanceComplete: false,
-      reapFailure: codeOf(error),
-      unattributedTempFiles,
-      unattributedRecords: unreadableRecords,
-      unattributedRecordCodes: unreadableRecordCodes,
-      registryEntriesRemoved: 0,
-      failures: 1,
-      failureCodes: [],
-    });
+    // The reap failed, possibly after it had removed containers. Hand the partial report to the observer so the log has it, and
+    // rethrow the original error: nothing is served after it. The reap deleted no record.
+    deps.onReport(
+      failedStartReport({
+        code: codeOf(error),
+        containerIds,
+        unattributedTempFiles,
+        unreadableRecords,
+        unreadableRecordCodes,
+        registryEntriesRemoved,
+      }),
+    );
     throw error;
   }
   // A removal the reap proved gone is named even when its call was never seen to resolve.
@@ -199,7 +186,8 @@ export async function runStartupMaintenance(deps: StartupMaintenanceDeps): Promi
   // below has its own bound (the controller's startup budget), so it is not counted against this one.
   const deadline = deps.monotonicNow() + deps.budgetMs;
   // The reap deleted the records of every session it did not adopt, so no registry entry of those sessions is live: each is
-  // removed. An adopted session's entry is written again by its hydration.
+  // removed. An adopted session's entry is written again by its hydration. A removal that fails is a reap failure: the reap has
+  // already destroyed its containers and records, so the report says what it did and the start fails with the removal's code.
   const adoptedIds = new Set(reaped.adopted.map((adopted) => adopted.sessionId));
   try {
     for (const id of listWorkspaceEntryIds(deps.stateDir)) {
@@ -209,9 +197,18 @@ export async function runStartupMaintenance(deps: StartupMaintenanceDeps): Promi
       }
     }
   } catch (error: unknown) {
-    // A registry entry that cannot be read or removed is counted with its code; the next start removes it.
-    failures += 1;
-    failureCodes.push(codeOf(error));
+    deps.onReport(
+      failedStartReport({
+        code: codeOf(error),
+        containerIds,
+        reaped,
+        unattributedTempFiles,
+        unreadableRecords,
+        unreadableRecordCodes,
+        registryEntriesRemoved,
+      }),
+    );
+    throw error;
   }
   for (const session of reaped.adopted) {
     deps.pending.add(session.sessionId);
@@ -313,6 +310,46 @@ export async function runStartupMaintenance(deps: StartupMaintenanceDeps): Promi
     failures: failures + hydrated,
     failureCodes,
   });
+}
+
+// The report of a start that failed in the reap, or in the registry cleanup after it. It holds what the reap had destroyed before
+// it stopped (nothing, when the reap itself threw); no sweep or reconciliation ran. The start fails with `code`, so nothing is served.
+function failedStartReport(failure: {
+  readonly code: ErrorCode;
+  readonly containerIds: readonly string[];
+  readonly reaped?: SelectiveReapResult;
+  readonly unattributedTempFiles: number;
+  readonly unreadableRecords: number;
+  readonly unreadableRecordCodes: readonly ErrorCode[];
+  readonly registryEntriesRemoved: number;
+}): StartupReport {
+  const removed = failure.reaped?.removed ?? [];
+  const adopted = failure.reaped?.adopted ?? [];
+  return {
+    containerIds: failure.containerIds,
+    containersRemoved: failure.reaped?.counts.removed ?? failure.containerIds.length,
+    recordsDeleted: failure.reaped?.counts.deleted ?? 0,
+    adopted: failure.reaped?.counts.adopted ?? 0,
+    removedCauses: removed.map((removal) => `${removal.containerId} ${removal.cause}`),
+    adoptedContainerIds: adopted.map((session) => session.containerId),
+    removalCodes: removed.flatMap((removal) =>
+      removal.removalCode === undefined ? [] : [`${removal.containerId} ${removal.removalCode}`],
+    ),
+    tempFilesRemoved: 0,
+    auditLinesReconciled: 0,
+    truncated: false,
+    unfinishedSweepRoots: [],
+    unfinishedAuditFiles: [],
+    auditListingTruncated: false,
+    maintenanceComplete: false,
+    reapFailure: failure.code,
+    unattributedTempFiles: failure.unattributedTempFiles,
+    unattributedRecords: failure.unreadableRecords,
+    unattributedRecordCodes: failure.unreadableRecordCodes,
+    registryEntriesRemoved: failure.registryEntriesRemoved,
+    failures: 1,
+    failureCodes: [],
+  };
 }
 
 // A record as it stood before the reap: the session it names and the workspace it was recorded for.
