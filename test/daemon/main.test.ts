@@ -4,7 +4,7 @@
 
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { verifyAuditFile } from "../../src/audit/chain.js";
@@ -22,7 +22,7 @@ import type { StartedDaemon } from "../../src/daemon/daemon.js";
 import { daemonLogPath, daemonStartFailureSince } from "../../src/daemon/ensure.js";
 import { defaultPolicyPath } from "../../src/runtime/host-paths.js";
 import { TEARDOWN_TIMEOUT_MS } from "../../src/lifecycle/bounds.js";
-import type { EnvironmentLike } from "../../src/session/paths.js";
+import { sessionIdOfWorkspace, type EnvironmentLike } from "../../src/session/paths.js";
 
 // Every entry line is one JSON object written through the logger: ts, level, event, then code. The timestamp is checked
 // and dropped, so the rest of the line compares exactly.
@@ -697,21 +697,24 @@ void test("OBS-02: audit.head logs the chain head of a session's audit file when
   const dir = tempDir(t);
   const raw = validConfig(dir);
   const stateDir = String(raw["stateDir"]);
+  const workspace = join(dir, "workspace");
+  mkdirSync(workspace, { recursive: true });
+  const sessionId = sessionIdOfWorkspace(realpathSync(workspace));
   mkdirSync(join(stateDir, "audit"), { recursive: true });
   for (let index = 0; index < 3; index += 1) {
     appendAudit(stateDir, {
-      sessionId: "sess-main",
+      sessionId,
       tool: "status",
       outcome: "ok",
       phase: "admission",
       correlationId: `head-${String(index)}`,
     });
   }
-  const head = verifyAuditFile(join(stateDir, "audit", "sess-main.jsonl")).head;
+  const head = verifyAuditFile(join(stateDir, "audit", `${sessionId}.jsonl`)).head;
   assert.ok(head !== undefined);
   const h = harness(writeConfig(dir, raw), {
     start: (options) => {
-      options.onAuditHead?.("sess-main");
+      options.onAuditHead?.(sessionId);
       return Promise.resolve(startedWith(Promise.resolve()));
     },
   });
@@ -721,10 +724,11 @@ void test("OBS-02: audit.head logs the chain head of a session's audit file when
   assert.deepEqual(entryOf(h.lines[0] ?? ""), {
     level: "info",
     event: "audit.head",
-    sessionId: "sess-main",
+    sessionId,
     seq: head.seq,
     lineSha256: head.hash,
   });
+  assert.equal(existsSync(join(stateDir, "audit", "daemon.jsonl")), false, "the daemon has no audit file");
 });
 
 void test("OBS-02: audit.head logs nothing when the session's audit file is missing", async (t) => {
