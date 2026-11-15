@@ -116,7 +116,7 @@
     {
       "number": "16",
       "name": "Omp runs in the sandbox",
-      "status": "pending"
+      "status": "complete"
     },
     {
       "number": "17",
@@ -142,7 +142,7 @@
   "next": {
     "command": "/gsd-progress --next",
     "label": "Advance to the next step",
-    "reason": "Phase 2 of 9 · 78% · executing"
+    "reason": "Phase 2 of 9 · 81% · executing"
   },
-  "updated_at": "2026-11-14T23:50:35.782Z"
+  "updated_at": "2026-11-15T00:03:48.463Z"
 }
