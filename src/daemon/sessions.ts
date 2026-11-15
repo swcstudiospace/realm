@@ -221,6 +221,8 @@ export interface SessionHealthOptions {
   readonly isStopping: () => boolean;
   // Observer for a probe that threw. It must not throw.
   readonly onProbeFailure: ((code: ErrorCode) => void) | undefined;
+  // The correlation id of the up that last reached this session's create, or undefined before any up. Read at each transition.
+  readonly upIdOf: (sessionId: string) => string | undefined;
 }
 
 // The health loop of one session. It runs while the session is in service, active or degraded (a degraded session still serves
@@ -240,11 +242,13 @@ export class SessionHealth {
       this.#options.metrics.recordTransition(event.from, event.to);
       // The reason is free text, so only a catalogue code is taken from it.
       const code = catalogueCode(event.reason);
+      const upId = this.#options.upIdOf(this.#options.sessionId);
       this.#options.logger.info("lifecycle.transition", {
         from: event.from,
         to: event.to,
         ...(code === undefined ? {} : { code }),
         ...(event.recoveredCode === undefined ? {} : { recoveredCode: event.recoveredCode }),
+        ...(upId === undefined ? {} : { upId }),
         ...(event.persistCode === undefined ? {} : { persistCode: event.persistCode }),
         sessionId: this.#options.sessionId,
       });

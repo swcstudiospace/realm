@@ -1372,6 +1372,12 @@ void test("OBS-02: lifecycle.transition logs from and to for each state change, 
     assert.equal("reason" in row, false, "the free-text reason is never logged");
     assert.equal("code" in row, false, "a transition whose reason is not a catalogue code carries no code");
   }
+  // The transitions the up's create fires run before the create settles; each names the up through upId.
+  const upEnd = logRowsOf(lines).find((row) => row["event"] === "up.end");
+  assert.match(String(upEnd?.["upId"]), /^[A-Za-z0-9_-]{1,64}$/);
+  for (const row of transitions) {
+    assert.equal(row["upId"], upEnd?.["upId"], "each transition of the up names it with upId");
+  }
   const down = await sendRequest(daemon.socketPath, { id: "d1", method: "down", params: selectedBy(fixture.ws) });
   assert.ok(down.result !== undefined);
   await awaitDone(daemon);
