@@ -20,7 +20,13 @@ import {
   workspacePinDirOf,
   writeWorkspacePin,
 } from "../../src/session/workspace-pin.js";
-import { readWorkspaceEntry, removeWorkspaceEntry, writeWorkspaceEntry } from "../../src/session/workspace-registry.js";
+import {
+  readWorkspaceEntry,
+  removeWorkspaceEntry,
+  verifyWorkspaceEntry,
+  workspaceEntryOf,
+  writeWorkspaceEntry,
+} from "../../src/session/workspace-registry.js";
 
 // Real directories under a temporary base, removed when the test ends. Nothing is mocked.
 function fixture(t: TestContext) {
@@ -61,7 +67,7 @@ void test("a written pin reads back equal to what was written, at mode 0600 in a
   assert.deepEqual(readWorkspacePin(stateDir, id), written);
   assert.equal(modeOf(pinDir), 0o700);
   assert.equal(modeOf(join(pinDir, recordFileName(id))), 0o600);
-  assert.equal(verifyWorkspacePin(written).realPath, ws);
+  assert.equal(verifyWorkspaceEntry(workspaceEntryOf(pinned, id)).realPath, ws);
 });
 
 void test("a second write with the same identity returns an equal pin and leaves the record unchanged", (t) => {
@@ -93,7 +99,7 @@ void test("a root replaced at the pinned path is bound again by a second write, 
     ino: replacement.ino,
   });
   assert.deepEqual(readWorkspacePin(stateDir, id), rebound);
-  assert.equal(verifyWorkspacePin(rebound).realPath, ws);
+  assert.equal(verifyWorkspaceEntry(workspaceEntryOf(replacement, id)).realPath, ws);
 });
 
 void test("a root moved away from the pinned path is refused by a write for its old session id with SCHEMA_INVALID, and the pin is unchanged", (t) => {
@@ -123,7 +129,7 @@ void test("removing the registry entry leaves the pin readable and verifiable", 
   removeWorkspaceEntry(stateDir, id);
   assert.equal(readWorkspaceEntry(stateDir, id), null);
   assert.deepEqual(readWorkspacePin(stateDir, id), pin);
-  assert.equal(verifyWorkspacePin(pin).realPath, ws);
+  assert.equal(verifyWorkspaceEntry(workspaceEntryOf(pinned, id)).realPath, ws);
 });
 
 void test("a malformed pin record is refused with SCHEMA_INVALID on read and on write, and the write does not overwrite it", (t) => {
