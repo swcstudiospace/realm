@@ -5,7 +5,7 @@
 
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { credentials, makeClientConstructor, type ServiceDefinition, type ServiceError } from "@grpc/grpc-js";
 import { makeRealmError, RealmError } from "../../../src/core/errors.js";
@@ -13,7 +13,8 @@ import { COMPUTE_DRIVER_SERVICE_NAME, loadComputeDriverService, type ComputeDriv
 import { startDriver, type DriverProcessConfig, type DriverStartSeams } from "../../../src/runtime/driver/main.js";
 import type { LifecycleLibpod } from "../../../src/runtime/driver/lifecycle.js";
 import { sandboxBindingOf, type SandboxBinding } from "../../../src/runtime/driver/sandbox-binding.js";
-import { DESCRIPTOR_FILE_NAME, secretDirOf, writeLaunchMaterial } from "../../../src/runtime/driver/secret-store.js";
+import { DESCRIPTOR_FILE_NAME, SSH_DIR_NAME, secretDirOf, writeLaunchMaterial } from "../../../src/runtime/driver/secret-store.js";
+import type { SupervisorHandle, SupervisorSpawn } from "../../../src/runtime/driver/supervisor.js";
 import {
   HARDENING_PROFILE,
   RUNTIME_ARGV,
@@ -367,4 +368,40 @@ void test("restart: the start logs an adopted line for the kept container, and a
     `realm compute driver adoption removed: container=${orphanId} cause=no-record`,
     `realm compute driver adoption adopted: container=c-${kept}`,
   ]);
+});
+
+// A runtime whose spawn records whether the survivor's ssh directory is still on disk when the supervisor starts.
+class SshAtSpawnRuntime extends FakeRuntime {
+  readonly sshDir: string;
+  readonly sshDirAtSpawn: boolean[] = [];
+  constructor(sshDir: string) {
+    super();
+    this.sshDir = sshDir;
+  }
+  spawnSupervisor(options: SupervisorSpawn): Promise<SupervisorHandle> {
+    this.sshDirAtSpawn.push(existsSync(this.sshDir));
+    return super.spawnSupervisor(options);
+  }
+}
+
+void test("restart: the respawned supervisor starts with no ssh directory left by the previous supervisor", async (t) => {
+  const config = driverConfig();
+  t.after(() => {
+    rmSync(dirname(config.sandboxStateRoot), { recursive: true, force: true });
+  });
+  const engine = new RestartEngine();
+  const name = leaveSurvivor(engine, config);
+  // The previous supervisor created its ssh directory and bound its socket in it, then exited with the previous driver.
+  const sshDir = join(secretDirOf(config.secretRoot, name), SSH_DIR_NAME);
+  mkdirSync(sshDir, { mode: 0o700 });
+  writeFileSync(join(sshDir, "ssh.sock"), "");
+  const runtime = new SshAtSpawnRuntime(sshDir);
+  const server = await startDriver(processConfigOf(config), seamsOver(engine, runtime));
+  t.after(async () => {
+    await server.close();
+  });
+
+  assert.equal(runtime.spawns.length, 1, "the supervisor was respawned once");
+  assert.deepEqual(runtime.sshDirAtSpawn, [false], "the previous supervisor's ssh directory was removed before the respawn");
+  assert.equal(existsSync(join(secretDirOf(config.secretRoot, name), "launch.json")), true, "the survivor's launch material is kept");
 });
