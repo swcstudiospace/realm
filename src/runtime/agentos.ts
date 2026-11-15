@@ -188,8 +188,9 @@ export class AgentOsSupervisor {
   }
 
   // Stops the driver. A failed, missed or hung driver stop rejects with AGENTOS_STOP_FAILED, so a failed delete is never
-  // read as success. That rejection does not stop the caller's teardown: the session container is removed by the
-  // lifecycle, which is the hard guarantee. Stop cancels every driver call and backoff wait still in flight, so none of
+  // read as success. That rejection does not stop the caller's teardown: the lifecycle still stops the session container
+  // regardless, and only a destroy removes it, which is the hard guarantee. So a stop whose sandbox delete fails leaves the
+  // container stopped, not removed. Stop cancels every driver call and backoff wait still in flight, so none of
   // them starts the driver again afterwards. After stop the supervisor stays stopped until start() is called.
   async stop(): Promise<void> {
     this.phase = "stopped";
