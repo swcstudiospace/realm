@@ -834,8 +834,6 @@ void test("a failed start writes daemon.failed to <stateDir>/daemon.log, not onl
   assert.ok(records.some((record) => record["event"] === "daemon.failed" && record["code"] === "AGENTOS_CRASH_LOOP"));
 });
 
-const LEFTOVER_SESSION = "5a1c0c3e-7d2b-4f10-9a77-0b8e1c2d3e4f";
-
 // The libpod double of a start with no container: every listing is empty, so the reap has no candidate to judge.
 function noContainers(): SessionContainers {
   return {
@@ -854,18 +852,20 @@ void test("MULTI-03: a startup removes a leftover registry entry and record, and
   const stateDir = join(dir, "state");
   const ws = join(dir, "workspace");
   mkdirSync(ws, { recursive: true });
+  // The leftover's id is the workspace's own: a registry entry is valid only for the id derived from its realpath.
+  const leftoverSession = sessionIdOfWorkspace(ws);
   mkdirSync(stateDir, { recursive: true });
   writeFileSync(defaultPolicyPath(stateDir), JSON.stringify({ mode: "advisory", workspaceRoots: [ws] }));
   // The leftover of an earlier generation: a record with no container, and the registry entry that names its workspace.
   new SessionStore(stateDir).save({
     realmId: "realm-leftover",
-    sessionId: LEFTOVER_SESSION,
+    sessionId: leftoverSession,
     workspaceRoot: ws,
     state: "unbound",
     controlSocketPath: join(dir, "control.sock"),
     containerId: null,
   });
-  writeWorkspaceEntry(stateDir, bindRoot(ws), LEFTOVER_SESSION);
+  writeWorkspaceEntry(stateDir, bindRoot(ws), leftoverSession);
   const h = harness(writeConfig(dir, validConfig(dir)), {
     start: (options) => startDaemon({ ...options, libpod: noContainers() }),
   });
@@ -885,7 +885,7 @@ void test("MULTI-03: a startup removes a leftover registry entry and record, and
   assert.equal(startup["unattributedRecords"], 0);
   assert.equal(startup["containersRemoved"], 0, "an existing field keeps its name and value");
   assert.deepEqual(listWorkspaceEntryIds(stateDir), [], "the entry's file is gone");
-  assert.equal(new SessionStore(stateDir).load(LEFTOVER_SESSION), null, "the record is deleted");
+  assert.equal(new SessionStore(stateDir).load(leftoverSession), null, "the record is deleted");
 });
 
 // MULTI-03 (plan 09 T2): a registry cleanup that fails is a reap failure. The report names the code, nothing is served, and the
