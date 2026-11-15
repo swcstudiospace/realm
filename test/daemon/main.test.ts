@@ -4,7 +4,7 @@
 
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { verifyAuditFile } from "../../src/audit/chain.js";
@@ -18,11 +18,15 @@ import {
   type DaemonSignal,
   type DaemonStartOptions,
 } from "../../src/daemon/main.js";
-import type { StartedDaemon } from "../../src/daemon/daemon.js";
+import { startDaemon, type StartedDaemon } from "../../src/daemon/daemon.js";
 import { daemonLogPath, daemonStartFailureSince } from "../../src/daemon/ensure.js";
 import { defaultPolicyPath } from "../../src/runtime/host-paths.js";
 import { TEARDOWN_TIMEOUT_MS } from "../../src/lifecycle/bounds.js";
 import type { EnvironmentLike } from "../../src/session/paths.js";
+import { bindRoot } from "../../src/fs/root.js";
+import type { SessionContainers } from "../../src/runtime/session-execution.js";
+import { SessionStore } from "../../src/session/store.js";
+import { listWorkspaceEntryIds, workspaceRegistryDirOf, writeWorkspaceEntry } from "../../src/session/workspace-registry.js";
 
 // Every entry line is one JSON object written through the logger: ts, level, event, then code. The timestamp is checked
 // and dropped, so the rest of the line compares exactly.
@@ -826,43 +830,85 @@ void test("a failed start writes daemon.failed to <stateDir>/daemon.log, not onl
   assert.ok(records.some((record) => record["event"] === "daemon.failed" && record["code"] === "AGENTOS_CRASH_LOOP"));
 });
 
-// MULTI-03 (plan 09 T2): the startup line names the registry entries the startup removed and the records it deleted.
-void test("MULTI-03: the startup line carries registryEntriesRemoved and recordsDeleted, with the unattributed counts", async (t) => {
-  const dir = tempDir(t);
+const LEFTOVER_SESSION = "5a1c0c3e-7d2b-4f10-9a77-0b8e1c2d3e4f";
+
+// The libpod double of a start with no container: every listing is empty, so the reap has no candidate to judge.
+function noContainers(): SessionContainers {
+  return {
+    info: () => Promise.resolve({ rootless: true, version: "5.0.0" }),
+    listContainersByLabel: () => Promise.resolve([]),
+    inspectContainer: () => Promise.resolve(null),
+    stopContainer: () => Promise.resolve(),
+    removeContainer: () => Promise.resolve(),
+  };
+}
+
+// MULTI-03 (plan 09 T2): a startup removes the registry entry and the record an earlier generation left, and the startup line
+// reports both. The start is the real startDaemon; only its libpod seam is a double, with no container to reap.
+void test("MULTI-03: a startup removes a leftover registry entry and record, and the startup line reports both", async (t) => {
+  const dir = realpathSync(tempDir(t));
+  const stateDir = join(dir, "state");
+  const ws = join(dir, "workspace");
+  mkdirSync(ws, { recursive: true });
+  mkdirSync(stateDir, { recursive: true });
+  writeFileSync(defaultPolicyPath(stateDir), JSON.stringify({ mode: "advisory", workspaceRoots: [ws] }));
+  // The leftover of an earlier generation: a record with no container, and the registry entry that names its workspace.
+  new SessionStore(stateDir).save({
+    realmId: "realm-leftover",
+    sessionId: LEFTOVER_SESSION,
+    workspaceRoot: ws,
+    state: "unbound",
+    controlSocketPath: join(dir, "control.sock"),
+    containerId: null,
+  });
+  writeWorkspaceEntry(stateDir, bindRoot(ws), LEFTOVER_SESSION);
   const h = harness(writeConfig(dir, validConfig(dir)), {
-    start: (options) => {
-      options.onStartup?.({
-        containerIds: [],
-        removedCauses: [],
-        removalCodes: [],
-        adoptedContainerIds: [],
-        containersRemoved: 0,
-        recordsDeleted: 1,
-        adopted: 0,
-        tempFilesRemoved: 0,
-        unattributedTempFiles: 2,
-        unattributedRecords: 1,
-        registryEntriesRemoved: 1,
-        auditLinesReconciled: 0,
-        truncated: false,
-        unfinishedSweepRoots: [],
-        unfinishedAuditFiles: [],
-        auditListingTruncated: false,
-        maintenanceComplete: true,
-        failureCodes: [],
-        unattributedRecordCodes: ["SCHEMA_INVALID"],
-        failures: 0,
-      });
-      return Promise.resolve(startedWith(Promise.resolve()));
-    },
+    start: (options) => startDaemon({ ...options, libpod: noContainers() }),
   });
 
-  assert.equal(await runDaemon(h.deps), 0);
-  assert.equal(h.lines.length, 1);
-  const line = startupOf(h.lines);
-  assert.equal(line["registryEntriesRemoved"], 1);
-  assert.equal(line["recordsDeleted"], 1);
-  assert.equal(line["unattributedTempFiles"], 2);
-  assert.equal(line["unattributedRecords"], 1);
-  assert.equal(line["containersRemoved"], 0, "an existing field keeps its name and value");
+  const run = runDaemon(h.deps);
+  await h.registered;
+  const handler = h.handlers.get("SIGTERM");
+  assert.ok(handler !== undefined);
+  handler();
+  assert.equal(await run, 0);
+
+  const startup = h.lines.map(entryOf).find((value) => value["event"] === "daemon.startup");
+  assert.ok(startup !== undefined, "the startup line is written");
+  assert.equal(startup["registryEntriesRemoved"], 1);
+  assert.equal(startup["recordsDeleted"], 1);
+  assert.equal(startup["unattributedTempFiles"], 0);
+  assert.equal(startup["unattributedRecords"], 0);
+  assert.equal(startup["containersRemoved"], 0, "an existing field keeps its name and value");
+  assert.deepEqual(listWorkspaceEntryIds(stateDir), [], "the entry's file is gone");
+  assert.equal(new SessionStore(stateDir).load(LEFTOVER_SESSION), null, "the record is deleted");
+});
+
+// MULTI-03 (plan 09 T2): a registry cleanup that fails is a reap failure. The report names the code, nothing is served, and the
+// start fails with that same code.
+void test("MULTI-03: a registry cleanup that fails is a reap failure: the report names its code and the start fails with it", async (t) => {
+  const dir = realpathSync(tempDir(t));
+  const stateDir = join(dir, "state");
+  const ws = join(dir, "workspace");
+  mkdirSync(ws, { recursive: true });
+  mkdirSync(stateDir, { recursive: true });
+  writeFileSync(defaultPolicyPath(stateDir), JSON.stringify({ mode: "advisory", workspaceRoots: [ws] }));
+  // The registry directory is a file, so listing it fails once the reap has run.
+  writeFileSync(workspaceRegistryDirOf(stateDir), "not a directory");
+  const h = harness(writeConfig(dir, validConfig(dir)), {
+    start: (options) => startDaemon({ ...options, libpod: noContainers() }),
+  });
+
+  assert.equal(await runDaemon(h.deps), 1);
+  const lines = h.lines.map(entryOf);
+  const startup = lines.find((value) => value["event"] === "daemon.startup");
+  assert.ok(startup !== undefined, "the startup line is written");
+  assert.equal(startup["reapFailure"], "SCHEMA_INVALID");
+  assert.equal(startup["code"], "SCHEMA_INVALID");
+  assert.equal(startup["failures"], 1);
+  assert.equal(startup["registryEntriesRemoved"], 0);
+  assert.ok(
+    lines.some((value) => value["event"] === "daemon.failed" && value["code"] === "SCHEMA_INVALID"),
+    "the start fails with the same code",
+  );
 });
