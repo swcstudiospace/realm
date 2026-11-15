@@ -32,8 +32,9 @@ export interface RealmDaemonOptions {
 export interface RealmDaemonFixture {
   readonly socketPath: string;
   readonly policyPath: string;
-  // Sends the same { method: "down" } request `realm down` sends for the configured workspace, then awaits the daemon's done.
-  down(): Promise<void>;
+  // Sends the same { method: "down" } request `realm down` sends for one project, the configured workspace when none is given.
+  // Without a project it awaits the daemon's done; with one it resolves after the reply, since another live session keeps the daemon running.
+  down(project?: string): Promise<void>;
   // Sends the same { method: "down" } request for one project and resolves with its reply. The daemon keeps running while
   // another session is live, so done is not awaited here.
   release(project: string): Promise<ControlReply>;
@@ -99,9 +100,11 @@ export async function startRealmDaemon(options: RealmDaemonOptions): Promise<Rea
     socketPath: daemon.socketPath,
     policyPath,
     done: daemon.done,
-    async down(): Promise<void> {
-      await release(options.workspace);
-      await awaitDone(daemon);
+    async down(project?: string): Promise<void> {
+      await release(project ?? options.workspace);
+      if (project === undefined) {
+        await awaitDone(daemon);
+      }
     },
     release,
     up(project: string): Promise<ControlReply> {
