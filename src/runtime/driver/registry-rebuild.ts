@@ -15,7 +15,7 @@ import { channelPathsOf } from "./channel.js";
 import type { ComputeDriver, ComputeDriverConfig, RuntimeHost, SandboxRecord } from "./compute-driver.js";
 import { addCleanupNote, SUPERVISOR_NOT_STOPPED } from "./compute-driver-state.js";
 import { decodeLaunchAuthentication } from "./isolation/launch.js";
-import type { DriverLifecycle } from "./lifecycle.js";
+import type { AdoptionRoots, DriverLifecycle } from "./lifecycle.js";
 import { refusalScope } from "./refusal.js";
 import { LAUNCH_FILE_NAME, removeSecretEntries, SSH_DIR_NAME, secretDirOf } from "./secret-store.js";
 import { launchSandboxSupervisor, type SupervisorHandle } from "./supervisor.js";
@@ -36,7 +36,8 @@ interface RespawnedSandbox {
 // rebuild, the driver configuration the supervisor is started from, and the runtime host that spawns it.
 export interface RegistryRebuildDeps {
   readonly driver: Pick<ComputeDriver, "adoptSandbox">;
-  readonly lifecycle: Pick<DriverLifecycle, "delete">;
+  readonly lifecycle: Pick<DriverLifecycle, "delete" | "restartAdopted">;
+  readonly roots: AdoptionRoots;
   readonly config: ComputeDriverConfig;
   readonly runtime: Pick<RuntimeHost, "spawnSupervisor">;
 }
@@ -74,6 +75,9 @@ async function respawnSupervisor(
   containerId: string,
 ): Promise<RespawnedSandbox> {
   const { config } = deps;
+  // The runtime in the adopted container is still bound to the previous driver's supervisor and would refuse a new one, so the container
+  // restarts first. A failed restart leaves the survivor to the destroy path in rebuildRegistry.
+  await deps.lifecycle.restartAdopted(sandboxName, deps.roots);
   const sessionId = sessionOfRealmSandbox(sandboxName);
   if (sessionId === undefined) {
     throw makeRealmError("SCHEMA_INVALID");

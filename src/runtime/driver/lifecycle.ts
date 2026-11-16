@@ -433,6 +433,24 @@ export class DriverLifecycle {
     await this.libpod.stopContainer(sandboxName, STOP_GRACE_MS);
   }
 
+  // Restarts an adopted sandbox's container and proves it conforms again. The runtime in a container stays bound to the host supervisor that
+  // first attached to it, and that supervisor exited with the previous driver, so a new supervisor is refused ("already bound to another
+  // supervisor"). A restart gives the runtime a fresh process that accepts one. The workspace and scratch volume are host-backed and
+  // survive; the processes inside the container do not. A container that does not conform after the restart is removed, as create removes one.
+  async restartAdopted(sandboxName: string, roots: AdoptionRoots): Promise<void> {
+    this.requireSwept();
+    if (!this.adopted.has(sandboxName)) {
+      throw makeRealmError("SCHEMA_INVALID");
+    }
+    const info = await bounded(this.libpod.info());
+    const binding = this.rebuildBinding(sandboxName, roots, info.rootless);
+    if (typeof binding === "string") {
+      throw makeRealmError("OPENSHELL_START_FAILED");
+    }
+    await bounded(this.libpod.stopContainer(sandboxName, STOP_GRACE_MS));
+    await this.startAndVerify(sandboxName, binding);
+  }
+
   // Starts the created container and proves it conforms. The verifier runs first, then the live capability proof and the two
   // checks it does not make. Any failure removes the container by id before the error is thrown. A State.Pid of 0, or one the
   // host cannot read, leaves the kernel capability sets unattached, so the live proof fails. The refusal keeps the original

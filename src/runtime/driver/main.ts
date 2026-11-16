@@ -272,7 +272,7 @@ export async function startDriver(config: DriverProcessConfig, seams: DriverStar
     for (const removal of adoption.removed) {
       logAdoptionRemoved(config.driver.refusalLog, removal.containerId, removal.cause);
     }
-    await (seams.rebuild ?? rebuildRegistry)({ driver, lifecycle, config: config.driver, runtime }, adoption.adopted);
+    await (seams.rebuild ?? rebuildRegistry)({ driver, lifecycle, roots, config: config.driver, runtime }, adoption.adopted);
     for (const kept of adoption.adopted) {
       logAdoptionKept(config.driver.refusalLog, kept.containerId);
     }

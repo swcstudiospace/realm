@@ -44,12 +44,14 @@ interface Survivor {
 }
 
 // The engine a fresh driver starts against. It holds the containers and the scratch volumes the previous generation left, and it records
-// every container removal, so a test can show what the start and each RPC removed. Nothing is created or started here: a restart creates
-// no container.
+// every container removal, stop and start, so a test can show what the start and each RPC did to them. Nothing is created here: a restart
+// creates no container, and it restarts each adopted one.
 class RestartEngine implements LifecycleLibpod {
   readonly containers = new Map<string, Survivor>();
   readonly volumes = new Map<string, Readonly<Record<string, string>>>();
   readonly removals: string[] = [];
+  readonly stops: string[] = [];
+  readonly starts: string[] = [];
 
   info(): Promise<LibpodInfo> {
     return Promise.resolve({ rootless: true, version: ENGINE_VERSION });
@@ -69,7 +71,8 @@ class RestartEngine implements LifecycleLibpod {
     return Promise.resolve(survivor === undefined ? null : structuredClone(survivor.inspect));
   }
 
-  stopContainer(): Promise<void> {
+  stopContainer(reference: string): Promise<void> {
+    this.stops.push(reference);
     return Promise.resolve();
   }
 
@@ -83,8 +86,9 @@ class RestartEngine implements LifecycleLibpod {
     return Promise.reject(makeRealmError("SCHEMA_INVALID"));
   }
 
-  startContainer(): Promise<void> {
-    return Promise.reject(makeRealmError("SCHEMA_INVALID"));
+  startContainer(reference: string): Promise<void> {
+    this.starts.push(reference);
+    return Promise.resolve();
   }
 
   createVolume(name: string, labels: Readonly<Record<string, string>>): Promise<void> {
@@ -289,6 +293,7 @@ void test("restart: the start adopts a conforming survivor and rebuilds its regi
   // survivor with the sandbox's id and name.
   assert.deepEqual(engine.removals, [], "the start removed no container");
   assert.equal(engine.containers.has(id), true, "the survivor's container is kept");
+  assert.deepEqual([engine.stops, engine.starts], [[name], [name]], "the survivor's container was restarted once, so its runtime accepts the new supervisor");
   assert.equal(engine.volumes.has(scratchVolumeNameOf(session)), true, "the survivor's scratch volume is kept");
   assert.equal(existsSync(join(secretDirOf(config.secretRoot, name), "launch.json")), true, "the survivor's launch material is kept");
   assert.equal(runtime.spawns.length, 1, "the supervisor was respawned once");
@@ -338,6 +343,27 @@ void test("restart: a survivor whose supervisor cannot be respawned is destroyed
   assert.equal(engine.containers.size, 0, "no container is left standing");
   assert.equal(existsSync(secretDirOf(config.secretRoot, name)), false, "the survivor's secret directory was removed");
   assert.equal(existsSync(processConfig.socketPath), false, "the failed start left no socket");
+});
+
+void test("restart: a survivor whose container cannot be restarted is destroyed, and no supervisor is spawned for it", async (t) => {
+  const config = driverConfig();
+  t.after(() => {
+    rmSync(dirname(config.sandboxStateRoot), { recursive: true, force: true });
+  });
+  const engine = new RestartEngine();
+  const name = leaveSurvivor(engine, config);
+  engine.startContainer = (): Promise<void> => Promise.reject(makeRealmError("OPENSHELL_START_FAILED"));
+  const runtime = new FakeRuntime();
+  const processConfig = processConfigOf(config);
+
+  await assert.rejects(
+    startDriver(processConfig, seamsOver(engine, runtime)),
+    (error: unknown) => error instanceof RealmError && error.code === "OPENSHELL_START_FAILED",
+  );
+
+  assert.equal(runtime.spawns.length, 0, "no supervisor was spawned against a container that did not restart");
+  assert.equal(engine.containers.size, 0, "the survivor's container was removed");
+  assert.equal(existsSync(secretDirOf(config.secretRoot, name)), false, "the survivor's secret directory was removed");
 });
 
 void test("restart: the start logs an adopted line for the kept container, and a removed line with its cause for one with no record", async (t) => {
