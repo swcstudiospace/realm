@@ -296,6 +296,13 @@ void test("restart: the start adopts a conforming survivor and rebuilds its regi
   assert.deepEqual([engine.stops, engine.starts], [[name], [name]], "the survivor's container was restarted once, so its runtime accepts the new supervisor");
   assert.equal(engine.volumes.has(scratchVolumeNameOf(session)), true, "the survivor's scratch volume is kept");
   assert.equal(existsSync(join(secretDirOf(config.secretRoot, name), "launch.json")), true, "the survivor's launch material is kept");
+  // The runtime consumed its bootstrap in the previous life, so the restart wrote a fresh one before it started the container.
+  assert.equal(
+    existsSync(join(secretDirOf(config.secretRoot, name), "channel", "bootstrap.json")),
+    true,
+    "the runtime's bootstrap was written again for the restarted container",
+  );
+  assert.equal(existsSync(join(secretDirOf(config.secretRoot, name), "channel", "server.key")), false, "the TLS key is removed once the listener answered");
   assert.equal(runtime.spawns.length, 1, "the supervisor was respawned once");
   const args = runtime.spawns[0]?.args ?? [];
   assert.equal(args[args.indexOf("--sandbox-id") + 1], SANDBOX_ID);

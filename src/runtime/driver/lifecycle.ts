@@ -439,10 +439,12 @@ export class DriverLifecycle {
   }
 
   // Restarts an adopted sandbox's container and proves it conforms again. The runtime in a container stays bound to the host supervisor that
-  // first attached to it, and that supervisor exited with the previous driver, so a new supervisor is refused ("already bound to another
-  // supervisor"). A restart gives the runtime a fresh process that accepts one. The workspace and scratch volume are host-backed and
-  // survive; the processes inside the container do not. A container that does not conform after the restart is removed, as create removes one.
-  async restartAdopted(sandboxName: string, roots: AdoptionRoots): Promise<void> {
+  // first attached to it, that supervisor exited with the previous driver, and the runtime consumed its bootstrap, so a new supervisor is
+  // refused ("already bound to another supervisor") and a plain restart exits ("read boundary config ... No such file"). The container is
+  // stopped, prepare rebuilds the runtime's channel while nothing runs, and the start then gives the runtime a fresh process that reads it.
+  // The workspace and scratch volume are host-backed and survive; the processes inside the container do not. A container that does not
+  // conform after the restart is removed, as create removes one.
+  async restartAdopted(sandboxName: string, roots: AdoptionRoots, prepare: () => Promise<void>): Promise<void> {
     this.requireSwept();
     if (!this.adopted.has(sandboxName)) {
       throw makeRealmError("SCHEMA_INVALID");
@@ -453,6 +455,7 @@ export class DriverLifecycle {
       throw makeRealmError("OPENSHELL_START_FAILED");
     }
     await bounded(this.libpod.stopContainer(sandboxName, ADOPTION_RESTART_GRACE_MS));
+    await prepare();
     await this.startAndVerify(sandboxName, binding);
   }
 

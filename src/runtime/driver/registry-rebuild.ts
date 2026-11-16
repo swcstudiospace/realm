@@ -8,16 +8,19 @@
 // decoded with the gateway's rules, and the supervisor is started through launchSandboxSupervisor, the spawn createSandbox uses.
 
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { makeRealmError, RealmError } from "../../core/errors.js";
+import { hardeningEvidenceDigest } from "../hardening.js";
 import { sessionOfRealmSandbox } from "../openshell.js";
-import { channelPathsOf } from "./channel.js";
+import { channelPathsOf, generateRuntimeTls, makeChannelDirectory, removeKeyFile, writeRuntimeFiles } from "./channel.js";
 import type { ComputeDriver, ComputeDriverConfig, RuntimeHost, SandboxRecord } from "./compute-driver.js";
 import { addCleanupNote, SUPERVISOR_NOT_STOPPED } from "./compute-driver-state.js";
+import { runtimeKeysOf } from "./compute-driver-create.js";
 import { decodeLaunchAuthentication } from "./isolation/launch.js";
 import type { AdoptionRoots, DriverLifecycle } from "./lifecycle.js";
 import { refusalScope } from "./refusal.js";
-import { LAUNCH_FILE_NAME, removeSecretEntries, SSH_DIR_NAME, secretDirOf } from "./secret-store.js";
+import { assertRuntimeFilesAgree, buildRuntimeChannel, runtimeServerName } from "./runtime-channel.js";
+import { LAUNCH_FILE_NAME, presentSecretEntries, removeSecretEntries, secretDirOf } from "./secret-store.js";
 import { launchSandboxSupervisor, type SupervisorHandle } from "./supervisor.js";
 
 // One sandbox the adoption kept: its gateway name and its container id.
@@ -39,7 +42,7 @@ export interface RegistryRebuildDeps {
   readonly lifecycle: Pick<DriverLifecycle, "delete" | "restartAdopted">;
   readonly roots: AdoptionRoots;
   readonly config: ComputeDriverConfig;
-  readonly runtime: Pick<RuntimeHost, "spawnSupervisor">;
+  readonly runtime: Pick<RuntimeHost, "awaitListener" | "spawnSupervisor">;
 }
 
 // Rebuilds the registry entry and the supervisor of each adopted sandbox, in the order the adoption listed them. Every survivor is respawned
@@ -75,9 +78,6 @@ async function respawnSupervisor(
   containerId: string,
 ): Promise<RespawnedSandbox> {
   const { config } = deps;
-  // The runtime in the adopted container is still bound to the previous driver's supervisor and would refuse a new one, so the container
-  // restarts first. A failed restart leaves the survivor to the destroy path in rebuildRegistry.
-  await deps.lifecycle.restartAdopted(sandboxName, deps.roots);
   const sessionId = sessionOfRealmSandbox(sandboxName);
   if (sessionId === undefined) {
     throw makeRealmError("SCHEMA_INVALID");
@@ -93,10 +93,38 @@ async function respawnSupervisor(
   if (!authentication.supervisor.hasSshHostPrivateKey) {
     throw makeRealmError("SCHEMA_INVALID");
   }
-  // The supervisor of the previous generation created the sandbox's ssh directory and the socket in it, and it exited with that driver.
-  // Nothing removes them while the sandbox is kept, so the directory is removed before the new supervisor starts, as create starts from a
-  // secret directory that holds none.
-  removeSecretEntries(secretDir, [join(secretDir, SSH_DIR_NAME)]);
+  // The runtime in the adopted container is bound to the previous driver's supervisor and consumed its bootstrap and TLS key, so a new
+  // supervisor cannot attach to it. The container restarts, and the runtime's channel is rebuilt while it is stopped: the entries the
+  // previous generation left (its channel and TLS directories, ssh socket, descriptor and auth bundle) are removed, the leaf is issued
+  // again, and the bootstrap, descriptor and auth bundle are written from the retained launch material, as a create writes them. A failed
+  // step leaves the survivor to the destroy path in rebuildRegistry.
+  const serverName = runtimeServerName(authentication.supervisor.sessionId);
+  const trust: { caPem: string } = { caPem: "" };
+  await deps.lifecycle.restartAdopted(sandboxName, deps.roots, async () => {
+    removeSecretEntries(
+      secretDir,
+      presentSecretEntries(secretDir).filter((path) => basename(path) !== LAUNCH_FILE_NAME),
+    );
+    makeChannelDirectory(channel);
+    trust.caPem = await generateRuntimeTls(channel, serverName);
+    const files = buildRuntimeChannel({
+      sandboxId,
+      containerName: sandboxName,
+      image: config.sandboxImage,
+      gatewayId: authentication.gatewayId,
+      supervisor: authentication.supervisor,
+      verificationKeys: runtimeKeysOf(authentication),
+      serverName,
+      trustAnchorPem: trust.caPem,
+      controlSocketHostPath: channel.controlSocket,
+      evidenceDigest: hardeningEvidenceDigest(config.sandboxImage),
+    });
+    assertRuntimeFilesAgree(files.bootstrap, files.descriptor);
+    writeRuntimeFiles(channel, files);
+  });
+  await deps.runtime.awaitListener(channel.controlSocket, { caPem: trust.caPem, serverName });
+  // The handshake completed, so the runtime has loaded its key, as at create.
+  removeKeyFile(channel.privateKey);
   const supervisor = await launchSandboxSupervisor(deps.runtime, {
     binary: config.supervisor.binary,
     gatewayEndpoint: config.supervisor.gatewayEndpoint,
