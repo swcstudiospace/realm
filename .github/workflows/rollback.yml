@@ -2,6 +2,8 @@ name: Rollback
 
 # Manual only. Marks a published release as a prerelease, then publishes the documentation of a known-good release
 # through pages.yml. The default branch is not redeployed: it can still hold the content the rolled-back release withdrew.
+# The known-good tag is resolved once, after validation, to its peeled full commit SHA. pages.yml receives that SHA
+# together with the tag and builds exactly that commit, so a tag moved after validation cannot change what is built.
 on:
   workflow_dispatch:
     inputs:
@@ -62,8 +64,11 @@ jobs:
           fi
 
       # The known-good source must be an existing tag whose commit is on the default branch (ancestry), and whose
-      # release is published, not a draft or a prerelease, so a withdrawn release cannot be the source.
+      # release is published, not a draft or a prerelease, so a withdrawn release cannot be the source. Only after every
+      # check passes, the tag's peeled commit (^{commit} resolves annotated and lightweight tags alike) is written to
+      # the step output "sha". That output is the only source reference the later steps pass on.
       - name: Validate the known-good documentation source
+        id: known-good
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -87,6 +92,11 @@ jobs:
             echo "::error::Release ${DOCS_TAG} is ${release}, not a published known-good release." >&2
             exit 1
           fi
+          if [[ ! "${commit}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Tag ${DOCS_TAG} did not resolve to a full commit SHA." >&2
+            exit 1
+          fi
+          echo "sha=${commit}" >> "${GITHUB_OUTPUT}"
 
       - name: Mark release as prerelease
         env:
@@ -95,16 +105,30 @@ jobs:
           TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
+          if [[ ! "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::The tag input must match v<major>.<minor>.<patch>." >&2
+            exit 1
+          fi
           gh release edit "${TAG}" --prerelease
 
-      # pages.yml builds the known-good tag's site in its build job, which holds no write grant. Its deploy job runs
-      # no code from that tag.
+      # pages.yml revalidates the tag and SHA pair on the default branch, then builds exactly that SHA in its build job,
+      # which holds no write grant. Its deploy job runs no code from that commit. The SHA and the tag reach the shell
+      # only through the environment, and they travel to pages.yml as workflow inputs.
       - name: Dispatch Pages for the known-good tag
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           DOCS_TAG: ${{ inputs.docs_tag }}
+          DOCS_SHA: ${{ steps.known-good.outputs.sha }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
-          gh workflow run pages.yml --ref "${DEFAULT_BRANCH}" -f source_ref="${DOCS_TAG}"
+          if [[ ! "${DOCS_TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::The docs_tag input must match v<major>.<minor>.<patch>." >&2
+            exit 1
+          fi
+          if [[ ! "${DOCS_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::The validated known-good commit must be a full 40-character SHA." >&2
+            exit 1
+          fi
+          gh workflow run pages.yml --ref "${DEFAULT_BRANCH}" -f source_ref="${DOCS_TAG}" -f source_sha="${DOCS_SHA}"

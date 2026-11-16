@@ -1,12 +1,20 @@
 name: Pages
 
-# Started by the release job in ci.yml after verify and release, by rollback.yml with a known-good tag, and by hand. There
-# is no push trigger: it would deploy a commit whose verify run failed. An empty source_ref builds the dispatched branch.
+# Started by the release job in ci.yml after verify and release, by rollback.yml with a known-good tag and its commit,
+# and by hand. There is no push trigger: it would deploy a commit whose verify run failed. Every dispatch must run the
+# default branch's workflow (ci.yml and rollback.yml both dispatch with --ref on it); this is an in-workflow defense in
+# depth, not an enforced boundary. Empty source inputs build the dispatched (default) branch. A documentation source is
+# a pair: a release tag and the full commit SHA it must resolve to.
 on:
   workflow_dispatch:
     inputs:
       source_ref:
-        description: Release tag to build the documentation from, for example v0.3.3. Empty builds the dispatched branch.
+        description: Release tag to build the documentation from, for example v0.3.3. Empty builds the dispatched branch. Needs source_sha.
+        required: false
+        default: ""
+        type: string
+      source_sha:
+        description: Full 40-character commit SHA the release tag resolves to. Empty builds the dispatched branch. Needs source_ref.
         required: false
         default: ""
         type: string
@@ -29,21 +37,102 @@ jobs:
       contents: read # actions/checkout
       pages: read # actions/configure-pages: GET /repos/{owner}/{repo}/pages
     steps:
-      # The ref is checked before checkout uses it. It reaches the shell only through the environment.
+      # Every dispatch must come from the default branch's workflow. Both source inputs are checked before any command
+      # uses them. They reach the shell only through the environment. The tag and the SHA are given together or not at
+      # all, and neither value is trusted yet: the next step verifies them.
       - name: Validate source ref
         env:
           SOURCE_REF: ${{ inputs.source_ref }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          REF: ${{ github.ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
+          if [[ "${REF}" != "refs/heads/${DEFAULT_BRANCH}" ]]; then
+            echo "::error::Pages runs only from the default branch's workflow." >&2
+            exit 1
+          fi
           if [[ -n "${SOURCE_REF}" && ! "${SOURCE_REF}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "::error::source_ref must be empty or match v<major>.<minor>.<patch>." >&2
             exit 1
           fi
+          if [[ -n "${SOURCE_SHA}" && ! "${SOURCE_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::source_sha must be empty or a full 40-character lowercase hexadecimal commit SHA." >&2
+            exit 1
+          fi
+          if [[ -n "${SOURCE_REF}" && -z "${SOURCE_SHA}" ]] || [[ -z "${SOURCE_REF}" && -n "${SOURCE_SHA}" ]]; then
+            echo "::error::source_ref and source_sha must be given together or both left empty." >&2
+            exit 1
+          fi
+
+      # Trusted validation, run from the default branch's workflow before any selected source is checked out and
+      # before any of its code runs. It asks the GitHub API, not a clone, so nothing from the selected source is
+      # needed. For a pair it resolves the tag now, peeling annotated tags to their commit, and requires that commit to
+      # equal the supplied SHA. It requires a published release (not draft, not prerelease) and the SHA to be an
+      # ancestor of the default branch. The step output "ref" is the verified SHA, or empty for the normal dispatch.
+      # The checkout step receives only that output, so retargeting the tag later cannot change what is checked out.
+      - name: Verify the source commit
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          SOURCE_REF: ${{ inputs.source_ref }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${SOURCE_REF}" ]]; then
+            echo "ref=" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          if ! object="$(gh api "repos/${GH_REPO}/git/ref/tags/${SOURCE_REF}" --jq '.object.type + " " + .object.sha')"; then
+            echo "::error::Tag ${SOURCE_REF} does not exist." >&2
+            exit 1
+          fi
+          depth=0
+          while [[ "${object%% *}" == "tag" ]]; do
+            depth=$((depth + 1))
+            if [[ "${depth}" -gt 5 ]]; then
+              echo "::error::Tag ${SOURCE_REF} is nested too deeply." >&2
+              exit 1
+            fi
+            if ! object="$(gh api "repos/${GH_REPO}/git/tags/${object##* }" --jq '.object.type + " " + .object.sha')"; then
+              echo "::error::Tag ${SOURCE_REF} could not be resolved." >&2
+              exit 1
+            fi
+          done
+          commit="${object##* }"
+          if [[ "${object%% *}" != "commit" || ! "${commit}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Tag ${SOURCE_REF} does not name a commit." >&2
+            exit 1
+          fi
+          if [[ "${commit}" != "${SOURCE_SHA}" ]]; then
+            echo "::error::Tag ${SOURCE_REF} resolves to ${commit}, not the supplied ${SOURCE_SHA}. The tag moved or the pair is wrong." >&2
+            exit 1
+          fi
+          if ! release="$(gh release view "${SOURCE_REF}" --json isDraft,isPrerelease \
+            --jq 'if .isDraft then "draft" elif .isPrerelease then "prerelease" else "published" end')"; then
+            echo "::error::Could not read the release for ${SOURCE_REF}." >&2
+            exit 1
+          fi
+          if [[ "${release}" != "published" ]]; then
+            echo "::error::Release ${SOURCE_REF} is ${release}, not a published release." >&2
+            exit 1
+          fi
+          if ! base="$(gh api "repos/${GH_REPO}/compare/${SOURCE_SHA}...${DEFAULT_BRANCH}" --jq '.merge_base_commit.sha')"; then
+            echo "::error::Could not compare ${SOURCE_SHA} with the default branch." >&2
+            exit 1
+          fi
+          if [[ "${base}" != "${SOURCE_SHA}" ]]; then
+            echo "::error::Commit ${SOURCE_SHA} is not on the default branch." >&2
+            exit 1
+          fi
+          echo "ref=${SOURCE_SHA}" >> "${GITHUB_OUTPUT}"
 
       - name: Checkout source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.source_ref }}
+          ref: ${{ steps.source.outputs.ref }}
           persist-credentials: false
 
       - name: Set up Node.js 22
