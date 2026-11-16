@@ -201,6 +201,32 @@ const EPERM = "1";
 interface Scenario {
   readonly inputs: LiveInputs;
   readonly environment: ScenarioEnvironment;
+  // Resolves once the previous scenario's host supervisors are gone (settleBeforeScenario). assertActive waits for it before the
+  // first realm up. Absent for a scenario that builds its own Scenario.
+  readonly settled?: Promise<void>;
+}
+
+// A scenario's teardown can outlive its residue check: the driver stops a deleted sandbox's host supervisor some seconds after the
+// sandbox, its container and its secret entries are gone. The next scenario reuses the same sandbox name, so it starts once the driver
+// runs no host supervisor, and no late teardown of the previous scenario can reach it. A host with no driver unit configured has no
+// supervisor to observe, so it settles at once.
+async function settleBeforeScenario(liveInputs: LiveInputs): Promise<void> {
+  const unit = process.env[DRIVER_UNIT_VARIABLE];
+  if (unit === undefined || unit === "") {
+    return;
+  }
+  const settled = await pollUntil(
+    async () => {
+      const pid = await unitMainPid(liveInputs, unit);
+      if (pid <= 0) {
+        return { done: true };
+      }
+      const children = await childPidsOf(liveInputs, pid);
+      return children.length === 0 ? { done: true } : { done: false, detail: `the driver still runs ${String(children.length)} host supervisor(s)` };
+    },
+    { timeoutMs: RESIDUE_TIMEOUT_MS, intervalMs: CRASH_OBSERVE_INTERVAL_MS },
+  );
+  assert.ok(settled.ok, `the previous scenario's teardown must finish before the next scenario starts: ${settled.detail}`);
 }
 
 // Builds the scenario's isolated configuration and registers its cleanup on the test: realm down, then the residue wait. The
@@ -218,7 +244,10 @@ function startScenario(t: TestContext, spec: ScenarioSpec, workspaceFiles: reado
     const outcome = await cleanupScenario(liveInputs, environment, workspaceFiles);
     assert.ok(outcome.ok, `residue after the scenario's cleanup: ${outcome.detail}`);
   });
-  return { inputs: liveInputs, environment };
+  const settled = settleBeforeScenario(liveInputs);
+  // A scenario that never calls assertActive must not leave a rejection unhandled; assertActive still awaits the original promise.
+  settled.catch(() => undefined);
+  return { inputs: liveInputs, environment, settled };
 }
 
 function up(scenario: Scenario): Promise<CommandResult> {
@@ -245,6 +274,7 @@ function sandboxOf(scenario: Scenario): string {
 
 // realm up exits 0 and realm status reports active.
 async function assertActive(scenario: Scenario): Promise<void> {
+  await scenario.settled;
   const started = await up(scenario);
   assert.equal(started.exitCode, 0, `realm up: ${describeResult(started)}`);
   const status = await statusCli(scenario);
