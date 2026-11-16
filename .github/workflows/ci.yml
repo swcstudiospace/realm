@@ -163,7 +163,7 @@ jobs:
     name: Build release
     needs: [verify, site, audit]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: [self-hosted, linux, x64, omega-ci]
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     # Unprivileged: this job runs dependency and build code, so it holds no write grant. The
     # publish job receives the files it produced as an artifact and holds every write grant.
@@ -497,7 +497,7 @@ jobs:
     name: Publish release
     needs: build
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: [self-hosted, linux, x64, omega-ci]
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     # Privileged: holds the write grants and the attestation identity. It downloads only the tarball, checksums,
     # SBOM, milestone files and plan from the build job. The release commit, CHANGELOG.md and release notes are

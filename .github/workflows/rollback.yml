@@ -28,7 +28,7 @@ concurrency:
 jobs:
   rollback:
     name: Mark release as prerelease and publish known-good docs
-    runs-on: [self-hosted, linux, x64, omega-ci]
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       contents: write # gh release edit; git fetches the default branch and the known-good tag
