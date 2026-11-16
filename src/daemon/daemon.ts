@@ -344,7 +344,20 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
       reattach:
         options.healthReattach === undefined
           ? undefined
-          : { ...options.healthReattach, sleep: (ms: number) => new Promise<void>((resolve) => { setTimeout(resolve, ms); }) },
+          : {
+              ...options.healthReattach,
+              sleep: (ms: number) =>
+                new Promise<void>((resolve) => {
+                  setTimeout(resolve, ms);
+                }),
+              restart: () => {
+                const recorded = store.load(sessionId)?.containerId;
+                if (recorded === undefined || recorded === null) {
+                  return Promise.reject(makeRealmError("SCHEMA_INVALID"));
+                }
+                return handle.controller.hydrate(recorded);
+              },
+            },
       upIdOf: (sessionId) => upIds.get(sessionId),
     });
     return { sessionId, pinned, handle, health };

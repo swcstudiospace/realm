@@ -1,4 +1,4 @@
-// The bounded health re-attach (SessionHealth.reattach). After a probe moves a session to error, the health loop runs start() up to
+// The bounded health re-attach (SessionHealth.reattach). After a probe moves a session to error, the health loop runs restart() up to
 // policy.attempts times, waiting delayMs times the attempt number before each, and stops at the first attempt that leaves the error
 // state. Without a policy a probe failure stays terminal until an explicit retry (owner ruling N1). The interval timer and the wait are
 // fakes, so no test sleeps.
@@ -29,11 +29,13 @@ interface Arrangement {
   readonly stateNow: () => StateName;
 }
 
-// A controller whose probe lands the session in error, and whose start() answers from startOutcomes, one per call. An outcome is the
-// state start() leaves the session in, or a code it refuses with.
+type ReattachInput = Omit<SessionReattachPolicy, "sleep" | "restart">;
+
+// A controller whose probe lands the session in error, and a restart that answers from startOutcomes, one per call. An outcome is the
+// state the restart leaves the session in, or a code it refuses with.
 function arrange(
   t: TestContext,
-  policy: SessionReattachPolicy | undefined,
+  policy: ReattachInput | undefined,
   startOutcomes: readonly (StateName | ErrorCode)[],
 ): Arrangement {
   let state: StateName = "active";
@@ -60,15 +62,15 @@ function arrange(
       state = "error";
       return Promise.resolve(snapshotOf("error", "probe failed"));
     },
-    start: (): Promise<StateSnapshot> => {
-      const outcome = startOutcomes[startCalls] ?? "error";
-      startCalls += 1;
-      if (outcome === "active" || outcome === "error") {
-        state = outcome;
-        return Promise.resolve(snapshotOf(outcome, "start"));
-      }
-      return Promise.reject(makeRealmError(outcome as ErrorCode));
-    },
+  };
+  const restart = (): Promise<StateSnapshot> => {
+    const outcome = startOutcomes[startCalls] ?? "error";
+    startCalls += 1;
+    if (outcome === "active" || outcome === "error") {
+      state = outcome;
+      return Promise.resolve(snapshotOf(outcome, "start"));
+    }
+    return Promise.reject(makeRealmError(outcome as ErrorCode));
   };
   const waits: number[] = [];
   const logger = {
@@ -93,6 +95,7 @@ function arrange(
         ? undefined
         : {
             ...policy,
+            restart,
             sleep: (ms: number): Promise<void> => {
               waits.push(ms);
               return Promise.resolve();
@@ -120,9 +123,9 @@ function arrange(
   };
 }
 
-const POLICY: SessionReattachPolicy = { attempts: 3, delayMs: 5_000, sleep: () => Promise.resolve() };
+const POLICY: ReattachInput = { attempts: 3, delayMs: 5_000 };
 
-void test("reattach: a probe failure is followed by start(), and the session is active again after the first attempt that works", async (t) => {
+void test("reattach: a probe failure is followed by a restart, and the session is active again after the first attempt that works", async (t) => {
   const run = arrange(t, POLICY, ["active"]);
   await run.tick();
   assert.equal(run.starts(), 1);
@@ -139,7 +142,7 @@ void test("reattach: failed attempts are bounded, each waits one more delay unit
   assert.ok(run.logged.includes("health.reattach_failed"), "a refused attempt is logged with its code");
 });
 
-void test("reattach: without a policy a probe failure is terminal and start() is never called", async (t) => {
+void test("reattach: without a policy a probe failure is terminal and no restart is attempted", async (t) => {
   const run = arrange(t, undefined, ["active"]);
   await run.tick();
   assert.equal(run.starts(), 0);
