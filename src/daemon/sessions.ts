@@ -223,6 +223,18 @@ export interface SessionHealthOptions {
   readonly onProbeFailure: ((code: ErrorCode) => void) | undefined;
   // The correlation id of the up that last reached this session's create, or undefined before any up. Read at each transition.
   readonly upIdOf: (sessionId: string) => string | undefined;
+  // When set, a probe that moves the session to error is followed by a bounded number of start() attempts, which run create again
+  // against the recorded workspace and reuse the session's container. A driver restart restarts each adopted sandbox's container and
+  // ends its AgentOS runner, so a healthy daemon re-launches the runner instead of leaving the project disconnected until a retry.
+  // Absent, a probe failure is terminal until an explicit retry (owner ruling N1).
+  readonly reattach: SessionReattachPolicy | undefined;
+}
+
+// The bounded re-attach a health loop runs after a probe failure: how many start attempts, the delay unit between them, and the wait.
+export interface SessionReattachPolicy {
+  readonly attempts: number;
+  readonly delayMs: number;
+  readonly sleep: (ms: number) => Promise<void>;
 }
 
 // The health loop of one session. It runs while the session is in service, active or degraded (a degraded session still serves
@@ -302,6 +314,7 @@ export class SessionHealth {
           ...(code === undefined ? { reason: snapshot.reason } : { code }),
           sessionId,
         });
+        await this.#reattach();
       }
     } catch (error: unknown) {
       const code = codeOf(error);
@@ -310,6 +323,32 @@ export class SessionHealth {
       this.#options.onProbeFailure?.(code);
     } finally {
       this.#probing = false;
+    }
+  }
+
+  // After a probe moved the session to error, runs start() up to policy.attempts times, waiting policy.delayMs times the attempt number
+  // before each. start() runs create again against the recorded workspace and reuses the session's container. It stops at the first
+  // attempt that leaves the error state, and when the daemon is stopping or another call has already moved the session on.
+  async #reattach(): Promise<void> {
+    const policy = this.#options.reattach;
+    if (policy === undefined) {
+      return;
+    }
+    const { handle, logger, sessionId } = this.#options;
+    for (let attempt = 1; attempt <= policy.attempts; attempt += 1) {
+      await policy.sleep(policy.delayMs * attempt);
+      if (this.#options.isStopping() || handle.controller.snapshot().state !== "error") {
+        return;
+      }
+      try {
+        const snapshot = await handle.controller.start();
+        logger.info("health.reattach", { attempt, state: snapshot.state, sessionId });
+        if (snapshot.state !== "error") {
+          return;
+        }
+      } catch (error: unknown) {
+        logger.warn("health.reattach_failed", { attempt, code: codeOf(error), sessionId });
+      }
     }
   }
 }
