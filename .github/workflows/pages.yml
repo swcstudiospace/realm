@@ -26,8 +26,8 @@ concurrency:
   group: pages
   cancel-in-progress: false
 
-# Every job runs on the Omega CI runner pool, never on GitHub-hosted runners
-# (swcstudiospace/Omega-Prime docs/ci-runners.md).
+# Every job runs on a GitHub-hosted runner (ubuntu-24.04). The omega-ci self-hosted pool was removed from this repository's
+# workflows on 2026-11-16.
 jobs:
   build:
     name: Build site
