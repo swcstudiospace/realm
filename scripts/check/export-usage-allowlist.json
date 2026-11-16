@@ -503,11 +503,6 @@
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
-      "file": "src/runtime/driver/lifecycle.ts",
-      "name": "HardeningRefusal",
-      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
-    },
-    {
       "file": "src/runtime/driver/refusal.ts",
       "name": "DriverRpc",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
@@ -783,11 +778,6 @@
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
-      "file": "src/daemon/channel.ts",
-      "name": "DaemonAbsentError",
-      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
-    },
-    {
       "file": "src/runtime/config.ts",
       "name": "describeRuntimeConfigProblems",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
@@ -795,11 +785,6 @@
     {
       "file": "src/runtime/openshell.ts",
       "name": "gatewayStatusJsonCommand",
-      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
-    },
-    {
-      "file": "src/session/workspace-registry.ts",
-      "name": "workspaceEntryOf",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
@@ -821,6 +806,31 @@
       "file": "src/runtime/sweep.ts",
       "name": "removeAllRealmContainers",
       "reason": "D-1306 test-only seam: the sweep tests drive the zero-orphan sweep with fake clients"
+    },
+    {
+      "file": "src/cli/checkpoint.ts",
+      "name": "PODMAN_PROOF_TIMEOUT_MS",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/cli/checkpoint.ts",
+      "name": "CheckpointDeps",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/cli/checkpoint.ts",
+      "name": "pinStoppedProject",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/daemon/sessions.ts",
+      "name": "SessionReattachPolicy",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/session/workspace-pin.ts",
+      "name": "readWorkspacePin",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     }
   ]
 }
