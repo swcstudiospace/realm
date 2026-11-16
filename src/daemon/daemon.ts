@@ -123,6 +123,10 @@ export interface StartDaemonOptions extends Omit<BuildDaemonHandleOptions, "sess
   // Observer for a health probe that threw. The controller has already recorded any outcome that changes the session state; this
   // receives the catalogue code of the failure, including a refusal that left the state unchanged. It must not throw.
   readonly onHealthProbeFailure?: (code: ErrorCode) => void;
+  // The bounded re-attach each session's health loop runs after a probe moves it to error: attempts and the delay unit in milliseconds.
+  // Absent, a probe failure is terminal until an explicit retry. The daemon process enables it (daemon/main.ts), so a driver restart,
+  // which restarts the sandbox's container and ends its runner, does not leave the project disconnected.
+  readonly healthReattach?: { readonly attempts: number; readonly delayMs: number };
   // Observer for the startup maintenance report (CRASH-04). It runs once per start, after the reap, the sweep, the reconciliation and
   // the hydrations, which run while the daemon serves. It must not throw; a throw aborts the start.
   readonly onStartup?: (report: StartupReport) => void;
@@ -337,6 +341,23 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
       logger,
       isStopping: () => downRequested,
       onProbeFailure: options.onHealthProbeFailure,
+      reattach:
+        options.healthReattach === undefined
+          ? undefined
+          : {
+              ...options.healthReattach,
+              sleep: (ms: number) =>
+                new Promise<void>((resolve) => {
+                  setTimeout(resolve, ms);
+                }),
+              restart: () => {
+                const recorded = store.load(sessionId)?.containerId;
+                if (recorded === undefined || recorded === null) {
+                  return Promise.reject(makeRealmError("SCHEMA_INVALID"));
+                }
+                return handle.controller.hydrate(recorded);
+              },
+            },
       upIdOf: (sessionId) => upIds.get(sessionId),
     });
     return { sessionId, pinned, handle, health };

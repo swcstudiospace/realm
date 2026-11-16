@@ -14,7 +14,6 @@ import { atomicWriteFile, observeSha256 } from "../fs/atomic-write.js";
 import { openCanonical } from "../fs/canonicalize.js";
 import { bindRoot, type PinnedRoot } from "../fs/root.js";
 import { recordFileName, sessionIdOfWorkspace } from "./paths.js";
-import { verifyWorkspaceEntry } from "./workspace-registry.js";
 
 const DIRECTORY_MODE = 0o700;
 const PIN_SCHEMA = 1;
@@ -34,10 +33,10 @@ export function workspacePinDirOf(stateDir: string): string {
 }
 
 // Binds the directory at the session path: writes the pin for the session id, replacing any pin stored under it. up is the
-// caller that binds, so a directory replaced while the project was down is bound again here. create and restore verify
-// the stored pin with verifyWorkspacePin from then on. A stored record that is malformed or names another id is SCHEMA_INVALID,
-// and it is left as it is. The session id must derive from the pinned real path, otherwise the write is SCHEMA_INVALID and
-// nothing is written. Returns the pin as written.
+// caller that binds, so a directory replaced while the project was down is bound again here. The checkpoint command does
+// not read this pin: a stopped project is pinned in memory. A stored record that is malformed or names another id is
+// SCHEMA_INVALID, and it is left as it is. The session id must derive from the pinned real path, otherwise the write is
+// SCHEMA_INVALID and nothing is written. Returns the pin as written.
 export function writeWorkspacePin(stateDir: string, pinned: PinnedRoot, sessionId: string): WorkspacePin {
   const fileName = recordFileName(sessionId);
   const dir = workspacePinDirOf(stateDir);
@@ -83,13 +82,6 @@ export function readWorkspacePin(stateDir: string, sessionId: string): Workspace
     closeSync(opened.fd);
   }
   return parsePin(text, sessionId);
-}
-
-// Checks that the pinned directory is still the directory it was pinned as. The check is the registry's
-// (verifyWorkspaceEntry): a moved directory, a directory replaced at the same path, and a link at the path
-// are POLICY_DENIED.
-export function verifyWorkspacePin(pin: WorkspacePin): PinnedRoot {
-  return verifyWorkspaceEntry(pin);
 }
 
 // The pin directory must be a real directory, not a link, at mode 0700. Anything else is refused

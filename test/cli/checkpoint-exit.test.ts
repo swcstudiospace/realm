@@ -13,9 +13,8 @@ import { fileURLToPath } from "node:url";
 import { CHECKPOINT_USAGE } from "../../src/cli/checkpoint.js";
 import { ERROR_CATALOGUE } from "../../src/core/errors.js";
 import { selectionOf } from "../../src/daemon/client.js";
-import { bindRoot } from "../../src/fs/root.js";
 import { checkpointDirOf } from "../../src/session/paths.js";
-import { writeWorkspacePin } from "../../src/session/workspace-pin.js";
+import { FakeLibpod } from "../support/fake-libpod.js";
 import { boundedWait, testTimeout } from "../support/timing.js";
 
 // This file runs from dist/test/cli, so three levels up is the package root.
@@ -32,10 +31,12 @@ interface Layout {
   readonly stateDir: string;
   readonly sessionId: string;
   readonly configHome: string;
+  readonly runtime: string;
 }
 
-// A workspace with one file, a state root outside it, and the runtime config that names the state root. All of it lives under
-// one scratch directory, removed when the test ends.
+// A workspace with one file, a state root outside it, the runtime config that names the state root, and the policy file
+// that lets the workspace be pinned. The project has no registry entry: it is stopped, and realm checkpoint pins it in
+// memory. All of it lives under one scratch directory, removed when the test ends.
 function layoutOf(t: TestContext): Layout {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "realm-cli-exit-")));
   t.after(() => {
@@ -44,9 +45,13 @@ function layoutOf(t: TestContext): Layout {
   const workspace = join(root, "workspace");
   const stateDir = join(root, "state");
   const configHome = join(root, "config");
+  const runtime = join(root, "runtime");
   mkdirSync(workspace);
+  mkdirSync(stateDir);
   mkdirSync(join(configHome, "realm"), { recursive: true });
+  mkdirSync(join(runtime, "podman"), { recursive: true });
   writeFileSync(join(workspace, "a.txt"), "alpha\n");
+  writeFileSync(join(stateDir, "policy.json"), JSON.stringify({ workspaceRoots: [workspace] }));
   writeFileSync(
     join(configHome, "realm", "config.json"),
     JSON.stringify({
@@ -55,7 +60,14 @@ function layoutOf(t: TestContext): Layout {
       workspaceRoot: workspace,
     }),
   );
-  return { workspace, stateDir, sessionId: selectionOf(workspace).sessionId, configHome };
+  return { workspace, stateDir, sessionId: selectionOf(workspace).sessionId, configHome, runtime };
+}
+
+// The Podman socket the stopped proof reads. It holds no container, so the proof finishes and the operation proceeds.
+async function startPodman(t: TestContext, fx: Layout): Promise<void> {
+  const fake = new FakeLibpod();
+  await fake.start(join(fx.runtime, "podman", "podman.sock"));
+  t.after(() => fake.stop());
 }
 
 interface ChildRun {
@@ -67,9 +79,14 @@ interface ChildRun {
 
 // Runs the built entry with args. Resolves once the process has exited and both of its output streams have closed, so the
 // output is whole. A child still running at the bound is killed, and the call rejects.
-async function runEntry(args: readonly string[], configHome: string, bound: number): Promise<ChildRun> {
+async function runEntry(args: readonly string[], fx: Layout, bound: number): Promise<ChildRun> {
   const child = spawn(process.execPath, [ENTRY, ...args], {
-    env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: configHome, XDG_CONFIG_HOME: configHome },
+    env: {
+      PATH: process.env.PATH ?? "/usr/bin:/bin",
+      HOME: fx.configHome,
+      XDG_CONFIG_HOME: fx.configHome,
+      XDG_RUNTIME_DIR: fx.runtime,
+    },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let stdout = "";
@@ -98,17 +115,13 @@ async function runEntry(args: readonly string[], configHome: string, bound: numb
 
 void test("RES-04: a checkpoint restore whose manifest.json is a FIFO is refused as a non-regular file within 30 seconds", testTimeout(QUICK_CHILD_BOUND_MS), async (t) => {
   const fx = layoutOf(t);
-  writeWorkspacePin(fx.stateDir, bindRoot(fx.workspace), fx.sessionId);
+  await startPodman(t, fx);
   // A FIFO where the checkpoint's manifest.json belongs. The restore reads that file before it takes the session lock.
   // A FIFO is not a regular file, so the read is refused at once, without waiting for a writer.
   const checkpoint = checkpointDirOf(fx.stateDir, fx.sessionId, CHECKPOINT_ID);
   mkdirSync(checkpoint, { recursive: true });
   execFileSync("mkfifo", [join(checkpoint, "manifest.json")]);
-  const run = await runEntry(
-    ["checkpoint", "restore", "--workspace", fx.workspace, "--id", CHECKPOINT_ID],
-    fx.configHome,
-    QUICK_CHILD_BOUND_MS,
-  );
+  const run = await runEntry(["checkpoint", "restore", "--workspace", fx.workspace, "--id", CHECKPOINT_ID], fx, QUICK_CHILD_BOUND_MS);
   assert.equal(run.signal, null, "the child was killed instead of exiting on its own");
   assert.equal(run.code, REFUSED_EXIT);
   assert.equal(run.stdout, "POLICY_DENIED\n");
@@ -117,12 +130,8 @@ void test("RES-04: a checkpoint restore whose manifest.json is a FIFO is refused
 
 void test("RES-04: a checkpoint create that finishes exits at once with exit 0 and its complete JSON line", testTimeout(QUICK_CHILD_BOUND_MS), async (t) => {
   const fx = layoutOf(t);
-  writeWorkspacePin(fx.stateDir, bindRoot(fx.workspace), fx.sessionId);
-  const run = await runEntry(
-    ["checkpoint", "create", "--workspace", fx.workspace, "--id", CHECKPOINT_ID],
-    fx.configHome,
-    QUICK_CHILD_BOUND_MS,
-  );
+  await startPodman(t, fx);
+  const run = await runEntry(["checkpoint", "create", "--workspace", fx.workspace, "--id", CHECKPOINT_ID], fx, QUICK_CHILD_BOUND_MS);
   assert.equal(run.signal, null, "the child was killed instead of exiting on its own");
   assert.equal(run.code, 0, run.stderr);
   assert.equal(run.stderr, "");
@@ -132,7 +141,7 @@ void test("RES-04: a checkpoint create that finishes exits at once with exit 0 a
 
 void test("a usage refusal writes its full line to stderr and exits 2 at once", testTimeout(QUICK_CHILD_BOUND_MS), async (t) => {
   const fx = layoutOf(t);
-  const run = await runEntry(["checkpoint"], fx.configHome, QUICK_CHILD_BOUND_MS);
+  const run = await runEntry(["checkpoint"], fx, QUICK_CHILD_BOUND_MS);
   assert.equal(run.signal, null, "the child was killed instead of exiting on its own");
   assert.equal(run.code, 2);
   assert.equal(run.stdout, "");

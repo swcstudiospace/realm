@@ -140,3 +140,43 @@ export function logAdoptionRemoved(log: RefusalLog | undefined, containerId: str
   const sink = log ?? stderrRefusalLog;
   sink(`realm compute driver adoption removed: container=${containerId} cause=${cause}`);
 }
+
+// The supervisor lines: a host supervisor's spawn, its exit, and a spawn that failed. They name a sandbox, a process id, an exit code,
+// a signal or a catalogue code, and no value. They go to the driver's stderr log, not to an injected RefusalLog, which carries the
+// refusal and adoption lines alone. A sandbox name outside the container-name shape is written as invalid, so no line can carry a
+// separator or a line break.
+const SUPERVISOR_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
+
+function supervisorNameOf(sandboxName: string | undefined): string {
+  if (sandboxName === undefined) {
+    return "none";
+  }
+  return SUPERVISOR_NAME.test(sandboxName) ? sandboxName : "invalid";
+}
+
+// Writes the line of a supervisor that spawned: its sandbox and its process id.
+export function logSupervisorSpawned(sandboxName: string | undefined, pid: number | undefined): void {
+  stderrRefusalLog(`realm compute driver supervisor spawned: sandbox=${supervisorNameOf(sandboxName)} pid=${String(pid ?? "none")}`);
+}
+
+// Writes the line of a supervisor that exited, however it exited: its pid, the exit code, and the signal that ended it.
+export function logSupervisorExited(
+  sandboxName: string | undefined,
+  pid: number | undefined,
+  code: number | null,
+  signal: NodeJS.Signals | null,
+): void {
+  stderrRefusalLog(
+    `realm compute driver supervisor exited: sandbox=${supervisorNameOf(sandboxName)} pid=${String(pid ?? "none")} code=${String(code ?? "none")} signal=${signal ?? "none"}`,
+  );
+}
+
+// Writes the line of a supervisor that could not be spawned: its sandbox and the catalogue code of the refusal.
+export function logSupervisorSpawnFailed(sandboxName: string | undefined, code: ErrorCode): void {
+  stderrRefusalLog(`realm compute driver supervisor spawn failed: sandbox=${supervisorNameOf(sandboxName)} code=${code}`);
+}
+
+// Writes the line of a supervisor whose output log could not be opened: its sandbox and the system error code. Its output is discarded.
+export function logSupervisorLogUnavailable(sandboxName: string | undefined, code: string): void {
+  stderrRefusalLog(`realm compute driver supervisor log unavailable: sandbox=${supervisorNameOf(sandboxName)} code=${code} output=discarded`);
+}

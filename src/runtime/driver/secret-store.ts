@@ -34,6 +34,8 @@ export const LAUNCH_FILE_NAME = "launch.json";
 export const DESCRIPTOR_FILE_NAME = "descriptor.json";
 export const AUTH_FILE_NAME = "auth.json";
 export const MAIN_EXIT_MARKER_NAME = "main-exit";
+// The host supervisor's stdout and stderr, appended at each spawn. Only sandbox teardown removes it, so it outlives supervisor exits and respawns.
+export const SUPERVISOR_LOG_NAME = "supervisor.log";
 // The channel directory holds the runtime's bootstrap, certificate, key and control socket. It is bound into the container.
 export const CHANNEL_DIR_NAME = "channel";
 export const BOOTSTRAP_FILE_NAME = "bootstrap.json";
@@ -45,7 +47,8 @@ export const TLS_WORK_DIR_NAME = "tls";
 const LAUNCH_STAGING_NAME = "launch.json.tmp";
 const ACTIVE_FILE_NAME = "active";
 // The files of a sandbox's secret directory that removal deletes. The staging copy is included, so a crash mid-write
-// leaves nothing behind once a delete or an adoption runs.
+// leaves nothing behind once a delete or an adoption runs. The supervisor log is not here: only teardown removes it (see
+// TEARDOWN_FILE_NAMES), so it survives supervisor exits and respawns.
 const SECRET_FILE_NAMES: readonly string[] = Object.freeze([
   LAUNCH_FILE_NAME,
   LAUNCH_STAGING_NAME,
@@ -54,6 +57,8 @@ const SECRET_FILE_NAMES: readonly string[] = Object.freeze([
   AUTH_FILE_NAME,
   MAIN_EXIT_MARKER_NAME,
 ]);
+// The files teardown removes: the secret files and the supervisor log.
+const TEARDOWN_FILE_NAMES: readonly string[] = Object.freeze([...SECRET_FILE_NAMES, SUPERVISOR_LOG_NAME]);
 // The directories of a sandbox's secret directory that removal deletes with their contents.
 const SECRET_DIR_NAMES: readonly string[] = Object.freeze([CHANNEL_DIR_NAME, TLS_WORK_DIR_NAME, SSH_DIR_NAME]);
 const GROUP_OR_WORLD_BITS = 0o077;
@@ -101,11 +106,20 @@ export function writeLaunchMaterial(root: string, sandboxName: string, body: Uin
 // anything is removed. A missing directory has none. A symbolic link or an entry of the wrong kind at a secret name is refused,
 // and is never followed or removed.
 export function presentSecretEntries(dir: string): string[] {
+  return presentEntries(dir, SECRET_FILE_NAMES);
+}
+
+// The entries teardown removes: the secret entries and the supervisor log. Only sandbox teardown (delete) uses this list.
+export function presentTeardownEntries(dir: string): string[] {
+  return presentEntries(dir, TEARDOWN_FILE_NAMES);
+}
+
+function presentEntries(dir: string, fileNames: readonly string[]): string[] {
   if (!directoryExists(dir)) {
     return [];
   }
   const present: string[] = [];
-  for (const name of SECRET_FILE_NAMES) {
+  for (const name of fileNames) {
     const path = join(dir, name);
     const stat = lstatOrAbsent(path, "CLEANUP_FAILED");
     if (stat === null) {

@@ -50,7 +50,7 @@ import {
   sessionOfRealmSandbox,
 } from "../openshell.js";
 import { listRealmContainers, SWEEP_CALL_TIMEOUT_MS } from "../sweep.js";
-import { LAUNCH_FILE_NAME, presentSecretEntries, removeSecretDirIfEmpty, removeSecretEntries, secretDirExists, secretDirOf, secretDirsUnder } from "./secret-store.js";
+import { LAUNCH_FILE_NAME, presentSecretEntries, presentTeardownEntries, removeSecretDirIfEmpty, removeSecretEntries, secretDirExists, secretDirOf, secretDirsUnder } from "./secret-store.js";
 import { assertStrictlyInside, isInsideInclusive, lstatOrAbsent } from "./fs-guards.js";
 import {
   assertNoOverlap,
@@ -64,6 +64,11 @@ import { sandboxBindingOf } from "./sandbox-binding.js";
 
 // Grace period a sandbox container gets to stop before it is killed. Matches the session composition's grace.
 const STOP_GRACE_MS = 10_000;
+
+// The grace an adopted sandbox's container gets before the adoption restart kills it. The workload ended with the previous driver's
+// generation, and the runtime ignores SIGTERM, so a long grace only holds the driver's start (and the daemon's health re-attach, which
+// must not overlap the restart) for 10 s.
+const ADOPTION_RESTART_GRACE_MS = 1_000;
 
 // C1. The options every workspace mount must carry, so the workspace is not executable, suid or device-bearing.
 const WORKSPACE_REQUIRED_OPTIONS: readonly string[] = Object.freeze(["noexec", "nosuid", "nodev"]);
@@ -395,7 +400,7 @@ export class DriverLifecycle {
     // its root. The pinned workspace root lies outside both roots (the driver checks this at construction), so it is never removed.
     assertStrictlyInside(dir, this.sandboxStateRoot);
     assertStrictlyInside(secretDir, this.secretRoot);
-    const secretEntries = presentSecretEntries(secretDir);
+    const secretEntries = presentTeardownEntries(secretDir);
     const listed = await this.libpod.listContainersByLabel(OPENSHELL_SANDBOX_NAME_LABEL_KEY, sandboxName);
     for (const container of listed) {
       if (await isSandboxOwned(this.libpod, container, sandboxName)) {
@@ -431,6 +436,27 @@ export class DriverLifecycle {
   async stop(sandboxName: string): Promise<void> {
     this.requireSwept();
     await this.libpod.stopContainer(sandboxName, STOP_GRACE_MS);
+  }
+
+  // Restarts an adopted sandbox's container and proves it conforms again. The runtime in a container stays bound to the host supervisor that
+  // first attached to it, that supervisor exited with the previous driver, and the runtime consumed its bootstrap, so a new supervisor is
+  // refused ("already bound to another supervisor") and a plain restart exits ("read boundary config ... No such file"). The container is
+  // stopped, prepare rebuilds the runtime's channel while nothing runs, and the start then gives the runtime a fresh process that reads it.
+  // The workspace and scratch volume are host-backed and survive; the processes inside the container do not. A container that does not
+  // conform after the restart is removed, as create removes one.
+  async restartAdopted(sandboxName: string, roots: AdoptionRoots, prepare: () => Promise<void>): Promise<void> {
+    this.requireSwept();
+    if (!this.adopted.has(sandboxName)) {
+      throw makeRealmError("SCHEMA_INVALID");
+    }
+    const info = await bounded(this.libpod.info());
+    const binding = this.rebuildBinding(sandboxName, roots, info.rootless);
+    if (typeof binding === "string") {
+      throw makeRealmError("OPENSHELL_START_FAILED");
+    }
+    await bounded(this.libpod.stopContainer(sandboxName, ADOPTION_RESTART_GRACE_MS));
+    await prepare();
+    await this.startAndVerify(sandboxName, binding);
   }
 
   // Starts the created container and proves it conforms. The verifier runs first, then the live capability proof and the two
