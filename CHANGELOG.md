@@ -4,6 +4,79 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.3.30] - 2026-11-16
+
+### Added
+- feat(release): rollback passes the verified commit SHA and Pages revalidates it before checkout (plan 20-01) (52a5d67)
+- feat(daemon): bounded health re-attach after a probe failure (plan 19-01) (b77f128)
+- feat(driver): record the sandbox supervisor stderr to supervisor.log (plan 19-01 diagnosis) (56da493)
+- feat(driver): log sandbox supervisor spawn, exit and spawn errors (plan 19-01 diagnosis) (845c65c)
+- feat(checkpoint): pin a stopped project in memory for realm checkpoint (phase 19, RES-04) (21a3b17)
+- feat(observability): 17-02 T1 upId on lifecycle.transition (a74d7c7)
+- feat(observability): 17-02 log control.request for unrecognized control lines (5028c9b)
+- feat(onboard): realm init and doctor --fix for zero-config onboarding (phase 15) (0f141fe)
+
+### Changed
+- diag(driver): log a failed OpenShell create's exit code and redacted stderr (338db2f)
+
+### Fixed
+- fix(driver): rebuild the runtime channel when an adopted sandbox's container restarts (plan 19-01) (2ff6df9)
+- fix(daemon): re-attach restarts the runner on the recorded container, never replaces it (plan 19-01) (02be0c0)
+- fix(driver): short adoption restart grace; poll the workload after a driver restart (plan 19-01) (b21e992)
+- fix(driver): name the cause and failed hardening properties when the driver fails to start (c9fa34b)
+- fix(driver): restart an adopted sandbox's container before respawning its supervisor (plan 19-01) (4ba8ab4)
+- fix(driver): keep the supervisor log across respawns; mark each spawn (plan 19-01 diagnosis) (ddd0d6c)
+- fix(driver): keep supervisor exit log fields as strings (plan 19-01 diagnosis) (af1e430)
+- fix(driver): respawn the sandbox supervisor of an adopted container after restart (plan 19-01) (bd583ad)
+- fix(checkpoint): verifyWorkspacePin matches the in-memory pin (phase 19, plan 19-01) (ec31518)
+- fix(daemon): a failed registry cleanup at startup is a reap failure (phase 18, plan 09 T2) (1775047)
+- fix(runtime): keep the cause of a failed AgentOS stop in phase 17 (e06f7ac)
+- fix(checkpoint): record symlinks whose target climbs a file or loops, not SCHEMA_INVALID (ef9f68a)
+- fix(runtime): free a stale gateway sandbox name before a session create (0abcb80)
+
+### Documentation
+- docs(driver): restart of an adopted sandbox and the bounded health re-attach (plan 19-01) (acbd799)
+- docs(runtime): C5 follows plan 18-01 (ffbff0d)
+- docs(spec): list OPENSHELL_GATEWAY_LOST in the frozen error codes (78ea260)
+- docs(runtime): reconcile AgentOS stop comment with no-removal path in phase 17 (cb03c81)
+- docs(observability): 17-05 T3 record S17-b and gateway-lost re-run results (891c7ad)
+- docs(observability): 17-04 record O-b and O-d per session as owner choice (3cf9d64)
+- docs(observability): 17-04 correct audit.head timing and file in runtime-decision (a5ae315)
+- docs(observability): 17-04 record audit.head per session in H2 (2afd9b5)
+- docs(phase-16): summary for plan 16-01 (OMPX-02/03/04) (4f5b5ba)
+- docs(onboarding): finish phase 15 plan 16 documentation items (58b671d)
+- docs(spec): annotate remaining advisory-default lines as superseded by D4 (fc07976)
+- docs(spec): annotate the advisory-default lines as superseded by D4 (237048c)
+- docs(spec): record the fail-closed default (D4); owner-directed spec edit (fabc4b7)
+- docs(onboard): status and down with --workspace work from another directory (e84b39c)
+- docs(onboard): status and down need the workspace while a daemon runs; L-D2 active frame (727391f)
+- docs(onboard): quickstart and Omp install record from the current build (phase 15) (1f80f7a)
+
+### Maintenance
+- ci(release): run the release, publish, rollback, pages and mutation jobs on GitHub-hosted runners (plan 20-02) (5c9ac7e)
+- test(release): behavior tests for the ci.yml release decision steps (plan 20-03) (d97c7c5)
+- test(live): start each scenario after the previous scenario's host supervisors are gone (plan 19-01) (40a0aec)
+- chore(gates): export-usage allowlist for the test-only seams and drop stale entries (phase 19) (4cb5e14)
+- test(driver): mark the FakeRuntime override explicitly (plan 19-01) (236324f)
+- test(live): drop redundant optional chain on the inspected volume (phase 19, plan 19-01 gap c lint) (52d2428)
+- test(live): add scenario 5c and the driver-restart scenario (phase 19, plan 19-01 gap c) (f031064)
+- test(live): gate the stopped checkpoint round trip and root device/inode checks (phase 19, plan 19-01 gap b) (93457e5)
+- test(checkpoint): cover the stopped-project round trip (phase 19, plan 19-01 gap a) (2dd0008)
+- test(fixture): down takes the project (plan 18-11 T1) (85eeccf)
+- test(daemon): key the MULTI-03 leftover registry entry by its workspace (phase 18 gap fix) (4ad91be)
+- test(daemon): startup line test uses a real leftover entry and record (phase 18, plan 09 T2) (ec94fec)
+- test(daemon): close phase 18 plan 18-06 gaps for T1 (g) and OBS-02 (99edfda)
+- test(mcp): assert the MCP write reply in the two-project case (phase 18, plan 18-11 T2) (eb6e846)
+- test(runtime): pin retry-only contract of gateway-lost hold in phase 17 (e11a283)
+- test(live): remove scenario 13's checkpoint so the next run can reuse its id (d46e322)
+- build(deps): bump @rivet-dev/agentos-core from 0.4.4 to 0.4.7 (4b73f77)
+- test(live): clean each scenario's own state and workspace files (41e890e)
+- test(live): pass the pinned workspace to realm metrics (02c902a)
+- test(live): run a scenario against the driver's own state root (0192120)
+- test(live): carry the host OpenShell registration into each scenario (13e7267)
+- test(live): opt-in keep of a scenario's state for diagnosis (6b75278)
+- build(sandbox): repin the agentos runner digest for the current source (98fd655)
+
 ## [0.3.29] - 2026-11-13
 
 ### Changed
