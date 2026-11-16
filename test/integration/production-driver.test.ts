@@ -1480,7 +1480,19 @@ void test("production live 19 driver-restart", { skip: driverRestartSkip, timeou
     );
     assert.ok(respawned.ok, `the restarted driver must respawn its sandbox supervisor: ${respawned.detail}`);
 
-    // The daemon was not touched: same process, same container, same scratch volume, and the workload still answers.
+    // The daemon was not touched: same process, same container, same scratch volume, and the workload still answers. The gateway shows
+    // the sandbox as not ready until the new supervisor attaches, so the workload read is polled to the active bound, and the status
+    // is read after it: the daemon's health re-attach runs the runner again once its probe has seen the restart.
+    let marker = await exec(scenario, ["cat", `${SANDBOX_WORKSPACE_PATH}/${DRIVER_MARKER_FILE}`]);
+    const answered = await pollUntil(
+      async () => {
+        marker = await exec(scenario, ["cat", `${SANDBOX_WORKSPACE_PATH}/${DRIVER_MARKER_FILE}`]);
+        return marker.exitCode === 0 ? { done: true } : { done: false, detail: `exit ${String(marker.exitCode)}; stderr ${marker.stderr.slice(0, 200)}` };
+      },
+      { timeoutMs: ACTIVE_TIMEOUT_MS, intervalMs: CRASH_OBSERVE_INTERVAL_MS },
+    );
+    assert.ok(answered.ok, `the workload must answer after the driver restart: ${answered.detail}`);
+    assert.equal(marker.stdout, DRIVER_MARKER_TEXT, "the workload must answer with the marker unchanged after the driver restart");
     const active = await waitForActive(scenario.inputs, scenario.environment, ACTIVE_TIMEOUT_MS);
     assert.ok(active.ok, `realm status must reach active after the driver restart: ${active.detail}`);
     const daemonAfter = await daemonPids(scenario);
@@ -1488,9 +1500,6 @@ void test("production live 19 driver-restart", { skip: driverRestartSkip, timeou
     const containersAfter = await itemsOf(listSandboxContainers(scenario.inputs, sandbox), `the ${sandbox} containers after the driver restart`);
     assert.deepEqual(containersAfter, containersBefore, "the driver restart must keep the same container, with no duplicate");
     assert.equal(await volumeExists(scenario.inputs, volume), true, `the scratch volume ${volume} must survive the driver restart`);
-    const marker = await exec(scenario, ["cat", `${SANDBOX_WORKSPACE_PATH}/${DRIVER_MARKER_FILE}`]);
-    assertExit(marker, 0, "reading the workspace marker from the sandbox after the driver restart");
-    assert.equal(marker.stdout, DRIVER_MARKER_TEXT, "the workload must answer with the marker unchanged after the driver restart");
   } catch (error) {
     await up(scenario);
     throw error;

@@ -65,6 +65,11 @@ import { sandboxBindingOf } from "./sandbox-binding.js";
 // Grace period a sandbox container gets to stop before it is killed. Matches the session composition's grace.
 const STOP_GRACE_MS = 10_000;
 
+// The grace an adopted sandbox's container gets before the adoption restart kills it. The workload ended with the previous driver's
+// generation, and the runtime ignores SIGTERM, so a long grace only holds the driver's start (and the daemon's health re-attach, which
+// must not overlap the restart) for 10 s.
+const ADOPTION_RESTART_GRACE_MS = 1_000;
+
 // C1. The options every workspace mount must carry, so the workspace is not executable, suid or device-bearing.
 const WORKSPACE_REQUIRED_OPTIONS: readonly string[] = Object.freeze(["noexec", "nosuid", "nodev"]);
 
@@ -447,7 +452,7 @@ export class DriverLifecycle {
     if (typeof binding === "string") {
       throw makeRealmError("OPENSHELL_START_FAILED");
     }
-    await bounded(this.libpod.stopContainer(sandboxName, STOP_GRACE_MS));
+    await bounded(this.libpod.stopContainer(sandboxName, ADOPTION_RESTART_GRACE_MS));
     await this.startAndVerify(sandboxName, binding);
   }
 

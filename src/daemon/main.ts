@@ -52,9 +52,9 @@ interface StopWiring {
 // Start provisions the runner child and waits for its probe, so it gets the long budget; probe and delete get the short one.
 const AGENTOS_START_TIMEOUT_MS = 180_000;
 const AGENTOS_CALL_TIMEOUT_MS = 30_000;
-// The bounded health re-attach (SessionHealth): up to three start attempts after a probe failure, waiting 5, 10 and 15 s before them. A
+// The bounded health re-attach (SessionHealth): up to three start attempts after a probe failure, waiting 10, 20 and 30 s before them. A
 // driver restart restarts each adopted sandbox's container, which ends the AgentOS runner, and the re-attach starts it again.
-const HEALTH_REATTACH = { attempts: 3, delayMs: 5_000 } as const;
+const HEALTH_REATTACH = { attempts: 3, delayMs: 10_000 } as const;
 
 function productionAgentOsDriver(env: EnvironmentLike, stateDir: string): AgentOsDriver {
   const driverSocket = env["REALM_DRIVER_SOCKET"];
