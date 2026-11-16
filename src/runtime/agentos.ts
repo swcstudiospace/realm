@@ -11,8 +11,8 @@
 //     is retryable: an explicit start() runs the policy again from a clean count;
 //   - the consecutive count resets only after 60000 ms of continuous alive, on the injected clock.
 //
-// Owner ruling (phase 9.6, N1; RT-04 amended 2026-10-28): once the session is active there is no automatic restart and
-// no hysteresis. A runner exit, or one failed probe (alive answers false, does not answer in time or rejects, which
+// Owner ruling (phase 9.6, N1; RT-04 amended 2026-10-28): once the session is active this supervisor never restarts the runner and
+// there is no hysteresis. (Since 2026-11-16 the daemon's health loop, not this class, runs a bounded re-attach after a failed probe: SessionHealth.) A runner exit, or one failed probe (alive answers false, does not answer in time or rejects, which
 // covers a stale heartbeat and an OpenShell failure), holds the supervisor, and check throws a catalogue code, so the
 // session moves to error with that code. Phase 17 (OBS-04) tells the causes apart. The failure path asks the driver
 // whether the gateway answers (gatewayAnswers): a gateway that does not answer throws OPENSHELL_GATEWAY_LOST. A gateway

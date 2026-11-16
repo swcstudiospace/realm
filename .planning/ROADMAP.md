@@ -190,7 +190,7 @@ Plans:
 - [x] **Phase 16: Omp runs in the sandbox** - Realm's tools are registered in Omp, and in fail-closed mode the built-in `write`, `edit` and `bash` are removed or blocked by the mechanism the spike proved (OMPX-02..05) (completed 2026-11-15)
 - [x] **Phase 17: Observability and tamper-evident audit** - A hash-chained audit log with `realm audit verify`, structured logs with correlation ids, counters over the control socket, and a distinct code for gateway or driver loss (OBS-01..04) (completed 2026-11-15)
 - [x] **Phase 18: Per-project sandboxes** - One session, sandbox, audit file and lock table per project workspace under the configured roots (MULTI-01..06) (completed 2026-11-15)
-- [ ] **Phase 19: Resume and checkpoint** - A surviving sandbox that passes the hardening verifier is re-adopted after a daemon restart, a session-owned scratch volume, and workspace snapshot and restore (RES-01..05)
+- [x] **Phase 19: Resume and checkpoint** - A surviving sandbox that passes the hardening verifier is re-adopted after a daemon restart, a session-owned scratch volume, and workspace snapshot and restore (RES-01..05) (completed 2026-11-16)
 - [ ] **Phase 20: Release pipeline hardening** - Unprivileged build job and privileged publish job, build provenance attestation, a rollback workflow, and a changelog filter for removed features (REL-01..04)
 
 ## Phase Details
@@ -527,7 +527,7 @@ The owner lifted the ship hold on 2026-10-28 for one pull request with autoMerge
 **Notes:** Owner decision D5, items ii and iii: the startup reaper re-adopts a running container that passes the hardening verifier and removes what cannot be proven good, superseding the "remove everything" form of D-84, D-86 and RT-08 while keeping the no-orphan guarantee in a precise form, and RT-01's mount list gains the scratch volume. Both are recorded before the code. Live runs on the shared realm stack are serialized, because the startup reap is account-wide.
 
 **Plans**: `19-01-PLAN.md` reconciles the existing offline implementation and received independent plan review; Phase 14/18 prerequisites, decision ancestry and current live acceptance remain open.
-- [ ] 19-01-PLAN.md
+- [x] 19-01-PLAN.md
 
 ### Phase 20: Release pipeline hardening
 
@@ -583,5 +583,5 @@ Milestone v3.0 phases (12 to 20) run in three parallel lanes that share no mutab
 | 16. Omp runs in the sandbox | 5/4 | Complete    | 2026-11-15 |
 | 17. Observability and tamper-evident audit | 6/5 | Complete    | 2026-11-15 |
 | 18. Per-project sandboxes | 16/15 | Complete    | 2026-11-15 |
-| 19. Resume and checkpoint | 0/1 | Recovery plan independently checked; upstream prerequisites and live acceptance open | - |
+| 19. Resume and checkpoint | 1/1 | Complete    | 2026-11-16 |
 | 20. Release pipeline hardening | 0/3 | Recovery plans independently checked; immutable rollback handoff, human review and live evidence open | - |
