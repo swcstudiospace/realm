@@ -34,6 +34,8 @@ export const LAUNCH_FILE_NAME = "launch.json";
 export const DESCRIPTOR_FILE_NAME = "descriptor.json";
 export const AUTH_FILE_NAME = "auth.json";
 export const MAIN_EXIT_MARKER_NAME = "main-exit";
+// The host supervisor's stdout and stderr, appended at each spawn. Removal deletes it with the other files.
+export const SUPERVISOR_LOG_NAME = "supervisor.log";
 // The channel directory holds the runtime's bootstrap, certificate, key and control socket. It is bound into the container.
 export const CHANNEL_DIR_NAME = "channel";
 export const BOOTSTRAP_FILE_NAME = "bootstrap.json";
@@ -53,6 +55,7 @@ const SECRET_FILE_NAMES: readonly string[] = Object.freeze([
   DESCRIPTOR_FILE_NAME,
   AUTH_FILE_NAME,
   MAIN_EXIT_MARKER_NAME,
+  SUPERVISOR_LOG_NAME,
 ]);
 // The directories of a sandbox's secret directory that removal deletes with their contents.
 const SECRET_DIR_NAMES: readonly string[] = Object.freeze([CHANNEL_DIR_NAME, TLS_WORK_DIR_NAME, SSH_DIR_NAME]);

@@ -5,12 +5,14 @@
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { appendFileSync, chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeRealmError, RealmError, type ErrorCode } from "../../../src/core/errors.js";
 import { ComputeDriver, type ComputeDriverConfig } from "../../../src/runtime/driver/compute-driver.js";
 import { spawnSupervisor } from "../../../src/runtime/driver/supervisor.js";
+import { realmSandboxName } from "../../../src/runtime/openshell.js";
+import { secretDirOf, SUPERVISOR_LOG_NAME } from "../../../src/runtime/driver/secret-store.js";
 import { FakeLibpod, FakeRuntime, diskLifecycle, driverConfig, validSandbox, writeSandboxWorkspaceEntry } from "./fakes.js";
 
 // A driver config, and the sandbox name of a project directory under its ceiling, bound by the registry entry the fixture writes.
@@ -175,4 +177,25 @@ void test("a supervisor file that cannot be read for its digest is refused at sp
     spawnSupervisor({ binary: join(tmpdir(), "realm-no-such-supervisor"), args: [], env: {}, expectedSha256: script.sha256 }),
     codeIs("SCHEMA_INVALID"),
   );
+});
+
+void test("a supervisor's stdout and stderr are appended to supervisor.log in its secret directory, created 0600 at spawn (plan 19-01)", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "realm-supervisor-log-"));
+  t.after(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+  const secretDir = secretDirOf(join(root, "secrets"), realmSandboxName("supervisor-log"));
+  mkdirSync(secretDir, { recursive: true, mode: 0o700 });
+  const logPath = join(secretDir, SUPERVISOR_LOG_NAME);
+  const handle = await spawnSupervisor({
+    binary: process.execPath,
+    args: ["-e", "process.stdout.write('stdout-line\\n'); process.stderr.write('stderr-line\\n'); process.exit(3)"],
+    env: {},
+    logPath,
+  });
+  await handle.exited;
+  assert.equal(statSync(logPath).mode & 0o777, 0o600);
+  const log = readFileSync(logPath, "utf8");
+  assert.ok(log.includes("stdout-line\n"));
+  assert.ok(log.includes("stderr-line\n"));
 });

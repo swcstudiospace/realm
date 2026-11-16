@@ -175,3 +175,8 @@ export function logSupervisorExited(
 export function logSupervisorSpawnFailed(sandboxName: string | undefined, code: ErrorCode): void {
   stderrRefusalLog(`realm compute driver supervisor spawn failed: sandbox=${supervisorNameOf(sandboxName)} code=${code}`);
 }
+
+// Writes the line of a supervisor whose output log could not be opened: its sandbox and the system error code. Its output is discarded.
+export function logSupervisorLogUnavailable(sandboxName: string | undefined, code: string): void {
+  stderrRefusalLog(`realm compute driver supervisor log unavailable: sandbox=${supervisorNameOf(sandboxName)} code=${code} output=discarded`);
+}

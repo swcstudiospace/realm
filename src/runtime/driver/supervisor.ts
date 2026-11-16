@@ -1,21 +1,25 @@
 // The host supervisor of one sandbox (phase 9.5, wave 2). The driver starts the supervisor binary with an exact argument array
 // and an exact environment (runtime-channel.ts builds both), with its stdin held open as a pipe. The supervisor exits when that
-// pipe closes, so the driver's exit ends every supervisor it started. Its stdout and stderr go to nowhere: the supervisor
-// handles launch secrets, and the driver never copies its output into a log.
+// pipe closes, so the driver's exit ends every supervisor it started. Its stdout and stderr are appended to the sandbox's
+// supervisor.log in its secret directory, opened at spawn, so a supervisor's exit leaves a record. The log is private like the others there.
 
 import { createHash } from "node:crypto";
-import { spawn } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { spawn, type ChildProcess } from "node:child_process";
+import { closeSync, constants, openSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { makeRealmError, RealmError } from "../../core/errors.js";
 import { withTimeout } from "../../core/timeout.js";
-import { logSupervisorExited, logSupervisorSpawned, logSupervisorSpawnFailed } from "./refusal.js";
+import { logSupervisorExited, logSupervisorLogUnavailable, logSupervisorSpawned, logSupervisorSpawnFailed } from "./refusal.js";
 import { supervisorArguments, supervisorEnvironment } from "./runtime-channel.js";
+import { SUPERVISOR_LOG_NAME } from "./secret-store.js";
 
 // How long a supervisor gets to exit after SIGTERM before it is killed.
 const STOP_GRACE_MS = 5000;
 // How long a supervisor gets to exit after SIGKILL before the stop gives up. SIGKILL cannot be caught, so this only covers kernel
 // delivery and reaping.
 const KILL_WAIT_MS = 5000;
+// The mode of the supervisor's log: private, like the other files in a secret directory.
+const SUPERVISOR_LOG_MODE = 0o600;
 
 export interface SupervisorSpawn {
   // The absolute path of the supervisor executable.
@@ -30,6 +34,9 @@ export interface SupervisorSpawn {
   readonly expectedSha256?: string;
   // The sandbox the supervisor serves. Its log lines name it, and they name none when it is absent.
   readonly sandboxName?: string;
+  // The file the supervisor's stdout and stderr are appended to. It is opened at spawn and never followed when it is a symbolic
+  // link. When it cannot be opened the output is discarded and one line names the failure. Absent, the output is discarded.
+  readonly logPath?: string;
 }
 
 // A started supervisor. stop ends it: SIGTERM, then SIGKILL after a bounded wait. Stopping an exited supervisor does nothing.
@@ -58,6 +65,22 @@ export function assertSha256OfFile(path: string, expectedSha256: string): void {
   }
 }
 
+// Opens the supervisor's log for its stdout and stderr: appended to, created at 0600, and never followed when it is a symbolic link.
+// Returns "ignore" when there is no log path or the log cannot be opened; the failure is logged on one line.
+function openSupervisorLog(options: SupervisorSpawn): number | "ignore" {
+  if (options.logPath === undefined) {
+    return "ignore";
+  }
+  const flags = constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | constants.O_NOFOLLOW;
+  try {
+    return openSync(options.logPath, flags, SUPERVISOR_LOG_MODE);
+  } catch (error: unknown) {
+    const code = error instanceof Error && "code" in error && typeof error.code === "string" ? error.code : "unknown";
+    logSupervisorLogUnavailable(options.sandboxName, code);
+    return "ignore";
+  }
+}
+
 // Starts the supervisor. Resolves when the process has spawned, and refuses when it cannot be started or when its file no longer
 // matches the expected digest. An error after start is not reported here: the process is already running and the driver stops it
 // by signal.
@@ -73,12 +96,20 @@ export function spawnSupervisor(options: SupervisorSpawn): Promise<SupervisorHan
         return;
       }
     }
-    const child = spawn(options.binary, [...options.args], {
-      env: { ...options.env },
-      stdio: ["pipe", "ignore", "ignore"],
-      shell: false,
-      windowsHide: true,
-    });
+    const output = openSupervisorLog(options);
+    let child: ChildProcess;
+    try {
+      child = spawn(options.binary, [...options.args], {
+        env: { ...options.env },
+        stdio: ["pipe", output, output],
+        shell: false,
+        windowsHide: true,
+      });
+    } finally {
+      if (output !== "ignore") {
+        closeSync(output);
+      }
+    }
     let exitedNow = false;
     const exited = new Promise<void>((resolveExit) => {
       child.once("exit", (code, signal) => {
@@ -134,6 +165,7 @@ export function launchSandboxSupervisor(
   return runtime.spawnSupervisor({
     binary: launch.binary,
     sandboxName: launch.sandboxName,
+    logPath: join(launch.secretDir, SUPERVISOR_LOG_NAME),
     args: supervisorArguments({
       sandboxId: launch.sandboxId,
       sandboxName: launch.sandboxName,
