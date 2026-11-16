@@ -1,11 +1,12 @@
 // The host supervisor of one sandbox (phase 9.5, wave 2). The driver starts the supervisor binary with an exact argument array
 // and an exact environment (runtime-channel.ts builds both), with its stdin held open as a pipe. The supervisor exits when that
 // pipe closes, so the driver's exit ends every supervisor it started. Its stdout and stderr are appended to the sandbox's
-// supervisor.log in its secret directory, opened at spawn, so a supervisor's exit leaves a record. The log is private like the others there.
+// supervisor.log in its secret directory, opened at spawn, so a supervisor's exit leaves a record. Each spawn first writes one
+// separator line naming its time and sandbox. The log is private like the others there, and it survives supervisor exits and respawns.
 
 import { createHash } from "node:crypto";
 import { spawn, type ChildProcess } from "node:child_process";
-import { closeSync, constants, openSync, readFileSync } from "node:fs";
+import { closeSync, constants, openSync, readFileSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import { makeRealmError, RealmError } from "../../core/errors.js";
 import { withTimeout } from "../../core/timeout.js";
@@ -66,19 +67,32 @@ export function assertSha256OfFile(path: string, expectedSha256: string): void {
 }
 
 // Opens the supervisor's log for its stdout and stderr: appended to, created at 0600, and never followed when it is a symbolic link.
-// Returns "ignore" when there is no log path or the log cannot be opened; the failure is logged on one line.
+// Each open first writes one separator line naming the spawn time and sandbox, so each attempt is distinguishable.
+// Returns "ignore" when there is no log path or the log cannot be opened or written; the failure is logged on one line.
 function openSupervisorLog(options: SupervisorSpawn): number | "ignore" {
   if (options.logPath === undefined) {
     return "ignore";
   }
   const flags = constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | constants.O_NOFOLLOW;
+  let fd: number | undefined;
   try {
-    return openSync(options.logPath, flags, SUPERVISOR_LOG_MODE);
+    fd = openSync(options.logPath, flags, SUPERVISOR_LOG_MODE);
+    writeSync(fd, spawnSeparatorOf(options.sandboxName, new Date()));
+    return fd;
   } catch (error: unknown) {
+    if (fd !== undefined) {
+      closeSync(fd);
+    }
     const code = error instanceof Error && "code" in error && typeof error.code === "string" ? error.code : "unknown";
     logSupervisorLogUnavailable(options.sandboxName, code);
     return "ignore";
   }
+}
+
+// The one line a spawn writes to the log: the spawn time as an ISO timestamp, then the sandbox it serves when it is named.
+function spawnSeparatorOf(sandboxName: string | undefined, at: Date): string {
+  const sandbox = sandboxName === undefined ? "" : ` sandbox=${sandboxName}`;
+  return `--- ${at.toISOString()} supervisor spawn${sandbox} ---\n`;
 }
 
 // Starts the supervisor. Resolves when the process has spawned, and refuses when it cannot be started or when its file no longer

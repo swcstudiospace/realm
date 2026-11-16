@@ -50,7 +50,7 @@ import {
   sessionOfRealmSandbox,
 } from "../openshell.js";
 import { listRealmContainers, SWEEP_CALL_TIMEOUT_MS } from "../sweep.js";
-import { LAUNCH_FILE_NAME, presentSecretEntries, removeSecretDirIfEmpty, removeSecretEntries, secretDirExists, secretDirOf, secretDirsUnder } from "./secret-store.js";
+import { LAUNCH_FILE_NAME, presentSecretEntries, presentTeardownEntries, removeSecretDirIfEmpty, removeSecretEntries, secretDirExists, secretDirOf, secretDirsUnder } from "./secret-store.js";
 import { assertStrictlyInside, isInsideInclusive, lstatOrAbsent } from "./fs-guards.js";
 import {
   assertNoOverlap,
@@ -395,7 +395,7 @@ export class DriverLifecycle {
     // its root. The pinned workspace root lies outside both roots (the driver checks this at construction), so it is never removed.
     assertStrictlyInside(dir, this.sandboxStateRoot);
     assertStrictlyInside(secretDir, this.secretRoot);
-    const secretEntries = presentSecretEntries(secretDir);
+    const secretEntries = presentTeardownEntries(secretDir);
     const listed = await this.libpod.listContainersByLabel(OPENSHELL_SANDBOX_NAME_LABEL_KEY, sandboxName);
     for (const container of listed) {
       if (await isSandboxOwned(this.libpod, container, sandboxName)) {
