@@ -126,8 +126,8 @@ void test("locateTomlTable: a table at the end of a file without a final newline
   assert.deepEqual(noNewline, { state: "present", start: 0, end: OWNED.length - 1, text: OWNED });
   const crlfFound = locateTomlTable(crlf(`[features]\nhooks = true\n\n${OWNED}`), TARGET);
   assert.equal(crlfFound.state, "present");
-  assert.equal(crlfFound.state === "present" ? crlfFound.text : "", OWNED);
-  const ends = crlfFound.state === "present" ? crlfFound.end : -1;
+  assert.equal(crlfFound.text, OWNED);
+  const ends = crlfFound.end;
   assert.equal(ends, crlf(`[features]\nhooks = true\n\n${OWNED}`).length);
 });
 

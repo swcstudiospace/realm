@@ -211,8 +211,8 @@ void test("ADPT-06 codex: the receipt names the kind and the table hash and hold
   await r.adapter.install(r.env, { dryRun: false });
   const receipt = await readReceipt(r.host.stateDir, "codex");
   assert.equal(receipt?.receipt.recipeKind, "toml-table");
-  assert.equal(receipt?.receipt.entries[0]?.ownedSha256, sha256Text(TABLE));
-  assert.equal(receipt?.receipt.entries[0]?.separatorAdded, true);
+  assert.equal(receipt.receipt.entries[0]?.ownedSha256, sha256Text(TABLE));
+  assert.equal(receipt.receipt.entries[0].separatorAdded, true);
   const raw = readFileSync(receiptPath(r.host.stateDir, "codex"), "utf8");
   assert.equal(raw.includes("--host"), false);
   assert.equal(raw.includes("command"), false);

@@ -49,9 +49,9 @@ void test("toml-table install: an absent file is created with exactly the table 
   assert.equal(text, OWNED);
   assert.equal(plan.changes[0]?.action, "create");
   assert.equal(plan.entries[0]?.kind, "toml-table");
-  assert.equal(plan.entries[0]?.ownedSha256, OWNED_HASH);
-  assert.equal(plan.entries[0]?.createdFile, true);
-  assert.equal(plan.entries[0]?.separatorAdded, undefined);
+  assert.equal(plan.entries[0].ownedSha256, OWNED_HASH);
+  assert.equal(plan.entries[0].createdFile, true);
+  assert.equal(plan.entries[0].separatorAdded, undefined);
   assert.equal(text.includes("#"), false, "no marker and no comment");
 });
 
@@ -130,7 +130,7 @@ void test("toml-table install: a table the receipt owns with older text is repla
   const upgraded = planRecipe(recipe, state("install", other, first.plan.entries));
   assert.equal(afterOf(upgraded), `# keep\n[a]\nx = 1\n\n${OWNED}\n[mcp_servers.other]\ncommand = "o"\n`);
   assert.equal(upgraded.entries[0]?.ownedSha256, OWNED_HASH);
-  assert.equal(upgraded.entries[0]?.separatorAdded, first.plan.entries[0]?.separatorAdded);
+  assert.equal(upgraded.entries[0].separatorAdded, first.plan.entries[0]?.separatorAdded);
   // The same table without a receipt is never replaced.
   refused(() => planRecipe(recipe, state("install", other)), "foreign-content", "POLICY_DENIED");
 });
