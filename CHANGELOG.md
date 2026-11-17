@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-11-17
+
+### Documentation
+- docs(phase-27): Anda disposition, carry list reconciliation and decision record (ANDAX-01, ANDAX-02) (#133) (4f136dc)
+
 ## [0.4.0] - 2026-11-17
 
 ### Documentation
