@@ -143,7 +143,7 @@ void test("hostLiveSkipReason refuses a relative override before it looks for th
       }),
     );
     assert.match(String(relative), new RegExp(`${spec.binOverride} must be an absolute path`), host);
-    assert.deepEqual(asked, [], `${host}: a relative override is never looked up`);
+    assert.equal(asked.length, 0, `${host}: a relative override is never looked up`);
 
     const missing = hostLiveSkipReason(
       host,
@@ -339,7 +339,7 @@ void test("isolatedHostEnv throws, before it creates anything, for a root, stub 
 // ---- Process-group runner --------------------------------------------------------------------------------------------------
 
 async function waitUntilGone(pid: number): Promise<void> {
-  const outcome = await pollUntil(async () => (processAlive(pid) ? { done: false, detail: `pid ${String(pid)} is still alive` } : { done: true }), {
+  const outcome = await pollUntil(() => (processAlive(pid) ? { done: false, detail: `pid ${String(pid)} is still alive` } : { done: true }), {
     timeoutMs: scaledMs(3_000),
     intervalMs: 50,
   });
