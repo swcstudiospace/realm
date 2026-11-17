@@ -705,10 +705,11 @@ Plans:
 **Goal:** `realm mcp` advertises MCP tool annotations (read-only, destructive, idempotent, open-world) for every Realm tool, verified against the protocol revisions it serves.
 **Depends on:** Phase 27
 **Requirements**: MCPA-01, MCPA-02
-**Plans:** 0 plans
+**Plans:** 2 plans
 
 Plans:
-- [ ] TBD (run /gsd-plan-phase 29 to break down)
+- [ ] 29-01-PLAN.md: annotation table, pins and mutation tests (wave 1)
+- [ ] 29-02-PLAN.md: smoke check, docs Q9 and doc tests (wave 2)
 
 ### Phase 30: Capability token spike
 
