@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.3.44] - 2026-11-17
+
+### Added
+- feat(host): host adapters wave 1 engine and recipes (24-01, 24-02) (#113) (9212949)
+
 ## [0.3.43] - 2026-11-17
 
 ### Documentation
