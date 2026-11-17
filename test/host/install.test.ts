@@ -387,7 +387,7 @@ void test("a crash between files leaves a pending receipt; a second install resu
   await run(straight, "install", recipe);
   assert.equal(treeHash(crashing.host.configHome), treeHash(straight.host.configHome));
   const straightReceipt = await readReceipt(straight.host.stateDir, "claude");
-  assert.deepEqual(done.receipt.entries, straightReceipt.receipt.entries);
+  assert.deepEqual(done.receipt.entries, straightReceipt?.receipt.entries);
   assert.equal(readFileSync(join(crashing.host.configHome, "plugins/realm/b.txt"), "utf8"), "beta\n");
 });
 

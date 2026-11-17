@@ -390,6 +390,7 @@ void test("RT-02 and ANDA-02: the four runtime items follow the three Phase 2 it
       "host-binaries",
       "kernel-hardening",
       "runtime-roots",
+      "host-plugins",
     ],
   );
 });

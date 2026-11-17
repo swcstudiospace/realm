@@ -298,6 +298,7 @@ void test("doctor through the CLI against the fake-backed daemon lists every ite
     "runtime-roots",
     "driver-socket",
     "gateway",
+    "host-plugins",
   ];
   for (const expected of expectedIds) {
     assert.ok(ids.includes(expected), `doctor report must list ${expected}`);
@@ -314,6 +315,7 @@ void test("doctor through the CLI against the fake-backed daemon lists every ite
     ids.indexOf("host-binaries") > ids.indexOf("agentos") && ids.indexOf("kernel-hardening") > ids.indexOf("host-binaries"),
     "host-binaries and kernel-hardening must be appended after agentos, in that order",
   );
+  assert.equal(ids.at(-1), "host-plugins", "host-plugins is the last item of the daemon report");
 
   for (const item of report) {
     assert.ok(typeof item.id === "string");

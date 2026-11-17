@@ -6,7 +6,7 @@
 import { makeRealmError } from "../core/errors.js";
 import type { AuditEntryInput, AuditOutcome, AuditPhase } from "../audit/log.js";
 
-export const HOST_AUDIT_SESSION_ID = "host-plugins";
+const HOST_AUDIT_SESSION_ID = "host-plugins";
 
 export type HostAuditTool = "host.install" | "host.uninstall";
 

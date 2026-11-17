@@ -34,6 +34,7 @@ import { createMcpServer } from "../mcp/server.js";
 import { loadRuntimeConfig, type RuntimeConfig } from "../runtime/config.js";
 import { readRuntimeConfigFile } from "../runtime/config-file.js";
 import { defaultPolicyPath, isDirectEntry, resolveConfigPath } from "../runtime/host-paths.js";
+import type { HostId, HostRuntimeEntry } from "../host/types.js";
 import type { LibpodClient } from "../runtime/libpod-client.js";
 import type { Policy } from "../contract/validate.js";
 import {
@@ -46,13 +47,14 @@ import { controlSocketPath, type EnvironmentLike } from "../session/paths.js";
 import { parseAnchorArgs, runAnchor } from "./anchor.js";
 import { runAuditCommand } from "./audit.js";
 import { runCheckpointCommand } from "./checkpoint.js";
+import { runHostCommand } from "./host.js";
 import { INIT_USAGE, InitRefusal, parseInitArgs, runInit } from "./init.js";
 
-export const CLI_COMMANDS = ["init", "up", "down", "status", "doctor", "mcp", "acp", "anchor", "audit", "metrics", "checkpoint"] as const;
+export const CLI_COMMANDS = ["init", "up", "down", "status", "doctor", "mcp", "acp", "anchor", "audit", "metrics", "checkpoint", "host"] as const;
 export type CliCommand = (typeof CLI_COMMANDS)[number];
 
 const USAGE =
-  "Usage: realm <init|up|down|status|doctor|mcp|acp|anchor|audit|metrics|checkpoint> (realm init --image <name@sha256:digest> [--workspace <absolute path>] [--state-dir <absolute path>]; realm up|mcp|acp|status|down|metrics [--workspace <absolute path>]; realm doctor [--workspace <absolute path> | --fix [--dry-run]]; realm anchor --session <id> [--publish] [--rpc <url>]; realm audit verify [--file <path> | --session <id>] [--head <seq>:<sha256>] [--anchor <record.json>]; realm checkpoint create|restore --workspace <absolute path> --id <checkpointId>)";
+  "Usage: realm <init|up|down|status|doctor|mcp|acp|anchor|audit|metrics|checkpoint|host> (realm init --image <name@sha256:digest> [--workspace <absolute path>] [--state-dir <absolute path>]; realm up|mcp|acp|status|down|metrics [--workspace <absolute path>]; realm doctor [--workspace <absolute path> | --fix [--dry-run]]; realm anchor --session <id> [--publish] [--rpc <url>]; realm audit verify [--file <path> | --session <id>] [--head <seq>:<sha256>] [--anchor <record.json>]; realm checkpoint create|restore --workspace <absolute path> --id <checkpointId>; realm host <list|detect|status|install|uninstall> [<host>] [--dry-run] [--config-home <absolute path>])";
 const RETRY_INTERVAL_MS = 25;
 const MCP_POLL_INTERVAL_MS = 100;
 
@@ -63,18 +65,18 @@ function isCliCommand(value: string): value is CliCommand {
 interface ParsedArgv {
   readonly command: CliCommand;
   readonly workspace: string | undefined;
-  // The words after `init`, `doctor`, `anchor`, `audit` or `checkpoint`; empty for every other command.
+  // The words after `init`, `doctor`, `anchor`, `audit`, `checkpoint` or `host`; empty for every other command.
   readonly words: readonly string[];
 }
 
-// `up`, `mcp`, `acp`, `status`, `down` and `metrics` take no arguments or `--workspace <path>`. `init`, `anchor`, `audit` and `checkpoint`
+// `up`, `mcp`, `acp`, `status`, `down` and `metrics` take no arguments or `--workspace <path>`. `init`, `anchor`, `audit`, `checkpoint` and `host`
 // take their own words. `doctor` takes --workspace <path>, --fix [--dry-run], or no flags.
 function parseArgv(argv: readonly string[]): ParsedArgv | undefined {
   const [command, ...rest] = argv;
   if (command === undefined || !isCliCommand(command)) {
     return undefined;
   }
-  if (command === "init" || command === "anchor" || command === "audit" || command === "checkpoint") {
+  if (command === "init" || command === "anchor" || command === "audit" || command === "checkpoint" || command === "host") {
     return { command, workspace: undefined, words: rest };
   }
   if (command === "doctor") {
@@ -154,8 +156,12 @@ export interface CliDeps {
   readonly anchorKeyFile?: string | undefined;
   // RPC factory for realm anchor --publish (default createJsonRpc); tests inject a fake.
   readonly createAnchorRpc?: (url: string) => AnchorRpc;
-  // Clock for the anchor record's createdAt (default the wall clock).
+  // Clock for the anchor record's createdAt and the host operations' receipts and audit lines (default the wall clock).
   readonly now?: () => Date;
+  // Test seams of realm host, with no production caller: the runtime table (default HOST_RUNTIMES) and the shipped adapters/
+  // directory (default: the package's own). They let a test run the installer lifecycle on a fixture host.
+  readonly hostRuntimes?: Readonly<Record<HostId, HostRuntimeEntry>>;
+  readonly hostAdaptersDir?: string;
 }
 
 export interface CliResult {
@@ -710,6 +716,9 @@ async function dispatchCli(argv: readonly string[], deps: CliDeps): Promise<CliR
   }
   if (parsed.command === "checkpoint") {
     return runCheckpointCommand(parsed.words, deps);
+  }
+  if (parsed.command === "host") {
+    return runHostCommand(parsed.words, deps);
   }
   const { command } = parsed;
   let stateDir: string;

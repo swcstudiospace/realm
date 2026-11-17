@@ -7,7 +7,7 @@
 // control channel have no item in Phase 3, because nothing there can inspect them (D-69).
 // Phase 6 appends control-channel and agentos to REGISTERED deliberately (CLI-03; P6-D6,
 // P6-D14); the list is a costly change under D-44. Phase 9.7 appends host-binaries and
-// kernel-hardening after agentos for the same reason.
+// kernel-hardening after agentos for the same reason. Phase 21 appends host-plugins last.
 //
 // Details and fixes name paths, rules, and schema pointers. They never carry a value read
 // from the policy file (the privacy rule in src/contract/validate.ts).
@@ -36,6 +36,7 @@ import { selectOpenShellEnvironment } from "../runtime/session-execution.js";
 import { SOCKET_TIMEOUT_MS } from "../daemon/channel.js";
 import { controlSocketPath, type EnvironmentLike, sessionsDirOf } from "../session/paths.js";
 import type { RuntimeConfig } from "../runtime/config.js";
+import { hostPluginsCheck } from "./host-checks.js";
 import { runtimeChecks, type RuntimeCheckOptions } from "./runtime-checks.js";
 import {
   defaultReadPtraceScope,
@@ -61,7 +62,8 @@ export type CheckId =
   | "kernel-hardening"
   | "runtime-roots"
   | "driver-socket"
-  | "gateway";
+  | "gateway"
+  | "host-plugins";
 export type CheckStatus = "pass" | "warn" | "fail";
 
 export interface CheckResult {
@@ -186,7 +188,8 @@ export async function runChecks(options: DoctorOptions): Promise<readonly CheckR
     ...(options.connectGateway === undefined ? {} : { connectGateway: options.connectGateway }),
     ...(options.probeTimeoutMs === undefined ? {} : { probeTimeoutMs: options.probeTimeoutMs }),
   });
-  return [...registered, ...runtime];
+  const hostPlugins = await hostPluginsCheck({ stateDir: options.stateDir });
+  return [...registered, ...runtime, hostPlugins];
 }
 
 // The text a failed probe reports as its reason. Every probe here throws an Error, so its message is the text.

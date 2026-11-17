@@ -9,12 +9,14 @@ import { RELEASE_VERSION_FILES } from "../release/sync-version.mjs";
 import {
   ADAPTER_FILES,
   DRIVER_PROTO_FILES,
+  HOST_MODULE_FILES,
   LEGAL_FILES,
   WALKED_DIRECTORIES,
   buildInstallArgs,
   buildPackArgs,
   missingAdapterFiles,
   missingDeclaredEntries,
+  missingHostModuleFiles,
   missingWalkedFiles,
   parseArgs,
   runCheck,
@@ -111,6 +113,30 @@ test("missingAdapterFiles reports every adapter file absent from the package roo
       writeFixture(root, path);
     }
     assert.deepEqual(missingAdapterFiles(root), []);
+  });
+});
+
+test("HOST_MODULE_FILES names each compiled host module, and each has a source file", () => {
+  assert.equal(new Set(HOST_MODULE_FILES).size, HOST_MODULE_FILES.length, "no duplicate entries");
+  for (const path of ["dist/src/host/runtimes.js", "dist/src/host/manifest.js", "dist/src/host/env.js", "dist/src/cli/host.js"]) {
+    assert.ok(HOST_MODULE_FILES.includes(path), `${path} is listed`);
+  }
+  for (const path of HOST_MODULE_FILES) {
+    const source = path.replace(/^dist\//, "").replace(/\.js$/, ".ts");
+    assert.ok(existsSync(join(REPO_ROOT, source)), `${path} has a source file at ${source}`);
+  }
+});
+
+test("missingHostModuleFiles reports every host module absent from the package root and accepts a complete tree", () => {
+  withTempRoots("realm-pack-host-modules-", 1, (root) => {
+    assert.deepEqual(missingHostModuleFiles(root), HOST_MODULE_FILES);
+    const [first, ...rest] = HOST_MODULE_FILES;
+    for (const path of rest) {
+      writeFixture(root, path, "");
+    }
+    assert.deepEqual(missingHostModuleFiles(root), [first]);
+    writeFixture(root, first, "");
+    assert.deepEqual(missingHostModuleFiles(root), []);
   });
 });
 
@@ -238,7 +264,7 @@ function writePackageTree(root, version) {
   for (const path of entries) {
     writeFixture(root, path, "");
   }
-  for (const path of [...ADAPTER_FILES, ...DRIVER_PROTO_FILES, ...LEGAL_FILES]) {
+  for (const path of [...ADAPTER_FILES, ...DRIVER_PROTO_FILES, ...LEGAL_FILES, ...HOST_MODULE_FILES]) {
     const carriesVersion = RELEASE_VERSION_FILES.includes(path);
     writeFixture(root, path, carriesVersion ? `${JSON.stringify({ version })}\n` : "{}\n");
   }
@@ -280,6 +306,61 @@ test("runCheck with --tarball makes no npm pack call and installs the given tarb
     const install = result.calls.find((call) => call.file === "npm" && call.args[0] === "install");
     assert.equal(install?.args.at(-1), tarball);
     assert.match(result.out, /schemas loaded/);
+  }));
+
+test("runCheck fails a packed package that lacks a host module, naming the file", () =>
+  withTempRootsAsync("realm-pack-cmd-host-module-", 2, async (sourceRoot, scratch) => {
+    writePackageTree(sourceRoot, "1.0.0");
+    const tarball = join(scratch, "given.tgz");
+    writeFileSync(tarball, "");
+    const out = [];
+    const err = [];
+    const code = await runCheck(["--tarball", tarball], {
+      root: sourceRoot,
+      run: async (file, args, options) => {
+        if (args[0] === "install") {
+          writePackageTree(join(options.cwd, "node_modules", "agent-realm"), "1.0.0");
+          rmSync(join(options.cwd, "node_modules", "agent-realm", "dist/src/host/install.js"));
+        }
+        return { stdout: "" };
+      },
+      stdout: (text) => out.push(text),
+      stderr: (text) => err.push(text),
+    });
+    assert.equal(code, 1);
+    assert.match(err.join(""), /packed package is missing host modules: dist\/src\/host\/install\.js/);
+  }));
+
+test("runCheck probes the shipped host runtime table and default manifests, and reports the host modules present", () =>
+  withTempRootsAsync("realm-pack-cmd-host-probe-", 2, async (sourceRoot, scratch) => {
+    writePackageTree(sourceRoot, "1.0.0");
+    const tarball = join(scratch, "given.tgz");
+    writeFileSync(tarball, "");
+    const written = new Map();
+    const out = [];
+    const code = await runCheck(["--tarball", tarball], {
+      root: sourceRoot,
+      run: async (file, args, options) => {
+        if (args[0] === "install") {
+          writePackageTree(join(options.cwd, "node_modules", "agent-realm"), "1.0.0");
+        }
+        return { stdout: "" };
+      },
+      writeFile: async (path, content) => {
+        written.set(path, content);
+        writeFileSync(path, content);
+      },
+      stdout: (text) => out.push(text),
+      stderr: () => {},
+    });
+    assert.equal(code, 0);
+    const probe = [...written.entries()].find(([path]) => path.endsWith("probe.mjs"));
+    assert.ok(probe, "the probe was written");
+    assert.match(probe[1], /agent-realm\/dist\/src\/host\/runtimes\.js/);
+    assert.match(probe[1], /agent-realm\/dist\/src\/host\/manifest\.js/);
+    assert.match(probe[1], /defaultManifestFor/);
+    assert.match(probe[1], /!== 19/);
+    assert.match(out.join(""), new RegExp(`host modules: ${String(HOST_MODULE_FILES.length)} present`));
   }));
 
 test("runCheck without --tarball packs the source tree and installs the packed tarball", () =>
@@ -477,6 +558,13 @@ function runMilestoneFixture(options = {}) {
       bin: { realm: "./dist/src/cli/main.js" }, omp: { extensions: ["./dist/src/omp/extension.js"] },
     }));
     writeFixture(packageRoot, "dist/src/contract/validate.js", "export function validate() { return { ok: true }; }\n");
+    // The probe also imports the host runtime table and manifest module: stand-ins with the exports it reads (19 hosts).
+    writeFixture(packageRoot, "dist/src/host/runtimes.js", 'export const HOST_RUNTIMES = Object.fromEntries(Array.from({ length: 19 }, (_, index) => [`host${index}`, {}]));\n');
+    writeFixture(
+      packageRoot,
+      "dist/src/host/manifest.js",
+      "export function defaultManifestFor(id) { return { hostId: id }; }\nexport function parseHostPluginManifest(value) { return value; }\n",
+    );
     if (options.adapterVersion) writeFixture(packageRoot, "adapters/hermes-agent/plugin.json", JSON.stringify({ version: options.adapterVersion }));
     if (options.omit) rmSync(join(packageRoot, options.omit));
     if (options.sourceExtra) writeFixture(historical, "adapters/tag-only.txt", "required by the tag\n");

@@ -24,6 +24,10 @@ isolated profile, not the persistent config. Its status item read
 reported daemon absent. Registration needs explicit approval per host.
 
 
+## Host plugin contract
+
+Phase 21 adds one contract for every CLI agent Realm may run in: a runtime table of 19 hosts, a strict plugin manifest, a capability catalogue over the existing policy facts, a boot-hook port with a conformance harness, an installer engine with ownership receipts, and `realm host list|detect|status|install|uninstall`. It is documented in [host-plugin-contract.md](host-plugin-contract.md), with the table of hosts and its evidence limits. It is proven on fixture hosts only: every install on the real table refuses as `recipe-pending` and changes nothing, so no host is registered live by it. Registration still needs explicit approval per host. The tier table above is unchanged.
+
 ## Gate note (FOUND-03)
 
 Gate note for FOUND-03 (decisions D-09, D-16, D-17, D-18). Status per host:
