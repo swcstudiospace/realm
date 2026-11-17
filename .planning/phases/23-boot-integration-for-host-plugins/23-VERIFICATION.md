@@ -33,6 +33,7 @@ covered_files:
   - "test/host/boot-observer.test.ts"
   - "test/host/boot-report.test.ts"
   - "test/integration/host-boot-isolation.test.ts"
+covered_digest: "v3:sha256:1226a5ed0d74eb328e9442f13ab91fc73cbfe5692ba198b49e3d9359fce20706"
 ---
 
 # Phase 23 Verification: Boot integration for host plugins
