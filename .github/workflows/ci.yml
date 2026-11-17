@@ -16,8 +16,8 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-# The PR gate jobs (verify, site, audit) run on GitHub-hosted runners. The build and publish jobs, which run only on main,
-# run on the Omega CI runner pool (swcstudiospace/Omega-Prime docs/ci-runners.md).
+# Every job runs on GitHub-hosted runners (ubuntu-24.04). The build and publish jobs run only on main; the PR gate jobs
+# (verify, site, audit) run on every pull request. The omega-ci self-hosted pool was removed from this repository's workflows on 2026-11-16.
 jobs:
   verify:
     name: Verify (Node ${{ matrix.node-version }})
