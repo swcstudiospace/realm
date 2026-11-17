@@ -166,7 +166,7 @@ export interface HostStatusSink {
 export interface HostBootDeps {
   attachDaemon(workspaceRoot: string): Promise<{ client: DaemonClient; refusal: RealmError | null }>;
   now(): Date;
-  random(): number;
+  readonly random: () => number;
   timers: HostTimers;
   sink: HostStatusSink;
 }
