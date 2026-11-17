@@ -85,8 +85,8 @@ void test("ADPT-04 claude: a fresh HOME gets { mcpServers: { realm } } in the de
   assert.equal(readFileSync(r.file, "utf8").endsWith("\n"), true);
   const receipt = await readReceipt(r.host.stateDir, "claude");
   assert.equal(receipt?.receipt.entries[0]?.createdFile, true);
-  assert.deepEqual(receipt?.receipt.entries[0]?.createdParents, [["mcpServers"]]);
-  assert.equal(receipt?.receipt.configHome, r.host.home);
+  assert.deepEqual(receipt.receipt.entries[0].createdParents, [["mcpServers"]]);
+  assert.equal(receipt.receipt.configHome, r.host.home);
   await r.adapter.uninstall(r.env, { dryRun: false });
   assert.equal(existsSync(r.file), false);
   assert.equal(r.watched(), before);

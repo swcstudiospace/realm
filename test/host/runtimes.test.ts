@@ -348,7 +348,7 @@ function registeredArgv(id: HostId): readonly string[] {
   assert.ok(recipe !== null, id);
   const strings = (value: unknown): readonly string[] => {
     assert.ok(Array.isArray(value) && value.every((item) => typeof item === "string"), id);
-    return value as readonly string[];
+    return value;
   };
   if (recipe.kind === "text-block") {
     const lines = recipe.block.split("\n");
