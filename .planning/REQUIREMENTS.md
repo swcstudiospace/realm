@@ -118,14 +118,14 @@ All v3.0 requirements are hypotheses until shipped and verified.
 
 ### Omp plugin on boot (OMPB)
 
-- [ ] **OMPB-01**: The Omp plugin reads every boot bound, the link-lost and retryable code lists, the re-attach sub-state table and the jitter function from `src/host/boot.ts`; `src/omp/reattach.ts` and the `src/omp` bound constants no longer exist; the parity tests are deleted.
-- [ ] **OMPB-02**: The real Omp plugin, driven through the Omp host API, passes harness cases C1 to C9, and the harness's four reference mutants still fail exactly their cases.
-- [ ] **OMPB-03**: The existing guard, status text, tool-set reconciliation and fail-closed default behave as before: all pre-existing `test/omp/` and `test/integration/omp-*.test.ts` expectations pass with import-line changes only.
-- [ ] **OMPB-04**: `realm host install omp` writes, idempotently and atomically, the shim under `<agent dir>/extensions/realm/`, records a receipt, supports `--dry-run`, and `uninstall` removes only what the receipt owns.
-- [ ] **OMPB-05**: Install refuses with `POLICY_DENIED` and writes nothing when the extension entry is not built (`extension-unbuilt`) or Omp already loads Realm through a plugin link (`already-loaded`); foreign content, drift and symlinks keep their Phase 21 refusals.
-- [ ] **OMPB-06**: With the shim installed and no environment switch, Omp session start attaches, spawns the daemon when none answers (including under a Bun host, via an absolute `PATH` Node) and runs the idempotent `up`; a Bun host with no Node found still refuses with `REALM_NOT_ACTIVE` and spawns nothing.
-- [ ] **OMPB-07**: `realm doctor` (`host-plugins`) and `realm host status omp` report installed, shim target present and live plugin sessions (presence markers); `realm host status omp` also reports duplicate-load (it needs the user's home, which doctor deliberately never reads). Output names ids, states and counts only, never a path or file content.
-- [ ] **OMPB-08**: Docs describe the shipped behavior with evidence tiers and the unproven live boundary; the export-usage allowlist has no stale entry and no entry whose reason is outdated; module-size, pack-smoke and docs gates pass.
+- [x] **OMPB-01**: The Omp plugin reads every boot bound, the link-lost and retryable code lists, the re-attach sub-state table and the jitter function from `src/host/boot.ts`; `src/omp/reattach.ts` and the `src/omp` bound constants no longer exist; the parity tests are deleted.
+- [x] **OMPB-02**: The real Omp plugin, driven through the Omp host API, passes harness cases C1 to C9, and the harness's four reference mutants still fail exactly their cases.
+- [x] **OMPB-03**: The existing guard, status text, tool-set reconciliation and fail-closed default behave as before: all pre-existing `test/omp/` and `test/integration/omp-*.test.ts` expectations pass with import-line changes only.
+- [x] **OMPB-04**: `realm host install omp` writes, idempotently and atomically, the shim under `<agent dir>/extensions/realm/`, records a receipt, supports `--dry-run`, and `uninstall` removes only what the receipt owns.
+- [x] **OMPB-05**: Install refuses with `POLICY_DENIED` and writes nothing when the extension entry is not built (`extension-unbuilt`) or Omp already loads Realm through a plugin link (`already-loaded`); foreign content, drift and symlinks keep their Phase 21 refusals.
+- [x] **OMPB-06**: With the shim installed and no environment switch, Omp session start attaches, spawns the daemon when none answers (including under a Bun host, via an absolute `PATH` Node) and runs the idempotent `up`; a Bun host with no Node found still refuses with `REALM_NOT_ACTIVE` and spawns nothing.
+- [x] **OMPB-07**: `realm doctor` (`host-plugins`) and `realm host status omp` report installed, shim target present and live plugin sessions (presence markers); `realm host status omp` also reports duplicate-load (it needs the user's home, which doctor deliberately never reads). Output names ids, states and counts only, never a path or file content.
+- [x] **OMPB-08**: Docs describe the shipped behavior with evidence tiers and the unproven live boundary; the export-usage allowlist has no stale entry and no entry whose reason is outdated; module-size, pack-smoke and docs gates pass.
 
 ### Boot integration (BOOT)
 
@@ -265,14 +265,14 @@ Each v3.0 requirement maps to exactly one phase. The carried requirements keep t
 | HOST-07 | Phase 21 | Complete |
 | HOST-08 | Phase 21 | Complete |
 | HOST-09 | Phase 21 | Complete |
-| OMPB-01 | Phase 22 | Planned |
-| OMPB-02 | Phase 22 | Planned |
-| OMPB-03 | Phase 22 | Planned |
-| OMPB-04 | Phase 22 | Planned |
-| OMPB-05 | Phase 22 | Planned |
-| OMPB-06 | Phase 22 | Planned |
-| OMPB-07 | Phase 22 | Planned |
-| OMPB-08 | Phase 22 | Planned |
+| OMPB-01 | Phase 22 | Complete |
+| OMPB-02 | Phase 22 | Complete |
+| OMPB-03 | Phase 22 | Complete |
+| OMPB-04 | Phase 22 | Complete |
+| OMPB-05 | Phase 22 | Complete |
+| OMPB-06 | Phase 22 | Complete |
+| OMPB-07 | Phase 22 | Complete |
+| OMPB-08 | Phase 22 | Complete |
 | BOOT-01 | Phase 23 | Planned |
 | BOOT-02 | Phase 23 | Planned |
 | BOOT-03 | Phase 23 | Planned |
