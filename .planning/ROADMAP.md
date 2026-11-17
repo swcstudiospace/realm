@@ -613,12 +613,15 @@ Plans:
 
 ### Phase 23: Boot integration for host plugins
 
-**Goal:** [To be planned]
-**Requirements**: TBD
-**Plans:** 0 plans
+**Goal:** Every supported host opens Realm on boot through one shared boot contract: a single attach implementation, a production boot driver for the stdio (MCP/ACP) hosts, per-host presence markers, a daemon-side boot report with audit and metrics, per-host failure isolation and teardown that never sends `down`.
+**Depends on:** Phase 22
+**Requirements**: BOOT-01, BOOT-02, BOOT-03, BOOT-04, BOOT-05, BOOT-06, BOOT-07, BOOT-08, BOOT-09
+**Plans:** 3 plans
 
 Plans:
-- [ ] TBD (run /gsd-plan-phase 23 to break down)
+- [ ] 23-01-PLAN.md: shared attach, boot driver, adapter and manifest wiring, presence read side (wave 1)
+- [ ] 23-02-PLAN.md: daemon-side host-boot control method, audit chain, metrics (wave 1)
+- [ ] 23-03-PLAN.md: observer, realm mcp|acp boot sequence and teardown, Omp adoption, isolation tests, docs, allowlist, live rehearsal (wave 2)
 
 ### Phase 24: Host adapters wave 1: Claude Code, OpenCode, Codex, Kimi CLI
 
