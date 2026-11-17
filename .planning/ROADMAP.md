@@ -192,6 +192,12 @@ Plans:
 - [x] **Phase 18: Per-project sandboxes** - One session, sandbox, audit file and lock table per project workspace under the configured roots (MULTI-01..06) (completed 2026-11-15)
 - [x] **Phase 19: Resume and checkpoint** - A surviving sandbox that passes the hardening verifier is re-adopted after a daemon restart, a session-owned scratch volume, and workspace snapshot and restore (RES-01..05) (completed 2026-11-16)
 - [x] **Phase 20: Release pipeline hardening** - Unprivileged build job and privileged publish job, build provenance attestation, a rollback workflow, and a changelog filter for removed features (REL-01..04) (completed 2026-11-17)
+- [x] **Phase 21: Host plugin contract and installer** - A shared host plugin contract (manifest, capability grants mapped to the existing policy gates, boot-hook port, installer engine) and a declarative table of Omp plus the 18 GSD Core runtimes, driven by a `realm host` CLI and a doctor check, proven on fixture hosts.
+- [x] **Phase 22: Omp plugin on boot** - Omp is the reference implementation of the host contract: it consumes `src/host/boot.ts`, passes the boot conformance harness, installs through `realm host install omp`, and opens Realm (daemon, sandbox) when an installed Omp session starts, even for the compiled Bun Omp.
+- [x] **Phase 23: Boot integration for host plugins** - Every supported host opens Realm on boot through one shared boot contract: a single attach implementation, a production boot driver for the stdio (MCP/ACP) hosts, per-host presence markers, a daemon-side boot report with audit and metrics, per-host failure isolation and teardown that never sends `down`.
+- [x] **Phase 24: Host adapters wave 1: Claude Code, OpenCode, Codex, Kimi CLI** - Real install recipes for Claude Code, OpenCode, Codex and Kimi CLI (plus a same-shaped Kimi Code row), built on an engine extended for per-host home roles, a TOML table guard and honest status, proven on fixture hosts, with gated live rehearsals and a stated evidence tier per host.
+- [x] **Phase 25: Host adapters wave 2: remaining GSD Core runtimes** - The remaining GSD Core runtimes get config-only recipes where their config is documented (ten hosts; the owner approved deferring windsurf, trae and zcode), with a shadow guard and a YAML owned-key kind, fixture proofs, gated live validator tiers where a host is available, and docs that state the evidence tier per host.
+- [x] **Phase 26: Plugin contract tests, boot tests and author docs** - A cross-host contract checker proven by seeded defects, a real-daemon boot matrix over every stdio host, conformance mutants for the uncovered boot cases, a plugin author guide, a support matrix that a test keeps in step with the runtime table, and one tracked gaps page for the phase 21 to 25 residuals.
 
 ## Phase Details
 
@@ -585,6 +591,12 @@ Milestone v3.0 phases (12 to 20) run in three parallel lanes that share no mutab
 | 18. Per-project sandboxes | 16/15 | Complete    | 2026-11-15 |
 | 19. Resume and checkpoint | 1/1 | Complete    | 2026-11-16 |
 | 20. Release pipeline hardening | 4/3 | Complete    | 2026-11-17 |
+| 21. Host plugin contract and installer | 4/4 | Complete    | 2026-11-17 |
+| 22. Omp plugin on boot | 3/3 | Complete    | 2026-11-17 |
+| 23. Boot integration for host plugins | 3/3 | Complete    | 2026-11-17 |
+| 24. Host adapters wave 1: Claude Code, OpenCode, Codex, Kimi CLI | 4/4 | Complete    | 2026-11-17 |
+| 25. Host adapters wave 2: remaining GSD Core runtimes | 4/4 | Complete    | 2026-11-17 |
+| 26. Plugin contract tests, boot tests and author docs | 3/3 | Complete    | 2026-11-17 |
 
 ### Phase 21: Host plugin contract and installer
 
