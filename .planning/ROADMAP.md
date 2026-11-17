@@ -625,12 +625,16 @@ Plans:
 
 ### Phase 24: Host adapters wave 1: Claude Code, OpenCode, Codex, Kimi CLI
 
-**Goal:** [To be planned]
-**Requirements**: TBD
-**Plans:** 0 plans
+**Goal:** Real install recipes for Claude Code, OpenCode, Codex and Kimi CLI (plus a same-shaped Kimi Code row), built on an engine extended for per-host home roles, a TOML table guard and honest status, proven on fixture hosts, with gated live rehearsals and a stated evidence tier per host.
+**Depends on:** Phase 23
+**Requirements**: ADPT-01, ADPT-02, ADPT-03, ADPT-04, ADPT-05, ADPT-06, ADPT-07, ADPT-08, ADPT-09
+**Plans:** 4 plans
 
 Plans:
-- [ ] TBD (run /gsd-plan-phase 24 to break down)
+- [ ] 24-01-PLAN.md: engine: home roles and env, TOML guard, status unreadable and launch (wave 1)
+- [ ] 24-02-PLAN.md: recipes and fixture proofs (wave 2)
+- [ ] 24-03-PLAN.md: gated live rehearsals (wave 3)
+- [ ] 24-04-PLAN.md: docs, evidence and gates (wave 4)
 
 ### Phase 25: Host adapters wave 2: remaining GSD Core runtimes
 
