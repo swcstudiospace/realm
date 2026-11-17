@@ -4,6 +4,18 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-11-17
+
+### Added
+- feat(mcp): tool annotations for every Realm tool in both protocol eras (Phase 29) (#134) (63f89c0)
+
+### Documentation
+- docs(phase-29): close phase 29, MCP tool annotations (#137) (0f76b85)
+- docs(phase-27): close phase 27, Anda disposition (#135) (803bbbc)
+
+### Maintenance
+- test(host): wave 1 boot rehearsal harness and boot matrix (31-01) (#136) (8a687e4)
+
 ## [0.4.1] - 2026-11-17
 
 ### Documentation
