@@ -106,15 +106,15 @@ All v3.0 requirements are hypotheses until shipped and verified.
 
 ### Host plugin contract (HOST)
 
-- [ ] **HOST-01**: Host plugin manifest schema with strict validation
-- [ ] **HOST-02**: Capability grants map onto the existing policy gates (roots, credential allow, egress, shell, mode) with no new enforcement path
-- [ ] **HOST-03**: Declarative runtime table: Omp plus the 18 GSD Core runtime flags, pinned to the verified source
-- [ ] **HOST-04**: Boot-hook port with bounds parity against the Omp plugin and a reusable conformance harness
-- [ ] **HOST-05**: Installer engine: pure recipes, atomic idempotent writes, ownership receipts, dry-run, crash resume
-- [ ] **HOST-06**: Host operations are audited on the shared chain, logged with redaction and bounded in time
-- [ ] **HOST-07**: `realm host list|detect|status|install|uninstall` CLI with dry-run
-- [ ] **HOST-08**: Doctor host-plugins check reads receipts only
-- [ ] **HOST-09**: Contract docs, packaging proof and repo gates for src/host
+- [x] **HOST-01**: Host plugin manifest schema with strict validation
+- [x] **HOST-02**: Capability grants map onto the existing policy gates (roots, credential allow, egress, shell, mode) with no new enforcement path
+- [x] **HOST-03**: Declarative runtime table: Omp plus the 18 GSD Core runtime flags, pinned to the verified source
+- [x] **HOST-04**: Boot-hook port with bounds parity against the Omp plugin and a reusable conformance harness
+- [x] **HOST-05**: Installer engine: pure recipes, atomic idempotent writes, ownership receipts, dry-run, crash resume
+- [x] **HOST-06**: Host operations are audited on the shared chain, logged with redaction and bounded in time
+- [x] **HOST-07**: `realm host list|detect|status|install|uninstall` CLI with dry-run
+- [x] **HOST-08**: Doctor host-plugins check reads receipts only
+- [x] **HOST-09**: Contract docs, packaging proof and repo gates for src/host
 
 ## Carried from v2.0 (not in this milestone)
 
@@ -233,15 +233,15 @@ Each v3.0 requirement maps to exactly one phase. The carried requirements keep t
 | REL-02 | Phase 20 | Complete (gh attestation verify exit 0 on v0.3.30 tarball, SHA256SUMS, SBOM; repair path offline-tested, owner-accepted) |
 | REL-03 | Phase 20 | Complete (test rollback run 43951066556; docs rebuilt from the known-good SHA) |
 | REL-04 | Phase 20 | Complete (release-cases tests, 59 passing) |
-| HOST-01 | Phase 21 | Planned |
-| HOST-02 | Phase 21 | Planned |
-| HOST-03 | Phase 21 | Planned |
-| HOST-04 | Phase 21 | Planned |
-| HOST-05 | Phase 21 | Planned |
-| HOST-06 | Phase 21 | Planned |
-| HOST-07 | Phase 21 | Planned |
-| HOST-08 | Phase 21 | Planned |
-| HOST-09 | Phase 21 | Planned |
+| HOST-01 | Phase 21 | Complete |
+| HOST-02 | Phase 21 | Complete |
+| HOST-03 | Phase 21 | Complete |
+| HOST-04 | Phase 21 | Complete |
+| HOST-05 | Phase 21 | Complete |
+| HOST-06 | Phase 21 | Complete |
+| HOST-07 | Phase 21 | Complete |
+| HOST-08 | Phase 21 | Complete |
+| HOST-09 | Phase 21 | Complete |
 | FS-02 | Phase 2 | Partial (accepted approximation, confirmed by the owner 2026-10-23; rebind verified through the pinned root; check-to-use windows remain on the read and write paths; audit G-10) |
 | ANDA-01 | Phase 3 | Partial (live-gated) |
 | ANDA-02 | Phase 3 | Partial (live-gated) |
