@@ -391,7 +391,7 @@ void test("Phase 24: recipe paths and key segments are safe, the codex table ope
     assert.ok(entry.homes.some((home) => home.role === (recipe.homeRole ?? "config")), `${id}: the recipe's home role has a home`);
     if (recipe.kind === "json-merge") {
       assert.ok(recipe.keyPath.every((segment) => isSafeKeySegment(segment)), id);
-    } else {
+    } else if (recipe.kind === "toml-table") {
       assert.ok(recipe.table.every((segment) => isSafeKeySegment(segment)), id);
       assert.equal(recipe.text.split("\n")[0], `[${recipe.table.join(".")}]`, id);
     }

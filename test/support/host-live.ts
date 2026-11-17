@@ -585,8 +585,8 @@ function clip(text: string): string {
 }
 
 // One line for an assertion message: the exit, then the clipped output.
-export function describeRun(result: HostRunResult): string {
-  const exit = result.timedOut ? "did not return (timed out)" : result.exitCode === undefined ? "did not exit" : `exit ${String(result.exitCode)}`;
+export function describeRun(result: Pick<HostRunResult, "exitCode" | "stdout" | "stderr"> & { readonly timedOut?: boolean }): string {
+  const exit = result.timedOut === true ? "did not return (timed out)" : result.exitCode === undefined ? "did not exit" : `exit ${String(result.exitCode)}`;
   return `${exit}; stdout ${clip(result.stdout)}; stderr ${clip(result.stderr)}`;
 }
 
