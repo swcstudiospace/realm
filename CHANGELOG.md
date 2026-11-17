@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.3.49] - 2026-11-17
+
+### Documentation
+- docs(phase-25): close phase 25, host adapters wave 2 (#119) (9df0e87)
+
 ## [0.3.48] - 2026-11-17
 
 ### Added
