@@ -248,7 +248,11 @@ function jsonFlavor(d: JsonSuiteDescriptor): Flavor {
     seed: render(d.seedDoc, d.seedFormat),
     seedResult: render(withEntry(d, { ...d.seedDoc }), d.seedFormat),
     created: render(withEntry(d, {})),
-    owns: (text) => isDeepStrictEqual(parentOf(parseDoc(text))["realm"], d.entry),
+    // False, not an assertion failure, when the parent object is absent: a seed without it has no Realm entry either.
+    owns: (text) => {
+      const parent = parseDoc(text)[d.parentKey];
+      return isRecord(parent) && isDeepStrictEqual(parent["realm"], d.entry);
+    },
     edit: (text) =>
       rewrite(text, (doc) => {
         parentOf(doc)["realm"] = { ...d.entry, command: "evil" };
