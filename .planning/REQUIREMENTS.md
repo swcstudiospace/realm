@@ -153,14 +153,14 @@ All v3.0 requirements are hypotheses until shipped and verified.
 
 ### Host adapters wave 2 (WAVE2)
 
-- [ ] **WAVE2-01**: A `yaml-map` recipe kind installs, no-ops, drifts, refuses and uninstalls one `parent.child` entry of a block-style YAML file, owned by key identity and parsed value with no comment marker; the scanner refuses every case in the D-25-04 contract (nothing written, no new error code or refusal reason); comments, blank lines, other keys, quoting, indentation and line endings outside the owned lines survive byte for byte; modules `yaml-scan.ts` and `yaml-owned.ts` keep `recipe.ts` under 1000 lines.
-- [ ] **WAVE2-02**: A table entry may carry `shadows`; an install that would create the recipe file while a shadow path exists is refused `foreign-content` with nothing written, and is not refused when the recipe file already exists; recipes without the field behave as before.
-- [ ] **WAVE2-03**: `realm host install` registers `realm mcp --host <id>` in the user-level MCP file named in D-25-02 for `cursor`, `copilot`, `qwen`, `augment`, `pi`, `cline`, `antigravity`, `kilo`: each proven on a fixture host built from the real table row (lifecycle, no-op, dry-run, drift, foreign content, JSONC refusal, hostile content, symlinks, override, doctor, `realm host status`), against goldens whose source and date are recorded; each value equals the host's own output where observed and `defaultManifestFor(id).launch`.
-- [ ] **WAVE2-04**: The same lifecycle for `codebuddy` (`.mcp.json`, `CODEBUDDY_CONFIG_DIR`) including the `shadows` refusal with `mcp.json` in the config home and `.codebuddy.json` in the user's home, and the skip of the guard when `.mcp.json` exists.
-- [ ] **WAVE2-05**: The same lifecycle for `hermes` (`config.yaml`, `HERMES_HOME`, `mcp_servers.realm`) on goldens recorded from the host's own writer and its documentation, including a host-rewritten file (re-quoted, re-flowed entry, same parsed value) that stays `ok`.
-- [ ] **WAVE2-06**: Exactly 16 of the 19 hosts have a recipe; `windsurf`, `trae` and `zcode` keep `recipe: null`, refuse install as `recipe-pending`, change no file, and are pinned by name in the tests; each deferral row carries its reason and open-question id in a table comment; no recipe exists for a host whose config format is not documented.
-- [ ] **WAVE2-07**: For each of `qwen`, `pi`, `hermes`, `cursor`, `kilo`, `copilot`, `augment`, `codebuddy`, `cline` a gated live file installs the real recipe into an isolated `HOME` and has the host's own listing command parse it (and launch the stub `realm` where it launches), skipping with a named reason when its prerequisite is missing; the skip-reason selection, the version floor, the stub, the isolation guard and the version parsing are covered by a hermetic helper test that always runs; `antigravity`'s gap is written down.
-- [ ] **WAVE2-08**: Docs state, per shipped host, the file, the shape, the override, the validator, the project-level behavior and shadowing warning, the evidence tier reached (T1, T2, documented-only) with version and date, and the gaps; `deferred-hosts.md` records the three deferrals with reasons and alternatives; the contract table shows 16 hosts with a recipe and 3 pending; the allowlist has no stale entry; module-size, `check:docs` and pack-smoke pass; the rehearsal record states what ran and what did not.
+- [x] **WAVE2-01**: A `yaml-map` recipe kind installs, no-ops, drifts, refuses and uninstalls one `parent.child` entry of a block-style YAML file, owned by key identity and parsed value with no comment marker; the scanner refuses every case in the D-25-04 contract (nothing written, no new error code or refusal reason); comments, blank lines, other keys, quoting, indentation and line endings outside the owned lines survive byte for byte; modules `yaml-scan.ts` and `yaml-owned.ts` keep `recipe.ts` under 1000 lines.
+- [x] **WAVE2-02**: A table entry may carry `shadows`; an install that would create the recipe file while a shadow path exists is refused `foreign-content` with nothing written, and is not refused when the recipe file already exists; recipes without the field behave as before.
+- [x] **WAVE2-03**: `realm host install` registers `realm mcp --host <id>` in the user-level MCP file named in D-25-02 for `cursor`, `copilot`, `qwen`, `augment`, `pi`, `cline`, `antigravity`, `kilo`: each proven on a fixture host built from the real table row (lifecycle, no-op, dry-run, drift, foreign content, JSONC refusal, hostile content, symlinks, override, doctor, `realm host status`), against goldens whose source and date are recorded; each value equals the host's own output where observed and `defaultManifestFor(id).launch`.
+- [x] **WAVE2-04**: The same lifecycle for `codebuddy` (`.mcp.json`, `CODEBUDDY_CONFIG_DIR`) including the `shadows` refusal with `mcp.json` in the config home and `.codebuddy.json` in the user's home, and the skip of the guard when `.mcp.json` exists.
+- [x] **WAVE2-05**: The same lifecycle for `hermes` (`config.yaml`, `HERMES_HOME`, `mcp_servers.realm`) on goldens recorded from the host's own writer and its documentation, including a host-rewritten file (re-quoted, re-flowed entry, same parsed value) that stays `ok`.
+- [x] **WAVE2-06**: Exactly 16 of the 19 hosts have a recipe; `windsurf`, `trae` and `zcode` keep `recipe: null`, refuse install as `recipe-pending`, change no file, and are pinned by name in the tests; each deferral row carries its reason and open-question id in a table comment; no recipe exists for a host whose config format is not documented.
+- [x] **WAVE2-07**: For each of `qwen`, `pi`, `hermes`, `cursor`, `kilo`, `copilot`, `augment`, `codebuddy`, `cline` a gated live file installs the real recipe into an isolated `HOME` and has the host's own listing command parse it (and launch the stub `realm` where it launches), skipping with a named reason when its prerequisite is missing; the skip-reason selection, the version floor, the stub, the isolation guard and the version parsing are covered by a hermetic helper test that always runs; `antigravity`'s gap is written down.
+- [x] **WAVE2-08**: Docs state, per shipped host, the file, the shape, the override, the validator, the project-level behavior and shadowing warning, the evidence tier reached (T1, T2, documented-only) with version and date, and the gaps; `deferred-hosts.md` records the three deferrals with reasons and alternatives; the contract table shows 16 hosts with a recipe and 3 pending; the allowlist has no stale entry; module-size, `check:docs` and pack-smoke pass; the rehearsal record states what ran and what did not.
 
 ## Carried from v2.0 (not in this milestone)
 
@@ -314,14 +314,14 @@ Each v3.0 requirement maps to exactly one phase. The carried requirements keep t
 | ADPT-07 | Phase 24 | Complete |
 | ADPT-08 | Phase 24 | Complete |
 | ADPT-09 | Phase 24 | Complete |
-| WAVE2-01 | Phase 25 | Planned |
-| WAVE2-02 | Phase 25 | Planned |
-| WAVE2-03 | Phase 25 | Planned |
-| WAVE2-04 | Phase 25 | Planned |
-| WAVE2-05 | Phase 25 | Planned |
-| WAVE2-06 | Phase 25 | Planned |
-| WAVE2-07 | Phase 25 | Planned |
-| WAVE2-08 | Phase 25 | Planned |
+| WAVE2-01 | Phase 25 | Complete |
+| WAVE2-02 | Phase 25 | Complete |
+| WAVE2-03 | Phase 25 | Complete |
+| WAVE2-04 | Phase 25 | Complete |
+| WAVE2-05 | Phase 25 | Complete |
+| WAVE2-06 | Phase 25 | Complete |
+| WAVE2-07 | Phase 25 | Complete |
+| WAVE2-08 | Phase 25 | Complete |
 | FS-02 | Phase 2 | Partial (accepted approximation, confirmed by the owner 2026-10-23; rebind verified through the pinned root; check-to-use windows remain on the read and write paths; audit G-10) |
 | ANDA-01 | Phase 3 | Partial (live-gated) |
 | ANDA-02 | Phase 3 | Partial (live-gated) |

@@ -46,7 +46,7 @@ Read date 2026-11-17. Each host below has a snippet with the file, the entry, th
 - Hermes Agent: ships through the new `yaml-map` kind; `~/.hermes/config.yaml` (`HERMES_HOME`), `mcp_servers.realm`; observed through the host's own writer functions, the CLI was broken on the verification machine. [Snippet](../hosts/snippets/hermes-agent.md).
 - Windsurf (renamed Devin Desktop), Trae and ZCode: deferred, owner-approved 2026-11-17; each keeps refusing `recipe-pending`. [Reasons, evidence and the owner decisions](../hosts/snippets/deferred-hosts.md).
 
-Nothing here was registered in a live host configuration, no wave 2 host has a live end-to-end tier, and the gated validator rehearsal records no result yet.
+Nothing here was registered in a live host configuration, no wave 2 host has a live end-to-end tier, and the gated validator rehearsal ran live once (Qwen Code 0.22.0 passed on 2026-11-17; the other eight gated hosts skipped with named reasons and were not run).
 
 ## Gate note (FOUND-03)
 
