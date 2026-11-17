@@ -26,9 +26,27 @@ reported daemon absent. Registration needs explicit approval per host.
 
 ## Host plugin contract
 
-Phase 21 adds one contract for every CLI agent Realm may run in: a runtime table of 19 hosts, a strict plugin manifest, a capability catalogue over the existing policy facts, a boot-hook port with a conformance harness, an installer engine with ownership receipts, and `realm host list|detect|status|install|uninstall`. It is documented in [host-plugin-contract.md](host-plugin-contract.md), with the table of hosts and its evidence limits. Phase 24 gave six hosts an install recipe (`omp`, `claude`, `opencode`, `codex`, `kimi`, `kimi-code`); the other 13 refuse as `recipe-pending` and change nothing. Everything is proven on fixture hosts (a temporary home and string goldens); the per-host live rehearsal is gated and records no result yet, so no host is registered live by this repository and no live Realm session through any of these hosts is claimed. Registration still needs explicit approval per host. The tier table above is unchanged.
+Phase 21 adds one contract for every CLI agent Realm may run in: a runtime table of 19 hosts, a strict plugin manifest, a capability catalogue over the existing policy facts, a boot-hook port with a conformance harness, an installer engine with ownership receipts, and `realm host list|detect|status|install|uninstall`. It is documented in [host-plugin-contract.md](host-plugin-contract.md), with the table of hosts and its evidence limits. Phases 22 and 24 gave `omp`, `claude`, `opencode`, `codex`, `kimi` and `kimi-code` an install recipe and Phase 25 gave ten more (`cursor`, `copilot`, `qwen`, `augment`, `pi`, `cline`, `antigravity`, `kilo`, `codebuddy`, `hermes`), so 16 hosts have a recipe; the other 3 (`windsurf`, `trae`, `zcode`) are owner-approved deferrals that refuse as `recipe-pending` and change nothing. Everything is proven on fixture hosts (a temporary home and string goldens); the per-host live rehearsal is gated and records no result yet, so no host is registered live by this repository and no live Realm session through any of these hosts is claimed. Registration still needs explicit approval per host. The tier table above is unchanged.
 
-Phase 23 adds the boot path for the 18 `mcp-config` hosts: a host's configuration launches `realm mcp --host <id>` (or `realm acp --host <id>`, optionally with `--reattach`) and the session boots in six numbered steps, serves nothing until the boot settles, writes its presence marker and reports its boot to the daemon. `--host` takes a canonical host id only. Every adapter bundle and snippet shipped before Phase 24 still runs plain `realm mcp`, which boots the same way and reports as `unlabelled`; the Phase 24 recipes write `--host <id>` (claude, opencode, codex, kimi, kimi-code), and no live registration was made. The sequence, the exit codes and what is proven against what are in [host-plugin-contract.md](host-plugin-contract.md), "Boot integration". It is proven against fakes and a real daemon over fakes; the live rehearsal with a real Claude Code and a real Omp has not been run.
+Phase 23 adds the boot path for the 18 `mcp-config` hosts: a host's configuration launches `realm mcp --host <id>` (or `realm acp --host <id>`, optionally with `--reattach`) and the session boots in six numbered steps, serves nothing until the boot settles, writes its presence marker and reports its boot to the daemon. `--host` takes a canonical host id only. Every adapter bundle and snippet shipped before Phase 24 still runs plain `realm mcp`, which boots the same way and reports as `unlabelled`; the Phase 24 and Phase 25 recipes write `--host <id>` (claude, opencode, codex, kimi, kimi-code and the ten Phase 25 hosts), and no live registration was made. The sequence, the exit codes and what is proven against what are in [host-plugin-contract.md](host-plugin-contract.md), "Boot integration". It is proven against fakes and a real daemon over fakes; the live rehearsal with a real Claude Code and a real Omp has not been run.
+
+### Phase 25: the remaining runtimes
+
+Read date 2026-11-17. Each host below has a snippet with the file, the entry, the override variable, the host's validator command, whether and how the host loads project-level configuration (with the shadowing warning), what the host does to the file when it rewrites it, the recovery steps and the evidence tier reached. One line per host, from the decision table in [host-plugin-contract.md](host-plugin-contract.md), "The Phase 25 recipes":
+
+- Cursor: ships; `~/.cursor/mcp.json`, `mcpServers.realm` with `type: "stdio"`; documented, spawn observed; no override variable. [Snippet](../hosts/snippets/cursor.md).
+- GitHub Copilot CLI: ships; `~/.copilot/mcp-config.json` (`COPILOT_HOME`), Copilot's canonical entry with `tools`; observed (1.0.112). [Snippet](../hosts/snippets/copilot.md).
+- Qwen Code: ships; `~/.qwen/settings.json` (`QWEN_HOME`), the host's whole settings file; observed (0.22.0). [Snippet](../hosts/snippets/qwen.md).
+- Augment (Auggie CLI): ships; `~/.augment/settings.json` (`AUGMENT_CACHE_DIR`); observed (1.2.1). [Snippet](../hosts/snippets/augment.md).
+- Pi: ships for pi 1.3 and later only (owner-approved); `~/.pi/agent/mcp.json` (`PI_CODING_AGENT_DIR`, shared with Omp); observed (1.5.2). [Snippet](../hosts/snippets/pi.md).
+- Cline: ships for the Cline CLI only; `~/.cline/data/settings/cline_mcp_settings.json` (`CLINE_DIR`); the documented flat shape parses (3.0.74). [Snippet](../hosts/snippets/cline.md).
+- Antigravity: ships documented-only; `~/.gemini/config/mcp_config.json`, three Google pages agree, GSD Core's path differs, `agy` never run. [Snippet](../hosts/snippets/antigravity.md).
+- Kilo Code: ships; `~/.config/kilo/kilo.json` (`XDG_CONFIG_HOME`), OpenCode-shaped `mcp.realm`; observed (7.8.27). [Snippet](../hosts/snippets/kilo.md).
+- CodeBuddy Code: ships with a guard; `~/.codebuddy/.mcp.json` (`CODEBUDDY_CONFIG_DIR`), refused when it would hide a legacy file; observed (2.185.0). [Snippet](../hosts/snippets/codebuddy.md).
+- Hermes Agent: ships through the new `yaml-map` kind; `~/.hermes/config.yaml` (`HERMES_HOME`), `mcp_servers.realm`; observed through the host's own writer functions, the CLI was broken on the verification machine. [Snippet](../hosts/snippets/hermes-agent.md).
+- Windsurf (renamed Devin Desktop), Trae and ZCode: deferred, owner-approved 2026-11-17; each keeps refusing `recipe-pending`. [Reasons, evidence and the owner decisions](../hosts/snippets/deferred-hosts.md).
+
+Nothing here was registered in a live host configuration, no wave 2 host has a live end-to-end tier, and the gated validator rehearsal records no result yet.
 
 ## Gate note (FOUND-03)
 
@@ -47,6 +65,8 @@ Blocks: the `engines` field and the build target (plan 01-03, D-09). It also blo
 ## Read date
 
 2026-10-21 (ISO 8601) for Omp, Claude Code, Grok Build, and Hermes Agent; 2026-10-22 for Muse Code. Every statement below was read on its section's date. Quotations are taken from the page text as fetched.
+
+Phase 25 hosts (Cursor, Copilot, Qwen Code, Augment, Pi, Cline, Antigravity, Kilo, CodeBuddy, Hermes, Windsurf/Devin Desktop, Trae, ZCode): 2026-11-17.
 
 ## Official URLs read
 
@@ -85,7 +105,24 @@ Muse Code (read 2026-10-22):
 - https://dev.meta.ai/docs/muse-code/extending (skills, hooks, MCP servers, headless runs)
 - https://dev.meta.ai/docs/muse-code/configuration (settings.json, schema_version, project instructions, memory)
 
-Each URL was reached from the official documentation index or from a link on an official page. None was typed from memory.
+Phase 25 hosts (read 2026-11-17; the ones marked third-party or archived are not official current sources):
+
+- https://cursor.com/docs/mcp and https://cursor.com/docs/cli/reference/configuration (Cursor)
+- https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/add-mcp-servers (GitHub Copilot CLI)
+- https://github.com/QwenLM/qwen-code (Qwen Code; the documentation bundled in the npm package)
+- https://docs.augmentcode.com/cli/integrations (Augment)
+- https://pi.dev/docs/latest/mcp and https://github.com/earendil-works/pi (Pi)
+- https://docs.cline.bot/mcp/mcp-overview.md and https://docs.cline.bot/getting-started/config.md (Cline)
+- https://antigravity.google/docs/mcp/, https://antigravity.google/docs/cli/gcli-migration and https://antigravity.google/docs/settings (Antigravity)
+- https://kilo.ai/docs/automate/mcp/using-in-kilo-code and https://kilo.ai/docs/code-with-ai/platforms/cli (Kilo Code)
+- https://www.codebuddy.ai/docs/cli/mcp (CodeBuddy Code)
+- https://hermes-agent.nousresearch.com/docs/user-guide/features/mcp and github.com/NousResearch/hermes-agent v0.23.2 (Hermes, MCP page re-read)
+- https://docs.devin.ai/desktop/devin-desktop-faq.md, https://docs.devin.ai/desktop/changelog.md, https://docs.devin.ai/cli/extensibility/mcp/configuration.md, https://docs.devin.ai/desktop/devin-local/customizations.md and https://docs.devin.ai/cli/reference/configuration/read-config-from.md (Windsurf, now Devin Desktop; the legacy Cascade file is documented only in a Wayback snapshot of 2026-02-28 of docs.windsurf.com/windsurf/cascade/mcp)
+- https://docs.trae.ai/ide/add-mcp-servers (Trae IDE) and, third-party, https://github.com/vshulcz/deja-vu/issues/4731
+- https://zcode.z.ai/en/docs/mcp-services and https://zcode.z.ai/en/docs/install (ZCode)
+- github.com/open-gsd/gsd-core `next` (`bin/install.js`, `docs/how-to/connect-gsd-mcp-server.md`, `docs/how-to/install-on-your-runtime.md`, `docs/reference/host-integration-capability-matrix.md`), read as the source of GSD Core's own homes and variable names
+
+Each URL in the lists above the Phase 25 list was reached from the official documentation index or from a link on an official page. None was typed from memory. The Phase 25 URLs were read in the 2026-11-17 research pass, each one directly; the Devin legacy Cascade snapshot and the Trae issue are marked as such and are not official current sources.
 
 ## Spec questions asked (D-16, spec n7 gate 6, PER_HOST_MATRIX)
 
