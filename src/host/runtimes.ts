@@ -11,6 +11,7 @@ import {
   type HostId,
   type HostRuntimeEntry,
   type HostTier,
+  type InstallRecipe,
   type IntegrationKind,
 } from "./types.js";
 
@@ -23,6 +24,8 @@ interface EntryInit {
   readonly homeVerified?: boolean;
   readonly envOverride?: string;
   readonly binaries?: readonly string[];
+  readonly recipe?: InstallRecipe;
+  readonly conflicts?: readonly string[];
 }
 
 function toHomes(homes: EntryInit["homes"]): readonly HostHomeSpec[] {
@@ -31,7 +34,7 @@ function toHomes(homes: EntryInit["homes"]): readonly HostHomeSpec[] {
 
 function entry(id: HostId, init: EntryInit): HostRuntimeEntry {
   const integration: IntegrationKind = id === "omp" ? "extension" : "mcp-config";
-  return Object.freeze({
+  const base = {
     id,
     flag: init.flag,
     aliases: Object.freeze([...(init.aliases ?? [])]),
@@ -42,13 +45,24 @@ function entry(id: HostId, init: EntryInit): HostRuntimeEntry {
     homeVerified: init.homeVerified ?? true,
     envOverride: init.envOverride ?? null,
     binaries: Object.freeze([...(init.binaries ?? [])]),
-    recipe: null,
-  });
+    recipe: init.recipe === undefined ? null : Object.freeze({ ...init.recipe }),
+  };
+  return Object.freeze(init.conflicts === undefined ? base : { ...base, conflicts: Object.freeze([...init.conflicts]) });
 }
 
 // Typed as a full Record over HostId, so a missing host fails compilation.
 export const HOST_RUNTIMES: Readonly<Record<HostId, HostRuntimeEntry>> = Object.freeze({
-  omp: entry("omp", { flag: "--omp", displayName: "Omp", tier: "reference", homes: [], homeVerified: false, binaries: ["omp"] }),
+  omp: entry("omp", {
+    flag: "--omp",
+    displayName: "Omp",
+    tier: "reference",
+    homes: [".omp/agent"],
+    envOverride: "PI_CODING_AGENT_DIR",
+    binaries: ["omp"],
+    recipe: { kind: "bundle-copy", source: "omp", dest: "extensions/realm" },
+    // An Omp plugin link (omp plugin install <checkout>) already loads Realm; the shim would load it twice.
+    conflicts: [".omp/plugins/node_modules/agent-realm"],
+  }),
   claude: entry("claude", { flag: "--claude", displayName: "Claude Code", tier: "proven", homes: [".claude"], envOverride: "CLAUDE_CONFIG_DIR", binaries: ["claude"] }),
   opencode: entry("opencode", { flag: "--opencode", displayName: "OpenCode", tier: "proven", homes: [".config/opencode"] }),
   kilo: entry("kilo", { flag: "--kilo", displayName: "Kilo", tier: "config-only", homes: [".config/kilo", ".kilo"] }),
@@ -100,7 +114,7 @@ export function resolveHostId(name: string): HostId | undefined {
   return undefined;
 }
 
-// Phase 21 invariant: no recipe exists yet. Later phases change this deliberately.
+// A host has no install recipe until its phase sets one: Phase 22 sets omp, Phases 24 and 25 set the others.
 export function recipePending(id: HostId): boolean {
   return HOST_RUNTIMES[id].recipe === null;
 }

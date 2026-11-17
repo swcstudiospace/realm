@@ -161,7 +161,8 @@ const CHANNEL_REFUSED_IMPORT = "^(?!(?:node:fs|node:net|\\.\\./core/errors\\.js|
 
 export default tseslint.config(
   {
-    ignores: ["dist/**", "coverage/**", "node_modules/**"],
+    // adapters/omp/index.js is an install template: its token is not valid JavaScript until `realm host install omp` expands it.
+    ignores: ["dist/**", "coverage/**", "node_modules/**", "adapters/omp/index.js"],
   },
   js.configs.recommended,
   {

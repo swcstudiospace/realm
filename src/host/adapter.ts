@@ -4,7 +4,8 @@
 // the caller hands in HostEnv.
 
 import { randomBytes } from "node:crypto";
-import { isAbsolute, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { SchemaInvalidError } from "../contract/validate.js";
 import { makeRealmError } from "../core/errors.js";
 import { withTimeout } from "../core/timeout.js";
@@ -68,6 +69,8 @@ export interface HostHomeStatus {
 export interface HostDetectionDetail extends HostDetection {
   readonly homes: readonly HostHomeStatus[];
   readonly binary: string | null;
+  // The entry's `conflicts` paths (relative to the user home, as in the table) that exist: the host already loads Realm another way.
+  readonly conflicts: readonly string[];
 }
 
 export interface HostOperationDetail extends HostOperationResult {
@@ -93,6 +96,37 @@ export interface RecipeHostAdapter extends HostAdapter {
 
 function defaultCorrelationId(): string {
   return randomBytes(12).toString("hex");
+}
+
+// The one install-time token a shipped bundle file may carry: the file URL of the built extension entry.
+const BUNDLE_TOKEN = "@realm:extension-url@";
+const ANY_BUNDLE_TOKEN = /@realm:[a-z-]+@/g;
+
+// Replaces BUNDLE_TOKEN in each bundle file with a JSON string literal of the entry's file URL (the package root is the parent of
+// the adapters directory, the entry comes from the validated manifest). Any other `@realm:` token, a token with a manifest that has
+// no entry, or a relative adapters directory is SCHEMA_INVALID. `entryPath` is the absolute entry path, or null when no file used
+// the token. Files without a token are returned unchanged.
+function expandBundleTokens(
+  files: readonly BundleFile[],
+  manifest: HostPluginManifest,
+  adaptersDir: string,
+): { readonly files: readonly BundleFile[]; readonly entryPath: string | null } {
+  const out: BundleFile[] = [];
+  let entryPath: string | null = null;
+  for (const file of files) {
+    const tokens = [...file.content.matchAll(ANY_BUNDLE_TOKEN)].map((match) => match[0]);
+    if (tokens.length === 0) {
+      out.push(file);
+      continue;
+    }
+    if (tokens.some((token) => token !== BUNDLE_TOKEN) || manifest.entry === undefined || !isAbsolute(adaptersDir)) {
+      throw makeRealmError("SCHEMA_INVALID");
+    }
+    entryPath ??= join(dirname(adaptersDir), manifest.entry);
+    const literal = JSON.stringify(pathToFileURL(entryPath).href);
+    out.push({ rel: file.rel, content: file.content.replaceAll(BUNDLE_TOKEN, () => literal) });
+  }
+  return { files: out, entryPath };
 }
 
 // Whether the receipt entry still matches what is on disk. The owned part is compared for json-merge and
@@ -129,6 +163,24 @@ export function createHostAdapter(
     ...(deps.stageHook === undefined ? {} : { stageHook: deps.stageHook }),
   };
   const bounded = <T>(work: Promise<T>): Promise<T> => withTimeout(work, readTimeoutMs, "TOOL_TIMEOUT");
+
+  // The table's `conflicts` that exist under the user's home. lstat, so a dangling symlink counts. Reads the file system only.
+  async function findConflicts(env: HostEnv): Promise<readonly string[]> {
+    const paths = entry.conflicts ?? [];
+    if (paths.length === 0) {
+      return [];
+    }
+    if (!isAbsolute(env.home)) {
+      throw makeRealmError("SCHEMA_INVALID");
+    }
+    const found: string[] = [];
+    for (const rel of paths) {
+      if ((await bounded(reader.lstat(join(env.home, rel)))) !== null) {
+        found.push(rel);
+      }
+    }
+    return found;
+  }
 
   async function detect(env: HostEnv): Promise<HostDetectionDetail> {
     const homes: HostHomeStatus[] = [];
@@ -167,6 +219,7 @@ export function createHostAdapter(
       via: homeFound ? "home" : binary !== null ? "binary" : "none",
       homes,
       binary,
+      conflicts: await findConflicts(env),
     };
   }
 
@@ -249,7 +302,7 @@ export function createHostAdapter(
   }
 
   // The shipped files of a bundle-copy source, read through the same lstat discipline as host files.
-  async function readBundle(recipe: InstallRecipe): Promise<readonly BundleFile[]> {
+  async function readBundle(recipe: InstallRecipe, dryRun: boolean): Promise<readonly BundleFile[]> {
     if (recipe.kind !== "bundle-copy") {
       return [];
     }
@@ -263,7 +316,15 @@ export function createHostAdapter(
     }
     const out: BundleFile[] = [];
     await readBundleDir(dir, "", 0, out);
-    return out;
+    const expanded = expandBundleTokens(out, checked, deps.adaptersDir);
+    if (expanded.entryPath !== null) {
+      const built = await bounded(reader.stat(expanded.entryPath));
+      if (built === null || !built.isFile) {
+        deps.logger.warn("host.install.refused", { host: entry.id, recipeKind: recipe.kind, dryRun, code: "POLICY_DENIED", reason: "extension-unbuilt" });
+        throw new HostRefusal("extension-unbuilt");
+      }
+    }
+    return expanded.files;
   }
 
   function requireAbsolute(options: HostOperationOptions): string | undefined {
@@ -288,8 +349,12 @@ export function createHostAdapter(
         deps.logger.warn("host.install.refused", { host: entry.id, recipeKind: recipe.kind, dryRun: options.dryRun, code: "POLICY_DENIED", reason: "not-detected" });
         throw new HostRefusal("not-detected");
       }
+      if ((await findConflicts(env)).length > 0) {
+        deps.logger.warn("host.install.refused", { host: entry.id, recipeKind: recipe.kind, dryRun: options.dryRun, code: "POLICY_DENIED", reason: "already-loaded" });
+        throw new HostRefusal("already-loaded");
+      }
       home = await installHome(env, recipe.homeRole ?? "config", override);
-      bundle = await readBundle(recipe);
+      bundle = await readBundle(recipe, options.dryRun);
     }
     const outcome = await runHostOperation({ op, hostId: entry.id, recipe, home, bundle }, ctx, { dryRun: options.dryRun });
     const changed = outcome.status === "installed" || outcome.status === "removed";
