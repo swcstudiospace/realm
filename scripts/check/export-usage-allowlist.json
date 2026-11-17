@@ -365,7 +365,7 @@
     {
       "file": "src/host/runtimes.ts",
       "name": "recipePending",
-      "reason": "D-1306 test-only seam: Phase 21 invariant seam: test/host/runtimes.test.ts holds every real host recipe-pending until the Phase 24 and 25 recipes land"
+      "reason": "D-1306 test-only seam: Phase 21 invariant seam: test/host/runtimes.test.ts holds exactly the 13 hosts that have no recipe recipe-pending (omp, claude, opencode, codex, kimi and kimi-code have one since Phase 24) until the Phase 25 recipes land"
     },
     {
       "file": "src/lifecycle/mutation-gate.ts",
