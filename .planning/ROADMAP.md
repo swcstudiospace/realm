@@ -604,12 +604,12 @@ Plans:
 **Goal:** Omp is the reference implementation of the host contract: it consumes `src/host/boot.ts`, passes the boot conformance harness, installs through `realm host install omp`, and opens Realm (daemon, sandbox) when an installed Omp session starts, even for the compiled Bun Omp.
 **Depends on:** Phase 21
 **Requirements**: OMPB-01, OMPB-02, OMPB-03, OMPB-04, OMPB-05, OMPB-06, OMPB-07, OMPB-08
-**Plans:** 3 plans
+**Plans:** 3/3 plans complete
 
 Plans:
-- [ ] 22-01-PLAN.md: Omp onto src/host, plugin view, conformance run (wave 1)
-- [ ] 22-02-PLAN.md: Omp install recipe and adapters/omp shim (wave 1)
-- [ ] 22-03-PLAN.md: auto-open under Bun, presence markers, doctor and status, docs, gates, live rehearsal (wave 2)
+- [x] 22-01-PLAN.md: Omp onto src/host, plugin view, conformance run (wave 1)
+- [x] 22-02-PLAN.md: Omp install recipe and adapters/omp shim (wave 1)
+- [x] 22-03-PLAN.md: auto-open under Bun, presence markers, doctor and status, docs, gates, live rehearsal (wave 2)
 
 ### Phase 23: Boot integration for host plugins
 
