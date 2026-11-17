@@ -14,7 +14,7 @@ import { ERROR_CODES, makeRealmError, RealmError, type ErrorCode } from "../core
 import { dialWithin, withTimeout } from "../core/timeout.js";
 import { controlSocketPath, isSessionId } from "../session/paths.js";
 
-export const CONTROL_METHODS = ["status", "up", "down", "doctor", "tool", "metrics"] as const;
+export const CONTROL_METHODS = ["status", "up", "down", "doctor", "tool", "metrics", "host-boot"] as const;
 export type ControlMethod = (typeof CONTROL_METHODS)[number];
 
 const KNOWN_METHODS: readonly string[] = CONTROL_METHODS;
@@ -28,7 +28,8 @@ export const SOCKET_TIMEOUT_MS = 5000;
 // still tearing down. up must outlast the policy startup budget plus a margin for the reply, or the
 // caller reports TOOL_TIMEOUT while the daemon is still inside its own budget. doctor runs the registered items plus the
 // runtime checks; probes run together, each bounded at 5 s, so it gets 60 s. tool runs one dispatcher call under its
-// own bound, so it gets that bound plus 10 s for the reply.
+// own bound, so it gets that bound plus 10 s for the reply. host-boot records one report in memory plus at most one audit
+// line, so it gets the 5 s of status and metrics.
 // STARTUP_BUDGET_DEFAULT_MS mirrors both the default and the maximum of startupBudgetMs in
 // policy.schema.json, so policy load refuses a budget the up request cannot wait for. The up bound is
 // that maximum plus UP_REPLY_MARGIN_MS. It is mirrored, not imported: this module keeps its
@@ -50,6 +51,7 @@ export const CONTROL_TIMEOUT_MS: Readonly<Record<ControlMethod, number>> = Objec
   doctor: 60_000,
   tool: TOOL_CALL_BOUND_MS + 10_000,
   metrics: 5_000,
+  "host-boot": 5_000,
 });
 
 // The socket is chmod to this mode after listen (P6-D3).
@@ -126,7 +128,8 @@ function selectionOfRecord(value: unknown): ControlSelection | undefined {
 }
 
 // The one validator for control selections. The daemon calls it on every request, and the client builds only
-// values it accepts. up carries only workspaceRoot and yields no selection; doctor may carry no params at all.
+// values it accepts. up carries only workspaceRoot and yields no selection; doctor may carry no params at all;
+// host-boot carries exactly { report } and yields no selection.
 // Every refusal is SCHEMA_INVALID.
 export function parseControlSelection(
   method: ControlMethod,
@@ -139,6 +142,14 @@ export function parseControlSelection(
     return { selection: null };
   }
   if (method === "doctor" && params === undefined) {
+    return { selection: null };
+  }
+  // host-boot carries exactly { report } and no selection: a boot that failed before it had a session still reports. The
+  // closed-vocabulary parse of the report is the daemon's (src/host/boot-report.ts); this module checks the frame only.
+  if (method === "host-boot") {
+    if (!isRecord(params) || !hasExactKeys(params, ["report"]) || !isRecord(params["report"])) {
+      throw makeRealmError("SCHEMA_INVALID");
+    }
     return { selection: null };
   }
   if (!isRecord(params)) {
