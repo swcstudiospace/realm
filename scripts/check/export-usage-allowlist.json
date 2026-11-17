@@ -74,6 +74,11 @@
     },
     {
       "file": "src/audit/anchor.ts",
+      "name": "merkleRootOfLeaves",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/audit/anchor.ts",
       "name": "verifyAnchorRecord",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
@@ -125,6 +130,21 @@
     {
       "file": "src/cli/checkpoint.ts",
       "name": "CHECKPOINT_USAGE",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/cli/checkpoint.ts",
+      "name": "CheckpointDeps",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/cli/checkpoint.ts",
+      "name": "PODMAN_PROOF_TIMEOUT_MS",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/cli/checkpoint.ts",
+      "name": "pinStoppedProject",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
@@ -185,6 +205,11 @@
     {
       "file": "src/daemon/sessions.ts",
       "name": "HEALTH_PROBE_INTERVAL_MS",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/daemon/sessions.ts",
+      "name": "SessionReattachPolicy",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
@@ -283,9 +308,19 @@
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
+      "file": "src/host/adapter.ts",
+      "name": "HostOperationDetail",
+      "reason": "D-1306 test-only seam: the operation detail shape that the cross-host contract checker (test/support/host-contract.ts) reads from install, uninstall and status; kept exported so the checker types match the adapter's result"
+    },
+    {
       "file": "src/host/boot-driver.ts",
       "name": "STDIO_TOOLS",
       "reason": "D-1306 test-only seam: the six Realm tool names the driver's guard passes, pinned by test/host/boot-driver.test.ts"
+    },
+    {
+      "file": "src/host/boot-report.ts",
+      "name": "BOOT_REPORT_HOSTS",
+      "reason": "D-1306 test-only seam: the closed host vocabulary (the 19 ids plus unlabelled), pinned by test/host/boot-report.test.ts and test/daemon/host-boot-control.test.ts; production code consumes the derived BootReportHost type"
     },
     {
       "file": "src/host/boot-report.ts",
@@ -296,11 +331,6 @@
       "file": "src/host/boot-report.ts",
       "name": "HOST_BOOT_TRANSPORTS",
       "reason": "D-1306 test-only seam: the closed transport vocabulary, pinned by test/host/boot-report.test.ts and test/daemon/host-boot-control.test.ts; production code consumes the derived HostBootTransport type"
-    },
-    {
-      "file": "src/host/boot-report.ts",
-      "name": "BOOT_REPORT_HOSTS",
-      "reason": "D-1306 test-only seam: the closed host vocabulary (the 19 ids plus unlabelled), pinned by test/host/boot-report.test.ts and test/daemon/host-boot-control.test.ts; production code consumes the derived BootReportHost type"
     },
     {
       "file": "src/host/capabilities.ts",
@@ -324,13 +354,13 @@
     },
     {
       "file": "src/host/install.ts",
-      "name": "planHostOperation",
-      "reason": "D-1306 test-only seam: planning phase of the engine; test/host/install.test.ts proves it writes nothing before runHostOperation composes it with apply"
+      "name": "applyHostOperation",
+      "reason": "D-1306 test-only seam: apply phase of the engine; test/host/install.test.ts proves its stage ordering and refusal paths without the planning phase"
     },
     {
       "file": "src/host/install.ts",
-      "name": "applyHostOperation",
-      "reason": "D-1306 test-only seam: apply phase of the engine; test/host/install.test.ts proves its stage ordering and refusal paths without the planning phase"
+      "name": "planHostOperation",
+      "reason": "D-1306 test-only seam: planning phase of the engine; test/host/install.test.ts proves it writes nothing before runHostOperation composes it with apply"
     },
     {
       "file": "src/host/receipt.ts",
@@ -396,6 +426,11 @@
       "file": "src/observe/metrics.ts",
       "name": "BUCKET_UPPER_BOUNDS_MS",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/omp/host-tools.ts",
+      "name": "HOST_TOOL_SET_BUDGET_MS",
+      "reason": "D-1306 test-only seam: the test asserts the setter bound against this constant"
     },
     {
       "file": "src/omp/plugin.ts",
@@ -548,6 +583,11 @@
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
+      "file": "src/runtime/config.ts",
+      "name": "describeRuntimeConfigProblems",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
       "file": "src/runtime/driver/channel.ts",
       "name": "removeTlsWorkDirectory",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
@@ -631,6 +671,11 @@
       "file": "src/runtime/driver/server.ts",
       "name": "SHUTDOWN_GRACE_MS",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/driver/supervisor.ts",
+      "name": "endSupervisorProcess",
+      "reason": "D-1306 test-only seam: the test drives the post-SIGKILL bound directly with a fake child"
     },
     {
       "file": "src/runtime/gateway-config.ts",
@@ -733,6 +778,11 @@
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
+      "file": "src/runtime/openshell.ts",
+      "name": "gatewayStatusJsonCommand",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
       "file": "src/runtime/podman-version.ts",
       "name": "PodmanProbe",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
@@ -788,6 +838,16 @@
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
+      "file": "src/runtime/sweep.ts",
+      "name": "SweepClient",
+      "reason": "D-1306 test-only seam: the sweep tests type their fake libpod client against it"
+    },
+    {
+      "file": "src/runtime/sweep.ts",
+      "name": "removeAllRealmContainers",
+      "reason": "D-1306 test-only seam: the sweep tests drive the zero-orphan sweep with fake clients"
+    },
+    {
       "file": "src/session/checkpoint-lock.ts",
       "name": "lockRemoval",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
@@ -824,6 +884,11 @@
     },
     {
       "file": "src/session/workspace-pin.ts",
+      "name": "readWorkspacePin",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/session/workspace-pin.ts",
       "name": "workspacePinDirOf",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
@@ -840,66 +905,6 @@
     {
       "file": "src/tools/dispatch.ts",
       "name": "TOOL_CALL_TIMEOUT_MS",
-      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
-    },
-    {
-      "file": "src/audit/anchor.ts",
-      "name": "merkleRootOfLeaves",
-      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
-    },
-    {
-      "file": "src/runtime/config.ts",
-      "name": "describeRuntimeConfigProblems",
-      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
-    },
-    {
-      "file": "src/runtime/openshell.ts",
-      "name": "gatewayStatusJsonCommand",
-      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
-    },
-    {
-      "file": "src/omp/host-tools.ts",
-      "name": "HOST_TOOL_SET_BUDGET_MS",
-      "reason": "D-1306 test-only seam: the test asserts the setter bound against this constant"
-    },
-    {
-      "file": "src/runtime/driver/supervisor.ts",
-      "name": "endSupervisorProcess",
-      "reason": "D-1306 test-only seam: the test drives the post-SIGKILL bound directly with a fake child"
-    },
-    {
-      "file": "src/runtime/sweep.ts",
-      "name": "SweepClient",
-      "reason": "D-1306 test-only seam: the sweep tests type their fake libpod client against it"
-    },
-    {
-      "file": "src/runtime/sweep.ts",
-      "name": "removeAllRealmContainers",
-      "reason": "D-1306 test-only seam: the sweep tests drive the zero-orphan sweep with fake clients"
-    },
-    {
-      "file": "src/cli/checkpoint.ts",
-      "name": "PODMAN_PROOF_TIMEOUT_MS",
-      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
-    },
-    {
-      "file": "src/cli/checkpoint.ts",
-      "name": "CheckpointDeps",
-      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
-    },
-    {
-      "file": "src/cli/checkpoint.ts",
-      "name": "pinStoppedProject",
-      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
-    },
-    {
-      "file": "src/daemon/sessions.ts",
-      "name": "SessionReattachPolicy",
-      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
-    },
-    {
-      "file": "src/session/workspace-pin.ts",
-      "name": "readWorkspacePin",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     }
   ]
