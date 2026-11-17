@@ -4,6 +4,12 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.3.53] - 2026-11-17
+
+### Documentation
+- docs(roadmap): add checklist entries and progress rows for phases 21 to 26 (#125) (dacb9b8)
+- docs(phase-26): close phase 26 and ratchet the src/host coverage floors (#124) (73d7574)
+
 ## [0.3.52] - 2026-11-17
 
 ### Documentation
