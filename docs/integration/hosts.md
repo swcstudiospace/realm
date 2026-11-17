@@ -26,9 +26,9 @@ reported daemon absent. Registration needs explicit approval per host.
 
 ## Host plugin contract
 
-Phase 21 adds one contract for every CLI agent Realm may run in: a runtime table of 19 hosts, a strict plugin manifest, a capability catalogue over the existing policy facts, a boot-hook port with a conformance harness, an installer engine with ownership receipts, and `realm host list|detect|status|install|uninstall`. It is documented in [host-plugin-contract.md](host-plugin-contract.md), with the table of hosts and its evidence limits. It is proven on fixture hosts only: every install on the real table refuses as `recipe-pending` and changes nothing, so no host is registered live by it. Registration still needs explicit approval per host. The tier table above is unchanged.
+Phase 21 adds one contract for every CLI agent Realm may run in: a runtime table of 19 hosts, a strict plugin manifest, a capability catalogue over the existing policy facts, a boot-hook port with a conformance harness, an installer engine with ownership receipts, and `realm host list|detect|status|install|uninstall`. It is documented in [host-plugin-contract.md](host-plugin-contract.md), with the table of hosts and its evidence limits. Phase 24 gave six hosts an install recipe (`omp`, `claude`, `opencode`, `codex`, `kimi`, `kimi-code`); the other 13 refuse as `recipe-pending` and change nothing. Everything is proven on fixture hosts (a temporary home and string goldens); the per-host live rehearsal is gated and records no result yet, so no host is registered live by this repository and no live Realm session through any of these hosts is claimed. Registration still needs explicit approval per host. The tier table above is unchanged.
 
-Phase 23 adds the boot path for the 18 `mcp-config` hosts: a host's configuration launches `realm mcp --host <id>` (or `realm acp --host <id>`, optionally with `--reattach`) and the session boots in six numbered steps, serves nothing until the boot settles, writes its presence marker and reports its boot to the daemon. `--host` takes a canonical host id only. Every adapter bundle and snippet shipped today still runs plain `realm mcp`, which boots the same way and reports as `unlabelled`; no recipe writes `--host` yet (Phases 24 and 25), and no live registration was made. The sequence, the exit codes and what is proven against what are in [host-plugin-contract.md](host-plugin-contract.md), "Boot integration". It is proven against fakes and a real daemon over fakes; the live rehearsal with a real Claude Code and a real Omp has not been run.
+Phase 23 adds the boot path for the 18 `mcp-config` hosts: a host's configuration launches `realm mcp --host <id>` (or `realm acp --host <id>`, optionally with `--reattach`) and the session boots in six numbered steps, serves nothing until the boot settles, writes its presence marker and reports its boot to the daemon. `--host` takes a canonical host id only. Every adapter bundle and snippet shipped before Phase 24 still runs plain `realm mcp`, which boots the same way and reports as `unlabelled`; the Phase 24 recipes write `--host <id>` (claude, opencode, codex, kimi, kimi-code), and no live registration was made. The sequence, the exit codes and what is proven against what are in [host-plugin-contract.md](host-plugin-contract.md), "Boot integration". It is proven against fakes and a real daemon over fakes; the live rehearsal with a real Claude Code and a real Omp has not been run.
 
 ## Gate note (FOUND-03)
 
@@ -123,6 +123,52 @@ Q4 (ACP). Not documented in the pages read.
 
 Q5 (capability gaps). Claude Code's own ACP host behaviour is not documented in the pages read. Hooks run "outside the main conversation" and are the lifecycle surface. The Node floor (22) applies only to the npm install route, not to the native binary.
 
+Installed by `realm host install claude`: since Phase 24 the command merges `mcpServers.realm` (`realm mcp --host claude`) into the user-scope file `~/.claude.json` (or `<CLAUDE_CONFIG_DIR>/.claude.json`), the entry `claude mcp add --scope user` writes (observed with Claude Code 2.1.322 in an isolated home, 2026-11-17). Q3 above gains the precedence rule from https://code.claude.com/docs/en/mcp.md (re-read 2026-11-17): local scope, then project scope (`.mcp.json`, approved interactively), then user scope, then plugin-provided servers, then claude.ai connectors; the winner's whole entry is used. See [the snippet](../hosts/snippets/claude-code.md) for the file, the shadowing warning and the evidence reached.
+
+## OpenCode
+
+Read date: 2026-11-17 (ISO 8601). Sources: https://opencode.ai/docs/config.md, https://opencode.ai/docs/mcp-servers.md, https://opencode.ai/docs/migrate-v1.md; observed with OpenCode 1.19.5 (fetched into a scratch directory, never installed).
+
+Q1 (Node or Bun). Not recorded in the pages read.
+
+Q2 (plugin loading). Not covered by this phase: Realm uses the MCP configuration file, not an OpenCode plugin. The configuration locations are the global `~/.config/opencode/opencode.json(c)` (moved by `XDG_CONFIG_HOME`, observed), a project `opencode.json(c)` and `.opencode/`, and a machine-wide `/etc/opencode`.
+
+Q3 (MCP loading). Servers are read from the `mcp` key of the configuration. Quoted from the config page: "The package config overrides matching settings from the repository config, which overrides the global config." From the MCP page: "A higher-precedence project config replaces the entire server object with the same name"; V2 names servers under `mcp.servers` and "does not place server names directly under `mcp`". The migration page: "The V1 config format remains supported" and "OpenCode recognizes mixed V1 and V2 members within `mcp`". Realm writes the V1 shape `mcp.realm` (`{"type": "local", "command": ["realm", "mcp", "--host", "opencode"]}`), which 1.19.5 listed. `opencode mcp add` is interactive in 1.19.5. No trust or approval gate for project configuration is documented.
+
+Q4 (ACP). Not documented in the pages read.
+
+Q5 (capability gaps). `opencode.jsonc` with comments is read by OpenCode but is never read or changed by Realm, and JSON with comments in `opencode.json` is refused. Which of `opencode.json` and `opencode.jsonc` wins for a same-named server in one directory is not documented. See [the snippet](../hosts/snippets/opencode.md).
+
+## Codex
+
+Read date: 2026-11-17 (ISO 8601). Source: https://developers.openai.com/codex/mcp; observed with codex-cli 0.154.0 in an isolated home.
+
+Q1 (Node or Bun). Not recorded in the pages read.
+
+Q2 (plugin loading). Not covered by this phase: Realm uses the MCP configuration, not a Codex plugin.
+
+Q3 (MCP loading). Quoted: "By default this is `~/.codex/config.toml`, but you can also scope MCP servers to a project with `.codex/config.toml` (trusted projects only)." (`CODEX_HOME` moves the user file, observed.) Each server is a `[mcp_servers.<server-name>]` table with `command`, `args`, `env`, `env_vars`, `cwd`, and a documented per-server `startup_timeout_sec`. `codex mcp add realm -- realm mcp --host codex` writes the table Realm's block holds; `codex mcp list` and `codex mcp get realm` parse it without launching it.
+
+Q4 (ACP). Not documented in the pages read.
+
+Q5 (capability gaps). `codex mcp get realm` prints a `remove: codex mcp remove realm` hint, but Realm's block is removed with `realm host uninstall codex` (the effect of Codex's remover on the markers is not yet recorded). A live Codex session booting Realm is not automatable here (`codex mcp list` does not start servers; a session needs model credentials). See [the snippet](../hosts/snippets/codex.md).
+
+## Kimi CLI and Kimi Code
+
+Read date: 2026-11-17 (ISO 8601). Sources: https://github.com/MoonshotAI/kimi-cli; https://moonshotai.github.io/kimi-cli/en/customization/mcp.html and .../configuration/{data-locations,env-vars}.html; https://www.kimi.com/code/docs/en/kimi-code-cli/customization/mcp.html and .../configuration/{data-locations,env-vars}.html; the GSD Core installer source at commit `69d604e`. Nothing here was observed running: no functional Kimi executable was available (the PyPI kimi-cli 1.52.0 is a deprecation stub; 1.51.0 did not complete `kimi mcp add` in 60 s).
+
+The flag question is closed: `--kimi` and the id `kimi` are Kimi CLI (Python, `~/.kimi`, `KIMI_SHARE_DIR`); `--kimi-code` and `kimi-code` are Kimi Code (Node, `~/.kimi-code`, `KIMI_CODE_HOME`). The command name `kimi` is shared, so Realm never detects either by it. Kimi CLI is archived upstream ("Legacy Python Kimi CLI, no longer maintained. Please use Kimi Code CLI"); Kimi Code is the successor.
+
+Q1 (Node or Bun). Not recorded in the pages read (Kimi Code is described as Node, Kimi CLI as Python by the installer source).
+
+Q2 (plugin loading). Not covered by this phase: Realm uses the MCP configuration file.
+
+Q3 (MCP loading). Kimi CLI: "MCP server configuration is stored in `~/.kimi/mcp.json`, in a format compatible with other MCP clients" with `{"mcpServers": {...}}`; commands `kimi mcp add|list|remove|test|auth`; `KIMI_SHARE_DIR` "Customize the share directory path (default: ~/.kimi)"; no project-level behavior documented. Kimi Code: user-level `~/.kimi-code/mcp.json` ("optional"), `KIMI_CODE_HOME` overrides the data root, project-level `.kimi-code/mcp.json` takes effect only after the folder is trusted at the startup prompt, and a server added by editing `mcp.json` mid-session joins only sessions created later. No validator command is documented for Kimi Code.
+
+Q4 (ACP). Not documented in the pages read.
+
+Q5 (capability gaps). The evidence for both rows is T1 only (offline fixtures against goldens that follow the documentation); no live Realm session through either product is claimed. See [the snippet](../hosts/snippets/kimi.md) and the open owner decision OQ-24-01.
+
 ## Grok Build
 
 Q1 (Node or Bun). Answer: not documented. The overview gives the install command `curl -fsSL https://x.ai/cli/install.sh | bash` (macOS and Linux) and `irm https://x.ai/cli/install.ps1 | iex` (PowerShell). It names no Node or Bun version.
@@ -188,3 +234,4 @@ Decision owner: plan 01-03 and the main agent confirm this value before `package
 - Grok Build plugin manifest, hook contract and ACP transport: not read in this phase.
 - Hermes numeric managed Node.js version: not documented in the page read.
 - Muse Code: plugin bundle manifest format and ACP support (not on the pages read 2026-10-22); Node or Bun requirement not stated on those pages.
+- Phase 24 (OpenCode, Codex, Kimi): the entry shape for OpenCode V1 versus V2 (OQ-24-02); project-level shadowing of a `realm` server by workload-written host configuration, with OpenCode documenting no trust gate (OQ-24-03); how a running Claude Code session reacts to `~/.claude.json` changing underneath it (OQ-24-04); real MCP start timeouts against a cold first boot of up to 230 s (OQ-24-06); which of `opencode.json` and `opencode.jsonc` wins for a same-named server (OQ-24-07). OQ-24-01 (keep, drop or promote the `kimi-code` row) and OQ-24-05 (what Codex does to the install markers) live in the Kimi and Codex snippets and in [host-plugin-contract.md](host-plugin-contract.md).

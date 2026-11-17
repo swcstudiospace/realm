@@ -105,6 +105,10 @@ Exit codes and exposure. The tools are exposed when the boot is `ready`, when `u
 
 Teardown and logging. Stdin EOF, `SIGTERM`, `SIGINT` and `SIGHUP` close the client, remove the marker and exit (`128 + signal` for a signal); a second signal exits at once. Nothing in the boot sends `down`: the sandbox lasts until `realm down`. Stdout carries protocol frames only. At the default level the session writes nothing to stderr on success; `REALM_LOG_LEVEL=debug` shows one `host.boot.<phase>` JSON line per step, all sharing the boot id as `correlationId`, and a failed boot still prints its catalogue code. The full contract and what is proven against what are in `docs/integration/host-plugin-contract.md`, "Boot integration".
 
+### Q8. Registering Realm in a host
+
+`realm host install <host>` is the supported way to register `realm mcp --host <host>` in the user-level MCP configuration of `claude`, `opencode`, `codex`, `kimi` and `kimi-code` (Phase 24). It edits only the host's own user-level file, with an ownership receipt, and `realm host uninstall <host>` removes exactly what it wrote. The manual route stays valid (`claude mcp add --scope user realm -- realm mcp --host claude`, `codex mcp add realm -- realm mcp --host codex`, or the JSON entry for OpenCode and Kimi); an identical manual entry makes the installer a no-op, and a different `realm` entry is refused. Each host has a snippet with the file, the entry, the override variable, the host's validator command, the shadowing warning for project-level configuration and the evidence tier reached: [Claude Code](../hosts/snippets/claude-code.md), [OpenCode](../hosts/snippets/opencode.md), [Codex](../hosts/snippets/codex.md) and [Kimi CLI and Kimi Code](../hosts/snippets/kimi.md). The per-host live rehearsal is gated and has no recorded result yet. The protocol claims in Q1 to Q6 do not change.
+
 ## Blocked module
 
 MCP transport code (Phase 5). Nothing else is blocked by this note.

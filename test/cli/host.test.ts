@@ -1,11 +1,12 @@
-// realm host (HOST-07): list, detect, status, install and uninstall through the real runCli. On the real table only omp has an
-// install recipe (Phase 22), so every other real install refuses as recipe-pending; the generic lifecycle is proven on an injected
-// fixture host through the CliDeps.hostRuntimes and CliDeps.hostAdaptersDir seams, and the omp recipe on the real table with a
-// fixture package root, in a temporary HOME and state directory. Nothing touches a real host.
+// realm host (HOST-07): list, detect, status, install and uninstall through the real runCli. On the real table six hosts have an
+// install recipe (omp from Phase 22; claude, opencode, codex, kimi and kimi-code from Phase 24), so every install of the other 13
+// refuses as recipe-pending; the generic lifecycle is proven on an injected fixture host through the CliDeps.hostRuntimes and
+// CliDeps.hostAdaptersDir seams, the omp recipe on the real table with a fixture package root, and the Phase 24 recipes on the real
+// table in test/cli/host-wave1.test.ts, in a temporary HOME and state directory. Nothing touches a real host.
 
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { checkAuditFile } from "../../src/audit/chain.js";
@@ -157,13 +158,15 @@ void test("HOST-07: an unknown host is a usage error; gemini and vscode are unkn
 
 // ---- list -------------------------------------------------------------------------------------------------------------------
 
-void test("HOST-07: list needs no config, no HOME and no file system, and names the 19 hosts, recipe ready for omp and pending for the other 18", async () => {
+void test("HOST-07: list needs no config, no HOME and no file system, and names the 19 hosts, recipe ready for omp, claude, opencode, codex, kimi and kimi-code and pending for the other 13", async () => {
   const result = await runCli(["host", "list"], { env: {}, readConfig: () => { throw new Error("list must not read the config"); } });
   const rows = json(result) as { id: string; flag: string; aliases: string[]; tier: string; integration: string; homeVerified: boolean; recipe: string }[];
   assert.deepEqual(rows.map((row) => row.id), [...HOST_IDS]);
   assert.equal(rows.length, 19);
-  assert.ok(rows.every((row) => row.recipe === (row.id === "omp" ? "ready" : "pending")));
-  assert.equal(rows.filter((row) => row.recipe === "pending").length, 18);
+  const ready: readonly HostId[] = ["omp", "claude", "opencode", "codex", "kimi", "kimi-code"];
+  assert.ok(rows.every((row) => row.recipe === (ready.includes(row.id as HostId) ? "ready" : "pending")));
+  assert.equal(rows.filter((row) => row.recipe === "ready").length, 6);
+  assert.equal(rows.filter((row) => row.recipe === "pending").length, 13);
   assert.deepEqual(Object.keys(rows[0] ?? {}), ["id", "flag", "aliases", "tier", "integration", "homeVerified", "recipe"]);
   const windsurf = rows.find((row) => row.id === "windsurf");
   assert.deepEqual(windsurf?.aliases, ["devin-desktop"]);
@@ -173,12 +176,13 @@ void test("HOST-07: list needs no config, no HOME and no file system, and names 
   assert.equal(rows.find((row) => row.id === "antigravity")?.homeVerified, false);
 });
 
-void test("HOST-07: list reports recipe ready for a host whose runtime entry has a recipe (injected table)", async (t) => {
+void test("HOST-07: list reports recipe ready for a host whose runtime entry has a recipe (injected table: the fixture claude replaces the real row; opencode, codex, kimi, kimi-code are ready from the real table)", async (t) => {
   const r = rig(t);
   const rows = json(await realmHost(r, "list")) as { id: string; recipe: string }[];
   assert.equal(rows.find((row) => row.id === "claude")?.recipe, "ready");
   assert.equal(rows.find((row) => row.id === "omp")?.recipe, "ready");
-  assert.equal(rows.filter((row) => row.recipe === "ready").length, 2);
+  // omp, the injected claude, and the real opencode, codex, kimi and kimi-code rows.
+  assert.equal(rows.filter((row) => row.recipe === "ready").length, 6);
 });
 
 // ---- detect -----------------------------------------------------------------------------------------------------------------
@@ -249,18 +253,20 @@ void test("HOST-07: status, install and uninstall exit 1 with the catalogue code
 
 // ---- The real table ---------------------------------------------------------------------------------------------------------
 
-void test("HOST-07: on the real table the 18 hosts without a recipe refuse install as recipe-pending (POLICY_DENIED) and change no home file, with or without --dry-run", async (t) => {
+void test("HOST-07: on the real table the 13 hosts without a recipe refuse install as recipe-pending (POLICY_DENIED) and change no home file, with or without --dry-run", async (t) => {
   const fx = makeFixtureHost(t);
-  const claudeHome = join(fx.root, "claude-home");
-  mkdirSync(claudeHome);
-  writeFileSync(join(claudeHome, "settings.json"), '{"keep":true}\n');
+  const cursorHome = join(fx.home, ".cursor");
+  mkdirSync(cursorHome);
+  writeFileSync(join(cursorHome, "settings.json"), '{"keep":true}\n');
   const deps: CliDeps = {
-    env: { HOME: fx.home, PATH: "", CLAUDE_CONFIG_DIR: claudeHome },
+    env: { HOME: fx.home, PATH: "" },
     readConfig: () => ({ image: IMAGE, stateDir: fx.stateDir, workspaceRoot: join(fx.root, "projects") }),
     now: () => new Date("2026-01-01T00:00:00.000Z"),
   };
-  const before = treeHash(fx.home) + treeHash(claudeHome);
-  for (const id of HOST_IDS.filter((host) => host !== "omp")) {
+  const before = treeHash(fx.home);
+  const pending = HOST_IDS.filter((host) => HOST_RUNTIMES[host].recipe === null);
+  assert.equal(pending.length, 13);
+  for (const id of pending) {
     for (const flags of [[], ["--dry-run"]]) {
       const result = await runCli(["host", "install", id, ...flags], deps);
       assert.equal(result.exitCode, 1, `${id} ${flags.join(" ")}`);
@@ -268,12 +274,12 @@ void test("HOST-07: on the real table the 18 hosts without a recipe refuse insta
       assert.equal(result.stderr, "realm host install: recipe-pending: no install recipe exists for this host yet\n");
     }
   }
-  assert.equal(treeHash(fx.home) + treeHash(claudeHome), before, "no host file changed");
+  assert.equal(treeHash(fx.home), before, "no host file changed");
   assert.equal(existsSync(join(fx.stateDir, "audit")), false, "a refusal writes no audit line");
   assert.equal(existsSync(join(fx.stateDir, "hosts")), false, "a refusal writes no receipt");
-  const status = json(await runCli(["host", "status", "claude"], deps)) as { id: string; status: string; entries: unknown[] };
-  assert.deepEqual(status, { id: "claude", status: "recipe-pending", entries: [] });
-  const uninstall = json(await runCli(["host", "uninstall", "claude"], deps)) as { status: string; actions: unknown[] };
+  const status = json(await runCli(["host", "status", "cursor"], deps)) as { id: string; status: string; entries: unknown[] };
+  assert.deepEqual(status, { id: "cursor", status: "recipe-pending", entries: [] });
+  const uninstall = json(await runCli(["host", "uninstall", "cursor"], deps)) as { status: string; actions: unknown[] };
   assert.equal(uninstall.status, "noop");
   assert.deepEqual(uninstall.actions, []);
 });
@@ -449,9 +455,12 @@ void test("HOST-07: status reports every host, not-detected when its home is abs
   const rows = json(await runCli(["host", "status"], deps)) as { id: string; status: string; entries: unknown[] }[];
   assert.deepEqual(rows.map((row) => row.id), [...HOST_IDS]);
   assert.ok(rows.every((row) => row.status === "not-detected" && row.entries.length === 0));
+  mkdirSync(join(fx.home, ".cursor"));
+  const cursor = json(await runCli(["host", "status", "cursor"], deps)) as { status: string };
+  assert.equal(cursor.status, "recipe-pending");
   mkdirSync(join(fx.home, ".claude"));
   const claude = json(await runCli(["host", "status", "claude"], deps)) as { status: string };
-  assert.equal(claude.status, "recipe-pending");
+  assert.equal(claude.status, "detected", "claude has a recipe now: detected, not recipe-pending");
 });
 
 // ---- Fixture host lifecycle -------------------------------------------------------------------------------------------------
@@ -496,8 +505,8 @@ void test("HOST-07: dry-run install plans and writes nothing; install applies wi
   assert.ok(again.actions.every((action) => action.action === "noop"));
   assert.equal(auditLineCount(r.auditFile), 2, "a noop adds no audit line");
 
-  const status = json(await realmHost(r, "status", "claude")) as { id: string; status: string; entries: { path: string; state: string }[] };
-  assert.deepEqual(status, { id: "claude", status: "installed", entries: [{ path: "settings.json", state: "ok" }] });
+  const status = json(await realmHost(r, "status", "claude")) as { id: string; status: string; entries: { path: string; state: string }[]; launch: string };
+  assert.deepEqual(status, { id: "claude", status: "installed", entries: [{ path: "settings.json", state: "ok" }], launch: "not-on-path" });
 
   const dryRemove = json(await realmHost(r, "uninstall", "claude", "--dry-run")) as { status: string };
   assert.equal(dryRemove.status, "planned");
@@ -577,7 +586,7 @@ void test("HOST-07: an explicit --config-home that does not exist refuses with P
   assert.equal(result.stderr, "realm host install: config-home-missing: the host config home does not exist\n");
 });
 
-void test("HOST-07: a symlinked host file refuses with PATH_ESCAPE and the fix `use --config-home`, and changes nothing", async (t) => {
+void test("HOST-07: a symlinked host file refuses with PATH_ESCAPE and no --config-home hint, and changes nothing", async (t) => {
   const r = rig(t);
   const elsewhere = join(r.host.root, "elsewhere.json");
   writeFileSync(elsewhere, "{}\n");
@@ -586,7 +595,7 @@ void test("HOST-07: a symlinked host file refuses with PATH_ESCAPE and the fix `
   const result = await realmHost(r, "install", "claude");
   assert.equal(result.exitCode, 1);
   assert.equal(result.stdout, "PATH_ESCAPE\n");
-  assert.ok(result.stderr.startsWith("realm host install: symlink: a symlink lies on the path to a host file; use --config-home "), result.stderr);
+  assert.equal(result.stderr, "realm host install: symlink: a symlink lies on the path to a host file\n");
   assert.equal(treeHash(r.host.home), before, "no host file changed");
   assert.equal(readFileSync(elsewhere, "utf8"), "{}\n");
   assert.equal(existsSync(r.auditFile), false);
@@ -660,4 +669,42 @@ void test("BOOT-05: the all-hosts status keeps the exact row for a host with no 
       assert.deepEqual(keys, ["entries", "id", "status"], row.id);
     }
   }
+});
+
+void test("ADPT-03: status adds launch, between entries and plugin, for an installed mcp-config host only, and never a path", async (t) => {
+  const r = rig(t);
+  const bin = join(r.host.root, "bin");
+  mkdirSync(bin);
+  writeFileSync(join(bin, "realm"), "#!/bin/sh\n");
+  chmodSync(join(bin, "realm"), 0o755);
+  const onPath: CliDeps = { ...r.deps, env: { ...r.deps.env, PATH: bin } };
+  const none = json(await runCli(["host", "status", "claude"], onPath)) as Record<string, unknown>;
+  assert.deepEqual(Object.keys(none), ["id", "status", "entries"], "no receipt: no launch key");
+
+  json(await realmHost(r, "install", "claude"));
+  const absent = json(await realmHost(r, "status", "claude")) as Record<string, unknown>;
+  assert.deepEqual(Object.keys(absent), ["id", "status", "entries", "launch"]);
+  assert.equal(absent["launch"], "not-on-path");
+  const present = json(await runCli(["host", "status", "claude"], onPath)) as Record<string, unknown>;
+  assert.equal(present["launch"], "on-path");
+  assert.equal(JSON.stringify(present).includes(r.host.root), false, "no absolute path in the status");
+
+  writePresence(r.host.stateDir, "claude", { pid: process.pid, ...MARKER });
+  const withPlugin = json(await runCli(["host", "status", "claude"], onPath)) as Record<string, unknown>;
+  assert.deepEqual(Object.keys(withPlugin), ["id", "status", "entries", "launch", "plugin"]);
+  const rows = json(await runCli(["host", "status"], onPath)) as { id: string; launch?: string }[];
+  assert.deepEqual(rows.filter((row) => row.launch !== undefined).map((row) => row.id), ["claude"]);
+});
+
+void test("ADPT-03: a symlinked owned file is reported unreadable, not drifted, by realm host status", async (t) => {
+  const r = rig(t);
+  seedSettings(r, { other: 1 });
+  json(await realmHost(r, "install", "claude"));
+  const elsewhere = join(r.host.root, "elsewhere.json");
+  writeFileSync(elsewhere, readFileSync(r.settings));
+  rmSync(r.settings);
+  symlinkSync(elsewhere, r.settings);
+  const status = json(await realmHost(r, "status", "claude")) as { status: string; entries: { state: string }[] };
+  assert.equal(status.status, "drifted");
+  assert.deepEqual(status.entries.map((entry) => entry.state), ["unreadable"]);
 });

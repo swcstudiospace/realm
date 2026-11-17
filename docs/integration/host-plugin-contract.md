@@ -2,7 +2,7 @@
 
 Phase 21 gives every CLI agent Realm may run in the same contract: a declarative runtime table of 19 hosts, a strict plugin manifest, a capability catalogue that maps each capability to one existing policy fact, a boot-hook port with a conformance harness, an installer engine with three recipe kinds, ownership receipts, and the `realm host` command. This page documents what is built and, as plainly, what is not proven. Code lives in `src/host/`, the command in `src/cli/host.ts`, the doctor item in `src/doctor/host-checks.ts`.
 
-No host is registered live by this repository. On the real table only `omp` has an install recipe (`realm host install omp`, see "The Omp recipe"); the other 18 hosts refuse as `recipe-pending` (see "Evidence limits"). Registering Realm in a live host configuration needs explicit owner approval per host, as `docs/integration/hosts.md` already states.
+No host is registered live by this repository. On the real table six hosts have an install recipe (`omp`, `claude`, `opencode`, `codex`, `kimi`, `kimi-code`; see "The Omp recipe" and "The Phase 24 recipes"); the other 13 refuse as `recipe-pending` (see "Evidence limits"). Registering Realm in a live host configuration needs explicit owner approval per host, as `docs/integration/hosts.md` already states.
 
 ## Direction
 
@@ -143,10 +143,12 @@ A runtime table entry carries an optional `recipe`. The engine (`src/host/instal
 | Kind | What Realm writes | Ownership | Drift rule |
 | --- | --- | --- | --- |
 | `json-merge` | one value at a key path in a JSON file, keeping every other key, the indent, the line ending and the trailing newline | the canonical value at the key path, and any parent object Realm created | a changed owned value is drift; an edit elsewhere in the file is not |
-| `text-block` | a block between `# BEGIN realm host-plugin` and `# END realm host-plugin` in a text file | the text between the markers, and the separator newline Realm added | a changed block is drift; text outside the markers is not |
+| `text-block` | a block between `# BEGIN realm host-plugin` and `# END realm host-plugin` in a text file; a recipe may add a `tomlTable` guard (below) | the text between the markers, and the separator newline Realm added | a changed block is drift; text outside the markers is not |
 | `bundle-copy` | the files of a shipped `adapters/<source>` directory under a destination in the host home | every copied file, whole, and every directory Realm created | any changed or missing copied file is drift |
 
 An install on an absent file creates it; an uninstall restores the exact bytes the file had before (or removes a file Realm created, and the directories it created once they are empty). A second install with nothing to change is a noop. JSON with comments, a file larger than 1 MiB, invalid UTF-8, a symlink anywhere below the config home, an unsafe path segment and a file that changed while the operation ran are all refused.
+
+`tomlTable` is an optional field of a `text-block` recipe: a path of at most six bare key segments naming the TOML table the block defines (Codex: `mcp_servers.realm`). Before any install, `src/host/toml-table.ts` scans the text outside the markers and the install is refused as `foreign-content`, with nothing written, if that table or an ancestor key is already defined there: a header in any spelling (`[mcp_servers.realm]`, `[ mcp_servers . realm ]`, `[mcp_servers."realm"]`, `[mcp_servers.realm.env]`, `[[mcp_servers.realm]]`), a `realm = ...` or `realm.command = ...` line inside `[mcp_servers]`, or a top-level dotted key starting with `mcp_servers`. A header or key the scanner cannot read is `unparseable`. The scanner is a line scanner, never a TOML parser, and it is conservative in one direction only: a look-alike inside a multi-line string is a false positive (refused), but a bare `["x"]` line inside a multi-line array in `[mcp_servers]` can hide a real definition from it (residual R-24-03). The block is appended at the end of the file, where a new table header is always valid TOML. Recipes without `tomlTable` behave as before.
 
 Refusals are catalogue errors with one of eleven fixed reasons. The reason id and its fixed text go to stderr; the code goes to stdout.
 
@@ -157,7 +159,7 @@ Refusals are catalogue errors with one of eleven fixed reasons. The reason id an
 | `foreign-content` | `POLICY_DENIED` | content Realm does not own is in the way |
 | `drifted` | `POLICY_DENIED` | content Realm owns was changed after it was written |
 | `config-home-missing` | `POLICY_DENIED` | the config home does not exist (Realm never creates one) |
-| `symlink` | `PATH_ESCAPE` | a symlink lies on the path; the text adds `use --config-home <real path>` |
+| `symlink` | `PATH_ESCAPE` | a symlink lies on the path; when the symlink is a directory component the text adds `use --config-home <real path>`, and for a symlinked file it adds no hint |
 | `unparseable` | `SCHEMA_INVALID` | a host file cannot be parsed safely |
 | `concurrent-change` | `WRITE_NOT_ATOMIC` | a host file or receipt changed while the operation ran |
 | `extension-unbuilt` | `POLICY_DENIED` | the extension entry the shim imports is not built (`npm run build`); nothing is written |
@@ -166,7 +168,25 @@ Refusals are catalogue errors with one of eleven fixed reasons. The reason id an
 
 ### The Omp recipe
 
-`omp` is the only host with a recipe. It is a `bundle-copy` of the shipped `adapters/omp` directory into `<agent dir>/extensions/realm/`, where the agent dir is `~/.omp/agent` or the `PI_CODING_AGENT_DIR` override. The shim is one file; at install the single token `@realm:extension-url@` is replaced with the file URL of the built entry (`dist/src/omp/extension.js`) as a JSON string literal, so the receipt hashes the expanded bytes and drift detection, an idempotent reinstall and an uninstall of only what Realm owns work unchanged. The table's `conflicts` field names `.omp/plugins/node_modules/agent-realm` (a plugin link, relative to the user home); when it exists, install refuses as `already-loaded`. Uninstall is never blocked by `extension-unbuilt` or `already-loaded`.
+`omp` is the one host whose recipe is a `bundle-copy`. It copies the shipped `adapters/omp` directory into `<agent dir>/extensions/realm/`, where the agent dir is `~/.omp/agent` or the `PI_CODING_AGENT_DIR` override. The shim is one file; at install the single token `@realm:extension-url@` is replaced with the file URL of the built entry (`dist/src/omp/extension.js`) as a JSON string literal, so the receipt hashes the expanded bytes and drift detection, an idempotent reinstall and an uninstall of only what Realm owns work unchanged. The table's `conflicts` field names `.omp/plugins/node_modules/agent-realm` (a plugin link, relative to the user home); when it exists, install refuses as `already-loaded`. Uninstall is never blocked by `extension-unbuilt` or `already-loaded`.
+
+### The Phase 24 recipes
+
+Phase 24 gives `claude`, `opencode`, `codex`, `kimi` and `kimi-code` a recipe. Each registers the bare command `realm` with `mcp --host <id>` (the arguments of `defaultManifestFor(id).launch`; a test holds the two equal) in the host's user-level MCP file, never an absolute path and never project-level configuration. Per-host detail, the manual equivalent and the evidence reached are in the snippets under `docs/hosts/snippets/` (`claude-code.md`, `opencode.md`, `codex.md`, `kimi.md`).
+
+| Host | File | Location (override) | Primitive | Entry | Host validator |
+| --- | --- | --- | --- | --- | --- |
+| `claude` | `.claude.json` | `~/.claude.json`, a sibling of `~/.claude` (`CLAUDE_CONFIG_DIR` moves it with the directory) | `json-merge` | `mcpServers.realm` = `{type: "stdio", command: "realm", args: ["mcp", "--host", "claude"], env: {}}`, the bytes `claude mcp add --scope user` writes | `claude mcp get realm` (launches the entry) |
+| `opencode` | `opencode.json` | `~/.config/opencode/` (`XDG_CONFIG_HOME` is a base: `$XDG_CONFIG_HOME/opencode/`) | `json-merge` | `mcp.realm` = `{type: "local", command: ["realm", "mcp", "--host", "opencode"]}`, the V1 shape (see the snippet) | `opencode mcp list` (launches the entry) |
+| `codex` | `config.toml` | `~/.codex/` (`CODEX_HOME`) | `text-block` with `tomlTable` | the table `[mcp_servers.realm]` with `command` and `args`, between the markers | `codex mcp get realm`, `codex mcp list` (parse only; neither launches) |
+| `kimi` | `mcp.json` | `~/.kimi/` (`KIMI_SHARE_DIR`) | `json-merge` | `mcpServers.realm` = `{command: "realm", args: ["mcp", "--host", "kimi"]}` | `kimi mcp test realm` (a functional Kimi CLI only) |
+| `kimi-code` | `mcp.json` | `~/.kimi-code/` (`KIMI_CODE_HOME`) | `json-merge` | the same, with `--host kimi-code` | none documented |
+
+**Home roles.** A home spec has a role: `config` (the host's configuration directory, a detection home), `skills` (a skills directory, a detection home) or `mcp` (the directory that holds the host's user-level MCP file when that is not its config home; never a detection home). `claude` has both a `config` home (`~/.claude`) and an `mcp` home (the user's home itself), and its recipe names `homeRole: "mcp"`. An absolute `envOverride` value replaces the path of every `config` and `mcp` home and never a `skills` home (`KIMI_SHARE_DIR` moves Kimi CLI's config home and leaves `~/.config/agents`). `envBase` (OpenCode: `XDG_CONFIG_HOME`, subdirectory `opencode`) replaces the `config` homes with the absolute value joined to the subdirectory; an entry has an override or a base, never both. An empty or relative value is `SCHEMA_INVALID`. `--config-home <abs>` for a host whose recipe has `homeRole: "mcp"` names the directory that holds the file (for `claude`, the user's home or `CLAUDE_CONFIG_DIR`), not `~/.claude`.
+
+**Kimi.** `--kimi` and the id `kimi` are Kimi CLI (Python, `~/.kimi`); `--kimi-code` and `kimi-code` are Kimi Code (Node, `~/.kimi-code`), per the GSD Core installer source at commit `69d604e`. The command name `kimi` is shared by both, so neither row detects by binary. Kimi CLI is archived upstream and its last PyPI release is an inert stub; Kimi Code is the maintained successor. The `kimi` row keeps its `proven` tier by the owner's roadmap while its evidence is T1 only; the `kimi-code` row, added by decision D-24-05, stays `config-only`. Keeping, dropping or promoting it is an owner decision (OQ-24-01).
+
+**Status.** `realm host status` reports each entry as `ok`, `drifted`, `missing` or `unreadable`, and for an installed `mcp-config` host `launch` (see "Commands"). The remover of a host's own CLI interacts with the recipe differently per primitive: `claude mcp remove realm -s user` deletes the key, so the entry reads `drifted` and `realm host uninstall claude` is a clean no-op; `codex mcp remove realm` edits the file with Codex's own TOML editor and [INFERENCE] can leave the `# END realm host-plugin` marker behind, which makes the entry `unreadable` and install and uninstall refuse as `unparseable` until the two marker lines are deleted by hand (residual R-24-04; the snippet carries the steps).
 
 ### Presence
 
@@ -189,8 +209,8 @@ Exit codes: 0 success (one JSON line on stdout); 1 a catalogue refusal (the code
 | Command | What it does | Needs |
 | --- | --- | --- |
 | `realm host list` | the 19 hosts: `id`, `flag`, `aliases`, `tier`, `integration`, `homeVerified`, `recipe` (`pending` or `ready`) | nothing |
-| `realm host detect [<host>]` | `id`, `detected`, `homes` (path and whether it exists) and the `binary` found on an absolute `PATH` directory; honors `CLAUDE_CONFIG_DIR` | `HOME` |
-| `realm host status [<host>]` | `id`, `status` and per owned entry its state (`ok`, `drifted` or `missing`); `status` is `not-detected`, `detected`, `recipe-pending`, `installed` or `drifted`. The `omp` row adds `plugin`: `target` (`present`, `missing`, `unreadable` or `null` with no receipt), `sessions` (`live`, `stale`, `unreadable` marker counts) and `conflicts` (the table's plugin-link paths, relative to the home, that exist) | `HOME`, the state directory |
+| `realm host detect [<host>]` | `id`, `detected`, `homes` (path and whether it exists; `config` and `skills` homes only) and the `binary` found on an absolute `PATH` directory; honors each host's override variable (`CLAUDE_CONFIG_DIR`, `XDG_CONFIG_HOME`, `CODEX_HOME`, `KIMI_SHARE_DIR`, `KIMI_CODE_HOME`, `PI_CODING_AGENT_DIR`) | `HOME` |
+| `realm host status [<host>]` | `id`, `status` and per owned entry its state (`ok`; `drifted`: the file parses and the owned part differs or is absent; `missing`: the file is gone; `unreadable`: a symlink, a file over 1 MiB, invalid UTF-8, content that does not parse, or a lone Realm marker); `status` is `not-detected`, `detected`, `recipe-pending`, `installed` or `drifted` (`installed` only when every entry is `ok`). A host with a receipt adds `launch`: `on-path` or `not-on-path`, whether the command the recipe registers resolves as an executable file in an absolute directory of the `PATH` of the `realm host status` process only (not the host's own `PATH`; nothing is spawned). The `omp` row adds `plugin`: `target` (`present`, `missing`, `unreadable` or `null` with no receipt), `sessions` (`live`, `stale`, `unreadable` marker counts) and `conflicts` (the table's plugin-link paths, relative to the home, that exist) | `HOME`, the state directory |
 | `realm host install <host> [--dry-run] [--config-home <abs>]` | install the recipe, or plan it with `--dry-run` | `HOME`, the state directory |
 | `realm host uninstall <host> [--dry-run] [--config-home <abs>]` | remove exactly what the receipt owns, or plan it | `HOME`, the state directory |
 
@@ -205,34 +225,34 @@ $ realm host list
 $ realm host detect claude
 {"id":"claude","detected":true,"homes":[{"path":"~/.claude","exists":true}],"binary":"claude"}
 
-$ realm host status claude
-{"id":"claude","status":"recipe-pending","entries":[]}
+$ realm host status cursor
+{"id":"cursor","status":"recipe-pending","entries":[]}
 
-$ realm host install claude --dry-run 2>&1 >/dev/null
+$ realm host install cursor --dry-run 2>&1 >/dev/null
 realm host install: recipe-pending: no install recipe exists for this host yet
-$ realm host install claude --dry-run 2>/dev/null; echo "exit $?"
+$ realm host install cursor --dry-run 2>/dev/null; echo "exit $?"
 POLICY_DENIED
 exit 1
 
-$ realm host uninstall claude
-{"id":"claude","status":"noop","dryRun":false,"actions":[]}
+$ realm host uninstall cursor
+{"id":"cursor","status":"noop","dryRun":false,"actions":[]}
 ```
 
-On a host with a recipe (`omp`), `install` and `uninstall` print `{ id, status, dryRun, actions }`, where `status` is `planned`, `installed`, `noop` or `removed` and each action is `{ path, action, bytes }` with `path` relative to the config home and no content.
+On a host with a recipe (`omp`, `claude`, `opencode`, `codex`, `kimi`, `kimi-code`), `install` and `uninstall` print `{ id, status, dryRun, actions }`, where `status` is `planned`, `installed`, `noop` or `removed` and each action is `{ path, action, bytes }` with `path` relative to the config home and no content. `realm host status claude` on an installed host prints, for example, `{"id":"claude","status":"installed","entries":[{"path":".claude.json","state":"ok"}],"launch":"on-path"}`.
 
-`realm doctor` adds a `host-plugins` item. It reads receipts and presence markers only (never a real home, a host binary or the environment): `pass` with no receipt or only intact installs, `warn` for a pending receipt or any drifted entry with the repair command (`realm host install <id>`, or `realm host uninstall <id>` to remove), and `fail`, with the catalogue code and the host id, for a corrupt receipt, a symlinked `hosts` directory or a read that exceeds its bound. For an installed `omp` the detail adds whether the extension target exists and the number of live plugin sessions (`installed: omp (extension target present, 1 live plugin session)`); a missing or unreadable target is a `warn` (`host plugin drift: omp: extension target missing`), as is an unreadable presence marker. The detail never holds a path or file content.
+`realm doctor` adds a `host-plugins` item. It reads receipts, the files a receipt names (for Claude Code a file in the user's home) and presence markers only, never a host binary or the environment: `pass` with no receipt or only intact installs, `warn` for a pending receipt or any drifted entry with the repair command (`realm host install <id>`, or `realm host uninstall <id>` to remove), and `fail`, with the catalogue code and the host id, for a corrupt receipt, a symlinked `hosts` directory or a read that exceeds its bound. A drifted entry that is `unreadable` carries the count in the detail (`..., 1 unreadable`) and a different fix text: the file cannot be read or parsed safely, so inspect it and repair it by hand before running `realm host uninstall <id>`. For an installed `omp` the detail adds whether the extension target exists and the number of live plugin sessions (`installed: omp (extension target present, 1 live plugin session)`); a missing or unreadable target is a `warn` (`host plugin drift: omp: extension target missing`), as is an unreadable presence marker. The detail never holds a path or file content. Doctor does not report `launch`, because it reads no environment.
 
 ## The 19 hosts
 
-Source: GSD Core `next`, commit `69d604e`, 2026-11-16, recorded in `.planning/phases/21-host-plugin-contract-and-installer/21-DISCOVERY.md` (package 1.21.0: `src/runtime-name-policy.cts`, `src/runtime-homes.cts`, `docs/how-to/install-on-your-runtime.md`). Gemini is retired upstream and `vscode` is registered but not installable, so neither is in the table. Tier is the project decision carried into Phase 21: Omp is the reference; Claude Code, OpenCode, Codex and Kimi CLI are to be proven end to end in Phases 24 and 25; the rest are config-only.
+Source: GSD Core `next`, commit `69d604e`, 2026-11-16, recorded in `.planning/phases/21-host-plugin-contract-and-installer/21-DISCOVERY.md` (package 1.21.0: `src/runtime-name-policy.cts`, `src/runtime-homes.cts`, `docs/how-to/install-on-your-runtime.md`). Gemini is retired upstream and `vscode` is registered but not installable, so neither is in the table. Tier is the project decision carried into Phase 21 and is the roadmap's classification of where end-to-end effort goes, not a statement of evidence: Omp is the reference; Claude Code, OpenCode, Codex and Kimi CLI are the proven tier, with their recipes landed in Phase 24 (and the `kimi-code` row's recipe by decision D-24-05); the rest are config-only. What was proven for each host is stated under "Evidence limits".
 
 | Id | Flag | Tier | Integration | Config home (global) | Recipe |
 | --- | --- | --- | --- | --- | --- |
 | `omp` | `--omp` | reference | extension | `~/.omp/agent` (`PI_CODING_AGENT_DIR`); the shim goes to `extensions/realm/` | ready |
-| `claude` | `--claude` | proven | mcp-config | `~/.claude` (`CLAUDE_CONFIG_DIR`) | pending |
-| `opencode` | `--opencode` | proven | mcp-config | `~/.config/opencode` | pending |
+| `claude` | `--claude` | proven | mcp-config | `~/.claude` (`CLAUDE_CONFIG_DIR`); the entry goes in `~/.claude.json` (`mcp` role: the user's home, or `CLAUDE_CONFIG_DIR`) | ready |
+| `opencode` | `--opencode` | proven | mcp-config | `~/.config/opencode` (`XDG_CONFIG_HOME/opencode`) | ready |
 | `kilo` | `--kilo` | config-only | mcp-config | `~/.config/kilo` or `~/.kilo` | pending |
-| `codex` | `--codex` | proven | mcp-config | `~/.codex` | pending |
+| `codex` | `--codex` | proven | mcp-config | `~/.codex` (`CODEX_HOME`) | ready |
 | `copilot` | `--copilot` | config-only | mcp-config | `~/.copilot` | pending |
 | `antigravity` | `--antigravity` | config-only | mcp-config | none verified | pending |
 | `cursor` | `--cursor` | config-only | mcp-config | `~/.cursor` | pending |
@@ -243,23 +263,39 @@ Source: GSD Core `next`, commit `69d604e`, 2026-11-16, recorded in `.planning/ph
 | `hermes` | `--hermes` | config-only | mcp-config | `~/.hermes` | pending |
 | `codebuddy` | `--codebuddy` | config-only | mcp-config | `~/.codebuddy` | pending |
 | `cline` | `--cline` | config-only | mcp-config | `~/.cline` | pending |
-| `kimi` | `--kimi` | proven | mcp-config | skills `~/.config/agents`, config `~/.kimi` | pending |
-| `kimi-code` | `--kimi-code` | config-only | mcp-config | `~/.kimi-code` | pending |
+| `kimi` | `--kimi` | proven | mcp-config | skills `~/.config/agents`, config `~/.kimi` (`KIMI_SHARE_DIR`, config only) | ready |
+| `kimi-code` | `--kimi-code` | config-only | mcp-config | `~/.kimi-code` (`KIMI_CODE_HOME`) | ready |
 | `zcode` | `--zcode` | config-only | mcp-config | `~/.zcode` | pending |
 | `pi` | `--pi` | config-only | mcp-config | `~/.pi/agent` | pending |
 
 ## Evidence limits
 
-- The engine and the Omp recipe are proven on fixtures: a temporary HOME, a temporary state directory and a stub extension entry (`test/support/fixture-host.ts`, `test/host/omp-recipe.test.ts`, `test/cli/host.test.ts`). No real host configuration is read or written by the test suite. The 18 other hosts have no recipe: every real install refuses as `recipe-pending` and changes nothing. Their recipes, and the host-side proof that each host loads them, are Phases 24 and 25.
+- The engine and the six recipes are proven on fixtures (tier T1): a temporary HOME, a temporary state directory and, for Omp, a stub extension entry (`test/support/fixture-host.ts`, `test/host/omp-recipe.test.ts`); for the other five, string goldens each tagged with its source and date (`test/support/host-config-goldens.ts`, `test/host/{claude,opencode,codex,kimi}-recipe.test.ts`, `test/cli/host.test.ts`). No real host configuration is read or written by the test suite. The 13 other hosts have no recipe: every real install refuses as `recipe-pending` and changes nothing. Their recipes are Phase 25.
 - That a real Omp loads the installed shim, starts the daemon and paints the status item is proven only by the live rehearsal in an isolated profile (`docs/integration/omp.md`, "Installed by `realm host install omp`"); until it is recorded there, the shim is unproven against a real Omp.
 - Omp is the only host with live evidence (`docs/integration/hosts.md`). The four adapter bundles under `adapters/` have evidence tier 2 (a host validator or isolated install passes) and are not registered in any live configuration.
-- Config homes come from the GSD Core discovery above and were not independently verified on a machine with each host. `antigravity` has no verified home (`homeVerified` is false). Omp's home (`~/.omp/agent`, `PI_CODING_AGENT_DIR`) is verified against `omp --help` and the public extension page. For `kimi` the table follows the installer flag `--kimi`; the config home reading (`~/.kimi`) is the discovery's, not a live check.
+- Config homes: Omp's home (`~/.omp/agent`, `PI_CODING_AGENT_DIR`) is verified against `omp --help` and the public extension page. The homes and files of `claude` (`~/.claude.json`, `CLAUDE_CONFIG_DIR`), `codex` (`~/.codex/config.toml`, `CODEX_HOME`) and `opencode` (`XDG_CONFIG_HOME`) were observed on 2026-11-17 by running the host in an isolated HOME (Claude Code 2.1.322, codex-cli 0.154.0, OpenCode 1.19.5 fetched into a scratch directory), and also come from documentation. The homes and entry shapes of `kimi` (`~/.kimi/mcp.json`, `KIMI_SHARE_DIR`) and `kimi-code` (`~/.kimi-code/mcp.json`, `KIMI_CODE_HOME`) come from official documentation only: no Kimi product was observed writing them. The other 13 hosts' homes come from the GSD Core discovery above and were not independently verified on a machine with each host; `antigravity` has no verified home (`homeVerified` is false).
 - `detect` is a file-system look at a home directory and at an executable on `PATH`. It runs no host binary, so it cannot tell a working install from a leftover directory.
 - The boot path of the 18 `mcp-config` hosts (`realm mcp|acp --host <id>`) is proven against fakes and against a real daemon over fakes, and its marker against a built `realm mcp --host claude` in the smoke. That a real Claude Code or a real Omp boots through it, and how long a real host waits for a cold first boot, is proven only by the live rehearsal, which has not been run (see "Boot integration", "Evidence tiers").
 
+The three evidence tiers of the Phase 24 recipes, per host. T1 is the offline fixture (always runs in CI). T2 is the host's own validator command against what the recipe wrote, in an isolated HOME, with a stub `realm` on `PATH` (gated: `REALM_LIVE_CLAUDE`, `REALM_LIVE_CODEX`, `REALM_LIVE_OPENCODE`, `REALM_LIVE_KIMI`). T3 is a real host health check performing an MCP initialize against the real `realm mcp --host <id>` with a daemon opened for a workspace (gated: `REALM_LIVE_PRODUCTION=1` plus the host variable, Podman 5.x). The rehearsal is gated and records no result in this repository yet: a cell says "not run" until a dated result is written here, and "gap" where the tier cannot be run at all.
+
+| Host | T1 offline fixture | T2 host validator | T3 live end to end |
+| --- | --- | --- | --- |
+| `claude` | covered; golden observed from Claude Code 2.1.322, 2026-11-17 | gated, runnable here with 2.1.322; no result recorded yet | not run: Podman 4.9.3 is below the required 5.x |
+| `codex` | covered; golden observed from codex-cli 0.154.0, 2026-11-17 | gated, runnable here with 0.154.0 (`get` and `list` parse only); it is also meant to record the block after `codex mcp add other` and the effect of `codex mcp remove realm`; no result recorded yet | gap: `codex mcp list` does not start servers and a session needs model credentials; not automatable |
+| `opencode` | covered; formats from official documentation and an observation of 1.19.5, 2026-11-17 | not run: no `opencode` executable on the verification machine | not run: no executable, and Podman 4.9.3 is below 5.x |
+| `kimi` | covered; formats from official documentation, 2026-11-17 | not run: no `kimi` executable, and the only published release is an inert stub | gap: no functional Kimi CLI exists to run |
+| `kimi-code` | covered; formats from official documentation, 2026-11-17 | not available: no validator command is documented | gap: not run, none attempted |
+
+Not shown by any tier, for any host: that a long-running session keeps using the entry after its file changes, that a real model turn calls the Realm tools, and that a host's start timeout outlasts a cold first boot of up to 230 s (OQ-24-06; no recipe writes a timeout). Open owner decisions: OQ-24-01 (keep, drop or promote `kimi-code`), OQ-24-02 (OpenCode V1 versus V2 entry shape), OQ-24-03 (hide host-config names from the workspace mount), OQ-24-05 (what Codex does to the markers).
+
 Residual risks, accepted and documented:
 
-- JSON with comments (JSONC) is refused as `unparseable`, not rewritten; TOML is only edited as a marker block, never parsed.
+- JSON with comments (JSONC) is refused as `unparseable`, not rewritten; TOML is edited only as an owned marker block guarded by a line scanner, never parsed. OpenCode's `opencode.jsonc` is never read or changed.
 - A host config home that is a symlink (dotfile managers) is refused; the operator names the real directory with `--config-home`.
 - The write phase is synchronous and bounded by file size (1 MiB per file, 256 bundle files), not by a timer; reads are bounded by `TOOL_TIMEOUT`.
 - A workload that can write a host config home can edit other settings there as well; Realm detects changes to its own entry only (doctor `warn`, uninstall refusal).
+- R-24-01, project-level shadowing: a workload can write a host's project-level configuration in the workspace (`.mcp.json`, `.codex/config.toml`, `opencode.json` and `.opencode/`, `.kimi-code/mcp.json`) naming a server `realm` with a hostile command; the host then launches it outside the sandbox with the user's privileges. Claude Code asks approval, Codex honours project configuration for trusted projects only and Kimi Code asks workspace trust; OpenCode documents no trust gate. Realm writes and reads no project-level configuration and the sandbox mount does not hide these names; the fix, a read-only or hidden overlay, is Phase 19 mount territory and an open owner decision (OQ-24-03).
+- R-24-02, the concurrent-writer window: a host (Claude Code rewrites `~/.claude.json` at any time) can write the file between the final hash check and the rename. A change before the check is refused as `concurrent-change`; the window itself cannot be closed without a lock the host does not honour, so install with no host session open.
+- R-24-03, the scanner limit: the Codex duplicate-table guard is a line scanner, not a parser (see "Install recipes"); a bare `["x"]` line inside a multi-line array in `[mcp_servers]` can hide a definition, in which case Codex itself rejects the file.
+- R-24-04, the Codex remover: `codex mcp remove realm` can leave the end marker behind ([INFERENCE]; not yet recorded against 0.154.0); the result is an `unreadable` entry that only a manual two-line deletion clears. Uninstall with `realm host uninstall codex`.
