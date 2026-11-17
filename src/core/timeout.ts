@@ -17,8 +17,8 @@ export function withTimeout<T>(work: Promise<T>, ms: number, code: ErrorCode): P
   });
 }
 
-// Resolves after ms. It never rejects and cannot be cancelled; a caller that must stop waiting early uses an
-// abort-aware wait instead (sleepUnlessAborted in src/anda/client.ts).
+// Resolves after ms. It never rejects and cannot be cancelled; a caller that must stop waiting early uses its own
+// abort-aware wait.
 export function sleep(ms: number): Promise<void> {
   return new Promise<void>((resolve) => {
     setTimeout(resolve, ms);

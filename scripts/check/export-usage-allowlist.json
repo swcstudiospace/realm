@@ -18,16 +18,6 @@
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
-      "file": "src/anda/client.ts",
-      "name": "SleepFn",
-      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
-    },
-    {
-      "file": "src/anda/client.ts",
-      "name": "sleepUnlessAborted",
-      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
-    },
-    {
       "file": "src/audit/anchor.ts",
       "name": "ANCHOR_RECORD_VERSION",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
@@ -219,17 +209,7 @@
     },
     {
       "file": "src/doctor/checks.ts",
-      "name": "AndaReply",
-      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
-    },
-    {
-      "file": "src/doctor/checks.ts",
       "name": "CheckId",
-      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
-    },
-    {
-      "file": "src/doctor/checks.ts",
-      "name": "FetchInformation",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {

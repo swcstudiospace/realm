@@ -146,8 +146,7 @@ export type MutationDecision =
   | { readonly decision: "deny"; readonly code: MutationDenyCode };
 
 // Pure. The one mutation decision for file-mutating calls, in both policy modes. An active session
-// allows a write whether or not an Anda bridge is configured; a configured bridge that goes down
-// moves the session to degraded, which is refused below.
+// allows a write.
 // Under advisory policy (an explicit opt-in; the default is fail-closed) a write in any other
 // non-active state proceeds with a warning.
 export function decideMutation(policy: Policy, state: State): MutationDecision {

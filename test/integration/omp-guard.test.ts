@@ -59,7 +59,6 @@ import { sendRequest } from "../../src/daemon/channel.js";
 import { selectionOf } from "../../src/daemon/client.js";
 import { startDaemon } from "../../src/daemon/daemon.js";
 import type { PodmanProbeResult } from "../../src/runtime/podman-probe.js";
-import { FakeBridge } from "../support/fake-bridge.js";
 import { FakeExecutionService } from "../support/fake-execution.js";
 
 // The warning the daemon attaches to an advisory write while its realm is in error (decideMutation, src/core/policy.ts).
@@ -100,7 +99,6 @@ async function startInactiveRealmDaemon(options: {
     runtimeInput: { image: REALM_IMAGE, stateDir: options.stateDir, workspaceRoot: options.workspace },
     policyPath,
     exec,
-    bridge: new FakeBridge(),
     clock: () => new Date(CLOCK_ISO),
     runOpenShell: () => Promise.resolve({ exitCode: 0, stdout: "", stderr: "", truncated: false }),
     // A libpod double whose realm listing is empty, so the startup reap removes nothing.

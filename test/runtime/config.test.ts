@@ -1,15 +1,16 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { RealmError } from "../../src/core/errors.js";
-import { describeRuntimeConfigProblems, loadRuntimeConfig, runtimeRootsOf } from "../../src/runtime/config.js";
+import { describeRuntimeConfigProblems, loadRuntimeConfig, retiredKeyNotes, runtimeRootsOf } from "../../src/runtime/config.js";
 
 const DIGEST = `sha256:${"a".repeat(64)}`;
 const IMAGE = `ghcr.io/example/realm-agent@${DIGEST}`;
+// The one sentence the retired andaUrl key adds to the problem list and to the CLI refusal (D-28-02).
+const RETIRED_ANDA_URL_SENTENCE = "andaUrl was removed in the 0.4 release line, with the Anda bridge: delete it from config.json";
 
 function validInput(): Record<string, unknown> {
   return {
     image: IMAGE,
-    andaUrl: "http://127.0.0.1:7777/",
     stateDir: "/var/lib/realm/state",
     workspaceRoot: "/srv/workspace",
   };
@@ -56,41 +57,14 @@ void test("a digest that is not 64 lowercase hex characters is rejected with SCH
   );
 });
 
-void test("an andaUrl with userinfo is rejected with SCHEMA_INVALID (RT-01)", () => {
-  assert.equal(
-    rejectionCode({ ...validInput(), andaUrl: "http://user:secret@127.0.0.1:7777/" }),
-    "SCHEMA_INVALID",
-  );
-  assert.equal(
-    rejectionCode({ ...validInput(), andaUrl: "https://token@anda.example.com/" }),
-    "SCHEMA_INVALID",
-  );
-  assert.equal(
-    rejectionCode({ ...validInput(), andaUrl: "http://:@127.0.0.1:7777/" }),
-    "SCHEMA_INVALID",
-  );
+void test("an andaUrl key is refused with SCHEMA_INVALID whatever its value, as any key outside the closed set is (RT-01, D-28-02)", () => {
+  for (const value of ["http://127.0.0.1:7777/", "https://anda.example.com/engine", "http://user:secret@127.0.0.1:7777/", "", 7, null, undefined]) {
+    assert.equal(rejectionCode({ ...validInput(), andaUrl: value }), "SCHEMA_INVALID");
+  }
 });
 
-void test("an andaUrl with a non-http(s) scheme is rejected with SCHEMA_INVALID (RT-01)", () => {
-  assert.equal(rejectionCode({ ...validInput(), andaUrl: "ftp://127.0.0.1/" }), "SCHEMA_INVALID");
-  assert.equal(rejectionCode({ ...validInput(), andaUrl: "file:///etc/anda" }), "SCHEMA_INVALID");
-  assert.equal(rejectionCode({ ...validInput(), andaUrl: "ws://127.0.0.1:7777/" }), "SCHEMA_INVALID");
-});
-
-void test("an andaUrl that does not parse is rejected with SCHEMA_INVALID (RT-01)", () => {
-  assert.equal(rejectionCode({ ...validInput(), andaUrl: "not a url" }), "SCHEMA_INVALID");
-});
-
-void test("an http or https andaUrl without userinfo is accepted (RT-01)", () => {
-  assert.equal(loadRuntimeConfig(validInput()).andaUrl, "http://127.0.0.1:7777/");
-  assert.equal(
-    loadRuntimeConfig({ ...validInput(), andaUrl: "https://anda.example.com/engine" }).andaUrl,
-    "https://anda.example.com/engine",
-  );
-});
-
-void test("an absent andaUrl is accepted and the config carries no andaUrl (RT-01)", () => {
-  const config = loadRuntimeConfig({ ...validInput(), andaUrl: undefined });
+void test("a loaded config carries no andaUrl property (RT-01)", () => {
+  const config = loadRuntimeConfig(validInput());
   assert.equal("andaUrl" in config, false);
 });
 
@@ -247,6 +221,29 @@ void test("ONB-03: describeRuntimeConfigProblems names the failing keys and carr
   assert.ok(!joined.includes("VALUE-XYZ"));
   assert.ok(!joined.includes("relative/x"));
   assert.ok(!joined.includes("extraKey"));
+});
+
+void test("D-28-02: describeRuntimeConfigProblems adds the fixed retired-key sentence for andaUrl and never echoes its value", () => {
+  const problems = describeRuntimeConfigProblems({ ...validInput(), andaUrl: "http://user:secret@127.0.0.1:7777/" });
+  assert.deepEqual(problems, ["config.json has a key that is not accepted", RETIRED_ANDA_URL_SENTENCE]);
+  for (const problem of problems) {
+    assert.doesNotMatch(problem, /secret|127\.0\.0\.1|user/);
+  }
+});
+
+void test("D-28-02: a different unknown key adds only the generic line, so no key name is echoed", () => {
+  assert.deepEqual(describeRuntimeConfigProblems({ ...validInput(), imagee: IMAGE }), [
+    "config.json has a key that is not accepted",
+  ]);
+});
+
+void test("D-28-02: retiredKeyNotes returns one sentence for an input with andaUrl and nothing for any other input", () => {
+  assert.deepEqual(retiredKeyNotes({ ...validInput(), andaUrl: "http://127.0.0.1:7777/" }), [RETIRED_ANDA_URL_SENTENCE]);
+  assert.deepEqual(retiredKeyNotes({ hostNetwork: true }), []);
+  assert.deepEqual(retiredKeyNotes("text"), []);
+  assert.deepEqual(retiredKeyNotes(null), []);
+  assert.deepEqual(retiredKeyNotes(undefined), []);
+  assert.deepEqual(retiredKeyNotes([]), []);
 });
 
 void test("ONB-03: describeRuntimeConfigProblems names the overlap for explicit overlapping roots and the non-object input", () => {

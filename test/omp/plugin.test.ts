@@ -559,12 +559,12 @@ void test("CRASH-04: an attach whose status carries no notice never calls ui.not
 });
 
 void test("OMP-01 (a): an attach failure settles disconnected with the catalogue code as the reason (P5-D8)", async () => {
-  const fixture = makeFixture({ attachErrors: ["ANDA_UNREACHABLE"] });
+  const fixture = makeFixture({ attachErrors: ["AGENTOS_CRASH_LOOP"] });
   startHandlerOf(fixture.pi)(fixture.ctx);
 
-  await waitForDetail(fixture.ui, "ANDA_UNREACHABLE");
+  await waitForDetail(fixture.ui, "AGENTOS_CRASH_LOOP");
   assert.equal(lastLabel(fixture.ui), DISCONNECTED_LABEL);
-  assert.match(lastDetail(fixture.ui) ?? "", /^ANDA_UNREACHABLE · /);
+  assert.match(lastDetail(fixture.ui) ?? "", /^AGENTOS_CRASH_LOOP · /);
   // No daemon was attached, so the guard has no client and refuses a guarded edit.
   assert.deepEqual(await toolCallOf(fixture.pi)({ toolName: "edit" }), { block: true, reason: "REALM_NOT_ACTIVE" });
 });
@@ -662,7 +662,7 @@ void test("OMP-01 (b): session shutdown closes the client, never calls down, and
   assert.equal(fixture.daemon.count("call"), 0, "shutdown dispatches no tool");
 
   const paintsAtShutdown = fixture.ui.calls.length;
-  fixture.daemon.snapshot = { state: "error", reason: "ANDA_UNREACHABLE", lastTransitionAt: CLOCK_ISO };
+  fixture.daemon.snapshot = { state: "error", reason: "AGENTOS_CRASH_LOOP", lastTransitionAt: CLOCK_ISO };
   assert.deepEqual(await toolCallOf(fixture.pi)({ toolName: "edit" }), { block: true, reason: "realm not started" });
   assert.equal(fixture.ui.calls.length, paintsAtShutdown, "no paint after shutdown");
   assert.equal(fixture.daemon.count("status"), 1, "a refused call after shutdown reads no status");
@@ -674,11 +674,11 @@ void test("OMP-02: every status read paints one shared label across every transi
   await waitForDetail(fixture.ui, "container running");
   const toolCall = toolCallOf(fixture.pi);
 
-  fixture.daemon.snapshot = { state: "error", reason: "ANDA_UNREACHABLE", lastTransitionAt: CLOCK_ISO };
+  fixture.daemon.snapshot = { state: "error", reason: "AGENTOS_CRASH_LOOP", lastTransitionAt: CLOCK_ISO };
   await toolCall({ toolName: "edit" });
   fixture.daemon.snapshot = ACTIVE;
   await toolCall({ toolName: "edit" });
-  fixture.daemon.snapshot = { state: "degraded", reason: "ANDA_VERSION_MISMATCH", lastTransitionAt: CLOCK_ISO };
+  fixture.daemon.snapshot = { state: "degraded", reason: "OPENSHELL_GATEWAY_LOST", lastTransitionAt: CLOCK_ISO };
   await toolCall({ toolName: "edit" });
 
   // Pinned table: the only labels are the shared mapping plus the text degraded flag.
@@ -693,7 +693,7 @@ void test("OMP-02: every status read paints one shared label across every transi
   // One status item carries the label, the reason, and the time: no second key competes with it.
   const keys = new Set(fixture.ui.calls.map((call) => call.key));
   assert.deepEqual(keys, new Set([REALM_STATUS_KEY]));
-  assert.equal(statusTexts(fixture.ui).at(-1), `${DEGRADED_LABEL} · ANDA_VERSION_MISMATCH · ${CLOCK_ISO} · ${FAIL_CLOSED_STATUS}`);
+  assert.equal(statusTexts(fixture.ui).at(-1), `${DEGRADED_LABEL} · OPENSHELL_GATEWAY_LOST · ${CLOCK_ISO} · ${FAIL_CLOSED_STATUS}`);
 });
 
 void test("OMP-03: the reason and last-transition time follow the label in the one status item on every transition (P5-D5)", async () => {
@@ -706,15 +706,15 @@ void test("OMP-03: the reason and last-transition time follow the label in the o
   // text of the one status item on every transition.
   const transitions: Array<{ readonly snapshot: StateSnapshot; readonly label: string; readonly detail: string }> = [
     {
-      snapshot: { state: "error", reason: "ANDA_UNREACHABLE", lastTransitionAt: CLOCK_ISO },
+      snapshot: { state: "error", reason: "AGENTOS_CRASH_LOOP", lastTransitionAt: CLOCK_ISO },
       label: DISCONNECTED_LABEL,
-      detail: `ANDA_UNREACHABLE · ${CLOCK_ISO}`,
+      detail: `AGENTOS_CRASH_LOOP · ${CLOCK_ISO}`,
     },
     { snapshot: ACTIVE, label: ACTIVE_LABEL, detail: `container running · ${CLOCK_ISO}` },
     {
-      snapshot: { state: "degraded", reason: "ANDA_VERSION_MISMATCH", lastTransitionAt: CLOCK_ISO },
+      snapshot: { state: "degraded", reason: "OPENSHELL_GATEWAY_LOST", lastTransitionAt: CLOCK_ISO },
       label: DEGRADED_LABEL,
-      detail: `ANDA_VERSION_MISMATCH · ${CLOCK_ISO}`,
+      detail: `OPENSHELL_GATEWAY_LOST · ${CLOCK_ISO}`,
     },
   ];
   for (const transition of transitions) {
@@ -730,15 +730,15 @@ void test("OMP-02: a daemon transition reaches the indicator on the poll, with n
   startHandlerOf(fixture.pi)(fixture.ctx);
   await waitForDetail(fixture.ui, "container running");
 
-  fixture.daemon.snapshot = { state: "error", reason: "ANDA_UNREACHABLE", lastTransitionAt: CLOCK_ISO };
+  fixture.daemon.snapshot = { state: "error", reason: "AGENTOS_CRASH_LOOP", lastTransitionAt: CLOCK_ISO };
   pollOf(fixture.ctx).callback();
   await waitUntil(() => lastLabel(fixture.ui) === DISCONNECTED_LABEL);
-  assert.equal(lastDetail(fixture.ui), `ANDA_UNREACHABLE · ${CLOCK_ISO}`);
+  assert.equal(lastDetail(fixture.ui), `AGENTOS_CRASH_LOOP · ${CLOCK_ISO}`);
 
-  fixture.daemon.snapshot = { state: "degraded", reason: "ANDA_VERSION_MISMATCH", lastTransitionAt: CLOCK_ISO };
+  fixture.daemon.snapshot = { state: "degraded", reason: "OPENSHELL_GATEWAY_LOST", lastTransitionAt: CLOCK_ISO };
   pollOf(fixture.ctx).callback();
   await waitUntil(() => lastLabel(fixture.ui) === DEGRADED_LABEL);
-  assert.equal(lastDetail(fixture.ui), `ANDA_VERSION_MISMATCH · ${CLOCK_ISO}`);
+  assert.equal(lastDetail(fixture.ui), `OPENSHELL_GATEWAY_LOST · ${CLOCK_ISO}`);
   assert.equal(fixture.daemon.count("call"), 0, "the repaint dispatches no tool");
 });
 
@@ -805,11 +805,11 @@ void test("OMP-02: a poll tick that fires after shutdown reads no status and pai
 });
 
 void test("OMP-04: the retry command re-runs the attach path and moves error to connecting then active (P5-D14)", async () => {
-  const fixture = makeFixture({ attachErrors: ["ANDA_UNREACHABLE"] });
+  const fixture = makeFixture({ attachErrors: ["AGENTOS_CRASH_LOOP"] });
   const command = retryCommandOf(fixture.pi);
   assert.ok(command.description.length > 0, "retry command carries a description");
   startHandlerOf(fixture.pi)(fixture.ctx);
-  await waitForDetail(fixture.ui, "ANDA_UNREACHABLE");
+  await waitForDetail(fixture.ui, "AGENTOS_CRASH_LOOP");
   assert.equal(lastLabel(fixture.ui), DISCONNECTED_LABEL);
 
   const detailsBefore = detailsOf(fixture.ui).length;
@@ -1197,9 +1197,9 @@ void test("B1 / T1: advisory with the realm not active forwards the Realm write 
 });
 
 void test("B2 / T2: with no daemon attached the Realm write is refused with REALM_NOT_ACTIVE, no daemon is called, and the write stays active", async () => {
-  const fixture = makeFixture({ mode: "advisory", attachErrors: ["ANDA_UNREACHABLE"] });
+  const fixture = makeFixture({ mode: "advisory", attachErrors: ["AGENTOS_CRASH_LOOP"] });
   startHandlerOf(fixture.pi)(fixture.ctx);
-  await waitForDetail(fixture.ui, "ANDA_UNREACHABLE");
+  await waitForDetail(fixture.ui, "AGENTOS_CRASH_LOOP");
 
   assert.equal(await toolCallOf(fixture.pi)({ toolName: "write" }), undefined, "the guard passes the Realm write to the tool");
   const result = await toolOf(fixture.pi, "write").execute("call-1", { path: "notes.txt", content: "hello" });
@@ -1287,7 +1287,7 @@ function makeRegisteredWorkspace(t: TestContext, mode: PolicyMode): {
   const stateDir = join(base, "state");
   const parsed = validate("policy", { mode, workspaceRoots: [workspace] });
   assert.ok(parsed.ok);
-  const fixture = makeFixture({ cwd: workspace, mode, snapshot: { state: "degraded", reason: "bridge unavailable", lastTransitionAt: CLOCK_ISO } });
+  const fixture = makeFixture({ cwd: workspace, mode, snapshot: { state: "degraded", reason: "runner unavailable", lastTransitionAt: CLOCK_ISO } });
   const dispatcher = new ToolDispatcher({
     sessionId: "sess-omp-registered",
     boundRoot: bindRoot(workspace),
@@ -1309,7 +1309,7 @@ function makeRegisteredWorkspace(t: TestContext, mode: PolicyMode): {
 void test("HARN-02 C1: registered advisory write warns on every inactive invocation and writes exact host bytes", async (t) => {
   const { fixture, workspace, stateDir } = makeRegisteredWorkspace(t, "advisory");
   startHandlerOf(fixture.pi)(fixture.ctx);
-  await waitForDetail(fixture.ui, "bridge unavailable");
+  await waitForDetail(fixture.ui, "runner unavailable");
   const write = toolOf(fixture.pi, "write");
   for (const [index, content] of ["first π\n", "second 🙂\n"].entries()) {
     const result = await write.execute(`advisory-${String(index)}`, { path: "c1.txt", content });
@@ -1329,7 +1329,7 @@ void test("HARN-02 C1: registered advisory write warns on every inactive invocat
 void test("HARN-02 C2: registered inactive fail-closed write refuses REALM_NOT_ACTIVE without a host file", async (t) => {
   const { fixture, workspace } = makeRegisteredWorkspace(t, "fail-closed");
   startHandlerOf(fixture.pi)(fixture.ctx);
-  await waitForDetail(fixture.ui, "bridge unavailable");
+  await waitForDetail(fixture.ui, "runner unavailable");
   const result = await toolOf(fixture.pi, "write").execute("inactive", { path: "c2.txt", content: "denied" });
   assert.deepEqual(result.details, { outcome: "refused", tool: "write", code: "REALM_NOT_ACTIVE", retryable: true });
   assert.ok(!existsSync(join(workspace, "c2.txt")));
@@ -1342,7 +1342,7 @@ for (const mode of ["advisory", "fail-closed"] as const) {
   void test(`HARN-02: registered ${mode} write refuses an unreachable daemon without host fallback`, async (t) => {
     const { fixture, workspace } = makeRegisteredWorkspace(t, mode);
     startHandlerOf(fixture.pi)(fixture.ctx);
-    await waitForDetail(fixture.ui, "bridge unavailable");
+    await waitForDetail(fixture.ui, "runner unavailable");
     fixture.daemon.failStatus = "REALM_NOT_ACTIVE";
     // The dispatch replaces the real dispatcher route, so the refusal is set on the dispatch itself.
     fixture.daemon.call = () => Promise.reject(makeRealmError("REALM_NOT_ACTIVE"));
@@ -1358,7 +1358,7 @@ for (const mode of ["advisory", "fail-closed"] as const) {
 void test("HARN-02 C1: registered advisory writes propagate validation, path and conditional-write failures", async (t) => {
   const { fixture, workspace } = makeRegisteredWorkspace(t, "advisory");
   startHandlerOf(fixture.pi)(fixture.ctx);
-  await waitForDetail(fixture.ui, "bridge unavailable");
+  await waitForDetail(fixture.ui, "runner unavailable");
   writeFileSync(join(workspace, "existing.txt"), "original");
   symlinkSync(join(workspace, "existing.txt"), join(workspace, "link.txt"));
   const write = toolOf(fixture.pi, "write");

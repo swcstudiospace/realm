@@ -6,14 +6,13 @@
 // so no second table can split lock ownership.
 
 import type { Policy, PolicyMode } from "../contract/validate.js";
-import { makeRealmError } from "../core/errors.js";
 import { loadPolicyFile } from "../core/policy.js";
-import type { BridgePort, ExecutionService } from "../core/ports.js";
+import type { ExecutionService } from "../core/ports.js";
 import type { StateSnapshot } from "../core/state-machine.js";
 import { LockTable } from "../fs/locks.js";
 import { bindWorkspaceUnderPolicy } from "../fs/root.js";
 import { LifecycleController } from "../lifecycle/controller.js";
-import { andaBridgeRequired, loadRuntimeConfig } from "../runtime/config.js";
+import { loadRuntimeConfig } from "../runtime/config.js";
 import type { OpenShellRunner } from "../runtime/openshell.js";
 import { SessionStore } from "../session/store.js";
 import { ToolDispatcher } from "../tools/dispatch.js";
@@ -39,9 +38,6 @@ export interface CreateRealmHandleOptions {
   readonly policy?: Policy;
   readonly sessionId: string;
   readonly exec: ExecutionService;
-  // The Anda bridge, or null when no Anda Engine is configured. A bridge is attached only when the
-  // runtime input names an andaUrl, and then it is required at start (C4).
-  readonly bridge: BridgePort | null;
   readonly clock: () => Date;
   readonly runOpenShell: OpenShellRunner;
 }
@@ -65,21 +61,11 @@ export function createRealmHandle(options: CreateRealmHandleOptions): RealmHandl
   const boundRoot = bindWorkspaceUnderPolicy(policy.workspaceRoots, config.workspaceRoot);
   const locks = new LockTable();
   const store = new SessionStore(config.stateDir);
-  // Attached exactly when andaUrl is configured (C4). An injected bridge is ignored without one, so
-  // no handshake runs and nothing is closed.
-  let bridge: BridgePort | null = null;
-  if (andaBridgeRequired(config)) {
-    if (options.bridge === null) {
-      throw makeRealmError("SCHEMA_INVALID");
-    }
-    bridge = options.bridge;
-  }
   const controller = new LifecycleController({
     sessionId: options.sessionId,
     policy,
     store,
     exec: options.exec,
-    bridge,
     clock: options.clock,
     locks,
     // Pinned at bind time. create refuses any requested workspace whose identity differs from

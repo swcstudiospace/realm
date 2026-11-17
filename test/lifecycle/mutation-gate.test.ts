@@ -10,7 +10,6 @@ import { bindWorkspaceUnderPolicy } from "../../src/fs/root.js";
 import { gateMutation, runGatedMutation } from "../../src/lifecycle/mutation-gate.js";
 import { LifecycleController } from "../../src/lifecycle/controller.js";
 import { SessionStore } from "../../src/session/store.js";
-import { FakeBridge } from "../support/fake-bridge.js";
 import { FakeExecutionService } from "../support/fake-execution.js";
 
 const ADVISORY: Policy = {
@@ -117,21 +116,20 @@ void test("CORE-05: the controller gate reads the current state, so a refused wr
   const workspace = join(base, "workspace");
   mkdirSync(workspace);
   const exec = new FakeExecutionService();
-  const bridge = new FakeBridge();
   const controller = new LifecycleController({
     sessionId: "session-gate",
     policy: { ...ADVISORY, mode: "fail-closed", workspaceRoots: [workspace] },
     pinnedRoot: bindWorkspaceUnderPolicy([workspace], workspace),
     store: new SessionStore(join(base, "state")),
     exec,
-    bridge,
     clock: () => new Date("2026-10-21T09:30:00.000Z"),
   });
 
   assert.deepEqual(controller.mutationGate(), { outcome: "refused", code: "REALM_UNBOUND" });
+  exec.failNext("start", "PODMAN_MACHINE_DOWN");
+  await controller.create(workspace);
+  assert.deepEqual(controller.mutationGate(), { outcome: "refused", code: "REALM_NOT_ACTIVE" });
   await controller.create(workspace);
   assert.deepEqual(controller.mutationGate(), { outcome: "proceed" });
-  bridge.emit({ kind: "down", code: "ANDA_UNREACHABLE" });
-  assert.deepEqual(controller.mutationGate(), { outcome: "refused", code: "REALM_NOT_ACTIVE" });
   assert.equal(exec.callCount("probe"), 0);
 });

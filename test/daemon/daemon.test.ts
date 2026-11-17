@@ -1,7 +1,7 @@
 // Daemon tests (CLI-01, RT-06, P6-D1, P6-D4, P6-D12). Every test drives the
 // real module: single-owner start over a live Unix socket, the startup reap
 // before serving, all five CONTROL_METHODS over the channel, and graceful
-// shutdown on down. No live Podman, OpenShell, or Anda engine is started: the
+// shutdown on down. No live Podman or OpenShell engine is started: the
 // adapter seam carries the existing fakes and scripted probes.
 
 import { after, test, type TestContext } from "node:test";
@@ -57,7 +57,6 @@ import { controlSocketPath } from "../../src/session/paths.js";
 import { currentBootId } from "../../src/session/proc-identity.js";
 import { writeRunnerRecord } from "../../src/session/runner-record.js";
 import type { ToolOutcome } from "../../src/tools/dispatch.js";
-import { FakeBridge } from "../support/fake-bridge.js";
 import { FakeExecutionService } from "../support/fake-execution.js";
 import { FakeContainerStore, FakeLibpod } from "../support/fake-libpod.js";
 import { FakeOpenShell } from "../support/fake-openshell.js";
@@ -117,7 +116,6 @@ interface ContainerDouble {
 interface DaemonParts {
   readonly options: StartDaemonOptions;
   readonly exec: FakeExecutionService;
-  readonly bridge: FakeBridge;
   readonly events: string[];
   readonly containers: ContainerDouble;
 }
@@ -224,7 +222,6 @@ function containerDoubleOf(events: string[]): ContainerDouble {
 function daemonParts(fixture: Fixture, overrides?: Partial<StartDaemonOptions>): DaemonParts {
   const events: string[] = [];
   const exec = new FakeExecutionService();
-  const bridge = new FakeBridge();
   const containers = containerDoubleOf(events);
   exec.beforeCall("create", () => {
     events.push("create");
@@ -241,7 +238,6 @@ function daemonParts(fixture: Fixture, overrides?: Partial<StartDaemonOptions>):
     // active expect the advisory warning; the default is fail-closed.
     policyPath: writePolicy(fixture, "daemon-policy.json", { mode: "advisory", workspaceRoots: [fixture.ws] }),
     exec,
-    bridge,
     libpod: containers.libpod,
     clock: () => new Date(CLOCK_ISO),
     runOpenShell: () =>
@@ -252,7 +248,7 @@ function daemonParts(fixture: Fixture, overrides?: Partial<StartDaemonOptions>):
     },
     ...overrides,
   };
-  return { options, exec, bridge, events, containers };
+  return { options, exec, events, containers };
 }
 
 function snapshotStateOf(reply: ControlReply): unknown {
@@ -419,7 +415,6 @@ void test("RT-04, D-47: buildDaemonHandle builds with no AgentOS driver, and an 
     },
     policyPath: writePolicy(fixture, "no-driver-policy.json", { workspaceRoots: [fixture.ws] }),
     sessionId: sessionOf(fixture),
-    bridge: new FakeBridge(),
     libpodSocketPath: socketPath,
     runOpenShell: openshell.runner,
     clock: () => new Date(CLOCK_ISO),
@@ -436,9 +431,9 @@ void test("RT-04, D-47: buildDaemonHandle builds with no AgentOS driver, and an 
   assert.equal(store.list().length, 0, "no container is created");
 });
 
-void test("C4: with no andaUrl the session reaches active with no bridge handshake, and exec and write proceed", async (t) => {
+void test("C4: the session reaches active, and exec and write proceed", async (t) => {
   const fixture = makeDirs();
-  const { options, bridge } = daemonParts(fixture);
+  const { options } = daemonParts(fixture);
   const handle = buildDaemonHandle({ ...options, sessionId: sessionOf(fixture) });
   t.after(async () => {
     await handle.close();
@@ -446,23 +441,22 @@ void test("C4: with no andaUrl the session reaches active with no bridge handsha
 
   const snapshot = await handle.controller.create(fixture.ws);
   assert.equal(snapshot.state, "active");
-  assert.equal(bridge.callCount("connect"), 0, "no andaUrl means no handshake, even with a bridge injected");
 
   const write = await handle.dispatcher.call({ write: { path: "doc.txt", content: "changed" } });
   if (write.outcome !== "done" || write.tool !== "write") {
     assert.fail(`expected a done write, got ${JSON.stringify(write)}`);
   }
   assert.equal(write.value.warning, null);
-  assert.equal(readFileSync(join(fixture.ws, "doc.txt"), "utf8"), "changed", "the write lands with no bridge");
+  assert.equal(readFileSync(join(fixture.ws, "doc.txt"), "utf8"), "changed", "the write lands");
 
   const exec = await handle.dispatcher.call({ exec: { argv: ["ls"] } });
   assert.equal(exec.outcome, "done", `expected a done exec, got ${JSON.stringify(exec)}`);
 
   const read = await handle.dispatcher.call({ read: { path: "doc.txt", maxBytes: 1024 } });
-  assert.equal(read.outcome, "done", `read needs no bridge, got ${JSON.stringify(read)}`);
+  assert.equal(read.outcome, "done", `expected a done read, got ${JSON.stringify(read)}`);
 
   const list = await handle.dispatcher.call({ list: { path: ".", depth: 1 } });
-  assert.equal(list.outcome, "done", `list needs no bridge, got ${JSON.stringify(list)}`);
+  assert.equal(list.outcome, "done", `expected a done list, got ${JSON.stringify(list)}`);
 
   const status = await handle.dispatcher.call({ status: {} });
   if (status.outcome !== "done" || status.tool !== "status") {
@@ -477,51 +471,10 @@ void test("C4: with no andaUrl the session reaches active with no bridge handsha
   assert.equal(retry.value.state, "active");
 });
 
-void test("C4: with andaUrl set, a bridge that goes down moves active to degraded and exec and write are refused", async (t) => {
-  const fixture = makeDirs();
-  const { options, bridge } = daemonParts(fixture, {
-    runtimeInput: {
-      image: IMAGE,
-      stateDir: fixture.stateDir,
-      workspaceRoot: fixture.ws,
-      andaUrl: "http://127.0.0.1:9/",
-    },
-    policyPath: writePolicy(fixture, "fail-closed-policy.json", { workspaceRoots: [fixture.ws], mode: "fail-closed" }),
-  });
-  const handle = buildDaemonHandle({ ...options, sessionId: sessionOf(fixture) });
-  t.after(async () => {
-    await handle.close();
-  });
-
-  assert.equal((await handle.controller.create(fixture.ws)).state, "active");
-  bridge.emit({ kind: "down", code: "ANDA_UNREACHABLE" });
-  assert.equal(handle.controller.snapshot().state, "degraded");
-  assert.equal(handle.controller.snapshot().reason, "ANDA_UNREACHABLE");
-
-  const write = await handle.dispatcher.call({ write: { path: "doc.txt", content: "changed" } });
-  if (write.outcome !== "refused") {
-    assert.fail(`expected a refused write, got ${JSON.stringify(write)}`);
-  }
-  assert.equal(write.code, "REALM_NOT_ACTIVE");
-  assert.equal(readFileSync(join(fixture.ws, "doc.txt"), "utf8"), "original", "the refused write changes nothing");
-  const exec = await handle.dispatcher.call({ exec: { argv: ["ls"] } });
-  if (exec.outcome !== "refused") {
-    assert.fail(`expected a refused exec, got ${JSON.stringify(exec)}`);
-  }
-  assert.equal(exec.code, "REALM_NOT_ACTIVE");
-});
-
 void test("B2: under advisory policy a write in error proceeds with the advisory warning", async (t) => {
   const fixture = makeDirs();
-  const { options, bridge } = daemonParts(fixture, {
-    runtimeInput: {
-      image: IMAGE,
-      stateDir: fixture.stateDir,
-      workspaceRoot: fixture.ws,
-      andaUrl: "http://127.0.0.1:9/",
-    },
-  });
-  bridge.failNext("connect", "ANDA_UNREACHABLE");
+  const { options, exec } = daemonParts(fixture);
+  exec.failNext("start", "AGENTOS_CRASH_LOOP");
   const handle = buildDaemonHandle({ ...options, sessionId: sessionOf(fixture) });
   t.after(async () => {
     await handle.close();
@@ -536,28 +489,6 @@ void test("B2: under advisory policy a write in error proceeds with the advisory
   }
   assert.equal(write.value.warning, "realm is error; the write proceeds under advisory policy");
   assert.equal(readFileSync(join(fixture.ws, "doc.txt"), "utf8"), "changed", "the advisory write in error lands");
-});
-
-void test("C4: with andaUrl set and the bridge unreachable, the start refuses with ANDA_UNREACHABLE", async (t) => {
-  const fixture = makeDirs();
-  const { options, bridge } = daemonParts(fixture, {
-    runtimeInput: {
-      image: IMAGE,
-      stateDir: fixture.stateDir,
-      workspaceRoot: fixture.ws,
-      andaUrl: "http://127.0.0.1:9/",
-    },
-  });
-  bridge.failNext("connect", "ANDA_UNREACHABLE");
-  const handle = buildDaemonHandle({ ...options, sessionId: sessionOf(fixture) });
-  t.after(async () => {
-    await handle.close();
-  });
-
-  const snapshot = await handle.controller.create(fixture.ws);
-  assert.equal(snapshot.state, "error");
-  assert.equal(snapshot.reason, "ANDA_UNREACHABLE");
-  assert.equal(bridge.callCount("connect"), 1, "a configured engine is handshaken at start");
 });
 
 void test("RT-06: startDaemon with no owner binds the socket and answers status over a real socket pair", async (t) => {

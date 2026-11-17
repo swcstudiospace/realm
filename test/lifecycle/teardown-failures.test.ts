@@ -3,13 +3,12 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Policy, SessionRecord } from "../../src/contract/validate.js";
-import { makeRealmError, RealmError } from "../../src/core/errors.js";
+import type { Policy } from "../../src/contract/validate.js";
+import { RealmError } from "../../src/core/errors.js";
 import { LifecycleController } from "../../src/lifecycle/controller.js";
 import { bindWorkspaceUnderPolicy } from "../../src/fs/root.js";
 import { SessionStore } from "../../src/session/store.js";
 import { FakeExecutionService } from "../support/fake-execution.js";
-import { FakeBridge } from "../support/fake-bridge.js";
 
 const SESSION = "session-teardown-failures";
 const CLOCK_TIME = "2026-10-21T09:30:00.000Z";
@@ -26,18 +25,6 @@ function policyFor(workspaceRoot: string, startupBudgetMs: number): Policy {
   };
 }
 
-// A store whose writes can be made to fail after the controller has started.
-class FlakyStore extends SessionStore {
-  failWrites = false;
-
-  override save(record: SessionRecord): void {
-    if (this.failWrites) {
-      throw makeRealmError("LOCK_CONFLICT");
-    }
-    super.save(record);
-  }
-}
-
 function fixture(t: TestContext, startupBudgetMs = 10000) {
   const base = realpathSync(mkdtempSync(join(tmpdir(), "realm-teardown-")));
   t.after(() => {
@@ -45,19 +32,17 @@ function fixture(t: TestContext, startupBudgetMs = 10000) {
   });
   const workspace = join(base, "workspace");
   mkdirSync(workspace);
-  const store = new FlakyStore(join(base, "state"));
+  const store = new SessionStore(join(base, "state"));
   const exec = new FakeExecutionService();
-  const bridge = new FakeBridge();
   const controller = new LifecycleController({
     sessionId: SESSION,
     policy: policyFor(workspace, startupBudgetMs),
     pinnedRoot: bindWorkspaceUnderPolicy([workspace], workspace),
     store,
     exec,
-    bridge,
     clock: () => new Date(CLOCK_TIME),
   });
-  return { workspace, store, exec, bridge, controller };
+  return { workspace, store, exec, controller };
 }
 
 // Polls until the predicate holds. The bound keeps a broken implementation from hanging the run.
@@ -72,25 +57,6 @@ async function waitUntil(predicate: () => boolean, label: string): Promise<void>
     });
   }
 }
-
-void test("a bridge event whose state write fails keeps the write's code, and the next transition carries it (QUAL-01)", async (t) => {
-  const { workspace, store, bridge, controller } = fixture(t);
-  const started = await controller.create(workspace);
-  assert.equal(started.state, "active");
-  const transitions: { readonly persistCode?: string }[] = [];
-  controller.events.subscribe((event) => {
-    transitions.push(event);
-  });
-
-  store.failWrites = true;
-  bridge.emit({ kind: "down" });
-  assert.equal(controller.snapshot().state, "degraded");
-
-  store.failWrites = false;
-  bridge.emit({ kind: "up" });
-  assert.equal(controller.snapshot().state, "active");
-  assert.deepEqual(transitions.map((event) => event.persistCode), [undefined, "LOCK_CONFLICT"]);
-});
 
 void test("a stop whose fallback destroy also fails throws the destroy error with the stop error as its cause (QUAL-01)", async (t) => {
   const { workspace, exec, controller } = fixture(t);

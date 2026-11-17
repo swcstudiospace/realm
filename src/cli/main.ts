@@ -33,7 +33,7 @@ import { defaultRunCommand, runChecks, type DoctorOptions } from "../doctor/chec
 import { applySafeFixes, FixRefusal, type FixAction } from "../doctor/fix.js";
 import { runtimeChecks } from "../doctor/runtime-checks.js";
 import type { createMcpServer } from "../mcp/server.js";
-import { loadRuntimeConfig, type RuntimeConfig } from "../runtime/config.js";
+import { loadRuntimeConfig, retiredKeyNotes, type RuntimeConfig } from "../runtime/config.js";
 import { readRuntimeConfigFile } from "../runtime/config-file.js";
 import { defaultPolicyPath, isDirectEntry, resolveConfigPath } from "../runtime/host-paths.js";
 import { HOST_RUNTIMES } from "../host/runtimes.js";
@@ -776,27 +776,39 @@ async function dispatchCli(argv: readonly string[], deps: CliDeps): Promise<CliR
   const { command } = parsed;
   let stateDir: string;
   let runtimeConfig: RuntimeConfig;
+  let configInput: unknown;
+  let configRead = false;
   try {
-    runtimeConfig = loadRuntimeConfig((deps.readConfig ?? readRuntimeConfigFile)(resolveConfigPath(deps.env)));
+    configInput = (deps.readConfig ?? readRuntimeConfigFile)(resolveConfigPath(deps.env));
+    configRead = true;
+    runtimeConfig = loadRuntimeConfig(configInput);
     stateDir = runtimeConfig.stateDir;
   } catch (error) {
     const { code } = refusalOf(error);
+    // A retired key is refused like any other bad key. When the file was read, one more line per retired key it carries
+    // says what to delete: the sentence is a literal, never the key or value read from the file (D-28-02).
+    const notes = configRead
+      ? retiredKeyNotes(configInput).map((sentence) => `realm ${command}: config.json: ${sentence}\n`).join("")
+      : "";
     if (command === "doctor") {
       if (parsed.words.length !== 0) {
         const failure = failureFor(new RealmError("SCHEMA_INVALID"));
-        return { ...failure, stderr: `${failure.stderr}realm doctor --fix: config must be present and valid; run realm init\n` };
+        return {
+          ...failure,
+          stderr: `${failure.stderr}realm doctor --fix: config must be present and valid; run realm init\n${notes}`,
+        };
       }
       const checks = await runtimeChecks({ env: deps.env });
       return {
         exitCode: 0,
         stdout: `${JSON.stringify(checks)}\n`,
-        stderr: `realm doctor: config is absent; ran ${String(checks.length)} local check (${code})\n`,
+        stderr: `realm doctor: config is absent; ran ${String(checks.length)} local check (${code})\n${notes}`,
       };
     }
     return {
       exitCode: 2,
       stdout: "",
-      stderr: `realm ${command}: cannot resolve a state directory (the realm config file under an absolute XDG_CONFIG_HOME or HOME must be present and valid) (${code})\n`,
+      stderr: `realm ${command}: cannot resolve a state directory (the realm config file under an absolute XDG_CONFIG_HOME or HOME must be present and valid) (${code})\n${notes}`,
     };
   }
   const resolved: ResolvedDeps = {

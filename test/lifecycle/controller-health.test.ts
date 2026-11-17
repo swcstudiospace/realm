@@ -16,7 +16,6 @@ import { LifecycleController } from "../../src/lifecycle/controller.js";
 import { AgentOsSupervisor } from "../../src/runtime/agentos.js";
 import { SessionStore } from "../../src/session/store.js";
 import { FakeAgentOsDriver } from "../support/fake-agentos.js";
-import { FakeBridge } from "../support/fake-bridge.js";
 import { FakeExecutionService } from "../support/fake-execution.js";
 
 const SESSION = "session-health";
@@ -96,17 +95,15 @@ function fixture(t: TestContext) {
   const pinnedRoot = bindWorkspaceUnderPolicy([workspace], workspace);
   const store = new SessionStore(join(base, "state"));
   const exec = new HoldableProbeExecution();
-  const bridge = new FakeBridge();
   const controller = new LifecycleController({
     sessionId: SESSION,
     policy: policyFor([workspace]),
     store,
     exec,
-    bridge,
     clock: () => new Date(CLOCK_TIME),
     pinnedRoot,
   });
-  return { workspace, store, exec, bridge, controller };
+  return { workspace, store, exec, controller };
 }
 
 async function settle(): Promise<void> {
@@ -247,51 +244,6 @@ void test("RT-04: a probe in unbound or error makes no port call", async (t) => 
   assert.equal((await controller.probe()).state, "error");
 
   assert.equal(exec.probeCalls, callsInError, "an errored session is not probed again");
-});
-
-void test("RT-04: a healthy probe keeps a degraded session degraded", async (t) => {
-  const { controller, exec, bridge, workspace } = fixture(t);
-  await controller.create(workspace);
-  bridge.emit({ kind: "down", code: "ANDA_UNREACHABLE" });
-  assert.equal(controller.snapshot().state, "degraded");
-
-  const snapshot = await controller.probe();
-
-  assert.equal(snapshot.state, "degraded");
-  assert.equal(snapshot.reason, "ANDA_UNREACHABLE");
-  assert.equal(exec.probeCalls, 1, "a degraded session is probed");
-});
-
-void test("RT-04: an unhealthy probe moves a degraded session to error and records it", async (t) => {
-  const { controller, exec, bridge, store, workspace } = fixture(t);
-  await controller.create(workspace);
-  bridge.emit({ kind: "down", code: "ANDA_UNREACHABLE" });
-  const container = exec.resources()[0];
-  assert.ok(container);
-  exec.setHealth(container.containerId, "unhealthy");
-
-  const snapshot = await controller.probe();
-
-  assert.equal(snapshot.state, "error");
-  assert.equal(snapshot.reason, "probe failed");
-  assert.equal(store.load(SESSION)?.state, "error");
-});
-
-void test("RT-04, N1: a probe that throws AGENTOS_CRASH_LOOP moves a degraded session to error with that code, and the label reads disconnected", async (t) => {
-  const { controller, exec, bridge, store, workspace } = fixture(t);
-  await controller.create(workspace);
-  bridge.emit({ kind: "down", code: "ANDA_UNREACHABLE" });
-  assert.equal(controller.snapshot().state, "degraded");
-  exec.failNext("probe", "AGENTOS_CRASH_LOOP");
-
-  const snapshot = await controller.probe();
-
-  assert.equal(snapshot.state, "error");
-  assert.equal(snapshot.reason, "AGENTOS_CRASH_LOOP");
-  assert.equal(store.load(SESSION)?.state, "error");
-  const shown = displayStatus(controller.snapshot());
-  assert.equal(shown.label, STATUS_LABELS.disconnected);
-  assert.equal(shown.reason, "AGENTOS_CRASH_LOOP");
 });
 
 void test("RT-04: an unhealthy result that lands after a stop does not change the stopped session", async (t) => {

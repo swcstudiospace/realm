@@ -136,6 +136,23 @@ void test("a missing config returns 1 and reports SCHEMA_INVALID without startin
   assert.deepEqual(h.lines.map(entryOf), [failed("SCHEMA_INVALID")]);
 });
 
+void test("D-28-02: a config that carries the retired andaUrl key returns 1 with one failure line that holds only the catalogue code", async (t) => {
+  const dir = tempDir(t);
+  const env = writeConfig(dir, { ...validConfig(dir), andaUrl: "http://127.0.0.1:7777/" });
+  let starts = 0;
+  const h = harness(env, {
+    start: () => {
+      starts += 1;
+      return Promise.reject(makeRealmError("SCHEMA_INVALID"));
+    },
+  });
+
+  assert.equal(await runDaemon(h.deps), 1);
+  assert.equal(starts, 0);
+  assert.deepEqual(h.lines.map(entryOf), [failed("SCHEMA_INVALID")]);
+  assert.doesNotMatch(h.lines.join("\n"), /andaUrl|removed|127\.0\.0\.1/);
+});
+
 void test("a valid config starts once with the derived options and resolves 0 on teardown", async (t) => {
   const dir = tempDir(t);
   const raw = validConfig(dir);

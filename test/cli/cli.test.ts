@@ -951,6 +951,60 @@ void test("a runtime config the loader refuses names its catalogue code on the s
   assert.match(result.stderr, /^realm status: cannot resolve a state directory .*\(SCHEMA_INVALID\)\n$/);
 });
 
+const RETIRED_ANDA_URL_SENTENCE = "andaUrl was removed in the 0.4 release line, with the Anda bridge: delete it from config.json";
+const HOSTILE_ANDA_URL = "https://operator:hunter2@anda.example.com/";
+
+// A config that would load but for the retired key, whose value looks like a credential.
+function configWithAndaUrl(): unknown {
+  return {
+    image: `registry.example.com/realm/workload@sha256:${"0".repeat(64)}`,
+    stateDir: "/var/lib/realm/state",
+    workspaceRoot: "/srv/workspace",
+    andaUrl: HOSTILE_ANDA_URL,
+  };
+}
+
+void test("D-28-02: status refuses a config that carries the retired andaUrl key, with the migration sentence on the next line and no value", async () => {
+  const daemon = fakeDaemon({ probes: [true] });
+  const result = await runCli(["status"], { env: ENV, connect: daemon.connect, readConfig: configWithAndaUrl });
+  assert.equal(result.exitCode, 2);
+  assert.equal(result.stdout, "");
+  assert.match(result.stderr, /^realm status: cannot resolve a state directory .*\(SCHEMA_INVALID\)\n/);
+  assert.equal(result.stderr.split("\n").slice(1).join("\n"), `realm status: config.json: ${RETIRED_ANDA_URL_SENTENCE}\n`);
+  assert.doesNotMatch(result.stderr, /hunter2|operator|anda\.example\.com/);
+  assert.equal(daemon.record.connects, 0);
+});
+
+void test("D-28-02: doctor with the retired andaUrl key stays diagnostic and prints the migration sentence after its config text", async () => {
+  const result = await runCli(["doctor"], { env: ENV, readConfig: configWithAndaUrl });
+  assert.equal(result.exitCode, 0);
+  const checks: unknown = JSON.parse(result.stdout);
+  assert.ok(Array.isArray(checks));
+  assert.ok(result.stderr.startsWith("realm doctor: config is absent; ran "), result.stderr);
+  assert.match(result.stderr, /\(SCHEMA_INVALID\)\nrealm doctor: config\.json: andaUrl was removed in the 0\.4 release line, with the Anda bridge: delete it from config\.json\n$/);
+  assert.doesNotMatch(`${result.stdout}${result.stderr}`, /hunter2|operator|anda\.example\.com/);
+});
+
+void test("D-28-02: doctor --fix with the retired andaUrl key keeps its refusal text and adds the migration sentence", async () => {
+  const result = await runCli(["doctor", "--fix"], { env: ENV, readConfig: configWithAndaUrl });
+  assert.equal(result.exitCode, 1);
+  assert.equal(result.stdout, "SCHEMA_INVALID\n");
+  assert.match(result.stderr, /realm doctor --fix: config must be present and valid; run realm init\n/);
+  assert.ok(result.stderr.endsWith(`realm doctor: config.json: ${RETIRED_ANDA_URL_SENTENCE}\n`), result.stderr);
+  assert.doesNotMatch(`${result.stdout}${result.stderr}`, /hunter2|operator|anda\.example\.com/);
+});
+
+void test("D-28-02: a config that cannot be read adds no migration line to the refusal", async () => {
+  const result = await runCli(["status"], {
+    env: ENV,
+    readConfig: () => {
+      throw new RealmError("SCHEMA_INVALID");
+    },
+  });
+  assert.equal(result.exitCode, 2);
+  assert.match(result.stderr, /^realm status: cannot resolve a state directory .*\(SCHEMA_INVALID\)\n$/);
+});
+
 void test("realm doctor with no config returns the init check and does not dial a daemon", async () => {
   const daemon = fakeDaemon({ probes: [true] });
   const result = await runCli(["doctor"], {

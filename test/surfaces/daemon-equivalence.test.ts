@@ -11,7 +11,6 @@ import { type StartedDaemon, startDaemon } from "../../src/daemon/daemon.js";
 import { createMcpServer, type McpDispatcher } from "../../src/mcp/server.js";
 import type { PodmanProbeResult } from "../../src/runtime/podman-probe.js";
 import type { ToolOutcome } from "../../src/tools/dispatch.js";
-import { FakeBridge } from "../support/fake-bridge.js";
 import { FakeExecutionService } from "../support/fake-execution.js";
 import { boundedWait, testTimeout } from "../support/timing.js";
 import { startRealmDaemon } from "../support/realm-daemon-fixture.js";
@@ -40,7 +39,6 @@ async function startRealDaemon(t: TestContext): Promise<{ readonly daemon: Start
     runtimeInput: { image: IMAGE, stateDir: join(base, "state"), workspaceRoot: workspace },
     policyPath,
     exec: new FakeExecutionService(),
-    bridge: new FakeBridge(),
     clock: () => new Date(TS),
     runOpenShell: () => Promise.resolve({ exitCode: 0, stdout: "", stderr: "", truncated: false }),
     // A libpod double whose realm listing is empty, so the startup reap removes nothing.

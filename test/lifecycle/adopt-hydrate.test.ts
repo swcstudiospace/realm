@@ -6,7 +6,7 @@ import { mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync } from "node:f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Policy } from "../../src/contract/validate.js";
-import { ERROR_CATALOGUE, makeRealmError, RealmError } from "../../src/core/errors.js";
+import { ERROR_CATALOGUE, RealmError } from "../../src/core/errors.js";
 import { LockTable } from "../../src/fs/locks.js";
 import { bindWorkspaceUnderPolicy } from "../../src/fs/root.js";
 import { hydrateAdopted } from "../../src/lifecycle/adoption.js";
@@ -14,7 +14,6 @@ import { LifecycleController } from "../../src/lifecycle/controller.js";
 import { realmSandboxName } from "../../src/runtime/openshell.js";
 import { controlSocketPath } from "../../src/session/paths.js";
 import { SessionStore } from "../../src/session/store.js";
-import { FakeBridge } from "../support/fake-bridge.js";
 import { FakeExecutionService } from "../support/fake-execution.js";
 import { currentBootId } from "../../src/session/proc-identity.js";
 import { groupHasMembers, runnerRecordOf, writeRunnerRecord, type RunnerRecord } from "../../src/session/runner-record.js";
@@ -46,7 +45,6 @@ interface Fixture {
   readonly workspace: string;
   readonly store: SessionStore;
   readonly exec: FakeExecutionService;
-  readonly bridge: FakeBridge;
   readonly controller: LifecycleController;
 }
 
@@ -60,19 +58,17 @@ function fixture(t: TestContext, options: FixtureOptions = {}): Fixture {
   const pinnedRoot = bindWorkspaceUnderPolicy([workspace], workspace);
   const store = new SessionStore(join(base, "state"));
   const exec = new FakeExecutionService();
-  const bridge = new FakeBridge();
   const controller = new LifecycleController({
     sessionId: SESSION,
     policy: policyFor([workspace], options.startupBudgetMs ?? 10000),
     store,
     exec,
-    bridge,
     clock: () => new Date(CLOCK_TIME),
     locks: new LockTable(),
     pinnedRoot,
     runnerStop: options.runnerStop ?? { graceMs: 200 },
   });
-  return { workspace, store, exec, bridge, controller };
+  return { workspace, store, exec, controller };
 }
 
 function assertRejectsWith(promise: Promise<unknown>, code: string): Promise<void> {
@@ -179,17 +175,6 @@ void test("a verified survivor hydrates to active with no create, and its contai
   ]);
 });
 
-void test("hydration connects the bridge once and subscribes it, so a later bridge event reaches the session", async (t) => {
-  const f = fixture(t);
-  const survivor = await adoptSurvivor(f);
-
-  await f.controller.hydrate(survivor);
-
-  assert.equal(f.bridge.callCount("connect"), 1);
-  f.bridge.emit({ kind: "down" });
-  assert.equal(f.controller.snapshot().state, "degraded");
-});
-
 void test("a record that names another container is refused before any port call", async (t) => {
   const f = fixture(t);
   const survivor = await adoptSurvivor(f);
@@ -199,7 +184,6 @@ void test("a record that names another container is refused before any port call
   await assertRejectsWith(f.controller.hydrate(survivor), "SCHEMA_INVALID");
 
   assert.equal(f.exec.calls().length, before);
-  assert.equal(f.bridge.calls().length, 0);
   assert.equal(f.controller.snapshot().state, "unbound");
 });
 
@@ -219,7 +203,6 @@ void test("a start that rejects moves the session to error with its code, and th
   );
   assert.equal(f.exec.resources().length, 0);
   assert.equal(f.store.load(SESSION)?.containerId, null);
-  assert.equal(f.bridge.callCount("connect"), 0);
 });
 
 void test("when the removal of a failed survivor is unproven, the record keeps its containerId", async (t) => {
@@ -252,13 +235,12 @@ void test("after an unproven removal, the next start retries the same container 
     f.exec.calls().slice(before).map((call) => call.operation),
     ["start"],
   );
-  assert.equal(f.bridge.callCount("connect"), 1);
 });
 
-void test("a bridge connect that outlasts the startup budget gives STARTUP_BUDGET_EXCEEDED, which is retryable", async (t) => {
+void test("a start that outlasts the startup budget gives STARTUP_BUDGET_EXCEEDED, which is retryable", async (t) => {
   const f = fixture(t, { startupBudgetMs: 50 });
   const survivor = await adoptSurvivor(f);
-  f.bridge.setDelay("connect", 500);
+  f.exec.setDelay("start", 500);
 
   const snapshot = await f.controller.hydrate(survivor);
 
@@ -308,34 +290,26 @@ void test("a stop that begins during hydration keeps the session out of active, 
   assert.notEqual(hydrated.state, "active");
   assert.equal(f.controller.snapshot().state, "unbound");
   assert.notEqual(f.store.load(SESSION)?.state, "active");
-  assert.equal(f.bridge.callCount("connect"), 0);
 });
 
-void test("a bridge connect that fails after a stop began during hydration is kept, and the next destroy reports it as the cause of its own failure (C1, G-04)", async (t) => {
+void test("a start that fails after a stop began during hydration is kept, and the next destroy reports it as the cause of its own failure (C1, G-04)", async (t) => {
   const f = fixture(t);
   const survivor = await adoptSurvivor(f);
-  // The connect is held behind a gate, so the stop begins while the bridge handshake is in flight. The connect then fails with
-  // a port code that no background step records.
-  let connectCalled: () => void = () => undefined;
-  const inConnect = new Promise<void>((resolve) => {
-    connectCalled = resolve;
+  // The start is delayed, so the stop begins while it is in flight. The start then fails with a port code that no
+  // background step records.
+  let startCalled: () => void = () => undefined;
+  const inStart = new Promise<void>((resolve) => {
+    startCalled = resolve;
   });
-  let openGate: () => void = () => undefined;
-  const gate = new Promise<void>((resolve) => {
-    openGate = () => {
-      resolve();
-    };
+  f.exec.beforeCall("start", () => {
+    startCalled();
   });
-  f.bridge.connect = async () => {
-    connectCalled();
-    await gate;
-    throw makeRealmError("PODMAN_MACHINE_DOWN");
-  };
+  f.exec.setDelay("start", 100);
+  f.exec.failNext("start", "PODMAN_MACHINE_DOWN");
 
   const hydrating = f.controller.hydrate(survivor);
-  await inConnect;
+  await inStart;
   const stopped = await f.controller.stop();
-  openGate();
   await hydrating;
   assert.equal(stopped.state, "unbound");
 

@@ -263,7 +263,6 @@ export class SessionHealth {
         ...(code === undefined ? {} : { code }),
         ...(event.recoveredCode === undefined ? {} : { recoveredCode: event.recoveredCode }),
         ...(upId === undefined ? {} : { upId }),
-        ...(event.persistCode === undefined ? {} : { persistCode: event.persistCode }),
         sessionId: this.#options.sessionId,
       });
       if (event.to === "active" || event.to === "degraded") {

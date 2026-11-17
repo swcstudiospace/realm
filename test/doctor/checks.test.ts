@@ -13,7 +13,6 @@ const REGISTERED_IDS: readonly CheckId[] = [
   "podman",
   "podman-service",
   "openshell",
-  "anda-bridge",
   "control-channel",
   "agentos",
   "host-binaries",
@@ -247,7 +246,7 @@ void test("session-store: an absent session directory fails when no ancestor is 
 void test("the checks are registered in report order, with runtime-roots appended when no runtime config is passed", async (t) => {
   const { policyPath, stateDir } = layout(t);
   // Every seam is injected: each command fails to start and each socket is refused, so the run spawns no
-  // process and opens no socket. The andaUrl is absent, so no engine is contacted either.
+  // process and opens no socket.
   const results = await runChecks({
     policyPath,
     stateDir,

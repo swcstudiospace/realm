@@ -51,7 +51,7 @@ void test("TOOL-04: a queued call proceeds at once when active is reached during
   const h = makeHarness(t, { state: "connecting", policy: { ...ADVISORY, toolQueueMs: 5000 } });
   const pending = h.dispatcher.call({ exec: { argv: [...WORKLOAD] } });
   await nextTurn();
-  h.machine.transition("active", "bridge up");
+  h.machine.transition("active", "container running");
   const outcome = await pending;
   assert.equal(outcome.outcome, "done");
   assert.equal(h.runs.length, 1, "execution ran after the transition");
