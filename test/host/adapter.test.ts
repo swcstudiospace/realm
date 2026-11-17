@@ -95,7 +95,7 @@ function binaryIn(dir: string, mode: number): void {
   chmodSync(file, mode);
 }
 
-void test("every table entry builds an adapter with no file system access, and install refuses as recipe-pending for the 18 hosts without a recipe", async (t) => {
+void test("every table entry builds an adapter with no file system access, and install refuses as recipe-pending for the 13 hosts without a recipe", async (t) => {
   const host = makeFixtureHost(t);
   const log = captureLog();
   const forbidden = (): never => {
@@ -115,8 +115,9 @@ void test("every table entry builds an adapter with no file system access, and i
     }
   }
   const before = treeHash(host.root);
-  const pending = adapters.filter((adapter) => adapter.id !== "omp");
-  assert.equal(pending.length, 18);
+  const pending = adapters.filter((adapter) => HOST_RUNTIMES[adapter.id].recipe === null);
+  assert.equal(pending.length, 13);
+  assert.ok(pending.every((adapter) => adapter.id !== "omp" && adapter.id !== "claude"), "omp and the Phase 24 hosts have recipes");
   for (const adapter of pending) {
     for (const dryRun of [false, true]) {
       // The recipe check comes before any read of host files, so a reader that throws is never reached.
