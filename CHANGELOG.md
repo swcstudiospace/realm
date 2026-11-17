@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.3.34] - 2026-11-17
+
+### Added
+- feat(host): host plugin contract, installer engine and realm host CLI (Phase 21) (#102) (bf70847)
+
 ## [0.3.33] - 2026-11-17
 
 ### Documentation
