@@ -27,6 +27,7 @@ covered_files:
   - "test/integration/production-driver.test.ts"
   - "AGENTS.md"
   - "CONTRIBUTING.md"
+covered_digest: "v3:sha256:a44946cd2400c80b5a6eab78690af27bdaa9413cb5c8ef801e27d9e9340ab33e"
 ---
 
 # Phase 29 Verification: MCP tool annotations
