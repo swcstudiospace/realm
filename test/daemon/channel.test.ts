@@ -120,8 +120,8 @@ void test("RT-06: requests and replies round-trip over a live socket with matchi
   }
 });
 
-void test("RT-06: the control methods are exactly status, up, down, doctor, tool, and metrics, and tool outlasts one dispatcher call (P6-D2, P6-D12)", () => {
-  assert.deepEqual([...CONTROL_METHODS].sort(), ["doctor", "down", "metrics", "status", "tool", "up"]);
+void test("RT-06: the control methods are exactly status, up, down, doctor, tool, metrics, and host-boot, and tool outlasts one dispatcher call (P6-D2, P6-D12)", () => {
+  assert.deepEqual([...CONTROL_METHODS].sort(), ["doctor", "down", "host-boot", "metrics", "status", "tool", "up"]);
   assert.ok(
     CONTROL_TIMEOUT_MS.tool > TOOL_CALL_TIMEOUT_MS,
     "a tool request must outlast one dispatcher call",
@@ -139,6 +139,7 @@ void test("RT-06: the up request outlasts the policy startup budget by a positiv
   assert.equal(CONTROL_TIMEOUT_MS.down, 45_000);
   assert.equal(CONTROL_TIMEOUT_MS.doctor, 60_000);
   assert.equal(CONTROL_TIMEOUT_MS.tool, TOOL_CALL_TIMEOUT_MS + 10_000);
+  assert.equal(CONTROL_TIMEOUT_MS["host-boot"], 5_000);
 });
 
 void test("RT-06: the schema maximum of startupBudgetMs equals its default and the channel's mirrored default, and the up request outlasts it plus the reply margin", () => {
@@ -534,6 +535,29 @@ void test("MULTI-03: a valid selection is returned as parsed for status, down, m
   assert.deepEqual(parseControlSelection("tool", { tool: { name: "x" }, selection: SELECTION }), {
     selection: SELECTION,
   });
+});
+
+void test("BOOT-06: host-boot carries exactly { report } and no selection", () => {
+  assert.deepEqual(parseControlSelection("host-boot", { report: { phase: "attached" } }), { selection: null });
+  assert.deepEqual(parseControlSelection("host-boot", { report: {} }), { selection: null });
+  assertRefusesSchemaInvalid(() => parseControlSelection("host-boot", { report: {}, selection: SELECTION }));
+  assertRefusesSchemaInvalid(() => parseControlSelection("host-boot", { selection: SELECTION }));
+  assertRefusesSchemaInvalid(() => parseControlSelection("host-boot", { report: {}, extra: 1 }));
+  assertRefusesSchemaInvalid(() => parseControlSelection("host-boot", {}));
+  assertRefusesSchemaInvalid(() => parseControlSelection("host-boot", { report: [] }));
+  assertRefusesSchemaInvalid(() => parseControlSelection("host-boot", { report: "attached" }));
+  assertRefusesSchemaInvalid(() => parseControlSelection("host-boot", { report: null }));
+  assertRefusesSchemaInvalid(() => parseControlSelection("host-boot", [{ report: {} }]));
+  assertRefusesSchemaInvalid(() => parseControlSelection("host-boot", undefined));
+});
+
+void test("BOOT-06: a host-boot request line round-trips decodeRequest", () => {
+  const request = { id: "boot-1", method: "host-boot", params: { report: { phase: "attached" } } };
+  const decoded = decodeRequest(encodeRequest(request));
+  assert.equal(decoded.id, "boot-1");
+  assert.equal(decoded.method, "host-boot");
+  assert.equal(isControlMethod(decoded.method), true);
+  assert.deepEqual(decoded.params, request.params);
 });
 
 void test("MULTI-03: a selection with a missing sessionId or a malformed sessionId is refused", () => {

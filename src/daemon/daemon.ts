@@ -3,7 +3,7 @@
 // libpod client, AndaBridge over the configured URL, the production OpenShell runner, Date clock); tests inject
 // the existing fakes at the same seam. startDaemon binds the control socket once per state directory,
 // runs the startup maintenance (runStartupMaintenance: the selective reap, the orphan temp-file sweep and the audit
-// reconciliation), opens the gate, then hydrates the adopted sessions while serving (CRASH-01, CRASH-02, CRASH-04), and dispatches the six
+// reconciliation), opens the gate, then hydrates the adopted sessions while serving (CRASH-01, CRASH-02, CRASH-04), and dispatches the
 // CONTROL_METHODS from the channel. Each admitted project (MULTI-02) has its own handle, held in a SessionEntry keyed by
 // session id (sessions.ts); every selected request acts on the entry its selection names and on no other. A session's
 // teardown bounds its wait by TEARDOWN_TIMEOUT_MS; socket I/O keeps SOCKET_TIMEOUT_MS. With no AgentOS driver or supervisor
@@ -17,6 +17,7 @@ import { newCorrelationId } from "../observe/ids.js";
 import { nullLogger, type Logger } from "../observe/logger.js";
 import { createMetrics } from "../observe/metrics.js";
 import { makeRealmError, type ErrorCode } from "../core/errors.js";
+import { packageVersion } from "../core/package-version.js";
 import { loadPolicyFile } from "../core/policy.js";
 import type { StateSnapshot } from "../core/state-machine.js";
 import { sleep, withTimeout } from "../core/timeout.js";
@@ -62,6 +63,7 @@ import {
   type ControlSelection,
   type SocketDirDeps,
 } from "./channel.js";
+import { createHostBootRecorder } from "./host-boot.js";
 import {
   defaultBridge,
   defaultConnectSocket,
@@ -306,6 +308,15 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
   // status. Unset until the startup maintenance has run, and unset when nothing was destroyed or adopted.
   let startupNotice: string | undefined;
   const metrics = createMetrics({ now: () => new Date(), monotonicMs: () => performance.now() });
+  // The one writer of the host-boot audit chain and the host.boot log lines (BOOT-06, BOOT-07).
+  const hostBoot = createHostBootRecorder({
+    logger,
+    metrics,
+    policy,
+    stateDir,
+    monotonicMs: () => performance.now(),
+    version: packageVersion(),
+  });
   const completed = new Set<Socket>();
 
   // The reply of status, up and down for a selection: the snapshot, the bound root and the session id the selection names.
@@ -698,6 +709,8 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
         metrics.setLogLinesFallback(options.logLinesFallback?.() ?? 0);
         return { id, result: metrics.snapshot() };
       }
+      case "host-boot":
+        return { id, result: hostBoot.record(params) };
       case "doctor": {
         try {
           const sessionId = selection === null ? null : (resolveTarget(selection).entry?.sessionId ?? null);
