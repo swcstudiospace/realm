@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.3.48] - 2026-11-17
+
+### Added
+- feat(host): eight JSON recipes for the wave 2 hosts (25-01) (#118) (2540115)
+
 ## [0.3.47] - 2026-11-17
 
 ### Documentation
