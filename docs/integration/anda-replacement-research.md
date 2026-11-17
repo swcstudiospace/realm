@@ -1,6 +1,6 @@
 # Anda replacement research (ANDA-01 to ANDA-04)
 
-Status: research note. It records evidence and a recommendation, and it decides nothing. A decision needs the owner and a new recorded decision ID (see `AGENTS.md`, "Settled runtime decisions").
+Status: adopted on 2026-11-17 as the rationale of D-27-01 (`docs/integration/runtime-decision.md`, section "Anda bridge removal (Phase 27, ANDAX-01, 2026-11-17)"). It was written as research that decides nothing; the owner decided on 2026-11-17 and section 10 records the answers to its five questions. The evidence sections are unchanged and keep their original read dates.
 Read date of every external source below: 2026-11-17 (ISO 8601), unless a row says otherwise.
 Scope: whether Realm should keep, replace or drop the Anda bridge (`src/anda/`), and whether a better mechanism than MCP exists for connecting agents and tools to the sandbox.
 Method: repository files were read in a worktree of `origin/main` (release 0.3.54). External sources were read with the read tool, or reached through a web search result. The source table marks which. Nothing in this note was run: no build, no test, no live handshake.
@@ -336,3 +336,17 @@ Phase numbers continue from v3.0, which ended at Phase 26 (`.planning/ROADMAP.md
 3. **Is a remote or multi-user Realm in scope for v4.0?** If no, MCP Streamable HTTP, OAuth and A2A stay out for good. If yes, section 5.2's resource-server-only design is the starting point and it is a larger milestone.
 4. **Should per-host scoped capabilities and verified audit attribution be explored** (phases 30 and 31), or is the 0600 socket plus fail-closed policy enough for the threat model? The same-uid limitation in section 5.7 means this is a least-privilege and attribution feature, not a defence against a malicious host process.
 5. **Which release signal for the removal?** A breaking removal of `andaUrl` and two error codes: a `feat!` or `refactor!` commit visible in the 0.4.0 notes, or a quiet removal because no known user exists? The release tooling shows breaking subjects, so the choice is yours.
+
+## 10. Owner decisions (2026-11-17)
+
+Source: the owner's decisions of 2026-11-17. The mapping of those decisions to the five questions of section 9 is the planner's reading (27-CONTEXT, OQ-27-04).
+
+| Question | Answer | Decision |
+| --- | --- | --- |
+| 1. Concrete Anda capability intended? | No capability named. Drop the bridge. | D-27-01 |
+| 2. What happens to `degraded`? | Removed in Phase 28, with the state machine, status label flag, schemas, host contract text and docs. Measured blast radius on 2026-11-17: 11 src files, 28 test files, 8 doc files outside this note. | D-27-01 |
+| 3. Remote or multi-user Realm in v4.0? | No. Local single-user only. | D-27-04 |
+| 4. Explore per-host scoped capabilities and verified attribution? | Yes, as a spike (Phase 30); build only if the spike records a build decision. | D-27-03 |
+| 5. Release signal for the removal? | A breaking-change commit subject visible in the 0.4.0 notes; release line 0.4.x. | D-27-05 |
+
+The phase skeleton of section 7.5 is superseded by the v4.0 roadmap (Phases 27 to 31). In that roadmap Phase 31 is production-stack boot rehearsals; the capability slice of the skeleton is considered only if the Phase 30 decision is build.

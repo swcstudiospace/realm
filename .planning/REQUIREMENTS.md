@@ -10,7 +10,7 @@ All v3.0 requirements are hypotheses until shipped and verified.
 
 **Parent evidence boundary:** the first joined wave passed typecheck/lint, 2380 tests (2351 passed, 0 failed, 29 skipped), 282 script tests, gate-closure (4 modules, 0 violations), build/pack/MCP (`firstWaveVerification`, parent artifact `artifact://8723`). MCP smoke there covered disconnected catalogue behaviour, not a live sandbox. The latest post-network union passed typecheck, then FAILED lint on two unnecessary optional chains in `test/integration/omp-spike.test.ts` at 955:43 and 960:55; all later chained tests/scripts/docs/gates/build/pack/MCP were NOT RUN (`lastJoinedAttempt`, lint artifact `artifact://8741`). The original owner is correcting those causes, not suppressing them. Neither result verifies future edits in this prerequisite wave; parent alone verifies the joined changes.
 
-**Milestone v2.0 closed 2026-10-29.** The full v2.0 table is archived at `.planning/milestones/v2.0-REQUIREMENTS.md`. The requirements it left open (FS-02, ANDA-01 to ANDA-04, OMP-05, PRD-DRV-01) and the accepted limitation UI-01 are listed under "Carried from v2.0" below. OMP-05 is closed in this milestone by HARN-04; the others are not in this milestone.
+**Milestone v2.0 closed 2026-10-29.** The full v2.0 table is archived at `.planning/milestones/v2.0-REQUIREMENTS.md`. The requirements it left open (FS-02, ANDA-01 to ANDA-04, OMP-05, PRD-DRV-01) and the accepted limitation UI-01 are listed under "Carried from v2.0" below. OMP-05 is closed in this milestone by HARN-04; the others are not in this milestone. Dispositions of 2026-11-17 (Phase 27): ANDA-01 to ANDA-04 dropped by owner decision D-27-01; OMP-05 complete; FS-02 and UI-01 accepted limitations; PRD-DRV-01 open pending the owner's confirmation. See `.planning/phases/27-anda-disposition-and-v4-0-requirement-closure/27-DISPOSITIONS.md`.
 
 ## v3.0 Requirements
 
@@ -188,16 +188,12 @@ All v3.0 requirements are hypotheses until shipped and verified.
 
 ## Carried from v2.0 (not in this milestone)
 
-- [ ] **FS-02**: Path resolution is race-resistant: components are opened relative to a pinned root descriptor with no-follow semantics, so a symlink swapped between check and open is rejected
-- [ ] **ANDA-01**: TypeScript client connects to Anda Engine components over the boundary confirmed by the Anda documentation, and the chosen boundary and its rationale are recorded in `docs/integration/anda-decision.md`
-- [ ] **ANDA-02**: Connection performs a version handshake; a version mismatch fails with `ANDA_VERSION_MISMATCH`
-- [ ] **ANDA-03**: Reconnection uses bounded exponential backoff with jitter; an unreachable bridge reports `ANDA_UNREACHABLE`, moves the state to degraded, and retries in the background
-- [ ] **ANDA-04**: A Rust shim is added only if the documentation spike shows no TypeScript-reachable surface; if added, it is minimal, lives in `src/anda/native/`, has its own build, and is covered by contract tests from the TypeScript side
-- [ ] **OMP-05**: When disconnected, the plugin reports it and applies the configured policy; it never silently falls back to unsandboxed file mutation
+- [ ] **FS-02**: Path resolution is race-resistant: components are opened relative to a pinned root descriptor with no-follow semantics, so a symlink swapped between check and open is rejected (Accepted limitation, Phase 27 disposition, 2026-11-17: the requirement text is unmet; owner-confirmed approximation of 2026-10-23)
+- [x] **OMP-05**: When disconnected, the plugin reports it and applies the configured policy; it never silently falls back to unsandboxed file mutation
   Status: Complete (2026-10-30). Basis (owner decision D2): a scripted OpenAI-compatible provider drove Omp 18.12.6's own `write` tool through the Realm plugin. Advisory with the realm down showed the unavailable notice and wrote the file; fail-closed with the realm down blocked the write with `REALM_NOT_ACTIVE` and that error was in the provider's next request; an active realm let the write land. Not an LLM-driven run. Paths that do not load the plugin are outside this closure.
   Note: closed in this milestone by HARN-04 (owner decision D2).
-- [ ] **PRD-DRV-01**: The realm compute driver serves ComputeDriver gRPC on a Unix socket in a 0700 directory with mode 0600, implementing GetCapabilities, ValidateSandboxCreate, CreateSandbox, GetSandbox, ListSandboxes, DeleteSandbox, WatchSandboxes, and EnsureWorkspace. AuthenticateSandbox is not advertised and returns UNIMPLEMENTED, because the gateway does not call it on the built-in path, and DeleteWorkspace refuses, because the driver never creates or removes the pinned workspace root. This amendment follows from the owner decisions of 2026-10-26 and 2026-10-27 and awaits the owner's confirmation (Phase 9.4)
-- [ ] **UI-01**: The Omp plugin starts on session launch and shows its realm state in the Omp UI status item without blocking the session (accepted limitation by owner decision, 2026-10-23: the status item appears at launch; a non-blocking check was not demonstrated, because get_state took about 6 s during the attach and the cause is not isolated; re-measured 2026-10-28: keystrokes echoed within 0.2 to 1.2 s through a 24 s cold attach on a loaded host, which bounds the stall but does not prove the loop is never blocked)
+- [ ] **PRD-DRV-01**: The realm compute driver serves ComputeDriver gRPC on a Unix socket in a 0700 directory with mode 0600, implementing GetCapabilities, ValidateSandboxCreate, CreateSandbox, GetSandbox, ListSandboxes, DeleteSandbox, WatchSandboxes, and EnsureWorkspace. AuthenticateSandbox is not advertised and returns UNIMPLEMENTED, because the gateway does not call it on the built-in path, and DeleteWorkspace refuses, because the driver never creates or removes the pinned workspace root. This amendment follows from the owner decisions of 2026-10-26 and 2026-10-27 and awaits the owner's confirmation (Phase 9.4) (Open, Phase 27 disposition, 2026-11-17: the owner has not confirmed the amendment; code and tests match it)
+- [ ] **UI-01**: The Omp plugin starts on session launch and shows its realm state in the Omp UI status item without blocking the session (accepted limitation by owner decision, 2026-10-23: the status item appears at launch; a non-blocking check was not demonstrated, because get_state took about 6 s during the attach and the cause is not isolated; re-measured 2026-10-28: keystrokes echoed within 0.2 to 1.2 s through a 24 s cold attach on a loaded host, which bounds the stall but does not prove the loop is never blocked) (Accepted limitation, Phase 27 disposition, 2026-11-17)
 
 ## Standing requirements (completed earlier, still binding)
 
@@ -236,9 +232,8 @@ These requirements were completed in v1.0 and v2.0 and bind every phase of v3.0.
 - Windows-native support — out of scope unless the session says otherwise
 - Container engines other than Podman — Podman is the only v1 engine
 - Model tuning or prompt changes — not a Realm concern
-- FS-02 closure — the owner's status call; the property tests of QR-07 add confidence only and do not change its status
-- ANDA-01 to ANDA-04 — blocked by the Anda engine licence
-- UI-01 — accepted limitation, the owner's status call
+- FS-02 closure — accepted limitation, the owner's status call (Phase 27); the property tests of QR-07 add confidence only and do not change its status
+- UI-01 — accepted limitation, the owner's status call (Phase 27)
 - TD-06 (a smoke mode for `check:mcp` on a runner without Podman 5.x) — not part of the eight approved proposals
 - TD-10 repository settings (secret scanning, push protection, branch protection or rulesets, `sha_pinning_required`) — the owner's, and they cannot be changed from the repository; only the release job split and the attestation are in this milestone (REL-01, REL-02)
 - Any change to the product spec (`docs/specs/realm-spec.xml`) — read-only
@@ -364,13 +359,13 @@ Each v3.0 requirement maps to exactly one phase. The carried requirements keep t
 | CAPT-01 | Phase 30 | Planned |
 | BOOTP-01 | Phase 31 | Planned |
 | BOOTP-02 | Phase 31 | Planned |
-| FS-02 | Phase 2 | Partial (accepted approximation, confirmed by the owner 2026-10-23; rebind verified through the pinned root; check-to-use windows remain on the read and write paths; audit G-10) |
-| ANDA-01 | Phase 3 | Partial (live-gated) |
-| ANDA-02 | Phase 3 | Partial (live-gated) |
-| ANDA-03 | Phase 3 | Partial (live-gated) |
-| ANDA-04 | Phase 3 | Partial (live-gated) |
+| FS-02 | Phase 2 | Accepted limitation (Phase 27 disposition, 2026-11-17): accepted approximation, confirmed by the owner 2026-10-23; rebind verified through the pinned root; check-to-use windows remain on the read and write paths; audit G-10 |
+| ANDA-01 | Phase 3 | Dropped (owner decision D-27-01, 2026-11-17): the Anda bridge is removed in Phase 28 |
+| ANDA-02 | Phase 3 | Dropped (owner decision D-27-01, 2026-11-17): the Anda bridge is removed in Phase 28 |
+| ANDA-03 | Phase 3 | Dropped (owner decision D-27-01, 2026-11-17): the Anda bridge is removed in Phase 28 |
+| ANDA-04 | Phase 3 | Dropped (owner decision D-27-01, 2026-11-17): the Anda bridge is removed in Phase 28 |
 | OMP-05 | Phase 5 | Complete (2026-10-30, HARN-04, owner decision D2): scripted provider drove Omp 18.12.6's own write through the Realm plugin; not LLM-driven |
-| PRD-DRV-01 | Phase 9.4 | Open: socket 0700/0600 verified live and in tests, AuthenticateSandbox UNIMPLEMENTED and not advertised, DeleteWorkspace refuses; the amendment follows from the owner decisions of 2026-10-26 and 2026-10-27 and awaits confirmation |
+| PRD-DRV-01 | Phase 9.4 | Open: owner confirmation of the amendment pending (code and tests verified 2026-11-17, 27-DISPOSITIONS.md Part B); socket 0700/0600 verified live and in tests, AuthenticateSandbox UNIMPLEMENTED and not advertised, DeleteWorkspace refuses; the amendment follows from the owner decisions of 2026-10-26 and 2026-10-27 |
 | UI-01 | Phase 9 | Accepted limitation (owner decision 2026-10-23): status item at launch; re-measured 2026-10-28: keystrokes echoed within 0.2 to 1.2 s through a 24 s cold attach on a loaded host, which bounds the stall but does not prove non-blocking; the status stays the owner's call |
 | QUAL-01 | Phase 1 | Complete (amended 2026-10-22); standing, binds every v3.0 phase |
 | QUAL-02 | Phase 2 | Complete; standing |

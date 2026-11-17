@@ -1,6 +1,18 @@
 # Anda decision note (ANDA-01, ANDA-04)
 
-Status: decided for Phase 3. Sourced facts live in `docs/integration/anda.md` and are not repeated as new claims here.
+**Status: superseded on 2026-11-17 by D-27-01 (owner decision).** The Anda bridge is removed in v4.0 (Phase 28), with no replacement and no shim. Sections 1 to 8 below record the Phase 3 decision. They are history and are not guidance; Phase 28 reduces this file to a tombstone. Until Phase 28 merges, the module `src/anda` still exists in the tree. The decision, its rationale and the list of superseded items are in `docs/integration/runtime-decision.md` (section "Anda bridge removal (Phase 27, ANDAX-01, 2026-11-17)") and `docs/integration/anda-replacement-research.md`.
+
+| Item | Disposition (2026-11-17) |
+| --- | --- |
+| ANDA-01 (the boundary and rationale in this note) | Dropped (D-27-01). |
+| ANDA-02 (the shape handshake, D-61, OQ-P3-09) | Dropped; OQ-P3-09 closed: superseded by removal. |
+| ANDA-03 (reconnection, `ANDA_UNREACHABLE`, the degraded state) | Dropped. |
+| ANDA-04 (no shim, D-66) | Dropped; moot. |
+| OQ-P3-10 (credentials) | Closed: superseded by removal. |
+| OQ-P3-11 (licence, section 5) | Closed: moot, not resolved; no legal determination is made. |
+| Section 7 (P5-D1) | First half kept (Anda may consume Realm over MCP stdio); second half superseded (Realm does not reach Anda over HTTP). |
+
+Historical status (Phase 3): decided for Phase 3. Sourced facts live in `docs/integration/anda.md` and are not repeated as new claims here.
 Owner phase: Phase 3 (container runtime and bridges). Module: `src/anda/` (`shape.ts` now; `client.ts` in plan 03-06).
 Read date of the sources: 2026-10-21 (ISO 8601), as recorded in `anda.md`.
 
