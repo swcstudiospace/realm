@@ -684,10 +684,11 @@ Plans:
 **Goal:** Every open Anda item is closed by a recorded owner decision: ANDA-01 to ANDA-04, the Phase 3 Anda items and OQ-P3-11 are dispositioned as removed, the v2.0 carry list is reconciled, and the replacement research is the published rationale.
 **Depends on:** Phase 26
 **Requirements**: ANDAX-01, ANDAX-02
-**Plans:** 0 plans
+**Plans:** 2 plans
 
 Plans:
-- [ ] TBD (run /gsd-plan-phase 27 to break down)
+- [ ] 27-01-PLAN.md: record the Anda disposition and decision (wave 1)
+- [ ] 27-02-PLAN.md: reconcile the v2.0 carry list (wave 2)
 
 ### Phase 28: Remove the Anda bridge
 
