@@ -100,7 +100,14 @@ function okVersion(): Promise<{ exitCode: number; stdout: string }> {
 // Fakes for the daemon client seam. Each status probe answers in order (true: a daemon answers;
 // false: the socket is absent); the last answer repeats. up and call settle with STATUS and
 // REFUSED_STATUS unless a test overrides them.
-const STATUS = { mode: "advisory" } as DaemonStatus;
+// A complete status (the shape the real client validates). The status a fake answers after the probe names the selection's own
+// root and session id, and reports what the last up reported, because the boot readback after up reads it.
+const STATUS: DaemonStatus = {
+  snapshot: { state: "active", reason: "realm active", lastTransitionAt: "2026-10-22T00:00:00.000Z" },
+  display: { label: "realm active", degraded: false, reason: "realm active", lastTransitionAt: "2026-10-22T00:00:00.000Z" },
+  mode: "advisory",
+  sessionId: "p0123456789ab",
+};
 // The up reply every successful realm returns: its lifecycle snapshot reports active.
 const ACTIVE_RESULT = { snapshot: { state: "active", reason: "" } };
 const REFUSED_STATUS: ToolOutcome = {
@@ -134,6 +141,7 @@ interface FakeDaemon {
 function fakeDaemon(options: FakeDaemonOptions): FakeDaemon {
   const record: FakeDaemonRecord = { connects: 0, closes: 0, upRoots: [] };
   let statusCalls = 0;
+  let lastUp: DaemonStatus | undefined;
   const connect: ConnectDaemon = (_socketPath, selection) => {
     record.connects += 1;
     return {
@@ -146,11 +154,12 @@ function fakeDaemon(options: FakeDaemonOptions): FakeDaemon {
         if (answer !== true) {
           return Promise.reject(new RealmError("REALM_NOT_ACTIVE"));
         }
-        return Promise.resolve(STATUS);
+        return Promise.resolve({ ...(lastUp ?? STATUS), boundRoot: selection.workspaceRoot, sessionId: selection.sessionId });
       },
       up: async () => {
         record.upRoots.push(selection.workspaceRoot);
-        return options.up === undefined ? STATUS : options.up();
+        lastUp = options.up === undefined ? STATUS : await options.up();
+        return lastUp;
       },
       call: async (tool: unknown) => (options.call === undefined ? REFUSED_STATUS : options.call(tool)),
       metrics: () => Promise.reject(new RealmError("REALM_NOT_ACTIVE")),

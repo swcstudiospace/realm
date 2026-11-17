@@ -53,7 +53,18 @@ const WORKSPACE = realpathSync(mkdtempSync(join(tmpdir(), "realm-mcp-attach-ws-"
 after(() => {
   rmSync(WORKSPACE, { recursive: true, force: true });
 });
-const STATUS = { mode: "advisory" } as DaemonStatus;
+const AT = "2026-10-22T00:00:00.000Z";
+// The complete status a daemon bound to the selection's root answers: the shape the real client validates, naming that root and
+// its session. The boot readback after up reads it.
+function statusFor(selection: ControlSelection): DaemonStatus {
+  return {
+    snapshot: { state: "active", reason: "realm active", lastTransitionAt: AT },
+    display: { label: "realm active", degraded: false, reason: "realm active", lastTransitionAt: AT },
+    mode: "advisory",
+    boundRoot: selection.workspaceRoot,
+    sessionId: selection.sessionId,
+  };
+}
 
 // Collects written text. Each write resolves any waiter whose marker has arrived, so tests await
 // events rather than wall-clock durations.
@@ -96,7 +107,7 @@ void test("realm mcp spawns the detached daemon when none answers, claims the wo
     status: () => {
       statusCalls += 1;
       // The first liveness probe finds no daemon; the probe after the spawn finds one.
-      return statusCalls === 1 ? Promise.reject(makeRealmError("REALM_NOT_ACTIVE")) : Promise.resolve(STATUS);
+      return statusCalls === 1 ? Promise.reject(makeRealmError("REALM_NOT_ACTIVE")) : Promise.resolve(statusFor(selection));
     },
     up: () => {
       upRoots.push(selection.workspaceRoot);
@@ -133,7 +144,7 @@ void test("realm mcp spawns the detached daemon when none answers, claims the wo
   assert.deepEqual(upRoots, [WORKSPACE], "up claims the named workspace");
   assert.equal(output.text(), "", "no MCP reply is written while up is pending");
 
-  upSettled.resolve(STATUS);
+  upSettled.resolve(statusFor(selectionOf(WORKSPACE)));
   await output.until('"id":1');
   input.end();
   const result = await pending;
@@ -151,12 +162,12 @@ void test("realm mcp waits for a daemon that holds its socket but has not answer
   for (const code of ["SCHEMA_INVALID", "TOOL_TIMEOUT"] as const) {
     const spawns: string[] = [];
     let statusCalls = 0;
-    const connect: ConnectDaemon = () => ({
+    const connect: ConnectDaemon = (_socketPath, selection) => ({
       status: () => {
         statusCalls += 1;
-        return statusCalls === 1 ? Promise.reject(makeRealmError(code)) : Promise.resolve(STATUS);
+        return statusCalls === 1 ? Promise.reject(makeRealmError(code)) : Promise.resolve(statusFor(selection));
       },
-      up: () => Promise.resolve(STATUS),
+      up: () => Promise.resolve(statusFor(selection)),
       call: () => Promise.resolve({ outcome: "refused", tool: null, code: "REALM_NOT_ACTIVE", retryable: false }),
       metrics: () => Promise.reject(makeRealmError("REALM_NOT_ACTIVE")),
       close: () => undefined,
@@ -223,10 +234,10 @@ void test("realm mcp --workspace attaches its client to the selection of that wo
   const connect: ConnectDaemon = (socketPath, selection) => {
     connected.push({ socketPath, selection });
     return {
-      status: () => Promise.resolve(STATUS),
+      status: () => Promise.resolve(statusFor(selection)),
       up: (...args: unknown[]) => {
         upArgs.push(args);
-        return Promise.resolve(STATUS);
+        return Promise.resolve(statusFor(selection));
       },
       call: () => Promise.resolve({ outcome: "refused", tool: null, code: "REALM_NOT_ACTIVE", retryable: false }),
       metrics: () => Promise.reject(makeRealmError("REALM_NOT_ACTIVE")),
@@ -259,10 +270,10 @@ void test("realm acp --workspace attaches its client to the selection of that wo
   const connect: ConnectDaemon = (socketPath, selection) => {
     connected.push({ socketPath, selection });
     return {
-      status: () => Promise.resolve(STATUS),
+      status: () => Promise.resolve(statusFor(selection)),
       up: (...args: unknown[]) => {
         upArgs.push(args);
-        return Promise.resolve(STATUS);
+        return Promise.resolve(statusFor(selection));
       },
       call: () => Promise.resolve({ outcome: "refused", tool: null, code: "REALM_NOT_ACTIVE", retryable: false }),
       metrics: () => Promise.reject(makeRealmError("REALM_NOT_ACTIVE")),
@@ -290,8 +301,8 @@ void test("realm acp --workspace attaches its client to the selection of that wo
 
 void test("realm acp --workspace refuses an up whose reply names another session: SCHEMA_INVALID on stderr, exit 1, no frames (MULTI-03)", async () => {
   // The real client throws SCHEMA_INVALID for an up reply that names another session; this fake throws the same code.
-  const connect: ConnectDaemon = () => ({
-    status: () => Promise.resolve(STATUS),
+  const connect: ConnectDaemon = (_socketPath, selection) => ({
+    status: () => Promise.resolve(statusFor(selection)),
     up: () => Promise.reject(makeRealmError("SCHEMA_INVALID")),
     call: () => Promise.resolve({ outcome: "refused", tool: null, code: "REALM_NOT_ACTIVE", retryable: false }),
     metrics: () => Promise.reject(makeRealmError("REALM_NOT_ACTIVE")),

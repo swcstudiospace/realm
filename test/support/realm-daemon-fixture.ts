@@ -12,6 +12,7 @@ import { connectDaemon, type DaemonClient, selectionOf } from "../../src/daemon/
 import type { ControlSelection } from "../../src/daemon/channel.js";
 import { startDaemon, type StartedDaemon } from "../../src/daemon/daemon.js";
 import type { PolicyMode } from "../../src/contract/validate.js";
+import type { Logger } from "../../src/observe/logger.js";
 import type { PodmanProbeResult } from "../../src/runtime/podman-probe.js";
 import { FakeBridge } from "./fake-bridge.js";
 import { FakeExecutionService } from "./fake-execution.js";
@@ -27,6 +28,8 @@ export interface RealmDaemonOptions {
   readonly stateDir: string;
   readonly workspace: string;
   readonly mode: PolicyMode;
+  // The daemon's structured logger, so a test can read the daemon log lines. Absent: the daemon's own default.
+  readonly logger?: Logger;
 }
 
 export interface RealmDaemonFixture {
@@ -71,6 +74,7 @@ export async function startRealmDaemon(options: RealmDaemonOptions): Promise<Rea
   const daemon = await startDaemon({
     runtimeInput: { image: IMAGE, stateDir: options.stateDir, workspaceRoot: options.workspace },
     policyPath,
+    ...(options.logger === undefined ? {} : { logger: options.logger }),
     exec: new FakeExecutionService(),
     bridge: new FakeBridge(),
     clock: () => new Date(CLOCK_ISO),

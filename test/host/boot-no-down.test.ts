@@ -4,7 +4,13 @@ import { test } from "node:test";
 
 // The boot path never sends the control method `down`: the sandbox outlives every host (AGENTS.md). Each source file below
 // is on the boot path and must not contain the string literal "down". Later plans append their own boot files here.
-const BOOT_PATH_FILES: readonly string[] = ["src/host/attach.ts", "src/host/boot-driver.ts"];
+const BOOT_PATH_FILES: readonly string[] = [
+  "src/host/attach.ts",
+  "src/host/boot-driver.ts",
+  "src/host/boot-observer.ts",
+  "src/cli/stdio-host.ts",
+  "src/omp/extension.ts",
+];
 
 void test("no boot-path source file names the control method down", () => {
   for (const file of BOOT_PATH_FILES) {

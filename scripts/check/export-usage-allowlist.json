@@ -178,6 +178,11 @@
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
+      "file": "src/daemon/host-boot.ts",
+      "name": "HostBootRecorder",
+      "reason": "D-1306 test-only seam: the recorder's return type, named by test/daemon/host-boot.test.ts; daemon.ts infers it from createHostBootRecorder"
+    },
+    {
       "file": "src/daemon/sessions.ts",
       "name": "HEALTH_PROBE_INTERVAL_MS",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
@@ -278,24 +283,29 @@
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
-      "file": "src/host/boot.ts",
-      "name": "withStartupBudget",
-      "reason": "D-1306 test-only seam: startup budget helper consumed by the conformance harness and the reference hook in test/support; the Omp plugin runs its budget on the host's managed timers, so production wiring of this helper is Phase 23"
+      "file": "src/host/boot-driver.ts",
+      "name": "STDIO_TOOLS",
+      "reason": "D-1306 test-only seam: the six Realm tool names the driver's guard passes, pinned by test/host/boot-driver.test.ts"
     },
     {
-      "file": "src/host/boot.ts",
-      "name": "attachFailureDisposition",
-      "reason": "D-1306 test-only seam: attach failure rule consumed by the conformance harness and the reference hook in test/support; production wiring is Phase 23"
+      "file": "src/host/boot-report.ts",
+      "name": "HOST_BOOT_PHASES",
+      "reason": "D-1306 test-only seam: the closed phase vocabulary, pinned by test/host/boot-report.test.ts, test/host/boot-observer.test.ts and test/daemon/host-boot-control.test.ts; production code consumes the derived HostBootPhase type"
+    },
+    {
+      "file": "src/host/boot-report.ts",
+      "name": "HOST_BOOT_TRANSPORTS",
+      "reason": "D-1306 test-only seam: the closed transport vocabulary, pinned by test/host/boot-report.test.ts and test/daemon/host-boot-control.test.ts; production code consumes the derived HostBootTransport type"
+    },
+    {
+      "file": "src/host/boot-report.ts",
+      "name": "BOOT_REPORT_HOSTS",
+      "reason": "D-1306 test-only seam: the closed host vocabulary (the 19 ids plus unlabelled), pinned by test/host/boot-report.test.ts and test/daemon/host-boot-control.test.ts; production code consumes the derived BootReportHost type"
     },
     {
       "file": "src/host/capabilities.ts",
       "name": "integrationCeiling",
-      "reason": "D-1306 test-only seam: capability ceiling per integration kind, proven by test/host/capabilities.test.ts; it stays until the daemon boot wiring of Phase 23 reads a Policy"
-    },
-    {
-      "file": "src/host/capabilities.ts",
-      "name": "resolveCapabilities",
-      "reason": "D-1306 test-only seam: grant = request AND policy, proven by test/host/capabilities.test.ts; it stays until the daemon boot wiring of Phase 23 reads a Policy"
+      "reason": "D-1306 test-only seam: capability ceiling per integration kind, input of the Phase 26 contract tests (test/host/capabilities.test.ts); isWithinCeiling is the production caller"
     },
     {
       "file": "src/host/install.ts",
@@ -358,26 +368,6 @@
       "reason": "D-1306 test-only seam: Phase 21 invariant seam: test/host/runtimes.test.ts holds every real host recipe-pending until the Phase 24 and 25 recipes land"
     },
     {
-      "file": "src/host/types.ts",
-      "name": "HostTimers",
-      "reason": "D-1306 test-only seam: boot-hook port type implemented by the Omp conformance double and the fakes in test/support; production wiring is Phase 23"
-    },
-    {
-      "file": "src/host/types.ts",
-      "name": "HostStatusSink",
-      "reason": "D-1306 test-only seam: boot-hook port type implemented by the Omp conformance double and the fakes in test/support; production wiring is Phase 23"
-    },
-    {
-      "file": "src/host/types.ts",
-      "name": "HostBootDeps",
-      "reason": "D-1306 test-only seam: boot-hook port type built by the conformance harness, the reference hook and the Omp conformance double in test/support; production wiring is Phase 23"
-    },
-    {
-      "file": "src/host/types.ts",
-      "name": "HostBootHook",
-      "reason": "D-1306 test-only seam: boot-hook port type implemented by the reference hook and the Omp conformance double in test/support and checked by the conformance harness; production wiring is Phase 23"
-    },
-    {
       "file": "src/lifecycle/mutation-gate.ts",
       "name": "runGatedMutation",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
@@ -405,11 +395,6 @@
     {
       "file": "src/observe/log-file.ts",
       "name": "DEFAULT_LOG_MAX_BYTES",
-      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
-    },
-    {
-      "file": "src/observe/log-file.ts",
-      "name": "createStderrSink",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
@@ -461,11 +446,6 @@
       "file": "src/omp/plugin.ts",
       "name": "RealmPluginOptions",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
-    },
-    {
-      "file": "src/omp/plugin.ts",
-      "name": "RealmPluginView",
-      "reason": "D-1306 test-only seam: the read-only view of what the plugin last painted, read by test/support/omp-boot-hook.ts for the conformance port's status(); production wiring of the view is Phase 23"
     },
     {
       "file": "src/omp/plugin.ts",
