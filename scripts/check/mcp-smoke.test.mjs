@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { LEGACY_VERSION, MODERN_VERSION, checkEras, compareStatus, describeMarker, readMarker } from "./mcp-smoke.mjs";
+import { EXPECTED_ANNOTATIONS, LEGACY_VERSION, MODERN_VERSION, checkEras, compareStatus, describeMarker, readMarker } from "./mcp-smoke.mjs";
 
 // The smoke gate decides whether the built server speaks both protocol eras in the shapes the revisions name. These
 // tests feed it the replies a conforming server gives, and then one broken reply at a time, so a gate that stops
@@ -18,7 +18,13 @@ const STATUS_OUTCOME = {
     display: { label: "realm active", degraded: false, reason: "ready", lastTransitionAt: "2026-10-29T00:00:00.000Z" },
   },
 };
-const TOOLS = ["exec", "read", "write", "list", "status", "retry"].map((name) => ({ name, description: name, inputSchema: { type: "object" } }));
+const TOOLS = Object.entries(EXPECTED_ANNOTATIONS).map(([name, annotations]) => ({
+  name,
+  title: annotations.title,
+  description: name,
+  inputSchema: { type: "object" },
+  annotations: { ...annotations },
+}));
 
 function toolResult(outcome, extra = {}) {
   return { content: [{ type: "text", text: JSON.stringify(outcome) }], structuredContent: outcome, isError: false, ...extra };
@@ -96,6 +102,102 @@ test("checkEras rejects an unsupported version that is not answered with -32022 
 
 test("checkEras reports a missing reply by id", () => {
   assert.throws(() => checkEras(conformingReplies().filter((reply) => reply.id !== 5), VERSION), /no reply for id 5/);
+});
+
+test("checkEras accepts the conforming session and both fixture lists carry annotations", () => {
+  const replies = conformingReplies();
+  checkEras(replies, VERSION);
+  for (const id of [2, 5]) {
+    const tools = replies.find((reply) => reply.id === id).result.tools;
+    assert.equal(tools.length, 6);
+    for (const tool of tools) {
+      assert.equal(typeof tool.annotations, "object");
+      assert.equal(tool.annotations.title, tool.title);
+    }
+  }
+});
+
+// Every seeded fault of the annotation check: per era (legacy reply 2, modern reply 5) and per tool, a flipped hint (4),
+// a deleted annotations object, an extra key and a changed title; plus each tool dropped from both lists.
+function annotationMutants() {
+  const mutants = [];
+  const eras = [["legacy", 2], ["modern", 5]];
+  for (const [era, id] of eras) {
+    for (const name of Object.keys(EXPECTED_ANNOTATIONS)) {
+      const edit = (label, change) => {
+        mutants.push({
+          label: `${era} ${name}: ${label}`,
+          name,
+          replies: withReply(id, (reply) => {
+            change(reply.result.tools.find((tool) => tool.name === name));
+            return reply;
+          }),
+        });
+      };
+      for (const hint of ["readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint"]) {
+        edit(`flip ${hint}`, (tool) => {
+          tool.annotations[hint] = !tool.annotations[hint];
+        });
+      }
+      edit("delete annotations", (tool) => {
+        delete tool.annotations;
+      });
+      edit("extra key", (tool) => {
+        tool.annotations.trustedByHost = true;
+      });
+      edit("change title", (tool) => {
+        tool.title = `${tool.title} (changed)`;
+      });
+    }
+  }
+  for (const name of Object.keys(EXPECTED_ANNOTATIONS)) {
+    mutants.push({
+      label: `both eras: drop ${name}`,
+      name,
+      replies: conformingReplies().map((reply) =>
+        reply.id === 2 || reply.id === 5
+          ? { ...reply, result: { ...reply.result, tools: reply.result.tools.filter((tool) => tool.name !== name) } }
+          : reply,
+      ),
+    });
+  }
+  return mutants;
+}
+
+test("checkEras rejects each seeded annotation fault in each era", () => {
+  const mutants = annotationMutants();
+  assert.equal(mutants.length, 90, "the generator must make exactly 90 mutants");
+  for (const mutant of mutants) {
+    let message;
+    try {
+      checkEras(mutant.replies, VERSION);
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    assert.notEqual(message, undefined, `${mutant.label}: checkEras must throw`);
+    assert.match(message, new RegExp(`(tool |include )${mutant.name}\\b`), `${mutant.label}: the message must name the tool, got ${String(message)}`);
+  }
+});
+
+test("checkEras rejects an era that differs from the other", () => {
+  const swapped = withReply(5, (reply) => {
+    const tools = reply.result.tools;
+    [tools[0], tools[1]] = [tools[1], tools[0]];
+    return reply;
+  });
+  assert.throws(() => checkEras(swapped, VERSION), /both eras must list identical tool objects/);
+});
+
+test("EXPECTED_ANNOTATIONS names exactly the six tools with the five keys each and no tool is both read-only and destructive", () => {
+  assert.deepEqual(Object.keys(EXPECTED_ANNOTATIONS), ["exec", "read", "write", "list", "status", "retry"]);
+  for (const [name, row] of Object.entries(EXPECTED_ANNOTATIONS)) {
+    assert.deepEqual(Object.keys(row).sort(), ["destructiveHint", "idempotentHint", "openWorldHint", "readOnlyHint", "title"], name);
+    for (const hint of ["readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint"]) {
+      assert.equal(typeof row[hint], "boolean", `${name} ${hint}`);
+    }
+    assert.equal(typeof row.title, "string", name);
+    assert.ok(!(row.readOnlyHint && row.destructiveHint), `${name} is both read-only and destructive`);
+  }
 });
 
 test("compareStatus passes when the MCP outcome carries the CLI's snapshot and display", () => {

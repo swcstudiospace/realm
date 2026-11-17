@@ -253,3 +253,16 @@ void test("MCPA-01: the tools marked read-only are exactly the ones the behaviou
   const readOnly = MCP_TOOL_DESCRIPTORS.filter((descriptor) => descriptor.annotations.readOnlyHint).map((descriptor) => descriptor.name);
   assert.deepEqual(readOnly, ["read", "list", "status"]);
 });
+
+// ---- The smoke gate's table ----------------------------------------------------------------------------------------------------
+
+interface SmokeModule {
+  EXPECTED_ANNOTATIONS: Record<string, unknown>;
+}
+
+void test("MCPA-02: the smoke gate's table equals the pins", async () => {
+  // Dynamic on purpose: a static import would make tsc emit the script into dist, where its repository-root constant is wrong. The
+  // path is resolved from this compiled file (dist/test/mcp) up to the repository root; importing the script does not run its main.
+  const smoke = (await import(new URL("../../../scripts/check/mcp-smoke.mjs", import.meta.url).href)) as SmokeModule;
+  assert.deepEqual(smoke.EXPECTED_ANNOTATIONS, ANNOTATION_PINS);
+});

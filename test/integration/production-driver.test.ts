@@ -835,6 +835,14 @@ async function runMcpSession(scenario: Scenario, session: McpSession): Promise<v
   for (const tool of tools) {
     assert.equal(typeof field(tool, "description"), "string", `a tool descriptor needs a description: ${describeValue(tool)}`);
     assert.equal(typeof field(tool, "inputSchema"), "object", `a tool descriptor needs an inputSchema: ${describeValue(tool)}`);
+    // The annotations are hints; the exact values are pinned by the unit and smoke layers, so the live artifact check only requires the shape.
+    const annotations = field(tool, "annotations");
+    assert.equal(typeof annotations, "object", `a tool descriptor needs annotations: ${describeValue(tool)}`);
+    for (const hint of ["readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint"]) {
+      assert.equal(typeof field(annotations, hint), "boolean", `annotations.${hint} must be a boolean: ${describeValue(tool)}`);
+    }
+    assert.equal(typeof field(tool, "title"), "string", `a tool descriptor needs a title: ${describeValue(tool)}`);
+    assert.equal(field(annotations, "title"), field(tool, "title"), `annotations.title must equal title: ${describeValue(tool)}`);
   }
 
   // 3. The attach must be active before the first call.

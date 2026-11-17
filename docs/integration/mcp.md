@@ -42,6 +42,7 @@ Sourced answer (specification index, "Security and Trust & Safety", read 2026-10
 
 - Hosts MUST obtain explicit user consent before invoking any tool.
 - Tool descriptions and annotations are untrusted unless obtained from a trusted server.
+- How Realm sets annotations, and why that grants no trust, is Q9.
 - Hosts MUST NOT transmit resource data elsewhere without user consent.
 
 ### Q4. Host-side transport support observed in Omp (informational)
@@ -108,6 +109,57 @@ Teardown and logging. Stdin EOF, `SIGTERM`, `SIGINT` and `SIGHUP` close the clie
 ### Q8. Registering Realm in a host
 
 `realm host install <host>` is the supported way to register `realm mcp --host <host>` in the user-level MCP configuration of `claude`, `opencode`, `codex`, `kimi` and `kimi-code` (Phase 24) and of `cursor`, `copilot`, `qwen`, `augment`, `pi`, `cline`, `antigravity`, `kilo`, `codebuddy` and `hermes` (Phase 25); `windsurf`, `trae` and `zcode` are owner-approved deferrals and refuse as `recipe-pending`. It edits only the host's own user-level file, with an ownership receipt, and `realm host uninstall <host>` removes exactly what it wrote. The manual route stays valid (`claude mcp add --scope user realm -- realm mcp --host claude`, `codex mcp add realm -- realm mcp --host codex`, `qwen mcp add realm -s user realm mcp --host qwen`, `copilot mcp add realm -- realm mcp --host copilot`, `pi mcp add realm -- realm mcp --host pi`, or the JSON entry for OpenCode, Kimi, Cursor, Kilo and Antigravity); an identical manual entry makes the installer a no-op, and a different `realm` entry is refused. Each host has a snippet with the file, the entry, the override variable, the host's validator command, the shadowing warning for project-level configuration and the evidence tier reached: [Claude Code](../hosts/snippets/claude-code.md), [OpenCode](../hosts/snippets/opencode.md), [Codex](../hosts/snippets/codex.md), [Kimi CLI and Kimi Code](../hosts/snippets/kimi.md), [Cursor](../hosts/snippets/cursor.md), [Copilot](../hosts/snippets/copilot.md), [Qwen Code](../hosts/snippets/qwen.md), [Augment](../hosts/snippets/augment.md), [Pi](../hosts/snippets/pi.md), [Cline](../hosts/snippets/cline.md), [Antigravity](../hosts/snippets/antigravity.md), [Kilo](../hosts/snippets/kilo.md), [CodeBuddy](../hosts/snippets/codebuddy.md), [Hermes Agent](../hosts/snippets/hermes-agent.md) and the [deferred hosts](../hosts/snippets/deferred-hosts.md). The per-host live rehearsal is gated and has no recorded result yet. The protocol claims in Q1 to Q6 do not change.
+
+### Q9. Tool annotations
+
+Since Phase 29 every tool `realm mcp` lists carries a `title` and an `annotations` object with the four hints, in both protocol eras. The hints are for a host that chooses to use them. Realm never reads them and they are never a security control.
+
+Read date: 2026-11-17.
+
+| Source | URL |
+| --- | --- |
+| Schema reference, revision 2026-07-28 | https://modelcontextprotocol.io/specification/2026-07-28/schema |
+| Schema reference, revision 2025-11-25 | https://modelcontextprotocol.io/specification/2025-11-25/schema |
+| Schema reference, revision 2025-06-18 | https://modelcontextprotocol.io/specification/2025-06-18/schema |
+| Tools page, revision 2026-07-28 | https://modelcontextprotocol.io/specification/2026-07-28/server/tools |
+| Tools page, revision 2025-11-25 | https://modelcontextprotocol.io/specification/2025-11-25/server/tools |
+| Tools page, revision 2025-06-18 | https://modelcontextprotocol.io/specification/2025-06-18/server/tools |
+| MCP blog, "Tool Annotations as Risk Vocabulary: What Hints Can and Can't Do", 2026-03-16 (the maintainers' blog, not normative) | https://blog.modelcontextprotocol.io/posts/2026-03-16-tool-annotations/ |
+
+Sourced answers.
+
+- Shape. A `Tool` has `name`, optional `title`, optional `description`, `inputSchema`, optional `annotations` and optional `_meta`. `ToolAnnotations` has five optional fields: `title`, `readOnlyHint`, `destructiveHint`, `idempotentHint` and `openWorldHint`. The `ToolAnnotations` interface and the four hint descriptions are word for word the same in 2026-07-28, 2025-11-25 and 2025-06-18, the three revisions Realm serves, so one object shape serves both eras. The only per-revision differences in `Tool` are fields Realm does not emit (`icons` and `execution` in 2025-11-25, `icons` in 2026-07-28). Annotations first appeared in 2025-03-26, a revision Realm does not serve.
+- Hint meanings and defaults. `readOnlyHint`: "If true, the tool does not modify its environment. Default: false". `destructiveHint`: "If true, the tool may perform destructive updates to its environment. If false, the tool performs only additive updates. (This property is meaningful only when readOnlyHint == false) Default: true". `idempotentHint`: "If true, calling the tool repeatedly with the same arguments will have no additional effect on its environment. (This property is meaningful only when readOnlyHint == false) Default: false". `openWorldHint`: "If true, this tool may interact with an 'open world' of external entities. If false, the tool's domain of interaction is closed. For example, the world of a web search tool is open, whereas that of a memory tool is not. Default: true". The defaults are pessimistic, so Realm states all four explicitly for every tool, including the read-only ones.
+- Display name. Revision 2026-07-28: "Display name precedence order is: title, annotations.title, then name." Realm sets `title` and `annotations.title` to the same fixed ASCII literal, so a client built on either field shows the same name.
+- Trust. Schema reference: "all properties in ToolAnnotations are hints. They are not guaranteed to provide a faithful description of tool behavior (including descriptive properties like title). Clients should never make tool use decisions based on ToolAnnotations received from untrusted servers." Tools page, all three revisions: "For trust & safety and security, clients MUST consider tool annotations to be untrusted unless they come from trusted servers." and "there SHOULD always be a human in the loop with the ability to deny tool invocations".
+- What clients typically do. The maintainers' blog describes typical client behaviour, not a requirement: a read-only tool from a trusted server may skip the confirmation dialog, a destructive tool may get a warning and an idempotent tool may be retried safely. Servers should set read-only on read-only tools, destructive false on additive operations and open-world false on closed-domain tools.
+
+Realm's behaviour. Each tool lists these values, in this order:
+
+<!-- mcp-tool-annotations:begin -->
+| Tool | Title | readOnlyHint | destructiveHint | idempotentHint | openWorldHint | Basis |
+| --- | --- | --- | --- | --- | --- | --- |
+| `exec` | Run command | false | true | false | true | Runs an arbitrary workload with the workspace mounted read-write: it can delete or overwrite any workspace file, so destructive. Two identical runs can have different effects (appending, counters): not idempotent. Egress is closed by default but policy can open it, and the descriptor cannot see the policy: open world (D-29-05). |
+| `read` | Read file | true | false | true | false | Returns file content, changes nothing in the workspace. Reads a closed domain (the bound workspace). |
+| `write` | Write file | false | true | true | false | Replaces the whole content of the target file (and creates it if absent); an existing file's old content is overwritten, so destructive. The same path and content again leaves the same file, so idempotent (with `ifMatchSha256` a repeat is refused rather than applied; still no additional effect). Closed domain: only the bound workspace, and the credential check and path lock refuse the rest. |
+| `list` | List directory | true | false | true | false | As `read`. |
+| `status` | Realm status | true | false | true | false | Returns the controller snapshot, no effect. Closed domain. |
+| `retry` | Retry session start | false | false | true | false | Not read-only: from `error` it starts the session's sandbox. Not destructive in the sense a user means: it acts only on Realm's own session container (including destroying one failed container it started) and never on workspace content (D-29-04). Idempotent: once the session is up a repeat returns the snapshot and does nothing; a failed attempt leaves state `error`. Closed domain: the local container runtime. |
+<!-- mcp-tool-annotations:end -->
+
+Both eras emit the same `title` and `annotations` objects: the legacy `tools/list` result has only `tools`, the modern one adds `resultType`, `ttlMs` and `cacheScope`, and nothing else differs. The table is static for the life of the process, so a description or an annotation cannot change after a host approved the server.
+
+Rules.
+
+- (a) Annotations are hints and never a security control. Realm never reads them. Enforcement is the schema validation, the shell gate, the policy mode, the mutation gate, the path locks and the sandbox, and a read-only-hinted tool still refuses a hostile argument (`test/mcp/server.test.ts`, "MCPA-01: a read-only hint relaxes nothing": a path outside the workspace is refused as `SCHEMA_INVALID` for `read` and `list`).
+- (b) What environment means. The hints describe the workspace files, the sandbox and the running session. Realm's own audit chain and metric rows are excluded, because every call, including `read`, `list` and `status`, appends to the audit log; without that exclusion no tool could be read-only.
+- (c) Why `exec` is open world. The default policy has no egress, so `exec` is offline in practice. The policy can open named host and port pairs, and the descriptor cannot see the policy, so the hint states what the policy may allow.
+- (d) Why `retry` is not destructive and `write` is both destructive and idempotent. `retry` can destroy one container, Realm's own disposable runtime object for the session, which it recreates in the same call, and it never touches workspace content, the thing a destructive prompt protects. `write` overwrites the whole content of the target, so it is destructive, and writing the same content to the same path again leaves the same file, so it is idempotent. The descriptor cannot tell creating a file from overwriting one, so a host that prompts on destructive tools will prompt on every `write`.
+- (e) The mistake direction. When a value depends on a case the descriptor cannot see, Realm states the broader one, which at worst causes an extra prompt and never skips a needed one.
+
+Host dependence. What a host does with the hints (auto-approve, prompt, use in a plan mode, or ignore them) is the host's choice and is host-dependent. It was not observed for Claude Code, Grok Build, Omp or any other host in this phase. Annotations never replace the host's duty of consent or Realm's containment. A hostile sibling server steering calls to `exec` or `write` is not addressed by annotations, because a host decides per server.
+
+Checks. `test/mcp/annotations.test.ts` (the pins against the frozen contract, the behaviour and 93 mutants), `test/mcp/server.test.ts` (both eras on the wire and the hostile-argument test), `scripts/check/mcp-smoke.test.mjs` (90 seeded faults of the gate), `test/docs/mcp-annotations-doc.test.ts` (this table equals the pins) and `npm run check:mcp`, which checks the title and annotations of the built server in both eras and, when no daemon can start, accepts only the fail-closed attach refusal; in that case the annotation checks are proven by the script tests alone. The research record's observation "no tool annotations" (`docs/integration/anda-replacement-research.md`) is closed by Phase 29.
 
 ## Blocked module
 
