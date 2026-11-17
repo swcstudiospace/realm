@@ -886,6 +886,11 @@
       "file": "src/tools/dispatch.ts",
       "name": "TOOL_CALL_TIMEOUT_MS",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/runtime/libpod-client.ts",
+      "name": "DEFAULT_REQUEST_TIMEOUT_MS",
+      "reason": "D-1306 test-only seam: the libpod client's default per-request bound, pinned by the libpod client tests; its only other importer was the removed Anda bridge"
     }
   ]
 }
