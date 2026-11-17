@@ -2,13 +2,15 @@
 // session: a legacy `initialize` handshake with tools/list and tools/call status, then the same calls as modern
 // requests (protocol version in _meta) and a request naming an unsupported version. The result shapes must match
 // the revision each era names (src/mcp/protocol.ts), and the status tool's snapshot and display must match what
-// `realm status` prints for the same runtime. Run `npm run build` first; check:mcp does not build.
+// `realm status` prints for the same runtime. Both eras must also list the six tools with the pinned title and annotations (an
+// independent literal table below, never read from dist or src). Run `npm run build` first; check:mcp does not build.
 
 import { spawn, spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isDeepStrictEqual } from "node:util";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CLI = join(ROOT, "dist", "src", "cli", "main.js");
@@ -72,7 +74,58 @@ function isTextToolResult(result) {
   return Array.isArray(result?.content) && result.content[0]?.type === "text" && typeof result.content[0].text === "string";
 }
 
-// Checks the protocol shapes of one session as main() sends it (ids 1 to 7). Throws on the first violation.
+// The annotations the built server must list for each tool (MCPA-01, MCPA-02). One row per tool, written by hand: the gate
+// compares the server against this table and never imports the server's own, so a stale or edited build fails here. The
+// values are hints for a host that chooses to use them, never a control; test/mcp/annotations.test.ts requires this table to
+// equal the pin module and docs/integration/mcp.md Q9 to carry the same rows.
+export const EXPECTED_ANNOTATIONS = {
+  exec: { title: "Run command", readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+  read: { title: "Read file", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  write: { title: "Write file", readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+  list: { title: "List directory", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  status: { title: "Realm status", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  retry: { title: "Retry session start", readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+};
+
+const HINT_KEYS = ["readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint"];
+const ANNOTATION_KEY_SET = ["title", ...HINT_KEYS].sort();
+
+function isPlainObject(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+// Checks one tools/list array against EXPECTED_ANNOTATIONS: exactly the six tools (no missing, extra or duplicate name), each
+// with a top-level title equal to the expected one and to annotations.title, and an annotations object with exactly the five
+// keys and the four explicit boolean hints. Throws through expect; every message starts with the label and names the tool.
+export function checkAnnotations(tools, label) {
+  expect(Array.isArray(tools), `${label}: tools must be an array`);
+  const names = tools.map((tool) => tool?.name);
+  const expectedNames = Object.keys(EXPECTED_ANNOTATIONS);
+  for (const name of expectedNames) {
+    expect(names.filter((candidate) => candidate === name).length === 1, `${label}: tool ${name} must be listed exactly once`);
+  }
+  for (const name of names) {
+    expect(expectedNames.includes(name), `${label}: tool ${String(name)} is not one of the six tools`);
+  }
+  for (const tool of tools) {
+    const name = tool.name;
+    const expected = EXPECTED_ANNOTATIONS[name];
+    const annotations = tool.annotations;
+    expect(isPlainObject(annotations), `${label}: tool ${name} annotations must be an object`);
+    expect(
+      JSON.stringify(Object.keys(annotations).sort()) === JSON.stringify(ANNOTATION_KEY_SET),
+      `${label}: tool ${name} annotations must have exactly the keys ${ANNOTATION_KEY_SET.join(", ")}, got ${Object.keys(annotations).sort().join(", ")}`,
+    );
+    for (const key of HINT_KEYS) {
+      expect(annotations[key] === expected[key], `${label}: tool ${name} ${key} must be ${String(expected[key])}, got ${String(annotations[key])}`);
+    }
+    expect(tool.title === expected.title, `${label}: tool ${name} title must be "${expected.title}", got ${String(tool.title)}`);
+    expect(annotations.title === tool.title, `${label}: tool ${name} annotations.title must equal title`);
+  }
+}
+
+// Checks the protocol shapes of one session as main() sends it (ids 1 to 7), including the title and annotations of the six
+// tools in both eras (checkAnnotations) and that the two eras list identical tool objects. Throws on the first violation.
 // expectedVersion is the package version: both agent surfaces must advertise it, not a placeholder.
 export function checkEras(replies, expectedVersion) {
   const result = (id) => {
@@ -99,6 +152,9 @@ export function checkEras(replies, expectedVersion) {
   const modernList = result(5);
   expect(modernList?.resultType === "complete" && typeof modernList.ttlMs === "number" && modernList.cacheScope === "public", "modern tools/list needs resultType, ttlMs and cacheScope");
   expect(Array.isArray(modernList.tools) && modernList.tools.length === legacyList.tools.length, "both eras list the same tools");
+  checkAnnotations(legacyList.tools, "legacy tools/list");
+  checkAnnotations(modernList.tools, "modern tools/list");
+  expect(isDeepStrictEqual(legacyList.tools, modernList.tools), "both eras must list identical tool objects");
   const modernCall = result(6);
   expect(modernCall?.resultType === "complete" && isTextToolResult(modernCall) && modernCall.structuredContent !== undefined, "modern tools/call needs resultType, a text content block and structuredContent");
   // An unsupported version is a protocol error that lists what the server serves.
@@ -281,7 +337,7 @@ async function main() {
         throw new Error(`${era}: ${parity.reason}`);
       }
     }
-    process.stdout.write(`mcp smoke: legacy and modern sessions ok (${packageVersion}); status parity with realm status\n`);
+    process.stdout.write(`mcp smoke: legacy and modern sessions ok (${packageVersion}); tool annotations pinned; status parity with realm status\n`);
   } finally {
     // A daemon started by realm mcp outlives the session; stop it with the same runtime before removing it.
     runCli(["down"], env, scratch);

@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -19,6 +19,7 @@ import {
 } from "../../src/mcp/protocol.js";
 import type { ToolOutcome } from "../../src/tools/dispatch.js";
 import { makeHarness, WORKLOAD } from "../support/fake-tools.js";
+import { annotationViolations } from "../support/mcp-annotation-pins.js";
 import { startRealmDaemon } from "../support/realm-daemon-fixture.js";
 import { sessionIdOfWorkspace } from "../../src/session/paths.js";
 import { boundedWait } from "../support/timing.js";
@@ -339,6 +340,92 @@ void test("TOOL-05: the tool descriptors the server lists are the ones the modul
   const h = makeHarness(t);
   const driven = await drive(h.dispatcher, [request(1, "tools/list", {})]);
   assert.deepEqual(resultRecord(driven.stdoutLines[0])["tools"], JSON.parse(JSON.stringify(MCP_TOOL_DESCRIPTORS)));
+});
+
+// ---- Tool annotations in both eras (MCPA-01, MCPA-02) ----------------------------------------------------------------------
+// The hints are for a host that chooses to use them; nothing in src reads them (D-29-01). These tests read the real wire.
+
+// The reply lines of a legacy session: the handshake, then tools/list with no _meta.
+async function legacyTools(t: TestContext, version: string): Promise<{ list: Record<string, unknown>; tools: unknown }> {
+  const h = makeHarness(t);
+  const driven = await drive(h.dispatcher, [
+    request(1, "initialize", { protocolVersion: version, capabilities: {}, clientInfo: CLIENT }),
+    request(2, "tools/list", {}),
+  ]);
+  assert.equal(resultRecord(driven.stdoutLines[0])["protocolVersion"], version);
+  const list = resultRecord(driven.stdoutLines[1]);
+  return { list, tools: list["tools"] };
+}
+
+async function modernTools(t: TestContext): Promise<{ list: Record<string, unknown>; tools: unknown }> {
+  const h = makeHarness(t);
+  const driven = await drive(h.dispatcher, [request(1, "tools/list", { _meta: MODERN_META })]);
+  const list = resultRecord(driven.stdoutLines[0]);
+  return { list, tools: list["tools"] };
+}
+
+void test("MCPA-01: a legacy tools/list carries the pinned title and annotations for every tool", async (t) => {
+  const { list, tools } = await legacyTools(t, "2025-06-18");
+  assert.deepEqual(annotationViolations(tools), []);
+  assert.deepEqual(Object.keys(list), ["tools"], "the legacy result is still just the tools");
+});
+
+void test("MCPA-01: a legacy 2025-11-25 session carries the same objects", async (t) => {
+  const { list, tools } = await legacyTools(t, "2025-11-25");
+  assert.deepEqual(annotationViolations(tools), []);
+  assert.deepEqual(Object.keys(list), ["tools"]);
+});
+
+void test("MCPA-01: a modern tools/list carries the pinned title and annotations for every tool", async (t) => {
+  const { list, tools } = await modernTools(t);
+  assert.deepEqual(annotationViolations(tools), []);
+  assert.equal(list["resultType"], "complete");
+  assert.equal(typeof list["ttlMs"], "number");
+  assert.equal(list["cacheScope"], "public");
+});
+
+void test("MCPA-01: both eras list identical tool objects", async (t) => {
+  const legacy = await legacyTools(t, "2025-11-25");
+  const older = await legacyTools(t, "2025-06-18");
+  const modern = await modernTools(t);
+  assert.deepEqual(legacy.tools, modern.tools);
+  assert.deepEqual(older.tools, modern.tools);
+});
+
+void test("MCPA-02: a mutated wire descriptor is reported", async (t) => {
+  const { tools } = await modernTools(t);
+  assert.ok(Array.isArray(tools), "the result lists tools");
+  const mutated = (tools as Record<string, unknown>[]).map((tool) => {
+    if (tool["name"] !== "write") {
+      return tool;
+    }
+    return { ...tool, annotations: { ...(tool["annotations"] as Record<string, unknown>), readOnlyHint: true } };
+  });
+  const violations = annotationViolations(mutated);
+  assert.ok(
+    violations.some((message) => message.startsWith("write:")),
+    `a wire-level flip of write is reported: ${violations.join(" | ")}`,
+  );
+});
+
+void test("MCPA-01: a read-only hint relaxes nothing", async (t) => {
+  const h = makeHarness(t);
+  const driven = await drive(h.dispatcher, [
+    toolRequest(1, "read", { path: "../outside", maxBytes: 10 }),
+    toolRequest(2, "list", { path: "../outside", depth: 1 }),
+    toolRequest(3, "exec", { shell: true, script: "id" }),
+  ]);
+  assert.equal(driven.stdoutLines.length, 3);
+  const expected = ["SCHEMA_INVALID", "SCHEMA_INVALID", "SHELL_NOT_ALLOWED"] as const;
+  expected.forEach((code, index) => {
+    const result = resultRecord(driven.stdoutLines[index]);
+    assert.equal(result["isError"], true, `call ${String(index + 1)} is a tool failure`);
+    const outcome = structuredOf(driven.stdoutLines[index]);
+    assert.equal(outcome["outcome"], "refused");
+    assert.equal(outcome["code"], code);
+    assert.equal(outcome["retryable"], ERROR_CATALOGUE[code].retryable);
+  });
+  assert.equal(h.runs.length, 0, "the runner was never invoked");
 });
 
 void test("TOOL-05: each of the six tools routes to ToolDispatcher.call with the ToolCall map unchanged", async (t) => {

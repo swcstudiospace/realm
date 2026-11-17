@@ -42,10 +42,22 @@ const TOOL_LIST_TTL_MS = 300_000;
 
 export type McpEra = { readonly kind: "modern" } | { readonly kind: "legacy"; readonly version: string };
 
+// The ToolAnnotations object of the three served revisions (2025-06-18, 2025-11-25, 2026-07-28 share one shape). The
+// specification makes every key optional; Realm's own type requires all five, so a missing value is a compile error.
+export interface McpToolAnnotations {
+  readonly title: string;
+  readonly readOnlyHint: boolean;
+  readonly destructiveHint: boolean;
+  readonly idempotentHint: boolean;
+  readonly openWorldHint: boolean;
+}
+
 export interface McpToolDescriptor {
   readonly name: string;
+  readonly title: string;
   readonly description: string;
   readonly inputSchema: Record<string, unknown>;
+  readonly annotations: McpToolAnnotations;
 }
 
 // The version a legacy `initialize` is answered with: the requested one when supported, else the latest.
