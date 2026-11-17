@@ -326,8 +326,8 @@ void test("OMPB-04: the installed shim awaits the extension it delegates to, wit
   await runShim(r.shimPath, state, { marker: "fake-pi" }, "default package root");
 });
 
-void test("OMPB-04: a package path with a quote, backslash, space, percent, hash or question mark still imports", async (t) => {
-  const names = ['quote"dir', "back\\slash", "space dir", "pct%41", "hash#dir", "query?dir", 'all "\\ %41 # ?'];
+void test("OMPB-04: a package path with a quote, space, percent, hash or question mark still imports", async (t) => {
+  const names = ['quote"dir', "space dir", "pct%41", "hash#dir", "query?dir", 'mixed "q" %41 # ?'];
   for (const name of names) {
     const state = installStub(t);
     const host = makeFixtureHost(t);
@@ -342,6 +342,24 @@ void test("OMPB-04: a package path with a quote, backslash, space, percent, hash
     assert.equal(text.includes("@realm:"), false, name);
     assert.equal(text, expectedShim(join(host.root, name, "dist", "src", "omp", "extension.js")), name);
     await runShim(shimPath, state, { name }, name);
+  }
+});
+
+void test("OMPB-05: a package path with a backslash cannot be imported through a file URL, so install refuses it and writes nothing", async (t) => {
+  // Node rejects a module URL that encodes a backslash (%5C), so a shim naming such a path could never load.
+  for (const name of ["back\\slash", 'all "\\ %41 # ?']) {
+    const host = makeFixtureHost(t);
+    const log = captureLog();
+    mkdirSync(join(host.home, ".omp", "agent"), { recursive: true });
+    const adapter = adapterFor(host, log, writePackage(join(host.root, name)));
+    const before = treeHash(host.root);
+    for (const dryRun of [false, true]) {
+      await assert.rejects(adapter.install(host.env, { dryRun }), refusedWith("unsupported-path", "POLICY_DENIED"), name);
+    }
+    assert.equal(treeHash(host.root), before, name);
+    assert.equal(existsSync(receiptPath(host.stateDir, "omp")), false, name);
+    assert.equal(existsSync(join(host.stateDir, "audit")), false, name);
+    assert.ok(eventsOf(log.lines).includes("host.install.refused"), name);
   }
 });
 
@@ -457,11 +475,15 @@ void test("OMPB-05: an edited installed shim is drift: status reports it and uni
 void test("OMPB-05: an unknown @realm: token in a bundle file is SCHEMA_INVALID, and so is the token under an mcp-config manifest", async (t) => {
   const r = rig(t);
   writeAt(join(r.adaptersDir, "omp", "index.js"), `${REAL_SHIM}// @realm:other@\n`);
-  const before = treeHash(r.host.root);
+  const unchanged = (): string => treeHash(r.host.root);
+  const first = unchanged();
   await assert.rejects(r.adapter.install(r.host.env, { dryRun: false }), (error: unknown) => code(error) === "SCHEMA_INVALID");
+  assert.equal(unchanged(), first, "a refused install writes nothing");
+  // The bundle itself is edited between the two attempts, so the baseline is taken again after the edit.
   writeAt(join(r.adaptersDir, "omp", "index.js"), "// @realm:Extension_URL@ is not a token, @realm:extension-url@ is\nexport default null;\n// @realm:path@\n");
+  const second = unchanged();
   await assert.rejects(r.adapter.install(r.host.env, { dryRun: true }), (error: unknown) => code(error) === "SCHEMA_INVALID");
-  assert.equal(treeHash(r.host.root), before);
+  assert.equal(unchanged(), second, "a refused dry run writes nothing");
   assert.equal(existsSync(receiptPath(r.host.stateDir, "omp")), false);
 
   // The mcp-config manifest has no entry for the token to name.

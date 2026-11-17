@@ -101,16 +101,25 @@ function defaultCorrelationId(): string {
 // The one install-time token a shipped bundle file may carry: the file URL of the built extension entry.
 const BUNDLE_TOKEN = "@realm:extension-url@";
 const ANY_BUNDLE_TOKEN = /@realm:[a-z-]+@/g;
+// Node refuses a module URL that encodes a path separator (ERR_INVALID_MODULE_SPECIFIER).
+const ENCODED_SEPARATOR = /%2f|%5c/i;
+
+interface ExpandedBundle {
+  readonly files: readonly BundleFile[];
+  readonly entryPath: string | null;
+}
 
 // Replaces BUNDLE_TOKEN in each bundle file with a JSON string literal of the entry's file URL (the package root is the parent of
 // the adapters directory, the entry comes from the validated manifest). Any other `@realm:` token, a token with a manifest that has
-// no entry, or a relative adapters directory is SCHEMA_INVALID. `entryPath` is the absolute entry path, or null when no file used
-// the token. Files without a token are returned unchanged.
+// no entry, or a relative adapters directory is SCHEMA_INVALID. A path whose file URL encodes a slash or backslash (a backslash in a
+// POSIX directory name) cannot be imported by Node, so it is refused as `unsupported-path` rather than written into a shim that
+// could never load. `entryPath` is the absolute entry path, or null when no file used the token. Files without a token are
+// returned unchanged.
 function expandBundleTokens(
   files: readonly BundleFile[],
   manifest: HostPluginManifest,
   adaptersDir: string,
-): { readonly files: readonly BundleFile[]; readonly entryPath: string | null } {
+): ExpandedBundle {
   const out: BundleFile[] = [];
   let entryPath: string | null = null;
   for (const file of files) {
@@ -123,7 +132,11 @@ function expandBundleTokens(
       throw makeRealmError("SCHEMA_INVALID");
     }
     entryPath ??= join(dirname(adaptersDir), manifest.entry);
-    const literal = JSON.stringify(pathToFileURL(entryPath).href);
+    const href = pathToFileURL(entryPath).href;
+    if (ENCODED_SEPARATOR.test(href)) {
+      throw new HostRefusal("unsupported-path");
+    }
+    const literal = JSON.stringify(href);
     out.push({ rel: file.rel, content: file.content.replaceAll(BUNDLE_TOKEN, () => literal) });
   }
   return { files: out, entryPath };
@@ -316,7 +329,15 @@ export function createHostAdapter(
     }
     const out: BundleFile[] = [];
     await readBundleDir(dir, "", 0, out);
-    const expanded = expandBundleTokens(out, checked, deps.adaptersDir);
+    let expanded: ExpandedBundle;
+    try {
+      expanded = expandBundleTokens(out, checked, deps.adaptersDir);
+    } catch (error: unknown) {
+      if (error instanceof HostRefusal) {
+        deps.logger.warn("host.install.refused", { host: entry.id, recipeKind: recipe.kind, dryRun, code: error.code, reason: error.refusal });
+      }
+      throw error;
+    }
     if (expanded.entryPath !== null) {
       const built = await bounded(reader.stat(expanded.entryPath));
       if (built === null || !built.isFile) {

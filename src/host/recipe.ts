@@ -21,7 +21,8 @@ export type HostRefusalReason =
   | "config-home-missing"
   | "concurrent-change"
   | "extension-unbuilt"
-  | "already-loaded";
+  | "already-loaded"
+  | "unsupported-path";
 
 const REFUSAL_CODE: Readonly<Record<HostRefusalReason, ErrorCode>> = Object.freeze({
   "recipe-pending": "POLICY_DENIED",
@@ -34,6 +35,7 @@ const REFUSAL_CODE: Readonly<Record<HostRefusalReason, ErrorCode>> = Object.free
   "concurrent-change": "WRITE_NOT_ATOMIC",
   "extension-unbuilt": "POLICY_DENIED",
   "already-loaded": "POLICY_DENIED",
+  "unsupported-path": "POLICY_DENIED",
 });
 
 // Fixed text per reason. It never carries file content, a key name or a host value.
@@ -48,9 +50,10 @@ const HOST_REFUSAL_TEXT: Readonly<Record<HostRefusalReason, string>> = Object.fr
   "concurrent-change": "a host file changed while the operation ran",
   "extension-unbuilt": "the Realm extension entry is not built; run npm run build in the Realm package",
   "already-loaded": "the host already loads Realm through a plugin link; remove that link first",
+  "unsupported-path": "the Realm package path holds a backslash that Node cannot import; move the package to a path without one and build it there",
 });
 
-// A catalogue error plus one of ten fixed reasons. `refusal` names the reason; `reason` stays the
+// A catalogue error plus one of eleven fixed reasons. `refusal` names the reason; `reason` stays the
 // catalogue text of the code, as on every RealmError. `fix` is a fixed hint, set for `symlink` only.
 export class HostRefusal extends RealmError {
   readonly refusal: HostRefusalReason;
