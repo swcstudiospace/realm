@@ -95,7 +95,7 @@ function binaryIn(dir: string, mode: number): void {
   chmodSync(file, mode);
 }
 
-void test("every table entry builds an adapter with no file system access, and install refuses as recipe-pending for the 13 hosts without a recipe", async (t) => {
+void test("every table entry builds an adapter with no file system access, and install refuses as recipe-pending for the 3 hosts without a recipe", async (t) => {
   const host = makeFixtureHost(t);
   const log = captureLog();
   const forbidden = (): never => {
@@ -116,8 +116,8 @@ void test("every table entry builds an adapter with no file system access, and i
   }
   const before = treeHash(host.root);
   const pending = adapters.filter((adapter) => HOST_RUNTIMES[adapter.id].recipe === null);
-  assert.equal(pending.length, 13);
-  assert.ok(pending.every((adapter) => adapter.id !== "omp" && adapter.id !== "claude"), "omp and the Phase 24 hosts have recipes");
+  assert.equal(pending.length, 3);
+  assert.deepEqual(pending.map((adapter) => adapter.id), ["windsurf", "trae", "zcode"], "the three hosts deferred by decision (25-CONTEXT D-25-02)");
   for (const adapter of pending) {
     for (const dryRun of [false, true]) {
       // The recipe check comes before any read of host files, so a reader that throws is never reached.
@@ -239,9 +239,19 @@ void test("detect follows a symlinked home once and reports it", async (t) => {
   assert.equal(dangling.detected, false);
 });
 
-void test("an entry with no home and no binary (antigravity) is never detected and never throws", async (t) => {
+void test("a host that is neither at its home nor on PATH (antigravity on an empty machine) is never detected and never throws", async (t) => {
   const host = makeFixtureHost(t);
   const adapter = createHostAdapter(HOST_RUNTIMES.antigravity, defaultManifestFor("antigravity", "1.2.3"), deps(host, captureLog()));
+  const found = await adapter.detect(host.env);
+  assert.equal(found.detected, false);
+  assert.deepEqual(found.homes, [{ path: join(host.home, ".gemini/config"), exists: false, symlink: false }]);
+  assert.equal(found.binary, null);
+});
+
+void test("an entry with no home and no binary is never detected and never throws", async (t) => {
+  const host = makeFixtureHost(t);
+  const entry: HostRuntimeEntry = { ...fixtureEntry(null), homes: [], binaries: [] };
+  const adapter = createHostAdapter(entry, defaultManifestFor("claude", "1.2.3"), deps(host, captureLog()));
   const found = await adapter.detect(host.env);
   assert.equal(found.detected, false);
   assert.deepEqual(found.homes, []);

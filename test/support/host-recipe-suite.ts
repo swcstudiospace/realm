@@ -1,6 +1,7 @@
-// The shared recipe suites of Phase 24 (plan 24-02): one lifecycle, drift, concurrency, mode, doctor, override and hostile-content
-// suite, run against the REAL table row of each wave-1 host (never a fixture entry), so a wrong home, file, override, binary or recipe
-// value fails a named test. `defineHostRecipeSuite` is for json-merge hosts, `defineHostTomlSuite` for the toml-table host (Codex).
+// The shared recipe suites of Phase 24 (plan 24-02) and Phase 25 (plan 25-02): one lifecycle, drift, concurrency, mode, doctor, override and hostile-content
+// suite, run against the REAL table row of each host (never a fixture entry), so a wrong home, file, override, binary or recipe
+// value fails a named test. `defineHostRecipeSuite` is for json-merge hosts, `defineHostTomlSuite` for the toml-table host (Codex) and
+// `defineHostYamlSuite` for the yaml-map host (Hermes), which also runs the shared YAML case table of host-yaml-cases.ts.
 // Every root is a real temporary directory removed when the test ends; nothing outside it is read or written, and no host runs.
 
 import { execFileSync } from "node:child_process";
@@ -20,6 +21,7 @@ import { HostRefusal, type HostRefusalReason } from "../../src/host/recipe.js";
 import { HOST_RUNTIMES } from "../../src/host/runtimes.js";
 import type { HostEnv, HostId } from "../../src/host/types.js";
 import { captureLog, makeFixtureHost, treeHash, type CapturedLog, type FixtureHost } from "./fixture-host.js";
+import { BLOCK, ENTRY_2, YAML_FOREIGN, YAML_UNPARSEABLE, YAML_VALID } from "./host-yaml-cases.js";
 
 export interface HostSuiteBase {
   readonly id: HostId;
@@ -32,8 +34,8 @@ export interface HostSuiteBase {
   readonly detectHomeRel: string;
   // The binary the table names for detection, or null when the host has none.
   readonly binary: string | null;
-  // The override variable and the install home it yields for a given (absolute) variable value.
-  readonly override: { readonly variable: string; readonly homeOf: (value: string) => string };
+  // The override variable and the install home it yields for a given (absolute) variable value; null when the host documents none.
+  readonly override: { readonly variable: string; readonly homeOf: (value: string) => string } | null;
 }
 
 export interface JsonFormat {
@@ -111,8 +113,10 @@ export function buildRig(t: TestContext, d: HostSuiteBase, options: RigOptions =
   const binDir = join(host.root, "bin");
   mkdirSync(binDir);
   const overrideDir = join(host.root, "override");
-  const homeDir = options.override === true ? d.override.homeOf(overrideDir) : join(host.home, d.installHomeRel);
-  if (options.override === true) {
+  const override = options.override === true ? d.override : null;
+  assert.ok(options.override !== true || override !== null, "a host without an override variable has no override rig");
+  const homeDir = override === null ? join(host.home, d.installHomeRel) : override.homeOf(overrideDir);
+  if (override !== null) {
     mkdirSync(overrideDir);
   }
   if (options.home !== false) {
@@ -125,7 +129,7 @@ export function buildRig(t: TestContext, d: HostSuiteBase, options: RigOptions =
   }
   const env: HostEnv = {
     home: host.home,
-    env: options.override === true ? { [d.override.variable]: overrideDir } : {},
+    env: override === null ? {} : { [override.variable]: overrideDir },
     pathDirs: options.path === true ? [binDir] : [],
   };
   let counter = 0;
@@ -188,7 +192,7 @@ export function nothingWritten(r: HostRig, d: HostSuiteBase, before: string): vo
   assert.equal(existsSync(join(r.host.stateDir, "audit")), false, "no audit directory");
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
@@ -406,6 +410,11 @@ function defineCommonCases(d: HostSuiteBase, flavor: Flavor): void {
       assert.equal(removed.outcome, "removed");
       assert.equal(removed.status, "detected");
       assert.equal(r.watched(), homeBefore, "the home is exactly as before");
+      if (d.file.includes("/")) {
+        // A file below subdirectories (Cline): the directories Realm created are removed, the host home itself never is.
+        assert.equal(existsSync(r.homeDir), true, "the host home is never removed");
+        assert.equal(existsSync(join(r.homeDir, d.file.slice(0, d.file.indexOf("/")))), seed !== null, "created directories are removed, a seeded one stays");
+      }
       assert.equal(existsSync(r.file), seed !== null);
       if (seed !== null) {
         assert.equal(readFileSync(r.file, "utf8"), seed);
@@ -552,48 +561,53 @@ function defineCommonCases(d: HostSuiteBase, flavor: Flavor): void {
     }
   });
 
-  void test(`${tag}: the ${d.override.variable} override redirects everything and leaves the default home alone; an empty or relative value is SCHEMA_INVALID`, async (t) => {
-    const r = buildRig(t, d, { override: true });
-    const defaultHome = join(r.host.home, d.installHomeRel);
-    const defaultBefore = treeHash(defaultHome);
-    const found = await r.adapter.detect(r.env);
-    assert.deepEqual(found.homes.filter((home) => home.path === r.homeDir), [{ path: r.homeDir, exists: true, symlink: false }]);
-    assert.equal((await r.adapter.install(r.env, { dryRun: false })).outcome, "installed");
-    assert.deepEqual(filesUnder(r.homeDir), [d.file]);
-    assert.equal(treeHash(defaultHome), defaultBefore, "the default home is untouched");
-    assert.equal((await r.adapter.status(r.env)).status, "installed");
-    assert.equal((await r.adapter.uninstall(r.env, { dryRun: false })).outcome, "removed");
-    assert.deepEqual(filesUnder(r.homeDir), []);
-    assert.equal(treeHash(defaultHome), defaultBefore);
+  // A host that documents no relocation variable (Cursor E-CU2, Antigravity E-AG1) has no override tests: there is no variable to set.
+  const override = d.override;
+  if (override !== null) {
+    void test(`${tag}: the ${override.variable} override redirects everything and leaves the default home alone; an empty or relative value is SCHEMA_INVALID`, async (t) => {
+      const r = buildRig(t, d, { override: true });
+      const defaultHome = join(r.host.home, d.installHomeRel);
+      const defaultBefore = treeHash(defaultHome);
+      const found = await r.adapter.detect(r.env);
+      assert.deepEqual(found.homes.filter((home) => home.path === r.homeDir), [{ path: r.homeDir, exists: true, symlink: false }]);
+      assert.equal((await r.adapter.install(r.env, { dryRun: false })).outcome, "installed");
+      assert.deepEqual(filesUnder(r.homeDir), [d.file]);
+      assert.equal(treeHash(defaultHome), defaultBefore, "the default home is untouched");
+      assert.equal((await r.adapter.status(r.env)).status, "installed");
+      assert.equal((await r.adapter.uninstall(r.env, { dryRun: false })).outcome, "removed");
+      assert.deepEqual(filesUnder(r.homeDir), []);
+      assert.equal(treeHash(defaultHome), defaultBefore);
 
-    const before = treeHash(r.host.root);
-    for (const bad of ["", "relative/dir"]) {
-      const badEnv: HostEnv = { ...r.env, env: { [d.override.variable]: bad } };
-      for (const dryRun of [true, false]) {
-        await assert.rejects(r.adapter.install(badEnv, { dryRun }), (error: unknown) => error instanceof SchemaInvalidError && error.code === "SCHEMA_INVALID", bad);
+      const before = treeHash(r.host.root);
+      for (const bad of ["", "relative/dir"]) {
+        const badEnv: HostEnv = { ...r.env, env: { [override.variable]: bad } };
+        for (const dryRun of [true, false]) {
+          await assert.rejects(r.adapter.install(badEnv, { dryRun }), (error: unknown) => error instanceof SchemaInvalidError && error.code === "SCHEMA_INVALID", bad);
+        }
       }
-    }
-    assert.equal(treeHash(r.host.root), before);
-  });
+      assert.equal(treeHash(r.host.root), before);
+    });
 
-  void test(`${tag}: a symlinked override directory is followed once and the receipt records the real path`, async (t) => {
-    const r = buildRig(t, d);
-    const real = join(r.host.root, "real-base");
-    const link = join(r.host.root, "link-base");
-    mkdirSync(d.override.homeOf(real), { recursive: true });
-    symlinkSync(real, link);
-    const env: HostEnv = { ...r.env, env: { [d.override.variable]: link } };
-    assert.equal((await r.adapter.install(env, { dryRun: false })).outcome, "installed");
-    assert.deepEqual(filesUnder(d.override.homeOf(real)), [d.file]);
-    assert.equal((await readReceipt(r.host.stateDir, d.id))?.receipt.configHome, realpathSync(d.override.homeOf(link)));
-    assert.equal((await r.adapter.uninstall(env, { dryRun: false })).outcome, "removed");
-    assert.deepEqual(filesUnder(d.override.homeOf(real)), []);
-  });
+    void test(`${tag}: a symlinked override directory is followed once and the receipt records the real path`, async (t) => {
+      const r = buildRig(t, d);
+      const real = join(r.host.root, "real-base");
+      const link = join(r.host.root, "link-base");
+      mkdirSync(override.homeOf(real), { recursive: true });
+      symlinkSync(real, link);
+      const env: HostEnv = { ...r.env, env: { [override.variable]: link } };
+      assert.equal((await r.adapter.install(env, { dryRun: false })).outcome, "installed");
+      assert.deepEqual(filesUnder(override.homeOf(real)), [d.file]);
+      assert.equal((await readReceipt(r.host.stateDir, d.id))?.receipt.configHome, realpathSync(override.homeOf(link)));
+      assert.equal((await r.adapter.uninstall(env, { dryRun: false })).outcome, "removed");
+      assert.deepEqual(filesUnder(override.homeOf(real)), []);
+    });
+  }
 
   void test(`${tag}: a symlinked recipe file is PATH_ESCAPE without a --config-home hint and its target is untouched`, async (t) => {
     const r = buildRig(t, d);
     const target = join(r.host.root, "elsewhere");
     writeFileSync(target, flavor.seed);
+    mkdirSync(dirname(r.file), { recursive: true });
     symlinkSync(target, r.file);
     const before = treeHash(r.host.root);
     for (const dryRun of [true, false]) {
@@ -608,12 +622,13 @@ function defineCommonCases(d: HostSuiteBase, flavor: Flavor): void {
 
   void test(`${tag}: a directory or a FIFO at the file name is foreign-content, never a hang, and nothing is written`, async (t) => {
     const asDir = buildRig(t, d);
-    mkdirSync(asDir.file);
+    mkdirSync(asDir.file, { recursive: true });
     const before = treeHash(asDir.host.root);
     await assert.rejects(asDir.adapter.install(asDir.env, { dryRun: false }), refusedWith("foreign-content", "POLICY_DENIED"));
     nothingWritten(asDir, d, before);
 
     const asFifo = buildRig(t, d);
+    mkdirSync(dirname(asFifo.file), { recursive: true });
     execFileSync("mkfifo", [asFifo.file]);
     await assert.rejects(asFifo.adapter.install(asFifo.env, { dryRun: false }), refusedWith("foreign-content", "POLICY_DENIED"));
     assert.equal(lstatSync(asFifo.file).isFIFO(), true);
@@ -781,4 +796,84 @@ export function defineHostTomlSuite(d: TomlSuiteDescriptor): void {
       }
     });
   }
+}
+
+// ---- the yaml-map host ----------------------------------------------------------------------------------------------------------------
+
+export interface YamlSuiteDescriptor extends HostSuiteBase {
+  // A realistic existing file that ends with a line ending and has no `mcp_servers` key and no `command: realm` line.
+  readonly seed: string;
+}
+
+function yamlFlavor(d: YamlSuiteDescriptor): Flavor {
+  const other = "  other:\n    command: other\n";
+  const unix = (text: string): string => text.replaceAll("\r\n", "\n");
+  return {
+    seed: d.seed,
+    seedResult: `${d.seed}${BLOCK}`,
+    created: BLOCK,
+    owns: (text) => unix(text).includes(ENTRY_2),
+    edit: (text) => text.replace("command: realm", "command: evil"),
+    // What the host's own remover does: the entry is gone, the header and everything else stay.
+    remove: (text) => {
+      assert.ok(text.includes(ENTRY_2), "the owned entry is present");
+      return text.replace(ENTRY_2, "");
+    },
+    removedState: "missing",
+    addOther: (text) => text.replace(ENTRY_2, `${ENTRY_2}${other}`),
+    keepsOther: (text) => text.includes(other),
+    append: (text) => `${text}# ${APPENDED}\n`,
+    hasAppended: (text) => text.includes(`# ${APPENDED}`),
+    mark: (text) => `${text}# ${MARKER}\n`,
+  };
+}
+
+export function defineHostYamlSuite(d: YamlSuiteDescriptor): void {
+  const tag = `${d.req} ${d.id}`;
+  defineCommonCases(d, yamlFlavor(d));
+  defineRefusals(d, [
+    ...YAML_UNPARSEABLE.map((c) => ({ name: c.name, seed: c.seed, ...UNPARSEABLE })),
+    { name: "invalid UTF-8", seed: Uint8Array.from([0x23, 0xff, 0x0a]), ...UNPARSEABLE },
+    ...YAML_FOREIGN.map((c) => ({ name: c.name, seed: c.seed, ...FOREIGN })),
+  ]);
+
+  for (const c of YAML_VALID) {
+    void test(`${tag}: ${c.name} installs to the expected bytes, and uninstall restores the original bytes`, async (t) => {
+      const r = buildRig(t, d, { seed: c.seed });
+      if (c.expected === c.seed) {
+        // An entry equal to the recipe's that Realm did not write: a no-op that is not claimed and that uninstall leaves.
+        const before = treeHash(r.host.root);
+        const same = await r.adapter.install(r.env, { dryRun: false });
+        assert.equal(same.outcome, "noop", c.name);
+        nothingWritten(r, d, before);
+        assert.equal((await r.adapter.status(r.env)).status, "detected");
+        assert.equal((await r.adapter.uninstall(r.env, { dryRun: false })).outcome, "noop");
+        assert.equal(readFileSync(r.file, "utf8"), c.seed);
+        return;
+      }
+      const installed = await r.adapter.install(r.env, { dryRun: false });
+      assert.equal(installed.outcome, "installed", c.name);
+      assert.equal(readFileSync(r.file, "utf8"), c.expected, c.name);
+      assert.equal((await r.adapter.status(r.env)).status, "installed");
+      assert.equal((await r.adapter.install(r.env, { dryRun: false })).outcome, "noop");
+      const removed = await r.adapter.uninstall(r.env, { dryRun: false });
+      assert.equal(removed.outcome, "removed", c.name);
+      assert.equal(readFileSync(r.file, "utf8"), c.seed, c.name);
+      assert.equal(existsSync(receiptPath(r.host.stateDir, d.id)), false);
+    });
+  }
+
+  void test(`${tag}: the host's own re-quoted and re-flowed rewrite of the entry keeps the status ok, and uninstall still removes it`, async (t) => {
+    const r = buildRig(t, d, { seed: d.seed });
+    await r.adapter.install(r.env, { dryRun: false });
+    writeFileSync(
+      r.file,
+      readFileSync(r.file, "utf8").replace(ENTRY_2, '  realm:\n    command: "realm"\n\n    args: ["mcp", "--host", "hermes"]\n'),
+    );
+    const status = await r.adapter.status(r.env);
+    assert.equal(status.status, "installed");
+    assert.deepEqual(status.entries, [{ path: d.file, state: "ok" }]);
+    assert.equal((await r.adapter.uninstall(r.env, { dryRun: false })).outcome, "removed");
+    assert.equal(readFileSync(r.file, "utf8"), d.seed);
+  });
 }

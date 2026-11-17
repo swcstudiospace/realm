@@ -1,4 +1,4 @@
-// Pure planning for the four install recipes (json-merge, text-block, toml-table, bundle-copy). Nothing in
+// Pure planning for the five install recipes (json-merge, text-block, toml-table, yaml-map, bundle-copy). Nothing in
 // this module touches the file system: the caller reads the current content of every file the
 // recipe names and passes it in as PlanState, so the same inputs always give the same plan and
 // the same hashes. The installer (install.ts) does every read and every write.
@@ -10,6 +10,7 @@ import { createHash } from "node:crypto";
 import { makeRealmError, RealmError, type ErrorCode } from "../core/errors.js";
 import type { ReceiptEntry } from "./receipt.js";
 import { ownedTomlTablePart, planTomlTableInstall, planTomlTableUninstall } from "./toml-owned.js";
+import { ownedYamlMapPart, planYamlMapInstall, planYamlMapUninstall } from "./yaml-owned.js";
 import type { InstallRecipe } from "./types.js";
 
 export type HostRefusalReason =
@@ -219,7 +220,7 @@ function canonical(value: unknown, depth: number): string {
 }
 
 // Keys sorted at every level, so two values are equal exactly when their canonical text is.
-function canonicalJson(value: unknown): string {
+export function canonicalJson(value: unknown): string {
   return canonical(value, 0);
 }
 
@@ -885,13 +886,15 @@ export function planRecipe(recipe: InstallRecipe, state: PlanState): RecipePlan 
       return install ? planTextInstall(recipe, state) : planTextUninstall(recipe, state);
     case "toml-table":
       return install ? planTomlTableInstall(recipe, state) : planTomlTableUninstall(recipe, state);
+    case "yaml-map":
+      return install ? planYamlMapInstall(recipe, state) : planYamlMapUninstall(recipe, state);
     case "bundle-copy":
       return install ? planBundleInstall(recipe, state) : planBundleUninstall(state);
   }
 }
 
 // The part of `content` a receipt entry owns, hashed. json-merge: the canonical value at the key path. text-block: the text
-// between the markers. toml-table: the table text. bundle-copy: the whole file. `parsed` is false when the content cannot be parsed (not a JSON object, or a
+// between the markers. toml-table: the table text. yaml-map: the canonical parsed entry. bundle-copy: the whole file. `parsed` is false when the content cannot be parsed (not a JSON object, or a
 // broken marker layout); `sha256` is null when it parsed but the owned part is absent. Used by status against the receipt.
 export function ownedPart(recipe: InstallRecipe, content: string): { readonly parsed: boolean; readonly sha256: string | null } {
   try {
@@ -900,6 +903,9 @@ export function ownedPart(recipe: InstallRecipe, content: string): { readonly pa
     }
     if (recipe.kind === "toml-table") {
       return ownedTomlTablePart(recipe, content);
+    }
+    if (recipe.kind === "yaml-map") {
+      return ownedYamlMapPart(recipe, content);
     }
     if (recipe.kind === "text-block") {
       const location = locateBlock(content);

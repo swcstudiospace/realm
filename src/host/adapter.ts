@@ -27,7 +27,7 @@ import {
 import { parseHostPluginManifest } from "./manifest.js";
 import { HostRefusal, MAX_BUNDLE_FILES, MAX_FILE_BYTES, isSafeRelPath, ownedPart, resumeDecision, sha256Text, type BundleFile } from "./recipe.js";
 import { DEFAULT_READ_TIMEOUT_MS, readReceipt, type ReceiptEntry } from "./receipt.js";
-import { resolveHomes, resolveHomeSpecs } from "./runtimes.js";
+import { checkedShadows, resolveHomes, resolveHomeSpecs } from "./runtimes.js";
 import type {
   HostAdapter,
   HostBootHookFactory,
@@ -83,7 +83,7 @@ export interface HostEntryStatus {
   readonly path: string;
   // "unreadable": the owned file cannot be read or parsed safely (a refused read, or content the recipe cannot parse), which a
   // reinstall cannot fix. "drifted": the file parses and its owned part differs or is absent.
-  // "missing": the file is absent, or (toml-table) the file is there and the owned table is not.
+  // "missing": the file is absent, or (toml-table, yaml-map) the file is there and the owned table or entry is not.
   readonly state: "ok" | "drifted" | "missing" | "unreadable";
 }
 
@@ -157,7 +157,7 @@ function expandBundleTokens(
 }
 
 // Whether the receipt entry still matches what is on disk. The owned part is compared for json-merge and
-// text-block and toml-table (an edit elsewhere in the file is not drift); a recipe of another kind falls back to the whole file.
+// text-block, toml-table and yaml-map (an edit elsewhere in the file is not drift); a recipe of another kind falls back to the whole file.
 function entryState(entry: ReceiptEntry, content: string | null, recipe: InstallRecipe | null): HostEntryStatus["state"] {
   if (content === null) {
     return "missing";
@@ -169,8 +169,8 @@ function entryState(entry: ReceiptEntry, content: string | null, recipe: Install
   if (!owned.parsed) {
     return "unreadable";
   }
-  if (owned.sha256 === null && recipe.kind === "toml-table") {
-    // The table is gone (Codex's own remover, or the user): the file is fine, what Realm owned is not there.
+  if (owned.sha256 === null && (recipe.kind === "toml-table" || recipe.kind === "yaml-map")) {
+    // The entry is gone (the host's own remover, or the user): the file is fine, what Realm owned is not there.
     return "missing";
   }
   return owned.sha256 === entry.ownedSha256 ? "ok" : "drifted";
@@ -185,6 +185,7 @@ export function createHostAdapter(
   if (checked.hostId !== entry.id) {
     throw new SchemaInvalidError("host plugin manifest does not match its host");
   }
+  const shadows = checkedShadows(entry.shadows ?? []);
   const readTimeoutMs = deps.readTimeoutMs ?? DEFAULT_READ_TIMEOUT_MS;
   const reader = deps.reader ?? defaultHostReader;
   const ctx: HostEngineContext = {
@@ -418,6 +419,23 @@ export function createHostAdapter(
     return options.configHome;
   }
 
+  // True when the install would CREATE `file` below `home` while a table `shadows` path exists (lstat, so a dangling symlink counts).
+  // An existing recipe file skips the guard: the host already reads it and ignores the older files.
+  async function shadowsRecipeFile(env: HostEnv, home: string, file: string): Promise<boolean> {
+    if (!isAbsolute(env.home)) {
+      throw makeRealmError("SCHEMA_INVALID");
+    }
+    if ((await bounded(reader.lstat(join(home, file)))) !== null) {
+      return false;
+    }
+    for (const shadow of shadows) {
+      if ((await bounded(reader.lstat(join(shadow.base === "home" ? env.home : home, shadow.rel)))) !== null) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   async function operate(op: HostOperation, env: HostEnv, options: HostOperationOptions): Promise<HostOperationDetail> {
     const override = requireAbsolute(options);
     const recipe = entry.recipe;
@@ -438,6 +456,10 @@ export function createHostAdapter(
         throw new HostRefusal("already-loaded");
       }
       home = await installHome(env, recipe.homeRole ?? "config", override);
+      if (recipe.kind !== "bundle-copy" && shadows.length > 0 && (await shadowsRecipeFile(env, home, recipe.file))) {
+        deps.logger.warn("host.install.refused", { host: entry.id, recipeKind: recipe.kind, dryRun: options.dryRun, code: "POLICY_DENIED", reason: "foreign-content" });
+        throw new HostRefusal("foreign-content");
+      }
       bundle = await readBundle(recipe, options.dryRun);
     }
     const outcome = await runHostOperation({ op, hostId: entry.id, recipe, home, bundle }, ctx, { dryRun: options.dryRun });

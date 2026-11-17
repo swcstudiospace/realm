@@ -14,7 +14,7 @@ import { defaultManifestFor } from "../../src/host/manifest.js";
 import { writePresence } from "../../src/host/presence.js";
 import { receiptPath } from "../../src/host/receipt.js";
 import { HOST_RUNTIMES } from "../../src/host/runtimes.js";
-import type { HostId, HostRuntimeEntry } from "../../src/host/types.js";
+import type { HostId, HostRuntimeEntry, InstallRecipe } from "../../src/host/types.js";
 import { captureLog, fixtureEntry, fixtureRecipe, makeFixtureHost, writeAt, type FixtureHost, type FixtureRecipeKind } from "../support/fixture-host.js";
 
 type Table = Readonly<Record<HostId, HostRuntimeEntry>>;
@@ -357,4 +357,64 @@ void test("ADPT-03: a symlinked owned file adds the unreadable count and the by-
   const edited = await check(host, table);
   assert.equal(edited.fix, "Repair with realm host install claude, or remove with realm host uninstall claude.");
   assert.ok(!edited.detail.includes("unreadable"));
+});
+
+// ---- the yaml-map receipt (WAVE2-01) ----------------------------------------------------------------------------------------------
+
+function yamlTable(): Table {
+  const recipe: InstallRecipe = { kind: "yaml-map", file: "config.yaml", path: ["mcp_servers", "realm"], value: { command: "realm", args: ["mcp", "--host", "claude"] } };
+  return { ...HOST_RUNTIMES, claude: { ...fixtureEntry(recipe), id: "claude" } };
+}
+
+void test("WAVE2-01: a yaml-map receipt that is installed and intact is a pass, and the owned part is checked by value, not by the whole file", async (t) => {
+  const host = makeFixtureHost(t);
+  const table = yamlTable();
+  writeAt(join(host.configHome, "config.yaml"), "# keep\nmodel: x\n");
+  await install(host, table, "claude");
+  assert.deepEqual(await check(host, table), { id: "host-plugins", status: "pass", detail: "installed: claude", fix: null });
+  const file = join(host.configHome, "config.yaml");
+  writeFileSync(file, `${readFileSync(file, "utf8")}# an edit elsewhere\n`);
+  assert.equal((await check(host, table)).status, "pass", "an edit elsewhere is not drift");
+  writeFileSync(file, readFileSync(file, "utf8").replace("    command: realm\n", '    command: "realm"\n').replace("model: x", "model: y"));
+  assert.equal((await check(host, table)).status, "pass", "a re-quoted entry is the same entry");
+});
+
+void test("WAVE2-01: a yaml-map receipt whose entry was edited or removed warns with the host id and the reinstall fix, and no content", async (t) => {
+  const host = makeFixtureHost(t);
+  const table = yamlTable();
+  await install(host, table, "claude");
+  const file = join(host.configHome, "config.yaml");
+  const installed = readFileSync(file, "utf8");
+  writeFileSync(file, installed.replace("command: realm", "command: evil"));
+  const edited = await check(host, table);
+  assert.equal(edited.status, "warn");
+  assert.match(edited.detail, /^host plugin drift: claude: installed receipt, 0 of 1 entries intact$/);
+  assert.equal(edited.fix, "Repair with realm host install claude, or remove with realm host uninstall claude.");
+  for (const leak of [host.configHome, host.home, "evil", "config.yaml"]) {
+    assert.ok(!edited.detail.includes(leak), `detail leaks ${leak}`);
+  }
+  writeFileSync(file, "mcp_servers:\n");
+  const removed = await check(host, table);
+  assert.equal(removed.status, "warn");
+  assert.match(removed.detail, /^host plugin drift: claude: /);
+});
+
+void test("WAVE2-01: a yaml-map file the scanner cannot read is counted as unreadable, and so is a symlinked one", async (t) => {
+  const host = makeFixtureHost(t);
+  const table = yamlTable();
+  await install(host, table, "claude");
+  const file = join(host.configHome, "config.yaml");
+  const installed = readFileSync(file, "utf8");
+  writeFileSync(file, `base: &anchor 1\n${installed}`);
+  const hostile = await check(host, table);
+  assert.equal(hostile.status, "warn");
+  assert.ok(hostile.detail.includes(", 1 unreadable"), hostile.detail);
+  assert.ok(!hostile.detail.includes("anchor"));
+  const elsewhere = join(host.root, "elsewhere.yaml");
+  writeFileSync(elsewhere, installed);
+  rmSync(file);
+  symlinkSync(elsewhere, file);
+  const linked = await check(host, table);
+  assert.equal(linked.status, "warn");
+  assert.ok(linked.detail.includes(", 1 unreadable"), linked.detail);
 });

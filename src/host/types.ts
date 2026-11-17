@@ -69,7 +69,23 @@ export type InstallRecipe =
       readonly text: string;
       readonly homeRole?: HostHomeSpec["role"];
     }
+  | {
+      readonly kind: "yaml-map";
+      readonly file: string;
+      // The one entry Realm owns, `path[0].path[1]` of a block-style YAML file: a parent key and a child key, owned by key and by parsed value.
+      readonly path: readonly [string, string];
+      // A flat mapping of plain-scalar strings and arrays of them (`command`, `args`).
+      readonly value: { readonly [key: string]: string | readonly string[] };
+      readonly homeRole?: HostHomeSpec["role"];
+    }
   | { readonly kind: "bundle-copy"; readonly source: string; readonly dest: string; readonly homeRole?: HostHomeSpec["role"] };
+
+// A path whose presence means a new recipe file would hide older host content: below the user's home ("home") or below the
+// resolved install home ("config").
+export interface HostShadow {
+  readonly rel: string;
+  readonly base: "home" | "config";
+}
 
 export interface HostRuntimeEntry {
   readonly id: HostId;
@@ -89,6 +105,9 @@ export interface HostRuntimeEntry {
   // Paths relative to the user home (POSIX separators, no `..`) whose presence means the host already loads
   // Realm another way, so an install would load it twice. Optional so fixture entries in tests still compile.
   readonly conflicts?: readonly string[];
+  // Files that an older host version still reads and that a NEW recipe file would hide (CodeBuddy: a new .mcp.json hides mcp.json).
+  // An install that would create the recipe file while one of these exists is refused. Optional so fixture entries still compile.
+  readonly shadows?: readonly HostShadow[];
 }
 
 // ---- Manifest ---------------------------------------------------------------

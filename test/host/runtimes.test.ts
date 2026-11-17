@@ -24,11 +24,11 @@ const EXPECTED_TIERS: Record<HostId, HostTier> = {
   zcode: "config-only", pi: "config-only",
 };
 const EXPECTED_HOMES: Record<HostId, readonly (readonly [string, "config" | "skills" | "mcp"])[]> = {
-  antigravity: [],
+  antigravity: [[".gemini/config", "config"]],
   omp: [[".omp/agent", "config"]],
   claude: [[".claude", "config"], [".", "mcp"]],
   opencode: [[".config/opencode", "config"]],
-  kilo: [[".config/kilo", "config"], [".kilo", "config"]],
+  kilo: [[".config/kilo", "config"], [".kilo", "skills"]],
   codex: [[".codex", "config"]],
   copilot: [[".copilot", "config"]],
   cursor: [[".cursor", "config"]],
@@ -45,20 +45,42 @@ const EXPECTED_HOMES: Record<HostId, readonly (readonly [string, "config" | "ski
   pi: [[".pi/agent", "config"]],
 };
 
-// Phase 24: the hosts with a recipe, and the per-host override variable, base variable and binaries.
-const WITH_RECIPE: readonly HostId[] = ["omp", "claude", "opencode", "codex", "kimi", "kimi-code"];
+// Phase 24 and 25: the hosts with a recipe (16 of the 19), and the per-host override variable, base variable and binaries.
+const WITH_RECIPE: readonly HostId[] = [
+  "omp", "claude", "opencode", "codex", "kimi", "kimi-code",
+  "cursor", "copilot", "qwen", "augment", "pi", "cline", "antigravity", "kilo", "codebuddy", "hermes",
+];
+// The three hosts deferred by decision (25-CONTEXT D-25-02, OQ-25-01 to OQ-25-03): they keep `recipe: null` and refuse as recipe-pending.
+const WITHOUT_RECIPE: readonly HostId[] = ["windsurf", "trae", "zcode"];
 const EXPECTED_OVERRIDES: Partial<Record<HostId, string>> = {
   claude: "CLAUDE_CONFIG_DIR",
   omp: "PI_CODING_AGENT_DIR",
   codex: "CODEX_HOME",
   kimi: "KIMI_SHARE_DIR",
   "kimi-code": "KIMI_CODE_HOME",
+  copilot: "COPILOT_HOME",
+  qwen: "QWEN_HOME",
+  augment: "AUGMENT_CACHE_DIR",
+  pi: "PI_CODING_AGENT_DIR",
+  cline: "CLINE_DIR",
+  codebuddy: "CODEBUDDY_CONFIG_DIR",
+  hermes: "HERMES_HOME",
 };
 const EXPECTED_BINARIES: Partial<Record<HostId, readonly string[]>> = {
   omp: ["omp"],
   claude: ["claude"],
   opencode: ["opencode"],
   codex: ["codex"],
+  cursor: ["cursor-agent", "cursor"],
+  copilot: ["copilot"],
+  qwen: ["qwen"],
+  augment: ["auggie"],
+  pi: ["pi"],
+  cline: ["cline"],
+  antigravity: ["agy"],
+  kilo: ["kilo", "kilocode"],
+  codebuddy: ["codebuddy"],
+  hermes: ["hermes"],
 };
 
 const env = (over: Record<string, string> = {}, home = "/home/u"): HostEnv => ({ home, env: over, pathDirs: [] });
@@ -107,9 +129,10 @@ void test("homes, verification, override and binaries are pinned", () => {
   for (const id of HOST_IDS) {
     const entry = HOST_RUNTIMES[id];
     assert.deepEqual(entry.homes.map((h) => [h.rel, h.role]), EXPECTED_HOMES[id], id);
-    assert.equal(entry.homeVerified, id !== "antigravity", id);
+    assert.equal(entry.homeVerified, true, id);
     assert.equal(entry.envOverride, EXPECTED_OVERRIDES[id] ?? null, id);
-    assert.deepEqual(entry.envBase, id === "opencode" ? { name: "XDG_CONFIG_HOME", sub: "opencode" } : undefined, id);
+    const expectedBase = id === "opencode" ? { name: "XDG_CONFIG_HOME", sub: "opencode" } : id === "kilo" ? { name: "XDG_CONFIG_HOME", sub: "kilo" } : undefined;
+    assert.deepEqual(entry.envBase, expectedBase, id);
     assert.deepEqual([...entry.binaries], EXPECTED_BINARIES[id] ?? [], id);
     assert.equal(entry.integration, id === "omp" ? "extension" : "mcp-config", id);
   }
@@ -126,7 +149,7 @@ void test("every home rel is a relative POSIX path without traversal", () => {
   }
 });
 
-void test("Phase 24: recipes for omp, claude, opencode, codex, kimi and kimi-code; recipePending is true for exactly the other 13, none of which has conflicts, envBase or a recipe", () => {
+void test("Phase 25: 16 hosts have a recipe; recipePending is true for exactly windsurf, trae and zcode (the deferred hosts), which have no conflicts, envBase, shadows or recipe", () => {
   const omp = HOST_RUNTIMES.omp;
   assert.deepEqual(omp.recipe, { kind: "bundle-copy", source: "omp", dest: "extensions/realm" });
   assert.deepEqual(omp.conflicts, [".omp/plugins/node_modules/agent-realm"]);
@@ -145,7 +168,10 @@ void test("Phase 24: recipes for omp, claude, opencode, codex, kimi and kimi-cod
       assert.equal(HOST_RUNTIMES[id].envBase, undefined, id);
     }
   }
-  assert.equal(HOST_IDS.filter((id) => recipePending(id)).length, 13);
+  assert.equal(HOST_IDS.filter((id) => recipePending(id)).length, 3);
+  assert.deepEqual(HOST_IDS.filter((id) => recipePending(id)), ["windsurf", "trae", "zcode"]);
+  assert.deepEqual(HOST_IDS.filter((id) => recipePending(id)), HOST_IDS.filter((id) => WITHOUT_RECIPE.includes(id)));
+  assert.equal(HOST_IDS.filter((id) => !recipePending(id)).length, 16);
 });
 
 void test("every conflicts entry in the table is a safe relative path", () => {
@@ -160,11 +186,20 @@ void test("the table is deeply frozen", () => {
   assert.ok(Object.isFrozen(HOST_RUNTIMES));
   const kimi = HOST_RUNTIMES.kimi;
   assert.ok(Object.isFrozen(kimi) && Object.isFrozen(kimi.homes) && Object.isFrozen(kimi.homes[0]) && Object.isFrozen(kimi.aliases));
+  const hermes = HOST_RUNTIMES.hermes.recipe;
+  assert.ok(hermes !== null && hermes.kind === "yaml-map");
+  const args = hermes.value["args"];
+  assert.ok(Object.isFrozen(hermes) && Object.isFrozen(hermes.path) && Object.isFrozen(hermes.value) && Array.isArray(args) && Object.isFrozen(args));
+  const shadows = HOST_RUNTIMES.codebuddy.shadows;
+  assert.ok(shadows !== undefined && Object.isFrozen(shadows) && shadows.length === 2 && shadows.every((shadow) => Object.isFrozen(shadow)));
+  for (const id of HOST_IDS) {
+    assert.equal(HOST_RUNTIMES[id].shadows === undefined, id !== "codebuddy", id);
+  }
 });
 
 void test("resolveHomes joins the home with each candidate", () => {
   assert.deepEqual(resolveHomes(HOST_RUNTIMES.kilo, env()), ["/home/u/.config/kilo", "/home/u/.kilo"]);
-  assert.deepEqual(resolveHomes(HOST_RUNTIMES.antigravity, env()), []);
+  assert.deepEqual(resolveHomes(HOST_RUNTIMES.antigravity, env()), ["/home/u/.gemini/config"]);
 });
 
 void test("an absolute CLAUDE_CONFIG_DIR replaces the claude default", () => {
@@ -235,7 +270,7 @@ void test("resolveHomes equals its pre-role result for every table entry, withou
   assert.deepEqual(resolveHomes(HOST_RUNTIMES.kimi, env({ KIMI_SHARE_DIR: "/opt/override" })), ["/home/u/.config/agents", "/opt/override"]);
 });
 
-void test("resolveHomeSpecs pairs each path with its role in table order", () => {
+void test("resolveHomeSpecs pairs each path with its role in table order (every row has a home since antigravity got ~/.gemini/config)", () => {
   assert.deepEqual(resolveHomeSpecs(HOST_RUNTIMES.kimi, env()), [
     { path: "/home/u/.config/agents", role: "skills" },
     { path: "/home/u/.kimi", role: "config" },
@@ -244,7 +279,10 @@ void test("resolveHomeSpecs pairs each path with its role in table order", () =>
     { path: "/opt/claude", role: "config" },
     { path: "/opt/claude", role: "mcp" },
   ]);
-  assert.deepEqual(resolveHomeSpecs(HOST_RUNTIMES.antigravity, env()), []);
+  assert.deepEqual(resolveHomeSpecs(HOST_RUNTIMES.antigravity, env()), [{ path: "/home/u/.gemini/config", role: "config" }]);
+  for (const id of HOST_IDS) {
+    assert.ok(resolveHomeSpecs(HOST_RUNTIMES[id], env()).length > 0, `${id} has a home`);
+  }
 });
 
 void test("an absolute envOverride replaces every config and mcp home and never a skills home", () => {
@@ -356,10 +394,15 @@ function registeredArgv(id: HostId): readonly string[] {
     assert.ok(typeof command === "string", id);
     return [command, ...strings(JSON.parse(/^args = (\[.*\])$/.exec(lines[2] ?? "")?.[1] ?? "null"))];
   }
+  if (recipe.kind === "yaml-map") {
+    const command = recipe.value["command"];
+    assert.ok(typeof command === "string", id);
+    return [command, ...strings(recipe.value["args"])];
+  }
   assert.ok(recipe.kind === "json-merge", id);
   assert.ok(typeof recipe.value === "object" && recipe.value !== null, id);
   const command: unknown = Reflect.get(recipe.value, "command");
-  if (id === "opencode") {
+  if (id === "opencode" || id === "kilo") {
     return strings(command);
   }
   assert.ok(typeof command === "string", id);
@@ -367,7 +410,7 @@ function registeredArgv(id: HostId): readonly string[] {
 }
 
 void test("Phase 24: every recipe registers exactly defaultManifestFor(id).launch, a bare command with no path", () => {
-  for (const id of ["claude", "opencode", "codex", "kimi", "kimi-code"] as const) {
+  for (const id of WITH_RECIPE.filter((host) => host !== "omp")) {
     const launch = defaultManifestFor(id, "0.0.0").launch;
     assert.ok(launch !== undefined, id);
     assert.deepEqual(registeredArgv(id), [launch.command, ...launch.args], id);
@@ -391,6 +434,9 @@ void test("Phase 24: recipe paths and key segments are safe, the codex table ope
     assert.ok(entry.homes.some((home) => home.role === (recipe.homeRole ?? "config")), `${id}: the recipe's home role has a home`);
     if (recipe.kind === "json-merge") {
       assert.ok(recipe.keyPath.every((segment) => isSafeKeySegment(segment)), id);
+    } else if (recipe.kind === "yaml-map") {
+      assert.ok(recipe.path.every((segment) => isSafeKeySegment(segment)), id);
+      assert.equal(recipe.path.length, 2, id);
     } else if (recipe.kind === "toml-table") {
       assert.ok(recipe.table.every((segment) => isSafeKeySegment(segment)), id);
       assert.equal(recipe.text.split("\n")[0], `[${recipe.table.join(".")}]`, id);
@@ -495,4 +541,108 @@ void test("Phase 24: the two kimi variables move only their own row, the claude 
   assert.deepEqual(resolveHomes(HOST_RUNTIMES.claude, env({ CLAUDE_CONFIG_DIR: "/opt/v" })), ["/opt/v"]);
   assert.deepEqual(resolveHomes(HOST_RUNTIMES.opencode, env({ OPENCODE_CONFIG_DIR: "/opt/v" })), ["/home/u/.config/opencode"]);
   assert.deepEqual(resolveHomes(HOST_RUNTIMES.opencode, env({ XDG_CONFIG_HOME: "/opt/v" })), ["/opt/v/opencode"]);
+});
+
+// ---- Phase 25 (plan 25-01): the eight wave-2 JSON rows ---------------------------------------------------------------------------------
+
+void test("Phase 25: the eight wave-2 rows hold exactly the recipes of 25-CONTEXT D-25-02, with the host's own canonical value", () => {
+  const json = (file: string, value: unknown, keyPath: readonly string[] = ["mcpServers", "realm"]): unknown => ({ kind: "json-merge", file, keyPath, value });
+  assert.deepEqual(HOST_RUNTIMES.cursor.recipe, json("mcp.json", { type: "stdio", command: "realm", args: ["mcp", "--host", "cursor"] }));
+  assert.deepEqual(HOST_RUNTIMES.copilot.recipe, json("mcp-config.json", { tools: ["*"], type: "local", command: "realm", args: ["mcp", "--host", "copilot"] }));
+  assert.deepEqual(HOST_RUNTIMES.qwen.recipe, json("settings.json", { command: "realm", args: ["mcp", "--host", "qwen"] }));
+  assert.deepEqual(HOST_RUNTIMES.augment.recipe, json("settings.json", { type: "stdio", command: "realm", args: ["mcp", "--host", "augment"] }));
+  assert.deepEqual(HOST_RUNTIMES.pi.recipe, json("mcp.json", { command: "realm", args: ["mcp", "--host", "pi"] }));
+  assert.deepEqual(HOST_RUNTIMES.cline.recipe, json("data/settings/cline_mcp_settings.json", { command: "realm", args: ["mcp", "--host", "cline"] }));
+  assert.deepEqual(HOST_RUNTIMES.antigravity.recipe, json("mcp_config.json", { command: "realm", args: ["mcp", "--host", "antigravity"] }));
+  assert.deepEqual(HOST_RUNTIMES.kilo.recipe, json("kilo.json", { type: "local", command: ["realm", "mcp", "--host", "kilo"] }, ["mcp", "realm"]));
+  for (const id of ["cursor", "copilot", "qwen", "augment", "pi", "cline", "antigravity", "kilo"] as const) {
+    assert.equal(HOST_RUNTIMES[id].tier, "config-only", id);
+  }
+});
+
+void test("Phase 25: the wave-2 overrides are the hosts' own variable names (D-25-03) and the GSD-only names appear nowhere in the table", () => {
+  const own: readonly (readonly [HostId, string | null])[] = [
+    ["copilot", "COPILOT_HOME"],
+    ["qwen", "QWEN_HOME"],
+    ["augment", "AUGMENT_CACHE_DIR"],
+    ["pi", "PI_CODING_AGENT_DIR"],
+    ["cline", "CLINE_DIR"],
+    ["cursor", null],
+    ["antigravity", null],
+    ["kilo", null],
+  ];
+  for (const [id, variable] of own) {
+    assert.equal(HOST_RUNTIMES[id].envOverride, variable, id);
+  }
+  const table = JSON.stringify(HOST_RUNTIMES);
+  for (const gsdOnly of ["COPILOT_CONFIG_DIR", "CURSOR_CONFIG_DIR", "AUGMENT_CONFIG_DIR", "KILO_CONFIG_DIR", "CLINE_CONFIG_DIR", "ANTIGRAVITY_CONFIG_DIR"]) {
+    assert.equal(table.includes(gsdOnly), false, gsdOnly);
+  }
+  for (const id of HOST_IDS) {
+    assert.equal(HOST_RUNTIMES[id].envBase !== undefined, id === "opencode" || id === "kilo", id);
+  }
+});
+
+const WAVE2_HOME_CASES: readonly {
+  readonly id: HostId;
+  readonly variable: string;
+  readonly dflt: readonly { readonly path: string; readonly role: "config" | "skills" | "mcp" }[];
+  readonly moved: readonly { readonly path: string; readonly role: "config" | "skills" | "mcp" }[];
+}[] = [
+  { id: "copilot", variable: "COPILOT_HOME", dflt: [{ path: "/home/u/.copilot", role: "config" }], moved: [{ path: "/opt/v", role: "config" }] },
+  { id: "qwen", variable: "QWEN_HOME", dflt: [{ path: "/home/u/.qwen", role: "config" }], moved: [{ path: "/opt/v", role: "config" }] },
+  { id: "augment", variable: "AUGMENT_CACHE_DIR", dflt: [{ path: "/home/u/.augment", role: "config" }], moved: [{ path: "/opt/v", role: "config" }] },
+  { id: "pi", variable: "PI_CODING_AGENT_DIR", dflt: [{ path: "/home/u/.pi/agent", role: "config" }], moved: [{ path: "/opt/v", role: "config" }] },
+  { id: "cline", variable: "CLINE_DIR", dflt: [{ path: "/home/u/.cline", role: "config" }], moved: [{ path: "/opt/v", role: "config" }] },
+  { id: "codebuddy", variable: "CODEBUDDY_CONFIG_DIR", dflt: [{ path: "/home/u/.codebuddy", role: "config" }], moved: [{ path: "/opt/v", role: "config" }] },
+  { id: "hermes", variable: "HERMES_HOME", dflt: [{ path: "/home/u/.hermes", role: "config" }], moved: [{ path: "/opt/v", role: "config" }] },
+  {
+    id: "kilo",
+    variable: "XDG_CONFIG_HOME",
+    dflt: [{ path: "/home/u/.config/kilo", role: "config" }, { path: "/home/u/.kilo", role: "skills" }],
+    moved: [{ path: "/opt/v/kilo", role: "config" }, { path: "/home/u/.kilo", role: "skills" }],
+  },
+];
+
+void test("Phase 25: each wave-2 row resolves its default home, an absolute override or base, and refuses an empty or relative one; cursor and antigravity read no variable", () => {
+  for (const c of WAVE2_HOME_CASES) {
+    const entry = HOST_RUNTIMES[c.id];
+    assert.deepEqual(resolveHomeSpecs(entry, env()), c.dflt, c.id);
+    assert.deepEqual(resolveHomeSpecs(entry, env({ [c.variable]: "/opt/v" })), c.moved, c.id);
+    for (const bad of ["", "rel/dir", "./dir"]) {
+      assert.throws(() => resolveHomeSpecs(entry, env({ [c.variable]: bad })), invalid, `${c.id}: ${bad}`);
+    }
+    assert.deepEqual(resolveHomeSpecs(entry, env({ UNRELATED_VARIABLE: "/opt/v" })), c.dflt, c.id);
+  }
+  assert.deepEqual(resolveHomes(HOST_RUNTIMES.cursor, env({ CURSOR_CONFIG_DIR: "/opt/v", XDG_CONFIG_HOME: "/opt/v" })), ["/home/u/.cursor"]);
+  assert.deepEqual(resolveHomes(HOST_RUNTIMES.antigravity, env({ ANTIGRAVITY_CONFIG_DIR: "/opt/v", XDG_CONFIG_HOME: "/opt/v" })), ["/home/u/.gemini/config"]);
+  assert.deepEqual(resolveHomes(HOST_RUNTIMES.kilo, env({ KILO_CONFIG_DIR: "/opt/v" })), ["/home/u/.config/kilo", "/home/u/.kilo"]);
+});
+
+void test("Phase 25: the codebuddy and hermes rows hold exactly the recipes of 25-CONTEXT D-25-02, D-25-04 and D-25-06", () => {
+  assert.deepEqual(HOST_RUNTIMES.codebuddy.recipe, {
+    kind: "json-merge",
+    file: ".mcp.json",
+    keyPath: ["mcpServers", "realm"],
+    value: { type: "stdio", command: "realm", args: ["mcp", "--host", "codebuddy"] },
+  });
+  assert.deepEqual(HOST_RUNTIMES.codebuddy.shadows, [
+    { rel: "mcp.json", base: "config" },
+    { rel: ".codebuddy.json", base: "home" },
+  ]);
+  assert.deepEqual(HOST_RUNTIMES.hermes.recipe, {
+    kind: "yaml-map",
+    file: "config.yaml",
+    path: ["mcp_servers", "realm"],
+    value: { command: "realm", args: ["mcp", "--host", "hermes"] },
+  });
+  for (const id of ["codebuddy", "hermes"] as const) {
+    assert.equal(HOST_RUNTIMES[id].tier, "config-only", id);
+    assert.equal(HOST_RUNTIMES[id].envBase, undefined, id);
+  }
+  for (const id of ["windsurf", "trae", "zcode"] as const) {
+    assert.equal(HOST_RUNTIMES[id].recipe, null, id);
+    assert.equal(HOST_RUNTIMES[id].tier, "config-only", id);
+  }
+  assert.equal(HOST_IDS.filter((id) => HOST_RUNTIMES[id].recipe !== null).length, 16);
 });

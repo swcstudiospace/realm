@@ -10,8 +10,9 @@ import type { TestContext } from "node:test";
 import { createLogger, type Logger } from "../../src/observe/logger.js";
 import type { HostEnv, HostRuntimeEntry, InstallRecipe } from "../../src/host/types.js";
 
-// The kinds the generic engine fixtures build; toml-table is covered by its own suite (test/host/toml-owned.test.ts).
-export type FixtureRecipeKind = Exclude<InstallRecipe["kind"], "toml-table">;
+// The kinds the generic engine fixtures build; toml-table and yaml-map are covered by their own suites (test/host/toml-owned.test.ts,
+// test/host/yaml-owned.test.ts).
+export type FixtureRecipeKind = Exclude<InstallRecipe["kind"], "toml-table" | "yaml-map">;
 
 export const FIXTURE_HOME_REL = ".fixture-host";
 export const FIXTURE_BUNDLE_SOURCE = "fixture-bundle";

@@ -138,7 +138,7 @@ for (const c of CASES) {
 
 void test("ADPT-04..07: install of a host without a recipe is still recipe-pending, and install claude with an empty HOME and PATH is not-detected", async (t) => {
   const r = rigFor(t);
-  const refused = await r.run(["install", "cursor"]);
+  const refused = await r.run(["install", "trae"]);
   assert.equal(refused.exitCode, 1);
   assert.equal(refused.stdout, "POLICY_DENIED\n");
   assert.equal(refused.stderr, "realm host install: recipe-pending: no install recipe exists for this host yet\n");
