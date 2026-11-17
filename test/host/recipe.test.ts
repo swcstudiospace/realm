@@ -84,9 +84,9 @@ void test("json-merge creates an absent file with the key and records the create
   assert.equal(afterOf(plan, "settings.json"), `${JSON.stringify({ mcpServers: { realm: FIXTURE_JSON_VALUE } }, null, 2)}\n`);
   const entry = plan.entries[0];
   assert.equal(entry?.createdFile, true);
-  assert.deepEqual(entry?.createdParents, [["mcpServers"]]);
-  assert.equal(entry?.beforeSha256, null);
-  assert.equal(entry?.ownedSha256, sha256Text(CANONICAL_FIXTURE_VALUE));
+  assert.deepEqual(entry.createdParents, [["mcpServers"]]);
+  assert.equal(entry.beforeSha256, null);
+  assert.equal(entry.ownedSha256, sha256Text(CANONICAL_FIXTURE_VALUE));
 });
 
 void test("json-merge keeps unrelated keys in order and the file's indentation and trailing newline", () => {
@@ -172,7 +172,7 @@ void test("json-merge install then uninstall removes a file Realm created", () =
   const first = installed(json, { "settings.json": null });
   const plan = planRecipe(json, state("uninstall", first.files, { receipt: first.plan.entries }));
   assert.equal(plan.changes[0]?.action, "remove");
-  assert.equal(plan.changes[0]?.after, null);
+  assert.equal(plan.changes[0].after, null);
 });
 
 void test("json-merge install then uninstall restores a normalized pre-existing file byte for byte", () => {

@@ -157,8 +157,8 @@ void test("install then uninstall is an exact inverse with a verifiable four-lin
     assert.notEqual(treeHash(r.host.configHome), preHome, kind);
     const receipt = await readReceipt(r.host.stateDir, "claude");
     assert.equal(receipt?.receipt.state, "installed");
-    assert.equal(receipt?.receipt.configHome, r.host.configHome);
-    assert.equal(receipt?.receipt.recipeKind, kind);
+    assert.equal(receipt.receipt.configHome, r.host.configHome);
+    assert.equal(receipt.receipt.recipeKind, kind);
 
     // A second install is a byte-identical no-op: no write and no audit line.
     const afterInstall = treeHash(r.host.configHome);
@@ -387,7 +387,7 @@ void test("a crash between files leaves a pending receipt; a second install resu
   await run(straight, "install", recipe);
   assert.equal(treeHash(crashing.host.configHome), treeHash(straight.host.configHome));
   const straightReceipt = await readReceipt(straight.host.stateDir, "claude");
-  assert.deepEqual(done?.receipt.entries, straightReceipt?.receipt.entries);
+  assert.deepEqual(done.receipt.entries, straightReceipt.receipt.entries);
   assert.equal(readFileSync(join(crashing.host.configHome, "plugins/realm/b.txt"), "utf8"), "beta\n");
 });
 

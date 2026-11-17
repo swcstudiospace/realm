@@ -181,7 +181,7 @@ void test("a symlinked hosts directory or receipt file is PATH_ESCAPE for read, 
   symlinkSync(elsewhere, join(host.stateDir, "hosts"));
   await assert.rejects(readReceipt(host.stateDir, "claude"), (error: unknown) => codeOf(error) === "PATH_ESCAPE");
   assert.throws(() => writeReceipt(host.stateDir, sample()), (error: unknown) => codeOf(error) === "PATH_ESCAPE");
-  assert.throws(() => removeReceipt(host.stateDir, "claude", H1), (error: unknown) => codeOf(error) === "PATH_ESCAPE");
+  assert.throws(() => { removeReceipt(host.stateDir, "claude", H1); }, (error: unknown) => codeOf(error) === "PATH_ESCAPE");
   assert.deepEqual(statSync(elsewhere).isDirectory(), true);
   assert.equal(existsSync(join(elsewhere, "claude.receipt.json")), false);
 
@@ -196,7 +196,7 @@ void test("a symlinked hosts directory or receipt file is PATH_ESCAPE for read, 
 void test("removeReceipt deletes the receipt only while it has the hash that was read", async (t) => {
   const host = makeFixtureHost(t);
   const sha = writeReceipt(host.stateDir, sample(), { expectedPriorSha256: null });
-  assert.throws(() => removeReceipt(host.stateDir, "claude", H1), (error: unknown) => codeOf(error) === "WRITE_NOT_ATOMIC");
+  assert.throws(() => { removeReceipt(host.stateDir, "claude", H1); }, (error: unknown) => codeOf(error) === "WRITE_NOT_ATOMIC");
   assert.ok(existsSync(receiptPath(host.stateDir, "claude")));
   removeReceipt(host.stateDir, "claude", sha);
   assert.equal(existsSync(receiptPath(host.stateDir, "claude")), false);
