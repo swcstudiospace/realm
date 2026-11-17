@@ -4,6 +4,12 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.3.54] - 2026-11-17
+
+### Documentation
+- docs(milestone): complete v3.0 Containment by Default (#128) (d87c770)
+- docs(milestones): re-verify archived v1.0 phases 03 to 07 against later live evidence (#126) (cae9172)
+
 ## [0.3.53] - 2026-11-17
 
 ### Documentation
