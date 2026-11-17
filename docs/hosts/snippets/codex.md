@@ -3,9 +3,10 @@
 This snippet carries no token, secret, or host path. Placeholders: `<home>` is the user's home directory,
 `<codex home>` is the Codex directory, `<tmp>` a throwaway directory.
 
-`realm host install codex` registers `realm mcp --host codex` as an owned block in Codex's user-level
-`config.toml`. The sections below say what it changes, why Codex's own remover is the one tool not to use on it, and how
-far each claim is proven (tiers T1 to T3 are defined under "Evidence reached").
+`realm host install codex` registers `realm mcp --host codex` as one owned table, `[mcp_servers.realm]`, in Codex's
+user-level `config.toml`. Ownership is by the table header: Realm writes no marker comment. The sections below say what
+it changes, how it behaves when Codex rewrites the file itself, and how far each claim is proven (tiers T1 to T3 are
+defined under "Evidence reached").
 
 ## Sources and dates
 
@@ -21,6 +22,12 @@ All read or observed on 2026-11-17.
   `codex mcp get realm` (transport, command, args, and a `remove: codex mcp remove realm` line) both worked with `realm`
   absent from `PATH`: they parse the registration and do not launch it. `CODEX_HOME=<tmp>` moved the file to
   `<tmp>/config.toml`.
+- Observed with codex-cli 0.154.0 in an isolated `CODEX_HOME` (2026-11-17), starting from a file with `# user comment`,
+  `model = "x"`, a `# BEGIN realm host-plugin` line, the table below and a `# END realm host-plugin` line: `codex mcp add
+  other -- echo hi` rewrote the file with a comment-dropping TOML editor. The `# BEGIN` line (decor of the table) was
+  **dropped**, the table text was kept byte-identical, `[mcp_servers.other]` was inserted after it, and the `# END` line
+  was kept at the end of the file. `codex mcp remove realm` then removed the table and left the orphan `# END` line. A
+  comment marker is therefore not a safe way to own text in this file: after any Codex-side edit the markers are lone.
 - A real `config.toml` on the verification machine is hand-grown TOML (a `[features]` table, `[hooks.state."..."]`
   tables, another `[mcp_servers.*]` table, comments), which is the normal case the recipe must preserve.
 - Node or Bun requirement of Codex: not recorded in the pages read.
@@ -37,8 +44,9 @@ realm host uninstall codex
 Each command prints one JSON line. `install` and `uninstall` print `{ id, status, dryRun, actions }` with `status` one
 of `planned`, `installed`, `noop` or `removed` and each action `{ path, action, bytes }` (`path` relative to the config
 home, no content). `status` prints `{ id, status, entries, launch }`: each entry is a path and one of `ok`, `drifted`
-(the owned block differs or is absent), `missing` (the recorded file is gone) or `unreadable` (a symlink, a file over
-1 MiB, invalid UTF-8, or a lone Realm marker); `launch` is `on-path` or `not-on-path` and says whether `realm` resolves
+(the owned table differs, or is defined a second time or in another form), `missing` (the recorded file is gone, or the
+file is there and the owned table is not: for instance after `codex mcp remove realm`) or `unreadable` (a symlink, a file
+over 1 MiB, invalid UTF-8, or a header the line scanner cannot read); `launch` is `on-path` or `not-on-path` and says whether `realm` resolves
 on the `PATH` that `realm host status` sees, which is not necessarily Codex's own.
 
 `--config-home <abs>` names the Codex directory itself (the one that holds `config.toml`), skips detection, and must
@@ -48,25 +56,39 @@ exist: Realm never creates a host home. Codex is detected by `~/.codex` (or `COD
 ## What changes
 
 One file: `<codex home>/config.toml`, where `<codex home>` is `CODEX_HOME` when it is set to an absolute path, else
-`<home>/.codex`. Realm appends one block at the end of the file (a separator newline first when the file does not end in
-one). The text between the two marker lines is the table `codex mcp add` writes (T1 golden, from the observation above):
+`<home>/.codex`. Realm appends one table at the end of the file, after one blank line when the file is not empty and
+does not already end in a blank line. The table is exactly what `codex mcp add` writes (T1 golden, from the observation
+above), with no comment around it:
 
 ```toml
-# BEGIN realm host-plugin
 [mcp_servers.realm]
 command = "realm"
 args = ["mcp", "--host", "codex"]
-# END realm host-plugin
 ```
 
-Every byte outside the markers (other tables, comments, blank lines, line endings, mode) is preserved; a missing file
-is created (mode 0600). The block goes at the end because a new table header is always valid TOML there, so a file that
-ends inside another table cannot capture the block's keys. TOML is never parsed or rewritten: the engine owns only the
-text between the markers. The command is the bare `realm`, resolved on Codex's `PATH`.
+Every byte outside the table (other tables, comments, blank lines, line endings, mode) is preserved; a missing file is
+created (mode 0600). A CRLF file stays CRLF. The table goes at the end because a new table header is always valid TOML
+there, so a file that ends inside another table cannot capture the table's keys. TOML is never parsed or rewritten: the
+engine owns only the text of that one table, found by its header line (`[mcp_servers.realm]`, written exactly so, on a
+line of its own) through its last key line. Comment and blank lines after the last key line belong to what follows and
+are not part of the table. The receipt stores the hash of the table text and no text. The command is the bare `realm`,
+resolved on Codex's `PATH`.
+
+What the engine does with the table:
+
+- **install**: table absent, append it. Present with exactly the owned text and owned by the receipt, a no-op. Present
+  with different text, a duplicate, a subtable or a dotted or inline definition, refused as `foreign-content`. The exact
+  owned text with no receipt (for example one written by `codex mcp add realm`) is not claimed: it is `foreign-content`
+  too, so Realm never takes ownership of an entry it did not write.
+- **status**: the owned table equal to the receipt's hash is `ok`; absent is `missing`; present but different is
+  `drifted`.
+- **uninstall**: the table is removed, with the blank separator line Realm added, only when its hash equals the receipt's
+  hash. If it was changed, uninstall refuses as `drifted` and writes nothing. If Codex or the user already removed it,
+  uninstall is a no-op that deletes the receipt.
 
 ## The duplicate-table guard
 
-Before an install, the text outside the markers is scanned by a line scanner (`src/host/toml-table.ts`), not a TOML
+Before an install (and for status and uninstall), the text outside the owned table is scanned by a line scanner (`src/host/toml-table.ts`), not a TOML
 parser. The install is refused as `foreign-content` and nothing is written when the scanner finds `mcp_servers.realm`
 defined: as a header in any spelling (`[mcp_servers.realm]`, `[ mcp_servers . realm ]`, `[mcp_servers."realm"]`,
 `['mcp_servers'.'realm']`, `[mcp_servers.realm.env]`, `[[mcp_servers.realm]]`), as a `realm = ...`, `"realm" = ...` or
@@ -78,23 +100,20 @@ multi-line string is a false positive (refused, which is safe); a bare `["x"]` l
 
 ## Manual registration and the host's own tools
 
-By hand, the same table is `codex mcp add realm -- realm mcp --host codex`. A user who already ran it has the table
-outside any marker, so `realm host install codex` refuses it as `foreign-content` rather than adding a second table:
-either keep the manual entry and skip the installer, or remove it with `codex mcp remove realm` first and then run
-`realm host install codex`. A manual `codex mcp add other -- other-cmd` after Realm's install adds a separate table
-and does not touch the block (T2 is meant to record that for 0.154.0; see below).
+By hand, the same table is `codex mcp add realm -- realm mcp --host codex`. A user who already ran it has a table
+Realm did not write, so `realm host install codex` refuses it as `foreign-content` rather than adding a second table or
+claiming it: either keep the manual entry and skip the installer, or remove it with `codex mcp remove realm` first and
+then run `realm host install codex`.
 
-**Uninstall with `realm host uninstall codex`, not with `codex mcp remove realm`.** Codex's remover edits the file with
-Codex's own TOML editor. [INFERENCE] It removes the table and the comment lines attached to it and leaves the
-`# END realm host-plugin` marker behind. The recorded effect of `codex mcp remove realm` on 0.154.0 is **not yet
-recorded**: the gated rehearsal that would record it has not run (see "Evidence reached"). If a lone marker is left, the
-engine refuses to guess: `realm host status codex` says `unreadable`, and `realm host install codex` and `realm host
-uninstall codex` both refuse as `unparseable`. Recovery, by hand:
+Codex's own commands and Realm's table coexist, because ownership is the table and not a comment:
 
-1. Open `<codex home>/config.toml` and delete the two lines `# BEGIN realm host-plugin` and `# END realm host-plugin`
-   if either is still present. Leave every other line.
-2. Run `realm host uninstall codex`. With no block left it is a clean no-op that clears the receipt.
-3. Reinstall with `realm host install codex` if you still want the entry.
+- `codex mcp add other -- other-cmd` after Realm's install adds a separate table and leaves the owned table
+  byte-identical, so `realm host status codex` stays `installed`.
+- `codex mcp remove realm` removes the owned table. `realm host status codex` then says `drifted` with the entry
+  `missing`, and `realm host uninstall codex` is a clean no-op that deletes the receipt and leaves the file as Codex left
+  it. Realm can be installed again afterwards.
+- Editing the owned table by hand (another value, an added key, a comment inside it) is drift: `realm host uninstall
+  codex` refuses as `drifted` and writes nothing, until the table is put back or removed by hand.
 
 ## Project-level configuration and shadowing
 
@@ -108,12 +127,12 @@ owner decision (OQ-24-03) and is not done here.
 
 | Tier | Claim | Result |
 | --- | --- | --- |
-| T1 offline fixture | the recipe on a fixture host in a temporary home against the observed table and a real-shaped hand-grown `config.toml`: detect, dry-run, install, no-op reinstall, drift, the duplicate-table guard (every spelling above), a lone marker, hostile content, uninstall, doctor, `realm host status`; other tables, comments and blank lines survive byte-exact | covered by the offline tests (`test/host/codex-recipe.test.ts`, `test/host/toml-table.test.ts`); the golden table is the output of codex-cli 0.154.0 observed 2026-11-17 |
-| T2 host validator | `codex mcp get realm` and `codex mcp list` parse what the recipe wrote (they do not launch it); a following `codex mcp add other -- other-cmd` leaves the block and status intact; `codex mcp remove realm` is run and its effect recorded | gated (`REALM_LIVE_CODEX=1`); runnable here with codex-cli 0.154.0; **no result is recorded yet**. This page claims nothing about what Codex does to the markers until a dated result is written here |
+| T1 offline fixture | the recipe on a fixture host in a temporary home against the observed table and a real-shaped hand-grown `config.toml`: detect, dry-run, install, no-op reinstall, drift, the duplicate-table guard (every spelling above), a Codex-style `add other` (a table inserted after ours; status stays ok) and `remove realm` (the table deleted; status missing, uninstall a no-op), hostile content, CRLF, uninstall, doctor, `realm host status`; other tables, comments and blank lines survive byte-exact | covered by the offline tests (`test/host/codex-recipe.test.ts`, `test/host/toml-owned.test.ts`, `test/host/toml-table.test.ts`); the golden table is the output of codex-cli 0.154.0 observed 2026-11-17 |
+| T2 host validator | `codex mcp get realm` and `codex mcp list` parse what the recipe wrote (they do not launch it); a following `codex mcp add other -- other-cmd` leaves the owned table byte-identical and status `installed`; `codex mcp remove realm` removes the table, status says `missing` and uninstall is a no-op | gated (`REALM_LIVE_CODEX=1`); runnable here with codex-cli 0.154.0. The rewrite behavior of `add other` and `remove realm` on the old marker block was observed with codex-cli 0.154.0 on 2026-11-17 (see "Sources and dates"); the gated test asserts the table-ownership behavior above and records what it observed as diagnostics |
 | T3 live end to end | not available: `codex mcp list` does not start servers, and a Codex session needs model credentials | **gap, not run**: no Codex session booting Realm is recorded or automatable here |
 
-Not shown by any tier: a live Realm session through Codex; that Codex keeps the marker comments when it rewrites the
-file (OQ-24-05); that a real model turn calls the Realm tools; that Codex's `startup_timeout_sec` outlasts a cold first
+Not shown by any tier: a live Realm session through Codex; that Codex keeps the owned table byte-identical in every
+Codex version (observed for codex-cli 0.154.0 only; OQ-24-05); that a real model turn calls the Realm tools; that Codex's `startup_timeout_sec` outlasts a cold first
 boot of up to 230 s (OQ-24-06).
 
 ## Known limits
@@ -121,8 +140,9 @@ boot of up to 230 s (OQ-24-06).
 - The guard is a line scanner, not a parser (see "The duplicate-table guard").
 - A file over 1 MiB, invalid UTF-8 or a symlink on the path is refused (`status` says `unreadable`). A change while
   the command runs is `concurrent-change`: run it again (residual R-24-02).
-- The remover caveat above (residual R-24-04). The engine is deliberately not loosened to heal a lone marker: a
-  half-present marker is exactly what a hand-edited file looks like.
+- Codex's editor may reformat the owned table (quoting, key order, inline values) in a later version. The engine then
+  reads a changed table as drift and refuses uninstall rather than guessing; remove the table by hand and run `realm host
+  uninstall codex` (a no-op that clears the receipt). Only 0.154.0 is observed.
 - Only the user-level file is written; `.codex/config.toml` in a project is never written.
 
 ACP: not documented in the pages read, so this snippet gives no ACP configuration.

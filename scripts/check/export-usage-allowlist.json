@@ -368,6 +368,11 @@
       "reason": "D-1306 test-only seam: Phase 21 invariant seam: test/host/runtimes.test.ts holds exactly the 13 hosts that have no recipe recipe-pending (omp, claude, opencode, codex, kimi and kimi-code have one since Phase 24) until the Phase 25 recipes land"
     },
     {
+      "file": "src/host/toml-table.ts",
+      "name": "tomlTableState",
+      "reason": "D-1306 test-only seam: the line scanner under locateTomlTable, whose free, taken and unreadable answers test/host/toml-table.test.ts pins directly"
+    },
+    {
       "file": "src/lifecycle/mutation-gate.ts",
       "name": "runGatedMutation",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"

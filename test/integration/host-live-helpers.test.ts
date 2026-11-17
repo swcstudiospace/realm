@@ -21,7 +21,7 @@ import {
   KIMI_CODE_GAP,
   LIVE_HOST_IDS,
   type LiveHostId,
-  ownedBlockOf,
+  ownedTableOf,
   parseHostVersion,
   processAlive,
   readStubArgv,
@@ -415,17 +415,18 @@ void test("resolveExecutable finds an executable by absolute path or on an absol
   assert.equal(resolveExecutable("tool", undefined), undefined);
 });
 
-void test("fileSha256, stripAnsi, ownedBlockOf and refusalReasonOf", (t) => {
+void test("fileSha256, stripAnsi, ownedTableOf and refusalReasonOf", (t) => {
   const dir = tempDir(t);
   const file = join(dir, "f");
   writeFileSync(file, "abc");
   assert.equal(fileSha256(file), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
   assert.equal(fileSha256(join(dir, "absent")), null);
   assert.equal(stripAnsi("\u001b[32m✓\u001b[0m realm \u001b[1mconnected\u001b[22m"), "✓ realm connected");
-  const block = '# BEGIN realm host-plugin\n[mcp_servers.realm]\ncommand = "realm"\n# END realm host-plugin';
-  assert.equal(ownedBlockOf(`[a]\nx = 1\n\n${block}\n[b]\n`), block);
-  assert.equal(ownedBlockOf("[a]\nx = 1\n"), undefined);
-  assert.equal(ownedBlockOf("# END realm host-plugin\n# BEGIN realm host-plugin\n"), undefined);
+  const table = '[mcp_servers.realm]\ncommand = "realm"\nargs = ["mcp", "--host", "codex"]\n';
+  assert.equal(ownedTableOf(`[a]\nx = 1\n\n${table}\n# next\n[b]\n`), table);
+  assert.equal(ownedTableOf(table.replaceAll("\n", "\r\n")), table.replaceAll("\n", "\r\n"));
+  assert.equal(ownedTableOf("[a]\nx = 1\n"), undefined);
+  assert.equal(ownedTableOf(`${table}\n${table}`), undefined, "a duplicate is not an owned table");
   assert.equal(refusalReasonOf({ exitCode: 1, stdout: "POLICY_DENIED\n", stderr: "realm host install: foreign-content: the host configuration holds content that Realm does not own\n" }), "foreign-content");
   assert.equal(refusalReasonOf({ exitCode: 1, stdout: "", stderr: "realm host uninstall: drifted: changed\n" }), "drifted");
   assert.equal(refusalReasonOf({ exitCode: 0, stdout: "{}\n", stderr: "" }), undefined);

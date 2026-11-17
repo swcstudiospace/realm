@@ -83,6 +83,7 @@ export interface HostEntryStatus {
   readonly path: string;
   // "unreadable": the owned file cannot be read or parsed safely (a refused read, or content the recipe cannot parse), which a
   // reinstall cannot fix. "drifted": the file parses and its owned part differs or is absent.
+  // "missing": the file is absent, or (toml-table) the file is there and the owned table is not.
   readonly state: "ok" | "drifted" | "missing" | "unreadable";
 }
 
@@ -156,7 +157,7 @@ function expandBundleTokens(
 }
 
 // Whether the receipt entry still matches what is on disk. The owned part is compared for json-merge and
-// text-block (an edit elsewhere in the file is not drift); a recipe of another kind falls back to the whole file.
+// text-block and toml-table (an edit elsewhere in the file is not drift); a recipe of another kind falls back to the whole file.
 function entryState(entry: ReceiptEntry, content: string | null, recipe: InstallRecipe | null): HostEntryStatus["state"] {
   if (content === null) {
     return "missing";
@@ -167,6 +168,10 @@ function entryState(entry: ReceiptEntry, content: string | null, recipe: Install
   const owned = ownedPart(recipe, content);
   if (!owned.parsed) {
     return "unreadable";
+  }
+  if (owned.sha256 === null && recipe.kind === "toml-table") {
+    // The table is gone (Codex's own remover, or the user): the file is fine, what Realm owned is not there.
+    return "missing";
   }
   return owned.sha256 === entry.ownedSha256 ? "ok" : "drifted";
 }

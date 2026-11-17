@@ -59,9 +59,15 @@ export type InstallRecipe =
       readonly file: string;
       readonly block: string;
       readonly homeRole?: HostHomeSpec["role"];
-      // The TOML table path the block defines. When set, an install is refused if the file already defines that table
-      // (or an ancestor key) outside the markers.
-      readonly tomlTable?: readonly string[];
+    }
+  | {
+      readonly kind: "toml-table";
+      readonly file: string;
+      // The table Realm owns, as 1 to 6 bare keys. It is located by its exact header line; there are no markers.
+      readonly table: readonly string[];
+      // The owned text: the header line and its key lines joined with "\n", no comment, no blank line, no trailing newline.
+      readonly text: string;
+      readonly homeRole?: HostHomeSpec["role"];
     }
   | { readonly kind: "bundle-copy"; readonly source: string; readonly dest: string; readonly homeRole?: HostHomeSpec["role"] };
 

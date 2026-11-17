@@ -324,10 +324,10 @@ void test("Phase 24: the wave-1 rows hold exactly the recipes of 24-CONTEXT D-24
     value: { type: "local", command: ["realm", "mcp", "--host", "opencode"] },
   });
   assert.deepEqual(HOST_RUNTIMES.codex.recipe, {
-    kind: "text-block",
+    kind: "toml-table",
     file: "config.toml",
-    block: '[mcp_servers.realm]\ncommand = "realm"\nargs = ["mcp", "--host", "codex"]',
-    tomlTable: ["mcp_servers", "realm"],
+    table: ["mcp_servers", "realm"],
+    text: '[mcp_servers.realm]\ncommand = "realm"\nargs = ["mcp", "--host", "codex"]',
   });
   for (const id of ["kimi", "kimi-code"] as const) {
     assert.deepEqual(HOST_RUNTIMES[id].recipe, {
@@ -342,7 +342,7 @@ void test("Phase 24: the wave-1 rows hold exactly the recipes of 24-CONTEXT D-24
   assert.equal(HOST_RUNTIMES["kimi-code"].tier, "config-only");
 });
 
-// The argv a recipe registers, read back from the recipe value (the codex block is parsed from its own lines).
+// The argv a recipe registers, read back from the recipe value (the codex table is parsed from its own lines).
 function registeredArgv(id: HostId): readonly string[] {
   const recipe = HOST_RUNTIMES[id].recipe;
   assert.ok(recipe !== null, id);
@@ -350,8 +350,8 @@ function registeredArgv(id: HostId): readonly string[] {
     assert.ok(Array.isArray(value) && value.every((item) => typeof item === "string"), id);
     return value;
   };
-  if (recipe.kind === "text-block") {
-    const lines = recipe.block.split("\n");
+  if (recipe.kind === "toml-table") {
+    const lines = recipe.text.split("\n");
     const command: unknown = JSON.parse(/^command = (".*")$/.exec(lines[1] ?? "")?.[1] ?? "null");
     assert.ok(typeof command === "string", id);
     return [command, ...strings(JSON.parse(/^args = (\[.*\])$/.exec(lines[2] ?? "")?.[1] ?? "null"))];
@@ -378,7 +378,7 @@ void test("Phase 24: every recipe registers exactly defaultManifestFor(id).launc
   }
 });
 
-void test("Phase 24: recipe paths and key segments are safe, the codex block opens with its table header, and the home role exists", () => {
+void test("Phase 24: recipe paths and key segments are safe, the codex table opens with its header, and the home role exists", () => {
   for (const id of WITH_RECIPE) {
     const entry = HOST_RUNTIMES[id];
     const recipe = entry.recipe;
@@ -392,10 +392,8 @@ void test("Phase 24: recipe paths and key segments are safe, the codex block ope
     if (recipe.kind === "json-merge") {
       assert.ok(recipe.keyPath.every((segment) => isSafeKeySegment(segment)), id);
     } else {
-      const table = recipe.tomlTable;
-      assert.ok(table !== undefined, id);
-      assert.ok(table.every((segment) => isSafeKeySegment(segment)), id);
-      assert.equal(recipe.block.split("\n")[0], `[${table.join(".")}]`, id);
+      assert.ok(recipe.table.every((segment) => isSafeKeySegment(segment)), id);
+      assert.equal(recipe.text.split("\n")[0], `[${recipe.table.join(".")}]`, id);
     }
   }
   assert.equal(HOST_RUNTIMES.claude.recipe?.kind === "json-merge" ? HOST_RUNTIMES.claude.recipe.homeRole : undefined, "mcp");
@@ -436,8 +434,8 @@ void test("Phase 24: every entry, home, envBase, conflicts list and recipe is fr
   assert.throws(() => { mutate(HOST_RUNTIMES.opencode.envBase, "sub"); }, TypeError);
   assert.throws(() => { mutate(HOST_RUNTIMES.omp.conflicts, "0"); }, TypeError);
   const codex = HOST_RUNTIMES.codex.recipe;
-  assert.ok(codex !== null && codex.kind === "text-block");
-  assert.throws(() => { mutate(codex.tomlTable, "0"); }, TypeError);
+  assert.ok(codex !== null && codex.kind === "toml-table");
+  assert.throws(() => { mutate(codex.table, "0"); }, TypeError);
 });
 
 // One row per host: its override variable (or XDG base), the default home and what the variable moves.
