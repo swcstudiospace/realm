@@ -1,6 +1,6 @@
-// realm host (HOST-07): list, detect, status, install and uninstall through the real runCli. On the real table six hosts have an
-// install recipe (omp from Phase 22; claude, opencode, codex, kimi and kimi-code from Phase 24), so every install of the other 13
-// refuses as recipe-pending; the generic lifecycle is proven on an injected fixture host through the CliDeps.hostRuntimes and
+// realm host (HOST-07): list, detect, status, install and uninstall through the real runCli. On the real table fourteen hosts have an
+// install recipe (omp from Phase 22; claude, opencode, codex, kimi and kimi-code from Phase 24; cursor, copilot, qwen, augment, pi,
+// cline, antigravity and kilo from Phase 25), so every install of the other 5 refuses as recipe-pending; the generic lifecycle is proven on an injected fixture host through the CliDeps.hostRuntimes and
 // CliDeps.hostAdaptersDir seams, the omp recipe on the real table with a fixture package root, and the Phase 24 recipes on the real
 // table in test/cli/host-wave1.test.ts, in a temporary HOME and state directory. Nothing touches a real host.
 
@@ -158,31 +158,34 @@ void test("HOST-07: an unknown host is a usage error; gemini and vscode are unkn
 
 // ---- list -------------------------------------------------------------------------------------------------------------------
 
-void test("HOST-07: list needs no config, no HOME and no file system, and names the 19 hosts, recipe ready for omp, claude, opencode, codex, kimi and kimi-code and pending for the other 13", async () => {
+void test("HOST-07: list needs no config, no HOME and no file system, and names the 19 hosts, recipe ready for the 14 hosts with a recipe and pending for the other 5", async () => {
   const result = await runCli(["host", "list"], { env: {}, readConfig: () => { throw new Error("list must not read the config"); } });
   const rows = json(result) as { id: string; flag: string; aliases: string[]; tier: string; integration: string; homeVerified: boolean; recipe: string }[];
   assert.deepEqual(rows.map((row) => row.id), [...HOST_IDS]);
   assert.equal(rows.length, 19);
-  const ready: readonly HostId[] = ["omp", "claude", "opencode", "codex", "kimi", "kimi-code"];
+  const ready: readonly HostId[] = [
+    "omp", "claude", "opencode", "codex", "kimi", "kimi-code",
+    "cursor", "copilot", "qwen", "augment", "pi", "cline", "antigravity", "kilo",
+  ];
   assert.ok(rows.every((row) => row.recipe === (ready.includes(row.id as HostId) ? "ready" : "pending")));
-  assert.equal(rows.filter((row) => row.recipe === "ready").length, 6);
-  assert.equal(rows.filter((row) => row.recipe === "pending").length, 13);
+  assert.equal(rows.filter((row) => row.recipe === "ready").length, 14);
+  assert.equal(rows.filter((row) => row.recipe === "pending").length, 5);
   assert.deepEqual(Object.keys(rows[0] ?? {}), ["id", "flag", "aliases", "tier", "integration", "homeVerified", "recipe"]);
   const windsurf = rows.find((row) => row.id === "windsurf");
   assert.deepEqual(windsurf?.aliases, ["devin-desktop"]);
   assert.equal(windsurf.flag, "--windsurf");
   assert.equal(rows.find((row) => row.id === "claude")?.tier, "proven");
   assert.equal(rows.find((row) => row.id === "omp")?.integration, "extension");
-  assert.equal(rows.find((row) => row.id === "antigravity")?.homeVerified, false);
+  assert.equal(rows.find((row) => row.id === "antigravity")?.homeVerified, true);
 });
 
-void test("HOST-07: list reports recipe ready for a host whose runtime entry has a recipe (injected table: the fixture claude replaces the real row; opencode, codex, kimi, kimi-code are ready from the real table)", async (t) => {
+void test("HOST-07: list reports recipe ready for a host whose runtime entry has a recipe (injected table: the fixture claude replaces the real row; the other 13 recipe rows are ready from the real table)", async (t) => {
   const r = rig(t);
   const rows = json(await realmHost(r, "list")) as { id: string; recipe: string }[];
   assert.equal(rows.find((row) => row.id === "claude")?.recipe, "ready");
   assert.equal(rows.find((row) => row.id === "omp")?.recipe, "ready");
-  // omp, the injected claude, and the real opencode, codex, kimi and kimi-code rows.
-  assert.equal(rows.filter((row) => row.recipe === "ready").length, 6);
+  // The injected claude and the 13 real recipe rows: the 14 hosts with a recipe.
+  assert.equal(rows.filter((row) => row.recipe === "ready").length, 14);
 });
 
 // ---- detect -----------------------------------------------------------------------------------------------------------------
@@ -253,11 +256,11 @@ void test("HOST-07: status, install and uninstall exit 1 with the catalogue code
 
 // ---- The real table ---------------------------------------------------------------------------------------------------------
 
-void test("HOST-07: on the real table the 13 hosts without a recipe refuse install as recipe-pending (POLICY_DENIED) and change no home file, with or without --dry-run", async (t) => {
+void test("HOST-07: on the real table the 5 hosts without a recipe refuse install as recipe-pending (POLICY_DENIED) and change no home file, with or without --dry-run", async (t) => {
   const fx = makeFixtureHost(t);
-  const cursorHome = join(fx.home, ".cursor");
-  mkdirSync(cursorHome);
-  writeFileSync(join(cursorHome, "settings.json"), '{"keep":true}\n');
+  const traeHome = join(fx.home, ".trae");
+  mkdirSync(traeHome);
+  writeFileSync(join(traeHome, "settings.json"), '{"keep":true}\n');
   const deps: CliDeps = {
     env: { HOME: fx.home, PATH: "" },
     readConfig: () => ({ image: IMAGE, stateDir: fx.stateDir, workspaceRoot: join(fx.root, "projects") }),
@@ -265,7 +268,7 @@ void test("HOST-07: on the real table the 13 hosts without a recipe refuse insta
   };
   const before = treeHash(fx.home);
   const pending = HOST_IDS.filter((host) => HOST_RUNTIMES[host].recipe === null);
-  assert.equal(pending.length, 13);
+  assert.equal(pending.length, 5);
   for (const id of pending) {
     for (const flags of [[], ["--dry-run"]]) {
       const result = await runCli(["host", "install", id, ...flags], deps);
@@ -277,11 +280,36 @@ void test("HOST-07: on the real table the 13 hosts without a recipe refuse insta
   assert.equal(treeHash(fx.home), before, "no host file changed");
   assert.equal(existsSync(join(fx.stateDir, "audit")), false, "a refusal writes no audit line");
   assert.equal(existsSync(join(fx.stateDir, "hosts")), false, "a refusal writes no receipt");
-  const status = json(await runCli(["host", "status", "cursor"], deps)) as { id: string; status: string; entries: unknown[] };
-  assert.deepEqual(status, { id: "cursor", status: "recipe-pending", entries: [] });
-  const uninstall = json(await runCli(["host", "uninstall", "cursor"], deps)) as { status: string; actions: unknown[] };
+  const status = json(await runCli(["host", "status", "trae"], deps)) as { id: string; status: string; entries: unknown[] };
+  assert.deepEqual(status, { id: "trae", status: "recipe-pending", entries: [] });
+  const uninstall = json(await runCli(["host", "uninstall", "trae"], deps)) as { status: string; actions: unknown[] };
   assert.equal(uninstall.status, "noop");
   assert.deepEqual(uninstall.actions, []);
+});
+
+void test("WAVE2-03: on the real table install cursor --dry-run plans mcp.json and changes no file, while install trae is still recipe-pending", async (t) => {
+  const fx = makeFixtureHost(t);
+  mkdirSync(join(fx.home, ".cursor"));
+  const deps: CliDeps = {
+    env: { HOME: fx.home, PATH: "" },
+    readConfig: () => ({ image: IMAGE, stateDir: fx.stateDir, workspaceRoot: join(fx.root, "projects") }),
+    now: () => new Date("2026-01-01T00:00:00.000Z"),
+  };
+  const before = treeHash(fx.home);
+  const plan = json(await runCli(["host", "install", "cursor", "--dry-run"], deps)) as { id: string; status: string; dryRun: boolean; actions: { path: string; action: string }[] };
+  assert.equal(plan.id, "cursor");
+  assert.equal(plan.status, "planned");
+  assert.equal(plan.dryRun, true);
+  assert.deepEqual(plan.actions.map((action) => [action.path, action.action]), [["mcp.json", "create"]]);
+  assert.equal(treeHash(fx.home), before, "dry-run changes no host file");
+  assert.equal(existsSync(join(fx.stateDir, "audit")), false, "dry-run writes no audit line");
+  assert.equal(existsSync(join(fx.stateDir, "hosts")), false, "dry-run writes no receipt");
+
+  const refused = await runCli(["host", "install", "trae"], deps);
+  assert.equal(refused.exitCode, 1);
+  assert.equal(refused.stdout, "POLICY_DENIED\n");
+  assert.equal(refused.stderr, "realm host install: recipe-pending: no install recipe exists for this host yet\n");
+  assert.equal(treeHash(fx.home), before);
 });
 
 // ---- The omp recipe on the real table (OMPB-04, OMPB-05) -----------------------------------------------------------------------
@@ -455,9 +483,9 @@ void test("HOST-07: status reports every host, not-detected when its home is abs
   const rows = json(await runCli(["host", "status"], deps)) as { id: string; status: string; entries: unknown[] }[];
   assert.deepEqual(rows.map((row) => row.id), [...HOST_IDS]);
   assert.ok(rows.every((row) => row.status === "not-detected" && row.entries.length === 0));
-  mkdirSync(join(fx.home, ".cursor"));
-  const cursor = json(await runCli(["host", "status", "cursor"], deps)) as { status: string };
-  assert.equal(cursor.status, "recipe-pending");
+  mkdirSync(join(fx.home, ".trae"));
+  const trae = json(await runCli(["host", "status", "trae"], deps)) as { status: string };
+  assert.equal(trae.status, "recipe-pending");
   mkdirSync(join(fx.home, ".claude"));
   const claude = json(await runCli(["host", "status", "claude"], deps)) as { status: string };
   assert.equal(claude.status, "detected", "claude has a recipe now: detected, not recipe-pending");

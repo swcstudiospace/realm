@@ -123,7 +123,19 @@ export const HOST_RUNTIMES: Readonly<Record<HostId, HostRuntimeEntry>> = Object.
       value: { type: "local", command: ["realm", "mcp", "--host", "opencode"] },
     },
   }),
-  kilo: entry("kilo", { flag: "--kilo", displayName: "Kilo", tier: "config-only", homes: [".config/kilo", ".kilo"] }),
+  // Evidence E-KL1, E-KL2 and D-25-02: kilo.json (never kilo.jsonc) under the XDG-relocatable config home; ~/.kilo is a detection-only skills home.
+  kilo: entry("kilo", {
+    flag: "--kilo",
+    displayName: "Kilo",
+    tier: "config-only",
+    homes: [
+      { rel: ".config/kilo", role: "config" },
+      { rel: ".kilo", role: "skills" },
+    ],
+    envBase: { name: "XDG_CONFIG_HOME", sub: "kilo" },
+    binaries: ["kilo", "kilocode"],
+    recipe: { kind: "json-merge", file: "kilo.json", keyPath: ["mcp", "realm"], value: { type: "local", command: ["realm", "mcp", "--host", "kilo"] } },
+  }),
   // Evidence E-X1 to E-X4 and D-24-04: the owned table is the one `codex mcp add realm -- realm mcp --host codex` writes. Codex rewrites
   // config.toml with a comment-dropping TOML editor (observed 2026-11-17, codex-cli 0.154.0), so the table is owned by its header and no marker is written.
   codex: entry("codex", {
@@ -140,16 +152,87 @@ export const HOST_RUNTIMES: Readonly<Record<HostId, HostRuntimeEntry>> = Object.
       text: '[mcp_servers.realm]\ncommand = "realm"\nargs = ["mcp", "--host", "codex"]',
     },
   }),
-  copilot: entry("copilot", { flag: "--copilot", displayName: "Copilot", tier: "config-only", homes: [".copilot"] }),
-  antigravity: entry("antigravity", { flag: "--antigravity", displayName: "Antigravity", tier: "config-only", homes: [], homeVerified: false }),
-  cursor: entry("cursor", { flag: "--cursor", displayName: "Cursor", tier: "config-only", homes: [".cursor"] }),
+  // Evidence E-CP1, E-CP2 and D-25-02: `copilot mcp add` writes this canonical entry (tools and type included); COPILOT_HOME moves the directory.
+  copilot: entry("copilot", {
+    flag: "--copilot",
+    displayName: "Copilot",
+    tier: "config-only",
+    homes: [".copilot"],
+    envOverride: "COPILOT_HOME",
+    binaries: ["copilot"],
+    recipe: {
+      kind: "json-merge",
+      file: "mcp-config.json",
+      keyPath: ["mcpServers", "realm"],
+      value: { tools: ["*"], type: "local", command: "realm", args: ["mcp", "--host", "copilot"] },
+    },
+  }),
+  // Evidence E-AG1 and D-25-02: documented-only ~/.gemini/config/mcp_config.json (three Google pages agree); no `type` is documented and no variable.
+  antigravity: entry("antigravity", {
+    flag: "--antigravity",
+    displayName: "Antigravity",
+    tier: "config-only",
+    homes: [".gemini/config"],
+    binaries: ["agy"],
+    recipe: { kind: "json-merge", file: "mcp_config.json", keyPath: ["mcpServers", "realm"], value: { command: "realm", args: ["mcp", "--host", "antigravity"] } },
+  }),
+  // Evidence E-CU1, E-CU2 and D-25-02: documented ~/.cursor/mcp.json (type "stdio" marked required); no relocation variable is documented.
+  cursor: entry("cursor", {
+    flag: "--cursor",
+    displayName: "Cursor",
+    tier: "config-only",
+    homes: [".cursor"],
+    binaries: ["cursor-agent", "cursor"],
+    recipe: { kind: "json-merge", file: "mcp.json", keyPath: ["mcpServers", "realm"], value: { type: "stdio", command: "realm", args: ["mcp", "--host", "cursor"] } },
+  }),
+  // Deferred (25-CONTEXT D-25-02, OQ-25-01): renamed product (E-WS1), two config files (E-WS2), the IDE was not observed.
   windsurf: entry("windsurf", { flag: "--windsurf", aliases: ["devin-desktop"], displayName: "Windsurf", tier: "config-only", homes: [".codeium/windsurf"] }),
-  augment: entry("augment", { flag: "--augment", displayName: "Augment", tier: "config-only", homes: [".augment"] }),
+  // Evidence E-AU1, E-AU2 and D-25-02: `auggie mcp add-json` writes type "stdio" into the shared settings file; AUGMENT_CACHE_DIR moves the directory.
+  augment: entry("augment", {
+    flag: "--augment",
+    displayName: "Augment",
+    tier: "config-only",
+    homes: [".augment"],
+    envOverride: "AUGMENT_CACHE_DIR",
+    binaries: ["auggie"],
+    recipe: {
+      kind: "json-merge",
+      file: "settings.json",
+      keyPath: ["mcpServers", "realm"],
+      value: { type: "stdio", command: "realm", args: ["mcp", "--host", "augment"] },
+    },
+  }),
+  // Deferred (25-CONTEXT D-25-02, OQ-25-02): no documented global MCP file for the IDE (E-TR1).
   trae: entry("trae", { flag: "--trae", displayName: "Trae", tier: "config-only", homes: [".trae"] }),
-  qwen: entry("qwen", { flag: "--qwen", displayName: "Qwen", tier: "config-only", homes: [".qwen"] }),
+  // Evidence E-QW1, E-QW2 and D-25-02: `qwen mcp add -s user` writes this entry into the host's whole settings file; QWEN_HOME moves the directory.
+  qwen: entry("qwen", {
+    flag: "--qwen",
+    displayName: "Qwen",
+    tier: "config-only",
+    homes: [".qwen"],
+    envOverride: "QWEN_HOME",
+    binaries: ["qwen"],
+    recipe: { kind: "json-merge", file: "settings.json", keyPath: ["mcpServers", "realm"], value: { command: "realm", args: ["mcp", "--host", "qwen"] } },
+  }),
+  // Recipe: plan 25-02.
   hermes: entry("hermes", { flag: "--hermes", displayName: "Hermes", tier: "config-only", homes: [".hermes"] }),
+  // Recipe: plan 25-02.
   codebuddy: entry("codebuddy", { flag: "--codebuddy", displayName: "CodeBuddy", tier: "config-only", homes: [".codebuddy"] }),
-  cline: entry("cline", { flag: "--cline", displayName: "Cline", tier: "config-only", homes: [".cline"] }),
+  // Evidence E-CL1, E-CL2 and D-25-02: the Cline CLI reads this file; the flat shape parses (the CLI writes a nested one). The IDE extension's file is unknown (OQ-25-08).
+  cline: entry("cline", {
+    flag: "--cline",
+    displayName: "Cline",
+    tier: "config-only",
+    homes: [".cline"],
+    envOverride: "CLINE_DIR",
+    binaries: ["cline"],
+    recipe: {
+      kind: "json-merge",
+      file: "data/settings/cline_mcp_settings.json",
+      keyPath: ["mcpServers", "realm"],
+      value: { command: "realm", args: ["mcp", "--host", "cline"] },
+    },
+  }),
   // Evidence E-K1 to E-K6 and D-24-05: `kimi` is Kimi CLI (the archived Python product, ~/.kimi), `kimi-code` is Kimi Code (the
   // Node product, ~/.kimi-code). Both read mcp.json in the documented mcpServers shape. The command name `kimi` is shared by
   // the two products, so neither row detects by binary. KIMI_SHARE_DIR moves the config home and never the skills home.
@@ -172,8 +255,18 @@ export const HOST_RUNTIMES: Readonly<Record<HostId, HostRuntimeEntry>> = Object.
     envOverride: "KIMI_CODE_HOME",
     recipe: { kind: "json-merge", file: "mcp.json", keyPath: ["mcpServers", "realm"], value: { command: "realm", args: ["mcp", "--host", "kimi-code"] } },
   }),
+  // Deferred (25-CONTEXT D-25-02, OQ-25-03): GUI-owned native config, unobservable.
   zcode: entry("zcode", { flag: "--zcode", displayName: "ZCode", tier: "config-only", homes: [".zcode"] }),
-  pi: entry("pi", { flag: "--pi", displayName: "Pi", tier: "config-only", homes: [".pi/agent"] }),
+  // Evidence E-PI1 to E-PI3 and D-25-02: `pi mcp add` writes this flat entry into a strict-JSON file; PI_CODING_AGENT_DIR is shared with omp.
+  pi: entry("pi", {
+    flag: "--pi",
+    displayName: "Pi",
+    tier: "config-only",
+    homes: [".pi/agent"],
+    envOverride: "PI_CODING_AGENT_DIR",
+    binaries: ["pi"],
+    recipe: { kind: "json-merge", file: "mcp.json", keyPath: ["mcpServers", "realm"], value: { command: "realm", args: ["mcp", "--host", "pi"] } },
+  }),
 });
 
 // Alias -> id, derived from the table. Null prototype so a name like "__proto__" never matches.
@@ -199,7 +292,7 @@ export function resolveHostId(name: string): HostId | undefined {
   return undefined;
 }
 
-// A host has no install recipe until its phase sets one: Phase 22 sets omp, Phase 24 sets claude, opencode, codex, kimi and kimi-code, Phase 25 the rest.
+// A host has no install recipe until its phase sets one: Phase 22 sets omp, Phase 24 sets claude, opencode, codex, kimi and kimi-code, Phase 25 the rest except the three deferred hosts (windsurf, trae, zcode).
 export function recipePending(id: HostId): boolean {
   return HOST_RUNTIMES[id].recipe === null;
 }
