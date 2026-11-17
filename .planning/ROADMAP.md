@@ -588,12 +588,16 @@ Milestone v3.0 phases (12 to 20) run in three parallel lanes that share no mutab
 
 ### Phase 21: Host plugin contract and installer
 
-**Goal:** [To be planned]
-**Requirements**: TBD
-**Plans:** 0 plans
+**Goal:** A shared host plugin contract (manifest, capability grants mapped to the existing policy gates, boot-hook port, installer engine) and a declarative table of Omp plus the 18 GSD Core runtimes, driven by a `realm host` CLI and a doctor check, proven on fixture hosts.
+**Depends on:** Phase 20
+**Requirements**: HOST-01, HOST-02, HOST-03, HOST-04, HOST-05, HOST-06, HOST-07, HOST-08, HOST-09
+**Plans:** 4 plans
 
 Plans:
-- [ ] TBD (run /gsd-plan-phase 21 to break down)
+- [ ] 21-01-PLAN.md: contract types, manifest, capability catalog, runtime table (wave 1)
+- [ ] 21-02-PLAN.md: boot-hook port, bounds parity, conformance harness (wave 2)
+- [ ] 21-03-PLAN.md: installer engine, receipts, audit and logging (wave 2)
+- [ ] 21-04-PLAN.md: `realm host` CLI, doctor check, docs and gates (wave 3)
 
 ### Phase 22: Omp plugin on boot
 
