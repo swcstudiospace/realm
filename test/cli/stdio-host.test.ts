@@ -313,6 +313,8 @@ void test("--host claude: a marker with the six keys exists after settle and is 
   assert.equal((await finish(labelled)).exitCode, 0);
   assert.equal(existsSync(join(MARKER_DIR("claude"), `${String(process.pid)}.json`)), false, "the marker is removed at EOF");
 
+  // The labelled session above left its own marker directory behind; the unlabelled one must add no marker of its own.
+  rmSync(join(STATE_DIR, "hosts"), { recursive: true, force: true });
   const unlabelled = start({ argv: ["mcp", "--workspace", WORKSPACE] });
   unlabelled.input.write(listTools(1));
   await untilReply(unlabelled, 1);

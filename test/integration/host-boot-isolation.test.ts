@@ -72,6 +72,8 @@ before(async () => {
     now: () => new Date(CLOCK_ISO),
   });
   fixture = await startRealmDaemon({ stateDir, workspace: root, mode: "advisory", logger });
+  // One standing session of its own: releasing the last live session stops the daemon, and the scenarios release theirs.
+  await fixture.up(project("anchor"));
 });
 
 after(async () => {
@@ -140,9 +142,23 @@ function bootHost(argv: readonly string[], options: HostOptions = {}): Host {
 
 const mcpHost = (host: string, workspace: string, options?: HostOptions): Host => bootHost(["mcp", "--host", host, "--workspace", workspace], options);
 
+// The daemon admits a bounded number of concurrent sessions, so a scenario releases its project once its assertions are done.
+// Each release is a down the test itself sends; a boot path adds none, so the daemon's down count must equal this count.
+let releases = 0;
+
+async function releaseProject(path: string): Promise<void> {
+  releases += 1;
+  await fixture.release(path);
+}
+
+async function downCount(): Promise<number> {
+  const snapshot = await metrics();
+  return snapshot.controlRequests.find((row) => row.method === "down")?.count ?? 0;
+}
+
 function stateOf(outcome: Record<string, unknown>): unknown {
   const value = outcome["value"];
-  assert.ok(typeof value === "object" && value !== null && "snapshot" in value, "a status value");
+  assert.ok(typeof value === "object" && value !== null && "snapshot" in value, `a status value, not ${JSON.stringify(outcome)}`);
   const snapshot = value.snapshot;
   assert.ok(typeof snapshot === "object" && snapshot !== null && "state" in snapshot, "a snapshot");
   return snapshot.state;
@@ -237,12 +253,8 @@ void test("S1-S3: a hung up, a failed boot and a stdin close leave another host,
   assert.equal(endedB.exitCode, 0);
   assert.equal(existsSync(markerPath("codex")), false, "host B's marker is removed");
   assert.equal(await sandboxState(projectTwo), "active", "the project's sandbox outlives its host");
-  const snapshot = await metrics();
-  assert.equal(
-    snapshot.controlRequests.find((row) => row.method === "down"),
-    undefined,
-    "no boot path issued down",
-  );
+  assert.equal(await downCount(), 0, "no boot path issued down");
+  await releaseProject(projectTwo);
 });
 
 void test("S4: a flood of host-boot frames is bounded, a fresh host still boots and the boot audit chain verifies", async () => {
@@ -294,8 +306,8 @@ void test("S4: a flood of host-boot frames is bounded, a fresh host still boots 
   const audit = join(stateDir, "audit", "host-boot.jsonl");
   assert.equal(existsSync(audit), true, "accepted reports wrote the boot chain");
   assert.equal(verifyAuditFile(audit).ok, true, "the boot audit chain still verifies after the flood");
-  const snapshot = await metrics();
-  assert.equal(snapshot.controlRequests.find((row) => row.method === "down"), undefined);
+  assert.equal(await downCount(), releases, "no boot path issued down: only the test's own release is counted");
+  await releaseProject(projectThree);
 });
 
 void test("S5: two hosts and an ACP host on one project boot together; one ends and the others keep the sandbox", async () => {
@@ -316,8 +328,8 @@ void test("S5: two hosts and an ACP host on one project boot together; one ends 
   assert.equal((await end(acp)).exitCode, 0);
   assert.equal((await end(codex)).exitCode, 0);
   assert.equal(await sandboxState(shared), "active", "the sandbox lasts until realm down");
-  const snapshot = await metrics();
-  assert.equal(snapshot.controlRequests.find((row) => row.method === "down"), undefined);
+  assert.equal(await downCount(), releases, "no boot path issued down: only the test's own releases are counted");
+  await releaseProject(shared);
 });
 
 void test("S6: a project directory named with a newline, a quote, an ANSI escape and a token appears in no log, report, metric, audit line or marker", async () => {

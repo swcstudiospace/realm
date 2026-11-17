@@ -97,10 +97,10 @@ void test("each phase writes one log line, the marker and a valid report", async
     readonly marker: { readonly attach: string; readonly code: string | null } | "removed";
   }[] = [
     { event: event("attached"), level: "debug", marker: { attach: "attached", code: null } },
-    { event: event("reattached", { attempt: 2 }), level: "debug", marker: { attach: "attached", code: null } },
     { event: event("refused", { code: "POLICY_DENIED" }), level: "warn", marker: { attach: "failed", code: "POLICY_DENIED" } },
     { event: event("failed", { code: "DAEMON_START_TIMEOUT", state: null }), level: "warn", marker: { attach: "failed", code: "DAEMON_START_TIMEOUT" } },
     { event: event("link-lost", { code: "REALM_NOT_ACTIVE" }), level: "warn", marker: { attach: "failed", code: "REALM_NOT_ACTIVE" } },
+    { event: event("reattached", { attempt: 2 }), level: "debug", marker: { attach: "attached", code: null } },
     { event: event("closed"), level: "debug", marker: "removed" },
   ];
   assert.deepEqual(table.map((row) => row.event.phase), [...HOST_BOOT_PHASES], "every phase is covered, in vocabulary order");
@@ -208,7 +208,7 @@ void test("a throwing send and a never-settling send leave observe synchronous a
   try {
     throwing.observer.observe(event("attached"));
     hanging.observer.observe(event("attached"));
-    assert.equal(throwing.lines.length, 1, "the log line was written synchronously");
+    assert.equal(throwing.lines[0]?.["event"], "host.boot.attached", "the boot log line was written synchronously, first");
     const started = Date.now();
     await boundedWait(throwing.observer.flush(50), "flush after a throwing send", 2000);
     await boundedWait(hanging.observer.flush(50), "flush after a hanging send", 2000);
