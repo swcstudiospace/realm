@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.3.40] - 2026-11-17
+
+### Documentation
+- docs(phase-22): close phase 22, Omp plugin on boot (#109) (81befb7)
+
 ## [0.3.39] - 2026-11-17
 
 ### Maintenance
