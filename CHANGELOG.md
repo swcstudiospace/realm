@@ -4,6 +4,16 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-17
+
+### Documentation
+- docs(v4.0): plan phases 27 to 31 (#131) (85ea2bb)
+- docs(milestone): start v4.0 (phases 27 to 31), release line 0.4.x, Anda replacement research (#130) (20a3eb8)
+
+### Maintenance
+- test: close archived v1.0 gaps (MCP notification and id handling, reaper null container record, lockfile integrity gate) (#132) (842d5ca)
+- test(live): live closeout test for the archived v1.0 doctor, socket-mode and timed-out exec gaps (#129) (379c9a5)
+
 ## [0.3.54] - 2026-11-17
 
 ### Documentation
