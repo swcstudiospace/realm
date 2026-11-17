@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.3.50] - 2026-11-17
+
+### Documentation
+- docs(phase-26): plan plugin tests and author docs, register TEST-HOST-01 to TEST-HOST-08 (#120) (772c6ee)
+
 ## [0.3.49] - 2026-11-17
 
 ### Documentation
