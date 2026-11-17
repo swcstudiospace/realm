@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.3.31] - 2026-11-17
+
+### Documentation
+- docs(release): drop stale omega-ci comments and fix release-state wording (phase 20) (#97) (339674c)
+
 ## [0.3.30] - 2026-11-16
 
 ### Added
