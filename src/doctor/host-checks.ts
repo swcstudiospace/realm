@@ -12,7 +12,7 @@ import { withTimeout } from "../core/timeout.js";
 import { errnoOf, lstatIfPresent } from "../fs/canonicalize.js";
 import { createHostAdapter } from "../host/adapter.js";
 import { defaultManifestFor } from "../host/manifest.js";
-import { readPresence } from "../host/presence.js";
+import { readAllPresence, readPresence, type HostPresenceReport } from "../host/presence.js";
 import { DEFAULT_READ_TIMEOUT_MS } from "../host/receipt.js";
 import { HOST_RUNTIMES } from "../host/runtimes.js";
 import { HOST_IDS, type HostEnv, type HostId, type HostRuntimeEntry } from "../host/types.js";
@@ -91,6 +91,15 @@ interface Failure {
   readonly code: ErrorCode;
 }
 
+// "; live host sessions: claude 1, omp 2": hosts with a live marker that the detail does not already describe, by id and
+// count only. "" when there are none.
+function liveSuffix(presence: readonly HostPresenceReport[], described: ReadonlySet<HostId>): string {
+  const live = presence.flatMap((report) =>
+    "counts" in report && report.counts.live > 0 && !described.has(report.id) ? [`${report.id} ${String(report.counts.live)}`] : [],
+  );
+  return live.length === 0 ? "" : `; live host sessions: ${live.join(", ")}`;
+}
+
 export async function hostPluginsCheck(options: HostPluginsCheckOptions): Promise<HostPluginsCheckResult> {
   const hostsDir = join(options.stateDir, "hosts");
   const inspect = `Inspect ${hostsDir} and the receipt named in the detail without following symlinks; restore the receipt from a known-good copy.`;
@@ -101,15 +110,25 @@ export async function hostPluginsCheck(options: HostPluginsCheckOptions): Promis
   } catch (error: unknown) {
     return { id: "host-plugins", status: "fail", detail: `the hosts directory cannot be read (${codeOf(error)})`, fix: inspect };
   }
+  // Markers are read for every host, receipt or not: a hand-registered `realm mcp --host claude` has markers and no receipt.
+  const presence = await readAllPresence(options.stateDir, {
+    readTimeoutMs,
+    ...(options.isProcessAlive === undefined ? {} : { isAlive: options.isProcessAlive }),
+  });
+  const markersUnreadable = presence.some((report) => "error" in report || report.counts.unreadable > 0);
+  const described = new Set<HostId>();
   if (hosts === null || hosts.length === 0) {
-    return { id: "host-plugins", status: "pass", detail: "no host plugin installed", fix: null };
+    const detail = `no host plugin installed${liveSuffix(presence, described)}`;
+    return markersUnreadable
+      ? { id: "host-plugins", status: "warn", detail, fix: inspect }
+      : { id: "host-plugins", status: "pass", detail, fix: null };
   }
   const runtimes = options.adapters ?? HOST_RUNTIMES;
   // A receipt names its own config home and status resolves paths against it. This env only serves the detection fallback
   // that runs if a receipt vanishes between the listing and the read, so it points inside the state directory, never at a real home.
   const env: HostEnv = { home: options.stateDir, env: {}, pathDirs: [] };
   const installed: InstalledHost[] = [];
-  let unreadableMarkers = false;
+  let unreadableMarkers = markersUnreadable;
   const drifted: Drift[] = [];
   const failed: Failure[] = [];
   for (const id of hosts) {
@@ -132,6 +151,7 @@ export async function hostPluginsCheck(options: HostPluginsCheckOptions): Promis
         const unreadable = sessions.unreadable === 0 ? "" : `, ${String(sessions.unreadable)} unreadable presence marker(s)`;
         unreadableMarkers ||= sessions.unreadable > 0;
         installed.push({ id, note: `extension target present, ${sessionsPhrase(sessions.live)}${unreadable}` });
+        described.add(id);
       } else if (found.status === "installed") {
         installed.push({ id, note: "" });
       } else if (found.status === "drifted") {
@@ -154,15 +174,16 @@ export async function hostPluginsCheck(options: HostPluginsCheckOptions): Promis
     return {
       id: "host-plugins",
       status: "warn",
-      detail: `host plugin drift: ${drifted.map((item) => `${item.id}: ${item.detail}`).join("; ")}`,
+      detail: `host plugin drift: ${drifted.map((item) => `${item.id}: ${item.detail}`).join("; ")}${liveSuffix(presence, described)}`,
       fix: `Repair with realm host install ${first.id}, or remove with realm host uninstall ${first.id}.`,
     };
   }
   // A receipt that vanished between the listing and the read leaves nothing installed.
-  const detail =
+  const detail = `${
     installed.length === 0
       ? "no host plugin installed"
-      : `installed: ${installed.map((item) => (item.note === "" ? item.id : `${item.id} (${item.note})`)).join(", ")}`;
+      : `installed: ${installed.map((item) => (item.note === "" ? item.id : `${item.id} (${item.note})`)).join(", ")}`
+  }${liveSuffix(presence, described)}`;
   if (unreadableMarkers) {
     return { id: "host-plugins", status: "warn", detail, fix: inspect };
   }

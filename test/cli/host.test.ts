@@ -623,3 +623,41 @@ void test("OMPB-07: the status row of a host that is not an extension host keeps
   const status = json(await realmHost(r, "status", "claude")) as Record<string, unknown>;
   assert.deepEqual(Object.keys(status).sort(), ["entries", "id", "status"]);
 });
+
+const MARKER = { startedAt: "2026-11-17T10:00:00.000Z", sessionId: "p0123456789ab", attach: "attached", code: null } as const;
+
+void test("BOOT-05: realm host status claude reports plugin.sessions for live markers, counts only, with no path", async (t) => {
+  const r = rig(t);
+  writePresence(r.host.stateDir, "claude", { pid: process.pid, ...MARKER });
+  const status = json(await realmHost(r, "status", "claude")) as Record<string, unknown>;
+  assert.deepEqual(Object.keys(status).sort(), ["entries", "id", "plugin", "status"]);
+  assert.deepEqual(status["plugin"], { sessions: { live: 1, stale: 0, unreadable: 0 } });
+  assert.equal(JSON.stringify(status).includes(r.host.root), false, "no absolute path in the status");
+});
+
+void test("BOOT-05: an unreadable marker alone adds plugin.sessions, and a stale marker alone does not", async (t) => {
+  const r = rig(t);
+  writePresence(r.host.stateDir, "claude", { pid: 4_194_000, ...MARKER });
+  const stale = json(await realmHost(r, "status", "claude")) as Record<string, unknown>;
+  assert.deepEqual(Object.keys(stale).sort(), ["entries", "id", "status"]);
+  writeAt(join(r.host.stateDir, "hosts", "claude-active", "5.json"), "garbage");
+  const unreadable = json(await realmHost(r, "status", "claude")) as Record<string, unknown>;
+  assert.deepEqual(unreadable["plugin"], { sessions: { live: 0, stale: 1, unreadable: 1 } });
+});
+
+void test("BOOT-05: the all-hosts status keeps the exact row for a host with no markers and adds plugin only where there are some", async (t) => {
+  const r = rig(t);
+  writePresence(r.host.stateDir, "claude", { pid: process.pid, ...MARKER });
+  const rows = json(await realmHost(r, "status")) as { id: string }[];
+  assert.equal(rows.length, 19);
+  for (const row of rows) {
+    const keys = Object.keys(row).sort();
+    if (row.id === "claude") {
+      assert.deepEqual(keys, ["entries", "id", "plugin", "status"]);
+    } else if (row.id === "omp") {
+      assert.ok(keys.includes("plugin"), "an extension host keeps its plugin object");
+    } else {
+      assert.deepEqual(keys, ["entries", "id", "status"], row.id);
+    }
+  }
+});

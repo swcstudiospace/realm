@@ -12,6 +12,7 @@ import { withTimeout } from "../core/timeout.js";
 import { appendAudit } from "../audit/log.js";
 import type { Logger } from "../observe/logger.js";
 import type { HostAuditFn } from "./host-audit.js";
+import { bootHookOf } from "./boot-driver.js";
 import {
   defaultHostReader,
   readHostFile,
@@ -435,7 +436,7 @@ export function createHostAdapter(
   return Object.freeze({
     id: entry.id,
     tier: entry.tier,
-    bootHook: deps.bootHook ?? null,
+    bootHook: deps.bootHook === undefined ? bootHookOf(entry) : deps.bootHook,
     detect,
     status,
     install: (env: HostEnv, options: HostOperationOptions) => operate("install", env, options),

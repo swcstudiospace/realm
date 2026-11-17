@@ -166,12 +166,25 @@ export interface HostStatusSink {
   notify(message: string): void;
 }
 
+// One step of a host boot, reported to HostBootDeps.observe. The six phases are the same vocabulary as HOST_BOOT_PHASES in
+// src/host/boot-report.ts. attempt is 1-based within the current attach streak (1 to 9) and durationMs is a non-negative
+// integer number of milliseconds (at most 600000), so each event is a valid boot report field. No event carries a path or text.
+export interface HostBootEvent {
+  readonly phase: "attached" | "refused" | "failed" | "link-lost" | "reattached" | "closed";
+  readonly code?: ErrorCode;
+  readonly attempt: number;
+  readonly durationMs: number;
+  readonly state: State | null;
+}
+
 export interface HostBootDeps {
   attachDaemon(workspaceRoot: string): Promise<{ client: DaemonClient; refusal: RealmError | null }>;
   now(): Date;
   readonly random: () => number;
   timers: HostTimers;
   sink: HostStatusSink;
+  // Optional observer of boot events. A hook calls it inside a try: a throwing observer changes nothing.
+  readonly observe?: (event: HostBootEvent) => void;
 }
 
 export interface HostBootHook {

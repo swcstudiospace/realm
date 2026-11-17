@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { RealmError } from "../../src/core/errors.js";
-import { readPresence, removePresence, writePresence } from "../../src/host/presence.js";
+import { readAllPresence, readPresence, removePresence, writePresence } from "../../src/host/presence.js";
 
 const STARTED = "2026-11-17T10:00:00.000Z";
 
@@ -247,5 +247,69 @@ void test(
     assert.equal(counts.live, 1);
     assert.equal(counts.stale + counts.unreadable, 1);
     assert.equal(readFileSync(join(stateDir, "hosts", "omp-active", `${String(process.pid)}.json`), "utf8").length > 0, true);
+  }),
+);
+
+void test(
+  "readAllPresence lists the hosts with live or unreadable markers in HOST_IDS order and leaves out stale-only and empty hosts",
+  withState(async (stateDir) => {
+    writePresence(stateDir, "claude", record(11));
+    writePresence(stateDir, "omp", record(12));
+    writePresence(stateDir, "kimi", record(13));
+    mkdirSync(join(stateDir, "hosts", "codex-active"), { recursive: true });
+    const reports = await readAllPresence(stateDir, { isAlive: (pid) => pid !== 13 });
+    assert.deepEqual(reports, [
+      { id: "omp", counts: { live: 1, stale: 0, unreadable: 0 } },
+      { id: "claude", counts: { live: 1, stale: 0, unreadable: 0 } },
+    ]);
+  }),
+);
+
+void test(
+  "readAllPresence reports an unreadable marker, and an absent hosts directory as nothing",
+  withState(async (stateDir) => {
+    assert.deepEqual(await readAllPresence(stateDir), []);
+    mkdirSync(join(stateDir, "hosts", "opencode-active"), { recursive: true });
+    writeFileSync(join(stateDir, "hosts", "opencode-active", "7.json"), "garbage");
+    assert.deepEqual(await readAllPresence(stateDir, { isAlive: everyoneAlive }), [
+      { id: "opencode", counts: { live: 0, stale: 0, unreadable: 1 } },
+    ]);
+  }),
+);
+
+void test(
+  "readAllPresence reports a host whose directory is a symlink by code and still reads the others",
+  withState(async (stateDir) => {
+    writePresence(stateDir, "claude", record(11));
+    mkdirSync(join(stateDir, "elsewhere"));
+    symlinkSync(join(stateDir, "elsewhere"), join(stateDir, "hosts", "codex-active"));
+    const reports = await readAllPresence(stateDir, { isAlive: everyoneAlive });
+    assert.deepEqual(reports, [
+      { id: "claude", counts: { live: 1, stale: 0, unreadable: 0 } },
+      { id: "codex", error: "PATH_ESCAPE" },
+    ]);
+  }),
+);
+
+void test(
+  "readAllPresence keeps the per-host bound of 64 names",
+  withState(async (stateDir) => {
+    const dir = join(stateDir, "hosts", "pi-active");
+    mkdirSync(dir, { recursive: true });
+    for (let pid = 1; pid <= 70; pid += 1) {
+      writeFileSync(join(dir, `${String(pid)}.json`), "garbage");
+    }
+    assert.deepEqual(await readAllPresence(stateDir), [{ id: "pi", counts: { live: 0, stale: 0, unreadable: 64 } }]);
+  }),
+);
+
+void test(
+  "readAllPresence with a symlinked hosts directory reports every host by code",
+  withState(async (stateDir) => {
+    mkdirSync(join(stateDir, "real-hosts"));
+    symlinkSync(join(stateDir, "real-hosts"), join(stateDir, "hosts"));
+    const reports = await readAllPresence(stateDir);
+    assert.equal(reports.length, 19);
+    assert.ok(reports.every((report) => "error" in report && report.error === "PATH_ESCAPE"));
   }),
 );

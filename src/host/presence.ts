@@ -11,13 +11,13 @@
 import { constants, lstatSync, mkdirSync, readdirSync, realpathSync, rmSync } from "node:fs";
 import { open, readdir } from "node:fs/promises";
 import { join } from "node:path";
-import { ERROR_CODES, makeRealmError } from "../core/errors.js";
+import { ERROR_CODES, makeRealmError, RealmError, type ErrorCode } from "../core/errors.js";
 import { withTimeout } from "../core/timeout.js";
 import { atomicWriteFile, observeSha256, type StageHook } from "../fs/atomic-write.js";
 import { errnoOf, lstatIfPresent } from "../fs/canonicalize.js";
 import { isSessionId } from "../session/paths.js";
 import { DEFAULT_READ_TIMEOUT_MS } from "./receipt.js";
-import type { HostId } from "./types.js";
+import { HOST_IDS, type HostId } from "./types.js";
 
 const MAX_ENTRIES = 64;
 const MAX_RECORD_BYTES = 4096;
@@ -266,4 +266,25 @@ export async function readPresence(stateDir: string, hostId: HostId, options: Pr
     }
     throw error;
   }
+}
+
+// One host's reading: its counts, or the catalogue code of the failure that kept it from being read.
+export type HostPresenceReport =
+  | { readonly id: HostId; readonly counts: PresenceCounts }
+  | { readonly id: HostId; readonly error: ErrorCode };
+
+// The hosts that have live or unreadable markers, in HOST_IDS order. A host with none is left out, and so is every host when
+// the hosts directory is absent. Every bound of readPresence applies per host. A host whose directory cannot be read is
+// reported by code and the others are still read; the function never throws for content.
+export async function readAllPresence(stateDir: string, options: PresenceReadOptions = {}): Promise<readonly HostPresenceReport[]> {
+  const readings = await Promise.all(
+    HOST_IDS.map(async (id): Promise<HostPresenceReport> => {
+      try {
+        return { id, counts: await readPresence(stateDir, id, options) };
+      } catch (error: unknown) {
+        return { id, error: error instanceof RealmError ? error.code : "SCHEMA_INVALID" };
+      }
+    }),
+  );
+  return readings.filter((reading) => "error" in reading || reading.counts.live + reading.counts.unreadable > 0);
 }
