@@ -28,6 +28,7 @@ covered_files:
   - "src/runtime/driver/compute-driver.ts"
   - "test/anda/no-shim.test.ts"
   - "test/runtime/driver/driver-service.test.ts"
+covered_digest: "v3:sha256:27da0b5a0fa6075d9ff077a51883e846dd293b849e0fbcf694f5157d48f45979"
 ---
 
 # Phase 27 Verification: Anda disposition and v4.0 requirement closure
