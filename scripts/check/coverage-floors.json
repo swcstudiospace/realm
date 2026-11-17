@@ -6,6 +6,6 @@
     "src/fs": { "lines": 91, "branches": 87, "functions": 99 },
     "src/core": { "lines": 97, "branches": 95, "functions": 96 },
     "src/tools": { "lines": 96, "branches": 92, "functions": 99 },
-    "src/host": { "lines": 0, "branches": 0, "functions": 0 }
+    "src/host": { "lines": 95, "branches": 93, "functions": 98 }
   }
 }
