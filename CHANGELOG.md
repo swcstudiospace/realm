@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.3.45] - 2026-11-17
+
+### Fixed
+- fix(host): own the Codex mcp table by header instead of comment markers (#114) (c157149)
+
 ## [0.3.44] - 2026-11-17
 
 ### Added
