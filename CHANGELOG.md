@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.3.41] - 2026-11-17
+
+### Added
+- feat(host): boot integration for host plugins (Phase 23) (#110) (82928b6)
+
 ## [0.3.40] - 2026-11-17
 
 ### Documentation
