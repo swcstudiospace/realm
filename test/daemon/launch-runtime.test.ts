@@ -95,7 +95,7 @@ void test("a Bun host with a found Node spawns it with the daemon entry", () => 
     assert.deepEqual(found, ["/opt/node/bin"]);
     assert.equal(records.length, 1);
     assert.equal(records[0]?.file, "/opt/node/bin/node");
-    assert.deepEqual(records[0]?.args, [ENTRY]);
+    assert.deepEqual(records[0].args, [ENTRY]);
   });
 });
 
@@ -128,7 +128,7 @@ void test("a Bun host passes PATH to the child and drops a sentinel", () => {
       );
     });
     assert.equal(records[0]?.env.PATH, "/opt/node/bin");
-    assert.equal(Object.hasOwn(records[0]?.env ?? {}, "REALM_SENTINEL_SECRET"), false);
+    assert.equal(Object.hasOwn(records[0].env, "REALM_SENTINEL_SECRET"), false);
   });
 });
 
