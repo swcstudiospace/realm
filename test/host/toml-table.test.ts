@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { tomlTableState } from "../../src/host/toml-table.js";
+import { locateTomlTable, tomlTableState } from "../../src/host/toml-table.js";
 
 const TARGET = ["mcp_servers", "realm"] as const;
 
@@ -106,4 +106,52 @@ void test("pathological single lines are answered, not hung", () => {
 
 void test("a look-alike inside a multi-line string is a documented false positive: taken", () => {
   assert.equal(stateOf('note = """\n[mcp_servers.realm]\n"""\n'), "taken");
+});
+
+// ---- locateTomlTable ---------------------------------------------------------------------------------------------------------
+
+const OWNED = '[mcp_servers.realm]\ncommand = "realm"\nargs = ["mcp", "--host", "codex"]\n';
+
+void test("locateTomlTable: a free file has no table; a table is found from its header to its last key line", () => {
+  assert.deepEqual(locateTomlTable("", TARGET), { state: "absent" });
+  assert.deepEqual(locateTomlTable("[features]\nhooks = true\n", TARGET), { state: "absent" });
+  const before = "# top\n[features]\nhooks = true\n\n";
+  const after = "\n# about the next table\n[mcp_servers.other]\ncommand = \"o\"\n";
+  const found = locateTomlTable(`${before}${OWNED}${after}`, TARGET);
+  assert.deepEqual(found, { state: "present", start: before.length, end: before.length + OWNED.length, text: OWNED });
+});
+
+void test("locateTomlTable: a table at the end of a file without a final newline, and a CRLF table, give the same normalized text", () => {
+  const noNewline = locateTomlTable(OWNED.slice(0, -1), TARGET);
+  assert.deepEqual(noNewline, { state: "present", start: 0, end: OWNED.length - 1, text: OWNED });
+  const crlfFound = locateTomlTable(crlf(`[features]\nhooks = true\n\n${OWNED}`), TARGET);
+  assert.equal(crlfFound.state, "present");
+  assert.equal(crlfFound.text, OWNED);
+  const ends = crlfFound.end;
+  assert.equal(ends, crlf(`[features]\nhooks = true\n\n${OWNED}`).length);
+});
+
+void test("locateTomlTable: a comment or a blank line inside the table stays in its text; one at its tail does not", () => {
+  const inside = locateTomlTable('[mcp_servers.realm]\n# note\ncommand = "realm"\n', TARGET);
+  assert.equal(inside.state === "present" ? inside.text : "", '[mcp_servers.realm]\n# note\ncommand = "realm"\n');
+  const tail = locateTomlTable('[mcp_servers.realm]\ncommand = "realm"\n\n# END\n', TARGET);
+  assert.deepEqual(tail, { state: "present", start: 0, end: '[mcp_servers.realm]\ncommand = "realm"\n'.length, text: '[mcp_servers.realm]\ncommand = "realm"\n' });
+});
+
+void test("locateTomlTable: every other definition of the table is foreign, and an unreadable header is unreadable", () => {
+  for (const seed of [
+    `${OWNED}\n${OWNED}`,
+    "[mcp_servers.realm] # note\n",
+    "    [mcp_servers.realm]\n",
+    `${OWNED}\n[mcp_servers.realm.env]\nA = "1"\n`,
+    `[mcp_servers]\nrealm.command = "x"\n${OWNED}`,
+    `${OWNED}\n[[mcp_servers.realm]]\n`,
+    "[ mcp_servers . realm ]\n",
+    'mcp_servers = { realm = {} }\n',
+  ]) {
+    assert.deepEqual(locateTomlTable(seed, TARGET), { state: "foreign" }, JSON.stringify(seed));
+  }
+  assert.deepEqual(locateTomlTable("[mcp_servers.realm\n", TARGET), { state: "unreadable" });
+  assert.deepEqual(locateTomlTable(`${OWNED}[oops\n`, TARGET), { state: "unreadable" });
+  assert.deepEqual(locateTomlTable("#".repeat(1024 * 1024 + 1), TARGET), { state: "unreadable" });
 });

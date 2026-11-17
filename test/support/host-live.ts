@@ -27,7 +27,7 @@
 //   runHost, describeRun, requireReturned              the bounded process-group runner and its result helpers
 //   createHostRig                                      one isolated root with the stub, a state directory and the realm CLI
 //   runHostProduction                                  the shared production-tier scenario of claude and opencode
-//   fileSha256, stripAnsi, cliJson, refusalReasonOf, ownedBlockOf, processAlive   small helpers of the live files
+//   fileSha256, stripAnsi, cliJson, refusalReasonOf, ownedTableOf, processAlive   small helpers of the live files
 
 import assert from "node:assert/strict";
 import { spawn, type ChildProcessByStdio } from "node:child_process";
@@ -38,6 +38,7 @@ import { delimiter, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import type { Readable } from "node:stream";
 import type { TestContext } from "node:test";
 import { runCli, type CliResult } from "../../src/cli/main.js";
+import { locateTomlTable } from "../../src/host/toml-table.js";
 import type { EnvironmentLike } from "../../src/session/paths.js";
 import { createCleanups, isRecord } from "./omp-live.js";
 import {
@@ -584,8 +585,8 @@ function clip(text: string): string {
 }
 
 // One line for an assertion message: the exit, then the clipped output.
-export function describeRun(result: HostRunResult): string {
-  const exit = result.timedOut ? "did not return (timed out)" : result.exitCode === undefined ? "did not exit" : `exit ${String(result.exitCode)}`;
+export function describeRun(result: Pick<HostRunResult, "exitCode" | "stdout" | "stderr"> & { readonly timedOut?: boolean }): string {
+  const exit = result.timedOut === true ? "did not return (timed out)" : result.exitCode === undefined ? "did not exit" : `exit ${String(result.exitCode)}`;
   return `${exit}; stdout ${clip(result.stdout)}; stderr ${clip(result.stderr)}`;
 }
 
@@ -647,17 +648,11 @@ export function refusalReasonOf(result: CliResult): string | undefined {
   return /^realm host (?:install|uninstall): ([a-z-]+):/.exec(result.stderr)?.[1];
 }
 
-export const OWNED_BLOCK_BEGIN = "# BEGIN realm host-plugin";
-export const OWNED_BLOCK_END = "# END realm host-plugin";
-
-// The owned block of a TOML file, marker comments included, or undefined when the markers are absent or unpaired.
-export function ownedBlockOf(text: string): string | undefined {
-  const begin = text.indexOf(OWNED_BLOCK_BEGIN);
-  const end = text.indexOf(OWNED_BLOCK_END);
-  if (begin === -1 || end === -1 || end < begin) {
-    return undefined;
-  }
-  return text.slice(begin, end + OWNED_BLOCK_END.length);
+// The owned `[mcp_servers.realm]` table of a Codex config, byte for byte (its header through its last key line, line endings
+// included), or undefined when the table is absent or defined in any other form.
+export function ownedTableOf(text: string): string | undefined {
+  const found = locateTomlTable(text, ["mcp_servers", "realm"]);
+  return found.state === "present" ? text.slice(found.start, found.end) : undefined;
 }
 
 // ---- Rig: one isolated root ------------------------------------------------------------------------------------------------

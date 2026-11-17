@@ -1,6 +1,6 @@
 // The shared recipe suites of Phase 24 (plan 24-02): one lifecycle, drift, concurrency, mode, doctor, override and hostile-content
 // suite, run against the REAL table row of each wave-1 host (never a fixture entry), so a wrong home, file, override, binary or recipe
-// value fails a named test. `defineHostRecipeSuite` is for json-merge hosts, `defineHostTextSuite` for the text-block host (Codex).
+// value fails a named test. `defineHostRecipeSuite` is for json-merge hosts, `defineHostTomlSuite` for the toml-table host (Codex).
 // Every root is a real temporary directory removed when the test ends; nothing outside it is read or written, and no host runs.
 
 import { execFileSync } from "node:child_process";
@@ -54,15 +54,17 @@ export interface JsonSuiteDescriptor extends HostSuiteBase {
   readonly seedFormat: JsonFormat;
 }
 
-export interface TextSuiteDescriptor extends HostSuiteBase {
-  readonly block: string;
+export interface TomlSuiteDescriptor extends HostSuiteBase {
+  // The owned table, with its trailing newline.
+  readonly table: string;
   readonly seed: string;
 }
 
 export const MARKER = "REALM-MARKER-7f3a9c41";
 const APPENDED = "appended-by-another-writer";
-const BEGIN = "# BEGIN realm host-plugin";
-const END = "# END realm host-plugin";
+// The markers of the first Codex recipe. No recipe writes them any more; a file that still holds them is ordinary text.
+const OLD_BEGIN = "# BEGIN realm host-plugin";
+const OLD_END = "# END realm host-plugin";
 
 // ---- rig ---------------------------------------------------------------------------------------------------------------------
 
@@ -220,6 +222,8 @@ interface Flavor {
   // The user changes the owned part, removes it as the host's own remover would, or adds an unrelated server.
   readonly edit: (text: string) => string;
   readonly remove: (text: string) => string;
+  // The status of the entry after `remove`: a JSON entry or a text block removed is "drifted"; a TOML table removed is "missing".
+  readonly removedState?: "missing";
   readonly addOther: (text: string) => string;
   readonly keepsOther: (text: string) => boolean;
   // Another writer adds one sibling key; and a text that carries a unique marker value.
@@ -278,32 +282,32 @@ function jsonFlavor(d: JsonSuiteDescriptor): Flavor {
   };
 }
 
-function textBody(block: string, eol: string): string {
-  return `${[BEGIN, ...block.split("\n"), END].join(eol)}${eol}`;
-}
-
-// What the engine writes for an install over `seed` (null: no file).
-export function expectedText(block: string, seed: string | null): string {
+// What the engine writes for an install over `seed` (null: no file): the table after one blank line, in the file's line ending.
+export function expectedTable(table: string, seed: string | null): string {
   if (seed === null) {
-    return textBody(block, "\n");
+    return table;
   }
   const eol = seed.includes("\r\n") ? "\r\n" : "\n";
-  return seed === "" || seed.endsWith("\n") ? `${seed}${textBody(block, eol)}` : `${seed}${eol}${textBody(block, eol)}`;
+  const body = table.replaceAll("\n", eol);
+  if (seed === "" || /\n\r?\n$/.test(seed)) {
+    return `${seed}${body}`;
+  }
+  return `${seed}${seed.endsWith("\n") ? eol : `${eol}${eol}`}${body}`;
 }
 
-function textFlavor(d: TextSuiteDescriptor): Flavor {
+function tomlFlavor(d: TomlSuiteDescriptor): Flavor {
   return {
     seed: d.seed,
-    seedResult: expectedText(d.block, d.seed),
-    created: expectedText(d.block, null),
-    owns: (text) => text.includes(textBody(d.block, text.includes("\r\n") ? "\r\n" : "\n")),
+    seedResult: expectedTable(d.table, d.seed),
+    created: expectedTable(d.table, null),
+    owns: (text) => text.includes(d.table.replaceAll("\n", text.includes("\r\n") ? "\r\n" : "\n")),
     edit: (text) => text.replace('command = "realm"', 'command = "evil"'),
+    // What `codex mcp remove realm` does: the table is gone, nothing else is touched.
     remove: (text) => {
-      const begin = text.indexOf(BEGIN);
-      const end = text.indexOf(END);
-      assert.ok(begin >= 0 && end > begin, "the owned block is present");
-      return `${text.slice(0, begin)}${text.slice(end + END.length).replace(/^\r?\n/, "")}`;
+      assert.ok(text.includes(d.table), "the owned table is present");
+      return text.replace(d.table, "");
     },
+    removedState: "missing",
     addOther: (text) => `${text}\n[mcp_servers.other]\ncommand = "other"\n`,
     keepsOther: (text) => text.includes('[mcp_servers.other]\ncommand = "other"\n'),
     append: (text) => `${text}\n# ${APPENDED}\n`,
@@ -417,7 +421,7 @@ function defineCommonCases(d: HostSuiteBase, flavor: Flavor): void {
     });
   }
 
-  void test(`${tag}: an edited owned entry is drifted: uninstall and reinstall refuse; a removed entry is drifted and uninstall is a clean no-op`, async (t) => {
+  void test(`${tag}: an edited owned entry is drifted: uninstall and reinstall refuse; a removed entry is drifted (a removed TOML table: missing) and uninstall is a clean no-op`, async (t) => {
     const edited = buildRig(t, d, { seed: flavor.seed });
     await edited.adapter.install(edited.env, { dryRun: false });
     writeFileSync(edited.file, flavor.edit(readFileSync(edited.file, "utf8")));
@@ -434,7 +438,7 @@ function defineCommonCases(d: HostSuiteBase, flavor: Flavor): void {
     writeFileSync(removed.file, flavor.remove(readFileSync(removed.file, "utf8")));
     const gone = await removed.adapter.status(removed.env);
     assert.equal(gone.status, "drifted");
-    assert.deepEqual(gone.entries, [{ path: d.file, state: "drifted" }]);
+    assert.deepEqual(gone.entries, [{ path: d.file, state: flavor.removedState ?? "drifted" }]);
     const noop = await removed.adapter.uninstall(removed.env, { dryRun: false });
     assert.equal(noop.outcome, "noop");
     assert.equal(existsSync(receiptPath(removed.host.stateDir, d.id)), false, "the stale receipt is deleted");
@@ -715,9 +719,9 @@ export function defineHostRecipeSuite(d: JsonSuiteDescriptor): void {
   });
 }
 
-// ---- the text-block host ------------------------------------------------------------------------------------------------------------------
+// ---- the toml-table host ------------------------------------------------------------------------------------------------------------------
 
-// The look-alikes of `[mcp_servers.realm]` that test/host/toml-table.test.ts pins as taken.
+// The look-alikes of `[mcp_servers.realm]` that test/host/toml-table.test.ts pins as foreign.
 const TAKEN_FORMS: readonly string[] = [
   '[mcp_servers.realm]\ncommand = "x"\n',
   "[ mcp_servers . realm ]\n",
@@ -731,28 +735,31 @@ const TAKEN_FORMS: readonly string[] = [
   "mcp_servers = { realm = {} }\n",
   "[other]\nx = 1\n\n[mcp_servers.realm]\n",
   "    [mcp_servers.realm]\n",
+  "[mcp_servers.realm] # note\n",
 ];
 
-export function defineHostTextSuite(d: TextSuiteDescriptor): void {
+export function defineHostTomlSuite(d: TomlSuiteDescriptor): void {
   const tag = `${d.req} ${d.id}`;
-  defineCommonCases(d, textFlavor(d));
+  defineCommonCases(d, tomlFlavor(d));
   defineRefusals(d, [
     { name: "a file of 1 MiB plus one byte", seed: new Uint8Array(1024 * 1024 + 1).fill(0x23), ...UNPARSEABLE },
     { name: "invalid UTF-8", seed: Uint8Array.from([0x23, 0xff, 0x0a]), ...UNPARSEABLE },
-    { name: "a lone BEGIN marker", seed: `${BEGIN}\n[x]\n`, ...UNPARSEABLE },
-    { name: "a lone END marker", seed: `${END}\n`, ...UNPARSEABLE },
-    { name: "a reversed marker pair", seed: `${END}\nx = 1\n${BEGIN}\n`, ...UNPARSEABLE },
-    { name: "two marker pairs", seed: `${BEGIN}\n${END}\n${BEGIN}\n${END}\n`, ...UNPARSEABLE },
     { name: "an unreadable table header", seed: "[mcp_servers.realm\n", ...UNPARSEABLE },
+    { name: "an unreadable header after the table", seed: `${d.table}[oops\n`, ...UNPARSEABLE },
+    { name: "the owned table text with no receipt", seed: d.table, ...FOREIGN },
+    { name: "the owned table text twice", seed: `${d.table}\n${d.table}`, ...FOREIGN },
     ...TAKEN_FORMS.map((seed) => ({ name: `the existing definition ${JSON.stringify(seed)}`, seed, ...FOREIGN })),
   ]);
 
   const clean: readonly { readonly name: string; readonly seed: string }[] = [
     { name: "CRLF line endings", seed: "[features]\r\nhooks = true\r\n" },
+    { name: "CRLF line endings and no trailing newline", seed: "[features]\r\nhooks = true" },
     { name: "a BOM", seed: "\uFEFF[features]\nhooks = true\n" },
     { name: "no trailing newline", seed: "[features]\nhooks = true" },
+    { name: "a final blank line", seed: "[features]\nhooks = true\n\n" },
     { name: "an empty file", seed: "" },
     { name: "a look-alike only in a comment", seed: "# [mcp_servers.realm]\n[features]\nhooks = true\n" },
+    { name: "comment lines the first Codex recipe used as markers", seed: `${OLD_BEGIN}\n[features]\nhooks = true\n${OLD_END}\n` },
     { name: "mcp_servers.realm2 and mcp_servers.railway", seed: '[mcp_servers.realm2]\ncommand = "a"\n\n[mcp_servers.railway]\ncommand = "b"\n' },
     { name: "a file shaped like a real user config", seed: d.seed },
   ];
@@ -761,7 +768,7 @@ export function defineHostTextSuite(d: TextSuiteDescriptor): void {
       const r = buildRig(t, d, { seed: c.seed });
       const installed = await r.adapter.install(r.env, { dryRun: false });
       assert.equal(installed.outcome, "installed", c.name);
-      assert.equal(readFileSync(r.file, "utf8"), expectedText(d.block, c.seed), c.name);
+      assert.equal(readFileSync(r.file, "utf8"), expectedTable(d.table, c.seed), c.name);
       if (c.seed.startsWith("\uFEFF")) {
         assert.deepEqual([...readFileSync(r.file).subarray(0, 3)], [0xef, 0xbb, 0xbf], "the BOM is still the first three bytes");
       }

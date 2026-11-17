@@ -1,4 +1,4 @@
-// Pure planning for the three install recipes (json-merge, text-block, bundle-copy). Nothing in
+// Pure planning for the four install recipes (json-merge, text-block, toml-table, bundle-copy). Nothing in
 // this module touches the file system: the caller reads the current content of every file the
 // recipe names and passes it in as PlanState, so the same inputs always give the same plan and
 // the same hashes. The installer (install.ts) does every read and every write.
@@ -9,7 +9,7 @@
 import { createHash } from "node:crypto";
 import { makeRealmError, RealmError, type ErrorCode } from "../core/errors.js";
 import type { ReceiptEntry } from "./receipt.js";
-import { tomlTableState } from "./toml-table.js";
+import { ownedTomlTablePart, planTomlTableInstall, planTomlTableUninstall } from "./toml-owned.js";
 import type { InstallRecipe } from "./types.js";
 
 export type HostRefusalReason =
@@ -77,7 +77,6 @@ const MAX_BLOCK_LINES = 200;
 const MAX_KEY_SEGMENTS = 6;
 const MAX_JSON_DEPTH = 32;
 const KEY_SEGMENT = /^[A-Za-z0-9_.-]+$/;
-const TOML_KEY = /^[A-Za-z0-9_-]+$/;
 const PATH_SEGMENT = /^[^\0/\\]{1,255}$/;
 const POISON_KEYS: readonly string[] = ["__proto__", "constructor", "prototype"];
 
@@ -153,7 +152,7 @@ export function isSafeKeySegment(segment: string): boolean {
   return KEY_SEGMENT.test(segment) && !POISON_KEYS.includes(segment);
 }
 
-function requireRelPath(path: string): string {
+export function requireRelPath(path: string): string {
   if (!isSafeRelPath(path)) {
     invalid();
   }
@@ -174,7 +173,7 @@ function ancestorsOf(path: string): string[] {
   return out;
 }
 
-function missingDirsFor(paths: readonly string[], dirs: ReadonlySet<string>): string[][] {
+export function missingDirsFor(paths: readonly string[], dirs: ReadonlySet<string>): string[][] {
   const missing = new Set<string>();
   for (const path of paths) {
     for (const dir of ancestorsOf(path)) {
@@ -228,7 +227,7 @@ function canonicalJson(value: unknown): string {
 
 type EntryKind = InstallRecipe["kind"];
 
-function priorEntry(state: PlanState, kind: EntryKind, path: string): ReceiptEntry | undefined {
+export function priorEntry(state: PlanState, kind: EntryKind, path: string): ReceiptEntry | undefined {
   return state.receipt.find((entry) => entry.kind === kind && entry.path === path);
 }
 
@@ -236,7 +235,7 @@ function hashOrNull(text: string | null): string | null {
   return text === null ? null : sha256Text(text);
 }
 
-function noopChange(path: string, current: string | null): PlannedChange {
+export function noopChange(path: string, current: string | null): PlannedChange {
   const hash = hashOrNull(current);
   return {
     path,
@@ -250,7 +249,7 @@ function noopChange(path: string, current: string | null): PlannedChange {
   };
 }
 
-function writeChange(path: string, before: string | null, after: string): PlannedChange {
+export function writeChange(path: string, before: string | null, after: string): PlannedChange {
   return {
     path,
     kind: "file",
@@ -263,7 +262,7 @@ function writeChange(path: string, before: string | null, after: string): Planne
   };
 }
 
-function removeFileChange(path: string, before: string): PlannedChange {
+export function removeFileChange(path: string, before: string): PlannedChange {
   return {
     path,
     kind: "file",
@@ -276,7 +275,7 @@ function removeFileChange(path: string, before: string): PlannedChange {
   };
 }
 
-function entryFlags(prior: ReceiptEntry | undefined): Partial<ReceiptEntry> {
+export function entryFlags(prior: ReceiptEntry | undefined): Partial<ReceiptEntry> {
   const flags: { -readonly [K in keyof ReceiptEntry]?: ReceiptEntry[K] } = {};
   if (prior?.createdFile === true) {
     flags.createdFile = true;
@@ -293,7 +292,7 @@ function entryFlags(prior: ReceiptEntry | undefined): Partial<ReceiptEntry> {
   return flags;
 }
 
-function makeEntry(
+export function makeEntry(
   kind: EntryKind,
   path: string,
   before: string | null,
@@ -309,7 +308,7 @@ function makeEntry(
   };
 }
 
-function currentOf(state: PlanState, path: string): string | null {
+export function currentOf(state: PlanState, path: string): string | null {
   const content = state.files.get(path);
   if (content === undefined) {
     return invalid();
@@ -622,27 +621,7 @@ function locateBlock(content: string): BlockLocation | null {
   };
 }
 
-// recipe.tomlTable: the path must be 1 to 6 bare keys and the block must open with that table's header. A file that already
-// defines the table or an ancestor key outside the markers is foreign content; a line the scanner cannot read is unparseable.
-function guardTomlTable(recipe: Extract<InstallRecipe, { kind: "text-block" }>, lines: readonly string[], current: string | null, location: BlockLocation | null): void {
-  const table = recipe.tomlTable;
-  if (table === undefined) {
-    return;
-  }
-  const header = lines.find((line) => line.trim() !== "" && !line.startsWith("#"));
-  if (table.length < 1 || table.length > MAX_KEY_SEGMENTS || !table.every((key) => TOML_KEY.test(key)) || header !== `[${table.join(".")}]`) {
-    invalid();
-  }
-  if (current !== null) {
-    const outside = location === null ? current : `${current.slice(0, location.beginStart)}${current.slice(location.endEnd)}`;
-    const found = tomlTableState(outside, table);
-    if (found !== "free") {
-      refuse(found === "taken" ? "foreign-content" : "unparseable");
-    }
-  }
-}
-
-function detectEol(content: string): string {
+export function detectEol(content: string): string {
   return content.includes("\r\n") ? "\r\n" : "\n";
 }
 
@@ -654,7 +633,6 @@ function planTextInstall(recipe: Extract<InstallRecipe, { kind: "text-block" }>,
   const current = currentOf(state, file);
   const prior = priorEntry(state, "text-block", file);
   const location = current === null ? null : locateBlock(current);
-  guardTomlTable(recipe, lines, current, location);
 
   if (current !== null && location !== null) {
     if (location.text === desiredText) {
@@ -855,7 +833,7 @@ function planBundleUninstall(state: PlanState): RecipePlan {
 
 // Directories a receipt marks as created are removed, deepest first, when nothing is left in them
 // once the planned removals are applied.
-function dirCleanup(entries: readonly ReceiptEntry[], removedFiles: ReadonlySet<string>, state: PlanState): PlannedChange[] {
+export function dirCleanup(entries: readonly ReceiptEntry[], removedFiles: ReadonlySet<string>, state: PlanState): PlannedChange[] {
   const dirs = mergeDirs(entries.flatMap((entry) => entry.createdDirs ?? [])).reverse();
   const removed = new Set(removedFiles);
   const changes: PlannedChange[] = [];
@@ -905,18 +883,23 @@ export function planRecipe(recipe: InstallRecipe, state: PlanState): RecipePlan 
       return install ? planJsonInstall(recipe, state) : planJsonUninstall(recipe, state);
     case "text-block":
       return install ? planTextInstall(recipe, state) : planTextUninstall(recipe, state);
+    case "toml-table":
+      return install ? planTomlTableInstall(recipe, state) : planTomlTableUninstall(recipe, state);
     case "bundle-copy":
       return install ? planBundleInstall(recipe, state) : planBundleUninstall(state);
   }
 }
 
 // The part of `content` a receipt entry owns, hashed. json-merge: the canonical value at the key path. text-block: the text
-// between the markers. bundle-copy: the whole file. `parsed` is false when the content cannot be parsed (not a JSON object, or a
+// between the markers. toml-table: the table text. bundle-copy: the whole file. `parsed` is false when the content cannot be parsed (not a JSON object, or a
 // broken marker layout); `sha256` is null when it parsed but the owned part is absent. Used by status against the receipt.
 export function ownedPart(recipe: InstallRecipe, content: string): { readonly parsed: boolean; readonly sha256: string | null } {
   try {
     if (recipe.kind === "bundle-copy") {
       return { parsed: true, sha256: sha256Text(content) };
+    }
+    if (recipe.kind === "toml-table") {
+      return ownedTomlTablePart(recipe, content);
     }
     if (recipe.kind === "text-block") {
       const location = locateBlock(content);

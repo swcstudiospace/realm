@@ -64,6 +64,11 @@ void test("a receipt round trips through serialize and parse, with a determinist
     entries: [{ path: "config.toml", kind: "text-block", beforeSha256: H1, afterSha256: H2, ownedSha256: H1, separatorAdded: true }],
   });
   assert.deepEqual(parseReceipt(serializeReceipt(textBlock)), textBlock);
+  const tomlTable = sample({
+    recipeKind: "toml-table",
+    entries: [{ path: "config.toml", kind: "toml-table", beforeSha256: H1, afterSha256: H2, ownedSha256: H1, separatorAdded: true }],
+  });
+  assert.deepEqual(parseReceipt(serializeReceipt(tomlTable)), tomlTable);
 });
 
 void test("a receipt holds paths, booleans and hashes only", () => {

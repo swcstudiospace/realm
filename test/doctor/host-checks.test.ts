@@ -14,12 +14,12 @@ import { defaultManifestFor } from "../../src/host/manifest.js";
 import { writePresence } from "../../src/host/presence.js";
 import { receiptPath } from "../../src/host/receipt.js";
 import { HOST_RUNTIMES } from "../../src/host/runtimes.js";
-import type { HostId, HostRuntimeEntry, InstallRecipe } from "../../src/host/types.js";
-import { captureLog, fixtureEntry, fixtureRecipe, makeFixtureHost, writeAt, type FixtureHost } from "../support/fixture-host.js";
+import type { HostId, HostRuntimeEntry } from "../../src/host/types.js";
+import { captureLog, fixtureEntry, fixtureRecipe, makeFixtureHost, writeAt, type FixtureHost, type FixtureRecipeKind } from "../support/fixture-host.js";
 
 type Table = Readonly<Record<HostId, HostRuntimeEntry>>;
 
-function tableOf(...hosts: readonly (readonly [HostId, InstallRecipe["kind"]])[]): Table {
+function tableOf(...hosts: readonly (readonly [HostId, FixtureRecipeKind])[]): Table {
   let table: Table = HOST_RUNTIMES;
   for (const [id, kind] of hosts) {
     table = { ...table, [id]: { ...fixtureEntry(fixtureRecipe(kind)), id } };

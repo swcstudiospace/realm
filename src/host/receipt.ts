@@ -27,14 +27,14 @@ export interface ReceiptEntry {
   readonly beforeSha256: string | null;
   // Hash of the whole file as Realm wrote it.
   readonly afterSha256: string;
-  // json-merge: hash of the canonical value Realm owns. text-block: hash of the block text.
+  // json-merge: hash of the canonical value Realm owns. text-block: hash of the block text. toml-table: hash of the table text.
   readonly ownedSha256?: string;
   readonly createdFile?: boolean;
   // json-merge: key paths of parent objects Realm created.
   readonly createdParents?: readonly (readonly string[])[];
   // Directories (relative path segments) Realm created for this entry's files.
   readonly createdDirs?: readonly (readonly string[])[];
-  // text-block: the newline Realm added before its block.
+  // text-block, toml-table: the newline or blank line Realm added before its block or table.
   readonly separatorAdded?: boolean;
 }
 
@@ -60,7 +60,7 @@ const MAX_DIR_LISTS = 64;
 const MAX_DIR_DEPTH = 16;
 const HASH = /^[0-9a-f]{64}$/;
 const TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/;
-const RECIPE_KINDS: readonly string[] = ["json-merge", "text-block", "bundle-copy"];
+const RECIPE_KINDS: readonly string[] = ["json-merge", "text-block", "toml-table", "bundle-copy"];
 const ENTRY_KEYS = ["path", "kind", "beforeSha256", "afterSha256", "ownedSha256", "createdFile", "createdParents", "createdDirs", "separatorAdded"];
 const RECEIPT_KEYS = ["schemaVersion", "hostId", "recipeKind", "state", "configHome", "createdAt", "entries"];
 

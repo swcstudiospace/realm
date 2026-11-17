@@ -34,7 +34,14 @@ export const CLAUDE_MCP_ADD_FILE = `{
 export const CLAUDE_MCP_ADD_ENTRY = { type: "stdio", command: "realm", args: ["mcp", "--host", "claude"], env: {} } as const;
 
 // source: E-X1; codex-cli 0.154.0; read 2026-11-17; observed. `codex mcp add realm -- realm mcp --host codex` in an isolated
-// HOME created ~/.codex/config.toml (mode 0600) with exactly this text, trailing newline included.
+// HOME created ~/.codex/config.toml (mode 0600) with exactly this text, trailing newline included. It is also the text Realm owns
+// for Codex: the `toml-table` recipe writes this table, located by its header, with no comment marker around it.
+//
+// source: E-X6; codex-cli 0.154.0; read 2026-11-17; observed. Why there is no marker: with `# user comment` and `model = "x"`
+// above a `# BEGIN realm host-plugin` line, this table and a `# END realm host-plugin` line, `codex mcp add other -- echo hi`
+// rewrote the file with a comment-dropping TOML editor. The BEGIN line (decor of the table) was dropped, the table was kept
+// byte for byte, `[mcp_servers.other]` was inserted after it, and the END line was kept at the end of the file. A following
+// `codex mcp remove realm` removed the table and left the END line alone.
 export const CODEX_MCP_ADD_TOML = '[mcp_servers.realm]\ncommand = "realm"\nargs = ["mcp", "--host", "codex"]\n';
 
 // source: E-X5; codex-cli 0.154.0; read 2026-11-17; observed (shape only). A hand-grown config.toml: a [features] table, two

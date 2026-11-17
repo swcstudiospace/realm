@@ -124,7 +124,8 @@ export const HOST_RUNTIMES: Readonly<Record<HostId, HostRuntimeEntry>> = Object.
     },
   }),
   kilo: entry("kilo", { flag: "--kilo", displayName: "Kilo", tier: "config-only", homes: [".config/kilo", ".kilo"] }),
-  // Evidence E-X1 to E-X4 and D-24-04: the block is the table `codex mcp add realm -- realm mcp --host codex` writes.
+  // Evidence E-X1 to E-X4 and D-24-04: the owned table is the one `codex mcp add realm -- realm mcp --host codex` writes. Codex rewrites
+  // config.toml with a comment-dropping TOML editor (observed 2026-11-17, codex-cli 0.154.0), so the table is owned by its header and no marker is written.
   codex: entry("codex", {
     flag: "--codex",
     displayName: "Codex",
@@ -133,10 +134,10 @@ export const HOST_RUNTIMES: Readonly<Record<HostId, HostRuntimeEntry>> = Object.
     envOverride: "CODEX_HOME",
     binaries: ["codex"],
     recipe: {
-      kind: "text-block",
+      kind: "toml-table",
       file: "config.toml",
-      block: '[mcp_servers.realm]\ncommand = "realm"\nargs = ["mcp", "--host", "codex"]',
-      tomlTable: ["mcp_servers", "realm"],
+      table: ["mcp_servers", "realm"],
+      text: '[mcp_servers.realm]\ncommand = "realm"\nargs = ["mcp", "--host", "codex"]',
     },
   }),
   copilot: entry("copilot", { flag: "--copilot", displayName: "Copilot", tier: "config-only", homes: [".copilot"] }),
