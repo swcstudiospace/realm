@@ -348,16 +348,6 @@
       "reason": "D-1306 test-only seam: refusal reason type named by test/host/recipe.test.ts, adapter.test.ts and install.test.ts"
     },
     {
-      "file": "src/host/recipe.ts",
-      "name": "PlanState",
-      "reason": "D-1306 test-only seam: pure planner input type built directly by test/host/recipe.test.ts"
-    },
-    {
-      "file": "src/host/recipe.ts",
-      "name": "RecipePlan",
-      "reason": "D-1306 test-only seam: pure planner output type read directly by test/host/recipe.test.ts"
-    },
-    {
       "file": "src/host/runtimes.ts",
       "name": "HOST_ALIASES",
       "reason": "D-1306 test-only seam: alias table derived from the runtime table, held equal to it by test/host/runtimes.test.ts; production resolves through resolveHostId"
