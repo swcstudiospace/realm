@@ -1,28 +1,33 @@
 // The boot sequence of realm mcp and realm acp (BOOT-03, BOOT-05, BOOT-08): flags, the numbered sequence, the exit and exposure
 // table, --reattach, teardown on EOF and on signals, logging levels and stdout purity. Every daemon is a script, every timer and
-// signal an injected seam: nothing here opens a socket, arms a boot timer or raises a real signal.
+// signal an injected seam: nothing here opens a socket, arms a boot timer or raises a real signal. The scripted daemon and the
+// session helpers live in test/support/stdio-world.ts, which test/cli/stdio-host-matrix.test.ts shares.
 
 import { after, beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PassThrough } from "node:stream";
-import { runCli, type CliDeps, type CliResult, type ConnectDaemon, type SendControlRequest, type SpawnDaemon } from "../../src/cli/main.js";
 import type { StdioSignal } from "../../src/cli/stdio-host.js";
-import { ERROR_CATALOGUE, RealmError, type ErrorCode } from "../../src/core/errors.js";
-import type { State } from "../../src/core/states.js";
-import type { ControlReply, ControlRequest, ControlSelection } from "../../src/daemon/channel.js";
-import type { DaemonClient, DaemonStatus } from "../../src/daemon/client.js";
-import { parseHostBootReport, type HostBootReport } from "../../src/host/boot-report.js";
-import type { MetricsSnapshot } from "../../src/observe/metrics.js";
+import { ERROR_CATALOGUE, RealmError } from "../../src/core/errors.js";
+import type { ControlReply } from "../../src/daemon/channel.js";
 import { sessionIdOfWorkspace, type EnvironmentLike } from "../../src/session/paths.js";
-import type { ToolOutcome } from "../../src/tools/dispatch.js";
-import { FakeTimers } from "../support/fake-host-daemon.js";
-import { callStatus, capture, FakeSignals, frame, framesOf, listTools, toolOutcomeOf, untilReplyOn, type Capture } from "../support/stdio-host-harness.js";
+import { callStatus, frame, framesOf, listTools, toolOutcomeOf } from "../support/stdio-host-harness.js";
+import {
+  adopted,
+  finish,
+  markerOf as markerOfRig,
+  newWorld,
+  reportsOf,
+  startSession,
+  untilReply,
+  type Session,
+  type StartOptions,
+  type StdioRig,
+  type World,
+} from "../support/stdio-world.js";
 import { boundedWait, pollUntil } from "../support/timing.js";
 
-const AT = "2026-10-22T00:00:00.000Z";
 const CONFIG_HOME = mkdtempSync(join(tmpdir(), "realm-stdio-host-config-"));
 const STATE_DIR = join(CONFIG_HOME, "state");
 mkdirSync(join(CONFIG_HOME, "realm"));
@@ -38,6 +43,7 @@ const WORKSPACE = realpathSync(mkdtempSync(join(tmpdir(), "realm-stdio-host-ws-"
 const DAEMON_ENTRY = `${STATE_DIR}/daemon/daemon.js`;
 const ENV: EnvironmentLike = { PATH: "/usr/bin", HOME: "/root", XDG_RUNTIME_DIR: "/run/user/0", XDG_CONFIG_HOME: CONFIG_HOME };
 const MARKER_DIR = (host: string): string => join(STATE_DIR, "hosts", `${host}-active`);
+const RIG: StdioRig = { env: ENV, stateDir: STATE_DIR, workspace: WORKSPACE, daemonEntry: DAEMON_ENTRY };
 
 after(() => {
   rmSync(CONFIG_HOME, { recursive: true, force: true });
@@ -47,184 +53,10 @@ beforeEach(() => {
   rmSync(join(STATE_DIR, "hosts"), { recursive: true, force: true });
 });
 
-// ---- A scripted daemon -------------------------------------------------------------------------------------------------------
+// ---- The scripted daemon and the session helpers: test/support/stdio-world.ts ------------------------------------------------
 
-interface World {
-  // Whether the control socket answers a status probe.
-  daemonUp: boolean;
-  // What up does: answer, never settle, or refuse with a catalogue code.
-  upResult: "ok" | "hang" | ErrorCode;
-  state: State;
-  reason: string;
-  // The status after up names another project's root and session.
-  readbackOther: boolean;
-  // When set, a status call made after up waits on it: the readback is held open.
-  gateAfterUp: Promise<void> | null;
-  upSeen: boolean;
-  readonly log: string[];
-  readonly tools: unknown[];
-  readonly clients: ScriptedClient[];
-}
-
-const newWorld = (): World => ({
-  daemonUp: true,
-  upResult: "ok",
-  state: "active",
-  reason: "realm active",
-  readbackOther: false,
-  gateAfterUp: null,
-  upSeen: false,
-  log: [],
-  tools: [],
-  clients: [],
-});
-
-function statusOf(world: World, selection: ControlSelection): DaemonStatus {
-  return {
-    snapshot: { state: world.state, reason: world.reason, lastTransitionAt: AT },
-    display: { label: "realm active", degraded: false, reason: world.reason, lastTransitionAt: AT },
-    mode: "advisory",
-    boundRoot: world.readbackOther ? "/ws/other" : selection.workspaceRoot,
-    sessionId: world.readbackOther ? sessionIdOfWorkspace("/ws/other") : selection.sessionId,
-  };
-}
-
-class ScriptedClient implements DaemonClient {
-  closeCalls = 0;
-  upCalls = 0;
-  constructor(
-    private readonly world: World,
-    private readonly selection: ControlSelection,
-  ) {}
-
-  async status(): Promise<DaemonStatus> {
-    this.world.log.push("status");
-    if (!this.world.daemonUp) {
-      throw new RealmError("REALM_NOT_ACTIVE");
-    }
-    if (this.world.upSeen && this.world.gateAfterUp !== null) {
-      await this.world.gateAfterUp;
-    }
-    return statusOf(this.world, this.selection);
-  }
-
-  up(): Promise<DaemonStatus> {
-    this.world.log.push("up");
-    this.world.upSeen = true;
-    this.upCalls += 1;
-    if (this.world.upResult === "hang") {
-      return new Promise<DaemonStatus>(() => undefined);
-    }
-    if (this.world.upResult !== "ok") {
-      return Promise.reject(new RealmError(this.world.upResult));
-    }
-    return Promise.resolve(statusOf(this.world, this.selection));
-  }
-
-  call(tool: unknown): Promise<ToolOutcome> {
-    this.world.log.push("call");
-    this.world.tools.push(tool);
-    return Promise.resolve({ outcome: "refused", tool: "status", code: "REALM_NOT_ACTIVE", retryable: true });
-  }
-
-  metrics(): Promise<MetricsSnapshot> {
-    return Promise.reject(new RealmError("REALM_NOT_ACTIVE"));
-  }
-
-  close(): void {
-    this.closeCalls += 1;
-  }
-}
-
-// The clients that received up: the adopted ones, not the liveness probes.
-const adopted = (world: World): ScriptedClient[] => world.clients.filter((client) => client.upCalls > 0);
-
-// ---- Injected seams ----------------------------------------------------------------------------------------------------------
-
-// FakeSignals and capture are shared with the isolation suite (test/support/stdio-host-harness.ts).
-
-interface Session {
-  readonly result: Promise<CliResult>;
-  readonly input: PassThrough;
-  readonly output: Capture;
-  readonly diagnostics: Capture;
-  readonly sent: ControlRequest[];
-  readonly signals: FakeSignals;
-  readonly timers: FakeTimers;
-  readonly spawns: string[];
-  readonly world: World;
-}
-
-interface StartOptions {
-  readonly argv: readonly string[];
-  readonly world?: World;
-  readonly env?: EnvironmentLike;
-  readonly timeoutMs?: number;
-  readonly send?: SendControlRequest;
-}
-
-function start(options: StartOptions): Session {
-  const world = options.world ?? newWorld();
-  const input = new PassThrough();
-  const output = capture();
-  const diagnostics = capture();
-  const sent: ControlRequest[] = [];
-  const spawns: string[] = [];
-  const signals = new FakeSignals();
-  const timers = new FakeTimers();
-  const connect: ConnectDaemon = (_socketPath, selection) => {
-    const client = new ScriptedClient(world, selection);
-    world.clients.push(client);
-    return client;
-  };
-  const spawn: SpawnDaemon = (_file, args) => {
-    spawns.push(...args);
-    return { unref: () => undefined };
-  };
-  const send: SendControlRequest =
-    options.send ?? ((_socketPath, request): Promise<ControlReply> => Promise.resolve({ id: request.id, result: { recorded: true } }));
-  const deps: CliDeps = {
-    env: options.env ?? ENV,
-    cwd: WORKSPACE,
-    daemonEntry: DAEMON_ENTRY,
-    timeoutMs: options.timeoutMs ?? 2000,
-    spawn,
-    connect,
-    send: (socketPath, request, timeoutMs) => {
-      sent.push(request);
-      return send(socketPath, request, timeoutMs);
-    },
-    mcpInput: input,
-    mcpOutput: output.stream,
-    acpInput: input,
-    acpOutput: output.stream,
-    diagnostics: diagnostics.stream,
-    signals,
-    bootTimers: timers,
-    random: timers.random,
-    now: timers.now,
-  };
-  const result = runCli(options.argv, deps);
-  return { result, input, output, diagnostics, sent, signals, timers, spawns, world };
-}
-
-const untilReply = (session: Session, id: number): Promise<Record<string, unknown>> => untilReplyOn(session.output, id);
-
-async function finish(session: Session): Promise<CliResult> {
-  session.input.end();
-  return boundedWait(session.result, "the session ending after stdin closed", 10_000);
-}
-
-const markerOf = (host: string): Record<string, unknown> =>
-  JSON.parse(readFileSync(join(MARKER_DIR(host), `${String(process.pid)}.json`), "utf8")) as Record<string, unknown>;
-
-const reportsOf = (sent: readonly ControlRequest[]): HostBootReport[] =>
-  sent.map((request) => {
-    assert.equal(request.method, "host-boot");
-    const params = request.params;
-    assert.ok(typeof params === "object" && params !== null && "report" in params);
-    return parseHostBootReport(params.report);
-  });
+const start = (options: StartOptions): Session => startSession(options, RIG);
+const markerOf = (host: string): Record<string, unknown> => markerOfRig(RIG, host);
 
 // ---- (a) flags ---------------------------------------------------------------------------------------------------------------
 
