@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.3.38] - 2026-11-17
+
+### Documentation
+- docs(phase-23): plan boot integration, register BOOT-01 to BOOT-09 (#107) (929366f)
+
 ## [0.3.37] - 2026-11-17
 
 ### Added
