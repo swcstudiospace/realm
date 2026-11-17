@@ -273,3 +273,60 @@ void test("OMPB-07: a symlinked presence directory fails with PATH_ESCAPE for om
   assert.equal(result.status, "fail");
   assert.match(result.detail, /omp \(PATH_ESCAPE\)/);
 });
+
+void test("BOOT-05: a hand-registered claude with a live marker and no receipt passes and names it by id and count, with no path", async (t) => {
+  const host = makeFixtureHost(t);
+  writePresence(host.stateDir, "claude", presenceRecord(4000000), { isAlive: () => true });
+  const result = await check(host, HOST_RUNTIMES, { isProcessAlive: () => true });
+  assert.deepEqual(result, { id: "host-plugins", status: "pass", detail: "no host plugin installed; live host sessions: claude 1", fix: null });
+  for (const leak of [host.home, host.root, host.stateDir]) {
+    assert.ok(!result.detail.includes(leak), `detail leaks ${leak}`);
+  }
+  const dead = await check(host, HOST_RUNTIMES, { isProcessAlive: () => false });
+  assert.equal(dead.detail, "no host plugin installed", "a dead pid is not counted");
+});
+
+void test("BOOT-05: an installed Omp keeps its own sentence and is not repeated; another host's live session is appended", async (t) => {
+  const host = await installedOmp(t);
+  writePresence(host.stateDir, "omp", presenceRecord(4000000), { isAlive: () => true });
+  writePresence(host.stateDir, "claude", presenceRecord(4000001), { isAlive: () => true });
+  writePresence(host.stateDir, "kimi", presenceRecord(4000002), { isAlive: () => true });
+  const result = await check(host, HOST_RUNTIMES, { isProcessAlive: () => true });
+  assert.equal(result.status, "pass");
+  assert.equal(result.detail, "installed: omp (extension target present, 1 live plugin session); live host sessions: claude 1, kimi 1");
+});
+
+void test("BOOT-05: a drift warn also names the live sessions of other hosts", async (t) => {
+  const host = await installedOmp(t);
+  rmSync(join(host.root, EXTENSION_REL));
+  writePresence(host.stateDir, "claude", presenceRecord(4000001), { isAlive: () => true });
+  const result = await check(host, HOST_RUNTIMES, { isProcessAlive: () => true });
+  assert.equal(result.status, "warn");
+  assert.equal(result.detail, "host plugin drift: omp: extension target missing; live host sessions: claude 1");
+  assert.equal(result.fix, "Repair with realm host install omp, or remove with realm host uninstall omp.");
+});
+
+void test("BOOT-05: an unreadable marker, or a host whose markers cannot be read, warns with the inspect fix", async (t) => {
+  const host = makeFixtureHost(t);
+  writeAt(join(host.stateDir, "hosts", "claude-active", "5.json"), "garbage");
+  const unreadable = await check(host, HOST_RUNTIMES, { isProcessAlive: () => true });
+  assert.equal(unreadable.status, "warn");
+  assert.equal(unreadable.detail, "no host plugin installed");
+  assert.match(unreadable.fix ?? "", /^Inspect /);
+  const other = makeFixtureHost(t);
+  mkdirSync(join(other.stateDir, "hosts"), { recursive: true });
+  mkdirSync(join(other.root, "elsewhere"));
+  symlinkSync(join(other.root, "elsewhere"), join(other.stateDir, "hosts", "codex-active"));
+  const unread = await check(other, HOST_RUNTIMES, { isProcessAlive: () => true });
+  assert.equal(unread.status, "warn");
+  assert.match(unread.fix ?? "", /^Inspect /);
+});
+
+void test("BOOT-05: an unreadable receipt is still a fail and its detail carries no live session suffix", async (t) => {
+  const host = makeFixtureHost(t);
+  writePresence(host.stateDir, "kimi", presenceRecord(4000002), { isAlive: () => true });
+  writeAt(join(host.stateDir, "hosts", "claude.receipt.json"), "{ not json");
+  const result = await check(host, HOST_RUNTIMES, { isProcessAlive: () => true });
+  assert.equal(result.status, "fail");
+  assert.ok(!result.detail.includes("live host sessions"), result.detail);
+});

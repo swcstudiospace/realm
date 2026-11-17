@@ -1,6 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { LEGACY_VERSION, MODERN_VERSION, checkEras, compareStatus } from "./mcp-smoke.mjs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { LEGACY_VERSION, MODERN_VERSION, checkEras, compareStatus, describeMarker, readMarker } from "./mcp-smoke.mjs";
 
 // The smoke gate decides whether the built server speaks both protocol eras in the shapes the revisions name. These
 // tests feed it the replies a conforming server gives, and then one broken reply at a time, so a gate that stops
@@ -114,4 +117,39 @@ test("compareStatus accepts a disconnected CLI only against a REALM_NOT_ACTIVE t
   const thrown = { isError: true, content: [{ type: "text", text: "REALM_NOT_ACTIVE: x" }], structuredContent: { code: "REALM_NOT_ACTIVE", message: "x", retryable: false } };
   assert.deepEqual(compareStatus("disconnected", thrown), { ok: true, mode: "disconnected" });
   assert.equal(compareStatus("disconnected", toolResult(STATUS_OUTCOME)).ok, false);
+});
+
+// The presence marker the smoke reads from a real `realm mcp --host claude` (src/host/presence.ts writes it).
+const MARKER = { schemaVersion: 1, pid: 4242, startedAt: "2026-11-17T10:00:00.000Z", sessionId: "p0123456789ab", attach: "attached", code: null };
+
+test("describeMarker accepts an attached marker and a failed marker with a catalogue code, and names why it refuses the rest", () => {
+  assert.equal(describeMarker(MARKER, 4242), null);
+  assert.equal(describeMarker({ ...MARKER, attach: "failed", code: "PODMAN_MISSING" }, 4242), null);
+  assert.match(describeMarker(null, 4242), /no marker/);
+  assert.match(describeMarker({ ...MARKER, extra: 1 }, 4242), /six keys/);
+  const short = Object.fromEntries(Object.entries(MARKER).filter(([key]) => key !== "sessionId"));
+  assert.match(describeMarker(short, 4242), /six keys/);
+  assert.match(describeMarker(MARKER, 4243), /child pid/);
+  assert.match(describeMarker({ ...MARKER, schemaVersion: 2 }, 4242), /schemaVersion 1/);
+  assert.match(describeMarker({ ...MARKER, attach: "done" }, 4242), /attach/);
+  assert.match(describeMarker({ ...MARKER, attach: "failed", code: "not a code" }, 4242), /code/);
+  assert.match(describeMarker({ unreadable: true }, 4242), /six keys/);
+});
+
+test("readMarker reads <state>/hosts/<host>-active/<pid>.json, null when absent, and flags a file that is not an object", () => {
+  const stateDir = mkdtempSync(join(tmpdir(), "realm-smoke-marker-"));
+  try {
+    assert.equal(readMarker(stateDir, "claude", 4242), null);
+    const dir = join(stateDir, "hosts", "claude-active");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "4242.json"), `${JSON.stringify(MARKER)}\n`);
+    assert.deepEqual(readMarker(stateDir, "claude", 4242), MARKER);
+    assert.equal(readMarker(stateDir, "codex", 4242), null, "another host's directory is not read");
+    writeFileSync(join(dir, "4243.json"), "[1]\n");
+    assert.deepEqual(readMarker(stateDir, "claude", 4243), { unreadable: true });
+    writeFileSync(join(dir, "4244.json"), "not json");
+    assert.deepEqual(readMarker(stateDir, "claude", 4244), { unreadable: true });
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true });
+  }
 });

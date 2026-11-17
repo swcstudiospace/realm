@@ -12,6 +12,8 @@ import { controlSocketPath, sessionIdOfWorkspace } from "../../src/session/paths
 import { RealmError } from "../../src/core/errors.js";
 import { BOOT_BOUNDS, resolveBoot } from "../../src/host/boot.js";
 import { defaultManifestFor, parseHostPluginManifest } from "../../src/host/manifest.js";
+import { parseHostBootReport, type HostBootReport } from "../../src/host/boot-report.js";
+import { isCorrelationId } from "../../src/observe/ids.js";
 import { pollUntil } from "../support/timing.js";
 
 const IMAGE = `registry.example.com/realm/workload@sha256:${"0".repeat(64)}`;
@@ -47,6 +49,20 @@ interface StubRequest {
 // What a stand-in daemon answers: a result, or a catalogue error code.
 type StubReply = { readonly result: unknown } | { readonly error: { readonly code: string } };
 
+// The host-boot reports the extension sends after an attach and at session end. The stand-in answers them itself, before
+// respond sees them: a report names no workspace, so a respond built on a workspace would throw on one. A test that cares reads
+// requests and sets reply; every test that does restores both through hostBootRecorder's cleanup.
+const hostBoot: { requests: StubRequest[]; reply: StubReply } = { requests: [], reply: { result: { recorded: true } } };
+
+function hostBootRecorder(t: TestContext): void {
+  hostBoot.requests = [];
+  hostBoot.reply = { result: { recorded: true } };
+  t.after(() => {
+    hostBoot.requests = [];
+    hostBoot.reply = { result: { recorded: true } };
+  });
+}
+
 // A stand-in daemon on one control socket. It answers each NDJSON request with respond(request) and reports the request with
 // the socket it arrived on. By default it answers every request with an active status.
 function startStub(
@@ -64,6 +80,11 @@ function startStub(
       }
       const request = JSON.parse(text.slice(0, end)) as StubRequest;
       onRequest({ socketPath, method: request.method });
+      if (request.method === "host-boot") {
+        hostBoot.requests.push(request);
+        socket.end(`${JSON.stringify({ id: request.id, ...hostBoot.reply })}\n`);
+        return;
+      }
       socket.end(`${JSON.stringify({ id: request.id, ...respond(request) })}\n`);
     });
   });
@@ -723,4 +744,129 @@ void test("OMPB-06: the omp manifest default resolves to BOOT_BOUNDS, and REALM_
   const on = resolveBoot(parseHostPluginManifest({ ...manifest, boot: { reattach: { enabled: reattachEnabledOf("1") } } }));
   assert.equal(on.reattach.enabled, true);
   assert.deepEqual({ ...on, reattach: { ...on.reattach, enabled: false } }, BOOT_BOUNDS);
+});
+
+// ---- boot observability through the shared observer ----------------------------------------------------------------------------
+
+// The report a host-boot request carries, parsed through the daemon's own parser.
+function bootReportOf(request: StubRequest | undefined): HostBootReport {
+  assert.ok(request, "a host-boot request was recorded");
+  assert.equal(request.method, "host-boot");
+  const params = request.params;
+  assert.ok(typeof params === "object" && params !== null && "report" in params, "params carry a report");
+  assert.deepEqual(Object.keys(params), ["report"]);
+  return parseHostBootReport(params.report);
+}
+
+// Captures what the process writes to stderr for the rest of the test.
+function captureStderr(t: TestContext): string[] {
+  const lines: string[] = [];
+  t.mock.method(process.stderr, "write", (chunk: string | Uint8Array): boolean => {
+    lines.push(String(chunk));
+    return true;
+  });
+  return lines;
+}
+
+void test("BOOT-08: one attach sends one host-boot report for omp and session_shutdown sends closed, under one boot id", async (t) => {
+  const base = scratchDir(t);
+  const socketPath = configure(t, base, base);
+  hostBootRecorder(t);
+  await serveDaemon(t, socketPath, [], (request) => answeredFor(request, ACTIVE_STATUS));
+  const host = createHost();
+  await startOmpSession(t, host, [], base, "realm active");
+  await pollUntil(() => hostBoot.requests.length === 1, "the attached report reaches the daemon");
+  const attached = bootReportOf(hostBoot.requests[0]);
+  assert.equal(attached.hostId, "omp");
+  assert.equal(attached.transport, "extension");
+  assert.equal(attached.phase, "attached");
+  assert.equal(attached.code, null);
+  assert.equal(attached.state, "active");
+  assert.equal(isCorrelationId(attached.bootId), true);
+  assert.equal(attached.attempt, 1);
+  host.handlers.get("session_shutdown")?.({ type: "session_shutdown" }, recordingCtx(base, []));
+  await pollUntil(() => hostBoot.requests.length === 2, "the closed report reaches the daemon");
+  const closed = bootReportOf(hostBoot.requests[1]);
+  assert.equal(closed.phase, "closed");
+  assert.equal(closed.bootId, attached.bootId);
+  assert.equal(closed.hostId, "omp");
+});
+
+void test("BOOT-08: a failed attach that is not kept sends failed with its catalogue code", async (t) => {
+  const base = scratchDir(t);
+  const project = join(base, "project");
+  const elsewhere = join(base, "elsewhere");
+  mkdirSync(project);
+  mkdirSync(elsewhere);
+  const socketPath = configure(t, base, project);
+  hostBootRecorder(t);
+  const status = { ...INACTIVE_STATUS, boundRoot: realpathSync(project), sessionId: sessionIdOfWorkspace(realpathSync(elsewhere)) };
+  await serveDaemon(t, socketPath, [], raisedAfterUp(status));
+  const host = createHost();
+  await startOmpSession(t, host, [], project, "AGENTOS_NOT_CONFIGURED");
+  await pollUntil(() => hostBoot.requests.length >= 1, "the failed report reaches the daemon");
+  const failed = bootReportOf(hostBoot.requests[0]);
+  assert.equal(failed.phase, "failed");
+  assert.equal(failed.code, "AGENTOS_NOT_CONFIGURED");
+  assert.equal(failed.hostId, "omp");
+  const marker = JSON.parse(readFileSync(markerFile(base), "utf8")) as Record<string, unknown>;
+  assert.equal(marker.attach, "failed");
+  assert.equal(marker.code, "AGENTOS_NOT_CONFIGURED");
+});
+
+void test("BOOT-08: a default-level session writes nothing to stderr; REALM_LOG_LEVEL=debug shows host.boot lines with one correlation id", async (t) => {
+  const quietBase = scratchDir(t);
+  const quietSocket = configure(t, quietBase, quietBase);
+  hostBootRecorder(t);
+  await serveDaemon(t, quietSocket, [], (request) => answeredFor(request, ACTIVE_STATUS));
+  const lines = captureStderr(t);
+  const quiet = createHost();
+  await startOmpSession(t, quiet, [], quietBase, "realm active");
+  await pollUntil(() => hostBoot.requests.length === 1, "the attached report reaches the daemon");
+  quiet.handlers.get("session_shutdown")?.({ type: "session_shutdown" }, recordingCtx(quietBase, []));
+  await pollUntil(() => hostBoot.requests.length === 2, "the closed report reaches the daemon");
+  assert.deepEqual(lines, [], "a default-level session adds nothing to stderr");
+
+  const loudBase = scratchDir(t);
+  const loudSocket = configure(t, loudBase, loudBase);
+  setProcessEnv(t, { REALM_LOG_LEVEL: "debug" });
+  await serveDaemon(t, loudSocket, [], (request) => answeredFor(request, ACTIVE_STATUS));
+  const loud = createHost();
+  await startOmpSession(t, loud, [], loudBase, "realm active");
+  await pollUntil(() => hostBoot.requests.length === 3, "the attached report of the debug session reaches the daemon");
+  loud.handlers.get("session_shutdown")?.({ type: "session_shutdown" }, recordingCtx(loudBase, []));
+  await pollUntil(() => hostBoot.requests.length === 4, "the closed report of the debug session reaches the daemon");
+  // assert.deepEqual earlier in this test narrows `lines` to never[]; widen it back before reading it.
+  const stderrLines: readonly string[] = lines;
+  const bootLines = stderrLines
+    .filter((line) => line.startsWith("{"))
+    .map((line) => JSON.parse(line) as Record<string, unknown>)
+    .filter((line) => {
+      const event = line["event"];
+      return typeof event === "string" && event.startsWith("host.boot.");
+    });
+  const events = bootLines.map((line) => line.event);
+  assert.ok(events.includes("host.boot.attached"));
+  assert.ok(events.includes("host.boot.closed"));
+  const bootId = bootReportOf(hostBoot.requests[2]).bootId;
+  for (const line of bootLines.filter((entry) => entry.event === "host.boot.attached" || entry.event === "host.boot.closed")) {
+    assert.equal(line.correlationId, bootId, "the log line and the report share one boot id");
+  }
+});
+
+void test("BOOT-08: a daemon that answers SCHEMA_INVALID to host-boot changes no outcome and adds no stderr line", async (t) => {
+  const base = scratchDir(t);
+  const socketPath = configure(t, base, base);
+  hostBootRecorder(t);
+  hostBoot.reply = { error: { code: "SCHEMA_INVALID" } };
+  await serveDaemon(t, socketPath, [], (request) => answeredFor(request, ACTIVE_STATUS));
+  const lines = captureStderr(t);
+  const host = createHost();
+  const paints: string[] = [];
+  await startOmpSession(t, host, paints, base, "realm active");
+  await pollUntil(() => hostBoot.requests.length === 1, "the report was sent and refused");
+  host.handlers.get("session_shutdown")?.({ type: "session_shutdown" }, recordingCtx(base, []));
+  await pollUntil(() => hostBoot.requests.length === 2, "the closed report was sent and refused");
+  assert.equal(paints.some((text) => /error|refus/i.test(text)), false, "no failure is painted");
+  assert.deepEqual(lines, [], "a refused report adds no stderr line");
 });

@@ -6,7 +6,9 @@ No host is registered live by this repository. On the real table only `omp` has 
 
 ## Direction
 
-The plugin loads into the CLI agent, not the reverse. Omp is the reference implementation: it consumes `src/host/boot.ts` and passes the conformance harness through the Omp host API. `src/omp/extension.ts` reads the environment once at the entry edge, takes its bounds from the omp manifest through `resolveBoot`, builds the daemon attach and writes the presence marker; `src/omp/plugin.ts` registers the session hooks, the retry command, the five Realm tools, the status paint and the guard; `src/omp/host-tools.ts` holds the fail-closed host-tool removal. The plugin never runs `down`: it closes its own client only, and the sandbox lasts until `realm down`. The contract states those seams once for every host, and `src/omp` holds no copy of a bound, a code list, the sub-state table or the jitter function.
+The plugin loads into the CLI agent, not the reverse. Omp is the reference implementation: it consumes `src/host/boot.ts` and passes the conformance harness through the Omp host API. `src/omp/extension.ts` reads the environment once at the entry edge, takes its bounds from the omp manifest through `resolveBoot`, builds the daemon attach through the shared `createDaemonAttach` and reports boot through the shared `createBootObserver` (log line, presence marker, host-boot report); `src/omp/plugin.ts` registers the session hooks, the retry command, the five Realm tools, the status paint and the guard; `src/omp/host-tools.ts` holds the fail-closed host-tool removal. The plugin never runs `down`: it closes its own client only, and the sandbox lasts until `realm down`. The contract states those seams once for every host, and `src/omp` holds no copy of a bound, a code list, the sub-state table or the jitter function.
+
+Since Phase 23 both kinds of host boot the same way. Omp loads the plugin in process; the 18 `mcp-config` hosts launch `realm mcp` or `realm acp` with `--host <id>`. Both paths attach through one function and report through one observer, so a host's boot is bounded, fail-closed and observable the same way; see "Boot integration".
 
 A host is one of two integration kinds:
 
@@ -75,6 +77,65 @@ defineBootConformance("my host hook", myBootHook, defaultManifestFor("omp", "1.0
 
 `defineBootConformance` registers nine cases against fakes (`test/support/fake-host-daemon.ts`): bounded attach, status readback and paint, refused-up retention, terminal attach failure, the fail-closed guard, client-only shutdown, re-attach off by default, bounded re-attach and workspace switching. `runBootConformance` returns the same results as data. The reference hook and four deliberately broken variants (`test/support/reference-boot-hook.ts`) prove the harness can pass and can fail. The real Omp plugin runs through it, driven through the Omp host API by a test double (`test/support/omp-boot-hook.ts`, `test/omp/boot-conformance.test.ts`). The harness was amended in two stated ways for a host that keeps a live session: while a session is live, a hook may keep one repaint poll armed (so "no timer remains" means no wait armed and at most that one poll), and the startup budget may run on the host's managed timers or on `withStartupBudget`. Every assertion made after shutdown stays strict. Phases 24 and 25 run it against each new host hook.
 
+## Boot integration
+
+Phase 23 wires the boot path end to end. A host's shutdown or failure never takes another host's session, or the sandbox, down: each host is its own process (stdio hosts) or its own in-process plugin (Omp), holds a client bound to its own selection, and arms only timers it created.
+
+**Two paths, shared pieces.** `createDaemonAttach` (`src/host/attach.ts`) is the only implementation of "ensure the daemon answers, connect, run the idempotent `up`, keep or drop the client when `up` is refused". Omp (`src/omp/extension.ts`), `realm mcp` and `realm acp` all call it. The three refusal-retention modes name behavior each entry already had: `verified` keeps the client only when `status` answers and names this root and session (Omp), `always` keeps it (`realm mcp`, which keeps serving and lets the driver's readback decide), `never` closes it and rethrows (`realm acp`). `createBootObserver` (`src/host/boot-observer.ts`) turns the boot events of either path into the same three side effects: one structured log line, the presence marker and the report to the daemon.
+
+**The driver.** `createBootDriver` (`src/host/boot-driver.ts`) is the production `HostBootHook` for the 18 `mcp-config` hosts, and the `{ call }` dispatcher the MCP server and the ACP agent are handed (neither file changed). It takes every bound from `resolveBoot`, runs each attempt (attach plus one status readback, validated against the selection) under `withStartupBudget`, decides retry with `attachFailureDisposition`, keeps re-attach off by default, refuses a Realm tool call while the link is not usable, and on shutdown closes its client and makes no daemon call. `bootHookOf(entry)` returns the driver factory for an `mcp-config` host and `null` for `omp`, by design: Omp keeps its in-process plugin (`src/omp/plugin.ts`), a conformance-tested session state machine with a status item, a host tool set to reconcile and an event pipeline. Moving it onto the driver would rewrite a 993-line module whose behavior its tests pin, to share logic that is already shared where it matters (bounds, code lists, the sub-state table and jitter in `src/host/boot.ts`, the attach, the observer and presence). The driver passes the conformance harness cases C1 to C9 (`test/host/boot-driver-conformance.test.ts`).
+
+**The sequence.** `realm mcp|acp [--workspace <absolute path>] [--host <id>] [--reattach]` runs `runStdioHost` (`src/cli/stdio-host.ts`):
+
+| Step | Action | Failure |
+| --- | --- | --- |
+| 1 resolve | parse flags, the host's manifest and `resolveBoot` (or the defaults for a session with no `--host`), a new boot id, the observer | usage error, exit 2, nothing started |
+| 2 ensure | probe the control socket, spawn the detached daemon at most once, poll to the `up` bound | `DAEMON_START_TIMEOUT` or the daemon's own start-failure code |
+| 3 up | connect for this selection, run the idempotent `up` | refusal handled per the retention mode |
+| 4 readback | one `status` read, validated against the selection (session id, bound root) | `SCHEMA_INVALID`, client closed, not adopted |
+| 5 settle | outcome `ready`, `refused` or `failed`; marker written, report sent, log line written | |
+| 6 expose | MCP creates its server and reads stdin; ACP starts its agent | |
+
+Nothing reads stdin before step 5 settles, and the runner writes nothing to stdout: boot text goes to diagnostics, so stdout holds protocol frames only in every outcome.
+
+**Readiness contract.** A protocol reply is the readiness signal: `initialize` (MCP) or the first ACP reply is answered only after the boot settled. `realm mcp` exposes its tools for exactly three outcomes: `ready`; `refused` (the refusal is written to stderr and every call is refused); and `failed` where the daemon itself refused `up` but its status could not confirm this root and session (calls are refused locally, never forwarded). Every other `failed` outcome with re-attach off exits 1 before any frame, with the catalogue code and the daemon-log hint on stderr and nothing on stdout. With `--reattach`, a retryable `failed` instead exposes the tools and refuses every call through the driver's gate with the last code until a re-attach links; the Realm `retry` tool re-attaches once. `realm acp` exposes only on `ready` with the state `active` or `degraded`: any other state exits 1 with the up refusal's `code: reason`, and any `failed` exits 1 with the attach failure text; `--reattach` applies to link loss after a successful boot only. A stdin end with a `RealmError` from the server exits 1; a clean end exits 0.
+
+**Flags.** `--workspace`, `--host` and `--reattach` may come in any order, each at most once, on `realm mcp` and `realm acp` only; `up`, `down`, `status`, `metrics` and `doctor` keep `--workspace` only. `--host` takes a canonical id of an `mcp-config` host: an alias, a differently cased name, an unknown id and `omp` are the usage error (exit 2). A session started with no `--host` (every adapter bundle and snippet shipped today) reports as `unlabelled`: it gets the same boot, a report and a log line, and no presence marker. No environment variable is added; the flags are visible in the host's configuration.
+
+**Teardown.** Stdin EOF, `SIGTERM`, `SIGINT` and `SIGHUP` end a session the same way: timers cleared, client closed, marker removed, a closing report bounded at 1 s, then exit (`128 + signal` for a signal: 143, 130, 129; a second signal exits at once). A signal also ends a boot still pending in `up`. No boot path sends `down`, on shutdown or on a failed boot or when the last host exits: the sandbox lasts until `realm down` (`test/host/boot-no-down.test.ts` pins that no boot-path source names the method). A `SIGKILL` or a crash leaves a stale marker, which readers classify as stale and the next write prunes.
+
+**Observability.**
+
+| Surface | What it carries | Where |
+| --- | --- | --- |
+| Host log line | `host.boot.<phase>` with `correlationId` (the boot id), `hostId`, `transport`, `phase`, `attempt`, `durationMs`, and `code` and `state` when set; `debug` for `attached`, `reattached`, `closed`, `warn` for `refused`, `failed`, `link-lost` | stderr, through the structured logger; the level is `REALM_LOG_LEVEL` when set and `error` when it is not, so a default session writes nothing it did not write before and `REALM_LOG_LEVEL=debug` shows the whole sequence |
+| Presence marker | `<stateDir>/hosts/<id>-active/<pid>.json`, written at settle, removed at `closed`; one catalogue-code line on stderr if it cannot be written | every labelled session, read by `realm host status <id>` and the `host-plugins` doctor item (ids and counts only) |
+| `host-boot` control method | one strict report `{ schemaVersion, bootId, hostId, transport, phase, code, attempt, durationMs, state }`, no path, session id or daemon text; at most 8 in flight, 5 s each (1 s for `closed`), never awaited by the boot | the daemon |
+| Daemon counters | `hostBoot` rows `{ hostId, transport, phase, code?, count }` (at most 256 distinct rows) and `timings.hostBootMs` (the `durationMs` of `attached`, `refused` and `failed`) | `realm metrics` |
+| Daemon log line | one `host.boot` line per accepted report with the same `correlationId`; `warn` when a code is set; the capability posture (`capabilitiesDenied`) of the reporting host on `attached` and `refused` | `daemon.log` |
+| Boot audit chain | `attached`, `refused` and `failed` reports as `host.boot` lines of the reserved `host-boot` session, `path` the closed triple `<hostId>/<transport>/<phase>`, the daemon the only writer | `<stateDir>/audit/host-boot.jsonl`; `realm audit verify --session host-boot` |
+
+The daemon refuses a report with `SCHEMA_INVALID` when it is outside the vocabulary and with `POLICY_DENIED` when a token bucket (60, one more per second) is empty, and records nothing. The Omp edge reports through the plugin's `onAttach` and `onSessionEnd` callbacks and reads `plugin.view()` for the state; its `hostId` is `omp` and its `transport` is `extension`.
+
+**Evidence tiers.** What is proven, and against what:
+
+| Tier | What it proves | Evidence |
+| --- | --- | --- |
+| Fakes | the driver and its guard (conformance cases C1 to C9), the shared attach, the observer's three side effects, the numbered sequence, flags, exit codes and signals of `realm mcp|acp`, Omp on the shared attach and observer | `test/host/`, `test/cli/stdio-host.test.ts`, `test/cli/mcp-attach.test.ts`, `test/cli/cli.test.ts`, `test/omp/extension.test.ts` |
+| Real daemon over fakes | a hung `up`, a failed boot, a signal teardown or a report flood leaves another host's session, the shared sandbox and the daemon answering within their bounds; no `down` row in `controlRequests`; a hostile directory name reaches no sink | `test/integration/host-boot-isolation.test.ts`, `test/daemon/host-boot-control.test.ts` |
+| Scripted-client smoke | a built `realm mcp --host claude` writes its marker before the first reply and removes it at exit | `scripts/check/mcp-smoke.mjs` (`npm run check:mcp`) |
+| Live rehearsal | a real Claude Code 2.x and a real Omp 18.x boot through this path in isolated profiles; how long a real host waits for a cold first boot | not run: it needs explicit owner approval, isolated profiles and (optionally) the Podman stack |
+
+Residuals, accepted and documented:
+
+- Reports are self-reported and advisory: the boot audit says "a process claiming host X reported phase Y", not that X authenticated. A same-user process can dial the control socket, forge a marker or run `down` itself.
+- A boot that never reaches a daemon leaves no daemon-side record; its trail is the host log line, the exit code and stderr.
+- The driver cannot restrict a host's own built-in tools: `host.tools.restrict` is outside the `mcp-config` ceiling.
+- Serve-after-boot can exceed a host's connect timeout on a cold first boot (up to the 230 s `up` bound before `initialize` is answered). No real host's timeout is measured; this is open question OQ-23-01, and serve-early with calls awaiting boot is the follow-up if a real host gives up first.
+- A `realm metrics` client older than an upgraded daemon fails on the snapshot's new `hostBoot` keys until `realm down` restarts the daemon on the new build.
+- A workload-planted project-level host configuration (`.mcp.json`, `.omp/extensions/`) is outside Realm's model: Realm installs at user level only.
+- The client of an `up` that never settles is not reachable by the driver, so it is not closed on teardown; the process exits and the sandbox is unaffected.
+
 ## Install recipes
 
 A runtime table entry carries an optional `recipe`. The engine (`src/host/install.ts`, planning in `src/host/recipe.ts`) supports three kinds. In all three, Realm changes only what a receipt entry owns: a value, marker block or file that is not owned and differs from what Realm would write is refused, never overwritten.
@@ -110,6 +171,8 @@ Refusals are catalogue errors with one of eleven fixed reasons. The reason id an
 ### Presence
 
 `src/host/presence.ts` is host-neutral. A plugin that has settled an attach writes `<stateDir>/hosts/<id>-active/<pid>.json` (mode 0600, directory 0700, atomic, at most 4096 bytes: `schemaVersion`, `pid`, `startedAt`, `sessionId`, `attach` of `attached` or `failed`, and a catalogue `code` or null) and removes it when its session ends. Doctor and `realm host status` count the markers whose process is alive (`process.kill(pid, 0)`); they read at most 64 names, parse each strictly, and count a symlink, directory, oversized or malformed file as unreadable. A marker means "a process of this host loaded the plugin and its last attach ended this way". It is not proof that the sandbox is healthy (that is `realm status`), it is not containment, and it never triggers an action. A write failure never changes an attach outcome; the extension reports it as one stderr line holding only a catalogue code.
+
+Since Phase 23 one module writes the marker for every host: `createBootObserver` (`src/host/boot-observer.ts`) writes it for Omp (`omp-active`) and for every `realm mcp|acp --host <id>` session (`<id>-active`), with the writer above unchanged; a session with no `--host` writes none. A marker written for a stdio host means the same thing: a process serving that host settled its boot this way. `realm host status <id>` and the `host-plugins` doctor item report live and unreadable markers for every host, ids and counts only, whether or not a receipt exists.
 
 ## Receipts, audit and log
 
@@ -192,6 +255,7 @@ Source: GSD Core `next`, commit `69d604e`, 2026-11-16, recorded in `.planning/ph
 - Omp is the only host with live evidence (`docs/integration/hosts.md`). The four adapter bundles under `adapters/` have evidence tier 2 (a host validator or isolated install passes) and are not registered in any live configuration.
 - Config homes come from the GSD Core discovery above and were not independently verified on a machine with each host. `antigravity` has no verified home (`homeVerified` is false). Omp's home (`~/.omp/agent`, `PI_CODING_AGENT_DIR`) is verified against `omp --help` and the public extension page. For `kimi` the table follows the installer flag `--kimi`; the config home reading (`~/.kimi`) is the discovery's, not a live check.
 - `detect` is a file-system look at a home directory and at an executable on `PATH`. It runs no host binary, so it cannot tell a working install from a leftover directory.
+- The boot path of the 18 `mcp-config` hosts (`realm mcp|acp --host <id>`) is proven against fakes and against a real daemon over fakes, and its marker against a built `realm mcp --host claude` in the smoke. That a real Claude Code or a real Omp boots through it, and how long a real host waits for a cold first boot, is proven only by the live rehearsal, which has not been run (see "Boot integration", "Evidence tiers").
 
 Residual risks, accepted and documented:
 

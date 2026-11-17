@@ -1,5 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { ERROR_CODES } from "../../src/core/errors.js";
+import { BOOT_REPORT_HOSTS, HOST_BOOT_PHASES, HOST_BOOT_TRANSPORTS } from "../../src/host/boot-report.js";
 import { BUCKET_UPPER_BOUNDS_MS, PROBE_FAILED_REASON, createMetrics, isMetricsSnapshot } from "../../src/observe/metrics.js";
 
 const CLOCK = new Date("2026-01-01T00:00:00.000Z");
@@ -88,4 +90,123 @@ void test("OBS-03: a saved snapshot does not change when another call is recorde
   assert.equal(first.toolCalls[0]?.count, 1);
   assert.equal(first.transitions[0]?.count, 1);
   assert.equal(registry.snapshot().toolCalls[0]?.count, 2);
+});
+
+interface Observation {
+  hostId: string;
+  transport: string;
+  phase: string;
+  code: string | null;
+  durationMs: number;
+}
+
+function observation(over: Partial<Observation> = {}): Observation {
+  return { hostId: "claude", transport: "mcp", phase: "attached", code: null, durationMs: 10, ...over };
+}
+
+void test("BOOT-06: host boot reports count per closed-vocabulary row and sort by host, transport, phase, code", () => {
+  const registry = createMetrics({ now: () => CLOCK, monotonicMs: () => 0 });
+  registry.recordHostBoot(observation());
+  registry.recordHostBoot(observation());
+  registry.recordHostBoot(observation({ hostId: "omp", transport: "extension" }));
+  registry.recordHostBoot(observation({ phase: "refused", code: "POLICY_DENIED" }));
+  registry.recordHostBoot(observation({ phase: "refused", code: "PODMAN_MISSING" }));
+  registry.recordHostBoot(observation({ transport: "acp" }));
+  registry.recordHostBoot(observation({ hostId: "unlabelled" }));
+  const rows = registry.snapshot().hostBoot ?? [];
+  assert.deepEqual(rows, [
+    { hostId: "claude", transport: "acp", phase: "attached", count: 1 },
+    { hostId: "claude", transport: "mcp", phase: "attached", count: 2 },
+    { hostId: "claude", transport: "mcp", phase: "refused", code: "PODMAN_MISSING", count: 1 },
+    { hostId: "claude", transport: "mcp", phase: "refused", code: "POLICY_DENIED", count: 1 },
+    { hostId: "omp", transport: "extension", phase: "attached", count: 1 },
+    { hostId: "unlabelled", transport: "mcp", phase: "attached", count: 1 },
+  ]);
+});
+
+void test("BOOT-06: an unknown host, transport, phase or code is ignored", () => {
+  const registry = createMetrics({ now: () => CLOCK, monotonicMs: () => 0 });
+  registry.recordHostBoot(observation({ hostId: "/home/user/secret" }));
+  registry.recordHostBoot(observation({ transport: "stdio" }));
+  registry.recordHostBoot(observation({ phase: "started" }));
+  registry.recordHostBoot(observation({ phase: "failed", code: "NOT_A_CODE" }));
+  const snap = registry.snapshot();
+  assert.deepEqual(snap.hostBoot, []);
+  assert.equal(snap.timings.hostBootMs?.count, 0);
+  assert.equal(JSON.stringify(snap).includes("secret"), false);
+});
+
+void test("BOOT-06: at most 256 distinct rows are kept, and an existing row still counts past the cap", () => {
+  const registry = createMetrics({ now: () => CLOCK, monotonicMs: () => 0 });
+  let sent = 0;
+  for (const hostId of BOOT_REPORT_HOSTS) {
+    for (const transport of HOST_BOOT_TRANSPORTS) {
+      for (const code of ERROR_CODES) {
+        registry.recordHostBoot(observation({ hostId, transport, phase: "failed", code, durationMs: 1 }));
+        sent += 1;
+      }
+    }
+  }
+  assert.ok(sent > 256);
+  const full = registry.snapshot();
+  assert.equal(full.hostBoot?.length, 256);
+  const first = full.hostBoot[0];
+  assert.ok(first !== undefined);
+  registry.recordHostBoot(observation({ hostId: first.hostId, transport: first.transport, phase: first.phase, code: first.code ?? null }));
+  const after = registry.snapshot();
+  assert.equal(after.hostBoot?.length, 256);
+  assert.equal(after.hostBoot[0]?.count, first.count + 1);
+  assert.equal(after.timings.hostBootMs?.count, sent + 1);
+});
+
+void test("BOOT-06: hostBootMs observes only attached, refused and failed, in the shared buckets", () => {
+  const registry = createMetrics({ now: () => CLOCK, monotonicMs: () => 0 });
+  for (const phase of HOST_BOOT_PHASES) {
+    registry.recordHostBoot(observation({ phase, code: phase === "attached" || phase === "reattached" || phase === "closed" ? null : "POLICY_DENIED", durationMs: 40 }));
+  }
+  const timing = registry.snapshot().timings.hostBootMs;
+  assert.equal(timing?.count, 3);
+  assert.equal(timing.sumMs, 120);
+  assert.equal(timing.maxMs, 40);
+  assert.deepEqual(timing.bucketUpperBoundsMs, BUCKET_UPPER_BOUNDS_MS);
+  assert.equal(registry.snapshot().hostBoot?.length, HOST_BOOT_PHASES.length);
+});
+
+void test("BOOT-06: a snapshot validates with the host-boot pair, without it, and refuses a half or malformed pair", () => {
+  const registry = createMetrics({ now: () => CLOCK, monotonicMs: () => 0 });
+  registry.recordHostBoot(observation());
+  registry.recordHostBoot(observation({ phase: "failed", code: "POLICY_DENIED" }));
+  const snap = registry.snapshot();
+  assert.equal(isMetricsSnapshot(snap), true);
+  assert.equal(isMetricsSnapshot(JSON.parse(JSON.stringify(snap)) as unknown), true);
+
+  const timings = snap.timings;
+  const hostBootMs = timings.hostBootMs;
+  const bare: Record<string, unknown> = {
+    ...snap,
+    timings: { attachMs: timings.attachMs, toolCallMs: timings.toolCallMs },
+  };
+  Reflect.deleteProperty(bare, "hostBoot");
+  assert.equal(isMetricsSnapshot(bare), true, "an older daemon emits neither key");
+  assert.equal(isMetricsSnapshot({ ...bare, hostBoot: [] }), false, "hostBoot without hostBootMs");
+  assert.equal(isMetricsSnapshot({ ...bare, timings }), false, "hostBootMs without hostBoot");
+  assert.equal(isMetricsSnapshot({ ...snap, hostBoot: [null] }), false);
+  assert.equal(isMetricsSnapshot({ ...snap, hostBoot: "rows" }), false);
+  assert.equal(isMetricsSnapshot({ ...snap, hostBoot: [{ hostId: "claude", transport: "mcp", phase: "attached" }] }), false, "no count");
+  assert.equal(isMetricsSnapshot({ ...snap, hostBoot: [{ hostId: "claude", transport: "mcp", phase: "attached", count: Number.NaN }] }), false);
+  assert.equal(isMetricsSnapshot({ ...snap, hostBoot: [{ hostId: "nobody", transport: "mcp", phase: "attached", count: 1 }] }), false);
+  assert.equal(isMetricsSnapshot({ ...snap, hostBoot: [{ hostId: "claude", transport: "stdio", phase: "attached", count: 1 }] }), false);
+  assert.equal(isMetricsSnapshot({ ...snap, hostBoot: [{ hostId: "claude", transport: "mcp", phase: "started", count: 1 }] }), false);
+  assert.equal(isMetricsSnapshot({ ...snap, hostBoot: [{ hostId: "claude", transport: "mcp", phase: "failed", code: "NOPE", count: 1 }] }), false);
+  assert.equal(isMetricsSnapshot({ ...snap, hostBoot: [{ hostId: "claude", transport: "mcp", phase: "attached", count: 1, extra: 1 }] }), false);
+  assert.equal(isMetricsSnapshot({ ...snap, timings: { ...timings, hostBootMs: {} } }), false);
+  assert.equal(isMetricsSnapshot({ ...snap, timings: { ...timings, hostBootMs: { ...hostBootMs, count: Number.NaN } } }), false);
+  assert.equal(isMetricsSnapshot({ ...snap, timings: { ...timings, extraMs: hostBootMs } }), false);
+});
+
+void test("BOOT-06: controlRequests shows host-boot after recordControl", () => {
+  const registry = createMetrics({ now: () => CLOCK, monotonicMs: () => 0 });
+  registry.recordControl("host-boot", false);
+  registry.recordControl("host-boot", true);
+  assert.deepEqual(registry.snapshot().controlRequests, [{ method: "host-boot", count: 2, refused: 1 }]);
 });

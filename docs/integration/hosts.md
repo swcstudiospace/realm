@@ -28,6 +28,8 @@ reported daemon absent. Registration needs explicit approval per host.
 
 Phase 21 adds one contract for every CLI agent Realm may run in: a runtime table of 19 hosts, a strict plugin manifest, a capability catalogue over the existing policy facts, a boot-hook port with a conformance harness, an installer engine with ownership receipts, and `realm host list|detect|status|install|uninstall`. It is documented in [host-plugin-contract.md](host-plugin-contract.md), with the table of hosts and its evidence limits. It is proven on fixture hosts only: every install on the real table refuses as `recipe-pending` and changes nothing, so no host is registered live by it. Registration still needs explicit approval per host. The tier table above is unchanged.
 
+Phase 23 adds the boot path for the 18 `mcp-config` hosts: a host's configuration launches `realm mcp --host <id>` (or `realm acp --host <id>`, optionally with `--reattach`) and the session boots in six numbered steps, serves nothing until the boot settles, writes its presence marker and reports its boot to the daemon. `--host` takes a canonical host id only. Every adapter bundle and snippet shipped today still runs plain `realm mcp`, which boots the same way and reports as `unlabelled`; no recipe writes `--host` yet (Phases 24 and 25), and no live registration was made. The sequence, the exit codes and what is proven against what are in [host-plugin-contract.md](host-plugin-contract.md), "Boot integration". It is proven against fakes and a real daemon over fakes; the live rehearsal with a real Claude Code and a real Omp has not been run.
+
 ## Gate note (FOUND-03)
 
 Gate note for FOUND-03 (decisions D-09, D-16, D-17, D-18). Status per host:

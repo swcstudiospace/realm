@@ -264,7 +264,13 @@ async function runStatus(host: HostId | undefined, ports: Ports): Promise<CliRes
       const conflicts = (await adapter.detect(ports.env)).conflicts;
       rows.push({ id, status: found.status, entries: found.entries, plugin: { target: found.extensionTarget, sessions, conflicts } });
     } else {
-      rows.push({ id, status: found.status, entries: found.entries });
+      // Any other host reports presence only when it has markers (a `realm mcp --host <id>` session): counts, never a path.
+      const sessions = await readPresence(ports.adapterDeps.stateDir, id);
+      rows.push(
+        sessions.live + sessions.unreadable > 0
+          ? { id, status: found.status, entries: found.entries, plugin: { sessions } }
+          : { id, status: found.status, entries: found.entries },
+      );
     }
   }
   return success(host === undefined ? rows : rows[0]);

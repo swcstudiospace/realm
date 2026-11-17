@@ -46,7 +46,8 @@ const refusals: [string, unknown][] = [
   ["9 args", mcp({ launch: { command: "realm", args: Array.from({ length: 9 }, () => "a") } })],
   ["mcp without launch", mcp({ launch: undefined })],
   ["mcp with entry", mcp({ entry: "a.js" })],
-  ["mcp with boot", mcp({ boot: {} })],
+  ["mcp with retryCap 9", mcp({ boot: { reattach: { retryCap: 9 } } })],
+  ["mcp with unknown boot key", mcp({ boot: { extra: 1 } })],
   ["mcp net.egress above ceiling", mcp({ capabilities: [{ capability: "net.egress", scope: "h:1" }] })],
   ["17 capabilities", mcp({ capabilities: Array.from({ length: 17 }, (_, i) => ({ capability: "fs.read", scope: String(i) })) })],
   ["duplicate capability", mcp({ capabilities: [{ capability: "fs.read" }, { capability: "fs.read" }] })],
@@ -119,9 +120,25 @@ void test("every default manifest parses and round-trips", () => {
       assert.equal(m.launch, undefined);
     } else {
       assert.equal(m.integration, "mcp-config");
-      assert.deepEqual(m.launch, { command: "realm", args: ["mcp"] });
+      assert.deepEqual(m.launch, { command: "realm", args: ["mcp", "--host", id] });
       assert.deepEqual(m.capabilities.map((c) => c.capability), ["daemon.attach", "fs.read", "fs.write", "fs.list", "exec.argv", "exec.shell"]);
     }
+  }
+});
+
+void test("an mcp-config manifest accepts a boot block and returns it frozen", () => {
+  const m = parseHostPluginManifest(mcp({ boot: { startupBudgetMs: 5000, reattach: { enabled: true, retryCap: 8 } } }));
+  assert.equal(m.boot?.startupBudgetMs, 5000);
+  assert.equal(m.boot.reattach?.enabled, true);
+  assert.ok(Object.isFrozen(m) && Object.isFrozen(m.boot));
+  assert.equal(parseHostPluginManifest(mcp()).boot, undefined);
+});
+
+void test("the default launch of every mcp-config host names the host", () => {
+  const ids = HOST_IDS.filter((id) => id !== "omp");
+  assert.equal(ids.length, 18);
+  for (const id of ids) {
+    assert.deepEqual(parseHostPluginManifest(defaultManifestFor(id, "1.0.0")).launch, { command: "realm", args: ["mcp", "--host", id] });
   }
 });
 

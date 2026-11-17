@@ -4,6 +4,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, wr
 import { join } from "node:path";
 import { RealmError } from "../../src/core/errors.js";
 import { createHostAdapter, type HostAdapterDeps, type RecipeHostAdapter } from "../../src/host/adapter.js";
+import { bootHookOf } from "../../src/host/boot-driver.js";
 import { defaultHostReader, type HostFileInfo, type HostFsReader } from "../../src/host/install.js";
 import { defaultManifestFor } from "../../src/host/manifest.js";
 import { receiptPath } from "../../src/host/receipt.js";
@@ -106,7 +107,12 @@ void test("every table entry builds an adapter with no file system access, and i
   assert.deepEqual(adapters.map((adapter) => adapter.id), [...HOST_IDS]);
   for (const adapter of adapters) {
     assert.equal(adapter.tier, HOST_RUNTIMES[adapter.id].tier);
-    assert.equal(adapter.bootHook, null);
+    assert.equal(adapter.bootHook, bootHookOf(HOST_RUNTIMES[adapter.id]));
+    if (adapter.id === "omp") {
+      assert.equal(adapter.bootHook, null);
+    } else {
+      assert.equal(typeof adapter.bootHook, "function");
+    }
   }
   const before = treeHash(host.root);
   const pending = adapters.filter((adapter) => adapter.id !== "omp");
@@ -160,6 +166,12 @@ void test("a boot hook factory passed in is exposed on the adapter", (t) => {
   };
   const adapter = createHostAdapter(fixtureEntry(null), defaultManifestFor("claude", "1.2.3"), deps(host, captureLog(), { bootHook: factory }));
   assert.equal(adapter.bootHook, factory);
+});
+
+void test("an explicit null boot hook wins over the default", (t) => {
+  const host = makeFixtureHost(t);
+  const adapter = createHostAdapter(fixtureEntry(null), defaultManifestFor("claude", "1.2.3"), deps(host, captureLog(), { bootHook: null }));
+  assert.equal(adapter.bootHook, null);
 });
 
 // ---- detect ------------------------------------------------------------------------

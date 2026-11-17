@@ -193,10 +193,11 @@ export function parseHostPluginManifest(input: unknown): HostPluginManifest {
     capabilities,
   };
   if (integration === "mcp-config") {
-    if (obj["launch"] === undefined || obj["entry"] !== undefined || obj["boot"] !== undefined) {
+    if (obj["launch"] === undefined || obj["entry"] !== undefined) {
       reject();
     }
-    return Object.freeze({ ...base, launch: parseLaunch(obj["launch"]) });
+    const launch = parseLaunch(obj["launch"]);
+    return Object.freeze(obj["boot"] === undefined ? { ...base, launch } : { ...base, launch, boot: parseBoot(obj["boot"]) });
   }
   if (obj["entry"] === undefined || obj["launch"] !== undefined) {
     reject();
@@ -212,7 +213,8 @@ const OMP_CAPABILITIES: readonly HostCapability[] = [...MCP_CAPABILITIES, "host.
 // The value package.json already declares in omp.extensions, without the leading "./".
 const OMP_ENTRY = "dist/src/omp/extension.js";
 
-// The manifest the installer uses for a host. Always passes parseHostPluginManifest.
+// The manifest the installer uses for a host. Always passes parseHostPluginManifest. An mcp-config host launches
+// `realm mcp --host <id>`, so the session names the host it serves (presence, boot reports).
 export function defaultManifestFor(id: HostId, pluginVersion: string): HostPluginManifest {
   const runtime = HOST_RUNTIMES[id];
   const capabilities = (runtime.integration === "extension" ? OMP_CAPABILITIES : MCP_CAPABILITIES).map((capability) => ({ capability }));
@@ -225,7 +227,7 @@ export function defaultManifestFor(id: HostId, pluginVersion: string): HostPlugi
           integration: "mcp-config",
           pluginName: "realm",
           pluginVersion,
-          launch: { command: "realm", args: ["mcp"] },
+          launch: { command: "realm", args: ["mcp", "--host", id] },
           capabilities,
         },
   );

@@ -126,16 +126,76 @@ function writeRuntime(configHome, stateDir, workspaceRoot) {
   );
 }
 
-// Drives one MCP session: writes each request, closes stdin after the last reply, and resolves by id.
-function session(env, cwd, workspaceRoot, requests) {
+// The presence marker a labelled session writes (src/host/presence.ts): <stateDir>/hosts/<host>-active/<pid>.json. Absent: null.
+// A file that is not a JSON object reads as { unreadable: true }, which describeMarker refuses.
+export function readMarker(stateDir, hostId, pid) {
+  const file = join(stateDir, "hosts", `${hostId}-active`, `${String(pid)}.json`);
+  let text;
+  try {
+    text = readFileSync(file, "utf8");
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
+  try {
+    const value = JSON.parse(text);
+    return typeof value === "object" && value !== null && !Array.isArray(value) ? value : { unreadable: true };
+  } catch {
+    return { unreadable: true };
+  }
+}
+
+const MARKER_KEYS = ["attach", "code", "pid", "schemaVersion", "sessionId", "startedAt"];
+
+// Why a marker is not what a live labelled session writes, or null when it is: exactly the six keys, schemaVersion 1, this pid, an
+// attach of attached or failed, and a code that is null or a catalogue-shaped code.
+export function describeMarker(marker, pid) {
+  if (marker === null) {
+    return "no marker exists";
+  }
+  if (Object.keys(marker).sort().join(",") !== MARKER_KEYS.join(",")) {
+    return "the marker does not hold exactly the six keys";
+  }
+  if (marker.schemaVersion !== 1 || marker.pid !== pid) {
+    return "the marker is not schemaVersion 1 for the child pid";
+  }
+  if (marker.attach !== "attached" && marker.attach !== "failed") {
+    return "the marker attach is neither attached nor failed";
+  }
+  if (marker.code !== null && !(typeof marker.code === "string" && /^[A-Z][A-Z_]+$/.test(marker.code))) {
+    return "the marker code is neither null nor a catalogue code";
+  }
+  return null;
+}
+
+// True once the output holds the reply to request id.
+function hasReply(text, id) {
+  return text.split("\n").some((line) => {
+    try {
+      return JSON.parse(line)?.id === id;
+    } catch {
+      return false;
+    }
+  });
+}
+
+// Drives one MCP session as `realm mcp --host claude`: writes the first request, reads the presence marker once its reply has
+// arrived (the session is then settled and still reading), writes the rest, closes stdin, and reads the marker again after the
+// child exits. Resolves with the replies by id, stderr, the child pid and both marker observations.
+function session(env, cwd, workspaceRoot, stateDir, requests) {
   return new Promise((resolvePromise, rejectPromise) => {
-    const child = spawn(process.execPath, [CLI, "mcp", "--workspace", workspaceRoot], {
+    const child = spawn(process.execPath, [CLI, "mcp", "--host", "claude", "--workspace", workspaceRoot], {
       env,
       cwd,
       stdio: ["pipe", "pipe", "pipe"],
     });
     let stdout = "";
     let stderr = "";
+    let markerDuring = null;
+    let sentRest = false;
+    const [first, ...rest] = requests;
     const timer = setTimeout(() => {
       child.kill();
       rejectPromise(new Error("MCP session timed out"));
@@ -144,6 +204,14 @@ function session(env, cwd, workspaceRoot, requests) {
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk) => {
       stdout += chunk;
+      if (!sentRest && hasReply(stdout, first[0])) {
+        sentRest = true;
+        markerDuring = readMarker(stateDir, "claude", child.pid);
+        for (const [id, method, params] of rest) {
+          child.stdin.write(frameFor(id, method, params));
+        }
+        child.stdin.end();
+      }
     });
     child.stderr.on("data", (chunk) => {
       stderr += chunk;
@@ -154,12 +222,15 @@ function session(env, cwd, workspaceRoot, requests) {
     });
     child.on("close", () => {
       clearTimeout(timer);
-      resolvePromise({ replies: parseReplies(stdout), stderr });
+      resolvePromise({
+        replies: parseReplies(stdout),
+        stderr,
+        pid: child.pid,
+        markerDuring,
+        markerAfter: readMarker(stateDir, "claude", child.pid),
+      });
     });
-    for (const [id, method, params] of requests) {
-      child.stdin.write(frameFor(id, method, params));
-    }
-    child.stdin.end();
+    child.stdin.write(frameFor(first[0], first[1], first[2]));
   });
 }
 
@@ -173,7 +244,7 @@ async function main() {
     mkdirSync(workspaceRoot);
     writeRuntime(configHome, stateDir, workspaceRoot);
     const modernMeta = { [META_VERSION_KEY]: MODERN_VERSION };
-    const { replies, stderr } = await session(env, scratch, workspaceRoot, [
+    const { replies, stderr, pid, markerDuring, markerAfter } = await session(env, scratch, workspaceRoot, stateDir, [
       [1, "initialize", { protocolVersion: LEGACY_VERSION, capabilities: {}, clientInfo: { name: "mcp-smoke", version: "0" } }],
       [2, "tools/list", {}],
       [3, "tools/call", { name: "status", arguments: {} }],
@@ -190,9 +261,14 @@ async function main() {
       if (code === undefined || cliStatus.stdout.trim() !== "disconnected") {
         throw new Error(`MCP session produced no reply and no fail-closed attach refusal: ${stderr.trim()}`);
       }
+      expect(markerAfter === null, "a session that exited before serving left a presence marker");
       process.stdout.write(`mcp smoke: realm mcp refused attach fail-closed (${code}); realm status disconnected\n`);
       return;
     }
+    // A served session wrote its marker before the first reply and removes it when it ends.
+    const markerProblem = describeMarker(markerDuring, pid);
+    expect(markerProblem === null, `presence marker after the first reply: ${String(markerProblem)}`);
+    expect(markerAfter === null, "the presence marker is removed once the session ends");
     const packageVersion = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")).version;
     const { legacyCall, modernCall } = checkEras(replies, packageVersion);
     const cli = runCli(["status"], env, scratch);

@@ -1080,7 +1080,7 @@ export interface McpExit {
 }
 
 // One `realm mcp` child and the JSON-RPC conversation with it. stdout carries only MCP messages and diagnostics go to stderr
-// (src/cli/main.ts runMcp), so stderr is kept, bounded, for failure messages.
+// (src/cli/stdio-host.ts runStdioHost), so stderr is kept, bounded, for failure messages.
 export interface McpSession {
   // Sends one request and resolves with its result. Rejects when the JSON-RPC response is an error, when the child ends first,
   // or when no response arrives within timeoutMs.
@@ -1219,7 +1219,7 @@ export function startMcpSession(inputs: LiveInputs, scenario: ScenarioEnvironmen
 // The legacy revision a realm mcp session handshakes with (src/mcp/protocol.ts), the one Claude Code uses.
 export const MCP_LEGACY_REVISION = "2025-11-25";
 // The bound on every MCP response. The first one, the answer to initialize, is the exception: realm mcp claims the workspace
-// before it reads any input (src/cli/main.ts runMcp: ensure the daemon, then up, then serve), so that answer waits for the
+// before it reads any input (src/cli/stdio-host.ts runStdioHost: ensure the daemon, then up, then serve), so that answer waits for the
 // attach, which has its own 60 s control bound after the daemon start. A hung server fails the test with a clear message, unless
 // the 5 minute scenario timeout fires first: the sum of the bounds can exceed it.
 export const MCP_RESPONSE_TIMEOUT_MS = 60_000;
