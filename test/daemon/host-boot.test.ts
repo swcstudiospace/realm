@@ -278,8 +278,8 @@ void test("BOOT-07: a failed audit append answers AUDIT_WRITE_FAILED after the m
   assert.deepEqual(afterFirst.map((line) => line["event"]), ["host.boot", "host.boot.audit_failed"]);
   assert.equal(afterFirst[0]?.["correlationId"], "first");
   assert.equal(afterFirst[1]?.["level"], "error");
-  assert.equal(afterFirst[1].["correlationId"], "first");
-  assert.equal(afterFirst[1].["code"], "AUDIT_WRITE_FAILED");
+  assert.equal(afterFirst[1]["correlationId"], "first");
+  assert.equal(afterFirst[1]["code"], "AUDIT_WRITE_FAILED");
 
   // A throw that is not a RealmError is mapped, and its text is never logged.
   assertCode(() => h.recorder.record(report({ bootId: "second" })), "AUDIT_WRITE_FAILED");

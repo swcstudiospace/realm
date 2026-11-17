@@ -129,7 +129,7 @@ void test("every default manifest parses and round-trips", () => {
 void test("an mcp-config manifest accepts a boot block and returns it frozen", () => {
   const m = parseHostPluginManifest(mcp({ boot: { startupBudgetMs: 5000, reattach: { enabled: true, retryCap: 8 } } }));
   assert.equal(m.boot?.startupBudgetMs, 5000);
-  assert.equal(m.boot.reattach.enabled, true);
+  assert.equal(m.boot.reattach?.enabled, true);
   assert.ok(Object.isFrozen(m) && Object.isFrozen(m.boot));
   assert.equal(parseHostPluginManifest(mcp()).boot, undefined);
 });
