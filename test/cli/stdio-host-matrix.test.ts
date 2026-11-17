@@ -240,7 +240,6 @@ async function retryStopsAtTheCap(id: HostId): Promise<void> {
     await pollUntil(() => session.timers.pendingTimeouts() === 1, `${label}: wait ${String(attempt)} is armed`);
     const due = session.timers.nextTimeoutDueIn();
     assert.equal(due, equalJitterDelayMs(attempt, REATTACH.baseDelayMs, REATTACH.capDelayMs, session.timers.random), `${label}: wait ${String(attempt)} delay`);
-    assert.ok(due !== null, `${label}: wait ${String(attempt)} has a due time`);
     await session.timers.advance(due);
   }
   const attempts = REATTACH.retryCap + 1;

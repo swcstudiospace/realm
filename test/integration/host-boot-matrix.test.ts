@@ -240,7 +240,7 @@ async function runMatrixFor(index: number, id: HostId): Promise<void> {
       "daemon log": daemonLog,
       metrics: JSON.stringify(snapshot),
       "boot audit": readFileSync(rig.auditPath, "utf8"),
-      marker: markerText ?? "",
+      marker: markerText,
       diagnostics: hosts.map((host) => host.diagnostics.text()).join("\n"),
       stderr: ended.map((result) => result.stderr).join("\n"),
     };
