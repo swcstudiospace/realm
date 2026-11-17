@@ -1,4 +1,5 @@
-// Codex against the real `codex` CLI (ADPT-08, ADPT-06). The validator tier only: the production tier is a named gap.
+// Codex against the real `codex` CLI (ADPT-08, ADPT-06, BOOTP-01). Three groups of tests: the validator tier, the validator-tier session
+// proof, and the production tier.
 //
 // Validator tier (REALM_LIVE_CODEX=1, the codex executable, the built CLI; no Podman). The real recipe installs the owned TOML table
 // (`[mcp_servers.realm]`, owned by its header, no marker comment) into an isolated CODEX_HOME and Codex's own commands parse it. `codex mcp get|list` print the registered command and do NOT start the
@@ -11,11 +12,26 @@
 //
 // The test never sets a gate variable, never edits Codex's file by hand to make a step pass, and never prints file contents. Observed
 // 2026-11-17 with codex-cli 0.154.0: Codex rewrites config.toml with a comment-dropping editor, which is why no marker comment is used. The operator's real ~/.codex/config.toml is hashed before and after and must not change.
+//
+// Session tier (31-CONTEXT D-31-02, D-31-04). Codex starts its registered MCP servers at session start, before any model request, and needs
+// no credential for that (E-31-4). `codex exec` is pointed at a loopback provider the test owns that answers every request with a 503 and
+// records whether an Authorization header ever arrived; no `env_key`, `auth` or bearer field is configured. The registered `realm` is a
+// wire recorder (test/support/host-live-session.ts) that logs JSON-RPC method names and, for the `tools/list` response, tool names only.
+//   validator session (REALM_LIVE_CODEX=1, no Podman): the recorder fronts a fake MCP server, so the test proves what Codex itself does
+//     with the recipe's table: it launches `realm mcp --host codex`, sends initialize, notifications/initialized and tools/list, forwards
+//     exactly the whitelisted environment (HOME, LANG, PATH and, with the env_vars override, the three names of CODEX_FORWARDED_ENV),
+//     runs the server in the project directory, writes no file through its `-c` overrides, and leaves no process behind. A second test
+//     pins that without the override the server sees only HOME, LANG and PATH (E-31-5, GAP-31-01).
+//   production (the validator gate plus the production prerequisites): the same session against `realm mcp --host codex` on the production
+//     stack, ended once the daemon shows an attached boot report and the recorder shows the six tools. See runHostProduction.
+// What the session drive proves: the host's own client started the registered server and listed its tools. What it does not: no model
+// turn, no tool call and no credential ever happens (GAP-31-02). The test never sets a gate variable and never prints an environment
+// value or a file body.
 
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, delimiter, join } from "node:path";
 import { test, type TestContext } from "node:test";
 import { fileURLToPath } from "node:url";
 import {
@@ -26,22 +42,41 @@ import {
   describeRun,
   fileSha256,
   gateBin,
-  HOST_LIVE,
   hostStatusOf,
   hostVersionNote,
   ownedTableOf,
+  processAlive,
   refusalReasonOf,
   requireReturned,
+  runHostProduction,
   stripAnsi,
   type HostRig,
   type HostRunResult,
 } from "../support/host-live.js";
-import { testTimeout } from "../support/timing.js";
+import {
+  codexSessionArgs,
+  readFakeServerLog,
+  readWireLog,
+  REALM_TOOL_NAMES,
+  runHostUntil,
+  startRefusingProvider,
+  isLoopbackPeer,
+  type HostUntilResult,
+  type ProviderRequestRecord,
+  wireSummary,
+  type WireSummary,
+  withoutShellNames,
+  writeFakeMcpServer,
+  writeWireRecorder,
+  type FakeServerStart,
+} from "../support/host-live-session.js";
+import { pollUntil, scaledMs, testTimeout } from "../support/timing.js";
 
 const CLI_PATH = fileURLToPath(new URL("../../src/cli/main.js", import.meta.url));
 const REAL_CODEX_CONFIG = join(homedir(), ".codex", "config.toml");
 
 const validator = await collectHostLiveGate("codex", "validator", { env: process.env, platform: process.platform, cliPath: CLI_PATH });
+const production = await collectHostLiveGate("codex", "production", { env: process.env, platform: process.platform, cliPath: CLI_PATH });
 
 function rigFor(t: TestContext): HostRig {
   const rig = createHostRig({ host: "codex", bin: gateBin(validator), overrides: { CODEX_HOME: "codex" } }, process.env);
@@ -152,6 +187,153 @@ void test(
   },
 );
 
-void test("codex production: a named gap", { skip: HOST_LIVE.codex.productionGap ?? "codex has no production tier" }, () => {
-  assert.fail("the codex production tier never runs");
-});
+// ---- Session tier ----------------------------------------------------------------------------------------------------------
+
+// A throwaway value the test plants in Codex's own environment. It must never reach the registered server.
+const SECRET_NAME = "REALM_REHEARSAL_SECRET";
+
+interface CodexSessionFacts {
+  readonly rig: HostRig;
+  readonly run: HostUntilResult;
+  readonly summary: WireSummary;
+  // The start lines the fake MCP server logged: one per launch.
+  readonly starts: readonly FakeServerStart[];
+  readonly requests: readonly ProviderRequestRecord[];
+  readonly configAfterInstall: string | null;
+  readonly configAfterSession: string | null;
+}
+
+function wireText(summary: WireSummary): string {
+  return `host methods [${summary.hostMethods.join(", ")}], tools [${summary.toolNames.join(", ")}]`;
+}
+
+// One validator-tier session: the real recipe installs into the rig's isolated CODEX_HOME, then `codex exec` runs against a refusing
+// loopback provider. The registered `realm` is the wire recorder, in front of a fake MCP server, so the test sees what Codex sent and
+// what the server was started with. Codex never exits by itself: the run ends as soon as the tools/list response is logged.
+async function driveCodexSession(t: TestContext, forwardEnv: boolean): Promise<CodexSessionFacts> {
+  const rig = rigFor(t);
+  const wireDir = rig.path("wire");
+  const serverLog = rig.path("server.log");
+  const wireLog = rig.path("wire.log");
+  const server = writeFakeMcpServer(wireDir, serverLog);
+  writeWireRecorder(wireDir, { nodePath: process.execPath, target: [process.execPath, server], logFile: wireLog });
+
+  const installed = cliJson(await rig.realm(["install", "codex"]), "realm host install codex");
+  assert.equal(installed["status"], "installed", "the recipe installs into the isolated CODEX_HOME");
+  const status = await hostStatusOf(rig, "codex");
+  assert.equal(status["status"], "installed");
+  assert.equal(status["launch"], "on-path", "the bare realm command must resolve on the rig's PATH");
+  const configAfterInstall = fileSha256(rig.path("codex", "config.toml"));
+
+  const provider = await startRefusingProvider();
+  t.after(() => provider.close());
+
+  // Codex's own environment: the rig's allowlist without TERM and TMPDIR (Codex's default list may forward them, and the proof
+  // compares the forwarded set with the three default names), the recorder directory first on PATH in place of the rig's stub realm, the
+  // three names the env_vars override forwards (dummy paths) and one planted secret.
+  const env: Record<string, string> = Object.fromEntries(Object.entries(rig.env).filter(([name]) => name !== "TERM" && name !== "TMPDIR"));
+  const stubDir = rig.path("stub");
+  env["PATH"] = [wireDir, ...(env["PATH"] ?? "").split(delimiter).filter((entry) => entry !== stubDir)].join(delimiter);
+  env["XDG_RUNTIME_DIR"] = rig.path("forward-runtime");
+  env["XDG_CONFIG_HOME"] = rig.path("forward-config");
+  env["REALM_DRIVER_SOCKET"] = rig.path("forward-driver.sock");
+  env[SECRET_NAME] = "throwaway-rehearsal-value";
+
+  const run = await runHostUntil(rig.bin, codexSessionArgs({ baseUrl: provider.baseUrl, forwardEnv }), env, rig.cwd, {
+    ready: () => Promise.resolve(wireSummary(readWireLog(wireLog)).answered),
+    timeoutMs: scaledMs(60_000),
+    pollMs: 200,
+  });
+  const summary = wireSummary(readWireLog(wireLog));
+  const requests = provider.requests();
+  t.diagnostic(`codex session ended by ${run.endedBy}; wire: ${wireText(summary)}; the refusing provider saw ${String(requests.length)} request(s)`);
+  assert.equal(
+    run.endedBy,
+    "ready",
+    `codex did not send tools/list to the registered server (ended by ${run.endedBy}); wire: ${wireText(summary)}; provider requests: ${String(requests.length)}; ${describeRun(run)}`,
+  );
+  return {
+    rig,
+    run,
+    summary,
+    starts: readFakeServerLog(serverLog).starts,
+    requests,
+    configAfterInstall,
+    configAfterSession: fileSha256(rig.path("codex", "config.toml")),
+  };
+}
+
+// What every session test asserts, with the environment names the server must have been started with.
+async function assertSession(t: TestContext, facts: CodexSessionFacts, expectedEnvNames: readonly string[]): Promise<void> {
+  const { summary, starts, requests } = facts;
+  const at = (method: string): number => summary.hostMethods.indexOf(method);
+  assert.ok(
+    at("initialize") >= 0 && at("initialize") < at("notifications/initialized") && at("notifications/initialized") < at("tools/list"),
+    `the host must send initialize, notifications/initialized and tools/list in that order; wire: ${wireText(summary)}`,
+  );
+  assert.deepEqual([...summary.toolNames], [...REALM_TOOL_NAMES], `the listed tools must be the six Realm tools; wire: ${wireText(summary)}`);
+
+  assert.ok(starts.length > 0, "the registered server must have been launched");
+  const sorted = [...expectedEnvNames].sort();
+  for (const start of starts) {
+    assert.deepEqual([...start.argv], ["mcp", "--host", "codex"], "Codex must launch the recipe's command and arguments");
+    const names = withoutShellNames(start.env).sort();
+    t.diagnostic(`codex server environment names: ${names.join(", ")}`);
+    assert.equal(names.includes(SECRET_NAME), false, "the planted secret must never reach the server");
+    assert.deepEqual(names, sorted, "Codex must forward exactly the whitelisted environment names");
+    assert.equal(start.cwd, basename(facts.rig.cwd), "the server must run in the project directory");
+  }
+
+  assert.equal(requests.filter((request) => request.authorization).length, 0, "the refusing provider must never see an Authorization header");
+  for (const request of requests) {
+    assert.ok(isLoopbackPeer(request.peer), `the refusing provider must only see loopback peers; saw ${request.peer}`);
+  }
+  assert.equal(facts.configAfterSession, facts.configAfterInstall, "the -c overrides must write nothing: config.toml is byte-identical after the session");
+  await pollUntil(() => starts.every((start) => !processAlive(start.pid)), "the fake MCP server exited", { timeoutMs: 10_000, intervalMs: 100 });
+}
+
+void test(
+  "codex validator session: codex exec against a refusing loopback provider launches the registered server, which sees initialize and tools/list, with only the whitelisted environment",
+  { skip: validator.skip, ...testTimeout(600_000) },
+  async (t) => {
+    t.diagnostic(hostVersionNote("codex", validator));
+    const realBefore = fileSha256(REAL_CODEX_CONFIG);
+    const facts = await driveCodexSession(t, true);
+    await assertSession(t, facts, ["HOME", "LANG", "PATH", "REALM_DRIVER_SOCKET", "XDG_CONFIG_HOME", "XDG_RUNTIME_DIR"]);
+    assert.equal(fileSha256(REAL_CODEX_CONFIG), realBefore, "the operator's real ~/.codex/config.toml must be unchanged");
+  },
+);
+
+void test(
+  "codex validator session: without the env_vars override the server sees only HOME, LANG and PATH",
+  { skip: validator.skip, ...testTimeout(600_000) },
+  async (t) => {
+    t.diagnostic(hostVersionNote("codex", validator));
+    const realBefore = fileSha256(REAL_CODEX_CONFIG);
+    // The three forwarded names and the planted secret are in Codex's own environment; only the defaults reach the server. A newer Codex
+    // that forwards more fails here: that is the signal to revisit GAP-31-01 and OQ-31-03.
+    const facts = await driveCodexSession(t, false);
+    await assertSession(t, facts, ["HOME", "LANG", "PATH"]);
+    assert.equal(fileSha256(REAL_CODEX_CONFIG), realBefore, "the operator's real ~/.codex/config.toml must be unchanged");
+  },
+);
+
+// ---- Production tier -------------------------------------------------------------------------------------------------------
+
+void test(
+  "codex production: codex exec against a refusing loopback provider launches realm mcp --host codex on the production stack and lists the six tools",
+  { skip: production.skip, ...testTimeout(1_800_000) },
+  async (t) => {
+    t.diagnostic(hostVersionNote("codex", production));
+    const provider = await startRefusingProvider();
+    t.after(() => provider.close());
+    await runHostProduction(t, {
+      host: "codex",
+      bin: gateBin(production),
+      cliPath: CLI_PATH,
+      env: process.env,
+      realFile: (home) => join(home, ".codex", "config.toml"),
+      drive: { kind: "session", provider, args: codexSessionArgs({ baseUrl: provider.baseUrl }) },
+    });
+  },
+);

@@ -30,7 +30,7 @@ Phase 21 adds one contract for every CLI agent Realm may run in: a runtime table
 
 Phase 23 adds the boot path for the 18 `mcp-config` hosts: a host's configuration launches `realm mcp --host <id>` (or `realm acp --host <id>`, optionally with `--reattach`) and the session boots in six numbered steps, serves nothing until the boot settles, writes its presence marker and reports its boot to the daemon. `--host` takes a canonical host id only. Every adapter bundle and snippet shipped before Phase 24 still runs plain `realm mcp`, which boots the same way and reports as `unlabelled`; the Phase 24 and Phase 25 recipes write `--host <id>` (claude, opencode, codex, kimi, kimi-code and the ten Phase 25 hosts), and no live registration was made. The sequence, the exit codes and what is proven against what are in [host-plugin-contract.md](host-plugin-contract.md), "Boot integration". It is proven against fakes and a real daemon over fakes; the live rehearsal with a real Claude Code and a real Omp has not been run.
 
-To add a host, read [Writing a Realm host plugin](writing-a-host-plugin.md); the per-host summary is the [Host support matrix](host-support-matrix.md); what is not proven is tracked in [Host plugin gaps](host-plugin-gaps.md).
+To add a host, read [Writing a Realm host plugin](writing-a-host-plugin.md); the per-host summary is the [Host support matrix](host-support-matrix.md); what is not proven is tracked in [Host plugin gaps](host-plugin-gaps.md); the production-stack boot status of the five wave 1 hosts is on [Wave 1 boot matrix](wave1-boot-matrix.md).
 
 ### Phase 25: the remaining runtimes
 
@@ -190,7 +190,7 @@ Q3 (MCP loading). Quoted: "By default this is `~/.codex/config.toml`, but you ca
 
 Q4 (ACP). Not documented in the pages read.
 
-Q5 (capability gaps). `codex mcp get realm` prints a `remove: codex mcp remove realm` hint, but Realm's table is removed with `realm host uninstall codex`; after Codex's own remover took the table out, that command is a clean no-op (Codex rewrites `config.toml` with a comment-dropping editor, so Realm owns the table by its header and writes no marker; observed with codex-cli 0.154.0, 2026-11-17). A live Codex session booting Realm is not automatable here (`codex mcp list` does not start servers; a session needs model credentials). See [the snippet](../hosts/snippets/codex.md).
+Q5 (capability gaps). `codex mcp get realm` prints a `remove: codex mcp remove realm` hint, but Realm's table is removed with `realm host uninstall codex`; after Codex's own remover took the table out, that command is a clean no-op (Codex rewrites `config.toml` with a comment-dropping editor, so Realm owns the table by its header and writes no marker; observed with codex-cli 0.154.0, 2026-11-17). `codex mcp list` does not start servers; a live Codex session booting Realm is driven by `codex exec` against a loopback provider that refuses every request, so no model credential is needed, and that drive is written and has not run on the production stack (see the [Wave 1 boot matrix](wave1-boot-matrix.md)). See [the snippet](../hosts/snippets/codex.md).
 
 ## Kimi CLI and Kimi Code
 

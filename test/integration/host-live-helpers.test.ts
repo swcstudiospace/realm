@@ -97,7 +97,7 @@ void test("HOST_LIVE is a frozen table of the thirteen hosts with the recorded f
   assert.ok(Object.isFrozen(HOST_LIVE));
   const expected: Record<LiveHostId, readonly [string, string, string, string, boolean, boolean]> = {
     claude: ["REALM_LIVE_CLAUDE", "REALM_CLAUDE_BIN", "claude", "2.1.322", true, true],
-    codex: ["REALM_LIVE_CODEX", "REALM_CODEX_BIN", "codex", "0.154.0", false, false],
+    codex: ["REALM_LIVE_CODEX", "REALM_CODEX_BIN", "codex", "0.154.0", false, true],
     opencode: ["REALM_LIVE_OPENCODE", "REALM_OPENCODE_BIN", "opencode", "1.19.5", true, true],
     kimi: ["REALM_LIVE_KIMI", "REALM_KIMI_BIN", "kimi", "1.51.0", true, false],
     qwen: ["REALM_LIVE_QWEN", "REALM_QWEN_BIN", "qwen", "0.22.0", true, false],
@@ -133,8 +133,9 @@ void test("HOST_LIVE is a frozen table of the thirteen hosts with the recorded f
   }
   assert.equal(new Set(LIVE_HOST_IDS.map((host) => HOST_LIVE[host].optIn)).size, LIVE_HOST_IDS.length, "the opt-in variables are unique");
   assert.equal(new Set(LIVE_HOST_IDS.map((host) => HOST_LIVE[host].binOverride)).size, LIVE_HOST_IDS.length, "the executable override variables are unique");
-  assert.match(HOST_LIVE.codex.productionGap ?? "", /`codex mcp list` does not start servers and a session needs model credentials/);
-  assert.match(HOST_LIVE.kimi.productionGap ?? "", /no functional Kimi CLI release exists/);
+  assert.equal(HOST_LIVE.codex.productionTier, true);
+  assert.equal(HOST_LIVE.codex.productionGap, null);
+  assert.match(HOST_LIVE.kimi.productionGap ?? "", /the Python Kimi CLI is archived: its last release is a deprecation stub, so no session can run/);
   assert.match(KIMI_CODE_GAP, /no validator command and no listing command \(24-CONTEXT E-K5\)/);
 });
 
@@ -145,6 +146,7 @@ void test("hostLiveSkipReason is false when every prerequisite holds, for both t
     assert.equal(hostLiveSkipReason(host, "validator", gateInputs(host)), false, host);
   }
   assert.equal(hostLiveSkipReason("claude", "production", gateInputs("claude")), false);
+  assert.equal(hostLiveSkipReason("codex", "production", gateInputs("codex")), false);
   assert.equal(hostLiveSkipReason("opencode", "production", gateInputs("opencode")), false);
 });
 
@@ -244,10 +246,9 @@ void test("hostLiveSkipReason: the validator tier ignores the production facts a
   }
 });
 
-void test("hostLiveSkipReason: the production tier names the gap of codex and kimi, then the production reason, then an existing receipt", () => {
-  assert.equal(hostLiveSkipReason("codex", "production", gateInputs("codex", { production: "no Podman" })), HOST_LIVE.codex.productionGap);
+void test("hostLiveSkipReason: the production tier names the gap of kimi, then the production reason, then an existing receipt", () => {
   assert.equal(hostLiveSkipReason("kimi", "production", gateInputs("kimi")), HOST_LIVE.kimi.productionGap);
-  for (const host of ["claude", "opencode"] as const) {
+  for (const host of ["claude", "codex", "opencode"] as const) {
     assert.equal(hostLiveSkipReason(host, "production", gateInputs(host, { production: "no Podman 5.x", receiptExists: true })), "no Podman 5.x", host);
     const receipt = hostLiveSkipReason(host, "production", gateInputs(host, { receiptExists: true }));
     assert.ok(typeof receipt === "string" && receipt.includes(`Realm host receipt for ${host}`), `${host}: ${String(receipt)}`);
@@ -342,8 +343,8 @@ void test("collectHostLiveGate runs a version probe in a throwaway home and deci
   const stub = await collectHostLiveGate("kimi", "validator", { env: { REALM_LIVE_KIMI: "1", REALM_KIMI_BIN: kimi }, platform: "linux", cliPath: cli });
   assert.match(String(stub.skip), /archived Python stub/);
   const codex = fake("codex-fake", "codex-cli 0.154.0");
-  const gap = await collectHostLiveGate("codex", "production", { env: { REALM_LIVE_CODEX: "1", REALM_CODEX_BIN: codex }, platform: "linux", cliPath: cli });
-  assert.equal(gap.skip, HOST_LIVE.codex.productionGap);
+  const closed = await collectHostLiveGate("codex", "production", { env: { REALM_LIVE_CODEX: "1", REALM_CODEX_BIN: codex }, platform: "linux", cliPath: cli });
+  assert.match(String(closed.skip), /REALM_LIVE_PRODUCTION=1 is not set/, "a closed production gate of codex names the production reason, not a gap sentence");
   const missing = await collectHostLiveGate("opencode", "validator", { env: { REALM_LIVE_OPENCODE: "1", REALM_OPENCODE_BIN: join(dir, "absent") }, platform: "linux", cliPath: cli });
   assert.match(String(missing.skip), /no OpenCode executable/);
 });

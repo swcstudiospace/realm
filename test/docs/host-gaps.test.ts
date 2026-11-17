@@ -1,5 +1,5 @@
 // TEST-HOST-08 (D-26-09): docs/integration/host-plugin-gaps.md is the tracked table of the unverified behavior, accepted residuals, owner
-// decisions and inferences of Phases 21 to 26. This test holds its shape (ids, classes, statuses), that each source names a planning file that
+// decisions and inferences of Phases 21 to 26, and the rows of the Phase 31 boot rehearsals. This test holds its shape (ids, classes, statuses), that each source names a planning file that
 // exists (skipped with a named diagnostic when the planning tree is archived), that a row marked closed or narrowed cites a repository path
 // that exists, that every numbered behavior_unverified item of the Phase 21 to 25 verification files has a row, and that a closed GAP-21-04
 // goes with a non-zero src/host coverage floor. Reads files only: nothing is written and no process starts.
@@ -92,7 +92,7 @@ void test("TEST-HOST-08: the table has seven non-empty cells per row, well forme
     const match = /^GAP-(\d{2})-(\d{2})$/.exec(row.id);
     assert.ok(match !== null, `${row.id}: the id is GAP, a two-digit phase and a two-digit number`);
     const phase = Number(match[1]);
-    assert.ok(phase >= 21 && phase <= 26, `${row.id}: the phase is 21 to 26`);
+    assert.ok(phase >= 21 && phase <= 31, `${row.id}: the phase is 21 to 31`);
     assert.ok(!seen.has(row.id), `${row.id}: the id is unique`);
     seen.add(row.id);
   }
