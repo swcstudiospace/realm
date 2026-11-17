@@ -339,7 +339,7 @@ void test("isolatedHostEnv throws, before it creates anything, for a root, stub 
 // ---- Process-group runner --------------------------------------------------------------------------------------------------
 
 async function waitUntilGone(pid: number): Promise<void> {
-  const outcome = await pollUntil(() => (processAlive(pid) ? { done: false, detail: `pid ${String(pid)} is still alive` } : { done: true }), {
+  const outcome = await pollUntil(() => Promise.resolve(processAlive(pid) ? { done: false, detail: `pid ${String(pid)} is still alive` } : { done: true }), {
     timeoutMs: scaledMs(3_000),
     intervalMs: 50,
   });
