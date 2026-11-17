@@ -99,10 +99,10 @@ All v3.0 requirements are hypotheses until shipped and verified.
 
 ### Release hardening (REL)
 
-- [ ] **REL-01**: The release job is split into an unprivileged build job and a privileged publish job (owner decision D6)
-- [ ] **REL-02**: A release carries a build provenance attestation that `gh attestation verify` accepts
-- [ ] **REL-03**: A manual rollback workflow marks a release a prerelease and re-points the documentation; a test release is marked a prerelease by it
-- [ ] **REL-04**: TD-08: the changelog generator filters commits of features that were later removed
+- [x] **REL-01**: The release job is split into an unprivileged build job and a privileged publish job (owner decision D6)
+- [x] **REL-02**: A release carries a build provenance attestation that `gh attestation verify` accepts
+- [x] **REL-03**: A manual rollback workflow marks a release a prerelease and re-points the documentation; a test release is marked a prerelease by it
+- [x] **REL-04**: TD-08: the changelog generator filters commits of features that were later removed
 
 ## Carried from v2.0 (not in this milestone)
 
@@ -217,10 +217,10 @@ Each v3.0 requirement maps to exactly one phase. The carried requirements keep t
 | RES-03 | Phase 19 | Complete 2026-11-16: scratch creation, attachment and ordered deletion (`src/runtime/hardening.ts`, `src/runtime/libpod-client.ts`, `test/runtime/driver/scratch-volume.test.ts`); live scenario 12 ok in 13 of 14 full runs and 9 of 9 isolated runs (G1 open risk, owner-accepted) |
 | RES-04 | Phase 19 | Complete 2026-11-16: spike recorded (`docs/integration/workspace-snapshot-spike.md`), D19-6 full copy; checkpoint create/restore (`src/session/checkpoint.ts`, `src/cli/checkpoint.ts`) with the in-memory stopped-project pin (PR 91); live `19 checkpoint-roundtrip` ok |
 | RES-05 | Phase 19 | Complete 2026-11-16: live scenarios 5, 5c, 12, 13, `19 verifier-failure`, `19 no-record`, `19 driver-restart` and `19 checkpoint-roundtrip` ok with no skip in the 40-test runs; the daemon-kill same-container survival is scenario 5 (`19-VERIFICATION.md`) |
-| REL-01 | Phase 20 | Implemented-unverified in open PR40; actual release-run permission/handoff evidence live-gated, P20 |
-| REL-02 | Phase 20 | Normal+repair six-file provenance implemented-unverified; actual downloaded-subject attestation proof live-gated, P20 |
-| REL-03 | Phase 20 | Rollback validates `docs_tag`, ancestry and published non-prerelease state and forwards `source_ref` (`.github/workflows/rollback.yml:6-120`, `.github/workflows/pages.yml:5-100`); GitHub acceptance and PR #40 human review open, P20 |
-| REL-04 | Phase 20 | Explicit `Removes:` relationships, multiple targets, earlier-release notes and canonical-revert-first composition implemented (`scripts/release/changelog.mjs:28-29,143-178`, `scripts/release/changelog.test.mjs:424-508`), P20 |
+| REL-01 | Phase 20 | Complete (live release v0.3.30: build job read-only, publish job write grants) |
+| REL-02 | Phase 20 | Complete (gh attestation verify exit 0 on v0.3.30 tarball, SHA256SUMS, SBOM; repair path offline-tested, owner-accepted) |
+| REL-03 | Phase 20 | Complete (test rollback run 43951066556; docs rebuilt from the known-good SHA) |
+| REL-04 | Phase 20 | Complete (release-cases tests, 59 passing) |
 | FS-02 | Phase 2 | Partial (accepted approximation, confirmed by the owner 2026-10-23; rebind verified through the pinned root; check-to-use windows remain on the read and write paths; audit G-10) |
 | ANDA-01 | Phase 3 | Partial (live-gated) |
 | ANDA-02 | Phase 3 | Partial (live-gated) |

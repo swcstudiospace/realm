@@ -191,7 +191,7 @@ Plans:
 - [x] **Phase 17: Observability and tamper-evident audit** - A hash-chained audit log with `realm audit verify`, structured logs with correlation ids, counters over the control socket, and a distinct code for gateway or driver loss (OBS-01..04) (completed 2026-11-15)
 - [x] **Phase 18: Per-project sandboxes** - One session, sandbox, audit file and lock table per project workspace under the configured roots (MULTI-01..06) (completed 2026-11-15)
 - [x] **Phase 19: Resume and checkpoint** - A surviving sandbox that passes the hardening verifier is re-adopted after a daemon restart, a session-owned scratch volume, and workspace snapshot and restore (RES-01..05) (completed 2026-11-16)
-- [ ] **Phase 20: Release pipeline hardening** - Unprivileged build job and privileged publish job, build provenance attestation, a rollback workflow, and a changelog filter for removed features (REL-01..04)
+- [x] **Phase 20: Release pipeline hardening** - Unprivileged build job and privileged publish job, build provenance attestation, a rollback workflow, and a changelog filter for removed features (REL-01..04) (completed 2026-11-17)
 
 ## Phase Details
 
@@ -546,8 +546,8 @@ The owner lifted the ship hold on 2026-10-28 for one pull request with autoMerge
 
 **Plans**: `20-01-PLAN.md` covers implementation and local readiness; `20-02-PLAN.md` depends on it and reserves exact-head human review and authorized live acceptance. Both passed independent plan review; no release action has been performed.
 - [x] 20-01-PLAN.md
-- [ ] 20-02-PLAN.md
-- [ ] 20-03-PLAN.md
+- [x] 20-02-PLAN.md
+- [x] 20-03-PLAN.md
 
 ## Progress
 
@@ -584,7 +584,7 @@ Milestone v3.0 phases (12 to 20) run in three parallel lanes that share no mutab
 | 17. Observability and tamper-evident audit | 6/5 | Complete    | 2026-11-15 |
 | 18. Per-project sandboxes | 16/15 | Complete    | 2026-11-15 |
 | 19. Resume and checkpoint | 1/1 | Complete    | 2026-11-16 |
-| 20. Release pipeline hardening | 0/3 | Recovery plans independently checked; immutable rollback handoff, human review and live evidence open | - |
+| 20. Release pipeline hardening | 4/3 | Complete    | 2026-11-17 |
 
 ### Phase 21: Host plugin contract and installer
 

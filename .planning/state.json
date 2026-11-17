@@ -136,13 +136,13 @@
     {
       "number": "20",
       "name": "Release pipeline hardening",
-      "status": "pending"
+      "status": "complete"
     }
   ],
   "next": {
     "command": "/gsd-progress --next",
-    "label": "Advance to the next step",
-    "reason": "Phase 9 of 15 · 96% · executing"
+    "label": "Advance to the next step (plan phase 21)",
+    "reason": "Phase 10 of 15 — needs a plan"
   },
-  "updated_at": "2026-11-16T23:15:10.117Z"
+  "updated_at": "2026-11-17T00:38:13.521Z"
 }
