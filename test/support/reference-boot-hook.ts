@@ -1,4 +1,4 @@
-// A minimal HostBootHook that conforms to the contract, plus four deliberately broken variants. It is a test double that proves
+// A minimal HostBootHook that conforms to the contract, plus ten deliberately broken variants. It is a test double that proves
 // the conformance harness (host-boot-conformance.ts) can pass and can fail; it is not a production host. Omp stays the real
 // reference until Phase 22. Every bound comes from resolveBoot, and the hook imports nothing from src/omp.
 
@@ -16,6 +16,12 @@ interface Faults {
   readonly downOnShutdown?: boolean;
   readonly waveThrough?: boolean;
   readonly unboundedReattach?: boolean;
+  readonly repaintsDuplicates?: boolean;
+  readonly dropsRefusedClient?: boolean;
+  readonly retriesTerminal?: boolean;
+  readonly reattachAlways?: boolean;
+  readonly reattachSameRoot?: boolean;
+  readonly adoptsForeign?: boolean;
 }
 type Adopted = { readonly daemon: DaemonClient; readonly refusal: RealmError | null; readonly status: DaemonStatus };
 type Outcome =
@@ -37,7 +43,7 @@ function expectedSession(root: string): string | null {
 
 function buildHook(deps: HostBootDeps, manifest: HostPluginManifest, faults: Faults): HostBootHook {
   const boot = resolveBoot(manifest);
-  const enabled = boot.reattach.enabled;
+  const enabled = faults.reattachAlways === true || boot.reattach.enabled;
   const retryCap = faults.unboundedReattach === true ? Number.POSITIVE_INFINITY : boot.reattach.retryCap;
   let root: string | null = null;
   let live = false;
@@ -60,7 +66,7 @@ function buildHook(deps: HostBootDeps, manifest: HostPluginManifest, faults: Fau
     state = next;
     lastCode = why;
     const text = `realm ${state}${why === undefined ? "" : ` (${why})`} mode: ${mode ?? "unknown"}`;
-    if (text !== lastText) {
+    if (faults.repaintsDuplicates === true || text !== lastText) {
       lastText = text;
       deps.sink.setStatus("realm", text);
     }
@@ -157,11 +163,15 @@ function buildHook(deps: HostBootDeps, manifest: HostPluginManifest, faults: Fau
     }
     // A reply naming another project's root or session is not adopted. A refused up keeps its client only when the reply names the root.
     const rootOk = status.boundRoot === undefined ? adopted.refusal === null : status.boundRoot === workspace;
-    if (!rootOk || status.sessionId !== expectedSession(workspace)) {
+    if (faults.adoptsForeign !== true && (!rootOk || status.sessionId !== expectedSession(workspace))) {
       daemon.close();
       return failed(makeRealmError("POLICY_DENIED"));
     }
-    client = daemon;
+    if (faults.dropsRefusedClient === true && adopted.refusal !== null) {
+      daemon.close();
+    } else {
+      client = daemon;
+    }
     mode = status.mode;
     const refused = adopted.refusal;
     if (refused === null) {
@@ -200,7 +210,7 @@ function buildHook(deps: HostBootDeps, manifest: HostPluginManifest, faults: Fau
     if (outcome.kind === "attached") {
       streak = 0;
       go("linked");
-    } else if (outcome.retryable && streak < retryCap) {
+    } else if ((outcome.retryable || faults.retriesTerminal === true) && streak < retryCap) {
       stopPoll();
       release();
       go("reconnecting");
@@ -266,7 +276,7 @@ function buildHook(deps: HostBootDeps, manifest: HostPluginManifest, faults: Fau
   return {
     start: begin,
     async switchWorkspace(workspace) {
-      if (!live || workspace !== root) {
+      if (faults.reattachSameRoot === true || !live || workspace !== root) {
         await begin(workspace);
       }
     },
@@ -323,3 +333,15 @@ export const downOnShutdownHook: HostBootHookFactory = (deps, manifest) => build
 export const waveThroughHook: HostBootHookFactory = (deps, manifest) => buildHook(deps, manifest, { waveThrough: true });
 // Re-attach ignores the retry cap.
 export const unboundedReattachHook: HostBootHookFactory = (deps, manifest) => buildHook(deps, manifest, { unboundedReattach: true });
+// The identical-text guard is skipped, so an unchanged status repaints on every poll (C2).
+export const repaintsDuplicatesHook: HostBootHookFactory = (deps, manifest) => buildHook(deps, manifest, { repaintsDuplicates: true });
+// A refused up closes the client instead of keeping it (C3).
+export const dropsRefusedClientHook: HostBootHookFactory = (deps, manifest) => buildHook(deps, manifest, { dropsRefusedClient: true });
+// Every attach failure counts as retryable, a terminal code included (C4, C8).
+export const retriesTerminalHook: HostBootHookFactory = (deps, manifest) => buildHook(deps, manifest, { retriesTerminal: true });
+// Re-attach is on although the manifest has it off (C1, C7).
+export const reattachAlwaysHook: HostBootHookFactory = (deps, manifest) => buildHook(deps, manifest, { reattachAlways: true });
+// A switch to the root already attached attaches again (C9).
+export const reattachSameRootHook: HostBootHookFactory = (deps, manifest) => buildHook(deps, manifest, { reattachSameRoot: true });
+// The root and session check on the status reply is skipped, so a reply for another project is adopted (C3, C9).
+export const adoptsForeignHook: HostBootHookFactory = (deps, manifest) => buildHook(deps, manifest, { adoptsForeign: true });
