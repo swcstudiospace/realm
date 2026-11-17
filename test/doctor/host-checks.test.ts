@@ -345,7 +345,7 @@ void test("ADPT-03: a symlinked owned file adds the unreadable count and the by-
   assert.match(result.detail, /^host plugin drift: claude: installed receipt, 0 of 1 entries intact, 1 unreadable$/);
   assert.equal(
     result.fix,
-    "A file this receipt owns cannot be read or parsed safely (a symlink, a file over 1 MiB, invalid content or a lone Realm marker); inspect it, repair it by hand as docs/hosts/snippets/claude.md describes, then run realm host uninstall claude.",
+    "A file this receipt owns cannot be read or parsed safely (a symlink, a file over 1 MiB, invalid content or a lone Realm marker); inspect it, repair it by hand as docs/hosts/snippets/claude-code.md describes, then run realm host uninstall claude.",
   );
   for (const leak of [host.configHome, host.home, host.root, "elsewhere", "settings.json"]) {
     assert.ok(!result.detail.includes(leak), `detail leaks ${leak}`);

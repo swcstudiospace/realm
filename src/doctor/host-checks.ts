@@ -38,6 +38,10 @@ export interface HostPluginsCheckOptions {
   readonly isProcessAlive?: (pid: number) => boolean;
 }
 
+// The snippet that documents each host: most are named by host id; these share or rename one.
+const SNIPPET_NAMES: Readonly<Record<string, string>> = { claude: "claude-code", "kimi-code": "kimi" };
+const snippetOf = (id: string): string => SNIPPET_NAMES[id] ?? id;
+
 const RECEIPT_SUFFIX = ".receipt.json";
 // status never copies a bundle, so no adapters directory is consulted.
 const NO_ADAPTERS_DIR = "";
@@ -179,7 +183,7 @@ export async function hostPluginsCheck(options: HostPluginsCheckOptions): Promis
     const fix =
       stuck === undefined
         ? `Repair with realm host install ${first.id}, or remove with realm host uninstall ${first.id}.`
-        : `A file this receipt owns cannot be read or parsed safely (a symlink, a file over 1 MiB, invalid content or a lone Realm marker); inspect it, repair it by hand as docs/hosts/snippets/${stuck.id}.md describes, then run realm host uninstall ${stuck.id}.`;
+        : `A file this receipt owns cannot be read or parsed safely (a symlink, a file over 1 MiB, invalid content or a lone Realm marker); inspect it, repair it by hand as docs/hosts/snippets/${snippetOf(stuck.id)}.md describes, then run realm host uninstall ${stuck.id}.`;
     return {
       id: "host-plugins",
       status: "warn",
