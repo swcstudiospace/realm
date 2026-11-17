@@ -12,7 +12,8 @@ Coverage: 46/46 v1 requirements mapped, each to exactly one phase. v2.0 adds 8 r
 
 - 🗄 **v1.0 provisional** — Phases 1 to 7 (archived in `milestones/`)
 - 🗄 **v2.0 Host Adapters, Live Verification and Production Isolation** — Phases 8 to 11 (shipped as releases 0.2.0 and 0.2.1 on 2026-10-29; archived in `milestones/`)
-- 🚧 **v3.0 Containment by Default** — Phases 12 to 20 (in progress, release line 0.3.x)
+- 🗄 **v3.0 Containment by Default** — Phases 12 to 26 (shipped 2026-11-17, release line 0.3.x; archived in `milestones/v3.0-ROADMAP.md`)
+- 🚧 **v4.0 Anda removal, MCP hardening and production boot proof** — Phases 27 to 31 (in progress, release line 0.4.x)
 
 ## Phases
 
@@ -198,6 +199,11 @@ Plans:
 - [x] **Phase 24: Host adapters wave 1: Claude Code, OpenCode, Codex, Kimi CLI** - Real install recipes for Claude Code, OpenCode, Codex and Kimi CLI (plus a same-shaped Kimi Code row), built on an engine extended for per-host home roles, a TOML table guard and honest status, proven on fixture hosts, with gated live rehearsals and a stated evidence tier per host.
 - [x] **Phase 25: Host adapters wave 2: remaining GSD Core runtimes** - The remaining GSD Core runtimes get config-only recipes where their config is documented (ten hosts; the owner approved deferring windsurf, trae and zcode), with a shadow guard and a YAML owned-key kind, fixture proofs, gated live validator tiers where a host is available, and docs that state the evidence tier per host.
 - [x] **Phase 26: Plugin contract tests, boot tests and author docs** - A cross-host contract checker proven by seeded defects, a real-daemon boot matrix over every stdio host, conformance mutants for the uncovered boot cases, a plugin author guide, a support matrix that a test keeps in step with the runtime table, and one tracked gaps page for the phase 21 to 25 residuals.
+- [ ] **Phase 27: Anda disposition and v4.0 requirement closure** - Every open Anda item is closed by a recorded owner decision: ANDA-01 to ANDA-04, the Phase 3 Anda items and OQ-P3-11 are dispositioned as removed, the v2.0 carry list is reconciled, and the replacement research is the published rationale.
+- [ ] **Phase 28: Remove the Anda bridge** - The Anda bridge is removed with a clean cutover: no `andaUrl` key, no `ANDA_UNREACHABLE` or `ANDA_VERSION_MISMATCH` codes, no degraded state, no doctor check or docs for it, and the release carries a breaking-change note.
+- [ ] **Phase 29: MCP tool annotations** - `realm mcp` advertises MCP tool annotations (read-only, destructive, idempotent, open-world) for every Realm tool, verified against the protocol revisions it serves.
+- [ ] **Phase 30: Capability token spike** - A bounded spike answers whether a per-session capability token (least privilege and audit attribution for stdio hosts) is worth building, with a recorded build or drop decision; no production code unless the decision is build.
+- [ ] **Phase 31: Production-stack boot rehearsals for wave 1 hosts** - The wave 1 hosts that can run on this account's Podman 5.x stack boot Realm through their own CLI against the production stack, with results or named gaps recorded.
 
 ## Phase Details
 
@@ -672,3 +678,53 @@ Plans:
 - [x] 26-01-PLAN.md: cross-host contract checker and lifecycle matrix (wave 1)
 - [x] 26-02-PLAN.md: boot matrix over every stdio host and conformance mutants (wave 1)
 - [x] 26-03-PLAN.md: author guide, support matrix, gaps page, closure checks (wave 2)
+
+### Phase 27: Anda disposition and v4.0 requirement closure
+
+**Goal:** Every open Anda item is closed by a recorded owner decision: ANDA-01 to ANDA-04, the Phase 3 Anda items and OQ-P3-11 are dispositioned as removed, the v2.0 carry list is reconciled, and the replacement research is the published rationale.
+**Depends on:** Phase 26
+**Requirements**: ANDAX-01, ANDAX-02
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 27 to break down)
+
+### Phase 28: Remove the Anda bridge
+
+**Goal:** The Anda bridge is removed with a clean cutover: no `andaUrl` key, no `ANDA_UNREACHABLE` or `ANDA_VERSION_MISMATCH` codes, no degraded state, no doctor check or docs for it, and the release carries a breaking-change note.
+**Depends on:** Phase 27
+**Requirements**: ANDAX-03, ANDAX-04, ANDAX-05
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 28 to break down)
+
+### Phase 29: MCP tool annotations
+
+**Goal:** `realm mcp` advertises MCP tool annotations (read-only, destructive, idempotent, open-world) for every Realm tool, verified against the protocol revisions it serves.
+**Depends on:** Phase 27
+**Requirements**: MCPA-01, MCPA-02
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 29 to break down)
+
+### Phase 30: Capability token spike
+
+**Goal:** A bounded spike answers whether a per-session capability token (least privilege and audit attribution for stdio hosts) is worth building, with a recorded build or drop decision; no production code unless the decision is build.
+**Depends on:** Phase 29
+**Requirements**: CAPT-01
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 30 to break down)
+
+### Phase 31: Production-stack boot rehearsals for wave 1 hosts
+
+**Goal:** The wave 1 hosts that can run on this account's Podman 5.x stack boot Realm through their own CLI against the production stack, with results or named gaps recorded.
+**Depends on:** Phase 28
+**Requirements**: BOOTP-01, BOOTP-02
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 31 to break down)
