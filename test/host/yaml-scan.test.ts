@@ -20,9 +20,19 @@ for (const c of YAML_UNPARSEABLE) {
   });
 }
 
+// The scanner locates; the planner compares. A parent or child defined twice, or a parent that is not a block mapping, is foreign here. A single realm
+// child whose value differs from the recipe's is located as `present` with its parsed value (or null when the reader does not accept it), and
+// yaml-owned.test.ts pins that install and uninstall refuse it.
+const RECIPE_VALUE = { command: "realm", args: ["mcp", "--host", "hermes"] };
+
 for (const c of YAML_FOREIGN) {
-  void test(`yaml-scan: ${c.name} is foreign`, () => {
-    assert.equal(scan(c.seed).state, "foreign");
+  void test(`yaml-scan: ${c.name} is foreign, or a located entry whose value is not the recipe's`, () => {
+    const found = scan(c.seed);
+    if (found.state === "present") {
+      assert.notDeepEqual(found.entry.value, RECIPE_VALUE);
+    } else {
+      assert.equal(found.state, "foreign");
+    }
   });
 }
 

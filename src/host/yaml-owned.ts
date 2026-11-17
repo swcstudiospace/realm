@@ -229,7 +229,8 @@ function removed(current: string, located: YamlEntryLocation, entry: ReceiptEntr
   const natural = entry.separatorAdded === true && located.end === current.length;
   const strip = (whole: string): string => (whole.endsWith(eol) ? whole.slice(0, -eol.length) : whole);
   const candidates = [text, ...(header === null ? [] : [header])];
-  const options = [...candidates.map((candidate) => (natural ? strip(candidate) : candidate)), ...(natural ? candidates : candidates.map(strip))];
+  // The line ending Realm added is stripped only when the entry is still the last thing in the file; otherwise it is the file's own.
+  const options = natural ? [...candidates.map(strip), ...candidates] : candidates;
   return options.find((option) => sha256Text(option) === entry.beforeSha256) ?? options[0] ?? text;
 }
 
