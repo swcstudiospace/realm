@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.3.36] - 2026-11-17
+
+### Documentation
+- docs(phase-22): plan Omp plugin on boot, register OMPB-01 to OMPB-08 (#104) (1945220)
+
 ## [0.3.35] - 2026-11-17
 
 ### Documentation
