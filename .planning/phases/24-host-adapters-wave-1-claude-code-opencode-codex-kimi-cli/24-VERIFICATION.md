@@ -41,6 +41,7 @@ covered_files:
   - "test/integration/host-live-kimi.test.ts"
   - "test/integration/host-live-opencode.test.ts"
   - "test/support/host-live.ts"
+covered_digest: "v3:sha256:0921135a84a8ed54680ba540337fd61be0c7d4825373e38bc9a7ea21f2adf7c5"
 ---
 
 # Phase 24 Verification: Host adapters wave 1 (Claude Code, OpenCode, Codex, Kimi)
