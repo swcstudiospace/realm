@@ -177,9 +177,9 @@ All v3.0 requirements are hypotheses until shipped and verified.
 
 - [x] **ANDAX-01**: Every Anda requirement and open question (ANDA-01..04, OQ-P3-11, PRD-DRV-01 carry notes) is dispositioned by a recorded owner decision of 2026-11-17: the Anda bridge is removed and the replacement research is the rationale
 - [x] **ANDAX-02**: The v2.0 carry list is reconciled: FS-02, OMP-05, PRD-DRV-01 and UI-01 have an evidence-cited disposition (complete, accepted limitation, or still open with a reason)
-- [ ] **ANDAX-03**: The Anda bridge code, the `andaUrl` config key, `ANDA_UNREACHABLE`, `ANDA_VERSION_MISMATCH`, the degraded state, the Anda doctor check and the Anda tests are removed with no shim
-- [ ] **ANDAX-04**: The state machine, status labels, schemas, policy reference, README and integration docs no longer mention the removed surface, and the check:docs and check:gates gates pass
-- [ ] **ANDAX-05**: The removal is a documented breaking change: release note text, config migration note (an unknown `andaUrl` key is refused with a clear message or ignored with a warning, as decided in the phase context)
+- [x] **ANDAX-03**: The Anda bridge code, the `andaUrl` config key, `ANDA_UNREACHABLE`, `ANDA_VERSION_MISMATCH`, the degraded state, the Anda doctor check and the Anda tests are removed with no shim
+- [x] **ANDAX-04**: The state machine, status labels, schemas, policy reference, README and integration docs no longer mention the removed surface, and the check:docs and check:gates gates pass
+- [x] **ANDAX-05**: The removal is a documented breaking change: release note text, config migration note (an unknown `andaUrl` key is refused with a clear message or ignored with a warning, as decided in the phase context)
 - [x] **MCPA-01**: Every Realm MCP tool advertises tool annotations (readOnlyHint, destructiveHint, idempotentHint, openWorldHint) in both protocol eras `realm mcp` serves
 - [x] **MCPA-02**: A test pins the annotations per tool against the tool contract, and a mutation of an annotation fails a test
 - [ ] **CAPT-01**: A spike answers whether a per-session capability token is worth building (threat model, same-user limits, cost) and records a build or drop decision with evidence
@@ -350,9 +350,9 @@ Each v3.0 requirement maps to exactly one phase. The carried requirements keep t
 | TEST-HOST-08 | Phase 26 | Complete |
 | ANDAX-01 | Phase 27 | Complete |
 | ANDAX-02 | Phase 27 | Complete |
-| ANDAX-03 | Phase 28 | Planned |
-| ANDAX-04 | Phase 28 | Planned |
-| ANDAX-05 | Phase 28 | Planned |
+| ANDAX-03 | Phase 28 | Complete |
+| ANDAX-04 | Phase 28 | Complete |
+| ANDAX-05 | Phase 28 | Complete |
 | MCPA-01 | Phase 29 | Complete |
 | MCPA-02 | Phase 29 | Complete |
 | CAPT-01 | Phase 30 | Planned |
