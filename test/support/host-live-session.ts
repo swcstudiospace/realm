@@ -196,7 +196,7 @@ function stringArray(value: unknown): string[] | undefined {
     return undefined;
   }
   const items = value as unknown[];
-  return items.every((item) => typeof item === "string") ? (items as string[]) : undefined;
+  return items.every((item) => typeof item === "string") ? items : undefined;
 }
 
 // The start and EOF lines a fake server wrote. A missing file is an empty log; a malformed line is skipped.
@@ -490,7 +490,7 @@ export function runHostUntil(bin: string, args: readonly string[], env: Readonly
       stop("timeout");
     }, options.timeoutMs);
     const check = async (): Promise<void> => {
-      let ready = false;
+      let ready: boolean;
       try {
         ready = await options.ready();
       } catch {
