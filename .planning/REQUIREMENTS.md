@@ -129,15 +129,15 @@ All v3.0 requirements are hypotheses until shipped and verified.
 
 ### Boot integration (BOOT)
 
-- [ ] **BOOT-01**: `createDaemonAttach` (`src/host/attach.ts`) is the only implementation of ensure daemon, connect, `up` and refusal retention; `src/omp/extension.ts`, `realm mcp` and `realm acp` call it; its three retention modes (`verified`, `always`, `never`) reproduce today's Omp, MCP and ACP behavior with every existing assertion unchanged.
-- [ ] **BOOT-02**: `createBootDriver` (`src/host/boot-driver.ts`) is the production `HostBootHook` for `mcp-config` hosts: bounds from `resolveBoot`, budget through `withStartupBudget`, retry through `attachFailureDisposition`, bounded re-attach off by default, fail-closed `call` gate, client-only shutdown. It passes harness cases C1 to C9; `bootHookOf` returns it for the 18 `mcp-config` hosts and `null` for `omp`; the four reference mutants still fail exactly their cases.
-- [ ] **BOOT-03**: `realm mcp\|acp [--host <id>] [--reattach]` runs the numbered boot sequence (resolve, ensure, up, readback, settle, expose); serves nothing before settle; a terminal failure exits 1 with its catalogue code and nothing on stdout; stdin EOF, `SIGTERM`, `SIGINT` and `SIGHUP` close the client, remove the marker and never send `down`; stdout holds only protocol frames in every outcome.
-- [ ] **BOOT-04**: Per-host failure isolation is proven with a real daemon over fakes: one host's hung `up`, failed boot, teardown or report flood leaves another host's session, the shared sandbox and the daemon answering within their bounds, and no boot path issues `down`.
-- [ ] **BOOT-05**: MCP and ACP sessions with `--host <id>` write and remove `<stateDir>/hosts/<id>-active/<pid>.json`; `realm host status <id>` and the `host-plugins` doctor item report live and unreadable markers for every host, ids and counts only.
-- [ ] **BOOT-06**: The `host-boot` control method accepts a strict closed-vocabulary report with no selection, rate-bounded by a token bucket; it feeds `hostBoot` counters and `timings.hostBootMs` in `realm metrics` and one redacted `host.boot` line carrying the boot id in `daemon.log`; a malformed or over-rate report is refused with an existing code and records nothing.
-- [ ] **BOOT-07**: The daemon alone appends `attached`, `refused` and `failed` reports to the reserved `host-boot` audit chain (closed-vocabulary `path`, boot id as correlation id, no paths or content); `realm audit verify --session host-boot` passes; the capability posture of the reporting host is logged from `resolveCapabilities` over the loaded policy.
-- [ ] **BOOT-08**: One host-side observer (`createBootObserver`) serves Omp and the stdio hosts: structured redacted log lines carrying the boot id, the presence marker and the report to the daemon, all best effort, none able to change an attach outcome, throw, or delay shutdown past 1 s.
-- [ ] **BOOT-09**: Docs describe the shipped behavior with evidence tiers and the unproven live boundary; the export-usage allowlist has no stale entry and no entry whose reason still says production wiring is Phase 23; module-size, host-paths, agents-sync, pack-smoke and mcp-smoke gates pass; the live rehearsal is recorded or the plan stays blocked on the named step.
+- [x] **BOOT-01**: `createDaemonAttach` (`src/host/attach.ts`) is the only implementation of ensure daemon, connect, `up` and refusal retention; `src/omp/extension.ts`, `realm mcp` and `realm acp` call it; its three retention modes (`verified`, `always`, `never`) reproduce today's Omp, MCP and ACP behavior with every existing assertion unchanged.
+- [x] **BOOT-02**: `createBootDriver` (`src/host/boot-driver.ts`) is the production `HostBootHook` for `mcp-config` hosts: bounds from `resolveBoot`, budget through `withStartupBudget`, retry through `attachFailureDisposition`, bounded re-attach off by default, fail-closed `call` gate, client-only shutdown. It passes harness cases C1 to C9; `bootHookOf` returns it for the 18 `mcp-config` hosts and `null` for `omp`; the four reference mutants still fail exactly their cases.
+- [x] **BOOT-03**: `realm mcp\|acp [--host <id>] [--reattach]` runs the numbered boot sequence (resolve, ensure, up, readback, settle, expose); serves nothing before settle; a terminal failure exits 1 with its catalogue code and nothing on stdout; stdin EOF, `SIGTERM`, `SIGINT` and `SIGHUP` close the client, remove the marker and never send `down`; stdout holds only protocol frames in every outcome.
+- [x] **BOOT-04**: Per-host failure isolation is proven with a real daemon over fakes: one host's hung `up`, failed boot, teardown or report flood leaves another host's session, the shared sandbox and the daemon answering within their bounds, and no boot path issues `down`.
+- [x] **BOOT-05**: MCP and ACP sessions with `--host <id>` write and remove `<stateDir>/hosts/<id>-active/<pid>.json`; `realm host status <id>` and the `host-plugins` doctor item report live and unreadable markers for every host, ids and counts only.
+- [x] **BOOT-06**: The `host-boot` control method accepts a strict closed-vocabulary report with no selection, rate-bounded by a token bucket; it feeds `hostBoot` counters and `timings.hostBootMs` in `realm metrics` and one redacted `host.boot` line carrying the boot id in `daemon.log`; a malformed or over-rate report is refused with an existing code and records nothing.
+- [x] **BOOT-07**: The daemon alone appends `attached`, `refused` and `failed` reports to the reserved `host-boot` audit chain (closed-vocabulary `path`, boot id as correlation id, no paths or content); `realm audit verify --session host-boot` passes; the capability posture of the reporting host is logged from `resolveCapabilities` over the loaded policy.
+- [x] **BOOT-08**: One host-side observer (`createBootObserver`) serves Omp and the stdio hosts: structured redacted log lines carrying the boot id, the presence marker and the report to the daemon, all best effort, none able to change an attach outcome, throw, or delay shutdown past 1 s.
+- [x] **BOOT-09**: Docs describe the shipped behavior with evidence tiers and the unproven live boundary; the export-usage allowlist has no stale entry and no entry whose reason still says production wiring is Phase 23; module-size, host-paths, agents-sync, pack-smoke and mcp-smoke gates pass; the live rehearsal is recorded or the plan stays blocked on the named step.
 
 ## Carried from v2.0 (not in this milestone)
 
@@ -273,15 +273,15 @@ Each v3.0 requirement maps to exactly one phase. The carried requirements keep t
 | OMPB-06 | Phase 22 | Complete |
 | OMPB-07 | Phase 22 | Complete |
 | OMPB-08 | Phase 22 | Complete |
-| BOOT-01 | Phase 23 | Planned |
-| BOOT-02 | Phase 23 | Planned |
-| BOOT-03 | Phase 23 | Planned |
-| BOOT-04 | Phase 23 | Planned |
-| BOOT-05 | Phase 23 | Planned |
-| BOOT-06 | Phase 23 | Planned |
-| BOOT-07 | Phase 23 | Planned |
-| BOOT-08 | Phase 23 | Planned |
-| BOOT-09 | Phase 23 | Planned |
+| BOOT-01 | Phase 23 | Complete |
+| BOOT-02 | Phase 23 | Complete |
+| BOOT-03 | Phase 23 | Complete |
+| BOOT-04 | Phase 23 | Complete |
+| BOOT-05 | Phase 23 | Complete |
+| BOOT-06 | Phase 23 | Complete |
+| BOOT-07 | Phase 23 | Complete |
+| BOOT-08 | Phase 23 | Complete |
+| BOOT-09 | Phase 23 | Complete |
 | FS-02 | Phase 2 | Partial (accepted approximation, confirmed by the owner 2026-10-23; rebind verified through the pinned root; check-to-use windows remain on the read and write paths; audit G-10) |
 | ANDA-01 | Phase 3 | Partial (live-gated) |
 | ANDA-02 | Phase 3 | Partial (live-gated) |
