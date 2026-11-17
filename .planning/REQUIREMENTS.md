@@ -139,6 +139,18 @@ All v3.0 requirements are hypotheses until shipped and verified.
 - [x] **BOOT-08**: One host-side observer (`createBootObserver`) serves Omp and the stdio hosts: structured redacted log lines carrying the boot id, the presence marker and the report to the daemon, all best effort, none able to change an attach outcome, throw, or delay shutdown past 1 s.
 - [x] **BOOT-09**: Docs describe the shipped behavior with evidence tiers and the unproven live boundary; the export-usage allowlist has no stale entry and no entry whose reason still says production wiring is Phase 23; module-size, host-paths, agents-sync, pack-smoke and mcp-smoke gates pass; the live rehearsal is recorded or the plan stays blocked on the named step.
 
+### Host adapters wave 1 (ADPT)
+
+- [ ] **ADPT-01**: `resolveHomeSpecs` resolves homes with roles `config`, `skills`, `mcp`; an absolute `envOverride` moves `config` and `mcp` homes and never `skills`; `envBase` moves OpenCode's home with `XDG_CONFIG_HOME`; `installHome` selects by role; `resolveHomes` keeps its current results for every existing entry; a leaf-symlink refusal carries no `--config-home` hint.
+- [ ] **ADPT-02**: A `text-block` recipe with `tomlTable` refuses (`foreign-content`) any install whose file already defines that table or an ancestor key outside the markers, by the conservative line scanner of `src/host/toml-table.ts`; nothing is written on refusal; recipes without the field behave as before.
+- [ ] **ADPT-03**: `realm host status` reports an `unreadable` entry state (not `drifted`) for a refused or unparseable owned file, and `launch` (`on-path` or `not-on-path`) for an installed `mcp-config` host; the doctor sentence carries the unreadable count; no new error code.
+- [ ] **ADPT-04**: `realm host install claude` merges the entry E-C1 into `<home or CLAUDE_CONFIG_DIR>/.claude.json` keeping every other byte-preserved key, mode and format; install, no-op, dry-run, drift, foreign content, hostile content, uninstall, doctor and status are proven on a fixture host; the value equals the golden `claude mcp add` output.
+- [ ] **ADPT-05**: The same lifecycle for `opencode` with the V1-shaped entry in `<XDG_CONFIG_HOME or ~/.config>/opencode/opencode.json`, JSONC refused, a sibling `opencode.jsonc` untouched.
+- [ ] **ADPT-06**: The same lifecycle for `codex` with the owned TOML block in `<CODEX_HOME or ~/.codex>/config.toml`; a table written by `codex mcp add realm ...` is refused as foreign content, never duplicated; other tables, comments and blank lines survive byte-exact.
+- [ ] **ADPT-07**: The same lifecycle for `kimi` (`~/.kimi/mcp.json`, `KIMI_SHARE_DIR`) and `kimi-code` (`~/.kimi-code/mcp.json`, `KIMI_CODE_HOME`); `kimi` has no binary detection; the recipe values equal `defaultManifestFor(id).launch` for all five recipe hosts.
+- [ ] **ADPT-08**: For each host a gated live file runs the validator tier, and where available the production tier, on an isolated `HOME`, skipping with a named reason when its prerequisite is missing; the skip-reason selection, the stub `realm`, the isolation guard and the version parsing are covered by a hermetic helper test that always runs.
+- [ ] **ADPT-09**: Docs state, per host, the file, the shape, the override, the validator, the project-level behavior, the evidence tier reached and the gaps; the Kimi flag resolution and the archived status are recorded; the contract table shows the recipes ready; the allowlist has no stale entry; module-size, `check:docs` and pack-smoke pass; the live rehearsal record states what ran and what did not.
+
 ## Carried from v2.0 (not in this milestone)
 
 - [ ] **FS-02**: Path resolution is race-resistant: components are opened relative to a pinned root descriptor with no-follow semantics, so a symlink swapped between check and open is rejected
@@ -282,6 +294,15 @@ Each v3.0 requirement maps to exactly one phase. The carried requirements keep t
 | BOOT-07 | Phase 23 | Complete |
 | BOOT-08 | Phase 23 | Complete |
 | BOOT-09 | Phase 23 | Complete |
+| ADPT-01 | Phase 24 | Planned |
+| ADPT-02 | Phase 24 | Planned |
+| ADPT-03 | Phase 24 | Planned |
+| ADPT-04 | Phase 24 | Planned |
+| ADPT-05 | Phase 24 | Planned |
+| ADPT-06 | Phase 24 | Planned |
+| ADPT-07 | Phase 24 | Planned |
+| ADPT-08 | Phase 24 | Planned |
+| ADPT-09 | Phase 24 | Planned |
 | FS-02 | Phase 2 | Partial (accepted approximation, confirmed by the owner 2026-10-23; rebind verified through the pinned root; check-to-use windows remain on the read and write paths; audit G-10) |
 | ANDA-01 | Phase 3 | Partial (live-gated) |
 | ANDA-02 | Phase 3 | Partial (live-gated) |
