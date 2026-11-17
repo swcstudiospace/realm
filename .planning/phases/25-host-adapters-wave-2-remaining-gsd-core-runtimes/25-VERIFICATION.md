@@ -33,6 +33,7 @@ covered_files:
   - "test/host/yaml-scan.test.ts"
   - "test/integration/host-live-wave2.test.ts"
   - "test/support/host-live-wave2.ts"
+covered_digest: "v3:sha256:d28b22ec2af1f21cc6226b761848a15306c30eca57cf91bb8edd5e51403d42c1"
 ---
 
 # Phase 25 Verification: Host adapters wave 2 (the remaining GSD Core runtimes)
