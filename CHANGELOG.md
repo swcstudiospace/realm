@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.3.51] - 2026-11-17
+
+### Maintenance
+- test(host): cross-host contract checker, registry and lifecycle matrix (26-01) (#122) (0768950)
+
 ## [0.3.50] - 2026-11-17
 
 ### Documentation
