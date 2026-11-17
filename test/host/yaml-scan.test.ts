@@ -42,7 +42,7 @@ void test("yaml-scan: a free scan with a block parent says where the entry goes,
   const seed = "a: 1\nmcp_servers:\n  other:\n    command: x\n  # c\nb: 2\n";
   const found = scan(seed);
   assert.equal(found.state, "free");
-  assert.ok(found.state === "free" && found.parent !== null);
+  assert.ok(found.parent !== null);
   assert.equal(found.parent.headerStart, seed.indexOf("mcp_servers:"));
   assert.equal(found.parent.headerEnd, seed.indexOf("  other:"));
   assert.equal(found.parent.colon, "mcp_servers".length);
