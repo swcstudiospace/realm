@@ -2,19 +2,19 @@
 gsd_state_version: "1.0"
 milestone: v3.0
 milestone_name: Containment by Default
-current_phase: 26
-status: completed
+status: Awaiting next milestone
 stopped_at: Phase 26 complete — all phases complete
-last_updated: "2026-11-17T16:32:59.163Z"
+last_updated: "2026-11-17T18:33:59.381Z"
 last_activity: 2026-11-17
-last_activity_desc: Phase 26 complete
-state_head: 293862ce81b730702b5cc3759dd1e289c2cb3c8d
+last_activity_desc: Milestone v3.0 completed and archived
+state_head: 4b6a0691c5adfbcd32cfa1626f74a1849d748a15
 progress:
   total_phases: 15
-  completed_phases: 27
+  completed_phases: 33
   total_plans: 68
   completed_plans: 68
   percent: 100
+current_phase: 26
 ---
 
 # Project State
@@ -28,10 +28,10 @@ See: .planning/PROJECT.md (updated 2026-10-29)
 
 ## Current Position
 
-Phase: 26
-Plan: Not started
-Status: All phases complete
-Last activity: 2026-11-17 — Phase 26 complete
+Phase: Milestone v3.0 complete
+Plan: —
+Status: Awaiting next milestone
+Last activity: 2026-11-17 — Milestone v3.0 completed and archived
 
 ## Current Recovery Boundaries
 
@@ -246,8 +246,7 @@ Recorded commits (earlier): e949ad3, 53fc919, 26ab145 (phases 1 to 3); 6b28fa4 a
 
 ## Operator Next Steps
 
-- Start the next milestone with /gsd-new-milestone. The carried requirements, the open owner decisions and the tech-debt register are in `.planning/milestones/v2.0-MILESTONE-AUDIT.md`, and a summary is in PROJECT.md under "Next Milestone Goals".
-- The eight improvement proposals in `.planning/quick/261029-g7m-lifecycle-and-persistence-findings/IMPROVEMENT-PROPOSALS.md` await selection. The decisions that gate each one are in its "Selection needed" section and in the summary of quick task 261029-g7m (D1 to D6, V1 to V3).
+- Start the next milestone with /gsd-new-milestone
 
 ## Run ut-mvlvx860-9e2d5e0a (gsd-autonomous, 2026-10-24)
 

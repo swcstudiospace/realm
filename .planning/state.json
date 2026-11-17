@@ -137,12 +137,42 @@
       "number": "20",
       "name": "Release pipeline hardening",
       "status": "complete"
+    },
+    {
+      "number": "21",
+      "name": "Host plugin contract and installer",
+      "status": "complete"
+    },
+    {
+      "number": "22",
+      "name": "Omp plugin on boot",
+      "status": "complete"
+    },
+    {
+      "number": "23",
+      "name": "Boot integration for host plugins",
+      "status": "complete"
+    },
+    {
+      "number": "24",
+      "name": "Host adapters wave 1: Claude Code, OpenCode, Codex, Kimi CLI",
+      "status": "complete"
+    },
+    {
+      "number": "25",
+      "name": "Host adapters wave 2: remaining GSD Core runtimes",
+      "status": "complete"
+    },
+    {
+      "number": "26",
+      "name": "Plugin contract tests, boot tests and author docs",
+      "status": "complete"
     }
   ],
   "next": {
-    "command": "/gsd-new-milestone",
-    "label": "Start a new milestone",
-    "reason": "All phases complete — start a new milestone"
+    "command": "/gsd-progress",
+    "label": "Show progress",
+    "reason": "Unsure of state — showing progress"
   },
-  "updated_at": "2026-11-17T16:32:59.478Z"
+  "updated_at": "2026-11-17T18:33:59.592Z"
 }
