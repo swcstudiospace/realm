@@ -81,7 +81,7 @@ export function registryProblems(registry: RegistryLike, table: Readonly<Record<
     if (record.live !== null && (record.live !== id || !LIVE_HOST_IDS.includes(record.live) || !(record.live in HOST_LIVE))) {
       problems.push(`${id}: live ${record.live} is not this host's key in HOST_LIVE`);
     }
-    if (record.t2 !== null && Object.values(record.t2).some((value) => value.trim() === "")) {
+    if (record.t2 !== null && [record.t2.date, record.t2.version, record.t2.result, record.t2.command].some((value) => value.trim() === "")) {
       problems.push(`${id}: a recorded T2 result has an empty field`);
     }
   }

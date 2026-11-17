@@ -168,7 +168,7 @@ function throwsInvalid(run: () => unknown): boolean {
 type ResolvedSpecs = readonly { readonly path: string; readonly role: HostHomeSpec["role"] }[];
 
 function sameSpecs(actual: ResolvedSpecs, expected: ResolvedSpecs): boolean {
-  return actual.length === expected.length && actual.every((spec, index) => spec.path === expected[index]?.path && spec.role === expected[index]?.role);
+  return actual.length === expected.length && actual.every((spec, index) => spec.path === expected[index]?.path && spec.role === expected[index].role);
 }
 
 // Resolution against an absolute fixture home: no variable gives join(home, rel) in table order; an absolute override value moves every
