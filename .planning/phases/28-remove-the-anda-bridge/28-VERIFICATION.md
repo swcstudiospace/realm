@@ -37,6 +37,7 @@ covered_files:
   - "test/cli/cli.test.ts"
   - "test/contract/session-record.schema.test.ts"
   - "test/doctor/checks.test.ts"
+covered_digest: "v3:sha256:4a4136cf4752927b66e76735e80ab236a74cc1b8ee50568c96dff093161c1068"
 ---
 
 # Phase 28 Verification: Remove the Anda bridge
