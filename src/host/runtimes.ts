@@ -11,6 +11,7 @@ import {
   type HostHomeSpec,
   type HostId,
   type HostRuntimeEntry,
+  type HostShadow,
   type HostTier,
   type InstallRecipe,
   type IntegrationKind,
@@ -28,6 +29,7 @@ interface EntryInit {
   readonly binaries?: readonly string[];
   readonly recipe?: InstallRecipe;
   readonly conflicts?: readonly string[];
+  readonly shadows?: readonly HostShadow[];
 }
 
 function toHomes(homes: EntryInit["homes"]): readonly HostHomeSpec[] {
@@ -53,6 +55,21 @@ function frozenRecipe(recipe: InstallRecipe): InstallRecipe {
   return copy;
 }
 
+const MAX_SHADOWS = 4;
+
+// The validated, frozen copy of a table entry's `shadows`: at most 4, each a safe relative path with base "home" or "config".
+// Both entry() and createHostAdapter() call it, so a fixture entry that skips entry() is held to the same rule. The parameter is
+// loosely typed on purpose: it is the check that makes the narrow type true.
+export function checkedShadows(shadows: readonly { readonly rel: string; readonly base: string }[]): readonly HostShadow[] {
+  const valid = (shadow: { readonly rel: string; readonly base: string }): shadow is HostShadow =>
+    isSafeRelPath(shadow.rel) && (shadow.base === "home" || shadow.base === "config");
+  const checked = shadows.filter(valid);
+  if (shadows.length > MAX_SHADOWS || checked.length !== shadows.length) {
+    throw new SchemaInvalidError("host entry shadows is invalid");
+  }
+  return Object.freeze(checked.map((shadow) => Object.freeze({ rel: shadow.rel, base: shadow.base })));
+}
+
 function entry(id: HostId, init: EntryInit): HostRuntimeEntry {
   if (init.envBase !== undefined && (init.envOverride !== undefined || init.envBase.name === "" || init.envBase.sub.includes("/") || !isSafeRelPath(init.envBase.sub))) {
     throw new SchemaInvalidError("host entry envBase is invalid");
@@ -72,7 +89,8 @@ function entry(id: HostId, init: EntryInit): HostRuntimeEntry {
     recipe: init.recipe === undefined ? null : frozenRecipe(init.recipe),
   };
   const withBase = init.envBase === undefined ? base : { ...base, envBase: Object.freeze({ ...init.envBase }) };
-  return Object.freeze(init.conflicts === undefined ? withBase : { ...withBase, conflicts: Object.freeze([...init.conflicts]) });
+  const withConflicts = init.conflicts === undefined ? withBase : { ...withBase, conflicts: Object.freeze([...init.conflicts]) };
+  return Object.freeze(init.shadows === undefined ? withConflicts : { ...withConflicts, shadows: checkedShadows(init.shadows) });
 }
 
 // Typed as a full Record over HostId, so a missing host fails compilation.
@@ -214,10 +232,30 @@ export const HOST_RUNTIMES: Readonly<Record<HostId, HostRuntimeEntry>> = Object.
     binaries: ["qwen"],
     recipe: { kind: "json-merge", file: "settings.json", keyPath: ["mcpServers", "realm"], value: { command: "realm", args: ["mcp", "--host", "qwen"] } },
   }),
-  // Recipe: plan 25-02.
-  hermes: entry("hermes", { flag: "--hermes", displayName: "Hermes", tier: "config-only", homes: [".hermes"] }),
-  // Recipe: plan 25-02.
-  codebuddy: entry("codebuddy", { flag: "--codebuddy", displayName: "CodeBuddy", tier: "config-only", homes: [".codebuddy"] }),
+  // Evidence E-HM1..E-HM3 and D-25-04: mcp_servers (not mcpServers); owned by key and parsed value, no comment marker.
+  hermes: entry("hermes", {
+    flag: "--hermes",
+    displayName: "Hermes",
+    tier: "config-only",
+    homes: [".hermes"],
+    envOverride: "HERMES_HOME",
+    binaries: ["hermes"],
+    recipe: { kind: "yaml-map", file: "config.yaml", path: ["mcp_servers", "realm"], value: { command: "realm", args: ["mcp", "--host", "hermes"] } },
+  }),
+  // Evidence E-CB1..E-CB3 and D-25-06: a new .mcp.json hides the legacy mcp.json and ~/.codebuddy.json (observed), so install refuses to create it next to them.
+  codebuddy: entry("codebuddy", {
+    flag: "--codebuddy",
+    displayName: "CodeBuddy",
+    tier: "config-only",
+    homes: [".codebuddy"],
+    envOverride: "CODEBUDDY_CONFIG_DIR",
+    binaries: ["codebuddy"],
+    shadows: [
+      { rel: "mcp.json", base: "config" },
+      { rel: ".codebuddy.json", base: "home" },
+    ],
+    recipe: { kind: "json-merge", file: ".mcp.json", keyPath: ["mcpServers", "realm"], value: { type: "stdio", command: "realm", args: ["mcp", "--host", "codebuddy"] } },
+  }),
   // Evidence E-CL1, E-CL2 and D-25-02: the Cline CLI reads this file; the flat shape parses (the CLI writes a nested one). The IDE extension's file is unknown (OQ-25-08).
   cline: entry("cline", {
     flag: "--cline",

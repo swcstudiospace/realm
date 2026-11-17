@@ -69,6 +69,17 @@ void test("a receipt round trips through serialize and parse, with a determinist
     entries: [{ path: "config.toml", kind: "toml-table", beforeSha256: H1, afterSha256: H2, ownedSha256: H1, separatorAdded: true }],
   });
   assert.deepEqual(parseReceipt(serializeReceipt(tomlTable)), tomlTable);
+  const yamlMap = sample({
+    recipeKind: "yaml-map",
+    entries: [{ path: "config.yaml", kind: "yaml-map", beforeSha256: H1, afterSha256: H2, ownedSha256: H1, createdFile: true, createdParents: [["mcp_servers"]], separatorAdded: true }],
+  });
+  assert.deepEqual(parseReceipt(serializeReceipt(yamlMap)), yamlMap);
+  assert.equal(serializeReceipt(parseReceipt(serializeReceipt(yamlMap))), serializeReceipt(yamlMap));
+  const kind = (value: string): unknown => ({ ...JSON.parse(serializeReceipt(yamlMap)) as Record<string, unknown>, recipeKind: value });
+  assert.throws(() => parseReceipt(JSON.stringify(kind("yaml"))), (error: unknown) => error instanceof SchemaInvalidError && error.code === "SCHEMA_INVALID");
+  assert.throws(() => parseReceipt(JSON.stringify(kind("yaml-map "))), (error: unknown) => error instanceof SchemaInvalidError && error.code === "SCHEMA_INVALID");
+  const mismatch = { ...(JSON.parse(serializeReceipt(yamlMap)) as Record<string, unknown>), recipeKind: "toml-table" };
+  assert.throws(() => parseReceipt(JSON.stringify(mismatch)), (error: unknown) => error instanceof SchemaInvalidError && error.code === "SCHEMA_INVALID", "an entry kind that differs from the receipt kind");
 });
 
 void test("a receipt holds paths, booleans and hashes only", () => {

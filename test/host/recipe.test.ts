@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { RealmError } from "../../src/core/errors.js";
 import {
   HostRefusal,
+  ownedPart,
   planRecipe,
   recipeTargetPaths,
   resumeDecision,
@@ -416,4 +417,31 @@ void test("recipeTargetPaths includes receipt paths and validates them", () => {
   assert.deepEqual(recipeTargetPaths(json, "install", [], [entry]), ["old.json", "settings.json"]);
   assert.deepEqual(recipeTargetPaths(json, "uninstall", [], [entry]), ["old.json"]);
   schemaInvalid(() => recipeTargetPaths(json, "uninstall", [], [{ ...entry, path: "../x" }]));
+});
+
+// ---- yaml-map dispatch (WAVE2-01; the planner itself is tested in yaml-owned.test.ts) ----------------------------------------------
+
+const yaml: InstallRecipe = { kind: "yaml-map", file: "config.yaml", path: ["mcp_servers", "realm"], value: { command: "realm", args: ["mcp", "--host", "hermes"] } };
+const YAML_BLOCK = "mcp_servers:\n  realm:\n    command: realm\n    args:\n      - mcp\n      - --host\n      - hermes\n";
+
+void test("planRecipe dispatches yaml-map to its planner for install and for uninstall", () => {
+  const created = planRecipe(yaml, state("install", { "config.yaml": null }));
+  assert.equal(created.changes[0]?.after, YAML_BLOCK);
+  assert.equal(created.entries[0]?.kind, "yaml-map");
+  const removed = planRecipe(yaml, state("uninstall", { "config.yaml": YAML_BLOCK }, { receipt: created.entries }));
+  assert.equal(removed.changes[0]?.action, "remove");
+  assert.deepEqual(planRecipe(yaml, state("uninstall", { "config.yaml": YAML_BLOCK })), { changes: [], entries: [] });
+});
+
+void test("ownedPart reads a yaml-map entry by its parsed value, and reports an unreadable file as unparsed", () => {
+  const owned = ownedPart(yaml, YAML_BLOCK);
+  assert.deepEqual(owned, { parsed: true, sha256: planRecipe(yaml, state("install", { "config.yaml": null })).entries[0]?.ownedSha256 });
+  assert.deepEqual(ownedPart(yaml, "a: 1\n"), { parsed: true, sha256: null });
+  assert.deepEqual(ownedPart(yaml, "a: &x 1\n"), { parsed: false, sha256: null });
+});
+
+void test("recipeTargetPaths names the file of a yaml-map recipe on install and only receipt paths on uninstall", () => {
+  const entry: ReceiptEntry = { path: "config.yaml", kind: "yaml-map", beforeSha256: null, afterSha256: sha256Text("x") };
+  assert.deepEqual(recipeTargetPaths(yaml, "install", [], []), ["config.yaml"]);
+  assert.deepEqual(recipeTargetPaths(yaml, "uninstall", [], [entry]), ["config.yaml"]);
 });

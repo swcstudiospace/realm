@@ -1,6 +1,7 @@
-// The shared recipe suites of Phase 24 (plan 24-02): one lifecycle, drift, concurrency, mode, doctor, override and hostile-content
-// suite, run against the REAL table row of each wave-1 host (never a fixture entry), so a wrong home, file, override, binary or recipe
-// value fails a named test. `defineHostRecipeSuite` is for json-merge hosts, `defineHostTomlSuite` for the toml-table host (Codex).
+// The shared recipe suites of Phase 24 (plan 24-02) and Phase 25 (plan 25-02): one lifecycle, drift, concurrency, mode, doctor, override and hostile-content
+// suite, run against the REAL table row of each host (never a fixture entry), so a wrong home, file, override, binary or recipe
+// value fails a named test. `defineHostRecipeSuite` is for json-merge hosts, `defineHostTomlSuite` for the toml-table host (Codex) and
+// `defineHostYamlSuite` for the yaml-map host (Hermes), which also runs the shared YAML case table of host-yaml-cases.ts.
 // Every root is a real temporary directory removed when the test ends; nothing outside it is read or written, and no host runs.
 
 import { execFileSync } from "node:child_process";
@@ -20,6 +21,7 @@ import { HostRefusal, type HostRefusalReason } from "../../src/host/recipe.js";
 import { HOST_RUNTIMES } from "../../src/host/runtimes.js";
 import type { HostEnv, HostId } from "../../src/host/types.js";
 import { captureLog, makeFixtureHost, treeHash, type CapturedLog, type FixtureHost } from "./fixture-host.js";
+import { BLOCK, ENTRY_2, YAML_FOREIGN, YAML_UNPARSEABLE, YAML_VALID } from "./host-yaml-cases.js";
 
 export interface HostSuiteBase {
   readonly id: HostId;
@@ -794,4 +796,84 @@ export function defineHostTomlSuite(d: TomlSuiteDescriptor): void {
       }
     });
   }
+}
+
+// ---- the yaml-map host ----------------------------------------------------------------------------------------------------------------
+
+export interface YamlSuiteDescriptor extends HostSuiteBase {
+  // A realistic existing file that ends with a line ending and has no `mcp_servers` key and no `command: realm` line.
+  readonly seed: string;
+}
+
+function yamlFlavor(d: YamlSuiteDescriptor): Flavor {
+  const other = "  other:\n    command: other\n";
+  const unix = (text: string): string => text.replaceAll("\r\n", "\n");
+  return {
+    seed: d.seed,
+    seedResult: `${d.seed}${BLOCK}`,
+    created: BLOCK,
+    owns: (text) => unix(text).includes(ENTRY_2),
+    edit: (text) => text.replace("command: realm", "command: evil"),
+    // What the host's own remover does: the entry is gone, the header and everything else stay.
+    remove: (text) => {
+      assert.ok(text.includes(ENTRY_2), "the owned entry is present");
+      return text.replace(ENTRY_2, "");
+    },
+    removedState: "missing",
+    addOther: (text) => text.replace(ENTRY_2, `${ENTRY_2}${other}`),
+    keepsOther: (text) => text.includes(other),
+    append: (text) => `${text}# ${APPENDED}\n`,
+    hasAppended: (text) => text.includes(`# ${APPENDED}`),
+    mark: (text) => `${text}# ${MARKER}\n`,
+  };
+}
+
+export function defineHostYamlSuite(d: YamlSuiteDescriptor): void {
+  const tag = `${d.req} ${d.id}`;
+  defineCommonCases(d, yamlFlavor(d));
+  defineRefusals(d, [
+    ...YAML_UNPARSEABLE.map((c) => ({ name: c.name, seed: c.seed, ...UNPARSEABLE })),
+    { name: "invalid UTF-8", seed: Uint8Array.from([0x23, 0xff, 0x0a]), ...UNPARSEABLE },
+    ...YAML_FOREIGN.map((c) => ({ name: c.name, seed: c.seed, ...FOREIGN })),
+  ]);
+
+  for (const c of YAML_VALID) {
+    void test(`${tag}: ${c.name} installs to the expected bytes, and uninstall restores the original bytes`, async (t) => {
+      const r = buildRig(t, d, { seed: c.seed });
+      if (c.expected === c.seed) {
+        // An entry equal to the recipe's that Realm did not write: a no-op that is not claimed and that uninstall leaves.
+        const before = treeHash(r.host.root);
+        const same = await r.adapter.install(r.env, { dryRun: false });
+        assert.equal(same.outcome, "noop", c.name);
+        nothingWritten(r, d, before);
+        assert.equal((await r.adapter.status(r.env)).status, "detected");
+        assert.equal((await r.adapter.uninstall(r.env, { dryRun: false })).outcome, "noop");
+        assert.equal(readFileSync(r.file, "utf8"), c.seed);
+        return;
+      }
+      const installed = await r.adapter.install(r.env, { dryRun: false });
+      assert.equal(installed.outcome, "installed", c.name);
+      assert.equal(readFileSync(r.file, "utf8"), c.expected, c.name);
+      assert.equal((await r.adapter.status(r.env)).status, "installed");
+      assert.equal((await r.adapter.install(r.env, { dryRun: false })).outcome, "noop");
+      const removed = await r.adapter.uninstall(r.env, { dryRun: false });
+      assert.equal(removed.outcome, "removed", c.name);
+      assert.equal(readFileSync(r.file, "utf8"), c.seed, c.name);
+      assert.equal(existsSync(receiptPath(r.host.stateDir, d.id)), false);
+    });
+  }
+
+  void test(`${tag}: the host's own re-quoted and re-flowed rewrite of the entry keeps the status ok, and uninstall still removes it`, async (t) => {
+    const r = buildRig(t, d, { seed: d.seed });
+    await r.adapter.install(r.env, { dryRun: false });
+    writeFileSync(
+      r.file,
+      readFileSync(r.file, "utf8").replace(ENTRY_2, '  realm:\n    command: "realm"\n\n    args: ["mcp", "--host", "hermes"]\n'),
+    );
+    const status = await r.adapter.status(r.env);
+    assert.equal(status.status, "installed");
+    assert.deepEqual(status.entries, [{ path: d.file, state: "ok" }]);
+    assert.equal((await r.adapter.uninstall(r.env, { dryRun: false })).outcome, "removed");
+    assert.equal(readFileSync(r.file, "utf8"), d.seed);
+  });
 }

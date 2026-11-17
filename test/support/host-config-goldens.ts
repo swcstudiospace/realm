@@ -389,3 +389,113 @@ export const CLINE_CLI_NESTED_FILE = `{
   }
 }
 `;
+
+// source: E-CB1; codebuddy 2.185.0; read 2026-11-17; observed. `codebuddy mcp add-json --scope user realm '{"type":"stdio","command":"realm",
+// "args":["mcp","--host","codebuddy"]}'` in an isolated HOME wrote `<home>/.codebuddy/.mcp.json` with the entry and an empty
+// `disabledMcpServers`. The observation also passed an `env`; it is left out here because the recipe value has none.
+export const CODEBUDDY_ADD_JSON_FILE = `{
+  "mcpServers": {
+    "realm": {
+      "type": "stdio",
+      "command": "realm",
+      "args": [
+        "mcp",
+        "--host",
+        "codebuddy"
+      ]
+    }
+  },
+  "disabledMcpServers": []
+}
+`;
+
+// source: E-HM1; hermes-agent v0.23.2 (hermes_cli.mcp_config._save_mcp_server, run from a local checkout); read 2026-11-17; observed. The host's own
+// writer, given a file with a header comment, an inline comment, `model.default` and no `mcp_servers`, appended `_config_version: 53` and the
+// entry in block style. The observation used the host id `hermes-agent` in `args`; the table id is `hermes`.
+export const HERMES_SAVE_MCP_SERVER_FILE = `# my header comment
+model:
+  default: foo   # inline comment
+# trailing
+_config_version: 53
+mcp_servers:
+  realm:
+    command: realm
+    args:
+      - mcp
+      - --host
+      - hermes
+`;
+
+// source: E-HM1; https://hermes-agent.nousresearch.com/docs/user-guide/features/mcp; read 2026-11-17; documented. A `mcp_servers` entry with a
+// flow-style `args`. The server name and the path are invented examples.
+export const HERMES_DOC_FILE = `mcp_servers:
+  filesystem:
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/projects"]
+`;
+
+// source: E-HM3; read 2026-11-17; observed (shape only). The real Hermes configuration is a long LF file with comments that carry
+// `*word*`, `mcp_servers` in the middle between other top-level keys, 2-space children, block-style `args` and `enabled: true` on every
+// sibling. This is generated from a template: no key, value or text of any real file is recorded, and `<home>` is a placeholder.
+function realShapedSections(first: number, count: number): string {
+  const sections: string[] = [];
+  for (let index = first; index < first + count; index += 1) {
+    sections.push(
+      [
+        `section_${String(index)}:`,
+        "  enabled: true",
+        `  path: <home>/data/${String(index)}`,
+        '  label: "quoted value"',
+        `  # note ${String(index)}: *emphasis* stays a comment`,
+        "  items:",
+        "    - one",
+        "    - two",
+        "",
+      ].join("\n"),
+    );
+  }
+  return sections.join("\n");
+}
+
+const HERMES_REAL_SHAPED_HEAD = `# Configuration shape, generated from a template.
+# Keep *closed* networks, *and* *confidential* data out of prompts.
+model:
+  default: example-model
+  provider: example-provider   # inline comment
+system_prompt: |
+  You are helpful.
+  *x &y !z are plain text inside this block scalar.
+  mcp_servers:
+    realm: not a key
+
+${realShapedSections(0, 18)}
+`;
+
+const HERMES_REAL_SHAPED_SERVERS = `mcp_servers:
+  filesystem:
+    command: npx
+    args:
+      - -y
+      - "@scope/example-server"
+      - <home>/projects
+    enabled: true
+  # a note between two servers
+  github:
+    command: example-github-server
+    env:
+      TOKEN: placeholder
+    enabled: true
+`;
+
+const HERMES_REAL_SHAPED_TAIL = `# --- end of servers ---
+${realShapedSections(18, 12)}
+auxiliary:
+  vision:
+    provider: auto
+_config_version: 53
+`;
+
+// The file in three parts: what comes before `mcp_servers`, the block up to its last content line, and what follows. Realm's entry goes
+// between the second and the third.
+export const HERMES_REAL_SHAPED_PARTS = { head: HERMES_REAL_SHAPED_HEAD, servers: HERMES_REAL_SHAPED_SERVERS, tail: HERMES_REAL_SHAPED_TAIL } as const;
+export const HERMES_REAL_SHAPED_FILE = `${HERMES_REAL_SHAPED_HEAD}${HERMES_REAL_SHAPED_SERVERS}${HERMES_REAL_SHAPED_TAIL}`;
