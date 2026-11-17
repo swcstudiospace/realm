@@ -1,0 +1,196 @@
+// Host-neutral plugin contract types (Phase 21). Types and `as const` lists only: no logic.
+//
+// Every host adapter (Omp, the proven hosts, the config-only hosts) is written against these
+// shapes. src/host never reads process.env; the CLI fills HostEnv at the edge.
+
+import type { Policy, PolicyMode } from "../contract/validate.js";
+import type { DaemonClient } from "../daemon/client.js";
+import type { ErrorCode, RealmError } from "../core/errors.js";
+import type { State } from "../core/states.js";
+import type { EnvironmentLike } from "../session/paths.js";
+
+// The 19 hosts: the Omp reference plus the 18 GSD Core installer flags.
+export const HOST_IDS = Object.freeze([
+  "omp",
+  "claude",
+  "opencode",
+  "kilo",
+  "codex",
+  "copilot",
+  "antigravity",
+  "cursor",
+  "windsurf",
+  "augment",
+  "trae",
+  "qwen",
+  "hermes",
+  "codebuddy",
+  "cline",
+  "kimi",
+  "kimi-code",
+  "zcode",
+  "pi",
+] as const);
+export type HostId = (typeof HOST_IDS)[number];
+
+export type HostTier = "reference" | "proven" | "config-only";
+export type IntegrationKind = "extension" | "mcp-config";
+
+// Everything the host layer may know about the machine. Filled once at the CLI edge.
+export interface HostEnv {
+  readonly home: string;
+  readonly env: EnvironmentLike;
+  readonly pathDirs: readonly string[];
+}
+
+// A home is always a directory, relative to the user's home, POSIX separators.
+export interface HostHomeSpec {
+  readonly rel: string;
+  readonly role: "config" | "skills";
+}
+
+// Declared here, implemented by the installer. `file` and `dest` are relative to the resolved
+// home of role `homeRole` (default "config"); `source` is relative to the package adapters/ dir.
+export type InstallRecipe =
+  | { readonly kind: "json-merge"; readonly file: string; readonly keyPath: readonly string[]; readonly value: unknown; readonly homeRole?: HostHomeSpec["role"] }
+  | { readonly kind: "text-block"; readonly file: string; readonly block: string; readonly homeRole?: HostHomeSpec["role"] }
+  | { readonly kind: "bundle-copy"; readonly source: string; readonly dest: string; readonly homeRole?: HostHomeSpec["role"] };
+
+export interface HostRuntimeEntry {
+  readonly id: HostId;
+  readonly flag: string;
+  readonly aliases: readonly string[];
+  readonly displayName: string;
+  readonly tier: HostTier;
+  readonly integration: IntegrationKind;
+  readonly homes: readonly HostHomeSpec[];
+  readonly homeVerified: boolean;
+  readonly envOverride: string | null;
+  readonly binaries: readonly string[];
+  readonly recipe: InstallRecipe | null;
+}
+
+// ---- Manifest ---------------------------------------------------------------
+
+export type HostCapability =
+  | "daemon.attach"
+  | "fs.read"
+  | "fs.write"
+  | "fs.list"
+  | "exec.argv"
+  | "exec.shell"
+  | "net.egress"
+  | "credential.read"
+  | "host.tools.restrict";
+
+export interface HostCapabilityRequest {
+  readonly capability: HostCapability;
+  readonly scope?: string;
+}
+
+// Boot bounds for `extension` hosts. Every field is optional: defaults are applied by the boot hook.
+export interface BootBounds {
+  readonly startupBudgetMs?: number;
+  readonly reattach?: {
+    readonly enabled?: boolean;
+    readonly retryCap?: number;
+    readonly baseDelayMs?: number;
+    readonly capDelayMs?: number;
+  };
+}
+
+export interface HostLaunch {
+  readonly command: string;
+  readonly args: readonly string[];
+}
+
+export interface HostPluginManifest {
+  readonly schemaVersion: 1;
+  readonly hostId: HostId;
+  readonly integration: IntegrationKind;
+  readonly pluginName: "realm";
+  readonly pluginVersion: string;
+  readonly launch?: HostLaunch;
+  readonly entry?: string;
+  readonly capabilities: readonly HostCapabilityRequest[];
+  readonly boot?: BootBounds;
+}
+
+// ---- Adapter and boot-hook port -----------------------------------------------
+
+export type HostStatus = "not-detected" | "detected" | "recipe-pending" | "installed" | "drifted";
+
+export interface HostDetection {
+  readonly id: HostId;
+  readonly detected: boolean;
+  readonly via: "binary" | "home" | "none";
+}
+
+export interface HostOperationOptions {
+  readonly dryRun: boolean;
+  readonly configHome?: string;
+}
+
+export interface HostOperationResult {
+  readonly id: HostId;
+  readonly status: HostStatus;
+  readonly changed: boolean;
+  readonly dryRun: boolean;
+  readonly detail: string;
+}
+
+export interface HostLinkStatus {
+  readonly state: State;
+  readonly mode: PolicyMode | null;
+  readonly link: "off" | "linked" | "reconnecting" | "attaching" | "failed";
+  readonly code?: ErrorCode;
+}
+
+export interface HostGuardVerdict {
+  readonly block: true;
+  readonly reason: string;
+}
+
+export interface HostTimers {
+  setTimeout(cb: () => void, ms: number): unknown;
+  setInterval(cb: () => void, ms: number): unknown;
+  clear(handle: unknown): void;
+}
+
+// The two-method subset of OmpStatusUi in src/omp/plugin.ts.
+export interface HostStatusSink {
+  setStatus(key: string, text: string): void;
+  notify(message: string): void;
+}
+
+export interface HostBootDeps {
+  attachDaemon(workspaceRoot: string): Promise<{ client: DaemonClient; refusal: RealmError | null }>;
+  now(): Date;
+  readonly random: () => number;
+  timers: HostTimers;
+  sink: HostStatusSink;
+}
+
+export interface HostBootHook {
+  start(workspaceRoot: string): Promise<void>;
+  switchWorkspace(workspaceRoot: string): Promise<void>;
+  status(): HostLinkStatus;
+  guard(toolName: unknown): Promise<HostGuardVerdict | undefined>;
+  retry(): Promise<void>;
+  shutdown(): Promise<void>;
+}
+
+export type HostBootHookFactory = (deps: HostBootDeps, manifest: HostPluginManifest) => HostBootHook;
+
+export interface HostAdapter {
+  readonly id: HostId;
+  readonly tier: HostTier;
+  detect(env: HostEnv): Promise<HostDetection>;
+  install(env: HostEnv, options: HostOperationOptions): Promise<HostOperationResult>;
+  uninstall(env: HostEnv, options: HostOperationOptions): Promise<HostOperationResult>;
+  status(env: HostEnv): Promise<HostOperationResult>;
+  readonly bootHook: HostBootHookFactory | null;
+}
+
+// Re-exported so adapters name the policy type through this module.
+export type { Policy };

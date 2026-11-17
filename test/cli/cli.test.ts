@@ -440,6 +440,13 @@ void test("unknown argv exits 2 with usage on stderr (CLI-01)", async () => {
   }
 });
 
+void test("HOST-07: the usage text names realm host and its subcommands, and host is a CLI command", async () => {
+  assert.ok((CLI_COMMANDS as readonly string[]).includes("host"));
+  const result = await runCli([], { env: ENV });
+  assert.equal(result.exitCode, 2);
+  assert.ok(result.stderr.includes("realm host <list|detect|status|install|uninstall>"), result.stderr);
+});
+
 void test("realm up with Podman missing reports PODMAN_MISSING and exits promptly with no spawn (CLI-02)", async () => {
   const spawns: SpawnCall[] = [];
   let sends = 0;

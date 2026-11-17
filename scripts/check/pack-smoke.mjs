@@ -1,7 +1,8 @@
 // Packed-package smoke test. Packs the package (or takes a ready tarball with --tarball), installs the tarball into a
-// throwaway consumer, loads every JSON schema through the shipped validator, asserts that every host adapter file and
-// every file under adapters/ and licenses/ shipped in the tarball, and with --expect-version that the installed package
-// and adapter manifests carry the release version.
+// throwaway consumer, loads every JSON schema through the shipped validator, asserts that every host adapter file, every
+// compiled host plugin module (dist/src/host and the realm host command) and every file under adapters/ and licenses/ shipped
+// in the tarball, that the consumer can import the host runtime table and manifest modules and builds the default manifest of
+// all 19 hosts, and with --expect-version that the installed package and adapter manifests carry the release version.
 // The schemas are read at runtime from <package root>/src/..., so a tarball that
 // omits them fails here with ENOENT. Run `npm run build` first; check:pack does not build.
 //
@@ -42,12 +43,33 @@ export const ADAPTER_FILES = [
 // Source directories whose every file must exist in the installed package.
 export const WALKED_DIRECTORIES = ["adapters", "licenses"];
 
+// The compiled host plugin contract and installer modules (Phase 21) and the realm host command, relative to the package root. The
+// list is explicit so a module dropped from the package fails here, and the consumer probe imports the table and the manifest.
+export const HOST_MODULE_FILES = [
+  "dist/src/host/types.js",
+  "dist/src/host/runtimes.js",
+  "dist/src/host/manifest.js",
+  "dist/src/host/capabilities.js",
+  "dist/src/host/boot.js",
+  "dist/src/host/recipe.js",
+  "dist/src/host/receipt.js",
+  "dist/src/host/install.js",
+  "dist/src/host/adapter.js",
+  "dist/src/host/host-audit.js",
+  "dist/src/host/env.js",
+  "dist/src/cli/host.js",
+];
+
 // The consumer imports the installed package by its bare name, so the probe
 // resolves through node_modules exactly as a real user's code would.
 // validate() compiles a schema on first use and throws if its file is missing.
 // Calling it with {} exercises all three schemas, and the result is never
 // inspected beyond its shape, since only the load matters here.
+// The host probe imports the runtime table and the manifest module, expects the 19 hosts, and builds each host's default
+// manifest (defaultManifestFor parses it through the strict manifest parser before it returns).
 const PROBE_SOURCE = `import { validate } from "agent-realm/dist/src/contract/validate.js";
+import { HOST_RUNTIMES } from "agent-realm/dist/src/host/runtimes.js";
+import { defaultManifestFor, parseHostPluginManifest } from "agent-realm/dist/src/host/manifest.js";
 
 for (const schema of ["policy", "tools", "sessionRecord"]) {
   const result = validate(schema, {});
@@ -56,6 +78,17 @@ for (const schema of ["policy", "tools", "sessionRecord"]) {
   }
 }
 console.log("schemas loaded: policy, tools, sessionRecord");
+
+const hostIds = Object.keys(HOST_RUNTIMES);
+if (hostIds.length !== 19) {
+  throw new Error("expected 19 hosts, found " + hostIds.length);
+}
+for (const id of hostIds) {
+  if (parseHostPluginManifest(defaultManifestFor(id, "1.0.0")).hostId !== id) {
+    throw new Error("the default manifest of " + id + " does not name its host");
+  }
+}
+console.log("host modules loaded: " + hostIds.length + " hosts");
 `;
 
 export function buildPackArgs(destination) {
@@ -169,6 +202,11 @@ export function missingDeclaredEntries(packageRoot) {
   return declared.filter((path) => !existsSync(join(packageRoot, path)));
 }
 
+// Lists the compiled host plugin modules absent under an installed package root.
+export function missingHostModuleFiles(packageRoot) {
+  return HOST_MODULE_FILES.filter((path) => !existsSync(join(packageRoot, path)));
+}
+
 // The vendored compute driver protos and their provenance file, relative to the package root. The driver loads them at
 // start, so a package without them cannot serve the gateway.
 export const DRIVER_PROTO_FILES = [
@@ -266,6 +304,10 @@ async function check(argv, deps) {
     if (missingLegal.length > 0) {
       throw new Error(`packed package is missing legal files: ${missingLegal.join(", ")}`);
     }
+    const missingHostModules = missingHostModuleFiles(installed);
+    if (missingHostModules.length > 0) {
+      throw new Error(`packed package is missing host modules: ${missingHostModules.join(", ")}`);
+    }
     if (options.expectVersion !== undefined) {
       const mismatches = versionMismatches(installed, options.expectVersion);
       if (mismatches.length > 0) {
@@ -279,6 +321,7 @@ async function check(argv, deps) {
     deps.stdout(`adapter files: ${ADAPTER_FILES.length} present\n`);
     deps.stdout(`driver protos: ${DRIVER_PROTO_FILES.length} present\n`);
     deps.stdout(`legal files: ${LEGAL_FILES.length} present\n`);
+    deps.stdout(`host modules: ${HOST_MODULE_FILES.length} present\n`);
     if (options.expectVersion !== undefined) {
       deps.stdout(`version: ${options.expectVersion}\n`);
     }

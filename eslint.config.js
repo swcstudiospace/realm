@@ -333,6 +333,29 @@ export default tseslint.config(
     },
   },
   {
+    // src/host reads Policy data and never calls a gate. It may use appendAudit and withTimeout (installer, boot hook).
+    files: ["src/host/**/*.ts"],
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        ...GENERIC.map((key) => SYNTAX[key]),
+        ...ADAPTER_INTERNALS.filter((name) => name !== "appendAudit" && name !== "withTimeout").map(adapterInternal),
+      ],
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: childProcessPaths,
+          patterns: [
+            {
+              group: ["../daemon/*", "!../daemon/client.js", "!../daemon/channel.js", "!../daemon/ensure.js"],
+              message: "Host adapters reach the daemon only through DaemonClient, so only ../daemon/client, ../daemon/channel and ../daemon/ensure may be imported.",
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
     files: ["src/cli/main.ts"],
     rules: {
       "no-restricted-syntax": [...syntaxRule([...DYNAMIC, ...NAMED_ONLY, "openshellBinary", ...GUARDS]), ...CLI_HANDLE_IDENTIFIERS.map(cliIdentifier)],

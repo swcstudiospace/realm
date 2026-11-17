@@ -278,6 +278,131 @@
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
+      "file": "src/host/boot.ts",
+      "name": "BootLink",
+      "reason": "D-1306 test-only seam: link state named by the conformance harness (test/support/reference-boot-hook.ts); Phase 22 moves src/omp onto it"
+    },
+    {
+      "file": "src/host/boot.ts",
+      "name": "ResolvedBoot",
+      "reason": "D-1306 test-only seam: the resolved bounds type named by test/support/host-boot-conformance.ts; Phase 22 moves src/omp onto it"
+    },
+    {
+      "file": "src/host/boot.ts",
+      "name": "BOOT_BOUNDS",
+      "reason": "D-1306 test-only seam: held equal to the Omp constants by test/host/boot.test.ts; Phase 22 deletes the src/omp duplicates and consumes it"
+    },
+    {
+      "file": "src/host/boot.ts",
+      "name": "resolveBoot",
+      "reason": "D-1306 test-only seam: boot-hook bounds consumed by the reference hook and the conformance harness in test/support; Phase 22 wires src/omp to it"
+    },
+    {
+      "file": "src/host/boot.ts",
+      "name": "withStartupBudget",
+      "reason": "D-1306 test-only seam: startup budget helper consumed by the reference hook in test/support; Phase 22 wires src/omp to it"
+    },
+    {
+      "file": "src/host/boot.ts",
+      "name": "attachFailureDisposition",
+      "reason": "D-1306 test-only seam: attach failure rule consumed by the reference hook in test/support; Phase 22 wires src/omp to it"
+    },
+    {
+      "file": "src/host/boot.ts",
+      "name": "backstopVerdict",
+      "reason": "D-1306 test-only seam: guard backstop rule consumed by the reference hook in test/support; Phase 22 wires src/omp to it"
+    },
+    {
+      "file": "src/host/capabilities.ts",
+      "name": "integrationCeiling",
+      "reason": "D-1306 test-only seam: capability ceiling per integration kind, proven by test/host/capabilities.test.ts; the plugin runtime of Phase 22 consumes it"
+    },
+    {
+      "file": "src/host/capabilities.ts",
+      "name": "resolveCapabilities",
+      "reason": "D-1306 test-only seam: grant = request AND policy, proven by test/host/capabilities.test.ts; the plugin runtime of Phase 22 consumes it"
+    },
+    {
+      "file": "src/host/install.ts",
+      "name": "HostFileInfo",
+      "reason": "D-1306 test-only seam: reader result type implemented by the injected readers of test/host/adapter.test.ts and test/host/install.test.ts"
+    },
+    {
+      "file": "src/host/install.ts",
+      "name": "HostOperationRequest",
+      "reason": "D-1306 test-only seam: engine request type built directly by test/host/install.test.ts"
+    },
+    {
+      "file": "src/host/install.ts",
+      "name": "HostPlan",
+      "reason": "D-1306 test-only seam: plan type returned by planHostOperation, which test/host/install.test.ts drives separately"
+    },
+    {
+      "file": "src/host/install.ts",
+      "name": "planHostOperation",
+      "reason": "D-1306 test-only seam: planning phase of the engine; test/host/install.test.ts proves it writes nothing before runHostOperation composes it with apply"
+    },
+    {
+      "file": "src/host/install.ts",
+      "name": "applyHostOperation",
+      "reason": "D-1306 test-only seam: apply phase of the engine; test/host/install.test.ts proves its stage ordering and refusal paths without the planning phase"
+    },
+    {
+      "file": "src/host/receipt.ts",
+      "name": "parseReceipt",
+      "reason": "D-1306 test-only seam: strict receipt parser exercised directly by test/host/receipt.test.ts; production reads it through readReceipt"
+    },
+    {
+      "file": "src/host/receipt.ts",
+      "name": "receiptPath",
+      "reason": "D-1306 test-only seam: receipt location used by test/host/receipt.test.ts, test/host/adapter.test.ts and test/host/install.test.ts to tamper with receipts"
+    },
+    {
+      "file": "src/host/recipe.ts",
+      "name": "HostRefusalReason",
+      "reason": "D-1306 test-only seam: refusal reason type named by test/host/recipe.test.ts, adapter.test.ts and install.test.ts"
+    },
+    {
+      "file": "src/host/recipe.ts",
+      "name": "PlanState",
+      "reason": "D-1306 test-only seam: pure planner input type built directly by test/host/recipe.test.ts"
+    },
+    {
+      "file": "src/host/recipe.ts",
+      "name": "RecipePlan",
+      "reason": "D-1306 test-only seam: pure planner output type read directly by test/host/recipe.test.ts"
+    },
+    {
+      "file": "src/host/runtimes.ts",
+      "name": "HOST_ALIASES",
+      "reason": "D-1306 test-only seam: alias table derived from the runtime table, held equal to it by test/host/runtimes.test.ts; production resolves through resolveHostId"
+    },
+    {
+      "file": "src/host/runtimes.ts",
+      "name": "recipePending",
+      "reason": "D-1306 test-only seam: Phase 21 invariant seam: test/host/runtimes.test.ts holds every real host recipe-pending until the Phase 24 and 25 recipes land"
+    },
+    {
+      "file": "src/host/types.ts",
+      "name": "HostTimers",
+      "reason": "D-1306 test-only seam: boot-hook port type implemented by test/support/fake-host-daemon.ts; Phase 22 wires src/omp to the port"
+    },
+    {
+      "file": "src/host/types.ts",
+      "name": "HostStatusSink",
+      "reason": "D-1306 test-only seam: boot-hook port type implemented by test/support/fake-host-daemon.ts; Phase 22 wires src/omp to the port"
+    },
+    {
+      "file": "src/host/types.ts",
+      "name": "HostBootDeps",
+      "reason": "D-1306 test-only seam: boot-hook port type built by the conformance harness and reference hook in test/support; Phase 22 wires src/omp to the port"
+    },
+    {
+      "file": "src/host/types.ts",
+      "name": "HostBootHook",
+      "reason": "D-1306 test-only seam: boot-hook port type implemented by test/support/reference-boot-hook.ts and checked by the conformance harness; Phase 22 wires src/omp to the port"
+    },
+    {
       "file": "src/lifecycle/mutation-gate.ts",
       "name": "runGatedMutation",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
