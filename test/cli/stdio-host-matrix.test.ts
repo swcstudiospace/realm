@@ -82,10 +82,13 @@ const argvOf = (transport: Transport, host: string, extra: readonly string[] = [
 const tagOf = (id: string, transport: Transport): string => `${id}/${transport}`;
 
 function hasControlCharacter(text: string): boolean {
-  return [...text].some((char) => {
-    const code = char.charCodeAt(0);
-    return (code < 32 && code !== 10) || code === 127;
-  });
+  for (let index = 0; index < text.length; index += 1) {
+    const code = text.charCodeAt(index);
+    if ((code < 32 && code !== 10) || code === 127) {
+      return true;
+    }
+  }
+  return false;
 }
 
 // Settles once the world has logged nothing for a while: an attempt that ran to its bound has ended.

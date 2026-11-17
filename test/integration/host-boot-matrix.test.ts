@@ -42,10 +42,13 @@ const HOSTILE_NAME = `evil-name\n"quoted-name"${ESCAPE}[31mansi-name-${TOKEN}`;
 const FRAGMENTS: readonly string[] = ["evil-name", TOKEN, `${ESCAPE}[31m`, "\\u001b[31m", "quoted-name", "ansi-name"];
 
 function hasControlCharacter(text: string): boolean {
-  return [...text].some((char) => {
-    const code = char.charCodeAt(0);
-    return (code < 32 && code !== 10) || code === 127;
-  });
+  for (let index = 0; index < text.length; index += 1) {
+    const code = text.charCodeAt(index);
+    if ((code < 32 && code !== 10) || code === 127) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function parsed(line: string): Record<string, unknown> | null {
@@ -115,7 +118,7 @@ async function runMatrixFor(index: number, id: HostId): Promise<void> {
     assert.equal(await rig.sandboxState(project), "active", tag(`${step}: the project's sandbox outlives its host`));
     assert.equal(await rig.downCount(), rig.releases(), tag(`${step}: no boot path issued down, only the test's own releases are counted`));
   };
-  let markerText = "";
+  let markerText: string | undefined;
   try {
     // The standing sibling: another id on its own project, kept until the end.
     const siblingProject = rig.project("sibling");
@@ -237,7 +240,7 @@ async function runMatrixFor(index: number, id: HostId): Promise<void> {
       "daemon log": daemonLog,
       metrics: JSON.stringify(snapshot),
       "boot audit": readFileSync(rig.auditPath, "utf8"),
-      marker: markerText,
+      marker: markerText ?? "",
       diagnostics: hosts.map((host) => host.diagnostics.text()).join("\n"),
       stderr: ended.map((result) => result.stderr).join("\n"),
     };
