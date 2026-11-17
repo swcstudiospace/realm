@@ -1,8 +1,9 @@
 // The per-host-id rig of the real-daemon boot matrix (test/integration/host-boot-matrix.test.ts, TEST-HOST-06): a fresh daemon
 // in this process over the existing fakes (startRealmDaemon), with its own state directory and workspace root under one
-// temporary base, a daemon logger that keeps every line, one anchor session so releasing a scenario's project never stops the
-// daemon, and the helpers that run realm mcp and realm acp against it. It is a copy-and-narrow of the scaffolding of
-// test/integration/host-boot-isolation.test.ts, which keeps its own private copy.
+// temporary base, a daemon logger that keeps every line, and the helpers that run realm mcp and realm acp against it. The
+// daemon admits at most MAX_CONCURRENT_SESSIONS (2) sessions at once, so the rig starts none of its own: the test's standing
+// sibling host is the one session that keeps the daemon alive while each scenario's project is released next to it.
+// It is a copy-and-narrow of test/integration/host-boot-isolation.test.ts, which keeps its own private copy.
 //
 // Fixtures and fakes: a real daemon over fakes, no Podman, no real host. `spawn` records and starts nothing.
 
@@ -132,14 +133,7 @@ export async function startMatrixRig(index: number, id: string): Promise<MatrixR
     rmSync(base, { recursive: true, force: true });
   };
 
-  try {
-    // One standing session of its own: releasing the last live session stops the daemon, and the scenarios release theirs.
-    await fixture.up(project("anchor"));
-  } catch (error: unknown) {
-    await stop();
-    throw error;
-  }
-
+  // Only the sibling's session and one scenario's session are ever live together (the daemon admits two).
   const bootHost = (argv: readonly string[], options: MatrixHostOptions = {}): MatrixHost => {
     const input = new PassThrough();
     const output = capture();
@@ -204,7 +198,13 @@ export async function startMatrixRig(index: number, id: string): Promise<MatrixR
       bootHost(["mcp", "--host", host, ...(options?.reattach === true ? ["--reattach"] : []), "--workspace", workspace], options),
     acpHost: (host, workspace, options) => bootHost(["acp", "--host", host, "--workspace", workspace], options),
     async serveStatus(host, callId) {
-      return stateOf(await statusOutcome(host, callId));
+      const outcome = await statusOutcome(host, callId);
+      try {
+        return stateOf(outcome);
+      } catch (error: unknown) {
+        const tail = daemonLines.slice(-12).join("");
+        throw new Error(`${error instanceof Error ? error.message : "no status value"}\nhost diagnostics: ${host.diagnostics.text()}\ndaemon log tail: ${tail}`);
+      }
     },
     statusOutcome,
     end(host) {

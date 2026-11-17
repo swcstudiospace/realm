@@ -120,7 +120,8 @@ async function runMatrixFor(index: number, id: HostId): Promise<void> {
   };
   let markerText: string | undefined;
   try {
-    // The standing sibling: another id on its own project, kept until the end.
+    // The standing sibling: another id on its own project, kept until the end. It is the daemon's one standing session, so the
+    // scenario releases below never stop the daemon; the daemon admits two sessions at once, the sibling's and one scenario's.
     const siblingProject = rig.project("sibling");
     const sibling = track(rig.mcpHost(siblingId, siblingProject));
     assert.equal(await rig.serveStatus(sibling, 1), "active", tag("the sibling boots"));
@@ -208,8 +209,8 @@ async function runMatrixFor(index: number, id: HostId): Promise<void> {
     // R4 the sibling ends last: the sandbox stays active and no boot path sent down.
     await finish(sibling, "R4 sibling");
     await settled(siblingId, siblingProject, "R4 sibling");
-    await rig.release(siblingProject);
-    assert.equal(await rig.downCount(), rig.releases(), tag("R4: the daemon's down count equals the test's own releases"));
+    // The sibling's own release is left to rig.stop(): it is the daemon's one standing session (the daemon admits two at once),
+    // so releasing it here would stop the daemon before the metrics and the audit chain are read.
 
     // R4 the metrics and the boot audit chain.
     const snapshot = await rig.metrics();
