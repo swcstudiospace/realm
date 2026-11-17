@@ -17,6 +17,7 @@ import {
   META_PROTOCOL_VERSION,
   UNSUPPORTED_PROTOCOL_VERSION,
 } from "../../src/mcp/protocol.js";
+import type { ToolOutcome } from "../../src/tools/dispatch.js";
 import { makeHarness, WORKLOAD } from "../support/fake-tools.js";
 import { startRealmDaemon } from "../support/realm-daemon-fixture.js";
 import { sessionIdOfWorkspace } from "../../src/session/paths.js";
@@ -109,6 +110,55 @@ void test("TOOL-05: a malformed line gets a parse error reply on stdout, and its
   assert.equal(parseLine(mixed.stdoutLines[0] as string)["id"], null);
   assert.equal(parseLine(mixed.stdoutLines[1] as string)["id"], 2);
   assert.match(mixed.stderr, /mcp: /, "the malformed fragment is still diagnosed on stderr");
+});
+
+// Notifications and unusable ids (Phase 7 re-verification item 7). The MCP twin of the ACP cases in test/acp/agent.test.ts
+// ("a _realm/tool notification without an id ..." and "a request whose id is neither a string, number, nor null ...").
+// A line is routed by parseRequest and handleLine in src/mcp/server.ts.
+
+// The harness dispatcher with every call recorded, so a test can prove which messages reached it.
+function spiedDispatcher(t: Parameters<typeof makeHarness>[0]): { readonly dispatcher: McpDispatcher; readonly seen: unknown[] } {
+  const h = makeHarness(t);
+  const seen: unknown[] = [];
+  const inner = h.dispatcher.call.bind(h.dispatcher);
+  const dispatcher: McpDispatcher = {
+    call: (raw: unknown): Promise<ToolOutcome> => {
+      seen.push(raw);
+      return inner(raw);
+    },
+  };
+  return { dispatcher, seen };
+}
+
+void test("TOOL-05: a JSON-RPC notification (no id) takes no reply and no diagnostic, and a tools/call notification is never dispatched", async (t) => {
+  // handleLine: parseRequest accepts a message with no id, then `request.id === undefined` returns before dispatchMethod.
+  const { dispatcher, seen } = spiedDispatcher(t);
+  const notification = (method: string, params: unknown): string => JSON.stringify({ jsonrpc: "2.0", method, params });
+  const driven = await drive(dispatcher, [
+    notification("notifications/initialized", {}),
+    notification("tools/call", { name: "write", arguments: { path: "notify.txt", content: "never" } }),
+    notification("no/such-method", {}),
+    request(7, "server/discover", {}),
+  ]);
+  assert.equal(driven.stdoutLines.length, 1, "only the request is answered; the three notifications take no reply line");
+  assert.equal(parseLine(driven.stdoutLines[0] as string)["id"], 7);
+  assert.equal(driven.stderr, "", "a notification is not an error, so nothing is diagnosed on stderr");
+  assert.equal(seen.length, 0, "the id-less tools/call notification never reaches the dispatcher");
+});
+
+void test("TOOL-05: a request whose id is neither a string, number, nor null is diagnosed on stderr only, takes no reply and is never dispatched", async (t) => {
+  // handleLine: parseRequest returns null for such an id, and because isRpcId(id) is false the Invalid Request reply branch is
+  // skipped; the line gets the fixed stderr diagnostic "mcp: rejected invalid request" and no stdout line. This is the
+  // behaviour of the code today and it differs from the ACP agent, which answers -32600 with a null id (test/acp/agent.test.ts),
+  // and from JSON-RPC 2.0 section 5, which asks for a null-id error reply to a request whose id cannot be read.
+  const { dispatcher, seen } = spiedDispatcher(t);
+  const status = { name: "status", arguments: {} };
+  const unusable = [true, { nested: 1 }, [1]].map((id) => JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: status }));
+  const driven = await drive(dispatcher, [...unusable, toolRequest(4, "status", {})]);
+  assert.equal(driven.stdoutLines.length, 1, "the three unusable-id requests take no reply; only the valid request is answered");
+  assert.equal(parseLine(driven.stdoutLines[0] as string)["id"], 4);
+  assert.equal(driven.stderr, "mcp: rejected invalid request\n".repeat(3), "each unusable-id request is diagnosed once, with fixed text");
+  assert.deepEqual(seen, [{ status: {} }], "only the valid request reached the dispatcher");
 });
 
 void test("TOOL-05: closing stdin shuts the server down without hanging", async (t) => {

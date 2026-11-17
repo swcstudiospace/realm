@@ -231,6 +231,46 @@ void test("D19-1: a record whose container is not adopted is deleted only after 
   assert.deepEqual(store.list(), []);
 });
 
+// A crash inside `realm up` leaves a session record whose containerId is still null (D-86). The reap has no container to
+// name for it: it is never matched to a candidate, never reaches the verdict, and is deleted with cause no-container. The
+// reap returns counts and ids only; it writes no audit or log line itself (the daemon reports the result).
+void test("D19-1 D-86: a record with a null containerId and no live container is deleted with cause no-container, with no removal and no proof listing", async (t) => {
+  const { stateDir, store } = await startFixture(t);
+  store.save(recordFor(stateDir, "session-crashed-up", null));
+  const events: string[] = [];
+  const result = await reapStartupSelective(selectiveDeps({ store, events, candidates: [] }));
+  assert.deepEqual(result, {
+    adopted: [],
+    removed: [],
+    deleted: [{ sessionId: "session-crashed-up", cause: "no-container" }],
+    counts: { adopted: 0, removed: 0, deleted: 1 },
+  });
+  assert.deepEqual(events, ["delete:session-crashed-up"], "no container removal and no proof listing; only the record delete");
+  assert.deepEqual(store.list(), []);
+});
+
+void test("D19-1 D-86: a null-containerId record never reaches the verdict, and the live labelled container left by the crash is removed as no-record before the record is deleted", async (t) => {
+  const { stateDir, store } = await startFixture(t);
+  store.save(recordFor(stateDir, "session-crashed-up", null));
+  store.save(recordFor(stateDir, "session-healthy", "c-healthy"));
+  const events: string[] = [];
+  const judged: string[] = [];
+  const deps = selectiveDeps({ store, events, candidates: [candidate("c-healthy"), candidate("c-leftover")] });
+  const result = await reapStartupSelective({
+    ...deps,
+    verdict: (record, entry) => {
+      judged.push(`${record.sessionId}:${entry.containerId}`);
+      return deps.verdict(record, entry);
+    },
+  });
+  assert.deepEqual(judged, ["session-healthy:c-healthy"], "only the record that names a container is judged");
+  assert.deepEqual(result.adopted, [{ sessionId: "session-healthy", containerId: "c-healthy" }]);
+  assert.deepEqual(result.removed, [{ containerId: "c-leftover", cause: "no-record" }]);
+  assert.deepEqual(result.deleted, [{ sessionId: "session-crashed-up", cause: "no-container" }]);
+  assert.deepEqual(events, ["remove:c-leftover", "proof", "delete:session-crashed-up"]);
+  assert.deepEqual(store.list(), ["session-healthy"]);
+});
+
 void test("D19-1: a sweep that misses its bound rejects with PODMAN_MACHINE_DOWN, and its late result starts no removal and deletes no record", async (t) => {
   const { stateDir, store } = await startFixture(t);
   store.save(recordFor(stateDir, "session-late", "c-late"));
