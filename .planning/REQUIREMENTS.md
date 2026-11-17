@@ -164,14 +164,14 @@ All v3.0 requirements are hypotheses until shipped and verified.
 
 ### Plugin tests and author docs (TEST-HOST)
 
-- [ ] **TEST-HOST-01**: A table-driven contract checker runs every one of the 19 rows of the real runtime table through the invariants of D-26-03 (frozen rows, identity, safe homes, env shape, home resolution, recipe kind and paths, launch argv safe and equal to the default manifest, manifest, capability grants within the policy gates under three policies, shadow shape, pending rows inert) and returns no violation; seeded defective rows each return exactly their violation code.
-- [ ] **TEST-HOST-02**: A registry holds one record per host (recipe family, suite files, snippet, live spec, recorded T2 and T3, deferral); a completeness test fails, listing every host at once, when a table row lacks a registry record, a suite file, a snippet or a consistent live spec, or when a registry fact contradicts the table.
-- [ ] **TEST-HOST-03**: A generic lifecycle contract runs on every real recipe row (16) and the three pending rows: dry run writes nothing, install changes only the recipe file or bundle and the state directory, the receipt holds relative paths and hashes only, the audit chain verifies, the log is closed-vocabulary and redacted, reinstall is a no-op, uninstall restores the seeded bytes exactly and removes only what Realm owns, an override variable redirects everything, and a pending host refuses `recipe-pending` with nothing written; seeded defects (a secret in the audit, a secret in the log, an unowned removal, a write outside the home, a non-restoring uninstall) each fail it.
-- [ ] **TEST-HOST-04**: The production boot driver passes all nine conformance cases for each of the 18 `mcp-config` hosts; the harness fails on a seeded defect in every one of the nine cases (six new reference faults and three decorators over the production driver, plus the four existing), each with its declared exact failing set.
-- [ ] **TEST-HOST-05**: A scripted boot matrix over the 18 ids and both transports shows the `--host` grammar accepts exactly the 18 canonical ids (no alias, no `omp`, no hostile value), readiness before the first reply with a marker and an attached report, bounded `--reattach` retry with no timer left, the refused-up and failed-boot exits, and EOF and three signals ending the session the same way with no `down`.
-- [ ] **TEST-HOST-06**: A real in-process daemon matrix (no Podman) boots every one of the 18 ids through `realm mcp` and `realm acp` against its own project: it serves status, records the `hostBoot` metric row and the `host.boot` daemon log line, retries within the cap, leaves a sibling host, the sandbox and the daemon answering while its own `up` hangs, never sends `down` (exact count), leaves a verified `host-boot` audit chain with one `attached` line per session, and leaks no hostile project-name text or planted secret into any sink.
-- [ ] **TEST-HOST-07**: `docs/integration/writing-a-host-plugin.md` explains how to add a host end to end (table row, recipe choice, manifest, capabilities, boot hook, conformance and recipe suites, evidence tiers, live-rehearsal gating, Enterprise checklist, PR gates); `docs/integration/host-support-matrix.md` holds a block generated from the table, the registry and the live specs that a test compares and can rewrite; both are linked from the contract page, `hosts.md` and the README; a test checks every named repository path exists, no host-local path, no unescaped tag-like token; the docs site build and `check:docs` pass.
-- [ ] **TEST-HOST-08**: `docs/integration/host-plugin-gaps.md` tracks the Phase 21 to 25 unverified and residual items as rows with id, source, class, status, evidence and lift condition (the 32 of "The gap rows", reconciled with `25-VERIFICATION.md` if present); a test verifies ids, sources, evidence paths and per-phase coverage; the `src/host` coverage floor is ratcheted to the measured values.
+- [x] **TEST-HOST-01**: A table-driven contract checker runs every one of the 19 rows of the real runtime table through the invariants of D-26-03 (frozen rows, identity, safe homes, env shape, home resolution, recipe kind and paths, launch argv safe and equal to the default manifest, manifest, capability grants within the policy gates under three policies, shadow shape, pending rows inert) and returns no violation; seeded defective rows each return exactly their violation code.
+- [x] **TEST-HOST-02**: A registry holds one record per host (recipe family, suite files, snippet, live spec, recorded T2 and T3, deferral); a completeness test fails, listing every host at once, when a table row lacks a registry record, a suite file, a snippet or a consistent live spec, or when a registry fact contradicts the table.
+- [x] **TEST-HOST-03**: A generic lifecycle contract runs on every real recipe row (16) and the three pending rows: dry run writes nothing, install changes only the recipe file or bundle and the state directory, the receipt holds relative paths and hashes only, the audit chain verifies, the log is closed-vocabulary and redacted, reinstall is a no-op, uninstall restores the seeded bytes exactly and removes only what Realm owns, an override variable redirects everything, and a pending host refuses `recipe-pending` with nothing written; seeded defects (a secret in the audit, a secret in the log, an unowned removal, a write outside the home, a non-restoring uninstall) each fail it.
+- [x] **TEST-HOST-04**: The production boot driver passes all nine conformance cases for each of the 18 `mcp-config` hosts; the harness fails on a seeded defect in every one of the nine cases (six new reference faults and three decorators over the production driver, plus the four existing), each with its declared exact failing set.
+- [x] **TEST-HOST-05**: A scripted boot matrix over the 18 ids and both transports shows the `--host` grammar accepts exactly the 18 canonical ids (no alias, no `omp`, no hostile value), readiness before the first reply with a marker and an attached report, bounded `--reattach` retry with no timer left, the refused-up and failed-boot exits, and EOF and three signals ending the session the same way with no `down`.
+- [x] **TEST-HOST-06**: A real in-process daemon matrix (no Podman) boots every one of the 18 ids through `realm mcp` and `realm acp` against its own project: it serves status, records the `hostBoot` metric row and the `host.boot` daemon log line, retries within the cap, leaves a sibling host, the sandbox and the daemon answering while its own `up` hangs, never sends `down` (exact count), leaves a verified `host-boot` audit chain with one `attached` line per session, and leaks no hostile project-name text or planted secret into any sink.
+- [x] **TEST-HOST-07**: `docs/integration/writing-a-host-plugin.md` explains how to add a host end to end (table row, recipe choice, manifest, capabilities, boot hook, conformance and recipe suites, evidence tiers, live-rehearsal gating, Enterprise checklist, PR gates); `docs/integration/host-support-matrix.md` holds a block generated from the table, the registry and the live specs that a test compares and can rewrite; both are linked from the contract page, `hosts.md` and the README; a test checks every named repository path exists, no host-local path, no unescaped tag-like token; the docs site build and `check:docs` pass.
+- [x] **TEST-HOST-08**: `docs/integration/host-plugin-gaps.md` tracks the Phase 21 to 25 unverified and residual items as rows with id, source, class, status, evidence and lift condition (the 32 of "The gap rows", reconciled with `25-VERIFICATION.md` if present); a test verifies ids, sources, evidence paths and per-phase coverage; the `src/host` coverage floor is ratcheted to the measured values.
 
 ## Carried from v2.0 (not in this milestone)
 
@@ -333,14 +333,14 @@ Each v3.0 requirement maps to exactly one phase. The carried requirements keep t
 | WAVE2-06 | Phase 25 | Complete |
 | WAVE2-07 | Phase 25 | Complete |
 | WAVE2-08 | Phase 25 | Complete |
-| TEST-HOST-01 | Phase 26 | Planned |
-| TEST-HOST-02 | Phase 26 | Planned |
-| TEST-HOST-03 | Phase 26 | Planned |
-| TEST-HOST-04 | Phase 26 | Planned |
-| TEST-HOST-05 | Phase 26 | Planned |
-| TEST-HOST-06 | Phase 26 | Planned |
-| TEST-HOST-07 | Phase 26 | Planned |
-| TEST-HOST-08 | Phase 26 | Planned |
+| TEST-HOST-01 | Phase 26 | Complete |
+| TEST-HOST-02 | Phase 26 | Complete |
+| TEST-HOST-03 | Phase 26 | Complete |
+| TEST-HOST-04 | Phase 26 | Complete |
+| TEST-HOST-05 | Phase 26 | Complete |
+| TEST-HOST-06 | Phase 26 | Complete |
+| TEST-HOST-07 | Phase 26 | Complete |
+| TEST-HOST-08 | Phase 26 | Complete |
 | FS-02 | Phase 2 | Partial (accepted approximation, confirmed by the owner 2026-10-23; rebind verified through the pinned root; check-to-use windows remain on the read and write paths; audit G-10) |
 | ANDA-01 | Phase 3 | Partial (live-gated) |
 | ANDA-02 | Phase 3 | Partial (live-gated) |
