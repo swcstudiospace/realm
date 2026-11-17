@@ -203,7 +203,7 @@ export async function startMatrixRig(index: number, id: string): Promise<MatrixR
         return stateOf(outcome);
       } catch (error: unknown) {
         const tail = daemonLines.slice(-12).join("");
-        throw new Error(`${error instanceof Error ? error.message : "no status value"}\nhost diagnostics: ${host.diagnostics.text()}\ndaemon log tail: ${tail}`);
+        throw new Error(`${error instanceof Error ? error.message : "no status value"}\nhost diagnostics: ${host.diagnostics.text()}\ndaemon log tail: ${tail}`, { cause: error });
       }
     },
     statusOutcome,
