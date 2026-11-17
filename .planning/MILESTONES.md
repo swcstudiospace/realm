@@ -1,5 +1,16 @@
 # Milestones
 
+## v3.0 v3.0 (Shipped: 2026-11-17)
+
+**Phases completed:** 15 phases, 68 plans, 0 tasks
+
+**Key accomplishments:**
+- Closes the code side of verification gap 1 (CR-01): under advisory, a host `edit` and a Realm `write` are refused when the realm status cannot be read. HARN-02 and OMP-05 are NOT closed by this plan; the live half stays with plan 12-03.
+- Closes the code and test side of verification gap 2 (WR-01): the four HARN-02 registered-write tests now exist and run over the real dispatcher, pinned filesystem, lock table and audit log. The live guard cases are re-pointed to the owner's 2026-11-12 ruling, and the guard docs describe them. HARN-02's live half, HARN-03, HARN-04 and OMP-05 are NOT closed by this plan.
+- Status: complete.
+
+---
+
 ## v2.0 Host Adapters, Live Verification and Production Isolation (Shipped: 2026-10-29; releases 0.2.0 and 0.2.1)
 
 **Phases completed:** 11 phases (8, 9, 9.1 to 9.7, 10 and 11), 12 plans (task count not recomputed in this archive)
