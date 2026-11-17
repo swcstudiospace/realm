@@ -4,6 +4,14 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.3.52] - 2026-11-17
+
+### Documentation
+- docs(host): author guide, support matrix, gaps page and their tests (TEST-HOST-07, 08) (#123) (db535c1)
+
+### Maintenance
+- test(host): boot matrix over every stdio host and conformance mutants (26-02) (#121) (7ced16a)
+
 ## [0.3.51] - 2026-11-17
 
 ### Maintenance
