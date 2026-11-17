@@ -266,11 +266,10 @@ async function runStatus(host: HostId | undefined, ports: Ports): Promise<CliRes
     } else {
       // Any other host reports presence only when it has markers (a `realm mcp --host <id>` session): counts, never a path.
       const sessions = await readPresence(ports.adapterDeps.stateDir, id);
-      rows.push(
-        sessions.live + sessions.unreadable > 0
-          ? { id, status: found.status, entries: found.entries, plugin: { sessions } }
-          : { id, status: found.status, entries: found.entries },
-      );
+      // `launch` (a host with a receipt only) says whether the registered command resolves on this process's PATH.
+      const base = { id, status: found.status, entries: found.entries };
+      const row = found.launch === null ? base : { ...base, launch: found.launch };
+      rows.push(sessions.live + sessions.unreadable > 0 ? { ...row, plugin: { sessions } } : row);
     }
   }
   return success(host === undefined ? rows : rows[0]);

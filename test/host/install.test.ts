@@ -10,6 +10,7 @@ import {
   applyHostOperation,
   defaultHostReader,
   planHostOperation,
+  readHostFile,
   runHostOperation,
   type HostEngineContext,
   type HostEngineStage,
@@ -267,14 +268,14 @@ void test("a missing config home is refused and never created", async (t) => {
   assert.equal(auditLines(r.host.stateDir).length, 0);
 });
 
-void test("a symlink below the home is refused with PATH_ESCAPE and a --config-home fix, and the target is untouched", async (t) => {
+void test("a symlinked final file is refused with PATH_ESCAPE and no --config-home hint, a symlinked directory keeps its hint, and the target is untouched", async (t) => {
   const r = rig(t);
   const outside = join(r.host.root, "outside.json");
   writeFileSync(outside, "{}\n");
   symlinkSync(outside, join(r.host.configHome, "settings.json"));
   await assert.rejects(
     run(r, "install", fixtureRecipe("json-merge")),
-    (error: unknown) => refusedWith("symlink", "PATH_ESCAPE")(error) && error instanceof HostRefusal && (error.fix ?? "").includes("--config-home"),
+    (error: unknown) => refusedWith("symlink", "PATH_ESCAPE")(error) && error instanceof HostRefusal && error.fix === undefined && !error.message.includes("--config-home"),
   );
   assert.equal(readFileSync(outside, "utf8"), "{}\n");
   assert.equal(auditLines(r.host.stateDir).length, 0);
@@ -284,7 +285,10 @@ void test("a symlink below the home is refused with PATH_ESCAPE and a --config-h
   const outsideDir = join(second.host.root, "outside-dir");
   mkdirSync(outsideDir);
   symlinkSync(outsideDir, join(second.host.configHome, "plugins"));
-  await assert.rejects(run(second, "install", fixtureRecipe("bundle-copy")), refusedWith("symlink", "PATH_ESCAPE"));
+  await assert.rejects(
+    run(second, "install", fixtureRecipe("bundle-copy")),
+    (error: unknown) => refusedWith("symlink", "PATH_ESCAPE")(error) && error instanceof HostRefusal && error.fix === `use --config-home ${outsideDir}`,
+  );
   assert.deepEqual(readdirSync(outsideDir), []);
   assert.equal(existsSync(join(outsideDir, "realm")), false);
 });
@@ -482,4 +486,24 @@ void test("an uninstall whose config home has vanished removes the stale receipt
   assert.equal(outcome.status, "noop");
   assert.equal(existsSync(receiptPath(r.host.stateDir, "claude")), false);
   assert.equal(existsSync(r.host.configHome), false, "the home is never recreated");
+});
+
+void test("a BOM-prefixed JSON file is unparseable and untouched, and a BOM-prefixed text file keeps its BOM through install and uninstall", async (t) => {
+  const r = rig(t);
+  const json = join(r.host.configHome, "settings.json");
+  const bomJson = Buffer.from("\uFEFF{}\n", "utf8");
+  writeFileSync(json, bomJson);
+  await assert.rejects(run(r, "install", fixtureRecipe("json-merge")), refusedWith("unparseable", "SCHEMA_INVALID"));
+  assert.deepEqual(readFileSync(json), bomJson);
+  assert.equal(existsSync(join(r.host.stateDir, "hosts")), false);
+
+  const text = join(r.host.configHome, "config.toml");
+  const bomText = "\uFEFFa = 1\n";
+  writeFileSync(text, bomText, "utf8");
+  assert.equal(await readHostFile(r.ctx, r.host.configHome, "config.toml", new Set()), bomText);
+  await run(r, "install", fixtureRecipe("text-block"));
+  const installed = readFileSync(text, "utf8");
+  assert.ok(installed.startsWith("\uFEFFa = 1\n"));
+  await run(r, "uninstall", fixtureRecipe("text-block"));
+  assert.deepEqual(readFileSync(text), Buffer.from(bomText, "utf8"));
 });

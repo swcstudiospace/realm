@@ -5,7 +5,7 @@
 
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { checkAuditFile } from "../../src/audit/chain.js";
@@ -496,8 +496,8 @@ void test("HOST-07: dry-run install plans and writes nothing; install applies wi
   assert.ok(again.actions.every((action) => action.action === "noop"));
   assert.equal(auditLineCount(r.auditFile), 2, "a noop adds no audit line");
 
-  const status = json(await realmHost(r, "status", "claude")) as { id: string; status: string; entries: { path: string; state: string }[] };
-  assert.deepEqual(status, { id: "claude", status: "installed", entries: [{ path: "settings.json", state: "ok" }] });
+  const status = json(await realmHost(r, "status", "claude")) as { id: string; status: string; entries: { path: string; state: string }[]; launch: string };
+  assert.deepEqual(status, { id: "claude", status: "installed", entries: [{ path: "settings.json", state: "ok" }], launch: "not-on-path" });
 
   const dryRemove = json(await realmHost(r, "uninstall", "claude", "--dry-run")) as { status: string };
   assert.equal(dryRemove.status, "planned");
@@ -577,7 +577,7 @@ void test("HOST-07: an explicit --config-home that does not exist refuses with P
   assert.equal(result.stderr, "realm host install: config-home-missing: the host config home does not exist\n");
 });
 
-void test("HOST-07: a symlinked host file refuses with PATH_ESCAPE and the fix `use --config-home`, and changes nothing", async (t) => {
+void test("HOST-07: a symlinked host file refuses with PATH_ESCAPE and no --config-home hint, and changes nothing", async (t) => {
   const r = rig(t);
   const elsewhere = join(r.host.root, "elsewhere.json");
   writeFileSync(elsewhere, "{}\n");
@@ -586,7 +586,7 @@ void test("HOST-07: a symlinked host file refuses with PATH_ESCAPE and the fix `
   const result = await realmHost(r, "install", "claude");
   assert.equal(result.exitCode, 1);
   assert.equal(result.stdout, "PATH_ESCAPE\n");
-  assert.ok(result.stderr.startsWith("realm host install: symlink: a symlink lies on the path to a host file; use --config-home "), result.stderr);
+  assert.equal(result.stderr, "realm host install: symlink: a symlink lies on the path to a host file\n");
   assert.equal(treeHash(r.host.home), before, "no host file changed");
   assert.equal(readFileSync(elsewhere, "utf8"), "{}\n");
   assert.equal(existsSync(r.auditFile), false);
@@ -660,4 +660,42 @@ void test("BOOT-05: the all-hosts status keeps the exact row for a host with no 
       assert.deepEqual(keys, ["entries", "id", "status"], row.id);
     }
   }
+});
+
+void test("ADPT-03: status adds launch, between entries and plugin, for an installed mcp-config host only, and never a path", async (t) => {
+  const r = rig(t);
+  const bin = join(r.host.root, "bin");
+  mkdirSync(bin);
+  writeFileSync(join(bin, "realm"), "#!/bin/sh\n");
+  chmodSync(join(bin, "realm"), 0o755);
+  const onPath: CliDeps = { ...r.deps, env: { ...r.deps.env, PATH: bin } };
+  const none = json(await runCli(["host", "status", "claude"], onPath)) as Record<string, unknown>;
+  assert.deepEqual(Object.keys(none), ["id", "status", "entries"], "no receipt: no launch key");
+
+  json(await realmHost(r, "install", "claude"));
+  const absent = json(await realmHost(r, "status", "claude")) as Record<string, unknown>;
+  assert.deepEqual(Object.keys(absent), ["id", "status", "entries", "launch"]);
+  assert.equal(absent["launch"], "not-on-path");
+  const present = json(await runCli(["host", "status", "claude"], onPath)) as Record<string, unknown>;
+  assert.equal(present["launch"], "on-path");
+  assert.equal(JSON.stringify(present).includes(r.host.root), false, "no absolute path in the status");
+
+  writePresence(r.host.stateDir, "claude", { pid: process.pid, ...MARKER });
+  const withPlugin = json(await runCli(["host", "status", "claude"], onPath)) as Record<string, unknown>;
+  assert.deepEqual(Object.keys(withPlugin), ["id", "status", "entries", "launch", "plugin"]);
+  const rows = json(await runCli(["host", "status"], onPath)) as { id: string; launch?: string }[];
+  assert.deepEqual(rows.filter((row) => row.launch !== undefined).map((row) => row.id), ["claude"]);
+});
+
+void test("ADPT-03: a symlinked owned file is reported unreadable, not drifted, by realm host status", async (t) => {
+  const r = rig(t);
+  seedSettings(r, { other: 1 });
+  json(await realmHost(r, "install", "claude"));
+  const elsewhere = join(r.host.root, "elsewhere.json");
+  writeFileSync(elsewhere, readFileSync(r.settings));
+  rmSync(r.settings);
+  symlinkSync(elsewhere, r.settings);
+  const status = json(await realmHost(r, "status", "claude")) as { status: string; entries: { state: string }[] };
+  assert.equal(status.status, "drifted");
+  assert.deepEqual(status.entries.map((entry) => entry.state), ["unreadable"]);
 });

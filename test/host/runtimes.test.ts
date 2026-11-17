@@ -2,8 +2,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { SchemaInvalidError } from "../../src/contract/validate.js";
 import { isSafeRelPath } from "../../src/host/recipe.js";
-import { HOST_ALIASES, HOST_RUNTIMES, recipePending, resolveHomes, resolveHostId } from "../../src/host/runtimes.js";
-import { HOST_IDS, type HostEnv, type HostId, type HostTier } from "../../src/host/types.js";
+import { HOST_ALIASES, HOST_RUNTIMES, recipePending, resolveHomes, resolveHomeSpecs, resolveHostId } from "../../src/host/runtimes.js";
+import { HOST_IDS, type HostEnv, type HostId, type HostRuntimeEntry, type HostTier } from "../../src/host/types.js";
+import { fixtureEntry } from "../support/fixture-host.js";
 
 // Pinned from 21-DISCOVERY.md (GSD Core `next`, commit 69d604e, 2026-11-16).
 const EXPECTED_IDS = [
@@ -169,4 +170,112 @@ void test("an empty or relative PI_CODING_AGENT_DIR is SCHEMA_INVALID", () => {
       (error: unknown) => error instanceof SchemaInvalidError && error.code === "SCHEMA_INVALID",
     );
   }
+});
+
+// ---- Phase 24: home roles, one pairs-based resolver, envBase ----------------------------------------------------
+
+const invalid = (error: unknown): boolean => error instanceof SchemaInvalidError && error.code === "SCHEMA_INVALID";
+
+// What resolveHomes returned before roles existed: an absolute override replaced the whole list.
+function legacyHomes(entry: HostRuntimeEntry, over: HostEnv): readonly string[] {
+  if (entry.envOverride !== null) {
+    const value = over.env[entry.envOverride];
+    if (value !== undefined) {
+      return [value];
+    }
+  }
+  return entry.homes.map((home) => `${over.home}/${home.rel}`);
+}
+
+function threeHomes(extra: Partial<HostRuntimeEntry>): HostRuntimeEntry {
+  return {
+    ...fixtureEntry(null),
+    homes: [
+      { rel: ".s", role: "skills" },
+      { rel: ".c", role: "config" },
+      { rel: ".", role: "mcp" },
+    ],
+    ...extra,
+  };
+}
+
+void test("resolveHomes equals its pre-role result for every table entry, without and with an absolute override", () => {
+  for (const id of HOST_IDS) {
+    const entry = HOST_RUNTIMES[id];
+    assert.deepEqual(resolveHomes(entry, env()), legacyHomes(entry, env()), id);
+    if (entry.envOverride !== null) {
+      const over = env({ [entry.envOverride]: "/opt/override" });
+      assert.deepEqual(resolveHomes(entry, over), legacyHomes(entry, over), id);
+    }
+  }
+  assert.deepEqual(resolveHomes(HOST_RUNTIMES.kimi, env()), ["/home/u/.config/agents", "/home/u/.kimi"]);
+});
+
+void test("resolveHomeSpecs pairs each path with its role in table order", () => {
+  assert.deepEqual(resolveHomeSpecs(HOST_RUNTIMES.kimi, env()), [
+    { path: "/home/u/.config/agents", role: "skills" },
+    { path: "/home/u/.kimi", role: "config" },
+  ]);
+  assert.deepEqual(resolveHomeSpecs(HOST_RUNTIMES.claude, env({ CLAUDE_CONFIG_DIR: "/opt/claude" })), [{ path: "/opt/claude", role: "config" }]);
+  assert.deepEqual(resolveHomeSpecs(HOST_RUNTIMES.antigravity, env()), []);
+});
+
+void test("an absolute envOverride replaces every config and mcp home and never a skills home", () => {
+  const entry = threeHomes({ envOverride: "FIXTURE_DIR" });
+  assert.deepEqual(resolveHomeSpecs(entry, env({ FIXTURE_DIR: "/opt/x" })), [
+    { path: "/home/u/.s", role: "skills" },
+    { path: "/opt/x", role: "config" },
+    { path: "/opt/x", role: "mcp" },
+  ]);
+  assert.deepEqual(resolveHomes(entry, env({ FIXTURE_DIR: "/opt/x" })), ["/home/u/.s", "/opt/x"]);
+  assert.deepEqual(resolveHomeSpecs(entry, env()), [
+    { path: "/home/u/.s", role: "skills" },
+    { path: "/home/u/.c", role: "config" },
+    { path: "/home/u", role: "mcp" },
+  ]);
+  // An mcp home is never a detection home.
+  assert.deepEqual(resolveHomes(entry, env()), ["/home/u/.s", "/home/u/.c"]);
+  // `..` inside an absolute value is the operator's and is used as given.
+  assert.deepEqual(resolveHomeSpecs(entry, env({ FIXTURE_DIR: "/opt/a/../b" }))[1], { path: "/opt/a/../b", role: "config" });
+});
+
+void test("an empty or relative envOverride value is SCHEMA_INVALID, an unset one changes nothing", () => {
+  const entry = threeHomes({ envOverride: "FIXTURE_DIR" });
+  for (const bad of ["", "rel", "./rel"]) {
+    assert.throws(() => resolveHomeSpecs(entry, env({ FIXTURE_DIR: bad })), invalid, bad);
+  }
+  assert.deepEqual(resolveHomeSpecs(entry, env({ OTHER: "/opt/x" })), resolveHomeSpecs(entry, env()));
+});
+
+void test("an absolute envBase replaces the config homes with <base>/<sub> and nothing else", () => {
+  const entry = threeHomes({ envBase: { name: "XDG_FIXTURE", sub: "opencode" } });
+  assert.deepEqual(resolveHomeSpecs(entry, env({ XDG_FIXTURE: "/opt/base" })), [
+    { path: "/home/u/.s", role: "skills" },
+    { path: "/opt/base/opencode", role: "config" },
+    { path: "/home/u", role: "mcp" },
+  ]);
+  const single: HostRuntimeEntry = { ...fixtureEntry(null), homes: [{ rel: ".config/opencode", role: "config" }], envBase: { name: "XDG_FIXTURE", sub: "opencode" } };
+  assert.deepEqual(resolveHomes(single, env({ XDG_FIXTURE: "/opt/base" })), ["/opt/base/opencode"]);
+  assert.deepEqual(resolveHomes(single, env()), ["/home/u/.config/opencode"]);
+});
+
+void test("an empty or relative envBase value is SCHEMA_INVALID", () => {
+  const entry = threeHomes({ envBase: { name: "XDG_FIXTURE", sub: "opencode" } });
+  for (const bad of ["", "rel/base"]) {
+    assert.throws(() => resolveHomeSpecs(entry, env({ XDG_FIXTURE: bad })), invalid, bad);
+  }
+});
+
+void test("the two variables of two different entries never interact", () => {
+  const withOverride = threeHomes({ envOverride: "FIXTURE_DIR" });
+  const withBase = threeHomes({ envBase: { name: "XDG_FIXTURE", sub: "d" } });
+  const both = env({ FIXTURE_DIR: "/opt/x", XDG_FIXTURE: "/opt/base" });
+  assert.deepEqual(resolveHomes(withOverride, both), ["/home/u/.s", "/opt/x"]);
+  assert.deepEqual(resolveHomes(withBase, both), ["/home/u/.s", "/opt/base/d"]);
+});
+
+void test("a relative or empty env.home is SCHEMA_INVALID before any variable is read", () => {
+  const entry = threeHomes({ envOverride: "FIXTURE_DIR" });
+  assert.throws(() => resolveHomeSpecs(entry, env({ FIXTURE_DIR: "/opt/x" }, "rel")), invalid);
+  assert.throws(() => resolveHomeSpecs(entry, env({}, "")), invalid);
 });

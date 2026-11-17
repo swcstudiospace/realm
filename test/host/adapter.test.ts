@@ -470,3 +470,153 @@ void test("the home is chosen by the recipe's role, and the first existing home 
   const parsed: unknown = JSON.parse(readFileSync(join(second.home, ".fixture-second", "settings.json"), "utf8"));
   assert.deepEqual(parsed, { mcpServers: { realm: FIXTURE_JSON_VALUE } });
 });
+
+// ---- Phase 24: install home by role, env override, mcp role ------------------------------------------------------
+
+void test("an env override moves the config home of an entry whose first home is a skills home, and never the skills home", async (t) => {
+  const host = makeFixtureHost(t);
+  const log = captureLog();
+  const override = join(host.root, "share");
+  mkdirSync(override);
+  const entry: HostRuntimeEntry = {
+    ...fixtureEntry(fixtureRecipe("json-merge")),
+    homes: [
+      { rel: ".skills", role: "skills" },
+      { rel: FIXTURE_HOME_REL, role: "config" },
+    ],
+    envOverride: "FIXTURE_SHARE_DIR",
+  };
+  const adapter = createHostAdapter(entry, defaultManifestFor("claude", "1.2.3"), deps(host, log));
+  const moved: HostEnv = { ...host.env, env: { FIXTURE_SHARE_DIR: override } };
+  await adapter.install(moved, { dryRun: false });
+  assert.ok(existsSync(join(override, "settings.json")));
+  assert.equal(existsSync(join(host.home, ".skills")), false, "nothing is created under the skills home");
+  assert.equal(existsSync(join(host.configHome, "settings.json")), false);
+
+  const plain = makeFixtureHost(t);
+  const second = createHostAdapter(entry, defaultManifestFor("claude", "1.2.3"), deps(plain, log));
+  await second.install(plain.env, { dryRun: false });
+  assert.ok(existsSync(join(plain.configHome, "settings.json")));
+  assert.equal(existsSync(join(plain.home, ".skills")), false);
+});
+
+void test("a recipe with homeRole mcp writes into the mcp home, and detect lists only the config home", async (t) => {
+  const host = makeFixtureHost(t);
+  const log = captureLog();
+  const entry: HostRuntimeEntry = {
+    ...fixtureEntry(null),
+    homes: [
+      { rel: FIXTURE_HOME_REL, role: "config" },
+      { rel: ".", role: "mcp" },
+    ],
+    recipe: { ...fixtureRecipe("json-merge"), homeRole: "mcp" },
+  };
+  const adapter = createHostAdapter(entry, defaultManifestFor("claude", "1.2.3"), deps(host, log));
+  assert.deepEqual((await adapter.detect(host.env)).homes, [{ path: host.configHome, exists: true, symlink: false }]);
+  await adapter.install(host.env, { dryRun: false });
+  assert.ok(existsSync(join(host.home, "settings.json")));
+  assert.equal(existsSync(join(host.configHome, "settings.json")), false);
+
+  // Without a config home the mcp home alone never makes the machine detected.
+  const bare = makeFixtureHost(t, { createConfigHome: false });
+  const none = createHostAdapter({ ...entry, binaries: [] }, defaultManifestFor("claude", "1.2.3"), deps(bare, log));
+  assert.equal((await none.detect(bare.env)).detected, false);
+  await assert.rejects(none.install(bare.env, { dryRun: false }), refusedWith("not-detected", "POLICY_DENIED"));
+});
+
+// ---- Phase 24: unreadable entries and launch ----------------------------------------------------------------------
+
+async function installedJson(t: TestContext): Promise<{ host: FixtureHost; adapter: RecipeHostAdapter; file: string; noHost: HostEnv }> {
+  const { host, adapter } = fixtureAdapter(t, fixtureRecipe("json-merge"));
+  const file = join(host.configHome, "settings.json");
+  writeAt(file, `${JSON.stringify({ z: 1 }, null, 2)}\n`);
+  await adapter.install(host.env, { dryRun: false });
+  return { host, adapter, file, noHost: { home: "", env: {}, pathDirs: [] } };
+}
+
+void test("status: a refused or unparseable owned file is unreadable, a parseable file with another owned part is drifted", async (t) => {
+  const { host, adapter, file, noHost } = await installedJson(t);
+  const original = readFileSync(file, "utf8");
+  const stateOf = async (): Promise<readonly [string, string, string]> => {
+    const found = await adapter.status(noHost);
+    return [found.status, found.entries.map((entry) => entry.state).join(","), found.detail];
+  };
+  assert.deepEqual(await stateOf(), ["installed", "ok", "installed receipt, 1 of 1 entries intact"]);
+
+  // (a) the owned value edited: drifted.
+  const tampered = JSON.parse(original) as { mcpServers: { realm: { command: string } } };
+  tampered.mcpServers.realm.command = "evil";
+  writeFileSync(file, JSON.stringify(tampered));
+  assert.deepEqual(await stateOf(), ["drifted", "drifted", "installed receipt, 0 of 1 entries intact"]);
+
+  // (b) a symlink in place of the file.
+  rmSync(file);
+  writeFileSync(join(host.root, "elsewhere.json"), original);
+  symlinkSync(join(host.root, "elsewhere.json"), file);
+  assert.deepEqual(await stateOf(), ["drifted", "unreadable", "installed receipt, 0 of 1 entries intact, 1 unreadable"]);
+  rmSync(file);
+
+  // (c) a 2 MiB file.
+  writeFileSync(file, JSON.stringify({ pad: "x".repeat(2 * 1024 * 1024) }));
+  assert.equal((await stateOf())[1], "unreadable");
+
+  // (d) invalid UTF-8.
+  writeFileSync(file, Buffer.from([0xff, 0xfe, 0x7b]));
+  assert.equal((await stateOf())[1], "unreadable");
+
+  // (e) not JSON.
+  writeFileSync(file, "not json");
+  assert.equal((await stateOf())[1], "unreadable");
+
+  // (f) valid JSON without the owned key: drifted, not unreadable.
+  writeFileSync(file, JSON.stringify({ z: 1 }));
+  assert.deepEqual(await stateOf(), ["drifted", "drifted", "installed receipt, 0 of 1 entries intact"]);
+
+  // (g) the file deleted: missing.
+  rmSync(file);
+  assert.deepEqual(await stateOf(), ["drifted", "missing", "installed receipt, 0 of 1 entries intact"]);
+});
+
+void test("status: a text-block file with a lone marker is unreadable", async (t) => {
+  const { host, adapter } = fixtureAdapter(t, fixtureRecipe("text-block"));
+  const file = join(host.configHome, "config.toml");
+  await adapter.install(host.env, { dryRun: false });
+  assert.equal((await adapter.status(host.env)).status, "installed");
+  writeFileSync(file, "# BEGIN realm host-plugin\n[mcp_servers.realm]\n");
+  const found = await adapter.status(host.env);
+  assert.equal(found.status, "drifted");
+  assert.deepEqual(found.entries, [{ path: "config.toml", state: "unreadable" }]);
+  assert.match(found.detail, /, 1 unreadable$/);
+});
+
+void test("status launch: on-path with an executable realm in an absolute PATH directory, not-on-path otherwise, null without a receipt", async (t) => {
+  const { host, adapter } = fixtureAdapter(t, fixtureRecipe("json-merge"));
+  assert.equal((await adapter.status(host.env)).launch, null, "no receipt");
+  await adapter.install(host.env, { dryRun: false });
+  const bin = join(host.root, "bin");
+  mkdirSync(bin);
+  const realm = join(bin, "realm");
+  writeFileSync(realm, "#!/bin/sh\n");
+  chmodSync(realm, 0o755);
+  const withPath = (...pathDirs: string[]): HostEnv => ({ ...host.env, pathDirs });
+  assert.equal((await adapter.status(withPath(bin))).launch, "on-path");
+  assert.equal((await adapter.status(withPath(join(host.root, "none"), bin))).launch, "on-path");
+  assert.equal((await adapter.status(withPath())).launch, "not-on-path");
+  assert.equal((await adapter.status(withPath(join(host.root, "absent")))).launch, "not-on-path");
+  assert.equal((await adapter.status(withPath("bin"))).launch, "not-on-path", "a relative PATH entry is skipped");
+  chmodSync(realm, 0o644);
+  assert.equal((await adapter.status(withPath(bin))).launch, "not-on-path", "no execute bit");
+  // The resolved path is never part of the result.
+  assert.equal(JSON.stringify(await adapter.status(withPath(bin))).includes(host.root), false);
+});
+
+void test("status launch is null for an extension host", async (t) => {
+  const entry: HostRuntimeEntry = { ...fixtureEntry(fixtureRecipe("bundle-copy")), integration: "extension" };
+  const { host, adapter } = fixtureAdapter(t, null, { entry });
+  await adapter.install(host.env, { dryRun: false });
+  const bin = join(host.root, "bin");
+  mkdirSync(bin);
+  writeFileSync(join(bin, "realm"), "#!/bin/sh\n");
+  chmodSync(join(bin, "realm"), 0o755);
+  assert.equal((await adapter.status({ ...host.env, pathDirs: [bin] })).launch, null);
+});

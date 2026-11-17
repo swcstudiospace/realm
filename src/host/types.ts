@@ -46,14 +46,23 @@ export interface HostEnv {
 // A home is always a directory, relative to the user's home, POSIX separators.
 export interface HostHomeSpec {
   readonly rel: string;
-  readonly role: "config" | "skills";
+  // "mcp": the directory holding a host's user-level MCP file when that is not its config home. Never a detection home.
+  readonly role: "config" | "skills" | "mcp";
 }
 
 // Declared here, implemented by the installer. `file` and `dest` are relative to the resolved
 // home of role `homeRole` (default "config"); `source` is relative to the package adapters/ dir.
 export type InstallRecipe =
   | { readonly kind: "json-merge"; readonly file: string; readonly keyPath: readonly string[]; readonly value: unknown; readonly homeRole?: HostHomeSpec["role"] }
-  | { readonly kind: "text-block"; readonly file: string; readonly block: string; readonly homeRole?: HostHomeSpec["role"] }
+  | {
+      readonly kind: "text-block";
+      readonly file: string;
+      readonly block: string;
+      readonly homeRole?: HostHomeSpec["role"];
+      // The TOML table path the block defines. When set, an install is refused if the file already defines that table
+      // (or an ancestor key) outside the markers.
+      readonly tomlTable?: readonly string[];
+    }
   | { readonly kind: "bundle-copy"; readonly source: string; readonly dest: string; readonly homeRole?: HostHomeSpec["role"] };
 
 export interface HostRuntimeEntry {
@@ -66,6 +75,9 @@ export interface HostRuntimeEntry {
   readonly homes: readonly HostHomeSpec[];
   readonly homeVerified: boolean;
   readonly envOverride: string | null;
+  // The variable names a base directory and the home is `<base>/<sub>` (OpenCode: XDG_CONFIG_HOME + "opencode"). An entry has at
+  // most one of envOverride and envBase. `sub` is one safe path segment.
+  readonly envBase?: { readonly name: string; readonly sub: string };
   readonly binaries: readonly string[];
   readonly recipe: InstallRecipe | null;
   // Paths relative to the user home (POSIX separators, no `..`) whose presence means the host already loads

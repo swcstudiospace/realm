@@ -330,3 +330,31 @@ void test("BOOT-05: an unreadable receipt is still a fail and its detail carries
   assert.equal(result.status, "fail");
   assert.ok(!result.detail.includes("live host sessions"), result.detail);
 });
+
+void test("ADPT-03: a symlinked owned file adds the unreadable count and the by-hand fix, and a plain edit keeps the reinstall fix", async (t) => {
+  const host = makeFixtureHost(t);
+  const table = tableOf(["claude", "json-merge"]);
+  await install(host, table, "claude");
+  const file = join(host.configHome, "settings.json");
+  const elsewhere = join(host.root, "elsewhere.json");
+  writeFileSync(elsewhere, readFileSync(file));
+  rmSync(file);
+  symlinkSync(elsewhere, file);
+  const result = await check(host, table);
+  assert.equal(result.status, "warn");
+  assert.match(result.detail, /^host plugin drift: claude: installed receipt, 0 of 1 entries intact, 1 unreadable$/);
+  assert.equal(
+    result.fix,
+    "A file this receipt owns cannot be read or parsed safely (a symlink, a file over 1 MiB, invalid content or a lone Realm marker); inspect it, repair it by hand as docs/hosts/snippets/claude.md describes, then run realm host uninstall claude.",
+  );
+  for (const leak of [host.configHome, host.home, host.root, "elsewhere", "settings.json"]) {
+    assert.ok(!result.detail.includes(leak), `detail leaks ${leak}`);
+  }
+
+  rmSync(file);
+  writeFileSync(file, readFileSync(elsewhere));
+  ownedValueTamper(host);
+  const edited = await check(host, table);
+  assert.equal(edited.fix, "Repair with realm host install claude, or remove with realm host uninstall claude.");
+  assert.ok(!edited.detail.includes("unreadable"));
+});

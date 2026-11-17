@@ -9,6 +9,7 @@
 import { createHash } from "node:crypto";
 import { makeRealmError, RealmError, type ErrorCode } from "../core/errors.js";
 import type { ReceiptEntry } from "./receipt.js";
+import { tomlTableState } from "./toml-table.js";
 import type { InstallRecipe } from "./types.js";
 
 export type HostRefusalReason =
@@ -76,6 +77,7 @@ const MAX_BLOCK_LINES = 200;
 const MAX_KEY_SEGMENTS = 6;
 const MAX_JSON_DEPTH = 32;
 const KEY_SEGMENT = /^[A-Za-z0-9_.-]+$/;
+const TOML_KEY = /^[A-Za-z0-9_-]+$/;
 const PATH_SEGMENT = /^[^\0/\\]{1,255}$/;
 const POISON_KEYS: readonly string[] = ["__proto__", "constructor", "prototype"];
 
@@ -620,6 +622,26 @@ function locateBlock(content: string): BlockLocation | null {
   };
 }
 
+// recipe.tomlTable: the path must be 1 to 6 bare keys and the block must open with that table's header. A file that already
+// defines the table or an ancestor key outside the markers is foreign content; a line the scanner cannot read is unparseable.
+function guardTomlTable(recipe: Extract<InstallRecipe, { kind: "text-block" }>, lines: readonly string[], current: string | null, location: BlockLocation | null): void {
+  const table = recipe.tomlTable;
+  if (table === undefined) {
+    return;
+  }
+  const header = lines.find((line) => line.trim() !== "" && !line.startsWith("#"));
+  if (table.length < 1 || table.length > MAX_KEY_SEGMENTS || !table.every((key) => TOML_KEY.test(key)) || header !== `[${table.join(".")}]`) {
+    invalid();
+  }
+  if (current !== null) {
+    const outside = location === null ? current : `${current.slice(0, location.beginStart)}${current.slice(location.endEnd)}`;
+    const found = tomlTableState(outside, table);
+    if (found !== "free") {
+      refuse(found === "taken" ? "foreign-content" : "unparseable");
+    }
+  }
+}
+
 function detectEol(content: string): string {
   return content.includes("\r\n") ? "\r\n" : "\n";
 }
@@ -632,6 +654,7 @@ function planTextInstall(recipe: Extract<InstallRecipe, { kind: "text-block" }>,
   const current = currentOf(state, file);
   const prior = priorEntry(state, "text-block", file);
   const location = current === null ? null : locateBlock(current);
+  guardTomlTable(recipe, lines, current, location);
 
   if (current !== null && location !== null) {
     if (location.text === desiredText) {
@@ -887,21 +910,21 @@ export function planRecipe(recipe: InstallRecipe, state: PlanState): RecipePlan 
   }
 }
 
-// The hash of the part of `content` a receipt entry owns, or null when that part is absent or the
-// content cannot be parsed. json-merge: the canonical value at the key path. text-block: the text
-// between the markers. bundle-copy: the whole file. Used by status to compare against the receipt.
-export function ownedPartSha256(recipe: InstallRecipe, content: string): string | null {
+// The part of `content` a receipt entry owns, hashed. json-merge: the canonical value at the key path. text-block: the text
+// between the markers. bundle-copy: the whole file. `parsed` is false when the content cannot be parsed (not a JSON object, or a
+// broken marker layout); `sha256` is null when it parsed but the owned part is absent. Used by status against the receipt.
+export function ownedPart(recipe: InstallRecipe, content: string): { readonly parsed: boolean; readonly sha256: string | null } {
   try {
     if (recipe.kind === "bundle-copy") {
-      return sha256Text(content);
+      return { parsed: true, sha256: sha256Text(content) };
     }
     if (recipe.kind === "text-block") {
       const location = locateBlock(content);
-      return location === null ? null : sha256Text(location.text);
+      return { parsed: true, sha256: location === null ? null : sha256Text(location.text) };
     }
     const found = lookup(parseJsonObject(content), recipe.keyPath);
-    return found.found ? sha256Text(canonicalJson(found.value)) : null;
+    return { parsed: true, sha256: found.found ? sha256Text(canonicalJson(found.value)) : null };
   } catch {
-    return null;
+    return { parsed: false, sha256: null };
   }
 }

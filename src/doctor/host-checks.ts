@@ -1,8 +1,9 @@
 // The host-plugins doctor item (HOST-08). It reads Realm's own receipts under <stateDir>/hosts and, for each, asks the host
-// adapter whether the files the receipt names still match. It never reads the real home of a host, never runs a host
-// binary and never reads the process environment: a receipt names its config home, and the adapter resolves paths against
-// that. A detail names host ids and counts, never a path or file content. This module imports nothing from checks.ts or
-// src/cli, and the check never throws: every failure is a `fail` result carrying a catalogue code.
+// adapter whether the files the receipt names still match. It reads only the files a receipt names (for Claude Code that is a
+// file in the user's home), never runs a host binary and never reads the process environment: a receipt names its config home,
+// and the adapter resolves paths against that. A detail names host ids and counts, never a path or file content. This module
+// imports nothing from checks.ts or src/cli, and the check never throws: every failure is a `fail` result carrying a catalogue
+// code.
 
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
@@ -74,6 +75,8 @@ async function listReceiptHosts(options: HostPluginsCheckOptions, hostsDir: stri
 interface Drift {
   readonly id: HostId;
   readonly detail: string;
+  // True when an owned file cannot be read or parsed safely: a reinstall or uninstall refuses until it is repaired by hand.
+  readonly unreadable?: true;
 }
 
 // An installed host with the sentence the doctor adds for it ("" when there is nothing to add).
@@ -155,7 +158,8 @@ export async function hostPluginsCheck(options: HostPluginsCheckOptions): Promis
       } else if (found.status === "installed") {
         installed.push({ id, note: "" });
       } else if (found.status === "drifted") {
-        drifted.push({ id, detail: found.detail });
+        const unreadable = found.entries.some((item) => item.state === "unreadable");
+        drifted.push(unreadable ? { id, detail: found.detail, unreadable } : { id, detail: found.detail });
       }
     } catch (error: unknown) {
       failed.push({ id, code: codeOf(error) });
@@ -171,11 +175,16 @@ export async function hostPluginsCheck(options: HostPluginsCheckOptions): Promis
   }
   const [first] = drifted;
   if (first !== undefined) {
+    const stuck = drifted.find((item) => item.unreadable === true);
+    const fix =
+      stuck === undefined
+        ? `Repair with realm host install ${first.id}, or remove with realm host uninstall ${first.id}.`
+        : `A file this receipt owns cannot be read or parsed safely (a symlink, a file over 1 MiB, invalid content or a lone Realm marker); inspect it, repair it by hand as docs/hosts/snippets/${stuck.id}.md describes, then run realm host uninstall ${stuck.id}.`;
     return {
       id: "host-plugins",
       status: "warn",
       detail: `host plugin drift: ${drifted.map((item) => `${item.id}: ${item.detail}`).join("; ")}${liveSuffix(presence, described)}`,
-      fix: `Repair with realm host install ${first.id}, or remove with realm host uninstall ${first.id}.`,
+      fix,
     };
   }
   // A receipt that vanished between the listing and the read leaves nothing installed.

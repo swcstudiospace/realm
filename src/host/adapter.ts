@@ -25,9 +25,9 @@ import {
   type HostOperationOutcome,
 } from "./install.js";
 import { parseHostPluginManifest } from "./manifest.js";
-import { HostRefusal, MAX_BUNDLE_FILES, MAX_FILE_BYTES, isSafeRelPath, ownedPartSha256, resumeDecision, sha256Text, type BundleFile } from "./recipe.js";
+import { HostRefusal, MAX_BUNDLE_FILES, MAX_FILE_BYTES, isSafeRelPath, ownedPart, resumeDecision, sha256Text, type BundleFile } from "./recipe.js";
 import { DEFAULT_READ_TIMEOUT_MS, readReceipt, type ReceiptEntry } from "./receipt.js";
-import { resolveHomes } from "./runtimes.js";
+import { resolveHomes, resolveHomeSpecs } from "./runtimes.js";
 import type {
   HostAdapter,
   HostBootHookFactory,
@@ -81,7 +81,9 @@ export interface HostOperationDetail extends HostOperationResult {
 
 export interface HostEntryStatus {
   readonly path: string;
-  readonly state: "ok" | "drifted" | "missing";
+  // "unreadable": the owned file cannot be read or parsed safely (a refused read, or content the recipe cannot parse), which a
+  // reinstall cannot fix. "drifted": the file parses and its owned part differs or is absent.
+  readonly state: "ok" | "drifted" | "missing" | "unreadable";
 }
 
 export interface HostStatusDetail extends HostOperationResult {
@@ -90,6 +92,10 @@ export interface HostStatusDetail extends HostOperationResult {
   // single file URL (edited, missing or ambiguous) or the target is not a regular file. null for every other host and with no
   // receipt. The path itself is never returned.
   readonly extensionTarget: "present" | "missing" | "unreadable" | null;
+  // For an mcp-config host with a receipt: whether its registered launch command resolves as an executable file in an absolute
+  // directory of the PATH this process sees. null for an extension host, with no receipt, and when the manifest has no launch.
+  // Reads only; nothing is spawned and the resolved path is never returned.
+  readonly launch: "on-path" | "not-on-path" | null;
 }
 
 export interface RecipeHostAdapter extends HostAdapter {
@@ -158,7 +164,11 @@ function entryState(entry: ReceiptEntry, content: string | null, recipe: Install
   if (recipe === null || recipe.kind !== entry.kind || recipe.kind === "bundle-copy") {
     return resumeDecision(entry, sha256Text(content)) === "done" ? "ok" : "drifted";
   }
-  return ownedPartSha256(recipe, content) === entry.ownedSha256 ? "ok" : "drifted";
+  const owned = ownedPart(recipe, content);
+  if (!owned.parsed) {
+    return "unreadable";
+  }
+  return owned.sha256 === entry.ownedSha256 ? "ok" : "drifted";
 }
 
 export function createHostAdapter(
@@ -202,6 +212,21 @@ export function createHostAdapter(
     return found;
   }
 
+  // The first of `names` that is a regular file with an execute bit in an absolute directory of env.pathDirs (stat follows
+  // symlinks). A name containing "/" is checked directly. null: none found. Reads the file system only.
+  async function findExecutable(names: readonly string[], env: HostEnv): Promise<string | null> {
+    for (const name of names) {
+      const candidates = name.includes("/") ? [name] : env.pathDirs.filter((dir) => dir !== "" && isAbsolute(dir)).map((dir) => join(dir, name));
+      for (const path of candidates) {
+        const info = await bounded(reader.stat(path));
+        if (info !== null && info.isFile && (info.mode & 0o111) !== 0) {
+          return name;
+        }
+      }
+    }
+    return null;
+  }
+
   async function detect(env: HostEnv): Promise<HostDetectionDetail> {
     const homes: HostHomeStatus[] = [];
     for (const path of resolveHomes(entry, env)) {
@@ -216,22 +241,7 @@ export function createHostAdapter(
         homes.push({ path, exists: info.isDirectory, symlink: false });
       }
     }
-    let binary: string | null = null;
-    for (const name of entry.binaries) {
-      for (const dir of env.pathDirs) {
-        if (dir === "" || !isAbsolute(dir)) {
-          continue;
-        }
-        const info = await bounded(reader.stat(join(dir, name)));
-        if (info !== null && info.isFile && (info.mode & 0o111) !== 0) {
-          binary = name;
-          break;
-        }
-      }
-      if (binary !== null) {
-        break;
-      }
-    }
+    const binary = await findExecutable(entry.binaries, env);
     const homeFound = homes.some((home) => home.exists);
     return {
       id: entry.id,
@@ -248,7 +258,7 @@ export function createHostAdapter(
     if (receipt === null) {
       const found = await detect(env);
       const state: HostStatus = !found.detected ? "not-detected" : entry.recipe === null ? "recipe-pending" : "detected";
-      return { id: entry.id, status: state, changed: false, dryRun: false, detail: state, entries: [], extensionTarget: null };
+      return { id: entry.id, status: state, changed: false, dryRun: false, detail: state, entries: [], extensionTarget: null, launch: null };
     }
     const dirs = new Set<string>();
     const entries: HostEntryStatus[] = [];
@@ -265,16 +275,21 @@ export function createHostAdapter(
         if (!(error instanceof HostRefusal)) {
           throw error;
         }
-        state = "drifted";
+        state = "unreadable";
       }
       entries.push({ path: owned.path, state });
     }
     const intact = entries.filter((item) => item.state === "ok").length;
+    const unreadable = entries.filter((item) => item.state === "unreadable").length;
     const verdict: HostStatus = receipt.receipt.state === "installed" && intact === entries.length ? "installed" : "drifted";
-    const detail = `${receipt.receipt.state} receipt, ${String(intact)} of ${String(entries.length)} entries intact`;
+    const detail = `${receipt.receipt.state} receipt, ${String(intact)} of ${String(entries.length)} entries intact${unreadable > 0 ? `, ${String(unreadable)} unreadable` : ""}`;
     const extensionTarget =
       entry.integration === "extension" && entry.recipe?.kind === "bundle-copy" ? await extensionTargetOf(contents) : null;
-    return { id: entry.id, status: verdict, changed: false, dryRun: false, detail, entries, extensionTarget };
+    let launch: HostStatusDetail["launch"] = null;
+    if (entry.integration === "mcp-config" && checked.launch !== undefined) {
+      launch = (await findExecutable([checked.launch.command], env)) === null ? "not-on-path" : "on-path";
+    }
+    return { id: entry.id, status: verdict, changed: false, dryRun: false, detail, entries, extensionTarget, launch };
   }
 
   // Whether the file the owned shim imports exists. Exactly one import literal across the owned files, a JSON string that is a
@@ -311,7 +326,9 @@ export function createHostAdapter(
     if (override !== undefined) {
       return override;
     }
-    const candidates = resolveHomes(entry, env).filter((_, index) => (entry.homes[index]?.role ?? "config") === role);
+    const candidates = resolveHomeSpecs(entry, env)
+      .filter((spec) => spec.role === role)
+      .map((spec) => spec.path);
     for (const path of candidates) {
       if ((await bounded(reader.lstat(path))) !== null) {
         return path;

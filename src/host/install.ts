@@ -193,7 +193,12 @@ function bounded<T>(ctx: HostEngineContext, work: Promise<T>): Promise<T> {
   return withTimeout(work, ctx.readTimeoutMs, "TOOL_TIMEOUT");
 }
 
-async function symlinkRefusal(ctx: HostEngineContext, path: string): Promise<HostRefusal> {
+// A symlinked directory component can be fixed by naming its real path as the home. A symlinked final file cannot: the file
+// is not a home, so its refusal carries no --config-home hint.
+async function symlinkRefusal(ctx: HostEngineContext, path: string, leaf: boolean): Promise<HostRefusal> {
+  if (leaf) {
+    return new HostRefusal("symlink");
+  }
   const real = (await bounded(ctx, ctx.reader.realpath(path))) ?? path;
   return new HostRefusal("symlink", `use --config-home ${real}`);
 }
@@ -215,7 +220,7 @@ export async function readHostFile(
       return null;
     }
     if (info.isSymbolicLink) {
-      throw await symlinkRefusal(ctx, current);
+      throw await symlinkRefusal(ctx, current, false);
     }
     if (!info.isDirectory) {
       throw new HostRefusal("foreign-content");
@@ -231,14 +236,15 @@ export async function readHostFile(
     return null;
   }
   if (info.isSymbolicLink) {
-    throw await symlinkRefusal(ctx, target);
+    throw await symlinkRefusal(ctx, target, true);
   }
   if (!info.isFile) {
     throw new HostRefusal("foreign-content");
   }
   const bytes = await bounded(ctx, ctx.reader.readFile(target, MAX_FILE_BYTES));
   try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    // ignoreBOM keeps a leading U+FEFF in the text (the default decoder drops it), so a BOM file is never rewritten without it.
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
   } catch {
     throw new HostRefusal("unparseable");
   }
@@ -253,7 +259,7 @@ async function listCreatedDir(ctx: HostEngineContext, home: string, rel: string)
       return undefined;
     }
     if (info.isSymbolicLink) {
-      throw await symlinkRefusal(ctx, current);
+      throw await symlinkRefusal(ctx, current, false);
     }
     if (!info.isDirectory) {
       return undefined;
