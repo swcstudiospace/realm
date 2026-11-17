@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.3.32] - 2026-11-17
+
+### Documentation
+- docs(phase-20): close phase 20, release pipeline hardening (#99) (58d974e)
+
 ## [0.3.31] - 2026-11-17
 
 ### Documentation
