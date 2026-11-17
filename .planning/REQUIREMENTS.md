@@ -180,8 +180,8 @@ All v3.0 requirements are hypotheses until shipped and verified.
 - [ ] **ANDAX-03**: The Anda bridge code, the `andaUrl` config key, `ANDA_UNREACHABLE`, `ANDA_VERSION_MISMATCH`, the degraded state, the Anda doctor check and the Anda tests are removed with no shim
 - [ ] **ANDAX-04**: The state machine, status labels, schemas, policy reference, README and integration docs no longer mention the removed surface, and the check:docs and check:gates gates pass
 - [ ] **ANDAX-05**: The removal is a documented breaking change: release note text, config migration note (an unknown `andaUrl` key is refused with a clear message or ignored with a warning, as decided in the phase context)
-- [ ] **MCPA-01**: Every Realm MCP tool advertises tool annotations (readOnlyHint, destructiveHint, idempotentHint, openWorldHint) in both protocol eras `realm mcp` serves
-- [ ] **MCPA-02**: A test pins the annotations per tool against the tool contract, and a mutation of an annotation fails a test
+- [x] **MCPA-01**: Every Realm MCP tool advertises tool annotations (readOnlyHint, destructiveHint, idempotentHint, openWorldHint) in both protocol eras `realm mcp` serves
+- [x] **MCPA-02**: A test pins the annotations per tool against the tool contract, and a mutation of an annotation fails a test
 - [ ] **CAPT-01**: A spike answers whether a per-session capability token is worth building (threat model, same-user limits, cost) and records a build or drop decision with evidence
 - [ ] **BOOTP-01**: Each wave 1 host that can run here (claude, codex; others named) is booted through its own CLI against the production stack, and Realm tools are listed or called, with results recorded
 - [ ] **BOOTP-02**: Hosts that cannot be booted (missing CLI, no credentials, archived) have a named gap in docs/integration/host-plugin-gaps.md
@@ -354,8 +354,8 @@ Each v3.0 requirement maps to exactly one phase. The carried requirements keep t
 | ANDAX-03 | Phase 28 | Planned |
 | ANDAX-04 | Phase 28 | Planned |
 | ANDAX-05 | Phase 28 | Planned |
-| MCPA-01 | Phase 29 | Planned |
-| MCPA-02 | Phase 29 | Planned |
+| MCPA-01 | Phase 29 | Complete |
+| MCPA-02 | Phase 29 | Complete |
 | CAPT-01 | Phase 30 | Planned |
 | BOOTP-01 | Phase 31 | Planned |
 | BOOTP-02 | Phase 31 | Planned |
