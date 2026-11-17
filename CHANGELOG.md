@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.3.37] - 2026-11-17
+
+### Added
+- feat(omp): Omp on the host contract, install recipe and auto-open (Phase 22) (#106) (819014d)
+
 ## [0.3.36] - 2026-11-17
 
 ### Documentation
