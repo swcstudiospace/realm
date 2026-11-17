@@ -74,7 +74,7 @@ The v1 requirement set lives in `.planning/REQUIREMENTS.md` (REQ-IDs grouped by 
 - [ ] Policy engine (advisory default, fail-closed opt-in), state machine, typed event bus, controller
 - [ ] Filesystem lockdown: root-allowlisted canonical paths, credential-path deny, advisory write locks, atomic writes
 - [ ] Podman rootless, OpenShell and AgentOS runtime adapters with hardening, gated integration tests
-- Dropped 2026-11-17 (owner decision D-27-01): the Anda Engine TypeScript bridge with version handshake and bounded backoff with jitter; the bridge is removed in Phase 28
+- Dropped 2026-11-17 (owner decision D-27-01): the Anda Engine TypeScript bridge with version handshake and bounded backoff with jitter; the bridge was removed in Phase 28 (merged 2026-11-17, release 0.4.x)
 - [ ] Orphan reaper, default-deny egress guard, single shared tool dispatcher
 - [ ] Omp plugin: detached autostart under a startup budget, status indicator (realm active / realm disconnected), retry command
 - [ ] MCP server and ACP adapter over one tool contract. Superseded 2026-10-29: TOOL-05 was proven live (REQUIREMENTS.md).

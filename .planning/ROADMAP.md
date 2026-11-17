@@ -695,10 +695,12 @@ Plans:
 **Goal:** The Anda bridge is removed with a clean cutover: no `andaUrl` key, no `ANDA_UNREACHABLE` or `ANDA_VERSION_MISMATCH` codes, no degraded state, no doctor check or docs for it, and the release carries a breaking-change note.
 **Depends on:** Phase 27
 **Requirements**: ANDAX-03, ANDAX-04, ANDAX-05
-**Plans:** 0 plans
+**Plans:** 3 plans
 
 Plans:
-- [ ] TBD (run /gsd-plan-phase 28 to break down)
+- [ ] 28-01-PLAN.md: remove the bridge, andaUrl and the ANDA codes (wave 1)
+- [ ] 28-02-PLAN.md: remove the degraded state (wave 2)
+- [ ] 28-03-PLAN.md: documents, closure greps, release note (wave 3)
 
 ### Phase 29: MCP tool annotations
 
