@@ -201,7 +201,7 @@ Plans:
 - [x] **Phase 26: Plugin contract tests, boot tests and author docs** - A cross-host contract checker proven by seeded defects, a real-daemon boot matrix over every stdio host, conformance mutants for the uncovered boot cases, a plugin author guide, a support matrix that a test keeps in step with the runtime table, and one tracked gaps page for the phase 21 to 25 residuals.
 - [x] **Phase 27: Anda disposition and v4.0 requirement closure** - Every open Anda item is closed by a recorded owner decision: ANDA-01 to ANDA-04, the Phase 3 Anda items and OQ-P3-11 are dispositioned as removed, the v2.0 carry list is reconciled, and the replacement research is the published rationale. (completed 2026-11-17)
 - [ ] **Phase 28: Remove the Anda bridge** - The Anda bridge is removed with a clean cutover: no `andaUrl` key, no `ANDA_UNREACHABLE` or `ANDA_VERSION_MISMATCH` codes, no degraded state, no doctor check or docs for it, and the release carries a breaking-change note.
-- [ ] **Phase 29: MCP tool annotations** - `realm mcp` advertises MCP tool annotations (read-only, destructive, idempotent, open-world) for every Realm tool, verified against the protocol revisions it serves.
+- [x] **Phase 29: MCP tool annotations** - `realm mcp` advertises MCP tool annotations (read-only, destructive, idempotent, open-world) for every Realm tool, verified against the protocol revisions it serves. (completed 2026-11-17)
 - [ ] **Phase 30: Capability token spike** - A bounded spike answers whether a per-session capability token (least privilege and audit attribution for stdio hosts) is worth building, with a recorded build or drop decision; no production code unless the decision is build.
 - [ ] **Phase 31: Production-stack boot rehearsals for wave 1 hosts** - The wave 1 hosts that can run on this account's Podman 5.x stack boot Realm through their own CLI against the production stack, with results or named gaps recorded.
 
@@ -705,10 +705,11 @@ Plans:
 **Goal:** `realm mcp` advertises MCP tool annotations (read-only, destructive, idempotent, open-world) for every Realm tool, verified against the protocol revisions it serves.
 **Depends on:** Phase 27
 **Requirements**: MCPA-01, MCPA-02
-**Plans:** 0 plans
+**Plans:** 2/2 plans complete
 
 Plans:
-- [ ] TBD (run /gsd-plan-phase 29 to break down)
+- [x] 29-01-PLAN.md: annotation table, pins and mutation tests (wave 1)
+- [x] 29-02-PLAN.md: smoke check, docs Q9 and doc tests (wave 2)
 
 ### Phase 30: Capability token spike
 
