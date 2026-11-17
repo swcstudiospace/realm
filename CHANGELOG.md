@@ -4,6 +4,18 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-11-17
+
+### Added
+- feat(core)!: remove the degraded state and display.degraded (ANDAX-03, ANDAX-04) (a56bc15)
+- feat(anda)!: remove the Anda bridge, the andaUrl key and the ANDA error codes (ANDAX-03) (2dda45d)
+
+### Documentation
+- docs(anda)!: retire the Anda documents, document the andaUrl and degraded-state removal (ANDAX-04, ANDAX-05) (8827afd)
+
+### Maintenance
+- chore: allowlist DEFAULT_REQUEST_TIMEOUT_MS as a test seam after the bridge removal (54b6b41)
+
 ## [0.4.2] - 2026-11-17
 
 ### Added
