@@ -1,0 +1,72 @@
+# Host support matrix
+
+This page is a view of three sources and never a second one: the runtime table `HOST_RUNTIMES` (`src/host/runtimes.ts`), the evidence registry (`test/support/host-registry.ts`) and the live specs (`test/support/host-live.ts`). A test (`test/docs/host-support-matrix.test.ts`) renders the block below from those three and compares it with the page byte for byte, so a change to a row, a recipe, a suite file, a gate or a recorded result that is not in the page fails CI with a difference and the command that regenerates it. Edits go to those sources, never here; the text outside the generated block is the only hand-written part.
+
+Nothing on this page is live evidence unless a dated result is written in a cell. The column T1 and the matrices of Phase 26 (the contract matrix, the lifecycle matrix, the boot matrices) prove the contract on fixtures and fakes: no host CLI runs, no Podman stack starts and nothing is registered in a real host configuration (see GAP-26-01 in [Host plugin gaps](host-plugin-gaps.md)).
+
+## How to read this
+
+- **T1, offline fixture.** The recipe runs on a fixture host in a temporary home against the observed golden: detect, dry run, install, no-op reinstall, drift, foreign and hostile content, uninstall, doctor and status. It runs in CI on every pull request and needs no host. The column lists the test files that run each host's recipe suite.
+- **T2, host validator.** The host's own validator command (for example a list or get command) parses what the recipe wrote, in an isolated `HOME` with a stub `realm` that records its argv. It is gated by the host's opt-in variable, `REALM_LIVE_ID=1` with the host id in capitals, and CI never runs it. A T2 pass shows that the host parses the entry and, for some hosts, launches the registered argv; it does not show that a Realm session runs.
+- **T3, live Realm session.** A real session through the host against a Podman 5.x stack: the host starts `realm mcp --host ID`, the daemon opens a workspace and the host's own health check initializes. It is defined for the proven tier only; a config-only host has no T3 tier by owner decision (open question OQ-25-09), and the cell says `none-defined`. `gap` means the tier cannot be run at all today, `not-run` means no dated result exists and `rehearsed` means a dated rehearsal exists and the note names it.
+
+Every cell that reads `not run` means exactly that: no dated result is recorded in the registry or in the host's snippet. The recorded T2 results are hand-entered, dated facts whose source is a comment next to each registry record (GAP-26-02); the T2 result of a host covers the version named in the cell only.
+
+The Support table reads the table: tier, integration kind, recipe kind (a host without a recipe is `pending (deferred)` and refuses `realm host install` as `recipe-pending`), the config home or homes with the override variable or base, the file the recipe edits (or the bundle destination), the binaries used for detection and the snippet that documents the host. A skills home is a detection home only. The Evidence table reads the registry and the live specs.
+
+<!-- host-support-matrix:begin -->
+### Support
+
+| Id | Name | Tier | Integration | Recipe | Config home | File | Binaries | Snippet |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `omp` | Omp | reference | extension | bundle-copy | `~/.omp/agent`; override `PI_CODING_AGENT_DIR` | `extensions/realm` | `omp` | [omp.md](../hosts/snippets/omp.md) |
+| `claude` | Claude Code | proven | mcp-config | json-merge | `~/.claude`, `~`; override `CLAUDE_CONFIG_DIR` | `.claude.json` | `claude` | [claude-code.md](../hosts/snippets/claude-code.md) |
+| `opencode` | OpenCode | proven | mcp-config | json-merge | `~/.config/opencode`; base `XDG_CONFIG_HOME/opencode` | `opencode.json` | `opencode` | [opencode.md](../hosts/snippets/opencode.md) |
+| `kilo` | Kilo | config-only | mcp-config | json-merge | `~/.config/kilo`, skills `~/.kilo` (detection only); base `XDG_CONFIG_HOME/kilo` | `kilo.json` | `kilo`, `kilocode` | [kilo.md](../hosts/snippets/kilo.md) |
+| `codex` | Codex | proven | mcp-config | toml-table | `~/.codex`; override `CODEX_HOME` | `config.toml` | `codex` | [codex.md](../hosts/snippets/codex.md) |
+| `copilot` | Copilot | config-only | mcp-config | json-merge | `~/.copilot`; override `COPILOT_HOME` | `mcp-config.json` | `copilot` | [copilot.md](../hosts/snippets/copilot.md) |
+| `antigravity` | Antigravity | config-only | mcp-config | json-merge | `~/.gemini/config` | `mcp_config.json` | `agy` | [antigravity.md](../hosts/snippets/antigravity.md) |
+| `cursor` | Cursor | config-only | mcp-config | json-merge | `~/.cursor` | `mcp.json` | `cursor-agent`, `cursor` | [cursor.md](../hosts/snippets/cursor.md) |
+| `windsurf` (`devin-desktop`) | Windsurf | config-only | mcp-config | pending (deferred) | `~/.codeium/windsurf` | - | - | [deferred-hosts.md](../hosts/snippets/deferred-hosts.md) |
+| `augment` | Augment | config-only | mcp-config | json-merge | `~/.augment`; override `AUGMENT_CACHE_DIR` | `settings.json` | `auggie` | [augment.md](../hosts/snippets/augment.md) |
+| `trae` | Trae | config-only | mcp-config | pending (deferred) | `~/.trae` | - | - | [deferred-hosts.md](../hosts/snippets/deferred-hosts.md) |
+| `qwen` | Qwen | config-only | mcp-config | json-merge | `~/.qwen`; override `QWEN_HOME` | `settings.json` | `qwen` | [qwen.md](../hosts/snippets/qwen.md) |
+| `hermes` | Hermes | config-only | mcp-config | yaml-map | `~/.hermes`; override `HERMES_HOME` | `config.yaml` | `hermes` | [hermes-agent.md](../hosts/snippets/hermes-agent.md) |
+| `codebuddy` | CodeBuddy | config-only | mcp-config | json-merge | `~/.codebuddy`; override `CODEBUDDY_CONFIG_DIR` | `.mcp.json` | `codebuddy` | [codebuddy.md](../hosts/snippets/codebuddy.md) |
+| `cline` | Cline | config-only | mcp-config | json-merge | `~/.cline`; override `CLINE_DIR` | `data/settings/cline_mcp_settings.json` | `cline` | [cline.md](../hosts/snippets/cline.md) |
+| `kimi` | Kimi CLI | proven | mcp-config | json-merge | skills `~/.config/agents` (detection only), `~/.kimi`; override `KIMI_SHARE_DIR` | `mcp.json` | - | [kimi.md](../hosts/snippets/kimi.md) |
+| `kimi-code` | Kimi Code | config-only | mcp-config | json-merge | `~/.kimi-code`; override `KIMI_CODE_HOME` | `mcp.json` | - | [kimi.md](../hosts/snippets/kimi.md) |
+| `zcode` | ZCode | config-only | mcp-config | pending (deferred) | `~/.zcode` | - | - | [deferred-hosts.md](../hosts/snippets/deferred-hosts.md) |
+| `pi` | Pi | config-only | mcp-config | json-merge | `~/.pi/agent`; override `PI_CODING_AGENT_DIR` | `mcp.json` | `pi` | [pi.md](../hosts/snippets/pi.md) |
+
+### Evidence
+
+| Id | T1 fixture suites | T2 gate | T2 recorded result | T3 | Deferral |
+| --- | --- | --- | --- | --- | --- |
+| `omp` | `test/host/omp-recipe.test.ts` | none | not run | rehearsed: Omp 18.22.0, Phase 22 live rehearsal 2026-11-17; predates the Phase 23 boot path (GAP-23-04) | - |
+| `claude` | `test/host/claude-recipe.test.ts` | `REALM_LIVE_CLAUDE=1` | 2026-11-17, 2.1.322: 3 of 3 passed, run twice | not-run: Podman 4.9.3 is below the required 5.x | - |
+| `opencode` | `test/host/opencode-recipe.test.ts` | `REALM_LIVE_OPENCODE=1` | not run | not-run: no opencode executable, and Podman 4.9.3 is below 5.x | - |
+| `kilo` | `test/host/wave2-json-recipes.test.ts` | `REALM_LIVE_KILO=1` | not run | none-defined: config-only host: no production tier is defined (OQ-25-09) | - |
+| `codex` | `test/host/codex-recipe.test.ts` | `REALM_LIVE_CODEX=1` | 2026-11-17, 0.154.0: 5 passed, 0 failed, 2 skipped (production tiers), after the header-owned recipe | gap: codex mcp list does not start servers and a session needs model credentials: not automatable | - |
+| `copilot` | `test/host/wave2-json-recipes.test.ts` | `REALM_LIVE_COPILOT=1` | not run | none-defined: config-only host: no production tier is defined (OQ-25-09) | - |
+| `antigravity` | `test/host/wave2-json-recipes.test.ts` | none | not run | none-defined: config-only host: no production tier is defined (OQ-25-09) | - |
+| `cursor` | `test/host/wave2-json-recipes.test.ts` | `REALM_LIVE_CURSOR=1` | not run | none-defined: config-only host: no production tier is defined (OQ-25-09) | - |
+| `windsurf` | - | none | not run | gap: deferred host: no recipe exists, so no tier can run | the product was renamed and two different MCP files now exist, so the recipe target is ambiguous and the IDE was not observed (OQ-25-01) |
+| `augment` | `test/host/wave2-json-recipes.test.ts` | `REALM_LIVE_AUGMENT=1` | not run | none-defined: config-only host: no production tier is defined (OQ-25-09) | - |
+| `trae` | - | none | not run | gap: deferred host: no recipe exists, so no tier can run | no documented global MCP file exists for the IDE (OQ-25-02) |
+| `qwen` | `test/host/wave2-json-recipes.test.ts` | `REALM_LIVE_QWEN=1` | 2026-11-17, 0.22.0: PASS; covers 0.22.0 only | none-defined: config-only host: no production tier is defined (OQ-25-09) | - |
+| `hermes` | `test/host/hermes-recipe.test.ts` | `REALM_LIVE_HERMES=1` | not run | none-defined: config-only host: no production tier is defined (OQ-25-09) | - |
+| `codebuddy` | `test/host/codebuddy-recipe.test.ts`, `test/host/shadows.test.ts` | `REALM_LIVE_CODEBUDDY=1` | not run | none-defined: config-only host: no production tier is defined (OQ-25-09) | - |
+| `cline` | `test/host/wave2-json-recipes.test.ts` | `REALM_LIVE_CLINE=1` | not run | none-defined: config-only host: no production tier is defined (OQ-25-09) | - |
+| `kimi` | `test/host/kimi-recipe.test.ts` | `REALM_LIVE_KIMI=1` | not run | gap: no functional Kimi CLI release exists to run | - |
+| `kimi-code` | `test/host/kimi-recipe.test.ts` | none | not run | gap: no documented validator command, and no run was attempted | - |
+| `zcode` | - | none | not run | gap: deferred host: no recipe exists, so no tier can run | the native config is owned by a GUI application and cannot be observed (OQ-25-03) |
+| `pi` | `test/host/wave2-json-recipes.test.ts` | `REALM_LIVE_PI=1`, floor 1.3.0 | not run | none-defined: config-only host: no production tier is defined (OQ-25-09) | - |
+<!-- host-support-matrix:end -->
+
+## Where to go next
+
+- To add a host, read [Writing a Realm host plugin](writing-a-host-plugin.md).
+- For what each recipe writes, the refusals and the evidence limits, read [Host plugin contract and installer](host-plugin-contract.md).
+- For what is still not proven, read [Host plugin gaps](host-plugin-gaps.md).
+- For the three hosts that have no recipe and why, read [the deferred hosts page](../hosts/snippets/deferred-hosts.md).
