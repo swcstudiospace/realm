@@ -1,17 +1,21 @@
 // Gate, isolation and runner pieces of the host live rehearsals (ADPT-08; decisions D-24-07 and D-24-08 of phase 24).
 //
-// Four hosts have a gated live file: claude, codex, opencode and kimi. Each file has a validator tier (the host's own commands
-// parse, and for three hosts launch, what the real recipe wrote into an isolated home) and, for claude and opencode, a production
-// tier (the host's own health check performs a real MCP initialize against `realm mcp --host <id>` on the production stack).
+// Thirteen hosts are in the table. Four have a gated live file of their own: claude, codex, opencode and kimi. Each file has a validator
+// tier (the host's own commands parse, and for three hosts launch, what the real recipe wrote into an isolated home) and, for claude and
+// opencode, a production tier (the host's own health check performs a real MCP initialize against `realm mcp --host <id>` on the
+// production stack). The nine wave-2 hosts (qwen, pi, hermes, cursor, kilo, copilot, augment, codebuddy, cline) share one table-driven
+// validator file, test/integration/host-live-wave2.test.ts, and have no production tier (config-only, 25-CONTEXT D-25-08). Antigravity has
+// no live file at all (ANTIGRAVITY_GAP).
 //
 // Gate order of hostLiveSkipReason, the first failing check names the skip (no test ever sets a gate variable):
-//   1. the host's opt-in variable is exactly 1 (REALM_LIVE_CLAUDE, REALM_LIVE_CODEX, REALM_LIVE_OPENCODE, REALM_LIVE_KIMI)
+//   1. the host's opt-in variable is exactly 1 (REALM_LIVE_<HOST>, for example REALM_LIVE_CLAUDE or REALM_LIVE_QWEN)
 //   2. the platform is Linux
 //   3. the host executable exists: REALM_<HOST>_BIN (an absolute path) or the default name on PATH
-//   4. `<bin> --version` runs and prints an x.y.z version
-//   5. kimi only: the installed kimi is not the archived Python stub
-//   6. the built CLI dist/src/cli/main.js exists
-//   7. production tier only: the host has a production tier, then productionSkipReason (Podman, image, driver, sockets), then
+//   4. `<bin> --version` runs and prints an x.y.z version (a broken install, such as the Hermes one of E-HM2, fails here)
+//   5. the host has a minimum version (`minVersion`, pi 1.3.0) and the installed one is older
+//   6. kimi only: the installed kimi is not the archived Python stub
+//   7. the built CLI dist/src/cli/main.js exists
+//   8. production tier only: the host has a production tier, then productionSkipReason (Podman, image, driver, sockets), then
 //      no Realm receipt for the host in the shared state directory
 //
 // Nothing here reads the process environment or touches the host at import time: every function takes what it needs as a
@@ -19,9 +23,9 @@
 // are covered by test/integration/host-live-helpers.test.ts, which always runs without a host CLI, Podman or a network.
 //
 // Exports (the live files and the helper test import exactly these names):
-//   HOST_LIVE, LIVE_HOST_IDS, type LiveHostId          the frozen per-host table
+//   HOST_LIVE, LIVE_HOST_IDS, type LiveHostId          the frozen per-host table (KIMI_CODE_GAP, ANTIGRAVITY_GAP, CONFIG_ONLY_GAP: its fixed gap sentences)
 //   hostLiveSkipReason, collectHostLiveGate            the pure gate and the probe-and-decide wrapper the live files call
-//   parseHostVersion, resolveExecutable                version parsing and executable lookup
+//   parseHostVersion, compareVersions, resolveExecutable   version parsing and comparison, and executable lookup
 //   writeStubRealm, readStubArgv                       the stub `realm` that records its argv, and the reader of that record
 //   isolatedHostEnv, isUnderTemp                       the allowlisted environment and the temporary-directory guard
 //   runHost, describeRun, requireReturned              the bounded process-group runner and its result helpers
@@ -68,8 +72,8 @@ import { scaledMs } from "./timing.js";
 
 // ---- The per-host table ----------------------------------------------------------------------------------------------------
 
-export type LiveHostId = "claude" | "codex" | "opencode" | "kimi";
-export const LIVE_HOST_IDS: readonly LiveHostId[] = Object.freeze(["claude", "codex", "opencode", "kimi"] as const);
+export type LiveHostId = "claude" | "codex" | "opencode" | "kimi" | "qwen" | "pi" | "hermes" | "cursor" | "kilo" | "copilot" | "augment" | "codebuddy" | "cline";
+export const LIVE_HOST_IDS: readonly LiveHostId[] = Object.freeze(["claude", "codex", "opencode", "kimi", "qwen", "pi", "hermes", "cursor", "kilo", "copilot", "augment", "codebuddy", "cline"] as const);
 export type HostLiveTier = "validator" | "production";
 
 export interface HostLiveSpec {
@@ -78,13 +82,44 @@ export interface HostLiveSpec {
   readonly defaultBinary: string;
   readonly displayName: string;
   readonly versionArgs: readonly string[];
-  // The version 24-CONTEXT observed. Informational: a newer or older version runs and is recorded, never skipped.
+  // The version the context documents observed. Informational: a newer or older version runs and is recorded, never skipped.
   readonly recordedVersion: string;
+  // The first version that can use the recipe, or null for a host without a floor. An older version is skipped (the only skip a version causes).
+  readonly minVersion: string | null;
   // Whether the host's own validator commands launch the registered command (the stub realm records the argv).
   readonly launchesOnValidate: boolean;
   readonly productionTier: boolean;
   // The fixed sentence of a host without a production tier; null for a host that has one.
   readonly productionGap: string | null;
+}
+
+// The production-tier gap of every wave-2 host.
+export const CONFIG_ONLY_GAP = "config-only host: no production tier is defined for it (25-CONTEXT D-25-08)";
+
+interface Wave2SpecInit {
+  readonly optIn: string;
+  readonly binOverride: string;
+  readonly defaultBinary: string;
+  readonly displayName: string;
+  readonly recordedVersion: string;
+  readonly minVersion?: string;
+  readonly launchesOnValidate: boolean;
+}
+
+// One wave-2 table entry: a config-only host whose validator runs `<bin> --version` and has no production tier.
+function wave2Spec(init: Wave2SpecInit): HostLiveSpec {
+  return Object.freeze({
+    optIn: init.optIn,
+    binOverride: init.binOverride,
+    defaultBinary: init.defaultBinary,
+    displayName: init.displayName,
+    versionArgs: Object.freeze(["--version"]),
+    recordedVersion: init.recordedVersion,
+    minVersion: init.minVersion ?? null,
+    launchesOnValidate: init.launchesOnValidate,
+    productionTier: false,
+    productionGap: CONFIG_ONLY_GAP,
+  });
 }
 
 export const HOST_LIVE: Readonly<Record<LiveHostId, HostLiveSpec>> = Object.freeze({
@@ -95,6 +130,7 @@ export const HOST_LIVE: Readonly<Record<LiveHostId, HostLiveSpec>> = Object.free
     displayName: "Claude Code",
     versionArgs: Object.freeze(["--version"]),
     recordedVersion: "2.1.322",
+    minVersion: null,
     launchesOnValidate: true,
     productionTier: true,
     productionGap: null,
@@ -106,6 +142,7 @@ export const HOST_LIVE: Readonly<Record<LiveHostId, HostLiveSpec>> = Object.free
     displayName: "Codex",
     versionArgs: Object.freeze(["--version"]),
     recordedVersion: "0.154.0",
+    minVersion: null,
     launchesOnValidate: false,
     productionTier: false,
     productionGap: "`codex mcp list` does not start servers and a session needs model credentials, which no rehearsal supplies",
@@ -117,6 +154,7 @@ export const HOST_LIVE: Readonly<Record<LiveHostId, HostLiveSpec>> = Object.free
     displayName: "OpenCode",
     versionArgs: Object.freeze(["--version"]),
     recordedVersion: "1.19.5",
+    minVersion: null,
     launchesOnValidate: true,
     productionTier: true,
     productionGap: null,
@@ -128,14 +166,29 @@ export const HOST_LIVE: Readonly<Record<LiveHostId, HostLiveSpec>> = Object.free
     displayName: "Kimi CLI",
     versionArgs: Object.freeze(["--version"]),
     recordedVersion: "1.51.0",
+    minVersion: null,
     launchesOnValidate: true,
     productionTier: false,
     productionGap: "no functional Kimi CLI release exists: the last release is a deprecation stub",
   }),
+  qwen: wave2Spec({ optIn: "REALM_LIVE_QWEN", binOverride: "REALM_QWEN_BIN", defaultBinary: "qwen", displayName: "Qwen Code", recordedVersion: "0.22.0", launchesOnValidate: true }),
+  // pi below 1.3.0 has no MCP and ignores mcp.json (E-PI2): the floor skips it.
+  pi: wave2Spec({ optIn: "REALM_LIVE_PI", binOverride: "REALM_PI_BIN", defaultBinary: "pi", displayName: "Pi", recordedVersion: "1.5.2", minVersion: "1.3.0", launchesOnValidate: true }),
+  hermes: wave2Spec({ optIn: "REALM_LIVE_HERMES", binOverride: "REALM_HERMES_BIN", defaultBinary: "hermes", displayName: "Hermes Agent", recordedVersion: "0.23.2", launchesOnValidate: true }),
+  cursor: wave2Spec({ optIn: "REALM_LIVE_CURSOR", binOverride: "REALM_CURSOR_BIN", defaultBinary: "cursor-agent", displayName: "Cursor", recordedVersion: "2026.11.13", launchesOnValidate: true }),
+  kilo: wave2Spec({ optIn: "REALM_LIVE_KILO", binOverride: "REALM_KILO_BIN", defaultBinary: "kilo", displayName: "Kilo Code", recordedVersion: "7.8.27", launchesOnValidate: true }),
+  copilot: wave2Spec({ optIn: "REALM_LIVE_COPILOT", binOverride: "REALM_COPILOT_BIN", defaultBinary: "copilot", displayName: "GitHub Copilot CLI", recordedVersion: "1.0.112", launchesOnValidate: false }),
+  augment: wave2Spec({ optIn: "REALM_LIVE_AUGMENT", binOverride: "REALM_AUGMENT_BIN", defaultBinary: "auggie", displayName: "Augment (Auggie)", recordedVersion: "1.2.1", launchesOnValidate: false }),
+  codebuddy: wave2Spec({ optIn: "REALM_LIVE_CODEBUDDY", binOverride: "REALM_CODEBUDDY_BIN", defaultBinary: "codebuddy", displayName: "CodeBuddy Code", recordedVersion: "2.185.0", launchesOnValidate: true }),
+  cline: wave2Spec({ optIn: "REALM_LIVE_CLINE", binOverride: "REALM_CLINE_BIN", defaultBinary: "cline", displayName: "Cline CLI", recordedVersion: "3.0.74", launchesOnValidate: false }),
 });
 
 // The sentence of the Kimi Code gap, written once so the live file and the helper test agree.
 export const KIMI_CODE_GAP = "Kimi Code documents no validator command and no listing command (24-CONTEXT E-K5); its recipe is proven on a fixture host only";
+
+// The sentence of the Antigravity gap: no live file exists for it, because `agy` was never observed.
+export const ANTIGRAVITY_GAP =
+  "Antigravity's CLI `agy` was never installed or run: its MCP file is documented by three Google pages and no listing command was observed (25-CONTEXT E-AG2); its recipe is proven on a fixture host only";
 
 // The text the archived Python kimi prints for any invocation.
 const KIMI_STUB_MARKER = "no longer maintained";
@@ -144,11 +197,36 @@ const KIMI_STUB_MARKER = "no longer maintained";
 
 const VERSION_PATTERN = /(?<!\d)(\d+\.\d+\.\d+)(?!\d)/;
 
+// Compares two x.y.z versions numerically, part by part: negative when `left` is older, 0 when equal, positive when newer. A part that
+// is not a number counts as 0, so a malformed string never throws.
+export function compareVersions(left: string, right: string): number {
+  const a = left.split(".").map((part) => Number.parseInt(part, 10) || 0);
+  const b = right.split(".").map((part) => Number.parseInt(part, 10) || 0);
+  for (let index = 0; index < Math.max(a.length, b.length); index += 1) {
+    const difference = (a[index] ?? 0) - (b[index] ?? 0);
+    if (difference !== 0) {
+      return difference;
+    }
+  }
+  return 0;
+}
+
+// A product word only for a host whose `--version` prints another x.y.z before the product's own; none of the nine wave-2 hosts does
+// (a date or a commit hash follows the version: `2026.11.13-eacade1`, `v0.23.2 (2026.11.13)`).
 const PRODUCT_WORDS: Readonly<Record<LiveHostId, RegExp | undefined>> = Object.freeze({
   claude: /Claude Code/i,
   codex: /codex-cli/i,
   opencode: undefined,
   kimi: /kimi/i,
+  qwen: undefined,
+  pi: undefined,
+  hermes: undefined,
+  cursor: undefined,
+  kilo: undefined,
+  copilot: undefined,
+  augment: undefined,
+  codebuddy: undefined,
+  cline: undefined,
 });
 
 // The first x.y.z of `<bin> --version`: the one on the line that names the product when there is one (`2.1.322 (Claude Code)`,
@@ -211,8 +289,12 @@ export function hostLiveSkipReason(host: LiveHostId, tier: HostLiveTier, inputs:
   if (inputs.versionProbe.kind === "unavailable") {
     return `${named} --version did not run to a successful exit`;
   }
-  if (parseHostVersion(host, inputs.versionProbe.stdout) === undefined) {
+  const parsed = parseHostVersion(host, inputs.versionProbe.stdout);
+  if (parsed === undefined) {
     return `${named} --version printed no x.y.z version`;
+  }
+  if (spec.minVersion !== null && compareVersions(parsed, spec.minVersion) < 0) {
+    return `${spec.displayName} ${parsed} is below ${spec.minVersion}, the first release with built-in MCP; a recipe for it would be silently ignored (25-CONTEXT E-PI2)`;
   }
   if (host === "kimi" && inputs.versionProbe.stdout.includes(KIMI_STUB_MARKER)) {
     return "the installed kimi is the archived Python stub, which writes no configuration and answers no subcommand";
@@ -411,6 +493,16 @@ export const HOST_OVERRIDE_VARIABLES: Readonly<Record<LiveHostId, readonly strin
   codex: Object.freeze(["CODEX_HOME"]),
   opencode: Object.freeze([] as string[]),
   kimi: Object.freeze(["KIMI_SHARE_DIR"]),
+  qwen: Object.freeze(["QWEN_HOME"]),
+  pi: Object.freeze(["PI_CODING_AGENT_DIR"]),
+  hermes: Object.freeze(["HERMES_HOME"]),
+  cursor: Object.freeze([] as string[]),
+  // XDG_CONFIG_HOME is already inside the isolated root; the override names the same directory explicitly.
+  kilo: Object.freeze(["XDG_CONFIG_HOME"]),
+  copilot: Object.freeze(["COPILOT_HOME"]),
+  augment: Object.freeze(["AUGMENT_CACHE_DIR"]),
+  codebuddy: Object.freeze(["CODEBUDDY_CONFIG_DIR"]),
+  cline: Object.freeze(["CLINE_DIR"]),
 });
 
 export interface IsolatedHostEnvOptions {
