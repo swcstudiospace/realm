@@ -638,12 +638,16 @@ Plans:
 
 ### Phase 25: Host adapters wave 2: remaining GSD Core runtimes
 
-**Goal:** [To be planned]
-**Requirements**: TBD
-**Plans:** 0 plans
+**Goal:** The remaining GSD Core runtimes get config-only recipes where their config is documented (ten hosts; the owner approved deferring windsurf, trae and zcode), with a shadow guard and a YAML owned-key kind, fixture proofs, gated live validator tiers where a host is available, and docs that state the evidence tier per host.
+**Depends on:** Phase 24
+**Requirements**: WAVE2-01, WAVE2-02, WAVE2-03, WAVE2-04, WAVE2-05, WAVE2-06, WAVE2-07, WAVE2-08
+**Plans:** 4 plans
 
 Plans:
-- [ ] TBD (run /gsd-plan-phase 25 to break down)
+- [ ] 25-01-PLAN.md: eight JSON recipes (wave 1)
+- [ ] 25-02-PLAN.md: shadows guard, yaml-map kind, codebuddy and hermes recipes (wave 2)
+- [ ] 25-03-PLAN.md: gated live validator tier (wave 3)
+- [ ] 25-04-PLAN.md: docs, deferred-hosts, gates (wave 4)
 
 ### Phase 26: Plugin contract tests, boot tests and author docs
 
