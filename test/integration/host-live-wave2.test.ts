@@ -159,7 +159,7 @@ async function scenario(t: TestContext, host: Wave2LiveId, gate: HostLiveGate): 
     const afterAdd = await hostStatusOf(rig, host);
     drifted = afterAdd["status"] === "drifted";
     assert.equal(afterAdd["status"], identical ? "installed" : "drifted", `${label}: the entry is ${identical ? "" : "not "}value-identical, so status must say so (OQ-25-10): ${JSON.stringify(afterAdd)}`);
-    t.diagnostic(`${script.addOther.note}: Realm's entry is ${identical ? "value-identical" : "CHANGED"}; realm host status ${String(afterAdd["status"])}; entries ${JSON.stringify(afterAdd["entries"])}`);
+    t.diagnostic(`${script.addOther.note}: Realm's entry is ${identical ? "value-identical" : "CHANGED"}; realm host status ${afterAdd["status"]}; entries ${JSON.stringify(afterAdd["entries"])}`);
   }
 
   // E: uninstall. `touched` is whether the host rewrote the file Realm's install created.
