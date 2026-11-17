@@ -30,6 +30,8 @@ Phase 21 adds one contract for every CLI agent Realm may run in: a runtime table
 
 Phase 23 adds the boot path for the 18 `mcp-config` hosts: a host's configuration launches `realm mcp --host <id>` (or `realm acp --host <id>`, optionally with `--reattach`) and the session boots in six numbered steps, serves nothing until the boot settles, writes its presence marker and reports its boot to the daemon. `--host` takes a canonical host id only. Every adapter bundle and snippet shipped before Phase 24 still runs plain `realm mcp`, which boots the same way and reports as `unlabelled`; the Phase 24 and Phase 25 recipes write `--host <id>` (claude, opencode, codex, kimi, kimi-code and the ten Phase 25 hosts), and no live registration was made. The sequence, the exit codes and what is proven against what are in [host-plugin-contract.md](host-plugin-contract.md), "Boot integration". It is proven against fakes and a real daemon over fakes; the live rehearsal with a real Claude Code and a real Omp has not been run.
 
+To add a host, read [Writing a Realm host plugin](writing-a-host-plugin.md); the per-host summary is the [Host support matrix](host-support-matrix.md); what is not proven is tracked in [Host plugin gaps](host-plugin-gaps.md).
+
 ### Phase 25: the remaining runtimes
 
 Read date 2026-11-17. Each host below has a snippet with the file, the entry, the override variable, the host's validator command, whether and how the host loads project-level configuration (with the shadowing warning), what the host does to the file when it rewrites it, the recovery steps and the evidence tier reached. One line per host, from the decision table in [host-plugin-contract.md](host-plugin-contract.md), "The Phase 25 recipes":

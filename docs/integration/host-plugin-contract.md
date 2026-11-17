@@ -4,6 +4,8 @@ Phase 21 gives every CLI agent Realm may run in the same contract: a declarative
 
 No host is registered live by this repository. On the real table 16 of the 19 hosts have an install recipe (`omp`, `claude`, `opencode`, `codex`, `kimi`, `kimi-code`, and from Phase 25 `cursor`, `copilot`, `qwen`, `augment`, `pi`, `cline`, `antigravity`, `kilo`, `codebuddy`, `hermes`; see "The Omp recipe", "The Phase 24 recipes" and "The Phase 25 recipes"); the other 3 (`windsurf`, `trae`, `zcode`) are owner-approved deferrals that refuse as `recipe-pending` (see "Deferred hosts" and "Evidence limits"). Registering Realm in a live host configuration needs explicit owner approval per host, as `docs/integration/hosts.md` already states.
 
+To add a host, read [Writing a Realm host plugin](writing-a-host-plugin.md); the per-host summary is the [Host support matrix](host-support-matrix.md); what is not proven is tracked in [Host plugin gaps](host-plugin-gaps.md).
+
 ## Direction
 
 The plugin loads into the CLI agent, not the reverse. Omp is the reference implementation: it consumes `src/host/boot.ts` and passes the conformance harness through the Omp host API. `src/omp/extension.ts` reads the environment once at the entry edge, takes its bounds from the omp manifest through `resolveBoot`, builds the daemon attach through the shared `createDaemonAttach` and reports boot through the shared `createBootObserver` (log line, presence marker, host-boot report); `src/omp/plugin.ts` registers the session hooks, the retry command, the five Realm tools, the status paint and the guard; `src/omp/host-tools.ts` holds the fail-closed host-tool removal. The plugin never runs `down`: it closes its own client only, and the sandbox lasts until `realm down`. The contract states those seams once for every host, and `src/omp` holds no copy of a bound, a code list, the sub-state table or the jitter function.
@@ -74,6 +76,8 @@ import { defineBootConformance } from "../support/host-boot-conformance.js";
 
 defineBootConformance("my host hook", myBootHook, defaultManifestFor("omp", "1.0.0"));
 ```
+
+To write a boot hook for a new `extension` host, follow [Step 4: the boot hook](writing-a-host-plugin.md#step-4-the-boot-hook) of Writing a Realm host plugin.
 
 `defineBootConformance` registers nine cases against fakes (`test/support/fake-host-daemon.ts`): bounded attach, status readback and paint, refused-up retention, terminal attach failure, the fail-closed guard, client-only shutdown, re-attach off by default, bounded re-attach and workspace switching. `runBootConformance` returns the same results as data. The reference hook and four deliberately broken variants (`test/support/reference-boot-hook.ts`) prove the harness can pass and can fail. The real Omp plugin runs through it, driven through the Omp host API by a test double (`test/support/omp-boot-hook.ts`, `test/omp/boot-conformance.test.ts`). The harness was amended in two stated ways for a host that keeps a live session: while a session is live, a hook may keep one repaint poll armed (so "no timer remains" means no wait armed and at most that one poll), and the startup budget may run on the host's managed timers or on `withStartupBudget`. Every assertion made after shutdown stays strict. Phases 24 and 25 run it against each new host hook.
 
