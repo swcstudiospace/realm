@@ -54,6 +54,7 @@ covered_files:
   - "test/support/fixture-host.ts"
   - "test/support/host-boot-conformance.ts"
   - "test/support/reference-boot-hook.ts"
+covered_digest: "v3:sha256:eeb27dfd88bc73e5e4065151cbe344a4a1ce88765af4dcf6076e1163b7cd7f9f"
 ---
 
 # Phase 21: Host plugin contract and installer: Verification at bf70847
