@@ -1,7 +1,7 @@
 {
   "contract": "1.0.0",
   "flavor": "core",
-  "milestone": "v3.0 — Containment by Default",
+  "milestone": "v3.0 — Containment by Default (In Progress)",
   "phases": [
     {
       "number": "1",
@@ -170,9 +170,9 @@
     }
   ],
   "next": {
-    "command": "/gsd-progress",
-    "label": "Show progress",
-    "reason": "Unsure of state — showing progress"
+    "command": "/gsd-progress --next",
+    "label": "Advance to the next step",
+    "reason": "Phase 17 of 20 · 100% · executing"
   },
-  "updated_at": "2026-11-17T19:50:45.467Z"
+  "updated_at": "2026-11-17T21:16:40.171Z"
 }

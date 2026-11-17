@@ -1,20 +1,21 @@
 ---
 gsd_state_version: "1.0"
 milestone: v3.0
-milestone_name: Containment by Default
-status: Awaiting next milestone
-stopped_at: Phase 26 complete — all phases complete
-last_updated: "2026-11-17T18:33:59.381Z"
+milestone_name: Containment by Default (In Progress)
+current_phase: 28
+current_phase_name: Remove the Anda bridge
+status: executing
+stopped_at: Phase 27 complete, ready to execute Phase 28
+last_updated: "2026-11-17T21:16:39.854Z"
 last_activity: 2026-11-17
-last_activity_desc: Milestone v3.0 completed and archived
-state_head: 4b6a0691c5adfbcd32cfa1626f74a1849d748a15
+last_activity_desc: Phase 27 complete, transitioned to Phase 28
+state_head: f146e432d6204a73440c2628fc85a786364151f8
 progress:
-  total_phases: 15
+  total_phases: 20
   completed_phases: 33
-  total_plans: 68
+  total_plans: 11
   completed_plans: 68
   percent: 100
-current_phase: 26
 ---
 
 # Project State
@@ -28,10 +29,10 @@ See: .planning/PROJECT.md (updated 2026-10-29)
 
 ## Current Position
 
-Phase: Milestone v3.0 complete
-Plan: —
-Status: Awaiting next milestone
-Last activity: 2026-11-17 — Milestone v3.0 completed and archived
+Phase: 28 — Remove the Anda bridge
+Plan: Not started
+Status: Ready to execute
+Last activity: 2026-11-17 — Phase 27 complete, transitioned to Phase 28
 
 ## Current Recovery Boundaries
 
@@ -57,7 +58,7 @@ not a fresh instruction to restart discovery, install a runtime or close a phase
 
 **Velocity:**
 
-- Total plans completed: 77
+- Total plans completed: 79
 - Average duration: N/A
 - Total execution time: 0 hours
 
@@ -80,6 +81,7 @@ not a fresh instruction to restart discovery, install a runtime or close a phase
 | 24 | 4 | - | - |
 | 25 | 4 | - | - |
 | 26 | 3 | - | - |
+| 27 | 2 | - | - |
 
 **Recent Trend:**
 
@@ -226,7 +228,7 @@ Detail, by phase: Phase 3 covers RT-01, RT-02, RT-03, RT-09, and the live parts 
 ## Session Continuity
 
 Last session: 2026-11-08T16:41:15.821Z
-Stopped at: Phase 26 complete — all phases complete
+Stopped at: Phase 27 complete, ready to execute Phase 28
 Resume file: None
 
 Recorded commits (closure run): 72817e9 (private flag restored, engines >=22.13.0); 390f511 (causeCode and catalogue codes, host paths, lifecycle bound, root identity, exec margin); b6bc892 (daemon entry, AgentOS fail-closed, catalogue refusals, per-method control bounds); 8088159 (daemon owns sessions; tool method; daemon client; Omp and MCP attach); 4b1d4ab (smoke fixes: CLI probe, up and down exits, state-dir 0700); c55056a (traceability: requirements by evidence, spike facts, runtime config, Omp attach contract); a999c17 (audit gap closure: realm acp, refusal code mapping, one state-dir resolver, Omp status, pinned-root rebind, catch-site fixes, daemon server-failure stop); dd02034 (re-audit, planning, and docs); 54bc236 (MCP tool-call diagnostic); plus the decisions commit (see git log).

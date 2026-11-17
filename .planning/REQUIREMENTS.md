@@ -175,8 +175,8 @@ All v3.0 requirements are hypotheses until shipped and verified.
 
 ### v4.0 Anda removal, MCP hardening and production boot proof
 
-- [ ] **ANDAX-01**: Every Anda requirement and open question (ANDA-01..04, OQ-P3-11, PRD-DRV-01 carry notes) is dispositioned by a recorded owner decision of 2026-11-17: the Anda bridge is removed and the replacement research is the rationale
-- [ ] **ANDAX-02**: The v2.0 carry list is reconciled: FS-02, OMP-05, PRD-DRV-01 and UI-01 have an evidence-cited disposition (complete, accepted limitation, or still open with a reason)
+- [x] **ANDAX-01**: Every Anda requirement and open question (ANDA-01..04, OQ-P3-11, PRD-DRV-01 carry notes) is dispositioned by a recorded owner decision of 2026-11-17: the Anda bridge is removed and the replacement research is the rationale
+- [x] **ANDAX-02**: The v2.0 carry list is reconciled: FS-02, OMP-05, PRD-DRV-01 and UI-01 have an evidence-cited disposition (complete, accepted limitation, or still open with a reason)
 - [ ] **ANDAX-03**: The Anda bridge code, the `andaUrl` config key, `ANDA_UNREACHABLE`, `ANDA_VERSION_MISMATCH`, the degraded state, the Anda doctor check and the Anda tests are removed with no shim
 - [ ] **ANDAX-04**: The state machine, status labels, schemas, policy reference, README and integration docs no longer mention the removed surface, and the check:docs and check:gates gates pass
 - [ ] **ANDAX-05**: The removal is a documented breaking change: release note text, config migration note (an unknown `andaUrl` key is refused with a clear message or ignored with a warning, as decided in the phase context)
@@ -349,8 +349,8 @@ Each v3.0 requirement maps to exactly one phase. The carried requirements keep t
 | TEST-HOST-06 | Phase 26 | Complete |
 | TEST-HOST-07 | Phase 26 | Complete |
 | TEST-HOST-08 | Phase 26 | Complete |
-| ANDAX-01 | Phase 27 | Planned |
-| ANDAX-02 | Phase 27 | Planned |
+| ANDAX-01 | Phase 27 | Complete |
+| ANDAX-02 | Phase 27 | Complete |
 | ANDAX-03 | Phase 28 | Planned |
 | ANDAX-04 | Phase 28 | Planned |
 | ANDAX-05 | Phase 28 | Planned |
