@@ -12,6 +12,7 @@
 import { isAbsolute } from "node:path";
 import { ERROR_CATALOGUE, RealmError, type ErrorCode } from "../core/errors.js";
 import { packageVersion } from "../core/package-version.js";
+import { readPresence } from "../host/presence.js";
 import { createHostAdapter, type HostAdapterDeps, type RecipeHostAdapter } from "../host/adapter.js";
 import { hostEnvFrom, hostLogPath } from "../host/env.js";
 import { defaultManifestFor } from "../host/manifest.js";
@@ -254,8 +255,17 @@ async function runDetect(host: HostId | undefined, ports: Ports): Promise<CliRes
 async function runStatus(host: HostId | undefined, ports: Ports): Promise<CliResult> {
   const rows: unknown[] = [];
   for (const id of host === undefined ? HOST_IDS : [host]) {
-    const found = await adapterOf(id, ports).status(ports.env);
-    rows.push({ id, status: found.status, entries: found.entries });
+    const adapter = adapterOf(id, ports);
+    const found = await adapter.status(ports.env);
+    if (ports.runtimes[id].integration === "extension") {
+      // An extension host also reports whether its shim target exists, how many live processes loaded the plugin (presence
+      // markers: counts only) and which table `conflicts` already exist under the home, so a doubled install is visible.
+      const sessions = await readPresence(ports.adapterDeps.stateDir, id);
+      const conflicts = (await adapter.detect(ports.env)).conflicts;
+      rows.push({ id, status: found.status, entries: found.entries, plugin: { target: found.extensionTarget, sessions, conflicts } });
+    } else {
+      rows.push({ id, status: found.status, entries: found.entries });
+    }
   }
   return success(host === undefined ? rows : rows[0]);
 }

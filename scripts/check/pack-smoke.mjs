@@ -38,6 +38,7 @@ export const ADAPTER_FILES = [
   "adapters/prime-agent/package.json",
   "adapters/prime-agent/MCP.md",
   "adapters/prime-agent/skills/realm/SKILL.md",
+  "adapters/omp/index.js",
 ];
 
 // Source directories whose every file must exist in the installed package.
@@ -57,6 +58,7 @@ export const HOST_MODULE_FILES = [
   "dist/src/host/adapter.js",
   "dist/src/host/host-audit.js",
   "dist/src/host/env.js",
+  "dist/src/host/presence.js",
   "dist/src/cli/host.js",
 ];
 

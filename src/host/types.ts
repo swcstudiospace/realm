@@ -68,6 +68,9 @@ export interface HostRuntimeEntry {
   readonly envOverride: string | null;
   readonly binaries: readonly string[];
   readonly recipe: InstallRecipe | null;
+  // Paths relative to the user home (POSIX separators, no `..`) whose presence means the host already loads
+  // Realm another way, so an install would load it twice. Optional so fixture entries in tests still compile.
+  readonly conflicts?: readonly string[];
 }
 
 // ---- Manifest ---------------------------------------------------------------

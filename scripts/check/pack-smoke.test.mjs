@@ -81,10 +81,11 @@ test("tarballFromPackOutput rejects output without exactly one tarball", () => {
   assert.throws(() => tarballFromPackOutput(JSON.stringify([{ name: "agent-realm" }]), "pack-dest"), /exactly one tarball/);
 });
 
-test("ADAPTER_FILES names the four snippet and guide files besides the manifests, and each exists in the source tree", () => {
+test("ADAPTER_FILES names the snippet, guide and shim files besides the manifests, and each exists in the source tree", () => {
   for (const path of [
     "adapters/hermes-agent/mcp.snippet.yaml",
     "adapters/muse-code/mcp-settings.snippet.json",
+    "adapters/omp/index.js",
     "adapters/prime-agent/MCP.md",
     "adapters/prime-agent/skills/realm/SKILL.md",
   ]) {

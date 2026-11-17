@@ -25,6 +25,7 @@ import {
   type ControlSelection,
 } from "../daemon/channel.js";
 import { connectDaemon, selectionOf, type DaemonClient, type DaemonStatus } from "../daemon/client.js";
+import { findNodeBinary } from "../daemon/node-runtime.js";
 import { daemonSpawnEnv } from "../daemon/spawn-env.js";
 import { ensureDaemon, daemonAnswers, daemonLogPath, reportingStartFailure } from "../daemon/ensure.js";
 import { defaultRunCommand, runChecks, type DoctorOptions } from "../doctor/checks.js";
@@ -356,14 +357,21 @@ export function launchFilteredDaemon(
   stateDir: string,
   source: EnvironmentLike,
   spawnImpl: SpawnDaemon = defaultSpawnDaemon,
+  findNode: (pathValue: string | undefined) => string | null = findNodeBinary,
 ): void {
-  // A Bun host never spawns the daemon: process.execPath there is the Omp binary, which would read the entry as a prompt
-  // and run an unsupervised agent session. The attach refuses with REALM_NOT_ACTIVE until realm up has started the daemon.
+  // Under a Bun host process.execPath is the Omp binary, which would read the entry as a prompt and run an unsupervised
+  // agent session, so it is never used there. The daemon runs on the Node found in an absolute directory of the handed-in
+  // PATH; with none, the attach refuses with REALM_NOT_ACTIVE and no child exists.
+  let runtime = process.execPath;
   if (Object.hasOwn(process.versions, "bun")) {
-    throw makeRealmError("REALM_NOT_ACTIVE");
+    const node = findNode(source.PATH);
+    if (node === null) {
+      throw makeRealmError("REALM_NOT_ACTIVE");
+    }
+    runtime = node;
   }
   withDaemonLog(stateDir, (log) => {
-    spawnImpl(process.execPath, [entry], {
+    spawnImpl(runtime, [entry], {
       detached: true,
       stdio: ["ignore", log, log],
       env: daemonSpawnEnv(source),

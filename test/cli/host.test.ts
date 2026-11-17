@@ -1,13 +1,16 @@
-// realm host (HOST-07): list, detect, status, install and uninstall through the real runCli. The real runtime table has no
-// recipe, so every real install refuses as recipe-pending; the lifecycle is proven on an injected fixture host through the
-// CliDeps.hostRuntimes and CliDeps.hostAdaptersDir seams, in a temporary HOME and state directory. Nothing touches a real host.
+// realm host (HOST-07): list, detect, status, install and uninstall through the real runCli. On the real table only omp has an
+// install recipe (Phase 22), so every other real install refuses as recipe-pending; the generic lifecycle is proven on an injected
+// fixture host through the CliDeps.hostRuntimes and CliDeps.hostAdaptersDir seams, and the omp recipe on the real table with a
+// fixture package root, in a temporary HOME and state directory. Nothing touches a real host.
 
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { checkAuditFile } from "../../src/audit/chain.js";
 import { runCli, type CliDeps, type CliResult } from "../../src/cli/main.js";
+import { writePresence } from "../../src/host/presence.js";
 import { HOST_RUNTIMES } from "../../src/host/runtimes.js";
 import { HOST_IDS, type HostId, type HostRuntimeEntry, type InstallRecipe } from "../../src/host/types.js";
 import { fixtureEntry, fixtureRecipe, makeFixtureHost, treeHash, writeAt, type FixtureHost } from "../support/fixture-host.js";
@@ -154,12 +157,13 @@ void test("HOST-07: an unknown host is a usage error; gemini and vscode are unkn
 
 // ---- list -------------------------------------------------------------------------------------------------------------------
 
-void test("HOST-07: list needs no config, no HOME and no file system, and names the 19 hosts with recipe pending", async () => {
+void test("HOST-07: list needs no config, no HOME and no file system, and names the 19 hosts, recipe ready for omp and pending for the other 18", async () => {
   const result = await runCli(["host", "list"], { env: {}, readConfig: () => { throw new Error("list must not read the config"); } });
   const rows = json(result) as { id: string; flag: string; aliases: string[]; tier: string; integration: string; homeVerified: boolean; recipe: string }[];
   assert.deepEqual(rows.map((row) => row.id), [...HOST_IDS]);
   assert.equal(rows.length, 19);
-  assert.ok(rows.every((row) => row.recipe === "pending"));
+  assert.ok(rows.every((row) => row.recipe === (row.id === "omp" ? "ready" : "pending")));
+  assert.equal(rows.filter((row) => row.recipe === "pending").length, 18);
   assert.deepEqual(Object.keys(rows[0] ?? {}), ["id", "flag", "aliases", "tier", "integration", "homeVerified", "recipe"]);
   const windsurf = rows.find((row) => row.id === "windsurf");
   assert.deepEqual(windsurf?.aliases, ["devin-desktop"]);
@@ -173,7 +177,8 @@ void test("HOST-07: list reports recipe ready for a host whose runtime entry has
   const r = rig(t);
   const rows = json(await realmHost(r, "list")) as { id: string; recipe: string }[];
   assert.equal(rows.find((row) => row.id === "claude")?.recipe, "ready");
-  assert.equal(rows.filter((row) => row.recipe === "ready").length, 1);
+  assert.equal(rows.find((row) => row.id === "omp")?.recipe, "ready");
+  assert.equal(rows.filter((row) => row.recipe === "ready").length, 2);
 });
 
 // ---- detect -----------------------------------------------------------------------------------------------------------------
@@ -244,7 +249,7 @@ void test("HOST-07: status, install and uninstall exit 1 with the catalogue code
 
 // ---- The real table ---------------------------------------------------------------------------------------------------------
 
-void test("HOST-07: on the real table every install refuses as recipe-pending (POLICY_DENIED) and changes no home file, with or without --dry-run", async (t) => {
+void test("HOST-07: on the real table the 18 hosts without a recipe refuse install as recipe-pending (POLICY_DENIED) and change no home file, with or without --dry-run", async (t) => {
   const fx = makeFixtureHost(t);
   const claudeHome = join(fx.root, "claude-home");
   mkdirSync(claudeHome);
@@ -255,7 +260,7 @@ void test("HOST-07: on the real table every install refuses as recipe-pending (P
     now: () => new Date("2026-01-01T00:00:00.000Z"),
   };
   const before = treeHash(fx.home) + treeHash(claudeHome);
-  for (const id of HOST_IDS) {
+  for (const id of HOST_IDS.filter((host) => host !== "omp")) {
     for (const flags of [[], ["--dry-run"]]) {
       const result = await runCli(["host", "install", id, ...flags], deps);
       assert.equal(result.exitCode, 1, `${id} ${flags.join(" ")}`);
@@ -271,6 +276,168 @@ void test("HOST-07: on the real table every install refuses as recipe-pending (P
   const uninstall = json(await runCli(["host", "uninstall", "claude"], deps)) as { status: string; actions: unknown[] };
   assert.equal(uninstall.status, "noop");
   assert.deepEqual(uninstall.actions, []);
+});
+
+// ---- The omp recipe on the real table (OMPB-04, OMPB-05) -----------------------------------------------------------------------
+
+const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
+const OMP_SHIM_REL = "extensions/realm/index.js";
+const OMP_UNBUILT_LINE = "realm host install: extension-unbuilt: the Realm extension entry is not built; run npm run build in the Realm package\n";
+const OMP_LOADED_LINE = "realm host install: already-loaded: the host already loads Realm through a plugin link; remove that link first\n";
+
+interface OmpRig {
+  readonly fx: FixtureHost;
+  readonly deps: CliDeps;
+  readonly agentDir: string;
+  readonly extensionPath: string;
+  readonly auditFile: string;
+  readonly hostLog: string;
+  readonly receiptFile: string;
+}
+
+// The real table, a temporary HOME with <home>/.omp/agent, and a fixture package root <root>/pkg holding the real shim under
+// adapters/omp and (unless asked otherwise) a stub dist/src/omp/extension.js.
+function ompRig(t: TestContext, options: { readonly stub?: boolean } = {}): OmpRig {
+  const fx = makeFixtureHost(t);
+  const agentDir = join(fx.home, ".omp", "agent");
+  mkdirSync(agentDir, { recursive: true });
+  const pkg = join(fx.root, "pkg");
+  writeAt(join(pkg, "adapters", "omp", "index.js"), readFileSync(join(REPO_ROOT, "adapters", "omp", "index.js"), "utf8"));
+  const extensionPath = join(pkg, "dist", "src", "omp", "extension.js");
+  if (options.stub !== false) {
+    writeAt(extensionPath, "export default async function stubExtension() {}\n");
+  }
+  const deps: CliDeps = {
+    env: { HOME: fx.home, PATH: "" },
+    readConfig: () => ({ image: IMAGE, stateDir: fx.stateDir, workspaceRoot: join(fx.root, "projects") }),
+    now: () => new Date("2026-01-01T00:00:00.000Z"),
+    hostAdaptersDir: join(pkg, "adapters"),
+  };
+  return {
+    fx,
+    deps,
+    agentDir,
+    extensionPath,
+    auditFile: join(fx.stateDir, "audit", "host-plugins.jsonl"),
+    hostLog: join(fx.stateDir, "host.log"),
+    receiptFile: join(fx.stateDir, "hosts", "omp.receipt.json"),
+  };
+}
+
+void test("OMPB-04: on the real table with nothing detected, install omp refuses as not-detected and writes nothing", async (t) => {
+  const fx = makeFixtureHost(t);
+  const deps: CliDeps = {
+    env: { HOME: fx.home, PATH: "" },
+    readConfig: () => ({ image: IMAGE, stateDir: fx.stateDir, workspaceRoot: join(fx.root, "projects") }),
+    now: () => new Date("2026-01-01T00:00:00.000Z"),
+  };
+  const before = treeHash(fx.home);
+  for (const flags of [[], ["--dry-run"]]) {
+    const result = await runCli(["host", "install", "omp", ...flags], deps);
+    assert.equal(result.exitCode, 1, flags.join(" "));
+    assert.equal(result.stdout, "POLICY_DENIED\n");
+    assert.equal(result.stderr, "realm host install: not-detected: the host was not detected on this machine\n");
+  }
+  assert.equal(treeHash(fx.home), before);
+  assert.equal(existsSync(join(fx.stateDir, "audit")), false);
+  assert.equal(existsSync(join(fx.stateDir, "hosts")), false);
+});
+
+void test("OMPB-04: realm host status omp is detected, not recipe-pending, when the agent directory exists and no receipt does", async (t) => {
+  const r = ompRig(t);
+  const status = json(await runCli(["host", "status", "omp"], r.deps)) as { id: string; status: string; entries: unknown[] };
+  assert.deepEqual(status, {
+    id: "omp",
+    status: "detected",
+    entries: [],
+    plugin: { target: null, sessions: { live: 0, stale: 0, unreadable: 0 }, conflicts: [] },
+  });
+});
+
+void test("OMPB-04: dry-run, install, status, a second install, and uninstall of omp on a fixture package and --config-home", async (t) => {
+  const r = ompRig(t);
+  const before = treeHash(r.fx.home);
+  const configHome = ["--config-home", r.agentDir];
+  const run = (...words: string[]): Promise<CliResult> => runCli(["host", ...words], r.deps);
+
+  const dry = json(await run("install", "omp", "--dry-run", ...configHome)) as { id: string; status: string; dryRun: boolean; actions: { path: string; action: string }[] };
+  assert.equal(dry.id, "omp");
+  assert.equal(dry.status, "planned");
+  assert.equal(dry.dryRun, true);
+  assert.deepEqual(dry.actions.filter((action) => action.path === OMP_SHIM_REL).map((action) => action.action), ["create"]);
+  assert.equal(treeHash(r.fx.home), before, "dry-run changes no host file");
+  assert.equal(existsSync(r.auditFile), false, "dry-run writes no audit line");
+  assert.equal(existsSync(r.receiptFile), false, "dry-run writes no receipt");
+  assert.deepEqual(logEvents(r.hostLog), ["host.install.plan"]);
+
+  const installed = json(await run("install", "omp", ...configHome)) as { id: string; status: string; dryRun: boolean; actions: { path: string }[] };
+  assert.equal(installed.status, "installed");
+  assert.equal(installed.dryRun, false);
+  assert.ok(installed.actions.some((action) => action.path === OMP_SHIM_REL));
+  const shim = join(r.agentDir, ...OMP_SHIM_REL.split("/"));
+  const text = readFileSync(shim, "utf8");
+  assert.ok(text.includes(JSON.stringify(pathToFileURL(r.extensionPath).href)), "the shim names the fixture extension by file URL");
+  assert.equal(text.includes("@realm:"), false);
+  assert.equal(auditLineCount(r.auditFile), 2);
+  const chain = checkAuditFile(r.auditFile);
+  assert.equal(chain.ok, true);
+  assert.equal(chain.lines, 2);
+  assert.ok(logEvents(r.hostLog).includes("host.install.applied"));
+
+  const again = json(await run("install", "omp", ...configHome)) as { status: string; actions: { action: string }[] };
+  assert.equal(again.status, "noop");
+  assert.ok(again.actions.every((action) => action.action === "noop"));
+  assert.equal(auditLineCount(r.auditFile), 2, "a noop adds no audit line");
+
+  const status = json(await run("status", "omp")) as { id: string; status: string; entries: { path: string; state: string }[] };
+  assert.deepEqual(status, {
+    id: "omp",
+    status: "installed",
+    entries: [{ path: OMP_SHIM_REL, state: "ok" }],
+    plugin: { target: "present", sessions: { live: 0, stale: 0, unreadable: 0 }, conflicts: [] },
+  });
+
+  const dryRemove = json(await run("uninstall", "omp", "--dry-run", ...configHome)) as { status: string };
+  assert.equal(dryRemove.status, "planned");
+  assert.equal(auditLineCount(r.auditFile), 2);
+  const removed = json(await run("uninstall", "omp", ...configHome)) as { status: string };
+  assert.equal(removed.status, "removed");
+  assert.equal(treeHash(r.fx.home), before, "uninstall is the exact inverse of install");
+  assert.equal(auditLineCount(r.auditFile), 4);
+  assert.equal(checkAuditFile(r.auditFile).ok, true);
+  assert.ok(logEvents(r.hostLog).includes("host.uninstall.applied"));
+  const after = json(await run("status", "omp")) as { status: string };
+  assert.equal(after.status, "detected");
+});
+
+void test("OMPB-05: a plugin link refuses install omp with POLICY_DENIED and already-loaded, and writes no receipt or audit line", async (t) => {
+  const r = ompRig(t);
+  mkdirSync(join(r.fx.home, ".omp", "plugins", "node_modules", "agent-realm"), { recursive: true });
+  const before = treeHash(r.fx.home);
+  for (const flags of [[], ["--dry-run"], ["--config-home", r.agentDir]]) {
+    const result = await runCli(["host", "install", "omp", ...flags], r.deps);
+    assert.equal(result.exitCode, 1, flags.join(" "));
+    assert.equal(result.stdout, "POLICY_DENIED\n");
+    assert.equal(result.stderr, OMP_LOADED_LINE);
+  }
+  assert.equal(treeHash(r.fx.home), before);
+  assert.equal(existsSync(r.receiptFile), false);
+  assert.equal(existsSync(r.auditFile), false);
+  assert.ok(logEvents(r.hostLog).includes("host.install.refused"));
+});
+
+void test("OMPB-05: an unbuilt extension entry refuses install omp with POLICY_DENIED and extension-unbuilt, and writes no receipt or audit line", async (t) => {
+  const r = ompRig(t, { stub: false });
+  const before = treeHash(r.fx.home);
+  for (const flags of [[], ["--dry-run"]]) {
+    const result = await runCli(["host", "install", "omp", ...flags], r.deps);
+    assert.equal(result.exitCode, 1, flags.join(" "));
+    assert.equal(result.stdout, "POLICY_DENIED\n");
+    assert.equal(result.stderr, OMP_UNBUILT_LINE);
+  }
+  assert.equal(treeHash(r.fx.home), before);
+  assert.equal(existsSync(r.receiptFile), false);
+  assert.equal(existsSync(r.auditFile), false);
 });
 
 void test("HOST-07: status reports every host, not-detected when its home is absent", async (t) => {
@@ -434,4 +601,25 @@ void test("HOST-07: log lines fall back to stderr when host.log cannot be opened
   assert.deepEqual(eventsOfLines(result.stderr), ["host.install.plan"]);
   const summary: unknown = JSON.parse(result.stdout);
   assert.ok(typeof summary === "object" && summary !== null && "status" in summary && summary.status === "planned");
+});
+
+void test("OMPB-07: realm host status omp counts live plugin sessions and names a duplicate plugin link, with no path", async (t) => {
+  const r = ompRig(t);
+  const run = (): Promise<CliResult> => runCli(["host", "status", "omp"], r.deps);
+  assert.equal((await runCli(["host", "install", "omp"], r.deps)).exitCode, 0);
+  writePresence(r.fx.stateDir, "omp", { pid: process.pid, startedAt: "2026-11-17T10:00:00.000Z", sessionId: "p0123456789ab", attach: "attached", code: null });
+  writeAt(join(r.fx.stateDir, "hosts", "omp-active", "5.json"), "garbage");
+  mkdirSync(join(r.fx.home, ".omp", "plugins", "node_modules", "agent-realm"), { recursive: true });
+  const status = json(await run()) as { plugin: { target: string; sessions: { live: number; stale: number; unreadable: number }; conflicts: string[] } };
+  assert.equal(status.plugin.target, "present");
+  assert.equal(status.plugin.sessions.live, 1);
+  assert.equal(status.plugin.sessions.unreadable, 1);
+  assert.deepEqual(status.plugin.conflicts, [".omp/plugins/node_modules/agent-realm"]);
+  assert.equal(JSON.stringify(status).includes(r.fx.root), false, "no absolute path in the status");
+});
+
+void test("OMPB-07: the status row of a host that is not an extension host keeps exactly id, status and entries", async (t) => {
+  const r = rig(t);
+  const status = json(await realmHost(r, "status", "claude")) as Record<string, unknown>;
+  assert.deepEqual(Object.keys(status).sort(), ["entries", "id", "status"]);
 });

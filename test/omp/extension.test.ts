@@ -1,6 +1,6 @@
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,6 +10,9 @@ import type { OmpExtensionApi, OmpSessionContext } from "../../src/omp/plugin.js
 import type { HostToolDefinition } from "../../src/omp/tools.js";
 import { controlSocketPath, sessionIdOfWorkspace } from "../../src/session/paths.js";
 import { RealmError } from "../../src/core/errors.js";
+import { BOOT_BOUNDS, resolveBoot } from "../../src/host/boot.js";
+import { defaultManifestFor, parseHostPluginManifest } from "../../src/host/manifest.js";
+import { pollUntil } from "../support/timing.js";
 
 const IMAGE = `registry.example.com/realm/workload@sha256:${"0".repeat(64)}`;
 const AT = "2026-10-22T00:00:00.000Z";
@@ -636,4 +639,88 @@ void test("an attach for a directory that does not exist is refused with POLICY_
   await startOmpSession(t, host, paints, join(base, "missing"), "POLICY_DENIED");
 
   assert.deepEqual(hits, [], "no socket is opened for a directory that does not exist");
+});
+
+// ---- presence marker and manifest bounds ----------------------------------------------------------------------------------------
+
+// A session context whose status paints are recorded; its timers are real and the plugin clears them at shutdown.
+function recordingCtx(cwd: string, statuses: string[]): OmpSessionContext {
+  return {
+    cwd,
+    ui: {
+      setStatus(_key: string, text: string): void {
+        statuses.push(text);
+      },
+      notify(): void {},
+    },
+    setTimeout: (callback, ms) => setTimeout(callback, ms),
+    setInterval: (callback, ms) => setInterval(callback, ms),
+    clearTimer: (handle) => {
+      clearTimeout(handle as NodeJS.Timeout);
+    },
+  };
+}
+
+function markerFile(base: string): string {
+  return join(base, "state", "hosts", "omp-active", `${String(process.pid)}.json`);
+}
+
+void test("OMPB-07: the extension writes a presence marker after an attach and removes it on session_shutdown", async (t) => {
+  const base = scratchDir(t);
+  const socketPath = configure(t, base, base);
+  await serveDaemon(t, socketPath, [], (request) => answeredFor(request, ACTIVE_STATUS));
+  const host = createHost();
+  realmExtension(host.pi);
+  const statuses: string[] = [];
+  const start = host.handlers.get("session_start");
+  assert.ok(start, "the extension registers a session_start handler");
+  start({ type: "session_start" }, recordingCtx(base, statuses));
+  await pollUntil(() => existsSync(markerFile(base)), "the presence marker is written");
+  const record = JSON.parse(readFileSync(markerFile(base), "utf8")) as Record<string, unknown>;
+  assert.equal(record.schemaVersion, 1);
+  assert.equal(record.pid, process.pid);
+  assert.equal(record.attach, "attached");
+  assert.equal(record.code, null);
+  assert.equal(record.sessionId, sessionIdOfWorkspace(realpathSync(base)));
+  assert.ok(statuses.some((text) => text.includes("realm active")), "the status was painted before the marker");
+  const shutdown = host.handlers.get("session_shutdown");
+  assert.ok(shutdown, "the extension registers a session_shutdown handler");
+  shutdown({ type: "session_shutdown" }, recordingCtx(base, statuses));
+  await pollUntil(() => !existsSync(markerFile(base)), "the presence marker is removed");
+});
+
+void test("OMPB-07: a presence failure writes one stderr line with only a code and changes no attach outcome", async (t) => {
+  const base = scratchDir(t);
+  const socketPath = configure(t, base, base);
+  // A regular file where the hosts directory belongs: the marker cannot be created.
+  writeFileSync(join(base, "state", "hosts"), "blocked");
+  await serveDaemon(t, socketPath, [], (request) => answeredFor(request, ACTIVE_STATUS));
+  const lines: string[] = [];
+  t.mock.method(process.stderr, "write", (chunk: string | Uint8Array): boolean => {
+    lines.push(String(chunk));
+    return true;
+  });
+  const host = createHost();
+  realmExtension(host.pi);
+  const statuses: string[] = [];
+  const start = host.handlers.get("session_start");
+  assert.ok(start);
+  start({ type: "session_start" }, recordingCtx(base, statuses));
+  await pollUntil(() => lines.some((line) => line.startsWith("realm: presence marker not updated")), "the presence failure is reported");
+  assert.deepEqual(
+    lines.filter((line) => line.startsWith("realm: presence marker not updated")),
+    ["realm: presence marker not updated: PATH_ESCAPE\n"],
+  );
+  assert.ok(statuses.some((text) => text.includes("realm active")), "the attach still ends active");
+  assert.equal(statuses.some((text) => /error|refus/i.test(text)), false, "no failure is painted");
+  host.handlers.get("session_shutdown")?.({ type: "session_shutdown" }, recordingCtx(base, statuses));
+});
+
+void test("OMPB-06: the omp manifest default resolves to BOOT_BOUNDS, and REALM_OMP_REATTACH=1 turns only re-attach on", () => {
+  const manifest = defaultManifestFor("omp", "1.2.3");
+  const off = resolveBoot(parseHostPluginManifest({ ...manifest, boot: { reattach: { enabled: reattachEnabledOf(undefined) } } }));
+  assert.deepEqual(off, BOOT_BOUNDS);
+  const on = resolveBoot(parseHostPluginManifest({ ...manifest, boot: { reattach: { enabled: reattachEnabledOf("1") } } }));
+  assert.equal(on.reattach.enabled, true);
+  assert.deepEqual({ ...on, reattach: { ...on.reattach, enabled: false } }, BOOT_BOUNDS);
 });

@@ -18,13 +18,11 @@ import { gateMutation } from "../../src/lifecycle/mutation-gate.js";
 import { ToolDispatcher, type ToolOutcome } from "../../src/tools/dispatch.js";
 import type { HostToolDefinition } from "../../src/omp/tools.js";
 import {
-  GUARD_STATUS_BUDGET_MS,
   GUARDED_HOST_TOOLS,
   REALM_RETRY_COMMAND,
   REALM_STATUS_KEY,
-  STARTUP_BUDGET_MS,
-  STATUS_POLL_MS,
   guardHostToolCall,
+  createRealmPlugin,
   registerRealmPlugin,
   renderRealmStatus,
   type DaemonAttach,
@@ -35,19 +33,28 @@ import {
   type OmpSessionContext,
   type OmpStatusUi,
   type RealmPluginOptions,
+  type PluginAttachOutcome,
+  type RealmPluginView,
   type RealmRetryCommand,
 } from "../../src/omp/plugin.js";
 import {
+  BOOT_BOUNDS,
   equalJitterDelayMs,
-  LINK_LOST_CODES,
-  REATTACH_BASE_DELAY_MS,
-  REATTACH_DELAY_CAP_MS,
-  REATTACH_RETRY_CAP,
   reattachTransitionAllowed,
-  RETRYABLE_ATTACH_CODES,
-  type ReattachState,
-} from "../../src/omp/reattach.js";
+  type BootLink,
+  type ResolvedBoot,
+} from "../../src/host/boot.js";
 import { hostToolSetOf, type HostToolSet } from "../../src/omp/host-tools.js";
+
+const STARTUP_BUDGET_MS = BOOT_BOUNDS.startupBudgetMs;
+const GUARD_STATUS_BUDGET_MS = BOOT_BOUNDS.guardStatusBudgetMs;
+const STATUS_POLL_MS = BOOT_BOUNDS.statusPollMs;
+const REATTACH_RETRY_CAP = BOOT_BOUNDS.reattach.retryCap;
+const REATTACH_BASE_DELAY_MS = BOOT_BOUNDS.reattach.baseDelayMs;
+const REATTACH_DELAY_CAP_MS = BOOT_BOUNDS.reattach.capDelayMs;
+const LINK_LOST_CODES: readonly string[] = BOOT_BOUNDS.linkLostCodes;
+const RETRYABLE_ATTACH_CODES: readonly string[] = BOOT_BOUNDS.retryableAttachCodes;
+type ReattachState = BootLink;
 
 // OMP-01 to OMP-05 plugin proof (P5-D4 to P5-D6, P5-D8, P5-D14). Every test runs the real plugin
 // wiring against a FakeDaemon injected through attachDaemon. The doubles are the FakePi host
@@ -362,6 +369,8 @@ interface FixtureOptions {
   readonly attach?: (daemon: FakeDaemon) => Promise<DaemonAttach>;
   // Bounded re-attach (O4). Omitted means the attach-once behaviour the existing tests pin.
   readonly reattach?: { readonly enabled: boolean; readonly random: () => number };
+  // Bounds and callbacks the Phase 22 plugin options add. Omitted means the defaults the existing tests pin.
+  readonly extra?: Pick<RealmPluginOptions, "bounds" | "onAttach" | "onSessionEnd">;
 }
 
 interface Fixture {
@@ -371,6 +380,7 @@ interface Fixture {
   readonly tools: HostToolSet;
   readonly daemon: FakeDaemon;
   readonly attachCalls: string[];
+  readonly view: () => RealmPluginView;
 }
 
 function makeFixture(options: FixtureOptions = {}): Fixture {
@@ -393,9 +403,10 @@ function makeFixture(options: FixtureOptions = {}): Fixture {
       return Promise.resolve({ client: daemon, refusal: null });
     },
     ...(options.reattach === undefined ? {} : { reattach: options.reattach }),
+    ...(options.extra ?? {}),
   };
-  const tools = registerRealmPlugin(pi, pluginOptions);
-  return { ui, ctx, pi, daemon, attachCalls, tools };
+  const plugin = createRealmPlugin(pi, pluginOptions);
+  return { ui, ctx, pi, daemon, attachCalls, tools: plugin.tools, view: plugin.view };
 }
 
 // The host calls a session_switch handler with the event first and the context of the session switched to second. The
@@ -2383,4 +2394,248 @@ void test("reconnect error is disclosed without changing the shared connecting r
   assert.equal(statusTexts(ui).at(-1), `${DISCONNECTED_LABEL} · connecting (REALM_NOT_ACTIVE) · ${CLOCK_ISO} · ${LAST_ADVISORY_STATUS}`);
   renderRealmStatus(ui, connecting, "advisory", false, "REALM_NOT_ACTIVE");
   assert.equal(statusTexts(ui).length, 2, "unchanged full reconnect status stays deduplicated");
+});
+
+// ---- Phase 22: the plugin consumes src/host/boot.ts -----------------------------------------------------------------
+
+// A resolved boot block with the named bounds changed. Re-attach stays as the base has it unless the test says so.
+function boundsWith(change: Partial<ResolvedBoot>): ResolvedBoot {
+  return { ...BOOT_BOUNDS, ...change };
+}
+
+void test("bounds: the startup budget is armed at bounds.startupBudgetMs and expires the attach with STARTUP_BUDGET_EXCEEDED", async () => {
+  const fixture = makeFixture({
+    attach: () => new Promise<DaemonAttach>(() => undefined),
+    extra: { bounds: boundsWith({ startupBudgetMs: 50 }) },
+  });
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  assert.ok(fixture.ctx.timeouts.includes(50), "the attach runs under the overridden budget");
+  assert.equal(fixture.ctx.timeouts.includes(STARTUP_BUDGET_MS), false, "the default budget is not armed");
+  expireTimer(fixture.ctx, 50);
+  await waitForDetail(fixture.ui, "STARTUP_BUDGET_EXCEEDED");
+  assert.deepEqual(fixture.view(), { state: "error", mode: null, link: "off", code: "STARTUP_BUDGET_EXCEEDED" });
+});
+
+void test("bounds: the guarded status read and the repaint poll use bounds.guardStatusBudgetMs and bounds.statusPollMs", async () => {
+  const fixture = makeFixture({ extra: { bounds: boundsWith({ guardStatusBudgetMs: 70, statusPollMs: 30 }) } });
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitForDetail(fixture.ui, "container running");
+  assert.ok(fixture.ctx.intervals.some((interval) => interval.ms === 30), "the repaint poll runs at the overridden interval");
+  assert.equal(fixture.ctx.intervals.some((interval) => interval.ms === STATUS_POLL_MS), false);
+  fixture.daemon.hangStatus = true;
+  const verdict = toolCallOf(fixture.pi)({ toolName: "edit" });
+  assert.ok(fixture.ctx.timeouts.includes(70), "the guarded read is bounded by the overridden budget");
+  expireTimer(fixture.ctx, 70);
+  assert.deepEqual(await verdict, { block: true, reason: "TOOL_TIMEOUT" });
+});
+
+void test("bounds: bounds.reattach.retryCap and the delay window bound the re-attach streak", async () => {
+  const fixture = makeFixture({
+    attach: () => Promise.reject(makeRealmError("REALM_NOT_ACTIVE")),
+    reattach: { enabled: true, random: seededRandom(5) },
+    extra: { bounds: boundsWith({ reattach: { enabled: true, retryCap: 2, baseDelayMs: 10, capDelayMs: 20 } }) },
+  });
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitArmed(fixture);
+  const first = soleWait(fixture.ctx).ms;
+  assert.ok(first >= 5 && first <= 10, `the first wait is ${String(first)}, within [5, 10]`);
+  fireWait(fixture.ctx);
+  await waitUntil(() => fixture.attachCalls.length === 2);
+  await waitUntil(() => pendingWaits(fixture.ctx).length === 1 && fixture.ui.notifications.some((text) => text.includes("attempt 2 of 2")));
+  const second = soleWait(fixture.ctx).ms;
+  assert.ok(second >= 10 && second <= 20, `the second wait is ${String(second)}, within [10, 20]`);
+  assert.ok(fixture.ui.notifications.some((text) => text.includes("attempt 1 of 2")), "the notice names the overridden cap");
+  fireWait(fixture.ctx);
+  await waitUntil(() => fixture.ui.notifications.some((text) => text.includes(`/${REALM_RETRY_COMMAND}`)));
+  assert.equal(fixture.attachCalls.length, 3, "one attach at start and two waits");
+  assert.deepEqual(pendingWaits(fixture.ctx), [], "no wait remains after the cap");
+  assert.equal(fixture.view().link, "failed");
+  assert.equal(fixture.view().state, "error");
+});
+
+void test("view: unbound before any session, and after shutdown", async () => {
+  const fixture = makeFixture();
+  const unbound = { state: "unbound", mode: null, link: "off" };
+  assert.deepEqual(fixture.view(), unbound);
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitUntil(() => lastLabel(fixture.ui) === ACTIVE_LABEL);
+  shutdownHandlerOf(fixture.pi)();
+  assert.deepEqual(fixture.view(), unbound);
+});
+
+void test("view: an attached session reports active, its mode, and link off without re-attach", async () => {
+  const fixture = makeFixture();
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitUntil(() => lastLabel(fixture.ui) === ACTIVE_LABEL);
+  assert.deepEqual(fixture.view(), { state: "active", mode: "fail-closed", link: "off" });
+});
+
+void test("view: an attached session reports link linked with re-attach on", async () => {
+  const fixture = makeFixture({ reattach: { enabled: true, random: seededRandom(6) } });
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitUntil(() => fixture.view().link === "linked");
+  assert.deepEqual(fixture.view(), { state: "active", mode: "fail-closed", link: "linked" });
+});
+
+void test("view: a refused up shows the error state and its code, and the next paint without a code clears it", async () => {
+  const fixture = makeFixture({
+    snapshot: UNBOUND,
+    attach: (daemon) => Promise.resolve({ client: daemon, refusal: makeRealmError("PODMAN_UNSUPPORTED_VERSION") }),
+  });
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitForDetail(fixture.ui, "PODMAN_UNSUPPORTED_VERSION");
+  assert.deepEqual(fixture.view(), { state: "error", mode: "fail-closed", link: "off", code: "PODMAN_UNSUPPORTED_VERSION" });
+  fixture.daemon.snapshot = ACTIVE;
+  pollOf(fixture.ctx).callback();
+  await waitUntil(() => fixture.view().state === "active");
+  const cleared = fixture.view();
+  assert.deepEqual(cleared, { state: "active", mode: "fail-closed", link: "off" });
+  assert.equal("code" in cleared, false, "the code is cleared by a paint that carries none");
+});
+
+void test("view: a failed attach reports its catalogue code", async () => {
+  const fixture = makeFixture({ attachErrors: ["POLICY_DENIED"] });
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitForDetail(fixture.ui, "POLICY_DENIED");
+  assert.deepEqual(fixture.view(), { state: "error", mode: null, link: "off", code: "POLICY_DENIED" });
+});
+
+void test("view: reading it never calls the daemon and arms no timer", async () => {
+  const fixture = makeFixture();
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitUntil(() => lastLabel(fixture.ui) === ACTIVE_LABEL);
+  const calls = fixture.daemon.calls.length;
+  const timeouts = fixture.ctx.timeouts.length;
+  const intervals = fixture.ctx.intervals.length;
+  for (let read = 0; read < 3; read += 1) {
+    fixture.view();
+  }
+  assert.equal(fixture.daemon.calls.length, calls);
+  assert.equal(fixture.ctx.timeouts.length, timeouts);
+  assert.equal(fixture.ctx.intervals.length, intervals);
+});
+
+void test("onAttach: fires once for the first attach and once more for /realm-retry", async () => {
+  const events: PluginAttachOutcome[] = [];
+  const fixture = makeFixture({ extra: { onAttach: (outcome) => { events.push(outcome); } } });
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitUntil(() => events.length === 1);
+  assert.deepEqual(events, [{ outcome: "attached", state: "active" }]);
+  assert.equal(lastLabel(fixture.ui), ACTIVE_LABEL, "the callback runs after the outcome is painted");
+  await retryCommandOf(fixture.pi).handler();
+  assert.deepEqual(events, [
+    { outcome: "attached", state: "active" },
+    { outcome: "attached", state: "active" },
+  ]);
+});
+
+void test("onAttach: a failed attach reports the catalogue code only", async () => {
+  const events: PluginAttachOutcome[] = [];
+  const fixture = makeFixture({ attachErrors: ["POLICY_DENIED"], extra: { onAttach: (outcome) => { events.push(outcome); } } });
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitUntil(() => events.length === 1);
+  assert.deepEqual(events, [{ outcome: "failed", code: "POLICY_DENIED" }]);
+});
+
+void test("onAttach: a superseded attempt reports nothing", async () => {
+  const events: PluginAttachOutcome[] = [];
+  const ends: string[] = [];
+  const gate = makeGate();
+  let calls = 0;
+  const fixture = makeFixture({
+    attach: async (daemon) => {
+      calls += 1;
+      if (calls === 1) {
+        await gate.promise;
+      }
+      return { client: daemon, refusal: null };
+    },
+    extra: { onAttach: (outcome) => { events.push(outcome); }, onSessionEnd: () => { ends.push("end"); } },
+  });
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitUntil(() => events.length === 1);
+  assert.deepEqual(ends, ["end"], "the replaced session ended once");
+  gate.resolve();
+  for (let turn = 0; turn < 10; turn += 1) {
+    await yieldTurn();
+  }
+  assert.equal(events.length, 1, "the superseded first attempt reports nothing");
+});
+
+void test("onAttach: a throwing callback changes neither the outcome nor the status text", async () => {
+  const plain = makeFixture();
+  startHandlerOf(plain.pi)(plain.ctx);
+  await waitUntil(() => lastLabel(plain.ui) === ACTIVE_LABEL);
+  const retryPlain = await retryCommandOf(plain.pi).handler();
+
+  const throwing = makeFixture({
+    extra: {
+      onAttach: () => {
+        throw new Error("callback broke");
+      },
+    },
+  });
+  startHandlerOf(throwing.pi)(throwing.ctx);
+  await waitUntil(() => lastLabel(throwing.ui) === ACTIVE_LABEL);
+  await waitUntil(() => throwing.ui.notifications.includes("realm status update failed: unexpected error"));
+  assert.equal(await retryCommandOf(throwing.pi).handler(), retryPlain, "the retry outcome is unchanged");
+  assert.equal(statusTexts(throwing.ui).at(-1), statusTexts(plain.ui).at(-1));
+  assert.deepEqual(throwing.view(), { state: "active", mode: "fail-closed", link: "off" });
+});
+
+void test("onSessionEnd: fires once on shutdown, never when no session is live", async () => {
+  let ends = 0;
+  const fixture = makeFixture({ extra: { onSessionEnd: () => { ends += 1; } } });
+  shutdownHandlerOf(fixture.pi)();
+  assert.equal(ends, 0, "no session was live");
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitUntil(() => lastLabel(fixture.ui) === ACTIVE_LABEL);
+  shutdownHandlerOf(fixture.pi)();
+  assert.equal(ends, 1);
+  assert.equal(fixture.daemon.count("close"), 1, "the client was closed before the callback");
+  shutdownHandlerOf(fixture.pi)();
+  assert.equal(ends, 1, "a second shutdown has no session to end");
+});
+
+void test("onSessionEnd: fires once when a second session_start replaces the first", async () => {
+  let ends = 0;
+  const fixture = makeFixture({ extra: { onSessionEnd: () => { ends += 1; } } });
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitUntil(() => lastLabel(fixture.ui) === ACTIVE_LABEL);
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  assert.equal(ends, 1);
+});
+
+void test("onSessionEnd: a throwing callback still lets the shutdown release the client and clear every timer", async () => {
+  const fixture = makeFixture({
+    extra: {
+      onSessionEnd: () => {
+        throw new Error("callback broke");
+      },
+    },
+  });
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitUntil(() => lastLabel(fixture.ui) === ACTIVE_LABEL);
+  const poll = pollOf(fixture.ctx);
+  shutdownHandlerOf(fixture.pi)();
+  assert.equal(fixture.daemon.count("close"), 1);
+  assert.ok(fixture.ctx.cleared.includes(poll.handle), "the poll was cleared");
+  assert.ok(fixture.ui.notifications.includes("realm status update failed: unexpected error"));
+});
+
+void test("the callbacks register no host event beyond the four the plugin always registers", () => {
+  const fixture = makeFixture({ extra: { onAttach: () => undefined, onSessionEnd: () => undefined } });
+  assert.equal(fixture.pi.startHandlers.length, 1);
+  assert.equal(fixture.pi.switchHandlers.length, 1);
+  assert.equal(fixture.pi.shutdownHandlers.length, 1);
+  assert.equal(fixture.pi.toolCallHandlers.length, 1);
+});
+
+void test("registerRealmPlugin still returns the host tool set", () => {
+  const pi = new FakePi();
+  const tools = registerRealmPlugin(pi, { attachDaemon: () => Promise.reject(makeRealmError("REALM_NOT_ACTIVE")) });
+  assert.deepEqual(tools.removed, []);
+  assert.equal(tools.inFlight, 0);
+  assert.ok(tools.queue instanceof Promise);
 });

@@ -7,6 +7,8 @@ import {
   backstopVerdict,
   BOOT_BOUNDS,
   equalJitterDelayMs,
+  isLinkLostCode,
+  isRetryableAttachCode,
   reattachTransitionAllowed,
   resolveBoot,
   withStartupBudget,
@@ -14,12 +16,6 @@ import {
 } from "../../src/host/boot.js";
 import { defaultManifestFor } from "../../src/host/manifest.js";
 import type { HostPluginManifest } from "../../src/host/types.js";
-import {
-  GUARD_STATUS_BUDGET_MS,
-  STARTUP_BUDGET_MS,
-  STATUS_POLL_MS,
-} from "../../src/omp/plugin.js";
-import * as ompReattach from "../../src/omp/reattach.js";
 
 const LINKS: readonly BootLink[] = ["off", "linked", "reconnecting", "attaching", "failed"];
 
@@ -36,18 +32,7 @@ function activeTimeouts(): number {
   return process.getActiveResourcesInfo().filter((name) => name === "Timeout").length;
 }
 
-// ---- Parity with the Omp constants (src/omp is read, never edited) -----------
-
-void test("BOOT_BOUNDS equals the Omp constants", () => {
-  assert.equal(BOOT_BOUNDS.startupBudgetMs, STARTUP_BUDGET_MS);
-  assert.equal(BOOT_BOUNDS.guardStatusBudgetMs, GUARD_STATUS_BUDGET_MS);
-  assert.equal(BOOT_BOUNDS.statusPollMs, STATUS_POLL_MS);
-  assert.equal(BOOT_BOUNDS.reattach.retryCap, ompReattach.REATTACH_RETRY_CAP);
-  assert.equal(BOOT_BOUNDS.reattach.baseDelayMs, ompReattach.REATTACH_BASE_DELAY_MS);
-  assert.equal(BOOT_BOUNDS.reattach.capDelayMs, ompReattach.REATTACH_DELAY_CAP_MS);
-  assert.deepEqual([...BOOT_BOUNDS.linkLostCodes], [...ompReattach.LINK_LOST_CODES]);
-  assert.deepEqual([...BOOT_BOUNDS.retryableAttachCodes], [...ompReattach.RETRYABLE_ATTACH_CODES]);
-});
+// ---- BOOT_BOUNDS -------------------------------------------------------------
 
 void test("BOOT_BOUNDS holds the documented values and is frozen", () => {
   assert.equal(BOOT_BOUNDS.startupBudgetMs, 200_000);
@@ -74,49 +59,60 @@ void test("startupBudgetMs equals the policy schema default", () => {
   assert.equal(BOOT_BOUNDS.startupBudgetMs, schema.properties.startupBudgetMs.default);
 });
 
-void test("reattachTransitionAllowed agrees with Omp on all 25 pairs", () => {
+void test("reattachTransitionAllowed allows exactly the documented moves", () => {
+  const allowed: Readonly<Record<BootLink, readonly BootLink[]>> = {
+    off: [],
+    linked: ["reconnecting", "attaching"],
+    reconnecting: ["attaching"],
+    attaching: ["linked", "reconnecting", "failed"],
+    failed: ["attaching"],
+  };
   let pairs = 0;
   for (const from of LINKS) {
     for (const to of LINKS) {
-      assert.equal(reattachTransitionAllowed(from, to), ompReattach.reattachTransitionAllowed(from, to), `${from} -> ${to}`);
+      assert.equal(reattachTransitionAllowed(from, to), allowed[from].includes(to), `${from} -> ${to}`);
       pairs += 1;
     }
   }
   assert.equal(pairs, 25);
 });
 
-void test("equalJitterDelayMs agrees with Omp over the attempt and random grid", () => {
+void test("equalJitterDelayMs stays inside [ceiling/2, ceiling] and reaches the cap at attempt 7", () => {
+  const base = BOOT_BOUNDS.reattach.baseDelayMs;
+  const cap = BOOT_BOUNDS.reattach.capDelayMs;
   for (let attempt = 1; attempt <= 12; attempt += 1) {
-    for (const random of [0, 0.5, 1]) {
-      const here = equalJitterDelayMs(attempt, BOOT_BOUNDS.reattach.baseDelayMs, BOOT_BOUNDS.reattach.capDelayMs, () => random);
-      const there = ompReattach.equalJitterDelayMs(attempt, ompReattach.REATTACH_BASE_DELAY_MS, ompReattach.REATTACH_DELAY_CAP_MS, () => random);
-      assert.equal(here, there, `attempt ${String(attempt)} random ${String(random)}`);
-    }
+    const ceiling = Math.min(cap, base * 2 ** (attempt - 1));
+    const low = equalJitterDelayMs(attempt, base, cap, () => 0);
+    const high = equalJitterDelayMs(attempt, base, cap, () => 1);
+    assert.equal(low, Math.round(ceiling / 2), `attempt ${String(attempt)} random 0`);
+    assert.equal(high, ceiling, `attempt ${String(attempt)} random 1`);
+    const middle = equalJitterDelayMs(attempt, base, cap, () => 0.5);
+    assert.ok(middle >= low && middle <= high, `attempt ${String(attempt)} random 0.5`);
   }
+  assert.equal(equalJitterDelayMs(6, base, cap, () => 1), 32_000);
+  assert.equal(equalJitterDelayMs(7, base, cap, () => 1), cap);
   // The delay is never near zero: random 0 gives half the ceiling.
   assert.equal(equalJitterDelayMs(1, 1_000, 60_000, () => 0), 500);
   assert.equal(equalJitterDelayMs(1, 1_000, 60_000, () => 1), 1_000);
   assert.equal(equalJitterDelayMs(12, 1_000, 60_000, () => 1), 60_000);
 });
 
-void test("equalJitterDelayMs throws the same RangeError as Omp on bad input", () => {
-  const bad: readonly (readonly [number, number, number, () => number])[] = [
-    [0, 1_000, 60_000, () => 0.5],
-    [1.5, 1_000, 60_000, () => 0.5],
-    [Number.NaN, 1_000, 60_000, () => 0.5],
-    [1, -1, 60_000, () => 0.5],
-    [1, 1_000, Number.POSITIVE_INFINITY, () => 0.5],
-    [1, 2_000, 1_000, () => 0.5],
-    [1, 1_000, 60_000, () => 2],
-    [1, 1_000, 60_000, () => -0.1],
-    [1, 1_000, 60_000, () => Number.NaN],
+void test("equalJitterDelayMs throws a RangeError on bad input", () => {
+  const bad: readonly (readonly [number, number, number, () => number, RegExp])[] = [
+    [0, 1_000, 60_000, () => 0.5, /attempt must be a positive integer/],
+    [1.5, 1_000, 60_000, () => 0.5, /attempt must be a positive integer/],
+    [Number.NaN, 1_000, 60_000, () => 0.5, /attempt must be a positive integer/],
+    [1, -1, 60_000, () => 0.5, /base and cap must be finite and not negative/],
+    [1, 1_000, Number.POSITIVE_INFINITY, () => 0.5, /base and cap must be finite and not negative/],
+    [1, 2_000, 1_000, () => 0.5, /exceeds cap/],
+    [1, 1_000, 60_000, () => 2, /random must return a value in \[0, 1\]/],
+    [1, 1_000, 60_000, () => -0.1, /random must return a value in \[0, 1\]/],
+    [1, 1_000, 60_000, () => Number.NaN, /random must return a value in \[0, 1\]/],
   ];
-  for (const [attempt, base, cap, random] of bad) {
-    const here = thrownBy(() => equalJitterDelayMs(attempt, base, cap, random));
-    const there = thrownBy(() => ompReattach.equalJitterDelayMs(attempt, base, cap, random));
-    assert.ok(here instanceof RangeError, `${String(attempt)} ${String(base)} ${String(cap)}`);
-    assert.ok(there instanceof RangeError);
-    assert.equal(here.message, there.message);
+  for (const [attempt, base, cap, random, message] of bad) {
+    const error = thrownBy(() => equalJitterDelayMs(attempt, base, cap, random));
+    assert.ok(error instanceof RangeError, `${String(attempt)} ${String(base)} ${String(cap)}`);
+    assert.match(error.message, message);
   }
 });
 
@@ -184,6 +180,27 @@ void test("attachFailureDisposition is retryable only for the listed RealmError 
 void test("attachFailureDisposition treats anything that is not a RealmError as terminal", () => {
   for (const value of [new Error("REALM_NOT_ACTIVE"), "TOOL_TIMEOUT", { code: "TOOL_TIMEOUT" }, null, undefined, 7, Symbol("x")]) {
     assert.equal(attachFailureDisposition(value), "terminal");
+  }
+});
+
+// ---- isLinkLostCode and isRetryableAttachCode -------------------------------------
+
+void test("isLinkLostCode is true exactly for the two link-lost codes", () => {
+  for (const code of ERROR_CODES) {
+    assert.equal(isLinkLostCode(code), code === "REALM_NOT_ACTIVE" || code === "TOOL_TIMEOUT", code);
+  }
+  for (const code of ["", "realm_not_active", " TOOL_TIMEOUT", "TOOL_TIMEOUT ", "TOOL_TIMEOUT\n", "STARTUP_BUDGET_EXCEEDED"]) {
+    assert.equal(isLinkLostCode(code), false, JSON.stringify(code));
+  }
+});
+
+void test("isRetryableAttachCode is true exactly for the four retryable codes", () => {
+  const listed = ["REALM_NOT_ACTIVE", "TOOL_TIMEOUT", "STARTUP_BUDGET_EXCEEDED", "DAEMON_START_TIMEOUT"];
+  for (const code of ERROR_CODES) {
+    assert.equal(isRetryableAttachCode(code), listed.includes(code), code);
+  }
+  for (const code of ["", "realm_not_active", " TOOL_TIMEOUT", "DAEMON_START_TIMEOUT ", "POLICY_DENIED"]) {
+    assert.equal(isRetryableAttachCode(code), false, JSON.stringify(code));
   }
 });
 

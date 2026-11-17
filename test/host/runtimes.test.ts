@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { SchemaInvalidError } from "../../src/contract/validate.js";
+import { isSafeRelPath } from "../../src/host/recipe.js";
 import { HOST_ALIASES, HOST_RUNTIMES, recipePending, resolveHomes, resolveHostId } from "../../src/host/runtimes.js";
 import { HOST_IDS, type HostEnv, type HostId, type HostTier } from "../../src/host/types.js";
 
@@ -21,7 +22,8 @@ const EXPECTED_TIERS: Record<HostId, HostTier> = {
   zcode: "config-only", pi: "config-only",
 };
 const EXPECTED_HOMES: Record<HostId, readonly (readonly [string, "config" | "skills"])[]> = {
-  omp: [], antigravity: [],
+  antigravity: [],
+  omp: [[".omp/agent", "config"]],
   claude: [[".claude", "config"]],
   opencode: [[".config/opencode", "config"]],
   kilo: [[".config/kilo", "config"], [".kilo", "config"]],
@@ -87,8 +89,8 @@ void test("homes, verification, override and binaries are pinned", () => {
   for (const id of HOST_IDS) {
     const entry = HOST_RUNTIMES[id];
     assert.deepEqual(entry.homes.map((h) => [h.rel, h.role]), EXPECTED_HOMES[id], id);
-    assert.equal(entry.homeVerified, id !== "antigravity" && id !== "omp", id);
-    assert.equal(entry.envOverride, id === "claude" ? "CLAUDE_CONFIG_DIR" : null, id);
+    assert.equal(entry.homeVerified, id !== "antigravity", id);
+    assert.equal(entry.envOverride, id === "claude" ? "CLAUDE_CONFIG_DIR" : id === "omp" ? "PI_CODING_AGENT_DIR" : null, id);
     const binaries = id === "omp" ? ["omp"] : id === "claude" ? ["claude"] : [];
     assert.deepEqual([...entry.binaries], binaries, id);
     assert.equal(entry.integration, id === "omp" ? "extension" : "mcp-config", id);
@@ -106,10 +108,28 @@ void test("every home rel is a relative POSIX path without traversal", () => {
   }
 });
 
-void test("Phase 21 invariant: every recipe is null", () => {
+void test("Phase 22: only omp has a recipe, a bundle copy of adapters/omp into extensions/realm", () => {
+  const omp = HOST_RUNTIMES.omp;
+  assert.deepEqual(omp.recipe, { kind: "bundle-copy", source: "omp", dest: "extensions/realm" });
+  assert.deepEqual(omp.conflicts, [".omp/plugins/node_modules/agent-realm"]);
+  assert.equal(omp.tier, "reference");
+  assert.equal(omp.integration, "extension");
+  assert.equal(omp.homeVerified, true);
+  assert.ok(Object.isFrozen(omp));
+  assert.ok(Object.isFrozen(omp.recipe));
+  assert.ok(Object.isFrozen(omp.conflicts));
   for (const id of HOST_IDS) {
-    assert.equal(HOST_RUNTIMES[id].recipe, null);
-    assert.equal(recipePending(id), true);
+    assert.equal(recipePending(id), id !== "omp", id);
+    assert.equal(HOST_RUNTIMES[id].recipe === null, id !== "omp", id);
+    assert.equal(HOST_RUNTIMES[id].conflicts === undefined, id !== "omp", id);
+  }
+});
+
+void test("every conflicts entry in the table is a safe relative path", () => {
+  for (const id of HOST_IDS) {
+    for (const path of HOST_RUNTIMES[id].conflicts ?? []) {
+      assert.equal(isSafeRelPath(path), true, `${id}: ${path}`);
+    }
   }
 });
 
@@ -134,5 +154,19 @@ void test("relative or empty overrides and relative homes are SCHEMA_INVALID", (
     () => resolveHomes(HOST_RUNTIMES.claude, env({ CLAUDE_CONFIG_DIR: "" })),
     () => resolveHomes(HOST_RUNTIMES.codex, env({}, "home/u"))]) {
     assert.throws(bad, (error: unknown) => error instanceof SchemaInvalidError && error.code === "SCHEMA_INVALID");
+  }
+});
+
+void test("the omp home defaults to <home>/.omp/agent and an absolute PI_CODING_AGENT_DIR replaces it", () => {
+  assert.deepEqual(resolveHomes(HOST_RUNTIMES.omp, env()), ["/home/u/.omp/agent"]);
+  assert.deepEqual(resolveHomes(HOST_RUNTIMES.omp, env({ PI_CODING_AGENT_DIR: "/opt/omp-agent" })), ["/opt/omp-agent"]);
+});
+
+void test("an empty or relative PI_CODING_AGENT_DIR is SCHEMA_INVALID", () => {
+  for (const bad of ["", "rel/agent"]) {
+    assert.throws(
+      () => resolveHomes(HOST_RUNTIMES.omp, env({ PI_CODING_AGENT_DIR: bad })),
+      (error: unknown) => error instanceof SchemaInvalidError && error.code === "SCHEMA_INVALID",
+    );
   }
 });

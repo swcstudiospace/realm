@@ -231,9 +231,9 @@ A policy that has no `mode` key, or no policy file at all, used to load as `advi
   the budget destroys the container its port call later produces
   (`LifecycleController.create` and `failCreate`, `src/lifecycle/controller.ts`). The Omp plugin
   does not read this key: the policy is daemon-owned, so the plugin arms its
-  own detached attach timer from `STARTUP_BUDGET_MS` (`src/omp/plugin.ts`), a
-  constant equal to this key's schema default (`200000`), through `armTimer` in
-  the `attach` function of `registerRealmPlugin`. A project that sets another
+  own detached attach timer from `BOOT_BOUNDS.startupBudgetMs` (`src/host/boot.ts`), a
+  constant equal to this key's schema default (`200000`, held equal by `test/host/boot.test.ts`), through `armTimer` in
+  the `attach` function of `createRealmPlugin` (`src/omp/plugin.ts`). A project that sets another
   `startupBudgetMs` therefore does not change the plugin's timer. Expiry paints the
   disconnected display with the existing `STARTUP_BUDGET_EXCEEDED` code while
   the session continues, and settle clears the timer (`disarmTimer`,
@@ -246,7 +246,7 @@ A policy that has no `mode` key, or no policy file at all, used to load as `advi
   `status`, `down`, `doctor` and `tool` keep their own limits. Because the
   key's maximum equals the `up` request's startup allowance, the `up` wait
   always outlasts any accepted budget. The plugin's own timer
-  (`STARTUP_BUDGET_MS`, 200000) equals the maximum and the default, and a
+  (`BOOT_BOUNDS.startupBudgetMs`, 200000) equals the maximum and the default, and a
   lower configured budget does not change it. The daemon's runtime guard in
   `src/daemon/daemon.ts` remains as defence in depth for a waiter whose
   remaining client wait is shorter than the budget.

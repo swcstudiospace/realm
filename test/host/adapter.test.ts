@@ -94,7 +94,7 @@ function binaryIn(dir: string, mode: number): void {
   chmodSync(file, mode);
 }
 
-void test("every table entry builds an adapter with no file system access, and install refuses as recipe-pending", async (t) => {
+void test("every table entry builds an adapter with no file system access, and install refuses as recipe-pending for the 18 hosts without a recipe", async (t) => {
   const host = makeFixtureHost(t);
   const log = captureLog();
   const forbidden = (): never => {
@@ -109,11 +109,30 @@ void test("every table entry builds an adapter with no file system access, and i
     assert.equal(adapter.bootHook, null);
   }
   const before = treeHash(host.root);
-  for (const adapter of adapters) {
+  const pending = adapters.filter((adapter) => adapter.id !== "omp");
+  assert.equal(pending.length, 18);
+  for (const adapter of pending) {
     for (const dryRun of [false, true]) {
       // The recipe check comes before any read of host files, so a reader that throws is never reached.
       await assert.rejects(adapter.install(host.env, { dryRun }), refusedWith("recipe-pending", "POLICY_DENIED"), adapter.id);
     }
+  }
+  assert.equal(treeHash(host.root), before);
+  assert.equal(existsSync(join(host.stateDir, "audit")), false);
+});
+
+void test("the omp adapter has a recipe: construction reads nothing, and install rejects at its first read, not as recipe-pending", async (t) => {
+  const host = makeFixtureHost(t);
+  const log = captureLog();
+  const forbidden = (): never => {
+    throw new Error("the first read");
+  };
+  const reader: HostFsReader = { realpath: forbidden, lstat: forbidden, stat: forbidden, readFile: forbidden, readdir: forbidden };
+  const construct = (): RecipeHostAdapter => createHostAdapter(HOST_RUNTIMES.omp, defaultManifestFor("omp", "1.2.3"), deps(host, log, { reader }));
+  assert.doesNotThrow(construct);
+  const before = treeHash(host.root);
+  for (const dryRun of [false, true]) {
+    await assert.rejects(construct().install(host.env, { dryRun }), (error: unknown) => error instanceof Error && error.message === "the first read");
   }
   assert.equal(treeHash(host.root), before);
   assert.equal(existsSync(join(host.stateDir, "audit")), false);
@@ -154,6 +173,7 @@ void test("detect finds a host by its home alone", async (t) => {
     via: "home",
     homes: [{ path: host.configHome, exists: true, symlink: false }],
     binary: null,
+    conflicts: [],
   });
 });
 
