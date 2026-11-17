@@ -651,9 +651,13 @@ Plans:
 
 ### Phase 26: Plugin contract tests, boot tests and author docs
 
-**Goal:** [To be planned]
-**Requirements**: TBD
-**Plans:** 0 plans
+**Goal:** A cross-host contract checker proven by seeded defects, a real-daemon boot matrix over every stdio host, conformance mutants for the uncovered boot cases, a plugin author guide, a support matrix that a test keeps in step with the runtime table, and one tracked gaps page for the phase 21 to 25 residuals.
+**Depends on:** Phase 25
+**Requirements**: TEST-HOST-01, TEST-HOST-02, TEST-HOST-03, TEST-HOST-04, TEST-HOST-05, TEST-HOST-06, TEST-HOST-07, TEST-HOST-08
+**Plans:** 3 plans
 
 Plans:
-- [ ] TBD (run /gsd-plan-phase 26 to break down)
+- [ ] 26-01-PLAN.md: cross-host contract checker and lifecycle matrix (wave 1)
+- [ ] 26-02-PLAN.md: boot matrix over every stdio host and conformance mutants (wave 1)
+- [ ] 26-03-PLAN.md: author guide, support matrix, gaps page, closure checks (wave 2)
+
