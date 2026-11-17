@@ -87,6 +87,11 @@ const ALL_TIERS: readonly HostLiveTier[] = ["validator", "production"];
 
 // ---- Table ------------------------------------------------------------------------------------------------------------------
 
+// A display name may hold regular-expression metacharacters (Augment (Auggie)); match the text literally.
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 void test("HOST_LIVE is a frozen table of the thirteen hosts with the recorded facts", () => {
   assert.deepEqual([...LIVE_HOST_IDS], ["claude", "codex", "opencode", "kimi", "qwen", "pi", "hermes", "cursor", "kilo", "copilot", "augment", "codebuddy", "cline"]);
   assert.ok(Object.isFrozen(HOST_LIVE));
@@ -198,7 +203,7 @@ void test("hostLiveSkipReason refuses a relative override before it looks for th
         },
       }),
     );
-    assert.match(String(missing), new RegExp(`no ${spec.displayName} executable ${spec.defaultBinary}; install ${spec.defaultBinary} or point ${spec.binOverride} at it`), host);
+    assert.match(String(missing), new RegExp(escapeRegExp(`no ${spec.displayName} executable ${spec.defaultBinary}; install ${spec.defaultBinary} or point ${spec.binOverride} at it`)), host);
     assert.deepEqual(asked, [spec.defaultBinary], `${host}: the default name is looked up on PATH`);
 
     const absolute = `/opt/${spec.defaultBinary}-next/${spec.defaultBinary}`;
@@ -276,7 +281,7 @@ void test("hostLiveSkipReason names, for each wave-2 host, the first missing pre
     assert.match(broken(host, { env: {}, platform: "darwin" }), new RegExp(`${spec.optIn}=1 is not set`), `${host}: opt-in first`);
     assert.match(broken(host, { platform: "darwin" }), /Linux only; this host is darwin/, `${host}: platform second`);
     assert.match(broken(host, { env: { [spec.optIn]: "1", [spec.binOverride]: `bin/${spec.defaultBinary}` } }), new RegExp(`${spec.binOverride} must be an absolute path`), `${host}: a relative override`);
-    assert.match(broken(host, {}), new RegExp(`no ${spec.displayName} executable ${spec.defaultBinary}; install ${spec.defaultBinary} or point ${spec.binOverride} at it`), `${host}: the executable`);
+    assert.match(broken(host, {}), new RegExp(escapeRegExp(`no ${spec.displayName} executable ${spec.defaultBinary}; install ${spec.defaultBinary} or point ${spec.binOverride} at it`)), `${host}: the executable`);
     assert.match(broken(host, { resolveBinary: (name) => `/bin/${name}` }), /--version did not run to a successful exit/, `${host}: a --version that fails (the Hermes broken-install case)`);
     assert.match(broken(host, { resolveBinary: (name) => `/bin/${name}`, versionProbe: { kind: "output", stdout: "no number here" } }), /--version printed no x\.y\.z version/, `${host}: a versionless output`);
     const recorded = broken(host, { resolveBinary: (name) => `/bin/${name}`, versionProbe: { kind: "output", stdout: RECORDED_OUTPUT[host] } });
