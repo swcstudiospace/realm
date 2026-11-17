@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.3.43] - 2026-11-17
+
+### Documentation
+- docs(phase-24): plan host adapters wave 1, register ADPT-01 to ADPT-09 (#112) (2446cba)
+
 ## [0.3.42] - 2026-11-17
 
 ### Documentation
