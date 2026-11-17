@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.3.42] - 2026-11-17
+
+### Documentation
+- docs(phase-23): close phase 23, boot integration (#111) (7528a46)
+
 ## [0.3.41] - 2026-11-17
 
 ### Added
