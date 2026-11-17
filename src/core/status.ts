@@ -21,16 +21,15 @@ export interface StatusSnapshot {
   readonly lastTransitionAt: string;
 }
 
-// The status a host shows: its label, whether it is degraded, the reason, and the time of the last transition.
+// The status a host shows: its label, the reason, and the time of the last transition.
 export interface DisplayStatus {
   readonly label: StatusLabel;
-  readonly degraded: boolean;
   readonly reason: string;
   readonly lastTransitionAt: string;
 }
 
 // Reasons fixed by D-27 for the three states whose reason text the mapping owns.
-// For active, degraded, and error the snapshot reason passes through; for error it
+// For active and error the snapshot reason passes through; for error it
 // is the catalogue code the lifecycle recorded.
 const FIXED_REASON = Object.freeze({
   unbound: "no workspace",
@@ -43,26 +42,22 @@ export function displayStatus(snapshot: StatusSnapshot): DisplayStatus {
   const { state, reason, lastTransitionAt } = snapshot;
   switch (state) {
     case "active":
-      return display(STATUS_LABELS.active, false, reason, lastTransitionAt);
-    case "degraded":
-      // Degraded is the active label with a flag, not a third label (CORE-02).
-      return display(STATUS_LABELS.active, true, reason, lastTransitionAt);
+      return display(STATUS_LABELS.active, reason, lastTransitionAt);
     case "unbound":
-      return display(STATUS_LABELS.disconnected, false, FIXED_REASON.unbound, lastTransitionAt);
+      return display(STATUS_LABELS.disconnected, FIXED_REASON.unbound, lastTransitionAt);
     case "connecting":
-      return display(STATUS_LABELS.disconnected, false, FIXED_REASON.connecting, lastTransitionAt);
+      return display(STATUS_LABELS.disconnected, FIXED_REASON.connecting, lastTransitionAt);
     case "stopping":
-      return display(STATUS_LABELS.disconnected, false, FIXED_REASON.stopping, lastTransitionAt);
+      return display(STATUS_LABELS.disconnected, FIXED_REASON.stopping, lastTransitionAt);
     case "error":
-      return display(STATUS_LABELS.disconnected, false, reason, lastTransitionAt);
+      return display(STATUS_LABELS.disconnected, reason, lastTransitionAt);
   }
 }
 
 function display(
   label: StatusLabel,
-  degraded: boolean,
   reason: string,
   lastTransitionAt: string,
 ): DisplayStatus {
-  return { label, degraded, reason, lastTransitionAt };
+  return { label, reason, lastTransitionAt };
 }

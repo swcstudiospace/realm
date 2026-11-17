@@ -16,8 +16,6 @@ export interface StateTransitionEvent {
   readonly at: string;
   // The code of the start failure a stale container's recovery replaced, carried by the first transition after the recovery.
   readonly recoveredCode?: ErrorCode;
-  // The code of a state write that failed, carried by the first transition after the failure until a later write persists the state.
-  readonly persistCode?: ErrorCode;
 }
 
 // Every event that can be published on the bus. A state transition is the only kind so far.

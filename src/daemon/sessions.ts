@@ -239,9 +239,9 @@ export interface SessionReattachPolicy {
   readonly restart: () => Promise<StateSnapshot>;
 }
 
-// The health loop of one session. It runs while the session is in service, active or degraded (a degraded session still serves
-// tool calls, so a dead runner there must not keep a truthful-looking label). An event that puts the session in service arms the
-// timer unless one is already armed, and any event that leaves service clears it. A tick probes through the controller, which
+// The health loop of one session. It runs while the session is active, so a dead runner never keeps a truthful-looking label.
+// An event that puts the session in service arms the timer unless one is already armed, and any event that leaves service
+// clears it. A tick probes through the controller, which
 // owns the transition to error. Ticks never overlap. The timer is unref'd, so it never keeps the process alive. dispose() stops
 // the timer and removes the lifecycle subscription, and is called when the session is torn down.
 export class SessionHealth {
@@ -263,10 +263,9 @@ export class SessionHealth {
         ...(code === undefined ? {} : { code }),
         ...(event.recoveredCode === undefined ? {} : { recoveredCode: event.recoveredCode }),
         ...(upId === undefined ? {} : { upId }),
-        ...(event.persistCode === undefined ? {} : { persistCode: event.persistCode }),
         sessionId: this.#options.sessionId,
       });
-      if (event.to === "active" || event.to === "degraded") {
+      if (event.to === "active") {
         if (this.#timer === undefined) {
           this.#start();
         }
@@ -299,7 +298,7 @@ export class SessionHealth {
   async #tick(): Promise<void> {
     const { handle, metrics, logger, sessionId } = this.#options;
     const { state } = handle.controller.snapshot();
-    if (this.#probing || this.#options.isStopping() || (state !== "active" && state !== "degraded")) {
+    if (this.#probing || this.#options.isStopping() || state !== "active") {
       return;
     }
     this.#probing = true;

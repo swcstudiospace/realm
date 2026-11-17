@@ -130,7 +130,6 @@ const PATH_TO: Readonly<Record<State, readonly State[]>> = {
   unbound: [],
   connecting: ["connecting"],
   active: ["connecting", "active"],
-  degraded: ["connecting", "active", "degraded"],
   error: ["connecting", "error"],
   stopping: ["connecting", "stopping"],
 };

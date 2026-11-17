@@ -20,7 +20,6 @@ const FAIL_CLOSED: Policy = { ...ADVISORY, mode: "fail-closed" };
 const NON_ACTIVE_CODES: Readonly<Record<Exclude<State, "active">, string>> = {
   unbound: "REALM_UNBOUND",
   connecting: "REALM_NOT_ACTIVE",
-  degraded: "REALM_NOT_ACTIVE",
   error: "REALM_NOT_ACTIVE",
   stopping: "REALM_STOPPING",
 };

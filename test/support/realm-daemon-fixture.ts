@@ -14,7 +14,6 @@ import { startDaemon, type StartedDaemon } from "../../src/daemon/daemon.js";
 import type { PolicyMode } from "../../src/contract/validate.js";
 import type { Logger } from "../../src/observe/logger.js";
 import type { PodmanProbeResult } from "../../src/runtime/podman-probe.js";
-import { FakeBridge } from "./fake-bridge.js";
 import { FakeExecutionService } from "./fake-execution.js";
 
 const IMAGE = `registry.example.com/realm/workload@sha256:${"0".repeat(64)}`;
@@ -76,7 +75,6 @@ export async function startRealmDaemon(options: RealmDaemonOptions): Promise<Rea
     policyPath,
     ...(options.logger === undefined ? {} : { logger: options.logger }),
     exec: new FakeExecutionService(),
-    bridge: new FakeBridge(),
     clock: () => new Date(CLOCK_ISO),
     runOpenShell: () => Promise.resolve({ exitCode: 0, stdout: "", stderr: "", truncated: false }),
     // A libpod double whose realm listing is empty, so the startup reap removes nothing.

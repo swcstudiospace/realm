@@ -368,7 +368,7 @@ async (t) => {
 void test("TOOL-05: a required-mode refusal over the lifecycle drive equals the dispatcher's own refusal",
 testTimeout(10_000),
 async (t) => {
-  const h = makeHarness(t, { policy: REQUIRED, state: "degraded" });
+  const h = makeHarness(t, { policy: REQUIRED, state: "error" });
   const call: ToolCall = { write: { path: "doc.txt", content: "blocked" } };
   const expected = await h.dispatcher.call(call);
   assert.equal(expected.outcome, "refused");

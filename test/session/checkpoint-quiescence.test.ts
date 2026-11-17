@@ -12,7 +12,6 @@ import { restoreWorkspace, type SandboxRunning, snapshotWorkspace } from "../../
 import { checkpointSessionDirOf, sessionIdOfWorkspace } from "../../src/session/paths.js";
 import { SessionStore } from "../../src/session/store.js";
 import { writeWorkspaceEntry, type WorkspaceEntry } from "../../src/session/workspace-registry.js";
-import { FakeBridge } from "../support/fake-bridge.js";
 import { FakeExecutionService } from "../support/fake-execution.js";
 
 const CLOCK_TIME = "2026-11-03T09:00:00.000Z";
@@ -57,7 +56,6 @@ function fixture(t: TestContext): Fixture {
     policy: policyFor(ws),
     store: new SessionStore(state),
     exec,
-    bridge: new FakeBridge(),
     clock: () => new Date(CLOCK_TIME),
     locks: new LockTable(),
     pinnedRoot: bindWorkspaceUnderPolicy([ws], ws),

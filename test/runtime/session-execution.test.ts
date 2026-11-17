@@ -53,7 +53,6 @@ import {
 } from "./hardening-fixtures.js";
 import { OCI_CONFIG_PATH, ociReaderOf, STATIC_DIR } from "./seccomp-fixtures.js";
 import { boundedWait, pollUntil, scaledMs } from "../support/timing.js";
-import { FakeBridge } from "../support/fake-bridge.js";
 
 const SESSION = "sess-01";
 const DIGEST = `sha256:${"a".repeat(64)}`;
@@ -1473,7 +1472,6 @@ void test("RT-04, D-28: the startup budget covers the runner start on the sessio
     pinnedRoot: bindWorkspaceUnderPolicy([f.workspaceRoot], f.workspaceRoot),
     store: new SessionStore(f.stateDir),
     exec: f.exec,
-    bridge: new FakeBridge(),
     clock: () => new Date("2026-10-21T09:30:00.000Z"),
   });
   const snapshot = await controller.create(f.workspaceRoot);

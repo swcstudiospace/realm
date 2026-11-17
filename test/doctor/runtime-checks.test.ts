@@ -3,20 +3,10 @@ import assert from "node:assert/strict";
 import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
-import {
-  runChecks,
-  type AndaReply,
-  type CheckId,
-  type CheckResult,
-  type DoctorOptions,
-  type FetchInformation,
-} from "../../src/doctor/checks.js";
+import { runChecks, type CheckId, type CheckResult, type DoctorOptions } from "../../src/doctor/checks.js";
 import type { CommandOutcome, ConnectSocket, RunCommand } from "../../src/runtime/podman-probe.js";
 
-// Every seam is injected, so no process runs and no socket opens in these tests (RT-02, ANDA-02), except
-// the trickle test in the ANDA-02 group, which dials a loopback server through the default Anda transport. PATH names an empty
+// Every seam is injected, so no process runs and no socket opens in these tests (RT-02). PATH names an empty
 // directory, so the host-binaries item finds, hashes and runs no real binary.
 const EMPTY_PATH_DIR = realpathSync(mkdtempSync(join(tmpdir(), "realm-runtime-empty-path-")));
 after(() => {
@@ -45,10 +35,7 @@ const HELP_ALL: CommandOutcome = {
   exitCode: 0,
   stdout: `${PINNED_FLAGS.map((flag) => `  ${flag} <VALUE>`).join("\n")}\n`,
 };
-const ENGINE_URL = "http://127.0.0.1:8080";
-const SHAPE_OK = JSON.stringify({ engines: [], default_engine: null, start_time_ms: 1 });
-const ANDA_OK: AndaReply = { status: 200, text: SHAPE_OK };
-const RUNTIME_IDS: readonly CheckId[] = ["podman", "podman-service", "openshell", "anda-bridge"];
+const RUNTIME_IDS: readonly CheckId[] = ["podman", "podman-service", "openshell"];
 
 type Seams = Omit<DoctorOptions, "policyPath" | "stateDir">;
 
@@ -63,13 +50,7 @@ interface HostPlan {
   readonly commands?: Readonly<Record<string, CommandOutcome>>;
   // "connect" accepts the socket; an Error models a refused, missing, or silent socket.
   readonly socket?: "connect" | Error;
-  // The engine's reply to GET /.well-known/information, or an Error when no reply arrives.
-  readonly engine?: AndaReply | Error;
-  readonly andaUrl?: string;
   readonly env?: Readonly<Record<string, string>>;
-  readonly probeTimeoutMs?: number;
-  // defaultTransport leaves fetchInformation unset, so the real Anda transport runs against andaUrl.
-  readonly defaultTransport?: boolean;
   // The Yama ptrace scope reader. Absent leaves the real /proc reader in place.
   readonly readPtraceScope?: () => string;
 }
@@ -78,13 +59,11 @@ interface Host {
   readonly seams: Seams;
   readonly commandCalls: CommandCall[];
   readonly dials: string[];
-  readonly engineCalls: string[];
 }
 
 function fakeHost(plan: HostPlan): Host {
   const commandCalls: CommandCall[] = [];
   const dials: string[] = [];
-  const engineCalls: string[] = [];
   const commands = plan.commands ?? {};
   const runCommand: RunCommand = (file, args, options) => {
     commandCalls.push({ file, args, env: options.env });
@@ -99,21 +78,13 @@ function fakeHost(plan: HostPlan): Host {
     dials.push(socketPath);
     return socket === "connect" ? Promise.resolve() : Promise.reject(socket);
   };
-  const engine = plan.engine ?? new Error("no engine is listening");
-  const fetchInformation: FetchInformation = (url) => {
-    engineCalls.push(url);
-    return engine instanceof Error ? Promise.reject(engine) : Promise.resolve(engine);
-  };
   const seams: Seams = {
     env: plan.env ?? HOST_ENV,
     runCommand,
     connectSocket,
-    ...(plan.defaultTransport === true ? {} : { fetchInformation }),
-    ...(plan.andaUrl === undefined ? {} : { andaUrl: plan.andaUrl }),
-    ...(plan.probeTimeoutMs === undefined ? {} : { probeTimeoutMs: plan.probeTimeoutMs }),
     ...(plan.readPtraceScope === undefined ? {} : { readPtraceScope: plan.readPtraceScope }),
   };
-  return { seams, commandCalls, dials, engineCalls };
+  return { seams, commandCalls, dials };
 }
 
 // A temporary base with a state directory at mode 0700 and a policy path that does not exist.
@@ -270,110 +241,7 @@ void test("RT-03: openshell fails on a non-zero exit, reports the status only, a
   assert.doesNotMatch(`${result.detail} ${fixOf(result)}`, /SECRET-HELP-TEXT/);
 });
 
-void test("ANDA-02: anda-bridge passes on the AppInformation shape with one anonymous GET to the engine (ANDA-02)", async (t) => {
-  const host = fakeHost({ andaUrl: ENGINE_URL, engine: ANDA_OK });
-  const result = resultOf(await runtimeChecks(t, host), "anda-bridge");
-  assert.equal(result.status, "pass");
-  assert.equal(result.fix, null);
-  assert.match(result.detail, /shape check, not a version check/);
-  assert.deepEqual(host.engineCalls, [ENGINE_URL]);
-});
-
-void test("ANDA-02: anda-bridge fails with ANDA_UNREACHABLE and the engine-URL fix when no reply arrives, never echoing the error (ANDA-02)", async (t) => {
-  const refused = Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:8080"), { code: "ECONNREFUSED" });
-  const host = fakeHost({ andaUrl: ENGINE_URL, engine: refused });
-  const result = resultOf(await runtimeChecks(t, host), "anda-bridge");
-  assert.equal(result.status, "fail");
-  assert.match(result.detail, /ANDA_UNREACHABLE/);
-  assert.match(fixOf(result), /andaUrl/);
-  assert.doesNotMatch(`${result.detail} ${fixOf(result)}`, /ECONNREFUSED/);
-});
-
-void test("ANDA-02: anda-bridge fails with ANDA_UNREACHABLE on a non-200 status, never echoing the body (ANDA-02)", async (t) => {
-  const host = fakeHost({ andaUrl: ENGINE_URL, engine: { status: 503, text: "SECRET-BODY" } });
-  const result = resultOf(await runtimeChecks(t, host), "anda-bridge");
-  assert.equal(result.status, "fail");
-  assert.match(result.detail, /ANDA_UNREACHABLE/);
-  assert.match(result.detail, /status 503/);
-  assert.doesNotMatch(`${result.detail} ${fixOf(result)}`, /SECRET-BODY/);
-});
-
-void test("ANDA-02: anda-bridge fails with ANDA_VERSION_MISMATCH on a wrong shape, naming the field and never its value (ANDA-02)", async (t) => {
-  const wrong = JSON.stringify({ engines: "SECRET-VALUE", default_engine: null, start_time_ms: 1 });
-  const host = fakeHost({ andaUrl: ENGINE_URL, engine: { status: 200, text: wrong } });
-  const result = resultOf(await runtimeChecks(t, host), "anda-bridge");
-  assert.equal(result.status, "fail");
-  assert.match(result.detail, /ANDA_VERSION_MISMATCH/);
-  assert.match(result.detail, /engines/);
-  assert.doesNotMatch(`${result.detail} ${fixOf(result)}`, /SECRET-VALUE/);
-});
-
-void test("ANDA-02: anda-bridge fails with ANDA_VERSION_MISMATCH when the body is not JSON (ANDA-02)", async (t) => {
-  const host = fakeHost({ andaUrl: ENGINE_URL, engine: { status: 200, text: "<html>not json</html>" } });
-  const result = resultOf(await runtimeChecks(t, host), "anda-bridge");
-  assert.equal(result.status, "fail");
-  assert.match(result.detail, /ANDA_VERSION_MISMATCH/);
-  assert.match(fixOf(result), /shape check/);
-});
-
-void test("ANDA-02: anda-bridge warns that no engine is configured and contacts nothing when andaUrl is absent (ANDA-02)", async (t) => {
-  const host = fakeHost({});
-  const result = resultOf(await runtimeChecks(t, host), "anda-bridge");
-  assert.equal(result.status, "warn");
-  assert.match(result.detail, /no Anda Engine URL is configured/);
-  assert.notEqual(result.fix, null);
-  assert.deepEqual(host.engineCalls, []);
-});
-
-void test("ANDA-02: anda-bridge refuses an andaUrl with user information, contacts nothing, and never echoes the credential (ANDA-02)", async (t) => {
-  const host = fakeHost({ andaUrl: "http://engine-user:secret-pass@127.0.0.1:8080", engine: ANDA_OK });
-  const result = resultOf(await runtimeChecks(t, host), "anda-bridge");
-  assert.equal(result.status, "fail");
-  assert.deepEqual(host.engineCalls, []);
-  assert.doesNotMatch(`${result.detail} ${fixOf(result)}`, /secret-pass|engine-user/);
-});
-
-void test("ANDA-02: anda-bridge names SCHEMA_INVALID for an andaUrl that does not parse (ANDA-02)", async (t) => {
-  const host = fakeHost({ andaUrl: "not a url", engine: ANDA_OK });
-  const result = resultOf(await runtimeChecks(t, host), "anda-bridge");
-  assert.match(result.detail, /^SCHEMA_INVALID: andaUrl is not an http or https URL/);
-});
-
-// The probe must end at its deadline. The server keeps the socket active by sending a byte every 20 ms,
-// so the idle timeout never fires, and it ends its own reply after trickleMs so that a probe without a
-// deadline finishes with a body that fails the JSON parse instead of hanging the run. This test waits in
-// real time on purpose: the socket timers are the behaviour under test, and fake timers do not drive
-// Node's socket I/O.
-void test("ANDA-02: anda-bridge gives up on a server that trickles bytes at the probe deadline (ANDA-02)", async (t) => {
-  const trickleMs = 3000;
-  const server = createServer((_request, response) => {
-    response.writeHead(200, { "content-type": "application/json" });
-    const tick = setInterval(() => response.write("x"), 20);
-    const stop = setTimeout(() => {
-      clearInterval(tick);
-      response.end();
-    }, trickleMs);
-    response.on("close", () => {
-      clearInterval(tick);
-      clearTimeout(stop);
-    });
-  });
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  t.after(() => {
-    server.closeAllConnections();
-    server.close();
-  });
-  const { port } = server.address() as AddressInfo;
-  const host = fakeHost({ andaUrl: `http://127.0.0.1:${String(port)}`, defaultTransport: true, probeTimeoutMs: 200 });
-  const started = Date.now();
-  const result = resultOf(await runtimeChecks(t, host), "anda-bridge");
-  const elapsed = Date.now() - started;
-  assert.equal(result.status, "fail");
-  assert.match(result.detail, /ANDA_UNREACHABLE/);
-  assert.ok(elapsed < trickleMs / 2, `the probe must end at its deadline, not after the trickle (took ${String(elapsed)} ms)`);
-});
-
-void test("RT-02 and ANDA-02: the four runtime items follow the three Phase 2 items, and the Phase 6 control-channel and agentos items follow anda-bridge (D-69, CLI-03)", async (t) => {
+void test("RT-02: the three runtime items follow the three Phase 2 items, and the Phase 6 control-channel and agentos items follow openshell (D-69, CLI-03)", async (t) => {
   const results = await runtimeChecks(t, fakeHost({}));
   assert.deepEqual(
     results.map((result) => result.id),
@@ -384,7 +252,6 @@ void test("RT-02 and ANDA-02: the four runtime items follow the three Phase 2 it
       "podman",
       "podman-service",
       "openshell",
-      "anda-bridge",
       "control-channel",
       "agentos",
       "host-binaries",
@@ -395,7 +262,7 @@ void test("RT-02 and ANDA-02: the four runtime items follow the three Phase 2 it
   );
 });
 
-void test("RT-02 and ANDA-02: a fail or warn always carries a fix, and a pass never does (D-44, RT-02, ANDA-02)", async (t) => {
+void test("RT-02: a fail or warn always carries a fix, and a pass never does (D-44, RT-02)", async (t) => {
   const results = await runtimeChecks(t, fakeHost({}));
   for (const id of RUNTIME_IDS) {
     const result = resultOf(results, id);

@@ -1,6 +1,6 @@
 // Daemon: single-owner start, reap-before-serve, selected method dispatch, and graceful shutdown (P6-D1, P6-D4, P6-D12).
 // buildDaemonHandle wires createRealmHandle with the production adapters (SessionExecution over the
-// libpod client, AndaBridge over the configured URL, the production OpenShell runner, Date clock); tests inject
+// libpod client, the production OpenShell runner, Date clock); tests inject
 // the existing fakes at the same seam. startDaemon binds the control socket once per state directory,
 // runs the startup maintenance (runStartupMaintenance: the selective reap, the orphan temp-file sweep and the audit
 // reconciliation), opens the gate, then hydrates the adopted sessions while serving (CRASH-01, CRASH-02, CRASH-04), and dispatches the
@@ -65,7 +65,6 @@ import {
 } from "./channel.js";
 import { createHostBootRecorder } from "./host-boot.js";
 import {
-  defaultBridge,
   defaultConnectSocket,
   defaultExec,
   libpodOf,
@@ -188,14 +187,12 @@ export function buildDaemonHandle(options: BuildDaemonHandleOptions): RealmHandl
   const runOpenShell =
     options.runOpenShell ?? productionOpenShellRunner(options.env ?? {});
   const exec = options.exec ?? defaultExec(config, policy, options, runOpenShell);
-  const bridge = options.bridge ?? defaultBridge(config, options.logger);
   return createRealmHandle({
     runtimeInput: options.runtimeInput,
     policyPath: options.policyPath,
     policy,
     sessionId: options.sessionId,
     exec,
-    bridge,
     clock,
     runOpenShell,
   });

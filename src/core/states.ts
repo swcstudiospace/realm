@@ -1,4 +1,4 @@
-// Frozen six-state transition table (D-11, spec n6). Pure data and pure checks
+// Frozen five-state transition table (D-11, spec n6, less degraded: removed in Phase 28). Pure data and pure checks
 // only: no state-machine behavior, events, or display mapping (Phase 2).
 // Self-transitions are absent from the table, so they are rejected.
 
@@ -9,7 +9,6 @@ export const STATES = Object.freeze([
   "unbound",
   "connecting",
   "active",
-  "degraded",
   "error",
   "stopping",
 ] as const);
@@ -29,18 +28,15 @@ function freezeEdges(edges: Edge[]): readonly Edge[] {
   return Object.freeze(edges);
 }
 
-// The allowed-edge table. Exactly the 13 edges of D-11 / spec n6.
+// The allowed-edge table. Exactly the 9 edges (the 13 edges of D-11, less the four that named degraded,
+// removed by the owner decision of 2026-11-17, Phase 28).
 export const ALLOWED_TRANSITIONS: readonly Edge[] = freezeEdges([
   ["unbound", "connecting"],
   ["connecting", "active"],
   ["connecting", "error"],
   ["connecting", "stopping"],
-  ["active", "degraded"],
   ["active", "error"],
   ["active", "stopping"],
-  ["degraded", "active"],
-  ["degraded", "error"],
-  ["degraded", "stopping"],
   ["error", "connecting"],
   ["error", "stopping"],
   ["stopping", "unbound"],

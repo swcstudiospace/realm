@@ -10,7 +10,6 @@ import { bindWorkspaceUnderPolicy } from "../../src/fs/root.js";
 import { LifecycleController } from "../../src/lifecycle/controller.js";
 import { SessionStore } from "../../src/session/store.js";
 import { FakeExecutionService } from "../support/fake-execution.js";
-import { FakeBridge } from "../support/fake-bridge.js";
 import { scaledMs } from "../support/timing.js";
 
 const SESSION = "session-1";
@@ -39,7 +38,6 @@ function fixture(t: TestContext, startupBudgetMs = 10000) {
   mkdirSync(workspace);
   const store = new SessionStore(join(base, "state"));
   const exec = new FakeExecutionService();
-  const bridge = new FakeBridge();
   const locks = new LockTable();
   const controller = new LifecycleController({
     sessionId: SESSION,
@@ -47,7 +45,6 @@ function fixture(t: TestContext, startupBudgetMs = 10000) {
     pinnedRoot: bindWorkspaceUnderPolicy([workspace], workspace),
     store,
     exec,
-    bridge,
     clock: () => new Date(CLOCK_TIME),
     locks,
   });
@@ -164,7 +161,7 @@ void test("probe unhealthy in active moves to error with reason probe failed, an
   assert.equal(store.load(SESSION)?.containerId, container.containerId);
 });
 
-void test("probe outside active or degraded returns the snapshot without a port call (D-38)", async (t) => {
+void test("probe outside active returns the snapshot without a port call (D-38)", async (t) => {
   const { controller, exec } = fixture(t);
   const snapshot = await controller.probe();
   assert.equal(snapshot.state, "unbound");
@@ -204,6 +201,19 @@ void test("stop of a stopping session is a no-op while the first stop completes 
 
   const done = await first;
   assert.equal(done.state, "unbound");
+  assert.equal(exec.callCount("stop"), 1);
+});
+
+void test("stop reaches exec.stop in the same tick as the call, before it awaits anything (CORE-06, D-38)", async (t) => {
+  const { controller, exec, workspace } = fixture(t);
+  await controller.create(workspace);
+  assert.equal(exec.callCount("stop"), 0);
+
+  const stopping = controller.stop();
+  assert.equal(exec.callCount("stop"), 1);
+
+  const stopped = await stopping;
+  assert.equal(stopped.state, "unbound");
   assert.equal(exec.callCount("stop"), 1);
 });
 

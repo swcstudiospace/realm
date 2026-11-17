@@ -19,7 +19,6 @@ import { HOST_BOOT_PHASES, HOST_BOOT_TRANSPORTS, BOOT_REPORT_HOSTS } from "../..
 import { createLogger } from "../../src/observe/logger.js";
 import { isMetricsSnapshot, type MetricsSnapshot } from "../../src/observe/metrics.js";
 import type { PodmanProbeResult } from "../../src/runtime/podman-probe.js";
-import { FakeBridge } from "../support/fake-bridge.js";
 import { FakeExecutionService } from "../support/fake-execution.js";
 
 const IMAGE = `registry.example.com/realm/workload@sha256:${"0".repeat(64)}`;
@@ -74,7 +73,6 @@ async function startBootDaemon(t: TestContext): Promise<BootDaemon> {
     runtimeInput: { image: IMAGE, stateDir, workspaceRoot: workspace },
     policyPath,
     exec: new FakeExecutionService(),
-    bridge: new FakeBridge(),
     clock: () => new Date(CLOCK_ISO),
     logger,
     runOpenShell: () => Promise.resolve({ exitCode: 0, stdout: "", stderr: "", truncated: false }),

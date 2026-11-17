@@ -95,15 +95,21 @@ void test("the session-record state enum holds exactly the STATES set, in both d
   assert.equal(enumStates.size, statesSet.size);
 });
 
-void test("the state enum rejects near-miss spellings of the six states and names the key", () => {
-  for (const near of ["Unbound", "unbound ", "stop", "", "running"]) {
+void test("the state enum rejects near-miss spellings of the five states and names the key", () => {
+  for (const near of ["Unbound", "unbound ", "stop", "", "running", "degraded"]) {
     const error = rejection(validate("sessionRecord", { ...RECORD, state: near }));
     assert.equal(error.code, "SCHEMA_INVALID");
     assert.match(error.detail, /\/state/);
   }
 });
 
-void test("a state outside the six is rejected and named", () => {
+void test("a record whose state is degraded, a state removed in Phase 28, is rejected and the key is named", () => {
+  const error = rejection(validate("sessionRecord", { ...RECORD, state: "degraded" }));
+  assert.equal(error.code, "SCHEMA_INVALID");
+  assert.match(error.detail, /\/state/);
+});
+
+void test("a state outside the five is rejected and named", () => {
   const error = rejection(validate("sessionRecord", { ...RECORD, state: "running" }));
   assert.match(error.detail, /\/state/);
 });

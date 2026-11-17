@@ -45,15 +45,15 @@ Loading rules (`loadPolicyFile`, `src/core/policy.ts`):
 - **Effect:** `fail-closed` is the default; `advisory` is the explicit opt-in
   (select it by writing `"mode": "advisory"` in the policy file; it is never
   applied without that value). The value changes the mutation decision for
-  non-`active` states. `active` allows a mutation in both modes, whether or
-  not an Anda bridge is configured (`decideMutation`, `src/core/policy.ts`):
+  non-`active` states. `active` allows a mutation in both modes
+  (`decideMutation`, `src/core/policy.ts`):
   - `fail-closed` + non-`active` → `deny` with code from
     `denyCodeFor` (`src/core/policy.ts`): `unbound` →
-    `REALM_UNBOUND`, `stopping` → `REALM_STOPPING`, `connecting`/`degraded`/
+    `REALM_UNBOUND`, `stopping` → `REALM_STOPPING`, `connecting`/
     `error` → `REALM_NOT_ACTIVE`.
   - `advisory` + non-`active` → `allow-with-warning` with message
     `` `realm is ${state}; the write proceeds under advisory policy` ``.
-  - `active` → `allow`, in both modes, whether or not an Anda bridge is configured. A configured bridge that goes down moves the session to `degraded` (reason `ANDA_UNREACHABLE`), which is handled by the rows above.
+  - `active` → `allow`, in both modes.
 - **Enforced by:**
   - `decideMutation` (`src/core/policy.ts`).
   - `gateMutation` thin wrapper mapping allow/allow-with-warning/deny to
@@ -79,7 +79,7 @@ Supersession. The product spec (`docs/specs/realm-spec.xml`, read-only) still ca
 
 ### Upgrading
 
-A policy that has no `mode` key, or no policy file at all, used to load as `advisory`. It now loads as `fail-closed`. While the realm is not active (not yet started, connecting, degraded, stopping or in error), host writes that used to proceed with a warning are refused: the Omp guard blocks `write` and `edit` with `REALM_NOT_ACTIVE` (or `REALM_UNBOUND` or `REALM_STOPPING` for those states), and `write` through the tool dispatcher is denied the same way. Start the realm (`realm up`, or `/realm-retry` in Omp) to proceed. To keep the earlier behaviour, add `"mode": "advisory"` to `<stateDir>/policy.json` and restart the daemon; to take the new default, change nothing. `exec` is unchanged: it was already refused outside `active` in both modes. `realm doctor` names the mode and its source in its `policy-file` check, warns for an explicit `advisory`, and exits 0 whatever its checks report.
+A policy that has no `mode` key, or no policy file at all, used to load as `advisory`. It now loads as `fail-closed`. While the realm is not active (not yet started, connecting, stopping or in error), host writes that used to proceed with a warning are refused: the Omp guard blocks `write` and `edit` with `REALM_NOT_ACTIVE` (or `REALM_UNBOUND` or `REALM_STOPPING` for those states), and `write` through the tool dispatcher is denied the same way. Start the realm (`realm up`, or `/realm-retry` in Omp) to proceed. To keep the earlier behaviour, add `"mode": "advisory"` to `<stateDir>/policy.json` and restart the daemon; to take the new default, change nothing. `exec` is unchanged: it was already refused outside `active` in both modes. `realm doctor` names the mode and its source in its `policy-file` check, warns for an explicit `advisory`, and exits 0 whatever its checks report.
 
 ## `workspaceRoots`
 
@@ -220,8 +220,8 @@ A policy that has no `mode` key, or no policy file at all, used to load as `advi
 - **Effect:** one deadline covering the whole startup path. In
   `LifecycleController.create` the deadline is armed before the pinned-root
   check (`verifyPinnedAt`)
-  and covers that check, record loads/writes, port create and start, and the bridge
-  handshake; each synchronous step is followed by a deadline check and each
+  and covers that check, record loads/writes, and port create and start;
+  each synchronous step is followed by a deadline check and each
   port call is raced against the time left
   (`LifecycleController.create`, `src/lifecycle/controller.ts`). Expiry
   throws/maps to `STARTUP_BUDGET_EXCEEDED` (create: `checkDeadline`,
@@ -285,7 +285,7 @@ a policy key (D-101)" (`TOOL_CALL_TIMEOUT_MS`, `src/tools/dispatch.ts`).
 | `CONTAINER_STOP_GRACE_MS` | `10_000` (`src/runtime/session-execution.ts`) | Libpod stop timeout grace period (`CONTAINER_STOP_GRACE_MS`, `src/runtime/session-execution.ts`). |
 | `AGENTOS_STOP_DEADLINE_MS` | `15_000` (`src/runtime/session-execution.ts`) | Backstop on the AgentOS stop; a missed deadline is a failed stop and maps to `AGENTOS_STOP_FAILED` (`AGENTOS_STOP_DEADLINE_MS` and `stopDeadlineMs`, `src/runtime/session-execution.ts`). |
 | `OPENSHELL_OUTPUT_LIMIT_BYTES` | `262144` (`src/runtime/openshell.ts`) | Per-stream capture cap for exec output (`BoundedOutput`, `src/runtime/session-execution.ts`). |
-| Runtime image / state dir | `RuntimeConfig` (`src/runtime/config.ts`), validated by hand-written `loadRuntimeConfig` (`src/runtime/config.ts`) | Deployment inputs, not policy: image digest pin, `stateDir`, optional `andaUrl`. Numeric limits live in `HARDENING_PROFILE`, never here (header comment of `src/runtime/config.ts`). |
+| Runtime image / state dir | `RuntimeConfig` (`src/runtime/config.ts`), validated by hand-written `loadRuntimeConfig` (`src/runtime/config.ts`) | Deployment inputs, not policy: image digest pin and `stateDir`. Numeric limits live in `HARDENING_PROFILE`, never here (header comment of `src/runtime/config.ts`). |
 
 Related but separate: session identity file naming (`SESSION_ID_PATTERN`,
 `isSessionId` and `recordFileName`, `src/session/paths.ts`), state/record layout
@@ -309,9 +309,7 @@ Keys (`ACCEPTED_KEYS`, `src/runtime/config.ts`). The key set is closed, and any 
 - `workspaceRoot` (required): an absolute path.
 - `secretRoot` (optional): an absolute path, the directory that holds per-sandbox secret directories. When omitted it is `<stateDir>/secrets`, derived by `runtimeRootsOf` (`src/runtime/config.ts`).
 - `sandboxStateRoot` (optional): an absolute path, the directory that holds per-sandbox state. When omitted it is `<stateDir>/sandboxes`.
-- `andaUrl` (optional): an `http:` or `https:` URL with no userinfo. Its presence decides whether the Anda bridge is required (`andaBridgeRequired`, `src/runtime/config.ts`).
-  - Set: the bridge is required at start. The start runs the bridge handshake, and an unreachable bridge refuses the start with `ANDA_UNREACHABLE`.
-  - Absent: no Anda bridge is attached and there is no handshake, so the session goes `active` once the runner start succeeds. While `active` with no bridge, `exec` and `write` run exactly as they do with a bridge, in both policy modes. `status`, `read`, `list`, and `retry` do not need the bridge. If a configured bridge later goes down, the session moves to `degraded` and `exec` and `write` are refused as in any non-active state.
+- Retired keys: `andaUrl` was removed in the 0.4 release line with the Anda bridge. A `config.json` that still has it is refused with `SCHEMA_INVALID`, like any key outside the list above, and the CLI prints the line "andaUrl was removed in the 0.4 release line, with the Anda bridge: delete it from config.json". To migrate, delete the key. Nothing replaces it: a session is `active` once its container runs, and `exec` and `write` are refused only in the states that were already refused.
 
 An explicit `secretRoot` or `sandboxStateRoot` that equals, contains or lies inside the other explicit root or `workspaceRoot` is refused when the file loads (`SCHEMA_INVALID`). That check is lexical; the doctor's `runtime-roots` item also checks the effective (derived) roots.
 

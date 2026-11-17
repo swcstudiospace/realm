@@ -4,8 +4,7 @@
 // waits, so a non-active call cannot hang; the bounded queue wait is TOOL-04 in Phase 4.
 // It writes no audit entry; the Phase 4 dispatcher owns the audit trail.
 //
-// Layering (D-50): this module imports only the contract and core layers, never runtime or
-// anda.
+// Layering (D-50): this module imports only the contract and core layers, never runtime.
 
 import type { Policy } from "../contract/validate.js";
 import { decideMutation, type MutationDenyCode } from "../core/policy.js";

@@ -21,14 +21,14 @@ const AT = "2026-10-22T00:00:00.000Z";
 // The status every stand-in control socket answers with: an active, advisory daemon.
 const ACTIVE_STATUS = {
   snapshot: { state: "active", reason: "realm active", lastTransitionAt: AT },
-  display: { label: "realm active", degraded: false, reason: "realm active", lastTransitionAt: AT },
+  display: { label: "realm active", reason: "realm active", lastTransitionAt: AT },
   mode: "advisory",
 };
 
 // The status a daemon reports while no realm is bound: inactive, advisory.
 const INACTIVE_STATUS = {
   snapshot: { state: "unbound", reason: "no realm bound", lastTransitionAt: AT },
-  display: { label: "realm disconnected", degraded: false, reason: "no realm bound", lastTransitionAt: AT },
+  display: { label: "realm disconnected", reason: "no realm bound", lastTransitionAt: AT },
   mode: "advisory",
 };
 // The refusal a stand-in daemon gives a forwarded write while its realm is not active. It touches no file.

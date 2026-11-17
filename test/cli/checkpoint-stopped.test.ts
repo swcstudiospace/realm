@@ -53,7 +53,7 @@ function policyOf(roots: readonly string[]): Policy {
 function statusOf(state: "unbound" | "active"): DaemonStatus {
   return {
     snapshot: { state, reason: "stopped project test", lastTransitionAt: "2026-11-08T00:00:00.000Z" },
-    display: { label: "realm active", degraded: false, reason: "realm active", lastTransitionAt: "2026-11-08T00:00:00.000Z" },
+    display: { label: "realm active", reason: "realm active", lastTransitionAt: "2026-11-08T00:00:00.000Z" },
     mode: "advisory",
     sessionId: "p0123456789ab",
   };

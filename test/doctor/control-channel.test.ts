@@ -29,7 +29,6 @@ const EXPECTED_IDS: readonly CheckId[] = [
   "podman",
   "podman-service",
   "openshell",
-  "anda-bridge",
   "control-channel",
   "agentos",
   "host-binaries",
@@ -82,7 +81,6 @@ function silentBase(policyPath: string, stateDir: string): DoctorOptions {
     stateDir,
     env: { PATH: EMPTY_PATH_DIR, HOME: "/home/realm", XDG_RUNTIME_DIR: "/run/user/1000" },
     runCommand: () => Promise.reject(Object.assign(new Error("spawn ENOENT"), { code: "ENOENT" })),
-    fetchInformation: () => Promise.reject(new Error("no engine is listening")),
   };
 }
 

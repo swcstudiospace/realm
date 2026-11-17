@@ -10,7 +10,6 @@ import { bindWorkspaceUnderPolicy } from "../../src/fs/root.js";
 import { LifecycleController } from "../../src/lifecycle/controller.js";
 import { SessionStore } from "../../src/session/store.js";
 import { FakeExecutionService } from "../support/fake-execution.js";
-import { FakeBridge } from "../support/fake-bridge.js";
 
 const SESSION = "session-1";
 const CLOCK_TIME = "2026-10-21T09:30:00.000Z";
@@ -39,14 +38,12 @@ function fixture(t: TestContext) {
   const stateDir = join(base, "state");
   const store = new SessionStore(stateDir);
   const exec = new FakeExecutionService();
-  const bridge = new FakeBridge();
   const controller = new LifecycleController({
     sessionId: SESSION,
     policy: policyFor([workspace]),
     pinnedRoot: bindWorkspaceUnderPolicy([workspace], workspace),
     store,
     exec,
-    bridge,
     clock: () => new Date(CLOCK_TIME),
   });
   return { workspace, stateDir, store, exec, controller };

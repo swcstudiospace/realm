@@ -1,6 +1,6 @@
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SessionRecord } from "../../src/contract/validate.js";
@@ -13,6 +13,7 @@ import {
   type ReapVerdict,
   type SelectiveReapDeps,
 } from "../../src/session/reap.js";
+import { recordFileName } from "../../src/session/paths.js";
 import { SessionStore } from "../../src/session/store.js";
 
 const REALM_ID = "7b1c2d3e-4f50-4a61-8b72-9c83d4e5f601";
@@ -209,6 +210,22 @@ void test("D19-1: a container with no record is removed with cause no-record, an
   assert.deepEqual(result.removed, [{ containerId: "c-orphan", cause: "no-record" }]);
   assert.deepEqual(result.deleted, []);
   assert.deepEqual(events, ["remove:c-orphan", "proof"]);
+});
+
+void test("Phase 28 D-28-07: a stored record whose state is degraded is deleted as unreadable and its container is removed as no-record", async (t) => {
+  const { stateDir, store } = await startFixture(t);
+  store.save(recordFor(stateDir, "session-old", "c-old"));
+  // A 0.3 daemon that died while degraded left this state in the record, which a 0.4 daemon cannot read.
+  const recordPath = join(stateDir, "sessions", recordFileName("session-old"));
+  const stored = JSON.parse(readFileSync(recordPath, "utf8")) as Record<string, unknown>;
+  writeFileSync(recordPath, JSON.stringify({ ...stored, state: "degraded" }));
+  const events: string[] = [];
+  const result = await reapStartupSelective(selectiveDeps({ store, events, candidates: [candidate("c-old")] }));
+  assert.deepEqual(result.adopted, []);
+  assert.deepEqual(result.removed, [{ containerId: "c-old", cause: "no-record" }]);
+  assert.deepEqual(result.deleted, [{ sessionId: "session-old", cause: "unreadable" }]);
+  assert.deepEqual(events, ["remove:c-old", "proof", "delete:session-old"]);
+  assert.deepEqual(store.list(), []);
 });
 
 void test("D19-1: a removal that throws but is proven gone keeps its code on the removed entry", async (t) => {

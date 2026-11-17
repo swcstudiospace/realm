@@ -18,8 +18,8 @@ export interface StateSnapshot {
 
 // The session's lifecycle state machine. It commits each allowed transition, then publishes one event for it.
 export class RealmStateMachine {
-  // Codes held for the next transition: recoveredCode and persistCode. A transition publishes them once and then holds none.
-  private held: { recoveredCode?: ErrorCode; persistCode?: ErrorCode } = {};
+  // The code held for the next transition: recoveredCode. A transition publishes it once and then holds none.
+  private held: { recoveredCode?: ErrorCode } = {};
   private readonly sessionId: string;
   private readonly bus: EventBus;
   private readonly clock: () => Date;
@@ -45,16 +45,6 @@ export class RealmStateMachine {
   // Holds the code of a start failure that a stale container's recovery replaced. The next transition carries it.
   holdRecoveredCode(code: ErrorCode): void {
     this.held = { ...this.held, recoveredCode: code };
-  }
-
-  // Holds the code of a state write that failed. The next transition carries it until releasePersistCode runs.
-  holdPersistCode(code: ErrorCode): void {
-    this.held = { ...this.held, persistCode: code };
-  }
-
-  // A later write persisted the state, so the failed write's code is no longer pending.
-  releasePersistCode(): void {
-    this.held = this.held.recoveredCode === undefined ? {} : { recoveredCode: this.held.recoveredCode };
   }
 
   // Throws the REALM_INVALID_TRANSITION error for a disallowed edge, including every

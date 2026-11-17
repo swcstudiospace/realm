@@ -308,7 +308,7 @@ export async function runStdioHost(input: StdioHostInput): Promise<StdioHostResu
       return fail(failureText(outcome.code ?? "REALM_NOT_ACTIVE"));
     }
     const snapshot = outcome.status?.snapshot;
-    if (snapshot?.state !== "active" && snapshot?.state !== "degraded") {
+    if (snapshot?.state !== "active") {
       const { code, reason } = format.upRefusal({ state: snapshot?.state, reason: snapshot?.reason });
       return fail(`${code}: ${reason}\n`);
     }

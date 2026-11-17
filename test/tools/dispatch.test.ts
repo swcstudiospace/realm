@@ -80,7 +80,6 @@ void test("TOOL-03: read, list, and status run with no gate and no lock probe, b
     assert.fail("expected a done status");
   }
   assert.equal(status.value.snapshot.state, "active");
-  assert.equal(status.value.display.degraded, false);
   assert.deepEqual(stagesOf(h), ["snapshot"], "only status reads the state");
   assert.deepEqual(h.phases(), ["admission", "result", "admission", "result", "admission", "result"]);
 });
@@ -127,7 +126,7 @@ void test("TOOL-03: a schema failure has zero side effects and reaches no later 
 });
 
 void test("TOOL-03: SHELL_NOT_ALLOWED precedes the state check (D-89)", async (t) => {
-  const h = makeHarness(t, { state: "degraded" });
+  const h = makeHarness(t, { state: "error" });
   const outcome = await h.dispatcher.call({ exec: { shell: true, script: "echo hi" } });
   assert.deepEqual(outcome, refusal("exec", "SHELL_NOT_ALLOWED", false));
   assert.deepEqual(h.observations, [], "the shell form never reaches the state check");
@@ -154,7 +153,6 @@ void test("TOOL-03: an admission failure runs no execution (D-89, S-21)", async 
 void test("TOOL-03: exec is refused unless active, in both modes (D-89, D-109)", async (t) => {
   const cases: ReadonlyArray<{ readonly state: State; readonly code: ErrorCode; readonly retryable: boolean }> = [
     { state: "unbound", code: "REALM_UNBOUND", retryable: false },
-    { state: "degraded", code: "REALM_NOT_ACTIVE", retryable: true },
     { state: "error", code: "REALM_NOT_ACTIVE", retryable: true },
     { state: "stopping", code: "REALM_STOPPING", retryable: false },
   ];
@@ -169,8 +167,8 @@ void test("TOOL-03: exec is refused unless active, in both modes (D-89, D-109)",
   }
 });
 
-void test("TOOL-03: a write in degraded under advisory policy proceeds with a warning (D-98)", async (t) => {
-  const h = makeHarness(t, { state: "degraded" });
+void test("TOOL-03: a write in error under advisory policy proceeds with a warning (D-98)", async (t) => {
+  const h = makeHarness(t, { state: "error" });
   const outcome = await h.dispatcher.call({ write: { path: "doc.txt", content: "advisory" } });
   expectDone(outcome, "write");
   if (outcome.outcome !== "done" || outcome.tool !== "write") {
@@ -181,8 +179,8 @@ void test("TOOL-03: a write in degraded under advisory policy proceeds with a wa
   assert.deepEqual(h.phases(), ["admission", "result"]);
 });
 
-void test("TOOL-03: a write in degraded under required policy is refused with no audit line (D-98)", async (t) => {
-  const h = makeHarness(t, { state: "degraded", policy: REQUIRED });
+void test("TOOL-03: a write in error under required policy is refused with no audit line (D-98)", async (t) => {
+  const h = makeHarness(t, { state: "error", policy: REQUIRED });
   const outcome = await h.dispatcher.call({ write: { path: "doc.txt", content: "blocked" } });
   assert.deepEqual(outcome, refusal("write", "REALM_NOT_ACTIVE", true));
   assert.equal(h.doc(), "original");
@@ -190,7 +188,7 @@ void test("TOOL-03: a write in degraded under required policy is refused with no
 });
 
 void test("TOOL-03: retry follows the state, returning the snapshot except from error, unbound, and stopping (D-95)", async (t) => {
-  for (const state of ["connecting", "active", "degraded"] as const) {
+  for (const state of ["connecting", "active"] as const) {
     const h = makeHarness(t, { state });
     const outcome = await h.dispatcher.call({ retry: {} });
     expectDone(outcome, "retry");

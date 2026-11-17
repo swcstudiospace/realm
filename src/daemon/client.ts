@@ -86,7 +86,6 @@ function isDisplayStatus(value: unknown): value is DisplayStatus {
     isRecord(value) &&
     typeof value["label"] === "string" &&
     KNOWN_LABELS.includes(value["label"]) &&
-    typeof value["degraded"] === "boolean" &&
     typeof value["reason"] === "string" &&
     typeof value["lastTransitionAt"] === "string"
   );

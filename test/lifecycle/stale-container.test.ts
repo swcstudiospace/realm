@@ -9,7 +9,6 @@ import { LockTable } from "../../src/fs/locks.js";
 import { bindWorkspaceUnderPolicy } from "../../src/fs/root.js";
 import { LifecycleController } from "../../src/lifecycle/controller.js";
 import { SessionStore } from "../../src/session/store.js";
-import { FakeBridge } from "../support/fake-bridge.js";
 import { FakeExecutionService } from "../support/fake-execution.js";
 
 const SESSION = "session-1";
@@ -42,7 +41,6 @@ function fixture(t: TestContext, startupBudgetMs = 10000) {
     policy: policyFor([workspace], startupBudgetMs),
     store,
     exec,
-    bridge: new FakeBridge(),
     clock: () => new Date(CLOCK_TIME),
     locks: new LockTable(),
     pinnedRoot,

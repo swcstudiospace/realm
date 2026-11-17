@@ -312,7 +312,6 @@ function execRefusalCode(state: Exclude<State, "active">): ErrorCode {
     case "stopping":
       return "REALM_STOPPING";
     case "connecting":
-    case "degraded":
     case "error":
       return "REALM_NOT_ACTIVE";
   }

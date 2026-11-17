@@ -9,18 +9,14 @@ import {
 } from "../../src/core/states.js";
 import { RealmError } from "../../src/core/errors.js";
 
-// The D-11 edges, pinned here as literals so the test does not read the table under test.
+// The nine edges (D-11 less the four that named degraded, Phase 28), pinned here as literals so the test does not read the table under test.
 const EXPECTED_ALLOWED: Readonly<Record<string, true>> = {
   "unbound>connecting": true,
   "connecting>active": true,
   "connecting>error": true,
   "connecting>stopping": true,
-  "active>degraded": true,
   "active>error": true,
   "active>stopping": true,
-  "degraded>active": true,
-  "degraded>error": true,
-  "degraded>stopping": true,
   "error>connecting": true,
   "error>stopping": true,
   "stopping>unbound": true,
@@ -30,14 +26,12 @@ const EXPECTED_KEYS = Object.keys(EXPECTED_ALLOWED);
 
 const key = (from: State, to: State): string => `${from}>${to}`;
 
-void test("the state set is exactly the six D-11 states", () => {
-  assert.deepEqual(
-    [...STATES],
-    ["unbound", "connecting", "active", "degraded", "error", "stopping"],
-  );
+void test("the state set is exactly the five states, and degraded is not one of them", () => {
+  assert.deepEqual([...STATES], ["unbound", "connecting", "active", "error", "stopping"]);
+  assert.equal((STATES as readonly string[]).includes("degraded"), false);
 });
 
-void test("the matrix covers 36 ordered pairs: 13 allowed and 23 rejected", () => {
+void test("the matrix covers 25 ordered pairs: 9 allowed and 16 rejected", () => {
   let total = 0;
   let allowed = 0;
   for (const from of STATES) {
@@ -46,16 +40,16 @@ void test("the matrix covers 36 ordered pairs: 13 allowed and 23 rejected", () =
       if (isTransitionAllowed(from, to)) allowed += 1;
     }
   }
-  assert.equal(total, 36);
-  assert.equal(allowed, 13);
-  assert.equal(total - allowed, 23);
-  assert.equal(EXPECTED_KEYS.length, 13);
+  assert.equal(total, 25);
+  assert.equal(allowed, 9);
+  assert.equal(total - allowed, 16);
+  assert.equal(EXPECTED_KEYS.length, 9);
 });
 
-void test("the exported edge table holds exactly the D-11 edges", () => {
+void test("the exported edge table holds exactly the nine edges", () => {
   const actual = ALLOWED_TRANSITIONS.map(([f, t]) => key(f, t));
-  assert.equal(actual.length, 13);
-  assert.equal(new Set(actual).size, 13);
+  assert.equal(actual.length, 9);
+  assert.equal(new Set(actual).size, 9);
   assert.deepEqual([...actual].sort(), [...EXPECTED_KEYS].sort());
 });
 
@@ -100,10 +94,21 @@ void test("assigning into or extending the state list throws a TypeError", () =>
   assert.throws(() => {
     mutable.push("paused");
   }, TypeError);
-  assert.deepEqual(
-    [...STATES],
-    ["unbound", "connecting", "active", "degraded", "error", "stopping"],
-  );
+  assert.deepEqual([...STATES], ["unbound", "connecting", "active", "error", "stopping"]);
+});
+
+void test("every edge naming degraded is rejected with REALM_INVALID_TRANSITION (Phase 28)", () => {
+  const degraded = "degraded" as unknown as State;
+  const refused = (from: State, to: State): void => {
+    assert.equal(isTransitionAllowed(from, to), false, `${from}>${to}`);
+    const err = checkTransition(from, to);
+    assert.ok(err instanceof RealmError, `${from}>${to} must return a RealmError`);
+    assert.equal(err.code, "REALM_INVALID_TRANSITION");
+  };
+  for (const other of STATES) {
+    refused(degraded, other);
+    refused(other, degraded);
+  }
 });
 
 void test("every self-transition is rejected with REALM_INVALID_TRANSITION (equality never merges)", () => {

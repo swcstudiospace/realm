@@ -1,4 +1,4 @@
-// Daemon health loop (RT-04, owner ruling N1). While the session is active or degraded the daemon probes it every
+// Daemon health loop (RT-04, owner ruling N1). While the session is active the daemon probes it every
 // HEALTH_PROBE_INTERVAL_MS through the controller, so a runner that died moves the session to error and the status label
 // reads disconnected without a doctor run. The interval timer is replaced by a recording fake that the test fires by hand, so
 // no test sleeps and no real timer is armed.
@@ -18,7 +18,6 @@ import { startDaemon, type StartedDaemon } from "../../src/daemon/daemon.js";
 import { HEALTH_PROBE_INTERVAL_MS, type SessionEntry } from "../../src/daemon/sessions.js";
 import { AgentOsSupervisor } from "../../src/runtime/agentos.js";
 import { FakeAgentOsDriver } from "../support/fake-agentos.js";
-import { FakeBridge } from "../support/fake-bridge.js";
 import { FakeExecutionService } from "../support/fake-execution.js";
 
 const IMAGE = `registry.example.com/realm/workload@sha256:${"0".repeat(64)}`;
@@ -127,14 +126,13 @@ function fakeIntervals(t: TestContext): FakeIntervals {
 interface Running {
   readonly daemon: StartedDaemon;
   readonly exec: HoldableProbeExecution;
-  readonly bridge: FakeBridge;
   readonly workspace: string;
   readonly failures: ErrorCode[];
   readonly servers: Server[];
 }
 
 // Starts a daemon over the fake execution service. The session stays unbound until activate.
-async function startIdle(t: TestContext, andaUrl?: string): Promise<Running> {
+async function startIdle(t: TestContext): Promise<Running> {
   const base = realpathSync(mkdtempSync(join(tmpdir(), "realm-health-daemon-")));
   scratchDirs.push(base);
   const workspace = join(base, "ws");
@@ -142,7 +140,6 @@ async function startIdle(t: TestContext, andaUrl?: string): Promise<Running> {
   const policyPath = join(base, "policy.json");
   writeFileSync(policyPath, JSON.stringify({ workspaceRoots: [workspace] }));
   const exec = new HoldableProbeExecution();
-  const bridge = new FakeBridge();
   const failures: ErrorCode[] = [];
   const servers: Server[] = [];
   const daemon = await startDaemon({
@@ -150,11 +147,9 @@ async function startIdle(t: TestContext, andaUrl?: string): Promise<Running> {
       image: IMAGE,
       stateDir: join(base, "state"),
       workspaceRoot: workspace,
-      ...(andaUrl === undefined ? {} : { andaUrl }),
     },
     policyPath,
     exec,
-    bridge,
     clock: () => new Date(CLOCK_ISO),
     runOpenShell: () => Promise.resolve({ exitCode: 0, stdout: "", stderr: "", truncated: false }),
     // A libpod double whose realm listing is empty, so the startup reap removes nothing.
@@ -181,11 +176,11 @@ async function startIdle(t: TestContext, andaUrl?: string): Promise<Running> {
       // The test already took the daemon down, so there is nothing left to stop.
     }
   });
-  return { daemon, exec, bridge, workspace, failures, servers };
+  return { daemon, exec, workspace, failures, servers };
 }
 
-async function startActive(t: TestContext, andaUrl?: string): Promise<Running> {
-  const running = await startIdle(t, andaUrl);
+async function startActive(t: TestContext): Promise<Running> {
+  const running = await startIdle(t);
   const reply = await sendRequest(running.daemon.socketPath, { id: "up-start", method: "up", params: { workspaceRoot: running.workspace } });
   assert.equal(reply.error, undefined);
   assert.equal(entryOf(running).handle.controller.snapshot().state, "active");
@@ -409,79 +404,6 @@ void test("RT-04: the timer is cleared when a probe moves the session to error, 
   timers.fire();
   await settle();
   assert.equal(running.exec.probeCalls, 1);
-});
-
-void test("RT-04: moving between active and degraded keeps exactly one timer, and a degraded session is probed", async (t) => {
-  const timers = fakeIntervals(t);
-  const running = await startActive(t, "http://127.0.0.1:9/");
-  const first = timers.live()[0];
-  assert.ok(first);
-
-  running.bridge.emit({ kind: "down", code: "ANDA_UNREACHABLE" });
-  assert.equal(stateOf(running), "degraded");
-  assert.equal(first.cleared, false, "entering degraded keeps the running timer");
-  assert.equal(timers.armed.length, 1, "no second timer was armed");
-  assert.equal(timers.live().length, 1);
-  timers.fire();
-  await settle();
-  assert.equal(running.exec.probeCalls, 1, "a degraded session is probed");
-  assert.equal(stateOf(running), "degraded");
-
-  running.bridge.emit({ kind: "up" });
-  assert.equal(stateOf(running), "active");
-  assert.equal(timers.armed.length, 1, "returning to active arms no second timer");
-  assert.equal(timers.live().length, 1);
-  timers.fire();
-  await settle();
-  assert.equal(running.exec.probeCalls, 2);
-});
-
-void test("RT-04: a dead runner in degraded moves the session to error with AGENTOS_CRASH_LOOP, and the label reads disconnected", async (t) => {
-  const timers = fakeIntervals(t);
-  const running = await startActive(t, "http://127.0.0.1:9/");
-  running.bridge.emit({ kind: "down", code: "ANDA_UNREACHABLE" });
-  assert.equal(stateOf(running), "degraded");
-  running.exec.failNext("probe", "AGENTOS_CRASH_LOOP");
-
-  timers.fire();
-  await settle();
-
-  const snapshot = entryOf(running).handle.controller.snapshot();
-  assert.equal(snapshot.state, "error");
-  assert.equal(snapshot.reason, "AGENTOS_CRASH_LOOP");
-  assert.equal(await statusLabelOf(running), STATUS_LABELS.disconnected);
-  assert.equal(timers.live().length, 0, "the timer is cleared once the probe moved the session to error");
-});
-
-void test("RT-04: a timer armed in degraded is cleared when the session leaves degraded, and no probe runs afterwards", async (t) => {
-  const timers = fakeIntervals(t);
-  const running = await startActive(t, "http://127.0.0.1:9/");
-  running.bridge.emit({ kind: "down", code: "ANDA_UNREACHABLE" });
-  assert.equal(stateOf(running), "degraded");
-  assert.equal(timers.live().length, 1);
-
-  await entryOf(running).handle.controller.stop();
-
-  assert.equal(stateOf(running), "unbound");
-  assert.equal(timers.live().length, 0, "leaving degraded cleared the timer");
-  timers.fire();
-  await settle();
-  assert.equal(running.exec.probeCalls, 0);
-});
-
-void test("RT-04: a bridge mismatch that takes a degraded session to error clears the timer", async (t) => {
-  const timers = fakeIntervals(t);
-  const running = await startActive(t, "http://127.0.0.1:9/");
-  running.bridge.emit({ kind: "down", code: "ANDA_UNREACHABLE" });
-  assert.equal(timers.live().length, 1);
-
-  running.bridge.emit({ kind: "mismatch", code: "ANDA_VERSION_MISMATCH" });
-
-  assert.equal(stateOf(running), "error");
-  assert.equal(timers.live().length, 0);
-  timers.fire();
-  await settle();
-  assert.equal(running.exec.probeCalls, 0);
 });
 
 void test("RT-04: the timer is cleared on down, and no probe runs afterwards", async (t) => {
