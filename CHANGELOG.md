@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.3.33] - 2026-11-17
+
+### Documentation
+- docs(phase-21): plan the host plugin contract (HOST-01..09) (#100) (7ed1ab7)
+
 ## [0.3.32] - 2026-11-17
 
 ### Documentation
