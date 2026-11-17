@@ -127,7 +127,7 @@ test("describeMarker accepts an attached marker and a failed marker with a catal
   assert.equal(describeMarker({ ...MARKER, attach: "failed", code: "PODMAN_MISSING" }, 4242), null);
   assert.match(describeMarker(null, 4242), /no marker/);
   assert.match(describeMarker({ ...MARKER, extra: 1 }, 4242), /six keys/);
-  const { sessionId: _dropped, ...short } = MARKER;
+  const short = Object.fromEntries(Object.entries(MARKER).filter(([key]) => key !== "sessionId"));
   assert.match(describeMarker(short, 4242), /six keys/);
   assert.match(describeMarker(MARKER, 4243), /child pid/);
   assert.match(describeMarker({ ...MARKER, schemaVersion: 2 }, 4242), /schemaVersion 1/);

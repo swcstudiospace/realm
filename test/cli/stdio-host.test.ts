@@ -440,7 +440,7 @@ void test("--reattach: an MCP boot that fails DAEMON_START_TIMEOUT exposes the t
     id += 1;
     return world.tools.length >= 1;
   }, "a call is forwarded after the re-attach");
-  assert.equal(world.tools[0] !== undefined, true);
+  assert.ok(world.tools.length > 0);
   const result = await finish(session);
   assert.equal(result.exitCode, 0);
   assert.equal(session.timers.pendingCount(), 0, "no timer remains after shutdown");

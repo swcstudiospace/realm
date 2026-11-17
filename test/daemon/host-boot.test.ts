@@ -118,7 +118,7 @@ void test("BOOT-06: an accepted report answers recorded, counts a metrics row an
   const snap = h.metrics.snapshot();
   assert.deepEqual(snap.hostBoot, [{ hostId: "claude", transport: "mcp", phase: "attached", count: 1 }]);
   assert.equal(snap.timings.hostBootMs?.count, 1);
-  assert.equal(snap.timings.hostBootMs?.sumMs, 120);
+  assert.equal(snap.timings.hostBootMs.sumMs, 120);
 });
 
 void test("BOOT-06: the host.boot line has exactly the documented keys and the level of its phase", (t) => {
@@ -172,26 +172,28 @@ void test("BOOT-07: the capability posture names what the loaded policy denies, 
 });
 
 void test("BOOT-07: an unlabelled session logs no posture, and the posture is computed once per host id", (t) => {
-  let reads = 0;
+  const counts = { reads: 0 };
+  // A call: assert.equal narrows a property read to its expected literal, which would make the later comparisons constant.
+  const readCount = (): number => counts.reads;
   const base = policy({ shellEnabled: false });
   const counting: Policy = {
     ...base,
     get workspaceRoots(): readonly string[] {
-      reads += 1;
+      counts.reads += 1;
       return base.workspaceRoots;
     },
   };
   const h = harness(t, { recordAudits: true, policy: counting });
   h.recorder.record(report({ hostId: "unlabelled", bootId: "anon-boot" }));
-  assert.equal(reads, 0, "unlabelled computes nothing");
+  assert.equal(readCount(), 0, "unlabelled computes nothing");
   h.recorder.record(report({ bootId: "claude-one" }));
-  const afterFirst = reads;
+  const afterFirst = readCount();
   assert.ok(afterFirst > 0, "the first claude report resolves the capabilities");
   h.recorder.record(report({ bootId: "claude-two" }));
   h.recorder.record(report({ phase: "refused", bootId: "claude-three" }));
-  assert.equal(reads, afterFirst, "cached per host id");
+  assert.equal(readCount(), afterFirst, "cached per host id");
   h.recorder.record(report({ hostId: "codex", bootId: "codex-one" }));
-  assert.ok(reads > afterFirst, "another host id resolves its own");
+  assert.ok(readCount() > afterFirst, "another host id resolves its own");
   const [anon] = logged(h);
   assert.equal(anon !== undefined && "capabilitiesDenied" in anon, false);
 });
@@ -276,8 +278,8 @@ void test("BOOT-07: a failed audit append answers AUDIT_WRITE_FAILED after the m
   assert.deepEqual(afterFirst.map((line) => line["event"]), ["host.boot", "host.boot.audit_failed"]);
   assert.equal(afterFirst[0]?.["correlationId"], "first");
   assert.equal(afterFirst[1]?.["level"], "error");
-  assert.equal(afterFirst[1]?.["correlationId"], "first");
-  assert.equal(afterFirst[1]?.["code"], "AUDIT_WRITE_FAILED");
+  assert.equal(afterFirst[1].["correlationId"], "first");
+  assert.equal(afterFirst[1].["code"], "AUDIT_WRITE_FAILED");
 
   // A throw that is not a RealmError is mapped, and its text is never logged.
   assertCode(() => h.recorder.record(report({ bootId: "second" })), "AUDIT_WRITE_FAILED");

@@ -85,6 +85,8 @@ interface Attempt {
 const MAX_ATTEMPT = 9;
 const MAX_DURATION_MS = 600_000;
 
+// Reads the flag through a call: a check made before an await no longer holds after it, and flow analysis cannot see the change.
+const isDead = (attempt: Attempt): boolean => attempt.dead;
 const codeOf = (error: unknown): ErrorCode => (error instanceof RealmError ? error.code : "REALM_NOT_ACTIVE");
 const isErrorCode = (value: string): value is ErrorCode => ERROR_CODES.some((code) => code === value);
 const isRealmTool = (name: string): name is ToolName => STDIO_TOOLS.some((tool) => tool === name);
@@ -299,7 +301,7 @@ export function createBootDriver(deps: HostBootDeps, boot: ResolvedBoot): BootDr
         dropClient(token);
         throw error;
       }
-      if (token.dead) {
+      if (isDead(token)) {
         throw makeRealmError("REALM_NOT_ACTIVE");
       }
       return { daemon: attached.client, refusal: attached.refusal, status };

@@ -150,12 +150,12 @@ void test("BOOT-06: at most 256 distinct rows are kept, and an existing row stil
   assert.ok(sent > 256);
   const full = registry.snapshot();
   assert.equal(full.hostBoot?.length, 256);
-  const first = full.hostBoot?.[0];
+  const first = full.hostBoot.[0];
   assert.ok(first !== undefined);
   registry.recordHostBoot(observation({ hostId: first.hostId, transport: first.transport, phase: first.phase, code: first.code ?? null }));
   const after = registry.snapshot();
   assert.equal(after.hostBoot?.length, 256);
-  assert.equal(after.hostBoot?.[0]?.count, first.count + 1);
+  assert.equal(after.hostBoot.[0].count, first.count + 1);
   assert.equal(after.timings.hostBootMs?.count, sent + 1);
 });
 
@@ -166,9 +166,9 @@ void test("BOOT-06: hostBootMs observes only attached, refused and failed, in th
   }
   const timing = registry.snapshot().timings.hostBootMs;
   assert.equal(timing?.count, 3);
-  assert.equal(timing?.sumMs, 120);
-  assert.equal(timing?.maxMs, 40);
-  assert.deepEqual(timing?.bucketUpperBoundsMs, BUCKET_UPPER_BOUNDS_MS);
+  assert.equal(timing.sumMs, 120);
+  assert.equal(timing.maxMs, 40);
+  assert.deepEqual(timing.bucketUpperBoundsMs, BUCKET_UPPER_BOUNDS_MS);
   assert.equal(registry.snapshot().hostBoot?.length, HOST_BOOT_PHASES.length);
 });
 

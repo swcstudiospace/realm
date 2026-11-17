@@ -154,7 +154,7 @@ void test("each phase writes one log line, the marker and a valid report", async
       assert.equal(report.hostId, "claude");
       assert.equal(report.transport, "mcp");
       assert.equal(h.sent[0]?.timeoutMs, phase === "closed" ? 1000 : 5000);
-      assert.equal(h.sent[0]?.socketPath, h.socketPath);
+      assert.equal(h.sent[0].socketPath, h.socketPath);
       assert.deepEqual(h.diagnostics, []);
     } finally {
       cleanup(h);
@@ -236,7 +236,7 @@ void test("a refused reply is logged at debug with the code only and writes noth
   }
 });
 
-void test("the ninth concurrent report is dropped and counted", async () => {
+void test("the ninth concurrent report is dropped and counted", () => {
   const sent: ControlRequest[] = [];
   const h = harness({
     send: (_path, request) => {

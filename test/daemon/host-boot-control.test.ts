@@ -140,7 +140,7 @@ void test("BOOT-06: a valid host-boot request is recorded: reply, metrics row, t
   const snap = await daemon.metrics();
   assert.deepEqual(snap.hostBoot, [{ hostId: "claude", transport: "mcp", phase: "attached", count: 1 }]);
   assert.equal(snap.timings.hostBootMs?.count, 1);
-  assert.equal(snap.timings.hostBootMs?.sumMs, 250);
+  assert.equal(snap.timings.hostBootMs.sumMs, 250);
   assert.deepEqual(
     snap.controlRequests.find((row) => row.method === "host-boot"),
     { method: "host-boot", count: 1, refused: 0 },
@@ -149,11 +149,11 @@ void test("BOOT-06: a valid host-boot request is recorded: reply, metrics row, t
   const [line, ...rest] = hostBootLines(daemon);
   assert.equal(rest.length, 0);
   assert.equal(line?.["level"], "info");
-  assert.equal(line?.["correlationId"], "boot-0123456789abcdef");
-  assert.equal(line?.["hostId"], "claude");
-  assert.equal(line?.["phase"], "attached");
+  assert.equal(line.["correlationId"], "boot-0123456789abcdef");
+  assert.equal(line.["hostId"], "claude");
+  assert.equal(line.["phase"], "attached");
   // The default policy denies shell, and the log says so: the capability posture of this host under the loaded policy.
-  assert.deepEqual(line?.["capabilitiesDenied"], ["exec.shell:SHELL_NOT_ALLOWED"]);
+  assert.deepEqual(line.["capabilitiesDenied"], ["exec.shell:SHELL_NOT_ALLOWED"]);
 
   // The audit chain holds the one attached line, written by the daemon, and verifies.
   assert.equal(verifyAuditFile(auditPath(daemon)).ok, true);
