@@ -2,20 +2,20 @@
 gsd_state_version: "1.0"
 milestone: v3.0
 milestone_name: Containment by Default
-current_phase: 20
-current_phase_name: Release pipeline hardening
-status: executing
-stopped_at: Phase 19 complete, ready to execute Phase 20
-last_updated: "2026-11-16T13:59:35.657Z"
-last_activity: 2026-11-16
-last_activity_desc: Phase 19 complete, transitioned to Phase 20
-state_head: 1be115b5567c4dd6cb83d3aed141ff468fad81a0
+current_phase: 21
+current_phase_name: Host plugin contract and installer
+status: planning
+stopped_at: Phase 20 complete, ready to plan Phase 21
+last_updated: "2026-11-17T00:38:13.404Z"
+last_activity: 2026-11-17
+last_activity_desc: Phase 20 complete, transitioned to Phase 21
+state_head: aeb44ef04f8c02d88bdb14dfab4f0f4a0cddfe0c
 progress:
-  total_phases: 9
-  completed_phases: 26
+  total_phases: 15
+  completed_phases: 27
   total_plans: 47
-  completed_plans: 44
-  percent: 96
+  completed_plans: 47
+  percent: 100
 ---
 
 # Project State
@@ -29,10 +29,10 @@ See: .planning/PROJECT.md (updated 2026-10-29)
 
 ## Current Position
 
-Phase: 20 — Release pipeline hardening
+Phase: 21 — Host plugin contract and installer
 Plan: Not started
-Status: Ready to execute
-Last activity: 2026-11-16 — Phase 19 complete, transitioned to Phase 20
+Status: Ready to plan
+Last activity: 2026-11-17 — Phase 20 complete, transitioned to Phase 21
 
 ## Current Recovery Boundaries
 
@@ -58,7 +58,7 @@ not a fresh instruction to restart discovery, install a runtime or close a phase
 
 **Velocity:**
 
-- Total plans completed: 52
+- Total plans completed: 56
 - Average duration: N/A
 - Total execution time: 0 hours
 
@@ -74,6 +74,7 @@ not a fresh instruction to restart discovery, install a runtime or close a phase
 | 17 | 6 | - | - |
 | 18 | 16 | - | - |
 | 19 | 1 | - | - |
+| 20 | 4 | - | - |
 
 **Recent Trend:**
 
@@ -220,7 +221,7 @@ Detail, by phase: Phase 3 covers RT-01, RT-02, RT-03, RT-09, and the live parts 
 ## Session Continuity
 
 Last session: 2026-11-08T16:41:15.821Z
-Stopped at: Phase 19 complete, ready to execute Phase 20
+Stopped at: Phase 20 complete, ready to plan Phase 21
 Resume file: None
 
 Recorded commits (closure run): 72817e9 (private flag restored, engines >=22.13.0); 390f511 (causeCode and catalogue codes, host paths, lifecycle bound, root identity, exec margin); b6bc892 (daemon entry, AgentOS fail-closed, catalogue refusals, per-method control bounds); 8088159 (daemon owns sessions; tool method; daemon client; Omp and MCP attach); 4b1d4ab (smoke fixes: CLI probe, up and down exits, state-dir 0700); c55056a (traceability: requirements by evidence, spike facts, runtime config, Omp attach contract); a999c17 (audit gap closure: realm acp, refusal code mapping, one state-dir resolver, Omp status, pinned-root rebind, catch-site fixes, daemon server-failure stop); dd02034 (re-audit, planning, and docs); 54bc236 (MCP tool-call diagnostic); plus the decisions commit (see git log).
