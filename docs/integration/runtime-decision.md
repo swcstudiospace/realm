@@ -1,6 +1,6 @@
 # Runtime decision note (Phase 3)
 
-Status: decided for Phase 3. Not every item is verified. Each one is unit-verified, live-gated (a skipped suite that names its reason), partly observed, recorded as an assumption or limitation, Open, or Blocked. OQ-P3-04 and OQ-P3-07 are Open, OQ-P3-11 is Open, and OQ-P3-16 is Blocked. Nothing here is live-verified on this host.
+Status: decided for Phase 3. Not every item is verified. Each one is unit-verified, live-gated (a skipped suite that names its reason), partly observed, recorded as an assumption or limitation, Open, or Blocked. OQ-P3-04 and OQ-P3-07 are Open, OQ-P3-11 is Open, and OQ-P3-16 is Blocked. Nothing here is live-verified on this host. Superseded in part on 2026-11-17: the Anda items (the S-08 Anda bullet and OQ-P3-09 to OQ-P3-11) are closed by D-27-01, recorded in the section "Anda bridge removal (Phase 27, ANDAX-01, 2026-11-17)" at the end of this file; OQ-P3-11 is no longer Open.
 Read date of external sources: 2026-10-21 (ISO 8601), as recorded in the integration notes.
 Scope: the layering, the Podman gate, the OpenShell pin, the AgentOS mode, and every open question OQ-P3-01 to OQ-P3-16 with its default and the module it blocks.
 
@@ -24,7 +24,7 @@ Settled input S-08:
 - The **OpenShell gateway runs on the host, rootless**.
 - It creates **one OpenShell sandbox per session** through its **Podman driver**.
 - The **AgentOS library runs as the sandbox workload**.
-- **Anda Engine runs as a separate service**, reached over HTTP from the TypeScript client.
+- **Anda Engine runs as a separate service**, reached over HTTP from the TypeScript client. [Superseded 2026-11-17 by D-27-01: the Anda bridge is removed in Phase 28 and Realm no longer reaches Anda.]
 - Nothing nests OpenShell inside the Realm container, and nothing runs privileged.
 
 Evidence: `docs/integration/openshell.md` Q1 records that the documented Podman driver creates its own sandbox container (driver table: "Its own container"), and that the gateway runs "Rootless containers on the gateway host". It does not document a launch inside an externally created container.
@@ -82,9 +82,9 @@ Reversibility: costly. Every runtime module depends on this layering.
 | OQ-P3-06 | `@rivet-dev/agentos-core` version, licence, and Node floor are not verified in its registry. | No dependency added. Execution checks `npm view` read-only before any add. | **Blocks adding the AgentOS dependency** (`package.json`, the concrete driver) | Blocked. No dependency added. |
 | OQ-P3-07 | Does AgentOS library mode need a native sidecar, and do native ELF binaries run (`agentos.md` Q5)? | Recorded as open. Library mode is primary (S-11). | AgentOS driver binding and any sandbox image that runs native binaries | Open. |
 | OQ-P3-08 | Confirm the `podman run` flags against the local 4.9.3 binary. | Run read-only, with no install or upgrade. Result is in "Host observations" above. The flags exist. The `no-new-privileges` default and value acceptance are not confirmed by the help text. | `verifyInspect` checks in `src/runtime/hardening.ts` (D-51) against a real 4.9.3 container | Partly observed. The remaining flag behaviour is live-gated. |
-| OQ-P3-09 | Anda publishes no protocol or engine version (`anda.md` Q4). | Shape handshake (D-61). Recorded as a limitation in `anda-decision.md`. | Any claim of a version match in `src/anda/shape.ts` and the ANDA-02 test | Limitation recorded. |
-| OQ-P3-10 | Anda RPC body and credential format (`anda.md` Q2, Q3). | Not needed in Phase 3. No credentials are produced. | **Blocks the phase that first calls `POST /{id}`** (Phase 4 or 5 tool calls through Anda) | Blocked for that phase. |
-| OQ-P3-11 | Anda licence conflict (`anda.md` Q6). | No Anda code or dependency added. | Any vendoring of Anda code. It does not block Phase 3. | Open. Must be resolved before vendoring. |
+| OQ-P3-09 | Anda publishes no protocol or engine version (`anda.md` Q4). | Shape handshake (D-61). Recorded as a limitation in `anda-decision.md`. | Any claim of a version match in `src/anda/shape.ts` and the ANDA-02 test | Closed: superseded by removal (D-27-01, 2026-11-17). Was: limitation recorded. |
+| OQ-P3-10 | Anda RPC body and credential format (`anda.md` Q2, Q3). | Not needed in Phase 3. No credentials are produced. | **Blocks the phase that first calls `POST /{id}`** (Phase 4 or 5 tool calls through Anda) | Closed: superseded by removal (D-27-01, 2026-11-17). Was: blocked for the phase that first calls POST /{id}; no phase ever called it. |
+| OQ-P3-11 | Anda licence conflict (`anda.md` Q6). | No Anda code or dependency added. | Any vendoring of Anda code. It does not block Phase 3. | Closed: moot, not resolved (D-27-01, 2026-11-17). No legal determination is made. Was: Open. |
 | OQ-P3-12 | OpenShell drift: docs 0.1.5, pinned verbs 0.1.2 (S-10). `--no-keep` with `--detach` is documented only for 0.1.5. Historical (superseded 2026-10-28): the pin is 0.1.5 and the create passes no `--no-keep`. | Pin 0.1.2 and gate. Re-verify on upgrade. | The argv builder in `src/runtime/openshell.ts` (D-55) and the live `--no-keep`/`--detach` lifecycle | Live-gated. Fails closed. |
 | OQ-P3-13 | On Linux, "Podman machine" is mapped to the rootless API socket (`$XDG_RUNTIME_DIR/podman/podman.sock`). | This mapping, recorded here. A refused socket gives `PODMAN_MACHINE_DOWN` with the fix `systemctl --user start podman.socket`. | `src/runtime/podman-probe.ts` step 3 (D-53) | Recorded assumption. |
 | OQ-P3-14 | Does the OpenShell driver apply the PID limit, read-only root, and capability drop? | The verifier (D-51) fails closed when it does not. | Live proof that `verifyInspect` passes on an OpenShell-created container (`src/runtime/hardening.ts`, `session-execution.ts`) | Live-gated. Fails closed. |
@@ -607,3 +607,37 @@ Evidence: `test/cli/checkpoint-pin-e2e.test.ts` runs up, down, checkpoint create
 Restart route. A daemon restart is a second recovery route, and it needs no original directory. Startup adoption refuses a session whose stored pin no longer matches the directory at its path (property workspace-pin, through storedPinOf in src/lifecycle/session-state.ts, called from src/daemon/startup.ts). The reap then removes its container and deletes its record (src/session/reap.ts), the registry entry is cleared, and a later up binds the replacement. This is expected behaviour, read from the code. No test exercises it yet, because the realm daemon fixture has no stop-only method and its libpod double does not track containers.
 
 Open: pins accumulate, one per session id, and no command depends on a pin being absent; the removal rule is open. A moved root derives a new session id and is not refused; refusing a move needs its own decision. A directory replaced while its session is live fails the identity check of resolveSelection for status, tool and down with its path (test T1 (g) in test/daemon/daemon.test.ts pins the refusal for a renamed directory; a replacement is not tested). Putting the original directory back at the path lets down release the session. A release by session id is not available, and whether to add one is open.
+
+## Anda bridge removal (Phase 27, ANDAX-01, 2026-11-17)
+
+Status: decided 2026-11-17 by the owner, recorded before the code change that Phase 28 makes. Source: the owner decisions of 2026-11-17 (milestone v4.0 start, commit 3b19bee; Phases 27 to 31 and ANDAX-01 to ANDAX-05 in the planning records) and `docs/integration/anda-replacement-research.md`. Nothing in this decision was run; the removal itself is executed in Phase 28.
+
+**D-27-01. Drop the Anda bridge entirely. Owner decision.** The bridge (the `src/anda/` module, the `andaUrl` config key, the codes `ANDA_UNREACHABLE` and `ANDA_VERSION_MISMATCH`, the `anda-bridge` doctor check and the `degraded` state) is removed as a breaking change with no replacement, no compatibility shim and no reserved state. Reasons, observed (research sections 2.1, 2.2, 7.1): the bridge makes one anonymous GET and carries no tool call or credential; no Anda capability need was identified and the owner named none; no live run against an engine was ever made and no host is recorded with one configured (recorded in the v2.0 audit, not re-observed); the direction of 2026-10-22 (P5-D1, recorded in the Phase 5 context, not re-observed) has Anda consume Realm over MCP; the bridge is the only producer of `degraded`. Reversibility: cheap. Revisit triggers: the owner names a concrete Anda capability for Realm to call (then a scoped client under a new decision), or a decision to vendor Anda code (then the licence conflict is reopened).
+
+**D-27-02. MCP over stdio stays the connection mechanism. Owner decision.** `realm mcp` over stdio, the control socket and the Omp plugin remain the mechanisms for agent hosts. P5-D1 survives in its first half only: Anda may consume Realm as an MCP client over stdio; Realm never dials Anda. Streamable HTTP, OAuth 2.1, A2A, mTLS and SPIFFE stay out of scope.
+
+**D-27-03. A capability-token spike is included. Owner decision.** Phase 30 decides, with evidence, whether a per-session capability token is worth building and records build or drop; no production code unless the decision is build.
+
+**D-27-04. Local single-user only. Owner decision.** No remote or multi-user Realm in v4.0.
+
+**D-27-05. Release line 0.4.x, breaking-change signal. Owner decision.** `release/milestone.json` reads milestone v4.0, minor 4. The removal carries a breaking-change commit subject (`refactor!` or `feat!`) so the 0.4.0 notes show it; `CHANGELOG.md` and version fields stay release-owned. The behavior for an unknown `andaUrl` key (refuse with a fixed message, or ignore with a warning) is decided in Phase 28 within the rule of `src/runtime/config.ts` that no unknown key name is echoed.
+
+**Dispositions.** ANDA-01 to ANDA-04: dropped, neither satisfied nor carried. OQ-P3-09 and OQ-P3-10: closed, superseded by removal. OQ-P3-11: closed, moot and not resolved; this note makes no legal determination and the question reopens only if a later decision vendors Anda code. The register with evidence is `.planning/phases/27-anda-disposition-and-v4-0-requirement-closure/27-DISPOSITIONS.md`, Part A.
+
+**Superseded by D-27-01.**
+
+| Item | Where recorded | Effect |
+| --- | --- | --- |
+| S-08's Anda line | This file | Marked superseded above; the service line text stays as history until Phase 28. |
+| S-12, D-52 (the `andaUrl` clause), D-61, D-62, D-64, D-65, D-66 and D-69 (the `anda-bridge` doctor item) | Archived Phase 3 context, not edited | Superseded. |
+| OQ-P3-09 to OQ-P3-11 | This file, closed above | Closed by this decision. |
+| The log record `anda.listener_failed` | This file | Removed by Phase 28 with the code that writes it. |
+| The second sentence of P5-D1, "Realm reaches Anda over its HTTP API" | The `AGENTS.md` bullet and `anda-decision.md` section 7 | Superseded; the bullet is rewritten in this phase. |
+| The `AGENTS.md` Project paragraph and Layout bullet for `anda/` | `AGENTS.md` | Phase 28 edits them in the same pull request as the code. |
+| The product spec passages: the layering lines, `ANDA_ENGINE_BRIDGE`, the `active` and `degraded` state definitions, the failure rule "Anda bridge unreachable: degraded", the bridge spike step and the open-question lines | `docs/specs/realm-spec.xml` | Not edited (OQ-27-02); read as superseded by this section. |
+
+**What stays.** P5-D1's first half; `src/core/backoff.ts` and `src/core/timeout.ts` (AgentOS and other callers use them; Phase 28 rewords only their Anda comments); the doctor's other items; the status label `active`.
+
+**Catalogue and state machine.** No catalogue code is added. Phase 28 removes `ANDA_UNREACHABLE` and `ANDA_VERSION_MISMATCH` from `src/core/errors.ts`, `src/runtime/driver/grpc-status.ts` and every table, doc and test that enumerates codes, in one pull request; the reason recorded here is D-27-01 (the codes have no producer once the bridge is gone). Phase 28 removes `degraded` from the state machine, the status snapshot flag, the schemas, the host contract text and the docs, for the same reason (the bridge was its only producer).
+
+**Accepted residuals.** R-27-01: the repository cannot show that no operator outside the audited hosts has an `andaUrl` configured; the mitigation is Phase 28's refusal message and the breaking-change release note. R-27-02: the product spec still names the bridge and `degraded` until the owner directs an edit; this section governs where they differ.

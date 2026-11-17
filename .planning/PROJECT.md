@@ -34,7 +34,7 @@ Verified only as far as a connection and a scripted run: no LLM-driven tool call
 
 The owner decisions D1 to D6 (2026-10-29) are recorded in `.planning/MILESTONE-CONTEXT.md`. The scope source is `.planning/quick/261029-g7m-lifecycle-and-persistence-findings/` (`IMPROVEMENT-PROPOSALS.md`), whose defaults for D1 to D6 those answers supersede. The requirement IDs are in `.planning/REQUIREMENTS.md` and the phases (12 to 20) in `.planning/ROADMAP.md`.
 
-**Carried, not in this milestone** (reasons and owners: `milestones/v2.0-MILESTONE-AUDIT.md`): FS-02 (race-resistant path resolution is an accepted approximation; the property tests of Phase 13 add confidence only), ANDA-01 to ANDA-04 (live-gated; the engine licence conflict, OQ-P3-11, blocks vendoring Anda code), PRD-DRV-01 (its amendment awaits the owner, except as far as Phase 18 needs the driver's workspace handling) and UI-01 (an accepted limitation). Owner decisions still open: the product-spec amendment for RT-04, the Podman probe classification, A10 F2 and F3 and the policy file integrity rule (R6), the supply-chain items for the trust channel, install sources and holding the openshell package, the TD-10 repository settings, and the removal of the rollback and builder-cache images. Tech debt outside this milestone: TD-02 (a coordination note in Phase 15) and TD-06.
+**Carried, not in this milestone** (reasons and owners: `milestones/v2.0-MILESTONE-AUDIT.md`): FS-02 (race-resistant path resolution is an accepted limitation, Phase 27 disposition of 2026-11-17; the property tests of Phase 13 add confidence only), ANDA-01 to ANDA-04 (dropped by owner decision D-27-01, 2026-11-17), PRD-DRV-01 (open: its amendment awaits the owner's confirmation, except as far as Phase 18 needs the driver's workspace handling) and UI-01 (an accepted limitation). Owner decisions still open: the product-spec amendment for RT-04, the Podman probe classification, A10 F2 and F3 and the policy file integrity rule (R6), the supply-chain items for the trust channel, install sources and holding the openshell package, the TD-10 repository settings, and the removal of the rollback and builder-cache images. Tech debt outside this milestone: TD-02 (a coordination note in Phase 15) and TD-06.
 
 ## Requirements
 
@@ -74,7 +74,7 @@ The v1 requirement set lives in `.planning/REQUIREMENTS.md` (REQ-IDs grouped by 
 - [ ] Policy engine (advisory default, fail-closed opt-in), state machine, typed event bus, controller
 - [ ] Filesystem lockdown: root-allowlisted canonical paths, credential-path deny, advisory write locks, atomic writes
 - [ ] Podman rootless, OpenShell and AgentOS runtime adapters with hardening, gated integration tests
-- [ ] Anda Engine TypeScript bridge with version handshake and bounded backoff with jitter
+- Dropped 2026-11-17 (owner decision D-27-01): the Anda Engine TypeScript bridge with version handshake and bounded backoff with jitter; the bridge is removed in Phase 28
 - [ ] Orphan reaper, default-deny egress guard, single shared tool dispatcher
 - [ ] Omp plugin: detached autostart under a startup budget, status indicator (realm active / realm disconnected), retry command
 - [ ] MCP server and ACP adapter over one tool contract. Superseded 2026-10-29: TOOL-05 was proven live (REQUIREMENTS.md).
