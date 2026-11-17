@@ -23,6 +23,7 @@ covered_files:
   - ".github/workflows/mutation.yml"
   - "scripts/release/release-cases.test.mjs"
   - "AGENTS.md"
+covered_digest: "v3:sha256:8abec94b6249dddc6c0fac27877fd250720e719ed01ed73a7264dbc96e02a45a"
 ---
 
 # Phase 20 verification: release pipeline hardening
