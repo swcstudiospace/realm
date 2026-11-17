@@ -51,7 +51,7 @@ Each refusal is a catalogue code. The retry column is the catalogue's `retryable
 
 A checkpoint is taken or restored only while the workspace's sandbox is stopped, and no sandbox start runs at the same time.
 
-- A sandbox in any daemon state other than unbound counts as running. That covers connecting, active, degraded, error and stopping. Both create and restore refuse it with `LOCK_CONFLICT`. Create checks the state before the copy and again after it. Restore checks it before the copy, after the copy, and after the entries move in.
+- A sandbox in any daemon state other than unbound counts as running. That covers connecting, active, error and stopping. Both create and restore refuse it with `LOCK_CONFLICT`. Create checks the state before the copy and again after it. Restore checks it before the copy, after the copy, and after the entries move in.
 - A sandbox start, `realm up` through its create or hydrate path, holds the session's checkpoint lock while it runs. The lock stays held until the start settles, including any start still in flight. A checkpoint that finds the lock held is refused with `LOCK_CONFLICT` at once. It does not wait.
 - A checkpoint holds the same lock for its whole run. A start that finds it held is refused with `REALM_NOT_ACTIVE`. Retry the start after the checkpoint finishes.
 - A host process that changes a file and then reverts it during a snapshot is refused with `LOCK_CONFLICT`. The snapshot records the device, inode, size, modification time and change time of every entry before the copy and again after it. A revert still moves the change time, so the difference is seen. These stamps are compared only between those two scans. They are not stored.

@@ -296,7 +296,7 @@ The live runs on the production stack (OpenShell 0.1.5 gateway, the Realm comput
 Decisions recorded with this evidence:
 
 - One sandbox per session, named `realm-<sessionId>`.
-- `active` needs no Anda bridge when no `andaUrl` is configured.
+- `active` needs no Anda bridge when no `andaUrl` is configured. This record is from a 0.3.x build; the item or field it names no longer exists.
 - One live sandbox per pinned root.
 - The runtime's policy is the enforcement authority, and the retired realm helper is removed (recover it from git history if needed).
 

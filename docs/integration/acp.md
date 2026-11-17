@@ -69,7 +69,7 @@ Realm is a tool bridge, not a full ACP agent. It implements `initialize` and the
 
 `realm acp [--workspace <absolute path>] [--host <id>] [--reattach]` runs the same six boot steps as `realm mcp` (resolve, ensure, up, readback, settle, expose; see `docs/integration/mcp.md`, Q7) and starts its agent only after the boot settles, so the first protocol reply is the readiness signal. The flag grammar, the teardown on stdin EOF and on `SIGTERM`, `SIGINT` and `SIGHUP`, the rule that no boot path sends `down`, and the logging levels are the same.
 
-ACP is stricter than MCP about what it serves. It starts only when the boot is `ready` and the realm's state is `active` or `degraded`. A refused `up`, an attach failure, or any other state exits 1 before any frame, with the catalogue code (and, for a state, `code: reason`) on stderr and nothing on stdout. A refused `up` is not kept: `realm acp` closes that client and exits. `--reattach` applies to link loss after a successful boot only; a boot failure with `--reattach` still exits 1. A session started with no `--host` is reported as `unlabelled`. No protocol claim in Q1 to Q5 changes.
+ACP is stricter than MCP about what it serves. It starts only when the boot is `ready` and the realm's state is `active`. A refused `up`, an attach failure, or any other state exits 1 before any frame, with the catalogue code (and, for a state, `code: reason`) on stderr and nothing on stdout. A refused `up` is not kept: `realm acp` closes that client and exits. `--reattach` applies to link loss after a successful boot only; a boot failure with `--reattach` still exits 1. A session started with no `--host` is reported as `unlabelled`. No protocol claim in Q1 to Q5 changes.
 
 ### Live check (2026-10-29)
 
