@@ -35,6 +35,7 @@ covered_files:
   - "test/support/host-support-matrix.ts"
   - "test/support/reference-boot-hook.ts"
   - "test/support/stdio-world.ts"
+covered_digest: "v3:sha256:bef3bdd624ba965a44dba58cba091d046169f9c5b7b4b5bfd3b2ee3864a60541"
 ---
 
 # Phase 26 Verification: Plugin contract tests, boot tests and author docs
