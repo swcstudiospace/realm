@@ -585,3 +585,57 @@ Milestone v3.0 phases (12 to 20) run in three parallel lanes that share no mutab
 | 18. Per-project sandboxes | 16/15 | Complete    | 2026-11-15 |
 | 19. Resume and checkpoint | 1/1 | Complete    | 2026-11-16 |
 | 20. Release pipeline hardening | 0/3 | Recovery plans independently checked; immutable rollback handoff, human review and live evidence open | - |
+
+### Phase 21: Host plugin contract and installer
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 21 to break down)
+
+### Phase 22: Omp plugin on boot
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 22 to break down)
+
+### Phase 23: Boot integration for host plugins
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 23 to break down)
+
+### Phase 24: Host adapters wave 1: Claude Code, OpenCode, Codex, Kimi CLI
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 24 to break down)
+
+### Phase 25: Host adapters wave 2: remaining GSD Core runtimes
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 25 to break down)
+
+### Phase 26: Plugin contract tests, boot tests and author docs
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 26 to break down)
