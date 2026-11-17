@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.3.39] - 2026-11-17
+
+### Maintenance
+- test(omp): live boot rehearsal for the installed shim (OMPB-06); record results (#108) (4dfefff)
+
 ## [0.3.38] - 2026-11-17
 
 ### Documentation
