@@ -28,7 +28,6 @@ const FAIL_CLOSED: Policy = { ...ADVISORY, mode: "fail-closed" };
 const NON_ACTIVE_CODES: Readonly<Record<Exclude<State, "active">, string>> = {
   unbound: "REALM_UNBOUND",
   connecting: "REALM_NOT_ACTIVE",
-  degraded: "REALM_NOT_ACTIVE",
   error: "REALM_NOT_ACTIVE",
   stopping: "REALM_STOPPING",
 };
@@ -78,11 +77,11 @@ void test("CORE-05: every state in both modes is decided, and the gate adds no d
 });
 
 void test("CORE-05: runGatedMutation returns the advisory warning together with the result", () => {
-  const gate = gateMutation(ADVISORY, "degraded");
+  const gate = gateMutation(ADVISORY, "error");
   const result = runGatedMutation(gate, () => "written");
   assert.equal(result.outcome, "done");
   assert.equal(result.value, "written");
-  assert.ok(result.warning !== null && /degraded/.test(result.warning));
+  assert.ok(result.warning !== null && /error/.test(result.warning));
 });
 
 void test("CORE-05: runGatedMutation never runs the mutation on a refusal and returns the deny code", () => {

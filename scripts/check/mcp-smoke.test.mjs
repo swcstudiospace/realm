@@ -15,7 +15,7 @@ const STATUS_OUTCOME = {
   tool: "status",
   value: {
     snapshot: { state: "active", reason: "ready", lastTransitionAt: "2026-10-29T00:00:00.000Z" },
-    display: { label: "realm active", degraded: false, reason: "ready", lastTransitionAt: "2026-10-29T00:00:00.000Z" },
+    display: { label: "realm active", reason: "ready", lastTransitionAt: "2026-10-29T00:00:00.000Z" },
   },
 };
 const TOOLS = Object.entries(EXPECTED_ANNOTATIONS).map(([name, annotations]) => ({

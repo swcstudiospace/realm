@@ -102,7 +102,7 @@ void test("stateOfStatus reads snapshot.state from the status JSON and nothing e
 });
 
 void test("statusFieldsOf reads snapshot.state, snapshot.reason and display.label from the status JSON", () => {
-  const printed = '{"snapshot":{"state":"error","reason":"AGENTOS_CRASH_LOOP","lastTransitionAt":"t"},"display":{"label":"realm disconnected","degraded":false,"reason":"AGENTOS_CRASH_LOOP"},"mode":"advisory"}\n';
+  const printed = '{"snapshot":{"state":"error","reason":"AGENTOS_CRASH_LOOP","lastTransitionAt":"t"},"display":{"label":"realm disconnected","reason":"AGENTOS_CRASH_LOOP"},"mode":"advisory"}\n';
   assert.deepEqual(statusFieldsOf(printed), { state: "error", reason: "AGENTOS_CRASH_LOOP", label: "realm disconnected" });
 });
 

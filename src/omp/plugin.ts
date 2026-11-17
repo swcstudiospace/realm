@@ -180,7 +180,7 @@ export const REALM_RETRY_COMMAND = "realm-retry";
 export const GUARDED_HOST_TOOLS: readonly string[] = Object.freeze(["edit"]);
 
 // ---- Status rendering (OMP-02, OMP-03; P5-D5) -------------------------------
-// One shared label with a readable marker, degraded flag, reason, time and mode disclosure.
+// One shared label with a readable marker, reason, time and mode disclosure.
 // Cache the full text per UI so any change repaints and identical status reads stay quiet.
 // A known mode is current only after a successful status read and active-tool readback.
 // On a failed read or application, it describes the last success, not the present tool set.
@@ -190,9 +190,8 @@ const lastPainted = new WeakMap<OmpStatusUi, string>();
 export function renderRealmStatus(ui: OmpStatusUi, snapshot: StateSnapshot, mode: PolicyMode | null, confirmed: boolean, reconnectCode?: string): void {
   const display = displayStatus(snapshot);
   const marker = display.label === STATUS_LABELS.active ? "●" : "○";
-  const flag = display.degraded ? " [degraded]" : "";
   const modeText = mode === null ? "mode: unknown" : `${confirmed ? "applied mode" : "last successfully applied mode"}: ${mode}${mode === "fail-closed" ? " (Omp host-tool guard; not host process containment)" : ""}`;
-  const text = `${marker} ${display.label}${flag} · ${display.reason}${reconnectCode === undefined ? "" : ` (${reconnectCode})`} · ${display.lastTransitionAt} · ${modeText}`;
+  const text = `${marker} ${display.label} · ${display.reason}${reconnectCode === undefined ? "" : ` (${reconnectCode})`} · ${display.lastTransitionAt} · ${modeText}`;
   if (lastPainted.get(ui) === text) {
     return;
   }
@@ -986,7 +985,6 @@ function denyCodeFor(state: Exclude<StateSnapshot["state"], "active">): Mutation
     case "stopping":
       return "REALM_STOPPING";
     case "connecting":
-    case "degraded":
     case "error":
       return "REALM_NOT_ACTIVE";
   }

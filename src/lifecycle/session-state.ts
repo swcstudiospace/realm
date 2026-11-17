@@ -5,10 +5,10 @@ import type { StateSnapshot } from "../core/state-machine.js";
 import { PinnedRoot, verifyPinnedAt } from "../fs/root.js";
 import { readWorkspaceEntry } from "../session/workspace-registry.js";
 
-// A live session is one whose container is or may be running: connecting, active or degraded. A live session is
+// A live session is one whose container is or may be running: connecting or active. A live session is
 // never created again, and a down of a live session arms the daemon's stop once it is destroyed.
 export function isLiveState(state: StateSnapshot["state"]): boolean {
-  return state === "connecting" || state === "active" || state === "degraded";
+  return state === "connecting" || state === "active";
 }
 
 // The pin of an adopted session, verified against its workspace. The device and inode were recorded in the session's workspace

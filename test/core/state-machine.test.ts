@@ -7,21 +7,17 @@ import type { State } from "../../src/core/states.js";
 
 const FIXED_TIME = "2026-10-21T09:30:00.000Z";
 
-// The six D-11 states and the 13 D-11 edges, pinned as literals so the test does not
+// The five states and the nine edges (D-11 less degraded, Phase 28), pinned as literals so the test does not
 // read the table under test.
-const ALL_STATES: readonly State[] = ["unbound", "connecting", "active", "degraded", "error", "stopping"];
+const ALL_STATES: readonly State[] = ["unbound", "connecting", "active", "error", "stopping"];
 
 const EXPECTED_ALLOWED: readonly (readonly [State, State])[] = [
   ["unbound", "connecting"],
   ["connecting", "active"],
   ["connecting", "error"],
   ["connecting", "stopping"],
-  ["active", "degraded"],
   ["active", "error"],
   ["active", "stopping"],
-  ["degraded", "active"],
-  ["degraded", "error"],
-  ["degraded", "stopping"],
   ["error", "connecting"],
   ["error", "stopping"],
   ["stopping", "unbound"],
@@ -34,7 +30,6 @@ const PATH_TO: Readonly<Record<State, readonly State[]>> = {
   unbound: [],
   connecting: ["connecting"],
   active: ["connecting", "active"],
-  degraded: ["connecting", "active", "degraded"],
   error: ["connecting", "error"],
   stopping: ["connecting", "stopping"],
 };
@@ -55,7 +50,7 @@ function positioned(state: State): { machine: RealmStateMachine; events: RealmEv
   return { machine, events };
 }
 
-void test("the 36 ordered pairs split into the 13 D-11 edges and 23 rejected pairs (CORE-01)", () => {
+void test("the 25 ordered pairs split into the 9 edges and 16 rejected pairs (CORE-01)", () => {
   let allowed = 0;
   let rejected = 0;
   for (const from of ALL_STATES) {
@@ -67,11 +62,11 @@ void test("the 36 ordered pairs split into the 13 D-11 edges and 23 rejected pai
       }
     }
   }
-  assert.equal(allowed, 13);
-  assert.equal(rejected, 23);
+  assert.equal(allowed, 9);
+  assert.equal(rejected, 16);
 });
 
-void test("every one of the 13 allowed edges commits and publishes its transition (CORE-01)", () => {
+void test("every one of the 9 allowed edges commits and publishes its transition (CORE-01)", () => {
   for (const [from, to] of EXPECTED_ALLOWED) {
     const { machine, events } = positioned(from);
     const snapshot = machine.transition(to, "allowed edge");
@@ -80,7 +75,7 @@ void test("every one of the 13 allowed edges commits and publishes its transitio
   }
 });
 
-void test("every disallowed pair, including all six self-transitions, throws REALM_INVALID_TRANSITION with nothing changed (CORE-01)", () => {
+void test("every disallowed pair, including all five self-transitions, throws REALM_INVALID_TRANSITION with nothing changed (CORE-01)", () => {
   for (const from of ALL_STATES) {
     for (const to of ALL_STATES) {
       if (ALLOWED_KEYS.has(`${from}>${to}`)) {

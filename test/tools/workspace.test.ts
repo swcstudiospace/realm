@@ -212,12 +212,12 @@ void test("TOOL-03: a write refused by the state gate in required mode is REALM_
 
 void test("TOOL-03: a write in a non-active state under advisory policy proceeds and returns the advisory warning (D-98, D-23)", (t) => {
   const f = makeFixture(t);
-  const result = writeWorkspaceFile(depsFor(f, { state: "degraded", policy: ADVISORY }), {
+  const result = writeWorkspaceFile(depsFor(f, { state: "error", policy: ADVISORY }), {
     path: "doc.txt",
     content: "advisory",
   });
   assert.equal(readFileSync(join(f.ws, "doc.txt"), "utf8"), "advisory");
-  assert.equal(result.warning, "realm is degraded; the write proceeds under advisory policy");
+  assert.equal(result.warning, "realm is error; the write proceeds under advisory policy");
   assert.equal(result.sha256, sha256Of("advisory"));
   assert.deepEqual(
     auditLines(f).map((line) => line["phase"]),

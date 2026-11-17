@@ -239,7 +239,7 @@ void test("the poll paints only a changed status and its text carries no path", 
   const painted = sink.statuses.length;
   await timers.advance(5 * 2_000);
   assert.equal(sink.statuses.length, painted);
-  daemon.setState("degraded");
+  daemon.setState("error");
   await timers.advance(2_000);
   assert.equal(sink.statuses.length, painted + 1);
   for (const entry of sink.statuses) {

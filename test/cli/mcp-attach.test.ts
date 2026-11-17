@@ -59,7 +59,7 @@ const AT = "2026-10-22T00:00:00.000Z";
 function statusFor(selection: ControlSelection): DaemonStatus {
   return {
     snapshot: { state: "active", reason: "realm active", lastTransitionAt: AT },
-    display: { label: "realm active", degraded: false, reason: "realm active", lastTransitionAt: AT },
+    display: { label: "realm active", reason: "realm active", lastTransitionAt: AT },
     mode: "advisory",
     boundRoot: selection.workspaceRoot,
     sessionId: selection.sessionId,

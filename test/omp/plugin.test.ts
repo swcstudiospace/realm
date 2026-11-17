@@ -66,7 +66,6 @@ const ACTIVE: StateSnapshot = { state: "active", reason: "container running", la
 const CONNECTING: StateSnapshot = { state: "connecting", reason: "connecting", lastTransitionAt: CLOCK_ISO };
 const UNBOUND: StateSnapshot = { state: "unbound", reason: "no workspace", lastTransitionAt: CLOCK_ISO };
 const ACTIVE_LABEL = `● ${STATUS_LABELS.active}`;
-const DEGRADED_LABEL = `● ${STATUS_LABELS.active} [degraded]`;
 const DISCONNECTED_LABEL = `○ ${STATUS_LABELS.disconnected}`;
 const WORKSPACE = "/ws";
 const SEPARATOR = " · ";
@@ -678,22 +677,20 @@ void test("OMP-02: every status read paints one shared label across every transi
   await toolCall({ toolName: "edit" });
   fixture.daemon.snapshot = ACTIVE;
   await toolCall({ toolName: "edit" });
-  fixture.daemon.snapshot = { state: "degraded", reason: "OPENSHELL_GATEWAY_LOST", lastTransitionAt: CLOCK_ISO };
-  await toolCall({ toolName: "edit" });
 
-  // Pinned table: the only labels are the shared mapping plus the text degraded flag.
-  const allowed = new Set([ACTIVE_LABEL, DEGRADED_LABEL, DISCONNECTED_LABEL]);
+  // Pinned table: the only labels are the two shared mapping labels.
+  const allowed = new Set([ACTIVE_LABEL, DISCONNECTED_LABEL]);
   const labels = labelsOf(fixture.ui);
   for (const label of labels) {
     assert.ok(allowed.has(label), `label comes from the shared mapping: ${label}`);
   }
   assert.ok(labels.includes(DISCONNECTED_LABEL), "disconnected renders");
   assert.ok(labels.includes(ACTIVE_LABEL), "active renders");
-  assert.equal(labels.at(-1), DEGRADED_LABEL, "degraded keeps the active label with its flag");
+  assert.equal(labels.at(-1), ACTIVE_LABEL, "the last transition leaves the active label");
   // One status item carries the label, the reason, and the time: no second key competes with it.
   const keys = new Set(fixture.ui.calls.map((call) => call.key));
   assert.deepEqual(keys, new Set([REALM_STATUS_KEY]));
-  assert.equal(statusTexts(fixture.ui).at(-1), `${DEGRADED_LABEL} · OPENSHELL_GATEWAY_LOST · ${CLOCK_ISO} · ${FAIL_CLOSED_STATUS}`);
+  assert.equal(statusTexts(fixture.ui).at(-1), `${ACTIVE_LABEL} · container running · ${CLOCK_ISO} · ${FAIL_CLOSED_STATUS}`);
 });
 
 void test("OMP-03: the reason and last-transition time follow the label in the one status item on every transition (P5-D5)", async () => {
@@ -711,11 +708,6 @@ void test("OMP-03: the reason and last-transition time follow the label in the o
       detail: `AGENTOS_CRASH_LOOP · ${CLOCK_ISO}`,
     },
     { snapshot: ACTIVE, label: ACTIVE_LABEL, detail: `container running · ${CLOCK_ISO}` },
-    {
-      snapshot: { state: "degraded", reason: "OPENSHELL_GATEWAY_LOST", lastTransitionAt: CLOCK_ISO },
-      label: DEGRADED_LABEL,
-      detail: `OPENSHELL_GATEWAY_LOST · ${CLOCK_ISO}`,
-    },
   ];
   for (const transition of transitions) {
     fixture.daemon.snapshot = transition.snapshot;
@@ -735,10 +727,10 @@ void test("OMP-02: a daemon transition reaches the indicator on the poll, with n
   await waitUntil(() => lastLabel(fixture.ui) === DISCONNECTED_LABEL);
   assert.equal(lastDetail(fixture.ui), `AGENTOS_CRASH_LOOP · ${CLOCK_ISO}`);
 
-  fixture.daemon.snapshot = { state: "degraded", reason: "OPENSHELL_GATEWAY_LOST", lastTransitionAt: CLOCK_ISO };
+  fixture.daemon.snapshot = ACTIVE;
   pollOf(fixture.ctx).callback();
-  await waitUntil(() => lastLabel(fixture.ui) === DEGRADED_LABEL);
-  assert.equal(lastDetail(fixture.ui), `OPENSHELL_GATEWAY_LOST · ${CLOCK_ISO}`);
+  await waitUntil(() => lastLabel(fixture.ui) === ACTIVE_LABEL);
+  assert.equal(lastDetail(fixture.ui), `container running · ${CLOCK_ISO}`);
   assert.equal(fixture.daemon.count("call"), 0, "the repaint dispatches no tool");
 });
 
@@ -1287,7 +1279,7 @@ function makeRegisteredWorkspace(t: TestContext, mode: PolicyMode): {
   const stateDir = join(base, "state");
   const parsed = validate("policy", { mode, workspaceRoots: [workspace] });
   assert.ok(parsed.ok);
-  const fixture = makeFixture({ cwd: workspace, mode, snapshot: { state: "degraded", reason: "runner unavailable", lastTransitionAt: CLOCK_ISO } });
+  const fixture = makeFixture({ cwd: workspace, mode, snapshot: { state: "error", reason: "runner unavailable", lastTransitionAt: CLOCK_ISO } });
   const dispatcher = new ToolDispatcher({
     sessionId: "sess-omp-registered",
     boundRoot: bindRoot(workspace),
@@ -1316,7 +1308,7 @@ void test("HARN-02 C1: registered advisory write warns on every inactive invocat
     assert.equal(result.isError, false);
     assert.deepEqual(readFileSync(join(workspace, "c1.txt")), Buffer.from(content));
     assert.equal(fixture.ui.notifications.length, index + 1, "the same notice is never deduplicated");
-    assert.equal(fixture.ui.notifications[index], "realm is degraded; the write proceeds under advisory policy");
+    assert.equal(fixture.ui.notifications[index], "realm is error; the write proceeds under advisory policy");
   }
   const read = await toolOf(fixture.pi, "read").execute("consumer-read", { path: "c1.txt", maxBytes: 100 });
   assert.equal(read.content[0]?.text, "second 🙂\n");

@@ -161,7 +161,7 @@ void test("probe unhealthy in active moves to error with reason probe failed, an
   assert.equal(store.load(SESSION)?.containerId, container.containerId);
 });
 
-void test("probe outside active or degraded returns the snapshot without a port call (D-38)", async (t) => {
+void test("probe outside active returns the snapshot without a port call (D-38)", async (t) => {
   const { controller, exec } = fixture(t);
   const snapshot = await controller.probe();
   assert.equal(snapshot.state, "unbound");

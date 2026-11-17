@@ -150,15 +150,15 @@ export class LifecycleController {
   // OPENSHELL_START_FAILED: that container is destroyed once and a new one is created (once per
   // call). Every create verifies the requested workspace
   // against the pinned root first: the same directory changes nothing, and any other is refused
-  // with POLICY_DENIED. While connecting, active, or degraded, a record that names another workspace
+  // with POLICY_DENIED. While connecting or active, a record that names another workspace
   // is refused the same way.
   // The startup budget (policy.startupBudgetMs) starts before the pinned-root check and covers the
   // check, the record loads and writes, and the port create and start.
   // Each synchronous step is followed by a deadline check, and each port call is raced against
   // the time left.
   // Expiry moves the session to error with STARTUP_BUDGET_EXCEEDED, keeps any containerId
-  // already recorded, and creates no second container. A repeat call while connecting,
-  // active, or degraded does no startup work, so the budget does not apply to it.
+  // already recorded, and creates no second container. A repeat call while connecting
+  // or active does no startup work, so the budget does not apply to it.
   // A stop or destroy that begins during create takes the create over: create then returns the
   // snapshot the teardown left, and it persists and transitions nothing more. A container the port
   // produces for a pending create is destroyed by that teardown (C1). A create given up at the
@@ -284,7 +284,7 @@ export class LifecycleController {
 
   // Starts the session's container (D-38). Start is valid in connecting and error. While
   // connecting, the create in flight owns the start, so the snapshot is returned. In active
-  // and degraded it is a no-op. In error it runs create again against the recorded
+  // it is a no-op. In error it runs create again against the recorded
   // workspace: the session moves through connecting and reuses the stored container. Unbound
   // has no recorded workspace (REALM_UNBOUND), and stopping refuses (REALM_STOPPING).
   async start(): Promise<StateSnapshot> {
@@ -305,7 +305,7 @@ export class LifecycleController {
     return this.create(record.workspaceRoot);
   }
 
-  // Probes the container in active or degraded (D-38). A healthy result changes nothing.
+  // Probes the container in active (D-38). A healthy result changes nothing.
   // An unhealthy result moves the session to error with reason "probe failed". A probe that cannot
   // answer moves it to error with the code the port threw, such as AGENTOS_CRASH_LOOP for a dead
   // runner. The probe is bounded by the
@@ -316,7 +316,7 @@ export class LifecycleController {
   async probe(): Promise<StateSnapshot> {
     const epoch = this.lifeEpoch;
     const { state } = this.machine.snapshot();
-    if (state !== "active" && state !== "degraded") {
+    if (state !== "active") {
       return this.machine.snapshot();
     }
     const containerId = this.deps.store.load(this.deps.sessionId)?.containerId ?? null;
@@ -336,8 +336,8 @@ export class LifecycleController {
       }
       return this.enterError(error);
     }
-    // A stop may have taken the session while the probe was in flight. Only the active and degraded
-    // states take the outcome of a probe (F4).
+    // A stop may have taken the session while the probe was in flight. Only the active state
+    // takes the outcome of a probe (F4).
     if (health === "unhealthy" && epoch === this.lifeEpoch && this.isInService()) {
       // The realm leaves service first, so a failed record write cannot leave it active; the write error then surfaces.
       this.machine.transition("error", "probe failed");
@@ -477,7 +477,7 @@ export class LifecycleController {
     return [...this.hostAttachments].sort();
   }
 
-  // Stops the container (D-38). Valid in connecting, active, degraded, and error, moving to
+  // Stops the container (D-38). Valid in connecting, active, and error, moving to
   // stopping and then to unbound. Stopping a stopping session is a no-op that returns the
   // snapshot. Stopping an unbound session makes no port call and changes no state; it clears
   // the host attachments, because the session is unbound. Expiry of the teardown bound, or
@@ -977,10 +977,10 @@ export class LifecycleController {
     );
   }
 
-  // Only the active and degraded states take a probe outcome (F4).
+  // Only the active state takes a probe outcome (F4).
   private isInService(): boolean {
     const { state } = this.machine.snapshot();
-    return state === "active" || state === "degraded";
+    return state === "active";
   }
 
   // Destroys a container that no record names yet. A failed destroy keeps the id in the record

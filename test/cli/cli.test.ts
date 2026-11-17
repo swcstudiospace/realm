@@ -104,7 +104,7 @@ function okVersion(): Promise<{ exitCode: number; stdout: string }> {
 // root and session id, and reports what the last up reported, because the boot readback after up reads it.
 const STATUS: DaemonStatus = {
   snapshot: { state: "active", reason: "realm active", lastTransitionAt: "2026-10-22T00:00:00.000Z" },
-  display: { label: "realm active", degraded: false, reason: "realm active", lastTransitionAt: "2026-10-22T00:00:00.000Z" },
+  display: { label: "realm active", reason: "realm active", lastTransitionAt: "2026-10-22T00:00:00.000Z" },
   mode: "advisory",
   sessionId: "p0123456789ab",
 };
@@ -313,6 +313,25 @@ void test("realm up exits 1 with the catalogue line when the realm is not active
   assert.equal(result.exitCode, 1);
   assert.equal(result.stdout, `${JSON.stringify(errorState)}\n`);
   assert.equal(result.stderr, `AGENTOS_NOT_CONFIGURED: ${ERROR_CATALOGUE.AGENTOS_NOT_CONFIGURED.reason}\n`);
+});
+
+void test("realm up exits 1 with REALM_NOT_ACTIVE and keeps its JSON when a 0.3 daemon replies with the removed degraded state (Phase 28)", async () => {
+  const degradedState = { snapshot: { state: "degraded", reason: "bridge down" } };
+  const send: SendControlRequest = (_socketPath, request) => {
+    const reply: ControlReply = { id: request.id, result: degradedState };
+    return Promise.resolve(reply);
+  };
+  const result = await runCli(["up", "--workspace", WORKSPACE], {
+    env: ENV,
+    timeoutMs: 500,
+    connect: fakeDaemon({ probes: [true] }).connect,
+    send,
+    runCommand: okVersion,
+    connectSocket: acceptConnect,
+  });
+  assert.equal(result.exitCode, 1);
+  assert.equal(result.stdout, `${JSON.stringify(degradedState)}\n`);
+  assert.equal(result.stderr, `REALM_NOT_ACTIVE: ${ERROR_CATALOGUE.REALM_NOT_ACTIVE.reason}\n`);
 });
 
 void test("realm up and mcp refuse a non-absolute or missing --workspace value before probing or dialing (CLI-01)", async () => {
@@ -805,7 +824,7 @@ void test("a failed realm mcp up writes the code and the daemon log path to stde
 // The up reply an active realm returns, in the DaemonStatus shape the client validates.
 const ACTIVE_DAEMON_STATUS: DaemonStatus = {
   snapshot: { state: "active", reason: "realm active", lastTransitionAt: "2026-10-22T00:00:00.000Z" },
-  display: { label: "realm active", degraded: false, reason: "realm active", lastTransitionAt: "2026-10-22T00:00:00.000Z" },
+  display: { label: "realm active", reason: "realm active", lastTransitionAt: "2026-10-22T00:00:00.000Z" },
   mode: "advisory",
   sessionId: "p0123456789ab",
 };
@@ -1266,6 +1285,23 @@ void test("realm status prints the daemon's notice inside the JSON result with n
   assert.equal(result.exitCode, 0);
   const printed = JSON.parse(result.stdout) as Record<string, unknown>;
   assert.equal(printed["notice"], STARTUP_NOTICE);
+});
+
+void test("realm status prints a daemon reply that has no display.degraded key, and one from a 0.3 daemon that still carries it", async () => {
+  for (const display of [
+    ACTIVE_DAEMON_STATUS.display,
+    { ...ACTIVE_DAEMON_STATUS.display, degraded: false },
+  ]) {
+    const send: SendControlRequest = (_socketPath, request) => {
+      const reply: ControlReply = { id: request.id, result: { ...ACTIVE_DAEMON_STATUS, display } };
+      return Promise.resolve(reply);
+    };
+    const result = await runCli(["status"], { env: ENV, timeoutMs: 500, send, runCommand: okVersion, connectSocket: refuseConnect });
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.stderr, "");
+    const printed = JSON.parse(result.stdout) as { display: Record<string, unknown> };
+    assert.equal(printed.display["label"], "realm active");
+  }
 });
 
 function doctorFixFixture(t: TestContext): {

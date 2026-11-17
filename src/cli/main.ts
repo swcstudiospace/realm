@@ -359,7 +359,7 @@ function lifecycleOf(result: unknown): UpLifecycle | undefined {
   return { state: snapshot["state"], reason: snapshot["reason"] };
 }
 
-// The refusal for an up reply that does not report active or degraded. A catalogue code reason keeps
+// The refusal for an up reply that does not report active. A catalogue code reason keeps
 // its own code; any other reason reads as REALM_NOT_ACTIVE; a reply with no lifecycle is SCHEMA_INVALID.
 function upRefusal(lifecycle: UpLifecycle | undefined): { readonly code: ErrorCode; readonly reason: string } {
   let code: ErrorCode = "SCHEMA_INVALID";
@@ -372,14 +372,14 @@ function upRefusal(lifecycle: UpLifecycle | undefined): { readonly code: ErrorCo
   return { code, reason: ERROR_CATALOGUE[code].reason };
 }
 
-// realm up succeeds only when the daemon reports the realm active or degraded. Any other state keeps
+// realm up succeeds only when the daemon reports the realm active. Any other state keeps
 // its JSON on stdout and writes one "CODE: reason" line to stderr.
 function upResult(reply: ControlReply): CliResult {
   if (reply.error !== undefined) {
     return replyToResult(reply);
   }
   const lifecycle = lifecycleOf(reply.result);
-  if (lifecycle?.state === "active" || lifecycle?.state === "degraded") {
+  if (lifecycle?.state === "active") {
     return replyToResult(reply);
   }
   const { code, reason } = upRefusal(lifecycle);

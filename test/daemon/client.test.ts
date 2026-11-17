@@ -19,7 +19,7 @@ const FIXED_SESSION = "p0123456789ab";
 
 const STATUS_VALUE: StatusValue = {
   snapshot: { state: "active", reason: "realm active", lastTransitionAt: TS },
-  display: { label: "realm active", degraded: false, reason: "realm active", lastTransitionAt: TS },
+  display: { label: "realm active", reason: "realm active", lastTransitionAt: TS },
 };
 
 function statusOf(sessionId: string): DaemonStatus {
@@ -111,7 +111,7 @@ function echoSelection(request: ControlRequest): string {
     case "tool": {
       const value: StatusValue = {
         snapshot: { state: "active", reason: sessionId, lastTransitionAt: TS },
-        display: { label: "realm active", degraded: false, reason: sessionId, lastTransitionAt: TS },
+        display: { label: "realm active", reason: sessionId, lastTransitionAt: TS },
       };
       const outcome: ToolOutcome = { outcome: "done", tool: "status", value };
       return encodeReply({ id: request.id, result: outcome });
@@ -266,6 +266,42 @@ void test("a reply carrying an error throws a RealmError with that catalogue cod
   const client = connectDaemon(stub.socketPath, projectSelection(t));
   await assert.rejects(client.status(), assertRealmError("REALM_UNBOUND"));
   await assert.rejects(client.call({ status: {} }), assertRealmError("REALM_UNBOUND"));
+});
+
+void test("status accepts a reply whose display has no degraded key, and one from a 0.3 daemon that still carries degraded: false", async (t) => {
+  const selection = projectSelection(t);
+  const without = await startStub(t, (request) => encodeReply({ id: request.id, result: statusOf(selection.sessionId) }));
+  const plain = await connectDaemon(without.socketPath, selection).status();
+  assert.equal(plain.display.label, "realm active");
+  assert.equal(plain.display.reason, "realm active");
+  assert.equal(plain.display.lastTransitionAt, TS);
+  const legacy = await startStub(t, (request) =>
+    encodeReply({
+      id: request.id,
+      result: { ...statusOf(selection.sessionId), display: { ...STATUS_VALUE.display, degraded: false } },
+    }),
+  );
+  const old = await connectDaemon(legacy.socketPath, selection).status();
+  assert.equal(old.display.label, "realm active");
+  assert.equal(old.display.reason, "realm active");
+  assert.equal(old.display.lastTransitionAt, TS);
+});
+
+void test("status and up refuse a reply from a 0.3 daemon whose snapshot state is the removed degraded state", async (t) => {
+  const selection = projectSelection(t);
+  const stub = await startStub(t, (request) =>
+    encodeReply({
+      id: request.id,
+      result: {
+        ...statusOf(selection.sessionId),
+        snapshot: { state: "degraded", reason: "bridge down", lastTransitionAt: TS },
+        display: { ...STATUS_VALUE.display, degraded: true },
+      },
+    }),
+  );
+  const client = connectDaemon(stub.socketPath, selection);
+  await assert.rejects(client.status(), assertRealmError("SCHEMA_INVALID"));
+  await assert.rejects(client.up(), assertRealmError("SCHEMA_INVALID"));
 });
 
 void test("a status reply missing display is refused with SCHEMA_INVALID", async (t) => {

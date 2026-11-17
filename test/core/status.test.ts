@@ -9,14 +9,13 @@ const AT = "2026-10-21T09:30:00.000Z";
 const ACTIVE_LABEL = "realm active";
 const DISCONNECTED_LABEL = "realm disconnected";
 
-// [state, snapshot reason, expected label, expected degraded, expected display reason]
-const EXPECTED: ReadonlyArray<readonly [State, string, string, boolean, string]> = [
-  ["unbound", "stale reason", DISCONNECTED_LABEL, false, "no workspace"],
-  ["connecting", "stale reason", DISCONNECTED_LABEL, false, "connecting"],
-  ["active", "bound", ACTIVE_LABEL, false, "bound"],
-  ["degraded", "probe lag", ACTIVE_LABEL, true, "probe lag"],
-  ["error", "PODMAN_MISSING", DISCONNECTED_LABEL, false, "PODMAN_MISSING"],
-  ["stopping", "user stop", DISCONNECTED_LABEL, false, "stopping"],
+// [state, snapshot reason, expected label, expected display reason]
+const EXPECTED: ReadonlyArray<readonly [State, string, string, string]> = [
+  ["unbound", "stale reason", DISCONNECTED_LABEL, "no workspace"],
+  ["connecting", "stale reason", DISCONNECTED_LABEL, "connecting"],
+  ["active", "bound", ACTIVE_LABEL, "bound"],
+  ["error", "PODMAN_MISSING", DISCONNECTED_LABEL, "PODMAN_MISSING"],
+  ["stopping", "user stop", DISCONNECTED_LABEL, "stopping"],
 ];
 
 function snapshot(state: State, reason: string): StatusSnapshot {
@@ -28,21 +27,15 @@ void test("CORE-02: the two frozen label strings are pinned", () => {
   assert.equal(STATUS_LABELS.disconnected, "realm disconnected");
 });
 
-void test("CORE-02: each of the six states maps to exactly one of the two labels with the degraded flag, reason and time", () => {
-  assert.equal(EXPECTED.length, 6, "every state has a row");
-  for (const [state, reason, label, degraded, displayReason] of EXPECTED) {
+void test("CORE-02: each of the five states maps to exactly one of the two labels with a reason and time, and no other key", () => {
+  assert.equal(EXPECTED.length, 5, "every state has a row");
+  for (const [state, reason, label, displayReason] of EXPECTED) {
     assert.deepEqual(
       displayStatus(snapshot(state, reason)),
-      { label, degraded, reason: displayReason, lastTransitionAt: AT },
+      { label, reason: displayReason, lastTransitionAt: AT },
       `state ${state}`,
     );
   }
-});
-
-void test("CORE-02: degraded is the active label with the degraded flag, not a third label", () => {
-  const degraded = displayStatus(snapshot("degraded", "probe lag"));
-  assert.equal(degraded.label, "realm active");
-  assert.equal(degraded.degraded, true);
 });
 
 void test("CORE-02: a snapshot reason and transition time pass through for active and error", () => {
