@@ -521,3 +521,39 @@ void test("OMPB-05: the omp binary on an absolute PATH directory without an agen
   await assert.rejects(r.adapter.install(r.host.env, { dryRun: false }), refusedWith("not-detected", "POLICY_DENIED"));
   assert.ok(eventsOf(r.log.lines).includes("host.install.refused"));
 });
+
+// ---- extension target status ---------------------------------------------------------------------------------------------------
+
+void test("OMPB-07: status reports the shim target present after install, missing once the entry is removed, and null with no receipt", async (t) => {
+  const r = rig(t);
+  assert.equal((await r.adapter.status(r.host.env)).extensionTarget, null, "no receipt");
+  await r.adapter.install(r.host.env, { dryRun: false });
+  const present = await r.adapter.status(r.host.env);
+  assert.equal(present.status, "installed");
+  assert.equal(present.extensionTarget, "present");
+  rmSync(join(r.host.root, "dist", "src", "omp", "extension.js"));
+  const missing = await r.adapter.status(r.host.env);
+  assert.equal(missing.status, "installed", "the shim itself is intact");
+  assert.equal(missing.extensionTarget, "missing");
+  assert.equal(JSON.stringify(missing).includes(r.host.root), false, "no path is returned");
+});
+
+void test("OMPB-07: a shim holding two import literals reports an unreadable target", async (t) => {
+  const r = rig(t);
+  writeAt(
+    join(r.adaptersDir, "omp", "index.js"),
+    `export default async function realmExtension(pi) {\n  await import(${TOKEN});\n  const { default: factory } = await import(${TOKEN});\n  await factory(pi);\n}\n`,
+  );
+  await r.adapter.install(r.host.env, { dryRun: false });
+  assert.equal((await r.adapter.status(r.host.env)).extensionTarget, "unreadable");
+});
+
+void test("OMPB-07: the extension target is null for a host that is not an extension host", async (t) => {
+  const host = makeFixtureHost(t);
+  const log = captureLog();
+  const adapter = createHostAdapter(fixtureEntry(fixtureRecipe("json-merge")), defaultManifestFor("claude", "1.2.3"), deps(host, log, host.adaptersDir));
+  await adapter.install(host.env, { dryRun: false });
+  const found = await adapter.status(host.env);
+  assert.equal(found.status, "installed");
+  assert.equal(found.extensionTarget, null);
+});

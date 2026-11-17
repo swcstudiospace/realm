@@ -58,6 +58,7 @@ export const HOST_MODULE_FILES = [
   "dist/src/host/adapter.js",
   "dist/src/host/host-audit.js",
   "dist/src/host/env.js",
+  "dist/src/host/presence.js",
   "dist/src/cli/host.js",
 ];
 

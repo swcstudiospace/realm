@@ -4,16 +4,18 @@
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { runChecks } from "../../src/doctor/checks.js";
 import { hostPluginsCheck } from "../../src/doctor/host-checks.js";
 import { createHostAdapter, type HostAdapterDeps } from "../../src/host/adapter.js";
 import { defaultManifestFor } from "../../src/host/manifest.js";
+import { writePresence } from "../../src/host/presence.js";
 import { receiptPath } from "../../src/host/receipt.js";
 import { HOST_RUNTIMES } from "../../src/host/runtimes.js";
 import type { HostId, HostRuntimeEntry, InstallRecipe } from "../../src/host/types.js";
-import { captureLog, fixtureEntry, fixtureRecipe, makeFixtureHost, type FixtureHost } from "../support/fixture-host.js";
+import { captureLog, fixtureEntry, fixtureRecipe, makeFixtureHost, writeAt, type FixtureHost } from "../support/fixture-host.js";
 
 type Table = Readonly<Record<HostId, HostRuntimeEntry>>;
 
@@ -37,7 +39,7 @@ async function install(host: FixtureHost, table: Table, id: HostId, extra: Parti
   await adapter.install(host.env, { dryRun: false });
 }
 
-function check(host: FixtureHost, table: Table, extra: { readonly readTimeoutMs?: number; readonly readDir?: (path: string) => Promise<readonly string[]> } = {}): Promise<Awaited<ReturnType<typeof hostPluginsCheck>>> {
+function check(host: FixtureHost, table: Table, extra: { readonly readTimeoutMs?: number; readonly readDir?: (path: string) => Promise<readonly string[]>; readonly isProcessAlive?: (pid: number) => boolean } = {}): Promise<Awaited<ReturnType<typeof hostPluginsCheck>>> {
   return hostPluginsCheck({ stateDir: host.stateDir, adapters: table, readTimeoutMs: 2000, ...extra });
 }
 
@@ -208,4 +210,66 @@ void test("HOST-08: runChecks ends with host-plugins, which ignores HOME entirel
   assert.deepEqual(last, { id: "host-plugins", status: "pass", detail: "no host plugin installed", fix: null });
   assert.deepEqual(withHome.at(-1), last);
   assert.equal(plain.filter((item) => item.id === "host-plugins").length, 1);
+});
+
+// ---- The Omp extension host ------------------------------------------------------------------------------------------------------
+
+const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
+const EXTENSION_REL = join("dist", "src", "omp", "extension.js");
+
+// A fixture host holding an Omp agent directory, the real shim under adapters/omp and a stub extension entry, with the shim installed.
+async function installedOmp(t: TestContext): Promise<FixtureHost> {
+  const host = makeFixtureHost(t);
+  mkdirSync(join(host.home, ".omp", "agent"), { recursive: true });
+  writeAt(join(host.adaptersDir, "omp", "index.js"), readFileSync(join(REPO_ROOT, "adapters", "omp", "index.js"), "utf8"));
+  writeAt(join(host.root, EXTENSION_REL), "export default function stub() {}\n");
+  await install(host, HOST_RUNTIMES, "omp");
+  return host;
+}
+
+function presenceRecord(pid: number): Parameters<typeof writePresence>[2] {
+  return { pid, startedAt: "2026-11-17T10:00:00.000Z", sessionId: "p0123456789ab", attach: "attached", code: null };
+}
+
+void test("OMPB-07: an installed Omp with its target present passes and counts live plugin sessions, naming no path", async (t) => {
+  const host = await installedOmp(t);
+  const none = await check(host, HOST_RUNTIMES, { isProcessAlive: () => true });
+  assert.deepEqual(none, { id: "host-plugins", status: "pass", detail: "installed: omp (extension target present, 0 live plugin sessions)", fix: null });
+  writePresence(host.stateDir, "omp", presenceRecord(4000000), { isAlive: () => true });
+  const one = await check(host, HOST_RUNTIMES, { isProcessAlive: () => true });
+  assert.equal(one.detail, "installed: omp (extension target present, 1 live plugin session)");
+  assert.equal(one.status, "pass");
+  const dead = await check(host, HOST_RUNTIMES, { isProcessAlive: () => false });
+  assert.equal(dead.detail, "installed: omp (extension target present, 0 live plugin sessions)", "a dead pid is not counted");
+  for (const leak of [host.home, host.root, host.stateDir, "extension.js"]) {
+    assert.ok(!one.detail.includes(leak), `detail leaks ${leak}`);
+  }
+});
+
+void test("OMPB-07: an Omp whose extension target is gone warns with the repair command", async (t) => {
+  const host = await installedOmp(t);
+  rmSync(join(host.root, EXTENSION_REL));
+  const result = await check(host, HOST_RUNTIMES);
+  assert.equal(result.status, "warn");
+  assert.equal(result.detail, "host plugin drift: omp: extension target missing");
+  assert.equal(result.fix, "Repair with realm host install omp, or remove with realm host uninstall omp.");
+});
+
+void test("OMPB-07: an unreadable presence marker makes the result a warn with the inspect fix, naming only a count", async (t) => {
+  const host = await installedOmp(t);
+  writeAt(join(host.stateDir, "hosts", "omp-active", "5.json"), "garbage");
+  const result = await check(host, HOST_RUNTIMES, { isProcessAlive: () => true });
+  assert.equal(result.status, "warn");
+  assert.equal(result.detail, "installed: omp (extension target present, 0 live plugin sessions, 1 unreadable presence marker(s))");
+  assert.match(result.fix ?? "", /^Inspect /);
+});
+
+void test("OMPB-07: a symlinked presence directory fails with PATH_ESCAPE for omp", async (t) => {
+  const host = await installedOmp(t);
+  const elsewhere = join(host.root, "elsewhere");
+  mkdirSync(elsewhere);
+  symlinkSync(elsewhere, join(host.stateDir, "hosts", "omp-active"));
+  const result = await check(host, HOST_RUNTIMES);
+  assert.equal(result.status, "fail");
+  assert.match(result.detail, /omp \(PATH_ESCAPE\)/);
 });

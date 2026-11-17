@@ -5,7 +5,7 @@
 
 import { randomBytes } from "node:crypto";
 import { dirname, isAbsolute, join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { SchemaInvalidError } from "../contract/validate.js";
 import { makeRealmError } from "../core/errors.js";
 import { withTimeout } from "../core/timeout.js";
@@ -85,6 +85,10 @@ export interface HostEntryStatus {
 
 export interface HostStatusDetail extends HostOperationResult {
   readonly entries: readonly HostEntryStatus[];
+  // For an extension host with a receipt: whether the file its owned shim imports exists. "unreadable" means the shim names no
+  // single file URL (edited, missing or ambiguous) or the target is not a regular file. null for every other host and with no
+  // receipt. The path itself is never returned.
+  readonly extensionTarget: "present" | "missing" | "unreadable" | null;
 }
 
 export interface RecipeHostAdapter extends HostAdapter {
@@ -103,6 +107,8 @@ const BUNDLE_TOKEN = "@realm:extension-url@";
 const ANY_BUNDLE_TOKEN = /@realm:[a-z-]+@/g;
 // Node refuses a module URL that encodes a path separator (ERR_INVALID_MODULE_SPECIFIER).
 const ENCODED_SEPARATOR = /%2f|%5c/i;
+// The one string literal an installed shim imports: import("file:///..."). Strict: a JSON string literal, nothing else.
+const SHIM_IMPORT = /\bimport\(\s*("(?:[^"\\\n]|\\.)*")\s*\)/g;
 
 interface ExpandedBundle {
   readonly files: readonly BundleFile[];
@@ -241,14 +247,18 @@ export function createHostAdapter(
     if (receipt === null) {
       const found = await detect(env);
       const state: HostStatus = !found.detected ? "not-detected" : entry.recipe === null ? "recipe-pending" : "detected";
-      return { id: entry.id, status: state, changed: false, dryRun: false, detail: state, entries: [] };
+      return { id: entry.id, status: state, changed: false, dryRun: false, detail: state, entries: [], extensionTarget: null };
     }
     const dirs = new Set<string>();
     const entries: HostEntryStatus[] = [];
+    const contents: string[] = [];
     for (const owned of receipt.receipt.entries) {
       let state: HostEntryStatus["state"];
       try {
         const content = await readHostFile(ctx, receipt.receipt.configHome, owned.path, dirs);
+        if (content !== null) {
+          contents.push(content);
+        }
         state = entryState(owned, content, entry.recipe);
       } catch (error: unknown) {
         if (!(error instanceof HostRefusal)) {
@@ -261,7 +271,37 @@ export function createHostAdapter(
     const intact = entries.filter((item) => item.state === "ok").length;
     const verdict: HostStatus = receipt.receipt.state === "installed" && intact === entries.length ? "installed" : "drifted";
     const detail = `${receipt.receipt.state} receipt, ${String(intact)} of ${String(entries.length)} entries intact`;
-    return { id: entry.id, status: verdict, changed: false, dryRun: false, detail, entries };
+    const extensionTarget =
+      entry.integration === "extension" && entry.recipe?.kind === "bundle-copy" ? await extensionTargetOf(contents) : null;
+    return { id: entry.id, status: verdict, changed: false, dryRun: false, detail, entries, extensionTarget };
+  }
+
+  // Whether the file the owned shim imports exists. Exactly one import literal across the owned files, a JSON string that is a
+  // file: URL naming an absolute path; anything else is "unreadable". A path that is not a regular file is "unreadable" too.
+  async function extensionTargetOf(contents: readonly string[]): Promise<"present" | "missing" | "unreadable"> {
+    const literals = contents.flatMap((content) => [...content.matchAll(SHIM_IMPORT)].map((match) => match[1] ?? ""));
+    const [literal] = literals;
+    if (literals.length !== 1 || literal === undefined) {
+      return "unreadable";
+    }
+    let target: string;
+    try {
+      const url: unknown = JSON.parse(literal);
+      if (typeof url !== "string" || !url.startsWith("file:///")) {
+        return "unreadable";
+      }
+      target = fileURLToPath(url);
+    } catch {
+      return "unreadable";
+    }
+    if (!isAbsolute(target)) {
+      return "unreadable";
+    }
+    const info = await bounded(reader.stat(target));
+    if (info === null) {
+      return "missing";
+    }
+    return info.isFile ? "present" : "unreadable";
   }
 
   // The home an install writes to: the operator's --config-home, else the first home of the recipe's role

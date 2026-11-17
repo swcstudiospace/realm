@@ -279,28 +279,23 @@
     },
     {
       "file": "src/host/boot.ts",
-      "name": "resolveBoot",
-      "reason": "D-1306 test-only seam: boot-hook bounds consumed by the reference hook and the conformance harness in test/support; Phase 22 wires src/omp to it"
-    },
-    {
-      "file": "src/host/boot.ts",
       "name": "withStartupBudget",
-      "reason": "D-1306 test-only seam: startup budget helper consumed by the reference hook in test/support; Phase 22 wires src/omp to it"
+      "reason": "D-1306 test-only seam: startup budget helper consumed by the conformance harness and the reference hook in test/support; the Omp plugin runs its budget on the host's managed timers, so production wiring of this helper is Phase 23"
     },
     {
       "file": "src/host/boot.ts",
       "name": "attachFailureDisposition",
-      "reason": "D-1306 test-only seam: attach failure rule consumed by the reference hook in test/support; Phase 22 wires src/omp to it"
+      "reason": "D-1306 test-only seam: attach failure rule consumed by the conformance harness and the reference hook in test/support; production wiring is Phase 23"
     },
     {
       "file": "src/host/capabilities.ts",
       "name": "integrationCeiling",
-      "reason": "D-1306 test-only seam: capability ceiling per integration kind, proven by test/host/capabilities.test.ts; the plugin runtime of Phase 22 consumes it"
+      "reason": "D-1306 test-only seam: capability ceiling per integration kind, proven by test/host/capabilities.test.ts; it stays until the daemon boot wiring of Phase 23 reads a Policy"
     },
     {
       "file": "src/host/capabilities.ts",
       "name": "resolveCapabilities",
-      "reason": "D-1306 test-only seam: grant = request AND policy, proven by test/host/capabilities.test.ts; the plugin runtime of Phase 22 consumes it"
+      "reason": "D-1306 test-only seam: grant = request AND policy, proven by test/host/capabilities.test.ts; it stays until the daemon boot wiring of Phase 23 reads a Policy"
     },
     {
       "file": "src/host/install.ts",
@@ -365,22 +360,22 @@
     {
       "file": "src/host/types.ts",
       "name": "HostTimers",
-      "reason": "D-1306 test-only seam: boot-hook port type implemented by test/support/fake-host-daemon.ts; Phase 22 wires src/omp to the port"
+      "reason": "D-1306 test-only seam: boot-hook port type implemented by the Omp conformance double and the fakes in test/support; production wiring is Phase 23"
     },
     {
       "file": "src/host/types.ts",
       "name": "HostStatusSink",
-      "reason": "D-1306 test-only seam: boot-hook port type implemented by test/support/fake-host-daemon.ts; Phase 22 wires src/omp to the port"
+      "reason": "D-1306 test-only seam: boot-hook port type implemented by the Omp conformance double and the fakes in test/support; production wiring is Phase 23"
     },
     {
       "file": "src/host/types.ts",
       "name": "HostBootDeps",
-      "reason": "D-1306 test-only seam: boot-hook port type built by the conformance harness and reference hook in test/support; Phase 22 wires src/omp to the port"
+      "reason": "D-1306 test-only seam: boot-hook port type built by the conformance harness, the reference hook and the Omp conformance double in test/support; production wiring is Phase 23"
     },
     {
       "file": "src/host/types.ts",
       "name": "HostBootHook",
-      "reason": "D-1306 test-only seam: boot-hook port type implemented by test/support/reference-boot-hook.ts and checked by the conformance harness; Phase 22 wires src/omp to the port"
+      "reason": "D-1306 test-only seam: boot-hook port type implemented by the reference hook and the Omp conformance double in test/support and checked by the conformance harness; production wiring is Phase 23"
     },
     {
       "file": "src/lifecycle/mutation-gate.ts",
@@ -434,11 +429,6 @@
     },
     {
       "file": "src/omp/plugin.ts",
-      "name": "GUARD_STATUS_BUDGET_MS",
-      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
-    },
-    {
-      "file": "src/omp/plugin.ts",
       "name": "HostToolCall",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
@@ -474,18 +464,23 @@
     },
     {
       "file": "src/omp/plugin.ts",
+      "name": "RealmPluginView",
+      "reason": "D-1306 test-only seam: the read-only view of what the plugin last painted, read by test/support/omp-boot-hook.ts for the conformance port's status(); production wiring of the view is Phase 23"
+    },
+    {
+      "file": "src/omp/plugin.ts",
       "name": "RealmRetryCommand",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
       "file": "src/omp/plugin.ts",
-      "name": "createRealmPlugin",
-      "reason": "D-1306 test-only seam: the plugin handle with view and callbacks, driven by test/support/omp-boot-hook.ts; the extension edge moves onto it in Phase 22 plan 22-03"
+      "name": "guardHostToolCall",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
       "file": "src/omp/plugin.ts",
-      "name": "guardHostToolCall",
-      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+      "name": "registerRealmPlugin",
+      "reason": "D-1306 test-only seam: returns only the host tool set; the extension edge calls createRealmPlugin, and test/omp/plugin.test.ts and test/omp/host-tools.test.ts read the tool set through this wrapper"
     },
     {
       "file": "src/omp/plugin.ts",

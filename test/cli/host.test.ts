@@ -10,6 +10,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { checkAuditFile } from "../../src/audit/chain.js";
 import { runCli, type CliDeps, type CliResult } from "../../src/cli/main.js";
+import { writePresence } from "../../src/host/presence.js";
 import { HOST_RUNTIMES } from "../../src/host/runtimes.js";
 import { HOST_IDS, type HostId, type HostRuntimeEntry, type InstallRecipe } from "../../src/host/types.js";
 import { fixtureEntry, fixtureRecipe, makeFixtureHost, treeHash, writeAt, type FixtureHost } from "../support/fixture-host.js";
@@ -345,7 +346,12 @@ void test("OMPB-04: on the real table with nothing detected, install omp refuses
 void test("OMPB-04: realm host status omp is detected, not recipe-pending, when the agent directory exists and no receipt does", async (t) => {
   const r = ompRig(t);
   const status = json(await runCli(["host", "status", "omp"], r.deps)) as { id: string; status: string; entries: unknown[] };
-  assert.deepEqual(status, { id: "omp", status: "detected", entries: [] });
+  assert.deepEqual(status, {
+    id: "omp",
+    status: "detected",
+    entries: [],
+    plugin: { target: null, sessions: { live: 0, stale: 0, unreadable: 0 }, conflicts: [] },
+  });
 });
 
 void test("OMPB-04: dry-run, install, status, a second install, and uninstall of omp on a fixture package and --config-home", async (t) => {
@@ -384,7 +390,12 @@ void test("OMPB-04: dry-run, install, status, a second install, and uninstall of
   assert.equal(auditLineCount(r.auditFile), 2, "a noop adds no audit line");
 
   const status = json(await run("status", "omp")) as { id: string; status: string; entries: { path: string; state: string }[] };
-  assert.deepEqual(status, { id: "omp", status: "installed", entries: [{ path: OMP_SHIM_REL, state: "ok" }] });
+  assert.deepEqual(status, {
+    id: "omp",
+    status: "installed",
+    entries: [{ path: OMP_SHIM_REL, state: "ok" }],
+    plugin: { target: "present", sessions: { live: 0, stale: 0, unreadable: 0 }, conflicts: [] },
+  });
 
   const dryRemove = json(await run("uninstall", "omp", "--dry-run", ...configHome)) as { status: string };
   assert.equal(dryRemove.status, "planned");
@@ -590,4 +601,25 @@ void test("HOST-07: log lines fall back to stderr when host.log cannot be opened
   assert.deepEqual(eventsOfLines(result.stderr), ["host.install.plan"]);
   const summary: unknown = JSON.parse(result.stdout);
   assert.ok(typeof summary === "object" && summary !== null && "status" in summary && summary.status === "planned");
+});
+
+void test("OMPB-07: realm host status omp counts live plugin sessions and names a duplicate plugin link, with no path", async (t) => {
+  const r = ompRig(t);
+  const run = (): Promise<CliResult> => runCli(["host", "status", "omp"], r.deps);
+  assert.equal((await runCli(["host", "install", "omp"], r.deps)).exitCode, 0);
+  writePresence(r.fx.stateDir, "omp", { pid: process.pid, startedAt: "2026-11-17T10:00:00.000Z", sessionId: "p0123456789ab", attach: "attached", code: null });
+  writeAt(join(r.fx.stateDir, "hosts", "omp-active", "5.json"), "garbage");
+  mkdirSync(join(r.fx.home, ".omp", "plugins", "node_modules", "agent-realm"), { recursive: true });
+  const status = json(await run()) as { plugin: { target: string; sessions: { live: number; stale: number; unreadable: number }; conflicts: string[] } };
+  assert.equal(status.plugin.target, "present");
+  assert.equal(status.plugin.sessions.live, 1);
+  assert.equal(status.plugin.sessions.unreadable, 1);
+  assert.deepEqual(status.plugin.conflicts, [".omp/plugins/node_modules/agent-realm"]);
+  assert.equal(JSON.stringify(status).includes(r.fx.root), false, "no absolute path in the status");
+});
+
+void test("OMPB-07: the status row of a host that is not an extension host keeps exactly id, status and entries", async (t) => {
+  const r = rig(t);
+  const status = json(await realmHost(r, "status", "claude")) as Record<string, unknown>;
+  assert.deepEqual(Object.keys(status).sort(), ["entries", "id", "status"]);
 });

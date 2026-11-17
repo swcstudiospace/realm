@@ -37,6 +37,32 @@ use the isolated `HOME`, `PI_CODING_AGENT_DIR` and `XDG_CONFIG_HOME` environment
 below too. For actual runtime use, select the generated Realm config and
 preconfigured gateway described under initialization instead.
 
+## Install with realm host
+
+`realm host install omp` writes one small shim into the Omp agent directory
+(`~/.omp/agent/extensions/realm/index.js`, or under `PI_CODING_AGENT_DIR`); the
+shim imports the built `dist/src/omp/extension.js` of the Realm package that wrote
+it. Build first (`npm run build`), review the plan, then apply:
+
+```bash
+realm host install omp --dry-run
+realm host install omp
+realm host status omp
+realm host uninstall omp
+```
+
+`--config-home <abs>` names a non-default agent directory and skips detection.
+The shim and the plugin link below are alternatives: install refuses
+(`already-loaded`, `POLICY_DENIED`) when the link exists, and refuses
+(`extension-unbuilt`) when the entry is not built. With the shim installed and
+no environment switch, an Omp session start attaches and starts the daemon when
+none answers, also under the compiled Omp binary when a Node is on an absolute
+`PATH` directory. Evidence: the recipe is proven on a fixture host; a real Omp
+loading the shim is proven only by the live rehearsal in
+`docs/integration/omp.md` ("Installed by `realm host install omp`"), which is
+not yet recorded. Do not run the rehearsal against a real home by accident; use
+an isolated `HOME`, `PI_CODING_AGENT_DIR` and `XDG_CONFIG_HOME` as below.
+
 ## Install a built local checkout
 
 Use Node.js 22.13.0 or newer and a checkout whose dependencies are installed

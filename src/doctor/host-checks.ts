@@ -12,6 +12,7 @@ import { withTimeout } from "../core/timeout.js";
 import { errnoOf, lstatIfPresent } from "../fs/canonicalize.js";
 import { createHostAdapter } from "../host/adapter.js";
 import { defaultManifestFor } from "../host/manifest.js";
+import { readPresence } from "../host/presence.js";
 import { DEFAULT_READ_TIMEOUT_MS } from "../host/receipt.js";
 import { HOST_RUNTIMES } from "../host/runtimes.js";
 import { HOST_IDS, type HostEnv, type HostId, type HostRuntimeEntry } from "../host/types.js";
@@ -32,6 +33,8 @@ export interface HostPluginsCheckOptions {
   readonly adapters?: Readonly<Record<HostId, HostRuntimeEntry>>;
   // Test seam: lists the hosts directory (default fs/promises readdir).
   readonly readDir?: (path: string) => Promise<readonly string[]>;
+  // Test seam: whether a process id is alive, for the live plugin session count (default process.kill(pid, 0)).
+  readonly isProcessAlive?: (pid: number) => boolean;
 }
 
 const RECEIPT_SUFFIX = ".receipt.json";
@@ -73,6 +76,16 @@ interface Drift {
   readonly detail: string;
 }
 
+// An installed host with the sentence the doctor adds for it ("" when there is nothing to add).
+interface InstalledHost {
+  readonly id: HostId;
+  readonly note: string;
+}
+
+function sessionsPhrase(live: number): string {
+  return `${String(live)} live plugin session${live === 1 ? "" : "s"}`;
+}
+
 interface Failure {
   readonly id: HostId;
   readonly code: ErrorCode;
@@ -95,7 +108,8 @@ export async function hostPluginsCheck(options: HostPluginsCheckOptions): Promis
   // A receipt names its own config home and status resolves paths against it. This env only serves the detection fallback
   // that runs if a receipt vanishes between the listing and the read, so it points inside the state directory, never at a real home.
   const env: HostEnv = { home: options.stateDir, env: {}, pathDirs: [] };
-  const installed: HostId[] = [];
+  const installed: InstalledHost[] = [];
+  let unreadableMarkers = false;
   const drifted: Drift[] = [];
   const failed: Failure[] = [];
   for (const id of hosts) {
@@ -108,8 +122,18 @@ export async function hostPluginsCheck(options: HostPluginsCheckOptions): Promis
         readTimeoutMs,
       });
       const found = await adapter.status(env);
-      if (found.status === "installed") {
-        installed.push(id);
+      if (found.status === "installed" && found.extensionTarget !== null && found.extensionTarget !== "present") {
+        drifted.push({ id, detail: `extension target ${found.extensionTarget}` });
+      } else if (found.status === "installed" && found.extensionTarget === "present") {
+        const sessions = await readPresence(options.stateDir, id, {
+          readTimeoutMs,
+          ...(options.isProcessAlive === undefined ? {} : { isAlive: options.isProcessAlive }),
+        });
+        const unreadable = sessions.unreadable === 0 ? "" : `, ${String(sessions.unreadable)} unreadable presence marker(s)`;
+        unreadableMarkers ||= sessions.unreadable > 0;
+        installed.push({ id, note: `extension target present, ${sessionsPhrase(sessions.live)}${unreadable}` });
+      } else if (found.status === "installed") {
+        installed.push({ id, note: "" });
       } else if (found.status === "drifted") {
         drifted.push({ id, detail: found.detail });
       }
@@ -135,6 +159,12 @@ export async function hostPluginsCheck(options: HostPluginsCheckOptions): Promis
     };
   }
   // A receipt that vanished between the listing and the read leaves nothing installed.
-  const detail = installed.length === 0 ? "no host plugin installed" : `installed: ${installed.join(", ")}`;
+  const detail =
+    installed.length === 0
+      ? "no host plugin installed"
+      : `installed: ${installed.map((item) => (item.note === "" ? item.id : `${item.id} (${item.note})`)).join(", ")}`;
+  if (unreadableMarkers) {
+    return { id: "host-plugins", status: "warn", detail, fix: inspect };
+  }
   return { id: "host-plugins", status: "pass", detail, fix: null };
 }
