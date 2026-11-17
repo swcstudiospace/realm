@@ -279,21 +279,6 @@
     },
     {
       "file": "src/host/boot.ts",
-      "name": "BootLink",
-      "reason": "D-1306 test-only seam: link state named by the conformance harness (test/support/reference-boot-hook.ts); Phase 22 moves src/omp onto it"
-    },
-    {
-      "file": "src/host/boot.ts",
-      "name": "ResolvedBoot",
-      "reason": "D-1306 test-only seam: the resolved bounds type named by test/support/host-boot-conformance.ts; Phase 22 moves src/omp onto it"
-    },
-    {
-      "file": "src/host/boot.ts",
-      "name": "BOOT_BOUNDS",
-      "reason": "D-1306 test-only seam: held equal to the Omp constants by test/host/boot.test.ts; Phase 22 deletes the src/omp duplicates and consumes it"
-    },
-    {
-      "file": "src/host/boot.ts",
       "name": "resolveBoot",
       "reason": "D-1306 test-only seam: boot-hook bounds consumed by the reference hook and the conformance harness in test/support; Phase 22 wires src/omp to it"
     },
@@ -306,11 +291,6 @@
       "file": "src/host/boot.ts",
       "name": "attachFailureDisposition",
       "reason": "D-1306 test-only seam: attach failure rule consumed by the reference hook in test/support; Phase 22 wires src/omp to it"
-    },
-    {
-      "file": "src/host/boot.ts",
-      "name": "backstopVerdict",
-      "reason": "D-1306 test-only seam: guard backstop rule consumed by the reference hook in test/support; Phase 22 wires src/omp to it"
     },
     {
       "file": "src/host/capabilities.ts",
@@ -499,13 +479,8 @@
     },
     {
       "file": "src/omp/plugin.ts",
-      "name": "STARTUP_BUDGET_MS",
-      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
-    },
-    {
-      "file": "src/omp/plugin.ts",
-      "name": "STATUS_POLL_MS",
-      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+      "name": "createRealmPlugin",
+      "reason": "D-1306 test-only seam: the plugin handle with view and callbacks, driven by test/support/omp-boot-hook.ts; the extension edge moves onto it in Phase 22 plan 22-03"
     },
     {
       "file": "src/omp/plugin.ts",

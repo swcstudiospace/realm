@@ -2,16 +2,24 @@
 // cases against fakes (fake-host-daemon.ts): bounded attach, status readback and paint, refused-up retention, terminal attach
 // failure, the fail-closed guard, client-only shutdown, re-attach off by default, bounded re-attach, and workspace switching.
 //
-// Who runs it: Phase 22 runs it against the refactored Omp hook, Phases 24 and 25 against each new host hook, and the
-// reference hook and its four broken variants (reference-boot-hook.ts) prove that it can pass and can fail.
+// Who runs it: Phase 22 runs it against the real Omp plugin (test/support/omp-boot-hook.ts), Phases 24 and 25 against each new
+// host hook, and the reference hook and its four broken variants (reference-boot-hook.ts) prove that it can pass and can fail.
 //
 // What a hook must do to pass:
 //   - take every bound from resolveBoot(manifest) (src/host/boot.ts), never a hard-coded value;
 //   - arm every timer it owns through HostBootDeps.timers, the guard's status read bound and the repaint poll (every
-//     statusPollMs) included, and leave none armed after shutdown;
-//   - attach under withStartupBudget, which uses the one real timer the harness lets through, cleared when the attach settles;
+//     statusPollMs) included. A live session may keep exactly one repaint poll armed, and no wait or budget timer once its
+//     attach has settled; after shutdown no timer remains at all;
+//   - enforce the startup budget either on withStartupBudget (the one real timer the harness lets through, cleared when the
+//     attach settles) or on the host's managed timers (HostBootDeps.timers): the harness advances the fake clock by the budget
+//     while it waits, so both pass;
 //   - report a failed attach through status() (state "error" and the catalogue code) and never let start() hang.
 // The harness names no host and imports nothing from src/omp.
+//
+// Amendments made for Phase 22 (the Omp plugin keeps its repaint poll armed for the life of a session, and runs its startup
+// budget on the host's managed timers): (a) every "no timer remains" assertion made while the session is still live is
+// idleExceptPoll, "no wait armed and at most the one repaint poll"; the two assertions in C6 made after shutdown keep
+// pendingCount() === 0. (b) C1 advances the fake clock by the startup budget while it waits for start().
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -102,23 +110,37 @@ function blocked(verdict: HostGuardVerdict | undefined, what: string): HostGuard
   return verdict;
 }
 
+// "No timer remains" for a live session: no wait or budget timer armed, and at most the one repaint poll. A session that has
+// shut down keeps the strict pendingCount() === 0 checks (C6).
+function idleExceptPoll(rig: Rig, what: string): void {
+  assert.equal(rig.timers.pendingTimeouts(), 0, `${what}: no wait or budget timer remains armed`);
+  assert.ok(rig.timers.pendingCount() - rig.timers.pendingTimeouts() <= 1, `${what}: at most the one repaint poll remains armed`);
+}
+
 // ---- C1 ---------------------------------------------------------------------
 
 async function attachBudget(factory: HostBootHookFactory, manifest: HostPluginManifest): Promise<void> {
   await withRig(factory, manifestWith(manifest, false), [hang()], async (rig) => {
     let observed: ErrorCode | undefined;
-    try {
-      await settles(rig.hook.start(ROOT_A), "a hung attach after the startup budget");
-    } catch (error: unknown) {
-      if (!(error instanceof RealmError)) {
-        throw error;
+    // start is not awaited yet: the budget runs on the fake clock for a hook that arms it on the host's timers, and on the one
+    // real timer withStartupBudget arms for a hook that uses that. Advancing the fake clock past the budget serves the first and
+    // is harmless to the second.
+    const started = rig.hook.start(ROOT_A).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    await rig.timers.advance(rig.boot.startupBudgetMs);
+    const failure = await settles(started, "a hung attach after the startup budget");
+    if (failure !== undefined) {
+      if (!(failure instanceof RealmError)) {
+        throw new Error("start() settled with a value that is not a RealmError");
       }
-      observed = error.code;
+      observed = failure.code;
     }
     const status = rig.hook.status();
     assert.equal(observed ?? status.code, "STARTUP_BUDGET_EXCEEDED");
     assert.notEqual(status.state, "active");
-    assert.equal(rig.timers.pendingCount(), 0, "no timer remains armed");
+    idleExceptPoll(rig, "after the budget failure");
   });
 }
 
@@ -189,7 +211,7 @@ async function terminalAttachFailure(factory: HostBootHookFactory, manifest: Hos
     await settles(rig.hook.start(ROOT_A), "start");
     assert.equal(rig.hook.status().state, "error");
     assert.equal(rig.hook.status().code, "POLICY_DENIED");
-    assert.equal(rig.timers.pendingCount(), 0, "a terminal failure schedules no re-attach");
+    idleExceptPoll(rig, "a terminal failure schedules no re-attach");
     await rig.timers.advance(1_000_000);
     assert.equal(rig.script.roots.length, 1, "no attach follows a terminal failure");
     await settles(rig.hook.retry(), "retry");
@@ -305,7 +327,7 @@ async function reattachBounded(factory: HostBootHookFactory, manifest: HostPlugi
       await fireWaits(rig, 1, cap, random);
       assert.equal(rig.script.roots.length, 1 + cap, `exactly ${String(cap)} re-attach attempts`);
       assert.equal(rig.hook.status().link, "failed");
-      assert.equal(rig.timers.pendingCount(), 0, "after the cap no timer remains");
+      idleExceptPoll(rig, "after the cap no timer remains");
       await rig.timers.advance(1_000_000);
       assert.equal(rig.script.roots.length, 1 + cap, "no attempt after the cap");
     });
@@ -326,7 +348,7 @@ async function reattachBounded(factory: HostBootHookFactory, manifest: HostPlugi
     await fireWaits(rig, 1, cap, 0);
     assert.equal(rig.script.roots.length, 1 + 4 + cap, "the second streak again runs to the cap");
     assert.equal(rig.hook.status().link, "failed");
-    assert.equal(rig.timers.pendingCount(), 0);
+    idleExceptPoll(rig, "the second streak ends with no wait armed");
   });
   // A terminal code stops the streak at once.
   const stable = new FakeDaemon({ root: ROOT_A });
@@ -337,7 +359,7 @@ async function reattachBounded(factory: HostBootHookFactory, manifest: HostPlugi
     await fireWaits(rig, 1, 2, rig.timers.randomValue);
     assert.equal(rig.script.roots.length, 3);
     assert.equal(rig.hook.status().link, "failed");
-    assert.equal(rig.timers.pendingCount(), 0, "a terminal code leaves no wait");
+    idleExceptPoll(rig, "a terminal code leaves no wait");
     await rig.timers.advance(1_000_000);
     assert.equal(rig.script.roots.length, 3, "a terminal code stops the streak");
   });

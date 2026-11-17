@@ -1,9 +1,9 @@
 // Host-neutral boot-hook helpers (Phase 21, HOST-04). Pure values and functions only: the bounds every host plugin's
 // attach, status, guard and re-attach behavior is held to, and the small rules those hooks share.
 //
-// These are the Omp plugin's seams (src/omp/plugin.ts, src/omp/reattach.ts) stated once for every host. src/host never
-// imports src/omp: the values below are duplicated on purpose, and test/host/boot.test.ts holds the two sides equal. Phase 22
-// moves Omp onto this module and deletes the duplicates in src/omp together with that parity test.
+// These are the rules the Omp plugin (src/omp/plugin.ts) follows, stated once for every host. Omp is the reference consumer:
+// src/omp imports this module and holds no copy of a bound, a code list, the sub-state table or the jitter function.
+// src/host never imports src/omp.
 //
 // A hook takes its bounds from resolveBoot and never hard-codes them. This module reads no environment and arms no timer of
 // its own: withStartupBudget delegates to withTimeout, which clears its timer as soon as the work settles.
@@ -31,13 +31,8 @@ export interface ResolvedBoot {
   readonly retryableAttachCodes: readonly ErrorCode[];
 }
 
-// The defaults. Held equal to the Omp constants by test/host/boot.test.ts:
-//   startupBudgetMs     STARTUP_BUDGET_MS in src/omp/plugin.ts (the policy.schema.json startupBudgetMs default)
-//   guardStatusBudgetMs GUARD_STATUS_BUDGET_MS in src/omp/plugin.ts
-//   statusPollMs        STATUS_POLL_MS in src/omp/plugin.ts
-//   reattach.*          REATTACH_RETRY_CAP, REATTACH_BASE_DELAY_MS, REATTACH_DELAY_CAP_MS in src/omp/reattach.ts
-//   linkLostCodes       LINK_LOST_CODES in src/omp/reattach.ts
-//   retryableAttachCodes RETRYABLE_ATTACH_CODES in src/omp/reattach.ts
+// The defaults: the single source for every host plugin. src/omp/plugin.ts consumes them; the policy.schema.json
+// startupBudgetMs default is held equal to startupBudgetMs by test/host/boot.test.ts.
 const LINK_LOST: readonly ErrorCode[] = ["REALM_NOT_ACTIVE", "TOOL_TIMEOUT"];
 const RETRYABLE_ATTACH: readonly ErrorCode[] = [
   "REALM_NOT_ACTIVE",
@@ -84,7 +79,19 @@ export function withStartupBudget<T>(work: Promise<T>, budgetMs: number): Promis
 // Whether a failed attach is worth another attempt. Only a RealmError whose code is in the retryable list is. Every other
 // failure is terminal: a refusal the daemon answered (POLICY_DENIED, for one) and any value that is not a RealmError.
 export function attachFailureDisposition(error: unknown): "retryable" | "terminal" {
-  return error instanceof RealmError && BOOT_BOUNDS.retryableAttachCodes.includes(error.code) ? "retryable" : "terminal";
+  return error instanceof RealmError && isRetryableAttachCode(error.code) ? "retryable" : "terminal";
+}
+
+// Whether a code means the link to the daemon is lost: a dropped channel, or a status read that outlived its bound. Takes a
+// string because a plugin outcome carries its code as one. Exact match only: no case folding, no trimming.
+export function isLinkLostCode(code: string): boolean {
+  return BOOT_BOUNDS.linkLostCodes.some((listed) => listed === code);
+}
+
+// Whether an attach failure code is worth another attempt. Every other failure, a refusal the daemon answered included,
+// is terminal. Exact match only.
+export function isRetryableAttachCode(code: string): boolean {
+  return BOOT_BOUNDS.retryableAttachCodes.some((listed) => listed === code);
 }
 
 // The guard backstop. A tool name that is not a string cannot be classified and is refused. A name in passThrough is never
@@ -104,6 +111,12 @@ export function backstopVerdict(
   return mode === "advisory" ? undefined : { block: true, reason: "POLICY_DENIED" };
 }
 
+// The re-attach sub-state table. Re-attach is off unless the plugin's reattach option is enabled (O4; spec
+// SANDBOX_OMP_PLUGIN_CONNECTION). A dropped link (a failed read whose code isLinkLostCode accepts) then re-attaches on a
+// bounded schedule: equal-jitter waits grown from reattach.baseDelayMs and capped at reattach.capDelayMs, at most
+// reattach.retryCap of them. Each attempt runs the attach path under startupBudgetMs, and each status read stays under
+// guardStatusBudgetMs. The status item keeps its six existing names: linked is active, attaching and reconnecting are
+// connecting, failed is error. The frozen state table has no wait state, so none is added.
 const REATTACH_TRANSITIONS: Readonly<Record<BootLink, readonly BootLink[]>> = {
   off: [],
   linked: ["reconnecting", "attaching"],
@@ -113,14 +126,14 @@ const REATTACH_TRANSITIONS: Readonly<Record<BootLink, readonly BootLink[]>> = {
 };
 
 // Whether a link sub-state may move to another. Every move the table does not list is refused.
-// Phase 22 deletes the src/omp/reattach.ts copy of this function and the parity test.
+// src/omp/plugin.ts reads this one copy.
 export function reattachTransitionAllowed(from: BootLink, to: BootLink): boolean {
   return Object.hasOwn(REATTACH_TRANSITIONS, from) && REATTACH_TRANSITIONS[from].includes(to);
 }
 
 // The delay before re-attach attempt `attempt` (1-based): equal jitter over an exponential ceiling, so the delay lies in
 // [ceiling/2, ceiling] and never near zero. random is injected and must return a value in [0, 1].
-// Phase 22 deletes the src/omp/reattach.ts copy of this function and the parity test.
+// Delays are a pure function of the attempt, the bounds and one injected draw; src/omp/plugin.ts reads this one copy.
 export function equalJitterDelayMs(attempt: number, baseMs: number, capMs: number, random: () => number): number {
   if (!Number.isInteger(attempt) || attempt < 1) {
     throw new RangeError(`attempt must be a positive integer, got ${String(attempt)}`);
