@@ -836,10 +836,15 @@ void test("BOOT-08: a default-level session writes nothing to stderr; REALM_LOG_
   await pollUntil(() => hostBoot.requests.length === 3, "the attached report of the debug session reaches the daemon");
   loud.handlers.get("session_shutdown")?.({ type: "session_shutdown" }, recordingCtx(loudBase, []));
   await pollUntil(() => hostBoot.requests.length === 4, "the closed report of the debug session reaches the daemon");
-  const bootLines = lines
+  // assert.deepEqual earlier in this test narrows `lines` to never[]; widen it back before reading it.
+  const stderrLines: readonly string[] = lines;
+  const bootLines = stderrLines
     .filter((line) => line.startsWith("{"))
     .map((line) => JSON.parse(line) as Record<string, unknown>)
-    .filter((line) => typeof line.event === "string" && line.event.startsWith("host.boot."));
+    .filter((line) => {
+      const event = line["event"];
+      return typeof event === "string" && event.startsWith("host.boot.");
+    });
   const events = bootLines.map((line) => line.event);
   assert.ok(events.includes("host.boot.attached"));
   assert.ok(events.includes("host.boot.closed"));

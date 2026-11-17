@@ -82,7 +82,7 @@ const newWorld = (): World => ({
 function statusOf(world: World, selection: ControlSelection): DaemonStatus {
   return {
     snapshot: { state: world.state, reason: world.reason, lastTransitionAt: AT },
-    display: { label: "realm", degraded: false, reason: world.reason, lastTransitionAt: AT },
+    display: { label: "realm active", degraded: false, reason: world.reason, lastTransitionAt: AT },
     mode: "advisory",
     boundRoot: world.readbackOther ? "/ws/other" : selection.workspaceRoot,
     sessionId: world.readbackOther ? sessionIdOfWorkspace("/ws/other") : selection.sessionId,

@@ -247,7 +247,7 @@ export async function runStdioHost(input: StdioHostInput): Promise<StdioHostResu
     );
   }
   const orSignal = <T>(work: Promise<T>): Promise<T | typeof SIGNALLED> =>
-    Promise.race([work, signalled.then(() => SIGNALLED)]);
+    Promise.race<T | typeof SIGNALLED>([work, signalled.then((): typeof SIGNALLED => SIGNALLED)]);
 
   let tornDown: Promise<void> | null = null;
   const teardown = (): Promise<void> => {

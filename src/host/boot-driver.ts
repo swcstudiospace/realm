@@ -84,7 +84,6 @@ interface Attempt {
 
 const MAX_ATTEMPT = 9;
 const MAX_DURATION_MS = 600_000;
-const BAD_TOOL_CALL = "realm bad tool call";
 
 const codeOf = (error: unknown): ErrorCode => (error instanceof RealmError ? error.code : "REALM_NOT_ACTIVE");
 const isErrorCode = (value: string): value is ErrorCode => ERROR_CODES.some((code) => code === value);
