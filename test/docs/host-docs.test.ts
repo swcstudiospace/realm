@@ -1,4 +1,4 @@
-// TEST-HOST-07 (D-26-08): the three author-facing pages (the guide, the support matrix, the gaps page) name only paths that exist, link only
+// TEST-HOST-07 (D-26-08): the four author-facing pages (the guide, the support matrix, the gaps page, the wave 1 boot matrix) name only paths that exist, link only
 // to files that exist, leave no raw tag-like token outside code (the docs site compiler reads one as a tag), and are linked from the contract
 // page, hosts.md and the README. The guide has its twelve sections and its two checklists. The repository's `check:docs` is the gate for
 // host-local paths; this test names none. Reads files only: nothing is written and no process starts.
@@ -16,7 +16,8 @@ const INTEGRATION = join(REPO_ROOT, "docs", "integration");
 const GUIDE = "writing-a-host-plugin.md";
 const MATRIX = "host-support-matrix.md";
 const GAPS = "host-plugin-gaps.md";
-const PAGES: readonly string[] = [GUIDE, MATRIX, GAPS];
+const BOOT = "wave1-boot-matrix.md";
+const PAGES: readonly string[] = [GUIDE, MATRIX, GAPS, BOOT];
 
 function read(path: string): string {
   return readFileSync(path, "utf8");
@@ -106,7 +107,7 @@ function hasLinkTo(text: string, target: string): boolean {
   return text.includes(`](${target})`) || text.includes(`](${target}#`);
 }
 
-void test("TEST-HOST-07: the contract page and hosts.md link to the guide, the matrix and the gaps page", () => {
+void test("TEST-HOST-07: the contract page and hosts.md link to the guide, the matrix, the gaps page and the wave 1 boot matrix", () => {
   for (const name of ["host-plugin-contract.md", "hosts.md"]) {
     const text = read(join(INTEGRATION, name));
     for (const page of PAGES) {
@@ -115,7 +116,7 @@ void test("TEST-HOST-07: the contract page and hosts.md link to the guide, the m
   }
 });
 
-void test("TEST-HOST-07: the README links to the guide, the matrix and the gaps page", () => {
+void test("TEST-HOST-07: the README links to the guide, the matrix, the gaps page and the wave 1 boot matrix", () => {
   const readme = read(join(REPO_ROOT, "README.md"));
   for (const page of PAGES) {
     assert.ok(hasLinkTo(readme, `docs/integration/${page}`), `README.md links to docs/integration/${page}`);

@@ -117,13 +117,26 @@ folder, or keep a `realm` server, that you did not set up yourself. Realm itself
 configuration, and the sandbox mount does not hide these names. A read-only or hidden overlay is an open owner decision
 (OQ-24-03) and is not done here.
 
+## Kimi Code CLI 2.x, read 2026-11-17
+
+Read on 2026-11-17 from the official Kimi Code pages (https://moonshotai.github.io/kimi-code/en/customization/mcp, https://moonshotai.github.io/kimi-code/en/reference/kimi-command and https://moonshotai.github.io/kimi-code/en/configuration/env-vars). Nothing here was observed running: no Kimi Code executable is installed on the verification machine. Where a third-party guide and an official page differ, the official page wins; they agree on the points below.
+
+- **Where servers are declared.** `mcp.json`, at user level (`$KIMI_CODE_HOME/mcp.json`, default `~/.kimi-code/mcp.json`) and at project level (`.kimi-code/mcp.json`); a project entry overrides a user entry of the same name. Entries with a `command` field are stdio servers (optional `env`, `cwd`, `startupTimeoutMs`). In the TUI, `/mcp-config` adds, edits and deletes servers and `/mcp` shows their connection status.
+- **No `kimi mcp` command.** The documented subcommands are `login`, `acp`, `web`, `app`, `install-desktop`, `doctor`, `export`, `migrate`, `import-sessions`, `upgrade`, `vis` and `provider`. The Python CLI's `kimi mcp add|list|remove|test|auth` group does not carry over.
+- **No non-interactive validator for the MCP entry.** `kimi doctor` validates `config.toml` and `tui.toml` only. `/mcp` is a TUI command.
+- **`kimi -p`.** `--prompt` runs one prompt non-interactively without the TUI. It needs a configured model: a login (`kimi login`) or a provider in `config.toml`. The pages do not say whether it runs without either.
+- **Provider override.** `KIMI_MODEL_NAME` and `KIMI_MODEL_API_KEY` (both required) with optional `KIMI_MODEL_BASE_URL` and `KIMI_MODEL_PROVIDER_TYPE` (`kimi`, `anthropic` or `openai`) define a temporary provider in memory. A key is required, so a session against a loopback provider would carry a key-shaped header, unlike the Codex session drive [INFERENCE].
+- **Headless runs and trust.** Project-level MCP servers stay disabled in a headless run unless the workspace is trusted (`KIMI_CODE_TRUST_WORKSPACE`); the recipe writes the user-level file.
+
+This is why `kimi-code` is a named gap in [Host plugin gaps](../../integration/host-plugin-gaps.md) (GAP-24-02) and not a session rehearsal: the product is functional, but nothing here was installed, and there is no documented command that lists or launches a registered server without a session.
+
 ## Evidence reached
 
 | Tier | Claim | Result |
 | --- | --- | --- |
 | T1 offline fixture | the recipe on a fixture host in a temporary home, for `kimi` and `kimi-code`: detect, dry-run, install, no-op reinstall, drift, foreign content, hostile content, uninstall, doctor, `realm host status`, the override variables, and the recipe value equal to the manifest launch for both | covered by the offline tests (`test/host/kimi-recipe.test.ts`); the goldens follow the official documentation read 2026-11-17 |
 | T2 host validator | `kimi mcp test realm` launches the registered argv (only a functional Kimi CLI) | gated (`REALM_LIVE_KIMI=1`); **not run**: no `kimi` executable on the verification machine, and the one published release is the inert stub. **Not available for `kimi-code`**: no validator command is documented |
-| T3 live end to end | a real Kimi session booting Realm | **gap, not run**: no functional Kimi CLI exists to run, and none was attempted for Kimi Code |
+| T3 live end to end | a real Kimi session booting Realm | **gap, not run**. `kimi`: the Python CLI is archived and its last release is a deprecation stub, so no session can run. `kimi-code`: a functional product that is not installed on the verification machine, with no MCP validator command documented; none was attempted |
 
 The named gaps: `kimi` has T1 only; `kimi-code` has T1 only; no Kimi session of either product has loaded Realm.
 

@@ -262,7 +262,7 @@ does not provision the runtime or verify a current sandbox. Use a configured
 
 See [docs/integration/hosts.md](docs/integration/hosts.md) for the host tiers.
 
-- To add a host, read [Writing a Realm host plugin](docs/integration/writing-a-host-plugin.md). The [Host support matrix](docs/integration/host-support-matrix.md) shows what each host supports and proves, and [Host plugin gaps](docs/integration/host-plugin-gaps.md) tracks what is not proven.
+- To add a host, read [Writing a Realm host plugin](docs/integration/writing-a-host-plugin.md). The [Host support matrix](docs/integration/host-support-matrix.md) shows what each host supports and proves, [Host plugin gaps](docs/integration/host-plugin-gaps.md) tracks what is not proven, and the [Wave 1 boot matrix](docs/integration/wave1-boot-matrix.md) shows the production-stack boot status of the five wave 1 hosts.
 
 ## Documentation
 

@@ -1,11 +1,14 @@
-// Gate, isolation and runner pieces of the host live rehearsals (ADPT-08; decisions D-24-07 and D-24-08 of phase 24).
+// Gate, isolation and runner pieces of the host live rehearsals (ADPT-08; decisions D-24-07 and D-24-08 of phase 24; BOOTP-01 of phase 31).
 //
 // Thirteen hosts are in the table. Four have a gated live file of their own: claude, codex, opencode and kimi. Each file has a validator
-// tier (the host's own commands parse, and for three hosts launch, what the real recipe wrote into an isolated home) and, for claude and
-// opencode, a production tier (the host's own health check performs a real MCP initialize against `realm mcp --host <id>` on the
-// production stack). The nine wave-2 hosts (qwen, pi, hermes, cursor, kilo, copilot, augment, codebuddy, cline) share one table-driven
-// validator file, test/integration/host-live-wave2.test.ts, and have no production tier (config-only, 25-CONTEXT D-25-08). Antigravity has
-// no live file at all (ANTIGRAVITY_GAP).
+// tier (the host's own commands parse, and for three hosts launch, what the real recipe wrote into an isolated home) and, for claude,
+// codex and opencode, a production tier. The production tier of claude and opencode is the host's own health check (`<host> mcp list`),
+// which performs a real MCP initialize against `realm mcp --host <id>` on the production stack. The production tier of codex is a session
+// drive (`codex exec` against a refusing loopback provider, no credential; 31-CONTEXT D-31-02) that makes Codex launch the registered
+// server and list its tools. In every production run the registered `realm` is a wire recorder (test/support/host-live-session.ts) that
+// logs method names and tool names. The nine wave-2 hosts (qwen, pi, hermes, cursor, kilo, copilot, augment, codebuddy, cline) share one
+// table-driven validator file, test/integration/host-live-wave2.test.ts, and have no production tier (config-only, 25-CONTEXT D-25-08).
+// Antigravity has no live file at all (ANTIGRAVITY_GAP).
 //
 // Gate order of hostLiveSkipReason, the first failing check names the skip (no test ever sets a gate variable):
 //   1. the host's opt-in variable is exactly 1 (REALM_LIVE_<HOST>, for example REALM_LIVE_CLAUDE or REALM_LIVE_QWEN)
@@ -29,8 +32,9 @@
 //   writeStubRealm, readStubArgv                       the stub `realm` that records its argv, and the reader of that record
 //   isolatedHostEnv, isUnderTemp                       the allowlisted environment and the temporary-directory guard
 //   runHost, describeRun, requireReturned              the bounded process-group runner and its result helpers
+//   Capture, signalGroup, shellQuote, the two grace constants   the runner pieces test/support/host-live-session.ts reuses
 //   createHostRig                                      one isolated root with the stub, a state directory and the realm CLI
-//   runHostProduction                                  the shared production-tier scenario of claude and opencode
+//   runHostProduction                                  the shared production-tier scenario of claude, codex and opencode
 //   fileSha256, stripAnsi, cliJson, refusalReasonOf, ownedTableOf, processAlive   small helpers of the live files
 
 import assert from "node:assert/strict";
@@ -53,6 +57,7 @@ import {
   isDirectory,
   isSocket,
   listSandboxContainers,
+  LIVE_PRODUCTION_VARIABLE,
   type LiveInputs,
   onPath,
   pollUntil,
@@ -68,6 +73,7 @@ import {
   stateOfStatus,
   waitForNoResidue,
 } from "./production-live.js";
+import { isLoopbackPeer, readWireLog, REALM_TOOL_NAMES, runHostUntil, type RefusingProvider, wireSummary, writeWireRecorder } from "./host-live-session.js";
 import { scaledMs } from "./timing.js";
 
 // ---- The per-host table ----------------------------------------------------------------------------------------------------
@@ -144,8 +150,8 @@ export const HOST_LIVE: Readonly<Record<LiveHostId, HostLiveSpec>> = Object.free
     recordedVersion: "0.154.0",
     minVersion: null,
     launchesOnValidate: false,
-    productionTier: false,
-    productionGap: "`codex mcp list` does not start servers and a session needs model credentials, which no rehearsal supplies",
+    productionTier: true,
+    productionGap: null,
   }),
   opencode: Object.freeze({
     optIn: "REALM_LIVE_OPENCODE",
@@ -169,7 +175,7 @@ export const HOST_LIVE: Readonly<Record<LiveHostId, HostLiveSpec>> = Object.free
     minVersion: null,
     launchesOnValidate: true,
     productionTier: false,
-    productionGap: "no functional Kimi CLI release exists: the last release is a deprecation stub",
+    productionGap: "the Python Kimi CLI is archived: its last release is a deprecation stub, so no session can run",
   }),
   qwen: wave2Spec({ optIn: "REALM_LIVE_QWEN", binOverride: "REALM_QWEN_BIN", defaultBinary: "qwen", displayName: "Qwen Code", recordedVersion: "0.22.0", launchesOnValidate: true }),
   // pi below 1.3.0 has no MCP and ignores mcp.json (E-PI2): the floor skips it.
@@ -417,7 +423,8 @@ export async function collectHostLiveGate(host: LiveHostId, tier: HostLiveTier, 
   if (tier === "production" && spec.productionGap === null && cliBuilt) {
     production = productionSkipReason({
       env,
-      podman: await probePodman(),
+      // podmanSkipReason is reached only after the production opt-in, so a run without it never starts `podman --version`.
+      podman: env[LIVE_PRODUCTION_VARIABLE] === "1" ? await probePodman() : { kind: "unavailable" },
       isSocket,
       onPath: (name) => onPath(name, env["PATH"]),
       exists: existsSync,
@@ -436,7 +443,7 @@ export async function collectHostLiveGate(host: LiveHostId, tier: HostLiveTier, 
 
 // ---- Stub realm ------------------------------------------------------------------------------------------------------------
 
-function shellQuote(value: string): string {
+export function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
@@ -559,8 +566,8 @@ export function isolatedHostEnv(root: string, host: LiveHostId, options: Isolate
 export const VALIDATOR_TIMEOUT_MS = 120_000;
 export const PRODUCTION_TIMEOUT_MS = 300_000;
 const OUTPUT_LIMIT_BYTES = 1024 * 1024;
-const GROUP_KILL_GRACE_MS = 2_000;
-const PIPE_CLOSE_GRACE_MS = 1_000;
+export const GROUP_KILL_GRACE_MS = 2_000;
+export const PIPE_CLOSE_GRACE_MS = 1_000;
 
 export interface HostRunResult {
   // Undefined when the command could not start, was signalled or timed out.
@@ -570,7 +577,7 @@ export interface HostRunResult {
   readonly timedOut: boolean;
 }
 
-class Capture {
+export class Capture {
   private readonly chunks: Buffer[] = [];
   private size = 0;
 
@@ -589,7 +596,7 @@ class Capture {
   }
 }
 
-function signalGroup(pid: number, signal: NodeJS.Signals): void {
+export function signalGroup(pid: number, signal: NodeJS.Signals): void {
   try {
     process.kill(-pid, signal);
   } catch {
@@ -831,21 +838,23 @@ const DOWN_TIMEOUT_MS = 120_000;
 const POLL_TIMEOUT_MS = 90_000;
 const POLL_INTERVAL_MS = 2_000;
 
+// The session drive: the host command is the host binary run with `args` (a session that never exits by itself, ended once the boot
+// is observed) against `provider`, a loopback provider that refuses every request. The default drive (no `drive`) runs `<host> mcp list`.
+export interface HostSessionDrive {
+  readonly kind: "session";
+  readonly provider: RefusingProvider;
+  readonly args: readonly string[];
+}
+
 export interface HostProductionOptions {
-  readonly host: "claude" | "opencode";
+  readonly host: "claude" | "codex" | "opencode";
   // The resolved absolute host executable and the compiled CLI beside the compiled tests.
   readonly bin: string;
   readonly cliPath: string;
   readonly env: EnvironmentLike;
   // The operator's real host configuration file: its sha256 must be equal before and after the run.
   readonly realFile: (home: string) => string;
-}
-
-function realmShim(dir: string, nodePath: string, cliPath: string): void {
-  mkdirSync(dir, { recursive: true });
-  const shim = join(dir, "realm");
-  writeFileSync(shim, `#!/bin/sh\nexec ${shellQuote(nodePath)} ${shellQuote(cliPath)} "$@"\n`);
-  chmodSync(shim, 0o755);
+  readonly drive?: HostSessionDrive;
 }
 
 // The line(s) of a host listing that name the realm server.
@@ -881,11 +890,13 @@ function presenceEntries(stateDir: string, host: string): string[] {
   return existsSync(dir) ? readdirSync(dir) : [];
 }
 
-// The production-tier scenario of claude and opencode: the real host's own health check (`<host> mcp list`) performs a real MCP
-// initialize against `realm mcp --host <id>` on the production stack. The gate has already passed. The host's configuration home is
-// isolated (CLAUDE_CONFIG_DIR, or the scenario's own XDG_CONFIG_HOME for opencode); HOME stays the account's, because the daemon the
-// host starts needs it (Phase 22 measured AGENTOS_STOP_FAILED with a profile HOME). The operator's real host file must be byte-equal
-// afterwards. No prompt is ever sent and no credential is used.
+// The production-tier scenario of claude, codex and opencode. The default drive is the real host's own health check (`<host> mcp list`):
+// it performs a real MCP initialize against `realm mcp --host <id>` on the production stack. The session drive (codex) runs the host as a
+// session against a refusing loopback provider and ends it once the daemon shows the boot and the recorder shows the tool listing. The
+// registered `realm` is a wire recorder: it forwards the stream to the real CLI and logs method names and tool names. The gate has
+// already passed. The host's configuration home is isolated (CLAUDE_CONFIG_DIR, CODEX_HOME, or the scenario's own XDG_CONFIG_HOME for
+// opencode); HOME stays the account's, because the daemon the host starts needs it (Phase 22 measured AGENTOS_STOP_FAILED with a profile
+// HOME). The operator's real host file must be byte-equal afterwards. No model turn happens and no credential is used.
 export async function runHostProduction(t: TestContext, options: HostProductionOptions): Promise<void> {
   const { host } = options;
   const inputs: LiveInputs = readLiveInputs(options.env, options.cliPath);
@@ -931,18 +942,24 @@ export async function runHostProduction(t: TestContext, options: HostProductionO
   });
   mkdirSync(projectDir);
 
-  // The host's own configuration home. Claude: a directory of the scenario named by CLAUDE_CONFIG_DIR. OpenCode: the `opencode`
-  // directory beside the scenario's realm/config.json, so both tools read their own subdirectory of one XDG_CONFIG_HOME.
+  // The host's own configuration home. Claude: a directory of the scenario named by CLAUDE_CONFIG_DIR. Codex: a directory of the
+  // scenario named by CODEX_HOME. OpenCode: the `opencode` directory beside the scenario's realm/config.json, so both tools read their
+  // own subdirectory of one XDG_CONFIG_HOME.
   const overrides: Record<string, string> = {};
   if (host === "claude") {
     const claudeDir = join(scenario.root, "cfg");
     mkdirSync(claudeDir);
     overrides["CLAUDE_CONFIG_DIR"] = claudeDir;
+  } else if (host === "codex") {
+    const codexDir = join(scenario.root, "codex");
+    mkdirSync(codexDir);
+    overrides["CODEX_HOME"] = codexDir;
   } else {
     mkdirSync(join(configHome, "opencode"), { recursive: true });
   }
   const shimDir = join(scenario.root, "shim");
-  realmShim(shimDir, process.execPath, options.cliPath);
+  const wireLog = join(scenario.root, "wire.log");
+  writeWireRecorder(shimDir, { nodePath: process.execPath, target: [process.execPath, options.cliPath], logFile: wireLog });
   const pathValue = [shimDir, dirname(options.bin), scenario.cliEnvironment["PATH"]].filter((entry): entry is string => entry !== undefined && entry !== "").join(delimiter);
   const env: Readonly<Record<string, string>> = { ...scenario.cliEnvironment, PATH: pathValue, ...overrides };
 
@@ -965,36 +982,83 @@ export async function runHostProduction(t: TestContext, options: HostProductionO
   assert.equal(afterInstall["status"], "installed", `realm host status ${host} must report installed: ${describeValue(afterInstall)}`);
   assert.equal(afterInstall["launch"], "on-path", `the shim realm must resolve on PATH: ${describeValue(afterInstall)}`);
 
-  // The host's own health check, from a directory under the pinned workspace root.
-  const listed = await runHost(options.bin, ["mcp", "list"], env, projectDir, scaledMs(REAL_HOST_TIMEOUT_MS));
-  requireReturned(listed, `${host} mcp list`);
-  assert.equal(listed.exitCode, 0, `${host} mcp list: ${describeRun(listed)}`);
-  const lines = realmLines(listed.stdout);
-  assert.ok(lines.length > 0, `${host} mcp list must list realm: ${describeRun(listed)}`);
-  const joined = lines.join("\n");
-  assert.match(joined, /\bconnected\b/i, `${host} must report realm connected: ${describeRun(listed)}`);
-  assert.doesNotMatch(joined, /\bfailed\b/i, `${host} must not report realm failed: ${describeRun(listed)}`);
-  t.diagnostic(`${host} mcp list reported: ${JSON.stringify(joined.trim())}`);
-
-  const active = await pollUntil(
-    async () => {
+  // The host command, from a directory under the pinned workspace root. The recorder's wire summary is what the tool listing is
+  // asserted from; the daemon's view (status active, an attached boot report) is asserted beside it.
+  const { drive } = options;
+  const wireText = (): string => {
+    const summary = wireSummary(readWireLog(wireLog));
+    return `host methods [${summary.hostMethods.join(", ")}], tools [${summary.toolNames.join(", ")}]`;
+  };
+  const startedAt = Date.now();
+  if (drive === undefined) {
+    // The host's own health check.
+    const listed = await runHost(options.bin, ["mcp", "list"], env, projectDir, scaledMs(REAL_HOST_TIMEOUT_MS));
+    requireReturned(listed, `${host} mcp list`);
+    assert.equal(listed.exitCode, 0, `${host} mcp list: ${describeRun(listed)}`);
+    const lines = realmLines(listed.stdout);
+    assert.ok(lines.length > 0, `${host} mcp list must list realm: ${describeRun(listed)}`);
+    const joined = lines.join("\n");
+    assert.match(joined, /\bconnected\b/i, `${host} must report realm connected: ${describeRun(listed)}`);
+    assert.doesNotMatch(joined, /\bfailed\b/i, `${host} must not report realm failed: ${describeRun(listed)}`);
+    t.diagnostic(`${host} mcp list reported: ${JSON.stringify(joined.trim())}`);
+  } else {
+    // A session never exits by itself: poll for the boot evidence and end the process group once it holds.
+    const bootSeen = async (): Promise<boolean> => {
+      if (!wireSummary(readWireLog(wireLog)).answered) {
+        return false;
+      }
       const status = await realmStatus();
-      const state = status.exitCode === 0 ? stateOfStatus(status.stdout) : undefined;
-      return state === "active" ? { done: true } : { done: false, detail: `realm status: ${describeResult(status)}` };
-    },
-    { timeoutMs: scaledMs(POLL_TIMEOUT_MS), intervalMs: POLL_INTERVAL_MS },
-  );
-  assert.ok(active.ok, `realm status must answer active for the project the host opened: ${active.detail}`);
-
-  const booted = await pollUntil(
-    async () => {
+      if (status.exitCode !== 0 || stateOfStatus(status.stdout) !== "active") {
+        return false;
+      }
       const metrics = await realmCli(inputs, scenario, ["metrics", "--workspace", projectDir], REALM_COMMAND_TIMEOUT_MS);
-      const count = metrics.exitCode === 0 ? attachedBootsOf(metrics.stdout, host) : 0;
-      return count >= 1 ? { done: true } : { done: false, detail: `attached boot reports for ${host}: ${String(count)}; ${describeResult(metrics)}` };
-    },
-    { timeoutMs: scaledMs(POLL_TIMEOUT_MS), intervalMs: POLL_INTERVAL_MS },
-  );
-  assert.ok(booted.ok, `realm metrics must count at least one attached boot report for ${host}: ${booted.detail}`);
+      return metrics.exitCode === 0 && attachedBootsOf(metrics.stdout, host) >= 1;
+    };
+    const session = await runHostUntil(options.bin, drive.args, env, projectDir, { ready: bootSeen, timeoutMs: scaledMs(REAL_HOST_TIMEOUT_MS), pollMs: POLL_INTERVAL_MS });
+    assert.equal(session.endedBy, "ready", `${host} session ended by ${session.endedBy} before the boot was observed; wire: ${wireText()}; ${describeRun(session)}`);
+  }
+  const elapsedMs = Date.now() - startedAt;
+
+  const summary = wireSummary(readWireLog(wireLog));
+  t.diagnostic(`${host} wire: ${wireText()}; the host command took ${String(elapsedMs)} ms`);
+  assert.ok(summary.hostMethods.includes("initialize"), `the host must have sent initialize to realm mcp: ${wireText()}`);
+  if (host !== "opencode") {
+    // OpenCode is recorded only: no OpenCode run has been observed yet (31-CONTEXT D-31-03).
+    assert.equal(summary.answered, true, `the host must have listed the Realm tools through the recorder: ${wireText()}`);
+    assert.deepEqual([...summary.toolNames], [...REALM_TOOL_NAMES], `the listed tools must be the six Realm tools: ${wireText()}`);
+  }
+
+  if (drive === undefined) {
+    const active = await pollUntil(
+      async () => {
+        const status = await realmStatus();
+        const state = status.exitCode === 0 ? stateOfStatus(status.stdout) : undefined;
+        return state === "active" ? { done: true } : { done: false, detail: `realm status: ${describeResult(status)}` };
+      },
+      { timeoutMs: scaledMs(POLL_TIMEOUT_MS), intervalMs: POLL_INTERVAL_MS },
+    );
+    assert.ok(active.ok, `realm status must answer active for the project the host opened: ${active.detail}`);
+
+    const booted = await pollUntil(
+      async () => {
+        const metrics = await realmCli(inputs, scenario, ["metrics", "--workspace", projectDir], REALM_COMMAND_TIMEOUT_MS);
+        const count = metrics.exitCode === 0 ? attachedBootsOf(metrics.stdout, host) : 0;
+        return count >= 1 ? { done: true } : { done: false, detail: `attached boot reports for ${host}: ${String(count)}; ${describeResult(metrics)}` };
+      },
+      { timeoutMs: scaledMs(POLL_TIMEOUT_MS), intervalMs: POLL_INTERVAL_MS },
+    );
+    assert.ok(booted.ok, `realm metrics must count at least one attached boot report for ${host}: ${booted.detail}`);
+  } else {
+    // The provider saw no credential and no foreign peer. Counts, flags and addresses only: never a header value.
+    const requests = drive.provider.requests();
+    const peers = [...new Set(requests.map((request) => request.peer))];
+    const withAuthorization = requests.filter((request) => request.authorization).length;
+    t.diagnostic(`${host} provider: ${String(requests.length)} request(s), ${String(withAuthorization)} with an Authorization header, peers [${peers.join(", ")}]`);
+    assert.equal(withAuthorization, 0, `the refusing provider must never see an Authorization header (${String(withAuthorization)} request(s) carried one)`);
+    for (const peer of peers) {
+      assert.ok(isLoopbackPeer(peer), `the refusing provider must only see loopback peers; saw ${peer}`);
+    }
+  }
 
   // The host command ended, so its realm session ended: no live session and an empty presence directory.
   const quiet = await pollUntil(

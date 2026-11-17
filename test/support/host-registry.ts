@@ -80,7 +80,8 @@ export const HOST_REGISTRY: Readonly<Record<HostId, RegistryRecord>> = Object.fr
     t3: { status: "rehearsed", note: "Omp 18.22.0, Phase 22 live rehearsal 2026-11-17; predates the Phase 23 boot path (GAP-23-04)" },
     deferral: null,
   }),
-  // Source: contract page, "Evidence tiers" (Phase 24 table): T2 ran live 2026-11-17, Claude Code 2.1.322, 3 of 3 passed, run twice; T3 not run, Podman 4.9.3 is below 5.x.
+  // Source: contract page, "Evidence tiers" (Phase 24 table): T2 ran live 2026-11-17, Claude Code 2.1.322, 3 of 3 passed, run twice. T3: the production tier exists and
+  // records the wire (Phase 31); no dated result yet, and plan 31-02 (a human-owned window on the realmlive account) writes it.
   claude: record({
     id: "claude",
     family: "json-merge",
@@ -88,10 +89,10 @@ export const HOST_REGISTRY: Readonly<Record<HostId, RegistryRecord>> = Object.fr
     snippet: "claude-code.md",
     live: "claude",
     t2: { date: "2026-11-17", version: "2.1.322", result: "3 of 3 passed, run twice", command: "claude mcp get, claude mcp list" },
-    t3: { status: "not-run", note: "Podman 4.9.3 is below the required 5.x" },
+    t3: { status: "not-run", note: "no dated production result yet; the root account's Podman is 4.9.3 and the production run uses the realmlive account's Podman 5.7.1" },
     deferral: null,
   }),
-  // Source: contract page, Phase 24 table: T2 not run (no opencode executable on the verification machine); T3 not run.
+  // Source: contract page, Phase 24 table: T2 not run (no opencode executable on the verification machine). T3: the production tier exists; no executable and no approved scratch install (31-CONTEXT OQ-31-01).
   opencode: record({
     id: "opencode",
     family: "json-merge",
@@ -99,13 +100,13 @@ export const HOST_REGISTRY: Readonly<Record<HostId, RegistryRecord>> = Object.fr
     snippet: "opencode.md",
     live: "opencode",
     t2: null,
-    t3: { status: "not-run", note: "no opencode executable, and Podman 4.9.3 is below 5.x" },
+    t3: { status: "not-run", note: "no opencode executable on the verification machine; the tier exists and needs a scratch install the owner has not approved (OQ-31-01)" },
     deferral: null,
   }),
   // Source: contract page, Phase 25 table (T2: kilo mcp list, no result recorded) and OQ-25-09.
   kilo: record({ id: "kilo", family: "json-merge", suites: [WAVE2_SUITE], snippet: "kilo.md", live: "kilo", t2: null, t3: WAVE2_T3, deferral: null }),
   // Source: contract page, Phase 24 table: T2 ran live 2026-11-17, codex-cli 0.154.0, 5 passed, 0 failed, 2 skipped (production tiers), after the
-  // header-owned recipe merged; get and list parse only. T3 is a gap there: codex mcp list does not start servers and a session needs model credentials.
+  // header-owned recipe merged; get and list parse only. T3: Phase 31 wrote a session tier (codex exec against a refusing loopback provider); no dated production result yet.
   codex: record({
     id: "codex",
     family: "toml-table",
@@ -118,7 +119,7 @@ export const HOST_REGISTRY: Readonly<Record<HostId, RegistryRecord>> = Object.fr
       result: "5 passed, 0 failed, 2 skipped (production tiers), after the header-owned recipe",
       command: "codex mcp get, codex mcp list (parse only)",
     },
-    t3: { status: "gap", note: "codex mcp list does not start servers and a session needs model credentials: not automatable" },
+    t3: { status: "not-run", note: "session tier written in Phase 31 (codex exec against a refusing loopback provider, no credential); no dated production result yet" },
     deferral: null,
   }),
   // Source: contract page, Phase 25 table (T2: copilot mcp get realm and list, parse only, no result recorded) and OQ-25-09.
@@ -201,7 +202,7 @@ export const HOST_REGISTRY: Readonly<Record<HostId, RegistryRecord>> = Object.fr
   }),
   // Source: contract page, Phase 25 table (T2: cline config mcp --json, parse only, no result recorded) and OQ-25-09.
   cline: record({ id: "cline", family: "json-merge", suites: [WAVE2_SUITE], snippet: "cline.md", live: "cline", t2: null, t3: WAVE2_T3, deferral: null }),
-  // Source: contract page, Phase 24 table: T2 not run (no kimi executable, the only published release is an inert stub); T3 gap (no functional Kimi CLI exists).
+  // Source: contract page, Phase 24 table: T2 not run (no kimi executable, the only published release is an inert stub); T3 gap (the Python CLI is archived; 31-CONTEXT E-31-9).
   kimi: record({
     id: "kimi",
     family: "json-merge",
@@ -209,7 +210,7 @@ export const HOST_REGISTRY: Readonly<Record<HostId, RegistryRecord>> = Object.fr
     snippet: "kimi.md",
     live: "kimi",
     t2: null,
-    t3: { status: "gap", note: "no functional Kimi CLI release exists to run" },
+    t3: { status: "gap", note: "the Python Kimi CLI is archived, its last release is a deprecation stub" },
     deferral: null,
   }),
   // Source: contract page, Phase 24 table: T2 not available (no validator command is documented); T3 gap (not run, none attempted). HOST_LIVE has no entry (KIMI_CODE_GAP).
@@ -220,7 +221,7 @@ export const HOST_REGISTRY: Readonly<Record<HostId, RegistryRecord>> = Object.fr
     snippet: "kimi.md",
     live: null,
     t2: null,
-    t3: { status: "gap", note: "no documented validator command, and no run was attempted" },
+    t3: { status: "gap", note: "functional product, not installed here, no MCP validator command documented (31-CONTEXT E-31-9)" },
     deferral: null,
   }),
   // Deferred, owner-approved 2026-11-17 (25-CONTEXT D-25-02, OQ-25-03): deferred-hosts.md, "zcode".

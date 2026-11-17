@@ -44,10 +44,10 @@ The Support table reads the table: tier, integration kind, recipe kind (a host w
 | Id | T1 fixture suites | T2 gate | T2 recorded result | T3 | Deferral |
 | --- | --- | --- | --- | --- | --- |
 | `omp` | `test/host/omp-recipe.test.ts` | none | not run | rehearsed: Omp 18.22.0, Phase 22 live rehearsal 2026-11-17; predates the Phase 23 boot path (GAP-23-04) | - |
-| `claude` | `test/host/claude-recipe.test.ts` | `REALM_LIVE_CLAUDE=1` | 2026-11-17, 2.1.322: 3 of 3 passed, run twice | not-run: Podman 4.9.3 is below the required 5.x | - |
-| `opencode` | `test/host/opencode-recipe.test.ts` | `REALM_LIVE_OPENCODE=1` | not run | not-run: no opencode executable, and Podman 4.9.3 is below 5.x | - |
+| `claude` | `test/host/claude-recipe.test.ts` | `REALM_LIVE_CLAUDE=1` | 2026-11-17, 2.1.322: 3 of 3 passed, run twice | not-run: no dated production result yet; the root account's Podman is 4.9.3 and the production run uses the realmlive account's Podman 5.7.1 | - |
+| `opencode` | `test/host/opencode-recipe.test.ts` | `REALM_LIVE_OPENCODE=1` | not run | not-run: no opencode executable on the verification machine; the tier exists and needs a scratch install the owner has not approved (OQ-31-01) | - |
 | `kilo` | `test/host/wave2-json-recipes.test.ts` | `REALM_LIVE_KILO=1` | not run | none-defined: config-only host: no production tier is defined (OQ-25-09) | - |
-| `codex` | `test/host/codex-recipe.test.ts` | `REALM_LIVE_CODEX=1` | 2026-11-17, 0.154.0: 5 passed, 0 failed, 2 skipped (production tiers), after the header-owned recipe | gap: codex mcp list does not start servers and a session needs model credentials: not automatable | - |
+| `codex` | `test/host/codex-recipe.test.ts` | `REALM_LIVE_CODEX=1` | 2026-11-17, 0.154.0: 5 passed, 0 failed, 2 skipped (production tiers), after the header-owned recipe | not-run: session tier written in Phase 31 (codex exec against a refusing loopback provider, no credential); no dated production result yet | - |
 | `copilot` | `test/host/wave2-json-recipes.test.ts` | `REALM_LIVE_COPILOT=1` | not run | none-defined: config-only host: no production tier is defined (OQ-25-09) | - |
 | `antigravity` | `test/host/wave2-json-recipes.test.ts` | none | not run | none-defined: config-only host: no production tier is defined (OQ-25-09) | - |
 | `cursor` | `test/host/wave2-json-recipes.test.ts` | `REALM_LIVE_CURSOR=1` | not run | none-defined: config-only host: no production tier is defined (OQ-25-09) | - |
@@ -58,8 +58,8 @@ The Support table reads the table: tier, integration kind, recipe kind (a host w
 | `hermes` | `test/host/hermes-recipe.test.ts` | `REALM_LIVE_HERMES=1` | not run | none-defined: config-only host: no production tier is defined (OQ-25-09) | - |
 | `codebuddy` | `test/host/codebuddy-recipe.test.ts`, `test/host/shadows.test.ts` | `REALM_LIVE_CODEBUDDY=1` | not run | none-defined: config-only host: no production tier is defined (OQ-25-09) | - |
 | `cline` | `test/host/wave2-json-recipes.test.ts` | `REALM_LIVE_CLINE=1` | not run | none-defined: config-only host: no production tier is defined (OQ-25-09) | - |
-| `kimi` | `test/host/kimi-recipe.test.ts` | `REALM_LIVE_KIMI=1` | not run | gap: no functional Kimi CLI release exists to run | - |
-| `kimi-code` | `test/host/kimi-recipe.test.ts` | none | not run | gap: no documented validator command, and no run was attempted | - |
+| `kimi` | `test/host/kimi-recipe.test.ts` | `REALM_LIVE_KIMI=1` | not run | gap: the Python Kimi CLI is archived, its last release is a deprecation stub | - |
+| `kimi-code` | `test/host/kimi-recipe.test.ts` | none | not run | gap: functional product, not installed here, no MCP validator command documented (31-CONTEXT E-31-9) | - |
 | `zcode` | - | none | not run | gap: deferred host: no recipe exists, so no tier can run | the native config is owned by a GUI application and cannot be observed (OQ-25-03) |
 | `pi` | `test/host/wave2-json-recipes.test.ts` | `REALM_LIVE_PI=1`, floor 1.3.0 | not run | none-defined: config-only host: no production tier is defined (OQ-25-09) | - |
 <!-- host-support-matrix:end -->
@@ -69,4 +69,5 @@ The Support table reads the table: tier, integration kind, recipe kind (a host w
 - To add a host, read [Writing a Realm host plugin](writing-a-host-plugin.md).
 - For what each recipe writes, the refusals and the evidence limits, read [Host plugin contract and installer](host-plugin-contract.md).
 - For what is still not proven, read [Host plugin gaps](host-plugin-gaps.md).
+- For the production-stack boot status of the five wave 1 hosts, with the procedure and its limits, read [Wave 1 boot matrix](wave1-boot-matrix.md).
 - For the three hosts that have no recipe and why, read [the deferred hosts page](../hosts/snippets/deferred-hosts.md).
