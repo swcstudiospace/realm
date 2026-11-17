@@ -23,7 +23,7 @@ D6 authorizes necessary workflow/release-script changes with D6 cited in PR bodi
 - QR-03 also requires actual Finish/repair tarball/version smoke before mutation, not just normal-release smoke. Coordinate with phase13's single ci.yml owner.
 - REL-04 cannot be closed by canonical `This reverts commit` pairs only. The real debt included multi-commit features removed by refactors, including shared/mixed surviving files. Implement maintainable explicit relationship semantics or demonstrated general path semantics covering actual behavior, no hard-coded historical SHAs. Preserve unrelated same-title/scope commits, renamed survivors and truthful removal notes for features shipped earlier. Never regenerate old published CHANGELOG to fabricate closure.
 - REL-03 requires validated known-good documentation source through rollback and Pages; redeploying default branch still containing withdrawn content is not repointing. Validate tag/ref/ancestry/trust before dispatch, pass user input via environment/data rather than shell interpolation and prove resulting deployed content, not dispatch success alone.
-- Job token separation does not prove separate OS users/ephemeral machines on shared self-hosted runners. Record residual runner isolation limits without a fabricated SLSA/security claim.
+- Job token separation does not by itself prove OS-user isolation (superseded: jobs now run on GitHub-hosted ubuntu-24.04, PR 96). Record residual runner isolation limits without a fabricated SLSA/security claim.
 
 ### Implementation discretion
 
