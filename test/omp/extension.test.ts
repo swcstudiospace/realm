@@ -51,16 +51,26 @@ type StubReply = { readonly result: unknown } | { readonly error: { readonly cod
 
 // The host-boot reports the extension sends after an attach and at session end. The stand-in answers them itself, before
 // respond sees them: a report names no workspace, so a respond built on a workspace would throw on one. A test that cares reads
-// requests and sets reply; every test that does restores both through hostBootRecorder's cleanup.
-const hostBoot: { requests: StubRequest[]; reply: StubReply } = { requests: [], reply: { result: { recorded: true } } };
+// requests and sets reply; every test that does restores both through hostBootRecorder's cleanup. Only requests that arrive on a
+// socket the test named (watched) are recorded: an earlier test's session sends its closing report while it shuts down, possibly
+// after the next test began, and that late report must not count in the next test's requests.
+const hostBoot: { requests: StubRequest[]; reply: StubReply; watched: Set<string> } = {
+  requests: [],
+  reply: { result: { recorded: true } },
+  watched: new Set<string>(),
+};
 
-function hostBootRecorder(t: TestContext): void {
-  hostBoot.requests = [];
-  hostBoot.reply = { result: { recorded: true } };
-  t.after(() => {
+function hostBootRecorder(t: TestContext, ...sockets: string[]): void {
+  const reset = (): void => {
     hostBoot.requests = [];
     hostBoot.reply = { result: { recorded: true } };
-  });
+    hostBoot.watched = new Set<string>();
+  };
+  reset();
+  for (const socket of sockets) {
+    hostBoot.watched.add(socket);
+  }
+  t.after(reset);
 }
 
 // A stand-in daemon on one control socket. It answers each NDJSON request with respond(request) and reports the request with
@@ -81,7 +91,9 @@ function startStub(
       const request = JSON.parse(text.slice(0, end)) as StubRequest;
       onRequest({ socketPath, method: request.method });
       if (request.method === "host-boot") {
-        hostBoot.requests.push(request);
+        if (hostBoot.watched.has(socketPath)) {
+          hostBoot.requests.push(request);
+        }
         socket.end(`${JSON.stringify({ id: request.id, ...hostBoot.reply })}\n`);
         return;
       }
@@ -771,12 +783,12 @@ function captureStderr(t: TestContext): string[] {
 void test("BOOT-08: one attach sends one host-boot report for omp and session_shutdown sends closed, under one boot id", async (t) => {
   const base = scratchDir(t);
   const socketPath = configure(t, base, base);
-  hostBootRecorder(t);
+  hostBootRecorder(t, socketPath);
   await serveDaemon(t, socketPath, [], (request) => answeredFor(request, ACTIVE_STATUS));
   const host = createHost();
   await startOmpSession(t, host, [], base, "realm active");
-  await pollUntil(() => hostBoot.requests.length === 1, "the attached report reaches the daemon");
-  const attached = bootReportOf(hostBoot.requests[0]);
+  await pollUntil(() => hostBoot.requests.some((request) => bootReportOf(request).phase === "attached"), "the attached report reaches the daemon");
+  const attached = bootReportOf(hostBoot.requests.find((request) => bootReportOf(request).phase === "attached"));
   assert.equal(attached.hostId, "omp");
   assert.equal(attached.transport, "extension");
   assert.equal(attached.phase, "attached");
@@ -785,8 +797,8 @@ void test("BOOT-08: one attach sends one host-boot report for omp and session_sh
   assert.equal(isCorrelationId(attached.bootId), true);
   assert.equal(attached.attempt, 1);
   host.handlers.get("session_shutdown")?.({ type: "session_shutdown" }, recordingCtx(base, []));
-  await pollUntil(() => hostBoot.requests.length === 2, "the closed report reaches the daemon");
-  const closed = bootReportOf(hostBoot.requests[1]);
+  await pollUntil(() => hostBoot.requests.some((request) => bootReportOf(request).phase === "closed"), "the closed report reaches the daemon");
+  const closed = bootReportOf(hostBoot.requests.find((request) => bootReportOf(request).phase === "closed"));
   assert.equal(closed.phase, "closed");
   assert.equal(closed.bootId, attached.bootId);
   assert.equal(closed.hostId, "omp");
@@ -799,7 +811,7 @@ void test("BOOT-08: a failed attach that is not kept sends failed with its catal
   mkdirSync(project);
   mkdirSync(elsewhere);
   const socketPath = configure(t, base, project);
-  hostBootRecorder(t);
+  hostBootRecorder(t, socketPath);
   const status = { ...INACTIVE_STATUS, boundRoot: realpathSync(project), sessionId: sessionIdOfWorkspace(realpathSync(elsewhere)) };
   await serveDaemon(t, socketPath, [], raisedAfterUp(status));
   const host = createHost();
@@ -817,7 +829,7 @@ void test("BOOT-08: a failed attach that is not kept sends failed with its catal
 void test("BOOT-08: a default-level session writes nothing to stderr; REALM_LOG_LEVEL=debug shows host.boot lines with one correlation id", async (t) => {
   const quietBase = scratchDir(t);
   const quietSocket = configure(t, quietBase, quietBase);
-  hostBootRecorder(t);
+  hostBootRecorder(t, quietSocket);
   await serveDaemon(t, quietSocket, [], (request) => answeredFor(request, ACTIVE_STATUS));
   const lines = captureStderr(t);
   const quiet = createHost();
@@ -829,6 +841,7 @@ void test("BOOT-08: a default-level session writes nothing to stderr; REALM_LOG_
 
   const loudBase = scratchDir(t);
   const loudSocket = configure(t, loudBase, loudBase);
+  hostBoot.watched.add(loudSocket);
   setProcessEnv(t, { REALM_LOG_LEVEL: "debug" });
   await serveDaemon(t, loudSocket, [], (request) => answeredFor(request, ACTIVE_STATUS));
   const loud = createHost();
@@ -857,7 +870,7 @@ void test("BOOT-08: a default-level session writes nothing to stderr; REALM_LOG_
 void test("BOOT-08: a daemon that answers SCHEMA_INVALID to host-boot changes no outcome and adds no stderr line", async (t) => {
   const base = scratchDir(t);
   const socketPath = configure(t, base, base);
-  hostBootRecorder(t);
+  hostBootRecorder(t, socketPath);
   hostBoot.reply = { error: { code: "SCHEMA_INVALID" } };
   await serveDaemon(t, socketPath, [], (request) => answeredFor(request, ACTIVE_STATUS));
   const lines = captureStderr(t);
