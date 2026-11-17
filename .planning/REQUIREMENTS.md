@@ -141,15 +141,15 @@ All v3.0 requirements are hypotheses until shipped and verified.
 
 ### Host adapters wave 1 (ADPT)
 
-- [ ] **ADPT-01**: `resolveHomeSpecs` resolves homes with roles `config`, `skills`, `mcp`; an absolute `envOverride` moves `config` and `mcp` homes and never `skills`; `envBase` moves OpenCode's home with `XDG_CONFIG_HOME`; `installHome` selects by role; `resolveHomes` keeps its current results for every existing entry; a leaf-symlink refusal carries no `--config-home` hint.
-- [ ] **ADPT-02**: A `text-block` recipe with `tomlTable` refuses (`foreign-content`) any install whose file already defines that table or an ancestor key outside the markers, by the conservative line scanner of `src/host/toml-table.ts`; nothing is written on refusal; recipes without the field behave as before.
-- [ ] **ADPT-03**: `realm host status` reports an `unreadable` entry state (not `drifted`) for a refused or unparseable owned file, and `launch` (`on-path` or `not-on-path`) for an installed `mcp-config` host; the doctor sentence carries the unreadable count; no new error code.
-- [ ] **ADPT-04**: `realm host install claude` merges the entry E-C1 into `<home or CLAUDE_CONFIG_DIR>/.claude.json` keeping every other byte-preserved key, mode and format; install, no-op, dry-run, drift, foreign content, hostile content, uninstall, doctor and status are proven on a fixture host; the value equals the golden `claude mcp add` output.
-- [ ] **ADPT-05**: The same lifecycle for `opencode` with the V1-shaped entry in `<XDG_CONFIG_HOME or ~/.config>/opencode/opencode.json`, JSONC refused, a sibling `opencode.jsonc` untouched.
-- [ ] **ADPT-06**: The same lifecycle for `codex` with the owned TOML block in `<CODEX_HOME or ~/.codex>/config.toml`; a table written by `codex mcp add realm ...` is refused as foreign content, never duplicated; other tables, comments and blank lines survive byte-exact.
-- [ ] **ADPT-07**: The same lifecycle for `kimi` (`~/.kimi/mcp.json`, `KIMI_SHARE_DIR`) and `kimi-code` (`~/.kimi-code/mcp.json`, `KIMI_CODE_HOME`); `kimi` has no binary detection; the recipe values equal `defaultManifestFor(id).launch` for all five recipe hosts.
-- [ ] **ADPT-08**: For each host a gated live file runs the validator tier, and where available the production tier, on an isolated `HOME`, skipping with a named reason when its prerequisite is missing; the skip-reason selection, the stub `realm`, the isolation guard and the version parsing are covered by a hermetic helper test that always runs.
-- [ ] **ADPT-09**: Docs state, per host, the file, the shape, the override, the validator, the project-level behavior, the evidence tier reached and the gaps; the Kimi flag resolution and the archived status are recorded; the contract table shows the recipes ready; the allowlist has no stale entry; module-size, `check:docs` and pack-smoke pass; the live rehearsal record states what ran and what did not.
+- [x] **ADPT-01**: `resolveHomeSpecs` resolves homes with roles `config`, `skills`, `mcp`; an absolute `envOverride` moves `config` and `mcp` homes and never `skills`; `envBase` moves OpenCode's home with `XDG_CONFIG_HOME`; `installHome` selects by role; `resolveHomes` keeps its current results for every existing entry; a leaf-symlink refusal carries no `--config-home` hint.
+- [x] **ADPT-02**: A `text-block` recipe with `tomlTable` refuses (`foreign-content`) any install whose file already defines that table or an ancestor key outside the markers, by the conservative line scanner of `src/host/toml-table.ts`; nothing is written on refusal; recipes without the field behave as before.
+- [x] **ADPT-03**: `realm host status` reports an `unreadable` entry state (not `drifted`) for a refused or unparseable owned file, and `launch` (`on-path` or `not-on-path`) for an installed `mcp-config` host; the doctor sentence carries the unreadable count; no new error code.
+- [x] **ADPT-04**: `realm host install claude` merges the entry E-C1 into `<home or CLAUDE_CONFIG_DIR>/.claude.json` keeping every other byte-preserved key, mode and format; install, no-op, dry-run, drift, foreign content, hostile content, uninstall, doctor and status are proven on a fixture host; the value equals the golden `claude mcp add` output.
+- [x] **ADPT-05**: The same lifecycle for `opencode` with the V1-shaped entry in `<XDG_CONFIG_HOME or ~/.config>/opencode/opencode.json`, JSONC refused, a sibling `opencode.jsonc` untouched.
+- [x] **ADPT-06**: The same lifecycle for `codex` with the owned TOML block in `<CODEX_HOME or ~/.codex>/config.toml`; a table written by `codex mcp add realm ...` is refused as foreign content, never duplicated; other tables, comments and blank lines survive byte-exact.
+- [x] **ADPT-07**: The same lifecycle for `kimi` (`~/.kimi/mcp.json`, `KIMI_SHARE_DIR`) and `kimi-code` (`~/.kimi-code/mcp.json`, `KIMI_CODE_HOME`); `kimi` has no binary detection; the recipe values equal `defaultManifestFor(id).launch` for all five recipe hosts.
+- [x] **ADPT-08**: For each host a gated live file runs the validator tier, and where available the production tier, on an isolated `HOME`, skipping with a named reason when its prerequisite is missing; the skip-reason selection, the stub `realm`, the isolation guard and the version parsing are covered by a hermetic helper test that always runs.
+- [x] **ADPT-09**: Docs state, per host, the file, the shape, the override, the validator, the project-level behavior, the evidence tier reached and the gaps; the Kimi flag resolution and the archived status are recorded; the contract table shows the recipes ready; the allowlist has no stale entry; module-size, `check:docs` and pack-smoke pass; the live rehearsal record states what ran and what did not.
 
 ## Carried from v2.0 (not in this milestone)
 
@@ -294,15 +294,15 @@ Each v3.0 requirement maps to exactly one phase. The carried requirements keep t
 | BOOT-07 | Phase 23 | Complete |
 | BOOT-08 | Phase 23 | Complete |
 | BOOT-09 | Phase 23 | Complete |
-| ADPT-01 | Phase 24 | Planned |
-| ADPT-02 | Phase 24 | Planned |
-| ADPT-03 | Phase 24 | Planned |
-| ADPT-04 | Phase 24 | Planned |
-| ADPT-05 | Phase 24 | Planned |
-| ADPT-06 | Phase 24 | Planned |
-| ADPT-07 | Phase 24 | Planned |
-| ADPT-08 | Phase 24 | Planned |
-| ADPT-09 | Phase 24 | Planned |
+| ADPT-01 | Phase 24 | Complete |
+| ADPT-02 | Phase 24 | Complete |
+| ADPT-03 | Phase 24 | Complete |
+| ADPT-04 | Phase 24 | Complete |
+| ADPT-05 | Phase 24 | Complete |
+| ADPT-06 | Phase 24 | Complete |
+| ADPT-07 | Phase 24 | Complete |
+| ADPT-08 | Phase 24 | Complete |
+| ADPT-09 | Phase 24 | Complete |
 | FS-02 | Phase 2 | Partial (accepted approximation, confirmed by the owner 2026-10-23; rebind verified through the pinned root; check-to-use windows remain on the read and write paths; audit G-10) |
 | ANDA-01 | Phase 3 | Partial (live-gated) |
 | ANDA-02 | Phase 3 | Partial (live-gated) |
