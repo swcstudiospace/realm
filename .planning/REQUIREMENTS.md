@@ -116,6 +116,17 @@ All v3.0 requirements are hypotheses until shipped and verified.
 - [x] **HOST-08**: Doctor host-plugins check reads receipts only
 - [x] **HOST-09**: Contract docs, packaging proof and repo gates for src/host
 
+### Omp plugin on boot (OMPB)
+
+- [ ] **OMPB-01**: The Omp plugin reads every boot bound, the link-lost and retryable code lists, the re-attach sub-state table and the jitter function from `src/host/boot.ts`; `src/omp/reattach.ts` and the `src/omp` bound constants no longer exist; the parity tests are deleted.
+- [ ] **OMPB-02**: The real Omp plugin, driven through the Omp host API, passes harness cases C1 to C9, and the harness's four reference mutants still fail exactly their cases.
+- [ ] **OMPB-03**: The existing guard, status text, tool-set reconciliation and fail-closed default behave as before: all pre-existing `test/omp/` and `test/integration/omp-*.test.ts` expectations pass with import-line changes only.
+- [ ] **OMPB-04**: `realm host install omp` writes, idempotently and atomically, the shim under `<agent dir>/extensions/realm/`, records a receipt, supports `--dry-run`, and `uninstall` removes only what the receipt owns.
+- [ ] **OMPB-05**: Install refuses with `POLICY_DENIED` and writes nothing when the extension entry is not built (`extension-unbuilt`) or Omp already loads Realm through a plugin link (`already-loaded`); foreign content, drift and symlinks keep their Phase 21 refusals.
+- [ ] **OMPB-06**: With the shim installed and no environment switch, Omp session start attaches, spawns the daemon when none answers (including under a Bun host, via an absolute `PATH` Node) and runs the idempotent `up`; a Bun host with no Node found still refuses with `REALM_NOT_ACTIVE` and spawns nothing.
+- [ ] **OMPB-07**: `realm doctor` (`host-plugins`) and `realm host status omp` report installed, shim target present and live plugin sessions (presence markers); `realm host status omp` also reports duplicate-load (it needs the user's home, which doctor deliberately never reads). Output names ids, states and counts only, never a path or file content.
+- [ ] **OMPB-08**: Docs describe the shipped behavior with evidence tiers and the unproven live boundary; the export-usage allowlist has no stale entry and no entry whose reason is outdated; module-size, pack-smoke and docs gates pass.
+
 ## Carried from v2.0 (not in this milestone)
 
 - [ ] **FS-02**: Path resolution is race-resistant: components are opened relative to a pinned root descriptor with no-follow semantics, so a symlink swapped between check and open is rejected
@@ -242,6 +253,14 @@ Each v3.0 requirement maps to exactly one phase. The carried requirements keep t
 | HOST-07 | Phase 21 | Complete |
 | HOST-08 | Phase 21 | Complete |
 | HOST-09 | Phase 21 | Complete |
+| OMPB-01 | Phase 22 | Planned |
+| OMPB-02 | Phase 22 | Planned |
+| OMPB-03 | Phase 22 | Planned |
+| OMPB-04 | Phase 22 | Planned |
+| OMPB-05 | Phase 22 | Planned |
+| OMPB-06 | Phase 22 | Planned |
+| OMPB-07 | Phase 22 | Planned |
+| OMPB-08 | Phase 22 | Planned |
 | FS-02 | Phase 2 | Partial (accepted approximation, confirmed by the owner 2026-10-23; rebind verified through the pinned root; check-to-use windows remain on the read and write paths; audit G-10) |
 | ANDA-01 | Phase 3 | Partial (live-gated) |
 | ANDA-02 | Phase 3 | Partial (live-gated) |
