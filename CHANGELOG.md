@@ -4,6 +4,14 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.3.47] - 2026-11-17
+
+### Documentation
+- docs(phase-25): plan host adapters wave 2 (WAVE2-01..08) (#116) (a34041a)
+
+### Maintenance
+- test(omp): scope the host-boot recorder to the test's own sockets (BOOT-08 flake) (#117) (f2895e1)
+
 ## [0.3.46] - 2026-11-17
 
 ### Documentation
