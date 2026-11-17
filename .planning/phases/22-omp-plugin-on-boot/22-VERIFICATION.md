@@ -49,6 +49,7 @@ covered_files:
   - "test/omp/plugin.test.ts"
   - "test/support/host-boot-conformance.ts"
   - "test/support/omp-boot-hook.ts"
+covered_digest: "v3:sha256:6db7081f67e72d0ee9c9891065e36b172117accac29116ce24fdd0d8bb39eb3e"
 ---
 
 # Phase 22: Omp plugin on boot: Verification at 4dfefff
