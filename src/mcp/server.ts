@@ -28,6 +28,7 @@ import {
   toolListResult,
   unsupportedVersionError,
   type McpEra,
+  type McpToolAnnotations,
   type McpToolDescriptor,
 } from "./protocol.js";
 
@@ -106,10 +107,73 @@ const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
   retry: "Retry session creation from error state.",
 };
 
+// Tool annotations (MCPA-01). These are hints for a host that chooses to use them (MCP specification: "all properties
+// in ToolAnnotations are hints"; clients must treat them as untrusted unless the server is trusted). No code here or
+// anywhere else in src reads them, and none of them is a protection: enforcement is the dispatcher's schema check, the
+// shell gate, policy mode, the mutation gate, path locks and the sandbox. The table is static for the life of the
+// process. Where behaviour depends on policy the value is the broader one, so an error costs an extra prompt and never
+// skips a needed one. "Environment" means the project the host user cares about (workspace files, sandbox, running
+// session); Realm's own audit and metric bookkeeping is excluded, otherwise no tool could be read-only. Basis per tool:
+//   exec:   runs an arbitrary workload with the workspace mounted read-write (it can delete or overwrite any file) and
+//           the policy may open network egress, so destructive and open world; two runs can differ, so not idempotent.
+//   read:   returns a workspace file, changes nothing; closed domain (the bound workspace).
+//   write:  replaces the whole content of the target (overwrite is destructive); the same path and content again leaves
+//           the same file, so idempotent; closed domain.
+//   list:   as read.
+//   status: returns the controller snapshot, no effect.
+//   retry:  not read-only (from error it starts the session sandbox) but it acts only on Realm's own session
+//           container and never on workspace content, so not destructive; a repeat after success does nothing.
+const TOOL_ANNOTATIONS: Record<ToolName, McpToolAnnotations> = {
+  exec: Object.freeze({
+    title: "Run command",
+    readOnlyHint: false,
+    destructiveHint: true,
+    idempotentHint: false,
+    openWorldHint: true,
+  }),
+  read: Object.freeze({
+    title: "Read file",
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false,
+  }),
+  write: Object.freeze({
+    title: "Write file",
+    readOnlyHint: false,
+    destructiveHint: true,
+    idempotentHint: true,
+    openWorldHint: false,
+  }),
+  list: Object.freeze({
+    title: "List directory",
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false,
+  }),
+  status: Object.freeze({
+    title: "Realm status",
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false,
+  }),
+  retry: Object.freeze({
+    title: "Retry session start",
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false,
+  }),
+};
+
 export const MCP_TOOL_DESCRIPTORS: readonly McpToolDescriptor[] = TOOL_NAMES.map((name) => ({
   name,
+  title: TOOL_ANNOTATIONS[name].title,
   description: TOOL_DESCRIPTIONS[name],
   inputSchema: TOOL_INPUT_SCHEMAS[name],
+  annotations: TOOL_ANNOTATIONS[name],
 }));
 
 export interface McpServer {
