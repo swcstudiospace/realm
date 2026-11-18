@@ -32,12 +32,14 @@ import { BOOT_BOUNDS, resolveBoot, type ResolvedBoot } from "../host/boot.js";
 import { bootHookOf, createBootDriver, type BootDriver } from "../host/boot-driver.js";
 import { createBootObserver, type BootObserver } from "../host/boot-observer.js";
 import { defaultManifestFor, parseHostPluginManifest } from "../host/manifest.js";
+import { createRefusalHint } from "../host/refusal-hint.js";
 import { HOST_RUNTIMES } from "../host/runtimes.js";
 import type { HostBootDeps, HostId, HostStatusSink, HostTimers } from "../host/types.js";
 import { newCorrelationId } from "../observe/ids.js";
 import { createLogger, parseLogLevel, type LogLevel } from "../observe/logger.js";
 import { createStderrSink } from "../observe/log-file.js";
 import { createMcpServer } from "../mcp/server.js";
+import type { ToolOutcome } from "../tools/dispatch.js";
 import { describeSettle, exitCodeAfterClose } from "./stdio-settle.js";
 
 export type StdioSignal = "SIGTERM" | "SIGINT" | "SIGHUP";
@@ -221,6 +223,17 @@ export async function runStdioHost(input: StdioHostInput): Promise<StdioHostResu
     return fail(format.diagnosticFor(error));
   }
 
+  // The call seam of both transports: the driver's outcome, unchanged, seen once by the refusal hint (D-34-05). The hint writes
+  // on the first POLICY_DENIED only; a pending-boot REALM_NOT_ACTIVE refusal is another code and writes nothing.
+  const hint = createRefusalHint(input.hostId, (text) => {
+    input.diagnostics.write(text);
+  });
+  const observedCall = async (tool: unknown): Promise<ToolOutcome> => {
+    const outcome = await driver.call(tool);
+    hint.observe(outcome);
+    return outcome;
+  };
+
   // Signals. The first one ends the session through teardown and exits 128 + the signal number; a second exits at once.
   let signalCode: number | null = null;
   let releases: (() => void)[] = [];
@@ -310,7 +323,7 @@ export async function runStdioHost(input: StdioHostInput): Promise<StdioHostResu
           input.diagnostics.write(format.attachFailure(error));
         },
       );
-      const server = createMcpServer({ call: (tool: unknown) => driver.call(tool) }, input.mcpInput, input.mcpOutput, input.diagnostics);
+      const server = createMcpServer({ call: observedCall }, input.mcpInput, input.mcpOutput, input.diagnostics);
       try {
         if ((await orSignal(server.closed)) === SIGNALLED) {
           return await signalExit();
@@ -347,7 +360,7 @@ export async function runStdioHost(input: StdioHostInput): Promise<StdioHostResu
     try {
       const served = await orSignal(
         runAcpOverStdio({
-          dispatcher: { call: (tool: unknown) => driver.call(tool) },
+          dispatcher: { call: observedCall },
           stdin: input.acpInput,
           stdout: input.acpOutput,
         }),

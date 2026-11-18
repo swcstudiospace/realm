@@ -40,6 +40,12 @@ same entry is kept in `adapters/muse-code/mcp-settings.snippet.json`:
 }
 ```
 
+Muse Code has no host id, so this launcher stays `realm mcp` with no host flag and carries no capability token. Realm
+enforces capability tokens by default, so the default refuses this session with `POLICY_DENIED` (`GAP-34-01` in
+`docs/integration/host-plugin-gaps.md`). Either set the policy value `capabilityTokens.mode` to `off` (the opt-out, which
+`realm doctor` flags with a warning), or add `"--host", "ID"` to `args` with the id of a host family you accept as the
+attribution label (`realm host list` names the ids). The migration steps are in Q10 of `docs/integration/mcp.md`.
+
 Server configs support `${VAR}` environment-variable interpolation, and Muse
 Code passes `MUSE_SESSION_ID` to `stdio` servers. Run `/mcp` in an
 interactive session to see a live inventory of connected servers and their

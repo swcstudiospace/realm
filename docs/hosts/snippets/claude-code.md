@@ -113,19 +113,19 @@ cold first boot of up to 230 s (OQ-24-06; no recipe writes a timeout).
 - A symlinked `~/.claude.json` (a dotfile manager) is refused (`symlink`); the refusal does not name a replacement
   path. Replace the symlink or run the manual command against the real file.
 - `adapters/claude-plugin` is a separate route (validate it with `claude plugin validate`, below). Its `.mcp.json` runs
-  plain `realm mcp` with no `--host`, so a session reports as `unlabelled`; `realm host` never installs it. Do not use
-  both routes for the same server name.
+  `realm mcp --host claude`, so a session is attributed `claude` and attaches under the enforced capability-token
+  default; `realm host` never installs it. Do not use both routes for the same server name.
 - `realm doctor` names this file when it warns: a `host-plugins` warning for `claude` points at a file in the user's
   home that the receipt owns. Doctor reads only the files a receipt names, never a host binary or the environment.
 
-## Add the server without --host (older snippet)
+## Add the server by hand (older snippet)
 
 Stdio servers run as local processes. The documented add form is
 `claude mcp add [options] <name> -- <command> [args...]`, where the `--`
 double dash separates Claude's own options from the server command:
 
 ```bash
-claude mcp add realm -- realm mcp
+claude mcp add realm -- realm mcp --host claude
 ```
 
 Each command writes to local scope unless `--scope project` or
@@ -143,7 +143,7 @@ read as a stdio server:
   "mcpServers": {
     "realm": {
       "command": "realm",
-      "args": ["mcp"]
+      "args": ["mcp", "--host", "claude"]
     }
   }
 }

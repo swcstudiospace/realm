@@ -255,10 +255,10 @@ the historical install receipt and shared-config prerequisites.
 Realm ships one integration per host, each under `docs/hosts/` with a snippet:
 
 - Omp: a Realm extension, loaded from `dist/src/omp/extension.js` (see `docs/hosts/snippets/omp.md`). It attaches the sandbox when a session starts, shows its status, and gates Omp's `edit` call and Realm's `write`: under the default `fail-closed` mode it refuses them while the realm is not active, and under an explicit `advisory` mode it warns and lets them through when the daemon is reachable (with the daemon unreachable, Realm `write` refuses). With the realm active, fail-closed mode asks Omp to remove its built-in tools outside the Realm allowlist; that is a guard, not containment, until the live check passes, and the session directory must be the configured workspace root (`docs/integration/omp-lifecycle-runbook.md`).
-- Claude Code and Grok Build: the shared plugin bundle `adapters/claude-plugin`, plus an MCP entry that runs `realm mcp`.
-- Muse Code: the plugin bundle `adapters/muse-code`, plus an `mcp_servers` entry.
-- Hermes Agent: the MCP-only plugin bundle `adapters/hermes-agent`.
-- Prime Agent: the package `adapters/prime-agent`, plus an MCP entry.
+- Claude Code and Grok Build: the shared plugin bundle `adapters/claude-plugin`, plus an MCP entry that runs `realm mcp --host claude`. Grok Build has no host id of its own, so a Grok Build session is attributed `claude`.
+- Muse Code: the plugin bundle `adapters/muse-code`, plus an `mcp_servers` entry. Muse Code has no host id, so its launcher stays `realm mcp` with no host flag.
+- Hermes Agent: the MCP-only plugin bundle `adapters/hermes-agent`, whose launcher is `realm mcp --host hermes`.
+- Prime Agent: the package `adapters/prime-agent`, plus an MCP entry. Prime Agent has no host id, so its launcher stays `realm mcp` with no host flag.
 
 Each host bundle has historical isolated validator evidence; installing one
 does not provision the runtime or verify a current sandbox. Use a configured
@@ -267,6 +267,10 @@ does not provision the runtime or verify a current sandbox. Use a configured
 See [docs/integration/hosts.md](docs/integration/hosts.md) for the host tiers.
 
 - To add a host, read [Writing a Realm host plugin](docs/integration/writing-a-host-plugin.md). The [Host support matrix](docs/integration/host-support-matrix.md) shows what each host supports and proves, [Host plugin gaps](docs/integration/host-plugin-gaps.md) tracks what is not proven, and the [Wave 1 boot matrix](docs/integration/wave1-boot-matrix.md) shows the production-stack boot status of the five wave 1 hosts.
+
+### Capability tokens are on by default
+
+The default of `capabilityTokens.mode` is `enforce`: a client that does not attach with a host id (a `realm mcp` or `realm acp` from before capability tokens, a process that speaks the control socket without a token, or a launcher with no `--host` flag) is refused `POLICY_DENIED`. Launchers written by `realm host install` already carry the host flag, as do the Claude Code and Hermes Agent bundles. Muse Code, Prime Agent and Grok Build have no host id, so use the opt-out for them or launch with the `--host` id of a host family you accept as the label. The opt-out is the policy value `capabilityTokens.mode` set to `off`, which restores the 0.4.x behaviour and makes `realm doctor` warn. A token is a signed label verified on every call; it does not stop a process of the same user that can read the token or the key file. See Q10 in [docs/integration/mcp.md](docs/integration/mcp.md) for the migration steps.
 
 ## Documentation
 

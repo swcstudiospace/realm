@@ -2,7 +2,7 @@
   "mcpServers": {
     "realm": {
       "command": "realm",
-      "args": ["mcp"]
+      "args": ["mcp", "--host", "claude"]
     }
   }
 }

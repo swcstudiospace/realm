@@ -42,8 +42,13 @@ the user's Grok configuration. It is not part of this snippet.
 The same page documents that "Grok automatically reads Claude Code
 marketplaces, plugins, skills, MCPs, agents, hooks, and instruction files."
 The `.mcp.json` `mcpServers` entry in the `claude-code.md` snippet therefore
-also reaches Grok. That entry starts the stdio command `realm mcp` (command
-`realm`, argument `mcp`). Use it to share Realm with a project.
+also reaches Grok. That entry starts the stdio command `realm mcp --host claude` (command `realm`, arguments `mcp`,
+`--host`, `claude`). Use it to share Realm with a project.
+
+Grok Build has no host id of its own. The shared bundle is labelled `claude`, so the attribution of a Grok Build session
+that uses it is `claude`: a self-declared label, not an identity. A Grok Build launcher with no host flag would be
+refused by the enforced capability-token default (`GAP-34-01` in `docs/integration/host-plugin-gaps.md`; the opt-out
+and the migration steps are in Q10 of `docs/integration/mcp.md`).
 
 To list what Grok sees for the current directory, run `grok inspect`. It
 covers "config sources, instructions, skills, plugins, hooks, and MCP servers."

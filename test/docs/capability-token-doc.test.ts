@@ -227,3 +227,119 @@ void test("CAPT-09: none of the five files holds a host path", () => {
     }
   }
 });
+
+// ---- Phase 34 (ENF-03, ENF-04): the migration path to the enforced default ----------------------------------------------------
+
+// The sentence that is the subject of the flip commit and the Release note text of Q10.
+const RELEASE_NOTE_SENTENCE = "enforce capability tokens by default; set capabilityTokens.mode to off to opt out";
+
+// A document with its fenced code blocks and inline code spans removed, so that what is left is prose.
+function proseOf(text: string): string {
+  return text.replace(/^```[\s\S]*?^```/gm, "").replace(/`[^`\n]*`/g, "");
+}
+
+void test("ENF-04: Q10 has the migration subsection between the unlabelled hosts paragraph and the audit paragraph, with the opt-out and the object", () => {
+  const section = q10Section();
+  const unlabelled = section.indexOf("**Unlabelled hosts.**");
+  const migrating = section.indexOf("**Migrating to the enforced default.**");
+  const audit = section.indexOf("**Audit.**");
+  assert.ok(unlabelled >= 0 && migrating > unlabelled && audit > migrating, "Unlabelled hosts, then Migrating, then Audit");
+  const migration = section.slice(migrating, audit);
+  assert.ok(migration.includes('`{ "capabilityTokens": { "mode": "off" } }`'), "the one-line opt-out object");
+  assert.ok(migration.includes("`capabilityTokens.mode` set to `off`"), "the opt-out value");
+  assert.ok(migration.includes("`realm doctor` warns"), "what the opt-out costs");
+  for (const phrase of [
+    "a missing policy file all enforce",
+    "Who is affected",
+    "Who is not affected",
+    "the 18 default manifests and the 15 install recipes",
+    "No CLI command issues a tool call",
+    "The stale-daemon note",
+    "`capability.refused`",
+    "the wire carries no reason",
+    "Muse Code, Prime Agent and Grok Build",
+    "GAP-34-01",
+  ]) {
+    assert.ok(migration.includes(phrase), `the migration subsection says: ${phrase}`);
+  }
+});
+
+void test("ENF-04: the migration steps are the five verbs in order", () => {
+  const section = q10Section();
+  const migration = section.slice(section.indexOf("**Migrating to the enforced default.**"), section.indexOf("**Audit.**"));
+  const steps = ["  1. Upgrade ", "  2. Add the host flag ", "  3. Run `realm doctor`", "  4. Stop the daemon ", "  5. Reconnect the hosts"].map((step) => migration.indexOf(step));
+  assert.ok(steps.every((index) => index >= 0), `every step is present: ${steps.join(", ")}`);
+  assert.deepEqual([...steps].sort((a, b) => a - b), steps, "the steps are in order");
+});
+
+void test("ENF-04: the Release note text paragraph is exactly the flip subject sentence, once", () => {
+  const section = q10Section();
+  const lines = section.split("\n").filter((line) => line.startsWith("**Release note text.**"));
+  assert.equal(lines.length, 1, "one Release note text paragraph");
+  assert.equal(lines[0], `**Release note text.** ${RELEASE_NOTE_SENTENCE}`);
+});
+
+void test("ENF-03: the Evidence limits paragraph names the observation date of the stale binary run or the reason it is carried", () => {
+  const section = q10Section();
+  const paragraph = section.split("\n").find((line) => line.startsWith("**Evidence limits.**"));
+  assert.ok(paragraph !== undefined, "the Evidence limits paragraph exists");
+  assert.ok(
+    /observed on the live stack on 20\d\d-\d\d-\d\d/.test(paragraph) || paragraph.includes("carried, not observed"),
+    "the stale binary item names its observation date or says it is carried, never neither",
+  );
+});
+
+void test("ENF-03: GAP-34-01 is on the gaps page as an accepted residual naming the three hosts with no id", () => {
+  const page = read("docs/integration/host-plugin-gaps.md");
+  const row = page.split("\n").find((line) => line.startsWith("| GAP-34-01 |"));
+  assert.ok(row !== undefined, "GAP-34-01 exists");
+  const cells = cellsOf(row);
+  assert.equal(cells[3], "accepted-residual");
+  assert.equal(cells[4], "accepted");
+  for (const host of ["Muse Code", "Prime Agent", "Grok Build"]) {
+    assert.ok((cells[2] ?? "").includes(host), `the row names ${host}`);
+  }
+});
+
+void test("ENF-03: the migration documents claim no advisory default, hold no host path and no raw angle-bracket token outside code", () => {
+  const paths = [
+    FILES.mcp,
+    FILES.contract,
+    "README.md",
+    "docs/integration/host-plugin-gaps.md",
+    "docs/hosts/snippets/claude-code.md",
+    "docs/hosts/snippets/grok-build.md",
+    "docs/hosts/snippets/hermes-agent.md",
+    "docs/hosts/snippets/muse-code.md",
+    "docs/hosts/snippets/prime-agent.md",
+    "docs/hosts/snippets/qwen.md",
+    "adapters/prime-agent/MCP.md",
+  ];
+  for (const path of paths) {
+    const text = read(path);
+    for (const pattern of HOST_PATHS) {
+      assert.ok(!pattern.test(text), `${path}: matches ${String(pattern)}`);
+    }
+  }
+  const migration = q10Section();
+  assert.ok(!/advisory (?:is|stays|remains) the default/i.test(migration), "Q10 does not say advisory is the default");
+  assert.ok(!/default (?:is|stays|remains|of) `?advisory/i.test(migration), "Q10 does not say the default is advisory");
+  assert.doesNotMatch(proseOf(migration), /<[A-Za-z]/, "no raw angle-bracket token in the Q10 prose");
+  const readme = read("README.md");
+  const subsection = readme.slice(readme.indexOf("### Capability tokens are on by default"), readme.indexOf("## Documentation"));
+  assert.doesNotMatch(proseOf(subsection), /<[A-Za-z]/, "no raw angle-bracket token in the README subsection");
+  for (const path of ["docs/hosts/snippets/muse-code.md", "docs/hosts/snippets/prime-agent.md", "docs/hosts/snippets/grok-build.md"]) {
+    assert.ok(read(path).includes("GAP-34-01"), `${path} points at GAP-34-01`);
+  }
+});
+
+void test("ENF-03: the README says which hosts are unlabelled and links Q10", () => {
+  const readme = read("README.md");
+  const at = readme.indexOf("### Capability tokens are on by default");
+  assert.ok(at >= 0, "the README has the subsection");
+  const paragraph = readme.slice(at, readme.indexOf("## Documentation", at));
+  assert.ok(paragraph.includes("`capabilityTokens.mode` set to `off`"), "the opt-out");
+  assert.ok(paragraph.includes("Muse Code, Prime Agent and Grok Build"), "the unlabelled hosts");
+  assert.ok(paragraph.includes("does not stop a process of the same user"), "the same-user limit, no stronger than Q10");
+  assert.ok(paragraph.includes("docs/integration/mcp.md"), "the link to Q10");
+});

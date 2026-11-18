@@ -11,6 +11,11 @@ prime-agent mcp add realm -- realm mcp
 `realm` must be on `PATH`, or replace it with the absolute path to the binary.
 This bundle carries no token and no host path.
 
+Prime Agent has no Realm host id, so this launcher is `realm mcp` with no host flag and carries no capability token.
+Realm enforces capability tokens by default, so the default refuses this session with `POLICY_DENIED`. Set the policy
+value `capabilityTokens.mode` to `off` (the opt-out), or end the command with `--host ID`, using the id of a host family
+you accept as the attribution label. The migration steps are in Q10 of `docs/integration/mcp.md`.
+
 To test without touching the default Prime Agent home, set an isolated
 directory for the run:
 
