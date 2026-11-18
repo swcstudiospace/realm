@@ -68,5 +68,6 @@ export function capabilityPolicyOf(policy: Policy): CapabilityTokenPolicy {
 // when its entry is empty.
 export function profileFor(policy: Policy, host: HostId): readonly TokenCapability[] {
   const profile = capabilityPolicyOf(policy).profiles[host];
-  return profile === undefined ? TOKEN_CAPABILITIES : [...profile].sort();
+  // The schema admits only the six names, so narrowing the configured list through the known set drops nothing.
+  return profile === undefined ? TOKEN_CAPABILITIES : TOKEN_CAPABILITIES.filter((known) => profile.includes(known)).sort();
 }

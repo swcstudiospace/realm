@@ -14,9 +14,7 @@ import { fileURLToPath } from "node:url";
 // export, which NodeNext types correctly and Node's CJS lexer detects. The default
 // import is typed as the module namespace under NodeNext, so it is not used.
 import { Ajv2020, type ErrorObject, type SchemaObject, type ValidateFunction } from "ajv/dist/2020.js";
-import type { TokenCapability } from "../capability/token.js";
 import { RealmError } from "../core/errors.js";
-import type { HostId } from "../host/types.js";
 import { STATES, type State } from "../core/states.js";
 
 // ---- Typed values -----------------------------------------------------------
@@ -37,7 +35,7 @@ export type CapabilityTokenMode = "off" | "enforce";
 export interface CapabilityTokenPolicy {
   readonly mode: CapabilityTokenMode;
   readonly ttlSeconds: number;
-  readonly profiles: Readonly<Partial<Record<HostId, readonly TokenCapability[]>>>;
+  readonly profiles: Readonly<Record<string, readonly string[]>>;
 }
 
 // Output of validating the policy schema: defaults are already applied.
