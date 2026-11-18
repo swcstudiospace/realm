@@ -13,7 +13,7 @@ Coverage: 46/46 v1 requirements mapped, each to exactly one phase. v2.0 adds 8 r
 - 🗄 **v1.0 provisional** — Phases 1 to 7 (archived in `milestones/`)
 - 🗄 **v2.0 Host Adapters, Live Verification and Production Isolation** — Phases 8 to 11 (shipped as releases 0.2.0 and 0.2.1 on 2026-10-29; archived in `milestones/`)
 - 🗄 **v3.0 Containment by Default** — Phases 12 to 26 (shipped 2026-11-17, release line 0.3.x; archived in `milestones/v3.0-ROADMAP.md`)
-- 🚧 **v4.0 Anda removal, MCP hardening and production boot proof** — Phases 27 to 31 (in progress, release line 0.4.x)
+- 🗄 **v4.0 Anda removal, MCP hardening and production boot proof** — Phases 27 to 32 (shipped 2026-11-18, release line 0.4.x; archived in `milestones/v4.0-ROADMAP.md`)
 
 ## Phases
 
@@ -178,7 +178,7 @@ Plans:
 
 </details>
 
-### 🚧 v3.0 Containment by Default (In Progress)
+### ✅ v3.0 Containment by Default (Shipped 2026-11-17)
 
 **Milestone Goal:** A model working through Omp does its file mutations and commands inside the sandbox by default; the sandbox and its files survive crashes; an operator can see what happened, prove the audit log is intact, and ship with provenance and a rollback path.
 
@@ -199,6 +199,11 @@ Plans:
 - [x] **Phase 24: Host adapters wave 1: Claude Code, OpenCode, Codex, Kimi CLI** - Real install recipes for Claude Code, OpenCode, Codex and Kimi CLI (plus a same-shaped Kimi Code row), built on an engine extended for per-host home roles, a TOML table guard and honest status, proven on fixture hosts, with gated live rehearsals and a stated evidence tier per host.
 - [x] **Phase 25: Host adapters wave 2: remaining GSD Core runtimes** - The remaining GSD Core runtimes get config-only recipes where their config is documented (ten hosts; the owner approved deferring windsurf, trae and zcode), with a shadow guard and a YAML owned-key kind, fixture proofs, gated live validator tiers where a host is available, and docs that state the evidence tier per host.
 - [x] **Phase 26: Plugin contract tests, boot tests and author docs** - A cross-host contract checker proven by seeded defects, a real-daemon boot matrix over every stdio host, conformance mutants for the uncovered boot cases, a plugin author guide, a support matrix that a test keeps in step with the runtime table, and one tracked gaps page for the phase 21 to 25 residuals.
+
+### ✅ v4.0 Anda removal, MCP hardening and production boot proof (Shipped 2026-11-18)
+
+**Milestone Goal:** The Anda bridge is removed, `realm mcp` advertises tool annotations, per-session capability tokens exist for stdio hosts, and the wave 1 hosts are rehearsed against the production stack.
+
 - [x] **Phase 27: Anda disposition and v4.0 requirement closure** - Every open Anda item is closed by a recorded owner decision: ANDA-01 to ANDA-04, the Phase 3 Anda items and OQ-P3-11 are dispositioned as removed, the v2.0 carry list is reconciled, and the replacement research is the published rationale. (completed 2026-11-17)
 - [x] **Phase 28: Remove the Anda bridge** - The Anda bridge is removed with a clean cutover: no `andaUrl` key, no `ANDA_UNREACHABLE` or `ANDA_VERSION_MISMATCH` codes, no degraded state, no doctor check or docs for it, and the release carries a breaking-change note. (completed 2026-11-17)
 - [x] **Phase 29: MCP tool annotations** - `realm mcp` advertises MCP tool annotations (read-only, destructive, idempotent, open-world) for every Realm tool, verified against the protocol revisions it serves. (completed 2026-11-17)
@@ -604,6 +609,12 @@ Milestone v3.0 phases (12 to 20) run in three parallel lanes that share no mutab
 | 24. Host adapters wave 1: Claude Code, OpenCode, Codex, Kimi CLI | 4/4 | Complete    | 2026-11-17 |
 | 25. Host adapters wave 2: remaining GSD Core runtimes | 4/4 | Complete    | 2026-11-17 |
 | 26. Plugin contract tests, boot tests and author docs | 3/3 | Complete    | 2026-11-17 |
+| 27. Anda disposition and v4.0 requirement closure | 2/2 | Complete    | 2026-11-17 |
+| 28. Remove the Anda bridge | 3/3 | Complete    | 2026-11-17 |
+| 29. MCP tool annotations | 2/2 | Complete    | 2026-11-17 |
+| 30. Capability token spike | 2/2 | Complete    | 2026-11-18 |
+| 31. Production-stack boot rehearsals for wave 1 hosts | 2/2 | Complete    | 2026-11-18 |
+| 32. Capability tokens for stdio hosts | 3/3 | Complete    | 2026-11-18 |
 
 ### Phase 21: Host plugin contract and installer
 
