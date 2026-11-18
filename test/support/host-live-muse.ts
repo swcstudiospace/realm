@@ -1,6 +1,6 @@
-// Pure helpers of the Muse Code validator-tier live test (V1LIVE-01, 36-CONTEXT D-36-04). Muse Code has no recipe, registry record or
-// `--host` id: the documented settings entry (docs/hosts/snippets/muse-code.md) is written verbatim into an isolated settings file and
-// the real `muse` binary reads it. This module holds the checks of that entry, of what `muse mcp list --json` and `muse mcp get realm
+// Pure helpers of the Muse Code validator-tier live test (V1LIVE-01, 36-CONTEXT D-36-04). Since Phase 40 Muse Code has the host id
+// `muse-code`, a recipe and a registry record (the recipe value is pinned equal to this entry, 40-CONTEXT D-40-04): the documented
+// settings entry (docs/hosts/snippets/muse-code.md) is written verbatim into an isolated settings file and the real `muse` binary reads it. This module holds the checks of that entry, of what `muse mcp list --json` and `muse mcp get realm
 // --json` print about it, the gate reason and the isolated environment.
 //
 // Nothing here reads the process environment, reads a clock or starts a process at import time. The hermetic test is
@@ -35,7 +35,7 @@ export function parseMuseVersion(stdout: string): string | undefined {
 }
 
 // The one documented entry, field by field.
-const EXPECTED_ENTRY: Readonly<Record<string, unknown>> = Object.freeze({ transport: "stdio", command: "realm", args: Object.freeze(["mcp"]), enabled: true, mode: "required" });
+const EXPECTED_ENTRY: Readonly<Record<string, unknown>> = Object.freeze({ type: "stdio", command: "realm", args: Object.freeze(["mcp", "--host", "muse-code"]), required: true });
 
 // Parses the snippet text and requires exactly the documented shape; returns the settings text to write (two-space indent, final
 // newline). Throws an Error that names the first difference.
@@ -53,17 +53,17 @@ export function museSettingsText(snippetText: string): string {
   if (parsed["schema_version"] !== 1) {
     throw new Error("schema_version differs: expected 1");
   }
-  const extra = keys.filter((key) => key !== "schema_version" && key !== "mcp_servers");
+  const extra = keys.filter((key) => key !== "schema_version" && key !== "mcpServers");
   if (extra.length > 0) {
     throw new Error(`the snippet has an unexpected top-level key: ${extra[0] ?? ""}`);
   }
-  const servers = parsed["mcp_servers"];
+  const servers = parsed["mcpServers"];
   if (!isRecord(servers)) {
-    throw new Error("mcp_servers is missing or not an object");
+    throw new Error("mcpServers is missing or not an object");
   }
   const names = Object.keys(servers);
   if (names.length !== 1 || names[0] !== "realm") {
-    throw new Error(`mcp_servers must hold exactly the server realm, found ${names.join(",") === "" ? "none" : names.join(",")}`);
+    throw new Error(`mcpServers must hold exactly the server realm, found ${names.join(",") === "" ? "none" : names.join(",")}`);
   }
   const entry = servers["realm"];
   if (!isRecord(entry)) {
@@ -105,8 +105,8 @@ export function museEntryProblem(entry: unknown): string | undefined {
     }
   }
   const args = entry["args"];
-  if (!Array.isArray(args) || args.at(-1) !== "mcp") {
-    return "the server field args does not end with mcp";
+  if (!Array.isArray(args) || JSON.stringify(args) !== JSON.stringify(["mcp", "--host", "muse-code"])) {
+    return "the server field args is not mcp, --host, muse-code";
   }
   return undefined;
 }

@@ -1,5 +1,5 @@
 // TEST-HOST-08 (D-26-09): docs/integration/host-plugin-gaps.md is the tracked table of the unverified behavior, accepted residuals, owner
-// decisions and inferences of Phases 21 to 26, and the rows of the Phase 31 boot rehearsals, of Phase 34 (the hosts with no host id) and of Phase 43 (the Kimi rehearsal). This test holds its shape (ids, classes, statuses), that each source names a planning file that
+// decisions and inferences of Phases 21 to 26, and the rows of the Phase 31 boot rehearsals, of Phase 34 (the hosts with no host id), of Phase 40 (the three host ids and the shared Claude configuration) and of Phase 43 (the Kimi rehearsal). This test holds its shape (ids, classes, statuses), that each source names a planning file that
 // exists (skipped with a named diagnostic when the planning tree is archived), that a row marked closed or narrowed cites a repository path
 // that exists, that every numbered behavior_unverified item of the Phase 21 to 25 verification files has a row, and that a closed GAP-21-04
 // goes with a non-zero src/host coverage floor. Reads files only: nothing is written and no process starts.

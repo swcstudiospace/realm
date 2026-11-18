@@ -1,4 +1,4 @@
-// Declarative runtime table: the 18 GSD Core installer flags plus the Omp reference entry.
+// Declarative runtime table: the 18 GSD Core installer flags, the Omp reference entry and the three Realm-only hosts of Phase 40 (22 rows).
 // Source: 21-DISCOVERY.md (GSD Core `next`, commit 69d604e, 2026-11-16). No gemini (retired), no
 // vscode (registered upstream but not installable). Pure data and pure functions: no file system.
 
@@ -305,6 +305,50 @@ export const HOST_RUNTIMES: Readonly<Record<HostId, HostRuntimeEntry>> = Object.
     binaries: ["pi"],
     recipe: { kind: "json-merge", file: "mcp.json", keyPath: ["mcpServers", "realm"], value: { command: "realm", args: ["mcp", "--host", "pi"] } },
   }),
+  // Phase 40 (D-40-01, D-40-02). Realm-only host: its flag is not a GSD Core installer flag. Evidence E-40-02 to E-40-05: `muse mcp add` writes
+  // settings.json below XDG_CONFIG_HOME/muse with `mcpServers.realm` and schema_version 1; the recipe adds `required: true` (E-40-03) so a failed
+  // Realm aborts the run, seeds schema_version only into a file it creates (E-40-04) and refuses a file that also holds the rival `mcp_servers` spelling (E-40-05).
+  "muse-code": entry("muse-code", {
+    flag: "--muse-code",
+    displayName: "Muse Code",
+    tier: "config-only",
+    homes: [".config/muse"],
+    envBase: { name: "XDG_CONFIG_HOME", sub: "muse" },
+    binaries: ["muse"],
+    recipe: {
+      kind: "json-merge",
+      file: "settings.json",
+      keyPath: ["mcpServers", "realm"],
+      value: { type: "stdio", command: "realm", args: ["mcp", "--host", "muse-code"], required: true },
+      seed: { schema_version: 1 },
+      refuseIfPresent: ["mcp_servers"],
+    },
+  }),
+  // Evidence E-40-06: `prime-agent mcp add` writes settings.json of the agent directory (PRIME_AGENT_CODING_AGENT_DIR is that directory itself).
+  "prime-agent": entry("prime-agent", {
+    flag: "--prime-agent",
+    displayName: "Prime Agent",
+    tier: "config-only",
+    homes: [".prime/agent"],
+    envOverride: "PRIME_AGENT_CODING_AGENT_DIR",
+    binaries: ["prime-agent"],
+    recipe: { kind: "json-merge", file: "settings.json", keyPath: ["mcpServers", "realm"], value: { type: "stdio", command: "realm", args: ["mcp", "--host", "prime-agent"] } },
+  }),
+  // Evidence E-40-07 to E-40-09: the owned table is the text `grok mcp add realm -- realm mcp --host grok-build` writes into ~/.grok/config.toml
+  // (multi-line args, enabled = true): Grok's own stable form, so a later `grok mcp add` leaves it byte-identical. Grok documents no relocation variable.
+  "grok-build": entry("grok-build", {
+    flag: "--grok-build",
+    displayName: "Grok Build",
+    tier: "config-only",
+    homes: [".grok"],
+    binaries: ["grok"],
+    recipe: {
+      kind: "toml-table",
+      file: "config.toml",
+      table: ["mcp_servers", "realm"],
+      text: '[mcp_servers.realm]\ncommand = "realm"\nargs = [\n    "mcp",\n    "--host",\n    "grok-build",\n]\nenabled = true',
+    },
+  }),
 });
 
 // Alias -> id, derived from the table. Null prototype so a name like "__proto__" never matches.
@@ -330,7 +374,7 @@ export function resolveHostId(name: string): HostId | undefined {
   return undefined;
 }
 
-// A host has no install recipe until its phase sets one: Phase 22 sets omp, Phase 24 sets claude, opencode, codex, kimi and kimi-code, Phase 25 the rest except the three deferred hosts (windsurf, trae, zcode).
+// A host has no install recipe until its phase sets one: Phase 22 sets omp, Phase 24 sets claude, opencode, codex, kimi and kimi-code, Phase 25 the rest except the three deferred hosts (windsurf, trae, zcode), Phase 40 muse-code, prime-agent and grok-build.
 export function recipePending(id: HostId): boolean {
   return HOST_RUNTIMES[id].recipe === null;
 }

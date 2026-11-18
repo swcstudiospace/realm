@@ -16,18 +16,18 @@ binary first, or give the absolute path to it in place of `realm` below.
 The documented form is `prime-agent mcp add <name> [--cwd] [--env CHILD=SOURCE] -- <command> [args]`:
 
 ```bash
-prime-agent mcp add realm -- realm mcp
+prime-agent mcp add realm -- realm mcp --host prime-agent
 ```
 
 This writes the `mcpServers` block of the Prime Agent `settings.json` (medium
 confidence). To test without touching the live configuration, run it from a
 scratch project directory with the project-local form in the next section.
 
-Prime Agent has no host id, so this launcher stays `realm mcp` with no host flag and carries no capability token. Realm
-enforces capability tokens by default, so the default refuses this session with `POLICY_DENIED` (`GAP-34-01` in
-`docs/integration/host-plugin-gaps.md`). Either set the policy value `capabilityTokens.mode` to `off` (the opt-out, which
-`realm doctor` flags with a warning), or end the command with `--host ID`, using the id of a host family you accept as the
-attribution label (`realm host list` names the ids). The migration steps are in Q10 of `docs/integration/mcp.md`.
+The launcher carries the host label `--host prime-agent`, so the default (capability tokens enforced) admits the session and
+the audit names the host. `realm host install prime-agent` registers the same entry. `GAP-34-01` in
+`docs/integration/host-plugin-gaps.md` is closed by Phase 40. An older entry added as `realm mcp` with no host flag is refused
+under the default: run `prime-agent mcp remove realm` first, then add the labelled entry. The migration steps are in Q10 of
+`docs/integration/mcp.md`.
 
 ## Skill package
 

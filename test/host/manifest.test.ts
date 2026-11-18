@@ -136,7 +136,7 @@ void test("an mcp-config manifest accepts a boot block and returns it frozen", (
 
 void test("the default launch of every mcp-config host names the host", () => {
   const ids = HOST_IDS.filter((id) => id !== "omp");
-  assert.equal(ids.length, 18);
+  assert.equal(ids.length, 21);
   for (const id of ids) {
     assert.deepEqual(parseHostPluginManifest(defaultManifestFor(id, "1.0.0")).launch, { command: "realm", args: ["mcp", "--host", id] });
   }

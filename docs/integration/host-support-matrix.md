@@ -38,6 +38,9 @@ The Support table reads the table: tier, integration kind, recipe kind (a host w
 | `kimi-code` | Kimi Code | config-only | mcp-config | json-merge | `~/.kimi-code`; override `KIMI_CODE_HOME` | `mcp.json` | - | [kimi.md](../hosts/snippets/kimi.md) |
 | `zcode` | ZCode | config-only | mcp-config | pending (deferred) | `~/.zcode` | - | - | [deferred-hosts.md](../hosts/snippets/deferred-hosts.md) |
 | `pi` | Pi | config-only | mcp-config | json-merge | `~/.pi/agent`; override `PI_CODING_AGENT_DIR` | `mcp.json` | `pi` | [pi.md](../hosts/snippets/pi.md) |
+| `muse-code` | Muse Code | config-only | mcp-config | json-merge | `~/.config/muse`; base `XDG_CONFIG_HOME/muse` | `settings.json` | `muse` | [muse-code.md](../hosts/snippets/muse-code.md) |
+| `prime-agent` | Prime Agent | config-only | mcp-config | json-merge | `~/.prime/agent`; override `PRIME_AGENT_CODING_AGENT_DIR` | `settings.json` | `prime-agent` | [prime-agent.md](../hosts/snippets/prime-agent.md) |
+| `grok-build` | Grok Build | config-only | mcp-config | toml-table | `~/.grok` | `config.toml` | `grok` | [grok-build.md](../hosts/snippets/grok-build.md) |
 
 ### Evidence
 
@@ -62,6 +65,9 @@ The Support table reads the table: tier, integration kind, recipe kind (a host w
 | `kimi-code` | `test/host/kimi-recipe.test.ts` | `REALM_LIVE_KIMI_CODE=1` | 2026-11-18, 2.6.3: 2 of 2 passed, as a session proof because no host validator command exists (validator 1 of 1: kimi doctor exits 0 and kimi mcp is an unknown command; validator session 1 of 1: kimi -p against a refusing loopback provider launched the registered server, which saw initialize, notifications/initialized and tools/list and the six tools, session ready after 12005 ms, the provider saw 0 requests; scratch install outside the repository) | rehearsed: Kimi Code 2.6.3, 2026-11-18, production stack (realmlive account, Podman 5.7.1), cold attach with no warm-up and a new project directory: a kimi -p session against a loopback provider that refuses every request launched realm mcp --host kimi-code, the wire shows initialize, notifications/initialized and tools/list and the six Realm tools; the host command took 37405 ms because Kimi Code keeps retrying its model request, so the drive ended it after the boot was observed (the 25000 ms bound applies to the command drive of kimi only); the provider saw 6 requests, all carrying the one fixed placeholder key and from loopback peers; Kimi Code forwards its whole environment to the server, so the name of the placeholder key reaches realm mcp; the validator tier passed 2 of 2 the same day; no model turn and no tool call (GAP-31-02); the network use of the CLI is not measured (GAP-43-02); evidence kept outside the repository | - |
 | `zcode` | - | none | not run | gap: deferred host: no recipe exists, so no tier can run | the native config is owned by a GUI application and cannot be observed (OQ-25-03) |
 | `pi` | `test/host/wave2-json-recipes.test.ts` | `REALM_LIVE_PI=1`, floor 1.3.0 | not run | none-defined: config-only host: no production tier is defined (OQ-25-09) | - |
+| `muse-code` | `test/host/muse-code-recipe.test.ts` | none | not run | none-defined: config-only host: no production tier is defined (OQ-25-09) | - |
+| `prime-agent` | `test/host/prime-agent-recipe.test.ts` | none | not run | none-defined: config-only host: no production tier is defined (OQ-25-09) | - |
+| `grok-build` | `test/host/grok-build-recipe.test.ts` | none | not run | none-defined: config-only host: no production tier is defined (OQ-25-09) | - |
 <!-- host-support-matrix:end -->
 
 ## Where to go next

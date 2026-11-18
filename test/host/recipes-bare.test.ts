@@ -1,6 +1,6 @@
 // CAPT-09, D-32-02, D-32-13 item 8: the recipes and the default manifests stay bare. The capability token reaches a host process
-// through the daemon at attach, never through a host-owned file, so the 18 default mcp-config manifests launch `realm mcp --host ID`
-// with no env member, the 15 install recipes register that same bare value, and nothing an install writes or records carries an
+// through the daemon at attach, never through a host-owned file, so the 21 default mcp-config manifests launch `realm mcp --host ID`
+// with no env member, the 18 install recipes register that same bare value, and nothing an install writes or records carries an
 // env, token or key member. Adding an environment delivery later fails here first. Rows come from the real tables at run time.
 
 import { test } from "node:test";
@@ -57,8 +57,8 @@ function filesUnder(dir: string): string[] {
   });
 }
 
-void test("CAPT-09: the 18 default mcp-config manifests launch the bare value with no env, cwd, token or key member", (t) => {
-  assert.equal(MCP_CONFIG.length, 18, "the table holds 18 mcp-config hosts");
+void test("CAPT-09: the 21 default mcp-config manifests launch the bare value with no env, cwd, token or key member", (t) => {
+  assert.equal(MCP_CONFIG.length, 21, "the table holds 21 mcp-config hosts");
   t.diagnostic(`mcp-config manifests checked: ${String(MCP_CONFIG.length)}`);
   for (const id of MCP_CONFIG) {
     const manifest = defaultManifestFor(id, VERSION);
@@ -74,16 +74,16 @@ void test("CAPT-09: the 18 default mcp-config manifests launch the bare value wi
   }
 });
 
-void test("CAPT-09: the table holds exactly 15 mcp-config recipes, 3 recipe-pending mcp-config rows and one extension row (omp)", (t) => {
+void test("CAPT-09: the table holds exactly 18 mcp-config recipes, 3 recipe-pending mcp-config rows and one extension row (omp)", (t) => {
   const pending = MCP_CONFIG.filter((id) => HOST_RUNTIMES[id].recipe === null);
   const extensions = HOST_IDS.filter((id) => HOST_RUNTIMES[id].integration === "extension");
   t.diagnostic(`mcp-config recipes: ${String(WITH_RECIPE.length)}, pending: ${String(pending.length)}, extension: ${extensions.join(",")}`);
-  assert.equal(WITH_RECIPE.length, 15, `recipes: ${WITH_RECIPE.join(",")}`);
+  assert.equal(WITH_RECIPE.length, 18, `recipes: ${WITH_RECIPE.join(",")}`);
   assert.equal(pending.length, 3, `pending: ${pending.join(",")}`);
   assert.deepEqual(extensions, ["omp"]);
 });
 
-void test("CAPT-09: each of the 15 recipes registers the bare launcher for its own host id", () => {
+void test("CAPT-09: each of the 18 recipes registers the bare launcher for its own host id", () => {
   for (const id of WITH_RECIPE) {
     assert.deepEqual(registeredArgvOf(HOST_RUNTIMES[id]), ["realm", "mcp", "--host", id], `${id}: the registered launch`);
   }
@@ -115,7 +115,7 @@ void test("CAPT-09: no recipe text carries env, token, rcap1, secret, key or REA
   assert.deepEqual(Reflect.get(claude.value, "env"), {}, "claude's env object is empty");
 });
 
-// Applies every one of the 15 recipes to a fixture config home and reads back what was written and recorded.
+// Applies every one of the 18 recipes to a fixture config home and reads back what was written and recorded.
 for (const id of WITH_RECIPE) {
   void test(`CAPT-09 ${id}: an applied recipe writes no rcap1 or REALM_ text and records a receipt with no env member`, async (t) => {
     const host = makeFixtureHost(t, { createConfigHome: false });

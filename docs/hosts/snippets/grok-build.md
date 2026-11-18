@@ -45,17 +45,26 @@ The `.mcp.json` `mcpServers` entry in the `claude-code.md` snippet therefore
 also reaches Grok. That entry starts the stdio command `realm mcp --host claude` (command `realm`, arguments `mcp`,
 `--host`, `claude`). Use it to share Realm with a project.
 
-Grok Build has no host id of its own. The shared bundle is labelled `claude`, so the attribution of a Grok Build session
-that uses it is `claude`: a self-declared label, not an identity. A Grok Build launcher with no host flag would be
-refused by the enforced capability-token default (`GAP-34-01` in `docs/integration/host-plugin-gaps.md`; the opt-out
-and the migration steps are in Q10 of `docs/integration/mcp.md`).
+The shared bundle is labelled `claude`, so the attribution of a Grok Build session that loads it, or that starts the entry the
+`claude` recipe wrote into `~/.claude.json`, is `claude` (`GAP-40-01`): a self-declared label, not an identity. For a session
+attributed `grok-build`, register the server in Grok's own configuration, not through the shared bundle:
+
+```bash
+realm host install grok-build
+grok mcp add realm -- realm mcp --host grok-build
+```
+
+Either line registers the same table in `~/.grok/config.toml` (the second is the host's own writer; the first is the Realm
+installer). A `realm` entry in that file shadows a `claude`-labelled one of the same name. `GAP-34-01` in
+`docs/integration/host-plugin-gaps.md` is closed by Phase 40; the opt-out and the migration steps are in Q10 of
+`docs/integration/mcp.md`.
 
 To list what Grok sees for the current directory, run `grok inspect`. It
 covers "config sources, instructions, skills, plugins, hooks, and MCP servers."
 
 ## Not documented
 
-A direct MCP server key in `~/.grok/config.toml`: not documented in the pages
-read, so this snippet gives no `~/.grok/config.toml` MCP block. ACP transport
-and launch command: not documented in the pages read, so this snippet gives no
-ACP configuration.
+A documented direct MCP server key in `~/.grok/config.toml`: the 2026-10-22 page read found none. Phase 40 observed the host's own
+writer instead (`grok mcp add` writes a `[mcp_servers.NAME]` table into that file, 1.0.77, 2026-11-18), and the `grok-build` recipe
+owns exactly that table. ACP transport and launch command: not documented in the pages read, so this snippet gives no ACP
+configuration.

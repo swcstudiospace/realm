@@ -1,6 +1,5 @@
-// Muse Code against its real CLI, validator tier (V1LIVE-01 / OI-07, 36-CONTEXT D-36-04). Muse Code has no recipe, registry record or
-// `--host` id, so no `realm host install` runs: the documented settings entry (docs/hosts/snippets/muse-code.md, command `realm`, args
-// `mcp`) is written verbatim into an ISOLATED settings file and the real `muse` binary is asked what it makes of it.
+// Muse Code against its real CLI, validator tier (V1LIVE-01 / OI-07, 36-CONTEXT D-36-04). The documented settings entry
+// (docs/hosts/snippets/muse-code.md, command `realm`, args `mcp --host muse-code`, required) is written verbatim into an ISOLATED settings file and the real `muse` binary is asked what it makes of it.
 //
 // One scenario; the real `realm` is never run, a wire recorder named `realm` first on the PATH stands in for it and forwards to a fake
 // MCP server that answers the handshake, so the entry stays byte-identical to the documented one and Muse must resolve it through PATH.
@@ -10,7 +9,7 @@
 //   D  `muse exec --provider echo --trust-workspace` starts the required entry through PATH, completes the handshake and sees the six
 //      Realm tools. The workspace is trusted by the flag: without it Muse does not start the entry (measured 2026-11-18, 36-CONTEXT
 //      E-36-06), which this test notes and does not assert
-//   E  control: a stub `realm` that does not speak MCP makes the same run fail with `failed during startup`; the stub records `mcp`
+//   E  control: a stub `realm` that does not speak MCP makes the same run fail with `failed during startup`; the stub records `mcp --host muse-code`
 //   F  the operator's real Muse settings file is byte-equal before and after
 //
 // Opt in with REALM_LIVE_MUSE=1 and optionally REALM_MUSE_BIN (an absolute path to the muse executable):
@@ -63,6 +62,8 @@ async function probeVersion(bin: string): Promise<HostVersionProbe> {
   }
 }
 
+// The argument list the entry gives the server: the labelled launcher of the muse-code recipe (40-CONTEXT D-40-04).
+const isMuseLaunch = (argv: readonly string[]): boolean => argv.length === 3 && argv[0] === "mcp" && argv[1] === "--host" && argv[2] === "muse-code";
 const BIN = process.env["REALM_LIVE_MUSE"] === "1" && process.platform === "linux" ? museBinary() : undefined;
 const VERSION_PROBE: HostVersionProbe = BIN === undefined ? { kind: "unavailable" } : await probeVersion(BIN);
 const SKIP = museGateReason({ env: process.env, platform: process.platform, resolveBinary: (name) => resolveExecutable(name, process.env["PATH"]), versionProbe: VERSION_PROBE });
@@ -143,15 +144,15 @@ void test(
     assert.equal(run.exitCode, 0, describeRun(run));
     assert.doesNotMatch(clean(run), /failed during startup/, describeRun(run));
     const log = readFakeServerLog(serverLog);
-    const launches = log.starts.filter((start) => start.argv.length === 1 && start.argv[0] === "mcp");
-    assert.ok(launches.length >= 1, `Muse started the realm entry through PATH with the argument mcp (${String(log.starts.length)} starts recorded)`);
+    const launches = log.starts.filter((start) => isMuseLaunch(start.argv));
+    assert.ok(launches.length >= 1, `Muse started the realm entry through PATH with the arguments mcp --host muse-code (${String(log.starts.length)} starts recorded)`);
     const summary = wireSummary(readWireLog(wireLog));
     assert.ok(summary.hostMethods.includes("initialize") || summary.hostMethods.includes("server/discover"), `the host opened the session: ${summary.hostMethods.join(",")}`);
     assert.deepEqual([...summary.toolNames], [...REALM_TOOL_NAMES], "Muse saw the six Realm tools");
     for (const start of log.starts) {
       assert.equal(processAlive(start.pid), false, "no server process outlives the run");
     }
-    t.diagnostic(`D: exec exit 0 in ${String(elapsed)} ms; server starts ${String(log.starts.length)} (argv mcp: ${String(launches.length)}); host methods ${summary.hostMethods.join(",")}; tools ${summary.toolNames.join(",")}`);
+    t.diagnostic(`D: exec exit 0 in ${String(elapsed)} ms; server starts ${String(log.starts.length)} (argv mcp --host muse-code: ${String(launches.length)}); host methods ${summary.hostMethods.join(",")}; tools ${summary.toolNames.join(",")}`);
 
     // E: control, a broken entry is visible.
     const broken = await runHost(bin, ["exec", "--provider", "echo", "--trust-workspace", SESSION_PROMPT], stubEnv, workspace, bound);
@@ -159,7 +160,7 @@ void test(
     assert.notEqual(broken.exitCode, 0, `a realm that does not speak MCP must fail the run; ${describeRun(broken)}`);
     assert.match(clean(broken), /failed during startup/, describeRun(broken));
     const stubArgv = readStubArgv(stubLog);
-    assert.ok(stubArgv.some((argv) => argv.length === 1 && argv[0] === "mcp"), `the stub realm was started with the argument mcp (${String(stubArgv.length)} invocations)`);
+    assert.ok(stubArgv.some((argv) => isMuseLaunch(argv)), `the stub realm was started with the arguments mcp --host muse-code (${String(stubArgv.length)} invocations)`);
     t.diagnostic(`E: a stub realm failed the run (exit ${String(broken.exitCode)}, failed during startup); stub invocations ${String(stubArgv.length)}`);
 
     // F: the operator's real settings file is byte-equal.

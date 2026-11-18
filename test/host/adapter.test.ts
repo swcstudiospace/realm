@@ -103,7 +103,7 @@ void test("every table entry builds an adapter with no file system access, and i
   };
   const reader: HostFsReader = { realpath: forbidden, lstat: forbidden, stat: forbidden, readFile: forbidden, readdir: forbidden };
   const adapters = HOST_IDS.map((id) => createHostAdapter(HOST_RUNTIMES[id], defaultManifestFor(id, "1.2.3"), deps(host, log, { reader })));
-  assert.equal(adapters.length, 19);
+  assert.equal(adapters.length, 22);
   assert.deepEqual(adapters.map((adapter) => adapter.id), [...HOST_IDS]);
   for (const adapter of adapters) {
     assert.equal(adapter.tier, HOST_RUNTIMES[adapter.id].tier);

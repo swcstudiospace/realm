@@ -285,7 +285,7 @@ A policy that has no `mode` key, or no policy file at all, used to load as `advi
   - `mode`: `"off" | "enforce"`.
   - `ttlSeconds`: `integer`, minimum 60, maximum 86400.
   - `profiles`: an object whose keys are host ids and whose values are arrays of
-    unique capability names. The host ids are exactly the 19 entries of
+    unique capability names. The host ids are exactly the 22 entries of
     `HOST_IDS` (`src/host/types.ts`). The capability names are exactly the six of
     the `mcp-config` ceiling (`integrationCeiling`, `src/host/capabilities.ts`):
     `daemon.attach`, `fs.read`, `fs.write`, `fs.list`, `exec.argv` and
