@@ -183,6 +183,14 @@ All v3.0 requirements are hypotheses until shipped and verified.
 - [x] **MCPA-01**: Every Realm MCP tool advertises tool annotations (readOnlyHint, destructiveHint, idempotentHint, openWorldHint) in both protocol eras `realm mcp` serves
 - [x] **MCPA-02**: A test pins the annotations per tool against the tool contract, and a mutation of an annotation fails a test
 - [ ] **CAPT-01**: A spike answers whether a per-session capability token is worth building (threat model, same-user limits, cost) and records a build or drop decision with evidence
+- [ ] **CAPT-02**: A per-session, per-host HMAC capability token can be minted and verified in a fixed order with deterministic refusal classes, with a tool-to-capability mapping and per-host profiles, proven by a seeded refusal matrix
+- [ ] **CAPT-03**: A keyring at rest (mode and ownership checked, atomic) supports rotation by key id with a grace period and an emergency revoke
+- [ ] **CAPT-04**: The policy has a capabilityTokens key (mode off or enforce, ttlSeconds, per-host profiles) with schema, defaults, type and reference docs; the default leaves behaviour unchanged
+- [ ] **CAPT-05**: The token shape is redacted by the audit and log redaction layers in every position
+- [ ] **CAPT-06**: With enforcement on, every tool request is verified against a daemon-minted token before dispatch, fail closed with POLICY_DENIED, token AND policy; the client keeps the token in memory only; MCP, ACP and Omp hosts attach
+- [ ] **CAPT-07**: The verified host and key id are recorded on the audit lines of every tokened call; attaches and refusals are audited within a bound; the chain covers the fields
+- [ ] **CAPT-08**: realm host token status and rotate work without a daemon; a doctor item capability-tokens reports mode, keyring and misconfiguration
+- [ ] **CAPT-09**: The delivery decision, the limits (no defence against a same-uid reader) and the owner override are documented and tested; the 18 default manifests and 15 recipes are unchanged
 - [ ] **BOOTP-01**: Each wave 1 host that can run here (claude, codex; others named) is booted through its own CLI against the production stack, and Realm tools are listed or called, with results recorded
 - [ ] **BOOTP-02**: Hosts that cannot be booted (missing CLI, no credentials, archived) have a named gap in docs/integration/host-plugin-gaps.md
 
@@ -356,6 +364,14 @@ Each v3.0 requirement maps to exactly one phase. The carried requirements keep t
 | MCPA-01 | Phase 29 | Complete |
 | MCPA-02 | Phase 29 | Complete |
 | CAPT-01 | Phase 30 | Planned |
+| CAPT-02 | Phase 32 | Planned |
+| CAPT-03 | Phase 32 | Planned |
+| CAPT-04 | Phase 32 | Planned |
+| CAPT-05 | Phase 32 | Planned |
+| CAPT-06 | Phase 32 | Planned |
+| CAPT-07 | Phase 32 | Planned |
+| CAPT-08 | Phase 32 | Planned |
+| CAPT-09 | Phase 32 | Planned |
 | BOOTP-01 | Phase 31 | Planned |
 | BOOTP-02 | Phase 31 | Planned |
 | FS-02 | Phase 2 | Accepted limitation (Phase 27 disposition, 2026-11-17): accepted approximation, confirmed by the owner 2026-10-23; rebind verified through the pinned root; check-to-use windows remain on the read and write paths; audit G-10 |
