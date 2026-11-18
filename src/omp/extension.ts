@@ -79,6 +79,8 @@ export default function realmExtension(pi: OmpExtensionApi): void {
     socketPath,
     stateDir,
     connect: connectDaemon,
+    // Omp is the host id omp: its client attaches with it when the daemon enforces capability tokens (CAPT-06).
+    host: "omp",
     spawnDaemon: () => {
       // startDetachedDaemon allowlists the child environment (spawn-env.ts). A sentinel does not cross.
       startDetachedDaemon(daemonEntry, stateDir);

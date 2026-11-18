@@ -13,6 +13,7 @@
 import { createServer, type Server, type Socket } from "node:net";
 import { performance } from "node:perf_hooks";
 import { appendAudit } from "../audit/log.js";
+import { createCapabilityGate } from "../capability/gate.js";
 import { newCorrelationId } from "../observe/ids.js";
 import { nullLogger, type Logger } from "../observe/logger.js";
 import { createMetrics } from "../observe/metrics.js";
@@ -50,6 +51,7 @@ import {
   encodeReply,
   ensureSocketDir,
   isControlMethod,
+  isRecord,
   oversizedLineReply,
   parseControlSelection,
   readControlLine,
@@ -314,6 +316,9 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
     monotonicMs: () => performance.now(),
     version: packageVersion(),
   });
+  // The capability gate (CAPT-06): built only when the policy mode is enforce. With the default policy there is none, no
+  // token is minted or checked, and an incoming token member is ignored.
+  const capabilityGate = createCapabilityGate({ stateDir, policy, now: () => clock().getTime(), logger });
   const completed = new Set<Socket>();
 
   // The reply of status, up and down for a selection: the snapshot, the bound root and the session id the selection names.
@@ -622,11 +627,11 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
         return { id, result };
       }
       case "tool": {
-        const tool: unknown =
-          typeof params === "object" && params !== null && !Array.isArray(params) && "tool" in params
-            ? params.tool
-            : undefined;
-        if (typeof tool !== "object" || tool === null || Array.isArray(tool)) {
+        const frame = isRecord(params) ? params : {};
+        const tool: unknown = frame["tool"];
+        // Without a gate a malformed call is refused before the target is resolved, as it always was. With a gate the
+        // check runs first, so a caller that holds no valid token learns nothing about the schema (CAPT-06).
+        if (capabilityGate === undefined && !isRecord(tool)) {
           return { id, error: { code: "SCHEMA_INVALID" } };
         }
         const resolved = resolveTarget(requireSelection(selection));
@@ -634,6 +639,15 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
           throw makeRealmError("REALM_NOT_ACTIVE");
         }
         const { sessionId } = resolved;
+        // Token AND policy: the token is verified before the correlation id is minted and before any dispatcher stage.
+        const verdict = capabilityGate?.check({ tool, token: frame["token"], sessionId });
+        if (verdict?.ok === false) {
+          metrics.recordTool(verdict.tool, "refused", 0, "POLICY_DENIED");
+          return { id, error: { code: "POLICY_DENIED" } };
+        }
+        if (!isRecord(tool)) {
+          return { id, error: { code: "SCHEMA_INVALID" } };
+        }
         const correlationId = newCorrelationId();
         const upId = upIds.get(sessionId);
         const startedAt = performance.now();
@@ -641,6 +655,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
           const outcome = await resolved.entry.handle.dispatcher.call(tool, {
             correlationId,
             ...(upId === undefined ? {} : { upId }),
+            ...(verdict?.ok === true ? { principal: verdict.principal } : {}),
           });
           const elapsed = Math.round(performance.now() - startedAt);
           const toolName = outcome.tool ?? "unknown";
@@ -685,6 +700,22 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
             code: codeOf(error),
             durationMs: elapsed,
           });
+          return refusalReply(id, error);
+        }
+      }
+      case "capability-attach": {
+        const resolved = resolveTarget(requireSelection(selection));
+        if (resolved.entry === null) {
+          throw makeRealmError("REALM_NOT_ACTIVE");
+        }
+        if (capabilityGate === undefined) {
+          return { id, result: { mode: "off" } };
+        }
+        const host = isRecord(params) ? params["host"] : undefined;
+        try {
+          const attached = capabilityGate.attach({ sessionId: resolved.sessionId, host: typeof host === "string" ? host : "" });
+          return { id, result: { mode: "enforce", ...attached } };
+        } catch (error: unknown) {
           return refusalReply(id, error);
         }
       }

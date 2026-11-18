@@ -139,6 +139,10 @@ function pinnedDaemon(status: object, upReply: (workspaceRoot: string) => StubRe
       const reply = upReply(params.workspaceRoot);
       return "result" in reply ? answeredFor(request, reply.result) : reply;
     }
+    if (request.method === "capability-attach") {
+      // The Omp client attaches before its first tool call (CAPT-06). This daemon enforces no tokens.
+      return { result: { mode: "off" } };
+    }
     if (request.method === "tool") {
       return { result: REFUSED_WRITE };
     }
@@ -882,4 +886,33 @@ void test("BOOT-08: a daemon that answers SCHEMA_INVALID to host-boot changes no
   await pollUntil(() => hostBoot.requests.length === 2, "the closed report was sent and refused");
   assert.equal(paints.some((text) => /error|refus/i.test(text)), false, "no failure is painted");
   assert.deepEqual(lines, [], "a refused report adds no stderr line");
+});
+
+void test("CAPT-06: the Omp extension attaches its capability token as the host id omp, before its first tool call", async (t) => {
+  const base = scratchDir(t);
+  const project = join(base, "project");
+  mkdirSync(project);
+  const root = realpathSync(project);
+  const socketPath = configure(t, base, project);
+  const seen: StubRequest[] = [];
+  await serveDaemon(t, socketPath, [], (request) => {
+    seen.push(request);
+    if (request.method === "capability-attach") {
+      return { result: { mode: "off" } };
+    }
+    if (request.method === "tool") {
+      return { result: REFUSED_WRITE };
+    }
+    return answeredFor(request, ACTIVE_STATUS);
+  });
+  const host = createHost();
+  const paints: string[] = [];
+  await startOmpSession(t, host, paints, project, "realm active");
+  assert.equal(seen.some((request) => request.method === "capability-attach"), false, "an attach alone does not ask for a token");
+
+  await realmWrite(host).execute("call-1", { path: "notes.txt", content: "hello" });
+  const methods = seen.map((request) => request.method).filter((method) => method === "capability-attach" || method === "tool");
+  assert.deepEqual(methods, ["capability-attach", "tool"]);
+  const attach = seen.find((request) => request.method === "capability-attach");
+  assert.deepEqual(attach?.params, { selection: { workspaceRoot: root, sessionId: sessionIdOfWorkspace(root) }, host: "omp" });
 });

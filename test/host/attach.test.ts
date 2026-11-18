@@ -7,9 +7,10 @@ import { makeRealmError, RealmError, type ErrorCode } from "../../src/core/error
 import type { StateSnapshot } from "../../src/core/state-machine.js";
 import { displayStatus } from "../../src/core/status.js";
 import type { ControlSelection } from "../../src/daemon/channel.js";
-import type { DaemonClient, DaemonStatus } from "../../src/daemon/client.js";
+import type { ConnectDaemonOptions, DaemonClient, DaemonStatus } from "../../src/daemon/client.js";
 import { daemonLogPath } from "../../src/daemon/ensure.js";
 import { createDaemonAttach, type RefusalRetention } from "../../src/host/attach.js";
+import type { HostId } from "../../src/host/types.js";
 import { sessionIdOfWorkspace } from "../../src/session/paths.js";
 import type { ToolOutcome } from "../../src/tools/dispatch.js";
 
@@ -58,11 +59,13 @@ interface Rig {
   readonly root: string;
   readonly spawns: { count: number };
   readonly selections: ControlSelection[];
+  // The third argument of every connect call, in order (undefined when the call passed two arguments).
+  readonly thirdArguments: (ConnectDaemonOptions | undefined)[];
   readonly events: string[];
   readonly diagnostics: string[];
   // Queues the clients connect() hands out, in order. A drained queue hands out absent probes.
   readonly queue: Stub[];
-  attach: (retention: RefusalRetention, extra?: { onUp?: (status: DaemonStatus) => void; upBoundMs?: number; pollMs?: number }) => (root: string) => Promise<{ client: DaemonClient; refusal: RealmError | null }>;
+  attach: (retention: RefusalRetention, extra?: { onUp?: (status: DaemonStatus) => void; upBoundMs?: number; pollMs?: number; host?: HostId }) => (root: string) => Promise<{ client: DaemonClient; refusal: RealmError | null }>;
 }
 
 function rig(t: TestContext): Rig {
@@ -73,11 +76,13 @@ function rig(t: TestContext): Rig {
   const root = realpathSync(dir);
   const spawns = { count: 0 };
   const selections: ControlSelection[] = [];
+  const thirdArguments: (ConnectDaemonOptions | undefined)[] = [];
   const events: string[] = [];
   const diagnostics: string[] = [];
   const queue: Stub[] = [];
-  const connect = (_socketPath: string, selection: ControlSelection): DaemonClient => {
+  const connect = (_socketPath: string, selection: ControlSelection, options?: ConnectDaemonOptions): DaemonClient => {
     selections.push(selection);
+    thirdArguments.push(options);
     events.push("connect");
     return queue.shift() ?? absent();
   };
@@ -86,6 +91,7 @@ function rig(t: TestContext): Rig {
     root,
     spawns,
     selections,
+    thirdArguments,
     events,
     diagnostics,
     queue,
@@ -94,6 +100,7 @@ function rig(t: TestContext): Rig {
         socketPath: join(dir, "control.sock"),
         stateDir: dir,
         connect,
+        ...(extra.host === undefined ? {} : { host: extra.host }),
         spawnDaemon: () => {
           spawns.count += 1;
           events.push("spawn");
@@ -287,4 +294,35 @@ void test("a root that does not resolve is refused before any probe", async (t) 
     (error: unknown) => error instanceof RealmError && error.code === "POLICY_DENIED",
   );
   assert.deepEqual(r.events, []);
+});
+
+void test("CAPT-06: the host reaches connect as the third argument of the client that runs up, and never of the status probe", async (t) => {
+  const r = rig(t);
+  const client = new Stub(() => Promise.resolve(statusFor(r.root)), () => Promise.resolve(statusFor(r.root)));
+  r.queue.push(answering(r.root), client);
+  const result = await r.attach("verified", { host: "cursor" })(r.root);
+  assert.equal(result.client, client);
+  assert.deepEqual(r.thirdArguments, [undefined, { host: "cursor" }], "the probe client has no host, the serving client has one");
+});
+
+void test("CAPT-06: with no host connect is called with two arguments, and a two-argument fake still works", async (t) => {
+  const r = rig(t);
+  r.queue.push(answering(r.root), new Stub(() => Promise.resolve(statusFor(r.root)), () => Promise.resolve(statusFor(r.root))));
+  const result = await r.attach("verified")(r.root);
+  assert.equal(result.refusal, null);
+  assert.deepEqual(r.thirdArguments, [undefined, undefined]);
+  const twoArguments: (socketPath: string, selection: ControlSelection) => DaemonClient = () => answering(r.root);
+  const attach = createDaemonAttach({
+    socketPath: join(r.dir, "control.sock"),
+    stateDir: r.dir,
+    connect: twoArguments,
+    host: "claude",
+    spawnDaemon: () => undefined,
+    diagnostics: { write: () => undefined },
+    upBoundMs: 2_000,
+    pollMs: 2,
+    refusalRetention: "always",
+  });
+  const refused = await attach(r.root);
+  assert.equal(refused.refusal?.code, "REALM_NOT_ACTIVE", "the two-argument fake compiled and ran: its up refuses");
 });

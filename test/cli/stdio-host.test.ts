@@ -155,6 +155,29 @@ void test("--host claude: a marker with the six keys exists after settle and is 
   assert.deepEqual(reportsOf(unlabelled.sent).map((report) => report.hostId), ["unlabelled", "unlabelled"]);
 });
 
+// ---- (c2) the capability host (CAPT-06) --------------------------------------------------------------------------------------
+
+void test("CAPT-06: realm mcp and realm acp attach as their --host id, and an unlabelled session passes no host", async () => {
+  const labelled = start({ argv: ["mcp", "--host", "claude", "--workspace", WORKSPACE] });
+  labelled.input.write(listTools(1));
+  await untilReply(labelled, 1);
+  assert.deepEqual(adopted(labelled.world).map((client) => client.options), [{ host: "claude" }]);
+  assert.equal((await finish(labelled)).exitCode, 0);
+
+  const acp = start({ argv: ["acp", "--host", "kimi", "--workspace", WORKSPACE] });
+  acp.input.write(frame(1, "initialize", { protocolVersion: 1 }));
+  acp.input.write(frame(2, "_realm/tool", { tool: { status: {} } }));
+  await untilReply(acp, 2);
+  assert.deepEqual(adopted(acp.world).map((client) => client.options), [{ host: "kimi" }]);
+  await finish(acp);
+
+  const unlabelled = start({ argv: ["mcp", "--workspace", WORKSPACE] });
+  unlabelled.input.write(listTools(1));
+  await untilReply(unlabelled, 1);
+  assert.deepEqual(adopted(unlabelled.world).map((client) => client.options), [undefined], "no host is passed, not the unlabelled placeholder");
+  assert.equal((await finish(unlabelled)).exitCode, 0);
+});
+
 // ---- (d) the reports ---------------------------------------------------------------------------------------------------------
 
 void test("reports: attached then closed, one boot id, parseable; a rejecting send changes no exit code and writes nothing at default level", async () => {

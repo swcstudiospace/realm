@@ -17,15 +17,20 @@
 
 import { makeRealmError, RealmError } from "../core/errors.js";
 import type { ControlSelection } from "../daemon/channel.js";
-import { selectionOf, type DaemonClient, type DaemonStatus } from "../daemon/client.js";
+import { selectionOf, type ConnectDaemonOptions, type DaemonClient, type DaemonStatus } from "../daemon/client.js";
 import { daemonAnswers, ensureDaemon, reportingStartFailure } from "../daemon/ensure.js";
+import type { HostId } from "./types.js";
 
 export type RefusalRetention = "verified" | "always" | "never";
 
 export interface DaemonAttachOptions {
   readonly socketPath: string;
   readonly stateDir: string;
-  readonly connect: (socketPath: string, selection: ControlSelection) => DaemonClient;
+  // The third argument is passed only when a host is set (CAPT-06), so a two-argument connect still fits.
+  readonly connect: (socketPath: string, selection: ControlSelection, options?: ConnectDaemonOptions) => DaemonClient;
+  // The host id the client attaches its capability token as. Absent for a host that has no label (an unlabelled stdio
+  // session): its client never attaches and sends no token.
+  readonly host?: HostId;
   // Starts the daemon detached. Called at most once per attach, and only when the socket is absent.
   readonly spawnDaemon: () => void;
   readonly diagnostics: { write(text: string): void };
@@ -88,7 +93,10 @@ export function createDaemonAttach(options: DaemonAttachOptions): (workspaceRoot
       timeoutMs: options.upBoundMs,
       pollMs: options.pollMs,
     });
-    const client = options.connect(options.socketPath, selection);
+    const client =
+      options.host === undefined
+        ? options.connect(options.socketPath, selection)
+        : options.connect(options.socketPath, selection, { host: options.host });
     let status: DaemonStatus;
     try {
       status = await client.up();

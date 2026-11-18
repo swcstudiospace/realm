@@ -52,6 +52,11 @@ export interface AuditEntryInput {
   // Optional join key for the attached session (O-g). The correlation id of the `up` that admitted the call; additive, and
   // present only on the lines of a call made over that session.
   readonly upId?: string;
+  // Optional verified attribution of a call made with a capability token (CAPT-07, D-32-10): the host id the token names and
+  // the id of the key that signed it. Both are written only when present, so a line of a call made without a token is the
+  // pre-token shape. Both are validated here, so a caller cannot write a value the verifier of the chain would not expect.
+  readonly host?: string;
+  readonly kid?: string;
 }
 
 export function summarizeExec(exec: ExecShape): ExecSummary {
@@ -74,6 +79,9 @@ export function summarizeExec(exec: ExecShape): ExecSummary {
 // SCHEMA_INVALID and nothing is written.
 const SAFE_SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 const CORRELATION_ID = /^[A-Za-z0-9_-]{1,64}$/;
+// The host id and key id of a capability principal (src/capability/token.ts holds the same two shapes).
+const AUDIT_HOST = /^[a-z][a-z0-9-]{0,31}$/;
+const AUDIT_KID = /^[a-z0-9]{1,16}$/;
 
 export function appendAudit(stateDir: string, input: AuditEntryInput): void {
   if (!SAFE_SESSION_ID.test(input.sessionId)) {
@@ -81,11 +89,19 @@ export function appendAudit(stateDir: string, input: AuditEntryInput): void {
   }
   const correlationId = durableCorrelationId(input.correlationId);
   const upId = durableCorrelationId(input.upId);
+  if (
+    (input.host !== undefined && !AUDIT_HOST.test(input.host)) ||
+    (input.kid !== undefined && !AUDIT_KID.test(input.kid))
+  ) {
+    throw makeRealmError("SCHEMA_INVALID");
+  }
   const redacted = redactValue({
     at: new Date().toISOString(),
     sessionId: input.sessionId,
     correlationId,
     ...(upId === undefined ? {} : { upId }),
+    ...(input.host === undefined ? {} : { host: input.host }),
+    ...(input.kid === undefined ? {} : { kid: input.kid }),
     tool: input.tool,
     outcome: input.outcome,
     phase: input.phase,
