@@ -4,6 +4,19 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.4.9] - 2026-11-18
+
+### Fixed
+- fix(test): the production tier accepts the modern handshake (server/discover); record the 2026-11-18 live results (#148) (efa7847)
+
+## [0.4.8] - 2026-11-18
+
+### Added
+- feat(capability): token core, keyring, policy key and redaction (32-01) (#145) (c1d1b8f)
+
+### Fixed
+- fix(test): host PATH puts the production podman first; warm-up uses the production PATH (#147) (e709d03)
+
 ## [0.4.7] - 2026-11-18
 
 ### Fixed

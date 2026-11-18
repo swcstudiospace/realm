@@ -3,7 +3,7 @@
 // Thirteen hosts are in the table. Four have a gated live file of their own: claude, codex, opencode and kimi. Each file has a validator
 // tier (the host's own commands parse, and for three hosts launch, what the real recipe wrote into an isolated home) and, for claude,
 // codex and opencode, a production tier. The production tier of claude and opencode is the host's own health check (`<host> mcp list`),
-// which performs a real MCP initialize against `realm mcp --host <id>` on the production stack. The production tier of codex is a session
+// which performs a real MCP handshake (initialize or server/discover) against `realm mcp --host <id>` on the production stack. The production tier of codex is a session
 // drive (`codex exec` against a refusing loopback provider, no credential; 31-CONTEXT D-31-02) that makes Codex launch the registered
 // server and list its tools. In every production run the registered `realm` is a wire recorder (test/support/host-live-session.ts) that
 // logs method names and tool names. The nine wave-2 hosts (qwen, pi, hermes, cursor, kilo, copilot, augment, codebuddy, cline) share one
@@ -892,7 +892,7 @@ function presenceEntries(stateDir: string, host: string): string[] {
 }
 
 // The production-tier scenario of claude, codex and opencode. The default drive is the real host's own health check (`<host> mcp list`):
-// it performs a real MCP initialize against `realm mcp --host <id>` on the production stack. The session drive (codex) runs the host as a
+// it performs a real MCP handshake (initialize or server/discover) against `realm mcp --host <id>` on the production stack. The session drive (codex) runs the host as a
 // session against a refusing loopback provider and ends it once the daemon shows the boot and the recorder shows the tool listing. The
 // registered `realm` is a wire recorder: it forwards the stream to the real CLI and logs method names and tool names. The gate has
 // already passed. The host's configuration home is isolated (CLAUDE_CONFIG_DIR, CODEX_HOME, or the scenario's own XDG_CONFIG_HOME for
@@ -1077,7 +1077,12 @@ export async function runHostProduction(t: TestContext, options: HostProductionO
 
   const summary = wireSummary(readWireLog(wireLog));
   t.diagnostic(`${host} wire: ${wireText()}; the host command took ${String(elapsedMs)} ms`);
-  assert.ok(summary.hostMethods.includes("initialize"), `the host must have sent initialize to realm mcp: ${wireText()}`);
+  // The handshake differs by MCP era: a legacy-era host sends `initialize`, a modern-era host (claude 2.1.322, observed 2026-11-18) sends
+  // `server/discover` and no initialize. Either is the host's own connect; tools/list and the six tools are still required below.
+  assert.ok(
+    summary.hostMethods.includes("initialize") || summary.hostMethods.includes("server/discover"),
+    `the host must have sent initialize or server/discover to realm mcp; methods seen: [${summary.hostMethods.join(", ")}]; ${wireText()}`,
+  );
   if (host !== "opencode") {
     // OpenCode is recorded only: no OpenCode run has been observed yet (31-CONTEXT D-31-03).
     assert.equal(summary.answered, true, `the host must have listed the Realm tools through the recorder: ${wireText()}`);
