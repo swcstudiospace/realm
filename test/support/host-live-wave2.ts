@@ -10,7 +10,7 @@ import { isRecord } from "./omp-live.js";
 import type { HostRig, LiveHostId } from "./host-live.js";
 import { HOST_RUNTIMES } from "../../src/host/runtimes.js";
 
-export type Wave2LiveId = Exclude<LiveHostId, "claude" | "codex" | "opencode" | "kimi">;
+export type Wave2LiveId = Exclude<LiveHostId, "claude" | "codex" | "opencode" | "kimi" | "kimi-code">;
 export const WAVE2_LIVE_IDS: readonly Wave2LiveId[] = Object.freeze(["qwen", "pi", "hermes", "cursor", "kilo", "copilot", "augment", "codebuddy", "cline"] as const);
 
 // One of the host's own commands, run in the isolated environment after Realm's install.
