@@ -67,8 +67,15 @@ entry value-identical. The validator tier is the wave 2 entry `prime-agent` of `
 (gate `REALM_LIVE_PRIME_AGENT=1`, executable override `REALM_PRIME_AGENT_BIN`): `realm host install prime-agent` in an isolated
 agent directory (`PRIME_AGENT_CODING_AGENT_DIR`), then `prime-agent mcp list` and `prime-agent mcp get realm` (each prints the name
 and the transport only, so the registered label is proven by the bytes the test reads back), then `prime-agent mcp add` of a
-second server and `realm host uninstall prime-agent`. The dated result is recorded in the registry
-(`test/support/host-registry.ts`) when the run has been made.
+second server and `realm host uninstall prime-agent`. Validator tier, run on 2026-11-18 (Phase 40)
+with Prime Agent 0.10.2, as root with isolated homes and a stub `realm` (no production stack):
+`REALM_LIVE_PRIME_AGENT=1 node --test dist/test/integration/host-live-wave2.test.js` (the other wave 2 hosts stay skipped), the
+`prime-agent` scenario passed. Shown: the dry run named `settings.json` and wrote nothing; the install wrote the entry and
+`realm host status` said installed with the launch resolved on `PATH`; `prime-agent mcp list` and `prime-agent mcp get realm`
+exited 0, printed `realm: stdio` and started nothing; the host's own `prime-agent mcp add` of a second server left Realm's entry
+value-identical (status installed, entry `ok`); uninstall removed only Realm's entry; the operator's real settings file was
+byte-equal before and after. The result covers Prime Agent 0.10.2 on one machine only and is recorded in
+`test/support/host-registry.ts`.
 
 Not shown: a Prime Agent boot against the production stack, and a model-driven tool call. No production tier is defined for
 this host (`GAP-40-01` in `docs/integration/host-plugin-gaps.md`).

@@ -84,8 +84,17 @@ carries is listed and started with the `claude` label, and when both files carry
 The validator tier is the wave 2 entry `grok-build` of `test/integration/host-live-wave2.test.ts` (gate `REALM_LIVE_GROK_BUILD=1`,
 executable override `REALM_GROK_BUILD_BIN`): `realm host install grok-build` in an isolated home, then `grok mcp list`, then
 `grok mcp doctor` (starts the labelled entry; the stub does not speak MCP, so the host exits 1 after printing its row), then
-`grok mcp add` of a second server and `realm host uninstall grok-build`. The dated result is recorded in the registry
-(`test/support/host-registry.ts`) when the run has been made.
+`grok mcp add` of a second server and `realm host uninstall grok-build`. Validator tier, run on 2026-11-18 (Phase 40)
+with Grok Build 1.0.77, as root with isolated homes and a stub `realm` (no production stack):
+`REALM_LIVE_GROK_BUILD=1 node --test dist/test/integration/host-live-wave2.test.js` (the other wave 2 hosts stay skipped), the
+`grok-build` scenario passed. Shown: the dry run named `config.toml` and wrote nothing; the install wrote the owned table and
+`realm host status` said installed; `grok mcp list` printed the registered command with the host flag and started nothing;
+`grok mcp doctor` started the entry (the stub recorded exactly `mcp --host grok-build`; the stub does not speak MCP, so the host
+exited 1 after printing its row, which the scenario accepts); the host's own `grok mcp add` of a second server left the Realm
+table byte-identical (status installed, entry `ok`); uninstall removed only the Realm table; the operator's real `config.toml`
+was byte-equal before and after. The result covers Grok Build 1.0.77 on one machine only and is recorded in
+`test/support/host-registry.ts`. The three-source observation (`config.toml`, `~/.claude.json`, `.mcp.json`) is not part of
+this run: it was made by hand in isolated homes with `grok mcp doctor --json` on the same date (40-CONTEXT E-40-09).
 
 Not shown: a Grok Build boot against the production stack, and a model-driven tool call. No production tier is defined for this
 host.
