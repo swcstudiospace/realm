@@ -200,10 +200,10 @@ All v3.0 requirements are hypotheses until shipped and verified.
 - [x] **COLD-02**: Until the session is ready, the realm is reported as not active (the existing status vocabulary) and every tool call is refused with the existing not-active refusal (fail closed); once ready, tools work on the same connection with no reconnect
 - [x] **COLD-03**: The warm path does not regress (a warm attach answers as before) and the status and audit contracts are unchanged; tests assert the not-active window, the transition to ready and the refusal of calls in between
 - [x] **COLD-04**: The claude, opencode and codex production tiers pass on the live stack from a cold start, with the warm-up (`realm up --workspace` first) removed from the test harness (`test/support/host-live.ts`); `GAP-31-04` is closed in `docs/integration/host-plugin-gaps.md` with the evidence
-- [ ] **ENF-01**: The default of `capabilityTokens.mode` is `enforce`; the schema (`src/core/policy.schema.json`), the defaults, `docs/policy-reference.md`, the README and the tests change together, and a policy file with no `capabilityTokens` key loads as enforce
-- [ ] **ENF-02**: Every client shipped in the repository (the stdio hosts, Omp, ACP and `realm mcp`) attaches and works under enforce with no policy edit; a test per client class proves it
-- [ ] **ENF-03**: The migration path is documented and visible: `"mode": "off"` opts out, `realm doctor` says what to do when a stale or unlabelled client is refused, and the refusal message names the cause and the fix
-- [ ] **ENF-04**: The default flip is a recorded breaking change: its commits carry `!` in the subject so the release notes list them, and the release note text and the migration notes are in the docs
+- [x] **ENF-01**: The default of `capabilityTokens.mode` is `enforce`; the schema (`src/core/policy.schema.json`), the defaults, `docs/policy-reference.md`, the README and the tests change together, and a policy file with no `capabilityTokens` key loads as enforce
+- [x] **ENF-02**: Every client shipped in the repository (the stdio hosts, Omp, ACP and `realm mcp`) attaches and works under enforce with no policy edit; a test per client class proves it
+- [x] **ENF-03**: The migration path is documented and visible: `"mode": "off"` opts out, `realm doctor` says what to do when a stale or unlabelled client is refused, and the refusal message names the cause and the fix
+- [x] **ENF-04**: The default flip is a recorded breaking change: its commits carry `!` in the subject so the release notes list them, and the release note text and the migration notes are in the docs
 
 - [ ] **EVID-01**: The capability token tests run end to end as a non-root user on a host with `ptrace_scope` 1, and the result is recorded (the Phase 32 runs were as root)
 - [ ] **EVID-02**: The `/proc/PID/mem` probe runs as a non-root, non-descendant, same-uid process and its result is recorded either way, settling or leaving open the memory-read claim of the Phase 32 limits
@@ -400,10 +400,10 @@ Each v3.0 requirement maps to exactly one phase. The carried requirements keep t
 | COLD-02 | Phase 33 | Complete |
 | COLD-03 | Phase 33 | Complete |
 | COLD-04 | Phase 33 | Complete |
-| ENF-01 | Phase 34 | Planned |
-| ENF-02 | Phase 34 | Planned |
-| ENF-03 | Phase 34 | Planned |
-| ENF-04 | Phase 34 | Planned |
+| ENF-01 | Phase 34 | Complete |
+| ENF-02 | Phase 34 | Complete |
+| ENF-03 | Phase 34 | Complete |
+| ENF-04 | Phase 34 | Complete (partial: PR 168 squash title lacks the ! marker; the flip commit with ! is in the changelog) |
 | EVID-01 | Phase 35 | Planned |
 | EVID-02 | Phase 35 | Planned |
 | EVID-03 | Phase 35 | Planned |

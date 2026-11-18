@@ -219,7 +219,7 @@ Plans:
 **Milestone Goal:** `realm mcp` connects on a cold start, capability tokens are enforced by default with a migration path, the token claims have live and non-root evidence, the v1.0 live items this host can run are re-verified, and the product spec no longer describes the Anda bridge.
 
 - [x] **Phase 33: Cold attach** - `realm mcp` answers the MCP handshake (`initialize`, `server/discover`, `tools/list`) before `ensure` and `up` complete and reports the realm as not active until the session is ready, so hosts with a 30 s connect timeout connect on a cold start; tool calls fail closed until ready; closes GAP-31-04 and re-proves claude, opencode and codex cold. (completed 2026-11-18)
-- [ ] **Phase 34: Capability tokens enforce by default** - `capabilityTokens.mode` defaults to `enforce` (a breaking change: stale or unlabelled clients are refused), with a documented opt-out, doctor guidance, a clear refusal message, every in-repo client attaching, and docs and tests updated.
+- [x] **Phase 34: Capability tokens enforce by default** - `capabilityTokens.mode` defaults to `enforce` (a breaking change: stale or unlabelled clients are refused), with a documented opt-out, doctor guidance, a clear refusal message, every in-repo client attaching, and docs and tests updated. (completed 2026-11-18)
 - [ ] **Phase 35: Capability token evidence** - A non-root end-to-end run of the token tests on a `ptrace_scope` 1 host, the `/proc/PID/mem` probe run as a non-root non-descendant same-uid process with the result recorded, and a live enforce proof on the production stack with claude via the daemon, audit lines carrying host and kid.
 - [x] **Phase 36: Live re-verification of the v1.0 open items** - The v1.0 live items this host can do (doctor and control-socket live modes, two reaper live checks, Muse Code and Hermes loading, Omp responsiveness) are re-verified with dated evidence or carried with a named reason; the Anda live handshake and licence items are closed as dropped by D-27-01. (completed 2026-11-18)
 - [x] **Phase 37: Spec update** - `docs/specs/realm-spec.xml` no longer describes the Anda bridge and no longer requires `andaUrl` or the degraded state, as an owner-directed edit of 2026-11-18 recorded in the pull request; all other spec content is kept. (completed 2026-11-18)
@@ -629,7 +629,7 @@ Milestone v3.0 phases (12 to 20) run in three parallel lanes that share no mutab
 | 31. Production-stack boot rehearsals for wave 1 hosts | 2/2 | Complete    | 2026-11-18 |
 | 32. Capability tokens for stdio hosts | 3/3 | Complete    | 2026-11-18 |
 | 33. Cold attach | 3/3 | Complete    | 2026-11-18 |
-| 34. Capability tokens enforce by default | 0/0 | Not started | - |
+| 34. Capability tokens enforce by default | 3/3 | Complete    | 2026-11-18 |
 | 35. Capability token evidence | 0/0 | Not started | - |
 | 36. Live re-verification of the v1.0 open items | 3/3 | Complete    | 2026-11-18 |
 | 37. Spec update | 1/1 | Complete    | 2026-11-18 |
@@ -806,12 +806,12 @@ Plans:
   3. A stale or unlabelled client is refused with a message that names the cause and the fix; `"mode": "off"` restores the old behaviour; `realm doctor` shows the guidance.
   4. The change ships under commits whose subjects carry `!`, and the migration notes and release note text are in the docs.
 
-**Plans:** 3 plans
+**Plans:** 3/3 plans complete
 
 Plans:
-- [ ] 34-01-PLAN.md: Make every test that is not about capability tokens independent of the default of capabilityTokens.mode, while the defau (wave 1)
-- [ ] 34-02-PLAN.md: Flip the default of capabilityTokens.mode to enforce, with the schema, the one shared default, the eager keyring, the do (wave 2)
-- [ ] 34-03-PLAN.md: Prove that every client the repository ships works under the new default, explain the refusal of the ones that do not, l (wave 3)
+- [x] 34-01-PLAN.md: Make every test that is not about capability tokens independent of the default of capabilityTokens.mode, while the defau (wave 1)
+- [x] 34-02-PLAN.md: Flip the default of capabilityTokens.mode to enforce, with the schema, the one shared default, the eager keyring, the do (wave 2)
+- [x] 34-03-PLAN.md: Prove that every client the repository ships works under the new default, explain the refusal of the ones that do not, l (wave 3)
 
 ### Phase 35: Capability token evidence
 
