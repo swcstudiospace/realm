@@ -412,6 +412,41 @@ function validateKeyPath(keyPath: readonly string[]): void {
   }
 }
 
+const MAX_SEED_MEMBERS = 8;
+const MAX_REFUSE_KEYS = 4;
+
+// A bad recipe fails the same way on install and uninstall. No input is echoed.
+function validateJsonMembers(recipe: Extract<InstallRecipe, { kind: "json-merge" }>): void {
+  const first = recipe.keyPath[0];
+  const seedKeys: string[] = [];
+  if (recipe.seed !== undefined) {
+    if (!isPlainObject(recipe.seed)) {
+      invalid();
+    }
+    seedKeys.push(...Object.keys(recipe.seed));
+    if (seedKeys.length < 1 || seedKeys.length > MAX_SEED_MEMBERS) {
+      invalid();
+    }
+    for (const key of seedKeys) {
+      if (!isSafeKeySegment(key) || key === first) {
+        invalid();
+      }
+      canonicalJson(recipe.seed[key]);
+    }
+  }
+  if (recipe.refuseIfPresent !== undefined) {
+    const keys = recipe.refuseIfPresent;
+    if (keys.length < 1 || keys.length > MAX_REFUSE_KEYS || new Set(keys).size !== keys.length) {
+      invalid();
+    }
+    for (const key of keys) {
+      if (!isSafeKeySegment(key) || key === first || seedKeys.includes(key)) {
+        invalid();
+      }
+    }
+  }
+}
+
 interface PathLookup {
   readonly found: boolean;
   readonly value: unknown;
@@ -431,11 +466,16 @@ function lookup(doc: Record<string, unknown>, keyPath: readonly string[]): PathL
 function planJsonInstall(recipe: Extract<InstallRecipe, { kind: "json-merge" }>, state: PlanState): RecipePlan {
   const file = requireRelPath(recipe.file);
   validateKeyPath(recipe.keyPath);
+  validateJsonMembers(recipe);
   const desired = canonicalJson(recipe.value);
   const desiredHash = sha256Text(desired);
   const current = currentOf(state, file);
   const prior = priorEntry(state, "json-merge", file);
-  const doc: Record<string, unknown> = current === null ? {} : parseJsonObject(current);
+  const parsedDoc: Record<string, unknown> = current === null ? {} : parseJsonObject(current);
+  if (recipe.refuseIfPresent?.some((key) => Object.hasOwn(parsedDoc, key)) === true) {
+    return refuse("foreign-content");
+  }
+  const doc: Record<string, unknown> = current === null && recipe.seed !== undefined ? structuredClone(recipe.seed) : parsedDoc;
   const format = current === null ? DEFAULT_JSON_FORMAT : detectJsonFormat(current);
 
   // Walk to the parent of the key, creating missing parents.
@@ -497,6 +537,7 @@ function planJsonInstall(recipe: Extract<InstallRecipe, { kind: "json-merge" }>,
 
 function planJsonUninstall(recipe: Extract<InstallRecipe, { kind: "json-merge" }>, state: PlanState): RecipePlan {
   validateKeyPath(recipe.keyPath);
+  validateJsonMembers(recipe);
   const entry = state.receipt.find((candidate) => candidate.kind === "json-merge");
   if (entry === undefined) {
     return { changes: [], entries: [] };
@@ -525,12 +566,21 @@ function planJsonUninstall(recipe: Extract<InstallRecipe, { kind: "json-merge" }
       removeKey(doc, parent);
     }
   }
-  if (entry.createdFile === true && Object.keys(doc).length === 0) {
+  if (entry.createdFile === true && (Object.keys(doc).length === 0 || holdsOnlySeed(doc, recipe.seed))) {
     const removed = new Set([file]);
     return { changes: [removeFileChange(file, current), ...dirCleanup([entry], removed, state)], entries: [] };
   }
   const after = serializeJson(doc, detectJsonFormat(current));
   return { changes: [writeChange(file, current, after), ...dirCleanup([entry], new Set(), state)], entries: [] };
+}
+
+// True when the document holds exactly the seed members, each with its seeded value.
+function holdsOnlySeed(doc: Record<string, unknown>, seed: Readonly<Record<string, unknown>> | undefined): boolean {
+  if (seed === undefined) {
+    return false;
+  }
+  const keys = Object.keys(seed);
+  return Object.keys(doc).length === keys.length && keys.every((key) => Object.hasOwn(doc, key) && canonicalJson(doc[key]) === canonicalJson(seed[key]));
 }
 
 function removeKey(doc: Record<string, unknown>, keyPath: readonly string[]): void {
