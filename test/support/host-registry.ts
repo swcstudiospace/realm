@@ -89,7 +89,7 @@ export const HOST_REGISTRY: Readonly<Record<HostId, RegistryRecord>> = Object.fr
     snippet: "claude-code.md",
     live: "claude",
     t2: { date: "2026-11-17", version: "2.1.322", result: "3 of 3 passed, run twice", command: "claude mcp get, claude mcp list" },
-    t3: { status: "rehearsed", note: "Claude Code 2.1.322, 2026-11-18, production stack (realmlive account, Podman 5.7.1, warm session, GAP-31-04): claude mcp list connected through server/discover then tools/list, the six Realm tools on the wire, realm status active, clean before and after; the validator tier passed 3 of 3 the same day; evidence kept outside the repository" },
+    t3: { status: "rehearsed", note: "Claude Code 2.1.322, 2026-11-18, production stack (realmlive account, Podman 5.7.1), cold attach with no warm-up and a new project directory (GAP-31-04, GAP-23-02 closed): claude mcp list connected and returned after 2438 ms against the 25000 ms bound, the wire shows server/discover then tools/list and the six Realm tools, the host left before the realm was ready by design, clean before and after (0 containers, 0 sandboxes, empty workspace); the direct cold attach probe passed on the same stack (handshake answered while realm status was not active, calls in the window refused REALM_NOT_ACTIVE with retryable true, the same process served a call after ready); the validator tier passed 3 of 3 the same day; evidence kept outside the repository" },
     deferral: null,
   }),
   // Source: contract page, Phase 24 table: T2 ran live 2026-11-18 with a scratch install of 1.19.5 (3 of 3 passed). T3: the production tier ran live 2026-11-18 (Phase 31 window 7).
@@ -100,7 +100,7 @@ export const HOST_REGISTRY: Readonly<Record<HostId, RegistryRecord>> = Object.fr
     snippet: "opencode.md",
     live: "opencode",
     t2: { date: "2026-11-18", version: "1.19.5", result: "3 of 3 passed (scratch install outside the repository, owner approved)", command: "opencode mcp list" },
-    t3: { status: "rehearsed", note: "opencode 1.19.5, 2026-11-18, production stack (realmlive account, Podman 5.7.1, warm session, GAP-31-04): opencode mcp list reported realm connected, wire recorded and tools not asserted, clean before and after; evidence kept outside the repository" },
+    t3: { status: "rehearsed", note: "opencode 1.19.5, 2026-11-18, production stack (realmlive account, Podman 5.7.1), cold attach with no warm-up and a new project directory (GAP-31-04, GAP-23-02 closed): opencode mcp list reported realm connected and returned after 2155 ms against the 25000 ms bound, the wire shows initialize, notifications/initialized and tools/list and the six Realm tools, the host left before the realm was ready by design, clean before and after (0 containers, 0 sandboxes, empty workspace); the validator tier passed 3 of 3 the same day; evidence kept outside the repository" },
     deferral: null,
   }),
   // Source: contract page, Phase 25 table (T2: kilo mcp list, no result recorded) and OQ-25-09.
@@ -119,7 +119,7 @@ export const HOST_REGISTRY: Readonly<Record<HostId, RegistryRecord>> = Object.fr
       result: "5 passed, 0 failed, 2 skipped (production tiers), after the header-owned recipe",
       command: "codex mcp get, codex mcp list (parse only)",
     },
-    t3: { status: "rehearsed", note: "codex-cli 0.154.0, 2026-11-18, production stack (realmlive account, Podman 5.7.1, warm session, GAP-31-04): the production tier passed after the exit-race fix, codex exec against a refusing loopback provider launched realm mcp --host codex and listed the six Realm tools, the validator tier (2) and the validator session tests (2) passed the same day, clean before and after, no model turn and no tool call; the validator session result of 2026-11-17 (2 of 2) stands; evidence kept outside the repository" },
+    t3: { status: "rehearsed", note: "codex-cli 0.154.0, 2026-11-18, production stack (realmlive account, Podman 5.7.1), cold attach with no warm-up and a new project directory (GAP-31-04, GAP-23-02 closed): the production tier passed, the codex exec host command ended after 896 ms (the session drive; the connect bound is 25000 ms), launched realm mcp --host codex against a refusing loopback provider and showed initialize, notifications/initialized and tools/list and the six Realm tools on the wire, the host left before the realm was ready by design, clean before and after, no model turn and no tool call; the validator tier (2) and the validator session tests (2) passed the same day; the validator session result of 2026-11-17 (2 of 2) stands; evidence kept outside the repository" },
     deferral: null,
   }),
   // Source: contract page, Phase 25 table (T2: copilot mcp get realm and list, parse only, no result recorded) and OQ-25-09.
