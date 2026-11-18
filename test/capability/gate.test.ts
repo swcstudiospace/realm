@@ -243,7 +243,7 @@ void test("D34-1: a keyring that cannot be created is logged at error level with
   const unavailable = r.logs().filter((line) => line["event"] === "capability.keyring_unavailable");
   assert.equal(unavailable.length, 1);
   assert.equal(unavailable[0]?.["level"], "error");
-  assert.deepEqual(Object.keys(unavailable[0] ?? {}).filter((key) => !["ts", "level", "event"].includes(key)), []);
+  assert.deepEqual(Object.keys(unavailable[0]).filter((key) => !["ts", "level", "event"].includes(key)), []);
   assert.equal(r.logs().some((line) => line["event"] === "capability.keyring_ready"), false);
   deniedWith(() => r.gate.attach({ sessionId: SESSION, host: "claude" }), "POLICY_DENIED");
   assert.deepEqual(r.gate.check({ tool: { status: {} }, token: "rcap1.a.b", sessionId: SESSION }), { ok: false, tool: "status" });
