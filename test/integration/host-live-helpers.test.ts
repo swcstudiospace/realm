@@ -4,12 +4,14 @@
 
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, sep } from "node:path";
 import { test, type TestContext } from "node:test";
+import { fileURLToPath } from "node:url";
 import {
   ANTIGRAVITY_GAP,
+  bootPhaseCountsOf,
   collectHostLiveGate,
   compareVersions,
   CONFIG_ONLY_GAP,
@@ -753,4 +755,35 @@ void test("V1LIVE-01 only the hermes record carries a version root, and the herm
     }
   }
   assert.deepEqual(explicit, { qwen: [], pi: [], cursor: [60_000], kilo: [], copilot: [], augment: [120_000], codebuddy: [120_000, 120_000], cline: [] });
+});
+
+void test("bootPhaseCountsOf sums the hostBoot rows of one host per phase and tolerates malformed metrics", () => {
+  const rows = [
+    { hostId: "claude", transport: "stdio", phase: "attached", count: 2 },
+    { hostId: "claude", transport: "stdio", phase: "attached", count: 1 },
+    { hostId: "claude", transport: "stdio", phase: "failed", code: "REALM_NOT_ACTIVE", count: 4 },
+    { hostId: "codex", transport: "stdio", phase: "refused", count: 9 },
+    { hostId: "claude", transport: "stdio", phase: "closed", count: "3" },
+    { hostId: "claude", transport: "stdio", count: 5 },
+    "not a row",
+    null,
+  ];
+  assert.deepEqual(bootPhaseCountsOf(JSON.stringify({ hostBoot: rows }), "claude"), { attached: 3, failed: 4 });
+  assert.deepEqual(bootPhaseCountsOf(JSON.stringify({ hostBoot: rows }), "codex"), { refused: 9 });
+  assert.deepEqual(bootPhaseCountsOf(JSON.stringify({ hostBoot: rows }), "opencode"), {});
+  assert.deepEqual(bootPhaseCountsOf(JSON.stringify({ timings: {} }), "claude"), {}, "a daemon without the hostBoot member yields no counts");
+  assert.deepEqual(bootPhaseCountsOf(JSON.stringify({ hostBoot: "nope" }), "claude"), {});
+  assert.deepEqual(bootPhaseCountsOf("not json", "claude"), {});
+  assert.deepEqual(bootPhaseCountsOf("[]", "claude"), {});
+});
+
+void test("the production body of host-live.ts never warms the session: no realm up, no up argument", () => {
+  const source = readFileSync(fileURLToPath(new URL("../../../test/support/host-live.ts", import.meta.url)), "utf8");
+  const start = source.indexOf("export async function runHostProduction(");
+  const end = source.indexOf("// ---- Helpers shared by the live files");
+  assert.ok(start > 0 && end > start, "the production body must be found between runHostProduction and the shared helpers marker");
+  const body = source.slice(start, end);
+  assert.equal(body.includes("realm up"), false, "the production tier attaches cold: the text realm up must not appear in its body");
+  assert.equal(body.includes('["up"'), false, "the production tier must not run an up command");
+  assert.equal(source.includes("WARM_UP_TIMEOUT_MS"), false, "the warm-up timeout constant is gone");
 });
