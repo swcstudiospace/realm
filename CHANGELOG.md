@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.4.13] - 2026-11-18
+
+### Added
+- feat(capability): realm host token status and rotate, doctor item, recipe guard, docs and decision record (32-03) (#153) (0910e14)
+
 ## [0.4.12] - 2026-11-18
 
 ### Documentation
