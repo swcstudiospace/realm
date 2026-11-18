@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.4.14] - 2026-11-18
+
+### Documentation
+- docs(phase-32): close phase 32, capability tokens for stdio hosts (#154) (56363c7)
+
 ## [0.4.13] - 2026-11-18
 
 ### Added
