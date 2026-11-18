@@ -17,7 +17,7 @@ Loading rules (`loadPolicyFile`, `src/core/policy.ts`):
 
 - The policy path is explicit and caller-supplied. A missing file (`ENOENT`)
   yields validated defaults via `validate("policy", {})` — `fail-closed` mode, no
-  roots, shell disabled. Any other read failure throws `POLICY_DENIED`
+  roots, shell disabled, capability tokens off. Any other read failure throws `POLICY_DENIED`
   (`readPolicyText`, `src/core/policy.ts`).
 - Every `workspaceRoots` entry must be absolute; otherwise
   `SchemaInvalidError("/workspaceRoots/<index> must be an absolute path")`
@@ -269,6 +269,74 @@ A policy that has no `mode` key, or no policy file at all, used to load as `advi
   fires, whichever comes first, clearing the timer and unsubscribing in
   either case (`waitLeavingConnecting`, `src/tools/dispatch.ts`, timer at `setTimeout(finish,
   toolQueueMs)`).
+
+## `capabilityTokens`
+
+- **Type:** `object` with the members `mode`, `ttlSeconds` and `profiles`, and no
+  other key (the `capabilityTokens` property of `src/core/policy.schema.json`;
+  `CapabilityTokenPolicy` and the optional `Policy.capabilityTokens` in
+  `src/contract/validate.ts`). A loaded policy always has it, because the schema
+  fills the default; the member is optional in the type only so that hand-built
+  `Policy` literals keep compiling, and `capabilityPolicyOf`
+  (`src/capability/admit.ts`) is the one reader that applies the default.
+  - `mode`: `"off" | "enforce"`.
+  - `ttlSeconds`: `integer`, minimum 60, maximum 86400.
+  - `profiles`: an object whose keys are host ids and whose values are arrays of
+    unique capability names. The host ids are exactly the 19 entries of
+    `HOST_IDS` (`src/host/types.ts`). The capability names are exactly the six of
+    the `mcp-config` ceiling (`integrationCeiling`, `src/host/capabilities.ts`):
+    `daemon.attach`, `fs.read`, `fs.write`, `fs.list`, `exec.argv` and
+    `exec.shell`. An unknown host id, an unknown capability (`net.egress` and
+    `credential.read` included), a duplicate or a non-array value fails with
+    `SCHEMA_INVALID`, and the failure names the pointer, never the value. A test
+    pins both lists to the host layer, so the schema, the token and the host
+    layer cannot drift.
+- **Default:** `{ "mode": "off", "ttlSeconds": 3600, "profiles": {} }` (the
+  `capabilityTokens` property of `src/core/policy.schema.json`). A policy file
+  with no `capabilityTokens` key, a missing policy file and an object with only
+  some members all load with the defaults of the members they leave out.
+- **Effect:** `off` changes nothing: no token is minted, none is checked, and
+  every existing install, test and script behaves as it did without the key.
+  `enforce` turns capability tokens on for every host and every session of the
+  daemon; the policy is one document per daemon, so there is no per-workspace
+  opt-in. A token names a session, a host and the capabilities that host's
+  profile grants, and it lives `ttlSeconds` seconds. A host with no entry in
+  `profiles` gets all six capabilities. A host whose entry is the empty array
+  gets a token that can only call `status`. The profile function is
+  `profileFor` (`src/capability/admit.ts`), and the mapping from a tool call to
+  the capability it needs is `requiredCapability` (same file):
+
+  | Tool call | Capability needed |
+  | --- | --- |
+  | `read` | `fs.read` |
+  | `list` | `fs.list` |
+  | `write` | `fs.write` |
+  | `exec`, argv form | `exec.argv` |
+  | `exec`, shell form (`shell` is `true`) | `exec.shell` |
+  | `retry` | `daemon.attach` |
+  | `status` | none (a valid token for the session is enough) |
+
+  A token never widens what the other policy keys grant. A call is admitted only
+  if the token grants its capability and then the dispatcher's own gates still
+  pass: a token that carries `exec.shell` under `shellEnabled: false` still gets
+  `SHELL_NOT_ALLOWED` for a shell-form `exec`, and a token without `fs.write` is
+  refused `write` under a policy that allows it.
+- **Enforced by:**
+  - The schema and `validate` (`src/contract/validate.ts`) for the shape, the
+    bounds and the defaults.
+  - Token minting and verification (`mintToken` and `verifyToken`,
+    `src/capability/token.ts`), key storage and rotation (`src/capability/keyring.ts`),
+    and the mapping and profile functions (`src/capability/admit.ts`).
+  - The daemon and client wiring that turns `enforce` into refusals lands with
+    the daemon change in the same phase (Phase 32). Until that change is
+    released, setting `mode` to `enforce` has no effect.
+- **What it does not do:** it is not an authentication of the host: the
+  daemon cannot tell the real host from a process that says it is that host, so
+  the token is a signed label that is verified on every call. It is no defence
+  against a process of the same user that can read the key file or obtain a
+  token. It does not identify a model or a prompt, and it does not protect the
+  sandbox, which never receives a token. It adds no error code: every token
+  refusal is `POLICY_DENIED`.
 
 ## What is not a policy key
 

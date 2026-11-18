@@ -108,6 +108,86 @@
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
+      "file": "src/capability/admit.ts",
+      "name": "capabilityPolicyOf",
+      "reason": "Phase 32 plan 32-01 seam: referenced only by tests until plan 32-02 wires it into the daemon gate; plan 32-02 removes this entry"
+    },
+    {
+      "file": "src/capability/admit.ts",
+      "name": "profileFor",
+      "reason": "Phase 32 plan 32-01 seam: referenced only by tests until plan 32-02 wires it into the daemon gate; plan 32-02 removes this entry"
+    },
+    {
+      "file": "src/capability/admit.ts",
+      "name": "requiredCapability",
+      "reason": "Phase 32 plan 32-01 seam: referenced only by tests until plan 32-02 wires it into the daemon gate; plan 32-02 removes this entry"
+    },
+    {
+      "file": "src/capability/keyring.ts",
+      "name": "KeyringOptions",
+      "reason": "Phase 32 plan 32-01 seam: referenced only by tests until plan 32-02 wires it into the daemon gate; plan 32-02 removes this entry"
+    },
+    {
+      "file": "src/capability/keyring.ts",
+      "name": "KeyringSnapshot",
+      "reason": "Phase 32 plan 32-01 seam: referenced only by tests until plan 32-02 wires it into the daemon gate; plan 32-02 removes this entry"
+    },
+    {
+      "file": "src/capability/keyring.ts",
+      "name": "ensureKeyring",
+      "reason": "Phase 32 plan 32-01 seam: referenced only by tests until plan 32-02 wires it into the daemon gate; plan 32-02 removes this entry"
+    },
+    {
+      "file": "src/capability/keyring.ts",
+      "name": "keyringIdentity",
+      "reason": "Phase 32 plan 32-01 seam: referenced only by tests until plan 32-02 wires it into the daemon gate; plan 32-02 removes this entry"
+    },
+    {
+      "file": "src/capability/keyring.ts",
+      "name": "keyringPathOf",
+      "reason": "Phase 32 plan 32-01 seam: referenced only by tests until plan 32-02 wires it into the daemon gate; plan 32-02 removes this entry"
+    },
+    {
+      "file": "src/capability/keyring.ts",
+      "name": "readKeyring",
+      "reason": "Phase 32 plan 32-01 seam: referenced only by tests until plan 32-02 wires it into the daemon gate; plan 32-02 removes this entry"
+    },
+    {
+      "file": "src/capability/keyring.ts",
+      "name": "rotateKeyring",
+      "reason": "Phase 32 plan 32-01 seam: referenced only by tests until plan 32-02 wires it into the daemon gate; plan 32-02 removes this entry"
+    },
+    {
+      "file": "src/capability/token.ts",
+      "name": "MintClaims",
+      "reason": "Phase 32 plan 32-01 seam: referenced only by tests until plan 32-02 wires it into the daemon gate; plan 32-02 removes this entry"
+    },
+    {
+      "file": "src/capability/token.ts",
+      "name": "RefusalClass",
+      "reason": "Phase 32 plan 32-01 seam: referenced only by tests until plan 32-02 wires it into the daemon gate; plan 32-02 removes this entry"
+    },
+    {
+      "file": "src/capability/token.ts",
+      "name": "TOKEN_PREFIX",
+      "reason": "Phase 32 plan 32-01 seam: referenced only by tests until plan 32-02 wires it into the daemon gate; plan 32-02 removes this entry"
+    },
+    {
+      "file": "src/capability/token.ts",
+      "name": "VerifyResult",
+      "reason": "Phase 32 plan 32-01 seam: referenced only by tests until plan 32-02 wires it into the daemon gate; plan 32-02 removes this entry"
+    },
+    {
+      "file": "src/capability/token.ts",
+      "name": "mintToken",
+      "reason": "Phase 32 plan 32-01 seam: referenced only by tests until plan 32-02 wires it into the daemon gate; plan 32-02 removes this entry"
+    },
+    {
+      "file": "src/capability/token.ts",
+      "name": "verifyToken",
+      "reason": "Phase 32 plan 32-01 seam: referenced only by tests until plan 32-02 wires it into the daemon gate; plan 32-02 removes this entry"
+    },
+    {
       "file": "src/cli/anchor.ts",
       "name": "AnchorArgs",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
@@ -311,11 +391,6 @@
       "file": "src/host/boot-report.ts",
       "name": "HOST_BOOT_TRANSPORTS",
       "reason": "D-1306 test-only seam: the closed transport vocabulary, pinned by test/host/boot-report.test.ts and test/daemon/host-boot-control.test.ts; production code consumes the derived HostBootTransport type"
-    },
-    {
-      "file": "src/host/capabilities.ts",
-      "name": "integrationCeiling",
-      "reason": "D-1306 test-only seam: capability ceiling per integration kind, input of the Phase 26 contract tests (test/host/capabilities.test.ts); isWithinCeiling is the production caller"
     },
     {
       "file": "src/host/install.ts",

@@ -24,6 +24,11 @@ export const SECRET_VALUE_PATTERNS: readonly RegExp[] = Object.freeze([
   /AKIA[0-9A-Z]{16}/g,
   /gh[pousr]_[A-Za-z0-9_]{20,}/g,
   /sk-[A-Za-z0-9_-]{20,}/g,
+  // The capability token shape of src/capability/token.ts (CAPT-05): rcap1, a dot, at least 8 base64url characters
+  // of payload, then optionally a dot and the MAC. A token with its MAC cut off, or cut short, still matches. The
+  // key layer already redacts a key named token; this catches a token under any other key and inside a string (an
+  // exec argv element, a log line, an error text). Linear: the prefix is a literal, so no match attempt backtracks.
+  /rcap1\.[A-Za-z0-9_-]{8,}(?:\.[A-Za-z0-9_-]*)?/g,
 ]);
 
 // NAME=value where NAME contains TOKEN, SECRET, PASSWORD, or KEY. Only the value is
