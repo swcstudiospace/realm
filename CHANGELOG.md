@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.4.4] - 2026-11-18
+
+### Documentation
+- docs(phase-28): close phase 28, remove the Anda bridge (#139) (29137f4)
+
 ## [0.4.3] - 2026-11-17
 
 ### Added
