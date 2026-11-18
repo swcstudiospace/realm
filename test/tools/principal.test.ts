@@ -20,9 +20,7 @@ function assertAttributed(h: Harness, lines: number): void {
 
 function assertRefusedAs(outcome: ToolOutcome, code: ErrorCode): void {
   assert.equal(outcome.outcome, "refused");
-  if (outcome.outcome === "refused") {
-    assert.equal(outcome.code, code);
-  }
+  assert.equal(outcome.code, code);
 }
 
 void test("CAPT-07: each of the six tools writes host and kid on both of its lines", async (t) => {
