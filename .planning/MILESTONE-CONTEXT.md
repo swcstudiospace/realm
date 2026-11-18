@@ -48,4 +48,4 @@ A model working through Omp does its file mutations and commands inside the sand
 
 ## Out of scope
 
-FS-02 closure (the owner's status call; the property tests of Phase 13 add confidence only), ANDA-01 to ANDA-04 (engine licence), UI-01, TD-06, the TD-10 repository settings, and any change to the product spec.
+FS-02 closure (the owner's status call; the property tests of Phase 13 add confidence only), ANDA-01 to ANDA-04 (dispositioned and dropped by owner decision D-27-01 on 2026-11-17; the Anda bridge was removed in v4.0), UI-01, TD-06, the TD-10 repository settings, and any change to the product spec.

@@ -1,7 +1,7 @@
 {
   "contract": "1.0.0",
   "flavor": "core",
-  "milestone": "v3.0 — Containment by Default (In Progress)",
+  "milestone": "v4.0",
   "phases": [
     {
       "number": "1",
@@ -167,12 +167,42 @@
       "number": "26",
       "name": "Plugin contract tests, boot tests and author docs",
       "status": "complete"
+    },
+    {
+      "number": "27",
+      "name": "Anda disposition and v4.0 requirement closure",
+      "status": "complete"
+    },
+    {
+      "number": "28",
+      "name": "Remove the Anda bridge",
+      "status": "complete"
+    },
+    {
+      "number": "29",
+      "name": "MCP tool annotations",
+      "status": "complete"
+    },
+    {
+      "number": "30",
+      "name": "Capability token spike",
+      "status": "complete"
+    },
+    {
+      "number": "31",
+      "name": "Production-stack boot rehearsals for wave 1 hosts",
+      "status": "complete"
+    },
+    {
+      "number": "32",
+      "name": "Capability tokens for stdio hosts",
+      "status": "complete"
     }
   ],
   "next": {
-    "command": "/gsd-new-milestone",
-    "label": "Start a new milestone",
-    "reason": "All phases complete — start a new milestone"
+    "command": "/gsd-progress",
+    "label": "Show progress",
+    "reason": "Unsure of state — showing progress"
   },
-  "updated_at": "2026-11-18T02:31:44.850Z"
+  "updated_at": "2026-11-18T02:47:31.058Z"
 }

@@ -1,5 +1,20 @@
 # Milestones
 
+## v4.0 Anda removal, MCP hardening and production boot proof (Shipped: 2026-11-18)
+
+**Phases completed:** 6 phases, 14 plans, 0 tasks
+
+**Requirements:** 18 audited (ANDAX-01..05, MCPA-01..02, CAPT-01..09, BOOTP-01..02), all Complete. Audit: `milestones/v4.0-MILESTONE-AUDIT.md` (passed_with_accepted_limitations).
+
+**Key accomplishments:**
+- Every open Anda item dispositioned by recorded owner decisions (D-27-01 to D-27-05), the v2.0 carry list reconciled, and the Anda bridge removed with a clean cutover: no `andaUrl` key (refused with a migration sentence), no `ANDA_` codes, no degraded state, no doctor check (release line 0.4.x, breaking change).
+- `realm mcp` advertises tool annotations for all six tools in both protocol eras, pinned by an independent table, a mutation test and the smoke gate.
+- A bounded capability-token spike recorded its criteria outcome (DROP) and the owner's override to BUILD; Phase 32 built per-session, per-host HMAC capability tokens for stdio hosts (keyring with rotation and revoke, gate before dispatch fail-closed with policy, audit attribution, `realm host token`, doctor item), default off, with the no-defence-against-a-same-uid-reader limit documented.
+- Production-stack boot rehearsals on rootless Podman 5.7.1: claude 2.1.322 and codex-cli 0.154.0 (and opencode 1.19.5) booted through their own CLIs on 2026-11-18; kimi and kimi-code are named gaps.
+- Owner decisions of 2026-11-18: complete v4.0; plan enforce-by-default capability tokens and a serve-early cold-attach phase as v5.0 candidates.
+
+---
+
 ## v3.0 v3.0 (Shipped: 2026-11-17)
 
 **Phases completed:** 15 phases, 68 plans, 0 tasks

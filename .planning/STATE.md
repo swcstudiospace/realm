@@ -1,20 +1,20 @@
 ---
 gsd_state_version: "1.0"
-milestone: v3.0
-milestone_name: Containment by Default (In Progress)
-current_phase: 32
-status: completed
+milestone: v4.0
+status: Awaiting next milestone
 stopped_at: Phase 32 complete — all phases complete
-last_updated: "2026-11-18T02:31:43.270Z"
+last_updated: "2026-11-18T02:47:30.364Z"
 last_activity: 2026-11-18
-last_activity_desc: Phase 32 complete
-state_head: c2f31ee6918a393d52c91bbfa9d527154619b260
+last_activity_desc: Milestone v4.0 completed and archived
+state_head: 56363c79ad6f778b0047eebc26a7759bf05f2571
 progress:
-  total_phases: 21
-  completed_phases: 33
+  total_phases: 6
+  completed_phases: 6
   total_plans: 14
-  completed_plans: 68
+  completed_plans: 14
   percent: 100
+milestone_name: Anda removal, MCP hardening and production boot proof (Shipped 2026-11-18)
+current_phase: 32
 ---
 
 # Project State
@@ -28,10 +28,10 @@ See: .planning/PROJECT.md (updated 2026-10-29)
 
 ## Current Position
 
-Phase: 32
-Plan: Not started
-Status: All phases complete
-Last activity: 2026-11-18 — Phase 32 complete
+Phase: Milestone v4.0 complete
+Plan: —
+Status: Awaiting next milestone
+Last activity: 2026-11-18 — Milestone v4.0 completed and archived
 
 ## Current Recovery Boundaries
 
