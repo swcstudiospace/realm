@@ -1,6 +1,6 @@
 // Gate, isolation and runner pieces of the host live rehearsals (ADPT-08; decisions D-24-07 and D-24-08 of phase 24; BOOTP-01 of phase 31).
 //
-// Fourteen hosts are in the table. Five have a gated live file of their own: claude, codex, opencode, kimi and kimi-code. The two Kimi
+// Sixteen hosts are in the table. Five have a gated live file of their own: claude, codex, opencode, kimi and kimi-code. The two Kimi
 // products share the command name `kimi`, so the gate tells them apart by the installed version (the legacy Python CLI is 1.x, Kimi Code
 // is 2.x or newer). Each file has a validator tier (the host's own commands parse, and for some hosts launch, what the real recipe wrote
 // into an isolated home) and a production tier. The production tier of claude and opencode is the host's own health check
@@ -8,7 +8,7 @@
 // production stack; that of kimi is a command drive (`kimi mcp test realm`, 43-CONTEXT). The production tier of codex and kimi-code is a
 // session drive (`codex exec`, `kimi -p` against a refusing loopback provider; 31-CONTEXT D-31-02, and for kimi-code one fixed non-secret
 // key) that makes the host launch the registered server and list its tools. In every production run the registered `realm` is a wire
-// recorder (test/support/host-live-session.ts) that logs method names and tool names. The nine wave-2 hosts (qwen, pi, hermes, cursor, kilo, copilot, augment, codebuddy, cline) share one
+// recorder (test/support/host-live-session.ts) that logs method names and tool names. The eleven wave-2 hosts (qwen, pi, hermes, cursor, kilo, copilot, augment, codebuddy, cline, prime-agent, grok-build) share one
 // table-driven validator file, test/integration/host-live-wave2.test.ts, and have no production tier (config-only, 25-CONTEXT D-25-08).
 // Antigravity has no live file at all (ANTIGRAVITY_GAP).
 //
@@ -82,8 +82,8 @@ import { scaledMs } from "./timing.js";
 
 // ---- The per-host table ----------------------------------------------------------------------------------------------------
 
-export type LiveHostId = "claude" | "codex" | "opencode" | "kimi" | "kimi-code" | "qwen" | "pi" | "hermes" | "cursor" | "kilo" | "copilot" | "augment" | "codebuddy" | "cline";
-export const LIVE_HOST_IDS: readonly LiveHostId[] = Object.freeze(["claude", "codex", "opencode", "kimi", "kimi-code", "qwen", "pi", "hermes", "cursor", "kilo", "copilot", "augment", "codebuddy", "cline"] as const);
+export type LiveHostId = "claude" | "codex" | "opencode" | "kimi" | "kimi-code" | "qwen" | "pi" | "hermes" | "cursor" | "kilo" | "copilot" | "augment" | "codebuddy" | "cline" | "prime-agent" | "grok-build";
+export const LIVE_HOST_IDS: readonly LiveHostId[] = Object.freeze(["claude", "codex", "opencode", "kimi", "kimi-code", "qwen", "pi", "hermes", "cursor", "kilo", "copilot", "augment", "codebuddy", "cline", "prime-agent", "grok-build"] as const);
 export type HostLiveTier = "validator" | "production";
 
 export interface HostLiveSpec {
@@ -215,6 +215,10 @@ export const HOST_LIVE: Readonly<Record<LiveHostId, HostLiveSpec>> = Object.free
   augment: wave2Spec({ optIn: "REALM_LIVE_AUGMENT", binOverride: "REALM_AUGMENT_BIN", defaultBinary: "auggie", displayName: "Augment (Auggie)", recordedVersion: "1.2.1", launchesOnValidate: false }),
   codebuddy: wave2Spec({ optIn: "REALM_LIVE_CODEBUDDY", binOverride: "REALM_CODEBUDDY_BIN", defaultBinary: "codebuddy", displayName: "CodeBuddy Code", recordedVersion: "2.185.0", launchesOnValidate: true }),
   cline: wave2Spec({ optIn: "REALM_LIVE_CLINE", binOverride: "REALM_CLINE_BIN", defaultBinary: "cline", displayName: "Cline CLI", recordedVersion: "3.0.74", launchesOnValidate: false }),
+  // Phase 40 (40-CONTEXT D-40-07): `prime-agent mcp list|get` print the name and the transport only and start nothing (E-40-06); `grok mcp doctor`
+  // starts the registered server (E-40-08), `grok mcp list` does not.
+  "prime-agent": wave2Spec({ optIn: "REALM_LIVE_PRIME_AGENT", binOverride: "REALM_PRIME_AGENT_BIN", defaultBinary: "prime-agent", displayName: "Prime Agent", recordedVersion: "0.10.2", launchesOnValidate: false }),
+  "grok-build": wave2Spec({ optIn: "REALM_LIVE_GROK_BUILD", binOverride: "REALM_GROK_BUILD_BIN", defaultBinary: "grok", displayName: "Grok Build", recordedVersion: "1.0.77", launchesOnValidate: true }),
 });
 
 // The sentence of the Antigravity gap: no live file exists for it, because `agy` was never observed.
@@ -242,7 +246,7 @@ export function compareVersions(left: string, right: string): number {
   return 0;
 }
 
-// A product word only for a host whose `--version` prints another x.y.z before the product's own; none of the nine wave-2 hosts does
+// A product word only for a host whose `--version` prints another x.y.z before the product's own; none of the eleven wave-2 hosts does
 // (a date or a commit hash follows the version: `2026.11.13-eacade1`, `v0.23.2 (2026.11.13)`).
 const PRODUCT_WORDS: Readonly<Record<LiveHostId, RegExp | undefined>> = Object.freeze({
   claude: /Claude Code/i,
@@ -260,6 +264,9 @@ const PRODUCT_WORDS: Readonly<Record<LiveHostId, RegExp | undefined>> = Object.f
   augment: undefined,
   codebuddy: undefined,
   cline: undefined,
+  "prime-agent": undefined,
+  // `grok --version` prints `grok 1.0.77 (50ca579fa996) [stable]`: the first x.y.z is the product's own, the commit hash has no dots.
+  "grok-build": undefined,
 });
 
 // The first x.y.z of `<bin> --version`: the one on the line that names the product when there is one (`2.1.322 (Claude Code)`,
@@ -555,6 +562,9 @@ export const HOST_OVERRIDE_VARIABLES: Readonly<Record<LiveHostId, readonly strin
   augment: Object.freeze(["AUGMENT_CACHE_DIR"]),
   codebuddy: Object.freeze(["CODEBUDDY_CONFIG_DIR"]),
   cline: Object.freeze(["CLINE_DIR"]),
+  "prime-agent": Object.freeze(["PRIME_AGENT_CODING_AGENT_DIR"]),
+  // Grok Build documents no relocation variable (40-CONTEXT E-40-08): its isolated runs set HOME, which the isolated environment always does.
+  "grok-build": Object.freeze([] as string[]),
 });
 
 export interface IsolatedHostEnvOptions {

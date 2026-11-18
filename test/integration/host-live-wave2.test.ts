@@ -1,16 +1,16 @@
-// The nine wave-2 hosts against their real CLIs (WAVE2-07, 25-CONTEXT D-25-08 and D-25-09). The validator tier only, table-driven from
+// The eleven wave-2 hosts against their real CLIs (WAVE2-07, 25-CONTEXT D-25-08 and D-25-09). The validator tier only, table-driven from
 // test/support/host-live-wave2.ts: no wave-2 host has a production tier (config-only hosts, D-25-08), and `antigravity` has no live file
 // at all (ANTIGRAVITY_GAP, E-AG2: `agy` was never observed).
 //
-// Per host the real recipe installs, through `realm host install <id>` with the real table, into an isolated HOME and the host's own
+// Per host the real recipe (json-merge, yaml-map or toml-table) installs, through `realm host install <id>` with the real table, into an isolated HOME and the host's own
 // override variable, and the host's own listing command parses what the recipe wrote:
 //   launches the stub `realm` (the stub records `mcp --host <id>`):  qwen, kilo, codebuddy and pi (`<host> mcp list`), cursor (`agent mcp
 //                                                                    list`, an interactive menu: only the stub argv is asserted),
-//                                                                    hermes (`hermes mcp test realm`)
+//                                                                    hermes (`hermes mcp test realm`), grok-build (`grok mcp doctor`)
 //   prints the registered entry and starts nothing (no stub run is expected and none is asserted to exist):  copilot (`mcp get realm`,
 //                                                                    `mcp list --json`), augment (`auggie mcp list`), cline (`config mcp
-//                                                                    --json`), hermes (`mcp list`)
-// Hosts with an add command (qwen, pi, copilot, augment, codebuddy, cline) then run it, and the test records whether the host left Realm's
+//                                                                    --json`), hermes (`mcp list`), prime-agent (`mcp list`, `mcp get realm`), grok-build (`grok mcp list`)
+// Hosts with an add command (qwen, pi, copilot, augment, codebuddy, cline, prime-agent, grok-build) then run it, and the test records whether the host left Realm's
 // entry value-identical and what `realm host status` says: a host that normalizes the entry shows as `drifted`, which is recorded and
 // never hidden (OQ-25-10). Kilo, Cursor and Hermes have no usable add command (interactive or absent) and skip that step.
 //
@@ -24,8 +24,9 @@
 //   F  the operator's real configuration files of the host are byte-equal to before
 //
 // Opt in per host: REALM_LIVE_QWEN, REALM_LIVE_PI, REALM_LIVE_HERMES, REALM_LIVE_CURSOR, REALM_LIVE_KILO, REALM_LIVE_COPILOT,
-// REALM_LIVE_AUGMENT, REALM_LIVE_CODEBUDDY, REALM_LIVE_CLINE (each exactly 1), and optionally REALM_<ID>_BIN (an absolute path to the host
-// executable; cursor's executable is `cursor-agent`). Run one host with, for example:
+// REALM_LIVE_AUGMENT, REALM_LIVE_CODEBUDDY, REALM_LIVE_CLINE, REALM_LIVE_PRIME_AGENT, REALM_LIVE_GROK_BUILD (each exactly 1), and optionally
+// REALM_<ID>_BIN (an absolute path to the host executable; cursor's executable is `cursor-agent`, grok-build's is `grok`, and the two new
+// ones are REALM_PRIME_AGENT_BIN and REALM_GROK_BUILD_BIN). Run one host with, for example:
 //   REALM_LIVE_QWEN=1 node --test dist/test/integration/host-live-wave2.test.js
 // A host whose opt-in is unset, whose CLI is missing, whose `--version` fails (a broken Hermes install, E-HM2) or whose version is below the
 // floor (pi below 1.3.0, E-PI2) produces a skip naming the first missing prerequisite; none of these ever fails.
@@ -53,6 +54,7 @@ import {
   hostStatusOf,
   hostVersionNote,
   jsonObjectAt,
+  ownedTableOf,
   refusalReasonOf,
   requireReturned,
   stripAnsi,
@@ -74,6 +76,11 @@ const GATES = new Map(gateEntries);
 // Whether the YAML text of the Hermes file still defines a `realm` server under `mcp_servers`.
 function yamlHasRealm(text: string): boolean {
   return /^[ \t]+realm:/m.test(text);
+}
+
+// The owned `[mcp_servers.realm]` table as the recipe states it: the scanner's slice ends with the line break of its last key line.
+function ownedTableText(text: string): string | undefined {
+  return ownedTableOf(text)?.replace(/\n$/, "");
 }
 
 async function scenario(t: TestContext, host: Wave2LiveId, gate: HostLiveGate): Promise<void> {
@@ -107,6 +114,8 @@ async function scenario(t: TestContext, host: Wave2LiveId, gate: HostLiveGate): 
   if (recipe.yaml) {
     const text = readFileSync(file, "utf8");
     assert.ok(/^mcp_servers:/m.test(text) && yamlHasRealm(text), "the install wrote a realm server under mcp_servers");
+  } else if (recipe.toml) {
+    assert.equal(ownedTableText(readFileSync(file, "utf8")), recipe.value, "the file holds the recipe's owned table");
   } else {
     assert.deepEqual(valueAt(jsonObjectAt(file), recipe.keyPath), recipe.value, "the file holds the recipe's value at its key path");
   }
@@ -152,10 +161,17 @@ async function scenario(t: TestContext, host: Wave2LiveId, gate: HostLiveGate): 
     const add = await rig.host(script.addOther.args);
     requireReturned(add, label);
     assert.equal(add.exitCode, 0, `${label}: ${describeRun(add)}`);
-    const parsed = parseLooseJson(readFileSync(file, "utf8"));
-    const container = valueAt(parsed, recipe.keyPath.slice(0, -1));
-    assert.ok(isRecord(container) && Object.hasOwn(container, "other"), `${label} must add the host's own entry beside Realm's`);
-    const identical = isDeepStrictEqual(valueAt(parsed, recipe.keyPath), recipe.value);
+    const afterText = readFileSync(file, "utf8");
+    let identical: boolean;
+    if (recipe.toml) {
+      assert.ok(afterText.includes("[mcp_servers.other]"), `${label} must add the host's own entry beside Realm's`);
+      identical = ownedTableText(afterText) === recipe.value;
+    } else {
+      const parsed = parseLooseJson(afterText);
+      const container = valueAt(parsed, recipe.keyPath.slice(0, -1));
+      assert.ok(isRecord(container) && Object.hasOwn(container, "other"), `${label} must add the host's own entry beside Realm's`);
+      identical = isDeepStrictEqual(valueAt(parsed, recipe.keyPath), recipe.value);
+    }
     const afterAdd = await hostStatusOf(rig, host);
     drifted = afterAdd["status"] === "drifted";
     assert.equal(afterAdd["status"], identical ? "installed" : "drifted", `${label}: the entry is ${identical ? "" : "not "}value-identical, so status must say so (OQ-25-10): ${JSON.stringify(afterAdd)}`);
@@ -178,6 +194,11 @@ async function scenario(t: TestContext, host: Wave2LiveId, gate: HostLiveGate): 
       const text = readFileSync(file, "utf8");
       if (recipe.yaml) {
         assert.equal(yamlHasRealm(text), false, "uninstall removed the realm server");
+      } else if (recipe.toml) {
+        assert.equal(ownedTableOf(text), undefined, "uninstall removed Realm's owned table");
+        if (script.addOther !== undefined) {
+          assert.ok(text.includes("[mcp_servers.other]"), "the host's own entry survives uninstall");
+        }
       } else {
         const remaining = parseLooseJson(text);
         assert.equal(valueAt(remaining, recipe.keyPath), undefined, "uninstall removed Realm's entry");
