@@ -255,6 +255,30 @@ function jsonOf(text: string | undefined): unknown {
 // The argv a recipe registers with the host, read back from the recipe value: json-merge takes value.command as a string plus value.args,
 // or value.command as an array alone; yaml-map takes value.command plus value.args; toml-table parses the command and args lines of the
 // owned text. Anything else a recipe holds (claude's env object) is ignored. null: not an mcp-config row with a recipe, or no argv can be read.
+// The command string and the args array of a toml-table recipe text. The array may close on its own line or on a later one, with a
+// trailing comma TOML allows; a line scan, no backtracking pattern. null on any doubt: no or a second command line, no or a second args
+// assignment, an array that never closes, or an element that is not a string.
+function tomlLaunchOf(text: string): { readonly command: unknown; readonly args: unknown } | null {
+  const lines = text.split("\n").map((line) => line.trim());
+  const commands = lines.filter((line) => line.startsWith("command = "));
+  const starts = lines.flatMap((line, index) => (line.startsWith("args = ") ? [index] : []));
+  const start = starts[0];
+  if (commands.length !== 1 || starts.length !== 1 || start === undefined) {
+    return null;
+  }
+  const collected: string[] = [];
+  let closed = false;
+  for (const line of lines.slice(start)) {
+    collected.push(collected.length === 0 ? line.slice("args = ".length) : line);
+    if (line.endsWith("]")) {
+      closed = true;
+      break;
+    }
+  }
+  const array = collected.join(" ").replace(/,\s*\]$/, "]");
+  return closed ? { command: jsonOf(commands[0]?.slice("command = ".length)), args: jsonOf(array) } : null;
+}
+
 export function registeredArgvOf(row: HostRuntimeEntry): readonly string[] | null {
   const recipe = row.recipe;
   if (row.integration !== "mcp-config" || recipe === null) {
@@ -266,8 +290,8 @@ export function registeredArgvOf(row: HostRuntimeEntry): readonly string[] | nul
   };
   switch (recipe.kind) {
     case "toml-table": {
-      const lines = recipe.text.split("\n");
-      return argvOf(jsonOf(/^command = (".*")$/.exec(lines[1] ?? "")?.[1]), jsonOf(/^args = (\[.*\])$/.exec(lines[2] ?? "")?.[1]));
+      const launch = tomlLaunchOf(recipe.text);
+      return launch === null ? null : argvOf(launch.command, launch.args);
     }
     case "yaml-map":
       return argvOf(recipe.value["command"], recipe.value["args"]);

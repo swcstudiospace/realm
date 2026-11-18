@@ -1,13 +1,24 @@
-// Kimi CLI against the real `kimi` CLI (ADPT-08, ADPT-07). The validator tier only: the production tier and Kimi Code are named gaps.
+// Kimi CLI (the legacy Python `kimi-cli` 1.x) against the real `kimi` CLI (ADPT-08, ADPT-07, BOOTP-01, KIMI-01). Three groups of tests: the
+// validator tier, a validator-tier session step against a fake MCP server, and the production tier. The command name `kimi` is shared with
+// Kimi Code (2.x, test/integration/host-live-kimi-code.test.ts): the gate skips this file when the installed kimi is 2.x or newer.
 //
-// Validator tier (REALM_LIVE_KIMI=1, a kimi executable that is NOT the archived Python stub, the built CLI; no Podman). The real recipe
-// installs mcp.json into an isolated KIMI_SHARE_DIR and Kimi's own commands parse and launch it. The only kimi commands that run are
-// `kimi mcp list`, `kimi mcp test realm` and `kimi mcp remove realm`: `kimi mcp add` is never run (not needed, and it is the command that
-// did not return within 60 s in the 2026-11-17 observation, cause unknown). A command that does not return fails the test with the
-// sentence `did not return` instead of hanging.
+// Validator tier (REALM_LIVE_KIMI=1, a kimi executable that is the legacy CLI and NOT the archived Python stub, the built CLI; no Podman).
+// The real recipe installs mcp.json into an isolated KIMI_SHARE_DIR and Kimi's own commands parse and launch it. The only kimi commands that
+// run are `kimi mcp list`, `kimi mcp test realm` and `kimi mcp remove realm`: `kimi mcp add` is never run (not needed, and it is the command
+// that did not return within 60 s in the 2026-11-17 observation, cause unknown). A command that does not return fails the test with the
+// sentence `did not return` instead of hanging. Every host command runs with the containment environment (update and telemetry switches
+// off, a dead proxy; 43-CONTEXT D-43-07).
 //   A  dry run names mcp.json          B  install; status installed
 //   C  `kimi mcp list` prints realm; `kimi mcp test realm` launches the stub realm: `mcp --host kimi`
 //   D  `kimi mcp remove realm` leaves status drifted; uninstall is a clean no-op
+//
+// Validator session (REALM_LIVE_KIMI=1, no Podman): the wire recorder fronts a fake MCP server and `kimi mcp test realm` connects to it. The
+// test proves the handshake, the tool listing and the argv, and reports (does not assert) which of XDG_RUNTIME_DIR, XDG_CONFIG_HOME and
+// REALM_DRIVER_SOCKET the legacy CLI forwards to the server (43-CONTEXT E-43-09, D-43-06).
+//
+// Production tier (the validator gate plus the production prerequisites): the command drive runs `kimi mcp test realm` against
+// `realm mcp --host kimi` on the production stack through the wire recorder, which gives back the three variables the legacy CLI does not
+// forward and logs their names. See runHostProduction.
 //
 // The test never sets a gate variable. No prompt is sent and no credential is forwarded. The operator's real ~/.kimi/mcp.json is hashed
 // before and after and must not change.
@@ -15,7 +26,7 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { test, type TestContext } from "node:test";
 import { fileURLToPath } from "node:url";
 import {
@@ -26,20 +37,26 @@ import {
   describeRun,
   fileSha256,
   gateBin,
-  HOST_LIVE,
   hostStatusOf,
   hostVersionNote,
-  KIMI_CODE_GAP,
+  processAlive,
   requireReturned,
+  runHost,
+  runHostProduction,
   stripAnsi,
+  VALIDATOR_TIMEOUT_MS,
   type HostRig,
+  type HostRunResult,
 } from "../support/host-live.js";
-import { testTimeout } from "../support/timing.js";
+import { KIMI_RESTORED_ENV, kimiContainmentEnv } from "../support/host-live-kimi.js";
+import { readFakeServerLog, readWireLog, REALM_TOOL_NAMES, wireSummary, withoutShellNames, writeFakeMcpServer, writeWireRecorder } from "../support/host-live-session.js";
+import { pollUntil, scaledMs, testTimeout } from "../support/timing.js";
 
 const CLI_PATH = fileURLToPath(new URL("../../src/cli/main.js", import.meta.url));
 const REAL_KIMI_MCP = join(homedir(), ".kimi", "mcp.json");
 
 const validator = await collectHostLiveGate("kimi", "validator", { env: process.env, platform: process.platform, cliPath: CLI_PATH });
+const production = await collectHostLiveGate("kimi", "production", { env: process.env, platform: process.platform, cliPath: CLI_PATH });
 
 function rigFor(t: TestContext): HostRig {
   const rig = createHostRig({ host: "kimi", bin: gateBin(validator), overrides: { KIMI_SHARE_DIR: "kimi" } }, process.env);
@@ -47,6 +64,11 @@ function rigFor(t: TestContext): HostRig {
     rig.dispose();
   });
   return rig;
+}
+
+// A host command in the rig's isolated environment plus the containment environment (the rig's own host method takes no environment).
+function runContained(rig: HostRig, args: readonly string[], env: Readonly<Record<string, string>> = rig.env): Promise<HostRunResult> {
+  return runHost(rig.bin, args, { ...env, ...kimiContainmentEnv() }, rig.cwd, scaledMs(VALIDATOR_TIMEOUT_MS));
 }
 
 void test(
@@ -73,11 +95,11 @@ void test(
 
     // C: the host lists realm, and `kimi mcp test realm` launches the registered argv. The test's own exit status is not asserted: the stub
     // realm exits at once, so the host reports a failed connection. That it LAUNCHED the argv is the evidence.
-    const listed = await rig.host(["mcp", "list"]);
+    const listed = await runContained(rig, ["mcp", "list"]);
     requireReturned(listed, "kimi mcp list");
     assert.equal(listed.exitCode, 0, `kimi mcp list: ${describeRun(listed)}`);
     assert.ok(/(^|[^\w-])realm([^\w-]|$)/m.test(stripAnsi(listed.stdout)), `kimi mcp list must list realm: ${describeRun(listed)}`);
-    const tested = await rig.host(["mcp", "test", "realm"]);
+    const tested = await runContained(rig, ["mcp", "test", "realm"]);
     requireReturned(tested, "kimi mcp test realm");
     const calls = rig.stubInvocations();
     assert.ok(calls.length >= 1, `kimi mcp test realm must launch the registered command; the stub recorded no invocation (${describeRun(tested)})`);
@@ -86,7 +108,7 @@ void test(
     }
 
     // D: the host's own remover. Status drifts; uninstall is a clean no-op.
-    const removal = await rig.host(["mcp", "remove", "realm"]);
+    const removal = await runContained(rig, ["mcp", "remove", "realm"]);
     requireReturned(removal, "kimi mcp remove realm");
     assert.equal(removal.exitCode, 0, `kimi mcp remove realm: ${describeRun(removal)}`);
     const afterRemove = await hostStatusOf(rig, "kimi");
@@ -103,10 +125,90 @@ void test(
   },
 );
 
-void test("kimi production: a named gap", { skip: HOST_LIVE.kimi.productionGap ?? "kimi has no production tier" }, () => {
-  assert.fail("the kimi production tier never runs");
-});
+// The three names the production drive restores. The legacy CLI forwards HOME and PATH only (43-CONTEXT E-43-09); the session step reports
+// which of these it forwards instead of asserting an answer.
+const MARKER_NAMES = KIMI_RESTORED_ENV;
 
-void test("kimi-code: a named gap", { skip: KIMI_CODE_GAP }, () => {
-  assert.fail("the kimi-code live tier never runs");
-});
+void test(
+  "kimi validator session: `kimi mcp test realm` launches the registered server, which sees the handshake and tools/list, and the forwarded environment is reported",
+  { skip: validator.skip, ...testTimeout(600_000) },
+  async (t) => {
+    t.diagnostic(hostVersionNote("kimi", validator));
+    const realBefore = fileSha256(REAL_KIMI_MCP);
+    const rig = rigFor(t);
+    const wireDir = rig.path("wire");
+    const serverLog = rig.path("server.log");
+    const wireLog = rig.path("wire.log");
+    const server = writeFakeMcpServer(wireDir, serverLog);
+    writeWireRecorder(wireDir, { nodePath: process.execPath, target: [process.execPath, server], logFile: wireLog });
+
+    const installed = cliJson(await rig.realm(["install", "kimi"]), "realm host install kimi");
+    assert.equal(installed["status"], "installed", "the recipe installs into the isolated KIMI_SHARE_DIR");
+    const status = await hostStatusOf(rig, "kimi");
+    assert.equal(status["status"], "installed");
+    assert.equal(status["launch"], "on-path", "the bare realm command must resolve on the rig's PATH");
+
+    // The recorder directory goes first on PATH in place of the rig's stub realm; the marker variables carry dummy paths inside the rig.
+    const stubDir = rig.path("stub");
+    const env: Record<string, string> = { ...rig.env };
+    env["PATH"] = [wireDir, ...(env["PATH"] ?? "").split(delimiter).filter((entry) => entry !== stubDir)].join(delimiter);
+    env["XDG_RUNTIME_DIR"] = rig.path("forward-runtime");
+    env["XDG_CONFIG_HOME"] = rig.path("forward-config");
+    env["REALM_DRIVER_SOCKET"] = rig.path("forward-driver.sock");
+
+    const startedAt = Date.now();
+    const tested = await runContained(rig, ["mcp", "test", "realm"], env);
+    requireReturned(tested, "kimi mcp test realm");
+    assert.equal(tested.exitCode, 0, `kimi mcp test realm must succeed against the fake server: ${describeRun(tested)}`);
+    t.diagnostic(`kimi mcp test realm returned after ${String(Date.now() - startedAt)} ms`);
+    const firstLine =
+      stripAnsi(`${tested.stdout}\n${tested.stderr}`)
+        .split("\n")
+        .map((line) => line.trim())
+        .find((line) => line !== "") ?? "";
+    t.diagnostic(`kimi mcp test realm printed: ${JSON.stringify(firstLine.slice(0, 200))}`);
+
+    const summary = wireSummary(readWireLog(wireLog));
+    const wire = `host methods [${summary.hostMethods.join(", ")}], tools [${summary.toolNames.join(", ")}]`;
+    assert.ok(summary.hostMethods.includes("initialize") || summary.hostMethods.includes("server/discover"), `the host must send initialize or server/discover; wire: ${wire}`);
+    assert.equal(summary.answered, true, `the host must list the tools through the recorder; wire: ${wire}`);
+    assert.deepEqual([...summary.toolNames], [...REALM_TOOL_NAMES], `the listed tools must be the six Realm tools; wire: ${wire}`);
+
+    const { starts } = readFakeServerLog(serverLog);
+    assert.ok(starts.length >= 1, "the registered server must have been launched");
+    for (const start of starts) {
+      assert.deepEqual([...start.argv], ["mcp", "--host", "kimi"], "kimi must launch the recipe's command and arguments");
+      const names = withoutShellNames(start.env);
+      for (const required of ["HOME", "PATH"]) {
+        assert.ok(names.includes(required), `the server must be started with ${required}; saw [${names.join(", ")}]`);
+      }
+      // The observation of 2026-11-18 on 1.51.0: none of the three marker names is forwarded (E-43-09). A different observation is reported.
+      for (const marker of MARKER_NAMES) {
+        t.diagnostic(`kimi forwarded ${marker} to the server: ${names.includes(marker) ? "forwarded" : "not forwarded"}`);
+      }
+    }
+
+    await pollUntil(() => starts.every((start) => !processAlive(start.pid)), "the fake MCP server exited", { timeoutMs: 10_000, intervalMs: 100 });
+    assert.equal(fileSha256(REAL_KIMI_MCP), realBefore, "the operator's real ~/.kimi/mcp.json must be unchanged");
+  },
+);
+
+// ---- Production tier -------------------------------------------------------------------------------------------------------
+// The command drive: `kimi mcp test realm` connects to `realm mcp --host kimi` through the wire recorder, lists the tools and returns. The
+// recorder gives back the three variables the legacy CLI does not forward and logs their names (test/support/host-live.ts).
+
+void test(
+  "kimi production: kimi mcp test realm launches realm mcp --host kimi on the production stack and lists the six tools",
+  { skip: production.skip, ...testTimeout(1_800_000) },
+  async (t) => {
+    t.diagnostic(hostVersionNote("kimi", production));
+    await runHostProduction(t, {
+      host: "kimi",
+      bin: gateBin(production),
+      cliPath: CLI_PATH,
+      env: process.env,
+      realFile: (home) => join(home, ".kimi", "mcp.json"),
+      drive: { kind: "command", args: ["mcp", "test", "realm"], restore: KIMI_RESTORED_ENV },
+    });
+  },
+);

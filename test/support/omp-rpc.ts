@@ -11,6 +11,8 @@
 //     wrap   an argv prefix put before the Omp command, for example traceArgv(outFile) of net-trace.ts (`strace ... --`)
 //   class OmpSession
 //     frames: readonly OmpFrame[]                 every JSON object frame, in arrival order
+//     frameArrivalsMs: readonly number[]          parallel to frames: the milliseconds from the session's construction to the arrival of
+//                                                 each frame (performance.now), so a frame can be placed on a timeline
 //     nonJsonLines: readonly string[]             every stdout line that was not a JSON object; its length is the count
 //     status(): string | undefined                statusText of the last `setStatus` frame with statusKey "realm"
 //     notices(): string[]                         the message of every `notify` frame
@@ -34,6 +36,7 @@
 // editor are answered `cancelled: true`. notify and setStatus need no answer.
 
 import { spawn } from "node:child_process";
+import { performance } from "node:perf_hooks";
 import type { Readable, Writable } from "node:stream";
 import { isRecord, OMP_PROMPT_TIMEOUT_MS, OMP_READY_TIMEOUT_MS } from "./omp-live.js";
 
@@ -357,6 +360,8 @@ export class OmpSession {
   readonly #exited: Promise<OmpExit>;
   readonly #framer = new JsonlFramer();
   readonly #frames: OmpFrame[] = [];
+  readonly #frameArrivalsMs: number[] = [];
+  readonly #createdAtMs = performance.now();
   readonly #nonJsonLines: string[] = [];
   readonly #dialogs: OmpFrame[] = [];
   readonly #waiters = new Set<Waiter>();
@@ -391,6 +396,10 @@ export class OmpSession {
 
   get frames(): readonly OmpFrame[] {
     return this.#frames;
+  }
+
+  get frameArrivalsMs(): readonly number[] {
+    return this.#frameArrivalsMs;
   }
 
   get nonJsonLines(): readonly string[] {
@@ -568,6 +577,7 @@ export class OmpSession {
         continue;
       }
       this.#frames.push(entry.frame);
+      this.#frameArrivalsMs.push(performance.now() - this.#createdAtMs);
       this.#answerDialog(entry.frame);
       this.#evaluateWaiters();
     }

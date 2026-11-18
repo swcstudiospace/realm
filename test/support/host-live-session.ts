@@ -47,7 +47,15 @@ export interface ProviderRequestRecord {
   readonly path: string;
   // Whether an Authorization header was present. The value is never read into a record.
   readonly authorization: boolean;
+  // Present only when the provider was started with an expected key and the request carried an Authorization header: whether the header
+  // equals `Bearer <key>`. Neither the header nor the key is ever stored.
+  readonly matchesKey?: boolean;
   readonly peer: string;
+}
+
+export interface RefusingProviderOptions {
+  // The one fixed, non-secret key a host is allowed to send (Kimi Code, which needs a key variable to define a provider at all).
+  readonly expectedKey?: string;
 }
 
 export interface RefusingProvider {
@@ -65,11 +73,20 @@ export function isLoopbackPeer(address: string): boolean {
 
 // An HTTP server on 127.0.0.1 (ephemeral port) that answers every request, whatever the method or path, with a fixed 503 and an
 // empty JSON body, and records the method, the path, whether an Authorization header was present and the peer address. It never
-// records a header value or a body. The caller closes it.
-export async function startRefusingProvider(): Promise<RefusingProvider> {
+// records a header value or a body. With `expectedKey` it also records, per request that carried an Authorization header, whether the
+// header equals `Bearer <key>` (a boolean; neither value is kept). The caller closes it.
+export async function startRefusingProvider(options: RefusingProviderOptions = {}): Promise<RefusingProvider> {
   const records: ProviderRequestRecord[] = [];
+  const expected = options.expectedKey === undefined ? undefined : `Bearer ${options.expectedKey}`;
   const server = createServer((request, response) => {
-    records.push({ method: request.method ?? "", path: request.url ?? "", authorization: request.headers.authorization !== undefined, peer: request.socket.remoteAddress ?? "" });
+    const { authorization } = request.headers;
+    records.push({
+      method: request.method ?? "",
+      path: request.url ?? "",
+      authorization: authorization !== undefined,
+      ...(expected === undefined || authorization === undefined ? {} : { matchesKey: authorization === expected }),
+      peer: request.socket.remoteAddress ?? "",
+    });
     request.resume();
     response.writeHead(503, { "Content-Type": "application/json", "Content-Length": "2", Connection: "close" });
     response.end("{}");
@@ -248,17 +265,22 @@ export interface WireRecorderOptions {
   readonly target: readonly string[];
   // Where the tee appends its log, one JSON line per message.
   readonly logFile: string;
+  // Environment variables to give the target when the host did not forward them (name to value). The tee adds every pair whose name is
+  // absent from its own environment and logs the sorted NAMES it added, never a value. The pairs are written to a file of mode 0600
+  // next to the tee, never to an argument. A name the host did forward keeps the host's value.
+  readonly restoreEnv?: Readonly<Record<string, string>>;
 }
 
 // The text of the tee: spawns `target + received arguments` with stdin and stdout piped and stderr inherited, forwards the host's
 // stdin to the child and the child's stdout to the host byte for byte (`pipe`), and reads a line-buffered COPY of each direction to
 // write the log. The log line holds the direction, the kind, the method name, the request id and, on the response to `tools/list`,
 // the tool names. Parameters, results, headers, paths and content are never copied. A log write error is swallowed, after the forward.
-function teeSource(prefixLength: number): string {
+function teeSource(prefixLength: number, restore: boolean): string {
   return [
     'import { spawn } from "node:child_process";',
-    'import { appendFileSync } from "node:fs";',
+    restore ? 'import { appendFileSync, readFileSync } from "node:fs";' : 'import { appendFileSync } from "node:fs";',
     'import { constants } from "node:os";',
+    ...(restore ? ['import { fileURLToPath } from "node:url";'] : []),
     "",
     `const PREFIX = ${String(prefixLength)};`,
     "const LINE_LIMIT = 1048576;",
@@ -311,7 +333,20 @@ function teeSource(prefixLength: number): string {
     "  };",
     "};",
     "",
-    'const child = spawn(target[0], [...target.slice(1), ...extra], { stdio: ["pipe", "pipe", "inherit"] });',
+    ...(restore
+      ? [
+          "const childEnv = { ...process.env };",
+          "const restored = [];",
+          "try {",
+          '  const pairs = JSON.parse(readFileSync(fileURLToPath(new URL("wire-restore.json", import.meta.url)), "utf8"));',
+          "  for (const name of Object.keys(pairs)) {",
+          "    if (!(name in process.env)) { childEnv[name] = pairs[name]; restored.push(name); }",
+          "  }",
+          "} catch { /* a missing or unreadable pair file restores nothing */ }",
+          'record({ dir: "host-to-realm", kind: "other", restored: restored.sort() });',
+        ]
+      : []),
+    `const child = spawn(target[0], [...target.slice(1), ...extra], { stdio: ["pipe", "pipe", "inherit"]${restore ? ", env: childEnv" : ""} });`,
     'child.on("error", (error) => { process.stderr.write("wire-tee: cannot start the target: " + error.message + "\\n"); process.exit(127); });',
     'child.stdin.on("error", () => {});',
     'process.stdout.on("error", () => {});',
@@ -328,13 +363,30 @@ function teeSource(prefixLength: number): string {
   ].join("\n");
 }
 
+function isRestorePair(name: string, value: unknown): boolean {
+  return name !== "" && !name.includes("=") && typeof value === "string";
+}
+
 // Writes `<dir>/realm` (mode 0755, a POSIX sh script: a shebang, then `exec` of the Node path, the tee script, the log path and the
 // target argv prefix, each shell-quoted, then "$@") and `<dir>/wire-tee.mjs` (mode 0644). Returns the shim path. The shim forwards
 // bytes, EOF, the child's exit code (or 128 plus its signal number) and SIGTERM and SIGINT; it only reads a copy of the stream.
 export function writeWireRecorder(dir: string, options: WireRecorderOptions): string {
+  const restore = options.restoreEnv;
+  if (restore !== undefined) {
+    for (const [name, value] of Object.entries(restore)) {
+      if (!isRestorePair(name, value)) {
+        throw new Error("restoreEnv holds a pair that is not a non-empty name without an equals sign and a string value; nothing was written");
+      }
+    }
+  }
   mkdirSync(dir, { recursive: true });
+  if (restore !== undefined) {
+    const pairsFile = join(dir, "wire-restore.json");
+    writeFileSync(pairsFile, JSON.stringify(restore), { mode: 0o600 });
+    chmodSync(pairsFile, 0o600);
+  }
   const tee = join(dir, "wire-tee.mjs");
-  writeFileSync(tee, teeSource(options.target.length));
+  writeFileSync(tee, teeSource(options.target.length, restore !== undefined));
   chmodSync(tee, 0o644);
   const shim = join(dir, "realm");
   const words = [options.nodePath, tee, options.logFile, ...options.target].map((word) => shellQuote(word)).join(" ");
@@ -350,6 +402,8 @@ export interface WireEvent {
   readonly id?: string | number;
   // On the response to `tools/list` only: the `name` of each listed tool, as the server sent them.
   readonly toolNames?: readonly string[];
+  // On the one event a recorder with `restoreEnv` logs first: the sorted NAMES of the variables it restored (empty when none).
+  readonly restored?: readonly string[];
 }
 
 const WIRE_DIRECTIONS: readonly string[] = ["host-to-realm", "realm-to-host"];
@@ -376,12 +430,14 @@ export function readWireLog(file: string): WireEvent[] {
       continue;
     }
     const toolNames = stringArray(parsed["toolNames"]);
+    const restored = stringArray(parsed["restored"]);
     events.push({
       dir: dir as WireEvent["dir"],
       kind: kind as WireEvent["kind"],
       ...(typeof method === "string" ? { method } : {}),
       ...(typeof id === "string" || typeof id === "number" ? { id } : {}),
       ...(toolNames === undefined ? {} : { toolNames }),
+      ...(restored === undefined ? {} : { restored }),
     });
   }
   return events;
@@ -394,6 +450,8 @@ export interface WireSummary {
   readonly toolNames: readonly string[];
   // True when a `tools/list` response with at least one tool name was logged.
   readonly answered: boolean;
+  // The names the recorder restored into the target environment (the first event that logged them), sorted; empty when there was none.
+  readonly restoredNames: readonly string[];
 }
 
 export function wireSummary(events: readonly WireEvent[]): WireSummary {
@@ -405,7 +463,8 @@ export function wireSummary(events: readonly WireEvent[]): WireSummary {
   }
   const listed = events.find((event) => event.toolNames !== undefined)?.toolNames;
   const toolNames = listed === undefined ? [] : [...listed].sort();
-  return { hostMethods, toolNames, answered: toolNames.length > 0 };
+  const restoredNames = [...(events.find((event) => event.restored !== undefined)?.restored ?? [])].sort();
+  return { hostMethods, toolNames, answered: toolNames.length > 0, restoredNames };
 }
 
 // ---- The until-ready runner ------------------------------------------------------------------------------------------------

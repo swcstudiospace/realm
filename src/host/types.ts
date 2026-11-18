@@ -53,7 +53,17 @@ export interface HostHomeSpec {
 // Declared here, implemented by the installer. `file` and `dest` are relative to the resolved
 // home of role `homeRole` (default "config"); `source` is relative to the package adapters/ dir.
 export type InstallRecipe =
-  | { readonly kind: "json-merge"; readonly file: string; readonly keyPath: readonly string[]; readonly value: unknown; readonly homeRole?: HostHomeSpec["role"] }
+  | {
+      readonly kind: "json-merge";
+      readonly file: string;
+      readonly keyPath: readonly string[];
+      readonly value: unknown;
+      readonly homeRole?: HostHomeSpec["role"];
+      // Top-level members written ahead of the entry only when the install creates the file; an existing file never receives them.
+      readonly seed?: Readonly<Record<string, unknown>>;
+      // Top-level keys whose presence in the document refuses an install or reinstall (the host reads a rival spelling of the entry).
+      readonly refuseIfPresent?: readonly string[];
+    }
   | {
       readonly kind: "text-block";
       readonly file: string;

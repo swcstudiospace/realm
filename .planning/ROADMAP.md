@@ -893,10 +893,12 @@ Plans:
   2. If the maximum exceeds 1000 ms or the 95th percentile exceeds 500 ms, the Omp extension path is changed so that it answers before `up` completes, no mutation runs before the session is ready, and a repeat run passes; if the first run passes, the phase records that no code change was needed.
   3. The existing status vocabulary, the not-active refusal and the audit lines are unchanged, shown by the existing Omp and contract tests plus a test for the not-active window of the Omp path if the path changed.
   4. The OI-11 row reads closed on the quiet-host evidence, or stays open with the measured numbers and a named reason.
-**Plans:** 0 plans
+**Plans:** 3 plans
 
 Plans:
-- [ ] TBD (run /gsd-plan-phase 38 to break down)
+- [ ] 38-01-PLAN.md: Measure the Omp cold attach on a quiet host with the existing harness, add the diagnostics that say where a stall sits,  (wave 1)
+- [ ] 38-02-PLAN.md: Change the Omp path only where the quiet-host evidence says the extension's own work is the cause, prove with hermetic t (wave 2)
+- [ ] 38-03-PLAN.md: Repeat the quiet-host measurement on the build or the harness that plan 38-02 changed, with the same frozen rule, record (wave 3)
 
 ### Phase 39: Timed-out exec kill proof
 
@@ -908,10 +910,12 @@ Plans:
   2. If the sleeper survives in a first run, the kill path is fixed so that a timed-out exec's process tree is killed, and a hermetic test fails without the fix and passes with it.
   3. The session stays usable after the kill (a following exec succeeds), and the `TOOL_TIMEOUT` reply, the per-call bound and the audit line are unchanged for callers.
   4. Finding F-3 is closed with the dated live evidence and its limits stated.
-**Plans:** 0 plans
+**Plans:** 3 plans
 
 Plans:
-- [ ] TBD (run /gsd-plan-phase 39 to break down)
+- [ ] 39-01-PLAN.md: Build the live proof of EXEC-01: a process-state check inside the sandbox, before, during and after a timed-out exec, th (wave 1)
+- [ ] 39-02-PLAN.md: Fix the kill path (EXEC-02): a timed-out exec's process tree is ended inside the sandbox by a watchdog that does not dep (wave 2)
+- [ ] 39-03-PLAN.md: Open the live window under the owner's control, run the kill proof twice (on a build without the fix, then on the fixed  (wave 3)
 
 ### Phase 40: Host ids for Muse Code, Prime Agent and Grok Build
 
@@ -923,10 +927,12 @@ Plans:
   2. Each of the three hosts attaches and completes a tool call under the default `enforce` mode with no policy edit, attributed to its own host id in the audit line (Grok Build no longer reads as `claude`).
   3. The guard test of labelled launchers has no named exception left, and the contract checker, the support matrix and `docs/integration/host-plugin-gaps.md` (GAP-34-01 closed) agree with the registry.
   4. The docs site build and `check:docs` pass, and the migration notes tell an existing install of these hosts what to change.
-**Plans:** 0 plans
+**Plans:** 3 plans
 
 Plans:
-- [ ] TBD (run /gsd-plan-phase 40 to break down)
+- [ ] 40-01-PLAN.md: Teach the json-merge recipe the two things Muse Code needs to be safe, and teach the contract checker to read the one ar (wave 1)
+- [ ] 40-02-PLAN.md: Give Muse Code, Prime Agent and Grok Build their host ids, rows, recipes and labelled launchers, update every list and c (wave 2)
+- [ ] 40-03-PLAN.md: Run the three hosts' own CLIs against what the recipes write, record the dated results, and make every document agree wi (wave 3)
 
 ### Phase 41: Daemon teardown flake
 
@@ -938,10 +944,11 @@ Plans:
   2. The cause is fixed or bounded in the code, and a hermetic test fails without the change and passes with it.
   3. A live run on the production stack stops the daemon with a sandbox container and the `daemon.stopped` line reports `failedTeardowns=0` with no `code`.
   4. The `daemon.stopped` event contract (the `failedTeardowns` count and the first failure code) is unchanged.
-**Plans:** 0 plans
+**Plans:** 2 plans
 
 Plans:
-- [ ] TBD (run /gsd-plan-phase 41 to break down)
+- [ ] 41-01-PLAN.md: Reproduce the report daemon.stopped code=REALM_STOPPING failedTeardowns=1 after about 30 s hermetically, record its caus (wave 1)
+- [ ] 41-02-PLAN.md: Prove the fix on the production stack (wave 2)
 
 ### Phase 42: Evidence debt
 
@@ -953,10 +960,12 @@ Plans:
   2. The guard script has tests that fail on a seeded breaking commit without `!` and pass when the marker is present or the range lands as a merge commit.
   3. The guard is wired into the repository's gate conventions; where enforcement would need a change under `.github/workflows/**` it stays report-only and the needed change is written down for human review.
   4. The `check:docs` and `check:gates` gates pass with the new script.
-**Plans:** 0 plans
+**Plans:** 3 plans
 
 Plans:
-- [ ] TBD (run /gsd-plan-phase 42 to break down)
+- [ ] 42-01-PLAN.md: Build the breaking-change marker guard and wire it into the repository's gate conventions: a script under scripts/check  (wave 1)
+- [ ] 42-02-PLAN.md: Pay the second half of the breaking-change debt: show what the guard does on the history that produced the ENF-04 partia (wave 2)
+- [ ] 42-03-PLAN.md: Run the whole unit suite as a regular user (the realmlive account, uid 5002) on the finished v6.0 code, and record the t (wave 3)
 
 ### Phase 43: Kimi and kimi-code rehearsal
 
@@ -968,7 +977,8 @@ Plans:
   2. The validator tier and the production tier run for each CLI that can run, and the result is recorded in `docs/integration/wave1-boot-matrix.md` with the evidence label.
   3. Anything that cannot run has a named blocker (for example the archived `kimi` stub), and `GAP-24-02` and the support matrix read the evidence tier reached.
   4. The scratch installs are removed and the production stack is left as found (no leftover container or session).
-**Plans:** 0 plans
+**Plans:** 2 plans
 
 Plans:
-- [ ] TBD (run /gsd-plan-phase 43 to break down)
+- [ ] 43-01-PLAN.md: Give the two Kimi hosts the live test wiring they lack so Plan 43-02 can run them: add kimi-code to the live table and t (wave 1)
+- [ ] 43-02-PLAN.md: Install both Kimi CLIs outside the repository, run the validator and production tiers for each one that can run, and rec (wave 2)

@@ -54,6 +54,10 @@ export interface JsonSuiteDescriptor extends HostSuiteBase {
   // A realistic existing document without a realm entry, and the format it is stored in.
   readonly seedDoc: Readonly<Record<string, unknown>>;
   readonly seedFormat: JsonFormat;
+  // The top-level members a file the install creates holds before the entry (the recipe's seed); absent for a host without one.
+  readonly createdSeed?: Readonly<Record<string, unknown>>;
+  // The one top-level key whose presence refuses the install (the recipe's refuseIfPresent); absent for a host without one.
+  readonly rival?: string;
 }
 
 export interface TomlSuiteDescriptor extends HostSuiteBase {
@@ -255,7 +259,7 @@ function jsonFlavor(d: JsonSuiteDescriptor): Flavor {
   return {
     seed: render(d.seedDoc, d.seedFormat),
     seedResult: render(withEntry(d, { ...d.seedDoc }), d.seedFormat),
-    created: render(withEntry(d, {})),
+    created: render(withEntry(d, { ...d.createdSeed })),
     // False, not an assertion failure, when the parent object is absent: a seed without it has no Realm entry either.
     owns: (text) => {
       const parent = parseDoc(text)[d.parentKey];
@@ -700,6 +704,60 @@ export function defineHostRecipeSuite(d: JsonSuiteDescriptor): void {
     assert.equal(removed.outcome, "noop");
     assert.equal(readFileSync(r.file, "utf8"), seed, "an entry Realm did not write stays");
   });
+
+  const createdSeed = d.createdSeed;
+  if (createdSeed !== undefined) {
+    void test(`${tag}: a created file holds the seed members before the entry, and an existing file never receives them`, async (t) => {
+      const fresh = buildRig(t, d);
+      await fresh.adapter.install(fresh.env, { dryRun: false });
+      const created = readFileSync(fresh.file, "utf8");
+      assert.equal(created, flavor.created);
+      assert.deepEqual(Object.keys(parseDoc(created)).slice(0, Object.keys(createdSeed).length), Object.keys(createdSeed), "the seed comes first");
+      assert.equal(flavor.owns(created), true);
+
+      const existing = buildRig(t, d, { seed: flavor.seed });
+      await existing.adapter.install(existing.env, { dryRun: false });
+      assert.equal(readFileSync(existing.file, "utf8"), flavor.seedResult, "only the entry was added to an existing file");
+      await existing.adapter.uninstall(existing.env, { dryRun: false });
+      assert.equal(readFileSync(existing.file, "utf8"), flavor.seed);
+    });
+
+    void test(`${tag}: uninstall keeps a created file that holds more than the seed and the entry`, async (t) => {
+      const r = buildRig(t, d);
+      await r.adapter.install(r.env, { dryRun: false });
+      writeFileSync(r.file, flavor.append(readFileSync(r.file, "utf8")));
+      assert.equal((await r.adapter.uninstall(r.env, { dryRun: false })).outcome, "removed");
+      const left = parseDoc(readFileSync(r.file, "utf8"));
+      assert.equal(flavor.hasAppended(JSON.stringify(left)), true);
+      for (const [key, value] of Object.entries(createdSeed)) {
+        assert.deepEqual(left[key], value);
+      }
+    });
+  }
+
+  const rival = d.rival;
+  if (rival !== undefined) {
+    void test(`${tag}: a document that holds the rival key ${rival} is refused as foreign-content, even over an owned entry, and nothing is written`, async (t) => {
+      const seed = render({ ...d.seedDoc, [rival]: { other: { command: "other" } } }, d.seedFormat);
+      const r = buildRig(t, d, { seed });
+      const before = treeHash(r.host.root);
+      for (const dryRun of [true, false]) {
+        await assert.rejects(
+          r.adapter.install(r.env, { dryRun }),
+          (error: unknown) => refusedWith("foreign-content", "POLICY_DENIED")(error) && error instanceof Error && !error.message.includes(rival),
+        );
+      }
+      nothingWritten(r, d, before);
+
+      const ok = buildRig(t, d, { seed: flavor.seed });
+      await ok.adapter.install(ok.env, { dryRun: false });
+      const installedText = readFileSync(ok.file, "utf8");
+      writeFileSync(ok.file, render({ ...parseDoc(installedText), [rival]: { other: { command: "other" } } }));
+      const owned = treeHash(ok.host.root);
+      await assert.rejects(ok.adapter.install(ok.env, { dryRun: false }), refusedWith("foreign-content", "POLICY_DENIED"));
+      assert.equal(treeHash(ok.host.root), owned, "a refused reinstall changes nothing");
+    });
+  }
 
   void test(`${tag}: __proto__, constructor and prototype keys are preserved byte for byte and pollute nothing`, async (t) => {
     const seed = '{\n  "__proto__": {\n    "polluted": true\n  },\n  "constructor": {\n    "polluted": true\n  },\n  "prototype": 1\n}\n';
