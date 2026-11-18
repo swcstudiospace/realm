@@ -1,37 +1,37 @@
 ---
 gsd_state_version: "1.0"
-milestone: v4.0
-status: Awaiting next milestone
-stopped_at: Phase 32 complete — all phases complete
-last_updated: "2026-11-18T02:47:30.364Z"
+milestone: v5.0
+milestone_name: Cold attach, enforced capability tokens and evidence (Starting)
+status: Starting
+stopped_at: Milestone v5.0 started, phases 33 to 37 planned
+last_updated: "2026-11-18T04:10:00.000Z"
 last_activity: 2026-11-18
-last_activity_desc: Milestone v4.0 completed and archived
-state_head: 56363c79ad6f778b0047eebc26a7759bf05f2571
+last_activity_desc: Milestone v5.0 started
+state_head: 26097b6fd6b0a47246707d19c2e0d56d2aec6215
 progress:
-  total_phases: 6
-  completed_phases: 6
-  total_plans: 14
-  completed_plans: 14
-  percent: 100
-milestone_name: Anda removal, MCP hardening and production boot proof (Shipped 2026-11-18)
-current_phase: 32
+  total_phases: 5
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
+current_phase: 33
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-10-29)
+See: .planning/PROJECT.md (updated 2026-11-18)
 
 **Core value:** Every file mutation by an agent either lands inside the realm under policy or fails closed, and the user can always see whether the realm is active or disconnected.
-**Current focus:** v3.0 recovery across phases 12–20. This isolated integration lane contains prior Phase 18/19 work; current Omp and quality-ratchet changes remain in a separate worktree and are not integrated here. The current milestone is not complete.
+**Current focus:** Milestone v5.0, Cold attach, enforced capability tokens and evidence (phases 33 to 37, release line 0.5.x). Phase 33 (cold attach) is first; 34 depends on 33, 35 on 34; 36 and 37 are independent. Scope and owner decisions of 2026-11-18: `.planning/MILESTONE-CONTEXT.md`.
 
 ## Current Position
 
-Phase: Milestone v4.0 complete
+Phase: 33 (Cold attach), not started
 Plan: —
-Status: Awaiting next milestone
-Last activity: 2026-11-18 — Milestone v4.0 completed and archived
+Status: Starting milestone v5.0 (phases 33 to 37, release line 0.5.x)
+Last activity: 2026-11-18 — Milestone v5.0 started
 
 ## Current Recovery Boundaries
 
