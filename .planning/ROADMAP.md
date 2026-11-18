@@ -787,10 +787,12 @@ Plans:
   2. A tool call made before the session is ready is refused with the existing not-active refusal and does not touch the sandbox; the same connection serves tool calls once the session is ready, with no reconnect.
   3. The warm path, the status labels and the audit lines are unchanged, shown by the existing contract and smoke tests plus new tests for the not-active window and the transition.
   4. The claude, opencode and codex production tiers pass from a cold start on the live stack with the warm-up removed from the test harness, and `GAP-31-04` is closed with that evidence.
-**Plans:** 0 plans
+**Plans:** 3 plans
 
 Plans:
-- [ ] TBD (run /gsd-plan-phase 33 to break down)
+- [ ] 33-01-PLAN.md: Make realm mcp answer the MCP handshake and tools/list at once, run ensure, up and the readback in the background, refus (wave 1)
+- [ ] 33-02-PLAN.md: Write the serve-early contract into the three integration pages that state the boot order and the readiness signal, and  (wave 2)
+- [ ] 33-03-PLAN.md: Remove the warm-up from the live harness, add a direct cold probe that shows the early handshake, the refusal and the tr (wave 3)
 
 ### Phase 34: Capability tokens enforce by default
 
@@ -802,10 +804,12 @@ Plans:
   2. The stdio hosts, Omp, ACP and `realm mcp` each attach and complete a tool call under the default, with no policy edit.
   3. A stale or unlabelled client is refused with a message that names the cause and the fix; `"mode": "off"` restores the old behaviour; `realm doctor` shows the guidance.
   4. The change ships under commits whose subjects carry `!`, and the migration notes and release note text are in the docs.
-**Plans:** 0 plans
+**Plans:** 3 plans
 
 Plans:
-- [ ] TBD (run /gsd-plan-phase 34 to break down)
+- [ ] 34-01-PLAN.md: Make every test that is not about capability tokens independent of the default of capabilityTokens.mode, while the defau (wave 1)
+- [ ] 34-02-PLAN.md: Flip the default of capabilityTokens.mode to enforce, with the schema, the one shared default, the eager keyring, the do (wave 2)
+- [ ] 34-03-PLAN.md: Prove that every client the repository ships works under the new default, explain the refusal of the ones that do not, l (wave 3)
 
 ### Phase 35: Capability token evidence
 
@@ -817,10 +821,12 @@ Plans:
   2. The `/proc/PID/mem` probe runs as a non-root, non-descendant, same-uid process, and its result (read succeeded or refused) is recorded in the limits either way.
   3. A live run on the production stack attaches claude through the daemon under enforce, a tool call succeeds, and the audit lines carry the host and the kid, verified by `realm audit verify` and a read of the lines.
   4. Each piece of live evidence is dated and kept outside the repository, and the phase record cites it.
-**Plans:** 0 plans
+**Plans:** 3 plans
 
 Plans:
-- [ ] TBD (run /gsd-plan-phase 35 to break down)
+- [ ] 35-01-PLAN.md: Create the evidence page and its guard, then run the capability token tests as a regular user (the realmlive account, ui (wave 1)
+- [ ] 35-02-PLAN.md: Build the memory probe that can settle the Phase 32 claim, run it as a non-root, non-descendant, same-uid process agains (wave 2)
+- [ ] 35-03-PLAN.md: Prove enforce mode on the production stack with a real host attached: claude through the daemon, the default policy (enf (wave 3)
 
 ### Phase 36: Live re-verification of the v1.0 open items
 
@@ -831,10 +837,12 @@ Plans:
   1. The doctor and control-socket live modes, the two reaper live checks, Muse Code and Hermes loading, and Omp responsiveness each have a recorded status: re-verified with a dated run, or carried with a named reason.
   2. No item of the v1.0 open list is left without a status; the Anda live handshake and licence items read dropped by D-27-01.
   3. The live evidence is kept outside the repository and the phase verification cites it by date and command.
-**Plans:** 0 plans
+**Plans:** 3 plans
 
 Plans:
-- [ ] TBD (run /gsd-plan-phase 36 to break down)
+- [ ] 36-01-PLAN.md: Build the checks that do not exist yet for three v1.0 open items and run the two that need no production stack: a Muse C (wave 1)
+- [ ] 36-02-PLAN.md: Close what needs no production stack and no new code: record the four Anda items as dropped (V1LIVE-02), run the two exi (wave 1)
+- [ ] 36-03-PLAN.md: Open the live window under the owner's control, run the seven production-stack checks of the v1.0 open list (live closeo (wave 2)
 
 ### Phase 37: Spec update
 
