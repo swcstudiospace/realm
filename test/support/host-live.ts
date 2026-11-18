@@ -920,28 +920,59 @@ export async function runHostProduction(t: TestContext, options: HostProductionO
   const sandboxes = [sandboxNameFor(projectDir)];
   const cleanups = createCleanups();
   t.after(() => cleanups.run());
+  // Set once the recipe is installed: the cleanup then uninstalls it, whatever failed in the body.
+  let uninstallRecipe: (() => Promise<void>) | undefined;
   cleanups.add(async () => {
-    // The body removes projectDir after its own `realm down`; the safety-net down runs only when the body failed before that.
-    if (existsSync(projectDir)) {
-      const stopped = await realmCliWithWorkspace(inputs, scenario, ["down"], projectDir, DOWN_TIMEOUT_MS);
-      assert.equal(stopped.exitCode, 0, `realm down: ${describeResult(stopped)}`);
-    }
-    restoreSharedPolicy(scenario);
-    removeSharedStateCreatedBy(scenario);
-    if (hostsDir !== undefined) {
-      // The receipt and the presence directory of this run. Nothing that existed before the run is removed.
-      rmSync(join(hostsDir, `${host}.receipt.json`), { force: true });
-      if (!presenceDirExisted) {
-        rmSync(join(hostsDir, `${host}-active`), { recursive: true, force: true });
+    // Every step runs even when an earlier one fails (the failures are reported together at the end), so a failed assertion never
+    // leaves the host receipt behind: the next run's gate refuses to start over a Realm receipt for the host.
+    const failures: unknown[] = [];
+    const step = async (work: () => void | Promise<void>): Promise<void> => {
+      try {
+        await work();
+      } catch (error) {
+        failures.push(error);
       }
-      if (!hostsDirExisted) {
-        rmSync(hostsDir, { recursive: true, force: true });
+    };
+    // The body removes projectDir after its own `realm down`; the safety-net down runs only while the directory exists (realm down on a
+    // removed directory is refused as POLICY_DENIED).
+    await step(async () => {
+      if (existsSync(projectDir)) {
+        const stopped = await realmCliWithWorkspace(inputs, scenario, ["down"], projectDir, DOWN_TIMEOUT_MS);
+        assert.equal(stopped.exitCode, 0, `realm down: ${describeResult(stopped)}`);
       }
+    });
+    await step(async () => {
+      await uninstallRecipe?.();
+    });
+    await step(() => {
+      restoreSharedPolicy(scenario);
+    });
+    await step(() => {
+      removeSharedStateCreatedBy(scenario);
+    });
+    await step(() => {
+      if (hostsDir !== undefined) {
+        // The receipt and the presence directory of this run. Nothing that existed before the run is removed.
+        rmSync(join(hostsDir, `${host}.receipt.json`), { force: true });
+        if (!presenceDirExisted) {
+          rmSync(join(hostsDir, `${host}-active`), { recursive: true, force: true });
+        }
+        if (!hostsDirExisted) {
+          rmSync(hostsDir, { recursive: true, force: true });
+        }
+      }
+    });
+    await step(() => {
+      rmSync(projectDir, { recursive: true, force: true });
+      rmSync(scenario.root, { recursive: true, force: true });
+    });
+    await step(async () => {
+      const residue = await waitForNoResidue(inputs, sandboxes);
+      assert.ok(residue.ok, `residue after realm down: ${residue.detail}`);
+    });
+    if (failures.length > 0) {
+      throw new AggregateError(failures, `host production cleanup: ${failures.map((failure) => (failure instanceof Error ? failure.message : String(failure))).join("; ")}`);
     }
-    rmSync(projectDir, { recursive: true, force: true });
-    rmSync(scenario.root, { recursive: true, force: true });
-    const residue = await waitForNoResidue(inputs, sandboxes);
-    assert.ok(residue.ok, `residue after realm down: ${residue.detail}`);
   });
 
   // The host's own configuration home. Claude: a directory of the scenario named by CLAUDE_CONFIG_DIR. Codex: a directory of the
@@ -964,6 +995,8 @@ export async function runHostProduction(t: TestContext, options: HostProductionO
   writeWireRecorder(shimDir, { nodePath: process.execPath, target: [process.execPath, options.cliPath], logFile: wireLog });
   const pathValue = [shimDir, dirname(options.bin), scenario.cliEnvironment["PATH"]].filter((entry): entry is string => entry !== undefined && entry !== "").join(delimiter);
   const env: Readonly<Record<string, string>> = { ...scenario.cliEnvironment, PATH: pathValue, ...overrides };
+  // The scenario with the environment the host gives `realm mcp`: the warm-up below runs through the production helper with it.
+  const hostScenario: ScenarioEnvironment = { ...scenario, cliEnvironment: env };
 
   const realmHost = (words: readonly string[]): Promise<CliResult> => runCli(["host", ...words], { env, now: () => new Date() });
   const realmStatus = (): Promise<CommandResult> => realmCliWithWorkspace(inputs, scenario, ["status"], projectDir, REALM_COMMAND_TIMEOUT_MS);
@@ -983,12 +1016,19 @@ export async function runHostProduction(t: TestContext, options: HostProductionO
   const afterInstall = cliJson(await realmHost(["status", host]), `realm host status ${host}`);
   assert.equal(afterInstall["status"], "installed", `realm host status ${host} must report installed: ${describeValue(afterInstall)}`);
   assert.equal(afterInstall["launch"], "on-path", `the shim realm must resolve on PATH: ${describeValue(afterInstall)}`);
+  // From here on the cleanup uninstalls the recipe (a no-op when the body already did).
+  uninstallRecipe = async () => {
+    const removedAtEnd = await realmHost(["uninstall", host]);
+    assert.equal(removedAtEnd.exitCode, 0, `realm host uninstall ${host} at cleanup: ${describeRun({ ...removedAtEnd, timedOut: false })}`);
+  };
 
   // Warm the session first: `realm mcp --host ID` ensures the daemon and runs `up` before it answers initialize, and a cold sandbox
   // creation (about 35 to 60 s measured 2026-11-18) outlasts the hosts' MCP connect timeouts (OpenCode 30 s; Claude's `mcp list`
   // probe gave up as well). `realm up` is idempotent, so the host attach below hits a warm session. The cold-attach gap itself is
-  // GAP-31-04; the wave 1 boot matrix says the production tier requires a warm session.
-  const warmed = await realmCli(inputs, scenario, ["up", "--workspace", projectDir], WARM_UP_TIMEOUT_MS);
+  // GAP-31-04; the wave 1 boot matrix says the production tier requires a warm session. The warm-up runs through the production
+  // helper (`realmCli`) with the environment the host gives `realm mcp` (the scenario environment, the recorder and the host's own
+  // directory first on PATH), the one environment under which the realm CLI was observed to reach Podman in a host attach.
+  const warmed = await realmCli(inputs, hostScenario, ["up", "--workspace", projectDir], WARM_UP_TIMEOUT_MS);
   assert.equal(warmed.exitCode, 0, `realm up --workspace for the project before the host attach: ${describeResult(warmed)}`);
 
   // The host command, from a directory under the pinned workspace root. The recorder's wire summary is what the tool listing is
