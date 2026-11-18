@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.4.12] - 2026-11-18
+
+### Documentation
+- docs(phase-31): close phase 31, wave 1 production boot rehearsals (#152) (f9aaa6d)
+
 ## [0.4.11] - 2026-11-18
 
 ### Documentation
