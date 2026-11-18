@@ -835,6 +835,7 @@ export function createHostRig(options: HostRigOptions, source: EnvironmentLike):
 const REAL_HOST_TIMEOUT_MS = PRODUCTION_TIMEOUT_MS;
 const REALM_COMMAND_TIMEOUT_MS = 60_000;
 const DOWN_TIMEOUT_MS = 120_000;
+const WARM_UP_TIMEOUT_MS = 240_000;
 const POLL_TIMEOUT_MS = 90_000;
 const POLL_INTERVAL_MS = 2_000;
 
@@ -982,6 +983,13 @@ export async function runHostProduction(t: TestContext, options: HostProductionO
   const afterInstall = cliJson(await realmHost(["status", host]), `realm host status ${host}`);
   assert.equal(afterInstall["status"], "installed", `realm host status ${host} must report installed: ${describeValue(afterInstall)}`);
   assert.equal(afterInstall["launch"], "on-path", `the shim realm must resolve on PATH: ${describeValue(afterInstall)}`);
+
+  // Warm the session first: `realm mcp --host ID` ensures the daemon and runs `up` before it answers initialize, and a cold sandbox
+  // creation (about 35 to 60 s measured 2026-11-18) outlasts the hosts' MCP connect timeouts (OpenCode 30 s; Claude's `mcp list`
+  // probe gave up as well). `realm up` is idempotent, so the host attach below hits a warm session. The cold-attach gap itself is
+  // GAP-31-04; the wave 1 boot matrix says the production tier requires a warm session.
+  const warmed = await realmCli(inputs, scenario, ["up", "--workspace", projectDir], WARM_UP_TIMEOUT_MS);
+  assert.equal(warmed.exitCode, 0, `realm up --workspace for the project before the host attach: ${describeResult(warmed)}`);
 
   // The host command, from a directory under the pinned workspace root. The recorder's wire summary is what the tool listing is
   // asserted from; the daemon's view (status active, an attached boot report) is asserted beside it.
