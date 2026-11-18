@@ -11,7 +11,7 @@
 // A V2 build (a dist-tag `next` or `dev` binary named by REALM_OPENCODE_BIN) is a valid run of the same file and answers OQ-24-02.
 //
 // Production tier (the validator gate plus the production prerequisites): `opencode mcp list` is OpenCode's own health check, a real MCP
-// initialize against `realm mcp --host opencode` on the production stack. See runHostProduction.
+// handshake (initialize or server/discover) against `realm mcp --host opencode` on the production stack. See runHostProduction.
 //
 // The test never sets a gate variable. No prompt is sent and no credential is forwarded. The operator's real
 // ~/.config/opencode/opencode.json is hashed before and after every test and must not change.
@@ -197,7 +197,7 @@ void test(
 );
 
 void test(
-  "opencode production: `opencode mcp list` performs a real MCP initialize against realm mcp --host opencode on the production stack",
+  "opencode production: `opencode mcp list` performs a real MCP handshake (initialize or server/discover) against realm mcp --host opencode on the production stack",
   { skip: production.skip, ...testTimeout(1_800_000) },
   async (t) => {
     t.diagnostic(hostVersionNote("opencode", production));
