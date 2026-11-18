@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.4.15] - 2026-11-18
+
+### Documentation
+- docs(milestone): complete v4.0, audit, archive and bookkeeping (#155) (3b6fdc8)
+
 ## [0.4.14] - 2026-11-18
 
 ### Documentation
