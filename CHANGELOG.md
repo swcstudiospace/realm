@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.4.7] - 2026-11-18
+
+### Fixed
+- fix(test): production host tier cleanup runs every step and warm-up uses the host environment (#146) (acc009a)
+
 ## [0.4.6] - 2026-11-18
 
 ### Fixed
