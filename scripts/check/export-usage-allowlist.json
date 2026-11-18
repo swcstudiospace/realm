@@ -393,11 +393,6 @@
       "reason": "D-1306 test-only seam: the closed transport vocabulary, pinned by test/host/boot-report.test.ts and test/daemon/host-boot-control.test.ts; production code consumes the derived HostBootTransport type"
     },
     {
-      "file": "src/host/capabilities.ts",
-      "name": "integrationCeiling",
-      "reason": "D-1306 test-only seam: capability ceiling per integration kind, input of the Phase 26 contract tests (test/host/capabilities.test.ts); isWithinCeiling is the production caller"
-    },
-    {
       "file": "src/host/install.ts",
       "name": "HostFileInfo",
       "reason": "D-1306 test-only seam: reader result type implemented by the injected readers of test/host/adapter.test.ts and test/host/install.test.ts"
