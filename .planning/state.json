@@ -216,18 +216,18 @@
     {
       "number": "36",
       "name": "Live re-verification of the v1.0 open items",
-      "status": "pending"
+      "status": "complete"
     },
     {
       "number": "37",
       "name": "Spec update",
-      "status": "pending"
+      "status": "complete"
     }
   ],
   "next": {
     "command": "/gsd-progress --next",
     "label": "Advance to the next step",
-    "reason": "Phase 23 of 26 · 91% · executing"
+    "reason": "Phase 23 of 26 · 95% · executing"
   },
-  "updated_at": "2026-11-18T06:52:45.828Z"
+  "updated_at": "2026-11-18T07:53:07.250Z"
 }
