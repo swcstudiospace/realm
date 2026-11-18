@@ -258,12 +258,12 @@ void test("E2: realm acp with a host flag completes one tool call over ACP stdio
   const attaches = attachLinesOf(lines);
   assert.equal(attaches.length, 1);
   assert.equal(attaches[0]?.["host"], "kimi");
-  assert.equal(typeof attaches[0].["kid"], "string");
+  assert.equal(typeof attaches[0]["kid"], "string");
   const calls = callLinesOf(lines);
   assert.equal(calls.length, 2);
   for (const line of calls) {
     assert.equal(line["host"], "kimi");
-    assert.equal(line["kid"], attaches[0].["kid"]);
+    assert.equal(line["kid"], attaches[0]["kid"]);
   }
   assert.equal(verifyAuditFile(auditPathOf(world, project)).ok, true);
 });
