@@ -11,7 +11,7 @@
 // A V2 build (a dist-tag `next` or `dev` binary named by REALM_OPENCODE_BIN) is a valid run of the same file and answers OQ-24-02.
 //
 // Production tier (the validator gate plus the production prerequisites): `opencode mcp list` is OpenCode's own health check, a real MCP
-// handshake (initialize or server/discover) against `realm mcp --host opencode` on the production stack. The host attaches cold (Phase 33): nothing warms the session first. See runHostProduction.
+// handshake (initialize or server/discover) against `realm mcp --host opencode` on the production stack. The host attaches cold (Phase 33): nothing warms the session first, and the health check may leave before the realm is ready, so the tier asserts the connect within the bound and the six tools on the wire, not readiness (test/integration/cold-attach-live.test.ts proves the ready transition on one connection). See runHostProduction.
 //
 // The test never sets a gate variable. No prompt is sent and no credential is forwarded. The operator's real
 // ~/.config/opencode/opencode.json is hashed before and after every test and must not change.

@@ -319,6 +319,8 @@ void test(
 );
 
 // ---- Production tier -------------------------------------------------------------------------------------------------------
+// The host attaches cold (Phase 33) and a `codex exec` run usually ends before the realm is ready: on exit the tier requires the wire
+// handshake and tools/list with the six names, not readiness (test/integration/cold-attach-live.test.ts proves the ready transition).
 
 void test(
   "codex production: codex exec against a refusing loopback provider launches realm mcp --host codex on the production stack and lists the six tools",
