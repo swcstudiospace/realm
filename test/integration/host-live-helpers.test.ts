@@ -16,6 +16,7 @@ import {
   compareVersions,
   CONFIG_ONLY_GAP,
   createHostRig,
+  downAcceptable,
   describeRun,
   fileSha256,
   HOST_LIVE,
@@ -786,4 +787,23 @@ void test("the production body of host-live.ts never warms the session: no realm
   assert.equal(body.includes("realm up"), false, "the production tier attaches cold: the text realm up must not appear in its body");
   assert.equal(body.includes('["up"'), false, "the production tier must not run an up command");
   assert.equal(source.includes("WARM_UP_TIMEOUT_MS"), false, "the warm-up timeout constant is gone");
+});
+
+void test("the production body asserts no readiness for the host tiers: no status-active poll, no metrics read", () => {
+  const source = readFileSync(fileURLToPath(new URL("../../../test/support/host-live.ts", import.meta.url)), "utf8");
+  const start = source.indexOf("export async function runHostProduction(");
+  const end = source.indexOf("// ---- Helpers shared by the live files");
+  const body = source.slice(start, end);
+  assert.equal(body.includes("COLD_READY_TIMEOUT_MS"), false, "no bound waits for the realm to become active after the host has left");
+  assert.equal(body.includes("must answer active"), false, "the default drive does not assert realm status active");
+  assert.equal(body.includes("never answered active"), false, "the session exit path does not assert realm status active");
+  assert.equal(body.includes('"metrics"') && body.includes("boot reports by phase"), false, "the default drive does not read the boot reports");
+});
+
+void test("downAcceptable tolerates a down for a session that never became active and refuses any other failure", () => {
+  assert.equal(downAcceptable({ exitCode: 0, stdout: "disconnected\n", stderr: "already down (REALM_NOT_ACTIVE)\n" }), true);
+  assert.equal(downAcceptable({ exitCode: 1, stdout: "", stderr: "realm down: daemon absent (REALM_NOT_ACTIVE)\n" }), true);
+  assert.equal(downAcceptable({ exitCode: 1, stdout: "REALM_NOT_ACTIVE\n", stderr: "" }), true);
+  assert.equal(downAcceptable({ exitCode: 1, stdout: "", stderr: "realm down: POLICY_DENIED\n" }), false);
+  assert.equal(downAcceptable({ exitCode: undefined, stdout: "", stderr: "" }), false);
 });
