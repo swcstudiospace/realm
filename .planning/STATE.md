@@ -2,14 +2,14 @@
 gsd_state_version: "1.0"
 milestone: v3.0
 milestone_name: Containment by Default (In Progress)
-current_phase: 28
-current_phase_name: Remove the Anda bridge
+current_phase: 30
+current_phase_name: Capability token spike
 status: executing
-stopped_at: Phase 29 complete, ready to execute Phase 28
-last_updated: "2026-11-17T21:27:55.556Z"
+stopped_at: Phase 28 complete, ready to execute Phase 30
+last_updated: "2026-11-17T23:52:57.763Z"
 last_activity: 2026-11-17
-last_activity_desc: Phase 29 complete, transitioned to Phase 28
-state_head: 7b465e2a1b2674860a8848395a73849b2a97df36
+last_activity_desc: Phase 28 complete, transitioned to Phase 30
+state_head: 2e83516c87a02a2cfdd36fd5869b4a986a6b133f
 progress:
   total_phases: 20
   completed_phases: 33
@@ -29,10 +29,10 @@ See: .planning/PROJECT.md (updated 2026-10-29)
 
 ## Current Position
 
-Phase: 28 — Remove the Anda bridge
+Phase: 30 — Capability token spike
 Plan: Not started
 Status: Ready to execute
-Last activity: 2026-11-17 — Phase 29 complete, transitioned to Phase 28
+Last activity: 2026-11-17 — Phase 28 complete, transitioned to Phase 30
 
 ## Current Recovery Boundaries
 
@@ -58,7 +58,7 @@ not a fresh instruction to restart discovery, install a runtime or close a phase
 
 **Velocity:**
 
-- Total plans completed: 81
+- Total plans completed: 84
 - Average duration: N/A
 - Total execution time: 0 hours
 
@@ -83,6 +83,7 @@ not a fresh instruction to restart discovery, install a runtime or close a phase
 | 26 | 3 | - | - |
 | 27 | 2 | - | - |
 | 29 | 2 | - | - |
+| 28 | 3 | - | - |
 
 **Recent Trend:**
 
@@ -229,7 +230,7 @@ Detail, by phase: Phase 3 covers RT-01, RT-02, RT-03, RT-09, and the live parts 
 ## Session Continuity
 
 Last session: 2026-11-08T16:41:15.821Z
-Stopped at: Phase 29 complete, ready to execute Phase 28
+Stopped at: Phase 28 complete, ready to execute Phase 30
 Resume file: None
 
 Recorded commits (closure run): 72817e9 (private flag restored, engines >=22.13.0); 390f511 (causeCode and catalogue codes, host paths, lifecycle bound, root identity, exec margin); b6bc892 (daemon entry, AgentOS fail-closed, catalogue refusals, per-method control bounds); 8088159 (daemon owns sessions; tool method; daemon client; Omp and MCP attach); 4b1d4ab (smoke fixes: CLI probe, up and down exits, state-dir 0700); c55056a (traceability: requirements by evidence, spike facts, runtime config, Omp attach contract); a999c17 (audit gap closure: realm acp, refusal code mapping, one state-dir resolver, Omp status, pinned-root rebind, catch-site fixes, daemon server-failure stop); dd02034 (re-audit, planning, and docs); 54bc236 (MCP tool-call diagnostic); plus the decisions commit (see git log).

@@ -177,9 +177,9 @@ All v3.0 requirements are hypotheses until shipped and verified.
 
 - [x] **ANDAX-01**: Every Anda requirement and open question (ANDA-01..04, OQ-P3-11, PRD-DRV-01 carry notes) is dispositioned by a recorded owner decision of 2026-11-17: the Anda bridge is removed and the replacement research is the rationale
 - [x] **ANDAX-02**: The v2.0 carry list is reconciled: FS-02, OMP-05, PRD-DRV-01 and UI-01 have an evidence-cited disposition (complete, accepted limitation, or still open with a reason)
-- [ ] **ANDAX-03**: The Anda bridge code, the `andaUrl` config key, `ANDA_UNREACHABLE`, `ANDA_VERSION_MISMATCH`, the degraded state, the Anda doctor check and the Anda tests are removed with no shim
-- [ ] **ANDAX-04**: The state machine, status labels, schemas, policy reference, README and integration docs no longer mention the removed surface, and the check:docs and check:gates gates pass
-- [ ] **ANDAX-05**: The removal is a documented breaking change: release note text, config migration note (an unknown `andaUrl` key is refused with a clear message or ignored with a warning, as decided in the phase context)
+- [x] **ANDAX-03**: The Anda bridge code, the `andaUrl` config key, `ANDA_UNREACHABLE`, `ANDA_VERSION_MISMATCH`, the degraded state, the Anda doctor check and the Anda tests are removed with no shim
+- [x] **ANDAX-04**: The state machine, status labels, schemas, policy reference, README and integration docs no longer mention the removed surface, and the check:docs and check:gates gates pass
+- [x] **ANDAX-05**: The removal is a documented breaking change: release note text, config migration note (an unknown `andaUrl` key is refused with a clear message or ignored with a warning, as decided in the phase context)
 - [x] **MCPA-01**: Every Realm MCP tool advertises tool annotations (readOnlyHint, destructiveHint, idempotentHint, openWorldHint) in both protocol eras `realm mcp` serves
 - [x] **MCPA-02**: A test pins the annotations per tool against the tool contract, and a mutation of an annotation fails a test
 - [ ] **CAPT-01**: A spike answers whether a per-session capability token is worth building (threat model, same-user limits, cost) and records a build or drop decision with evidence
@@ -192,7 +192,7 @@ All v3.0 requirements are hypotheses until shipped and verified.
 - [x] **OMP-05**: When disconnected, the plugin reports it and applies the configured policy; it never silently falls back to unsandboxed file mutation
   Status: Complete (2026-10-30). Basis (owner decision D2): a scripted OpenAI-compatible provider drove Omp 18.12.6's own `write` tool through the Realm plugin. Advisory with the realm down showed the unavailable notice and wrote the file; fail-closed with the realm down blocked the write with `REALM_NOT_ACTIVE` and that error was in the provider's next request; an active realm let the write land. Not an LLM-driven run. Paths that do not load the plugin are outside this closure.
   Note: closed in this milestone by HARN-04 (owner decision D2).
-- [ ] **PRD-DRV-01**: The realm compute driver serves ComputeDriver gRPC on a Unix socket in a 0700 directory with mode 0600, implementing GetCapabilities, ValidateSandboxCreate, CreateSandbox, GetSandbox, ListSandboxes, DeleteSandbox, WatchSandboxes, and EnsureWorkspace. AuthenticateSandbox is not advertised and returns UNIMPLEMENTED, because the gateway does not call it on the built-in path, and DeleteWorkspace refuses, because the driver never creates or removes the pinned workspace root. This amendment follows from the owner decisions of 2026-10-26 and 2026-10-27 and awaits the owner's confirmation (Phase 9.4) (Open, Phase 27 disposition, 2026-11-17: the owner has not confirmed the amendment; code and tests match it)
+- [x] **PRD-DRV-01**: The realm compute driver serves ComputeDriver gRPC on a Unix socket in a 0700 directory with mode 0600, implementing GetCapabilities, ValidateSandboxCreate, CreateSandbox, GetSandbox, ListSandboxes, DeleteSandbox, WatchSandboxes, and EnsureWorkspace. AuthenticateSandbox is not advertised and returns UNIMPLEMENTED, because the gateway does not call it on the built-in path, and DeleteWorkspace refuses, because the driver never creates or removes the pinned workspace root. This amendment follows from the owner decisions of 2026-10-26 and 2026-10-27 and awaits the owner's confirmation (Phase 9.4) (Open, Phase 27 disposition, 2026-11-17: the owner has not confirmed the amendment; code and tests match it)
 - [ ] **UI-01**: The Omp plugin starts on session launch and shows its realm state in the Omp UI status item without blocking the session (accepted limitation by owner decision, 2026-10-23: the status item appears at launch; a non-blocking check was not demonstrated, because get_state took about 6 s during the attach and the cause is not isolated; re-measured 2026-10-28: keystrokes echoed within 0.2 to 1.2 s through a 24 s cold attach on a loaded host, which bounds the stall but does not prove the loop is never blocked) (Accepted limitation, Phase 27 disposition, 2026-11-17)
 
 ## Standing requirements (completed earlier, still binding)
@@ -203,8 +203,7 @@ These requirements were completed in v1.0 and v2.0 and bind every phase of v3.0.
 
 - [x] **QUAL-01**: Every async boundary has a timeout; every error is typed with a machine-readable code and a human-readable reason; the silent-catch rule is amended as below
   Amended by decision: no silent catch blocks exist, except the named exceptions below. Each exception keeps the failure as recorded state or a retry, or fails closed, as stated.
-  - (a) `src/anda/client.ts`, `deliver`: a listener throw or rejection leaves the event undelivered for the monitor to retry (2 sites).
-  - (b) `src/anda/client.ts`, `stamp`: a clock failure leaves the transition undelivered and unstamped for retry.
+  - (a) and (b): removed with `src/anda/client.ts` in Phase 28 (2026-11-17); the remaining exceptions keep their letters.
   - (c) `src/lifecycle/controller.ts`, `stop`: a stop failure is recovered by the fallback destroy, which succeeds; the stop error is not kept.
   - (d) `src/lifecycle/controller.ts`, `probe`: a probe error is not recorded when a stop already owns the session; the stop's outcome is the session state (documented in the code).
   - (e) `src/omp/plugin.ts`, `attach`: a late rejection from a superseded attempt; the current attempt reports its own outcome.
@@ -351,9 +350,9 @@ Each v3.0 requirement maps to exactly one phase. The carried requirements keep t
 | TEST-HOST-08 | Phase 26 | Complete |
 | ANDAX-01 | Phase 27 | Complete |
 | ANDAX-02 | Phase 27 | Complete |
-| ANDAX-03 | Phase 28 | Planned |
-| ANDAX-04 | Phase 28 | Planned |
-| ANDAX-05 | Phase 28 | Planned |
+| ANDAX-03 | Phase 28 | Complete |
+| ANDAX-04 | Phase 28 | Complete |
+| ANDAX-05 | Phase 28 | Complete |
 | MCPA-01 | Phase 29 | Complete |
 | MCPA-02 | Phase 29 | Complete |
 | CAPT-01 | Phase 30 | Planned |
@@ -365,7 +364,7 @@ Each v3.0 requirement maps to exactly one phase. The carried requirements keep t
 | ANDA-03 | Phase 3 | Dropped (owner decision D-27-01, 2026-11-17): the Anda bridge is removed in Phase 28 |
 | ANDA-04 | Phase 3 | Dropped (owner decision D-27-01, 2026-11-17): the Anda bridge is removed in Phase 28 |
 | OMP-05 | Phase 5 | Complete (2026-10-30, HARN-04, owner decision D2): scripted provider drove Omp 18.12.6's own write through the Realm plugin; not LLM-driven |
-| PRD-DRV-01 | Phase 9.4 | Open: owner confirmation of the amendment pending (code and tests verified 2026-11-17, 27-DISPOSITIONS.md Part B); socket 0700/0600 verified live and in tests, AuthenticateSandbox UNIMPLEMENTED and not advertised, DeleteWorkspace refuses; the amendment follows from the owner decisions of 2026-10-26 and 2026-10-27 |
+| PRD-DRV-01 | Phase 9.4 | Complete (owner confirmed the amendment 2026-11-17; code and tests verified, 27-DISPOSITIONS.md Part B); socket 0700/0600 verified live and in tests, AuthenticateSandbox UNIMPLEMENTED and not advertised, DeleteWorkspace refuses; the amendment follows from the owner decisions of 2026-10-26 and 2026-10-27 |
 | UI-01 | Phase 9 | Accepted limitation (owner decision 2026-10-23): status item at launch; re-measured 2026-10-28: keystrokes echoed within 0.2 to 1.2 s through a 24 s cold attach on a loaded host, which bounds the stall but does not prove non-blocking; the status stays the owner's call |
 | QUAL-01 | Phase 1 | Complete (amended 2026-10-22); standing, binds every v3.0 phase |
 | QUAL-02 | Phase 2 | Complete; standing |
