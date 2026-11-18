@@ -44,7 +44,7 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "mode": { "type": "string", "enum": ["off", "enforce"], "default": "off" },
+        "mode": { "type": "string", "enum": ["off", "enforce"], "default": "enforce" },
         "ttlSeconds": { "type": "integer", "minimum": 60, "maximum": 86400, "default": 3600 },
         "profiles": {
           "type": "object",

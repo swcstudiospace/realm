@@ -34,7 +34,7 @@ const DEFAULTS = {
   shellEnabled: false,
   startupBudgetMs: 200000,
   toolQueueMs: 2000,
-  capabilityTokens: { mode: "off", ttlSeconds: 3600, profiles: {} },
+  capabilityTokens: { mode: "enforce", ttlSeconds: 3600, profiles: {} },
 };
 
 void test("an empty object resolves to the D-15 defaults", () => {
@@ -172,22 +172,35 @@ function tokenSchema(): TokenSchema["properties"]["capabilityTokens"] {
 // A sentinel in each refused value: the failure detail names the pointer, never the value.
 const SENTINEL = "sentinel-zq7";
 
-void test("an empty policy yields capabilityTokens mode off, ttlSeconds 3600 and empty profiles", () => {
+void test("an empty policy yields capabilityTokens mode enforce, ttlSeconds 3600 and empty profiles", () => {
   const policy = value(validate("policy", {}));
-  assert.deepEqual(policy.capabilityTokens, { mode: "off", ttlSeconds: 3600, profiles: {} });
+  assert.deepEqual(policy.capabilityTokens, { mode: "enforce", ttlSeconds: 3600, profiles: {} });
 });
 
 void test("capabilityTokens defaults fill member by member inside a given object", () => {
-  assert.deepEqual(value(validate("policy", { capabilityTokens: {} })).capabilityTokens, { mode: "off", ttlSeconds: 3600, profiles: {} });
+  assert.deepEqual(value(validate("policy", { capabilityTokens: {} })).capabilityTokens, { mode: "enforce", ttlSeconds: 3600, profiles: {} });
   assert.deepEqual(value(validate("policy", { capabilityTokens: { mode: "enforce" } })).capabilityTokens, {
     mode: "enforce",
     ttlSeconds: 3600,
     profiles: {},
   });
   assert.deepEqual(value(validate("policy", { capabilityTokens: { ttlSeconds: 60 } })).capabilityTokens, {
-    mode: "off",
+    mode: "enforce",
     ttlSeconds: 60,
     profiles: {},
+  });
+});
+
+void test("an explicit capabilityTokens mode off is kept, and a profiles-only object keeps the enforce default", () => {
+  assert.deepEqual(value(validate("policy", { capabilityTokens: { mode: "off" } })).capabilityTokens, {
+    mode: "off",
+    ttlSeconds: 3600,
+    profiles: {},
+  });
+  assert.deepEqual(value(validate("policy", { capabilityTokens: { profiles: { cursor: ["fs.read"] } } })).capabilityTokens, {
+    mode: "enforce",
+    ttlSeconds: 3600,
+    profiles: { cursor: ["fs.read"] },
   });
 });
 
@@ -251,11 +264,11 @@ void test("the capabilityTokens schema: host ids equal HOST_IDS and capabilities
   assert.deepEqual(new Set(capabilities), new Set<string>(integrationCeiling("mcp-config")));
 });
 
-void test("the capabilityTokens schema declares mode off, ttlSeconds 3600 within 60 to 86400, and object defaults", () => {
+void test("the capabilityTokens schema declares mode default enforce, ttlSeconds 3600 within 60 to 86400, and object defaults", () => {
   const schema = tokenSchema();
   assert.deepEqual(schema.default, {});
   assert.deepEqual(schema.properties.mode.enum, ["off", "enforce"]);
-  assert.equal(schema.properties.mode.default, "off");
+  assert.equal(schema.properties.mode.default, "enforce");
   assert.equal(schema.properties.ttlSeconds.default, 3600);
   assert.equal(schema.properties.ttlSeconds.minimum, 60);
   assert.equal(schema.properties.ttlSeconds.maximum, 86400);

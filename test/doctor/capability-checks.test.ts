@@ -1,5 +1,5 @@
-// The capability-tokens doctor item (CAPT-08, D-32-12): off, off with profiles, enforce with a valid keyring, and every failing
-// keyring class, with real files in a temporary directory and injected uid, clock and lstat seams. No result text may carry key
+// The capability-tokens doctor item (CAPT-08, D-32-12, D34-1): off (a warn, the opt-out), off with profiles, enforce with a
+// valid keyring, enforce with no keyring yet (a warn, the daemon creates it), and every failing keyring class, with real files in a temporary directory and injected uid, clock and lstat seams. No result text may carry key
 // material or a path (T-32-22).
 
 import { test, type TestContext } from "node:test";
@@ -7,7 +7,10 @@ import assert from "node:assert/strict";
 import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync, type Stats } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createCapabilityGate } from "../../src/capability/gate.js";
 import { ensureKeyring, keyringPathOf, rotateKeyring } from "../../src/capability/keyring.js";
+import { validate, type Policy } from "../../src/contract/validate.js";
+import { createLogger } from "../../src/observe/logger.js";
 import { capabilityTokensCheck } from "../../src/doctor/capability-checks.js";
 import { runChecks, type CheckResult } from "../../src/doctor/checks.js";
 import type { RuntimeConfig } from "../../src/runtime/config.js";
@@ -45,6 +48,12 @@ function scratch(t: TestContext): Scratch {
   return { base, stateDir, policyPath: join(base, "policy.json") };
 }
 
+function validatedPolicy(): Policy {
+  const parsed = validate("policy", {});
+  assert.ok(parsed.ok);
+  return parsed.value;
+}
+
 function writePolicy(s: Scratch, value: unknown): void {
   writeFileSync(s.policyPath, JSON.stringify(value));
 }
@@ -78,18 +87,43 @@ function enforcing(t: TestContext): Scratch {
   return s;
 }
 
-void test("CAPT-08: mode off with no profiles and no policy file passes and says tokens are off", (t) => {
+void test("D34-1: mode off with no profiles is a warn that names the opt-out and the fix", (t) => {
+  const s = scratch(t);
+  writePolicy(s, { capabilityTokens: { mode: "off" } });
+  const off = check(s);
+  assert.equal(off.id, "capability-tokens");
+  assert.equal(off.status, "warn");
+  assert.ok(off.detail.includes("capability tokens are off") && off.detail.includes("opt-out"), off.detail);
+  assert.ok(off.detail.includes("without one"), off.detail);
+  assert.ok(off.fix?.includes("capabilityTokens.mode") && off.fix.includes("enforce"), String(off.fix));
+});
+
+void test("D34-1: no policy file is the default, enforce: with no keyring yet it is a warn, and after a started gate it passes", (t) => {
   const s = scratch(t);
   const noFile = capabilityTokensCheck({ stateDir: s.stateDir });
   produced.push(noFile);
-  assert.deepEqual(noFile, {
-    id: "capability-tokens",
-    status: "pass",
-    detail: "capability tokens are off (the default): no token is minted or checked",
-    fix: null,
+  assert.equal(noFile.status, "warn");
+  assert.ok(noFile.detail.includes("capability tokens enforce"), noFile.detail);
+  assert.ok(noFile.detail.includes("creates it when it starts"), noFile.detail);
+  const gate = createCapabilityGate({
+    stateDir: s.stateDir,
+    policy: validatedPolicy(),
+    now: () => Date.now(),
+    logger: createLogger({ sink: { write: () => true }, level: "debug", now: () => new Date() }),
   });
-  writePolicy(s, { capabilityTokens: { mode: "off" } });
-  assert.equal(check(s).status, "pass");
+  assert.ok(gate !== undefined);
+  const started = capabilityTokensCheck({ stateDir: s.stateDir });
+  produced.push(started);
+  assert.equal(started.status, "pass", started.detail);
+  assert.ok(started.detail.includes("active key k1"), started.detail);
+});
+
+void test("D34-1: a policy file with no capabilityTokens key enforces too", (t) => {
+  const s = scratch(t);
+  writePolicy(s, { workspaceRoots: [] });
+  const result = check(s);
+  assert.equal(result.status, "warn");
+  assert.ok(result.detail.includes("capability tokens enforce"), result.detail);
 });
 
 void test("CAPT-08: mode off with profiles configured is a warn that says the profiles have no effect", (t) => {
@@ -108,9 +142,14 @@ void test("CAPT-08: enforce with a valid keyring passes and names the mode, the 
   const result = check(s);
   assert.equal(result.status, "pass", result.detail);
   assert.equal(result.fix, null);
-  assert.equal(result.detail, "capability tokens enforce: active key k1, 0 retired key(s), 1 host(s) with a profile");
+  assert.ok(result.detail.startsWith("capability tokens enforce: active key k1, 0 retired key(s), 1 host(s) with a profile"), result.detail);
+  assert.ok(result.detail.includes("stale or unlabelled"), "the pass carries the stale-or-unlabelled guidance");
+  assert.ok(result.detail.includes("--host ID") && result.detail.includes("capabilityTokens.mode to off"), result.detail);
   rotateKeyring(s.stateDir, { revokePrevious: false });
-  assert.equal(check(s).detail, "capability tokens enforce: active key k2, 1 retired key(s), 1 host(s) with a profile");
+  assert.ok(
+    check(s).detail.startsWith("capability tokens enforce: active key k2, 1 retired key(s), 1 host(s) with a profile"),
+    "the detail names the new kid and the retired count",
+  );
 });
 
 void test("CAPT-08: a retired key past its prune time is a warn; one inside its grace is a pass", (t) => {
@@ -125,14 +164,19 @@ void test("CAPT-08: a retired key past its prune time is a warn; one inside its 
   assert.ok(stale.fix?.includes("realm host token rotate"), String(stale.fix));
 });
 
-void test("CAPT-08: enforce with a missing keyring is a fail that names realm host token rotate", (t) => {
-  const s = enforcing(t);
-  const result = check(s);
-  failsWith(result, "the keyring is missing");
+function warnsMissing(result: CheckResult): void {
+  assert.equal(result.id, "capability-tokens");
+  assert.equal(result.status, "warn", result.detail);
+  assert.ok(result.detail.includes("the daemon creates it when it starts"), result.detail);
   assert.ok(result.fix?.includes("realm host token rotate"), String(result.fix));
+}
+
+void test("D34-1: enforce with no keyring yet is a warn that says the daemon creates it and names realm host token rotate", (t) => {
+  const s = enforcing(t);
+  warnsMissing(check(s));
   // A capability directory with no key file is missing too.
   mkdirSync(join(s.stateDir, "capability"), { mode: 0o700 });
-  failsWith(check(s), "the keyring is missing");
+  warnsMissing(check(s));
 });
 
 void test("CAPT-08: a symlink at the directory and a symlink at the file are each a fail", (t) => {
@@ -202,7 +246,7 @@ void test("CAPT-08: a keyring that cannot be statted is a fail of class unreadab
   // The injected lstat is also the one that reports a vanished file.
   const t3 = enforcing(t);
   ensureKeyring(t3.stateDir);
-  failsWith(
+  warnsMissing(
     check(t3, {
       lstat: (path) => {
         if (path.endsWith("keys.json")) {
@@ -211,7 +255,6 @@ void test("CAPT-08: a keyring that cannot be statted is a fail of class unreadab
         return lstatSync(path);
       },
     }),
-    "the keyring is missing",
   );
 });
 
@@ -259,7 +302,7 @@ void test("CAPT-08: runChecks appends the item last, after host-plugins, with ev
   assert.equal(results.at(-1)?.id, "capability-tokens");
   assert.equal(results.at(-2)?.id, "host-plugins");
   const last = results.at(-1);
-  assert.equal(last?.status, "fail", "enforce with no keyring fails through runChecks");
+  assert.equal(last?.status, "warn", "enforce with no keyring yet is a warn through runChecks");
   produced.push(last);
 });
 

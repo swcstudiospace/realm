@@ -7,7 +7,7 @@
 
 import { lstatSync, type Stats } from "node:fs";
 import { dirname, isAbsolute, relative, sep } from "node:path";
-import { capabilityPolicyOf } from "../capability/admit.js";
+import { capabilityPolicyOf, DEFAULT_CAPABILITY_POLICY } from "../capability/admit.js";
 import { keyringPathOf, readKeyring, type KeyringRead } from "../capability/keyring.js";
 import type { CapabilityTokenPolicy } from "../contract/validate.js";
 import { loadPolicyFileDetailed } from "../core/policy.js";
@@ -22,7 +22,7 @@ interface CapabilityTokensCheckResult {
 
 interface CapabilityTokensCheckOptions {
   readonly stateDir: string;
-  // The explicit policy path. Absent: no policy file, so the validated defaults (mode off, no profiles).
+  // The explicit policy path. Absent: no policy file, so the defaults (mode enforce, no profiles).
   readonly policyPath?: string;
   // Loaded runtime config. When present, a keyring under its sandbox state root is a failure.
   readonly runtimeConfig?: RuntimeConfig;
@@ -39,9 +39,6 @@ const FILE_MODE = 0o600;
 const MAX_FILE_BYTES = 64 * 1024;
 const PERMISSION_BITS = 0o777;
 
-// No policy file configured: the validated defaults (mode off, no profiles).
-const NO_POLICY: CapabilityTokenPolicy = { mode: "off", ttlSeconds: 3600, profiles: {} };
-
 type FailureClass =
   | "missing"
   | "unreadable"
@@ -52,7 +49,7 @@ type FailureClass =
   | "malformed";
 
 const FAILURE_DETAIL: Readonly<Record<FailureClass, string>> = {
-  missing: "the keyring is missing",
+  missing: "the keyring does not exist yet; the daemon creates it when it starts",
   unreadable: "the keyring cannot be read",
   symlink: "the keyring or its directory is a symlink",
   owner: "the keyring or its directory is owned by another user",
@@ -62,7 +59,7 @@ const FAILURE_DETAIL: Readonly<Record<FailureClass, string>> = {
 };
 
 const FAILURE_FIX: Readonly<Record<FailureClass, string>> = {
-  missing: "Run realm host token rotate to create the keyring, or set capabilityTokens.mode to off.",
+  missing: "Start the daemon (realm up), which creates the keyring, or run realm host token rotate to create it now.",
   unreadable:
     "Make the capability directory of the state directory readable by the current user, or remove it and run realm host token rotate.",
   symlink:
@@ -74,8 +71,10 @@ const FAILURE_FIX: Readonly<Record<FailureClass, string>> = {
   malformed: "Remove the key file and run realm host token rotate, or set capabilityTokens.mode to off.",
 };
 
+// A keyring that does not exist yet is not a fault under the default: the daemon creates it when it starts. Every other
+// guard class is a fail.
 function failure(failureClass: FailureClass): CapabilityTokensCheckResult {
-  return { id: ID, status: "fail", detail: `capability tokens enforce: ${FAILURE_DETAIL[failureClass]}`, fix: FAILURE_FIX[failureClass] };
+  return { id: ID, status: failureClass === "missing" ? "warn" : "fail", detail: `capability tokens enforce: ${FAILURE_DETAIL[failureClass]}`, fix: FAILURE_FIX[failureClass] };
 }
 
 function isAbsent(error: unknown): boolean {
@@ -152,6 +151,8 @@ function enforcedCheck(options: CapabilityTokensCheckOptions, hostsWithProfile: 
   const { active, retired } = read.snapshot;
   const expired = retired.filter((key) => key.pastGrace).length;
   const detail = `capability tokens enforce: active key ${active}, ${String(retired.length)} retired key(s), ${String(hostsWithProfile)} host(s) with a profile`;
+  const guidance =
+    "a client refused POLICY_DENIED with no other cause is stale or unlabelled: upgrade it, add --host ID to its realm mcp launcher, or set capabilityTokens.mode to off";
   if (expired > 0) {
     return {
       id: ID,
@@ -160,14 +161,14 @@ function enforcedCheck(options: CapabilityTokensCheckOptions, hostsWithProfile: 
       fix: "Run realm host token rotate to prune the expired retired keys.",
     };
   }
-  return { id: ID, status: "pass", detail, fix: null };
+  return { id: ID, status: "pass", detail: `${detail}; ${guidance}`, fix: null };
 }
 
 // Never throws. A policy that cannot be loaded is a warn that points at the policy-file item, which reports the failure.
 export function capabilityTokensCheck(options: CapabilityTokensCheckOptions): CapabilityTokensCheckResult {
   let policy: CapabilityTokenPolicy;
   try {
-    policy = options.policyPath === undefined ? NO_POLICY : capabilityPolicyOf(loadPolicyFileDetailed(options.policyPath).policy);
+    policy = options.policyPath === undefined ? DEFAULT_CAPABILITY_POLICY : capabilityPolicyOf(loadPolicyFileDetailed(options.policyPath).policy);
   } catch {
     return {
       id: ID,
@@ -188,9 +189,10 @@ export function capabilityTokensCheck(options: CapabilityTokensCheckOptions): Ca
     }
     return {
       id: ID,
-      status: "pass",
-      detail: "capability tokens are off (the default): no token is minted or checked",
-      fix: null,
+      status: "warn",
+      detail:
+        "capability tokens are off (the opt-out of the default): no token is minted or checked, so a caller that reaches the control socket is admitted without one",
+      fix: "Remove capabilityTokens.mode from the policy, or set it to enforce, once every client is labelled.",
     };
   }
   return enforcedCheck(options, hostsWithProfile);

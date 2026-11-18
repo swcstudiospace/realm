@@ -24,7 +24,7 @@ interface Rig {
   readonly deps: CliDeps;
   readonly clock: { ms: number };
   readonly reads: { count: number };
-  readonly modeOf: { value: "off" | "enforce" | "throw" };
+  readonly modeOf: { value: "off" | "enforce" | "default" | "throw" };
 }
 
 function rig(t: TestContext): Rig {
@@ -47,7 +47,7 @@ function rig(t: TestContext): Rig {
       if (modeOf.value === "throw") {
         throw new Error("policy cannot be loaded");
       }
-      const parsed = validate("policy", { capabilityTokens: { mode: modeOf.value } });
+      const parsed = validate("policy", modeOf.value === "default" ? {} : { capabilityTokens: { mode: modeOf.value } });
       if (!parsed.ok) {
         throw new Error("the fixture policy does not validate");
       }
@@ -119,6 +119,8 @@ void test("CAPT-08: status with no keyring reports the policy mode and an absent
   assert.deepEqual(json(await token(r, "status")), { ok: true, mode: "off", keyring: "absent" });
   r.modeOf.value = "enforce";
   assert.deepEqual(json(await token(r, "status")), { ok: true, mode: "enforce", keyring: "absent" });
+  r.modeOf.value = "default";
+  assert.deepEqual(json(await token(r, "status")), { ok: true, mode: "enforce", keyring: "absent" }, "a policy that says nothing enforces (D34-1)");
   r.modeOf.value = "throw";
   assert.deepEqual(json(await token(r, "status")), { ok: true, mode: "unknown", keyring: "absent" });
   assert.equal(existsSync(join(r.stateDir, "capability")), false, "status creates nothing");

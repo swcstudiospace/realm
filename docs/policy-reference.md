@@ -17,7 +17,7 @@ Loading rules (`loadPolicyFile`, `src/core/policy.ts`):
 
 - The policy path is explicit and caller-supplied. A missing file (`ENOENT`)
   yields validated defaults via `validate("policy", {})` — `fail-closed` mode, no
-  roots, shell disabled, capability tokens off. Any other read failure throws `POLICY_DENIED`
+  roots, shell disabled, capability tokens enforce (D34-1). Any other read failure throws `POLICY_DENIED`
   (`readPolicyText`, `src/core/policy.ts`).
 - Every `workspaceRoots` entry must be absolute; otherwise
   `SchemaInvalidError("/workspaceRoots/<index> must be an absolute path")`
@@ -278,7 +278,9 @@ A policy that has no `mode` key, or no policy file at all, used to load as `advi
   `src/contract/validate.ts`). A loaded policy always has it, because the schema
   fills the default; the member is optional in the type only so that hand-built
   `Policy` literals keep compiling, and `capabilityPolicyOf`
-  (`src/capability/admit.ts`) is the one reader that applies the default.
+  (`src/capability/admit.ts`) is the one reader that applies the default for
+  them, from `DEFAULT_CAPABILITY_POLICY` (same file), a constant that a test
+  pins equal to the schema default so the two cannot drift.
   - `mode`: `"off" | "enforce"`.
   - `ttlSeconds`: `integer`, minimum 60, maximum 86400.
   - `profiles`: an object whose keys are host ids and whose values are arrays of
@@ -291,15 +293,21 @@ A policy that has no `mode` key, or no policy file at all, used to load as `advi
     `SCHEMA_INVALID`, and the failure names the pointer, never the value. A test
     pins both lists to the host layer, so the schema, the token and the host
     layer cannot drift.
-- **Default:** `{ "mode": "off", "ttlSeconds": 3600, "profiles": {} }` (the
-  `capabilityTokens` property of `src/core/policy.schema.json`). A policy file
-  with no `capabilityTokens` key, a missing policy file and an object with only
-  some members all load with the defaults of the members they leave out.
-- **Effect:** `off` changes nothing: no token is minted, none is checked, and
-  every existing install, test and script behaves as it did without the key.
-  `enforce` turns capability tokens on for every host and every session of the
-  daemon; the policy is one document per daemon, so there is no per-workspace
-  opt-in. A token names a session, a host and the capabilities that host's
+- **Default:** `{ "mode": "enforce", "ttlSeconds": 3600, "profiles": {} }` (the
+  `capabilityTokens` property of `src/core/policy.schema.json`; decision D34-1,
+  2026-11-18). A policy file with no `capabilityTokens` key, a missing policy
+  file, an object with no `mode` and an object with only some members (only
+  `ttlSeconds`, or only `profiles`) all load with the defaults of the members
+  they leave out, so they all enforce. `"capabilityTokens": { "mode": "off" }`
+  is the documented opt-out; `realm doctor` warns for it.
+- **Effect:** `enforce`, the default, turns capability tokens on for every host
+  and every session of the daemon; the policy is one document per daemon, so
+  there is no per-workspace opt-in. The daemon creates the keyring when it
+  starts. A client that holds no valid token (a `realm mcp` or `realm acp` binary
+  from before capability tokens, or one launched without `--host ID`) is refused
+  `POLICY_DENIED`. `off` is the 0.4.x behaviour: no token is minted, none is
+  checked, and a caller that reaches the control socket is admitted without one.
+  A token names a session, a host and the capabilities that host's
   profile grants, and it lives `ttlSeconds` seconds. A host with no entry in
   `profiles` gets all six capabilities. A host whose entry is the empty array
   gets a token that can only call `status`. The profile function is

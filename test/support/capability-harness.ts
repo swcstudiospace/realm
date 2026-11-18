@@ -25,7 +25,8 @@ import { boundedWait } from "./timing.js";
 export const IMAGE = `registry.example.com/realm/workload@sha256:${"0".repeat(64)}`;
 
 export interface RigOptions {
-  // The capabilityTokens policy member. Absent: the default policy (mode off).
+  // The capabilityTokens policy member. Absent: the policy omits it, so the default applies (mode enforce, D34-1); a rig that
+  // wants the opt-out passes mode off explicitly.
   readonly capabilityTokens?: {
     readonly mode: "off" | "enforce";
     readonly ttlSeconds?: number;

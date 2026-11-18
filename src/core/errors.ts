@@ -126,7 +126,7 @@ export const ERROR_CATALOGUE: Readonly<Record<ErrorCode, CatalogueEntry>> =
       retryable: true,
     },
     POLICY_DENIED: {
-      reason: "The active policy denies this operation.",
+      reason: "The active policy denies this operation, or the caller holds no valid capability token (capability tokens are enforced by default; run realm doctor).",
       retryable: false,
     },
     PATH_ESCAPE: {
